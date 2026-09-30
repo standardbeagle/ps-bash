@@ -89,6 +89,9 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
         OptSkipFields = "skipfields", OptSkipChars = "skipchars", OptIgnoreCase = "ignorecase",
         OptUnique = "unique", OptCheckChars = "checkchars";
 
+    /// <summary>GNU uniq long_options[] order; getopt_long lists ambiguous-prefix candidates in it.</summary>
+    private static readonly string[] UniqLongOptionOrder = { "count", "check-chars", "skip-fields", "skip-chars" };
+
     /// <summary>
     /// uniq's option surface (GNU coreutils 9.4: -c -d -D -f -i -s -u -w -z + --count --repeated
     /// --all-repeated[=METHOD] --skip-fields --group[=METHOD] --ignore-case --skip-chars --unique
@@ -112,7 +115,8 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
         validButUnsupported: UniqValidButUnsupported,
         allowAbbrev: true,
         numericShorthandId: OptSkipFields,
-        gnuInfoOptions: true);
+        gnuInfoOptions: true,
+        longOptionOrder: UniqLongOptionOrder);
 
     /// <summary>Pure argv scan (unit-test seam): options, operands and the first error.</summary>
     internal static ParsedArgs ScanArgs(string[] args) => ArgParser.Parse(args, UniqSpec);

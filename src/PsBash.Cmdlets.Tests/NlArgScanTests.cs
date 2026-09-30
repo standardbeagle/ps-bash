@@ -90,8 +90,8 @@ public class NlArgScanTests
     [InlineData("ERR nl: option '--no-renumber' is recognized but not supported by ps-bash", "--no")]  // FIX
     [InlineData("ERR nl: option '--join-blank-lines' is recognized but not supported by ps-bash", "--join", "2")]  // FIX
     [InlineData("ERR nl: option '--he' is ambiguous; possibilities: '--header-numbering' '--help'", "--he")]  // GNU: same set
-    [InlineData("ERR nl: option '--n' is ambiguous; possibilities: '--no-renumber' '--number-format' '--number-separator' '--number-width'", "--n")]
-    [InlineData("ERR nl: option '--s' is ambiguous; possibilities: '--section-delimiter' '--starting-line-number'", "--s")]
+    [InlineData("ERR nl: option '--n' is ambiguous; possibilities: '--no-renumber' '--number-separator' '--number-width' '--number-format'", "--n")]  // GNU long_options[] order
+    [InlineData("ERR nl: option '--s' is ambiguous; possibilities: '--starting-line-number' '--section-delimiter'", "--s")]
     [InlineData("ERR nl: unrecognized option '--w=4'", "--w=4")]
     [InlineData("ERR nl: unrecognized option '--bogus'", "--bogus")]
     [InlineData("ERR nl: invalid option -- 'x'", "-x")]

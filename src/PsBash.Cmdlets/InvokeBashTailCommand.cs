@@ -83,6 +83,9 @@ public sealed class InvokeBashTailCommand : PSCmdlet
     private const string OptLines = "lines", OptBytes = "bytes", OptQuiet = "quiet", OptNum = "num",
         OptFollow = "follow", OptSleep = "sleep";
 
+    /// <summary>GNU tail long_options[] order; getopt_long lists ambiguous-prefix candidates in it.</summary>
+    private static readonly string[] TailLongOptionOrder = { "silent", "sleep-interval", "verbose", "version" };
+
     /// <summary>
     /// tail's option surface (GNU coreutils 9.4: -c -f -F -n -q -s -v -z + long forms; -NUM
     /// obsolete shorthand). <c>--follow</c> takes an OPTIONAL attached value (<c>name</c> /
@@ -102,7 +105,8 @@ public sealed class InvokeBashTailCommand : PSCmdlet
         validButUnsupported: TailValidButUnsupported,
         allowAbbrev: true,
         numericShorthandId: OptNum,
-        gnuInfoOptions: true);
+        gnuInfoOptions: true,
+        longOptionOrder: TailLongOptionOrder);
 
     /// <summary>Pure argv scan (unit-test seam): options, operands and the first error.</summary>
     internal static ParsedArgs ScanArgs(string[] args) => ArgParser.Parse(args, TailSpec);

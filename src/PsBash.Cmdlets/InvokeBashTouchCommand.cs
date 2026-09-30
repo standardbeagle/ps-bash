@@ -71,6 +71,9 @@ public sealed class InvokeBashTouchCommand : PSCmdlet
     private const string OptAccess = "access", OptModify = "modify", OptNoCreate = "no-create",
         OptIgnored = "ignored", OptDate = "date", OptReference = "reference";
 
+    /// <summary>GNU touch long_options[] order; getopt_long lists ambiguous-prefix candidates in it.</summary>
+    private static readonly string[] TouchLongOptionOrder = { "no-create", "no-dereference" };
+
     /// <summary>
     /// touch's whole option surface, built once for the shared ordered parser. GNU touch has NO
     /// <c>-v</c> (`touch -v` is "invalid option -- 'v'"); the old scan accepted it as a silent
@@ -89,7 +92,8 @@ public sealed class InvokeBashTouchCommand : PSCmdlet
         },
         validButUnsupported: TouchValidButUnsupported,
         allowAbbrev: true,
-        gnuInfoOptions: true);
+        gnuInfoOptions: true,
+        longOptionOrder: TouchLongOptionOrder);
 
     /// <summary>Pure argv scan (unit-test seam): options, operands and the first error.</summary>
     internal static ParsedArgs ScanArgs(string[] args) => ArgParser.Parse(args, TouchSpec);

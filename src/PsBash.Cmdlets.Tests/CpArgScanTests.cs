@@ -43,7 +43,12 @@ public class CpArgScanTests
     [InlineData("r=1 n=0 f=0 v=0 p=1 u=0 ops=[a,b]", "--archive", "a", "b")]
     [InlineData("r=0 n=0 f=0 v=0 p=0 u=1 ops=[a,b]", "--update", "a", "b")]
     [InlineData("r=1 n=0 f=0 v=0 p=0 u=0 ops=[a,b]", "--rec", "a", "b")]  // FIX (was: ERR cp: unrecognized option '--rec')
-    [InlineData("ERR cp: option '--re' is ambiguous; possibilities: '--recursive' '--reflink' '--remove-destination'", "--re", "a", "b")]  // FIX (was: ERR cp: unrecognized option '--re')
+    [InlineData("ERR cp: option '--re' is ambiguous; possibilities: '--recursive' '--remove-destination' '--reflink'", "--re", "a", "b")]  // FIX (was: ERR cp: unrecognized option '--re'); GNU long_options[] order, not alphabetical
+    [InlineData("ERR cp: option '--r' is ambiguous; possibilities: '--recursive' '--remove-destination' '--reflink'", "--r", "a", "b")]
+    [InlineData("ERR cp: option '--s' is ambiguous; possibilities: '--sparse' '--strip-trailing-slashes' '--suffix' '--symbolic-link'", "--s", "a", "b")]
+    [InlineData("ERR cp: option '--c' is ambiguous; possibilities: '--copy-contents' '--context'", "--c", "a", "b")]
+    [InlineData("ERR cp: option '--d' is ambiguous; possibilities: '--debug' '--dereference'", "--d", "a", "b")]
+    [InlineData("ERR cp: option '--p' is ambiguous; possibilities: '--parents' '--preserve'", "--p", "a", "b")]
     [InlineData("ERR cp: option '--ver' is ambiguous; possibilities: '--verbose' '--version'", "--ver", "a", "b")]  // FIX (was: ERR cp: unrecognized option '--ver')
     [InlineData("ERR cp: option '--no' is ambiguous; possibilities: '--no-clobber' '--no-dereference' '--no-preserve' '--no-target-directory'", "--no", "a", "b")]  // FIX (was: ERR cp: unrecognized option '--no')
     [InlineData("r=0 n=1 f=0 v=0 p=0 u=0 ops=[a,b]", "--no-c", "a", "b")]  // FIX (was: ERR cp: unrecognized option '--no-c')

@@ -81,6 +81,9 @@ public sealed class InvokeBashNlCommand : PSCmdlet
     private const string OptBody = "body", OptFormat = "format", OptSeparator = "sep",
         OptWidth = "width", OptStart = "start", OptIncrement = "incr";
 
+    /// <summary>GNU nl long_options[] order; getopt_long lists ambiguous-prefix candidates in it.</summary>
+    private static readonly string[] NlLongOptionOrder = { "header-numbering", "help", "no-renumber", "number-separator", "number-width", "number-format", "starting-line-number", "section-delimiter" };
+
     /// <summary>
     /// nl's option surface (GNU coreutils 9.4: -b -d -f -h -i -l -n -p -s -v -w + long forms).
     /// Implemented: -b (a/t/n), -n (ln/rn/rz), -s, -w, -v, -i. Built once for the shared parser.
@@ -97,7 +100,8 @@ public sealed class InvokeBashNlCommand : PSCmdlet
         },
         validButUnsupported: NlValidButUnsupported,
         allowAbbrev: true,
-        gnuInfoOptions: true);
+        gnuInfoOptions: true,
+        longOptionOrder: NlLongOptionOrder);
 
     /// <summary>Pure argv scan (unit-test seam): options, operands and the first error.</summary>
     internal static ParsedArgs ScanArgs(string[] args) => ArgParser.Parse(args, NlSpec);

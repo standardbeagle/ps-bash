@@ -265,7 +265,10 @@ untouched — its contract (unknown flag becomes an operand) differs.
   may share an `Id` (`-r`/`-R` = "recursive"). `Short` is `'\0'` for none; `Long` has no `--`.
 - `OptSpecSet` — built ONCE as `static readonly`: the specs, `validButUnsupported` names (as typed:
   `"-i"`, `"--interactive"`), `allowAbbrev` (getopt_long unique-prefix long options; an ambiguous
-  prefix is an error listing candidates), `numericShorthandId` (`head -5`), `gnuInfoOptions`
+  prefix is an error listing candidates in GNU's `long_options[]` TABLE order, not alphabetical:
+  `--re` in cp is `'--recursive' '--remove-destination' '--reflink'`. Pass `longOptionOrder:` (the full
+  long-name order, read from the oracle by probing `cmd --<letter>`); names it omits follow in
+  declaration order: specs, then valid-but-unsupported, then `help`/`version`), `numericShorthandId` (`head -5`), `gnuInfoOptions`
   (`--help`/`--version` join abbreviation, so `--ver` is ambiguous with `--verbose`).
 - `ArgParser.Parse(ReadOnlySpan<string> argv, OptSpecSet)` → `ParsedArgs`: `Tokens` in ORIGINAL
   order (`ArgTokKind` Operand/Option/DoubleDash; a bundle `-abc` is one token per letter), the

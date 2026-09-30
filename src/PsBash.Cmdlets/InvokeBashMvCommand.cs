@@ -61,6 +61,9 @@ public sealed class InvokeBashMvCommand : PSCmdlet
 
     private const string OptNoClobber = "no-clobber", OptForce = "force", OptVerbose = "verbose";
 
+    /// <summary>GNU mv long_options[] order; getopt_long lists ambiguous-prefix candidates in it.</summary>
+    private static readonly string[] MvLongOptionOrder = { "no-clobber", "no-copy", "no-target-directory", "strip-trailing-slashes", "suffix", "verbose", "version" };
+
     /// <summary>mv's whole option surface, built once for the shared ordered parser.</summary>
     private static readonly OptSpecSet MvSpec = new(
         new[]
@@ -71,7 +74,8 @@ public sealed class InvokeBashMvCommand : PSCmdlet
         },
         validButUnsupported: MvValidButUnsupported,
         allowAbbrev: true,
-        gnuInfoOptions: true);
+        gnuInfoOptions: true,
+        longOptionOrder: MvLongOptionOrder);
 
     /// <summary>Pure argv scan (unit-test seam): options, operands and the first error.</summary>
     internal static ParsedArgs ScanArgs(string[] args) => ArgParser.Parse(args, MvSpec);

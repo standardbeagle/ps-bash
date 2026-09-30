@@ -99,8 +99,8 @@ public class UniqArgScanTests
     [InlineData("ERR uniq: option '--group' is recognized but not supported by ps-bash", "--group")]
     [InlineData("ERR uniq: option '--group' is recognized but not supported by ps-bash", "--group=prepend")]
     [InlineData("ERR uniq: option '--group' is recognized but not supported by ps-bash", "--gr")]  // FIX
-    [InlineData("ERR uniq: option '--s' is ambiguous; possibilities: '--skip-chars' '--skip-fields'", "--s", "1")]  // GNU: same set, its own order
-    [InlineData("ERR uniq: option '--c' is ambiguous; possibilities: '--check-chars' '--count'", "--c")]
+    [InlineData("ERR uniq: option '--s' is ambiguous; possibilities: '--skip-fields' '--skip-chars'", "--s", "1")]  // GNU long_options[] order
+    [InlineData("ERR uniq: option '--c' is ambiguous; possibilities: '--count' '--check-chars'", "--c")]
     [InlineData("ERR uniq: option '--count' doesn't allow an argument", "--count=1")]  // FIX
     [InlineData("ERR uniq: option '--ignore-case' doesn't allow an argument", "--ignore-case=1")]
     [InlineData("ERR uniq: unrecognized option '--bogus'", "--bogus")]

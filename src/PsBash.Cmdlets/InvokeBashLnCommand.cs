@@ -66,6 +66,9 @@ public sealed class InvokeBashLnCommand : PSCmdlet
     private const string OptSymbolic = "symbolic", OptForce = "force", OptVerbose = "verbose",
         OptNoDereference = "no-dereference";
 
+    /// <summary>GNU ln long_options[] order; getopt_long lists ambiguous-prefix candidates in it.</summary>
+    private static readonly string[] LnLongOptionOrder = { "no-dereference", "no-target-directory", "suffix", "symbolic", "verbose", "version" };
+
     /// <summary>
     /// ln's whole option surface, built once for the shared ordered parser.
     /// <c>-n/--no-dereference</c> is accepted because this cmdlet ALREADY treats an existing
@@ -83,7 +86,8 @@ public sealed class InvokeBashLnCommand : PSCmdlet
         },
         validButUnsupported: LnValidButUnsupported,
         allowAbbrev: true,
-        gnuInfoOptions: true);
+        gnuInfoOptions: true,
+        longOptionOrder: LnLongOptionOrder);
 
     /// <summary>Pure argv scan (unit-test seam): options, operands and the first error.</summary>
     internal static ParsedArgs ScanArgs(string[] args) => ArgParser.Parse(args, LnSpec);

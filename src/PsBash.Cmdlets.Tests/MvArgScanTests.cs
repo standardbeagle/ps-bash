@@ -46,6 +46,7 @@ public class MvArgScanTests
     [InlineData("ERR mv: option '--no' is ambiguous; possibilities: '--no-clobber' '--no-copy' '--no-target-directory'", "--no", "a", "b")]  // FIX (was: ERR mv: unrecognized option '--no')
     [InlineData("ERR mv: option '--n' is ambiguous; possibilities: '--no-clobber' '--no-copy' '--no-target-directory'", "--n", "a", "b")]  // FIX (was: ERR mv: unrecognized option '--n')
     [InlineData("n=0 v=0 ops=[a,b]", "--f", "a", "b")]  // FIX (was: ERR mv: unrecognized option '--f')
+    [InlineData("ERR mv: option '--s' is ambiguous; possibilities: '--strip-trailing-slashes' '--suffix'", "--s", "a", "b")]
     [InlineData("ERR mv: option '--v' is ambiguous; possibilities: '--verbose' '--version'", "--v", "a", "b")]  // FIX (was: ERR mv: unrecognized option '--v')
     [InlineData("ERR mv: option '--verbose' doesn't allow an argument", "--verbose=1", "a", "b")]  // FIX (was: ERR mv: unrecognized option '--verbose=1')
     [InlineData("ERR mv: option '--force' doesn't allow an argument", "--force=1", "a", "b")]  // FIX (was: ERR mv: unrecognized option '--force=1')

@@ -107,6 +107,9 @@ public sealed class InvokeBashCatCommand : PSCmdlet
     private const string OptNumber = "number", OptNonBlank = "nonblank", OptSqueeze = "squeeze",
         OptEnds = "ends", OptTabs = "tabs", OptIgnored = "ignored";
 
+    /// <summary>GNU cat long_options[] order; getopt_long lists ambiguous-prefix candidates in it.</summary>
+    private static readonly string[] CatLongOptionOrder = { "number-nonblank", "number", "squeeze-blank", "show-nonprinting", "show-ends", "show-tabs", "show-all" };
+
     /// <summary>
     /// cat's option surface (GNU coreutils 9.4: -A -b -e -E -n -s -t -T -u -v + --show-all
     /// --number-nonblank --show-ends --number --squeeze-blank --show-tabs --show-nonprinting).
@@ -125,7 +128,8 @@ public sealed class InvokeBashCatCommand : PSCmdlet
         },
         validButUnsupported: CatValidButUnsupported,
         allowAbbrev: true,
-        gnuInfoOptions: true);
+        gnuInfoOptions: true,
+        longOptionOrder: CatLongOptionOrder);
 
     /// <summary>Pure argv scan (unit-test seam): options, operands and the first error.</summary>
     internal static ParsedArgs ScanArgs(string[] args) => ArgParser.Parse(args, CatSpec);

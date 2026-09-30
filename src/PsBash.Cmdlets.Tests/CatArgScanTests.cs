@@ -66,10 +66,10 @@ public class CatArgScanTests
     [InlineData("ERR cat: option '--show-nonprinting' is recognized but not supported by ps-bash", "--show-nonprinting")]
     [InlineData("ERR cat: option '--show-nonprinting' is recognized but not supported by ps-bash", "--show-n")]  // FIX
     [InlineData("ERR cat: option '--show-all' is recognized but not supported by ps-bash", "--show-a")]  // FIX
-    [InlineData("ERR cat: option '--num' is ambiguous; possibilities: '--number' '--number-nonblank'", "--num")]  // GNU: same set, its own order
-    [InlineData("ERR cat: option '--n' is ambiguous; possibilities: '--number' '--number-nonblank'", "--n")]
-    [InlineData("ERR cat: option '--show' is ambiguous; possibilities: '--show-all' '--show-ends' '--show-nonprinting' '--show-tabs'", "--show")]
-    [InlineData("ERR cat: option '--s' is ambiguous; possibilities: '--show-all' '--show-ends' '--show-nonprinting' '--show-tabs' '--squeeze-blank'", "--s")]
+    [InlineData("ERR cat: option '--num' is ambiguous; possibilities: '--number-nonblank' '--number'", "--num")]  // GNU long_options[] order
+    [InlineData("ERR cat: option '--n' is ambiguous; possibilities: '--number-nonblank' '--number'", "--n")]
+    [InlineData("ERR cat: option '--show' is ambiguous; possibilities: '--show-nonprinting' '--show-ends' '--show-tabs' '--show-all'", "--show")]
+    [InlineData("ERR cat: option '--s' is ambiguous; possibilities: '--squeeze-blank' '--show-nonprinting' '--show-ends' '--show-tabs' '--show-all'", "--s")]
     [InlineData("ERR cat: option '--number' doesn't allow an argument", "--number=1")]  // FIX
     [InlineData("ERR cat: unrecognized option '--bogus'", "--bogus")]
     [InlineData("ERR cat: invalid option -- 'x'", "-x")]

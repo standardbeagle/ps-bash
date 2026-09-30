@@ -81,32 +81,54 @@ public sealed class OptSpecSet
         bool allowAbbrev = false,
         string? numericShorthandId = null,
         bool gnuInfoOptions = false,
-        int usageExitCode = 1)
+        int usageExitCode = 1,
+        IEnumerable<string>? longOptionOrder = null)
     {
         UsageExitCode = usageExitCode;
+        var declared = new List<string>();
         foreach (var s in specs)
         {
             if (s.Short != '\0') _byShort[s.Short] = s;
-            if (s.Long is not null) _byLong[s.Long] = s;
+            if (s.Long is not null)
+            {
+                if (!_byLong.ContainsKey(s.Long)) declared.Add(s.Long);
+                _byLong[s.Long] = s;
+            }
+        }
+
+        var unsupportedList = new List<string>(validButUnsupported ?? Array.Empty<string>());
+        _unsupported = new HashSet<string>(unsupportedList, StringComparer.Ordinal);
+
+        foreach (var u in unsupportedList)
+        {
+            if (u.StartsWith("--", StringComparison.Ordinal) && u.Length > 2) declared.Add(u.Substring(2));
         }
 
         if (gnuInfoOptions)
         {
-            _byLong.TryAdd(HelpId, new OptSpec(HelpId, '\0', "help"));
-            _byLong.TryAdd(VersionId, new OptSpec(VersionId, '\0', "version"));
+            if (_byLong.TryAdd(HelpId, new OptSpec(HelpId, '\0', "help"))) declared.Add("help");
+            if (_byLong.TryAdd(VersionId, new OptSpec(VersionId, '\0', "version"))) declared.Add("version");
         }
 
-        _unsupported = new HashSet<string>(validButUnsupported ?? Array.Empty<string>(), StringComparer.Ordinal);
         AllowAbbrev = allowAbbrev;
         NumericShorthandId = numericShorthandId;
 
-        var names = new HashSet<string>(_byLong.Keys, StringComparer.Ordinal);
-        foreach (var u in _unsupported)
+        // Abbreviation candidates keep GNU's long_options[] order (getopt_long reports them in table
+        // order): the explicit longOptionOrder first, then anything it did not name in declaration order.
+        var ordered = new List<string>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        if (longOptionOrder is not null)
         {
-            if (u.StartsWith("--", StringComparison.Ordinal) && u.Length > 2) names.Add(u.Substring(2));
+            foreach (var n in longOptionOrder)
+            {
+                if (declared.Contains(n) && seen.Add(n)) ordered.Add(n);
+            }
         }
-        _allLongNames = names.ToArray();
-        Array.Sort(_allLongNames, StringComparer.Ordinal);
+        foreach (var n in declared)
+        {
+            if (seen.Add(n)) ordered.Add(n);
+        }
+        _allLongNames = ordered.ToArray();
     }
 
     internal bool TryGetShort(char c, out OptSpec spec) => _byShort.TryGetValue(c, out spec);
