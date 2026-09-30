@@ -106,6 +106,7 @@ public sealed class InvokeBashTreeCommand : PSCmdlet
 
     private int _dirCount;
     private int _fileCount;
+    private int _rootsWritten;
     private string _resolvedRoot = string.Empty;
     private int _maxDepth = int.MaxValue;
     private List<string> _excludePatterns = new();
@@ -201,6 +202,7 @@ public sealed class InvokeBashTreeCommand : PSCmdlet
         _maxDepth = plan.MaxDepth;
         _dirCount = 0;
         _fileCount = 0;
+        _rootsWritten = 0;
 
         var operands = plan.Operands;
         if (operands.Count == 0)
@@ -213,7 +215,8 @@ public sealed class InvokeBashTreeCommand : PSCmdlet
             WriteRoot(target);
         }
 
-        WriteSummary();
+        // Nothing walked (every operand missing): no report, only the errors (and exit 1).
+        if (_rootsWritten > 0) WriteSummary();
     }
 
     private void WriteSummary()
@@ -289,6 +292,7 @@ public sealed class InvokeBashTreeCommand : PSCmdlet
         rootObj.Properties.Add(new PSNoteProperty("TreePrefix", ""));
         rootObj.Properties.Add(new PSNoteProperty("BashText", _fullPath ? _normTarget : rootName));
         WriteObject(rootObj);
+        _rootsWritten++;
 
         if (Directory.Exists(resolved))
         {

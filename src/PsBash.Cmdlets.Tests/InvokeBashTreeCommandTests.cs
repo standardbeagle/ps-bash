@@ -259,4 +259,28 @@ public class InvokeBashTreeCommandTests : IClassFixture<SharedPwshFixture>, IDis
         Assert.Single(result);
         Assert.Equal(2, (int)result[0].BaseObject);
     }
-}
+
+    [Fact]
+    public void Tree_MissingOperand_ErrorsWithNoReportLine_ExitOne()
+    {
+        // Pester-pinned: a path that does not exist produces the error only — no "0 directories, 0 files".
+        var pwsh = _fixture.AcquireFresh();
+        var r = CmdResult.Run(pwsh, "$ErrorActionPreference='Continue'; Invoke-BashTree '/nonexistent/psb-tree'");
+        Assert.Empty(r.Lines);
+        Assert.Equal(1, r.ExitCode);
+        Assert.Contains("No such file or directory", r.Stderr);
+    }
+
+    [Fact]
+    public void Tree_SeveralOperands_EachIsWalked_OneCombinedReport()
+    {
+        string a = Path.Combine(_tmpDir, "opa"), b = Path.Combine(_tmpDir, "opb");
+        Directory.CreateDirectory(a);
+        Directory.CreateDirectory(b);
+        File.WriteAllText(Path.Combine(a, "fa.txt"), "");
+        File.WriteAllText(Path.Combine(b, "fb.txt"), "");
+        var lines = Run($"Invoke-BashTree '{Esc(a)}' '{Esc(b)}'");
+        Assert.Contains(lines, l => l.EndsWith("fa.txt"));
+        Assert.Contains(lines, l => l.EndsWith("fb.txt"));
+        Assert.Equal("0 directories, 2 files", lines[^1]);
+    }}
