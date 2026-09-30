@@ -2,6 +2,7 @@ using System.Formats.Tar;
 using System.IO.Compression;
 using System.Management.Automation;
 using System.Text;
+using PsBash.Cmdlets.Args;
 
 namespace PsBash.Cmdlets;
 
@@ -63,32 +64,225 @@ namespace PsBash.Cmdlets;
 [OutputType(typeof(string))]
 public sealed class InvokeBashTarCommand : PSCmdlet
 {
-    /// <summary>Valid GNU <c>tar</c> options ps-bash does not implement. The
-    /// only residual gaps are compression formats with no managed codec in the
-    /// .NET BCL — bzip2, xz/lzma, zstd, and the legacy LZW <c>compress</c>. These
-    /// are a genuine PowerShell/.NET limit, not a missing wiring: gzip
-    /// (<c>-z</c>) is the only filter <c>System.IO.Compression</c> ships. Both
-    /// the long forms (catchable here as operands) and the bundled short forms
-    /// (<c>-cjf</c>, caught in the bundle loop) produce the bash-parity
-    /// "recognized but not supported" diagnostic rather than silently writing an
-    /// uncompressed archive. Every other documented flag is now handled — real
-    /// behavior (<c>-c -x -t -z -v -f -k --strip-components --exclude --directory
-    /// --to-stdout -a/--auto-compress</c>) or accept-and-ignore where it maps to
-    /// our existing default (<c>--overwrite</c>, <c>-m/--touch</c>,
-    /// <c>--wildcards</c>, <c>--no-wildcards</c>, <c>-p</c>).</summary>
-    private static readonly HashSet<string> TarValidButUnsupported = new(StringComparer.Ordinal)
+    private const string OptCreate = "create", OptExtract = "extract", OptList = "list", OptVerbose = "verbose",
+        OptGzip = "gzip", OptKeep = "keep", OptAuto = "auto", OptStdout = "stdout", OptFile = "file",
+        OptDirectory = "directory", OptExclude = "exclude", OptStrip = "strip", OptNoOp = "noop";
+
+    /// <summary>GNU tar 1.35 long options in argp table order (concatenated per-letter `--X` ambiguity lists
+    /// from the oracle, so any abbreviation's candidate list is in GNU order). Every name here that is not
+    /// implemented is a valid-but-unsupported option (exit 2): modes <c>-A -d -r -u --delete --test-label</c>,
+    /// the bzip2/xz/lzma/lzip/lzop/zstd/compress filters (no managed .NET codec; gzip is the only one
+    /// <c>System.IO.Compression</c> ships), <c>-h --dereference</c>, <c>-T -X --files-from --exclude-from</c>,
+    /// incremental/multi-volume/sparse/xattr/ownership/transform/checkpoint families, and so on.</summary>
+    private static readonly string[] TarLongNamesInGnuOrder =
     {
-        "-j", "--bzip2", "-J", "--xz", "--lzma", "--lzip", "--lzop",
-        "--zstd", "-Z", "--compress",
+        "append", "atime-preserve", "acls", "auto-compress", "absolute-names", "after-date", "add-file", "anchored",
+        "blocking-factor", "bzip2", "backup", "block-number",
+        "create", "compare", "catenate", "concatenate", "check-device", "clamp-mtime", "compress", "checkpoint",
+        "checkpoint-action", "check-links", "confirmation",
+        "diff", "delete", "delay-directory-restore", "dereference", "directory",
+        "extract", "exclude", "exclude-from", "exclude-caches", "exclude-caches-under", "exclude-caches-all",
+        "exclude-tag", "exclude-ignore", "exclude-ignore-recursive", "exclude-tag-under", "exclude-tag-all",
+        "exclude-vcs", "exclude-vcs-ignores", "exclude-backups",
+        "file", "force-local", "format", "full-time", "files-from",
+        "get", "group", "group-map", "gzip", "gunzip",
+        "hole-detection", "hard-dereference", "help",
+        "incremental", "ignore-failed-read", "ignore-command-error", "info-script", "ignore-zeros", "index-file",
+        "interactive", "ignore-case",
+        "keep-old-files", "keep-newer-files", "keep-directory-symlink",
+        "list", "listed-incremental", "level", "label", "lzip", "lzma", "lzop",
+        "mtime", "mode", "multi-volume",
+        "no-seek", "no-check-device", "no-overwrite-dir", "no-ignore-command-error", "no-same-owner",
+        "numeric-owner", "no-same-permissions", "no-delay-directory-restore", "no-xattrs", "no-selinux", "no-acls",
+        "new-volume-script", "no-auto-compress", "newer", "newer-mtime", "no-quote-chars", "null", "no-null",
+        "no-unquote", "no-verbatim-files-from", "no-recursion", "no-anchored", "no-ignore-case", "no-wildcards",
+        "no-wildcards-match-slash",
+        "occurrence", "overwrite", "overwrite-dir", "one-top-level", "owner", "owner-map", "old-archive",
+        "one-file-system",
+        "preserve-permissions", "preserve-order", "portability", "posix", "pax-option", "program-name",
+        "quoting-style", "quote-chars",
+        "remove-files", "recursive-unlink", "rmt-command", "rsh-command", "record-size", "read-full-records",
+        "restrict", "recursion",
+        "sparse", "sparse-version", "seek", "skip-old-files", "same-owner", "same-permissions", "same-order", "sort",
+        "selinux", "starting-file", "suffix", "strip-components", "show-defaults", "show-snapshot-field-ranges",
+        "show-omitted-dirs", "show-transformed-names", "show-stored-names",
+        "test-label", "to-stdout", "to-command", "touch", "tape-length", "transform", "totals",
+        "update", "unlink-first", "use-compress-program", "ungzip", "uncompress", "utc", "unquote", "usage",
+        "verify", "volno-file", "verbose", "verbatim-files-from", "version",
+        "warning", "wildcards", "wildcards-match-slash",
+        "xattrs", "xattrs-include", "xattrs-exclude", "xz", "xform",
+        "zstd",
     };
 
+    private static readonly string[] TarImplementedLongNames =
+    {
+        "create", "extract", "get", "list", "verbose", "gzip", "gunzip", "ungzip", "keep-old-files", "auto-compress",
+        "to-stdout", "touch", "preserve-permissions", "same-permissions", "overwrite", "wildcards", "no-wildcards",
+        "no-same-owner", "same-owner", "no-same-permissions", "file", "directory", "exclude", "strip-components",
+        "help", "version",
+    };
+
+    private static string[] BuildTarValidButUnsupported()
+    {
+        var implemented = new HashSet<string>(TarImplementedLongNames, StringComparer.Ordinal);
+        var list = new List<string>();
+        foreach (char c in "AdruGgnSTXUWsFLMbBiHVIjJZhKNPlRw") list.Add("-" + c);
+        foreach (var name in TarLongNamesInGnuOrder)
+            if (!implemented.Contains(name)) list.Add("--" + name);
+        return list.ToArray();
+    }
+
+    /// <summary>GNU tar options ps-bash refuses (exit 2): see <see cref="TarLongNamesInGnuOrder"/>.</summary>
+    private static readonly string[] TarValidButUnsupported = BuildTarValidButUnsupported();
+
+    /// <summary>
+    /// tar's option surface. Implemented: modes <c>-c -x -t</c>; <c>-f FILE</c>, <c>-C DIR</c> (position
+    /// matters on create), <c>-v -z -k -a -O</c>, <c>--exclude=PAT</c>, <c>--strip-components=N</c>; accepted
+    /// no-ops that match the existing behaviour: <c>-m/--touch -p/--preserve-permissions --same-permissions
+    /// --overwrite --wildcards --no-wildcards --no-same-owner --same-owner --no-same-permissions</c>.
+    /// Usage errors exit 64 (EX_USAGE, GNU tar); semantic errors (no/two modes, empty archive) exit 2.
+    /// </summary>
+    private static readonly OptSpecSet TarSpec = new(
+        new[]
+        {
+            new OptSpec(OptCreate, 'c', "create"),
+            new OptSpec(OptExtract, 'x', "extract"),
+            new OptSpec(OptExtract, '\0', "get"),
+            new OptSpec(OptList, 't', "list"),
+            new OptSpec(OptVerbose, 'v', "verbose"),
+            new OptSpec(OptGzip, 'z', "gzip"),
+            new OptSpec(OptGzip, '\0', "gunzip"),
+            new OptSpec(OptGzip, '\0', "ungzip"),
+            new OptSpec(OptKeep, 'k', "keep-old-files"),
+            new OptSpec(OptAuto, 'a', "auto-compress"),
+            new OptSpec(OptStdout, 'O', "to-stdout"),
+            new OptSpec(OptFile, 'f', "file", OptKind.Value),
+            new OptSpec(OptDirectory, 'C', "directory", OptKind.Value),
+            new OptSpec(OptExclude, '\0', "exclude", OptKind.Value),
+            new OptSpec(OptStrip, '\0', "strip-components", OptKind.Value),
+            new OptSpec(OptNoOp, 'm', "touch"),
+            new OptSpec(OptNoOp, 'p', "preserve-permissions"),
+            new OptSpec(OptNoOp, '\0', "same-permissions"),
+            new OptSpec(OptNoOp, '\0', "overwrite"),
+            new OptSpec(OptNoOp, '\0', "wildcards"),
+            new OptSpec(OptNoOp, '\0', "no-wildcards"),
+            new OptSpec(OptNoOp, '\0', "no-same-owner"),
+            new OptSpec(OptNoOp, '\0', "same-owner"),
+            new OptSpec(OptNoOp, '\0', "no-same-permissions"),
+        },
+        TarValidButUnsupported,
+        allowAbbrev: true,
+        gnuInfoOptions: true,
+        usageExitCode: 64,
+        longOptionOrder: TarLongNamesInGnuOrder);
+
+    /// <summary>Pure argv scan (unit-test seam); applies the old-style first-word rule first.</summary>
+    internal static ParsedArgs ScanArgs(string[] args) => ArgParser.Parse(NormalizeOldStyle(args), TarSpec);
+
+    /// <summary>
+    /// GNU tar's old-style option word: a FIRST argument that does not start with a dash is a bundle of
+    /// option letters without the dash (<c>tar czf a.tgz dir</c>, <c>tar xvf a.tar</c>); the options that take a
+    /// value (<c>b C f F g H I K L N T V X</c>) consume the FOLLOWING arguments in order
+    /// (<c>tar cf a.tar -C d x</c>). Rewritten to ordinary dashed options; idempotent.
+    /// </summary>
+    internal static string[] NormalizeOldStyle(string[] args)
+    {
+        if (args.Length == 0 || args[0].Length == 0 || args[0][0] == '-') return args;
+        var result = new List<string>(args.Length + 4);
+        int next = 1;
+        foreach (char ch in args[0])
+        {
+            result.Add("-" + ch);
+            if ("bCfFgHIKLNTVX".IndexOf(ch) >= 0 && next < args.Length) result.Add(args[next++]);
+        }
+        for (; next < args.Length; next++) result.Add(args[next]);
+        return result.ToArray();
+    }
+
+    internal sealed class TarArgs
+    {
+        public ParsedArgs Parsed = null!;
+        public string? Mode;                // OptCreate / OptExtract / OptList
+        public bool Verbose, Gzip, Keep, AutoCompress, ToStdout;
+        public string? ArchiveFile;
+        /// <summary>Accumulated -C/--directory (extract/list destination).</summary>
+        public string? ChangeDir;
+        public List<string> Excludes = new();
+        public int StripComponents;
+        /// <summary>Operands with the -C directory in effect where each appeared (create: -C is positional).</summary>
+        public List<(string? Dir, string Path)> Sources = new();
+        public List<string> Operands = new();
+        public string? Error;
+        public int ErrorExit = 2;
+    }
+
+    /// <summary>
+    /// Scan + validate. Fixes over the old hand scan: usage errors exit 64 (they were 1/2) and unknown
+    /// long options / a dangling -f were silently ignored or operands, abbreviations (<c>--dir</c>,
+    /// <c>--strip=1</c>) work, two modes (<c>-cx</c>) and no mode are GNU's exit-2 errors, a bad
+    /// <c>--strip-components</c> is "Invalid number of elements" (was 0), <c>-C</c> works on create and is
+    /// positional (<c>tar cf a.tar -C d f</c>), old-style words (<c>tar czf ...</c>) parse.
+    /// </summary>
+    internal static TarArgs Plan(string[] args)
+    {
+        var p = new TarArgs { Parsed = ScanArgs(args) };
+        p.Operands = p.Parsed.Operands();
+        if (p.Parsed.HasError) return p;
+        if (p.Parsed.Has(OptSpecSet.HelpId) || p.Parsed.Has(OptSpecSet.VersionId)) return p;
+
+        var modes = new List<string>();
+        string? dir = null;
+        foreach (var tok in p.Parsed.Tokens)
+        {
+            if (tok.Kind == ArgTokKind.Operand) { p.Sources.Add((dir, tok.Raw)); continue; }
+            if (tok.Kind != ArgTokKind.Option) continue;
+            switch (tok.OptId)
+            {
+                case OptCreate or OptExtract or OptList:
+                    if (!modes.Contains(tok.OptId!)) modes.Add(tok.OptId!);
+                    break;
+                case OptVerbose: p.Verbose = true; break;
+                case OptGzip: p.Gzip = true; break;
+                case OptKeep: p.Keep = true; break;
+                case OptAuto: p.AutoCompress = true; break;
+                case OptStdout: p.ToStdout = true; break;
+                case OptFile: p.ArchiveFile = tok.Value; break;
+                case OptExclude: p.Excludes.Add(tok.Value!); break;
+                case OptDirectory:
+                    dir = dir is null || Path.IsPathRooted(tok.Value!) ? tok.Value : Path.Combine(dir, tok.Value!);
+                    break;
+                case OptStrip:
+                    {
+                        string v = tok.Value!;
+                        bool digits = v.Length > 0;
+                        foreach (char ch in v) if (ch < '0' || ch > '9') { digits = false; break; }
+                        if (!digits) { p.Error = $"tar: {v}: Invalid number of elements"; return p; }
+                        p.StripComponents = int.TryParse(v, out int n) ? n : int.MaxValue;
+                        break;
+                    }
+            }
+        }
+        p.ChangeDir = dir;
+
+        if (modes.Count > 1)
+        {
+            p.Error = "tar: You may not specify more than one '-Acdtrux', '--delete' or  '--test-label' option";
+            return p;
+        }
+        if (modes.Count == 0)
+        {
+            p.Error = "tar: You must specify one of the '-Acdtrux', '--delete' or '--test-label' options";
+            return p;
+        }
+        p.Mode = modes[0];
+        return p;
+    }
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
-    /// <summary>The bash <c>-c</c> (create) switch — explicit because the
-    /// bare token <c>-c</c> prefix-collides with <c>-Confirm</c>. Case-insensitive
-    /// binder means <c>-C</c> (the bash change-dir flag) also binds to this
-    /// switch — see the cmdlet docstring for the known-gap workaround.</summary>
+    /// <summary>Decoy for <c>-c</c> (create): the bare token prefix-collides with <c>-Confirm</c>, and the
+    /// case-insensitive binder also routes <c>-C</c> (change-dir) here in DIRECT calls. <see cref="ArgsWithDecoys"/>
+    /// tells them apart; the transpiler single-quotes every flag so it never binds.</summary>
     [Parameter]
     public SwitchParameter C { get; set; }
 
@@ -103,190 +297,63 @@ public sealed class InvokeBashTarCommand : PSCmdlet
     [Parameter]
     public string? F { get; set; }
 
+    /// <summary>
+    /// Re-injects decoy-bound flags before the scan. <c>-v</c> and <c>-f FILE</c> are position-free. The
+    /// <c>C</c> switch is either <c>-c</c> or <c>-C DIR</c> (the binder cannot tell): with no mode on the line
+    /// it is <c>-c</c>; with a mode already given it is <c>-C</c> and its DIR is the first operand
+    /// (`Invoke-BashTar -xf a.tar -C out` leaves <c>out</c> as the first operand).
+    /// </summary>
+    private string[] ArgsWithDecoys()
+    {
+        // A bound decoy means the original first argument was a dashed option the binder consumed, so what is
+        // left in Arguments is NOT an old-style word (`Invoke-BashTar -c -f a.tar src` leaves `src` first).
+        var raw = Arguments ?? Array.Empty<string>();
+        if (!V.IsPresent && F is null && !C.IsPresent) raw = NormalizeOldStyle(raw);
+        var pre = new List<string>();
+        if (V.IsPresent) pre.Add("-v");
+        if (F is not null) { pre.Add("-f"); pre.Add(F); }
+        var rest = raw;
+        if (C.IsPresent)
+        {
+            var probe = ArgParser.Parse(raw, TarSpec);
+            bool hasMode = probe.Has(OptCreate) || probe.Has(OptExtract) || probe.Has(OptList);
+            int operandIndex = -1;
+            foreach (var t in probe.Tokens)
+            {
+                if (t.Kind == ArgTokKind.Operand) { operandIndex = t.ArgIndex; break; }
+            }
+            if (hasMode && operandIndex >= 0)
+            {
+                pre.Add("-C");
+                pre.Add(raw[operandIndex]);
+                rest = raw.Where((_, i) => i != operandIndex).ToArray();
+            }
+            else
+            {
+                pre.Add("-c");
+            }
+        }
+        return pre.Count == 0 ? rest : pre.Concat(rest).ToArray();
+    }
+
     protected override void EndProcessing()
     {
-        var args = Arguments ?? Array.Empty<string>();
+        var args = ArgsWithDecoys();
 
         FileSystemHelpers.SetLastExitCode(this, 0);
-        if (FileSystemHelpers.TryHandleVersion(this, "tar", args)) return;
-        if (Array.IndexOf(args, "--help") >= 0)
+        var plan = Plan(args);
+        if (FileSystemHelpers.TryWriteParseError(this, "tar", plan.Parsed)) return;
+        if (FileSystemHelpers.TryHandleInfoOptions(this, "tar", plan.Parsed)) return;
+        if (plan.Error is { } planError)
         {
-            foreach (var line in InvokeCommand.InvokeScript(
-                         "param($n) Show-BashHelp $n", "tar"))
-            {
-                WriteObject(line);
-            }
+            FileSystemHelpers.WriteBashError(this, planError);
+            FileSystemHelpers.SetLastExitCode(this, plan.ErrorExit);
             return;
         }
 
-        // Defer the create flag — we'll decide AFTER the args loop whether
-        // C.IsPresent meant -c (create) or -C DIR (chdir). The case-
-        // insensitive PowerShell binder collapses them onto the same switch.
-        bool cBoundByBinder = C.IsPresent;
-        bool create = false;
-        bool extract = false;
-        bool listMode = false;
-        bool gzipFilter = false;
-        bool verbose = V.IsPresent;
-        string? archiveFile = F;
-        string? changeDir = null;
-        var excludePatterns = new List<string>();
-        var operands = new List<string>();
-        bool sawExplicitCreate = false;
-        int stripComponents = 0;
-        bool toStdout = false;
-        bool autoCompress = false;
-        bool keepOldFiles = false;
-        string? unsupportedCompression = null;
-
-        int i = 0;
-        while (i < args.Length)
-        {
-            string a = args[i];
-
-            if (a == "--") { i++; while (i < args.Length) { operands.Add(args[i]); i++; } break; }
-            if (a == "--create") { create = true; sawExplicitCreate = true; i++; continue; }
-            if (a == "--extract" || a == "--get") { extract = true; i++; continue; }
-            if (a == "--list") { listMode = true; i++; continue; }
-            if (a == "--gzip" || a == "--gunzip") { gzipFilter = true; i++; continue; }
-            if (a == "--verbose") { verbose = true; i++; continue; }
-            if (a == "--auto-compress") { autoCompress = true; i++; continue; }
-            if (a == "--keep-old-files") { keepOldFiles = true; i++; continue; }
-            // Accept-and-ignore: these map to ps-bash's existing default behavior
-            // (we overwrite on extract, don't restore mtime, and --exclude already
-            // globs), so the flags are honored as no-ops rather than refused.
-            if (a == "--overwrite" || a == "--touch" || a == "--no-same-owner"
-                || a == "--same-owner" || a == "--no-same-permissions"
-                || a == "--preserve-permissions" || a == "--wildcards"
-                || a == "--no-wildcards") { i++; continue; }
-            // Compression formats with no managed .NET codec: refuse clearly
-            // rather than silently produce an uncompressed archive.
-            if (a == "--bzip2" || a == "--xz" || a == "--lzma" || a == "--lzip"
-                || a == "--lzop" || a == "--zstd" || a == "--compress")
-            { unsupportedCompression = a; i++; continue; }
-
-            if (a == "--file")
-            {
-                i++;
-                if (i < args.Length) { archiveFile = args[i]; }
-                i++;
-                continue;
-            }
-            if (a.StartsWith("--file=", StringComparison.Ordinal))
-            {
-                archiveFile = a.Substring("--file=".Length);
-                i++;
-                continue;
-            }
-            if (a == "--directory")
-            {
-                i++;
-                if (i < args.Length) { changeDir = args[i]; }
-                i++;
-                continue;
-            }
-            if (a.StartsWith("--directory=", StringComparison.Ordinal))
-            {
-                changeDir = a.Substring("--directory=".Length);
-                i++;
-                continue;
-            }
-            if (a.StartsWith("--exclude=", StringComparison.Ordinal))
-            {
-                excludePatterns.Add(a.Substring("--exclude=".Length));
-                i++;
-                continue;
-            }
-            if (a == "--exclude")
-            {
-                i++;
-                if (i < args.Length) { excludePatterns.Add(args[i]); }
-                i++;
-                continue;
-            }
-            // --strip-components=N / --strip-components N: drop leading path
-            // components on extract (ubiquitous for "extract into current dir").
-            if (a.StartsWith("--strip-components=", StringComparison.Ordinal))
-            {
-                int.TryParse(a.Substring("--strip-components=".Length), out stripComponents);
-                i++;
-                continue;
-            }
-            if (a == "--strip-components")
-            {
-                i++;
-                if (i < args.Length) int.TryParse(args[i], out stripComponents);
-                i++;
-                continue;
-            }
-            if (a == "--to-stdout") { toStdout = true; i++; continue; }
-
-            // Bundled / joined short flags (oracle: `arg.Substring(1).ToCharArray()`
-            // loop). `f` and `C` are value-bearing and consume the rest of the
-            // token or the next argument; everything else is a boolean switch.
-            if (a.Length > 1 && a[0] == '-' && !a.StartsWith("--", StringComparison.Ordinal))
-            {
-                string body = a.Substring(1);
-                int j = 0;
-                while (j < body.Length)
-                {
-                    char ch = body[j];
-                    if (ch == 'c') { create = true; sawExplicitCreate = true; }
-                    else if (ch == 'x') { extract = true; }
-                    else if (ch == 't') { listMode = true; }
-                    else if (ch == 'z') { gzipFilter = true; }
-                    else if (ch == 'v') { verbose = true; }
-                    else if (ch == 'p') { /* preserve perms — ignored, oracle parity */ }
-                    else if (ch == 'm') { /* --touch: don't restore mtime — already our default */ }
-                    else if (ch == 'k') { keepOldFiles = true; }
-                    else if (ch == 'a') { autoCompress = true; }
-                    else if (ch == 'O') { toStdout = true; }
-                    else if (ch == 'j' || ch == 'J' || ch == 'Z')
-                    {
-                        // bzip2 / xz / LZW — no managed codec; refuse clearly so a
-                        // bundled `-cjf` never silently writes an uncompressed tar.
-                        unsupportedCompression = "-" + ch;
-                    }
-                    else if (ch == 'f')
-                    {
-                        string rest = body.Substring(j + 1);
-                        if (rest.Length > 0) { archiveFile = rest; }
-                        else
-                        {
-                            i++;
-                            if (i < args.Length) { archiveFile = args[i]; }
-                        }
-                        break;
-                    }
-                    else if (ch == 'C')
-                    {
-                        // Bash -C DIR / -CDIR change-dir. Note: a bare `-C`
-                        // arriving here means the PSCmdlet binder did NOT
-                        // consume it as the create switch (e.g. because it
-                        // was bundled into a multi-char short flag like
-                        // `-xC`). Standalone `-C` and `-c` are
-                        // case-insensitively equivalent under the binder and
-                        // are both captured by the `C` SwitchParameter
-                        // declaration; callers must use --directory=DIR for
-                        // change-dir. See cmdlet docstring.
-                        string rest = body.Substring(j + 1);
-                        if (rest.Length > 0) { changeDir = rest; }
-                        else
-                        {
-                            i++;
-                            if (i < args.Length) { changeDir = args[i]; }
-                        }
-                        break;
-                    }
-                    j++;
-                }
-                i++;
-                continue;
-            }
-
-            operands.Add(a);
-            i++;
-        }
+        string? archiveFile = plan.ArchiveFile;
+        string? changeDir = plan.ChangeDir;
+        bool gzipFilter = plan.Gzip;
 
         if (!string.IsNullOrEmpty(archiveFile))
         {
@@ -297,65 +364,15 @@ public sealed class InvokeBashTarCommand : PSCmdlet
             changeDir = SessionState.Path.GetUnresolvedProviderPathFromPSPath(changeDir);
         }
 
-        // Resolve the cBoundByBinder ambiguity: the PowerShell binder caught
-        // either -c (create) or -C (chdir). If we already saw an explicit
-        // lowercase -c in the args loop (--create or bundled), create is set
-        // correctly. Otherwise the binder fired for either bare -c (the far
-        // more common case — separated form `-c -f ARCHIVE SRC`) or for a
-        // bare uppercase -C DIR. We disambiguate by looking at the other
-        // action flags: if NO other action verb (-x / -t) is set, the binder
-        // must have caught -c (create), since -C DIR alone is meaningless
-        // without an action. Only when an action verb IS already set do we
-        // treat cBoundByBinder as the chdir flag and consume the first
-        // operand as the directory target.
-        if (cBoundByBinder && !sawExplicitCreate)
-        {
-            if (!extract && !listMode)
-            {
-                // No other action verb — binder caught the create flag.
-                create = true;
-            }
-            else if (string.IsNullOrEmpty(changeDir) && operands.Count > 0)
-            {
-                // Action verb already set; binder caught -C DIR. Pull the
-                // chdir target from the first operand position. Matches
-                // GNU tar's surface for `-C DIR` taking one value.
-                changeDir = operands[0];
-                operands.RemoveAt(0);
-                try
-                {
-                    changeDir = SessionState.Path.GetUnresolvedProviderPathFromPSPath(changeDir);
-                }
-                catch { /* fall through with the raw token */ }
-            }
-        }
-        else if (cBoundByBinder && sawExplicitCreate)
-        {
-            // Both -c and -C might be present. The bundled-flag handler
-            // already set create; keep it. changeDir, if any, was already
-            // captured via --directory= forms.
-            create = true;
-        }
-
         if (string.IsNullOrEmpty(archiveFile))
         {
             FileSystemHelpers.WriteBashError(this, "tar: you must specify -f archive");
             return;
         }
 
-        // A compression format with no managed .NET codec was requested — refuse
-        // clearly (bucket 2) instead of writing an uncompressed archive.
-        if (unsupportedCompression != null)
-        {
-            FileSystemHelpers.WriteBashError(this,
-                $"tar: option '{unsupportedCompression}' is recognized but not supported by ps-bash");
-            FileSystemHelpers.SetLastExitCode(this, 2);
-            return;
-        }
-
         // -a/--auto-compress: pick the filter from the archive extension. Only
         // gzip is available; a .bz2/.xz/.zst extension is the same .NET-codec gap.
-        if (autoCompress)
+        if (plan.AutoCompress)
         {
             if (archiveFile!.EndsWith(".gz", StringComparison.OrdinalIgnoreCase)
                 || archiveFile.EndsWith(".tgz", StringComparison.OrdinalIgnoreCase))
@@ -374,32 +391,25 @@ public sealed class InvokeBashTarCommand : PSCmdlet
             }
         }
 
-        if (FileSystemHelpers.TryWriteOperandOptionError(this, "tar", operands, TarValidButUnsupported))
-            return;
-
-        if (create)
+        switch (plan.Mode)
         {
-            DoCreate(archiveFile!, operands, gzipFilter, verbose, excludePatterns);
-        }
-        else if (extract)
-        {
-            DoExtract(archiveFile!, gzipFilter, verbose, changeDir, stripComponents, toStdout, keepOldFiles);
-        }
-        else if (listMode)
-        {
-            DoList(archiveFile!, gzipFilter);
-        }
-        else
-        {
-            FileSystemHelpers.WriteBashError(this, "tar: you must specify -c, -x, or -t");
+            case OptCreate:
+                DoCreate(archiveFile!, plan.Sources, gzipFilter, plan.Verbose, plan.Excludes);
+                break;
+            case OptExtract:
+                DoExtract(archiveFile!, gzipFilter, plan.Verbose, changeDir, plan.StripComponents, plan.ToStdout, plan.Keep);
+                break;
+            default:
+                DoList(archiveFile!, gzipFilter);
+                break;
         }
     }
-
-    private void DoCreate(string archiveFile, List<string> sources, bool gzipFilter, bool verbose, List<string> excludePatterns)
+    private void DoCreate(string archiveFile, List<(string? Dir, string Path)> sources, bool gzipFilter, bool verbose, List<string> excludePatterns)
     {
         if (sources.Count == 0)
         {
-            FileSystemHelpers.WriteBashError(this, "tar: no files or directories specified");
+            FileSystemHelpers.WriteBashError(this, "tar: Cowardly refusing to create an empty archive");
+            FileSystemHelpers.SetLastExitCode(this, 2);
             return;
         }
 
@@ -419,9 +429,15 @@ public sealed class InvokeBashTarCommand : PSCmdlet
             // component prunes that component's whole subtree.
             var excludeRegexes = BuildExcludeRegexes(excludePatterns);
 
-            foreach (string src in sources)
+            foreach (var (srcDir, src) in sources)
             {
                 string resolved = SessionState.Path.GetUnresolvedProviderPathFromPSPath(src);
+                if (!string.IsNullOrEmpty(srcDir) && !Path.IsPathRooted(src))
+                {
+                    // -C DIR before this operand: members are taken relative to DIR (GNU tar).
+                    string dirResolved = SessionState.Path.GetUnresolvedProviderPathFromPSPath(srcDir);
+                    resolved = Path.GetFullPath(Path.Combine(dirResolved, src));
+                }
                 if (!File.Exists(resolved) && !Directory.Exists(resolved))
                 {
                     FileSystemHelpers.WriteBashError(this, $"tar: {src}: Cannot stat: No such file or directory");

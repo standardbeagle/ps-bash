@@ -46,8 +46,7 @@ public class BinderDecoyClassifierTests : IClassFixture<SharedPwshFixture>
     [InlineData("'x' | Invoke-BashCat -v")]
     // tee diagnose-write-errors
     [InlineData("'x' | Invoke-BashTee -p out.txt")]
-    // column output width / separator
-    [InlineData("'a b' | Invoke-BashColumn -o")]
+    // column output width (-o is implemented now: a value-bearing decoy)
     [InlineData("'a b' | Invoke-BashColumn -c")]
     // split elide-empty / line-bytes
     [InlineData("'x' | Invoke-BashSplit -e")]
@@ -62,19 +61,12 @@ public class BinderDecoyClassifierTests : IClassFixture<SharedPwshFixture>
     [InlineData("'x' | Invoke-BashTail -v")]
     // grep directories / devices
     [InlineData("'x' | Invoke-BashGrep -d skip")]
+    // du no-dereference (bare -P prefix-collides with -ProgressAction)
+    [InlineData("Invoke-BashDu -P .")]
     public void CollidingClassifierFlag_FiresExit2_WithoutBinderCrash(string script)
     {
         var (err, exit) = Run(script);
         Assert.Equal(2, exit);
         Assert.Contains(err, m => m.Contains("recognized but not supported", StringComparison.Ordinal));
-    }
-
-    [Fact]
-    public void Du_DashP_NoBinderCrash_RunsNormally()
-    {
-        // du silently swallows unknown short flags (oracle behavior); the P decoy just
-        // prevents the -ProgressAction binder crash. du -P . computes the size normally.
-        var (_, exit) = Run("Invoke-BashDu -P .");
-        Assert.Equal(0, exit);
     }
 }

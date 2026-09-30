@@ -795,7 +795,7 @@ public class PsEmitterTests
         // Batch 1 of the shared ordered parser. Adding a command here also means adding it to
         // CommonParameterCollisionGuardTests.EmitterForceQuoted (Cmdlets.Tests) — that map is
         // how the guard knows the emitter, not a decoy, protects the colliding letters.
-        Assert.Equal(new[] { "awk", "base64", "bash", "cat", "comm", "command", "cp", "cut", "echo", "env", "expand", "file", "find", "fold", "grep", "head", "join", "ln", "ls", "mkdir", "mv", "nl", "paste", "printf", "rg", "rm", "rmdir", "sed", "sort", "split", "stat", "strings", "tac", "tail", "tee", "test", "time", "touch", "unexpand", "uniq", "wc", "xargs" }, PsEmitter.OrderedArgCommands.OrderBy(x => x).ToArray());
+        Assert.Equal(new[] { "awk", "base64", "bash", "cat", "column", "comm", "command", "cp", "cut", "du", "echo", "env", "expand", "file", "find", "fold", "grep", "gzip", "head", "join", "ln", "ls", "md5sum", "mkdir", "mv", "nl", "paste", "printf", "rg", "rm", "rmdir", "sed", "sha1sum", "sha256sum", "sort", "split", "stat", "strings", "tac", "tail", "tar", "tee", "test", "time", "touch", "tree", "unexpand", "uniq", "wc", "xargs" }, PsEmitter.OrderedArgCommands.OrderBy(x => x).ToArray());
     }
 
     // `bash` is on OrderedArgCommands: the script's own args (`bash s.sh -v -e -c x`) and the
@@ -948,7 +948,22 @@ public class PsEmitterTests
     [InlineData("command -p echo -e x", "Invoke-BashCommand '-p' echo '-e' x")]
     [InlineData("command grep -i x f", "Invoke-BashCommand grep '-i' x f")]
     [InlineData("command -- ls -d", "Invoke-BashCommand '--' ls '-d'")]
-    public void Transpile_OrderedArgCommand_QuotesEveryDashLiteral(string bash, string expected)
+    // batch 5: du tree column gzip tar md5sum sha1sum sha256sum
+    [InlineData("du -sh -d 1 .", "Invoke-BashDu '-sh' '-d' 1 .")]
+    [InlineData("du -P -c d", "Invoke-BashDu '-P' '-c' d")]
+    [InlineData("tree -L 2 -I '*.o' -a dir", "Invoke-BashTree '-L' 2 '-I' '*.o' '-a' dir")]
+    [InlineData("tree -d -C dir", "Invoke-BashTree '-d' '-C' dir")]
+    [InlineData("column -t -s: -o ' | ' f", "Invoke-BashColumn '-t' '-s:' '-o' ' | ' f")]
+    [InlineData("column -e -d -V", "Invoke-BashColumn '-e' '-d' '-V'")]
+    [InlineData("gzip -dc -9 f.gz", "Invoke-BashGzip '-dc' '-9' f.gz")]
+    [InlineData("gzip -S .z -- -x", "Invoke-BashGzip '-S' .z '--' '-x'")]
+    [InlineData("tar -xf a.tar -C out", "Invoke-BashTar '-xf' a.tar '-C' out")]
+    [InlineData("tar -cvf a.tar -c d", "Invoke-BashTar '-cvf' a.tar '-c' d")]
+    [InlineData("tar czf a.tgz d", "Invoke-BashTar czf a.tgz d")]
+    [InlineData("tar --exclude=x --strip-components=1 -xf a.tar", "Invoke-BashTar '--exclude=x' '--strip-components=1' '-xf' a.tar")]
+    [InlineData("md5sum -c -w sums", "Invoke-BashMd5sum '-c' '-w' sums")]
+    [InlineData("sha256sum --tag -z f", "Invoke-BashSha256sum '--tag' '-z' f")]
+    [InlineData("sha1sum -b -- -c", "Invoke-BashSha1sum '-b' '--' '-c'")]    public void Transpile_OrderedArgCommand_QuotesEveryDashLiteral(string bash, string expected)
     {
         Assert.Equal(expected, PsEmitter.Transpile(bash));
     }
@@ -4487,7 +4502,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("cat data.csv | column -t");
 
-        Assert.Equal("Invoke-BashCat data.csv | Invoke-BashColumn -t", result);
+        Assert.Equal("Invoke-BashCat data.csv | Invoke-BashColumn '-t'", result);
     }
 
     [Fact]
