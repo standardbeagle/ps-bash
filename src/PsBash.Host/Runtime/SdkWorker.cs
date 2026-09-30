@@ -574,9 +574,13 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
             }
             catch (System.Management.Automation.ParseException ex)
             {
+                // The script never started (PowerShell parses all of it first), so there is
+                // no partial output to explain. Say why on stderr and use bash's
+                // syntax-error status (2) — the launcher's own bash ParseException path
+                // already does — so a caller can tell "never ran" from a command failing.
                 deliverError($"ps-bash: parse error: {ex.Message}");
                 _ps.Commands.Clear();
-                return 1;
+                return 2;
             }
             catch (System.Management.Automation.RuntimeException ex)
             {

@@ -58,6 +58,34 @@ public class AgentPatternEndToEndTests
     }
 
     [SkippableFact]
+    public async Task TmpWordWithQuotedPart_NamesTheUnquotedFile()
+    {
+        // bash oracle: `echo c > /tmp/psb_'s p'` writes the file `psb_s p` (the quotes are
+        // syntax, not name characters). The /tmp rewrite used to splice the emitted text, so the
+        // name kept LITERAL single quotes and `cat "/tmp/psb_s p"` found nothing.
+        var id = Guid.NewGuid().ToString("N")[..8];
+        var script = $"echo c > /tmp/psb_{id}_'s p'; cat \"/tmp/psb_{id}_s p\"; "
+                   + $"cat /tmp/\"psb_{id}_s p\"; ls /tmp/psb_{id}_*";
+        var file = Path.Combine(Path.GetTempPath(), $"psb_{id}_s p");
+        try
+        {
+            var (exitCode, stdout, stderr) = await RunShellAsync(
+                ["-c", script], timeout: null, env: null, workingDirectory: null);
+
+            Assert.Equal("", stderr.Trim());
+            Assert.Equal(0, exitCode);
+            var lines = stdout.Replace("\r", "").TrimEnd('\n').Split('\n');
+            Assert.Equal("c", lines[0]);
+            Assert.Equal("c", lines[1]);
+            Assert.Contains($"psb_{id}_s p", lines[2]);
+        }
+        finally
+        {
+            try { File.Delete(file); } catch { }
+        }
+    }
+
+    [SkippableFact]
     public async Task GlobWordWithComma_MatchesLiteralCommaAndKeepsWordWhenNoMatch()
     {
         // bash oracle: the comma is literal inside the glob; `ls f*,g` lists `fx,g`, and an

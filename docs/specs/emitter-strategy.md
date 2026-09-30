@@ -619,6 +619,16 @@ Maps redirects to PowerShell: `>file`, `>>file`, `2>&1`, etc. Calls
   Windows maps `/tmp` to `$env:TEMP`; Linux/macOS keep the literal `/tmp` (`$env:TEMP` is usually
   unset there, and the old unconditional `$env:TEMP\file` collapsed to `\file` at the filesystem
   root). Build it only via `PsBuild.TempPath` / `TempDirExpr`; never hand-concatenate.
+  **The rewrite is decided on the word's PARTS, not its emitted text** (`TryEmitTmpRootedWord` /
+  `TryEmitTmpBraceWord` in `EmitWord`): the leading `/tmp/` of the first part (bare, `'…'`, or inside
+  `"…"`) is removed and the rest is rendered through `AppendFlattenedParts` (the body of
+  `FlattenPartsToDoubleQuotedString`) into one `"TempDirExpr/…"` string. Quotes are therefore
+  consumed (`/tmp/psb_'s p'` → file `psb_s p`, not one with literal `'`), `$x` / `$(cmd)` stay live,
+  `\$` / `\'` are literal, and a glob (`/tmp/*.log`) stays in the string for the cmdlet's own glob
+  expansion. `/tmp/{a,b}` yields one rooted string per item. Brace-with-non-literal, tilde and
+  process-sub words decline to their dedicated emitters; `$HOME/tmp`, `/var/tmp`, `./tmp` are never
+  rewritten. Splicing emitted text into a string (the old `TempPath(emitted)`) is the bug class
+  this replaced — the text still carried bash's quote characters.
 - `/dev/null` -> `$null` — **redirect targets ONLY**. As a command *operand*, bash's
   `/dev/null` is an empty FILE (`grep x /dev/null` reads it and exits 1), not the `$null`
   discard sink — mapping it in `TransformWordPath` crashed cmdlets with "Value cannot be

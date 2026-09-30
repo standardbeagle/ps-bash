@@ -42,6 +42,53 @@ public class ProgramEndToEndTests
         Assert.Contains("hello", stdout);
     }
 
+    // A script that does not PARSE (here raw PowerShell with a stray `}` — the launcher's
+    // PowerShell fallback hands it to the host as-is, the same shape an emitter bug produces)
+    // runs nothing. It must never end quietly: stderr names the parse error and the exit status
+    // is 2, like a bash syntax error. Covers -c and stdin, daemon (shared host) and
+    // per-invocation hosts.
+    [SkippableTheory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task UnparseableScript_ReportsParseErrorOnStderr_ExitsTwo(bool perInvocation, bool viaStdin)
+    {
+        const string script = "Get-Date; Write-Output 'before' }";
+        var env = perInvocation
+            ? new Dictionary<string, string?> { ["PSBASH_PER_INVOCATION"] = "1" }
+            : null;
+        var psi = viaStdin
+            ? PsBashTestProcess.Create(["-s"], workingDirectory: null, env, ipcEndpoint: perInvocation ? null : IpcEndpoint)
+            : PsBashTestProcess.Create(["-c", script], workingDirectory: null, env, ipcEndpoint: perInvocation ? null : IpcEndpoint);
+
+        var (exitCode, stdout, stderr) = await ProcessRunHelper.RunAsync(
+            psi, stdinContent: viaStdin ? script : null, timeout: TimeSpan.FromSeconds(60));
+
+        Assert.Contains("parse error", stderr);
+        Assert.Equal(2, exitCode);
+        Assert.DoesNotContain("before", stdout);
+    }
+
+    [SkippableFact]
+    public async Task ScriptFileWithSyntaxError_ReportsParseErrorOnStderr_ExitsTwo()
+    {
+        var file = Path.Combine(Path.GetTempPath(), $"psb_syntax_{Guid.NewGuid():N}.sh");
+        File.WriteAllText(file, "echo before\nif true; then\n");
+        try
+        {
+            var (exitCode, stdout, stderr) = await RunShellAsync(file);
+
+            Assert.Contains("parse error", stderr);
+            Assert.Equal(2, exitCode);
+            Assert.DoesNotContain("before", stdout);
+        }
+        finally
+        {
+            try { File.Delete(file); } catch { }
+        }
+    }
+
     [SkippableFact]
     public async Task Command_ThrowError_PropagatesExitCodeAndStderr()
     {
