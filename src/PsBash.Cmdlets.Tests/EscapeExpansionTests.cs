@@ -190,7 +190,8 @@ public class EscapeExpansionTests : IClassFixture<SharedPwshFixture>
     [Fact]
     public void Redirect_PrintfNul_WritesExactlyTwoBytes()
     {
-        var dir = Path.Combine(Path.GetTempPath(), "psb-esc-" + Guid.NewGuid().ToString("N")[..8]);
+        // NOT Path.GetTempPath(): on Linux that is /tmp, which the emitter rewrites to $env:TEMP (unset there), so the path would not resolve.
+        var dir = Path.Combine(AppContext.BaseDirectory, "psb-esc-" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(dir);
         try
         {
@@ -204,7 +205,8 @@ public class EscapeExpansionTests : IClassFixture<SharedPwshFixture>
     [Fact]
     public void Tee_PrintfNul_WritesExactlyTwoBytes()
     {
-        var dir = Path.Combine(Path.GetTempPath(), "psb-esc-" + Guid.NewGuid().ToString("N")[..8]);
+        // NOT Path.GetTempPath(): on Linux that is /tmp, which the emitter rewrites to $env:TEMP (unset there), so the path would not resolve.
+        var dir = Path.Combine(AppContext.BaseDirectory, "psb-esc-" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(dir);
         try
         {
