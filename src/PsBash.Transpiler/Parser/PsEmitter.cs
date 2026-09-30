@@ -2925,11 +2925,129 @@ public static class PsEmitter
         return FlattenPartsToDoubleQuotedString(value.Parts);
     }
 
+    private const string TmpRoot = "/tmp/";
+
+    /// <summary>
+    /// If the word's FIRST part begins with the literal text <c>/tmp/</c> (bare, single-quoted or
+    /// inside a double-quoted part), returns the word's parts with that prefix removed. This is how
+    /// the <c>/tmp</c> rewrite sees a word: as PARTS it can re-render, never as already-emitted
+    /// PowerShell text (which still carries bash's quote characters).
+    /// </summary>
+    private static bool TryStripTmpPrefix(ImmutableArray<WordPart> parts, out ImmutableArray<WordPart> rest)
+    {
+        rest = default;
+        if (parts.IsDefaultOrEmpty)
+            return false;
+
+        WordPart? replacement;
+        switch (parts[0])
+        {
+            case WordPart.Literal l when l.Value.StartsWith(TmpRoot, StringComparison.Ordinal):
+                replacement = l.Value.Length == TmpRoot.Length
+                    ? null : new WordPart.Literal(l.Value[TmpRoot.Length..]);
+                break;
+            case WordPart.SingleQuoted s when s.Value.StartsWith(TmpRoot, StringComparison.Ordinal):
+                replacement = s.Value.Length == TmpRoot.Length
+                    ? null : new WordPart.SingleQuoted(s.Value[TmpRoot.Length..]);
+                break;
+            case WordPart.DoubleQuoted { Parts: { Length: > 0 } inner }
+                when inner[0] is WordPart.Literal dl && dl.Value.StartsWith(TmpRoot, StringComparison.Ordinal):
+                var innerRest = dl.Value.Length == TmpRoot.Length
+                    ? inner.RemoveAt(0)
+                    : inner.SetItem(0, new WordPart.Literal(dl.Value[TmpRoot.Length..]));
+                replacement = innerRest.IsEmpty ? null : new WordPart.DoubleQuoted(innerRest);
+                break;
+            default:
+                return false;
+        }
+
+        var builder = ImmutableArray.CreateBuilder<WordPart>(parts.Length);
+        if (replacement is not null)
+            builder.Add(replacement);
+        for (int i = 1; i < parts.Length; i++)
+            builder.Add(parts[i]);
+        rest = builder.ToImmutable();
+        return true;
+    }
+
+    /// <summary>
+    /// <c>/tmp/REST</c> as ONE PowerShell double-quoted string: the runtime temp-dir expression,
+    /// then <c>/</c>, then REST's parts rendered through the normal part emitters (so quote
+    /// characters are consumed, expansions stay live, globs stay in the literal for the cmdlet's
+    /// own glob expansion). Declines (false) for shapes it cannot render faithfully — brace,
+    /// tilde and process-substitution parts — which keep their dedicated emitters.
+    /// </summary>
+    private static bool TryEmitTmpRootedWord(ImmutableArray<WordPart> parts, out string emitted)
+    {
+        emitted = "";
+        if (!TryStripTmpPrefix(parts, out var rest))
+            return false;
+        foreach (var p in rest)
+            if (p is WordPart.ProcessSub or WordPart.TildeSub or WordPart.BracedTuple or WordPart.BracedRange)
+                return false;
+
+        var sb = new StringBuilder();
+        sb.Append('"').Append(PsBuild.TempDirExpr).Append('/');
+        AppendFlattenedParts(sb, rest);
+        sb.Append('"');
+        emitted = sb.ToString();
+        return true;
+    }
+
+    /// <summary>
+    /// <c>/tmp/{a,b}</c>: one temp-dir-rooted string per brace item. Only the plain shape (one
+    /// brace part, every other part literal text) is handled; anything richer keeps the generic
+    /// brace emitter.
+    /// </summary>
+    private static bool TryEmitTmpBraceWord(ImmutableArray<WordPart> parts, out string emitted)
+    {
+        emitted = "";
+        if (!TryStripTmpPrefix(parts, out var rest))
+            return false;
+        // The stripped prefix must have been BARE literal text (a quoted `/tmp/` brace word is
+        // not brace-expanded in bash).
+        if (parts[0] is not WordPart.Literal)
+            return false;
+
+        var pre = new StringBuilder();
+        var suf = new StringBuilder();
+        WordPart? brace = null;
+        foreach (var p in rest)
+        {
+            if (p is WordPart.BracedTuple or WordPart.BracedRange)
+            {
+                if (brace is not null)
+                    return false;
+                brace = p;
+            }
+            else if (p is WordPart.Literal l)
+                (brace is null ? pre : suf).Append(l.Value);
+            else
+                return false;
+        }
+        if (brace is null)
+            return false;
+
+        var items = new List<string>();
+        foreach (var item in ExpandBrace(brace))
+            items.Add("\"" + PsBuild.TempDirExpr + "/"
+                + PsBuild.EscapeForDoubleQuote(pre + item + suf) + "\"");
+        emitted = $"@({string.Join(',', items)})";
+        return true;
+    }
+
     private static string EmitWord(CompoundWord word)
     {
+        // `/tmp/…` words are rewritten from their PARTS (see TryEmitTmpRootedWord), before any
+        // emitted text exists to splice into.
+        if (TryEmitTmpRootedWord(word.Parts, out var tmpWord))
+            return tmpWord;
+
         // Check for brace expansion parts that need prefix/suffix combination.
         if (HasBraceExpansion(word.Parts))
-            return EmitBraceExpandedWord(word.Parts);
+            return TryEmitTmpBraceWord(word.Parts, out var tmpBrace)
+                ? tmpBrace
+                : EmitBraceExpandedWord(word.Parts);
 
         if (word.Parts.Length == 1)
             return EscapeLeadingSplatSigil(
@@ -3027,6 +3145,19 @@ public static class PsEmitter
 
         var sb = new StringBuilder();
         sb.Append('"');
+        AppendFlattenedParts(sb, parts);
+        sb.Append('"');
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// The INNER text (no surrounding quotes) of <see cref="FlattenPartsToDoubleQuotedString"/>:
+    /// each part rendered for placement inside one PowerShell double-quoted string. Shared with
+    /// the <c>/tmp</c> word rewrite so it renders the rest of the word through these same part
+    /// emitters instead of splicing already-emitted text.
+    /// </summary>
+    private static void AppendFlattenedParts(StringBuilder sb, ImmutableArray<WordPart> parts)
+    {
         for (int i = 0; i < parts.Length; i++)
         {
             var part = parts[i];
@@ -3038,6 +3169,10 @@ public static class PsEmitter
                 sb.Append(EscapeForDoubleQuoteNested(ExpandAnsiCEscapes(aq.Value)));
             else if (part is WordPart.Literal lit)
                 sb.Append(EscapeForDoubleQuoteNested(lit.Value));
+            // `\x` in bash is the literal char x. A bare backtick+x is NOT that inside a PS
+            // double-quoted string for every x (`` `n `` is a newline, `` `' `` a quote pair).
+            else if (part is WordPart.EscapedLiteral esc)
+                sb.Append(EscapeForDoubleQuoteNested(esc.Value));
             // A NESTED expansion (e.g. ${x:-${y:-z}}) must be emitted in double-quote
             // context: its bare form `($env:y ?? "z")` carries raw `"`, which would
             // break out of this surrounding "...". The inDoubleQuote form uses `$(...)`
@@ -3073,8 +3208,6 @@ public static class PsEmitter
             if (part is WordPart.TildeSub && i + 1 < parts.Length)
                 sb.Append('\\');
         }
-        sb.Append('"');
-        return sb.ToString();
     }
 
     /// <summary>

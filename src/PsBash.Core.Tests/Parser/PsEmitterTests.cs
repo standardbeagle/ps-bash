@@ -1846,6 +1846,67 @@ public class PsEmitterTests
         Assert.Equal("Invoke-BashCat \"$($env:OS -eq 'Windows_NT' ? $env:TEMP : '/tmp')/log.txt\"", result);
     }
 
+    // The /tmp rewrite works on the word's PARTS: the leading `/tmp/` of the first part is
+    // replaced by the runtime temp-dir expression and every remaining part is rendered through
+    // the normal double-quote part emitters. It used to splice already-EMITTED text (which still
+    // carried bash's quote characters) into a PowerShell string, so `/tmp/psb_'s p'` named a file
+    // with LITERAL single quotes in it.
+    private const string TmpDir = "$($env:OS -eq 'Windows_NT' ? $env:TEMP : '/tmp')";
+
+    [Theory]
+    [InlineData("cat /tmp/psb_'s p'", "Invoke-BashCat \"" + TmpDir + "/psb_s p\"")]
+    [InlineData("cat /tmp/\"a b\"", "Invoke-BashCat \"" + TmpDir + "/a b\"")]
+    [InlineData("cat \"/tmp/a b\"", "Invoke-BashCat \"" + TmpDir + "/a b\"")]
+    [InlineData("cat '/tmp/a b'", "Invoke-BashCat \"" + TmpDir + "/a b\"")]
+    [InlineData("cat \"/tmp/\"x", "Invoke-BashCat \"" + TmpDir + "/x\"")]
+    [InlineData("cat /tmp/a$x", "Invoke-BashCat \"" + TmpDir + "/a$env:x\"")]
+    [InlineData("cat /tmp/psb_\\$z", "Invoke-BashCat \"" + TmpDir + "/psb_`$z\"")]
+    [InlineData("cat /tmp/it\\'s", "Invoke-BashCat \"" + TmpDir + "/it's\"")]
+    [InlineData("cat /tmp/'a$b'", "Invoke-BashCat \"" + TmpDir + "/a`$b\"")]
+    [InlineData("cat /tmp/*.log", "Invoke-BashCat \"" + TmpDir + "/*.log\"")]
+    public void Transpile_TmpWordWithQuotedOrSpecialParts_RendersPartsNotEmittedText(string bash, string expected)
+    {
+        Assert.Equal(expected, PsEmitter.Transpile(bash));
+    }
+
+    [Fact]
+    public void Transpile_TmpWordWithCommandSub_KeepsTheSubstitution()
+    {
+        var result = PsEmitter.Transpile("cat /tmp/$(echo hi).txt");
+
+        Assert.StartsWith("Invoke-BashCat \"" + TmpDir + "/$(", result);
+        Assert.Contains("Invoke-BashEcho hi", result);
+        Assert.EndsWith(".txt\"", result);
+    }
+
+    [Fact]
+    public void Transpile_TmpRedirectTargetWithQuotes_RendersPartsNotEmittedText()
+    {
+        var result = PsEmitter.Transpile("echo c > /tmp/psb_'s p'");
+
+        Assert.Equal(
+            "Invoke-BashEcho c | Invoke-BashRedirect -Path \"" + TmpDir + "/psb_s p\"", result);
+    }
+
+    [Fact]
+    public void Transpile_TmpBraceExpansion_MapsEveryItemToTempDir()
+    {
+        var result = PsEmitter.Transpile("ls /tmp/{a,b}");
+
+        Assert.Equal(
+            "Invoke-BashLs @(\"" + TmpDir + "/a\",\"" + TmpDir + "/b\")", result);
+    }
+
+    [Theory]
+    [InlineData("cat $HOME/tmp/x")]
+    [InlineData("cat /var/tmp/x")]
+    [InlineData("cat ./tmp/x")]
+    [InlineData("cat x/tmp/y")]
+    public void Transpile_NonRootTmp_IsNotRewritten(string bash)
+    {
+        Assert.DoesNotContain("Windows_NT", PsEmitter.Transpile(bash));
+    }
+
     [Fact]
     public void Transpile_DevNullAsArgument_StaysLiteralPath()
     {
