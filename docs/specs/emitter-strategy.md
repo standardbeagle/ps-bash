@@ -186,15 +186,22 @@ EmitPassthrough(cmdlet, args) -> "cmdlet arg1 arg2 ..."
 - Already-quoted arguments (starting with `"` or `'`) are skipped.
 
 Example: `awk -F,` emits as `Invoke-BashAwk "-F,"` to prevent PowerShell from
-splitting on the comma. `xargs -I{}` emits as `Invoke-BashXargs "-I{}"`.
+splitting on the comma. `xargs -I{}` emits as `Invoke-BashXargs '-I{}'` (xargs is on the ordered-arg path, below).
 
-`xargs` additionally force-quotes the obsolete `-i` / `-iTOK` replacement forms
-(via `XargsForceQuoteFlags` plus an inline `-i` prefix check). The cmdlet
-declares a value-bearing `I` parameter for `-I`, whose prefix also matches
-`-i`; without force-quoting the binder either consumes the following command
-token as `I`'s value or raises "Missing an argument for parameter 'I'". The
-whole token reaches `Invoke-BashXargs`'s `Arguments`, where the manual scan
-reads it as replacement mode with the default `{}`.
+`xargs`, `time`, `env` (and the `-exec`/`-execdir`/`-ok` argv of `find`) run a FOREIGN command
+line, so the flags of the command they run are as dangerous as their own: an inner `-a`
+(`xargs -0 basename -a`) prefix-matched `Invoke-BashXargs`'s `-Arguments` and died with
+"Missing an argument for parameter 'Arguments'"; `time echo -e` / `find -exec grep -i` hit the
+ambiguous `-Error*` / `-Information*` common parameters; `env X=1 grep -i` had its `-i` taken
+as env's own decoy switch. `xargs`, `time` and `env` are therefore on
+`PsEmitter.OrderedArgCommands` (every dash-leading literal is single-quoted, so it reaches
+`Arguments` verbatim and in order — see runtime-functions.md "Shared argument parser"), and
+`FindExecArgvIndices` applies the same quoting to the words between `-exec` and its `;` / `+`.
+The cmdlets' scans stop parsing their own options at the first operand (the command name);
+everything after is the inner argv. Ordered-arg commands also single-quote a bare literal
+containing a comma (`xargs -d , echo`): unquoted it is a PowerShell array / parse error.
+Not covered: `command` (declared `-v/-V/-p` switches would have to move into `Arguments`) and
+`bash SCRIPT -flags` — inner flags of those can still collide.
 
 ---
 

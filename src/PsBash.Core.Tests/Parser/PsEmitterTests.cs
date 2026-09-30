@@ -782,7 +782,7 @@ public class PsEmitterTests
         // Batch 1 of the shared ordered parser. Adding a command here also means adding it to
         // CommonParameterCollisionGuardTests.EmitterForceQuoted (Cmdlets.Tests) — that map is
         // how the guard knows the emitter, not a decoy, protects the colliding letters.
-        Assert.Equal(new[] { "cp", "ln", "mkdir", "mv", "rm", "rmdir", "tee", "touch" }, PsEmitter.OrderedArgCommands.OrderBy(x => x).ToArray());
+        Assert.Equal(new[] { "cp", "env", "ln", "mkdir", "mv", "rm", "rmdir", "tee", "time", "touch", "xargs" }, PsEmitter.OrderedArgCommands.OrderBy(x => x).ToArray());
     }
 
     [Theory]
@@ -3964,7 +3964,29 @@ public class PsEmitterTests
         // Issue 14: -I{} was parsed by PowerShell as -I + empty scriptblock
         var result = PsEmitter.Transpile("echo test | xargs -I{} echo \"found: {}\"");
 
-        Assert.Contains("\"-I{}\"", result);
+        Assert.Contains("'-I{}'", result);
+    }
+
+    // xargs is on OrderedArgCommands: xargs's own flags AND the flags of the command it runs
+    // are all single-quoted, so none can prefix-match a cmdlet/common parameter (`-a` of
+    // `basename -a` matched Invoke-BashXargs's -Arguments: "Missing an argument ... 'Arguments'").
+    [Theory]
+    [InlineData("xargs -0 basename -a", "Invoke-BashXargs '-0' basename '-a'")]
+    [InlineData("xargs grep -i foo", "Invoke-BashXargs grep '-i' foo")]
+    [InlineData("xargs -n1 echo -e x", "Invoke-BashXargs '-n1' echo '-e' x")]
+    [InlineData("xargs -P2 -n1 ls -d", "Invoke-BashXargs '-P2' '-n1' ls '-d'")]
+    [InlineData("xargs -I {} cp -v {} dst/", "Invoke-BashXargs '-I' \"{}\" cp '-v' \"{}\" dst/")]
+    [InlineData("xargs -i echo x", "Invoke-BashXargs '-i' echo x")]
+    [InlineData("xargs -d , -n 1 echo", "Invoke-BashXargs '-d' ',' '-n' 1 echo")]
+    // Other wrappers that run a foreign command line: the inner argv is quoted too.
+    [InlineData("time echo -e a", "Invoke-BashTime echo '-e' a")]
+    [InlineData("env FOO=1 grep -i x f", "Invoke-BashEnv FOO=1 grep '-i' x f")]
+    [InlineData("env basename -a a/b", "Invoke-BashEnv basename '-a' a/b")]
+    [InlineData("find . -exec grep -i x {} \\;", "Invoke-BashFind . -exec grep '-i' x \"{}\" `;")]
+    [InlineData("find . -exec basename -a {} +", "Invoke-BashFind . -exec basename '-a' \"{}\" +")]
+    public void Transpile_XargsDashLiterals_AreAllSingleQuoted(string bash, string expected)
+    {
+        Assert.Contains(expected, PsEmitter.Transpile(bash));
     }
 
     [Fact]
@@ -4679,7 +4701,7 @@ public class PsEmitterTests
     public void Transpile_FindExecWithBraces_PreservesBraces()
     {
         var result = PsEmitter.Transpile("find src -name '*.cs' -exec wc -l {} +");
-        Assert.Contains("Invoke-BashFind src -name '*.cs' -exec wc -l \"{}\" +", result);
+        Assert.Contains("Invoke-BashFind src -name '*.cs' -exec wc '-l' \"{}\" +", result);
     }
 
     [Fact]

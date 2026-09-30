@@ -302,7 +302,16 @@ public sealed class InvokeBashXargsCommand : PSCmdlet
                 continue;
             }
 
-            // -PN joined form for accepted-but-ignored parallel flag.
+            // -P N (separate value) and -PN (joined) for the accepted-but-ignored parallel
+            // flag. The transpiler single-quotes every dash literal, so the bare `-P` arrives
+            // here with its value as the NEXT element — it must be consumed, or "2" would be
+            // taken as the command.
+            if (string.Equals(arg, "-P", System.StringComparison.Ordinal)
+                || string.Equals(arg, "--max-procs", System.StringComparison.Ordinal))
+            {
+                i += 2;
+                continue;
+            }
             if (arg.Length > 2 && arg.StartsWith("-P", System.StringComparison.Ordinal))
             {
                 i++;

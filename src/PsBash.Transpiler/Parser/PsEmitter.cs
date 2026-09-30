@@ -5171,7 +5171,7 @@ public static class PsEmitter
                 result = EmitPassthrough("Invoke-BashCut", args);
                 return true;
             case "xargs":
-                result = EmitPassthrough("Invoke-BashXargs", args, XargsForceQuoteFlags);
+                result = EmitPassthrough("Invoke-BashXargs", args);
                 return true;
             case "tr":
                 result = EmitPassthrough("Invoke-BashTr", args);
@@ -5819,19 +5819,6 @@ public static class PsEmitter
         new HashSet<string>(StringComparer.Ordinal) { "-e", "-E", "--" };
 
     /// <summary>
-    /// xargs's <c>-i[REPLACE]</c> (obsolete GNU replacement flag) collides with
-    /// the <c>-Information*</c> common parameters and, because the cmdlet also
-    /// declares a value-bearing <c>I</c> parameter for <c>-I</c>, the binder
-    /// would silently consume the following command token (or fail with
-    /// "Missing an argument for parameter 'I'"). Force-quoting routes the whole
-    /// token to <c>Invoke-BashXargs</c>'s Arguments, where the manual scan
-    /// reads it as replacement mode with the default <c>{}</c>. The prefix form
-    /// (<c>-iTOK</c>) is matched separately.
-    /// </summary>
-    private static readonly IReadOnlySet<string> XargsForceQuoteFlags =
-        new HashSet<string>(StringComparer.Ordinal) { "-i" };
-
-    /// <summary>
     /// Bash command names whose cmdlet parses its argv with the shared ORDERED parser
     /// (<c>PsBash.Cmdlets.Args.ArgParser</c>). For these, <see cref="EmitPassthrough"/> quotes
     /// EVERY dash-leading literal word (and <c>--</c>) so the PowerShell binder never sees a
@@ -5843,7 +5830,7 @@ public static class PsEmitter
     /// cmdlet must be prepared to receive every flag as a plain string.
     /// </summary>
     internal static readonly IReadOnlySet<string> OrderedArgCommands =
-        new HashSet<string>(StringComparer.Ordinal) { "tee", "cp", "mv", "rm", "mkdir", "rmdir", "ln", "touch" };
+        new HashSet<string>(StringComparer.Ordinal) { "tee", "cp", "mv", "rm", "mkdir", "rmdir", "ln", "touch", "xargs", "time", "env" };
 
     /// <summary><c>Invoke-BashTee</c> -&gt; is <c>tee</c> in <see cref="OrderedArgCommands"/>?</summary>
     private static bool IsOrderedArgCmdlet(string cmdlet) =>
@@ -5864,6 +5851,34 @@ public static class PsEmitter
         return value;
     }
 
+    /// <summary>
+    /// Indices of the words that belong to a <c>find -exec</c>/<c>-execdir</c>/<c>-ok</c>
+    /// command line: everything after the action word up to its <c>;</c> / <c>+</c>
+    /// terminator (the command name included, harmlessly — it never starts with a dash).
+    /// Null when the find has no such action.
+    /// </summary>
+    private static HashSet<int>? FindExecArgvIndices(ImmutableArray<CompoundWord> args)
+    {
+        HashSet<int>? indices = null;
+        bool inExec = false;
+        for (int i = 0; i < args.Length; i++)
+        {
+            var literal = TryGetStaticArgValue(args[i]);
+            if (!inExec)
+            {
+                if (literal is "-exec" or "-execdir" or "-ok" or "-okdir")
+                {
+                    inExec = true;
+                    indices ??= new HashSet<int>();
+                }
+                continue;
+            }
+            if (literal is ";" or "+") { inExec = false; continue; }
+            indices!.Add(i);
+        }
+        return indices;
+    }
+
     private static string EmitPassthrough(
         string cmdlet,
         ImmutableArray<CompoundWord> args,
@@ -5878,9 +5893,16 @@ public static class PsEmitter
         // process-sub operand goes through EmitProcessSubPipeline, everything
         // else through EmitWord with passthrough quoting applied.
         bool orderedArgs = IsOrderedArgCmdlet(cmdlet);
+        // `find … -exec CMD ARGS ;` — CMD's argv is a foreign command line, so ITS flags
+        // (`-exec grep -i x {} ;`) are quoted exactly like an ordered-arg command's.
+        var findExecArgv = cmdlet == "Invoke-BashFind" ? FindExecArgvIndices(args) : null;
 
         string EmitPlainArg(int i)
         {
+            if (findExecArgv is not null && findExecArgv.Contains(i)
+                && OrderedArgDashLiteral(args[i]) is { } execDash)
+                return PsBuild.SingleQuote(execDash);
+
             // Ordered-parser commands: EVERY dash-leading literal (and `--`) is a single-quoted
             // string, so no flag is ever a PowerShell parameter token. See OrderedArgCommands.
             if (orderedArgs && OrderedArgDashLiteral(args[i]) is { } dashLiteral)
@@ -5889,6 +5911,13 @@ public static class PsEmitter
             var emitted = i == pipelineProcessSubIndex
                 ? EmitProcessSubPipeline((WordPart.ProcessSub)args[i].Parts[0])
                 : EmitWord(args[i]);
+            // A bare literal with a comma is a PowerShell ARRAY (`xargs -d , echo` -> the
+            // parse error "Missing argument"; `a,b` -> @('a','b')). Ordered-parser commands
+            // take option VALUES as separate words, so quote those literals as well.
+            if (orderedArgs && emitted.Contains(',')
+                && emitted.IndexOfAny(['"', '\'', '$', '`', '(', '@']) < 0
+                && TryGetStaticArgValue(args[i]) is { } commaLiteral && commaLiteral == emitted)
+                return PsBuild.SingleQuote(commaLiteral);
             // forceQuoteFlags carries bare short flags that prefix-collide with a
             // PowerShell common parameter (e.g. find's infix `-o`, ambiguous with
             // -OutVariable/-OutBuffer). Quoting routes the literal token to the
@@ -5896,13 +5925,6 @@ public static class PsEmitter
             // switch decoy on the cmdlet would resolve the crash but lose the
             // operator's position. See docs/solutions on common-param collisions.
             bool force = forceQuoteFlags is not null && forceQuoteFlags.Contains(emitted);
-            // xargs -iTOK prefix form (attached replace string, e.g. -i{} / -iX).
-            // Must survive binding as one literal token, not be split into -i + value.
-            if (!force && cmdlet == "Invoke-BashXargs"
-                && emitted.Length > 2 && emitted[0] == '-' && emitted[1] == 'i')
-            {
-                force = true;
-            }
             if (NeedsPassthroughQuoting(emitted) || force)
             {
                 // If the emitted text ALREADY contains a quote char, wrapping it in
