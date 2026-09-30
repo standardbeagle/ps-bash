@@ -723,6 +723,9 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
     [InlineData("Invoke-BashCp -Q a b")]
     [InlineData("Invoke-BashMv --bogus a b")]
     [InlineData("Invoke-BashMv -Q a b")]
+    [InlineData("Invoke-BashRm --bogus a")]
+    [InlineData("Invoke-BashRm -rz a")]
+    [InlineData("Invoke-BashRm --recursive=1 a")]
     public void Mover_ParserUsageError_ExitsOne(string cmd)
     {
         var lines = Run($"{cmd} *> $null; $global:LASTEXITCODE");
@@ -730,7 +733,6 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
     }
 
     [Theory]
-    [InlineData("Invoke-BashRm --bogus a")]
     [InlineData("Invoke-BashMkdir --bogus d")]
     [InlineData("Invoke-BashRmdir --bogus d")]
     public void Mover_UnrecognizedFlag_ExitsTwo(string cmd)
@@ -901,5 +903,97 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
         // `--update=older` is -u: copies when the destination is missing.
         Run($"Invoke-BashCp '--update=older' {Q(src)} {Q(dst)}");
         Assert.True(File.Exists(dst));
+    }
+
+    // ─────────── shared ordered parser: rm as the transpiler delivers it ───────────
+
+    [Fact]
+    public void Rm_EmitterStyleQuotedBundle_RecursiveForceVerbose_RemovesTree()
+    {
+        var dir = Path.Combine(_tmpRoot, "rmtree");
+        Directory.CreateDirectory(Path.Combine(dir, "sub"));
+        File.WriteAllText(Path.Combine(dir, "sub", "f.txt"), "x");
+        var lines = Run($"Invoke-BashRm '-rfv' {Q(dir)}");
+        Assert.False(Directory.Exists(dir));
+        Assert.Contains(lines, l => l.StartsWith("removed '"));
+    }
+
+    [Theory]
+    [InlineData("--rec")]        // unique prefix of --recursive (GNU getopt_long)
+    [InlineData("--recursive")]
+    [InlineData("-R")]
+    public void Rm_QuotedLongOrUpperRecursive_RemovesDirectory(string flag)
+    {
+        var dir = Path.Combine(_tmpRoot, "rmdirflag" + flag.Length);
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, "f"), "x");
+        Run($"Invoke-BashRm '{flag}' {Q(dir)}");
+        Assert.False(Directory.Exists(dir));
+    }
+
+    [Fact]
+    public void Rm_DoubleDash_DashNamedFileIsAnOperandNotAnOption_EmitterStyle()
+    {
+        File.WriteAllText(Path.Combine(_tmpRoot, "-rf"), "dash");
+        Run($"Set-Location {Q(_tmpRoot)}; Invoke-BashRm '--' '-rf'");
+        Assert.False(File.Exists(Path.Combine(_tmpRoot, "-rf")));
+    }
+
+    [Fact]
+    public void Rm_OptionAfterOperand_StillApplies()
+    {
+        var dir = Path.Combine(_tmpRoot, "rmafter");
+        Directory.CreateDirectory(dir);
+        Run($"Invoke-BashRm {Q(dir)} '-r'");
+        Assert.False(Directory.Exists(dir));
+    }
+
+    [Fact]
+    public void Rm_QuotedBareI_IsRefusedAndDeletesNothing()
+    {
+        var f = Path.Combine(_tmpRoot, "keep.txt");
+        File.WriteAllText(f, "x");
+        Assert.Equal("2", LastExit($"Invoke-BashRm '-i' {Q(f)}"));
+        Assert.True(File.Exists(f));
+    }
+
+    [Fact]
+    public void Rm_UnsupportedAfterOtherOperands_StopsBeforeDeletingAnything()
+    {
+        // An option anywhere before `--` is a usage error for the WHOLE command (GNU permutes
+        // options), so the earlier operand must survive too.
+        var f = Path.Combine(_tmpRoot, "first.txt");
+        File.WriteAllText(f, "x");
+        Assert.Equal("2", LastExit($"Invoke-BashRm {Q(f)} '-I'"));
+        Assert.True(File.Exists(f));
+    }
+
+    [Fact]
+    public void Rm_ForceWithNoOperands_IsSilentSuccess_WithoutForceIsAnError()
+    {
+        Assert.Equal("0", LastExit("Invoke-BashRm '-f'"));
+        Assert.Equal("1", LastExit("Invoke-BashRm"));
+    }
+
+    [Fact]
+    public void Rm_ProtectedPathGuard_StillRefusesTheHomeDirectoryUnderTheNewParser()
+    {
+        // The migration must not have weakened the safety guards: removing the profile dir is refused.
+        // Deliberately NOT recursive: if the guard ever regressed, "Is a directory" (also exit 1)
+        // would still protect the developer's real home directory.
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        Assert.Equal("1", LastExit($"Invoke-BashRm '-f' {Q(home)}"));
+        Assert.True(Directory.Exists(home));
+    }
+
+    [Fact]
+    public void Rm_DirectCallDecoyVerbose_StillWorks()
+    {
+        // Pester/interactive path: bare -v binds the decoy switch, not Arguments.
+        var f = Path.Combine(_tmpRoot, "dv.txt");
+        File.WriteAllText(f, "x");
+        var lines = Run($"Invoke-BashRm -v {Q(f)}");
+        Assert.Contains(lines, l => l.StartsWith("removed '"));
+        Assert.False(File.Exists(f));
     }
 }

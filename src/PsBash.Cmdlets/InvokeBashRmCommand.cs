@@ -1,6 +1,7 @@
 using System.Linq;
 using System.Management.Automation;
 using System.Runtime.InteropServices;
+using PsBash.Cmdlets.Args;
 
 namespace PsBash.Cmdlets;
 
@@ -29,9 +30,11 @@ namespace PsBash.Cmdlets;
 /// <c>-rv</c> over a directory, lists each child first, then the directory.</item>
 /// </list>
 /// <para>
-/// <b>One colliding flag</b> declared explicitly: <c>-v</c> vs
-/// <c>-Verbose</c>. <c>-r</c> / <c>-R</c> / <c>-f</c> stay in
-/// <c>Arguments</c>.
+/// <b>Argv</b> is parsed by the shared ordered parser (<see cref="ArgParser"/>, spec
+/// <c>RmSpec</c>). The transpiler single-quotes every dash-leading word for rm
+/// (<c>PsEmitter.OrderedArgCommands</c>) so flags arrive in <c>Arguments</c> in order; the
+/// <c>v</c>/<c>I</c>/<c>D</c> decoy switches exist ONLY for direct calls and are re-injected first.
+/// The path-root / reserved-device safety guards below are untouched by the migration.
 /// </para>
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashRm")]
@@ -60,11 +63,31 @@ public sealed class InvokeBashRmCommand : PSCmdlet
     /// <summary>Valid GNU <c>rm</c> flags ps-bash does not implement. See
     /// <see cref="FileSystemHelpers.TryWriteOperandOptionError"/> /
     /// <see cref="InvokeBashCpCommand"/> for the classification contract.</summary>
-    private static readonly HashSet<string> RmValidButUnsupported = new(StringComparer.Ordinal)
+    // (A string[] on purpose: CommonParameterCollisionGuardTests enumerates each cmdlet's static
+    // string sets to find short flags the binder could eat.)
+    private static readonly string[] RmValidButUnsupported =
     {
         "-i", "-I", "--interactive", "-d", "--dir",
         "--one-file-system", "--no-preserve-root", "--preserve-root",
     };
+
+    private const string OptRecursive = "recursive", OptForce = "force", OptVerbose = "verbose";
+
+    /// <summary>rm's whole option surface, built once for the shared ordered parser.</summary>
+    private static readonly OptSpecSet RmSpec = new(
+        new[]
+        {
+            new OptSpec(OptRecursive, 'r', "recursive"),
+            new OptSpec(OptRecursive, 'R', null),
+            new OptSpec(OptForce, 'f', "force"),
+            new OptSpec(OptVerbose, 'v', "verbose"),
+        },
+        validButUnsupported: RmValidButUnsupported,
+        allowAbbrev: true,
+        gnuInfoOptions: true);
+
+    /// <summary>Pure argv scan (unit-test seam): options, operands and the first error.</summary>
+    internal static ParsedArgs ScanArgs(string[] args) => ArgParser.Parse(args, RmSpec);
 
     private static readonly HashSet<string> WinReservedNames = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -75,9 +98,11 @@ public sealed class InvokeBashRmCommand : PSCmdlet
 
     protected override void ProcessRecord()
     {
-        // Re-inject decoy-bound classifier flags so the classifier still fires exit 2
-        // (bare -i/-I/-d never reach Arguments — the binder crashes/silent-drops them).
-        var args = BashRuntime.PrependDecoys(Arguments, (I.IsPresent, "-i"), (D.IsPresent, "-d"));
+        // Re-inject every decoy-bound flag. The transpiler single-quotes each dash-leading word
+        // for rm (PsEmitter.OrderedArgCommands) so they arrive in Arguments in order; a DIRECT
+        // call (`Invoke-BashRm -v f`, Pester) binds the decoys instead (bare -v/-i/-d never reach
+        // Arguments). Prepending is safe: a decoy can only have been bound before any `--`.
+        var args = BashRuntime.PrependDecoys(Arguments, (v.IsPresent, "-v"), (I.IsPresent, "-i"), (D.IsPresent, "-d"));
 
         FileSystemHelpers.SetLastExitCode(this, 0);
         if (FileSystemHelpers.TryHandleVersion(this, "rm", args)) return;
@@ -91,50 +116,19 @@ public sealed class InvokeBashRmCommand : PSCmdlet
             return;
         }
 
-        bool recursive = false;
-        bool force = false;
-        bool verbose = v.IsPresent;
-        var operands = new List<string>();
-        bool pastDoubleDash = false;
-        int preDashCount = -1;
+        // Shared ordered parser: bundles in any order/repeat (-rf, -rvf, -vv), `--`, long options
+        // with unique-prefix abbreviation, and the unsupported/unknown classifier in ONE scan.
+        // The classifier runs regardless of -f: GNU `rm -f` suppresses missing-file errors, NOT a
+        // usage error for a bad option (a valid-but-unsupported -i/-I/-d is refused loudly, never
+        // silently ignored). Nothing after `--` is ever classified: `rm -- -weird` deletes it.
+        var parsed = ScanArgs(args);
+        if (FileSystemHelpers.TryWriteParseError(this, "rm", parsed)) return;
+        if (FileSystemHelpers.TryHandleInfoOptions(this, "rm", parsed)) return;
 
-        foreach (var a in args)
-        {
-            if (pastDoubleDash) { operands.Add(a); continue; }
-            switch (a)
-            {
-                case "--": pastDoubleDash = true; preDashCount = operands.Count; break;
-                case "-r": case "-R": case "--recursive": recursive = true; break;
-                case "-f": case "--force": force = true; break;
-                case "-v": case "--verbose": verbose = true; break;
-                default:
-                    // Bundled short flags: -rf, -fr, -rvf, etc. Each char
-                    // maps to one of r/R/f/v. Anything else is an operand.
-                    if (a.Length > 2 && a[0] == '-'
-                        && a.Skip(1).All(ch => ch == 'r' || ch == 'R' || ch == 'f' || ch == 'v'))
-                    {
-                        foreach (var ch in a.Skip(1))
-                        {
-                            if (ch == 'r' || ch == 'R') recursive = true;
-                            else if (ch == 'f') force = true;
-                            else if (ch == 'v') verbose = true;
-                        }
-                    }
-                    else
-                    {
-                        operands.Add(a);
-                    }
-                    break;
-            }
-        }
-
-        // Classify an unknown / valid-but-unsupported option-looking token before
-        // it is treated as a target. rm -f does NOT suppress a usage error, so the
-        // classification runs regardless of -f (matching GNU rm). Only pre-`--`
-        // operands are classified; a `-leading` filename after `--` passes through.
-        var rmToClassify = preDashCount < 0 ? operands : operands.GetRange(0, preDashCount);
-        if (FileSystemHelpers.TryWriteOperandOptionError(this, "rm", rmToClassify, RmValidButUnsupported))
-            return;
+        bool recursive = parsed.Has(OptRecursive);
+        bool force = parsed.Has(OptForce);
+        bool verbose = parsed.Has(OptVerbose);
+        var operands = parsed.Operands();
 
         if (operands.Count == 0)
         {

@@ -782,7 +782,7 @@ public class PsEmitterTests
         // Batch 1 of the shared ordered parser. Adding a command here also means adding it to
         // CommonParameterCollisionGuardTests.EmitterForceQuoted (Cmdlets.Tests) — that map is
         // how the guard knows the emitter, not a decoy, protects the colliding letters.
-        Assert.Equal(new[] { "cp", "mv", "tee" }, PsEmitter.OrderedArgCommands.OrderBy(x => x).ToArray());
+        Assert.Equal(new[] { "cp", "mv", "rm", "tee" }, PsEmitter.OrderedArgCommands.OrderBy(x => x).ToArray());
     }
 
     [Theory]
@@ -794,6 +794,11 @@ public class PsEmitterTests
     [InlineData("mv -n a -v b", "Invoke-BashMv '-n' a '-v' b")]
     [InlineData("mv --backup=numbered a b", "Invoke-BashMv '--backup=numbered' a b")]
     [InlineData("mv - a", "Invoke-BashMv '-' a")]
+    [InlineData("rm -rf a", "Invoke-BashRm '-rf' a")]
+    [InlineData("rm -i -I -d a", "Invoke-BashRm '-i' '-I' '-d' a")]
+    [InlineData("rm -- -rf", "Invoke-BashRm '--' '-rf'")]
+    [InlineData("rm a -v", "Invoke-BashRm a '-v'")]
+    [InlineData("rm --preserve-root=all a", "Invoke-BashRm '--preserve-root=all' a")]
     public void Transpile_OrderedArgCommand_QuotesEveryDashLiteral(string bash, string expected)
     {
         Assert.Equal(expected, PsEmitter.Transpile(bash));
