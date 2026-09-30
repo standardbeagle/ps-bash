@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Management.Automation;
+using PsBash.Cmdlets.Args;
 using System.Text;
 
 namespace PsBash.Cmdlets;
@@ -70,21 +71,78 @@ public sealed class InvokeBashUnexpandCommand : PSCmdlet
     [Parameter]
     public SwitchParameter a { get; set; }
 
-    // Valid GNU unexpand flags recognized but not implemented by ps-bash.
-    // Note: --first-only IS implemented (sets leading-only mode), but listed
-    // here so any future variant or typo reaches the classifier rather than
-    // being silently swallowed.
-    private static readonly HashSet<string> UnexpandValidButUnsupported =
-        new(StringComparer.Ordinal) { "--first-only" };
+    private const string OptAll = "all", OptFirstOnly = "first", OptTabs = "tabs", OptTabsNum = "tabsnum";
+
+    /// <summary>
+    /// unexpand's option surface (GNU coreutils 9.4: -a/--all, --first-only, -t/--tabs=N|LIST and the
+    /// obsolete <c>-NUM</c> tab size). Like GNU, <c>-t</c> ENABLES <c>-a</c> and <c>--first-only</c>
+    /// overrides it wherever it appears. GNU unexpand has no other options.
+    /// </summary>
+    private static readonly OptSpecSet UnexpandSpec = new(
+        new[]
+        {
+            new OptSpec(OptAll, 'a', "all"),
+            new OptSpec(OptFirstOnly, '\0', "first-only"),
+            new OptSpec(OptTabs, 't', "tabs", OptKind.Value),
+        },
+        allowAbbrev: true,
+        numericShorthandId: OptTabsNum,   // -NUM sets the tab size but, unlike -t, does NOT imply -a (oracle: GNU 9.4)
+        gnuInfoOptions: true);
+
+    /// <summary>Pure argv scan (unit-test seam).</summary>
+    internal static ParsedArgs ScanArgs(string[] args) => ArgParser.Parse(args, UnexpandSpec);
+
+    internal sealed class UnexpandArgs
+    {
+        public ParsedArgs Parsed = null!;
+        public TabStopList Tabs = TabStopList.Default;
+        /// <summary>Convert blanks anywhere on the line, not just the leading run.</summary>
+        public bool AllBlanks;
+        public List<string> Operands = new();
+        public string? Error;
+
+        public bool Declined =>
+            Parsed.HasError || Error is not null
+            || Parsed.Has(OptSpecSet.HelpId) || Parsed.Has(OptSpecSet.VersionId);
+    }
+
+    /// <summary>Scan + resolve. FIX: <c>-t N</c> now implies <c>-a</c> (it was leading-only), and a
+    /// bad/zero/non-ascending tab spec exits 1 instead of silently becoming 8.</summary>
+    internal static UnexpandArgs Plan(string[] args)
+    {
+        var u = new UnexpandArgs { Parsed = ScanArgs(args) };
+        u.Operands = u.Parsed.Operands();
+        if (u.Parsed.HasError) return u;
+
+        var values = new List<string>();
+        foreach (var t in u.Parsed.Tokens)
+        {
+            if (t.Kind == ArgTokKind.Option && (t.OptId == OptTabs || t.OptId == OptTabsNum)) values.Add(t.Value!);
+        }
+        if (values.Count > 0)
+        {
+            if (!TabStopList.TryParse(values, out var tabs, out var err))
+            {
+                u.Error = $"unexpand: {err}";
+                return u;
+            }
+            u.Tabs = tabs;
+        }
+        u.AllBlanks = (u.Parsed.Has(OptAll) || u.Parsed.Has(OptTabs)) && !u.Parsed.Has(OptFirstOnly);
+        return u;
+    }
+
+    /// <summary>Arguments with the decoy-bound <c>-a</c> re-injected.</summary>
+    private string[] ArgsWithDecoys() => BashRuntime.PrependDecoys(Arguments, (a.IsPresent, "-a"));
 
     // Parsed-once state.
     private bool _parsed;
-    private int _tabWidth = 8;
+    private TabStopList _tabs = TabStopList.Default;
     private bool _allSpaces;
     private List<string> _operands = new();
-    // True when stdin must NOT be streamed: file operands present, or a
-    // --help / --version request (both short-circuit the scan in the oracle —
-    // important here because the scan can throw on a malformed -t value).
+    private UnexpandArgs? _plan;
+    // True when stdin must NOT be streamed: file operands present, a scan/value error, or a
+    // --help / --version request.
     private bool _suppressStdin;
 
     private void ParseOnce()
@@ -92,61 +150,26 @@ public sealed class InvokeBashUnexpandCommand : PSCmdlet
         if (_parsed) return;
         _parsed = true;
 
-        var args = Arguments ?? Array.Empty<string>();
-        _allSpaces = a.IsPresent;
+        var args = ArgsWithDecoys();
 
-        // --help / --version short-circuit before flag scanning (oracle order).
         if (Array.IndexOf(args, "--version") >= 0 || Array.IndexOf(args, "--help") >= 0)
         {
             _suppressStdin = true;
             return;
         }
 
-        for (int i = 0; i < args.Length; i++)
-        {
-            var arg = args[i];
-
-            // -tN (joined form): "-t" followed by one or more digits.
-            if (arg.Length > 2 && arg[0] == '-' && arg[1] == 't' && AllDigits(arg, 2))
-            {
-                _tabWidth = BashRuntime.ParseCountClamped(arg.AsSpan(2), fallback: 8);
-                continue;
-            }
-            // -t N (separated form): consume next arg.
-            if (arg == "-t" && i + 1 < args.Length)
-            {
-                _tabWidth = BashRuntime.ParseCountClamped(args[i + 1], fallback: 8);
-                i++;
-                continue;
-            }
-            // --tabs=N
-            if (arg.StartsWith("--tabs=", StringComparison.Ordinal))
-            {
-                _tabWidth = BashRuntime.ParseCountClamped(arg.AsSpan("--tabs=".Length), fallback: 8);
-                continue;
-            }
-            // -a (case-sensitive per oracle's -ceq) or --all.
-            if (arg == "-a" || arg == "--all")
-            {
-                _allSpaces = true;
-                continue;
-            }
-            if (arg == "--first-only")
-            {
-                _allSpaces = false;
-                continue;
-            }
-            _operands.Add(arg);
-        }
-
-        _suppressStdin = _operands.Count > 0;
+        var plan = Plan(args);
+        _plan = plan;
+        _tabs = plan.Tabs;
+        _allSpaces = plan.AllBlanks;
+        _operands = plan.Operands;
+        _suppressStdin = plan.Declined || _operands.Count > 0;
     }
-
     private void EmitTransformed(string line)
     {
         string transformed = _allSpaces
-            ? UnexpandAll(line, _tabWidth)
-            : UnexpandLeading(line, _tabWidth);
+            ? UnexpandAll(line, _tabs)
+            : UnexpandLeading(line, _tabs);
         WriteObject(BashRuntime.NewBashObject(transformed));
     }
 
@@ -178,7 +201,7 @@ public sealed class InvokeBashUnexpandCommand : PSCmdlet
     {
         ParseOnce();
 
-        var args = Arguments ?? Array.Empty<string>();
+        var args = ArgsWithDecoys();
 
         FileSystemHelpers.SetLastExitCode(this, 0);
         if (FileSystemHelpers.TryHandleVersion(this, "unexpand", args)) return;
@@ -192,8 +215,17 @@ public sealed class InvokeBashUnexpandCommand : PSCmdlet
             return;
         }
 
-        if (FileSystemHelpers.TryWriteOperandOptionError(
-                this, "unexpand", _operands, UnexpandValidButUnsupported)) return;
+        if (_plan is { } plan)
+        {
+            if (FileSystemHelpers.TryWriteParseError(this, "unexpand", plan.Parsed)) return;
+            if (FileSystemHelpers.TryHandleInfoOptions(this, "unexpand", plan.Parsed)) return;
+            if (plan.Error is { } planError)
+            {
+                FileSystemHelpers.WriteBashError(this, planError);
+                FileSystemHelpers.SetLastExitCode(this, 1);
+                return;
+            }
+        }
 
         // Pipeline mode (no operands) was already streamed in ProcessRecord.
         if (_operands.Count == 0) return;
@@ -219,10 +251,10 @@ public sealed class InvokeBashUnexpandCommand : PSCmdlet
     }
 
     /// <summary>
-    /// Default mode: convert only the leading run of spaces to tabs.
-    /// Mirrors the psm1 oracle's leading-only branch.
+    /// Default mode: convert only the leading run of spaces to tabs (greedy up to each tab stop;
+    /// leftover spaces stay). Mirrors the psm1 oracle's leading-only branch for a uniform tab size.
     /// </summary>
-    private static string UnexpandLeading(string line, int tabWidth)
+    internal static string UnexpandLeading(string line, TabStopList tabs)
     {
         int leading = 0;
         while (leading < line.Length && line[leading] == ' ')
@@ -230,35 +262,46 @@ public sealed class InvokeBashUnexpandCommand : PSCmdlet
             leading++;
         }
         if (leading == 0) return line;
-        int tabs = leading / tabWidth;
-        int remain = leading % tabWidth;
-        var sb = new StringBuilder(tabs + remain + (line.Length - leading));
-        sb.Append('\t', tabs);
-        sb.Append(' ', remain);
+
+        var sb = new StringBuilder(line.Length);
+        int pos = 0;
+        while (true)
+        {
+            int next = tabs.NextStop(pos);
+            if (next < 0 || next > leading) break;
+            sb.Append('\t');
+            pos = next;
+        }
+        sb.Append(' ', leading - pos);
         sb.Append(line, leading, line.Length - leading);
         return sb.ToString();
     }
 
     /// <summary>
-    /// -a mode: convert every run of spaces (at any column) that crosses a
-    /// tabstop boundary with at least two spaces in the run. Mirrors the psm1
-    /// oracle's all-spaces branch byte-for-byte.
+    /// -a mode: convert every run of spaces (at any column) that reaches a tab stop with at least
+    /// two spaces in the run. Mirrors the psm1 oracle's all-spaces branch byte-for-byte for a
+    /// uniform tab size; a tab list has no stops past its last element, so nothing converts there.
     /// </summary>
-    private static string UnexpandAll(string line, int tabWidth)
+    internal static string UnexpandAll(string line, TabStopList tabs)
     {
         var sb = new StringBuilder(line.Length);
         int col = 0;
         int spaceRun = 0;
+        int nextStop = tabs.NextStop(0);
         foreach (var ch in line)
         {
             if (ch == ' ')
             {
                 spaceRun++;
                 col++;
-                if ((col % tabWidth) == 0 && spaceRun >= 2)
+                if (nextStop >= 0 && col == nextStop)
                 {
-                    sb.Append('\t');
-                    spaceRun = 0;
+                    if (spaceRun >= 2)
+                    {
+                        sb.Append('\t');
+                        spaceRun = 0;
+                    }
+                    nextStop = tabs.NextStop(col);
                 }
             }
             else
@@ -270,6 +313,7 @@ public sealed class InvokeBashUnexpandCommand : PSCmdlet
                 }
                 sb.Append(ch);
                 col++;
+                if (nextStop >= 0 && col >= nextStop) nextStop = tabs.NextStop(col);
             }
         }
         if (spaceRun > 0)
@@ -278,17 +322,6 @@ public sealed class InvokeBashUnexpandCommand : PSCmdlet
         }
         return sb.ToString();
     }
-
-    private static bool AllDigits(string s, int start)
-    {
-        if (start >= s.Length) return false;
-        for (int i = start; i < s.Length; i++)
-        {
-            if (s[i] < '0' || s[i] > '9') return false;
-        }
-        return true;
-    }
-
     private void WriteReadError(string path, Exception ex)
     {
         bool notFound = ex is FileNotFoundException or DirectoryNotFoundException

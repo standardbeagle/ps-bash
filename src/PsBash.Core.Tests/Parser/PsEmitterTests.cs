@@ -782,7 +782,7 @@ public class PsEmitterTests
         // Batch 1 of the shared ordered parser. Adding a command here also means adding it to
         // CommonParameterCollisionGuardTests.EmitterForceQuoted (Cmdlets.Tests) — that map is
         // how the guard knows the emitter, not a decoy, protects the colliding letters.
-        Assert.Equal(new[] { "cat", "cp", "env", "head", "ln", "mkdir", "mv", "nl", "rm", "rmdir", "tac", "tail", "tee", "time", "touch", "uniq", "wc", "xargs" }, PsEmitter.OrderedArgCommands.OrderBy(x => x).ToArray());
+        Assert.Equal(new[] { "cat", "cp", "env", "expand", "fold", "head", "ln", "mkdir", "mv", "nl", "rm", "rmdir", "tac", "tail", "tee", "time", "touch", "unexpand", "uniq", "wc", "xargs" }, PsEmitter.OrderedArgCommands.OrderBy(x => x).ToArray());
     }
 
     [Theory]
@@ -823,6 +823,15 @@ public class PsEmitterTests
     [InlineData("head -c 1K f", "Invoke-BashHead '-c' 1K f")]
     [InlineData("head --lines=3 f", "Invoke-BashHead '--lines=3' f")]
     [InlineData("head -- -n", "Invoke-BashHead '--' '-n'")]
+    // batch 3b rows
+    [InlineData("fold -w 5 f", "Invoke-BashFold '-w' 5 f")]
+    [InlineData("fold -sw5 f", "Invoke-BashFold '-sw5' f")]
+    [InlineData("fold -s -w 10 -- -f", "Invoke-BashFold '-s' '-w' 10 '--' '-f'")]
+    [InlineData("expand -t 4,8 f", "Invoke-BashExpand '-t' '4,8' f")]
+    [InlineData("expand -t4,8 f", "Invoke-BashExpand '-t4,8' f")]
+    [InlineData("expand -i --tabs=3 f", "Invoke-BashExpand '-i' '--tabs=3' f")]
+    [InlineData("unexpand -a -t 4 f", "Invoke-BashUnexpand '-a' '-t' 4 f")]
+    [InlineData("unexpand -t 2,/4 f", "Invoke-BashUnexpand '-t' '2,/4' f")]
     [InlineData("head -v -z f", "Invoke-BashHead '-v' '-z' f")]
     [InlineData("tail -n 5 f", "Invoke-BashTail '-n' 5 f")]
     [InlineData("tail -n +3 f", "Invoke-BashTail '-n' +3 f")]

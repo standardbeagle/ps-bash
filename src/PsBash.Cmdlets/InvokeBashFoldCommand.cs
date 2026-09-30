@@ -1,4 +1,6 @@
+using System.Linq;
 using System.Management.Automation;
+using PsBash.Cmdlets.Args;
 
 namespace PsBash.Cmdlets;
 
@@ -61,33 +63,112 @@ public sealed class InvokeBashFoldCommand : PSCmdlet
     // prefix-collides with the PowerShell common parameters `-WarningAction`
     // and `-WarningVariable` under PSCmdlet parameter binding: an exact param
     // name match beats a common-parameter prefix match, so declaring `-w` as
-    // an explicit value-bearing parameter resolves the collision and lets the
-    // standard `-w N` form reach the cmdlet. Joined `-wN` and `--width=N`
-    // continue to flow through `Arguments`.
+    // an explicit value-bearing parameter resolves the collision for DIRECT
+    // PowerShell calls (`Invoke-BashFold -w 5`). From the transpiler every
+    // dash word is single-quoted (PsEmitter.OrderedArgCommands) and reaches
+    // Arguments verbatim; ArgsWithDecoys re-injects the bound decoys as `-w N` / `-s`.
     [Parameter]
     [Alias("w")]
     public string? Width { get; set; }
 
-    // Likewise `-s` is unambiguous on its own (no common-parameter prefix
-    // overlap) but declaring it explicitly keeps the binder from later
-    // re-routing it; pure paranoia given the `-w` lesson.
     [Parameter]
     [Alias("s")]
     public SwitchParameter Spaces { get; set; }
 
-    // Valid GNU fold flags not implemented by ps-bash (empty — all GNU flags are
-    // either implemented or not worth a separate bucket; unknown flags are garbage).
-    private static readonly HashSet<string> FoldValidButUnsupported =
-        new(StringComparer.Ordinal);
+    private const string OptBytes = "bytes", OptSpaces = "spaces", OptWidth = "width";
+
+    /// <summary>
+    /// fold's option surface (GNU coreutils 9.4: -b -s -w + long forms and the obsolete
+    /// <c>-NUM</c> width). GNU fold has no other options, so there is no valid-but-unsupported set;
+    /// <c>-b</c> is accepted and counts characters (== bytes for the ASCII text ps-bash folds).
+    /// </summary>
+    private static readonly OptSpecSet FoldSpec = new(
+        new[]
+        {
+            new OptSpec(OptBytes, 'b', "bytes"),
+            new OptSpec(OptSpaces, 's', "spaces"),
+            new OptSpec(OptWidth, 'w', "width", OptKind.Value),
+        },
+        allowAbbrev: true,
+        numericShorthandId: OptWidth,
+        gnuInfoOptions: true);
+
+    /// <summary>Pure argv scan (unit-test seam).</summary>
+    internal static ParsedArgs ScanArgs(string[] args) => ArgParser.Parse(args, FoldSpec);
+
+    internal sealed class FoldArgs
+    {
+        public ParsedArgs Parsed = null!;
+        public int Width = 80;
+        public bool BreakSpaces;
+        public List<string> Operands = new();
+        public string? Error;
+
+        public bool Declined =>
+            Parsed.HasError || Error is not null
+            || Parsed.Has(OptSpecSet.HelpId) || Parsed.Has(OptSpecSet.VersionId);
+    }
+
+    /// <summary>
+    /// Scan + validate. GNU accepts only a positive decimal width (digits, no suffix): the old
+    /// scan silently ignored <c>-w x</c> (kept 80) and turned <c>-w 0</c> / a negative into "never
+    /// wrap"; GNU exits 1 with "invalid number of columns". Last <c>-w</c> wins.
+    /// </summary>
+    internal static FoldArgs Plan(string[] args)
+    {
+        var f = new FoldArgs { Parsed = ScanArgs(args) };
+        f.Operands = f.Parsed.Operands();
+        if (f.Parsed.HasError) return f;
+
+        foreach (var tok in f.Parsed.Tokens)
+        {
+            if (tok.Kind != ArgTokKind.Option) continue;
+            if (tok.OptId == OptSpaces) f.BreakSpaces = true;
+            else if (tok.OptId == OptWidth)
+            {
+                if (!TryWidth(tok.Value!, out int w))
+                {
+                    f.Error = $"fold: invalid number of columns: '{tok.Value}'";
+                    return f;
+                }
+                f.Width = w;
+            }
+        }
+        return f;
+    }
+
+    private static bool TryWidth(string s, out int width)
+    {
+        width = 0;
+        if (s.Length == 0) return false;
+        long v = 0;
+        foreach (char c in s)
+        {
+            if (c < '0' || c > '9') return false;
+            v = Math.Min(v * 10 + (c - '0'), int.MaxValue);
+        }
+        width = (int)v;
+        return width >= 1;
+    }
+
+    /// <summary>Arguments with the decoy-bound flags re-injected (<c>-s</c>, <c>-w N</c>).</summary>
+    private string[] ArgsWithDecoys()
+    {
+        var args = Arguments ?? Array.Empty<string>();
+        var pre = new List<string>();
+        if (Spaces.IsPresent) pre.Add("-s");
+        if (!string.IsNullOrEmpty(Width)) { pre.Add("-w"); pre.Add(Width); }
+        return pre.Count == 0 ? args : pre.Concat(args).ToArray();
+    }
 
     // Parsed-once state.
     private bool _parsed;
     private int _width = 80;
     private bool _breakSpaces;
     private List<string> _operands = new();
+    private FoldArgs? _plan;
     // True when stdin must NOT be streamed: file operands present (file mode
-    // ignores stdin) or a --help / --version request. Matches the buffered
-    // oracle, which only consumed the pipeline when there were no operands.
+    // ignores stdin), a scan/value error, or a --help / --version request.
     private bool _suppressStdin;
 
     private void ParseOnce()
@@ -95,69 +176,21 @@ public sealed class InvokeBashFoldCommand : PSCmdlet
         if (_parsed) return;
         _parsed = true;
 
-        var args = Arguments ?? Array.Empty<string>();
-        _breakSpaces = Spaces.IsPresent;
+        var args = ArgsWithDecoys();
 
-        if (!string.IsNullOrEmpty(Width) && int.TryParse(Width, out int wBound))
+        if (Array.IndexOf(args, "--version") >= 0 || Array.IndexOf(args, "--help") >= 0)
         {
-            _width = wBound;
+            _suppressStdin = true;
+            return;
         }
 
-        int i = 0;
-        while (i < args.Length)
-        {
-            string a = args[i];
-            // -wN  (joined form)
-            if (a.Length > 2 && a.StartsWith("-w") && int.TryParse(a.AsSpan(2), out int wJoined))
-            {
-                _width = wJoined;
-                i++;
-                continue;
-            }
-            // -w N
-            if (a == "-w" && i + 1 < args.Length && int.TryParse(args[i + 1], out int wSep))
-            {
-                _width = wSep;
-                i += 2;
-                continue;
-            }
-            // --width=N
-            if (a.StartsWith("--width=") && int.TryParse(a.AsSpan(8), out int wLong))
-            {
-                _width = wLong;
-                i++;
-                continue;
-            }
-            if (a == "-s" || a == "--spaces")
-            {
-                _breakSpaces = true;
-                i++;
-                continue;
-            }
-            if (a == "-b" || a == "--bytes")
-            {
-                // bytes mode — no-op for the ASCII text path; oracle parity.
-                i++;
-                continue;
-            }
-            _operands.Add(a);
-            i++;
-        }
-
-        if (_width <= 0)
-        {
-            // Guard against zero/negative widths producing infinite loops.
-            // The psm1 oracle never explicitly validated; on an int <= 0 the
-            // while-loop in PowerShell would either never enter or stall on
-            // the chunk arithmetic. Treat as "emit each line unchanged".
-            _width = int.MaxValue;
-        }
-
-        bool helpOrVersion = Array.IndexOf(args, "--help") >= 0
-            || Array.IndexOf(args, "--version") >= 0;
-        _suppressStdin = _operands.Count > 0 || helpOrVersion;
+        var plan = Plan(args);
+        _plan = plan;
+        _width = plan.Width;
+        _breakSpaces = plan.BreakSpaces;
+        _operands = plan.Operands;
+        _suppressStdin = plan.Declined || _operands.Count > 0;
     }
-
     protected override void ProcessRecord()
     {
         if (InputObject == null) return;
@@ -186,7 +219,7 @@ public sealed class InvokeBashFoldCommand : PSCmdlet
     {
         ParseOnce();
 
-        var args = Arguments ?? Array.Empty<string>();
+        var args = ArgsWithDecoys();
 
         FileSystemHelpers.SetLastExitCode(this, 0);
         if (FileSystemHelpers.TryHandleVersion(this, "fold", args)) return;
@@ -200,8 +233,17 @@ public sealed class InvokeBashFoldCommand : PSCmdlet
             return;
         }
 
-        if (FileSystemHelpers.TryWriteOperandOptionError(
-                this, "fold", _operands, FoldValidButUnsupported)) return;
+        if (_plan is { } plan)
+        {
+            if (FileSystemHelpers.TryWriteParseError(this, "fold", plan.Parsed)) return;
+            if (FileSystemHelpers.TryHandleInfoOptions(this, "fold", plan.Parsed)) return;
+            if (plan.Error is { } planError)
+            {
+                FileSystemHelpers.WriteBashError(this, planError);
+                FileSystemHelpers.SetLastExitCode(this, 1);
+                return;
+            }
+        }
 
         // Pipeline mode (no operands) was already streamed in ProcessRecord.
         if (_operands.Count == 0) return;
