@@ -412,7 +412,7 @@ public class PsEmitterTests
     public void Transpile_InputRedirectWithCommand_StillPipes()
     {
         // Guard the narrow claim: a redirect that DOES have a command is unchanged.
-        Assert.Contains("Get-Content f.txt | Invoke-BashWc -l",
+        Assert.Contains("Get-Content f.txt | Invoke-BashWc '-l'",
             PsEmitter.Transpile("wc -l < f.txt"));
     }
 
@@ -762,7 +762,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("echo hello | wc -l");
 
-        Assert.Equal("Invoke-BashEcho hello | Invoke-BashWc -l", result);
+        Assert.Equal("Invoke-BashEcho hello | Invoke-BashWc '-l'", result);
     }
 
     [Fact]
@@ -782,7 +782,7 @@ public class PsEmitterTests
         // Batch 1 of the shared ordered parser. Adding a command here also means adding it to
         // CommonParameterCollisionGuardTests.EmitterForceQuoted (Cmdlets.Tests) — that map is
         // how the guard knows the emitter, not a decoy, protects the colliding letters.
-        Assert.Equal(new[] { "cp", "head", "ln", "mkdir", "mv", "rm", "rmdir", "tail", "tee", "touch" }, PsEmitter.OrderedArgCommands.OrderBy(x => x).ToArray());
+        Assert.Equal(new[] { "cp", "head", "ln", "mkdir", "mv", "rm", "rmdir", "tail", "tee", "touch", "wc" }, PsEmitter.OrderedArgCommands.OrderBy(x => x).ToArray());
     }
 
     [Theory]
@@ -830,6 +830,10 @@ public class PsEmitterTests
     [InlineData("tail -c 1K f", "Invoke-BashTail '-c' 1K f")]
     [InlineData("tail --follow=name f", "Invoke-BashTail '--follow=name' f")]
     [InlineData("tail -F -- -n", "Invoke-BashTail '-F' '--' '-n'")]
+    [InlineData("wc -l f", "Invoke-BashWc '-l' f")]
+    [InlineData("wc -lwc f", "Invoke-BashWc '-lwc' f")]
+    [InlineData("wc --max-line-length f", "Invoke-BashWc '--max-line-length' f")]
+    [InlineData("wc -w -- -c", "Invoke-BashWc '-w' '--' '-c'")]
     public void Transpile_OrderedArgCommand_QuotesEveryDashLiteral(string bash, string expected)
     {
         Assert.Equal(expected, PsEmitter.Transpile(bash));
@@ -3392,7 +3396,7 @@ public class PsEmitterTests
         // wc's output format depends on file-vs-stdin mode (file echoes filename, stdin doesn't),
         // so the stdin-substitutable assumption doesn't hold for wc.
         var result = PsEmitter.Transpile("wc -l <(seq 1 100)");
-        Assert.Equal("Invoke-BashWc -l (Invoke-ProcessSub { Invoke-BashSeq 1 100 })", result);
+        Assert.Equal("Invoke-BashWc '-l' (Invoke-ProcessSub { Invoke-BashSeq 1 100 })", result);
     }
 
     [Fact]
@@ -3997,7 +4001,7 @@ public class PsEmitterTests
         // Issue 8: wc -l with heredoc input
         var result = PsEmitter.Transpile("wc -l << EOF\nhello\nworld\nEOF");
 
-        Assert.Contains("Invoke-BashWc -l", result);
+        Assert.Contains("Invoke-BashWc '-l'", result);
         Assert.Contains("hello", result);
         Assert.Contains("world", result);
     }
@@ -4304,7 +4308,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("wc -l file.txt");
 
-        Assert.Equal("Invoke-BashWc -l file.txt", result);
+        Assert.Equal("Invoke-BashWc '-l' file.txt", result);
     }
 
     [Fact]

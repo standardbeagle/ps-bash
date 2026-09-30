@@ -27,16 +27,19 @@ public class LineStreamArgAgreementTests
         new[] { "-n", "3", "-n", "2" }, new[] { "-n", "3", "-c", "2" },
         new[] { "-f" }, new[] { "-F" }, new[] { "--follow" }, new[] { "--fo" }, new[] { "-s", "1" }, new[] { "+2" }, new[] { "-n", "+2" },
         new[] { "--retry" }, new[] { "--pid=1" }, new[] { "-nx" }, new[] { "-c", "+2" },
+        new[] { "-l" }, new[] { "-lw" }, new[] { "-lwcmL" }, new[] { "--bytes" }, new[] { "--li" }, new[] { "--total=always" },
+        new[] { "--files0-from=f" }, new[] { "-l", "f" }, new[] { "-lx" },
     };
 
     private static bool CmdletAccepts(string name, string[] argv) => name switch
     {
         "head" => !InvokeBashHeadCommand.Plan(argv).Declined,
         "tail" => !InvokeBashTailCommand.Plan(argv).Declined,
+        "wc" => !InvokeBashWcCommand.Plan(argv).Declined,
         _ => throw new ArgumentException(name),
     };
 
-    public static IEnumerable<object[]> Commands => new[] { new object[] { "head" }, new object[] { "tail" } };
+    public static IEnumerable<object[]> Commands => new[] { new object[] { "head" }, new object[] { "tail" }, new object[] { "wc" } };
 
     [Theory]
     [MemberData(nameof(Commands))]

@@ -1,5 +1,6 @@
 using System.Management.Automation;
 using System.Text;
+using PsBash.Cmdlets.Args;
 
 namespace PsBash.Cmdlets;
 
@@ -92,20 +93,77 @@ public sealed class InvokeBashWcCommand : PSCmdlet
     private int _totalLines, _totalWords, _totalBytes, _totalChars, _maxLine;
     private bool _sawRecord;
 
-    /// <summary>Valid GNU <c>wc</c> options ps-bash does not implement (see
-    /// <see cref="FileSystemHelpers.TryWriteOperandOptionError"/>).</summary>
-    private static readonly HashSet<string> WcValidButUnsupported = new(StringComparer.Ordinal)
+    /// <summary>
+    /// Valid GNU <c>wc</c> options ps-bash does not implement, refused loudly (exit 2) by the
+    /// shared parser. <c>--files0-from=F</c> (NUL-separated file list) and <c>--total=WHEN</c> are
+    /// GNU 9.4 options with no implementation here. (A string[] on purpose:
+    /// CommonParameterCollisionGuardTests enumerates static string sets.)
+    /// </summary>
+    private static readonly string[] WcValidButUnsupported = { "--files0-from", "--total" };
+
+    private const string OptLines = "lines", OptWords = "words", OptBytes = "bytes",
+        OptChars = "chars", OptMaxLine = "maxline";
+
+    /// <summary>
+    /// wc's option surface (GNU coreutils 9.4: -c -m -l -L -w + --bytes --chars --lines
+    /// --max-line-length --words, --files0-from, --total). Built once for the shared ordered parser.
+    /// </summary>
+    private static readonly OptSpecSet WcSpec = new(
+        new[]
+        {
+            new OptSpec(OptBytes, 'c', "bytes"),
+            new OptSpec(OptChars, 'm', "chars"),
+            new OptSpec(OptLines, 'l', "lines"),
+            new OptSpec(OptMaxLine, 'L', "max-line-length"),
+            new OptSpec(OptWords, 'w', "words"),
+        },
+        validButUnsupported: WcValidButUnsupported,
+        allowAbbrev: true,
+        gnuInfoOptions: true);
+
+    /// <summary>Pure argv scan (unit-test seam): options, operands and the first error.</summary>
+    internal static ParsedArgs ScanArgs(string[] args) => ArgParser.Parse(args, WcSpec);
+
+    /// <summary>The resolved meaning of a wc argv (shared by the cmdlet and the fused core).</summary>
+    internal sealed class WcArgs
     {
-        // --lines / --words / --bytes are now parsed (aliases of -l / -w / -c).
-        "--files0-from",
-    };
+        public ParsedArgs Parsed = null!;
+        public bool Lines, Words, Bytes, Chars, MaxLine;
+        public List<string> Operands = new();
+
+        /// <summary>True when nothing further should execute: scan error or --help/--version.</summary>
+        public bool Declined =>
+            Parsed.HasError || Parsed.Has(OptSpecSet.HelpId) || Parsed.Has(OptSpecSet.VersionId);
+    }
+
+    /// <summary>Scan + resolve the column selectors (any order, any bundling, repeats are harmless).</summary>
+    internal static WcArgs Plan(string[] args)
+    {
+        var p = ScanArgs(args);
+        return new WcArgs
+        {
+            Parsed = p,
+            Lines = p.Has(OptLines),
+            Words = p.Has(OptWords),
+            Bytes = p.Has(OptBytes),
+            Chars = p.Has(OptChars),
+            MaxLine = p.Has(OptMaxLine),
+            Operands = p.Operands(),
+        };
+    }
+
+    /// <summary>Arguments with the decoy-bound flags re-injected (bare -w binds -WarningAction, bare
+    /// -c would bind -Confirm on a cmdlet that supports it).</summary>
+    private string[] ArgsWithDecoys() => BashRuntime.PrependDecoys(Arguments, (W.IsPresent, "-w"), (C.IsPresent, "-c"));
+
+    private WcArgs? _plan;
 
     private void ParseOnce()
     {
         if (_parsed) return;
         _parsed = true;
 
-        var args = Arguments ?? Array.Empty<string>();
+        var args = ArgsWithDecoys();
 
         // --help / --version short-circuit before flag parsing (oracle order).
         if (Array.IndexOf(args, "--version") >= 0 || Array.IndexOf(args, "--help") >= 0)
@@ -114,52 +172,18 @@ public sealed class InvokeBashWcCommand : PSCmdlet
             return;
         }
 
-        // -w is bound via the explicit W switch (common-parameter collision);
-        // -l and -c stay in Arguments and are parsed by ConvertFromBashArgs.
-        var flagDefs = BashRuntime.NewFlagDefs(new[]
-        {
-            "-l", "line count only",
-            "-c", "byte count only",
-            "-m", "char count only",
-            "-L", "longest line length",
-            "--chars", "char count only",
-            "--max-line-length", "longest line length",
-            "--lines", "line count only",
-            "--words", "word count only",
-            "--bytes", "byte count only",
-        });
-        var parsed = BashRuntime.ConvertFromBashArgs(args, flagDefs);
-        _linesOnly = parsed.Flags["-l"] || parsed.Flags["--lines"];
-        _wordsOnly = W.IsPresent || parsed.Flags["--words"];
-        _bytesOnly = parsed.Flags["-c"] || C.IsPresent || parsed.Flags["--bytes"];
-        _charsOnly = parsed.Flags["-m"] || parsed.Flags["--chars"];
-        _maxLineOnly = parsed.Flags["-L"] || parsed.Flags["--max-line-length"];
-        _operands = parsed.Operands;
-
-        // Bundled-flag recovery: a bundle like -lw or -wc reaches operands
-        // intact (the explicit W switch only binds a bare -w, and
-        // ConvertFromBashArgs turns the unrecognized -w bundle char into an
-        // operand). Restore -l/-w/-c from such a bundle, matching the psm1
-        // oracle's ConvertFrom-BashArgs which split bundled short flags.
-        for (int bi = 0; bi < _operands.Count; bi++)
-        {
-            var op = _operands[bi];
-            if (op.Length > 1 && op[0] == '-' && op[1] != '-'
-                && op.Skip(1).All(c => "lwcmL".IndexOf(c) >= 0))
-            {
-                if (op.IndexOf('l') >= 0) _linesOnly = true;
-                if (op.IndexOf('w') >= 0) _wordsOnly = true;
-                if (op.IndexOf('c') >= 0) _bytesOnly = true;
-                if (op.IndexOf('m') >= 0) _charsOnly = true;
-                if (op.IndexOf('L') >= 0) _maxLineOnly = true;
-                _operands.RemoveAt(bi);
-                bi--;
-            }
-        }
-
-        _suppressStdin = _operands.Count > 0;
+        // Shared ordered parser: bundles (-lw, -wc), attached long forms, abbreviations
+        // (--li), `--`, and the unsupported/unknown classifier in ONE scan. A scan error is
+        // reported from EndProcessing; stdin is not counted for it.
+        _plan = Plan(args);
+        _linesOnly = _plan.Lines;
+        _wordsOnly = _plan.Words;
+        _bytesOnly = _plan.Bytes;
+        _charsOnly = _plan.Chars;
+        _maxLineOnly = _plan.MaxLine;
+        _operands = _plan.Operands;
+        _suppressStdin = _plan.Declined || _operands.Count > 0;
     }
-
     protected override void ProcessRecord()
     {
         if (InputObject == null) return;
@@ -212,7 +236,7 @@ public sealed class InvokeBashWcCommand : PSCmdlet
     {
         ParseOnce();
 
-        var args = Arguments ?? Array.Empty<string>();
+        var args = ArgsWithDecoys();
 
         FileSystemHelpers.SetLastExitCode(this, 0);
         if (FileSystemHelpers.TryHandleVersion(this, "wc", args)) return;
@@ -226,13 +250,10 @@ public sealed class InvokeBashWcCommand : PSCmdlet
             return;
         }
 
-        // Any remaining option-looking operand is an unknown flag that fell
-        // through ConvertFromBashArgs, not a file — classify it (specific "not
-        // supported" if a valid wc flag, else bash-parity "unrecognized option")
-        // instead of reporting it as a missing file.
-        if (FileSystemHelpers.TryWriteOperandOptionError(this, "wc", _operands, WcValidButUnsupported))
+        if (_plan is { } plan)
         {
-            return;
+            if (FileSystemHelpers.TryWriteParseError(this, "wc", plan.Parsed)) return;
+            if (FileSystemHelpers.TryHandleInfoOptions(this, "wc", plan.Parsed)) return;
         }
 
         // Pipeline mode: counts were streamed in ProcessRecord. Emit only when

@@ -30,7 +30,7 @@ public class PsEmitterFusedPipelineTests
         var result = PsEmitter.Transpile("seq 1 100 | wc -l");
         Assert.Equal(
             "Invoke-BashFusedPipeline -Stages @(@('seq', '1', '100'), @('wc', '-l')) "
-                + "-Fallback { Invoke-BashSeq 1 100 | Invoke-BashWc -l }",
+                + "-Fallback { Invoke-BashSeq 1 100 | Invoke-BashWc '-l' }",
             result);
     }
 
@@ -52,7 +52,7 @@ public class PsEmitterFusedPipelineTests
         Assert.StartsWith(Wrap, result);
         Assert.Contains("Invoke-BashCat f", result);
         Assert.Contains("Invoke-BashSed", result);
-        Assert.Contains("Invoke-BashWc -l", result);
+        Assert.Contains("Invoke-BashWc '-l'", result);
         Assert.EndsWith(" }", result);
     }
 
@@ -178,7 +178,7 @@ public class PsEmitterFusedPipelineTests
         {
             var result = PsEmitter.Transpile("seq 1 100 | wc -l");
             Assert.DoesNotContain("Invoke-BashFusedPipeline", result);
-            Assert.Equal("Invoke-BashSeq 1 100 | Invoke-BashWc -l", result);
+            Assert.Equal("Invoke-BashSeq 1 100 | Invoke-BashWc '-l'", result);
         }
         finally
         {

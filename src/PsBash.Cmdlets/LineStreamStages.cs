@@ -218,34 +218,24 @@ internal sealed class HeadStage : ILineStreamStage
 
 }
 
-/// <summary><c>wc</c> terminal aggregator. Certified subset: bare, or a single
-/// <c>-l</c>/<c>-w</c>/<c>-c</c>/<c>-m</c>/<c>-L</c> (no bundles, no long forms, no
-/// file operands). Reuses <see cref="InvokeBashWcCommand.FormatWcText"/> +
-/// counting helpers so the output line is identical to the cmdlet.</summary>
+/// <summary><c>wc</c> terminal aggregator. Certified subset: any argv the cmdlet accepts with NO
+/// file operands (column selectors in any order/bundling/long form — the cmdlet's own
+/// <see cref="InvokeBashWcCommand.Plan"/> resolves them, so this core can never accept an argv the
+/// cmdlet would reject). Reuses <see cref="InvokeBashWcCommand.FormatWcText"/> + counting helpers
+/// so the output line is identical to the cmdlet.</summary>
 internal sealed class WcStage : ILineStreamStage
 {
     private readonly bool _l, _w, _c, _m, _L;
+    // _c = bytes selector (-c), _m = chars selector (-m), _L = max-line-length.
     private WcStage(bool l, bool w, bool c, bool m, bool bigL) { _l = l; _w = w; _c = c; _m = m; _L = bigL; }
     public int ExitCode => 0;
 
     internal static ILineStreamStage? TryCreate(string[] argv)
     {
-        bool l = false, w = false, c = false, m = false, bigL = false;
-        foreach (var a in argv)
-        {
-            switch (a)
-            {
-                case "-l": l = true; break;
-                case "-w": w = true; break;
-                case "-c": c = true; break;
-                case "-m": m = true; break;
-                case "-L": bigL = true; break;
-                default: return null; // bundles, long forms, files, unknown → decline
-            }
-        }
-        return new WcStage(l, w, c, m, bigL);
+        var plan = InvokeBashWcCommand.Plan(argv);
+        if (plan.Declined || plan.Operands.Count > 0) return null; // file operands, errors, help
+        return new WcStage(plan.Lines, plan.Words, plan.Bytes, plan.Chars, plan.MaxLine);
     }
-
     public IEnumerable<string> Run(IEnumerable<string> input)
     {
         int lines = 0, words = 0, bytes = 0, chars = 0, maxLine = 0;
@@ -260,8 +250,11 @@ internal sealed class WcStage : ILineStreamStage
         }
         // The cmdlet emits nothing when no record arrived in pipeline mode.
         if (lines == 0 && words == 0 && bytes == 0) yield break;
+        // FormatWcText's parameter order is (lines, words, CHARS, BYTES, maxLine): -m before -c.
+        // (This call used to pass _c/_m swapped, so a fused `wc -c` printed the CHAR count — equal
+        // to the byte count for ASCII, which is why the ASCII parity corpus never noticed.)
         yield return InvokeBashWcCommand.FormatWcText(
-            _l, _w, _c, _m, _L, lines, words, bytes, chars, maxLine, string.Empty);
+            _l, _w, _m, _c, _L, lines, words, bytes, chars, maxLine, string.Empty);
     }
 }
 

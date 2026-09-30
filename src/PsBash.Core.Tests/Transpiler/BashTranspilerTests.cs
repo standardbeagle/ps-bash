@@ -509,7 +509,7 @@ public class BashTranspilerTests
         var result = BashTranspiler.Transpile("cat /tmp/data.csv | grep -v header | sort | uniq | wc -l");
         // All-mapped, terminal-bound pipeline → fused lane (PERF phase 2).
         Assert.Equal(
-            "Invoke-BashFusedPipeline { Invoke-BashCat $env:TEMP\\data.csv | Invoke-BashGrep -v header | Invoke-BashSort | Invoke-BashUniq | Invoke-BashWc -l }",
+            "Invoke-BashFusedPipeline { Invoke-BashCat $env:TEMP\\data.csv | Invoke-BashGrep -v header | Invoke-BashSort | Invoke-BashUniq | Invoke-BashWc '-l' }",
             result);
     }
 
