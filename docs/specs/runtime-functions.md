@@ -275,7 +275,12 @@ untouched — its contract (unknown flag becomes an operand) differs.
   a lone `-` is an operand; a value option ends its bundle (`-abn5`) and, like getopt, takes the
   next element even if it starts with `-`; options may follow operands (GNU permutation).
 - `ArgError.Message(cmd)` holds the GNU wording; `FileSystemHelpers.TryWriteParseError` is the
-  cmdlet-side sink (message + exit 2). `TryHandleInfoOptions` acts on an abbreviated
+  cmdlet-side sink (message + `ParsedArgs.ErrorExitCode`).
+  **Exit status is per command**: `OptSpecSet(usageExitCode:)` (default **1** — GNU coreutils
+  `EXIT_FAILURE` for tee/cp/mv/rm/mkdir/rmdir/ln/touch; set 2 for ls/grep/diff-style tools) covers
+  unknown option, missing argument, ambiguous prefix and `--flag=x` on a flag. A valid-but-unsupported
+  option (ps-bash's own refusal of a real GNU flag) is always **2** (`ArgError.UnsupportedExitCode`),
+  so scripts can tell "ps-bash cannot do this" from "you typed it wrong". `TryHandleInfoOptions` acts on an abbreviated
   `--vers`/`--he`.
 
 **Emitter opt-in.** `PsEmitter.OrderedArgCommands` (tee, cp, mv): for these, `EmitPassthrough`

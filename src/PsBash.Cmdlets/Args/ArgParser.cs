@@ -60,10 +60,10 @@ public static class ArgParser
                 ? ParseLong(argv, ref i, arg, spec, tokens)
                 : ParseShortBundle(argv, ref i, arg, spec, tokens);
 
-            if (error is not null) return new ParsedArgs(tokens, error);
+            if (error is not null) return new ParsedArgs(tokens, error, spec.UsageExitCode);
         }
 
-        return new ParsedArgs(tokens, null);
+        return new ParsedArgs(tokens, null, spec.UsageExitCode);
     }
 
     private static ArgError? ParseLong(

@@ -719,8 +719,17 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
     }
 
     [Theory]
-    [InlineData("Invoke-BashCp --bogus a b")]
+    [InlineData("Invoke-BashCp --bogus a b")]     // GNU cp/mv usage error = EXIT_FAILURE (1)
+    [InlineData("Invoke-BashCp -Q a b")]
     [InlineData("Invoke-BashMv --bogus a b")]
+    [InlineData("Invoke-BashMv -Q a b")]
+    public void Mover_ParserUsageError_ExitsOne(string cmd)
+    {
+        var lines = Run($"{cmd} *> $null; $global:LASTEXITCODE");
+        Assert.Equal("1", lines[^1]);
+    }
+
+    [Theory]
     [InlineData("Invoke-BashRm --bogus a")]
     [InlineData("Invoke-BashMkdir --bogus d")]
     [InlineData("Invoke-BashRmdir --bogus d")]

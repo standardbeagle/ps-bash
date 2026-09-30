@@ -50,6 +50,14 @@ public sealed class OptSpecSet
 
     public bool AllowAbbrev { get; }
 
+    /// <summary>
+    /// Exit status of a usage error (unknown option, missing argument, ambiguous or malformed
+    /// long option). GNU coreutils use 1 (EXIT_FAILURE) for tee/cp/mv/rm/mkdir/rmdir/ln/touch
+    /// and 2 for ls/grep/diff, so this is per command. Does not apply to valid-but-unsupported
+    /// options, which are always <see cref="ArgError.UnsupportedExitCode"/>.
+    /// </summary>
+    public int UsageExitCode { get; }
+
     /// <summary>Id produced by <c>-NUM</c>, or null when the shorthand is off.</summary>
     public string? NumericShorthandId { get; }
 
@@ -66,13 +74,16 @@ public sealed class OptSpecSet
     /// <see cref="VersionId"/>; the cmdlet acts on them via
     /// <c>FileSystemHelpers.TryHandleInfoOptions</c>.
     /// </param>
+    /// <param name="usageExitCode">Exit status of a usage error; see <see cref="UsageExitCode"/> (default 1).</param>
     public OptSpecSet(
         IEnumerable<OptSpec> specs,
         IEnumerable<string>? validButUnsupported = null,
         bool allowAbbrev = false,
         string? numericShorthandId = null,
-        bool gnuInfoOptions = false)
+        bool gnuInfoOptions = false,
+        int usageExitCode = 1)
     {
+        UsageExitCode = usageExitCode;
         foreach (var s in specs)
         {
             if (s.Short != '\0') _byShort[s.Short] = s;

@@ -258,8 +258,9 @@ internal static class FileSystemHelpers
 
     /// <summary>
     /// Report the first scan error of the shared ordered parser
-    /// (<see cref="Args.ParsedArgs.Error"/>) with its GNU wording and exit status 2, and
-    /// return <c>true</c> so the caller can bail. Returns <c>false</c> when the parse was clean.
+    /// (<see cref="Args.ParsedArgs.Error"/>) with its GNU wording and exit status
+    /// (<see cref="Args.ParsedArgs.ErrorExitCode"/>: 2 for a valid-but-unsupported option, else the
+    /// command's usage status — 1 for GNU file tools), and return <c>true</c> so the caller can bail. Returns <c>false</c> when the parse was clean.
     /// The message text lives in <see cref="Args.ArgError.Message"/> (pure, unit-tested); this
     /// is only the cmdlet-side sink.
     /// </summary>
@@ -267,7 +268,7 @@ internal static class FileSystemHelpers
     {
         if (parsed.Error is not { } err) return false;
         WriteBashError(cmdlet, err.Message(cmd));
-        SetLastExitCode(cmdlet, Args.ArgError.ExitCode);
+        SetLastExitCode(cmdlet, parsed.ErrorExitCode);
         return true;
     }
 

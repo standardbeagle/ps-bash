@@ -156,7 +156,7 @@ public sealed class InvokeBashCpCommand : PSCmdlet
             {
                 FileSystemHelpers.WriteBashError(this,
                     $"cp: option '--update={upd.Value}' is recognized but not supported by ps-bash");
-                FileSystemHelpers.SetLastExitCode(this, ArgError.ExitCode);
+                FileSystemHelpers.SetLastExitCode(this, ArgError.UnsupportedExitCode);
                 return;
             }
         }

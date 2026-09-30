@@ -42,12 +42,16 @@ public enum ArgErrorKind
 /// The first scan error. <paramref name="Token"/> is the offending argv element (or, for
 /// <see cref="ArgErrorKind.ValidButUnsupported"/>, the canonical option name);
 /// <paramref name="BadChar"/> is the offending short letter when the error is about a short option.
-/// Every scan error is a usage error: exit status <see cref="ExitCode"/>.
+/// The exit status is decided by <see cref="ParsedArgs.ErrorExitCode"/>: ps-bash's own refusal of a
+/// real GNU option (<see cref="ArgErrorKind.ValidButUnsupported"/>) is always
+/// <see cref="UnsupportedExitCode"/>; every other usage error takes the command's
+/// <see cref="OptSpecSet.UsageExitCode"/> (GNU: 1 for coreutils file tools, 2 for ls/grep/diff).
 /// </summary>
 public readonly record struct ArgError(
     ArgErrorKind Kind, string Token, char BadChar, int ArgIndex, string? Detail = null)
 {
-    public const int ExitCode = 2;
+    /// <summary>Exit status for a valid-but-unsupported option: ps-bash policy (deliberately not GNU, which would honour the flag).</summary>
+    public const int UnsupportedExitCode = 2;
 
     /// <summary>The GNU-worded message for <paramref name="command"/> (no trailing newline).</summary>
     public string Message(string command) => Kind switch
@@ -78,11 +82,21 @@ public sealed class ParsedArgs
 {
     private readonly List<ArgToken> _tokens;
 
-    internal ParsedArgs(List<ArgToken> tokens, ArgError? error)
+    internal ParsedArgs(List<ArgToken> tokens, ArgError? error, int usageExitCode)
     {
         _tokens = tokens;
         Error = error;
+        _usageExitCode = usageExitCode;
     }
+
+    private readonly int _usageExitCode;
+
+    /// <summary>
+    /// Exit status for <see cref="Error"/>: <see cref="ArgError.UnsupportedExitCode"/> for a
+    /// valid-but-unsupported option, otherwise the spec's <see cref="OptSpecSet.UsageExitCode"/>.
+    /// </summary>
+    public int ErrorExitCode =>
+        Error is { Kind: ArgErrorKind.ValidButUnsupported } ? ArgError.UnsupportedExitCode : _usageExitCode;
 
     public IReadOnlyList<ArgToken> Tokens => _tokens;
 

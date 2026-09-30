@@ -311,7 +311,7 @@ $global:teeSeen = $null
     [Fact]
     public void Tee_UnrecognizedOption_WritesError()
     {
-        // Unrecognized option-like token: classified as "unrecognized option", exit 2.
+        // Unrecognized option: GNU tee usage error is EXIT_FAILURE (1), not 2 (wsl tee --bogus; echo $?).
         var pwsh = _fixture.AcquireFresh();
         pwsh.AddScript("$ErrorActionPreference='Continue'").Invoke();
         pwsh.Commands.Clear();
@@ -319,7 +319,7 @@ $global:teeSeen = $null
             "'x' | Invoke-BashTee --bogus 2>$null; $LASTEXITCODE").Invoke();
         pwsh.Commands.Clear();
         Assert.Single(result);
-        Assert.Equal(2, (int)result[0].BaseObject);
+        Assert.Equal(1, (int)result[0].BaseObject);
     }
 
     [Fact]

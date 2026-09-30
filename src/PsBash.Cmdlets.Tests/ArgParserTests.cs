@@ -409,8 +409,41 @@ public class ArgParserTests
         Assert.Equal(2, p.Tokens.Count);
     }
 
+    // Exit status is per spec: GNU file tools exit 1 on a usage error, ls/grep/diff exit 2;
+    // ps-bash's own refusal of a valid-but-unsupported option is always 2.
+    private static readonly OptSpecSet ExitTwoSpec = new(
+        new[] { new OptSpec("append", 'a', "append") },
+        validButUnsupported: new[] { "-i" },
+        usageExitCode: 2);
+
+    [Theory]
+    [InlineData("--bogus")]
+    [InlineData("-z")]
+    [InlineData("--append=x")]
+    [InlineData("--l")]
+    public void UsageError_DefaultsToExitOne(string arg) =>
+        Assert.Equal(1, P(arg).ErrorExitCode);
+
+    [Theory]
+    [InlineData("--bogus")]
+    [InlineData("-z")]
+    [InlineData("--append=x")]
+    public void UsageError_TakesTheSpecExitCode(string arg) =>
+        Assert.Equal(2, ArgParser.Parse(new[] { arg }, ExitTwoSpec).ErrorExitCode);
+
     [Fact]
-    public void ErrorExitCodeIsTwo() => Assert.Equal(2, ArgError.ExitCode);
+    public void MissingValue_IsAUsageError() =>
+        Assert.Equal(1, P("-l").ErrorExitCode);
+
+    [Fact]
+    public void ValidButUnsupported_IsAlwaysExitTwo_RegardlessOfSpec()
+    {
+        Assert.Equal(2, P("-i").ErrorExitCode);
+        Assert.Equal(2, ArgParser.Parse(new[] { "-i" }, ExitTwoSpec).ErrorExitCode);
+        var oneSpec = new OptSpecSet(new[] { new OptSpec("a", 'a', null) },
+            validButUnsupported: new[] { "-i" }, usageExitCode: 1);
+        Assert.Equal(2, ArgParser.Parse(new[] { "-i" }, oneSpec).ErrorExitCode);
+    }
 
     // ── property-style: nothing after `--` is ever an option or an error ─────
 
