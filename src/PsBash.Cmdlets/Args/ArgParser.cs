@@ -91,7 +91,8 @@ public static class ArgParser
             {
                 var sb = new StringBuilder();
                 foreach (var h in hits) sb.Append(" '--").Append(h).Append('\'');
-                return new ArgError(ArgErrorKind.Ambiguous, "--" + name, '\0', argIndex, sb.ToString());
+                // GNU (glibc getopt_long) echoes the WHOLE argument, `=VALUE` included: `--li=3`.
+                return new ArgError(ArgErrorKind.Ambiguous, arg, '\0', argIndex, sb.ToString());
             }
 
             name = hits[0];

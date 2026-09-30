@@ -32,7 +32,7 @@ public class SplitArgScanTests
     [InlineData("l=3 b=- a=2 d=False/0 add= ops=[]", "--lines", "3")]
     [InlineData("l=1000 b=- a=3 d=False/0 add= ops=[]", "--suffix=3")]  // FIX (abbreviation)
     [InlineData("l=1000 b=6 a=2 d=False/0 add= ops=[]", "--by=6")]
-    [InlineData("ERR split: option '--li' is ambiguous; possibilities: '--line-bytes' '--lines'", "--li=3")]
+    [InlineData("ERR split: option '--li=3' is ambiguous; possibilities: '--lines' '--line-bytes'", "--li=3")]
     [InlineData("l=3 b=- a=2 d=False/0 add= ops=[]", "-3")]  // FIX: obsolete -NUM
     [InlineData("l=4 b=- a=2 d=False/0 add= ops=[]", "-l", "3", "-l", "4")]
     [InlineData("l=1000 b=6 a=2 d=False/0 add= ops=[]", "-b", "6")]

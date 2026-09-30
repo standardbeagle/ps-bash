@@ -82,7 +82,9 @@ public sealed class InvokeBashSplitCommand : PSCmdlet
         validButUnsupported: SplitValidButUnsupported,
         allowAbbrev: true,
         numericShorthandId: OptLines,
-        gnuInfoOptions: true);
+        gnuInfoOptions: true,
+        // GNU split's long_options order (oracle: `split --li=3` → '--lines' '--line-bytes').
+        longOptionOrder: new[] { "bytes", "lines", "line-bytes" });
 
     /// <summary>Pure argv scan (unit-test seam).</summary>
     internal static ParsedArgs ScanArgs(string[] args) => ArgParser.Parse(args, SplitSpec);
