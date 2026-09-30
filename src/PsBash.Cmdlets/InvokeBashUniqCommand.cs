@@ -1,5 +1,7 @@
+using System.Linq;
 using System.Management.Automation;
 using System.Text.RegularExpressions;
+using PsBash.Cmdlets.Args;
 
 namespace PsBash.Cmdlets;
 
@@ -73,30 +75,180 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
     public PSObject? InputObject { get; set; }
 
     /// <summary>
-    /// Valid GNU <c>uniq</c> options ps-bash does not implement. An
-    /// option-looking token in this set yields "recognized but not supported"
-    /// instead of the old misleading "No such file or directory". Anything
-    /// option-looking NOT here is reported as unrecognized/invalid (bash parity).
+    /// Valid GNU <c>uniq</c> options ps-bash does not implement, refused loudly (exit 2) by the
+    /// shared parser: <c>-z/--zero-terminated</c> (NUL records) and <c>--group[=METHOD]</c>.
+    /// (A string[] on purpose: CommonParameterCollisionGuardTests enumerates static string sets.)
     /// </summary>
-    private static readonly HashSet<string> UniqValidButUnsupported =
-        new(StringComparer.Ordinal)
+    private static readonly string[] UniqValidButUnsupported =
+    {
+        "-z", "--zero-terminated",
+        "--group",
+    };
+
+    private const string OptCount = "count", OptRepeated = "repeated", OptAllRepeated = "allrepeated",
+        OptSkipFields = "skipfields", OptSkipChars = "skipchars", OptIgnoreCase = "ignorecase",
+        OptUnique = "unique", OptCheckChars = "checkchars";
+
+    /// <summary>
+    /// uniq's option surface (GNU coreutils 9.4: -c -d -D -f -i -s -u -w -z + --count --repeated
+    /// --all-repeated[=METHOD] --skip-fields --group[=METHOD] --ignore-case --skip-chars --unique
+    /// --check-chars --zero-terminated; obsolete <c>-N</c> = <c>-f N</c>). <c>-D</c> and
+    /// <c>--all-repeated</c> share an id: the short form takes no value, the long an optional
+    /// attached METHOD. Built once for the shared ordered parser.
+    /// </summary>
+    private static readonly OptSpecSet UniqSpec = new(
+        new[]
         {
-            "-z", "--zero-terminated",
-            "--group",
-            "--output-delimiter",
+            new OptSpec(OptCount, 'c', "count"),
+            new OptSpec(OptRepeated, 'd', "repeated"),
+            new OptSpec(OptAllRepeated, 'D', null),
+            new OptSpec(OptAllRepeated, '\0', "all-repeated", OptKind.OptionalValue),
+            new OptSpec(OptSkipFields, 'f', "skip-fields", OptKind.Value),
+            new OptSpec(OptIgnoreCase, 'i', "ignore-case"),
+            new OptSpec(OptSkipChars, 's', "skip-chars", OptKind.Value),
+            new OptSpec(OptUnique, 'u', "unique"),
+            new OptSpec(OptCheckChars, 'w', "check-chars", OptKind.Value),
+        },
+        validButUnsupported: UniqValidButUnsupported,
+        allowAbbrev: true,
+        numericShorthandId: OptSkipFields,
+        gnuInfoOptions: true);
+
+    /// <summary>Pure argv scan (unit-test seam): options, operands and the first error.</summary>
+    internal static ParsedArgs ScanArgs(string[] args) => ArgParser.Parse(args, UniqSpec);
+
+    /// <summary>The resolved meaning of a uniq argv (shared by the cmdlet and the fused core).</summary>
+    internal sealed class UniqArgs
+    {
+        public ParsedArgs Parsed = null!;
+        public bool Count, Repeated, Unique, IgnoreCase, AllRepeated;
+        /// <summary><c>none</c> (default), <c>prepend</c> or <c>separate</c> — only meaningful with <see cref="AllRepeated"/>.</summary>
+        public string AllRepeatedMethod = "none";
+        public int SkipFields, SkipChars;
+        /// <summary>-w N: compare at most N chars; -1 = unlimited (unset). NOTE <c>-w 0</c> means "compare nothing" (GNU).</summary>
+        public int CheckChars = -1;
+        public List<string> Operands = new();
+        /// <summary>A usage error the scan itself cannot see (bad number, bad METHOD, -c with -D); exit 1.</summary>
+        public string? Error;
+
+        /// <summary>True when nothing further should execute: scan error, value error, --help/--version.</summary>
+        public bool Declined =>
+            Parsed.HasError || Error is not null
+            || Parsed.Has(OptSpecSet.HelpId) || Parsed.Has(OptSpecSet.VersionId);
+    }
+
+    /// <summary>
+    /// Scan + resolve with GNU's value rules: -f/-s/-w take a non-negative decimal (anything else is
+    /// "invalid number of fields to skip" etc., exit 1; huge values saturate), <c>--all-repeated=M</c>
+    /// takes any unique prefix of none|prepend|separate, and <c>-c</c> with <c>-D</c> is refused
+    /// ("printing all duplicated lines and repeat counts is meaningless").
+    /// </summary>
+    internal static UniqArgs Plan(string[] args)
+    {
+        var p = ScanArgs(args);
+        var u = new UniqArgs
+        {
+            Parsed = p,
+            Count = p.Has(OptCount),
+            Repeated = p.Has(OptRepeated),
+            Unique = p.Has(OptUnique),
+            IgnoreCase = p.Has(OptIgnoreCase),
+            AllRepeated = p.Has(OptAllRepeated),
+            Operands = p.Operands(),
         };
+        if (p.HasError) return u;
+
+        foreach (var tok in p.Tokens)
+        {
+            if (tok.Kind != ArgTokKind.Option) continue;
+            switch (tok.OptId)
+            {
+                case OptSkipFields:
+                    if (!TryCount(tok.Value!, out int sf)) { u.Error = $"uniq: {tok.Value}: invalid number of fields to skip"; return u; }
+                    u.SkipFields = sf;
+                    break;
+                case OptSkipChars:
+                    if (!TryCount(tok.Value!, out int sc)) { u.Error = $"uniq: {tok.Value}: invalid number of bytes to skip"; return u; }
+                    u.SkipChars = sc;
+                    break;
+                case OptCheckChars:
+                    if (!TryCount(tok.Value!, out int cc)) { u.Error = $"uniq: {tok.Value}: invalid number of bytes to compare"; return u; }
+                    u.CheckChars = cc;
+                    break;
+                case OptAllRepeated when tok.Value is { } method:
+                    string? full = MatchMethod(method);
+                    if (full is null)
+                    {
+                        u.Error = $"uniq: invalid argument '{method}' for '--all-repeated'\n"
+                                  + "Valid arguments are:\n  - 'none'\n  - 'prepend'\n  - 'separate'";
+                        return u;
+                    }
+                    u.AllRepeatedMethod = full;
+                    break;
+            }
+        }
+
+        if (u.AllRepeated && u.Count)
+            u.Error = "uniq: printing all duplicated lines and repeat counts is meaningless";
+        return u;
+    }
+
+    /// <summary>Non-negative decimal (no sign, no suffix); values beyond int saturate.</summary>
+    private static bool TryCount(string s, out int value)
+    {
+        value = 0;
+        if (s.Length == 0) return false;
+        long acc = 0;
+        foreach (char c in s)
+        {
+            if (c < '0' || c > '9') return false;
+            acc = Math.Min(acc * 10 + (c - '0'), int.MaxValue);
+        }
+        value = (int)acc;
+        return true;
+    }
+
+    private static string? MatchMethod(string v)
+    {
+        if (v.Length == 0) return null;
+        foreach (var m in new[] { "none", "prepend", "separate" })
+            if (m.StartsWith(v, StringComparison.Ordinal)) return m;
+        return null;
+    }
+
+    /// <summary>
+    /// Arguments with the decoy-bound flags re-injected (bare -c/-d/-i/-w bind -Confirm-like
+    /// switches, -Debug, -Information*, -WarningAction). A bare <c>-D</c> binds the -d decoy
+    /// case-insensitively, so the distinct uppercase form is recovered from the raw invocation
+    /// line — scoped to uniq's own pipeline segment so another command's -D cannot leak in.
+    /// A transpiled <c>'-D'</c> is a quoted string in Arguments and never needs this.
+    /// </summary>
+    private string[] ArgsWithDecoys()
+    {
+        var raw = Arguments ?? Array.Empty<string>();
+        var pre = new List<string>();
+        if (C.IsPresent) pre.Add("-c");
+        if (D.IsPresent)
+        {
+            var rawLine = BashRuntime.CurrentPipelineSegment(MyInvocation);
+            pre.Add(Regex.IsMatch(rawLine, @"(?<![\w-])-D(?![\w])") ? "-D" : "-d");
+        }
+        if (I.IsPresent) pre.Add("-i");
+        if (W.HasValue) { pre.Add("-w"); pre.Add(W.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)); }
+        return pre.Count == 0 ? raw : pre.Concat(raw).ToArray();
+    }
 
     // Parsed-once state.
     private bool _parsed;
+    private UniqArgs? _plan;
     private bool _countMode, _duplicatesOnly, _ignoreCase, _uniqueOnly, _allRepeated;
-    private int _skipFields, _skipChars, _checkChars;
+    private string _allRepeatedMethod = "none";
+    private int _groupsEmitted;
+    private int _skipFields, _skipChars, _checkChars = -1;
     private List<string> _operands = new();
     // True when stdin must NOT be streamed: file operands present (file mode
-    // ignores stdin) or a --help / --version request.
+    // ignores stdin), a scan/value error, or a --help / --version request.
     private bool _suppressStdin;
-    // Deferred parse failure: an unrecognized flag found in ParseOnce.
-    // Emitted in EndProcessing so the stdin-streaming path stays clean.
-    private string? _optionErrorToken;
     // Adjacent-dedup state — uniq only needs the current run, never the whole
     // pipe. Instance state so a streamed stdin run carries across records.
     private string? _prevLine;
@@ -109,207 +261,33 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
         if (_parsed) return;
         _parsed = true;
 
-        var rawArgs = Arguments ?? Array.Empty<string>();
+        var args = ArgsWithDecoys();
 
         // --help / --version short-circuit before flag scanning (oracle order).
-        if (Array.IndexOf(rawArgs, "--version") >= 0 || Array.IndexOf(rawArgs, "--help") >= 0)
+        if (Array.IndexOf(args, "--version") >= 0 || Array.IndexOf(args, "--help") >= 0)
         {
             _suppressStdin = true;
             return;
         }
 
-        bool countMode = C.IsPresent;
-        bool duplicatesOnly = D.IsPresent;
-        bool ignoreCase = I.IsPresent;
-        bool uniqueOnly = false;
-        int skipFields = 0;
-        int skipChars = 0;
-        int checkChars = 0;
-        var operands = new List<string>();
-
-        int i = 0;
-        while (i < rawArgs.Length)
-        {
-            var arg = rawArgs[i];
-
-            if (arg == "--")
-            {
-                i++;
-                while (i < rawArgs.Length)
-                {
-                    operands.Add(rawArgs[i]);
-                    i++;
-                }
-                break;
-            }
-
-            if (arg == "--ignore-case")
-            {
-                ignoreCase = true;
-                i++;
-                continue;
-            }
-
-            // -D / --all-repeated[=METHOD]: print ALL lines of each duplicate run.
-            if (arg == "--all-repeated" || arg.StartsWith("--all-repeated=", StringComparison.Ordinal))
-            {
-                _allRepeated = true;
-                i++;
-                continue;
-            }
-
-            if (arg.StartsWith("--skip-fields=", StringComparison.Ordinal))
-            {
-                if (int.TryParse(arg.Substring("--skip-fields=".Length), out var sf))
-                {
-                    skipFields = sf;
-                }
-                i++;
-                continue;
-            }
-
-            if (arg.StartsWith("--skip-chars=", StringComparison.Ordinal))
-            {
-                if (int.TryParse(arg.Substring("--skip-chars=".Length), out var sc))
-                {
-                    skipChars = sc;
-                }
-                i++;
-                continue;
-            }
-
-            if (arg.StartsWith("--check-chars=", StringComparison.Ordinal))
-            {
-                if (int.TryParse(arg.Substring("--check-chars=".Length), out var cc))
-                {
-                    checkChars = cc;
-                }
-                i++;
-                continue;
-            }
-
-            // Unknown long flag (all known --xxx forms were matched above).
-            if (arg.StartsWith("--", StringComparison.Ordinal))
-            {
-                _optionErrorToken = arg;
-                _suppressStdin = true;
-                return;
-            }
-
-            // Short-flag bundle. Numeric-leading (e.g. "-5") is treated as an
-            // operand (oracle parity).
-            if (arg.StartsWith("-", StringComparison.Ordinal) && arg.Length > 1 && !IsNumericFlag(arg))
-            {
-                var body = arg.Substring(1);
-                int j = 0;
-                while (j < body.Length)
-                {
-                    char ch = body[j];
-                    switch (ch)
-                    {
-                        case 'c': countMode = true; j++; break;
-                        case 'd': duplicatesOnly = true; j++; break;
-                        case 'u': uniqueOnly = true; j++; break;
-                        case 'i': ignoreCase = true; j++; break;
-                        case 'f':
-                        {
-                            string rest = body.Substring(j + 1);
-                            if (rest.Length > 0 && IsDigitRun(rest, out var n))
-                            {
-                                skipFields = n;
-                                j = body.Length;
-                            }
-                            else
-                            {
-                                i++;
-                                if (i < rawArgs.Length && int.TryParse(rawArgs[i], out var nv))
-                                {
-                                    skipFields = nv;
-                                }
-                                j = body.Length;
-                            }
-                            break;
-                        }
-                        case 's':
-                        {
-                            string rest = body.Substring(j + 1);
-                            if (rest.Length > 0 && IsDigitRun(rest, out var n))
-                            {
-                                skipChars = n;
-                                j = body.Length;
-                            }
-                            else
-                            {
-                                i++;
-                                if (i < rawArgs.Length && int.TryParse(rawArgs[i], out var nv))
-                                {
-                                    skipChars = nv;
-                                }
-                                j = body.Length;
-                            }
-                            break;
-                        }
-                        case 'w':
-                        {
-                            string rest = body.Substring(j + 1);
-                            if (rest.Length > 0 && IsDigitRun(rest, out var n))
-                            {
-                                checkChars = n;
-                                j = body.Length;
-                            }
-                            else
-                            {
-                                i++;
-                                if (i < rawArgs.Length && int.TryParse(rawArgs[i], out var nv))
-                                {
-                                    checkChars = nv;
-                                }
-                                j = body.Length;
-                            }
-                            break;
-                        }
-                        default:
-                            _optionErrorToken = $"-{ch}";
-                            j = body.Length; // exit inner while
-                            break;
-                    }
-                }
-                if (_optionErrorToken != null) { _suppressStdin = true; return; }
-                i++;
-                continue;
-            }
-
-            operands.Add(arg);
-            i++;
-        }
-
-        // Publish the parsed flags to instance state so the streamed
-        // ProcessRecord and EndProcessing share them.
-        // Bare -D binds to the -d decoy (case-insensitive), so recover the
-        // distinct uppercase -D from the raw invocation line.
-        // Scope the -D recovery scan to uniq's own pipeline segment so another command's
-        // uppercase -D cannot leak in as uniq's --all-repeated.
-        var rawLine = BashRuntime.CurrentPipelineSegment(MyInvocation);
-        if (System.Text.RegularExpressions.Regex.IsMatch(rawLine, @"(?<![\w-])-D(?![\w])"))
-        {
-            _allRepeated = true;
-        }
-
-        // The SEPARATE `-w N` form binds to the W decoy (never reaches the scan
-        // above), so apply it here. A joined/bundled `-w3` already set checkChars.
-        if (W.HasValue) checkChars = W.Value;
-
-        _countMode = countMode;
-        _duplicatesOnly = duplicatesOnly;
-        _ignoreCase = ignoreCase;
-        _uniqueOnly = uniqueOnly;
-        _skipFields = skipFields;
-        _skipChars = skipChars;
-        _checkChars = checkChars;
-        _operands = operands;
-        _suppressStdin = operands.Count > 0;
+        // Shared ordered parser: bundles (-cdi), attached values (-f1, --skip-fields=1), long forms
+        // and unique-prefix abbreviations, the obsolete -N, `--`, options after operands, and the
+        // unsupported/unknown classifier in ONE scan. A scan or value error is reported from
+        // EndProcessing; stdin is not streamed for it.
+        var plan = Plan(args);
+        _plan = plan;
+        _countMode = plan.Count;
+        _duplicatesOnly = plan.Repeated;
+        _ignoreCase = plan.IgnoreCase;
+        _uniqueOnly = plan.Unique;
+        _allRepeated = plan.AllRepeated;
+        _allRepeatedMethod = plan.AllRepeatedMethod;
+        _skipFields = plan.SkipFields;
+        _skipChars = plan.SkipChars;
+        _checkChars = plan.CheckChars;
+        _operands = plan.Operands;
+        _suppressStdin = plan.Declined || _operands.Count > 0;
     }
-
     private void FlushRun()
     {
         if (_prevLine == null) return;
@@ -319,6 +297,10 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
         if (_allRepeated)
         {
             if (_runCount < 2) return;
+            // --all-repeated=prepend: a blank line before EVERY group; =separate: between groups.
+            if (_allRepeatedMethod == "prepend" || (_allRepeatedMethod == "separate" && _groupsEmitted > 0))
+                WriteObject(BashRuntime.NewBashObject(string.Empty));
+            _groupsEmitted++;
             for (int k = 0; k < _runCount; k++)
             {
                 WriteObject(BashRuntime.NewBashObject(_prevLine));
@@ -397,7 +379,7 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
     {
         ParseOnce();
 
-        var rawArgs = Arguments ?? Array.Empty<string>();
+        var rawArgs = ArgsWithDecoys();
 
         FileSystemHelpers.SetLastExitCode(this, 0);
         if (FileSystemHelpers.TryHandleVersion(this, "uniq", rawArgs)) return;
@@ -411,13 +393,16 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
             return;
         }
 
-        // Deferred parse failure: an unrecognized or unsupported flag was found.
-        if (_optionErrorToken != null)
+        if (_plan is { } plan)
         {
-            FileSystemHelpers.WriteOptionError(this, "uniq", _optionErrorToken, UniqValidButUnsupported);
-            return;
+            if (FileSystemHelpers.TryWriteParseError(this, "uniq", plan.Parsed)) return;
+            if (FileSystemHelpers.TryHandleInfoOptions(this, "uniq", plan.Parsed)) return;
+            if (plan.Error is { } planError)
+            {
+                FileSystemHelpers.WriteBashError(this, planError); // exit 1, GNU's usage status
+                return;
+            }
         }
-
         // File mode: stdin was suppressed; read each operand. Pipeline mode
         // (no operands) already streamed its lines through ProcessRecord.
         if (_operands.Count > 0)
@@ -452,24 +437,6 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
         }
     }
 
-    private static bool IsNumericFlag(string arg)
-    {
-        if (arg.Length < 2) return false;
-        return char.IsDigit(arg[1]);
-    }
-
-    private static bool IsDigitRun(string s, out int value)
-    {
-        int end = 0;
-        while (end < s.Length && char.IsDigit(s[end])) end++;
-        if (end == 0 || end != s.Length)
-        {
-            value = 0;
-            return false;
-        }
-        return int.TryParse(s, out value);
-    }
-
     private static string GetUniqKey(string line, int skipFields, int skipChars, int checkChars)
     {
         string key = line;
@@ -496,7 +463,8 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
             key = "";
         }
 
-        if (checkChars > 0 && key.Length > checkChars)
+        // -w N compares at most N chars; N = 0 compares NOTHING (GNU), -1 = unlimited.
+        if (checkChars >= 0 && key.Length > checkChars)
         {
             key = key.Substring(0, checkChars);
         }

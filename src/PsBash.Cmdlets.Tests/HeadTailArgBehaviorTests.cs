@@ -241,4 +241,40 @@ public class HeadTailArgBehaviorTests : IClassFixture<SharedPwshFixture>, IDispo
         var r = Run("'a','','b' | Invoke-BashNl '--body' a '--number-f' rz '--number-w' 3 '-v' 5 '-i' 2" + Text).AssertSuccess();
         Assert.Equal(new[] { "005\ta", "007\t", "009\tb" }, r.Lines);
     }
+
+    // ── uniq ────────────────────────────────────────────────────────────────
+
+    private const string Runs = "'a','a','b','c','c'";
+
+    [Fact]
+    public void Uniq_AllRepeatedMethods_MatchGnu()
+    {
+        // oracle: separate -> blank BETWEEN groups; prepend -> blank before EACH group; none/plain -> none.
+        Assert.Equal(new[] { "a", "a", "", "c", "c" },
+            Run($"{Runs} | Invoke-BashUniq '--all-repeated=separate'" + Text).AssertSuccess().Lines);
+        Assert.Equal(new[] { "", "a", "a", "", "c", "c" },
+            Run($"{Runs} | Invoke-BashUniq '--all-repeated=prepend'" + Text).AssertSuccess().Lines);
+        Assert.Equal(new[] { "a", "a", "c", "c" },
+            Run($"{Runs} | Invoke-BashUniq '-D'" + Text).AssertSuccess().Lines);
+    }
+
+    [Fact]
+    public void Uniq_LongFormsAndValueErrors()
+    {
+        Assert.Equal(new[] { "      2 a", "      1 b", "      2 c" },
+            Run($"{Runs} | Invoke-BashUniq '--count'" + Text).AssertSuccess().Lines);   // was "unrecognized option"
+        Run($"{Runs} | Invoke-BashUniq '-f' x").AssertFailed(1, "x: invalid number of fields to skip");
+        Run($"{Runs} | Invoke-BashUniq '-cD'").AssertFailed(1, "printing all duplicated lines and repeat counts is meaningless");
+        Run($"{Runs} | Invoke-BashUniq '--all-repeated=x'").AssertFailed(1, "invalid argument 'x' for '--all-repeated'");
+        Run($"{Runs} | Invoke-BashUniq '-z'").AssertFailed(2, "not supported");
+        Run($"{Runs} | Invoke-BashUniq '--bogus'").AssertFailed(1, "unrecognized option '--bogus'");
+    }
+
+    [Fact]
+    public void Uniq_CheckCharsZero_ComparesNothing_AndObsoleteNumberSkipsFields()
+    {
+        // oracle: `uniq -w 0` = one line (was unlimited: 2); `uniq -1` = -f 1.
+        Assert.Equal(new[] { "a x" }, Run("'a x','b y' | Invoke-BashUniq '-w' 0" + Text).AssertSuccess().Lines);
+        Assert.Equal(new[] { "a x" }, Run("'a x','b x' | Invoke-BashUniq '-1'" + Text).AssertSuccess().Lines);
+    }
 }

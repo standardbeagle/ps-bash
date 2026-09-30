@@ -34,6 +34,9 @@ public class LineStreamArgAgreementTests
         new[] { "-ba" }, new[] { "-b", "a" }, new[] { "-bn" }, new[] { "-bx" }, new[] { "-bpfoo" }, new[] { "-nrz" }, new[] { "-n", "xx" },
         new[] { "-w", "3" }, new[] { "-w3" }, new[] { "-w0" }, new[] { "-v", "5" }, new[] { "-i", "2" }, new[] { "-h", "a" }, new[] { "-p" },
         new[] { "-s:" }, new[] { "--number-format=rz" },
+        new[] { "-c" }, new[] { "-d" }, new[] { "-D" }, new[] { "-cD" }, new[] { "--count" }, new[] { "--all-repeated=x" }, new[] { "-z" }, new[] { "--group" },
+        new[] { "-f", "1" }, new[] { "-f", "x" }, new[] { "-f1" }, new[] { "-5" }, new[] { "-w", "0" }, new[] { "-ic" }, new[] { "-cdui" },
+        new[] { "--skip-fields=1" }, new[] { "--check-chars=2" }, new[] { "--ignore-case" },
     };
 
     private static bool CmdletAccepts(string name, string[] argv) => name switch
@@ -44,10 +47,11 @@ public class LineStreamArgAgreementTests
         "cat" => !InvokeBashCatCommand.Plan(argv).Declined,
         "tac" => !InvokeBashTacCommand.Plan(argv).Declined,
         "nl" => !InvokeBashNlCommand.Plan(argv).Declined,
+        "uniq" => !InvokeBashUniqCommand.Plan(argv).Declined,
         _ => throw new ArgumentException(name),
     };
 
-    public static IEnumerable<object[]> Commands => new[] { new object[] { "head" }, new object[] { "tail" }, new object[] { "wc" }, new object[] { "cat" }, new object[] { "tac" }, new object[] { "nl" } };
+    public static IEnumerable<object[]> Commands => new[] { new object[] { "head" }, new object[] { "tail" }, new object[] { "wc" }, new object[] { "cat" }, new object[] { "tac" }, new object[] { "nl" }, new object[] { "uniq" } };
 
     [Theory]
     [MemberData(nameof(Commands))]

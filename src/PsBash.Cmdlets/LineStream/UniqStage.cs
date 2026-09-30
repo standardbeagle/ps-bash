@@ -21,15 +21,12 @@ namespace PsBash.Cmdlets;
 /// rather than shared because this slice's file scope did not include the cmdlet
 /// file.</para>
 ///
-/// <para><b>Certified argv subset:</b> <c>-c</c> count, <c>-d</c> duplicates-only,
-/// <c>-u</c> uniques-only, <c>-i</c> ignore-case, <c>-f N</c>/<c>-fN</c> skip fields,
-/// <c>-s N</c>/<c>-sN</c> skip chars, <c>-w N</c>/<c>-wN</c> compare-chars, and any
-/// bundle of those (value flags consume the rest of their bundle, as in the cmdlet).
-/// DECLINED: file operands, <c>--</c>, every long form, <c>-D</c> /
-/// <c>--all-repeated</c> (the cmdlet recovers bare <c>-D</c> by rescanning the raw
-/// invocation line — a surface the streaming lane has no access to), a non-integer
-/// value for <c>-f</c>/<c>-s</c>/<c>-w</c>, and any unknown flag char (uppercase
-/// included — the cmdlet's dispatch is case-sensitive and errors on the rest).</para>
+/// <para><b>Certified argv subset:</b> every argv the cmdlet accepts with no file operands and
+/// no <c>-D</c>/<c>--all-repeated</c> — <c>-c -d -u -i -f N -s N -w N</c> (bundled, joined, long,
+/// abbreviated, obsolete <c>-N</c>). The cmdlet's own <see cref="InvokeBashUniqCommand.Plan"/>
+/// resolves and validates the argv for both lanes. DECLINED: file operands, <c>-D</c> /
+/// <c>--all-repeated</c> (group-separator methods live in the cmdlet), a bad number, an
+/// unsupported option (<c>-z</c>, <c>--group</c>), <c>--help</c> / <c>--version</c>, unknown flags.</para>
 /// </summary>
 internal sealed class UniqStage : ILineStreamStage
 {
@@ -47,92 +44,17 @@ internal sealed class UniqStage : ILineStreamStage
     /// is the cmdlet's only exit-1, and file mode is declined).</summary>
     public int ExitCode => 0;
 
-    /// <summary>Argv gate; the per-char dispatch mirrors the cmdlet's bundle scan,
-    /// including the "value flag consumes the rest of the bundle, else the next
-    /// argv element" rule.</summary>
+    /// <summary>Argv gate: the cmdlet's own resolver decides, so this core can NEVER accept an argv
+    /// the cmdlet would reject or read differently. Declined: file operands (file mode), scan or
+    /// value errors, --help/--version, and -D/--all-repeated (its group-separator methods are the
+    /// cmdlet's).</summary>
     internal static ILineStreamStage? TryCreate(string[] argv)
     {
-        bool countMode = false, duplicatesOnly = false, uniqueOnly = false, ignoreCase = false;
-        int skipFields = 0, skipChars = 0, checkChars = 0;
-
-        int i = 0;
-        while (i < argv.Length)
-        {
-            var arg = argv[i];
-
-            // `--`, long forms (--ignore-case, --all-repeated, --skip-fields=…, …),
-            // --help / --version: all outside the subset.
-            if (arg == "--" || arg.StartsWith("--", StringComparison.Ordinal)) return null;
-
-            // A numeric-led token (`-5`) is an operand to the cmdlet → file mode.
-            if (arg.Length > 1 && arg[0] == '-' && !char.IsDigit(arg[1]))
-            {
-                var body = arg.Substring(1);
-                int j = 0;
-                while (j < body.Length)
-                {
-                    char ch = body[j];
-                    switch (ch)
-                    {
-                        case 'c': countMode = true; j++; break;
-                        case 'd': duplicatesOnly = true; j++; break;
-                        case 'u': uniqueOnly = true; j++; break;
-                        case 'i': ignoreCase = true; j++; break;
-                        case 'f':
-                            if (!TryTakeValue(argv, body, j, ref i, out skipFields)) return null;
-                            j = body.Length;
-                            break;
-                        case 's':
-                            if (!TryTakeValue(argv, body, j, ref i, out skipChars)) return null;
-                            j = body.Length;
-                            break;
-                        case 'w':
-                            if (!TryTakeValue(argv, body, j, ref i, out checkChars)) return null;
-                            j = body.Length;
-                            break;
-                        // 'D' (--all-repeated, recovered by the cmdlet from the raw
-                        // invocation line) and every other char: decline.
-                        default: return null;
-                    }
-                }
-                i++;
-                continue;
-            }
-
-            // Operand → file mode. Decline.
-            return null;
-        }
-
-        return new UniqStage(countMode, duplicatesOnly, uniqueOnly, ignoreCase,
-                             skipFields, skipChars, checkChars);
+        var plan = InvokeBashUniqCommand.Plan(argv);
+        if (plan.Declined || plan.Operands.Count > 0 || plan.AllRepeated) return null;
+        return new UniqStage(plan.Count, plan.Repeated, plan.Unique, plan.IgnoreCase,
+                             plan.SkipFields, plan.SkipChars, plan.CheckChars);
     }
-
-    /// <summary>
-    /// Value-flag reader shared by <c>-f</c>/<c>-s</c>/<c>-w</c>: a digit run joined to
-    /// the flag inside the bundle wins, otherwise the NEXT argv element is consumed.
-    /// A missing or non-integer value declines (the cmdlet silently keeps 0 there,
-    /// but that is an argv shape we will not certify).
-    /// </summary>
-    private static bool TryTakeValue(string[] argv, string body, int j, ref int i, out int value)
-    {
-        value = 0;
-        string rest = body.Substring(j + 1);
-        if (rest.Length > 0)
-        {
-            return IsDigitRun(rest, out value);
-        }
-        i++;
-        return i < argv.Length && int.TryParse(argv[i], out value);
-    }
-
-    private static bool IsDigitRun(string s, out int value)
-    {
-        int end = 0;
-        while (end < s.Length && char.IsDigit(s[end])) end++;
-        if (end == 0 || end != s.Length) { value = 0; return false; }
-        return int.TryParse(s, out value);
-    }
-
     /// <summary>
     /// Lazy adjacent dedup. State is the current run only (<c>prevLine</c>,
     /// <c>prevKey</c>, <c>runCount</c>) — no buffering of the input, so a downstream
@@ -206,7 +128,8 @@ internal sealed class UniqStage : ILineStreamStage
         if (skipChars > 0 && key.Length > skipChars) key = key.Substring(skipChars);
         else if (skipChars > 0) key = "";
 
-        if (checkChars > 0 && key.Length > checkChars) key = key.Substring(0, checkChars);
+        // -w N compares at most N chars; N = 0 compares NOTHING (GNU), -1 = unlimited.
+        if (checkChars >= 0 && key.Length > checkChars) key = key.Substring(0, checkChars);
 
         return key;
     }
