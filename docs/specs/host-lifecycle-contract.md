@@ -383,3 +383,16 @@ endpoints (`ResolvePerInvocationEndpoint`).
 it may unlink the socket path after lifecycle validation has decided cleanup is
 allowed. For `pipe` it must remain a no-op for the endpoint, because Windows
 named pipes are kernel namespace objects and have no path to delete.
+
+## A script that does not parse is never silent
+
+The host parses the WHOLE transpiled script before running any of it, so a PowerShell-level
+parse failure (an emitter defect, or raw PowerShell with a stray `}` reaching the host through the
+launcher's PowerShell fallback) means nothing ran — not even the statements before the bad one.
+`SdkWorker.RunCommand` reports it on the stderr sink as `ps-bash: parse error: <PowerShell message>`
+and returns **2**, bash's syntax-error status (the launcher's own bash `ParseException` path, in
+`-c`, stdin and script-file mode, already exits 2). A runtime error stays exit 1. This holds for
+the shared `Daemon` host and `PSBASH_PER_INVOCATION=1` alike — it is host behaviour, independent
+of lifetime. Coverage: `PsBash.Host.Tests/Runtime/SdkWorkerParseErrorTests` (worker level) and
+`PsBash.Shell.Tests/ProgramEndToEndTests.UnparseableScript_*` (launcher, -c / -s × daemon /
+per-invocation).
