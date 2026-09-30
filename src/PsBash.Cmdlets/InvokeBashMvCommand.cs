@@ -116,10 +116,10 @@ public sealed class InvokeBashMvCommand : PSCmdlet
         var destRaw = operands[^1];
         var sourceOperands = operands.GetRange(0, operands.Count - 1);
 
-        var sources = new List<string>();
+        var sources = new List<FileSystemHelpers.OperandPath>();
         foreach (var s in sourceOperands)
         {
-            foreach (var expanded in FileSystemHelpers.ResolveOperandPaths(this, s))
+            foreach (var expanded in FileSystemHelpers.ResolveOperands(this, s))
             {
                 sources.Add(expanded);
             }
@@ -137,24 +137,28 @@ public sealed class InvokeBashMvCommand : PSCmdlet
             return;
         }
 
-        foreach (var src in sources)
+        foreach (var operand in sources)
         {
+            var src = operand.Path;
+            var srcDisplay = operand.Display;
             bool srcIsFile = File.Exists(src);
             bool srcIsDir = !srcIsFile && Directory.Exists(src);
 
             if (!srcIsFile && !srcIsDir)
             {
                 FileSystemHelpers.WriteBashError(this,
-                    $"mv: cannot stat '{src}': No such file or directory");
+                    $"mv: cannot stat '{srcDisplay}': No such file or directory");
                 hadError = true;
                 continue;
             }
 
             var targetPath = TransferValidation.ResolveTarget(src, destAbs, destIsExistingDir);
+            // Diagnostics name the destination as typed (GNU): `mv f d/` reports 'd/f'.
+            var targetDisplay = destIsExistingDir ? FileSystemHelpers.JoinDisplay(destRaw, srcDisplay) : destRaw;
 
             // Identity first (same file / dir into itself): must run before ANY delete, since the
             // resolved target can BE the source (`mv p/src p`).
-            var identityError = TransferValidation.CheckIdentity("mv", src, srcIsDir, targetPath);
+            var identityError = TransferValidation.CheckIdentity("mv", src, srcIsDir, targetPath, srcDisplay, targetDisplay);
             if (identityError != null)
             {
                 FileSystemHelpers.WriteBashError(this, identityError);
@@ -170,10 +174,20 @@ public sealed class InvokeBashMvCommand : PSCmdlet
             bool caseOnlyRename = TransferValidation.IsCaseOnlyRename(src, targetPath);
             var occupancyError = caseOnlyRename
                 ? null
-                : TransferValidation.CheckOccupancy("mv", src, srcIsDir, targetPath, replaceEmptyDirOnly: true);
+                : TransferValidation.CheckOccupancy("mv", src, srcIsDir, targetPath, replaceEmptyDirOnly: true,
+                    srcDisplay, targetDisplay);
             if (occupancyError != null)
             {
                 FileSystemHelpers.WriteBashError(this, occupancyError);
+                hadError = true;
+                continue;
+            }
+
+            var targetParent = Path.GetDirectoryName(targetPath);
+            if (!string.IsNullOrEmpty(targetParent) && !Directory.Exists(targetParent))
+            {
+                FileSystemHelpers.WriteBashError(this,
+                    $"mv: cannot move '{srcDisplay}' to '{targetDisplay}': No such file or directory");
                 hadError = true;
                 continue;
             }
@@ -200,7 +214,7 @@ public sealed class InvokeBashMvCommand : PSCmdlet
             {
                 if (FileSystemHelpers.IsPipelineStop(ex)) throw;
                 FileSystemHelpers.WriteBashError(this,
-                    $"mv: cannot move '{src}' to '{targetPath}': {ex.Message}");
+                    $"mv: cannot move '{srcDisplay}' to '{targetDisplay}': {ex.Message}");
                 hadError = true;
                 continue;
             }
@@ -208,7 +222,7 @@ public sealed class InvokeBashMvCommand : PSCmdlet
             if (verbose)
             {
                 WriteObject(BashRuntime.NewBashObject(
-                    $"'{FileSystemHelpers.ToBashPath(src)}' -> '{FileSystemHelpers.ToBashPath(targetPath)}'\n"));
+                    $"'{FileSystemHelpers.ToBashPath(srcDisplay)}' -> '{FileSystemHelpers.ToBashPath(targetDisplay)}'\n"));
             }
         }
 

@@ -139,10 +139,10 @@ public sealed class InvokeBashRmCommand : PSCmdlet
             return;
         }
 
-        var resolved = new List<string>();
+        var resolved = new List<FileSystemHelpers.OperandPath>();
         foreach (var op in operands)
         {
-            foreach (var expanded in FileSystemHelpers.ResolveOperandPaths(this, op))
+            foreach (var expanded in FileSystemHelpers.ResolveOperands(this, op))
             {
                 resolved.Add(expanded);
             }
@@ -152,8 +152,12 @@ public sealed class InvokeBashRmCommand : PSCmdlet
         bool isWindows = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
         var homeDir = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 
-        foreach (var target in resolved)
+        foreach (var operand in resolved)
         {
+            var target = operand.Path;
+            // Diagnostics quote the operand AS TYPED (GNU: `rm: cannot remove 'nosuch'`), never the
+            // resolved full path.
+            var display = operand.Display;
             // Windows reserved-device-name guard (psm1 oracle parity).
             if (isWindows)
             {
@@ -165,7 +169,7 @@ public sealed class InvokeBashRmCommand : PSCmdlet
                 if (WinReservedNames.Contains(baseName))
                 {
                     FileSystemHelpers.WriteBashError(this,
-                        $"rm: cannot remove '{target}': Windows reserved device name");
+                        $"rm: cannot remove '{display}': Windows reserved device name");
                     hadError = true;
                     continue;
                 }
@@ -202,7 +206,7 @@ public sealed class InvokeBashRmCommand : PSCmdlet
                 if (string.IsNullOrEmpty(normalized) && !string.IsNullOrEmpty(pathRoot))
                 {
                     FileSystemHelpers.WriteBashError(this,
-                        $"rm: refusing to remove '{target}': protected path");
+                        $"rm: refusing to remove '{display}': protected path");
                     hadError = true;
                     isProtected = true;
                 }
@@ -210,7 +214,7 @@ public sealed class InvokeBashRmCommand : PSCmdlet
                          string.Equals(normalized, normalizedRoot, StringComparison.OrdinalIgnoreCase))
                 {
                     FileSystemHelpers.WriteBashError(this,
-                        $"rm: refusing to remove '{target}': protected path");
+                        $"rm: refusing to remove '{display}': protected path");
                     hadError = true;
                     isProtected = true;
                 }
@@ -222,7 +226,7 @@ public sealed class InvokeBashRmCommand : PSCmdlet
                         string.Equals(normalized, normalizedHome, StringComparison.OrdinalIgnoreCase))
                     {
                         FileSystemHelpers.WriteBashError(this,
-                            $"rm: refusing to remove '{target}': protected path");
+                            $"rm: refusing to remove '{display}': protected path");
                         hadError = true;
                         isProtected = true;
                     }
@@ -238,7 +242,7 @@ public sealed class InvokeBashRmCommand : PSCmdlet
                 if (!force)
                 {
                     FileSystemHelpers.WriteBashError(this,
-                        $"rm: cannot remove '{target}': No such file or directory");
+                        $"rm: cannot remove '{display}': No such file or directory");
                     hadError = true;
                 }
                 continue;
@@ -247,7 +251,7 @@ public sealed class InvokeBashRmCommand : PSCmdlet
             if (isDir && !recursive)
             {
                 FileSystemHelpers.WriteBashError(this,
-                    $"rm: cannot remove '{target}': Is a directory");
+                    $"rm: cannot remove '{display}': Is a directory");
                 hadError = true;
                 continue;
             }
@@ -258,14 +262,14 @@ public sealed class InvokeBashRmCommand : PSCmdlet
                              target, "*", SearchOption.AllDirectories))
                 {
                     WriteObject(BashRuntime.NewBashObject(
-                        $"removed '{FileSystemHelpers.ToBashPath(child)}'\n"));
+                        $"removed '{FileSystemHelpers.AppendDisplay(display, Path.GetRelativePath(target, child))}'\n"));
                 }
             }
 
             if (verbose)
             {
                 WriteObject(BashRuntime.NewBashObject(
-                    $"removed '{FileSystemHelpers.ToBashPath(target)}'\n"));
+                    $"removed '{FileSystemHelpers.ToBashPath(display)}'\n"));
             }
 
             try
@@ -278,7 +282,7 @@ public sealed class InvokeBashRmCommand : PSCmdlet
             {
                 if (FileSystemHelpers.IsPipelineStop(ex)) throw;
                 FileSystemHelpers.WriteBashError(this,
-                    $"rm: cannot remove '{target}': {ex.Message}");
+                    $"rm: cannot remove '{display}': {ex.Message}");
                 hadError = true;
                 continue;
             }

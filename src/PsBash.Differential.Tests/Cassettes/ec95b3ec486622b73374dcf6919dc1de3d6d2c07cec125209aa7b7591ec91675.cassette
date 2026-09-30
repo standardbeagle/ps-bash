@@ -1,0 +1,36 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 396
+stdout-length: 271
+stderr-length: 0
+==== SCRIPT ====
+__fs_snap() { find . | LC_ALL=C sort | while IFS= read -r p; do if [ -d "$p" ]; then echo "D $p"; else echo "F $p $(base64 -w0 "$p")"; fi; done; }
+d=$(mktemp -d) && cd "$d" && { :
+mkdir -p 'd1'
+printf '%s\n' 'x' > 'd1/f'
+printf '%s\n' 'k' > 'keep'
+} >/dev/null 2>&1
+echo '== stdout'
+{ :
+rm nosuch ./nosuch2 d1 nosuch/x 2>&1
+} 2>/dev/null
+echo "== exit $?"
+echo '== fs'
+__fs_snap
+cd /; rm -rf "$d"
+==== STDOUT ====
+== stdout
+rm: cannot remove 'nosuch': No such file or directory
+rm: cannot remove './nosuch2': No such file or directory
+rm: cannot remove 'd1': Is a directory
+rm: cannot remove 'nosuch/x': No such file or directory
+== exit 1
+== fs
+D .
+D ./d1
+F ./d1/f eAo=
+F ./keep awo=
+
+==== STDERR ====
+

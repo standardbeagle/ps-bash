@@ -54,6 +54,36 @@ public class FsStateDifferentialTests
             "",
             "printf 'hi\\n' | tee -- -zz");
 
+    // ───────────── diagnostics quote operands as typed ─────────────
+    //
+    // `2>&1` folds the message into the compared stdout: GNU quotes each operand exactly as typed
+    // ('nosuch', './nosuch', 'dir1/../s'), never the resolved full path.
+
+    [SkippableFact] public Task Rm_DiagnosticsQuoteOperandsAsTyped() =>
+        EqualAsync(
+            Tree(("d1/f", "x"), ("keep", "k")),
+            "rm nosuch ./nosuch2 d1 nosuch/x 2>&1");
+
+    [SkippableFact] public Task Cp_DiagnosticsQuoteOperandsAsTyped() =>
+        EqualAsync(
+            Tree(("s", "S"), ("d1/f", "x")),
+            "cp nosuch dst 2>&1; cp d1 dst 2>&1; cp s ./s 2>&1; cp s d1/../s 2>&1");
+
+    [SkippableFact] public Task Cp_MissingDestinationParent_ErrorsAndCreatesNothing() =>
+        EqualAsync(
+            Tree(("s", "S")),
+            "cp s nodir/x 2>&1");
+
+    [SkippableFact] public Task Cp_DestinationDirectoryTrailingSlash_SameFileNamesJoinedTarget() =>
+        EqualAsync(
+            Tree(("d/s", "S")),
+            "cd d; cp s ./ 2>&1; cp s . 2>&1");
+
+    [SkippableFact] public Task Mv_DiagnosticsQuoteOperandsAsTyped() =>
+        EqualAsync(
+            Tree(("s", "S"), ("d/f", "x")),
+            "mv nosuch dst 2>&1; mv s ./s 2>&1; mv d d/x 2>&1; mv s nodir/x 2>&1");
+
     // ───────────── redirect byte fidelity ─────────────
 
     // `printf x > f` leaves f = "x" (1 byte): Invoke-BashRedirect honours the NoTrailingNewline

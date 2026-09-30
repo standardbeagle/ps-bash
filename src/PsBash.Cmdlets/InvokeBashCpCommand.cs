@@ -182,10 +182,10 @@ public sealed class InvokeBashCpCommand : PSCmdlet
         var sourceOperands = operands.GetRange(0, operands.Count - 1);
 
         // Expand globs on the source list, preserving order.
-        var sources = new List<string>();
+        var sources = new List<FileSystemHelpers.OperandPath>();
         foreach (var s in sourceOperands)
         {
-            foreach (var expanded in FileSystemHelpers.ResolveOperandPaths(this, s))
+            foreach (var expanded in FileSystemHelpers.ResolveOperands(this, s))
             {
                 sources.Add(expanded);
             }
@@ -204,15 +204,17 @@ public sealed class InvokeBashCpCommand : PSCmdlet
             return;
         }
 
-        foreach (var src in sources)
+        foreach (var operand in sources)
         {
+            var src = operand.Path;
+            var srcDisplay = operand.Display;
             bool srcIsFile = File.Exists(src);
             bool srcIsDir = !srcIsFile && Directory.Exists(src);
 
             if (!srcIsFile && !srcIsDir)
             {
                 FileSystemHelpers.WriteBashError(this,
-                    $"cp: cannot stat '{src}': No such file or directory");
+                    $"cp: cannot stat '{srcDisplay}': No such file or directory");
                 hadError = true;
                 continue;
             }
@@ -220,14 +222,16 @@ public sealed class InvokeBashCpCommand : PSCmdlet
             if (srcIsDir && !recursive)
             {
                 FileSystemHelpers.WriteBashError(this,
-                    $"cp: -r not specified; omitting directory '{src}'");
+                    $"cp: -r not specified; omitting directory '{srcDisplay}'");
                 hadError = true;
                 continue;
             }
 
             var targetPath = TransferValidation.ResolveTarget(src, destAbs, destIsExistingDir);
+            // Diagnostics name the destination as typed (GNU): `cp f d/` reports 'd/f', not the full path.
+            var targetDisplay = destIsExistingDir ? FileSystemHelpers.JoinDisplay(destRaw, srcDisplay) : destRaw;
 
-            var identityError = TransferValidation.CheckIdentity("cp", src, srcIsDir, targetPath);
+            var identityError = TransferValidation.CheckIdentity("cp", src, srcIsDir, targetPath, srcDisplay, targetDisplay);
             if (identityError != null)
             {
                 FileSystemHelpers.WriteBashError(this, identityError);
@@ -237,10 +241,23 @@ public sealed class InvokeBashCpCommand : PSCmdlet
 
             // Type conflicts (dir over file / file over dir) are errors; an existing target
             // DIRECTORY is not — cp merges into it (replaceEmptyDirOnly: false).
-            var occupancyError = TransferValidation.CheckOccupancy("cp", src, srcIsDir, targetPath, replaceEmptyDirOnly: false);
+            var occupancyError = TransferValidation.CheckOccupancy("cp", src, srcIsDir, targetPath, replaceEmptyDirOnly: false,
+                srcDisplay, targetDisplay);
             if (occupancyError != null)
             {
                 FileSystemHelpers.WriteBashError(this, occupancyError);
+                hadError = true;
+                continue;
+            }
+
+            // GNU never creates missing parent directories for the destination
+            // (`cp f nodir/x` -> "cannot create regular file 'nodir/x': No such file or directory");
+            // only an explicit mkdir -p does. Refuse before any write.
+            var targetParent = Path.GetDirectoryName(targetPath);
+            if (!string.IsNullOrEmpty(targetParent) && !Directory.Exists(targetParent))
+            {
+                FileSystemHelpers.WriteBashError(this,
+                    $"cp: cannot create {(srcIsDir ? "directory" : "regular file")} '{targetDisplay}': No such file or directory");
                 hadError = true;
                 continue;
             }
@@ -259,7 +276,8 @@ public sealed class InvokeBashCpCommand : PSCmdlet
                     // Merge: never delete the existing target tree. Same-named files are replaced
                     // (unless -n), destination-only files survive.
                     var errors = new List<string>();
-                    CopyDirectoryRecursive(src, targetPath, preserve, update, noClobber, force, errors);
+                    CopyDirectoryRecursive(src, targetPath, preserve, update, noClobber, force, errors,
+                        srcDisplay, targetDisplay);
                     if (errors.Count > 0)
                     {
                         foreach (var e in errors) FileSystemHelpers.WriteBashError(this, e);
@@ -274,11 +292,6 @@ public sealed class InvokeBashCpCommand : PSCmdlet
                     {
                         continue;
                     }
-                    var parent = Path.GetDirectoryName(targetPath);
-                    if (!string.IsNullOrEmpty(parent) && !Directory.Exists(parent))
-                    {
-                        Directory.CreateDirectory(parent);
-                    }
                     if (force) FileSystemHelpers.ClearReadOnly(targetPath);
                     File.Copy(src, targetPath, overwrite: true);
                     if (preserve) PreserveMetadata(src, targetPath, isDir: false);
@@ -288,7 +301,7 @@ public sealed class InvokeBashCpCommand : PSCmdlet
             {
                 if (FileSystemHelpers.IsPipelineStop(ex)) throw;
                 FileSystemHelpers.WriteBashError(this,
-                    $"cp: cannot copy '{src}' to '{targetPath}': {ex.Message}");
+                    $"cp: cannot copy '{srcDisplay}' to '{targetDisplay}': {ex.Message}");
                 hadError = true;
                 continue;
             }
@@ -296,7 +309,7 @@ public sealed class InvokeBashCpCommand : PSCmdlet
             if (verbose)
             {
                 WriteObject(BashRuntime.NewBashObject(
-                    $"'{FileSystemHelpers.ToBashPath(src)}' -> '{FileSystemHelpers.ToBashPath(targetPath)}'\n"));
+                    $"'{FileSystemHelpers.ToBashPath(srcDisplay)}' -> '{FileSystemHelpers.ToBashPath(targetDisplay)}'\n"));
             }
         }
 
@@ -310,13 +323,15 @@ public sealed class InvokeBashCpCommand : PSCmdlet
     /// into, and a file/dir type clash is appended to <paramref name="errors"/> and skipped.
     /// </summary>
     private static void CopyDirectoryRecursive(string src, string dest, bool preserve, bool update,
-        bool noClobber, bool force, List<string> errors)
+        bool noClobber, bool force, List<string> errors, string srcDisplay, string destDisplay)
     {
         Directory.CreateDirectory(dest);
         foreach (var file in Directory.EnumerateFiles(src))
         {
-            var target = Path.Combine(dest, Path.GetFileName(file));
-            var clash = TransferValidation.CheckOccupancy("cp", file, srcIsDir: false, target, replaceEmptyDirOnly: false);
+            var name = Path.GetFileName(file);
+            var target = Path.Combine(dest, name);
+            var clash = TransferValidation.CheckOccupancy("cp", file, srcIsDir: false, target, replaceEmptyDirOnly: false,
+                FileSystemHelpers.JoinDisplay(srcDisplay, name), FileSystemHelpers.JoinDisplay(destDisplay, name));
             if (clash != null) { errors.Add(clash); continue; }
             if (File.Exists(target))
             {
@@ -338,9 +353,13 @@ public sealed class InvokeBashCpCommand : PSCmdlet
                 FileSystemHelpers.TryCopyDirectoryLink(sub, subDest);
                 continue;
             }
-            var subClash = TransferValidation.CheckOccupancy("cp", sub, srcIsDir: true, subDest, replaceEmptyDirOnly: false);
+            var subName = Path.GetFileName(sub);
+            var subSrcDisplay = FileSystemHelpers.JoinDisplay(srcDisplay, subName);
+            var subDestDisplay = FileSystemHelpers.JoinDisplay(destDisplay, subName);
+            var subClash = TransferValidation.CheckOccupancy("cp", sub, srcIsDir: true, subDest, replaceEmptyDirOnly: false,
+                subSrcDisplay, subDestDisplay);
             if (subClash != null) { errors.Add(subClash); continue; }
-            CopyDirectoryRecursive(sub, subDest, preserve, update, noClobber, force, errors);
+            CopyDirectoryRecursive(sub, subDest, preserve, update, noClobber, force, errors, subSrcDisplay, subDestDisplay);
         }
         // Apply directory timestamps LAST — writing children bumps the dir mtime,
         // so GNU cp -p restores it after the contents are in place.
