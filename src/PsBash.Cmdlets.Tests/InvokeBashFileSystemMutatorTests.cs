@@ -726,6 +726,9 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
     [InlineData("Invoke-BashRm --bogus a")]
     [InlineData("Invoke-BashRm -rz a")]
     [InlineData("Invoke-BashRm --recursive=1 a")]
+    [InlineData("Invoke-BashMkdir --bogus d")]
+    [InlineData("Invoke-BashMkdir -pz d")]
+    [InlineData("Invoke-BashMkdir --parents=1 d")]
     public void Mover_ParserUsageError_ExitsOne(string cmd)
     {
         var lines = Run($"{cmd} *> $null; $global:LASTEXITCODE");
@@ -733,7 +736,6 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
     }
 
     [Theory]
-    [InlineData("Invoke-BashMkdir --bogus d")]
     [InlineData("Invoke-BashRmdir --bogus d")]
     public void Mover_UnrecognizedFlag_ExitsTwo(string cmd)
     {
@@ -903,6 +905,70 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
         // `--update=older` is -u: copies when the destination is missing.
         Run($"Invoke-BashCp '--update=older' {Q(src)} {Q(dst)}");
         Assert.True(File.Exists(dst));
+    }
+
+    // ─────────── shared ordered parser: mkdir as the transpiler delivers it ───────────
+
+    [Fact]
+    public void Mkdir_QuotedPv_ReachesTheParserIntact_CreatesNestedWithVerbose()
+    {
+        // `-pv` typed bare at PowerShell is eaten by the binder (-PipelineVariable alias). The
+        // transpiler single-quotes every dash word for mkdir, so it arrives whole in Arguments.
+        var nested = Path.Combine(_tmpRoot, "qp", "qv", "qz");
+        var lines = Run($"Invoke-BashMkdir '-pv' {Q(nested)}");
+        Assert.True(Directory.Exists(nested));
+        Assert.Contains(lines, l => l.Contains("created directory", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Theory]
+    [InlineData("--par")]        // unique prefix of --parents
+    [InlineData("--parents")]
+    [InlineData("-pp")]
+    public void Mkdir_QuotedParentsSpellings_CreateTheChain(string flag)
+    {
+        var nested = Path.Combine(_tmpRoot, "mk" + flag.Length, "n1", "n2");
+        Run($"Invoke-BashMkdir '{flag}' {Q(nested)}");
+        Assert.True(Directory.Exists(nested));
+    }
+
+    [Fact]
+    public void Mkdir_DoubleDash_DashNamedDirectoryIsCreatedNotParsed()
+    {
+        Run($"Set-Location {Q(_tmpRoot)}; Invoke-BashMkdir '--' '-p'");
+        Assert.True(Directory.Exists(Path.Combine(_tmpRoot, "-p")));
+    }
+
+    [Fact]
+    public void Mkdir_OptionAfterOperand_StillApplies()
+    {
+        var nested = Path.Combine(_tmpRoot, "ma", "deep");
+        Run($"Invoke-BashMkdir {Q(nested)} '-p'");
+        Assert.True(Directory.Exists(nested));
+    }
+
+    [Fact]
+    public void Mkdir_QuotedMode_IsRefusedAndCreatesNothing()
+    {
+        var d = Path.Combine(_tmpRoot, "moded");
+        Assert.Equal("2", LastExit($"Invoke-BashMkdir '-m' '755' {Q(d)}"));
+        Assert.False(Directory.Exists(d));
+    }
+
+    [Fact]
+    public void Mkdir_NoOperand_IsAnError()
+    {
+        Assert.Equal("1", LastExit("Invoke-BashMkdir"));
+        Assert.Equal("1", LastExit("Invoke-BashMkdir '-p'"));
+    }
+
+    [Fact]
+    public void Mkdir_DirectCallDecoys_StillWork()
+    {
+        // Pester/interactive path: bare -p/-v bind the decoy switches, not Arguments.
+        var nested = Path.Combine(_tmpRoot, "dd1", "dd2");
+        var lines = Run($"Invoke-BashMkdir -p -v {Q(nested)}");
+        Assert.True(Directory.Exists(nested));
+        Assert.Contains(lines, l => l.Contains("created directory", StringComparison.OrdinalIgnoreCase));
     }
 
     // ─────────── shared ordered parser: rm as the transpiler delivers it ───────────

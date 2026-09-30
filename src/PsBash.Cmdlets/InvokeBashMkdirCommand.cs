@@ -1,5 +1,6 @@
 using System.Linq;
 using System.Management.Automation;
+using PsBash.Cmdlets.Args;
 
 namespace PsBash.Cmdlets;
 
@@ -25,12 +26,12 @@ namespace PsBash.Cmdlets;
 /// output.</item>
 /// </list>
 /// <para>
-/// <b>Two colliding flags</b> declared as explicit
-/// <see cref="SwitchParameter"/>s: <c>-p</c> prefix-collides with
-/// <c>-ProgressAction</c> / <c>-PipelineVariable</c>, and <c>-v</c>
-/// prefix-collides with <c>-Verbose</c>. An exact parameter-name match beats
-/// a common-parameter prefix match, so declaring <c>p</c> and <c>v</c> here
-/// makes the bash invocation bind correctly.
+/// <b>Argv</b> is parsed by the shared ordered parser (<see cref="ArgParser"/>, spec
+/// <c>MkdirSpec</c>). The transpiler single-quotes every dash-leading word for mkdir
+/// (<c>PsEmitter.OrderedArgCommands</c>) so flags arrive in <c>Arguments</c> in order — which is
+/// also what makes <c>-pv</c> work (bare, the PowerShell binder eats it as
+/// <c>-PipelineVariable</c>). The <c>p</c>/<c>v</c> decoy switches exist ONLY for direct calls
+/// and are re-injected first.
 /// </para>
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashMkdir")]
@@ -47,15 +48,36 @@ public sealed class InvokeBashMkdirCommand : PSCmdlet
     /// (<c>-m MODE</c> has no faithful Windows ACL mapping; <c>-Z</c>/SELinux is
     /// Linux-only). Classified via
     /// <see cref="FileSystemHelpers.TryWriteOperandOptionError"/>.</summary>
-    private static readonly HashSet<string> MkdirValidButUnsupported = new(StringComparer.Ordinal)
+    // (A string[] on purpose: CommonParameterCollisionGuardTests enumerates each cmdlet's static
+    // string sets to find short flags the binder could eat.)
+    private static readonly string[] MkdirValidButUnsupported =
     {
         "-m", "--mode", "-Z", "--context",
     };
 
+    private const string OptParents = "parents", OptVerbose = "verbose";
+
+    /// <summary>mkdir's whole option surface, built once for the shared ordered parser.</summary>
+    private static readonly OptSpecSet MkdirSpec = new(
+        new[]
+        {
+            new OptSpec(OptParents, 'p', "parents"),
+            new OptSpec(OptVerbose, 'v', "verbose"),
+        },
+        validButUnsupported: MkdirValidButUnsupported,
+        allowAbbrev: true,
+        gnuInfoOptions: true);
+
+    /// <summary>Pure argv scan (unit-test seam): options, operands and the first error.</summary>
+    internal static ParsedArgs ScanArgs(string[] args) => ArgParser.Parse(args, MkdirSpec);
+
     protected override void ProcessRecord()
     {
-        var args = Arguments ?? Array.Empty<string>();
-
+        // Re-inject every decoy-bound flag. The transpiler single-quotes each dash-leading word
+        // for mkdir (PsEmitter.OrderedArgCommands) so they arrive in Arguments in order; a DIRECT
+        // call (`Invoke-BashMkdir -p d`, Pester) binds the decoys instead. Prepending is safe: a
+        // decoy can only have been bound before any `--`.
+        var args = BashRuntime.PrependDecoys(Arguments, (p.IsPresent, "-p"), (v.IsPresent, "-v"));
         FileSystemHelpers.SetLastExitCode(this, 0);
         if (FileSystemHelpers.TryHandleVersion(this, "mkdir", args)) return;
         if (Array.IndexOf(args, "--help") >= 0)
@@ -68,39 +90,17 @@ public sealed class InvokeBashMkdirCommand : PSCmdlet
             return;
         }
 
-        // Bare -p / -v arrive via the decoy SwitchParameters above. Bundled
-        // (-pv) and long (--parents / --verbose) forms flow through Arguments and
-        // are parsed here; `--` ends flag parsing so a dir literally named "-foo"
-        // can be created after it.
-        bool parents = p.IsPresent;
-        bool verbose = v.IsPresent;
+        // Shared ordered parser: bundles in any order (-pv, -vp, -pp), `--` (a dir literally named
+        // "-foo" can be created after it), unique-prefix long options, and the unsupported/unknown
+        // classifier in ONE scan. `-pv` used to be eaten by the binder as -PipelineVariable when
+        // typed at PowerShell; the transpiler now single-quotes it so it reaches Arguments intact.
+        var parsed = ScanArgs(args);
+        if (FileSystemHelpers.TryWriteParseError(this, "mkdir", parsed)) return;
+        if (FileSystemHelpers.TryHandleInfoOptions(this, "mkdir", parsed)) return;
 
-        var operands = new List<string>();
-        bool pastDoubleDash = false;
-        int preDashCount = -1;
-        foreach (var a in args)
-        {
-            if (pastDoubleDash) { operands.Add(a); continue; }
-            if (a == "--") { pastDoubleDash = true; preDashCount = operands.Count; continue; }
-            if (a == "-p" || a == "--parents") { parents = true; continue; }
-            if (a == "-v" || a == "--verbose") { verbose = true; continue; }
-            // De-bundle a pure -p/-v short bundle (e.g. -pv, -vp).
-            if (a.Length > 2 && a[0] == '-' && a[1] != '-'
-                && a.Skip(1).All(ch => ch == 'p' || ch == 'v'))
-            {
-                foreach (var ch in a.Skip(1))
-                {
-                    if (ch == 'p') parents = true;
-                    else if (ch == 'v') verbose = true;
-                }
-                continue;
-            }
-            operands.Add(a);
-        }
-
-        var mkdirToClassify = preDashCount < 0 ? operands : operands.GetRange(0, preDashCount);
-        if (FileSystemHelpers.TryWriteOperandOptionError(this, "mkdir", mkdirToClassify, MkdirValidButUnsupported))
-            return;
+        bool parents = parsed.Has(OptParents);
+        bool verbose = parsed.Has(OptVerbose);
+        var operands = parsed.Operands();
 
         if (operands.Count == 0)
         {

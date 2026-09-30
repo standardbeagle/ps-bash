@@ -50,6 +50,7 @@ public class CommonParameterCollisionGuardTests
             ["cp"] = new(CollidingLetters),
             ["mv"] = new(CollidingLetters),
             ["rm"] = new(CollidingLetters),
+            ["mkdir"] = new(CollidingLetters),
         };
 
     [Fact]
