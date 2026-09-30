@@ -64,7 +64,9 @@ public class SplitArgScanTests
     [InlineData("ERR split: invalid number of bytes: '1x'", "-b", "1x")]  // FIX
     [InlineData("ERR split: invalid number of bytes: '-5'", "-b", "-5")]
     [InlineData("ERR split: invalid suffix length: 'x'", "-a", "x")]  // FIX
-    [InlineData("ERR split: invalid suffix start: 'x'", "--numeric-suffixes=x")]
+    [InlineData("ERR split: 'x': invalid start value for numerical suffix\nTry 'split --help' for more information.", "--numeric-suffixes=x")]
+    [InlineData("ERR split: numerical suffix start value is too large for the suffix length\nTry 'split --help' for more information.", "--numeric-suffixes=123")]
+    [InlineData("l=1000 b=- a=3 d=True/123 add= ops=[]", "--numeric-suffixes=123", "-a3")]
     [InlineData("ERR split: cannot split in more than one way", "-l", "4", "-b", "3")]  // FIX
     [InlineData("ERR split: extra operand 'z'", "f", "y", "z")]  // FIX (was: ignored)
     [InlineData("ERR split: option requires an argument -- 'l'", "-l")]

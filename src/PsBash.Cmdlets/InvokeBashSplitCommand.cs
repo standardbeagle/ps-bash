@@ -97,6 +97,15 @@ public sealed class InvokeBashSplitCommand : PSCmdlet
         public int SuffixLength = 2;
         public bool Numeric;
         public int NumericStart;
+
+        /// <summary>The <c>--numeric-suffixes=FROM</c> digits as typed (null = none given).</summary>
+        public string? NumericFromText;
+
+        /// <summary>
+        /// GNU auto-extends the suffix (xyz -> xzaaa) only when neither a non-zero <c>-a N</c> nor a
+        /// <c>--numeric-suffixes=FROM</c> fixed the length.
+        /// </summary>
+        public bool SuffixAuto = true;
         public string AdditionalSuffix = string.Empty;
         public List<string> Operands = new();
         public string? Error;
@@ -115,6 +124,7 @@ public sealed class InvokeBashSplitCommand : PSCmdlet
         s.Operands = s.Parsed.Operands();
         if (s.Parsed.HasError) return s;
 
+        bool suffixGiven = false;
         foreach (var tok in s.Parsed.Tokens)
         {
             if (tok.Kind != ArgTokKind.Option) continue;
@@ -132,14 +142,16 @@ public sealed class InvokeBashSplitCommand : PSCmdlet
                     break;
                 case OptSuffixLen:
                     if (!TryDigits(v, out int len)) { s.Error = $"split: invalid suffix length: '{v}'"; return s; }
-                    s.SuffixLength = len < 1 ? 2 : len;
+                    if (len < 1) { s.SuffixLength = 2; suffixGiven = false; }   // -a 0 = auto length
+                    else { s.SuffixLength = len; suffixGiven = true; }
                     break;
                 case OptNumeric:
                     s.Numeric = true;
                     if (tok.Value is { Length: > 0 } from)
                     {
-                        if (!TryDigits(from, out int start)) { s.Error = $"split: invalid suffix start: '{from}'"; return s; }
+                        if (!TryDigits(from, out int start)) { s.Error = $"split: '{from}': invalid start value for numerical suffix\nTry 'split --help' for more information."; return s; }
                         s.NumericStart = start;
+                        s.NumericFromText = from;
                     }
                     break;
                 case OptAddSuffix:
@@ -147,6 +159,17 @@ public sealed class InvokeBashSplitCommand : PSCmdlet
                     break;
             }
         }
+
+        if (s.NumericFromText is { } fromText)
+        {
+            s.SuffixAuto = false;   // FROM fixes the length (GNU: x05..x99, then exhausted)
+            if (fromText.Length > s.SuffixLength)
+            {
+                s.Error = "split: numerical suffix start value is too large for the suffix length\nTry 'split --help' for more information.";
+                return s;
+            }
+        }
+        else if (suffixGiven) s.SuffixAuto = false;
 
         if (s.Parsed.Has(OptLines) && s.Parsed.Has(OptBytes))
         {
@@ -200,7 +223,7 @@ public sealed class InvokeBashSplitCommand : PSCmdlet
     public PSObject? InputObject { get; set; }
 
     private readonly List<PSObject> _pipeline = new();
-    private int _numericStart;
+    private SplitSuffixSequence _suffixes = null!;
 
     protected override void ProcessRecord()
     {
@@ -247,7 +270,7 @@ public sealed class InvokeBashSplitCommand : PSCmdlet
         long? byteSize = plan.Bytes;
         string additionalSuffix = plan.AdditionalSuffix;
         bool numericSuffix = plan.Numeric;
-        _numericStart = plan.NumericStart;
+        _suffixes = new SplitSuffixSequence(numericSuffix, plan.SuffixLength, plan.SuffixAuto, plan.NumericFromText);
         int suffixLength = plan.SuffixLength;
         var operands = plan.Operands;
         IEnumerable<string> lines;
@@ -356,9 +379,8 @@ public sealed class InvokeBashSplitCommand : PSCmdlet
         for (long offset = 0; offset < bytes.Length; offset += byteSize)
         {
             int len = (int)Math.Min(byteSize, bytes.Length - offset);
-            string suffix = numericSuffix
-                ? (chunkIndex + _numericStart).ToString().PadLeft(suffixLength, '0')
-                : BuildAlphaSuffix(chunkIndex, suffixLength);
+            string? suffix = _suffixes.Next();
+            if (suffix is null) { SuffixesExhausted(); return; }
             string outName = prefix + suffix + additionalSuffix;
             string outPath = Path.IsPathRooted(outName) ? outName : Path.Combine(cwd, outName);
             try
@@ -427,9 +449,8 @@ public sealed class InvokeBashSplitCommand : PSCmdlet
         bool numericSuffix,
         string additionalSuffix)
     {
-        string suffix = numericSuffix
-            ? (chunkIndex + _numericStart).ToString().PadLeft(suffixLength, '0')
-            : BuildAlphaSuffix(chunkIndex, suffixLength);
+        string? suffix = _suffixes.Next();
+        if (suffix is null) { SuffixesExhausted(); return false; }
 
         string outName = prefix + suffix + additionalSuffix;
         string outPath = Path.IsPathRooted(outName)
@@ -453,26 +474,8 @@ public sealed class InvokeBashSplitCommand : PSCmdlet
         }
     }
 
-    /// <summary>
-    /// Reproduces the psm1 oracle's alphabetic-suffix loop:
-    /// <c>chunkIndex</c> is decomposed into base-26 digits using the alphabet
-    /// <c>a..z</c>, lowest-order digit on the right, padded with <c>a</c>
-    /// (<c>aa</c>, <c>ab</c>, …, <c>az</c>, <c>ba</c>, …, <c>zz</c>).
-    /// The oracle silently rolls over past <c>zz</c> (truncates higher bits),
-    /// preserved here.
-    /// </summary>
-    private static string BuildAlphaSuffix(int chunkIndex, int suffixLength)
-    {
-        var chars = new char[suffixLength];
-        int idx = chunkIndex;
-        for (int si = 0; si < suffixLength; si++)
-        {
-            int charCode = (int)'a' + (idx % 26);
-            chars[suffixLength - 1 - si] = (char)charCode;
-            idx /= 26;
-        }
-        return new string(chars);
-    }
+    private void SuffixesExhausted() =>
+        FileSystemHelpers.WriteBashError(this, "split: output file suffixes exhausted");
 
     private void CollectPipelineLines(List<string> lines)
     {
