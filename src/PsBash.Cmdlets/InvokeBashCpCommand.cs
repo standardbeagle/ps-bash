@@ -88,13 +88,13 @@ public sealed class InvokeBashCpCommand : PSCmdlet
         "-T", "--no-target-directory", "-x", "--one-file-system",
         "--sparse", "--strip-trailing-slashes", "-Z", "--context",
         "--attributes-only", "-d",
-        // valid GNU long options (the `-p` short is implemented; its long spellings are not)
-        "--preserve", "--no-preserve", "--parents", "--remove-destination",
-        "--copy-contents", "--debug",
+        // valid GNU long options
+        "--parents", "--remove-destination", "--copy-contents", "--debug",
     };
 
     private const string OptRecursive = "recursive", OptNoClobber = "no-clobber", OptForce = "force",
-        OptVerbose = "verbose", OptPreserve = "preserve", OptUpdate = "update", OptArchive = "archive";
+        OptVerbose = "verbose", OptPreserve = "preserve", OptUpdate = "update", OptArchive = "archive",
+        OptPreserveList = "preserve-list", OptNoPreserve = "no-preserve";
 
     /// <summary>cp's whole option surface, built once for the shared ordered parser.</summary>
     private static readonly OptSpecSet CpSpec = new(
@@ -106,6 +106,10 @@ public sealed class InvokeBashCpCommand : PSCmdlet
             new OptSpec(OptForce, 'f', "force"),
             new OptSpec(OptVerbose, 'v', "verbose"),
             new OptSpec(OptPreserve, 'p', null),
+            // --preserve[=ATTR_LIST] (argument optional, attached only) and --no-preserve=ATTR_LIST
+            // (argument required): resolved in command-line order by CpPreserve.
+            new OptSpec(OptPreserveList, '\0', "preserve", OptKind.OptionalValue),
+            new OptSpec(OptNoPreserve, '\0', "no-preserve", OptKind.Value),
             new OptSpec(OptUpdate, 'u', null),
             // GNU >= 9.3: --update[=older|all|none|none-fail]; bare / =older is -u.
             new OptSpec(OptUpdate, '\0', "update", OptKind.OptionalValue),
@@ -168,7 +172,18 @@ public sealed class InvokeBashCpCommand : PSCmdlet
         bool noClobber = parsed.Has(OptNoClobber);
         bool force = parsed.Has(OptForce);
         bool verbose = parsed.Has(OptVerbose);
-        bool preserve = archive || parsed.Has(OptPreserve);
+        // -p / -a / --preserve[=LIST] / --no-preserve=LIST, resolved in command-line order. A bad
+        // attribute word is a usage error; naming `context` needs SELinux, which is never present here.
+        if (!CpPreserve.TryFrom(parsed, OptPreserve, OptArchive, OptPreserveList, OptNoPreserve, out var preserve, out var preserveError))
+        {
+            FileSystemHelpers.WriteBashError(this, preserveError!);
+            return;
+        }
+        if (preserve.ContextRequested)
+        {
+            FileSystemHelpers.WriteBashError(this, "cp: cannot preserve security context without an SELinux-enabled kernel");
+            return;
+        }
         bool update = parsed.Has(OptUpdate);
         var operands = parsed.Operands();
 
@@ -293,8 +308,7 @@ public sealed class InvokeBashCpCommand : PSCmdlet
                         continue;
                     }
                     if (force) FileSystemHelpers.ClearReadOnly(targetPath);
-                    File.Copy(src, targetPath, overwrite: true);
-                    if (preserve) PreserveMetadata(src, targetPath, isDir: false);
+                    CopyFile(src, targetPath, preserve);
                 }
             }
             catch (Exception ex)
@@ -322,9 +336,11 @@ public sealed class InvokeBashCpCommand : PSCmdlet
     /// <paramref name="noClobber"/> / <paramref name="update"/>), a same-named directory is descended
     /// into, and a file/dir type clash is appended to <paramref name="errors"/> and skipped.
     /// </summary>
-    private static void CopyDirectoryRecursive(string src, string dest, bool preserve, bool update,
+    private static void CopyDirectoryRecursive(string src, string dest, CpPreserve preserve, bool update,
         bool noClobber, bool force, List<string> errors, string srcDisplay, string destDisplay)
     {
+        bool destExisted = Directory.Exists(dest);
+        int? previousMode = destExisted ? PlatformMode.TryGet(dest) : null;
         Directory.CreateDirectory(dest);
         foreach (var file in Directory.EnumerateFiles(src))
         {
@@ -339,8 +355,7 @@ public sealed class InvokeBashCpCommand : PSCmdlet
                 if (update && File.GetLastWriteTimeUtc(file) <= File.GetLastWriteTimeUtc(target)) continue;
                 if (force) FileSystemHelpers.ClearReadOnly(target);
             }
-            File.Copy(file, target, overwrite: true);
-            if (preserve) PreserveMetadata(file, target, isDir: false);
+            CopyFile(file, target, preserve);
         }
         foreach (var sub in Directory.EnumerateDirectories(src))
         {
@@ -361,42 +376,89 @@ public sealed class InvokeBashCpCommand : PSCmdlet
             if (subClash != null) { errors.Add(subClash); continue; }
             CopyDirectoryRecursive(sub, subDest, preserve, update, noClobber, force, errors, subSrcDisplay, subDestDisplay);
         }
-        // Apply directory timestamps LAST — writing children bumps the dir mtime,
-        // so GNU cp -p restores it after the contents are in place.
-        if (preserve) PreserveMetadata(src, dest, isDir: true);
+        // Apply the directory's mode and timestamps LAST — writing children bumps the dir mtime
+        // (GNU cp -p restores it after the contents are in place) and a read-only directory must
+        // not block its own children.
+        ApplyAttributes(src, dest, isDir: true, preserve, destExisted, previousMode);
     }
 
     /// <summary>
-    /// Best-effort <c>cp -p</c>: copy timestamps and attributes from source to
-    /// destination. Unix mode bits and ownership have no faithful Windows
-    /// representation, so those parts of <c>--preserve=all</c> are silently not
-    /// applied; timestamps and the read-only/hidden/archive attributes are.
+    /// Copies one file and then applies the requested attribute policy (see
+    /// <see cref="CpPreserve"/>). The destination's prior Unix mode is captured BEFORE the copy
+    /// because <see cref="File.Copy(string, string, bool)"/> overwrites it with the source's.
     /// </summary>
-    private static void PreserveMetadata(string src, string dest, bool isDir)
+    private static void CopyFile(string src, string dest, CpPreserve preserve)
+    {
+        bool existed = File.Exists(dest);
+        int? previousMode = existed ? PlatformMode.TryGet(dest) : null;
+        File.Copy(src, dest, overwrite: true);
+        ApplyAttributes(src, dest, isDir: false, preserve, existed, previousMode);
+    }
+
+    /// <summary>
+    /// Applies the attribute policy to a finished copy, best-effort (a locked attribute or an
+    /// unsupported timestamp must not fail the copy itself). <b>Mode</b> is the Unix permission bits
+    /// on Linux/macOS — GNU semantics: preserved exactly, cleared to 0666/0777 masked by the umask, or
+    /// by default the source's bits masked by the umask for a NEW file while an existing destination
+    /// keeps its own; on Windows, where there are no mode bits, the read-only / hidden / archive
+    /// attributes stand in (copied when preserving, read-only cleared by <c>--no-preserve=mode</c>).
+    /// <b>Timestamps</b> (creation too on Windows) are real on every OS. Ownership, links and xattr
+    /// have nothing to do.
+    /// </summary>
+    private static void ApplyAttributes(string src, string dest, bool isDir, CpPreserve preserve,
+        bool destExisted, int? previousMode)
     {
         try
         {
-            if (isDir)
+            if (OperatingSystem.IsWindows())
             {
-                var s = new DirectoryInfo(src);
-                var d = new DirectoryInfo(dest);
-                d.CreationTimeUtc = s.CreationTimeUtc;
-                d.LastWriteTimeUtc = s.LastWriteTimeUtc;
-                d.LastAccessTimeUtc = s.LastAccessTimeUtc;
-                d.Attributes = s.Attributes;
+                if (preserve.Mode == CpModePolicy.Preserve)
+                {
+                    if (isDir) new DirectoryInfo(dest).Attributes = new DirectoryInfo(src).Attributes;
+                    else new FileInfo(dest).Attributes = new FileInfo(src).Attributes;
+                }
+                else if (preserve.Mode == CpModePolicy.Clear)
+                {
+                    FileSystemHelpers.ClearReadOnly(dest);
+                }
             }
             else
             {
-                File.SetCreationTimeUtc(dest, File.GetCreationTimeUtc(src));
-                File.SetLastWriteTimeUtc(dest, File.GetLastWriteTimeUtc(src));
-                File.SetLastAccessTimeUtc(dest, File.GetLastAccessTimeUtc(src));
-                new FileInfo(dest) { Attributes = new FileInfo(src).Attributes };
+                PlatformMode.Apply(src, dest, isDir, preserve.Mode, destExisted, previousMode);
+            }
+
+            if (!preserve.Timestamps)
+            {
+                // Windows CopyFile carries the source's modification time over; GNU stamps the
+                // copy with "now" unless timestamps are preserved. (Linux/macOS already do.)
+                if (OperatingSystem.IsWindows() && !isDir)
+                {
+                    var now = DateTime.UtcNow;
+                    File.SetLastWriteTimeUtc(dest, now);
+                    File.SetLastAccessTimeUtc(dest, now);
+                }
+            }
+            else
+            {
+                if (isDir)
+                {
+                    var s = new DirectoryInfo(src);
+                    var d = new DirectoryInfo(dest);
+                    d.CreationTimeUtc = s.CreationTimeUtc;
+                    d.LastWriteTimeUtc = s.LastWriteTimeUtc;
+                    d.LastAccessTimeUtc = s.LastAccessTimeUtc;
+                }
+                else
+                {
+                    File.SetCreationTimeUtc(dest, File.GetCreationTimeUtc(src));
+                    File.SetLastWriteTimeUtc(dest, File.GetLastWriteTimeUtc(src));
+                    File.SetLastAccessTimeUtc(dest, File.GetLastAccessTimeUtc(src));
+                }
             }
         }
         catch
         {
-            // Preservation is best-effort; a locked attribute or unsupported
-            // timestamp must not fail the copy itself.
+            // Preservation is best-effort; see above.
         }
     }
 }

@@ -192,6 +192,38 @@ public class FsStateDifferentialTests
             "",
             "touch -h nosuch; echo r1=$?; touch -hc nosuch2; echo r2=$?; touch --no-dereference plain; echo r3=$?");
 
+    // ───────────── cp --preserve / --no-preserve ─────────────
+    //
+    // A copy made "now" is newer than the 2001 source; a copy that preserved timestamps is not.
+    // `find -newer` observes exactly that, independent of the zone and of the snapshot's lack of times.
+
+    [SkippableFact] public Task Cp_Preserve_OnlyTimestampPreservingCopiesStayOld() =>
+        EqualAsync(
+            Tree(("s", "S")),
+            "touch -t 200101010000 s; cp s d1; cp --preserve=timestamps s d2; cp --no-preserve=all s d3; " +
+            "cp -p --no-preserve=timestamps s d4; cp --no-preserve=timestamps -p s d5; cp --preserve s d6; " +
+            "cp --preserve=mode s d7; cp --preserve=t s d8; cp --preserve=all --no-preserve=mode s d9; " +
+            "find . -newer s | sort");
+
+    [SkippableFact] public Task Cp_Preserve_ListAndOrder() =>
+        EqualAsync(
+            Tree(("s", "S")),
+            "touch -t 200101010000 s; cp --preserve=mode,timestamps s a; cp --preserve=ownership,links,xattr s b; " +
+            "cp --preserve=timestamps --no-preserve=timestamps s c; cp --no-preserve=timestamps --preserve=timestamps s d; " +
+            "find . -newer s | sort");
+
+    [SkippableFact] public Task Cp_Preserve_ErrorsExitOneAndCopyNothing() =>
+        EqualAsync(
+            Tree(("s", "S")),
+            "cp --preserve=context s x; echo r1=$?; cp --preserve=bogus s y; echo r2=$?; cp --preserve= s z; echo r3=$?; " +
+            "cp --no-preserve s w; echo r4=$?; cp --preserve=mode,bogus s v; echo r5=$?; cp --preserve=mode,context s u; echo r6=$?");
+
+    [SkippableFact] public Task Cp_Preserve_Recursive_TimestampsOfTheTreeStayOld() =>
+        EqualAsync(
+            Tree(("s/f", "F"), ("ref", "R")),
+            "touch -t 200101010000 s/f ref; touch -t 200101010000 s; cp -r --preserve=timestamps s t; cp -r s u; " +
+            "find t u -newer ref | sort");
+
     // ───────────── redirect byte fidelity ─────────────
 
     // `printf x > f` leaves f = "x" (1 byte): Invoke-BashRedirect honours the NoTrailingNewline

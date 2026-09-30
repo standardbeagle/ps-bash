@@ -1,6 +1,52 @@
 namespace PsBash.Cmdlets;
 
 /// <summary>
+/// Reading and applying Unix permission bits for the copy commands; every member is a no-op /
+/// null on Windows, which has no mode bits (its stand-in, the read-only attribute, is handled by
+/// the caller). OS-interface seam for <c>cp</c>.
+/// </summary>
+internal static class PlatformMode
+{
+    /// <summary>The Unix mode of <paramref name="path"/>, or null on Windows / when unreadable.</summary>
+    public static int? TryGet(string path)
+    {
+        if (OperatingSystem.IsWindows()) return null;
+        try { return (int)File.GetUnixFileMode(path); }
+        catch { return null; }
+    }
+
+    /// <summary>
+    /// Sets the mode of a finished copy the way GNU <c>cp</c> does. <c>Preserve</c> gives the
+    /// destination exactly the source's bits. Otherwise an EXISTING destination keeps the mode it had
+    /// (<see cref="File.Copy(string, string, bool)"/> would have replaced it with the source's), and
+    /// a NEW one gets the source's bits (<c>Default</c>) or 0666 / 0777 (<c>Clear</c>), both masked
+    /// by the umask.
+    /// </summary>
+    public static void Apply(string src, string dest, bool isDir, CpModePolicy policy, bool destExisted, int? previousMode)
+    {
+        if (OperatingSystem.IsWindows()) return;
+
+        int umask = FileModeSpec.CurrentUmask();
+        if (policy == CpModePolicy.Preserve)
+        {
+            File.SetUnixFileMode(dest, File.GetUnixFileMode(src));
+        }
+        else if (destExisted)
+        {
+            if (previousMode is { } previous) File.SetUnixFileMode(dest, (UnixFileMode)previous);
+        }
+        else if (policy == CpModePolicy.Clear)
+        {
+            File.SetUnixFileMode(dest, (UnixFileMode)((isDir ? 0x1FF : 0x1B6) & ~umask));
+        }
+        else
+        {
+            File.SetUnixFileMode(dest, (UnixFileMode)((int)File.GetUnixFileMode(src) & ~umask));
+        }
+    }
+}
+
+/// <summary>
 /// chmod-style mode strings — the argument of <c>mkdir -m</c> — compiled the way gnulib's
 /// <c>mode_compile</c> / <c>mode_adjust</c> do: a bare octal number (at most 07777), or a
 /// comma-separated list of symbolic clauses <c>[ugoa]*([-+=][rwxXst]*|[-+=][ugo])+</c> applied in

@@ -86,9 +86,6 @@ public class CpArgScanTests
     [InlineData("ERR cp: option '--strip-trailing-slashes' is recognized but not supported by ps-bash", "--strip-trailing-slashes", "a", "b")]
     [InlineData("ERR cp: option '--context' is recognized but not supported by ps-bash", "--context", "a", "b")]
     [InlineData("ERR cp: option '--attributes-only' is recognized but not supported by ps-bash", "--attributes-only", "a", "b")]
-    [InlineData("ERR cp: option '--preserve' is recognized but not supported by ps-bash", "--preserve", "a", "b")]  // FIX (was: ERR cp: unrecognized option '--preserve')
-    [InlineData("ERR cp: option '--preserve' is recognized but not supported by ps-bash", "--preserve=all", "a", "b")]  // FIX (was: ERR cp: unrecognized option '--preserve=all')
-    [InlineData("ERR cp: option '--no-preserve' is recognized but not supported by ps-bash", "--no-preserve=mode", "a", "b")]  // FIX (was: ERR cp: unrecognized option '--no-preserve=mode')
     [InlineData("ERR cp: option '--parents' is recognized but not supported by ps-bash", "--parents", "a", "b")]  // FIX (was: ERR cp: unrecognized option '--parents')
     [InlineData("ERR cp: option '--remove-destination' is recognized but not supported by ps-bash", "--remove-destination", "a", "b")]  // FIX (was: ERR cp: unrecognized option '--remove-destination')
     [InlineData("ERR cp: option '--copy-contents' is recognized but not supported by ps-bash", "--copy-contents", "a", "b")]  // FIX (was: ERR cp: unrecognized option '--copy-contents')
@@ -138,4 +135,22 @@ public class CpArgScanTests
         Assert.True(p.Has("archive"));
         Assert.False(p.Has("recursive"));
     }
-}
+
+    // --preserve[=LIST] / --no-preserve=LIST are implemented: the scan records the raw list in
+    // command-line order (CpPreserveTests covers the semantics). --preserve's argument is OPTIONAL
+    // (attached only); --no-preserve's is REQUIRED (it takes the next word).
+    [Theory]
+    [InlineData("preserve-list", "", "--preserve", "a", "b")]
+    [InlineData("preserve-list", "all", "--preserve=all", "a", "b")]
+    [InlineData("preserve-list", "mode,timestamps", "--preserve=mode,timestamps", "a", "b")]
+    [InlineData("preserve-list", "", "--pre", "a", "b")]
+    [InlineData("no-preserve", "mode", "--no-preserve=mode", "a", "b")]
+    [InlineData("no-preserve", "mode", "--no-preserve", "mode", "a", "b")]
+    [InlineData("no-preserve", "all", "--no-p=all", "a", "b")]
+    public void ScanArgs_RecordsThePreserveLists(string id, string value, params string[] argv)
+    {
+        var p = InvokeBashCpCommand.ScanArgs(argv);
+        Assert.Null(p.Error);
+        Assert.Equal(value, p.Last(id)?.Value ?? "");
+        Assert.Equal(new[] { "a", "b" }, p.Operands());
+    }}
