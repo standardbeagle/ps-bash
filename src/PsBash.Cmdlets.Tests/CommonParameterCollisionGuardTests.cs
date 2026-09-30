@@ -90,6 +90,7 @@ public class CommonParameterCollisionGuardTests
             ["tree"] = new(CollidingLetters),
             ["column"] = new(CollidingLetters),
             ["gzip"] = new(CollidingLetters),
+            ["tar"] = new(CollidingLetters),
         };
 
     [Fact]

@@ -515,4 +515,75 @@ public class InvokeBashTarCommandTests : IDisposable, IClassFixture<SharedPwshFi
         Assert.Equal("preexisting", File.ReadAllText(Path.Combine(dest, "keep.txt")));
         Assert.Contains(errs, m => m.Contains("File exists", StringComparison.OrdinalIgnoreCase));
     }
-}
+
+    // ===================== Shared ordered parser: behaviour (oracle: GNU tar 1.35) =====================
+
+    private int ExitOf(string script)
+    {
+        var pwsh = _fixture.AcquireFresh();
+        pwsh.AddScript("$ErrorActionPreference='Continue'").Invoke();
+        pwsh.Commands.Clear();
+        var r = pwsh.AddScript(script + " 2>$null; $LASTEXITCODE").Invoke();
+        pwsh.Commands.Clear();
+        return (int)r[^1].BaseObject;
+    }
+
+    [Fact]
+    public void Tar_OldStyleWord_CreatesListsAndExtracts()
+    {
+        // `tar czf a.tgz dir`, `tar tf a.tgz`, `tar xzf a.tgz -C out`: the first word is an old-style option
+        // bundle (quoted here so the binder sees plain strings, as the transpiler emits them).
+        string src = Path.Combine(_tmpDir, "os.txt");
+        File.WriteAllText(src, "old-style");
+        string archive = Path.Combine(_tmpDir, "os.tgz");
+        string outDir = Path.Combine(_tmpDir, "os-out");
+        Directory.CreateDirectory(outDir);
+
+        RunLines($"Invoke-BashTar 'czf' '{PsQuote(archive)}' '{PsQuote(src)}'");
+        Assert.True(File.Exists(archive));
+        Assert.Contains("os.txt", RunLines($"Invoke-BashTar 'tzf' '{PsQuote(archive)}'"));
+        RunLines($"Invoke-BashTar 'xzf' '{PsQuote(archive)}' '-C' '{PsQuote(outDir)}'");
+        Assert.Equal("old-style", File.ReadAllText(Path.Combine(outDir, "os.txt")));
+    }
+
+    [Fact]
+    public void Tar_CreateWithChangeDir_ArchivesMembersRelativeToDir()
+    {
+        // GNU: `tar cf a.tar -C d f` archives d/f as `f`. The old cmdlet ignored -C on create.
+        string d = Path.Combine(_tmpDir, "cdir");
+        Directory.CreateDirectory(d);
+        File.WriteAllText(Path.Combine(d, "f.txt"), "in-d");
+        string archive = Path.Combine(_tmpDir, "cd.tar");
+
+        RunLines($"Invoke-BashTar '-cf' '{PsQuote(archive)}' '-C' '{PsQuote(d)}' 'f.txt'");
+        Assert.Equal(new[] { "f.txt" }, RunLines($"Invoke-BashTar '-tf' '{PsQuote(archive)}'"));
+    }
+
+    [Fact]
+    public void Tar_DirectCallBareDashCapitalC_StillMeansChangeDir()
+    {
+        // Pester calls `tar -xf $a -C $out` directly: the case-insensitive binder routes -C to the `C` decoy.
+        string src = Path.Combine(_tmpDir, "dc.txt");
+        File.WriteAllText(src, "direct");
+        string archive = Path.Combine(_tmpDir, "dc.tar");
+        string outDir = Path.Combine(_tmpDir, "dc-out");
+        Directory.CreateDirectory(outDir);
+
+        RunLines($"Invoke-BashTar -cf '{PsQuote(archive)}' '{PsQuote(src)}'");
+        RunLines($"Invoke-BashTar -xf '{PsQuote(archive)}' -C '{PsQuote(outDir)}'");
+        Assert.Equal("direct", File.ReadAllText(Path.Combine(outDir, "dc.txt")));
+    }
+
+    [Theory]
+    [InlineData("Invoke-BashTar '--zzz'", 64)]                          // parse error: EX_USAGE
+    [InlineData("Invoke-BashTar '-f'", 64)]
+    [InlineData("Invoke-BashTar '-e'", 64)]
+    [InlineData("Invoke-BashTar '-f' 'x.tar'", 2)]                      // no mode: GNU exit 2
+    [InlineData("Invoke-BashTar '-cx' '-f' 'x.tar'", 2)]                // two modes
+    [InlineData("Invoke-BashTar '-xf' 'x.tar' '--strip-components=x'", 2)]
+    [InlineData("Invoke-BashTar '-cf' 'x.tar' '--bzip2'", 2)]           // valid-but-unsupported
+    [InlineData("Invoke-BashTar '-r'", 2)]
+    public void Tar_ExitStatuses_MatchGnuTar(string script, int expected)
+    {
+        Assert.Equal(expected, ExitOf(script));
+    }}
