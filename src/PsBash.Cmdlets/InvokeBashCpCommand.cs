@@ -67,6 +67,13 @@ public sealed class InvokeBashCpCommand : PSCmdlet
     /// </summary>
     [Parameter] public SwitchParameter D { get; set; }
 
+    /// <summary>
+    /// Decoy for <c>-a</c> (archive). The bare token prefix-matches this cmdlet's own
+    /// <c>-Arguments</c> parameter, which swallowed the flag AND the operands silently, so a direct
+    /// <c>Invoke-BashCp -a src dst</c> degraded to a plain non-recursive copy.
+    /// </summary>
+    [Parameter] public SwitchParameter A { get; set; }
+
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
@@ -130,7 +137,7 @@ public sealed class InvokeBashCpCommand : PSCmdlet
         // crash the binder or be silently swallowed as common parameters. Prepending is safe:
         // a decoy can only have been bound before any `--`.
         var args = BashRuntime.PrependDecoys(Arguments,
-            (v.IsPresent, "-v"), (p.IsPresent, "-p"), (I.IsPresent, "-i"), (D.IsPresent, "-d"));
+            (v.IsPresent, "-v"), (p.IsPresent, "-p"), (I.IsPresent, "-i"), (D.IsPresent, "-d"), (A.IsPresent, "-a"));
 
         FileSystemHelpers.SetLastExitCode(this, 0);
         if (FileSystemHelpers.TryHandleVersion(this, "cp", args)) return;
