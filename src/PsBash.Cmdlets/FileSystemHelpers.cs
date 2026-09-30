@@ -518,6 +518,30 @@ internal static class FileSystemHelpers
         return false;
     }
 
+    /// <summary>
+    /// Applies a compiled chmod mode (<see cref="FileModeSpec"/>) to a directory. Unix sets the exact
+    /// permission bits (<see cref="File.SetUnixFileMode(string, UnixFileMode)"/>, which also carries
+    /// setuid/setgid/sticky). Windows has no mode bits and no faithful ACL mapping, so only the
+    /// representable part is honoured: a mode WITHOUT the owner-write bit sets the read-only
+    /// attribute, one with it clears it. <see cref="DeleteDirectoryForce"/> / <see cref="ClearReadOnly"/>
+    /// already cope with a read-only directory.
+    /// </summary>
+    public static void ApplyDirectoryMode(string path, int mode)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            var attrs = File.GetAttributes(path);
+            var wanted = FileModeSpec.OwnerCanWrite(mode)
+                ? attrs & ~FileAttributes.ReadOnly
+                : attrs | FileAttributes.ReadOnly;
+            if (wanted != attrs) File.SetAttributes(path, wanted);
+        }
+        else
+        {
+            File.SetUnixFileMode(path, (UnixFileMode)mode);
+        }
+    }
+
     /// <summary>Clear the read-only attribute on <paramref name="path"/> if set. Best-effort.</summary>
     public static void ClearReadOnly(string path)
     {

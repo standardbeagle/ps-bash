@@ -144,6 +144,27 @@ public class FsStateDifferentialTests
             Tree(("d/f", "x")),
             "rm -rv d");
 
+    // ───────────── mkdir -m ─────────────
+    //
+    // The snapshot has no permission column (Windows cannot reproduce one), so these pin what is
+    // observable everywhere: which directories exist, the exit status, and that an invalid mode
+    // creates NOTHING (GNU rejects it before touching any operand).
+
+    [SkippableFact] public Task Mkdir_Mode_CreatesTheDirectories() =>
+        EqualAsync(
+            "",
+            "mkdir -m 755 a; mkdir --mode=u=rwx,go=rx b; mkdir -pm 700 p/q/r; mkdir -m 0777 c");
+
+    [SkippableFact] public Task Mkdir_InvalidMode_ExitsOneAndCreatesNothing() =>
+        EqualAsync(
+            Tree(("keep", "k")),
+            "mkdir -m 999 d; echo \"one=$?\"; mkdir -m rwx a b; echo \"two=$?\"; mkdir -m '' e; echo \"three=$?\"");
+
+    [SkippableFact] public Task Mkdir_ModeOnExistingDirectory_IsFileExists() =>
+        EqualAsync(
+            Tree(("d/f", "x")),
+            "mkdir -m 700 d; echo \"rc=$?\"");
+
     // ───────────── redirect byte fidelity ─────────────
 
     // `printf x > f` leaves f = "x" (1 byte): Invoke-BashRedirect honours the NoTrailingNewline

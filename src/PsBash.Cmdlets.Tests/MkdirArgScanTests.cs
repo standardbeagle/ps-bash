@@ -49,15 +49,8 @@ public class MkdirArgScanTests
     [InlineData("p=1 v=0 ops=[-]", "-p", "-")]
     [InlineData("p=0 v=0 ops=[]")]
     [InlineData("p=1 v=0 ops=[]", "-p")]
-    [InlineData("ERR mkdir: option '-m' is recognized but not supported by ps-bash", "-m", "755", "d")]
-    [InlineData("ERR mkdir: option '-m' is recognized but not supported by ps-bash", "-m755", "d")]
-    [InlineData("ERR mkdir: option '-m' is recognized but not supported by ps-bash", "-pm", "755", "d")]
     [InlineData("ERR mkdir: option '-Z' is recognized but not supported by ps-bash", "-Z", "d")]
     [InlineData("ERR mkdir: option '-Z' is recognized but not supported by ps-bash", "-vZ", "d")]
-    [InlineData("ERR mkdir: option '--mode' is recognized but not supported by ps-bash", "--mode=755", "d")]
-    [InlineData("ERR mkdir: option '--mode' is recognized but not supported by ps-bash", "--mode", "755", "d")]
-    [InlineData("ERR mkdir: option '--mode' is recognized but not supported by ps-bash", "--mo", "755", "d")]  // FIX (was: ERR mkdir: unrecognized option '--mo')
-    [InlineData("ERR mkdir: option '--mode' is recognized but not supported by ps-bash", "--m", "755", "d")]  // FIX (was: ERR mkdir: unrecognized option '--m')
     [InlineData("ERR mkdir: option '--context' is recognized but not supported by ps-bash", "--context", "d")]
     [InlineData("ERR mkdir: option '--context' is recognized but not supported by ps-bash", "--context=x", "d")]
     [InlineData("ERR mkdir: option '--context' is recognized but not supported by ps-bash", "--con", "d")]  // FIX (was: ERR mkdir: unrecognized option '--con')
@@ -74,6 +67,34 @@ public class MkdirArgScanTests
         Assert.Equal(expected, Scan(argv));
     }
 
+    // -m MODE / --mode=MODE is implemented: the scan only records the raw mode string (the cmdlet
+    // compiles it), last occurrence wins, and a missing argument is getopt's usage error.
+    [Theory]
+    [InlineData("755", "-m", "755", "d")]
+    [InlineData("755", "-m755", "d")]
+    [InlineData("755", "-pm", "755", "d")]
+    [InlineData("u=rwx,go=rx", "--mode=u=rwx,go=rx", "d")]
+    [InlineData("700", "--mode", "700", "d")]
+    [InlineData("700", "--mo", "700", "d")]
+    [InlineData("700", "--m", "700", "d")]
+    [InlineData("700", "-m", "755", "-m", "700", "d")]
+    public void ScanArgs_RecordsTheModeString(string expectedMode, params string[] argv)
+    {
+        var p = InvokeBashMkdirCommand.ScanArgs(argv);
+        Assert.Null(p.Error);
+        Assert.Equal(expectedMode, p.Last("mode")?.Value);
+        Assert.Equal(new[] { "d" }, p.Operands());
+    }
+
+    [Theory]
+    [InlineData("ERR mkdir: option requires an argument -- 'm'", "-m")]
+    [InlineData("ERR mkdir: option requires an argument -- 'm'", "d", "-m")]
+    [InlineData("ERR mkdir: option '--mode' requires an argument", "--mode")]
+    public void ScanArgs_ModeWithoutAnArgumentIsAUsageError(string expected, params string[] argv)
+    {
+        Assert.Equal(expected, Scan(argv));
+        Assert.Equal(1, InvokeBashMkdirCommand.ScanArgs(argv).ErrorExitCode);
+    }
     [Theory]
     [InlineData("--version", "version")]
     [InlineData("--vers", "version")]
@@ -91,7 +112,6 @@ public class MkdirArgScanTests
     [InlineData("-z", 1)]
     [InlineData("--parents=1", 1)]
     [InlineData("--v", 1)]
-    [InlineData("-m", 2)]
     [InlineData("--context", 2)]
     public void ScanError_ExitStatus_IsGnuUsageStatusExceptOurOwnRefusal(string arg, int exit)
     {
