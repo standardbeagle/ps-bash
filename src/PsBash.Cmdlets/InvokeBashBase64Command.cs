@@ -1,4 +1,6 @@
+using System.Linq;
 using System.Management.Automation;
+using PsBash.Cmdlets.Args;
 using System.Text;
 
 namespace PsBash.Cmdlets;
@@ -58,14 +60,76 @@ namespace PsBash.Cmdlets;
 [OutputType(typeof(string))]
 public sealed class InvokeBashBase64Command : PSCmdlet
 {
-    /// <summary>
-    /// Valid GNU <c>base64</c> options ps-bash does not implement (representative).
-    /// An option-looking token in this set yields "recognized but not supported"
-    /// instead of the misleading "No such file or directory".
-    /// </summary>
-    private static readonly HashSet<string> Base64ValidButUnsupported =
-        new(StringComparer.Ordinal);
+    private const string OptDecode = "decode", OptIgnore = "ignore", OptWrap = "wrap";
 
+    /// <summary>
+    /// base64's option surface (GNU coreutils 9.4): -d/--decode, -i/--ignore-garbage, -w/--wrap=COLS,
+    /// unique long prefixes (<c>--dec</c>, <c>--ig</c>, <c>--wr 20</c>), a bundle such as <c>-dw0</c>
+    /// (<c>w</c> takes the rest). GNU base64 has no other options, so nothing is valid-but-unsupported.
+    /// </summary>
+    private static readonly OptSpecSet Base64Spec = new(
+        new[]
+        {
+            new OptSpec(OptDecode, 'd', "decode"),
+            new OptSpec(OptIgnore, 'i', "ignore-garbage"),
+            new OptSpec(OptWrap, 'w', "wrap", OptKind.Value),
+        },
+        allowAbbrev: true,
+        gnuInfoOptions: true);
+
+    /// <summary>Pure argv scan (unit-test seam).</summary>
+    internal static ParsedArgs ScanArgs(string[] args) => ArgParser.Parse(args, Base64Spec);
+
+    internal sealed class Base64Args
+    {
+        public ParsedArgs Parsed = null!;
+        public bool Decode, IgnoreGarbage;
+        public int Wrap = 76;
+        public List<string> Operands = new();
+        public string? Error;
+    }
+
+    /// <summary>
+    /// Scan + validate. GNU accepts a decimal wrap size only (<c>-w x</c>, <c>-w -1</c>, <c>-w 1K</c>
+    /// are "invalid wrap size", exit 1; the old scan silently kept 76 for the separated form and
+    /// misread <c>-w0</c> after a bundle) and exactly one FILE ("extra operand"; the old code
+    /// silently ignored the rest).
+    /// </summary>
+    internal static Base64Args Plan(string[] args)
+    {
+        var b = new Base64Args { Parsed = ScanArgs(args) };
+        b.Operands = b.Parsed.Operands();
+        if (b.Parsed.HasError) return b;
+
+        b.Decode = b.Parsed.Has(OptDecode);
+        b.IgnoreGarbage = b.Parsed.Has(OptIgnore);
+        foreach (var tok in b.Parsed.All(OptWrap))
+        {
+            string v = tok.Value!;
+            long n = 0;
+            bool ok = v.Length > 0;
+            foreach (char c in v)
+            {
+                if (c < '0' || c > '9') { ok = false; break; }
+                n = Math.Min(n * 10 + (c - '0'), int.MaxValue);
+            }
+            if (!ok) { b.Error = $"base64: invalid wrap size: '{v}'"; return b; }
+            b.Wrap = (int)n;
+        }
+        if (b.Operands.Count > 1) b.Error = $"base64: extra operand '{b.Operands[1]}'";
+        return b;
+    }
+
+    /// <summary>Arguments with the decoy-bound flags re-injected (<c>-d</c>, <c>-i</c>, <c>-w N</c>).</summary>
+    private string[] ArgsWithDecoys()
+    {
+        var args = Arguments ?? Array.Empty<string>();
+        var pre = new List<string>();
+        if (D.IsPresent) pre.Add("-d");
+        if (I.IsPresent) pre.Add("-i");
+        if (W.HasValue) { pre.Add("-w"); pre.Add(W.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)); }
+        return pre.Count == 0 ? args : pre.Concat(args).ToArray();
+    }
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
@@ -116,7 +180,7 @@ public sealed class InvokeBashBase64Command : PSCmdlet
 
     protected override void EndProcessing()
     {
-        var args = Arguments ?? Array.Empty<string>();
+        var args = ArgsWithDecoys();
 
         FileSystemHelpers.SetLastExitCode(this, 0);
         if (FileSystemHelpers.TryHandleVersion(this, "base64", args)) return;
@@ -130,55 +194,21 @@ public sealed class InvokeBashBase64Command : PSCmdlet
             return;
         }
 
-        // The bare `-d` / `-w N` tokens bind to the declared `Decode` /
-        // `Wrap` parameters above (necessary to dodge -Debug / -WarningAction
-        // prefix collision). Any remaining `--decode` / `--wrap=N` long-form
-        // tokens land in Arguments and are recovered here. Bare positional
-        // tokens are operands.
-        bool decode = D.IsPresent;
-        bool ignoreGarbage = I.IsPresent;
-        int wrapCol = W ?? 76;
-        var operands = new List<string>();
-        int i = 0;
-        while (i < args.Length)
+        var plan = Plan(args);
+        if (FileSystemHelpers.TryWriteParseError(this, "base64", plan.Parsed)) return;
+        if (FileSystemHelpers.TryHandleInfoOptions(this, "base64", plan.Parsed)) return;
+        if (plan.Error is { } planError)
         {
-            string a = args[i];
-            if (a == "--decode")
-            {
-                decode = true; i++; continue;
-            }
-            if (a == "--ignore-garbage")
-            {
-                ignoreGarbage = true; i++; continue;
-            }
-            if (a.StartsWith("--wrap=", StringComparison.Ordinal))
-            {
-                if (int.TryParse(a.Substring("--wrap=".Length), out var parsed)) wrapCol = parsed;
-                i++; continue;
-            }
-            if (a == "--wrap" && i + 1 < args.Length)
-            {
-                if (int.TryParse(args[i + 1], out var parsed)) wrapCol = parsed;
-                i += 2; continue;
-            }
-            // Joined `-wN` (`base64 -w0`, the idiom for one unwrapped line): the bare `-w N`
-            // form binds to `W`, but a joined token is not an exact parameter name so it lands
-            // here. Without this it fell through to "invalid option -- 'w'".
-            if (a.Length > 2 && a[0] == '-' && a[1] == 'w' && int.TryParse(a.AsSpan(2), out var joinedWrap) && joinedWrap >= 0)
-            {
-                wrapCol = joinedWrap;
-                i++; continue;
-            }
-            operands.Add(a);
-            i++;
+            FileSystemHelpers.WriteBashError(this, planError);
+            return;
         }
 
-        // Any remaining option-looking operand is an unknown flag that fell
-        // through the parser — classify it instead of reporting "No such file".
-        if (FileSystemHelpers.TryWriteOperandOptionError(this, "base64", operands, Base64ValidButUnsupported))
-            return;
-
-        if (operands.Count > 0)
+        bool decode = plan.Decode;
+        bool ignoreGarbage = plan.IgnoreGarbage;
+        int wrapCol = plan.Wrap;
+        var operands = plan.Operands;
+        // A lone `-` operand is stdin (GNU), i.e. the pipeline path below.
+        if (operands.Count > 0 && operands[0] != "-")
         {
             // Oracle uses operands[0] directly — later operands are ignored.
             string filePath = SessionState.Path.GetUnresolvedProviderPathFromPSPath(operands[0]);

@@ -1,4 +1,5 @@
 using System.Management.Automation;
+using PsBash.Cmdlets.Args;
 using System.Text;
 
 namespace PsBash.Cmdlets;
@@ -76,25 +77,94 @@ public sealed class InvokeBashStringsCommand : PSCmdlet
         => BashRuntime.PrependDecoys(Arguments, (A.IsPresent, "-a"), (E.IsPresent, "-e"));
 
     /// <summary>
-    /// Valid GNU <c>strings</c> options ps-bash does not implement (representative).
-    /// An option-looking token in this set yields "recognized but not supported"
-    /// instead of the misleading "No such file or directory".
+    /// Valid GNU/binutils <c>strings</c> options ps-bash does not implement, refused loudly (exit 2)
+    /// instead of the misleading "No such file or directory". (A string[] on purpose:
+    /// CommonParameterCollisionGuardTests enumerates static string sets.)
     /// </summary>
-    private static readonly HashSet<string> StringsValidButUnsupported =
-        new(StringComparer.Ordinal)
+    private static readonly string[] StringsValidButUnsupported =
+    {
+        "-d", "--data",
+        "-f", "--print-file-name",
+        "-t", "--radix",
+        "-o",
+        "-w", "--include-all-whitespace",
+        "-e", "--encoding",
+        "-T", "--target",
+        "-s", "--output-separator",
+        "-U", "--unicode",
+    };
+
+    private const string OptMinLength = "minlen", OptAll = "all";
+
+    /// <summary>
+    /// strings' option surface (binutils 2.42: getopt_long): <c>-n N</c> / <c>-nN</c> /
+    /// <c>--bytes=N</c> / <c>-N</c> (minimum run length), <c>-a</c>/<c>--all</c> (accepted: scanning
+    /// the whole input is what ps-bash always does), <c>-h</c>/<c>--help</c>, <c>-v -V --version</c>,
+    /// unique long prefixes. binutils usage errors exit 1.
+    /// </summary>
+    private static readonly OptSpecSet StringsSpec = new(
+        new[]
         {
-            "-a", "--all",
-            "-t", "--radix",
-            "-f", "--print-file-name",
-            "-e", "--encoding",
-            "-T", "--target",
-        };
+            new OptSpec(OptMinLength, 'n', "bytes", OptKind.Value),
+            new OptSpec(OptAll, 'a', "all"),
+            new OptSpec(OptSpecSet.HelpId, 'h', "help"),
+            new OptSpec(OptSpecSet.VersionId, 'v', "version"),
+            new OptSpec(OptSpecSet.VersionId, 'V', null),
+        },
+        validButUnsupported: StringsValidButUnsupported,
+        allowAbbrev: true,
+        numericShorthandId: OptMinLength,
+        gnuInfoOptions: true);
+
+    /// <summary>Pure argv scan (unit-test seam).</summary>
+    internal static ParsedArgs ScanArgs(string[] args) => ArgParser.Parse(args, StringsSpec);
+
+    internal sealed class StringsArgs
+    {
+        public ParsedArgs Parsed = null!;
+        public int MinLength = 4;
+        public List<string> Operands = new();
+        public string? Error;
+
+        public bool Declined =>
+            Parsed.HasError || Error is not null
+            || Parsed.Has(OptSpecSet.HelpId) || Parsed.Has(OptSpecSet.VersionId);
+    }
+
+    /// <summary>
+    /// Scan + validate the minimum length like binutils: a decimal integer of at least 1 (last
+    /// occurrence wins). The old scan ignored a non-numeric <c>-n x</c> and clamped 0 up to 1.
+    /// </summary>
+    internal static StringsArgs Plan(string[] args)
+    {
+        var s = new StringsArgs { Parsed = ScanArgs(args) };
+        s.Operands = s.Parsed.Operands();
+        if (s.Parsed.HasError) return s;
+
+        foreach (var tok in s.Parsed.Tokens)
+        {
+            if (tok.Kind != ArgTokKind.Option || tok.OptId != OptMinLength) continue;
+            string v = tok.Value!;
+            long n = 0;
+            bool ok = v.Length > 0;
+            foreach (char c in v)
+            {
+                if (c < '0' || c > '9') { ok = false; break; }
+                n = Math.Min(n * 10 + (c - '0'), int.MaxValue);
+            }
+            if (!ok) { s.Error = $"strings: invalid integer argument {v}"; return s; }
+            if (n < 1) { s.Error = $"strings: minimum string length is too small: {v}"; return s; }
+            s.MinLength = (int)n;
+        }
+        return s;
+    }
 
     // Parsed-once state.
     private bool _parsed;
     private int _minLength = 4;
     private List<string> _operands = new();
-    // True when stdin must NOT be streamed: file operands present, or a
+    private StringsArgs? _plan;
+    // True when stdin must NOT be streamed: file operands present, a scan/value error, or a
     // --help / --version request.
     private bool _suppressStdin;
     // Scanner state — instance so a streamed stdin run carries across records
@@ -116,39 +186,12 @@ public sealed class InvokeBashStringsCommand : PSCmdlet
             return;
         }
 
-        for (int i = 0; i < args.Length; i++)
-        {
-            var arg = args[i];
-            if (arg == "-n" && (i + 1) < args.Length)
-            {
-                if (int.TryParse(args[i + 1], out var parsed))
-                {
-                    _minLength = parsed;
-                }
-                i++;
-                continue;
-            }
-            if (arg.StartsWith("--bytes=", StringComparison.Ordinal))
-            {
-                if (int.TryParse(arg.Substring("--bytes=".Length), out var parsed))
-                {
-                    _minLength = parsed;
-                }
-                continue;
-            }
-            _operands.Add(arg);
-        }
-
-        if (_minLength < 1)
-        {
-            // GNU strings rejects N < 1; psm1 oracle would build an invalid
-            // regex {0,}. Guard so we always have a sane pattern.
-            _minLength = 1;
-        }
-
-        _suppressStdin = _operands.Count > 0;
+        var plan = Plan(args);
+        _plan = plan;
+        _minLength = plan.MinLength;
+        _operands = plan.Operands;
+        _suppressStdin = plan.Declined || _operands.Count > 0;
     }
-
     private void ScanChar(char ch)
     {
         if (ch is >= '\x20' and <= '\x7E')
@@ -210,17 +253,23 @@ public sealed class InvokeBashStringsCommand : PSCmdlet
             return;
         }
 
+        if (_plan is { } plan)
+        {
+            if (FileSystemHelpers.TryWriteParseError(this, "strings", plan.Parsed)) return;
+            if (FileSystemHelpers.TryHandleInfoOptions(this, "strings", plan.Parsed)) return;
+            if (plan.Error is { } planError)
+            {
+                FileSystemHelpers.WriteBashError(this, planError);
+                return;
+            }
+        }
+
         if (_operands.Count == 0)
         {
             // Pipeline mode: records already streamed; flush the trailing run.
             FlushRun();
             return;
         }
-
-        // Any remaining option-looking operand is an unknown flag that fell
-        // through the parser — classify it instead of reporting "No such file".
-        if (FileSystemHelpers.TryWriteOperandOptionError(this, "strings", _operands, StringsValidButUnsupported))
-            return;
 
         foreach (var filePath in ResolveGlob(_operands))
         {

@@ -73,6 +73,8 @@ public class CommonParameterCollisionGuardTests
             ["join"] = new(CollidingLetters),
             ["comm"] = new(CollidingLetters),
             ["split"] = new(CollidingLetters),
+            ["strings"] = new(CollidingLetters),
+            ["base64"] = new(CollidingLetters),
         };
 
     [Fact]
