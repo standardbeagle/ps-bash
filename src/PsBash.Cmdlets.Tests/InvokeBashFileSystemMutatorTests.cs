@@ -833,6 +833,55 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
     }
 
     [Fact]
+    public void Mv_EmitterStyleQuotedBundle_ForceVerbose_Moves()
+    {
+        // REGRESSION: the old scan never de-bundled, so `mv -fv a b` died with
+        // "invalid option -- 'f'". GNU mv accepts it.
+        var src = Path.Combine(_tmpRoot, "mvsrc.txt");
+        File.WriteAllText(src, "x");
+        var dst = Path.Combine(_tmpRoot, "mvdst.txt");
+        var lines = Run($"Invoke-BashMv '-fv' {Q(src)} {Q(dst)}");
+        Assert.False(File.Exists(src));
+        Assert.Equal("x", File.ReadAllText(dst));
+        Assert.Contains(lines, l => l.Contains("->"));
+    }
+
+    [Fact]
+    public void Mv_DoubleDash_DashNamedSourceIsAnOperandNotAnOption()
+    {
+        File.WriteAllText(Path.Combine(_tmpRoot, "-n"), "dash");
+        Run($"Set-Location {Q(_tmpRoot)}; Invoke-BashMv '--' '-n' 'moved.txt'");
+        Assert.Equal("dash", File.ReadAllText(Path.Combine(_tmpRoot, "moved.txt")));
+        Assert.False(File.Exists(Path.Combine(_tmpRoot, "-n")));
+    }
+
+    [Fact]
+    public void Mv_QuotedBareI_IsRefusedNotSwallowedByTheBinder()
+    {
+        var src = Path.Combine(_tmpRoot, "misrc.txt");
+        File.WriteAllText(src, "x");
+        var dst = Path.Combine(_tmpRoot, "midst.txt");
+        Assert.Equal("2", LastExit($"Invoke-BashMv '-i' {Q(src)} {Q(dst)}"));
+        Assert.True(File.Exists(src));
+        Assert.False(File.Exists(dst));
+    }
+
+    [Fact]
+    public void Mv_AbbreviatedNoClobberAfterOperands_HonorsGnuAmbiguityRules()
+    {
+        var src = Path.Combine(_tmpRoot, "nsrc.txt");
+        var dst = Path.Combine(_tmpRoot, "ndst.txt");
+        File.WriteAllText(src, "new");
+        File.WriteAllText(dst, "old");
+        Run($"Invoke-BashMv {Q(src)} {Q(dst)} '--no-c' *> $null");
+        // `--no-c` is ambiguous with --no-copy (GNU), so nothing moved and the destination is intact.
+        Assert.Equal("old", File.ReadAllText(dst));
+        Run($"Invoke-BashMv {Q(src)} {Q(dst)} '--no-cl'");
+        Assert.Equal("old", File.ReadAllText(dst));
+        Assert.True(File.Exists(src));
+    }
+
+    [Fact]
     public void Cp_UpdateWithUnimplementedPolicy_IsRefusedLoudly()
     {
         var src = Path.Combine(_tmpRoot, "usrc.txt");

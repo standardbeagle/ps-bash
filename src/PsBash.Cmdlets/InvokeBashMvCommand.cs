@@ -1,4 +1,5 @@
 using System.Management.Automation;
+using PsBash.Cmdlets.Args;
 
 namespace PsBash.Cmdlets;
 
@@ -23,8 +24,10 @@ namespace PsBash.Cmdlets;
 /// <item>Verbose mode emits <c>'src' -> 'dest'\n</c> per move.</item>
 /// </list>
 /// <para>
-/// <b>One colliding flag</b> declared explicitly: <c>-v</c> vs
-/// <c>-Verbose</c>. <c>-n</c> / <c>-f</c> stay in <c>Arguments</c>.
+/// <b>Argv</b> is parsed by the shared ordered parser (<see cref="ArgParser"/>, spec
+/// <see cref="MvSpec"/>). The transpiler single-quotes every dash-leading word for mv
+/// (<c>PsEmitter.OrderedArgCommands</c>) so flags arrive in <c>Arguments</c> in order; the
+/// <c>v</c>/<c>I</c> decoy switches exist ONLY for direct calls and are re-injected first.
 /// </para>
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashMv")]
@@ -46,18 +49,40 @@ public sealed class InvokeBashMvCommand : PSCmdlet
     /// <summary>Valid GNU <c>mv</c> flags ps-bash does not implement. See
     /// <see cref="FileSystemHelpers.TryWriteOperandOptionError"/> /
     /// <see cref="InvokeBashCpCommand"/> for the classification contract.</summary>
-    private static readonly HashSet<string> MvValidButUnsupported = new(StringComparer.Ordinal)
+    // (A string[] on purpose: CommonParameterCollisionGuardTests enumerates each cmdlet's static
+    // string sets to find short flags the binder could eat.)
+    private static readonly string[] MvValidButUnsupported =
     {
         "-i", "--interactive", "-b", "--backup", "-S", "--suffix",
         "-u", "--update", "-t", "--target-directory",
         "-T", "--no-target-directory", "--strip-trailing-slashes",
-        "-Z", "--context",
+        "-Z", "--context", "--no-copy", "--debug",
     };
+
+    private const string OptNoClobber = "no-clobber", OptForce = "force", OptVerbose = "verbose";
+
+    /// <summary>mv's whole option surface, built once for the shared ordered parser.</summary>
+    private static readonly OptSpecSet MvSpec = new(
+        new[]
+        {
+            new OptSpec(OptNoClobber, 'n', "no-clobber"),
+            new OptSpec(OptForce, 'f', "force"),
+            new OptSpec(OptVerbose, 'v', "verbose"),
+        },
+        validButUnsupported: MvValidButUnsupported,
+        allowAbbrev: true,
+        gnuInfoOptions: true);
+
+    /// <summary>Pure argv scan (unit-test seam): options, operands and the first error.</summary>
+    internal static ParsedArgs ScanArgs(string[] args) => ArgParser.Parse(args, MvSpec);
 
     protected override void ProcessRecord()
     {
-        // Re-inject the decoy-bound -i so the classifier still emits exit 2.
-        var args = BashRuntime.PrependDecoys(Arguments, (I.IsPresent, "-i"));
+        // Re-inject every decoy-bound flag. The transpiler single-quotes each dash-leading word
+        // for mv (PsEmitter.OrderedArgCommands) so they arrive in Arguments in order; a DIRECT
+        // call (`Invoke-BashMv -v a b`, Pester) binds the decoys instead. Prepending is safe:
+        // a decoy can only have been bound before any `--`.
+        var args = BashRuntime.PrependDecoys(Arguments, (v.IsPresent, "-v"), (I.IsPresent, "-i"));
 
         FileSystemHelpers.SetLastExitCode(this, 0);
         if (FileSystemHelpers.TryHandleVersion(this, "mv", args)) return;
@@ -71,28 +96,16 @@ public sealed class InvokeBashMvCommand : PSCmdlet
             return;
         }
 
-        bool noClobber = false;
-        bool verbose = v.IsPresent;
-        var operands = new List<string>();
-        bool pastDoubleDash = false;
-        int preDashCount = -1;
+        // Shared ordered parser: bundles (-fv, which the old switch never de-bundled), `--`,
+        // long options with abbreviation, and the unsupported/unknown classifier in one scan.
+        // -f/--force is accepted and is a no-op (File.Move(overwrite:true) already forces).
+        var parsed = ScanArgs(args);
+        if (FileSystemHelpers.TryWriteParseError(this, "mv", parsed)) return;
+        if (FileSystemHelpers.TryHandleInfoOptions(this, "mv", parsed)) return;
 
-        foreach (var a in args)
-        {
-            if (pastDoubleDash) { operands.Add(a); continue; }
-            switch (a)
-            {
-                case "--": pastDoubleDash = true; preDashCount = operands.Count; break;
-                case "-n": case "--no-clobber": noClobber = true; break;
-                case "-f": case "--force": /* no-op: File.Move(overwrite:true) already forces */ break;
-                case "-v": case "--verbose": verbose = true; break;
-                default: operands.Add(a); break;
-            }
-        }
-
-        var mvToClassify = preDashCount < 0 ? operands : operands.GetRange(0, preDashCount);
-        if (FileSystemHelpers.TryWriteOperandOptionError(this, "mv", mvToClassify, MvValidButUnsupported))
-            return;
+        bool noClobber = parsed.Has(OptNoClobber);
+        bool verbose = parsed.Has(OptVerbose);
+        var operands = parsed.Operands();
 
         if (operands.Count < 2)
         {
