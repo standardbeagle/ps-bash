@@ -5,11 +5,11 @@ description: Run the release-blocking Pester gate (tests/PsBash.Tests.ps1) the r
 
 # PESTER GATE. One of the TWO release-blocking suites (the other is Core.Tests). Ref: [[release-pester-gate-local]] memory, `.claude/commands/publish.md`.
 
-文言：一命跑之——`./scripts/pester.ps1`；建cmdlets、刷旁DLL、去陳裝PsBash之PSModulePath、跑之。psm1獨改用 `-SkipBuild`。綠準1068/0。
+文言：一命跑之——`tman pester`（即 `./scripts/pester.ps1`，經 tman 串行）；建cmdlets、刷旁DLL、去陳裝PsBash之PSModulePath、跑之。psm1獨改用 `-SkipBuild`。綠準1068/0。
 
 ## RUN
 
-`./scripts/pester.ps1`  — does the whole dance (build PsBash.Cmdlets → copy `net8.0/{PsBash.Cmdlets,PsBash.Transpiler,Parlot}.dll` beside the module → Invoke-Pester in a fresh child pwsh that STRIPS any installed PsBash from PSModulePath first).
+`tman pester` (same as `./scripts/pester.ps1`, but serialized with build/test and kill-tree supervised; pass flags through: `tman pester -Detailed -Filter '*echo*'`) — does the whole dance (build PsBash.Cmdlets → copy `net8.0/{PsBash.Cmdlets,PsBash.Transpiler,Parlot}.dll` beside the module → Invoke-Pester in a fresh child pwsh that STRIPS any installed PsBash from PSModulePath first).
 
 Flags: `-SkipBuild` (psm1-only edits load from source → instant re-run), `-Detailed`, `-Filter '<wildcard>'`.
 
@@ -20,8 +20,8 @@ Flags: `-SkipBuild` (psm1-only edits load from source → instant re-run), `-Det
 
 ## EXPECT
 
-Green baseline ≈ **1068 passed, 0 failed, 6 skipped** (~54 s). Any failure = abort (do not tag). Then also `dotnet test src/PsBash.Core.Tests` (the ReleaseNotes/manifest guard — the OTHER blocking gate).
+Green baseline ≈ **1068 passed, 0 failed, 6 skipped** (~54 s). Any failure = abort (do not tag). Then also `tman test-proj src/PsBash.Core.Tests` (the ReleaseNotes/manifest guard — the OTHER blocking gate).
 
 ## GOTCHA
 
-The Pester gate exercises **direct cmdlet calls** (`Invoke-BashEcho -e …`) and **manifest invariants** that xunit never touches, so a green `dotnet test` is NOT enough to release. And a per-line "improvement" to a widely-consumed psm1 helper can break the gate wholesale — e.g. making `Show-BashHelp` emit per-line records broke every `--help` test. Keep single-object contracts single-object.
+The Pester gate exercises **direct cmdlet calls** (`Invoke-BashEcho -e …`) and **manifest invariants** that xunit never touches, so a green `tman test` is NOT enough to release. And a per-line "improvement" to a widely-consumed psm1 helper can break the gate wholesale — e.g. making `Show-BashHelp` emit per-line records broke every `--help` test. Keep single-object contracts single-object.
