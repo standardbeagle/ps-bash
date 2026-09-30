@@ -35,8 +35,8 @@ path.
    mapping table and is **not** a PowerShell builtin alias (see Section 2.2).
 
 It inspects the command name and dispatches to `EmitPassthrough`. Every mapped
-command uses the same `EmitPassthrough` path (a few force-quote specific colliding
-flags — `echo`, `find` — but still via `EmitPassthrough`).
+command uses the same `EmitPassthrough` path (`echo` force-quotes its colliding flags and
+every `OrderedArgCommands` member single-quotes all of its dash words — still via `EmitPassthrough`).
 
 **Source of truth:** the `switch (name)` in `PsEmitter.TryEmitMappedCommand`
 (**99 command-name cases**). The table below is the complete list as of this
@@ -220,9 +220,15 @@ line, so the flags of the command they run are as dangerous as their own: an inn
 ambiguous `-Error*` / `-Information*` common parameters; `env X=1 grep -i` had its `-i` taken
 as env's own decoy switch. `xargs`, `time` and `env` are therefore on
 `PsEmitter.OrderedArgCommands` (every dash-leading literal is single-quoted, so it reaches
-`Arguments` verbatim and in order — see runtime-functions.md "Shared argument parser"), and
-`FindExecArgvIndices` applies the same quoting to the words between `-exec` and its `;` / `+`.
-The cmdlets' scans stop parsing their own options at the first operand (the command name);
+`Arguments` verbatim and in order — see runtime-functions.md "Shared argument parser"), and so
+is `find`: its expression language (`-o`/`-a`, `!`, `\( \)`, the argv between `-exec` and its `;` / `+`)
+arrives whole and in order, which replaced the per-flag `FindForceQuoteFlags` set (only `-o`/`-a`)
+and the `FindExecArgvIndices` special case for the `-exec` argv. `find` is not getopt, so its
+cmdlet scans `[-H|-L|-P] [-D opts] [-Olevel] [PATH...] [EXPRESSION]` itself.
+`grep`, `sed` and `rg` joined the set with the search/edit batch: their repeated `-e`, `-ve`/`-ie`
+bundles, `-ftemplate.txt`, `-i.bak`, `-A2`, `-NUM` and `--` all reach the cmdlet as written (the
+psm1 `Invoke-BashGrep`/`Invoke-BashSed` proxies remain only for direct PowerShell calls and forward
+literal strings). The cmdlets' scans stop parsing their own options at the first operand (the command name);
 everything after is the inner argv. Ordered-arg commands also single-quote a bare literal
 containing a comma (`xargs -d , echo`): unquoted it is a PowerShell array / parse error.
 `command` is on the set too: its cmdlet reads `-p -v -V` only up to the first operand and runs the

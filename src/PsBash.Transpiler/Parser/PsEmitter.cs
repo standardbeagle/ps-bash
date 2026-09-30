@@ -5346,11 +5346,12 @@ public static class PsEmitter
                 result = EmitPassthrough("Invoke-BashLs", args);
                 return true;
             case "find":
-                // find's `-o` is the OR operator (infix, position-critical), and it
-                // prefix-collides with -OutVariable/-OutBuffer. Quote it so it reaches
-                // the cmdlet's Arguments in place; the find cmdlet's expression
-                // evaluator needs the position a switch decoy would discard.
-                result = EmitPassthrough("Invoke-BashFind", args, FindForceQuoteFlags);
+                // find is an expression language, not getopt: `-o` (OR) and `-a` (AND) are
+                // position-critical infix operators that collide with -OutVariable / -Arguments,
+                // and the flags of a `-exec CMD ...` argv belong to CMD. find is on
+                // OrderedArgCommands, so EVERY dash word is single-quoted and the cmdlet gets the
+                // whole expression verbatim and in order (the old per-flag force-quote sets are gone).
+                result = EmitPassthrough("Invoke-BashFind", args);
                 return true;
             case "stat":
                 result = EmitPassthrough("Invoke-BashStat", args);
@@ -5941,20 +5942,6 @@ public static class PsEmitter
     }
 
     /// <summary>
-    /// Bare short flags that must be quoted when emitted for <c>find</c> because
-    /// the PowerShell binder would otherwise consume them — destroying the
-    /// operator's position in find's expression grammar. <c>-o</c> (OR)
-    /// prefix-collides with the <c>-OutVariable</c>/<c>-OutBuffer</c> common
-    /// parameters; <c>-a</c> (AND) prefix-collides with the find cmdlet's own
-    /// <c>-Arguments</c> (<c>ValueFromRemainingArguments</c>) parameter, which
-    /// would bind <c>-a</c> as named and swallow the following token as its
-    /// value. <c>-and</c>/<c>-or</c>/<c>-not</c> and <c>!</c>/<c>(</c>/<c>)</c>
-    /// share no parameter prefix and reach Arguments unaided.
-    /// </summary>
-    private static readonly IReadOnlySet<string> FindForceQuoteFlags =
-        new HashSet<string>(StringComparer.Ordinal) { "-o", "-a" };
-
-    /// <summary>
     /// echo's <c>-e</c> / <c>-E</c> collide with the <c>-Error*</c> common
     /// parameters and are case-indistinguishable to the binder; quoting routes
     /// them to <c>Invoke-BashEcho</c>'s Arguments with case intact.
@@ -5974,7 +5961,7 @@ public static class PsEmitter
     /// cmdlet must be prepared to receive every flag as a plain string.
     /// </summary>
     internal static readonly IReadOnlySet<string> OrderedArgCommands =
-        new HashSet<string>(StringComparer.Ordinal) { "tee", "cp", "mv", "rm", "mkdir", "rmdir", "ln", "touch", "xargs", "time", "env", "command", "bash", "awk", "head", "tail", "wc", "cat", "tac", "nl", "uniq", "fold", "expand", "unexpand", "paste", "join", "comm", "split", "strings", "base64", "stat", "file", "cut", "sort", "grep", "sed", "rg" };
+        new HashSet<string>(StringComparer.Ordinal) { "tee", "cp", "mv", "rm", "mkdir", "rmdir", "ln", "touch", "xargs", "time", "env", "command", "bash", "awk", "head", "tail", "wc", "cat", "tac", "nl", "uniq", "fold", "expand", "unexpand", "paste", "join", "comm", "split", "strings", "base64", "stat", "file", "cut", "sort", "grep", "sed", "rg", "find" };
 
     /// <summary><c>Invoke-BashTee</c> -&gt; is <c>tee</c> in <see cref="OrderedArgCommands"/>?</summary>
     private static bool IsOrderedArgCmdlet(string cmdlet) =>
@@ -5995,34 +5982,6 @@ public static class PsEmitter
         return value;
     }
 
-    /// <summary>
-    /// Indices of the words that belong to a <c>find -exec</c>/<c>-execdir</c>/<c>-ok</c>
-    /// command line: everything after the action word up to its <c>;</c> / <c>+</c>
-    /// terminator (the command name included, harmlessly — it never starts with a dash).
-    /// Null when the find has no such action.
-    /// </summary>
-    private static HashSet<int>? FindExecArgvIndices(ImmutableArray<CompoundWord> args)
-    {
-        HashSet<int>? indices = null;
-        bool inExec = false;
-        for (int i = 0; i < args.Length; i++)
-        {
-            var literal = TryGetStaticArgValue(args[i]);
-            if (!inExec)
-            {
-                if (literal is "-exec" or "-execdir" or "-ok" or "-okdir")
-                {
-                    inExec = true;
-                    indices ??= new HashSet<int>();
-                }
-                continue;
-            }
-            if (literal is ";" or "+") { inExec = false; continue; }
-            indices!.Add(i);
-        }
-        return indices;
-    }
-
     private static string EmitPassthrough(
         string cmdlet,
         ImmutableArray<CompoundWord> args,
@@ -6037,16 +5996,9 @@ public static class PsEmitter
         // process-sub operand goes through EmitProcessSubPipeline, everything
         // else through EmitWord with passthrough quoting applied.
         bool orderedArgs = IsOrderedArgCmdlet(cmdlet);
-        // `find … -exec CMD ARGS ;` — CMD's argv is a foreign command line, so ITS flags
-        // (`-exec grep -i x {} ;`) are quoted exactly like an ordered-arg command's.
-        var findExecArgv = cmdlet == "Invoke-BashFind" ? FindExecArgvIndices(args) : null;
 
         string EmitPlainArg(int i)
         {
-            if (findExecArgv is not null && findExecArgv.Contains(i)
-                && OrderedArgDashLiteral(args[i]) is { } execDash)
-                return PsBuild.SingleQuote(execDash);
-
             // Ordered-parser commands: EVERY dash-leading literal (and `--`) is a single-quoted
             // string, so no flag is ever a PowerShell parameter token. See OrderedArgCommands.
             if (orderedArgs && OrderedArgDashLiteral(args[i]) is { } dashLiteral)

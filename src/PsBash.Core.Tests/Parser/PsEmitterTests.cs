@@ -331,7 +331,7 @@ public class PsEmitterTests
         // The emitter quotes it so it reaches Invoke-BashFind's Arguments in place
         // (a switch decoy on the cmdlet would resolve the crash but lose position).
         var result = PsEmitter.Transpile("find . -name a -o -name b");
-        Assert.Equal("Invoke-BashFind . -name a \"-o\" -name b", result);
+        Assert.Equal("Invoke-BashFind . '-name' a '-o' '-name' b", result);
     }
 
     [Fact]
@@ -340,7 +340,20 @@ public class PsEmitterTests
         // find's `-a` (AND) prefix-matches the cmdlet's own -Arguments parameter,
         // which would bind it as named and swallow the next token. Quote it too.
         var result = PsEmitter.Transpile("find . -type f -a -name x");
-        Assert.Equal("Invoke-BashFind . -type f \"-a\" -name x", result);
+        Assert.Equal("Invoke-BashFind . '-type' f '-a' '-name' x", result);
+    }
+
+    // find is on OrderedArgCommands: the whole expression (operators, grouping, the -exec argv and its
+    // terminator) reaches Invoke-BashFind verbatim and in order; no per-flag force-quote set is involved.
+    [Theory]
+    [InlineData("find . -name a -o -name b", "Invoke-BashFind . '-name' a '-o' '-name' b")]
+    [InlineData("find . \\( -name a -o -name b \\) -print", "Invoke-BashFind . `( '-name' a '-o' '-name' b `) '-print'")]
+    [InlineData("find . ! -type d -a -name x", "Invoke-BashFind . ! '-type' d '-a' '-name' x")]
+    [InlineData("find -H . -maxdepth 2 -print0", "Invoke-BashFind '-H' . '-maxdepth' 2 '-print0'")]
+    [InlineData("find . -name '*.c' -exec grep -il -e foo {} +", "Invoke-BashFind . '-name' '*.c' '-exec' grep '-il' '-e' foo \"{}\" +")]
+    public void Transpile_FindExpression_ReachesTheCmdletVerbatimAndInOrder(string bash, string expected)
+    {
+        Assert.Equal(expected, PsEmitter.Transpile(bash));
     }
 
     [Fact]
@@ -350,7 +363,7 @@ public class PsEmitterTests
         // after the command word is a literal operand (find . ! -name x). The
         // parser used to break the command at `!`, dropping `! -name x`.
         var result = PsEmitter.Transpile("find . ! -name x");
-        Assert.Equal("Invoke-BashFind . ! -name x", result);
+        Assert.Equal("Invoke-BashFind . ! '-name' x", result);
     }
 
     [Fact]
@@ -782,7 +795,7 @@ public class PsEmitterTests
         // Batch 1 of the shared ordered parser. Adding a command here also means adding it to
         // CommonParameterCollisionGuardTests.EmitterForceQuoted (Cmdlets.Tests) — that map is
         // how the guard knows the emitter, not a decoy, protects the colliding letters.
-        Assert.Equal(new[] { "awk", "base64", "bash", "cat", "comm", "command", "cp", "cut", "env", "expand", "file", "fold", "grep", "head", "join", "ln", "mkdir", "mv", "nl", "paste", "rg", "rm", "rmdir", "sed", "sort", "split", "stat", "strings", "tac", "tail", "tee", "time", "touch", "unexpand", "uniq", "wc", "xargs" }, PsEmitter.OrderedArgCommands.OrderBy(x => x).ToArray());
+        Assert.Equal(new[] { "awk", "base64", "bash", "cat", "comm", "command", "cp", "cut", "env", "expand", "file", "find", "fold", "grep", "head", "join", "ln", "mkdir", "mv", "nl", "paste", "rg", "rm", "rmdir", "sed", "sort", "split", "stat", "strings", "tac", "tail", "tee", "time", "touch", "unexpand", "uniq", "wc", "xargs" }, PsEmitter.OrderedArgCommands.OrderBy(x => x).ToArray());
     }
 
     // `bash` is on OrderedArgCommands: the script's own args (`bash s.sh -v -e -c x`) and the
@@ -4161,8 +4174,8 @@ public class PsEmitterTests
     [InlineData("time echo -e a", "Invoke-BashTime echo '-e' a")]
     [InlineData("env FOO=1 grep -i x f", "Invoke-BashEnv FOO=1 grep '-i' x f")]
     [InlineData("env basename -a a/b", "Invoke-BashEnv basename '-a' a/b")]
-    [InlineData("find . -exec grep -i x {} \\;", "Invoke-BashFind . -exec grep '-i' x \"{}\" `;")]
-    [InlineData("find . -exec basename -a {} +", "Invoke-BashFind . -exec basename '-a' \"{}\" +")]
+    [InlineData("find . -exec grep -i x {} \\;", "Invoke-BashFind . '-exec' grep '-i' x \"{}\" `;")]
+    [InlineData("find . -exec basename -a {} +", "Invoke-BashFind . '-exec' basename '-a' \"{}\" +")]
     public void Transpile_XargsDashLiterals_AreAllSingleQuoted(string bash, string expected)
     {
         Assert.Contains(expected, PsEmitter.Transpile(bash));
@@ -4500,7 +4513,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("find . -name '*.txt'");
 
-        Assert.Equal("Invoke-BashFind . -name '*.txt'", result);
+        Assert.Equal("Invoke-BashFind . '-name' '*.txt'", result);
     }
 
     [Fact]
@@ -4880,7 +4893,7 @@ public class PsEmitterTests
     public void Transpile_FindExecWithBraces_PreservesBraces()
     {
         var result = PsEmitter.Transpile("find src -name '*.cs' -exec wc -l {} +");
-        Assert.Contains("Invoke-BashFind src -name '*.cs' -exec wc '-l' \"{}\" +", result);
+        Assert.Contains("Invoke-BashFind src '-name' '*.cs' '-exec' wc '-l' \"{}\" +", result);
     }
 
     [Fact]
