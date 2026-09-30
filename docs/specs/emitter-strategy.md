@@ -602,7 +602,7 @@ Maps redirects to PowerShell: `>file`, `>>file`, `2>&1`, etc. Calls
 
 ### `TransformWordPath` / `TransformRedirectTarget`
 
-- `/tmp/file` -> `PsBuild.TempPath("file")` = `$($env:OS -eq 'Windows_NT' ? $env:TEMP : '/tmp')/file` (both).
+- `/tmp/file` -> `PsBuild.TempPath("file")` = `"$($env:OS -eq 'Windows_NT' ? $env:TEMP : '/tmp')/file"` (both; double-quoted because a bare `$(…)/file` is two PowerShell arguments; a REST containing `"` keeps the legacy Windows-only `$env:TEMP\rest`).
   The rewrite is decided at RUNTIME, not transpile time: the emitted text may run on any OS.
   Windows maps `/tmp` to `$env:TEMP`; Linux/macOS keep the literal `/tmp` (`$env:TEMP` is usually
   unset there, and the old unconditional `$env:TEMP\file` collapsed to `\file` at the filesystem

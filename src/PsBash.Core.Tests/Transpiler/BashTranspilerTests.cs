@@ -484,7 +484,7 @@ public class BashTranspilerTests
     {
         var result = BashTranspiler.Transpile("cat /tmp/log.txt | grep error");
         // All-mapped, terminal-bound pipeline → fused lane (PERF phase 2).
-        Assert.Equal("Invoke-BashFusedPipeline { Invoke-BashCat $($env:OS -eq 'Windows_NT' ? $env:TEMP : '/tmp')/log.txt | Invoke-BashGrep error }", result);
+        Assert.Equal("Invoke-BashFusedPipeline { Invoke-BashCat \"$($env:OS -eq 'Windows_NT' ? $env:TEMP : '/tmp')/log.txt\" | Invoke-BashGrep error }", result);
     }
 
     [Fact]
@@ -509,7 +509,7 @@ public class BashTranspilerTests
         var result = BashTranspiler.Transpile("cat /tmp/data.csv | grep -v header | sort | uniq | wc -l");
         // All-mapped, terminal-bound pipeline → fused lane (PERF phase 2).
         Assert.Equal(
-            "Invoke-BashFusedPipeline { Invoke-BashCat $($env:OS -eq 'Windows_NT' ? $env:TEMP : '/tmp')/data.csv | Invoke-BashGrep -v header | Invoke-BashSort | Invoke-BashUniq | Invoke-BashWc '-l' }",
+            "Invoke-BashFusedPipeline { Invoke-BashCat \"$($env:OS -eq 'Windows_NT' ? $env:TEMP : '/tmp')/data.csv\" | Invoke-BashGrep -v header | Invoke-BashSort | Invoke-BashUniq | Invoke-BashWc '-l' }",
             result);
     }
 

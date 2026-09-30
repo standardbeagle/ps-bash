@@ -202,7 +202,7 @@ public sealed class InvokeBashLsCommand : PSCmdlet
         var allEntries = new List<PSObject>();
         bool hadError = false;
 
-        foreach (var target in targets)
+        foreach (var (target, typedOperand) in targets)
         {
             string? resolvedPath = null;
             try
@@ -220,7 +220,7 @@ public sealed class InvokeBashLsCommand : PSCmdlet
             {
                 if (dirOnly)
                 {
-                    allEntries.Add(BuildEntryFromFsi(new DirectoryInfo(resolvedPath)));
+                    allEntries.Add(WithOperandDisplayName(BuildEntryFromFsi(new DirectoryInfo(resolvedPath)), typedOperand));
                 }
                 else
                 {
@@ -260,7 +260,7 @@ public sealed class InvokeBashLsCommand : PSCmdlet
 
             if (resolvedPath != null && File.Exists(resolvedPath))
             {
-                allEntries.Add(BuildEntryFromFsi(new FileInfo(resolvedPath)));
+                allEntries.Add(WithOperandDisplayName(BuildEntryFromFsi(new FileInfo(resolvedPath)), typedOperand));
                 continue;
             }
 
@@ -328,7 +328,7 @@ public sealed class InvokeBashLsCommand : PSCmdlet
         else
         {
             var byName = allEntries.OrderBy(
-                e => GetString(e, "Name"), StringComparer.OrdinalIgnoreCase);
+                e => GetDisplayName(e), StringComparer.OrdinalIgnoreCase);
             sorted = reverseSort
                 ? byName.Reverse()
                 : byName;
@@ -389,7 +389,7 @@ public sealed class InvokeBashLsCommand : PSCmdlet
             }
             else
             {
-                string name = GetString(entry, "Name");
+                string name = GetDisplayName(entry);
                 if (colorize)
                 {
                     if (isDir)
@@ -427,6 +427,25 @@ public sealed class InvokeBashLsCommand : PSCmdlet
         {
             SessionState.PSVariable.Set("global:LASTEXITCODE", 2);
         }
+    }
+
+    /// <summary>
+    /// bash prints a FILE / <c>-d</c> operand exactly as typed (<c>ls -d .</c> -> <c>.</c>,
+    /// <c>ls ./a.txt</c> -> <c>./a.txt</c>). The typed entry keeps its real <c>Name</c>; only the
+    /// rendered text uses the operand, carried in <c>DisplayName</c>. Directory LISTINGS never
+    /// set it (their entries print their own names).
+    /// </summary>
+    private static PSObject WithOperandDisplayName(PSObject entry, string? operand)
+    {
+        if (operand is not null)
+            entry.Properties.Add(new PSNoteProperty("DisplayName", operand));
+        return entry;
+    }
+
+    private static string GetDisplayName(PSObject entry)
+    {
+        string d = GetString(entry, "DisplayName");
+        return d.Length > 0 ? d : GetString(entry, "Name");
     }
 
     /// <summary>
@@ -620,7 +639,7 @@ public sealed class InvokeBashLsCommand : PSCmdlet
             GetString(entry, "Group"),
             size,
             date,
-            GetString(entry, "Name"));
+            GetDisplayName(entry));
     }
 
     /// <summary>
@@ -690,9 +709,9 @@ public sealed class InvokeBashLsCommand : PSCmdlet
     /// when nothing matches; literal paths resolve against the shell's
     /// <c>$PWD</c> via the path provider.
     /// </summary>
-    private List<string> ResolveGlob(IReadOnlyList<string> paths)
+    private List<(string Target, string? Display)> ResolveGlob(IReadOnlyList<string> paths)
     {
-        var result = new List<string>();
+        var result = new List<(string, string?)>();
         foreach (var p in paths)
         {
             if (p.IndexOf('*') >= 0 || p.IndexOf('?') >= 0)
@@ -713,16 +732,16 @@ public sealed class InvokeBashLsCommand : PSCmdlet
 
                 if (matched.Count == 0)
                 {
-                    result.Add(p);
+                    result.Add((p, null));
                 }
                 else
                 {
-                    result.AddRange(matched);
+                    foreach (var m in matched) result.Add((m, null));
                 }
             }
             else
             {
-                result.Add(SessionState.Path.GetUnresolvedProviderPathFromPSPath(p));
+                result.Add((SessionState.Path.GetUnresolvedProviderPathFromPSPath(p), p));
             }
         }
         return result;

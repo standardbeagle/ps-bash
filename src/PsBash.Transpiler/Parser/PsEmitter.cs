@@ -6073,10 +6073,9 @@ public static class PsEmitter
         if (word.Parts.All(p => p is WordPart.Literal or WordPart.EscapedLiteral)
             && TryGetPureLiteralText(word.Parts, out var text))
         {
-            var transformed = TransformWordPath(text);
-            if (PsBuild.TryGetTempPathRest(transformed, out var tmpRest))
-                return "\"" + PsBuild.TempDirExpr + "/" + PsBuild.EscapeForDoubleQuote(tmpRest) + "\"";
-            return PsBuild.SingleQuote(transformed);
+            if (text.StartsWith("/tmp/"))
+                return PsBuild.TempPath(PsBuild.EscapeForDoubleQuote(text[5..]));
+            return PsBuild.SingleQuote(TransformWordPath(text));
         }
         return TransformWordPath(FlattenPartsToDoubleQuotedString(word.Parts));
     }

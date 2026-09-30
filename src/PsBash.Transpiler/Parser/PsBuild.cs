@@ -40,20 +40,16 @@ public static class PsBuild
     /// </summary>
     public const string TempDirExpr = "$($env:OS -eq 'Windows_NT' ? $env:TEMP : '/tmp')";
 
-    /// <summary>Bare-word form of <c>/tmp/REST</c>: <c>TempDirExpr/REST</c> (Windows accepts <c>/</c>).</summary>
-    public static string TempPath(string rest) => TempDirExpr + "/" + rest;
-
-    /// <summary>If <paramref name="emitted"/> was produced by <see cref="TempPath"/>, return the REST.</summary>
-    public static bool TryGetTempPathRest(string emitted, out string rest)
-    {
-        if (emitted.StartsWith(TempDirExpr + "/", StringComparison.Ordinal))
-        {
-            rest = emitted[(TempDirExpr.Length + 1)..];
-            return true;
-        }
-        rest = "";
-        return false;
-    }
+    /// <summary>
+    /// Word form of <c>/tmp/REST</c>: <c>"TempDirExpr/REST"</c>. Double-quoted because a bare
+    /// <c>$(…)/rest</c> is two arguments in PowerShell. <paramref name="rest"/> is emitted word
+    /// text and must already be safe inside double quotes (no bare <c>"</c>); a REST containing
+    /// one falls back to the Windows-only legacy form.
+    /// </summary>
+    public static string TempPath(string rest)
+        => rest.Contains('"')
+            ? "$env:TEMP\\" + rest
+            : "\"" + TempDirExpr + "/" + rest + "\"";
     // ─────────────────────────────── Quoting / escaping ───────────────────────────────
 
     /// <summary>The chars that must be escaped inside a PowerShell double-quoted string.</summary>
