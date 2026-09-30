@@ -138,7 +138,16 @@ internal static class FileSystemHelpers
     public static void WriteBashError(PSCmdlet cmdlet, string message)
     {
         SetLastExitCode(cmdlet, 1);
+        WriteStderr(cmdlet, message);
+    }
 
+    /// <summary>
+    /// One line on the command's stderr WITHOUT touching the exit status: the error stream is the
+    /// only channel the host delivers to stderr, so an interactive prompt (<c>rm -i</c>) that GNU
+    /// writes there rides it too. The host ends the line; GNU's prompt has no newline.
+    /// </summary>
+    public static void WriteStderr(PSCmdlet cmdlet, string message)
+    {
         var record = new ErrorRecord(
             new System.IO.IOException(message),
             "BashError",

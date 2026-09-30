@@ -84,6 +84,66 @@ public class FsStateDifferentialTests
             Tree(("s", "S"), ("d/f", "x")),
             "mv nosuch dst 2>&1; mv s ./s 2>&1; mv d d/x 2>&1; mv s nodir/x 2>&1");
 
+    // ───────────── rm -d / -i / -I / --interactive ─────────────
+    //
+    // Prompts go to stderr without a newline in GNU (the host ends every stderr line), so these
+    // compare stdout + exit + the resulting tree, not the prompt text (RmInteractiveTests pins it).
+
+    [SkippableFact] public Task Rm_DashD_RemovesEmptyDirsAndFiles_RefusesNonEmpty() =>
+        EqualAsync(
+            Tree(("e", null), ("ne/g", "x"), ("f", "x")),
+            "rm -d e ne f 2>&1");
+
+    [SkippableFact] public Task Rm_DashRD_RemovesANonEmptyTree() =>
+        EqualAsync(
+            Tree(("ne/x/g", "x")),
+            "rm -rd ne");
+
+    [SkippableFact] public Task Rm_Interactive_OneAnswerPerOperand() =>
+        EqualAsync(
+            Tree(("a", "A"), ("b", "B"), ("c", "C")),
+            "printf 'y\\nn\\nyes\\n' | rm -i a b c");
+
+    [SkippableFact] public Task Rm_Interactive_NoAnswerIsNo() =>
+        EqualAsync(
+            Tree(("a", "A")),
+            "printf '' | rm -i a");
+
+    [SkippableFact] public Task Rm_InteractiveOnce_FourFilesDeclined_KeepsEverything() =>
+        EqualAsync(
+            Tree(("a", "A"), ("b", "B"), ("c", "C"), ("d", "D")),
+            "echo n | rm -I a b c d");
+
+    [SkippableFact] public Task Rm_InteractiveOnce_ThreeFiles_DoesNotAsk() =>
+        EqualAsync(
+            Tree(("a", "A"), ("b", "B"), ("c", "C")),
+            "echo n | rm -I a b c");
+
+    [SkippableFact] public Task Rm_InteractiveOnce_Recursive_AsksEvenForOneArgument() =>
+        EqualAsync(
+            Tree(("k/l/f", "x")),
+            "echo n | rm -I -r k");
+
+    [SkippableFact] public Task Rm_InteractiveRecursive_DecliningADescentKeepsTheSubtree() =>
+        EqualAsync(
+            Tree(("p/q/r/f", "x"), ("p/top", "t")),
+            "printf 'y\\nn\\ny\\n' | rm -ir p");
+
+    [SkippableFact] public Task Rm_LastOfFAndIWins() =>
+        EqualAsync(
+            Tree(("z1", "1"), ("z2", "2")),
+            "echo n | rm -if z2; echo n | rm -fi z1");
+
+    [SkippableFact] public Task Rm_InteractiveWhen_NeverAlwaysAndBare() =>
+        EqualAsync(
+            Tree(("a", "A"), ("b", "B"), ("c", "C")),
+            "echo n | rm --interactive=never a; echo n | rm --interactive=always b; echo n | rm --interactive c");
+
+    [SkippableFact] public Task Rm_RecursiveVerbose_DirectoriesAreReportedAsRemovedDirectory() =>
+        EqualAsync(
+            Tree(("d/f", "x")),
+            "rm -rv d");
+
     // ───────────── redirect byte fidelity ─────────────
 
     // `printf x > f` leaves f = "x" (1 byte): Invoke-BashRedirect honours the NoTrailingNewline
