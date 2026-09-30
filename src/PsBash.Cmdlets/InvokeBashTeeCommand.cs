@@ -1,4 +1,5 @@
 using System.Management.Automation;
+using PsBash.Cmdlets.Args;
 
 namespace PsBash.Cmdlets;
 
@@ -24,14 +25,17 @@ namespace PsBash.Cmdlets;
 /// matching GNU. A legacy record whose text already ends in <c>\n</c> without
 /// the marker is not given a second newline.
 ///
-/// <c>--</c> ends option parsing: operands after it are literal file names and
-/// are never run through the unsupported-option classifier
-/// (<c>tee -- -zz</c> creates a file named <c>-zz</c>).
+/// ARGV: parsed by the shared ordered parser (<see cref="ArgParser"/>, spec
+/// <see cref="TeeSpec"/>): <c>--</c> ends option parsing and everything after it is a literal
+/// file name that is never classified (<c>tee -- -zz</c> creates <c>-zz</c>); bundles
+/// (<c>-aa</c>), unique-prefix long options (<c>--app</c>) and options after operands follow
+/// GNU getopt_long; unsupported options are refused with exit 2.
 ///
-/// Common-parameter collision: <c>-a</c> prefix-matches the cmdlet's own
-/// <c>-Arguments</c> catch-all parameter, so it is declared as an explicit
-/// <see cref="SwitchParameter"/> named <see cref="A"/> — same hazard the
-/// <c>ls</c> and <c>uname</c> migrations hit.
+/// Common-parameter collision: the transpiler single-quotes every dash-leading word for tee
+/// (<c>PsEmitter.OrderedArgCommands</c>), so flags arrive in <see cref="Arguments"/> in order.
+/// <see cref="A"/>/<see cref="P"/> stay as decoy switches ONLY for DIRECT calls
+/// (<c>Invoke-BashTee -a f</c>, Pester), where the binder would otherwise eat a bare
+/// <c>-a</c> (prefix of <c>-Arguments</c>) / <c>-p</c>; they are re-injected before parsing.
 ///
 /// Glob expansion routes through
 /// <see cref="FileSystemHelpers.ResolveOperandPaths"/>.
@@ -65,15 +69,25 @@ public sealed class InvokeBashTeeCommand : PSCmdlet
     [Parameter(ValueFromPipeline = true)]
     public PSObject? InputObject { get; set; }
 
+    private const string OptAppend = "append";
+
     // Valid GNU tee flags not implemented by ps-bash. -a / --append IS implemented.
-    // Bare -i collides with the PS binder so it is represented by its long form only.
-    private static readonly HashSet<string> TeeValidButUnsupported =
-        new(StringComparer.Ordinal)
-        {
-            "--ignore-interrupts",
-            "--output-error",
-            "-p",
-        };
+    // (A string[] field on purpose: CommonParameterCollisionGuardTests enumerates the
+    // static string sets of every cmdlet to find short flags the binder could eat.)
+    private static readonly string[] TeeValidButUnsupported =
+    {
+        "-i", "--ignore-interrupts",
+        "-p", "--output-error",
+    };
+
+    /// <summary>tee's whole option surface, built once for the shared ordered parser.</summary>
+    private static readonly OptSpecSet TeeSpec = new(
+        new[] { new OptSpec(OptAppend, 'a', "append") },
+        validButUnsupported: TeeValidButUnsupported,
+        allowAbbrev: true);
+
+    /// <summary>Pure argv scan (unit-test seam): options, operands and the first error.</summary>
+    internal static ParsedArgs ScanArgs(string[] args) => ArgParser.Parse(args, TeeSpec);
 
     private static readonly System.Text.UTF8Encoding Utf8NoBom = new(false);
 
@@ -82,8 +96,11 @@ public sealed class InvokeBashTeeCommand : PSCmdlet
 
     protected override void BeginProcessing()
     {
-        // Re-inject the decoy-bound -p so the classifier still fires exit 2.
-        var args = BashRuntime.PrependDecoys(Arguments, (P.IsPresent, "-p"));
+        // Re-inject the decoy-bound flags (a DIRECT call such as `Invoke-BashTee -a f` binds A/P
+        // instead of reaching Arguments; the transpiler force-quotes them so they arrive in
+        // Arguments in order). The decoys are prepended, which is fine: tee's options are
+        // order-insensitive and a decoy can only be bound BEFORE any `--`.
+        var args = BashRuntime.PrependDecoys(Arguments, (A.IsPresent, "-a"), (P.IsPresent, "-p"));
 
         FileSystemHelpers.SetLastExitCode(this, 0);
         if (FileSystemHelpers.TryHandleVersion(this, "tee", args)) { _done = true; return; }
@@ -98,34 +115,11 @@ public sealed class InvokeBashTeeCommand : PSCmdlet
             return;
         }
 
-        bool append = A.IsPresent;
-        var operands = new List<string>();
-        var classify = new List<string>(); // operands BEFORE `--` only
-        bool pastDoubleDash = false;
+        var parsed = ScanArgs(args);
+        if (FileSystemHelpers.TryWriteParseError(this, "tee", parsed)) { _done = true; return; }
 
-        foreach (var arg in args)
-        {
-            if (pastDoubleDash)
-            {
-                operands.Add(arg);
-                continue;
-            }
-            if (arg == "--")
-            {
-                pastDoubleDash = true;
-                continue;
-            }
-            if (arg == "-a" || arg == "--append")
-            {
-                append = true;
-                continue;
-            }
-            operands.Add(arg);
-            classify.Add(arg);
-        }
-
-        if (FileSystemHelpers.TryWriteOperandOptionError(
-                this, "tee", classify, TeeValidButUnsupported)) { _done = true; return; }
+        bool append = parsed.Has(OptAppend);
+        var operands = parsed.Operands();
 
         foreach (var rawPath in operands.Where(o => !string.IsNullOrEmpty(o)))
         {

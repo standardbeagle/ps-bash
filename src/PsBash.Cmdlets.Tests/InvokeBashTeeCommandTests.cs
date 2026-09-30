@@ -336,4 +336,117 @@ $global:teeSeen = $null
         Assert.Single(result);
         Assert.Equal(2, (int)result[0].BaseObject);
     }
+
+    // ── shared ordered parser: what the emitter's every-dash-literal quoting delivers ──
+
+    [Fact]
+    public void Tee_QuotedFlagsBeforeDoubleDash_AppendThenLiteralOperand()
+    {
+        // The emitter renders `tee -a -- f` as Invoke-BashTee '-a' '--' f: all in Arguments, in order.
+        string target = Path.Combine(_tmpDir, "q.txt");
+        File.WriteAllText(target, "old\n");
+        var lines = RunLines($"'x' | Invoke-BashTee '-a' '--' '{Q(target)}'");
+        Assert.Equal(new[] { "x" }, lines);
+        Assert.Equal("old\nx\n", File.ReadAllText(target));
+    }
+
+    [Theory]
+    [InlineData("--app")]
+    [InlineData("--a")]
+    [InlineData("-aa")]
+    public void Tee_AppendSpelledAsAbbreviationOrRepeatedBundle_Appends(string flag)
+    {
+        string target = Path.Combine(_tmpDir, "ab.txt");
+        File.WriteAllText(target, "old\n");
+        RunLines($"'x' | Invoke-BashTee '{flag}' '{Q(target)}'");
+        Assert.Equal("old\nx\n", File.ReadAllText(target));
+    }
+
+    [Fact]
+    public void Tee_QuotedBareI_IsClassifiedNotSwallowedByTheBinder()
+    {
+        // Bare `-i` prefix-collides with -InformationAction; quoted it reaches Arguments and is
+        // refused as valid-but-unsupported (GNU: --ignore-interrupts), exit 2, nothing written.
+        string target = Path.Combine(_tmpDir, "i.txt");
+        var pwsh = _fixture.AcquireFresh();
+        pwsh.AddScript("$ErrorActionPreference='Continue'").Invoke();
+        pwsh.Commands.Clear();
+        var result = pwsh.AddScript(
+            $"'x' | Invoke-BashTee '-i' '{Q(target)}' 2>$null; $LASTEXITCODE").Invoke();
+        pwsh.Commands.Clear();
+        Assert.Equal(2, (int)result[^1].BaseObject);
+        Assert.False(File.Exists(target));
+    }
+
+    [Fact]
+    public void Tee_OptionAfterOperand_IsStillAnOption()
+    {
+        // GNU permutes: `tee f -a` appends to f.
+        string target = Path.Combine(_tmpDir, "perm.txt");
+        File.WriteAllText(target, "old\n");
+        RunLines($"'x' | Invoke-BashTee '{Q(target)}' '-a'");
+        Assert.Equal("old\nx\n", File.ReadAllText(target));
+    }
+}
+
+/// <summary>
+/// Pure argv-scan table for tee. Each row was compared against the pre-migration hand scan
+/// (append flag + operands + `TryWriteOperandOptionError`) and against real GNU tee
+/// (`wsl bash`); rows marked FIX are GNU-correct changes from the old behavior:
+/// bundles of the same flag (`-aa`), unique-prefix long options (`--app`, `--a`), a proper
+/// "doesn't allow an argument" error, `-i` refused as valid-but-unsupported instead of
+/// "invalid option", and the offending letter (not the first) named in `-az`.
+/// </summary>
+public class TeeArgScanTests
+{
+    private static string Scan(params string[] argv)
+    {
+        var p = InvokeBashTeeCommand.ScanArgs(argv);
+        if (p.Error is { } e) return "ERR " + e.Message("tee");
+        return $"append={(p.Has("append") ? 1 : 0)} ops=[{string.Join(",", p.Operands())}]";
+    }
+
+    [Theory]
+    // unchanged from the old scan
+    [InlineData("append=0 ops=[]")]
+    [InlineData("append=0 ops=[f]", "f")]
+    [InlineData("append=1 ops=[f]", "-a", "f")]
+    [InlineData("append=1 ops=[f]", "--append", "f")]
+    [InlineData("append=1 ops=[f]", "f", "-a")]
+    [InlineData("append=1 ops=[f]", "-a", "-a", "f")]
+    [InlineData("ERR tee: option '-p' is recognized but not supported by ps-bash", "-p", "f")]
+    [InlineData("ERR tee: option '-p' is recognized but not supported by ps-bash", "-ap", "f")]
+    [InlineData("ERR tee: option '--ignore-interrupts' is recognized but not supported by ps-bash", "--ignore-interrupts", "f")]
+    [InlineData("ERR tee: option '--output-error' is recognized but not supported by ps-bash", "--output-error=warn", "f")]
+    [InlineData("ERR tee: unrecognized option '--bogus'", "--bogus", "f")]
+    [InlineData("ERR tee: invalid option -- 'z'", "-z", "f")]
+    [InlineData("append=0 ops=[-,f]", "-", "f")]
+    [InlineData("append=0 ops=[-]", "-")]
+    [InlineData("append=0 ops=[f]", "--", "f")]
+    [InlineData("append=0 ops=[-a]", "--", "-a")]
+    [InlineData("append=0 ops=[-zz]", "--", "-zz")]
+    [InlineData("append=1 ops=[-a,-p]", "-a", "--", "-a", "-p")]
+    [InlineData("append=0 ops=[--,f]", "--", "--", "f")]
+    [InlineData("append=1 ops=[--bogus]", "-a", "--", "--bogus")]
+    [InlineData("ERR tee: unrecognized option '--bogus'", "--bogus", "--", "f")]
+    [InlineData("append=0 ops=[f,-p]", "f", "--", "-p")]
+    [InlineData("append=0 ops=[-,-,-]", "-", "-", "-")]
+    [InlineData("append=1 ops=[-,-]", "-a", "-", "--", "-")]
+    [InlineData("ERR tee: invalid option -- 'A'", "-A", "f")]
+    [InlineData("ERR tee: unrecognized option '--APPEND'", "--APPEND", "f")]
+    // FIX: GNU-correct (oracle-verified) divergences from the pre-migration scan
+    [InlineData("append=1 ops=[f]", "-aa", "f")]                                   // was invalid option -- 'a'
+    [InlineData("append=1 ops=[f]", "--app", "f")]                                 // was unrecognized option '--app'
+    [InlineData("append=1 ops=[f]", "--a", "f")]                                   // was unrecognized option '--a'
+    [InlineData("ERR tee: option '--append' doesn't allow an argument", "--append=x", "f")]
+    [InlineData("ERR tee: option '--append' doesn't allow an argument", "--ap=", "f")]
+    [InlineData("ERR tee: option '-i' is recognized but not supported by ps-bash", "-i", "f")]           // was invalid option -- 'i'
+    [InlineData("ERR tee: option '--output-error' is recognized but not supported by ps-bash", "--out", "f")]
+    [InlineData("ERR tee: option '--ignore-interrupts' is recognized but not supported by ps-bash", "--ignore", "f")]
+    [InlineData("ERR tee: invalid option -- 'z'", "-az", "f")]                     // was invalid option -- 'a'
+    [InlineData("ERR tee: invalid option -- '-'", "-a-", "f")]                     // was invalid option -- 'a'
+    public void ScanArgs_MatchesGnuTee(string expected, params string[] argv)
+    {
+        Assert.Equal(expected, Scan(argv));
+    }
 }
