@@ -95,6 +95,15 @@
     {
       "flag": "-3",
       "desc": "suppress col 3"
+    },
+    {
+      "flag": "--total",
+      "desc": "append a summary line of the column counts"
+    },
+    {
+      "flag": "--output-delimiter",
+      "desc": "separate columns with STR",
+      "arg": "STR"
     }
   ],
   "command": [
@@ -119,6 +128,24 @@
     {
       "flag": "-f",
       "desc": "force"
+    },
+    {
+      "flag": "-p",
+      "desc": "preserve mode, ownership, timestamps"
+    },
+    {
+      "flag": "-a",
+      "desc": "archive (recursive, preserve all)"
+    },
+    {
+      "flag": "--preserve",
+      "desc": "preserve the listed attributes (default mode,ownership,timestamps)",
+      "arg": "[LIST]"
+    },
+    {
+      "flag": "--no-preserve",
+      "desc": "do not preserve the listed attributes",
+      "arg": "LIST"
     }
   ],
   "cut": [
@@ -568,6 +595,15 @@
     {
       "flag": "-n",
       "desc": "number of lines"
+    },
+    {
+      "flag": "-c",
+      "desc": "number of bytes",
+      "arg": "NUM"
+    },
+    {
+      "flag": "-q",
+      "desc": "never print file name headers"
     }
   ],
   "install": [
@@ -612,6 +648,25 @@
     {
       "flag": "-2",
       "desc": "field from file 2"
+    },
+    {
+      "flag": "-j",
+      "desc": "join field of both files",
+      "arg": "FIELD"
+    },
+    {
+      "flag": "-a",
+      "desc": "also print unpairable lines from file 1 or 2",
+      "arg": "FILENUM"
+    },
+    {
+      "flag": "-v",
+      "desc": "print only unpairable lines from file 1 or 2",
+      "arg": "FILENUM"
+    },
+    {
+      "flag": "-i",
+      "desc": "ignore case in comparing fields"
     }
   ],
   "jq": [
@@ -630,6 +685,14 @@
     {
       "flag": "-s",
       "desc": "slurp"
+    },
+    {
+      "flag": "-R",
+      "desc": "raw input (each line is a string)"
+    },
+    {
+      "flag": "-j",
+      "desc": "join output (raw, no newline after each result)"
     }
   ],
   "ln": [
@@ -644,6 +707,19 @@
     {
       "flag": "-v",
       "desc": "verbose"
+    },
+    {
+      "flag": "-n",
+      "desc": "treat LINK_NAME that is a link to a directory as a normal file"
+    },
+    {
+      "flag": "-t",
+      "desc": "create the links in DIRECTORY",
+      "arg": "DIRECTORY"
+    },
+    {
+      "flag": "-T",
+      "desc": "treat LINK_NAME as a normal file always"
     }
   ],
   "ls": [
@@ -712,6 +788,16 @@
     {
       "flag": "-v",
       "desc": "verbose"
+    },
+    {
+      "flag": "-m",
+      "desc": "set file mode (octal or symbolic)",
+      "arg": "MODE"
+    },
+    {
+      "flag": "--mode",
+      "desc": "set file mode (octal or symbolic)",
+      "arg": "MODE"
     }
   ],
   "mv": [
@@ -877,6 +963,23 @@
     {
       "flag": "-v",
       "desc": "verbose"
+    },
+    {
+      "flag": "-d",
+      "desc": "remove empty directories"
+    },
+    {
+      "flag": "-i",
+      "desc": "prompt before every removal"
+    },
+    {
+      "flag": "-I",
+      "desc": "prompt once before removing many files or recursing"
+    },
+    {
+      "flag": "--interactive",
+      "desc": "prompt according to WHEN (never, once, always)",
+      "arg": "WHEN"
     }
   ],
   "rmdir": [
@@ -1004,6 +1107,21 @@
     {
       "flag": "-a",
       "desc": "suffix length"
+    },
+    {
+      "flag": "-b",
+      "desc": "bytes per file (K, M, G, KB, MB, KiB ...)",
+      "arg": "SIZE"
+    },
+    {
+      "flag": "--numeric-suffixes",
+      "desc": "numeric suffixes, optionally starting at FROM",
+      "arg": "[=FROM]"
+    },
+    {
+      "flag": "--additional-suffix",
+      "desc": "append SUFFIX to file names",
+      "arg": "SUFFIX"
     }
   ],
   "stat": [
@@ -1100,6 +1218,37 @@
     {
       "flag": "-d",
       "desc": "date string"
+    },
+    {
+      "flag": "-t",
+      "desc": "timestamp [[CC]YY]MMDDhhmm[.ss]",
+      "arg": "STAMP"
+    },
+    {
+      "flag": "-r",
+      "desc": "use this file's times",
+      "arg": "FILE"
+    },
+    {
+      "flag": "-a",
+      "desc": "change only the access time"
+    },
+    {
+      "flag": "-m",
+      "desc": "change only the modification time"
+    },
+    {
+      "flag": "-c",
+      "desc": "do not create any files"
+    },
+    {
+      "flag": "-h",
+      "desc": "affect a symbolic link itself, not its target"
+    },
+    {
+      "flag": "--time",
+      "desc": "change the named time (atime, access, use, mtime, modify)",
+      "arg": "WORD"
     }
   ],
   "tput": [
@@ -1192,6 +1341,34 @@
     {
       "flag": "-d",
       "desc": "duplicates only"
+    },
+    {
+      "flag": "-u",
+      "desc": "unique lines only"
+    },
+    {
+      "flag": "-D",
+      "desc": "print all duplicate lines",
+      "arg": "[=METHOD]"
+    },
+    {
+      "flag": "-i",
+      "desc": "ignore case"
+    },
+    {
+      "flag": "-f",
+      "desc": "skip the first N fields",
+      "arg": "N"
+    },
+    {
+      "flag": "-s",
+      "desc": "skip the first N characters",
+      "arg": "N"
+    },
+    {
+      "flag": "-w",
+      "desc": "compare at most N characters",
+      "arg": "N"
     }
   ],
   "unset": [
@@ -1216,6 +1393,14 @@
     {
       "flag": "-c",
       "desc": "byte count"
+    },
+    {
+      "flag": "-m",
+      "desc": "character count"
+    },
+    {
+      "flag": "-L",
+      "desc": "length of the longest line"
     }
   ],
   "which": [
