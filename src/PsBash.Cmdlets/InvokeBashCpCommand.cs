@@ -246,6 +246,13 @@ public sealed class InvokeBashCpCommand : PSCmdlet
             // Diagnostics name the destination as typed (GNU): `cp f d/` reports 'd/f', not the full path.
             var targetDisplay = destIsExistingDir ? FileSystemHelpers.JoinDisplay(destRaw, srcDisplay) : destRaw;
 
+            // -n skips an existing destination FILE before anything else is asked — even when it is
+            // the same file (GNU: `cp -n a a` and `cp -n a hardlink-of-a` are silent no-ops, exit 0).
+            if (noClobber && !srcIsDir && File.Exists(targetPath))
+            {
+                continue;
+            }
+
             var identityError = TransferValidation.CheckIdentity("cp", src, srcIsDir, targetPath, srcDisplay, targetDisplay);
             if (identityError != null)
             {

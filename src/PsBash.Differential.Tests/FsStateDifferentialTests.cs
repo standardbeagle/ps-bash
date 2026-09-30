@@ -224,6 +224,28 @@ public class FsStateDifferentialTests
             "touch -t 200101010000 s/f ref; touch -t 200101010000 s; cp -r --preserve=timestamps s t; cp -r s u; " +
             "find t u -newer ref | sort");
 
+    // ───────────── same file under another name (hard links) ─────────────
+
+    [SkippableFact] public Task Cp_HardLinkedOperands_AreTheSameFile() =>
+        EqualAsync(
+            Tree(("a", "A")) + "\nln a h",
+            "cp a h 2>&1; echo r1=$?; cp h a 2>&1; echo r2=$?; cp -f a ./h 2>&1; echo r3=$?; cp -u a h 2>&1; echo r4=$?");
+
+    [SkippableFact] public Task Cp_NoClobber_OnHardLinkedOperands_IsASilentSkip() =>
+        EqualAsync(
+            Tree(("a", "A")) + "\nln a h",
+            "cp -n a h 2>/dev/null; echo r=$?");
+
+    [SkippableFact] public Task Mv_HardLinkedOperands_AreTheSameFile_BothNamesRemain() =>
+        EqualAsync(
+            Tree(("a", "A")) + "\nln a h",
+            "mv a h 2>&1; echo r1=$?; mv -f h a 2>&1; echo r2=$?");
+
+    [SkippableFact] public Task CpMv_HardLinksIntoADirectory_AreFine() =>
+        EqualAsync(
+            Tree(("a", "A"), ("d", null), ("e", null)) + "\nln a h",
+            "cp a h d; echo r1=$?; mv a h e; echo r2=$?");
+
     // ───────────── redirect byte fidelity ─────────────
 
     // `printf x > f` leaves f = "x" (1 byte): Invoke-BashRedirect honours the NoTrailingNewline

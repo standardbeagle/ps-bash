@@ -72,6 +72,14 @@ internal static class TransferValidation
         targetDisplay ??= target;
         if (IsSamePath(src, target) && !(cmd == "mv" && IsCaseOnlyRename(src, target)))
             return $"{cmd}: '{srcDisplay}' and '{targetDisplay}' are the same file";
+
+        // Different NAMES for one file: a hard link, or a symlink leading to the other operand. Only
+        // files — a directory cannot be hard-linked, and recursion guards cover directory aliases.
+        if (!srcIsDir && !(cmd == "mv" && IsCaseOnlyRename(src, target))
+            && (cmd == "mv"
+                ? FileIdentity.SameEntryNotFollowing(src, target)
+                : FileIdentity.SameFileFollowingLinks(src, target)))
+            return $"{cmd}: '{srcDisplay}' and '{targetDisplay}' are the same file";
         if (srcIsDir && IsStrictlyInside(target, src))
             return cmd == "mv"
                 ? $"mv: cannot move '{srcDisplay}' to a subdirectory of itself, '{targetDisplay}'"
