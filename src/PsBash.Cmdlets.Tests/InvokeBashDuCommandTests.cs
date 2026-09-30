@@ -269,7 +269,7 @@ public class InvokeBashDuCommandTests : IClassFixture<SharedPwshFixture>, IDispo
     [Fact]
     public void Du_UnrecognizedOption_WritesError()
     {
-        // Unrecognized option-like token: classified as "unrecognized option", exit 2.
+        // Unknown long option: GNU usage error, exit 1 (valid-but-unsupported is exit 2).
         var pwsh = _fixture.AcquireFresh();
         pwsh.AddScript("$ErrorActionPreference='Continue'").Invoke();
         pwsh.Commands.Clear();
@@ -277,19 +277,19 @@ public class InvokeBashDuCommandTests : IClassFixture<SharedPwshFixture>, IDispo
             "Invoke-BashDu --bogus 2>$null; $LASTEXITCODE").Invoke();
         pwsh.Commands.Clear();
         Assert.Single(result);
-        Assert.Equal(2, (int)result[0].BaseObject);
+        Assert.Equal(1, (int)result[0].BaseObject);
     }
 
     [Fact]
     public void Du_ValidButUnsupportedOption_WritesError()
     {
         // Catalog flag (valid GNU, not implemented): classified as "recognized but not supported", exit 2.
-        // Using long form --apparent-size (short -B is swallowed by the per-char bundle decoder).
+        // --block-size (-B) is a valid GNU option ps-bash refuses (exit 2).
         var pwsh = _fixture.AcquireFresh();
         pwsh.AddScript("$ErrorActionPreference='Continue'").Invoke();
         pwsh.Commands.Clear();
         var result = pwsh.AddScript(
-            "Invoke-BashDu --apparent-size 2>$null; $LASTEXITCODE").Invoke();
+            "Invoke-BashDu --block-size=1 2>$null; $LASTEXITCODE").Invoke();
         pwsh.Commands.Clear();
         Assert.Single(result);
         Assert.Equal(2, (int)result[0].BaseObject);

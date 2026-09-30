@@ -1,4 +1,5 @@
 using System.Management.Automation;
+using PsBash.Cmdlets.Args;
 
 namespace PsBash.Cmdlets;
 
@@ -40,15 +41,15 @@ namespace PsBash.Cmdlets;
 [OutputType("PsBash.DuEntry")]
 public sealed class InvokeBashDuCommand : PSCmdlet
 {
-    /// <summary>The bash <c>-d N</c> (max depth) value flag.</summary>
+    /// <summary>The bash <c>-d N</c> (max depth) value flag (decoy for direct calls; re-injected as <c>-d N</c>).</summary>
     [Parameter]
     public int? D { get; set; }
 
-    /// <summary>The bash <c>-a</c> (include files) switch.</summary>
+    /// <summary>The bash <c>-a</c> (include files) switch (decoy: bare <c>-a</c> prefix-matches <see cref="Arguments"/>).</summary>
     [Parameter]
     public SwitchParameter A { get; set; }
 
-    /// <summary>The bash <c>-c</c> (grand total) switch.</summary>
+    /// <summary>The bash <c>-c</c> (grand total) switch (decoy: prefix-collides with <c>-Confirm</c>).</summary>
     [Parameter]
     public SwitchParameter C { get; set; }
 
@@ -56,142 +57,194 @@ public sealed class InvokeBashDuCommand : PSCmdlet
     public string[]? Arguments { get; set; }
 
     /// <summary>
-    /// Decoy for the unsupported <c>-P</c> (no-dereference). Bare <c>-P</c> prefix-
-    /// collides with <c>-ProgressAction</c> and crashed the binder. du silently
-    /// swallows unknown short flags (oracle behavior), so this just prevents the
-    /// crash — <c>du -P</c> is ignored, exactly like <c>-B</c>/<c>-l</c>.
+    /// Decoy for <c>-P</c> (no-dereference, valid-but-unsupported): bare <c>-P</c> prefix-collides with
+    /// <c>-ProgressAction</c> and crashed the binder. Re-injected as <c>-P</c> so the classifier answers.
     /// </summary>
     [Parameter] public SwitchParameter P { get; set; }
 
-    // Valid GNU du flags not implemented by ps-bash. Implemented flags
-    // (-h/-s/-a/-c/-d/--max-depth) are NOT in this set.
-    // Note: short flags like -B/-l/-P are swallowed by the per-char bundle
-    // decoder (oracle behavior) and never reach the operand list, so only
-    // long forms are practically catchable by TryWriteOperandOptionError.
-    private static readonly HashSet<string> DuValidButUnsupported =
-        new(StringComparer.Ordinal)
+    private const string OptAll = "all", OptTotal = "total", OptHuman = "human", OptSummarize = "summarize",
+        OptMaxDepth = "max-depth", OptExclude = "exclude", OptKilo = "kilo", OptMega = "mega",
+        OptBytes = "bytes", OptNoOp = "noop";
+
+    /// <summary>GNU du 9.4 options ps-bash refuses (exit 2).</summary>
+    private static readonly string[] DuValidButUnsupported =
+    {
+        "-B", "--block-size", "-D", "-H", "--dereference-args", "-L", "--dereference", "-P", "--no-dereference",
+        "-S", "--separate-dirs", "-t", "--threshold", "-X", "--exclude-from", "-0", "--null",
+        "--files0-from", "--inodes", "--si", "--time", "--time-style",
+    };
+
+    /// <summary>
+    /// du's option surface (GNU coreutils 9.4; long names in du.c <c>long_options[]</c> table order so an
+    /// ambiguous abbreviation lists candidates like GNU: <c>--s</c> = '--si' '--separate-dirs' '--summarize').
+    /// <c>-k</c> (1K blocks, the default), <c>-x</c>, <c>-l</c> and <c>--apparent-size</c> are accepted
+    /// no-ops: ps-bash always reports apparent size, counts every hard link, and does not cross mounts.
+    /// </summary>
+    private static readonly OptSpecSet DuSpec = new(
+        new[]
         {
-            "--apparent-size",
-            "--block-size",
-            "-B",
-            "-l",
-            "--inodes",
-            "-P",
-            "--no-dereference",
-            "--time",
-        };
+            new OptSpec(OptAll, 'a', "all"),
+            new OptSpec(OptNoOp, '\0', "apparent-size"),
+            new OptSpec(OptBytes, 'b', "bytes"),
+            new OptSpec(OptNoOp, 'l', "count-links"),
+            new OptSpec(OptExclude, '\0', "exclude", OptKind.Value),
+            new OptSpec(OptHuman, 'h', "human-readable"),
+            new OptSpec(OptMaxDepth, 'd', "max-depth", OptKind.Value),
+            new OptSpec(OptNoOp, 'x', "one-file-system"),
+            new OptSpec(OptSummarize, 's', "summarize"),
+            new OptSpec(OptTotal, 'c', "total"),
+            new OptSpec(OptKilo, 'k', null),
+            new OptSpec(OptMega, 'm', null),
+        },
+        DuValidButUnsupported,
+        allowAbbrev: true,
+        gnuInfoOptions: true,
+        longOptionOrder: new[]
+        {
+            "all", "apparent-size", "block-size", "bytes", "count-links", "dereference", "dereference-args",
+            "exclude", "exclude-from", "files0-from", "human-readable", "inodes", "si", "max-depth", "null",
+            "no-dereference", "one-file-system", "separate-dirs", "summarize", "total", "threshold", "time",
+            "time-style",
+        });
+
+    /// <summary>Pure argv scan (unit-test seam).</summary>
+    internal static ParsedArgs ScanArgs(string[] args) => ArgParser.Parse(args, DuSpec);
+
+    internal enum DuSizeMode { Kilo, Mega, Bytes, Human }
+
+    internal sealed class DuArgs
+    {
+        public ParsedArgs Parsed = null!;
+        public bool All, Total, Summarize;
+        public int MaxDepth = int.MaxValue;
+        public DuSizeMode Mode = DuSizeMode.Kilo;
+        public List<string> Excludes = new();
+        public List<string> Operands = new();
+        public string? Error;
+    }
+
+    /// <summary>
+    /// Scan + validate in GNU's order. Fixes over the old hand scan: unknown options, a dangling
+    /// <c>-d</c>, and a non-numeric depth were swallowed (the per-character bundle decoder ignored
+    /// every unknown letter: <c>du -z d</c> ran), <c>--</c> is honoured, options may follow operands,
+    /// abbreviations (<c>--max=1</c>), <c>-k -m -b</c> size units (the last of -h/-k/-m/-b wins),
+    /// <c>-a</c> with <c>-s</c> and <c>-s</c> with a non-zero <c>-d</c> are GNU's usage errors.
+    /// </summary>
+    internal static DuArgs Plan(string[] args)
+    {
+        var p = new DuArgs { Parsed = ScanArgs(args) };
+        p.Operands = p.Parsed.Operands();
+        if (p.Parsed.HasError) return p;
+        if (p.Parsed.Has(OptSpecSet.HelpId) || p.Parsed.Has(OptSpecSet.VersionId)) return p;
+
+        int? depthSpecified = null;
+        foreach (var tok in p.Parsed.Tokens)
+        {
+            if (tok.Kind != ArgTokKind.Option) continue;
+            switch (tok.OptId)
+            {
+                case OptAll: p.All = true; break;
+                case OptTotal: p.Total = true; break;
+                case OptSummarize: p.Summarize = true; break;
+                case OptHuman: p.Mode = DuSizeMode.Human; break;
+                case OptKilo: p.Mode = DuSizeMode.Kilo; break;
+                case OptMega: p.Mode = DuSizeMode.Mega; break;
+                case OptBytes: p.Mode = DuSizeMode.Bytes; break;
+                case OptExclude: p.Excludes.Add(tok.Value!); break;
+                case OptMaxDepth:
+                    {
+                        if (!TryParseDepth(tok.Value!, out int depth))
+                        { p.Error = $"du: invalid maximum depth '{tok.Value}'"; return p; }
+                        p.MaxDepth = depth;
+                        depthSpecified = depth;
+                        break;
+                    }
+            }
+        }
+
+        if (p.All && p.Summarize) { p.Error = "du: cannot both summarize and show all entries"; return p; }
+        if (p.Summarize && depthSpecified is int d && d != 0)
+        { p.Error = $"du: warning: summarizing conflicts with --max-depth={d}"; return p; }
+        if (p.Summarize) p.MaxDepth = 0;
+        return p;
+    }
+
+    // Decimal digits (an optional leading '-' is GNU's "unlimited": strtoul wraps it to ULONG_MAX); overflow clamps.
+    private static bool TryParseDepth(string s, out int depth)
+    {
+        depth = int.MaxValue;
+        if (s.Length == 0) return false;
+        bool neg = s[0] == '-';
+        int i = neg || s[0] == '+' ? 1 : 0;
+        if (i >= s.Length) return false;
+        for (int k = i; k < s.Length; k++)
+            if (s[k] < '0' || s[k] > '9') return false;
+        if (neg) return true; // unlimited
+        depth = int.TryParse(s.AsSpan(i), out int v) ? v : int.MaxValue;
+        return true;
+    }
+
+    private string[] ArgsWithDecoys()
+    {
+        var raw = Arguments ?? Array.Empty<string>();
+        var pre = new List<string>();
+        if (A.IsPresent) pre.Add("-a");
+        if (C.IsPresent) pre.Add("-c");
+        if (P.IsPresent) pre.Add("-P");
+        if (D is int d) { pre.Add("-d"); pre.Add(d.ToString(System.Globalization.CultureInfo.InvariantCulture)); }
+        return pre.Count == 0 ? raw : pre.Concat(raw).ToArray();
+    }
+
+    /// <summary>Size number for the mode: KiB (default), MiB, or bytes; all round up like GNU.</summary>
+    private static long SizeUnits(long bytes, DuSizeMode mode) => mode switch
+    {
+        DuSizeMode.Mega => CeilingDiv(bytes, 1048576),
+        DuSizeMode.Bytes => bytes,
+        _ => CeilingDiv(bytes, 1024),
+    };
+
+    private PSObject NewEntry(long sizeBytes, string path, int depth, bool isTotal, DuSizeMode mode)
+    {
+        long units = SizeUnits(sizeBytes, mode);
+        string sizeHuman = FormatBashSize(sizeBytes);
+        string displaySize = mode == DuSizeMode.Human ? sizeHuman : units.ToString();
+        var obj = new PSObject();
+        obj.TypeNames.Insert(0, "PsBash.DuEntry");
+        obj.Properties.Add(new PSNoteProperty("Size", units));
+        obj.Properties.Add(new PSNoteProperty("SizeBytes", sizeBytes));
+        obj.Properties.Add(new PSNoteProperty("SizeHuman", sizeHuman));
+        obj.Properties.Add(new PSNoteProperty("Path", path));
+        obj.Properties.Add(new PSNoteProperty("Depth", depth));
+        obj.Properties.Add(new PSNoteProperty("IsTotal", isTotal));
+        obj.Properties.Add(new PSNoteProperty("BashText", $"{displaySize}\t{path}"));
+        return obj;
+    }
 
     protected override void EndProcessing()
     {
-        var args = Arguments ?? Array.Empty<string>();
+        var args = ArgsWithDecoys();
 
         FileSystemHelpers.SetLastExitCode(this, 0);
-        if (FileSystemHelpers.TryHandleVersion(this, "du", args)) return;
-        if (Array.IndexOf(args, "--help") >= 0)
+        var plan = Plan(args);
+        if (FileSystemHelpers.TryWriteParseError(this, "du", plan.Parsed)) return;
+        if (FileSystemHelpers.TryHandleInfoOptions(this, "du", plan.Parsed)) return;
+        if (plan.Error is { } planError)
         {
-            foreach (var line in InvokeCommand.InvokeScript(
-                         "param($n) Show-BashHelp $n", "du"))
-            {
-                WriteObject(line);
-            }
+            FileSystemHelpers.WriteBashError(this, planError);
+            FileSystemHelpers.SetLastExitCode(this, 1);
             return;
         }
 
-        bool humanReadable = false;
-        bool summarize = false;
-        bool allFiles = A.IsPresent;
-        bool showTotal = C.IsPresent;
-        int maxDepth = D ?? int.MaxValue;
+        bool allFiles = plan.All;
+        bool showTotal = plan.Total;
+        bool summarize = plan.Summarize;
+        int maxDepth = plan.MaxDepth;
+        var mode = plan.Mode;
+        var operands = plan.Operands;
 
-        var operands = new List<string>();
-        var excludePatterns = new List<string>();
-
-        for (int i = 0; i < args.Length; i++)
-        {
-            var arg = args[i];
-
-            // --exclude=GLOB / --exclude GLOB — prune matching files/dirs.
-            if (arg.StartsWith("--exclude=", StringComparison.Ordinal))
-            {
-                excludePatterns.Add(arg.Substring("--exclude=".Length));
-                continue;
-            }
-            if (arg == "--exclude" && (i + 1) < args.Length)
-            {
-                excludePatterns.Add(args[i + 1]);
-                i++;
-                continue;
-            }
-
-            // -d<digits> joined form (oracle: -cmatch '^-d(\d+)$')
-            if (arg.Length > 2 && arg.StartsWith("-d", StringComparison.Ordinal)
-                && AllDigits(arg, 2))
-            {
-                if (int.TryParse(arg.Substring(2), out var parsed))
-                {
-                    maxDepth = parsed;
-                }
-                continue;
-            }
-
-            // -d N separated form
-            if (arg == "-d" && (i + 1) < args.Length)
-            {
-                if (int.TryParse(args[i + 1], out var parsed))
-                {
-                    maxDepth = parsed;
-                }
-                i++;
-                continue;
-            }
-
-            // --max-depth=N / --max-depth N — GNU long form of -d.
-            if (arg.StartsWith("--max-depth=", StringComparison.Ordinal))
-            {
-                if (int.TryParse(arg.Substring("--max-depth=".Length), out var parsed))
-                {
-                    maxDepth = parsed;
-                }
-                continue;
-            }
-            if (arg == "--max-depth" && (i + 1) < args.Length)
-            {
-                if (int.TryParse(args[i + 1], out var parsed))
-                {
-                    maxDepth = parsed;
-                }
-                i++;
-                continue;
-            }
-
-            // Per-char short-flag bundle (oracle's per-char dispatch)
-            if (arg.StartsWith("-", StringComparison.Ordinal) && arg.Length > 1
-                && !arg.StartsWith("--", StringComparison.Ordinal))
-            {
-                foreach (var ch in arg.Substring(1))
-                {
-                    switch (ch)
-                    {
-                        case 'h': humanReadable = true; break;
-                        case 's': summarize = true; break;
-                        case 'a': allFiles = true; break;
-                        case 'c': showTotal = true; break;
-                        // Oracle: default branch ignores unknown letters
-                    }
-                }
-                continue;
-            }
-
-            operands.Add(arg);
-        }
-
-        if (FileSystemHelpers.TryWriteOperandOptionError(
-                this, "du", operands, DuValidButUnsupported)) return;
-
-        var excludeWild = excludePatterns
+        var excludeWild = plan.Excludes
             .Select(p => WildcardPattern.Get(p, WildcardOptions.None))
             .ToList();
-
         if (operands.Count == 0)
         {
             operands.Add(".");
@@ -240,21 +293,8 @@ public sealed class InvokeBashDuCommand : PSCmdlet
             {
                 long sizeBytes = fi.Length;
                 grandTotal += sizeBytes;
-                long sizeKb = CeilingDiv(sizeBytes, 1024);
-                string sizeHuman = FormatBashSize(sizeBytes);
-                string displaySize = humanReadable ? sizeHuman : sizeKb.ToString();
-                string displayPath = target.Replace('\\', '/');
+                WriteObject(NewEntry(sizeBytes, target.Replace('\\', '/'), 0, false, mode));
 
-                var fobj = new PSObject();
-                fobj.TypeNames.Insert(0, "PsBash.DuEntry");
-                fobj.Properties.Add(new PSNoteProperty("Size", sizeKb));
-                fobj.Properties.Add(new PSNoteProperty("SizeBytes", sizeBytes));
-                fobj.Properties.Add(new PSNoteProperty("SizeHuman", sizeHuman));
-                fobj.Properties.Add(new PSNoteProperty("Path", displayPath));
-                fobj.Properties.Add(new PSNoteProperty("Depth", 0));
-                fobj.Properties.Add(new PSNoteProperty("IsTotal", false));
-                fobj.Properties.Add(new PSNoteProperty("BashText", $"{displaySize}\t{displayPath}"));
-                WriteObject(fobj);
                 continue;
             }
 
@@ -327,23 +367,8 @@ public sealed class InvokeBashDuCommand : PSCmdlet
                 if (summarize && !string.Equals(d.FullName, resolvedRoot, StringComparison.Ordinal)) continue;
 
                 long sizeBytes = accumSizes[d.FullName];
-                long sizeKb = CeilingDiv(sizeBytes, 1024);
-                if (sizeKb == 0 && sizeBytes > 0) sizeKb = 1;
-                string sizeHuman = FormatBashSize(sizeBytes);
-                string displaySize = humanReadable ? sizeHuman : sizeKb.ToString();
-
                 string displayPath = BuildDisplayPath(target, resolvedRoot, d.FullName);
-
-                var obj = new PSObject();
-                obj.TypeNames.Insert(0, "PsBash.DuEntry");
-                obj.Properties.Add(new PSNoteProperty("Size", sizeKb));
-                obj.Properties.Add(new PSNoteProperty("SizeBytes", sizeBytes));
-                obj.Properties.Add(new PSNoteProperty("SizeHuman", sizeHuman));
-                obj.Properties.Add(new PSNoteProperty("Path", displayPath));
-                obj.Properties.Add(new PSNoteProperty("Depth", itemDepth));
-                obj.Properties.Add(new PSNoteProperty("IsTotal", false));
-                obj.Properties.Add(new PSNoteProperty("BashText", $"{displaySize}\t{displayPath}"));
-                entries.Add(obj);
+                entries.Add(NewEntry(sizeBytes, displayPath, itemDepth, false, mode));
             }
 
             // Individual file entries with -a. Enumerate lazily rather than
@@ -379,22 +404,8 @@ public sealed class InvokeBashDuCommand : PSCmdlet
                     if (summarize) continue;
 
                     long sizeBytes = f.Length;
-                    long sizeKb = CeilingDiv(sizeBytes, 1024);
-                    if (sizeKb == 0 && sizeBytes > 0) sizeKb = 1;
-                    string sizeHuman = FormatBashSize(sizeBytes);
-                    string displaySize = humanReadable ? sizeHuman : sizeKb.ToString();
                     string displayPath = BuildDisplayPath(target, resolvedRoot, f.FullName);
-
-                    var obj = new PSObject();
-                    obj.TypeNames.Insert(0, "PsBash.DuEntry");
-                    obj.Properties.Add(new PSNoteProperty("Size", sizeKb));
-                    obj.Properties.Add(new PSNoteProperty("SizeBytes", sizeBytes));
-                    obj.Properties.Add(new PSNoteProperty("SizeHuman", sizeHuman));
-                    obj.Properties.Add(new PSNoteProperty("Path", displayPath));
-                    obj.Properties.Add(new PSNoteProperty("Depth", fileDepth));
-                    obj.Properties.Add(new PSNoteProperty("IsTotal", false));
-                    obj.Properties.Add(new PSNoteProperty("BashText", $"{displaySize}\t{displayPath}"));
-                    entries.Add(obj);
+                    entries.Add(NewEntry(sizeBytes, displayPath, fileDepth, false, mode));
                 }
                 fileEnum?.Dispose();
             }
@@ -413,21 +424,7 @@ public sealed class InvokeBashDuCommand : PSCmdlet
 
         if (showTotal)
         {
-            long sizeKb = CeilingDiv(grandTotal, 1024);
-            if (sizeKb == 0 && grandTotal > 0) sizeKb = 1;
-            string sizeHuman = FormatBashSize(grandTotal);
-            string displaySize = humanReadable ? sizeHuman : sizeKb.ToString();
-
-            var obj = new PSObject();
-            obj.TypeNames.Insert(0, "PsBash.DuEntry");
-            obj.Properties.Add(new PSNoteProperty("Size", sizeKb));
-            obj.Properties.Add(new PSNoteProperty("SizeBytes", grandTotal));
-            obj.Properties.Add(new PSNoteProperty("SizeHuman", sizeHuman));
-            obj.Properties.Add(new PSNoteProperty("Path", "total"));
-            obj.Properties.Add(new PSNoteProperty("Depth", 0));
-            obj.Properties.Add(new PSNoteProperty("IsTotal", true));
-            obj.Properties.Add(new PSNoteProperty("BashText", $"{displaySize}\ttotal"));
-            WriteObject(obj);
+            WriteObject(NewEntry(grandTotal, "total", 0, true, mode));
         }
     }
 
