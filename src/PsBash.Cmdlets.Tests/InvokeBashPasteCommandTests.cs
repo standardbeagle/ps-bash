@@ -114,20 +114,17 @@ public class InvokeBashPasteCommandTests : IDisposable, IClassFixture<SharedPwsh
     }
 
     [Fact]
-    public void Paste_MultiCharDelimiter_OraclePreservesAsLiteral()
+    public void Paste_MultiCharDelimiter_CyclesPerColumn()
     {
-        // Oracle behavior: psm1 stored the entire -d value as a single string
-        // and -join'd with it. GNU paste cycles per-char ":,"; the oracle does
-        // not. This test pins the oracle's behavior bit-for-bit. (See class
-        // docstring + cmdlet docstring for rationale.)
+        // GNU paste: -d LIST is a list of single-character delimiters used in turn between
+        // columns. (The pre-migration cmdlet joined with the WHOLE list as one string, printing
+        // "1:,x:,A"; oracle-checked against coreutils 9.4: "1:x,A".)
         string a = WriteFile("a.txt", "1\n2\n");
         string b = WriteFile("b.txt", "x\ny\n");
         string c = WriteFile("c.txt", "A\nB\n");
-        // -d ":,"  → fields separated by literal ":," between each pair.
         var lines = RunLines($"Invoke-BashPaste -d ':,' '{Q(a)}' '{Q(b)}' '{Q(c)}'");
-        Assert.Equal(new[] { "1:,x:,A", "2:,y:,B" }, lines);
+        Assert.Equal(new[] { "1:x,A", "2:y,B" }, lines);
     }
-
     [Fact]
     public void Paste_SerialMode_DashS_OneLinePerFile()
     {
@@ -273,7 +270,7 @@ public class InvokeBashPasteCommandTests : IDisposable, IClassFixture<SharedPwsh
             "Invoke-BashPaste --bogus 2>$null; $LASTEXITCODE").Invoke();
         pwsh.Commands.Clear();
         Assert.Single(result);
-        Assert.Equal(2, (int)result[0].BaseObject);
+        Assert.Equal(1, (int)result[0].BaseObject); // usage error: GNU exit 1 (shared ordered parser)
     }
 
     [Fact]

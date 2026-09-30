@@ -782,7 +782,7 @@ public class PsEmitterTests
         // Batch 1 of the shared ordered parser. Adding a command here also means adding it to
         // CommonParameterCollisionGuardTests.EmitterForceQuoted (Cmdlets.Tests) — that map is
         // how the guard knows the emitter, not a decoy, protects the colliding letters.
-        Assert.Equal(new[] { "cat", "command", "cp", "env", "head", "ln", "mkdir", "mv", "nl", "rm", "rmdir", "tac", "tail", "tee", "time", "touch", "uniq", "wc", "xargs" }, PsEmitter.OrderedArgCommands.OrderBy(x => x).ToArray());
+        Assert.Equal(new[] { "base64", "cat", "comm", "command", "cp", "env", "expand", "fold", "head", "join", "ln", "mkdir", "mv", "nl", "paste", "rm", "rmdir", "split", "strings", "tac", "tail", "tee", "time", "touch", "unexpand", "uniq", "wc", "xargs" }, PsEmitter.OrderedArgCommands.OrderBy(x => x).ToArray());
     }
 
     [Theory]
@@ -823,6 +823,31 @@ public class PsEmitterTests
     [InlineData("head -c 1K f", "Invoke-BashHead '-c' 1K f")]
     [InlineData("head --lines=3 f", "Invoke-BashHead '--lines=3' f")]
     [InlineData("head -- -n", "Invoke-BashHead '--' '-n'")]
+    // batch 3b rows
+    [InlineData("fold -w 5 f", "Invoke-BashFold '-w' 5 f")]
+    [InlineData("fold -sw5 f", "Invoke-BashFold '-sw5' f")]
+    [InlineData("fold -s -w 10 -- -f", "Invoke-BashFold '-s' '-w' 10 '--' '-f'")]
+    [InlineData("expand -t 4,8 f", "Invoke-BashExpand '-t' '4,8' f")]
+    [InlineData("expand -t4,8 f", "Invoke-BashExpand '-t4,8' f")]
+    [InlineData("expand -i --tabs=3 f", "Invoke-BashExpand '-i' '--tabs=3' f")]
+    [InlineData("unexpand -a -t 4 f", "Invoke-BashUnexpand '-a' '-t' 4 f")]
+    [InlineData("unexpand -t 2,/4 f", "Invoke-BashUnexpand '-t' '2,/4' f")]
+    [InlineData("paste -d, a b", "Invoke-BashPaste '-d,' a b")]
+    [InlineData("paste -sd, f", "Invoke-BashPaste '-sd,' f")]
+    [InlineData("paste -d ',;' a b", "Invoke-BashPaste '-d' ',;' a b")]
+    [InlineData("paste -d '\\n' a b", "Invoke-BashPaste '-d' '\\n' a b")]
+    [InlineData("paste - - f", "Invoke-BashPaste '-' '-' f")]
+    [InlineData("join -t, -1 2 a b", "Invoke-BashJoin '-t,' '-1' 2 a b")]
+    [InlineData("join -a1 -v 2 -i a b", "Invoke-BashJoin '-a1' '-v' 2 '-i' a b")]
+    [InlineData("comm -12 a b", "Invoke-BashComm '-12' a b")]
+    [InlineData("comm --output-delimiter=, a b", "Invoke-BashComm '--output-delimiter=,' a b")]
+    [InlineData("split -l 2 -d f p", "Invoke-BashSplit '-l' 2 '-d' f p")]
+    [InlineData("split -b1K -a 3 f", "Invoke-BashSplit '-b1K' '-a' 3 f")]
+    [InlineData("strings -n 6 f", "Invoke-BashStrings '-n' 6 f")]
+    [InlineData("strings -a -e S f", "Invoke-BashStrings '-a' '-e' S f")]
+    [InlineData("base64 -w0 f", "Invoke-BashBase64 '-w0' f")]
+    [InlineData("base64 -d", "Invoke-BashBase64 '-d'")]
+    [InlineData("base64 -di -w 0", "Invoke-BashBase64 '-di' '-w' 0")]    [InlineData("head -v -z f", "Invoke-BashHead '-v' '-z' f")]
     [InlineData("head -v -z f", "Invoke-BashHead '-v' '-z' f")]
     [InlineData("tail -n 5 f", "Invoke-BashTail '-n' 5 f")]
     [InlineData("tail -n +3 f", "Invoke-BashTail '-n' +3 f")]
@@ -4542,7 +4567,7 @@ public class PsEmitterTests
     public void Transpile_PasteAsPipeTarget()
     {
         var result = PsEmitter.Transpile("cat file.txt | paste -d, -s");
-        Assert.Equal("Invoke-BashCat file.txt | Invoke-BashPaste \"-d,\" -s", result);
+        Assert.Equal("Invoke-BashCat file.txt | Invoke-BashPaste '-d,' '-s'", result);
     }
 
     [Fact]

@@ -69,6 +69,15 @@ public class CommonParameterCollisionGuardTests
             ["tac"] = new(CollidingLetters),
             ["nl"] = new(CollidingLetters),
             ["uniq"] = new(CollidingLetters),
+            ["fold"] = new(CollidingLetters),
+            ["expand"] = new(CollidingLetters),
+            ["unexpand"] = new(CollidingLetters),
+            ["paste"] = new(CollidingLetters),
+            ["join"] = new(CollidingLetters),
+            ["comm"] = new(CollidingLetters),
+            ["split"] = new(CollidingLetters),
+            ["strings"] = new(CollidingLetters),
+            ["base64"] = new(CollidingLetters),
         };
 
     [Fact]

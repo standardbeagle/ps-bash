@@ -1,4 +1,5 @@
 using System.Management.Automation;
+using PsBash.Cmdlets.Args;
 using System.Text;
 
 namespace PsBash.Cmdlets;
@@ -62,19 +63,75 @@ public sealed class InvokeBashExpandCommand : PSCmdlet
     [Parameter(ValueFromPipeline = true)]
     public PSObject? InputObject { get; set; }
 
-    // Valid GNU expand flags recognized but not implemented by ps-bash.
-    // (-i/--first-only and --tabs in all forms are now implemented.)
-    private static readonly HashSet<string> ExpandValidButUnsupported =
-        new(StringComparer.Ordinal);
+    private const string OptInitial = "initial", OptTabs = "tabs";
+
+    /// <summary>
+    /// expand's option surface (GNU coreutils 9.4: -i/--initial, -t/--tabs=N|LIST, and the obsolete
+    /// <c>-NUM</c> tab size). <c>--first-only</c> is a ps-bash spelling of <c>--initial</c> (older
+    /// releases accepted it; kept because tests and scripts use it). GNU expand has no other options.
+    /// </summary>
+    private static readonly OptSpecSet ExpandSpec = new(
+        new[]
+        {
+            new OptSpec(OptInitial, 'i', "initial"),
+            new OptSpec(OptInitial, '\0', "first-only"),
+            new OptSpec(OptTabs, 't', "tabs", OptKind.Value),
+        },
+        allowAbbrev: true,
+        numericShorthandId: OptTabs,
+        gnuInfoOptions: true);
+
+    /// <summary>Pure argv scan (unit-test seam).</summary>
+    internal static ParsedArgs ScanArgs(string[] args) => ArgParser.Parse(args, ExpandSpec);
+
+    internal sealed class ExpandArgs
+    {
+        public ParsedArgs Parsed = null!;
+        public TabStopList Tabs = TabStopList.Default;
+        public bool InitialOnly;
+        public List<string> Operands = new();
+        public string? Error;
+
+        public bool Declined =>
+            Parsed.HasError || Error is not null
+            || Parsed.Has(OptSpecSet.HelpId) || Parsed.Has(OptSpecSet.VersionId);
+    }
+
+    /// <summary>
+    /// Scan + resolve the tab stops. Every <c>-t</c> is concatenated into one list (GNU). The old
+    /// scan silently used 8 for anything unparsable (<c>-t x</c>, <c>-t 0</c>, <c>-t 4,8</c> all
+    /// expanded at 8) where GNU exits 1 ("tab size cannot be 0", "tab sizes must be ascending")
+    /// or honours the list.
+    /// </summary>
+    internal static ExpandArgs Plan(string[] args)
+    {
+        var e = new ExpandArgs { Parsed = ScanArgs(args) };
+        e.Operands = e.Parsed.Operands();
+        if (e.Parsed.HasError) return e;
+
+        e.InitialOnly = e.Parsed.Has(OptInitial);
+        var values = new List<string>();
+        foreach (var t in e.Parsed.All(OptTabs)) values.Add(t.Value!);
+        if (values.Count > 0)
+        {
+            if (!TabStopList.TryParse(values, out var tabs, out var err))
+            {
+                e.Error = $"expand: {err}";
+                return e;
+            }
+            e.Tabs = tabs;
+        }
+        return e;
+    }
 
     // Parsed-once state.
     private bool _parsed;
-    private int _tabWidth = 8;
+    private TabStopList _tabs = TabStopList.Default;
     private bool _initialOnly;
     private List<string> _operands = new();
-    // True when stdin must NOT be streamed: file operands present, or a
-    // --help / --version request (both short-circuit the scan in the oracle —
-    // important here because the scan can throw on a malformed -t value).
+    private ExpandArgs? _plan;
+    // True when stdin must NOT be streamed: file operands present, a scan/value error, or a
+    // --help / --version request (all short-circuit before the scan can fail).
     private bool _suppressStdin;
 
     private void ParseOnce()
@@ -84,60 +141,19 @@ public sealed class InvokeBashExpandCommand : PSCmdlet
 
         var args = Arguments ?? Array.Empty<string>();
 
-        // --help / --version short-circuit before flag scanning (oracle order),
-        // so a malformed -t value never throws ahead of a help request.
         if (Array.IndexOf(args, "--version") >= 0 || Array.IndexOf(args, "--help") >= 0)
         {
             _suppressStdin = true;
             return;
         }
 
-        int i = 0;
-        while (i < args.Length)
-        {
-            var a = args[i];
-            // -tN (joined, digits only)
-            if (a.Length > 2 && a[0] == '-' && a[1] == 't' && IsAllDigits(a, 2))
-            {
-                _tabWidth = BashRuntime.ParseCountClamped(a.AsSpan(2), fallback: 8);
-                i++;
-                continue;
-            }
-            // -t N (separate)
-            if (a == "-t" && (i + 1) < args.Length)
-            {
-                _tabWidth = BashRuntime.ParseCountClamped(args[i + 1], fallback: 8);
-                i += 2;
-                continue;
-            }
-            // --tabs=N
-            if (a.StartsWith("--tabs=", StringComparison.Ordinal))
-            {
-                _tabWidth = BashRuntime.ParseCountClamped(a.AsSpan("--tabs=".Length), fallback: 8);
-                i++;
-                continue;
-            }
-            // --tabs N (separate form)
-            if (a == "--tabs" && (i + 1) < args.Length)
-            {
-                _tabWidth = BashRuntime.ParseCountClamped(args[i + 1], fallback: 8);
-                i += 2;
-                continue;
-            }
-            // -i / --first-only: convert only the leading (pre-text) tabs.
-            if (a == "-i" || a == "--first-only")
-            {
-                _initialOnly = true;
-                i++;
-                continue;
-            }
-            _operands.Add(a);
-            i++;
-        }
-
-        _suppressStdin = _operands.Count > 0;
+        var plan = Plan(args);
+        _plan = plan;
+        _tabs = plan.Tabs;
+        _initialOnly = plan.InitialOnly;
+        _operands = plan.Operands;
+        _suppressStdin = plan.Declined || _operands.Count > 0;
     }
-
     protected override void ProcessRecord()
     {
         if (InputObject == null) return;
@@ -153,12 +169,12 @@ public sealed class InvokeBashExpandCommand : PSCmdlet
         {
             foreach (var subLine in trimmed.Split('\n'))
             {
-                WriteObject(BashRuntime.NewBashObject(ExpandTabs(subLine, _tabWidth, _initialOnly)));
+                WriteObject(BashRuntime.NewBashObject(ExpandTabs(subLine, _tabs, _initialOnly)));
             }
         }
         else
         {
-            WriteObject(BashRuntime.NewBashObject(ExpandTabs(trimmed, _tabWidth, _initialOnly)));
+            WriteObject(BashRuntime.NewBashObject(ExpandTabs(trimmed, _tabs, _initialOnly)));
         }
     }
 
@@ -180,8 +196,17 @@ public sealed class InvokeBashExpandCommand : PSCmdlet
             return;
         }
 
-        if (FileSystemHelpers.TryWriteOperandOptionError(
-                this, "expand", _operands, ExpandValidButUnsupported)) return;
+        if (_plan is { } plan)
+        {
+            if (FileSystemHelpers.TryWriteParseError(this, "expand", plan.Parsed)) return;
+            if (FileSystemHelpers.TryHandleInfoOptions(this, "expand", plan.Parsed)) return;
+            if (plan.Error is { } planError)
+            {
+                FileSystemHelpers.WriteBashError(this, planError);
+                FileSystemHelpers.SetLastExitCode(this, 1);
+                return;
+            }
+        }
 
         // Pipeline mode (no operands) was already streamed in ProcessRecord.
         if (_operands.Count == 0) return;
@@ -195,7 +220,7 @@ public sealed class InvokeBashExpandCommand : PSCmdlet
                 {
                     foreach (var line in BashFileSystem.ReadLines(filePath))
                     {
-                        WriteObject(BashRuntime.NewBashObject(ExpandTabs(line, _tabWidth, _initialOnly)));
+                        WriteObject(BashRuntime.NewBashObject(ExpandTabs(line, _tabs, _initialOnly)));
                     }
                 }
                 catch (Exception ex)
@@ -212,7 +237,7 @@ public sealed class InvokeBashExpandCommand : PSCmdlet
         }
     }
 
-    private static string ExpandTabs(string line, int tabWidth, bool initialOnly = false)
+    internal static string ExpandTabs(string line, TabStopList tabs, bool initialOnly = false)
     {
         var sb = new StringBuilder(line.Length);
         int col = 0;
@@ -229,7 +254,7 @@ public sealed class InvokeBashExpandCommand : PSCmdlet
                     col++;
                     continue;
                 }
-                int spaces = tabWidth - (col % tabWidth);
+                int spaces = tabs.SpacesAt(col);
                 sb.Append(' ', spaces);
                 col += spaces;
             }
@@ -241,15 +266,6 @@ public sealed class InvokeBashExpandCommand : PSCmdlet
             }
         }
         return sb.ToString();
-    }
-
-    private static bool IsAllDigits(string s, int startIndex)
-    {
-        for (int k = startIndex; k < s.Length; k++)
-        {
-            if (s[k] < '0' || s[k] > '9') return false;
-        }
-        return true;
     }
 
     private void WriteReadError(string path, Exception ex)
