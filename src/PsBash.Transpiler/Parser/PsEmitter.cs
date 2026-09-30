@@ -900,7 +900,7 @@ public static class PsEmitter
         }
         else if (inputRedirect is not null)
         {
-            var inTarget = TransformRedirectTarget(EmitWord(inputRedirect.Target));
+            var inTarget = TransformRedirectTarget(EmitArgWord(inputRedirect.Target));
             // /dev/null maps to $null; `Get-Content $null` errors, and empty stdin
             // is the same as no piped input, so skip the pipe in that case.
             if (inTarget != "$null")
@@ -2099,7 +2099,7 @@ public static class PsEmitter
 
         var remaining = cmd.Redirects.Remove(inputRedirect);
         var innerCmd = new Command.Simple(cmd.Words, cmd.EnvPairs, remaining);
-        var target = TransformRedirectTarget(EmitWord(inputRedirect.Target));
+        var target = TransformRedirectTarget(EmitArgWord(inputRedirect.Target));
 
         if (target == "$null")
         {
@@ -2520,7 +2520,8 @@ public static class PsEmitter
             sb.Append(EmitCommandWithSplatArgs(
                 leading + commandWordText,
                 commandArgs,
-                argIndex => EmitWord(commandArgs[argIndex])));
+                argIndex => QuoteCommaLiteralWord(
+                    commandArgs[argIndex], EmitWord(commandArgs[argIndex]))));
         }
         else
         {
@@ -2529,7 +2530,11 @@ public static class PsEmitter
                 if (i > 0)
                 {
                     sb.Append(' ');
-                    sb.Append(QuoteGeneralArgIfNeeded(EmitWord(cmd.Words[i])));
+                    var emittedArg = EmitWord(cmd.Words[i]);
+                    var quotedArg = QuoteGeneralArgIfNeeded(emittedArg);
+                    sb.Append(ReferenceEquals(quotedArg, emittedArg)
+                        ? QuoteCommaLiteralWord(cmd.Words[i], emittedArg)
+                        : quotedArg);
                     continue;
                 }
                 sb.Append(leading);
@@ -2578,7 +2583,7 @@ public static class PsEmitter
 
     private static string EmitRedirect(Redirect r)
     {
-        var target = TransformRedirectTarget(EmitWord(r.Target));
+        var target = TransformRedirectTarget(EmitArgWord(r.Target));
 
         return r.Op switch
         {
@@ -4885,7 +4890,7 @@ public static class PsEmitter
         bool stderrMerged = false;
         foreach (var redirect in redirects)
         {
-            var target = TransformRedirectTarget(EmitWord(redirect.Target));
+            var target = TransformRedirectTarget(EmitArgWord(redirect.Target));
             bool isStdoutFile = redirect.Fd == 1
                 && (redirect.Op == ">" || redirect.Op == ">>")
                 && target != "$null";
@@ -4913,7 +4918,7 @@ public static class PsEmitter
 
         if (fileRedirect is not null)
         {
-            var target = TransformRedirectTarget(EmitWord(fileRedirect.Target));
+            var target = TransformRedirectTarget(EmitArgWord(fileRedirect.Target));
             sb.Append(" | Invoke-BashRedirect -Path ");
             sb.Append(target);
             if (fileRedirect.Op == ">>")
@@ -4973,7 +4978,7 @@ public static class PsEmitter
         }
         else if (inputRedirect is not null)
         {
-            var inTarget = TransformRedirectTarget(EmitWord(inputRedirect.Target));
+            var inTarget = TransformRedirectTarget(EmitArgWord(inputRedirect.Target));
             // /dev/null maps to $null; `Get-Content $null` errors, and empty stdin is the
             // same as no piped input, so skip the pipe in that case (matches EmitSubshell).
             if (inTarget != "$null")
@@ -5918,7 +5923,8 @@ public static class PsEmitter
                 }
                 return $"\"{emitted}\"";
             }
-            return emitted;
+            // A bare `,` literal (sed -n 725,750p) is a PowerShell array separator.
+            return QuoteCommaLiteralWord(args[i], emitted);
         }
 
         // RC-7: when any operand is a pure unquoted ordinary variable, hoist it
@@ -5995,6 +6001,59 @@ public static class PsEmitter
         if (emitted.IndexOfAny(['"', '\'', '$', '`']) >= 0)
             return emitted;
         return emitted.IndexOfAny([',', '{', '}']) >= 0 ? $"\"{emitted}\"" : emitted;
+    }
+
+    /// <summary>
+    /// Quote a command ARGUMENT word that carries a bare, unquoted <c>,</c> literal.
+    /// In PowerShell argument mode <c>a,b</c> is an ARRAY (<c>sed -n 725,750p f</c>
+    /// reached <c>Invoke-BashSed</c> as <c>@(725,'750p')</c> — "Cannot convert
+    /// 'System.Object[]' to the type 'System.String'"; a native command got the
+    /// array flattened wrongly). Bash treats the comma as an ordinary character
+    /// (brace expansion <c>{a,b}</c> is a distinct <see cref="WordPart.BracedTuple"/>
+    /// and never reaches here).
+    /// <para>
+    /// A pure-literal word becomes ONE single-quoted string (path transforms
+    /// applied first). A word mixing the literal with expansions/quotes
+    /// (<c>$x,y</c>, <c>a,"b"</c>) is flattened to one double-quoted string.
+    /// Words with a glob / process-sub / brace part are left alone (quoting would
+    /// disable globbing). Returns <paramref name="emitted"/> unchanged when no
+    /// quoting is needed or it is already a single quoted token.
+    /// </para>
+    /// </summary>
+    private static string EmitArgWord(CompoundWord word)
+        => QuoteCommaLiteralWord(word, EmitWord(word));
+
+    private static string QuoteCommaLiteralWord(CompoundWord word, string emitted)
+    {
+        if (emitted.Length == 0 || emitted[0] is '"' or '\'' or '(' or '@')
+            return emitted;
+
+        bool hasCommaLiteral = false;
+        foreach (var part in word.Parts)
+        {
+            switch (part)
+            {
+                case WordPart.Literal lit:
+                    if (lit.Value.Contains(','))
+                        hasCommaLiteral = true;
+                    break;
+                case WordPart.GlobPart or WordPart.ProcessSub
+                    or WordPart.BracedTuple or WordPart.BracedRange:
+                    return emitted;
+            }
+        }
+        if (!hasCommaLiteral)
+            return emitted;
+
+        if (word.Parts.All(p => p is WordPart.Literal or WordPart.EscapedLiteral)
+            && TryGetPureLiteralText(word.Parts, out var text))
+        {
+            var transformed = TransformWordPath(text);
+            if (transformed.StartsWith("$env:TEMP\\", StringComparison.Ordinal))
+                return "\"$env:TEMP\\" + PsBuild.EscapeForDoubleQuote(transformed["$env:TEMP\\".Length..]) + "\"";
+            return PsBuild.SingleQuote(transformed);
+        }
+        return TransformWordPath(FlattenPartsToDoubleQuotedString(word.Parts));
     }
 
     private static bool NeedsPassthroughQuoting(string arg)

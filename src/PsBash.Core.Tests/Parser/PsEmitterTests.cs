@@ -5227,6 +5227,67 @@ public class PsEmitterTests
         Assert.Equal("cmd \"-a,b\"", PsEmitter.Transpile("cmd \"-a,b\""));
     }
 
+    // ---- bare `,` literal in an ARGUMENT word (PowerShell array separator) ----
+
+    [Theory]
+    [InlineData("sed -n 725,750p f", "Invoke-BashSed -n '725,750p' f")]
+    [InlineData("cut -f1,3 f", "Invoke-BashCut -f1,3 f")]   // placeholder, asserted below
+    [InlineData("echo a,b", "Invoke-BashEcho 'a,b'")]
+    [InlineData("printf '%s\\n' x,y", "Invoke-BashPrintf '%s\\n' 'x,y'")]
+    [InlineData("git log --format=%h,%s", "git log \"--format=%h,%s\"")]
+    [InlineData("cmd 1,2 3,4", "cmd '1,2' '3,4'")]
+    public void Transpile_UnquotedCommaLiteralArg_IsQuotedNotArray(string bash, string expected)
+    {
+        var result = PsEmitter.Transpile(bash);
+        if (bash.StartsWith("cut"))
+        {
+            // `-f1,3` is flag-shaped: the historical double-quote wrap is kept.
+            Assert.Equal("Invoke-BashCut \"-f1,3\" f", result);
+            return;
+        }
+        Assert.Equal(expected, result);
+    }
+
+    [Fact]
+    public void Transpile_CommaWordMixedWithVariable_FlattensToOneString()
+    {
+        var result = PsEmitter.Transpile("cmd $x,y a,\"b\"");
+        Assert.DoesNotContain(" $env:x,y", result);
+        Assert.Contains("\"$env:x,y\"", result);
+        Assert.Contains("\"a,b\"", result);
+    }
+
+    [Fact]
+    public void Transpile_CommaLiteralInSplatPath_IsQuoted()
+    {
+        var result = PsEmitter.Transpile("cmd $x 1,2");
+        Assert.Contains("'1,2'", result);
+    }
+
+    [Fact]
+    public void Transpile_BraceExpansionAndQuotedComma_Unchanged()
+    {
+        Assert.Equal("Invoke-BashEcho @('a','b')", PsEmitter.Transpile("echo {a,b}"));
+        Assert.Equal("Invoke-BashEcho \"a,b\"", PsEmitter.Transpile("echo \"a,b\""));
+        Assert.Equal("Invoke-BashEcho 'a,b'", PsEmitter.Transpile("echo 'a,b'"));
+    }
+
+    [Theory]
+    [InlineData("echo hi > a,b", "Invoke-BashEcho hi | Invoke-BashRedirect -Path 'a,b'")]
+    [InlineData("echo /tmp/a,b", "Invoke-BashEcho \"$env:TEMP\\a,b\"")]
+    [InlineData("echo a\\,b", "Invoke-BashEcho a`,b")]
+    [InlineData("x=a,b", "$env:x = \"a,b\"")]
+    [InlineData("arr=(a,b c)", "$arr = @(\"a,b\",\"c\")")]
+    [InlineData("for i in a,b c; do :; done", null)]
+    public void Transpile_CommaInOtherContexts_StaysOneWord(string bash, string? expected)
+    {
+        var result = PsEmitter.Transpile(bash);
+        if (expected is not null)
+            Assert.Equal(expected, result);
+        else
+            Assert.Contains("'a,b','c'", result);
+    }
+
     // ---- positional-parameter slices ${@:off[:len]} ------------------------
 
     [Theory]

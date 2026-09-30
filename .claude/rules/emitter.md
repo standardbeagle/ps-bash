@@ -24,6 +24,7 @@ NEVER in the emitter:
 
 ## QUOTING (NeedsPassthroughQuoting)
 Quote a flag arg containing `,` (PS array sep) or `{`/`}` (PS scriptblock): emit `"-F,"`, `"-I{}"`.
+ANY arg word with a bare `,` literal (`sed -n 725,750p`) is a PS array → `QuoteCommaLiteralWord`/`EmitArgWord` single-quote it (mixed with `$x` → one `"…"`); glob/brace/process-sub words exempt.
 
 ## PS-TEXT VIA PsBuild (one source — `Parser/PsBuild.cs`)
 Recurring PowerShell fragments drift when hand-built (the negated-pipeline condition once
