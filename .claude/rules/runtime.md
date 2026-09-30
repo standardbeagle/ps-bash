@@ -12,11 +12,14 @@ paths:
 - `New-BashObject -BashText` → typed single-line (LsEntry/CatLine/PsEntry). Does NOT split.
 - `Get-BashText -InputObject` → text from any pipeline object. `Set-BashDisplayProperty` → ToString() for Out-String.
 
-## PIPELINE PRESERVATION
-Consumers (grep/sed/tail…) PASS ORIGINAL objects through — keep typed props.
-- single-line (ls/cat/find): pass directly.
-- multi-line edge: defensive split — split THAT item into `New-BashObject` lines; pass single-line items unchanged.
-- NEVER flatten all input into `$allLines` — destroys typed objects.
+## PIPELINE RECORD KINDS (filter vs transformer)
+文言：濾者透傳原物件，變者出新文本；末行換行以源為準。
+Producers (ls/find/ps/stat/du/date/ping…) emit typed objects. Consumers split by what they do to a line:
+- FILTER — output line IS an input line (grep plain, head/tail -n, sort, uniq plain, tac, shuf, cat no-flags, tee, less/more, rg plain): PASS THE ORIGINAL object through. `ls | grep .txt` stays `PsBash.LsEntry`.
+- TRANSFORMER — text changes (sed, tr, cut, awk, rev, nl, grep -o/-n/-H, uniq -c, cat -n/-E/-T, head/tail -c): emit FRESH text (`BashRuntime.TextRecord`), never the upstream object.
+- Multi-line record (`printf 'b\na'` = one object): split it into text lines; the LAST piece inherits the missing final newline.
+- Terminator: `BashRuntime.IsUnterminated(item)` (NoTrailingNewline AND text not ending `\n`). byte-copy tools (head/tail/cat/tee/rev/tr/sed/more/less) keep it; always-terminating tools (grep/sort/uniq/shuf/cut/nl/awk) pass originals through `BashRuntime.PassTerminated` so a stale flag cannot glue lines. tac glues (`printf 'b\na'|tac` = `ab\n`) — reversed originals give that for free.
+- NEVER flatten all input into `$allLines` — destroys typed objects of filters.
 
 ## ARG PARSING
 Top of every `Invoke-Bash*`: `$Arguments=[string[]]$args; $pipelineInput=@($input)`.

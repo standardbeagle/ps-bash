@@ -187,6 +187,9 @@ public sealed class InvokeBashShufCommand : PSCmdlet
         }
 
         var items = new List<string>();
+        // Pipeline mode only: the upstream record behind each item (null = split piece or
+        // non-pipeline source). shuf is a FILTER — each output line is one of its input lines.
+        var origins = new List<object?>();
 
         if (echoMode)
         {
@@ -280,9 +283,25 @@ public sealed class InvokeBashShufCommand : PSCmdlet
         {
             foreach (var obj in _pipeline)
             {
-                items.Add(BashRuntime.GetBashText(obj));
+                string text = BashRuntime.GetBashText(obj);
+                string trimmed = text.TrimEnd('\n');
+                if (trimmed.Contains('\n'))
+                {
+                    // A multi-line record (printf 'a\nb') is several lines to shuffle.
+                    foreach (var piece in trimmed.Split('\n'))
+                    {
+                        items.Add(piece);
+                        origins.Add(null);
+                    }
+                }
+                else
+                {
+                    items.Add(text);
+                    origins.Add(obj);
+                }
             }
         }
+        while (origins.Count < items.Count) origins.Add(null);
 
         // Shuffle: Fisher-Yates with System.Random (no seed, matching the
         // oracle's `[System.Random]::new()`).
@@ -291,6 +310,7 @@ public sealed class InvokeBashShufCommand : PSCmdlet
         {
             int swap = rng.Next(k + 1);
             (items[k], items[swap]) = (items[swap], items[k]);
+            (origins[k], origins[swap]) = (origins[swap], origins[k]);
         }
 
         int emitCount = count.HasValue && count.Value < items.Count
@@ -299,7 +319,10 @@ public sealed class InvokeBashShufCommand : PSCmdlet
 
         for (int k = 0; k < emitCount; k++)
         {
-            WriteObject(BashRuntime.NewBashObject(items[k]));
+            // shuf terminates every output line, so a stale missing-newline flag is stripped.
+            WriteObject(origins[k] is { } origin
+                ? BashRuntime.PassTerminated(origin)
+                : BashRuntime.NewBashObject(items[k]));
         }
     }
 }

@@ -802,13 +802,13 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
             if (outputMatchOnly && matchIndices.Contains(li))
             {
                 foreach (var mv in AllMatchValues(regexes, lineText))
-                    WriteObject(BuildGrepMatch("<stdin>", lineNum, lineText, prefix + mv));
+                    WriteObject(BashRuntime.NewBashObject(prefix + mv));
                 continue;
             }
 
             // Context lines and matches alike emit a fresh GrepMatch (GNU
             // prints context as plain text with no object identity).
-            WriteObject(BuildGrepMatch("<stdin>", lineNum, lineText, prefix + lineText));
+            WriteObject(BashRuntime.NewBashObject(prefix + lineText));
         }
     }
 
@@ -873,7 +873,7 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
             // line (bash semantics), not just the first. The prefix (filename /
             // line number) is repeated on each match line, matching GNU grep.
             foreach (var mv in AllMatchValues(regexes, lineText))
-                WriteObject(BuildGrepMatch("<stdin>", lineNum, lineText, prefix + mv));
+                WriteObject(BashRuntime.NewBashObject(prefix + mv));
             return;
         }
 
@@ -881,18 +881,19 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
 
         if (prefix.Length > 0)
         {
-            WriteObject(BuildGrepMatch("<stdin>", lineNum, lineText, prefix + outputText));
+            WriteObject(BashRuntime.NewBashObject(prefix + outputText));
         }
         else if (asNewObject)
         {
             // Multi-line split: emit a fresh GrepMatch (oracle: New-BashObject).
-            WriteObject(BuildGrepMatch("<stdin>", lineNum, lineText, outputText));
+            WriteObject(BashRuntime.NewBashObject(outputText));
         }
         else
         {
-            // Single-line pipeline item: pass the original object through
-            // (oracle parity — preserves typed properties).
-            WriteObject(originalItem);
+            // Plain grep is a FILTER: the selected line IS the input record, so the ORIGINAL
+            // object passes through (ls | grep .txt keeps PsBash.LsEntry). grep always
+            // terminates its output line, so a stale missing-newline flag is stripped.
+            WriteObject(BashRuntime.PassTerminated(originalItem));
         }
     }
 

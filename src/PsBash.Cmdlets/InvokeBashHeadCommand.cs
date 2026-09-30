@@ -214,10 +214,14 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
             string trimmed = text.TrimEnd('\n');
             if (trimmed.Contains('\n'))
             {
-                foreach (var subLine in trimmed.Split('\n'))
+                // A multi-line record (printf 'b\na') is split into text lines; the last
+                // piece keeps the source's missing newline (head copies bytes).
+                bool unterminated = BashRuntime.IsUnterminated(InputObject);
+                var pieces = trimmed.Split('\n');
+                for (int p = 0; p < pieces.Length; p++)
                 {
                     if (_emitted >= _lineCount) break;
-                    WriteObject(subLine);
+                    WriteObject(BashRuntime.TextRecord(pieces[p], unterminated && p == pieces.Length - 1));
                     _emitted++;
                 }
             }
@@ -320,18 +324,14 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
         {
             if (byteCount != null)
             {
-                var sb = new StringBuilder();
-                for (int k = 0; k < _pipeline.Count; k++)
-                {
-                    if (k > 0) sb.Append('\n');
-                    sb.Append(BashRuntime.GetBashText(_pipeline[k]));
-                }
-                byte[] bytes = Encoding.UTF8.GetBytes(sb.ToString());
+                byte[] bytes = Encoding.UTF8.GetBytes(BashRuntime.RecordStreamText(_pipeline));
                 // GNU head: -c N takes the first N bytes; -c -K takes all but the last K.
                 int take = byteCount.Value >= 0
                     ? Math.Min(byteCount.Value, bytes.Length)
                     : Math.Max(0, bytes.Length + byteCount.Value);
-                WriteObject(Encoding.UTF8.GetString(bytes, 0, take));
+                // Byte slice: a TRANSFORMER — fresh text, exact bytes (no record boundary added).
+                foreach (var rec in BashRuntime.ByteSliceRecords(Encoding.UTF8.GetString(bytes, 0, take)))
+                    WriteObject(rec);
                 return;
             }
 
@@ -354,17 +354,18 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
                 var lines = ItemLines(BashRuntime.GetBashText(item));
                 if (lines.Length <= 1)
                 {
-                    // Single-line item: pass the ORIGINAL object through so typed
-                    // properties (LsEntry.Name, CatLine.Content, …) survive.
+                    // head is a FILTER: a single-line item is one of its own output lines,
+                    // so pass the ORIGINAL object through (LsEntry, CatLine, …).
                     WriteObject(item);
                     emitted++;
                 }
                 else
                 {
-                    foreach (var subLine in lines)
+                    bool unterminated = BashRuntime.IsUnterminated(item);
+                    for (int p = 0; p < lines.Length; p++)
                     {
                         if (emitted >= limit) break;
-                        WriteObject(subLine);
+                        WriteObject(BashRuntime.TextRecord(lines[p], unterminated && p == lines.Length - 1));
                         emitted++;
                     }
                 }
@@ -385,7 +386,8 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
                         // whole file, so read it fully and drop the trailing K.
                         byte[] all = BashFileSystem.ReadAllBytes(filePath);
                         int take = Math.Max(0, all.Length + byteCount.Value);
-                        WriteObject(Encoding.UTF8.GetString(all, 0, take));
+                        foreach (var rec in BashRuntime.ByteSliceRecords(Encoding.UTF8.GetString(all, 0, take)))
+                            WriteObject(rec);
                         continue;
                     }
                     // Stream at most N bytes — never read the whole file just to
@@ -402,7 +404,9 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
                         ms.Write(chunk, 0, n);
                         remaining -= n;
                     }
-                    WriteObject(Encoding.UTF8.GetString(ms.GetBuffer(), 0, (int)ms.Length));
+                    foreach (var rec in BashRuntime.ByteSliceRecords(
+                                 Encoding.UTF8.GetString(ms.GetBuffer(), 0, (int)ms.Length)))
+                        WriteObject(rec);
                 }
                 catch (Exception ex)
                 {

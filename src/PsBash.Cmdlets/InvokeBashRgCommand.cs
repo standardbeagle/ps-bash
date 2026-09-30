@@ -488,8 +488,9 @@ public sealed class InvokeBashRgCommand : PSCmdlet
                         }
                         else
                         {
-                            // Pass original typed object through.
-                            WriteObject(item);
+                            // Plain rg is a FILTER: pass the original object through (rg
+                            // terminates every output line, so strip a stale missing-newline flag).
+                            WriteObject(BashRuntime.PassTerminated(item));
                         }
                     }
                 }

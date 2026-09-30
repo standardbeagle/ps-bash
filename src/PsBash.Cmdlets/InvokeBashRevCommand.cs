@@ -58,16 +58,13 @@ public sealed class InvokeBashRevCommand : PSCmdlet
 
         string text = BashRuntime.GetBashText(InputObject);
         string trimmed = text.TrimEnd('\n');
-        if (trimmed.Contains('\n'))
+        // rev is a TRANSFORMER: fresh text, and (GNU) it copies a missing final newline.
+        bool unterminated = BashRuntime.IsUnterminated(InputObject);
+        var pieces = trimmed.Split('\n');
+        for (int p = 0; p < pieces.Length; p++)
         {
-            foreach (var subLine in trimmed.Split('\n'))
-            {
-                WriteObject(BashRuntime.NewBashObject(ReverseString(subLine)));
-            }
-        }
-        else
-        {
-            WriteObject(BashRuntime.NewBashObject(ReverseString(trimmed)));
+            WriteObject(BashRuntime.TextRecord(
+                ReverseString(pieces[p]), unterminated && p == pieces.Length - 1));
         }
     }
 

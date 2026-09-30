@@ -697,11 +697,12 @@ public sealed class InvokeBashSortCommand : PSCmdlet
 
         foreach (var entry in sorted)
         {
-            // Preserve original objects when they're PSObjects; bare strings get
-            // wrapped into the default PsBash.TextOutput shape.
+            // sort is a FILTER: original objects pass through. sort terminates every line, so
+            // PassTerminated strips a stale missing-newline flag (the flagged record may sort
+            // anywhere). Bare strings get wrapped into the default PsBash.TextOutput shape.
             if (entry.Item is PSObject ps)
             {
-                WriteObject(ps);
+                WriteObject(BashRuntime.PassTerminated(ps));
             }
             else if (entry.Item is string s)
             {

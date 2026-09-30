@@ -62,10 +62,21 @@ public sealed class InvokeBashMoreCommand : PSCmdlet
 
         if (_pipelineItems.Count > 0)
         {
+            // more is a FILTER: a single-line record is one of its own output lines, so the
+            // upstream object passes through; a multi-line record is split into text lines
+            // (the last keeps a missing final newline, as GNU more copies bytes).
             foreach (var item in _pipelineItems)
             {
-                var text = BashRuntime.GetBashText(item);
-                AppendText(lines, text);
+                var pieces = new List<string>();
+                AppendText(pieces, BashRuntime.GetBashText(item));
+                if (pieces.Count <= 1)
+                {
+                    WriteObject(item);
+                    continue;
+                }
+                bool unterminated = BashRuntime.IsUnterminated(item);
+                for (int p = 0; p < pieces.Count; p++)
+                    WriteObject(BashRuntime.TextRecord(pieces[p], unterminated && p == pieces.Count - 1));
             }
         }
 
