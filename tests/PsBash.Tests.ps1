@@ -2511,7 +2511,7 @@ Describe 'Invoke-BashSed — Range Delete' {
 }
 
 Describe 'Invoke-BashSed — Pipeline Bridge' {
-    It 'ls | sed transforms BashText but preserves object type' {
+    It 'ls | sed transforms the text of each listed entry' {
         $testDir = Join-Path ([System.IO.Path]::GetTempPath()) "psbash-sed-ls-$([guid]::NewGuid().ToString('N').Substring(0,8))"
         New-Item -ItemType Directory -Path $testDir -Force | Out-Null
         try {
@@ -2522,13 +2522,14 @@ Describe 'Invoke-BashSed — Pipeline Bridge' {
                 $_.BashText -match '\.bak'
             }
             $txtEntry | Should -Not -BeNullOrEmpty
-            $txtEntry.PSObject.TypeNames[0] | Should -Be 'PsBash.LsEntry'
+            # sed emits text (bash pipes bytes): the rewritten line is plain text, not an LsEntry.
+            (Get-BashText -InputObject $txtEntry) | Should -Match '\.bak'
         } finally {
             Remove-Item -Recurse -Force $testDir
         }
     }
 
-    It 'pipeline sed preserves original object properties' {
+    It 'pipeline sed rewrites BashText of an object input as plain text' {
         $obj = [PSCustomObject]@{
             PSTypeName = 'PsBash.TestObj'
             BashText   = "hello world`n"
@@ -2537,9 +2538,7 @@ Describe 'Invoke-BashSed — Pipeline Bridge' {
         $obj | Add-Member -MemberType ScriptMethod -Name 'ToString' -Value { $this.BashText } -Force
         $results = @($obj | Invoke-BashSed 's/world/earth/')
         $results.Count | Should -Be 1
-        $results[0].Name | Should -Be 'original'
-        ($results[0].BashText -replace "`n$", '') | Should -Be 'hello earth'
-        $results[0].PSObject.TypeNames[0] | Should -Be 'PsBash.TestObj'
+        (Get-BashText -InputObject $results[0]).TrimEnd("`n") | Should -Be 'hello earth'
     }
 
     It 'pipeline sed /pattern/d filters out matching objects' {
@@ -3791,9 +3790,10 @@ Describe 'Invoke-BashXargs — Integration with PsBash Commands' {
 }
 
 Describe 'Invoke-BashXargs — Error Handling' {
-    It 'errors when no command specified' {
+    It 'defaults to echo when no command specified' {
+        # GNU xargs with no command runs echo (echo a | xargs prints a).
         $results = @(@('a') | Invoke-BashXargs 2>&1)
-        $results[0] | Should -BeOfType [System.Management.Automation.ErrorRecord]
+        (Get-BashText -InputObject $results[0]).Trim() | Should -Be 'a'
     }
 }
 
@@ -3827,7 +3827,7 @@ Describe 'Invoke-BashXargs — Null-Delimited Input (-0)' {
         try {
             Set-Content -Path (Join-Path $testDir 'file with spaces.txt') -Value 'content' -NoNewline
             Set-Content -Path (Join-Path $testDir 'normal.txt') -Value 'other' -NoNewline
-            $results = @(Invoke-BashFind $testDir -name '*.txt' -print0 | Invoke-BashXargs -0 Invoke-BashBasename)
+            $results = @(Invoke-BashFind $testDir -name '*.txt' -print0 | Invoke-BashXargs -0 Invoke-BashBasename '-a')
             $results.Count | Should -Be 2
             $names = @($results | ForEach-Object { (Get-BashText -InputObject $_).Trim() })
             $names | Should -Contain 'file with spaces.txt'
@@ -4786,7 +4786,8 @@ Describe 'Invoke-BashBasename — Suffix Removal' {
 
 Describe 'Invoke-BashBasename — Multiple Paths' {
     It 'handles multiple path arguments' {
-        $results = @(Invoke-BashBasename '/a/one.txt' '/b/two.txt')
+        # Without -a, GNU basename treats a second operand as SUFFIX (a third is an error).
+        $results = @(Invoke-BashBasename -a '/a/one.txt' '/b/two.txt')
         $results.Count | Should -Be 2
         $results[0].BashText | Should -Be 'one.txt'
         $results[1].BashText | Should -Be 'two.txt'
