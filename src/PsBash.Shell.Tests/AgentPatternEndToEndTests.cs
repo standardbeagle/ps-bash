@@ -31,6 +31,33 @@ public class AgentPatternEndToEndTests
     }
 
     [SkippableFact]
+    public async Task SedRangeAddress_UnquotedComma_IsOneArgumentNotArray()
+    {
+        // `725,750p` is one word in bash; unquoted it was a PowerShell array and the
+        // cmdlet binder failed ("Cannot convert 'System.Object[]' ... 'Arguments'").
+        var tempDir = Path.Combine(Path.GetTempPath(), "ps-bash-comma-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            File.WriteAllText(Path.Combine(tempDir, "f"), "l1\nl2\nl3\nl4\n");
+            var (exitCode, stdout, stderr) = await RunShellAsync(
+                ["-c", "sed -n 2,3p f; echo a,b; x=q; echo $x,y; echo {a,b}"],
+                timeout: null,
+                env: null,
+                workingDirectory: tempDir);
+
+            Assert.Equal("", stderr.Trim());
+            Assert.Equal(0, exitCode);
+            Assert.Equal(new[] { "l2", "l3", "a,b", "q,y", "a b" },
+                stdout.Replace("\r", "").TrimEnd('\n').Split('\n'));
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, recursive: true); } catch { }
+        }
+    }
+
+    [SkippableFact]
     public async Task Pwd_AfterHomeRelativeCd_PrintsDirectory()
     {
         var tempHome = Path.Combine(Path.GetTempPath(), "ps-bash-home-" + Guid.NewGuid().ToString("N"));

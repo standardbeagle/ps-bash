@@ -185,6 +185,24 @@ EmitPassthrough(cmdlet, args) -> "cmdlet arg1 arg2 ..."
 - Contains braces (`{` or `}`) -- PowerShell scriptblock delimiters.
 - Already-quoted arguments (starting with `"` or `'`) are skipped.
 
+**Bare comma literal (any word, not just flags).** In PowerShell argument mode an
+unquoted `a,b` is an ARRAY. bash treats `,` as an ordinary character, so
+`sed -n 725,750p f` reached `Invoke-BashSed` as `@(725,'750p')` ("Cannot convert
+'System.Object[]' to the type 'System.String' required by parameter 'Arguments'").
+`QuoteCommaLiteralWord` (applied in `EmitPassthrough`, the general external-command
+path, the RC-7 splat path, and redirect targets via `EmitArgWord`) therefore quotes
+any argument word whose `WordPart.Literal` parts contain `,`:
+
+- pure-literal word → one single-quoted string (`'725,750p'`; `/tmp/` and `/c/…`
+  path transforms applied first);
+- word mixing the comma literal with variables / quoted parts (`$x,y`, `a,"b"`)
+  → flattened to ONE double-quoted string (`"$env:x,y"`);
+- flag-shaped words keep the historical `"-F,"` double-quote wrap above;
+- words with a glob, process-sub or brace part are left alone (quoting would kill
+  globbing; `{a,b}` is a `BracedTuple`, never a comma literal) — a glob word that
+  also contains a bare comma (`ls *.c,x`) remains a known gap;
+- already-quoted words (`"a,b"`, `'a,b'`) and backslash-escaped commas are untouched.
+
 Example: `awk -F,` emits as `Invoke-BashAwk "-F,"` to prevent PowerShell from
 splitting on the comma. `xargs -I{}` emits as `Invoke-BashXargs "-I{}"`.
 
