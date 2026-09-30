@@ -782,12 +782,21 @@ public class PsEmitterTests
         // Batch 1 of the shared ordered parser. Adding a command here also means adding it to
         // CommonParameterCollisionGuardTests.EmitterForceQuoted (Cmdlets.Tests) — that map is
         // how the guard knows the emitter, not a decoy, protects the colliding letters.
-        Assert.Equal(new[] { "bash", "cat", "cp", "env", "head", "ln", "mkdir", "mv", "nl", "rm", "rmdir", "tac", "tail", "tee", "time", "touch", "uniq", "wc", "xargs" }, PsEmitter.OrderedArgCommands.OrderBy(x => x).ToArray());
+        Assert.Equal(new[] { "awk", "bash", "cat", "cp", "env", "head", "ln", "mkdir", "mv", "nl", "rm", "rmdir", "tac", "tail", "tee", "time", "touch", "uniq", "wc", "xargs" }, PsEmitter.OrderedArgCommands.OrderBy(x => x).ToArray());
     }
 
     // `bash` is on OrderedArgCommands: the script's own args (`bash s.sh -v -e -c x`) and the
     // args after `-c CMD NAME` are positional parameters in bash, so none may become a
     // PowerShell parameter token (`-c` is a declared parameter of Invoke-BashBash).
+    [Theory]
+    [InlineData("awk -v a=1 -v b=2 'BEGIN{print a+b}'", "Invoke-BashAwk '-v' a=1 '-v' b=2 'BEGIN{print a+b}'")]
+    [InlineData("awk -F: -va=1 '{print $1}' f", "Invoke-BashAwk '-F:' '-va=1' '{print $1}' f")]
+    [InlineData("awk -- '{print}' f", "Invoke-BashAwk '--' '{print}' f")]
+    public void Transpile_AwkFlags_AreSingleQuotedSoRepeatedDashVReachesTheCmdlet(string bash, string expected)
+    {
+        Assert.Equal(expected, PsEmitter.Transpile(bash));
+    }
+
     [Theory]
     [InlineData("bash s.sh -v -e -c x", "Invoke-BashBash s.sh '-v' '-e' '-c' x")]
     [InlineData("bash -c 'echo hi' zero -d", "Invoke-BashBash '-c' 'echo hi' zero '-d'")]
@@ -3846,7 +3855,7 @@ public class PsEmitterTests
     {
         // awk in a pipeline gets Invoke-BashAwk; braces+comma still must not be expanded
         var result = PsEmitter.Transpile("echo \"a,b,c\" | awk -F, '{print $1, $3}'");
-        Assert.Equal("Invoke-BashEcho \"a,b,c\" | Invoke-BashAwk \"-F,\" '{print $1, $3}'", result);
+        Assert.Equal("Invoke-BashEcho \"a,b,c\" | Invoke-BashAwk '-F,' '{print $1, $3}'", result);
         Assert.DoesNotContain("@(", result);
     }
 
@@ -4074,7 +4083,7 @@ public class PsEmitterTests
         var result = PsEmitter.Transpile("echo test | awk -F, '{print $1, $3}'");
 
         Assert.Contains("Invoke-BashAwk", result);
-        Assert.Contains("\"-F,\"", result);
+        Assert.Contains("'-F,'", result);
     }
 
     [Fact]
@@ -4692,7 +4701,7 @@ public class PsEmitterTests
     public void Transpile_AwkWithColonDelimiter_QuotesColonFlag()
     {
         var result = PsEmitter.Transpile("cat file | awk -F: '{print}'");
-        Assert.Contains("Invoke-BashAwk \"-F:\"", result);
+        Assert.Contains("Invoke-BashAwk '-F:'", result);
     }
 
     [Fact]

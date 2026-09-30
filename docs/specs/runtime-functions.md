@@ -283,7 +283,7 @@ untouched — its contract (unknown flag becomes an operand) differs.
   so scripts can tell "ps-bash cannot do this" from "you typed it wrong". `TryHandleInfoOptions` acts on an abbreviated
   `--vers`/`--he`.
 
-**Emitter opt-in.** `PsEmitter.OrderedArgCommands` (tee, cp, mv, rm, mkdir, rmdir, ln, touch, head, tail, wc, cat, tac, nl, uniq, plus the command-running wrappers xargs, time, env, bash — these keep their manual scans, which stop at the first operand, and only take the emitter quoting so the INNER command's flags are safe): for these, `EmitPassthrough`
+**Emitter opt-in.** `PsEmitter.OrderedArgCommands` (tee, cp, mv, rm, mkdir, rmdir, ln, touch, head, tail, wc, cat, tac, nl, uniq, plus awk, and the command-running wrappers xargs, time, env, bash — these keep their manual scans, which stop at the first operand, and only take the emitter quoting so the INNER command's flags are safe): for these, `EmitPassthrough`
 single-quotes EVERY dash-leading literal word and `--` (via `PsBuild.SingleQuote`; quoted and mixed
 words like `--x="a b"` collapse to one literal). No flag is then a PowerShell parameter token, so
 each reaches `[ValueFromRemainingArguments] Arguments` verbatim and in order — no prefix collision

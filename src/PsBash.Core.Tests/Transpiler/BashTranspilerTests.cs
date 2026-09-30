@@ -547,7 +547,7 @@ public class BashTranspilerTests
     public void AwkWithFlags_PreservesExpression()
     {
         var result = BashTranspiler.Transpile("echo \"a,b,c\" | awk -F, '{print $1, $3}'");
-        Assert.Equal("Invoke-BashEcho \"a,b,c\" | Invoke-BashAwk \"-F,\" '{print $1, $3}'", result);
+        Assert.Equal("Invoke-BashEcho \"a,b,c\" | Invoke-BashAwk '-F,' '{print $1, $3}'", result);
     }
 
     [Fact]

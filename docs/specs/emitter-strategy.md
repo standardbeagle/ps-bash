@@ -207,8 +207,11 @@ any argument word whose `WordPart.Literal` parts contain `,`:
   never a comma literal);
 - already-quoted words (`"a,b"`, `'a,b'`) and backslash-escaped commas are untouched.
 
-Example: `awk -F,` emits as `Invoke-BashAwk "-F,"` to prevent PowerShell from
-splitting on the comma. `xargs -I{}` emits as `Invoke-BashXargs '-I{}'` (xargs is on the ordered-arg path, below).
+Example: `awk -F,` emits as `Invoke-BashAwk '-F,'` (awk is on `OrderedArgCommands`, so every
+flag is single-quoted — this is also what lets a repeated `-v a=1 -v b=2` reach the cmdlet
+instead of tripping the binder's "parameter 'V' is specified more than once").
+Outside that set, a comma flag keeps the historical double-quote wrap (`"-F,"`) to prevent
+PowerShell from splitting on the comma. `xargs -I{}` emits as `Invoke-BashXargs '-I{}'` (xargs is on the ordered-arg path, below).
 
 `xargs`, `time`, `env` (and the `-exec`/`-execdir`/`-ok` argv of `find`) run a FOREIGN command
 line, so the flags of the command they run are as dangerous as their own: an inner `-a`
