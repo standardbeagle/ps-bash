@@ -18,7 +18,7 @@ public class ConvertToPowerShellCommandTests : IClassFixture<SharedPwshFixture>
         var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript("'ls -la | grep .txt' | ConvertTo-PowerShell").Invoke();
         Assert.Single(result);
-        Assert.Equal("Invoke-BashLs -la | Invoke-BashGrep .txt", result[0].ToString());
+        Assert.Equal("Invoke-BashLs '-la' | Invoke-BashGrep .txt", result[0].ToString());
     }
 
     [Fact]

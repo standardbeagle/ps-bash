@@ -1512,8 +1512,21 @@ public static class PsEmitter
         if (extended && TryUnwrapTestGroup(words, out var grouped))
             return $"({EmitExtendedTest(grouped)})";
 
+        // `[ A op B ]`: bash picks the arity-3 shape from the OPERATOR in the middle, before it
+        // looks at A — so `[ -f = -f ]` compares two strings, `[ ! = ! ]` is true, and
+        // `[ -z -a -z ]` is the AND of two non-empty strings. None of the word-0 heuristics
+        // below (negation, unary file test) may fire for such a list.
+        bool arity3 = !extended && words.Length == 3 && GetLiteralValue(words[1]) is { } mid
+            && (IsBinaryTestOp(mid) || mid == "-a" || mid == "-o");
+        if (arity3 && GetLiteralValue(words[1]) is "-a" or "-o")
+        {
+            string l = $"(-not [string]::IsNullOrEmpty({EmitTestOperand(words[0])}))";
+            string r = $"(-not [string]::IsNullOrEmpty({EmitTestOperand(words[2])}))";
+            return $"{l} {(GetLiteralValue(words[1]) == "-a" ? "-and" : "-or")} {r}";
+        }
+
         // Handle leading ! negation: [ ! -f x ] → !(Test-Path ...)
-        if (words.Length >= 1 && GetLiteralValue(words[0]) == "!")
+        if (!arity3 && words.Length >= 1 && GetLiteralValue(words[0]) == "!")
         {
             var inner = words.RemoveAt(0);
             return $"!({TranslateTestCondition(inner, extended)})";
@@ -1532,7 +1545,7 @@ public static class PsEmitter
             if (TrySplitTestCombinator(words, "-a", "-and", out var andResult)) return andResult;
         }
 
-        if (words.Length >= 2)
+        if (!arity3 && words.Length >= 2)
         {
             var flag = GetLiteralValue(words[0]);
             // String tests.
@@ -1680,11 +1693,20 @@ public static class PsEmitter
         // values (`'-o' 'PROMPT_SUBST'`), which is NEVER valid PowerShell, so one
         // such line broke the parse of the entire file. Degrade to a false result
         // plus a diagnostic on stderr: wrong-but-visible beats unparseable.
+        // `[ ]` (not `[[ ]]`) runs bash's own argument-count grammar in the `test` cmdlet, which
+        // knows `( )`, `-o NAME`, `-v`, `-R`, usage errors (exit 2) and every shape above
+        // verbatim. `[[ ]]` keeps the diagnostic: the cmdlet has no `[[` grammar.
+        if (!extended)
+            return PsBuild.ExitCodeTest(EmitPassthrough("Invoke-BashTest", words), negate: false);
+
         var opName = GetLiteralValue(words[0]) ?? "";
         var message = PsBuild.SingleQuote(
             $"ps-bash: [: {opName}: unsupported test operator");
         return PsBuild.Subexpr($"Write-BashHostStderr {message}; $false");
     }
+
+    private static bool IsBinaryTestOp(string op) => op is "=" or "==" or "!=" or "-eq" or "-ne" or "-lt"
+        or "-le" or "-gt" or "-ge" or "-nt" or "-ot" or "-ef";
 
     // Split a `[ ]` clause list on a top-level POSIX combinator (`-a` / `-o`) and
     // recurse on each clause, joining with the PowerShell logical op (-and / -or).
@@ -5334,7 +5356,7 @@ public static class PsEmitter
                 // -ErrorAction/-ErrorVariable and are case-indistinguishable to the
                 // binder; force-quote them so they reach the cmdlet's Arguments with
                 // case intact (the cmdlet parses -e/-E case-sensitively). `-n` is safe.
-                result = EmitPassthrough("Invoke-BashEcho", args, EchoForceQuoteFlags);
+                result = EmitPassthrough("Invoke-BashEcho", args);
                 return true;
             case "printf":
                 result = EmitPassthrough("Invoke-BashPrintf", args);
@@ -5942,12 +5964,6 @@ public static class PsEmitter
     }
 
     /// <summary>
-    /// echo's <c>-e</c> / <c>-E</c> collide with the <c>-Error*</c> common
-    /// parameters and are case-indistinguishable to the binder; quoting routes
-    /// them to <c>Invoke-BashEcho</c>'s Arguments with case intact.
-    /// </summary>
-    private static readonly IReadOnlySet<string> EchoForceQuoteFlags =
-        new HashSet<string>(StringComparer.Ordinal) { "-e", "-E", "--" };
 
     /// <summary>
     /// Bash command names whose cmdlet parses its argv with the shared ORDERED parser
@@ -5961,7 +5977,7 @@ public static class PsEmitter
     /// cmdlet must be prepared to receive every flag as a plain string.
     /// </summary>
     internal static readonly IReadOnlySet<string> OrderedArgCommands =
-        new HashSet<string>(StringComparer.Ordinal) { "tee", "cp", "mv", "rm", "mkdir", "rmdir", "ln", "touch", "xargs", "time", "env", "command", "bash", "awk", "head", "tail", "wc", "cat", "tac", "nl", "uniq", "fold", "expand", "unexpand", "paste", "join", "comm", "split", "strings", "base64", "stat", "file", "cut", "sort", "grep", "sed", "rg", "find" };
+        new HashSet<string>(StringComparer.Ordinal) { "tee", "cp", "mv", "rm", "mkdir", "rmdir", "ln", "touch", "xargs", "time", "env", "command", "bash", "awk", "head", "tail", "wc", "cat", "tac", "nl", "uniq", "fold", "expand", "unexpand", "paste", "join", "comm", "split", "strings", "base64", "stat", "file", "cut", "sort", "grep", "sed", "rg", "find", "echo", "printf", "test", "ls" };
 
     /// <summary><c>Invoke-BashTee</c> -&gt; is <c>tee</c> in <see cref="OrderedArgCommands"/>?</summary>
     private static bool IsOrderedArgCmdlet(string cmdlet) =>

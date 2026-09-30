@@ -93,6 +93,10 @@ public class CommonParameterCollisionGuardTests
             ["sed"] = new(CollidingLetters),
             // rg: ripgrep-flavoured ordered parser; the native passthrough receives the argv verbatim.
             ["rg"] = new(CollidingLetters),
+            ["echo"] = new(CollidingLetters),
+            ["printf"] = new(CollidingLetters),
+            ["test"] = new(CollidingLetters),
+            ["ls"] = new(CollidingLetters),
         };
 
     [Fact]

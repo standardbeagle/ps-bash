@@ -771,7 +771,7 @@ public class BashTranspilerTests
     public void Transpile_LsWithFlags_UnderEval_EmitsInvokeBashLs()
     {
         var result = BashTranspiler.Transpile("ls -la", TranspileContext.Eval);
-        Assert.Equal("Invoke-BashLs -la", result);
+        Assert.Equal("Invoke-BashLs '-la'", result);
     }
 
     [Fact]

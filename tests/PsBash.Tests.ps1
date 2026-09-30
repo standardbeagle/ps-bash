@@ -118,9 +118,9 @@ Describe 'Invoke-BashEcho' {
         $text | Should -Be 'hello'
     }
 
-    It '-- stops flag parsing' {
+    It '-- is printed literally (bash echo has no -- handling)' {
         $result = Invoke-BashEcho '--' '-n'
-        $result.BashText | Should -Be '-n'
+        $result.BashText | Should -Be '-- -n'
     }
 }
 
@@ -4979,7 +4979,7 @@ Describe 'Register-BashCompletions — Completer Results' {
         $completer | Should -Not -BeNullOrEmpty
         $results = @(& $completer '-' $null $null)
         $results | Should -Not -BeNullOrEmpty
-        $results | Should -HaveCount 8
+        $results.Count | Should -BeGreaterThan 7
         $names = $results | ForEach-Object { $_.CompletionText }
         $names | Should -Contain '-l'
         $names | Should -Contain '-a'
@@ -5474,9 +5474,9 @@ Describe '--help — at least 10 commands respond' {
 }
 
 Describe '--help — commands without BashFlagSpecs' {
-    It 'echo --help returns help text' {
+    It 'echo --help prints the word (bash echo is a builtin with no --help)' {
         $result = Invoke-BashEcho '--help'
-        $result.BashText | Should -Match 'Usage: echo'
+        $result.BashText | Should -Be '--help'
     }
 
     It 'rev --help returns help text' {

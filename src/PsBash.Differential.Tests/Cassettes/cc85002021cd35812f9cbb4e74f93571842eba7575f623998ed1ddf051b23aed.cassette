@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 149
+stdout-length: 6
+stderr-length: 0
+==== SCRIPT ====
+d=$(mktemp -d) && printf '' > "$d/a" && test "$d/a" -ef "$d/a"; echo $?; test "$d/a" -nt "$d/missing"; echo $?; test "$d/missing" -ot "$d/a"; echo $?
+==== STDOUT ====
+0
+0
+0
+
+==== STDERR ====
+

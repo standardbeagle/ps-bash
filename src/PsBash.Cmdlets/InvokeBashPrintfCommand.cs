@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Management.Automation;
 using System.Text;
+using PsBash.Cmdlets.Args;
 
 namespace PsBash.Cmdlets;
 
@@ -25,47 +26,79 @@ namespace PsBash.Cmdlets;
 /// <see cref="BashRuntime.NewBashObject"/>.</item>
 /// </list>
 ///
-/// The usage-error path (<c>printf</c> with no format) reports through
-/// <see cref="FileSystemHelpers.WriteBashError"/> — one ErrorRecord, which the
-/// host prints to stderr inline and which <c>2&gt;/dev/null</c> can discard.
-/// The <c>--help</c> path delegates to the psm1 <c>Show-BashHelp</c> via a
-/// string-bodied <c>InvokeCommand.InvokeScript</c> (AOT-safe).
-/// </summary>
+/// Options follow the bash BUILTIN (<see cref="PrintfArgScan"/>): <c>-v VAR</c> assigns instead of
+/// printing, <c>--</c> ends options, any other dash-led first word is
+/// <c>printf: -x: invalid option</c> + usage, exit 2 (so <c>--help</c> / <c>--version</c> are errors
+/// too, as in bash). printf is on <c>PsEmitter.OrderedArgCommands</c>: every dash word arrives
+/// verbatim, so <c>printf '%s\n' -n</c> prints <c>-n</c>. Errors go through
+/// <see cref="FileSystemHelpers.WriteBashError"/> (discardable with <c>2&gt;/dev/null</c>)./// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashPrintf")]
 [OutputType(typeof(PSObject))]
 public sealed class InvokeBashPrintfCommand : PSCmdlet
 {
     private const string EscapedPercentSentinel = "\0ESCAPED_PERCENT\0";
 
+    /// <summary>
+    /// Decoy for a bare <c>-v</c> typed DIRECTLY at PowerShell (it prefix-matches
+    /// <c>-Verbose</c>); the transpiler single-quotes every dash word, so it never binds there.
+    /// <c>-v</c> must be printf's first argument, so it is re-injected at the head.
+    /// </summary>
+    [Parameter]
+    public SwitchParameter V { get; set; }
+
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
+
+    private const string Usage = "printf: usage: printf [-v var] format [arguments]";
 
     protected override void ProcessRecord()
     {
         var args = Arguments ?? Array.Empty<string>();
-
-        FileSystemHelpers.SetLastExitCode(this, 0);
-        if (FileSystemHelpers.TryHandleVersion(this, "printf", args)) return;
-        if (Array.IndexOf(args, "--help") >= 0)
+        if (V.IsPresent)
         {
-            foreach (var line in InvokeCommand.InvokeScript(
-                         "param($n) Show-BashHelp $n", "printf"))
-            {
-                WriteObject(line);
-            }
-            return;
+            var withV = new string[args.Length + 1];
+            withV[0] = "-v";
+            Array.Copy(args, 0, withV, 1, args.Length);
+            args = withV;
         }
 
-        if (args.Length == 0)
+        FileSystemHelpers.SetLastExitCode(this, 0);
+
+        var scan = PrintfArgScan.Scan(args);
+        if (scan.IsError)
         {
-            FileSystemHelpers.WriteBashError(this, "printf: usage: printf format [arguments]");
+            // bash builtins answer a leading `--help` with their help text on stdout, THEN the
+            // invalid-option diagnostic (oracle: bash 5.2 prints both, exit 2).
+            if (args.Length > 0 && args[0] == "--help")
+            {
+                foreach (var line in InvokeCommand.InvokeScript("param($n) Show-BashHelp $n", "printf"))
+                    WriteObject(line);
+            }
+            FileSystemHelpers.WriteBashError(this, scan.MissingValue
+                ? "printf: -v: option requires an argument"
+                : $"printf: -{scan.InvalidOption}: invalid option");
+            FileSystemHelpers.WriteBashError(this, Usage);
             FileSystemHelpers.SetLastExitCode(this, 2);
             return;
         }
 
-        var format = args[0];
-        var argList = args.Skip(1).ToArray();
+        if (scan.FirstOperand >= args.Length)
+        {
+            FileSystemHelpers.WriteBashError(this, Usage);
+            FileSystemHelpers.SetLastExitCode(this, 2);
+            return;
+        }
 
+        string? assignTo = scan.VarName;
+        if (assignTo is not null && !IsAssignableName(assignTo))
+        {
+            FileSystemHelpers.WriteBashError(this, $"printf: `{assignTo}': not a valid identifier");
+            FileSystemHelpers.SetLastExitCode(this, 2);
+            return;
+        }
+
+        var format = args[scan.FirstOperand];
+        var argList = args.Skip(scan.FirstOperand + 1).ToArray();
         // Coerce each argument: int, then double, then string. Matches the
         // psm1 TryParse ladder.
         var converted = new List<object>(argList.Length);
@@ -329,8 +362,53 @@ public sealed class InvokeBashPrintfCommand : PSCmdlet
 
         string result = sb.ToString().Replace(EscapedPercentSentinel, "%");
 
+        if (assignTo is not null)
+        {
+            AssignVariable(assignTo, result);
+            return;
+        }
+
         WriteObject(BashRuntime.NewBashObject(
             result, "PsBash.TextOutput", noTrailingNewline: true, command: "printf"));
+    }
+
+    // NAME or NAME[subscript] (bash accepts an array element as the -v target).
+    private static readonly System.Text.RegularExpressions.Regex AssignableName =
+        new(@"^[A-Za-z_][A-Za-z0-9_]*(\[[^\]]+\])?$", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+    internal static bool IsAssignableName(string s) => AssignableName.IsMatch(s);
+
+    /// <summary>
+    /// <c>printf -v NAME</c>: set the shell variable in the caller scope AND the variable store
+    /// (<c>$env:NAME</c> expansions in transpiled bash read it), exactly as <c>read</c> does.
+    /// <c>NAME[i]</c> sets one element of the PowerShell array variable (created/extended as needed).
+    /// </summary>
+    private void AssignVariable(string target, string value)
+    {
+        int br = target.IndexOf('[');
+        if (br < 0)
+        {
+            SessionState.PSVariable.Set(target, value);
+            try { BashVariableStore.Set(target, value); } catch { }
+            return;
+        }
+
+        string name = target.Substring(0, br);
+        string sub = target.Substring(br + 1, target.Length - br - 2).Trim();
+        if (!int.TryParse(sub, out int idx) || idx < 0)
+        {
+            // Associative / computed subscripts are not modelled; keep the value reachable.
+            SessionState.PSVariable.Set(name, value);
+            return;
+        }
+        var existing = SessionState.PSVariable.GetValue(name);
+        var items = new List<object?>();
+        if (existing is System.Collections.IEnumerable en && existing is not string)
+            foreach (var o in en) items.Add(o);
+        else if (existing is string one) items.Add(one);
+        while (items.Count <= idx) items.Add("");
+        items[idx] = value;
+        SessionState.PSVariable.Set(name, items.ToArray());
     }
 
     /// <summary>

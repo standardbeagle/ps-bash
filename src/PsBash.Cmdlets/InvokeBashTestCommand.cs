@@ -5,39 +5,27 @@ using System.Management.Automation;
 namespace PsBash.Cmdlets;
 
 /// <summary>
-/// Binary cmdlet replacement for the psm1 <c>Invoke-BashTest</c> function
-/// (REFACTOR-2 follow-on) — the bash <c>test</c> / <c>[ ]</c> builtin.
+/// Binary cmdlet for the bash <c>test</c> / <c>[</c> builtin. <b>There are no options</b>: every
+/// word is part of the expression, dash-leading or not, so the expression is evaluated by
+/// <see cref="BashTestExpr"/> (a port of bash's argument-count driven <c>test.c</c>), never by the
+/// getopt-style scanner the other migrated commands share. <c>test</c> is on
+/// <c>PsEmitter.OrderedArgCommands</c>, so the transpiler single-quotes every dash word and the
+/// expression reaches <see cref="Arguments"/> verbatim and in order.
 ///
-/// Behavioral parity oracle: the original psm1 <c>Invoke-BashTest</c> +
-/// <c>Test-BashCondition</c> recursive helper. Reproduces every predicate the
-/// oracle implemented: file tests (<c>-e -f -d -r -w -x -s -L -h</c>), string
-/// tests (<c>-z</c>, <c>-n</c>, <c>=</c>, <c>!=</c>), integer tests
-/// (<c>-eq -ne -lt -le -gt -ge</c>), and the logical chain (<c>!</c>,
-/// <c>-a</c>, <c>-o</c>).
+/// <para>Exit status: 0 = true, 1 = false, 2 = syntax error (<c>test: x: integer expression
+/// expected</c>, <c>too many arguments</c>, <c>argument expected</c>, ...). Nothing is written to
+/// stdout. There is no <c>--help</c> / <c>--version</c>: <c>test --help</c> is the one-word
+/// expression "--help" (true).</para>
 ///
-/// Exit-code contract via <see cref="FileSystemHelpers.SetLastExitCode"/>:
-/// 0 = true, 1 = false, 2 = syntax error. The cmdlet also writes back the
-/// boolean result to the pipeline so callers can capture either the exit code
-/// or the value (preserving the psm1 oracle's <c>,$__testResult</c> emit).
+/// <para><b>Direct PowerShell calls:</b> the single-letter operators <c>-e -d -w -a -o</c>
+/// prefix-collide with common parameters / <c>-Arguments</c>, so they are declared as decoy
+/// <see cref="SwitchParameter"/>s and re-injected at the head of the expression. Decoys lose their
+/// position (a transpiled <c>test</c> never binds them), so quote them
+/// (<c>Invoke-BashTest '-e' $p '-a' ...</c>) when order matters.</para>
 ///
-/// <para>
-/// <b>Flag-collision strategy:</b> the bash <c>test</c> single-letter operators
-/// (<c>-e</c>, <c>-d</c>, <c>-w</c>, <c>-a</c>, <c>-o</c>) prefix-collide with
-/// PowerShell common parameters (<c>-ErrorAction</c>, <c>-Debug</c>,
-/// <c>-WarningAction</c>, <c>-Arguments</c>, <c>-OutVariable</c>) under the
-/// <see cref="PSCmdlet"/> binder. Each is declared as an explicit
-/// <see cref="SwitchParameter"/> with a literal single-letter name so an
-/// exact-name match beats common-parameter prefix-matching. The bound switches
-/// are then re-injected at the head of the operand list so the manual walk
-/// sees the bash-shaped argv the oracle saw.
-/// </para>
-///
-/// <para><b>Bracket form:</b> when invoked as <c>[</c> (alias),
-/// <see cref="PSCmdlet.MyInvocation"/> <c>.InvocationName</c> equals
-/// <c>"["</c>; we require the last operand to be <c>]</c> and drop it before
-/// evaluating. Missing <c>]</c> is a syntax error (exit 2). When invoked as
-/// <c>test</c>, no trailing <c>]</c> is consumed.
-/// </para>
+/// <para><b>Bracket form:</b> invoked as <c>[</c> (alias) the final word must be <c>]</c> and is
+/// removed; its absence is <c>[: missing `]'</c>, exit 2. As <c>test</c> a trailing <c>]</c> is an
+/// ordinary word.</para>
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashTest")]
 [OutputType(typeof(bool))]
@@ -77,42 +65,15 @@ public sealed class InvokeBashTestCommand : PSCmdlet
     protected override void ProcessRecord()
     {
         var raw = Arguments ?? Array.Empty<string>();
-
         FileSystemHelpers.SetLastExitCode(this, 0);
-        if (FileSystemHelpers.TryHandleVersion(this, "test", raw)) return;
-        if (Array.IndexOf(raw, "--help") >= 0)
-        {
-            foreach (var line in InvokeCommand.InvokeScript(
-                         "param($n) Show-BashHelp $n", "test"))
-            {
-                WriteObject(line);
-            }
-            return;
-        }
 
-        // Re-inject decoy switches that the binder consumed. The order
-        // matters — these tokens originally appeared in argv before their
-        // operand, so we prepend them in declaration order. Because each
-        // decoy is a SwitchParameter (not value-bearing), the binder
-        // already pushed any following PATH into Arguments.
-        var operands = new List<string>(raw.Length + 5);
-        if (E.IsPresent) operands.Add("-e");
-        if (D.IsPresent) operands.Add("-d");
-        if (W.IsPresent) operands.Add("-w");
-        if (A.IsPresent) operands.Add("-a");
-        if (O.IsPresent) operands.Add("-o");
-        operands.AddRange(raw);
+        // Re-inject decoy switches the binder consumed (direct PowerShell calls only).
+        var operands = RebuildWithDecoys(raw);
 
-        // Bracket form: when invoked as `[`, the final operand must be `]`.
-        // Detect via two signals — the InvocationName (alias-aware) and a
-        // trailing `]` token — because PowerShell's call-operator dispatch
-        // can normalize InvocationName depending on resolver path.
-        var invocation = MyInvocation?.InvocationName ?? string.Empty;
-        bool bracketForm = invocation == "[";
-        bool trailingClose = operands.Count > 0 && operands[^1] == "]";
-        if (bracketForm)
+        string name = IsBracketInvocation() ? "[" : "test";
+        if (name == "[")
         {
-            if (!trailingClose)
+            if (operands.Count == 0 || operands[^1] != "]")
             {
                 FileSystemHelpers.WriteBashError(this, "bash: [: missing `]'");
                 FileSystemHelpers.SetLastExitCode(this, 2);
@@ -120,170 +81,193 @@ public sealed class InvokeBashTestCommand : PSCmdlet
             }
             operands.RemoveAt(operands.Count - 1);
         }
-        else if (trailingClose)
-        {
-            // Defensive: emitter may emit `Invoke-BashTest ... ]` for the
-            // bracket form even when InvocationName resolves to the cmdlet
-            // canonical name. Strip a trailing `]` so the predicate walk
-            // sees the bash-shaped argv.
-            operands.RemoveAt(operands.Count - 1);
-        }
 
         bool result;
         try
         {
-            result = Eval(operands.ToArray());
+            result = BashTestExpr.Eval(operands.ToArray(), Unary, FileBinary);
         }
-        catch (SyntaxException ex)
+        catch (TestSyntaxException ex)
         {
-            FileSystemHelpers.WriteBashError(this, $"bash: test: {ex.Message}");
+            FileSystemHelpers.WriteBashError(this, $"bash: {name}: {ex.Message}");
             FileSystemHelpers.SetLastExitCode(this, 2);
             return;
         }
 
-        // bash `test` / `[` is SILENT — the result is the EXIT CODE only, never stdout. Emitting the
-        // bool here leaked "True"/"False" into output for `test ... && cmd` and standalone `test`/`[`.
-        // (if/while/&&/|| conditions consume the exit code, not this object — see EmitConditionAsExpr.)
+        // bash `test` / `[` is SILENT — the result is the EXIT CODE only, never stdout.
         FileSystemHelpers.SetLastExitCode(this, result ? 0 : 1);
     }
 
     /// <summary>
-    /// Reproduces the psm1 <c>Test-BashCondition</c> recursive evaluator
-    /// byte-for-byte: 0 args -> false; 1 arg -> non-empty truthiness; 2 args
-    /// -> unary predicate or <c>!</c>; 3 args -> binary infix; else walk a
-    /// chain with <c>!</c>/<c>-a</c>/<c>-o</c> connectives.
+    /// A decoy switch swallowed its token, so the bound parameters no longer say WHERE it stood;
+    /// <c>test</c>'s grammar is positional (<c>-z '' -a -n x</c>), so re-read the command's own
+    /// AST from the invocation line and put each decoy back in place. Falls back to the head of
+    /// the expression when the line cannot be mapped one-to-one onto <paramref name="raw"/>.
     /// </summary>
-    private static bool Eval(string[] args)
+    private List<string> RebuildWithDecoys(string[] raw)
     {
-        if (args.Length == 0) return false;
-        if (args.Length == 1) return !string.IsNullOrEmpty(args[0]);
+        var decoys = new List<string>(5);
+        if (E.IsPresent) decoys.Add("-e");
+        if (D.IsPresent) decoys.Add("-d");
+        if (W.IsPresent) decoys.Add("-w");
+        if (A.IsPresent) decoys.Add("-a");
+        if (O.IsPresent) decoys.Add("-o");
 
-        if (args.Length == 2)
-        {
-            var flag = args[0];
-            var val = args[1];
-            switch (flag)
-            {
-                case "-f": return File.Exists(val);
-                case "-d": return Directory.Exists(val);
-                case "-e": return File.Exists(val) || Directory.Exists(val);
-                case "-r":
-                    try { using var s = BashFileSystem.OpenRead(val); return true; }
-                    catch { return false; }
-                case "-w":
-                    try { using var s = File.OpenWrite(val); return true; }
-                    catch { return false; }
-                case "-x":
-                    // Oracle parity: `Get-Command -CommandType Application`.
-                    // On Windows there's no executable bit; existence in PATH
-                    // as an Application is the closest equivalent.
-                    return File.Exists(val); // best-effort: file exists -> assume executable
-                case "-s":
-                    return File.Exists(val) && new FileInfo(val).Length > 0;
-                case "-L":
-                case "-h":
-                    try
-                    {
-                        var fi = new FileInfo(val);
-                        return fi.Exists && (fi.Attributes & FileAttributes.ReparsePoint) != 0;
-                    }
-                    catch { return false; }
-                case "-z": return string.IsNullOrEmpty(val);
-                case "-n": return !string.IsNullOrEmpty(val);
-                case "!": return !TruthyOne(val);
-                default:
-                    // Oracle parity: unrecognized two-token form treats first
-                    // as bool truthiness check (matches psm1 default branch).
-                    return TruthyOne(flag);
-            }
-        }
+        var result = new List<string>(raw.Length + decoys.Count);
+        if (decoys.Count == 0) { result.AddRange(raw); return result; }
 
-        if (args.Length == 3)
+        try
         {
-            var lhs = args[0];
-            var op = args[1];
-            var rhs = args[2];
-            switch (op)
+            var line = MyInvocation?.Line ?? string.Empty;
+            var ast = System.Management.Automation.Language.Parser.ParseInput(line, out _, out _);
+            int off = MyInvocation?.OffsetInLine ?? 0;
+            var cmd = ast.Find(n => n is System.Management.Automation.Language.CommandAst c
+                                    && c.Extent.StartColumnNumber - 1 == off, true) as System.Management.Automation.Language.CommandAst
+                      ?? ast.Find(n => n is System.Management.Automation.Language.CommandAst, true) as System.Management.Automation.Language.CommandAst;
+            if (cmd is not null)
             {
-                case "=":
-                case "==": return string.Equals(lhs, rhs, StringComparison.Ordinal);
-                case "!=": return !string.Equals(lhs, rhs, StringComparison.Ordinal);
-                case "-eq": return ParseInt(lhs) == ParseInt(rhs);
-                case "-ne": return ParseInt(lhs) != ParseInt(rhs);
-                case "-lt": return ParseInt(lhs) < ParseInt(rhs);
-                case "-le": return ParseInt(lhs) <= ParseInt(rhs);
-                case "-gt": return ParseInt(lhs) > ParseInt(rhs);
-                case "-ge": return ParseInt(lhs) >= ParseInt(rhs);
-                default: return true; // oracle parity: unknown 3-tok op returns true
-            }
-        }
-
-        // Length >= 4: walk with !/-a/-o connectives, mirroring the oracle
-        // step-by-step (each step consumes either 1 (!) or 2 (predicate)
-        // tokens; -a/-o are 1-token connectives).
-        int i = 0;
-        bool result = true;
-        string? currentOp = null;
-        while (i < args.Length)
-        {
-            var tok = args[i];
-            if (tok == "!")
-            {
-                i++;
-                if (i < args.Length)
+                int next = 0, placed = 0;
+                var rebuilt = new List<string>(raw.Length + decoys.Count);
+                for (int i = 1; i < cmd.CommandElements.Count; i++)
                 {
-                    var nextResult = Eval(new[] { args[i] });
-                    result = !nextResult;
+                    var el = cmd.CommandElements[i];
+                    if (el is System.Management.Automation.Language.CommandParameterAst p && p.Argument is null
+                        && p.ParameterName.Length == 1 && "edwao".IndexOf(char.ToLowerInvariant(p.ParameterName[0])) >= 0
+                        && decoys.Contains("-" + char.ToLowerInvariant(p.ParameterName[0])))
+                    {
+                        rebuilt.Add("-" + char.ToLowerInvariant(p.ParameterName[0]));
+                        placed++;
+                    }
+                    else if (next < raw.Length) rebuilt.Add(raw[next++]);
+                    else { rebuilt = null!; break; }
                 }
-                i++;
-                continue;
+                if (rebuilt is not null && next == raw.Length && placed == decoys.Count) return rebuilt;
             }
-            if (tok == "-a")
-            {
-                currentOp = "and";
-                i++;
-                continue;
-            }
-            if (tok == "-o")
-            {
-                currentOp = "or";
-                i++;
-                continue;
-            }
-
-            bool check;
-            if (i + 2 <= args.Length)
-            {
-                check = Eval(new[] { tok, args[i + 1] });
-            }
-            else
-            {
-                check = TruthyOne(tok);
-            }
-
-            if (currentOp == "and") result = result && check;
-            else if (currentOp == "or") result = result || check;
-            else result = check;
-
-            currentOp = null;
-            i += 2;
         }
+        catch { /* fall through to the head-injection fallback */ }
+
+        result.AddRange(decoys);
+        result.AddRange(raw);
         return result;
     }
 
-    private static bool TruthyOne(string s) => !string.IsNullOrEmpty(s);
-
-    private static decimal ParseInt(string s)
+    /// <summary>
+    /// True when invoked as <c>[</c>. InvocationName is the alias as typed, but the call operator
+    /// (<c>&amp; '[' ...</c>) can surface the resolved cmdlet name instead, so the text at the
+    /// command's own offset in the invocation line is the second signal.
+    /// </summary>
+    private bool IsBracketInvocation()
     {
-        if (decimal.TryParse(s, NumberStyles.Any, CultureInfo.InvariantCulture, out var v))
+        if (MyInvocation?.InvocationName == "[") return true;
+        var line = MyInvocation?.Line ?? string.Empty;
+        int off = Math.Clamp(MyInvocation?.OffsetInLine ?? 0, 0, line.Length);
+        var rest = line.AsSpan(off).TrimStart();
+        if (rest.StartsWith("&")) rest = rest.Slice(1).TrimStart();
+        if (rest.Length > 0 && (rest[0] == '\'' || rest[0] == '"')) rest = rest.Slice(1);
+        return rest.Length > 0 && rest[0] == '[' && (rest.Length == 1 || rest[1] is ' ' or '\'' or '"' or '\t');
+    }
+
+    // ---- predicates (everything BashTestExpr does not decide itself) ------------------------
+
+    private string Resolve(string raw)
+    {
+        try { return SessionState.Path.GetUnresolvedProviderPathFromPSPath(FileSystemHelpers.NormalizeOperandPath(raw)); }
+        catch { return raw; }
+    }
+
+    private static bool IsLink(string path)
+    {
+        try
         {
-            return v;
+            FileSystemInfo fi = Directory.Exists(path) ? new DirectoryInfo(path) : new FileInfo(path);
+            return fi.Exists && (fi.Attributes & FileAttributes.ReparsePoint) != 0;
         }
-        throw new SyntaxException($"integer expression expected: {s}");
+        catch { return false; }
     }
 
-    private sealed class SyntaxException : Exception
+    private static bool Exists(string p) => File.Exists(p) || Directory.Exists(p);
+
+    private bool Unary(string op, string operand)
     {
-        public SyntaxException(string message) : base(message) { }
+        char c = op[1];
+        if (c == 'v') return BashVariableStore.Get(operand) is not null;
+        if (c == 'o' || c == 'R') return false; // shell options / namerefs are not modelled
+        if (c == 't')
+        {
+            return int.TryParse(operand, out int fd) && fd switch
+            {
+                0 => !Console.IsInputRedirected,
+                1 => !Console.IsOutputRedirected,
+                2 => !Console.IsErrorRedirected,
+                _ => false,
+            };
+        }
+
+        if (FileSystemHelpers.IsNullDevice(operand))
+            return c is 'a' or 'e' or 'c' or 'r' or 'w';
+
+        string p = Resolve(operand);
+        switch (c)
+        {
+            case 'a':
+            case 'e': return Exists(p);
+            case 'f': return File.Exists(p);
+            case 'd': return Directory.Exists(p);
+            case 'r':
+                if (Directory.Exists(p)) return true;
+                try { using var s = BashFileSystem.OpenRead(p); return true; }
+                catch { return false; }
+            case 'w':
+                // Never OpenWrite: that CREATES a missing file. Writable = exists and not read-only.
+                if (Directory.Exists(p)) return true;
+                try { return File.Exists(p) && (File.GetAttributes(p) & FileAttributes.ReadOnly) == 0; }
+                catch { return false; }
+            case 'x':
+                // Windows has no exec bit: an existing file is taken as executable (historic parity).
+                if (Directory.Exists(p)) return true;
+                if (!File.Exists(p)) return false;
+                if (OperatingSystem.IsWindows()) return true;
+                try { return (File.GetUnixFileMode(p) & (UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute)) != 0; }
+                catch { return false; }
+            case 's':
+                if (Directory.Exists(p)) return true;
+                try { return File.Exists(p) && new FileInfo(p).Length > 0; }
+                catch { return false; }
+            case 'h':
+            case 'L': return IsLink(p);
+            case 'O':
+            case 'G': return Exists(p);
+            case 'g':
+            case 'u':
+            case 'k':
+                if (OperatingSystem.IsWindows() || !Exists(p)) return false;
+                try
+                {
+                    var m = File.GetUnixFileMode(p);
+                    return c == 'g' ? (m & UnixFileMode.SetGroup) != 0
+                         : c == 'u' ? (m & UnixFileMode.SetUser) != 0
+                         : (m & UnixFileMode.StickyBit) != 0;
+                }
+                catch { return false; }
+            default: return false; // -b -c -p -S -N: no block/char/fifo/socket files here
+        }
     }
+
+    private bool FileBinary(string op, string l, string r)
+    {
+        string a = Resolve(l), b = Resolve(r);
+        switch (op)
+        {
+            case "-ef":
+                try { return Exists(a) && Exists(b) && string.Equals(Path.GetFullPath(a), Path.GetFullPath(b), StringComparison.OrdinalIgnoreCase); }
+                catch { return false; }
+            default:
+                bool ea = Exists(a), eb = Exists(b);
+                if (op == "-nt") return ea && (!eb || Mtime(a) > Mtime(b));
+                return eb && (!ea || Mtime(a) < Mtime(b)); // -ot
+        }
+    }
+
+    private static DateTime Mtime(string p)
+        => Directory.Exists(p) ? Directory.GetLastWriteTimeUtc(p) : File.GetLastWriteTimeUtc(p);
 }

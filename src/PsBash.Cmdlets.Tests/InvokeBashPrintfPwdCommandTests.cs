@@ -322,9 +322,55 @@ public class InvokeBashPrintfPwdCommandTests : IClassFixture<SharedPwshFixture>
     [Fact]
     public void Printf_Help_DelegatesToShowBashHelp()
     {
-        var lines = RunLines("Invoke-BashPrintf --help");
-        Assert.NotEmpty(lines);
-        Assert.Contains(lines, l => l.Contains("Usage: printf"));
+        // bash prints the builtin help on stdout AND the invalid-option diagnostic (exit 2).
+        var r = CmdResult.Run(_fixture.AcquireFresh(), "Invoke-BashPrintf '--help'");
+        Assert.Contains(r.Stdout.Split('\n'), l => l.Contains("Usage: printf"));
+        r.AssertFailed(2, "--: invalid option");
+    }
+
+    // ---- printf: builtin options (bash semantics, not getopt) ----
+
+    [Fact]
+    public void Printf_DashV_AssignsVariableAndPrintsNothing()
+    {
+        var pwsh = _fixture.AcquireFresh();
+        var r = CmdResult.Run(pwsh, "Invoke-BashPrintf '-v' myvar '%s-%d' a 5; $myvar").AssertSuccess();
+        Assert.Equal("a-5", r.Stdout.Trim());
+        Assert.Equal("a-5", Environment.GetEnvironmentVariable("myvar"));
+    }
+
+    [Fact]
+    public void Printf_DashVJoined_AndLastWins()
+    {
+        var r = CmdResult.Run(_fixture.AcquireFresh(), "Invoke-BashPrintf '-vpa' '-vpb' '%s' z; $pa + '|' + $pb").AssertSuccess();
+        Assert.Equal("|", r.Stdout.Trim().Replace("z", ""));
+    }
+
+    [Fact]
+    public void Printf_DashV_Direct_BareDecoyBinds()
+        // A bare -v typed at PowerShell prefix-matches -Verbose; the V decoy rescues it (Pester path).
+        => Assert.Equal("hi", CmdResult.Run(_fixture.AcquireFresh(), "Invoke-BashPrintf -v pv2 '%s' hi; $pv2").AssertSuccess().Stdout.Trim());
+
+    [Fact]
+    public void Printf_DashV_ArrayElement_SetsThatElement()
+        => Assert.Equal("x|hi", CmdResult.Run(_fixture.AcquireFresh(),
+            "$parr = @('x'); Invoke-BashPrintf '-v' 'parr[2]' '%s' hi; $parr[0] + '|' + $parr[2]").AssertSuccess().Stdout.Trim());
+
+    [Theory]
+    [InlineData("'-x'", "-x: invalid option")]
+    [InlineData("'-v'", "-v: option requires an argument")]
+    [InlineData("'--'", "usage: printf")]
+    [InlineData("", "usage: printf")]
+    [InlineData("'-v' x", "usage: printf")]
+    [InlineData("'-v' '1bad' x", "not a valid identifier")]
+    public void Printf_UsageErrors_Exit2(string args, string stderr)
+        => CmdResult.Run(_fixture.AcquireFresh(), "Invoke-BashPrintf " + args).AssertFailed(2, stderr);
+
+    [Fact]
+    public void Printf_DashDash_EndsOptions_FormatVerbatim()
+    {
+        Assert.Equal(new[] { "-x" }, RunBashText("Invoke-BashPrintf '--' '-x'"));
+        Assert.Equal(new[] { "-n" + "\n" }, RunBashText("Invoke-BashPrintf '%s\n' '-n'"));
     }
 
     // ---- pwd: core behavior ----

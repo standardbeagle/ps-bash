@@ -217,17 +217,20 @@ public class InvokeBashTestCommandTests : IClassFixture<SharedPwshFixture>
     }
 
     [Fact]
-    public void BracketForm_TrailingCloseStripped()
+    public void Test_TrailingCloseBracket_IsAnOrdinaryWord()
     {
-        // Defensive parity: even when invoked via the cmdlet's canonical
-        // name (not the `[` alias), a trailing `]` token is stripped before
-        // evaluation, so `Invoke-BashTest -n abc ]` behaves identically to
-        // `Invoke-BashTest -n abc`.
-        var (val, exit, _) = Run("Invoke-BashTest -n 'abc' ']'");
-        Assert.True(val);
-        Assert.Equal(0, exit);
+        // `test -n abc ]` is three words, and the middle one is not an operator: bash says
+        // "abc: binary operator expected" (exit 2). Only the `[` alias consumes the `]`.
+        var (_, exit, _) = Run("Invoke-BashTest -n 'abc' ']'");
+        Assert.Equal(2, exit);
     }
 
+    [Fact]
+    public void BracketForm_MissingClose_Exit2()
+    {
+        var (_, exit, _) = Run("& '[' -n 'abc'");
+        Assert.Equal(2, exit);
+    }
     // ---- alias resolution ----
 
     [Fact]
@@ -248,18 +251,77 @@ public class InvokeBashTestCommandTests : IClassFixture<SharedPwshFixture>
         Assert.Equal(0, exit);
     }
 
-    // ---- --help ----
+    // ---- no options: --help / --version are plain one-word expressions (bash test has neither) ----
 
-    [Fact]
-    public void Help_EmitsUsage()
+    [Theory]
+    [InlineData("Invoke-BashTest '--help'")]
+    [InlineData("Invoke-BashTest '--version'")]
+    [InlineData("Invoke-BashTest '-h'")]
+    public void OneWordExpression_IsTrue_AndSilent(string script)
     {
         var pwsh = _fixture.AcquireFresh();
-        var result = pwsh.AddScript("Invoke-BashTest --help").Invoke();
+        var result = pwsh.AddScript(script + "; $global:LASTEXITCODE").Invoke();
         pwsh.Commands.Clear();
-        var lines = result.Select(o => o?.ToString() ?? "").ToArray();
-        Assert.NotEmpty(lines);
+        Assert.Equal(new[] { "0" }, result.Select(o => o?.ToString() ?? "").ToArray());
     }
 
+    // ---- dash-leading operands as the transpiler delivers them (all quoted, verbatim) ----
+
+    [Theory]
+    [InlineData("'-n' '-e'", 0)]          // -n with operand "-e"
+    [InlineData("'x' '=' '-f'", 1)]
+    [InlineData("'-f' '=' '-f'", 0)]
+    [InlineData("'!' '-z' 'x'", 0)]
+    [InlineData("'-e' 'nonexistent-zz' '-a' '-d' 'nonexistent-dir'", 1)]
+    [InlineData("'-o'", 0)]               // one word
+    [InlineData("'-o' 'x'", 0)]           // -o is the unary "shell option x is set": not set here
+    public void DashWords_AreExpressionWords(string args, int expectedExitIfNotO)
+    {
+        var (_, exit, _) = Run("Invoke-BashTest " + args);
+        if (args.StartsWith("'-o' 'x'")) Assert.Equal(1, exit); else Assert.Equal(expectedExitIfNotO, exit);
+    }
+
+    [Fact]
+    public void DirectCall_Decoys_KeepTheirPositionInTheExpression()
+    {
+        // -e / -d / -a / -o are swallowed by decoy switches on a DIRECT call; the expression is
+        // positional, so they must be put back where they stood.
+        var tmp = Path.Combine(Path.GetTempPath(), "psb-decoy-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tmp);
+        try
+        {
+            Assert.Equal(0, Run($"Invoke-BashTest -e '{tmp}' -a -d '{tmp}'").exit);
+            Assert.Equal(1, Run($"Invoke-BashTest -e '{tmp}-nope' -a -d '{tmp}'").exit);
+            Assert.Equal(0, Run($"Invoke-BashTest -e '{tmp}-nope' -o -d '{tmp}'").exit);
+            Assert.Equal(0, Run($"Invoke-BashTest '!' -e '{tmp}-nope'").exit);
+        }
+        finally { Directory.Delete(tmp, true); }
+    }
+
+    [Fact]
+    public void WritableProbe_DoesNotCreateMissingFile()
+    {
+        // -w used to File.OpenWrite(path), which CREATES a missing file.
+        var p = Path.Combine(Path.GetTempPath(), "psb-w-" + Guid.NewGuid().ToString("N"));
+        var (_, exit, _) = Run($"Invoke-BashTest '-w' '{p}'");
+        Assert.Equal(1, exit);
+        Assert.False(File.Exists(p));
+    }
+
+    [Fact]
+    public void Link_TestsDirectoryLinksToo()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "psb-l-" + Guid.NewGuid().ToString("N"));
+        var real = Path.Combine(dir, "real"); var link = Path.Combine(dir, "link");
+        Directory.CreateDirectory(real);
+        try
+        {
+            try { Directory.CreateSymbolicLink(link, real); } catch { return; } // privilege-gated on Windows
+            Assert.Equal(0, Run($"Invoke-BashTest '-L' '{link}'").exit);
+            Assert.Equal(1, Run($"Invoke-BashTest '-L' '{real}'").exit);
+        }
+        finally { Directory.Delete(dir, true); }
+    }
     // ---- Directive 12: injection probe ----
 
     [Fact]

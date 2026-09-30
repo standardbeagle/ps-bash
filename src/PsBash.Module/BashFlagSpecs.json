@@ -754,6 +754,49 @@
     {
       "flag": "-1",
       "desc": "one per line"
+    },
+    {
+      "flag": "-A",
+      "desc": "show hidden except . and .."
+    },
+    {
+      "flag": "-d",
+      "desc": "list directories themselves"
+    },
+    {
+      "flag": "-p",
+      "desc": "append / to directories"
+    },
+    {
+      "flag": "-F",
+      "desc": "classify: append */=>@| indicators"
+    },
+    {
+      "flag": "-i",
+      "desc": "print inode numbers (accepted, not shown)"
+    },
+    {
+      "flag": "-s",
+      "desc": "print block sizes (accepted, not shown)"
+    },
+    {
+      "flag": "--color",
+      "desc": "colorize output",
+      "arg": "WHEN"
+    },
+    {
+      "flag": "--sort",
+      "desc": "sort by size or time",
+      "arg": "WORD"
+    },
+    {
+      "flag": "--classify",
+      "desc": "classify entries",
+      "arg": "WHEN"
+    },
+    {
+      "flag": "--group-directories-first",
+      "desc": "list directories before files"
     }
   ],
   "mapfile": [
@@ -864,6 +907,13 @@
     {
       "flag": "-o",
       "desc": "output format"
+    }
+  ],
+  "printf": [
+    {
+      "flag": "-v",
+      "desc": "assign the output to shell variable VAR instead of printing it",
+      "arg": "VAR"
     }
   ],
   "pushd": [
