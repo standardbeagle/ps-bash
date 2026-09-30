@@ -1121,6 +1121,19 @@ public class BashParserTests
         Assert.Equal("file", Assert.IsType<WordPart.Literal>(Assert.Single(boolExpr.Inner[1].Parts)).Value);
     }
 
+    [Theory]
+    [InlineData("[ ! = ! ]", 3)]
+    [InlineData("[ ! = x ]", 3)]
+    [InlineData("[ a != b ]", 3)]
+    [InlineData("[ ! ]", 1)]
+    public void Parse_BangEquals_MergesOnlyWhenAdjacent(string src, int words)
+    {
+        var boolExpr = Assert.IsType<Command.BoolExpr>(Parse(src));
+        Assert.Equal(words, boolExpr.Inner.Length);
+        var mid = Assert.IsType<WordPart.Literal>(Assert.Single(boolExpr.Inner[words == 3 ? 1 : 0].Parts)).Value;
+        Assert.Equal(src.Contains("a !=") ? "!=" : words == 3 ? "=" : "!", mid);
+    }
+
     [Fact]
     public void Parse_DoubleBracketTest_ReturnsBoolExprExtended()
     {

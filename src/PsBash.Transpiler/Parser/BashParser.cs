@@ -385,9 +385,12 @@ public sealed partial class BashParser
             {
                 var opToken = Advance();
                 // Handle != (Bang followed by word starting with =)
+                // ADJACENT only: `[ a != b ]` is one operator, but `[ ! = x ]` has a space
+                // between the words, so `!` is a negation/operand and `=` the binary operator.
                 if (opToken.Kind == BashTokenKind.Bang
                     && Peek().Kind == BashTokenKind.Word
-                    && Peek().Value.StartsWith('='))
+                    && Peek().Value.StartsWith('=')
+                    && Peek().Position == opToken.Position + opToken.Value.Length)
                 {
                     var eqToken = Advance();
                     inner.Add(new CompoundWord(ImmutableArray.Create<WordPart>(
