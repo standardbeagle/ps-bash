@@ -1,4 +1,5 @@
 using System.Management.Automation;
+using PsBash.Cmdlets.Args;
 using System.Text.RegularExpressions;
 
 namespace PsBash.Cmdlets;
@@ -11,28 +12,13 @@ namespace PsBash.Cmdlets;
 /// <c>-e</c>; <c>-E</c> is accepted as the default-state no-op, and there is no
 /// last-wins ordering between them).
 ///
-/// Flag binding: <c>-e</c> and <c>-E</c> both prefix-collide with the common
-/// parameters <c>-ErrorAction</c> / <c>-ErrorVariable</c>, and being
-/// case-insensitive the binder cannot even tell them apart. Two paths reach
-/// this cmdlet and both must work:
-/// <list type="bullet">
-/// <item><b>Transpiler</b> (<c>ps-bash -c 'echo -e ...'</c>): the emitter
-/// force-quotes <c>-e</c> / <c>-E</c>
-/// (<see cref="PsBash.Core.Parser.PsEmitter"/> EchoForceQuoteFlags) so they
-/// arrive as plain operands in <see cref="Arguments"/> with case intact, where
-/// <see cref="BashRuntime.ConvertFromBashArgs"/> parses them case-sensitively
-/// (its flag table is ordinal).</item>
-/// <item><b>Direct cmdlet call</b> (<c>Invoke-BashEcho -e ...</c>, e.g. from
-/// the Pester suite or <c>Import-Module PsBash</c> users): a bare <c>-e</c>
-/// never reaches <see cref="Arguments"/> — the binder throws
-/// "ambiguous" first. The <see cref="E"/> SwitchParameter decoy resolves that
-/// (an explicit name beats a common-parameter prefix), and because the switch
-/// alone cannot carry the original case, the enable-vs-disable choice is
-/// recovered from <see cref="System.Management.Automation.InvocationInfo.Line"/>
-/// (case-sensitive, bash last-wins) and re-injected so the same
-/// <c>ConvertFromBashArgs</c> path handles it.</item>
-/// </list>
-/// <c>-n</c> shares no prefix and needs no quoting.
+/// Options follow the bash BUILTIN, not getopt: see <see cref="EchoArgScan"/> (a leading run of
+/// <c>-[neE]+</c> words; everything else, including <c>--</c> and <c>--help</c>, is literal).
+/// <c>echo</c> is on <c>PsEmitter.OrderedArgCommands</c>, so the transpiler single-quotes every
+/// dash word and each arrives in <see cref="Arguments"/> verbatim, case intact, in order. A DIRECT
+/// cmdlet call (Pester, <c>Import-Module PsBash</c>) still hits the binder: a bare <c>-e</c> /
+/// <c>-E</c> is ambiguous with <c>-ErrorAction</c>, so the <see cref="E"/> decoy swallows it and
+/// the original case is recovered from the invocation line and re-injected.
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashEcho")]
 [OutputType(typeof(string))]
@@ -58,7 +44,7 @@ public sealed class InvokeBashEchoCommand : PSCmdlet
         // Direct-call decoy fired: the bare -e/-E was swallowed by the E switch
         // and is absent from Arguments. Recover its case from the invocation line
         // (the only place the original token survives) and re-inject it so the
-        // case-sensitive ConvertFromBashArgs below sees it. bash is last-wins, so
+        // case-sensitive option scan below sees it. bash is last-wins, so
         // take the last standalone -e/-E token; default to -e (enable) if the
         // line is somehow unavailable.
         if (E.IsPresent)
@@ -73,27 +59,18 @@ public sealed class InvokeBashEchoCommand : PSCmdlet
             args = argList.ToArray();
         }
 
-        if (Array.IndexOf(args, "--help") >= 0)
-        {
-            foreach (var line in InvokeCommand.InvokeScript("param($n) Show-BashHelp $n", "echo"))
-                WriteObject(line);
-            return;
-        }
-
-        var defs = new Dictionary<string, string>(StringComparer.Ordinal)
-        {
-            ["-n"] = "no trailing newline",
-            ["-e"] = "enable escape sequences",
-            ["-E"] = "disable escape sequences",
-        };
-        var parsed = BashRuntime.ConvertFromBashArgs(args, defs);
-
-        var text = string.Join(" ", parsed.Operands);
+        // bash builtin: only a LEADING run of `-[neE]+` words are options; the first other word
+        // (`-x`, `--`, `-n-`, `--help`, `-`) and everything after it is printed literally.
+        var scan = EchoArgScan.Scan(args);
+        var operands = scan.FirstOperand >= args.Length
+            ? Array.Empty<string>()
+            : args[scan.FirstOperand..];
+        var text = string.Join(" ", operands);
         bool stopped = false;
-        if (parsed.Flags["-e"])
+        if (scan.Escapes)
             text = BashEscapes.Expand(text, EscapeDialect.Echo, out stopped);
         // \c stops ALL output, including the trailing newline.
-        if (!parsed.Flags["-n"] && !stopped)
+        if (!scan.NoNewline && !stopped)
             text += "\n";
 
         foreach (var obj in BashRuntime.EmitBashLines(text, "echo"))
@@ -102,6 +79,6 @@ public sealed class InvokeBashEchoCommand : PSCmdlet
         FileSystemHelpers.SetLastExitCode(this, 0);
         // $_ in the next command resolves to the last operand of this one.
         SessionState.PSVariable.Set("global:BashLastArg",
-            parsed.Operands.Count > 0 ? parsed.Operands[^1] : "");
+            operands.Length > 0 ? operands[^1] : "");
     }
 }

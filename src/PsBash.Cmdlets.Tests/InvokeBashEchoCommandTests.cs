@@ -68,13 +68,9 @@ public class InvokeBashEchoCommandTests : IClassFixture<SharedPwshFixture>
         => Assert.Equal(new[] { "hello" }, RunLines("Invoke-BashEcho '-n' hello"));
 
     [Fact]
-    public void Echo_HelpFlag_EmitsUsage()
-    {
-        var lines = RunLines("Invoke-BashEcho --help");
-        Assert.NotEmpty(lines);
-        Assert.Contains(lines, l => l.Contains("echo", StringComparison.OrdinalIgnoreCase));
-    }
-
+    public void Echo_HelpFlag_IsPrintedLiterally()
+        // bash's echo builtin has no --help: it prints the word (oracle: echo --help -> --help).
+        => Assert.Equal(new[] { "--help" }, RunLines("Invoke-BashEcho '--help'"));
     [Fact]
     public void Echo_AliasResolution_NoFlags()
         // `Set-Alias echo Invoke-BashEcho` resolves to the cmdlet (the psm1
@@ -83,8 +79,7 @@ public class InvokeBashEchoCommandTests : IClassFixture<SharedPwshFixture>
         => Assert.Equal(new[] { "hi there" }, RunLines("echo hi there"));
 
     [Fact]
-    public void Echo_DoubleDash_EndsFlagParsing()
-        // `echo -- -n` → "-n" (operands after --). The emitter force-quotes `--`
-        // (so PowerShell's binder doesn't swallow it); tested in that quoted form.
-        => Assert.Equal(new[] { "-n" }, RunLines("Invoke-BashEcho '--' '-n'"));
+    public void Echo_DoubleDash_IsPrintedLiterally()
+        // bash echo has no `--` handling: `echo -- -n` prints "-- -n" (oracle-checked).
+        => Assert.Equal(new[] { "-- -n" }, RunLines("Invoke-BashEcho '--' '-n'"));
 }

@@ -118,9 +118,9 @@ Describe 'Invoke-BashEcho' {
         $text | Should -Be 'hello'
     }
 
-    It '-- stops flag parsing' {
+    It '-- is printed literally (bash echo has no -- handling)' {
         $result = Invoke-BashEcho '--' '-n'
-        $result.BashText | Should -Be '-n'
+        $result.BashText | Should -Be '-- -n'
     }
 }
 

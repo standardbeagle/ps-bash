@@ -5334,7 +5334,7 @@ public static class PsEmitter
                 // -ErrorAction/-ErrorVariable and are case-indistinguishable to the
                 // binder; force-quote them so they reach the cmdlet's Arguments with
                 // case intact (the cmdlet parses -e/-E case-sensitively). `-n` is safe.
-                result = EmitPassthrough("Invoke-BashEcho", args, EchoForceQuoteFlags);
+                result = EmitPassthrough("Invoke-BashEcho", args);
                 return true;
             case "printf":
                 result = EmitPassthrough("Invoke-BashPrintf", args);
@@ -5955,14 +5955,6 @@ public static class PsEmitter
         new HashSet<string>(StringComparer.Ordinal) { "-o", "-a" };
 
     /// <summary>
-    /// echo's <c>-e</c> / <c>-E</c> collide with the <c>-Error*</c> common
-    /// parameters and are case-indistinguishable to the binder; quoting routes
-    /// them to <c>Invoke-BashEcho</c>'s Arguments with case intact.
-    /// </summary>
-    private static readonly IReadOnlySet<string> EchoForceQuoteFlags =
-        new HashSet<string>(StringComparer.Ordinal) { "-e", "-E", "--" };
-
-    /// <summary>
     /// Bash command names whose cmdlet parses its argv with the shared ORDERED parser
     /// (<c>PsBash.Cmdlets.Args.ArgParser</c>). For these, <see cref="EmitPassthrough"/> quotes
     /// EVERY dash-leading literal word (and <c>--</c>) so the PowerShell binder never sees a
@@ -5974,7 +5966,7 @@ public static class PsEmitter
     /// cmdlet must be prepared to receive every flag as a plain string.
     /// </summary>
     internal static readonly IReadOnlySet<string> OrderedArgCommands =
-        new HashSet<string>(StringComparer.Ordinal) { "tee", "cp", "mv", "rm", "mkdir", "rmdir", "ln", "touch", "xargs", "time", "env", "command", "bash", "awk", "head", "tail", "wc", "cat", "tac", "nl", "uniq", "fold", "expand", "unexpand", "paste", "join", "comm", "split", "strings", "base64", "stat", "file", "cut", "sort" };
+        new HashSet<string>(StringComparer.Ordinal) { "tee", "cp", "mv", "rm", "mkdir", "rmdir", "ln", "touch", "xargs", "time", "env", "command", "bash", "awk", "head", "tail", "wc", "cat", "tac", "nl", "uniq", "fold", "expand", "unexpand", "paste", "join", "comm", "split", "strings", "base64", "stat", "file", "cut", "sort", "echo" };
 
     /// <summary><c>Invoke-BashTee</c> -&gt; is <c>tee</c> in <see cref="OrderedArgCommands"/>?</summary>
     private static bool IsOrderedArgCmdlet(string cmdlet) =>
