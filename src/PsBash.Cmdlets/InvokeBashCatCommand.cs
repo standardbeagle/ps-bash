@@ -1,4 +1,6 @@
+using System.Linq;
 using System.Management.Automation;
+using PsBash.Cmdlets.Args;
 
 namespace PsBash.Cmdlets;
 
@@ -90,20 +92,80 @@ public sealed class InvokeBashCatCommand : PSCmdlet
     [Parameter(ValueFromPipeline = true)]
     public PSObject? InputObject { get; set; }
 
-    /// <summary>Valid GNU <c>cat</c> options ps-bash does not implement (see
-    /// <see cref="FileSystemHelpers.TryWriteOperandOptionError"/>). Note <c>-v</c>
-    /// and <c>-e</c> are eaten by the binder (-Verbose / the -E switch) before
-    /// reaching here; listed for completeness / bundle probing.</summary>
-    private static readonly HashSet<string> CatValidButUnsupported = new(StringComparer.Ordinal)
+    /// <summary>
+    /// Valid GNU <c>cat</c> options ps-bash does not implement, refused loudly (exit 2) by the
+    /// shared parser: -A / -e / -t / -v (and --show-all / --show-nonprinting) all need the
+    /// <c>-v</c> caret/M- notation for non-printing characters, which is not implemented.
+    /// (A string[] on purpose: CommonParameterCollisionGuardTests enumerates static string sets.)
+    /// </summary>
+    private static readonly string[] CatValidButUnsupported =
     {
-        // -A / -e / -t / -v all require -v non-printing (caret/M- notation),
-        // which is not implemented. The long-form aliases of the SUPPORTED short
-        // flags (--number, --number-nonblank, --squeeze-blank, --show-ends,
-        // --show-tabs) are now parsed and are NOT listed here.
-        "-A", "-t", "-u", "-v", "-e",
+        "-A", "-t", "-v", "-e",
         "--show-all", "--show-nonprinting",
     };
 
+    private const string OptNumber = "number", OptNonBlank = "nonblank", OptSqueeze = "squeeze",
+        OptEnds = "ends", OptTabs = "tabs", OptIgnored = "ignored";
+
+    /// <summary>
+    /// cat's option surface (GNU coreutils 9.4: -A -b -e -E -n -s -t -T -u -v + --show-all
+    /// --number-nonblank --show-ends --number --squeeze-blank --show-tabs --show-nonprinting).
+    /// <c>-u</c> is "(ignored)" in GNU and is accepted as a no-op here too. Built once for the
+    /// shared ordered parser.
+    /// </summary>
+    private static readonly OptSpecSet CatSpec = new(
+        new[]
+        {
+            new OptSpec(OptNumber, 'n', "number"),
+            new OptSpec(OptNonBlank, 'b', "number-nonblank"),
+            new OptSpec(OptSqueeze, 's', "squeeze-blank"),
+            new OptSpec(OptEnds, 'E', "show-ends"),
+            new OptSpec(OptTabs, 'T', "show-tabs"),
+            new OptSpec(OptIgnored, 'u', null),
+        },
+        validButUnsupported: CatValidButUnsupported,
+        allowAbbrev: true,
+        gnuInfoOptions: true);
+
+    /// <summary>Pure argv scan (unit-test seam): options, operands and the first error.</summary>
+    internal static ParsedArgs ScanArgs(string[] args) => ArgParser.Parse(args, CatSpec);
+
+    /// <summary>The resolved meaning of a cat argv (shared by the cmdlet and the fused core).</summary>
+    internal sealed class CatArgs
+    {
+        public ParsedArgs Parsed = null!;
+        public bool NumberAll, NumberNonBlank, Squeeze, ShowEnds, ShowTabs;
+        public List<string> Operands = new();
+
+        /// <summary>True when nothing further should execute: scan error or --help/--version.</summary>
+        public bool Declined =>
+            Parsed.HasError || Parsed.Has(OptSpecSet.HelpId) || Parsed.Has(OptSpecSet.VersionId);
+
+        public bool HasFlags => NumberAll || NumberNonBlank || Squeeze || ShowEnds || ShowTabs;
+    }
+
+    /// <summary>Scan + resolve (any order, any bundling; repeats are harmless).</summary>
+    internal static CatArgs Plan(string[] args)
+    {
+        var p = ScanArgs(args);
+        return new CatArgs
+        {
+            Parsed = p,
+            NumberAll = p.Has(OptNumber),
+            NumberNonBlank = p.Has(OptNonBlank),
+            Squeeze = p.Has(OptSqueeze),
+            ShowEnds = p.Has(OptEnds),
+            ShowTabs = p.Has(OptTabs),
+            Operands = p.Operands(),
+        };
+    }
+
+    /// <summary>Arguments with the decoy-bound flags re-injected (bare -A binds -Arguments, -v binds
+    /// -Verbose, -E binds the E switch): a bound decoy would otherwise never reach the parser.</summary>
+    private string[] ArgsWithDecoys()
+        => BashRuntime.PrependDecoys(Arguments, (A.IsPresent, "-A"), (V.IsPresent, "-v"), (E.IsPresent, "-E"));
+
+    private CatArgs? _plan;
     // Parsed-once flag / operand state.
     private bool _parsed;
     private bool _numberAll, _numberNonBlank, _squeezeBlanks, _showEnds, _showTabs, _hasFlags;
@@ -127,88 +189,29 @@ public sealed class InvokeBashCatCommand : PSCmdlet
         if (_parsed) return;
         _parsed = true;
 
-        // Re-inject decoy-bound classifier flags (bare -A/-v never reach Arguments —
-        // -A binds -Arguments, -v binds -Verbose) so TryWriteOperandOptionError fires.
-        var args = BashRuntime.PrependDecoys(Arguments, (A.IsPresent, "-A"), (V.IsPresent, "-v"));
+        var args = ArgsWithDecoys();
 
-        // Translate the GNU long forms that are exact aliases of the supported
-        // short flags into their short spelling before ConvertFromBashArgs sees
-        // them (it parses short flags). --show-ends maps to the E switch, so it
-        // is tracked separately and dropped from the arg stream.
-        bool longShowEnds = false;
-        {
-            var translated = new List<string>(args.Length);
-            bool sawDashDash = false;
-            foreach (var a in args)
-            {
-                // After a bare `--`, every token is a filename (GNU) — copy verbatim,
-                // never translate a file literally named like a long flag.
-                if (sawDashDash) { translated.Add(a); continue; }
-                if (a == "--") { sawDashDash = true; translated.Add(a); continue; }
-                switch (a)
-                {
-                    case "--number": translated.Add("-n"); break;
-                    case "--number-nonblank": translated.Add("-b"); break;
-                    case "--squeeze-blank": translated.Add("-s"); break;
-                    case "--show-tabs": translated.Add("-T"); break;
-                    case "--show-ends": longShowEnds = true; break;
-                    default: translated.Add(a); break;
-                }
-            }
-            args = translated.ToArray();
-        }
-
-        // -E is bound via the explicit E switch (common-parameter collision);
-        // the rest stay in Arguments and are parsed by ConvertFromBashArgs.
-        var flagDefs = BashRuntime.NewFlagDefs(new[]
-        {
-            "-n", "number all lines",
-            "-b", "number non-blank lines",
-            "-s", "squeeze blank lines",
-            "-T", "show ^I for tabs",
-        });
-        var parsed = BashRuntime.ConvertFromBashArgs(args, flagDefs);
-        _numberAll = parsed.Flags["-n"];
-        _numberNonBlank = parsed.Flags["-b"];
-        _squeezeBlanks = parsed.Flags["-s"];
-        _showEnds = E.IsPresent || longShowEnds;
-        _showTabs = parsed.Flags["-T"];
-
-        // Bundled-flag recovery: a bundle like -nE or -Es reaches Arguments
-        // intact (the explicit E switch only binds a bare -E). ConvertFromBashArgs
-        // turns an unrecognized bundle char into an operand, so -E inside a
-        // bundle of otherwise-known cat flags would be lost. Detect that case
-        // and restore -n/-b/-s/-T/-E from the bundle, matching the psm1 oracle's
-        // ConvertFrom-BashArgs which split bundled short flags.
-        for (int bi = 0; bi < parsed.Operands.Count; bi++)
-        {
-            var op = parsed.Operands[bi];
-            if (op.Length > 1 && op[0] == '-' && op[1] != '-'
-                && op.Skip(1).All(c => "nbsTE".IndexOf(c) >= 0))
-            {
-                if (op.IndexOf('n') >= 0) _numberAll = true;
-                if (op.IndexOf('b') >= 0) _numberNonBlank = true;
-                if (op.IndexOf('s') >= 0) _squeezeBlanks = true;
-                if (op.IndexOf('T') >= 0) _showTabs = true;
-                if (op.IndexOf('E') >= 0) _showEnds = true;
-                parsed.Operands.RemoveAt(bi);
-                bi--;
-            }
-        }
-        _hasFlags = _numberAll || _numberNonBlank || _squeezeBlanks || _showEnds || _showTabs;
-        _operands = parsed.Operands;
+        // Shared ordered parser: bundles (-nE, -Es), long forms (--number), unique-prefix
+        // abbreviations (--squeeze), `--`, and the unsupported/unknown classifier in ONE scan.
+        // A scan error is reported from EndProcessing; stdin is not streamed for it.
+        var plan = Plan(args);
+        _plan = plan;
+        _numberAll = plan.NumberAll;
+        _numberNonBlank = plan.NumberNonBlank;
+        _squeezeBlanks = plan.Squeeze;
+        _showEnds = plan.ShowEnds;
+        _showTabs = plan.ShowTabs;
+        _hasFlags = plan.HasFlags;
+        _operands = plan.Operands;
         _readStdin = _operands.Count == 0 || _operands.Contains("-");
 
-        // Help / version / an unknown option all make EndProcessing emit
-        // something other than the catenation and return early; the oracle
-        // ignored stdin in those cases. A file-only invocation likewise never
-        // reads stdin. In all of these we must not stream the pipeline.
+        // Help / version / a scan error all make EndProcessing emit something other than the
+        // catenation and return early; the oracle ignored stdin in those cases. A file-only
+        // invocation likewise never reads stdin. In all of these we must not stream the pipeline.
         bool helpOrVersion = Array.IndexOf(args, "--help") >= 0
             || Array.IndexOf(args, "--version") >= 0;
-        bool unknownOption = _operands.Any(FileSystemHelpers.IsOptionLike);
-        _suppressStdin = !_readStdin || helpOrVersion || unknownOption;
+        _suppressStdin = !_readStdin || helpOrVersion || plan.Declined;
     }
-
     protected override void ProcessRecord()
     {
         if (InputObject == null) return;
@@ -244,7 +247,7 @@ public sealed class InvokeBashCatCommand : PSCmdlet
     {
         ParseOnce();
 
-        var args = Arguments ?? Array.Empty<string>();
+        var args = ArgsWithDecoys();
 
         FileSystemHelpers.SetLastExitCode(this, 0);
         if (FileSystemHelpers.TryHandleVersion(this, "cat", args)) return;
@@ -258,15 +261,11 @@ public sealed class InvokeBashCatCommand : PSCmdlet
             return;
         }
 
-        // Any remaining option-looking operand (not the lone "-" stdin marker)
-        // is an unknown flag that fell through ConvertFromBashArgs, not a file —
-        // classify it (specific "not supported" if a valid cat flag, else
-        // bash-parity "unrecognized option") instead of reporting a missing file.
-        if (FileSystemHelpers.TryWriteOperandOptionError(this, "cat", _operands, CatValidButUnsupported))
+        if (_plan is { } plan)
         {
-            return;
+            if (FileSystemHelpers.TryWriteParseError(this, "cat", plan.Parsed)) return;
+            if (FileSystemHelpers.TryHandleInfoOptions(this, "cat", plan.Parsed)) return;
         }
-
         // Stdin was already streamed from ProcessRecord; only files remain.
         var fileOperands = _operands.Where(o => o != "-").ToList();
 

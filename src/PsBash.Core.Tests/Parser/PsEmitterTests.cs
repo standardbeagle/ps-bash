@@ -782,7 +782,7 @@ public class PsEmitterTests
         // Batch 1 of the shared ordered parser. Adding a command here also means adding it to
         // CommonParameterCollisionGuardTests.EmitterForceQuoted (Cmdlets.Tests) — that map is
         // how the guard knows the emitter, not a decoy, protects the colliding letters.
-        Assert.Equal(new[] { "cp", "head", "ln", "mkdir", "mv", "rm", "rmdir", "tail", "tee", "touch", "wc" }, PsEmitter.OrderedArgCommands.OrderBy(x => x).ToArray());
+        Assert.Equal(new[] { "cat", "cp", "head", "ln", "mkdir", "mv", "rm", "rmdir", "tail", "tee", "touch", "wc" }, PsEmitter.OrderedArgCommands.OrderBy(x => x).ToArray());
     }
 
     [Theory]
@@ -834,6 +834,12 @@ public class PsEmitterTests
     [InlineData("wc -lwc f", "Invoke-BashWc '-lwc' f")]
     [InlineData("wc --max-line-length f", "Invoke-BashWc '--max-line-length' f")]
     [InlineData("wc -w -- -c", "Invoke-BashWc '-w' '--' '-c'")]
+    [InlineData("cat -n f", "Invoke-BashCat '-n' f")]
+    [InlineData("cat -nET f", "Invoke-BashCat '-nET' f")]
+    [InlineData("cat --squeeze-blank f", "Invoke-BashCat '--squeeze-blank' f")]
+    [InlineData("cat -e -v -A f", "Invoke-BashCat '-e' '-v' '-A' f")]
+    [InlineData("cat - f -n", "Invoke-BashCat '-' f '-n'")]
+    [InlineData("cat -- -n", "Invoke-BashCat '--' '-n'")]
     public void Transpile_OrderedArgCommand_QuotesEveryDashLiteral(string bash, string expected)
     {
         Assert.Equal(expected, PsEmitter.Transpile(bash));

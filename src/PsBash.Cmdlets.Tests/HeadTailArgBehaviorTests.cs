@@ -26,6 +26,9 @@ public class HeadTailArgBehaviorTests : IClassFixture<SharedPwshFixture>, IDispo
 
     private const string Four = "'a','b','c','d'";
 
+    // Flagged cat emits typed CatLine objects; project their BashText for comparison.
+    private const string Text = " | ForEach-Object { if ($null -ne $_.BashText) { $_.BashText } else { $_ } }";
+
     private CmdResult Run(string script) => CmdResult.Run(_fixture.AcquireFresh(), script);
 
     private string File1(string content)
@@ -168,5 +171,41 @@ public class HeadTailArgBehaviorTests : IClassFixture<SharedPwshFixture>, IDispo
         var f = File1("l1\nl2\nl3\n");
         var r = Run($"Invoke-BashTail '{f}' '-qn' 2").AssertSuccess();
         Assert.Equal(new[] { "l2", "l3" }, r.Lines);
+    }
+
+    // ── cat ─────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void Cat_UIsIgnoredAsInGnu_AndBundlesResolve()
+    {
+        Assert.Equal(new[] { "a", "b" }, Run("'a','b' | Invoke-BashCat '-u'").AssertSuccess().Lines);
+        var r = Run("'x' | Invoke-BashCat '-nE'" + Text).AssertSuccess();
+        Assert.Equal(new[] { "     1\tx$" }, r.Lines);
+    }
+
+    [Fact]
+    public void Cat_AbbreviatedLongOptions_MatchGnu()
+    {
+        // --squeeze = --squeeze-blank (was: a file operand -> "No such file")
+        var r = Run("'a','','','b' | Invoke-BashCat '--squeeze'" + Text).AssertSuccess();
+        Assert.Equal(new[] { "a", "", "b" }, r.Lines);
+        var b = Run("'a','','b' | Invoke-BashCat '-bn'" + Text).AssertSuccess();   // GNU: -b overrides -n
+        Assert.Equal(new[] { "     1\ta", "", "     2\tb" }, b.Lines);
+    }
+
+    [Fact]
+    public void Cat_ErrorsAndExitStatuses()
+    {
+        Run("'x' | Invoke-BashCat '-A'").AssertFailed(2, "option '-A' is recognized but not supported");
+        Run("'x' | Invoke-BashCat '-v'").AssertFailed(2, "not supported");
+        Run("'x' | Invoke-BashCat '--bogus'").AssertFailed(1, "unrecognized option '--bogus'");
+        Run("'x' | Invoke-BashCat '-x'").AssertFailed(1, "invalid option -- 'x'");
+        Run("'x' | Invoke-BashCat '--num'").AssertFailed(1, "option '--num' is ambiguous");
+    }
+
+    [Fact]
+    public void Cat_DoubleDash_MakesFlagLikeWordsFileNames()
+    {
+        Run("'x' | Invoke-BashCat '--' '-n'").AssertFailed(1, "-n: No such file or directory"); // a FILE named -n, not a flag
     }
 }
