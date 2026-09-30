@@ -1,104 +1,219 @@
 using System.Management.Automation;
-using System.Text;
+using PsBash.Cmdlets.Args;
 
 namespace PsBash.Cmdlets;
 
 /// <summary>
-/// Binary cmdlet replacement for the psm1 <c>Invoke-BashCut</c> function
-/// (REFACTOR-2 follow-on). Reproduces GNU coreutils <c>cut</c>: extract a
-/// list of fields (<c>-f LIST</c> with <c>-d DELIM</c>) or byte/char ranges
-/// (<c>-c LIST</c>) from each input line.
+/// Binary cmdlet for GNU coreutils <c>cut</c>: select byte (<c>-b</c>), character (<c>-c</c>) or
+/// field (<c>-f</c> with <c>-d</c>) ranges from each input line, from files or the pipeline.
 ///
-/// Behavioral parity oracle: the original psm1 <c>Invoke-BashCut</c>. File +
-/// pipeline dual mode:
-/// <list type="bullet">
-/// <item><b>Pipeline mode</b> — when there are no operands and pipeline input
-/// is present, each pipeline item's <c>BashText</c> is split on <c>\n</c>
-/// after trailing-newline trim; each resulting sub-line is processed and
-/// emitted as a <c>PsBash.TextOutput</c> object (matching the oracle's
-/// defensive-split path).</item>
-/// <item><b>File mode</b> — operands are treated as file paths (glob-expanded
-/// via <see cref="FileSystemHelpers.ResolveOperandPaths"/>). Each file is
-/// read with CRLF normalization (matching the oracle's
-/// <c>Read-BashFileLines</c> / <c>StreamReader.ReadLine()</c> semantics — a
-/// trailing newline does NOT yield a spurious empty final line). Missing
-/// files emit a bash-style error via <see cref="FileSystemHelpers.WriteBashError"/>
-/// and are skipped (the oracle's <c>$null</c>-from-Read-BashFileLines branch
-/// continues to the next operand).</item>
-/// </list>
+/// <para><b>Arguments</b> go through the shared ordered parser (<see cref="CutSpec"/>;
+/// <c>cut</c> is on <c>PsEmitter.OrderedArgCommands</c>, so every flag reaches <c>Arguments</c>
+/// verbatim and in order). <see cref="Plan"/> resolves and validates the whole argv into a
+/// <see cref="CutPlan"/> with GNU's rules and messages (exit 1): exactly one of <c>-b/-c/-f</c>
+/// ("only one list may be specified"), a single-character <c>-d</c> only with <c>-f</c>,
+/// <c>-s</c> only with <c>-f</c>, a valid list (positions from 1, no decreasing range, no
+/// overflow). <c>-z</c> is valid-but-unsupported (exit 2); <c>-n</c> is accepted and ignored, as
+/// GNU 9.4. The per-line engine is <see cref="CutPlan.Apply"/> (shared with the fused core).</para>
 ///
-/// Per-line behavior matches the oracle byte-for-byte:
-/// <list type="bullet">
-/// <item><c>-c LIST</c> selects character positions (1-based). Each parsed
-/// index becomes a single char in the output; out-of-range indices are
-/// silently dropped (the oracle's <c>$idx -ge 0 -and $idx -lt $Line.Length</c>
-/// guard).</item>
-/// <item><c>-f LIST</c> splits the line on <c>-d DELIM</c> (default tab) and
-/// selects the listed fields (1-based), joined back with the same delimiter.
-/// Missing-delim lines: the oracle's <c>Split($delimiter)</c> returns the
-/// whole line as one field, so <c>-f 1</c> emits the whole line and
-/// <c>-f 2</c> emits nothing (no field index 2 exists). This is GNU
-/// <c>cut</c>'s actual behavior only when neither <c>-s</c> nor a different
-/// flag is specified; the psm1 oracle does not implement <c>-s</c>, and we
-/// preserve that.</item>
-/// <item>No <c>-c</c> and no <c>-f</c> — the line passes through unchanged.</item>
-/// </list>
+/// <para><b>Direct PowerShell calls</b>: <c>-d</c> and <c>-c</c> prefix-collide with the
+/// <c>-Debug</c> / <c>-Confirm</c> common parameters, so they are declared value-bearing
+/// parameters <see cref="D"/> / <see cref="C"/> and re-injected as <c>-d VALUE</c> /
+/// <c>-c VALUE</c> pairs. The colon spelling <c>Invoke-BashCut -d: -f2</c> binds <c>D</c> to the
+/// NEXT token; it is recovered from the invocation segment and that token is re-injected.</para>
 ///
-/// List parsing (<c>ParseSpec</c>) matches the oracle: comma-separated parts,
-/// each part either <c>N-M</c> (inclusive range) or <c>N</c> (single index).
-/// The oracle does NOT implement open ranges (<c>N-</c> / <c>-M</c>) — neither
-/// branch matches <c>^\d+-\d+$</c>, so a bare dash-token in either position
-/// falls through to <c>[int]$part</c> and throws. We preserve that exact
-/// failure surface here (we do not add open-range support beyond the oracle).
-///
-/// Flag binding: <c>-d</c> prefix-collides with the <c>-Debug</c> common
-/// parameter and <c>-c</c> prefix-collides with <c>-Confirm</c>. Both are
-/// declared as explicit value-bearing parameters with single-letter names
-/// (<see cref="D"/> / <see cref="C"/> — both <c>string?</c>); the binder
-/// routes a bare token by exact parameter name, which beats a
-/// common-parameter prefix match. A <see cref="System.Management.Automation.AliasAttribute"/>
-/// on a longer parameter name would NOT be sufficient (aliases lose to
-/// common-parameter prefix matches under the cmdlet binder). <c>-f</c> has no
-/// PowerShell common-parameter prefix collision and is recovered from
-/// <see cref="Arguments"/> by a manual scan. The joined short forms
-/// <c>-dC</c>, <c>-fLIST</c>, <c>-cLIST</c> (per the oracle's
-/// <c>^-d(.)$</c> / <c>^-f(.+)$</c> / <c>^-c(.+)$</c> patterns) are recovered
-/// from <see cref="Arguments"/> post-parse. <c>--</c> ends flag parsing.
-///
-/// AOT safety: no <see cref="ScriptBlock"/> construction; <c>--help</c>
-/// delegates to psm1 <c>Show-BashHelp</c> via parameter-bound
-/// <see cref="CommandInvocationIntrinsics.InvokeScript(string, object[])"/>.
-/// File-read failures route through
-/// <see cref="FileSystemHelpers.WriteBashError"/>.
+/// <para>Output is a transformer: fresh text records (see runtime-functions.md "Pipeline record
+/// kinds"); <c>cut</c> always terminates the last line.</para>
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashCut")]
 [OutputType(typeof(string))]
 public sealed class InvokeBashCutCommand : PSCmdlet
 {
+    private const string OptBytes = "bytes", OptChars = "characters", OptFields = "fields",
+        OptDelim = "delimiter", OptOnly = "only-delimited", OptOutDelim = "output-delimiter",
+        OptComplement = "complement";
+
+    /// <summary>GNU <c>cut</c> options ps-bash refuses (exit 2): NUL-terminated records cannot be
+    /// carried by the line-record pipeline.</summary>
+    private static readonly string[] CutValidButUnsupported = { "-z", "--zero-terminated" };
+
+    /// <summary>
+    /// cut's option surface (GNU coreutils 9.4). Ambiguity lists follow GNU's table order
+    /// (<c>--o</c> = <c>'--only-delimited' '--output-delimiter'</c>, <c>--c</c> = characters, complement).
+    /// </summary>
+    private static readonly OptSpecSet CutSpec = new(
+        new[]
+        {
+            new OptSpec(OptBytes, 'b', "bytes", OptKind.Value),
+            new OptSpec(OptChars, 'c', "characters", OptKind.Value),
+            new OptSpec(OptFields, 'f', "fields", OptKind.Value),
+            new OptSpec(OptDelim, 'd', "delimiter", OptKind.Value),
+            new OptSpec("ignored-n", 'n', null),
+            new OptSpec(OptOnly, 's', "only-delimited"),
+            new OptSpec(OptOutDelim, '\0', "output-delimiter", OptKind.Value),
+            new OptSpec(OptComplement, '\0', "complement"),
+        },
+        CutValidButUnsupported,
+        allowAbbrev: true,
+        gnuInfoOptions: true,
+        longOptionOrder: new[]
+        {
+            "bytes", "characters", "fields", "delimiter", "only-delimited", "output-delimiter",
+            "complement", "zero-terminated",
+        });
+
+    /// <summary>Pure argv scan (unit-test seam).</summary>
+    internal static ParsedArgs ScanArgs(string[] args) => ArgParser.Parse(args, CutSpec);
+
+    internal sealed class CutArgs
+    {
+        public ParsedArgs Parsed = null!;
+        public CutPlan? Selection;
+        public List<string> Operands = new();
+        public string? Error;
+
+        /// <summary>True when nothing may be processed: scan error, plan error, --help/--version.</summary>
+        public bool Declined =>
+            Parsed.HasError || Error is not null
+            || Parsed.Has(OptSpecSet.HelpId) || Parsed.Has(OptSpecSet.VersionId);
+    }
+
+    /// <summary>
+    /// Scan + validate in GNU's order. Fixes over the old hand scan: sorted/merged selection (old:
+    /// spec order with duplicates), a delimiter-less line is printed whole in field mode (old: empty
+    /// for <c>-f2</c>), <c>--complement</c>, <c>-b</c>, <c>--output-delimiter</c> between
+    /// byte/char ranges, <c>-d</c> must be one character, only one of -b/-c/-f, <c>-s</c>/<c>-d</c>
+    /// with -b/-c are errors, a missing list is an error, overflow is an error, options after
+    /// operands, bundles, abbreviations.
+    /// </summary>
+    internal static CutArgs Plan(string[] args)
+    {
+        var c = new CutArgs { Parsed = ScanArgs(args) };
+        c.Operands = c.Parsed.Operands();
+        if (c.Parsed.HasError) return c;
+        if (c.Parsed.Has(OptSpecSet.HelpId) || c.Parsed.Has(OptSpecSet.VersionId)) return c;
+
+        CutMode? mode = null;
+        string? list = null;
+        string delimiter = "\t";
+        bool delimSpecified = false, only = false, complement = false;
+        string? outDelim = null;
+
+        foreach (var tok in c.Parsed.Tokens)
+        {
+            if (tok.Kind != ArgTokKind.Option) continue;
+            switch (tok.OptId)
+            {
+                case OptBytes or OptChars or OptFields:
+                    if (list is not null) { c.Error = "cut: only one list may be specified"; return c; }
+                    mode = tok.OptId == OptBytes ? CutMode.Bytes : tok.OptId == OptChars ? CutMode.Chars : CutMode.Fields;
+                    list = tok.Value!;
+                    break;
+                case OptDelim:
+                    {
+                        string v = tok.Value!;
+                        bool single = v.Length == 0 || v.Length == 1
+                            || (v.Length == 2 && char.IsHighSurrogate(v[0]) && char.IsLowSurrogate(v[1]));
+                        if (!single) { c.Error = "cut: the delimiter must be a single character"; return c; }
+                        delimiter = v.Length == 0 ? "\0" : v; // GNU: an empty DELIM is NUL
+                        delimSpecified = v.Length != 0;
+                        break;
+                    }
+                case OptOnly: only = true; break;
+                case OptOutDelim: outDelim = tok.Value!; break;
+                case OptComplement: complement = true; break;
+            }
+        }
+
+        if (mode is null) { c.Error = "cut: you must specify a list of bytes, characters, or fields"; return c; }
+        if (delimSpecified && mode != CutMode.Fields)
+        { c.Error = "cut: an input delimiter may be specified only when operating on fields"; return c; }
+        if (only && mode != CutMode.Fields)
+        { c.Error = "cut: suppressing non-delimited lines makes sense\n\tonly when operating on fields"; return c; }
+
+        var ranges = ParseList(list!, mode == CutMode.Fields, out string? listError);
+        if (listError is not null) { c.Error = $"cut: {listError}"; return c; }
+
+        c.Selection = new CutPlan(mode.Value, ranges!, delimiter, complement, only, outDelim);
+        return c;
+    }
+
+    /// <summary>
+    /// GNU list syntax: elements separated by commas or blanks; <c>N</c>, <c>N-M</c>, <c>N-</c>, <c>-M</c>.
+    /// Returns null with <paramref name="error"/> (GNU wording, ASCII quotes) on: a zero or empty
+    /// position, a decreasing range, a bare <c>-</c>, a non-digit, a number beyond 64 bits.
+    /// </summary>
+    internal static List<(int Lo, int Hi)>? ParseList(string spec, bool isField, out string? error)
+    {
+        error = null;
+        string numbered = isField ? "fields are numbered from 1" : "byte/character positions are numbered from 1";
+        string invalid = isField ? "invalid field value" : "invalid byte/character position";
+        string tooLarge = isField ? "field number" : "byte/character offset";
+        var result = new List<(int, int)>();
+
+        foreach (var part in spec.Split(',', ' ', '\t'))
+        {
+            int dash = part.IndexOf('-');
+            if (part == "-") { error = "invalid range with no endpoint: -"; return null; }
+            if (dash >= 0 && part.IndexOf('-', dash + 1) >= 0)
+            { error = "invalid byte or character range"; return null; }
+
+            string loS = dash < 0 ? part : part.Substring(0, dash);
+            string hiS = dash < 0 ? part : part.Substring(dash + 1);
+            int lo = 1, hi = int.MaxValue;
+            if (dash < 0 || loS.Length > 0)
+            {
+                if (!TryNumber(loS, part, invalid, tooLarge, out lo, out error)) return null;
+                if (lo == 0) { error = numbered; return null; }
+            }
+            if (dash < 0) hi = lo;
+            else if (hiS.Length > 0)
+            {
+                if (!TryNumber(hiS, hiS, invalid, tooLarge, out hi, out error)) return null;
+                if (hi == 0) { error = numbered; return null; }
+                if (lo > hi) { error = "invalid decreasing range"; return null; }
+            }
+            result.Add((lo, hi));
+        }
+        return result;
+    }
+
+    // Digits only; a trailing junk char is the reported token; > ulong overflow is "too large";
+    // anything above int.MaxValue clamps (positions past the end of a line select nothing).
+    private static bool TryNumber(string s, string whole, string invalid, string tooLarge,
+                                  out int value, out string? error)
+    {
+        value = 0;
+        error = null;
+        if (s.Length == 0) { return true; } // empty element: position 0 -> "numbered from 1"
+        int bad = -1;
+        for (int i = 0; i < s.Length; i++)
+        {
+            if (s[i] < '0' || s[i] > '9') { bad = i; break; }
+        }
+        if (bad >= 0)
+        {
+            // `x-2` reports the whole token, `1x` only the offending tail (GNU).
+            string tok = whole.Length > s.Length && bad == 0 ? whole : s.Substring(bad);
+            error = $"{invalid} '{tok}'";
+            return false;
+        }
+        if (!ulong.TryParse(s, out ulong big)) { error = $"{tooLarge} '{s}' is too large"; return false; }
+        value = big > int.MaxValue ? int.MaxValue : (int)big;
+        return true;
+    }
+
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
     /// <summary>
-    /// The bash <c>-d DELIM</c> (delimiter) value flag — declared explicitly
-    /// because the bare token <c>-d</c> prefix-collides with the <c>-Debug</c>
-    /// common parameter. Exact parameter-name match beats a common-parameter
-    /// prefix match, so the parameter is literally named <c>D</c>. The joined
-    /// form <c>-dC</c> (single-char delimiter immediately after the flag)
-    /// lands in <see cref="Arguments"/> and is recovered post-parse to match
-    /// the oracle's <c>^-d(.)$</c> branch.
+    /// The bash <c>-d DELIM</c> value flag — declared because the bare token <c>-d</c> prefix-collides
+    /// with <c>-Debug</c>. Exact parameter-name match beats a common-parameter prefix match.
     /// </summary>
     [Parameter]
     public string? D { get; set; }
 
-    /// <summary>
-    /// The bash <c>-c LIST</c> (character-positions list) value flag —
-    /// declared explicitly because the bare token <c>-c</c> prefix-collides
-    /// with the <c>-Confirm</c> common parameter. Exact parameter-name match
-    /// beats a common-parameter prefix match, so the parameter is literally
-    /// named <c>C</c>. The joined form <c>-cLIST</c> lands in
-    /// <see cref="Arguments"/> and is recovered post-parse to match the
-    /// oracle's <c>^-c(.+)$</c> branch.
-    /// </summary>
+    /// <summary>The bash <c>-c LIST</c> value flag — declared because bare <c>-c</c> collides with <c>-Confirm</c>.</summary>
     [Parameter]
     public string? C { get; set; }
 
@@ -107,287 +222,62 @@ public sealed class InvokeBashCutCommand : PSCmdlet
 
     // Parsed-once state.
     private bool _parsed;
-    private string _delimiter = "\t";
-    private string _fieldSpec = string.Empty;
-    private string _charSpec = string.Empty;
-    private List<string> _operands = new();
-    // Selected ranges (1-based, inclusive). hi == int.MaxValue means "to the
-    // end of the line/record" — an OPEN range (`-f2-`). These are resolved
-    // against each line's actual char/field count in EmitCutLine, which is why
-    // open ranges can't be flattened to a fixed index array at parse time.
-    private List<(int Lo, int Hi)>? _ranges;
-    // -s: in field mode, drop lines that contain no delimiter (GNU --only-delimited).
-    private bool _suppressNonDelimited;
-    // --output-delimiter=STR: rejoin selected fields with STR instead of the input delimiter.
-    private string? _outputDelimiter;
-    // Deferred parse failures: emitted in EndProcessing (ProcessRecord runs
-    // first and must not write the error twice). Either of these also
-    // suppresses stdin streaming.
-    private string? _optionErrorToken;
-    private string? _invalidListMsg;
-    private string? _cutRangeMsg;
-    // True when stdin must NOT be streamed: file operands present, a
-    // --help / --version request, or a deferred parse error. Matches the
-    // buffered oracle, which only consumed the pipeline in pipeline mode.
+    private CutArgs? _plan;
+    private string[] _args = Array.Empty<string>();
+    // True when stdin must NOT be streamed: file operands present, a scan/plan error, or a
+    // --help / --version request (file mode ignores stdin, like the buffered oracle).
     private bool _suppressStdin;
 
     /// <summary>
-    /// Valid GNU <c>cut</c> options ps-bash does not implement. Hitting one
-    /// yields a specific "recognized but not supported" message via
-    /// <see cref="FileSystemHelpers.WriteOptionError"/> instead of the old
-    /// misleading "No such file or directory" (the token used to fall through
-    /// to the file-operand list). Anything option-looking NOT in this set is
-    /// reported as unrecognized/invalid (bash parity). Representative — see the
-    /// per-command flag-catalog rollout.
+    /// Arguments with the decoy-bound flags re-injected (<c>-c LIST</c>, <c>-d DELIM</c>). The colon
+    /// spelling <c>-d:</c> (PowerShell binds D to the NEXT token) is recovered from this command's
+    /// own pipeline segment; that swallowed token is re-injected when it is another option. Only
+    /// consulted when D was actually bound — a transpiled call never binds D.
     /// </summary>
-    private static readonly HashSet<string> ValidButUnsupported = new(StringComparer.Ordinal)
+    private string[] ArgsWithDecoys()
     {
-        // --fields / --characters / --delimiter are now parsed (aliases of
-        // -f / -c / -d). -b/--bytes (byte mode) and --complement remain unimplemented.
-        "-b", "-n", "-z",
-        "--bytes",
-        "--complement",
-        "--zero-terminated",
-    };
+        var args = Arguments ?? Array.Empty<string>();
+        var pre = new List<string>();
+        if (C is not null) { pre.Add("-c"); pre.Add(C); }
+        if (D is not null)
+        {
+            var m = System.Text.RegularExpressions.Regex.Match(
+                BashRuntime.CurrentPipelineSegment(MyInvocation) ?? string.Empty,
+                @"(?<![A-Za-z0-9])-d(\S)(?!\w)");
+            if (m.Success)
+            {
+                pre.Add("-d" + m.Groups[1].Value);
+                if (D.StartsWith('-')) pre.Add(D);
+            }
+            else
+            {
+                pre.Add("-d");
+                pre.Add(D);
+            }
+        }
+        return pre.Count == 0 ? args : pre.Concat(args).ToArray();
+    }
 
     private void ParseOnce()
     {
         if (_parsed) return;
         _parsed = true;
 
-        var args = Arguments ?? Array.Empty<string>();
-
-        // --help / --version short-circuit before any flag/spec parsing
-        // (oracle order — EndProcessing checked them first).
-        if (Array.IndexOf(args, "--version") >= 0 || Array.IndexOf(args, "--help") >= 0)
+        _args = ArgsWithDecoys();
+        if (Array.IndexOf(_args, "--version") >= 0 || Array.IndexOf(_args, "--help") >= 0)
         {
             _suppressStdin = true;
             return;
         }
 
-        // Default delimiter is a tab (oracle). PowerShell's colon-syntax
-        // (-Param:Value) treats `-d:` as "param -d with value...", consuming
-        // the NEXT token as the value. So `-d: -f2` ends up binding
-        // D="-f2", and `-d: -f1,3` errors on the array conversion. To honor
-        // the bash convention (`-d:` means delimiter is colon), detect the
-        // joined literal in MyInvocation.Line and override.
-        _delimiter = D ?? "\t";
-        // Scope the joined-delimiter scan to cut's own pipeline segment — a `-d,` in a
-        // different command (e.g. `paste -d, a b | cut -f1`) must not become cut's delimiter.
-        var rawLine = BashRuntime.CurrentPipelineSegment(MyInvocation);
-        if (!string.IsNullOrEmpty(rawLine))
-        {
-            var m = System.Text.RegularExpressions.Regex.Match(
-                rawLine, @"(?<![A-Za-z0-9])-d(\S)(?!\w)");
-            if (m.Success)
-            {
-                _delimiter = m.Groups[1].Value;
-                // The PowerShell binder may have consumed the NEXT token as
-                // D's value (e.g. -d: -f2 → D="-f2"). Re-inject that token
-                // into Arguments so the manual scan picks up the -f.
-                if (D != null && D.StartsWith("-"))
-                {
-                    var newArgs = new List<string>(args.Length + 1) { D };
-                    newArgs.AddRange(args);
-                    args = newArgs.ToArray();
-                }
-            }
-        }
-        _charSpec = C ?? string.Empty;
-        bool pastDoubleDash = false;
-
-        int i = 0;
-        while (i < args.Length)
-        {
-            string a = args[i];
-            if (pastDoubleDash)
-            {
-                _operands.Add(a);
-                i++;
-                continue;
-            }
-
-            if (a == "--")
-            {
-                pastDoubleDash = true;
-                i++;
-                continue;
-            }
-
-            // Bare `-d` is bound to the D parameter by the binder, but a
-            // joined `-dC` lands here (oracle: ^-d(.)$).
-            if (a.Length == 3 && a[0] == '-' && a[1] == 'd')
-            {
-                _delimiter = a.Substring(2, 1);
-                i++;
-                continue;
-            }
-
-            // Bare `-f` flag — value follows in next arg.
-            if (a == "-f")
-            {
-                i++;
-                if (i < args.Length)
-                {
-                    _fieldSpec = args[i];
-                }
-                i++;
-                continue;
-            }
-
-            // Joined `-fLIST` form (oracle: ^-f(.+)$).
-            if (a.Length > 2 && a[0] == '-' && a[1] == 'f')
-            {
-                _fieldSpec = a.Substring(2);
-                i++;
-                continue;
-            }
-
-            // Joined `-cLIST` form (oracle: ^-c(.+)$). The bare `-c` is
-            // already bound to the C parameter by the binder.
-            if (a.Length > 2 && a[0] == '-' && a[1] == 'c')
-            {
-                _charSpec = a.Substring(2);
-                i++;
-                continue;
-            }
-
-            // -s / --only-delimited: field mode drops lines with no delimiter.
-            if (a == "-s" || a == "--only-delimited")
-            {
-                _suppressNonDelimited = true;
-                i++;
-                continue;
-            }
-
-            // --output-delimiter=STR (and the rare separate-arg form).
-            if (a.StartsWith("--output-delimiter=", StringComparison.Ordinal))
-            {
-                _outputDelimiter = a.Substring("--output-delimiter=".Length);
-                i++;
-                continue;
-            }
-            if (a == "--output-delimiter")
-            {
-                i++;
-                if (i < args.Length) _outputDelimiter = args[i];
-                i++;
-                continue;
-            }
-
-            // Long-form aliases of the supported short flags (-f / -d / -c).
-            // GNU cut accepts both spellings interchangeably.
-            if (a.StartsWith("--fields=", StringComparison.Ordinal))
-            { _fieldSpec = a.Substring("--fields=".Length); i++; continue; }
-            if (a == "--fields")
-            { i++; if (i < args.Length) _fieldSpec = args[i]; i++; continue; }
-            if (a.StartsWith("--characters=", StringComparison.Ordinal))
-            { _charSpec = a.Substring("--characters=".Length); i++; continue; }
-            if (a == "--characters")
-            { i++; if (i < args.Length) _charSpec = args[i]; i++; continue; }
-            if (a.StartsWith("--delimiter=", StringComparison.Ordinal))
-            { _delimiter = a.Substring("--delimiter=".Length); i++; continue; }
-            if (a == "--delimiter")
-            { i++; if (i < args.Length) _delimiter = args[i]; i++; continue; }
-
-            // Any remaining option-looking token is a flag cut doesn't handle,
-            // not a file operand: valid-but-unsupported → specific refusal,
-            // otherwise bash-parity "unrecognized option". A lone "-" (stdin)
-            // is not option-like and falls through to operands. The error is
-            // deferred to EndProcessing (ProcessRecord runs first).
-            if (FileSystemHelpers.IsOptionLike(a))
-            {
-                _optionErrorToken = a;
-                _suppressStdin = true;
-                return;
-            }
-
-            _operands.Add(a);
-            i++;
-        }
-
-        // Pre-parse the active spec once into (possibly open-ended) ranges.
-        try
-        {
-            if (_charSpec.Length > 0)
-            {
-                _ranges = ParseRanges(_charSpec, isField: false);
-            }
-            else if (_fieldSpec.Length > 0)
-            {
-                _ranges = ParseRanges(_fieldSpec, isField: true);
-            }
-        }
-        catch (CutRangeError ex)
-        {
-            // GNU cut rejects a zero position (`fields are numbered from 1`) and a
-            // decreasing range (`-f3-1`) with a dedicated message and exit 1 —
-            // distinct from the generic "invalid list" malformed-token path. Before
-            // this they silently produced empty output.
-            _cutRangeMsg = ex.Message;
-            _suppressStdin = true;
-            return;
-        }
-        catch (FormatException ex)
-        {
-            // Oracle: [int]$part on a non-integer token throws; we surface
-            // the same failure mode via a bash-style error and bail (deferred
-            // to EndProcessing).
-            _invalidListMsg = ex.Message;
-            _suppressStdin = true;
-            return;
-        }
-
-        _suppressStdin = _operands.Count > 0;
+        _plan = Plan(_args);
+        _suppressStdin = _plan.Declined || _plan.Operands.Count > 0;
     }
 
     private void EmitCutLine(string line)
     {
-        string result;
-        if (_charSpec.Length > 0)
-        {
-            var sb = new StringBuilder();
-            foreach (var pos in ExpandRanges(_ranges!, line.Length))
-            {
-                int idx = pos - 1;
-                if (idx >= 0 && idx < line.Length)
-                {
-                    sb.Append(line[idx]);
-                }
-            }
-            result = sb.ToString();
-        }
-        else if (_fieldSpec.Length > 0)
-        {
-            // String.Split(string) — single-string separator overload
-            // matches PowerShell's .Split($string) behavior when the
-            // delimiter is a multi-char string. The oracle uses
-            // $Line.Split($delimiter) where $delimiter may be 1 char or
-            // a string passed via -d. .NET's Split(string) splits on the
-            // string as a substring boundary.
-            // Single-string Split overload — same substring-boundary semantics
-            // as Split(new[]{ _delimiter }, None) but without allocating a
-            // one-element separator array on every line.
-            string[] fields = line.Split(_delimiter, StringSplitOptions.None);
-            // -s: a line with no delimiter splits into a single field; GNU
-            // --only-delimited suppresses it entirely.
-            if (_suppressNonDelimited && fields.Length <= 1) return;
-            var picks = new List<string>();
-            foreach (var pos in ExpandRanges(_ranges!, fields.Length))
-            {
-                int fi = pos - 1;
-                if (fi >= 0 && fi < fields.Length)
-                {
-                    picks.Add(fields[fi]);
-                }
-            }
-            result = string.Join(_outputDelimiter ?? _delimiter, picks);
-        }
-        else
-        {
-            result = line;
-        }
-        WriteObject(BashRuntime.NewBashObject(result));
+        string? result = _plan!.Selection!.Apply(line);
+        if (result is not null) WriteObject(BashRuntime.NewBashObject(result));
     }
 
     protected override void ProcessRecord()
@@ -397,8 +287,7 @@ public sealed class InvokeBashCutCommand : PSCmdlet
         ParseOnce();
         if (_suppressStdin) return;
 
-        // Pipeline mode: cut each stdin sub-line as it arrives instead of
-        // buffering the whole pipe.
+        // Pipeline mode: cut each stdin sub-line as it arrives instead of buffering the whole pipe.
         string text = BashRuntime.GetBashText(InputObject);
         string trimmed = text.TrimEnd('\n');
         if (trimmed.Contains('\n'))
@@ -418,11 +307,9 @@ public sealed class InvokeBashCutCommand : PSCmdlet
     {
         ParseOnce();
 
-        var args = Arguments ?? Array.Empty<string>();
-
         FileSystemHelpers.SetLastExitCode(this, 0);
-        if (FileSystemHelpers.TryHandleVersion(this, "cut", args)) return;
-        if (Array.IndexOf(args, "--help") >= 0)
+        if (FileSystemHelpers.TryHandleVersion(this, "cut", _args)) return;
+        if (Array.IndexOf(_args, "--help") >= 0)
         {
             foreach (var line in InvokeCommand.InvokeScript(
                          "param($n) Show-BashHelp $n", "cut"))
@@ -432,27 +319,21 @@ public sealed class InvokeBashCutCommand : PSCmdlet
             return;
         }
 
-        // Deferred parse failures (captured in ParseOnce).
-        if (_optionErrorToken != null)
+        var plan = _plan!;
+        if (FileSystemHelpers.TryWriteParseError(this, "cut", plan.Parsed)) return;
+        if (FileSystemHelpers.TryHandleInfoOptions(this, "cut", plan.Parsed)) return;
+        if (plan.Error is { } planError)
         {
-            FileSystemHelpers.WriteOptionError(this, "cut", _optionErrorToken, ValidButUnsupported);
-            return;
-        }
-        if (_cutRangeMsg != null)
-        {
-            FileSystemHelpers.WriteBashError(this, $"cut: {_cutRangeMsg}");
-            return;
-        }
-        if (_invalidListMsg != null)
-        {
-            FileSystemHelpers.WriteBashError(this, $"cut: invalid list: {_invalidListMsg}");
+            FileSystemHelpers.WriteBashError(this, planError);
+            FileSystemHelpers.SetLastExitCode(this, 1);
             return;
         }
 
         // Pipeline mode (no operands) was already streamed in ProcessRecord.
-        if (_operands.Count == 0) return;
+        if (plan.Operands.Count == 0) return;
 
-        foreach (var raw in _operands)
+        bool hadError = false;
+        foreach (var raw in plan.Operands)
         {
             foreach (var filePath in FileSystemHelpers.ResolveOperandPaths(this, raw))
             {
@@ -467,114 +348,11 @@ public sealed class InvokeBashCutCommand : PSCmdlet
                 {
                     if (FileSystemHelpers.IsPipelineStop(ex)) throw;
                     WriteReadError(filePath, ex);
+                    hadError = true;
                 }
             }
         }
-    }
-
-    /// <summary>
-    /// Parse a cut list spec (comma-separated) into 1-based inclusive ranges.
-    /// Each part is one of GNU cut's forms:
-    /// <list type="bullet">
-    /// <item><c>N</c> — single position → <c>(N, N)</c>.</item>
-    /// <item><c>N-M</c> — closed range → <c>(N, M)</c>.</item>
-    /// <item><c>N-</c> — open from N to end → <c>(N, int.MaxValue)</c>.</item>
-    /// <item><c>-M</c> — open from start to M → <c>(1, M)</c>.</item>
-    /// </list>
-    /// Open ranges are resolved per line in <see cref="ExpandRanges"/> against
-    /// the actual char/field count. A non-numeric token still throws
-    /// <see cref="FormatException"/> (bash/oracle parity: invalid list).
-    /// </summary>
-    private static List<(int Lo, int Hi)> ParseRanges(string spec, bool isField)
-    {
-        // GNU cut: position 0 is rejected; the wording differs for -f vs -c/-b.
-        string numbered = isField
-            ? "fields are numbered from 1"
-            : "byte/character positions are numbered from 1";
-        var result = new List<(int, int)>();
-        foreach (var partRaw in spec.Split(','))
-        {
-            string part = partRaw;
-            int dash = part.IndexOf('-');
-            if (dash >= 0)
-            {
-                string lo = part.Substring(0, dash);
-                string hi = part.Substring(dash + 1);
-                // -M  (open start)
-                if (lo.Length == 0 && hi.Length > 0 && AllDigits(hi))
-                {
-                    int m = BashRuntime.ParseCountClamped(hi);
-                    if (m == 0) throw new CutRangeError(numbered);
-                    result.Add((1, m));
-                    continue;
-                }
-                // N-  (open end)
-                if (hi.Length == 0 && lo.Length > 0 && AllDigits(lo))
-                {
-                    int nlo = BashRuntime.ParseCountClamped(lo);
-                    if (nlo == 0) throw new CutRangeError(numbered);
-                    result.Add((nlo, int.MaxValue));
-                    continue;
-                }
-                // N-M (closed)
-                if (lo.Length > 0 && hi.Length > 0 && AllDigits(lo) && AllDigits(hi))
-                {
-                    int a = BashRuntime.ParseCountClamped(lo), b = BashRuntime.ParseCountClamped(hi);
-                    if (a == 0 || b == 0) throw new CutRangeError(numbered);
-                    if (a > b) throw new CutRangeError("invalid decreasing range");
-                    result.Add((a, b));
-                    continue;
-                }
-                // Malformed (e.g. bare "-", "a-b") — surface as invalid list.
-                throw new FormatException($"invalid byte/character position '{part}'");
-            }
-            // Single index: non-integer throws (oracle parity); a digit string too
-            // big for int clamps to int.MaxValue instead of an unhandled OverflowException.
-            if (!int.TryParse(part, out int n))
-            {
-                if (!AllDigits(part))
-                    throw new FormatException($"invalid byte/character position '{part}'");
-                n = int.MaxValue;
-            }
-            if (n == 0) throw new CutRangeError(numbered);
-            result.Add((n, n));
-        }
-        return result;
-    }
-
-    /// <summary>A GNU-specific cut list error (zero position / decreasing range)
-    /// that is reported verbatim, not wrapped in the generic "invalid list" form.</summary>
-    private sealed class CutRangeError : Exception
-    {
-        public CutRangeError(string message) : base(message) { }
-    }
-
-    /// <summary>
-    /// Expand parsed ranges into the concrete 1-based positions for a line of
-    /// <paramref name="max"/> chars/fields, preserving spec order (the oracle's
-    /// behavior). An open range (<c>Hi == int.MaxValue</c>) runs to
-    /// <paramref name="max"/>; positions past <paramref name="max"/> are simply
-    /// not produced (EmitCutLine's index guard also drops any stragglers).
-    /// </summary>
-    private static IEnumerable<int> ExpandRanges(List<(int Lo, int Hi)> ranges, int max)
-    {
-        foreach (var (lo, hi) in ranges)
-        {
-            int end = hi == int.MaxValue ? max : hi;
-            for (int n = lo; n <= end && n <= max; n++)
-            {
-                if (n >= 1) yield return n;
-            }
-        }
-    }
-
-    private static bool AllDigits(string s)
-    {
-        foreach (var c in s)
-        {
-            if (c < '0' || c > '9') return false;
-        }
-        return true;
+        if (hadError) FileSystemHelpers.SetLastExitCode(this, 1);
     }
 
     private void WriteReadError(string path, Exception ex)

@@ -6,14 +6,9 @@ namespace PsBash.Cmdlets.Tests;
 /// Byte-parity tests for the S3 <c>cut</c> streaming core (<c>CutStage</c>) against the
 /// real <c>Invoke-BashCut</c> (the parity oracle).
 ///
-/// <para><b>The <c>-d</c> binder collision bounds the certified subset.</b> A BARE
-/// <c>-d</c> is a declared value-bearing parameter on the cmdlet (<c>-d</c>
-/// prefix-collides with <c>-Debug</c>), and the joined <c>-d:</c> form is recovered by
-/// re-scanning the raw invocation line — a surface a streaming stage has neither. So the
-/// core certifies the JOINED <c>-dX</c> spelling only (identical on both lanes: argv
-/// token and raw-line scan agree) and DECLINES bare <c>-d</c> / bare <c>-c</c>. Same
-/// rule as everywhere in this lane: a core that guesses is a correctness bug, a core
-/// that declines is merely slower.</para>
+/// <para>The core resolves argv with the cmdlet's own <c>Plan</c> and runs the cmdlet's CutPlan, so anything the
+/// plan accepts (bare <c>-d</c>/<c>-c</c>, <c>-b</c>, <c>--complement</c>, separated long forms) is certified and
+/// anything it rejects (bad list, no list, <c>-z</c>, file operands, --help) declines to the real cmdlet.</para>
 /// </summary>
 public class LineStreamCutParityTests : LineStreamParityHarness
 {
@@ -97,9 +92,22 @@ public class LineStreamCutParityTests : LineStreamParityHarness
     public void CutCore_Unicode_MatchesCmdlet()
         => AssertCut(new[] { "-d,", "-f2" }, new[] { "café,naïve", "🚀,rocket" });
 
-    [Fact]
-    public void CutCore_NoSpec_PassesLinesThrough_MatchesCmdlet()
-        => AssertCut(Array.Empty<string>(), Tabbed);
+    [Theory]
+    [InlineData("-d , -f1")]
+    [InlineData("-d: -f2-")]
+    [InlineData("-c 1-3")]
+    [InlineData("-b1-2")]
+    [InlineData("-c2- --complement")]
+    [InlineData("-f1,3 --complement")]
+    [InlineData("-f3,1")]                 // selection is sorted, each field once
+    [InlineData("-f1,1")]
+    [InlineData("-f2 -s")]
+    [InlineData("-f2")]                   // delimiter-less line prints whole
+    [InlineData("-c1,3 --output-delimiter=-")]
+    [InlineData("-c1-2,3-4 --output-delimiter=-")]
+    [InlineData("--fields 2")]
+    public void CutCore_GnuSemantics_MatchCmdlet(string flags)
+        => AssertCut(Split(flags), Tabbed.Concat(Commad).Append("abcdefg").ToArray());
 
     [Fact]
     public void CutCore_IsLazy_DoesNotDrainInfiniteProducer()
@@ -117,15 +125,14 @@ public class LineStreamCutParityTests : LineStreamParityHarness
     // ── decline matrix ───────────────────────────────────────────────────────
 
     [Theory]
-    [InlineData("-d")]                    // bare -d: binder-bound parameter, not argv
-    [InlineData("-c")]                    // bare -c: binder-bound parameter, not argv
-    [InlineData("-d , -f1")]
-    [InlineData("-c 1-3")]
-    [InlineData("-b1")]                   // byte mode: valid-but-unsupported → cmdlet error
+    [InlineData("-d")]                    // dangling value flag
+    [InlineData("-c")]
+    [InlineData("")]                      // no list: usage error
     [InlineData("--complement")]
     [InlineData("--help")]
     [InlineData("--version")]
-    [InlineData("--")]
+    [InlineData("-f1 -c1")]               // only one list
+    [InlineData("-c1 -s")]                // -s needs fields
     [InlineData("-f0")]                   // zero position: cmdlet error + exit 1
     [InlineData("-f3-1")]                 // decreasing range: cmdlet error
     [InlineData("-fx")]                   // invalid list: cmdlet error
