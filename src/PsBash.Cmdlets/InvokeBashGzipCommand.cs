@@ -1,6 +1,7 @@
 using System.IO.Compression;
 using System.Management.Automation;
 using System.Text;
+using PsBash.Cmdlets.Args;
 
 namespace PsBash.Cmdlets;
 
@@ -64,18 +65,112 @@ namespace PsBash.Cmdlets;
 [OutputType(typeof(string))]
 public sealed class InvokeBashGzipCommand : PSCmdlet
 {
-    /// <summary>Valid GNU <c>gzip</c> options ps-bash does not implement. This set
-    /// is now empty: every documented GNU <c>gzip</c> flag is handled — either with
-    /// real behavior (<c>-d -c -k -f -v -l -t -r -q -S --fast --best -1..-9</c>) or
-    /// as an accept-and-ignore no-op where the .NET <see cref="GZipStream"/> header
-    /// surface offers no faithful mapping (<c>-n/--no-name</c>, <c>-N/--name</c>,
-    /// <c>-a/--ascii</c>, <c>--rsyncable</c>, <c>--synchronous</c> — see the per-flag
-    /// notes in <see cref="EndProcessing"/>). An option-looking token that matches
-    /// none of these still produces the bash-parity "unrecognized option" /
-    /// "invalid option" diagnostic via <see cref="FileSystemHelpers.WriteOptionError"/>
-    /// (empty catalog ⇒ bucket 3).</summary>
-    private static readonly HashSet<string> GzipValidButUnsupported = new(StringComparer.Ordinal);
+    private const string OptDecompress = "decompress", OptStdout = "stdout", OptKeep = "keep", OptForce = "force",
+        OptVerbose = "verbose", OptList = "list", OptTest = "test", OptRecursive = "recursive", OptQuiet = "quiet",
+        OptSuffix = "suffix", OptNoOp = "noop", OptLevelPrefix = "level";
 
+    /// <summary>GNU gzip 1.12 options ps-bash refuses (exit 2): the LZW (<c>compress</c>) format and its bit width.</summary>
+    private static readonly string[] GzipValidButUnsupported = { "-Z", "--lzw", "-b", "--bits" };
+
+    private static OptSpec[] BuildGzipSpecs()
+    {
+        var specs = new List<OptSpec>
+        {
+            new(OptNoOp, 'a', "ascii"),
+            new(OptStdout, 'c', "to-stdout"),
+            new(OptStdout, '\0', "stdout"),
+            new(OptDecompress, 'd', "decompress"),
+            new(OptDecompress, '\0', "uncompress"),
+            new(OptForce, 'f', "force"),
+            new(OptSpecSet.HelpId, 'h', "help"),
+            new(OptSpecSet.HelpId, 'H', null),
+            new(OptKeep, 'k', "keep"),
+            new(OptList, 'l', "list"),
+            new(OptSpecSet.VersionId, 'L', "license"),  // GNU prints the license; ps-bash prints its version line
+            new(OptNoOp, 'm', null),
+            new(OptNoOp, 'M', null),
+            new(OptNoOp, 'n', "no-name"),
+            new(OptNoOp, 'N', "name"),
+            new(OptQuiet, 'q', "quiet"),
+            new(OptQuiet, '\0', "silent"),
+            new(OptRecursive, 'r', "recursive"),
+            new(OptNoOp, '\0', "rsyncable"),
+            new(OptNoOp, '\0', "synchronous"),
+            new(OptSuffix, 'S', "suffix", OptKind.Value),
+            new(OptTest, 't', "test"),
+            new(OptVerbose, 'v', "verbose"),
+            new(OptSpecSet.VersionId, 'V', "version"),
+            new(OptLevelPrefix + "1", '\0', "fast"),
+            new(OptLevelPrefix + "9", '\0', "best"),
+        };
+        for (char d = '1'; d <= '9'; d++) specs.Add(new OptSpec(OptLevelPrefix + d, d, null));
+        return specs.ToArray();
+    }
+
+    /// <summary>gzip's option surface (GNU 1.12). Usage errors exit 1 (gzip ERROR status); ambiguity lists
+    /// follow gzip's <c>long_options[]</c> order (<c>--s</c> = '--stdout' '--silent' '--synchronous' '--suffix').
+    /// <c>-a -m -M -n -N --rsyncable --synchronous</c> are accepted no-ops: the .NET GZipStream header has no
+    /// name/time/text-mode controls, and there is no fsync-flush or rsync-friendly mode.</summary>
+    private static readonly OptSpecSet GzipSpec = new(
+        BuildGzipSpecs(),
+        GzipValidButUnsupported,
+        allowAbbrev: true,
+        gnuInfoOptions: true,
+        longOptionOrder: new[]
+        {
+            "ascii", "to-stdout", "stdout", "decompress", "uncompress", "force", "help", "keep", "list", "license",
+            "no-name", "name", "quiet", "silent", "recursive", "rsyncable", "synchronous", "suffix", "test",
+            "verbose", "version", "fast", "best", "lzw", "bits",
+        });
+
+    /// <summary>Pure argv scan (unit-test seam).</summary>
+    internal static ParsedArgs ScanArgs(string[] args) => ArgParser.Parse(args, GzipSpec);
+
+    internal sealed class GzipArgs
+    {
+        public ParsedArgs Parsed = null!;
+        public bool Decompress, ToStdout, Keep, Force, Verbose, List, Test, Recursive, Quiet;
+        public string Suffix = ".gz";
+        public int Level = 6;
+        public List<string> Operands = new();
+    }
+
+    /// <summary>
+    /// Scan in GNU's order (last of <c>-1..-9/--fast/--best</c> wins, last <c>-S</c> wins). Fixes over the
+    /// old hand scan: a dangling <c>-S</c> was ignored, <c>--</c>/abbreviations (<c>--dec</c>, <c>--std</c>)
+    /// were not honoured (an unknown long option fell through as a file name), unknown long options exit 1
+    /// (was 2), <c>-h</c>/<c>-V</c>/<c>-L</c> were not options, <c>-10</c> = <c>-1</c> then invalid <c>-0</c>.
+    /// </summary>
+    internal static GzipArgs Plan(string[] args)
+    {
+        var p = new GzipArgs { Parsed = ScanArgs(args) };
+        p.Operands = p.Parsed.Operands();
+        if (p.Parsed.HasError) return p;
+        if (p.Parsed.Has(OptSpecSet.HelpId) || p.Parsed.Has(OptSpecSet.VersionId)) return p;
+
+        foreach (var tok in p.Parsed.Tokens)
+        {
+            if (tok.Kind != ArgTokKind.Option) continue;
+            switch (tok.OptId)
+            {
+                case OptDecompress: p.Decompress = true; break;
+                case OptStdout: p.ToStdout = true; break;
+                case OptKeep: p.Keep = true; break;
+                case OptForce: p.Force = true; break;
+                case OptVerbose: p.Verbose = true; break;
+                case OptList: p.List = true; break;
+                case OptTest: p.Test = true; break;
+                case OptRecursive: p.Recursive = true; break;
+                case OptQuiet: p.Quiet = true; break;
+                case OptSuffix: p.Suffix = tok.Value!; break;
+                default:
+                    if (tok.OptId is { } id && id.StartsWith(OptLevelPrefix, StringComparison.Ordinal))
+                        p.Level = id[OptLevelPrefix.Length] - '0';
+                    break;
+            }
+        }
+        return p;
+    }
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
@@ -102,32 +197,26 @@ public sealed class InvokeBashGzipCommand : PSCmdlet
 
     protected override void EndProcessing()
     {
-        var args = Arguments ?? Array.Empty<string>();
+        // Decoy-bound switches (bare -d/-c/-v/-f never reach Arguments) are re-injected before the scan.
+        var raw = Arguments ?? Array.Empty<string>();
+        var args = BashRuntime.PrependDecoys(raw, (D.IsPresent, "-d"), (C.IsPresent, "-c"), (V.IsPresent, "-v"), (F.IsPresent, "-f"));
 
         FileSystemHelpers.SetLastExitCode(this, 0);
-        if (FileSystemHelpers.TryHandleVersion(this, "gzip", args)) return;
-        if (Array.IndexOf(args, "--help") >= 0)
-        {
-            foreach (var line in InvokeCommand.InvokeScript(
-                         "param($n) Show-BashHelp $n", "gzip"))
-            {
-                WriteObject(line);
-            }
-            return;
-        }
+        var plan = Plan(args);
+        if (FileSystemHelpers.TryWriteParseError(this, "gzip", plan.Parsed)) return;
+        if (FileSystemHelpers.TryHandleInfoOptions(this, "gzip", plan.Parsed)) return;
 
-        bool decompress = D.IsPresent;
-        bool toStdout = C.IsPresent;
-        bool keep = false;
-        bool force = F.IsPresent;
-        bool verbose = V.IsPresent;
-        bool list = false;
-        bool test = false;
-        bool recursive = false;
-        bool quiet = false;
-        string suffix = ".gz";
-        int level = 6;
-        var unknownShort = new List<string>();
+        bool decompress = plan.Decompress;
+        bool toStdout = plan.ToStdout;
+        bool keep = plan.Keep;
+        bool force = plan.Force;
+        bool verbose = plan.Verbose;
+        bool list = plan.List;
+        bool test = plan.Test;
+        bool recursive = plan.Recursive;
+        bool quiet = plan.Quiet;
+        string suffix = plan.Suffix;
+        int level = plan.Level;
 
         // Detect gunzip / zcat invocation via alias name. Matches the psm1
         // oracle's `$MyInvocation.InvocationName -eq 'gunzip'` branch.
@@ -142,109 +231,7 @@ public sealed class InvokeBashGzipCommand : PSCmdlet
             toStdout = true;
         }
 
-        var operands = new List<string>();
-        int i = 0;
-        while (i < args.Length)
-        {
-            string a = args[i];
-
-            if (a == "--")
-            {
-                i++;
-                while (i < args.Length) { operands.Add(args[i]); i++; }
-                break;
-            }
-            if (a == "--decompress" || a == "--uncompress") { decompress = true; i++; continue; }
-            if (a == "--stdout" || a == "--to-stdout") { toStdout = true; i++; continue; }
-            if (a == "--keep") { keep = true; i++; continue; }
-            if (a == "--force") { force = true; i++; continue; }
-            if (a == "--verbose") { verbose = true; i++; continue; }
-            if (a == "--list") { list = true; i++; continue; }
-            if (a == "--test") { test = true; i++; continue; }
-            if (a == "--recursive") { recursive = true; i++; continue; }
-            if (a == "--quiet" || a == "--silent") { quiet = true; i++; continue; }
-            if (a == "--fast") { level = 1; i++; continue; }
-            if (a == "--best") { level = 9; i++; continue; }
-            // --suffix SUF / --suffix=SUF: change the (de)compress suffix.
-            if (a == "--suffix") { i++; if (i < args.Length) suffix = args[i]; i++; continue; }
-            if (a.StartsWith("--suffix=", StringComparison.Ordinal))
-            {
-                suffix = a.Substring("--suffix=".Length); i++; continue;
-            }
-            // Accept-and-ignore: the .NET GZipStream header surface has no name /
-            // timestamp / text-mode controls, so these GNU flags are honored as
-            // no-ops rather than refused — every valid gzip flag still maps to
-            // *something* (the unsupported-flag policy).
-            if (a == "--no-name" || a == "--name" || a == "--ascii"
-                || a == "--rsyncable" || a == "--synchronous") { i++; continue; }
-            if (a == "--license") { i++; continue; }
-
-            // -N single-digit level (oracle: `^-(\d)$`).
-            if (a.Length == 2 && a[0] == '-' && a[1] >= '0' && a[1] <= '9')
-            {
-                level = a[1] - '0';
-                i++;
-                continue;
-            }
-
-            // Bundled short flags (oracle: `arg.Substring(1).ToCharArray()` switch).
-            // `S` is value-bearing: it consumes the rest of the token, or the next
-            // argument, as the suffix.
-            if (a.Length > 1 && a[0] == '-' && !a.StartsWith("--", StringComparison.Ordinal))
-            {
-                string body = a.Substring(1);
-                int j = 0;
-                bool consumedNext = false;
-                while (j < body.Length)
-                {
-                    char ch = body[j];
-                    switch (ch)
-                    {
-                        case 'd': decompress = true; break;
-                        case 'c': toStdout = true; break;
-                        case 'k': keep = true; break;
-                        case 'f': force = true; break;
-                        case 'v': verbose = true; break;
-                        case 'l': list = true; break;
-                        case 't': test = true; break;
-                        case 'r': recursive = true; break;
-                        case 'q': quiet = true; break;
-                        case 'n': case 'N': case 'a': break; // accept-and-ignore (see above)
-                        case 'L': break; // --license, accept-ignore
-                        case 'S':
-                        {
-                            string rest = body.Substring(j + 1);
-                            if (rest.Length > 0) { suffix = rest; }
-                            else { i++; if (i < args.Length) { suffix = args[i]; } consumedNext = true; }
-                            j = body.Length; // S consumes the remainder of the token
-                            continue;
-                        }
-                        default:
-                            if (ch >= '0' && ch <= '9') { level = ch - '0'; }
-                            else { unknownShort.Add("-" + ch); }
-                            break;
-                    }
-                    j++;
-                }
-                _ = consumedNext;
-                i++;
-                continue;
-            }
-
-            operands.Add(a);
-            i++;
-        }
-
-        // An unrecognized short flag (bucket 3) reported in bash-parity form.
-        if (unknownShort.Count > 0)
-        {
-            FileSystemHelpers.WriteBashError(this, $"gzip: invalid option -- '{unknownShort[0].Substring(1)}'");
-            FileSystemHelpers.SetLastExitCode(this, 2);
-            return;
-        }
-        if (FileSystemHelpers.TryWriteOperandOptionError(this, "gzip", operands, GzipValidButUnsupported))
-            return;
-
+        var operands = plan.Operands;
         if (operands.Count == 0)
         {
             FileSystemHelpers.WriteBashError(this, "gzip: missing file operand");
