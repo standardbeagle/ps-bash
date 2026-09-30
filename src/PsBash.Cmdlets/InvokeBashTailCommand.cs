@@ -580,16 +580,14 @@ public sealed class InvokeBashTailCommand : PSCmdlet
                 : Math.Max(0, fs.Length - safeCount);
             fs.Seek(start, SeekOrigin.Begin);
 
-            using var reader = new StreamReader(
-                fs, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
-            string? line;
-            while ((line = reader.ReadLine()) != null)
-            {
-                foreach (var obj in BashRuntime.EmitBashLines(line))
-                {
-                    WriteObject(obj);
-                }
-            }
+            // Byte slice: a TRANSFORMER — fresh text records carrying exactly the slice's
+            // bytes (GNU `tail -c 1` of `a\nc` is `c`, not `c\n`; the slice's own newlines
+            // are kept), the same as the pipeline path and `head -c FILE`.
+            using var ms = new MemoryStream();
+            fs.CopyTo(ms);
+            foreach (var rec in BashRuntime.ByteSliceRecords(
+                         Encoding.UTF8.GetString(ms.GetBuffer(), 0, (int)ms.Length)))
+                WriteObject(rec);
         }
         catch (Exception ex)
         {

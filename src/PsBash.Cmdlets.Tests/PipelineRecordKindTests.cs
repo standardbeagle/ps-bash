@@ -298,6 +298,65 @@ public class PipelineRecordKindTests : IDisposable, IClassFixture<SharedPwshFixt
             Render(Run($"Invoke-BashDiff {Q(u1)} {Q(u2)}")));
     }
 
+    // ---- group 3: leftovers (tail -c FILE, uniq -D, fused cat FILE) -----------------------
+
+    [Theory]
+    // GNU: printf 'a\nc' > f; tail -c 1 f -> "c"; tail -c 3 f -> "a\nc"; printf 'a\nc\n': tail -c 2 -> "c\n"
+    [InlineData("a\nc", "'-c1'", "c")]
+    [InlineData("a\nc", "'-c3'", "a\nc")]
+    [InlineData("a\nc\n", "'-c2'", "c\n")]
+    [InlineData("a\nc\n", "'-c3'", "\nc\n")]
+    [InlineData("a\nb\n", "'-c+3'", "b\n")]
+    public void Group3_TailBytesFile_RendersExactSlice(string content, string arg, string expected)
+    {
+        var f = Path.Combine(_dir, "tailc-" + Guid.NewGuid().ToString("N")[..6]);
+        File.WriteAllText(f, content);
+        Assert.Equal(expected, Render(Run($"Invoke-BashTail {arg} {Q(f)}")));
+    }
+
+    [Theory]
+    // GNU: printf 'b\nb\na' | uniq -D -> "b\nb\n"; printf 'b\na\na' | uniq -D -> "a\na\n"
+    [InlineData("Invoke-BashPrintf 'b\\nb\\na' | Invoke-BashUniq '-D'", "b\nb\n")]
+    [InlineData("Invoke-BashPrintf 'b\\na\\na' | Invoke-BashUniq '-D'", "a\na\n")]
+    public void Group3_UniqAllRepeated_RendersGnuBytes(string script, string expected)
+    {
+        Assert.Equal(expected, Render(Run(script)));
+    }
+
+    [Fact]
+    public void Group3_UniqAllRepeated_IsAFilter_KeepsTheUpstreamObject()
+    {
+        var records = Run($"Invoke-BashLs {Q(_dir)} | ForEach-Object {{ $_; $_ }} | Invoke-BashUniq '-D'");
+        Assert.NotEmpty(records);
+        Assert.All(records, r => Assert.Contains("PsBash.LsEntry", r.TypeNames));
+    }
+
+    [Fact]
+    public void Group3_CatFiles_ConcatenateRawBytes_NoSeparatorInserted()
+    {
+        // GNU: printf 'a\nb' > u1; printf 'a\nc' > u2; cat u1 u2 -> "a\nba\nc"
+        var u1 = Path.Combine(_dir, "g3u1"); var u2 = Path.Combine(_dir, "g3u2");
+        File.WriteAllText(u1, "a\nb"); File.WriteAllText(u2, "a\nc");
+        Assert.Equal("a\nba\nc", Render(Run($"Invoke-BashCat {Q(u1)} {Q(u2)}")));
+    }
+
+    [Fact]
+    public void Group3_FusedCatFile_WithoutFinalNewline_DeclinesToTheCmdletAndKeepsGnuBytes()
+    {
+        // GNU: printf 'a\nb' > u1; cat u1 | head -n5 -> "a\nb" (no added byte);
+        //      cat u1 | head -n1 -> "a\n". The fused lane cannot express "no terminator", so
+        //      CatFileStage declines and the real cmdlets run (fallback).
+        var u1 = Path.Combine(_dir, "g3f1");
+        File.WriteAllText(u1, "a\nb");
+        string Fused(string head) =>
+            $"Invoke-BashFusedPipeline -Stages @(@('cat',{Q(u1)}),@('head','{head}')) " +
+            $"-Fallback {{ Invoke-BashCat {Q(u1)} | Invoke-BashHead '{head}' }}";
+        // The fused cmdlet renders record boundaries as Environment.NewLine (what the host
+        // does); normalize so the assertion is about the bytes, not the platform newline.
+        Assert.Equal("a\nb", Render(Run(Fused("-n5"))).Replace("\r\n", "\n"));
+        Assert.Equal("a\n", Render(Run(Fused("-n1"))).Replace("\r\n", "\n"));
+    }
+
     [Fact]
     public void Group2_Yq_MatchesJqTerminators()
     {
