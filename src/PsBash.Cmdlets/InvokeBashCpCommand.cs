@@ -1,4 +1,5 @@
 using System.Management.Automation;
+using PsBash.Cmdlets.Args;
 
 namespace PsBash.Cmdlets;
 
@@ -26,12 +27,14 @@ namespace PsBash.Cmdlets;
 /// <item>Verbose mode emits <c>'src' -> 'dest'\n</c> per copy.</item>
 /// </list>
 /// <para>
-/// <b>One colliding flag</b> declared explicitly: <c>-v</c> prefix-collides
-/// with <c>-Verbose</c>. <c>-r</c> / <c>-R</c> / <c>-n</c> / <c>-f</c> /
-/// <c>-p</c> stay in <c>Arguments</c> and are recovered post-parse —
-/// PowerShell parameter binding is case-insensitive, so <c>-r</c> and
-/// <c>-R</c> are not distinguishable as separate cmdlet parameters; both
-/// map to <c>recursive</c> in the body.
+/// <b>Argv</b> is parsed by the shared ordered parser (<see cref="ArgParser"/>, spec
+/// <see cref="CpSpec"/>): bundles of any implemented flags (<c>-rfv</c>), <c>--</c>,
+/// long options with unique-prefix abbreviation, and the unsupported/unknown classifier
+/// are one left-to-right scan. The transpiler single-quotes every dash-leading word for
+/// cp (<c>PsEmitter.OrderedArgCommands</c>), so <c>-r</c>/<c>-R</c> (indistinguishable to
+/// the case-insensitive binder) and every colliding letter arrive in <c>Arguments</c>
+/// intact. The <c>v</c>/<c>p</c>/<c>I</c>/<c>D</c> decoy switches exist ONLY for direct
+/// calls and are re-injected before parsing.
 /// </para>
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashCp")]
@@ -75,7 +78,9 @@ public sealed class InvokeBashCpCommand : PSCmdlet
     /// that prefix-collide with a PowerShell common parameter never reach this
     /// list (the binder eats them first) so the long form is the catchable
     /// one.</summary>
-    private static readonly HashSet<string> CpValidButUnsupported = new(StringComparer.Ordinal)
+    // (A string[] on purpose: CommonParameterCollisionGuardTests enumerates each cmdlet's static
+    // string sets to find short flags the binder could eat.)
+    private static readonly string[] CpValidButUnsupported =
     {
         "-i", "--interactive", "-l", "--link", "-s", "--symbolic-link",
         "-b", "--backup", "--reflink", "-P", "--no-dereference",
@@ -83,14 +88,45 @@ public sealed class InvokeBashCpCommand : PSCmdlet
         "-T", "--no-target-directory", "-x", "--one-file-system",
         "--sparse", "--strip-trailing-slashes", "-Z", "--context",
         "--attributes-only", "-d",
+        // valid GNU long options (the `-p` short is implemented; its long spellings are not)
+        "--preserve", "--no-preserve", "--parents", "--remove-destination",
+        "--copy-contents", "--debug",
     };
+
+    private const string OptRecursive = "recursive", OptNoClobber = "no-clobber", OptForce = "force",
+        OptVerbose = "verbose", OptPreserve = "preserve", OptUpdate = "update", OptArchive = "archive";
+
+    /// <summary>cp's whole option surface, built once for the shared ordered parser.</summary>
+    private static readonly OptSpecSet CpSpec = new(
+        new[]
+        {
+            new OptSpec(OptRecursive, 'r', "recursive"),
+            new OptSpec(OptRecursive, 'R', null),
+            new OptSpec(OptNoClobber, 'n', "no-clobber"),
+            new OptSpec(OptForce, 'f', "force"),
+            new OptSpec(OptVerbose, 'v', "verbose"),
+            new OptSpec(OptPreserve, 'p', null),
+            new OptSpec(OptUpdate, 'u', null),
+            // GNU >= 9.3: --update[=older|all|none|none-fail]; bare / =older is -u.
+            new OptSpec(OptUpdate, '\0', "update", OptKind.OptionalValue),
+            new OptSpec(OptArchive, 'a', "archive"),
+        },
+        validButUnsupported: CpValidButUnsupported,
+        allowAbbrev: true,
+        gnuInfoOptions: true);
+
+    /// <summary>Pure argv scan (unit-test seam): options, operands and the first error.</summary>
+    internal static ParsedArgs ScanArgs(string[] args) => ArgParser.Parse(args, CpSpec);
 
     protected override void ProcessRecord()
     {
-        // Re-inject decoy-bound classifier flags (bare -i/-d never reach Arguments —
-        // the binder crashes/silent-drops them) so TryWriteOperandOptionError still
-        // emits the exit-2 "recognized but not supported" message.
-        var args = BashRuntime.PrependDecoys(Arguments, (I.IsPresent, "-i"), (D.IsPresent, "-d"));
+        // Re-inject every decoy-bound flag. The transpiler single-quotes each dash-leading word
+        // for cp (PsEmitter.OrderedArgCommands) so they arrive in Arguments in order; a DIRECT
+        // call (`Invoke-BashCp -v a b`, Pester) binds the decoys instead — bare -i/-d/-v/-p would
+        // crash the binder or be silently swallowed as common parameters. Prepending is safe:
+        // a decoy can only have been bound before any `--`.
+        var args = BashRuntime.PrependDecoys(Arguments,
+            (v.IsPresent, "-v"), (p.IsPresent, "-p"), (I.IsPresent, "-i"), (D.IsPresent, "-d"));
 
         FileSystemHelpers.SetLastExitCode(this, 0);
         if (FileSystemHelpers.TryHandleVersion(this, "cp", args)) return;
@@ -104,64 +140,37 @@ public sealed class InvokeBashCpCommand : PSCmdlet
             return;
         }
 
-        bool recursive = false;
-        bool noClobber = false;
-        bool force = false;
-        bool verbose = v.IsPresent;
-        bool preserve = p.IsPresent;  // bare -p arrives via the decoy parameter
-        bool update = false;
-        var operands = new List<string>();
-        bool pastDoubleDash = false;
-        int preDashCount = -1; // count of operands collected before `--` (-1 = no `--`)
+        // Shared ordered parser: bundles, `--`, long options and abbreviations, and the
+        // valid-but-unsupported / unknown classifier are all one scan (see CpSpec). Classification
+        // happens DURING the scan, so nothing after `--` is ever an option — `cp -- -a b` copies
+        // a file named "-a".
+        var parsed = ScanArgs(args);
+        if (FileSystemHelpers.TryWriteParseError(this, "cp", parsed)) return;
+        if (FileSystemHelpers.TryHandleInfoOptions(this, "cp", parsed)) return;
 
-        foreach (var a in args)
+        // --update=WHEN: only the default/`older` policy (== -u) is implemented; refusing the
+        // rest loudly beats silently copying with the wrong overwrite policy.
+        foreach (var upd in parsed.All(OptUpdate))
         {
-            if (pastDoubleDash) { operands.Add(a); continue; }
-            if (a == "--") { pastDoubleDash = true; preDashCount = operands.Count; continue; }
-
-            // De-bundle combined short flags (-rf, -rpv) — only when every char is a known
-            // cp short flag, so unknown tokens (and filenames starting with '-') stay operands.
-            if (a.Length > 2 && a[0] == '-' && a[1] != '-' && IsCpShortBundle(a))
+            if (upd.Value is not null && upd.Value != "older")
             {
-                foreach (var c in a.AsSpan(1))
-                {
-                    switch (c)
-                    {
-                        case 'r': case 'R': recursive = true; break;
-                        case 'n': noClobber = true; break;
-                        case 'f': force = true; break;
-                        case 'v': verbose = true; break;
-                        case 'p': preserve = true; break;
-                        case 'u': update = true; break;
-                        case 'a': recursive = true; preserve = true; break;
-                    }
-                }
-                continue;
-            }
-
-            switch (a)
-            {
-                case "-r": case "-R": case "--recursive": recursive = true; break;
-                case "-n": case "--no-clobber": noClobber = true; break;
-                case "-f": case "--force": force = true; break;
-                case "-v": case "--verbose": verbose = true; break;
-                case "-p": preserve = true; break;
-                case "-u": case "--update": update = true; break;
-                // -a / --archive == -dR --preserve=all; on Windows we honor the
-                // recursive + timestamp/attribute preservation that maps.
-                case "-a": case "--archive": recursive = true; preserve = true; break;
-                default: operands.Add(a); break;
+                FileSystemHelpers.WriteBashError(this,
+                    $"cp: option '--update={upd.Value}' is recognized but not supported by ps-bash");
+                FileSystemHelpers.SetLastExitCode(this, ArgError.ExitCode);
+                return;
             }
         }
 
-        // An option-looking token that survived flag parsing is an unknown or
-        // valid-but-unsupported flag, not a file — classify it (exit 2) before it
-        // is mistaken for a source/dest path. Only operands collected BEFORE `--`
-        // are classified; tokens after `--` are real filenames (even if they look
-        // like flags), so a `-leading` file passes through.
-        var cpToClassify = preDashCount < 0 ? operands : operands.GetRange(0, preDashCount);
-        if (FileSystemHelpers.TryWriteOperandOptionError(this, "cp", cpToClassify, CpValidButUnsupported))
-            return;
+        // -a / --archive == -dR --preserve=all; on Windows we honor the recursive +
+        // timestamp/attribute preservation that maps.
+        bool archive = parsed.Has(OptArchive);
+        bool recursive = archive || parsed.Has(OptRecursive);
+        bool noClobber = parsed.Has(OptNoClobber);
+        bool force = parsed.Has(OptForce);
+        bool verbose = parsed.Has(OptVerbose);
+        bool preserve = archive || parsed.Has(OptPreserve);
+        bool update = parsed.Has(OptUpdate);
+        var operands = parsed.Operands();
 
         if (operands.Count < 2)
         {
@@ -292,17 +301,6 @@ public sealed class InvokeBashCpCommand : PSCmdlet
         }
 
         if (hadError) FileSystemHelpers.SetLastExitCode(this, 1);
-    }
-
-    /// <summary>True when <paramref name="s"/> (a multi-char <c>-xyz</c> token) is a bundle of
-    /// only known cp short flags, so it can be safely split into individual switches.</summary>
-    private static bool IsCpShortBundle(string s)
-    {
-        for (int i = 1; i < s.Length; i++)
-        {
-            if (s[i] is not ('r' or 'R' or 'n' or 'f' or 'v' or 'p' or 'u' or 'a')) return false;
-        }
-        return true;
     }
 
     /// <summary>

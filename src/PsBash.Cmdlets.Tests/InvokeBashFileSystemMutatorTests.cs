@@ -772,4 +772,76 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
         Assert.True(Directory.Exists(nested));
         Assert.Contains(lines, l => l.Contains("created directory", StringComparison.OrdinalIgnoreCase));
     }
+
+    // ─────────── shared ordered parser: cp as the transpiler delivers it ───────────
+    // PsEmitter.OrderedArgCommands single-quotes every dash-leading word, so flags arrive in
+    // Arguments as plain strings, in order (the direct-call decoy path is covered above).
+
+    [Fact]
+    public void Cp_EmitterStyleQuotedBundle_RecursiveForceVerbose()
+    {
+        var src = Path.Combine(_tmpRoot, "qsrc");
+        Directory.CreateDirectory(src);
+        File.WriteAllText(Path.Combine(src, "f.txt"), "payload");
+        var dst = Path.Combine(_tmpRoot, "qdst");
+        var lines = Run($"Invoke-BashCp '-rfv' {Q(src)} {Q(dst)}");
+        Assert.Equal("payload", File.ReadAllText(Path.Combine(dst, "f.txt")));
+        Assert.Contains(lines, l => l.Contains("->"));
+    }
+
+    [Theory]
+    [InlineData("--rec")]       // unique prefix of --recursive
+    [InlineData("--recursive")]
+    public void Cp_QuotedLongRecursive_CopiesDirectory(string flag)
+    {
+        var src = Path.Combine(_tmpRoot, "lsrc");
+        Directory.CreateDirectory(src);
+        File.WriteAllText(Path.Combine(src, "f.txt"), "x");
+        var dst = Path.Combine(_tmpRoot, "ldst");
+        Run($"Invoke-BashCp '{flag}' {Q(src)} {Q(dst)}");
+        Assert.True(File.Exists(Path.Combine(dst, "f.txt")));
+    }
+
+    [Fact]
+    public void Cp_DoubleDash_DashNamedSourceIsAnOperandNotAnOption()
+    {
+        // `cp -- -a dst` copies a file literally named "-a" (the classifier must stop at `--`).
+        File.WriteAllText(Path.Combine(_tmpRoot, "-a"), "dash");
+        Run($"Set-Location {Q(_tmpRoot)}; Invoke-BashCp '--' '-a' 'out.txt'");
+        Assert.Equal("dash", File.ReadAllText(Path.Combine(_tmpRoot, "out.txt")));
+    }
+
+    [Fact]
+    public void Cp_QuotedBareI_IsRefusedNotSwallowedByTheBinder()
+    {
+        var src = Path.Combine(_tmpRoot, "isrc.txt");
+        File.WriteAllText(src, "x");
+        var dst = Path.Combine(_tmpRoot, "idst.txt");
+        Assert.Equal("2", LastExit($"Invoke-BashCp '-i' {Q(src)} {Q(dst)}"));
+        Assert.False(File.Exists(dst));
+    }
+
+    [Fact]
+    public void Cp_OptionAfterOperands_StillApplies()
+    {
+        var src = Path.Combine(_tmpRoot, "osrc");
+        Directory.CreateDirectory(src);
+        File.WriteAllText(Path.Combine(src, "f"), "x");
+        var dst = Path.Combine(_tmpRoot, "odst");
+        Run($"Invoke-BashCp {Q(src)} {Q(dst)} '-r'");
+        Assert.True(File.Exists(Path.Combine(dst, "f")));
+    }
+
+    [Fact]
+    public void Cp_UpdateWithUnimplementedPolicy_IsRefusedLoudly()
+    {
+        var src = Path.Combine(_tmpRoot, "usrc.txt");
+        File.WriteAllText(src, "x");
+        var dst = Path.Combine(_tmpRoot, "udst.txt");
+        Assert.Equal("2", LastExit($"Invoke-BashCp '--update=none' {Q(src)} {Q(dst)}"));
+        Assert.False(File.Exists(dst));
+        // `--update=older` is -u: copies when the destination is missing.
+        Run($"Invoke-BashCp '--update=older' {Q(src)} {Q(dst)}");
+        Assert.True(File.Exists(dst));
+    }
 }
