@@ -35,6 +35,12 @@ public class LineStreamUniqParityTests : LineStreamParityHarness
     [InlineData("-cu")]
     [InlineData("-ci")]
     [InlineData("-c -d")]
+    [InlineData("--count")]      // long forms + abbreviations: certified now, the cmdlet parses them too
+    [InlineData("--repeated")]
+    [InlineData("--unique")]
+    [InlineData("--ignore-case")]
+    [InlineData("--coun")]
+    [InlineData("--")]
     public void UniqCore_FlagForms_MatchCmdlet(string flags)
         => AssertUniq(Split(flags), Dupes);
 
@@ -47,6 +53,13 @@ public class LineStreamUniqParityTests : LineStreamParityHarness
     [InlineData("-w2")]
     [InlineData("-cf1")]     // bundle whose value flag ends it
     [InlineData("-cw3")]
+    [InlineData("-w 0")]     // GNU: compare NOTHING (was: unlimited) — both lanes
+    [InlineData("-5")]       // obsolete -N = -f N
+    [InlineData("--skip-fields=1")]
+    [InlineData("--skip-f 1")]
+    [InlineData("--check-chars=2")]
+    [InlineData("--check 2")]
+    [InlineData("--skip-chars=1")]
     public void UniqCore_SkipAndCompareForms_MatchCmdlet(string flags)
         => AssertUniq(Split(flags), KeyedFields);
 
@@ -102,15 +115,15 @@ public class LineStreamUniqParityTests : LineStreamParityHarness
     [Theory]
     [InlineData("-D")]                    // cmdlet recovers this from the raw line
     [InlineData("--all-repeated")]
-    [InlineData("--ignore-case")]
-    [InlineData("--skip-fields=1")]
-    [InlineData("--")]
     [InlineData("-z")]
-    [InlineData("-C")]                    // uppercase: cmdlet dispatch is case-sensitive
+    [InlineData("--group")]
+    [InlineData("-cD")]                   // refused by the cmdlet ("meaningless")
+    [InlineData("--all-repeated=x")]
+    [InlineData("-C")]                    // uppercase: not a uniq option
     [InlineData("-f x")]                  // non-integer value
     [InlineData("-w")]                    // dangling value flag
     [InlineData("file.txt")]              // file operand
-    [InlineData("-5")]                    // numeric-led token = operand to the cmdlet
+    [InlineData("--bogus")]
     public void UniqCore_UncertifiedArgv_Declines(string flags)
         => Assert.False(LineStreamRegistry.TryCreate("uniq", Split(flags), out _),
             $"uniq core must DECLINE '{flags}' rather than guess");

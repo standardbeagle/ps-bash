@@ -50,6 +50,13 @@ public class LineStreamTacNlParityTests : LineStreamParityHarness
     public void TacCore_LongSeparator_MatchesCmdlet()
         => AssertTac(new[] { "--separator=," }, new[] { "a,b,c", "d,e" });
 
+    [Theory]
+    [InlineData("-s,")]                   // joined value: certified now that the cmdlet parses it too
+    [InlineData("--sep=,")]               // unique-prefix abbreviation
+    [InlineData("--sep ,")]
+    public void TacCore_JoinedAndAbbreviatedSeparator_MatchCmdlet(string flags)
+        => AssertTac(Split(flags), new[] { "a,b,c", "d,e" });
+
     [Fact]
     public void TacCore_IsBlocking_BuffersWholeInput()
     {
@@ -75,6 +82,8 @@ public class LineStreamTacNlParityTests : LineStreamParityHarness
     [InlineData("--help")]
     [InlineData("--version")]
     [InlineData("-s")]                    // dangling value flag
+    [InlineData("-x")]
+    [InlineData("--bogus")]
     [InlineData("file.txt")]              // file operand → file mode
     public void TacCore_UncertifiedArgv_Declines(string flags)
         => Assert.False(LineStreamRegistry.TryCreate("tac", Split(flags), out _),
@@ -115,6 +124,13 @@ public class LineStreamTacNlParityTests : LineStreamParityHarness
     [InlineData("-i2")]
     [InlineData("-s:")]
     [InlineData("-s ::")]
+    [InlineData("-w 3")]                  // bare forms certified now: the cmdlet reads the same argv
+    [InlineData("-v 5")]
+    [InlineData("-i 2")]
+    [InlineData("--number-width=3")]
+    [InlineData("--number-w 3")]          // unique-prefix abbreviation
+    [InlineData("--body a")]
+    [InlineData("-ba -nrz -w 3 -v -5 -i 0")]
     public void NlCore_WidthStartIncrementSeparator_MatchCmdlet(string flags)
         => AssertNl(Split(flags), Lines);
 
@@ -144,13 +160,15 @@ public class LineStreamTacNlParityTests : LineStreamParityHarness
     }
 
     [Theory]
-    [InlineData("-w 3")]                  // bare -w: binder-bound decoy parameter, not argv
-    [InlineData("-v 5")]
-    [InlineData("-i 2")]
     [InlineData("--help")]
     [InlineData("--version")]
-    [InlineData("--number-width=3")]
-    [InlineData("--")]
+    [InlineData("-w x")]                  // bad value: the cmdlet refuses it, so the core declines
+    [InlineData("-w 0")]
+    [InlineData("-n xx")]
+    [InlineData("-bx")]
+    [InlineData("-bpfoo")]
+    [InlineData("-h a")]                  // valid-but-unsupported (sections)
+    [InlineData("-p")]
     [InlineData("-z")]
     [InlineData("file.txt")]              // file operand → file mode
     public void NlCore_UncertifiedArgv_Declines(string flags)

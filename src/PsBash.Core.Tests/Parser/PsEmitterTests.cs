@@ -110,7 +110,7 @@ public class PsEmitterTests
         // with a phase-2b streaming -Stages list + phase-2a scriptblock Fallback.
         Assert.Equal(
             "Invoke-BashFusedPipeline -Stages @(@('cat', 'file'), @('head', '-n', '5'), @('sort')) "
-                + "-Fallback { Invoke-BashCat file | Invoke-BashHead -n 5 | Invoke-BashSort }",
+                + "-Fallback { Invoke-BashCat file | Invoke-BashHead '-n' 5 | Invoke-BashSort }",
             result);
     }
 
@@ -412,7 +412,7 @@ public class PsEmitterTests
     public void Transpile_InputRedirectWithCommand_StillPipes()
     {
         // Guard the narrow claim: a redirect that DOES have a command is unchanged.
-        Assert.Contains("Get-Content f.txt | Invoke-BashWc -l",
+        Assert.Contains("Get-Content f.txt | Invoke-BashWc '-l'",
             PsEmitter.Transpile("wc -l < f.txt"));
     }
 
@@ -762,7 +762,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("echo hello | wc -l");
 
-        Assert.Equal("Invoke-BashEcho hello | Invoke-BashWc -l", result);
+        Assert.Equal("Invoke-BashEcho hello | Invoke-BashWc '-l'", result);
     }
 
     [Fact]
@@ -782,7 +782,7 @@ public class PsEmitterTests
         // Batch 1 of the shared ordered parser. Adding a command here also means adding it to
         // CommonParameterCollisionGuardTests.EmitterForceQuoted (Cmdlets.Tests) — that map is
         // how the guard knows the emitter, not a decoy, protects the colliding letters.
-        Assert.Equal(new[] { "cp", "env", "ln", "mkdir", "mv", "rm", "rmdir", "tee", "time", "touch", "xargs" }, PsEmitter.OrderedArgCommands.OrderBy(x => x).ToArray());
+        Assert.Equal(new[] { "cat", "cp", "env", "head", "ln", "mkdir", "mv", "nl", "rm", "rmdir", "tac", "tail", "tee", "time", "touch", "uniq", "wc", "xargs" }, PsEmitter.OrderedArgCommands.OrderBy(x => x).ToArray());
     }
 
     [Theory]
@@ -817,6 +817,41 @@ public class PsEmitterTests
     [InlineData("rmdir -- -d", "Invoke-BashRmdir '--' '-d'")]
     [InlineData("rmdir --ignore-fail-on-non-empty d", "Invoke-BashRmdir '--ignore-fail-on-non-empty' d")]
     [InlineData("rm --preserve-root=all a", "Invoke-BashRm '--preserve-root=all' a")]
+    [InlineData("head -n 5 f", "Invoke-BashHead '-n' 5 f")]
+    [InlineData("head -qn2 f", "Invoke-BashHead '-qn2' f")]
+    [InlineData("head -5 f", "Invoke-BashHead '-5' f")]
+    [InlineData("head -c 1K f", "Invoke-BashHead '-c' 1K f")]
+    [InlineData("head --lines=3 f", "Invoke-BashHead '--lines=3' f")]
+    [InlineData("head -- -n", "Invoke-BashHead '--' '-n'")]
+    [InlineData("head -v -z f", "Invoke-BashHead '-v' '-z' f")]
+    [InlineData("tail -n 5 f", "Invoke-BashTail '-n' 5 f")]
+    [InlineData("tail -n +3 f", "Invoke-BashTail '-n' +3 f")]
+    [InlineData("tail -qn2 f", "Invoke-BashTail '-qn2' f")]
+    [InlineData("tail -c 1K f", "Invoke-BashTail '-c' 1K f")]
+    [InlineData("tail --follow=name f", "Invoke-BashTail '--follow=name' f")]
+    [InlineData("tail -F -- -n", "Invoke-BashTail '-F' '--' '-n'")]
+    [InlineData("wc -l f", "Invoke-BashWc '-l' f")]
+    [InlineData("wc -lwc f", "Invoke-BashWc '-lwc' f")]
+    [InlineData("wc --max-line-length f", "Invoke-BashWc '--max-line-length' f")]
+    [InlineData("wc -w -- -c", "Invoke-BashWc '-w' '--' '-c'")]
+    [InlineData("cat -n f", "Invoke-BashCat '-n' f")]
+    [InlineData("cat -nET f", "Invoke-BashCat '-nET' f")]
+    [InlineData("cat --squeeze-blank f", "Invoke-BashCat '--squeeze-blank' f")]
+    [InlineData("cat -e -v -A f", "Invoke-BashCat '-e' '-v' '-A' f")]
+    [InlineData("cat - f -n", "Invoke-BashCat '-' f '-n'")]
+    [InlineData("cat -- -n", "Invoke-BashCat '--' '-n'")]
+    [InlineData("tac -s x f", "Invoke-BashTac '-s' x f")]
+    [InlineData("tac -sx f", "Invoke-BashTac '-sx' f")]
+    [InlineData("tac --separator=, f", "Invoke-BashTac '--separator=,' f")]
+    [InlineData("nl -ba f", "Invoke-BashNl '-ba' f")]
+    [InlineData("nl -w 3 -v 5 -i 2 f", "Invoke-BashNl '-w' 3 '-v' 5 '-i' 2 f")]
+    [InlineData("nl -s: -nrz f", "Invoke-BashNl '-s:' '-nrz' f")]
+    [InlineData("nl --number-width=3 f", "Invoke-BashNl '--number-width=3' f")]
+    [InlineData("uniq -c f", "Invoke-BashUniq '-c' f")]
+    [InlineData("uniq -D f", "Invoke-BashUniq '-D' f")]
+    [InlineData("uniq -f 1 -s 2 -w 3 f", "Invoke-BashUniq '-f' 1 '-s' 2 '-w' 3 f")]
+    [InlineData("uniq --all-repeated=prepend f", "Invoke-BashUniq '--all-repeated=prepend' f")]
+    [InlineData("uniq -cdi -- -z", "Invoke-BashUniq '-cdi' '--' '-z'")]
     public void Transpile_OrderedArgCommand_QuotesEveryDashLiteral(string bash, string expected)
     {
         Assert.Equal(expected, PsEmitter.Transpile(bash));
@@ -3355,14 +3390,14 @@ public class PsEmitterTests
     public void Transpile_HeadWithInputProcessSub_RoutesToPipelineObjectPath()
     {
         var result = PsEmitter.Transpile("head -n 1 <(seq 1 10)");
-        Assert.Equal("Invoke-BashHead -n 1 (Invoke-ProcessSubPipeline { Invoke-BashSeq 1 10 })", result);
+        Assert.Equal("Invoke-BashHead '-n' 1 (Invoke-ProcessSubPipeline { Invoke-BashSeq 1 10 })", result);
     }
 
     [Fact]
     public void Transpile_TailWithInputProcessSub_RoutesToPipelineObjectPath()
     {
         var result = PsEmitter.Transpile("tail -n 1 <(seq 1 10)");
-        Assert.Equal("Invoke-BashTail -n 1 (Invoke-ProcessSubPipeline { Invoke-BashSeq 1 10 })", result);
+        Assert.Equal("Invoke-BashTail '-n' 1 (Invoke-ProcessSubPipeline { Invoke-BashSeq 1 10 })", result);
     }
 
     [Fact]
@@ -3379,7 +3414,7 @@ public class PsEmitterTests
         // wc's output format depends on file-vs-stdin mode (file echoes filename, stdin doesn't),
         // so the stdin-substitutable assumption doesn't hold for wc.
         var result = PsEmitter.Transpile("wc -l <(seq 1 100)");
-        Assert.Equal("Invoke-BashWc -l (Invoke-ProcessSub { Invoke-BashSeq 1 100 })", result);
+        Assert.Equal("Invoke-BashWc '-l' (Invoke-ProcessSub { Invoke-BashSeq 1 100 })", result);
     }
 
     [Fact]
@@ -3996,7 +4031,7 @@ public class PsEmitterTests
         // (2 was reclassified as IoNumber). Now 2 stays as a word arg.
         var result = PsEmitter.Transpile("head -n 2 << EOF\nline1\nline2\nline3\nEOF");
 
-        Assert.Contains("Invoke-BashHead -n 2", result);
+        Assert.Contains("Invoke-BashHead '-n' 2", result);
         Assert.Contains("line1", result);
     }
 
@@ -4006,7 +4041,7 @@ public class PsEmitterTests
         // Issue 8: wc -l with heredoc input
         var result = PsEmitter.Transpile("wc -l << EOF\nhello\nworld\nEOF");
 
-        Assert.Contains("Invoke-BashWc -l", result);
+        Assert.Contains("Invoke-BashWc '-l'", result);
         Assert.Contains("hello", result);
         Assert.Contains("world", result);
     }
@@ -4278,7 +4313,7 @@ public class PsEmitterTests
         // phase-2b streaming -Stages list + phase-2a scriptblock Fallback.
         Assert.Equal(
             "Invoke-BashFusedPipeline -Stages @(@('cat', 'file'), @('nl', '-ba')) "
-                + "-Fallback { Invoke-BashCat file | Invoke-BashNl -ba }",
+                + "-Fallback { Invoke-BashCat file | Invoke-BashNl '-ba' }",
             result);
     }
 
@@ -4305,7 +4340,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("head -n 5 file.txt");
 
-        Assert.Equal("Invoke-BashHead -n 5 file.txt", result);
+        Assert.Equal("Invoke-BashHead '-n' 5 file.txt", result);
     }
 
     [Fact]
@@ -4313,7 +4348,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("wc -l file.txt");
 
-        Assert.Equal("Invoke-BashWc -l file.txt", result);
+        Assert.Equal("Invoke-BashWc '-l' file.txt", result);
     }
 
     [Fact]

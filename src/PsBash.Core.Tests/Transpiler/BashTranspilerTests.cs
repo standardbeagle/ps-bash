@@ -179,7 +179,7 @@ public class BashTranspilerTests
     public void LocalShellScript_InPipeline_RoutedThroughBash()
     {
         var result = BashTranspiler.Transpile("./scripts/test.sh foo | tail -30");
-        Assert.Equal("bash ./scripts/test.sh foo | Invoke-BashTail -30", result);
+        Assert.Equal("bash ./scripts/test.sh foo | Invoke-BashTail '-30'", result);
     }
 
     [Fact]
@@ -500,7 +500,7 @@ public class BashTranspilerTests
     public void HomePathWithPipe_TransformsBoth()
     {
         var result = BashTranspiler.Transpile("ls ~/.config | head -n 5");
-        Assert.Equal("Invoke-BashLs $HOME\\.config | Invoke-BashHead -n 5", result);
+        Assert.Equal("Invoke-BashLs $HOME\\.config | Invoke-BashHead '-n' 5", result);
     }
 
     [Fact]
@@ -509,7 +509,7 @@ public class BashTranspilerTests
         var result = BashTranspiler.Transpile("cat /tmp/data.csv | grep -v header | sort | uniq | wc -l");
         // All-mapped, terminal-bound pipeline → fused lane (PERF phase 2).
         Assert.Equal(
-            "Invoke-BashFusedPipeline { Invoke-BashCat $env:TEMP\\data.csv | Invoke-BashGrep -v header | Invoke-BashSort | Invoke-BashUniq | Invoke-BashWc -l }",
+            "Invoke-BashFusedPipeline { Invoke-BashCat $env:TEMP\\data.csv | Invoke-BashGrep -v header | Invoke-BashSort | Invoke-BashUniq | Invoke-BashWc '-l' }",
             result);
     }
 

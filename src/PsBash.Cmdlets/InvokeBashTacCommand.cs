@@ -1,4 +1,5 @@
 using System.Management.Automation;
+using PsBash.Cmdlets.Args;
 
 namespace PsBash.Cmdlets;
 
@@ -43,17 +44,59 @@ namespace PsBash.Cmdlets;
 public sealed class InvokeBashTacCommand : PSCmdlet
 {
     /// <summary>
-    /// Valid GNU <c>tac</c> options ps-bash does not implement (representative).
-    /// An option-looking token in this set yields "recognized but not supported"
-    /// instead of the misleading "No such file or directory".
+    /// Valid GNU <c>tac</c> options ps-bash does not implement, refused loudly (exit 2) by the
+    /// shared parser: <c>-r/--regex</c> (regex separator) and <c>-b/--before</c> (attach the
+    /// separator before). (A string[] on purpose: CommonParameterCollisionGuardTests enumerates
+    /// static string sets.)
     /// </summary>
-    private static readonly HashSet<string> TacValidButUnsupported =
-        new(StringComparer.Ordinal)
-        {
-            "-r", "--regex",
-            "-b", "--before",
-        };
+    private static readonly string[] TacValidButUnsupported =
+    {
+        "-r", "--regex",
+        "-b", "--before",
+    };
 
+    private const string OptSeparator = "separator";
+
+    /// <summary>
+    /// tac's option surface (GNU coreutils 9.4: -b -r -s + --before --regex --separator=STRING).
+    /// Built once for the shared ordered parser.
+    /// </summary>
+    private static readonly OptSpecSet TacSpec = new(
+        new[]
+        {
+            new OptSpec(OptSeparator, 's', "separator", OptKind.Value),
+        },
+        validButUnsupported: TacValidButUnsupported,
+        allowAbbrev: true,
+        gnuInfoOptions: true);
+
+    /// <summary>Pure argv scan (unit-test seam): options, operands and the first error.</summary>
+    internal static ParsedArgs ScanArgs(string[] args) => ArgParser.Parse(args, TacSpec);
+
+    /// <summary>The resolved meaning of a tac argv (shared by the cmdlet and the fused core).</summary>
+    internal sealed class TacArgs
+    {
+        public ParsedArgs Parsed = null!;
+        /// <summary>The last <c>-s</c> / <c>--separator</c> value, or null.</summary>
+        public string? Separator;
+        public List<string> Operands = new();
+
+        /// <summary>True when nothing further should execute: scan error or --help/--version.</summary>
+        public bool Declined =>
+            Parsed.HasError || Parsed.Has(OptSpecSet.HelpId) || Parsed.Has(OptSpecSet.VersionId);
+    }
+
+    /// <summary>Scan + resolve (last -s wins, as in getopt).</summary>
+    internal static TacArgs Plan(string[] args)
+    {
+        var p = ScanArgs(args);
+        return new TacArgs
+        {
+            Parsed = p,
+            Separator = p.Last(OptSeparator)?.Value,
+            Operands = p.Operands(),
+        };
+    }
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
@@ -86,31 +129,14 @@ public sealed class InvokeBashTacCommand : PSCmdlet
             return;
         }
 
-        string? separator = null;
-        var operands = new List<string>();
-
-        for (int i = 0; i < args.Length; i++)
-        {
-            var arg = args[i];
-            if (arg == "-s" && (i + 1) < args.Length)
-            {
-                separator = args[i + 1];
-                i++;
-                continue;
-            }
-            if (arg.StartsWith("--separator=", StringComparison.Ordinal))
-            {
-                separator = arg.Substring("--separator=".Length);
-                continue;
-            }
-            operands.Add(arg);
-        }
-
-        // Any remaining option-looking operand is an unknown flag that fell
-        // through the parser — classify it instead of reporting "No such file".
-        if (FileSystemHelpers.TryWriteOperandOptionError(this, "tac", operands, TacValidButUnsupported))
-            return;
-
+        // Shared ordered parser: attached values (-sX), --separator=X / abbreviations (--sep X),
+        // `--`, options after operands, and the unsupported/unknown classifier in ONE scan. (A
+        // dangling -s used to become a file operand.)
+        var plan = Plan(args);
+        if (FileSystemHelpers.TryWriteParseError(this, "tac", plan.Parsed)) return;
+        if (FileSystemHelpers.TryHandleInfoOptions(this, "tac", plan.Parsed)) return;
+        string? separator = plan.Separator;
+        var operands = plan.Operands;
         var lines = new List<string>();
         bool hadError = false;
 

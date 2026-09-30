@@ -1,6 +1,7 @@
 using System.Management.Automation;
 using System.Reflection;
 using System.Text;
+using PsBash.Cmdlets.Args;
 
 namespace PsBash.Cmdlets;
 
@@ -58,21 +59,115 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
         => BashRuntime.PrependDecoys(Arguments, (V.IsPresent, "-v"));
 
     /// <summary>
-    /// Valid GNU <c>head</c> options ps-bash does not implement. An option-looking
-    /// token that is not a recognized flag falls through this cmdlet's static
-    /// <c>ParseArgs</c> into the operand (file) list; rather than report it as a
-    /// missing file, it is classified via
-    /// <see cref="FileSystemHelpers.TryWriteOperandOptionError"/>: in this set →
-    /// "recognized but not supported"; otherwise bash-parity "unrecognized option".
+    /// Valid GNU <c>head</c> options ps-bash does not implement, refused loudly (exit 2) by the
+    /// shared parser. -q/--quiet/--silent are accepted (no-op); --lines/--bytes are aliases of
+    /// -n/-c. -v/--verbose (force per-file headers) is unsupported because ps-bash head does not
+    /// emit the "==> name &lt;==" headers at all; -z/--zero-terminated needs NUL records.
+    /// (A string[] on purpose: CommonParameterCollisionGuardTests enumerates static string sets.)
     /// </summary>
-    private static readonly HashSet<string> ValidButUnsupported = new(StringComparer.Ordinal)
+    private static readonly string[] HeadValidButUnsupported =
     {
-        // -q/--quiet/--silent accepted (no-op); --lines/--bytes parsed (aliases
-        // of -n/-c). -v/--verbose (force per-file headers) is unsupported because
-        // ps-bash head does not emit the "==> name <==" headers at all.
-        "-v", "-z",
-        "--verbose", "--zero-terminated",
+        "-v", "-z", "--verbose", "--zero-terminated",
     };
+
+    private const string OptLines = "lines", OptBytes = "bytes", OptQuiet = "quiet", OptNum = "num";
+
+    /// <summary>
+    /// head's option surface (GNU coreutils 9.4: -c -n -q -v -z + long forms; -NUM obsolete
+    /// shorthand). Built once for the shared ordered parser.
+    /// </summary>
+    private static readonly OptSpecSet HeadSpec = new(
+        new[]
+        {
+            new OptSpec(OptBytes, 'c', "bytes", OptKind.Value),
+            new OptSpec(OptLines, 'n', "lines", OptKind.Value),
+            new OptSpec(OptQuiet, 'q', "quiet"),
+            new OptSpec(OptQuiet, '\0', "silent"),
+        },
+        validButUnsupported: HeadValidButUnsupported,
+        allowAbbrev: true,
+        numericShorthandId: OptNum,
+        gnuInfoOptions: true);
+
+    /// <summary>Pure argv scan (unit-test seam): options, operands and the first error.</summary>
+    internal static ParsedArgs ScanArgs(string[] args) => ArgParser.Parse(args, HeadSpec);
+
+    /// <summary>The resolved meaning of a head argv (shared by the cmdlet and the fused core).</summary>
+    internal sealed class HeadArgs
+    {
+        public ParsedArgs Parsed = null!;
+        /// <summary>Lines to print; negative = all but the last K (GNU <c>-n -K</c>).</summary>
+        public int Count = 10;
+        /// <summary>Bytes to print when <see cref="BytesMode"/> (negative = all but the last K).</summary>
+        public int ByteCount;
+        /// <summary>True when the LAST of -c / -n on the line was -c (GNU: last one wins).</summary>
+        public bool BytesMode;
+        public List<string> Operands = new();
+        /// <summary>A usage error the scan itself cannot see (bad NUM, misplaced -NUM); exit 1.</summary>
+        public string? Error;
+
+        /// <summary>True when nothing further should execute: scan error, NUM error, --help/--version.</summary>
+        public bool Declined =>
+            Parsed.HasError || Error is not null
+            || Parsed.Has(OptSpecSet.HelpId) || Parsed.Has(OptSpecSet.VersionId);
+    }
+
+    /// <summary>
+    /// Scan + resolve. GNU rules kept: last -c/-n wins; NUM takes a sign and multiplier suffix
+    /// (<see cref="GnuNumber"/>) and an invalid one is an error; the obsolete <c>-NUM</c> is only
+    /// valid as the FIRST argument (<c>head -n1 -5</c> is "invalid trailing option"). The legacy
+    /// ps-bash extension — a bare leading positional number is the line count (<c>head 5</c>,
+    /// Pester-pinned) — is preserved.
+    /// </summary>
+    internal static HeadArgs Plan(string[] args)
+    {
+        var h = new HeadArgs { Parsed = ScanArgs(args) };
+        h.Operands = h.Parsed.Operands();
+        if (h.Parsed.HasError) return h;
+
+        foreach (var tok in h.Parsed.Tokens)
+        {
+            if (tok.Kind != ArgTokKind.Option) continue;
+            switch (tok.OptId)
+            {
+                case OptNum when tok.ArgIndex != 0:
+                    h.Error = $"head: invalid trailing option -- {tok.Value![0]}";
+                    return h;
+                case OptNum:
+                case OptLines:
+                    if (!GnuNumber.TryParse(tok.Value!, out int lines, out char lsign))
+                    {
+                        h.Error = $"head: invalid number of lines: '{tok.Value}'";
+                        return h;
+                    }
+                    h.Count = lsign == '-' ? -lines : lines;
+                    h.BytesMode = false;
+                    break;
+                case OptBytes:
+                    if (!GnuNumber.TryParse(tok.Value!, out int bytes, out char bsign))
+                    {
+                        h.Error = $"head: invalid number of bytes: '{tok.Value}'";
+                        return h;
+                    }
+                    h.ByteCount = bsign == '-' ? -bytes : bytes;
+                    h.BytesMode = true;
+                    break;
+            }
+        }
+
+        // Legacy bare leading positional number (head 5). Never after `--`.
+        foreach (var tok in h.Parsed.Tokens)
+        {
+            if (tok.Kind != ArgTokKind.Operand) continue;
+            if (!tok.AfterDoubleDash && IsAllDigits(tok.Raw))
+            {
+                h.Count = BashRuntime.ParseCountClamped(tok.Raw.AsSpan());
+                h.Operands.RemoveAt(0);
+            }
+            break; // only the first operand qualifies
+        }
+        return h;
+    }
 
     private readonly List<PSObject> _pipeline = new();
     // Streaming state for line-mode pipeline: parse flags lazily on first
@@ -88,17 +183,18 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
     {
         if (_flagsParsed) return;
         _flagsParsed = true;
-        ParseArgs(ArgsWithDecoys(),
-            out _lineCount, out _byteCount, out var operands, out var help);
+        var h = Plan(ArgsWithDecoys());
+        _lineCount = h.Count;
+        _byteCount = h.BytesMode ? h.ByteCount : null;
         // We stream the pipeline only when:
-        //   - no --help (which goes through EndProcessing)
+        //   - the argv is clean (a scan/NUM error or --help/--version goes through EndProcessing)
         //   - no file operands (file mode runs in EndProcessing)
         //   - line mode (byte mode needs to join everything first)
         //   - a NON-negative line count. GNU `head -n -K` means "all lines but the
         //     last K", which is undecidable while streaming (you can't know which are
         //     the last K until input ends) — buffer and resolve in EndProcessing.
-        _streamingLineMode = !help && operands.Count == 0 && _byteCount == null && _lineCount >= 0;
-        if (help || operands.Count > 0) _suppress = true;
+        _streamingLineMode = !h.Declined && h.Operands.Count == 0 && _byteCount == null && _lineCount >= 0;
+        if (h.Declined || h.Operands.Count > 0) _suppress = true;
     }
 
     protected override void ProcessRecord()
@@ -204,15 +300,20 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
             return;
         }
 
-        ParseArgs(args, out int count, out int? byteCount,
-            out var operands, out _);
-
-        // An option-looking operand is an unknown flag that fell through the
-        // scan, not a file — classify it instead of reporting a missing file.
-        if (FileSystemHelpers.TryWriteOperandOptionError(this, "head", operands, ValidButUnsupported))
+        // Shared ordered parser: bundles (-qn2), attached values (-n5, --lines=5), abbreviations
+        // (--li=1), `--`, and the unsupported/unknown classifier in ONE scan.
+        var plan = Plan(args);
+        if (FileSystemHelpers.TryWriteParseError(this, "head", plan.Parsed)) return;
+        if (FileSystemHelpers.TryHandleInfoOptions(this, "head", plan.Parsed)) return;
+        if (plan.Error is { } planError)
         {
+            FileSystemHelpers.WriteBashError(this, planError); // exit 1, GNU's usage status
             return;
         }
+
+        int count = plan.Count;
+        int? byteCount = plan.BytesMode ? plan.ByteCount : null;
+        var operands = plan.Operands;
 
         // Pipeline mode
         if (operands.Count == 0 && _pipeline.Count > 0)
@@ -378,138 +479,6 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
             return parts[..^1]; // drop the terminator's trailing empty element
         }
         return text.Split('\n');
-    }
-
-    private static void ParseArgs(string[] args, out int count, out int? byteCount,
-        out List<string> operands, out bool help)
-    {
-        count = 10;
-        byteCount = null;
-        operands = new List<string>();
-        help = false;
-        bool pastDoubleDash = false;
-
-        int i = 0;
-        while (i < args.Length)
-        {
-            var arg = args[i];
-
-            if (pastDoubleDash)
-            {
-                operands.Add(arg);
-                i++;
-                continue;
-            }
-
-            if (arg == "--help")
-            {
-                help = true;
-                i++;
-                continue;
-            }
-
-            if (arg == "--")
-            {
-                pastDoubleDash = true;
-                i++;
-                continue;
-            }
-
-            // Long-form aliases of -n / -c.
-            if (arg.StartsWith("--lines=", StringComparison.Ordinal))
-            {
-                if (int.TryParse(arg.Substring("--lines=".Length), out int ln)) count = ln;
-                i++;
-                continue;
-            }
-            if (arg == "--lines")
-            {
-                i++;
-                if (i < args.Length && int.TryParse(args[i], out int ln)) count = ln;
-                i++;
-                continue;
-            }
-            if (arg.StartsWith("--bytes=", StringComparison.Ordinal))
-            {
-                if (int.TryParse(arg.Substring("--bytes=".Length), out int bc)) byteCount = bc;
-                i++;
-                continue;
-            }
-            if (arg == "--bytes")
-            {
-                i++;
-                if (i < args.Length && int.TryParse(args[i], out int bc)) byteCount = bc;
-                i++;
-                continue;
-            }
-
-            // -q / --quiet / --silent: never print the per-file "==> name <=="
-            // header. ps-bash head never prints those headers, so this is the
-            // effective behavior already — accept the flag as a no-op so it is
-            // honored rather than refused.
-            if (arg == "-q" || arg == "--quiet" || arg == "--silent")
-            {
-                i++;
-                continue;
-            }
-
-            if (arg.Length > 2 && arg.StartsWith("-n", StringComparison.Ordinal)
-                && IsAllDigits(arg.Substring(2)))
-            {
-                count = BashRuntime.ParseCountClamped(arg.AsSpan(2));
-                i++;
-                continue;
-            }
-
-            if (arg == "-n")
-            {
-                i++;
-                if (i < args.Length && int.TryParse(args[i], out int n))
-                {
-                    count = n;
-                }
-                i++;
-                continue;
-            }
-
-            if (arg.Length > 2 && arg.StartsWith("-c", StringComparison.Ordinal)
-                && IsAllDigits(arg.Substring(2)))
-            {
-                byteCount = BashRuntime.ParseCountClamped(arg.AsSpan(2));
-                i++;
-                continue;
-            }
-
-            if (arg == "-c")
-            {
-                i++;
-                if (i < args.Length && int.TryParse(args[i], out int c))
-                {
-                    byteCount = c;
-                }
-                i++;
-                continue;
-            }
-
-            // Legacy -N shorthand (e.g. head -5).
-            if (arg.Length > 1 && arg[0] == '-' && IsAllDigits(arg.Substring(1)))
-            {
-                count = BashRuntime.ParseCountClamped(arg.AsSpan(1));
-                i++;
-                continue;
-            }
-
-            // Bare leading positional number (e.g. head 5).
-            if (operands.Count == 0 && arg.Length > 0 && IsAllDigits(arg))
-            {
-                count = BashRuntime.ParseCountClamped(arg.AsSpan());
-                i++;
-                continue;
-            }
-
-            operands.Add(arg);
-            i++;
-        }
     }
 
     private static bool IsAllDigits(string s)
