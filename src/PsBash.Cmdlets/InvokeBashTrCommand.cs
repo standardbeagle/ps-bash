@@ -169,7 +169,7 @@ public sealed class InvokeBashTrCommand : PSCmdlet
         // Expand C-style escape sequences in operands before class expansion.
         for (int oi = 0; oi < _operands.Count; oi++)
         {
-            _operands[oi] = BashRuntime.ExpandEscapeSequences(_operands[oi]);
+            _operands[oi] = BashEscapes.Expand(_operands[oi], EscapeDialect.Tr);
         }
 
         BuildTables();

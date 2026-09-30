@@ -62,6 +62,19 @@ public class FsStateDifferentialTests
     public Task Redirect_PrintfWithoutNewline_FileBytesAreExactlyTheInput() =>
         EqualAsync("", "printf x > f");
 
+    // NUL / octal escapes reach the file as real bytes: `printf 'x\0' > f` is 2 bytes.
+    [SkippableFact]
+    public Task Redirect_PrintfNulEscape_FileHoldsARealNulByte() =>
+        EqualAsync("", "printf 'x\\0' > f");
+
+    [SkippableFact]
+    public Task Redirect_PrintfOctalEscapes_FileBytesMatch() =>
+        EqualAsync("", "printf 'a\\101\\0101b\\n' > f; printf '%b' 'p\\0101q' > g");
+
+    [SkippableFact]
+    public Task Redirect_EchoEOctalAndNul_FileBytesMatch() =>
+        EqualAsync("", "echo -e 'a\\0101b\\0c\\101' > f");
+
     [SkippableFact] public Task Redirect_EchoDashN_FileBytesAreExactlyTheInput() =>
         EqualAsync("", "echo -n x > f");
 
