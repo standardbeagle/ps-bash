@@ -902,6 +902,136 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
         Assert.True(File.Exists(dst));
     }
 
+    // ─────────── shared ordered parser: touch as the transpiler delivers it ───────────
+
+    private static readonly DateTime OldStamp = new(2001, 2, 3, 4, 5, 6, DateTimeKind.Utc);
+
+    private string TouchTarget(string name)
+    {
+        var f = Path.Combine(_tmpRoot, name);
+        File.WriteAllText(f, "x");
+        File.SetLastWriteTimeUtc(f, OldStamp);
+        File.SetLastAccessTimeUtc(f, OldStamp);
+        return f;
+    }
+
+    [Fact]
+    public void Touch_QuotedAm_UpdatesBothTimes_TheOldScanUpdatedNeither()
+    {
+        // REGRESSION: `-a -m` set both "only" flags and updated NOTHING; `-am` created a file "-am".
+        var f = TouchTarget("tam.txt");
+        Run($"Invoke-BashTouch '-am' {Q(f)}");
+        Assert.True(File.GetLastWriteTimeUtc(f) > OldStamp.AddYears(1));
+        Assert.True(File.GetLastAccessTimeUtc(f) > OldStamp.AddYears(1));
+        Assert.False(File.Exists(Path.Combine(Directory.GetCurrentDirectory(), "-am")));
+    }
+
+    [Fact]
+    public void Touch_QuotedMOnly_LeavesAccessTimeAlone()
+    {
+        var f = TouchTarget("tm.txt");
+        Run($"Invoke-BashTouch '-m' {Q(f)}");
+        Assert.True(File.GetLastWriteTimeUtc(f) > OldStamp.AddYears(1));
+        Assert.Equal(OldStamp, File.GetLastAccessTimeUtc(f));
+    }
+
+    [Fact]
+    public void Touch_QuotedAttachedDate_SetsThatTime()
+    {
+        // `-d2020-01-01` (attached value) was an operand before: it created a file of that name.
+        var f = TouchTarget("td.txt");
+        Run($"Invoke-BashTouch '-d2020-01-01' {Q(f)}");
+        Assert.Equal(new DateTime(2020, 1, 1), File.GetLastWriteTime(f).Date);
+    }
+
+    [Fact]
+    public void Touch_QuotedLongDateForms_SetThatTime()
+    {
+        var f = TouchTarget("tld.txt");
+        Run($"Invoke-BashTouch '--date=2021-03-04' {Q(f)}");
+        Assert.Equal(new DateTime(2021, 3, 4), File.GetLastWriteTime(f).Date);
+        Run($"Invoke-BashTouch '--da' '2022-05-06' {Q(f)}");
+        Assert.Equal(new DateTime(2022, 5, 6), File.GetLastWriteTime(f).Date);
+    }
+
+    [Fact]
+    public void Touch_QuotedNoCreateBundle_DoesNotCreate()
+    {
+        var f = Path.Combine(_tmpRoot, "tcc.txt");
+        Run($"Invoke-BashTouch '-cm' {Q(f)}");
+        Assert.False(File.Exists(f));
+        Run($"Invoke-BashTouch '--no-c' {Q(f)}");
+        Assert.False(File.Exists(f));
+    }
+
+    [Fact]
+    public void Touch_QuotedReferenceAttached_CopiesTheReferenceTime()
+    {
+        var reference = TouchTarget("tref.txt");
+        var f = Path.Combine(_tmpRoot, "tnew.txt");
+        Run($"Invoke-BashTouch '-r{reference}' {Q(f)}");
+        Assert.Equal(OldStamp, File.GetLastWriteTimeUtc(f));
+    }
+
+    [Fact]
+    public void Touch_UnsupportedT_IsRefusedAndCreatesNothing()
+    {
+        // REGRESSION: `touch -t 202401011200 f` created files named "-t" and "202401011200" (exit 0).
+        var stamp = Path.Combine(_tmpRoot, "202401011200");
+        var f = Path.Combine(_tmpRoot, "tt.txt");
+        Assert.Equal("2", LastExit($"Set-Location {Q(_tmpRoot)}; Invoke-BashTouch '-t' '202401011200' {Q(f)}"));
+        Assert.False(File.Exists(f));
+        Assert.False(File.Exists(stamp));
+        Assert.False(File.Exists(Path.Combine(_tmpRoot, "-t")));
+    }
+
+    [Theory]
+    [InlineData("-v")]              // GNU touch has no -v
+    [InlineData("--bogus")]
+    [InlineData("-az")]
+    [InlineData("--no")]            // ambiguous: no-create / no-dereference
+    public void Touch_UsageError_ExitsOneAndCreatesNothing(string flag)
+    {
+        var f = Path.Combine(_tmpRoot, "tu.txt");
+        Assert.Equal("1", LastExit($"Invoke-BashTouch '{flag}' {Q(f)}"));
+        Assert.False(File.Exists(f));
+    }
+
+    [Fact]
+    public void Touch_DateWithoutValue_IsAnError_NotSilentlyIgnored()
+    {
+        var f = Path.Combine(_tmpRoot, "tdn.txt");
+        Assert.Equal("1", LastExit($"Invoke-BashTouch {Q(f)} '-d'"));
+        Assert.False(File.Exists(f));
+    }
+
+    [Fact]
+    public void Touch_DoubleDash_DashNamedFileIsCreatedNotParsed()
+    {
+        Run($"Set-Location {Q(_tmpRoot)}; Invoke-BashTouch '--' '-a'");
+        Assert.True(File.Exists(Path.Combine(_tmpRoot, "-a")));
+    }
+
+    [Fact]
+    public void Touch_OptionAfterOperand_StillApplies()
+    {
+        var f = Path.Combine(_tmpRoot, "tafter.txt");
+        Run($"Invoke-BashTouch {Q(f)} '-c'");
+        Assert.False(File.Exists(f));
+    }
+
+    [Fact]
+    public void Touch_DirectCallDecoys_StillWork()
+    {
+        // Pester/interactive path: bare -c / -d bind decoy parameters, not Arguments.
+        var f = Path.Combine(_tmpRoot, "tdec.txt");
+        Run($"Invoke-BashTouch -c {Q(f)}");
+        Assert.False(File.Exists(f));
+        var g = TouchTarget("tdec2.txt");
+        Run($"Invoke-BashTouch -d '2020-01-01' {Q(g)}");
+        Assert.Equal(new DateTime(2020, 1, 1), File.GetLastWriteTime(g).Date);
+    }
+
     // ─────────── shared ordered parser: rmdir as the transpiler delivers it ───────────
 
     [Fact]

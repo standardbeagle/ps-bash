@@ -782,7 +782,7 @@ public class PsEmitterTests
         // Batch 1 of the shared ordered parser. Adding a command here also means adding it to
         // CommonParameterCollisionGuardTests.EmitterForceQuoted (Cmdlets.Tests) — that map is
         // how the guard knows the emitter, not a decoy, protects the colliding letters.
-        Assert.Equal(new[] { "cp", "ln", "mkdir", "mv", "rm", "rmdir", "tee" }, PsEmitter.OrderedArgCommands.OrderBy(x => x).ToArray());
+        Assert.Equal(new[] { "cp", "ln", "mkdir", "mv", "rm", "rmdir", "tee", "touch" }, PsEmitter.OrderedArgCommands.OrderBy(x => x).ToArray());
     }
 
     [Theory]
@@ -802,6 +802,12 @@ public class PsEmitterTests
     [InlineData("mkdir -p -m 755 d", "Invoke-BashMkdir '-p' '-m' 755 d")]
     [InlineData("mkdir -- -d", "Invoke-BashMkdir '--' '-d'")]
     [InlineData("mkdir --parents d", "Invoke-BashMkdir '--parents' d")]
+    [InlineData("touch -am f", "Invoke-BashTouch '-am' f")]
+    [InlineData("touch -d 2020-01-01 f", "Invoke-BashTouch '-d' 2020-01-01 f")]
+    [InlineData("touch -t 202401011200 f", "Invoke-BashTouch '-t' 202401011200 f")]
+    [InlineData("touch -r ref f -c", "Invoke-BashTouch '-r' ref f '-c'")]
+    [InlineData("touch -- -a", "Invoke-BashTouch '--' '-a'")]
+    [InlineData("touch --date=\"2020-01-01 10:00\" f", "Invoke-BashTouch '--date=2020-01-01 10:00' f")]
     [InlineData("ln -sfn a b", "Invoke-BashLn '-sfn' a b")]
     [InlineData("ln -s -T a b", "Invoke-BashLn '-s' '-T' a b")]
     [InlineData("ln -- -a b", "Invoke-BashLn '--' '-a' b")]

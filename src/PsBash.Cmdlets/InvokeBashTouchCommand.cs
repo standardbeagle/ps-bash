@@ -1,4 +1,6 @@
+using System.Linq;
 using System.Management.Automation;
+using PsBash.Cmdlets.Args;
 
 namespace PsBash.Cmdlets;
 
@@ -7,10 +9,10 @@ namespace PsBash.Cmdlets;
 /// (REFACTOR-2). Updates the access / modification timestamps of each
 /// operand file, creating an empty file when the operand does not exist
 /// (unless <c>-c</c> is set). Matches GNU coreutils <c>touch</c> for the
-/// supported flag subset: <c>-d DATE</c> (parse date string), <c>-a</c>
-/// (update access time only), <c>-m</c> (update mod time only), <c>-c</c>
-/// (no-create), <c>-v</c> (verbose — no-op in the psm1 oracle, retained for
-/// arg compatibility).
+/// supported flag subset: <c>-d DATE</c> (parse date string), <c>-r FILE</c>,
+/// <c>-a</c> (update access time only), <c>-m</c> (update mod time only; both
+/// together update both), <c>-c</c> (no-create), <c>-f</c> (ignored, as in GNU).
+/// GNU touch has no <c>-v</c>, so it is now a usage error.
 ///
 /// Behavioral parity oracle: the original psm1 function. The cmdlet
 /// reproduces its exact branches:
@@ -29,14 +31,12 @@ namespace PsBash.Cmdlets;
 /// (Default — neither <c>-a</c> nor <c>-m</c> — sets both.)</item>
 /// </list>
 /// <para>
-/// <b>Three colliding flags</b> declared as explicit
-/// <see cref="SwitchParameter"/>s: <c>-a</c> prefix-collides with the
-/// catch-all <c>Arguments</c> parameter's own <c>a</c> prefix (since the
-/// cmdlet's only other parameter starts with a different letter, this is
-/// a soft collision but the psm1 oracle treated <c>-a</c> as a switch);
-/// <c>-c</c> prefix-collides with <c>-Confirm</c>;
-/// <c>-v</c> prefix-collides with <c>-Verbose</c>. <c>-d</c> and <c>-m</c>
-/// stay in <c>Arguments</c> and are scanned by the manual loop.
+/// <b>Argv</b> is parsed by the shared ordered parser (<see cref="ArgParser"/>, spec
+/// <c>TouchSpec</c>). The transpiler single-quotes every dash-leading word for touch
+/// (<c>PsEmitter.OrderedArgCommands</c>) so flags arrive in <c>Arguments</c> in order; the
+/// <c>a</c>/<c>c</c>/<c>v</c> switch decoys and the value-bearing <c>D</c> decoy exist ONLY for
+/// direct calls (bare <c>-a</c>/<c>-c</c>/<c>-v</c>/<c>-d</c> collide with <c>-Arguments</c>,
+/// <c>-Confirm</c>, <c>-Verbose</c>, <c>-Debug</c>) and are re-injected first.
 /// </para>
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashTouch")]
@@ -57,9 +57,52 @@ public sealed class InvokeBashTouchCommand : PSCmdlet
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
+    /// <summary>
+    /// Valid GNU <c>touch</c> options ps-bash does not implement; refused loudly (exit 2).
+    /// <c>-t STAMP</c> (the [[CC]YY]MMDDhhmm[.ss] format), <c>-h/--no-dereference</c> (touch the
+    /// symlink itself) and <c>--time=WORD</c> have no implementation here. (A string[] on purpose:
+    /// CommonParameterCollisionGuardTests enumerates each cmdlet's static string sets.)
+    /// </summary>
+    private static readonly string[] TouchValidButUnsupported =
+    {
+        "-t", "-h", "--no-dereference", "--time",
+    };
+
+    private const string OptAccess = "access", OptModify = "modify", OptNoCreate = "no-create",
+        OptIgnored = "ignored", OptDate = "date", OptReference = "reference";
+
+    /// <summary>
+    /// touch's whole option surface, built once for the shared ordered parser. GNU touch has NO
+    /// <c>-v</c> (`touch -v` is "invalid option -- 'v'"); the old scan accepted it as a silent
+    /// no-op inherited from the psm1 oracle, which no GNU-targeted script ever passes.
+    /// <c>-f</c> is accepted and ignored, exactly as GNU documents it.
+    /// </summary>
+    private static readonly OptSpecSet TouchSpec = new(
+        new[]
+        {
+            new OptSpec(OptAccess, 'a', null),
+            new OptSpec(OptModify, 'm', null),
+            new OptSpec(OptNoCreate, 'c', "no-create"),
+            new OptSpec(OptIgnored, 'f', null),
+            new OptSpec(OptDate, 'd', "date", OptKind.Value),
+            new OptSpec(OptReference, 'r', "reference", OptKind.Value),
+        },
+        validButUnsupported: TouchValidButUnsupported,
+        allowAbbrev: true,
+        gnuInfoOptions: true);
+
+    /// <summary>Pure argv scan (unit-test seam): options, operands and the first error.</summary>
+    internal static ParsedArgs ScanArgs(string[] args) => ArgParser.Parse(args, TouchSpec);
+
     protected override void ProcessRecord()
     {
-        var args = Arguments ?? Array.Empty<string>();
+        // Re-inject every decoy-bound flag. The transpiler single-quotes each dash-leading word
+        // for touch (PsEmitter.OrderedArgCommands) so they arrive in Arguments in order; a DIRECT
+        // call (`Invoke-BashTouch -c f`, `-d DATE f`, Pester) binds the decoys instead. Prepending
+        // is safe: a decoy can only have been bound before any `--`. -d's value decoy becomes the
+        // two elements "-d" VALUE.
+        var args = BashRuntime.PrependDecoys(Arguments, (a.IsPresent, "-a"), (c.IsPresent, "-c"), (v.IsPresent, "-v"));
+        if (D is not null) args = new[] { "-d", D }.Concat(args).ToArray();
 
         FileSystemHelpers.SetLastExitCode(this, 0);
         if (FileSystemHelpers.TryHandleVersion(this, "touch", args)) return;
@@ -73,58 +116,27 @@ public sealed class InvokeBashTouchCommand : PSCmdlet
             return;
         }
 
-        bool accessOnly = a.IsPresent;
-        bool noCreate = c.IsPresent;
-        // -v was a documented switch in the psm1 oracle but had no effect
-        // on output. Preserve that no-op behavior; the declared parameter
-        // exists only to defuse the -Verbose prefix collision.
-        _ = v;
+        // Shared ordered parser: bundles in any order (-am, -cm, -fa), attached values (-d2020-01-01,
+        // --date=..), `--`, unique-prefix long options, and the unsupported/unknown classifier in
+        // ONE scan. Before it, touch had NO classifier: `touch -t 202401011200 f` created files
+        // named "-t" and "202401011200" at exit 0, and a trailing `-d` with no value was ignored.
+        var parsed = ScanArgs(args);
+        if (FileSystemHelpers.TryWriteParseError(this, "touch", parsed)) return;
+        if (FileSystemHelpers.TryHandleInfoOptions(this, "touch", parsed)) return;
 
-        bool modOnly = false;
-        string? dateStr = D;
-        string? refFile = null;
-        var operands = new List<string>();
+        // GNU: -a alone = access time only, -m alone = modification time only, and BOTH (-a -m /
+        // -am) = both — the old scan set the two "only" flags together and updated NOTHING.
+        bool wantAccess = parsed.Has(OptAccess);
+        bool wantModify = parsed.Has(OptModify);
+        bool accessOnly = wantAccess && !wantModify;
+        bool modOnly = wantModify && !wantAccess;
+        bool noCreate = parsed.Has(OptNoCreate);
 
-        int i = 0;
-        while (i < args.Length)
-        {
-            var arg = args[i];
-            if (arg == "-d")
-            {
-                i++;
-                if (i < args.Length) dateStr = args[i];
-                i++;
-                continue;
-            }
-            // -r FILE / --reference=FILE: take timestamps from a reference file.
-            if (arg == "-r" || arg == "--reference")
-            {
-                i++;
-                if (i < args.Length) refFile = args[i];
-                i++;
-                continue;
-            }
-            if (arg.StartsWith("--reference=", StringComparison.Ordinal))
-            {
-                refFile = arg.Substring("--reference=".Length);
-                i++;
-                continue;
-            }
-            if (arg == "-m")
-            {
-                modOnly = true;
-                i++;
-                continue;
-            }
-            // -a / -c / -v are handled by the declared SwitchParameters
-            // above. Tokens that look like them but reach Arguments are
-            // a parse oddity — match psm1 oracle by still recognizing them.
-            if (arg == "-a") { accessOnly = true; i++; continue; }
-            if (arg == "-c") { noCreate = true; i++; continue; }
-            if (arg == "-v") { i++; continue; }
-            operands.Add(arg);
-            i++;
-        }
+        // Last occurrence wins, as in getopt_long.
+        string? dateStr = parsed.Last(OptDate)?.Value;
+        // -r FILE / --reference=FILE: take timestamps from a reference file.
+        string? refFile = parsed.Last(OptReference)?.Value;
+        var operands = parsed.Operands();
 
         if (operands.Count == 0)
         {
