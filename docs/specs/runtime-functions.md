@@ -150,7 +150,7 @@ about identity, not about "text vs objects":
 | Kind | Definition | Emits | Commands |
 |---|---|---|---|
 | **Filter** | every output line IS one of its input lines (selected, reordered, deduplicated, passed as-is) | the **original upstream object** | `grep` (plain match), `rg` (plain), `head`/`tail` (`-n`), `sort`, `uniq` (plain, `-d`, `-u`), `tac`, `shuf`, `cat` (no flags), `tee`, `less`, `more` |
-| **Transformer** | the line's text changes | a **fresh text record** (`BashRuntime.TextRecord`: a bare string, or a `NoTrailingNewline` object), never the upstream object, whose type no longer describes the text | `sed`, `tr`, `cut`, `awk`, `rev`, `nl`, `grep -o/-n/-H/context`, `uniq -c`, `cat -n/-b/-E/-T`, `head -c`/`tail -c` |
+| **Transformer** | the line's text changes | a **fresh text record** (`BashRuntime.TextRecord`: a bare string, or a `NoTrailingNewline` object), never the upstream object, whose type no longer describes the text | `sed`, `tr`, `cut`, `awk`, `rev`, `nl`, `fold`, `expand`, `unexpand`, `paste`, `join`, `comm`, `strings`, `base64`, `grep -o/-n/-H/context`, `uniq -c`, `cat -n/-b/-E/-T`, `head -c`/`tail -c` |
 
 `ls | grep .txt` therefore still yields `PsBash.LsEntry`; `ls | cut -c1-3` yields plain text. A
 mode of a filter command that rewrites the line (`grep -n`, `cat -n`, `uniq -c`) is a
@@ -172,8 +172,13 @@ line. GNU tools differ on the missing final newline (oracle: `printf 'b\na' | cm
 
 | Copy it through (`b\na`) | Always terminate the last line |
 |---|---|
-| head, tail, cat, tee, rev, tr, sed, less, more, `head -c`, `tail -c` (exact slice) | grep, sort, uniq, shuf, cut, nl, awk, `uniq -c` |
-| `tac` glues: `ab\n` (the unterminated record is emitted first, keeping its flag) | |
+| head, tail, cat, tee, rev, tr, sed, less, more, `head -c`, `tail -c` (exact slice), `fold`, `expand`, `unexpand` | grep, sort, uniq, shuf, cut, nl, awk, `uniq -c`, `strings`, `paste`, `join`, `comm`, `column` |
+| `tac` glues: `ab\n` (the unterminated record is emitted first, keeping its flag) | `base64`: bytes in = bytes out (`printf 'b\na' \| base64` is `Ygph`, not `YgphCg==`); `-w0` writes no final newline; `-d` writes the decoded bytes exactly |
+| `split` writes no stdout; its LAST piece file copies the input's missing final newline (`printf 'a b\nc d' \| split -l1` leaves `xab` = `c d`) | |
+
+`BashRuntime.RecordLines(item)` is the one record splitter for transformers (each line + whether
+it is the unterminated last line); file readers use `BashFileSystem.ReadTextLines`
+(`HasTrailingNewline`) for the same flag.
 
 Helpers (all in `BashRuntime`, never re-derive): `IsUnterminated`, `TextRecord(text,
 unterminated)` (fresh text; the last piece of a split record inherits the flag),

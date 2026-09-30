@@ -200,19 +200,8 @@ public sealed class InvokeBashFoldCommand : PSCmdlet
 
         // Pipeline mode: wrap each stdin sub-line as it arrives instead of
         // buffering the whole pipe.
-        string text = BashRuntime.GetBashText(InputObject);
-        string trimmed = text.TrimEnd('\n');
-        if (trimmed.Contains('\n'))
-        {
-            foreach (var sub in trimmed.Split('\n'))
-            {
-                EmitWrapped(sub, _width, _breakSpaces);
-            }
-        }
-        else
-        {
-            EmitWrapped(trimmed, _width, _breakSpaces);
-        }
+        foreach (var (sub, unterminated) in BashRuntime.RecordLines(InputObject))
+            EmitWrapped(sub, _width, _breakSpaces, unterminated);
     }
 
     protected override void EndProcessing()
@@ -256,9 +245,9 @@ public sealed class InvokeBashFoldCommand : PSCmdlet
             {
                 try
                 {
-                    foreach (var line in BashFileSystem.ReadLines(filePath))
+                    foreach (var line in BashFileSystem.ReadTextLines(filePath))
                     {
-                        EmitWrapped(line, _width, _breakSpaces);
+                        EmitWrapped(line.Text, _width, _breakSpaces, !line.HasTrailingNewline);
                     }
                 }
                 catch (Exception ex)
@@ -275,11 +264,13 @@ public sealed class InvokeBashFoldCommand : PSCmdlet
         }
     }
 
-    private void EmitWrapped(string line, int width, bool breakSpaces)
+    // fold is a TRANSFORMER: fresh text records; only the LAST chunk of an unterminated input
+    // line stays unterminated (GNU copies the missing final newline through).
+    private void EmitWrapped(string line, int width, bool breakSpaces, bool unterminated)
     {
         if (line.Length <= width)
         {
-            WriteObject(BashRuntime.NewBashObject(line));
+            WriteObject(BashRuntime.TextRecord(line, unterminated));
             return;
         }
 
@@ -289,7 +280,7 @@ public sealed class InvokeBashFoldCommand : PSCmdlet
             int remaining = line.Length - pos;
             if (remaining <= width)
             {
-                WriteObject(BashRuntime.NewBashObject(line.Substring(pos)));
+                WriteObject(BashRuntime.TextRecord(line.Substring(pos), unterminated));
                 break;
             }
             int chunkEnd = pos + width;

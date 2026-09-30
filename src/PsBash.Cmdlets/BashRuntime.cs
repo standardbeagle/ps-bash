@@ -467,6 +467,20 @@ public static class BashRuntime
             : NewBashObject(text);
 
     /// <summary>
+    /// The lines of a (possibly multi-line) record, each with whether it is unterminated: only
+    /// the LAST line of an <see cref="IsUnterminated"/> record is. The one splitter every
+    /// transformer uses so a stdin record (<c>printf 'b\na'</c>) and a file line
+    /// (<c>TextLine.HasTrailingNewline == false</c>) carry the missing final newline the same way.
+    /// </summary>
+    public static IEnumerable<(string Text, bool Unterminated)> RecordLines(object? item)
+    {
+        bool unterminated = IsUnterminated(item);
+        var pieces = GetBashText(item).TrimEnd('\n').Split('\n');
+        for (int p = 0; p < pieces.Length; p++)
+            yield return (pieces[p], unterminated && p == pieces.Length - 1);
+    }
+
+    /// <summary>
     /// The record a passed-through FILTER may emit when the command always terminates its
     /// last line (grep, sort, uniq, shuf …): the original object, unless it carries the
     /// missing-newline flag, in which case a fresh terminated text record — the stale flag

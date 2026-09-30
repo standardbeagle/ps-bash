@@ -199,4 +199,63 @@ public class PipelineRecordKindTests : IDisposable, IClassFixture<SharedPwshFixt
         var text = Render(Run(LsIn("Invoke-BashCut '-c1-2'")));
         Assert.Equal("a.\nb.\nc.\n", text);
     }
+
+    // ---- group 1: transformers (fold/expand/unexpand/paste/strings/base64), GNU oracle ----
+    // Bytes captured from GNU in WSL Ubuntu 24.04: `printf 'b\na' | CMD | od -c`.
+
+    [Theory]
+    [InlineData("Invoke-BashPrintf 'b\\na' | Invoke-BashFold '-w1'", "b\na")]
+    [InlineData("Invoke-BashPrintf 'abc\\nd' | Invoke-BashFold '-w2'", "ab\nc\nd")]
+    [InlineData("Invoke-BashPrintf 'b\\na' | Invoke-BashExpand", "b\na")]
+    [InlineData("Invoke-BashPrintf 'b\\n\\ta' | Invoke-BashExpand", "b\n        a")]
+    [InlineData("Invoke-BashPrintf 'b\\n        a' | Invoke-BashUnexpand", "b\n\ta")]
+    [InlineData("Invoke-BashPrintf 'b\\na' | Invoke-BashPaste '-s'", "b\ta\n")]
+    [InlineData("Invoke-BashPrintf 'b\\na' | Invoke-BashPaste '-sd,'", "b,a\n")]
+    [InlineData("Invoke-BashPrintf 'b\\na' | Invoke-BashPaste - -", "b\ta\n")]
+    [InlineData("Invoke-BashPrintf 'b\\na' | Invoke-BashPaste -", "b\na\n")]
+    [InlineData("Invoke-BashPrintf 'b\\na' | Invoke-BashStrings '-n1'", "b\na\n")]
+    [InlineData("Invoke-BashPrintf 'b\\na' | Invoke-BashBase64", "Ygph\n")]
+    [InlineData("Invoke-BashPrintf 'b\\na' | Invoke-BashBase64 '-w0'", "Ygph")]
+    [InlineData("Invoke-BashPrintf 'Ygph' | Invoke-BashBase64 '-d'", "b\na")]
+    public void Group1Transformer_StdinRendersGnuBytes(string script, string expected)
+    {
+        Assert.Equal(expected, Render(Run(script)));
+    }
+
+    [Fact]
+    public void Group1_FileOperandsRenderGnuBytes()
+    {
+        var u1 = Path.Combine(_dir, "u1"); var u2 = Path.Combine(_dir, "u2");
+        var j1 = Path.Combine(_dir, "j1"); var j2 = Path.Combine(_dir, "j2");
+        File.WriteAllText(u1, "a\nb"); File.WriteAllText(u2, "a\nc");
+        File.WriteAllText(j1, "a 1\nb 2"); File.WriteAllText(j2, "a x\nb y");
+        Assert.Equal("a\nb", Render(Run($"Invoke-BashFold '-w1' {Q(u1)}")));
+        Assert.Equal("a\nb", Render(Run($"Invoke-BashExpand {Q(u1)}")));
+        Assert.Equal("a\tb\n", Render(Run($"Invoke-BashPaste '-s' {Q(u1)}")));
+        Assert.Equal("a\ta\nb\tc\n", Render(Run($"Invoke-BashPaste {Q(u1)} {Q(u2)}")));
+        Assert.Equal("\t\ta\nb\n\tc\n", Render(Run($"Invoke-BashComm {Q(u1)} {Q(u2)}")));
+        Assert.Equal("c\n", Render(Run($"Invoke-BashComm '-13' {Q(u1)} {Q(u2)}")));
+        Assert.Equal("a 1 x\nb 2 y\n", Render(Run($"Invoke-BashJoin {Q(j1)} {Q(j2)}")));
+    }
+
+    [Fact]
+    public void Group1_Split_PartFilesMatchGnu()
+    {
+        var prefix = Path.Combine(_dir, "spl_");
+        Run($"Invoke-BashPrintf 'a b\\nc d' | Invoke-BashSplit '-l1' - {Q(prefix)}");
+        Assert.Equal("a b\n", File.ReadAllText(prefix + "aa"));
+        Assert.Equal("c d", File.ReadAllText(prefix + "ab"));
+    }
+
+    [Fact]
+    public void Group1_Transformers_EmitTextNotLsEntry()
+    {
+        foreach (var cmd in new[] { "Invoke-BashFold '-w3'", "Invoke-BashExpand", "Invoke-BashUnexpand",
+                                    "Invoke-BashPaste -", "Invoke-BashStrings '-n1'" })
+        {
+            var records = Run(LsIn(cmd));
+            Assert.NotEmpty(records);
+            Assert.All(records, r => Assert.DoesNotContain("PsBash.LsEntry", r.TypeNames));
+        }
+    }
 }

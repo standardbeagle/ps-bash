@@ -165,12 +165,13 @@ public sealed class InvokeBashUnexpandCommand : PSCmdlet
         _operands = plan.Operands;
         _suppressStdin = plan.Declined || _operands.Count > 0;
     }
-    private void EmitTransformed(string line)
+    // TRANSFORMER: fresh text; the missing final newline is copied through (GNU).
+    private void EmitTransformed(string line, bool unterminated)
     {
         string transformed = _allSpaces
             ? UnexpandAll(line, _tabs)
             : UnexpandLeading(line, _tabs);
-        WriteObject(BashRuntime.NewBashObject(transformed));
+        WriteObject(BashRuntime.TextRecord(transformed, unterminated));
     }
 
     protected override void ProcessRecord()
@@ -182,19 +183,8 @@ public sealed class InvokeBashUnexpandCommand : PSCmdlet
 
         // Pipeline mode: transform each stdin sub-line as it arrives instead of
         // buffering the whole pipe.
-        string text = BashRuntime.GetBashText(InputObject);
-        string trimmed = text.TrimEnd('\n');
-        if (trimmed.Contains('\n'))
-        {
-            foreach (var sub in trimmed.Split('\n'))
-            {
-                EmitTransformed(sub);
-            }
-        }
-        else
-        {
-            EmitTransformed(trimmed);
-        }
+        foreach (var (sub, unterminated) in BashRuntime.RecordLines(InputObject))
+            EmitTransformed(sub, unterminated);
     }
 
     protected override void EndProcessing()
@@ -236,9 +226,9 @@ public sealed class InvokeBashUnexpandCommand : PSCmdlet
             {
                 try
                 {
-                    foreach (var line in BashFileSystem.ReadLines(filePath))
+                    foreach (var line in BashFileSystem.ReadTextLines(filePath))
                     {
-                        EmitTransformed(line);
+                        EmitTransformed(line.Text, !line.HasTrailingNewline);
                     }
                 }
                 catch (Exception ex)
