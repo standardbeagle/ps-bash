@@ -6,7 +6,8 @@
     Strata is OPTIONAL. The default build must work without it (CI has no feed).
 
     Inputs (all overridable with -p:):
-      StrataLocalFeed  the feed directory (default ../strata/local-feed beside the ps-bash checkout)
+      StrataLocalFeed  the feed directory (default ../strata/local-feed beside the ps-bash checkout;
+                       from a git worktree, beside the MAIN checkout the worktree's .git file points at)
       StrataVersion    the exact Strata.* package version. If set, discovery is skipped.
       UseStrata        true | false. Unset = auto: ON only when a concrete version resolved.
 
@@ -18,8 +19,18 @@
     MSBuild property functions cannot sort, so it folds VersionGreaterThan over at most
     _StrataMaxCandidates versions; with more than that, discovery declines (pass -p:StrataVersion=X).
   -->
+  <!-- Feed location: sibling of the ps-bash checkout. In a git WORKTREE (e.g. .claude/worktrees/agent-X) the repo root
+       is not beside strata, so its .git is a FILE ("gitdir: <main>/.git/worktrees/<name>"); resolve the MAIN
+       checkout from that line and look for the sibling there. An explicit StrataLocalFeed always wins. -->
+  <PropertyGroup>
+    <_StrataRepoGitPath>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\.git'))</_StrataRepoGitPath>
+    <_StrataWorktreeGitDir Condition="$([System.IO.File]::Exists('$(_StrataRepoGitPath)'))">$([System.Text.RegularExpressions.Regex]::Match($([System.IO.File]::ReadAllText('$(_StrataRepoGitPath)')), '(?&lt;=gitdir:\s*)[^\r\n]+').Value.Trim())</_StrataWorktreeGitDir>
+    <_StrataMainRoot Condition="'$(_StrataWorktreeGitDir)' != ''">$([System.IO.Path]::GetFullPath('$(_StrataWorktreeGitDir)/../../..'))</_StrataMainRoot>
+  </PropertyGroup>
+
   <PropertyGroup>
     <StrataLocalFeed Condition="'$(StrataLocalFeed)' == ''">$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\strata\local-feed'))</StrataLocalFeed>
+    <StrataLocalFeed Condition="!Exists('$(StrataLocalFeed)') and '$(_StrataMainRoot)' != '' and Exists('$(_StrataMainRoot)\..\strata\local-feed')">$([System.IO.Path]::GetFullPath('$(_StrataMainRoot)\..\strata\local-feed'))</StrataLocalFeed>
     <_StrataMaxCandidates>8</_StrataMaxCandidates>
   </PropertyGroup>
 

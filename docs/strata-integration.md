@@ -14,6 +14,10 @@ consumed as local NuGet packages:
    namespaces stay `Strata.*`; only the package IDs carry the prefix). The version is
    derived from git tags via MinVer, so the version arg to `pack-local.sh` is ignored —
    the feed is stamped with the MinVer value (currently `0.1.0-alpha.1.2`).
+   `src/Strata.props` finds the feed automatically: `../strata/local-feed` beside the
+   checkout, or (from a git worktree, e.g. `.claude/worktrees/agent-X`) beside the MAIN checkout
+   named by the worktree's `.git` file. `-p:StrataLocalFeed=` / `-p:StrataVersion=` override;
+   with no feed (CI) Strata stays off.
 2. The csproj adds that folder as a per-project restore source (`RestoreAdditionalProjectSources`)
    only when `UseStrata=true`; it is deliberately NOT in `nuget.config` (a missing local
    source is a hard NU1301 error that would break CI).
