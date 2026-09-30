@@ -256,7 +256,7 @@ PowerShell's `$PWD`.
 
 The ordered getopt-style parser that replaces per-cmdlet hand scans. Pure and AOT-safe (no
 `PSCmdlet`/`SessionState`/reflection), so it is unit-tested in isolation
-(`ArgParserTests`). **Migrated so far: `tee`, `cp`, `mv`, `rm`, `mkdir`, `rmdir`, `ln`, `touch`, `head`, `tail`, `wc`, `cat`, `tac`, `nl`, `uniq`.** `BashRuntime.ConvertFromBashArgs` is
+(`ArgParserTests`). **Migrated so far: `tee`, `cp`, `mv`, `rm`, `mkdir`, `rmdir`, `ln`, `touch`, `head`, `tail`, `wc`, `cat`, `tac`, `nl`, `uniq`, `fold`, `expand`, `unexpand`, `paste`, `join`, `comm`, `split`, `strings`, `base64`.** `BashRuntime.ConvertFromBashArgs` is
 untouched — its contract (unknown flag becomes an operand) differs.
 
 **API** (`src/PsBash.Cmdlets/Args/`):
@@ -283,7 +283,7 @@ untouched — its contract (unknown flag becomes an operand) differs.
   so scripts can tell "ps-bash cannot do this" from "you typed it wrong". `TryHandleInfoOptions` acts on an abbreviated
   `--vers`/`--he`.
 
-**Emitter opt-in.** `PsEmitter.OrderedArgCommands` (tee, cp, mv, rm, mkdir, rmdir, ln, touch, head, tail, wc, cat, tac, nl, uniq, plus the command-running wrappers xargs, time, env — these keep their manual scans, which stop at the first operand, and only take the emitter quoting so the INNER command's flags are safe): for these, `EmitPassthrough`
+**Emitter opt-in.** `PsEmitter.OrderedArgCommands` (tee, cp, mv, rm, mkdir, rmdir, ln, touch, head, tail, wc, cat, tac, nl, uniq, fold, expand, unexpand, paste, join, comm, split, strings, base64, plus the command-running wrappers xargs, time, env — these keep their manual scans, which stop at the first operand, and only take the emitter quoting so the INNER command's flags are safe): for these, `EmitPassthrough`
 single-quotes EVERY dash-leading literal word and `--` (via `PsBuild.SingleQuote`; quoted and mixed
 words like `--x="a b"` collapse to one literal). No flag is then a PowerShell parameter token, so
 each reaches `[ValueFromRemainingArguments] Arguments` verbatim and in order — no prefix collision
@@ -302,6 +302,7 @@ colliding bare letter that has NO decoy (`Invoke-BashTee -i`) still fails in the
 
 **Batch 3a (head, tail, wc, cat, tac, nl, uniq) and the fused lane.** Each cmdlet exposes `internal static <Cmd>Args Plan(string[])` (ScanArgs + value validation: NUM, `-s`, nl style/format/width, uniq `-f/-s/-w`/METHOD) and the compiled line-stream core (`LineStreamRegistry.TryCreate`) calls it FIRST, then applies its own narrower certification — so a core can never accept an argv its cmdlet rejects (`LineStreamArgAgreementTests`). `FusedLane.StageIsUnbounded` treats every `--follow` abbreviation as unbounded (`IsFollowSpelling`), since `tail --fo` now parses as follow. The emitter builds the `-Stages` argv from static values, so single-quoting in the fallback text never reaches the cores. Legacy ps-bash extensions kept (Pester-pinned): a bare leading number is the count for head/tail (`head 5`, `tail 5`).
 
+**Batch 3b (fold, expand, unexpand, paste, join, comm, split, strings, base64).** Same `Plan(argv)` / `ScanArgs` seam per cmdlet (pure, tested by `<Cmd>ArgScanTests`); end-to-end behavior incl. direct-call decoys in `Batch3bArgBehaviorTests`. Usage errors exit **1** (GNU coreutils; `strings` = binutils, also 1); valid-but-unsupported exit 2. Notable rules: counts/widths are decimal-only where GNU says so (`fold -w`, `base64 -w`, `strings -n`, `split -a/-l`), GNU SIZE suffixes only where GNU allows them (`split -b` via `GnuNumber`); `expand`/`unexpand` `-t` goes through `TabStopList` (uniform N, ascending list, last element `/N` or `+N`, several `-t` concatenate; past the last plain stop `expand` emits one space and `unexpand` converts nothing); `unexpand -t` implies `-a`, `--first-only` overrides it in any order, obsolete `-NUM` does not imply `-a`; `paste -d LIST` cycles single-character delimiters per column (serial: per line, restarting per file) with `\n \t \r \b \f \v \\ \0` escapes, and a `-` operand shares ONE stdin cursor (`paste - -` pairs lines); `join -o/-e` and `comm --check-order/--nocheck-order` are refused (they were silently ignored / swallowed); `comm --output-delimiter=STR` is implemented (an empty STR is NUL, as GNU 9.4). Value decoys (`fold -w`, `split -a`, `base64 -w`, `paste -d`, `join -a/-v`) are re-injected as `-x VALUE` pairs by each cmdlet's `ArgsWithDecoys`. `stat` and `file` are not migrated yet.
 **Migrating a command:**
 
 1. Declare `static readonly string[]` valid-but-unsupported names (a `string[]` field keeps the
