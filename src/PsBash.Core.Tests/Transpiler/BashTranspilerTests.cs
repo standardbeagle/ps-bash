@@ -500,7 +500,7 @@ public class BashTranspilerTests
     public void HomePathWithPipe_TransformsBoth()
     {
         var result = BashTranspiler.Transpile("ls ~/.config | head -n 5");
-        Assert.Equal("Invoke-BashLs $HOME\\.config | Invoke-BashHead -n 5", result);
+        Assert.Equal("Invoke-BashLs $HOME\\.config | Invoke-BashHead '-n' 5", result);
     }
 
     [Fact]

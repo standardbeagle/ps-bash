@@ -54,6 +54,7 @@ public class CommonParameterCollisionGuardTests
             ["rmdir"] = new(CollidingLetters),
             ["ln"] = new(CollidingLetters),
             ["touch"] = new(CollidingLetters),
+            ["head"] = new(CollidingLetters),
         };
 
     [Fact]

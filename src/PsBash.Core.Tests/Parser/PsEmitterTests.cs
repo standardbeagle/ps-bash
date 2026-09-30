@@ -110,7 +110,7 @@ public class PsEmitterTests
         // with a phase-2b streaming -Stages list + phase-2a scriptblock Fallback.
         Assert.Equal(
             "Invoke-BashFusedPipeline -Stages @(@('cat', 'file'), @('head', '-n', '5'), @('sort')) "
-                + "-Fallback { Invoke-BashCat file | Invoke-BashHead -n 5 | Invoke-BashSort }",
+                + "-Fallback { Invoke-BashCat file | Invoke-BashHead '-n' 5 | Invoke-BashSort }",
             result);
     }
 
@@ -782,7 +782,7 @@ public class PsEmitterTests
         // Batch 1 of the shared ordered parser. Adding a command here also means adding it to
         // CommonParameterCollisionGuardTests.EmitterForceQuoted (Cmdlets.Tests) — that map is
         // how the guard knows the emitter, not a decoy, protects the colliding letters.
-        Assert.Equal(new[] { "cp", "ln", "mkdir", "mv", "rm", "rmdir", "tee", "touch" }, PsEmitter.OrderedArgCommands.OrderBy(x => x).ToArray());
+        Assert.Equal(new[] { "cp", "head", "ln", "mkdir", "mv", "rm", "rmdir", "tee", "touch" }, PsEmitter.OrderedArgCommands.OrderBy(x => x).ToArray());
     }
 
     [Theory]
@@ -817,6 +817,13 @@ public class PsEmitterTests
     [InlineData("rmdir -- -d", "Invoke-BashRmdir '--' '-d'")]
     [InlineData("rmdir --ignore-fail-on-non-empty d", "Invoke-BashRmdir '--ignore-fail-on-non-empty' d")]
     [InlineData("rm --preserve-root=all a", "Invoke-BashRm '--preserve-root=all' a")]
+    [InlineData("head -n 5 f", "Invoke-BashHead '-n' 5 f")]
+    [InlineData("head -qn2 f", "Invoke-BashHead '-qn2' f")]
+    [InlineData("head -5 f", "Invoke-BashHead '-5' f")]
+    [InlineData("head -c 1K f", "Invoke-BashHead '-c' 1K f")]
+    [InlineData("head --lines=3 f", "Invoke-BashHead '--lines=3' f")]
+    [InlineData("head -- -n", "Invoke-BashHead '--' '-n'")]
+    [InlineData("head -v -z f", "Invoke-BashHead '-v' '-z' f")]
     public void Transpile_OrderedArgCommand_QuotesEveryDashLiteral(string bash, string expected)
     {
         Assert.Equal(expected, PsEmitter.Transpile(bash));
@@ -3355,7 +3362,7 @@ public class PsEmitterTests
     public void Transpile_HeadWithInputProcessSub_RoutesToPipelineObjectPath()
     {
         var result = PsEmitter.Transpile("head -n 1 <(seq 1 10)");
-        Assert.Equal("Invoke-BashHead -n 1 (Invoke-ProcessSubPipeline { Invoke-BashSeq 1 10 })", result);
+        Assert.Equal("Invoke-BashHead '-n' 1 (Invoke-ProcessSubPipeline { Invoke-BashSeq 1 10 })", result);
     }
 
     [Fact]
@@ -3974,7 +3981,7 @@ public class PsEmitterTests
         // (2 was reclassified as IoNumber). Now 2 stays as a word arg.
         var result = PsEmitter.Transpile("head -n 2 << EOF\nline1\nline2\nline3\nEOF");
 
-        Assert.Contains("Invoke-BashHead -n 2", result);
+        Assert.Contains("Invoke-BashHead '-n' 2", result);
         Assert.Contains("line1", result);
     }
 
@@ -4283,7 +4290,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("head -n 5 file.txt");
 
-        Assert.Equal("Invoke-BashHead -n 5 file.txt", result);
+        Assert.Equal("Invoke-BashHead '-n' 5 file.txt", result);
     }
 
     [Fact]

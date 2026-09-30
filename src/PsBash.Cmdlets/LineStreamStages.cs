@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.RegularExpressions;
+using PsBash.Cmdlets.Args;
 
 namespace PsBash.Cmdlets;
 
@@ -188,35 +189,20 @@ internal sealed class HeadStage : ILineStreamStage
 
     internal static ILineStreamStage? TryCreate(string[] argv)
     {
-        int count = 10;
-        int i = 0;
-        while (i < argv.Length)
+        // The cmdlet's own resolver (shared ordered parser + NUM rules) decides first, so this
+        // core can NEVER accept an argv the cmdlet would reject or interpret differently.
+        var plan = InvokeBashHeadCommand.Plan(argv);
+        if (plan.Declined || plan.BytesMode || plan.Operands.Count > 0 || plan.Count < 0) return null;
+
+        // Certified subset within that: only -n N / -nN / -N (no '+' count, no -q, no --lines
+        // spelling variants beyond the ids below, no `--`, no bare positional number).
+        foreach (var tok in plan.Parsed.Tokens)
         {
-            var a = argv[i];
-            if (a == "-n")
-            {
-                i++;
-                // Decline a '+'-prefixed count (rare, and int.TryParse("+5")==5 is an
-                // ambiguity we won't certify) — the cmdlet handles it on fallback.
-                if (i >= argv.Length || argv[i].StartsWith('+')
-                    || !int.TryParse(argv[i], out count) || count < 0) return null;
-                i++;
-                continue;
-            }
-            if (a.Length > 2 && a.StartsWith("-n", StringComparison.Ordinal) && IsAllDigits(a, 2))
-            {
-                count = ParseClamp(a, 2); i++; continue;
-            }
-            // Legacy -N shorthand (head -5).
-            if (a.Length > 1 && a[0] == '-' && IsAllDigits(a, 1))
-            {
-                count = ParseClamp(a, 1); i++; continue;
-            }
-            // Anything else (-c byte mode, --lines, -q, files, --, negative, bare
-            // positional number, unknown flag) → decline to the cmdlet.
-            return null;
+            if (tok.Kind == ArgTokKind.DoubleDash || tok.Kind == ArgTokKind.Operand) return null;
+            if (tok.OptId != "lines" && tok.OptId != "num") return null;
+            if (tok.Value!.StartsWith('+')) return null;
         }
-        return new HeadStage(count);
+        return new HeadStage(plan.Count);
     }
 
     public IEnumerable<string> Run(IEnumerable<string> input)
@@ -230,16 +216,6 @@ internal sealed class HeadStage : ILineStreamStage
         }
     }
 
-    private static bool IsAllDigits(string s, int start)
-    {
-        if (start >= s.Length) return false;
-        for (int i = start; i < s.Length; i++)
-            if (!char.IsDigit(s[i])) return false;
-        return true;
-    }
-
-    private static int ParseClamp(string s, int start)
-        => BashRuntime.ParseCountClamped(s.AsSpan(start));
 }
 
 /// <summary><c>wc</c> terminal aggregator. Certified subset: bare, or a single
