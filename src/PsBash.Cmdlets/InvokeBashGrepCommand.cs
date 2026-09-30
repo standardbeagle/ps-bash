@@ -1,6 +1,7 @@
 using System.Linq;
 using System.Management.Automation;
 using System.Text.RegularExpressions;
+using PsBash.Cmdlets.Args;
 
 namespace PsBash.Cmdlets;
 
@@ -10,45 +11,19 @@ namespace PsBash.Cmdlets;
 /// for a pattern, reproducing GNU coreutils <c>grep</c> byte-for-byte against
 /// the original psm1 oracle.
 ///
-/// Supports the oracle's complete flag surface: <c>-i</c> ignore-case,
-/// <c>-v</c> invert, <c>-n</c> line-numbers, <c>-c</c> count-only, <c>-q</c>
-/// quiet, <c>-r</c> recursive, <c>-l</c> files-with-matches, <c>-E</c>
-/// extended regex (default is basic-regex with the same metachar escaping the
-/// oracle applies), <c>-F</c> fixed-string, <c>-w</c> word-regexp, <c>-o</c>
-/// only-matching, <c>-H</c> force filename, <c>-h</c> suppress filename,
-/// <c>-A N</c> / <c>-B N</c> / <c>-C N</c> context (separated and joined
-/// forms), <c>-m N</c> max-count, <c>-e PATTERN</c> multiple patterns (OR),
-/// plus the long-form aliases the oracle accepts. Pattern + file operand
-/// (default first operand is the pattern when no <c>-e</c> was given).
+/// Option parsing is the shared ORDERED parser (<see cref="ArgParser"/>, GNU grep 3.11 option table —
+/// see <see cref="Plan"/>): bundles (<c>-ie PAT</c>, <c>-ePAT</c>, <c>-1n</c>), repeated <c>-e</c> /
+/// <c>-f</c> / <c>--include</c> / <c>--exclude</c> / <c>--exclude-dir</c>, <c>-A/-B/-C N</c> and the
+/// <c>-NUM</c> shorthand, <c>--color[=WHEN]</c>, unique-prefix long options, usage errors exit 2.
+/// The first operand is the PATTERN unless <c>-e</c>/<c>-f</c> was given.
 ///
-/// Common-parameter collisions per the playbook table — each declared as an
-/// explicit parameter with a single-letter name so the binder routes the bare
-/// token by exact parameter-name match (which beats a common-parameter prefix
-/// match): <c>-i</c> vs <c>-InformationAction</c> → <see cref="I"/>;
-/// <c>-v</c> vs <c>-Verbose</c> → <see cref="V"/>; <c>-c</c> vs
-/// <c>-Confirm</c> → <see cref="C"/>; <c>-e</c> vs <c>-ErrorAction</c> →
-/// <see cref="E"/> (value-bearing <c>string[]</c>, repeatable); <c>-w</c> vs
-/// <c>-WarningAction</c> → <see cref="W"/>; <c>-o</c> vs <c>-OutVariable</c> /
-/// <c>-OutBuffer</c> → <see cref="O"/> (an earlier audit wrongly listed <c>-o</c>
-/// as collision-free — it is ambiguous and hard-crashes if undeclared). <c>-n</c>,
-/// <c>-r</c>, <c>-R</c>, <c>-l</c>, <c>-F</c>, <c>-E</c>, <c>-q</c>, <c>-H</c>,
-/// <c>-h</c>, <c>-A</c>, <c>-B</c>, <c>-C</c>, <c>-m</c>, <c>--include</c>,
-/// <c>--exclude</c>, <c>--help</c>, and <c>--</c> have no PowerShell
-/// common-parameter prefix collision and stay in <see cref="Arguments"/>.
-/// Bundled short forms (<c>-ivn</c>, <c>-Ev</c>, etc.) land in
-/// <see cref="Arguments"/> too — the manual scan walks them per-char,
-/// matching the oracle's <c>foreach ($ch in $arg.Substring(1).ToCharArray())</c>
-/// slice byte-for-byte (case-sensitive).
-///
-/// Note: <c>-C</c> (context, case-sensitive in the oracle's <c>^-C(\d+)$</c>
-/// pattern) cannot be a distinct parameter from <c>-c</c> under PowerShell's
-/// case-insensitive binder; the joined <c>-CN</c> form is recovered from
-/// <see cref="Arguments"/> by the manual scan, and the separated <c>-C N</c>
-/// form has the unavoidable property that a bare <c>-C</c> token binds to
-/// <see cref="C"/> (count) — same residual gap as <c>sed -e A -e B</c>. The
-/// common single-flag forms <c>-A N</c> / <c>-B N</c> / <c>-A2</c> etc. are
-/// unaffected.
-///
+/// <para><b>Direct PowerShell calls.</b> The transpiler single-quotes every flag
+/// (<c>PsEmitter.OrderedArgCommands</c>) so the whole argv reaches <see cref="Arguments"/> verbatim and in
+/// order. Typed directly at PowerShell the binder still intercepts colliding bare flags, so the decoys
+/// <see cref="I"/> <see cref="V"/> <see cref="C"/> <see cref="W"/> <see cref="P"/> <see cref="O"/>
+/// <see cref="D"/> <see cref="A"/> <see cref="B"/> <see cref="E"/> remain and are re-injected as ordinary
+/// tokens before parsing; the psm1 <c>Invoke-BashGrep</c> proxy hands every argument over as a literal
+/// string so a repeated <c>-e</c> or a bundle like <c>-ve</c> never reaches the binder.</para>
 /// Output is a typed <c>PsBash.GrepMatch</c> PSObject per match with
 /// <c>FileName</c>, <c>LineNumber</c>, <c>Line</c>, and <c>BashText</c>
 /// properties (oracle parity). <c>-c</c>/<c>-l</c> emit bare-string PSObjects
@@ -127,6 +102,18 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
 
     private readonly List<PSObject> _pipeline = new();
 
+    /// <summary>GNU's label for stdin in a prefixed line (<c>grep -H x &lt; f</c>).</summary>
+    private const string StdinLabel = "(standard input)";
+
+    /// <summary>GNU's default <c>--group-separator</c>, printed between non-adjacent context groups.</summary>
+    private const string GroupSeparator = "--";
+
+    /// <summary>A context group was already printed (a later group, even in another file, gets a separator).</summary>
+    private bool _contextGroupEmitted;
+
+    /// <summary>-A/-B/-C/-NUM present (possibly 0): the buffered window path runs and "--" separates groups.</summary>
+    private bool _contextRequested;
+
     /// <summary>
     /// An input operand could not be read (missing / unreadable). GNU grep then exits 2
     /// whatever else matched — even under <c>-s</c> — except <c>-q</c> with a selected
@@ -134,28 +121,252 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
     /// </summary>
     private bool _operandReadError;
 
+    private const string OptBasic = "G", OptExtended = "E", OptFixed = "F", OptPerl = "P",
+        OptRegexp = "regexp", OptFile = "file", OptIgnoreCase = "ignore-case",
+        OptNoIgnoreCase = "no-ignore-case", OptWord = "word", OptLineRegexp = "line-regexp",
+        OptNoMessages = "no-messages", OptInvert = "invert", OptMax = "max-count",
+        OptLineNumber = "line-number", OptLineBuffered = "line-buffered", OptWithName = "with-filename",
+        OptNoName = "no-filename", OptOnly = "only-matching", OptQuiet = "quiet",
+        OptRecursive = "recursive", OptInclude = "include", OptExclude = "exclude",
+        OptExcludeDir = "exclude-dir", OptExcludeFrom = "exclude-from", OptFilesWithout = "files-without",
+        OptFilesWith = "files-with", OptCount = "count", OptAfter = "after", OptBefore = "before",
+        OptContext = "context", OptContextNum = "context-num", OptColor = "color", OptBinary = "binary";
+
     /// <summary>
-    /// GNU grep options that are valid but not (yet) implemented by ps-bash.
-    /// Hitting one yields a specific "recognized but not supported" message
-    /// (via <see cref="FileSystemHelpers.WriteOptionError"/>) instead of the
-    /// old misleading "No such file or directory" or a silent drop. Anything
-    /// option-looking NOT in this set is reported as an unrecognized/invalid
-    /// option (bash parity). NOTE: representative, not yet exhaustive — see the
-    /// per-command flag-catalog rollout.
+    /// GNU grep options that are valid but not implemented by ps-bash. Refused loudly (exit 2) rather than
+    /// silently dropped. Written as typed; the <c>=VALUE</c> suffix of a long option is not part of the name.
     /// </summary>
-    private static readonly HashSet<string> ValidButUnsupported = new(StringComparer.Ordinal)
+    private static readonly string[] GrepValidButUnsupported =
     {
-        // Short forms.
-        "-z", "-Z", "-a", "-b", "-D", "-d",
-        "-U", "-T", "-u", "-y", "-I", "-V",
-        // Long forms (bare names; the =VALUE suffix is stripped before lookup).
-        "--null-data", "--null",
-        "--text", "--byte-offset",
-        "--binary-files", "--devices", "--directories", "--binary",
-        "--initial-tab", "--include-dir",
-        "--label",
-        "--line-buffered", "--group-separator", "--no-group-separator",
+        "-z", "-Z", "-a", "-b", "-D", "-d", "-T", "-u", "-I",
+        "--null-data", "--null", "--text", "--byte-offset", "--binary-files", "--devices",
+        "--directories", "--initial-tab", "--label", "--group-separator", "--no-group-separator",
+        "--unix-byte-offsets",
     };
+
+    /// <summary>
+    /// grep's option surface (GNU grep 3.11). <c>-y</c> is the obsolete <c>-i</c>; <c>-V</c> is
+    /// <c>--version</c>; <c>--color</c>/<c>--colour</c> take an optional attached WHEN (accepted, no colouring);
+    /// <c>-NUM</c> anywhere in a bundle is the context shorthand. Ambiguity lists follow GNU's
+    /// <c>long_options[]</c> table order (<c>--ex</c> = extended-regexp, exclude, exclude-from, exclude-dir).
+    /// </summary>
+    private static readonly OptSpecSet GrepSpec = new(
+        new[]
+        {
+            new OptSpec(OptBasic, 'G', "basic-regexp"),
+            new OptSpec(OptExtended, 'E', "extended-regexp"),
+            new OptSpec(OptFixed, 'F', "fixed-strings"),
+            new OptSpec(OptFixed, '\0', "fixed-regexp"),
+            new OptSpec(OptPerl, 'P', "perl-regexp"),
+            new OptSpec(OptRegexp, 'e', "regexp", OptKind.Value),
+            new OptSpec(OptFile, 'f', "file", OptKind.Value),
+            new OptSpec(OptIgnoreCase, 'i', "ignore-case"),
+            new OptSpec(OptIgnoreCase, 'y', null),
+            new OptSpec(OptNoIgnoreCase, '\0', "no-ignore-case"),
+            new OptSpec(OptWord, 'w', "word-regexp"),
+            new OptSpec(OptLineRegexp, 'x', "line-regexp"),
+            new OptSpec(OptNoMessages, 's', "no-messages"),
+            new OptSpec(OptInvert, 'v', "invert-match"),
+            new OptSpec(OptMax, 'm', "max-count", OptKind.Value),
+            new OptSpec(OptLineNumber, 'n', "line-number"),
+            new OptSpec(OptLineBuffered, '\0', "line-buffered"),
+            new OptSpec(OptWithName, 'H', "with-filename"),
+            new OptSpec(OptNoName, 'h', "no-filename"),
+            new OptSpec(OptOnly, 'o', "only-matching"),
+            new OptSpec(OptQuiet, 'q', "quiet"),
+            new OptSpec(OptQuiet, '\0', "silent"),
+            new OptSpec(OptRecursive, 'r', "recursive"),
+            new OptSpec(OptRecursive, 'R', "dereference-recursive"),
+            new OptSpec(OptInclude, '\0', "include", OptKind.Value),
+            new OptSpec(OptExclude, '\0', "exclude", OptKind.Value),
+            new OptSpec(OptExcludeDir, '\0', "exclude-dir", OptKind.Value),
+            new OptSpec(OptExcludeFrom, '\0', "exclude-from", OptKind.Value),
+            new OptSpec(OptFilesWithout, 'L', "files-without-match"),
+            new OptSpec(OptFilesWith, 'l', "files-with-matches"),
+            new OptSpec(OptCount, 'c', "count"),
+            new OptSpec(OptAfter, 'A', "after-context", OptKind.Value),
+            new OptSpec(OptBefore, 'B', "before-context", OptKind.Value),
+            new OptSpec(OptContext, 'C', "context", OptKind.Value),
+            new OptSpec(OptColor, '\0', "color", OptKind.OptionalValue),
+            new OptSpec(OptColor, '\0', "colour", OptKind.OptionalValue),
+            new OptSpec(OptBinary, 'U', "binary"),
+            new OptSpec(OptSpecSet.VersionId, 'V', "version"),
+        },
+        GrepValidButUnsupported,
+        allowAbbrev: true,
+        gnuInfoOptions: true,
+        usageExitCode: 2,
+        bundleDigitsId: OptContextNum,
+        longOptionOrder: new[]
+        {
+            "basic-regexp", "extended-regexp", "fixed-regexp", "fixed-strings", "perl-regexp",
+            "after-context", "before-context", "binary-files", "byte-offset", "context", "color", "colour",
+            "count", "dereference-recursive", "devices", "directories", "exclude", "exclude-from",
+            "exclude-dir", "file", "files-with-matches", "files-without-match", "group-separator", "help",
+            "include", "ignore-case", "no-ignore-case", "initial-tab", "label", "line-buffered",
+            "line-number", "line-regexp", "max-count", "no-filename", "no-group-separator", "no-messages",
+            "null", "null-data", "only-matching", "quiet", "recursive", "regexp", "invert-match", "silent",
+            "text", "binary", "unix-byte-offsets", "version", "with-filename", "word-regexp",
+        });
+
+    /// <summary>Pure argv scan (unit-test seam).</summary>
+    internal static ParsedArgs ScanArgs(string[] args) => ArgParser.Parse(args, GrepSpec);
+
+    /// <summary>GNU <c>--color=WHEN</c> spellings (grep accepts all of these; ps-bash never colours).</summary>
+    private static readonly string[] ColorWhenWords =
+        { "always", "yes", "force", "never", "no", "none", "auto", "tty", "if-tty" };
+
+    internal sealed class GrepArgs
+    {
+        public ParsedArgs Parsed = null!;
+        public string? Error;
+        public int ErrorExit = 2;
+
+        public bool IgnoreCase, Invert, LineNumbers, Count, Quiet, Recursive, FilesWith, FilesWithout;
+        public bool Word, OnlyMatching, ForceFileName, SuppressFileName, LineRegexp, NoMessages;
+        public bool Extended, Fixed;
+
+        /// <summary>Matcher letter (<c>G E F P</c>) or <c>'\0'</c>. GNU refuses two different matchers.</summary>
+        public char Matcher;
+
+        public int MaxMatches = int.MaxValue;
+        public int After, Before;
+
+        /// <summary>Any of -A/-B/-C/-NUM was given (even 0): GNU then prints "--" between groups.</summary>
+        public bool ContextRequested;
+
+        /// <summary>Every <c>-e PATTERN</c> / <c>-f FILE</c> in command-line order.</summary>
+        public List<(bool IsFile, string Value)> PatternSources = new();
+
+        public List<string> Include = new(), Exclude = new(), ExcludeDir = new(), ExcludeFromFiles = new();
+        public List<string> Operands = new();
+
+        public bool SawPatternFile => PatternSources.Exists(s => s.IsFile);
+
+        public bool Declined =>
+            Parsed.HasError || Error is not null
+            || Parsed.Has(OptSpecSet.HelpId) || Parsed.Has(OptSpecSet.VersionId);
+    }
+
+    /// <summary>
+    /// Scan + interpret + validate, in GNU's order (first error wins). Semantics taken from GNU grep 3.11:
+    /// <c>-A/-B</c> beat <c>-C</c>/<c>-NUM</c> regardless of order; <c>-l</c>/<c>-L</c> and <c>-h</c>/<c>-H</c>
+    /// are last-wins; two DIFFERENT matchers among <c>-E -F -G -P</c> are
+    /// "conflicting matchers specified"; a bad context length is "X: invalid context length argument" and a bad
+    /// <c>-m</c> "invalid max count" (both exit 2) while a NEGATIVE <c>-m</c> means unlimited.
+    /// </summary>
+    internal static GrepArgs Plan(string[] args)
+    {
+        var g = new GrepArgs { Parsed = ScanArgs(args) };
+        g.Operands = g.Parsed.Operands();
+        if (g.Parsed.HasError) return g;
+        if (g.Parsed.Has(OptSpecSet.HelpId) || g.Parsed.Has(OptSpecSet.VersionId)) return g;
+
+        int after = -1, before = -1, both = -1;
+
+        foreach (var tok in g.Parsed.Tokens)
+        {
+            if (tok.Kind != ArgTokKind.Option) continue;
+            string? v = tok.Value;
+            switch (tok.OptId)
+            {
+                case OptBasic: case OptExtended: case OptFixed: case OptPerl:
+                {
+                    char m = tok.OptId![0];
+                    if (g.Matcher != '\0' && g.Matcher != m)
+                    {
+                        g.Error = "grep: conflicting matchers specified";
+                        return g;
+                    }
+                    g.Matcher = m;
+                    g.Extended = m is 'E' or 'P';   // -P runs on the .NET regex path, like -E
+                    g.Fixed = m == 'F';
+                    break;
+                }
+                case OptRegexp: g.PatternSources.Add((false, v!)); break;
+                case OptFile: g.PatternSources.Add((true, v!)); break;
+                case OptIgnoreCase: g.IgnoreCase = true; break;
+                case OptNoIgnoreCase: g.IgnoreCase = false; break;
+                case OptWord: g.Word = true; break;
+                case OptLineRegexp: g.LineRegexp = true; break;
+                case OptNoMessages: g.NoMessages = true; break;
+                case OptInvert: g.Invert = true; break;
+                case OptLineNumber: g.LineNumbers = true; break;
+                case OptWithName: g.ForceFileName = true; g.SuppressFileName = false; break;
+                case OptNoName: g.SuppressFileName = true; g.ForceFileName = false; break;
+                case OptOnly: g.OnlyMatching = true; break;
+                case OptQuiet: g.Quiet = true; break;
+                case OptCount: g.Count = true; break;
+                case OptRecursive: g.Recursive = true; break;
+                case OptFilesWith: g.FilesWith = true; g.FilesWithout = false; break;
+                case OptFilesWithout: g.FilesWithout = true; g.FilesWith = false; break;
+                case OptInclude: g.Include.Add(v!); break;
+                case OptExclude: g.Exclude.Add(v!); break;
+                case OptExcludeDir: g.ExcludeDir.Add(v!); break;
+                case OptExcludeFrom: g.ExcludeFromFiles.Add(v!); break;
+                case OptMax:
+                {
+                    if (!TryParseMaxCount(v!, out int max))
+                    {
+                        g.Error = "grep: invalid max count";
+                        return g;
+                    }
+                    g.MaxMatches = max;
+                    break;
+                }
+                case OptAfter: case OptBefore: case OptContext: case OptContextNum:
+                {
+                    if (!TryParseContext(v!, out int n))
+                    {
+                        g.Error = $"grep: {v}: invalid context length argument";
+                        return g;
+                    }
+                    if (tok.OptId == OptAfter) after = n;
+                    else if (tok.OptId == OptBefore) before = n;
+                    else both = n;
+                    break;
+                }
+                case OptColor:
+                    if (v is not null && Array.IndexOf(ColorWhenWords, v) < 0)
+                    {
+                        g.Error = $"grep: invalid argument '{v}' for '--color'";
+                        return g;
+                    }
+                    break;
+                // OptLineBuffered, OptBinary: accepted no-ops (nothing to flush / no CR stripping here).
+            }
+        }
+
+        g.ContextRequested = after >= 0 || before >= 0 || both >= 0;
+        g.After = after >= 0 ? after : Math.Max(both, 0);
+        g.Before = before >= 0 ? before : Math.Max(both, 0);
+        return g;
+    }
+
+    /// <summary>Context length: digits only (GNU rejects signs/garbage); overflow clamps.</summary>
+    private static bool TryParseContext(string s, out int n)
+    {
+        n = 0;
+        if (s.Length == 0) return false;
+        foreach (char c in s)
+            if (c < '0' || c > '9') return false;
+        n = BashRuntime.ParseCountClamped(s);
+        return true;
+    }
+
+    /// <summary><c>-m NUM</c>: a negative value means "no limit" (GNU 3.11); non-numeric is an error.</summary>
+    private static bool TryParseMaxCount(string s, out int max)
+    {
+        max = int.MaxValue;
+        var t = s.Trim();
+        bool neg = t.StartsWith('-');
+        var digits = neg || t.StartsWith('+') ? t.Substring(1) : t;
+        if (digits.Length == 0) return false;
+        foreach (char c in digits)
+            if (c < '0' || c > '9') return false;
+        max = neg ? int.MaxValue : BashRuntime.ParseCountClamped(digits);
+        return true;
+    }
 
     protected override void ProcessRecord()
     {
@@ -165,342 +376,81 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
         }
     }
 
+
     protected override void EndProcessing()
     {
-        // Re-inject the decoy-bound -d/-D so grep's scan emits the exit-2 "recognized
-        // but not supported" message (bare -d/-D silently bound -Debug otherwise).
-        var args = BashRuntime.PrependDecoys(Arguments, (D.IsPresent, "-d"));
-
-        if (Array.IndexOf(args, "--help") >= 0)
+        // Direct PowerShell calls: a bare -d/-i/-v/-c/-w/-P/-o/-A/-B/-e binds a declared decoy parameter
+        // (or a common parameter) instead of reaching Arguments. Re-inject them as the ordinary tokens
+        // they stand for so the ordered parser sees them. Transpiled bash never gets here: the emitter
+        // single-quotes every flag (OrderedArgCommands), so they arrive verbatim in Arguments.
+        var args = BashRuntime.PrependDecoys(Arguments,
+            (D.IsPresent, "-d"), (I.IsPresent, "-i"), (V.IsPresent, "-v"), (C.IsPresent, "-c"),
+            (W.IsPresent, "-w"), (P.IsPresent, "-P"), (O.IsPresent, "-o"));
+        if (A is not null || B is not null || E is { Length: > 0 })
         {
-            foreach (var line in InvokeCommand.InvokeScript(
-                         "param($n) Show-BashHelp $n", "grep"))
-            {
-                WriteObject(line);
-            }
+            var extra = new List<string>();
+            if (A is { } av) { extra.Add("-A"); extra.Add(av.ToString()); }
+            if (B is { } bv) { extra.Add("-B"); extra.Add(bv.ToString()); }
+            if (E != null) foreach (var pat in E) { extra.Add("-e"); extra.Add(pat); }
+            extra.AddRange(args);
+            args = extra.ToArray();
+        }
+
+        var plan = Plan(args);
+        if (FileSystemHelpers.TryWriteParseError(this, "grep", plan.Parsed)) return;
+        if (FileSystemHelpers.TryHandleInfoOptions(this, "grep", plan.Parsed)) return;
+        if (plan.Error is { } planError)
+        {
+            FileSystemHelpers.WriteBashError(this, planError);
+            FileSystemHelpers.SetLastExitCode(this, plan.ErrorExit);
             return;
         }
 
-        if (FileSystemHelpers.TryHandleVersion(this, "grep", args)) return;
-
-        bool ignoreCase = I.IsPresent;
-        bool invertMatch = V.IsPresent;
-        bool showLineNumbers = false;
-        bool countOnly = C.IsPresent;
-        bool quietMode = false;
-        bool recursive = false;
-        bool filesOnly = false;
-        bool extendedRegex = P.IsPresent;   // -P (perl) → .NET regex path, same as -E
-        bool fixedString = false;
-        bool wholeWord = W.IsPresent;
-        bool outputMatchOnly = O.IsPresent;
-        bool forceFileName = false;
-        bool suppressFileName = false;
-        int maxMatches = int.MaxValue;
-        int afterContext = A ?? 0;
-        int beforeContext = B ?? 0;
-
-        bool filesWithoutMatch = false;   // -L / --files-without-match
-        bool lineRegexp = false;          // -x / --line-regexp
-        bool noMessages = false;          // -s / --no-messages
+        bool ignoreCase = plan.IgnoreCase;
+        bool invertMatch = plan.Invert;
+        bool showLineNumbers = plan.LineNumbers;
+        bool countOnly = plan.Count;
+        bool quietMode = plan.Quiet;
+        bool recursive = plan.Recursive;
+        bool filesOnly = plan.FilesWith;
+        bool extendedRegex = plan.Extended;
+        bool fixedString = plan.Fixed;
+        bool wholeWord = plan.Word;
+        bool outputMatchOnly = plan.OnlyMatching;
+        bool forceFileName = plan.ForceFileName;
+        bool suppressFileName = plan.SuppressFileName;
+        int maxMatches = plan.MaxMatches;
+        int afterContext = plan.After;
+        int beforeContext = plan.Before;
+        _contextRequested = plan.ContextRequested;
+        bool filesWithoutMatch = plan.FilesWithout;
+        bool lineRegexp = plan.LineRegexp;
+        bool noMessages = plan.NoMessages;
         // Recursive filename filters (basename fnmatch), GNU grep --include/--exclude/--exclude-dir.
-        var includeGlobs = new List<string>();
-        var excludeGlobs = new List<string>();
-        var excludeDirGlobs = new List<string>();
+        var includeGlobs = plan.Include;
+        var excludeGlobs = plan.Exclude;
+        var excludeDirGlobs = plan.ExcludeDir;
+        var operands = plan.Operands;
 
+        // -e / -f in command-line order. A missing -f / --exclude-from file is fatal (GNU: exit 2),
+        // whatever -s says.
         var patterns = new List<string>();
-        if (E != null) patterns.AddRange(E);
-        var operands = new List<string>();
-        bool pastDoubleDash = false;
-        // True once -f/--file was given: the pattern list is fully determined by
-        // the file(s), so the first operand must NOT be reinterpreted as a pattern
-        // (an empty pattern file means "match nothing", not "use file as pattern").
-        bool sawPatternFile = false;
-
-        // PowerShell's binder is case-insensitive, so the bash conventions
-        // `-e PATTERN` (multi-pattern) and `-E` (extended-regex flag) both
-        // bind to the same `E` parameter. Detect the uppercase form in the
-        // raw command line and switch on extended-regex mode. The pattern
-        // value is already in `patterns` from the E binding above.
-        // Scan only THIS grep's pipeline segment, not the whole line — a `-E` in a
-        // different command (e.g. `grep 'a+' f | sed -E …`) must not flip grep here.
-        var rawLine = BashRuntime.CurrentPipelineSegment(MyInvocation);
-        if (!string.IsNullOrEmpty(rawLine)
-            && System.Text.RegularExpressions.Regex.IsMatch(
-                rawLine, @"(?<![A-Za-z0-9])-E(?![a-zA-Z0-9])"))
+        foreach (var (isFile, value) in plan.PatternSources)
         {
-            extendedRegex = true;
+            if (!isFile) { patterns.Add(value); continue; }
+            if (!TryAddLinesFromFile(value, patterns)) { FileSystemHelpers.SetLastExitCode(this, 2); return; }
         }
-
-        int i = 0;
-        while (i < args.Length)
+        foreach (var exFile in plan.ExcludeFromFiles)
         {
-            string a = args[i];
-
-            if (pastDoubleDash)
-            {
-                operands.Add(a);
-                i++;
-                continue;
-            }
-
-            if (a == "--")
-            {
-                pastDoubleDash = true;
-                i++;
-                continue;
-            }
-
-            // -e PATTERN (literal -e in Arguments — when the binder did not
-            // already consume it into E because it was preceded by other
-            // tokens or carried via ValueFromRemainingArguments).
-            if (a == "-e")
-            {
-                i++;
-                if (i < args.Length) patterns.Add(args[i]);
-                i++;
-                continue;
-            }
-
-            // Joined -ePATTERN form (oracle did not match, but be defensive).
-
-            // -f FILE / --file=FILE / -fFILE: read patterns from a file, one per
-            // line. Each line becomes an OR pattern (added to `patterns`).
-            if (a == "-f" || a == "--file")
-            {
-                i++;
-                if (i < args.Length) { AddLinesFromFile(args[i], patterns, noMessages); sawPatternFile = true; }
-                i++;
-                continue;
-            }
-            if (a.StartsWith("--file=", StringComparison.Ordinal))
-            {
-                AddLinesFromFile(a.Substring("--file=".Length), patterns, noMessages);
-                sawPatternFile = true;
-                i++;
-                continue;
-            }
-            if (a.Length > 2 && a[0] == '-' && a[1] == 'f' && a[2] != '-')
-            {
-                AddLinesFromFile(a.Substring(2), patterns, noMessages);
-                sawPatternFile = true;
-                i++;
-                continue;
-            }
-
-            // --exclude-from=FILE / --exclude-from FILE: read exclude globs from a file.
-            if (a == "--exclude-from")
-            {
-                i++;
-                if (i < args.Length) AddLinesFromFile(args[i], excludeGlobs, noMessages);
-                i++;
-                continue;
-            }
-            if (a.StartsWith("--exclude-from=", StringComparison.Ordinal))
-            {
-                AddLinesFromFile(a.Substring("--exclude-from=".Length), excludeGlobs, noMessages);
-                i++;
-                continue;
-            }
-
-            // -A NUM, -B NUM, -C NUM (separated) or -A2 / -B2 / -C2 (joined).
-            var ctxJoined = Regex.Match(a, @"^-([ABC])(\d+)$");
-            if (ctxJoined.Success)
-            {
-                int v = BashRuntime.ParseCountClamped(ctxJoined.Groups[2].Value);
-                switch (ctxJoined.Groups[1].Value)
-                {
-                    case "A": afterContext = v; break;
-                    case "B": beforeContext = v; break;
-                    case "C": afterContext = v; beforeContext = v; break;
-                }
-                i++;
-                continue;
-            }
-            var ctxBare = Regex.Match(a, @"^-([ABC])$");
-            if (ctxBare.Success)
-            {
-                string flag = ctxBare.Groups[1].Value;
-                i++;
-                // GNU grep: a missing or non-numeric context length is a hard error
-                // (exit 2), NOT a silently-consumed-and-ignored operand. `grep -A foo f`
-                // previously ate "foo" and searched with zero context. (The common
-                // separate form `-A NUM` is handled by the value-bearing int? A/B decoy
-                // parameters at the binder; this Arguments path covers the residual cases.)
-                if (i >= args.Length || !int.TryParse(args[i], out int v))
-                {
-                    string bad = i < args.Length ? args[i] : "";
-                    FileSystemHelpers.WriteBashError(this, $"grep: {bad}: invalid context length argument");
-                    FileSystemHelpers.SetLastExitCode(this, 2);
-                    return;
-                }
-                switch (flag)
-                {
-                    case "A": afterContext = v; break;
-                    case "B": beforeContext = v; break;
-                    case "C": afterContext = v; beforeContext = v; break;
-                }
-                i++;
-                continue;
-            }
-
-            // -m NUM (max matches), -mN joined.
-            var mJoined = Regex.Match(a, @"^-m(\d+)$");
-            if (mJoined.Success)
-            {
-                maxMatches = BashRuntime.ParseCountClamped(mJoined.Groups[1].Value);
-                i++;
-                continue;
-            }
-            if (a == "-m")
-            {
-                i++;
-                if (i < args.Length && int.TryParse(args[i], out int mv))
-                {
-                    maxMatches = mv;
-                }
-                i++;
-                continue;
-            }
-
-            // Long-form flags (oracle parity).
-            if (a == "--extended-regexp") { extendedRegex = true; i++; continue; }
-            if (a == "--basic-regexp") { extendedRegex = false; i++; continue; }
-            if (a == "--ignore-case") { ignoreCase = true; i++; continue; }
-            if (a == "--invert-match") { invertMatch = true; i++; continue; }
-            if (a == "--line-number") { showLineNumbers = true; i++; continue; }
-            if (a == "--count") { countOnly = true; i++; continue; }
-            if (a == "--recursive") { recursive = true; i++; continue; }
-            if (a == "--files-with-matches") { filesOnly = true; i++; continue; }
-            if (a == "--fixed-strings") { fixedString = true; i++; continue; }
-            if (a == "--with-filename") { forceFileName = true; i++; continue; }
-            if (a == "--no-filename") { suppressFileName = true; i++; continue; }
-            if (a == "--word-regexp") { wholeWord = true; i++; continue; }
-            if (a == "--only-matching") { outputMatchOnly = true; i++; continue; }
-            if (a == "--quiet" || a == "--silent") { quietMode = true; i++; continue; }
-            if (a == "--files-without-match") { filesWithoutMatch = true; i++; continue; }
-            if (a == "--line-regexp") { lineRegexp = true; i++; continue; }
-            if (a == "--no-messages") { noMessages = true; i++; continue; }
-            // -P / --perl-regexp: ps-bash has no PCRE engine; route through .NET regex (a close
-            // PCRE superset). Common patterns (\d, \b, lookaround, named groups) work identically;
-            // PCRE-only syntax .NET lacks (\K, possessive ++, recursion) errors visibly rather than
-            // silently mismatching. Same raw-pattern path as -E.
-            if (a == "--perl-regexp") { extendedRegex = true; i++; continue; }
-            // --include=GLOB / --include GLOB (and --exclude / --exclude-dir): recursive-search
-            // filename filters matched against the file's BASE name, like GNU grep. Check
-            // --exclude-dir before --exclude so the longer flag wins.
-            if (TryTakeGlobFlag(args, ref i, "--include", includeGlobs)) continue;
-            if (TryTakeGlobFlag(args, ref i, "--exclude-dir", excludeDirGlobs)) continue;
-            if (TryTakeGlobFlag(args, ref i, "--exclude", excludeGlobs)) continue;
-            // --color[=WHEN] / --colour[=WHEN]: GNU grep accepts these silently.
-            // ps-bash emits typed BashObjects with no per-match ANSI coloring, so
-            // we accept-and-ignore (parity with grep's flag surface, not its
-            // coloring). WHEN must be attached with '=' in real grep, so a bare
-            // --color does NOT consume the next token. Without this, the common
-            // `alias grep='grep --color=auto'` makes every grep treat
-            // `--color=auto` as a file operand → "No such file or directory".
-            if (a == "--color" || a == "--colour"
-                || a.StartsWith("--color=", StringComparison.Ordinal)
-                || a.StartsWith("--colour=", StringComparison.Ordinal))
-            {
-                i++;
-                continue;
-            }
-            if (a == "--max-count")
-            {
-                i++;
-                if (i < args.Length && int.TryParse(args[i], out int mc))
-                {
-                    maxMatches = mc;
-                }
-                i++;
-                continue;
-            }
-            var maxLong = Regex.Match(a, @"^--max-count=(\d+)$");
-            if (maxLong.Success)
-            {
-                maxMatches = BashRuntime.ParseCountClamped(maxLong.Groups[1].Value);
-                i++;
-                continue;
-            }
-
-            // Short-flag bundle (single dash, length > 1, not --). Walk per-char
-            // case-sensitively, matching the oracle's switch -CaseSensitive.
-            // Indexed (not foreach) so a lower-case 'e' can take the REST of the
-            // bundle as its pattern (GNU -ePAT), or the NEXT argument when it is
-            // the bundle's last letter (GNU -ie PATTERN): getopt treats the
-            // option's argument as the remainder of the token, else the next argv.
-            if (a.Length > 1 && a[0] == '-' && a[1] != '-')
-            {
-                string bundle = a.Substring(1);
-                for (int bi = 0; bi < bundle.Length; bi++)
-                {
-                    char ch = bundle[bi];
-                    switch (ch)
-                    {
-                        case 'i': ignoreCase = true; break;
-                        case 'v': invertMatch = true; break;
-                        case 'n': showLineNumbers = true; break;
-                        case 'c': countOnly = true; break;
-                        case 'q': quietMode = true; break;
-                        case 'r': recursive = true; break;
-                        case 'R': recursive = true; break;
-                        case 'l': filesOnly = true; break;
-                        case 'E': extendedRegex = true; break;
-                        case 'G': extendedRegex = false; break; // basic-regexp (default)
-                        case 'F': fixedString = true; break;
-                        case 'w': wholeWord = true; break;
-                        case 'o': outputMatchOnly = true; break;
-                        case 'H': forceFileName = true; break;
-                        case 'h': suppressFileName = true; break;
-                        case 'L': filesWithoutMatch = true; break;
-                        case 'x': lineRegexp = true; break;
-                        case 's': noMessages = true; break;
-                        case 'P': extendedRegex = true; break; // PCRE → .NET regex (see --perl-regexp note)
-                        case 'e':
-                            // -e takes a value. Attached tail is the pattern
-                            // (-ePAT); a bare trailing e takes the next arg.
-                            if (bi + 1 < bundle.Length)
-                            {
-                                patterns.Add(bundle.Substring(bi + 1));
-                                bi = bundle.Length;   // rest of bundle consumed
-                            }
-                            else
-                            {
-                                i++;
-                                if (i < args.Length) patterns.Add(args[i]);
-                            }
-                            break;
-                        default:
-                            // Unknown short flag: a valid-but-unsupported grep
-                            // option gets a specific refusal; anything else is
-                            // a bash-parity "invalid option" error. getopt
-                            // reports the first offending char and stops.
-                            FileSystemHelpers.WriteOptionError(this, "grep", "-" + ch, ValidButUnsupported);
-                            return;
-                    }
-                }
-                i++;
-                continue;
-            }
-
-            // Any remaining option-looking token (a long flag we don't handle,
-            // e.g. --perl-regexp / --include=*.c, or a typo) is NOT a file
-            // operand. Classify it: valid-but-unsupported → specific refusal;
-            // otherwise bash-parity "unrecognized option". A lone "-" (stdin)
-            // and "--" fell through above and are handled as operands.
-            if (FileSystemHelpers.IsOptionLike(a))
-            {
-                FileSystemHelpers.WriteOptionError(this, "grep", a, ValidButUnsupported);
-                return;
-            }
-
-            operands.Add(a);
-            i++;
+            if (!TryAddLinesFromFile(exFile, excludeGlobs)) { FileSystemHelpers.SetLastExitCode(this, 2); return; }
         }
+        // True once -f/--file was given: the pattern list is fully determined by the file(s), so the
+        // first operand must NOT be reinterpreted as a pattern (an empty pattern file means "match
+        // nothing", not "use file as pattern").
+        bool sawPatternFile = plan.SawPatternFile;
 
         // Pattern collection: -e/-f patterns (already accumulated) or first operand.
-        if (patterns.Count == 0 && operands.Count > 0 && !sawPatternFile)
+        if (plan.PatternSources.Count == 0 && operands.Count > 0)
         {
             patterns.Add(operands[0]);
             operands.RemoveAt(0);
@@ -514,14 +464,12 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
                 FileSystemHelpers.SetLastExitCode(this, 1);
                 return;
             }
-            FileSystemHelpers.WriteBashError(this, "grep: usage: grep [options] pattern [file ...]");
-        FileSystemHelpers.SetLastExitCode(this, 2);
+            FileSystemHelpers.WriteBashError(this, "grep: usage: grep [OPTION]... PATTERNS [FILE]...");
+            FileSystemHelpers.SetLastExitCode(this, 2);
             return;
         }
 
-        // The oracle has an odd two-branch in fileOperands that ultimately
-        // yields "everything but operands[0]"; but since we already removed the
-        // pattern (or it came from -e), operands now contains the file list.
+        // The pattern (or -e/-f patterns) is already removed, so operands now holds the file list.
         var fileOperands = operands;
 
         // Build regex list (OR logic across multiple patterns) via the shared ladder.
@@ -551,17 +499,11 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
     }
 
     /// <summary>
-    /// Consume a <c>--flag=GLOB</c> or <c>--flag GLOB</c> filename-filter option into
-    /// <paramref name="into"/>; returns false (advancing nothing) when <paramref name="args"/>[i] is
-    /// not this flag. Used for grep <c>--include</c> / <c>--exclude</c> / <c>--exclude-dir</c>.
+    /// Read a file's lines into <paramref name="dest"/> — backing <c>-f</c> (pattern file) and
+    /// <c>--exclude-from</c> (glob file). An unreadable file is fatal in GNU grep
+    /// (<c>grep: F: No such file or directory</c>, exit 2): reports the error and returns false.
     /// </summary>
-    /// <summary>
-    /// Read a file's lines into <paramref name="dest"/> — backing <c>-f</c>
-    /// (pattern file) and <c>--exclude-from</c> (glob file). A missing/unreadable
-    /// file emits a bash-style error (unless <paramref name="noMessages"/>) and
-    /// contributes nothing, matching GNU grep.
-    /// </summary>
-    private void AddLinesFromFile(string rawPath, List<string> dest, bool noMessages)
+    private bool TryAddLinesFromFile(string rawPath, List<string> dest)
     {
         string path;
         try
@@ -576,33 +518,14 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
         try
         {
             foreach (var line in BashFileSystem.ReadLines(path)) dest.Add(line);
+            return true;
         }
         catch (Exception ex)
         {
             if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-            if (!noMessages)
-            {
-                FileSystemHelpers.WriteBashError(this, $"grep: {rawPath.Replace('\\', '/')}: No such file or directory");
-            }
+            FileSystemHelpers.WriteBashError(this, $"grep: {rawPath.Replace('\\', '/')}: No such file or directory");
+            return false;
         }
-    }
-
-    private static bool TryTakeGlobFlag(string[] args, ref int i, string flag, List<string> into)
-    {
-        var a = args[i];
-        if (a.StartsWith(flag + "=", StringComparison.Ordinal))
-        {
-            into.Add(a.Substring(flag.Length + 1));
-            i++;
-            return true;
-        }
-        if (a == flag)
-        {
-            i++;
-            if (i < args.Length) { into.Add(args[i]); i++; }
-            return true;
-        }
-        return false;
     }
 
     /// <summary>
@@ -666,7 +589,7 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
         // locate matches, then emit the windowed set — the same shape as file
         // mode. Without context the original streaming pass is kept (typed
         // single-line objects pass through untouched).
-        if (beforeContext > 0 || afterContext > 0)
+        if (_contextRequested || beforeContext > 0 || afterContext > 0)
         {
             RunPipelineModeWithContext(regexes, invertMatch, showLineNumbers,
                 countOnly, quietMode, outputMatchOnly, forceFileName, maxMatches,
@@ -791,18 +714,29 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
             emitCount++;
         }
 
+        var matchSet = new HashSet<int>(matchIndices);
+        int prevEmitted = -2;
         foreach (var li in emitLines)
         {
             string lineText = lines[li];
             int lineNum = li + 1;
+            bool isMatchLine = matchSet.Contains(li);
+            // GNU: a matched line is "NAME:NUM:text", a context line "NAME-NUM-text".
+            char sep = isMatchLine ? ':' : '-';
             string prefix = "";
-            if (forceFileName) prefix = "<stdin>:";
-            if (showLineNumbers) prefix = prefix + lineNum + ":";
+            if (forceFileName) prefix = StdinLabel + sep;
+            if (showLineNumbers) prefix = prefix + lineNum + sep;
 
-            if (outputMatchOnly && matchIndices.Contains(li))
+            // Non-adjacent groups are divided by the default group separator "--".
+            if (li != prevEmitted + 1 && prevEmitted >= 0 && !outputMatchOnly)
+                WriteObject(BashRuntime.NewBashObject(GroupSeparator));
+            prevEmitted = li;
+
+            if (outputMatchOnly)
             {
-                foreach (var mv in AllMatchValues(regexes, lineText))
-                    WriteObject(BashRuntime.NewBashObject(prefix + mv));
+                if (isMatchLine)
+                    foreach (var mv in AllMatchValues(regexes, lineText))
+                        WriteObject(BashRuntime.NewBashObject(prefix + mv));
                 continue;
             }
 
@@ -864,7 +798,7 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
         if (countOnly) return;
 
         string prefix = "";
-        if (forceFileName) prefix = "<stdin>:";
+        if (forceFileName) prefix = StdinLabel + ':';
         if (showLineNumbers) prefix = prefix + lineNum + ":";
 
         if (outputMatchOnly)
@@ -990,7 +924,7 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
         // 2 GB log streams in constant memory. Context / -m need look-back or a
         // global cap, so they fall back to a per-file pass (still a STREAMED read,
         // still binary-skipped — only those rarer cases hold one file in memory).
-        bool needsBuffer = beforeContext > 0 || afterContext > 0 || maxMatches != int.MaxValue;
+        bool needsBuffer = _contextRequested || beforeContext > 0 || afterContext > 0 || maxMatches != int.MaxValue;
 
         foreach (var filePath in fileSource)
         {
@@ -1077,21 +1011,32 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
                 emitCount++;
             }
 
+            var matchSet = new HashSet<int>(matchIndices);
+            bool contextActive = _contextRequested || beforeContext > 0 || afterContext > 0;
+            int prevEmitted = -2;
             foreach (var li in emitLines)
             {
-                if (totalMatchCount > maxMatches && !matchIndices.Contains(li)) break;
+                bool isMatchLine = matchSet.Contains(li);
+                if (totalMatchCount > maxMatches && !isMatchLine) break;
 
                 string line = lines[li];
                 int lineNum = li + 1;
-                if (outputMatchOnly && matchIndices.Contains(li))
+                // GNU: "--" divides non-adjacent groups, also across files.
+                if (contextActive && !outputMatchOnly && li != prevEmitted + 1 && (prevEmitted >= 0 || _contextGroupEmitted))
+                    WriteObject(BashRuntime.NewBashObject(GroupSeparator));
+                prevEmitted = li;
+                if (contextActive) _contextGroupEmitted = true;
+
+                if (outputMatchOnly)
                 {
                     // -o: emit every non-overlapping match (bash). Context lines
                     // (non-match) produce no -o output, matching GNU grep.
-                    foreach (var mv in AllMatchValues(regexes, line))
-                        EmitGrepLine(filePath, lineNum, line, mv, showFile, showLineNumbers);
+                    if (isMatchLine)
+                        foreach (var mv in AllMatchValues(regexes, line))
+                            EmitGrepLine(filePath, lineNum, line, mv, showFile, showLineNumbers);
                     continue;
                 }
-                EmitGrepLine(filePath, lineNum, line, line, showFile, showLineNumbers);
+                EmitGrepLine(filePath, lineNum, line, line, showFile, showLineNumbers, isMatchLine ? ':' : '-');
             }
         }
 
@@ -1229,17 +1174,17 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
 
     /// <summary>Build the <c>file:line:</c> prefix and emit one GrepMatch.</summary>
     private void EmitGrepLine(string filePath, int lineNum, string fullLine, string outputText,
-        bool showFile, bool showLineNumbers)
+        bool showFile, bool showLineNumbers, char sep = ':')
     {
         string bashText;
         if (showLineNumbers)
         {
-            string prefix = showFile ? (filePath + ":") : "";
-            bashText = prefix + lineNum + ":" + outputText;
+            string prefix = showFile ? (filePath + sep) : "";
+            bashText = prefix + lineNum + sep + outputText;
         }
         else if (showFile)
         {
-            bashText = filePath + ":" + outputText;
+            bashText = filePath + sep + outputText;
         }
         else
         {

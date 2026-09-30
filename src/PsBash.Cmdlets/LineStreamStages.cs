@@ -257,11 +257,10 @@ internal sealed class WcStage : ILineStreamStage
     }
 }
 
-/// <summary><c>grep</c> pipeline mode. Certified subset: exactly ONE pattern (the
-/// first non-flag operand or a single <c>-e</c>) with the SINGLE boolean flags
-/// <c>-i -v -n -c -w -F -E</c>. Declines flag bundles (`-in`, `-vc`: a bundle can
-/// prefix-collide with the cmdlet binder, e.g. `-InputObject`), multiple patterns,
-/// <c>-o/-A/-B/-C/-m/-q/-r/-l/-L/-x/-s/-H/-h/-f/-P</c>, file operands, long forms,
+/// <summary><c>grep</c> pipeline mode. The cmdlet's <c>Plan</c> decides first; certified subset
+/// within it: exactly ONE pattern (the first non-flag operand or a single <c>-e</c>) with the
+/// boolean flags <c>-i -v -n -c -w -F -E -G</c> (bundles included). Declines multiple patterns,
+/// <c>-o/-A/-B/-C/-m/-q/-r/-l/-L/-x/-s/-H/-h/-f/-P</c>, file operands, other long forms,
 /// and <c>--</c> — all handled by the cmdlet on fallback. Regex assembly + matching
 /// are the cmdlet's own shared helpers
 /// (<see cref="InvokeBashGrepCommand.TryBuildRegexes"/> /
@@ -281,51 +280,37 @@ internal sealed class GrepStage : ILineStreamStage
 
     internal static ILineStreamStage? TryCreate(string[] argv)
     {
-        bool ignoreCase = false, invert = false, lineNumbers = false, countOnly = false;
-        bool wholeWord = false, fixedString = false, extended = false;
-        var patterns = new List<string>();
-        var operands = new List<string>();
+        // The cmdlet's own resolver (shared ordered parser, GNU option table) decides first, so this
+        // core can NEVER accept an argv the cmdlet would reject or read differently
+        // (LineStreamArgAgreementTests).
+        var plan = InvokeBashGrepCommand.Plan(argv);
+        if (plan.Declined) return null;
 
-        int i = 0;
-        while (i < argv.Length)
+        // Certified subset within that: -i -v -n -c -w -F -E -G (bundles fine: one token per letter)
+        // with exactly ONE pattern (first operand or a single -e) and no file operand. Everything else
+        // (-o/-A/-B/-C/-m/-q/-r/-l/-L/-x/-s/-H/-h/-f/-P, --include/..., `--`, --color) runs the cmdlet.
+        foreach (var tok in plan.Parsed.Tokens)
         {
-            var a = argv[i];
-            if (a == "-e")
+            if (tok.Kind == ArgTokKind.DoubleDash) return null;
+            if (tok.Kind != ArgTokKind.Option) continue;
+            switch (tok.OptId)
             {
-                i++;
-                if (i >= argv.Length) return null;
-                patterns.Add(argv[i]);
-                i++;
-                continue;
+                case "ignore-case": case "invert": case "line-number": case "count": case "word":
+                case "F": case "E": case "G": case "regexp":
+                    break;
+                default:
+                    return null;
             }
-            // A SINGLE supported boolean flag only. Bundles (`-in`, `-vc`, …) are
-            // declined: a bundle can prefix-collide with the cmdlet's binder (e.g.
-            // `-in` prefix-matches `-InputObject`), so its unfused behavior isn't the
-            // simple char-by-char union — decline and let the cmdlet's decoy handling
-            // run on fallback, keeping the two paths byte-identical.
-            if (a.Length == 2 && a[0] == '-')
-            {
-                switch (a[1])
-                {
-                    case 'i': ignoreCase = true; break;
-                    case 'v': invert = true; break;
-                    case 'n': lineNumbers = true; break;
-                    case 'c': countOnly = true; break;
-                    case 'w': wholeWord = true; break;
-                    case 'F': fixedString = true; break;
-                    case 'E': extended = true; break;
-                    default: return null; // unsupported single flag → decline
-                }
-                i++;
-                continue;
-            }
-            if (a.Length > 1 && a[0] == '-' && a[1] != '-') return null; // bundle → decline
-            // Non-flag operand: the pattern (first) — a second operand is a file → decline.
-            operands.Add(a);
-            i++;
         }
 
-        if (patterns.Count == 0)
+        var patterns = new List<string>();
+        foreach (var (isFile, value) in plan.PatternSources)
+        {
+            if (isFile) return null;
+            patterns.Add(value);
+        }
+        var operands = plan.Operands;
+        if (plan.PatternSources.Count == 0)
         {
             if (operands.Count == 0) return null; // no pattern → usage error path
             patterns.Add(operands[0]);
@@ -336,11 +321,11 @@ internal sealed class GrepStage : ILineStreamStage
 
         // Shared ladder with the cmdlet (lineRegexp=false — -x is declined above).
         if (!InvokeBashGrepCommand.TryBuildRegexes(
-                patterns, fixedString, extended, wholeWord, lineRegexp: false, ignoreCase,
+                patterns, plan.Fixed, plan.Extended, plan.Word, lineRegexp: false, plan.IgnoreCase,
                 out var regexes, out _))
             return null; // invalid regex → decline; the cmdlet emits the error
 
-        return new GrepStage(regexes, invert, lineNumbers, countOnly);
+        return new GrepStage(regexes, plan.Invert, plan.LineNumbers, plan.Count);
     }
 
     public IEnumerable<string> Run(IEnumerable<string> input)

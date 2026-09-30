@@ -38,6 +38,17 @@ public class LineStreamArgAgreementTests
         new[] { "-f", "1" }, new[] { "-f", "x" }, new[] { "-f1" }, new[] { "-5" }, new[] { "-w", "0" }, new[] { "-ic" }, new[] { "-cdui" },
         new[] { "-d:", "-f1" }, new[] { "-d", ":", "-f2-" }, new[] { "-c1-3" }, new[] { "-b", "1" }, new[] { "-f1", "-c1" }, new[] { "-s", "-f1" }, new[] { "-f0" }, new[] { "-f3-1" }, new[] { "--complement", "-f1" }, new[] { "--output-delimiter=x", "-f1" }, new[] { "-f1", "file" },
         new[] { "--skip-fields=1" }, new[] { "--check-chars=2" }, new[] { "--ignore-case" },
+        // grep / sed (GNU getopt: patterns, scripts, bundles)
+        new[] { "a" }, new[] { "-i", "a" }, new[] { "-e", "a" }, new[] { "-ea" }, new[] { "-ie", "a" }, new[] { "-e", "a", "-e", "b" },
+        new[] { "-E", "a|b" }, new[] { "-E", "-F", "a" }, new[] { "-F", "-F", "a" }, new[] { "-G", "-E", "a" }, new[] { "-P", "a" },
+        new[] { "-c", "a" }, new[] { "-vc", "a" }, new[] { "-cn", "a" }, new[] { "-1", "a" }, new[] { "-A1", "a" }, new[] { "-A", "x", "a" },
+        new[] { "a", "f" }, new[] { "-m1", "a" }, new[] { "-m", "x", "a" }, new[] { "--color", "a" }, new[] { "--color=bogus", "a" },
+        new[] { "--colo=always", "a" }, new[] { "-o", "a" }, new[] { "-x", "a" }, new[] { "-f", "p" }, new[] { "-y", "a" }, new[] { "--", "-a" },
+        new[] { "-V" }, new[] { "--line-buffered", "a" }, new[] { "-s", "a" }, new[] { "-n", "-e", "a" }, new[] { "-w", "-F", "-e", "a" },
+        new[] { "s/a/b/" }, new[] { "-n", "p" }, new[] { "-ne", "p" }, new[] { "-n", "-e", "p", "-e", "p" }, new[] { "-E", "s/(a)/\\1/" },
+        new[] { "-r", "s/a/b/" }, new[] { "-i", "s/a/b/", "f" }, new[] { "-i.bak", "s/a/b/", "f" }, new[] { "-s", "p" }, new[] { "-z", "p" },
+        new[] { "-u", "p" }, new[] { "--posix", "p" }, new[] { "--debug", "p" }, new[] { "--expression=p" }, new[] { "--regexp-extended", "p" },
+        new[] { "-l", "5", "p" }, new[] { "-l" , "x", "p" }, new[] { "-nE", "p" }, new[] { "-nr", "p" }, new[] { "-nf", "s" },
     };
 
     private static bool CmdletAccepts(string name, string[] argv) => name switch
@@ -50,10 +61,11 @@ public class LineStreamArgAgreementTests
         "nl" => !InvokeBashNlCommand.Plan(argv).Declined,
         "uniq" => !InvokeBashUniqCommand.Plan(argv).Declined,
         "cut" => !InvokeBashCutCommand.Plan(argv).Declined,
+        "grep" => !InvokeBashGrepCommand.Plan(argv).Declined,
         _ => throw new ArgumentException(name),
     };
 
-    public static IEnumerable<object[]> Commands => new[] { new object[] { "head" }, new object[] { "tail" }, new object[] { "wc" }, new object[] { "cat" }, new object[] { "tac" }, new object[] { "nl" }, new object[] { "uniq" }, new object[] { "cut" } };
+    public static IEnumerable<object[]> Commands => new[] { new object[] { "head" }, new object[] { "tail" }, new object[] { "wc" }, new object[] { "cat" }, new object[] { "tac" }, new object[] { "nl" }, new object[] { "uniq" }, new object[] { "cut" }, new object[] { "grep" } };
 
     [Theory]
     [MemberData(nameof(Commands))]

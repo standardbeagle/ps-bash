@@ -87,6 +87,11 @@ public static class ArgParser
             if (hits.Count == 0)
                 return new ArgError(ArgErrorKind.Unrecognized, arg, '\0', argIndex);
 
+            // getopt_long: several candidates are NOT ambiguous when they all name the same option
+            // (grep --colo = color/colour, --fixed = fixed-regexp/fixed-strings).
+            if (hits.Count > 1 && SameOption(spec, hits))
+                hits.RemoveRange(1, hits.Count - 1);
+
             if (hits.Count > 1)
             {
                 var sb = new StringBuilder();
@@ -127,6 +132,16 @@ public static class ArgParser
         }
     }
 
+    private static bool SameOption(OptSpecSet spec, List<string> names)
+    {
+        if (!spec.TryGetLong(names[0], out var first)) return false;
+        for (int k = 1; k < names.Count; k++)
+        {
+            if (!spec.TryGetLong(names[k], out var o) || o.Id != first.Id || o.Kind != first.Kind) return false;
+        }
+        return true;
+    }
+
     private static ArgError? ParseShortBundle(
         ReadOnlySpan<string> argv, ref int i, string arg, OptSpecSet spec, List<ArgToken> tokens)
     {
@@ -142,6 +157,15 @@ public static class ArgParser
         for (int j = 1; j < arg.Length; j++)
         {
             char c = arg[j];
+
+            if (spec.BundleDigitsId is { } digitsId && c is >= '0' and <= '9')
+            {
+                int end = j;
+                while (end < arg.Length && arg[end] is >= '0' and <= '9') end++;
+                tokens.Add(new ArgToken(ArgTokKind.Option, argIndex, digitsId, arg.Substring(j, end - j), arg, false));
+                j = end - 1;
+                continue;
+            }
 
             if (!spec.TryGetShort(c, out var opt))
             {
