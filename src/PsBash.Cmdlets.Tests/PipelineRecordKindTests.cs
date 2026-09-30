@@ -247,6 +247,75 @@ public class PipelineRecordKindTests : IDisposable, IClassFixture<SharedPwshFixt
         Assert.Equal("c d", File.ReadAllText(prefix + "ab"));
     }
 
+    // ---- group 2: column / xargs / jq / yq / diff, GNU oracle ----------------------------
+
+    [Theory]
+    [InlineData("Invoke-BashPrintf 'b\\na' | Invoke-BashColumn '-t'", "b\na\n")]
+    [InlineData("Invoke-BashPrintf 'b\\na' | Invoke-BashXargs", "b a\n")]
+    [InlineData("Invoke-BashPrintf 'b\\na' | Invoke-BashXargs echo", "b a\n")]
+    [InlineData("Invoke-BashPrintf 'b\\na' | Invoke-BashXargs '-n1' echo", "b\na\n")]
+    [InlineData("Invoke-BashPrintf 'b\\na' | Invoke-BashXargs '-I{}' echo '{}'", "b\na\n")]
+    [InlineData("Invoke-BashPrintf '{\"a\":1}' | Invoke-BashJq '.'", "{\n  \"a\": 1\n}\n")]
+    [InlineData("Invoke-BashPrintf '{\"a\":1}' | Invoke-BashJq '-r' '.a'", "1\n")]
+    [InlineData("Invoke-BashPrintf '{\"a\":\"x\"}' | Invoke-BashJq '-j' '.a'", "x")]
+    [InlineData("Invoke-BashPrintf 'b\\na' | Invoke-BashJq '-R' '.'", "\"b\"\n\"a\"\n")]
+    [InlineData("Invoke-BashPrintf 'b\\na' | Invoke-BashJq '-Rr' '.'", "b\na\n")]
+    public void Group2_StdinRendersGnuBytes(string script, string expected)
+    {
+        Assert.Equal(expected, Render(Run(script)));
+    }
+
+    [Fact]
+    public void Group2_Diff_NoNewlineAtEndOfFile_MatchesGnu()
+    {
+        var u1 = Path.Combine(_dir, "d1"); var u2 = Path.Combine(_dir, "d2");
+        File.WriteAllText(u1, "a\nb"); File.WriteAllText(u2, "a\nc");
+        Assert.Equal(
+            "2c2\n< b\n\\ No newline at end of file\n---\n> c\n\\ No newline at end of file\n",
+            Render(Run($"Invoke-BashDiff {Q(u1)} {Q(u2)}")));
+    }
+
+    [Fact]
+    public void Group2_DiffUnified_NoNewlineAtEndOfFile_MatchesGnu()
+    {
+        var u1 = Path.Combine(_dir, "e1"); var u2 = Path.Combine(_dir, "e2");
+        File.WriteAllText(u1, "a\nb"); File.WriteAllText(u2, "a\nc");
+        // GNU `diff -u a b | tail -n +3` (the two header lines carry timestamps).
+        var body = string.Concat(Render(Run($"Invoke-BashDiff '-u' {Q(u1)} {Q(u2)}"))
+            .Split('\n').Skip(2).Select(l => l + "\n")).TrimEnd('\n') + "\n";
+        Assert.Equal(
+            "@@ -1,2 +1,2 @@\n a\n-b\n\\ No newline at end of file\n+c\n\\ No newline at end of file\n", body);
+    }
+
+    [Fact]
+    public void Group2_Diff_SameTextTerminatedVsNot_Differs()
+    {
+        // GNU: `printf 'a\nb' > x; printf 'a\nb\n' > y; diff x y` reports 2c2 (exit 1).
+        var u1 = Path.Combine(_dir, "f1"); var u2 = Path.Combine(_dir, "f2");
+        File.WriteAllText(u1, "a\nb"); File.WriteAllText(u2, "a\nb\n");
+        Assert.Equal(
+            "2c2\n< b\n\\ No newline at end of file\n---\n> b\n",
+            Render(Run($"Invoke-BashDiff {Q(u1)} {Q(u2)}")));
+    }
+
+    [Fact]
+    public void Group2_Yq_MatchesJqTerminators()
+    {
+        Assert.Equal("1\n", Render(Run("Invoke-BashPrintf 'a:\\n  b: 1\\n' | Invoke-BashYq '.a.b'")));
+        Assert.Equal("1\n", Render(Run("Invoke-BashPrintf 'a:\\n  b: 1' | Invoke-BashYq '.a.b'")));
+    }
+
+    [Fact]
+    public void Group2_Transformers_EmitTextNotLsEntry()
+    {
+        foreach (var cmd in new[] { "Invoke-BashColumn '-t'", "Invoke-BashXargs echo", "Invoke-BashJq '-R' '.'" })
+        {
+            var records = Run(LsIn(cmd));
+            Assert.NotEmpty(records);
+            Assert.All(records, r => Assert.DoesNotContain("PsBash.LsEntry", r.TypeNames));
+        }
+    }
+
     [Fact]
     public void Group1_Transformers_EmitTextNotLsEntry()
     {

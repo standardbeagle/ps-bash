@@ -176,6 +176,13 @@ line. GNU tools differ on the missing final newline (oracle: `printf 'b\na' | cm
 | `tac` glues: `ab\n` (the unterminated record is emitted first, keeping its flag) | `base64`: bytes in = bytes out (`printf 'b\na' \| base64` is `Ygph`, not `YgphCg==`); `-w0` writes no final newline; `-d` writes the decoded bytes exactly |
 | `split` writes no stdout; its LAST piece file copies the input's missing final newline (`printf 'a b\nc d' \| split -l1` leaves `xab` = `c d`) | |
 
+Group 2 audit (oracle-checked): `column -t`, `xargs` (its own stdout; the child's objects pass through
+unchanged, exactly as the child emitted them), `xan`, `yq` already terminate like GNU/jq and emit fresh
+text. `jq` is a transformer: fresh text; new `-j`/`--join-output` (no newline after each result, exact
+bytes), `-R`/`--raw-input` (each line a string; `-Rs` = the exact bytes as one string) and bundled
+short flags (`-Rr`). `diff` tracks the unterminated last line of each file: it compares unequal to the
+same text with a newline and is followed by GNU's `\ No newline at end of file` line (normal, `-u`, `-c`).
+
 `BashRuntime.RecordLines(item)` is the one record splitter for transformers (each line + whether
 it is the unterminated last line); file readers use `BashFileSystem.ReadTextLines`
 (`HasTrailingNewline`) for the same flag.

@@ -85,6 +85,8 @@ public sealed class InvokeBashJqCommand : PSCmdlet
         bool compact = C.IsPresent;
         bool sortKeys = false;
         bool slurp = false;
+        bool joinOutput = false;
+        bool rawInput = false;
         string filterExpr = ".";
         bool filterSet = false;
         var files = new List<string>();
@@ -103,11 +105,32 @@ public sealed class InvokeBashJqCommand : PSCmdlet
                 pastDoubleDash = true;
                 continue;
             }
+            // Bundled short flags (`-Rr`, `-rc`): every letter must be a supported flag.
+            if (arg.Length > 2 && arg[0] == '-' && arg[1] != '-' && IsFlagBundle(arg))
+            {
+                foreach (char f in arg.AsSpan(1))
+                {
+                    switch (f)
+                    {
+                        case 'r': rawOutput = true; break;
+                        case 'c': compact = true; break;
+                        case 'S': sortKeys = true; break;
+                        case 's': slurp = true; break;
+                        case 'j': rawOutput = true; joinOutput = true; break;
+                        case 'R': rawInput = true; break;
+                    }
+                }
+                continue;
+            }
             // Case-sensitive: -S and -s differ.
             if (arg == "-r" || arg == "--raw-output") { rawOutput = true; continue; }
             if (arg == "-c" || arg == "--compact-output") { compact = true; continue; }
             if (arg == "-S" || arg == "--sort-keys") { sortKeys = true; continue; }
             if (arg == "-s" || arg == "--slurp") { slurp = true; continue; }
+            // -j: like -r but no newline after each output (GNU jq writes the bytes exactly).
+            if (arg == "-j" || arg == "--join-output") { rawOutput = true; joinOutput = true; continue; }
+            // -R: each input LINE is a JSON string (with -s: the whole input as one string).
+            if (arg == "-R" || arg == "--raw-input") { rawInput = true; continue; }
 
             // First non-flag = filter, rest = files.
             if (!filterSet)
@@ -125,7 +148,50 @@ public sealed class InvokeBashJqCommand : PSCmdlet
         // oracle used (ConvertFrom-Json -AsHashtable). File mode parses from
         // streams so large JSON files are not also materialized as raw strings.
         var allData = new List<object?>();
-        if (files.Count > 0)
+        if (rawInput)
+        {
+            // Raw input: no JSON parse. Lines (or, slurped, one string of the exact bytes).
+            var rawLines = new List<string>();
+            bool lastUnterminated = false;
+            if (files.Count > 0)
+            {
+                foreach (var file in files)
+                {
+                    string resolved = SessionState.Path.GetUnresolvedProviderPathFromPSPath(file);
+                    if (!File.Exists(resolved))
+                    {
+                        EmitError($"jq: {file}: No such file or directory");
+                        SessionState.PSVariable.Set("global:LASTEXITCODE", 2);
+                        return;
+                    }
+                    foreach (var line in BashFileSystem.ReadTextLines(resolved))
+                    {
+                        rawLines.Add(line.Text);
+                        lastUnterminated = !line.HasTrailingNewline;
+                    }
+                }
+            }
+            else
+            {
+                foreach (var item in _pipeline)
+                    foreach (var (text, unterminated) in BashRuntime.RecordLines(item))
+                    {
+                        rawLines.Add(text);
+                        lastUnterminated = unterminated;
+                    }
+            }
+            if (slurp)
+            {
+                string all = string.Join("\n", rawLines) + (rawLines.Count > 0 && !lastUnterminated ? "\n" : "");
+                allData.Add(all);
+                slurp = false; // already one value
+            }
+            else
+            {
+                foreach (var line in rawLines) allData.Add(line);
+            }
+        }
+        else if (files.Count > 0)
         {
             foreach (var file in files)
             {
@@ -223,9 +289,17 @@ public sealed class InvokeBashJqCommand : PSCmdlet
             foreach (var result in results)
             {
                 string text = JqEngine.ToJson(result, compact, sortKeys, rawOutput);
-                WriteObject(BashRuntime.NewBashObject(text + "\n"));
+                // jq is a TRANSFORMER: fresh text carrying GNU's exact bytes.
+                WriteObject(BashRuntime.TextRecord(joinOutput ? text : text + "\n", unterminated: joinOutput));
             }
         }
+    }
+
+    private static bool IsFlagBundle(string arg)
+    {
+        foreach (char f in arg.AsSpan(1))
+            if ("rcSsjR".IndexOf(f) < 0) return false;
+        return true;
     }
 
     private void EmitError(string message)
