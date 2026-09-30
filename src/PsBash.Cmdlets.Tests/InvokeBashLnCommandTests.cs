@@ -175,6 +175,119 @@ public class InvokeBashLnCommandTests : IClassFixture<SharedPwshFixture>, IDispo
         Assert.Equal("UNRELATED", File.ReadAllText(sibling));
     }
 
+    // ───────────────────── shared ordered parser: ln as the transpiler delivers it ─────────────────────
+    // PsEmitter.OrderedArgCommands single-quotes every dash-leading word, so flags arrive in
+    // Arguments as plain strings, in order. Hard links keep these privilege-free.
+
+    private string RunLastExit(string script)
+    {
+        var pwsh = _fixture.AcquireFresh();
+        pwsh.AddScript("$ErrorActionPreference='Continue'").Invoke();
+        pwsh.Commands.Clear();
+        var result = pwsh.AddScript($"{script} *> $null; $global:LASTEXITCODE").Invoke();
+        pwsh.Commands.Clear();
+        return result[^1].ToString()!;
+    }
+
+    private string[] RunLines(string script)
+    {
+        var pwsh = _fixture.AcquireFresh();
+        var result = pwsh.AddScript(script).Invoke();
+        pwsh.Commands.Clear();
+        return result.Select(r => r.BaseObject is PSObject p ? p.ToString() : (r.ToString() ?? "")).ToArray();
+    }
+
+    [Fact]
+    public void Ln_QuotedForceVerboseBundle_OverwritesAndReports()
+    {
+        var target = Mk("qt.txt", "NEW");
+        var link = Mk("ql.txt", "OLD");
+        var lines = RunLines($"Invoke-BashLn '-fv' {Q(target)} {Q(link)}");
+        Assert.Equal("NEW", File.ReadAllText(link));
+        Assert.Contains(lines, l => l.Contains("=>"));
+    }
+
+    [Theory]
+    [InlineData("-T")]
+    [InlineData("-r")]
+    [InlineData("-sfT")]
+    [InlineData("--no-target-directory")]
+    [InlineData("--backup=numbered")]
+    public void Ln_ValidButUnsupportedOption_IsRefusedAndCreatesNoLink(string flag)
+    {
+        // REGRESSION: with no classifier the flag was taken as the link TARGET and a wrongly named
+        // link was created at exit 0.
+        var target = Mk("rt.txt", "x");
+        var link = Path.Combine(_tmpDir, "rl.txt");
+        Assert.Equal("2", RunLastExit($"Invoke-BashLn '{flag}' {Q(target)} {Q(link)}"));
+        Assert.False(File.Exists(link));
+    }
+
+    [Theory]
+    [InlineData("--bogus")]
+    [InlineData("-z")]
+    [InlineData("-sz")]
+    [InlineData("--symbolic=1")]
+    [InlineData("--s")]
+    public void Ln_UsageError_ExitsOneAndCreatesNoLink(string flag)
+    {
+        var target = Mk("ut.txt", "x");
+        var link = Path.Combine(_tmpDir, "ul.txt");
+        Assert.Equal("1", RunLastExit($"Invoke-BashLn '{flag}' {Q(target)} {Q(link)}"));
+        Assert.False(File.Exists(link));
+    }
+
+    [Fact]
+    public void Ln_DoubleDash_DashNamedTargetIsAnOperandNotAnOption()
+    {
+        Mk("-a", "dash");
+        Run($"Set-Location {Q(_tmpDir)}; Invoke-BashLn '--' '-a' 'dashlink.txt'");
+        Assert.Equal("dash", File.ReadAllText(Path.Combine(_tmpDir, "dashlink.txt")));
+    }
+
+    [Fact]
+    public void Ln_OptionAfterOperands_StillApplies()
+    {
+        var target = Mk("ot.txt", "NEW");
+        var link = Mk("ol.txt", "OLD");
+        Run($"Invoke-BashLn {Q(target)} {Q(link)} '-f'");
+        Assert.Equal("NEW", File.ReadAllText(link));
+    }
+
+    [Fact]
+    public void Ln_DirectCallDecoyI_IsClassifiedNotSwallowedByTheBinder()
+    {
+        // Pester/interactive path: bare -i would crash the binder (-InformationAction ambiguity);
+        // the decoy re-injects it so the classifier refuses it (exit 2) and nothing is created.
+        var target = Mk("dt.txt", "x");
+        var link = Path.Combine(_tmpDir, "dl.txt");
+        Assert.Equal("2", RunLastExit($"Invoke-BashLn -i {Q(target)} {Q(link)}"));
+        Assert.False(File.Exists(link));
+    }
+
+    [Fact]
+    public void Ln_DirectCallDecoyVerbose_StillWorks()
+    {
+        var target = Mk("vt.txt", "x");
+        var link = Path.Combine(_tmpDir, "vl.txt");
+        var lines = RunLines($"Invoke-BashLn -v {Q(target)} {Q(link)}");
+        Assert.True(File.Exists(link));
+        Assert.Contains(lines, l => l.Contains("=>"));
+    }
+
+    [SkippableFact]
+    public void Ln_SfnRepointsAnExistingSymlink_TheCommonIdiom()
+    {
+        // REGRESSION: `ln -sfn` (bundle containing -n) was an operand list [-sfn, a, b] before.
+        Skip.IfNot(SymlinksSupported(), "symlink creation not permitted in this environment");
+        var t1 = Mk("n1.txt", "one");
+        var t2 = Mk("n2.txt", "two");
+        var link = Path.Combine(_tmpDir, "cur");
+        Run($"Invoke-BashLn '-sfn' {Q(t1)} {Q(link)}; Invoke-BashLn '-sfn' {Q(t2)} {Q(link)}");
+        Assert.True(IsSymlink(link));
+        Assert.Equal("two", File.ReadAllText(link));
+    }
+
     private bool SymlinksSupported()
     {
         var probeTarget = Mk("__probe_target", "x");

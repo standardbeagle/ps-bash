@@ -1,5 +1,6 @@
 using System.Linq;
 using System.Management.Automation;
+using PsBash.Cmdlets.Args;
 
 namespace PsBash.Cmdlets;
 
@@ -25,9 +26,11 @@ namespace PsBash.Cmdlets;
 /// <c>'link' =&gt; 'target'\n</c> for hard links.</item>
 /// </list>
 /// <para>
-/// <b>One colliding flag</b> declared explicitly: <c>-v</c> vs
-/// <c>-Verbose</c>. <c>-s</c> / <c>-f</c> have no common-parameter
-/// collision and stay in <c>Arguments</c>.
+/// <b>Argv</b> is parsed by the shared ordered parser (<see cref="ArgParser"/>, spec
+/// <see cref="LnSpec"/>). The transpiler single-quotes every dash-leading word for ln
+/// (<c>PsEmitter.OrderedArgCommands</c>) so flags arrive in <c>Arguments</c> in order; the
+/// <c>v</c>/<c>D</c>/<c>I</c>/<c>P</c> decoy switches exist ONLY for direct calls and are
+/// re-injected first.
 /// </para>
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashLn")]
@@ -36,12 +39,63 @@ public sealed class InvokeBashLnCommand : PSCmdlet
 {
     [Parameter] public SwitchParameter v { get; set; }
 
+    /// <summary>Decoys for the valid-but-unsupported <c>-d</c> (Debug), <c>-i</c>
+    /// (InformationAction) and <c>-P</c> (ProgressAction / PipelineVariable) so a DIRECT call
+    /// (`Invoke-BashLn -i a b`) reaches the classifier instead of crashing or being swallowed by
+    /// the binder. The transpiler never binds them (it single-quotes every dash word).</summary>
+    [Parameter] public SwitchParameter D { get; set; }
+    [Parameter] public SwitchParameter I { get; set; }
+    [Parameter] public SwitchParameter P { get; set; }
+
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
+    /// <summary>
+    /// Valid GNU <c>ln</c> options ps-bash does not implement; refused loudly (exit 2). NOT
+    /// listed: <c>-n/--no-dereference</c>, which is accepted (see <see cref="LnSpec"/>). GNU 9.4
+    /// ln has no <c>-Z</c>/<c>--context</c>. (A string[] on purpose:
+    /// CommonParameterCollisionGuardTests enumerates each cmdlet's static string sets.)
+    /// </summary>
+    private static readonly string[] LnValidButUnsupported =
+    {
+        "-b", "--backup", "-d", "-F", "--directory", "-i", "--interactive",
+        "-L", "--logical", "-P", "--physical", "-r", "--relative",
+        "-S", "--suffix", "-t", "--target-directory", "-T", "--no-target-directory",
+    };
+
+    private const string OptSymbolic = "symbolic", OptForce = "force", OptVerbose = "verbose",
+        OptNoDereference = "no-dereference";
+
+    /// <summary>
+    /// ln's whole option surface, built once for the shared ordered parser.
+    /// <c>-n/--no-dereference</c> is accepted because this cmdlet ALREADY treats an existing
+    /// symlink-to-directory LINK_NAME as a plain name (it never descends into it), which is
+    /// exactly what -n asks for; `ln -sfn TARGET LINK` is the ubiquitous re-point idiom. (GNU's
+    /// default without -n dereferences such a LINK_NAME — a pre-existing divergence, not new.)
+    /// </summary>
+    private static readonly OptSpecSet LnSpec = new(
+        new[]
+        {
+            new OptSpec(OptSymbolic, 's', "symbolic"),
+            new OptSpec(OptForce, 'f', "force"),
+            new OptSpec(OptVerbose, 'v', "verbose"),
+            new OptSpec(OptNoDereference, 'n', "no-dereference"),
+        },
+        validButUnsupported: LnValidButUnsupported,
+        allowAbbrev: true,
+        gnuInfoOptions: true);
+
+    /// <summary>Pure argv scan (unit-test seam): options, operands and the first error.</summary>
+    internal static ParsedArgs ScanArgs(string[] args) => ArgParser.Parse(args, LnSpec);
+
     protected override void ProcessRecord()
     {
-        var args = Arguments ?? Array.Empty<string>();
+        // Re-inject every decoy-bound flag. The transpiler single-quotes each dash-leading word
+        // for ln (PsEmitter.OrderedArgCommands) so they arrive in Arguments in order; a DIRECT
+        // call (`Invoke-BashLn -v a b`, Pester) binds the decoys instead. Prepending is safe: a
+        // decoy can only have been bound before any `--`.
+        var args = BashRuntime.PrependDecoys(Arguments,
+            (v.IsPresent, "-v"), (D.IsPresent, "-d"), (I.IsPresent, "-i"), (P.IsPresent, "-P"));
 
         FileSystemHelpers.SetLastExitCode(this, 0);
         if (FileSystemHelpers.TryHandleVersion(this, "ln", args)) return;
@@ -55,37 +109,18 @@ public sealed class InvokeBashLnCommand : PSCmdlet
             return;
         }
 
-        bool symbolic = false;
-        bool force = false;
-        bool verbose = v.IsPresent;
-        var operands = new List<string>();
+        // Shared ordered parser: bundles in any order (-sf, -sfn, -ss), `--`, unique-prefix long
+        // options, and the unsupported/unknown classifier in ONE scan. Before it, ln had NO
+        // classifier: `ln -T a b` / `ln -sfn a b` fell through as OPERANDS, so the flag became
+        // the link target and a wrongly-named link was created at exit 0.
+        var parsed = ScanArgs(args);
+        if (FileSystemHelpers.TryWriteParseError(this, "ln", parsed)) return;
+        if (FileSystemHelpers.TryHandleInfoOptions(this, "ln", parsed)) return;
 
-        foreach (var arg in args)
-        {
-            switch (arg)
-            {
-                case "-s": symbolic = true; break;
-                case "-f": force = true; break;
-                case "-v": verbose = true; break;
-                default:
-                    // Bundled short flags: -sf, -sv, -fv, -svf, etc.
-                    if (arg.Length > 2 && arg[0] == '-'
-                        && arg.Substring(1).All(c => c == 's' || c == 'f' || c == 'v'))
-                    {
-                        foreach (var c in arg.Substring(1))
-                        {
-                            if (c == 's') symbolic = true;
-                            else if (c == 'f') force = true;
-                            else if (c == 'v') verbose = true;
-                        }
-                    }
-                    else
-                    {
-                        operands.Add(arg);
-                    }
-                    break;
-            }
-        }
+        bool symbolic = parsed.Has(OptSymbolic);
+        bool force = parsed.Has(OptForce);
+        bool verbose = parsed.Has(OptVerbose);
+        var operands = parsed.Operands();
 
         if (operands.Count < 2)
         {

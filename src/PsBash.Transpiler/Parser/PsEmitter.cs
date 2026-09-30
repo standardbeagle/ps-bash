@@ -5843,7 +5843,7 @@ public static class PsEmitter
     /// cmdlet must be prepared to receive every flag as a plain string.
     /// </summary>
     internal static readonly IReadOnlySet<string> OrderedArgCommands =
-        new HashSet<string>(StringComparer.Ordinal) { "tee", "cp", "mv", "rm", "mkdir", "rmdir" };
+        new HashSet<string>(StringComparer.Ordinal) { "tee", "cp", "mv", "rm", "mkdir", "rmdir", "ln" };
 
     /// <summary><c>Invoke-BashTee</c> -&gt; is <c>tee</c> in <see cref="OrderedArgCommands"/>?</summary>
     private static bool IsOrderedArgCmdlet(string cmdlet) =>

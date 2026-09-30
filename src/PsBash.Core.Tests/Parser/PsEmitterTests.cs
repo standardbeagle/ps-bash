@@ -782,7 +782,7 @@ public class PsEmitterTests
         // Batch 1 of the shared ordered parser. Adding a command here also means adding it to
         // CommonParameterCollisionGuardTests.EmitterForceQuoted (Cmdlets.Tests) — that map is
         // how the guard knows the emitter, not a decoy, protects the colliding letters.
-        Assert.Equal(new[] { "cp", "mkdir", "mv", "rm", "rmdir", "tee" }, PsEmitter.OrderedArgCommands.OrderBy(x => x).ToArray());
+        Assert.Equal(new[] { "cp", "ln", "mkdir", "mv", "rm", "rmdir", "tee" }, PsEmitter.OrderedArgCommands.OrderBy(x => x).ToArray());
     }
 
     [Theory]
@@ -802,6 +802,11 @@ public class PsEmitterTests
     [InlineData("mkdir -p -m 755 d", "Invoke-BashMkdir '-p' '-m' 755 d")]
     [InlineData("mkdir -- -d", "Invoke-BashMkdir '--' '-d'")]
     [InlineData("mkdir --parents d", "Invoke-BashMkdir '--parents' d")]
+    [InlineData("ln -sfn a b", "Invoke-BashLn '-sfn' a b")]
+    [InlineData("ln -s -T a b", "Invoke-BashLn '-s' '-T' a b")]
+    [InlineData("ln -- -a b", "Invoke-BashLn '--' '-a' b")]
+    [InlineData("ln -s a -f b", "Invoke-BashLn '-s' a '-f' b")]
+    [InlineData("ln -i -d -P a b", "Invoke-BashLn '-i' '-d' '-P' a b")]
     [InlineData("rmdir -pv a/b", "Invoke-BashRmdir '-pv' a/b")]
     [InlineData("rmdir -- -d", "Invoke-BashRmdir '--' '-d'")]
     [InlineData("rmdir --ignore-fail-on-non-empty d", "Invoke-BashRmdir '--ignore-fail-on-non-empty' d")]
