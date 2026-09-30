@@ -1,4 +1,5 @@
 using System.Management.Automation;
+using PsBash.Cmdlets.Args;
 
 namespace PsBash.Cmdlets;
 
@@ -38,17 +39,38 @@ public sealed class InvokeBashCommCommand : PSCmdlet
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
-    // Valid GNU comm flags not implemented by ps-bash. Single dash (-) is
-    // stdin and is not option-like; digit flags -1/-2/-3 ARE implemented.
-    private static readonly HashSet<string> CommValidButUnsupported =
-        new(StringComparer.Ordinal)
+    /// <summary>
+    /// Valid GNU comm options ps-bash does not implement, refused loudly (exit 2). (A string[] on
+    /// purpose: CommonParameterCollisionGuardTests enumerates static string sets.)
+    /// </summary>
+    private static readonly string[] CommValidButUnsupported =
+    {
+        "--check-order", "--nocheck-order",
+        "-z", "--zero-terminated",
+    };
+
+    private const string OptSup1 = "s1", OptSup2 = "s2", OptSup3 = "s3",
+        OptTotal = "total", OptDelim = "delim";
+
+    /// <summary>
+    /// comm's option surface (GNU coreutils 9.4): <c>-1 -2 -3</c> (bundle in any order, <c>-123</c>),
+    /// <c>--total</c>, <c>--output-delimiter=STR</c> (previously refused), unique long prefixes.
+    /// </summary>
+    private static readonly OptSpecSet CommSpec = new(
+        new[]
         {
-            "--check-order",
-            "--nocheck-order",
-            "--output-delimiter",
-            "-z",
-            "--zero-terminated",
-        };
+            new OptSpec(OptSup1, '1', null),
+            new OptSpec(OptSup2, '2', null),
+            new OptSpec(OptSup3, '3', null),
+            new OptSpec(OptTotal, '\0', "total"),
+            new OptSpec(OptDelim, '\0', "output-delimiter", OptKind.Value),
+        },
+        validButUnsupported: CommValidButUnsupported,
+        allowAbbrev: true,
+        gnuInfoOptions: true);
+
+    /// <summary>Pure argv scan (unit-test seam).</summary>
+    internal static ParsedArgs ScanArgs(string[] args) => ArgParser.Parse(args, CommSpec);
 
     protected override void EndProcessing()
     {
@@ -66,62 +88,30 @@ public sealed class InvokeBashCommCommand : PSCmdlet
             return;
         }
 
-        bool suppress1 = false;
-        bool suppress2 = false;
-        bool suppress3 = false;
-        bool total = false;
-        var operands = new List<string>();
-        bool pastDoubleDash = false;
+        var parsed = ScanArgs(args);
+        if (FileSystemHelpers.TryWriteParseError(this, "comm", parsed)) return;
+        if (FileSystemHelpers.TryHandleInfoOptions(this, "comm", parsed)) return;
 
-        for (int i = 0; i < args.Length; i++)
-        {
-            string arg = args[i];
-
-            if (pastDoubleDash)
-            {
-                operands.Add(arg);
-                continue;
-            }
-
-            if (arg == "--")
-            {
-                pastDoubleDash = true;
-                continue;
-            }
-
-            if (arg == "--total")
-            {
-                total = true;
-                continue;
-            }
-
-            // Match the oracle's `^-[123]+$` digit-bundle predicate.
-            if (arg.Length > 1 && arg[0] == '-' && IsDigitBundle123(arg, 1))
-            {
-                for (int k = 1; k < arg.Length; k++)
-                {
-                    switch (arg[k])
-                    {
-                        case '1': suppress1 = true; break;
-                        case '2': suppress2 = true; break;
-                        case '3': suppress3 = true; break;
-                    }
-                }
-                continue;
-            }
-
-            operands.Add(arg);
-        }
+        bool suppress1 = parsed.Has(OptSup1);
+        bool suppress2 = parsed.Has(OptSup2);
+        bool suppress3 = parsed.Has(OptSup3);
+        bool total = parsed.Has(OptTotal);
+        // GNU: an empty --output-delimiter is a NUL byte (oracle-checked, coreutils 9.4).
+        string delim = parsed.Last(OptDelim) is { } d ? (d.Value!.Length == 0 ? "\0" : d.Value) : "\t";
+        var operands = parsed.Operands();
 
         if (operands.Count < 2)
         {
-            FileSystemHelpers.WriteBashError(this, "comm: missing operand");
+            FileSystemHelpers.WriteBashError(this, operands.Count == 0
+                ? "comm: missing operand"
+                : $"comm: missing operand after '{operands[0]}'");
             return;
         }
-
-        if (FileSystemHelpers.TryWriteOperandOptionError(
-                this, "comm", operands, CommValidButUnsupported)) return;
-
+        if (operands.Count > 2)
+        {
+            FileSystemHelpers.WriteBashError(this, $"comm: extra operand '{operands[2]}'");
+            return;
+        }
         // First operand path: route through glob expansion for symmetry with
         // the wider migrated set (the oracle used GetUnresolvedProviderPathFromPSPath
         // directly; ResolveOperandPaths falls through to that for non-glob
@@ -147,8 +137,8 @@ public sealed class InvokeBashCommCommand : PSCmdlet
 
             // Column prefixes depend only on the suppress flags — constant for the
             // whole run, so build them once instead of concatenating per output line.
-            string col2Prefix = suppress1 ? "" : "\t";                       // "only in file2"
-            string col3Prefix = (suppress1 ? "" : "\t") + (suppress2 ? "" : "\t"); // "in both"
+            string col2Prefix = suppress1 ? "" : delim;                       // "only in file2"
+            string col3Prefix = (suppress1 ? "" : delim) + (suppress2 ? "" : delim); // "in both"
 
             // --total counts each category regardless of column suppression.
             long n1 = 0, n2 = 0, n3 = 0;
@@ -221,7 +211,7 @@ public sealed class InvokeBashCommCommand : PSCmdlet
             // (GNU prints all three counts regardless of -1/-2/-3 suppression).
             if (total)
             {
-                WriteObject(BashRuntime.NewBashObject($"{n1}\t{n2}\t{n3}\ttotal"));
+                WriteObject(BashRuntime.NewBashObject($"{n1}{delim}{n2}{delim}{n3}{delim}total"));
             }
         }
         catch (Exception ex)
@@ -235,17 +225,6 @@ public sealed class InvokeBashCommCommand : PSCmdlet
             file1?.Dispose();
             file2?.Dispose();
         }
-    }
-
-    private static bool IsDigitBundle123(string s, int start)
-    {
-        if (start >= s.Length) return false;
-        for (int i = start; i < s.Length; i++)
-        {
-            char c = s[i];
-            if (c != '1' && c != '2' && c != '3') return false;
-        }
-        return true;
     }
 
     private string? ResolveSingleOperand(string raw)

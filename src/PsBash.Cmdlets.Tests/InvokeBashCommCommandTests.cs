@@ -262,7 +262,7 @@ public class InvokeBashCommCommandTests : IClassFixture<SharedPwshFixture>, IDis
             "Invoke-BashComm --bogus /nonexistent-a /nonexistent-b 2>$null; $LASTEXITCODE").Invoke();
         pwsh.Commands.Clear();
         Assert.Single(result);
-        Assert.Equal(2, (int)result[0].BaseObject);
+        Assert.Equal(1, (int)result[0].BaseObject); // usage error: GNU exit 1 (shared ordered parser)
     }
 
     [Fact]

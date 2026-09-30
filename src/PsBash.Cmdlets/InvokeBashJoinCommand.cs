@@ -1,4 +1,6 @@
+using System.Linq;
 using System.Management.Automation;
+using PsBash.Cmdlets.Args;
 
 namespace PsBash.Cmdlets;
 
@@ -53,17 +55,108 @@ public sealed class InvokeBashJoinCommand : PSCmdlet
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
-    // Valid GNU join flags not implemented by ps-bash. Implemented flags
-    // (-t/-1/-2/-j/-o/-e/-a/-v/-i/--ignore-case) are NOT in this set.
-    private static readonly HashSet<string> JoinValidButUnsupported =
-        new(StringComparer.Ordinal)
+    /// <summary>
+    /// Valid GNU join options ps-bash does not implement, refused loudly (exit 2). <c>-o FORMAT</c> and
+    /// <c>-e STRING</c> used to be silently swallowed as file operands / ignored, so `join -o 0,1.2 a b`
+    /// printed the DEFAULT format. (A string[] on purpose: CommonParameterCollisionGuardTests
+    /// enumerates static string sets.)
+    /// </summary>
+    private static readonly string[] JoinValidButUnsupported =
+    {
+        "-o", "-e",
+        "--check-order", "--nocheck-order", "--header",
+        "-z", "--zero-terminated",
+    };
+
+    private const string OptDelim = "t", OptField1 = "1", OptField2 = "2", OptJoinField = "j",
+        OptA = "a", OptV = "v", OptIgnoreCase = "i";
+
+    /// <summary>
+    /// join's option surface (GNU coreutils 9.4). Implemented: -1 -2 -j -t -a -v -i/--ignore-case.
+    /// </summary>
+    private static readonly OptSpecSet JoinSpec = new(
+        new[]
         {
-            "--check-order",
-            "--nocheck-order",
-            "--header",
-            "-z",
-            "--zero-terminated",
-        };
+            new OptSpec(OptField1, '1', null, OptKind.Value),
+            new OptSpec(OptField2, '2', null, OptKind.Value),
+            new OptSpec(OptJoinField, 'j', null, OptKind.Value),
+            new OptSpec(OptDelim, 't', null, OptKind.Value),
+            new OptSpec(OptA, 'a', null, OptKind.Value),
+            new OptSpec(OptV, 'v', null, OptKind.Value),
+            new OptSpec(OptIgnoreCase, 'i', "ignore-case"),
+        },
+        validButUnsupported: JoinValidButUnsupported,
+        allowAbbrev: true,
+        gnuInfoOptions: true);
+
+    /// <summary>Pure argv scan (unit-test seam).</summary>
+    internal static ParsedArgs ScanArgs(string[] args) => ArgParser.Parse(args, JoinSpec);
+
+    internal sealed class JoinArgs
+    {
+        public ParsedArgs Parsed = null!;
+        public string Delimiter = " ";
+        public int Field1 = 1, Field2 = 1;
+        public bool IgnoreCase;
+        public HashSet<int> AFiles = new(), VFiles = new();
+        public List<string> Operands = new();
+        public string? Error;
+    }
+
+    /// <summary>
+    /// Scan + validate like GNU: a field number must be a positive integer, <c>-a</c>/<c>-v</c> take 1 or
+    /// 2, <c>-t</c> a single character (<c>\0</c> = NUL). The old scan silently ignored a bad
+    /// <c>-1 x</c> (kept field 1), took <c>-a3</c> as an operand and accepted a multi-char <c>-t</c>.
+    /// Options are applied in argv order (last <c>-1</c>/<c>-2</c>/<c>-j</c> wins).
+    /// </summary>
+    internal static JoinArgs Plan(string[] args)
+    {
+        var j = new JoinArgs { Parsed = ScanArgs(args) };
+        j.Operands = j.Parsed.Operands();
+        if (j.Parsed.HasError) return j;
+
+        foreach (var tok in j.Parsed.Tokens)
+        {
+            if (tok.Kind != ArgTokKind.Option) continue;
+            string v = tok.Value ?? string.Empty;
+            switch (tok.OptId)
+            {
+                case OptIgnoreCase: j.IgnoreCase = true; break;
+                case OptField1:
+                case OptField2:
+                case OptJoinField:
+                    if (!TryField(v, out int n)) { j.Error = $"join: invalid field number: '{v}'"; return j; }
+                    if (tok.OptId != OptField2) j.Field1 = n;
+                    if (tok.OptId != OptField1) j.Field2 = n;
+                    break;
+                case OptA:
+                case OptV:
+                    if (v is not ("1" or "2")) { j.Error = $"join: invalid field number: '{v}'"; return j; }
+                    (tok.OptId == OptA ? j.AFiles : j.VFiles).Add(v[0] - '0');
+                    break;
+                case OptDelim:
+                    if (v == "\\0") j.Delimiter = "\0";
+                    else if (v.Length > 1) { j.Error = $"join: multi-character tab '{v}'"; return j; }
+                    else j.Delimiter = v;
+                    break;
+            }
+        }
+        return j;
+    }
+
+    private static bool TryField(string s, out int n)
+    {
+        n = 0;
+        if (s.Length == 0) return false;
+        long v = 0;
+        foreach (char c in s)
+        {
+            if (c < '0' || c > '9') return false;
+            v = Math.Min(v * 10 + (c - '0'), int.MaxValue);
+        }
+        n = (int)v;
+        return n >= 1;
+    }
 
     /// <summary>-i (case-insensitive) decoy: bare -i is ambiguous with -Information*.</summary>
     [Parameter] public SwitchParameter I { get; set; }
@@ -74,9 +167,20 @@ public sealed class InvokeBashJoinCommand : PSCmdlet
     /// <summary>-v FILENUM decoy: bare -v abbreviates -Verbose.</summary>
     [Parameter] public string? V { get; set; }
 
-    protected override void EndProcessing()
+    /// <summary>Arguments with the decoy-bound flags re-injected (<c>-i</c>, <c>-a N</c>, <c>-v N</c>).</summary>
+    private string[] ArgsWithDecoys()
     {
         var args = Arguments ?? Array.Empty<string>();
+        var pre = new List<string>();
+        if (I.IsPresent) pre.Add("-i");
+        if (A is not null) { pre.Add("-a"); pre.Add(A); }
+        if (V is not null) { pre.Add("-v"); pre.Add(V); }
+        return pre.Count == 0 ? args : pre.Concat(args).ToArray();
+    }
+
+    protected override void EndProcessing()
+    {
+        var args = ArgsWithDecoys();
 
         FileSystemHelpers.SetLastExitCode(this, 0);
         if (FileSystemHelpers.TryHandleVersion(this, "join", args)) return;
@@ -90,104 +194,35 @@ public sealed class InvokeBashJoinCommand : PSCmdlet
             return;
         }
 
-        string delimiter = " ";
-        int field1 = 1;
-        int field2 = 1;
-        bool ignoreCase = I.IsPresent;     // bare -i arrives via the decoy
-        var aFiles = new HashSet<int>();   // -a FILENUM: also print that file's unpaired lines
-        var vFiles = new HashSet<int>();   // -v FILENUM: print ONLY that file's unpaired lines
-        // Bare -a/-v arrive via the decoy parameters (they abbreviate -Arguments/-Verbose).
-        if (A != null && int.TryParse(A, out var aDecoy)) aFiles.Add(aDecoy);
-        if (V != null && int.TryParse(V, out var vDecoy)) vFiles.Add(vDecoy);
-        var operands = new List<string>();
-        bool pastDoubleDash = false;
-
-        for (int i = 0; i < args.Length; i++)
+        var plan = Plan(args);
+        if (FileSystemHelpers.TryWriteParseError(this, "join", plan.Parsed)) return;
+        if (FileSystemHelpers.TryHandleInfoOptions(this, "join", plan.Parsed)) return;
+        if (plan.Error is { } planError)
         {
-            var arg = args[i];
-
-            if (pastDoubleDash)
-            {
-                operands.Add(arg);
-                continue;
-            }
-
-            if (arg == "--")
-            {
-                pastDoubleDash = true;
-                continue;
-            }
-
-            if (arg == "-t" && (i + 1) < args.Length)
-            {
-                delimiter = args[i + 1];
-                i++;
-                continue;
-            }
-
-            // Joined form: -tC (exactly one char after -t).
-            if (arg.Length == 3 && arg[0] == '-' && arg[1] == 't')
-            {
-                delimiter = arg.Substring(2, 1);
-                continue;
-            }
-
-            if (arg == "-1" && (i + 1) < args.Length)
-            {
-                if (int.TryParse(args[i + 1], out var parsed1))
-                {
-                    field1 = parsed1;
-                }
-                i++;
-                continue;
-            }
-
-            if (arg == "-2" && (i + 1) < args.Length)
-            {
-                if (int.TryParse(args[i + 1], out var parsed2))
-                {
-                    field2 = parsed2;
-                }
-                i++;
-                continue;
-            }
-
-            // -j N: join on the same field in both files.
-            if (arg == "-j" && (i + 1) < args.Length)
-            {
-                if (int.TryParse(args[i + 1], out var jf)) { field1 = jf; field2 = jf; }
-                i++;
-                continue;
-            }
-
-            // -a FILENUM / -v FILENUM (separated or joined like -a1).
-            if ((arg == "-a" || arg == "-v") && (i + 1) < args.Length && int.TryParse(args[i + 1], out var fnSep))
-            {
-                (arg == "-a" ? aFiles : vFiles).Add(fnSep);
-                i++;
-                continue;
-            }
-            if (arg.Length == 3 && arg[0] == '-' && (arg[1] == 'a' || arg[1] == 'v') && (arg[2] == '1' || arg[2] == '2'))
-            {
-                (arg[1] == 'a' ? aFiles : vFiles).Add(arg[2] - '0');
-                continue;
-            }
-
-            // -i / --ignore-case: case-insensitive key comparison.
-            if (arg == "-i" || arg == "--ignore-case") { ignoreCase = true; continue; }
-
-            operands.Add(arg);
-        }
-
-        if (operands.Count < 2)
-        {
-            FileSystemHelpers.WriteBashError(this, "join: missing operand");
+            FileSystemHelpers.WriteBashError(this, planError);
             return;
         }
 
-        if (FileSystemHelpers.TryWriteOperandOptionError(
-                this, "join", operands, JoinValidButUnsupported)) return;
+        string delimiter = plan.Delimiter;
+        int field1 = plan.Field1;
+        int field2 = plan.Field2;
+        bool ignoreCase = plan.IgnoreCase;
+        var aFiles = plan.AFiles;   // -a FILENUM: also print that file's unpaired lines
+        var vFiles = plan.VFiles;   // -v FILENUM: print ONLY that file's unpaired lines
+        var operands = plan.Operands;
 
+        if (operands.Count < 2)
+        {
+            FileSystemHelpers.WriteBashError(this, operands.Count == 0
+                ? "join: missing operand"
+                : $"join: missing operand after '{operands[0]}'");
+            return;
+        }
+        if (operands.Count > 2)
+        {
+            FileSystemHelpers.WriteBashError(this, $"join: extra operand '{operands[2]}'");
+            return;
+        }
         string path1 = SessionState.Path.GetUnresolvedProviderPathFromPSPath(operands[0]);
         string path2 = SessionState.Path.GetUnresolvedProviderPathFromPSPath(operands[1]);
 
