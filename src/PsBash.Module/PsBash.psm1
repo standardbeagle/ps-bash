@@ -1079,7 +1079,10 @@ function Get-BashLsProviderEntries {
         return
     }
 
-    Write-BashError "ls: cannot access '$Target': No such file or directory" -ExitCode 2
+    # Not found anywhere: emit an ERROR RECORD (not Write-BashError, whose Bash mode writes straight to
+    # the host and is immune to `2>/dev/null`). The binary cmdlet captures it with an inner 2>&1 and
+    # re-reports it through its own error stream, naming the operand as typed.
+    Write-Error -Message "ls: cannot access '$Target': No such file or directory" -ErrorAction Continue
 }
 
 # --- cat Command ---

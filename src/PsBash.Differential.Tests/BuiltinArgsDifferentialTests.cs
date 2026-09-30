@@ -107,4 +107,57 @@ public class BuiltinArgsDifferentialTests
     [InlineData("d=$(mktemp -d) && printf '' > \"$d/f\" && test -s \"$d/f\"; echo $?; echo x > \"$d/f\"; test -s \"$d/f\"; echo $?; test -r \"$d/f\" -a -w \"$d/f\"; echo $?")]
     [InlineData("d=$(mktemp -d) && printf '' > \"$d/a\" && test \"$d/a\" -ef \"$d/a\"; echo $?; test \"$d/a\" -nt \"$d/missing\"; echo $?; test \"$d/missing\" -ot \"$d/a\"; echo $?")]
     public Task Test_BuiltinHasNoOptions(string script) => Eq(script);
+
+    // ls on the ordered parser: option scan + last-wins conflicts. Output is names only (one per
+    // line): ps-bash prints the same names in the same order as GNU for every IMPLEMENTED option.
+    private const string LsTree =
+        "d=$(mktemp -d) && cd \"$d\" && mkdir sub && printf 'x' > a && printf 'yyyyyyyyyy' > b && printf 'zzz' > c && " +
+        "touch -t 202001010000 a && touch -t 202101010000 b && touch -t 202201010000 c; ";
+
+    private const string LsCleanup = "; cd /; rm -rf \"$d\"";
+
+    [SkippableTheory]
+    [InlineData("ls -1")]
+    [InlineData("ls -r")]
+    [InlineData("ls --reverse")]
+    [InlineData("ls --rev")]
+    [InlineData("ls -S")]
+    [InlineData("ls -t")]
+    [InlineData("ls -tS")]
+    [InlineData("ls -St")]
+    [InlineData("ls -tr")]
+    [InlineData("ls -Sr")]
+    [InlineData("ls --sort=size")]
+    [InlineData("ls --sort=s")]
+    [InlineData("ls --sort=time")]
+    [InlineData("ls -p")]
+    [InlineData("ls -F")]
+    [InlineData("ls -pF")]
+    [InlineData("ls -Fp")]
+    [InlineData("ls --classify")]
+    [InlineData("ls --classify=never")]
+    [InlineData("ls --color=never")]
+    [InlineData("ls --color=auto")]
+    [InlineData("ls --group-directories-first")]
+    [InlineData("ls --group")]
+    [InlineData("ls -d sub")]
+    [InlineData("ls --directory sub")]
+    [InlineData("ls -- a")]
+    [InlineData("ls a -r b")]
+    [InlineData("ls -1 -r -S")]
+    public Task Ls_OptionOrderAndConflicts(string cmd) => Eq(LsTree + cmd + LsCleanup);
+
+    [SkippableTheory]
+    [InlineData("ls -Y")]
+    [InlineData("ls --nope")]
+    [InlineData("ls --c")]
+    [InlineData("ls --a")]
+    [InlineData("ls --dir")]
+    [InlineData("ls --sort")]
+    [InlineData("ls --color=bogus")]
+    [InlineData("ls --classify=bogus")]
+    [InlineData("ls --sort=bogus")]
+    [InlineData("ls -- -x")]
+    [InlineData("ls nosuch")]
+    public Task Ls_UsageErrors_ExitStatus(string cmd) => Eq(LsTree + cmd + " 2>/dev/null; echo rc=$?" + LsCleanup);
 }

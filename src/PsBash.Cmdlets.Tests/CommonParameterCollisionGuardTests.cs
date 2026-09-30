@@ -89,6 +89,7 @@ public class CommonParameterCollisionGuardTests
             ["echo"] = new(CollidingLetters),
             ["printf"] = new(CollidingLetters),
             ["test"] = new(CollidingLetters),
+            ["ls"] = new(CollidingLetters),
         };
 
     [Fact]

@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Management.Automation;
 using System.Text;
+using PsBash.Cmdlets.Args;
 
 namespace PsBash.Cmdlets;
 
@@ -35,34 +36,14 @@ namespace PsBash.Cmdlets;
 /// <c>Get-LsEntryFromPsItem</c>.</item>
 /// </list>
 ///
-/// Common-parameter / own-parameter audit (Phase 1c lesson — the "no
-/// collisions" claim must be VERIFIED against a live runspace, not assumed —
-/// the original audit here was wrong and the parity tests caught it):
-/// ls's short flags are <c>-l -a -A -h -R -S -t -r -1 -p -d -F -i -s</c>.
-/// Three collide and are declared as explicit <see cref="SwitchParameter"/>s:
-/// <list type="bullet">
-/// <item><c>-a</c> / <c>-A</c> prefix-match this cmdlet's own
-/// <see cref="Arguments"/> parameter (<c>-A</c> → <c>-Arguments</c>), which
-/// would bind the next operand as the argument array. A single switch
-/// (<see cref="A"/>) binds both — PowerShell parameter names are
-/// case-insensitive — and that is behaviorally complete because
-/// <see cref="System.IO"/> directory enumeration never yields <c>.</c> /
-/// <c>..</c>, so the oracle's <c>-A</c>-excludes-dot-dirs nuance is a
-/// filesystem-path no-op.</item>
-/// <item><c>-d</c> prefix-collides with the <c>-Debug</c> common parameter
-/// (<see cref="D"/>).</item>
-/// <item><c>-p</c> prefix-collides with <c>-ProgressAction</c> /
-/// <c>-PipelineVariable</c> (<see cref="P"/>).</item>
-/// </list>
-/// An exact / explicit parameter match beats a prefix match. The remaining
-/// flags (<c>-l -h -R -S -t -r -1 -F -i -s</c>, <c>--color</c>) do not
-/// prefix-collide and stay in <see cref="Arguments"/>, parsed by
-/// <see cref="BashRuntime.ConvertFromBashArgs"/>. Bundled forms (e.g.
-/// <c>-la</c>, <c>-ad</c>) are recovered post-parse, as in the cat / wc
-/// cmdlets. <c>-1</c> / <c>-i</c> / <c>-s</c> are accepted but ignored,
-/// matching the psm1 oracle.
-///
-/// The <c>--help</c> path delegates to the psm1 <c>Show-BashHelp</c>; a
+/// Options are parsed by the shared ordered parser (<see cref="LsSpec"/>; see
+/// <c>runtime-functions.md</c> "Shared argument parser"): ls is on
+/// <c>PsEmitter.OrderedArgCommands</c>, so every dash word reaches <see cref="Arguments"/>
+/// verbatim. Last-wins conflicts (<c>-tS</c> vs <c>-St</c>, <c>-pF</c>, <c>--color</c> forms) are
+/// resolved by walking the tokens in order. A DIRECT PowerShell call still hits the binder, so the
+/// colliding <c>-a</c>/<c>-A</c>, <c>-d</c>, <c>-p</c>, <c>-i</c> keep decoy switches
+/// (<see cref="A"/>, <see cref="D"/>, <see cref="P"/>, <see cref="I"/>) that are re-injected.
+////// The <c>--help</c> path delegates to the psm1 <c>Show-BashHelp</c>; a
 /// not-found / unreadable target delegates to the psm1 <c>Write-BashError</c>
 /// (<c>-ExitCode 2</c>, matching the oracle) — both via string-bodied
 /// <c>InvokeCommand.InvokeScript</c>.
@@ -102,15 +83,109 @@ public sealed class InvokeBashLsCommand : PSCmdlet
     [Parameter]
     public SwitchParameter P { get; set; }
 
+    /// <summary>
+    /// The bash <c>-i</c> (inode) switch — a bare <c>-i</c> prefix-collides with
+    /// <c>-InformationAction</c> / <c>-InformationVariable</c> and crashes the binder. Accepted
+    /// without effect, as before.
+    /// </summary>
+    [Parameter]
+    public SwitchParameter I { get; set; }
+
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
     private static readonly string[] ExecExtensions =
         { ".exe", ".bat", ".cmd", ".ps1", ".sh", ".com" };
 
+    // ---- option table (GNU coreutils 9.4 ls; oracle-checked) --------------------------------
+
+    private const string OptAll = "all", OptAlmostAll = "almost-all", OptLong = "long", OptHuman = "human",
+        OptRecursive = "recursive", OptSortSize = "sort-size", OptSortTime = "sort-time", OptReverse = "reverse",
+        OptOnePerLine = "one", OptSlash = "slash", OptDirectory = "directory", OptClassifyShort = "classify-short",
+        OptClassify = "classify", OptColor = "color", OptInode = "inode", OptBlocks = "blocks",
+        OptGroupDirsFirst = "group-dirs-first", OptSort = "sort";
+
+    /// <summary>
+    /// GNU options ps-bash refuses (exit 2): each changes the OUTPUT (columns, quoting, sort key,
+    /// time format, owner columns...) in a way this cmdlet does not reproduce, so accepting and
+    /// ignoring them would be a silent wrong answer. <c>-w</c> / <c>-T</c> / <c>-I</c> take a value
+    /// but are refused before it is read. A <c>string[]</c> field so the collision guard sees them.
+    /// </summary>
+    private static readonly string[] LsUnsupported =
+    {
+        "-b", "-c", "-f", "-g", "-k", "-m", "-n", "-o", "-q", "-u", "-v", "-w", "-x",
+        "-B", "-C", "-D", "-G", "-H", "-I", "-L", "-N", "-Q", "-T", "-U", "-X", "-Z",
+        "--author", "--escape", "--block-size", "--ignore-backups", "--dired", "--file-type", "--format",
+        "--full-time", "--no-group", "--si", "--dereference-command-line",
+        "--dereference-command-line-symlink-to-dir", "--hide", "--hyperlink", "--indicator-style",
+        "--ignore", "--kibibytes", "--dereference", "--numeric-uid-gid", "--literal",
+        "--hide-control-chars", "--show-control-chars", "--quote-name", "--quoting-style", "--time",
+        "--time-style", "--tabsize", "--width", "--context", "--zero",
+    };
+
+    /// <summary>GNU's long_options[] order (what an ambiguous abbreviation lists), read from the oracle.</summary>
+    private static readonly string[] LsLongOptionOrder =
+    {
+        "all", "almost-all", "author", "escape", "block-size", "ignore-backups", "classify", "color", "context",
+        "directory", "dired", "dereference-command-line", "dereference-command-line-symlink-to-dir", "dereference",
+        "full-time", "file-type", "format", "group-directories-first", "human-readable", "hide-control-chars",
+        "hide", "hyperlink", "help", "inode", "ignore", "indicator-style", "kibibytes",
+        "literal", "numeric-uid-gid", "no-group", "quote-name", "quoting-style", "reverse", "recursive",
+        "size", "si", "show-control-chars", "sort", "tabsize", "time", "time-style", "width", "zero", "version",
+    };
+
+    private static readonly OptSpecSet LsSpec = new(
+        new[]
+        {
+            new OptSpec(OptAll, 'a', "all"),
+            new OptSpec(OptAlmostAll, 'A', "almost-all"),
+            new OptSpec(OptLong, 'l', null),
+            new OptSpec(OptHuman, 'h', "human-readable"),
+            new OptSpec(OptRecursive, 'R', "recursive"),
+            new OptSpec(OptSortSize, 'S', null),
+            new OptSpec(OptSortTime, 't', null),
+            new OptSpec(OptReverse, 'r', "reverse"),
+            new OptSpec(OptOnePerLine, '1', null),
+            new OptSpec(OptSlash, 'p', null),
+            new OptSpec(OptDirectory, 'd', "directory"),
+            new OptSpec(OptClassifyShort, 'F', null),
+            new OptSpec(OptClassify, '\0', "classify", OptKind.OptionalValue),
+            new OptSpec(OptColor, '\0', "color", OptKind.OptionalValue),
+            new OptSpec(OptInode, 'i', "inode"),
+            new OptSpec(OptBlocks, 's', "size"),
+            new OptSpec(OptGroupDirsFirst, '\0', "group-directories-first"),
+            new OptSpec(OptSort, '\0', "sort", OptKind.Value),
+        },
+        LsUnsupported,
+        allowAbbrev: true,
+        gnuInfoOptions: true,
+        usageExitCode: 2,
+        longOptionOrder: LsLongOptionOrder);
+
+    /// <summary>Pure argv scan (unit-test seam): options, operands and the first error.</summary>
+    internal static ParsedArgs ScanArgs(string[] args) => ArgParser.Parse(args, LsSpec);
+
+    private const string WhenValidBlock =
+        "  - 'always', 'yes', 'force'\n  - 'never', 'no', 'none'\n  - 'auto', 'tty', 'if-tty'";
+
+    private static readonly (string, int)[] WhenTable =
+    {
+        ("always", 1), ("yes", 1), ("force", 1), ("never", 0), ("no", 0), ("none", 0),
+        ("auto", 2), ("tty", 2), ("if-tty", 2),
+    };
+
+    private static readonly (string, int)[] SortTable =
+    {
+        ("none", 0), ("time", 1), ("size", 2), ("extension", 3), ("version", 4), ("width", 5),
+    };
+
     protected override void EndProcessing()
     {
-        var args = Arguments ?? Array.Empty<string>();
+        // A decoy-bound flag (direct PowerShell call: `Invoke-BashLs -a`, `-d`, `-p`, `-i`) is
+        // re-injected ahead of everything; the transpiler single-quotes every dash word for ls
+        // (PsEmitter.OrderedArgCommands) so they arrive in Arguments, in order.
+        var args = BashRuntime.PrependDecoys(Arguments, (A.IsPresent, "-a"), (D.IsPresent, "-d"),
+            (P.IsPresent, "-p"), (I.IsPresent, "-i"));
 
         FileSystemHelpers.SetLastExitCode(this, 0);
         if (FileSystemHelpers.TryHandleVersion(this, "ls", args)) return;
@@ -124,78 +199,81 @@ public sealed class InvokeBashLsCommand : PSCmdlet
             return;
         }
 
-        // Common-parameter / own-parameter audit (Phase 1c lesson — the
-        // "no collisions" claim must be VERIFIED, not assumed):
-        //   -a / -A  prefix-match this cmdlet's own -Arguments parameter,
-        //   -d       prefix-collides with the -Debug common parameter,
-        //   -p       prefix-collides with -ProgressAction / -PipelineVariable.
-        // Those three are declared as explicit SwitchParameters (A / D / P) —
-        // an exact / explicit parameter match beats a prefix match. The rest
-        // (-l -h -R -S -t -r -1 -F -i -s, --color) do not prefix-collide and
-        // stay in Arguments, parsed by ConvertFromBashArgs.
-        var flagDefs = BashRuntime.NewFlagDefs(new[]
-        {
-            "-l", "long listing",
-            "-h", "human readable sizes",
-            "-R", "recursive",
-            "-S", "sort by size",
-            "-t", "sort by time",
-            "-r", "reverse sort",
-            "-1", "one per line",
-            "-F", "classify (append */=>@| type indicators)",
-            "--color", "colorize output",
-            "-i", "show inode number",
-            "-s", "show allocated size in blocks",
-            "--group-directories-first", "list directories before files",
-        });
-        var parsed = BashRuntime.ConvertFromBashArgs(args, flagDefs);
+        // ONE scan: bundles, last-wins conflicts, abbreviations and GNU's exit statuses (usage
+        // error 2, invalid WHEN / --sort word 1). Unknown dash words used to fall through as
+        // "operands" and surface as `ls: cannot access '-x'`.
+        var parsed = ScanArgs(args);
+        if (FileSystemHelpers.TryWriteParseError(this, "ls", parsed)) return;
+        if (FileSystemHelpers.TryHandleInfoOptions(this, "ls", parsed)) return;
 
-        bool longMode = parsed.Flags["-l"];
-        bool showHidden = A.IsPresent;
-        bool humanSizes = parsed.Flags["-h"];
-        bool recursive = parsed.Flags["-R"];
-        bool sortBySize = parsed.Flags["-S"];
-        bool sortByTime = parsed.Flags["-t"];
-        bool reverseSort = parsed.Flags["-r"];
-        bool dirOnly = D.IsPresent;
-        bool classifyF = parsed.Flags["-F"];
-        bool classifyP = P.IsPresent;
-
-        // Bundled-flag recovery: a bundle like -la or -ad reaches Arguments
-        // intact (the explicit A/D/P switches only bind a bare -a/-A/-d/-p).
-        // ConvertFromBashArgs turns an unrecognized bundle char into an
-        // operand, so -a/-d/-p inside a bundle of otherwise-known ls flags
-        // would be lost. Detect that case and restore them, matching the psm1
-        // oracle's ConvertFrom-BashArgs which split bundled short flags.
-        const string knownBundleChars = "lhRStr1FisaAdp";
-        for (int bi = 0; bi < parsed.Operands.Count; bi++)
+        // Sort key, indicator and colour are "last option wins" in GNU, so walk the tokens in order.
+        int sortKey = 0; // 0 = name, 1 = time, 2 = size
+        int indicatorStyle = 0; // 0 = none, 1 = slash (-p), 2 = classify (-F)
+        bool colorOn = false;
+        foreach (var t in parsed.Tokens)
         {
-            var op = parsed.Operands[bi];
-            if (op.Length > 1 && op[0] == '-' && op[1] != '-'
-                && op.Skip(1).All(c => knownBundleChars.IndexOf(c) >= 0))
+            if (t.Kind != ArgTokKind.Option) continue;
+            switch (t.OptId)
             {
-                if (op.IndexOf('l') >= 0) longMode = true;
-                if (op.IndexOf('h') >= 0) humanSizes = true;
-                if (op.IndexOf('R') >= 0) recursive = true;
-                if (op.IndexOf('S') >= 0) sortBySize = true;
-                if (op.IndexOf('t') >= 0) sortByTime = true;
-                if (op.IndexOf('r') >= 0) reverseSort = true;
-                if (op.IndexOf('F') >= 0) classifyF = true;
-                if (op.IndexOf('a') >= 0 || op.IndexOf('A') >= 0) showHidden = true;
-                if (op.IndexOf('d') >= 0) dirOnly = true;
-                if (op.IndexOf('p') >= 0) classifyP = true;
-                // -1 / -i / -s are accepted-but-ignored (parity with the psm1
-                // oracle, which parsed but did not act on -1 / -i / -s).
-                parsed.Operands.RemoveAt(bi);
-                bi--;
+                case OptSortSize: sortKey = 2; break;
+                case OptSortTime: sortKey = 1; break;
+                case OptSlash: indicatorStyle = 1; break;
+                case OptClassifyShort: indicatorStyle = 2; break;
+                case OptClassify:
+                    if (t.Value is null) { indicatorStyle = 2; break; }
+                    if (!GnuArgMatch.TryMatch("ls", "classify", t.Value, WhenTable, WhenValidBlock, out int cw, out var cerr))
+                    {
+                        FileSystemHelpers.WriteBashError(this, cerr!);
+                        FileSystemHelpers.SetLastExitCode(this, 1);
+                        return;
+                    }
+                    indicatorStyle = cw == 1 ? 2 : 0; // auto = "only on a terminal": output here is never one
+                    break;
+                case OptColor:
+                    if (t.Value is null) { colorOn = true; break; }
+                    if (!GnuArgMatch.TryMatch("ls", "color", t.Value, WhenTable, WhenValidBlock, out int w, out var werr))
+                    {
+                        FileSystemHelpers.WriteBashError(this, werr!);
+                        FileSystemHelpers.SetLastExitCode(this, 1);
+                        return;
+                    }
+                    colorOn = w == 1;
+                    break;
+                case OptSort:
+                    if (!GnuArgMatch.TryMatch("ls", "sort", t.Value ?? "", SortTable,
+                            "  - 'none'\n  - 'time'\n  - 'size'\n  - 'extension'\n  - 'version'\n  - 'width'",
+                            out int sw, out var serr))
+                    {
+                        FileSystemHelpers.WriteBashError(this, serr!);
+                        FileSystemHelpers.SetLastExitCode(this, 1);
+                        return;
+                    }
+                    if (sw is 1 or 2) { sortKey = sw; break; }
+                    FileSystemHelpers.WriteBashError(this,
+                        $"ls: option '--sort={t.Value}' is recognized but not supported by ps-bash");
+                    FileSystemHelpers.SetLastExitCode(this, ArgError.UnsupportedExitCode);
+                    return;
             }
         }
 
-        bool classify = classifyF || classifyP || longMode;
-        bool colorize = parsed.Flags["--color"];
+        bool longMode = parsed.Has(OptLong);
+        bool showHidden = parsed.Has(OptAll) || parsed.Has(OptAlmostAll);
+        bool humanSizes = parsed.Has(OptHuman);
+        bool recursive = parsed.Has(OptRecursive);
+        bool sortBySize = sortKey == 2;
+        bool sortByTime = sortKey == 1;
+        bool reverseSort = parsed.Has(OptReverse);
+        bool dirOnly = parsed.Has(OptDirectory);
+        bool classifyF = indicatorStyle == 2;
+        bool classifyP = indicatorStyle == 1;
+        bool groupDirsFirst = parsed.Has(OptGroupDirsFirst);
+        // -1 (and -i / -s, historically accepted without effect) change nothing in this listing.
 
-        var operands = parsed.Operands.Count > 0
-            ? parsed.Operands
+        bool classify = classifyF || classifyP || longMode;
+        bool colorize = colorOn;
+        var operandList = parsed.Operands();
+        var operands = operandList.Count > 0
+            ? operandList
             : new List<string> { "." };
         var targets = ResolveGlob(operands);
 
@@ -282,7 +360,7 @@ public sealed class InvokeBashLsCommand : PSCmdlet
                 recursive,
                 dirOnly);
 
-            bool anyFromShim = false;
+            bool shimFailed = false;
             foreach (var item in shimResults)
             {
                 if (item == null)
@@ -293,21 +371,20 @@ public sealed class InvokeBashLsCommand : PSCmdlet
                 // the EAP-override-safe WriteBashError so the outer cmdlet's
                 // error stream carries it.
                 var baseObj = (item is PSObject po2) ? po2.BaseObject : item;
-                if (baseObj is ErrorRecord innerEr)
+                if (baseObj is ErrorRecord)
                 {
-                    FileSystemHelpers.WriteBashError(this, innerEr.ToString());
+                    // Not found anywhere. Name the operand as typed (GNU: `ls: cannot access
+                    // 'nosuch'`), through THIS cmdlet's error stream so `2>/dev/null` discards it.
+                    FileSystemHelpers.WriteBashError(this,
+                        $"ls: cannot access '{typedOperand ?? target}': No such file or directory");
+                    shimFailed = true;
                     continue;
                 }
-                anyFromShim = true;
                 allEntries.Add(item as PSObject ?? PSObject.AsPSObject(item));
             }
 
-            if (!anyFromShim)
-            {
-                // The shim emits its own bash-style error and sets the exit
-                // code; mirror the oracle's $hadError flag for the final code.
-                hadError = true;
-            }
+            // An empty provider container is not an error; only a not-found target is.
+            if (shimFailed) hadError = true;
         }
 
         // Sort — bash default is case-insensitive alphabetical with dirs and
@@ -336,7 +413,7 @@ public sealed class InvokeBashLsCommand : PSCmdlet
 
         // --group-directories-first: stable re-order so directories precede files
         // (LINQ OrderBy is stable, preserving the within-group sort above).
-        if (parsed.Flags["--group-directories-first"])
+        if (groupDirsFirst)
         {
             sorted = sorted.OrderByDescending(e => GetBool(e, "IsDirectory"));
         }
