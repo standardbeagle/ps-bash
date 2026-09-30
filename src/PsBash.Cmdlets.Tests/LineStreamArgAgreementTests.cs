@@ -25,15 +25,18 @@ public class LineStreamArgAgreementTests
         new[] { "--bogus" }, new[] { "-x" }, new[] { "--" }, new[] { "-" }, new[] { "f" }, new[] { "--", "-n" },
         new[] { "-n1", "-5" }, new[] { "-1", "-2" }, new[] { "5" }, new[] { "5", "f" },
         new[] { "-n", "3", "-n", "2" }, new[] { "-n", "3", "-c", "2" },
+        new[] { "-f" }, new[] { "-F" }, new[] { "--follow" }, new[] { "--fo" }, new[] { "-s", "1" }, new[] { "+2" }, new[] { "-n", "+2" },
+        new[] { "--retry" }, new[] { "--pid=1" }, new[] { "-nx" }, new[] { "-c", "+2" },
     };
 
     private static bool CmdletAccepts(string name, string[] argv) => name switch
     {
         "head" => !InvokeBashHeadCommand.Plan(argv).Declined,
+        "tail" => !InvokeBashTailCommand.Plan(argv).Declined,
         _ => throw new ArgumentException(name),
     };
 
-    public static IEnumerable<object[]> Commands => new[] { new object[] { "head" } };
+    public static IEnumerable<object[]> Commands => new[] { new object[] { "head" }, new object[] { "tail" } };
 
     [Theory]
     [MemberData(nameof(Commands))]
@@ -51,6 +54,7 @@ public class LineStreamArgAgreementTests
 
     [Theory]
     [InlineData("head")]
+    [InlineData("tail")]
     public void Core_StillCertifiesTheCommonSubset(string name)
     {
         Assert.True(LineStreamRegistry.TryCreate(name, Array.Empty<string>(), out _));

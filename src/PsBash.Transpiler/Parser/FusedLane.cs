@@ -110,6 +110,20 @@ internal static class FusedLane
     }
 
     /// <summary>
+    /// <c>--follow</c>, <c>--follow=name</c> and every getopt_long abbreviation of it
+    /// (<c>--f</c>, <c>--fo</c>, <c>--foll</c>, …): tail's shared ordered parser accepts unique
+    /// prefixes, so each one is the never-terminating mode. (Before that parser
+    /// <c>--fo</c> was a file operand and could not hang.)
+    /// </summary>
+    internal static bool IsFollowSpelling(string lit)
+    {
+        if (lit.Length < 3 || !lit.StartsWith("--", StringComparison.Ordinal)) return false;
+        int eq = lit.IndexOf('=');
+        var name = eq >= 0 ? lit.Substring(0, eq) : lit;
+        return name.Length >= 3 && "--follow".StartsWith(name, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// True when an allowlisted stage's args put it into an UNBOUNDED / never-terminating
     /// mode that the batched fused lane cannot serve (it buffers until the inner pipeline
     /// completes). The fused chain must never hang where the unfused chain streams, so any
@@ -141,7 +155,7 @@ internal static class FusedLane
             if (lit is null)
                 return true; // non-literal arg could expand to -f → be safe, fall back
 
-            if (lit == "--follow" || lit.StartsWith("--follow=", StringComparison.Ordinal))
+            if (IsFollowSpelling(lit))
                 return true;
             if (lit == "--")
                 break; // end of flags — remaining tokens are operands, not -f

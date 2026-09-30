@@ -31,7 +31,10 @@ public class LineStreamTailParityTests : LineStreamParityHarness
     [InlineData("-n5")]
     [InlineData("-5")]           // legacy shorthand
     [InlineData("5")]            // bare positional number
-    [InlineData("-n 0")]         // oracle keeps ONE line here (cap = max(count,1))
+    [InlineData("-n 0")]         // GNU: nothing (was a documented ONE-line quirk, fixed in both lanes)
+    [InlineData("-n -3")]        // GNU: a leading - means the same as none (last 3); was a negative count
+    [InlineData("-n 20")]
+    [InlineData("-n 21")]
     [InlineData("-n 100")]       // more than the input
     [InlineData("--lines=3")]
     [InlineData("--lines 3")]
@@ -97,7 +100,7 @@ public class LineStreamTailParityTests : LineStreamParityHarness
     // ── decline matrix ───────────────────────────────────────────────────────
 
     [Theory]
-    [InlineData("-c 20")]                 // byte mode: file-only in the cmdlet
+    [InlineData("-c 20")]                 // byte mode: not certified for the streaming core
     [InlineData("-c20")]
     [InlineData("-s 2")]                  // sleep interval only means anything with -f
     [InlineData("--sleep-interval 2")]
@@ -108,7 +111,6 @@ public class LineStreamTailParityTests : LineStreamParityHarness
     [InlineData("-z")]
     [InlineData("file.txt")]              // file operand → file mode (typed CatLine objects)
     [InlineData("-n x")]                  // non-numeric value
-    [InlineData("-n -3")]                 // negative count
     [InlineData("-n")]                    // dangling value flag
     public void TailCore_UncertifiedArgv_Declines(string flags)
         => Assert.False(LineStreamRegistry.TryCreate("tail", Split(flags), out _),

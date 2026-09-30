@@ -179,7 +179,7 @@ public class BashTranspilerTests
     public void LocalShellScript_InPipeline_RoutedThroughBash()
     {
         var result = BashTranspiler.Transpile("./scripts/test.sh foo | tail -30");
-        Assert.Equal("bash ./scripts/test.sh foo | Invoke-BashTail -30", result);
+        Assert.Equal("bash ./scripts/test.sh foo | Invoke-BashTail '-30'", result);
     }
 
     [Fact]

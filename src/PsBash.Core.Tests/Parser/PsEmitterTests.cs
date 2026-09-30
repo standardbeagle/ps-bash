@@ -782,7 +782,7 @@ public class PsEmitterTests
         // Batch 1 of the shared ordered parser. Adding a command here also means adding it to
         // CommonParameterCollisionGuardTests.EmitterForceQuoted (Cmdlets.Tests) — that map is
         // how the guard knows the emitter, not a decoy, protects the colliding letters.
-        Assert.Equal(new[] { "cp", "head", "ln", "mkdir", "mv", "rm", "rmdir", "tee", "touch" }, PsEmitter.OrderedArgCommands.OrderBy(x => x).ToArray());
+        Assert.Equal(new[] { "cp", "head", "ln", "mkdir", "mv", "rm", "rmdir", "tail", "tee", "touch" }, PsEmitter.OrderedArgCommands.OrderBy(x => x).ToArray());
     }
 
     [Theory]
@@ -824,6 +824,12 @@ public class PsEmitterTests
     [InlineData("head --lines=3 f", "Invoke-BashHead '--lines=3' f")]
     [InlineData("head -- -n", "Invoke-BashHead '--' '-n'")]
     [InlineData("head -v -z f", "Invoke-BashHead '-v' '-z' f")]
+    [InlineData("tail -n 5 f", "Invoke-BashTail '-n' 5 f")]
+    [InlineData("tail -n +3 f", "Invoke-BashTail '-n' +3 f")]
+    [InlineData("tail -qn2 f", "Invoke-BashTail '-qn2' f")]
+    [InlineData("tail -c 1K f", "Invoke-BashTail '-c' 1K f")]
+    [InlineData("tail --follow=name f", "Invoke-BashTail '--follow=name' f")]
+    [InlineData("tail -F -- -n", "Invoke-BashTail '-F' '--' '-n'")]
     public void Transpile_OrderedArgCommand_QuotesEveryDashLiteral(string bash, string expected)
     {
         Assert.Equal(expected, PsEmitter.Transpile(bash));
@@ -3369,7 +3375,7 @@ public class PsEmitterTests
     public void Transpile_TailWithInputProcessSub_RoutesToPipelineObjectPath()
     {
         var result = PsEmitter.Transpile("tail -n 1 <(seq 1 10)");
-        Assert.Equal("Invoke-BashTail -n 1 (Invoke-ProcessSubPipeline { Invoke-BashSeq 1 10 })", result);
+        Assert.Equal("Invoke-BashTail '-n' 1 (Invoke-ProcessSubPipeline { Invoke-BashSeq 1 10 })", result);
     }
 
     [Fact]

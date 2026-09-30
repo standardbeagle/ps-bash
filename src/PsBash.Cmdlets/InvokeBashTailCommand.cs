@@ -1,6 +1,8 @@
+using System.Linq;
 using System.Management.Automation;
 using System.Text;
 using System.Threading;
+using PsBash.Cmdlets.Args;
 
 namespace PsBash.Cmdlets;
 
@@ -65,21 +67,185 @@ public sealed class InvokeBashTailCommand : PSCmdlet
     private readonly List<PSObject> _pipeline = new();
 
     /// <summary>
-    /// Valid GNU <c>tail</c> options ps-bash does not implement. An unknown
-    /// option-looking token falls through the scan into the operand (file) list;
-    /// it is classified via <see cref="FileSystemHelpers.TryWriteOperandOptionError"/>
-    /// (specific "not supported" if listed, else bash-parity "unrecognized
-    /// option") instead of being reported as a missing file.
+    /// Valid GNU <c>tail</c> options ps-bash does not implement, refused loudly (exit 2) by the
+    /// shared parser. -q/--quiet/--silent are accepted (no-op); --lines/--bytes alias -n/-c.
+    /// -v/--verbose (ps-bash tail emits no "==> name &lt;==" headers), -z, and the follow-by-name
+    /// family (-F, --retry, --pid, --max-unchanged-stats) are refused. (A string[] on purpose:
+    /// CommonParameterCollisionGuardTests enumerates static string sets.)
     /// </summary>
-    private static readonly HashSet<string> ValidButUnsupported = new(StringComparer.Ordinal)
+    private static readonly string[] TailValidButUnsupported =
     {
-        // -q/--quiet/--silent accepted (no-op); --lines parsed (alias of -n).
-        // -v/--verbose unsupported (ps-bash tail emits no "==> name <==" headers).
         "-v", "-z", "-F",
         "--verbose", "--zero-terminated",
         "--retry", "--max-unchanged-stats", "--pid",
-        "--follow-retry",
     };
+
+    private const string OptLines = "lines", OptBytes = "bytes", OptQuiet = "quiet", OptNum = "num",
+        OptFollow = "follow", OptSleep = "sleep";
+
+    /// <summary>
+    /// tail's option surface (GNU coreutils 9.4: -c -f -F -n -q -s -v -z + long forms; -NUM
+    /// obsolete shorthand). <c>--follow</c> takes an OPTIONAL attached value (<c>name</c> /
+    /// <c>descriptor</c>), which ps-bash treats alike (it follows the resolved path).
+    /// </summary>
+    private static readonly OptSpecSet TailSpec = new(
+        new[]
+        {
+            new OptSpec(OptBytes, 'c', "bytes", OptKind.Value),
+            new OptSpec(OptLines, 'n', "lines", OptKind.Value),
+            new OptSpec(OptFollow, 'f', null),                            // -f takes no value in a bundle
+            new OptSpec(OptFollow, '\0', "follow", OptKind.OptionalValue), // --follow[=name|descriptor]
+            new OptSpec(OptQuiet, 'q', "quiet"),
+            new OptSpec(OptQuiet, '\0', "silent"),
+            new OptSpec(OptSleep, 's', "sleep-interval", OptKind.Value),
+        },
+        validButUnsupported: TailValidButUnsupported,
+        allowAbbrev: true,
+        numericShorthandId: OptNum,
+        gnuInfoOptions: true);
+
+    /// <summary>Pure argv scan (unit-test seam): options, operands and the first error.</summary>
+    internal static ParsedArgs ScanArgs(string[] args) => ArgParser.Parse(args, TailSpec);
+
+    /// <summary>The resolved meaning of a tail argv (shared by the cmdlet and the fused core).</summary>
+    internal sealed class TailArgs
+    {
+        public ParsedArgs Parsed = null!;
+        /// <summary>Lines to print (magnitude; a leading <c>-</c> means the same as none).</summary>
+        public int Count = 10;
+        /// <summary>GNU <c>-n +N</c>: print from line N onward.</summary>
+        public bool FromLine;
+        public int ByteCount;
+        /// <summary>GNU <c>-c +N</c>: print from byte N onward.</summary>
+        public bool BytesFromStart;
+        /// <summary>True when the LAST of -c / -n on the line was -c (GNU: last one wins).</summary>
+        public bool BytesMode;
+        public bool Follow;
+        public double SleepInterval = 1.0;
+        public List<string> Operands = new();
+        /// <summary>A usage error the scan itself cannot see (bad NUM, bad -s, bad --follow value); exit 1.</summary>
+        public string? Error;
+
+        /// <summary>True when nothing further should execute: scan error, value error, --help/--version.</summary>
+        public bool Declined =>
+            Parsed.HasError || Error is not null
+            || Parsed.Has(OptSpecSet.HelpId) || Parsed.Has(OptSpecSet.VersionId);
+    }
+
+    /// <summary>
+    /// Scan + resolve. GNU rules kept: last -c/-n wins; NUM takes a sign (<c>+</c> = from the
+    /// start) and a multiplier suffix (<see cref="GnuNumber"/>), an invalid one is an error; the
+    /// obsolete <c>-NUM</c> is only valid as the FIRST argument; the obsolete <c>+NUM</c> first
+    /// argument (<c>tail +2</c>) means <c>-n +2</c>. The legacy ps-bash extension — a bare leading
+    /// positional number is the line count (<c>tail 5</c>, Pester-pinned) — is preserved.
+    /// </summary>
+    internal static TailArgs Plan(string[] args)
+    {
+        var t = new TailArgs { Parsed = ScanArgs(args) };
+        t.Operands = t.Parsed.Operands();
+        if (t.Parsed.HasError) return t;
+
+        foreach (var tok in t.Parsed.Tokens)
+        {
+            if (tok.Kind != ArgTokKind.Option) continue;
+            switch (tok.OptId)
+            {
+                // GNU: the obsolete -NUM is only valid as the FIRST argument and not combined with
+                // any other option (`tail -5 -n1`, `tail -n1 -5` are both "invalid context").
+                case OptNum when tok.ArgIndex != 0 || t.Parsed.Tokens.Any(x => x.Kind == ArgTokKind.Option && x.OptId != OptNum):
+                    t.Error = $"tail: option used in invalid context -- {tok.Value![0]}";
+                    return t;
+                case OptNum:
+                case OptLines:
+                    if (!GnuNumber.TryParse(tok.Value!, out int lines, out char lsign))
+                    {
+                        t.Error = $"tail: invalid number of lines: '{tok.Value}'";
+                        return t;
+                    }
+                    t.Count = lines;
+                    t.FromLine = lsign == '+';
+                    t.BytesMode = false;
+                    break;
+                case OptBytes:
+                    if (!GnuNumber.TryParse(tok.Value!, out int bytes, out char bsign))
+                    {
+                        t.Error = $"tail: invalid number of bytes: '{tok.Value}'";
+                        return t;
+                    }
+                    t.ByteCount = bytes;
+                    t.BytesFromStart = bsign == '+';
+                    t.BytesMode = true;
+                    break;
+                case OptFollow:
+                    if (tok.Value is { } how && !IsFollowHow(how))
+                    {
+                        t.Error = $"tail: invalid argument '{how}' for '--follow'\n"
+                                  + "Valid arguments are:\n  - 'descriptor'\n  - 'name'";
+                        return t;
+                    }
+                    t.Follow = true;
+                    break;
+                case OptSleep:
+                    if (!double.TryParse(tok.Value, System.Globalization.NumberStyles.Float,
+                            System.Globalization.CultureInfo.InvariantCulture, out double secs) || secs < 0)
+                    {
+                        t.Error = $"tail: invalid number of seconds: '{tok.Value}'";
+                        return t;
+                    }
+                    t.SleepInterval = secs;
+                    break;
+            }
+        }
+
+        // Legacy operand forms, on the FIRST operand only and never after `--`:
+        //   tail +2  -> GNU obsolete -n +2 (only as the very first argument)
+        //   tail 5   -> ps-bash extension: line count 5 (Pester-pinned)
+        foreach (var tok in t.Parsed.Tokens)
+        {
+            if (tok.Kind != ArgTokKind.Operand) continue;
+            if (!tok.AfterDoubleDash)
+            {
+                if (tok.ArgIndex == 0 && tok.Raw.Length > 1 && tok.Raw[0] == '+' && IsAllDigits(tok.Raw.AsSpan(1)))
+                {
+                    t.Count = BashRuntime.ParseCountClamped(tok.Raw.AsSpan(1));
+                    t.FromLine = true;
+                    t.BytesMode = false;
+                    t.Operands.RemoveAt(0);
+                }
+                else if (IsAllDigits(tok.Raw))
+                {
+                    t.Count = BashRuntime.ParseCountClamped(tok.Raw.AsSpan());
+                    t.Operands.RemoveAt(0);
+                }
+            }
+            break; // only the first operand qualifies
+        }
+        return t;
+    }
+
+    /// <summary>GNU argmatch: any non-empty prefix of <c>name</c> or <c>descriptor</c>.</summary>
+    private static bool IsFollowHow(string v) =>
+        v.Length > 0 && ("name".StartsWith(v, StringComparison.Ordinal)
+                         || "descriptor".StartsWith(v, StringComparison.Ordinal));
+
+    private static bool IsAllDigits(ReadOnlySpan<char> s)
+    {
+        if (s.Length == 0) return false;
+        foreach (char c in s)
+        {
+            if (c < '0' || c > '9') return false;
+        }
+        return true;
+    }
+
+    /// <summary>Arguments with the decoy-bound flags re-injected (bare -v binds -Verbose; -c binds
+    /// the value decoy C). A value decoy becomes the two elements <c>-c VALUE</c>.</summary>
+    private string[] ArgsWithDecoys()
+    {
+        var args = BashRuntime.PrependDecoys(Arguments, (V.IsPresent, "-v"));
+        if (C is not null) args = new[] { "-c", C }.Concat(args).ToArray();
+        return args;
+    }
 
     protected override void ProcessRecord()
     {
@@ -91,8 +257,8 @@ public sealed class InvokeBashTailCommand : PSCmdlet
 
     protected override void EndProcessing()
     {
-        // Re-inject the decoy-bound -v so the classifier fires exit 2.
-        var args = BashRuntime.PrependDecoys(Arguments, (V.IsPresent, "-v"));
+        // Re-inject the decoy-bound flags (-v, -c VALUE) so the shared parser sees them.
+        var args = ArgsWithDecoys();
 
         FileSystemHelpers.SetLastExitCode(this, 0);
         if (FileSystemHelpers.TryHandleVersion(this, "tail", args)) return;
@@ -106,231 +272,39 @@ public sealed class InvokeBashTailCommand : PSCmdlet
             return;
         }
 
-        int count = 10;
-        int? byteCount = null;
-        bool fromLine = false;
-        bool followFile = false;
-        double sleepInterval = 1.0;
-        var operands = new List<string>();
-        bool pastDoubleDash = false;
-
-        // Honour the explicit -C value parameter (collision fix for -c
-        // vs -Confirm). Accepts the same +N / N forms the inline scan
-        // below handles.
-        if (!string.IsNullOrEmpty(C))
+        // Shared ordered parser: bundles (-qn2), attached values (-n5, --lines=5, --bytes=5),
+        // abbreviations (--li=1), `--`, and the unsupported/unknown classifier in ONE scan.
+        var plan = Plan(args);
+        if (FileSystemHelpers.TryWriteParseError(this, "tail", plan.Parsed)) return;
+        if (FileSystemHelpers.TryHandleInfoOptions(this, "tail", plan.Parsed)) return;
+        if (plan.Error is { } planError)
         {
-            var cVal = C!;
-            if (cVal.StartsWith("+", StringComparison.Ordinal)
-                && int.TryParse(cVal.Substring(1), out int cp))
-            {
-                byteCount = cp;
-                fromLine = true;
-            }
-            else if (int.TryParse(cVal, out int cn))
-            {
-                byteCount = cn;
-            }
-        }
-
-        int i = 0;
-        while (i < args.Length)
-        {
-            var arg = args[i];
-
-            if (pastDoubleDash)
-            {
-                operands.Add(arg);
-                i++;
-                continue;
-            }
-
-            if (arg == "--")
-            {
-                pastDoubleDash = true;
-                i++;
-                continue;
-            }
-
-            if (arg == "-f" || arg == "--follow")
-            {
-                followFile = true;
-                i++;
-                continue;
-            }
-
-            // --lines=N / --lines N / --lines +N  (alias of -n, incl. the +N
-            // "from line N onward" form).
-            if (arg.StartsWith("--lines=", StringComparison.Ordinal))
-            {
-                var val = arg.Substring("--lines=".Length);
-                if (val.StartsWith("+", StringComparison.Ordinal)
-                    && int.TryParse(val.Substring(1), out int lp)) { count = lp; fromLine = true; }
-                else if (int.TryParse(val, out int ln)) { count = ln; }
-                i++;
-                continue;
-            }
-            if (arg == "--lines")
-            {
-                i++;
-                if (i < args.Length)
-                {
-                    var val = args[i];
-                    if (val.StartsWith("+", StringComparison.Ordinal)
-                        && int.TryParse(val.Substring(1), out int lp)) { count = lp; fromLine = true; }
-                    else if (int.TryParse(val, out int ln)) { count = ln; }
-                }
-                i++;
-                continue;
-            }
-
-            // -q / --quiet / --silent: never print per-file headers — already the
-            // ps-bash behavior, so accept the flag as a no-op rather than refuse it.
-            if (arg == "-q" || arg == "--quiet" || arg == "--silent")
-            {
-                i++;
-                continue;
-            }
-
-            if (arg == "--sleep-interval")
-            {
-                i++;
-                if (i < args.Length && double.TryParse(args[i], out double s))
-                {
-                    sleepInterval = s;
-                }
-                i++;
-                continue;
-            }
-
-            if (arg.Length > 2 && arg.StartsWith("-s", StringComparison.Ordinal)
-                && double.TryParse(arg.Substring(2), out double sj))
-            {
-                sleepInterval = sj;
-                i++;
-                continue;
-            }
-
-            if (arg == "-s")
-            {
-                i++;
-                if (i < args.Length && double.TryParse(args[i], out double s2))
-                {
-                    sleepInterval = s2;
-                }
-                i++;
-                continue;
-            }
-
-            // -c +N (from byte N onward).
-            if (arg.Length > 3 && arg.StartsWith("-c+", StringComparison.Ordinal)
-                && IsAllDigits(arg.Substring(3)))
-            {
-                byteCount = BashRuntime.ParseCountClamped(arg.AsSpan(3));
-                fromLine = true;
-                i++;
-                continue;
-            }
-
-            if (arg.Length > 2 && arg.StartsWith("-c", StringComparison.Ordinal)
-                && IsAllDigits(arg.Substring(2)))
-            {
-                byteCount = BashRuntime.ParseCountClamped(arg.AsSpan(2));
-                i++;
-                continue;
-            }
-
-            if (arg == "-c" || arg == "--bytes")
-            {
-                i++;
-                if (i < args.Length)
-                {
-                    var val = args[i];
-                    if (val.StartsWith("+", StringComparison.Ordinal)
-                        && int.TryParse(val.Substring(1), out int cp))
-                    {
-                        byteCount = cp;
-                        fromLine = true;
-                    }
-                    else if (int.TryParse(val, out int c))
-                    {
-                        byteCount = c;
-                    }
-                }
-                i++;
-                continue;
-            }
-
-            // -n +N (from line N onward).
-            if (arg.Length > 3 && arg.StartsWith("-n+", StringComparison.Ordinal)
-                && IsAllDigits(arg.Substring(3)))
-            {
-                count = BashRuntime.ParseCountClamped(arg.AsSpan(3));
-                fromLine = true;
-                i++;
-                continue;
-            }
-
-            if (arg.Length > 2 && arg.StartsWith("-n", StringComparison.Ordinal)
-                && IsAllDigits(arg.Substring(2)))
-            {
-                count = BashRuntime.ParseCountClamped(arg.AsSpan(2));
-                i++;
-                continue;
-            }
-
-            if (arg == "-n")
-            {
-                i++;
-                if (i < args.Length)
-                {
-                    var val = args[i];
-                    if (val.StartsWith("+", StringComparison.Ordinal)
-                        && int.TryParse(val.Substring(1), out int np))
-                    {
-                        count = np;
-                        fromLine = true;
-                    }
-                    else if (int.TryParse(val, out int n))
-                    {
-                        count = n;
-                    }
-                }
-                i++;
-                continue;
-            }
-
-            // Legacy -N shorthand (e.g. tail -5).
-            if (arg.Length > 1 && arg[0] == '-' && IsAllDigits(arg.Substring(1)))
-            {
-                count = BashRuntime.ParseCountClamped(arg.AsSpan(1));
-                i++;
-                continue;
-            }
-
-            // Bare leading positional number (e.g. tail 5).
-            if (operands.Count == 0 && arg.Length > 0 && IsAllDigits(arg))
-            {
-                count = BashRuntime.ParseCountClamped(arg.AsSpan());
-                i++;
-                continue;
-            }
-
-            operands.Add(arg);
-            i++;
-        }
-
-        // An option-looking operand is an unknown flag that fell through the
-        // scan, not a file — classify it instead of reporting a missing file.
-        if (FileSystemHelpers.TryWriteOperandOptionError(this, "tail", operands, ValidButUnsupported))
-        {
+            FileSystemHelpers.WriteBashError(this, planError); // exit 1, GNU's usage status
             return;
         }
+
+        int count = plan.Count;
+        int? byteCount = plan.BytesMode ? plan.ByteCount : null;
+        bool fromLine = plan.FromLine;
+        bool bytesFromStart = plan.BytesFromStart;
+        bool followFile = plan.Follow;
+        double sleepInterval = plan.SleepInterval;
+        var operands = plan.Operands;
 
         // Pipeline mode
         if (operands.Count == 0 && _pipeline.Count > 0)
         {
-            if (fromLine)
+            // -c on a pipe (the pipeline branch used to run BEFORE any byte handling, so `-c` was
+            // silently ignored and the last N LINES came out). The bytes are the items joined by
+            // '\n' plus the terminator GNU sees on stdin (omitted when the final record says it
+            // had none, e.g. `printf x`).
+            if (byteCount != null)
             {
+                EmitPipelineBytes(byteCount.Value, bytesFromStart);
+                return;
+            }
+
+            if (fromLine)            {
                 int skip = count - 1;
                 int idx = 0;
                 foreach (var item in _pipeline)
@@ -378,6 +352,7 @@ public sealed class InvokeBashTailCommand : PSCmdlet
                     }
                 }
 
+                if (count == 0) bufLen = 0; // GNU: 	ail -n 0 prints nothing (the ring buffer is sized max(count, 1))
                 int start = bufLen < cap ? 0 : pos;
                 for (int k = 0; k < bufLen; k++)
                 {
@@ -399,7 +374,7 @@ public sealed class InvokeBashTailCommand : PSCmdlet
         // -c bytes mode
         if (byteCount != null)
         {
-            EmitFileBytes(firstFile, byteCount.Value, fromLine, "tail");
+            EmitFileBytes(firstFile, byteCount.Value, bytesFromStart, "tail");
             return;
         }
 
@@ -452,6 +427,7 @@ public sealed class InvokeBashTailCommand : PSCmdlet
                         total++;
                     }
 
+                    if (count == 0) bufLen = 0; // GNU: 	ail -n 0 prints nothing
                     int start = bufLen < cap ? 0 : pos;
                     int lineNumOffset = total - bufLen;
                     for (int k = 0; k < bufLen; k++)
@@ -571,14 +547,41 @@ public sealed class InvokeBashTailCommand : PSCmdlet
         return (lastNl + 1, lines);
     }
 
+    /// <summary>
+    /// <c>tail -c N</c> / <c>-c +N</c> over pipeline input: slice the UTF-8 bytes of the joined
+    /// records and emit the surviving text one line per object, like the file-mode byte path.
+    /// </summary>
+    private void EmitPipelineBytes(int byteCount, bool fromByte)
+    {
+        var sb = new StringBuilder();
+        for (int k = 0; k < _pipeline.Count; k++)
+        {
+            sb.Append(BashRuntime.GetBashText(_pipeline[k]));
+            bool last = k == _pipeline.Count - 1;
+            bool noNewline = last && _pipeline[k].Properties["NoTrailingNewline"]?.Value is true;
+            if (!noNewline) sb.Append('\n');
+        }
+        byte[] all = Encoding.UTF8.GetBytes(sb.ToString());
+        long safeCount = Math.Max(byteCount, 0);
+        long start = fromByte
+            ? Math.Min(Math.Max(safeCount - 1, 0), all.Length)
+            : Math.Max(0, all.Length - safeCount);
+        string text = Encoding.UTF8.GetString(all, (int)start, (int)(all.Length - start));
+        if (text.Length == 0) return;
+        var lines = text.Split('\n');
+        int n = text.EndsWith('\n') ? lines.Length - 1 : lines.Length;
+        for (int k = 0; k < n; k++) WriteObject(lines[k]);
+    }
+
     private void EmitFileBytes(string path, int byteCount, bool fromByte, string command)
     {
         try
         {
             using var fs = BashFileSystem.OpenRead(path);
             long safeCount = Math.Max(byteCount, 0);
+            // `-c +N` starts AT byte N (1-based): skip N-1. (The old code skipped N.)
             long start = fromByte
-                ? Math.Min(safeCount, fs.Length)
+                ? Math.Min(Math.Max(safeCount - 1, 0), fs.Length)
                 : Math.Max(0, fs.Length - safeCount);
             fs.Seek(start, SeekOrigin.Begin);
 
@@ -636,6 +639,7 @@ public sealed class InvokeBashTailCommand : PSCmdlet
                 if (bufLen < cap) bufLen++;
             }
 
+            if (count == 0) bufLen = 0; // GNU: 	ail -n 0 -f starts with nothing
             int start = bufLen < cap ? 0 : pos;
             for (int k = 0; k < bufLen; k++)
             {
@@ -670,16 +674,6 @@ public sealed class InvokeBashTailCommand : PSCmdlet
         obj.Properties.Add(new PSNoteProperty(
             "BashText", BashRuntime.NormalizeBashText(content)));
         return obj;
-    }
-
-    private static bool IsAllDigits(string s)
-    {
-        if (s.Length == 0) return false;
-        foreach (char c in s)
-        {
-            if (!char.IsDigit(c)) return false;
-        }
-        return true;
     }
 
     /// <summary>
