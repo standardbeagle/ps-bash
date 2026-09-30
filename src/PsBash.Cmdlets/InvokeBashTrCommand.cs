@@ -23,8 +23,8 @@ namespace PsBash.Cmdlets;
 /// <item>POSIX character classes <c>[:alpha:] [:digit:] [:alnum:] [:upper:]
 /// [:lower:] [:space:] [:punct:]</c> in both SETs.</item>
 /// <item>Ranges <c>a-z</c> in both SETs.</item>
-/// <item>C-style escape sequences (<c>\n</c>, <c>\t</c>, <c>\r</c>, etc.) in
-/// both SETs via <see cref="BashRuntime.ExpandEscapeSequences"/>.</item>
+/// <item>C-style escape sequences (<c>\n</c>, <c>\NNN</c>; an unknown escape drops its
+/// backslash) in both SETs via <see cref="BashEscapes.ExpandTrSet"/>.</item>
 /// </list>
 ///
 /// Two PowerShell common-parameter prefix collisions, both resolved by
@@ -166,10 +166,18 @@ public sealed class InvokeBashTrCommand : PSCmdlet
             _operands.Add(arg);
         }
 
-        // Expand C-style escape sequences in operands before class expansion.
-        for (int oi = 0; oi < _operands.Count; oi++)
+        // GNU warns (stderr, exit unchanged) once per SET ending in a lone backslash. Expanding each
+        // operand here also surfaces the warning before any output, as GNU does.
+        for (int oi = 0; oi < _operands.Count && oi < 2; oi++)
         {
-            _operands[oi] = BashEscapes.Expand(_operands[oi], EscapeDialect.Tr);
+            bool trailing;
+            try { BashEscapes.ExpandTrSet(_operands[oi], out trailing); }
+            catch (TrSetException) { continue; } // BuildTables reports a reverse range
+            if (trailing)
+            {
+                FileSystemHelpers.WriteBashError(this, "tr: warning: an unescaped backslash at end of string is not portable");
+                FileSystemHelpers.SetLastExitCode(this, 0);
+            }
         }
 
         BuildTables();
@@ -187,14 +195,23 @@ public sealed class InvokeBashTrCommand : PSCmdlet
         // A reversed range (`a-A`) makes ExpandClass throw; GNU tr rejects it with
         // exit 1 instead of silently expanding to nothing. Defer the message to the
         // EndProcessing emit and suppress output.
-        try { BuildTablesCore(); }
-        catch (TrRangeError ex) { _rangeErrorMsg = ex.Message; _suppress = true; }
+        try
+        {
+            BuildTablesCore();
+            _touchesNewline = TrStage.NewlineIsModified(
+                _deleteMode, _complementMode, _squeezeMode, _operands.Count,
+                _membershipSet, _translateMap, _translateDrop, _squeezeSet2);
+        }
+        catch (TrSetException ex) { _rangeErrorMsg = ex.Message; _suppress = true; }
     }
 
-    private sealed class TrRangeError : Exception
-    {
-        public TrRangeError(string message) : base(message) { }
-    }
+    // True when the tables touch '\n': the whole byte stream (record terminators included) is
+    // buffered and transformed once at the end. See ProcessRecord.
+    private bool _touchesNewline;
+    private readonly StringBuilder _stream = new();
+
+    /// <summary>One expanded SET operand (escapes, classes, ranges); see <see cref="BashEscapes.ExpandTrSet"/>.</summary>
+    private static string ExpandClass(string spec) => BashEscapes.ExpandTrSet(spec, out _);
 
     private void BuildTablesCore()
     {
@@ -268,35 +285,42 @@ public sealed class InvokeBashTrCommand : PSCmdlet
         ParseOnce();
         if (_suppress) return;
 
-        // `tr` is a BYTE-STREAM filter: the newline is an ordinary character it
-        // can translate or delete, not a record boundary to preserve. Transform
-        // each record's text WHOLE — including its trailing '\n' — and emit it as
-        // ONE object.
-        //
-        // The previous code split each record on '\n' and emitted one object per
-        // piece, which was wrong twice over:
-        //   * a record's BashText carries its trailing '\n', so "a\n" split into
-        //     ["a", ""] and tr ADDED a line — `printf "a\nb\n" | tr x y | wc -l`
-        //     answered 3 where bash says 2;
-        //   * the '\n' never reached TransformLine, so it could not be translated
-        //     at all — `tr "\n" ","` and `tr -d "\n"` were silent no-ops.
-        // Both are oracle-verified. Emitting the record whole fixes both and keeps
-        // the streaming (non-buffering) behavior.
-        //
-        // Known limitation, unchanged from before: `-s` squeezes only WITHIN a
-        // record, so a run of the squeezed character spanning a record boundary is
-        // not collapsed.
-        //
-        // REMAINING GAP (pre-existing, deliberately not papered over here):
-        // sources disagree about whether a record's BashText carries its trailing
-        // '\n' — `printf`/`cat` include it, `seq` does not — and the host appends
-        // one when it is absent. So `seq 1 3 | tr -d "\n"` still cannot see a
-        // newline to delete. Synthesizing the separator inside tr was tried and
-        // makes it WORSE (the host then adds its own newline on top, so
-        // `seq 1 3 | tr "\n" " "` produced "1\n 2\n 3"). The real fix belongs at
-        // the source/host contract, not in this cmdlet.
+        // `tr` is a BYTE-STREAM filter: the newline is an ordinary character it can translate or
+        // delete, not a record boundary to preserve. The record contract (BashRuntime.NewBashObject /
+        // SdkWorker.GetOutputText): a normal record is a line WITHOUT its terminator, which the
+        // serializer appends; a record marked NoTrailingNewline (printf, echo -n) carries its exact
+        // bytes, embedded newlines included. So this record's byte-stream contribution is
+        // BashText + "\n" for a normal record and BashText verbatim for a marked one — which is what
+        // makes `seq 1 3 | tr -d '\n'` (seq emits bare lines) "123" exactly like `printf '1\n2\n3\n'`.
         string text = BashRuntime.GetBashText(InputObject);
-        WriteObject(BashRuntime.NewBashObject(TransformLine(text)));
+        bool exact = InputObject.Properties["NoTrailingNewline"]?.Value is true;
+        string chunk = exact ? text : text + "\n";
+
+        if (_touchesNewline)
+        {
+            // The answer for a newline-touching table is only right on the whole stream (a squeeze
+            // or delete runs across record boundaries), and one exact-bytes record is also the only
+            // shape a `$(...)` capture joins correctly. Buffer it; EndProcessing transforms + emits.
+            _stream.Append(chunk);
+            return;
+        }
+
+        EmitStream(TransformLine(chunk));
+    }
+
+    /// <summary>
+    /// Writes transformed stream bytes. Bytes ending in a terminator go out as an ordinary record
+    /// (the serializer re-adds that <c>\n</c>; embedded newlines stay inside the record, as before);
+    /// bytes without one (terminator deleted or translated, or input that never had one) go out as
+    /// exact bytes.
+    /// </summary>
+    private void EmitStream(string bytes)
+    {
+        if (bytes.Length == 0) return;
+        if (bytes[^1] == '\n')
+            WriteObject(BashRuntime.NewBashObject(bytes.Substring(0, bytes.Length - 1)));
+        else
+            WriteObject(BashRuntime.NewBashObject(bytes, noTrailingNewline: true));
     }
 
     protected override void EndProcessing()
@@ -329,8 +353,13 @@ public sealed class InvokeBashTrCommand : PSCmdlet
             return;
         }
 
-        // Pipeline records (if any) were streamed in ProcessRecord; empty
-        // input produces no output, matching the oracle's count==0 guard.
+        // Pipeline records were streamed in ProcessRecord (empty input produces no output, matching
+        // the oracle's count==0 guard) — except a newline-touching table, whose buffered byte stream
+        // is transformed and written once, as exact bytes.
+        if (_touchesNewline && !_suppress && _stream.Length > 0)
+        {
+            EmitStream(TransformLine(_stream.ToString()));
+        }
     }
 
     /// <summary>
@@ -407,50 +436,4 @@ public sealed class InvokeBashTrCommand : PSCmdlet
         return text;
     }
 
-    /// <summary>
-    /// Reproduces the psm1 oracle's class expander: POSIX class names get
-    /// substituted first, then ranges (<c>a-z</c>) expand into the full
-    /// inclusive character sequence.
-    /// </summary>
-    private static string ExpandClass(string spec)
-    {
-        spec = ExpandPosixClasses(spec);
-        var sb = new StringBuilder();
-        int i = 0;
-        while (i < spec.Length)
-        {
-            if (i + 2 < spec.Length && spec[i + 1] == '-')
-            {
-                int start = spec[i];
-                int end = spec[i + 2];
-                if (start > end)
-                    throw new TrRangeError(
-                        $"range-endpoints of '{(char)start}-{(char)end}' are in reverse collating sequence order");
-                for (int c = start; c <= end; c++)
-                {
-                    sb.Append((char)c);
-                }
-                i += 3;
-            }
-            else
-            {
-                sb.Append(spec[i]);
-                i++;
-            }
-        }
-        return sb.ToString();
-    }
-
-    private static string ExpandPosixClasses(string spec)
-    {
-        // Char sets reproduce the oracle's hashtable byte-for-byte.
-        return spec
-            .Replace("[:alnum:]", "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
-            .Replace("[:alpha:]", "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
-            .Replace("[:digit:]", "0123456789")
-            .Replace("[:upper:]", "ABCDEFGHIJKLMNOPQRSTUVWXYZ")
-            .Replace("[:lower:]", "abcdefghijklmnopqrstuvwxyz")
-            .Replace("[:space:]", " \t\n\r\f\v")
-            .Replace("[:punct:]", "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~");
-    }
 }

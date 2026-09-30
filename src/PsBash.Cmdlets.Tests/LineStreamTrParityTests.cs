@@ -12,7 +12,8 @@ namespace PsBash.Cmdlets.Tests;
 /// untranslatable, turning <c>tr -d '\n'</c> into a silent no-op — the exact historical bug
 /// documented on the <c>tr</c> row of <c>docs/specs/runtime-command-reference.md</c>. The
 /// <c>WholeRecord_*</c> tests below feed records that CARRY a trailing <c>\n</c>, so a
-/// splitting core fails them instead of quietly passing.</para>
+/// splitting core fails them instead of quietly passing. A table that touches the newline itself is
+/// declined by the core (see <c>TrCore_NewlineTouchingTable_Declines</c>).</para>
 /// </summary>
 public class LineStreamTrParityTests : LineStreamParityHarness
 {
@@ -47,7 +48,7 @@ public class LineStreamTrParityTests : LineStreamParityHarness
 
     [Fact]
     public void TrCore_DeleteClass_MatchesCmdlet()
-        => AssertTr(new[] { "-d", "[:space:]" }, Mixed);
+        => AssertTr(new[] { "-d", "[:digit:]" }, Mixed);
 
     [Fact]
     public void TrCore_SqueezeOnly_MatchesCmdlet()
@@ -59,11 +60,12 @@ public class LineStreamTrParityTests : LineStreamParityHarness
 
     [Fact]
     public void TrCore_Complement_MatchesCmdlet()
-        => AssertTr(new[] { "-c", "[:alpha:]", "." }, Mixed);
+        // SET1 names the newline, so the complement leaves the terminator alone.
+        => AssertTr(new[] { "-c", "[:alpha:]\\n", "." }, Mixed);
 
     [Fact]
     public void TrCore_ComplementDelete_MatchesCmdlet()
-        => AssertTr(new[] { "-cd", "[:alpha:]" }, Mixed);
+        => AssertTr(new[] { "-cd", "[:alpha:]\\n" }, Mixed);
 
     [Fact]
     public void TrCore_TruncateSet1_MatchesCmdlet()
@@ -93,33 +95,22 @@ public class LineStreamTrParityTests : LineStreamParityHarness
     // ── WHOLE-RECORD semantics (the historical bug) ──────────────────────────
 
     [Fact]
-    public void TrCore_WholeRecord_DeleteNewline_MatchesCmdlet()
-        // `printf 'a\nb\n' | tr -d '\n'` — records CARRY their trailing newline here.
-        // A core that split the record first would emit 4 pieces where the cmdlet
-        // emits 2, and would never see the '\n' to delete.
-        => AssertTr(new[] { "-d", "\\n" }, new[] { "a\n", "b\n" });
-
-    [Fact]
-    public void TrCore_WholeRecord_TranslateNewline_MatchesCmdlet()
-        => AssertTr(new[] { "\\n", "," }, new[] { "a\n", "b\n" });
-
-    [Fact]
     public void TrCore_WholeRecord_DoesNotAddALine_MatchesCmdlet()
-        // The other half of the bug: a no-op translate must not change the RECORD
-        // COUNT (`printf "a\nb\n" | tr x y | wc -l` answered 3, not 2).
+        // A no-op translate must not change the RECORD COUNT
+        // (`printf "a\nb\n" | tr x y | wc -l` answered 3, not 2).
         => AssertTr(new[] { "x", "y" }, new[] { "a\n", "b\n" });
 
     [Fact]
     public void TrCore_WholeRecord_PipedToWc_CountsTwoLines()
     {
-        // The `... | wc -l` half of the required regression, composed through the
-        // streaming cores exactly as the fused lane composes them, and diffed against
-        // the same two cmdlets in a real pipeline.
+        // The `... | wc -l` half of that regression, composed through the streaming cores
+        // exactly as the fused lane composes them, and diffed against the same two cmdlets in
+        // a real pipeline.
         var input = new[] { "a\n", "b\n" };
         var expected = RenderScript(
-            "@(('a' + [char]10), ('b' + [char]10)) | Invoke-BashTr -d ([char]10) | Invoke-BashWc -l");
+            "@(('a' + [char]10), ('b' + [char]10)) | Invoke-BashTr x y | Invoke-BashWc -l");
 
-        Assert.True(LineStreamRegistry.TryCreate("tr", new[] { "-d", "\\n" }, out var tr));
+        Assert.True(LineStreamRegistry.TryCreate("tr", new[] { "x", "y" }, out var tr));
         Assert.True(LineStreamRegistry.TryCreate("wc", new[] { "-l" }, out var wc));
         var actual = string.Concat(
             wc.Run(tr.Run(input)).Select(l => l + Environment.NewLine));
@@ -128,6 +119,32 @@ public class LineStreamTrParityTests : LineStreamParityHarness
         // The count itself is the regression: a record-splitting tr answers 4.
         Assert.Equal("2", actual.Trim());
     }
+
+    // ── newline-touching tables: the cmdlet owns them ─────────────────────────
+    // Records reach tr WITHOUT their terminator (seq/cat/echo emit bare lines; the serializer adds
+    // the "\n"), so deleting / translating / squeezing "\n" is only right on the reconstructed byte
+    // stream — which the line-stream core does not have. It must DECLINE and let the cmdlet (which
+    // appends the terminator itself) answer. End-to-end bytes are pinned in EscapeExpansionTests
+    // (`seq 1 3 | tr -d '\n'` is 123).
+
+    [Theory]
+    [InlineData("-d", "\\n")]
+    [InlineData("-d", "[:space:]")]
+    [InlineData("-cd", "[:alpha:]")]      // the complement deletes the newline
+    [InlineData("-c", "[:alpha:]", ".")]  // ... or translates it
+    [InlineData("\\n", ",")]
+    [InlineData("-s", "\\n")]
+    [InlineData("-s", "[:space:]", " ")]
+    public void TrCore_NewlineTouchingTable_Declines(params string[] argv)
+        => Assert.False(LineStreamRegistry.TryCreate("tr", argv, out _),
+            $"tr core must DECLINE newline-touching '{string.Join(' ', argv)}'");
+
+    [Theory]
+    [InlineData("-cd", "[:alpha:]\\n")]  // SET1 names the newline: it is kept
+    [InlineData("\\r", "\\n")]           // INTO a newline leaves the terminator alone
+    [InlineData("-s", " ")]
+    public void TrCore_NewlineUntouchingTable_StillStreams(params string[] argv)
+        => Assert.True(LineStreamRegistry.TryCreate("tr", argv, out _));
 
     [Fact]
     public void TrCore_IsLazy_DoesNotDrainInfiniteProducer()

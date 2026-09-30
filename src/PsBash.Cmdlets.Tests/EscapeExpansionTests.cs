@@ -88,16 +88,121 @@ public class EscapeExpansionTests : IClassFixture<SharedPwshFixture>
     [InlineData(EscapeDialect.Echo, @"a\\b", @"a\b")]
     [InlineData(EscapeDialect.Echo, @"a\qb", @"a\qb")]
     [InlineData(EscapeDialect.Echo, "a\\\"b", "a\\\"b")]
-    // tr SETs: \NNN 1-3 octal digits; no \x (GNU tr has none)
-    [InlineData(EscapeDialect.Tr, @"\0", "\0")]
-    [InlineData(EscapeDialect.Tr, @"\101", "A")]
-    [InlineData(EscapeDialect.Tr, @"\1", "\u0001")]
-    [InlineData(EscapeDialect.Tr, @"\18", "\u00018")]
-    [InlineData(EscapeDialect.Tr, @"\n", "\n")]
-    [InlineData(EscapeDialect.Tr, @"\\", @"\")]
-    [InlineData(EscapeDialect.Tr, @"\x41", @"\x41")]
     public void Expand_MatchesBashPerDialect(EscapeDialect dialect, string input, string expected)
         => Assert.Equal(expected, BashEscapes.Expand(input, dialect));
+
+    // ---- tr SETs: ExpandTrSet (escapes + classes + ranges in ONE pass, every row oracle-checked) ----
+    // \NNN is 1-3 octal digits; GNU tr has no \x \e \c \u: an unknown escape DROPS the backslash and
+    // keeps the character; an escaped '-' / '[' is a literal, never a range / class operator.
+
+    [Theory]
+    [InlineData(@"\0", "\0")]
+    [InlineData(@"\101", "A")]
+    [InlineData(@"\1", "\u0001")]
+    [InlineData(@"\18", "\u00018")]
+    [InlineData(@"\n", "\n")]
+    [InlineData(@"\\", @"\")]
+    [InlineData(@"\q", "q")]  // FIX (was: \q)
+    [InlineData(@"\x41", "x41")]  // FIX (was: \x41) GNU tr has no \x: backslash dropped
+    [InlineData(@"\e", "e")]
+    [InlineData(@"\c", "c")]
+    [InlineData(@"\8", "8")]
+    [InlineData(@"a\qb", "aqb")]
+    [InlineData(@"a\-c", "a-c")]  // FIX: literal '-', not the range a..c
+    [InlineData(@"a-c", "abc")]
+    [InlineData(@"a-c\-", "abc-")]
+    [InlineData(@"\[:digit:]", "[:digit:]")]  // escaped '[' is not a class opener
+    [InlineData(@"[:digit:]", "0123456789")]
+    [InlineData(@"[:upper:]x", "ABCDEFGHIJKLMNOPQRSTUVWXYZx")]
+    [InlineData(@"[:punct:]", "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~")]  // its '-' is not a range operator
+    [InlineData(@"[:bogus:]", "[:bogus:]")]
+    [InlineData(@"\011-\012", "\t\n")]  // an escaped char can END or START a range
+    [InlineData(@"a-\n", null)]  // reverse range (a > \n): an error, see ReverseRange test
+    [InlineData(@"a\", @"a\")]  // lone trailing backslash stays literal (GNU also warns)
+    [InlineData(@"\", @"\")]
+    public void ExpandTrSet_MatchesGnuTr(string input, string? expected)
+    {
+        if (expected is null)
+        {
+            Assert.Throws<TrSetException>(() => BashEscapes.ExpandTrSet(input, out _));
+            return;
+        }
+        Assert.Equal(expected, BashEscapes.ExpandTrSet(input, out _));
+    }
+
+    [Theory]
+    [InlineData(@"a\", true)]
+    [InlineData(@"\", true)]
+    [InlineData(@"\\", false)]
+    [InlineData(@"a", false)]
+    public void ExpandTrSet_ReportsTrailingBackslash(string input, bool warn)
+    {
+        BashEscapes.ExpandTrSet(input, out bool trailing);
+        Assert.Equal(warn, trailing);
+    }
+
+    [Fact]
+    public void ExpandTrSet_ReverseRange_MessageIsGnus()
+    {
+        var ex = Assert.Throws<TrSetException>(() => BashEscapes.ExpandTrSet("c-a", out _));
+        Assert.Equal("range-endpoints of 'c-a' are in reverse collating sequence order", ex.Message);
+    }
+
+    [Fact]
+    public void Tr_UnknownEscape_DropsTheBackslash()
+        // bash: aXb — `\q` is just `q`
+        => Assert.Equal("aXb\n", Stdout(@"printf 'aqb\n' | tr '\q' X"));
+
+    [Fact]
+    public void Tr_EscapedDash_IsLiteral_NotARange()
+        // bash: XXXb — a, '-' and c only
+        => Assert.Equal("XXXb\n", Stdout(@"printf 'a-cb\n' | tr 'a\-c' X"));
+
+    [Fact]
+    public void Tr_EscapedDash_TranslatesPositionally()
+        // bash: XbYZ
+        => Assert.Equal("XbYZ\n", Stdout(@"printf 'ab-c\n' | tr 'a\-c' XYZ"));
+
+    // ---- tr and the record terminator: seq/echo/cat emit bare lines, printf emits exact bytes ----
+    // Every expected value was taken from bash 5.2 (`… | od -c`). Before, `seq 1 3 | tr -d '\n'`
+    // printed 1 2 3 on separate lines because the newline was never part of the record tr saw.
+
+    [Theory]
+    [InlineData("seq 1 3 | tr -d '\\n'", "123")]
+    [InlineData("seq 1 3 | tr '\\n' ,", "1,2,3,")]
+    [InlineData("seq 1 3 | tr '\\n' '\\t'", "1\t2\t3\t")]
+    [InlineData("printf 'a\\nb\\n' | tr -d '\\n'", "ab")]
+    [InlineData("echo hi | tr -d '\\n'", "hi")]
+    [InlineData("echo -n hi | tr h X", "Xi")]  // was: a newline the producer never wrote
+    [InlineData("echo -e 'a\\nb' | tr '\\n' ,", "a,b,")]
+    [InlineData("seq 1 3 | tr 1 x", "x\n2\n3\n")]  // a newline-free table streams as before
+    [InlineData("printf 'a\\nb' | tr x y", "a\nb")]  // no final newline in, none out (was: one added)
+    [InlineData("seq 1 3 | tr '\\n' ' ' | tr ' ' X", "1X2X3X")]  // exact bytes feed the next tr
+    [InlineData("x=$(seq 1 3 | tr -d \"\\n\"); echo \"$x\"", "123\n")]
+    [InlineData("printf 'a\\n\\n\\nb\\n' | tr -s '\\n'", "a\nb\n")]  // squeeze runs across records
+    [InlineData("(echo a; echo; echo; echo b) | tr -s '\\n'", "a\nb\n")]
+    [InlineData("seq 1 3 | tr -c 0-9 X", "1X2X3X")]  // the complement includes the newline
+    [InlineData("seq 1 3 | tr -cd '0-9\\n'", "1\n2\n3\n")]  // ... unless SET1 names it
+    [InlineData("seq 1 3 | tr -cd 0-9", "123")]
+    [InlineData("echo 'a b c' | tr ' ' '\\n'", "a\nb\nc\n")]  // INTO a newline: unchanged shape
+    [InlineData("echo 'a b c' | tr ' ' '\\n' | wc -l", "3\n")]
+    [InlineData("printf '' | tr -d '\\n'", "")]
+    [InlineData("echo | tr -d '\\n'", "")]
+    public void Tr_TreatsTheRecordTerminatorAsARealNewline(string bash, string expected)
+        => Assert.Equal(expected, Stdout(bash).Replace("\r\n", "\n"));
+
+    [Fact]
+    public void Tr_TrailingBackslash_IsLiteralAndWarns()
+    {
+        // bash: aXb plus "tr: warning: an unescaped backslash at end of string is not portable" on stderr
+        var ps = PsEmitter.Transpile(@"printf 'a\\b\n' | tr '\' X")!;
+        var pwsh = _fixture.AcquireFresh();
+        var result = pwsh.AddScript(ps).Invoke();
+        pwsh.Commands.Clear();
+        Assert.Equal("aXb", string.Concat(result.Select(o => BashRuntime.GetBashText(o).TrimEnd('\n'))));
+        Assert.Contains(pwsh.Streams.Error, e => e.ToString() ==
+            "tr: warning: an unescaped backslash at end of string is not portable");
+    }
 
     [Theory]
     [InlineData(EscapeDialect.Echo)]

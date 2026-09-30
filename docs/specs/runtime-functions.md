@@ -336,13 +336,18 @@ The dialects differ exactly where bash's builtins do (oracle-checked, bash 5.2):
 | `Echo` (`echo -e`) | `\0NNN` only (0 + up to 3 digits); `\101` stays literal | `\xHH \uHHHH \UHHHHHHHH \e \E`; `\"` stays literal | stops ALL output incl. the newline |
 | `PrintfB` (`printf %b` arg) | `\0NNN` and `\NNN` | as Echo | stops all output, including the rest of the format |
 | `PrintfFormat` (printf format) | `\NNN` = 1-3 digits INCLUDING the first (`\0101` = `\010` + `1`) | `\xHH \u \U \e \" \' \?` | literal (not special) |
-| `Tr` (tr SETs) | `\NNN` 1-3 digits | single-char escapes only; no `\x`/`\e` | n/a |
 
 All dialects: `\\ \a \b \f \n \r \t \v`; an unknown escape keeps its backslash. `\0` yields a
 real NUL char, which survives pipes, `tee` and `>` (`printf 'x\0' > f` is 2 bytes). Values above
 `\177` become the corresponding Unicode char (not a raw byte) — known gap. `$'…'` is expanded by the
 emitter's own `ExpandAnsiCEscapes` (Transpiler cannot reference Cmdlets); it truncates the word at
 the first NUL, as bash's C strings do.
+
+`tr` SETs are not a dialect of `Expand`: `BashEscapes.ExpandTrSet` does escapes, `[:class:]` and `a-z`
+ranges in ONE pass so an escaped `-`/`[` stays a literal. `\NNN` is 1-3 octal digits, every other unknown
+escape (`\q \x \e \c`) DROPS the backslash (oracle: GNU tr 9.4 — `tr '\q' X` translates `q`), and a lone
+trailing backslash is literal plus `tr: warning: an unescaped backslash at end of string is not portable`
+on stderr. How `tr` sees the record terminator is in `runtime-command-reference.md` (tr row).
 
 `printf %b` reads the RAW argument text (not the int/double coercion used by `%d`), so `\0101`
 keeps its leading zero.
