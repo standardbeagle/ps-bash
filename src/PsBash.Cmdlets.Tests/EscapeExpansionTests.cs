@@ -91,6 +91,57 @@ public class EscapeExpansionTests : IClassFixture<SharedPwshFixture>
     public void Expand_MatchesBashPerDialect(EscapeDialect dialect, string input, string expected)
         => Assert.Equal(expected, BashEscapes.Expand(input, dialect));
 
+    // ---- \xHH / \NNN name BYTES: a run that is valid UTF-8 is that character (bash writes those bytes) ----
+    // Oracle (bash 5.2, `| od -An -tx1`): printf '\xe2\x82\xac' = e2 82 ac, printf 'caf\xc3\xa9' = 63 61 66 c3 a9,
+    // printf '\xf0\x9f\x98\x80' = f0 9f 98 80. Before, each byte became its own Latin-1 char (â<0x82>¬) and
+    // went out as SIX bytes.
+
+    [Theory]
+    [InlineData(EscapeDialect.PrintfFormat, @"\xe2\x82\xac", "€")]
+    [InlineData(EscapeDialect.PrintfFormat, @"\342\202\254", "€")]
+    [InlineData(EscapeDialect.PrintfFormat, @"caf\xc3\xa9", "café")]
+    [InlineData(EscapeDialect.PrintfFormat, @"\xf0\x9f\x98\x80", "\U0001F600")]
+    [InlineData(EscapeDialect.PrintfFormat, @"\xc3\xa9\xc3\xa9", "éé")]
+    [InlineData(EscapeDialect.PrintfFormat, @"\xc3\xa9\x41", "éA")]
+    [InlineData(EscapeDialect.PrintfB, @"\xe2\x82\xac", "€")]
+    [InlineData(EscapeDialect.PrintfB, @"\0342\0202\0254", "€")]
+    [InlineData(EscapeDialect.Echo, @"\xe2\x82\xac", "€")]
+    [InlineData(EscapeDialect.Echo, @"\0342\0202\0254", "€")]
+    // Not valid UTF-8 (overlong, surrogate, truncated, lone, interrupted): one Latin-1 char per byte.
+    // KNOWN GAP — bash writes the raw bytes, ps-bash writes the UTF-8 of those chars (see the design note).
+    [InlineData(EscapeDialect.PrintfFormat, @"\xe9", "é")]
+    [InlineData(EscapeDialect.PrintfFormat, @"\351", "é")]
+    [InlineData(EscapeDialect.PrintfFormat, @"\xc3A", "ÃA")]
+    [InlineData(EscapeDialect.PrintfFormat, @"\xc0\x80", "À\u0080")]
+    [InlineData(EscapeDialect.PrintfFormat, @"\xed\xa0\x80", "í \u0080")]
+    [InlineData(EscapeDialect.PrintfFormat, @"\xe2\x82", "â\u0082")]
+    [InlineData(EscapeDialect.PrintfFormat, @"\xe2x\x82\xac", "âx\u0082¬")]
+    public void Expand_ByteRuns_AreUtf8Decoded(EscapeDialect dialect, string input, string expected)
+        => Assert.Equal(expected, BashEscapes.Expand(input, dialect));
+
+    [Fact]
+    public void Redirect_PrintfUtf8ByteEscapes_WritesTheExactBytes()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "psb-esc-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var f = Path.Combine(dir, "f").Replace('\\', '/');
+            Stdout($"printf '\\xe2\\x82\\xac' > {f}");
+            // bash: e2 82 ac — three bytes, not the six of "â<0x82>¬" re-encoded
+            Assert.Equal(new byte[] { 0xE2, 0x82, 0xAC }, File.ReadAllBytes(f));
+        }
+        finally { Directory.Delete(dir, true); }
+    }
+
+    [Fact]
+    public void AnsiC_ByteEscapes_AreUtf8Decoded()
+    {
+        Assert.Equal("€\n", Stdout("echo $'\\xe2\\x82\\xac'"));
+        Assert.Equal("€\n", Stdout("echo $'\\342\\202\\254'"));
+        Assert.Equal("café\n", Stdout("echo $'caf\\xc3\\xa9'"));
+    }
+
     // ---- tr SETs: ExpandTrSet (escapes + classes + ranges in ONE pass, every row oracle-checked) ----
     // \NNN is 1-3 octal digits; GNU tr has no \x \e \c \u: an unknown escape DROPS the backslash and
     // keeps the character; an escaped '-' / '[' is a literal, never a range / class operator.

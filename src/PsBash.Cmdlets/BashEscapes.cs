@@ -1,5 +1,6 @@
 using System;
 using System.Text;
+using PsBash.Core;
 
 namespace PsBash.Cmdlets;
 
@@ -42,7 +43,8 @@ public static class BashEscapes
         stopped = false;
         if (text.IndexOf('\\') < 0) return text;
 
-        var sb = new StringBuilder(text.Length);
+        // \xHH / \NNN name BYTES: runs of them are UTF-8 decoded (see EscapedTextBuilder).
+        var sb = new EscapedTextBuilder(text.Length);
         int i = 0;
         while (i < text.Length)
         {
@@ -70,7 +72,7 @@ public static class BashEscapes
                     stopped = true;
                     return sb.ToString();
                 case 'x':
-                    if (TryHex(text, i + 2, 2, out int hv, out int hEnd)) { sb.Append((char)hv); i = hEnd; }
+                    if (TryHex(text, i + 2, 2, out int hv, out int hEnd)) { sb.AppendByte(hv); i = hEnd; }
                     else { sb.Append('\\').Append('x'); i += 2; }
                     continue;
                 case 'u':
@@ -210,7 +212,7 @@ public static class BashEscapes
         return sb.ToString();
     }
 
-    private static void ParseOctal(string s, int start, int maxDigits, StringBuilder sb, out int next)
+    private static void ParseOctal(string s, int start, int maxDigits, EscapedTextBuilder sb, out int next)
     {
         int j = start, val = 0, cnt = 0;
         while (j < s.Length && cnt < maxDigits && s[j] is >= '0' and <= '7')
@@ -218,7 +220,7 @@ public static class BashEscapes
             val = val * 8 + (s[j] - '0');
             j++; cnt++;
         }
-        sb.Append((char)(val & 0xFF));
+        sb.AppendByte(val);
         next = j;
     }
 

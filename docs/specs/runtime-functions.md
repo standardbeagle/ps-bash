@@ -338,8 +338,11 @@ The dialects differ exactly where bash's builtins do (oracle-checked, bash 5.2):
 | `PrintfFormat` (printf format) | `\NNN` = 1-3 digits INCLUDING the first (`\0101` = `\010` + `1`) | `\xHH \u \U \e \" \' \?` | literal (not special) |
 
 All dialects: `\\ \a \b \f \n \r \t \v`; an unknown escape keeps its backslash. `\0` yields a
-real NUL char, which survives pipes, `tee` and `>` (`printf 'x\0' > f` is 2 bytes). Values above
-`\177` become the corresponding Unicode char (not a raw byte) — known gap. `$'…'` is expanded by the
+real NUL char, which survives pipes, `tee` and `>` (`printf 'x\0' > f` is 2 bytes). `\xHH` / `\NNN` name
+BYTES: a run of bytes >= 0x80 that is valid UTF-8 becomes that character (`EscapedTextBuilder` in
+Transpiler; `printf '\xe2\x82\xac'` is U+20AC and every output boundary writes E2 82 AC, exactly bash's
+bytes). A run that is not valid UTF-8 (a lone `\xe9`/`\351`, overlong, truncated) becomes one Latin-1 char
+per byte — KNOWN GAP, see "Raw bytes" below. `$'…'` is expanded by the
 emitter's own `ExpandAnsiCEscapes` (Transpiler cannot reference Cmdlets); it truncates the word at
 the first NUL, as bash's C strings do.
 
@@ -351,6 +354,33 @@ on stderr. How `tr` sees the record terminator is in `runtime-command-reference.
 
 `printf %b` reads the RAW argument text (not the int/double coercion used by `%d`), so `\0101`
 keeps its leading zero.
+
+### Raw bytes (design note — NOT implemented)
+
+`printf '\351' | wc -c` is 1 in bash (the single byte E9); ps-bash answers 2 (U+00E9, which every
+boundary encodes as C3 A9), and `printf '\xe9' > f` writes 2 bytes. Only a byte that is not part of a
+valid UTF-8 run hits this (valid runs are decoded, see above). Investigation: text is a .NET `string`
+(UTF-16) end to end, and UTF-8 is hard-wired at every boundary — `HostProtocol` frames, the launcher's
+`ConsoleEncoding`/PTY writers, `File.WriteAllText` in `Invoke-BashRedirect`, tee, split, gzip, `BashFileSystem`
+readers (`StreamReader(UTF8)`, which turns an invalid input byte into U+FFFD — so `cat` of a binary file is
+lossy too), and `wc -c` (`GetByteCount`) — roughly 55 sites. A fix needs a byte model, not an escape fix.
+Options:
+
+1. **Escaped-byte markers** (Python `surrogateescape` / Cygwin style). Escapes and invalid input bytes map to
+   U+F780..U+F7FF; every OUTPUT boundary maps them back to single bytes (host stdout frame -> launcher ->
+   stdout/PTY, redirect/tee/split writers, `wc -c`, external-process stdin) and every INPUT boundary maps
+   invalid UTF-8 to markers. Pipeline stays strings; the cost is the ~55 sites, the launcher, and deciding
+   that a literal PUA character in user text is ambiguous. Smallest total change, lossless round trip.
+2. **Byte-carrying records**: a `Bytes` (`byte[]`) member on the BashObject (next to `NoTrailingNewline`) that
+   only binary-aware consumers (redirect, tee, cat, wc -c, base64, gzip, tr) read; `BashText` keeps a
+   Latin-1 view for text consumers. Needs a binary `HostProtocol` frame and breaks the "every record is a
+   string" fast path.
+3. **Status quo** (chosen): Latin-1 char per invalid byte; valid UTF-8 runs exact. Covers the real-world uses
+   of `\x`/octal in scripts (accented letters, currency signs, emoji, ANSI `\x1b`) and leaves only genuinely
+   non-UTF-8 payloads (raw Latin-1 text, binary) wrong.
+
+Pick option 1 if a consumer needs binary-safe pipelines; it should land as one change touching all boundaries
+with `printf '\351' | wc -c` (1) and `printf '\xe9' > f` (1 byte) as the acceptance tests.
 
 ## Temp File Strategy
 
