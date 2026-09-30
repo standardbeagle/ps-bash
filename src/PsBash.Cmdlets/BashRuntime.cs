@@ -424,6 +424,20 @@ public static class BashRuntime
     /// itself, an object exposing a <c>BashText</c> property -&gt; that value,
     /// otherwise the object's <c>ToString()</c>.
     /// </summary>
+    /// <summary>
+    /// The exact bytes-as-text a stdout record contributes to a file (<c>tee</c>,
+    /// <c>&gt; file</c>): its <c>BashText</c> plus a record boundary <c>\n</c>, UNLESS the
+    /// record carries <c>NoTrailingNewline</c> (printf / <c>echo -n</c> output with no final
+    /// newline) or already ends in <c>\n</c>. Single source so tee and the redirect writer
+    /// cannot drift.
+    /// </summary>
+    public static string RecordFilePayload(PSObject record)
+    {
+        string text = GetBashText(record);
+        bool noNl = record.Properties["NoTrailingNewline"]?.Value is true;
+        return noNl || text.EndsWith('\n') ? text : text + "\n";
+    }
+
     public static string GetBashText(object? inputObject)
     {
         if (inputObject is null)

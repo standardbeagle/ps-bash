@@ -168,9 +168,7 @@ public sealed class InvokeBashTeeCommand : PSCmdlet
     {
         if (_done || InputObject == null) return;
 
-        string text = BashRuntime.GetBashText(InputObject);
-        bool noNl = InputObject.Properties["NoTrailingNewline"]?.Value is true;
-        string payload = noNl || text.EndsWith('\n') ? text : text + "\n";
+        string payload = BashRuntime.RecordFilePayload(InputObject);
 
         if (_sinks.Count > 0 && payload.Length > 0)
         {

@@ -54,14 +54,31 @@ public class FsStateDifferentialTests
             "",
             "printf 'hi\\n' | tee -- -zz");
 
-    // ───────────── known product bug (found by this helper) ─────────────
+    // ───────────── redirect byte fidelity ─────────────
 
-    // Confirmed against GNU bash: `printf x > f` leaves f = "x" (1 byte). ps-bash writes "x\n":
-    // Invoke-BashRedirect joins records and always appends "\n", ignoring the NoTrailingNewline
-    // marker that printf / echo -n set (tee already honours it). Same for `echo -n x > f`.
-    [SkippableFact(Skip = "PRODUCT BUG: `printf x > f` / `echo -n x > f` write a trailing newline (Invoke-BashRedirect ignores NoTrailingNewline). Remove Skip when fixed and record the cassette.")]
+    // `printf x > f` leaves f = "x" (1 byte): Invoke-BashRedirect honours the NoTrailingNewline
+    // marker printf / echo -n set, like tee.
+    [SkippableFact]
     public Task Redirect_PrintfWithoutNewline_FileBytesAreExactlyTheInput() =>
         EqualAsync("", "printf x > f");
+
+    [SkippableFact] public Task Redirect_EchoDashN_FileBytesAreExactlyTheInput() =>
+        EqualAsync("", "echo -n x > f");
+
+    [SkippableFact] public Task Redirect_Append_PrintfThenPrintf_Concatenates() =>
+        EqualAsync("", "printf a > f; printf b >> f");
+
+    [SkippableFact] public Task Redirect_PrintfMultiLine_NoFinalNewline() =>
+        EqualAsync("", "printf 'a\\nb' > f");
+
+    [SkippableFact] public Task Redirect_BraceGroupMixedRecords_OnlyLastLosesNewline() =>
+        EqualAsync("", "{ echo x; printf y; } > f");
+
+    [SkippableFact] public Task Redirect_EmptyPrintf_TruncatesExistingFile() =>
+        EqualAsync(Tree(("f", "OLD")), "printf '' > f");
+
+    [SkippableFact] public Task Redirect_PlainEcho_KeepsNewline() =>
+        EqualAsync("", "echo x > f");
 
     // ───────────── helper self-checks (no spawn) ─────────────
 
