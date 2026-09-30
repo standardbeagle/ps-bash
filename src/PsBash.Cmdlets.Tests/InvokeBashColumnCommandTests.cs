@@ -234,17 +234,17 @@ public class InvokeBashColumnCommandTests : IClassFixture<SharedPwshFixture>, ID
     }
 
     [Fact]
-    public void Column_TableMode_RagggedRows_LastColumnNotPadded()
+    public void Column_TableMode_RaggedRows_ShortRowPaddedToTableWidth()
     {
         // Row 1 has three fields; row 2 has two. Per-col widths:
         //   col0 = 5 ("hello"), col1 = 5 ("there"), col2 last (no pad).
-        // For row 2, "x" is in col0; "y" is col1 (last column for that row → no pad).
+        // util-linux completes a short row with empty cells (oracle: `column -t | cat -A` gives `x      y      $`),\n        // so row 2 carries y padded to col1 plus the separator before the empty last cell.
         var f = WriteFile("t.txt", "hello there world\nx y\n");
         var lines = RunLines($"Invoke-BashColumn -t '{Q(f)}'");
         Assert.Equal(new[]
         {
             "hello  there  world",
-            "x      y",
+            "x      y      ",
         }, lines);
     }
 
@@ -267,7 +267,7 @@ public class InvokeBashColumnCommandTests : IClassFixture<SharedPwshFixture>, ID
     public void Column_UnrecognizedLongOption_ExitCode2()
     {
         // Completely unknown option → bash-parity "unrecognized option" error,
-        // LASTEXITCODE=2, no stdout.
+        // LASTEXITCODE=1 (util-linux usage error), no stdout.
         var pwsh = _fixture.AcquireFresh();
         pwsh.AddScript("$ErrorActionPreference='Continue'").Invoke();
         pwsh.Commands.Clear();
@@ -275,6 +275,6 @@ public class InvokeBashColumnCommandTests : IClassFixture<SharedPwshFixture>, ID
             "Invoke-BashColumn --bogus 2>$null; $LASTEXITCODE").Invoke();
         pwsh.Commands.Clear();
         Assert.Single(result);
-        Assert.Equal(2, (int)result[0].BaseObject);
+        Assert.Equal(1, (int)result[0].BaseObject);
     }
 }

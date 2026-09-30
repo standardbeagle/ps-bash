@@ -1,51 +1,126 @@
 using System.Management.Automation;
 using System.Text;
-using System.Text.RegularExpressions;
+using PsBash.Cmdlets.Args;
 
 namespace PsBash.Cmdlets;
 
 /// <summary>
-/// Binary cmdlet replacement for the psm1 <c>Invoke-BashColumn</c> function
-/// (REFACTOR-2 follow-on). Formats input as a table; in default (passthrough)
-/// mode each line is emitted unchanged, in <c>-t</c> mode each line is split
-/// on whitespace (or <c>-s SEP</c>) and the columns are padded to the per-column
-/// max width before joining with the oracle-fixed two-space gap.
+/// Binary cmdlet for util-linux <c>column</c> (2.39): in <c>-t</c> (table) mode each input line is
+/// split into fields and the columns are padded to the per-column maximum width; without <c>-t</c>
+/// each line is emitted unchanged (ps-bash does not implement GNU's terminal-width "fill columns"
+/// layout — a documented divergence).
 ///
-/// Behavioral parity oracle: the original psm1 function. Flag set:
-/// <list type="bullet">
-/// <item><c>-t</c> — enable table mode (column alignment).</item>
-/// <item><c>-s SEP</c> / <c>-sSEP</c> — input separator (regex-escaped before
-/// use; falls back to <c>\s+</c> when unset). The joined form
-/// (<c>-sSEP</c>) requires exactly one delimiter character, matching the
-/// oracle's <c>^-s(.)$</c> pattern.</item>
-/// <item><c>--</c> — end-of-flags.</item>
-/// <item><c>--help</c> — delegates to psm1 <c>Show-BashHelp</c>.</item>
-/// </list>
-/// The output separator is hard-coded to two spaces (<c>"  "</c>), matching
-/// the oracle byte-for-byte; an <c>-o</c> output-separator flag is intentionally
-/// not supported (the oracle never accepted one).
+/// <para><b>Arguments</b> go through the shared ordered parser (<see cref="ColumnSpec"/>; <c>column</c> is
+/// on <c>PsEmitter.OrderedArgCommands</c>). Implemented: <c>-t/--table</c>, <c>-s/--separator CHARS</c>
+/// (each character is a delimiter, empty fields are kept), <c>-o/--output-separator STR</c>,
+/// <c>-l/--table-columns-limit N</c> (the last column takes the rest of the line),
+/// <c>-L/--keep-empty-lines</c>; <c>-e</c> and <c>-d</c> are accepted no-ops (no headings exist without
+/// <c>-N</c>). The rest of column's table/tree/JSON/fill surface (<c>-x -c -n -N -O -C -E -m -H -R -T -W -J
+/// -r -i -p</c>) is refused with exit 2. Usage errors exit 1 like util-linux.</para>
 ///
-/// No PowerShell common-parameter prefix collision: <c>-t</c> and <c>-s</c>
-/// share no prefix with any common parameter (no <c>-T*</c> / <c>-S*</c>
-/// common parameter exists). Both stay in <see cref="Arguments"/> and are
-/// parsed by a manual scan.
+/// <para>Table rendering follows util-linux: blank lines are ignored unless <c>-L</c>, a row with fewer
+/// fields than the table is padded with empty cells (so it carries trailing spaces), the last column is
+/// never padded.</para>
 ///
-/// File mode glob expansion routes through
-/// <see cref="FileSystemHelpers.ResolveOperandPaths"/>; missing files emit a
-/// bash-style error via <see cref="FileSystemHelpers.WriteBashError"/>
-/// (parameter-bound <c>InvokeScript</c>, AOT-safe) and the cmdlet continues
-/// with the rest of the operands — matching the oracle's
-/// <c>Read-BashFileLines</c> null-swallow contract.
-///
-/// Output: each emitted record goes through
-/// <see cref="BashRuntime.NewBashObject(string)"/> — the same default
-/// <c>PsBash.TextOutput</c> shape the psm1 oracle produced via
-/// <c>New-BashObject -BashText</c>.
+/// <para>Direct PowerShell calls: <c>-c -o -e -d -V</c> prefix-collide with common parameters and are
+/// declared decoys, re-injected before the scan; <c>-o</c> takes its value (<see cref="O"/> is a string).</para>
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashColumn")]
 [OutputType(typeof(string))]
 public sealed class InvokeBashColumnCommand : PSCmdlet
 {
+    private const string OptTable = "table", OptSep = "separator", OptOutSep = "output-separator",
+        OptLimit = "limit", OptKeepEmpty = "keep-empty-lines", OptNoOp = "noop";
+
+    /// <summary>util-linux column options ps-bash refuses (exit 2).</summary>
+    private static readonly string[] ColumnValidButUnsupported =
+    {
+        "-x", "--fillrows", "-c", "--output-width", "--columns", "-n", "--table-name", "-N", "--table-columns",
+        "-O", "--table-order", "-C", "--table-column", "-E", "--table-noextreme", "-m", "--table-maxout",
+        "-H", "--table-hide", "-R", "--table-right", "-T", "--table-truncate", "-W", "--table-wrap",
+        "-J", "--json", "-r", "--tree", "-i", "--tree-id", "-p", "--tree-parent",
+    };
+
+    /// <summary>column's option surface; ambiguity lists follow util-linux's table order (<c>--t</c>,
+    /// <c>--o</c>, <c>--table-h</c> oracle-checked).</summary>
+    private static readonly OptSpecSet ColumnSpec = new(
+        new[]
+        {
+            new OptSpec(OptTable, 't', "table"),
+            new OptSpec(OptSep, 's', "separator", OptKind.Value),
+            new OptSpec(OptOutSep, 'o', "output-separator", OptKind.Value),
+            new OptSpec(OptLimit, 'l', "table-columns-limit", OptKind.Value),
+            new OptSpec(OptKeepEmpty, 'L', "keep-empty-lines"),
+            new OptSpec(OptKeepEmpty, '\0', "table-empty-lines"),
+            new OptSpec(OptNoOp, 'e', "table-header-repeat"),
+            new OptSpec(OptNoOp, 'd', "table-noheadings"),
+            new OptSpec(OptSpecSet.HelpId, 'h', "help"),
+            new OptSpec(OptSpecSet.VersionId, 'V', "version"),
+        },
+        ColumnValidButUnsupported,
+        allowAbbrev: true,
+        gnuInfoOptions: true,
+        longOptionOrder: new[]
+        {
+            "columns", "fillrows", "help", "json", "keep-empty-lines", "output-separator", "output-width",
+            "separator", "table", "table-columns", "table-column", "table-columns-limit", "table-hide",
+            "table-name", "table-maxout", "table-noextreme", "table-noheadings", "table-order", "table-right",
+            "table-truncate", "table-wrap", "table-empty-lines", "table-header-repeat", "tree", "tree-id",
+            "tree-parent", "version",
+        });
+
+    /// <summary>Pure argv scan (unit-test seam).</summary>
+    internal static ParsedArgs ScanArgs(string[] args) => ArgParser.Parse(args, ColumnSpec);
+
+    internal sealed class ColumnArgs
+    {
+        public ParsedArgs Parsed = null!;
+        public bool Table, KeepEmpty;
+        public string? Separators;   // null = whitespace
+        public string OutputSeparator = "  ";
+        public int Limit = int.MaxValue;
+        public List<string> Operands = new();
+        public string? Error;
+    }
+
+    /// <summary>
+    /// Scan + validate. Fixes over the old hand scan: <c>-s</c> is a SET of delimiter characters (it was one
+    /// literal string), <c>-o</c>/<c>-l</c>/<c>-L</c> are implemented (they were refused), every other
+    /// unknown option was a file name (<c>column -z</c> tried to read a file called <c>-z</c>), a dangling
+    /// <c>-s</c> was ignored, <c>--</c>/abbreviations/bundles (<c>-ts:</c>) work.
+    /// </summary>
+    internal static ColumnArgs Plan(string[] args)
+    {
+        var p = new ColumnArgs { Parsed = ScanArgs(args) };
+        p.Operands = p.Parsed.Operands();
+        if (p.Parsed.HasError) return p;
+        if (p.Parsed.Has(OptSpecSet.HelpId) || p.Parsed.Has(OptSpecSet.VersionId)) return p;
+
+        foreach (var tok in p.Parsed.Tokens)
+        {
+            if (tok.Kind != ArgTokKind.Option) continue;
+            switch (tok.OptId)
+            {
+                case OptTable: p.Table = true; break;
+                case OptKeepEmpty: p.KeepEmpty = true; break;
+                case OptSep: p.Separators = tok.Value!; break;
+                case OptOutSep: p.OutputSeparator = tok.Value!; break;
+                case OptLimit:
+                    {
+                        string v = tok.Value!;
+                        bool digits = v.Length > 0;
+                        foreach (char ch in v) if (ch < '0' || ch > '9') { digits = false; break; }
+                        if (!digits) { p.Error = $"column: invalid columns limit argument: '{v}'"; return p; }
+                        int n = int.TryParse(v, out int parsed) ? parsed : int.MaxValue;
+                        if (n == 0) { p.Error = "column: columns limit must be greater than zero"; return p; }
+                        p.Limit = n;
+                        break;
+                    }
+            }
+        }
+        return p;
+    }
+
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
@@ -53,26 +128,21 @@ public sealed class InvokeBashColumnCommand : PSCmdlet
     public PSObject? InputObject { get; set; }
 
     /// <summary>Decoy for the unsupported <c>-c</c> (--output-width). Bare <c>-c</c>
-    /// silently bound <c>-Confirm</c>; re-injected below so the classifier fires.</summary>
+    /// silently bound <c>-Confirm</c>; re-injected so the classifier fires.</summary>
     [Parameter] public SwitchParameter C { get; set; }
 
-    /// <summary>Decoy for the unsupported <c>-o</c> (--output-separator). Bare <c>-o</c>
-    /// prefix-collides with <c>-OutVariable</c>/<c>-OutBuffer</c> and crashed the binder.</summary>
-    [Parameter] public SwitchParameter O { get; set; }
+    /// <summary>The <c>-o STRING</c> output separator. Bare <c>-o</c> prefix-collides with
+    /// <c>-OutVariable</c>/<c>-OutBuffer</c>; declared value-bearing so the value binds with it.</summary>
+    [Parameter] public string? O { get; set; }
 
-    // Valid GNU column flags recognized but not implemented by ps-bash.
-    private static readonly HashSet<string> ColumnValidButUnsupported =
-        new(StringComparer.Ordinal)
-        {
-            "-x", "--fillrows",
-            "-c", "--output-width",
-            "-o", "--output-separator",
-            "-N", "--table-columns",
-            "-J", "--json",
-            "-n", "--table-name",
-            "-R", "--table-right",
-            "-L", "--keep-empty-lines",
-        };
+    /// <summary>Decoy for <c>-e</c> (header-repeat no-op): ambiguous between -ErrorAction/-ErrorVariable.</summary>
+    [Parameter] public SwitchParameter E { get; set; }
+
+    /// <summary>Decoy for <c>-d</c> (noheadings no-op): would bind <c>-Debug</c>.</summary>
+    [Parameter] public SwitchParameter D { get; set; }
+
+    /// <summary>Decoy for <c>-V</c> (version): would bind <c>-Verbose</c>.</summary>
+    [Parameter] public SwitchParameter V { get; set; }
 
     private readonly List<PSObject> _pipeline = new();
 
@@ -86,76 +156,31 @@ public sealed class InvokeBashColumnCommand : PSCmdlet
 
     protected override void EndProcessing()
     {
-        // Re-inject decoy-bound classifier flags so the classifier fires exit 2
-        // (bare -c/-o never reach Arguments — the binder eats/crashes them).
-        var args = BashRuntime.PrependDecoys(Arguments, (C.IsPresent, "-c"), (O.IsPresent, "-o"));
+        var raw = Arguments ?? Array.Empty<string>();
+        var pre = new List<string>();
+        if (C.IsPresent) pre.Add("-c");
+        if (E.IsPresent) pre.Add("-e");
+        if (D.IsPresent) pre.Add("-d");
+        if (V.IsPresent) pre.Add("-V");
+        if (O is not null) { pre.Add("-o"); pre.Add(O); }
+        var args = pre.Count == 0 ? raw : pre.Concat(raw).ToArray();
 
         FileSystemHelpers.SetLastExitCode(this, 0);
-        if (FileSystemHelpers.TryHandleVersion(this, "column", args)) return;
-        if (Array.IndexOf(args, "--help") >= 0)
+        var plan = Plan(args);
+        if (FileSystemHelpers.TryWriteParseError(this, "column", plan.Parsed)) return;
+        if (FileSystemHelpers.TryHandleInfoOptions(this, "column", plan.Parsed)) return;
+        if (plan.Error is { } planError)
         {
-            foreach (var line in InvokeCommand.InvokeScript(
-                         "param($n) Show-BashHelp $n", "column"))
-            {
-                WriteObject(line);
-            }
+            FileSystemHelpers.WriteBashError(this, planError);
+            FileSystemHelpers.SetLastExitCode(this, 1);
             return;
         }
 
-        bool tableMode = false;
-        string? separator = null;
-        var operands = new List<string>();
-        bool pastDoubleDash = false;
-
-        for (int i = 0; i < args.Length; i++)
-        {
-            string arg = args[i];
-
-            if (pastDoubleDash)
-            {
-                operands.Add(arg);
-                continue;
-            }
-
-            if (arg == "--")
-            {
-                pastDoubleDash = true;
-                continue;
-            }
-
-            // -t (table mode) — case-sensitive match parity with the oracle's `-ceq`.
-            if (arg == "-t")
-            {
-                tableMode = true;
-                continue;
-            }
-
-            // -s SEP (separated form) — case-sensitive match parity with oracle.
-            if (arg == "-s")
-            {
-                if (i + 1 < args.Length)
-                {
-                    separator = args[i + 1];
-                    i++;
-                }
-                continue;
-            }
-
-            // -sX joined form — oracle requires exactly one char (^-s(.)$).
-            if (arg.Length == 3 && arg[0] == '-' && arg[1] == 's')
-            {
-                separator = arg[2].ToString();
-                continue;
-            }
-
-            operands.Add(arg);
-        }
-
-        if (FileSystemHelpers.TryWriteOperandOptionError(
-                this, "column", operands, ColumnValidButUnsupported)) return;
+        var operands = plan.Operands;
 
         // Collect input lines.
         var lines = new List<string>();
+        bool hadError = false;
 
         if (operands.Count == 0 && _pipeline.Count > 0)
         {
@@ -178,9 +203,9 @@ public sealed class InvokeBashColumnCommand : PSCmdlet
         }
         else
         {
-            foreach (var raw in operands)
+            foreach (var raw2 in operands)
             {
-                foreach (var filePath in FileSystemHelpers.ResolveOperandPaths(this, raw))
+                foreach (var filePath in FileSystemHelpers.ResolveOperandPaths(this, raw2))
                 {
                     try
                     {
@@ -193,51 +218,46 @@ public sealed class InvokeBashColumnCommand : PSCmdlet
                     {
                         if (FileSystemHelpers.IsPipelineStop(ex)) throw;
                         WriteReadError(filePath, ex);
+                        hadError = true;
                     }
                 }
             }
         }
 
-        if (!tableMode)
+        if (!plan.Table)
         {
             foreach (var line in lines)
             {
                 WriteObject(BashRuntime.NewBashObject(line));
             }
-            return;
+        }
+        else
+        {
+            foreach (var row in RenderTable(lines, plan.Separators, plan.OutputSeparator, plan.Limit, plan.KeepEmpty))
+            {
+                WriteObject(BashRuntime.NewBashObject(row));
+            }
         }
 
-        // Table mode: split each line into fields, compute per-column widths,
-        // emit padded rows. The oracle pre-trims each non-empty line before
-        // splitting (its `$line.Trim()`); empty lines become a single empty
-        // field. The output column separator is hard-coded to two spaces.
-        // An EMPTY separator (`-s ''`) cannot delimit: Regex.Escape("") = "" and
-        // Regex.Split(line, "") matches every position, yielding one phantom column
-        // per character. Guard it like the sort/awk/tr empty-pattern traps — an empty
-        // delimiter means "no split", so each line is a single field.
-        string? splitPattern = separator switch
-        {
-            null => @"\s+",
-            "" => null,
-            _ => Regex.Escape(separator),
-        };
-        var rows = new List<string[]>();
+        if (hadError) FileSystemHelpers.SetLastExitCode(this, 1);
+    }
+
+    /// <summary>
+    /// Table layout (pure). <paramref name="separators"/> null = split on runs of blanks; otherwise each
+    /// character of the set delimits a field and empty fields are kept. <paramref name="limit"/> caps the
+    /// field count (the last field holds the rest of the line). Blank lines are dropped unless
+    /// <paramref name="keepEmpty"/>. Every column but the last is padded to its widest cell; a short row is
+    /// completed with empty cells.
+    /// </summary>
+    internal static List<string> RenderTable(
+        IReadOnlyList<string> lines, string? separators, string outputSeparator, int limit, bool keepEmpty)
+    {
+        var rows = new List<string[]>(lines.Count);
         int maxCols = 0;
         foreach (var line in lines)
         {
-            string[] fields;
-            if (line == string.Empty)
-            {
-                fields = new[] { string.Empty };
-            }
-            else if (splitPattern is null)
-            {
-                fields = new[] { line.Trim() };
-            }
-            else
-            {
-                fields = Regex.Split(line.Trim(), splitPattern);
-            }
+            string[] fields = SplitFields(line, separators, limit);
+            if (fields.Length == 0 && !keepEmpty) continue;
             rows.Add(fields);
             if (fields.Length > maxCols) maxCols = fields.Length;
         }
@@ -251,23 +271,60 @@ public sealed class InvokeBashColumnCommand : PSCmdlet
             }
         }
 
+        var result = new List<string>(rows.Count);
         foreach (var row in rows)
         {
             var sb = new StringBuilder();
-            for (int c = 0; c < row.Length; c++)
+            for (int c = 0; c < maxCols; c++)
             {
-                if (c > 0) sb.Append("  ");
-                if (c < row.Length - 1)
-                {
-                    sb.Append(row[c].PadRight(widths[c]));
-                }
-                else
-                {
-                    sb.Append(row[c]);
-                }
+                string cell = c < row.Length ? row[c] : string.Empty;
+                if (c > 0) sb.Append(outputSeparator);
+                if (c < maxCols - 1) sb.Append(cell.PadRight(widths[c]));
+                else sb.Append(cell);
             }
-            WriteObject(BashRuntime.NewBashObject(sb.ToString()));
+            result.Add(sb.ToString());
         }
+        return result;
+    }
+
+    private static string[] SplitFields(string line, string? separators, int limit)
+    {
+        if (separators is null)
+        {
+            // Blanks: leading blanks dropped, runs collapse; past the limit the rest of the line is one field.
+            var list = new List<string>();
+            int i = 0, n = line.Length;
+            while (true)
+            {
+                while (i < n && (line[i] == ' ' || line[i] == '\t')) i++;
+                if (i >= n) break;
+                if (list.Count == limit - 1)
+                {
+                    list.Add(line.Substring(i).TrimEnd(' ', '\t'));
+                    break;
+                }
+                int start = i;
+                while (i < n && line[i] != ' ' && line[i] != '\t') i++;
+                list.Add(line.Substring(start, i - start));
+            }
+            return list.ToArray();
+        }
+
+        if (line.Length == 0) return Array.Empty<string>();
+        if (separators.Length == 0) return new[] { line }; // an empty set cannot delimit: one field
+        var parts = new List<string>();
+        int from = 0;
+        for (int i = 0; i < line.Length; i++)
+        {
+            if (parts.Count == limit - 1) break;
+            if (separators.IndexOf(line[i]) >= 0)
+            {
+                parts.Add(line.Substring(from, i - from));
+                from = i + 1;
+            }
+        }
+        parts.Add(line.Substring(from));
+        return parts.ToArray();
     }
 
     private void WriteReadError(string path, Exception ex)

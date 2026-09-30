@@ -46,8 +46,7 @@ public class BinderDecoyClassifierTests : IClassFixture<SharedPwshFixture>
     [InlineData("'x' | Invoke-BashCat -v")]
     // tee diagnose-write-errors
     [InlineData("'x' | Invoke-BashTee -p out.txt")]
-    // column output width / separator
-    [InlineData("'a b' | Invoke-BashColumn -o")]
+    // column output width (-o is implemented now: a value-bearing decoy)
     [InlineData("'a b' | Invoke-BashColumn -c")]
     // split elide-empty / line-bytes
     [InlineData("'x' | Invoke-BashSplit -e")]
