@@ -294,7 +294,10 @@ public sealed class InvokeBashGzipCommand : PSCmdlet
                 }
                 else
                 {
-                    FileSystemHelpers.WriteBashError(this, $"gzip: {resolved.Replace('\\', '/')}: No such file or directory");
+                    // GNU gzip -d retries NAME as NAME<suffix> and reports the name it tried last.
+                    string tried = decompress && !resolved.EndsWith(suffix, StringComparison.Ordinal)
+                        ? resolved + suffix : resolved;
+                    FileSystemHelpers.WriteBashError(this, $"gzip: {tried.Replace('\\', '/')}: No such file or directory");
                 }
             }
         }

@@ -561,11 +561,10 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
         catch (Exception ex)
         {
             if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-            string normalized = path.Replace('\\', '/');
-            bool notFound = ex is FileNotFoundException or DirectoryNotFoundException
-                || ex.InnerException is FileNotFoundException or DirectoryNotFoundException;
-            string msg = notFound ? "No such file or directory" : ex.Message;
-            FileSystemHelpers.WriteBashError(this, $"{command}: {normalized}: {msg}");
+            // GNU: head: cannot open 'x' for reading: No such file or directory (path shown as typed
+            // by OperandDisplay at the stderr sink).
+            FileSystemHelpers.WriteBashError(this,
+                $"{command}: cannot open '{path.Replace('\\', '/')}' for reading: {FileSystemHelpers.ReadErrorMessage(ex)}");
             return null;
         }
 

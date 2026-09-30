@@ -300,11 +300,10 @@ public sealed class InvokeBashStringsCommand : PSCmdlet
 
     private void WriteReadError(string path, string command, Exception ex)
     {
-        string normalized = path.Replace('\\', '/');
-        bool notFound = ex is FileNotFoundException or DirectoryNotFoundException
-            || ex.InnerException is FileNotFoundException or DirectoryNotFoundException;
-        string msg = notFound ? "No such file or directory" : ex.Message;
-        FileSystemHelpers.WriteBashError(this, $"{command}: {normalized}: {msg}");
+        // binutils: strings: 'x': No such file  (no "or directory")
+        string msg = FileSystemHelpers.ReadErrorMessage(ex);
+        if (msg == "No such file or directory") msg = "No such file";
+        FileSystemHelpers.WriteBashError(this, $"{command}: '{path.Replace('\\', '/')}': {msg}");
     }
 
     /// <summary>

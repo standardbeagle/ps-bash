@@ -431,12 +431,11 @@ public sealed class InvokeBashBase64Command : PSCmdlet
 
     private void WriteReadError(string path, Exception ex, bool normalizeNotFound)
     {
-        bool notFound = normalizeNotFound
-            && (ex is FileNotFoundException or DirectoryNotFoundException
-                || ex.InnerException is FileNotFoundException or DirectoryNotFoundException);
-        string msg = notFound ? "No such file or directory" : ex.Message;
-        string normalized = path.Replace('\\', '/');
-        FileSystemHelpers.WriteBashError(this, $"base64: {normalized}: {msg}");
+        // normalizeNotFound is kept for the two call sites; both now map a missing file to GNU's text
+        // (the encode path used to leak the .NET "Could not find file 'C:\...'" message).
+        _ = normalizeNotFound;
+        FileSystemHelpers.WriteBashError(this,
+            $"base64: {path.Replace('\\', '/')}: {FileSystemHelpers.ReadErrorMessage(ex)}");
     }
 
     private sealed class Base64OutputBuilder

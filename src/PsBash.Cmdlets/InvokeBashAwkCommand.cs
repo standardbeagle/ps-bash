@@ -141,7 +141,7 @@ public sealed class InvokeBashAwkCommand : PSCmdlet
                 }
                 if (!File.Exists(resolved))
                 {
-                    FileSystemHelpers.WriteBashError(this, $"awk: can't open source file {pf}: No such file or directory");
+                    FileSystemHelpers.WriteBashError(this, $"awk: fatal: cannot open source file `{pf}' for reading: No such file or directory");
                     SessionState.PSVariable.Set("global:LASTEXITCODE", 2);
                     return;
                 }
@@ -210,7 +210,7 @@ public sealed class InvokeBashAwkCommand : PSCmdlet
                         }
                         if (!File.Exists(resolved))
                         {
-                            FileSystemHelpers.WriteBashError(this, $"awk: can't open file {file}: No such file or directory");
+                            FileSystemHelpers.WriteBashError(this, $"awk: fatal: cannot open file `{file}' for reading: No such file or directory");
                             fileError = 2;
                             continue;
                         }

@@ -125,10 +125,8 @@ public sealed class InvokeBashRevCommand : PSCmdlet
 
     private void WriteReadError(string path, Exception ex)
     {
-        bool notFound = ex is FileNotFoundException or DirectoryNotFoundException
-            || ex.InnerException is FileNotFoundException or DirectoryNotFoundException;
-        string msg = notFound ? "No such file or directory" : ex.Message;
-        string normalized = path.Replace('\\', '/');
-        FileSystemHelpers.WriteBashError(this, $"rev: {normalized}: {msg}");
+        // util-linux: rev: cannot open x: No such file or directory
+        FileSystemHelpers.WriteBashError(this,
+            $"rev: cannot open {path.Replace('\\', '/')}: {FileSystemHelpers.ReadErrorMessage(ex)}");
     }
 }
