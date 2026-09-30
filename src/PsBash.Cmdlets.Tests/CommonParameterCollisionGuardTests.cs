@@ -42,10 +42,15 @@ public class CommonParameterCollisionGuardTests
         new(StringComparer.Ordinal)
         {
             ["find"] = new() { 'o', 'a' },
-            ["xargs"] = new() { 'i' },
+            // xargs: single-quoted like the ordered set below, so the INNER command's flags
+            // (`xargs basename -a`) reach Arguments verbatim too. The manual scan stops at the
+            // first operand; I/P/D stay declared for direct calls.
+            ["xargs"] = new(CollidingLetters),
             // PsEmitter.OrderedArgCommands: the emitter single-quotes EVERY dash-leading literal
             // for these (shared ordered parser), so all colliding letters reach Arguments. Their
             // cmdlets still keep decoys for DIRECT calls (Pester: `Invoke-BashTee -a f`).
+            ["time"] = new(CollidingLetters),
+            ["env"] = new(CollidingLetters),
             ["tee"] = new(CollidingLetters),
             ["cp"] = new(CollidingLetters),
             ["mv"] = new(CollidingLetters),
