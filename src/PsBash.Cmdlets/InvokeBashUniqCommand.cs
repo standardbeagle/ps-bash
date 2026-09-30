@@ -165,7 +165,7 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
         // Operands in order. GNU: a non-option word `+N` (not after `--`) is the obsolete skip-chars
         // (-s N) — later of it and -s wins, like any option — and a third real operand is an error
         // (uniq takes INPUT [OUTPUT]).
-        bool plusOk = ObsoletePlusAllowed(Environment.GetEnvironmentVariable("_POSIX2_VERSION"));
+        bool plusOk = ObsoletePlusAllowed(BashVariableStore.Get("_POSIX2_VERSION"));
         u.Operands = new List<string>();
         foreach (var tok in p.Tokens)
         {
