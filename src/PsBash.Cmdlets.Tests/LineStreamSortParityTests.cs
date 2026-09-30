@@ -127,23 +127,18 @@ public class LineStreamSortParityTests : LineStreamParityHarness
     // ── decline matrix ───────────────────────────────────────────────────────
 
     [Theory]
-    [InlineData("-V")]                       // version sort: comparator not ported
-    [InlineData("-h")]
-    [InlineData("-g")]
-    [InlineData("-M")]
     [InlineData("-c")]                       // check mode: an exit-code path
-    [InlineData("-b")]
-    [InlineData("-d")]
-    [InlineData("-s")]
-    [InlineData("-i")]
-    [InlineData("-rV")]                      // bundle containing a non-ported flag
-    [InlineData("--reverse")]                // long forms are never certified
-    [InlineData("--numeric-sort")]
-    [InlineData("--key=2")]
+    [InlineData("-C")]
+    [InlineData("-m")]                       // merge of one stream is a pass-through, not a sort
     [InlineData("-o out.txt")]
     [InlineData("-t")]                       // dangling value flag
     [InlineData("-k")]
-    [InlineData("--")]
+    [InlineData("-k0")]                      // invalid key: cmdlet error + exit 2
+    [InlineData("-n -g")]                    // incompatible options
+    [InlineData("-z")]                       // valid-but-unsupported
+    [InlineData("-R")]
+    [InlineData("--debug")]
+    [InlineData("--help")]
     [InlineData("file.txt")]                 // file operand → file mode
     [InlineData("-")]                        // explicit stdin operand
     [InlineData("-x")]                       // unknown flag → cmdlet error path
@@ -151,6 +146,42 @@ public class LineStreamSortParityTests : LineStreamParityHarness
         => Assert.False(LineStreamRegistry.TryCreate("sort", Split(flags), out _),
             $"sort core must DECLINE '{flags}' rather than guess");
 
+    // The core now shares the cmdlet's Plan + SortEngine, so every mode the cmdlet accepts is certified.
+    private static readonly string[] Mixed =
+    {
+        "x 10K 2.10 Mar", "y 9 2.9 Jan", "Z 1.5M 2.9 feb", "a  3e2 10.1 Dec", "b 7 2.9 jan", "B 7 2.9 Jan",
+        "", "c\tt 5 x", "a-b 10 1.0 Nov",
+    };
+
+    [Theory]
+    [InlineData("-V")]
+    [InlineData("-rV")]
+    [InlineData("-h")]
+    [InlineData("-g")]
+    [InlineData("-M")]
+    [InlineData("-b")]
+    [InlineData("-d")]
+    [InlineData("-i")]
+    [InlineData("-s")]
+    [InlineData("-fu")]
+    [InlineData("--reverse")]
+    [InlineData("--numeric-sort")]
+    [InlineData("--key=2")]
+    [InlineData("--sort=n")]
+    [InlineData("-k2,2n")]
+    [InlineData("-k2,2nr")]
+    [InlineData("-r -k2,2n")]               // a key with its own option does NOT inherit -r
+    [InlineData("-n -r -k2,2")]             // a plain key inherits -n and -r
+    [InlineData("-k3,3V")]
+    [InlineData("-k4,4M")]
+    [InlineData("-k1.2,1.3")]                // offsets count from the start of their own field
+    [InlineData("-k2,2g -k1,1f")]
+    [InlineData("-u -k3,3")]                 // -u keeps the first line of each run, in input order
+    [InlineData("-t- -k2")]
+    [InlineData("-n")]                       // keyless -n reads a numeric prefix
+    [InlineData("--")]
+    public void SortCore_NewlyCertifiedModes_MatchCmdlet(string flags)
+        => AssertSort(Split(flags), Mixed);
     [Fact]
     public void SortCore_EmptyFieldSeparator_Declines()
         // `sort -t ''` is an exit-2 error in the cmdlet, not a sort.

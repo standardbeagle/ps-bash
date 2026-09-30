@@ -85,6 +85,7 @@ public class CommonParameterCollisionGuardTests
             ["stat"] = new(CollidingLetters),
             ["file"] = new(CollidingLetters),
             ["cut"] = new(CollidingLetters),
+            ["sort"] = new(CollidingLetters),
         };
 
     [Fact]
