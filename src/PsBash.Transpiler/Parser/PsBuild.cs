@@ -30,6 +30,26 @@ namespace PsBash.Core.Parser;
 /// </summary>
 public static class PsBuild
 {
+    // ─────────────────────────────── Portable /tmp ───────────────────────────────
+
+    /// <summary>
+    /// Runtime-evaluated temp directory for a bash <c>/tmp</c> operand. The transpiled text
+    /// may run on any OS: Windows has no <c>/tmp</c> (map to <c>$env:TEMP</c>), while on
+    /// Linux/macOS <c>$env:TEMP</c> is usually unset (keep the literal <c>/tmp</c>).
+    /// <c>$env:OS</c> is <c>Windows_NT</c> only on Windows.
+    /// </summary>
+    public const string TempDirExpr = "$($env:OS -eq 'Windows_NT' ? $env:TEMP : '/tmp')";
+
+    /// <summary>
+    /// Word form of <c>/tmp/REST</c>: <c>"TempDirExpr/REST"</c>. Double-quoted because a bare
+    /// <c>$(…)/rest</c> is two arguments in PowerShell. <paramref name="rest"/> is emitted word
+    /// text and must already be safe inside double quotes (no bare <c>"</c>); a REST containing
+    /// one falls back to the Windows-only legacy form.
+    /// </summary>
+    public static string TempPath(string rest)
+        => rest.Contains('"')
+            ? "$env:TEMP\\" + rest
+            : "\"" + TempDirExpr + "/" + rest + "\"";
     // ─────────────────────────────── Quoting / escaping ───────────────────────────────
 
     /// <summary>The chars that must be escaped inside a PowerShell double-quoted string.</summary>

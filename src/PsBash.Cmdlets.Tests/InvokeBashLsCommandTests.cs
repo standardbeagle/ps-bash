@@ -245,7 +245,8 @@ public class InvokeBashLsCommandTests : IDisposable, IClassFixture<SharedPwshFix
     {
         var f = WriteFile("target.txt", "data");
         var names = RunBashText($"Invoke-BashLs '{Q(f)}'");
-        Assert.Equal(new[] { "target.txt" }, names);
+        // bash: `ls /abs/target.txt` prints the operand as typed.
+        Assert.Equal(new[] { f }, names);
     }
 
     // --- Long format: -l ---
@@ -311,7 +312,8 @@ public class InvokeBashLsCommandTests : IDisposable, IClassFixture<SharedPwshFix
         var box = Path.Combine(_tmpDir, "box");
 
         var names = RunBashText($"Invoke-BashLs -d '{Q(box)}'");
-        Assert.Equal(new[] { "box" }, names);
+        // bash prints the operand as typed (here the absolute path).
+        Assert.Equal(new[] { box }, names);
     }
 
     // --- Recursive: -R ---
