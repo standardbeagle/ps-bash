@@ -49,7 +49,9 @@ $besideDlls = 'PsBash.Cmdlets.dll', 'PsBash.Transpiler.dll', 'Parlot.dll'
 
 if (-not $SkipBuild) {
     Write-Host '==> Building PsBash.Cmdlets (Debug)…' -ForegroundColor Cyan
-    dotnet build $cmdletsProj -c Debug --nologo -clp:ErrorsOnly
+    # Same flags as `tman build` (-m:1 / -nodeReuse:false / no shared compiler) so an aborted
+    # build leaves no MSBuild node or VBCSCompiler holding obj/bin.
+    dotnet build $cmdletsProj -c Debug --nologo -clp:ErrorsOnly -m:1 -nodeReuse:false -p:UseSharedCompilation=false
     if ($LASTEXITCODE -ne 0) { throw "Cmdlets build failed (exit $LASTEXITCODE)." }
 
     # Prefer net8.0 (the module's load target); fall back to whatever TFM has the DLLs.

@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Run dotnet tests and clean up all spawned processes on exit.
+# Legacy runner (Stress filter split, coverage, timeouts). DEFAULT is `tman test` / `tman test-proj`
+# (CLAUDE.md "Running Tests") - build+test in one serialized job, kill-tree on exit.
+# Cleanup here is scoped to processes whose exe is under THIS checkout's src/*/bin.
 # Usage: ./scripts/test.sh [dotnet test args...]
 #
 # Coverage: set PSBASH_COVERAGE=1 to collect XPlat Code Coverage.
@@ -21,51 +23,30 @@
 set -euo pipefail
 
 cleanup() {
-    # Graceful shutdown first.
+    # Graceful shutdown of THIS user's build servers first (no process kills).
     dotnet build-server shutdown 2>/dev/null || true
 
-    # On Windows, `pkill` is not available (Git Bash does not ship it), so the
-    # previous cleanup silently no-op'd on Windows. That left ps-bash.exe and
-    # ps-bash-host.exe children running from src/PsBash.Shell/bin/Debug after
-    # a test run; subsequent `dotnet build` invocations then failed copying
-    # ps-bash.exe because the binary was locked. Use taskkill.exe with exact
-    # image-name matching so we never touch unrelated user processes (e.g.
-    # an interactive `pwsh` session would NOT be matched here).
-    # Windows: kill ONLY this repo's leaked test processes, not every testhost /
-    # vstest / ps-bash on the box. On a shared machine with many concurrent agents
-    # (each in its own worktree) the old blanket `taskkill //IM testhost.exe`
-    # aborted OTHER agents' in-flight test runs (#17). Scope by matching this
-    # repo's path in the process ExecutablePath/CommandLine via a CIM query.
-    if command -v pwsh >/dev/null 2>&1 && command -v taskkill.exe >/dev/null 2>&1; then
+    # Reap leaked test processes - ONLY those whose EXECUTABLE lives under THIS checkout's
+    # src/*/bin (dev-build ps-bash / ps-bash-host / testhost). Never by image name and never
+    # by command-line match: that would kill ~/.local/bin ps-bash (serves other sessions'
+    # Bash tool), other worktrees' runs, and any process merely mentioning this path.
+    # `tman test` needs none of this (kill-tree on exit); prefer it.
+    if command -v pwsh >/dev/null 2>&1; then
         PSBASH_CLEANUP_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -W 2>/dev/null || pwd)" \
         pwsh -NoProfile -Command '
-            $root = $env:PSBASH_CLEANUP_ROOT.Replace("\","/").ToLower()
+            $root = $env:PSBASH_CLEANUP_ROOT
             if ([string]::IsNullOrWhiteSpace($root)) { return }
+            $prefix = ([IO.Path]::GetFullPath((Join-Path $root "src"))).TrimEnd("\","/").Replace("\","/").ToLowerInvariant() + "/"
             Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
-              Where-Object { $_.Name -in @("testhost.exe","vstest.console.exe","ps-bash.exe","ps-bash-host.exe") } |
-              Where-Object { "$($_.ExecutablePath) $($_.CommandLine)".Replace("\","/").ToLower().Contains($root) } |
+              Where-Object { $_.Name -in @("testhost.exe","vstest.console.exe","ps-bash.exe","ps-bash-host.exe","testhost","ps-bash","ps-bash-host") -and $_.ExecutablePath } |
+              Where-Object {
+                  $exe = $_.ExecutablePath.Replace("\","/").ToLowerInvariant()
+                  $exe.StartsWith($prefix) -and $exe.Contains("/bin/")
+              } |
               ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
         ' 2>/dev/null || true
-    elif command -v taskkill.exe >/dev/null 2>&1; then
-        # Fallback (no pwsh): blanket image kill. Machine-wide — only reached on a
-        # box without PowerShell, where the shared-agent hazard does not apply.
-        taskkill.exe //F //IM ps-bash-host.exe //T 2>/dev/null || true
-        taskkill.exe //F //IM ps-bash.exe      //T 2>/dev/null || true
-        taskkill.exe //F //IM testhost.exe        //T 2>/dev/null || true
-        taskkill.exe //F //IM vstest.console.exe  //T 2>/dev/null || true
-    elif command -v pkill >/dev/null 2>&1; then
-        # POSIX path: pkill -f matches the full command line. Patterns are
-        # anchored to the on-disk binary path so a similarly-named binary in
-        # the user's PATH (or an interactive pwsh) is left alone.
-        pkill -f "MSBuild\.dll.*nodeReuse:true" 2>/dev/null || true
-        pkill -f "testhost"                     2>/dev/null || true
-        pkill -f "vstest"                       2>/dev/null || true
-        pkill -f 'dotnet.*\btest\b'             2>/dev/null || true
-        pkill -f '/ps-bash($|[[:space:]])'      2>/dev/null || true
-        pkill -f '/ps-bash-host($|[[:space:]])' 2>/dev/null || true
     fi
 }
-
 trap cleanup EXIT
 trap cleanup INT
 

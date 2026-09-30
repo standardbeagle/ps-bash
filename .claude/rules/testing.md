@@ -5,11 +5,13 @@ paths:
 
 # TESTING. QA bar: @.claude/rules/qa-rubric.md (overrides this on conflict).
 
-文言：用scripts/test.sh不用裸dotnet test；分五層；改錯必附回歸測試；命名Transpile_輸入_預期。
+文言：用tman不用裸dotnet test；分五層；改錯必附回歸測試；命名Transpile_輸入_預期。
 
 ## RUN
-ALWAYS `scripts/test.sh` — NEVER bare `dotnet test` (script kills MSBuild nodes + testhost).
-`./scripts/test.sh` · `--filter "MyTest"` · `src/PsBash.Core.Tests` (project). Don't put `|` in a `--filter` unless quoted.
+ALWAYS `tman` (see CLAUDE.md "Running Tests") — NEVER bare `dotnet build`/`dotnet test` (leaks MSBuild nodes + testhost).
+`tman build` · `tman test` · `tman test-proj src/PsBash.Core.Tests --filter "..."` · `tman pester`.
+Test verbs BUILD FIRST in the same job (no stale-binary runs). Quote a `--filter` containing `|`.
+`scripts/test.sh` = legacy (Stress split/coverage); its cleanup is scoped to this checkout's `src/*/bin`.
 
 ## LAYERS
 1. BashLexerTests — tokens. 2. BashParserTests — AST shape. 3. PsEmitterTests — `PsEmitter.Transpile()` output.

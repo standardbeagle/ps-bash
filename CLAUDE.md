@@ -62,27 +62,33 @@ Run builds and tests through **`tman`** (config: `.tman.kdl`). Never bare `dotne
 once corrupt the shared `src/*/bin` outputs.
 
 ```bash
-tman build                                        # dotnet build -c Debug -f net10.0
-tman test                                         # full suite
-tman test-proj src/PsBash.Core.Tests              # one project
+tman build                                        # dotnet build ps-bash.sln -c Debug -f net10.0
+tman test                                         # BUILD, then full suite (one job)
+tman test-proj src/PsBash.Core.Tests              # BUILD, then one project (one job)
 tman test-proj src/PsBash.Cmdlets.Tests --filter "FullyQualifiedName~Fused"
+tman pester [-Detailed] [-Filter '*echo*']        # release-blocking Pester gate (scripts/pester.ps1)
 tman ls --all | tman status <id> | tman kill all  # inspect / stop runs
 ```
 
-Why tman and not `dotnet` directly:
+How it is wired (all four aliases run `scripts/tman-job.ps1`):
 
-1. **Kill-tree on exit** — no orphaned MSBuild/testhost survives a run (the job
-   `scripts/test.sh` was written for; that script still works but is not the default).
-2. **`max-parallel 1`** — serializes build/test in this directory. Concurrent builds
-   against the shared `src/*/bin/Debug/net10.0` outputs are the documented root cause of
-   this repo's suite flakiness: a half-written test bin can't start a runspace, so spawned
-   hosts die with "stream closed before EXIT sentinel" or hang 30s with no output. Never
-   raise this to chase speed.
-3. **`stall 5m` / `max-time 45m`** — a wedged run is killed instead of hanging the session.
+1. **Test verbs always build first, in the same job** — `dotnet build ps-bash.sln` then
+   `dotnet test --no-build`. There is no separate "stale binaries" path and nothing can rebuild
+   between the two steps. (`test-proj` builds the whole solution, not just the project: suites
+   spawn `ps-bash.exe` / `ps-bash-host.exe`, which a project-only build does not relink.)
+2. **One serialized bucket across all aliases.** tman buckets by alias name, so the script takes
+   a per-checkout file lock: `build`/`test`/`test-proj`/`pester` queue behind each other.
+   Plus `max-parallel 1`, `stall 5m`, `max-time 45m`, kill-tree on exit.
+3. **MSBuild switches live in the script, not the kdl.** tman 0.5.1 rewrites `-m:1` →
+   `-m: 1` and `-nodeReuse:false` → `-nodeReuse: false` in args it passes through. Only *your*
+   args (`--filter ...`) cross tman; avoid `-x:y`-style switches there.
+4. Quote any `--filter` containing `|` — an unquoted pipe becomes a shell pipe and hangs.
 
-**Never trust suite results gathered while another build was running.** If you must check,
-`tman ls` shows live runs. Quote any `--filter` containing `|` — an unquoted pipe becomes a
-shell pipe and hangs.
+`scripts/test.sh` is a legacy runner (Stress split, coverage, timeouts), not the default; its
+cleanup only ever kills processes whose exe is under *this checkout's* `src/*/bin`.
+
+**Never trust suite results gathered while another build was running.** `tman ls` shows live
+runs (other worktrees/sessions included).
 
 Orphaned DEV-BUILD `ps-bash-host` / `ps-bash` processes (path under the repo's `bin`) lock
 output DLLs and cause MSB3021 on the next build. Kill only those — **never** the
@@ -136,7 +142,7 @@ The publish gate is the **Pester** suite (`tests/PsBash.Tests.ps1`) + **Core.Tes
 suites and every `Skip report` step are `continue-on-error` (non-fatal). A green
 `scripts/test.sh` / xunit run is NOT enough — Pester calls cmdlets directly
 (`Invoke-BashEcho -e '...'`), hitting bare-flag binder collisions and manifest invariants xunit
-never touches. Run Pester locally first (refresh the gitignored beside-module DLL, then
+never touches. Run Pester locally first (`tman pester`: builds, refreshes the gitignored beside-module DLL, runs
 `Invoke-Pester ./tests/`) — see the **release-pester-gate-local** memory and the `/publish`
 skill for the exact commands. Fix any failure before proceeding.
 
