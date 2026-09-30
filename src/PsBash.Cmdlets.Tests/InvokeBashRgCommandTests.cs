@@ -83,7 +83,7 @@ public class InvokeBashRgCommandTests : IDisposable, IClassFixture<SharedPwshFix
     [Theory]
     [InlineData("--color=auto")]
     [InlineData("--color=always")]
-    [InlineData("--colour")]
+    [InlineData("--color never")]   // rg's WHEN is a required value (there is no --colour)
     public void Rg_ColorFlag_AcceptedAndIgnored_InFallback(string colorFlag)
     {
         // Pipeline mode forces the internal fallback (native rg can't read

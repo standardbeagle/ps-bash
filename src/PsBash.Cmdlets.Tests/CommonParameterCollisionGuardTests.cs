@@ -90,6 +90,8 @@ public class CommonParameterCollisionGuardTests
             ["grep"] = new(CollidingLetters),
             // sed: GNU getopt via the shared parser; direct calls go through the psm1 literal-args proxy.
             ["sed"] = new(CollidingLetters),
+            // rg: ripgrep-flavoured ordered parser; the native passthrough receives the argv verbatim.
+            ["rg"] = new(CollidingLetters),
         };
 
     [Fact]
