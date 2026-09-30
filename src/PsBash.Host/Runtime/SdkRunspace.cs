@@ -108,19 +108,11 @@ internal sealed class SdkRunspace : IAsyncDisposable
             try
             {
                 var asm = System.Reflection.Assembly.LoadFrom(cmdletsDll);
-                Type[] types;
-                try { types = asm.GetTypes(); }
-                catch (ReflectionTypeLoadException ex)
-                {
-                    types = ex.Types.Where(t => t != null).ToArray()!;
-                }
+                // Metadata-first scan: NOT asm.GetTypes(), which loads every type (and so the
+                // Strata assemblies its helper types derive from) into every runspace.
                 int registered = 0;
-                foreach (var type in types)
+                foreach (var (type, attr) in CmdletTypeScanner.FindCmdletTypes(asm))
                 {
-                    if (type?.IsAbstract != false) continue;
-                    if (!typeof(Cmdlet).IsAssignableFrom(type)) continue;
-                    var attr = type.GetCustomAttribute<CmdletAttribute>();
-                    if (attr == null) continue;
                     iss.Commands.Add(new SessionStateCmdletEntry(
                         $"{attr.VerbName}-{attr.NounName}", type, null));
                     registered++;

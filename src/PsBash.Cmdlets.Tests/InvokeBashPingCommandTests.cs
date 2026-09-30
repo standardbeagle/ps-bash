@@ -49,9 +49,10 @@ public class InvokeBashPingCommandTests : IClassFixture<SharedPwshFixture>
         Assert.Contains(pwsh.Streams.Error, e => e.ToString().Contains("Destination address required"));
     }
 
-    [Fact]
+    [SkippableFact]
     public void Ping_PipedToShowStyled_AutoPicksNetSheet()
     {
+        Skip.IfNot(StrataBuild.Enabled, StrataBuild.SkipReason);
         // PingReply objects must auto-resolve to the built-in `net` stylesheet so
         // `ping | Show-Styled` (and the interactive default) colour replies by latency with no
         // explicit -Style. The test host has redirected I/O, so Show-Styled emits its headless

@@ -139,7 +139,9 @@ and drop the oldest entries (the trailing version-history URL still links them).
 ### 2. Run the gate locally — Pester + Core.Tests, not just xunit
 
 The publish gate is the **Pester** suite (`tests/PsBash.Tests.ps1`) + **Core.Tests**; the other
-suites and every `Skip report` step are `continue-on-error` (non-fatal). A green
+suites and every `Skip report` step are `continue-on-error` (non-fatal) in publish.yml. (build.yml,
+which runs on every push/PR, additionally gates on **Cmdlets.Tests**; publish.yml does not, because
+of an intermittent process-spawning hang on runners — revisit once that is proven stable.) A green
 `scripts/test.sh` / xunit run is NOT enough — Pester calls cmdlets directly
 (`Invoke-BashEcho -e '...'`), hitting bare-flag binder collisions and manifest invariants xunit
 never touches. Run Pester locally first (`tman pester`: builds, refreshes the gitignored beside-module DLL, runs

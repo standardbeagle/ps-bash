@@ -19,9 +19,10 @@ public class ShowStyledCommandTests : IClassFixture<SharedPwshFixture>
         _fixture = fixture;
     }
 
-    [Fact]
+    [SkippableFact]
     public void Headless_BuildsViewTreeAndSummarizes()
     {
+        Skip.IfNot(StrataBuild.Enabled, StrataBuild.SkipReason);
         var pwsh = _fixture.AcquireFresh();
         var script = """
             $rows = @(
@@ -41,9 +42,10 @@ public class ShowStyledCommandTests : IClassFixture<SharedPwshFixture>
         Assert.Contains("2 rows", text);
     }
 
-    [Fact]
+    [SkippableFact]
     public void Headless_AutoPicksFamilySheetByKind()
     {
+        Skip.IfNot(StrataBuild.Enabled, StrataBuild.SkipReason);
         var pwsh = _fixture.AcquireFresh();
         // No -Style: a Process row must auto-resolve to the `procsvc` family sheet without error
         // (the auto-pick + cascade + projection path runs clean).
@@ -60,9 +62,10 @@ public class ShowStyledCommandTests : IClassFixture<SharedPwshFixture>
         Assert.Contains("1 rows", text);
     }
 
-    [Fact]
+    [SkippableFact]
     public void NoInput_ProducesNoOutput()
     {
+        Skip.IfNot(StrataBuild.Enabled, StrataBuild.SkipReason);
         var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript("@() | Show-Styled").Invoke();
 

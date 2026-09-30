@@ -193,6 +193,10 @@ public class ModuleInstallLayoutTests
 
         var dangling = aliasTargets
             .Where(t => !psm1Functions.Contains(t) && !cmdlets.Contains(t))
+            // Strata-gated cmdlets are compiled out when Strata is off (CI has no feed); their
+            // aliases legitimately dangle in that build. Only those named targets are exempt.
+            .Where(t => StrataBuild.Enabled
+                        || !StrataBuild.GatedCmdletTargets.Contains(t, StringComparer.OrdinalIgnoreCase))
             .ToList();
 
         Assert.True(dangling.Count == 0,
