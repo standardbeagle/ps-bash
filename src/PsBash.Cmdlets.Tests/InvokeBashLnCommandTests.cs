@@ -154,7 +154,8 @@ public class InvokeBashLnCommandTests : IClassFixture<SharedPwshFixture>, IDispo
     [Fact]
     public void Ln_MissingOperand_Errors()
     {
-        var errs = RunErrors("Invoke-BashLn -s onlyone");
+        // No operands at all (a single operand is GNU form 2 now — see the operand-forms section).
+        var errs = RunErrors("Invoke-BashLn -s");
         Assert.Contains(errs, m => m.Contains("missing file operand", StringComparison.OrdinalIgnoreCase));
     }
 
@@ -208,10 +209,9 @@ public class InvokeBashLnCommandTests : IClassFixture<SharedPwshFixture>, IDispo
     }
 
     [Theory]
-    [InlineData("-T")]
     [InlineData("-r")]
-    [InlineData("-sfT")]
-    [InlineData("--no-target-directory")]
+    [InlineData("-sr")]
+    [InlineData("--relative")]
     [InlineData("--backup=numbered")]
     public void Ln_ValidButUnsupportedOption_IsRefusedAndCreatesNoLink(string flag)
     {
@@ -286,6 +286,166 @@ public class InvokeBashLnCommandTests : IClassFixture<SharedPwshFixture>, IDispo
         Run($"Invoke-BashLn '-sfn' {Q(t1)} {Q(link)}; Invoke-BashLn '-sfn' {Q(t2)} {Q(link)}");
         Assert.True(IsSymlink(link));
         Assert.Equal("two", File.ReadAllText(link));
+    }
+
+    // ───────────────────── GNU operand forms (oracle: coreutils 9.4 via FsStateDifferentialTests) ─────────────────────
+
+    /// <summary>Fresh directory holding files a, b, and directories d (with d/c) and e.</summary>
+    private string Fixture()
+    {
+        var root = Path.Combine(_tmpDir, "fx" + Guid.NewGuid().ToString("N")[..6]);
+        Directory.CreateDirectory(Path.Combine(root, "d"));
+        Directory.CreateDirectory(Path.Combine(root, "e"));
+        File.WriteAllText(Path.Combine(root, "a"), "a\n");
+        File.WriteAllText(Path.Combine(root, "b"), "b\n");
+        File.WriteAllText(Path.Combine(root, "d", "c"), "c\n");
+        return root;
+    }
+
+    private CmdResult RunIn(string cwd, string script) =>
+        CmdResult.Run(_fixture.AcquireFresh(), $"Set-Location {Q(cwd)}; {script}");
+
+    [Fact]
+    public void Ln_SingleOperand_LinksBasenameIntoCwd()
+    {
+        var root = Fixture();
+        var r = RunIn(root, "Invoke-BashLn -v 'd/c'").AssertSuccess();
+        Assert.Equal("'./c' => 'd/c'", r.Stdout.TrimEnd());
+        Assert.Equal("c\n", File.ReadAllText(Path.Combine(root, "c")));
+    }
+
+    [Fact]
+    public void Ln_SingleOperand_ExistingName_FailsLikeGnu()
+    {
+        var root = Fixture();
+        RunIn(root, "Invoke-BashLn 'a'").AssertFailed(1, "ln: failed to create hard link './a': File exists");
+    }
+
+    [Fact]
+    public void Ln_MultipleTargets_IntoDirectory_OneLinkEach()
+    {
+        var root = Fixture();
+        var r = RunIn(root, "Invoke-BashLn -v 'a' 'b' 'd'").AssertSuccess();
+        Assert.Equal(new[] { "'d/a' => 'a'", "'d/b' => 'b'" }, r.Lines.Select(l => l.TrimEnd()).ToArray());
+        Assert.Equal("a\n", File.ReadAllText(Path.Combine(root, "d", "a")));
+        Assert.Equal("b\n", File.ReadAllText(Path.Combine(root, "d", "b")));
+    }
+
+    [Fact]
+    public void Ln_MultipleTargets_TrailingSlashDirectory_NoDoubleSlash()
+    {
+        var root = Fixture();
+        var r = RunIn(root, "Invoke-BashLn -v 'a' 'b' 'e/'").AssertSuccess();
+        Assert.Equal(new[] { "'e/a' => 'a'", "'e/b' => 'b'" }, r.Lines.Select(l => l.TrimEnd()).ToArray());
+    }
+
+    [Fact]
+    public void Ln_MultipleTargets_LastOperandMissing_Fails()
+    {
+        var root = Fixture();
+        RunIn(root, "Invoke-BashLn 'a' 'b' 'nodir'").AssertFailed(1, "ln: target 'nodir': No such file or directory");
+        Assert.False(File.Exists(Path.Combine(root, "nodir")));
+    }
+
+    [Fact]
+    public void Ln_MultipleTargets_LastOperandIsAFile_Fails()
+    {
+        var root = Fixture();
+        RunIn(root, "Invoke-BashLn 'a' 'b' 'b'").AssertFailed(1, "ln: target 'b': Not a directory");
+    }
+
+    [Fact]
+    public void Ln_MultipleTargets_OneFailure_KeepsGoingAndExitsOne()
+    {
+        var root = Fixture();
+        File.WriteAllText(Path.Combine(root, "e", "a"), "existing\n");
+        var r = RunIn(root, "Invoke-BashLn 'a' 'b' 'e'");
+        r.AssertFailed(1, "ln: failed to create hard link 'e/a': File exists");
+        Assert.Equal("b\n", File.ReadAllText(Path.Combine(root, "e", "b")));
+        Assert.Equal("existing\n", File.ReadAllText(Path.Combine(root, "e", "a")));
+    }
+
+    [Fact]
+    public void Ln_TwoOperands_LinkNameIsDirectory_LinksInside()
+    {
+        var root = Fixture();
+        var r = RunIn(root, "Invoke-BashLn -v 'a' 'e'").AssertSuccess();
+        Assert.Equal("'e/a' => 'a'", r.Stdout.TrimEnd());
+        Assert.True(File.Exists(Path.Combine(root, "e", "a")));
+    }
+
+    [Fact]
+    public void Ln_TargetDirectoryOption_LinksEachOperandInside()
+    {
+        var root = Fixture();
+        var r = RunIn(root, "Invoke-BashLn '-v' '-t' 'e' 'a' 'b'").AssertSuccess();
+        Assert.Equal(new[] { "'e/a' => 'a'", "'e/b' => 'b'" }, r.Lines.Select(l => l.TrimEnd()).ToArray());
+    }
+
+    [Fact]
+    public void Ln_TargetDirectoryOption_MissingDirectory_Fails()
+    {
+        var root = Fixture();
+        RunIn(root, "Invoke-BashLn '-t' 'nodir' 'a'").AssertFailed(1, "ln: failed to access 'nodir': No such file or directory");
+    }
+
+    [Fact]
+    public void Ln_NoTargetDirectory_ExistingDirectoryIsNotDescended()
+    {
+        var root = Fixture();
+        RunIn(root, "Invoke-BashLn '-T' 'a' 'd'").AssertFailed(1, "ln: failed to create hard link 'd': File exists");
+        Assert.False(File.Exists(Path.Combine(root, "d", "a")));
+    }
+
+    [Fact]
+    public void Ln_NoTargetDirectory_PlainName_Links()
+    {
+        var root = Fixture();
+        var r = RunIn(root, "Invoke-BashLn '-Tv' 'a' 'b2'").AssertSuccess();
+        Assert.Equal("'b2' => 'a'", r.Stdout.TrimEnd());
+    }
+
+    [Fact]
+    public void Ln_NoTargetDirectory_ThreeOperands_ExtraOperand()
+    {
+        var root = Fixture();
+        RunIn(root, "Invoke-BashLn '-T' 'a' 'b2' 'c'").AssertFailed(1, "ln: extra operand 'c'");
+    }
+
+    [Fact]
+    public void Ln_TargetAndNoTargetDirectory_Conflict()
+    {
+        var root = Fixture();
+        RunIn(root, "Invoke-BashLn '-t' 'e' '-T' 'a'")
+            .AssertFailed(1, "ln: cannot combine --target-directory and --no-target-directory");
+    }
+
+    [Fact]
+    public void Ln_HardLink_MissingTarget_FailsLikeGnu()
+    {
+        var root = Fixture();
+        RunIn(root, "Invoke-BashLn 'missing' 'zz'").AssertFailed(1, "ln: failed to access 'missing': No such file or directory");
+        Assert.False(File.Exists(Path.Combine(root, "zz")));
+    }
+
+    [Fact]
+    public void Ln_HardLink_DirectoryTarget_NotAllowed()
+    {
+        var root = Fixture();
+        RunIn(root, "Invoke-BashLn 'd' 'zz'").AssertFailed(1, "ln: d: hard link not allowed for directory");
+    }
+
+    [SkippableFact]
+    public void Ln_Symlink_SingleOperandAndMultiTarget()
+    {
+        Skip.IfNot(SymlinksSupported(), "symlink creation not permitted in this environment");
+        var root = Fixture();
+        var one = RunIn(root, "Invoke-BashLn '-sv' 'd/c'").AssertSuccess();
+        Assert.Equal("'./c' -> 'd/c'", one.Stdout.TrimEnd());
+        Assert.True(IsSymlink(Path.Combine(root, "c")));
+        var many = RunIn(root, "Invoke-BashLn '-sv' 'a' 'b' 'e'").AssertSuccess();
+        Assert.Equal(new[] { "'e/a' -> 'a'", "'e/b' -> 'b'" }, many.Lines.Select(l => l.TrimEnd()).ToArray());
+        Assert.True(IsSymlink(Path.Combine(root, "e", "a")));
     }
 
     private bool SymlinksSupported()
