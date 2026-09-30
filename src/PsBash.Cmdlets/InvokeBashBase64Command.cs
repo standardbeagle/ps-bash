@@ -161,6 +161,14 @@ public sealed class InvokeBashBase64Command : PSCmdlet
                 if (int.TryParse(args[i + 1], out var parsed)) wrapCol = parsed;
                 i += 2; continue;
             }
+            // Joined `-wN` (`base64 -w0`, the idiom for one unwrapped line): the bare `-w N`
+            // form binds to `W`, but a joined token is not an exact parameter name so it lands
+            // here. Without this it fell through to "invalid option -- 'w'".
+            if (a.Length > 2 && a[0] == '-' && a[1] == 'w' && int.TryParse(a.AsSpan(2), out var joinedWrap) && joinedWrap >= 0)
+            {
+                wrapCol = joinedWrap;
+                i++; continue;
+            }
             operands.Add(a);
             i++;
         }
