@@ -55,8 +55,7 @@ public class BinderDecoyClassifierTests : IClassFixture<SharedPwshFixture>
     // split elide-empty / line-bytes
     [InlineData("'x' | Invoke-BashSplit -e")]
     [InlineData("'x' | Invoke-BashSplit -C")]
-    // strings all / encoding
-    [InlineData("'x' | Invoke-BashStrings -a")]
+    // strings encoding (-a/--all is accepted now: scanning the whole input is what strings does)
     [InlineData("'x' | Invoke-BashStrings -e")]
     // tree colorize / permissions
     [InlineData("Invoke-BashTree -p")]
