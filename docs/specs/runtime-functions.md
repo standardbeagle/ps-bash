@@ -252,6 +252,61 @@ foreach ($filePath in (Resolve-BashGlob -Paths $operands)) {
 `Resolve-BashGlob` expands `*` and `?` patterns and resolves relative paths against
 PowerShell's `$PWD`.
 
+## Shared argument parser (`PsBash.Cmdlets.Args`)
+
+The ordered getopt-style parser that replaces per-cmdlet hand scans. Pure and AOT-safe (no
+`PSCmdlet`/`SessionState`/reflection), so it is unit-tested in isolation
+(`ArgParserTests`). **Migrated so far: `tee`, `cp`, `mv`.** `BashRuntime.ConvertFromBashArgs` is
+untouched — its contract (unknown flag becomes an operand) differs.
+
+**API** (`src/PsBash.Cmdlets/Args/`):
+
+- `OptSpec(Id, Short, Long, Kind)` with `OptKind { Flag, Value, OptionalValue }`; several specs
+  may share an `Id` (`-r`/`-R` = "recursive"). `Short` is `'\0'` for none; `Long` has no `--`.
+- `OptSpecSet` — built ONCE as `static readonly`: the specs, `validButUnsupported` names (as typed:
+  `"-i"`, `"--interactive"`), `allowAbbrev` (getopt_long unique-prefix long options; an ambiguous
+  prefix is an error listing candidates), `numericShorthandId` (`head -5`), `gnuInfoOptions`
+  (`--help`/`--version` join abbreviation, so `--ver` is ambiguous with `--verbose`).
+- `ArgParser.Parse(ReadOnlySpan<string> argv, OptSpecSet)` → `ParsedArgs`: `Tokens` in ORIGINAL
+  order (`ArgTokKind` Operand/Option/DoubleDash; a bundle `-abc` is one token per letter), the
+  first `Error` (`Unrecognized`, `ValidButUnsupported`, `MissingValue`, `Ambiguous`,
+  `UnexpectedValue`), and `Has/Last/All/Operands()`. Scanning stops at the first error.
+- Errors are classified DURING the scan, so nothing after `--` is ever an option or an error;
+  a lone `-` is an operand; a value option ends its bundle (`-abn5`) and, like getopt, takes the
+  next element even if it starts with `-`; options may follow operands (GNU permutation).
+- `ArgError.Message(cmd)` holds the GNU wording; `FileSystemHelpers.TryWriteParseError` is the
+  cmdlet-side sink (message + exit 2). `TryHandleInfoOptions` acts on an abbreviated
+  `--vers`/`--he`.
+
+**Emitter opt-in.** `PsEmitter.OrderedArgCommands` (tee, cp, mv): for these, `EmitPassthrough`
+single-quotes EVERY dash-leading literal word and `--` (via `PsBuild.SingleQuote`; quoted and mixed
+words like `--x="a b"` collapse to one literal). No flag is then a PowerShell parameter token, so
+each reaches `[ValueFromRemainingArguments] Arguments` verbatim and in order — no prefix collision
+(`-i`/`-e`/`-p`), no binder-swallowed `--`, no decoy losing position. Dynamic words (`-$x`) keep the
+normal path; the RC-7 unquoted-variable splat path shares the same arg renderer. Add a command to
+the set only AFTER its cmdlet is migrated, and add it to
+`CommonParameterCollisionGuardTests.EmitterForceQuoted` (all colliding letters).
+
+**Decoy caveat (direct calls).** The cmdlets keep their single-letter decoy switches
+(`Invoke-BashTee -a f`, `Invoke-BashCp -v a b` — Pester and interactive PowerShell bind them, the
+transpiler never does). Re-inject them with `BashRuntime.PrependDecoys(Arguments, ...)` BEFORE
+`Parse`; prepending is safe because a decoy can only bind ahead of any `--`. A direct call with a
+colliding bare letter that has NO decoy (`Invoke-BashTee -i`) still fails in the binder — quote it.
+
+**Migrating a command:**
+
+1. Declare `static readonly string[]` valid-but-unsupported names (a `string[]` field keeps the
+   collision guard's classifier scan working) and a `static readonly OptSpecSet`
+   (`allowAbbrev: true, gnuInfoOptions: true` for GNU tools).
+2. Add `internal static ParsedArgs ScanArgs(string[] args)` as the test seam.
+3. In the cmdlet: `PrependDecoys` → keep the exact `--help`/`--version` early exits →
+   `ScanArgs` → `TryWriteParseError` → `TryHandleInfoOptions` → read `Has/Last/Operands`.
+4. Before deleting the old scan, diff old vs new over an argv corpus (bundles, `--`, long forms,
+   abbreviations, unknown and unsupported flags, lone `-`, dash operands after `--`) and check
+   every divergence against GNU (`wsl bash`); pin the result as an expected-value table
+   (`TeeArgScanTests`, `CpArgScanTests`, `MvArgScanTests`).
+5. Add the command to `OrderedArgCommands` and the guard map; add emitter tests.
+
 ## Escape Sequence Handling
 
 `Expand-EscapeSequences` converts C-style escape sequences in string literals. It is
