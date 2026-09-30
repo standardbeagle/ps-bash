@@ -2,281 +2,445 @@ using System.Management.Automation;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
+using PsBash.Cmdlets.Args;
 
 namespace PsBash.Cmdlets;
 
 /// <summary>
-/// Shared file-hashing engine for the md5sum / sha1sum / sha256sum binary
-/// cmdlets (REFACTOR-2). Reimplements the psm1 <c>Invoke-BashChecksum</c>
-/// helper in C#:
+/// Shared engine for the md5sum / sha1sum / sha256sum binary cmdlets (GNU coreutils 9.4 semantics):
 /// <list type="bullet">
-/// <item>File mode (one or more operands): hash each file's bytes, emit a
-/// typed <c>PsBash.TextOutput</c> PSObject per file with
-/// <c>BashText = "&lt;hex&gt;  &lt;path&gt;"</c> and side properties
-/// <c>Hash</c> / <c>FileName</c> / <c>Algorithm</c>. Missing files emit a
-/// bash-style error via <see cref="FileSystemHelpers.WriteBashError"/> and continue.</item>
-/// <item>Pipeline mode (no operands): concatenate every upstream item's
-/// BashText with <c>\n</c> separators plus a final <c>\n</c>, hash the
-/// UTF-8 bytes, emit a single PSObject with <c>FileName = "-"</c>.</item>
+/// <item>Hash mode (<c>FILE...</c>, or stdin with no operand / <c>-</c>): one record per input,
+/// <c>HASH  NAME</c> (text), <c>HASH *NAME</c> (<c>-b</c>), <c>ALGO (NAME) = HASH</c> (<c>--tag</c>); a name
+/// containing <c>\</c> or a newline is printed escaped with a leading <c>\</c>; <c>-z</c> ends every record with
+/// NUL instead of a newline and never escapes. The NAME is the operand AS TYPED (it used to be the resolved
+/// absolute path, so a checksum file written by ps-bash named files by absolute path). stdin hashes the exact
+/// byte stream (<see cref="BashRuntime.RecordStreamText"/>: <c>printf x | md5sum</c> hashes <c>x</c>, not <c>x\n</c>).</item>
+/// <item>Check mode (<c>-c</c>): verifies each line of the listed checksum file(s) — text, binary and BSD
+/// <c>--tag</c> formats, hash length per algorithm, blank and <c>#</c> lines skipped — printing
+/// <c>NAME: OK|FAILED|FAILED open or read</c> (<c>--quiet</c> hides OK, <c>--status</c> hides everything),
+/// GNU's <c>WARNING:</c> summaries on stderr, <c>--warn</c> per-line format diagnostics, <c>--strict</c> (an
+/// improper line fails), <c>--ignore-missing</c>. Exit 1 on any failure, unreadable file, or a list with no
+/// properly formatted line.</item>
 /// </list>
-/// The hex form is lowercase with no separator (matching GNU coreutils).
-/// Glob expansion of operands uses
-/// <see cref="PSCmdlet.SessionState"/>.<c>Path.GetResolvedProviderPathFromPSPath</c>
-/// — the same slice <c>InvokeBashCatCommand</c> reimplements in C# — so we
-/// stay off the psm1 <c>Resolve-BashGlob</c> dependency on the hot path.
+/// Options go through the shared ordered parser (<see cref="ChecksumSpec"/>; usage errors exit 1 like coreutils).
+/// Option-combination errors follow GNU ("the --warn option is meaningful only when verifying checksums", ...).
 /// </summary>
 internal static class ChecksumEngine
 {
+    private const string OptBinary = "binary", OptCheck = "check", OptIgnoreMissing = "ignore-missing",
+        OptQuiet = "quiet", OptStatus = "status", OptStrict = "strict", OptTag = "tag", OptText = "text",
+        OptWarn = "warn", OptZero = "zero";
+
+    /// <summary>coreutils <c>md5sum.c</c> option table (<c>--t</c> = '--tag' '--text', <c>--s</c> = '--status' '--strict').</summary>
+    private static readonly OptSpecSet ChecksumSpec = new(
+        new[]
+        {
+            new OptSpec(OptBinary, 'b', "binary"),
+            new OptSpec(OptCheck, 'c', "check"),
+            new OptSpec(OptIgnoreMissing, '\0', "ignore-missing"),
+            new OptSpec(OptQuiet, '\0', "quiet"),
+            new OptSpec(OptStatus, '\0', "status"),
+            new OptSpec(OptStrict, '\0', "strict"),
+            new OptSpec(OptTag, '\0', "tag"),
+            new OptSpec(OptText, 't', "text"),
+            new OptSpec(OptWarn, 'w', "warn"),
+            new OptSpec(OptZero, 'z', "zero"),
+        },
+        allowAbbrev: true,
+        gnuInfoOptions: true,
+        longOptionOrder: new[]
+        {
+            "binary", "check", "ignore-missing", "quiet", "status", "strict", "tag", "text", "warn", "zero",
+            "help", "version",
+        });
+
+    /// <summary>Pure argv scan (unit-test seam).</summary>
+    internal static ParsedArgs ScanArgs(string[] args) => ArgParser.Parse(args, ChecksumSpec);
+
+    internal sealed class ChecksumArgs
+    {
+        public ParsedArgs Parsed = null!;
+        public bool? Binary;          // null = neither -b nor -t given; the last of -b/-t wins
+        public bool Check, Warn, Quiet, Status, Strict, IgnoreMissing, Tag, Zero;
+        public List<string> Operands = new();
+        public string? Error;
+    }
+
+    /// <summary>Scan + GNU's option-combination checks (all exit 1).</summary>
+    internal static ChecksumArgs Plan(string command, string[] args)
+    {
+        var p = new ChecksumArgs { Parsed = ScanArgs(args) };
+        p.Operands = p.Parsed.Operands();
+        if (p.Parsed.HasError) return p;
+        if (p.Parsed.Has(OptSpecSet.HelpId) || p.Parsed.Has(OptSpecSet.VersionId)) return p;
+
+        foreach (var tok in p.Parsed.Tokens)
+        {
+            if (tok.Kind != ArgTokKind.Option) continue;
+            switch (tok.OptId)
+            {
+                case OptBinary: p.Binary = true; break;
+                case OptText: p.Binary = false; break;
+                case OptCheck: p.Check = true; break;
+                case OptWarn: p.Warn = true; break;
+                case OptQuiet: p.Quiet = true; break;
+                case OptStatus: p.Status = true; break;
+                case OptStrict: p.Strict = true; break;
+                case OptIgnoreMissing: p.IgnoreMissing = true; break;
+                case OptTag: p.Tag = true; break;
+                case OptZero: p.Zero = true; break;
+            }
+        }
+
+        if (!p.Check)
+        {
+            if (p.IgnoreMissing) p.Error = $"{command}: the --ignore-missing option is meaningful only when verifying checksums";
+            else if (p.Status) p.Error = $"{command}: the --status option is meaningful only when verifying checksums";
+            else if (p.Warn) p.Error = $"{command}: the --warn option is meaningful only when verifying checksums";
+            else if (p.Quiet) p.Error = $"{command}: the --quiet option is meaningful only when verifying checksums";
+            else if (p.Strict) p.Error = $"{command}: the --strict option is meaningful only when verifying checksums";
+        }
+        else
+        {
+            if (p.Tag) p.Error = $"{command}: the --tag option is meaningless when verifying checksums";
+            else if (p.Binary is not null) p.Error = $"{command}: the --binary and --text options are meaningless when verifying checksums";
+            else if (p.Zero) p.Error = $"{command}: the --zero option is not supported when verifying checksums";
+        }
+        return p;
+    }
+
     public static void Run(
         PSCmdlet cmdlet,
         HashAlgorithmName algorithmName,
         string algorithmLabel,
         string commandName,
         string[] arguments,
-        IList<PSObject>? pipelineInput,
-        bool checkMode = false)
+        IList<PSObject>? pipelineInput)
     {
         FileSystemHelpers.SetLastExitCode(cmdlet, 0);
-        if (FileSystemHelpers.TryHandleVersion(cmdlet, commandName, arguments)) return;
-        if (Array.IndexOf(arguments, "--help") >= 0)
+        var plan = Plan(commandName, arguments);
+        if (FileSystemHelpers.TryWriteParseError(cmdlet, commandName, plan.Parsed)) return;
+        if (FileSystemHelpers.TryHandleInfoOptions(cmdlet, commandName, plan.Parsed)) return;
+        if (plan.Error is { } planError)
         {
-            foreach (var line in cmdlet.InvokeCommand.InvokeScript(
-                         "param($n) Show-BashHelp $n", commandName))
-            {
-                cmdlet.WriteObject(line);
-            }
+            FileSystemHelpers.WriteBashError(cmdlet, planError);
+            FileSystemHelpers.SetLastExitCode(cmdlet, 1);
             return;
         }
 
-        // Check mode (-c / --check): verify the named files against a checksum
-        // file. `-c` prefix-collides with -Confirm, so each cmdlet passes
-        // checkMode via a `C` decoy; `--check` arrives as an operand.
-        if (checkMode || Array.IndexOf(arguments, "--check") >= 0)
+        if (plan.Check)
         {
-            RunCheck(cmdlet, algorithmName, commandName, arguments);
+            RunCheck(cmdlet, algorithmName, algorithmLabel, commandName, plan, pipelineInput);
             return;
         }
 
-        // Separate flags from file operands. -b/--binary and -t/--text are the
-        // GNU mode tags; previously they fell through as bogus filenames
-        // ("No such file"). Binary mode changes the output marker from two
-        // spaces to " *" (GNU md5sum convention). `--` ends flag parsing.
-        var operands = new List<string>();
-        bool binary = false;
-        bool pastDoubleDash = false;
-        foreach (var a in arguments)
-        {
-            if (!pastDoubleDash)
-            {
-                if (a == "--") { pastDoubleDash = true; continue; }
-                if (a == "-b" || a == "--binary") { binary = true; continue; }
-                if (a == "-t" || a == "--text") { binary = false; continue; }
-            }
-            operands.Add(a);
-        }
-        string marker = binary ? " *" : "  ";
-
-        using var hasher = IncrementalHash.CreateHash(algorithmName);
-
-        if (operands.Count > 0)
-        {
-            foreach (var rawPath in operands)
-            {
-                foreach (var filePath in ResolveOperandPaths(cmdlet, rawPath))
-                {
-                    if (!File.Exists(filePath))
-                    {
-                        FileSystemHelpers.WriteBashError(cmdlet, $"{commandName}: {filePath}: No such file or directory");
-                        continue;
-                    }
-
-                    string hex;
-                    try
-                    {
-                        // Stream-hash in chunks — never load the whole file. A
-                        // checksum of a multi-GB file runs in ~80 KB of memory.
-                        using var s = BashFileSystem.OpenRead(filePath);
-                        hex = ComputeHexFromStream(algorithmName, s);
-                    }
-                    catch (Exception ex)
-                    {
-                        if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-                        FileSystemHelpers.WriteBashError(cmdlet, $"{commandName}: {filePath}: {ex.Message}");
-                        continue;
-                    }
-
-                    cmdlet.WriteObject(MakeOutput(hex, filePath, algorithmLabel, marker));
-                }
-            }
-            return;
-        }
-
-        if (pipelineInput is { Count: > 0 })
-        {
-            var sb = new StringBuilder();
-            foreach (var item in pipelineInput)
-            {
-                sb.Append(BashRuntime.GetBashText(item));
-                sb.Append('\n');
-            }
-            var hex = ComputeHex(algorithmName, Encoding.UTF8.GetBytes(sb.ToString()));
-            cmdlet.WriteObject(MakeOutput(hex, "-", algorithmLabel, marker));
-        }
+        RunHash(cmdlet, algorithmName, algorithmLabel, commandName, plan, pipelineInput);
     }
 
-    /// <summary>
-    /// <c>-c</c> / <c>--check</c>: read checksum file(s) (lines of
-    /// <c>HASH  FILENAME</c> or <c>HASH *FILENAME</c>), recompute each named
-    /// file's digest, and report <c>FILENAME: OK</c> / <c>FILENAME: FAILED</c>.
-    /// <c>--status</c> suppresses all output (exit code only); <c>--quiet</c>
-    /// prints only failures. Exit 1 if any line fails or a file is missing.
-    /// </summary>
-    private static void RunCheck(
-        PSCmdlet cmdlet, HashAlgorithmName algorithmName, string commandName, string[] arguments)
+    // ---------------------------------------------------------------- hash mode
+
+    private static void RunHash(
+        PSCmdlet cmdlet, HashAlgorithmName algorithmName, string algorithmLabel, string commandName,
+        ChecksumArgs plan, IList<PSObject>? pipelineInput)
     {
-        bool status = false, quiet = false, pastDoubleDash = false;
-        var checkFiles = new List<string>();
-        foreach (var a in arguments)
+        var operands = plan.Operands;
+        bool hadError = false;
+
+        // No operand, or a lone `-`: hash stdin. (Only when something was piped: a bare call prints nothing.)
+        if (operands.Count == 0 || (operands.Count == 1 && operands[0] == "-" ))
         {
-            if (!pastDoubleDash)
+            if (pipelineInput is { Count: > 0 } || operands.Count == 1)
             {
-                if (a == "--") { pastDoubleDash = true; continue; }
-                if (a == "-c" || a == "--check") continue;
-                if (a == "--status") { status = true; continue; }
-                if (a == "--quiet") { quiet = true; continue; }
-                if (a == "--warn" || a == "--strict" || a == "--ignore-missing") continue;
-                if (a == "-b" || a == "--binary" || a == "-t" || a == "--text") continue;
+                string text = pipelineInput is null ? string.Empty : BashRuntime.RecordStreamText(pipelineInput.Cast<object>());
+                var hex = ComputeHex(algorithmName, Encoding.UTF8.GetBytes(text));
+                cmdlet.WriteObject(MakeOutput(hex, "-", algorithmLabel, plan));
             }
-            checkFiles.Add(a);
+            return;
         }
 
-        int failures = 0;
-        var lineRx = new Regex(@"^([0-9A-Fa-f]+)[ \t]+\*?(.+)$");
-
-        foreach (var cf in checkFiles)
+        foreach (var rawPath in operands)
         {
-            foreach (var checkPath in ResolveOperandPaths(cmdlet, cf))
+            if (rawPath == "-")
             {
-                if (!File.Exists(checkPath))
+                string text = pipelineInput is null ? string.Empty : BashRuntime.RecordStreamText(pipelineInput.Cast<object>());
+                cmdlet.WriteObject(MakeOutput(ComputeHex(algorithmName, Encoding.UTF8.GetBytes(text)), "-", algorithmLabel, plan));
+                continue;
+            }
+
+            foreach (var op0 in FileSystemHelpers.ResolveOperands(cmdlet, rawPath))
+            {
+                var op = op0 with { Display = Shown(op0.Display) };
+                string filePath = op.Path;
+                if (Directory.Exists(filePath))
                 {
-                    FileSystemHelpers.WriteBashError(cmdlet, $"{commandName}: {checkPath}: No such file or directory");
-                    failures++;
+                    FileSystemHelpers.WriteBashError(cmdlet, $"{commandName}: {op.Display}: Is a directory");
+                    hadError = true;
+                    continue;
+                }
+                if (!File.Exists(filePath))
+                {
+                    FileSystemHelpers.WriteBashError(cmdlet, $"{commandName}: {op.Display}: No such file or directory");
+                    hadError = true;
                     continue;
                 }
 
-                List<string> lines;
-                try { lines = new List<string>(BashFileSystem.ReadLines(checkPath)); }
+                string hex;
+                try
+                {
+                    // Stream-hash in chunks — never load the whole file. A
+                    // checksum of a multi-GB file runs in ~80 KB of memory.
+                    using var s = BashFileSystem.OpenRead(filePath);
+                    hex = ComputeHexFromStream(algorithmName, s);
+                }
                 catch (Exception ex)
                 {
                     if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-                    FileSystemHelpers.WriteBashError(cmdlet, $"{commandName}: {checkPath}: {ex.Message}");
-                    failures++;
+                    FileSystemHelpers.WriteBashError(cmdlet, $"{commandName}: {op.Display}: {ex.Message}");
+                    hadError = true;
                     continue;
                 }
 
-                foreach (var line in lines)
-                {
-                    if (string.IsNullOrWhiteSpace(line)) continue;
-                    var m = lineRx.Match(line.Trim());
-                    if (!m.Success) continue;
-
-                    string expected = m.Groups[1].Value;
-                    string fname = m.Groups[2].Value;
-                    string fpath;
-                    try { fpath = cmdlet.SessionState.Path.GetUnresolvedProviderPathFromPSPath(fname); }
-                    catch { fpath = fname; }
-
-                    if (!File.Exists(fpath))
-                    {
-                        if (!status) cmdlet.WriteObject(BashRuntime.NewBashObject($"{fname}: FAILED open or read"));
-                        failures++;
-                        continue;
-                    }
-
-                    string actual;
-                    try
-                    {
-                        using var s = BashFileSystem.OpenRead(fpath);
-                        actual = ComputeHexFromStream(algorithmName, s);
-                    }
-                    catch (Exception ex)
-                    {
-                        if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-                        if (!status) cmdlet.WriteObject(BashRuntime.NewBashObject($"{fname}: FAILED open or read"));
-                        failures++;
-                        continue;
-                    }
-
-                    if (string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase))
-                    {
-                        if (!status && !quiet) cmdlet.WriteObject(BashRuntime.NewBashObject($"{fname}: OK"));
-                    }
-                    else
-                    {
-                        if (!status) cmdlet.WriteObject(BashRuntime.NewBashObject($"{fname}: FAILED"));
-                        failures++;
-                    }
-                }
+                cmdlet.WriteObject(MakeOutput(hex, op.Display, algorithmLabel, plan));
             }
         }
 
-        if (failures > 0)
+        if (hadError) FileSystemHelpers.SetLastExitCode(cmdlet, 1);
+    }
+
+    /// <summary>The name to print. On Windows a backslash is a path separator, not a filename character, so it is shown as `/`
+    /// (otherwise every Windows path would come out with GNU's `\` escaping); on POSIX the name is kept verbatim.</summary>
+    private static string Shown(string display) => OperatingSystem.IsWindows() ? FileSystemHelpers.ToBashPath(display) : display;
+
+    /// <summary>The output line for one input (pure; <c>-z</c> never escapes, like GNU).</summary>
+    internal static string FormatLine(string hex, string name, string algorithmLabel, bool binary, bool tag, bool zero)
+    {
+        bool escape = !zero && (name.Contains('\\') || name.Contains('\n'));
+        string shown = escape ? name.Replace("\\", "\\\\").Replace("\n", "\\n") : name;
+        string prefix = escape ? "\\" : string.Empty;
+        string body = tag
+            ? $"{algorithmLabel} ({shown}) = {hex}"
+            : $"{hex} {(binary ? '*' : ' ')}{shown}";
+        return prefix + body;
+    }
+
+    private static PSObject MakeOutput(string hex, string fileName, string algorithmLabel, ChecksumArgs plan)
+    {
+        string line = FormatLine(hex, fileName, algorithmLabel, plan.Binary == true, plan.Tag, plan.Zero);
+        var obj = new PSObject();
+        obj.TypeNames.Insert(0, "PsBash.TextOutput");
+        obj.Properties.Add(new PSNoteProperty("BashText", plan.Zero ? line + "\0" : line));
+        obj.Properties.Add(new PSNoteProperty("Hash", hex));
+        obj.Properties.Add(new PSNoteProperty("FileName", fileName));
+        obj.Properties.Add(new PSNoteProperty("Algorithm", algorithmLabel));
+        // -z: the NUL is the terminator; the serializer must not add a newline after it.
+        if (plan.Zero) obj.Properties.Add(new PSNoteProperty("NoTrailingNewline", true));
+        return obj;
+    }
+
+    // ---------------------------------------------------------------- check mode
+
+    /// <summary>One parsed checksum-list line (<see cref="TryParseCheckLine"/>).</summary>
+    internal readonly record struct CheckLine(string Hash, string Name);
+
+    /// <summary>
+    /// Parse a checksum-list line: <c>HASH  NAME</c> / <c>HASH *NAME</c> (hex of exactly
+    /// <paramref name="hexLength"/> digits, then a space, then an optional space or <c>*</c>) or the BSD tag
+    /// <c>ALGO (NAME) = HASH</c> with this command's <paramref name="algorithmLabel"/>. A leading <c>\</c>
+    /// marks an escaped name (<c>\\</c> and <c>\n</c>). Returns false for an improperly formatted line.
+    /// </summary>
+    internal static bool TryParseCheckLine(string line, string algorithmLabel, int hexLength, out CheckLine parsed)
+    {
+        parsed = default;
+        bool escaped = line.StartsWith('\\');
+        string body = escaped ? line.Substring(1) : line;
+
+        string hash, name;
+        var tag = Regex.Match(body, @"^" + Regex.Escape(algorithmLabel) + @" \((.+)\) = ([0-9A-Fa-f]+)$");
+        if (tag.Success)
         {
-            if (!status)
-            {
-                FileSystemHelpers.WriteBashError(cmdlet,
-                    $"{commandName}: WARNING: {failures} computed checksum(s) did NOT match");
-            }
-            FileSystemHelpers.SetLastExitCode(cmdlet, 1);
+            name = tag.Groups[1].Value;
+            hash = tag.Groups[2].Value;
         }
         else
         {
-            FileSystemHelpers.SetLastExitCode(cmdlet, 0);
+            var m = Regex.Match(body, @"^([0-9A-Fa-f]+) (?:[ *](.+)|([^ *].*))$");
+            if (!m.Success) return false;
+            hash = m.Groups[1].Value;
+            name = m.Groups[2].Success ? m.Groups[2].Value : m.Groups[3].Value;
+        }
+        if (hash.Length != hexLength) return false;
+
+        if (escaped) name = Regex.Replace(name, @"\\(.)", mm => mm.Groups[1].Value == "n" ? "\n" : mm.Groups[1].Value);
+        parsed = new CheckLine(hash, name);
+        return true;
+    }
+
+    private static void RunCheck(
+        PSCmdlet cmdlet, HashAlgorithmName algorithmName, string algorithmLabel, string commandName,
+        ChecksumArgs plan, IList<PSObject>? pipelineInput)
+    {
+        int hexLength = ComputeHex(algorithmName, Array.Empty<byte>()).Length;
+        bool anyFailure = false;
+
+        // Sources of checksum lines: each operand file, or stdin (no operand / `-`).
+        var sources = new List<(string Display, Func<List<string>?> Read)>();
+        if (plan.Operands.Count == 0)
+        {
+            sources.Add(("standard input", () => PipelineLines(pipelineInput)));
+        }
+        foreach (var raw in plan.Operands)
+        {
+            if (raw == "-")
+            {
+                sources.Add(("standard input", () => PipelineLines(pipelineInput)));
+                continue;
+            }
+            foreach (var op0 in FileSystemHelpers.ResolveOperands(cmdlet, raw))
+            {
+                var captured = op0 with { Display = Shown(op0.Display) };
+                sources.Add((captured.Display, () => ReadListFile(cmdlet, commandName, captured)));
+            }
+        }
+
+        foreach (var (display, read) in sources)
+        {
+            var lines = read();
+            if (lines is null) { anyFailure = true; continue; }
+            if (!CheckOneList(cmdlet, algorithmName, algorithmLabel, commandName, plan, display, lines, hexLength))
+                anyFailure = true;
+        }
+
+        FileSystemHelpers.SetLastExitCode(cmdlet, anyFailure ? 1 : 0);
+    }
+
+    private static List<string>? PipelineLines(IList<PSObject>? pipelineInput)
+    {
+        var lines = new List<string>();
+        if (pipelineInput is null) return lines;
+        foreach (var item in pipelineInput)
+            foreach (var (text, _) in BashRuntime.RecordLines(item)) lines.Add(text);
+        return lines;
+    }
+
+    private static List<string>? ReadListFile(PSCmdlet cmdlet, string commandName, FileSystemHelpers.OperandPath op)
+    {
+        if (Directory.Exists(op.Path))
+        {
+            FileSystemHelpers.WriteBashError(cmdlet, $"{commandName}: {op.Display}: Is a directory");
+            return null;
+        }
+        if (!File.Exists(op.Path))
+        {
+            FileSystemHelpers.WriteBashError(cmdlet, $"{commandName}: {op.Display}: No such file or directory");
+            return null;
+        }
+        try { return new List<string>(BashFileSystem.ReadLines(op.Path)); }
+        catch (Exception ex)
+        {
+            if (FileSystemHelpers.IsPipelineStop(ex)) throw;
+            FileSystemHelpers.WriteBashError(cmdlet, $"{commandName}: {op.Display}: {ex.Message}");
+            return null;
         }
     }
 
-    private static IEnumerable<string> ResolveOperandPaths(PSCmdlet cmdlet, string raw)
+    /// <summary>Verify one checksum list. Returns true when it passed (no failures, nothing unreadable, and —
+    /// under <c>--strict</c> — nothing improperly formatted).</summary>
+    private static bool CheckOneList(
+        PSCmdlet cmdlet, HashAlgorithmName algorithmName, string algorithmLabel, string commandName,
+        ChecksumArgs plan, string listDisplay, List<string> lines, int hexLength)
     {
-        raw = FileSystemHelpers.NormalizeOperandPath(raw);
-        // Glob slice mirrors InvokeBashCatCommand: '*'/'?' triggers
-        // SessionState resolution; literal paths fall through unchanged so a
-        // bash-style "no such file" error can be emitted by the caller.
-        if (raw.IndexOf('*') < 0 && raw.IndexOf('?') < 0)
-        {
-            yield return cmdlet.SessionState.Path.GetUnresolvedProviderPathFromPSPath(raw);
-            yield break;
-        }
+        int properLines = 0, improper = 0, mismatched = 0, unreadable = 0, verified = 0;
+        int lineNo = 0;
 
-        var matched = new List<string>();
-        try
+        foreach (var line in lines)
         {
-            foreach (var resolved in cmdlet.SessionState.Path
-                         .GetResolvedProviderPathFromPSPath(raw, out _))
+            lineNo++;
+            if (line.Length == 0 || line[0] == '#') continue;
+
+            if (!TryParseCheckLine(line, algorithmLabel, hexLength, out var parsed))
             {
-                matched.Add(resolved);
+                improper++;
+                if (plan.Warn && !plan.Status)
+                    FileSystemHelpers.WriteBashError(cmdlet,
+                        $"{commandName}: {listDisplay}: {lineNo}: improperly formatted {algorithmLabel} checksum line");
+                continue;
+            }
+            properLines++;
+
+            string shown = parsed.Name.Contains('\\') || parsed.Name.Contains('\n')
+                ? "\\" + parsed.Name.Replace("\\", "\\\\").Replace("\n", "\\n")
+                : parsed.Name;
+            string fpath;
+            try { fpath = cmdlet.SessionState.Path.GetUnresolvedProviderPathFromPSPath(parsed.Name); }
+            catch { fpath = parsed.Name; }
+
+            bool isDir = Directory.Exists(fpath);
+            if (isDir || !File.Exists(fpath))
+            {
+                if (plan.IgnoreMissing && !isDir) continue;
+                unreadable++;
+                if (!plan.Status) cmdlet.WriteObject(BashRuntime.NewBashObject($"{shown}: FAILED open or read"));
+                FileSystemHelpers.WriteBashError(cmdlet,
+                    $"{commandName}: {parsed.Name}: {(isDir ? "Is a directory" : "No such file or directory")}");
+                continue;
+            }
+
+            string actual;
+            try
+            {
+                using var s = BashFileSystem.OpenRead(fpath);
+                actual = ComputeHexFromStream(algorithmName, s);
+            }
+            catch (Exception ex)
+            {
+                if (FileSystemHelpers.IsPipelineStop(ex)) throw;
+                unreadable++;
+                if (!plan.Status) cmdlet.WriteObject(BashRuntime.NewBashObject($"{shown}: FAILED open or read"));
+                FileSystemHelpers.WriteBashError(cmdlet, $"{commandName}: {parsed.Name}: {ex.Message}");
+                continue;
+            }
+
+            verified++;
+            if (string.Equals(actual, parsed.Hash, StringComparison.OrdinalIgnoreCase))
+            {
+                if (!plan.Status && !plan.Quiet) cmdlet.WriteObject(BashRuntime.NewBashObject($"{shown}: OK"));
+            }
+            else
+            {
+                mismatched++;
+                if (!plan.Status) cmdlet.WriteObject(BashRuntime.NewBashObject($"{shown}: FAILED"));
             }
         }
-        catch
-        {
-            // No matches — fall through to literal passthrough (the caller
-            // will report the missing file).
-        }
 
-        if (matched.Count == 0)
+        bool ok = true;
+        if (properLines == 0)
         {
-            yield return raw;
+            FileSystemHelpers.WriteBashError(cmdlet, $"{commandName}: {listDisplay}: no properly formatted checksum lines found");
+            return false;
         }
-        else
+        if (!plan.Status)
         {
-            foreach (var m in matched) yield return m;
+            if (improper > 0)
+                FileSystemHelpers.WriteBashError(cmdlet,
+                    $"{commandName}: WARNING: {improper} {(improper == 1 ? "line is" : "lines are")} improperly formatted");
+            if (unreadable > 0)
+                FileSystemHelpers.WriteBashError(cmdlet,
+                    $"{commandName}: WARNING: {unreadable} listed {(unreadable == 1 ? "file" : "files")} could not be read");
+            if (mismatched > 0)
+                FileSystemHelpers.WriteBashError(cmdlet,
+                    $"{commandName}: WARNING: {mismatched} computed {(mismatched == 1 ? "checksum" : "checksums")} did NOT match");
         }
+        if (plan.IgnoreMissing && verified == 0 && unreadable == 0)
+        {
+            FileSystemHelpers.WriteBashError(cmdlet, $"{commandName}: {listDisplay}: no file was verified");
+            ok = false;
+        }
+        if (mismatched > 0 || unreadable > 0 || (plan.Strict && improper > 0)) ok = false;
+        return ok;
     }
 
     private static string ComputeHex(HashAlgorithmName name, byte[] bytes)
     {
-        // IncrementalHash is per-call here because the API is convenient and
-        // each invocation is independent. For a long-lived hasher we'd reuse,
-        // but each checksum operation hashes one file's bytes in one shot.
         using var hasher = IncrementalHash.CreateHash(name);
         hasher.AppendData(bytes);
         var hashBytes = hasher.GetHashAndReset();
@@ -299,25 +463,12 @@ internal static class ChecksumEngine
         }
         return Convert.ToHexString(hasher.GetHashAndReset()).ToLowerInvariant();
     }
-
-    private static PSObject MakeOutput(string hex, string fileName, string algorithmLabel, string marker = "  ")
-    {
-        var obj = new PSObject();
-        obj.TypeNames.Insert(0, "PsBash.TextOutput");
-        obj.Properties.Add(new PSNoteProperty("BashText", $"{hex}{marker}{fileName}"));
-        obj.Properties.Add(new PSNoteProperty("Hash", hex));
-        obj.Properties.Add(new PSNoteProperty("FileName", fileName));
-        obj.Properties.Add(new PSNoteProperty("Algorithm", algorithmLabel));
-        return obj;
-    }
 }
 
 /// <summary>
-/// Binary cmdlet replacement for the psm1 <c>Invoke-BashMd5sum</c>
-/// (REFACTOR-2). MD5 file checksum, matching the GNU coreutils <c>md5sum</c>
-/// output shape: <c>&lt;hex&gt;  &lt;path&gt;</c> per file, or
-/// <c>&lt;hex&gt;  -</c> in pipeline mode. Delegates to
-/// <see cref="ChecksumEngine.Run"/>.
+/// Binary cmdlet for <c>md5sum</c>. Delegates to <see cref="ChecksumEngine.Run"/>. Direct PowerShell calls:
+/// <c>-c</c> (Confirm) and <c>-w</c> (WarningAction/-WarningVariable/-WhatIf) collide with common parameters
+/// and are declared decoy switches, re-injected before the scan.
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashMd5sum")]
 [OutputType(typeof(PSObject))]
@@ -328,6 +479,9 @@ public sealed class InvokeBashMd5sumCommand : PSCmdlet
 
     /// <summary>Bash <c>-c</c> (check). Decoy — prefix-collides with <c>-Confirm</c>.</summary>
     [Parameter] public SwitchParameter C { get; set; }
+
+    /// <summary>Bash <c>-w</c> (warn). Decoy — ambiguous between <c>-WarningAction</c>/<c>-WarningVariable</c>.</summary>
+    [Parameter] public SwitchParameter W { get; set; }
 
     [Parameter(ValueFromPipeline = true)]
     public PSObject? InputObject { get; set; }
@@ -343,15 +497,11 @@ public sealed class InvokeBashMd5sumCommand : PSCmdlet
     {
         ChecksumEngine.Run(
             this, HashAlgorithmName.MD5, "MD5", "md5sum",
-            Arguments ?? Array.Empty<string>(), _pipeline, C.IsPresent);
+            BashRuntime.PrependDecoys(Arguments, (C.IsPresent, "-c"), (W.IsPresent, "-w")), _pipeline);
     }
 }
 
-/// <summary>
-/// Binary cmdlet replacement for the psm1 <c>Invoke-BashSha1sum</c>
-/// (REFACTOR-2). SHA-1 file checksum. Delegates to
-/// <see cref="ChecksumEngine.Run"/>.
-/// </summary>
+/// <summary>Binary cmdlet for <c>sha1sum</c>. See <see cref="InvokeBashMd5sumCommand"/>.</summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashSha1sum")]
 [OutputType(typeof(PSObject))]
 public sealed class InvokeBashSha1sumCommand : PSCmdlet
@@ -361,6 +511,9 @@ public sealed class InvokeBashSha1sumCommand : PSCmdlet
 
     /// <summary>Bash <c>-c</c> (check). Decoy — prefix-collides with <c>-Confirm</c>.</summary>
     [Parameter] public SwitchParameter C { get; set; }
+
+    /// <summary>Bash <c>-w</c> (warn). Decoy — ambiguous between <c>-WarningAction</c>/<c>-WarningVariable</c>.</summary>
+    [Parameter] public SwitchParameter W { get; set; }
 
     [Parameter(ValueFromPipeline = true)]
     public PSObject? InputObject { get; set; }
@@ -376,15 +529,11 @@ public sealed class InvokeBashSha1sumCommand : PSCmdlet
     {
         ChecksumEngine.Run(
             this, HashAlgorithmName.SHA1, "SHA1", "sha1sum",
-            Arguments ?? Array.Empty<string>(), _pipeline, C.IsPresent);
+            BashRuntime.PrependDecoys(Arguments, (C.IsPresent, "-c"), (W.IsPresent, "-w")), _pipeline);
     }
 }
 
-/// <summary>
-/// Binary cmdlet replacement for the psm1 <c>Invoke-BashSha256sum</c>
-/// (REFACTOR-2). SHA-256 file checksum. Delegates to
-/// <see cref="ChecksumEngine.Run"/>.
-/// </summary>
+/// <summary>Binary cmdlet for <c>sha256sum</c>. See <see cref="InvokeBashMd5sumCommand"/>.</summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashSha256sum")]
 [OutputType(typeof(PSObject))]
 public sealed class InvokeBashSha256sumCommand : PSCmdlet
@@ -394,6 +543,9 @@ public sealed class InvokeBashSha256sumCommand : PSCmdlet
 
     /// <summary>Bash <c>-c</c> (check). Decoy — prefix-collides with <c>-Confirm</c>.</summary>
     [Parameter] public SwitchParameter C { get; set; }
+
+    /// <summary>Bash <c>-w</c> (warn). Decoy — ambiguous between <c>-WarningAction</c>/<c>-WarningVariable</c>.</summary>
+    [Parameter] public SwitchParameter W { get; set; }
 
     [Parameter(ValueFromPipeline = true)]
     public PSObject? InputObject { get; set; }
@@ -409,6 +561,6 @@ public sealed class InvokeBashSha256sumCommand : PSCmdlet
     {
         ChecksumEngine.Run(
             this, HashAlgorithmName.SHA256, "SHA256", "sha256sum",
-            Arguments ?? Array.Empty<string>(), _pipeline, C.IsPresent);
+            BashRuntime.PrependDecoys(Arguments, (C.IsPresent, "-c"), (W.IsPresent, "-w")), _pipeline);
     }
 }

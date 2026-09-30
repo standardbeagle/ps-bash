@@ -91,6 +91,9 @@ public class CommonParameterCollisionGuardTests
             ["column"] = new(CollidingLetters),
             ["gzip"] = new(CollidingLetters),
             ["tar"] = new(CollidingLetters),
+            ["md5sum"] = new(CollidingLetters),
+            ["sha1sum"] = new(CollidingLetters),
+            ["sha256sum"] = new(CollidingLetters),
         };
 
     [Fact]

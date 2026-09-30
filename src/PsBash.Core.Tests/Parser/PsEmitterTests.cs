@@ -782,7 +782,7 @@ public class PsEmitterTests
         // Batch 1 of the shared ordered parser. Adding a command here also means adding it to
         // CommonParameterCollisionGuardTests.EmitterForceQuoted (Cmdlets.Tests) — that map is
         // how the guard knows the emitter, not a decoy, protects the colliding letters.
-        Assert.Equal(new[] { "awk", "base64", "bash", "cat", "column", "comm", "command", "cp", "cut", "du", "env", "expand", "file", "fold", "gzip", "head", "join", "ln", "mkdir", "mv", "nl", "paste", "rm", "rmdir", "sort", "split", "stat", "strings", "tac", "tail", "tar", "tee", "time", "touch", "tree", "unexpand", "uniq", "wc", "xargs" }, PsEmitter.OrderedArgCommands.OrderBy(x => x).ToArray());
+        Assert.Equal(new[] { "awk", "base64", "bash", "cat", "column", "comm", "command", "cp", "cut", "du", "env", "expand", "file", "fold", "gzip", "head", "join", "ln", "md5sum", "mkdir", "mv", "nl", "paste", "rm", "rmdir", "sha1sum", "sha256sum", "sort", "split", "stat", "strings", "tac", "tail", "tar", "tee", "time", "touch", "tree", "unexpand", "uniq", "wc", "xargs" }, PsEmitter.OrderedArgCommands.OrderBy(x => x).ToArray());
     }
 
     // `bash` is on OrderedArgCommands: the script's own args (`bash s.sh -v -e -c x`) and the
