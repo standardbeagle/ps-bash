@@ -729,18 +729,13 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
     [InlineData("Invoke-BashMkdir --bogus d")]
     [InlineData("Invoke-BashMkdir -pz d")]
     [InlineData("Invoke-BashMkdir --parents=1 d")]
+    [InlineData("Invoke-BashRmdir --bogus d")]
+    [InlineData("Invoke-BashRmdir -pz d")]
+    [InlineData("Invoke-BashRmdir '-Z' d")]         // GNU rmdir has no -Z: a plain usage error
     public void Mover_ParserUsageError_ExitsOne(string cmd)
     {
         var lines = Run($"{cmd} *> $null; $global:LASTEXITCODE");
         Assert.Equal("1", lines[^1]);
-    }
-
-    [Theory]
-    [InlineData("Invoke-BashRmdir --bogus d")]
-    public void Mover_UnrecognizedFlag_ExitsTwo(string cmd)
-    {
-        var lines = Run($"{cmd} *> $null; $global:LASTEXITCODE");
-        Assert.Equal("2", lines[^1]);
     }
 
     [Fact]
@@ -905,6 +900,72 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
         // `--update=older` is -u: copies when the destination is missing.
         Run($"Invoke-BashCp '--update=older' {Q(src)} {Q(dst)}");
         Assert.True(File.Exists(dst));
+    }
+
+    // ─────────── shared ordered parser: rmdir as the transpiler delivers it ───────────
+
+    [Fact]
+    public void Rmdir_QuotedPv_RemovesChainAndReportsEachDirectory()
+    {
+        var leaf = Path.Combine(_tmpRoot, "rp1", "rp2", "rp3");
+        Directory.CreateDirectory(leaf);
+        var lines = Run($"Invoke-BashRmdir '-pv' {Q(leaf)}");
+        Assert.False(Directory.Exists(Path.Combine(_tmpRoot, "rp1")));
+        Assert.True(lines.Count(l => l.Contains("removing directory")) >= 3);
+    }
+
+    [Theory]
+    [InlineData("--par")]        // unique prefix of --parents
+    [InlineData("--parents")]
+    [InlineData("-pp")]
+    public void Rmdir_QuotedParentsSpellings_RemoveTheChain(string flag)
+    {
+        var top = Path.Combine(_tmpRoot, "rq" + flag.Length);
+        var leaf = Path.Combine(top, "n1", "n2");
+        Directory.CreateDirectory(leaf);
+        Run($"Invoke-BashRmdir '{flag}' {Q(leaf)}");
+        Assert.False(Directory.Exists(top));
+    }
+
+    [Fact]
+    public void Rmdir_DoubleDash_DashNamedDirectoryIsRemovedNotParsed()
+    {
+        Directory.CreateDirectory(Path.Combine(_tmpRoot, "-v"));
+        Run($"Set-Location {Q(_tmpRoot)}; Invoke-BashRmdir '--' '-v'");
+        Assert.False(Directory.Exists(Path.Combine(_tmpRoot, "-v")));
+    }
+
+    [Fact]
+    public void Rmdir_OptionAfterOperand_StillApplies()
+    {
+        var top = Path.Combine(_tmpRoot, "ra");
+        var leaf = Path.Combine(top, "deep");
+        Directory.CreateDirectory(leaf);
+        Run($"Invoke-BashRmdir {Q(leaf)} '-p'");
+        Assert.False(Directory.Exists(top));
+    }
+
+    [Fact]
+    public void Rmdir_QuotedIgnoreFailOnNonEmpty_IsRefusedAndRemovesNothing()
+    {
+        var d = Path.Combine(_tmpRoot, "rne");
+        Directory.CreateDirectory(d);
+        Assert.Equal("2", LastExit($"Invoke-BashRmdir '--ign' {Q(d)}"));
+        Assert.True(Directory.Exists(d));
+    }
+
+    [Fact]
+    public void Rmdir_NoOperand_IsAnError() => Assert.Equal("1", LastExit("Invoke-BashRmdir '-p'"));
+
+    [Fact]
+    public void Rmdir_DirectCallDecoys_StillWork()
+    {
+        var top = Path.Combine(_tmpRoot, "rdd");
+        var leaf = Path.Combine(top, "x");
+        Directory.CreateDirectory(leaf);
+        var lines = Run($"Invoke-BashRmdir -p -v {Q(leaf)}");
+        Assert.False(Directory.Exists(top));
+        Assert.Contains(lines, l => l.Contains("removing directory"));
     }
 
     // ─────────── shared ordered parser: mkdir as the transpiler delivers it ───────────

@@ -1,5 +1,6 @@
 using System.Linq;
 using System.Management.Automation;
+using PsBash.Cmdlets.Args;
 
 namespace PsBash.Cmdlets;
 
@@ -21,10 +22,10 @@ namespace PsBash.Cmdlets;
 /// and remove each one that is empty. Stop on the first non-empty.</item>
 /// </list>
 /// <para>
-/// <b>Two colliding flags</b> declared explicitly — same hazards as
-/// <see cref="InvokeBashMkdirCommand"/>: <c>-p</c> vs
-/// <c>-ProgressAction</c> / <c>-PipelineVariable</c>; <c>-v</c> vs
-/// <c>-Verbose</c>.
+/// <b>Argv</b> is parsed by the shared ordered parser (<see cref="ArgParser"/>, spec
+/// <c>RmdirSpec</c>); same delivery contract as <see cref="InvokeBashMkdirCommand"/>: the
+/// transpiler single-quotes every dash word (<c>PsEmitter.OrderedArgCommands</c>) and the
+/// <c>p</c>/<c>v</c> decoy switches exist ONLY for direct calls.
 /// </para>
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashRmdir")]
@@ -39,15 +40,37 @@ public sealed class InvokeBashRmdirCommand : PSCmdlet
 
     /// <summary>Valid GNU <c>rmdir</c> flags ps-bash does not implement.
     /// Classified via <see cref="FileSystemHelpers.TryWriteOperandOptionError"/>.</summary>
-    private static readonly HashSet<string> RmdirValidButUnsupported = new(StringComparer.Ordinal)
+    // (A string[] on purpose: CommonParameterCollisionGuardTests enumerates each cmdlet's static
+    // string sets to find short flags the binder could eat.) GNU coreutils 9.4 rmdir has NO
+    // -Z/--context (`rmdir -Z` is "invalid option -- 'Z'"), so they are not listed here.
+    private static readonly string[] RmdirValidButUnsupported =
     {
-        "--ignore-fail-on-non-empty", "-Z", "--context",
+        "--ignore-fail-on-non-empty",
     };
+
+    private const string OptParents = "parents", OptVerbose = "verbose";
+
+    /// <summary>rmdir's whole option surface, built once for the shared ordered parser.</summary>
+    private static readonly OptSpecSet RmdirSpec = new(
+        new[]
+        {
+            new OptSpec(OptParents, 'p', "parents"),
+            new OptSpec(OptVerbose, 'v', "verbose"),
+        },
+        validButUnsupported: RmdirValidButUnsupported,
+        allowAbbrev: true,
+        gnuInfoOptions: true);
+
+    /// <summary>Pure argv scan (unit-test seam): options, operands and the first error.</summary>
+    internal static ParsedArgs ScanArgs(string[] args) => ArgParser.Parse(args, RmdirSpec);
 
     protected override void ProcessRecord()
     {
-        var args = Arguments ?? Array.Empty<string>();
-
+        // Re-inject every decoy-bound flag. The transpiler single-quotes each dash-leading word
+        // for rmdir (PsEmitter.OrderedArgCommands) so they arrive in Arguments in order; a DIRECT
+        // call (`Invoke-BashRmdir -p d`, Pester) binds the decoys instead. Prepending is safe: a
+        // decoy can only have been bound before any `--`.
+        var args = BashRuntime.PrependDecoys(Arguments, (p.IsPresent, "-p"), (v.IsPresent, "-v"));
         FileSystemHelpers.SetLastExitCode(this, 0);
         if (FileSystemHelpers.TryHandleVersion(this, "rmdir", args)) return;
         if (Array.IndexOf(args, "--help") >= 0)
@@ -60,34 +83,15 @@ public sealed class InvokeBashRmdirCommand : PSCmdlet
             return;
         }
 
-        bool removeParents = p.IsPresent;
-        bool verbose = v.IsPresent;
+        // Shared ordered parser: bundles in any order (-pv, -vp, -pp), `--`, unique-prefix long
+        // options, and the unsupported/unknown classifier in ONE scan.
+        var parsed = ScanArgs(args);
+        if (FileSystemHelpers.TryWriteParseError(this, "rmdir", parsed)) return;
+        if (FileSystemHelpers.TryHandleInfoOptions(this, "rmdir", parsed)) return;
 
-        var operands = new List<string>();
-        bool pastDoubleDash = false;
-        int preDashCount = -1;
-        foreach (var a in args)
-        {
-            if (pastDoubleDash) { operands.Add(a); continue; }
-            if (a == "--") { pastDoubleDash = true; preDashCount = operands.Count; continue; }
-            if (a == "-p" || a == "--parents") { removeParents = true; continue; }
-            if (a == "-v" || a == "--verbose") { verbose = true; continue; }
-            if (a.Length > 2 && a[0] == '-' && a[1] != '-'
-                && a.Skip(1).All(ch => ch == 'p' || ch == 'v'))
-            {
-                foreach (var ch in a.Skip(1))
-                {
-                    if (ch == 'p') removeParents = true;
-                    else if (ch == 'v') verbose = true;
-                }
-                continue;
-            }
-            operands.Add(a);
-        }
-
-        var rmdirToClassify = preDashCount < 0 ? operands : operands.GetRange(0, preDashCount);
-        if (FileSystemHelpers.TryWriteOperandOptionError(this, "rmdir", rmdirToClassify, RmdirValidButUnsupported))
-            return;
+        bool removeParents = parsed.Has(OptParents);
+        bool verbose = parsed.Has(OptVerbose);
+        var operands = parsed.Operands();
 
         if (operands.Count == 0)
         {
