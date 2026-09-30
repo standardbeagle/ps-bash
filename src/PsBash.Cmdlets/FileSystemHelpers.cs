@@ -256,6 +256,21 @@ internal static class FileSystemHelpers
         return true;
     }
 
+    /// <summary>
+    /// Report the first scan error of the shared ordered parser
+    /// (<see cref="Args.ParsedArgs.Error"/>) with its GNU wording and exit status 2, and
+    /// return <c>true</c> so the caller can bail. Returns <c>false</c> when the parse was clean.
+    /// The message text lives in <see cref="Args.ArgError.Message"/> (pure, unit-tested); this
+    /// is only the cmdlet-side sink.
+    /// </summary>
+    public static bool TryWriteParseError(PSCmdlet cmdlet, string cmd, Args.ParsedArgs parsed)
+    {
+        if (parsed.Error is not { } err) return false;
+        WriteBashError(cmdlet, err.Message(cmd));
+        SetLastExitCode(cmdlet, Args.ArgError.ExitCode);
+        return true;
+    }
+
     public static void WriteOptionError(
         PSCmdlet cmdlet, string cmd, string token,
         ISet<string> validButUnsupported)

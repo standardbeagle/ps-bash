@@ -774,6 +774,66 @@ public class PsEmitterTests
         Assert.Matches(@"Invoke-BashTee ['""]--['""] ", result);
     }
 
+    // ── OrderedArgCommands: every dash-leading literal reaches Arguments as a quoted string ──
+
+    [Fact]
+    public void OrderedArgCommands_IsExactlyTheMigratedSet()
+    {
+        // Batch 1 of the shared ordered parser. Adding a command here also means adding it to
+        // CommonParameterCollisionGuardTests.EmitterForceQuoted (Cmdlets.Tests) — that map is
+        // how the guard knows the emitter, not a decoy, protects the colliding letters.
+        Assert.Equal(new[] { "cp", "mv", "tee" }, PsEmitter.OrderedArgCommands.OrderBy(x => x).ToArray());
+    }
+
+    [Theory]
+    [InlineData("cp -rfv a b", "Invoke-BashCp '-rfv' a b")]
+    [InlineData("cp -i -p -d a b", "Invoke-BashCp '-i' '-p' '-d' a b")]
+    [InlineData("cp --no-clobber a b", "Invoke-BashCp '--no-clobber' a b")]
+    [InlineData("cp -- -a b", "Invoke-BashCp '--' '-a' b")]
+    [InlineData("mv -fv a b", "Invoke-BashMv '-fv' a b")]
+    [InlineData("mv -n a -v b", "Invoke-BashMv '-n' a '-v' b")]
+    [InlineData("mv --backup=numbered a b", "Invoke-BashMv '--backup=numbered' a b")]
+    [InlineData("mv - a", "Invoke-BashMv '-' a")]
+    public void Transpile_OrderedArgCommand_QuotesEveryDashLiteral(string bash, string expected)
+    {
+        Assert.Equal(expected, PsEmitter.Transpile(bash));
+    }
+
+    [Theory]
+    [InlineData("echo a | tee -a -i -p f", "Invoke-BashEcho a | Invoke-BashTee '-a' '-i' '-p' f")]
+    [InlineData("echo a | tee --append -- -zz", "Invoke-BashEcho a | Invoke-BashTee '--append' '--' '-zz'")]
+    public void Transpile_TeeFlags_AreAllQuoted(string bash, string expected)
+    {
+        Assert.Equal(expected, PsEmitter.Transpile(bash));
+    }
+
+    [Fact]
+    public void Transpile_OrderedArgCommand_QuotedAndMixedDashWordsBecomeOneSingleQuotedLiteral()
+    {
+        Assert.Equal("Invoke-BashCp '-r' a b", PsEmitter.Transpile("cp \"-r\" a b"));
+        Assert.Equal("Invoke-BashCp '--target=a b' x", PsEmitter.Transpile("cp --target=\"a b\" x"));
+        // an embedded single quote is doubled by PsBuild.SingleQuote, not corrupted
+        Assert.Equal("Invoke-BashCp '-a''b' x y", PsEmitter.Transpile("cp \"-a'b\" x y"));
+    }
+
+    [Fact]
+    public void Transpile_OrderedArgCommand_LeavesNonDashWordsAndOtherCommandsAlone()
+    {
+        Assert.Equal("Invoke-BashCp a/b c-d", PsEmitter.Transpile("cp a/b c-d"));
+        // grep is not opted in: `-i` stays a bare flag (its cmdlet declares decoys instead)
+        Assert.Contains("Invoke-BashGrep -i ", PsEmitter.Transpile("echo x | grep -i x"));
+    }
+
+    [Fact]
+    public void Transpile_OrderedArgCommand_UnquotedVariableStillSplatsAndFlagsStayQuoted()
+    {
+        // RC-7 word-splitting path (EmitCommandWithSplatArgs) shares the same arg renderer.
+        var result = PsEmitter.Transpile("cp -r $f dst")!;
+        Assert.Contains("'-r'", result);
+        Assert.Contains("@__bashsplat0", result);
+        Assert.DoesNotContain(" -r ", result);
+    }
+
     [Fact]
     public void Transpile_PsPipeBrowse_EmitsBrowseMappedCommand()
     {

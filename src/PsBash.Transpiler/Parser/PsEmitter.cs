@@ -5177,7 +5177,7 @@ public static class PsEmitter
                 result = EmitPassthrough("Invoke-BashTr", args);
                 return true;
             case "tee":
-                result = EmitPassthrough("Invoke-BashTee", args, TeeForceQuoteFlags);
+                result = EmitPassthrough("Invoke-BashTee", args);
                 return true;
             case "less":
                 result = EmitPassthrough("Invoke-BashLess", args);
@@ -5828,11 +5828,41 @@ public static class PsEmitter
     /// reads it as replacement mode with the default <c>{}</c>. The prefix form
     /// (<c>-iTOK</c>) is matched separately.
     /// </summary>
-    private static readonly IReadOnlySet<string> TeeForceQuoteFlags =
-        new HashSet<string>(StringComparer.Ordinal) { "--" };
-
     private static readonly IReadOnlySet<string> XargsForceQuoteFlags =
         new HashSet<string>(StringComparer.Ordinal) { "-i" };
+
+    /// <summary>
+    /// Bash command names whose cmdlet parses its argv with the shared ORDERED parser
+    /// (<c>PsBash.Cmdlets.Args.ArgParser</c>). For these, <see cref="EmitPassthrough"/> quotes
+    /// EVERY dash-leading literal word (and <c>--</c>) so the PowerShell binder never sees a
+    /// parameter-shaped token: each flag reaches <c>[ValueFromRemainingArguments] Arguments</c>
+    /// verbatim and in its original position, with no decoy switch losing the order and no
+    /// prefix collision (<c>-i</c>/<c>-e</c>/<c>-p</c>...) crashing or being swallowed.
+    /// This generalizes the per-flag sets above (find/echo/xargs), which quote only the
+    /// specific collisions. Opt a command in HERE only after its cmdlet is migrated — the
+    /// cmdlet must be prepared to receive every flag as a plain string.
+    /// </summary>
+    internal static readonly IReadOnlySet<string> OrderedArgCommands =
+        new HashSet<string>(StringComparer.Ordinal) { "tee", "cp", "mv" };
+
+    /// <summary><c>Invoke-BashTee</c> -&gt; is <c>tee</c> in <see cref="OrderedArgCommands"/>?</summary>
+    private static bool IsOrderedArgCmdlet(string cmdlet) =>
+        cmdlet.StartsWith("Invoke-Bash", StringComparison.Ordinal)
+        && OrderedArgCommands.Contains(cmdlet.Substring("Invoke-Bash".Length).ToLowerInvariant());
+
+    /// <summary>
+    /// The literal text of a dash-leading word that is fully static (bare, quoted or mixed:
+    /// <c>-r</c>, <c>--file="a b"</c>), or null when the word is dynamic or not dash-leading.
+    /// A dynamic word (<c>-$x</c>) keeps the normal path; an already-quoted whole word
+    /// (<c>'-r'</c>) is also returned — re-emitting it single-quoted is equivalent and keeps
+    /// one rule for "every dash-leading word".
+    /// </summary>
+    private static string? OrderedArgDashLiteral(CompoundWord word)
+    {
+        if (word.Parts.IsEmpty || TryGetStaticArgValue(word) is not { Length: > 0 } value || value[0] != '-')
+            return null;
+        return value;
+    }
 
     private static string EmitPassthrough(
         string cmdlet,
@@ -5847,8 +5877,15 @@ public static class PsEmitter
         // Renders operand i as a plain (non-splat) argument: the pipeline
         // process-sub operand goes through EmitProcessSubPipeline, everything
         // else through EmitWord with passthrough quoting applied.
+        bool orderedArgs = IsOrderedArgCmdlet(cmdlet);
+
         string EmitPlainArg(int i)
         {
+            // Ordered-parser commands: EVERY dash-leading literal (and `--`) is a single-quoted
+            // string, so no flag is ever a PowerShell parameter token. See OrderedArgCommands.
+            if (orderedArgs && OrderedArgDashLiteral(args[i]) is { } dashLiteral)
+                return PsBuild.SingleQuote(dashLiteral);
+
             var emitted = i == pipelineProcessSubIndex
                 ? EmitProcessSubPipeline((WordPart.ProcessSub)args[i].Parts[0])
                 : EmitWord(args[i]);

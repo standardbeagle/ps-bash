@@ -43,6 +43,12 @@ public class CommonParameterCollisionGuardTests
         {
             ["find"] = new() { 'o', 'a' },
             ["xargs"] = new() { 'i' },
+            // PsEmitter.OrderedArgCommands: the emitter single-quotes EVERY dash-leading literal
+            // for these (shared ordered parser), so all colliding letters reach Arguments. Their
+            // cmdlets still keep decoys for DIRECT calls (Pester: `Invoke-BashTee -a f`).
+            ["tee"] = new(CollidingLetters),
+            ["cp"] = new(CollidingLetters),
+            ["mv"] = new(CollidingLetters),
         };
 
     [Fact]
