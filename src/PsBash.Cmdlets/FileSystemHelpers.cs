@@ -25,12 +25,15 @@ internal static class FileSystemHelpers
     /// </summary>
     public static IEnumerable<string> ResolveOperandPaths(PSCmdlet cmdlet, string raw)
     {
+        string typed = raw;
         raw = NormalizeOperandPath(raw);
         // *, ?, or a [..] character class → wildcard. A lone unmatched '[' matches
         // nothing and falls through to literal passthrough (bash-literal semantics).
         if (raw.IndexOf('*') < 0 && raw.IndexOf('?') < 0 && raw.IndexOf('[') < 0)
         {
-            yield return cmdlet.SessionState.Path.GetUnresolvedProviderPathFromPSPath(raw);
+            string resolved = cmdlet.SessionState.Path.GetUnresolvedProviderPathFromPSPath(raw);
+            OperandDisplay.Remember(cmdlet, resolved, typed);
+            yield return resolved;
             yield break;
         }
 
@@ -117,6 +120,23 @@ internal static class FileSystemHelpers
     }
 
     /// <summary>
+    /// The strerror text for a failed read open: a missing file / directory, or a name Windows cannot
+    /// even parse (<c>*</c>, <c>?</c> in an unmatched glob: ERROR_INVALID_NAME), is ENOENT's
+    /// "No such file or directory"; anything else keeps the exception's own message. The one
+    /// definition every reader uses (the per-cmdlet copies missed the invalid-name case, so
+    /// <c>cat '*.zz'</c> said "The filename, directory name, or volume label syntax is incorrect").
+    /// </summary>
+    public static string ReadErrorMessage(Exception ex)
+    {
+        static bool NotFound(Exception e) =>
+            e is FileNotFoundException or DirectoryNotFoundException
+            || (OperatingSystem.IsWindows() && e is IOException && (e.HResult & 0xFFFF) == 0x7B); // ERROR_INVALID_NAME
+        return NotFound(ex) || (ex.InnerException is { } inner && NotFound(inner))
+            ? "No such file or directory"
+            : ex.Message;
+    }
+
+    /// <summary>
     /// Emit a bash-style error to the cmdlet's error stream so that callers
     /// using <c>2&gt;$null</c> can suppress it, <c>2&gt;&amp;1</c> can merge
     /// it into the pipeline, and the ps-bash host (SdkWorker) prints it to
@@ -148,6 +168,8 @@ internal static class FileSystemHelpers
     /// </summary>
     public static void WriteStderr(PSCmdlet cmdlet, string message)
     {
+        // Every diagnostic names an operand as typed, not its resolved full path (OperandDisplay).
+        message = OperandDisplay.Rewrite(cmdlet, message);
         var record = new ErrorRecord(
             new System.IO.IOException(message),
             "BashError",

@@ -470,7 +470,8 @@ static string BuildPositionalPreamble(string script0, string[] scriptArgs)
     static string QuotePs(string s) =>
         "'" + s.Replace("'", "''") + "'";
 
-    var scriptName = QuotePs(Path.GetFileName(script0));
+    // $0 is the script path / `-c` NAME exactly as given (bash: `bash sub/s.sh` -> $0 = sub/s.sh).
+    var scriptName = QuotePs(script0);
     var argList = string.Join(", ", scriptArgs.Select(QuotePs));
     var arrayLiteral = scriptArgs.Length == 0 ? "@()" : $"@({argList})";
 

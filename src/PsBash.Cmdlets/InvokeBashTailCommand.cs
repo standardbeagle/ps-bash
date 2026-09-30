@@ -689,11 +689,9 @@ public sealed class InvokeBashTailCommand : PSCmdlet
 
     private void WriteFileReadError(string path, string command, Exception ex)
     {
-        string normalized = path.Replace('\\', '/');
-        bool notFound = ex is FileNotFoundException or DirectoryNotFoundException
-            || ex.InnerException is FileNotFoundException or DirectoryNotFoundException;
-        string msg = notFound ? "No such file or directory" : ex.Message;
-        FileSystemHelpers.WriteBashError(this, $"{command}: {normalized}: {msg}");
+        // GNU: tail: cannot open 'x' for reading: No such file or directory
+        FileSystemHelpers.WriteBashError(this,
+            $"{command}: cannot open '{path.Replace('\\', '/')}' for reading: {FileSystemHelpers.ReadErrorMessage(ex)}");
     }
 
     private static PSObject MakeCatLine(int lineNumber, string content, string fileName)
@@ -726,11 +724,8 @@ public sealed class InvokeBashTailCommand : PSCmdlet
         catch (Exception ex)
         {
             if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-            string normalized = path.Replace('\\', '/');
-            bool notFound = ex is FileNotFoundException or DirectoryNotFoundException
-                || ex.InnerException is FileNotFoundException or DirectoryNotFoundException;
-            string msg = notFound ? "No such file or directory" : ex.Message;
-            FileSystemHelpers.WriteBashError(this, $"{command}: {normalized}: {msg}");
+            FileSystemHelpers.WriteBashError(this,
+                $"{command}: cannot open '{path.Replace('\\', '/')}' for reading: {FileSystemHelpers.ReadErrorMessage(ex)}");
             return null;
         }
 

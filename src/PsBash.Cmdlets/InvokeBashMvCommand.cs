@@ -107,7 +107,14 @@ public sealed class InvokeBashMvCommand : PSCmdlet
         if (FileSystemHelpers.TryWriteParseError(this, "mv", parsed)) return;
         if (FileSystemHelpers.TryHandleInfoOptions(this, "mv", parsed)) return;
 
-        bool noClobber = parsed.Has(OptNoClobber);
+        // GNU mv: the LAST of -f / -n / -i decides (`mv -n -f a b` replaces, `mv -f -n a b` does not).
+        bool noClobber = false;
+        foreach (var tok in parsed.Tokens)
+        {
+            if (tok.Kind != ArgTokKind.Option) continue;
+            if (tok.OptId == OptNoClobber) noClobber = true;
+            else if (tok.OptId == OptForce) noClobber = false;
+        }
         bool verbose = parsed.Has(OptVerbose);
         var operands = parsed.Operands();
 
@@ -160,6 +167,15 @@ public sealed class InvokeBashMvCommand : PSCmdlet
             // Diagnostics name the destination as typed (GNU): `mv f d/` reports 'd/f'.
             var targetDisplay = destIsExistingDir ? FileSystemHelpers.JoinDisplay(destRaw, srcDisplay) : destRaw;
 
+            // -n: an existing destination is NOT replaced, and GNU 9.4 says so and exits 1
+            // (`mv: not replacing 'b'`) — before the same-file check (`mv -n a a` also says this).
+            if (noClobber && (File.Exists(targetPath) || Directory.Exists(targetPath)))
+            {
+                FileSystemHelpers.WriteBashError(this, $"mv: not replacing '{targetDisplay}'");
+                hadError = true;
+                continue;
+            }
+
             // Identity first (same file / dir into itself): must run before ANY delete, since the
             // resolved target can BE the source (`mv p/src p`).
             var identityError = TransferValidation.CheckIdentity("mv", src, srcIsDir, targetPath, srcDisplay, targetDisplay);
@@ -167,11 +183,6 @@ public sealed class InvokeBashMvCommand : PSCmdlet
             {
                 FileSystemHelpers.WriteBashError(this, identityError);
                 hadError = true;
-                continue;
-            }
-
-            if (noClobber && (File.Exists(targetPath) || Directory.Exists(targetPath)))
-            {
                 continue;
             }
 

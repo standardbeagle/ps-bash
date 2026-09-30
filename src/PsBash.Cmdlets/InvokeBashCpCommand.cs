@@ -181,6 +181,11 @@ public sealed class InvokeBashCpCommand : PSCmdlet
         bool archive = parsed.Has(OptArchive);
         bool recursive = archive || parsed.Has(OptRecursive);
         bool noClobber = parsed.Has(OptNoClobber);
+        // coreutils 9.4 warns once per invocation, before any other diagnostic, and leaves the exit
+        // status alone. -n wins over -f in either order (oracle-checked), so `noClobber` ignores order.
+        if (noClobber)
+            FileSystemHelpers.WriteStderr(this,
+                "cp: warning: behavior of -n is non-portable and may change in future; use --update=none instead");
         bool force = parsed.Has(OptForce);
         bool verbose = parsed.Has(OptVerbose);
         // -p / -a / --preserve[=LIST] / --no-preserve=LIST, resolved in command-line order. A bad

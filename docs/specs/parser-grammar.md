@@ -354,7 +354,7 @@ The parser recognizes bash special variables and maps them to PowerShell equival
 | `$?` | `$LASTEXITCODE` | Exit status of last command |
 | `$@` / `$*` | `$(if ($global:BashPositional) { $global:BashPositional } else { $args })` | Positional parameters (with `set --` support) |
 | `$#` | `$(if ($global:BashPositional) { $global:BashPositional.Count } else { $args.Count })` | Number of positional parameters |
-| `$0` | `$MyInvocation.MyCommand.Name` | Script or function name |
+| `$0` | `$(if ($global:BashPositional0) { $global:BashPositional0 } else { 'bash' })` | The `-c CMD NAME` name or script path exactly as given (launcher sets `BashPositional0`); `bash` when absent; unchanged inside functions |
 | `$$` / `$!` | `$PID` / `$global:BashBgLastPid` | Current/background process ID |
 | `$-` | `$global:BashFlags` | Shell flags |
 | `$_` | `$global:BashLastArg` | Last argument of previous command |

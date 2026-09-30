@@ -654,7 +654,7 @@ Maps bash special variables to PowerShell equivalents:
 - `$?` -> `$LASTEXITCODE`
 - `$@` / `$*` -> `$args`
 - `$#` -> `$args.Count`
-- `$0` -> `$MyInvocation.MyCommand.Name`
+- `$0` -> `$(if ($global:BashPositional0) { $global:BashPositional0 } else { 'bash' })` (the launcher's `-c CMD NAME` / script path as typed; it used to be `$MyInvocation.MyCommand.Name`, empty at top level)
 - `$$` / `$!` -> `$PID`
 - `$1`..`$9` -> `$args[0]`..`$args[8]`
 - `$HOME`, `$LASTEXITCODE`, `$null`, `$true`, `$false` -> kept as-is

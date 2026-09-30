@@ -112,6 +112,19 @@ every diagnostic twice and made it immune to `2>/dev/null`, because Bash mode
 writes through `$Host.UI.WriteErrorLine`. `Write-BashError` remains only for the
 psm1 helpers (`Get-BashItem`, `Read-BashFile*`) and the job-control functions.
 
+**Diagnostics name operands as typed.** GNU quotes the argv element, never the resolved full path
+(`cat: nosuchfile: No such file or directory`). Every diagnostic goes through
+`FileSystemHelpers.WriteStderr`, which calls `OperandDisplay.Rewrite`: an operand resolved through
+`FileSystemHelpers.ResolveOperandPaths` / `ResolveOperands` was remembered (resolved path -> text as
+typed, so `./x` stays `./x`), and any other path below the working directory loses the directory
+prefix (relative, forward slashes). A reader therefore just formats `{cmd}: {path}: {strerror}` with
+whatever path it holds; the wording is per tool (head/tail `cannot open 'x' for reading`, tac `failed
+to open`, sed `can't read x`, rev `cannot open x`, strings `'x': No such file`, awk gawk-style
+`fatal: cannot open file \`x' for reading`, gzip -d names `x.gz`). The strerror text comes from
+`FileSystemHelpers.ReadErrorMessage` (also maps Windows' invalid-name error for an unmatched `*`/`?`
+to "No such file or directory"). Known gap: GNU shell-quotes names with special characters
+(`cat: '*.zz': ...`). Tests: `ReaderOperandDisplayTests` (table over the commands, GNU 9.4 oracle).
+
 ### Migrated Binary Cmdlets
 
 Leaf `Invoke-Bash*` commands are progressively migrated from psm1 functions to

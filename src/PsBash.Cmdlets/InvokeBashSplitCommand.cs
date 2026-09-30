@@ -412,11 +412,9 @@ public sealed class InvokeBashSplitCommand : PSCmdlet
         }
         catch (Exception ex) when (fileReadPath is not null)
         {
-            string normalized = fileReadPath.Replace('\\', '/');
-            bool notFound = ex is FileNotFoundException or DirectoryNotFoundException
-                || ex.InnerException is FileNotFoundException or DirectoryNotFoundException;
-            string msg = notFound ? "No such file or directory" : ex.Message;
-            FileSystemHelpers.WriteBashError(this, $"split: {normalized}: {msg}");
+            // GNU: split: cannot open 'x' for reading: No such file or directory
+            FileSystemHelpers.WriteBashError(this,
+                $"split: cannot open '{fileReadPath.Replace('\\', '/')}' for reading: {FileSystemHelpers.ReadErrorMessage(ex)}");
         }
     }
 

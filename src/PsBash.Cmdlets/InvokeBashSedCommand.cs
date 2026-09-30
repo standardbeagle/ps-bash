@@ -1498,11 +1498,8 @@ public sealed class InvokeBashSedCommand : PSCmdlet
         catch (Exception ex)
         {
             if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-            string normalized = path.Replace('\\', '/');
-            bool notFound = ex is FileNotFoundException or DirectoryNotFoundException
-                || ex.InnerException is FileNotFoundException or DirectoryNotFoundException;
-            string msg = notFound ? "No such file or directory" : ex.Message;
-            EmitError($"sed: {normalized}: {msg}");
+            // GNU: sed: can't read x: No such file or directory
+            EmitError($"sed: can't read {path.Replace('\\', '/')}: {FileSystemHelpers.ReadErrorMessage(ex)}");
             return null;
         }
     }

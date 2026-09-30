@@ -130,7 +130,6 @@ public class AgentPatternEndToEndTests
             foreach (var argv in new[]
             {
                 new[] { "s.sh", "-v", "-e", "-c", "x" },
-                // ($0 in -c mode is a separate pre-existing gap: it emits MyInvocation, not the NAME.)
                 new[] { "-c", "echo \"$1 $2\"", "zero", "-d", "-x" },
                 new[] { "s.sh", "--version", "--help" },
             })
@@ -142,6 +141,43 @@ public class AgentPatternEndToEndTests
                 lines.AddRange(stdout.Replace("\r", "").TrimEnd('\n').Split('\n'));
             }
             Assert.Equal(new[] { "-v|-e|-c|x", "-d -x", "--version|--help||" }, lines);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, recursive: true); } catch { }
+        }
+    }
+
+    [SkippableFact]
+    public async Task DollarZero_IsTheNameOrScriptPathAsGiven()
+    {
+        // bash oracle (5.2): `-c 'echo "$0 $1"' zero -d` -> `zero -d`; `-c 'echo "[$0]"'` -> `[bash]`;
+        // `-c ... a/b/c` -> `[a/b/c]` (NOT the basename); `bash s0.sh a` -> `[s0.sh]`, `./s0.sh` and
+        // `sub/s0.sh` keep the path as typed, and a function inside the script still sees the script's $0.
+        var tempDir = Path.Combine(Path.GetTempPath(), "ps-bash-dz-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(tempDir, "sub"));
+        try
+        {
+            const string body = "echo \"[$0] [$1]\"\nf() { echo \"in f: $0\"; }\nf\n";
+            File.WriteAllText(Path.Combine(tempDir, "s0.sh"), body);
+            File.WriteAllText(Path.Combine(tempDir, "sub", "s0.sh"), body);
+            var cases = new (string[] Argv, string[] Expected)[]
+            {
+                (new[] { "-c", "echo \"$0 $1\"", "zero", "-d" }, new[] { "zero -d" }),
+                (new[] { "-c", "echo \"[$0]\"" }, new[] { "[bash]" }),
+                (new[] { "-c", "echo \"[$0]\"", "a/b/c" }, new[] { "[a/b/c]" }),
+                (new[] { "s0.sh", "a" }, new[] { "[s0.sh] [a]", "in f: s0.sh" }),
+                (new[] { "./s0.sh", "a" }, new[] { "[./s0.sh] [a]", "in f: ./s0.sh" }),
+                (new[] { "sub/s0.sh", "a" }, new[] { "[sub/s0.sh] [a]", "in f: sub/s0.sh" }),
+            };
+            foreach (var (argv, expected) in cases)
+            {
+                var (exitCode, stdout, stderr) = await RunShellAsync(
+                    argv, timeout: null, env: null, workingDirectory: tempDir);
+                Assert.Equal("", stderr.Trim());
+                Assert.Equal(0, exitCode);
+                Assert.Equal(expected, stdout.Replace("\r", "").TrimEnd('\n').Split('\n'));
+            }
         }
         finally
         {

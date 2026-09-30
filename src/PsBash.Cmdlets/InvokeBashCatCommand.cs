@@ -394,11 +394,8 @@ public sealed class InvokeBashCatCommand : PSCmdlet
 
     private void EmitReadError(string path, string command, Exception ex)
     {
-        string normalized = path.Replace('\\', '/');
-        bool notFound = ex is FileNotFoundException or DirectoryNotFoundException
-            || ex.InnerException is FileNotFoundException or DirectoryNotFoundException;
-        string msg = notFound ? "No such file or directory" : ex.Message;
-        FileSystemHelpers.WriteBashError(this, $"{command}: {normalized}: {msg}");
+        FileSystemHelpers.WriteBashError(this,
+            $"{command}: {path.Replace('\\', '/')}: {FileSystemHelpers.ReadErrorMessage(ex)}");
     }
 
     /// <summary>

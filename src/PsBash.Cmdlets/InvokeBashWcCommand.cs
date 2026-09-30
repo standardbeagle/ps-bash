@@ -91,7 +91,6 @@ public sealed class InvokeBashWcCommand : PSCmdlet
     // Streamed counters — wc needs only running totals, never the buffered
     // pipeline. int (not long) for byte-exact parity with the buffered oracle.
     private int _totalLines, _totalWords, _totalBytes, _totalChars, _maxLine;
-    private bool _sawRecord;
 
     /// <summary>
     /// Valid GNU <c>wc</c> options ps-bash does not implement, refused loudly (exit 2) by the
@@ -194,30 +193,41 @@ public sealed class InvokeBashWcCommand : PSCmdlet
         // Stream the counts instead of buffering the pipe — wc only ever needs
         // running totals. Per-record accumulation is exactly the buffered
         // oracle's per-item loop (no cross-item state in the counting).
-        _sawRecord = true;
+        // Count the BYTE STREAM the record renders to (record terminator contract): an
+        // unterminated record (printf 'abc', echo -n) contributes exactly its bytes, a normal
+        // record BashText + "\n". -l therefore counts newlines, as GNU does, and an unterminated
+        // record glues to the next one (words, -L) because the state carries across records.
         string text = BashRuntime.GetBashText(InputObject);
-        string trimmed = text.TrimEnd('\n');
-        if (trimmed.Contains('\n'))
-        {
-            foreach (var subLine in trimmed.Split('\n'))
-            {
-                AccumulateLine(subLine);
-            }
-        }
-        else
-        {
-            AccumulateLine(trimmed);
-        }
+        if (!text.EndsWith('\n') && !BashRuntime.IsUnterminated(InputObject)) text += "\n";
+        AccumulateStream(text);
     }
 
-    private void AccumulateLine(string line)
+    // Cross-record state: a word / line may span an unterminated record boundary.
+    private bool _inWord;
+    private int _curLine;
+
+    private void AccumulateStream(string text)
     {
-        _totalLines++;
-        _totalWords += CountWords(line);
-        _totalBytes += Encoding.UTF8.GetByteCount(line) + 1;
-        int cp = CountCodePoints(line);
-        _totalChars += cp + 1; // +1 for the line's newline (GNU counts it as a char)
-        if (cp > _maxLine) _maxLine = cp;
+        _totalBytes += Encoding.UTF8.GetByteCount(text);
+        foreach (char c in text)
+        {
+            bool isLow = char.IsLowSurrogate(c);
+            if (!isLow) _totalChars++;
+            if (c == '\n')
+            {
+                _totalLines++;
+                if (_curLine > _maxLine) _maxLine = _curLine;
+                _curLine = 0;
+            }
+            else if (!isLow)
+            {
+                _curLine++;
+            }
+
+            if (c is ' ' or '\t' or '\n' or '\r') _inWord = false;
+            else if (!_inWord) { _totalWords++; _inWord = true; }
+        }
+        if (_curLine > _maxLine) _maxLine = _curLine; // a final unterminated line still counts for -L
     }
 
     /// <summary>Unicode code points (scalar values) in a string — a surrogate
@@ -256,16 +266,12 @@ public sealed class InvokeBashWcCommand : PSCmdlet
             if (FileSystemHelpers.TryHandleInfoOptions(this, "wc", plan.Parsed)) return;
         }
 
-        // Pipeline mode: counts were streamed in ProcessRecord. Emit only when
-        // stdin actually delivered a record (matching the buffered oracle's
-        // `_pipeline.Count > 0` gate; no input + no operands emits nothing).
+        // Pipeline mode: counts were streamed in ProcessRecord. Always emit, like GNU wc on an
+        // empty stdin (`echo -n '' | wc -c` prints 0; `printf '' | wc` prints 0 0 0).
         if (_operands.Count == 0)
         {
-            if (_sawRecord)
-            {
-                WriteObject(BuildResult(
-                    _totalLines, _totalWords, _totalBytes, _totalChars, _maxLine, string.Empty));
-            }
+            WriteObject(BuildResult(
+                _totalLines, _totalWords, _totalBytes, _totalChars, _maxLine, string.Empty));
             return;
         }
 

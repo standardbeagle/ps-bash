@@ -213,6 +213,32 @@ public class CommonParameterCollisionGuardTests
         return set;
     }
 
+    /// <summary>
+    /// The completion / collision-guard spec must list the options the migrated cmdlets implement: a
+    /// flag missing here gets no completion and — worse — HIDES a binder collision from the guard
+    /// above. Pins the options added with the file-mutator and batch-3 migrations.
+    /// </summary>
+    [Theory]
+    [InlineData("rm", "-d,-i,-I,--interactive")]
+    [InlineData("mkdir", "-m,--mode")]
+    [InlineData("touch", "-t,-r,-a,-m,-c,-h,--time")]
+    [InlineData("cp", "-p,-a,--preserve,--no-preserve")]
+    [InlineData("ln", "-n,-t,-T")]
+    [InlineData("comm", "--total,--output-delimiter")]
+    [InlineData("jq", "-R,-j")]
+    [InlineData("split", "-b,--numeric-suffixes,--additional-suffix")]
+    [InlineData("head", "-c,-q")]
+    [InlineData("join", "-j,-a,-v,-i")]
+    [InlineData("uniq", "-u,-D,-i,-f,-s,-w")]
+    [InlineData("wc", "-m,-L")]
+    public void FlagSpecs_ListTheImplementedOptions(string command, string flagsCsv)
+    {
+        var specs = LoadFlagSpecs();
+        Assert.True(specs.TryGetValue(command, out var have), $"{command} has no spec");
+        var missing = flagsCsv.Split(',').Where(f => !have!.Contains(f)).ToList();
+        Assert.True(missing.Count == 0, $"{command}: missing {string.Join(' ', missing)}");
+    }
+
     private static Dictionary<string, List<string>> LoadFlagSpecs()
     {
         var path = FindRepoFile(Path.Combine("src", "PsBash.Module", "BashFlagSpecs.json"));

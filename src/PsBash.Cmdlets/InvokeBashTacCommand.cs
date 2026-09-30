@@ -245,10 +245,8 @@ public sealed class InvokeBashTacCommand : PSCmdlet
 
     private void WriteReadError(string path, Exception ex)
     {
-        bool notFound = ex is FileNotFoundException or DirectoryNotFoundException
-            || ex.InnerException is FileNotFoundException or DirectoryNotFoundException;
-        string msg = notFound ? "No such file or directory" : ex.Message;
-        string normalized = path.Replace('\\', '/');
-        FileSystemHelpers.WriteBashError(this, $"tac: {normalized}: {msg}");
+        // GNU: tac: failed to open 'x' for reading: No such file or directory
+        FileSystemHelpers.WriteBashError(this,
+            $"tac: failed to open '{path.Replace('\\', '/')}' for reading: {FileSystemHelpers.ReadErrorMessage(ex)}");
     }
 }

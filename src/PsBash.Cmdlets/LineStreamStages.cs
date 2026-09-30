@@ -248,8 +248,7 @@ internal sealed class WcStage : ILineStreamStage
             chars += cp + 1;
             if (cp > maxLine) maxLine = cp;
         }
-        // The cmdlet emits nothing when no record arrived in pipeline mode.
-        if (lines == 0 && words == 0 && bytes == 0) yield break;
+        // Empty input still prints the zero counts (GNU: `seq 1 0 | wc` = 0 0 0), as the cmdlet does.
         // FormatWcText's parameter order is (lines, words, CHARS, BYTES, maxLine): -m before -c.
         // (This call used to pass _c/_m swapped, so a fused `wc -c` printed the CHAR count — equal
         // to the byte count for ASCII, which is why the ASCII parity corpus never noticed.)
