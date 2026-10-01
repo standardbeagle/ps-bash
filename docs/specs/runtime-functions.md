@@ -320,7 +320,7 @@ untouched — its contract (unknown flag becomes an operand) differs.
   prefix is an error listing candidates in GNU's `long_options[]` TABLE order, not alphabetical:
   `--re` in cp is `'--recursive' '--remove-destination' '--reflink'`. Pass `longOptionOrder:` (the full
   long-name order, read from the oracle by probing `cmd --<letter>`); names it omits follow in
-  declaration order: specs, then valid-but-unsupported, then `help`/`version`; candidates that name the SAME option — same Id and kind, e.g. grep `--colo` = color/colour, `--fixed` = fixed-regexp/fixed-strings — are not ambiguous, as in getopt_long), `numericShorthandId` (`head -5`), `bundleDigitsId` (grep's `-NUM`: a digit run anywhere in a bundle — `-5`, `-1n`, `-n12` — is one value option; each argv element's digits are ONE number), `gnuInfoOptions`
+  declaration order: specs, then valid-but-unsupported, then `help`/`version`; candidates that name the SAME option — same Id and kind, e.g. grep `--colo` = color/colour, `--fixed` = fixed-regexp/fixed-strings — are not ambiguous, as in getopt_long — so NEVER group unrelated options under one catch-all id; `OptSpecSharedIdGuardTests` fails any id with 2+ long names that is not an oracle-verified alias in its allowlist), `numericShorthandId` (`head -5`), `bundleDigitsId` (grep's `-NUM`: a digit run anywhere in a bundle — `-5`, `-1n`, `-n12` — is one value option; each argv element's digits are ONE number), `gnuInfoOptions`
   (`--help`/`--version` join abbreviation, so `--ver` is ambiguous with `--verbose`).
 - `ArgParser.Parse(ReadOnlySpan<string> argv, OptSpecSet)` → `ParsedArgs`: `Tokens` in ORIGINAL
   order (`ArgTokKind` Operand/Option/DoubleDash; a bundle `-abc` is one token per letter), the

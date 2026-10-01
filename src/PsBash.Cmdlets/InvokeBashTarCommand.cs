@@ -160,15 +160,18 @@ public sealed class InvokeBashTarCommand : PSCmdlet
             new OptSpec(OptDirectory, 'C', "directory", OptKind.Value),
             new OptSpec(OptExclude, '\0', "exclude", OptKind.Value),
             new OptSpec(OptStrip, '\0', "strip-components", OptKind.Value),
-            new OptSpec(OptNoOp, 'm', "touch"),
-            new OptSpec(OptNoOp, 'p', "preserve-permissions"),
-            new OptSpec(OptNoOp, '\0', "same-permissions"),
-            new OptSpec(OptNoOp, '\0', "overwrite"),
-            new OptSpec(OptNoOp, '\0', "wildcards"),
-            new OptSpec(OptNoOp, '\0', "no-wildcards"),
-            new OptSpec(OptNoOp, '\0', "no-same-owner"),
-            new OptSpec(OptNoOp, '\0', "same-owner"),
-            new OptSpec(OptNoOp, '\0', "no-same-permissions"),
+            // Accepted no-ops. Each GNU option keeps its OWN id (never a shared catch-all): ids that
+            // share a long name set count as ONE option for abbreviation, but GNU tar reports
+            // --no-same / --no-sa as ambiguous (--no-same-owner vs --no-same-permissions).
+            new OptSpec(OptNoOp + ":touch", 'm', "touch"),
+            new OptSpec(OptNoOp + ":preserve-permissions", 'p', "preserve-permissions"),
+            new OptSpec(OptNoOp + ":preserve-permissions", '\0', "same-permissions"), // GNU alias of -p
+            new OptSpec(OptNoOp + ":overwrite", '\0', "overwrite"),
+            new OptSpec(OptNoOp + ":wildcards", '\0', "wildcards"),
+            new OptSpec(OptNoOp + ":no-wildcards", '\0', "no-wildcards"),
+            new OptSpec(OptNoOp + ":no-same-owner", '\0', "no-same-owner"),
+            new OptSpec(OptNoOp + ":same-owner", '\0', "same-owner"),
+            new OptSpec(OptNoOp + ":no-same-permissions", '\0', "no-same-permissions"),
         },
         TarValidButUnsupported,
         allowAbbrev: true,

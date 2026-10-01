@@ -50,6 +50,9 @@ public sealed class OptSpecSet
 
     public bool AllowAbbrev { get; }
 
+    /// <summary>Every declared spec (test seam: the shared-id ambiguity guard walks these).</summary>
+    internal IReadOnlyList<OptSpec> Specs { get; }
+
     /// <summary>
     /// Exit status of a usage error (unknown option, missing argument, ambiguous or malformed
     /// long option). GNU coreutils use 1 (EXIT_FAILURE) for tee/cp/mv/rm/mkdir/rmdir/ln/touch
@@ -107,8 +110,11 @@ public sealed class OptSpecSet
         UsageExitCode = usageExitCode;
         DigitOptionWording = digitOptionWording;
         var declared = new List<string>();
+        var specList = new List<OptSpec>();
+        Specs = specList;
         foreach (var s in specs)
         {
+            specList.Add(s);
             if (s.Short != '\0') _byShort[s.Short] = s;
             if (s.Long is not null)
             {

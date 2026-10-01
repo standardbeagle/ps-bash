@@ -137,8 +137,17 @@ public class RmInteractiveTests : IDisposable, IClassFixture<SharedPwshFixture>
     }
 
     [Fact]
+    public void TestAssembly_NeverReadsTheRealConsole()
+    {
+        // CanonicalTestEnvironment sets PSBASH_NO_TTY. Without it, running Cmdlets.Tests from a terminal
+        // (console stdin) blocks every prompt test that supplies no answer on the keyboard.
+        Assert.True(BashRuntime.IsHostConfigTruthy(StdinLineSource.NoTtyEnvVar));
+    }
+
+    [Fact]
     public void I_NoAnswerAtAll_IsNo()
     {
+        // No pipeline answer and no queue: with PSBASH_NO_TTY this is EOF even when stdin is a console.
         File1("c");
         var r = InTmp("Invoke-BashRm -i c");
         AssertPrompts(r, "rm: remove regular file 'c'? ");
