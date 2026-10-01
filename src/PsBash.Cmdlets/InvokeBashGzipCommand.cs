@@ -179,13 +179,78 @@ public sealed class InvokeBashGzipCommand : PSCmdlet
     [Parameter(ValueFromPipeline = true)]
     public PSObject? InputObject { get; set; }
 
-    private readonly List<object> _pipeline = new();
+    // ---- stdin pipeline (no file operand), consumed record by record. COMPRESS streams: each
+    // record's bytes go through the stateful RawBytes encoder into a GZipStream whose output is
+    // emitted as records while it is produced (nothing but the compressor's own window is held).
+    // DECOMPRESS / -t must see the whole gzip member before it can inflate, so the COMPRESSED
+    // input bytes are kept (a MemoryStream of the real size, not the 3-5x string copies it used
+    // to take) and the inflated output streams out in chunks.
+    private bool _planned, _stdinMode, _stdinDecompress, _stdinTest;
+    private GzipArgs? _stdinPlan;
+    private RecordByteEncoder? _recordBytes;
+    private GZipStream? _compressor;
+    private ByteRecordEmitter? _outRecords;
+    private MemoryStream? _compressedInput;
+    private ByteSink? _stdinSink;
+
+    /// <summary>Records fed to the stdin stream (test seam).</summary>
+    internal int StdinRecords { get; private set; }
+
+    /// <summary>Bytes of compressed input retained for inflating (0 when compressing; test seam).</summary>
+    internal long RetainedInputBytes => _compressedInput?.Length ?? 0;
+
+    private string[] EffectiveArgs()
+        => BashRuntime.PrependDecoys(Arguments ?? Array.Empty<string>(), (D.IsPresent, "-d"), (C.IsPresent, "-c"), (V.IsPresent, "-v"), (F.IsPresent, "-f"));
+
+    private bool IsDecompress(GzipArgs plan)
+    {
+        string invokedAs = MyInvocation?.InvocationName ?? string.Empty;
+        return plan.Decompress
+               || string.Equals(invokedAs, "gunzip", StringComparison.OrdinalIgnoreCase)
+               || string.Equals(invokedAs, "zcat", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static CompressionLevel LevelFor(int level) => level switch
+    {
+        <= 1 => CompressionLevel.Fastest,
+        >= 9 => CompressionLevel.SmallestSize,
+        _ => CompressionLevel.Optimal,
+    };
 
     protected override void ProcessRecord()
     {
-        if (InputObject is not null) _pipeline.Add(InputObject);
+        if (InputObject is null) return;
+        if (!_planned)
+        {
+            _planned = true;
+            var plan = Plan(EffectiveArgs());
+            _stdinPlan = plan;
+            // Only a plain no-operand run reads the pipeline; usage errors / --help / --version / a
+            // file operand leave it untouched (EndProcessing reports them exactly as before).
+            _stdinMode = !plan.Parsed.HasError && plan.Operands.Count == 0
+                         && !plan.Parsed.Has(OptSpecSet.HelpId) && !plan.Parsed.Has(OptSpecSet.VersionId);
+            if (_stdinMode)
+            {
+                _stdinDecompress = IsDecompress(plan);
+                _stdinTest = plan.Test;
+                _recordBytes = new RecordByteEncoder();
+                _outRecords = new ByteRecordEmitter(WriteObject);
+                if (!_stdinDecompress && !_stdinTest)
+                {
+                    _compressor = new GZipStream(new ByteRecordStream(_outRecords), LevelFor(plan.Level), leaveOpen: false);
+                    _stdinSink = bytes => _compressor.Write(bytes);
+                }
+                else
+                {
+                    _compressedInput = new MemoryStream();
+                    _stdinSink = bytes => _compressedInput.Write(bytes);
+                }
+            }
+        }
+        if (!_stdinMode) return;
+        StdinRecords++;
+        _recordBytes!.Encode(InputObject, _stdinSink!);
     }
-
     /// <summary>The bash <c>-d</c> (decompress) switch — explicit because the bare token
     /// <c>-d</c> prefix-collides with <c>-Debug</c>.</summary>
     [Parameter]
@@ -244,9 +309,9 @@ public sealed class InvokeBashGzipCommand : PSCmdlet
         }
 
         var operands = plan.Operands;
-        if (operands.Count == 0 && _pipeline.Count > 0)
+        if (operands.Count == 0 && StdinRecords > 0)
         {
-            RunStdin(plan, decompress, level);
+            FinishStdin();
             return;
         }
         if (operands.Count == 0)
@@ -394,14 +459,20 @@ public sealed class InvokeBashGzipCommand : PSCmdlet
                 {
                     if (toStdout)
                     {
-                        string text;
+                        // Inflate in chunks straight into records: the decompressed bytes are never
+                        // materialised (a bomb used to fill a MemoryStream, then a string, then a split).
                         try
                         {
                             using var input = BashFileSystem.OpenRead(filePath);
                             using var gs = new GZipStream(input, CompressionMode.Decompress);
-                            using var buf = new MemoryStream();
-                            gs.CopyTo(buf);
-                            text = RawBytes.GetString(buf.GetBuffer(), 0, (int)buf.Length);
+                            var records = new ByteRecordEmitter(WriteObject);
+                            var chunk = new byte[81920];
+                            int got;
+                            try
+                            {
+                                while ((got = gs.Read(chunk, 0, chunk.Length)) > 0) records.Append(chunk.AsSpan(0, got));
+                            }
+                            finally { records.Finish(); }
                         }
                         catch (Exception ex)
                         {
@@ -410,7 +481,6 @@ public sealed class InvokeBashGzipCommand : PSCmdlet
                             FileSystemHelpers.WriteBashError(this, $"gzip: {normalized}: {ex.Message}");
                             continue;
                         }
-                        foreach (var rec in BashRuntime.EmitBashLines(text)) WriteObject(rec);
                     }
                     else
                     {
@@ -492,18 +562,20 @@ public sealed class InvokeBashGzipCommand : PSCmdlet
                     {
                         // The compressed stream is binary: it travels the string pipeline as
                         // escaped-byte markers (RawBytes), so `gzip -c FILE | gzip -dc` and
-                        // `gzip -c FILE > f.gz` carry exactly GNU's bytes. The compressed output
-                        // is materialized here (the input is still streamed in).
-                        byte[] compressedBytes;
+                        // `gzip -c FILE > f.gz` carry exactly GNU's bytes. Input AND output stream:
+                        // the compressor writes straight into records as it produces them.
                         try
                         {
-                            using var ms = new MemoryStream();
-                            using (var gs = new GZipStream(ms, compLevel, leaveOpen: true))
-                            using (var input = BashFileSystem.OpenRead(filePath))
+                            var records = new ByteRecordEmitter(WriteObject);
+                            try
                             {
-                                input.CopyTo(gs);
+                                using (var gs = new GZipStream(new ByteRecordStream(records), compLevel, leaveOpen: false))
+                                using (var input = BashFileSystem.OpenRead(filePath))
+                                {
+                                    input.CopyTo(gs);
+                                }
                             }
-                            compressedBytes = ms.ToArray();
+                            finally { records.Finish(); }
                         }
                         catch (Exception ex)
                         {
@@ -512,7 +584,6 @@ public sealed class InvokeBashGzipCommand : PSCmdlet
                             FileSystemHelpers.WriteBashError(this, $"gzip: {normalized}: {ex.Message}");
                             continue;
                         }
-                        foreach (var rec in BashRuntime.EmitBashLines(RawBytes.GetString(compressedBytes))) WriteObject(rec);
                     }
                     else
                     {
@@ -557,46 +628,44 @@ public sealed class InvokeBashGzipCommand : PSCmdlet
     }
 
     /// <summary>
-    /// gzip with no file operand: the pipeline (the exact byte stream) is compressed — or, under
-    /// <c>-d</c> / <c>zcat</c>, decompressed — to stdout, GNU's stdin-to-stdout filter mode.
+    /// gzip with no file operand: the pipeline (the exact byte stream, consumed in
+    /// <see cref="ProcessRecord"/>) is compressed — or, under <c>-d</c> / <c>zcat</c>, decompressed —
+    /// to stdout, GNU's stdin-to-stdout filter mode. Compress has already streamed its output; this
+    /// closes the gzip trailer, or inflates the retained compressed input chunk by chunk.
     /// </summary>
-    private void RunStdin(GzipArgs plan, bool decompress, int level)
+    private void FinishStdin()
     {
-        byte[] input = RawBytes.GetBytes(BashRuntime.RecordStreamText(_pipeline));
         try
         {
-            using var ms = new MemoryStream();
-            if (plan.Test)
+            if (_compressor is not null)
             {
-                using var gsTest = new GZipStream(new MemoryStream(input), CompressionMode.Decompress);
-                gsTest.CopyTo(Stream.Null);
+                _recordBytes!.Finish(_stdinSink!);
+                _compressor.Dispose();   // writes the trailer through the record stream
+                _outRecords!.Finish();
                 return;
             }
-            if (decompress)
+
+            _recordBytes!.Finish(_stdinSink!);
+            _compressedInput!.Position = 0;
+            using var gs = new GZipStream(_compressedInput, CompressionMode.Decompress);
+            if (_stdinTest)
             {
-                using var gs = new GZipStream(new MemoryStream(input), CompressionMode.Decompress);
-                gs.CopyTo(ms);
+                gs.CopyTo(Stream.Null);
+                return;
             }
-            else
+            var chunk = new byte[81920];
+            int got;
+            try
             {
-                CompressionLevel compLevel = level switch
-                {
-                    <= 1 => CompressionLevel.Fastest,
-                    >= 9 => CompressionLevel.SmallestSize,
-                    _ => CompressionLevel.Optimal,
-                };
-                using (var gs = new GZipStream(ms, compLevel, leaveOpen: true))
-                    gs.Write(input, 0, input.Length);
+                while ((got = gs.Read(chunk, 0, chunk.Length)) > 0) _outRecords!.Append(chunk.AsSpan(0, got));
             }
-            foreach (var rec in BashRuntime.EmitBashLines(RawBytes.GetString(ms.GetBuffer(), 0, (int)ms.Length)))
-                WriteObject(rec);
+            finally { _outRecords!.Finish(); }
         }
         catch (Exception ex) when (ex is InvalidDataException or IOException)
         {
             FileSystemHelpers.WriteBashError(this, "gzip: stdin: not in gzip format");
         }
     }
-
     /// <summary>
     /// File.WriteAllBytes with the oracle's bash-style error contract:
     /// emit "gzip: PATH: MESSAGE" via FileSystemHelpers.WriteBashError on
