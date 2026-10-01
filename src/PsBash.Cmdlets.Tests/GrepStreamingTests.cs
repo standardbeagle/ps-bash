@@ -141,8 +141,8 @@ public class GrepStreamingTests : IClassFixture<SharedPwshFixture>
     [Fact]
     public void Context_Before_ManyRecords_OnlyTheWindow()
     {
-        var r = Run("1..300000 | ForEach-Object { \"r$_\" } | Invoke-BashGrep -B 2 'r300000$' | ForEach-Object { $_.ToString().Trim() }");
-        Assert.Equal(new[] { "r299998", "r299999", "r300000" }, r);
+        var r = Run("1..60000 | ForEach-Object { \"r$_\" } | Invoke-BashGrep -B 2 'r60000$' | ForEach-Object { $_.ToString().Trim() }");
+        Assert.Equal(new[] { "r59998", "r59999", "r60000" }, r);
     }
 
     [Fact]

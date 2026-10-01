@@ -25,14 +25,15 @@ namespace PsBash.Cmdlets;
 /// <c>$1</c>-<c>$9</c>, <c>\&amp;</c> → <c>$0</c>) and the BRE→.NET
 /// metacharacter escaping (when not in extended-regex mode) match the oracle
 /// byte-for-byte.</item>
-/// <item><b>Address matching</b> (<see cref="TestAddress"/>) — reproduces
-/// <c>Test-SedAddress</c>, including the stateful <c>range_regex</c> walk over
-/// all input lines.</item>
-/// <item><b>Cycle engine</b> (<see cref="ProcessLines"/>) — reproduces the
+/// <item><b>Address matching + cycle engine</b> (<see cref="SedEngine"/>) — a push state machine
+/// (one record in, output out as each cycle completes; range addresses tracked incrementally)
+/// reproducing the
 /// pattern-space loop with multi-line pattern space (<c>N</c>/<c>D</c>),
 /// restart-cycle semantics, <c>p</c>/<c>P</c> printing, <c>a</c>/<c>i</c>/<c>c</c>
 /// insert/append, <c>q</c> early-quit, and <c>y</c> transliteration.</item>
 /// </list>
+/// Records STREAM: pipeline input is fed to the engine per record and file operands are read through a streaming
+/// reader (no whole-file read), so retained memory is the pattern space plus a one-record lookahead.
 /// File mode resolves operands through <see cref="FileSystemHelpers.ResolveOperandPaths"/> (so a
 /// diagnostic names the operand as typed), reads with CRLF normalization, and supports
 /// <c>-i[SUFFIX]</c> in-place rewrite with a backup; without <c>-i</c>/<c>-s</c> the files are ONE
@@ -93,15 +94,18 @@ public sealed class InvokeBashSedCommand : PSCmdlet
     [Parameter(ValueFromPipeline = true)]
     public PSObject? InputObject { get; set; }
 
-    private readonly List<PSObject> _pipeline = new();
+    /// <summary>Set by the psm1 proxy only (see InvokeBashGrepCommand.PsBashProxy): behind its steppable pipeline a quit
+    /// ignores the rest of the input instead of raising the stop-upstream signal.</summary>
+    [Parameter(DontShow = true)] public SwitchParameter PsBashProxy { get; set; }
 
-    protected override void ProcessRecord()
-    {
-        if (InputObject != null)
-        {
-            _pipeline.Add(InputObject);
-        }
-    }
+    // Streaming state: pipeline records feed the engine as they arrive (BeginProcessing resolves the script).
+    private bool _pipelineMode, _pDone, _pFinished, _sawRecord, _lastUnterminated, _quitMidRecord, _bufferStdin;
+    private char _term = '\n';
+    private SedEngine? _engine;
+    private RecordSink? _sink;
+    private Action? _fileRun;
+    private readonly StringBuilder _nulTail = new();
+    private List<PSObject>? _stdinBuffer;
 
     internal const string OptQuiet = "quiet", OptExpr = "expression", OptFile = "file",
         OptExtended = "extended", OptInPlace = "in-place", OptSeparate = "separate",
@@ -200,7 +204,7 @@ public sealed class InvokeBashSedCommand : PSCmdlet
         return s;
     }
 
-    protected override void EndProcessing()
+    protected override void BeginProcessing()
     {
         FileSystemHelpers.SetLastExitCode(this, 0);
 
@@ -292,9 +296,6 @@ public sealed class InvokeBashSedCommand : PSCmdlet
             }
         }
 
-        // Thread the -n flag into the (static, pure-transform) cycle engine.
-        SuppressDefault = suppressDefault;
-
         if (plan.InPlace && operands.Count == 0)
         {
             EmitError("sed: no input files");
@@ -302,13 +303,16 @@ public sealed class InvokeBashSedCommand : PSCmdlet
             return;
         }
 
-        if (operands.Count > 0)
+        // No operand, or a lone `-` (the pipeline itself): stream records through the engine as they arrive.
+        if (operands.Count == 0 || (operands.Count == 1 && operands[0] == "-" && !plan.InPlace))
         {
-            RunFiles(plan, operands, commands);
+            StartPipeline(plan, commands, suppressDefault);
             return;
         }
 
-        RunPipeline(plan, commands);
+        // File operands run in EndProcessing; pipeline input is ignored unless a `-` operand names it.
+        _bufferStdin = operands.Contains("-");
+        _fileRun = () => RunFiles(plan, operands, commands, suppressDefault);
     }
 
     /// <summary>
@@ -324,9 +328,164 @@ public sealed class InvokeBashSedCommand : PSCmdlet
     }
 
     /// <summary>
-    /// The records of a text: split on <paramref name="term"/>, the terminator after the last record
-    /// removed (and remembered), an empty text having no records at all.
+    /// One-record delay between the engine and the writer: a record is released as terminated when the next one
+    /// arrives, and the LAST gets the input's own terminator state (<see cref="Complete"/>) — the contract
+    /// "every output record is newline-terminated except the final one when the input had no final newline".
     /// </summary>
+    private sealed class RecordSink
+    {
+        private readonly Action<string, bool> _write;
+        private string? _pending;
+        public RecordSink(Action<string, bool> write) { _write = write; }
+        public void Add(string record)
+        {
+            if (_pending != null) _write(_pending, true);
+            _pending = record;
+        }
+        public void Complete(bool trailingTerminator)
+        {
+            if (_pending != null) _write(_pending, trailingTerminator);
+            _pending = null;
+        }
+    }
+
+    /// <summary>Write one output record to stdout; a final unterminated record carries exact bytes.</summary>
+    private void WriteStdoutRecord(string record, bool terminated)
+    {
+        if (_term == '\n')
+        {
+            WriteObject(terminated
+                ? BashRuntime.NewBashObject(record + "\n")
+                : BashRuntime.NewBashObject(record, "PsBash.TextOutput", noTrailingNewline: true));
+        }
+        else
+        {
+            // -z: the record terminator is NUL; a NoTrailingNewline record carries exact bytes.
+            WriteObject(BashRuntime.NewBashObject(
+                terminated ? record + _term : record, "PsBash.TextOutput", noTrailingNewline: true));
+        }
+    }
+
+    // ---- pipeline mode: records stream through the engine as they arrive -------------------------------
+
+    private void StartPipeline(SedArgs plan, List<SedCommand> commands, bool suppressDefault)
+    {
+        _pipelineMode = true;
+        _term = plan.NullData ? '\0' : '\n';
+        _sink = new RecordSink(WriteStdoutRecord);
+        _engine = new SedEngine(commands, suppressDefault, _sink.Add);
+    }
+
+    protected override void ProcessRecord()
+    {
+        if (InputObject == null) return;
+        if (_bufferStdin)
+        {
+            // A `-` operand among file operands (rare): the pipeline is one unit among several, so it is
+            // buffered until its turn. A lone `-` / no operand streams below.
+            (_stdinBuffer ??= new List<PSObject>()).Add(InputObject);
+            return;
+        }
+        if (!_pipelineMode) return;
+        if (_pDone)
+        {
+            if (!PsBashProxy) UpstreamStop.Throw(this);
+            return;
+        }
+
+        _sawRecord = true;
+        _lastUnterminated = InputObject.Properties["NoTrailingNewline"]?.Value is true
+            && !BashRuntime.GetBashText(InputObject).EndsWith("\n");
+
+        bool quitMidRecord = false;
+        if (_term == '\n')
+        {
+            string trimmed = BashRuntime.GetBashText(InputObject).TrimEnd('\n');
+            if (trimmed.Contains('\n'))
+            {
+                var parts = trimmed.Split('\n');
+                for (int i = 0; i < parts.Length; i++)
+                {
+                    _engine!.Feed(parts[i]);
+                    if (_engine.Done) { quitMidRecord = i < parts.Length - 1; break; }
+                }
+            }
+            else
+            {
+                _engine!.Feed(trimmed);
+            }
+        }
+        else
+        {
+            FeedNulText(BashRuntime.RecordStreamText(new object[] { InputObject }));
+        }
+
+        if (_engine!.Done)
+        {
+            _pDone = true;
+            _quitMidRecord = quitMidRecord;
+            FinishPipeline();
+            if (!PsBashProxy) UpstreamStop.Throw(this);
+        }
+    }
+
+    /// <summary>-z: the byte stream is cut into NUL-terminated records; only the partial tail is retained.</summary>
+    private void FeedNulText(string chunk)
+    {
+        if (chunk.IndexOf('\0') < 0) { _nulTail.Append(chunk); return; }
+        string all = _nulTail.Length == 0 ? chunk : _nulTail.Append(chunk).ToString();
+        _nulTail.Clear();
+        int start = 0;
+        while (true)
+        {
+            int z = all.IndexOf('\0', start);
+            if (z < 0) break;
+            _engine!.Feed(all.Substring(start, z - start));
+            start = z + 1;
+            if (_engine.Done) return;
+        }
+        _nulTail.Append(all, start, all.Length - start);
+    }
+
+    protected override void EndProcessing()
+    {
+        if (_pipelineMode) FinishPipeline();
+        else _fileRun?.Invoke();
+    }
+
+    private void FinishPipeline()
+    {
+        if (_pFinished) return;
+        _pFinished = true;
+        if (!_sawRecord) return;
+
+        bool trailing;
+        if (_term == '\0')
+        {
+            if (!_engine!.Done && _nulTail.Length > 0)
+            {
+                _engine.Feed(_nulTail.ToString());
+                _nulTail.Clear();
+                trailing = false;
+            }
+            else
+            {
+                trailing = true;
+            }
+        }
+        else
+        {
+            // A quit in the middle of a record leaves lines unread, so the last one written had a newline.
+            trailing = _quitMidRecord || !_lastUnterminated;
+        }
+        _engine!.Finish();
+        _sink!.Complete(trailing);
+    }
+
+    // ---- file operands ----------------------------------------------------------------------------------
+
+    /// <summary>The records of a text: split on <paramref name="term"/>, the terminator after the last record
+    /// removed (and remembered), an empty text having no records at all. Used for the buffered `-` operand.</summary>
     private static List<string> SplitRecords(string text, char term, out bool trailingTerminator)
     {
         trailingTerminator = true;
@@ -336,42 +495,111 @@ public sealed class InvokeBashSedCommand : PSCmdlet
         return new List<string>(text.Split(term));
     }
 
-    /// <summary>Emit each output record + its terminator; the LAST has none when the input had none.</summary>
-    private void EmitRecords(List<string> records, bool trailingTerminator, char term)
+    /// <summary>
+    /// Lazily stream a file's records, split on <paramref name="term"/> (CRLF normalized like the whole-document
+    /// reader, BOM-aware). Opens the file eagerly so an unreadable operand throws at the call, not mid-stream.
+    /// </summary>
+    private static IEnumerable<BashFileSystem.TextLine> OpenRecords(string path, char term)
     {
-        for (int oi = 0; oi < records.Count; oi++)
+        if (term == '\n') return BashFileSystem.ReadTextLines(path);
+        return NulRecords(BashFileSystem.OpenRead(path));
+    }
+
+    private static IEnumerable<BashFileSystem.TextLine> NulRecords(FileStream fs)
+    {
+        using (fs)
+        using (var reader = BashFileSystem.OpenDocumentReader(fs))
         {
-            bool terminated = oi < records.Count - 1 || trailingTerminator;
-            if (term == '\n')
+            var sb = new StringBuilder(256);
+            var buf = new char[16384];
+            bool pendingCr = false;
+            int read;
+            while ((read = reader.Read(buf, 0, buf.Length)) > 0)
             {
-                WriteObject(terminated
-                    ? BashRuntime.NewBashObject(records[oi] + "\n")
-                    : BashRuntime.NewBashObject(records[oi], "PsBash.TextOutput", noTrailingNewline: true));
+                for (int i = 0; i < read; i++)
+                {
+                    char c = buf[i];
+                    if (pendingCr)
+                    {
+                        pendingCr = false;
+                        if (c != '\n') sb.Append('\r'); // CRLF -> LF, as the whole-document read does
+                    }
+                    if (c == '\r') { pendingCr = true; continue; }
+                    if (c == '\0')
+                    {
+                        yield return new BashFileSystem.TextLine(sb.ToString(), HasTrailingNewline: true);
+                        sb.Clear();
+                        continue;
+                    }
+                    sb.Append(c);
+                }
             }
-            else
-            {
-                // -z: the record terminator is NUL; a NoTrailingNewline record carries exact bytes.
-                WriteObject(BashRuntime.NewBashObject(
-                    terminated ? records[oi] + term : records[oi], "PsBash.TextOutput", noTrailingNewline: true));
-            }
+            if (pendingCr) sb.Append('\r');
+            if (sb.Length > 0) yield return new BashFileSystem.TextLine(sb.ToString(), HasTrailingNewline: false);
         }
+    }
+
+    private static IEnumerable<BashFileSystem.TextLine> BufferedRecords(string text, char term)
+    {
+        var records = SplitRecords(text, term, out bool trailing);
+        for (int i = 0; i < records.Count; i++)
+            yield return new BashFileSystem.TextLine(records[i], i < records.Count - 1 || trailing);
     }
 
     /// <summary>
     /// File operands. GNU treats the files as ONE continuous stream (line numbers and <c>$</c> span
     /// them; a missing final newline is supplied between files) unless <c>-s</c> / <c>-i</c> makes each
     /// file its own. A <c>-</c> operand is the pipeline input. An unreadable operand is reported and
-    /// skipped and the status becomes 2 once everything else ran.
+    /// skipped and the status becomes 2 once everything else ran. Files are read through a streaming reader
+    /// (no whole-file read, so no size cap), and <c>-i</c> streams into a temp file that replaces the original.
     /// </summary>
-    private void RunFiles(SedArgs plan, List<string> operands, List<SedCommand> commands)
+    private void RunFiles(SedArgs plan, List<string> operands, List<SedCommand> commands, bool suppressDefault)
     {
-        char term = plan.NullData ? '\0' : '\n';
+        _term = plan.NullData ? '\0' : '\n';
+        char term = _term;
         bool separate = plan.Separate || plan.InPlace;
         bool readError = false;
-        var units = new List<(string? Path, List<string> Records, bool Trailing)>();
+
+        // One continuous stream: a single engine/sink for all units.
+        RecordSink? oneSink = null;
+        SedEngine? oneEngine = null;
+        bool oneTrailing = true;
+        bool any = false;
+        bool quitAll = false;
+
+        // Feed one unit's records; returns the unit's trailing-terminator state.
+        bool Pump(IEnumerable<BashFileSystem.TextLine> lines, SedEngine engine, string? path)
+        {
+            bool trailing = true;
+            try
+            {
+                using var en = lines.GetEnumerator();
+                while (en.MoveNext())
+                {
+                    trailing = en.Current.HasTrailingNewline;
+                    engine.Feed(en.Current.Text);
+                    if (engine.Done)
+                    {
+                        // Quit: input remains unless that was the unit's last record.
+                        trailing = en.MoveNext() || trailing;
+                        break;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                if (FileSystemHelpers.IsPipelineStop(ex)) throw;
+                EmitError($"sed: can't read {(path ?? "-").Replace('\\', '/')}: {FileSystemHelpers.ReadErrorMessage(ex)}");
+                readError = true;
+            }
+            return trailing;
+        }
 
         foreach (var operand in operands)
         {
+            if (quitAll) break;
+
+            var sources = new List<(string? Path, Func<IEnumerable<BashFileSystem.TextLine>> Open)>();
             if (operand == "-")
             {
                 if (plan.InPlace)
@@ -380,48 +608,150 @@ public sealed class InvokeBashSedCommand : PSCmdlet
                     FileSystemHelpers.SetLastExitCode(this, 4);
                     return;
                 }
-                var stdin = SplitRecords(BashRuntime.RecordStreamText(_pipeline.Cast<object>()), term, out bool stdinTrailing);
-                units.Add((null, stdin, stdinTrailing));
-                continue;
+                string text = BashRuntime.RecordStreamText((_stdinBuffer ?? new List<PSObject>()).Cast<object>());
+                sources.Add((null, () => BufferedRecords(text, term)));
             }
-
-            foreach (var filePath in FileSystemHelpers.ResolveOperandPaths(this, operand))
+            else
             {
-                string? rawText = ReadFileText(filePath);
-                if (rawText == null) { readError = true; continue; }
-                units.Add((filePath, SplitRecords(rawText, term, out bool trailing), trailing));
-            }
-        }
-
-        if (!separate)
-        {
-            if (units.Count > 0)
-            {
-                var all = new List<string>();
-                foreach (var u in units) all.AddRange(u.Records);
-                EmitRecords(ProcessLines(all.ToArray(), commands), units[^1].Trailing, term);
-            }
-        }
-        else
-        {
-            foreach (var (path, records, trailing) in units)
-            {
-                var output = ProcessLines(records.ToArray(), commands);
-                if (!plan.InPlace || path == null)
+                foreach (var filePath in FileSystemHelpers.ResolveOperandPaths(this, operand))
                 {
-                    EmitRecords(output, trailing, term);
+                    string p = filePath;
+                    sources.Add((p, () => OpenRecords(p, term)));
+                }
+            }
+
+            foreach (var (path, open) in sources)
+            {
+                if (quitAll) break;
+                IEnumerable<BashFileSystem.TextLine> lines;
+                try
+                {
+                    if (plan.InPlace && plan.Suffix != null && !BackUp(path!, plan.Suffix)) { readError = true; continue; }
+                    lines = open();
+                }
+                catch (Exception ex)
+                {
+                    if (FileSystemHelpers.IsPipelineStop(ex)) throw;
+                    // GNU: sed: can't read x: No such file or directory
+                    EmitError($"sed: can't read {(path ?? "-").Replace('\\', '/')}: {FileSystemHelpers.ReadErrorMessage(ex)}");
+                    readError = true;
                     continue;
                 }
 
-                var sb = new StringBuilder();
-                sb.Append(string.Join(term, output));
-                if (output.Count > 0 && trailing) sb.Append(term);
-                if (plan.Suffix != null && !BackUp(path, plan.Suffix)) { readError = true; continue; }
-                if (!WriteFileText(path, sb.ToString())) return;
+                any = true;
+                if (!separate)
+                {
+                    oneSink ??= new RecordSink(WriteStdoutRecord);
+                    oneEngine ??= new SedEngine(commands, suppressDefault, oneSink.Add);
+                    oneTrailing = Pump(lines, oneEngine, path);
+                    if (oneEngine.Done) quitAll = true;
+                    continue;
+                }
+
+                if (plan.InPlace && path != null)
+                {
+                    if (!EditInPlace(path, lines, term, commands, suppressDefault, ref readError)) return;
+                    continue;
+                }
+
+                var sink = new RecordSink(WriteStdoutRecord);
+                var engine = new SedEngine(commands, suppressDefault, sink.Add);
+                bool trailing = Pump(lines, engine, path);
+                engine.Finish();
+                sink.Complete(trailing);
             }
         }
 
+        if (!separate && any && oneEngine != null)
+        {
+            oneEngine.Finish();
+            oneSink!.Complete(oneTrailing);
+        }
+
         if (readError) FileSystemHelpers.SetLastExitCode(this, 2);
+    }
+
+    /// <summary>
+    /// <c>-i</c>: stream the edited records into a temp file beside the original and replace it (GNU's own
+    /// strategy), keeping the original's mode and following a symlink to its target. False aborts the run
+    /// (the write failed, reported GNU-style); a backup failure is the caller's, before this runs.
+    /// </summary>
+    private bool EditInPlace(string path, IEnumerable<BashFileSystem.TextLine> lines, char term,
+        List<SedCommand> commands, bool suppressDefault, ref bool readError)
+    {
+        string target = path;
+        try
+        {
+            if (File.ResolveLinkTarget(path, returnFinalTarget: true) is { } link) target = link.FullName;
+        }
+        catch (Exception ex) when (!FileSystemHelpers.IsPipelineStop(ex)) { target = path; }
+
+        string dir = Path.GetDirectoryName(target) is { Length: > 0 } d ? d : ".";
+        string tmp = Path.Combine(dir, "sed" + Guid.NewGuid().ToString("N").Substring(0, 8));
+        try
+        {
+            bool trailing = true;
+            using (var fs = new FileStream(tmp, FileMode.CreateNew, FileAccess.Write, FileShare.None, 65536))
+            using (var writer = new StreamWriter(fs, RawBytes.Encoding, 65536))
+            {
+                var sink = new RecordSink((record, terminated) =>
+                {
+                    writer.Write(record);
+                    if (terminated) writer.Write(term);
+                });
+                var engine = new SedEngine(commands, suppressDefault, sink.Add);
+                try
+                {
+                    using var en = lines.GetEnumerator();
+                    while (en.MoveNext())
+                    {
+                        trailing = en.Current.HasTrailingNewline;
+                        engine.Feed(en.Current.Text);
+                        if (engine.Done) { trailing = en.MoveNext() || trailing; break; }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    if (FileSystemHelpers.IsPipelineStop(ex)) throw;
+                    EmitError($"sed: can't read {path.Replace('\\', '/')}: {FileSystemHelpers.ReadErrorMessage(ex)}");
+                    readError = true;
+                    writer.Dispose();
+                    File.Delete(tmp);
+                    return true;
+                }
+                engine.Finish();
+                sink.Complete(trailing);
+            }
+
+            CopyFileMode(target, tmp);
+            File.Move(tmp, target, overwrite: true);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            if (FileSystemHelpers.IsPipelineStop(ex)) { TryDelete(tmp); throw; }
+            TryDelete(tmp);
+            EmitError($"sed: {target.Replace('\\', '/')}: {ex.Message}");
+            return false;
+        }
+    }
+
+    private static void TryDelete(string path)
+    {
+        try { File.Delete(path); } catch { /* best effort */ }
+    }
+
+    /// <summary>The replacement keeps the original's permissions (Unix mode bits / Windows attributes).</summary>
+    private static void CopyFileMode(string from, string to)
+    {
+        try
+        {
+            if (OperatingSystem.IsWindows())
+                File.SetAttributes(to, File.GetAttributes(from) & ~FileAttributes.ReadOnly);
+            else
+                File.SetUnixFileMode(to, File.GetUnixFileMode(from));
+        }
+        catch { /* best effort */ }
     }
 
     /// <summary>
@@ -446,58 +776,6 @@ public sealed class InvokeBashSedCommand : PSCmdlet
             EmitError($"sed: cannot rename {path.Replace('\\', '/')}: {ex.Message}");
             return false;
         }
-    }
-
-    private void RunPipeline(SedArgs plan, List<SedCommand> commands)
-    {
-        if (_pipeline.Count == 0)
-        {
-            return;
-        }
-
-        if (plan.NullData)
-        {
-            var records = SplitRecords(BashRuntime.RecordStreamText(_pipeline.Cast<object>()), '\0', out bool trailingNul);
-            EmitRecords(ProcessLines(records.ToArray(), commands), trailingNul, '\0');
-            return;
-        }
-
-        var allLines = new List<string>();
-        foreach (var item in _pipeline)
-        {
-            string text = BashRuntime.GetBashText(item);
-            string trimmed = text.TrimEnd('\n');
-            if (trimmed.Contains('\n'))
-            {
-                foreach (var subLine in trimmed.Split('\n'))
-                {
-                    allLines.Add(subLine);
-                }
-            }
-            else
-            {
-                allLines.Add(trimmed);
-            }
-        }
-
-        // Whether the pipeline's last record ends in a newline in the emitted
-        // byte stream. A record is NOT newline-terminated only when it is an
-        // explicit NoTrailingNewline object AND its BashText does not already end
-        // in \n (printf '%s' with no newline). Everything else — a plain string,
-        // a normal BashObject, or a NoTrailingNewline object whose text DOES end
-        // in \n (printf '%s\n', which embeds the newline) — is terminated. Reusing
-        // the input object (the old code) copied its flag onto REWRITTEN text, so
-        // a single-line `printf 'x.y\n' | sed 's/\./-/'` lost its newline and the
-        // next command concatenated (`x-yZ`).
-        bool inputTrailingNewline = true;
-        if (_pipeline.Count > 0 && _pipeline[^1] is PSObject tailPso
-            && tailPso.Properties["NoTrailingNewline"]?.Value is true
-            && !BashRuntime.GetBashText(tailPso).EndsWith("\n"))
-        {
-            inputTrailingNewline = false;
-        }
-
-        EmitRecords(ProcessLines(allLines.ToArray(), commands), inputTrailingNewline, '\n');
     }
 
     // ── sed command model ────────────────────────────────────────────────────
@@ -1239,381 +1517,6 @@ public sealed class InvokeBashSedCommand : PSCmdlet
                     return Fail($"sed: unsupported command '{cmdChar}'", 2);
                 return Fail($"sed: -e expression #1, char {pos + 1}: unknown command: `{cmdChar}'", 1);
         }
-        }
-    }
-
-    /// <summary>
-    /// Reproduces the psm1 <c>Test-SedAddress</c>.
-    /// </summary>
-    private static bool TestAddress(
-        SedCommand cmd, string line, int lineNum, string[] allLines)
-    {
-        var addr = cmd.Address;
-        if (addr == null)
-        {
-            return true;
-        }
-
-        switch (addr.Type)
-        {
-            case AddressType.Regex:
-                return Regex.IsMatch(line, addr.Pattern!);
-            case AddressType.Line:
-                return lineNum == addr.Line;
-            case AddressType.Last:
-                return lineNum == allLines.Length;
-            case AddressType.RangeNum:
-                return lineNum >= addr.Start && lineNum <= addr.End;
-            case AddressType.Step:
-            {
-                // first~step: match `first`, then every step-th line after it.
-                // step <= 0 degenerates to just `first` (GNU). first may be 0,
-                // in which case 0~step matches multiples of step.
-                if (addr.Step <= 0) { return lineNum == addr.Start; }
-                return lineNum >= Math.Max(addr.Start, 1)
-                    && (lineNum - addr.Start) % addr.Step == 0;
-            }
-            case AddressType.RangeNumToRegex:
-            {
-                // N,/re/ — active from line max(Start,1); ends on the first line
-                // whose text matches the end regex (inclusive). The 0,/re/ idiom
-                // (Start == 0) lets the end regex match the very first line.
-                int begin = Math.Max(addr.Start, 1);
-                if (lineNum < begin) { return false; }
-                bool canEndOnStart = addr.Start == 0;
-                for (int ri = begin; ri <= lineNum && ri <= allLines.Length; ri++)
-                {
-                    if ((ri > begin || canEndOnStart)
-                        && Regex.IsMatch(allLines[ri - 1], addr.EndPattern!))
-                    {
-                        // Range closed at line ri — only lines begin..ri are in range.
-                        return lineNum <= ri;
-                    }
-                }
-                return true; // end regex never matched up to here — still in range.
-            }
-            case AddressType.RangeRegex:
-            {
-                bool inRange = false;
-                bool rangeActive = false;
-                for (int ri = 0; ri < allLines.Length; ri++)
-                {
-                    if (!rangeActive
-                        && Regex.IsMatch(allLines[ri], addr.StartPattern!))
-                    {
-                        rangeActive = true;
-                    }
-                    if (rangeActive && ri + 1 == lineNum)
-                    {
-                        inRange = true;
-                    }
-                    if (rangeActive && ri + 1 != lineNum
-                        && Regex.IsMatch(allLines[ri], addr.EndPattern!))
-                    {
-                        rangeActive = false;
-                    }
-                    if (rangeActive && ri + 1 == lineNum
-                        && Regex.IsMatch(allLines[ri], addr.EndPattern!))
-                    {
-                        rangeActive = false;
-                    }
-                    if (ri + 1 > lineNum)
-                    {
-                        break;
-                    }
-                }
-                return inRange;
-            }
-        }
-        return false;
-    }
-
-    /// <summary>
-    /// True when a <c>c</c> command's address is a RANGE and the line after
-    /// <paramref name="lineNum"/> is still inside that range. Used so the change
-    /// text is emitted once per range rather than once per line. A non-range
-    /// address always returns false (emit on every matching line).
-    /// </summary>
-    private static bool RangeContinuesPast(
-        SedCommand cmd, string firstLine, int lineNum, string[] allLines)
-    {
-        var addr = cmd.Address;
-        if (addr is null) { return false; }
-        switch (addr.Type)
-        {
-            case AddressType.RangeNum:
-            case AddressType.RangeRegex:
-            case AddressType.RangeNumToRegex:
-                break;
-            default:
-                return false;
-        }
-
-        if (lineNum >= allLines.Length) { return false; }
-        string nextFirst = allLines[lineNum];
-        bool nextMatched = TestAddress(cmd, nextFirst, lineNum + 1, allLines);
-        return cmd.Negate ? !nextMatched : nextMatched;
-    }
-
-    /// <summary>
-    /// Reproduces the psm1 <c>$processLines</c> closure: the sed cycle engine.
-    /// </summary>
-    internal static List<string> ProcessLines(
-        string[] inputLines, List<SedCommand> commands)
-    {
-        var outputLines = new List<string>();
-        int totalLines = inputLines.Length;
-        int li = 0;
-
-        while (li < totalLines)
-        {
-            string patternSpace = inputLines[li];
-            int lineNum = li + 1;
-            bool quit = false;
-
-            bool restartCycle = true;
-            while (restartCycle)
-            {
-                restartCycle = false;
-                var printedLines = new List<string>();
-                var appendTexts = new List<string>();
-                var insertTexts = new List<string>();
-                bool deleted = false;
-
-                foreach (var cmd in commands)
-                {
-                    if (deleted)
-                    {
-                        break;
-                    }
-                    if (quit && cmd.Type != 'q' && cmd.Type != 'Q')
-                    {
-                        continue;
-                    }
-
-                    string firstLine = patternSpace.Contains('\n')
-                        ? patternSpace.Substring(0, patternSpace.IndexOf('\n'))
-                        : patternSpace;
-
-                    bool matched = TestAddress(cmd, firstLine, lineNum, inputLines);
-                    if (cmd.Negate) { matched = !matched; }
-                    if (!matched)
-                    {
-                        continue;
-                    }
-
-                    switch (cmd.Type)
-                    {
-                        case 's':
-                        {
-                            // Walk every match and decide per-occurrence whether to
-                            // substitute, so the four GNU forms all fall out of one
-                            // path: first-only (count == 1), g (count >= 1), Nth
-                            // (count == N), and Ng (count >= N).
-                            int target = cmd.Nth > 0 ? cmd.Nth : 1;
-                            int count = 0;
-                            bool subbed = false;
-                            patternSpace = cmd.Regex!.Replace(patternSpace, m =>
-                            {
-                                count++;
-                                bool hit = cmd.Global ? count >= target : count == target;
-                                if (hit) { subbed = true; }
-                                return hit ? m.Result(cmd.Replacement!) : m.Value;
-                            });
-                            // s///p: print the pattern space only if a sub happened.
-                            if (cmd.PrintOnSub && subbed) { printedLines.Add(patternSpace); }
-                            break;
-                        }
-                        case 'd':
-                            deleted = true;
-                            break;
-                        case 'D':
-                        {
-                            int nlIdx = patternSpace.IndexOf('\n');
-                            if (nlIdx >= 0)
-                            {
-                                patternSpace = patternSpace.Substring(nlIdx + 1);
-                            }
-                            else
-                            {
-                                deleted = true;
-                                patternSpace = string.Empty;
-                            }
-                            if (!deleted && patternSpace.Length > 0)
-                            {
-                                restartCycle = true;
-                            }
-                            break;
-                        }
-                        case 'p':
-                            printedLines.Add(patternSpace);
-                            break;
-                        case 'P':
-                        {
-                            int nlIdx = patternSpace.IndexOf('\n');
-                            printedLines.Add(nlIdx >= 0
-                                ? patternSpace.Substring(0, nlIdx)
-                                : patternSpace);
-                            break;
-                        }
-                        case 'N':
-                            li++;
-                            if (li < totalLines)
-                            {
-                                patternSpace += "\n" + inputLines[li];
-                            }
-                            else
-                            {
-                                // No next line: GNU sed ends the run here without
-                                // executing later commands. Auto-print still
-                                // applies (so `N;s…` emits the final line), but
-                                // -n suppresses it (so `-n 'N;p'` emits nothing
-                                // more). Later commands are skipped via `quit`.
-                                quit = true;
-                            }
-                            break;
-                        case 'q':
-                            quit = true;
-                            break;
-                        case 'Q':
-                            // Quit immediately WITHOUT auto-printing this line.
-                            quit = true;
-                            deleted = true;
-                            break;
-                        case '=':
-                            // Print the current line number (before the line text).
-                            printedLines.Add(lineNum.ToString());
-                            break;
-                        case 'a':
-                            appendTexts.Add(cmd.Text!);
-                            break;
-                        case 'i':
-                            insertTexts.Add(cmd.Text!);
-                            break;
-                        case 'c':
-                            deleted = true;
-                            // A range `c` prints its text ONCE for the whole range,
-                            // at the range's final line (GNU); a per-line `c` prints
-                            // it on every matching line. TestAddress matched this
-                            // line, so emit unless a LATER line is still in range.
-                            if (!RangeContinuesPast(cmd, firstLine, lineNum, inputLines))
-                            {
-                                appendTexts.Add(cmd.Text!);
-                            }
-                            break;
-                        case 'y':
-                        {
-                            var sb = new StringBuilder(patternSpace.Length);
-                            foreach (char ch in patternSpace)
-                            {
-                                int idx = cmd.Source!.IndexOf(ch);
-                                sb.Append(idx >= 0 ? cmd.Dest![idx] : ch);
-                            }
-                            patternSpace = sb.ToString();
-                            break;
-                        }
-                    }
-
-                    if (restartCycle)
-                    {
-                        break;
-                    }
-                }
-
-                if (restartCycle)
-                {
-                    continue;
-                }
-
-                foreach (var insText in insertTexts)
-                {
-                    outputLines.Add(insText);
-                }
-                foreach (var pLine in printedLines)
-                {
-                    outputLines.Add(pLine);
-                }
-                if (!deleted)
-                {
-                    // Suppression: -n was modeled by the psm1 oracle's
-                    // $suppressDefault. ProcessLines receives that decision
-                    // through the caller; emulate by checking the sentinel
-                    // below. (See EndProcessing — suppressDefault is folded in
-                    // via the SuppressDefault field on the first call.)
-                    if (!SuppressDefault)
-                    {
-                        if (patternSpace.Contains('\n'))
-                        {
-                            foreach (var psLine in patternSpace.Split('\n'))
-                            {
-                                outputLines.Add(psLine);
-                            }
-                        }
-                        else
-                        {
-                            outputLines.Add(patternSpace);
-                        }
-                    }
-                }
-                foreach (var appText in appendTexts)
-                {
-                    outputLines.Add(appText);
-                }
-            }
-
-            li++;
-
-            if (quit)
-            {
-                break;
-            }
-        }
-
-        return outputLines;
-    }
-
-    /// <summary>
-    /// The <c>-n</c> suppress-default-output flag. <see cref="ProcessLines"/> is
-    /// static (it is a pure transform); this instance-set, statically-read field
-    /// threads the flag in without changing the method signature. It is set once
-    /// per cmdlet invocation in <see cref="EndProcessing"/> before any
-    /// <see cref="ProcessLines"/> call. Cmdlet instances do not run concurrently
-    /// in a single runspace, so a static carrier is safe here.
-    /// </summary>
-    [ThreadStatic]
-    internal static bool SuppressDefault;
-
-    // ── file IO + glob (psm1 Resolve-BashGlob / Read-BashFileBytes /
-    //    Write-BashFileText slices reimplemented in C#) ───────────────────────
-
-    private string? ReadFileText(string path)
-    {
-        try
-        {
-            return BashFileSystem.ReadAllText(path);
-        }
-        catch (Exception ex)
-        {
-            if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-            // GNU: sed: can't read x: No such file or directory
-            EmitError($"sed: can't read {path.Replace('\\', '/')}: {FileSystemHelpers.ReadErrorMessage(ex)}");
-            return null;
-        }
-    }
-
-    private bool WriteFileText(string path, string text)
-    {
-        try
-        {
-            File.WriteAllBytes(path, RawBytes.GetBytes(text));
-            return true;
-        }
-        catch (Exception ex)
-        {
-            if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-            string normalized = path.Replace('\\', '/');
-            EmitError($"sed: {normalized}: {ex.Message}");
-            return false;
         }
     }
 
