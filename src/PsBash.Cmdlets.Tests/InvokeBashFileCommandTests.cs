@@ -173,8 +173,10 @@ public class InvokeBashFileCommandTests : IDisposable, IClassFixture<SharedPwshF
         File.WriteAllText(ok, "ok\n");
         var (_, lines) = Run(
             $"Invoke-BashFile '{Esc(ghost)}' '{Esc(ok)}' 2>$null");
-        Assert.Single(lines);
-        Assert.EndsWith(": ASCII text", lines[0]);
+        // file(1) reports the unopenable operand on stdout and carries on (exit 0)
+        Assert.Equal(2, lines.Length);
+        Assert.Contains("cannot open `", lines[0]);
+        Assert.EndsWith(" ASCII text", lines[1]);   // type column is padded to the widest operand
     }
 
     [Fact]
