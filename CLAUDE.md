@@ -78,11 +78,22 @@ How it is wired (all four aliases run `scripts/tman-job.ps1`):
    spawn `ps-bash.exe` / `ps-bash-host.exe`, which a project-only build does not relink.)
 2. **One serialized bucket across all aliases.** tman buckets by alias name, so the script takes
    a per-checkout file lock: `build`/`test`/`test-proj`/`pester` queue behind each other.
-   Plus `max-parallel 1`, `stall 5m`, `max-time 45m`, kill-tree on exit.
-3. **MSBuild switches live in the script, not the kdl.** tman 0.5.1 rewrites `-m:1` →
+   Plus `max-parallel 1` and kill-tree on exit.
+3. **Machine-wide gate: 2 build/test slots across main + every worktree.** tman's
+   `max-parallel` is per DIRECTORY, so each agent worktree used to get its own slot
+   (4 agents = 4 solution builds + test hosts, which filled the disk and RAM). Holding the
+   per-checkout lock, the script re-runs itself as a nested `tman run --max-parallel 2` from
+   one shared directory (`%LOCALAPPDATA%\psbash-tman-gate`); a queued job prints
+   `slots busy, waiting` and shows in `tman ls`. `PSBASH_TMAN_MACHINE_SLOTS=N` changes the
+   count (`0` = off). The real `stall 5m` / `max-time 45m` limits sit on that inner run; the
+   alias's own limits are loose because it is silent while queued. The script clears
+   `TMAN_RUN_ID` for the inner call — tman exempts nested runs from queueing otherwise.
+   tman's `max-mem` is deliberately unused: in tman 0.5.1 it measures only the direct child
+   (pwsh), never the dotnet/testhost processes below it.
+4. **MSBuild switches live in the script, not the kdl.** tman 0.5.1 rewrites `-m:1` →
    `-m: 1` and `-nodeReuse:false` → `-nodeReuse: false` in args it passes through. Only *your*
    args (`--filter ...`) cross tman; avoid `-x:y`-style switches there.
-4. Quote any `--filter` containing `|` — an unquoted pipe becomes a shell pipe and hangs.
+5. Quote any `--filter` containing `|` — an unquoted pipe becomes a shell pipe and hangs.
 
 `scripts/test.sh` is a legacy runner (Stress split, coverage, timeouts), not the default; its
 cleanup only ever kills processes whose exe is under *this checkout's* `src/*/bin`.

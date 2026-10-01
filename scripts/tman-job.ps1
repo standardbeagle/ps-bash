@@ -15,6 +15,15 @@
          Every verb takes the same per-checkout file lock below, so they queue behind each
          other regardless of alias. (Output is emitted while waiting so tman's `stall` does not
          kill a queued job.)
+      4. tman's max-parallel is per DIRECTORY, so every agent worktree had its own slot: 4 agents
+         = 4 concurrent solution builds + test hosts, which filled the disk and RAM (2026-09-30).
+         While holding the per-checkout lock, this script re-runs itself through a NESTED
+         `tman run --max-parallel N` started from one shared directory, so all checkouts on the
+         machine share N slots (tman buckets by executable@cwd — pwsh.exe@<gate dir>).
+         N = $env:PSBASH_TMAN_MACHINE_SLOTS (default 2; 0 = no machine-wide gate). The inner run
+         carries the real stall/max-time limits; the outer alias limits are loose because the
+         outer run is silent while queued. tman's max-mem is NOT used: in tman 0.5.1 it only
+         measures the direct child (pwsh), not dotnet/testhost below it, so it never fires.
 
     Only tman/dotnet kill-tree ends processes; nothing here kills by image name.
 
@@ -36,6 +45,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 Set-Location $repo
+$isInner = $env:PSBASH_TMAN_GATE_INNER -eq '1'
 
 # Flags every dotnet invocation carries (see the long rationale history in git: 94ab500, b32b2b2).
 # -nodeReuse:false + UseSharedCompilation=false: process exit releases every handle on obj/bin.
@@ -47,7 +57,8 @@ $hash = [BitConverter]::ToString([Security.Cryptography.SHA1]::HashData([Text.En
 $lockPath = Join-Path ([IO.Path]::GetTempPath()) "psbash-tman-$hash.lock"
 $lock = $null
 $waited = 0
-while ($true) {
+# The inner (gated) run inherits the lock its outer run holds; taking it again would deadlock.
+while (-not $isInner) {
     try {
         $lock = [IO.File]::Open($lockPath, 'OpenOrCreate', 'ReadWrite', 'None')
         break
@@ -61,6 +72,33 @@ while ($true) {
 }
 
 try {
+    # --- machine-wide gate (see DESCRIPTION 4) ---------------------------------------------------
+    $slots = if ($env:PSBASH_TMAN_MACHINE_SLOTS) { [int]$env:PSBASH_TMAN_MACHINE_SLOTS } else { 2 }
+    if (-not $isInner -and $slots -gt 0 -and (Get-Command tman -ErrorAction SilentlyContinue)) {
+        $gateDir = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'psbash-tman-gate'
+        New-Item -ItemType Directory -Force $gateDir | Out-Null
+        $env:PSBASH_TMAN_GATE_INNER = '1'
+        # tman exempts NESTED runs (TMAN_RUN_ID set by the parent run) from max-parallel queueing —
+        # sensible when parent and child share a bucket, but ours never do (alias@checkout vs
+        # pwsh.exe@gate), and with the marker set the gate silently admitted every run. Clear it
+        # so the inner run queues; kill-tree still works because the inner tman is our child.
+        $parentRunId = $env:TMAN_RUN_ID
+        Remove-Item Env:TMAN_RUN_ID -ErrorAction SilentlyContinue
+        Write-Host "tman-job: taking a machine-wide build/test slot ($slots total; queue: tman ls --all)"
+        Push-Location $gateDir
+        try {
+            & tman run --max-parallel $slots --queue-timeout 60m --stall 5m --max-time 45m -- `
+                pwsh -NoProfile -File $PSCommandPath $Verb @Rest
+            $code = $LASTEXITCODE
+        }
+        finally {
+            Pop-Location
+            Remove-Item Env:PSBASH_TMAN_GATE_INNER -ErrorAction SilentlyContinue
+            if ($parentRunId) { $env:TMAN_RUN_ID = $parentRunId }
+        }
+        exit $code
+    }
+
     function Invoke-Native([string]$Exe, [string[]]$Arguments) {
         Write-Host "tman-job: $Exe $($Arguments -join ' ')"
         & $Exe @Arguments
@@ -96,5 +134,5 @@ try {
     }
 }
 finally {
-    $lock.Dispose()
+    if ($lock) { $lock.Dispose() }
 }

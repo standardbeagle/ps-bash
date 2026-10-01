@@ -17,13 +17,18 @@ defaults {
     // (Output while queued keeps `stall` from killing a waiting job.)
     max-parallel 1
 
-    // Suites here are minutes, not tens of minutes. A run with no output and no
-    // cpu/io for this long is wedged (the classic symptom is a spawned ps-bash
-    // host waiting forever on a runspace that never came up).
-    stall "5m"
+    // Machine-wide gate: tman-job.ps1 re-runs itself as a NESTED `tman run --max-parallel 2`
+    // from one shared directory, so main + every agent worktree share 2 build/test slots
+    // (PSBASH_TMAN_MACHINE_SLOTS). The REAL limits live on that inner run: stall 5m (a run
+    // with no output and no cpu/io for this long is wedged — classically a spawned ps-bash host
+    // waiting on a runspace that never came up) and max-time 45m. These OUTER limits only have
+    // to outlast a silent wait in the machine queue (queue-timeout 60m) plus the run itself.
+    stall "70m"
+    max-time "2h"
 
-    // Hard ceiling. The full suite is well under this; anything longer is a hang.
-    max-time "45m"
+    // NOT used: max-mem. In tman 0.5.1 it measures only the direct child (pwsh), not the
+    // dotnet/testhost processes below it — a 900MB grandchild survived a 400MB cap (tested
+    // 2026-10-01) — so it would look like protection without being any.
 
     retain "24h"
 }
