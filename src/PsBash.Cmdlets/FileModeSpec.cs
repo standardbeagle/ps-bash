@@ -58,8 +58,9 @@ internal static class PlatformMode
 /// alone unless the clause mentions them (<c>g+s</c> / <c>u=rwxs</c>). <c>X</c> is execute only for a
 /// directory or when some execute bit is already set.
 /// </para>
-/// <para>Known gap: GNU skips the final chmod when only special bits are mentioned (<c>+t</c> yields
-/// 1755, <c>g-s</c> 755); this computes the full mode (1777, 777).</para>
+/// <para><see cref="ResultingDirMode"/> then models what mkdir really leaves on disk (coreutils mkdir.c +
+/// gnulib mkdir-p/dirchownmod): <c>+t</c> yields 1755 and <c>g-s</c> 755, because the final chmod is skipped
+/// unless a MENTIONED bit differs from what the kernel gave.</para>
 /// </summary>
 internal static class FileModeSpec
 {
@@ -76,19 +77,47 @@ internal static class FileModeSpec
     /// <paramref name="umask"/>. False for anything GNU calls an invalid mode.
     /// </summary>
     public static bool TryParse(string spec, bool isDirectory, int umask, int baseMode, out int mode)
+        => TryParse(spec, isDirectory, umask, baseMode, out mode, out _);
+
+    /// <summary>
+    /// As above, also returning gnulib's "mentioned" bits: the bits the clauses name explicitly (an octal mode
+    /// mentions all of 07777). They decide whether mkdir has to chmod at all (<see cref="ResultingDirMode"/>).
+    /// </summary>
+    public static bool TryParse(string spec, bool isDirectory, int umask, int baseMode, out int mode, out int mentioned)
     {
         mode = baseMode & AllBits;
+        mentioned = 0;
         if (spec.Length == 0) return false;
 
-        if (spec[0] >= '0' && spec[0] <= '7') return TryParseOctal(spec, out mode);
+        if (spec[0] >= '0' && spec[0] <= '7')
+        {
+            mentioned = AllBits;
+            return TryParseOctal(spec, out mode);
+        }
 
         int result = baseMode & AllBits;
+        int named = 0;
         foreach (var clause in spec.Split(','))
         {
-            if (!TryApplyClause(clause, isDirectory, umask, ref result)) { mode = baseMode & AllBits; return false; }
+            if (!TryApplyClause(clause, isDirectory, umask, ref result, ref named)) { mode = baseMode & AllBits; return false; }
         }
         mode = result;
+        mentioned = named;
         return true;
+    }
+
+    /// <summary>
+    /// The mode <c>mkdir -m</c> leaves on a new directory (oracle: coreutils 9.4). mkdir creates it with
+    /// <paramref name="mode"/> under umask <c>umask &amp; ~mode</c>, minus group/other write when special bits are
+    /// involved (a mode with setuid/setgid/sticky, or a setuid/setgid bit mentioned); the kernel drops setuid/setgid.
+    /// It then chmods to the full <paramref name="mode"/> only if a MENTIONED bit differs from what it got.
+    /// </summary>
+    public static int ResultingDirMode(int mode, int mentioned, int umask)
+    {
+        bool special = (mode & (SetUid | SetGid | Sticky)) != 0 || (mentioned & (SetUid | SetGid)) != 0;
+        int created = special ? mode & ~0x12 : mode;                       // ~(S_IWGRP | S_IWOTH)
+        int actual = created & ~(umask & ~mode) & (Sticky | 0x1FF);        // setuid/setgid do not survive mkdir(2)
+        return (mentioned & (actual ^ mode)) != 0 ? mode : actual;
     }
 
     /// <summary>The owner-write bit — the only part of a mode Windows can express (read-only attribute).</summary>
@@ -129,7 +158,7 @@ internal static class FileModeSpec
         return true;
     }
 
-    private static bool TryApplyClause(string clause, bool isDir, int umask, ref int mode)
+    private static bool TryApplyClause(string clause, bool isDir, int umask, ref int mode, ref int named)
     {
         int i = 0;
         int affected = 0;
@@ -139,7 +168,7 @@ internal static class FileModeSpec
             {
                 case 'u': affected |= SetUid | Owner; continue;
                 case 'g': affected |= SetGid | Group; continue;
-                case 'o': affected |= Other; continue;
+                case 'o': affected |= Sticky | Other; continue;   // gnulib: o -> S_ISVTX | S_IRWXO
                 case 'a': affected |= AllBits; continue;
             }
             break;
@@ -182,6 +211,8 @@ internal static class FileModeSpec
             if (xIfAny && (isDir || (mode & 0x049) != 0)) value |= 0x049;
             if (!copy && i < clause.Length && clause[i] != '+' && clause[i] != '-' && clause[i] != '=') return false;
             if (copy && i < clause.Length && clause[i] != '+' && clause[i] != '-' && clause[i] != '=') return false;
+
+            named |= affected != 0 ? affected & value : value;
 
             // gnulib mode_adjust: with no who the clause "mentions" exactly the bits of its value.
             int mentioned = affected != 0 ? affected : value;

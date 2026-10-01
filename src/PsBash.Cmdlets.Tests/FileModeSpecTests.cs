@@ -5,10 +5,10 @@ namespace PsBash.Cmdlets.Tests;
 /// <summary>
 /// chmod-style mode strings (<c>mkdir -m</c>): octal and symbolic, compiled against mkdir's base
 /// mode 0777 and the process umask. Every expected value was produced by real GNU coreutils 9.4
-/// (<c>umask 022; mkdir -m SPEC d; stat -c %a d</c> under <c>wsl bash</c>). Known gap, deliberately NOT
-/// asserted: GNU gives 1755 for a sticky-only change (<c>+t</c>, <c>a+t</c>) and 755 for <c>g-s</c>
-/// (the final chmod is skipped when only special bits are mentioned); ps-bash applies the computed
-/// mode (1777 / 777).
+/// (<c>umask 022; mkdir -m SPEC d; stat -c %a d</c> under <c>wsl bash</c>). The mode a directory
+/// ENDS UP with (<see cref="FileModeSpec.ResultingDirMode"/>) follows mkdir.c + gnulib dirchownmod: a sticky-only
+/// change (<c>+t</c>) gives 1755 and <c>g-s</c> 755 because the directory is created without group/other write and
+/// the chmod is skipped when no MENTIONED bit differs (see <c>FinalMode</c> table).
 /// </summary>
 public class FileModeSpecTests
 {
@@ -127,4 +127,61 @@ public class FileModeSpecTests
     {
         Assert.Equal(expected, FileModeSpec.OwnerCanWrite(Convert.ToInt32(octal, 8)));
     }
-}
+
+    private static int Final(string spec, int umask = Umask022)
+    {
+        Assert.True(FileModeSpec.TryParse(spec, isDirectory: true, umask, baseMode: 0x1FF, out var mode, out var mentioned), spec);
+        return FileModeSpec.ResultingDirMode(mode, mentioned, umask);
+    }
+
+    // Oracle: `mkdir -m SPEC q; stat -c %a q` (coreutils 9.4). Identical under umask 0, 022 and 077 for every row
+    // here except the explicit umask rows below.
+    [Theory]
+    [InlineData("+t", "1755")]
+    [InlineData("a+t", "1755")]
+    [InlineData("o+t", "1755")]      // 'o' covers the sticky bit (gnulib: o -> S_ISVTX | S_IRWXO)
+    [InlineData("g-s", "755")]
+    [InlineData("u-s", "755")]
+    [InlineData("a-s", "755")]
+    [InlineData("-s", "755")]
+    [InlineData("-st", "755")]
+    [InlineData("u-s,o-t", "755")]
+    [InlineData("g-s,o+t", "1755")]
+    [InlineData("u=rwx,+t", "1755")]
+    [InlineData("+t,u-w", "1555")]
+    [InlineData("a-w,+t", "1555")]
+    [InlineData("+s", "6777")]
+    [InlineData("u+s", "4777")]
+    [InlineData("g+s", "2777")]
+    [InlineData("ug+s", "6777")]
+    [InlineData("u=rwx,g+s", "2777")]
+    [InlineData("g+s,u-w", "2577")]
+    [InlineData("+s,g-w", "6757")]
+    [InlineData("u+s,-t", "4777")]
+    [InlineData("-t", "777")]        // no special bit is 'mentioned' -> plain chmod to 777
+    [InlineData("o-t", "777")]
+    [InlineData("g-t", "777")]
+    [InlineData("u+t", "777")]
+    [InlineData("o+s", "777")]
+    [InlineData("u+x", "777")]
+    [InlineData("+w", "777")]
+    [InlineData("1777", "1777")]
+    [InlineData("777", "777")]
+    [InlineData("755", "755")]
+    [InlineData("a=s", "6000")]
+    [InlineData("=t", "1000")]
+    [InlineData("a=t,u+rwx", "1700")]
+    public void FinalMode_MatchesGnuMkdir(string spec, string expectedOctal)
+    {
+        Assert.Equal(Convert.ToInt32(expectedOctal, 8), Final(spec));
+        Assert.Equal(Convert.ToInt32(expectedOctal, 8), Final(spec, 0));
+        Assert.Equal(Convert.ToInt32(expectedOctal, 8), Final(spec, 0x3F));
+    }
+
+    [Theory]
+    [InlineData("=t,+x", 0x12, "1111")]
+    [InlineData("=t,+x", 0x3F, "1100")]
+    public void FinalMode_UmaskStillShapesWholessClauses(string spec, int umask, string expectedOctal)
+    {
+        Assert.Equal(Convert.ToInt32(expectedOctal, 8), Final(spec, umask));
+    }}
