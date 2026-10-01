@@ -101,7 +101,7 @@ public sealed class InvokeBashBashCommand : PSCmdlet
         // preference: 1) the parent process binary (via $__parentPid global
         // set by the host); 2) Get-Command ps-bash; 3) sibling of the
         // current PowerShell process's MainModule path.
-        string? psBashExe = ResolvePsBashExecutable();
+        string? psBashExe = ResolvePsBashExecutable(this);
         if (string.IsNullOrEmpty(psBashExe))
         {
             FileSystemHelpers.WriteBashError(this, "bash: ps-bash executable not found");
@@ -221,7 +221,7 @@ public sealed class InvokeBashBashCommand : PSCmdlet
         return null;
     }
 
-    private string? ResolvePsBashExecutable()
+    internal static string? ResolvePsBashExecutable(PSCmdlet cmdlet)
     {
         // Tier 1: $global:__parentPid → parent process MainModule.FileName.
         // This is the exact binary the user spawned; preferred so a dev
@@ -229,7 +229,7 @@ public sealed class InvokeBashBashCommand : PSCmdlet
         // PATH-installed one.
         try
         {
-            var pidObj = SessionState.PSVariable.GetValue("global:__parentPid");
+            var pidObj = cmdlet.SessionState.PSVariable.GetValue("global:__parentPid");
             if (pidObj != null && LanguagePrimitives.TryConvertTo<int>(pidObj, out int parentPid) && parentPid > 0)
             {
                 try
@@ -253,7 +253,7 @@ public sealed class InvokeBashBashCommand : PSCmdlet
         // Tier 2: Get-Command ps-bash on PATH.
         try
         {
-            var probe = InvokeCommand.InvokeScript(
+            var probe = cmdlet.InvokeCommand.InvokeScript(
                 "Get-Command ps-bash -ErrorAction SilentlyContinue | Select-Object -First 1");
             if (probe.Count > 0 && probe[0] != null)
             {

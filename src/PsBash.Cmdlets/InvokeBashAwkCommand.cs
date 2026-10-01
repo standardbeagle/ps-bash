@@ -50,14 +50,30 @@ public sealed class InvokeBashAwkCommand : PSCmdlet
     [Parameter(ValueFromPipeline = true)]
     public PSObject? InputObject { get; set; }
 
-    // STREAMING (memory bound): the program is parsed and BEGIN runs in BeginProcessing, each
-    // pipeline record is fed to the machine in ProcessRecord as it arrives, and END runs in
-    // EndProcessing. Nothing collects stdin: awk here has no `getline` (the parser rejects it), so
-    // the machine never needs to pull from stdin and no pull model / blocking queue is required.
-    // File operands are read in EndProcessing (after BEGIN), unchanged.
+    // INPUT MODES (memory bound). Three, chosen once the program is parsed:
+    //  1. stdin, STREAMING (no file operands, no main-input getline): BEGIN runs in BeginProcessing,
+    //     each pipeline record is fed to the machine in ProcessRecord as it arrives, END runs in
+    //     EndProcessing. Nothing collects stdin.
+    //  2. stdin, BUFFERED (no file operands, program has a plain `getline [var]` or `getline < "-"`):
+    //     a main-input getline PULLS the next record from inside a rule, but this cmdlet is push-driven
+    //     (the pipeline hands us records in ProcessRecord). Decided statically from the AST
+    //     (AwkProgram.UsesMainInput): only such programs buffer stdin (O(input) memory); every record is
+    //     collected in ProcessRecord and the WHOLE run (BEGIN, main loop, END) happens in EndProcessing
+    //     as a pull loop over the buffer — BEGIN is deferred too, so a BEGIN-time getline sees the first
+    //     record. Output stays on the cmdlet thread (no worker thread, no queue).
+    //  3. FILE operands: the machine pulls from AwkMainInput (files opened lazily, one at a time), BEGIN
+    //     runs in BeginProcessing, the main loop and END in EndProcessing; getline crosses file
+    //     boundaries exactly like the main loop (FNR reset, FILENAME updated). If the program has a
+    //     main-input getline the pipeline (if any) is buffered for `getline < "-"` and BEGIN is deferred
+    //     to EndProcessing too, so a BEGIN-time `getline < "-"` sees the piped records.
     private AwkMachine? _machine;
+    private AwkProgram? _program;
+    private AwkShell? _shell;
     private List<string> _files = new();
+    private readonly List<string> _stdinBuffer = new();
+    private int _fileError;
     private bool _stdinMode;
+    private bool _bufferStdin;  // mode 2, or mode 3 with a getline that may read the pipeline
     private bool _halt;     // version/help/usage/syntax/runtime error: ignore everything that follows
 
     protected override void BeginProcessing()
@@ -193,8 +209,36 @@ public sealed class InvokeBashAwkCommand : PSCmdlet
         }
 
         _machine = machine;
+        _program = program;
         _files = files;
         _stdinMode = files.Count == 0;
+        _bufferStdin = program.UsesMainInput;
+
+        _shell = new AwkShell(this);
+        machine.Shell = _shell;
+        machine.ResolvePath = ResolveGetlineFile;
+
+        if (_stdinMode && _bufferStdin)
+        {
+            // Mode 2: everything (BEGIN included) runs in EndProcessing over the buffered records.
+            var source = new AwkMainInput(Array.Empty<string>(), _ => null, machine.StartFile, _stdinBuffer);
+            machine.MainInput = source;
+            machine.StdinInput = source;
+            return;
+        }
+
+        if (!_stdinMode)
+        {
+            // Mode 3. `getline < "-"` reads the pipeline, which is only collected (ProcessRecord)
+            // when the program can ask for it — and then BEGIN waits for it too (EndProcessing), so a
+            // BEGIN-time `getline < "-"` sees the piped records.
+            machine.MainInput = new AwkMainInput(files, OpenOperand, machine.StartFile, null);
+            if (_bufferStdin)
+            {
+                machine.StdinInput = new AwkListSource(_stdinBuffer);
+                return;
+            }
+        }
 
         // BEGIN runs before the first record. A runtime fault (bad dynamic regex, field index past
         // the ceiling, a regex that blows the match-time budget) must surface as an awk error with
@@ -209,9 +253,17 @@ public sealed class InvokeBashAwkCommand : PSCmdlet
 
     protected override void ProcessRecord()
     {
-        if (_halt || !_stdinMode || _machine is null || InputObject is null) return;
+        if (_halt || _machine is null || InputObject is null) return;
         var machine = _machine;
-        if (machine.Exited) return;
+
+        if (_bufferStdin)
+        {
+            // Modes 2 and 3: collect; the machine pulls from the buffer in EndProcessing / via getline.
+            _stdinBuffer.AddRange(SplitRecords(InputObject));
+            return;
+        }
+        if (!_stdinMode || machine.Exited) return;
+
         Guarded(() =>
         {
             foreach (var record in SplitRecords(InputObject))
@@ -224,50 +276,81 @@ public sealed class InvokeBashAwkCommand : PSCmdlet
 
     protected override void EndProcessing()
     {
-        if (_halt || _machine is null) return;
+        if (_halt || _machine is null || _program is null) return;
         var machine = _machine;
-        int fileError = 0;
+        var program = _program;
 
-        bool ok = Guarded(() =>
+        try
         {
-            if (!machine.Exited && !_stdinMode)
+            bool ok = Guarded(() =>
             {
-                foreach (var file in _files)
+                if (_bufferStdin) machine.RunBegin(); // deferred: see the INPUT MODES note
+
+                // Files / buffered stdin are pulled through the machine's own main input, so a getline
+                // inside a rule and this loop consume ONE stream. A program with neither a main rule nor
+                // END never reads its input (gawk: `awk 'BEGIN{...}' missing-file` is not an error).
+                if (!machine.Exited && !(_stdinMode && !_bufferStdin) && (program.Main.Count > 0 || program.End.Count > 0))
                 {
-                    string resolved;
-                    try { resolved = SessionState.Path.GetUnresolvedProviderPathFromPSPath(file); }
-                    catch (Exception ex)
-                    {
-                        if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-                        FileSystemHelpers.WriteBashError(this, $"awk: can't open file {file}: {ex.Message}");
-                        fileError = 2;
-                        continue;
-                    }
-                    if (!File.Exists(resolved))
-                    {
-                        FileSystemHelpers.WriteBashError(this, $"awk: fatal: cannot open file `{file}' for reading: No such file or directory");
-                        fileError = 2;
-                        continue;
-                    }
-
-                    machine.StartFile(file);
-                    foreach (var record in BashFileSystem.ReadLines(resolved))
-                    {
+                    var input = machine.MainInput!;
+                    string? record;
+                    while (!machine.Exited && (record = input.Next()) is not null)
                         machine.ProcessRecord(record);
-                        if (machine.Exited) break;
-                    }
-                    if (machine.Exited) break;
                 }
-            }
 
-            machine.RunEnd();
-        });
-        if (!ok) return;
+                machine.RunEnd();
+            });
+            if (!ok) return;
 
-        machine.Flush();
+            machine.Flush();
 
-        int exit = machine.ExitCode != 0 ? machine.ExitCode : fileError;
-        SessionState.PSVariable.Set("global:LASTEXITCODE", exit);
+            int exit = machine.ExitCode != 0 ? machine.ExitCode : _fileError;
+            SessionState.PSVariable.Set("global:LASTEXITCODE", exit);
+        }
+        finally
+        {
+            machine.CloseAll();
+        }
+    }
+
+    protected override void StopProcessing()
+    {
+        // Ctrl-C / host stop: a getline blocked on a running command must not outlive the pipeline.
+        _shell?.KillAll();
+    }
+
+    /// <summary>
+    /// Open one file operand for the main input: an enumerator over its records, or null (reported,
+    /// exit status 2) when it does not exist or cannot be named. The input then skips to the next operand.
+    /// </summary>
+    private IEnumerator<string>? OpenOperand(string file)
+    {
+        string resolved;
+        try { resolved = SessionState.Path.GetUnresolvedProviderPathFromPSPath(file); }
+        catch (Exception ex)
+        {
+            if (FileSystemHelpers.IsPipelineStop(ex)) throw;
+            FileSystemHelpers.WriteBashError(this, $"awk: can't open file {file}: {ex.Message}");
+            _fileError = 2;
+            return null;
+        }
+        if (!File.Exists(resolved))
+        {
+            FileSystemHelpers.WriteBashError(this, $"awk: fatal: cannot open file `{file}' for reading: No such file or directory");
+            _fileError = 2;
+            return null;
+        }
+        return BashFileSystem.ReadLines(resolved).GetEnumerator();
+    }
+
+    /// <summary>A getline file name as a path: relative names resolve against the PowerShell location.</summary>
+    private string ResolveGetlineFile(string name)
+    {
+        try { return SessionState.Path.GetUnresolvedProviderPathFromPSPath(name); }
+        catch (Exception ex)
+        {
+            if (FileSystemHelpers.IsPipelineStop(ex)) throw;
+            return name;
+        }
     }
 
     /// <summary>Run <paramref name="body"/>, mapping awk runtime faults to an awk error + exit 2.

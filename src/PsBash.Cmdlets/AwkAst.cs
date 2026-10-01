@@ -28,6 +28,25 @@ internal sealed class IncDec : AwkExpr { public bool Increment; public bool Pref
 internal sealed class Call : AwkExpr { public string Name = ""; public List<AwkExpr> Args = new(); }
 internal sealed class Grouping : AwkExpr { public AwkExpr Inner = null!; }
 
+/// <summary>Where a <c>getline</c> reads from.</summary>
+internal enum GetlineSource
+{
+    /// <summary><c>getline [var]</c> — the next record of the main input.</summary>
+    Main,
+    /// <summary><c>getline [var] &lt; file</c> — <see cref="GetlineExpr.Operand"/> is the file name.</summary>
+    File,
+    /// <summary><c>cmd | getline [var]</c> — <see cref="GetlineExpr.Operand"/> is the command line.</summary>
+    Command,
+}
+
+/// <summary>Any getline form. <see cref="Target"/> is the optional lvalue (null = assign to <c>$0</c>).</summary>
+internal sealed class GetlineExpr : AwkExpr
+{
+    public GetlineSource Source;
+    public AwkExpr? Target;
+    public AwkExpr? Operand;
+}
+
 // ── Statement AST ──────────────────────────────────────────────────────────
 
 internal abstract class AwkStmt { }
@@ -64,4 +83,11 @@ internal sealed class AwkProgram
     public List<AwkRule> Begin = new();
     public List<AwkRule> Main = new();
     public List<AwkRule> End = new();
+
+    /// <summary>
+    /// The program pulls from the MAIN input: a plain <c>getline [var]</c>, or a <c>getline &lt; "-"</c> /
+    /// <c>"/dev/stdin"</c> spelled literally. Decided statically by the parser; the cmdlet buffers stdin
+    /// and drives the machine pull-style for such programs (see InvokeBashAwkCommand).
+    /// </summary>
+    public bool UsesMainInput;
 }

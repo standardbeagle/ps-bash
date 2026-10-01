@@ -15,6 +15,7 @@ internal sealed class AwkParser
     private int _pos;
     private bool _noGt; // inside an unparenthesized print/printf arg list
     private int _depth; // nesting depth, to bound recursion (see EnterDepth)
+    private bool _usesMainInput; // saw a getline that reads the main input (AwkProgram.UsesMainInput)
 
     public AwkParser(List<Tok> tokens) { _t = tokens; }
 
@@ -67,6 +68,7 @@ internal sealed class AwkParser
             }
             SkipTerminators();
         }
+        prog.UsesMainInput = _usesMainInput;
         return prog;
     }
 
@@ -141,7 +143,6 @@ internal sealed class AwkParser
                 case "print": return ParsePrint();
                 case "printf": return ParsePrintf();
                 case "return": throw Err("'return' outside a function is not supported");
-                case "getline": throw Err("getline is not supported");
             }
         }
 
@@ -386,6 +387,16 @@ internal sealed class AwkParser
     private AwkExpr ParseComparison()
     {
         var left = ParseConcat();
+
+        // `cmd | getline [var]`: the pipe binds below concatenation (`"echo " x | getline` pipes the
+        // whole concatenation) and above comparison (`cmd | getline > 0` is `(cmd | getline) > 0`).
+        // `print x | "cmd"` is an output redirection: only a `getline` after the bar makes it this form.
+        while (Is(TokKind.Pipe) && Peek().Kind == TokKind.Keyword && Peek().Text == "getline")
+        {
+            Advance(); Advance(); // | getline
+            left = new GetlineExpr { Source = GetlineSource.Command, Operand = left, Target = ParseGetlineTarget() };
+        }
+
         // non-associative: at most one comparison/match operator
         switch (Cur.Kind)
         {
@@ -559,9 +570,44 @@ internal sealed class AwkParser
             case TokKind.LParen:
                 return ParseParenthesized();
 
+            case TokKind.Keyword when Cur.Text == "getline":
+                return ParseGetline();
+
             default:
                 throw Err("unexpected token in expression");
         }
+    }
+
+    /// <summary>
+    /// <c>getline [lvalue] [&lt; file]</c> at primary level. The file operand is gawk's <c>simp_exp</c>:
+    /// additive-level, NO concatenation and no comparison, so <c>getline &lt; "a" "b"</c> is
+    /// <c>(getline &lt; "a") "b"</c> and <c>getline line &lt; f &gt; 0</c> is <c>(getline line &lt; f) &gt; 0</c>.
+    /// </summary>
+    private AwkExpr ParseGetline()
+    {
+        Advance(); // getline
+        var target = ParseGetlineTarget();
+        if (!Is(TokKind.Lt))
+        {
+            _usesMainInput = true;
+            return new GetlineExpr { Source = GetlineSource.Main, Target = target };
+        }
+        Advance(); // <
+        var file = ParseAdditive();
+        // A literal "-" / "/dev/stdin" names the main stdin, which a push-driven stdin run cannot serve.
+        if (file is StrLit { Value: "-" or "/dev/stdin" }) _usesMainInput = true;
+        return new GetlineExpr { Source = GetlineSource.File, Target = target, Operand = file };
+    }
+
+    /// <summary>The optional lvalue after <c>getline</c>: <c>name</c>, <c>name[subs]</c> or <c>$expr</c>.</summary>
+    private AwkExpr? ParseGetlineTarget()
+    {
+        if (Is(TokKind.Dollar))
+        {
+            Advance();
+            return new FieldRef { Index = ParsePrimary() };
+        }
+        return Is(TokKind.Name) ? ParsePrimary() : null;
     }
 
     /// <summary>A subscript expression parsed with greater-than re-enabled.</summary>
