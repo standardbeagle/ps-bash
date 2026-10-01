@@ -116,7 +116,7 @@ internal static class ChecksumEngine
         string algorithmLabel,
         string commandName,
         string[] arguments,
-        IList<PSObject>? pipelineInput)
+        ChecksumStdin stdin)
     {
         FileSystemHelpers.SetLastExitCode(cmdlet, 0);
         var plan = Plan(commandName, arguments);
@@ -131,18 +131,18 @@ internal static class ChecksumEngine
 
         if (plan.Check)
         {
-            RunCheck(cmdlet, algorithmName, algorithmLabel, commandName, plan, pipelineInput);
+            RunCheck(cmdlet, algorithmName, algorithmLabel, commandName, plan, stdin.Buffered);
             return;
         }
 
-        RunHash(cmdlet, algorithmName, algorithmLabel, commandName, plan, pipelineInput);
+        RunHash(cmdlet, algorithmName, algorithmLabel, commandName, plan, stdin);
     }
 
     // ---------------------------------------------------------------- hash mode
 
     private static void RunHash(
         PSCmdlet cmdlet, HashAlgorithmName algorithmName, string algorithmLabel, string commandName,
-        ChecksumArgs plan, IList<PSObject>? pipelineInput)
+        ChecksumArgs plan, ChecksumStdin stdin)
     {
         var operands = plan.Operands;
         bool hadError = false;
@@ -150,12 +150,8 @@ internal static class ChecksumEngine
         // No operand, or a lone `-`: hash stdin. (Only when something was piped: a bare call prints nothing.)
         if (operands.Count == 0 || (operands.Count == 1 && operands[0] == "-" ))
         {
-            if (pipelineInput is { Count: > 0 } || operands.Count == 1)
-            {
-                string text = pipelineInput is null ? string.Empty : BashRuntime.RecordStreamText(pipelineInput.Cast<object>());
-                var hex = ComputeHex(algorithmName, RawBytes.GetBytes(text));
-                cmdlet.WriteObject(MakeOutput(hex, "-", algorithmLabel, plan));
-            }
+            if (stdin.HasInput || operands.Count == 1)
+                cmdlet.WriteObject(MakeOutput(stdin.Hex(), "-", algorithmLabel, plan));
             return;
         }
 
@@ -163,8 +159,7 @@ internal static class ChecksumEngine
         {
             if (rawPath == "-")
             {
-                string text = pipelineInput is null ? string.Empty : BashRuntime.RecordStreamText(pipelineInput.Cast<object>());
-                cmdlet.WriteObject(MakeOutput(ComputeHex(algorithmName, RawBytes.GetBytes(text)), "-", algorithmLabel, plan));
+                cmdlet.WriteObject(MakeOutput(stdin.Hex(), "-", algorithmLabel, plan));
                 continue;
             }
 
@@ -467,6 +462,86 @@ internal static class ChecksumEngine
 }
 
 /// <summary>
+/// What the md5sum / sha1sum / sha256sum cmdlets do with their pipeline, record by record, so stdin
+/// is never held. Hash mode (no operand, or a <c>-</c> operand) feeds each record's exact bytes
+/// (<see cref="RecordByteEncoder"/>: text + boundary newline unless unterminated, the same stream
+/// <c>RecordStreamText</c> joined) straight into an <see cref="IncrementalHash"/>; check mode keeps the
+/// records (a checksum LIST is read as lines, and is small); anything else (a file operand, a usage
+/// error, --help) ignores the pipeline exactly as before.
+/// </summary>
+internal sealed class ChecksumStdin
+{
+    private enum Mode { Undecided, Ignore, Hash, Buffer }
+
+    private readonly HashAlgorithmName _algorithm;
+    private readonly string _command;
+    private Mode _mode;
+    private IncrementalHash? _hasher;
+    private RecordByteEncoder? _bytes;
+    private List<PSObject>? _buffered;
+    private string? _hex;
+
+    public ChecksumStdin(HashAlgorithmName algorithm, string command)
+    {
+        _algorithm = algorithm;
+        _command = command;
+    }
+
+    /// <summary>True once any record arrived in hash mode.</summary>
+    public bool HasInput { get; private set; }
+
+    /// <summary>Records fed to the hasher (test seam: none of them are retained).</summary>
+    public int Streamed { get; private set; }
+
+    /// <summary>Records retained (check mode only; test seam, 0 in hash mode).</summary>
+    public int Retained => _buffered?.Count ?? 0;
+
+    /// <summary>The checksum list for check mode (null when none was piped).</summary>
+    public IList<PSObject>? Buffered => _buffered;
+
+    public void Add(PSObject item, string[] args)
+    {
+        if (_mode == Mode.Undecided) _mode = Decide(args);
+        switch (_mode)
+        {
+            case Mode.Hash:
+                _hasher ??= IncrementalHash.CreateHash(_algorithm);
+                _bytes ??= new RecordByteEncoder();
+                HasInput = true;
+                Streamed++;
+                _bytes.Encode(item, Append);
+                break;
+            case Mode.Buffer:
+                (_buffered ??= new List<PSObject>()).Add(item);
+                break;
+        }
+    }
+
+    private void Append(ReadOnlySpan<byte> bytes) => _hasher!.AppendData(bytes);
+
+    private Mode Decide(string[] args)
+    {
+        var plan = ChecksumEngine.Plan(_command, args);
+        if (plan.Parsed.HasError || plan.Error is not null
+            || plan.Parsed.Has(OptSpecSet.HelpId) || plan.Parsed.Has(OptSpecSet.VersionId))
+            return Mode.Ignore;
+        bool readsStdin = plan.Operands.Count == 0 || plan.Operands.Contains("-");
+        if (!readsStdin) return Mode.Ignore;
+        return plan.Check ? Mode.Buffer : Mode.Hash;
+    }
+
+    /// <summary>The hex digest of everything streamed (of the empty input when nothing was).</summary>
+    public string Hex()
+    {
+        if (_hex is not null) return _hex;
+        _hasher ??= IncrementalHash.CreateHash(_algorithm);
+        _bytes?.Finish(Append);
+        _hex = Convert.ToHexString(_hasher.GetHashAndReset()).ToLowerInvariant();
+        _hasher.Dispose();
+        return _hex;
+    }
+}
+/// <summary>
 /// Binary cmdlet for <c>md5sum</c>. Delegates to <see cref="ChecksumEngine.Run"/>. Direct PowerShell calls:
 /// <c>-c</c> (Confirm) and <c>-w</c> (WarningAction/-WarningVariable/-WhatIf) collide with common parameters
 /// and are declared decoy switches, re-injected before the scan.
@@ -487,18 +562,20 @@ public sealed class InvokeBashMd5sumCommand : PSCmdlet
     [Parameter(ValueFromPipeline = true)]
     public PSObject? InputObject { get; set; }
 
-    private readonly List<PSObject> _pipeline = new();
+    internal ChecksumStdin Stdin { get; } = new(HashAlgorithmName.MD5, "md5sum");
+
+    private string[] EffectiveArgs() => BashRuntime.PrependDecoys(Arguments, (C.IsPresent, "-c"), (W.IsPresent, "-w"));
 
     protected override void ProcessRecord()
     {
-        if (InputObject != null) _pipeline.Add(InputObject);
+        if (InputObject != null) Stdin.Add(InputObject, EffectiveArgs());
     }
 
     protected override void EndProcessing()
     {
         ChecksumEngine.Run(
             this, HashAlgorithmName.MD5, "MD5", "md5sum",
-            BashRuntime.PrependDecoys(Arguments, (C.IsPresent, "-c"), (W.IsPresent, "-w")), _pipeline);
+            EffectiveArgs(), Stdin);
     }
 }
 
@@ -519,18 +596,20 @@ public sealed class InvokeBashSha1sumCommand : PSCmdlet
     [Parameter(ValueFromPipeline = true)]
     public PSObject? InputObject { get; set; }
 
-    private readonly List<PSObject> _pipeline = new();
+    internal ChecksumStdin Stdin { get; } = new(HashAlgorithmName.SHA1, "sha1sum");
+
+    private string[] EffectiveArgs() => BashRuntime.PrependDecoys(Arguments, (C.IsPresent, "-c"), (W.IsPresent, "-w"));
 
     protected override void ProcessRecord()
     {
-        if (InputObject != null) _pipeline.Add(InputObject);
+        if (InputObject != null) Stdin.Add(InputObject, EffectiveArgs());
     }
 
     protected override void EndProcessing()
     {
         ChecksumEngine.Run(
             this, HashAlgorithmName.SHA1, "SHA1", "sha1sum",
-            BashRuntime.PrependDecoys(Arguments, (C.IsPresent, "-c"), (W.IsPresent, "-w")), _pipeline);
+            EffectiveArgs(), Stdin);
     }
 }
 
@@ -551,17 +630,19 @@ public sealed class InvokeBashSha256sumCommand : PSCmdlet
     [Parameter(ValueFromPipeline = true)]
     public PSObject? InputObject { get; set; }
 
-    private readonly List<PSObject> _pipeline = new();
+    internal ChecksumStdin Stdin { get; } = new(HashAlgorithmName.SHA256, "sha256sum");
+
+    private string[] EffectiveArgs() => BashRuntime.PrependDecoys(Arguments, (C.IsPresent, "-c"), (W.IsPresent, "-w"));
 
     protected override void ProcessRecord()
     {
-        if (InputObject != null) _pipeline.Add(InputObject);
+        if (InputObject != null) Stdin.Add(InputObject, EffectiveArgs());
     }
 
     protected override void EndProcessing()
     {
         ChecksumEngine.Run(
             this, HashAlgorithmName.SHA256, "SHA256", "sha256sum",
-            BashRuntime.PrependDecoys(Arguments, (C.IsPresent, "-c"), (W.IsPresent, "-w")), _pipeline);
+            EffectiveArgs(), Stdin);
     }
 }

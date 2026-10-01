@@ -62,19 +62,20 @@ namespace PsBash.Cmdlets;
 /// </para>
 ///
 /// <para>
-/// <b>Bounded-output assumption.</b> <c>InvokeScript</c> only returns after the inner
-/// pipeline COMPLETES, so this cmdlet must never be handed a never-terminating stage.
-/// The emitter's <c>StageIsUnbounded</c> guard keeps <c>tail -f</c> / <c>--follow</c>
-/// (and any future unbounded flag) off the fused lane, so a follow chain streams on the
-/// unfused path rather than buffering here forever. The buffer is also unbounded in
-/// MEMORY for a very large FINITE output (the whole result Collection is held before the
-/// first flush), whereas the unfused lane streams per-line — extreme-scale
-/// (100M-line-class) outputs therefore remain best served by the deferred per-stage
-/// streaming contract (profile bottleneck #2). This slice fixes bottleneck #1 (the
-/// per-line IPC return framing) via output batching.
+/// <b>Streaming, and why unbounded stages stay unfused.</b> The fallback pipeline is piped into a
+/// sink instance of this cmdlet (<see cref="Sink"/>) that renders each record into a ~32 KiB batch
+/// and writes the frame as soon as it is full, so retained output is one batch, not the whole
+/// result (it used to be <c>InvokeScript</c>'s full Collection, held until the pipeline completed;
+/// the host drains by removal the same way). That fixes MEMORY. It does not make a never-terminating
+/// stage fusible: frames are cut by SIZE, so the lines of a live follower
+/// (<c>tail -f log | grep x</c>) would sit in a half-full batch until 32 KiB accumulate, where the
+/// unfused lane prints each line at once; flushing on idle would need a timer thread, and
+/// <c>WriteObject</c> is only legal on the pipeline thread. The emitter's <c>StageIsUnbounded</c>
+/// guard therefore stays: <c>tail -f</c> / <c>--follow</c> (and any future unbounded flag) keep the
+/// unfused lane.
 /// </para>
 /// </summary>
-[Cmdlet(VerbsLifecycle.Invoke, "BashFusedPipeline")]
+[Cmdlet(VerbsLifecycle.Invoke, "BashFusedPipeline", DefaultParameterSetName = RunSet)]
 [OutputType(typeof(PSObject))]
 public sealed class InvokeBashFusedPipelineCommand : PSCmdlet
 {
@@ -84,9 +85,12 @@ public sealed class InvokeBashFusedPipelineCommand : PSCmdlet
     /// FALLBACK path: it runs when <see cref="Stages"/> is absent or any stage's
     /// argv is outside its streaming core's certified subset.
     /// </summary>
-    [Parameter(Mandatory = true, Position = 0)]
+    [Parameter(Mandatory = true, Position = 0, ParameterSetName = RunSet)]
     [Alias("Fallback")]
     public ScriptBlock Pipeline { get; set; } = null!;
+
+    private const string RunSet = "Run";
+    private const string SinkSet = "Sink";
 
     /// <summary>
     /// Structured stage list emitted by <c>PsEmitter</c> when every stage's args are
@@ -98,8 +102,50 @@ public sealed class InvokeBashFusedPipelineCommand : PSCmdlet
     /// Any stage that declines forces the <see cref="Pipeline"/> fallback, so
     /// correctness is preserved for every case the streaming cores do not (yet) cover.
     /// </summary>
-    [Parameter]
+    [Parameter(ParameterSetName = RunSet)]
     public object[]? Stages { get; set; }
+
+    /// <summary>
+    /// Internal: when the fallback pipeline runs, its output is piped into a SECOND instance of this cmdlet
+    /// bound to this parameter set — a sink that hands every record to the OUTER instance (this parameter
+    /// is that instance), which renders it and writes a ~32 KiB frame as soon as one is full. Not for users.
+    /// </summary>
+    [Parameter(Mandatory = true, ParameterSetName = SinkSet, DontShow = true)]
+    public object? Sink { get; set; }
+
+    /// <summary>Sink-instance pipeline input (the fallback pipeline's records).</summary>
+    [Parameter(ValueFromPipeline = true, ParameterSetName = SinkSet, DontShow = true)]
+    public PSObject? InputObject { get; set; }
+
+    // The batch being filled by the OUTER instance (fed from the sink instance, same thread).
+    private StringBuilder? _batch;
+
+    /// <summary>Frames written by the fallback lane so far (test seam: &gt; 1 means output left before the inner pipeline ended).</summary>
+    internal int FramesWritten { get; private set; }
+
+    // The wrapper runs in its OWN scope (useLocalScope: true), so its two parameters leak nothing into the
+    // caller. `& $pipeline` is a CALL, so the pipeline text sees a fresh empty $args exactly as the old
+    // InvokeScript(args: null) gave it. The pipeline streams into the sink: each record reaches it as it is
+    // produced, so nothing is collected. (Not `$args[0]`: how $args reaches a non-local-scope invocation
+    // differs between hosts; a parameter binds identically everywhere.)
+    // Built per call, not cached in a static: the host runs several runspaces on several threads, and a
+    // ScriptBlock is compiled lazily and bound to the session state that first runs it.
+    private const string SinkWrapperText =
+        "param($__psbPipeline, $__psbSink) & $__psbPipeline | Invoke-BashFusedPipeline -Sink $__psbSink";
+
+    protected override void ProcessRecord()
+    {
+        if (ParameterSetName != SinkSet || InputObject is null) return;
+        var outer = (Sink is PSObject p ? p.BaseObject : Sink) as InvokeBashFusedPipelineCommand;
+        outer?.Accept(InputObject);
+    }
+
+    private void Accept(PSObject item)
+    {
+        var sb = _batch ??= new StringBuilder(FlushThresholdChars + 4096);
+        RenderItem(item, sb);
+        if (sb.Length >= FlushThresholdChars) Flush(sb);
+    }
 
     /// <summary>
     /// Flush the accumulated output once it reaches this many chars. 32 KiB keeps
@@ -109,6 +155,9 @@ public sealed class InvokeBashFusedPipelineCommand : PSCmdlet
 
     protected override void EndProcessing()
     {
+        // The sink instance only forwards records (ProcessRecord); it has nothing to run or flush.
+        if (ParameterSetName == SinkSet) return;
+
         // Phase-2b streaming lane: when the emitter supplied a plain-arg stage list
         // and every stage has a certified streaming core, run the composed lazy
         // line→line chain directly (no per-line PSObject). Any decline → fall through
@@ -120,23 +169,16 @@ public sealed class InvokeBashFusedPipelineCommand : PSCmdlet
         }
 
         // Fallback (phase-2a): run the inner pipeline in the current scope so
-        // $global:LASTEXITCODE the last stage sets is visible to the host.
-        Collection<PSObject> results = InvokeCommand.InvokeScript(
-            useLocalScope: false,
-            scriptBlock: Pipeline,
+        // $global:LASTEXITCODE the last stage sets is visible to the host. The pipeline STREAMS
+        // into the sink (see SinkWrapperText): each ~32 KiB frame is written the moment it is full,
+        // instead of the whole result Collection being held until the pipeline completes.
+        _batch = new StringBuilder(FlushThresholdChars + 4096);
+        InvokeCommand.InvokeScript(
+            useLocalScope: true,
+            scriptBlock: ScriptBlock.Create(SinkWrapperText),
             input: System.Array.Empty<object>(),
-            args: null);
-
-        var sb = new StringBuilder(FlushThresholdChars + 4096);
-        foreach (var item in results)
-        {
-            RenderItem(item, sb);
-            if (sb.Length >= FlushThresholdChars)
-            {
-                Flush(sb);
-            }
-        }
-        Flush(sb);
+            args: new object[] { Pipeline, this });
+        Flush(_batch);
     }
 
     /// <summary>
@@ -237,6 +279,7 @@ public sealed class InvokeBashFusedPipelineCommand : PSCmdlet
     private void Flush(StringBuilder sb)
     {
         if (sb.Length == 0) return;
+        FramesWritten++;
         // NoTrailingNewline: RenderItem already appended every record boundary, so
         // the host must emit these bytes verbatim and add nothing.
         WriteObject(BashRuntime.NewBashObject(

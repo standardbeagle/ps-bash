@@ -593,12 +593,20 @@ no ETS.
   are what keep the two lanes byte-identical. Any non-allowlisted / external stage, `|&`, per-stage redirect,
 env-prefix, negation, or capture context keeps today's PowerShell-pipeline path.
 
-**Unbounded-stage guard (`StageIsUnbounded`).** The fused cmdlet runs the inner
-pipeline via `InvokeScript`, which returns only after the pipeline *completes* —
-so a never-terminating stage would batch-buffer forever and hang silently where
-the unfused lane streams live. `tail -f` / `-F` / `--follow` (and, conservatively,
-`tail` with a non-literal arg that could expand to `-f`) therefore force the
-fallback; plain `tail -n 5` still fuses. The check is keyed by command name so a
+**The fallback streams.** When a stage's core declines, the inner PowerShell pipeline
+is piped into a sink instance of `Invoke-BashFusedPipeline` (hidden `-Sink` parameter
+set) that renders each record into a ~32 KiB batch and writes the frame as soon as it
+is full (`FusedFallbackStreamingTests`). It used to be `InvokeScript`, which returned the
+whole result Collection only after the pipeline completed, so retained memory was the
+whole output. Frame rendering is unchanged (`RenderItem`), so the bytes are identical.
+
+**Unbounded-stage guard (`StageIsUnbounded`).** Kept after the fallback started streaming,
+for a different reason than it was written: frames are cut by SIZE, not by idleness, so
+a never-terminating stage (`tail -f log | grep x`) would hold its lines in a half-full
+frame where the unfused lane prints each one live, and an idle flush needs a timer thread
+while `WriteObject` is pipeline-thread-only. `tail -f` / `-F` / `--follow` (and,
+conservatively, `tail` with a non-literal arg that could expand to `-f`) therefore keep
+the unfused lane; plain `tail -n 5` still fuses. The check is keyed by command name so a
 future allowlist addition with its own unbounded flag inherits the seam.
 The kill switch `PSBASH_FUSED=0` (falsy tokens) disables detection; default ON.
 `ls | grep .txt` and other typed-object boundaries are unaffected — `ls` (and
@@ -742,6 +750,10 @@ While the emitter's primary job is to forward arguments to runtime functions, ce
 The default `<(...)` and `>(...)` path emits `Invoke-ProcessSub`, which captures
 producer output into an ephemeral temp file and passes that file path to the
 consumer. This remains the safe fallback for seekable or multi-file consumers.
+The producer is STREAMED into the file as it runs (`ProcessSubFileWriter`, 64 KB
+buffered, exact bytes) rather than collected first; the consumer still starts only
+after the producer finishes (a live feed needs a FIFO / named pipe, see the deferred
+bullets below).
 
 Some mapped commands can treat a single file operand exactly like stdin. For
 those consumers, the emitter routes one pure process-substitution operand through

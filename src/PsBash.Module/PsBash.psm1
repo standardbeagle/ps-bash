@@ -179,23 +179,19 @@ function Invoke-ProcessSub {
     } catch { }
 
     $tmp = [System.IO.Path]::Combine($subDir, [System.IO.Path]::GetRandomFileName())
+    $writer = $null
     try {
-        $output = & $Command
-        $sb = [System.Text.StringBuilder]::new()
-        foreach ($item in $output) {
-            [void]$sb.Append((Get-BashText -InputObject $item))
-            # Mirror the worker serializer: add \n unless the object signals partial-line output
-            $isPartial = $null -ne $item.PSObject -and
-                         $null -ne $item.PSObject.Properties['NoTrailingNewline'] -and
-                         [bool]$item.NoTrailingNewline
-            if (-not $isPartial) {
-                [void]$sb.Append("`n")
-            }
-        }
-        [PsBash.Cmdlets.BashRuntime]::WriteRawText($tmp, $sb.ToString())
+        # STREAM the producer into the file: each record is encoded (exact bytes, \n boundary unless the
+        # record is unterminated — the worker serializer's rule) and written as it is produced, so the
+        # whole output is never collected. The consumer still starts after the producer finishes.
+        $writer = [PsBash.Cmdlets.ProcessSubFileWriter]::new($tmp)
+        & $Command | ForEach-Object { $writer.Add($_) }
+        $writer.Dispose()
+        $writer = $null
         return $tmp
     }
     catch {
+        if ($null -ne $writer) { $writer.Dispose() }
         Remove-Item -Path $tmp -Force -ErrorAction SilentlyContinue
         throw
     }
@@ -2481,6 +2477,56 @@ function Complete-BashBgJob {
         $Job.Done = $true
     }
 }
+
+# Upper bound on the job table: a long-lived runspace (the interactive shell) that backgrounds
+# commands and never waits would otherwise keep every finished job's PowerShell instance and its
+# buffered output forever. Past this many entries Invoke-BashBackground reaps finished jobs first.
+$script:BashBgMaxJobs = 256
+
+function Remove-BashBgFinished {
+    <#
+    .SYNOPSIS
+        Drain and drop every FINISHED background job (bash forgets a job once it has reported it Done).
+        Running jobs are untouched. Output a finished job produced is emitted, not lost.
+    #>
+    foreach ($job in @($script:BashBgJobs)) {
+        if ($job.AsyncResult.IsCompleted) {
+            Complete-BashBgJob -Job $job
+            [void]$script:BashBgJobs.Remove($job)
+        }
+    }
+}
+
+function Remove-BashBgState {
+    <#
+    .SYNOPSIS
+        Tear down ALL background-job state of this runspace: stop and dispose every job, dispose the
+        job RunspacePool. The host calls it just before it discards a runspace (a runspace's disposal
+        does not dispose a RunspacePool held in one of its variables, so each command that used `&`
+        used to leave a whole pool of runspaces behind in a long-lived host). Returns $true when a
+        pool existed.
+    #>
+    foreach ($job in @($script:BashBgJobs)) {
+        try { if (-not $job.AsyncResult.IsCompleted) { $job.PowerShell.Stop() } } catch { }
+        try { $job.PowerShell.Dispose() } catch { }
+        $job.Done = $true
+    }
+    $script:BashBgJobs.Clear()
+    $had = $null -ne $script:BashBgPool
+    if ($had) {
+        try { $script:BashBgPool.Dispose() } catch { }
+        $script:BashBgPool = $null
+    }
+    return $had
+}
+
+# Import-Module / Remove-Module (a plain pwsh session): leave no job pool behind when the module goes away.
+try {
+    if ($null -ne $ExecutionContext.SessionState.Module) {
+        $ExecutionContext.SessionState.Module.OnRemove = { Remove-BashBgState | Out-Null }
+    }
+} catch { }
+
 $global:BashStartTime = [DateTime]::UtcNow
 $__bashVer = try { $MyInvocation.MyCommand.Module?.Version ?? [version]'0.8.0' } catch { [version]'0.8.0' }
 # The real ps-bash module version (distinct from the emulated $BASH_VERSION above). Binary cmdlets
@@ -2505,6 +2551,7 @@ function Invoke-BashBackground {
     # RC-2: run the background command as a PowerShell pipeline against a pooled,
     # isolated runspace instead of spawning a fresh pwsh process. This eliminates
     # the ~1-3s pwsh cold start per `&` and the WaitForExit hang in `wait`.
+    if ($script:BashBgJobs.Count -ge $script:BashBgMaxJobs) { Remove-BashBgFinished }
     $pool = Get-BashBgRunspacePool
     $ps = [powershell]::Create()
     $ps.RunspacePool = $pool
@@ -2599,6 +2646,10 @@ function Invoke-BashJobs {
         New-BashObject -BashText "[$i]`t$status`t$($job.Id)`tbash-bg`n"
         $i++
     }
+
+    # bash reports a finished job once and then forgets it. Without this a Done job (its PowerShell
+    # instance and buffered output) stayed in the table until a `wait` — forever, if none came.
+    Remove-BashBgFinished
 }
 
 function Invoke-BashFg {

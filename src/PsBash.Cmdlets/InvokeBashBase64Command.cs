@@ -22,10 +22,11 @@ namespace PsBash.Cmdlets;
 /// materialized as one array. For decoding, base64 characters are consumed
 /// incrementally while whitespace is ignored, matching
 /// <see cref="Convert.FromBase64String(string)"/>.</item>
-/// <item><b>Pipeline mode</b> — pipeline items' <c>BashText</c> values are
-/// joined with <c>\n</c> separators plus a trailing <c>\n</c> if absent.
-/// For encoding, the joined text is UTF-8 encoded and base64'd. For decoding,
-/// the joined text is whitespace-trimmed and base64-decoded.</item>
+/// <item><b>Pipeline mode</b> — the record byte stream (each item's <c>BashText</c>
+/// plus a boundary <c>\n</c> unless unterminated) is consumed RECORD BY RECORD in
+/// <c>ProcessRecord</c>: encoding feeds <see cref="Base64LineEncoder"/> (wrapped lines
+/// are emitted as they fill), decoding feeds <see cref="Base64StreamDecoder"/> (decoded
+/// bytes become records as they arrive). Nothing but a carry and one line is retained.</item>
 /// </list>
 ///
 /// Encoded output is wrapped at <c>-w N</c> columns by joining wrap-sized
@@ -169,14 +170,102 @@ public sealed class InvokeBashBase64Command : PSCmdlet
     [Parameter(ValueFromPipeline = true)]
     public PSObject? InputObject { get; set; }
 
-    private readonly List<PSObject> _pipeline = new();
+    // ---- stdin pipeline (streamed): each record's bytes are encoded / decoded as it arrives, so
+    // retained memory is a 0-2 byte carry plus one output line, not the input (it used to be
+    // RecordStreamText joined string + byte copy + the output string = 3-5x the input).
+    private bool _planned, _streamable, _failed;
+    private RecordByteEncoder? _recordBytes;
+    private Base64LineEncoder? _encoder;
+    private Base64StreamDecoder? _decoder;
+    private ByteRecordEmitter? _decodedRecords;
+
+    /// <summary>Records fed to the stdin stream (test seam; the stream itself retains none of them).</summary>
+    internal int StreamedRecords { get; private set; }
 
     protected override void ProcessRecord()
     {
-        if (InputObject != null)
+        if (InputObject is null) return;
+        if (!_planned)
         {
-            _pipeline.Add(InputObject);
+            _planned = true;
+            var args = ArgsWithDecoys();
+            var plan = Plan(args);
+            // Only a plain stdin run streams; help / version / errors / a file operand leave the
+            // pipeline unread (EndProcessing handles them exactly as before).
+            _streamable = !plan.Parsed.HasError && plan.Error is null
+                          && !plan.Parsed.Has(OptSpecSet.HelpId) && !plan.Parsed.Has(OptSpecSet.VersionId)
+                          && Array.IndexOf(args, "--help") < 0
+                          && (plan.Operands.Count == 0 || plan.Operands[0] == "-");
+            if (_streamable)
+            {
+                _recordBytes = new RecordByteEncoder();
+                if (plan.Decode)
+                {
+                    _decodedRecords = new ByteRecordEmitter(WriteObject);
+                    _decoder = new Base64StreamDecoder(plan.IgnoreGarbage, _decodedRecords.Append);
+                }
+                else
+                {
+                    _encoder = new Base64LineEncoder(plan.Wrap, WriteObject);
+                }
+            }
         }
+        if (!_streamable || _failed) return;
+
+        StreamedRecords++;
+        try
+        {
+            if (_decoder is not null)
+            {
+                string text = BashRuntime.GetBashText(InputObject);
+                _decoder.Append(text);
+                _decoder.Append("\n");
+            }
+            else
+            {
+                _recordBytes!.Encode(InputObject, _encoder!.Append);
+            }
+        }
+        catch (FormatException ex)
+        {
+            _failed = true;
+            FileSystemHelpers.WriteBashError(this, $"base64: invalid input: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// The stdin trailer: flush the encoder / decoder. Returns false when no pipeline input was
+    /// streamed (the caller falls through to its "nothing to do" path).
+    /// </summary>
+    private bool FinishStdinStream()
+    {
+        if (!_streamable || StreamedRecords == 0) return false;
+        if (_failed)
+        {
+            // Like GNU, what decoded before the bad character is still written.
+            _decodedRecords?.Finish();
+            FileSystemHelpers.SetLastExitCode(this, 1);
+            return true;
+        }
+        try
+        {
+            if (_decoder is not null)
+            {
+                // Trailing whitespace is trimmed by the decoder; the final partial quartet is validated here.
+                try { _decoder.Finish(); }
+                finally { _decodedRecords!.Finish(); }
+            }
+            else
+            {
+                _recordBytes!.Finish(_encoder!.Append);
+                _encoder.Finish();
+            }
+        }
+        catch (FormatException ex)
+        {
+            FileSystemHelpers.WriteBashError(this, $"base64: invalid input: {ex.Message}");
+        }
+        return true;
     }
 
     protected override void EndProcessing()
@@ -252,35 +341,10 @@ public sealed class InvokeBashBase64Command : PSCmdlet
             }
         }
 
-        if (_pipeline.Count == 0)
-        {
-            // No operand, no pipeline -> oracle returns nothing.
-            return;
-        }
-
-        // The exact byte stream the upstream wrote (base64 is byte-oriented): a missing final
-        // newline stays missing, so `printf 'b\na' | base64` is `Ygph`, not `YgphCg==`.
-        string pipelineText = BashRuntime.RecordStreamText(_pipeline.Cast<object>());
-
-        if (decode)
-        {
-            string output;
-            try
-            {
-                output = DecodeBase64TextToOutput(pipelineText.Trim(), ignoreGarbage);
-            }
-            catch (FormatException ex)
-            {
-                FileSystemHelpers.WriteBashError(this, $"base64: invalid input: {ex.Message}");
-                return;
-            }
-            WriteDecoded(output);
-        }
-        else
-        {
-            string output = EncodeBytesToBase64String(RawBytes.GetBytes(pipelineText), wrapCol);
-            WriteEncoded(output, wrapCol);
-        }
+        // The pipeline was consumed record by record in ProcessRecord (the exact byte stream the
+        // upstream wrote — base64 is byte-oriented: a missing final newline stays missing, so
+        // `printf 'b\na' | base64` is `Ygph`, not `YgphCg==`). No operand, no pipeline -> nothing.
+        FinishStdinStream();
     }
 
     // base64 is a TRANSFORMER: one fresh text record carrying exactly GNU's bytes.
@@ -301,12 +365,6 @@ public sealed class InvokeBashBase64Command : PSCmdlet
     private static string EncodeFileToBase64String(string path, int wrapCol)
     {
         using var stream = BashFileSystem.OpenRead(path);
-        return EncodeByteStream(stream, wrapCol);
-    }
-
-    private static string EncodeBytesToBase64String(byte[] bytes, int wrapCol)
-    {
-        using var stream = new MemoryStream(bytes);
         return EncodeByteStream(stream, wrapCol);
     }
 
@@ -397,21 +455,6 @@ public sealed class InvokeBashBase64Command : PSCmdlet
         }
 
         return DecodeBytesToOutput(decoded.GetBuffer(), (int)decoded.Length);
-    }
-
-    private static string DecodeBase64TextToOutput(string text, bool ignoreGarbage)
-    {
-        if (ignoreGarbage)
-        {
-            var sb = new StringBuilder(text.Length);
-            foreach (char ch in text)
-            {
-                if (IsBase64Char(ch)) sb.Append(ch);
-            }
-            text = sb.ToString();
-        }
-        byte[] decoded = Convert.FromBase64String(text);
-        return DecodeBytesToOutput(decoded, decoded.Length);
     }
 
     /// <summary>True for a standard base64 alphabet char (incl. <c>=</c> padding).</summary>

@@ -150,13 +150,14 @@ public class InvokeBashBase64CommandTests : IClassFixture<SharedPwshFixture>, ID
         // specific by oracle design), so we strip CR/LF and check the chunks.
         var payload = new string('A', 30);
         var lines = RunLines($"'{payload}' | Invoke-BashBase64 -w 10");
-        Assert.Single(lines);
-        // BashText embeds the wrap lines as a single string with newline-
-        // separated chunks. After normalization, each non-empty chunk must
-        // be <= 10 chars.
-        var chunks = lines[0]
-            .Replace("\r\n", "\n")
-            .Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        // A piped input is encoded as a STREAM: each wrapped line is its own record, emitted as it
+        // fills (it used to be one multi-line object built from the joined input; the rendered bytes
+        // are identical). Every line must be <= 10 chars and the lines concatenate to the encoding.
+        Assert.True(lines.Length >= 2, $"expected one record per wrapped line, got {lines.Length}");
+        var chunks = lines
+            .SelectMany(l => l.Replace("\r\n", "\n").Split('\n', StringSplitOptions.RemoveEmptyEntries))
+            .ToArray();
+        Assert.Equal(Convert.ToBase64String(Encoding.ASCII.GetBytes(payload + "\n")), string.Concat(chunks));
         Assert.True(chunks.Length >= 2, $"expected multi-chunk wrap, got {chunks.Length}");
         foreach (var chunk in chunks)
         {

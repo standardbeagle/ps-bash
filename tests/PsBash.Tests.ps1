@@ -6927,6 +6927,27 @@ Describe 'Invoke-BashJobs' {
             $script:BashBgPids.Clear()
         }
 
+        It 'reports a finished job once and then forgets it (bash does not list a reported Done job again)' {
+            $script:BashBgPids.Clear()
+            Invoke-BashBackground { Write-Output 'quick' }
+            Start-Sleep -Seconds 2
+            $first = @(Invoke-BashJobs)
+            (($first | ForEach-Object { "$($_.BashText)" }) -join '') | Should -Match 'Done'
+            $script:BashBgPids.Count | Should -Be 0
+            @(Invoke-BashJobs).Count | Should -Be 0
+        }
+
+        It 'Remove-BashBgState stops every job and disposes the job RunspacePool' {
+            Invoke-BashBackground { Start-Sleep -Seconds 30 }
+            $script:BashBgPool | Should -Not -BeNullOrEmpty
+            $pool = $script:BashBgPool
+            (Remove-BashBgState) | Should -BeTrue
+            $script:BashBgPool | Should -BeNullOrEmpty
+            $script:BashBgPids.Count | Should -Be 0
+            "$($pool.RunspacePoolStateInfo.State)" | Should -Be 'Closed'
+            (Remove-BashBgState) | Should -BeFalse
+        }
+
         It 'returns help with --help' {
             $result = Invoke-BashJobs --help
             $result.BashText | Should -Match 'Usage: jobs'
