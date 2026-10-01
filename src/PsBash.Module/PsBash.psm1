@@ -179,23 +179,18 @@ function Invoke-ProcessSub {
     } catch { }
 
     $tmp = [System.IO.Path]::Combine($subDir, [System.IO.Path]::GetRandomFileName())
+    $writer = $null
     try {
-        $output = & $Command
-        $sb = [System.Text.StringBuilder]::new()
-        foreach ($item in $output) {
-            [void]$sb.Append((Get-BashText -InputObject $item))
-            # Mirror the worker serializer: add \n unless the object signals partial-line output
-            $isPartial = $null -ne $item.PSObject -and
-                         $null -ne $item.PSObject.Properties['NoTrailingNewline'] -and
-                         [bool]$item.NoTrailingNewline
-            if (-not $isPartial) {
-                [void]$sb.Append("`n")
-            }
-        }
-        [PsBash.Cmdlets.BashRuntime]::WriteRawText($tmp, $sb.ToString())
+        # STREAM the producer into the file (see ProcessSubFileWriter): exact bytes, \n boundary unless the
+        # record is unterminated; the consumer still starts after the producer finishes.
+        $writer = [PsBash.Cmdlets.ProcessSubFileWriter]::new($tmp)
+        & $Command | ForEach-Object { $writer.Add($_) }
+        $writer.Dispose()
+        $writer = $null
         return $tmp
     }
     catch {
+        if ($null -ne $writer) { $writer.Dispose() }
         Remove-Item -Path $tmp -Force -ErrorAction SilentlyContinue
         throw
     }
