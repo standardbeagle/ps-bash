@@ -58,12 +58,11 @@ public sealed class InvokeBashSplitCommand : PSCmdlet
         "--filter",
         "--verbose",
         "-e", "--elide-empty-files",
-        "-x", "--hex-suffixes",
         "-u", "--unbuffered",
     };
 
     private const string OptLines = "lines", OptBytes = "bytes", OptSuffixLen = "suffixlen",
-        OptNumeric = "numeric", OptAddSuffix = "addsuffix";
+        OptNumeric = "numeric", OptDecimalShort = "decimalshort", OptHex = "hex", OptAddSuffix = "addsuffix";
 
     /// <summary>
     /// split's option surface (GNU coreutils 9.4). Implemented: -l/--lines, -b/--bytes (GNU SIZE
@@ -76,7 +75,8 @@ public sealed class InvokeBashSplitCommand : PSCmdlet
             new OptSpec(OptLines, 'l', "lines", OptKind.Value),
             new OptSpec(OptBytes, 'b', "bytes", OptKind.Value),
             new OptSpec(OptSuffixLen, 'a', "suffix-length", OptKind.Value),
-            new OptSpec(OptNumeric, 'd', null),
+            new OptSpec(OptDecimalShort, 'd', null),
+            new OptSpec(OptHex, 'x', "hex-suffixes", OptKind.OptionalValue),
             new OptSpec(OptNumeric, '\0', "numeric-suffixes", OptKind.OptionalValue),
             new OptSpec(OptAddSuffix, '\0', "additional-suffix", OptKind.Value),
         },
@@ -97,6 +97,12 @@ public sealed class InvokeBashSplitCommand : PSCmdlet
         public long? Bytes;
         public int SuffixLength = 2;
         public bool Numeric;
+
+        /// <summary>
+        /// <c>-x</c> / <c>--hex-suffixes[=FROM]</c>: hexadecimal suffix. GNU 9.4 quirk (oracle): the SHORT <c>-d</c>
+        /// wins over <c>-x</c> in either order, while the long <c>--numeric-suffixes</c> does not.
+        /// </summary>
+        public bool Hex;
         public int NumericStart;
 
         /// <summary>The <c>--numeric-suffixes=FROM</c> digits as typed (null = none given).</summary>
@@ -126,6 +132,7 @@ public sealed class InvokeBashSplitCommand : PSCmdlet
         if (s.Parsed.HasError) return s;
 
         bool suffixGiven = false;
+        bool hexSeen = false, decimalShortSeen = false;
         foreach (var tok in s.Parsed.Tokens)
         {
             if (tok.Kind != ArgTokKind.Option) continue;
@@ -146,21 +153,36 @@ public sealed class InvokeBashSplitCommand : PSCmdlet
                     if (len < 1) { s.SuffixLength = 2; suffixGiven = false; }   // -a 0 = auto length
                     else { s.SuffixLength = len; suffixGiven = true; }
                     break;
-                case OptNumeric:
+                case OptDecimalShort:
                     s.Numeric = true;
+                    decimalShortSeen = true;
+                    break;
+                case OptNumeric:
+                case OptHex:
+                {
+                    bool isHex = tok.OptId == OptHex;
+                    if (isHex) hexSeen = true; else s.Numeric = true;
                     if (tok.Value is { Length: > 0 } from)
                     {
-                        if (!TryDigits(from, out int start)) { s.Error = $"split: '{from}': invalid start value for numerical suffix\nTry 'split --help' for more information."; return s; }
-                        s.NumericStart = start;
+                        // Hex digits are lowercase only (oracle: `--hex-suffixes=1F` is invalid).
+                        if (isHex ? !TryHexDigits(from, out int hstart) : !TryDigits(from, out hstart))
+                        {
+                            s.Error = $"split: '{from}': invalid start value for {(isHex ? "hexadecimal" : "numerical")} suffix\nTry 'split --help' for more information.";
+                            return s;
+                        }
+                        s.NumericStart = hstart;
                         s.NumericFromText = from;
                     }
                     break;
+                }
                 case OptAddSuffix:
                     s.AdditionalSuffix = v;
                     break;
             }
         }
 
+        s.Hex = hexSeen && !decimalShortSeen;
+        if (s.Hex) s.Numeric = true;
         if (s.NumericFromText is { } fromText)
         {
             s.SuffixAuto = false;   // FROM fixes the length (GNU: x05..x99, then exhausted)
@@ -194,6 +216,21 @@ public sealed class InvokeBashSplitCommand : PSCmdlet
         {
             if (c < '0' || c > '9') return false;
             v = Math.Min(v * 10 + (c - '0'), int.MaxValue);
+        }
+        n = (int)v;
+        return true;
+    }
+
+    private static bool TryHexDigits(string s, out int n)
+    {
+        n = 0;
+        if (s.Length == 0) return false;
+        long v = 0;
+        foreach (char c in s)
+        {
+            int d = c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : -1;
+            if (d < 0) return false;
+            v = Math.Min(v * 16 + d, int.MaxValue);
         }
         n = (int)v;
         return true;
@@ -271,7 +308,7 @@ public sealed class InvokeBashSplitCommand : PSCmdlet
         long? byteSize = plan.Bytes;
         string additionalSuffix = plan.AdditionalSuffix;
         bool numericSuffix = plan.Numeric;
-        _suffixes = new SplitSuffixSequence(numericSuffix, plan.SuffixLength, plan.SuffixAuto, plan.NumericFromText);
+        _suffixes = new SplitSuffixSequence(numericSuffix, plan.SuffixLength, plan.SuffixAuto, plan.NumericFromText, plan.Hex);
         int suffixLength = plan.SuffixLength;
         var operands = plan.Operands;
         IEnumerable<string> lines;

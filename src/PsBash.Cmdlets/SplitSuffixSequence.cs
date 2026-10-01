@@ -21,6 +21,7 @@ internal sealed class SplitSuffixSequence
 {
     private const string Letters = "abcdefghijklmnopqrstuvwxyz";
     private const string Digits = "0123456789";
+    private const string HexDigits = "0123456789abcdef";
 
     private readonly string _alphabet;
     private readonly bool _auto;
@@ -30,19 +31,20 @@ internal sealed class SplitSuffixSequence
     private bool _exhausted;
 
     /// <param name="numeric">Digits instead of letters.</param>
+    /// <param name="hex">Lowercase hexadecimal digits (<c>-x</c>); the auto marker symbol is <c>f</c> (oracle: <c>xef</c> is followed by <c>xf000</c>).</param>
     /// <param name="length">Suffix length (fixed mode) / starting counter length (auto mode, 2).</param>
     /// <param name="auto">Grow instead of running out.</param>
     /// <param name="from">Decimal start value (numeric mode), right-aligned into the suffix; null = 0.</param>
-    public SplitSuffixSequence(bool numeric, int length, bool auto, string? from = null)
+    public SplitSuffixSequence(bool numeric, int length, bool auto, string? from = null, bool hex = false)
     {
-        _alphabet = numeric ? Digits : Letters;
+        _alphabet = hex ? HexDigits : numeric ? Digits : Letters;
         _auto = auto;
         _counter = new int[Math.Max(length, 1)];
-        if (numeric && from is { Length: > 0 })
+        if ((numeric || hex) && from is { Length: > 0 })
         {
             // Right-align the FROM digits (the caller already checked from.Length <= length).
             for (int i = 0; i < from.Length; i++)
-                _counter[_counter.Length - from.Length + i] = from[i] - '0';
+                _counter[_counter.Length - from.Length + i] = from[i] <= '9' ? from[i] - '0' : from[i] - 'a' + 10;
         }
     }
 

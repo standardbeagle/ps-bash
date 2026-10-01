@@ -202,6 +202,93 @@ public class RgBehaviorTests : IClassFixture<SharedPwshFixture>, IDisposable
         Assert.Equal(new[] { "g.txt", "h.txt" }, Run(Tty($"Invoke-BashRg '-l' c3 {_g} {h}")).AssertSuccess().Lines.Select(l => Name(l)).ToArray());
     }
 
+    // ---- context output (oracle: ripgrep 14.1.0, pipe and `script` terminal) ----
+    // f.txt = a1 b2 match3 c4 d5 e6 match7 f8 ; g.txt = x match y
+
+    private const string CtxF = "a1\nb2\nmatch3\nc4\nd5\ne6\nmatch7\nf8\n";
+
+    [Fact]
+    public void Context_UsesDashForContextLines_AndDividesGroupsWithDoubleDash()
+    {
+        var f = F("f.txt", CtxF);
+        Assert.Equal(new[] { "b2", "match3", "c4", "--", "e6", "match7", "f8" },
+            Run($"Invoke-BashRg '-C1' match {f}").AssertSuccess().Lines);
+        Assert.Equal(new[] { "2-b2", "3:match3", "4-c4", "--", "6-e6", "7:match7", "8-f8" },
+            Run($"Invoke-BashRg '-n' '-C1' match {f}").AssertSuccess().Lines);
+        Assert.Equal(new[] { "a1", "b2", "match3", "--", "d5", "e6", "match7" },   // -B2: gap at c4
+            Run($"Invoke-BashRg '-B2' match {f}").AssertSuccess().Lines);
+    }
+
+    [Fact]
+    public void Context_ZeroLength_PrintsNoSeparators()
+    {
+        var f = F("f.txt", CtxF);
+        Assert.Equal(new[] { "match3", "match7" }, Run($"Invoke-BashRg '-A0' match {f}").AssertSuccess().Lines);
+        Assert.Equal(new[] { "match3", "match7" }, Run($"Invoke-BashRg '-C0' match {f}").AssertSuccess().Lines);
+    }
+
+    [Fact]
+    public void Context_MultiFile_PathDashLineDashText_AndSeparatorBetweenFiles()
+    {
+        var f = F("f.txt", CtxF);
+        var g = F("g.txt", "x\nmatch\ny\n");
+        var lines = Run($"Invoke-BashRg '-n' '-C1' match {f} {g}").AssertSuccess().Lines.Select(Name).ToArray();
+        Assert.Equal(new[]
+        {
+            "f.txt-2-b2", "f.txt:3:match3", "f.txt-4-c4", "--", "f.txt-6-e6", "f.txt:7:match7", "f.txt-8-f8",
+            "--", "g.txt-1-x", "g.txt:2:match", "g.txt-3-y",
+        }, lines);
+        var noNum = Run($"Invoke-BashRg '-C1' match {f} {g}").AssertSuccess().Lines.Select(Name).ToArray();
+        Assert.Equal("f.txt-b2", noNum[0]);
+        Assert.Equal("f.txt:match3", noNum[1]);
+    }
+
+    [Fact]
+    public void Context_Terminal_HeadingLayout_BlankLineBetweenFiles_DoubleDashInsideAFile()
+    {
+        var f = F("f.txt", CtxF);
+        var g = F("g.txt", "x\nmatch\ny\n");
+        var lines = Run(Tty($"Invoke-BashRg '-C1' match {f} {g}")).AssertSuccess().Lines.Select(Name).ToArray();
+        Assert.Equal(new[]
+        {
+            "f.txt", "2-b2", "3:match3", "4-c4", "--", "6-e6", "7:match7", "8-f8", "",
+            "g.txt", "1-x", "2:match", "3-y",
+        }, lines);
+        // single file on a terminal: line numbers on, no path
+        Assert.Equal(new[] { "2-b2", "3:match3", "4-c4", "--", "6-e6", "7:match7", "8-f8" },
+            Run(Tty($"Invoke-BashRg '-C1' match {f}")).AssertSuccess().Lines);
+        // --no-heading puts the path back on every line
+        var nh = Run(Tty($"Invoke-BashRg '--no-heading' '-C1' match {f} {g}")).AssertSuccess().Lines.Select(Name).ToArray();
+        Assert.Equal("f.txt-2-b2", nh[0]);
+        Assert.Equal("--", nh[7]);
+        Assert.Equal("g.txt-1-x", nh[8]);
+    }
+
+    [Fact]
+    public void Context_OnlyMatching_PrintsContextLinesWhole()
+    {
+        var f = F("f.txt", CtxF);
+        Assert.Equal(new[] { "match", "c4", "--", "match", "f8" }, Run($"Invoke-BashRg '-o' '-A1' match {f}").AssertSuccess().Lines);
+    }
+
+    [Fact]
+    public void Context_Invert_MarksTheSelectedNonMatchingLines()
+    {
+        var f = F("f.txt", CtxF);
+        Assert.Equal(new[] { "3:match3", "4-c4", "--", "7:match7", "8-f8" },
+            Run($"Invoke-BashRg '-n' '-v' '-A1' '[a-f][0-9]' {f}").AssertSuccess().Lines);
+    }
+
+    [Fact]
+    public void Context_Stdin_AppliesToThePipeline()
+    {
+        const string feed = "'a1','b2','match3','c4','d5','e6','match7','f8'";
+        Assert.Equal(new[] { "b2", "match3", "c4", "--", "e6", "match7", "f8" },
+            Run($"{feed} | Invoke-BashRg '-C1' match").AssertSuccess().Lines);
+        Assert.Equal(new[] { "2-b2", "3:match3", "4-c4", "--", "6-e6", "7:match7", "8-f8" },
+            Run($"{feed} | Invoke-BashRg '-n' '-C1' match").AssertSuccess().Lines);
+        Run($"{feed} | Invoke-BashRg '-C1' nomatch").AssertFailed(1);
+    }
     // ---- direct PowerShell calls ----
 
     [Fact]

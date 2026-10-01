@@ -414,7 +414,10 @@ public sealed class InvokeBashRgCommand : PSCmdlet
         // --- Pipeline mode ---
         if (_pipeline.Count > 0 && fileOperands.Count == 0)
         {
-            RunPipelineMode(regex, invertMatch, countOnly, onlyMatching, plan.LineNumberMode == true);
+            if (!countOnly && (beforeContext > 0 || afterContext > 0))
+                RunPipelineContextMode(regex, invertMatch, onlyMatching, plan.LineNumberMode == true, beforeContext, afterContext);
+            else
+                RunPipelineMode(regex, invertMatch, countOnly, onlyMatching, plan.LineNumberMode == true);
             return;
         }
 
@@ -518,6 +521,58 @@ public sealed class InvokeBashRgCommand : PSCmdlet
     }
 
     private static bool NativeRgPassthroughEnabled() => BashRuntime.IsHostConfigTruthy("PSBASH_RG_NATIVE");
+
+    /// <summary>
+    /// Stdin search with <c>-A/-B/-C</c> (ripgrep 14.1): the lines around a match print with <c>-</c> where a
+    /// match has <c>:</c> (<c>2-b2</c> / <c>3:match</c> under <c>-n</c>), and non-adjacent groups are divided by
+    /// <c>--</c>. Context lines print whole even under <c>-o</c>. (Before this the pipeline form ignored context.)
+    /// </summary>
+    private void RunPipelineContextMode(Regex regex, bool invertMatch, bool onlyMatching, bool lineNumbers,
+        int beforeContext, int afterContext)
+    {
+        var lines = new List<(string Text, object? Item)>();
+        foreach (var item in _pipeline)
+        {
+            string trimmed = BashRuntime.GetBashText(item).TrimEnd('\n');
+            if (trimmed.Contains('\n'))
+                foreach (var sub in trimmed.Split('\n')) lines.Add((sub, null));
+            else
+                lines.Add((trimmed, item));
+        }
+
+        var isMatch = new bool[lines.Count];
+        int matchCount = 0;
+        var emit = new SortedSet<int>();
+        for (int i = 0; i < lines.Count; i++)
+        {
+            bool m = regex.IsMatch(lines[i].Text);
+            if (invertMatch) m = !m;
+            isMatch[i] = m;
+            if (!m) continue;
+            matchCount++;
+            for (int j = Math.Max(0, i - beforeContext); j <= Math.Min(lines.Count - 1, i + afterContext); j++) emit.Add(j);
+        }
+
+        int prev = -2;
+        foreach (int li in emit)
+        {
+            if (prev >= 0 && li != prev + 1) WriteObject(BashRuntime.NewBashObject("--"));
+            prev = li;
+            var (text, item) = lines[li];
+            string sep = isMatch[li] ? ":" : "-";
+            string pfx = lineNumbers ? (li + 1) + sep : "";
+            if (onlyMatching && isMatch[li])
+            {
+                foreach (Match m in regex.Matches(text)) WriteObject(BashRuntime.NewBashObject(pfx + m.Value));
+            }
+            else if (!lineNumbers && item is not null)
+                WriteObject(BashRuntime.PassTerminated(item));
+            else
+                WriteObject(BashRuntime.NewBashObject(pfx + text));
+        }
+
+        FileSystemHelpers.SetLastExitCode(this, matchCount == 0 ? 1 : 0);
+    }
 
     private void RunPipelineMode(Regex regex, bool invertMatch, bool countOnly, bool onlyMatching, bool lineNumbers)
     {
@@ -668,6 +723,7 @@ public sealed class InvokeBashRgCommand : PSCmdlet
         bool useHeading = heading && multipleFiles;
         bool prefixPath = multipleFiles && !useHeading;
         bool anyHeading = false;
+        bool printedAny = false;
 
         foreach (var source in sources)
         foreach (var filePath in source)
@@ -704,30 +760,44 @@ public sealed class InvokeBashRgCommand : PSCmdlet
                 for (int li = start; li <= end; li++) emitLines.Add(li);
             }
 
+            // ripgrep context layout: `--` divides non-adjacent groups inside a file and (without
+            // headings) consecutive files; with headings a blank line + the path divides files instead.
+            // Nothing is divided without a context option (`-A0` / `-C0` print no separators).
+            bool contextOn = beforeContext > 0 || afterContext > 0;
             if (useHeading && emitLines.Count > 0)
             {
                 if (anyHeading) WriteObject(BashRuntime.NewBashObject(""));
                 WriteObject(BashRuntime.NewBashObject(filePath));
                 anyHeading = true;
             }
+            else if (contextOn && printedAny && emitLines.Count > 0)
+            {
+                WriteObject(BashRuntime.NewBashObject("--"));
+            }
+            if (emitLines.Count > 0) printedAny = true;
 
+            var matchSet = new HashSet<int>(matchIndices);
+            int prevLine = -2;
             foreach (var li in emitLines)
             {
+                if (contextOn && prevLine >= 0 && li != prevLine + 1) WriteObject(BashRuntime.NewBashObject("--"));
+                prevLine = li;
                 string line = lines[li];
                 int lineNum = li + 1;
+                bool isMatchLine = matchSet.Contains(li);
 
-                if (onlyMatching && matchIndices.Contains(li))
+                if (onlyMatching && isMatchLine)
                 {
                     foreach (Match m in regex.Matches(line))
                     {
                         string matchText = m.Value;
-                        string bashText = BuildBashText(filePath, lineNum, matchText, prefixPath, showLineNumbers);
+                        string bashText = BuildBashText(filePath, lineNum, matchText, prefixPath, showLineNumbers, isContext: false);
                         WriteObject(BuildRgMatch(filePath, lineNum, line, bashText));
                     }
                     continue;
                 }
 
-                string bt = BuildBashText(filePath, lineNum, line, prefixPath, showLineNumbers);
+                string bt = BuildBashText(filePath, lineNum, line, prefixPath, showLineNumbers, isContext: !isMatchLine);
                 WriteObject(BuildRgMatch(filePath, lineNum, line, bt));
             }
         }
@@ -797,11 +867,13 @@ public sealed class InvokeBashRgCommand : PSCmdlet
         }
     }
 
-    private static string BuildBashText(string filePath, int lineNum, string body, bool multipleFiles, bool showLineNumbers)
+    /// <summary>A match line separates its fields with <c>:</c>, a context line with <c>-</c> (ripgrep).</summary>
+    private static string BuildBashText(string filePath, int lineNum, string body, bool multipleFiles, bool showLineNumbers, bool isContext)
     {
-        if (multipleFiles && showLineNumbers) return $"{filePath}:{lineNum}:{body}";
-        if (multipleFiles) return $"{filePath}:{body}";
-        if (showLineNumbers) return $"{lineNum}:{body}";
+        char sep = isContext ? '-' : ':';
+        if (multipleFiles && showLineNumbers) return $"{filePath}{sep}{lineNum}{sep}{body}";
+        if (multipleFiles) return $"{filePath}{sep}{body}";
+        if (showLineNumbers) return $"{lineNum}{sep}{body}";
         return body;
     }
 
