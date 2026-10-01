@@ -343,6 +343,31 @@ public static class BashRuntime
     public static string NormalizeWindowsPath(string path)
         => OperatingSystem.IsWindows() ? PsBash.Core.WindowsPath.Normalize(path) : path;
 
+    // ---- Raw (escaped-byte) text I/O for the psm1 helpers --------------------------------------
+    // The psm1 cannot reliably resolve [PsBash.Core.RawBytes] (Transpiler.dll may not be loaded when a
+    // psm1 function runs, see NormalizeWindowsPath), so it reaches the codec through these.
+
+    /// <summary>The escaped-byte UTF-8 <see cref="System.Text.Encoding"/> (<see cref="PsBash.Core.RawBytes"/>).</summary>
+    public static System.Text.Encoding RawEncoding => PsBash.Core.RawBytes.Encoding;
+
+    /// <summary>Write (or append) <paramref name="text"/> as its exact bytes: markers back to single bytes.</summary>
+    public static void WriteRawText(string path, string text, bool append = false)
+    {
+        var bytes = PsBash.Core.RawBytes.GetBytes(text);
+        if (append)
+        {
+            using var fs = new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite);
+            fs.Write(bytes, 0, bytes.Length);
+        }
+        else
+        {
+            File.WriteAllBytes(path, bytes);
+        }
+    }
+
+    /// <summary>Read a whole file as text: BOM-tolerant, invalid UTF-8 bytes as escaped-byte markers.</summary>
+    public static string ReadRawText(string path) => BashFileSystem.ReadAllTextRaw(path);
+
     /// <summary>
     /// Builds a BashObject, reproducing the psm1 <c>New-BashObject</c> contract:
     /// <list type="bullet">
@@ -870,6 +895,10 @@ public static class BashRuntime
         startInfo.UseShellExecute = false;
         startInfo.RedirectStandardOutput = true;
         startInfo.RedirectStandardError = true;
+        // Decode the child's output byte-faithfully: valid UTF-8 normally, every invalid byte as an
+        // escaped-byte marker (RawBytes), so a native tool's binary output survives the string pipeline.
+        startInfo.StandardOutputEncoding ??= PsBash.Core.RawBytes.Encoding;
+        startInfo.StandardErrorEncoding ??= PsBash.Core.RawBytes.Encoding;
         // Redirect stdin so we can close it immediately (below): a non-interactive
         // capture must never inherit a live stdin that a child could block reading
         // (e.g. ps-bash's no-args REPL, or `sort`/`cat` with no file operand).

@@ -1,3 +1,4 @@
+using PsBash.Core;
 using System.Management.Automation;
 using System.Reflection;
 using System.Text;
@@ -302,9 +303,9 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
             }
             // This record's share of the byte stream (BashText + terminator unless exact), cut at
             // the bytes still owed; the slice is a TRANSFORMER output: fresh text, exact bytes.
-            byte[] recBytes = Encoding.UTF8.GetBytes(BashRuntime.RecordStreamText(new object[] { InputObject }));
+            byte[] recBytes = RawBytes.GetBytes(BashRuntime.RecordStreamText(new object[] { InputObject }));
             int take = (int)Math.Min(_bytesRemaining, recBytes.Length);
-            foreach (var rec in BashRuntime.ByteSliceRecords(Encoding.UTF8.GetString(recBytes, 0, take)))
+            foreach (var rec in BashRuntime.ByteSliceRecords(RawBytes.GetString(recBytes, 0, take)))
                 WriteObject(rec);
             _bytesRemaining -= take;
             if (_bytesRemaining <= 0) StopUpstream();
@@ -398,13 +399,13 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
         {
             if (byteCount != null)
             {
-                byte[] bytes = Encoding.UTF8.GetBytes(BashRuntime.RecordStreamText(_pipeline));
+                byte[] bytes = RawBytes.GetBytes(BashRuntime.RecordStreamText(_pipeline));
                 // GNU head: -c N takes the first N bytes; -c -K takes all but the last K.
                 int take = byteCount.Value >= 0
                     ? Math.Min(byteCount.Value, bytes.Length)
                     : Math.Max(0, bytes.Length + byteCount.Value);
                 // Byte slice: a TRANSFORMER — fresh text, exact bytes (no record boundary added).
-                foreach (var rec in BashRuntime.ByteSliceRecords(Encoding.UTF8.GetString(bytes, 0, take)))
+                foreach (var rec in BashRuntime.ByteSliceRecords(RawBytes.GetString(bytes, 0, take)))
                     WriteObject(rec);
                 return;
             }
@@ -460,7 +461,7 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
                         // whole file, so read it fully and drop the trailing K.
                         byte[] all = BashFileSystem.ReadAllBytes(filePath);
                         int take = Math.Max(0, all.Length + byteCount.Value);
-                        foreach (var rec in BashRuntime.ByteSliceRecords(Encoding.UTF8.GetString(all, 0, take)))
+                        foreach (var rec in BashRuntime.ByteSliceRecords(RawBytes.GetString(all, 0, take)))
                             WriteObject(rec);
                         continue;
                     }
@@ -479,7 +480,7 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
                         remaining -= n;
                     }
                     foreach (var rec in BashRuntime.ByteSliceRecords(
-                                 Encoding.UTF8.GetString(ms.GetBuffer(), 0, (int)ms.Length)))
+                                 RawBytes.GetString(ms.GetBuffer(), 0, (int)ms.Length)))
                         WriteObject(rec);
                 }
                 catch (Exception ex)
@@ -600,7 +601,7 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
             fs.Seek(0, SeekOrigin.Begin);
         }
 
-        return new StreamReader(fs, new UTF8Encoding(false));
+        return new StreamReader(fs, RawBytes.Encoding, detectEncodingFromByteOrderMarks: false);
     }
 
     /// <summary>

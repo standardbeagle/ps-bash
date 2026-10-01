@@ -16,7 +16,8 @@ namespace PsBash.Cmdlets;
 ///
 /// <para><b>Reads go through <see cref="BashFileSystem.ReadTextLines"/></b> — the same
 /// call the cmdlet's fast path makes (streaming, BOM-aware UTF-8, CRLF→LF, no spurious
-/// trailing empty line). Never a raw <c>File.ReadAllText</c>/<c>StreamReader</c>
+/// trailing empty line; a BINARY file — NUL in the first 8 KB — is read byte-exactly via
+/// <c>exactIfBinary</c>, invalid UTF-8 bytes as escaped-byte markers). Never a raw <c>File.ReadAllText</c>/<c>StreamReader</c>
 /// (`.claude/rules/os-interface.md`): re-deriving BOM or CRLF handling here would
 /// silently corrupt the first line of every file in the fused lane.</para>
 ///
@@ -187,7 +188,7 @@ internal sealed class CatFileStage : ILineStreamStage
     {
         foreach (var path in _paths)
         {
-            foreach (var line in BashFileSystem.ReadTextLines(path))
+            foreach (var line in BashFileSystem.ReadTextLines(path, exactIfBinary: true))
             {
                 yield return line.Text;
             }

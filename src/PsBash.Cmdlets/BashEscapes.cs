@@ -158,7 +158,10 @@ public static class BashEscapes
                 {
                     int j = i + 1, val = 0, cnt = 0;
                     while (j < spec.Length && cnt < 3 && spec[j] is >= '0' and <= '7') { val = val * 8 + (spec[j] - '0'); j++; cnt++; }
-                    items.Add(((char)(val & 0xFF), true));
+                    // \NNN names a BYTE: >= 0x80 is the escaped-byte marker (RawBytes), so it matches the
+                    // same byte in the (marker-decoded) input stream.
+                    int octByte = val & 0xFF;
+                    items.Add((octByte >= 0x80 ? RawBytes.ToMarker((byte)octByte) : (char)octByte, true));
                     i = j;
                     continue;
                 }

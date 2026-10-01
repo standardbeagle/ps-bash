@@ -276,8 +276,7 @@ public sealed class InvokeBashStringsCommand : PSCmdlet
             try
             {
                 using var fs = BashFileSystem.OpenRead(filePath);
-                using var reader = new StreamReader(
-                    fs, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+                using var reader = BashFileSystem.OpenRawReader(fs, leaveOpen: true);
                 var buffer = new char[16384];
                 int read;
                 while ((read = reader.Read(buffer, 0, buffer.Length)) > 0)

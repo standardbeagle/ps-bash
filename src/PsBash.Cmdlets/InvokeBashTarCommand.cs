@@ -522,7 +522,7 @@ public sealed class InvokeBashTarCommand : PSCmdlet
                 if (toStdout)
                 {
                     if (entry.DataStream == null) { continue; }
-                    using var sr = new StreamReader(entry.DataStream);
+                    using var sr = BashFileSystem.OpenRawReader(entry.DataStream, leaveOpen: true);
                     foreach (var o in BashRuntime.EmitBashLines(sr.ReadToEnd())) WriteObject(o);
                     continue;
                 }

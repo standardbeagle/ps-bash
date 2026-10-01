@@ -1,4 +1,5 @@
 using System.Text;
+using PsBash.Core;
 
 namespace PsBash.Cmdlets;
 
@@ -88,14 +89,18 @@ public static class BashFileSystem
     /// the old <c>File.ReadAllText(p).Replace("\r\n","\n").Split('\n')</c> path
     /// byte-for-byte — but without ever holding the whole file in memory.
     /// <para>
+    /// <paramref name="exact"/> reads byte-faithfully (no BOM sniffing, no CRLF rewrite);
+    /// <paramref name="exactIfBinary"/> does so only when the file is binary (NUL in the first 8 KB) —
+    /// what <c>cat</c> uses so a binary file copies byte for byte while a text file keeps the
+    /// long-standing "CRLF / BOM are transparent" policy of the line tools.
     /// When <paramref name="skipBinary"/> is true and the file is binary (NUL in
     /// first 8 KB), yields nothing. The file is opened (and any IO error thrown)
     /// only when enumeration starts; iterate inside the caller's try/catch.
     /// </para>
     /// </summary>
-    public static IEnumerable<string> ReadLines(string path, bool skipBinary = false)
+    public static IEnumerable<string> ReadLines(string path, bool skipBinary = false, bool exact = false, bool exactIfBinary = false)
     {
-        foreach (var line in ReadTextLines(path, skipBinary))
+        foreach (var line in ReadTextLines(path, skipBinary, exact, exactIfBinary))
         {
             yield return line.Text;
         }
@@ -107,20 +112,36 @@ public static class BashFileSystem
     /// no-newline marker affects downstream serialization. CRLF is normalized
     /// the same way <see cref="ReadLines"/> normalizes it.
     /// </summary>
-    public static IEnumerable<TextLine> ReadTextLines(string path, bool skipBinary = false)
+    public static IEnumerable<TextLine> ReadTextLines(string path, bool skipBinary = false, bool exact = false, bool exactIfBinary = false)
     {
         var fs = OpenRead(path);
-        return ReadTextLinesIterator(fs, skipBinary);
+        return ReadTextLinesIterator(fs, skipBinary, exact, exactIfBinary);
     }
 
-    private static IEnumerable<TextLine> ReadTextLinesIterator(FileStream fs, bool skipBinary)
+    /// <summary>
+    /// Decoder for byte-faithful text: <see cref="RawBytes"/> (valid UTF-8 normally, every invalid byte an
+    /// escaped-byte marker) with NO BOM sniffing — a UTF-8 BOM stays a U+FEFF character and a UTF-16 BOM
+    /// stays two (marker) bytes, exactly as bash's <c>cat</c> would copy them. <c>cat</c> (and anything
+    /// else whose output must equal its input byte for byte) reads through this; line tools use
+    /// <see cref="OpenDocumentReader"/>, which keeps the long-standing "BOM is transparent" policy.
+    /// </summary>
+    public static StreamReader OpenRawReader(Stream stream, bool leaveOpen = false)
+        => new(stream, RawBytes.Encoding, detectEncodingFromByteOrderMarks: false, bufferSize: 16384, leaveOpen: leaveOpen);
+
+    private static IEnumerable<TextLine> ReadTextLinesIterator(FileStream fs, bool skipBinary, bool exact, bool exactIfBinary)
     {
         using (fs)
         {
-            if (skipBinary && ProbeBinary(fs)) yield break;
+            // One probe serves both: skip a binary file (grep/rg) or read it byte-exactly (cat).
+            if (skipBinary || exactIfBinary)
+            {
+                bool binary = ProbeBinary(fs);
+                if (binary && skipBinary) yield break;
+                if (binary && exactIfBinary) exact = true;
+            }
 
-            using var reader = new StreamReader(
-                fs, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+            using var reader = exact ? OpenRawReader(fs, leaveOpen: true) : OpenDocumentReader(fs);
+            bool normalizeCrLf = !exact;
 
             // Scan each buffer chunk for '\n' and BULK-append the segment between
             // newlines (one Append per line, not per char — the per-char version
@@ -138,7 +159,7 @@ public static class BashFileSystem
                 {
                     if (buf[i] != '\n') continue;
                     sb.Append(buf, start, i - start);
-                    if (sb.Length > 0 && sb[sb.Length - 1] == '\r') sb.Length--;
+                    if (normalizeCrLf && sb.Length > 0 && sb[sb.Length - 1] == '\r') sb.Length--;
                     yield return new TextLine(sb.ToString(), HasTrailingNewline: true);
                     sb.Clear();
                     start = i + 1;
@@ -218,8 +239,7 @@ public static class BashFileSystem
 
     private static string ReadAllTextBounded(Stream stream, bool normalizeCrLf)
     {
-        using var reader = new StreamReader(
-            stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true, leaveOpen: true);
+        using var reader = OpenDocumentReader(stream);
         var maxChars = WholeDocumentMaxChars();
         var sb = new StringBuilder();
         var buffer = new char[4096];
@@ -233,6 +253,29 @@ public static class BashFileSystem
 
         var text = sb.ToString();
         return normalizeCrLf ? text.Replace("\r\n", "\n") : text;
+    }
+
+    /// <summary>
+    /// Reader for WHOLE-DOCUMENT consumers (jq/yq/sed scripts/source): tolerant of a leading BOM — UTF-8
+    /// BOM skipped, UTF-16 BOM honoured (both are common in Windows-authored documents and a parser must not
+    /// see U+FEFF) — but everything else decodes through <see cref="RawBytes"/>, so invalid bytes survive as
+    /// escaped-byte markers instead of U+FFFD. Line tools use <see cref="OpenRawReader"/> (no sniffing).
+    /// </summary>
+    public static StreamReader OpenDocumentReader(Stream stream)
+    {
+        if (!stream.CanSeek)
+            return new StreamReader(stream, RawBytes.Encoding, detectEncodingFromByteOrderMarks: true, leaveOpen: true);
+
+        long start = stream.Position;
+        Span<byte> head = stackalloc byte[3];
+        int n = 0, r;
+        while (n < head.Length && (r = stream.Read(head.Slice(n))) > 0) n += r;
+        if (n >= 3 && head[0] == 0xEF && head[1] == 0xBB && head[2] == 0xBF)
+            return OpenRawReader(stream, leaveOpen: true); // BOM consumed
+        stream.Position = start;
+        if (n >= 2 && ((head[0] == 0xFF && head[1] == 0xFE) || (head[0] == 0xFE && head[1] == 0xFF)))
+            return new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true, leaveOpen: true);
+        return OpenRawReader(stream, leaveOpen: true);
     }
 
     private static int WholeDocumentMaxChars()
