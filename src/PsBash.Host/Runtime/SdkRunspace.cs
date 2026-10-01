@@ -194,6 +194,18 @@ internal sealed class SdkRunspace : IAsyncDisposable
             ps.AddScript(psm1Content).Invoke();
             ps.Commands.Clear();
             Trace("psm1-invoked");
+
+            // The psm1's Invoke-BashGrep / Invoke-BashSed are literal-argument PROXIES for DIRECT
+            // PowerShell calls (they keep the binder out of a repeated `-e`). Transpiled bash never needs
+            // them: the emitter single-quotes every flag, so the whole argv reaches the cmdlet verbatim.
+            // They are also a steppable-pipeline hop, which makes the real cmdlet's early stop
+            // (`grep -q`, `grep -m N`, `sed q`) unable to reach the caller's upstream. Drop them here so a
+            // transpiled `producer | grep -q x` resolves straight to the cmdlet and stops the producer.
+            ps.AddScript(
+                "foreach ($n in 'Invoke-BashGrep','Invoke-BashSed') { " +
+                "if (Microsoft.PowerShell.Core\\Get-Command $n -CommandType Cmdlet -ErrorAction SilentlyContinue) { " +
+                "Microsoft.PowerShell.Management\\Remove-Item -LiteralPath \"Function:\\$n\" -ErrorAction SilentlyContinue } }").Invoke();
+            ps.Commands.Clear();
         }
 
         Interlocked.Increment(ref ModuleLoadCount);
