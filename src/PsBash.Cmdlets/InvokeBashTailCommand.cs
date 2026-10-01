@@ -65,8 +65,6 @@ public sealed class InvokeBashTailCommand : PSCmdlet
     [Parameter(ValueFromPipeline = true)]
     public PSObject? InputObject { get; set; }
 
-    private readonly List<PSObject> _pipeline = new();
-
     /// <summary>
     /// Valid GNU <c>tail</c> options ps-bash does not implement, refused loudly (exit 2) by the
     /// shared parser. -q/--quiet/--silent are accepted (no-op); --lines/--bytes alias -n/-c.
@@ -287,21 +285,29 @@ public sealed class InvokeBashTailCommand : PSCmdlet
         return args;
     }
 
-    protected override void ProcessRecord()
-    {
-        if (InputObject != null)
-        {
-            _pipeline.Add(InputObject);
-        }
-    }
+    // ---- Streaming pipeline mode (memory bound) -------------------------------------------------
+    // Arguments are resolved in BeginProcessing (before the first record), so pipeline input is
+    // consumed as it arrives instead of being collected whole:
+    //   -n +N / -c +N  pure streaming (skip, then pass through);
+    //   -n N           ring of the last N records (O(N));
+    //   -c N           ring of the last >= N bytes of record text (O(N + one record)).
+    // File mode (operands present) is unchanged and runs in EndProcessing.
+    private TailArgs? _plan;
+    private bool _halt;
+    private bool _pipeMode;
+    private long _lineIdx;                 // -n +N: records/lines seen so far
+    private long _bytesToSkip;             // -c +N: bytes still to skip
+    private Queue<object>? _lineRing;      // -n N
+    private Queue<byte[]>? _byteRing;      // -c N
+    private long _byteRingTotal;
 
-    protected override void EndProcessing()
+    protected override void BeginProcessing()
     {
         // Re-inject the decoy-bound flags (-v, -c VALUE) so the shared parser sees them.
         var args = ArgsWithDecoys();
 
         FileSystemHelpers.SetLastExitCode(this, 0);
-        if (FileSystemHelpers.TryHandleVersion(this, "tail", args)) return;
+        if (FileSystemHelpers.TryHandleVersion(this, "tail", args)) { _halt = true; return; }
         if (Array.IndexOf(args, "--help") >= 0)
         {
             foreach (var line in InvokeCommand.InvokeScript(
@@ -309,19 +315,126 @@ public sealed class InvokeBashTailCommand : PSCmdlet
             {
                 WriteObject(line);
             }
+            _halt = true;
             return;
         }
 
         // Shared ordered parser: bundles (-qn2), attached values (-n5, --lines=5, --bytes=5),
         // abbreviations (--li=1), `--`, and the unsupported/unknown classifier in ONE scan.
         var plan = Plan(args);
-        if (FileSystemHelpers.TryWriteParseError(this, "tail", plan.Parsed)) return;
-        if (FileSystemHelpers.TryHandleInfoOptions(this, "tail", plan.Parsed)) return;
+        if (FileSystemHelpers.TryWriteParseError(this, "tail", plan.Parsed)) { _halt = true; return; }
+        if (FileSystemHelpers.TryHandleInfoOptions(this, "tail", plan.Parsed)) { _halt = true; return; }
         if (plan.Error is { } planError)
         {
             FileSystemHelpers.WriteBashError(this, planError); // exit 1, GNU's usage status
+            _halt = true;
             return;
         }
+
+        _plan = plan;
+        _pipeMode = plan.Operands.Count == 0;
+        if (!_pipeMode) return;
+
+        if (plan.BytesMode)
+        {
+            if (plan.BytesFromStart) _bytesToSkip = Math.Max((long)plan.ByteCount - 1, 0);
+            else if (plan.ByteCount > 0) _byteRing = new Queue<byte[]>();
+        }
+        else if (plan.FromLine)
+        {
+            _bytesToSkip = 0;
+        }
+        else if (plan.Count > 0)
+        {
+            _lineRing = new Queue<object>(); // grows lazily: `tail -n 2000000000` must not preallocate
+        }
+    }
+
+    protected override void ProcessRecord()
+    {
+        if (_halt || !_pipeMode || _plan is null || InputObject is null) return;
+        var item = InputObject;
+
+        if (_plan.BytesMode)
+        {
+            // Byte stream text of this record: BashText + boundary \n unless unterminated.
+            string text = BashRuntime.GetBashText(item);
+            if (!text.EndsWith('\n') && !BashRuntime.IsUnterminated(item)) text += "\n";
+            byte[] bytes = RawBytes.GetBytes(text);
+
+            if (_plan.BytesFromStart)
+            {
+                int skip = (int)Math.Min(_bytesToSkip, bytes.Length);
+                _bytesToSkip -= skip;
+                if (skip == bytes.Length) return;
+                // Byte slice: a TRANSFORMER — fresh text records carrying exactly the slice's bytes.
+                foreach (var rec in BashRuntime.ByteSliceRecords(
+                             RawBytes.GetString(bytes, skip, bytes.Length - skip)))
+                    WriteObject(rec);
+            }
+            else if (_byteRing is not null)
+            {
+                long keep = _plan.ByteCount;
+                _byteRing.Enqueue(bytes);
+                _byteRingTotal += bytes.Length;
+                // Drop whole leading chunks that can no longer contribute to the last N bytes.
+                while (_byteRingTotal - _byteRing.Peek().Length >= keep)
+                    _byteRingTotal -= _byteRing.Dequeue().Length;
+            }
+            return;
+        }
+
+        if (_plan.FromLine)
+        {
+            long skip = (long)_plan.Count - 1;
+            string text = BashRuntime.GetBashText(item);
+            string trimmed = text.TrimEnd('\n');
+            if (trimmed.Contains('\n'))
+            {
+                bool unterminated = BashRuntime.IsUnterminated(item);
+                var pieces = trimmed.Split('\n');
+                for (int p = 0; p < pieces.Length; p++)
+                {
+                    if (_lineIdx >= skip)
+                        WriteObject(BashRuntime.TextRecord(pieces[p], unterminated && p == pieces.Length - 1));
+                    _lineIdx++;
+                }
+            }
+            else
+            {
+                if (_lineIdx >= skip) WriteObject(item);
+                _lineIdx++;
+            }
+            return;
+        }
+
+        if (_lineRing is null) return; // -n 0: GNU prints nothing
+        {
+            int cap = _plan.Count;
+            string text = BashRuntime.GetBashText(item);
+            string trimmed = text.TrimEnd('\n');
+            if (trimmed.Contains('\n'))
+            {
+                bool unterminated = BashRuntime.IsUnterminated(item);
+                var pieces = trimmed.Split('\n');
+                for (int p = 0; p < pieces.Length; p++)
+                {
+                    _lineRing.Enqueue(BashRuntime.TextRecord(pieces[p], unterminated && p == pieces.Length - 1));
+                    if (_lineRing.Count > cap) _lineRing.Dequeue();
+                }
+            }
+            else
+            {
+                _lineRing.Enqueue(item);
+                if (_lineRing.Count > cap) _lineRing.Dequeue();
+            }
+        }
+    }
+
+    protected override void EndProcessing()
+    {
+        if (_halt || _plan is null) return;
+        var plan = _plan;
 
         int count = plan.Count;
         int? byteCount = plan.BytesMode ? plan.ByteCount : null;
@@ -331,78 +444,27 @@ public sealed class InvokeBashTailCommand : PSCmdlet
         double sleepInterval = plan.SleepInterval;
         var operands = plan.Operands;
 
-        // Pipeline mode
-        if (operands.Count == 0 && _pipeline.Count > 0)
+        // Pipeline mode: the streaming parts already ran in ProcessRecord; flush the rings.
+        if (_pipeMode)
         {
-            // -c on a pipe (the pipeline branch used to run BEFORE any byte handling, so `-c` was
-            // silently ignored and the last N LINES came out). The bytes are the items joined by
-            // '\n' plus the terminator GNU sees on stdin (omitted when the final record says it
-            // had none, e.g. `printf x`).
-            if (byteCount != null)
+            if (_byteRing is not null)
             {
-                EmitPipelineBytes(byteCount.Value, bytesFromStart);
-                return;
-            }
-
-            if (fromLine)            {
-                int skip = count - 1;
-                int idx = 0;
-                foreach (var item in _pipeline)
+                long keep = plan.ByteCount;
+                var all = new byte[_byteRingTotal];
+                int off = 0;
+                foreach (var chunk in _byteRing)
                 {
-                    string text = BashRuntime.GetBashText(item);
-                    string trimmed = text.TrimEnd('\n');
-                    if (trimmed.Contains('\n'))
-                    {
-                        bool unterminated = BashRuntime.IsUnterminated(item);
-                        var pieces = trimmed.Split('\n');
-                        for (int p = 0; p < pieces.Length; p++)
-                        {
-                            if (idx >= skip)
-                                WriteObject(BashRuntime.TextRecord(pieces[p], unterminated && p == pieces.Length - 1));
-                            idx++;
-                        }
-                    }
-                    else
-                    {
-                        if (idx >= skip) WriteObject(item);
-                        idx++;
-                    }
+                    Buffer.BlockCopy(chunk, 0, all, off, chunk.Length);
+                    off += chunk.Length;
                 }
+                long start = Math.Max(0, all.Length - keep);
+                string text = RawBytes.GetString(all, (int)start, (int)(all.Length - start));
+                foreach (var rec in BashRuntime.ByteSliceRecords(text)) WriteObject(rec);
+                _byteRing = null;
             }
-            else
+            else if (_lineRing is not null)
             {
-                int cap = Math.Max(count, 1);
-                var buf = new object[cap];
-                int bufLen = 0, pos = 0;
-                foreach (var item in _pipeline)
-                {
-                    string text = BashRuntime.GetBashText(item);
-                    string trimmed = text.TrimEnd('\n');
-                    if (trimmed.Contains('\n'))
-                    {
-                        bool unterminated = BashRuntime.IsUnterminated(item);
-                        var pieces = trimmed.Split('\n');
-                        for (int p = 0; p < pieces.Length; p++)
-                        {
-                            buf[pos] = BashRuntime.TextRecord(pieces[p], unterminated && p == pieces.Length - 1);
-                            pos = (pos + 1) % cap;
-                            if (bufLen < cap) bufLen++;
-                        }
-                    }
-                    else
-                    {
-                        buf[pos] = item;
-                        pos = (pos + 1) % cap;
-                        if (bufLen < cap) bufLen++;
-                    }
-                }
-
-                if (count == 0) bufLen = 0; // GNU: 	ail -n 0 prints nothing (the ring buffer is sized max(count, 1))
-                int start = bufLen < cap ? 0 : pos;
-                for (int k = 0; k < bufLen; k++)
-                {
-                    WriteObject(buf[(start + k) % cap]);
-                }
+                while (_lineRing.Count > 0) WriteObject(_lineRing.Dequeue());
             }
             return;
         }
@@ -590,22 +652,6 @@ public sealed class InvokeBashTailCommand : PSCmdlet
             lines.Add(l);
         }
         return (lastNl + 1, lines);
-    }
-
-    /// <summary>
-    /// <c>tail -c N</c> / <c>-c +N</c> over pipeline input: slice the UTF-8 bytes of the joined
-    /// records and emit the surviving text one line per object, like the file-mode byte path.
-    /// </summary>
-    private void EmitPipelineBytes(int byteCount, bool fromByte)
-    {
-        byte[] all = RawBytes.GetBytes(BashRuntime.RecordStreamText(_pipeline));
-        long safeCount = Math.Max(byteCount, 0);
-        long start = fromByte
-            ? Math.Min(Math.Max(safeCount - 1, 0), all.Length)
-            : Math.Max(0, all.Length - safeCount);
-        string text = RawBytes.GetString(all, (int)start, (int)(all.Length - start));
-        // Byte slice: a TRANSFORMER — fresh text records carrying exactly the slice's bytes.
-        foreach (var rec in BashRuntime.ByteSliceRecords(text)) WriteObject(rec);
     }
 
     private void EmitFileBytes(string path, int byteCount, bool fromByte, string command)
