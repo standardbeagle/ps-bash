@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 208
+stdout-length: 8
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" && printf 'a\nb\nc\n' > f && printf 'x\ny\n' > g && awk 'BEGIN{ x = "echo a" | getline y; print x, y; x = "echo a" | getline y; print x; close("echo a"); x = "echo a" | getline y; print x }'
+==== STDOUT ====
+1 a
+0
+1
+
+==== STDERR ====
+

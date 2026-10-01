@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 129
+stdout-length: 2
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" && printf 'a\nb\nc\n' > f && printf 'x\ny\n' > g && awk 'BEGIN{while(("seq 3" | getline l) > 0) s+=l; print s}'
+==== STDOUT ====
+6
+
+==== STDERR ====
+

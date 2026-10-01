@@ -31,6 +31,22 @@ internal sealed class AwkMachine
     // host runspaces. Discarded with the machine after the run.
     private readonly Dictionary<string, Regex> _regexCache = new();
 
+    // ── getline plumbing (wired by the cmdlet; all optional so the machine stays unit-testable) ──
+    private readonly Dictionary<string, IAwkLineStream> _fileStreams = new();
+    private readonly Dictionary<string, IAwkLineStream> _cmdStreams = new();
+
+    /// <summary>Main input for plain <c>getline [var]</c>; null when the run is push-driven (no such getline in the program).</summary>
+    public IAwkRecordSource? MainInput { get; set; }
+
+    /// <summary>What <c>getline &lt; "-"</c> / <c>"/dev/stdin"</c> reads. In stdin mode this is <see cref="MainInput"/> itself.</summary>
+    public IAwkRecordSource? StdinInput { get; set; }
+
+    /// <summary>Maps a getline file name to a path (relative names resolve against the PowerShell location).</summary>
+    public Func<string, string> ResolvePath { get; set; } = static p => p;
+
+    /// <summary>Runs shell command lines for <c>cmd | getline</c> and <c>system()</c>.</summary>
+    public AwkShell? Shell { get; set; }
+
     public bool Exited { get; private set; }
     public int ExitCode { get; private set; }
 
@@ -106,6 +122,15 @@ internal sealed class AwkMachine
             catch (NextSignal) { /* next in END is a no-op */ }
             catch (NextFileSignal) { }
         }
+    }
+
+    /// <summary>Close every file and command opened by getline (end of program; gawk closes them too).</summary>
+    public void CloseAll()
+    {
+        foreach (var s in _fileStreams.Values) s.Close();
+        foreach (var s in _cmdStreams.Values) s.Close();
+        _fileStreams.Clear();
+        _cmdStreams.Clear();
     }
 
     public void Flush()
@@ -443,6 +468,7 @@ internal sealed class AwkMachine
             case Unary u: return EvalUnary(u);
             case IncDec id: return EvalIncDec(id);
             case Call call: return EvalCall(call);
+            case GetlineExpr gl: return EvalGetline(gl);
             default: throw new InvalidOperationException("unknown expr node");
         }
     }
@@ -582,11 +608,110 @@ internal sealed class AwkMachine
             case "srand": return BuiltinSrand(call.Args);
             case "systime": return AwkValue.Number(DateTimeOffset.UtcNow.ToUnixTimeSeconds());
             case "strftime": return BuiltinStrftime(call.Args);
-            case "system": return AwkValue.Number(0); // unsupported; report success
-            case "close": return AwkValue.Number(0);
-            case "fflush": return AwkValue.Number(0);
+            case "system": return BuiltinSystem(Arg(call, 0));
+            case "close": return BuiltinClose(Arg(call, 0));
+            case "fflush": return AwkValue.Number(0); // output is already line-flushed to the pipeline
             default: throw new AwkInterpreter.AwkSyntaxException($"awk: calling undefined function {call.Name}");
         }
+    }
+
+    // ── getline / close / system ─────────────────────────────────────────────
+
+    /// <summary>
+    /// Effects per form (gawk 5.2.1 and mawk agree; POSIX's text also lists NR for <c>cmd | getline</c>,
+    /// neither implementation does it):
+    /// <c>getline</c> = $0 NF NR FNR · <c>getline v</c> = v NR FNR ·
+    /// <c>getline &lt; f</c> = $0 NF · <c>getline v &lt; f</c> = v ·
+    /// <c>cmd | getline</c> = $0 NF · <c>cmd | getline v</c> = v.
+    /// Returns 1 (a record was read), 0 (end of input), -1 (cannot open / start).
+    /// </summary>
+    private AwkValue EvalGetline(GetlineExpr g)
+    {
+        string? record;
+        switch (g.Source)
+        {
+            case GetlineSource.Main:
+                record = MainInput?.Next();
+                if (record is null) return AwkValue.Number(0);
+                _nr++;
+                _fnr++;
+                break;
+
+            case GetlineSource.File:
+            {
+                var stream = OpenFileStream(Eval(g.Operand!).ToStr(Convfmt));
+                if (stream is null) return AwkValue.Number(-1);
+                record = stream.ReadLine();
+                if (record is null) return AwkValue.Number(0);
+                break;
+            }
+
+            default: // Command
+            {
+                var stream = OpenCommandStream(Eval(g.Operand!).ToStr(Convfmt));
+                if (stream is null) return AwkValue.Number(-1);
+                record = stream.ReadLine();
+                if (record is null) return AwkValue.Number(0);
+                break;
+            }
+        }
+
+        if (g.Target is null) SetRecord(record);
+        else SetLvalue(g.Target, AwkValue.StrNum(record));
+        return AwkValue.Number(1);
+    }
+
+    private IAwkLineStream? OpenFileStream(string name)
+    {
+        if (_fileStreams.TryGetValue(name, out var open)) return open;
+
+        IAwkLineStream? stream;
+        if (name is "-" or "/dev/stdin")
+            stream = StdinInput is null ? null : new AwkSourceStream(StdinInput);
+        else
+            stream = AwkFileStream.Open(ResolvePath(name));
+
+        if (stream is not null) _fileStreams[name] = stream;
+        return stream;
+    }
+
+    private IAwkLineStream? OpenCommandStream(string command)
+    {
+        if (_cmdStreams.TryGetValue(command, out var open)) return open;
+        var stream = Shell?.Start(command);
+        if (stream is not null) _cmdStreams[command] = stream;
+        return stream;
+    }
+
+    /// <summary>
+    /// <c>close(name)</c>: ends the file or command stream of that name so the next getline starts over.
+    /// Returns 0 for a file, a command's exit status, -1 when nothing by that name is open.
+    /// </summary>
+    private AwkValue BuiltinClose(string name)
+    {
+        bool any = false;
+        int status = 0;
+        if (_fileStreams.Remove(name, out var f)) { status = f.Close(); any = true; }
+        if (_cmdStreams.Remove(name, out var c)) { status = c.Close(); any = true; }
+        return AwkValue.Number(any ? status : -1);
+    }
+
+    /// <summary>
+    /// <c>system(cmd)</c>: runs <paramref name="command"/> to completion through ps-bash and returns its
+    /// exit status; its stdout joins awk's own output at this point (stderr goes to the error stream).
+    /// </summary>
+    private AwkValue BuiltinSystem(string command)
+    {
+        if (Shell is null) return AwkValue.Number(-1);
+        BashRuntime.ChildProcessResult r;
+        try { r = Shell.Run(command); }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException)
+        {
+            return AwkValue.Number(-1);
+        }
+        if (r.Stdout.Length > 0) Output(r.Stdout.Replace("\r\n", "\n"));
+        if (r.Stderr.Length > 0) Console.Error.Write(r.Stderr);
+        return AwkValue.Number(r.TimedOut ? 124 : r.ExitCode);
     }
 
     private string Arg(Call c, int i) => i < c.Args.Count ? Eval(c.Args[i]).ToStr(Convfmt) : "";
