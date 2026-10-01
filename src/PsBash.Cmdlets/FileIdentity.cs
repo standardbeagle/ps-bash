@@ -83,6 +83,33 @@ internal static class FileIdentity
         }
     }
 
+    /// <summary>
+    /// The inode number <c>ls -i</c> prints: st_ino on Unix (via <c>stat</c>), the NTFS file index on
+    /// Windows. False when it cannot be read.
+    /// </summary>
+    public static bool TryGetInode(string path, out ulong inode)
+    {
+        inode = 0;
+        try
+        {
+            if (OperatingSystem.IsWindows())
+            {
+                if (!TryGetWindowsId(path, out var id)) return false;
+                inode = id.Index;
+                return true;
+            }
+
+            var linux = BashRuntime.RunChildProcess("stat", new[] { "-c", "%i", "--", path }, TimeSpan.FromSeconds(10));
+            if (linux.ExitCode == 0 && !linux.TimedOut && ulong.TryParse(linux.Stdout.Trim(), out inode)) return true;
+            var bsd = BashRuntime.RunChildProcess("stat", new[] { "-f", "%i", path }, TimeSpan.FromSeconds(10));
+            return bsd.ExitCode == 0 && !bsd.TimedOut && ulong.TryParse(bsd.Stdout.Trim(), out inode);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     // ───────────── Unix ─────────────
 
     private static string? TryGetUnixId(string path)

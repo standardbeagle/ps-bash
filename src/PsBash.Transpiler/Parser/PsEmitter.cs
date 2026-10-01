@@ -5984,8 +5984,6 @@ public static class PsEmitter
     }
 
     /// <summary>
-
-    /// <summary>
     /// Bash command names whose cmdlet parses its argv with the shared ORDERED parser
     /// (<c>PsBash.Cmdlets.Args.ArgParser</c>). For these, <see cref="EmitPassthrough"/> quotes
     /// EVERY dash-leading literal word (and <c>--</c>) so the PowerShell binder never sees a
