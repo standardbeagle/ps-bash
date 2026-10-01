@@ -201,10 +201,12 @@ internal sealed class SdkRunspace : IAsyncDisposable
             // They are also a steppable-pipeline hop, which makes the real cmdlet's early stop
             // (`grep -q`, `grep -m N`, `sed q`) unable to reach the caller's upstream. Drop them here so a
             // transpiled `producer | grep -q x` resolves straight to the cmdlet and stops the producer.
+            // Run inside `& { }` so the loop variable is local: a global `$n` would shadow the bash variable `n`
+            // (the arithmetic evaluator and `$env`-less lookups read PS variables first).
             ps.AddScript(
-                "foreach ($n in 'Invoke-BashGrep','Invoke-BashSed') { " +
-                "if (Microsoft.PowerShell.Core\\Get-Command $n -CommandType Cmdlet -ErrorAction SilentlyContinue) { " +
-                "Microsoft.PowerShell.Management\\Remove-Item -LiteralPath \"Function:\\$n\" -ErrorAction SilentlyContinue } }").Invoke();
+                "& { foreach ($proxy in 'Invoke-BashGrep','Invoke-BashSed') { " +
+                "if (Microsoft.PowerShell.Core\\Get-Command $proxy -CommandType Cmdlet -ErrorAction SilentlyContinue) { " +
+                "Microsoft.PowerShell.Management\\Remove-Item -LiteralPath \"Function:\\$proxy\" -ErrorAction SilentlyContinue } } }").Invoke();
             ps.Commands.Clear();
         }
 
