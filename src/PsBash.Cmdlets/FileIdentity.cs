@@ -110,6 +110,28 @@ internal static class FileIdentity
         }
     }
 
+    /// <summary>
+    /// Hard-link count of an existing path on Windows (<c>nNumberOfLinks</c> of an open handle; NTFS reports 1
+    /// for a directory — unlike a Linux directory, which counts <c>.</c> and each subdirectory). Always false on
+    /// Unix, where <c>ls</c> reads <c>stat %h</c> in the same call that fetches the owner.
+    /// </summary>
+    public static bool TryGetLinkCount(string path, out uint count)
+    {
+        count = 0;
+        if (!OperatingSystem.IsWindows() || string.IsNullOrEmpty(path)) return false;
+        try
+        {
+            using var handle = CreateFileW(path, 0, ShareAll, IntPtr.Zero, OpenExisting, BackupSemantics, IntPtr.Zero);
+            if (handle.IsInvalid || !GetFileInformationByHandle(handle, out var info)) return false;
+            count = info.NumberOfLinks;
+            return count > 0;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     // ───────────── Unix ─────────────
 
     private static string? TryGetUnixId(string path)
@@ -128,7 +150,9 @@ internal static class FileIdentity
     private const uint OpenExisting = 3;
     private const uint BackupSemantics = 0x02000000;
 
-    [StructLayout(LayoutKind.Sequential)]
+    // Pack = 4: the native FILETIMEs are two DWORDs (4-aligned); the default 8-byte packing put padding after
+    // FileAttributes and shifted every later field (volume serial, link count, file index) by 4 bytes.
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
     private struct ByHandleFileInformation
     {
         public uint FileAttributes;

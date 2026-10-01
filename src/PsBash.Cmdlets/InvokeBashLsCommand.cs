@@ -427,6 +427,16 @@ public sealed class InvokeBashLsCommand : PSCmdlet
                 WriteObject(BashRuntime.TextRecord("total " + totalText, false));
             }
 
+            // `-l` columns are aligned to the widest entry of THIS block (LsLongFormat), so they are laid
+            // out once for the whole block before the per-entry prefix/indicator work below.
+            string[]? longLines = null;
+            if (longMode)
+            {
+                var rows = new List<LsLongRow>(sorted.Count);
+                foreach (var e in sorted) rows.Add(LongRow(e, humanSizes));
+                longLines = LsLongFormat.Align(rows);
+            }
+
             string[]? inodes = showInode ? sorted.Select(InodeText).ToArray() : null;
             string[]? blockText = showBlocks && blocks is not null
                 ? blocks.Select(b => humanSizes
@@ -473,7 +483,7 @@ public sealed class InvokeBashLsCommand : PSCmdlet
                 string bashText;
                 if (longMode)
                 {
-                    string line = FormatLsLine(entry, humanSizes);
+                    string line = longLines![idx];
                     if (classify)
                     {
                         line += indicator;
@@ -686,6 +696,7 @@ public sealed class InvokeBashLsCommand : PSCmdlet
         string perm;
         string owner;
         string group;
+        int linkCount = 1;
 
         if (IsWindows())
         {
@@ -697,6 +708,8 @@ public sealed class InvokeBashLsCommand : PSCmdlet
             perm = $"{typeChar}{r}{w}{x}{r}-{x}{r}-{x}";
             owner = Environment.GetEnvironmentVariable("USERNAME") ?? string.Empty;
             group = owner;
+            // NTFS hard links: read lazily for `-l` only (LongRow), a per-entry handle open is not free.
+            linkCount = 1;
         }
         else
         {
@@ -708,8 +721,8 @@ public sealed class InvokeBashLsCommand : PSCmdlet
             {
                 bool isMac = OperatingSystem.IsMacOS();
                 var statArgs = isMac
-                    ? new[] { "-f", "%Su %Sg", item.FullName }
-                    : new[] { "-c", "%U %G", item.FullName };
+                    ? new[] { "-f", "%l %Su %Sg", item.FullName }
+                    : new[] { "-c", "%h %U %G", item.FullName };
                 var psi = new System.Diagnostics.ProcessStartInfo("/usr/bin/stat")
                 {
                     RedirectStandardOutput = true,
@@ -725,9 +738,14 @@ public sealed class InvokeBashLsCommand : PSCmdlet
                 string statOut = BashRuntime.RunChildProcess(psi).Stdout.Trim();
                 if (statOut.Length > 0)
                 {
-                    var parts = statOut.Split(new[] { ' ' }, 2);
-                    owner = parts[0];
-                    group = parts.Length > 1 ? parts[1] : string.Empty;
+                    // "LINKS OWNER GROUP": the group takes the remainder (it may contain spaces).
+                    var parts = statOut.Split(new[] { ' ' }, 3);
+                    if (parts.Length == 3 && int.TryParse(parts[0], out int links))
+                    {
+                        linkCount = links;
+                        owner = parts[1];
+                        group = parts[2];
+                    }
                 }
             }
             catch
@@ -760,7 +778,7 @@ public sealed class InvokeBashLsCommand : PSCmdlet
         obj.Properties.Add(new PSNoteProperty("IsSymlink", isLink));
         obj.Properties.Add(new PSNoteProperty("SizeBytes", sizeBytes));
         obj.Properties.Add(new PSNoteProperty("Permissions", perm));
-        obj.Properties.Add(new PSNoteProperty("LinkCount", 1));
+        obj.Properties.Add(new PSNoteProperty("LinkCount", linkCount));
         obj.Properties.Add(new PSNoteProperty("Owner", owner));
         obj.Properties.Add(new PSNoteProperty("Group", group));
         obj.Properties.Add(new PSNoteProperty("LastModified", item.LastWriteTime));
@@ -818,51 +836,33 @@ public sealed class InvokeBashLsCommand : PSCmdlet
     }
 
     /// <summary>
-    /// Reimplements the psm1 <c>Format-BashDate</c>: a date within the last six
-    /// months (and not in the future) prints <c>MMM dd HH:mm</c>; anything else
-    /// prints <c>MMM dd  yyyy</c>. Month name is invariant-culture.
+    /// The <c>-l</c> columns of one entry as text. The size is the plain byte count (or the <c>-h</c> form);
+    /// padding is NOT done here — <see cref="LsLongFormat.Align"/> pads to the widest entry of the block.
+    /// On Windows the NTFS hard-link count is read here (only <c>-l</c> pays for the handle open).
     /// </summary>
-    private static string FormatBashDate(DateTime date)
-    {
-        DateTime now = DateTime.Now;
-        DateTime sixMonthsAgo = now.AddMonths(-6);
-
-        string month = date.ToString("MMM", CultureInfo.InvariantCulture);
-        string day = date.Day.ToString(CultureInfo.InvariantCulture).PadLeft(2);
-
-        if (date < sixMonthsAgo || date > now)
-        {
-            return $"{month} {day}  {date.Year}";
-        }
-        string time = date.ToString("HH:mm", CultureInfo.InvariantCulture);
-        return $"{month} {day} {time}";
-    }
-
-    /// <summary>
-    /// Reimplements the psm1 <c>Format-LsLine</c>: the <c>-l</c> long-format
-    /// line — permissions, link count, owner, group, size (8-wide, or 4-wide
-    /// human), date, name.
-    /// </summary>
-    private static string FormatLsLine(PSObject entry, bool humanReadable)
+    private static LsLongRow LongRow(PSObject entry, bool humanReadable)
     {
         long sizeBytes = GetLong(entry, "SizeBytes");
         string size = humanReadable
-            ? FormatBashSize(sizeBytes).PadLeft(4)
-            : sizeBytes.ToString(CultureInfo.InvariantCulture).PadLeft(8);
-        string date = FormatBashDate(GetDate(entry, "LastModified"));
+            ? FormatBashSize(sizeBytes)
+            : sizeBytes.ToString(CultureInfo.InvariantCulture);
+        int links = GetInt(entry, "LinkCount");
+        if (IsWindows() && !GetBool(entry, "IsSymlink")
+            && FileIdentity.TryGetLinkCount(GetString(entry, "FullPath"), out uint ntfsLinks))
+            {
+                links = (int)ntfsLinks;
+                if (entry.Properties["LinkCount"] is { } lp) lp.Value = links;
+            }
 
-        return string.Format(
-            CultureInfo.InvariantCulture,
-            "{0} {1} {2} {3} {4} {5} {6}",
+        return new LsLongRow(
             GetString(entry, "Permissions"),
-            GetInt(entry, "LinkCount"),
+            links.ToString(CultureInfo.InvariantCulture),
             GetString(entry, "Owner"),
             GetString(entry, "Group"),
             size,
-            date,
+            LsLongFormat.Date(GetDate(entry, "LastModified"), DateTime.Now),
             GetDisplayName(entry));
     }
-
     /// <summary>
     /// Reimplements the psm1 <c>Test-IsExecutable</c>: a directory or symlink is
     /// never executable; on Windows the extension decides; on POSIX any of the
