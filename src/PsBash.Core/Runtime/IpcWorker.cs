@@ -660,6 +660,14 @@ public sealed class IpcWorker : IWorker
         }
     }
 
+    /// <summary>
+    /// The launcher's own standard input, to be forwarded to the NEXT <see cref="ExecuteAsync"/> command as
+    /// that command's stdin (raw bytes, streamed as the command runs, end of input propagated). Null (the
+    /// default) forwards nothing. The launcher sets it only when its stdin is redirected and the transpiled
+    /// command can read it; a command that never reads stdin never consumes any of it.
+    /// </summary>
+    public Stream? LauncherStdin { get; set; }
+
     public async Task<int> ExecuteAsync(
         string command,
         CancellationToken ct = default,
@@ -670,7 +678,9 @@ public sealed class IpcWorker : IWorker
         await _requestGate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            return await SendRequestAsync(new Mode.Command(command, SessionMode.Framed, environment), ct).ConfigureAwait(false);
+            return await SendRequestAsync(
+                new Mode.Command(command, SessionMode.Framed, environment, StdinFollows: LauncherStdin is not null),
+                ct).ConfigureAwait(false);
         }
         finally
         {
@@ -944,12 +954,22 @@ public sealed class IpcWorker : IWorker
             ? StartHostLivenessWatchdog(hostPid, _hostBinaryPath, hostDeadCts, watchdogStop.Token)
             : null;
 
+        using var stdinPumpStop = new CancellationTokenSource();
         try
         {
             await using (stream)
             {
                 await HostProtocol.WriteRequestAsync(stream, mode, linked.Token).ConfigureAwait(false);
                 ArmIdle(); // reset: now waiting for the first response frame
+
+                // Forward the launcher's stdin once the host has ACKNOWLEDGED execution start: a reset before
+                // that is retried against a fresh host, and stdin already consumed could not be replayed.
+                var forwardedStdin = mode is Mode.Command { StdinFollows: true } ? LauncherStdin : null;
+                void StartStdinPump()
+                {
+                    if (forwardedStdin is null) return;
+                    _ = Task.Run(() => PumpLauncherStdinAsync(forwardedStdin, stream, stdinPumpStop.Token));
+                }
 
                 // REFACTOR-4: route each response frame by its stream tag. STDOUT
                 // frames go to OutputCallback (or Console.Out when no callback is
@@ -994,8 +1014,9 @@ public sealed class IpcWorker : IWorker
 
                         StreamFrame(line, tag);
                     },
-                    onStarted,
+                    () => { onStarted(); StartStdinPump(); },
                     linked.Token).ConfigureAwait(false);
+                try { stdinPumpStop.Cancel(); } catch (ObjectDisposedException) { }
 
                 if (compactFrames is not null)
                 {
@@ -1035,6 +1056,38 @@ public sealed class IpcWorker : IWorker
             // Stop the watchdog. Fire-and-forget cancellation: the task observes
             // watchdogStop and exits; we never block command teardown on it.
             try { watchdogStop.Cancel(); } catch { }
+            try { stdinPumpStop.Cancel(); } catch { }
+        }
+    }
+
+    /// <summary>
+    /// Copy the launcher's stdin to the host as <c>STDIN:</c> frames (raw bytes, as read: a chunk goes out as
+    /// soon as it arrives, so an interactive producer is not held back for a full buffer), then the
+    /// end-of-input marker. Best effort: a failed write means the host is gone, which the response reader
+    /// reports; a read blocked on the console cannot be cancelled and is simply abandoned at process exit.
+    /// </summary>
+    private static async Task PumpLauncherStdinAsync(Stream input, Stream transport, CancellationToken ct)
+    {
+        var buffer = new byte[HostProtocol.MaxStdinChunkBytes];
+        try
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                int n;
+                try { n = await input.ReadAsync(buffer, ct).ConfigureAwait(false); }
+                catch (Exception ex) when (ex is IOException or ObjectDisposedException or UnauthorizedAccessException)
+                {
+                    break; // unreadable stdin (closed handle, broken pipe) is end of input
+                }
+                if (n <= 0) break;
+                await HostProtocol.WriteStdinFrameAsync(transport, buffer.AsMemory(0, n), ct).ConfigureAwait(false);
+            }
+            if (!ct.IsCancellationRequested)
+                await HostProtocol.WriteStdinEofAsync(transport, ct).ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            // Host gone / command finished: nothing more to forward.
         }
     }
 

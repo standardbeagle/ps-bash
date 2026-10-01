@@ -158,7 +158,15 @@ internal sealed class Connection
         using var clientGone = new CancellationTokenSource();
         using var watchStop = new CancellationTokenSource();
         using var execCts = CancellationTokenSource.CreateLinkedTokenSource(ct, clientGone.Token);
-        if (sessionMode == SessionMode.Framed && !_stream.CanSeek)
+        // The launcher forwarding its own stdin (STDIN-FEED header): the same pending read that would be the
+        // disconnect detector instead PUMPS the stdin frames, and still reports a closed stream as "client
+        // gone". The end-of-input marker is NOT a disconnect — the launcher keeps reading the response.
+        LauncherStdinFeed? stdinFeed = mode is Mode.Command { StdinFollows: true } && !_stream.CanSeek
+            ? new LauncherStdinFeed(execCts.Token)
+            : null;
+        if (stdinFeed is not null)
+            _ = PumpLauncherStdinAsync(stdinFeed, _stream, clientGone, watchStop.Token);
+        else if (sessionMode == SessionMode.Framed && !_stream.CanSeek)
             _ = WatchForClientDisconnectAsync(_stream, clientGone, watchStop.Token);
 
         // `await using` binds disposal to the whole remaining scope, so ANY exit
@@ -228,7 +236,8 @@ internal sealed class Connection
             if (sessionMode == SessionMode.Framed)
                 await HostProtocol.WriteStartedAsync(_stream, execCts.Token).ConfigureAwait(false);
 
-            exitCode = await worker.ExecuteWithOutputAsync(command, outputSink, errorSink, execCts.Token, environment);
+            exitCode = await worker.ExecuteWithOutputAsync(
+                command, outputSink, errorSink, execCts.Token, environment, stdinFeed?.CreateCursor());
             WorkerPool<SdkWorker>.DiagLog($"Connection: executed, exit={exitCode}");
         }
         catch (OperationCanceledException) when (clientGone.IsCancellationRequested && !ct.IsCancellationRequested)
@@ -267,6 +276,7 @@ internal sealed class Connection
         finally
         {
             watchStop.Cancel();
+            stdinFeed?.Dispose();
             if (worker is not null)
             {
                 _pool.Release(worker);
@@ -351,6 +361,36 @@ internal sealed class Connection
         {
             try { cts.Cancel(); } catch (ObjectDisposedException) { }
         }
+    }
+
+    /// <summary>
+    /// Stdin-forwarding counterpart of <see cref="WatchForClientDisconnectAsync"/>: reads the launcher's
+    /// <c>STDIN:</c> frames into <paramref name="feed"/> and trips <paramref name="clientGone"/> only when
+    /// the stream closes (or resets) before the command finished.
+    /// </summary>
+    private static async Task PumpLauncherStdinAsync(
+        LauncherStdinFeed feed, Stream stream, CancellationTokenSource clientGone, CancellationToken stop)
+    {
+        try
+        {
+            if (await feed.PumpAsync(stream, stop).ConfigureAwait(false))
+                TripClientGone(clientGone);
+            else
+            {
+                // End of input was delivered. Keep the disconnect detector armed: a closed stream is
+                // still the only liveness signal a silent command has.
+                await WatchForClientDisconnectAsync(stream, clientGone, stop).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException) { /* command finished first */ }
+        catch (ObjectDisposedException) { /* connection already torn down */ }
+        catch (IOException) { TripClientGone(clientGone); /* reset by peer */ }
+        catch (Exception) { /* advisory only — never fail the connection */ }
+    }
+
+    private static void TripClientGone(CancellationTokenSource cts)
+    {
+        try { cts.Cancel(); } catch (ObjectDisposedException) { }
     }
 
     private readonly record struct IpcOutputFrame(StreamTag Tag, string Line);

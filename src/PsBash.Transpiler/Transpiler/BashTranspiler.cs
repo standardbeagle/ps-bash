@@ -81,6 +81,36 @@ public static class BashTranspiler
     }
 
     /// <summary>
+    /// Marker the emitter writes into a script that reads standard input through the launcher-stdin scope
+    /// (the variable the host fills with a <c>StdinCursor</c>).
+    /// </summary>
+    public const string LauncherStdinVariable = "__BashStdIn";
+
+    /// <summary>
+    /// Transpile <paramref name="bashCommand"/> so that its stdin is the LAUNCHER's own forwarded stdin:
+    /// the whole script is one stdin scope (<c>$global:__BashStdIn</c>, installed by the host). Returns
+    /// <c>null</c> when the script has no stdin reader at all — the launcher then needs no forwarding and
+    /// should use <see cref="Transpile(string)"/>, whose text is unchanged.
+    /// </summary>
+    /// <exception cref="ParseException">Thrown when the bash input cannot be parsed.</exception>
+    public static string? TranspileWithLauncherStdin(string bashCommand)
+    {
+        var emitted = PsEmitter.TranspileWithLauncherStdin(bashCommand, TranspileContext.Default);
+        if (emitted is null || !ReadsSharedStdin(emitted))
+            return null;
+        return WrapWithTrapEpilogue(bashCommand, emitted);
+    }
+
+    /// <summary>
+    /// True when emitted PowerShell can read the shared stdin: a command was fed from the cursor variable, or a
+    /// builtin that takes its lines from it at RUN time (<c>read</c>, <c>mapfile</c>) is present.
+    /// </summary>
+    private static bool ReadsSharedStdin(string emitted) =>
+        emitted.Contains(LauncherStdinVariable, StringComparison.Ordinal)
+        || emitted.Contains("Invoke-BashRead", StringComparison.Ordinal)
+        || emitted.Contains("Invoke-BashMapfile", StringComparison.Ordinal);
+
+    /// <summary>
     /// Transpile a bash command string to PowerShell, also producing a line
     /// map from each emitted PowerShell line back to its originating bash
     /// source location. Uses the <see cref="TranspileContext.Default"/> context.

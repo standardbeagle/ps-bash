@@ -175,7 +175,8 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
         Action<string>? output,
         Action<string>? errorOutput,
         CancellationToken ct = default,
-        IReadOnlyList<KeyValuePair<string, string>>? environment = null)
+        IReadOnlyList<KeyValuePair<string, string>>? environment = null,
+        PsBash.Core.StdinCursor? stdin = null)
     {
         ObjectDisposedException.ThrowIf(_disposed != 0, this);
         await _globalExecGate.WaitAsync(ct);
@@ -187,7 +188,7 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
                 // When ct fires mid-command (e.g. parent-death watcher), stop the PS
                 // pipeline so Invoke() returns instead of blocking indefinitely.
                 using var stopReg = ct.Register(() => _ps.Stop());
-                return await Task.Run(() => WithDefaultRunspace(() => RunCommand(command, output, errorOutput, batchOutput: true, environment)), ct);
+                return await Task.Run(() => WithDefaultRunspace(() => RunCommand(command, output, errorOutput, batchOutput: true, environment, stdin)), ct);
             }
             finally
             {
@@ -223,7 +224,8 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
     /// </param>
     private int RunCommand(string command, Action<string>? output, Action<string>? errorOutput,
                            bool batchOutput,
-                           IReadOnlyList<KeyValuePair<string, string>>? environment = null)
+                           IReadOnlyList<KeyValuePair<string, string>>? environment = null,
+                           PsBash.Core.StdinCursor? stdin = null)
     {
         // R06: reset the process environment to the caller's block BEFORE running.
         // The environment is process-global and shared by every pooled runspace,
@@ -259,6 +261,10 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
         _ps.Commands.Clear();
         _ps.Streams.Error.Clear();
         PeakRetainedOutput = 0;
+        // The launcher's forwarded stdin: the transpiled script (TranspileWithLauncherStdin) reads it from
+        // $global:__BashStdIn; cleared in the finally below so a pooled runspace never keeps a dead cursor.
+        if (stdin is not null)
+            _sdkRunspace.Runspace.SessionStateProxy.SetVariable("__BashStdIn", stdin);
         _ps.AddScript(command);
 
         // Forward formatted Out-Default lines to the same callback the output
@@ -703,6 +709,12 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
             // output sink.
             _host.HostUI.SetWriteLineForwarder(null);
             _host.HostUI.SetWriteErrorLineForwarder(null);
+
+            if (stdin is not null)
+            {
+                try { _sdkRunspace.Runspace.SessionStateProxy.SetVariable("__BashStdIn", null); }
+                catch { /* runspace already closed */ }
+            }
 
             if (markedInsideHost)
             {
