@@ -110,7 +110,7 @@ public sealed class InvokeBashFileCommand : PSCmdlet
     internal sealed class FileArgs
     {
         public ParsedArgs Parsed = null!;
-        public bool Brief, WantMimeType, WantMimeEncoding, Follow, Print0;
+        public bool Brief, WantMimeType, WantMimeEncoding, Follow, Print0, NoPad;
         public string Separator = ":";
         public List<string> Operands = new();
         public string? Error;
@@ -149,6 +149,7 @@ public sealed class InvokeBashFileCommand : PSCmdlet
                 case OptFollow: f.Follow = true; break;
                 case OptNoFollow: f.Follow = false; break;
                 case OptPrint0: f.Print0 = true; break;
+                case "no-pad": f.NoPad = true; break;
                 case OptSep: f.Separator = tok.Value!; break;
             }
         }
@@ -195,43 +196,55 @@ public sealed class InvokeBashFileCommand : PSCmdlet
             return;
         }
 
+        // Expand every operand first: GNU pads the name column to the widest operand (file.c `nlen`),
+        // missing ones included, so the width is known only after the whole list is resolved.
+        var targets = new List<(string Path, string Name)>();
         foreach (var raw in plan.Operands)
         {
+            bool glob = raw.IndexOfAny(new[] { '*', '?', '[' }) >= 0;
             foreach (var filePath in FileSystemHelpers.ResolveOperandPaths(this, raw))
-            {
-                var (fileType, mimeType, encoding) = Classify(filePath, plan.Follow, out bool missing);
-                if (missing)
-                {
-                    // Match the psm1 oracle's "cannot open" wording exactly.
-                    // The error path uses the resolved-but-missing path
-                    // string, which on Windows may contain backslashes; the
-                    // psm1 oracle did not normalize, so neither do we.
-                    FileSystemHelpers.WriteBashError(
-                        this,
-                        $"file: cannot open '{filePath}' (No such file or directory)");
-                    continue;
-                }
+                targets.Add((filePath, glob ? RelativeName(filePath) : raw));
+        }
+        int nameWidth = 0;
+        foreach (var (_, name) in targets) nameWidth = Math.Max(nameWidth, name.Length);
 
-                string display = plan.AnyMime
+        foreach (var (filePath, name) in targets)
+        {
+            var (fileType, mimeType, encoding) = Classify(filePath, plan.Follow, out bool missing);
+            // file(1) reports an unopenable operand on STDOUT, in the operand's own line and with exit
+            // status 0 (file-5.45: `nosuch: cannot open `nosuch' (No such file or directory)`).
+            string display = missing
+                ? $"cannot open `{name}' (No such file or directory)"
+                : plan.AnyMime
                     ? (plan.WantMimeType && plan.WantMimeEncoding ? $"{mimeType}; charset={encoding}"
                         : plan.WantMimeType ? mimeType : encoding)
                     : fileType;
-                string bashText = plan.Brief
-                    ? display
-                    : $"{filePath}{(plan.Print0 ? "\0" : "")}{plan.Separator} {display}";
+            int pad = plan.NoPad ? 0 : nameWidth - name.Length;
+            string bashText = plan.Brief
+                ? display
+                : $"{name}{(plan.Print0 ? "\0" : "")}{plan.Separator}{new string(' ', pad)} {display}";
 
-                var obj = new PSObject();
-                obj.TypeNames.Insert(0, "PsBash.TextOutput");
-                obj.Properties.Add(new PSNoteProperty("BashText", bashText));
-                obj.Properties.Add(new PSNoteProperty("FileName", filePath));
-                obj.Properties.Add(new PSNoteProperty("FileType", fileType));
-                obj.Properties.Add(new PSNoteProperty("MimeType", mimeType));
-                obj.Properties.Add(new PSNoteProperty("MimeEncoding", encoding));
-                WriteObject(obj);
-            }
+            var obj = new PSObject();
+            obj.TypeNames.Insert(0, "PsBash.TextOutput");
+            obj.Properties.Add(new PSNoteProperty("BashText", bashText));
+            obj.Properties.Add(new PSNoteProperty("FileName", filePath));
+            obj.Properties.Add(new PSNoteProperty("FileType", missing ? display : fileType));
+            obj.Properties.Add(new PSNoteProperty("MimeType", mimeType));
+            obj.Properties.Add(new PSNoteProperty("MimeEncoding", encoding));
+            WriteObject(obj);
         }
     }
 
+    /// <summary>The name a glob match is listed under: relative to the working directory when it lives below it.</summary>
+    private string RelativeName(string resolved)
+    {
+        try
+        {
+            var rel = Path.GetRelativePath(SessionState.Path.CurrentLocation.Path, resolved);
+            return rel.StartsWith("..", StringComparison.Ordinal) || Path.IsPathRooted(rel) ? resolved : rel.Replace('\\', '/');
+        }
+        catch { return resolved; }
+    }
     /// <summary>
     /// Type description, MIME type and MIME encoding of one path: symlink (unless
     /// <paramref name="follow"/>), directory, empty file, the magic-byte table (PNG, JPEG, PDF, Zip,

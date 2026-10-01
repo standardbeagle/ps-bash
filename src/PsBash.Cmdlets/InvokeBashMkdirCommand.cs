@@ -109,12 +109,12 @@ public sealed class InvokeBashMkdirCommand : PSCmdlet
         if (parsed.Last(OptMode) is { } modeToken)
         {
             var spec = modeToken.Value ?? "";
-            if (!FileModeSpec.TryParse(spec, isDirectory: true, FileModeSpec.CurrentUmask(), baseMode: 0x1FF, out var compiled))
+            if (!FileModeSpec.TryParse(spec, isDirectory: true, FileModeSpec.CurrentUmask(), baseMode: 0x1FF, out var compiled, out var mentioned))
             {
                 FileSystemHelpers.WriteBashError(this, $"mkdir: invalid mode '{spec}'");
                 return;
             }
-            requestedMode = compiled;
+            requestedMode = FileModeSpec.ResultingDirMode(compiled, mentioned, FileModeSpec.CurrentUmask());
         }
 
         if (operands.Count == 0)

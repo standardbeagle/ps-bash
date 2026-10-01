@@ -5783,14 +5783,14 @@ Describe 'Invoke-BashRg -- File Mode' {
         Remove-Item -Path $rgDir -Recurse -Force -ErrorAction SilentlyContinue
     }
 
-    It 'rg pattern file.txt returns matches with file:line:content format' {
+    It 'rg pattern file.txt returns the bare line when not on a terminal (ripgrep pipe default)' {
         $results = @(Invoke-BashRg 'hello' $rgFile)
         $results.Count | Should -Be 1
         $results[0].PSTypeNames[0] | Should -Be 'PsBash.RgMatch'
         $results[0].Line | Should -Be 'hello world'
         $results[0].LineNumber | Should -Be 1
         $results[0].FileName | Should -Be $rgFile
-        $results[0].BashText | Should -Be "1:hello world"
+        $results[0].BashText | Should -Be "hello world"
     }
 
     It 'rg pattern ./dir searches recursively by default' {

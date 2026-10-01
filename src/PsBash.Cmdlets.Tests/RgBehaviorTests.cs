@@ -134,6 +134,74 @@ public class RgBehaviorTests : IClassFixture<SharedPwshFixture>, IDisposable
         Assert.NotEmpty(Run("Invoke-BashRg '-V'").Lines);
     }
 
+    // ---- output style: ripgrep 14.1 defaults depend on a terminal (oracle: `script -qc "rg ..."` vs a pipe) ----
+
+    private static string Name(string line) => Path.GetFileName(line.Replace('\\', '/'));
+
+    [Fact]
+    public void NotATerminal_SingleFile_NoLineNumbersNoPath()
+    {
+        Assert.Equal(new[] { "c3" }, Run($"Invoke-BashRg c3 {_g}").AssertSuccess().Lines);
+        Assert.Equal(new[] { "3:c3" }, Run($"Invoke-BashRg '-n' c3 {_g}").AssertSuccess().Lines);
+    }
+
+    [Fact]
+    public void NotATerminal_MultiFile_PathPrefixOnly_NoHeading()
+    {
+        var h = F("h.txt", "x\nc3\n");
+        var lines = Run($"Invoke-BashRg c3 {_g} {h}").AssertSuccess().Lines;
+        Assert.Equal(new[] { "g.txt:c3", "h.txt:c3" }, lines.Select(l => Name(l)).ToArray());
+        var n = Run($"Invoke-BashRg '-n' c3 {_g} {h}").AssertSuccess().Lines;
+        Assert.Equal(new[] { "g.txt:3:c3", "h.txt:2:c3" }, n.Select(l => Name(l)).ToArray());
+        // --heading forces the grouped layout even on a pipe
+        var hd = Run($"Invoke-BashRg '--heading' c3 {_g} {h}").AssertSuccess().Lines;
+        Assert.Equal(new[] { "g.txt", "c3", "", "h.txt", "c3" }, hd.Select(l => Name(l)).ToArray());
+    }
+
+    [Fact]
+    public void NotATerminal_Directory_PathPrefixNoLineNumbers()
+    {
+        var lines = Run($"Invoke-BashRg c3 {Dir}").AssertSuccess().Lines;
+        Assert.Equal(new[] { "g.txt:c3" }, lines.Select(l => Name(l)).ToArray());
+    }
+
+    [Fact]
+    public void NotATerminal_Stdin_ExplicitNGivesLineNumbers()
+    {
+        Assert.Equal(new[] { "b" }, Run("'a','b','c' | Invoke-BashRg b").AssertSuccess().Lines);
+        Assert.Equal(new[] { "2:b", "3:b" }, Run("'a','b','b' | Invoke-BashRg '-n' b").AssertSuccess().Lines);
+    }
+
+    private string Tty(string body) => $"$env:PSBASH_RG_TTY='1'; try {{ {body} }} finally {{ Remove-Item Env:PSBASH_RG_TTY }}";
+
+    [Fact]
+    public void Terminal_SingleFile_LineNumbersOnByDefault_NoPath()
+    {
+        Assert.Equal(new[] { "3:c3" }, Run(Tty($"Invoke-BashRg c3 {_g}")).AssertSuccess().Lines);
+        Assert.Equal(new[] { "c3" }, Run(Tty($"Invoke-BashRg '-N' c3 {_g}")).AssertSuccess().Lines);
+    }
+
+    [Fact]
+    public void Terminal_MultiFile_HeadingGroupsWithBlankLineBetween()
+    {
+        var h = F("h.txt", "x\nc3\n");
+        var lines = Run(Tty($"Invoke-BashRg c3 {_g} {h}")).AssertSuccess().Lines;
+        Assert.Equal(new[] { "g.txt", "3:c3", "", "h.txt", "2:c3" }, lines.Select(l => Name(l)).ToArray());
+        var nh = Run(Tty($"Invoke-BashRg '--no-heading' c3 {_g} {h}")).AssertSuccess().Lines;
+        Assert.Equal(new[] { "g.txt:3:c3", "h.txt:2:c3" }, nh.Select(l => Name(l)).ToArray());
+        var nn = Run(Tty($"Invoke-BashRg '-N' c3 {_g} {h}")).AssertSuccess().Lines;
+        Assert.Equal(new[] { "g.txt", "c3", "", "h.txt", "c3" }, nn.Select(l => Name(l)).ToArray());
+    }
+
+    [Fact]
+    public void Terminal_Stdin_NoLineNumbers_CountAndFilesUnaffected()
+    {
+        Assert.Equal(new[] { "b" }, Run(Tty("'a','b' | Invoke-BashRg b")).AssertSuccess().Lines);
+        var h = F("h.txt", "x\nc3\n");
+        Assert.Equal(new[] { "g.txt:1", "h.txt:1" }, Run(Tty($"Invoke-BashRg '-c' c3 {_g} {h}")).AssertSuccess().Lines.Select(l => Name(l)).ToArray());
+        Assert.Equal(new[] { "g.txt", "h.txt" }, Run(Tty($"Invoke-BashRg '-l' c3 {_g} {h}")).AssertSuccess().Lines.Select(l => Name(l)).ToArray());
+    }
+
     // ---- direct PowerShell calls ----
 
     [Fact]

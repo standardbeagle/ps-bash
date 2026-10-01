@@ -108,7 +108,7 @@ public sealed class InvokeBashRgCommand : PSCmdlet
         OptOnly = "only", OptInvert = "invert", OptFixed = "fixed", OptUnrestricted = "unrestricted",
         OptHidden = "hidden", OptNoIgnore = "no-ignore", OptGlob = "glob", OptAfter = "after",
         OptBefore = "before", OptContext = "context", OptRegexp = "regexp", OptColor = "color",
-        OptNoop = "noop";
+        OptHeading = "heading", OptNoHeading = "no-heading", OptNoop = "noop";
 
     /// <summary>
     /// ripgrep options the internal engine does not run (refused, exit 2, instead of being silently
@@ -122,7 +122,7 @@ public sealed class InvokeBashRgCommand : PSCmdlet
         "--type", "--type-not", "--type-add", "--type-clear", "--type-list", "--threads", "--json",
         "--search-zip", "--multiline", "--multiline-dotall", "--pcre2", "--replace", "--file", "--max-count",
         "--max-depth", "--maxdepth", "--max-filesize", "--follow", "--sort", "--sortr", "--files", "--stats",
-        "--vimgrep", "--passthru", "--null", "--column", "--heading", "--debug", "--trace", "--pre",
+        "--vimgrep", "--passthru", "--null", "--column", "--debug", "--trace", "--pre",
         "--pre-glob", "--encoding", "--text", "--binary", "--iglob", "--ignore-file", "--no-ignore-dot",
         "--no-ignore-global", "--no-ignore-parent", "--no-ignore-files", "--pretty", "--null-data",
         "--byte-offset", "--quiet", "--files-without-match", "--with-filename", "--no-filename", "--trim",
@@ -160,7 +160,8 @@ public sealed class InvokeBashRgCommand : PSCmdlet
             new OptSpec(OptContext, 'C', "context", OptKind.Value),
             new OptSpec(OptRegexp, 'e', "regexp", OptKind.Value),
             new OptSpec(OptColor, '\0', "color", OptKind.Value),
-            new OptSpec(OptNoop, '\0', "no-heading"),
+            new OptSpec(OptHeading, '\0', "heading"),
+            new OptSpec(OptNoHeading, '\0', "no-heading"),
             new OptSpec(OptNoop, '\0', "no-messages"),
             new OptSpec(OptNoop, '\0', "no-config"),
             new OptSpec(OptNoop, '\0', "mmap"),
@@ -183,7 +184,16 @@ public sealed class InvokeBashRgCommand : PSCmdlet
         public string? Error;
         public int ErrorExit = 2;
 
-        public bool WordRegexp, LineRegexp, CountOnly, FilesOnly, LineNumbers = true, OnlyMatching, Invert, Fixed;
+        public bool WordRegexp, LineRegexp, CountOnly, FilesOnly, OnlyMatching, Invert, Fixed;
+
+        /// <summary>Last of -n / -N: true / false, or null = unset (ripgrep then decides from the terminal).</summary>
+        public bool? LineNumberMode;
+
+        /// <summary>Last of --heading / --no-heading, or null = unset (the terminal decides).</summary>
+        public bool? HeadingMode;
+
+        /// <summary>False only for an explicit -N (the scan-test view of the flag).</summary>
+        public bool LineNumbers => LineNumberMode != false;
 
         /// <summary>Last of -i / -s / -S wins (ripgrep): 'i', 's', 'S', or '\0' = default (sensitive).</summary>
         public char CaseMode;
@@ -226,8 +236,10 @@ public sealed class InvokeBashRgCommand : PSCmdlet
                 case OptLine: r.LineRegexp = true; break;
                 case OptCount: r.CountOnly = true; break;
                 case OptFilesWith: r.FilesOnly = true; break;
-                case OptLineNumber: r.LineNumbers = true; break;
-                case OptNoLineNumber: r.LineNumbers = false; break;
+                case OptLineNumber: r.LineNumberMode = true; break;
+                case OptNoLineNumber: r.LineNumberMode = false; break;
+                case OptHeading: r.HeadingMode = true; break;
+                case OptNoHeading: r.HeadingMode = false; break;
                 case OptOnly: r.OnlyMatching = true; break;
                 case OptInvert: r.Invert = true; break;
                 case OptFixed: r.Fixed = true; break;
@@ -329,7 +341,12 @@ public sealed class InvokeBashRgCommand : PSCmdlet
         bool countOnly = plan.CountOnly;
         bool invertMatch = plan.Invert;
         bool filesOnly = plan.FilesOnly;
-        bool showLineNumbers = plan.LineNumbers;
+        // ripgrep's terminal-dependent defaults (see StdoutIsTerminal): line numbers and headings are ON
+        // for a terminal, OFF for a pipe; an explicit -n/-N/--heading/--no-heading always wins. Searching
+        // stdin never defaults to line numbers, even on a terminal (oracle: `cat f | rg x` under a tty).
+        bool tty = StdoutIsTerminal();
+        bool showLineNumbers = plan.LineNumberMode ?? tty;
+        bool heading = plan.HeadingMode ?? tty;
         bool onlyMatching = plan.OnlyMatching;
         bool fixedStrings = plan.Fixed;
         bool lineRegexp = plan.LineRegexp;
@@ -397,14 +414,29 @@ public sealed class InvokeBashRgCommand : PSCmdlet
         // --- Pipeline mode ---
         if (_pipeline.Count > 0 && fileOperands.Count == 0)
         {
-            RunPipelineMode(regex, invertMatch, countOnly, onlyMatching);
+            RunPipelineMode(regex, invertMatch, countOnly, onlyMatching, plan.LineNumberMode == true);
             return;
         }
 
         // --- File mode (recursive by default; cwd if no operands) ---
-        RunFileMode(regex, fileOperands, invertMatch, showLineNumbers, countOnly,
+        RunFileMode(regex, fileOperands, invertMatch, showLineNumbers, heading, countOnly,
             filesOnly, onlyMatching, includeHidden, noIgnore, plan.Globs,
             beforeContext, afterContext);
+    }
+
+    /// <summary>
+    /// Is this output headed for a terminal? ripgrep keys its defaults (line numbers, headings, colour) on
+    /// it. The host process's own stdout is always a pipe/IPC frame, so the signal is the launcher's
+    /// hand-off: <c>PSBASH_PTY_ATTACHED=1</c> (interactive shell under a PTY). <c>PSBASH_RG_TTY</c>
+    /// (<c>1</c>/<c>0</c>) overrides it (tests, wrappers that know better). Known limit: an interactive
+    /// <c>rg x | less</c> still counts as a terminal; <c>-c</c> one-shot runs never do.
+    /// </summary>
+    internal static bool StdoutIsTerminal()
+    {
+        var o = Environment.GetEnvironmentVariable("PSBASH_RG_TTY")?.Trim();
+        if (o is { Length: > 0 })
+            return BashRuntime.IsHostConfigTruthy("PSBASH_RG_TTY");
+        return BashRuntime.IsHostConfigTruthy("PSBASH_PTY_ATTACHED");
     }
 
     /// <summary>Smart-case test: does the raw pattern contain an uppercase letter?</summary>
@@ -487,9 +519,11 @@ public sealed class InvokeBashRgCommand : PSCmdlet
 
     private static bool NativeRgPassthroughEnabled() => BashRuntime.IsHostConfigTruthy("PSBASH_RG_NATIVE");
 
-    private void RunPipelineMode(Regex regex, bool invertMatch, bool countOnly, bool onlyMatching)
+    private void RunPipelineMode(Regex regex, bool invertMatch, bool countOnly, bool onlyMatching, bool lineNumbers)
     {
         int matchCount = 0;
+        int lineNo = 0;
+        string Pfx() => lineNumbers ? lineNo + ":" : "";
 
         foreach (var item in _pipeline)
         {
@@ -500,6 +534,7 @@ public sealed class InvokeBashRgCommand : PSCmdlet
             {
                 foreach (var subLine in trimmed.Split('\n'))
                 {
+                    lineNo++;
                     bool isMatch = regex.IsMatch(subLine);
                     if (invertMatch) isMatch = !isMatch;
                     if (isMatch)
@@ -511,12 +546,12 @@ public sealed class InvokeBashRgCommand : PSCmdlet
                             {
                                 foreach (Match m in regex.Matches(subLine))
                                 {
-                                    WriteObject(BashRuntime.NewBashObject(m.Value));
+                                    WriteObject(BashRuntime.NewBashObject(Pfx() + m.Value));
                                 }
                             }
                             else
                             {
-                                WriteObject(BashRuntime.NewBashObject(subLine));
+                                WriteObject(BashRuntime.NewBashObject(Pfx() + subLine));
                             }
                         }
                     }
@@ -524,6 +559,7 @@ public sealed class InvokeBashRgCommand : PSCmdlet
             }
             else
             {
+                lineNo++;
                 bool isMatch = regex.IsMatch(trimmed);
                 if (invertMatch) isMatch = !isMatch;
                 if (isMatch)
@@ -535,8 +571,12 @@ public sealed class InvokeBashRgCommand : PSCmdlet
                         {
                             foreach (Match m in regex.Matches(trimmed))
                             {
-                                WriteObject(BashRuntime.NewBashObject(m.Value));
+                                WriteObject(BashRuntime.NewBashObject(Pfx() + m.Value));
                             }
+                        }
+                        else if (lineNumbers)
+                        {
+                            WriteObject(BashRuntime.NewBashObject(Pfx() + trimmed));
                         }
                         else
                         {
@@ -560,7 +600,7 @@ public sealed class InvokeBashRgCommand : PSCmdlet
 
     private void RunFileMode(
         Regex regex, List<string> fileOperands, bool invertMatch,
-        bool showLineNumbers, bool countOnly, bool filesOnly, bool onlyMatching,
+        bool showLineNumbers, bool heading, bool countOnly, bool filesOnly, bool onlyMatching,
         bool includeHidden, bool noIgnore, List<string> globs,
         int beforeContext, int afterContext)
     {
@@ -623,6 +663,11 @@ public sealed class InvokeBashRgCommand : PSCmdlet
         // Binary files are skipped (NUL probe) like ripgrep; the same
         // PSBASH_SEARCH_NO_IGNORE escape hatch searches them too.
         bool skipBinary = !BashFileSystem.DefaultFilteringDisabled();
+        // ripgrep heading layout: the path on its own line, the file's matches beneath it, a blank line
+        // between files. Only when several files are searched; the lines then carry no path prefix.
+        bool useHeading = heading && multipleFiles;
+        bool prefixPath = multipleFiles && !useHeading;
+        bool anyHeading = false;
 
         foreach (var source in sources)
         foreach (var filePath in source)
@@ -659,6 +704,13 @@ public sealed class InvokeBashRgCommand : PSCmdlet
                 for (int li = start; li <= end; li++) emitLines.Add(li);
             }
 
+            if (useHeading && emitLines.Count > 0)
+            {
+                if (anyHeading) WriteObject(BashRuntime.NewBashObject(""));
+                WriteObject(BashRuntime.NewBashObject(filePath));
+                anyHeading = true;
+            }
+
             foreach (var li in emitLines)
             {
                 string line = lines[li];
@@ -669,13 +721,13 @@ public sealed class InvokeBashRgCommand : PSCmdlet
                     foreach (Match m in regex.Matches(line))
                     {
                         string matchText = m.Value;
-                        string bashText = BuildBashText(filePath, lineNum, matchText, multipleFiles, showLineNumbers);
+                        string bashText = BuildBashText(filePath, lineNum, matchText, prefixPath, showLineNumbers);
                         WriteObject(BuildRgMatch(filePath, lineNum, line, bashText));
                     }
                     continue;
                 }
 
-                string bt = BuildBashText(filePath, lineNum, line, multipleFiles, showLineNumbers);
+                string bt = BuildBashText(filePath, lineNum, line, prefixPath, showLineNumbers);
                 WriteObject(BuildRgMatch(filePath, lineNum, line, bt));
             }
         }
