@@ -98,11 +98,10 @@ internal static class FusedLane
             var name = s.Words.IsEmpty ? null : PsEmitter.GetLiteralValue(s.Words[0]);
             if (name is null || !FusePipelineAllowlist.Contains(name))
                 return false;
-            // Unbounded/streaming stage guard: the fused cmdlet runs the inner
-            // pipeline via InvokeScript, which only returns after the pipeline
-            // COMPLETES — so a never-ending stage (e.g. `tail -f`) would batch-buffer
-            // forever and hang silently where the unfused lane streams live. Any such
-            // stage forces the fallback. See StageIsUnbounded.
+            // Unbounded/streaming stage guard: the fused cmdlet cuts output frames by SIZE
+            // (~32 KiB), so a never-ending stage (e.g. `tail -f`) would hold its lines in a
+            // half-full frame where the unfused lane prints each one live. Any such stage
+            // keeps the unfused lane. See StageIsUnbounded.
             if (StageIsUnbounded(name, s.Words))
                 return false;
         }
@@ -125,9 +124,11 @@ internal static class FusedLane
 
     /// <summary>
     /// True when an allowlisted stage's args put it into an UNBOUNDED / never-terminating
-    /// mode that the batched fused lane cannot serve (it buffers until the inner pipeline
-    /// completes). The fused chain must never hang where the unfused chain streams, so any
-    /// such stage forces the PowerShell-pipeline fallback.
+    /// mode that the batched fused lane cannot serve. Since the fallback streams (frames are
+    /// written as they fill, not after the pipeline completes) it no longer buffers the whole
+    /// output, but a frame is cut by SIZE, not by idleness — a live follower's lines would
+    /// wait in a half-full frame, and an idle flush needs a timer thread while
+    /// <c>WriteObject</c> is pipeline-thread-only. So any such stage keeps the unfused lane.
     /// <para>
     /// General deny seam keyed by command so future allowlist additions inherit the check.
     /// Today only <c>tail</c> has an unbounded flag (<c>-f</c>/<c>-F</c>/<c>--follow</c>).
