@@ -200,11 +200,12 @@ public sealed class InvokeBashTouchCommand : PSCmdlet
         }
         else if (dateStr is not null)
         {
-            if (!DateTime.TryParse(dateStr, out mtime))
+            if (!GnuDateParser.TryParse(dateStr, DateTimeOffset.Now, TimeZoneInfo.Local, out var parsedDate))
             {
                 FileSystemHelpers.WriteBashError(this, $"touch: invalid date format '{dateStr}'");
                 return;
             }
+            mtime = parsedDate.LocalDateTime;
             atime = mtime;
         }
 

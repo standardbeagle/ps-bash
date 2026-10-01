@@ -312,6 +312,47 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
     // multi-line record or a file line), so the run is emitted as the input lines themselves.
     private readonly List<(string Line, object? Obj)> _runMembers = new();
     private bool _hadError;
+    // OUTPUT operand (`uniq in out`): results go to this file instead of the pipeline. Opened on
+    // the first line written, or at the end when the input is read without error (GNU creates it
+    // even for an empty result, but never when the input could not be opened).
+    private string? _outputFile;
+    private StreamWriter? _outWriter;
+    private bool _outFailed;
+
+    private void Emit(object record)
+    {
+        if (_outputFile is null) { WriteObject(record); return; }
+        var w = EnsureOutput();
+        if (w is null) return;
+        var text = BashRuntime.GetBashText(record);
+        if (text.EndsWith('\n')) text = text[..^1];
+        w.Write(text);
+        w.Write('\n');
+    }
+
+    private StreamWriter? EnsureOutput()
+    {
+        if (_outWriter is not null || _outFailed || _outputFile is null) return _outWriter;
+        try
+        {
+            var path = SessionState.Path.GetUnresolvedProviderPathFromPSPath(_outputFile);
+            _outWriter = new StreamWriter(path, false, new System.Text.UTF8Encoding(false));
+        }
+        catch (Exception ex)
+        {
+            if (FileSystemHelpers.IsPipelineStop(ex)) throw;
+            _outFailed = true;
+            _hadError = true;
+            string why = ex switch
+            {
+                DirectoryNotFoundException => "No such file or directory",
+                UnauthorizedAccessException => "Permission denied",
+                _ => ex.Message,
+            };
+            FileSystemHelpers.WriteBashError(this, $"uniq: {_outputFile}: {why}");
+        }
+        return _outWriter;
+    }
 
     private void ParseOnce()
     {
@@ -342,7 +383,12 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
         _skipFields = plan.SkipFields;
         _skipChars = plan.SkipChars;
         _checkChars = plan.CheckChars;
-        _operands = plan.Operands;
+        // uniq [INPUT [OUTPUT]]: the FIRST operand is the input (`-` = stdin), the SECOND the file the
+        // result is written to (`-` = stdout) — it is never a second input.
+        _operands = plan.Operands.Count > 0 && plan.Operands[0] != "-"
+            ? new List<string> { plan.Operands[0] }
+            : new List<string>();
+        _outputFile = plan.Operands.Count > 1 && plan.Operands[1] != "-" ? plan.Operands[1] : null;
         _suppressStdin = plan.Declined || _operands.Count > 0;
     }
     private void FlushRun()
@@ -356,13 +402,13 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
             if (_runCount < 2) return;
             // --all-repeated=prepend: a blank line before EVERY group; =separate: between groups.
             if (_allRepeatedMethod == "prepend" || (_allRepeatedMethod == "separate" && _groupsEmitted > 0))
-                WriteObject(BashRuntime.NewBashObject(string.Empty));
+                Emit(BashRuntime.NewBashObject(string.Empty));
             _groupsEmitted++;
             // -D is a FILTER too: every member of the run is one of the input lines (with
             // -f/-s/-w they may differ textually), so emit each member's ORIGINAL object.
             foreach (var (memberLine, memberObj) in _runMembers)
             {
-                WriteObject(memberObj != null
+                Emit(memberObj != null
                     ? BashRuntime.PassTerminated(memberObj)
                     : BashRuntime.NewBashObject(memberLine));
             }
@@ -375,14 +421,14 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
         if (_countMode)
         {
             string text = string.Format("{0,7} {1}", _runCount, _prevLine);
-            WriteObject(BashRuntime.NewBashObject(text));
+            Emit(BashRuntime.NewBashObject(text));
         }
         else
         {
             // Plain uniq / -d / -u is a FILTER: the output line IS the first line of its run,
             // so the ORIGINAL upstream object passes through (uniq always terminates the line,
             // hence PassTerminated strips a stale missing-newline flag).
-            WriteObject(_prevObject != null
+            Emit(_prevObject != null
                 ? BashRuntime.PassTerminated(_prevObject)
                 : BashRuntime.NewBashObject(_prevLine));
         }
@@ -503,6 +549,14 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
 
         // Flush the final run (the buffered oracle's single trailing FlushRun).
         FlushRun();
+        if (_outputFile is not null && !_hadError) EnsureOutput();
+        try { _outWriter?.Dispose(); }
+        catch (IOException ex)
+        {
+            _hadError = true;
+            FileSystemHelpers.WriteBashError(this, $"uniq: {_outputFile}: {ex.Message}");
+        }
+        _outWriter = null;
 
         if (_hadError)
         {

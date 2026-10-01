@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 41
+stdout-length: 8
+stderr-length: 0
+==== SCRIPT ====
+x=$(printf 'a\nb\n'; echo c); echo "[$x]"
+==== STDOUT ====
+[a
+b
+c]
+
+==== STDERR ====
+

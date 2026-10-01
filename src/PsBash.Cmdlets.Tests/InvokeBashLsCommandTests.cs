@@ -189,7 +189,8 @@ public class InvokeBashLsCommandTests : IDisposable, IClassFixture<SharedPwshFix
         WriteFile("visible.txt", "v");
 
         var names = RunBashText($"Invoke-BashLs -a '{Q(_tmpDir)}'");
-        Assert.Equal(new[] { ".hidden", "visible.txt" }, names);
+        // GNU `ls -a` lists the directory itself and its parent first.
+        Assert.Equal(new[] { ".", "..", ".hidden", "visible.txt" }, names);
     }
 
     [Fact]
@@ -198,9 +199,9 @@ public class InvokeBashLsCommandTests : IDisposable, IClassFixture<SharedPwshFix
         WriteFile(".dotfile", "d");
         WriteFile("plain", "p");
 
-        // -A is "almost all" — like -a for our temp dir (no . / .. entries
-        // are enumerated by System.IO anyway).
-        var names = RunBashText($"Invoke-BashLs -A '{Q(_tmpDir)}'");
+        // -A is "almost all": hidden entries but NOT "." / "..". (Quoted: a bare direct-call -A
+        // binds the case-insensitive -a decoy, which is -a.)
+        var names = RunBashText($"Invoke-BashLs '-A' '{Q(_tmpDir)}'");
         Assert.Equal(new[] { ".dotfile", "plain" }, names);
     }
 
@@ -257,11 +258,13 @@ public class InvokeBashLsCommandTests : IDisposable, IClassFixture<SharedPwshFix
         WriteFile("file.txt", "hello");
 
         var lines = RunBashText($"Invoke-BashLs -l '{Q(_tmpDir)}'");
-        Assert.Single(lines);
+        // A directory listing starts with GNU's "total N" (1 KiB units: 5 bytes = one 4 KiB block).
+        Assert.Equal(2, lines.Length);
+        Assert.Equal("total 4", lines[0]);
         // Long line: permissions linkcount owner group size date name.
         // Permissions begin with the type char ('-' for a regular file) then
         // 9 rwx chars; the line ends with the file name.
-        var line = lines[0];
+        var line = lines[1];
         Assert.StartsWith("-", line);
         Assert.EndsWith("file.txt", line);
         // Size column carries the 5-byte content somewhere in the line.
@@ -274,9 +277,10 @@ public class InvokeBashLsCommandTests : IDisposable, IClassFixture<SharedPwshFix
         MakeDir("subdir");
 
         var lines = RunBashText($"Invoke-BashLs -l '{Q(_tmpDir)}'");
-        Assert.Single(lines);
-        Assert.StartsWith("d", lines[0]);
-        Assert.EndsWith("subdir", lines[0]);
+        Assert.Equal(2, lines.Length);
+        Assert.Equal("total 4", lines[0]);
+        Assert.StartsWith("d", lines[1]);
+        Assert.EndsWith("subdir", lines[1]);
     }
 
     // --- Classify: -p / -F ---

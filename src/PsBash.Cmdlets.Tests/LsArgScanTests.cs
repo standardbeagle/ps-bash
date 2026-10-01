@@ -141,8 +141,8 @@ public class LsArgScanTests : IClassFixture<SharedPwshFixture>
         try
         {
             // oracle: ls -l1 and ls -1l both print the long format.
-            Assert.All(Names($"Invoke-BashLs '-l1' '{d}'"), l => Assert.Matches(@"^[-d][rwx-]{9} ", l));
-            Assert.All(Names($"Invoke-BashLs '-1l' '{d}'"), l => Assert.Matches(@"^[-d][rwx-]{9} ", l));
+            Assert.All(Names($"Invoke-BashLs '-l1' '{d}'").Where(l => !l.StartsWith("total ")), l => Assert.Matches(@"^[-d][rwx-]{9} ", l));
+            Assert.All(Names($"Invoke-BashLs '-1l' '{d}'").Where(l => !l.StartsWith("total ")), l => Assert.Matches(@"^[-d][rwx-]{9} ", l));
         }
         finally { Directory.Delete(d, true); }
     }

@@ -29,7 +29,7 @@ namespace PsBash.Cmdlets;
 /// uniform sort + format pass for every tier.</item>
 /// <item><b>Tier 2 — real filesystem.</b> The hot path: <see cref="System.IO"/>
 /// streaming (no <c>Get-ChildItem</c>, no <c>Get-Acl</c>), fully reimplemented
-/// in C# here. <c>-R</c> uses <see cref="SearchOption.AllDirectories"/>.</item>
+/// in C# here. <c>-R</c> recurses depth first, one "dir:" section per directory (symlinks not followed).</item>
 /// <item><b>Tier 3 — PS provider fallback.</b> Registry:, Cert:, custom
 /// PSDrives — also delegated to the <c>Get-BashLsProviderEntries</c> shim,
 /// which calls <c>Get-Item</c> / <c>Get-ChildItem</c> and
@@ -85,8 +85,7 @@ public sealed class InvokeBashLsCommand : PSCmdlet
 
     /// <summary>
     /// The bash <c>-i</c> (inode) switch — a bare <c>-i</c> prefix-collides with
-    /// <c>-InformationAction</c> / <c>-InformationVariable</c> and crashes the binder. Accepted
-    /// without effect, as before.
+    /// <c>-InformationAction</c> / <c>-InformationVariable</c> and crashes the binder. Re-injected as <c>-i</c>.
     /// </summary>
     [Parameter]
     public SwitchParameter I { get; set; }
@@ -257,7 +256,8 @@ public sealed class InvokeBashLsCommand : PSCmdlet
         }
 
         bool longMode = parsed.Has(OptLong);
-        bool showHidden = parsed.Has(OptAll) || parsed.Has(OptAlmostAll);
+        bool showAll = parsed.Has(OptAll);          // -a: also "." and ".."
+        bool showHidden = showAll || parsed.Has(OptAlmostAll);
         bool humanSizes = parsed.Has(OptHuman);
         bool recursive = parsed.Has(OptRecursive);
         bool sortBySize = sortKey == 2;
@@ -267,7 +267,9 @@ public sealed class InvokeBashLsCommand : PSCmdlet
         bool classifyF = indicatorStyle == 2;
         bool classifyP = indicatorStyle == 1;
         bool groupDirsFirst = parsed.Has(OptGroupDirsFirst);
-        // -1 (and -i / -s, historically accepted without effect) change nothing in this listing.
+        bool showInode = parsed.Has(OptInode);
+        bool showBlocks = parsed.Has(OptBlocks);
+        // -1 changes nothing in this one-entry-per-line listing.
 
         bool classify = classifyF || classifyP || longMode;
         bool colorize = colorOn;
@@ -277,7 +279,12 @@ public sealed class InvokeBashLsCommand : PSCmdlet
             : new List<string> { "." };
         var targets = ResolveGlob(operands);
 
-        var allEntries = new List<PSObject>();
+        // GNU layout: the non-directory operands (and -d operands) first as one block, then every
+        // directory operand as its own section. A section gets a "dir:" header when more than one
+        // operand was given or -R is on, sections are separated by a blank line, and -l / -s
+        // sections start with a "total N" line.
+        var fileBlock = new List<PSObject>();
+        var dirTargets = new List<(string Path, string Display, DateTime Mtime)>();
         bool hadError = false;
 
         foreach (var (target, typedOperand) in targets)
@@ -298,47 +305,19 @@ public sealed class InvokeBashLsCommand : PSCmdlet
             {
                 if (dirOnly)
                 {
-                    allEntries.Add(WithOperandDisplayName(BuildEntryFromFsi(new DirectoryInfo(resolvedPath)), typedOperand));
+                    fileBlock.Add(WithOperandDisplayName(BuildEntryFromFsi(new DirectoryInfo(resolvedPath)), typedOperand));
                 }
                 else
                 {
-                    try
-                    {
-                        var dirInfo = new DirectoryInfo(resolvedPath);
-                        var searchOpt = recursive
-                            ? SearchOption.AllDirectories
-                            : SearchOption.TopDirectoryOnly;
-                        foreach (var fsi in dirInfo.EnumerateFileSystemInfos("*", searchOpt))
-                        {
-                            if (!showHidden)
-                            {
-                                if (fsi.Name.Length > 0 && fsi.Name[0] == '.')
-                                {
-                                    continue;
-                                }
-                                if (IsWindows()
-                                    && (fsi.Attributes & FileAttributes.Hidden) != 0)
-                                {
-                                    continue;
-                                }
-                            }
-                            allEntries.Add(BuildEntryFromFsi(fsi));
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-                        WriteBashError(
-                            $"ls: cannot open directory '{target}': {ex.Message}", 2);
-                        hadError = true;
-                    }
+                    dirTargets.Add((resolvedPath, typedOperand ?? RelativeDisplay(resolvedPath),
+                        Directory.GetLastWriteTime(resolvedPath)));
                 }
                 continue;
             }
 
             if (resolvedPath != null && File.Exists(resolvedPath))
             {
-                allEntries.Add(WithOperandDisplayName(BuildEntryFromFsi(new FileInfo(resolvedPath)), typedOperand));
+                fileBlock.Add(WithOperandDisplayName(BuildEntryFromFsi(new FileInfo(resolvedPath)), typedOperand));
                 continue;
             }
 
@@ -380,7 +359,7 @@ public sealed class InvokeBashLsCommand : PSCmdlet
                     shimFailed = true;
                     continue;
                 }
-                allEntries.Add(item as PSObject ?? PSObject.AsPSObject(item));
+                fileBlock.Add(item as PSObject ?? PSObject.AsPSObject(item));
             }
 
             // An empty provider container is not an error; only a not-found target is.
@@ -388,122 +367,287 @@ public sealed class InvokeBashLsCommand : PSCmdlet
         }
 
         // Sort — bash default is case-insensitive alphabetical with dirs and
-        // files interleaved; -S sorts by size, -t by mtime; -r reverses.
-        IEnumerable<PSObject> sorted;
-        if (sortBySize)
+        // files interleaved; -S sorts by size, -t by mtime (ties by name); -r reverses.
+        List<PSObject> Sort(List<PSObject> entries)
         {
-            sorted = reverseSort
-                ? allEntries.OrderBy(e => GetLong(e, "SizeBytes"))
-                : allEntries.OrderByDescending(e => GetLong(e, "SizeBytes"));
-        }
-        else if (sortByTime)
-        {
-            sorted = reverseSort
-                ? allEntries.OrderBy(e => GetDate(e, "LastModified"))
-                : allEntries.OrderByDescending(e => GetDate(e, "LastModified"));
-        }
-        else
-        {
-            var byName = allEntries.OrderBy(
-                e => GetDisplayName(e), StringComparer.OrdinalIgnoreCase);
-            sorted = reverseSort
-                ? byName.Reverse()
-                : byName;
-        }
+            IEnumerable<PSObject> sorted;
+            if (sortBySize)
+            {
+                sorted = entries.OrderByDescending(e => GetLong(e, "SizeBytes"))
+                    .ThenBy(e => GetDisplayName(e), StringComparer.OrdinalIgnoreCase);
+                if (reverseSort) sorted = sorted.Reverse();
+            }
+            else if (sortByTime)
+            {
+                sorted = entries.OrderByDescending(e => GetDate(e, "LastModified"))
+                    .ThenBy(e => GetDisplayName(e), StringComparer.OrdinalIgnoreCase);
+                if (reverseSort) sorted = sorted.Reverse();
+            }
+            else
+            {
+                var byName = entries.OrderBy(e => GetDisplayName(e), StringComparer.OrdinalIgnoreCase);
+                sorted = reverseSort ? byName.Reverse() : byName;
+            }
 
-        // --group-directories-first: stable re-order so directories precede files
-        // (LINQ OrderBy is stable, preserving the within-group sort above).
-        if (groupDirsFirst)
-        {
-            sorted = sorted.OrderByDescending(e => GetBool(e, "IsDirectory"));
+            // --group-directories-first: stable re-order so directories precede files
+            // (LINQ OrderBy is stable, preserving the within-group sort above).
+            if (groupDirsFirst)
+            {
+                sorted = sorted.OrderByDescending(e => GetBool(e, "IsDirectory"));
+            }
+            return sorted.ToList();
         }
 
         // Format and emit.
-        const string reset = "[0m";
-        const string bold = "[1m";
-        const string blue = "[34m";
-        const string cyan = "[36m";
-        const string green = "[32m";
+        const string reset = "[0m";
+        const string bold = "[1m";
+        const string blue = "[34m";
+        const string cyan = "[36m";
+        const string green = "[32m";
 
-        foreach (var entry in sorted)
+        bool anyBlockWritten = false;
+
+        // One block of already-sorted entries: optional header, optional "total N", the entries.
+        void EmitBlock(string? header, List<PSObject> sorted, bool withTotal)
         {
-            bool isDir = GetBool(entry, "IsDirectory");
-            bool isSymlink = GetBool(entry, "IsSymlink");
+            if (anyBlockWritten) WriteObject(BashRuntime.TextRecord(string.Empty, false));
+            anyBlockWritten = true;
+            if (header is not null) WriteObject(BashRuntime.TextRecord(header + ":", false));
 
-            string indicator = string.Empty;
-            if (classifyF)
+            var blocks = showBlocks || (withTotal && longMode)
+                ? sorted.Select(BlocksK).ToList()
+                : null;
+            if (withTotal && (longMode || showBlocks) && blocks is not null)
             {
-                if (isDir)
-                {
-                    indicator = "/";
-                }
-                else if (isSymlink)
-                {
-                    indicator = "@";
-                }
-                else if (IsExecutable(entry))
-                {
-                    indicator = "*";
-                }
-            }
-            else if (classifyP)
-            {
-                if (isDir)
-                {
-                    indicator = "/";
-                }
+                long sumK = 0;
+                foreach (var b in blocks) sumK += b;
+                string totalText = humanSizes
+                    ? FormatBashSize(sumK * 1024)
+                    : sumK.ToString(CultureInfo.InvariantCulture);
+                WriteObject(BashRuntime.TextRecord("total " + totalText, false));
             }
 
-            string bashText;
-            if (longMode)
+            string[]? inodes = showInode ? sorted.Select(InodeText).ToArray() : null;
+            string[]? blockText = showBlocks && blocks is not null
+                ? blocks.Select(b => humanSizes
+                    ? FormatBashSize(b * 1024)
+                    : b.ToString(CultureInfo.InvariantCulture)).ToArray()
+                : null;
+            int inodeWidth = inodes is null ? 0 : inodes.Max(s => s.Length);
+            int blockWidth = blockText is null ? 0 : blockText.Max(s => s.Length);
+
+            for (int idx = 0; idx < sorted.Count; idx++)
             {
-                string line = FormatLsLine(entry, humanSizes);
-                if (classify)
-                {
-                    line += indicator;
-                }
-                bashText = line + "\n";
-            }
-            else
-            {
-                string name = GetDisplayName(entry);
-                if (colorize)
+                var entry = sorted[idx];
+                bool isDir = GetBool(entry, "IsDirectory");
+                bool isSymlink = GetBool(entry, "IsSymlink");
+
+                string indicator = string.Empty;
+                if (classifyF)
                 {
                     if (isDir)
                     {
-                        name = $"{blue}{bold}{name}{reset}";
+                        indicator = "/";
                     }
                     else if (isSymlink)
                     {
-                        name = $"{cyan}{name}{reset}";
+                        indicator = "@";
                     }
                     else if (IsExecutable(entry))
                     {
-                        name = $"{green}{name}{reset}";
+                        indicator = "*";
                     }
                 }
-                bashText = $"{name}{indicator}\n";
+                else if (classifyP)
+                {
+                    if (isDir)
+                    {
+                        indicator = "/";
+                    }
+                }
+
+                string prefix = string.Empty;
+                if (inodes is not null) prefix += inodes[idx].PadLeft(inodeWidth) + " ";
+                if (blockText is not null) prefix += blockText[idx].PadLeft(blockWidth) + " ";
+
+                string bashText;
+                if (longMode)
+                {
+                    string line = FormatLsLine(entry, humanSizes);
+                    if (classify)
+                    {
+                        line += indicator;
+                    }
+                    bashText = prefix + line + "\n";
+                }
+                else
+                {
+                    string name = GetDisplayName(entry);
+                    if (colorize)
+                    {
+                        if (isDir)
+                        {
+                            name = $"{blue}{bold}{name}{reset}";
+                        }
+                        else if (isSymlink)
+                        {
+                            name = $"{cyan}{name}{reset}";
+                        }
+                        else if (IsExecutable(entry))
+                        {
+                            name = $"{green}{name}{reset}";
+                        }
+                    }
+                    bashText = $"{prefix}{name}{indicator}\n";
+                }
+
+                // Match the psm1 Set-BashDisplayProperty normalization (strip one
+                // trailing \n) and write the typed object through.
+                var prop = entry.Properties["BashText"];
+                if (prop != null)
+                {
+                    prop.Value = BashRuntime.NormalizeBashText(bashText);
+                }
+                else
+                {
+                    entry.Properties.Add(new PSNoteProperty(
+                        "BashText", BashRuntime.NormalizeBashText(bashText)));
+                }
+                WriteObject(entry);
+            }
+        }
+
+        bool printHeaders = recursive || targets.Count > 1;
+
+        // One directory section, then (with -R) each subdirectory in listing order, depth first.
+        void ListDirectory(string path, string display)
+        {
+            var entries = new List<PSObject>();
+            try
+            {
+                var dirInfo = new DirectoryInfo(path);
+                if (showAll)
+                {
+                    entries.Add(DotEntry(dirInfo, "."));
+                    entries.Add(DotEntry(dirInfo.Parent ?? dirInfo, ".."));
+                }
+                foreach (var fsi in dirInfo.EnumerateFileSystemInfos("*", SearchOption.TopDirectoryOnly))
+                {
+                    if (!showHidden)
+                    {
+                        if (fsi.Name.Length > 0 && fsi.Name[0] == '.')
+                        {
+                            continue;
+                        }
+                        if (IsWindows()
+                            && (fsi.Attributes & FileAttributes.Hidden) != 0)
+                        {
+                            continue;
+                        }
+                    }
+                    entries.Add(BuildEntryFromFsi(fsi));
+                }
+            }
+            catch (Exception ex)
+            {
+                if (FileSystemHelpers.IsPipelineStop(ex)) throw;
+                WriteBashError(
+                    $"ls: cannot open directory '{display}': {ex.Message}", 2);
+                hadError = true;
+                return;
             }
 
-            // Match the psm1 Set-BashDisplayProperty normalization (strip one
-            // trailing \n) and write the typed object through.
-            var prop = entry.Properties["BashText"];
-            if (prop != null)
+            var sorted = Sort(entries);
+            EmitBlock(printHeaders ? display : null, sorted, withTotal: true);
+
+            if (!recursive) return;
+            foreach (var e in sorted)
             {
-                prop.Value = BashRuntime.NormalizeBashText(bashText);
+                if (!GetBool(e, "IsDirectory") || GetBool(e, "IsSymlink")) continue;
+                string name = GetString(e, "Name");
+                if (name is "." or "..") continue;
+                ListDirectory(GetString(e, "FullPath"), JoinDisplay(display, name));
             }
-            else
-            {
-                entry.Properties.Add(new PSNoteProperty(
-                    "BashText", BashRuntime.NormalizeBashText(bashText)));
-            }
-            WriteObject(entry);
+        }
+
+        if (fileBlock.Count > 0)
+        {
+            EmitBlock(null, Sort(fileBlock), withTotal: false);
+        }
+
+        IEnumerable<(string Path, string Display, DateTime Mtime)> orderedDirs;
+        if (sortBySize)
+        {
+            orderedDirs = dirTargets.OrderBy(t => t.Display, StringComparer.OrdinalIgnoreCase);
+            if (reverseSort) orderedDirs = orderedDirs.Reverse();
+        }
+        else if (sortByTime)
+        {
+            orderedDirs = dirTargets.OrderByDescending(t => t.Mtime)
+                .ThenBy(t => t.Display, StringComparer.OrdinalIgnoreCase);
+            if (reverseSort) orderedDirs = orderedDirs.Reverse();
+        }
+        else
+        {
+            var byName = dirTargets.OrderBy(t => t.Display, StringComparer.OrdinalIgnoreCase);
+            orderedDirs = reverseSort ? byName.Reverse() : byName;
+        }
+
+        foreach (var d in orderedDirs)
+        {
+            ListDirectory(d.Path, d.Display);
         }
 
         if (hadError)
         {
             SessionState.PSVariable.Set("global:LASTEXITCODE", 2);
         }
+    }
+
+    /// <summary>"." / ".." entries for <c>-a</c>: the directory itself or its parent, named as GNU names them.</summary>
+    private static PSObject DotEntry(DirectoryInfo dir, string name)
+    {
+        var e = BuildEntryFromFsi(dir);
+        e.Properties["Name"].Value = name;
+        return e;
+    }
+
+    /// <summary>A directory operand that came out of a glob: show it relative to the working directory.</summary>
+    private static string RelativeDisplay(string fullPath)
+    {
+        try
+        {
+            var rel = Path.GetRelativePath(Environment.CurrentDirectory, fullPath);
+            if (!rel.StartsWith("..", StringComparison.Ordinal) && !Path.IsPathRooted(rel))
+                return rel.Replace('\\', '/');
+        }
+        catch { /* fall through */ }
+        return fullPath;
+    }
+
+    /// <summary>GNU builds a child's header as "parent/child" without doubling a trailing slash.</summary>
+    internal static string JoinDisplay(string parent, string child) =>
+        parent.EndsWith('/') || parent.EndsWith('\\') ? parent + child : parent + "/" + child;
+
+    /// <summary>
+    /// Allocated size in 1 KiB units, the way <c>ls -s</c> / the <c>total</c> line count it:
+    /// whole 4 KiB allocation units (a 5000-byte file is 8, an empty file 0, a directory 4).
+    /// The true figure is filesystem-specific (st_blocks); 4 KiB is what ext4/NTFS give in practice.
+    /// </summary>
+    internal static long BlocksK(PSObject entry)
+    {
+        if (GetBool(entry, "IsSymlink")) return 0;
+        if (GetBool(entry, "IsDirectory")) return 4;
+        long size = GetLong(entry, "SizeBytes");
+        return (size + 4095) / 4096 * 4;
+    }
+
+    private static string InodeText(PSObject entry)
+    {
+        var path = GetString(entry, "FullPath");
+        return FileIdentity.TryGetInode(path, out var inode)
+            ? inode.ToString(CultureInfo.InvariantCulture)
+            : "?";
     }
 
     /// <summary>

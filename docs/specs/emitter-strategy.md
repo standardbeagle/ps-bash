@@ -364,6 +364,10 @@ list's shape from the MIDDLE word, so `arity3` (`A op B` with `=`, `==`, `!=`, `
 `PsBuild.ExitCodeTest` instead of degrading to `$false` plus a diagnostic; `[[ ]]` keeps the diagnostic (the
 cmdlet has no `[[` grammar).
 
+### `:` / `true` / `false`
+
+All three are no-argument builtins that ignore their arguments but still EXPAND them: `EmitNoOpArgPrelude` emits `[void](word);` for every non-literal argument (`: ${x:=5}` assigns, `: $(cmd)` runs cmd), then sets `$global:LASTEXITCODE` (`:`/`true` = 0, `false` = 1, with the errexit behaviour above). `:` was "command not found". As a `while`/`if` condition (`EmitWhileCondition` / `EmitCondition`) a bare `:` is the constant `$true`, and as a pipe target (`echo hi | :`) it is `Out-Null`.
+
 ### `set`
 
 - `set -e` / `set -o errexit` -> `$ErrorActionPreference = 'Stop'; $global:__BashErrexit = $true`
@@ -617,7 +621,7 @@ everything else stays a single-quoted literal for the evaluator to resolve itsel
 `$(( $(echo 5) + 60 ))` emits
 
 ```powershell
-Invoke-BashArith ('' + $((@(Invoke-BashEcho 5 | ForEach-Object { Get-BashText $_ }) -join [string][char]10).Trim()) + ' + 60')
+Invoke-BashArith ('' + $((@(Invoke-BashEcho 5 | ConvertTo-BashCapture) -join [string][char]10).Trim()) + ' + 60')
 ```
 
 The leading `'' +` forces string (not numeric) concatenation. The newline join uses
@@ -626,6 +630,10 @@ arbitrarily nested `"$( … )"`, where a `"` would need escaping once per enclos
 string level. The scan is quote-aware, so a `)` inside a quoted argument
 (`$(grep -c "a)b" f)`) does not end the substitution. Returns `null` when nothing
 needs substituting, so the common case keeps the cheap one-literal form.
+
+### Command-substitution capture (`ConvertTo-BashCapture`)
+
+Every `$(…)` body ends in the binary cmdlet `ConvertTo-BashCapture` (`EmitCommandSub` / `EmitCommandSubString` / the arithmetic operand), not `ForEach-Object { Get-BashText $_ }`. It turns the records into the lines of their BYTE STREAM: a normal record is a line, a `NoTrailingNewline` (exact-bytes) record is glued to whatever follows it, and an exact record that already ends in `\n` loses it (the caller's join re-adds it once). So `$(printf a; printf b)` is `ab` (it was `a\nb`), `$(printf 'x\n'; echo y)` is `x\ny`, and a streaming producer such as `tr '\n' ,` may emit many exact records and still capture as one string — which is what let `tr` stop buffering. The pipe-TARGET conversion before a native program (`ForEach-Object { Get-BashText $_ } | native`, EmitPipeline) is separate and unchanged.
 
 ### `EmitRedirect`
 
