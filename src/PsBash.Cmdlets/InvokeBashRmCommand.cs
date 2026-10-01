@@ -67,14 +67,11 @@ public sealed class InvokeBashRmCommand : PSCmdlet
     /// <see cref="InvokeBashCpCommand"/> for the classification contract.</summary>
     // (A string[] on purpose: CommonParameterCollisionGuardTests enumerates each cmdlet's static
     // string sets to find short flags the binder could eat.)
-    private static readonly string[] RmValidButUnsupported =
-    {
-        "--one-file-system", "--no-preserve-root", "--preserve-root",
-    };
+    private static readonly string[] RmValidButUnsupported = Array.Empty<string>();
 
     private const string OptRecursive = "recursive", OptForce = "force", OptVerbose = "verbose",
         OptDir = "dir", OptPromptAlways = "prompt-always", OptPromptOnce = "prompt-once",
-        OptInteractive = "interactive";
+        OptInteractive = "interactive", OptOneFileSystem = "one-file-system";
 
     /// <summary>rm's whole option surface, built once for the shared ordered parser.</summary>
     private static readonly OptSpecSet RmSpec = new(
@@ -89,6 +86,11 @@ public sealed class InvokeBashRmCommand : PSCmdlet
             new OptSpec(OptPromptOnce, 'I', null),
             // --interactive[=WHEN]: the argument is optional and only ever attached.
             new OptSpec(OptInteractive, '\0', "interactive", OptKind.OptionalValue),
+            new OptSpec(OptOneFileSystem, '\0', "one-file-system"),
+            // --preserve-root[=all] (argument optional, attached only) and --no-preserve-root:
+            // resolved in command-line order by RmRootPolicyResolver.
+            new OptSpec(RmRootPolicyResolver.OptPreserveRoot, '\0', "preserve-root", OptKind.OptionalValue),
+            new OptSpec(RmRootPolicyResolver.OptNoPreserveRoot, '\0', "no-preserve-root"),
         },
         validButUnsupported: RmValidButUnsupported,
         allowAbbrev: true,
@@ -179,6 +181,12 @@ public sealed class InvokeBashRmCommand : PSCmdlet
         bool recursive = parsed.Has(OptRecursive);
         bool verbose = parsed.Has(OptVerbose);
         bool dirOnly = parsed.Has(OptDir);
+        bool oneFileSystem = parsed.Has(OptOneFileSystem);
+        if (!RmRootPolicyResolver.TryResolve(parsed, out var rootPolicy, out var rootError))
+        {
+            FileSystemHelpers.WriteBashError(this, rootError!);
+            return;
+        }
         var operands = parsed.Operands();
 
         // -f / -i / -I / --interactive[=WHEN] share ONE setting and the LAST one wins (`-if` does not
@@ -246,7 +254,8 @@ public sealed class InvokeBashRmCommand : PSCmdlet
 
         var remover = new RmRemover(recursive, dirOnly, promptEach, verbose, Confirm,
             say: text => WriteObject(BashRuntime.NewBashObject(text)),
-            error: message => FileSystemHelpers.WriteBashError(this, message));
+            error: message => FileSystemHelpers.WriteBashError(this, message),
+            oneFileSystem: oneFileSystem);
 
         bool hadError = false;
         bool isWindows = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
@@ -275,6 +284,24 @@ public sealed class InvokeBashRmCommand : PSCmdlet
                 }
             }
 
+            // An operand made only of slashes IS the root (POSIX: `//` is the root too, and on Windows
+            // the path APIs would read it as an unreachable UNC prefix and fail to find it at all).
+            if (recursive && rootPolicy != RmRootPolicy.None && display.Length > 0 && display.All(c => c == '/'))
+            {
+                FileSystemHelpers.WriteBashError(this, RmRootPolicyResolver.DangerousMessage(display));
+                hadError = true;
+                continue;
+            }
+
+            // GNU never removes `.` / `..` (or `dir/.`), even with -rf.
+            if (RmRootPolicyResolver.IsDotOrDotDot(display))
+            {
+                FileSystemHelpers.WriteBashError(this,
+                    $"rm: refusing to remove '.' or '..' directory: skipping '{display}'");
+                hadError = true;
+                continue;
+            }
+
             // Protected-path guard: refuse to delete the drive root or the
             // current user's home directory. Mirrors the psm1 oracle's
             // "refusing to remove: protected path" branch.
@@ -297,6 +324,19 @@ public sealed class InvokeBashRmCommand : PSCmdlet
                     Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
 
                 bool isProtected = false;
+
+                // --preserve-root (the default): a RECURSIVE removal of the root is refused with GNU's
+                // two-line message. --no-preserve-root skips this, but the protected-path guard below
+                // still refuses the root (a deliberate ps-bash difference: nothing here can delete C:\ or /).
+                bool isRoot = (string.IsNullOrEmpty(normalized) && !string.IsNullOrEmpty(pathRoot))
+                    || (!string.IsNullOrEmpty(normalizedRoot)
+                        && string.Equals(normalized, normalizedRoot, StringComparison.OrdinalIgnoreCase));
+                if (recursive && isRoot && rootPolicy != RmRootPolicy.None)
+                {
+                    FileSystemHelpers.WriteBashError(this, RmRootPolicyResolver.DangerousMessage(display));
+                    hadError = true;
+                    continue;
+                }
 
                 // Filesystem root: on POSIX `Path.GetPathRoot("/")` returns
                 // "/" which trims to "" — both the path and root are empty
@@ -348,9 +388,23 @@ public sealed class InvokeBashRmCommand : PSCmdlet
                 continue;
             }
 
+            // --preserve-root=all: a directory operand that is itself a mount point (another device
+            // than its parent) is skipped.
+            if (rootPolicy == RmRootPolicy.All && recursive && isDir && !FileSystemHelpers.IsReparsePoint(target)
+                && Path.GetDirectoryName(Path.GetFullPath(target).TrimEnd(
+                        Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)) is { Length: > 0 } parentDir
+                && FileIdentity.TryGetDeviceId(target) is { } own
+                && FileIdentity.TryGetDeviceId(parentDir) is { } parentDev
+                && own != parentDev)
+            {
+                FileSystemHelpers.WriteBashError(this, RmRootPolicyResolver.DifferentDeviceMessage(display));
+                hadError = true;
+                continue;
+            }
+
             // Anything rm has to SAY while it works (a prompt, -v lines, -d on a directory) goes
             // through the step-by-step walk; a quiet removal keeps the native fast path below.
-            if (promptEach || verbose || (dirOnly && isDir && !recursive))
+            if (promptEach || verbose || (dirOnly && isDir && !recursive) || (oneFileSystem && recursive && isDir))
             {
                 if (!remover.Remove(target, display)) hadError = true;
                 continue;

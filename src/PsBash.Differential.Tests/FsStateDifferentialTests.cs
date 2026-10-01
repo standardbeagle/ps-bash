@@ -95,6 +95,48 @@ public class FsStateDifferentialTests
     [SkippableFact] public Task Ln_HardLink_DirectoryTarget() =>
         EqualAsync(LnTree(), "ln d z 2>&1");
 
+    // ───────────── rm: root protection, mount boundaries, . and .. ─────────────
+    // (Only refusals are ever aimed at the real root here: bash's default --preserve-root rejects them.)
+
+    [SkippableFact] public Task Rm_RecursiveOnRoot_IsRefused() =>
+        EqualAsync(Tree(("d/f", "x")), "rm -r / 2>&1");
+
+    [SkippableFact] public Task Rm_RecursiveForceOnDoubleSlash_NamesTheSameAsRoot() =>
+        EqualAsync(Tree(("d/f", "x")), "rm -rf // 2>&1");
+
+    [SkippableFact] public Task Rm_ExplicitPreserveRootOnRoot_IsRefused() =>
+        EqualAsync(Tree(("d/f", "x")), "rm -r --preserve-root / 2>&1");
+
+    [SkippableFact] public Task Rm_LastRootOptionWins_PreserveRootAfterNoPreserveRoot() =>
+        EqualAsync(Tree(("d/f", "x")), "rm -r --no-preserve-root --preserve-root / 2>&1");
+
+    [SkippableFact] public Task Rm_NoPreserveRoot_RemovesAnOrdinaryTree() =>
+        EqualAsync(Tree(("d/e/f", "x"), ("keep", "k")), "rm -r --no-preserve-root d");
+
+    [SkippableFact] public Task Rm_PreserveRootAll_RemovesAnOrdinaryTree() =>
+        EqualAsync(Tree(("d/e/f", "x"), ("keep", "k")), "rm -r --preserve-root=all d");
+
+    [SkippableFact] public Task Rm_BadPreserveRootArgument_RemovesNothing() =>
+        EqualAsync(Tree(("d/f", "x")), "rm -r --preserve-root=bogus d 2>&1");
+
+    [SkippableFact] public Task Rm_AbbreviatedNoPreserveRoot_IsRefused() =>
+        EqualAsync(Tree(("d/f", "x")), "rm -r --no-pre d 2>&1");
+
+    [SkippableFact] public Task Rm_OneFileSystem_RemovesAnOrdinaryTree() =>
+        EqualAsync(Tree(("d/a/f", "x"), ("keep", "k")), "rm -rv --one-file-system d");
+
+    [SkippableFact] public Task Rm_OneFileSystemAbbreviation() =>
+        EqualAsync(Tree(("d/a/f", "x")), "rm -r --one d");
+
+    [SkippableFact] public Task Rm_DotOperand_IsNeverRemoved() =>
+        EqualAsync(Tree(("d/f", "x")), "cd d && rm -rf . 2>&1");
+
+    [SkippableFact] public Task Rm_DotDotOperand_IsNeverRemoved() =>
+        EqualAsync(Tree(("d/f", "x")), "cd d && rm -r .. 2>&1");
+
+    [SkippableFact] public Task Rm_TrailingDotComponent_IsNeverRemoved() =>
+        EqualAsync(Tree(("d/f", "x")), "rm -r d/. 2>&1");
+
     // ───────────── tee ─────────────
 
     [SkippableFact] public Task Tee_PrintfWithoutNewline_FileBytesAreExactlyTheInput() =>

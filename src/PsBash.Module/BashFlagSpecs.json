@@ -1030,6 +1030,19 @@
       "flag": "--interactive",
       "desc": "prompt according to WHEN (never, once, always)",
       "arg": "WHEN"
+    },
+    {
+      "flag": "--one-file-system",
+      "desc": "when removing recursively, skip directories on another filesystem"
+    },
+    {
+      "flag": "--preserve-root",
+      "desc": "do not remove / (default); =all also refuses a directory on another device",
+      "arg": "all"
+    },
+    {
+      "flag": "--no-preserve-root",
+      "desc": "do not treat / specially (ps-bash still refuses to delete the root)"
     }
   ],
   "rmdir": [

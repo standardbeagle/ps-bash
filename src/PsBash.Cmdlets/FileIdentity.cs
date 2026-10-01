@@ -111,6 +111,30 @@ internal static class FileIdentity
     }
 
     /// <summary>
+    /// The device (filesystem) an existing path lives on, as an opaque comparable string: st_dev on Unix
+    /// (via <c>stat</c>), the volume serial number of an open handle on Windows — a mounted volume or a
+    /// junction onto another volume therefore reports a different id than its parent directory, which is
+    /// what <c>rm --one-file-system</c> / <c>--preserve-root=all</c> ask. Null when it cannot be read.
+    /// </summary>
+    public static string? TryGetDeviceId(string path)
+    {
+        try
+        {
+            if (OperatingSystem.IsWindows())
+                return TryGetWindowsId(path, out var id) ? id.Volume.ToString("x8") : null;
+
+            var linux = BashRuntime.RunChildProcess("stat", new[] { "-c", "%d", "--", path }, TimeSpan.FromSeconds(10));
+            if (linux.ExitCode == 0 && !linux.TimedOut && linux.Stdout.Trim() is { Length: > 0 } li) return li;
+            var bsd = BashRuntime.RunChildProcess("stat", new[] { "-f", "%d", path }, TimeSpan.FromSeconds(10));
+            return bsd.ExitCode == 0 && !bsd.TimedOut && bsd.Stdout.Trim() is { Length: > 0 } bi ? bi : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
     /// Hard-link count of an existing path on Windows (<c>nNumberOfLinks</c> of an open handle; NTFS reports 1
     /// for a directory — unlike a Linux directory, which counts <c>.</c> and each subdirectory). Always false on
     /// Unix, where <c>ls</c> reads <c>stat %h</c> in the same call that fetches the owner.

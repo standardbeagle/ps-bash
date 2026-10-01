@@ -686,7 +686,9 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
         // We're not going to actually delete C:\ ╬ô├ç├╢ but the cmdlet must
         // refuse to attempt it. Use a path that resolves to the drive root.
         var rootCandidate = Path.GetPathRoot(_tmpRoot) ?? "C:\\";
-        RunResult($"Invoke-BashRm -rf {Q(rootCandidate)}").AssertFailed(1, "refusing");
+        // Recursive: GNU's --preserve-root wording. Not recursive: ps-bash's protected-path guard.
+        RunResult($"Invoke-BashRm -rf {Q(rootCandidate)}").AssertFailed(1, "dangerous to operate recursively");
+        RunResult($"Invoke-BashRm -f {Q(rootCandidate)}").AssertFailed(1, "refusing");
         // _tmpRoot is on the drive root, so the drive must still exist.
         Assert.True(Directory.Exists(_tmpRoot));
     }
@@ -721,7 +723,6 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
     [Theory]
     [InlineData("Invoke-BashCp --reflink a b")]      // valid GNU cp flag, unimplemented
     [InlineData("Invoke-BashMv --backup a b")]       // valid GNU mv flag, unimplemented
-    [InlineData("Invoke-BashRm --one-file-system a")] // valid GNU rm flag, unimplemented
     [InlineData("Invoke-BashMkdir --context d")]     // valid GNU mkdir flag (SELinux), unimplemented
     [InlineData("Invoke-BashRmdir --ignore-fail-on-non-empty d")]
     public void Mover_ValidButUnsupportedFlag_ExitsTwo(string cmd)
@@ -749,11 +750,11 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
     }
 
     [Fact]
-    public void Rm_ForceDoesNotSuppressUnsupportedFlagError()
+    public void Rm_ForceDoesNotSuppressOptionError()
     {
         // GNU rm -f suppresses missing-file errors but NOT a usage error for a
-        // bad option. The classifier still fires (exit 2) under -f.
-        Fail("Invoke-BashRm -f --one-file-system ghost.txt", 2);
+        // bad option (rm has no valid-but-unsupported flag left, so a bogus one stands in).
+        Fail("Invoke-BashRm -f --bogus ghost.txt", 1);
     }
 
     [Fact]
@@ -1232,7 +1233,7 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
         // options), so the earlier operand must survive too.
         var f = Path.Combine(_tmpRoot, "first.txt");
         File.WriteAllText(f, "x");
-        Assert.Equal("2", LastExit($"Invoke-BashRm {Q(f)} '--one-file-system'"));
+        Assert.Equal("1", LastExit($"Invoke-BashRm {Q(f)} '--bogus'"));
         Assert.True(File.Exists(f));
     }
 
