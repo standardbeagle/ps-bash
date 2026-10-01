@@ -351,7 +351,8 @@ Describe 'Invoke-BashLs' {
     }
 
     It 'ls -l has BashText matching permission format' {
-        $results = Invoke-BashLs -l $testDir
+        # GNU ls -l starts a directory listing with a bare "total N" text line; the entries are LsEntry.
+        $results = @(Invoke-BashLs -l $testDir | Where-Object { $_ -isnot [string] })
         $first = $results[0]
         $first.BashText | Should -Match '^[dl-][rwx-]{9}\s+'
     }
@@ -376,7 +377,7 @@ Describe 'Invoke-BashLs' {
     }
 
     It 'ls -la combined flags work' {
-        $results = Invoke-BashLs -la $testDir
+        $results = @(Invoke-BashLs -la $testDir | Where-Object { $_ -isnot [string] })
         $names = $results | ForEach-Object { $_.Name }
         $names | Should -Contain '.hidden'
         $results[0].BashText | Should -Match '^[dl-][rwx-]{9}\s+'
@@ -438,7 +439,7 @@ Describe 'Invoke-BashLs' {
     }
 
     It 'file entry has - prefix in permissions' {
-        $results = Invoke-BashLs -l $testDir
+        $results = @(Invoke-BashLs -l $testDir | Where-Object { $_ -isnot [string] })
         $file = $results | Where-Object { -not $_.IsDirectory } | Select-Object -First 1
         $file.Permissions | Should -Match '^-'
     }
@@ -972,7 +973,7 @@ Describe 'Invoke-BashSort — Object-Aware' {
     }
 
     It 'ls -lh | sort -h returns LsEntry objects sorted by size' {
-        $results = @(Invoke-BashLs -lh $sortDir | Invoke-BashSort -h)
+        $results = @(Invoke-BashLs -lh $sortDir | Where-Object { $_ -isnot [string] } | Invoke-BashSort -h)
         $results.Count | Should -BeGreaterOrEqual 3
         $results[0].PSTypeNames[0] | Should -Be 'PsBash.LsEntry'
         $sizes = $results | ForEach-Object { $_.SizeBytes }
@@ -987,7 +988,7 @@ Describe 'Invoke-BashSort — Object-Aware' {
     }
 
     It 'ls -la | sort -k5 -n sorts by size field numerically' {
-        $results = @(Invoke-BashLs -la $sortDir | Invoke-BashSort -k5 -n)
+        $results = @(Invoke-BashLs -la $sortDir | Where-Object { $_ -isnot [string] } | Invoke-BashSort -k5 -n)
         $results[0].PSTypeNames[0] | Should -Be 'PsBash.LsEntry'
         # Field 5 in ls -l output is the size column
         $sizes = $results | ForEach-Object { $_.SizeBytes }
@@ -1005,7 +1006,7 @@ Describe 'Invoke-BashSort — Object-Aware' {
     }
 
     It 'sort preserves original object types in output' {
-        $lsResults = @(Invoke-BashLs -lh $sortDir | Invoke-BashSort -h)
+        $lsResults = @(Invoke-BashLs -lh $sortDir | Where-Object { $_ -isnot [string] } | Invoke-BashSort -h)
         foreach ($r in $lsResults) {
             $r.PSTypeNames[0] | Should -Be 'PsBash.LsEntry'
             $r.Name | Should -Not -BeNullOrEmpty
@@ -1061,7 +1062,7 @@ Describe 'Invoke-BashHead — Pipeline' {
     }
 
     It 'ls -la | head -n 5 returns LsEntry objects' {
-        $results = @(Invoke-BashLs -la $headDir | Invoke-BashHead -n 5)
+        $results = @(Invoke-BashLs -la $headDir | Where-Object { $_ -isnot [string] } | Invoke-BashHead -n 5)
         $results.Count | Should -BeLessOrEqual 5
         $results[0].PSTypeNames[0] | Should -Be 'PsBash.LsEntry'
     }
@@ -6658,7 +6659,7 @@ Describe 'Invoke-BashLs — Grid Output' {
     }
 
     It 'returns LsEntry objects in long mode (-l)' {
-        $results = @(Invoke-BashLs '-l' $tmpDir)
+        $results = @(Invoke-BashLs '-l' $tmpDir | Where-Object { $_ -isnot [string] })
         $results | Should -Not -BeNullOrEmpty
         $results[0].PSTypeNames | Should -Contain 'PsBash.LsEntry'
     }

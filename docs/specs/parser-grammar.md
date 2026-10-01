@@ -262,7 +262,7 @@ test_expr -> '[' inner_word* ']'
            | '[[' inner_word* ']]'
 ```
 
-Inside `[[ ]]`, `&&` and `||` tokens are consumed as literal words (logical operators, not shell operators). `<`, `>`, and `!` are also consumed as literal words inside both forms. `!=` is assembled from `Bang` + `Word` starting with `=`.
+Inside `[[ ]]`, `&&` and `||` tokens are consumed as literal words (logical operators, not shell operators). `<`, `>`, and `!` are also consumed as literal words inside both forms. `!=` is assembled from `Bang` + `Word` starting with `=` only when the two tokens are ADJACENT (no whitespace): `[ a != b ]` is the operator, but `[ ! = x ]` / `[ ! = ! ]` keep three words (negation/operand, binary `=`, operand — bash reads the middle word as the operator).
 
 **Grouping parens.** Inside `[[ ]]`, `(` / `)` are consumed as literal words
 (`[[ ! -e $f || ( -f $f && ! -L $f ) ]]`). The emitter's `SplitLogical` only breaks on

@@ -364,6 +364,10 @@ list's shape from the MIDDLE word, so `arity3` (`A op B` with `=`, `==`, `!=`, `
 `PsBuild.ExitCodeTest` instead of degrading to `$false` plus a diagnostic; `[[ ]]` keeps the diagnostic (the
 cmdlet has no `[[` grammar).
 
+### `:` / `true` / `false`
+
+All three are no-argument builtins that ignore their arguments but still EXPAND them: `EmitNoOpArgPrelude` emits `[void](word);` for every non-literal argument (`: ${x:=5}` assigns, `: $(cmd)` runs cmd), then sets `$global:LASTEXITCODE` (`:`/`true` = 0, `false` = 1, with the errexit behaviour above). `:` was "command not found". As a `while`/`if` condition (`EmitWhileCondition` / `EmitCondition`) a bare `:` is the constant `$true`, and as a pipe target (`echo hi | :`) it is `Out-Null`.
+
 ### `set`
 
 - `set -e` / `set -o errexit` -> `$ErrorActionPreference = 'Stop'; $global:__BashErrexit = $true`
