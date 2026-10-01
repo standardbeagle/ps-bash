@@ -148,6 +148,8 @@ FunctionsToExport = @(
     'Read-BashFileStreaming',
     'Register-BashCompletions',
     'Register-BashLsProvider',
+    'Remove-BashBgFinished',
+    'Remove-BashBgState',
     'Resolve-BashGlob',
     'Resolve-BrowseAdapter',
     'Resolve-JqDotPath',

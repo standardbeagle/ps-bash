@@ -217,11 +217,59 @@ internal sealed class SdkRunspace : IAsyncDisposable
 
     public Runspace Runspace => _runspace;
 
+    // Test seam: how many background-job RunspacePools were torn down on release (a runspace that never
+    // used `&` has none, so it does not count).
+    internal static int BackgroundPoolsReleased;
+
+    /// <summary>How long releasing a runspace waits for the job-pool teardown (stop + dispose of the jobs).</summary>
+    private static readonly TimeSpan BackgroundTeardownTimeout = TimeSpan.FromSeconds(5);
+
     public ValueTask DisposeAsync()
     {
         if (Interlocked.Exchange(ref _disposed, 1) == 0)
+        {
+            ReleaseBackgroundJobs();
             _runspace.Dispose();
+        }
         return ValueTask.CompletedTask;
+    }
+
+    /// <summary>
+    /// `cmd &amp;` runs on a private <c>RunspacePool</c> held in the module's script scope. Disposing the
+    /// runspace does NOT dispose an object its variables point at, so every discarded runspace (the daemon
+    /// discards one per <c>-c</c> command) that had used `&amp;` left a whole pool of runspaces, with their
+    /// threads and imported modules, alive for the life of the host. Ask the module to tear its job state
+    /// down first (<c>Remove-BashBgState</c>: stop + dispose the jobs, dispose the pool). Best effort and
+    /// bounded: a runspace that is still busy (an abandoned command) cannot take another pipeline and is
+    /// disposed as before.
+    /// </summary>
+    private void ReleaseBackgroundJobs()
+    {
+        try
+        {
+            if (_runspace.RunspaceStateInfo.State != RunspaceState.Opened) return;
+            if (_runspace.RunspaceAvailability != RunspaceAvailability.Available) return;
+            // `$!` is set the first time anything is backgrounded: a runspace that never used `&`
+            // (almost every command) skips the extra pipeline entirely.
+            if (_runspace.SessionStateProxy.GetVariable("BashBgLastPid") is null) return;
+
+            using var ps = PowerShell.Create();
+            ps.Runspace = _runspace;
+            ps.AddScript("if (Get-Command Remove-BashBgState -ErrorAction SilentlyContinue) { Remove-BashBgState }");
+            var async = ps.BeginInvoke();
+            if (!async.AsyncWaitHandle.WaitOne(BackgroundTeardownTimeout))
+            {
+                try { ps.BeginStop(null, null); } catch { }
+                return;
+            }
+            var output = ps.EndInvoke(async);
+            if (output.Count > 0 && output[0]?.BaseObject is true)
+                Interlocked.Increment(ref BackgroundPoolsReleased);
+        }
+        catch
+        {
+            // Teardown is advisory: never let it mask the runspace disposal that follows.
+        }
     }
 
     [System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage(
