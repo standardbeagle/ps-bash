@@ -269,7 +269,7 @@ internal sealed class AwkCommandStream : IAwkLineStream
 }
 
 /// <summary>
-/// Runs awk's shell command lines (<c>cmd | getline</c>, <c>system()</c>) through ps-bash ITSELF —
+/// Runs awk's shell command lines (<c>cmd | getline</c>, <c>system()</c>, <c>print | cmd</c>) through ps-bash ITSELF —
 /// the same resolution <c>bash -c</c> uses — so <c>"seq 3" | getline</c> and <c>"date +%s" | getline</c>
 /// work on Windows. Fallbacks when no ps-bash executable can be found: <c>sh -c</c> where there is one,
 /// else <c>cmd.exe /c</c> on Windows. Tracks every stream it started so <see cref="KillAll"/> (host
@@ -296,12 +296,61 @@ internal sealed class AwkShell
     public BashRuntime.ChildProcessResult Run(string command) =>
         BashRuntime.RunChildProcess(BuildStartInfo(command));
 
+    /// <summary>
+    /// Run <paramref name="command"/> to completion with the contents of <paramref name="inputPath"/> as
+    /// its stdin (<c>print | "cmd"</c>), capturing its output. The launcher does not forward a pipe into
+    /// a <c>-c</c> command, so the input is attached as a file redirection of the whole command line.
+    /// </summary>
+    public BashRuntime.ChildProcessResult RunWithInput(string command, string inputPath) =>
+        BashRuntime.RunChildProcess(BuildStartInfo(command, inputPath));
+
     public void KillAll()
     {
         foreach (var s in _streams) s.Kill();
     }
 
-    private ProcessStartInfo BuildStartInfo(string command)
+    /// <summary>
+    /// <c>cat 'file' | command</c> for a plain command / pipeline (the shape awk programs pipe into:
+    /// <c>sort -n</c>, <c>sort | uniq -c</c>, <c>cat &gt;&gt; log</c>). Anything with list operators, groups or
+    /// substitutions (<c>a; b</c>, <c>x &amp;&amp; y</c>, <c>(…)</c>) gets the redirection on a brace group
+    /// instead — ps-bash feeds a compound command's stdin only to <c>read</c>-style consumers, so the
+    /// commands inside such a group may not see the data.
+    /// </summary>
+    internal static string WithInput(string command, string inputPath)
+    {
+        string quoted = "'" + inputPath.Replace("'", "'\\''") + "'";
+        return IsPlainPipeline(command)
+            ? "cat " + quoted + " | " + command
+            : "{ " + command + "\n} < " + quoted;
+    }
+
+    /// <summary>No unquoted list operator (<c>; &amp; &amp;&amp; ||</c>), group, redirection from a file, newline or substitution.</summary>
+    internal static bool IsPlainPipeline(string command)
+    {
+        bool single = false, dbl = false;
+        for (int i = 0; i < command.Length; i++)
+        {
+            char c = command[i];
+            if (single) { if (c == '\'') single = false; continue; }
+            if (c == '\\') { i++; continue; }
+            if (c == '`') return false;
+            if (c == '$' && i + 1 < command.Length && command[i + 1] == '(') return false;
+            if (dbl) { if (c == '"') dbl = false; continue; }
+            switch (c)
+            {
+                case '\'': single = true; break;
+                case '"': dbl = true; break;
+                case ';': case '&': case '(': case ')': case '{': case '}': case '<': case '\n': case '\r':
+                    return false;
+                case '|':
+                    if (i + 1 < command.Length && command[i + 1] == '|') return false;
+                    break;
+            }
+        }
+        return !single && !dbl && command.Trim().Length > 0;
+    }
+
+    private ProcessStartInfo BuildStartInfo(string command, string? inputPath = null)
     {
         if (!_exeResolved)
         {
@@ -314,18 +363,18 @@ internal sealed class AwkShell
         {
             psi.FileName = _exe;
             psi.ArgumentList.Add("-c");
-            psi.ArgumentList.Add(command);
+            psi.ArgumentList.Add(inputPath is null ? command : WithInput(command, inputPath));
         }
         else if (OperatingSystem.IsWindows())
         {
             psi.FileName = "cmd.exe";
-            psi.Arguments = "/d /s /c \"" + command + "\"";
+            psi.Arguments = "/d /s /c \"" + (inputPath is null ? command : "(" + command + ") < \"" + inputPath + "\"") + "\"";
         }
         else
         {
             psi.FileName = "/bin/sh";
             psi.ArgumentList.Add("-c");
-            psi.ArgumentList.Add(command);
+            psi.ArgumentList.Add(inputPath is null ? command : WithInput(command, inputPath));
         }
 
         try

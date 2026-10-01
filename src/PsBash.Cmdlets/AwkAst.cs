@@ -51,8 +51,20 @@ internal sealed class GetlineExpr : AwkExpr
 
 internal abstract class AwkStmt { }
 
-internal sealed class PrintStmt : AwkStmt { public List<AwkExpr> Args = new(); }
-internal sealed class PrintfStmt : AwkStmt { public List<AwkExpr> Args = new(); }
+/// <summary>Where a <c>print</c> / <c>printf</c> writes: stdout, <c>&gt; file</c>, <c>&gt;&gt; file</c> or <c>| "cmd"</c>.</summary>
+internal enum RedirKind { None, File, Append, Pipe }
+
+/// <summary>Shared shape of print/printf: the argument list plus an optional output redirection.</summary>
+internal abstract class OutputStmt : AwkStmt
+{
+    public List<AwkExpr> Args = new();
+    public RedirKind Redir;
+    /// <summary>The file name / command line expression (a concatenation-level expression); null when <see cref="Redir"/> is None.</summary>
+    public AwkExpr? Target;
+}
+
+internal sealed class PrintStmt : OutputStmt { }
+internal sealed class PrintfStmt : OutputStmt { }
 internal sealed class ExprStmt : AwkStmt { public AwkExpr Expr = null!; }
 internal sealed class IfStmt : AwkStmt { public AwkExpr Cond = null!; public AwkStmt Then = null!; public AwkStmt? Else; }
 internal sealed class WhileStmt : AwkStmt { public AwkExpr Cond = null!; public AwkStmt Body = null!; }
@@ -66,6 +78,15 @@ internal sealed class BreakStmt : AwkStmt { }
 internal sealed class ContinueStmt : AwkStmt { }
 internal sealed class ExitStmt : AwkStmt { public AwkExpr? Code; }
 internal sealed class DeleteStmt : AwkStmt { public string ArrayName = ""; public List<AwkExpr>? Subscripts; }
+internal sealed class ReturnStmt : AwkStmt { public AwkExpr? Value; }
+
+/// <summary><c>function name(params, locals) { body }</c>. Extra parameters beyond what a call passes are locals.</summary>
+internal sealed class AwkFunction
+{
+    public string Name = "";
+    public List<string> Params = new();
+    public BlockStmt Body = null!;
+}
 
 // ── Program structure ──────────────────────────────────────────────────────
 
@@ -83,6 +104,9 @@ internal sealed class AwkProgram
     public List<AwkRule> Begin = new();
     public List<AwkRule> Main = new();
     public List<AwkRule> End = new();
+
+    /// <summary>User-defined functions by name (defined anywhere in the program; calls resolve at run time).</summary>
+    public Dictionary<string, AwkFunction> Functions = new();
 
     /// <summary>
     /// The program pulls from the MAIN input: a plain <c>getline [var]</c>, or a <c>getline &lt; "-"</c> /

@@ -57,7 +57,11 @@ internal sealed class AwkParser
         while (!Is(TokKind.Eof))
         {
             if (IsKw("function") || IsKw("func"))
-                throw Err("user-defined functions are not supported");
+            {
+                ParseFunction(prog);
+                SkipTerminators();
+                continue;
+            }
 
             var rule = ParseRule();
             switch (rule.Kind)
@@ -68,9 +72,77 @@ internal sealed class AwkParser
             }
             SkipTerminators();
         }
+        ValidateFunctions(prog);
         prog.UsesMainInput = _usesMainInput;
         return prog;
     }
+
+    // ── user-defined functions ─────────────────────────────────────────────
+
+    /// <summary>A static (compile-time) error in gawk's wording; reported like any syntax error.</summary>
+    private static AwkInterpreter.AwkSyntaxException StaticErr(string kind, string msg) => new($"awk: {kind}: {msg}");
+
+    /// <summary><c>function name(p1, p2, local1) { body }</c> (also <c>func</c>). Newlines are allowed inside the
+    /// parameter list and between <c>)</c> and <c>{</c>.</summary>
+    private void ParseFunction(AwkProgram prog)
+    {
+        Advance(); // function | func
+        if (Cur.Kind == TokKind.Builtin)
+            throw StaticErr("error", $"`{Cur.Text}' is a built-in function, it cannot be redefined");
+        if (Cur.Kind != TokKind.Name && Cur.Kind != TokKind.FuncName) throw Err("expected a function name");
+        string name = Advance().Text;
+        if (prog.Functions.ContainsKey(name)) throw StaticErr("error", $"function name `{name}' previously defined");
+
+        var fn = new AwkFunction { Name = name };
+        Expect(TokKind.LParen, "'('");
+        SkipNewlines();
+        while (!Is(TokKind.RParen))
+        {
+            string p = Expect(TokKind.Name, "parameter name").Text;
+            int dup = fn.Params.IndexOf(p);
+            if (dup >= 0)
+                throw StaticErr("error", $"function `{name}': parameter #{fn.Params.Count + 1}, `{p}', duplicates parameter #{dup + 1}");
+            fn.Params.Add(p);
+            SkipNewlines();
+            if (!Is(TokKind.Comma)) break;
+            Advance();
+            SkipNewlines();
+        }
+        Expect(TokKind.RParen, "')'");
+        SkipNewlines();
+
+        prog.Functions[name] = fn; // registered before the body so a recursive call resolves
+        bool prev = _inFunction;
+        _inFunction = true;
+        try { fn.Body = ParseBlock(); }
+        finally { _inFunction = prev; }
+    }
+
+    /// <summary>
+    /// gawk's whole-program checks: a parameter may not be named like a function, a function name may
+    /// not be used as a variable or array (which is also what <c>f (x)</c> — a space before the
+    /// parenthesis — looks like), and every called function must exist.
+    /// </summary>
+    private void ValidateFunctions(AwkProgram prog)
+    {
+        foreach (var fn in prog.Functions.Values)
+            foreach (var p in fn.Params)
+                if (prog.Functions.ContainsKey(p))
+                    throw StaticErr("error", $"function `{fn.Name}': cannot use function name as parameter name");
+
+        foreach (var used in _usedNames)
+            if (prog.Functions.ContainsKey(used))
+                throw StaticErr("error",
+                    $"function `{used}' called with space between name and `(', or used as a variable or an array");
+
+        foreach (var called in _callNames)
+            if (!prog.Functions.ContainsKey(called))
+                throw StaticErr("fatal", $"function `{called}' not defined");
+    }
+
+    private bool _inFunction;
+    private readonly HashSet<string> _usedNames = new();   // names read/written as variables or arrays
+    private readonly List<string> _callNames = new();      // user-function call sites (name( ... ))
 
     private AwkRule ParseRule()
     {
@@ -142,7 +214,7 @@ internal sealed class AwkParser
                 case "delete": return ParseDelete();
                 case "print": return ParsePrint();
                 case "printf": return ParsePrintf();
-                case "return": throw Err("'return' outside a function is not supported");
+                case "return": return ParseReturn();
             }
         }
 
@@ -209,6 +281,8 @@ internal sealed class AwkParser
             string v = Advance().Text;
             Advance(); // in
             string arr = Expect(TokKind.Name, "array name").Text;
+            _usedNames.Add(v);
+            _usedNames.Add(arr);
             Expect(TokKind.RParen, "')'");
             SkipNewlines();
             var b = ParseStatement();
@@ -226,6 +300,15 @@ internal sealed class AwkParser
         return new ForStmt { Init = init, Cond = cond, Post = post, Body = body };
     }
 
+    private AwkStmt ParseReturn()
+    {
+        if (!_inFunction) throw StaticErr("error", "`return' used outside function context");
+        Advance();
+        AwkExpr? value = null;
+        if (!IsStatementEnd()) value = ParseExpr();
+        return new ReturnStmt { Value = value };
+    }
+
     private AwkStmt ParseExit()
     {
         Advance();
@@ -238,6 +321,7 @@ internal sealed class AwkParser
     {
         Advance();
         string name = Expect(TokKind.Name, "array name").Text;
+        _usedNames.Add(name);
         if (Is(TokKind.LBracket))
         {
             Advance();
@@ -252,48 +336,94 @@ internal sealed class AwkParser
     private AwkStmt ParsePrint()
     {
         Advance();
-        var args = ParsePrintArgs();
-        return new PrintStmt { Args = args };
+        var stmt = new PrintStmt();
+        ParseOutputRest(stmt);
+        return stmt;
     }
 
     private AwkStmt ParsePrintf()
     {
         Advance();
-        var args = ParsePrintArgs();
-        return new PrintfStmt { Args = args };
+        var stmt = new PrintfStmt();
+        ParseOutputRest(stmt);
+        return stmt;
     }
 
     /// <summary>
-    /// Parse a print/printf argument list under the no-greater-than rule, then
-    /// swallow (and discard) any output redirection target. Output redirection
-    /// to files/pipes is a documented gap — untested, routed to stdout.
+    /// Parse a print/printf argument list under the no-greater-than rule (a top-level <c>&gt;</c> is a
+    /// redirection, not a comparison) and then the optional redirection: <c>&gt; target</c>,
+    /// <c>&gt;&gt; target</c> or <c>| target</c>. As in gawk the target is a concatenation-level
+    /// expression (<c>print &gt; "out" n</c> writes to the file named <c>"out" n</c>; a comparison or
+    /// <c>?:</c> after it is a syntax error — parenthesize it).
     /// </summary>
-    private List<AwkExpr> ParsePrintArgs()
+    private void ParseOutputRest(OutputStmt stmt)
     {
-        var args = new List<AwkExpr>();
         if (IsStatementEnd() || Is(TokKind.Gt) || Is(TokKind.Append) || Is(TokKind.Pipe))
         {
             // bare `print` — no args; fall through to redirection handling
         }
-        else
+        else if (!TryParseParenthesizedArgList(stmt.Args))
         {
             bool prev = _noGt;
             _noGt = true;
             try
             {
-                args.Add(ParseExpr());
-                while (Is(TokKind.Comma)) { Advance(); SkipNewlines(); args.Add(ParseExpr()); }
+                stmt.Args.Add(ParseExpr());
+                while (Is(TokKind.Comma)) { Advance(); SkipNewlines(); stmt.Args.Add(ParseExpr()); }
             }
             finally { _noGt = prev; }
         }
 
-        // discard redirection target (unsupported)
         if (Is(TokKind.Gt) || Is(TokKind.Append) || Is(TokKind.Pipe))
         {
+            stmt.Redir = Cur.Kind switch
+            {
+                TokKind.Gt => RedirKind.File,
+                TokKind.Append => RedirKind.Append,
+                _ => RedirKind.Pipe,
+            };
             Advance();
-            ParseExpr();
+            bool prev = _noGt;
+            _noGt = true;
+            try { stmt.Target = ParseConcat(); }
+            finally { _noGt = prev; }
         }
-        return args;
+    }
+
+    /// <summary>
+    /// <c>print (a, b) &gt; "f"</c> / <c>printf("%s\n", x)</c>: a parenthesized list that is the WHOLE
+    /// argument list (followed by a terminator or a redirection). Anything else — <c>print (a)(b)</c>,
+    /// <c>print (1 &gt; 2) ? x : y</c> — is rewound and parsed as an ordinary expression.
+    /// </summary>
+    private bool TryParseParenthesizedArgList(List<AwkExpr> args)
+    {
+        if (!Is(TokKind.LParen)) return false;
+        int save = _pos;
+        bool prevGt = _noGt;
+        int prevDepth = _depth;
+        _noGt = false;
+        try
+        {
+            Advance(); // (
+            var list = new List<AwkExpr>();
+            SkipNewlines();
+            list.Add(ParseExpr());
+            while (Is(TokKind.Comma)) { Advance(); SkipNewlines(); list.Add(ParseExpr()); }
+            SkipNewlines();
+            if (Is(TokKind.RParen))
+            {
+                Advance();
+                if (IsStatementEnd() || Is(TokKind.Gt) || Is(TokKind.Append) || Is(TokKind.Pipe))
+                {
+                    args.AddRange(list);
+                    return true;
+                }
+            }
+        }
+        catch (AwkInterpreter.AwkSyntaxException) { /* not a plain list: reparse as an expression */ }
+        finally { _noGt = prevGt; _depth = prevDepth; }
+        _pos = save;
+        return false;
     }
 
     private bool IsStatementEnd() =>
@@ -379,6 +509,7 @@ internal sealed class AwkParser
         {
             Advance();
             string arr = Expect(TokKind.Name, "array name").Text;
+            _usedNames.Add(arr);
             left = new InExpr { Keys = { left }, ArrayName = arr };
         }
         return left;
@@ -537,6 +668,7 @@ internal sealed class AwkParser
                 string name = Advance().Text;
                 Expect(TokKind.LParen, "'('");
                 var args = ParseCallArgs();
+                _callNames.Add(name);
                 return new Call { Name = name, Args = args };
             }
 
@@ -556,6 +688,7 @@ internal sealed class AwkParser
             case TokKind.Name:
             {
                 string name = Advance().Text;
+                _usedNames.Add(name);
                 if (Is(TokKind.LBracket))
                 {
                     Advance();
@@ -652,6 +785,7 @@ internal sealed class AwkParser
                 {
                     Advance();
                     string arr = Expect(TokKind.Name, "array name").Text;
+                    _usedNames.Add(arr);
                     return new InExpr { Keys = keys, ArrayName = arr };
                 }
                 // Not an `in` test — degrade to the last expression (rare).

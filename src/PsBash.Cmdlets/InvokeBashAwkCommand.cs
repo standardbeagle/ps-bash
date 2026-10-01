@@ -276,12 +276,14 @@ public sealed class InvokeBashAwkCommand : PSCmdlet
 
     protected override void EndProcessing()
     {
-        if (_halt || _machine is null || _program is null) return;
+        if (_machine is null || _program is null) return;
         var machine = _machine;
         var program = _program;
 
         try
         {
+            if (_halt) return; // finally still closes whatever was opened before the fault
+
             bool ok = Guarded(() =>
             {
                 if (_bufferStdin) machine.RunBegin(); // deferred: see the INPUT MODES note
@@ -298,6 +300,7 @@ public sealed class InvokeBashAwkCommand : PSCmdlet
                 }
 
                 machine.RunEnd();
+                machine.CloseAll(); // output pipes run here; their output precedes the last held stdout lines
             });
             if (!ok) return;
 
@@ -308,14 +311,29 @@ public sealed class InvokeBashAwkCommand : PSCmdlet
         }
         finally
         {
-            machine.CloseAll();
+            // Faulted / halted runs: still flush and close every output file, run the output pipes
+            // (a second CloseAll after a clean one finds nothing left to do).
+            Guarded2(machine.CloseAll);
+        }
+    }
+
+    /// <summary>Run a final cleanup step; an awk fault inside it is reported like any other, never thrown.</summary>
+    private void Guarded2(Action body)
+    {
+        try { body(); }
+        catch (AwkInterpreter.AwkRuntimeException ex)
+        {
+            FileSystemHelpers.WriteBashError(this, $"awk: {ex.Message}");
+            SessionState.PSVariable.Set("global:LASTEXITCODE", 2);
         }
     }
 
     protected override void StopProcessing()
     {
-        // Ctrl-C / host stop: a getline blocked on a running command must not outlive the pipeline.
+        // Ctrl-C / host stop: a getline blocked on a running command must not outlive the pipeline,
+        // and EndProcessing will not run — release the output files and drop pipe temp data here.
         _shell?.KillAll();
+        _machine?.AbortOutputs();
     }
 
     /// <summary>

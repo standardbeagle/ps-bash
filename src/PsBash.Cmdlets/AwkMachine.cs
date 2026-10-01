@@ -16,14 +16,13 @@ namespace PsBash.Cmdlets;
 internal sealed class AwkMachine
 {
     private readonly AwkProgram _prog;
-    private readonly Action<string> _emitLine;
+    private readonly AwkStdout _stdout;
 
     private readonly Dictionary<string, AwkValue> _vars = new();
     private readonly Dictionary<string, Dictionary<string, AwkValue>> _arrays = new();
     private readonly List<string> _fields = new() { "" }; // [0] = $0
     private int _nf;
     private double _nr, _fnr, _rstart, _rlength;
-    private readonly StringBuilder _outBuf = new();
     private Random _rand = new(0);
     private double _prevSeed;
     // Per-machine (per awk invocation): caches compiled regexes across the
@@ -53,7 +52,7 @@ internal sealed class AwkMachine
     public AwkMachine(AwkProgram program, Action<string> emitLine)
     {
         _prog = program;
-        _emitLine = emitLine;
+        _stdout = new AwkStdout(emitLine);
         _vars["FS"] = AwkValue.Str(" ");
         _vars["OFS"] = AwkValue.Str(" ");
         _vars["ORS"] = AwkValue.Str("\n");
@@ -124,41 +123,97 @@ internal sealed class AwkMachine
         }
     }
 
-    /// <summary>Close every file and command opened by getline (end of program; gawk closes them too).</summary>
+    /// <summary>
+    /// End of program (gawk's close_io): close every output redirection — most recently opened first, so
+    /// an output pipe's command runs and emits its output — then release the held stdout lines, then
+    /// close the getline files and commands. Idempotent. A faulting close (a command that cannot be
+    /// started) still lets every later stream close before the first fault is rethrown.
+    /// </summary>
     public void CloseAll()
     {
+        Exception? fault = null;
+        for (int i = _outputOrder.Count - 1; i >= 0; i--)
+        {
+            string name = _outputOrder[i];
+            if (!_outputs.Remove(name, out var sink)) continue;
+            try { sink.CloseAtExit(); }
+            catch (AwkInterpreter.AwkRuntimeException ex) { fault ??= ex; }
+        }
+        _outputOrder.Clear();
+        _stdout.FlushHeld();
+
         foreach (var s in _fileStreams.Values) s.Close();
         foreach (var s in _cmdStreams.Values) s.Close();
         _fileStreams.Clear();
         _cmdStreams.Clear();
+        if (fault is not null) throw fault;
     }
 
-    public void Flush()
+    /// <summary>Host stop: release every output stream without running its command and delete temp data.</summary>
+    public void AbortOutputs()
     {
-        if (_outBuf.Length > 0)
+        foreach (var sink in _outputs.Values.ToArray())
         {
-            _emitLine(_outBuf.ToString());
-            _outBuf.Clear();
+            try { sink.Abort(); } catch { /* best effort */ }
         }
+        _outputs.Clear();
+        _outputOrder.Clear();
     }
+
+    /// <summary>The unterminated last output line, if any (printf without a final newline).</summary>
+    public void Flush() => _stdout.FlushPartial();
 
     // ── output ───────────────────────────────────────────────────────────────
 
-    private void Output(string s)
+    private void Output(string s) => _stdout.Write(s);
+
+    private readonly Dictionary<string, AwkOutSink> _outputs = new();
+    private readonly List<string> _outputOrder = new(); // open order; CloseAll walks it backwards
+
+    /// <summary>
+    /// The open output stream called <paramref name="name"/>, opening it on first use: <c>&gt;</c> truncates
+    /// and <c>&gt;&gt;</c> appends, but only when the name is opened — a name that is already open keeps
+    /// its stream whichever operator names it, until close(). Special names: <c>/dev/stdout</c>,
+    /// <c>-</c>, <c>/dev/fd/1</c> (awk's stdout), <c>/dev/stderr</c>, <c>/dev/fd/2</c>, <c>/dev/null</c>.
+    /// </summary>
+    private AwkOutSink GetOutput(string name, RedirKind kind)
     {
-        _outBuf.Append(s);
-        int nl;
-        while ((nl = IndexOfNewline(_outBuf)) >= 0)
+        if (_outputs.TryGetValue(name, out var open)) return open;
+        if (name.Length == 0)
         {
-            _emitLine(_outBuf.ToString(0, nl));
-            _outBuf.Remove(0, nl + 1);
+            string op = kind switch { RedirKind.Append => ">>", RedirKind.Pipe => "|", _ => ">" };
+            throw new AwkInterpreter.AwkRuntimeException($"fatal: expression for `{op}' redirection has null string value");
         }
+
+        AwkOutSink sink;
+        if (kind == RedirKind.Pipe)
+        {
+            FlushAllOutputs(); // gawk flushes everything before it starts a command
+            sink = new AwkPipeSink(name, Shell, _stdout);
+        }
+        else if (name is "/dev/stdout" or "-" or "/dev/fd/1") sink = new AwkStdoutSink(_stdout);
+        else if (name is "/dev/stderr" or "/dev/fd/2") sink = new AwkStderrSink();
+        else if (FileSystemHelpers.IsNullDevice(name)) sink = new AwkNullSink();
+        else sink = AwkFileSink.Open(name, ResolvePath(name), append: kind == RedirKind.Append);
+
+        _outputs[name] = sink;
+        _outputOrder.Add(name);
+        return sink;
     }
 
-    private static int IndexOfNewline(StringBuilder sb)
+    /// <summary>gawk's flush_io: held stdout, every output file and every pipe's pending data.</summary>
+    private void FlushAllOutputs()
     {
-        for (int i = 0; i < sb.Length; i++) if (sb[i] == '\n') return i;
-        return -1;
+        _stdout.FlushHeld();
+        foreach (var s in _outputs.Values) s.Flush();
+    }
+
+    /// <summary>Send <paramref name="text"/> where a print/printf says: stdout, or the named file / pipe.</summary>
+    private void WriteOutput(OutputStmt stmt, string text)
+    {
+        if (stmt.Redir == RedirKind.None) { Output(text); return; }
+        string name = Eval(stmt.Target!).ToStr(Convfmt);
+        GetOutput(name, stmt.Redir).Write(text);
     }
 
     // ── fields ─────────────────────────────────────────────────────────────
@@ -283,18 +338,38 @@ internal sealed class AwkMachine
 
     // ── variables / arrays ───────────────────────────────────────────────────
 
-    private AwkValue GetVar(string name) => name switch
+    private AwkValue GetVar(string name)
     {
-        "NF" => AwkValue.Number(_nf),
-        "NR" => AwkValue.Number(_nr),
-        "FNR" => AwkValue.Number(_fnr),
-        "RSTART" => AwkValue.Number(_rstart),
-        "RLENGTH" => AwkValue.Number(_rlength),
-        _ => _vars.TryGetValue(name, out var v) ? v : AwkValue.Uninitialized,
-    };
+        if (_frame is not null && _frame.Locals.TryGetValue(name, out var cell))
+        {
+            if (cell.Array is not null) throw ArrayAsScalar(name);
+            return cell.HasScalar ? cell.Scalar : AwkValue.Uninitialized;
+        }
+        if (_arrays.Count > 0 && _arrays.ContainsKey(name)) throw ArrayAsScalar(name);
+        return name switch
+        {
+            "NF" => AwkValue.Number(_nf),
+            "NR" => AwkValue.Number(_nr),
+            "FNR" => AwkValue.Number(_fnr),
+            "RSTART" => AwkValue.Number(_rstart),
+            "RLENGTH" => AwkValue.Number(_rlength),
+            _ => _vars.TryGetValue(name, out var v) ? v : AwkValue.Uninitialized,
+        };
+    }
+
+    private static AwkInterpreter.AwkRuntimeException ArrayAsScalar(string name) =>
+        new($"fatal: attempt to use array `{name}' in a scalar context");
 
     private void SetVar(string name, AwkValue value)
     {
+        if (_frame is not null && _frame.Locals.TryGetValue(name, out var cell))
+        {
+            if (cell.Array is not null) throw ArrayAsScalar(name);
+            cell.Scalar = value;
+            cell.HasScalar = true;
+            return;
+        }
+        if (_arrays.Count > 0 && _arrays.ContainsKey(name)) throw ArrayAsScalar(name);
         switch (name)
         {
             case "NF": SetNF((int)value.ToNumber()); return;
@@ -308,6 +383,7 @@ internal sealed class AwkMachine
 
     private Dictionary<string, AwkValue> GetArray(string name)
     {
+        if (_frame is not null && _frame.Locals.TryGetValue(name, out var cell)) return CellArray(cell, name);
         if (!_arrays.TryGetValue(name, out var arr))
         {
             arr = new Dictionary<string, AwkValue>();
@@ -315,6 +391,12 @@ internal sealed class AwkMachine
         }
         return arr;
     }
+
+    /// <summary>True when <paramref name="name"/> currently denotes an array (a local that holds one, or a global array).</summary>
+    private bool IsArrayName(string name) =>
+        _frame is not null && _frame.Locals.TryGetValue(name, out var cell)
+            ? cell.Array is not null
+            : _arrays.ContainsKey(name);
 
     private string SubscriptKey(IReadOnlyList<AwkExpr> subs)
     {
@@ -331,8 +413,16 @@ internal sealed class AwkMachine
         switch (stmt)
         {
             case BlockStmt b:
-                foreach (var s in b.Statements) ExecStmt(s);
+                foreach (var s in b.Statements)
+                {
+                    ExecStmt(s);
+                    if (_returning) return;
+                }
                 break;
+            case ReturnStmt ret:
+                _retVal = ret.Value is null ? AwkValue.Uninitialized : Eval(ret.Value);
+                _returning = true;
+                return;
             case PrintStmt p: ExecPrint(p); break;
             case PrintfStmt pf: ExecPrintf(pf); break;
             case ExprStmt e: Eval(e.Expr); break;
@@ -346,6 +436,7 @@ internal sealed class AwkMachine
                     try { ExecStmt(w.Body); }
                     catch (BreakSignal) { break; }
                     catch (ContinueSignal) { }
+                    if (_returning) return;
                 }
                 break;
             case DoWhileStmt dw:
@@ -354,6 +445,7 @@ internal sealed class AwkMachine
                     try { ExecStmt(dw.Body); }
                     catch (BreakSignal) { break; }
                     catch (ContinueSignal) { }
+                    if (_returning) return;
                 } while (Eval(dw.Cond).ToBool());
                 break;
             case ForStmt f:
@@ -363,6 +455,7 @@ internal sealed class AwkMachine
                     try { ExecStmt(f.Body); }
                     catch (BreakSignal) { break; }
                     catch (ContinueSignal) { }
+                    if (_returning) return;
                     if (f.Post != null) ExecStmt(f.Post);
                 }
                 break;
@@ -375,6 +468,7 @@ internal sealed class AwkMachine
                     try { ExecStmt(fi.Body); }
                     catch (BreakSignal) { break; }
                     catch (ContinueSignal) { }
+                    if (_returning) return;
                 }
                 break;
             }
@@ -393,7 +487,7 @@ internal sealed class AwkMachine
     {
         if (p.Args.Count == 0)
         {
-            Output(GetField(0).ToStr(Ofmt) + Ors);
+            WriteOutput(p, GetField(0).ToStr(Ofmt) + Ors);
             return;
         }
         string ofs = Ofs;
@@ -404,7 +498,7 @@ internal sealed class AwkMachine
             sb.Append(Eval(p.Args[i]).ToStr(Ofmt));
         }
         sb.Append(Ors);
-        Output(sb.ToString());
+        WriteOutput(p, sb.ToString());
     }
 
     private void ExecPrintf(PrintfStmt pf)
@@ -413,7 +507,7 @@ internal sealed class AwkMachine
         string fmt = Eval(pf.Args[0]).ToStr(Convfmt);
         var vals = new List<AwkValue>(pf.Args.Count - 1);
         for (int i = 1; i < pf.Args.Count; i++) vals.Add(Eval(pf.Args[i]));
-        Output(AwkPrintf.Format(fmt, vals, Convfmt));
+        WriteOutput(pf, AwkPrintf.Format(fmt, vals, Convfmt));
     }
 
     private void ExecDelete(DeleteStmt del)
@@ -610,8 +704,107 @@ internal sealed class AwkMachine
             case "strftime": return BuiltinStrftime(call.Args);
             case "system": return BuiltinSystem(Arg(call, 0));
             case "close": return BuiltinClose(Arg(call, 0));
-            case "fflush": return AwkValue.Number(0); // output is already line-flushed to the pipeline
-            default: throw new AwkInterpreter.AwkSyntaxException($"awk: calling undefined function {call.Name}");
+            case "fflush": return BuiltinFflush(call.Args);
+            default:
+                if (_prog.Functions.TryGetValue(call.Name, out var fn)) return CallUser(fn, call.Args);
+                throw new AwkInterpreter.AwkSyntaxException($"awk: fatal: function `{call.Name}' not defined");
+        }
+    }
+
+    // ── user-defined functions ───────────────────────────────────────────────
+
+    /// <summary>
+    /// A function-local variable: a scalar, an array, or (while neither has been used) untyped. An
+    /// untyped parameter that was given a bare caller variable remembers where it came from: if the
+    /// callee uses it as an array, the array is also bound to that caller variable, so
+    /// <c>function mk(a){a[1]=1} BEGIN{mk(x); print x[1]}</c> works exactly as in gawk.
+    /// </summary>
+    private sealed class Cell
+    {
+        public AwkValue Scalar;
+        public bool HasScalar;
+        public Dictionary<string, AwkValue>? Array;
+        public Cell? Origin;                                   // caller's local this untyped cell stands for
+        public Action<Dictionary<string, AwkValue>>? BindGlobal; // caller's global this untyped cell stands for
+
+        public void AdoptArray(Dictionary<string, AwkValue> d)
+        {
+            if (Array is not null || HasScalar) return;
+            Array = d;
+            Origin?.AdoptArray(d);
+            BindGlobal?.Invoke(d);
+        }
+    }
+
+    private sealed class Frame
+    {
+        public readonly Dictionary<string, Cell> Locals;
+        public Frame(Dictionary<string, Cell> locals) { Locals = locals; }
+    }
+
+    private Frame? _frame;
+    private bool _returning;
+    private AwkValue _retVal;
+
+    private Dictionary<string, AwkValue> CellArray(Cell cell, string name)
+    {
+        if (cell.Array is not null) return cell.Array;
+        if (cell.HasScalar)
+            throw new AwkInterpreter.AwkRuntimeException($"fatal: attempt to use scalar parameter `{name}' as an array");
+        var d = new Dictionary<string, AwkValue>();
+        cell.AdoptArray(d);
+        return d;
+    }
+
+    /// <summary>
+    /// The cell a call argument becomes: a bare variable passes an array by reference (and an untyped
+    /// variable as a link that can turn into one), anything else — including a scalar variable — by value.
+    /// </summary>
+    private Cell ArgumentCell(AwkExpr arg)
+    {
+        if (arg is VarRef v && v.Name is not ("NF" or "NR" or "FNR" or "RSTART" or "RLENGTH"))
+        {
+            if (_frame is not null && _frame.Locals.TryGetValue(v.Name, out var src))
+            {
+                if (src.Array is not null) return new Cell { Array = src.Array };
+                if (src.HasScalar) return new Cell { Scalar = src.Scalar, HasScalar = true };
+                return new Cell { Origin = src };
+            }
+            if (_arrays.TryGetValue(v.Name, out var garr)) return new Cell { Array = garr };
+            if (_vars.TryGetValue(v.Name, out var gv)) return new Cell { Scalar = gv, HasScalar = true };
+            string gname = v.Name;
+            return new Cell { BindGlobal = d => _arrays[gname] = d };
+        }
+        return new Cell { Scalar = Eval(arg), HasScalar = true };
+    }
+
+    private AwkValue CallUser(AwkFunction fn, List<AwkExpr> args)
+    {
+        // The recursion is on the managed stack: report a clean awk error instead of letting a
+        // runaway function overflow it (which would kill the shared host process).
+        if (!System.Runtime.CompilerServices.RuntimeHelpers.TryEnsureSufficientExecutionStack())
+            throw new AwkInterpreter.AwkRuntimeException("fatal: function call nesting too deep");
+
+        var locals = new Dictionary<string, Cell>(fn.Params.Count);
+        for (int i = 0; i < args.Count; i++)
+        {
+            if (i < fn.Params.Count) locals[fn.Params[i]] = ArgumentCell(args[i]);
+            else Eval(args[i]); // more arguments than parameters: evaluated for effect, then ignored
+        }
+        for (int i = args.Count; i < fn.Params.Count; i++) locals[fn.Params[i]] = new Cell();
+
+        var saved = _frame;
+        _frame = new Frame(locals);
+        try
+        {
+            ExecStmt(fn.Body);
+            return _returning ? _retVal : AwkValue.Uninitialized;
+        }
+        finally
+        {
+            _frame = saved;
+            _returning = false;
+            _retVal = default;
         }
     }
 
@@ -678,6 +871,7 @@ internal sealed class AwkMachine
     private IAwkLineStream? OpenCommandStream(string command)
     {
         if (_cmdStreams.TryGetValue(command, out var open)) return open;
+        FlushAllOutputs(); // the command may read what this program just wrote
         var stream = Shell?.Start(command);
         if (stream is not null) _cmdStreams[command] = stream;
         return stream;
@@ -691,9 +885,29 @@ internal sealed class AwkMachine
     {
         bool any = false;
         int status = 0;
+        if (_outputs.Remove(name, out var o))
+        {
+            _outputOrder.Remove(name);
+            status = o.Close();
+            any = true;
+        }
         if (_fileStreams.Remove(name, out var f)) { status = f.Close(); any = true; }
         if (_cmdStreams.Remove(name, out var c)) { status = c.Close(); any = true; }
         return AwkValue.Number(any ? status : -1);
+    }
+
+    /// <summary>
+    /// <c>fflush()</c> publishes every output; <c>fflush(name)</c> the one open output called
+    /// <paramref name="args"/>[0] — 0, or -1 when no such output is open.
+    /// </summary>
+    private AwkValue BuiltinFflush(List<AwkExpr> args)
+    {
+        if (args.Count == 0) { FlushAllOutputs(); return AwkValue.Number(0); }
+        string name = Eval(args[0]).ToStr(Convfmt);
+        if (!_outputs.TryGetValue(name, out var sink)) return AwkValue.Number(-1);
+        if (sink is AwkStdoutSink) _stdout.FlushHeld();
+        sink.Flush();
+        return AwkValue.Number(0);
     }
 
     /// <summary>
@@ -703,13 +917,14 @@ internal sealed class AwkMachine
     private AwkValue BuiltinSystem(string command)
     {
         if (Shell is null) return AwkValue.Number(-1);
+        FlushAllOutputs(); // gawk flushes every output before it runs the command
         BashRuntime.ChildProcessResult r;
         try { r = Shell.Run(command); }
         catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException)
         {
             return AwkValue.Number(-1);
         }
-        if (r.Stdout.Length > 0) Output(r.Stdout.Replace("\r\n", "\n"));
+        if (r.Stdout.Length > 0) _stdout.WriteThrough(r.Stdout.Replace("\r\n", "\n"));
         if (r.Stderr.Length > 0) Console.Error.Write(r.Stderr);
         return AwkValue.Number(r.TimedOut ? 124 : r.ExitCode);
     }
@@ -720,8 +935,8 @@ internal sealed class AwkMachine
     private AwkValue BuiltinLength(List<AwkExpr> args)
     {
         if (args.Count == 0) return AwkValue.Number(_fields[0].Length);
-        if (args[0] is VarRef vr && _arrays.ContainsKey(vr.Name))
-            return AwkValue.Number(_arrays[vr.Name].Count);
+        if (args[0] is VarRef vr && IsArrayName(vr.Name))
+            return AwkValue.Number(GetArray(vr.Name).Count);
         return AwkValue.Number(Eval(args[0]).ToStr(Convfmt).Length);
     }
 
@@ -763,7 +978,6 @@ internal sealed class AwkMachine
         string s = Eval(args[0]).ToStr(Convfmt);
         var arr = GetArray(arrRef.Name);
         arr.Clear();
-        _arrays[arrRef.Name] = arr;
 
         List<string> parts;
         if (args.Count >= 3)
