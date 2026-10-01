@@ -50,23 +50,27 @@ public sealed class InvokeBashAwkCommand : PSCmdlet
     [Parameter(ValueFromPipeline = true)]
     public PSObject? InputObject { get; set; }
 
-    private readonly List<PSObject> _pipeline = new();
+    // STREAMING (memory bound): the program is parsed and BEGIN runs in BeginProcessing, each
+    // pipeline record is fed to the machine in ProcessRecord as it arrives, and END runs in
+    // EndProcessing. Nothing collects stdin: awk here has no `getline` (the parser rejects it), so
+    // the machine never needs to pull from stdin and no pull model / blocking queue is required.
+    // File operands are read in EndProcessing (after BEGIN), unchanged.
+    private AwkMachine? _machine;
+    private List<string> _files = new();
+    private bool _stdinMode;
+    private bool _halt;     // version/help/usage/syntax/runtime error: ignore everything that follows
 
-    protected override void ProcessRecord()
-    {
-        if (InputObject != null) _pipeline.Add(InputObject);
-    }
-
-    protected override void EndProcessing()
+    protected override void BeginProcessing()
     {
         var args = Arguments ?? Array.Empty<string>();
 
         FileSystemHelpers.SetLastExitCode(this, 0);
-        if (FileSystemHelpers.TryHandleVersion(this, "awk", args)) return;
+        if (FileSystemHelpers.TryHandleVersion(this, "awk", args)) { _halt = true; return; }
         if (Array.IndexOf(args, "--help") >= 0)
         {
             foreach (var line in InvokeCommand.InvokeScript("param($n) Show-BashHelp $n", "awk"))
                 WriteObject(line);
+            _halt = true;
             return;
         }
 
@@ -137,12 +141,14 @@ public sealed class InvokeBashAwkCommand : PSCmdlet
                     if (FileSystemHelpers.IsPipelineStop(ex)) throw;
                     FileSystemHelpers.WriteBashError(this, $"awk: can't open source file {pf}: {ex.Message}");
                     SessionState.PSVariable.Set("global:LASTEXITCODE", 2);
+                    _halt = true;
                     return;
                 }
                 if (!File.Exists(resolved))
                 {
                     FileSystemHelpers.WriteBashError(this, $"awk: fatal: cannot open source file `{pf}' for reading: No such file or directory");
                     SessionState.PSVariable.Set("global:LASTEXITCODE", 2);
+                    _halt = true;
                     return;
                 }
                 sb.Append(BashFileSystem.ReadAllText(resolved));
@@ -155,6 +161,7 @@ public sealed class InvokeBashAwkCommand : PSCmdlet
         {
             FileSystemHelpers.WriteBashError(this, "awk: usage: awk [options] program [file ...]");
             SessionState.PSVariable.Set("global:LASTEXITCODE", 2);
+            _halt = true;
             return;
         }
 
@@ -167,6 +174,7 @@ public sealed class InvokeBashAwkCommand : PSCmdlet
         {
             FileSystemHelpers.WriteBashError(this, ex.Message);
             SessionState.PSVariable.Set("global:LASTEXITCODE", 2);
+            _halt = true;
             return;
         }
 
@@ -184,78 +192,110 @@ public sealed class InvokeBashAwkCommand : PSCmdlet
             }
         }
 
-        int fileError = 0;
+        _machine = machine;
+        _files = files;
+        _stdinMode = files.Count == 0;
 
-        // A runtime fault (bad dynamic regex, field index past the ceiling, a
-        // regex that blows the match-time budget) must surface as an awk error
-        // with whatever output was already produced flushed — never an unhandled
-        // .NET exception, which would tear down the shared host runspace.
-        try
+        // BEGIN runs before the first record. A runtime fault (bad dynamic regex, field index past
+        // the ceiling, a regex that blows the match-time budget) must surface as an awk error with
+        // whatever output was already produced flushed — never an unhandled .NET exception, which
+        // would tear down the shared host runspace.
+        Guarded(() =>
         {
             machine.RunBegin();
-            if (!machine.Exited)
-            {
-                if (files.Count > 0)
-                {
-                    foreach (var file in files)
-                    {
-                        string resolved;
-                        try { resolved = SessionState.Path.GetUnresolvedProviderPathFromPSPath(file); }
-                        catch (Exception ex)
-                        {
-                            if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-                            FileSystemHelpers.WriteBashError(this, $"awk: can't open file {file}: {ex.Message}");
-                            fileError = 2;
-                            continue;
-                        }
-                        if (!File.Exists(resolved))
-                        {
-                            FileSystemHelpers.WriteBashError(this, $"awk: fatal: cannot open file `{file}' for reading: No such file or directory");
-                            fileError = 2;
-                            continue;
-                        }
+            if (!machine.Exited && _stdinMode) machine.StartFile("");
+        });
+    }
 
-                        machine.StartFile(file);
-                        foreach (var record in BashFileSystem.ReadLines(resolved))
-                        {
-                            machine.ProcessRecord(record);
-                            if (machine.Exited) break;
-                        }
-                        if (machine.Exited) break;
-                    }
-                }
-                else
+    protected override void ProcessRecord()
+    {
+        if (_halt || !_stdinMode || _machine is null || InputObject is null) return;
+        var machine = _machine;
+        if (machine.Exited) return;
+        Guarded(() =>
+        {
+            foreach (var record in SplitRecords(InputObject))
+            {
+                machine.ProcessRecord(record);
+                if (machine.Exited) break;
+            }
+        });
+    }
+
+    protected override void EndProcessing()
+    {
+        if (_halt || _machine is null) return;
+        var machine = _machine;
+        int fileError = 0;
+
+        bool ok = Guarded(() =>
+        {
+            if (!machine.Exited && !_stdinMode)
+            {
+                foreach (var file in _files)
                 {
-                    machine.StartFile("");
-                    foreach (var record in PipelineRecords())
+                    string resolved;
+                    try { resolved = SessionState.Path.GetUnresolvedProviderPathFromPSPath(file); }
+                    catch (Exception ex)
+                    {
+                        if (FileSystemHelpers.IsPipelineStop(ex)) throw;
+                        FileSystemHelpers.WriteBashError(this, $"awk: can't open file {file}: {ex.Message}");
+                        fileError = 2;
+                        continue;
+                    }
+                    if (!File.Exists(resolved))
+                    {
+                        FileSystemHelpers.WriteBashError(this, $"awk: fatal: cannot open file `{file}' for reading: No such file or directory");
+                        fileError = 2;
+                        continue;
+                    }
+
+                    machine.StartFile(file);
+                    foreach (var record in BashFileSystem.ReadLines(resolved))
                     {
                         machine.ProcessRecord(record);
                         if (machine.Exited) break;
                     }
+                    if (machine.Exited) break;
                 }
             }
 
             machine.RunEnd();
-        }
-        catch (AwkInterpreter.AwkRuntimeException ex)
-        {
-            machine.Flush();
-            FileSystemHelpers.WriteBashError(this, $"awk: {ex.Message}");
-            SessionState.PSVariable.Set("global:LASTEXITCODE", 2);
-            return;
-        }
-        catch (System.Text.RegularExpressions.RegexMatchTimeoutException)
-        {
-            machine.Flush();
-            FileSystemHelpers.WriteBashError(this, "awk: regular expression match timed out");
-            SessionState.PSVariable.Set("global:LASTEXITCODE", 2);
-            return;
-        }
+        });
+        if (!ok) return;
 
         machine.Flush();
 
         int exit = machine.ExitCode != 0 ? machine.ExitCode : fileError;
         SessionState.PSVariable.Set("global:LASTEXITCODE", exit);
+    }
+
+    /// <summary>Run <paramref name="body"/>, mapping awk runtime faults to an awk error + exit 2.
+    /// Returns false (and halts further processing) when it faulted.</summary>
+    private bool Guarded(Action body)
+    {
+        if (_halt) return false;
+        try
+        {
+            body();
+            return true;
+        }
+        catch (AwkInterpreter.AwkRuntimeException ex)
+        {
+            _machine?.Flush();
+            FileSystemHelpers.WriteBashError(this, $"awk: {ex.Message}");
+            SessionState.PSVariable.Set("global:LASTEXITCODE", 2);
+            _halt = true;
+            return false;
+        }
+        catch (System.Text.RegularExpressions.RegexMatchTimeoutException)
+        {
+            _machine?.Flush();
+            FileSystemHelpers.WriteBashError(this, "awk: regular expression match timed out");
+            SessionState.PSVariable.Set("global:LASTEXITCODE", 2);
+            _halt = true;
+            return false;
+        }
     }
 
     private static void AddOperand(string arg, ref string? programText, List<string> programFiles, List<string> files)
@@ -265,7 +305,7 @@ public sealed class InvokeBashAwkCommand : PSCmdlet
     }
 
     /// <summary>
-    /// Records from the pipeline. In ps-bash's model each pipeline object is one
+    /// Records from ONE pipeline item. In ps-bash's model each pipeline object is one
     /// record — but typed objects (LsEntry, CatLine, …) carry a bare
     /// <c>BashText</c> with no trailing newline, while text sources (printf /
     /// echo -e) carry one with a trailing newline (and may pack several lines
@@ -274,26 +314,23 @@ public sealed class InvokeBashAwkCommand : PSCmdlet
     /// (objects without newlines) from being concatenated into one record while
     /// still splitting a multi-line text object into multiple records.
     /// </summary>
-    private IEnumerable<string> PipelineRecords()
+    private static IEnumerable<string> SplitRecords(PSObject item)
     {
-        foreach (var item in _pipeline)
-        {
-            string text = BashRuntime.GetBashText(item);
-            if (text.Length == 0) continue;
-            // Drop exactly one trailing line terminator (the object's own line break).
-            if (text.EndsWith("\r\n", StringComparison.Ordinal)) text = text.Substring(0, text.Length - 2);
-            else if (text[^1] == '\n' || text[^1] == '\r') text = text.Substring(0, text.Length - 1);
+        string text = BashRuntime.GetBashText(item);
+        if (text.Length == 0) yield break;
+        // Drop exactly one trailing line terminator (the object's own line break).
+        if (text.EndsWith("\r\n", StringComparison.Ordinal)) text = text.Substring(0, text.Length - 2);
+        else if (text[^1] == '\n' || text[^1] == '\r') text = text.Substring(0, text.Length - 1);
 
-            int start = 0;
-            for (int i = 0; i < text.Length; i++)
-            {
-                if (text[i] != '\n') continue;
-                int end = i > start && text[i - 1] == '\r' ? i - 1 : i;
-                yield return text.Substring(start, end - start);
-                start = i + 1;
-            }
-            yield return start == 0 ? text : text.Substring(start);
+        int start = 0;
+        for (int i = 0; i < text.Length; i++)
+        {
+            if (text[i] != '\n') continue;
+            int end = i > start && text[i - 1] == '\r' ? i - 1 : i;
+            yield return text.Substring(start, end - start);
+            start = i + 1;
         }
+        yield return start == 0 ? text : text.Substring(start);
     }
 
     /// <summary>
