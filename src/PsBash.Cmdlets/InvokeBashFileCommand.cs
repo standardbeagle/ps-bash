@@ -1,4 +1,5 @@
 using System.Management.Automation;
+using PsBash.Core;
 using System.Text;
 using PsBash.Cmdlets.Args;
 
@@ -55,14 +56,14 @@ public sealed class InvokeBashFileCommand : PSCmdlet
 {
     private const string OptBrief = "brief", OptMime = "mime", OptMimeType = "mime-type",
         OptMimeEnc = "mime-encoding", OptFollow = "dereference", OptNoFollow = "no-dereference",
-        OptPrint0 = "print0", OptSep = "separator";
+        OptPrint0 = "print0", OptSep = "separator", OptNameFile = "files-from";
 
     /// <summary>GNU <c>file</c> options ps-bash refuses (exit 2). <c>-s</c>/<c>-e</c>/<c>-m</c>/<c>-f</c>/<c>-P</c>
     /// take values or need the magic database, so they cannot be silently ignored.</summary>
     private static readonly string[] FileValidButUnsupported =
     {
         "-z", "--uncompress", "-Z", "--uncompress-noreport", "-s", "--special-files",
-        "-k", "--keep-going", "-f", "--files-from", "-r", "--raw", "-c", "--checking-printout",
+        "-k", "--keep-going", "-r", "--raw", "-c", "--checking-printout",
         "-C", "--compile", "-d", "--debug", "-E", "-l", "--list", "-m", "--magic-file",
         "-e", "--exclude", "--exclude-quiet", "-P", "--parameter", "--apple", "--extension",
     };
@@ -85,6 +86,7 @@ public sealed class InvokeBashFileCommand : PSCmdlet
             new OptSpec(OptFollow, 'L', "dereference"),
             new OptSpec(OptNoFollow, 'h', "no-dereference"),
             new OptSpec(OptSep, 'F', "separator", OptKind.Value),
+            new OptSpec(OptNameFile, 'f', "files-from", OptKind.Value),
             new OptSpec(OptPrint0, '0', "print0"),
             new OptSpec("no-buffer", 'n', "no-buffer"),
             new OptSpec("no-pad", 'N', "no-pad"),
@@ -107,14 +109,24 @@ public sealed class InvokeBashFileCommand : PSCmdlet
     /// <summary>Pure argv scan (unit-test seam).</summary>
     internal static ParsedArgs ScanArgs(string[] args) => ArgParser.Parse(args, FileSpec);
 
-    internal sealed class FileArgs
+    /// <summary>The output-affecting options. A <c>-f NAMEFILE</c> is processed when it is PARSED (file 5.45), so it
+    /// carries a snapshot of the options given before it; options after it only affect the later operands.</summary>
+    internal class FileOpts
     {
-        public ParsedArgs Parsed = null!;
         public bool Brief, WantMimeType, WantMimeEncoding, Follow, Print0, NoPad;
         public string Separator = ":";
-        public List<string> Operands = new();
-        public string? Error;
         public bool AnyMime => WantMimeType || WantMimeEncoding;
+        public FileOpts Snapshot() => (FileOpts)MemberwiseClone();
+    }
+
+    internal sealed class FileArgs : FileOpts
+    {
+        public ParsedArgs Parsed = null!;
+        public List<string> Operands = new();
+
+        /// <summary>Each <c>-f NAMEFILE</c> in command-line order, with the options in force when it was parsed.</summary>
+        public List<(string NameFile, FileOpts Opts)> NameFiles = new();
+        public string? Error;
     }
 
     private const string FileUsage =
@@ -151,9 +163,10 @@ public sealed class InvokeBashFileCommand : PSCmdlet
                 case OptPrint0: f.Print0 = true; break;
                 case "no-pad": f.NoPad = true; break;
                 case OptSep: f.Separator = tok.Value!; break;
+                case OptNameFile: f.NameFiles.Add((tok.Value!, f.Snapshot())); break;
             }
         }
-        if (f.Operands.Count == 0 && !f.Parsed.Has(OptSpecSet.HelpId) && !f.Parsed.Has(OptSpecSet.VersionId))
+        if (f.Operands.Count == 0 && f.NameFiles.Count == 0 && !f.Parsed.Has(OptSpecSet.HelpId) && !f.Parsed.Has(OptSpecSet.VersionId))
             f.Error = FileUsage;
         return f;
     }
@@ -169,6 +182,17 @@ public sealed class InvokeBashFileCommand : PSCmdlet
 
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
+
+    /// <summary>Standard input: the `-` operand (`/dev/stdin`) and `-f -` read the pipeline.</summary>
+    [Parameter(ValueFromPipeline = true)]
+    public PSObject? InputObject { get; set; }
+
+    private readonly List<object> _pipeline = new();
+
+    protected override void ProcessRecord()
+    {
+        if (InputObject != null) _pipeline.Add(InputObject);
+    }
 
     protected override void EndProcessing()
     {
@@ -196,38 +220,129 @@ public sealed class InvokeBashFileCommand : PSCmdlet
             return;
         }
 
+        // `-f NAMEFILE` is processed when parsed (file 5.45), before the plain operands, each list as its own
+        // batch with the options that preceded it; a name file that cannot be opened is fatal (exit 1).
+        foreach (var (nameFile, opts) in plan.NameFiles)
+        {
+            if (!TryReadNames(nameFile, out var names))
+            {
+                FileSystemHelpers.WriteBashError(this, $"file: Cannot open `{nameFile}' (No such file or directory)");
+                FileSystemHelpers.SetLastExitCode(this, 1);
+                return;
+            }
+            var batch = new List<Target>();
+            foreach (var n in names) batch.Add(NameTarget(n));
+            EmitBatch(batch, opts);
+        }
+
+        if (plan.Operands.Count == 0) return;
         // Expand every operand first: GNU pads the name column to the widest operand (file.c `nlen`),
         // missing ones included, so the width is known only after the whole list is resolved.
-        var targets = new List<(string Path, string Name)>();
+        var targets = new List<Target>();
         foreach (var raw in plan.Operands)
         {
+            if (raw == "-") { targets.Add(new Target(null, raw, "/dev/stdin", false)); continue; }
             bool glob = raw.IndexOfAny(new[] { '*', '?', '[' }) >= 0;
             foreach (var filePath in FileSystemHelpers.ResolveOperandPaths(this, raw))
-                targets.Add((filePath, glob ? RelativeName(filePath) : raw));
+            {
+                string shown = glob ? RelativeName(filePath) : raw;
+                targets.Add(new Target(filePath, shown, shown, false));
+            }
         }
-        int nameWidth = 0;
-        foreach (var (_, name) in targets) nameWidth = Math.Max(nameWidth, name.Length);
+        EmitBatch(targets, plan);
+    }
 
-        foreach (var (filePath, name) in targets)
+    /// <summary>One operand: <c>Path</c> null = standard input. <c>Typed</c> is what pads the column
+    /// (file pads stdin by the typed <c>-</c>, not by <c>/dev/stdin</c>); <c>Shown</c> is what is printed.</summary>
+    private readonly record struct Target(string? Path, string Typed, string Shown, bool Missing);
+
+    /// <summary>A name from a <c>-f</c> list: taken verbatim (no globbing, no tilde); the empty name is a missing file;
+    /// <c>-</c> is stdin.</summary>
+    private Target NameTarget(string name)
+    {
+        if (name == "-") return new Target(null, name, "/dev/stdin", false);
+        string shown = EscapeName(name);
+        if (name.Length == 0) return new Target("", name, shown, true);
+        return new Target(SessionState.Path.GetUnresolvedProviderPathFromPSPath(name), name, shown, false);
+    }
+
+    /// <summary>file prints control characters of a name as octal (<c>a.txt\015</c>).</summary>
+    private static string EscapeName(string name)
+    {
+        var sb = new StringBuilder(name.Length);
+        foreach (char c in name)
         {
-            var (fileType, mimeType, encoding) = Classify(filePath, plan.Follow, out bool missing);
+            if (c < 0x20 || c == 0x7f) sb.Append('\\').Append(Convert.ToString(c, 8).PadLeft(3, '0'));
+            else sb.Append(c);
+        }
+        return sb.ToString();
+    }
+
+    private bool _stdinConsumed;
+
+    private string StdinText()
+    {
+        if (_stdinConsumed) return string.Empty;
+        _stdinConsumed = true;
+        return BashRuntime.RecordStreamText(_pipeline);
+    }
+
+    private bool TryReadNames(string nameFile, out List<string> names)
+    {
+        names = new List<string>();
+        try
+        {
+            if (nameFile == "-")
+            {
+                string all = StdinText();
+                if (all.Length == 0) return true;
+                foreach (var l in all.Split('\n')) names.Add(l);
+                if (all.EndsWith('\n')) names.RemoveAt(names.Count - 1);
+                return true;
+            }
+            string path = SessionState.Path.GetUnresolvedProviderPathFromPSPath(nameFile);
+            if (!File.Exists(path)) return false;
+            foreach (var line in BashFileSystem.ReadTextLines(path, exact: true)) names.Add(line.Text);
+            return true;
+        }
+        catch (Exception ex) when (!FileSystemHelpers.IsPipelineStop(ex))
+        {
+            return false;
+        }
+    }
+
+    private void EmitBatch(List<Target> targets, FileOpts plan)
+    {
+        int nameWidth = 0;
+        foreach (var t in targets) nameWidth = Math.Max(nameWidth, t.Typed.Length);
+
+        foreach (var t in targets)
+        {
+            bool missing = t.Missing;
+            string fileType = "", mimeType = "", encoding = "";
+            if (!missing)
+            {
+                (fileType, mimeType, encoding) = t.Path is null
+                    ? ClassifyStdin()
+                    : Classify(t.Path, plan.Follow, out missing);
+            }
             // file(1) reports an unopenable operand on STDOUT, in the operand's own line and with exit
             // status 0 (file-5.45: `nosuch: cannot open `nosuch' (No such file or directory)`).
             string display = missing
-                ? $"cannot open `{name}' (No such file or directory)"
+                ? $"cannot open `{t.Shown}' (No such file or directory)"
                 : plan.AnyMime
                     ? (plan.WantMimeType && plan.WantMimeEncoding ? $"{mimeType}; charset={encoding}"
                         : plan.WantMimeType ? mimeType : encoding)
                     : fileType;
-            int pad = plan.NoPad ? 0 : nameWidth - name.Length;
+            int pad = plan.NoPad ? 0 : nameWidth - t.Typed.Length;
             string bashText = plan.Brief
                 ? display
-                : $"{name}{(plan.Print0 ? "\0" : "")}{plan.Separator}{new string(' ', pad)} {display}";
+                : $"{t.Shown}{(plan.Print0 ? "\0" : "")}{plan.Separator}{new string(' ', pad)} {display}";
 
             var obj = new PSObject();
             obj.TypeNames.Insert(0, "PsBash.TextOutput");
             obj.Properties.Add(new PSNoteProperty("BashText", bashText));
-            obj.Properties.Add(new PSNoteProperty("FileName", filePath));
+            obj.Properties.Add(new PSNoteProperty("FileName", t.Path ?? "/dev/stdin"));
             obj.Properties.Add(new PSNoteProperty("FileType", missing ? display : fileType));
             obj.Properties.Add(new PSNoteProperty("MimeType", mimeType));
             obj.Properties.Add(new PSNoteProperty("MimeEncoding", encoding));
@@ -235,6 +350,24 @@ public sealed class InvokeBashFileCommand : PSCmdlet
         }
     }
 
+    /// <summary>Standard input (the pipeline's byte stream) classified like a file; empty input is <c>empty</c>.</summary>
+    private (string FileType, string MimeType, string Encoding) ClassifyStdin()
+    {
+        byte[] bytes = RawBytes.GetBytes(StdinTextShared());
+        if (bytes.Length == 0) return ("empty", "inode/x-empty", "binary");
+        return ClassifyContent(() => new MemoryStream(bytes));
+    }
+
+    private string? _stdinSnapshot;
+
+    /// <summary>The same stdin bytes serve every <c>-</c> operand (`file - -` classifies both), unless a
+    /// <c>-f -</c> name list already drained it.</summary>
+    private string StdinTextShared()
+    {
+        if (_stdinSnapshot is not null) return _stdinSnapshot;
+        _stdinSnapshot = StdinText();
+        return _stdinSnapshot;
+    }
     /// <summary>The name a glob match is listed under: relative to the working directory when it lives below it.</summary>
     private string RelativeName(string resolved)
     {
@@ -275,10 +408,18 @@ public sealed class InvokeBashFileCommand : PSCmdlet
         }
         if (isDir) return ("directory", "inode/directory", "binary");
 
+        if (info is FileInfo { Exists: true, Length: 0 })
+            return ("empty", "inode/x-empty", "binary");
+        return ClassifyContent(() => BashFileSystem.OpenRead(filePath));
+    }
+
+    /// <summary>Magic-byte table, then the control-byte text/data scan, over any re-openable byte source.</summary>
+    private static (string FileType, string MimeType, string Encoding) ClassifyContent(Func<Stream> open)
+    {
         byte[] headBytes;
         try
         {
-            using var stream = BashFileSystem.OpenRead(filePath);
+            using var stream = open();
             var buf = new byte[16];
             int read = stream.Read(buf, 0, 16);
             headBytes = read <= 0 ? Array.Empty<byte>() : buf.AsSpan(0, read).ToArray();
@@ -288,9 +429,6 @@ public sealed class InvokeBashFileCommand : PSCmdlet
             // psm1 oracle: catch -> $bytes = @() then fall through to the content scan.
             headBytes = Array.Empty<byte>();
         }
-
-        if (headBytes.Length == 0 && info is FileInfo { Exists: true, Length: 0 })
-            return ("empty", "inode/x-empty", "binary");
 
         if (headBytes.Length >= 8 && headBytes[0] == 0x89 && headBytes[1] == 0x50
             && headBytes[2] == 0x4E && headBytes[3] == 0x47)
@@ -319,7 +457,7 @@ public sealed class InvokeBashFileCommand : PSCmdlet
         bool allText = true, sawHigh = false, utf8Ok = true;
         try
         {
-            using var s = BashFileSystem.OpenRead(filePath);
+            using var s = open();
             var buffer = new byte[65536];
             var decoder = new UTF8Encoding(false, true).GetDecoder();
             int read;

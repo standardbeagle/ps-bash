@@ -57,7 +57,10 @@ public class FileArgScanTests
     [InlineData("ERR file: option '-k' is recognized but not supported by ps-bash", "-k", "f")]
     [InlineData("ERR file: option '--keep-going' is recognized but not supported by ps-bash", "--keep-going", "f")]
     [InlineData("ERR file: option '-z' is recognized but not supported by ps-bash", "-z", "f")]
-    [InlineData("ERR file: option '-f' is recognized but not supported by ps-bash", "-f", "l")]
+    [InlineData("b=False type=False enc=False L=False 0=False sep=: ops=[]", "-f", "l")]
+    [InlineData("b=False type=False enc=False L=False 0=False sep=: ops=[]", "--files-from=l")]
+    [InlineData("b=False type=False enc=False L=False 0=False sep=: ops=[]", "--files", "l")]
+    [InlineData("ERR file: option requires an argument -- 'f'", "-f")]
     [InlineData("ERR file: option '--apple' is recognized but not supported by ps-bash", "--apple", "f")]
     public void Resolves(string expected, params string[] argv) => Assert.Equal(expected, Scan(argv));
 
@@ -69,6 +72,24 @@ public class FileArgScanTests
         Assert.Null(v.Error);
         Assert.True(InvokeBashFileCommand.ScanArgs(new[] { "--vers" }).Has("version"));
         Assert.True(InvokeBashFileCommand.ScanArgs(new[] { "--he" }).Has("help"));
+    }
+
+    [Fact]
+    public void NameFiles_CarryTheOptionsParsedBeforeThem()
+    {
+        // oracle (file 5.45): `-f` lists are processed when parsed, so `-b -f L` is brief and `-f L -b` is not
+        var p = InvokeBashFileCommand.Plan(new[] { "-b", "-f", "l1", "-F", "=", "-f", "l2", "-N", "x" });
+        Assert.Equal(2, p.NameFiles.Count);
+        Assert.Equal("l1", p.NameFiles[0].NameFile);
+        Assert.True(p.NameFiles[0].Opts.Brief);
+        Assert.Equal(":", p.NameFiles[0].Opts.Separator);
+        Assert.Equal("=", p.NameFiles[1].Opts.Separator);
+        Assert.False(p.NameFiles[1].Opts.NoPad);
+        Assert.True(p.NoPad);
+        var later = InvokeBashFileCommand.Plan(new[] { "-f", "l1", "-b" });
+        Assert.False(later.NameFiles[0].Opts.Brief);
+        Assert.True(later.Brief);
+        Assert.Null(later.Error);   // a name file satisfies "needs an operand"
     }
 
     [Fact]
