@@ -1,3 +1,4 @@
+using PsBash.Core;
 using System.Management.Automation;
 
 namespace PsBash.Cmdlets;
@@ -41,8 +42,17 @@ public sealed class InvokeBashRedirectCommand : PSCmdlet
     {
         if (Path is null) return;
 
-        var content = _content.ToString();
-        if (Append) File.AppendAllText(Path, content);
-        else File.WriteAllText(Path, content);
+        // The exact bytes: escaped-byte markers (invalid UTF-8, see RawBytes) are written back as the
+        // single original byte, everything else as UTF-8 — `printf '\xe9' > f` is ONE byte.
+        var bytes = RawBytes.GetBytes(_content.ToString());
+        if (Append)
+        {
+            using var fs = new FileStream(Path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite);
+            fs.Write(bytes, 0, bytes.Length);
+        }
+        else
+        {
+            File.WriteAllBytes(Path, bytes);
+        }
     }
 }

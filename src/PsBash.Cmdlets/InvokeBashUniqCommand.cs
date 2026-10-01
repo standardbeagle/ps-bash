@@ -1,3 +1,4 @@
+using PsBash.Core;
 using System.Linq;
 using System.Management.Automation;
 using System.Text.RegularExpressions;
@@ -336,7 +337,7 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
         try
         {
             var path = SessionState.Path.GetUnresolvedProviderPathFromPSPath(_outputFile);
-            _outWriter = new StreamWriter(path, false, new System.Text.UTF8Encoding(false));
+            _outWriter = new StreamWriter(path, false, RawBytes.Encoding);
         }
         catch (Exception ex)
         {
