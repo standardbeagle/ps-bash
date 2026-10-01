@@ -623,13 +623,14 @@ public class InvokeBashFindCommandTests : IDisposable, IClassFixture<SharedPwshF
     // ===================== -print0 =====================
 
     [Fact]
-    public void Find_Print0_EmitsSingleNullSeparatedTextObject()
+    public void Find_Print0_EmitsOneExactRecordPerPath_WhoseByteStreamIsNulSeparated()
     {
         Mk("a.txt"); Mk("b.txt");
         var results = Run($"Invoke-BashFind '{Esc(_tmpDir)}' -name '*.txt' -print0");
-        Assert.Single(results);
-        Assert.Equal(true, results[0].Properties["NoTrailingNewline"]?.Value);
-        var text = (string?)results[0].Properties["BashText"]?.Value ?? "";
+        // Streaming: each path is its own exact-bytes record ("path\0"); the concatenated stream is the NUL-joined list.
+        Assert.True(results.Count >= 2);
+        Assert.All(results, r => Assert.Equal(true, r.Properties["NoTrailingNewline"]?.Value));
+        var text = string.Concat(results.Select(r => (string?)r.Properties["BashText"]?.Value ?? ""));
         var parts = text.Split('\0').Where(p => p.Length > 0).ToArray();
         Assert.True(parts.Length >= 2,
             $"expected >= 2 null-separated paths, got {parts.Length}");

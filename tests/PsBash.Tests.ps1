@@ -1505,12 +1505,14 @@ Describe 'Invoke-BashFind' {
         $root.Count | Should -Be 1
     }
 
-    It 'find -print0 outputs single object with null-separated paths' {
+    It 'find -print0 streams one exact record per path whose byte stream is null-separated' {
         $results = @(Invoke-BashFind $findDir -name '*.txt' -print0)
-        $results.Count | Should -Be 1
-        $results[0].PSObject.TypeNames[0] | Should -BeIn @('PsBash.TextOutput', 'System.String')
-        $results[0].NoTrailingNewline | Should -Be $true
-        $bashText = $results[0].BashText
+        $results.Count | Should -BeGreaterOrEqual 5
+        foreach ($r in $results) {
+            $r.PSObject.TypeNames[0] | Should -BeIn @('PsBash.TextOutput', 'System.String')
+            $r.NoTrailingNewline | Should -Be $true
+        }
+        $bashText = ($results | ForEach-Object { $_.BashText }) -join ''
         $bashText | Should -Not -BeNullOrEmpty
         # Paths should be separated by null chars
         $paths = $bashText -split "`0"
@@ -1524,8 +1526,8 @@ Describe 'Invoke-BashFind' {
 
     It 'find --print0 (long form) works same as -print0' {
         $results = @(Invoke-BashFind $findDir -name '*.txt' --print0)
-        $results.Count | Should -Be 1
-        $bashText = $results[0].BashText
+        $results.Count | Should -BeGreaterOrEqual 5
+        $bashText = ($results | ForEach-Object { $_.BashText }) -join ''
         $paths = @(($bashText -split "`0") | Where-Object { $_ -ne '' })
         $paths.Count | Should -BeGreaterOrEqual 5
     }

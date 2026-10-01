@@ -358,7 +358,7 @@ internal sealed class GrepStage : ILineStreamStage
 /// <c>-e EXPR</c> (repeatable) or a first-operand expression, and bundles of
 /// <c>n/E/r</c>. Declines <c>-i</c> (in-place), <c>-f</c> (script file), and file
 /// operands. Reuses the cmdlet's <see cref="InvokeBashSedCommand.TryBuildCommands"/>
-/// + <see cref="InvokeBashSedCommand.ProcessLines"/> so the transform is identical.</summary>
+/// + <see cref="SedEngine"/> so the transform is identical.</summary>
 internal sealed class SedStage : ILineStreamStage
 {
     private readonly List<InvokeBashSedCommand.SedCommand> _commands;
@@ -412,18 +412,7 @@ internal sealed class SedStage : ILineStreamStage
         return new SedStage(commands, plan.Quiet);
     }
 
-    public IEnumerable<string> Run(IEnumerable<string> input)
-    {
-        // ProcessLines is a whole-input transform (N / D / address ranges need all
-        // lines), so buffer the stream — same as the cmdlet's pipeline path. Still
-        // removes the per-line PSObject allocation that this phase targets.
-        var lines = input as List<string> ?? new List<string>(input);
-        // SuppressDefault is a [ThreadStatic] carrier the pure ProcessLines reads; set
-        // it immediately before the call. No reset needed: every ProcessLines caller
-        // (cmdlet + this stage) sets it first, and cmdlet invocations never overlap on
-        // one runspace thread — the value is always freshly written before it is read.
-        InvokeBashSedCommand.SuppressDefault = _suppress;
-        var output = InvokeBashSedCommand.ProcessLines(lines.ToArray(), _commands);
-        foreach (var line in output) yield return line;
-    }
+    // The engine is a push state machine, so the stage streams: records flow through with a one-record
+    // lookahead and a downstream early exit (head) stops reading the upstream.
+    public IEnumerable<string> Run(IEnumerable<string> input) => SedEngine.Run(input, _commands, _suppress);
 }

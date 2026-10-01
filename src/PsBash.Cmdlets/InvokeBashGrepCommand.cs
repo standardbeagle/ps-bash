@@ -97,10 +97,16 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
     /// </summary>
     [Parameter] public SwitchParameter D { get; set; }
 
+    /// <summary>
+    /// Set by the psm1 proxy only. A cmdlet that stops its upstream (-q, -m N) raises the engine's stop-upstream
+    /// signal, which is routed to the pipeline that CONTAINS this command; behind the proxy's steppable pipeline that
+    /// is not the caller's pipeline, so the signal would kill the whole statement. Behind the proxy the cmdlet just
+    /// ignores the rest of its input instead (the transpiled path calls the cmdlet directly and stops the upstream).
+    /// </summary>
+    [Parameter(DontShow = true)] public SwitchParameter PsBashProxy { get; set; }
+
     [Parameter(ValueFromPipeline = true)]
     public PSObject? InputObject { get; set; }
-
-    private readonly List<PSObject> _pipeline = new();
 
     /// <summary>GNU's label for stdin in a prefixed line (<c>grep -H x &lt; f</c>).</summary>
     private const string StdinLabel = "(standard input)";
@@ -368,16 +374,51 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
         return true;
     }
 
+    /// <summary>
+    /// Pipeline mode streams: each record is matched as it arrives (the cmdlet resolves its whole argv in
+    /// <see cref="BeginProcessing"/>), so <c>ls | grep x</c> / <c>find | grep -m1 x</c> emit before the producer
+    /// finishes and an early-satisfied grep (<c>-q</c>, <c>-m N</c>) stops the upstream. Retained state is
+    /// bounded by the context window (-B ring + -A countdown), never the stream length.
+    /// </summary>
     protected override void ProcessRecord()
     {
-        if (InputObject != null)
+        if (!_pipelineMode || InputObject == null) return;
+        if (_pDone)
         {
-            _pipeline.Add(InputObject);
+            FinishPipeline();
+            if (!PsBashProxy) UpstreamStop.Throw(this);
+            return;
+        }
+
+        string text = BashRuntime.GetBashText(InputObject);
+        string trimmed = text.TrimEnd('\n');
+        if (trimmed.Contains('\n'))
+        {
+            foreach (var subLine in trimmed.Split('\n'))
+            {
+                if (_pDone) break;
+                FeedPipelineLine(subLine, InputObject, asNewObject: true);
+            }
+        }
+        else
+        {
+            FeedPipelineLine(trimmed, InputObject, asNewObject: false);
+        }
+
+        if (_pDone)
+        {
+            FinishPipeline();
+            if (!PsBashProxy) UpstreamStop.Throw(this);
         }
     }
 
-
     protected override void EndProcessing()
+    {
+        if (_pipelineMode) FinishPipeline();
+        else _fileModeRun?.Invoke();
+    }
+
+    protected override void BeginProcessing()
     {
         // Direct PowerShell calls: a bare -d/-i/-v/-c/-w/-P/-o/-A/-B/-e binds a declared decoy parameter
         // (or a common parameter) instead of reaching Arguments. Re-inject them as the ordinary tokens
@@ -484,15 +525,15 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
         // --- Pipeline mode ---
         if (fileOperands.Count == 0 && !recursive)
         {
-            RunPipelineMode(regexes, invertMatch, showLineNumbers, countOnly,
+            StartPipelineMode(regexes, invertMatch, showLineNumbers, countOnly,
                 quietMode, outputMatchOnly, forceFileName, maxMatches,
                 beforeContext, afterContext);
             return;
         }
 
-        // --- File mode (incl. recursive) ---
+        // --- File mode (incl. recursive) --- runs in EndProcessing (pipeline input is ignored).
         var recursiveFilter = BuildRecursiveFileFilter(includeGlobs, excludeGlobs, excludeDirGlobs);
-        RunFileMode(regexes, fileOperands, recursive, invertMatch, showLineNumbers,
+        _fileModeRun = () => RunFileMode(regexes, fileOperands, recursive, invertMatch, showLineNumbers,
             countOnly, quietMode, filesOnly, filesWithoutMatch, noMessages, outputMatchOnly,
             forceFileName, suppressFileName, maxMatches, beforeContext, afterContext,
             recursiveFilter);
@@ -579,173 +620,163 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
         };
     }
 
-    private void RunPipelineMode(
+    // ---- Streaming pipeline mode -------------------------------------------------------------------
+    // State is set once in StartPipelineMode (BeginProcessing) and advanced per record in ProcessRecord.
+
+    private Action? _fileModeRun;
+    private bool _pipelineMode, _pDone, _pFinished;
+    private List<Regex> _pRegexes = null!;
+    private bool _pInvert, _pNumbers, _pCount, _pQuiet, _pOnly, _pForceName, _pContext;
+    private int _pMax, _pBefore, _pAfter, _pLineNum, _pMatchCount;
+    // Context window: -B ring of the most recent unprinted non-matching lines, -A countdown, the last
+    // printed line index (group separator), and "the -m limit was hit, only the trailing window remains".
+    private Queue<(int Index, string Text)>? _pRing;
+    private int _pAfterLeft, _pLastEmitted = -2;
+    private bool _pLimitReached;
+
+    private void StartPipelineMode(
         List<Regex> regexes, bool invertMatch, bool showLineNumbers,
         bool countOnly, bool quietMode, bool outputMatchOnly, bool forceFileName,
         int maxMatches, int beforeContext, int afterContext)
     {
-        // Context (-A/-B/-C) needs look-back / look-ahead across the whole
-        // stream, so it takes a buffered path: flatten the pipeline into lines,
-        // locate matches, then emit the windowed set — the same shape as file
-        // mode. Without context the original streaming pass is kept (typed
-        // single-line objects pass through untouched).
-        if (_contextRequested || beforeContext > 0 || afterContext > 0)
+        _pipelineMode = true;
+        _pRegexes = regexes;
+        _pInvert = invertMatch;
+        _pNumbers = showLineNumbers;
+        _pCount = countOnly;
+        _pQuiet = quietMode;
+        _pOnly = outputMatchOnly;
+        _pForceName = forceFileName;
+        _pMax = maxMatches;
+        _pBefore = beforeContext;
+        _pAfter = afterContext;
+        // -c / -q print no lines, so context is moot for them (they only count).
+        _pContext = (_contextRequested || beforeContext > 0 || afterContext > 0) && !countOnly && !quietMode;
+        if (_pContext && beforeContext > 0) _pRing = new Queue<(int, string)>(Math.Min(beforeContext, 1024));
+        if (maxMatches <= 0) _pDone = true; // -m 0: select nothing (the first record stops the upstream)
+    }
+
+    private void FeedPipelineLine(string lineText, PSObject originalItem, bool asNewObject)
+    {
+        if (_pContext) { FeedContextLine(lineText); return; }
+
+        _pLineNum++;
+        Match? matchObject = MatchLine(_pRegexes, lineText, _pInvert, out bool isMatch);
+        _ = matchObject;
+        if (!isMatch) return;
+
+        _pMatchCount++;
+        if (_pMatchCount >= _pMax || _pQuiet) _pDone = true;
+        if (_pQuiet || _pCount) return;
+
+        string prefix = "";
+        if (_pForceName) prefix = StdinLabel + ':';
+        if (_pNumbers) prefix = prefix + _pLineNum + ":";
+
+        if (_pOnly)
         {
-            RunPipelineModeWithContext(regexes, invertMatch, showLineNumbers,
-                countOnly, quietMode, outputMatchOnly, forceFileName, maxMatches,
-                beforeContext, afterContext);
+            // -o: EVERY non-overlapping match on the line, each on its own output line; the prefix
+            // (filename / line number) repeats on each, as GNU does.
+            foreach (var mv in AllMatchValues(_pRegexes, lineText))
+                WriteObject(BashRuntime.NewBashObject(prefix + mv));
             return;
         }
 
-        int matchCount = 0;
-        int lineNum = 0;
-
-        foreach (var item in _pipeline)
+        if (prefix.Length > 0)
         {
-            if (matchCount >= maxMatches) break;
-
-            string text = BashRuntime.GetBashText(item);
-            string trimmed = text.TrimEnd('\n');
-
-            // Branch: multi-line BashText → defensive split; else single-line.
-            bool isMulti = trimmed.Contains('\n');
-
-            if (isMulti)
-            {
-                foreach (var subLine in trimmed.Split('\n'))
-                {
-                    if (matchCount >= maxMatches) break;
-                    lineNum++;
-                    ProcessPipelineLine(subLine, item, regexes, invertMatch,
-                        showLineNumbers, countOnly, quietMode, outputMatchOnly,
-                        forceFileName, lineNum, ref matchCount, asNewObject: true);
-                    if (quietMode && matchCount > 0)
-                    {
-                        FileSystemHelpers.SetLastExitCode(this, 0);
-                        return;
-                    }
-                }
-            }
-            else
-            {
-                lineNum++;
-                string lineText = trimmed;
-                ProcessPipelineLine(lineText, item, regexes, invertMatch,
-                    showLineNumbers, countOnly, quietMode, outputMatchOnly,
-                    forceFileName, lineNum, ref matchCount, asNewObject: false);
-                if (quietMode && matchCount > 0)
-                {
-                    FileSystemHelpers.SetLastExitCode(this, 0);
-                    return;
-                }
-            }
+            WriteObject(BashRuntime.NewBashObject(prefix + lineText));
         }
-
-        if (quietMode)
+        else if (asNewObject)
         {
-            FileSystemHelpers.SetLastExitCode(this, 1);
-            return;
+            // Multi-line split: a fresh text record (the upstream object spans several lines).
+            WriteObject(BashRuntime.NewBashObject(lineText));
         }
-
-        FileSystemHelpers.SetLastExitCode(this, matchCount == 0 ? 1 : 0);
-
-        if (countOnly)
+        else
         {
-            WriteObject(BashRuntime.NewBashObject(matchCount.ToString()));
+            // Plain grep is a FILTER: the selected line IS the input record, so the ORIGINAL
+            // object passes through (ls | grep .txt keeps PsBash.LsEntry). grep always
+            // terminates its output line, so a stale missing-newline flag is stripped.
+            WriteObject(BashRuntime.PassTerminated(originalItem));
         }
     }
 
     /// <summary>
-    /// Pipeline-mode context path: flatten every pipeline item's BashText into
-    /// one line list (a multi-line item contributes one entry per line), mark
-    /// the matching lines, then emit each match plus the <c>-A</c>/<c>-B</c>
-    /// window around it — deduplicated and in input order, exactly like the
-    /// file-mode fallback. Context lines are emitted as <c>GrepMatch</c>
-    /// objects (GNU prints context as plain text), so typed single-line objects
-    /// pass through only as context here, never as matches.
+    /// Context path (-A/-B/-C): streams with a -B ring and an -A countdown. A matched line prints as
+    /// <c>NAME:NUM:text</c>, a context line <c>NAME-NUM-text</c>; non-adjacent groups are divided by
+    /// <c>--</c>. Context and matches are fresh text records (GNU prints context as plain text).
     /// </summary>
-    private void RunPipelineModeWithContext(
-        List<Regex> regexes, bool invertMatch, bool showLineNumbers,
-        bool countOnly, bool quietMode, bool outputMatchOnly, bool forceFileName,
-        int maxMatches, int beforeContext, int afterContext)
+    private void FeedContextLine(string lineText)
     {
-        var lines = new List<string>();
-        foreach (var item in _pipeline)
-        {
-            string text = BashRuntime.GetBashText(item);
-            string trimmed = text.TrimEnd('\n');
-            if (trimmed.Contains('\n'))
-                lines.AddRange(trimmed.Split('\n'));
-            else
-                lines.Add(trimmed);
-        }
+        int li = _pLineNum++;
+        MatchLine(_pRegexes, lineText, _pInvert, out bool isMatch);
 
-        var matchIndices = new List<int>();
-        for (int li = 0; li < lines.Count; li++)
+        if (_pLimitReached)
         {
-            MatchLine(regexes, lines[li], invertMatch, out bool isMatch);
-            if (isMatch) matchIndices.Add(li);
-        }
-
-        int matchCount = matchIndices.Count;
-
-        if (quietMode)
-        {
-            FileSystemHelpers.SetLastExitCode(this, matchCount == 0 ? 1 : 0);
+            // -m N reached: only the trailing -A window of the Nth match remains.
+            if (_pAfterLeft > 0) { EmitContextLine(li, lineText, isMatch); _pAfterLeft--; }
+            if (_pAfterLeft <= 0) _pDone = true;
             return;
         }
 
-        FileSystemHelpers.SetLastExitCode(this, matchCount == 0 ? 1 : 0);
-
-        if (countOnly)
+        if (isMatch)
         {
-            WriteObject(BashRuntime.NewBashObject(matchCount.ToString()));
-            return;
-        }
-
-        var emitLines = new SortedSet<int>();
-        int emitCount = 0;
-        foreach (var mi in matchIndices)
-        {
-            if (emitCount >= maxMatches) break;
-            int start = Math.Max(0, mi - beforeContext);
-            int end = Math.Min(lines.Count - 1, mi + afterContext);
-            for (int li = start; li <= end; li++) emitLines.Add(li);
-            emitCount++;
-        }
-
-        var matchSet = new HashSet<int>(matchIndices);
-        int prevEmitted = -2;
-        foreach (var li in emitLines)
-        {
-            string lineText = lines[li];
-            int lineNum = li + 1;
-            bool isMatchLine = matchSet.Contains(li);
-            // GNU: a matched line is "NAME:NUM:text", a context line "NAME-NUM-text".
-            char sep = isMatchLine ? ':' : '-';
-            string prefix = "";
-            if (forceFileName) prefix = StdinLabel + sep;
-            if (showLineNumbers) prefix = prefix + lineNum + sep;
-
-            // Non-adjacent groups are divided by the default group separator "--".
-            if (li != prevEmitted + 1 && prevEmitted >= 0 && !outputMatchOnly)
-                WriteObject(BashRuntime.NewBashObject(GroupSeparator));
-            prevEmitted = li;
-
-            if (outputMatchOnly)
+            _pMatchCount++;
+            if (_pRing is { Count: > 0 })
             {
-                if (isMatchLine)
-                    foreach (var mv in AllMatchValues(regexes, lineText))
-                        WriteObject(BashRuntime.NewBashObject(prefix + mv));
-                continue;
+                foreach (var (ri, rt) in _pRing) EmitContextLine(ri, rt, false);
+                _pRing.Clear();
             }
-
-            // Context lines and matches alike emit a fresh GrepMatch (GNU
-            // prints context as plain text with no object identity).
-            WriteObject(BashRuntime.NewBashObject(prefix + lineText));
+            EmitContextLine(li, lineText, true);
+            _pAfterLeft = _pAfter;
+            if (_pMatchCount >= _pMax)
+            {
+                _pLimitReached = true;
+                if (_pAfterLeft <= 0) _pDone = true;
+            }
+        }
+        else if (_pAfterLeft > 0)
+        {
+            EmitContextLine(li, lineText, false);
+            _pAfterLeft--;
+        }
+        else if (_pRing is not null)
+        {
+            _pRing.Enqueue((li, lineText));
+            if (_pRing.Count > _pBefore) _pRing.Dequeue();
         }
     }
 
+    private void EmitContextLine(int li, string lineText, bool isMatchLine)
+    {
+        char sep = isMatchLine ? ':' : '-';
+        string prefix = "";
+        if (_pForceName) prefix = StdinLabel + sep;
+        if (_pNumbers) prefix = prefix + (li + 1) + sep;
+
+        // Non-adjacent groups are divided by the default group separator "--".
+        if (li != _pLastEmitted + 1 && _pLastEmitted >= 0 && !_pOnly)
+            WriteObject(BashRuntime.NewBashObject(GroupSeparator));
+        _pLastEmitted = li;
+
+        if (_pOnly)
+        {
+            if (isMatchLine)
+                foreach (var mv in AllMatchValues(_pRegexes, lineText))
+                    WriteObject(BashRuntime.NewBashObject(prefix + mv));
+            return;
+        }
+        WriteObject(BashRuntime.NewBashObject(prefix + lineText));
+    }
+
+    /// <summary>Exit status (and the -c count), once, whether the stream ended or grep stopped it.</summary>
+    private void FinishPipeline()
+    {
+        if (_pFinished) return;
+        _pFinished = true;
+        FileSystemHelpers.SetLastExitCode(this, _pMatchCount == 0 ? 1 : 0);
+        if (_pCount && !_pQuiet)
+            WriteObject(BashRuntime.NewBashObject(_pMatchCount.ToString()));
+    }
     /// <summary>
     /// All non-overlapping match strings on <paramref name="lineText"/> in
     /// left-to-right order, for grep <c>-o</c>. Gathers matches from every
@@ -769,65 +800,6 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
             if (f.Index <= consumedTo) continue; // overlaps a reported match
             yield return f.Value;
             consumedTo = f.Index + f.Length - 1;
-        }
-    }
-
-    private void ProcessPipelineLine(
-        string lineText, PSObject originalItem, List<Regex> regexes,
-        bool invertMatch, bool showLineNumbers, bool countOnly, bool quietMode,
-        bool outputMatchOnly, bool forceFileName, int lineNum,
-        ref int matchCount, bool asNewObject)
-    {
-        bool isMatch = false;
-        Match? matchObject = null;
-        foreach (var rx in regexes)
-        {
-            var m = rx.Match(lineText);
-            if (m.Success)
-            {
-                isMatch = true;
-                matchObject = m;
-                break;
-            }
-        }
-        if (invertMatch) isMatch = !isMatch;
-        if (!isMatch) return;
-
-        matchCount++;
-        if (quietMode) return;
-        if (countOnly) return;
-
-        string prefix = "";
-        if (forceFileName) prefix = StdinLabel + ':';
-        if (showLineNumbers) prefix = prefix + lineNum + ":";
-
-        if (outputMatchOnly)
-        {
-            // -o: emit EVERY non-overlapping match on the line, each on its own
-            // line (bash semantics), not just the first. The prefix (filename /
-            // line number) is repeated on each match line, matching GNU grep.
-            foreach (var mv in AllMatchValues(regexes, lineText))
-                WriteObject(BashRuntime.NewBashObject(prefix + mv));
-            return;
-        }
-
-        string outputText = lineText;
-
-        if (prefix.Length > 0)
-        {
-            WriteObject(BashRuntime.NewBashObject(prefix + outputText));
-        }
-        else if (asNewObject)
-        {
-            // Multi-line split: emit a fresh GrepMatch (oracle: New-BashObject).
-            WriteObject(BashRuntime.NewBashObject(outputText));
-        }
-        else
-        {
-            // Plain grep is a FILTER: the selected line IS the input record, so the ORIGINAL
-            // object passes through (ls | grep .txt keeps PsBash.LsEntry). grep always
-            // terminates its output line, so a stale missing-newline flag is stripped.
-            WriteObject(BashRuntime.PassTerminated(originalItem));
         }
     }
 

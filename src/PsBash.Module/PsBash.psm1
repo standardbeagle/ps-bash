@@ -3028,22 +3028,33 @@ function ConvertTo-BashLiteralArgs {
     , $out.ToArray()
 }
 
+# The proxy STREAMS: begin/process/end drive a steppable pipeline around the real cmdlet, so each upstream
+# record reaches the cmdlet as it arrives (collecting `$input` here would hold the whole stream and print
+# nothing until EOF). A plain function with begin/process/end has no common parameters either.
 function Invoke-BashGrep {
-    $piped = @($input)
-    $literal = ConvertTo-BashLiteralArgs $args -RepeatFlags '-e', '--regexp'
-    $cmd = Microsoft.PowerShell.Core\Get-Command `
-        -Name Invoke-BashGrep -CommandType Cmdlet -ErrorAction Stop |
-        Select-Object -First 1
-    if ($piped.Count -gt 0) { $piped | & $cmd @literal } else { & $cmd @literal }
+    begin {
+        $literal = ConvertTo-BashLiteralArgs $args -RepeatFlags '-e', '--regexp'
+        $cmd = Microsoft.PowerShell.Core\Get-Command `
+            -Name Invoke-BashGrep -CommandType Cmdlet -ErrorAction Stop |
+            Select-Object -First 1
+        $steppable = { & $cmd -PsBashProxy @literal }.GetSteppablePipeline()
+        $steppable.Begin($MyInvocation.ExpectingInput)
+    }
+    process { $steppable.Process($_) }
+    end { $steppable.End() }
 }
 
 function Invoke-BashSed {
-    $piped = @($input)
-    $literal = ConvertTo-BashLiteralArgs $args -RepeatFlags '-e', '--expression'
-    $cmd = Microsoft.PowerShell.Core\Get-Command `
-        -Name Invoke-BashSed -CommandType Cmdlet -ErrorAction Stop |
-        Select-Object -First 1
-    if ($piped.Count -gt 0) { $piped | & $cmd @literal } else { & $cmd @literal }
+    begin {
+        $literal = ConvertTo-BashLiteralArgs $args -RepeatFlags '-e', '--expression'
+        $cmd = Microsoft.PowerShell.Core\Get-Command `
+            -Name Invoke-BashSed -CommandType Cmdlet -ErrorAction Stop |
+            Select-Object -First 1
+        $steppable = { & $cmd -PsBashProxy @literal }.GetSteppablePipeline()
+        $steppable.Begin($MyInvocation.ExpectingInput)
+    }
+    process { $steppable.Process($_) }
+    end { $steppable.End() }
 }
 Set-Alias -Name 'sed'     -Value 'Invoke-BashSed'     -Force -Scope Global -Option AllScope
 Set-Alias -Name 'awk'     -Value 'Invoke-BashAwk'     -Force -Scope Global -Option AllScope
