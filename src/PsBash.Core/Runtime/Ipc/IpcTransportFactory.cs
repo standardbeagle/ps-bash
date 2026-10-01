@@ -52,6 +52,54 @@ public static class IpcTransportFactory
     public static bool IsInsideHostCommand()
         => !string.IsNullOrEmpty(Environment.GetEnvironmentVariable(InsideHostEnvVar));
 
+    /// <summary>
+    /// Nesting depth the host publishes to a command it runs (host depth + 1). A launcher
+    /// started by that command serves from a WARM daemon at exactly this depth
+    /// (<see cref="ResolveNestedEndpoint"/>), never from the host blocked on its parent.
+    /// </summary>
+    public const string NestDepthEnvVar = "PSBASH_NEST_DEPTH";
+
+    /// <summary>Deepest nested daemon; beyond it a launcher falls back to a private host.</summary>
+    public const int MaxNestedDaemonDepth = 6;
+
+    /// <summary>Depth of THIS host process (0 = top-level), set from its bound endpoint.</summary>
+    public static int HostNestDepth { get; set; }
+
+    /// <summary>Depth this launcher lives at: 0 outside any host command, else the published depth (min 1).</summary>
+    public static int CurrentNestDepth()
+    {
+        if (!IsInsideHostCommand()) return 0;
+        return int.TryParse(Environment.GetEnvironmentVariable(NestDepthEnvVar), out var d) && d > 0 ? d : 1;
+    }
+
+    private const string NestedMarker = "-nested";
+
+    /// <summary>Depth encoded in an endpoint name by <see cref="ResolveNestedEndpoint"/>; 0 when none.</summary>
+    public static int ParseNestDepth(string endpoint)
+    {
+        var i = endpoint.LastIndexOf(NestedMarker, StringComparison.Ordinal);
+        if (i < 0) return 0;
+        return int.TryParse(endpoint.AsSpan(i + NestedMarker.Length), out var d) && d > 0 ? d : 0;
+    }
+
+    /// <summary>
+    /// The warm-daemon endpoint for nesting depth <paramref name="depth"/> (&gt;= 1): the
+    /// canonical / explicit endpoint with a <c>-nested{depth}</c> suffix. One daemon per
+    /// (session, depth), so repeated nested calls reuse it and the depth strictly increases down
+    /// the chain (no cycle). Falls back to a hashed pipe name when a unix path would not fit.
+    /// </summary>
+    public static (string Scheme, string Endpoint) ResolveNestedEndpoint(int depth)
+    {
+        var (scheme, endpoint) = ResolveEndpoint();
+        var nested = endpoint + NestedMarker + depth.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        if (scheme == "unix" && nested.Length > UnixSocketPathBudget())
+        {
+            var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(nested)))[..16];
+            return ("pipe", $"psbash-nested-{hash}{NestedMarker}{depth}");
+        }
+        return (scheme, nested);
+    }
+
     // Test seam: override platform detection without P/Invoke or env hacks.
     internal static Func<bool>? UnixSocketSupportedOverride { get; set; }
 

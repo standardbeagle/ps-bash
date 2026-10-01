@@ -111,17 +111,34 @@ when the child resolves the same session anchor.
 R06 environment reset, cleared in the `finally`; never set for in-process/legacy callers whose
 environment block is null). Child processes inherit it. `IpcWorker.StartAsync` checks
 `IpcTransportFactory.IsInsideHostCommand()` and downgrades a `Lifetime.Daemon` request to
-`Lifetime.PerInvocation`: the nested launcher spawns a private host on a process-local endpoint
-(ignoring any `PSBASH_IPC_ENDPOINT`) and kills it on dispose. The private host sets the marker
-for its own commands, so any depth of nesting stays process-separated. Top-level launchers
-(marker absent) keep daemon reuse. Cost: a nested launch pays a host cold start. No caller
-needs its own workaround (awk's `PSBASH_PER_INVOCATION` override was removed). The nested
+a **warm daemon at the launcher's nesting depth** (below), so repeated nested calls reuse one host
+instead of each paying a cold start (a private host per call cost ~10 s: awk close/reopen pipe
+12 s → 2.5 s, 5 awk `system()` 27 s → 4.4 s, 2-level `bash -c` 11.7 s → 2.2 s, medians). Top-level
+launchers (marker absent) keep the canonical endpoint. No caller
+needs its own workaround (awk's `PSBASH_PER_INVOCATION` override was removed).
+
+**Nested daemons (per depth).** Besides the marker, the host publishes
+`PSBASH_NEST_DEPTH = <host depth> + 1` to the command (`IpcTransportFactory.NestDepthEnvVar`; a
+host learns its own depth from the `-nested<d>` suffix of the endpoint it was started on,
+`ParseNestDepth`; the top-level host is depth 0). A nested launcher at depth `d`
+(`CurrentNestDepth()`) resolves `ResolveNestedEndpoint(d)` = the explicit / per-session endpoint
+plus `-nested<d>` (a unix path that would overflow `sun_path` becomes a hashed pipe name), then runs
+the normal Daemon path on it (`EnsureHostReachableAsync`: HostSpawnLock single-flight, BuildIdentity
+replace, optimistic local reuse). The host serving depth `d` is never the host blocked on the
+caller (which is at depth `d-1`), and depth strictly increases down any chain, so there is no
+cycle. Nested daemons idle out after 60 s (`PSBASH_HOST_IDLE_SECS`, unless the environment already
+asks for less) because nothing reaps them when their parent host goes away. Depth beyond
+`MaxNestedDaemonDepth` (6) falls back to a private `PerInvocation` host. `PSBASH_PER_INVOCATION=1`
+is unchanged: such launchers (nested or not) always get a private host, and that host's children
+inherit the flag. After every framed command the host also moves its process cwd out of the
+caller's directory (a persistent host must not pin it, or Windows cannot delete it). The nested
 launcher is also resolved to the `ps-bash` beside the host process
 (`InvokeBashBashCommand.ResolvePsBashExecutable` tier 0), i.e. the SAME build as the host, so an
 older PATH-installed ps-bash — which predates this marker and would connect to the explicit
 endpoint and retire the host as obsolete — is never picked.
 Regression-pinned by `NestedInvocationTests` (explicit and default endpoint, 1–2 levels,
-awk getline) and `SdkWorkerEnvironmentTests.LauncherFramedCommand_SeesInsideHostMarker_ClearedAfterwards`.
+awk getline, `NestedBashC_RepeatedCalls_ReuseOneWarmNestedHost` via `$$`), `IpcTransportFactoryTests`
+(`ResolveNestedEndpoint_*`, `CurrentNestDepth_*`) and `SdkWorkerEnvironmentTests.LauncherFramedCommand_SeesInsideHostMarker_ClearedAfterwards`.
 
 ## Runtime Directory
 
