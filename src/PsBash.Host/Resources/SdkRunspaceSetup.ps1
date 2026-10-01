@@ -71,22 +71,76 @@ if (-not $PsBashCmdletsAlreadyLoaded -and
 $script:BashAutoloadIndex = $null
 $script:BashAutoloadResolving = $false
 
-function Resolve-BashAutoloadModule {
-    param([string]$Name)
+function Get-BashAutoloadFingerprint {
+    # Cheap (directory listing only, depth 2: module / version) change detector.
+    $sb = [System.Text.StringBuilder]::new()
+    [void]$sb.Append($env:PSModulePath).Append('|')
+    foreach ($root in ($env:PSModulePath -split [IO.Path]::PathSeparator)) {
+        if (-not $root -or -not [IO.Directory]::Exists($root)) { continue }
+        try {
+            foreach ($d in [IO.Directory]::EnumerateDirectories($root)) {
+                [void]$sb.Append($d).Append(':').Append([IO.Directory]::GetLastWriteTimeUtc($d).Ticks).Append(';')
+                try {
+                    foreach ($v in [IO.Directory]::EnumerateDirectories($d)) {
+                        [void]$sb.Append([IO.Directory]::GetLastWriteTimeUtc($v).Ticks).Append(',')
+                    }
+                } catch { }
+            }
+        } catch { }
+    }
+    $bytes = [Text.Encoding]::UTF8.GetBytes($sb.ToString())
+    return [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($bytes)).Substring(0, 24)
+}
 
-    if ($null -eq $script:BashAutoloadIndex) {
-        $script:BashAutoloadIndex = @{}
+function Get-BashAutoloadIndexCached {
+    $fp = Get-BashAutoloadFingerprint
+    $shared = [System.AppContext]::GetData('PsBash.AutoloadIndex')
+    if ($shared -and $shared.Fingerprint -eq $fp) { return $shared.Index }
+
+    $file = Join-Path ([IO.Path]::GetTempPath()) "ps-bash/autoload-index-$fp.json"
+    $index = $null
+    try {
+        if ([IO.File]::Exists($file)) {
+            $index = @{}
+            $obj = [IO.File]::ReadAllText($file) | ConvertFrom-Json -AsHashtable
+            foreach ($k in $obj.Keys) { $index[$k] = $obj[$k] }
+        }
+    } catch { $index = $null }
+
+    if ($null -eq $index) {
+        $index = @{}
         foreach ($m in (Get-Module -ListAvailable -ErrorAction SilentlyContinue)) {
             # ExportedAliases/Functions/Cmdlets come from the manifest's explicit export
             # lists for manifest modules — no module load required. Aliases are the case
             # the normal auto-loader misses in this runspace.
             $names = @($m.ExportedAliases.Keys) + @($m.ExportedFunctions.Keys) + @($m.ExportedCmdlets.Keys)
             foreach ($n in $names) {
-                if ($n -and -not $script:BashAutoloadIndex.ContainsKey($n)) {
-                    $script:BashAutoloadIndex[$n] = $m.Name
+                if ($n -and -not $index.ContainsKey($n)) {
+                    $index[$n] = $m.Name
                 }
             }
         }
+        try {
+            [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($file)) | Out-Null
+            $tmp = "$file.$PID.tmp"
+            [IO.File]::WriteAllText($tmp, ($index | ConvertTo-Json -Compress))
+            [IO.File]::Move($tmp, $file, $true)
+        } catch { }
+    }
+    [System.AppContext]::SetData('PsBash.AutoloadIndex', [pscustomobject]@{ Fingerprint = $fp; Index = $index })
+    return $index
+}
+
+function Resolve-BashAutoloadModule {
+    param([string]$Name)
+
+    if ($null -eq $script:BashAutoloadIndex) {
+        # PERF: `Get-Module -ListAvailable` costs ~8 s on a typical PSModulePath, and this
+        # runspace is discarded after every `-c` command, so a per-runspace index made EVERY
+        # command-not-found pay it. The index is therefore cached (1) process-wide in
+        # AppContext data (shared by every pooled runspace of this host) and (2) on disk,
+        # keyed by the module directories' names + timestamps (shared across host processes).
+        $script:BashAutoloadIndex = Get-BashAutoloadIndexCached
     }
 
     if ($script:BashAutoloadIndex.ContainsKey($Name)) {
