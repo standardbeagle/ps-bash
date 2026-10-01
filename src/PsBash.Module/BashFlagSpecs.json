@@ -104,6 +104,18 @@
       "flag": "--output-delimiter",
       "desc": "separate columns with STR",
       "arg": "STR"
+    },
+    {
+      "flag": "-z",
+      "desc": "line delimiter is NUL, not newline"
+    },
+    {
+      "flag": "--check-order",
+      "desc": "check that the input is correctly sorted"
+    },
+    {
+      "flag": "--nocheck-order",
+      "desc": "do not check that the input is correctly sorted"
     }
   ],
   "command": [

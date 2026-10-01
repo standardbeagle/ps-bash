@@ -194,7 +194,7 @@ public class Batch3bArgBehaviorTests : IClassFixture<SharedPwshFixture>, IDispos
         Run($"Invoke-BashComm {a} {b} {b}").AssertFailed(1, "comm: extra operand");             // FIX (was: ignored)
         Run($"Invoke-BashComm {a}").AssertFailed(1, "comm: missing operand after");
         Run($"Invoke-BashComm '-4' {a} {b}").AssertFailed(1, "invalid option -- '4'");
-        Run($"Invoke-BashComm '--check' {a} {b}").AssertFailed(2, "'--check-order' is recognized but not supported");
+        Run($"Invoke-BashComm '--bogus' {a} {b}").AssertFailed(1, "unrecognized option '--bogus'");
     }
 
     // ── split ───────────────────────────────────────────────────────────────

@@ -266,10 +266,9 @@ public class InvokeBashCommCommandTests : IClassFixture<SharedPwshFixture>, IDis
     }
 
     [Fact]
-    public void Comm_ValidButUnsupportedOption_WritesError()
+    public void Comm_CheckOrder_MissingFiles_WritesError()
     {
-        // Catalog flag (valid GNU, not implemented): classified as "recognized but not supported".
-        // Pass two extra dummy file operands so the missing-operand guard does not fire first.
+        // --check-order is implemented now; a missing file is still an error (exit 1).
         var pwsh = _fixture.AcquireFresh();
         pwsh.AddScript("$ErrorActionPreference='Continue'").Invoke();
         pwsh.Commands.Clear();
@@ -277,7 +276,7 @@ public class InvokeBashCommCommandTests : IClassFixture<SharedPwshFixture>, IDis
             "Invoke-BashComm --check-order /nonexistent-a /nonexistent-b 2>$null; $LASTEXITCODE").Invoke();
         pwsh.Commands.Clear();
         Assert.Single(result);
-        Assert.Equal(2, (int)result[0].BaseObject);
+        Assert.Equal(1, (int)result[0].BaseObject);
     }
 
     [Fact]
