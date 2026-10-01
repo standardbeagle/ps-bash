@@ -1240,26 +1240,8 @@ public sealed partial class BashParser
             ? commands[0]
             : new Command.CommandList(commands.ToImmutable());
 
-        // Collect trailing redirects (e.g. (cmd) > out.txt)
-        var redirects = ImmutableArray.CreateBuilder<Redirect>();
-        while (true)
-        {
-            if (IsNamedCompoundRedirect())
-            {
-                var fdVar = Advance().Value[1..^1];
-                redirects.Add(ParseRedirect(fdVar));
-            }
-            else if (Peek().Kind == BashTokenKind.IoNumber || IsCompoundRedirectOp(Peek().Kind))
-            {
-                redirects.Add(ParseRedirect());
-            }
-            else
-            {
-                break;
-            }
-        }
-
-        return new Command.Subshell(body, redirects.ToImmutable());
+        // Trailing redirects (e.g. (cmd) > out.txt, (cmd) <<< word) — the one shared parser.
+        return new Command.Subshell(body, ParseTrailingRedirects());
     }
 
     private Command.BraceGroup ParseStandaloneBraceGroup()

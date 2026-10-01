@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 107
+stdout-length: 6
+stderr-length: 0
+==== SCRIPT ====
+printf '3\n1\n2\n' > /tmp/psb_cs_d.txt; if true; then sort; fi < /tmp/psb_cs_d.txt; rm -f /tmp/psb_cs_d.txt
+==== STDOUT ====
+1
+2
+3
+
+==== STDERR ====
+

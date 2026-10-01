@@ -66,6 +66,22 @@ public class InvokeBashReadCommandTests : IClassFixture<SharedPwshFixture>
     }
 
     [Fact]
+    public void Read_SharedStdinQueue_TakesOneLineAtATimeAndLeavesTheRestForTheFeed()
+    {
+        // The compound-stdin scope (PsBuild.StdinScope) fills Queue[object] with the ORIGINAL
+        // records; `read` takes a LINE (a multi-line record yields its first line and keeps the
+        // remainder at the front), and the feed yields what is left, in order.
+        var lines = RunLines(
+            "$global:__BashStdIn = [System.Collections.Generic.Queue[object]]::new(); " +
+            "$global:__BashStdIn.Enqueue(\"a`nb`nc\"); $global:__BashStdIn.Enqueue('d'); " +
+            "Invoke-BashRead x; Invoke-BashRead y; " +
+            "\"x=$x y=$y\"; " +
+            "& { while ($global:__BashStdIn -and $global:__BashStdIn.Count -gt 0) { $global:__BashStdIn.Dequeue() } }");
+
+        Assert.Equal(new[] { "x=a y=b", "c", "d" }, lines);
+    }
+
+    [Fact]
     public void Read_BasicStdin_PopulatesREPLY()
     {
         // No destination name given: oracle parity (bash default) is REPLY.

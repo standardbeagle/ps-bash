@@ -342,20 +342,8 @@ public sealed class InvokeBashReadCommand : PSCmdlet
     /// read. The cast goes through <see cref="PSObject.Base(object)"/> so a
     /// PSObject-wrapped value still resolves.
     /// </summary>
-    private bool TryDequeueSharedStdin(out string? line)
-    {
-        line = null;
-        var raw = SessionState.PSVariable.GetValue("global:__BashStdIn");
-        if (raw is null) return false;
-        if (System.Management.Automation.PSObject.AsPSObject(raw).BaseObject
-            is System.Collections.Generic.Queue<string> queue)
-        {
-            if (queue.Count == 0) return false;
-            line = queue.Dequeue();
-            return true;
-        }
-        return false;
-    }
+    private bool TryDequeueSharedStdin(out string? line) =>
+        SharedStdin.TryDequeueLine(SessionState, out line);
 
     /// <summary>
     /// Assign value to a variable in the caller's scope plus the process
