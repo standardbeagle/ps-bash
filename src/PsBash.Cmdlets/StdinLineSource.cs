@@ -12,6 +12,11 @@ namespace PsBash.Cmdlets;
 /// </summary>
 internal sealed class StdinLineSource
 {
+    /// <summary>Host-config switch: never read the keyboard (see <see cref="ReadLine"/>).</summary>
+    internal const string NoTtyEnvVar = "PSBASH_NO_TTY";
+
+    private static bool NoTty => BashRuntime.IsHostConfigTruthy(NoTtyEnvVar);
+
     private readonly PSCmdlet _cmdlet;
     private readonly Queue<string> _piped = new();
 
@@ -41,7 +46,9 @@ internal sealed class StdinLineSource
         }
 
         // Only a real console can produce an answer; a redirected stdin that nothing fed is EOF.
-        if (Console.IsInputRedirected) return null;
+        // PSBASH_NO_TTY forces EOF even on a console: a test host started from a terminal has console
+        // stdin, and an unanswered prompt would otherwise block on the keyboard (Cmdlets.Tests sets it).
+        if (NoTty || Console.IsInputRedirected) return null;
         try { return Console.In.ReadLine(); }
         catch (Exception ex) when (ex is InvalidOperationException or NotSupportedException or IOException) { return null; }
     }
