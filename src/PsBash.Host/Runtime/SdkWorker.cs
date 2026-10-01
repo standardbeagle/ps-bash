@@ -17,6 +17,10 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
     // attached to the same runspace produces empty pipeline output — using a
     // persistent instance (same pattern as PwshTestFixture) avoids the issue.
     private readonly PowerShell _ps;
+
+    /// <summary>Test seam: the largest number of undrained output objects the last invocation's
+    /// output collection ever held. Bounded (drain-by-removal) rather than O(stream).</summary>
+    internal int PeakRetainedOutput { get; private set; }
     private readonly SemaphoreSlim _lock = new(1, 1);
     private int _disposed;
 
@@ -234,6 +238,7 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
         _host.Reset();
         _ps.Commands.Clear();
         _ps.Streams.Error.Clear();
+        PeakRetainedOutput = 0;
         _ps.AddScript(command);
 
         // Forward formatted Out-Default lines to the same callback the output
@@ -346,7 +351,6 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
         // (the formatter needs to see all rows before computing widths).
         var formatBuffer = new List<PSObject>();
         var outputLock = new object();
-        var processedOutputCount = 0;
 
         // Render the buffered non-bash PSObjects with PowerShell's own formatting
         // engine (Out-String -Stream) so native cmdlet output gets its registered
@@ -510,14 +514,16 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
             }
         }
 
+        // Drain by REMOVING: ReadAll() hands back everything queued and empties the collection, so
+        // it never retains more than what arrived since the last drain. The old index-walk
+        // (col[processedOutputCount]) left every output object of the invocation referenced until
+        // Invoke returned. Retained output is now bounded by the batcher (32 KB) + formatBuffer.
         void DrainOutputCollectionCore(System.Management.Automation.PSDataCollection<System.Management.Automation.PSObject> col)
         {
-            while (processedOutputCount < col.Count)
-            {
-                var item = col[processedOutputCount];
-                processedOutputCount++;
+            if (col.Count > PeakRetainedOutput) PeakRetainedOutput = col.Count;
+            if (col.Count == 0) return;
+            foreach (var item in col.ReadAll())
                 ProcessItemCore(item);
-            }
         }
 
         outputCollection.DataAdded += (sender, e) =>
@@ -536,13 +542,15 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
         // (under outputLock, flushing pending formatter output first) keeps it in
         // order with the stdout around it; deliverError flushes the batcher.
         var errorStream = _ps.Streams.Error;
-        int deliveredErrorCount = 0;
+        // Same remove-as-you-drain discipline as stdout. The post-run command-not-found check needs
+        // the LAST record, so remember it as it is delivered instead of re-reading the collection.
+        System.Management.Automation.ErrorRecord? lastErrorRecord = null;
         void DrainErrorStreamCore()
         {
-            while (deliveredErrorCount < errorStream.Count)
+            if (errorStream.Count == 0) return;
+            foreach (var record in errorStream.ReadAll())
             {
-                var record = errorStream[deliveredErrorCount];
-                deliveredErrorCount++;
+                lastErrorRecord = record;
                 FlushFormatBufferCore();
                 deliverError(record.ToString());
             }
@@ -616,10 +624,9 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
             // DrainErrorStreamCore), so diagnostics surface even when the
             // script exits 0.
             bool sawCommandNotFoundAsLastError = false;
-            var errors = errorStream;
-            if (_ps.HadErrors && errors.Count > 0)
+            if (_ps.HadErrors && lastErrorRecord is not null)
             {
-                var last = errors[errors.Count - 1];
+                var last = lastErrorRecord;
                 if (last.CategoryInfo?.Reason == "CommandNotFoundException"
                     || last.Exception is System.Management.Automation.CommandNotFoundException)
                 {
