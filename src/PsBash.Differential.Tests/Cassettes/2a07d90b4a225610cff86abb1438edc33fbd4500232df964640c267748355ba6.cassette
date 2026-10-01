@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 25
+stdout-length: 68
+stderr-length: 0
+==== SCRIPT ====
+printf '\xe9' | sha256sum
+==== STDOUT ====
+de2e331d891ae267a7009cb45b4e8830f170e0c937288ea2731a1941c7a53b0d  -
+
+==== STDERR ====
+

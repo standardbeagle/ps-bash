@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 86
+stdout-length: 5
+stderr-length: 0
+==== SCRIPT ====
+printf 'caf\xc3\xa9 \xf0\x9f\x98\x80 \xe6\x97\xa5\n' | wc -m -c | awk '{print $1, $2}'
+==== STDOUT ====
+9 15
+
+==== STDERR ====
+

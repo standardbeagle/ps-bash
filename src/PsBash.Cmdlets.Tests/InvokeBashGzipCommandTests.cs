@@ -90,20 +90,19 @@ public class InvokeBashGzipCommandTests : IDisposable, IClassFixture<SharedPwshF
     }
 
     [Fact]
-    public void Gzip_StdoutFlag_EmitsBase64ForCompress()
+    public void Gzip_StdoutFlag_EmitsTheExactGzipBytes()
     {
-        // With -c the compressed output goes to the pipeline as base64
-        // (the oracle picks base64 so the byte stream survives PowerShell's
-        // string pipeline). Source file must remain in place.
+        // With -c the compressed stream goes to the pipeline as its EXACT bytes (escaped-byte markers,
+        // RawBytes — the old base64 detour is gone). Source file must remain in place.
         string file = Path.Combine(_tmpDir, "c.txt");
         byte[] original = Encoding.UTF8.GetBytes("payload");
         File.WriteAllBytes(file, original);
 
-        string[] lines = RunLines($"Invoke-BashGzip -c '{PsQuote(file)}'");
-        Assert.Single(lines);
+        var records = RunObjects($"Invoke-BashGzip -c '{PsQuote(file)}'");
         Assert.True(File.Exists(file), "-c must not remove the source");
-        byte[] decoded = Convert.FromBase64String(lines[0]);
-        // Decode the base64 -> gzip bytes and verify round-trip via GZipStream.
+        byte[] decoded = PsBash.Core.RawBytes.GetBytes(
+            PsBash.Cmdlets.BashRuntime.RecordStreamText(records.Cast<object>()));
+        Assert.Equal(new byte[] { 0x1F, 0x8B }, decoded.Take(2).ToArray()); // gzip magic
         using var ms = new MemoryStream(decoded);
         using var gs = new GZipStream(ms, CompressionMode.Decompress);
         using var buf = new MemoryStream();

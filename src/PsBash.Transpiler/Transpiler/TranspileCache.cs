@@ -95,9 +95,10 @@ public static class TranspileCache
             bytes.Write(buffer, 0, read);
         }
 
-        bytes.Position = 0;
-        using var reader = new StreamReader(bytes, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
-        return reader.ReadToEnd();
+        // Escaped-byte-faithful (RawBytes): a script holding non-UTF-8 bytes must round-trip the cache.
+        var all = bytes.GetBuffer().AsSpan(0, (int)bytes.Length);
+        if (all.Length >= 3 && all[0] == 0xEF && all[1] == 0xBB && all[2] == 0xBF) all = all.Slice(3);
+        return RawBytes.GetString(all);
     }
 
     /// <summary>
@@ -147,7 +148,7 @@ public static class TranspileCache
     private static string ComputeKey(string content, TranspileContext context)
     {
         var pathMode = Environment.GetEnvironmentVariable("PSBASH_UNIX_PATHS") == "1" ? "u" : "w";
-        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(content)));
+        var hash = Convert.ToHexString(SHA256.HashData(RawBytes.GetBytes(content)));
         return $"{ModuleId}-{pathMode}-{(int)context}-{hash}";
     }
 
@@ -174,7 +175,7 @@ public static class TranspileCache
             // partially written entry (multiple processes may race on the same key; the content is
             // identical for a given key, so last-writer-wins is harmless).
             var tmp = path + "." + Environment.ProcessId + ".tmp";
-            File.WriteAllText(tmp, pwsh);
+            File.WriteAllBytes(tmp, RawBytes.GetBytes(pwsh));
             try { File.Move(tmp, path, overwrite: true); }
             catch { try { File.Delete(tmp); } catch { /* ignore */ } return; }
 

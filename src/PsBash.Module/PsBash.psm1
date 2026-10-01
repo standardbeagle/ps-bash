@@ -192,7 +192,7 @@ function Invoke-ProcessSub {
                 [void]$sb.Append("`n")
             }
         }
-        [System.IO.File]::WriteAllText($tmp, $sb.ToString(), [System.Text.UTF8Encoding]::new($false))
+        [PsBash.Cmdlets.BashRuntime]::WriteRawText($tmp, $sb.ToString())
         return $tmp
     }
     catch {
@@ -265,7 +265,7 @@ function Read-BashFileBytes {
 
     $Path = [PsBash.Cmdlets.BashRuntime]::NormalizeWindowsPath($Path)
     try {
-        $rawText = [System.IO.File]::ReadAllText($Path)
+        $rawText = [PsBash.Cmdlets.BashRuntime]::ReadRawText($Path)
     } catch {
         $normalized = $Path -replace '\\', '/'
         $ex = $_.Exception
@@ -329,8 +329,8 @@ function Open-BashFileReader {
         $null = $fs.Seek(0, 'Begin')
     }
 
-    $encoding = [System.Text.UTF8Encoding]::new($false)
-    [System.IO.StreamReader]::new($fs, $encoding)
+    $encoding = [PsBash.Cmdlets.BashRuntime]::RawEncoding
+    [System.IO.StreamReader]::new($fs, $encoding, $false)
 }
 
 function Read-BashFileStreaming {
@@ -423,11 +423,7 @@ function Write-BashFileText {
     )
 
     try {
-        if ($Append) {
-            [System.IO.File]::AppendAllText($Path, $Text)
-        } else {
-            [System.IO.File]::WriteAllText($Path, $Text)
-        }
+        [PsBash.Cmdlets.BashRuntime]::WriteRawText($Path, $Text, [bool]$Append)
         return $true
     } catch {
         $normalized = $Path -replace '\\', '/'

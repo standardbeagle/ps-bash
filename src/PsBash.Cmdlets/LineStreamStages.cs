@@ -243,7 +243,7 @@ internal sealed class WcStage : ILineStreamStage
         {
             lines++;
             words += InvokeBashWcCommand.CountWordsInLine(line);
-            bytes += Encoding.UTF8.GetByteCount(line) + 1;
+            bytes += PsBash.Core.RawBytes.GetByteCount(line) + 1;
             int cp = InvokeBashWcCommand.CountCodePointsInLine(line);
             chars += cp + 1;
             if (cp > maxLine) maxLine = cp;

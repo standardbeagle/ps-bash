@@ -442,8 +442,9 @@ public class PsEmitterTests
     [Fact]
     public void Transpile_InputRedirectWithCommand_StillPipes()
     {
-        // Guard the narrow claim: a redirect that DOES have a command is unchanged.
-        Assert.Contains("Get-Content f.txt | Invoke-BashWc '-l'",
+        // Guard the narrow claim: a redirect that DOES have a command still pipes. The file is the
+        // command's stdin BYTE STREAM, so a mapped consumer is fed exact records by Invoke-BashCat.
+        Assert.Contains("Invoke-BashCat f.txt | Invoke-BashWc '-l'",
             PsEmitter.Transpile("wc -l < f.txt"));
     }
 
@@ -1360,11 +1361,12 @@ public class PsEmitterTests
     }
 
     [Fact]
-    public void Transpile_InputRedirect_EmitsGetContent()
+    public void Transpile_InputRedirect_NativeConsumer_FeedsExactRecordsAsText()
     {
         var result = PsEmitter.Transpile("cmd < input.txt");
 
-        Assert.Equal("Get-Content input.txt | cmd", result);
+        // Exact records (no CRLF/BOM rewrite, invalid bytes kept), converted to text for the native binder.
+        Assert.Equal("Invoke-BashCat input.txt | ForEach-Object { Get-BashText $_ } | cmd", result);
     }
 
     [Fact]

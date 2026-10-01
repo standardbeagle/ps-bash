@@ -320,7 +320,9 @@ public class InvokeBashCatHeadTailWcCommandTests : IClassFixture<SharedPwshFixtu
     [Fact]
     public void Cat_File_CrlfNormalized()
     {
-        // CRLF axis: \r\n is normalized to \n before line splitting.
+        // CRLF axis: in a TEXT file (no NUL in the first 8 KB) \r\n is normalized to \n before line
+        // splitting — the long-standing "CRLF is transparent" policy. A BINARY file is copied byte for
+        // byte instead (RawBytesCmdletTests.Cat_BinaryFile_KeepsCrlfAndBom).
         var f = WriteFile("crlf.txt", "x\r\ny\r\n");
         var lines = RunBashText($"Invoke-BashCat '{f.Replace("\\", "\\\\")}'");
         Assert.Equal(new[] { "x", "y" }, lines);

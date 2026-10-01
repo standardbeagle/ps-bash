@@ -1,3 +1,4 @@
+using PsBash.Core;
 using System.Diagnostics;
 using System.Management.Automation;
 using System.Text;
@@ -182,7 +183,7 @@ public sealed class InvokeBashLessCommand : PSCmdlet
                     sb.Append(text);
                     if (!text.EndsWith("\n", StringComparison.Ordinal)) sb.Append('\n');
                 }
-                System.IO.File.WriteAllText(tempFile, sb.ToString(), new UTF8Encoding(false));
+                System.IO.File.WriteAllBytes(tempFile, RawBytes.GetBytes(sb.ToString()));
                 pagerArgs.Insert(0, tempFile);
             }
 

@@ -80,7 +80,6 @@ public class EscapeExpansionTests : IClassFixture<SharedPwshFixture>
     [InlineData(EscapeDialect.Echo, @"a\0101b", "aAb")]
     [InlineData(EscapeDialect.Echo, @"a\101b", @"a\101b")]
     [InlineData(EscapeDialect.Echo, @"a\01b", "a\u0001b")]
-    [InlineData(EscapeDialect.Echo, @"a\0777b", "aÿb")]
     [InlineData(EscapeDialect.Echo, @"a\x41b", "aAb")]
     [InlineData(EscapeDialect.Echo, @"a\eb", "a\u001bb")]
     [InlineData(EscapeDialect.Echo, @"a\Eb", "a\u001bb")]
@@ -107,17 +106,30 @@ public class EscapeExpansionTests : IClassFixture<SharedPwshFixture>
     [InlineData(EscapeDialect.PrintfB, @"\0342\0202\0254", "€")]
     [InlineData(EscapeDialect.Echo, @"\xe2\x82\xac", "€")]
     [InlineData(EscapeDialect.Echo, @"\0342\0202\0254", "€")]
-    // Not valid UTF-8 (overlong, surrogate, truncated, lone, interrupted): one Latin-1 char per byte.
-    // KNOWN GAP — bash writes the raw bytes, ps-bash writes the UTF-8 of those chars (see the design note).
-    [InlineData(EscapeDialect.PrintfFormat, @"\xe9", "é")]
-    [InlineData(EscapeDialect.PrintfFormat, @"\351", "é")]
-    [InlineData(EscapeDialect.PrintfFormat, @"\xc3A", "ÃA")]
-    [InlineData(EscapeDialect.PrintfFormat, @"\xc0\x80", "À\u0080")]
-    [InlineData(EscapeDialect.PrintfFormat, @"\xed\xa0\x80", "í \u0080")]
-    [InlineData(EscapeDialect.PrintfFormat, @"\xe2\x82", "â\u0082")]
-    [InlineData(EscapeDialect.PrintfFormat, @"\xe2x\x82\xac", "âx\u0082¬")]
     public void Expand_ByteRuns_AreUtf8Decoded(EscapeDialect dialect, string input, string expected)
         => Assert.Equal(expected, BashEscapes.Expand(input, dialect));
+
+    // Not valid UTF-8 (overlong, surrogate, truncated, lone, interrupted): every byte of the invalid run is an
+    // ESCAPED-BYTE MARKER (RawBytes, U+DC80..U+DCFF) that each output boundary writes back as the single original
+    // byte, exactly bash's bytes. Expected chars are hex code units: an attribute cannot carry a lone surrogate.
+    [Theory]
+    [InlineData(EscapeDialect.PrintfFormat, @"\xe9", "DCE9")]
+    [InlineData(EscapeDialect.PrintfFormat, @"\351", "DCE9")]
+    [InlineData(EscapeDialect.PrintfFormat, @"\xc3A", "DCC3 0041")]
+    [InlineData(EscapeDialect.PrintfFormat, @"\xc0\x80", "DCC0 DC80")]
+    [InlineData(EscapeDialect.PrintfFormat, @"\xed\xa0\x80", "DCED DCA0 DC80")]
+    [InlineData(EscapeDialect.PrintfFormat, @"\xe2\x82", "DCE2 DC82")]
+    [InlineData(EscapeDialect.PrintfFormat, @"\xe2x\x82\xac", "DCE2 0078 DC82 DCAC")]
+    [InlineData(EscapeDialect.Echo, @"a\0777b", "0061 DCFF 0062")]
+    [InlineData(EscapeDialect.PrintfB, @"\xff\xfe", "DCFF DCFE")]
+    public void Expand_InvalidUtf8ByteRuns_AreEscapedByteMarkers(EscapeDialect dialect, string input, string expectedHex)
+    {
+        var expected = new string(expectedHex.Split(' ').Select(h => (char)Convert.ToInt32(h, 16)).ToArray());
+        var actual = BashEscapes.Expand(input, dialect);
+        Assert.Equal(expected, actual);
+        // ...and the marker text encodes back to exactly the bytes the escapes named.
+        Assert.Equal(PsBash.Core.RawBytes.GetBytes(expected), PsBash.Core.RawBytes.GetBytes(actual));
+    }
 
     [Fact]
     public void Redirect_PrintfUtf8ByteEscapes_WritesTheExactBytes()

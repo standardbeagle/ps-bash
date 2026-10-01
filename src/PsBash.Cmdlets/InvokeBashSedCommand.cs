@@ -1,3 +1,4 @@
+using PsBash.Core;
 using System.Linq;
 using System.Management.Automation;
 using System.Text;
@@ -1604,7 +1605,7 @@ public sealed class InvokeBashSedCommand : PSCmdlet
     {
         try
         {
-            File.WriteAllText(path, text);
+            File.WriteAllBytes(path, RawBytes.GetBytes(text));
             return true;
         }
         catch (Exception ex)

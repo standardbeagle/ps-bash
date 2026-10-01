@@ -216,10 +216,15 @@ if (shellArgs.ReadFromStdin || (!shellArgs.Interactive && shellArgs.Command is n
     string stdinCommand;
     try
     {
-        stdinCommand = await ReadTextBoundedAsync(
-            Console.In,
+        // A piped script is read as BYTES (escaped-byte decoding, see RawBytes) so a script holding a
+        // non-UTF-8 byte in a string passes it through; a BOM is not part of the script.
+        TextReader stdinReader = Console.IsInputRedirected
+            ? new StreamReader(Console.OpenStandardInput(), PsBash.Core.RawBytes.Encoding, detectEncodingFromByteOrderMarks: false)
+            : Console.In;
+        stdinCommand = (await ReadTextBoundedAsync(
+            stdinReader,
             MaxCommandInputChars,
-            "stdin command input exceeds the maximum supported size.").ConfigureAwait(false);
+            "stdin command input exceeds the maximum supported size.").ConfigureAwait(false)).TrimStart('﻿');
     }
     catch (IOException ex)
     {
@@ -487,7 +492,8 @@ static async Task<string> ReadFileTextBoundedAsync(string path, long maxChars, s
         FileShare.ReadWrite,
         bufferSize: 8192,
         FileOptions.SequentialScan);
-    using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+    // Escaped-byte decoding (RawBytes): a script holding non-UTF-8 bytes in a string passes them through.
+    using var reader = new StreamReader(stream, PsBash.Core.RawBytes.Encoding, detectEncodingFromByteOrderMarks: true);
     return await ReadTextBoundedAsync(reader, maxChars, tooLargeMessage).ConfigureAwait(false);
 }
 

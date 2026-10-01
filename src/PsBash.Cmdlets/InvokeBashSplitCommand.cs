@@ -1,3 +1,4 @@
+using PsBash.Core;
 using System.Linq;
 using System.Management.Automation;
 using PsBash.Cmdlets.Args;
@@ -335,7 +336,7 @@ public sealed class InvokeBashSplitCommand : PSCmdlet
 
     private IEnumerable<string> ReadLinesTrackingTerminator(string path)
     {
-        foreach (var line in BashFileSystem.ReadTextLines(path))
+        foreach (var line in BashFileSystem.ReadTextLines(path, exact: true))
         {
             _inputUnterminated = !line.HasTrailingNewline;
             yield return line.Text;
@@ -366,7 +367,7 @@ public sealed class InvokeBashSplitCommand : PSCmdlet
         {
             var content = string.Join("\n", lines);
             if (!_inputUnterminated) content += "\n";
-            bytes = System.Text.Encoding.UTF8.GetBytes(content);
+            bytes = RawBytes.GetBytes(content);
         }
         catch (Exception ex)
         {
@@ -460,7 +461,7 @@ public sealed class InvokeBashSplitCommand : PSCmdlet
         string content = string.Join("\n", chunk) + "\n";
         try
         {
-            File.WriteAllText(outPath, content);
+            File.WriteAllBytes(outPath, RawBytes.GetBytes(content));
             _lastPiecePath = outPath;
             return true;
         }

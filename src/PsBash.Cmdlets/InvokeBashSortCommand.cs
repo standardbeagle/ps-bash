@@ -1,3 +1,4 @@
+using PsBash.Core;
 using System.Management.Automation;
 using System.Text.RegularExpressions;
 using PsBash.Cmdlets.Args;
@@ -550,7 +551,7 @@ public sealed class InvokeBashSortCommand : PSCmdlet
             try
             {
                 var outPath = SessionState.Path.GetUnresolvedProviderPathFromPSPath(plan.Output);
-                File.WriteAllText(outPath, sb.ToString(), new System.Text.UTF8Encoding(false));
+                File.WriteAllBytes(outPath, RawBytes.GetBytes(sb.ToString()));
             }
             catch (Exception ex)
             {

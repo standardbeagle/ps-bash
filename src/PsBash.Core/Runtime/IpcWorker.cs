@@ -1361,7 +1361,7 @@ public sealed class IpcWorker : IWorker
                 .Select(c => char.IsLetterOrDigit(c) || c is '-' or '_' ? c : '_'));
             var path = Path.Combine(dir, $"{DateTime.UtcNow:yyyyMMdd_HHmmss_fffffff}_{safe}.log");
             using var stream = new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite);
-            using var writer = new StreamWriter(stream, new System.Text.UTF8Encoding(false));
+            using var writer = new StreamWriter(stream, RawBytes.Encoding);
             foreach (var frame in frames) writer.Write(frame.Text);
             return path;
         }

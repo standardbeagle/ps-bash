@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 127
+stdout-length: 6
+stderr-length: 0
+==== SCRIPT ====
+printf 'a\n' | base64 | base64 -d | wc -c; printf 'a' | base64 | base64 -d | wc -c; printf 'a\n\n' | base64 | base64 -d | wc -c
+==== STDOUT ====
+2
+1
+3
+
+==== STDERR ====
+

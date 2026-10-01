@@ -421,10 +421,11 @@ All dialects: `\\ \a \b \f \n \r \t \v`; an unknown escape keeps its backslash. 
 real NUL char, which survives pipes, `tee` and `>` (`printf 'x\0' > f` is 2 bytes). `\xHH` / `\NNN` name
 BYTES: a run of bytes >= 0x80 that is valid UTF-8 becomes that character (`EscapedTextBuilder` in
 Transpiler; `printf '\xe2\x82\xac'` is U+20AC and every output boundary writes E2 82 AC, exactly bash's
-bytes). A run that is not valid UTF-8 (a lone `\xe9`/`\351`, overlong, truncated) becomes one Latin-1 char
-per byte — KNOWN GAP, see "Raw bytes" below. `$'…'` is expanded by the
-emitter's own `ExpandAnsiCEscapes` (Transpiler cannot reference Cmdlets); it truncates the word at
-the first NUL, as bash's C strings do.
+bytes). A run that is not valid UTF-8 (a lone `\xe9`/`\351`, overlong, truncated) becomes one
+escaped-byte marker per byte (U+DC80..U+DCFF), written back as the single original byte by every output
+boundary — see "Raw bytes" below. `$'…'` is expanded by the
+emitter's own `ExpandAnsiCEscapes` (Transpiler cannot reference Cmdlets; both go through the same
+`EscapedTextBuilder`); it truncates the word at the first NUL, as bash's C strings do.
 
 `tr` SETs are not a dialect of `Expand`: `BashEscapes.ExpandTrSet` does escapes, `[:class:]` and `a-z`
 ranges in ONE pass so an escaped `-`/`[` stays a literal. `\NNN` is 1-3 octal digits, every other unknown
@@ -435,33 +436,75 @@ on stderr. How `tr` sees the record terminator is in `runtime-command-reference.
 `printf %b` reads the RAW argument text (not the int/double coercion used by `%d`), so `\0101`
 keeps its leading zero.
 
-### Raw bytes (design note — NOT implemented)
+### Raw bytes (escaped-byte markers) — implemented
 
-`printf '\351' | wc -c` is 1 in bash (the single byte E9); ps-bash answers 2 (U+00E9, which every
-boundary encodes as C3 A9), and `printf '\xe9' > f` writes 2 bytes. Only a byte that is not part of a
-valid UTF-8 run hits this (valid runs are decoded, see above). Investigation: text is a .NET `string`
-(UTF-16) end to end, and UTF-8 is hard-wired at every boundary — `HostProtocol` frames, the launcher's
-`ConsoleEncoding`/PTY writers, `File.WriteAllText` in `Invoke-BashRedirect`, tee, split, gzip, `BashFileSystem`
-readers (`StreamReader(UTF8)`, which turns an invalid input byte into U+FFFD — so `cat` of a binary file is
-lossy too), and `wc -c` (`GetByteCount`) — roughly 55 sites. A fix needs a byte model, not an escape fix.
-Options:
+ps-bash text is .NET `string` (UTF-16) end to end, but the data it carries is BYTES (`printf '\351'`,
+`cat binary`, a native tool's output). One shared codec, `PsBash.Core.RawBytes`
+(`src/PsBash.Transpiler/RawBytes.cs`, in the leaf assembly every layer references), makes the string a
+lossless carrier — Python `surrogateescape` / Cygwin style:
 
-1. **Escaped-byte markers** (Python `surrogateescape` / Cygwin style). Escapes and invalid input bytes map to
-   U+F780..U+F7FF; every OUTPUT boundary maps them back to single bytes (host stdout frame -> launcher ->
-   stdout/PTY, redirect/tee/split writers, `wc -c`, external-process stdin) and every INPUT boundary maps
-   invalid UTF-8 to markers. Pipeline stays strings; the cost is the ~55 sites, the launcher, and deciding
-   that a literal PUA character in user text is ambiguous. Smallest total change, lossless round trip.
-2. **Byte-carrying records**: a `Bytes` (`byte[]`) member on the BashObject (next to `NoTrailingNewline`) that
-   only binary-aware consumers (redirect, tee, cat, wc -c, base64, gzip, tr) read; `BashText` keeps a
-   Latin-1 view for text consumers. Needs a binary `HostProtocol` frame and breaks the "every record is a
-   string" fast path.
-3. **Status quo** (chosen): Latin-1 char per invalid byte; valid UTF-8 runs exact. Covers the real-world uses
-   of `\x`/octal in scripts (accented letters, currency signs, emoji, ANSI `\x1b`) and leaves only genuinely
-   non-UTF-8 payloads (raw Latin-1 text, binary) wrong.
+- **Decode** (bytes to string): valid UTF-8 decodes normally; **every byte of an invalid sequence** (a lone
+  `E9`, overlong `C0 80`, truncated `E2 82`, stray continuation byte, `FF`, a UTF-8-encoded surrogate)
+  becomes one marker char `U+DC00 + byte`, i.e. `U+DC80..U+DCFF` (lone LOW surrogates).
+- **Encode** (string to bytes): a marker char becomes the single original byte; everything else is UTF-8.
+  `decode` then `encode` is the identity on ANY byte sequence (`RawBytesTests`: all 256 values, every
+  two-byte pair, random and mostly-valid-UTF-8 inputs, arbitrary chunk boundaries).
+- **Why a low surrogate, not the private-use area:** valid UTF-8 can never decode to a surrogate, so a marker
+  cannot come from valid input and cannot be confused with text a user typed. The only residual case is a
+  marker char that directly follows a HIGH surrogate: by definition that is a (valid) surrogate pair, a
+  supplementary-plane character, and it encodes as such (U+10080 is `D800 DC80`, not byte 80). A *lone* high
+  surrogate is not binary data and gets the standard U+FFFD. A marker can therefore only appear when some
+  decoder produced it, or when string surgery splits an emoji — documented, not defended.
+- The decoder is hand-written (`Utf8.ToUtf16` + `Rune.DecodeFromUtf8` for the maximal invalid subsequence):
+  .NET refuses lone surrogates from a `DecoderFallback` ("String contains invalid Unicode code points").
+  `RawBytes.Encoding` is the same codec as a normal `System.Text.Encoding` (code page 65001, stateful
+  `Decoder`/`Encoder` across chunk boundaries, no preamble) for `StreamReader`/`StreamWriter`, `Console`,
+  `ProcessStartInfo.Standard*Encoding` and PowerShell's `$OutputEncoding`.
 
-Pick option 1 if a consumer needs binary-safe pipelines; it should land as one change touching all boundaries
-with `printf '\351' | wc -c` (1) and `printf '\xe9' > f` (1 byte) as the acceptance tests.
+The pipeline stays strings. Filters, transformers and the fused line-stream cores need no change: a marker is
+an ordinary non-ASCII char to them (`LineStreamRawBytesParityTests` pins fused vs unfused), and valid UTF-8 text
+is byte-for-byte what it was.
 
+**Boundary list — converted** (each reads through `RawBytes` decode, or writes through `RawBytes` encode):
+
+| Boundary | Where |
+|---|---|
+| File readers | `BashFileSystem.OpenRawReader` (no BOM sniffing, for byte-exact reads) and `OpenDocumentReader` (UTF-8 BOM skipped, UTF-16 BOM honoured — the long-standing "BOM is transparent" policy of the line tools and whole-document parsers); `ReadTextLines/ReadLines/ReadAllText*`; `head`/`tail` readers, `wc`, `strings`, `base64 -d FILE`, `tar -O` |
+| `cat` | Reads a **binary** file (NUL in the first 8 KB, the grep/rg heuristic) byte-exactly — no CRLF rewrite, no BOM strip — via `ReadTextLines(exactIfBinary: true)`; a text file keeps the CRLF/BOM-transparent policy. The fused `CatFileStage` makes the same call. `split` always reads exactly |
+| Stdin of a simple command (`cmd < file`) | `Invoke-BashCat file \| cmd` (exact records, a missing final newline kept; a native / unmapped consumer gets `ForEach-Object { Get-BashText $_ }` text). `Get-Content` remains for compound redirects (`while read … done < f`, `$(<f)`) where text lines are the contract |
+| Script text | script file and piped-stdin script (`Program.cs`), `TranspileCache` (hash key, disk entries), IPC request bodies |
+| Escape producers | `BashEscapes` (`printf` format / `%b`, `echo -e`), the transpiler's `$'…'` (`EscapedTextBuilder`), `tr` SET `\NNN` (a range such as `\200-\377` works: markers are consecutive) |
+| Native children | `Console.OutputEncoding = RawBytes.Encoding` in the host (PowerShell decodes a native command's stdout with it, so `findstr . bin` keeps its bytes; also `$(...)` of native output); `$OutputEncoding` set in the runspace (`SdkRunspace`) for text piped INTO a native stdin; `BashRuntime.RunChildProcess` (`StandardOutput/ErrorEncoding`, used by `bash -c` and the tool wrappers) |
+| IPC | `HostProtocol` frames (stdout, stderr, request body/path/argv/ENV, sentinels): every base64 payload is `RawBytes.GetBytes` / `GetString` |
+| Console | `RawConsole.Install()` (host + launcher): `Console.OutputEncoding` = the codec, so `Console.Write(line)` writes a marker as its byte. The PTY byte pump already moved raw bytes |
+| File writers | `Invoke-BashRedirect` (`>`, `>>`), `tee`, `split`, `sort -o`, `uniq OUTPUT`, `sed -i`, the `less` temp file, the psm1 process-substitution temp file and `Write-BashFileText` (via `BashRuntime.WriteRawText`), the failure-tee log |
+| Byte consumers | `wc -c` (`RawBytes.GetByteCount`), `cut -b`, `head -c` / `tail -c`, `base64` encode and decode (`-d` writes the decoded bytes exactly — it used to drop a final newline), `md5sum`/`sha1sum`/`sha256sum` (stdin), `gzip` (see below), `jq @base64`/`@base64d` |
+| `gzip` | `-c` emits the EXACT compressed bytes (the old base64 detour is gone), `-d`/`zcat` output is the exact decompressed bytes, and with no file operand the pipeline is the input (`gzip -c f \| gzip -dc`) |
+
+**`wc` follows GNU in a UTF-8 locale** (oracle-checked): an invalid byte counts toward `-c` only — it is not a
+character (`-m`/`-L`) and neither starts nor ends a word (`printf 'a\xffb c' \| wc` = 2 words, 4 chars,
+5 bytes; `printf '\xe9\n' \| wc -w` = 0). A UTF-8 BOM is counted (`wc -c` is the file's size).
+
+**Deliberately left, with reason:**
+
+- **argv and environment of a native child.** The OS passes UTF-16 (Windows) or re-encodes (Unix); a marker
+  cannot become a raw byte there. Values with markers are not honoured by native children.
+- **File names with invalid bytes**, same reason.
+- **The launcher's own stdin is not forwarded** into a `-c` command (pre-existing); only a piped *script* is
+  read, as bytes.
+- **Windows record terminator.** The host serializer ends each record with `Environment.NewLine`, so the
+  launcher's stdout carries `\r\n` on Windows (`echo hi` = `68 69 0D 0A`); a record's own bytes are exact, only
+  the boundary is translated. `Invoke-BashRedirect`/`tee` write `\n`.
+- **Regex `.` matches a marker as one character**; GNU in a UTF-8 locale does not match an invalid byte.
+  `printf '%5s'` / `${#x}` count a marker as one character.
+- **`$HOME/.psbashrc`, history, config, AI assist** — text, not data; unchanged.
+- **`read` / interactive typing** — keyboard text; the interactive PTY path is a raw byte pump already.
+- **`sed -i` / whole-document parsers** (`jq`, `yq`) keep the BOM-tolerant document reader.
+
+Tests: `RawBytesTests` (codec), `HostProtocolRawBytesTests` (frames), `RawBytesCmdletTests` (round trips,
+counters, gzip/base64/split), `LineStreamRawBytesParityTests` (fused lane), `RawBytesEndToEndTests` (the
+built `ps-bash.exe` writes bytes; native child `findstr`), `RawBytesDifferentialTests` (41 bash-oracle cases,
+cassette-replayed).
 ## Temp File Strategy
 
 All temp files are written under a `ps-bash/` subdirectory of the system temp path

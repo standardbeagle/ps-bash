@@ -294,7 +294,7 @@ public sealed class InvokeBashCatCommand : PSCmdlet
             {
                 try
                 {
-                    foreach (var line in BashFileSystem.ReadTextLines(filePath))
+                    foreach (var line in BashFileSystem.ReadTextLines(filePath, exactIfBinary: true))
                     {
                         WriteObject(BashRuntime.NewBashObject(
                             line.Text,
@@ -316,7 +316,7 @@ public sealed class InvokeBashCatCommand : PSCmdlet
             {
                 try
                 {
-                    foreach (var line in BashFileSystem.ReadLines(filePath))
+                    foreach (var line in BashFileSystem.ReadLines(filePath, exactIfBinary: true))
                     {
                         EmitLine(line, filePath);
                     }

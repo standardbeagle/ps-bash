@@ -145,6 +145,12 @@ internal sealed class SdkRunspace : IAsyncDisposable
             // In that case, module commands fall back to .NET's current directory.
         }
 
+        // $OutputEncoding is how PowerShell encodes the text it PIPES INTO a native command's stdin
+        // (`printf '\351' | native`). The default is plain UTF-8, which turns an escaped-byte marker
+        // (RawBytes) into U+FFFD; the byte-faithful codec writes the single original byte.
+        try { runspace.SessionStateProxy.SetVariable("OutputEncoding", PsBash.Core.RawBytes.Encoding); }
+        catch { /* the default UTF-8 is still correct for every valid-UTF-8 payload */ }
+
         // Pull the setup script content directly from the embedded resource
         // instead of extract-to-disk + dot-source-from-disk. The previous
         // path paid ~600 ms on every cold start for file I/O + path

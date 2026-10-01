@@ -29,7 +29,8 @@ public enum StreamTag
 /// without reading the body.
 /// </summary>
 /// <remarks>
-/// Encoding: UTF-8, no BOM. Line terminator on the wire is LF (<c>\n</c>);
+/// Encoding: UTF-8, no BOM, with escaped-byte markers (<see cref="PsBash.Core.RawBytes"/>: an invalid UTF-8
+/// byte in a payload travels as itself, never as U+FFFD). Line terminator on the wire is LF (<c>\n</c>);
 /// readers tolerate CRLF for cross-platform robustness. Fields that may contain
 /// newlines (script path, argv elements, script body) are base64-encoded so
 /// every protocol line is a single physical line.
@@ -206,7 +207,7 @@ public static class HostProtocol
     public static async Task WriteStartedAsync(Stream stream, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(stream);
-        var bytes = Utf8NoBom.GetBytes(StartedSentinel + "\n");
+        var bytes = RawBytes.GetBytes(StartedSentinel + "\n");
         await stream.WriteAsync(bytes, ct).ConfigureAwait(false);
         await stream.FlushAsync(ct).ConfigureAwait(false);
     }
@@ -219,7 +220,7 @@ public static class HostProtocol
     public static async Task WriteBusyAsync(Stream stream, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(stream);
-        var bytes = Utf8NoBom.GetBytes(BusySentinel + "\n");
+        var bytes = RawBytes.GetBytes(BusySentinel + "\n");
         await stream.WriteAsync(bytes, ct).ConfigureAwait(false);
         await stream.FlushAsync(ct).ConfigureAwait(false);
     }
@@ -233,7 +234,7 @@ public static class HostProtocol
     public static async Task WriteHostExitingAsync(Stream stream, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(stream);
-        var bytes = Utf8NoBom.GetBytes(HostExitingSentinel + "\n");
+        var bytes = RawBytes.GetBytes(HostExitingSentinel + "\n");
         await stream.WriteAsync(bytes, ct).ConfigureAwait(false);
         await stream.FlushAsync(ct).ConfigureAwait(false);
     }
@@ -261,8 +262,6 @@ public static class HostProtocol
     /// shutdown-aware host (older hosts respond with a protocol error).
     /// </summary>
     public const string ShutdownAcceptedPayload = "ps-bash-host shutdown=accepted";
-
-    private static readonly UTF8Encoding Utf8NoBom = new(encoderShouldEmitUTF8Identifier: false);
 
     public static string HealthPayload { get; } =
         $"ps-bash-host protocol={ProtocolVersion} build={GetBuildIdentity()}";
@@ -320,7 +319,7 @@ public static class HostProtocol
         }
         sb.Append(EndSentinel).Append('\n');
 
-        var bytes = Utf8NoBom.GetBytes(sb.ToString());
+        var bytes = RawBytes.GetBytes(sb.ToString());
         await stream.WriteAsync(bytes, ct).ConfigureAwait(false);
         await stream.FlushAsync(ct).ConfigureAwait(false);
     }
@@ -629,9 +628,9 @@ public static class HostProtocol
 
     private static async Task WriteResponseFrameAsync(Stream stream, string payload, StreamTag tag, CancellationToken ct)
     {
-        var encoded = Convert.ToBase64String(Utf8NoBom.GetBytes(payload));
+        var encoded = Convert.ToBase64String(RawBytes.GetBytes(payload));
         var framed = tag == StreamTag.Stderr ? StderrPrefix + encoded : encoded;
-        var bytes = Utf8NoBom.GetBytes(framed + "\n");
+        var bytes = RawBytes.GetBytes(framed + "\n");
         await stream.WriteAsync(bytes, ct).ConfigureAwait(false);
     }
 
@@ -641,7 +640,7 @@ public static class HostProtocol
     public static async Task WriteExitAsync(Stream stream, int exitCode, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(stream);
-        var bytes = Utf8NoBom.GetBytes($"{ExitPrefix}{exitCode}{ExitSuffix}\n");
+        var bytes = RawBytes.GetBytes($"{ExitPrefix}{exitCode}{ExitSuffix}\n");
         await stream.WriteAsync(bytes, ct).ConfigureAwait(false);
         await stream.FlushAsync(ct).ConfigureAwait(false);
     }
@@ -659,7 +658,7 @@ public static class HostProtocol
     public static async Task WritePromptReadyAsync(Stream stream, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(stream);
-        var bytes = Utf8NoBom.GetBytes(PromptReadySentinel + "\n");
+        var bytes = RawBytes.GetBytes(PromptReadySentinel + "\n");
         await stream.WriteAsync(bytes, ct).ConfigureAwait(false);
         await stream.FlushAsync(ct).ConfigureAwait(false);
     }
@@ -855,7 +854,7 @@ public static class HostProtocol
             string decoded;
             try
             {
-                decoded = Utf8NoBom.GetString(Convert.FromBase64String(payload));
+                decoded = RawBytes.GetString(Convert.FromBase64String(payload));
             }
             catch (FormatException)
             {
@@ -866,10 +865,10 @@ public static class HostProtocol
     }
 
     private static string EncodeBase64(string s)
-        => Convert.ToBase64String(Utf8NoBom.GetBytes(s));
+        => Convert.ToBase64String(RawBytes.GetBytes(s));
 
     private static string DecodeBase64(string s)
-        => Utf8NoBom.GetString(Convert.FromBase64String(s));
+        => RawBytes.GetString(Convert.FromBase64String(s));
 
     /// <summary>
     /// Build-identity string the host advertises in its health payload and
@@ -993,7 +992,7 @@ public static class HostProtocol
                     if (b == (byte)'\n')
                     {
                         if (_line.Count > 0 && _line[^1] == (byte)'\r') _line.RemoveAt(_line.Count - 1);
-                        return Utf8NoBom.GetString(_line.ToArray());
+                        return RawBytes.GetString(_line.ToArray());
                     }
                     _line.Add(b);
                     if (_line.Count > MaxLineBytes)
@@ -1003,7 +1002,7 @@ public static class HostProtocol
 
                 int n = await _stream.ReadAsync(_buf.AsMemory(), ct).ConfigureAwait(false);
                 if (n == 0)
-                    return _line.Count == 0 ? null : Utf8NoBom.GetString(_line.ToArray());
+                    return _line.Count == 0 ? null : RawBytes.GetString(_line.ToArray());
                 _start = 0;
                 _end = n;
             }
@@ -1015,12 +1014,12 @@ public static class HostProtocol
             {
                 int n = await _stream.ReadAsync(_one.AsMemory(), ct).ConfigureAwait(false);
                 if (n == 0)
-                    return _line.Count == 0 ? null : Utf8NoBom.GetString(_line.ToArray());
+                    return _line.Count == 0 ? null : RawBytes.GetString(_line.ToArray());
                 byte b = _one[0];
                 if (b == (byte)'\n')
                 {
                     if (_line.Count > 0 && _line[^1] == (byte)'\r') _line.RemoveAt(_line.Count - 1);
-                    return Utf8NoBom.GetString(_line.ToArray());
+                    return RawBytes.GetString(_line.ToArray());
                 }
                 _line.Add(b);
                 if (_line.Count > MaxLineBytes)

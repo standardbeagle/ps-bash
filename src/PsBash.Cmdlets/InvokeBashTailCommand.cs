@@ -1,3 +1,4 @@
+using PsBash.Core;
 using System.Linq;
 using System.Management.Automation;
 using System.Text;
@@ -579,7 +580,7 @@ public sealed class InvokeBashTailCommand : PSCmdlet
             lastNl = read - 1;                          // cap exceeded — force-emit
         }
 
-        var text = Encoding.UTF8.GetString(buffer, 0, lastNl + 1);
+        var text = RawBytes.GetString(buffer, 0, lastNl + 1);
         var parts = text.Split('\n');
         int emitCount = text.EndsWith('\n') ? parts.Length - 1 : parts.Length;
         for (int k = 0; k < emitCount; k++)
@@ -597,12 +598,12 @@ public sealed class InvokeBashTailCommand : PSCmdlet
     /// </summary>
     private void EmitPipelineBytes(int byteCount, bool fromByte)
     {
-        byte[] all = Encoding.UTF8.GetBytes(BashRuntime.RecordStreamText(_pipeline));
+        byte[] all = RawBytes.GetBytes(BashRuntime.RecordStreamText(_pipeline));
         long safeCount = Math.Max(byteCount, 0);
         long start = fromByte
             ? Math.Min(Math.Max(safeCount - 1, 0), all.Length)
             : Math.Max(0, all.Length - safeCount);
-        string text = Encoding.UTF8.GetString(all, (int)start, (int)(all.Length - start));
+        string text = RawBytes.GetString(all, (int)start, (int)(all.Length - start));
         // Byte slice: a TRANSFORMER — fresh text records carrying exactly the slice's bytes.
         foreach (var rec in BashRuntime.ByteSliceRecords(text)) WriteObject(rec);
     }
@@ -625,7 +626,7 @@ public sealed class InvokeBashTailCommand : PSCmdlet
             using var ms = new MemoryStream();
             fs.CopyTo(ms);
             foreach (var rec in BashRuntime.ByteSliceRecords(
-                         Encoding.UTF8.GetString(ms.GetBuffer(), 0, (int)ms.Length)))
+                         RawBytes.GetString(ms.GetBuffer(), 0, (int)ms.Length)))
                 WriteObject(rec);
         }
         catch (Exception ex)
@@ -737,7 +738,7 @@ public sealed class InvokeBashTailCommand : PSCmdlet
             fs.Seek(0, SeekOrigin.Begin);
         }
 
-        return new StreamReader(fs, new UTF8Encoding(false));
+        return new StreamReader(fs, RawBytes.Encoding, detectEncodingFromByteOrderMarks: false);
     }
 
     /// <summary>

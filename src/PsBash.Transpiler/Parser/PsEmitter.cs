@@ -2135,9 +2135,21 @@ public static class PsEmitter
         // allowed"), which failed the parse of the whole file. With no command the
         // redirect IS the command.
         var inner = EmitSimple(innerCmd);
-        result = inner.Length == 0
-            ? $"Get-Content {target}"
-            : $"Get-Content {target} | {inner}";
+        if (inner.Length == 0)
+        {
+            result = $"Get-Content {target}";
+            return true;
+        }
+
+        // The file is the command's STDIN, which is a byte stream: `Invoke-BashCat` feeds it as exact
+        // records (no CRLF/BOM rewriting, a missing final newline kept, invalid UTF-8 bytes carried as
+        // escaped-byte markers — see RawBytes), where Get-Content would decode lossily and always
+        // terminate the last line (`wc -c < f` was one byte high). A mapped consumer takes those records
+        // as-is; a native / unmapped consumer needs their TEXT (the binder would format a record object).
+        bool mappedConsumer = TryEmitMappedCommand(innerCmd, out _);
+        result = mappedConsumer
+            ? $"Invoke-BashCat {target} | {inner}"
+            : $"Invoke-BashCat {target} | ForEach-Object {{ Get-BashText $_ }} | {inner}";
         return true;
     }
 

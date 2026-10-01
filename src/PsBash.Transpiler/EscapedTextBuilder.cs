@@ -9,10 +9,9 @@ namespace PsBash.Core;
 /// the next non-byte append, UTF-8 decoded: <c>\xe2\x82\xac</c> / <c>\342\202\254</c> become the single
 /// character U+20AC, which every ps-bash output boundary (stdout frames, <c>&gt;</c>, <c>tee</c>) then
 /// encodes back to exactly E2 82 AC — the bytes bash writes. A byte run that is NOT valid UTF-8 (a lone
-/// <c>\xe9</c>, an overlong <c>\xc0\x80</c>, a truncated <c>\xe2\x82</c>) falls back to one Latin-1 char per
-/// byte, which is NOT byte-exact on output (<c>\xe9</c> is written as C3 A9, two bytes): ps-bash text is
-/// Unicode strings, and representing a raw byte needs a byte model across every boundary (see
-/// docs/specs/runtime-functions.md "Escape Sequence Handling").
+/// <c>\xe9</c>, an overlong <c>\xc0\x80</c>, a truncated <c>\xe2\x82</c>) becomes one escaped-byte marker
+/// per byte (<see cref="RawBytes"/>, U+DC80..U+DCFF), which every boundary writes back as the single
+/// original byte (see docs/specs/runtime-functions.md "Raw bytes").
 /// </summary>
 public sealed class EscapedTextBuilder
 {
@@ -47,21 +46,9 @@ public sealed class EscapedTextBuilder
     private void Flush()
     {
         if (_raw is not { Count: > 0 }) return;
-        var bytes = System.Runtime.InteropServices.CollectionsMarshal.AsSpan(_raw);
-        int i = 0;
-        while (i < bytes.Length)
-        {
-            if (Rune.DecodeFromUtf8(bytes.Slice(i), out Rune rune, out int used) == OperationStatus.Done)
-            {
-                _sb.Append(rune.ToString());
-                i += used;
-            }
-            else
-            {
-                _sb.Append((char)bytes[i]);
-                i++;
-            }
-        }
+        // Valid UTF-8 runs become their characters; every byte of an invalid run becomes an
+        // escaped-byte marker (RawBytes), which each output boundary writes back as the single byte.
+        _sb.Append(RawBytes.GetString(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(_raw)));
         _raw.Clear();
     }
 

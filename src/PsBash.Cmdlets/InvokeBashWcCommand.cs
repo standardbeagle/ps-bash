@@ -1,3 +1,4 @@
+using PsBash.Core;
 using System.Management.Automation;
 using System.Text;
 using PsBash.Cmdlets.Args;
@@ -208,9 +209,14 @@ public sealed class InvokeBashWcCommand : PSCmdlet
 
     private void AccumulateStream(string text)
     {
-        _totalBytes += Encoding.UTF8.GetByteCount(text);
+        _totalBytes += RawBytes.GetByteCount(text);
+        char prev = '\0';
         foreach (char c in text)
         {
+            // An escaped byte (invalid UTF-8, see RawBytes) is not a character: GNU wc in a UTF-8 locale
+            // counts it in -c only, and it neither starts nor ends a word (not printable, not space).
+            if (RawBytes.IsMarkerChar(c) && !char.IsHighSurrogate(prev)) { prev = c; continue; }
+            prev = c;
             bool isLow = char.IsLowSurrogate(c);
             if (!isLow) _totalChars++;
             if (c == '\n')
@@ -235,9 +241,12 @@ public sealed class InvokeBashWcCommand : PSCmdlet
     private static int CountCodePoints(string s)
     {
         int n = 0;
+        char prev = '\0';
         foreach (var c in s)
         {
-            if (!char.IsLowSurrogate(c)) n++;
+            bool escapedByte = RawBytes.IsMarkerChar(c) && !char.IsHighSurrogate(prev);
+            if (!escapedByte && !char.IsLowSurrogate(c)) n++;
+            prev = c;
         }
         return n;
     }
@@ -291,14 +300,9 @@ public sealed class InvokeBashWcCommand : PSCmdlet
             long fileBytes;
             try
             {
+                // The file's exact size: a BOM is bytes like any other (GNU counts it).
                 fileBytes = new FileInfo(filePath).Length;
-                using var fs = BashFileSystem.OpenRead(filePath);
-                var bom = new byte[3];
-                if (fs.Read(bom, 0, 3) >= 3
-                    && bom[0] == 0xEF && bom[1] == 0xBB && bom[2] == 0xBF)
-                {
-                    fileBytes -= 3;
-                }
+                if (FileSystemHelpers.IsNullDevice(filePath)) fileBytes = 0;
             }
             catch
             {
@@ -351,8 +355,11 @@ public sealed class InvokeBashWcCommand : PSCmdlet
         // allocating (and discarding) a word array on every line.
         int words = 0;
         bool inWord = false;
+        char prev = '\0';
         foreach (char c in text)
         {
+            if (RawBytes.IsMarkerChar(c) && !char.IsHighSurrogate(prev)) { prev = c; continue; }
+            prev = c;
             if (c is ' ' or '\t' or '\n' or '\r') inWord = false;
             else if (!inWord) { words++; inWord = true; }
         }
@@ -362,8 +369,7 @@ public sealed class InvokeBashWcCommand : PSCmdlet
     private static (int Lines, int Words, int Chars, int MaxLine) CountFileText(string path)
     {
         using var fs = BashFileSystem.OpenRead(path);
-        using var reader = new StreamReader(
-            fs, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        using var reader = BashFileSystem.OpenRawReader(fs, leaveOpen: true);
 
         int lines = 0;
         int words = 0;
@@ -373,11 +379,15 @@ public sealed class InvokeBashWcCommand : PSCmdlet
         bool inWord = false;
         var buffer = new char[16384];
         int read;
+        char prev = '\0';
         while ((read = reader.Read(buffer, 0, buffer.Length)) > 0)
         {
             for (int i = 0; i < read; i++)
             {
                 char c = buffer[i];
+                // An escaped byte (invalid UTF-8) is no character and no word boundary (see AccumulateStream).
+                if (RawBytes.IsMarkerChar(c) && !char.IsHighSurrogate(prev)) { prev = c; continue; }
+                prev = c;
                 // Count code points: a surrogate pair (high+low) is one char.
                 bool isLow = char.IsLowSurrogate(c);
                 if (!isLow) chars++;

@@ -1,3 +1,4 @@
+using PsBash.Core;
 using System.Management.Automation;
 using PsBash.Cmdlets.Args;
 
@@ -90,8 +91,6 @@ public sealed class InvokeBashTeeCommand : PSCmdlet
     /// <summary>Pure argv scan (unit-test seam): options, operands and the first error.</summary>
     internal static ParsedArgs ScanArgs(string[] args) => ArgParser.Parse(args, TeeSpec);
 
-    private static readonly System.Text.UTF8Encoding Utf8NoBom = new(false);
-
     private readonly List<(string Display, FileStream Stream)> _sinks = new();
     private bool _done;
 
@@ -172,7 +171,7 @@ public sealed class InvokeBashTeeCommand : PSCmdlet
 
         if (_sinks.Count > 0 && payload.Length > 0)
         {
-            byte[] bytes = Utf8NoBom.GetBytes(payload);
+            byte[] bytes = RawBytes.GetBytes(payload);
             for (int i = _sinks.Count - 1; i >= 0; i--)
             {
                 var (display, stream) = _sinks[i];

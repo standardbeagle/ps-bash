@@ -1,3 +1,4 @@
+using PsBash.Core;
 using System.Collections;
 using System.Globalization;
 using System.Text;
@@ -504,9 +505,9 @@ internal static class JqEngine
             case "from_entries":
                 return new List<object?> { FromEntries(data) };
             case "@base64":
-                return new List<object?> { Convert.ToBase64String(Encoding.UTF8.GetBytes(data is string b64s ? b64s : JqToString(data))) };
+                return new List<object?> { Convert.ToBase64String(RawBytes.GetBytes(data is string b64s ? b64s : JqToString(data))) };
             case "@base64d":
-                return new List<object?> { data is string b64d ? Encoding.UTF8.GetString(Convert.FromBase64String(b64d)) : null };
+                return new List<object?> { data is string b64d ? RawBytes.GetString(Convert.FromBase64String(b64d)) : null };
             case "@json":
                 return new List<object?> { JqSerialize(data) };
             case "@csv":

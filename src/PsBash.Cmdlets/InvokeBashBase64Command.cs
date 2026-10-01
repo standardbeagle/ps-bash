@@ -1,3 +1,4 @@
+using PsBash.Core;
 using System.Linq;
 using System.Management.Automation;
 using PsBash.Cmdlets.Args;
@@ -28,8 +29,8 @@ namespace PsBash.Cmdlets;
 /// </list>
 ///
 /// Encoded output is wrapped at <c>-w N</c> columns by joining wrap-sized
-/// substrings with <see cref="Environment.NewLine"/> (matching the psm1
-/// oracle's <c>StringBuilder.AppendLine</c> slice) and stripping trailing
+/// substrings with <c>\n</c> (the record boundary; <see cref="Environment.NewLine"/> would put CRs into
+/// the bytes on Windows) and stripping trailing
 /// <c>\r</c> / <c>\n</c>. The wrapped string is emitted as a single
 /// <c>PsBash.TextOutput</c> object (BashText preserves the embedded line
 /// endings). <c>-w 0</c> emits the unwrapped string in one piece.
@@ -277,7 +278,7 @@ public sealed class InvokeBashBase64Command : PSCmdlet
         }
         else
         {
-            string output = EncodeBytesToBase64String(Encoding.UTF8.GetBytes(pipelineText), wrapCol);
+            string output = EncodeBytesToBase64String(RawBytes.GetBytes(pipelineText), wrapCol);
             WriteEncoded(output, wrapCol);
         }
     }
@@ -287,8 +288,8 @@ public sealed class InvokeBashBase64Command : PSCmdlet
     // newline only when wrapping (`-w 0` writes none).
     private void WriteDecoded(string output)
     {
-        if (output.Length == 0) return;
-        WriteObject(BashRuntime.TextRecord(output, unterminated: !output.EndsWith('\n')));
+        // EmitBashLines splits the exact byte stream into records and marks an unterminated tail.
+        foreach (var rec in BashRuntime.EmitBashLines(output)) WriteObject(rec);
     }
 
     private void WriteEncoded(string output, int wrapCol)
@@ -365,8 +366,7 @@ public sealed class InvokeBashBase64Command : PSCmdlet
     private static string DecodeBase64FileToOutput(string path, bool ignoreGarbage)
     {
         using var stream = BashFileSystem.OpenRead(path);
-        using var reader = new StreamReader(
-            stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        using var reader = BashFileSystem.OpenRawReader(stream, leaveOpen: true);
         using var decoded = new MemoryStream();
         var chars = new char[16384];
         var quartet = new char[4];
@@ -421,12 +421,9 @@ public sealed class InvokeBashBase64Command : PSCmdlet
 
     private static string DecodeBytesToOutput(byte[] decoded, int count)
     {
-        string output = Encoding.UTF8.GetString(decoded, 0, count);
-        if (output.EndsWith("\n", StringComparison.Ordinal))
-        {
-            output = output.Substring(0, output.Length - 1);
-        }
-        return output;
+        // The decoded bytes EXACTLY (escaped-byte markers for non-UTF-8 bytes): a final newline is data, not
+        // something to strip (`printf 'a\n' | base64 | base64 -d | wc -c` is 2).
+        return RawBytes.GetString(decoded, 0, count);
     }
 
     private void WriteReadError(string path, Exception ex, bool normalizeNotFound)
@@ -462,7 +459,7 @@ public sealed class InvokeBashBase64Command : PSCmdlet
             {
                 if (_lineLen == _wrapCol)
                 {
-                    _builder.Append(Environment.NewLine);
+                    _builder.Append('\n'); // a record boundary is always LF (Environment.NewLine put CRs into the bytes on Windows)
                     _lineLen = 0;
                 }
 

@@ -44,6 +44,9 @@ internal sealed class Program
         // Detach inherited launcher stdio when spawned as a daemon. See
         // InheritedFdDetach for the rationale and the RC-5 macOS fix.
         InheritedFdDetach.DetachInheritedStdioIfRequested();
+        // Byte-faithful console: escaped-byte markers (RawBytes) are written back as the single original
+        // byte by Console.Write, and PowerShell decodes a native command's stdout with this encoding.
+        RawConsole.Install();
         // PTY-2 probe mode: spawned by PtySpawnTests to verify the host's
         // System.Console is wired to a real terminal when invoked through
         // PtySpawner. Writes a single marker line to stdout and exits 0.
