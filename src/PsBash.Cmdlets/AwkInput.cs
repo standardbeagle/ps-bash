@@ -328,16 +328,6 @@ internal sealed class AwkShell
             psi.ArgumentList.Add(command);
         }
 
-        // A child ps-bash that shares an EXPLICIT host endpoint with the command that spawned it resets
-        // that command's connection (the same hazard `bash -c` nested in a script has under an explicit
-        // PSBASH_IPC_ENDPOINT, e.g. the differential harness). Give such a child a private host instead;
-        // with the default per-session endpoint the warm shared host is reused as before.
-        if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("PSBASH_IPC_ENDPOINT")))
-        {
-            psi.Environment.Remove("PSBASH_IPC_ENDPOINT");
-            psi.Environment["PSBASH_PER_INVOCATION"] = "1";
-        }
-
         try
         {
             var loc = _cmdlet.SessionState.Path.CurrentFileSystemLocation.ProviderPath;

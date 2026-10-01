@@ -54,6 +54,23 @@ public class SdkWorkerEnvironmentTests : IAsyncLifetime
         return (exit, lines);
     }
 
+    // A command run for a launcher carries the "inside a host" marker (so a ps-bash it spawns
+    // goes to a private host instead of queueing behind this command on the exec gate), and the
+    // marker does not outlive the command.
+    [Fact]
+    public async Task LauncherFramedCommand_SeesInsideHostMarker_ClearedAfterwards()
+    {
+        var worker = _fixture.CreateWorker();
+        var name = PsBash.Core.Runtime.Ipc.IpcTransportFactory.InsideHostEnvVar;
+
+        var run = await RunAsync(worker, $"Invoke-BashEcho $env:{name}",
+            Block(Array.Empty<KeyValuePair<string, string>>(), name));
+
+        Assert.Equal(0, run.ExitCode);
+        Assert.Contains(run.Lines, l => l.Trim() == Environment.ProcessId.ToString());
+        Assert.False(PsBash.Core.Runtime.Ipc.IpcTransportFactory.IsInsideHostCommand());
+    }
+
     // A var CHANGED between two invocations must be observed by the second.
     // Pre-fix the worker reuses whatever the process environment held from the
     // previous run (or from host spawn), so the second prints the first value.

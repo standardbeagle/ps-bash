@@ -38,6 +38,20 @@ public static class IpcTransportFactory
     /// </summary>
     public const string SessionEnvVar = "PSBASH_SESSION";
 
+    /// <summary>
+    /// Marker the host sets in its process environment (value = host PID) for the duration of
+    /// every launcher-framed command. A ps-bash started by that command inherits it and must
+    /// not reuse the host that is executing its parent (the host serializes execution behind a
+    /// process-wide gate the parent holds, so the child would deadlock behind it, or — on an
+    /// obsolete-build mismatch — retire the host out from under the parent).
+    /// <see cref="IpcWorker.StartAsync"/> therefore gives such a launcher a private host.
+    /// </summary>
+    public const string InsideHostEnvVar = "PSBASH_INSIDE_HOST";
+
+    /// <summary>True when this process was started (transitively) by a command a host is running.</summary>
+    public static bool IsInsideHostCommand()
+        => !string.IsNullOrEmpty(Environment.GetEnvironmentVariable(InsideHostEnvVar));
+
     // Test seam: override platform detection without P/Invoke or env hacks.
     internal static Func<bool>? UnixSocketSupportedOverride { get; set; }
 
