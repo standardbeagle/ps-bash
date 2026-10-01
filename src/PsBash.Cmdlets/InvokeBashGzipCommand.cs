@@ -89,13 +89,13 @@ public sealed class InvokeBashGzipCommand : PSCmdlet
             new(OptSpecSet.VersionId, 'L', "license"),  // GNU prints the license; ps-bash prints its version line
             new(OptNoOp, 'm', null),
             new(OptNoOp, 'M', null),
-            new(OptNoOp, 'n', "no-name"),
-            new(OptNoOp, 'N', "name"),
+            new("no-name", 'n', "no-name"),   // distinct ids: glibc only collapses an abbreviation onto ONE option, so `--n` must stay ambiguous
+            new("name", 'N', "name"),
             new(OptQuiet, 'q', "quiet"),
             new(OptQuiet, '\0', "silent"),
             new(OptRecursive, 'r', "recursive"),
-            new(OptNoOp, '\0', "rsyncable"),
-            new(OptNoOp, '\0', "synchronous"),
+            new("rsyncable", '\0', "rsyncable"),
+            new("synchronous", '\0', "synchronous"),
             new(OptSuffix, 'S', "suffix", OptKind.Value),
             new(OptTest, 't', "test"),
             new(OptVerbose, 'v', "verbose"),
