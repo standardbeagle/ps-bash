@@ -186,7 +186,7 @@ public class SameFileIdentityTests : IDisposable, IClassFixture<SharedPwshFixtur
         Assert.False(File.Exists(P("r1")));
     }
 
-    [Fact]
+    [SkippableFact]
     public void Mv_CaseOnlyRename_IsNotMistakenForTheSameFile()
     {
         Skip.IfNot(OperatingSystem.IsWindows() || OperatingSystem.IsMacOS(), "case-insensitive filesystems only");

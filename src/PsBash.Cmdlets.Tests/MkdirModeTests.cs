@@ -46,9 +46,9 @@ public class MkdirModeTests : IDisposable, IClassFixture<SharedPwshFixture>
     [InlineData("-m 700", "d", 0x1C0)]                 // 0700
     [InlineData("-m 0755", "d", 0x1ED)]                // 0755
     [InlineData("--mode=750", "d", 0x1E8)]             // 0750
-    [InlineData("-m u=rwx,go=rx", "d", 0x1ED)]         // 0755
+    [InlineData("-m 'u=rwx,go=rx'", "d", 0x1ED)]         // 0755
     [InlineData("-m a=rx", "d", 0x16D)]                // 0555
-    [InlineData("-m u+w,g-r", "d", 0x1DF)]             // 0737 from base 0777
+    [InlineData("-m 'u+w,g-r'", "d", 0x1DF)]             // 0737 from base 0777
     [InlineData("-m 0", "d", 0)]
     public void Unix_AppliesTheRequestedMode(string flags, string name, int expected)
     {

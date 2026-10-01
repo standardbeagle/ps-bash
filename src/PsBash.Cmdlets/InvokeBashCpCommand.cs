@@ -452,9 +452,10 @@ public sealed class InvokeBashCpCommand : PSCmdlet
 
             if (!preserve.Timestamps)
             {
-                // Windows CopyFile carries the source's modification time over; GNU stamps the
-                // copy with "now" unless timestamps are preserved. (Linux/macOS already do.)
-                if (OperatingSystem.IsWindows() && !isDir)
+                // File.Copy carries the source's modification time over on EVERY OS (Windows
+                // CopyFile and .NET's Unix copy both do); GNU stamps the copy with "now" unless
+                // timestamps are preserved.
+                if (!isDir)
                 {
                     var now = DateTime.UtcNow;
                     File.SetLastWriteTimeUtc(dest, now);

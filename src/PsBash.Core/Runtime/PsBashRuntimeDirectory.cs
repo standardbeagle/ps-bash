@@ -43,8 +43,10 @@ public static class PsBashRuntimeDirectory
         if (OperatingSystem.IsWindows())
             return Path.Combine(TempPath(), "ps-bash");
 
+        // The test seam also suppresses $XDG_RUNTIME_DIR: otherwise a Linux box with XDG set
+        // ignores the synthetic root, and tests that chmod "their" directory hit the REAL one.
         return ResolvePath(
-            Environment.GetEnvironmentVariable("XDG_RUNTIME_DIR"),
+            TempPathOverride is null ? Environment.GetEnvironmentVariable("XDG_RUNTIME_DIR") : null,
             TempPath(),
             PosixIdentity.CurrentUid(),
             isPosix: true);
