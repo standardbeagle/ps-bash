@@ -51,8 +51,20 @@ internal sealed class GetlineExpr : AwkExpr
 
 internal abstract class AwkStmt { }
 
-internal sealed class PrintStmt : AwkStmt { public List<AwkExpr> Args = new(); }
-internal sealed class PrintfStmt : AwkStmt { public List<AwkExpr> Args = new(); }
+/// <summary>Where a <c>print</c> / <c>printf</c> writes: stdout, <c>&gt; file</c>, <c>&gt;&gt; file</c> or <c>| "cmd"</c>.</summary>
+internal enum RedirKind { None, File, Append, Pipe }
+
+/// <summary>Shared shape of print/printf: the argument list plus an optional output redirection.</summary>
+internal abstract class OutputStmt : AwkStmt
+{
+    public List<AwkExpr> Args = new();
+    public RedirKind Redir;
+    /// <summary>The file name / command line expression (a concatenation-level expression); null when <see cref="Redir"/> is None.</summary>
+    public AwkExpr? Target;
+}
+
+internal sealed class PrintStmt : OutputStmt { }
+internal sealed class PrintfStmt : OutputStmt { }
 internal sealed class ExprStmt : AwkStmt { public AwkExpr Expr = null!; }
 internal sealed class IfStmt : AwkStmt { public AwkExpr Cond = null!; public AwkStmt Then = null!; public AwkStmt? Else; }
 internal sealed class WhileStmt : AwkStmt { public AwkExpr Cond = null!; public AwkStmt Body = null!; }

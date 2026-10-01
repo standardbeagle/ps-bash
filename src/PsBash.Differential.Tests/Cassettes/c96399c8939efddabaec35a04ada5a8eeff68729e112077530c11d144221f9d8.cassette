@@ -1,0 +1,17 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 102
+stdout-length: 10
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" && printf 'c\nb\na\n' | awk 'BEGIN{ print "h" } { print | "sort" } END{ print "f" }'
+==== STDOUT ====
+h
+a
+b
+c
+f
+
+==== STDERR ====
+

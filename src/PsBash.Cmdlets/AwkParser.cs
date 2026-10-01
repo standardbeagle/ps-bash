@@ -252,48 +252,94 @@ internal sealed class AwkParser
     private AwkStmt ParsePrint()
     {
         Advance();
-        var args = ParsePrintArgs();
-        return new PrintStmt { Args = args };
+        var stmt = new PrintStmt();
+        ParseOutputRest(stmt);
+        return stmt;
     }
 
     private AwkStmt ParsePrintf()
     {
         Advance();
-        var args = ParsePrintArgs();
-        return new PrintfStmt { Args = args };
+        var stmt = new PrintfStmt();
+        ParseOutputRest(stmt);
+        return stmt;
     }
 
     /// <summary>
-    /// Parse a print/printf argument list under the no-greater-than rule, then
-    /// swallow (and discard) any output redirection target. Output redirection
-    /// to files/pipes is a documented gap — untested, routed to stdout.
+    /// Parse a print/printf argument list under the no-greater-than rule (a top-level <c>&gt;</c> is a
+    /// redirection, not a comparison) and then the optional redirection: <c>&gt; target</c>,
+    /// <c>&gt;&gt; target</c> or <c>| target</c>. As in gawk the target is a concatenation-level
+    /// expression (<c>print &gt; "out" n</c> writes to the file named <c>"out" n</c>; a comparison or
+    /// <c>?:</c> after it is a syntax error — parenthesize it).
     /// </summary>
-    private List<AwkExpr> ParsePrintArgs()
+    private void ParseOutputRest(OutputStmt stmt)
     {
-        var args = new List<AwkExpr>();
         if (IsStatementEnd() || Is(TokKind.Gt) || Is(TokKind.Append) || Is(TokKind.Pipe))
         {
             // bare `print` — no args; fall through to redirection handling
         }
-        else
+        else if (!TryParseParenthesizedArgList(stmt.Args))
         {
             bool prev = _noGt;
             _noGt = true;
             try
             {
-                args.Add(ParseExpr());
-                while (Is(TokKind.Comma)) { Advance(); SkipNewlines(); args.Add(ParseExpr()); }
+                stmt.Args.Add(ParseExpr());
+                while (Is(TokKind.Comma)) { Advance(); SkipNewlines(); stmt.Args.Add(ParseExpr()); }
             }
             finally { _noGt = prev; }
         }
 
-        // discard redirection target (unsupported)
         if (Is(TokKind.Gt) || Is(TokKind.Append) || Is(TokKind.Pipe))
         {
+            stmt.Redir = Cur.Kind switch
+            {
+                TokKind.Gt => RedirKind.File,
+                TokKind.Append => RedirKind.Append,
+                _ => RedirKind.Pipe,
+            };
             Advance();
-            ParseExpr();
+            bool prev = _noGt;
+            _noGt = true;
+            try { stmt.Target = ParseConcat(); }
+            finally { _noGt = prev; }
         }
-        return args;
+    }
+
+    /// <summary>
+    /// <c>print (a, b) &gt; "f"</c> / <c>printf("%s\n", x)</c>: a parenthesized list that is the WHOLE
+    /// argument list (followed by a terminator or a redirection). Anything else — <c>print (a)(b)</c>,
+    /// <c>print (1 &gt; 2) ? x : y</c> — is rewound and parsed as an ordinary expression.
+    /// </summary>
+    private bool TryParseParenthesizedArgList(List<AwkExpr> args)
+    {
+        if (!Is(TokKind.LParen)) return false;
+        int save = _pos;
+        bool prevGt = _noGt;
+        int prevDepth = _depth;
+        _noGt = false;
+        try
+        {
+            Advance(); // (
+            var list = new List<AwkExpr>();
+            SkipNewlines();
+            list.Add(ParseExpr());
+            while (Is(TokKind.Comma)) { Advance(); SkipNewlines(); list.Add(ParseExpr()); }
+            SkipNewlines();
+            if (Is(TokKind.RParen))
+            {
+                Advance();
+                if (IsStatementEnd() || Is(TokKind.Gt) || Is(TokKind.Append) || Is(TokKind.Pipe))
+                {
+                    args.AddRange(list);
+                    return true;
+                }
+            }
+        }
+        catch (AwkInterpreter.AwkSyntaxException) { /* not a plain list: reparse as an expression */ }
+        finally { _noGt = prevGt; _depth = prevDepth; }
+        _pos = save;
+        return false;
     }
 
     private bool IsStatementEnd() =>
