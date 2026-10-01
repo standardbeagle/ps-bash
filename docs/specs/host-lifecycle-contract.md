@@ -88,6 +88,41 @@ the server drained. Before this, every daemon that had run a background job
 lingered indefinitely. Regression-pinned by
 `ProcessLifecycleTests.IdleDaemon_AfterBackgroundJob_ExitsInsteadOfLingering`.
 
+## Nested invocations never reuse the parent's host
+
+A command executing inside a `Daemon` host may itself start a ps-bash: `bash -c '…'` in a
+script, awk `"cmd" | getline`, `xargs bash -c`, a `.sh` that calls `ps-bash`. That child must
+**not** connect to the host running its parent. The host holds the process-wide exec gate
+(`SdkWorker._globalExecGate`) for the parent's whole command, so the child's request queues
+behind the very command that waits for it:
+
+- same build: the child is accepted and acquires a runspace, then blocks on the gate —
+  deadlock until the parent's `RunChildProcess` timeout (120 s) or the idle timeout;
+- different build (e.g. an installed release first on `PATH` while a dev host serves the
+  parent): the child classifies the host Obsolete, asks it to shut down and replaces it, and
+  the parent sees `host connection reset after the command started executing` (exit 125).
+
+This hit every nested launch whose endpoint matched the parent's — an explicit
+`PSBASH_IPC_ENDPOINT` (differential harness, tests) and also the default per-session endpoint
+when the child resolves the same session anchor.
+
+**Mechanism.** For the duration of every launcher-framed command the host sets
+`PSBASH_INSIDE_HOST=<host pid>` in its process environment (`SdkWorker.RunCommand`, after the
+R06 environment reset, cleared in the `finally`; never set for in-process/legacy callers whose
+environment block is null). Child processes inherit it. `IpcWorker.StartAsync` checks
+`IpcTransportFactory.IsInsideHostCommand()` and downgrades a `Lifetime.Daemon` request to
+`Lifetime.PerInvocation`: the nested launcher spawns a private host on a process-local endpoint
+(ignoring any `PSBASH_IPC_ENDPOINT`) and kills it on dispose. The private host sets the marker
+for its own commands, so any depth of nesting stays process-separated. Top-level launchers
+(marker absent) keep daemon reuse. Cost: a nested launch pays a host cold start. No caller
+needs its own workaround (awk's `PSBASH_PER_INVOCATION` override was removed). The nested
+launcher is also resolved to the `ps-bash` beside the host process
+(`InvokeBashBashCommand.ResolvePsBashExecutable` tier 0), i.e. the SAME build as the host, so an
+older PATH-installed ps-bash — which predates this marker and would connect to the explicit
+endpoint and retire the host as obsolete — is never picked.
+Regression-pinned by `NestedInvocationTests` (explicit and default endpoint, 1–2 levels,
+awk getline) and `SdkWorkerEnvironmentTests.LauncherFramedCommand_SeesInsideHostMarker_ClearedAfterwards`.
+
 ## Runtime Directory
 
 All per-user runtime artifacts — extracted module, IPC sockets, `.host.json`

@@ -232,8 +232,22 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
         // is running while we swap the environment. A null block means the caller
         // does not manage the environment (in-process interactive/legacy paths) —
         // leave it untouched for back-compat.
+        // Mark the process environment as "a command is running inside a host" so a
+        // ps-bash this command spawns (nested `bash -c`, awk `"cmd" | getline`, xargs
+        // ...) can tell it must NOT connect to this host: we hold _globalExecGate for
+        // the command, so a child queued behind it would deadlock on its own parent.
+        // IpcWorker.StartAsync turns a Daemon request into a private host when it sees
+        // the marker. Set AFTER the reset (the launcher block never carries it) and
+        // cleared in the finally below; only for framed launcher requests (a non-null
+        // block), so in-process IWorker use never leaks it into a host process.
+        bool markedInsideHost = environment is not null;
         if (environment is not null)
+        {
             ResetEnvironment(environment);
+            Environment.SetEnvironmentVariable(
+                PsBash.Core.Runtime.Ipc.IpcTransportFactory.InsideHostEnvVar,
+                Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        }
 
         _host.Reset();
         _ps.Commands.Clear();
@@ -683,6 +697,10 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
             // output sink.
             _host.HostUI.SetWriteLineForwarder(null);
             _host.HostUI.SetWriteErrorLineForwarder(null);
+
+            if (markedInsideHost)
+                Environment.SetEnvironmentVariable(
+                    PsBash.Core.Runtime.Ipc.IpcTransportFactory.InsideHostEnvVar, null);
         }
     }
 

@@ -158,6 +158,13 @@ public sealed class IpcWorker : IWorker
     {
         ArgumentNullException.ThrowIfNull(hostBinaryPath);
 
+        // Nested invocation: we run inside a command a host is executing. That host holds its
+        // process-wide exec gate for our parent, so connecting to it (explicit
+        // PSBASH_IPC_ENDPOINT or the per-session default) deadlocks behind the parent — or
+        // retires it if our build differs. A private host is the only safe choice.
+        if (lifetime == Lifetime.Daemon && IpcTransportFactory.IsInsideHostCommand())
+            lifetime = Lifetime.PerInvocation;
+
         var (scheme, endpoint) = lifetime == Lifetime.PerInvocation
             ? IpcTransportFactory.ResolvePerInvocationEndpoint()
             : IpcTransportFactory.ResolveEndpoint();

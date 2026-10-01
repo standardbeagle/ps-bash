@@ -223,6 +223,27 @@ public sealed class InvokeBashBashCommand : PSCmdlet
 
     internal static string? ResolvePsBashExecutable(PSCmdlet cmdlet)
     {
+        // Tier 0: a `ps-bash` beside the process we run in. Inside ps-bash-host that is the
+        // launcher of the SAME build, so a nested child never lands on a different
+        // (e.g. PATH-installed older) build — which would otherwise misjudge this host's
+        // build identity and could retire the host that is executing us.
+        try
+        {
+            var self = Environment.ProcessPath;
+            var selfDir = string.IsNullOrEmpty(self) ? null : System.IO.Path.GetDirectoryName(self);
+            if (!string.IsNullOrEmpty(selfDir)
+                && System.IO.Path.GetFileNameWithoutExtension(self)!.StartsWith("ps-bash", StringComparison.OrdinalIgnoreCase))
+            {
+                var sib = System.IO.Path.Combine(selfDir, OperatingSystem.IsWindows() ? "ps-bash.exe" : "ps-bash");
+                if (System.IO.File.Exists(sib))
+                    return sib;
+            }
+        }
+        catch
+        {
+            // fall through
+        }
+
         // Tier 1: $global:__parentPid → parent process MainModule.FileName.
         // This is the exact binary the user spawned; preferred so a dev
         // build's nested `bash -c` re-enters the same dev build, not a
