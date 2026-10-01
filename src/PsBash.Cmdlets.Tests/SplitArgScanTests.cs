@@ -79,12 +79,27 @@ public class SplitArgScanTests
     [InlineData("ERR split: option '-C' is recognized but not supported by ps-bash", "-C", "6")]
     [InlineData("ERR split: option '-t' is recognized but not supported by ps-bash", "-t", ":")]
     [InlineData("ERR split: option '-e' is recognized but not supported by ps-bash", "-e")]
-    [InlineData("ERR split: option '-x' is recognized but not supported by ps-bash", "-x")]
-    [InlineData("ERR split: option '--hex-suffixes' is recognized but not supported by ps-bash", "--hex-suffixes")]
+    [InlineData("l=1000 b=- a=2 d=True/0 add= ops=[]", "-x")]
+    [InlineData("l=1000 b=- a=2 d=True/0 add= ops=[]", "--hex-suffixes")]
+    [InlineData("l=1000 b=- a=2 d=True/0 add= ops=[]", "--hex")]
+    [InlineData("l=1000 b=- a=2 d=True/255 add= ops=[]", "--hex-suffixes=ff")]
+    [InlineData("ERR split: '1F': invalid start value for hexadecimal suffix\nTry 'split --help' for more information.", "--hex-suffixes=1F")]
+    [InlineData("ERR split: 'zz': invalid start value for hexadecimal suffix\nTry 'split --help' for more information.", "--hex-suffixes=zz")]
+    [InlineData("ERR split: numerical suffix start value is too large for the suffix length\nTry 'split --help' for more information.", "--hex-suffixes=100")]
     [InlineData("ERR split: option '-u' is recognized but not supported by ps-bash", "-u")]
     [InlineData("ERR split: option '--filter' is recognized but not supported by ps-bash", "--filter=cat")]
     [InlineData("ERR split: option '--verbose' is recognized but not supported by ps-bash", "--verbose")]
     public void Resolves(string expected, params string[] argv) => Assert.Equal(expected, Scan(argv));
+
+    [Theory]
+    [InlineData(true, "-x")]
+    [InlineData(true, "--hex-suffixes")]
+    [InlineData(false, "-d", "-x")]      // oracle: the short -d wins over -x in either order
+    [InlineData(false, "-x", "-d")]
+    [InlineData(true, "-x", "--numeric-suffixes")]   // the long spelling does not
+    [InlineData(false, "-d")]
+    public void HexFlag_FollowsGnuPrecedence(bool hex, params string[] argv) =>
+        Assert.Equal(hex, InvokeBashSplitCommand.Plan(argv).Hex);
 
     [Fact]
     public void UsageErrors_Exit1_UnsupportedExit2()

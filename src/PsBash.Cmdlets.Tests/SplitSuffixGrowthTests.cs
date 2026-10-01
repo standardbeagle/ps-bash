@@ -46,6 +46,49 @@ public class SplitSuffixGrowthTests : IDisposable, IClassFixture<SharedPwshFixtu
     // The n-th (1-based) piece in creation order is the n-th name when sorted, because every name
     // sorts after the previous ones in GNU's scheme (z / 9 markers keep the order).
     [Fact]
+    public void HexSuffixes_AutoExtend_AsGnu()
+    {
+        // oracle: `split -x -l1` on 300 lines names x00..xef (240), then xf000..
+        var (exit, _, names) = Split("'-x' '-l' 1", 300);
+        Assert.Equal(0, exit);
+        Assert.Equal(300, names.Length);
+        Assert.Equal("x00", names[0]);
+        Assert.Equal("x0a", names[10]);
+        Assert.Equal("xef", names[239]);
+        Assert.Equal("xf000", names[240]);
+        Assert.Equal("xf03b", names[299]);
+    }
+
+    [Fact]
+    public void HexSuffixes_FixedLength_ExhaustsAfter16()
+    {
+        var (exit, err, names) = Split("'--hex-suffixes' '-a' 1 '-l' 1", 20);
+        Assert.Equal(1, exit);
+        Assert.Contains("output file suffixes exhausted", err);
+        Assert.Equal(16, names.Length);
+        Assert.Equal("xf", names[^1]);
+    }
+
+    [Fact]
+    public void HexSuffixes_From_StartsThere()
+    {
+        // oracle: --hex-suffixes=10 -l1 -> x10 .. xff (240 names), then exhausted (FROM fixes the length)
+        var (exit, err, names) = Split("'--hex-suffixes=10' '-l' 1", 300);
+        Assert.Equal(1, exit);
+        Assert.Contains("output file suffixes exhausted", err);
+        Assert.Equal(240, names.Length);
+        Assert.Equal("x10", names[0]);
+        Assert.Equal("xff", names[^1]);
+    }
+
+    [Fact]
+    public void ShortD_BeatsX_AsGnu()
+    {
+        var (_, _, names) = Split("'-x' '-d' '-l' 1", 120);
+        Assert.Equal("x9009", names[99]);   // decimal auto-extension (x00..x89, x9000..), not hex ("x63")
+    }
+
+    [Fact]
     public void Default_AutoExtendsAlphabetic_PastXyz()
     {
         var (exit, _, names) = Split("'-l' 1", 700);
