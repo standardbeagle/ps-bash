@@ -3719,7 +3719,7 @@ public static class PsEmitter
     {
         var body = (Command)cs.Body;
         string inner = EmitCaptured(body);
-        return $"$({PipelineHead(body, inner)} | ForEach-Object {{ Get-BashText $_ }})";
+        return $"$({PipelineHead(body, inner)} | ConvertTo-BashCapture)";
     }
 
     /// <summary>
@@ -3747,7 +3747,7 @@ public static class PsEmitter
         // the backtick escape and the inner string ends early ("The string is
         // missing the terminator"). Hit git-completion.bash, where a command sub
         // nested two double-quote levels deep broke the whole file's parse.
-        return $"$((@({PipelineHead(body, inner)} | ForEach-Object {{ Get-BashText $_ }}) -join [string][char]10) -replace '(\\r?\\n)+$','')";
+        return $"$((@({PipelineHead(body, inner)} | ConvertTo-BashCapture) -join [string][char]10) -replace '(\\r?\\n)+$','')";
     }
 
     private static string EmitProcessSub(WordPart.ProcessSub ps)
@@ -3889,7 +3889,7 @@ public static class PsEmitter
         // evaluates as the empty operand of a unary `+` — i.e. zero.
         if (body is null) return "'0'";
         string inner = EmitCaptured(body);
-        return $"$((@({PipelineHead(body, inner)} | ForEach-Object {{ Get-BashText $_ }}) -join [string][char]10).Trim())";
+        return $"$((@({PipelineHead(body, inner)} | ConvertTo-BashCapture) -join [string][char]10).Trim())";
     }
 
     /// <summary>

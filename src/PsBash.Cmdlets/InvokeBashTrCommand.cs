@@ -198,17 +198,15 @@ public sealed class InvokeBashTrCommand : PSCmdlet
         try
         {
             BuildTablesCore();
-            _touchesNewline = TrStage.NewlineIsModified(
-                _deleteMode, _complementMode, _squeezeMode, _operands.Count,
-                _membershipSet, _translateMap, _translateDrop, _squeezeSet2);
         }
         catch (TrSetException ex) { _rangeErrorMsg = ex.Message; _suppress = true; }
     }
 
-    // True when the tables touch '\n': the whole byte stream (record terminators included) is
-    // buffered and transformed once at the end. See ProcessRecord.
-    private bool _touchesNewline;
-    private readonly StringBuilder _stream = new();
+    // Squeeze state carried ACROSS records: a run of the same squeezed character continues over a
+    // record boundary when the terminator is itself squeezed (`tr -s '\n'`), and that is the only
+    // cross-record state tr has — delete and translate are per-character.
+    private char _sqPrevChar = '\0';
+    private bool _sqPrevInSet;
 
     /// <summary>One expanded SET operand (escapes, classes, ranges); see <see cref="BashEscapes.ExpandTrSet"/>.</summary>
     private static string ExpandClass(string spec) => BashEscapes.ExpandTrSet(spec, out _);
@@ -296,15 +294,10 @@ public sealed class InvokeBashTrCommand : PSCmdlet
         bool exact = InputObject.Properties["NoTrailingNewline"]?.Value is true;
         string chunk = exact ? text : text + "\n";
 
-        if (_touchesNewline)
-        {
-            // The answer for a newline-touching table is only right on the whole stream (a squeeze
-            // or delete runs across record boundaries), and one exact-bytes record is also the only
-            // shape a `$(...)` capture joins correctly. Buffer it; EndProcessing transforms + emits.
-            _stream.Append(chunk);
-            return;
-        }
-
+        // STREAMING, whatever the table: each record is transformed and written as it arrives
+        // (`tail -f log | tr '\n' ' '` emits per line; `yes | tr '\n' x | head -c 5` terminates).
+        // A table that eats the terminator yields exact-bytes records, whose concatenation is the
+        // exact output; `$(...)` capture glues them (ConvertTo-BashCapture).
         EmitStream(TransformLine(chunk));
     }
 
@@ -353,13 +346,8 @@ public sealed class InvokeBashTrCommand : PSCmdlet
             return;
         }
 
-        // Pipeline records were streamed in ProcessRecord (empty input produces no output, matching
-        // the oracle's count==0 guard) — except a newline-touching table, whose buffered byte stream
-        // is transformed and written once, as exact bytes.
-        if (_touchesNewline && !_suppress && _stream.Length > 0)
-        {
-            EmitStream(TransformLine(_stream.ToString()));
-        }
+        // Every record was streamed in ProcessRecord (empty input produces no output, matching the
+        // oracle's count==0 guard); nothing is held back.
     }
 
     /// <summary>
@@ -388,16 +376,14 @@ public sealed class InvokeBashTrCommand : PSCmdlet
         {
             if (_membershipSet == null) return text;
             var sb = new StringBuilder(text.Length);
-            char prevChar = '\0';
-            bool prevInSet = false;
             foreach (char ch in text)
             {
                 bool inSet = _membershipSet.Contains(ch);
                 if (_complementMode) inSet = !inSet;
-                if (inSet && prevInSet && ch == prevChar) continue;
+                if (inSet && _sqPrevInSet && ch == _sqPrevChar) continue;
                 sb.Append(ch);
-                prevChar = ch;
-                prevInSet = inSet;
+                _sqPrevChar = ch;
+                _sqPrevInSet = inSet;
             }
             return sb.ToString();
         }
@@ -417,15 +403,13 @@ public sealed class InvokeBashTrCommand : PSCmdlet
             if (_squeezeMode && _squeezeSet2 != null)
             {
                 var sb2 = new StringBuilder(result.Length);
-                char prevCh = '\0';
-                bool prevInSet2 = false;
                 foreach (char ch in result)
                 {
                     bool inSet2 = _squeezeSet2.Contains(ch);
-                    if (inSet2 && prevInSet2 && ch == prevCh) continue;
+                    if (inSet2 && _sqPrevInSet && ch == _sqPrevChar) continue;
                     sb2.Append(ch);
-                    prevCh = ch;
-                    prevInSet2 = inSet2;
+                    _sqPrevChar = ch;
+                    _sqPrevInSet = inSet2;
                 }
                 return sb2.ToString();
             }

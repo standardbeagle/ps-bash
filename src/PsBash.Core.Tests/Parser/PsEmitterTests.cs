@@ -190,7 +190,7 @@ public class PsEmitterTests
         var result = PsEmitter.Transpile("echo $(( $(echo 5) + 60 ))");
         Assert.Equal(
             "Invoke-BashEcho $(Invoke-BashArith ('' + "
-            + "$((@(Invoke-BashEcho 5 | ForEach-Object { Get-BashText $_ }) -join [string][char]10).Trim())"
+            + "$((@(Invoke-BashEcho 5 | ConvertTo-BashCapture) -join [string][char]10).Trim())"
             + " + ' + 60'))",
             result);
         // The evaluator must never receive the un-expanded substitution text.
@@ -201,7 +201,7 @@ public class PsEmitterTests
     public void Transpile_ArithBacktickCommandSubOperand_RunsCommandBeforeEvaluating()
     {
         var result = PsEmitter.Transpile("echo $(( `echo 7` - 1 ))");
-        Assert.Contains("Invoke-BashEcho 7 | ForEach-Object { Get-BashText $_ }", result);
+        Assert.Contains("Invoke-BashEcho 7 | ConvertTo-BashCapture", result);
         Assert.Contains("+ ' - 1'", result);
     }
 
@@ -1838,7 +1838,7 @@ public class PsEmitterTests
         // RC-8d: command-substitution emit wraps inner output in
         // `| ForEach-Object { Get-BashText $_ }` so the captured value is the
         // bash-text payload, never a typed BashObject's default ToString().
-        Assert.Equal("Invoke-BashEcho $(Invoke-BashWhoami | ForEach-Object { Get-BashText $_ })", result);
+        Assert.Equal("Invoke-BashEcho $(Invoke-BashWhoami | ConvertTo-BashCapture)", result);
     }
 
     [Fact]
@@ -1846,7 +1846,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("echo $(ls | grep foo)");
 
-        Assert.Equal("Invoke-BashEcho $(Invoke-BashLs | Invoke-BashGrep foo | ForEach-Object { Get-BashText $_ })", result);
+        Assert.Equal("Invoke-BashEcho $(Invoke-BashLs | Invoke-BashGrep foo | ConvertTo-BashCapture)", result);
     }
 
     [Fact]
@@ -1854,7 +1854,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("echo `date`");
 
-        Assert.Equal("Invoke-BashEcho $(Invoke-BashDate | ForEach-Object { Get-BashText $_ })", result);
+        Assert.Equal("Invoke-BashEcho $(Invoke-BashDate | ConvertTo-BashCapture)", result);
     }
 
     [Fact]
@@ -1866,7 +1866,7 @@ public class PsEmitterTests
         // (bash), instead of the array $OFS-joining with a space (which flattened the
         // file to one line). The newline join is [char]10, not a "`n" literal, so the
         // fragment survives nesting inside another double-quoted string.
-        Assert.Equal("$env:VAR = \"$((@(Invoke-BashCat file | ForEach-Object { Get-BashText $_ }) -join [string][char]10) -replace '(\\r?\\n)+$','')\"", result);
+        Assert.Equal("$env:VAR = \"$((@(Invoke-BashCat file | ConvertTo-BashCapture) -join [string][char]10) -replace '(\\r?\\n)+$','')\"", result);
     }
 
     [Fact]
@@ -1874,7 +1874,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("echo $(echo $(whoami))");
 
-        Assert.Equal("Invoke-BashEcho $(Invoke-BashEcho $(Invoke-BashWhoami | ForEach-Object { Get-BashText $_ }) | ForEach-Object { Get-BashText $_ })", result);
+        Assert.Equal("Invoke-BashEcho $(Invoke-BashEcho $(Invoke-BashWhoami | ConvertTo-BashCapture) | ConvertTo-BashCapture)", result);
     }
 
     /// <summary>
@@ -1889,7 +1889,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("dir=$(pwd)");
 
-        Assert.Equal("$env:dir = \"$((@(Invoke-BashPwd | ForEach-Object { Get-BashText $_ }) -join [string][char]10) -replace '(\\r?\\n)+$','')\"", result);
+        Assert.Equal("$env:dir = \"$((@(Invoke-BashPwd | ConvertTo-BashCapture) -join [string][char]10) -replace '(\\r?\\n)+$','')\"", result);
     }
 
     [Fact]
@@ -3936,7 +3936,7 @@ public class PsEmitterTests
         // string is missing the terminator") — which is exactly what broke
         // git-completion.bash at two levels of nesting.
         Assert.Equal(
-            "Invoke-BashEcho \"$((@(Invoke-BashEcho 'hi there' | ForEach-Object { Get-BashText $_ }) -join [string][char]10) -replace '(\\r?\\n)+$','')\"",
+            "Invoke-BashEcho \"$((@(Invoke-BashEcho 'hi there' | ConvertTo-BashCapture) -join [string][char]10) -replace '(\\r?\\n)+$','')\"",
             result);
     }
 
@@ -5666,7 +5666,7 @@ public class PsEmitterTests
         var result = PsEmitter.Transpile("echo $(LC_TIME=C date)");
 
         Assert.Contains("$(& { $__saved_LC_TIME", result);
-        Assert.Contains("} | ForEach-Object { Get-BashText $_ })", result);
+        Assert.Contains("} | ConvertTo-BashCapture)", result);
     }
 
     [Fact]

@@ -227,6 +227,10 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
     private int? _byteCount;
     private int _emitted;
     private bool _streamingLineMode;
+    // `head -c N` (N >= 0) on a pipe streams too: it keeps only the bytes still owed, so an endless
+    // upstream (`yes | head -c 5`) is cut off after the Nth byte instead of being buffered forever.
+    private bool _streamingByteMode;
+    private long _bytesRemaining;
     private bool _suppress; // --help or arg-only path; do not stream
 
     private void ParseFlagsOnce()
@@ -244,6 +248,8 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
         //     last K", which is undecidable while streaming (you can't know which are
         //     the last K until input ends) — buffer and resolve in EndProcessing.
         _streamingLineMode = !h.Declined && h.Operands.Count == 0 && _byteCount == null && _lineCount >= 0;
+        _streamingByteMode = !h.Declined && h.Operands.Count == 0 && _byteCount is >= 0;
+        _bytesRemaining = _byteCount ?? 0;
         if (h.Declined || h.Operands.Count > 0) _suppress = true;
     }
 
@@ -287,7 +293,25 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
             return;
         }
 
-        // Non-streaming paths (byte mode pipeline, file mode) still need
+        if (_streamingByteMode)
+        {
+            if (_bytesRemaining <= 0)
+            {
+                StopUpstream();
+                return;
+            }
+            // This record's share of the byte stream (BashText + terminator unless exact), cut at
+            // the bytes still owed; the slice is a TRANSFORMER output: fresh text, exact bytes.
+            byte[] recBytes = Encoding.UTF8.GetBytes(BashRuntime.RecordStreamText(new object[] { InputObject }));
+            int take = (int)Math.Min(_bytesRemaining, recBytes.Length);
+            foreach (var rec in BashRuntime.ByteSliceRecords(Encoding.UTF8.GetString(recBytes, 0, take)))
+                WriteObject(rec);
+            _bytesRemaining -= take;
+            if (_bytesRemaining <= 0) StopUpstream();
+            return;
+        }
+
+        // Non-streaming paths (negative byte count, file mode) still need
         // the full input buffered; EndProcessing handles them.
         if (!_suppress)
         {
@@ -335,7 +359,7 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
     protected override void EndProcessing()
     {
         // If ProcessRecord streamed the line-mode pipeline already, we're done.
-        if (_flagsParsed && _streamingLineMode)
+        if (_flagsParsed && (_streamingLineMode || _streamingByteMode))
         {
             return;
         }
