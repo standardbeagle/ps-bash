@@ -98,9 +98,9 @@ public static class LineStreamRegistry
 /// generator the cmdlet uses). Ignores pipeline input.</summary>
 internal sealed class SeqStage : ILineStreamStage
 {
-    private readonly List<string> _values;
+    private readonly IEnumerable<string> _values; // lazy: nothing is formatted until pulled
     private readonly string? _separator;
-    private SeqStage(List<string> values, string? separator) { _values = values; _separator = separator; }
+    private SeqStage(IEnumerable<string> values, string? separator) { _values = values; _separator = separator; }
     public int ExitCode => 0;
 
     internal static ILineStreamStage? TryCreate(string[] argv)

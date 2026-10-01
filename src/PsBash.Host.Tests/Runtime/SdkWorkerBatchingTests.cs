@@ -91,6 +91,26 @@ public class SdkWorkerBatchingTests : IAsyncLifetime
         Assert.Equal(unbatched.Stdout, batched.Stdout);
     }
 
+    [Fact]
+    public async Task OutputCollection_DoesNotRetainProcessedItems()
+    {
+        // Memory bound: the invocation's output collection is drained BY REMOVAL, so it never
+        // holds the whole stream. Before, every object stayed referenced until Invoke returned
+        // (peak == total). Deterministic count assertion, not a memory number.
+        const int total = 200_000;
+        var worker = _fixture.CreateWorker();
+        long chars = 0;
+        var exit = await worker.ExecuteWithOutputAsync(
+            "1..200000 | ForEach-Object { \"line $_\" }",
+            s => chars += s.Length,
+            null);
+
+        Assert.Equal(0, exit);
+        Assert.True(chars > total, $"output was not delivered ({chars} chars)");
+        Assert.True(worker.PeakRetainedOutput < 1000,
+            $"output collection retained {worker.PeakRetainedOutput} of {total} items");
+    }
+
     // --------------------------------------------------------- stream interleave
 
     [Fact]

@@ -89,18 +89,21 @@ public sealed class InvokeBashSeqCommand : PSCmdlet
             return;
         }
 
-        for (int j = 0; j < values.Count; j++)
+        int j = 0;
+        foreach (var text in values)
         {
+            if (Stopping) return;
             var obj = new PSObject();
             obj.TypeNames.Insert(0, "PsBash.SeqOutput");
             object value = isInteger
                 ? (object)(long)Math.Round(
-                    double.Parse(values[j], CultureInfo.InvariantCulture))
-                : double.Parse(values[j], CultureInfo.InvariantCulture);
+                    double.Parse(text, CultureInfo.InvariantCulture))
+                : double.Parse(text, CultureInfo.InvariantCulture);
             obj.Properties.Add(new PSNoteProperty("Value", value));
             obj.Properties.Add(new PSNoteProperty("Index", j));
-            obj.Properties.Add(new PSNoteProperty("BashText", values[j]));
+            obj.Properties.Add(new PSNoteProperty("BashText", text));
             WriteObject(obj);
+            j++;
         }
     }
 }
@@ -126,10 +129,10 @@ internal static class SeqCore
     /// </summary>
     internal static Status Generate(
         string[] args, bool equalWidthFlag,
-        out List<string> values, out string? separator, out bool isInteger,
+        out IEnumerable<string> values, out string? separator, out bool isInteger,
         out string? badIncrement)
     {
-        values = new List<string>();
+        values = Array.Empty<string>();
         separator = null;
         isInteger = true;
         badIncrement = null;
@@ -221,9 +224,21 @@ internal static class SeqCore
             padWidth = ((long)maxVal).ToString(CultureInfo.InvariantCulture).Length;
         }
 
+        // Everything that can fail (operand parse, zero increment) has been decided above, so
+        // errors surface at the same moment as before; only the value loop is deferred.
+        values = Enumerate(first, increment, last, isInteger, equalWidth, padWidth, decPlaces);
+        return Status.Ok;
+    }
+
+    /// <summary>The value loop, lazily: <c>seq 1 100000000 | head -1</c> formats one value.</summary>
+    private static IEnumerable<string> Enumerate(
+        double first, double increment, double last,
+        bool isInteger, bool equalWidth, int padWidth, int decPlaces)
+    {
         bool ascending = increment > 0;
         int index = 0;
         double current = first;
+        string fmt = "F" + decPlaces.ToString(CultureInfo.InvariantCulture);
 
         while ((ascending && current <= (last + 1e-9))
                || (!ascending && current >= (last - 1e-9)))
@@ -239,17 +254,13 @@ internal static class SeqCore
             }
             else
             {
-                formatted = current.ToString(
-                    "F" + decPlaces.ToString(CultureInfo.InvariantCulture),
-                    CultureInfo.InvariantCulture);
+                formatted = current.ToString(fmt, CultureInfo.InvariantCulture);
             }
-            values.Add(formatted);
+            yield return formatted;
             index++;
             current = first + (increment * index);
             if (increment == 0) break;
         }
-
-        return Status.Ok;
     }
 
     private static double ParseDouble(string s) =>

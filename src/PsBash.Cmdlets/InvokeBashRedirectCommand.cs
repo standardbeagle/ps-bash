@@ -28,31 +28,42 @@ public sealed class InvokeBashRedirectCommand : PSCmdlet
     [Parameter(ValueFromPipeline = true)]
     public PSObject? InputObject { get; set; }
 
-    private readonly System.Text.StringBuilder _content = new();
+    private FileStream? _stream;
+
+    // STREAMING (memory bound): the target is opened up front and every record is written as it
+    // arrives through a 64 KB-buffered FileStream, so `big | cmd > f` holds O(buffer), not the
+    // whole output. Opening in BeginProcessing also gives bash's ordering: the redirect truncates
+    // the target BEFORE the command runs (`cat f > f` leaves f empty, as in bash) and creates it
+    // even when the command prints nothing. A target that cannot be opened (missing directory)
+    // fails here, so the upstream command never runs, as in bash.
+    protected override void BeginProcessing()
+    {
+        if (Path is null) return;
+        _stream = new FileStream(Path, Append ? FileMode.Append : FileMode.Create,
+            FileAccess.Write, FileShare.ReadWrite, bufferSize: 64 * 1024);
+    }
 
     protected override void ProcessRecord()
     {
-        if (InputObject is null) return;
+        if (InputObject is null || _stream is null) return;
         // Same per-record rule as tee: record boundary "\n" unless the record is marked
         // NoTrailingNewline (printf x / echo -n x), so `printf x > f` writes exactly "x".
-        _content.Append(BashRuntime.RecordFilePayload(InputObject));
-    }
-
-    protected override void EndProcessing()
-    {
-        if (Path is null) return;
-
+        var payload = BashRuntime.RecordFilePayload(InputObject);
+        if (payload.Length == 0) return;
         // The exact bytes: escaped-byte markers (invalid UTF-8, see RawBytes) are written back as the
         // single original byte, everything else as UTF-8 — `printf '\xe9' > f` is ONE byte.
-        var bytes = RawBytes.GetBytes(_content.ToString());
-        if (Append)
-        {
-            using var fs = new FileStream(Path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite);
-            fs.Write(bytes, 0, bytes.Length);
-        }
-        else
-        {
-            File.WriteAllBytes(Path, bytes);
-        }
+        var bytes = RawBytes.GetBytes(payload);
+        _stream.Write(bytes, 0, bytes.Length);
+    }
+
+    protected override void EndProcessing() => Close();
+
+    protected override void StopProcessing() => Close();
+
+    private void Close()
+    {
+        var s = _stream;
+        _stream = null;
+        try { s?.Dispose(); } catch { /* best-effort */ }
     }
 }

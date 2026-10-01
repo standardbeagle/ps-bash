@@ -222,6 +222,22 @@ The fused lane (`Invoke-BashFusedPipeline`) and `Invoke-ProcessSubPipeline` are 
 fused lane only ever carries strings (its allowlist has no typed producer), and the process-sub
 route hands the producer's objects to a consumer that follows the rules above.
 
+## Memory / streaming
+
+Retained memory is bounded by the working set, not the stream length, on these paths (each has a
+test that asserts streaming by ORDER or a retained-count seam, not a memory number):
+
+| Path | Bound | Test |
+|---|---|---|
+| Host output/error collection (`SdkWorker`) | drained by removal (`ReadAll`), so the collection holds only what arrived since the last drain; retained output = batcher (32 KB) + format buffer. `PeakRetainedOutput` is the seam | `SdkWorkerBatchingTests.OutputCollection_DoesNotRetainProcessedItems` |
+| `seq` (cmdlet and fused core) | lazy `IEnumerable`; operand parsing / zero-increment errors stay eager. `seq 1 100000000 \| head -n 1` returns at once. (`-s SEP` still yields ONE joined record by definition.) | `SeqStreamingTests` |
+| `> file` / `>> file` (`Invoke-BashRedirect`) | target opened in `BeginProcessing` (truncate/append, created even when empty, a missing directory fails before the command runs), each record written through a 64 KB-buffered stream. Matches bash ordering: `cat f > f` leaves `f` empty | `RedirectStreamingTests` |
+| `tail` on a pipe | `-n +N` / `-c +N` stream (skip, then pass through); `-n N` is a lazily-grown ring of N records; `-c N` is a ring of the last >= N bytes of record text (O(N + one record)). Filters still pass original objects | `TailStreamingTests` |
+| `awk` on stdin | BEGIN in `BeginProcessing`, each record fed to the machine in `ProcessRecord`, END in `EndProcessing`. No pull model is needed because awk has no `getline` (parse error) | `AwkStreamingTests` |
+
+Still O(input) by nature: `sort`, `tac`, `uniq -c` group state, `tail`'s rings (O(N)), and any
+consumer that must see every line before emitting.
+
 ## Command Reference
 
 The full per-command table — `Invoke-Bash*` function, key flags, arg-parsing
