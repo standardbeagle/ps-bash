@@ -96,6 +96,11 @@ public sealed class InvokeBashJoinCommand : PSCmdlet
     {
         public ParsedArgs Parsed = null!;
         public string Delimiter = " ";
+        /// <summary>
+        /// True once <c>-t</c> was given: fields are then split on EXACTLY that character. Without it GNU
+        /// separates fields by runs of blanks (space/tab) and ignores leading blanks.
+        /// </summary>
+        public bool DelimiterExplicit;
         public int Field1 = 1, Field2 = 1;
         public bool IgnoreCase;
         public HashSet<int> AFiles = new(), VFiles = new();
@@ -135,6 +140,7 @@ public sealed class InvokeBashJoinCommand : PSCmdlet
                     (tok.OptId == OptA ? j.AFiles : j.VFiles).Add(v[0] - '0');
                     break;
                 case OptDelim:
+                    j.DelimiterExplicit = true;
                     if (v == "\\0") j.Delimiter = "\0";
                     else if (v.Length > 1) { j.Error = $"join: multi-character tab '{v}'"; return j; }
                     else j.Delimiter = v;
@@ -244,6 +250,7 @@ public sealed class InvokeBashJoinCommand : PSCmdlet
         // String.Split takes a char[]; we use a single-char or multi-char
         // delimiter consistently via Split(string[], StringSplitOptions).
         var delimAsArray = new[] { delimiter };
+        _blankMode = !plan.DelimiterExplicit;
 
         // Output controls for -a / -v:
         //   emitPaired   — print matched rows (suppressed when -v is given alone)
@@ -263,7 +270,7 @@ public sealed class InvokeBashJoinCommand : PSCmdlet
         {
             foreach (var line in BashFileSystem.ReadLines(path2))
             {
-                var fields = line.Split(delimAsArray, StringSplitOptions.None);
+                var fields = SplitFields(line, delimAsArray);
                 if (keyIdx2 >= fields.Length) { continue; }
                 var key = fields[keyIdx2];
                 if (!file2Map.TryGetValue(key, out var bucket))
@@ -317,6 +324,16 @@ public sealed class InvokeBashJoinCommand : PSCmdlet
         }
     }
 
+    // Default (no -t): GNU splits a line on RUNS of blanks and ignores leading blanks, so "a  b" has two
+    // fields; a trailing blank leaves one empty last field ("d 4 " is d, 4, ""). With -t the split is exact.
+    private bool _blankMode;
+    private static readonly System.Text.RegularExpressions.Regex s_blankRun = new("[ \t]+");
+
+    private string[] SplitFields(string line, string[] delimAsArray) =>
+        _blankMode
+            ? s_blankRun.Split(line.TrimStart(' ', '\t'))
+            : line.Split(delimAsArray, StringSplitOptions.None);
+
     private void EmitJoinedRows(
         string line,
         string[] delimAsArray,
@@ -328,7 +345,7 @@ public sealed class InvokeBashJoinCommand : PSCmdlet
         bool emitUnpaired1,
         HashSet<string> matchedKeys2)
     {
-        var fields1 = line.Split(delimAsArray, StringSplitOptions.None);
+        var fields1 = SplitFields(line, delimAsArray);
         if (keyIdx1 >= fields1.Length) { return; }
         var key = fields1[keyIdx1];
 
