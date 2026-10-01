@@ -37,13 +37,8 @@ internal sealed class StdinLineSource
     {
         if (_piped.Count > 0) return _piped.Dequeue();
 
-        var shared = _cmdlet.SessionState.PSVariable.GetValue("global:__BashStdIn");
-        if (shared is not null
-            && PSObject.AsPSObject(shared).BaseObject is Queue<string> queue
-            && queue.Count > 0)
-        {
-            return queue.Dequeue();
-        }
+        if (SharedStdin.TryDequeueLine(_cmdlet.SessionState, out var shared))
+            return shared;
 
         // Only a real console can produce an answer; a redirected stdin that nothing fed is EOF.
         // PSBASH_NO_TTY forces EOF even on a console: a test host started from a terminal has console

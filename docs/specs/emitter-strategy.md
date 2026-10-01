@@ -332,18 +332,60 @@ rendered as PowerShell values (`$x`, `"a"`, `(…)`, `@(…)`, numbers) pass thr
 - A bare `IFS=, read -r a b c` (not a loop) is a normal simple command; the
   `IFS=` env pair wraps it, and the runtime cmdlet reads `$IFS` and applies
   `SplitByIfsForRead` for the multi-variable remainder rule.
-- A **brace group used as a pipe target** (`echo hi | { read y; …; }`) emits
-  `& { $global:__BashStdIn = [Queue[string]]::new(); foreach (… in $input) { … }; BODY }`
-  so the body runs ONCE with the piped lines available to `read` (bash's fd-0
-  semantics). `Invoke-BashRead` dequeues one line from `$global:__BashStdIn` when
-  it has no pipeline input. A per-line `ForEach-Object` envelope would run a
-  multi-command body once per line, which is not bash.
+- A **compound used as a pipe target** (`echo hi | { read y; …; }`) opens a *stdin scope*
+  — see "Compound-command stdin" below — so the body runs ONCE with the piped records
+  available to `read` AND to every other stdin-reading command (bash's fd-0 semantics).
+  `Invoke-BashRead` takes one LINE from `$global:__BashStdIn` when it has no pipeline input.
+  A per-line `ForEach-Object` envelope would run a multi-command body once per line,
+  which is not bash.
 - Flags `-r`, `-p PROMPT`, and `-a ARR` are recognized by the runtime; other
   flags are currently ignored.
 - Under an interactive PTY, `Invoke-BashRead` reads from
   `[Console]::In.ReadLine()` so it blocks on the PTY slave fd. `Read-Host` is
   not usable in the interactive PTY host runspace because
   `ExitTrackingHost.ReadLine()` throws `NotSupportedException`.
+
+### Compound-command stdin (shared cursor)
+
+A compound (`{ …; }`, `( … )`, `if`, `for`, `while`, `case`) has ONE stdin that every command
+inside shares, advancing one cursor: `printf 'b\na\n' | { sort; }`, `{ read x; sort; } < f`,
+`cat f | if true; then sort; fi`, `{ cat; } <<< hi`, `( cat ) <<EOF`. PowerShell's `& { … }`
+passes its pipeline to `$input` only, so the emitter builds the sharing itself
+(`PsBuild.StdinScope` / `PsBuild.StdinFeed`, `PsEmitter._inStdinScope`):
+
+- **Scope.** A compound opens a stdin scope when it is a pipe stage after the first
+  (`EmitCompoundStage`) or has an input redirect `< file` / `<<<` / `<<` (`EmitCompoundBody`,
+  `ApplyCompoundRedirects`, `EmitSubshell`). The scope wrapper saves the previous
+  `$global:__BashStdIn`, fills a fresh `Queue[object]` from `$input` (the ORIGINAL records:
+  typed objects and unterminated `printf` records survive), runs the body in `try`, and restores
+  the previous queue in `finally`, so a nested compound stage never clobbers its parent's stdin.
+  `< /dev/null` is a scope fed nothing. The queue is filled eagerly (a PowerShell script block
+  starts only after its upstream finished), so an infinite producer (`yes | { head -n1; }`)
+  does not terminate.
+- **Readers.** Inside a scope `EmitSimpleFed` prefixes a stdin-reading simple command with the lazy
+  feed `& { while (queue.Count) { queue.Dequeue() } } | cmd`; `read` and the feed advance the same
+  cursor, so `{ read x; sort; }` sorts the REST. Which commands read stdin is a syntactic estimate
+  (`StdinReaders.ShouldFeed`, the emitter never parses flags): `tr xargs tee mapfile` always;
+  `cat head tail wc sort uniq cut nl rev tac fold paste join comm base64 md5sum … less more` when
+  there is no file operand (value-taking flags like `head -n 2`, `sort -k 2` are skipped, a lone
+  `-` always feeds); `grep sed awk rg jq yq` when the only positional is the pattern/program (or
+  `-e`/`-f` supplied it); builtins (`echo printf cd test …`) and file mutators never. A command
+  that is not a ps-bash command nor a builtin is fed only at runtime, when it resolves to an
+  application and the queue is non-empty (`Get-Command -CommandType Application`), so user functions
+  and programs that ignore stdin are not starved. Commands with an env prefix, their own heredoc /
+  `< file`, or a statement-list / RC-7 splat emission are left alone.
+- **Pipelines inside a scope.** Only the FIRST stage reads the scope; later stages read the pipe
+  (`{ grep a | sort; }`). A fused-lane pipeline is not formed inside a scope (the compiled cores
+  know no feed).
+- **`while read`.** The loop streams its own input: as a pipe stage it keeps `$input`; inside a
+  scope with no redirect of its own it reads the feed instead; with its own `<` it reads the
+  redirect. It opens no scope of its own (a `read`/`cat` in its body does not see the stream).
+
+Known divergences (oracle bash 5.2 / GNU coreutils 9.4): `{ head -n1; cat; } < file` prints `1 2 3`
+in bash (GNU head seeks a regular file back) but `1` here — the same as bash when the data comes
+from a PIPE, which is what ps-bash models (`printf '1\n2\n3\n' | { head -n1; cat; }` matches); a
+native program that ignores its stdin still consumes the queue; commands emitted as a statement list
+(env prefix, `& { …splat… }`) never read the scope.
 
 ### `[[ … =~ … ]]` and `BASH_REMATCH`
 
@@ -476,9 +518,9 @@ general fallback path (`EmitSimple`) and the mapped passthrough path
 4. A **compound** stage (`subshell` / `brace group` / loop / `if` / `case`) emits
    PowerShell *statements*, not a pipeable expression, so it is wrapped in
    `& { … }` (PowerShell rejects `foreach (…) {} | sort` with "An empty pipe
-   element is not allowed"). A **brace group** additionally drains `$input` into
-   `$global:__BashStdIn` before its body so `read` inside the group sees the
-   piped lines (see the `read` section).
+   element is not allowed"). A compound stage after the first additionally opens a
+   stdin scope (drains `$input` into `$global:__BashStdIn`) so EVERY stdin-reading
+   command inside sees the piped records (see "Compound-command stdin").
 
 Note: standalone commands are also mapped via `EmitSimple` (see Section 2.2),
 so mapping applies to both pipe targets and standalone invocations.

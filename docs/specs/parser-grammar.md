@@ -255,6 +255,12 @@ subshell    -> '(' body ')' redirect*
 brace_group -> '{' body '}'
 ```
 
+Every compound's trailing redirects come from the ONE `ParseTrailingRedirects`, which also
+accepts a here-string `<<< word` and a here-document `<< DELIM` (`( cat ) <<< hi`,
+`{ sort; } <<EOF`): both become a `Redirect` with `Fd = 0` and `Here` = the body
+(`Op` `"<<<"` / `"<<"`), the compound's stdin like `< file`. (The subshell used to carry a
+private copy of the loop that knew neither, so they were parse errors.)
+
 ### 3.10 Test Expression
 
 ```

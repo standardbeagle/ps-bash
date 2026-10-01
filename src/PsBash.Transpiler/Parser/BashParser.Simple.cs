@@ -542,6 +542,7 @@ public sealed partial class BashParser
     {
         if (!IsNamedCompoundRedirect() && Peek().Kind != BashTokenKind.IoNumber
             && Peek().Kind != BashTokenKind.TLess
+            && Peek().Kind is not (BashTokenKind.DLess or BashTokenKind.DLessDash)
             && !IsCompoundRedirectOp(Peek().Kind))
             return ImmutableArray<Redirect>.Empty;
 
@@ -564,6 +565,22 @@ public sealed partial class BashParser
                 var here = ParseHereString();
                 redirects.Add(new Redirect("<<<", 0, new CompoundWord(
                     ImmutableArray<WordPart>.Empty), FdVar: null, Here: here));
+            }
+            else if (Peek().Kind is BashTokenKind.DLess or BashTokenKind.DLessDash)
+            {
+                // `{ sort; } <<EOF` / `( cat ) <<EOF`: a here-document feeding a whole compound.
+                // Same body capture as a simple command (the lexer stamped the span on the
+                // delimiter token); the AST carries it like a here-string: Op "<<", Here = the body.
+                bool stripTabs = Peek().Kind == BashTokenKind.DLessDash;
+                Advance(); // << or <<-
+                var delimToken = Advance();
+                var (delimiter, expand) = BashLexer.ParseHeredocDelimiter(delimToken.Value);
+                var docs = ImmutableArray.CreateBuilder<HereDoc>(1);
+                CollectHereDocBodies(
+                    new() { (delimiter, expand, stripTabs, null, delimToken.BodyStart, delimToken.BodyEnd) },
+                    docs);
+                redirects.Add(new Redirect("<<", 0, new CompoundWord(
+                    ImmutableArray<WordPart>.Empty), FdVar: null, Here: docs[0]));
             }
             else if (Peek().Kind == BashTokenKind.IoNumber || IsCompoundRedirectOp(Peek().Kind))
             {

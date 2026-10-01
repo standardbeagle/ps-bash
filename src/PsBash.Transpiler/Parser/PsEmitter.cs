@@ -28,6 +28,36 @@ public static class PsEmitter
     private static int _loopDepth;
 
     /// <summary>
+    /// True while emitting inside a COMPOUND command's stdin scope — a compound used as a pipe stage
+    /// or given <c>&lt; file</c> / <c>&lt;&lt;&lt;</c>, whose incoming data sits in
+    /// <c>$global:__BashStdIn</c> (<see cref="PsBuild.StdinScope"/>). A stdin-reading simple command
+    /// emitted here is fed from that queue (<see cref="EmitSimpleFed"/>). Pipe-target stages (i &gt; 0)
+    /// and the body of a <c>while read</c> loop that streams <c>$input</c> reset it: their stdin is the
+    /// pipe, not the shared queue. See emitter-strategy.md "Compound-command stdin".
+    /// </summary>
+    [ThreadStatic]
+    private static bool _inStdinScope;
+
+    /// <summary>Run <paramref name="emit"/> with <see cref="_inStdinScope"/> set to <paramref name="value"/>.</summary>
+    private static string WithStdinScope(bool value, Func<string> emit)
+    {
+        var prior = _inStdinScope;
+        _inStdinScope = value;
+        try { return emit(); }
+        finally { _inStdinScope = prior; }
+    }
+
+    private static bool HasInputRedirect(ImmutableArray<Redirect> redirects) =>
+        !redirects.IsDefaultOrEmpty && redirects.Any(r => r.Fd == 0 && r.Op is "<" or "<<" or "<<<");
+
+    /// <summary>
+    /// A compound command that is given its own stdin (<c>&lt; file</c>, <c>&lt;&lt;&lt;</c>) emits its
+    /// body INSIDE a stdin scope; one without redirects inherits the surrounding scope unchanged.
+    /// </summary>
+    private static string EmitCompoundBody(ImmutableArray<Redirect> redirects, Func<string> emitBody) =>
+        HasInputRedirect(redirects) ? WithStdinScope(true, emitBody) : emitBody();
+
+    /// <summary>
     /// Active transpile context for the current call. Set by
     /// <see cref="Transpile(string, TranspileContext)"/> and read by
     /// <see cref="EmitSimple"/> when deciding whether to bypass the
@@ -193,19 +223,19 @@ public static class PsEmitter
 
     public static string Emit(Command cmd) => cmd switch
     {
-        Command.If ifCmd => EmitIf(ifCmd),
+        Command.If ifCmd => EmitCompoundBody(ifCmd.Redirects, () => EmitIf(ifCmd)),
         Command.BoolExpr boolExpr => EmitBoolExpr(boolExpr),
-        Command.ForIn forIn => EmitForIn(forIn),
-        Command.ForArith forArith => EmitForArith(forArith),
+        Command.ForIn forIn => EmitCompoundBody(forIn.Redirects, () => EmitForIn(forIn)),
+        Command.ForArith forArith => EmitCompoundBody(forArith.Redirects, () => EmitForArith(forArith)),
         Command.Select sel => EmitSelect(sel),
         Command.While whileCmd => EmitWhile(whileCmd),
-        Command.Case caseCmd => EmitCase(caseCmd),
+        Command.Case caseCmd => EmitCompoundBody(caseCmd.Redirects, () => EmitCase(caseCmd)),
         Command.ArithCommand arith => EmitArithCommand(arith),
         Command.Subshell subshell => EmitSubshell(subshell),
-        Command.BraceGroup braceGroup => EmitBraceGroup(braceGroup),
+        Command.BraceGroup braceGroup => EmitCompoundBody(braceGroup.Redirects, () => EmitBraceGroup(braceGroup)),
         Command.ShFunction func => EmitFunction(func),
         Command.Background bg => EmitBackground(bg),
-        Command.Simple simple => EmitSimple(simple),
+        Command.Simple simple => EmitSimpleFed(simple),
         Command.Pipeline pipeline => EmitPipeline(pipeline),
         Command.AndOrList andOr => EmitAndOrList(andOr),
         Command.ShAssignment assign => EmitShAssignment(assign),
@@ -556,9 +586,22 @@ public static class PsEmitter
         // Special case: while read VAR -> ForEach-Object pipeline (no infinite loop risk).
         // The classic `while read line; do ...; done < input.txt` idiom attaches its input
         // redirect here; ApplyCompoundRedirects feeds it in via Get-Content | & { $input | ... }.
+        // The loop streams its input itself (`$input |`, or the shared stdin queue when it
+        // inherits a compound's stdin), so it never opens a stdin scope of its own: with its OWN
+        // `< file` the body runs outside any scope and the redirect feeds `$input`.
         if (IsWhileRead(whileCmd.Cond, out var readVar, out var readIfs))
-            return ApplyCompoundRedirects(EmitWhileRead(readVar, readIfs, whileCmd.Body), whileCmd.Redirects);
+        {
+            bool readsQueue = _inStdinScope && !HasInputRedirect(whileCmd.Redirects);
+            return ApplyCompoundRedirects(
+                WithStdinScope(readsQueue, () => EmitWhileRead(readVar, readIfs, whileCmd.Body)),
+                whileCmd.Redirects, stdinScope: false);
+        }
 
+        return EmitCompoundBody(whileCmd.Redirects, () => EmitWhileLoop(whileCmd));
+    }
+
+    private static string EmitWhileLoop(Command.While whileCmd)
+    {
         int depth = _loopDepth++;
         try
         {
@@ -848,7 +891,8 @@ public static class PsEmitter
         // and give that `return` a script block to return from.
         _subshellDepth++;
         string body;
-        try { body = Emit(subshell.Body); }
+        // `( … ) < file` gives the body its own stdin (a scope); otherwise it inherits the enclosing one.
+        try { body = EmitCompoundBody(subshell.Redirects, () => Emit(subshell.Body)); }
         finally { _subshellDepth--; }
 
         bool scopedExit = ContainsExitCommand(subshell.Body);
@@ -874,7 +918,7 @@ public static class PsEmitter
         var tailRedirects = new List<Redirect>(subshell.Redirects.Length);
         foreach (var redirect in subshell.Redirects)
         {
-            if (redirect.Fd == 0 && redirect.Op is "<" or "<<<")
+            if (redirect.Fd == 0 && redirect.Op is "<" or "<<" or "<<<")
                 inputRedirect = redirect;
             else
                 tailRedirects.Add(redirect);
@@ -896,15 +940,16 @@ public static class PsEmitter
         string result = sb.ToString();
         if (inputRedirect is { Here: { } subshellHere })
         {
-            result = $"{EmitHereDocLiteral(subshellHere)} | Emit-BashLine | & {{ {result} }}";
+            result = $"{EmitHereDocLiteral(subshellHere)} | Emit-BashLine | & {{ {PsBuild.StdinScope(result)} }}";
         }
         else if (inputRedirect is not null)
         {
             var inTarget = TransformRedirectTarget(EmitArgWord(inputRedirect.Target));
-            // /dev/null maps to $null; `Get-Content $null` errors, and empty stdin
-            // is the same as no piped input, so skip the pipe in that case.
-            if (inTarget != "$null")
-                result = $"Get-Content {inTarget} | & {{ {result} }}";
+            // /dev/null maps to $null; `Get-Content $null` errors. Its stdin is EMPTY (EOF), so feed
+            // the scope nothing explicitly (it must not see an outer pipe's or queue's data).
+            result = inTarget != "$null"
+                ? $"Get-Content {inTarget} | & {{ {PsBuild.StdinScope(result)} }}"
+                : $"@() | & {{ {PsBuild.StdinScope(result)} }}";
         }
 
         return result;
@@ -916,15 +961,41 @@ public static class PsEmitter
     }
 
     /// <summary>
-    /// Prelude emitted at the head of a brace group used as a pipeline stage: it
-    /// drains the PowerShell pipeline (<c>$input</c>) into the shared bash stdin
-    /// queue the <c>read</c> builtin consumes from, so the group's body sees the
-    /// piped lines exactly as bash's fd 0 would. The queue is replaced (not
-    /// appended) per stage, matching a fresh pipe connection.
+    /// Feed <paramref name="simple"/> from the enclosing compound's shared stdin when it is inside a
+    /// stdin scope and is a command that reads stdin (<see cref="StdinReaders"/>): the emitted text
+    /// becomes <c>feed | cmd</c>. A command that carries its own input (<c>&lt; file</c>, heredoc,
+    /// env-pair prefix, or any statement-list emission) is left alone — its text is not a single
+    /// pipeable element. A non-ps-bash program is fed only when it resolves to an application AND
+    /// the queue is non-empty, so a user function or a program that ignores stdin is never starved
+    /// of what it would not have read.
     /// </summary>
-    private const string BraceGroupStdinPrelude =
-        "$global:__BashStdIn = [System.Collections.Generic.Queue[string]]::new(); " +
-        "foreach ($__psbash_stdin_line in $input) { $global:__BashStdIn.Enqueue([string]$__psbash_stdin_line) }; ";
+    private static string EmitSimpleFed(Command.Simple simple)
+    {
+        var text = EmitSimple(simple);
+        if (!_inStdinScope
+            || !simple.EnvPairs.IsEmpty
+            || !simple.HereDocs.IsDefaultOrEmpty
+            || HasInputRedirect(simple.Redirects)
+            || simple.Words.IsDefaultOrEmpty
+            || GetLiteralValue(simple.Words[0]) is not { } name
+            || PsBuild.IsStatementList(text)
+            || text.StartsWith("$(", StringComparison.Ordinal)
+            || text.StartsWith("& {", StringComparison.Ordinal))
+            return text;
+
+        var args = new List<string?>(simple.Words.Length - 1);
+        for (int i = 1; i < simple.Words.Length; i++)
+            args.Add(GetLiteralValue(simple.Words[i]));
+        if (!StdinReaders.ShouldFeed(name, args))
+            return text;
+
+        if (StdinReaders.Classify(name) != StdinReaders.Kind.Native)
+            return PsBuild.StdinFeed + " | " + text;
+
+        return "& { if ($global:__BashStdIn -and $global:__BashStdIn.Count -gt 0 -and (Get-Command "
+            + PsBuild.SingleQuote(name) + " -CommandType Application -ErrorAction SilentlyContinue)) { "
+            + PsBuild.StdinFeed + " | ForEach-Object { Get-BashText $_ } | " + text + " } else { " + text + " } }";
+    }
 
     private static string EmitBackground(Command.Background bg)
     {
@@ -1129,7 +1200,10 @@ public static class PsEmitter
             ? $"${{{varNames[0]}}} = $_; "
             : BuildReadFieldBindings(varNames, ifs);
 
-        return $"$input | ForEach-Object {{ {PsBuild.NullSafeBashText} }} | ForEach-Object {{ ($_ -replace \"`n$\",\"\") -split \"`n\" }} | ForEach-Object {{ {bind}{bodyText} }}";
+        // Inheriting a compound's stdin, the lines come from the shared queue (a `read` or `cat`
+        // before the loop already advanced it), not from `$input`.
+        var source = _inStdinScope ? PsBuild.StdinFeed : "$input";
+        return $"{source} | ForEach-Object {{ {PsBuild.NullSafeBashText} }} | ForEach-Object {{ ($_ -replace \"`n$\",\"\") -split \"`n\" }} | ForEach-Object {{ {bind}{bodyText} }}";
     }
 
     /// <summary>
@@ -4851,7 +4925,7 @@ public static class PsEmitter
                 // Some simple-command rewrites, notably cd, emit PowerShell statements
                 // such as assignments plus if/else blocks. Pipeline-chain operators
                 // require a pipeline operand, so wrap only those statement rewrites.
-                var simpleText = EmitSimple(simple);
+                var simpleText = EmitSimpleFed(simple);
                 sb.Append(NeedsChainOperandSubexpression(simpleText) ? $"$({simpleText})" : simpleText);
             }
             else
@@ -4906,9 +4980,19 @@ public static class PsEmitter
 
     private static string EmitPipeline(Command.Pipeline pipeline)
     {
+        var entryScope = _inStdinScope;
+        try { return EmitPipelineStages(pipeline, entryScope); }
+        finally { _inStdinScope = entryScope; }
+    }
+
+    private static string EmitPipelineStages(Command.Pipeline pipeline, bool entryScope)
+    {
         var sb = new StringBuilder();
         for (int i = 0; i < pipeline.Commands.Length; i++)
         {
+            // Only the FIRST stage reads the enclosing compound's stdin; every later stage reads
+            // the pipe. (A compound stage re-enters a scope of its own below.)
+            _inStdinScope = i == 0 && entryScope;
             if (i > 0)
             {
                 var op = pipeline.Ops[i - 1];
@@ -4985,21 +5069,14 @@ public static class PsEmitter
                 // matches bash, which runs every pipe stage in its own subshell.
                 // This applies at ANY position (incl. the first stage), not just i > 0.
                 //
-                // A BRACE GROUP additionally needs the piped lines on its stdin: bash
-                // connects the pipe to the group's fd 0, so `echo hi | { read y; ... }`
-                // reads "hi". PowerShell's `& { }` does not auto-bind `$input`, so we
-                // drain it into the shared stdin queue the read builtin consumes from
-                // (Set-BashStdinQueue). The group body still runs ONCE — only `read`
-                // advances the queue — which is bash's semantics, unlike a per-line
-                // ForEach-Object envelope.
-                if (cmd is Command.BraceGroup)
-                {
-                    sb.Append("& { ").Append(BraceGroupStdinPrelude).Append(Emit(cmd)).Append(" }");
-                }
-                else
-                {
-                    sb.Append($"& {{ {Emit(cmd)} }}");
-                }
+                // A compound after the first stage additionally needs the piped records
+                // on its stdin: bash connects the pipe to the group's fd 0, so
+                // `echo hi | { read y; ... }` reads "hi" and `{ sort; }` sorts it.
+                // PowerShell's `& { }` does not feed `$input` to the commands inside, so
+                // EmitCompoundStage drains it into the shared stdin queue (a stdin scope)
+                // that `read` and the fed readers consume from. The body still runs
+                // ONCE — bash's semantics, unlike a per-line ForEach-Object envelope.
+                sb.Append(EmitCompoundStage(cmd, isFirstStage: i == 0, entryScope));
             }
             else if (pipeline.Commands.Length > 1)
                 sb.Append(WrapPipelineStageIfStatementList(Emit(cmd)));
@@ -5014,7 +5091,10 @@ public static class PsEmitter
         // large batched frames instead of one IPC frame per line. IsFusablePipeline
         // already excludes negated pipelines, so this never collides with the
         // negation tail below.
+        // Inside a compound's stdin scope the first stage reads the shared queue (a feed the
+        // compiled cores know nothing about), so the chain stays on the plain pipeline.
         if (_captureDepth == 0
+            && !entryScope
             && FusedLane.IsFusionEnabled(FusionEnabledOverride)
             && FusedLane.IsFusablePipeline(pipeline))
         {
@@ -5037,6 +5117,28 @@ public static class PsEmitter
             body += "; $global:LASTEXITCODE = if ($global:LASTEXITCODE -eq 0) { 1 } else { 0 }";
 
         return body;
+    }
+
+    /// <summary>
+    /// A compound command as a stage of a multi-stage pipeline: <c>&amp; { … }</c>. A stage AFTER the
+    /// first receives the pipe as its stdin, so it opens a stdin scope (<see cref="PsBuild.StdinScope"/>):
+    /// every stdin-reading command inside — <c>sort</c>, <c>cat</c>, <c>read</c>, a native — consumes the
+    /// same queue, in order. The FIRST stage keeps whatever stdin its surroundings have. A
+    /// <c>while read</c> loop streams <c>$input</c> itself and an arithmetic command / function
+    /// definition reads nothing, so those open no scope (the body sees no shared stdin).
+    /// </summary>
+    private static string EmitCompoundStage(Command cmd, bool isFirstStage, bool entryScope)
+    {
+        if (isFirstStage)
+            return $"& {{ {Emit(cmd)} }}";
+
+        bool opensScope = cmd is Command.Subshell or Command.BraceGroup or Command.ForIn
+                or Command.ForArith or Command.If or Command.Case
+            || (cmd is Command.While loop && !IsWhileRead(loop.Cond, out _, out _));
+        if (!opensScope)
+            return $"& {{ {Emit(cmd)} }}";
+
+        return $"& {{ {PsBuild.StdinScope(WithStdinScope(true, () => Emit(cmd)))} }}";
     }
 
     /// <summary>
@@ -5129,20 +5231,14 @@ public static class PsEmitter
     /// LAST input redirect (bash: last wins) feeds the group via <c>Get-Content &lt;file&gt; | …</c>.
     /// Empty/absent redirects return the body untouched, so non-redirected compounds are unchanged.
     /// <para>
-    /// STDIN-DELIVERY LIMITATION (parity with <see cref="EmitSubshell"/>): the
-    /// <c>Get-Content &lt;file&gt; |</c> prefix places the file on the group's PowerShell pipeline,
-    /// so it reaches any body that consumes <c>$input</c> — the <c>while read</c> form (which drains
-    /// <c>$input</c> explicitly) and any inner stage that reads the pipeline. A bare stdin-reading
-    /// command inside a non-<c>while-read</c> body (e.g. <c>read</c>/<c>cat</c> with no operand in
-    /// <c>if …; read x; fi &lt; f</c>) does NOT auto-receive it, exactly as the identical
-    /// <c>(read x) &lt; f</c> subshell emission does not. This is a pre-existing, codebase-wide
-    /// limitation of the <c>Get-Content | &amp; { … }</c> stdin model, NOT a regression introduced
-    /// here: before this fix the redirect was dropped entirely, so those readers already fell back
-    /// to the console. A general per-command fd-0 bridge is out of scope for this node-set fix and
-    /// would have to land uniformly for subshells too.
+    /// STDIN: the input redirect (<c>&lt; file</c>, <c>&lt;&lt;&lt;</c>, <c>&lt;&lt;</c>) becomes the
+    /// body's stdin SCOPE (<see cref="PsBuild.StdinScope"/>), so every stdin-reading command inside
+    /// consumes it, not just <c>while read</c>. <paramref name="stdinScope"/> is false for that loop,
+    /// which streams <c>$input</c> itself. See emitter-strategy.md "Compound-command stdin".
     /// </para>
     /// </summary>
-    private static string ApplyCompoundRedirects(string body, ImmutableArray<Redirect> redirects)
+    private static string ApplyCompoundRedirects(
+        string body, ImmutableArray<Redirect> redirects, bool stdinScope = true)
     {
         if (redirects.IsDefaultOrEmpty)
             return body;
@@ -5153,14 +5249,17 @@ public static class PsEmitter
         {
             // `<` file and `<<<` here-string both supply the group's stdin; the last
             // one wins (bash).
-            if (redirect.Fd == 0 && redirect.Op is "<" or "<<<")
+            if (redirect.Fd == 0 && redirect.Op is "<" or "<<" or "<<<")
                 inputRedirect = redirect;
             else
                 tailRedirects.Add(redirect);
         }
 
+        // With an input redirect the body is a stdin scope: the redirected data is drained into the
+        // shared queue the body's stdin-reading commands consume (the body was emitted with
+        // _inStdinScope set — see EmitCompoundBody). A `while read` loop streams `$input` itself.
         var sb = new StringBuilder("& { ");
-        sb.Append(body);
+        sb.Append(inputRedirect is not null && stdinScope ? PsBuild.StdinScope(body) : body);
         sb.Append(" }");
         AppendRedirectTail(sb, tailRedirects);
         string result = sb.ToString();
@@ -5172,10 +5271,12 @@ public static class PsEmitter
         else if (inputRedirect is not null)
         {
             var inTarget = TransformRedirectTarget(EmitArgWord(inputRedirect.Target));
-            // /dev/null maps to $null; `Get-Content $null` errors, and empty stdin is the
-            // same as no piped input, so skip the pipe in that case (matches EmitSubshell).
+            // /dev/null maps to $null; `Get-Content $null` errors. Its stdin is EMPTY (EOF), which
+            // for a stdin scope must still replace any outer pipe, so feed it nothing explicitly.
             if (inTarget != "$null")
                 result = $"Get-Content {inTarget} | {result}";
+            else if (stdinScope)
+                result = $"@() | {result}";
         }
 
         return result;

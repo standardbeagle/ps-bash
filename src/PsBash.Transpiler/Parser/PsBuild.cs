@@ -345,6 +345,31 @@ public static class PsBuild
     public const string NullSafeBashText =
         "if ($null -ne $_ -and $_.PSObject.Properties['BashText']) { $_.BashText } else { \"$_\" }";
 
+    // ───────────────────── Compound-command stdin (shared cursor) ──────────────────────
+
+    /// <summary>
+    /// A pipeline source that yields what is LEFT of the compound command's shared stdin
+    /// (<c>$global:__BashStdIn</c>, a <c>Queue[object]</c> of the original records), one record at a
+    /// time. Prepended (<c>feed | cmd</c>) to a stdin-reading command inside a stdin scope. Lazy:
+    /// a consumer that stops the pipeline early (<c>head</c>) leaves the rest queued, and
+    /// <c>read</c> / a later command advance the same cursor. Empty queue = empty input (EOF).
+    /// </summary>
+    public const string StdinFeed =
+        "& { while ($global:__BashStdIn -and $global:__BashStdIn.Count -gt 0) { $global:__BashStdIn.Dequeue() } }";
+
+    /// <summary>
+    /// Wrap <paramref name="body"/> so it runs with the incoming pipeline (<c>$input</c>) as ITS stdin:
+    /// the previous queue is saved, a fresh one filled from <c>$input</c> (the records are kept as
+    /// objects), and the previous queue is restored in a <c>finally</c> so a nested compound pipe stage
+    /// never clobbers its parent's stdin. The result is a statement list for the inside of a
+    /// <c>&amp; { … }</c> block — the block is what receives the pipeline.
+    /// </summary>
+    public static string StdinScope(string body) =>
+        "$__psbash_stdin_prev = Get-Variable -Name __BashStdIn -Scope Global -ValueOnly -ErrorAction SilentlyContinue; "
+        + "$global:__BashStdIn = [System.Collections.Generic.Queue[object]]::new(); "
+        + "foreach ($__psbash_stdin_line in $input) { $global:__BashStdIn.Enqueue($__psbash_stdin_line) }; "
+        + "try { " + body + " } finally { $global:__BashStdIn = $__psbash_stdin_prev }";
+
     // ───────────────────────── Positional-parameter expansion ──────────────────────────
 
     /// <summary>

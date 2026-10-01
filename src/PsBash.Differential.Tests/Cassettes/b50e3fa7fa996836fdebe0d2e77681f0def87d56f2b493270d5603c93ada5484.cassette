@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 56
+stdout-length: 6
+stderr-length: 0
+==== SCRIPT ====
+printf '1\n2\n3\n' | if true; then cat; else echo no; fi
+==== STDOUT ====
+1
+2
+3
+
+==== STDERR ====
+
