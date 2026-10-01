@@ -1,4 +1,5 @@
 using System.Text;
+using PsBash.Core;
 
 namespace PsBash.Cmdlets;
 
@@ -126,12 +127,12 @@ internal sealed class CutPlan
 
         if (bytes)
         {
-            byte[] raw = Encoding.UTF8.GetBytes(line);
+            byte[] raw = RawBytes.GetBytes(line);
             BuildGroups(raw.Length);
             // One contiguous byte stream per group; decode the whole result so a group that keeps
-            // whole characters round-trips exactly (a split character falls back to Latin-1).
+            // whole characters round-trips exactly (a split character leaves escaped-byte markers, written back as the original bytes).
             var outBytes = new List<byte>(raw.Length);
-            byte[]? sepBytes = OutputDelimiter is null ? null : Encoding.UTF8.GetBytes(OutputDelimiter);
+            byte[]? sepBytes = OutputDelimiter is null ? null : RawBytes.GetBytes(OutputDelimiter);
             bool first = true;
             foreach (var (lo, hi) in _groups)
             {
@@ -140,7 +141,7 @@ internal sealed class CutPlan
                 first = false;
             }
             var arr = outBytes.ToArray();
-            return System.Text.Unicode.Utf8.IsValid(arr) ? Encoding.UTF8.GetString(arr) : Encoding.Latin1.GetString(arr);
+            return RawBytes.GetString(arr);
         }
 
         // Characters: index by Unicode scalar so a surrogate pair is never split.

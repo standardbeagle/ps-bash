@@ -1,3 +1,4 @@
+using PsBash.Core;
 using System.Management.Automation;
 using System.Security.Cryptography;
 using System.Text;
@@ -152,7 +153,7 @@ internal static class ChecksumEngine
             if (pipelineInput is { Count: > 0 } || operands.Count == 1)
             {
                 string text = pipelineInput is null ? string.Empty : BashRuntime.RecordStreamText(pipelineInput.Cast<object>());
-                var hex = ComputeHex(algorithmName, Encoding.UTF8.GetBytes(text));
+                var hex = ComputeHex(algorithmName, RawBytes.GetBytes(text));
                 cmdlet.WriteObject(MakeOutput(hex, "-", algorithmLabel, plan));
             }
             return;
@@ -163,7 +164,7 @@ internal static class ChecksumEngine
             if (rawPath == "-")
             {
                 string text = pipelineInput is null ? string.Empty : BashRuntime.RecordStreamText(pipelineInput.Cast<object>());
-                cmdlet.WriteObject(MakeOutput(ComputeHex(algorithmName, Encoding.UTF8.GetBytes(text)), "-", algorithmLabel, plan));
+                cmdlet.WriteObject(MakeOutput(ComputeHex(algorithmName, RawBytes.GetBytes(text)), "-", algorithmLabel, plan));
                 continue;
             }
 
