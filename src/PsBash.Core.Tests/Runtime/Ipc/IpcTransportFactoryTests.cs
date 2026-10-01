@@ -45,6 +45,42 @@ public class IpcTransportFactoryTests : IDisposable
         => Environment.SetEnvironmentVariable(IpcTransportFactory.SessionEnvVar, value);
 
     [Fact]
+    public void ResolveNestedEndpoint_DerivesPerDepthEndpoint_AndParsesBack()
+    {
+        SetEnv("pipe:psb-nest-x");
+        var (s1, e1) = IpcTransportFactory.ResolveNestedEndpoint(1);
+        var (_, e2) = IpcTransportFactory.ResolveNestedEndpoint(2);
+        Assert.Equal("pipe", s1);
+        Assert.Equal("psb-nest-x-nested1", e1);
+        Assert.NotEqual(e1, e2);
+        Assert.Equal(1, IpcTransportFactory.ParseNestDepth(e1));
+        Assert.Equal(2, IpcTransportFactory.ParseNestDepth(e2));
+        Assert.Equal(0, IpcTransportFactory.ParseNestDepth("psb-nest-x"));
+    }
+
+    [Fact]
+    public void CurrentNestDepth_ZeroOutsideHost_PublishedDepthInside()
+    {
+        var prior = Environment.GetEnvironmentVariable(IpcTransportFactory.InsideHostEnvVar);
+        var priorDepth = Environment.GetEnvironmentVariable(IpcTransportFactory.NestDepthEnvVar);
+        try
+        {
+            Environment.SetEnvironmentVariable(IpcTransportFactory.InsideHostEnvVar, null);
+            Environment.SetEnvironmentVariable(IpcTransportFactory.NestDepthEnvVar, "3");
+            Assert.Equal(0, IpcTransportFactory.CurrentNestDepth());
+            Environment.SetEnvironmentVariable(IpcTransportFactory.InsideHostEnvVar, "123");
+            Assert.Equal(3, IpcTransportFactory.CurrentNestDepth());
+            Environment.SetEnvironmentVariable(IpcTransportFactory.NestDepthEnvVar, null);
+            Assert.Equal(1, IpcTransportFactory.CurrentNestDepth()); // older host: marker only
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(IpcTransportFactory.InsideHostEnvVar, prior);
+            Environment.SetEnvironmentVariable(IpcTransportFactory.NestDepthEnvVar, priorDepth);
+        }
+    }
+
+    [Fact]
     public void ResolveEndpoint_CliOverrideUnix_ReturnsParsedPair()
     {
         var (scheme, endpoint) = IpcTransportFactory.ResolveEndpoint("unix:/tmp/test.sock");

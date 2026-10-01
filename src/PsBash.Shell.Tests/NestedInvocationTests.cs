@@ -65,6 +65,27 @@ public class NestedInvocationTests
     }
 
     [SkippableFact]
+    public async Task NestedBashC_RepeatedCalls_ReuseOneWarmNestedHost()
+    {
+        Skip.If(PsBashExe is null, "built ps-bash required");
+        // $$ is the PID of the host process running the command. Both nested calls must land on
+        // the SAME nested daemon (not a fresh private host each), distinct from the outer host;
+        // a doubly nested call lands on a third (depth 2) host.
+        var r = await RunAsync(
+            ExplicitEndpoint(
+                "a=$(bash -c 'echo $$'); b=$(bash -c 'echo $$'); " +
+                "c=$(bash -c \"bash -c 'echo \\$\\$'\"); echo \"$a $b $c $$\""),
+            TimeSpan.FromSeconds(120));
+        Assert.Equal(0, r.Exit);
+        var pids = r.Out.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        Assert.Equal(4, pids.Length);
+        Assert.Equal(pids[0], pids[1]);                 // reused nested host
+        Assert.NotEqual(pids[0], pids[3]);              // not the outer host
+        Assert.NotEqual(pids[2], pids[0]);              // depth 2 is its own host
+        Assert.NotEqual(pids[2], pids[3]);
+    }
+
+    [SkippableFact]
     public async Task AwkGetlineFromCommand_ExplicitEndpoint_Completes()
     {
         Skip.If(PsBashExe is null, "built ps-bash required");

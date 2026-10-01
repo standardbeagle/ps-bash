@@ -247,6 +247,12 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
             Environment.SetEnvironmentVariable(
                 PsBash.Core.Runtime.Ipc.IpcTransportFactory.InsideHostEnvVar,
                 Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            // Depth a ps-bash started by this command lives at: strictly deeper than this host,
+            // so the host it picks (warm, per depth) can never be the one blocked on its parent.
+            Environment.SetEnvironmentVariable(
+                PsBash.Core.Runtime.Ipc.IpcTransportFactory.NestDepthEnvVar,
+                (PsBash.Core.Runtime.Ipc.IpcTransportFactory.HostNestDepth + 1)
+                    .ToString(System.Globalization.CultureInfo.InvariantCulture));
         }
 
         _host.Reset();
@@ -699,8 +705,12 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
             _host.HostUI.SetWriteErrorLineForwarder(null);
 
             if (markedInsideHost)
+            {
                 Environment.SetEnvironmentVariable(
                     PsBash.Core.Runtime.Ipc.IpcTransportFactory.InsideHostEnvVar, null);
+                Environment.SetEnvironmentVariable(
+                    PsBash.Core.Runtime.Ipc.IpcTransportFactory.NestDepthEnvVar, null);
+            }
         }
     }
 

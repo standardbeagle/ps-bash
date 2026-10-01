@@ -162,15 +162,29 @@ public sealed class IpcWorker : IWorker
         // process-wide exec gate for our parent, so connecting to it (explicit
         // PSBASH_IPC_ENDPOINT or the per-session default) deadlocks behind the parent — or
         // retires it if our build differs. A private host is the only safe choice.
+        // Instead of paying a cold private host per nested call, a nested launcher uses a WARM
+        // daemon at its own nesting depth (<endpoint>-nested<depth>, see ResolveNestedEndpoint).
+        // The host at depth d+1 is never the host blocked on the parent at depth d, so there is
+        // no cycle; deeper than MaxNestedDaemonDepth falls back to a private host.
+        int nestDepth = 0;
         if (lifetime == Lifetime.Daemon && IpcTransportFactory.IsInsideHostCommand())
-            lifetime = Lifetime.PerInvocation;
+        {
+            nestDepth = IpcTransportFactory.CurrentNestDepth();
+            if (nestDepth > IpcTransportFactory.MaxNestedDaemonDepth)
+            {
+                lifetime = Lifetime.PerInvocation;
+                nestDepth = 0;
+            }
+        }
 
         var (scheme, endpoint) = lifetime == Lifetime.PerInvocation
             ? IpcTransportFactory.ResolvePerInvocationEndpoint()
-            : IpcTransportFactory.ResolveEndpoint();
+            : nestDepth > 0
+                ? IpcTransportFactory.ResolveNestedEndpoint(nestDepth)
+                : IpcTransportFactory.ResolveEndpoint();
         var timeout = startupTimeout ?? GetStartupTimeout();
         var poll = startupPollInterval ?? TimeSpan.FromMilliseconds(50);
-        var worker = new IpcWorker(scheme, endpoint, hostBinaryPath, timeout, poll, lifetime);
+        var worker = new IpcWorker(scheme, endpoint, hostBinaryPath, timeout, poll, lifetime) { _nestDepth = nestDepth };
         if (lifetime == Lifetime.PerInvocation)
             await worker.SpawnPrivateHostAsync(ct).ConfigureAwait(false);
         else
@@ -544,6 +558,10 @@ public sealed class IpcWorker : IWorker
         catch (OperationCanceledException) when (!ct.IsCancellationRequested) { return HostHealthState.Unhealthy; }
     }
 
+    private int _nestDepth;
+    private const string NestedIdleEnvVar = "PSBASH_HOST_IDLE_SECS";
+    private const int NestedIdleSecs = 60;
+
     private async Task SpawnAndWaitAsync(CancellationToken ct)
     {
         var args = new List<string> { $"--ipc-endpoint={_scheme}:{_endpoint}" };
@@ -564,7 +582,24 @@ public sealed class IpcWorker : IWorker
             // PARENT from ever seeing EOF (the Bash tool hanging after every command;
             // `tman test` hanging after the suite). Each platform severs inheritance
             // at spawn — see StartHostProcess.
-            proc = StartHostProcess(args);
+            // A nested daemon (see StartAsync) idles out sooner than a top-level one: it only
+            // exists to serve repeated nested calls, and nothing reaps it when its parent host
+            // goes away. The host reads PSBASH_HOST_IDLE_SECS from its environment.
+            string? savedIdle = null;
+            bool lowerIdle = _nestDepth > 0;
+            if (lowerIdle)
+            {
+                savedIdle = Environment.GetEnvironmentVariable(NestedIdleEnvVar);
+                if (!int.TryParse(savedIdle, out var cur) || cur <= 0 || cur > NestedIdleSecs)
+                    Environment.SetEnvironmentVariable(NestedIdleEnvVar, NestedIdleSecs.ToString());
+                else
+                    lowerIdle = false;
+            }
+            try { proc = StartHostProcess(args); }
+            finally
+            {
+                if (lowerIdle) Environment.SetEnvironmentVariable(NestedIdleEnvVar, savedIdle);
+            }
 
             // Test seam: record that this launcher actually spawned a host on this
             // endpoint. Single-flight (EnsureHostReachableAsync) must keep this at

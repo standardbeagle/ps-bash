@@ -221,6 +221,8 @@ internal sealed class Program
         // when absent.
         var ipcEndpoint = GetArg(args, "--ipc-endpoint");
         var (scheme, endpoint) = IpcTransportFactory.ResolveEndpoint(ipcEndpoint);
+        // A nested daemon's endpoint carries its depth; its commands' children get depth+1.
+        IpcTransportFactory.HostNestDepth = IpcTransportFactory.ParseNestDepth(endpoint);
         return (IpcTransportFactory.CreateDefault(ipcEndpoint), scheme, endpoint);
     }
 
