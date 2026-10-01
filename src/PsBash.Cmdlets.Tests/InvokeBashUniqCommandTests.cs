@@ -274,15 +274,6 @@ public class InvokeBashUniqCommandTests : IClassFixture<SharedPwshFixture>, IDis
     }
 
     [Fact]
-    public void Uniq_ValidButUnsupportedFlag_NotSupportedMessage()
-    {
-        // --zero-terminated is a real GNU uniq flag but ps-bash does not
-        // implement it. It must report "not supported", not "No such file".
-        var (_, errs) = RunWithErrors("'a','a','b' | Invoke-BashUniq --zero-terminated");
-        Assert.Contains(errs, m => m.Contains("not supported", StringComparison.OrdinalIgnoreCase));
-    }
-
-    [Fact]
     public void Uniq_UnrecognizedLongOption_BashParityMessage()
     {
         // --bogus is not a real uniq option → bash-style "unrecognized option".

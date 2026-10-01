@@ -1419,6 +1419,15 @@
       "flag": "-w",
       "desc": "compare at most N characters",
       "arg": "N"
+    },
+    {
+      "flag": "-z",
+      "desc": "line delimiter is NUL, not newline"
+    },
+    {
+      "flag": "--group",
+      "desc": "separate groups with an empty line",
+      "arg": "[=METHOD]"
     }
   ],
   "unset": [
