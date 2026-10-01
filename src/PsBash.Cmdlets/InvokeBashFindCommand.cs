@@ -435,16 +435,12 @@ public sealed class InvokeBashFindCommand : PSCmdlet
         // rather than aborting the whole invocation.
         var searchPaths = operands.Count > 0 ? operands : new List<string> { searchPath };
 
-        var pathCmp = OperatingSystem.IsWindows()
-            ? StringComparison.OrdinalIgnoreCase
-            : StringComparison.Ordinal;
-        char[] sepChars = {
-            System.IO.Path.DirectorySeparatorChar,
-            System.IO.Path.AltDirectorySeparatorChar,
-        };
-
         var now = DateTime.Now;
-        var matches = new List<(System.IO.FileSystemInfo Item, string DisplayPath, bool IsDir, string ItemPath)>();
+
+        // `-exec ... +` batches every path into one invocation (inherent); every other action runs per match
+        // AS IT IS FOUND, so `find / -name x | head -1` stops walking at the first hit and retained memory is
+        // the current directory's listing plus the recursion stack, never the tree.
+        var execCollectedPaths = new List<string>();
 
         foreach (var rootSearchPath in searchPaths)
         {
@@ -476,33 +472,6 @@ public sealed class InvokeBashFindCommand : PSCmdlet
             }
 
             string resolvedRoot = rootItem.FullName;
-            int rootDepth = resolvedRoot
-                .TrimEnd(sepChars)
-                .Split(new[] { '\\', '/' })
-                .Length;
-
-            // Collect items: root + recursive children, with maxdepth honored at
-            // enumeration time so a large tree does not load into memory.
-            var rootItems = new List<System.IO.FileSystemInfo> { rootItem };
-            if (rootItem is System.IO.DirectoryInfo rootDir)
-            {
-                try
-                {
-                    // Reparse-point-safe walk: a directory junction / symlink is listed but never
-                    // descended into (GNU find's default, no -follow), so the walk can't escape the
-                    // tree or loop forever on a cyclic link. maxDepth is find's -maxdepth (relative
-                    // to root; root's direct children are depth 1); the per-item post-filter below
-                    // (relativeDepth > maxDepth) still clamps the boundary.
-                    foreach (var fsi in FileSystemHelpers.EnumerateNoFollow(rootDir, maxDepth))
-                    {
-                        rootItems.Add(fsi);
-                    }
-                }
-                catch
-                {
-                    // best-effort, oracle swallows enumeration errors too.
-                }
-            }
 
             // Forward-slash relative display path anchored at this root's search path
             // (the psm1 oracle's form).
@@ -517,167 +486,137 @@ public sealed class InvokeBashFindCommand : PSCmdlet
                 return relativePath.Length == 0 ? normalized : $"{normalized}/{relativePath}";
             }
 
-            // -prune needs parents evaluated before their children so a matched directory can
-            // exclude its subtree. Sort shallow-first only then (keeps default output order otherwise).
-            if (doPrune)
-                rootItems.Sort((a, b) => SegmentCount(a.FullName).CompareTo(SegmentCount(b.FullName)));
-
-            var prunedRoots = new List<string>();
-            var rootMatches = new List<(System.IO.FileSystemInfo Item, string DisplayPath, bool IsDir, string ItemPath)>();
-
-            foreach (var item in rootItems)
+            foreach (var m in WalkMatches(rootItem, 0, matchExpr, maxDepth, minDepth, doPrune, depthFirst, now, BuildDisplay))
             {
-                string itemPath = item.FullName;
-                int relativeDepth = SegmentCount(itemPath) - rootDepth;
-
-                if (relativeDepth > maxDepth) continue;
-
-                // Skip anything beneath a pruned directory (don't descend into it).
-                if (prunedRoots.Count > 0)
+                // -delete is an action: remove the match and print nothing (the post-order walk lets a
+                // directory be removed after its matched contents are gone).
+                if (doDelete)
                 {
-                    bool underPruned = false;
-                    foreach (var pruned in prunedRoots)
+                    try
                     {
-                        if (itemPath.StartsWith(pruned + System.IO.Path.DirectorySeparatorChar, pathCmp))
+                        if (m.IsDir)
                         {
-                            underPruned = true;
-                            break;
+                            // Non-recursive on purpose: bash `find -delete` errors on a non-empty
+                            // directory (matched contents are deleted first, depth-first). Clear the
+                            // read-only bit first so an empty-but-read-only dir still deletes on Windows.
+                            FileSystemHelpers.ClearReadOnly(m.ItemPath);
+                            System.IO.Directory.Delete(m.ItemPath, recursive: false);
+                        }
+                        else
+                        {
+                            // Read-only-aware file delete (Windows read-only bit).
+                            FileSystemHelpers.DeleteFileForce(m.ItemPath);
                         }
                     }
-                    if (underPruned) continue;
+                    catch (Exception ex)
+                    {
+                        if (FileSystemHelpers.IsPipelineStop(ex)) throw;
+                        EmitError($"find: cannot delete '{m.DisplayPath}': {ex.Message}", 1);
+                    }
+                    continue;
                 }
 
-                bool isDir = item is System.IO.DirectoryInfo;
-
-                if (relativeDepth < minDepth) continue;
-
-                string displayPath = BuildDisplay(itemPath);
-
-                // Evaluate the full predicate expression for this item. An empty
-                // expression (no predicates) matches everything.
-                if (!matchExpr(new EvalCtx(item, isDir, displayPath, now))) continue;
-
-                // A matched directory under -prune excludes its subtree from here on.
-                if (doPrune && isDir)
-                    prunedRoots.Add(itemPath);
-
-                rootMatches.Add((item, displayPath, isDir, itemPath));
-            }
-
-            // -depth (and the implied -depth of -delete): process directory contents before the
-            // directory itself, i.e. deepest paths first. Scoped to this root's matches so
-            // multiple roots don't interleave by absolute segment count.
-            if (depthFirst)
-                rootMatches.Sort((a, b) => SegmentCount(b.ItemPath).CompareTo(SegmentCount(a.ItemPath)));
-
-            matches.AddRange(rootMatches);
-        }
-
-        // ── dispatch ────────────────────────────────────────────────────────────
-        // -delete is an action: remove matches and print nothing (deepest-first lets a
-        // directory be removed after its matched contents are gone).
-        if (doDelete)
-        {
-            foreach (var m in matches)
-            {
-                try
+                if (execCmd != null)
                 {
-                    if (m.IsDir)
+                    if (execTerminator == ";")
                     {
-                        // Non-recursive on purpose: bash `find -delete` errors on a non-empty
-                        // directory (matched contents are deleted first, depth-first). Clear the
-                        // read-only bit first so an empty-but-read-only dir still deletes on Windows.
-                        FileSystemHelpers.ClearReadOnly(m.ItemPath);
-                        System.IO.Directory.Delete(m.ItemPath, recursive: false);
+                        var cmdArgs = new List<string>(execCmd.Count);
+                        foreach (var token in execCmd)
+                            cmdArgs.Add(token == "{}" ? m.DisplayPath : token);
+                        InvokeExternalCommand(cmdArgs);
                     }
                     else
                     {
-                        // Read-only-aware file delete (Windows read-only bit).
-                        FileSystemHelpers.DeleteFileForce(m.ItemPath);
+                        execCollectedPaths.Add(m.DisplayPath);
                     }
+                    continue;
                 }
-                catch (Exception ex)
-                {
-                    if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-                    EmitError($"find: cannot delete '{m.DisplayPath}': {ex.Message}", 1);
-                }
-            }
-            return;
-        }
 
-        if (execCmd != null)
-        {
-            var execCollectedPaths = new List<string>();
-            foreach (var m in matches)
-            {
-                if (execTerminator == ";")
+                if (printNull)
                 {
-                    var cmdArgs = new List<string>(execCmd.Count);
-                    foreach (var token in execCmd)
-                        cmdArgs.Add(token == "{}" ? m.DisplayPath : token);
-                    InvokeExternalCommand(cmdArgs);
+                    // One exact-bytes record per path ("path\0"); the byte stream is the NUL-joined list.
+                    var nul = new PSObject();
+                    nul.TypeNames.Insert(0, "PsBash.TextOutput");
+                    nul.Properties.Add(new PSNoteProperty("BashText", m.DisplayPath + "\0"));
+                    nul.Properties.Add(new PSNoteProperty("NoTrailingNewline", true));
+                    WriteObject(nul);
+                    continue;
                 }
-                else
-                {
-                    execCollectedPaths.Add(m.DisplayPath);
-                }
-            }
-            // -exec cmd {} +  — one invocation with the whole collected path set.
-            if (execTerminator == "+" && execCollectedPaths.Count > 0)
-            {
-                var cmdArgs = new List<string>();
-                foreach (var token in execCmd)
-                {
-                    if (token == "{}") cmdArgs.AddRange(execCollectedPaths);
-                    else cmdArgs.Add(token);
-                }
-                InvokeExternalCommand(cmdArgs);
-            }
-            return;
-        }
 
-        if (printNull)
-        {
-            var nullDelimitedPaths = new StringBuilder();
-            foreach (var m in matches)
-            {
-                nullDelimitedPaths.Append(m.DisplayPath);
-                nullDelimitedPaths.Append('\0');
-            }
-            if (nullDelimitedPaths.Length > 0)
-            {
+                // Default action: emit a typed FindEntry per match.
+                var fileInfo = BuildFileInfo(m.Item);
                 var obj = new PSObject();
-                obj.TypeNames.Insert(0, "PsBash.TextOutput");
-                obj.Properties.Add(new PSNoteProperty("BashText", nullDelimitedPaths.ToString()));
-                obj.Properties.Add(new PSNoteProperty("NoTrailingNewline", true));
+                obj.TypeNames.Insert(0, "PsBash.FindEntry");
+                obj.Properties.Add(new PSNoteProperty("Path", m.DisplayPath));
+                obj.Properties.Add(new PSNoteProperty("Name", m.Item.Name));
+                obj.Properties.Add(new PSNoteProperty("FullPath", m.ItemPath));
+                obj.Properties.Add(new PSNoteProperty("IsDirectory", m.IsDir));
+                obj.Properties.Add(new PSNoteProperty("SizeBytes", fileInfo.SizeBytes));
+                obj.Properties.Add(new PSNoteProperty("Permissions", fileInfo.Permissions));
+                obj.Properties.Add(new PSNoteProperty("LinkCount", fileInfo.LinkCount));
+                obj.Properties.Add(new PSNoteProperty("Owner", fileInfo.Owner));
+                obj.Properties.Add(new PSNoteProperty("Group", fileInfo.Group));
+                obj.Properties.Add(new PSNoteProperty("LastModified", m.Item.LastWriteTime));
+                obj.Properties.Add(new PSNoteProperty("BashText", m.DisplayPath));
                 WriteObject(obj);
             }
-            return;
         }
 
-        // Default action: emit a typed FindEntry per match.
-        foreach (var m in matches)
+        // -exec cmd {} +  — one invocation with the whole collected path set.
+        if (execCmd != null && execTerminator == "+" && execCollectedPaths.Count > 0 && !doDelete)
         {
-            var fileInfo = BuildFileInfo(m.Item);
-            var obj = new PSObject();
-            obj.TypeNames.Insert(0, "PsBash.FindEntry");
-            obj.Properties.Add(new PSNoteProperty("Path", m.DisplayPath));
-            obj.Properties.Add(new PSNoteProperty("Name", m.Item.Name));
-            obj.Properties.Add(new PSNoteProperty("FullPath", m.ItemPath));
-            obj.Properties.Add(new PSNoteProperty("IsDirectory", m.IsDir));
-            obj.Properties.Add(new PSNoteProperty("SizeBytes", fileInfo.SizeBytes));
-            obj.Properties.Add(new PSNoteProperty("Permissions", fileInfo.Permissions));
-            obj.Properties.Add(new PSNoteProperty("LinkCount", fileInfo.LinkCount));
-            obj.Properties.Add(new PSNoteProperty("Owner", fileInfo.Owner));
-            obj.Properties.Add(new PSNoteProperty("Group", fileInfo.Group));
-            obj.Properties.Add(new PSNoteProperty("LastModified", m.Item.LastWriteTime));
-            obj.Properties.Add(new PSNoteProperty("BashText", m.DisplayPath));
-            WriteObject(obj);
+            var cmdArgs = new List<string>();
+            foreach (var token in execCmd)
+            {
+                if (token == "{}") cmdArgs.AddRange(execCollectedPaths);
+                else cmdArgs.Add(token);
+            }
+            InvokeExternalCommand(cmdArgs);
         }
     }
 
-    private static int SegmentCount(string path) =>
-        path.TrimEnd('\\', '/').Split('\\', '/').Length;
+    private readonly record struct FindHit(System.IO.FileSystemInfo Item, string DisplayPath, bool IsDir, string ItemPath);
+
+    /// <summary>
+    /// Lazy depth-first walk yielding each item the expression accepts. The expression is evaluated ONCE per
+    /// item, when the walk reaches it: a matched directory under <c>-prune</c> is listed but not descended; with
+    /// <c>-depth</c> / <c>-delete</c> a directory is yielded AFTER its contents (post-order), otherwise before
+    /// them (pre-order, GNU's default order). <c>-maxdepth</c> bounds the descent, <c>-mindepth</c> only
+    /// withholds shallow items (they are neither evaluated nor able to prune). A directory symlink / junction is
+    /// a leaf (never followed); the ROOT is always listed into.
+    /// </summary>
+    private static IEnumerable<FindHit> WalkMatches(
+        System.IO.FileSystemInfo item, int depth, Func<EvalCtx, bool> matchExpr, int maxDepth, int minDepth,
+        bool prune, bool depthFirst, DateTime now, Func<string, string> display)
+    {
+        bool isDir = item is System.IO.DirectoryInfo;
+        bool matched = false;
+        FindHit hit = default;
+        if (depth >= minDepth)
+        {
+            string itemPath = item.FullName;
+            string displayPath = display(itemPath);
+            if (matchExpr(new EvalCtx(item, isDir, displayPath, now)))
+            {
+                matched = true;
+                hit = new FindHit(item, displayPath, isDir, itemPath);
+            }
+        }
+
+        if (matched && !depthFirst) yield return hit;
+
+        if (isDir && depth < maxDepth && !(prune && matched)
+            && (depth == 0 || (item.Attributes & System.IO.FileAttributes.ReparsePoint) == 0))
+        {
+            foreach (var child in FileSystemHelpers.ListChildrenNoFollow((System.IO.DirectoryInfo)item))
+            {
+                foreach (var h in WalkMatches(child, depth + 1, matchExpr, maxDepth, minDepth, prune, depthFirst, now, display))
+                    yield return h;
+            }
+        }
+
+        if (matched && depthFirst) yield return hit;
+    }
 
     // ── predicate expression model ───────────────────────────────────────────
     // find combines predicates with an implicit AND, explicit -a/-and, -o/-or

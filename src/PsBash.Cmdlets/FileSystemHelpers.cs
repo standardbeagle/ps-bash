@@ -612,11 +612,21 @@ internal static class FileSystemHelpers
     public static IEnumerable<FileSystemInfo> EnumerateNoFollow(DirectoryInfo root, int maxDepth = int.MaxValue)
         => EnumerateNoFollowCore(root, 1, maxDepth);
 
+    /// <summary>
+    /// One directory's entries (files, subdirectories, links; no <c>.</c>/<c>..</c>), in the OS's own listing
+    /// order, with per-directory enumeration errors swallowed (best-effort: an unreadable directory lists as empty).
+    /// The shared listing step of <see cref="EnumerateNoFollow"/> and of walkers that decide per entry whether to
+    /// descend (<c>find -prune</c>).
+    /// </summary>
+    public static List<FileSystemInfo> ListChildrenNoFollow(DirectoryInfo dir)
+    {
+        try { return new List<FileSystemInfo>(dir.EnumerateFileSystemInfos("*", _noFollowEnumOptions)); }
+        catch { return new List<FileSystemInfo>(); }
+    }
+
     private static IEnumerable<FileSystemInfo> EnumerateNoFollowCore(DirectoryInfo dir, int depth, int maxDepth)
     {
-        List<FileSystemInfo> children;
-        try { children = new List<FileSystemInfo>(dir.EnumerateFileSystemInfos("*", _noFollowEnumOptions)); }
-        catch { yield break; }
+        var children = ListChildrenNoFollow(dir);
 
         foreach (var child in children)
         {
