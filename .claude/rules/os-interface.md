@@ -27,6 +27,7 @@ streaming/interactive consumers (traceroute hop-by-hop, less paging) that handle
 - operand path normalization → `FileSystemHelpers.NormalizeOperandPath` → `WindowsPath` (unix→drive).
 - `--version` → `FileSystemHelpers.TryHandleVersion`; exit code → `FileSystemHelpers.SetLastExitCode`.
 - file reads → `BashFileSystem` (streaming, BOM/CRLF, binary policy) — NEVER raw `File.ReadAllText`.
+- data text↔bytes → `PsBash.Core.RawBytes` (escaped-byte markers; `RawBytes.Encoding` for readers/writers/children) — NEVER `Encoding.UTF8.GetBytes/GetString` or `File.*AllText` on data (guard: `RawBytesGuardTests`).
 
 ## RAW-LINE FLAG RECOVERY (binder-swallowed short flags)
 A flag the case-insensitive binder ate (grep/sed `-E`, cut `-d:`, uniq `-D`, echo `-e`), recovered
