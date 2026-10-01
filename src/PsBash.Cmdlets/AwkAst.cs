@@ -78,6 +78,15 @@ internal sealed class BreakStmt : AwkStmt { }
 internal sealed class ContinueStmt : AwkStmt { }
 internal sealed class ExitStmt : AwkStmt { public AwkExpr? Code; }
 internal sealed class DeleteStmt : AwkStmt { public string ArrayName = ""; public List<AwkExpr>? Subscripts; }
+internal sealed class ReturnStmt : AwkStmt { public AwkExpr? Value; }
+
+/// <summary><c>function name(params, locals) { body }</c>. Extra parameters beyond what a call passes are locals.</summary>
+internal sealed class AwkFunction
+{
+    public string Name = "";
+    public List<string> Params = new();
+    public BlockStmt Body = null!;
+}
 
 // ── Program structure ──────────────────────────────────────────────────────
 
@@ -95,6 +104,9 @@ internal sealed class AwkProgram
     public List<AwkRule> Begin = new();
     public List<AwkRule> Main = new();
     public List<AwkRule> End = new();
+
+    /// <summary>User-defined functions by name (defined anywhere in the program; calls resolve at run time).</summary>
+    public Dictionary<string, AwkFunction> Functions = new();
 
     /// <summary>
     /// The program pulls from the MAIN input: a plain <c>getline [var]</c>, or a <c>getline &lt; "-"</c> /

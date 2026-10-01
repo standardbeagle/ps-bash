@@ -338,18 +338,38 @@ internal sealed class AwkMachine
 
     // ── variables / arrays ───────────────────────────────────────────────────
 
-    private AwkValue GetVar(string name) => name switch
+    private AwkValue GetVar(string name)
     {
-        "NF" => AwkValue.Number(_nf),
-        "NR" => AwkValue.Number(_nr),
-        "FNR" => AwkValue.Number(_fnr),
-        "RSTART" => AwkValue.Number(_rstart),
-        "RLENGTH" => AwkValue.Number(_rlength),
-        _ => _vars.TryGetValue(name, out var v) ? v : AwkValue.Uninitialized,
-    };
+        if (_frame is not null && _frame.Locals.TryGetValue(name, out var cell))
+        {
+            if (cell.Array is not null) throw ArrayAsScalar(name);
+            return cell.HasScalar ? cell.Scalar : AwkValue.Uninitialized;
+        }
+        if (_arrays.Count > 0 && _arrays.ContainsKey(name)) throw ArrayAsScalar(name);
+        return name switch
+        {
+            "NF" => AwkValue.Number(_nf),
+            "NR" => AwkValue.Number(_nr),
+            "FNR" => AwkValue.Number(_fnr),
+            "RSTART" => AwkValue.Number(_rstart),
+            "RLENGTH" => AwkValue.Number(_rlength),
+            _ => _vars.TryGetValue(name, out var v) ? v : AwkValue.Uninitialized,
+        };
+    }
+
+    private static AwkInterpreter.AwkRuntimeException ArrayAsScalar(string name) =>
+        new($"fatal: attempt to use array `{name}' in a scalar context");
 
     private void SetVar(string name, AwkValue value)
     {
+        if (_frame is not null && _frame.Locals.TryGetValue(name, out var cell))
+        {
+            if (cell.Array is not null) throw ArrayAsScalar(name);
+            cell.Scalar = value;
+            cell.HasScalar = true;
+            return;
+        }
+        if (_arrays.Count > 0 && _arrays.ContainsKey(name)) throw ArrayAsScalar(name);
         switch (name)
         {
             case "NF": SetNF((int)value.ToNumber()); return;
@@ -363,6 +383,7 @@ internal sealed class AwkMachine
 
     private Dictionary<string, AwkValue> GetArray(string name)
     {
+        if (_frame is not null && _frame.Locals.TryGetValue(name, out var cell)) return CellArray(cell, name);
         if (!_arrays.TryGetValue(name, out var arr))
         {
             arr = new Dictionary<string, AwkValue>();
@@ -370,6 +391,12 @@ internal sealed class AwkMachine
         }
         return arr;
     }
+
+    /// <summary>True when <paramref name="name"/> currently denotes an array (a local that holds one, or a global array).</summary>
+    private bool IsArrayName(string name) =>
+        _frame is not null && _frame.Locals.TryGetValue(name, out var cell)
+            ? cell.Array is not null
+            : _arrays.ContainsKey(name);
 
     private string SubscriptKey(IReadOnlyList<AwkExpr> subs)
     {
@@ -386,8 +413,16 @@ internal sealed class AwkMachine
         switch (stmt)
         {
             case BlockStmt b:
-                foreach (var s in b.Statements) ExecStmt(s);
+                foreach (var s in b.Statements)
+                {
+                    ExecStmt(s);
+                    if (_returning) return;
+                }
                 break;
+            case ReturnStmt ret:
+                _retVal = ret.Value is null ? AwkValue.Uninitialized : Eval(ret.Value);
+                _returning = true;
+                return;
             case PrintStmt p: ExecPrint(p); break;
             case PrintfStmt pf: ExecPrintf(pf); break;
             case ExprStmt e: Eval(e.Expr); break;
@@ -401,6 +436,7 @@ internal sealed class AwkMachine
                     try { ExecStmt(w.Body); }
                     catch (BreakSignal) { break; }
                     catch (ContinueSignal) { }
+                    if (_returning) return;
                 }
                 break;
             case DoWhileStmt dw:
@@ -409,6 +445,7 @@ internal sealed class AwkMachine
                     try { ExecStmt(dw.Body); }
                     catch (BreakSignal) { break; }
                     catch (ContinueSignal) { }
+                    if (_returning) return;
                 } while (Eval(dw.Cond).ToBool());
                 break;
             case ForStmt f:
@@ -418,6 +455,7 @@ internal sealed class AwkMachine
                     try { ExecStmt(f.Body); }
                     catch (BreakSignal) { break; }
                     catch (ContinueSignal) { }
+                    if (_returning) return;
                     if (f.Post != null) ExecStmt(f.Post);
                 }
                 break;
@@ -430,6 +468,7 @@ internal sealed class AwkMachine
                     try { ExecStmt(fi.Body); }
                     catch (BreakSignal) { break; }
                     catch (ContinueSignal) { }
+                    if (_returning) return;
                 }
                 break;
             }
@@ -666,7 +705,106 @@ internal sealed class AwkMachine
             case "system": return BuiltinSystem(Arg(call, 0));
             case "close": return BuiltinClose(Arg(call, 0));
             case "fflush": return BuiltinFflush(call.Args);
-            default: throw new AwkInterpreter.AwkSyntaxException($"awk: calling undefined function {call.Name}");
+            default:
+                if (_prog.Functions.TryGetValue(call.Name, out var fn)) return CallUser(fn, call.Args);
+                throw new AwkInterpreter.AwkSyntaxException($"awk: fatal: function `{call.Name}' not defined");
+        }
+    }
+
+    // ── user-defined functions ───────────────────────────────────────────────
+
+    /// <summary>
+    /// A function-local variable: a scalar, an array, or (while neither has been used) untyped. An
+    /// untyped parameter that was given a bare caller variable remembers where it came from: if the
+    /// callee uses it as an array, the array is also bound to that caller variable, so
+    /// <c>function mk(a){a[1]=1} BEGIN{mk(x); print x[1]}</c> works exactly as in gawk.
+    /// </summary>
+    private sealed class Cell
+    {
+        public AwkValue Scalar;
+        public bool HasScalar;
+        public Dictionary<string, AwkValue>? Array;
+        public Cell? Origin;                                   // caller's local this untyped cell stands for
+        public Action<Dictionary<string, AwkValue>>? BindGlobal; // caller's global this untyped cell stands for
+
+        public void AdoptArray(Dictionary<string, AwkValue> d)
+        {
+            if (Array is not null || HasScalar) return;
+            Array = d;
+            Origin?.AdoptArray(d);
+            BindGlobal?.Invoke(d);
+        }
+    }
+
+    private sealed class Frame
+    {
+        public readonly Dictionary<string, Cell> Locals;
+        public Frame(Dictionary<string, Cell> locals) { Locals = locals; }
+    }
+
+    private Frame? _frame;
+    private bool _returning;
+    private AwkValue _retVal;
+
+    private Dictionary<string, AwkValue> CellArray(Cell cell, string name)
+    {
+        if (cell.Array is not null) return cell.Array;
+        if (cell.HasScalar)
+            throw new AwkInterpreter.AwkRuntimeException($"fatal: attempt to use scalar parameter `{name}' as an array");
+        var d = new Dictionary<string, AwkValue>();
+        cell.AdoptArray(d);
+        return d;
+    }
+
+    /// <summary>
+    /// The cell a call argument becomes: a bare variable passes an array by reference (and an untyped
+    /// variable as a link that can turn into one), anything else — including a scalar variable — by value.
+    /// </summary>
+    private Cell ArgumentCell(AwkExpr arg)
+    {
+        if (arg is VarRef v && v.Name is not ("NF" or "NR" or "FNR" or "RSTART" or "RLENGTH"))
+        {
+            if (_frame is not null && _frame.Locals.TryGetValue(v.Name, out var src))
+            {
+                if (src.Array is not null) return new Cell { Array = src.Array };
+                if (src.HasScalar) return new Cell { Scalar = src.Scalar, HasScalar = true };
+                return new Cell { Origin = src };
+            }
+            if (_arrays.TryGetValue(v.Name, out var garr)) return new Cell { Array = garr };
+            if (_vars.TryGetValue(v.Name, out var gv)) return new Cell { Scalar = gv, HasScalar = true };
+            string gname = v.Name;
+            return new Cell { BindGlobal = d => _arrays[gname] = d };
+        }
+        return new Cell { Scalar = Eval(arg), HasScalar = true };
+    }
+
+    private AwkValue CallUser(AwkFunction fn, List<AwkExpr> args)
+    {
+        // The recursion is on the managed stack: report a clean awk error instead of letting a
+        // runaway function overflow it (which would kill the shared host process).
+        if (!System.Runtime.CompilerServices.RuntimeHelpers.TryEnsureSufficientExecutionStack())
+            throw new AwkInterpreter.AwkRuntimeException("fatal: function call nesting too deep");
+
+        var locals = new Dictionary<string, Cell>(fn.Params.Count);
+        for (int i = 0; i < args.Count; i++)
+        {
+            if (i < fn.Params.Count) locals[fn.Params[i]] = ArgumentCell(args[i]);
+            else Eval(args[i]); // more arguments than parameters: evaluated for effect, then ignored
+        }
+        for (int i = args.Count; i < fn.Params.Count; i++) locals[fn.Params[i]] = new Cell();
+
+        var saved = _frame;
+        _frame = new Frame(locals);
+        try
+        {
+            ExecStmt(fn.Body);
+            return _returning ? _retVal : AwkValue.Uninitialized;
+        }
+        finally
+        {
+            _frame = saved;
+            _returning = false;
+            _retVal = default;
         }
     }
 
@@ -797,8 +935,8 @@ internal sealed class AwkMachine
     private AwkValue BuiltinLength(List<AwkExpr> args)
     {
         if (args.Count == 0) return AwkValue.Number(_fields[0].Length);
-        if (args[0] is VarRef vr && _arrays.ContainsKey(vr.Name))
-            return AwkValue.Number(_arrays[vr.Name].Count);
+        if (args[0] is VarRef vr && IsArrayName(vr.Name))
+            return AwkValue.Number(GetArray(vr.Name).Count);
         return AwkValue.Number(Eval(args[0]).ToStr(Convfmt).Length);
     }
 
@@ -840,7 +978,6 @@ internal sealed class AwkMachine
         string s = Eval(args[0]).ToStr(Convfmt);
         var arr = GetArray(arrRef.Name);
         arr.Clear();
-        _arrays[arrRef.Name] = arr;
 
         List<string> parts;
         if (args.Count >= 3)

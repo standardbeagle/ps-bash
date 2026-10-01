@@ -76,8 +76,9 @@ internal readonly struct AwkValue
         if (double.IsPositiveInfinity(d)) return "inf";
         if (double.IsNegativeInfinity(d)) return "-inf";
         // Integral values print without a fractional part (awk special-cases this
-        // regardless of CONVFMT/OFMT).
-        if (d == Math.Floor(d) && Math.Abs(d) < 1e16)
+        // regardless of CONVFMT/OFMT) as long as they fit a 64-bit integer, like gawk
+        // (20! prints 2432902008176640000, not 2.4329e+18).
+        if (d == Math.Floor(d) && d > -9.2233720368547758E+18 && d < 9.2233720368547758E+18)
         {
             return ((long)d).ToString(CultureInfo.InvariantCulture);
         }
