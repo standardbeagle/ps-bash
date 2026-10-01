@@ -53,7 +53,7 @@ public class OptSpecSharedIdGuardTests
         // ripgrep has NO long-option abbreviation (oracle: rg --no-m / --no-ign are "unrecognized flag"),
         // and RgSpec is built with allowAbbrev:false, so shared ids can never resolve a prefix.
         "InvokeBashRgCommand.RgSpec no-ignore: no-ignore no-ignore-vcs",
-        "InvokeBashRgCommand.RgSpec noop: no-heading no-messages no-config mmap no-mmap",
+        "InvokeBashRgCommand.RgSpec noop: no-messages no-config mmap no-mmap",
     };
 
     internal static IEnumerable<(string Owner, OptSpecSet Set)> AllSets()
