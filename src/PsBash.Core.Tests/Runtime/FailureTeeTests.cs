@@ -21,7 +21,7 @@ public class FailureTeeTests
         Assert.NotNull(path);
         try
         {
-            Assert.Contains(Path.Combine("ps-bash", "tee"), path!);
+            Assert.StartsWith(Path.Combine(PsBashRuntimeDirectory.GetPath(), "tee"), path!);
             using var stream = new FileStream(path!, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite);
             using var reader = new StreamReader(stream);
             Assert.Equal("ordinary output\nfatal: complete diagnostic\n", reader.ReadToEnd().Replace("\r\n", "\n"));
