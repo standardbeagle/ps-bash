@@ -142,7 +142,10 @@ CmdletsToExport = @(
     'ConvertTo-BashCapture',
     # Word splitting + pathname expansion of an unquoted $(cmd) / `cmd` / $x in a for list
     # (IFS-aware, nullglob off). Emitted by the transpiler; not a bash command alias.
-    'ConvertTo-BashWords'
+    'ConvertTo-BashWords',
+    # Pathname expansion of one unquoted glob word (echo *.txt, for f in *, arr=(*)): bash's
+    # filename-expansion step, done by the shell. Emitted by the transpiler; not a bash command alias.
+    'ConvertTo-BashGlob'
 )
 
 VariablesToExport = @()

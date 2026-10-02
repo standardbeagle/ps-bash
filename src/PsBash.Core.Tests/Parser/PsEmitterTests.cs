@@ -1458,8 +1458,7 @@ public class PsEmitterTests
         var result = PsEmitter.Transpile("echo $FOO");
 
         Assert.Equal(
-            "& { $__bashsplat0 = @(if ([string]::IsNullOrEmpty($env:FOO)) " +
-            "{ @() } else { @($env:FOO -split '\\s+' | Where-Object { $_ -ne '' }) }); " +
+            "& { $__bashsplat0 = @(ConvertTo-BashWords $env:FOO); " +
             "Invoke-BashEcho @__bashsplat0 }",
             result);
     }
@@ -1473,8 +1472,7 @@ public class PsEmitterTests
         var result = PsEmitter.Transpile("echo ${PATH}");
 
         Assert.Equal(
-            "& { $__bashsplat0 = @(if ([string]::IsNullOrEmpty($env:PATH)) " +
-            "{ @() } else { @($env:PATH -split '\\s+' | Where-Object { $_ -ne '' }) }); " +
+            "& { $__bashsplat0 = @(ConvertTo-BashWords $env:PATH); " +
             "Invoke-BashEcho @__bashsplat0 }",
             result);
     }
@@ -1942,7 +1940,6 @@ public class PsEmitterTests
     [InlineData("cat /tmp/psb_\\$z", "Invoke-BashCat \"" + TmpDir + "/psb_`$z\"")]
     [InlineData("cat /tmp/it\\'s", "Invoke-BashCat \"" + TmpDir + "/it's\"")]
     [InlineData("cat /tmp/'a$b'", "Invoke-BashCat \"" + TmpDir + "/a`$b\"")]
-    [InlineData("cat /tmp/*.log", "Invoke-BashCat \"" + TmpDir + "/*.log\"")]
     public void Transpile_TmpWordWithQuotedOrSpecialParts_RendersPartsNotEmittedText(string bash, string expected)
     {
         Assert.Equal(expected, PsEmitter.Transpile(bash));
@@ -2520,7 +2517,7 @@ public class PsEmitterTests
         // RC-7 splitting applied to command arguments but not to a for-in list.
         var result = PsEmitter.Transpile("for x in $list; do echo $x; done");
 
-        Assert.Contains("$env:list -split '\\s+'", result);
+        Assert.Contains("@(ConvertTo-BashWords $env:list)", result);
         Assert.DoesNotContain("foreach ($x in $env:list)", result);
     }
 
@@ -2529,8 +2526,8 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("for x in $a $b; do echo $x; done");
 
-        Assert.Contains("$env:a -split '\\s+'", result);
-        Assert.Contains("$env:b -split '\\s+'", result);
+        Assert.Contains("ConvertTo-BashWords $env:a", result);
+        Assert.Contains("ConvertTo-BashWords $env:b", result);
     }
 
     [Fact]
@@ -2540,7 +2537,7 @@ public class PsEmitterTests
         // arrays must flatten (oracle: `a="x y"; for w in $a z` runs x, y, z).
         var result = PsEmitter.Transpile("for w in $a z; do echo $w; done");
 
-        Assert.Contains("foreach ($w in @(@(if ([string]::IsNullOrEmpty($env:a))", result);
+        Assert.Contains("foreach ($w in @(@(ConvertTo-BashWords $env:a)", result);
         Assert.Contains("; 'z')", result);
     }
 
@@ -2899,37 +2896,37 @@ public class PsEmitterTests
     }
 
     [Fact]
-    public void Transpile_ForInGlob_EmitsResolveBashGlob()
+    public void Transpile_ForInGlob_EmitsConvertToBashGlob()
     {
         var result = PsEmitter.Transpile("for f in *.txt; do cat $f; done");
 
-        // Resolve-BashGlob (not Resolve-Path): a matching glob expands, but an
-        // unmatched glob falls back to the literal word so the loop still runs
+        // ConvertTo-BashGlob: the shell's pathname expansion (relative names, no hidden files,
+        // sorted); an unmatched glob falls back to the literal word so the loop still runs
         // once — bash nullglob is OFF by default.
-        Assert.Equal("$__psbash_iter = 0; foreach ($f in (Resolve-BashGlob *.txt)) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; Invoke-BashCat $f }", result);
+        Assert.Equal("$__psbash_iter = 0; foreach ($f in @(ConvertTo-BashGlob '*.txt')) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; Invoke-BashCat $f }", result);
     }
 
     [Fact]
-    public void Transpile_ForInSingleNonMatchingGlob_FallsBackToLiteralWordViaResolveBashGlob()
+    public void Transpile_ForInSingleNonMatchingGlob_FallsBackToLiteralWordViaConvertToBashGlob()
     {
         // bash: `for f in *.xyz` with no match iterates ONCE with the literal
         // word `*.xyz` (nullglob off). Resolve-Path would error + yield nothing
-        // (zero iterations). Resolve-BashGlob returns the literal on no-match.
+        // (zero iterations). ConvertTo-BashGlob returns the literal on no-match.
         var result = PsEmitter.Transpile("for f in *.xyz; do echo $f; done");
 
-        Assert.Contains("foreach ($f in (Resolve-BashGlob *.xyz))", result);
+        Assert.Contains("foreach ($f in @(ConvertTo-BashGlob '*.xyz'))", result);
         Assert.DoesNotContain("Resolve-Path", result);
     }
 
     [Fact]
-    public void Transpile_ForInMixedGlobList_RoutesWholeListThroughResolveBashGlob()
+    public void Transpile_ForInMixedGlobList_FlattensEachGlobWordIndependently()
     {
-        // A single non-matching glob/literal must NOT nuke the rest of the list:
-        // Resolve-BashGlob resolves each operand independently, so `a.txt` and
-        // `missing.xyz` survive even when `*.log` matches nothing.
+        // A single non-matching glob/literal must NOT nuke the rest of the list: every glob word
+        // expands on its own into one flat list, so `a.txt` and `missing.xyz` survive even when
+        // `*.log` matches nothing.
         var result = PsEmitter.Transpile("for f in a.txt *.log missing.xyz; do echo $f; done");
 
-        Assert.Contains("foreach ($f in (Resolve-BashGlob a.txt *.log missing.xyz))", result);
+        Assert.Contains("foreach ($f in @('a.txt'; @(ConvertTo-BashGlob '*.log'); 'missing.xyz'))", result);
         Assert.DoesNotContain("Resolve-Path", result);
     }
 
@@ -3541,39 +3538,44 @@ public class PsEmitterTests
         => Assert.Equal("Invoke-BashEcho $(Invoke-BashArith '${x} + 1')",
             PsEmitter.Transpile("echo $((${x} + 1))"));
 
+    // A glob word is expanded by the SHELL (ConvertTo-BashGlob), so echo receives file names.
+    // See emitter-strategy.md "Pathname expansion".
+    private static string GlobSplat(string pattern, string command = "Invoke-BashEcho") =>
+        $"& {{ $__bashsplat0 = @(ConvertTo-BashGlob '{pattern}'); {command} @__bashsplat0 }}";
+
     [Fact]
-    public void Transpile_GlobStar_PassesThrough()
+    public void Transpile_GlobStar_ExpandsViaConvertToBashGlob()
     {
         var result = PsEmitter.Transpile("echo *.py");
-        Assert.Equal("Invoke-BashEcho *.py", result);
+        Assert.Equal(GlobSplat("*.py"), result);
     }
 
     [Fact]
-    public void Transpile_GlobQuestionMark_PassesThrough()
+    public void Transpile_GlobQuestionMark_ExpandsViaConvertToBashGlob()
     {
         var result = PsEmitter.Transpile("echo file?.txt");
-        Assert.Equal("Invoke-BashEcho file?.txt", result);
+        Assert.Equal(GlobSplat("file?.txt"), result);
     }
 
     [Fact]
-    public void Transpile_GlobCharClass_PassesThrough()
+    public void Transpile_GlobCharClass_ExpandsViaConvertToBashGlob()
     {
         var result = PsEmitter.Transpile("echo [abc]*");
-        Assert.Equal("Invoke-BashEcho [abc]*", result);
+        Assert.Equal(GlobSplat("[abc]*"), result);
     }
 
     [Fact]
-    public void Transpile_GlobMixedWithLiteral_PassesThrough()
+    public void Transpile_GlobMixedWithLiteral_ExpandsViaConvertToBashGlob()
     {
         var result = PsEmitter.Transpile("echo src/*.py");
-        Assert.Equal("Invoke-BashEcho src/*.py", result);
+        Assert.Equal(GlobSplat("src/*.py"), result);
     }
 
     [Fact]
-    public void Transpile_GlobStandalone_PassesThrough()
+    public void Transpile_GlobStandalone_ExpandsViaConvertToBashGlob()
     {
         var result = PsEmitter.Transpile("echo *");
-        Assert.Equal("Invoke-BashEcho *", result);
+        Assert.Equal(GlobSplat("*"), result);
     }
 
     [Fact]
@@ -3584,17 +3586,130 @@ public class PsEmitterTests
     }
 
     [Fact]
-    public void Transpile_GlobPrefix_PassesThrough()
+    public void Transpile_GlobPrefix_ExpandsViaConvertToBashGlob()
     {
         var result = PsEmitter.Transpile("echo *.log");
-        Assert.Equal("Invoke-BashEcho *.log", result);
+        Assert.Equal(GlobSplat("*.log"), result);
     }
 
     [Fact]
-    public void Transpile_GlobSuffix_PassesThrough()
+    public void Transpile_GlobSuffix_ExpandsViaConvertToBashGlob()
     {
         var result = PsEmitter.Transpile("echo test*");
-        Assert.Equal("Invoke-BashEcho test*", result);
+        Assert.Equal(GlobSplat("test*"), result);
+    }
+
+    // ---- Pathname expansion: every consumer, not only the cmdlets that glob themselves ----
+
+    [Fact]
+    public void Transpile_PrintfWithGlobOperand_ExpandsTheGlobOnly()
+    {
+        Assert.Equal(
+            "& { $__bashsplat0 = @(ConvertTo-BashGlob '*'); Invoke-BashPrintf '%s\\n' @__bashsplat0 }",
+            PsEmitter.Transpile("printf '%s\\n' *"));
+    }
+
+    [Theory]
+    [InlineData("f *", "f")]
+    [InlineData("/bin/echo *", "/bin/echo")]
+    [InlineData("cmd.exe /c echo *", "cmd.exe")]
+    public void Transpile_GlobOperandOfFunctionOrNativeCommand_IsExpandedByTheShell(string bash, string command)
+    {
+        // Functions and native programs never expand a pattern themselves, and never get -ForCmdlet.
+        var result = PsEmitter.Transpile(bash);
+
+        Assert.Contains("$__bashsplat0 = @(ConvertTo-BashGlob '*');", result);
+        Assert.Contains(command, result);
+        Assert.EndsWith("@__bashsplat0 }", result);
+    }
+
+    [Theory]
+    [InlineData("touch *.c", "Invoke-BashTouch")]
+    [InlineData("tar cf a.tar *", "Invoke-BashTar")]
+    [InlineData("cp *.c d", "Invoke-BashCp")]
+    [InlineData("rm -f *.o", "Invoke-BashRm")]
+    [InlineData("grep -l x *", "Invoke-BashGrep")]
+    [InlineData("ls *", "Invoke-BashLs")]
+    public void Transpile_GlobOperandOfMappedCommand_IsExpandedByTheShellForEveryCommand(
+        string bash, string command)
+    {
+        // Every consumer gets names; the cmdlets that also glob their own operands then see plain names
+        // (one expansion by the shell, hidden files and ordering decided in one place).
+        var pattern = bash.Contains("*.c") ? "*.c" : bash.Contains("*.o") ? "*.o" : "*";
+
+        Assert.Contains($"$__bashsplat0 = @(ConvertTo-BashGlob '{pattern}');", PsEmitter.Transpile(bash));
+        Assert.Contains(command, PsEmitter.Transpile(bash));
+    }
+
+    [Theory]
+    [InlineData("echo \"*\"")]
+    [InlineData("echo '*.txt'")]
+    [InlineData("echo \\*")]
+    [InlineData("echo \\*.txt")]
+    [InlineData("echo \"a\"*\"\" 'x'")]
+    public void Transpile_QuotedOrEscapedGlobCharacter_IsNotExpanded(string bash)
+    {
+        // `echo "a"*` still globs (the star is bare); the others have only quoted stars.
+        var result = PsEmitter.Transpile(bash);
+
+        if (bash.Contains("\"a\""))
+            Assert.Contains("ConvertTo-BashGlob 'a*'", result);
+        else
+            Assert.DoesNotContain("ConvertTo-BashGlob", result);
+    }
+
+    [Fact]
+    public void Transpile_GlobWordWithQuotedParts_EscapesTheQuotedGlobCharacters()
+    {
+        // `"a*"*` : the first star is quoted (matches itself), the second is the glob.
+        Assert.Equal(GlobSplat("a\\**"), PsEmitter.Transpile("echo \"a*\"*"));
+        // Single-quoted and escaped text is escaped as well, and `?` / `[` too.
+        Assert.Equal(GlobSplat("a\\?\\[b*"), PsEmitter.Transpile("echo 'a?'\\[b*"));
+    }
+
+    [Fact]
+    public void Transpile_GlobWordWithVariable_QuotedValueIsEscapedUnquotedValueIsActive()
+    {
+        // bash: an unquoted $d keeps its glob characters live; "$d" never globs.
+        var unquoted = PsEmitter.Transpile("echo $d/*");
+        var quoted = PsEmitter.Transpile("echo \"$d\"/*");
+
+        Assert.Contains("ConvertTo-BashGlob ('' + ($env:d) + '/*')", unquoted);
+        Assert.Contains("ConvertTo-BashGlob ('' + ([PsBash.Cmdlets.BashGlobText]::Escape(\"$env:d\")) + '/*')", quoted);
+    }
+
+    [Fact]
+    public void Transpile_GlobWordWithTilde_ReaddsTheSlashTheParserConsumed()
+    {
+        var result = PsEmitter.Transpile("echo ~/x*");
+
+        Assert.Contains("([string]$HOME).Replace('\\','/')", result);
+        Assert.Contains("+ '/x*')", result);
+    }
+
+    [Fact]
+    public void Transpile_ExtglobWord_KeepsItsOldEmission()
+    {
+        // extglob (+(a|b)) is not implemented by the engine: it must not reach ConvertTo-BashGlob.
+        Assert.DoesNotContain("ConvertTo-BashGlob", PsEmitter.Transpile("echo +(*.py|*.js)"));
+    }
+
+    [Fact]
+    public void Transpile_ArrayAssignmentWithGlobElement_FlattensIntoOneArray()
+    {
+        // The comma form cannot splice an expansion that yields zero or many words.
+        Assert.Equal("$arr = @(\"a\"; @(ConvertTo-BashGlob '*.txt'); \"b\")", PsEmitter.Transpile("arr=(a *.txt b)"));
+        // No glob element: the historical comma form is unchanged.
+        Assert.Equal("$arr = @(\"a\",\"b\")", PsEmitter.Transpile("arr=(a b)"));
+    }
+
+    [Fact]
+    public void Transpile_GlobWordInPipeStage_ForwardsThePipeInput()
+    {
+        // The splat hoist wraps the stage in a script block, which would swallow the pipe.
+        var result = PsEmitter.Transpile("echo hi | tee *.log");
+
+        Assert.Contains("$input | Invoke-BashTee @__bashsplat0", result);
     }
 
     [Fact]
@@ -3633,17 +3748,18 @@ public class PsEmitterTests
     }
 
     [Theory]
-    [InlineData("[[:alpha:]]", "[A-Za-z]")]
-    [InlineData("[[:digit:][:upper:]]", "[0-9A-Z]")]
-    [InlineData("[![:xdigit:]]", "[!A-Fa-f0-9]")]
-    [InlineData("[[:blank:]]", "[` `t]")]
-    [InlineData("[[:space:]]", "[` `t`r`n`f`v]")]
-    public void Transpile_PosixGlobCharClass_NormalizesForPowerShellWildcard(string pattern, string expected)
+    [InlineData("[[:alpha:]]")]
+    [InlineData("[[:digit:][:upper:]]")]
+    [InlineData("[![:xdigit:]]")]
+    [InlineData("[[:blank:]]")]
+    [InlineData("[[:space:]]")]
+    public void Transpile_PosixGlobCharClass_ReachesTheGlobEngineVerbatim(string pattern)
     {
+        // The engine (BashGlob / LsGlob) understands [:class:] itself, so the class is NOT rewritten
+        // into a PowerShell wildcard range any more.
         var result = PsEmitter.Emit(Assert.IsType<Command.Simple>(BashParser.Parse($"echo {pattern}")));
 
-        Assert.Contains(expected, result);
-        Assert.DoesNotContain("[:", result);
+        Assert.Equal(GlobSplat(pattern), result);
     }
 
     [Theory]
@@ -3679,10 +3795,10 @@ public class PsEmitterTests
     }
 
     [Fact]
-    public void Transpile_ForInGlobCharClass_EmitsResolveBashGlob()
+    public void Transpile_ForInGlobCharClass_EmitsConvertToBashGlob()
     {
         var result = PsEmitter.Transpile("for f in [abc]*.txt; do cat $f; done");
-        Assert.Equal("$__psbash_iter = 0; foreach ($f in (Resolve-BashGlob [abc]*.txt)) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; Invoke-BashCat $f }", result);
+        Assert.Equal("$__psbash_iter = 0; foreach ($f in @(ConvertTo-BashGlob '[abc]*.txt')) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; Invoke-BashCat $f }", result);
     }
 
     [Fact]
@@ -4273,8 +4389,7 @@ public class PsEmitterTests
         var result = PsEmitter.Transpile("export FOO=bar && echo $FOO");
         Assert.Equal(
             "[void]($env:FOO = \"bar\") && $(& { $__bashsplat0 = " +
-            "@(if ([string]::IsNullOrEmpty($env:FOO)) { @() } " +
-            "else { @($env:FOO -split '\\s+' | Where-Object { $_ -ne '' }) }); " +
+            "@(ConvertTo-BashWords $env:FOO); " +
             "Invoke-BashEcho @__bashsplat0 })",
             result);
     }
@@ -5413,9 +5528,7 @@ public class PsEmitterTests
         // and PowerShell-splats it.
         var result = PsEmitter.Transpile("echo a $x b");
 
-        Assert.Contains("$__bashsplat0 = @(if ([string]::IsNullOrEmpty($env:x))",
-            result);
-        Assert.Contains("@($env:x -split '\\s+' | Where-Object { $_ -ne '' })", result);
+        Assert.Contains("$__bashsplat0 = @(ConvertTo-BashWords $env:x)", result);
         Assert.Contains("@__bashsplat0", result);
         // Wrapped in & { } so the temp assignment never leaks into a pipeline.
         Assert.Contains("& {", result);
@@ -5493,7 +5606,7 @@ public class PsEmitterTests
 
         // The word-split array is still built (bash word-splitting semantics),
         // it is just consumed as a VALUE rather than splatted.
-        Assert.Contains("$env:code -split '\\s+'", result);
+        Assert.Contains("ConvertTo-BashWords $env:code", result);
         Assert.Contains("$__bashexit[0]", result);
     }
 
@@ -5589,8 +5702,8 @@ public class PsEmitterTests
     public void Transpile_StaticGlobClass_StillAGlob()
     {
         // A class with no expansion keeps its glob handling.
-        Assert.Equal("Invoke-BashEcho [abc]", PsEmitter.Transpile("echo [abc]"));
-        Assert.Equal("Invoke-BashEcho [0-9]", PsEmitter.Transpile("echo [[:digit:]]"));
+        Assert.Equal(GlobSplat("[abc]"), PsEmitter.Transpile("echo [abc]"));
+        Assert.Equal(GlobSplat("[[:digit:]]"), PsEmitter.Transpile("echo [[:digit:]]"));
     }
 
     // ---- redirect / test-operator / unmodelable-expansion degradations -----
@@ -5708,19 +5821,15 @@ public class PsEmitterTests
     // A glob word that also carries a bare `,` was emitted bare: PowerShell bound it as an
     // ARRAY (`*.c,x` -> @('*.c','x')). Bash keeps the comma literal inside the pattern.
     [Theory]
-    [InlineData("ls *.c,x", "Invoke-BashLs '*.c,x'")]
-    [InlineData("echo a*,b", "Invoke-BashEcho 'a*,b'")]
-    [InlineData("cat f*,g", "Invoke-BashCat 'f*,g'")]
-    [InlineData("cat f?,g[12]", "Invoke-BashCat 'f?,g[12]'")]
-    public void Transpile_GlobWordWithCommaLiteral_IsOneQuotedPattern(string bash, string expected)
+    [InlineData("ls *.c,x", "*.c,x", "Invoke-BashLs")]
+    [InlineData("echo a*,b", "a*,b", "Invoke-BashEcho")]
+    [InlineData("cat f*,g", "f*,g", "Invoke-BashCat")]
+    [InlineData("cat f?,g[12]", "f?,g[12]", "Invoke-BashCat")]
+    public void Transpile_GlobWordWithCommaLiteral_IsOneQuotedPattern(
+        string bash, string pattern, string command)
     {
-        Assert.Equal(expected, PsEmitter.Transpile(bash));
-    }
-
-    [Fact]
-    public void Transpile_GlobWordWithoutComma_StaysBare()
-    {
-        Assert.Equal("Invoke-BashLs *.c", PsEmitter.Transpile("ls *.c"));
+        // The comma stays inside ONE single-quoted pattern string (an array in PowerShell otherwise).
+        Assert.Equal(GlobSplat(pattern, command), PsEmitter.Transpile(bash));
     }
 
     [Fact]

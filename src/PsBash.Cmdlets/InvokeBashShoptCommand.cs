@@ -40,12 +40,13 @@ public sealed class InvokeBashShoptCommand : PSCmdlet
     // state was scoped to Invoke-BashShopt only; no other psm1 function
     // reads or writes BashShoptOptions, so consolidating ownership here
     // preserves single-source semantics.
-    private static readonly Dictionary<string, bool> Options = new(StringComparer.Ordinal)
+    private static Dictionary<string, bool> NewDefaults() => new(StringComparer.Ordinal)
     {
         ["extglob"] = false,
         ["globstar"] = true,
         ["dotglob"] = false,
         ["nullglob"] = false,
+        ["failglob"] = false,
         ["nocaseglob"] = false,
         ["expand_aliases"] = true,
         ["cmdhist"] = true,
@@ -57,6 +58,22 @@ public sealed class InvokeBashShoptCommand : PSCmdlet
         ["sourcepath"] = true,
         ["hostcomplete"] = true,
     };
+
+    // Option state belongs to the SHELL SESSION, i.e. the runspace: the host process outlives a `-c`
+    // command (a pooled daemon serves many), and a `shopt -s nullglob` in one command must not change
+    // pathname expansion in the next. The glob cmdlets read the same table through IsEnabled.
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<
+        System.Management.Automation.Runspaces.Runspace, Dictionary<string, bool>> PerRunspace = new();
+
+    private static Dictionary<string, bool> Options =>
+        System.Management.Automation.Runspaces.Runspace.DefaultRunspace is { } rs
+            ? PerRunspace.GetValue(rs, _ => NewDefaults())
+            : Fallback;
+
+    private static readonly Dictionary<string, bool> Fallback = NewDefaults();
+
+    /// <summary>Current value of a shell option in the calling runspace (false for an unknown name).</summary>
+    internal static bool IsEnabled(string name) => Options.TryGetValue(name, out var on) && on;
 
     /// <summary>
     /// Declared explicitly because the bare token <c>-p</c> prefix-matches
@@ -158,20 +175,8 @@ public sealed class InvokeBashShoptCommand : PSCmdlet
     /// </summary>
     public static void ResetForTests()
     {
-        Options.Clear();
-        Options["extglob"] = false;
-        Options["globstar"] = true;
-        Options["dotglob"] = false;
-        Options["nullglob"] = false;
-        Options["nocaseglob"] = false;
-        Options["expand_aliases"] = true;
-        Options["cmdhist"] = true;
-        Options["histappend"] = true;
-        Options["checkwinsize"] = true;
-        Options["progcomp"] = true;
-        Options["login_shell"] = false;
-        Options["interactive_comments"] = true;
-        Options["sourcepath"] = true;
-        Options["hostcomplete"] = true;
+        PerRunspace.Clear();
+        Fallback.Clear();
+        foreach (var kv in NewDefaults()) Fallback[kv.Key] = kv.Value;
     }
 }
