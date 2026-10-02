@@ -65,7 +65,7 @@ internal static class TransferValidation
     /// Returns the GNU-style diagnostic, or null when the pair is acceptable.
     /// </summary>
     public static string? CheckIdentity(string cmd, string src, bool srcIsDir, string target,
-        string? srcDisplay = null, string? targetDisplay = null)
+        string? srcDisplay = null, string? targetDisplay = null, bool makingLinks = false)
     {
         // Diagnostics quote the operands AS TYPED (GNU), not the resolved full paths.
         srcDisplay ??= src;
@@ -75,8 +75,10 @@ internal static class TransferValidation
 
         // Different NAMES for one file: a hard link, or a symlink leading to the other operand. Only
         // files — a directory cannot be hard-linked, and recursion guards cover directory aliases.
+        // `cp -s` / `cp -l` (GNU, oracle-checked) compare the ENTRIES like mv does: a destination that is a
+        // symlink to the source is "File exists" from the link primitive, not "the same file".
         if (!srcIsDir && !(cmd == "mv" && IsCaseOnlyRename(src, target))
-            && (cmd == "mv"
+            && (cmd == "mv" || makingLinks
                 ? FileIdentity.SameEntryNotFollowing(src, target)
                 : FileIdentity.SameFileFollowingLinks(src, target)))
             return $"{cmd}: '{srcDisplay}' and '{targetDisplay}' are the same file";

@@ -72,7 +72,13 @@ internal sealed class CpEngine
             return true;
         }
 
-        var identityError = TransferValidation.CheckIdentity("cp", src, srcIsDir, dest, srcDisplay, destDisplay);
+        // `cp -l a b` where b is already a hard link to a: GNU succeeds silently (nothing to link, -f or not).
+        if (_plan.Link == CpLink.Hard && !srcIsDir && destExisted && !TransferValidation.IsSamePath(src, dest)
+            && FileIdentity.SameEntryNotFollowing(src, dest))
+            return true;
+
+        var identityError = TransferValidation.CheckIdentity("cp", src, srcIsDir, dest, srcDisplay, destDisplay,
+            makingLinks: _plan.Link != CpLink.None);
         if (identityError != null) { _error(identityError); return false; }
 
         var occupancyError = TransferValidation.CheckOccupancy("cp", src, srcIsDir, dest, replaceEmptyDirOnly: false,
