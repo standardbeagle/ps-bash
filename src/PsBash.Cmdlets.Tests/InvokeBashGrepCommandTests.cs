@@ -451,15 +451,16 @@ public class InvokeBashGrepCommandTests : IDisposable, IClassFixture<SharedPwshF
     public void Grep_Recursive_NoIgnoreEnv_SearchesBinary()
     {
         // PSBASH_SEARCH_NO_IGNORE=1 also disables binary skipping (same "search
-        // everything" escape hatch as dir pruning).
+        // everything" escape hatch as dir pruning): the file is searched and, as in GNU grep 3.11, a
+        // match is reported as a "binary file matches" notice on stderr (merged here with 2>&1).
         var bin = Path.Combine(_tmpDir, "blob.bin");
         File.WriteAllBytes(bin, new byte[] { 0, (byte)'m', (byte)'a', (byte)'t', (byte)'c', (byte)'h', (byte)'\n' });
 
         Environment.SetEnvironmentVariable("PSBASH_SEARCH_NO_IGNORE", "1");
         try
         {
-            var lines = RunLines($"Invoke-BashGrep -r match '{Q(_tmpDir)}'");
-            Assert.Contains(lines, l => l.Contains("blob.bin"));
+            var lines = RunLines($"Invoke-BashGrep -r match '{Q(_tmpDir)}' 2>&1");
+            Assert.Contains(lines, l => l.Contains("blob.bin") && l.Contains("binary file matches"));
         }
         finally
         {
@@ -577,7 +578,6 @@ public class InvokeBashGrepCommandTests : IDisposable, IClassFixture<SharedPwshF
 
     [Theory]
     [InlineData("--color")]
-    [InlineData("--color=always")]
     [InlineData("--color=never")]
     [InlineData("--colour")]
     [InlineData("--colour=auto")]
@@ -614,14 +614,13 @@ public class InvokeBashGrepCommandTests : IDisposable, IClassFixture<SharedPwshF
     }
 
     [Fact]
-    public void Grep_UnsupportedFlagInBundle_ReportsFirstOffender()
+    public void Grep_InvalidFlagInBundle_ReportsFirstOffender()
     {
-        // -i is honored, then -T (a real but unsupported grep flag) is the offending
-        // char getopt would stop on. (-T is used rather than -y/-x/-P now that those are
-        // implemented.)
-        var (_, errs) = RunWithErrors("'x' | Invoke-BashGrep -iT foo");
-        Assert.Contains(errs, m => m.Contains("-T", StringComparison.Ordinal)
-                                   && m.Contains("not supported", StringComparison.OrdinalIgnoreCase));
+        // -i is honored, then -j (not a grep option) is the offending char getopt stops on.
+        // (Every real grep option is implemented now, so there is no valid-but-unsupported one left.)
+        var (_, errs) = RunWithErrors("'x' | Invoke-BashGrep -ij foo");
+        Assert.Contains(errs, m => m.Contains("invalid option", StringComparison.OrdinalIgnoreCase)
+                                   && m.Contains("'j'", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -643,14 +642,12 @@ public class InvokeBashGrepCommandTests : IDisposable, IClassFixture<SharedPwshF
     }
 
     [Fact]
-    public void Grep_LongUnsupportedWithValue_StripsEqValueForLookup()
+    public void Grep_LongOptionWithValue_Label_NamesStdin()
     {
-        // --label=foo → valid grep flag, still unsupported; the =VALUE suffix must
-        // not defeat the catalog lookup. (--include is now implemented, so it is no
-        // longer a valid example of an unsupported =VALUE flag.)
-        var (_, errs) = RunWithErrors("'x' | Invoke-BashGrep --label=foo foo");
-        Assert.Contains(errs, m => m.Contains("--label", StringComparison.Ordinal)
-                                   && m.Contains("not supported", StringComparison.OrdinalIgnoreCase));
+        // --label=foo (formerly refused) names stdin in a -H prefix.
+        var (outLines, errs) = RunWithErrors("'foo' | Invoke-BashGrep '--label=LBL' '-H' foo");
+        Assert.Empty(errs);
+        Assert.Equal(new[] { "LBL:foo" }, outLines);
     }
 
     [Fact]
