@@ -840,6 +840,19 @@ public class ProgramEndToEndTests
         Assert.Contains("paths-ok", stdout);
     }
 
+    // Regression: under --unix-paths a bare `/c` switch was rewritten to the drive root `C:\`,
+    // so `cmd /c echo hi` started an interactive cmd instead of running the command.
+    [SkippableFact]
+    public async Task UnixPaths_CmdSlashC_RunsCommandAndExits()
+    {
+        Skip.IfNot(OperatingSystem.IsWindows(), "cmd.exe is Windows-only");
+        var (exitCode, stdout, _) = await RunShellAsync(
+            new[] { "--unix-paths", "-c", "cmd /c echo hi-from-cmd" }, TimeSpan.FromSeconds(30));
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("hi-from-cmd", stdout);
+    }
+
     // --noprofile / --norc are consumed as leading flags; the -c command runs.
     // (Profile-skipping only changes interactive startup, which has no observable
     // effect in -c mode — this asserts the flag doesn't break the -c path.)
