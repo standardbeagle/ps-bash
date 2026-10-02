@@ -266,7 +266,7 @@ internal sealed class WcStage : ILineStreamStage
 /// (<see cref="InvokeBashGrepCommand.TryBuildRegexes"/> /
 /// <see cref="InvokeBashGrepCommand.MatchLine"/>), so no ladder is duplicated here —
 /// the two paths cannot drift.</summary>
-internal sealed class GrepStage : ILineStreamStage
+internal sealed class GrepStage : ILineStreamStage, ILineStreamDiagnostics
 {
     private readonly List<Regex> _regexes;
     private readonly bool _invert, _lineNumbers, _countOnly;
@@ -328,30 +328,40 @@ internal sealed class GrepStage : ILineStreamStage
         return new GrepStage(regexes, plan.Invert, plan.LineNumbers, plan.Count);
     }
 
+    private readonly List<string> _diagnostics = new();
+
+    /// <summary>stderr lines the stage produced (GNU's <c>binary file matches</c> notice for a NUL in the input).</summary>
+    public IReadOnlyList<string> Diagnostics => _diagnostics;
+
+    /// <summary>
+    /// The cmdlet's own engine (<see cref="GrepScanner"/>), so the binary-input rule (a NUL makes the stream
+    /// binary: a selected line prints nothing and the notice goes to stderr) and the output decorations are
+    /// identical to the unfused lane.
+    /// </summary>
     public IEnumerable<string> Run(IEnumerable<string> input)
     {
-        int matchCount = 0;
-        int lineNum = 0;
+        var pending = new List<string>();
+        var opts = new GrepOptions { Invert = _invert, LineNumbers = _lineNumbers, Count = _countOnly };
+        var scanner = new GrepScanner(opts, _regexes,
+            (text, _, _, _, _, _) => pending.Add(text), msg => _diagnostics.Add(msg));
+        scanner.Begin("(standard input)", showName: false, startBinary: false, sizeHint: -1);
         foreach (var line in input)
         {
-            lineNum++;
-            InvokeBashGrepCommand.MatchLine(_regexes, line, _invert, out bool isMatch);
-            if (!isMatch) continue;
-            matchCount++;
-            _exit = 0;
-            if (_countOnly) continue;
-            yield return _lineNumbers ? (lineNum + ":" + line) : line;
+            bool more = scanner.Feed(line, 1, null);
+            foreach (var p in pending) yield return p;
+            pending.Clear();
+            if (!more) break;
         }
-        if (_countOnly)
-        {
-            _exit = matchCount == 0 ? 1 : 0;
-            yield return matchCount.ToString();
-        }
-        else
-        {
-            _exit = matchCount == 0 ? 1 : 0;
-        }
+        scanner.End();
+        foreach (var p in pending) yield return p;
+        _exit = scanner.AnyMatch ? 0 : 1;
     }
+}
+
+/// <summary>A fused stage that can report stderr diagnostics after it has been enumerated.</summary>
+internal interface ILineStreamDiagnostics
+{
+    IReadOnlyList<string> Diagnostics { get; }
 }
 
 /// <summary><c>sed</c> pipeline mode. Certified subset: <c>-n</c>, <c>-E</c>/<c>-r</c>,

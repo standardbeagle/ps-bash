@@ -25,7 +25,15 @@ public class GrepArgScanTests
             + (g.NoMessages ? "s" : "") + (g.Matcher != '\0' ? g.Matcher.ToString() : "");
         string src = string.Join(",", g.PatternSources.Select(s => (s.IsFile ? "f:" : "e:") + s.Value));
         string max = g.MaxMatches == int.MaxValue ? "inf" : g.MaxMatches.ToString();
-        return $"flags={flags} src=[{src}] ops=[{string.Join(",", g.Operands)}] ctx={g.After}/{g.Before} max={max}"
+        string ext = (g.NullData ? "z" : "") + (g.NullAfterName ? "Z" : "") + (g.ByteOffset ? "b" : "")
+            + (g.InitialTab ? "T" : "") + (g.UnixOffsetsWarning ? "u" : "")
+            + (g.Binary == GrepBinaryMode.Text ? "a" : g.Binary == GrepBinaryMode.WithoutMatch ? "I" : "")
+            + (g.Directories == GrepDirectories.Skip ? "dskip" : "")
+            + (g.Devices == GrepDevices.Skip ? "Dskip" : "");
+        string tail = (g.Label != null ? $" label={g.Label}" : "")
+            + (g.GroupSeparator != "--" ? $" gsep={(g.GroupSeparator ?? "<none>")}" : "")
+            + (g.Color != GrepColorMode.Never ? $" color={g.Color}" : "");
+        return $"flags={flags}{(ext.Length > 0 ? "+" + ext : "")} src=[{src}] ops=[{string.Join(",", g.Operands)}] ctx={g.After}/{g.Before} max={max}{tail}"
             + (g.Include.Count + g.Exclude.Count + g.ExcludeDir.Count + g.ExcludeFromFiles.Count == 0 ? ""
                 : $" inc=[{string.Join(",", g.Include)}] exc=[{string.Join(",", g.Exclude)}] xdir=[{string.Join(",", g.ExcludeDir)}] xfrom=[{string.Join(",", g.ExcludeFromFiles)}]");
     }
@@ -105,11 +113,11 @@ public class GrepArgScanTests
     [InlineData("flags=r src=[] ops=[a,.] ctx=0/0 max=inf inc=[*.c,*.h] exc=[] xdir=[] xfrom=[]", "-r", "--include=*.c", "--include", "*.h", "a", ".")]
     [InlineData("flags= src=[] ops=[a] ctx=0/0 max=inf inc=[] exc=[x] xdir=[d,e] xfrom=[ex]", "--exclude=x", "--exclude-dir=d", "--exclude-dir", "e", "--exclude-from=ex", "a")]
     [InlineData("flags= src=[] ops=[a] ctx=0/0 max=inf inc=[x] exc=[] xdir=[] xfrom=[]", "--inc=x", "a")]
-    // --color[=WHEN] (accepted, never colours); --colo = color/colour are the same option
-    [InlineData("flags= src=[] ops=[a] ctx=0/0 max=inf", "--color", "a")]
-    [InlineData("flags= src=[] ops=[a] ctx=0/0 max=inf", "--colour=auto", "a")]
-    [InlineData("flags= src=[] ops=[a] ctx=0/0 max=inf", "--colo=always", "a")]   // FIX (was refused as an unknown long option)
-    [InlineData("flags= src=[] ops=[always,a] ctx=0/0 max=inf", "--color", "always", "a")]   // WHEN is attached only
+    // --color[=WHEN]; --colo = color/colour are the same option
+    [InlineData("flags= src=[] ops=[a] ctx=0/0 max=inf color=Auto", "--color", "a")]
+    [InlineData("flags= src=[] ops=[a] ctx=0/0 max=inf color=Auto", "--colour=auto", "a")]
+    [InlineData("flags= src=[] ops=[a] ctx=0/0 max=inf color=Always", "--colo=always", "a")]   // FIX (was refused as an unknown long option)
+    [InlineData("flags= src=[] ops=[always,a] ctx=0/0 max=inf color=Auto", "--color", "always", "a")]   // WHEN is attached only
     [InlineData("ERR 2 grep: invalid argument 'bogus' for '--color'", "--color=bogus", "a")]
     // accepted no-ops
     [InlineData("flags= src=[] ops=[a] ctx=0/0 max=inf", "--line-buffered", "a")]   // FIX (was refused: common in tail -f | grep)
@@ -123,11 +131,41 @@ public class GrepArgScanTests
     [InlineData("ERR 2 grep: option '--ex' is ambiguous; possibilities: '--extended-regexp' '--exclude' '--exclude-from' '--exclude-dir'", "--ex", "c")]
     [InlineData("ERR 2 grep: option '--no' is ambiguous; possibilities: '--no-ignore-case' '--no-filename' '--no-group-separator' '--no-messages'", "--no", "c")]
     [InlineData("ERR 2 grep: option '--count' doesn't allow an argument", "--count=1", "c")]
-    // valid-but-unsupported (ps-bash policy: exit 2)
-    [InlineData("ERR 2 grep: option '-T' is recognized but not supported by ps-bash", "-T", "a")]
-    [InlineData("ERR 2 grep: option '-d' is recognized but not supported by ps-bash", "-d", "skip", "a")]
-    [InlineData("ERR 2 grep: option '--label' is recognized but not supported by ps-bash", "--label=x", "a")]
-    [InlineData("ERR 2 grep: option '-z' is recognized but not supported by ps-bash", "-iz", "a")]
+    // formerly valid-but-unsupported (exit 2), now implemented (oracle: GNU grep 3.11)
+    [InlineData("flags=+T src=[] ops=[a] ctx=0/0 max=inf", "-T", "a")]
+    [InlineData("flags=+dskip src=[] ops=[a] ctx=0/0 max=inf", "-d", "skip", "a")]
+    [InlineData("flags=r src=[] ops=[a] ctx=0/0 max=inf", "-d", "recurse", "a")]
+    [InlineData("flags=r src=[] ops=[a] ctx=0/0 max=inf", "--directories=recurse", "a")]
+    [InlineData("flags=+dskip src=[] ops=[a] ctx=0/0 max=inf", "-r", "-d", "skip", "a")]   // -r and -d are last-wins
+    [InlineData("flags=r src=[] ops=[a] ctx=0/0 max=inf", "-d", "skip", "-r", "a")]
+    [InlineData("flags=+Dskip src=[] ops=[a] ctx=0/0 max=inf", "-D", "skip", "a")]
+    [InlineData("flags=+Dskip src=[] ops=[a] ctx=0/0 max=inf", "--devices=skip", "a")]
+    [InlineData("flags=i+z src=[] ops=[a] ctx=0/0 max=inf", "-iz", "a")]
+    [InlineData("flags=+z src=[] ops=[a] ctx=0/0 max=inf", "--null-data", "a")]
+    [InlineData("flags=+Z src=[] ops=[a] ctx=0/0 max=inf", "-Z", "a")]
+    [InlineData("flags=+Z src=[] ops=[a] ctx=0/0 max=inf", "--null", "a")]
+    [InlineData("flags=+b src=[] ops=[a] ctx=0/0 max=inf", "-b", "a")]
+    [InlineData("flags=+u src=[] ops=[a] ctx=0/0 max=inf", "-u", "a")]
+    [InlineData("flags=+a src=[] ops=[a] ctx=0/0 max=inf", "-a", "a")]
+    [InlineData("flags=+a src=[] ops=[a] ctx=0/0 max=inf", "--text", "a")]
+    [InlineData("flags=+I src=[] ops=[a] ctx=0/0 max=inf", "-I", "a")]
+    [InlineData("flags=+I src=[] ops=[a] ctx=0/0 max=inf", "--binary-files=without-match", "a")]
+    [InlineData("flags=+a src=[] ops=[a] ctx=0/0 max=inf", "--binary-files=text", "a")]
+    [InlineData("flags= src=[] ops=[a] ctx=0/0 max=inf", "-I", "--binary-files=binary", "a")]   // last wins
+    [InlineData("flags=+a src=[] ops=[a] ctx=0/0 max=inf", "-I", "-a", "a")]
+    [InlineData("flags= src=[] ops=[a] ctx=0/0 max=inf label=x", "--label=x", "a")]
+    [InlineData("flags= src=[] ops=[a] ctx=0/0 max=inf gsep=XX", "--group-separator=XX", "a")]
+    [InlineData("flags= src=[] ops=[a] ctx=0/0 max=inf gsep=<none>", "--no-group-separator", "a")]
+    [InlineData("flags= src=[] ops=[a] ctx=0/0 max=inf gsep=YY", "--no-group-separator", "--group-separator=YY", "a")]
+    [InlineData("flags= src=[] ops=[a] ctx=0/0 max=inf gsep=<none>", "--group-separator=YY", "--no-group-separator", "a")]
+    [InlineData("flags= src=[] ops=[a] ctx=0/0 max=inf color=Always", "--color=always", "a")]
+    [InlineData("flags= src=[] ops=[a] ctx=0/0 max=inf color=Always", "--colour=force", "a")]
+    [InlineData("flags= src=[] ops=[a] ctx=0/0 max=inf color=Auto", "--color", "a")]
+    [InlineData("flags= src=[] ops=[a] ctx=0/0 max=inf", "--color=never", "a")]
+    [InlineData("ERR 2 grep: unknown binary-files type", "--binary-files=bogus", "a")]
+    [InlineData("ERR 2 grep: option '--binary-files' requires an argument", "--binary-files")]
+    [InlineData("ERR 2 grep: option '--binary' doesn't allow an argument", "--binary=text", "a")]
+    [InlineData("ERR 2 grep: unknown devices method", "-D", "bogus", "a")]
     // info options
     [InlineData("HELP", "--help")]
     [InlineData("HELP", "--he")]

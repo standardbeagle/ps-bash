@@ -861,6 +861,69 @@
     {
       "flag": "-m",
       "desc": "max count"
+    },
+    {
+      "flag": "-P",
+      "desc": "perl-compatible regex",
+      "detail": "PCRE patterns mapped onto the .NET engine: lookaround, \\K, \\Q..\\E, possessive quantifiers, named groups. Recursion, subroutine calls, branch reset and backtracking verbs are refused (exit 2). One pattern only."
+    },
+    {
+      "flag": "-z",
+      "desc": "NUL-separated input and output records"
+    },
+    {
+      "flag": "-Z",
+      "desc": "NUL after each file name"
+    },
+    {
+      "flag": "-a",
+      "desc": "treat binary files as text"
+    },
+    {
+      "flag": "-I",
+      "desc": "skip binary files (binary-files=without-match)"
+    },
+    {
+      "flag": "--binary-files",
+      "desc": "binary file handling",
+      "arg": "binary|text|without-match"
+    },
+    {
+      "flag": "-b",
+      "desc": "byte offset of each line"
+    },
+    {
+      "flag": "-T",
+      "desc": "align content with a tab after the prefix"
+    },
+    {
+      "flag": "-d",
+      "desc": "directories action",
+      "arg": "read|skip|recurse"
+    },
+    {
+      "flag": "-D",
+      "desc": "devices action",
+      "arg": "read|skip"
+    },
+    {
+      "flag": "--label",
+      "desc": "name to show for standard input",
+      "arg": "LABEL"
+    },
+    {
+      "flag": "--group-separator",
+      "desc": "line between context groups",
+      "arg": "SEP"
+    },
+    {
+      "flag": "--no-group-separator",
+      "desc": "no line between context groups"
+    },
+    {
+      "flag": "--color",
+      "desc": "colour matches",
+      "arg": "never|always|auto"
     }
   ],
   "gzip": [
