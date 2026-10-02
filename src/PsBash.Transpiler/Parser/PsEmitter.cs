@@ -6683,6 +6683,10 @@ public static class PsEmitter
         return emitted.IndexOfAny([',', '{', '}']) >= 0 ? $"\"{emitted}\"" : emitted;
     }
 
+    /// <summary>An argument word, emitted and comma-quoted (<see cref="QuoteCommaLiteralWord"/>).</summary>
+    private static string EmitArgWord(CompoundWord word)
+        => QuoteCommaLiteralWord(word, EmitWord(word));
+
     /// <summary>
     /// Quote a command ARGUMENT word that carries a bare, unquoted <c>,</c> literal.
     /// In PowerShell argument mode <c>a,b</c> is an ARRAY (<c>sed -n 725,750p f</c>
@@ -6700,9 +6704,6 @@ public static class PsEmitter
     /// quoting is needed or it is already a single quoted token.
     /// </para>
     /// </summary>
-    private static string EmitArgWord(CompoundWord word)
-        => QuoteCommaLiteralWord(word, EmitWord(word));
-
     private static string QuoteCommaLiteralWord(CompoundWord word, string emitted)
     {
         if (emitted.Length == 0 || emitted[0] is '"' or '\'' or '(' or '@')

@@ -52,8 +52,6 @@ public sealed class InvokeBashJqCommand : PSCmdlet
         if (InputObject != null) _pipeline.Add(InputObject);
     }
 
-    private int _exit;
-
     protected override void EndProcessing()
     {
         var args = BashRuntime.PrependDecoys(Arguments, (C.IsPresent, "-c"), (E.IsPresent, "-e"), (A.IsPresent, "-a"));

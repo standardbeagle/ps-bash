@@ -195,8 +195,6 @@ public sealed class InvokeBashFindCommand : PSCmdlet
             return sink;
         }
 
-        string Typed(string s) => s;
-
         while (i < args.Length)
         {
             string arg = args[i];

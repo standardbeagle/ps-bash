@@ -27,7 +27,9 @@ public sealed class NewBashLazyStdinCommand : PSCmdlet
     protected override void EndProcessing()
     {
         var iss = InitialSessionState.CreateDefault();
+#pragma warning disable IL3000 // runs only in the (non-single-file) host runspace, where the cmdlet assembly has a real path
         iss.ImportPSModule(new[] { typeof(NewBashLazyStdinCommand).Assembly.Location });
+#pragma warning restore IL3000
         var runspace = RunspaceFactory.CreateRunspace(iss);
         runspace.Open();
 

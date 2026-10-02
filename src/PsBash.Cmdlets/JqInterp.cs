@@ -91,7 +91,6 @@ internal sealed partial class JqInterp
 {
     private readonly Func<(bool Ok, object? Value)> _nextInput;
     private readonly IDictionary<string, object?> _globalVars;
-    private int _labelCounter;
 
     public JqInterp(Func<(bool Ok, object? Value)> nextInput, IDictionary<string, object?> globalVars)
     {

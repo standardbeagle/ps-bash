@@ -22,7 +22,9 @@ internal static class CmdletTypeScanner
     /// <summary>Cmdlet types of <paramref name="assembly"/>, each with its <see cref="CmdletAttribute"/>.</summary>
     public static IReadOnlyList<(Type Type, CmdletAttribute Attribute)> FindCmdletTypes(Assembly assembly)
     {
+#pragma warning disable IL3000 // empty in a single-file bundle: TryReadCmdletTypeNames then returns null and FromAllTypes is used
         var names = TryReadCmdletTypeNames(assembly.Location);
+#pragma warning restore IL3000
         return names is null
             ? FromAllTypes(assembly)
             : FromNames(assembly, names);

@@ -404,7 +404,11 @@ public class FindPredicateTests : IClassFixture<SharedPwshFixture>, IDisposable
     public void Printf_Sizes_Blocks_Sparseness_Links()
     {
         Assert.Equal(new[] { "2|4|8|1|2048" }, Find("a.txt '-printf' '%s|%k|%b|%n|%S\\n'").AssertSuccess().Lines);
-        Assert.Equal(new[] { "4096|4|8|1" }, Find("sub '-maxdepth' 0 '-printf' '%s|%k|%b|%S\\n'").AssertSuccess().Lines);
+        var dirLine = Find("sub '-maxdepth' 0 '-printf' '%s|%k|%b|%S\\n'").AssertSuccess().Lines.Single();
+        if (OperatingSystem.IsMacOS())
+            Assert.Matches(@"^\d+\|0\|0\|0$", dirLine);   // APFS: a directory occupies no allocation blocks
+        else
+            Assert.Equal("4096|4|8|1", dirLine);           // ext4 / synthesised 4 KiB on Windows
     }
 
     [Fact]
@@ -470,7 +474,9 @@ public class FindPredicateTests : IClassFixture<SharedPwshFixture>, IDisposable
         Assert.Matches(@"^\s*\d+ +4 -rw-r--r-- +\d+ \S+ +\S+ +2 Mar  5  2020 a\.txt$", line);
         Directory.SetLastWriteTime(P("sub"), DateTime.Now.AddDays(-1));
         var dir = Find("sub '-maxdepth' 0 '-ls'").AssertSuccess().Lines.Single();
-        Assert.Matches(@"^\s*\d+ +4 drwxr-xr-x +\d+ \S+ +\S+ +4096 [A-Z][a-z]{2} [ 0-3]\d \d\d:\d\d sub$", dir);
+        Assert.Matches(OperatingSystem.IsMacOS()   // APFS directories: 0 blocks and a size that is not 4096
+            ? @"^\s*\d+ +0 drwxr-xr-x +\d+ \S+ +\S+ +\d+ [A-Z][a-z]{2} [ 0-3]\d \d\d:\d\d sub$"
+            : @"^\s*\d+ +4 drwxr-xr-x +\d+ \S+ +\S+ +4096 [A-Z][a-z]{2} [ 0-3]\d \d\d:\d\d sub$", dir);
     }
 
     [Fact]

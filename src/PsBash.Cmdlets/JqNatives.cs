@@ -103,9 +103,12 @@ internal static class JqNatives
         Reg("now", 0, (ip, a, env, v) => Lazy(() => NV(Num((DateTime.UtcNow - DateTime.UnixEpoch).TotalSeconds), v)));
     }
 
+    // Iterators on purpose: jq raises these LAZILY, when the stream is pulled (`limit(0; error)` raises nothing).
+#pragma warning disable CS0162 // the yield break only makes the method an iterator
     private static IEnumerable<JV> ErrorZero(JV v) { throw new JqError(v.V); yield break; }
 
     private static IEnumerable<JV> Halt() { throw new JqHalt(0, null); yield break; }
+#pragma warning restore CS0162
 
     private static IEnumerable<JV> ErrorWith(JqInterp ip, JNode[] a, JEnv env, JV v)
     {
@@ -458,8 +461,7 @@ internal static class JqNatives
         {
             if (p is not object?[] path) throw Err("Path must be specified as an array");
             object? result;
-            try { result = JqPaths.GetPath(v.V, path); }
-            catch (JqError) when (false) { throw; }
+            result = JqPaths.GetPath(v.V, path);
             JPath? np = v.P;
             if (np != null && np != JPath.Invalid) foreach (var k in path) np = np.Append(k);
             yield return new JV(result, v.P == null ? null : (v.P == JPath.Invalid ? JPath.Invalid : np));
