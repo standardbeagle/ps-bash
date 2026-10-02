@@ -372,8 +372,8 @@ public class GrepOptionsGnuTests : IClassFixture<SharedPwshFixture>, IDisposable
         Assert.Equal(new[] { $"{Path_("t.txt")}:hello" }, sk.Lines);
         Assert.Equal(1, G("'-d' 'skip' 'hello'", d).Exit);
         var rec = G("'-d' 'recurse' 'hello'", d);
-        Assert.Equal(new[] { Path.Combine(Path_("dd"), "f.txt") + ":hello" }, rec.Lines);
-        Assert.Equal(new[] { Path.Combine(Path_("dd"), "f.txt") + ":hello" }, G("'-d' 'skip' '-r' 'hello'", d).Lines);   // last wins
+        Assert.Equal(new[] { Path_("dd") + "/f.txt:hello" }, rec.Lines);
+        Assert.Equal(new[] { Path_("dd") + "/f.txt:hello" }, G("'-d' 'skip' '-r' 'hello'", d).Lines);   // last wins
         var bad = G("'-d' 'bogus' 'hello'", d);
         Assert.Equal(2, bad.Exit);
         Assert.Contains("invalid argument 'bogus' for '--directories'", bad.Stderr);

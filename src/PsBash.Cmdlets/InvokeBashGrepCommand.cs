@@ -746,7 +746,8 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
             }
 
             bool existed = false;
-            foreach (var fp in FileSystemHelpers.ResolveOperandPaths(this, raw))
+            // Every name grep prints is the operand AS TYPED (GNU), never the resolved absolute path.
+            foreach (var (fp, shown) in FileSystemHelpers.ResolveOperands(this, raw))
             {
                 if (scanner.QuitAll) break;
                 if (Directory.Exists(fp))
@@ -764,7 +765,8 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
                         foreach (var f in files)
                         {
                             if (scanner.QuitAll) break;
-                            SearchFile(f, nameInWalk, walked: true, noIgnore);
+                            SearchFile(f, WalkDisplayName(shown, implicitRoot: operands.Count == 0, fp, f),
+                                nameInWalk, walked: true, noIgnore);
                         }
                     }
                     else if (plan.Directories == GrepDirectories.Read)
@@ -779,7 +781,7 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
                 {
                     existed = true;
                     if (plan.Devices == GrepDevices.Skip && IsDeviceFile(fp)) continue;
-                    SearchFile(fp, nameForOperands, walked: false, noIgnore);
+                    SearchFile(fp, shown, nameForOperands, walked: false, noIgnore);
                 }
             }
             if (!existed)
@@ -793,6 +795,19 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
 
         int exit = scanner.QuitAll ? 0 : _operandReadError ? 2 : scanner.AnyMatch ? 0 : 1;
         FileSystemHelpers.SetLastExitCode(this, exit);
+    }
+
+    /// <summary>
+    /// GNU's name for a file found by the recursive walk: the root as typed + <c>/</c> + the path below it
+    /// (<c>grep -r x dir</c> -> <c>dir/a/b</c>; <c>dir/</c> does not double the slash; with no operand the
+    /// implicit <c>.</c> root contributes nothing: <c>a/b</c>).
+    /// </summary>
+    internal static string WalkDisplayName(string shownRoot, bool implicitRoot, string rootFull, string file)
+    {
+        string rel = Path.GetRelativePath(rootFull, file).Replace('\\', '/');
+        if (implicitRoot) return rel;
+        if (shownRoot.EndsWith('/') || shownRoot.EndsWith('\\')) return shownRoot + rel;
+        return shownRoot + "/" + rel;
     }
 
     private static bool IsDeviceFile(string path)
@@ -819,7 +834,7 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
     /// found by the recursive WALK that are binary stay skipped silently (ps-bash's default recursive prune —
     /// <c>PSBASH_SEARCH_NO_IGNORE</c> or <c>-a</c> searches them).
     /// </summary>
-    private void SearchFile(string path, bool showName, bool walked, bool noIgnore)
+    private void SearchFile(string path, string shown, bool showName, bool walked, bool noIgnore)
     {
         var scanner = _scanner!;
         var plan = _plan;
@@ -839,7 +854,7 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
                 try { size = FileSystemHelpers.IsNullDevice(path) ? 0 : new FileInfo(path).Length; } catch { size = -1; }
             }
 
-            scanner.Begin(path, showName, binary, size, typed: true);
+            scanner.Begin(shown, showName, binary, size, typed: true);
             foreach (var (text, term) in GrepIo.ReadRecords(path, plan.NullData, exact: plan.ByteOffset))
                 if (!scanner.Feed(text, term, null)) break;
         }
