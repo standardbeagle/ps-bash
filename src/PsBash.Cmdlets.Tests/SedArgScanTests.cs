@@ -7,7 +7,7 @@ namespace PsBash.Cmdlets.Tests;
 /// expectation was read from the oracle (`wsl bash`, GNU sed 4.9): usage errors exit 1, the first
 /// operand is the script only when no -e/-f was given, <c>-i</c>'s suffix is ATTACHED only
 /// (<c>-i.bak</c>; <c>-i -e x</c> means no suffix; <c>-in</c> is suffix "n"), long options abbreviate
-/// in GNU table order, --debug is refused by ps-bash (exit 2). Lines marked FIX used to be silently
+/// in GNU table order, --debug is accepted. Lines marked FIX used to be silently
 /// wrong before the migration.
 /// </summary>
 public class SedArgScanTests
@@ -98,8 +98,8 @@ public class SedArgScanTests
     [InlineData("ERR 1 sed: option '--quiet' doesn't allow an argument", "--quiet=x", "p")]
     [InlineData("ERR 1 sed: option '--s' is ambiguous; possibilities: '--silent' '--sandbox' '--separate'", "--s", "p")]
     [InlineData("ERR 1 sed: option '--f' is ambiguous; possibilities: '--file' '--follow-symlinks'", "--f", "p")]
-    [InlineData("ERR 2 sed: option '--debug' is recognized but not supported by ps-bash", "--debug", "p")]
-    [InlineData("ERR 2 sed: option '--debug' is recognized but not supported by ps-bash", "--d", "p")]
+    [InlineData("flags= i=no src=[] ops=[p]", "--debug", "p")]   // --debug is implemented now
+    [InlineData("flags= i=no src=[] ops=[p]", "--d", "p")]
     // info options
     [InlineData("HELP", "--help")]
     [InlineData("HELP", "--he")]

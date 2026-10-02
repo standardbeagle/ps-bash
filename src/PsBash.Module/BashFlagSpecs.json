@@ -1544,6 +1544,26 @@
     {
       "flag": "-e",
       "desc": "expression"
+    },
+    {
+      "flag": "-f",
+      "desc": "script file"
+    },
+    {
+      "flag": "-s",
+      "desc": "separate files"
+    },
+    {
+      "flag": "-z",
+      "desc": "NUL-separated records"
+    },
+    {
+      "flag": "-l",
+      "desc": "line wrap length for l"
+    },
+    {
+      "flag": "--debug",
+      "desc": "annotate program execution"
     }
   ],
   "seq": [
