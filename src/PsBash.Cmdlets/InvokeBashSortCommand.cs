@@ -14,9 +14,10 @@ namespace PsBash.Cmdlets;
 /// effective options, global flags) and validates it with GNU's rules and messages. <b>Usage and
 /// validation errors exit 2</b> (GNU <c>SORT_FAILURE</c>); <c>-c</c> disorder exits 1; an invalid
 /// <c>--sort</c>/<c>--check</c> argument exits 1 (as GNU's argmatch). Ps-bash refuses (exit 2) the
-/// real options it cannot honour: <c>-R</c>/<c>--random-sort</c>, <c>--random-source</c>,
-/// <c>-z</c>/<c>--zero-terminated</c> (NUL-terminated records), <c>--debug</c>,
-/// <c>--files0-from</c>.</para>
+/// real option it cannot honour: <c>--debug</c> (its underline annotations depend on locale and per-key span
+/// rules). <c>-z</c> (NUL records via <see cref="NulRecords"/>), <c>-R</c>/<c>--random-sort</c> with
+/// <c>--random-source</c> (GNU's MD5 order in the C locale: digest of the 16 seed bytes + key text) and
+/// <c>--files0-from</c> are implemented.</para>
 ///
 /// <para><b>Accepted and ignored</b> (they tune HOW GNU sorts, never WHAT it outputs):
 /// <c>-S</c>/<c>--buffer-size</c> (validated), <c>-T</c>/<c>--temporary-directory</c> (this sort never
@@ -45,11 +46,10 @@ public sealed class InvokeBashSortCommand : PSCmdlet
         OptCheckQuiet = "check-quiet", OptKey = "key", OptTab = "tab", OptOutput = "output",
         OptSort = "sort", OptIgnoredSize = "ignored-size", OptIgnoredTmp = "ignored-tmp",
         OptParallel = "parallel", OptBatch = "batch-size", OptCompress = "compress-program",
-        OptFiles0 = "files0-from", OptRandomSource = "random-source";
+        OptFiles0 = "files0-from", OptRandomSource = "random-source", OptRandom = "random-sort", OptZero = "zero";
 
     /// <summary>Valid GNU <c>sort</c> options ps-bash refuses (exit 2).</summary>
-    private static readonly string[] SortValidButUnsupported =
-        { "-R", "--random-sort", "-z", "--zero-terminated", "--debug" };
+    private static readonly string[] SortValidButUnsupported = { "--debug" };
 
     /// <summary>
     /// sort's option surface (GNU coreutils 9.4). Ambiguity lists follow GNU's <c>long_options[]</c>
@@ -85,6 +85,8 @@ public sealed class InvokeBashSortCommand : PSCmdlet
             new OptSpec(OptCompress, '\0', "compress-program", OptKind.Value),
             new OptSpec(OptFiles0, '\0', "files0-from", OptKind.Value),
             new OptSpec(OptRandomSource, '\0', "random-source", OptKind.Value),
+            new OptSpec(OptRandom, 'R', "random-sort"),
+            new OptSpec(OptZero, 'z', "zero-terminated"),
         },
         SortValidButUnsupported,
         allowAbbrev: true,
@@ -151,6 +153,8 @@ public sealed class InvokeBashSortCommand : PSCmdlet
                 case OptGeneral: g.General = true; break;
                 case OptHuman: g.Human = true; break;
                 case OptMonth: g.Month = true; break;
+                case OptRandom: g.Random = true; break;
+                case OptZero: plan.Zero = true; break;
                 case OptVersion: g.Version = true; break;
                 case OptFold: g.Fold = true; break;
                 case OptBlank: g.BlankStart = g.BlankEnd = true; break;
@@ -206,7 +210,7 @@ public sealed class InvokeBashSortCommand : PSCmdlet
                             case "month": g.Month = true; break;
                             case "numeric": g.Numeric = true; break;
                             case "version": g.Version = true; break;
-                            default: return Fail(s, "sort: option '--sort=random' is recognized but not supported by ps-bash", 2);
+                            default: g.Random = true; break;
                         }
                         break;
                     }
@@ -222,14 +226,14 @@ public sealed class InvokeBashSortCommand : PSCmdlet
                     if (v!.TrimStart('0').Length == 0 || (v.Length == 1 && v[0] < '2'))
                         return Fail(s, "sort: minimum --batch-size argument is '2'", 2);
                     break;
-                case OptFiles0:
-                    return Fail(s, "sort: option '--files0-from' is recognized but not supported by ps-bash", 2);
-                case OptRandomSource:
-                    return Fail(s, "sort: option '--random-source' is recognized but not supported by ps-bash", 2);
+                case OptFiles0: plan.Files0From = v; break;
+                case OptRandomSource: plan.RandomSource = v; break;
                 // -T / --compress-program: accepted, no effect on the output.
             }
         }
 
+        if (plan.Files0From is not null && s.Operands.Count > 0)
+            return Fail(s, $"sort: extra operand '{s.Operands[0]}'\nfile operands cannot be combined with --files0-from\nTry 'sort --help' for more information.", 2);
         if (sawCheck && sawQuiet) return Fail(s, "sort: options '-cC' are incompatible", 2);
         s.CheckMode = sawQuiet ? 2 : sawCheck ? 1 : 0;
         if (s.CheckMode != 0 && s.Operands.Count > 1)
@@ -308,7 +312,7 @@ public sealed class InvokeBashSortCommand : PSCmdlet
 
     /// <summary>
     /// GNU <c>-k F[.C][OPTS][,F[.C][OPTS]]</c> (OPTS from <c>bdfghiMnRrV</c>). Messages and their order
-    /// follow GNU's <c>parse_field_count</c> / <c>badfieldspec</c>; <c>R</c> is refused (random sort).
+    /// follow GNU's <c>parse_field_count</c> / <c>badfieldspec</c>; <c>R</c> is random order.
     /// </summary>
     internal static bool TryParseKey(string spec, out SortKey? key, out string? error)
     {
@@ -380,9 +384,7 @@ public sealed class InvokeBashSortCommand : PSCmdlet
                 case 'n': o.Numeric = true; break;
                 case 'r': o.Reverse = true; break;
                 case 'V': o.Version = true; break;
-                case 'R':
-                    error = "sort: key option 'R' (random sort) is recognized but not supported by ps-bash";
-                    return false;
+                case 'R': o.Random = true; break;
                 default:
                     s = s.Substring(i);
                     return true;
@@ -466,6 +468,14 @@ public sealed class InvokeBashSortCommand : PSCmdlet
         {
             sourceStarts.Add(items.Count);
             int line = 0;
+            if (plan.Plan.Zero)
+            {
+                foreach (var rec in NulRecords.FromPipeline(_pipeline))
+                {
+                    items.Add(rec); texts.Add(rec); labels.Add("-"); lineNos.Add(++line);
+                }
+                return;
+            }
             foreach (var item in _pipeline)
             {
                 string text = BashRuntime.GetBashText(item);
@@ -484,14 +494,19 @@ public sealed class InvokeBashSortCommand : PSCmdlet
             }
         }
 
-        if (plan.Operands.Count == 0)
+        var operandList = plan.Operands;
+        if (plan.Plan.Files0From is { } files0)
+        {
+            if (!TryReadFiles0(files0, plan.Plan.Zero, out operandList)) return;
+        }
+        if (operandList.Count == 0)
         {
             AddPipeline();
         }
         else
         {
             bool stdinUsed = false;
-            foreach (var raw in plan.Operands)
+            foreach (var raw in operandList)
             {
                 if (raw == "-")
                 {
@@ -505,9 +520,9 @@ public sealed class InvokeBashSortCommand : PSCmdlet
                     {
                         int fileLine = 0;
                         string label = filePath.Replace('\\', '/');
-                        foreach (var line in BashFileSystem.ReadLines(filePath))
+                        foreach (var line in plan.Plan.Zero ? NulRecords.ReadFile(filePath) : BashFileSystem.ReadLines(filePath))
                         {
-                            items.Add(BashRuntime.NewBashObject(line));
+                            items.Add(plan.Plan.Zero ? line : BashRuntime.NewBashObject(line));
                             texts.Add(line);
                             labels.Add(label);
                             lineNos.Add(++fileLine);
@@ -523,6 +538,12 @@ public sealed class InvokeBashSortCommand : PSCmdlet
                     }
                 }
             }
+        }
+
+        if (plan.Plan.UsesRandom && plan.Plan.RandomSource is { } rs)
+        {
+            if (!TryReadRandomSeed(rs, out var seed)) return;
+            plan.Plan.RandomSeed = seed;
         }
 
         var engine = new SortEngine(plan.Plan);
@@ -547,7 +568,7 @@ public sealed class InvokeBashSortCommand : PSCmdlet
         if (plan.Output != null)
         {
             var sb = new System.Text.StringBuilder();
-            foreach (int idx in order) sb.Append(texts[idx]).Append('\n');
+            foreach (int idx in order) sb.Append(texts[idx]).Append(NulRecords.Terminator(plan.Plan.Zero));
             try
             {
                 var outPath = SessionState.Path.GetUnresolvedProviderPathFromPSPath(plan.Output);
@@ -566,6 +587,7 @@ public sealed class InvokeBashSortCommand : PSCmdlet
 
         foreach (int idx in order)
         {
+            if (plan.Plan.Zero) { WriteObject(NulRecords.Record(texts[idx])); continue; }
             // sort is a FILTER: original objects pass through. sort terminates every line, so
             // PassTerminated strips a stale missing-newline flag (the flagged record may sort
             // anywhere). Bare strings get wrapped into the default PsBash.TextOutput shape.
@@ -592,6 +614,83 @@ public sealed class InvokeBashSortCommand : PSCmdlet
         catch
         {
             return null;
+        }
+    }
+
+    /// <summary>GNU <c>--files0-from=F</c>: the NUL-separated operand names (<c>-</c> = the pipeline). Errors exit 2 with GNU's wording.</summary>
+    private bool TryReadFiles0(string source, bool zero, out List<string> names)
+    {
+        names = new List<string>();
+        IEnumerable<string> records;
+        try
+        {
+            if (source == "-") records = NulRecords.FromPipeline(_pipeline);
+            else
+            {
+                string path = SessionState.Path.GetUnresolvedProviderPathFromPSPath(source);
+                records = NulRecords.ReadFile(path).ToList();   // open + read now: a failure is "open failed"
+            }
+        }
+        catch (Exception ex)
+        {
+            if (FileSystemHelpers.IsPipelineStop(ex)) throw;
+            string reason = ex is DirectoryNotFoundException or FileNotFoundException ? "No such file or directory" : ex.Message;
+            FileSystemHelpers.WriteBashError(this, $"sort: open failed: {source.Replace('\\', '/')}: {reason}");
+            FileSystemHelpers.SetLastExitCode(this, 2);
+            return false;
+        }
+        int n = 0;
+        foreach (var name in records)
+        {
+            n++;
+            if (name.Length == 0)
+            {
+                FileSystemHelpers.WriteBashError(this, $"sort: {source}:{n}: invalid zero-length file name");
+                FileSystemHelpers.SetLastExitCode(this, 2);
+                return false;
+            }
+            if (name == "-")
+            {
+                FileSystemHelpers.WriteBashError(this, "sort: when reading file names from stdin, no file name of '-' allowed");
+                FileSystemHelpers.SetLastExitCode(this, 2);
+                return false;
+            }
+            names.Add(name);
+        }
+        if (n == 0)
+        {
+            FileSystemHelpers.WriteBashError(this, $"sort: no input from '{source}'");
+            FileSystemHelpers.SetLastExitCode(this, 2);
+            return false;
+        }
+        return true;
+    }
+
+    /// <summary>GNU <c>random_md5_state_init</c>: the first 16 bytes of the <c>--random-source</c> file seed the -R digests.</summary>
+    private bool TryReadRandomSeed(string source, out byte[] seed)
+    {
+        seed = new byte[16];
+        try
+        {
+            string path = SessionState.Path.GetUnresolvedProviderPathFromPSPath(source);
+            using var fs = BashFileSystem.OpenRead(path);
+            int got = 0, r;
+            while (got < 16 && (r = fs.Read(seed, got, 16 - got)) > 0) got += r;
+            if (got < 16)
+            {
+                FileSystemHelpers.WriteBashError(this, $"sort: '{source}': end of file");
+                FileSystemHelpers.SetLastExitCode(this, 2);
+                return false;
+            }
+            return true;
+        }
+        catch (Exception ex)
+        {
+            if (FileSystemHelpers.IsPipelineStop(ex)) throw;
+            string reason = ex is DirectoryNotFoundException or FileNotFoundException ? "No such file or directory" : ex.Message;
+            FileSystemHelpers.WriteBashError(this, $"sort: open failed: {source.Replace('\\', '/')}: {reason}");
+            FileSystemHelpers.SetLastExitCode(this, 2);
+            return false;
         }
     }
 

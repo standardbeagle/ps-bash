@@ -135,8 +135,9 @@ public class LineStreamSortParityTests : LineStreamParityHarness
     [InlineData("-k")]
     [InlineData("-k0")]                      // invalid key: cmdlet error + exit 2
     [InlineData("-n -g")]                    // incompatible options
-    [InlineData("-z")]                       // valid-but-unsupported
-    [InlineData("-R")]
+    [InlineData("-z")]                       // NUL records: the cmdlet owns them
+    [InlineData("-R")]                       // random order: the cmdlet owns it
+    [InlineData("--files0-from=l")]
     [InlineData("--debug")]
     [InlineData("--help")]
     [InlineData("file.txt")]                 // file operand → file mode

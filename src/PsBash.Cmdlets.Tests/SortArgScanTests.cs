@@ -5,8 +5,8 @@ namespace PsBash.Cmdlets.Tests;
 /// <summary>
 /// Pure argv-resolution table for sort (shared ordered parser + key/tab/option validation). Checked
 /// against GNU sort 9.4 (`wsl bash`): usage and validation errors exit 2 (except an invalid
-/// --sort/--check argument: 1), -R/-z/--debug/--files0-from/--random-source valid-but-unsupported
-/// (ps-bash, exit 2), a key with its own ordering option does not inherit the global ones.
+/// --sort/--check argument: 1), --debug valid-but-unsupported
+/// (ps-bash, exit 2); -R/-z/--files0-from/--random-source are implemented, a key with its own ordering option does not inherit the global ones.
 /// </summary>
 public class SortArgScanTests
 {
@@ -130,22 +130,44 @@ public class SortArgScanTests
     [InlineData("ERR 1 sort: invalid argument 'x' for '--sort'", "--sort=x")]
     [InlineData("ERR 1 sort: invalid argument 'x' for '--check'", "--check=x")]
     // valid but refused by ps-bash (exit 2)
-    [InlineData("ERR sort: option '-R' is recognized but not supported by ps-bash", "-R")]
-    [InlineData("ERR sort: option '--random-sort' is recognized but not supported by ps-bash", "--random-sort")]
-    [InlineData("ERR sort: option '-z' is recognized but not supported by ps-bash", "-z")]
-    [InlineData("ERR sort: option '--zero-terminated' is recognized but not supported by ps-bash", "--zero-terminated")]
     [InlineData("ERR sort: option '--debug' is recognized but not supported by ps-bash", "--debug")]
-    [InlineData("ERR 2 sort: option '--files0-from' is recognized but not supported by ps-bash", "--files0-from=x")]
-    [InlineData("ERR 2 sort: option '--random-source' is recognized but not supported by ps-bash", "--random-source=x")]
-    [InlineData("ERR 2 sort: option '--sort=random' is recognized but not supported by ps-bash", "--sort=random")]
-    [InlineData("ERR 2 sort: key option 'R' (random sort) is recognized but not supported by ps-bash", "-k1R")]
+    [InlineData("ERR 2 sort: options '-nR' are incompatible", "-n", "-R")]
+    [InlineData("ERR 2 sort: options '-nR' are incompatible", "-R", "-n")]
+    [InlineData("ERR 2 sort: options '-nR' are incompatible", "-k1nR")]
+    [InlineData("ERR 2 sort: extra operand 'f'", "--files0-from=l", "f")]
+    [InlineData("ERR 2 sort: option '--random-source' requires an argument", "--random-source")]
     public void Resolves(string expected, params string[] argv) => Assert.Equal(expected, Scan(argv));
+
+    [Theory]
+    [InlineData("-R")]
+    [InlineData("--random-sort")]
+    [InlineData("--sort=random")]
+    [InlineData("--sort=r")]
+    [InlineData("-k1R")]
+    [InlineData("-zR")]
+    [InlineData("-z")]
+    [InlineData("--zero-terminated")]
+    [InlineData("--files0-from=x")]
+    [InlineData("--random-source=x")]
+    public void ZeroRandomAndFiles0_AreAccepted(string arg) => Assert.False(Scan(new[] { arg }).StartsWith("ERR"));
+
+    [Fact]
+    public void RandomKey_FlagsAndPlanFields()
+    {
+        Assert.True(InvokeBashSortCommand.Plan(new[] { "-R" }).Plan.UsesRandom);
+        Assert.True(InvokeBashSortCommand.Plan(new[] { "-k2,2R" }).Plan.UsesRandom);
+        Assert.False(InvokeBashSortCommand.Plan(new[] { "-r" }).Plan.UsesRandom);
+        Assert.True(InvokeBashSortCommand.Plan(new[] { "-z" }).Plan.Zero);
+        Assert.Equal("l", InvokeBashSortCommand.Plan(new[] { "--files0-from=l" }).Plan.Files0From);
+        Assert.Equal("s", InvokeBashSortCommand.Plan(new[] { "--random-source=s", "-R" }).Plan.RandomSource);
+        Assert.False(InvokeBashSortCommand.Plan(new[] { "-R", "-V" }).Parsed.HasError);   // R and V share one exclusivity bucket (GNU)
+    }
 
     [Fact]
     public void ExitStatus_UsageIs2_UnsupportedIs2()
     {
         Assert.Equal(2, InvokeBashSortCommand.ScanArgs(new[] { "-x" }).ErrorExitCode);
-        Assert.Equal(2, InvokeBashSortCommand.ScanArgs(new[] { "-z" }).ErrorExitCode);
+        Assert.Equal(2, InvokeBashSortCommand.ScanArgs(new[] { "--debug" }).ErrorExitCode);
         Assert.True(InvokeBashSortCommand.ScanArgs(new[] { "--he" }).Has("help"));
         Assert.True(InvokeBashSortCommand.ScanArgs(new[] { "-V" }).Has("version-sort"));
     }
