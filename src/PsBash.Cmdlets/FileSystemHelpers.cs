@@ -37,6 +37,17 @@ internal static class FileSystemHelpers
             yield break;
         }
 
+        // The shell has already expanded an unquoted pattern, so what arrives here is a NAME: a file
+        // that literally exists under this spelling (`a[1]`, whose class form would match `a1`) is
+        // that file, never a pattern.
+        string literal = cmdlet.SessionState.Path.GetUnresolvedProviderPathFromPSPath(raw);
+        if (File.Exists(literal) || Directory.Exists(literal))
+        {
+            OperandDisplay.Remember(cmdlet, literal, typed);
+            yield return literal;
+            yield break;
+        }
+
         var matched = new List<string>();
         try
         {

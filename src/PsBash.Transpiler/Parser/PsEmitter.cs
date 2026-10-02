@@ -2657,8 +2657,13 @@ public static class PsEmitter
             {
                 // Quote each element so that bare literals like `a`, `b`, `c`
                 // are treated as strings, not variable/command references in PS.
-                var items = string.Join(", ", positionalWords.Select(w =>
+                // `set -- *.txt`: a glob word expands into zero or more parameters, which the comma
+                // form cannot splice -- such a list is built as `@( item; item; ... )` instead.
+                bool anyGlob = positionalWords.Any(IsUnquotedSplitWord);
+                var items = string.Join(anyGlob ? "; " : ", ", positionalWords.Select(w =>
                 {
+                    if (anyGlob && IsUnquotedSplitWord(w))
+                        return EmitUnquotedSplitWordArray(w);
                     var emitted = EmitWord(w);
                     // Already quoted (starts with ' or "), a variable ($), subexpr ((), or array (@): pass through.
                     if (emitted.Length > 0 && emitted[0] is '\'' or '"' or '$' or '(' or '@')
@@ -4313,7 +4318,8 @@ public static class PsEmitter
     /// <summary>A word whose expansion is word-split (and elided when empty): see RC-7 and
     /// <see cref="IsPureUnquotedCommandSubWord"/>.</summary>
     private static bool IsUnquotedSplitWord(CompoundWord word)
-        => IsPureUnquotedVarWord(word) || IsPureUnquotedCommandSubWord(word) || IsGlobWord(word);
+        => IsPureUnquotedVarWord(word) || IsPureUnquotedCommandSubWord(word) || IsGlobWord(word)
+           || IsBraceGlobWord(word);
 
     /// <summary>
     /// The array an unquoted split word expands to, for PowerShell <c>@</c>-splatting or flattening into a
@@ -4322,7 +4328,10 @@ public static class PsEmitter
     /// through <c>ConvertTo-BashGlob</c> (see <see cref="EmitGlobPatternExpr"/>).
     /// </summary>
     private static string EmitUnquotedSplitWordArray(CompoundWord word)
-        => IsGlobWord(word)
+        => IsBraceGlobWord(word)
+            // `*.{c,h}` / `sub/{a,b}*`: brace expansion comes FIRST, then every resulting word globs.
+            ? "@(" + EmitBraceExpandedWord(word.Parts) + " | ConvertTo-BashGlob)"
+            : IsGlobWord(word)
             ? PsBuild.GlobWordArray(EmitGlobPatternExpr(word))
             : word.Parts[0] is WordPart.CommandSub cs
                 ? "@(ConvertTo-BashWords " + EmitCommandSubString(cs, nested: false) + ")"
@@ -4377,6 +4386,36 @@ public static class PsEmitter
             sb.Append(c);
         }
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// A word with a brace expansion AND a glob (<c>*.{c,h}</c>, <c>sub/{a,b}*</c>) made only of plain literals,
+    /// brace parts and glob parts. bash expands the braces first; the emitter's brace array carries each
+    /// resulting word's text with the glob characters intact, so piping it through <c>ConvertTo-BashGlob</c>
+    /// finishes the job. Quoted or dynamic parts beside a brace keep the existing emission.
+    /// </summary>
+    private static bool IsBraceGlobWord(CompoundWord word)
+    {
+        bool brace = false, glob = false;
+        foreach (var part in word.Parts)
+        {
+            switch (part)
+            {
+                case WordPart.BracedTuple or WordPart.BracedRange:
+                    brace = true;
+                    break;
+                case WordPart.GlobPart gp:
+                    if (gp.Pattern.Length > 1 && gp.Pattern[1] == '(' && gp.Pattern[0] is '+' or '*' or '?' or '!' or '@')
+                        return false;
+                    glob = true;
+                    break;
+                case WordPart.Literal:
+                    break;
+                default:
+                    return false;
+            }
+        }
+        return brace && glob;
     }
 
     /// <summary>

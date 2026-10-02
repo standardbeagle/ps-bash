@@ -3704,6 +3704,25 @@ public class PsEmitterTests
     }
 
     [Fact]
+    public void Transpile_BraceExpansionWithGlob_ExpandsBracesThenGlobsEachWord()
+    {
+        Assert.Equal(
+            "& { $__bashsplat0 = @(@('sub/a*','sub/b*') | ConvertTo-BashGlob); Invoke-BashEcho @__bashsplat0 }",
+            PsEmitter.Transpile("echo sub/{a,b}*"));
+        // No glob character: the plain brace array is unchanged.
+        Assert.Equal("Invoke-BashEcho @('a','b')", PsEmitter.Transpile("echo {a,b}"));
+    }
+
+    [Fact]
+    public void Transpile_SetDashDashWithGlob_BuildsAFlatPositionalList()
+    {
+        Assert.Equal("$global:BashPositional = @('a'; @(ConvertTo-BashGlob '*.txt'))",
+            PsEmitter.Transpile("set -- a *.txt"));
+        // No expansion in the list: unchanged comma form.
+        Assert.Equal("$global:BashPositional = @('a', 'b')", PsEmitter.Transpile("set -- a b"));
+    }
+
+    [Fact]
     public void Transpile_GlobWordInPipeStage_ForwardsThePipeInput()
     {
         // The splat hoist wraps the stage in a script block, which would swallow the pipe.

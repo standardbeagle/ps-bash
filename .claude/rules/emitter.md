@@ -24,7 +24,11 @@ NEVER in the emitter:
 
 ## QUOTING (NeedsPassthroughQuoting)
 Quote a flag arg containing `,` (PS array sep) or `{`/`}` (PS scriptblock): emit `"-F,"`, `"-I{}"`.
-ANY arg word with a bare `,` literal (`sed -n 725,750p`) is a PS array → `QuoteCommaLiteralWord`/`EmitArgWord` single-quote it (mixed with `$x` → one `"…"`); plain literal+glob word (`ls *.c,x`) → one single-quoted pattern (cmdlets glob it); brace/process-sub words exempt.
+ANY arg word with a bare `,` literal (`sed -n 725,750p`) is a PS array → `QuoteCommaLiteralWord`/`EmitArgWord` single-quote it (mixed with `$x` → one `"…"`); brace/process-sub words exempt.
+
+## GLOBS = SHELL EXPANDS (emitter-strategy.md "Pathname expansion")
+文言：glob字由殼展開，一次，交名於令；勿留原式予cmdlet。
+Unquoted glob word (`IsGlobWord`/`IsBraceGlobWord`) → `@(ConvertTo-BashGlob <pattern>)` via the RC-7 splat hoist (`IsUnquotedSplitWord`), flat `@(a; b)` in for-lists/arrays/`set --`. Pattern text = `EmitGlobPatternExpr` (quoted `* ? [ \` backslash-escaped; NEVER hand-build). `$x`/`$(cmd)` unquoted → `ConvertTo-BashWords` (IFS split + same engine). New list/array position → use `IsUnquotedSplitWord` + `EmitUnquotedSplitWordArray`, flat `;` form (comma does not splice).
 
 ## PS-TEXT VIA PsBuild (one source — `Parser/PsBuild.cs`)
 Recurring PowerShell fragments drift when hand-built (the negated-pipeline condition once

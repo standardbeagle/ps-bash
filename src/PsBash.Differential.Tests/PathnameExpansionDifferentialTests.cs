@@ -50,6 +50,10 @@ public class PathnameExpansionDifferentialTests
     [SkippableFact] public Task StarInsideQuotesMixedWithAStar() => Case("echo *\"y\"*");
     [SkippableFact] public Task AbsolutePattern_GivesAbsolutePaths() => Case("[ \"$(echo \"$PWD\"/*.txt)\" = \"$PWD/y.txt\" ] && echo same");
 
+    [SkippableFact] public Task SetDashDash_PositionalParametersFromGlob() => Case("set -- *; echo \"$#: $1 $3\"");
+    [SkippableFact] public Task BraceExpansionThenGlob_PrefixAndSuffix() => Case("echo sub/{a,b}*");
+    [SkippableFact] public Task BraceExpansionThenGlob_ExtensionList() => Case("echo *.{txt,zz} x");
+
     // ───────────── quoting disables it ─────────────
 
     [SkippableFact] public Task DoubleQuotedStar_StaysLiteral() => Case("echo \"*\"");
@@ -90,6 +94,8 @@ public class PathnameExpansionDifferentialTests
     [SkippableFact] public Task Cat_ClassOperandMatchesTheOtherFile() => Case("cat sub/a[1]");
     [SkippableFact] public Task Cp_StarIntoDirectory_MatchesAndNothingElse() =>
         EqualAsync(Fx() + "\nmkdir -p d", "cp *.txt x d; echo \"rc=$?\"");
+    [SkippableFact] public Task Cp_StarOverAFileNamedLikeAClass_CopiesEveryFile() =>
+        EqualAsync(Fx() + "\nmkdir -p d", "cp sub/* d; echo \"rc=$?\"");
     [SkippableFact] public Task Touch_StarTouchesTheExistingMatches() => Case("touch *.txt; echo rc=$?");
     [SkippableFact] public Task Rm_StarRemovesOnlyNonHiddenFiles() =>
         EqualAsync(Fx(), "rm -f *; echo rc=$?");
