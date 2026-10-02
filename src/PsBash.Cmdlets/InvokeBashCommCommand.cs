@@ -30,7 +30,16 @@ namespace PsBash.Cmdlets;
 ///
 /// Output: each emitted record goes through
 /// <see cref="BashRuntime.NewBashObject(string)"/> — the same default
-/// <c>PsBash.TextOutput</c> shape the psm1 oracle produced.
+/// <c>PsBash.TextOutput</c> shape the psm1 oracle produced (under <c>-z</c>: a NUL-terminated
+/// exact record, <see cref="NulRecords"/>).
+///
+/// <para><b>Input-order check</b> (GNU comm.c <c>check_order</c>, oracle coreutils 9.4): every line READ
+/// after the first of a file is compared with the previous one of the same file. By default
+/// (neither option, or <c>--nocheck-order</c> last = never) the check only runs once an UNPAIRABLE line
+/// has been seen; the first disorder per file prints <c>comm: file N is not in sorted order</c> and the
+/// run continues, ending with <c>comm: input is not in sorted order</c> and exit 1.
+/// <c>--check-order</c> checks always and stops at the first disorder (exit 1). The last of
+/// <c>--check-order</c>/<c>--nocheck-order</c> wins.</para>
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashComm")]
 [OutputType(typeof(string))]
@@ -43,18 +52,16 @@ public sealed class InvokeBashCommCommand : PSCmdlet
     /// Valid GNU comm options ps-bash does not implement, refused loudly (exit 2). (A string[] on
     /// purpose: CommonParameterCollisionGuardTests enumerates static string sets.)
     /// </summary>
-    private static readonly string[] CommValidButUnsupported =
-    {
-        "--check-order", "--nocheck-order",
-        "-z", "--zero-terminated",
-    };
+    private static readonly string[] CommValidButUnsupported = Array.Empty<string>();
 
     private const string OptSup1 = "s1", OptSup2 = "s2", OptSup3 = "s3",
-        OptTotal = "total", OptDelim = "delim";
+        OptTotal = "total", OptDelim = "delim",
+        OptCheck = "check", OptNoCheck = "nocheck", OptZero = "zero";
 
     /// <summary>
     /// comm's option surface (GNU coreutils 9.4): <c>-1 -2 -3</c> (bundle in any order, <c>-123</c>),
-    /// <c>--total</c>, <c>--output-delimiter=STR</c> (previously refused), unique long prefixes.
+    /// <c>--total</c>, <c>--output-delimiter=STR</c>, <c>--check-order</c>/<c>--nocheck-order</c>,
+    /// <c>-z</c>/<c>--zero-terminated</c>, unique long prefixes.
     /// </summary>
     private static readonly OptSpecSet CommSpec = new(
         new[]
@@ -64,6 +71,9 @@ public sealed class InvokeBashCommCommand : PSCmdlet
             new OptSpec(OptSup3, '3', null),
             new OptSpec(OptTotal, '\0', "total"),
             new OptSpec(OptDelim, '\0', "output-delimiter", OptKind.Value),
+            new OptSpec(OptCheck, '\0', "check-order"),
+            new OptSpec(OptNoCheck, '\0', "nocheck-order"),
+            new OptSpec(OptZero, 'z', "zero-terminated"),
         },
         validButUnsupported: CommValidButUnsupported,
         allowAbbrev: true,
@@ -71,6 +81,22 @@ public sealed class InvokeBashCommCommand : PSCmdlet
 
     /// <summary>Pure argv scan (unit-test seam).</summary>
     internal static ParsedArgs ScanArgs(string[] args) => ArgParser.Parse(args, CommSpec);
+
+    /// <summary>Input-order checking mode: GNU's CHECK_ORDER_DEFAULT / ENABLED / DISABLED.</summary>
+    public enum OrderCheck { Default, Enabled, Disabled }
+
+    /// <summary>The last of <c>--check-order</c> / <c>--nocheck-order</c> in command-line order.</summary>
+    internal static OrderCheck ResolveOrderCheck(ParsedArgs parsed)
+    {
+        var mode = OrderCheck.Default;
+        foreach (var tok in parsed.Tokens)
+        {
+            if (tok.Kind != ArgTokKind.Option) continue;
+            if (tok.OptId == OptCheck) mode = OrderCheck.Enabled;
+            else if (tok.OptId == OptNoCheck) mode = OrderCheck.Disabled;
+        }
+        return mode;
+    }
 
     protected override void EndProcessing()
     {
@@ -96,6 +122,8 @@ public sealed class InvokeBashCommCommand : PSCmdlet
         bool suppress2 = parsed.Has(OptSup2);
         bool suppress3 = parsed.Has(OptSup3);
         bool total = parsed.Has(OptTotal);
+        bool zero = parsed.Has(OptZero);
+        var checkMode = ResolveOrderCheck(parsed);
         // GNU: an empty --output-delimiter is a NUL byte (oracle-checked, coreutils 9.4).
         string delim = parsed.Last(OptDelim) is { } d ? (d.Value!.Length == 0 ? "\0" : d.Value) : "\t";
         var operands = parsed.Operands();
@@ -121,19 +149,48 @@ public sealed class InvokeBashCommCommand : PSCmdlet
         string? path2 = ResolveSingleOperand(operands[1]);
         if (path2 == null) return;
 
+        object Out(string text) => zero ? NulRecords.Record(text) : BashRuntime.NewBashObject(text);
+        IEnumerable<string> Read(string path) => zero ? NulRecords.ReadFile(path) : BashFileSystem.ReadLines(path);
+
         IEnumerator<string>? file1 = null;
         IEnumerator<string>? file2 = null;
         string currentReadPath = path1;
 
         try
         {
-            file1 = BashFileSystem.ReadLines(path1).GetEnumerator();
-            file2 = BashFileSystem.ReadLines(path2).GetEnumerator();
+            file1 = Read(path1).GetEnumerator();
+            file2 = Read(path2).GetEnumerator();
 
-            currentReadPath = path1;
-            bool has1 = file1.MoveNext();
-            currentReadPath = path2;
-            bool has2 = file2.MoveNext();
+            var prev = new string?[2];
+            var issued = new bool[2];
+            bool seenUnpairable = false;
+            bool aborted = false;
+
+            // Read the next line of file i (GNU readlinebuffer + check_order): a line that sorts BEFORE
+            // its predecessor is a disorder when checking is enabled, or by default once an unpairable
+            // line has been output. Returns whether a line was read; sets aborted for --check-order.
+            bool Next(int i)
+            {
+                var e = i == 0 ? file1! : file2!;
+                currentReadPath = i == 0 ? path1 : path2;
+                if (!e.MoveNext()) return false;
+                string cur = e.Current;
+                if (checkMode != OrderCheck.Disabled && (checkMode == OrderCheck.Enabled || seenUnpairable)
+                    && prev[i] is { } p && string.CompareOrdinal(cur, p) < 0
+                    && (!issued[i] || checkMode == OrderCheck.Enabled))
+                {
+                    FileSystemHelpers.WriteBashError(this, $"comm: file {i + 1} is not in sorted order");
+                    issued[i] = true;
+                    if (checkMode == OrderCheck.Enabled) { aborted = true; return false; }
+                }
+                prev[i] = cur;
+                return true;
+            }
+
+            bool has1 = Next(0);
+            if (aborted) return;
+            bool has2 = Next(1);
+            if (aborted) return;
 
             // Column prefixes depend only on the suppress flags — constant for the
             // whole run, so build them once instead of concatenating per output line.
@@ -143,76 +200,41 @@ public sealed class InvokeBashCommCommand : PSCmdlet
             // --total counts each category regardless of column suppression.
             long n1 = 0, n2 = 0, n3 = 0;
 
-            while (has1 && has2)
+            while (has1 || has2)
             {
-                int cmp = string.CompareOrdinal(file1.Current, file2.Current);
-                if (cmp == 0)
+                // An exhausted file sorts after everything (GNU: order = 1 / -1).
+                int order = !has1 ? 1 : !has2 ? -1 : Math.Sign(string.CompareOrdinal(file1!.Current, file2!.Current));
+                if (order == 0)
                 {
                     n3++;
-                    if (!suppress3)
-                    {
-                        WriteObject(BashRuntime.NewBashObject(col3Prefix + file1.Current));
-                    }
-
-                    currentReadPath = path1;
-                    has1 = file1.MoveNext();
-                    currentReadPath = path2;
-                    has2 = file2.MoveNext();
+                    if (!suppress3) WriteObject(Out(col3Prefix + file1!.Current));
                 }
-                else if (cmp < 0)
+                else if (order < 0)
                 {
+                    seenUnpairable = true;
                     n1++;
-                    if (!suppress1)
-                    {
-                        WriteObject(BashRuntime.NewBashObject(file1.Current));
-                    }
-
-                    currentReadPath = path1;
-                    has1 = file1.MoveNext();
+                    if (!suppress1) WriteObject(Out(file1!.Current));
                 }
                 else
                 {
+                    seenUnpairable = true;
                     n2++;
-                    if (!suppress2)
-                    {
-                        WriteObject(BashRuntime.NewBashObject(col2Prefix + file2.Current));
-                    }
-
-                    currentReadPath = path2;
-                    has2 = file2.MoveNext();
-                }
-            }
-
-            while (has1)
-            {
-                n1++;
-                if (!suppress1)
-                {
-                    WriteObject(BashRuntime.NewBashObject(file1.Current));
+                    if (!suppress2) WriteObject(Out(col2Prefix + file2!.Current));
                 }
 
-                currentReadPath = path1;
-                has1 = file1.MoveNext();
-            }
-
-            while (has2)
-            {
-                n2++;
-                if (!suppress2)
-                {
-                    WriteObject(BashRuntime.NewBashObject(col2Prefix + file2.Current));
-                }
-
-                currentReadPath = path2;
-                has2 = file2.MoveNext();
+                if (order <= 0) { has1 = Next(0); if (aborted) return; }
+                if (order >= 0) { has2 = Next(1); if (aborted) return; }
             }
 
             // --total: trailing summary line "n1<TAB>n2<TAB>n3<TAB>total"
             // (GNU prints all three counts regardless of -1/-2/-3 suppression).
             if (total)
             {
-                WriteObject(BashRuntime.NewBashObject($"{n1}{delim}{n2}{delim}{n3}{delim}total"));
+                WriteObject(Out($"{n1}{delim}{n2}{delim}{n3}{delim}total"));
             }
+
+            if (issued[0] || issued[1])
+                FileSystemHelpers.WriteBashError(this, "comm: input is not in sorted order");
         }
         catch (Exception ex)
         {

@@ -12,12 +12,12 @@ namespace PsBash.Cmdlets;
 /// </summary>
 internal sealed class SortKeyOpts
 {
-    public bool Numeric, General, Human, Month, Version, Fold, Dict, NonPrint, BlankStart, BlankEnd, Reverse;
+    public bool Numeric, General, Human, Month, Version, Fold, Dict, NonPrint, BlankStart, BlankEnd, Reverse, Random;
 
     /// <summary>GNU <c>default_key_compare</c>: no ordering option (b d f g h i M n R V) on the key.
     /// <c>-r</c> alone does not count as an ordering option but still stops inheritance.</summary>
     public bool HasOrdering =>
-        Numeric || General || Human || Month || Version || Fold || Dict || NonPrint || BlankStart || BlankEnd;
+        Numeric || General || Human || Month || Version || Random || Fold || Dict || NonPrint || BlankStart || BlankEnd;
 
     public SortKeyOpts Clone() => (SortKeyOpts)MemberwiseClone();
 
@@ -29,7 +29,7 @@ internal sealed class SortKeyOpts
     public string? IncompatibleLetters()
     {
         int n = (Numeric ? 1 : 0) + (General ? 1 : 0) + (Human ? 1 : 0) + (Month ? 1 : 0)
-            + ((Version || Dict || NonPrint) ? 1 : 0);
+            + ((Version || Random || Dict || NonPrint) ? 1 : 0);
         if (n <= 1) return null;
         var sb = new StringBuilder();
         if (Dict) sb.Append('d');
@@ -39,6 +39,7 @@ internal sealed class SortKeyOpts
         if (NonPrint) sb.Append('i');
         if (Month) sb.Append('M');
         if (Numeric) sb.Append('n');
+        if (Random) sb.Append('R');
         if (Version) sb.Append('V');
         return sb.ToString();
     }
@@ -62,6 +63,12 @@ internal sealed class SortPlan
     public bool Reverse;                          // GLOBAL -r: only the last-resort comparison uses it directly
     public bool Unique, Stable, Merge;
     public char? Delimiter;                       // -t
+    public bool Zero;                             // -z: NUL-terminated records
+    public string? RandomSource;                  // --random-source=FILE
+    public string? Files0From;                    // --files0-from=F (last wins)
+    /// <summary>The 16-byte MD5 seed of -R (GNU <c>random_md5_state</c>), set by the cmdlet before <see cref="SortEngine.Prepare"/>; null = a fresh random one.</summary>
+    public byte[]? RandomSeed;
+    public bool UsesRandom { get { foreach (var k in Keys) if (k.Opts.Random) return true; return false; } }
 }
 
 /// <summary>
@@ -90,6 +97,7 @@ internal sealed class SortEngine
     private string[] _raw = Array.Empty<string>();
     private string[][] _text = Array.Empty<string[]>();      // [key][item] compare text
     private double[][] _num = Array.Empty<double[]>();       // [key][item] numeric / month value
+    private byte[][][]? _dig;                                // [key][item] MD5(seed + key text) for -R keys
 
     public SortEngine(SortPlan plan) => _plan = plan;
 
@@ -112,6 +120,12 @@ internal sealed class SortEngine
             var o = key.Opts;
             var kt = new string[n];
             double[]? kn = (o.IsNumericLike || o.Month) ? new double[n] : null;
+            if (o.Random)
+            {
+                _dig ??= new byte[nk][][];
+                _seed ??= _plan.RandomSeed ?? System.Security.Cryptography.RandomNumberGenerator.GetBytes(16);
+                _dig[k] = new byte[n][];
+            }
             for (int i = 0; i < n; i++)
             {
                 string text = key.Whole
@@ -124,10 +138,23 @@ internal sealed class SortEngine
                 else if (o.General) kn![i] = ParseGeneralNumeric(text);
                 else if (o.Numeric) kn![i] = ParseNumericPrefix(text);
                 else if (o.Month) kn![i] = ConvertFromMonthName(text);
+                if (o.Random) _dig![k][i] = RandomDigest(text);
             }
             _text[k] = kt;
             _num[k] = kn ?? Array.Empty<double>();
         }
+    }
+
+    private byte[]? _seed;
+
+    /// <summary>GNU <c>compare_random</c> in the C locale: MD5 of the 16 seed bytes followed by the key text; digests are compared as bytes.</summary>
+    private byte[] RandomDigest(string text)
+    {
+        var textBytes = PsBash.Core.RawBytes.GetBytes(text);
+        var all = new byte[_seed!.Length + textBytes.Length];
+        _seed.CopyTo(all, 0);
+        textBytes.CopyTo(all, _seed.Length);
+        return System.Security.Cryptography.MD5.HashData(all);
     }
 
     /// <summary>Key comparison only (no last resort): 0 means "equal keys".</summary>
@@ -137,7 +164,8 @@ internal sealed class SortEngine
         {
             var o = _plan.Keys[k].Opts;
             int c;
-            if (o.IsNumericLike || o.Month)
+            if (o.Random) c = _dig![k][a].AsSpan().SequenceCompareTo(_dig[k][b]);
+            else if (o.IsNumericLike || o.Month)
             {
                 double x = _num[k][a], y = _num[k][b];
                 c = x < y ? -1 : (x > y ? 1 : 0);
@@ -240,7 +268,8 @@ internal sealed class SortEngine
         return end <= beg ? "" : line.Substring(beg, end - beg);
     }
 
-    private static bool IsBlank(char c) => c == ' ' || c == '\t';
+    // GNU: blanks are space and tab AND newline (a record may contain one under -z).
+    private static bool IsBlank(char c) => c == ' ' || c == '\t' || c == '\n';
 
     // GNU begfield: skip `sword0` fields, then (-b) the blanks, then schar-1 characters (clamped to the line).
     private static int BeginField(string line, int sword0, int schar, bool skipBlanks, char? tab)
@@ -380,52 +409,82 @@ internal sealed class SortEngine
     }
 
     /// <summary>
-    /// <c>-V</c>: the dpkg/gnulib <c>verrevcmp</c> ordering — alternating non-digit runs (compared
-    /// character by character: letters, then everything else after them, <c>~</c> before even the end)
-    /// and digit runs (compared numerically, leading zeros ignored), an empty string first. Not ported
-    /// from gnulib's <c>filevercmp</c>: the file-suffix stripping (<c>.tar.gz</c>) and the special
-    /// <c>.</c>/<c>..</c> cases, so those differ from GNU.
+    /// <c>-V</c>: gnulib <c>filevercmp</c> (coreutils 9.4). An empty string first; "." then ".." then other
+    /// dot files before everything else; then the strings are compared WITHOUT their file suffix
+    /// (<c>(\.[A-Za-z~][A-Za-z0-9~]*)*$</c>, so <c>a.tar.gz</c> compares as <c>a</c>) by <c>verrevcmp</c> —
+    /// alternating non-digit runs (letters, then everything else, <c>~</c> before even the end) and digit
+    /// runs (numeric, leading zeros ignored) — and only when those are equal, as whole strings.
     /// </summary>
     internal static int VersionCompare(string a, string b)
     {
         if (a.Length == 0) return b.Length == 0 ? 0 : -1;
         if (b.Length == 0) return 1;
-        // gnulib: dot names first ("." < ".." < ".x" < everything else).
-        bool da = a[0] == '.', db = b[0] == '.';
-        if (da != db) return da ? -1 : 1;
-        if (da)
+        if (a[0] == '.')
         {
-            int ra = a == "." ? 0 : a == ".." ? 1 : 2, rb = b == "." ? 0 : b == ".." ? 1 : 2;
-            if (ra != rb) return ra < rb ? -1 : 1;
-            if (ra < 2) return 0;
+            if (b[0] != '.') return -1;
+            bool adot = a.Length == 1, bdot = b.Length == 1;
+            if (adot) return bdot ? 0 : -1;
+            if (bdot) return 1;
+            bool add = a.Length == 2 && a[1] == '.', bdd = b.Length == 2 && b[1] == '.';
+            if (add) return bdd ? 0 : -1;
+            if (bdd) return 1;
         }
-        int i = 0, j = 0;
-        while (i < a.Length || j < b.Length)
+        else if (b[0] == '.') return 1;
+
+        int ap = FilePrefixLength(a), bp = FilePrefixLength(b);
+        bool onePass = ap == a.Length && bp == b.Length;
+        int r = VerRevCmp(a, ap, b, bp);
+        return r != 0 || onePass ? Math.Sign(r) : Math.Sign(VerRevCmp(a, a.Length, b, b.Length));
+    }
+
+    /// <summary>gnulib <c>file_prefixlen</c>: the length before the trailing run of <c>.[A-Za-z~][A-Za-z0-9~]*</c> suffixes.</summary>
+    private static int FilePrefixLength(string s)
+    {
+        int n = s.Length;
+        if (n == 0) return 0;
+        int prefix = 0;
+        int i = 0;
+        while (true)
         {
-            while ((i < a.Length && !char.IsAsciiDigit(a[i])) || (j < b.Length && !char.IsAsciiDigit(b[j])))
+            if (i == n) break;
+            i++;
+            prefix = i;
+            while (i + 1 < n && s[i] == '.' && (char.IsAsciiLetter(s[i + 1]) || s[i + 1] == '~'))
             {
-                int ac = i < a.Length ? VersionOrder(a[i]) : 0;
-                int bc = j < b.Length ? VersionOrder(b[j]) : 0;
-                if (ac != bc) return ac < bc ? -1 : 1;
-                i++;
-                j++;
+                for (i += 2; i < n && (char.IsAsciiLetterOrDigit(s[i]) || s[i] == '~'); i++) { }
             }
-            while (i < a.Length && a[i] == '0') i++;
-            while (j < b.Length && b[j] == '0') j++;
+        }
+        return prefix;
+    }
+
+    private static int VerRevCmp(string s1, int len1, string s2, int len2)
+    {
+        int p1 = 0, p2 = 0;
+        while (p1 < len1 || p2 < len2)
+        {
             int firstDiff = 0;
-            while (i < a.Length && char.IsAsciiDigit(a[i]) && j < b.Length && char.IsAsciiDigit(b[j]))
+            while ((p1 < len1 && !char.IsAsciiDigit(s1[p1])) || (p2 < len2 && !char.IsAsciiDigit(s2[p2])))
             {
-                if (firstDiff == 0) firstDiff = a[i] - b[j];
-                i++;
-                j++;
+                int c1 = p1 == len1 ? 0 : VersionOrder(s1[p1]);
+                int c2 = p2 == len2 ? 0 : VersionOrder(s2[p2]);
+                if (c1 != c2) return c1 - c2;
+                p1++;
+                p2++;
             }
-            if (i < a.Length && char.IsAsciiDigit(a[i])) return 1;
-            if (j < b.Length && char.IsAsciiDigit(b[j])) return -1;
-            if (firstDiff != 0) return firstDiff < 0 ? -1 : 1;
+            while (p1 < len1 && s1[p1] == '0') p1++;
+            while (p2 < len2 && s2[p2] == '0') p2++;
+            while (p1 < len1 && p2 < len2 && char.IsAsciiDigit(s1[p1]) && char.IsAsciiDigit(s2[p2]))
+            {
+                if (firstDiff == 0) firstDiff = s1[p1] - s2[p2];
+                p1++;
+                p2++;
+            }
+            if (p1 < len1 && char.IsAsciiDigit(s1[p1])) return 1;
+            if (p2 < len2 && char.IsAsciiDigit(s2[p2])) return -1;
+            if (firstDiff != 0) return firstDiff;
         }
         return 0;
     }
-
     private static int VersionOrder(char c)
     {
         if (char.IsAsciiDigit(c)) return 0;

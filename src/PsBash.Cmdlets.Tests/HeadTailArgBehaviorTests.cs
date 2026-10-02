@@ -266,7 +266,6 @@ public class HeadTailArgBehaviorTests : IClassFixture<SharedPwshFixture>, IDispo
         Run($"{Runs} | Invoke-BashUniq '-f' x").AssertFailed(1, "x: invalid number of fields to skip");
         Run($"{Runs} | Invoke-BashUniq '-cD'").AssertFailed(1, "printing all duplicated lines and repeat counts is meaningless");
         Run($"{Runs} | Invoke-BashUniq '--all-repeated=x'").AssertFailed(1, "invalid argument 'x' for '--all-repeated'");
-        Run($"{Runs} | Invoke-BashUniq '-z'").AssertFailed(2, "not supported");
         Run($"{Runs} | Invoke-BashUniq '--bogus'").AssertFailed(1, "unrecognized option '--bogus'");
     }
 

@@ -26,7 +26,7 @@ namespace PsBash.Cmdlets;
 /// abbreviated, obsolete <c>-N</c>). The cmdlet's own <see cref="InvokeBashUniqCommand.Plan"/>
 /// resolves and validates the argv for both lanes. DECLINED: file operands, <c>-D</c> /
 /// <c>--all-repeated</c> (group-separator methods live in the cmdlet), a bad number, an
-/// unsupported option (<c>-z</c>, <c>--group</c>), <c>--help</c> / <c>--version</c>, unknown flags.</para>
+/// <c>-z</c> / <c>--group</c> (NUL records, group separators), <c>--help</c> / <c>--version</c>, unknown flags.</para>
 /// </summary>
 internal sealed class UniqStage : ILineStreamStage
 {
@@ -51,7 +51,8 @@ internal sealed class UniqStage : ILineStreamStage
     internal static ILineStreamStage? TryCreate(string[] argv)
     {
         var plan = InvokeBashUniqCommand.Plan(argv);
-        if (plan.Declined || plan.Operands.Count > 0 || plan.AllRepeated) return null;
+        // -z (NUL records) and --group are the cmdlet's: the fused lane carries \n-terminated lines only.
+        if (plan.Declined || plan.Operands.Count > 0 || plan.AllRepeated || plan.Zero || plan.GroupMethod is not null) return null;
         return new UniqStage(plan.Count, plan.Repeated, plan.Unique, plan.IgnoreCase,
                              plan.SkipFields, plan.SkipChars, plan.CheckChars);
     }

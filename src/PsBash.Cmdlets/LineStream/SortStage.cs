@@ -15,7 +15,7 @@ namespace PsBash.Cmdlets;
 /// done by the cmdlet's <see cref="SortEngine"/> — one resolver and one engine for both lanes, so they
 /// cannot disagree (the old hand-ported comparator is gone). DECLINED (the real cmdlet owns the message,
 /// the output file and the exit status): any argv the plan rejects, <c>--help</c>/<c>--version</c>, file
-/// operands (file mode), <c>-o</c>, <c>-c</c>/<c>-C</c> (exit 1 paths) and <c>-m</c> (a merge of a single
+/// operands (file mode), <c>--files0-from</c>, <c>-z</c> (NUL records), <c>-R</c> (random order), <c>-o</c>, <c>-c</c>/<c>-C</c> (exit 1 paths) and <c>-m</c> (a merge of a single
 /// stream is a pass-through, not a sort).</para>
 /// </summary>
 internal sealed class SortStage : ILineStreamStage
@@ -31,7 +31,8 @@ internal sealed class SortStage : ILineStreamStage
     internal static ILineStreamStage? TryCreate(string[] argv)
     {
         var a = InvokeBashSortCommand.Plan(argv);
-        if (a.Declined || a.Operands.Count > 0 || a.Output is not null || a.CheckMode != 0 || a.Plan.Merge)
+        if (a.Declined || a.Operands.Count > 0 || a.Output is not null || a.CheckMode != 0 || a.Plan.Merge
+            || a.Plan.Zero || a.Plan.UsesRandom || a.Plan.Files0From is not null)
             return null;
         return new SortStage(a.Plan);
     }

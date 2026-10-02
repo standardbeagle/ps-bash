@@ -96,11 +96,11 @@ public class UniqArgScanTests
     [InlineData("ERR uniq: invalid argument 'x' for '--all-repeated'\nValid arguments are:\n  - 'none'\n  - 'prepend'\n  - 'separate'", "--all-repeated=x")]  // FIX
     [InlineData("ERR uniq: printing all duplicated lines and repeat counts is meaningless", "-cD")]  // FIX
     [InlineData("ERR uniq: printing all duplicated lines and repeat counts is meaningless", "-c", "--all-repeated")]  // FIX
-    [InlineData("ERR uniq: option '-z' is recognized but not supported by ps-bash", "-z")]
-    [InlineData("ERR uniq: option '--zero-terminated' is recognized but not supported by ps-bash", "--zero")]  // FIX
-    [InlineData("ERR uniq: option '--group' is recognized but not supported by ps-bash", "--group")]
-    [InlineData("ERR uniq: option '--group' is recognized but not supported by ps-bash", "--group=prepend")]
-    [InlineData("ERR uniq: option '--group' is recognized but not supported by ps-bash", "--gr")]  // FIX
+    [InlineData("ERR uniq: --group is mutually exclusive with -c/-d/-D/-u", "--group", "-c")]
+    [InlineData("ERR uniq: --group is mutually exclusive with -c/-d/-D/-u", "-d", "--group=both")]
+    [InlineData("ERR uniq: --group is mutually exclusive with -c/-d/-D/-u", "--group", "-D")]
+    [InlineData("ERR uniq: --group is mutually exclusive with -c/-d/-D/-u", "--group", "-u")]
+    [InlineData("ERR uniq: invalid argument 'bogus' for '--group'\nValid arguments are:\n  - 'prepend'\n  - 'append'\n  - 'separate'\n  - 'both'", "--group=bogus")]
     [InlineData("ERR uniq: option '--s' is ambiguous; possibilities: '--skip-fields' '--skip-chars'", "--s", "1")]  // GNU long_options[] order
     [InlineData("ERR uniq: option '--c' is ambiguous; possibilities: '--count' '--check-chars'", "--c")]
     // Obsolete +N (= -s N) and the third-operand error, every row checked against GNU uniq 9.4.
@@ -168,10 +168,25 @@ public class UniqArgScanTests
     [InlineData("-x", 1)]
     [InlineData("-f", 1)]
     [InlineData("--s", 1)]
-    [InlineData("-z", 2)]
-    [InlineData("--group", 2)]
-    public void ScanError_ExitStatus_IsGnuUsageStatusExceptOurOwnRefusal(string arg, int exit)
+    public void ScanError_ExitStatus_IsGnuUsageStatus(string arg, int exit)
     {
         Assert.Equal(exit, InvokeBashUniqCommand.ScanArgs(new[] { arg }).ErrorExitCode);
+    }
+
+    [Theory]
+    [InlineData(null, "-z")]
+    [InlineData(null, "--zero-terminated")]
+    [InlineData(null, "--zero")]
+    [InlineData("separate", "--group")]
+    [InlineData("prepend", "--group=prepend")]
+    [InlineData("append", "--group=app")]
+    [InlineData("both", "--gr=b")]
+    [InlineData("both", "-z", "--group=both")]
+    public void ZeroAndGroup_AreResolved(string? method, params string[] argv)
+    {
+        var u = InvokeBashUniqCommand.Plan(argv);
+        Assert.Null(u.Error);
+        Assert.Equal(argv.Any(a => a is "-z" or "--zero-terminated" or "--zero"), u.Zero);
+        Assert.Equal(method, u.GroupMethod);
     }
 }

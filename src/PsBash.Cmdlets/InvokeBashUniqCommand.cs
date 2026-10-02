@@ -80,15 +80,11 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
     /// shared parser: <c>-z/--zero-terminated</c> (NUL records) and <c>--group[=METHOD]</c>.
     /// (A string[] on purpose: CommonParameterCollisionGuardTests enumerates static string sets.)
     /// </summary>
-    private static readonly string[] UniqValidButUnsupported =
-    {
-        "-z", "--zero-terminated",
-        "--group",
-    };
+    private static readonly string[] UniqValidButUnsupported = Array.Empty<string>();
 
     private const string OptCount = "count", OptRepeated = "repeated", OptAllRepeated = "allrepeated",
         OptSkipFields = "skipfields", OptSkipChars = "skipchars", OptIgnoreCase = "ignorecase",
-        OptUnique = "unique", OptCheckChars = "checkchars";
+        OptUnique = "unique", OptCheckChars = "checkchars", OptGroup = "group", OptZero = "zero";
 
     /// <summary>GNU uniq long_options[] order; getopt_long lists ambiguous-prefix candidates in it.</summary>
     private static readonly string[] UniqLongOptionOrder = { "count", "check-chars", "skip-fields", "skip-chars" };
@@ -112,6 +108,8 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
             new OptSpec(OptSkipChars, 's', "skip-chars", OptKind.Value),
             new OptSpec(OptUnique, 'u', "unique"),
             new OptSpec(OptCheckChars, 'w', "check-chars", OptKind.Value),
+            new OptSpec(OptGroup, '\0', "group", OptKind.OptionalValue),
+            new OptSpec(OptZero, 'z', "zero-terminated"),
         },
         validButUnsupported: UniqValidButUnsupported,
         allowAbbrev: true,
@@ -129,6 +127,10 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
         public bool Count, Repeated, Unique, IgnoreCase, AllRepeated;
         /// <summary><c>none</c> (default), <c>prepend</c> or <c>separate</c> — only meaningful with <see cref="AllRepeated"/>.</summary>
         public string AllRepeatedMethod = "none";
+        /// <summary><c>-z</c>: NUL-terminated records in and out.</summary>
+        public bool Zero;
+        /// <summary><c>--group[=METHOD]</c> (null = off): <c>separate</c> (default) | <c>prepend</c> | <c>append</c> | <c>both</c>.</summary>
+        public string? GroupMethod;
         public int SkipFields, SkipChars;
         /// <summary>-w N: compare at most N chars; -1 = unlimited (unset). NOTE <c>-w 0</c> means "compare nothing" (GNU).</summary>
         public int CheckChars = -1;
@@ -159,6 +161,7 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
             Unique = p.Has(OptUnique),
             IgnoreCase = p.Has(OptIgnoreCase),
             AllRepeated = p.Has(OptAllRepeated),
+            Zero = p.Has(OptZero),
             Operands = p.Operands(),
         };
         if (p.HasError) return u;
@@ -210,9 +213,25 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
                     }
                     u.AllRepeatedMethod = full;
                     break;
+                case OptGroup:
+                    // GNU argmatch: an exact name or a unique prefix; no METHOD = separate.
+                    string? g = tok.Value is null ? "separate" : MatchGroupMethod(tok.Value);
+                    if (g is null)
+                    {
+                        u.Error = $"uniq: invalid argument '{tok.Value}' for '--group'\n"
+                                  + "Valid arguments are:\n  - 'prepend'\n  - 'append'\n  - 'separate'\n  - 'both'";
+                        return u;
+                    }
+                    u.GroupMethod = g;
+                    break;
             }
         }
 
+        if (u.GroupMethod is not null && (u.Count || u.Repeated || u.AllRepeated || u.Unique))
+        {
+            u.Error = "uniq: --group is mutually exclusive with -c/-d/-D/-u";
+            return u;
+        }
         if (u.AllRepeated && u.Count)
             u.Error = "uniq: printing all duplicated lines and repeat counts is meaningless";
         return u;
@@ -260,6 +279,14 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
         }
         value = (int)acc;
         return true;
+    }
+
+    private static string? MatchGroupMethod(string v)
+    {
+        if (v.Length == 0) return null;
+        foreach (var m in new[] { "prepend", "append", "separate", "both" })
+            if (m.StartsWith(v, StringComparison.Ordinal)) return m;
+        return null;
     }
 
     private static string? MatchMethod(string v)
@@ -320,16 +347,24 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
     private StreamWriter? _outWriter;
     private bool _outFailed;
 
+    private bool _zero;
+    private string? _groupMethod;
+    private readonly List<object> _zeroInput = new();
+
     private void Emit(object record)
     {
         if (_outputFile is null) { WriteObject(record); return; }
         var w = EnsureOutput();
         if (w is null) return;
         var text = BashRuntime.GetBashText(record);
+        if (_zero) { w.Write(text); return; }   // a NUL record already carries its terminator
         if (text.EndsWith('\n')) text = text[..^1];
         w.Write(text);
         w.Write('\n');
     }
+
+    /// <summary>A fresh output line: under <c>-z</c> an exact NUL-terminated record (its text may hold <c>\n</c>).</summary>
+    private object Line(string text) => _zero ? NulRecords.Record(text) : BashRuntime.NewBashObject(text);
 
     private StreamWriter? EnsureOutput()
     {
@@ -381,6 +416,8 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
         _uniqueOnly = plan.Unique;
         _allRepeated = plan.AllRepeated;
         _allRepeatedMethod = plan.AllRepeatedMethod;
+        _zero = plan.Zero;
+        _groupMethod = plan.GroupMethod;
         _skipFields = plan.SkipFields;
         _skipChars = plan.SkipChars;
         _checkChars = plan.CheckChars;
@@ -396,6 +433,20 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
     {
         if (_prevLine == null) return;
 
+        // --group: EVERY line of EVERY run (unique lines included), groups divided by an empty
+        // line per METHOD: separate = between, prepend = before each, append = after each, both.
+        if (_groupMethod is { } gm)
+        {
+            // both = a blank before every group (so one between groups and one at the start) plus
+            // ONE after the last group (written at the end of the input, EndProcessing).
+            if (gm is "prepend" or "both" || (gm == "separate" && _groupsEmitted > 0)) Emit(Line(string.Empty));
+            _groupsEmitted++;
+            foreach (var (memberLine, memberObj) in _runMembers)
+                Emit(memberObj != null ? BashRuntime.PassTerminated(memberObj) : Line(memberLine));
+            if (gm == "append") Emit(Line(string.Empty));
+            return;
+        }
+
         // -D / --all-repeated: emit EVERY line of a duplicate run (count >= 2),
         // not a single representative. No count prefix (GNU rejects -cD).
         if (_allRepeated)
@@ -403,7 +454,7 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
             if (_runCount < 2) return;
             // --all-repeated=prepend: a blank line before EVERY group; =separate: between groups.
             if (_allRepeatedMethod == "prepend" || (_allRepeatedMethod == "separate" && _groupsEmitted > 0))
-                Emit(BashRuntime.NewBashObject(string.Empty));
+                Emit(Line(string.Empty));
             _groupsEmitted++;
             // -D is a FILTER too: every member of the run is one of the input lines (with
             // -f/-s/-w they may differ textually), so emit each member's ORIGINAL object.
@@ -411,7 +462,7 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
             {
                 Emit(memberObj != null
                     ? BashRuntime.PassTerminated(memberObj)
-                    : BashRuntime.NewBashObject(memberLine));
+                    : Line(memberLine));
             }
             return;
         }
@@ -422,7 +473,7 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
         if (_countMode)
         {
             string text = string.Format("{0,7} {1}", _runCount, _prevLine);
-            Emit(BashRuntime.NewBashObject(text));
+            Emit(Line(text));
         }
         else
         {
@@ -431,7 +482,7 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
             // hence PassTerminated strips a stale missing-newline flag).
             Emit(_prevObject != null
                 ? BashRuntime.PassTerminated(_prevObject)
-                : BashRuntime.NewBashObject(_prevLine));
+                : Line(_prevLine));
         }
     }
 
@@ -455,7 +506,7 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
         if (same)
         {
             _runCount++;
-            if (_allRepeated) _runMembers.Add((line, original));
+            if (KeepMembers) _runMembers.Add((line, original));
             return;
         }
 
@@ -464,12 +515,14 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
         _prevObject = original;
         _prevKey = key;
         _runCount = 1;
-        if (_allRepeated)
+        if (KeepMembers)
         {
             _runMembers.Clear();
             _runMembers.Add((line, original));
         }
     }
+
+    private bool KeepMembers => _allRepeated || _groupMethod is not null;
 
     protected override void ProcessRecord()
     {
@@ -477,6 +530,7 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
 
         ParseOnce();
         if (_suppressStdin) return;
+        if (_zero) { _zeroInput.Add(InputObject); return; }   // -z: the whole byte stream is re-split on NUL at the end
 
         // Stream the adjacent dedup instead of buffering the pipe — uniq only
         // needs the current run (prev line/key + count), never the whole input.
@@ -523,6 +577,8 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
                 return;
             }
         }
+        if (_zero && _zeroInput.Count > 0)
+            foreach (var rec in NulRecords.FromPipeline(_zeroInput)) ProcessLine(rec);
         // File mode: stdin was suppressed; read each operand. Pipeline mode
         // (no operands) already streamed its lines through ProcessRecord.
         if (_operands.Count > 0)
@@ -533,7 +589,7 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
                 {
                     try
                     {
-                        foreach (var line in BashFileSystem.ReadLines(filePath))
+                        foreach (var line in _zero ? NulRecords.ReadFile(filePath) : BashFileSystem.ReadLines(filePath))
                         {
                             ProcessLine(line);
                         }
@@ -550,6 +606,7 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
 
         // Flush the final run (the buffered oracle's single trailing FlushRun).
         FlushRun();
+        if (_groupMethod == "both" && _groupsEmitted > 0) Emit(Line(string.Empty));
         if (_outputFile is not null && !_hadError) EnsureOutput();
         try { _outWriter?.Dispose(); }
         catch (IOException ex)

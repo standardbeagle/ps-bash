@@ -146,7 +146,6 @@ public class SortGnuBehaviorTests : IClassFixture<SharedPwshFixture>, IDisposabl
         Run($"{Q("a")} | Invoke-BashSort '-n' '-g'").AssertFailed(2, "options '-gn' are incompatible");
         Run($"{Q("a")} | Invoke-BashSort '-tab'").AssertFailed(2, "multi-character tab");
         Run($"{Q("a")} | Invoke-BashSort '-k' '0'").AssertFailed(2, "field number is zero");
-        Run($"{Q("a")} | Invoke-BashSort '-z'").AssertFailed(2, "not supported");
         Run($"{Q("a")} | Invoke-BashSort '--sort=x'").AssertFailed(1, "invalid argument 'x' for '--sort'");
     }
 

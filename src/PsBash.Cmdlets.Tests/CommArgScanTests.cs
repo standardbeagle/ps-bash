@@ -43,17 +43,31 @@ public class CommArgScanTests
     [InlineData("ERR comm: unrecognized option '--nope'", "--nope")]
     [InlineData("ERR comm: option '--output-delimiter' requires an argument", "--output-delimiter")]
     [InlineData("ERR comm: option '--total' doesn't allow an argument", "--total=1")]
-    [InlineData("ERR comm: option '--check-order' is recognized but not supported by ps-bash", "--check-order")]
-    [InlineData("ERR comm: option '--check-order' is recognized but not supported by ps-bash", "--check")]
-    [InlineData("ERR comm: option '--nocheck-order' is recognized but not supported by ps-bash", "--nocheck-order")]
-    [InlineData("ERR comm: option '-z' is recognized but not supported by ps-bash", "-z")]
-    [InlineData("ERR comm: option '--zero-terminated' is recognized but not supported by ps-bash", "--zero-terminated")]
+    [InlineData("sup= total=False delim=- ops=[a,b]", "--check-order", "a", "b")]
+    [InlineData("sup= total=False delim=- ops=[a,b]", "--chec", "a", "b")]
+    [InlineData("sup= total=False delim=- ops=[a,b]", "--nocheck-order", "a", "b")]
+    [InlineData("sup= total=False delim=- ops=[a,b]", "--no", "a", "b")]
+    [InlineData("sup= total=False delim=- ops=[a,b]", "-z", "a", "b")]
+    [InlineData("sup=1 total=False delim=- ops=[a,b]", "--zero-terminated", "-1", "a", "b")]
+    [InlineData("sup= total=False delim=- ops=[a,b]", "--zero", "a", "b")]
+    [InlineData("ERR comm: option '--check-order' doesn't allow an argument", "--check-order=1")]
     public void Resolves(string expected, params string[] argv) => Assert.Equal(expected, Scan(argv));
 
+    [Theory]   // the LAST of --check-order / --nocheck-order wins (oracle)
+    [InlineData(InvokeBashCommCommand.OrderCheck.Default)]
+    [InlineData(InvokeBashCommCommand.OrderCheck.Enabled, "--check-order")]
+    [InlineData(InvokeBashCommCommand.OrderCheck.Disabled, "--nocheck-order")]
+    [InlineData(InvokeBashCommCommand.OrderCheck.Enabled, "--nocheck-order", "--check-order")]
+    [InlineData(InvokeBashCommCommand.OrderCheck.Disabled, "--check-order", "--nocheck-order")]
+    [InlineData(InvokeBashCommCommand.OrderCheck.Enabled, "--chec")]
+    [InlineData(InvokeBashCommCommand.OrderCheck.Disabled, "--n")]
+    public void OrderCheck_LastWins(InvokeBashCommCommand.OrderCheck expected, params string[] argv)
+        => Assert.Equal(expected, InvokeBashCommCommand.ResolveOrderCheck(InvokeBashCommCommand.ScanArgs(argv)));
+
     [Fact]
-    public void UsageErrors_Exit1_UnsupportedExit2()
+    public void UsageErrors_Exit1()
     {
         Assert.Equal(1, InvokeBashCommCommand.ScanArgs(new[] { "-4" }).ErrorExitCode);
-        Assert.Equal(2, InvokeBashCommCommand.ScanArgs(new[] { "-z" }).ErrorExitCode);
+        Assert.Null(InvokeBashCommCommand.ScanArgs(new[] { "-z" }).Error);
     }
 }

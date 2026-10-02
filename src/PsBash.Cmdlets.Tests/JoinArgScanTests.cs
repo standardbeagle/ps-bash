@@ -37,8 +37,8 @@ public class JoinArgScanTests
     [InlineData("t=[ ] 1=2 2=3 a=[] v=[] i=False ops=[]", "-12", "-23")]  // value takes the rest: -1 2, -2 3
     [InlineData("t=[ ] 1=3 2=3 a=[] v=[] i=False ops=[]", "-j", "3")]
     [InlineData("t=[ ] 1=3 2=3 a=[] v=[] i=False ops=[]", "-j3")]
-    [InlineData("t=[ ] 1=4 2=2 a=[] v=[] i=False ops=[]", "-j", "2", "-1", "4")]  // argv order
-    [InlineData("t=[ ] 1=2 2=2 a=[] v=[] i=False ops=[]", "-1", "4", "-j", "2")]
+    [InlineData("ERR join: incompatible join fields 1, 3", "-j", "2", "-1", "4")]
+    [InlineData("ERR join: incompatible join fields 3, 1", "-1", "4", "-j", "2")]
     [InlineData("t=[ ] 1=1 2=1 a=[1,2] v=[] i=False ops=[]", "-a", "1", "-a", "2")]
     [InlineData("t=[ ] 1=1 2=1 a=[1] v=[] i=False ops=[]", "-a1")]
     [InlineData("t=[ ] 1=1 2=1 a=[] v=[1] i=False ops=[]", "-v", "1")]
@@ -63,19 +63,29 @@ public class JoinArgScanTests
     [InlineData("ERR join: option requires an argument -- 't'", "-t")]
     [InlineData("ERR join: invalid option -- 'x'", "-x")]
     [InlineData("ERR join: unrecognized option '--nope'", "--nope")]
-    [InlineData("ERR join: option '-o' is recognized but not supported by ps-bash", "-o", "0,1.2")]  // FIX (was: format ignored)
-    [InlineData("ERR join: option '-e' is recognized but not supported by ps-bash", "-e", "X")]
-    [InlineData("ERR join: option '--check-order' is recognized but not supported by ps-bash", "--check-order")]
-    [InlineData("ERR join: option '--check-order' is recognized but not supported by ps-bash", "--check")]
-    [InlineData("ERR join: option '--nocheck-order' is recognized but not supported by ps-bash", "--nocheck-order")]
-    [InlineData("ERR join: option '--header' is recognized but not supported by ps-bash", "--header")]
-    [InlineData("ERR join: option '-z' is recognized but not supported by ps-bash", "-z")]
+    [InlineData("t=[ ] 1=1 2=1 a=[] v=[] i=False ops=[a,b]", "-o", "0,1.2", "a", "b")]
+    [InlineData("t=[ ] 1=1 2=1 a=[] v=[] i=False ops=[a,b]", "-e", "X", "a", "b")]
+    [InlineData("t=[ ] 1=1 2=1 a=[] v=[] i=False ops=[a,b]", "--check-order", "a", "b")]
+    [InlineData("t=[ ] 1=1 2=1 a=[] v=[] i=False ops=[a,b]", "--check", "a", "b")]
+    [InlineData("t=[ ] 1=1 2=1 a=[] v=[] i=False ops=[a,b]", "--header", "a", "b")]
+    [InlineData("t=[ ] 1=1 2=1 a=[] v=[] i=False ops=[a,b]", "-z", "a", "b")]
+    [InlineData("ERR join: option '--h' is ambiguous; possibilities: '--header' '--help'", "--h")]
+    [InlineData("ERR join: incompatible tabs", "-t", ",", "-t", ";")]
+    [InlineData("ERR join: incompatible join fields 0, 1", "-1", "1", "-1", "2")]
+    [InlineData("ERR join: invalid file number in field spec: ''", "-o", "")]
+    [InlineData("ERR join: invalid field specifier: '1'", "-o", "1")]
+    [InlineData("ERR join: invalid field number: 'x'", "-o", "1.x")]
+    [InlineData("ERR join: invalid file number in field spec: '3.1'", "-o", "3.1")]
+    [InlineData("ERR join: invalid field number: '0'", "-o", "1.0")]
+    [InlineData("ERR join: invalid field specifier: '0.1'", "-o", "0.1")]
+    [InlineData("ERR join: invalid file number in field spec: 'x'", "-o", "x")]
+    [InlineData("ERR join: invalid file number in field spec: ''", "-o", "1.1,")]
     public void Resolves(string expected, params string[] argv) => Assert.Equal(expected, Scan(argv));
 
     [Fact]
     public void UsageErrors_Exit1_UnsupportedExit2()
     {
         Assert.Equal(1, InvokeBashJoinCommand.ScanArgs(new[] { "-x" }).ErrorExitCode);
-        Assert.Equal(2, InvokeBashJoinCommand.ScanArgs(new[] { "-o", "0" }).ErrorExitCode);
+        Assert.Null(InvokeBashJoinCommand.ScanArgs(new[] { "-o", "0" }).Error);
     }
 }
