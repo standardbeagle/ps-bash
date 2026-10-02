@@ -5016,8 +5016,40 @@ public static class PsEmitter
         finally { _inStdinScope = entryScope; }
     }
 
+    /// <summary>
+    /// <c>yes | { …; }</c> / <c>seq … | { …; }</c>: a literal-argument producer that can be unbounded, piped into a
+    /// compound that opens a stdin scope. The scope reads the producer lazily from a background runspace
+    /// (<see cref="PsBuild.StdinScopeLazy"/>) so a reader that stops early (<c>head -n1</c>, a lone <c>read</c>)
+    /// ends the producer — a script block after a pipe would only start once the producer finished (never).
+    /// Other producers keep the eager scope (<see cref="PsBuild.StdinScope"/>).
+    /// </summary>
+    private static bool TryEmitLazyProducerStage(Command.Pipeline pipeline, out string emitted)
+    {
+        emitted = "";
+        if (pipeline.Commands.Length != 2 || pipeline.Negated || pipeline.Ops[0] != "|"
+            || pipeline.Commands[0] is not Command.Simple producer
+            || !producer.EnvPairs.IsEmpty || !producer.HereDocs.IsDefaultOrEmpty
+            || !producer.Redirects.IsDefaultOrEmpty || producer.Words.IsDefaultOrEmpty
+            || GetLiteralValue(producer.Words[0]) is not ("yes" or "seq"))
+            return false;
+        foreach (var w in producer.Words)
+            if (GetLiteralValue(w) is null) return false;
+
+        var cmd = pipeline.Commands[1];
+        bool opensScope = cmd is Command.Subshell or Command.BraceGroup or Command.ForIn
+                or Command.ForArith or Command.If or Command.Case
+            || (cmd is Command.While loop && !IsWhileRead(loop.Cond, out _, out _));
+        if (!opensScope || !TryEmitMappedCommand(producer, out var producerText))
+            return false;
+
+        var body = WithStdinScope(true, () => Emit(cmd));
+        emitted = $"& {{ {PsBuild.StdinScopeLazy(producerText, body)} }}";
+        return true;
+    }
+
     private static string EmitPipelineStages(Command.Pipeline pipeline, bool entryScope)
     {
+        if (TryEmitLazyProducerStage(pipeline, out var lazy)) return lazy;
         var sb = new StringBuilder();
         for (int i = 0; i < pipeline.Commands.Length; i++)
         {

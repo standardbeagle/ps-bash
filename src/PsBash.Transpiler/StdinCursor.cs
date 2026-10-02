@@ -71,6 +71,20 @@ public sealed class StdinCursor
             _buffer.AddFirst(list[i]);
     }
 
+    /// <summary>Run when the owning scope ends (<see cref="Close"/>): stops a background producer feeding the source.</summary>
+    public Action? OnClose { get; set; }
+
+    /// <summary>End the scope: release the source and stop whatever produces it. Idempotent.</summary>
+    public void Close()
+    {
+        _sourceDone = true;
+        _buffer.Clear();
+        var close = OnClose;
+        OnClose = null;
+        try { close?.Invoke(); } catch { /* best effort */ }
+        try { _source?.Dispose(); } catch { /* best effort */ }
+    }
+
     private void FillOne()
     {
         if (_buffer.Count > 0 || _sourceDone || _source is null) return;
