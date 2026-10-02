@@ -68,6 +68,9 @@ model in [runtime-functions.md](runtime-functions.md) "Raw bytes".
 | `shopt -s failglob` | The failing COMMAND is aborted with `bash: no match: PAT` and status 1, and the script continues with the next statement; bash discards the whole line | Statement-level abort in a PowerShell host |
 | Pathname expansion of a name that contains `* ? [` | Mapped cmdlets that expand their own operands (`cp`, `mv`, `ls`, …) receive the already-expanded NAMES; a name that literally exists is used as is, but a cmdlet that only looks at `*`/`?` may re-glob one that does not (a missing `a[1]` next to `a1`) | The cmdlets keep their own globbing for direct PowerShell calls; their dialects differ |
 | Pathname expansion inside redirect targets, `case` words, `[[ ]]` | Not expanded (a redirect target is the literal word; bash expands it and fails `ambiguous redirect` on several matches) | Rare; not modelled |
+| Command substitution glued into a longer word (`x$(cmd)y`) | Not word-split | Only a bare `$(…)` / `` `…` `` word goes through `ConvertTo-BashWords` |
+| Redirect failure message (`echo > nodir/f`) | `bash: nodir/f: No such file or directory`; bash prints `script: line N: nodir/f: …` | No line tracking at runtime; status and filesystem state match |
+| Env prefix on a pipe stage (`yes \| FOO=1 head -n1`) | The stage collects its input before running, so an unbounded producer does not stream into it | The save/set/restore wrapper is a script block, which starts after its upstream completes |
 | Windows drive paths in a glob word | A pattern spelled `/c/Users/*` (with `PSBASH_UNIX_PATHS=1`) or `C:/Users/*` is expanded with forward slashes (`C:/Users/x`), and a drive-letter prefix keeps the form it was typed | `/` is the pattern's only separator (`\` escapes) |
 
 ## Not implemented (refused, exit 2)
