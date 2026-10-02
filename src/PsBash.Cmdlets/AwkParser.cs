@@ -742,7 +742,9 @@ internal sealed class AwkParser
         Advance(); // <
         var file = ParseAdditive();
         // A literal "-" / "/dev/stdin" names the main stdin, which a push-driven stdin run cannot serve.
-        if (file is StrLit { Value: "-" or "/dev/stdin" }) _usesMainInput = true;
+        // A name computed at run time (`f = "-"; getline l < f`) may name it too; it cannot be known statically,
+        // so any non-literal file operand takes the buffered pull path as well (stdin runs only).
+        if (file is not StrLit || file is StrLit { Value: "-" or "/dev/stdin" }) _usesMainInput = true;
         return new GetlineExpr { Source = GetlineSource.File, Target = target, Operand = file };
     }
 
