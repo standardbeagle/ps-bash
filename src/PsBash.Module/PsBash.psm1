@@ -2422,20 +2422,13 @@ $script:BashBgPids = $script:BashBgJobs
 $script:BashBgNextId = 1000
 $script:BashBgPool = $null
 $global:BashBgLastPid = $null
-# The psm1 is loaded into the host runspace by running its content as a script
-# (SdkRunspace.cs: AddScript(psm1Content)), so $PSCommandPath / $PSScriptRoot are
-# empty inside it. To make Invoke-Bash* functions available in pooled background
-# runspaces, locate the extracted module on disk: ModuleExtractor writes it to
-# {temp}/ps-bash/module-{version}/PsBash.psm1.
-$script:BashBgModulePath = $null
-try {
-    $psbDir = Join-Path ([System.IO.Path]::GetTempPath()) 'ps-bash'
-    if (Test-Path $psbDir) {
-        $candidate = Get-ChildItem -Path $psbDir -Filter 'PsBash.psm1' -Recurse -ErrorAction SilentlyContinue |
-            Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
-        if ($candidate) { $script:BashBgModulePath = $candidate.FullName }
-    }
-} catch { }
+# The host loads this psm1 by running its content as a script (SdkRunspace.cs:
+# AddScript(psm1Content)), so $PSCommandPath / $PSScriptRoot are empty there; it
+# hands over the exact extracted path as $PsBashModulePsm1Path instead. (Scanning
+# {temp}/ps-bash for it broke when the runtime dir moved to $XDG_RUNTIME_DIR, and
+# left pooled background runspaces without Invoke-Bash* commands.) Import-Module
+# loads set $PSCommandPath.
+$script:BashBgModulePath = $(Get-Variable -Name PsBashModulePsm1Path -ValueOnly -ErrorAction Ignore) ?? $PSCommandPath
 
 function Get-BashBgRunspacePool {
     if ($null -eq $script:BashBgPool) {

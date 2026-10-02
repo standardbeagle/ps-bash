@@ -20,8 +20,11 @@ public static class PsBashRuntimeDirectory
         UnixFileMode.GroupWrite | UnixFileMode.OtherWrite;
 
     // Test seam: the long-sun_path budget tests need a synthetic temp root
-    // without touching process-wide TMPDIR. Only affects the returned string;
-    // never selects the POSIX native path.
+    // without touching process-wide TMPDIR. While set, XDG_RUNTIME_DIR is not
+    // consulted either: otherwise a runner that exports it (GitHub's ubuntu
+    // images do) resolves the REAL per-user directory, and tests that chmod or
+    // fill the "synthetic" root corrupt it for every later test and process.
+    // Only affects the returned string; never selects the POSIX native path.
     internal static Func<string>? TempPathOverride { get; set; }
 
     /// <summary>
