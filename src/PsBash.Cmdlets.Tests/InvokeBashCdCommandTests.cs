@@ -49,8 +49,7 @@ public class InvokeBashCdCommandTests : IClassFixture<SharedPwshFixture>, IDispo
         // each invocation, so seeding from C# would be undone.
         var result = RunOneShot("cd 'sub'");
 
-        Assert.Equal(_sub, result.Location, ignoreCase: true);
-        Assert.Equal(_sub, result.ProcessCwd, ignoreCase: true);
+        AssertBothHalves(_sub, result);
     }
 
     [Fact]
@@ -71,8 +70,7 @@ public class InvokeBashCdCommandTests : IClassFixture<SharedPwshFixture>, IDispo
         // keeps it working, and the sync must follow it back.
         var result = RunOneShot("cd 'sub'; cd -");
 
-        Assert.Equal(_dir, result.Location, ignoreCase: true);
-        Assert.Equal(_dir, result.ProcessCwd, ignoreCase: true);
+        AssertBothHalves(_dir, result);
     }
 
     [Fact]
@@ -92,8 +90,7 @@ public class InvokeBashCdCommandTests : IClassFixture<SharedPwshFixture>, IDispo
         // halves swapped.
         var result = RunOneShot("cd 'no-such-dir' -ErrorAction SilentlyContinue");
 
-        Assert.Equal(_dir, result.Location, ignoreCase: true);
-        Assert.Equal(_dir, result.ProcessCwd, ignoreCase: true);
+        AssertBothHalves(_dir, result);
     }
 
     /// <summary>
@@ -116,4 +113,36 @@ public class InvokeBashCdCommandTests : IClassFixture<SharedPwshFixture>, IDispo
 
     private static string Trim(object value)
         => (value?.ToString() ?? string.Empty).TrimEnd(Path.DirectorySeparatorChar);
+
+    /// <summary>
+    /// The process-cwd half is what getcwd(3) reports: the PHYSICAL path (macOS: /var/folders/... comes back
+    /// as /private/var/folders/...). bash's `cd` is logical ($PWD keeps the typed path), so the PowerShell
+    /// location half is allowed to be either spelling, but the process half is compared physically.
+    /// </summary>
+    private static void AssertBothHalves(string expected, (string Location, string ProcessCwd, string Home) actual)
+    {
+        Assert.True(
+            string.Equals(expected, actual.Location, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(Physical(expected), Physical(actual.Location), StringComparison.OrdinalIgnoreCase),
+            $"location half: expected '{expected}', got '{actual.Location}'");
+        Assert.Equal(Physical(expected), Physical(actual.ProcessCwd), ignoreCase: true);
+    }
+
+    /// <summary>realpath: resolve every symlinked path component (not just the leaf).</summary>
+    private static string Physical(string path)
+    {
+        var root = Path.GetPathRoot(path) ?? "";
+        var current = root;
+        foreach (var segment in path[root.Length..].Split(new[] { '/', '\\' }, StringSplitOptions.RemoveEmptyEntries))
+        {
+            current = Path.Combine(current, segment);
+            try
+            {
+                if (new DirectoryInfo(current).ResolveLinkTarget(returnFinalTarget: true) is { } target)
+                    current = target.FullName;
+            }
+            catch (IOException) { /* not a link / unreadable: keep the component */ }
+        }
+        return current.TrimEnd(Path.DirectorySeparatorChar);
+    }
 }
