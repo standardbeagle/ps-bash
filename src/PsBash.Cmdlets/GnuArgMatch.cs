@@ -21,7 +21,8 @@ internal static class GnuArgMatch
     /// <param name="validBlock">The "Valid arguments are:" body, one <c>"  - 'a', 'b'"</c> line per
     /// meaning — GNU groups the synonyms, so the caller supplies the grouping.</param>
     public static bool TryMatch<T>(string command, string option, string arg,
-        IReadOnlyList<(string Name, T Value)> table, string validBlock, out T value, out string? error)
+        IReadOnlyList<(string Name, T Value)> table, string validBlock, out T value, out string? error,
+        string? subject = null)
     {
         error = null;
         foreach (var (name, v) in table)
@@ -43,7 +44,9 @@ internal static class GnuArgMatch
 
         value = default!;
         var kind = hits.Count == 0 ? "invalid" : "ambiguous";
-        error = $"{command}: {kind} argument '{arg}' for '--{option}'\n"
+        // `subject` replaces the "--option" text for arguments that are not an option's (GNU's backup
+        // type: `for 'backup type'`, `for '$VERSION_CONTROL'`).
+        error = $"{command}: {kind} argument '{arg}' for '{subject ?? "--" + option}'\n"
             + "Valid arguments are:\n"
             + validBlock + "\n"
             + $"Try '{command} --help' for more information.";

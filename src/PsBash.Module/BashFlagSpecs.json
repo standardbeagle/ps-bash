@@ -174,6 +174,100 @@
       "flag": "--no-preserve",
       "desc": "do not preserve the listed attributes",
       "arg": "LIST"
+    },
+    {
+      "flag": "-i",
+      "desc": "prompt before overwriting"
+    },
+    {
+      "flag": "-l",
+      "desc": "hard link files instead of copying"
+    },
+    {
+      "flag": "-s",
+      "desc": "make symbolic links instead of copying"
+    },
+    {
+      "flag": "-b",
+      "desc": "make a backup of each existing destination file"
+    },
+    {
+      "flag": "--backup",
+      "desc": "backup with CONTROL (none, numbered, existing, simple)",
+      "arg": "[CONTROL]"
+    },
+    {
+      "flag": "-S",
+      "desc": "override the usual backup suffix",
+      "arg": "SUFFIX"
+    },
+    {
+      "flag": "-t",
+      "desc": "copy all SOURCE arguments into DIRECTORY",
+      "arg": "DIRECTORY"
+    },
+    {
+      "flag": "-T",
+      "desc": "treat DEST as a normal file"
+    },
+    {
+      "flag": "-u",
+      "desc": "copy only when SOURCE is newer than DEST"
+    },
+    {
+      "flag": "--update",
+      "desc": "control which existing files are replaced (all, none, older)",
+      "arg": "[WHEN]"
+    },
+    {
+      "flag": "--reflink",
+      "desc": "clone files when the filesystem can (auto, always, never)",
+      "arg": "[WHEN]"
+    },
+    {
+      "flag": "-L",
+      "desc": "always follow symbolic links in SOURCE"
+    },
+    {
+      "flag": "-P",
+      "desc": "never follow symbolic links in SOURCE"
+    },
+    {
+      "flag": "-H",
+      "desc": "follow command-line symbolic links in SOURCE"
+    },
+    {
+      "flag": "-d",
+      "desc": "same as --no-dereference --preserve=links"
+    },
+    {
+      "flag": "-x",
+      "desc": "stay on this file system"
+    },
+    {
+      "flag": "--sparse",
+      "desc": "control creation of sparse files (never, auto, always)",
+      "arg": "WHEN"
+    },
+    {
+      "flag": "--strip-trailing-slashes",
+      "desc": "remove trailing slashes from each SOURCE argument"
+    },
+    {
+      "flag": "--attributes-only",
+      "desc": "do not copy file data, just the attributes"
+    },
+    {
+      "flag": "--remove-destination",
+      "desc": "remove each existing destination file before opening it"
+    },
+    {
+      "flag": "--parents",
+      "desc": "use full source file name under DIRECTORY"
+    },
+    {
+      "flag": "--debug",
+      "desc": "explain how a file is copied (implies -v)"
     }
   ],
   "cut": [
@@ -1633,6 +1727,19 @@
       "flag": "--interactive",
       "desc": "prompt according to WHEN (never, once, always)",
       "arg": "WHEN"
+    },
+    {
+      "flag": "--one-file-system",
+      "desc": "when removing recursively, skip directories on another filesystem"
+    },
+    {
+      "flag": "--preserve-root",
+      "desc": "do not remove / (default); =all also refuses a directory on another device",
+      "arg": "all"
+    },
+    {
+      "flag": "--no-preserve-root",
+      "desc": "do not treat / specially (ps-bash still refuses to delete the root)"
     }
   ],
   "rmdir": [

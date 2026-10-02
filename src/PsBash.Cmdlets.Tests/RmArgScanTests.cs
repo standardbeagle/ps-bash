@@ -61,12 +61,13 @@ public class RmArgScanTests
     [InlineData("r=1 f=0 v=0 ops=[-,b]", "-r", "-", "b")]
     [InlineData("r=0 f=0 v=0 ops=[]")]
     [InlineData("r=0 f=1 v=0 ops=[]", "-f")]
-    [InlineData("ERR rm: option '--one-file-system' is recognized but not supported by ps-bash", "--one-file-system", "a")]
-    [InlineData("ERR rm: option '--one-file-system' is recognized but not supported by ps-bash", "--one", "a")]  // FIX (was: ERR rm: unrecognized option '--one')
-    [InlineData("ERR rm: option '--preserve-root' is recognized but not supported by ps-bash", "--preserve-root", "a")]
-    [InlineData("ERR rm: option '--preserve-root' is recognized but not supported by ps-bash", "--preserve-root=all", "a")]
-    [InlineData("ERR rm: option '--no-preserve-root' is recognized but not supported by ps-bash", "--no-preserve-root", "a")]
-    [InlineData("ERR rm: option '--no-preserve-root' is recognized but not supported by ps-bash", "--no", "a")]  // GNU: "you may not abbreviate the --no-preserve-root option" (also an error)
+    [InlineData("r=0 f=0 v=0 ops=[a]", "--one-file-system", "a")]
+    [InlineData("r=0 f=0 v=0 ops=[a]", "--one", "a")]
+    [InlineData("r=0 f=0 v=0 ops=[a]", "--preserve-root", "a")]
+    [InlineData("r=0 f=0 v=0 ops=[a]", "--preserve-root=all", "a")]
+    [InlineData("r=0 f=0 v=0 ops=[a]", "--no-preserve-root", "a")]
+    [InlineData("r=0 f=0 v=0 ops=[a]", "--no", "a")]  // the scan accepts the abbreviation; RmRootPolicyResolver refuses it (GNU: "you may not abbreviate ...")
+    [InlineData("ERR rm: option '--no-preserve-root' doesn't allow an argument", "--no-preserve-root=x", "a")]
     [InlineData("ERR rm: invalid option -- 'z'", "-z", "a")]
     [InlineData("ERR rm: invalid option -- 'z'", "-rz", "a")]  // FIX (was: ERR rm: invalid option -- 'r')
     [InlineData("ERR rm: invalid option -- 'z'", "-zr", "a")]

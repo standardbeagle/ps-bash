@@ -36,6 +36,9 @@ internal sealed class RmRemover
     private readonly Action<string> _say;
     private readonly Action<string> _error;
     private bool _failed;
+    private readonly bool _oneFileSystem;
+    private readonly Func<string, string?> _deviceOf;
+    private string? _rootDevice;
 
     /// <param name="recursive"><c>-r</c>: descend into directories.</param>
     /// <param name="dirOnly"><c>-d</c>: a directory without <c>-r</c> is removed when empty.</param>
@@ -44,9 +47,16 @@ internal sealed class RmRemover
     /// <param name="confirm">Shows the prompt (complete text) and returns the user's yes/no.</param>
     /// <param name="say">Verbose output sink (stdout).</param>
     /// <param name="error">Diagnostic sink; also marks the walk failed.</param>
+    /// <param name="oneFileSystem"><c>--one-file-system</c>: while descending, skip a directory that lives
+    /// on a different device than the command-line operand.</param>
+    /// <param name="deviceOf">Device id of a path (<see cref="FileIdentity.TryGetDeviceId"/>; a seam so
+    /// the skip logic is testable without a second filesystem). Null id = unknown = never skip.</param>
     public RmRemover(bool recursive, bool dirOnly, bool promptEach, bool verbose,
-        Func<string, bool> confirm, Action<string> say, Action<string> error)
+        Func<string, bool> confirm, Action<string> say, Action<string> error,
+        bool oneFileSystem = false, Func<string, string?>? deviceOf = null)
     {
+        _oneFileSystem = oneFileSystem;
+        _deviceOf = deviceOf ?? FileIdentity.TryGetDeviceId;
         _recursive = recursive;
         _dirOnly = dirOnly;
         _promptEach = promptEach;
@@ -61,6 +71,7 @@ internal sealed class RmRemover
     public bool Remove(string path, string display)
     {
         _failed = false;
+        _rootDevice = _oneFileSystem && _recursive && Directory.Exists(path) ? _deviceOf(path) : null;
         RemoveEntry(path, display);
         return !_failed;
     }
@@ -159,7 +170,18 @@ internal sealed class RmRemover
         }
 
         foreach (var child in children)
-            RemoveEntry(child, FileSystemHelpers.AppendDisplay(display, Path.GetFileName(child)));
+        {
+            var childDisplay = FileSystemHelpers.AppendDisplay(display, Path.GetFileName(child));
+            // --one-file-system: a real directory on another device is skipped whole (GNU: the
+            // command fails, and the directory — hence its parents — stay).
+            if (_rootDevice is not null && !FileSystemHelpers.IsReparsePoint(child) && Directory.Exists(child)
+                && _deviceOf(child) is { } dev && dev != _rootDevice)
+            {
+                Fail($"rm: skipping '{childDisplay}', since it's on a different device");
+                continue;
+            }
+            RemoveEntry(child, childDisplay);
+        }
 
         // A declined or failed child leaves the directory non-empty: keep it, and — like GNU —
         // do not ask about removing it.
