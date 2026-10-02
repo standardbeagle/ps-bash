@@ -152,9 +152,11 @@ public class InvokeBashSourceCommandTests : IClassFixture<SharedPwshFixture>
         Assert.Contains(errors, e => e.Exception.Message.Contains(".sh"));
     }
 
-    [Fact]
+    [SkippableFact]
     public void SourceClaudeSnapshotMissingUnixTmp_CreatesEmptySnapshotWithoutError()
     {
+        // /tmp -> %TEMP% is a Windows-only mapping (ResolveSourcePath); elsewhere /tmp is the real /tmp, not GetTempPath().
+        Skip.IfNot(OperatingSystem.IsWindows(), "the /tmp -> $env:TEMP mapping exists only on Windows (macOS TMPDIR is /var/folders/...)");
         var pwsh = _fixture.AcquireFresh();
         var snapshotName = $"claude-shell-snapshot-{Guid.NewGuid():N}.sh";
         var translatedPath = Path.Combine(Path.GetTempPath(), snapshotName);
@@ -178,9 +180,10 @@ public class InvokeBashSourceCommandTests : IClassFixture<SharedPwshFixture>
         }
     }
 
-    [Fact]
+    [SkippableFact]
     public void SourceUnixTmpPath_WhenUnixPathsEnabled_ReadsFromWindowsTemp()
     {
+        Skip.IfNot(OperatingSystem.IsWindows(), "the /tmp -> $env:TEMP mapping exists only on Windows (macOS TMPDIR is /var/folders/...)");
         var pwsh = _fixture.AcquireFresh();
         var fileName = $"psbash_source_unix_tmp_{Guid.NewGuid():N}.sh";
         var translatedPath = Path.Combine(Path.GetTempPath(), fileName);
