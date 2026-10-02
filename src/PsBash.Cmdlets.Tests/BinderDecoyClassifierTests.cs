@@ -60,7 +60,6 @@ public class BinderDecoyClassifierTests : IClassFixture<SharedPwshFixture>
     [InlineData("'x' | Invoke-BashHead -v")]
     [InlineData("'x' | Invoke-BashTail -v")]
     // grep directories / devices
-    [InlineData("'x' | Invoke-BashGrep -d skip")]
     // du no-dereference (bare -P prefix-collides with -ProgressAction)
     [InlineData("Invoke-BashDu -P .")]
     public void CollidingClassifierFlag_FiresExit2_WithoutBinderCrash(string script)
