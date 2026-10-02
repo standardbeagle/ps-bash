@@ -1,0 +1,38 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 345
+stdout-length: 431
+stderr-length: 0
+==== SCRIPT ====
+__fs_snap() { find . | LC_ALL=C sort | while IFS= read -r p; do if [ -d "$p" ]; then echo "D $p"; else echo "F $p $(base64 -w0 "$p")"; fi; done; }
+d=$(mktemp -d) && cd "$d" && { :
+printf '' > none
+} >/dev/null 2>&1
+echo '== stdout'
+{ :
+seq 1 100 | column -x -c 80 | cat -A
+} 2>/dev/null
+echo "== exit $?"
+echo '== fs'
+__fs_snap
+cd /; rm -rf "$d"
+==== STDOUT ====
+== stdout
+1^I2^I3^I4^I5^I6^I7^I8^I9^I10$
+11^I12^I13^I14^I15^I16^I17^I18^I19^I20$
+21^I22^I23^I24^I25^I26^I27^I28^I29^I30$
+31^I32^I33^I34^I35^I36^I37^I38^I39^I40$
+41^I42^I43^I44^I45^I46^I47^I48^I49^I50$
+51^I52^I53^I54^I55^I56^I57^I58^I59^I60$
+61^I62^I63^I64^I65^I66^I67^I68^I69^I70$
+71^I72^I73^I74^I75^I76^I77^I78^I79^I80$
+81^I82^I83^I84^I85^I86^I87^I88^I89^I90$
+91^I92^I93^I94^I95^I96^I97^I98^I99^I100$
+== exit 0
+== fs
+D .
+F ./none
+
+==== STDERR ====
+

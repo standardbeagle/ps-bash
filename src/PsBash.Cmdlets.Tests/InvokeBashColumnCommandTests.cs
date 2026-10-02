@@ -58,11 +58,12 @@ public class InvokeBashColumnCommandTests : IClassFixture<SharedPwshFixture>, ID
     private static string Q(string p) => p.Replace("'", "''");
 
     [Fact]
-    public void Column_PlainMode_PassesLinesThrough()
+    public void Column_PlainMode_FillsColumns()
     {
+        // util-linux fill layout: 8-wide cells, 80 columns by default off a terminal, tab-separated.
         var f = WriteFile("a.txt", "one\ntwo\nthree\n");
         var lines = RunLines($"Invoke-BashColumn '{Q(f)}'");
-        Assert.Equal(new[] { "one", "two", "three" }, lines);
+        Assert.Equal(new[] { "one\ttwo\tthree" }, lines);
     }
 
     [Fact]
@@ -124,11 +125,11 @@ public class InvokeBashColumnCommandTests : IClassFixture<SharedPwshFixture>, ID
     }
 
     [Fact]
-    public void Column_PipelineMode_PlainPassthrough()
+    public void Column_PipelineMode_PlainMode_FillsColumns()
     {
         var lines = RunLines(
             "@('alpha','bravo','charlie') | ForEach-Object { New-BashObject -BashText $_ } | Invoke-BashColumn");
-        Assert.Equal(new[] { "alpha", "bravo", "charlie" }, lines);
+        Assert.Equal(new[] { "alpha\tbravo\tcharlie" }, lines);
     }
 
     [Fact]

@@ -235,7 +235,7 @@ public class Batch3bArgBehaviorTests : IClassFixture<SharedPwshFixture>, IDispos
         Run(cd + "Invoke-BashSplit '-b' 1x in").AssertFailed(1, "invalid number of bytes: '1x'");
         Run(cd + "Invoke-BashSplit '-l' 2 '-b' 3 in").AssertFailed(1, "cannot split in more than one way");
         Run(cd + "Invoke-BashSplit in y z").AssertFailed(1, "extra operand 'z'");
-        Run(cd + "Invoke-BashSplit '-n' 3 in").AssertFailed(2, "recognized but not supported");
+        Run(cd + "Invoke-BashSplit '-C' 3 in").AssertFailed(2, "recognized but not supported");
         Run(cd + "Invoke-BashSplit -e in").AssertFailed(2, "recognized but not supported");                 // direct: -e decoy
         Assert.Equal(new[] { "in" }, Directory.GetFiles(d).Select(Path.GetFileName).ToArray());
     }

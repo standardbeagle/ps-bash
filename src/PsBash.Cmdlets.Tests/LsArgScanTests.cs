@@ -41,6 +41,35 @@ public class LsArgScanTests : IClassFixture<SharedPwshFixture>
     [InlineData("a|-l|b", "'a,long,'b")]             // options after operands
     [InlineData("-l|--|-x", "long,--,'-x")]           // nothing after -- is an option
     [InlineData("-", "'-")]
+    [InlineData("-Cx", "vertical,across")]
+    [InlineData("-m", "commas")]
+    [InlineData("-ngo", "numeric,no-owner,no-group-long")]
+    [InlineData("-G", "no-group")]
+    [InlineData("--no-group", "no-group")]
+    [InlineData("--numeric", "numeric")]
+    [InlineData("--numeric-uid-gid", "numeric")]
+    [InlineData("-UXuc", "unsorted,extension,atime,ctime")]
+    [InlineData("--time=atime", "time=atime")]
+    [InlineData("--time|ctime", "time=ctime")]
+    [InlineData("--time-style=long-iso", "time-style=long-iso")]
+    [InlineData("--time-s=iso", "time-style=iso")]
+    [InlineData("--full-time", "full-time")]
+    [InlineData("--fo=x", "format=x")]
+    [InlineData("-I|*.c", "ignore=*.c")]
+    [InlineData("-I*.c", "ignore=*.c")]
+    [InlineData("--ignore=*.c", "ignore=*.c")]
+    [InlineData("--ignore|*.c", "ignore=*.c")]
+    [InlineData("--hide=*.c", "hide=*.c")]
+    [InlineData("--hide|x", "hide=x")]
+    [InlineData("-B", "ignore-backups")]
+    [InlineData("--ignore-backups", "ignore-backups")]
+    [InlineData("--ignore-b", "ignore-backups")]
+    [InlineData("-w|40", "width=40")]
+    [InlineData("-w40", "width=40")]
+    [InlineData("--width=40", "width=40")]
+    [InlineData("--wid=3", "width=3")]              // unique prefix of --width
+    [InlineData("-T|4", "tabsize=4")]
+    [InlineData("--format=across", "format=across")]
     public void Scan_AcceptsImplementedOptions(string joined, string expected)
         => Assert.Equal(expected, Ids(joined.Split('|')));
 
@@ -52,14 +81,16 @@ public class LsArgScanTests : IClassFixture<SharedPwshFixture>
     [InlineData("--dir", ArgErrorKind.Ambiguous, 2)]          // '--directory' '--dired'
     [InlineData("--sort", ArgErrorKind.MissingValue, 2)]
     [InlineData("--all=x", ArgErrorKind.UnexpectedValue, 2)]
-    [InlineData("-x", ArgErrorKind.ValidButUnsupported, 2)]   // columns
-    [InlineData("-C", ArgErrorKind.ValidButUnsupported, 2)]
-    [InlineData("-m", ArgErrorKind.ValidButUnsupported, 2)]
-    [InlineData("-Q", ArgErrorKind.ValidButUnsupported, 2)]
-    [InlineData("-w", ArgErrorKind.ValidButUnsupported, 2)]
-    [InlineData("--full-time", ArgErrorKind.ValidButUnsupported, 2)]
+    [InlineData("--f=x", ArgErrorKind.Ambiguous, 2)]          // '--full-time' '--file-type' '--format'
+    [InlineData("--ign=x", ArgErrorKind.Ambiguous, 2)]        // '--ignore-backups' '--ignore'
+    [InlineData("--hi=x", ArgErrorKind.Ambiguous, 2)]         // '--hide-control-chars' '--hide' '--hyperlink'
+    [InlineData("-I", ArgErrorKind.MissingValue, 2)]          // ls: option requires an argument -- 'I'
+    [InlineData("-w", ArgErrorKind.MissingValue, 2)]          // ls: option requires an argument -- 'w'
+    [InlineData("-T", ArgErrorKind.MissingValue, 2)]
+    [InlineData("--format", ArgErrorKind.MissingValue, 2)]
+    [InlineData("-Q", ArgErrorKind.ValidButUnsupported, 2)]   // quoting
     [InlineData("--zero", ArgErrorKind.ValidButUnsupported, 2)]
-    [InlineData("-lx", ArgErrorKind.ValidButUnsupported, 2)]  // inside a bundle
+    [InlineData("-lQ", ArgErrorKind.ValidButUnsupported, 2)]  // inside a bundle
     public void Scan_Errors(string argv, ArgErrorKind kind, int exit)
     {
         var p = InvokeBashLsCommand.ScanArgs(argv.Split('|'));
@@ -164,11 +195,17 @@ public class LsArgScanTests : IClassFixture<SharedPwshFixture>
     [Theory]
     [InlineData("'-Y'", 2, "invalid option -- 'Y'")]
     [InlineData("'--nope'", 2, "unrecognized option '--nope'")]
-    [InlineData("'-x'", 2, "not supported by ps-bash")]
+    [InlineData("'-Q'", 2, "not supported by ps-bash")]
+    [InlineData("'--format=bogus'", 1, "invalid argument 'bogus' for '--format'")]
+    [InlineData("'-w' 'x'", 2, "invalid line width: 'x'")]
+    [InlineData("'-w' '-3'", 2, "invalid line width: '-3'")]
+    [InlineData("'-T' 'x'", 2, "invalid tab size: 'x'")]
     [InlineData("'--color=bogus'", 1, "invalid argument 'bogus' for '--color'")]
     [InlineData("'--classify=bogus'", 1, "invalid argument 'bogus' for '--classify'")]
     [InlineData("'--sort=bogus'", 1, "invalid argument 'bogus' for '--sort'")]
-    [InlineData("'--sort=none'", 2, "not supported by ps-bash")]
+    [InlineData("'--sort=version'", 2, "not supported by ps-bash")]
+    [InlineData("'--sort=width'", 2, "not supported by ps-bash")]
+    [InlineData("'--time=bogus'", 1, "invalid argument 'bogus' for '--time'")]
     public void UsageErrors_ExitLikeGnu(string args, int exit, string stderr)
         => CmdResult.Run(_fixture.AcquireFresh(), "Invoke-BashLs " + args).AssertFailed(exit, stderr);
 

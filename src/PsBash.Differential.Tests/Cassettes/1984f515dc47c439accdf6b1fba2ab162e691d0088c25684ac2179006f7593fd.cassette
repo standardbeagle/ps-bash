@@ -1,0 +1,47 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 503
+stdout-length: 233
+stderr-length: 0
+==== SCRIPT ====
+__fs_snap() { find . | LC_ALL=C sort | while IFS= read -r p; do if [ -d "$p" ]; then echo "D $p"; else echo "F $p $(base64 -w0 "$p")"; fi; done; }
+d=$(mktemp -d) && cd "$d" && { :
+for f in alpha.c beta.h gamma delta.tar.gz epsilon.txt zeta.c theta .hid 'bk~' x.o noext 'a b' z.a m.zz.b .cfg '.old~'; do printf '' > "$f"; done; mkdir dd; printf '' > dd/g.c
+} >/dev/null 2>&1
+echo '== stdout'
+{ :
+ls -I '*.c' alpha.c beta.h | cat -A
+} 2>/dev/null
+echo "== exit $?"
+echo '== fs'
+__fs_snap
+cd /; rm -rf "$d"
+==== STDOUT ====
+== stdout
+alpha.c$
+beta.h$
+== exit 0
+== fs
+D .
+F ./.cfg
+F ./.hid
+F ./.old~
+F ./a b
+F ./alpha.c
+F ./beta.h
+F ./bk~
+D ./dd
+F ./dd/g.c
+F ./delta.tar.gz
+F ./epsilon.txt
+F ./gamma
+F ./m.zz.b
+F ./noext
+F ./theta
+F ./x.o
+F ./z.a
+F ./zeta.c
+
+==== STDERR ====
+

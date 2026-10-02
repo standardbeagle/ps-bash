@@ -219,10 +219,10 @@ public class InvokeBashSplitCommandTests : IDisposable, IClassFixture<SharedPwsh
     [Fact]
     public void Split_ValidButUnsupportedFlag_NotSupportedMessage()
     {
-        // --number is a real GNU split flag (split into N chunks) but
+        // --line-bytes is a real GNU split flag but
         // ps-bash does not implement it. Must report "not supported",
         // not "No such file or directory".
-        var (_, errs) = RunInDirWithErrors("'a','b' | Invoke-BashSplit --number 2");
+        var (_, errs) = RunInDirWithErrors("'a','b' | Invoke-BashSplit --line-bytes 2");
         Assert.Contains(errs, m => m.Contains("not supported", StringComparison.OrdinalIgnoreCase));
     }
 

@@ -246,12 +246,11 @@ public class InvokeBashCutCommandTests : IClassFixture<SharedPwshFixture>, IDisp
         var file = Path.Combine(_tmpDir, "uni.txt");
         File.WriteAllText(file, "héllo\n",
             new System.Text.UTF8Encoding(false));
-        // Char-position is per-UTF16-code-unit (oracle parity — same as the
-        // psm1 oracle's String indexer).
+        // -c counts bytes (GNU 9.4): bytes 1-3 of "héllo" are h + é (C3 A9).
         var lines = RunLines(
             $"Invoke-BashCut -c 1-3 '{file.Replace("'", "''")}'");
         Assert.Single(lines);
-        Assert.Equal("hél", lines[0]);
+        Assert.Equal("hé", lines[0]);
     }
 
     [Fact]

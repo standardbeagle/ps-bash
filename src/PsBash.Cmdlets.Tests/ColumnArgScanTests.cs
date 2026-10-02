@@ -54,9 +54,18 @@ public class ColumnArgScanTests
     [InlineData("ERR column: option '--table-n' is ambiguous; possibilities: '--table-name' '--table-noextreme' '--table-noheadings'", "--table-n")]
     [InlineData("ERR column: option '--tab' is ambiguous; possibilities: '--table' '--table-columns' '--table-column' '--table-columns-limit' '--table-hide' '--table-name' '--table-maxout' '--table-noextreme' '--table-noheadings' '--table-order' '--table-right' '--table-truncate' '--table-wrap' '--table-empty-lines' '--table-header-repeat'", "--tab")]
     // util-linux options ps-bash refuses (exit 2)
-    [InlineData("ERR column: option '-x' is recognized but not supported by ps-bash", "-x")]
-    [InlineData("ERR column: option '-c' is recognized but not supported by ps-bash", "-c", "20")]
-    [InlineData("ERR column: option '--output-width' is recognized but not supported by ps-bash", "--output-w", "20")]
+    [InlineData("t=False L=False s=<ws> o=[  ] l=inf ops=[]", "-x")]            // fill layout: implemented (ColumnFillTests)
+    [InlineData("t=False L=False s=<ws> o=[  ] l=inf ops=[]", "-c", "20")]
+    [InlineData("t=False L=False s=<ws> o=[  ] l=inf ops=[]", "--output-w", "20")]
+    [InlineData("t=False L=False s=<ws> o=[  ] l=inf ops=[]", "-xc20")]
+    [InlineData("ERR column: mutually exclusive arguments: --table --fillrows", "-t", "-x")]
+    [InlineData("ERR column: mutually exclusive arguments: --table --fillrows", "-x", "--table")]
+    [InlineData("ERR column: invalid columns argument: 'x'", "-c", "x")]
+    [InlineData("ERR column: invalid columns argument: ''", "-c", "")]
+    [InlineData("ERR column: invalid columns argument: '12abc'", "-c", "12abc")]
+    [InlineData("ERR column: invalid columns argument: '-5': Numerical result out of range", "-c", "-5")]
+    [InlineData("ERR column: invalid columns argument: '4294967296': Numerical result out of range", "-c", "4294967296")]
+    [InlineData("ERR column: option requires an argument -- 'c'", "-c")]
     [InlineData("ERR column: option '-N' is recognized but not supported by ps-bash", "-t", "-N", "a,b")]
     [InlineData("ERR column: option '-R' is recognized but not supported by ps-bash", "-t", "-R", "1")]
     [InlineData("ERR column: option '-J' is recognized but not supported by ps-bash", "-J")]
@@ -69,7 +78,7 @@ public class ColumnArgScanTests
     public void ExitStatus_UsageIs1_UnsupportedIs2()
     {
         Assert.Equal(1, InvokeBashColumnCommand.ScanArgs(new[] { "-z" }).ErrorExitCode);
-        Assert.Equal(2, InvokeBashColumnCommand.ScanArgs(new[] { "-x" }).ErrorExitCode);
+        Assert.Equal(2, InvokeBashColumnCommand.ScanArgs(new[] { "-J" }).ErrorExitCode);
         Assert.True(InvokeBashColumnCommand.ScanArgs(new[] { "-V" }).Has("version"));
         Assert.True(InvokeBashColumnCommand.ScanArgs(new[] { "-h" }).Has("help"));
     }

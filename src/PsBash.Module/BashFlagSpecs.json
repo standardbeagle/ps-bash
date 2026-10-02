@@ -97,6 +97,14 @@
     {
       "flag": "-s",
       "desc": "separator"
+    },
+    {
+      "flag": "-c",
+      "desc": "output width (fill layout)"
+    },
+    {
+      "flag": "-x",
+      "desc": "fill rows before columns"
     }
   ],
   "comm": [
@@ -1314,6 +1322,120 @@
     {
       "flag": "--group-directories-first",
       "desc": "list directories before files"
+    },
+    {
+      "flag": "-C",
+      "desc": "list entries in columns, sorted down"
+    },
+    {
+      "flag": "-x",
+      "desc": "list entries in rows (across)"
+    },
+    {
+      "flag": "-m",
+      "desc": "comma-separated list, filled to the width"
+    },
+    {
+      "flag": "-w",
+      "desc": "set the output width (0 = no limit)",
+      "arg": "COLS"
+    },
+    {
+      "flag": "-T",
+      "desc": "assume tab stops every COLS (0 = spaces only)",
+      "arg": "COLS"
+    },
+    {
+      "flag": "--format",
+      "desc": "across, commas, horizontal, long, single-column, verbose, vertical",
+      "arg": "WORD"
+    },
+    {
+      "flag": "--width",
+      "desc": "set the output width (0 = no limit)",
+      "arg": "COLS"
+    },
+    {
+      "flag": "--tabsize",
+      "desc": "assume tab stops every COLS",
+      "arg": "COLS"
+    },
+    {
+      "flag": "-I",
+      "desc": "do not list entries matching PATTERN",
+      "arg": "PATTERN"
+    },
+    {
+      "flag": "--ignore",
+      "desc": "do not list entries matching PATTERN",
+      "arg": "PATTERN"
+    },
+    {
+      "flag": "--hide",
+      "desc": "do not list entries matching PATTERN (unless -a / -A)",
+      "arg": "PATTERN"
+    },
+    {
+      "flag": "-B",
+      "desc": "do not list entries ending with ~"
+    },
+    {
+      "flag": "--ignore-backups",
+      "desc": "do not list entries ending with ~"
+    },
+    {
+      "flag": "-n",
+      "desc": "long listing with numeric uid and gid"
+    },
+    {
+      "flag": "-g",
+      "desc": "long listing without the owner"
+    },
+    {
+      "flag": "-o",
+      "desc": "long listing without the group"
+    },
+    {
+      "flag": "-G",
+      "desc": "in a long listing, do not print the group"
+    },
+    {
+      "flag": "-U",
+      "desc": "do not sort (directory order)"
+    },
+    {
+      "flag": "-X",
+      "desc": "sort by extension"
+    },
+    {
+      "flag": "-u",
+      "desc": "with -l show and sort by access time, else sort by it"
+    },
+    {
+      "flag": "-c",
+      "desc": "with -l show and sort by change time, else sort by it"
+    },
+    {
+      "flag": "--time",
+      "desc": "atime, access, use, ctime, status, mtime, modification, birth, creation",
+      "arg": "WORD"
+    },
+    {
+      "flag": "--full-time",
+      "desc": "like -l --time-style=full-iso"
+    },
+    {
+      "flag": "--time-style",
+      "desc": "full-iso, long-iso, iso, locale (or posix- forms)",
+      "arg": "STYLE"
+    },
+    {
+      "flag": "--numeric-uid-gid",
+      "desc": "like -l, but list numeric user and group IDs"
+    },
+    {
+      "flag": "--no-group",
+      "desc": "in a long listing, do not print group names"
     }
   ],
   "mapfile": [
@@ -1879,6 +2001,10 @@
     {
       "flag": "-l",
       "desc": "lines per file"
+    },
+    {
+      "flag": "-n",
+      "desc": "CHUNKS output files: N, K/N, l/N, l/K/N, r/N, r/K/N"
     },
     {
       "flag": "-d",

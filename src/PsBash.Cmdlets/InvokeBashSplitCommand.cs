@@ -52,7 +52,6 @@ public sealed class InvokeBashSplitCommand : PSCmdlet
     /// </summary>
     private static readonly string[] SplitValidButUnsupported =
     {
-        "-n", "--number",
         "-C", "--line-bytes",
         "-t", "--separator",
         "--filter",
@@ -62,7 +61,8 @@ public sealed class InvokeBashSplitCommand : PSCmdlet
     };
 
     private const string OptLines = "lines", OptBytes = "bytes", OptSuffixLen = "suffixlen",
-        OptNumeric = "numeric", OptDecimalShort = "decimalshort", OptHex = "hex", OptAddSuffix = "addsuffix";
+        OptNumeric = "numeric", OptDecimalShort = "decimalshort", OptHex = "hex", OptAddSuffix = "addsuffix",
+        OptNumber = "number";
 
     /// <summary>
     /// split's option surface (GNU coreutils 9.4). Implemented: -l/--lines, -b/--bytes (GNU SIZE
@@ -75,6 +75,7 @@ public sealed class InvokeBashSplitCommand : PSCmdlet
             new OptSpec(OptLines, 'l', "lines", OptKind.Value),
             new OptSpec(OptBytes, 'b', "bytes", OptKind.Value),
             new OptSpec(OptSuffixLen, 'a', "suffix-length", OptKind.Value),
+            new OptSpec(OptNumber, 'n', "number", OptKind.Value),
             new OptSpec(OptDecimalShort, 'd', null),
             new OptSpec(OptHex, 'x', "hex-suffixes", OptKind.OptionalValue),
             new OptSpec(OptNumeric, '\0', "numeric-suffixes", OptKind.OptionalValue),
@@ -85,7 +86,7 @@ public sealed class InvokeBashSplitCommand : PSCmdlet
         numericShorthandId: OptLines,
         gnuInfoOptions: true,
         // GNU split's long_options order (oracle: `split --li=3` → '--lines' '--line-bytes').
-        longOptionOrder: new[] { "bytes", "lines", "line-bytes" });
+        longOptionOrder: new[] { "bytes", "lines", "line-bytes", "number" });
 
     /// <summary>Pure argv scan (unit-test seam).</summary>
     internal static ParsedArgs ScanArgs(string[] args) => ArgParser.Parse(args, SplitSpec);
@@ -97,6 +98,9 @@ public sealed class InvokeBashSplitCommand : PSCmdlet
         public long? Bytes;
         public int SuffixLength = 2;
         public bool Numeric;
+
+        /// <summary><c>-n CHUNKS</c> (null = not given): N / K/N bytes, l/N, l/K/N, r/N, r/K/N.</summary>
+        public SplitChunkSpec? Chunk;
 
         /// <summary>
         /// <c>-x</c> / <c>--hex-suffixes[=FROM]</c>: hexadecimal suffix. GNU 9.4 quirk (oracle): the SHORT <c>-d</c>
@@ -153,6 +157,10 @@ public sealed class InvokeBashSplitCommand : PSCmdlet
                     if (len < 1) { s.SuffixLength = 2; suffixGiven = false; }   // -a 0 = auto length
                     else { s.SuffixLength = len; suffixGiven = true; }
                     break;
+                case OptNumber:
+                    if (!SplitChunks.TryParse(v, out var chunk, out string chunkError)) { s.Error = $"split: {chunkError}"; return s; }
+                    s.Chunk = chunk;
+                    break;
                 case OptDecimalShort:
                     s.Numeric = true;
                     decimalShortSeen = true;
@@ -183,6 +191,32 @@ public sealed class InvokeBashSplitCommand : PSCmdlet
 
         s.Hex = hexSeen && !decimalShortSeen;
         if (s.Hex) s.Numeric = true;
+
+        if (s.Chunk is { } chunkSpec)
+        {
+            // GNU: one way to split only (a second -n counts too), and the suffix is sized for N files.
+            if (s.Parsed.All(OptNumber).Count() > 1 || s.Parsed.Has(OptLines) || s.Parsed.Has(OptBytes))
+            {
+                s.Error = "split: cannot split in more than one way\nTry 'split --help' for more information.";
+                return s;
+            }
+            int radix = s.Hex ? 16 : s.Numeric ? 10 : 26;
+            int needed = SplitChunks.SuffixLengthNeeded(chunkSpec.N, radix);
+            if (suffixGiven)
+            {
+                if (s.SuffixLength < needed)
+                {
+                    s.Error = $"split: the suffix length needs to be at least {needed}";
+                    return s;
+                }
+            }
+            else
+            {
+                s.SuffixLength = Math.Max(2, needed);
+            }
+            s.SuffixAuto = false;   // the length is fixed for N files: no xzaaa growth
+        }
+
         if (s.NumericFromText is { } fromText)
         {
             s.SuffixAuto = false;   // FROM fixes the length (GNU: x05..x99, then exhausted)
@@ -353,6 +387,12 @@ public sealed class InvokeBashSplitCommand : PSCmdlet
         // Resolve working directory exactly as the oracle did: Join-Path $PWD ...
         string cwd = SessionState.Path.CurrentLocation.Path;
 
+        if (plan.Chunk is { } chunkSpec)
+        {
+            WriteChunked(lines, cwd, prefix, chunkSpec, additionalSuffix, fileReadPath);
+            return;
+        }
+
         // -b: byte-size mode. Reconstruct the (CRLF-normalized) content bytes and
         // chunk them by size, rather than by line count.
         if (byteSize is > 0)
@@ -392,6 +432,60 @@ public sealed class InvokeBashSplitCommand : PSCmdlet
         {
             if (FileSystemHelpers.IsPipelineStop(ex)) throw;
             FileSystemHelpers.WriteBashError(this, $"split: {_lastPiecePath.Replace('\\', '/')}: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// <c>-n CHUNKS</c>: the whole input is divided into N chunks by <see cref="SplitChunks"/>. With a
+    /// K the chunk goes to stdout (exact bytes) and no file is made; otherwise every one of the N
+    /// files is created, empty ones included.
+    /// </summary>
+    private void WriteChunked(
+        IEnumerable<string> lines, string cwd, string prefix, SplitChunkSpec spec, string additionalSuffix,
+        string? fileReadPath)
+    {
+        byte[] bytes;
+        try
+        {
+            var list = lines as IList<string> ?? lines.ToList();
+            bytes = list.Count == 0
+                ? Array.Empty<byte>()
+                : RawBytes.GetBytes(string.Join("\n", list) + (_inputUnterminated ? string.Empty : "\n"));
+        }
+        catch (Exception ex)
+        {
+            if (FileSystemHelpers.IsPipelineStop(ex)) throw;
+            string name = fileReadPath?.Replace('\\', '/') ?? "-";
+            FileSystemHelpers.WriteBashError(this,
+                $"split: cannot open '{name}' for reading: {FileSystemHelpers.ReadErrorMessage(ex)}");
+            return;
+        }
+
+        byte[][] chunks = SplitChunks.Partition(bytes, spec.Kind, spec.N);
+        if (spec.K > 0)
+        {
+            var emitter = new ByteRecordEmitter(o => WriteObject(o));
+            emitter.Append(chunks[spec.K - 1]);
+            emitter.Finish();
+            return;
+        }
+
+        foreach (var chunk in chunks)
+        {
+            string? suffix = _suffixes.Next();
+            if (suffix is null) { SuffixesExhausted(); return; }
+            string outName = prefix + suffix + additionalSuffix;
+            string outPath = Path.IsPathRooted(outName) ? outName : Path.Combine(cwd, outName);
+            try
+            {
+                File.WriteAllBytes(outPath, chunk);
+            }
+            catch (Exception ex)
+            {
+                if (FileSystemHelpers.IsPipelineStop(ex)) throw;
+                FileSystemHelpers.WriteBashError(this, $"split: {outPath.Replace('\\', '/')}: {ex.Message}");
+                return;
+            }
         }
     }
 

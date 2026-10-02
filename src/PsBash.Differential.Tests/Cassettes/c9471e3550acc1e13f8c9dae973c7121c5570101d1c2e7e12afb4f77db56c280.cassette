@@ -1,0 +1,54 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 501
+stdout-length: 482
+stderr-length: 0
+==== SCRIPT ====
+__fs_snap() { find . | LC_ALL=C sort | while IFS= read -r p; do if [ -d "$p" ]; then echo "D $p"; else echo "F $p $(base64 -w0 "$p")"; fi; done; }
+d=$(mktemp -d) && cd "$d" && { :
+for f in alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu; do printf '' > $f; done
+} >/dev/null 2>&1
+echo '== stdout'
+{ :
+ls -Cx -w 40 | cat -A; ls -xC -w 40 | cat -A; ls -mC -w 40 | cat -A; ls -x1 | head -3; ls -1x -w 40 | cat -A
+} 2>/dev/null
+echo "== exit $?"
+echo '== fs'
+__fs_snap
+cd /; rm -rf "$d"
+==== STDOUT ====
+== stdout
+alpha  beta  delta  epsilon  eta$
+gamma  iota  kappa  lambda   mu$
+theta  zeta$
+alpha  epsilon^Iiota^Imu$
+beta   eta^Ikappa^Itheta$
+delta  gamma^Ilambda^Izeta$
+alpha  epsilon^Iiota^Imu$
+beta   eta^Ikappa^Itheta$
+delta  gamma^Ilambda^Izeta$
+alpha
+beta
+delta
+alpha  beta  delta  epsilon  eta$
+gamma  iota  kappa  lambda   mu$
+theta  zeta$
+== exit 0
+== fs
+D .
+F ./alpha
+F ./beta
+F ./delta
+F ./epsilon
+F ./eta
+F ./gamma
+F ./iota
+F ./kappa
+F ./lambda
+F ./mu
+F ./theta
+F ./zeta
+
+==== STDERR ====
+

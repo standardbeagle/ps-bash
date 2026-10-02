@@ -107,15 +107,16 @@ public class InvokeBashFileCommandTests : IDisposable, IClassFixture<SharedPwshF
     public void File_PngMagic_EmitsPngImageData()
     {
         var f = Path.Combine(_tmpDir, "img.png");
-        // PNG magic: 89 50 4E 47 0D 0A 1A 0A
+        // PNG magic: 89 50 4E 47 0D 0A 1A 0A + the IHDR chunk header (libmagic needs both); a truncated IHDR reads as zeros.
         File.WriteAllBytes(f, new byte[]
         {
             0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
-            0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52
+            0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+            0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x08, 0x08, 0x02, 0x00, 0x00, 0x00
         });
         var (_, lines) = Run($"Invoke-BashFile '{Esc(f)}'");
         Assert.Single(lines);
-        Assert.EndsWith(": PNG image data", lines[0]);
+        Assert.EndsWith(": PNG image data, 16 x 8, 8-bit/color RGB, non-interlaced", lines[0]);
     }
 
     [Fact]
@@ -144,7 +145,8 @@ public class InvokeBashFileCommandTests : IDisposable, IClassFixture<SharedPwshF
         var f = Path.Combine(_tmpDir, "both.png");
         File.WriteAllBytes(f, new byte[]
         {
-            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+            0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52
         });
         var (_, lines) = Run($"Invoke-BashFile -b -i '{Esc(f)}'");
         Assert.Single(lines);
