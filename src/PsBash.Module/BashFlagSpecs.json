@@ -1372,6 +1372,32 @@
     {
       "flag": "-f",
       "desc": "force"
+    },
+    {
+      "flag": "-i",
+      "desc": "prompt before overwrite"
+    },
+    {
+      "flag": "-b",
+      "desc": "make a backup of each existing destination file"
+    },
+    {
+      "flag": "-S",
+      "desc": "override the usual backup suffix",
+      "arg": "SUFFIX"
+    },
+    {
+      "flag": "-t",
+      "desc": "move all SOURCE arguments into DIRECTORY",
+      "arg": "DIRECTORY"
+    },
+    {
+      "flag": "-T",
+      "desc": "treat DEST as a normal file"
+    },
+    {
+      "flag": "-u",
+      "desc": "move only when the source is newer than the destination"
     }
   ],
   "nl": [

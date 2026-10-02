@@ -166,6 +166,6 @@ public class OperandDisplayTests : IDisposable, IClassFixture<SharedPwshFixture>
         Write("s");
         Directory.CreateDirectory(Path.Combine(_tmp, "d"));
         var r = InTmp("Invoke-BashMv -v s d").AssertSuccess();
-        Assert.Equal("'s' -> 'd/s'", r.Stdout.Trim());
+        Assert.Equal("renamed 's' -> 'd/s'", r.Stdout.Trim());
     }
 }

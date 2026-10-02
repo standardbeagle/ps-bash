@@ -722,7 +722,7 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
 
     [Theory]
     [InlineData("Invoke-BashCp --context a b")]      // valid GNU cp flag (SELinux), unimplemented
-    [InlineData("Invoke-BashMv --backup a b")]       // valid GNU mv flag, unimplemented
+    [InlineData("Invoke-BashMv --debug a b")]       // valid GNU mv flag, unimplemented
     [InlineData("Invoke-BashMkdir --context d")]     // valid GNU mkdir flag (SELinux), unimplemented
     [InlineData("Invoke-BashRmdir --ignore-fail-on-non-empty d")]
     public void Mover_ValidButUnsupportedFlag_ExitsTwo(string cmd)
@@ -876,14 +876,17 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
     }
 
     [Fact]
-    public void Mv_QuotedBareI_IsRefusedNotSwallowedByTheBinder()
+    public void Mv_QuotedBareI_PromptsNotSwallowedByTheBinder()
     {
         var src = Path.Combine(_tmpRoot, "misrc.txt");
         File.WriteAllText(src, "x");
         var dst = Path.Combine(_tmpRoot, "midst.txt");
-        Fail($"Invoke-BashMv '-i' {Q(src)} {Q(dst)}", 2);
+        // -i is implemented: with no answer on stdin the prompt is declined (exit 1), nothing moves,
+        // and the quoted bare -i is not swallowed by the binder.
+        File.WriteAllText(dst, "y");
+        Fail($"Invoke-BashMv '-i' {Q(src)} {Q(dst)}", 1, "mv: overwrite");
         Assert.True(File.Exists(src));
-        Assert.False(File.Exists(dst));
+        Assert.Equal("y", File.ReadAllText(dst));
     }
 
     [Fact]
