@@ -1850,28 +1850,28 @@ public class PsEmitterTests
     [Fact]
     public void Transpile_CommandSub_SimpleCommand_Passthrough()
     {
-        var result = PsEmitter.Transpile("echo $(whoami)");
+        var result = PsEmitter.Transpile("echo x$(whoami)");
 
         // RC-8d: command-substitution emit wraps inner output in
         // `| ForEach-Object { Get-BashText $_ }` so the captured value is the
         // bash-text payload, never a typed BashObject's default ToString().
-        Assert.Equal("Invoke-BashEcho $(Invoke-BashWhoami | ConvertTo-BashCapture)", result);
+        Assert.Equal("Invoke-BashEcho x$(Invoke-BashWhoami | ConvertTo-BashCapture)", result);
     }
 
     [Fact]
     public void Transpile_CommandSub_InnerPipeline_TranspilesInnerCommands()
     {
-        var result = PsEmitter.Transpile("echo $(ls | grep foo)");
+        var result = PsEmitter.Transpile("echo x$(ls | grep foo)");
 
-        Assert.Equal("Invoke-BashEcho $(Invoke-BashLs | Invoke-BashGrep foo | ConvertTo-BashCapture)", result);
+        Assert.Equal("Invoke-BashEcho x$(Invoke-BashLs | Invoke-BashGrep foo | ConvertTo-BashCapture)", result);
     }
 
     [Fact]
     public void Transpile_BacktickCommandSub_NormalizedToDollarParen()
     {
-        var result = PsEmitter.Transpile("echo `date`");
+        var result = PsEmitter.Transpile("echo x`date`");
 
-        Assert.Equal("Invoke-BashEcho $(Invoke-BashDate | ConvertTo-BashCapture)", result);
+        Assert.Equal("Invoke-BashEcho x$(Invoke-BashDate | ConvertTo-BashCapture)", result);
     }
 
     [Fact]
@@ -1889,9 +1889,9 @@ public class PsEmitterTests
     [Fact]
     public void Transpile_NestedCommandSub_EmitsCorrectNesting()
     {
-        var result = PsEmitter.Transpile("echo $(echo $(whoami))");
+        var result = PsEmitter.Transpile("echo x$(echo y$(whoami))");
 
-        Assert.Equal("Invoke-BashEcho $(Invoke-BashEcho $(Invoke-BashWhoami | ConvertTo-BashCapture) | ConvertTo-BashCapture)", result);
+        Assert.Equal("Invoke-BashEcho x$(Invoke-BashEcho y$(Invoke-BashWhoami | ConvertTo-BashCapture) | ConvertTo-BashCapture)", result);
     }
 
     /// <summary>
@@ -2531,6 +2531,101 @@ public class PsEmitterTests
 
         Assert.Contains("$env:a -split '\\s+'", result);
         Assert.Contains("$env:b -split '\\s+'", result);
+    }
+
+    [Fact]
+    public void Transpile_ForInMultipleUnquotedVars_FlattenIntoOneList()
+    {
+        // PowerShell's comma operator does NOT splice: `'a',@('b','c')` is two elements. The split
+        // arrays must flatten (oracle: `a="x y"; for w in $a z` runs x, y, z).
+        var result = PsEmitter.Transpile("for w in $a z; do echo $w; done");
+
+        Assert.Contains("foreach ($w in @(@(if ([string]::IsNullOrEmpty($env:a))", result);
+        Assert.Contains("; 'z')", result);
+    }
+
+    [Fact]
+    public void Transpile_ForInCommandSub_WordSplitsThroughConvertToBashWords()
+    {
+        // `for f in $(echo a b c)` ran ONCE over "a b c": the capture array only splits on lines.
+        var result = PsEmitter.Transpile("for f in $(echo a b c); do echo \"<$f>\"; done");
+
+        Assert.Contains("foreach ($f in @(ConvertTo-BashWords $((@(Invoke-BashEcho a b c | ConvertTo-BashCapture)", result);
+    }
+
+    [Fact]
+    public void Transpile_ForInBacktickCommandSub_WordSplitsToo()
+    {
+        var result = PsEmitter.Transpile("for f in `echo a b`; do echo $f; done");
+
+        Assert.Contains("foreach ($f in @(ConvertTo-BashWords ", result);
+    }
+
+    [Fact]
+    public void Transpile_ForInQuotedCommandSub_StaysOneWordAndIsNotGlobbed()
+    {
+        // The regex in the quoted capture's `-replace '(\r?\n)+$'` once made the emitted TEXT look like a
+        // glob (`?`), sending a quoted "$(cmd)" through Resolve-BashGlob.
+        var result = PsEmitter.Transpile("for f in \"$(echo a b)\"; do echo \"<$f>\"; done");
+
+        Assert.DoesNotContain("ConvertTo-BashWords", result);
+        Assert.DoesNotContain("Resolve-BashGlob", result);
+    }
+
+    [Fact]
+    public void Transpile_ForInMixedListWithCommandSub_FlattensAndKeepsLiterals()
+    {
+        var result = PsEmitter.Transpile("for f in x $(echo a b) y; do echo $f; done");
+
+        Assert.Contains("foreach ($f in @('x'; @(ConvertTo-BashWords ", result);
+        Assert.Contains("; 'y')", result);
+    }
+
+    [Fact]
+    public void Transpile_UnquotedCommandSubOperand_HoistsWordSplitArrayAndSplats()
+    {
+        // `printf '%s\n' $(echo a b)`: the substitution's text is word-split (and an empty result is
+        // elided) exactly like an unquoted $var operand (RC-7).
+        var result = PsEmitter.Transpile("printf '%s\\n' $(echo a b)");
+
+        Assert.StartsWith("& { $__bashsplat0 = @(ConvertTo-BashWords $((@(Invoke-BashEcho a b | ConvertTo-BashCapture)", result);
+        Assert.EndsWith("; Invoke-BashPrintf '%s\\n' @__bashsplat0 }", result);
+    }
+
+    [Fact]
+    public void Transpile_QuotedCommandSubOperand_NotSplat()
+    {
+        var result = PsEmitter.Transpile("echo \"$(echo a b)\"");
+
+        Assert.DoesNotContain("__bashsplat", result);
+    }
+
+    [Fact]
+    public void Transpile_SplatOperandOnPipeTarget_ForwardsPipelineInputIntoTheBlock()
+    {
+        // A script block hands the stage's pipeline input to its `$input`, not to the command inside:
+        // `printf … | grep $x` used to print nothing.
+        var result = PsEmitter.Transpile("printf 'a\\nb\\n' | grep $x");
+
+        Assert.Contains("| & { $__bashsplat0 = ", result);
+        Assert.Contains("; $input | Invoke-BashGrep @__bashsplat0 }", result);
+    }
+
+    [Fact]
+    public void Transpile_SplatOperandOnFirstStage_DoesNotReadInput()
+    {
+        var result = PsEmitter.Transpile("echo $x | cat");
+
+        Assert.DoesNotContain("$input", result);
+    }
+
+    [Fact]
+    public void Transpile_CommandSubInsideSplatPipeStage_DoesNotStealTheStageInput()
+    {
+        // The substitution body is its own pipeline: no `$input |` inside it.
+        var result = PsEmitter.Transpile("echo a | grep $(echo b $y)");
+
+        Assert.Equal(1, System.Text.RegularExpressions.Regex.Matches(result, @"\$input \|").Count);
     }
 
     [Fact]
@@ -5680,7 +5775,7 @@ public class PsEmitterTests
         // `LC_TIME=C date` emits `$__saved… = …; try { … } finally { … }` — a
         // statement LIST, which cannot head a pipeline. Unwrapped it emitted
         // "An empty pipe element is not allowed" (Go's make.bash).
-        var result = PsEmitter.Transpile("echo $(LC_TIME=C date)");
+        var result = PsEmitter.Transpile("echo x$(LC_TIME=C date)");
 
         Assert.Contains("$(& { $__saved_LC_TIME", result);
         Assert.Contains("} | ConvertTo-BashCapture)", result);
@@ -5691,7 +5786,7 @@ public class PsEmitterTests
     {
         // cd emits an if/else statement list from a Command.Simple node — the
         // AST-type-only check called it pipeable and broke the parse.
-        var result = PsEmitter.Transpile("echo $(cd /tmp)");
+        var result = PsEmitter.Transpile("echo x$(cd /tmp)");
 
         Assert.Contains("$(& { $__psbash_cd_target", result);
     }
@@ -5710,7 +5805,7 @@ public class PsEmitterTests
     {
         // The pipeline-head classifier is quote-aware: a ';' inside a string
         // operand is not a statement separator.
-        var result = PsEmitter.Transpile("echo $(echo \"a;b\")");
+        var result = PsEmitter.Transpile("echo x$(echo \"a;b\")");
 
         Assert.DoesNotContain("& {", result);
     }

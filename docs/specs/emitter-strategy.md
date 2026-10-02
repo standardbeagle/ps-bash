@@ -314,6 +314,24 @@ word made PowerShell invoke it as a command ("one: command not found"); only the
 multi-item path used to quote, which is what hid the bug. Words `EmitWord` already
 rendered as PowerShell values (`$x`, `"a"`, `(…)`, `@(…)`, numbers) pass through.
 
+An UNQUOTED `$(cmd)` / `` `cmd` `` word is word-split like an unquoted `$x`: bash expands it to TEXT,
+splits that text on `$IFS`, then glob-expands each word. The capture array only splits on LINES, so
+`for f in $(echo a b c)` used to iterate once over `a b c`. Such a word emits
+`@(ConvertTo-BashWords <the substitution's text>)` (`IsPureUnquotedCommandSubWord`; a quoted
+`"$(cmd)"` or a substitution glued into a longer word `x$(cmd)y` stays one word). The cmdlet
+(`ConvertToBashWordsCommand`, splitter = `BashWordSplitter`) follows bash's IFS rules (unset IFS =
+space/tab/newline; IFS whitespace folds and trims; every non-whitespace IFS character delimits and keeps
+empty fields, a single trailing delimiter adds none; empty IFS splits nothing), yields NO word for an
+empty / blank result (zero iterations), and expands each word containing `* ? [` against the filesystem
+(nullglob off: no match keeps the literal word; matches of a relative pattern are printed relative).
+A list with any split word (`$a`, `$(cmd)`) is emitted as ONE flat `@( item; item; … )`: PowerShell's
+comma operator does not splice (`'a',@('b','c')` is two elements), which is why `for w in $a z` ran
+`x y` and `z` as two items. Whether a list word is a glob is decided from its PARTS
+(`WordIsGlob`: a `GlobPart` and glob characters), not from its emitted text alone — the
+`-replace '(\r?\n)+$'` inside a quoted capture used to make `for f in "$(cmd)"` look like a glob.
+Known gap: an unquoted `$x` in a list is still split on whitespace only (RC-7), not on `$IFS`, and is
+not glob-expanded.
+
 ### `read`
 
 - `read [-r] [-p "prompt"] VAR` -> `Invoke-BashRead [-p "prompt"] VAR` (the
@@ -495,7 +513,17 @@ ordered temp whenever any operand needs the splat — which changes argument
 semantics for arrays and quoted words, so it is deliberately not done for a case
 this narrow. Only side-effecting expansions (`$((x++))`, `$((x=…))`) are
 affected; a plain command substitution earlier in the same command is fine
-because it does not mutate a variable the later operand reads. The `@(...)` around the `if` is required:
+because it does not mutate a variable the later operand reads.
+
+**Command substitutions are split words too.** A command operand that is a single unquoted
+`$(cmd)` / `` `cmd` `` (`IsUnquotedSplitWord` = pure variable OR pure command substitution) is hoisted
+the same way, with `@(ConvertTo-BashWords <text>)` as the temp's value (IFS split, then glob
+expansion; see "`for x in LIST`"): `printf '%s\n' $(echo a b)` prints `a` and `b`, an empty result
+contributes no argument (it used to pass a spurious `$null`), and `"$(cmd)"` stays one argument.
+**On a pipe-target stage the splat block forwards its input** (`& { $__s = …; $input | cmd @__s }`,
+`_pipeStageFeedsInput`, cleared inside command / process substitution bodies by `EmitCaptured`): the
+hoist wraps the stage in a script block, which used to swallow the pipe, so
+`printf 'a\nb\n' | grep $x` printed nothing. The `@(...)` around the `if` is required:
 assigning a bare `if (...) { @() }` collapses the empty branch to `$null`, and
 splatting `$null` injects one spurious empty argument. This applies to both the
 general fallback path (`EmitSimple`) and the mapped passthrough path
