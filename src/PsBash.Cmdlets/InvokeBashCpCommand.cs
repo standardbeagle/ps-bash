@@ -4,37 +4,23 @@ using PsBash.Cmdlets.Args;
 namespace PsBash.Cmdlets;
 
 /// <summary>
-/// Binary cmdlet replacement for the psm1 <c>Invoke-BashCp</c> (REFACTOR-2).
-/// Copies each source operand to the destination, matching GNU coreutils
-/// <c>cp</c> semantics. Supports <c>-r</c> / <c>-R</c> (recursive),
-/// <c>-v</c> (verbose), <c>-n</c> (no-clobber), <c>-f</c> (force).
-///
-/// Behavioral parity oracle: the original psm1 function. Branches preserved
-/// byte for byte:
-/// <list type="bullet">
-/// <item>Fewer than 2 operands → "missing file operand" error and no copy.</item>
-/// <item>Last operand is the destination; everything else is a source.
-/// Sources are glob-expanded.</item>
-/// <item>Source is a directory and <c>-r</c> not set → "omitting directory"
-/// error and $LASTEXITCODE=1.</item>
-/// <item>Destination is an existing directory → copy each source as a child
-/// of the dest dir (preserving the source's basename).</item>
-/// <item>With <c>-n</c>, skip a target FILE that already exists (a directory
-/// source is still traversed, skipping only conflicting files). Recursive copy
-/// MERGES into an existing target directory — nothing there is ever deleted;
-/// <c>-f</c> only clears the read-only bit of a file it is about to replace.
-/// Pre-mutation checks live in <see cref="TransferValidation"/>.</item>
-/// <item>Verbose mode emits <c>'src' -> 'dest'\n</c> per copy.</item>
-/// </list>
+/// Binary cmdlet <c>Invoke-BashCp</c>: GNU coreutils 9.4 <c>cp</c>. Copies each source operand to the
+/// destination; the per-entry behaviour (identity, overwrite policy, backups, links, reflink, symlink
+/// handling, <c>-v</c>/<c>--debug</c> output) is <see cref="CpEngine"/>, the option resolution is
+/// <see cref="CpPlan"/>; this class owns the OPERAND SHAPES: <c>-t DIR</c>, <c>-T</c>, <c>--parents</c>,
+/// <c>--strip-trailing-slashes</c>, glob expansion, "several sources need a directory".
 /// <para>
-/// <b>Argv</b> is parsed by the shared ordered parser (<see cref="ArgParser"/>, spec
-/// <see cref="CpSpec"/>): bundles of any implemented flags (<c>-rfv</c>), <c>--</c>,
-/// long options with unique-prefix abbreviation, and the unsupported/unknown classifier
-/// are one left-to-right scan. The transpiler single-quotes every dash-leading word for
-/// cp (<c>PsEmitter.OrderedArgCommands</c>), so <c>-r</c>/<c>-R</c> (indistinguishable to
-/// the case-insensitive binder) and every colliding letter arrive in <c>Arguments</c>
-/// intact. The <c>v</c>/<c>p</c>/<c>I</c>/<c>D</c> decoy switches exist ONLY for direct
-/// calls and are re-injected before parsing.
+/// <b>Argv</b> is parsed by the shared ordered parser (<see cref="ArgParser"/>, spec <see cref="CpSpec"/>).
+/// The transpiler single-quotes every dash-leading word for cp (<c>PsEmitter.OrderedArgCommands</c>), so
+/// <c>-r</c>/<c>-R</c> (indistinguishable to the case-insensitive binder) and every colliding letter arrive in
+/// <c>Arguments</c> intact. The <c>v</c>/<c>p</c>/<c>I</c>/<c>D</c>/<c>A</c> decoy switches exist ONLY for
+/// direct calls and are re-injected before parsing. (<c>-P</c> cannot be decoyed: parameter names are
+/// case-insensitive and <c>p</c> is taken — quote it in a direct call.)
+/// </para>
+/// <para>
+/// <b>Prompts</b> (<c>-i</c>) read their answers from the command's stdin exactly like <c>rm -i</c>
+/// (<see cref="StdinLineSource"/>); no answer is "no", and — unlike rm — a declined prompt makes the exit
+/// status 1.
 /// </para>
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashCp")]
@@ -44,102 +30,112 @@ public sealed class InvokeBashCpCommand : PSCmdlet
     [Parameter] public SwitchParameter v { get; set; }
 
     /// <summary>
-    /// Bash <c>-p</c> (preserve) decoy. The bare token <c>-p</c> prefix-collides
-    /// with the value-bearing common parameter <c>-PipelineVariable</c>, which
-    /// would otherwise consume the next token (the source) as its value. An exact
-    /// single-letter parameter name beats the common-parameter prefix, so a bare
-    /// <c>-p</c> binds here; bundled forms (<c>-rp</c>) still flow through
-    /// <see cref="Arguments"/>.
+    /// Bash <c>-p</c> (preserve) decoy. The bare token <c>-p</c> prefix-collides with the value-bearing
+    /// common parameter <c>-PipelineVariable</c>, which would otherwise consume the next token (the source)
+    /// as its value. An exact single-letter parameter name beats the common-parameter prefix, so a bare
+    /// <c>-p</c> binds here; bundled forms (<c>-rp</c>) still flow through <see cref="Arguments"/>.
     /// </summary>
     [Parameter] public SwitchParameter p { get; set; }
 
-    /// <summary>
-    /// Decoy for the valid-but-unsupported <c>-i</c> (interactive). The bare <c>-i</c>
-    /// prefix-collides with <c>-InformationAction</c>/<c>-InformationVariable</c> and
-    /// the binder crashes ("ambiguous") before the classifier could emit its exit-2
-    /// "recognized but not supported" message. Re-injected below so the classifier fires.
-    /// </summary>
+    /// <summary>Decoy for <c>-i</c> (interactive): bare <c>-i</c> prefix-collides with
+    /// <c>-InformationAction</c>/<c>-InformationVariable</c> and the binder would crash ("ambiguous").</summary>
     [Parameter] public SwitchParameter I { get; set; }
 
-    /// <summary>
-    /// Decoy for the valid-but-unsupported <c>-d</c> (copy-as-is / no-dereference). Bare
-    /// <c>-d</c> silently bound <c>-Debug</c> before this, so the classifier never fired.
-    /// </summary>
+    /// <summary>Decoy for <c>-d</c> (no-dereference, preserve links): bare <c>-d</c> silently bound <c>-Debug</c>.</summary>
     [Parameter] public SwitchParameter D { get; set; }
 
-    /// <summary>
-    /// Decoy for <c>-a</c> (archive). The bare token prefix-matches this cmdlet's own
-    /// <c>-Arguments</c> parameter, which swallowed the flag AND the operands silently, so a direct
-    /// <c>Invoke-BashCp -a src dst</c> degraded to a plain non-recursive copy.
-    /// </summary>
+    /// <summary>Decoy for <c>-a</c> (archive): the bare token prefix-matches this cmdlet's own
+    /// <c>-Arguments</c> parameter, which swallowed the flag AND the operands silently.</summary>
     [Parameter] public SwitchParameter A { get; set; }
 
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
-    /// <summary>Valid GNU <c>cp</c> flags ps-bash does not implement. An
-    /// option-looking operand matching one of these gets the bash-parity
-    /// "recognized but not supported" diagnostic; anything else option-looking
-    /// gets "unrecognized/invalid option" (see
-    /// <see cref="FileSystemHelpers.TryWriteOperandOptionError"/>). Short forms
-    /// that prefix-collide with a PowerShell common parameter never reach this
-    /// list (the binder eats them first) so the long form is the catchable
-    /// one.</summary>
-    // (A string[] on purpose: CommonParameterCollisionGuardTests enumerates each cmdlet's static
-    // string sets to find short flags the binder could eat.)
+    /// <summary>The command's stdin, read only for an <c>-i</c> answer; the command runs once, in <see cref="EndProcessing"/>.</summary>
+    [Parameter(ValueFromPipeline = true)]
+    public PSObject? InputObject { get; set; }
+
+    private readonly List<PSObject> _stdin = new();
+
+    /// <summary>Valid GNU <c>cp</c> options ps-bash refuses. <c>-Z</c>/<c>--context</c> need SELinux, which no
+    /// supported platform has; <c>--copy-contents</c> only matters for special files (FIFOs), which cp here never copies.
+    /// (A string[] on purpose: CommonParameterCollisionGuardTests enumerates each cmdlet's static string sets.)</summary>
     private static readonly string[] CpValidButUnsupported =
     {
-        "-i", "--interactive", "-l", "--link", "-s", "--symbolic-link",
-        "-b", "--backup", "--reflink", "-P", "--no-dereference",
-        "-L", "--dereference", "-H", "-t", "--target-directory",
-        "-T", "--no-target-directory", "-x", "--one-file-system",
-        "--sparse", "--strip-trailing-slashes", "-Z", "--context",
-        "--attributes-only", "-d",
-        // valid GNU long options
-        "--parents", "--remove-destination", "--copy-contents", "--debug", "-S", "--suffix",
+        "-Z", "--context", "--copy-contents",
     };
 
-    private const string OptRecursive = "recursive", OptNoClobber = "no-clobber", OptForce = "force",
-        OptVerbose = "verbose", OptPreserve = "preserve", OptUpdate = "update", OptArchive = "archive",
-        OptPreserveList = "preserve-list", OptNoPreserve = "no-preserve";
-
     /// <summary>GNU cp long_options[] order; getopt_long lists ambiguous-prefix candidates in it.</summary>
-    private static readonly string[] CpLongOptionOrder = { "archive", "attributes-only", "copy-contents", "context", "debug", "dereference", "no-clobber", "no-dereference", "no-preserve", "no-target-directory", "parents", "preserve", "recursive", "remove-destination", "reflink", "sparse", "strip-trailing-slashes", "suffix", "symbolic-link", "verbose", "version" };
+    private static readonly string[] CpLongOptionOrder =
+    {
+        "archive", "attributes-only", "copy-contents", "context", "debug", "dereference", "no-clobber",
+        "no-dereference", "no-preserve", "no-target-directory", "parents", "preserve", "recursive",
+        "remove-destination", "reflink", "sparse", "strip-trailing-slashes", "suffix", "symbolic-link",
+        "verbose", "version",
+    };
 
     /// <summary>cp's whole option surface, built once for the shared ordered parser.</summary>
     private static readonly OptSpecSet CpSpec = new(
         new[]
         {
-            new OptSpec(OptRecursive, 'r', "recursive"),
-            new OptSpec(OptRecursive, 'R', null),
-            new OptSpec(OptNoClobber, 'n', "no-clobber"),
-            new OptSpec(OptForce, 'f', "force"),
-            new OptSpec(OptVerbose, 'v', "verbose"),
-            new OptSpec(OptPreserve, 'p', null),
+            new OptSpec(CpPlan.OptRecursive, 'r', "recursive"),
+            new OptSpec(CpPlan.OptRecursive, 'R', null),
+            new OptSpec(CpPlan.OptNoClobber, 'n', "no-clobber"),
+            new OptSpec(CpPlan.OptForce, 'f', "force"),
+            new OptSpec(CpPlan.OptVerbose, 'v', "verbose"),
+            new OptSpec(CpPlan.OptPreserve, 'p', null),
             // --preserve[=ATTR_LIST] (argument optional, attached only) and --no-preserve=ATTR_LIST
             // (argument required): resolved in command-line order by CpPreserve.
-            new OptSpec(OptPreserveList, '\0', "preserve", OptKind.OptionalValue),
-            new OptSpec(OptNoPreserve, '\0', "no-preserve", OptKind.Value),
-            new OptSpec(OptUpdate, 'u', null),
-            // GNU >= 9.3: --update[=older|all|none|none-fail]; bare / =older is -u.
-            new OptSpec(OptUpdate, '\0', "update", OptKind.OptionalValue),
-            new OptSpec(OptArchive, 'a', "archive"),
+            new OptSpec(CpPlan.OptPreserveList, '\0', "preserve", OptKind.OptionalValue),
+            new OptSpec(CpPlan.OptNoPreserve, '\0', "no-preserve", OptKind.Value),
+            new OptSpec(CpPlan.OptUpdate, 'u', null),
+            // GNU >= 9.3: --update[=all|none|older]; bare / =older is -u.
+            new OptSpec(CpPlan.OptUpdate, '\0', "update", OptKind.OptionalValue),
+            new OptSpec(CpPlan.OptArchive, 'a', "archive"),
+            new OptSpec(CpPlan.OptInteractive, 'i', "interactive"),
+            new OptSpec(CpPlan.OptLink, 'l', "link"),
+            new OptSpec(CpPlan.OptSymbolic, 's', "symbolic-link"),
+            new OptSpec(CpPlan.OptBackup, 'b', null),
+            new OptSpec(CpPlan.OptBackupControl, '\0', "backup", OptKind.OptionalValue),
+            new OptSpec(CpPlan.OptSuffix, 'S', "suffix", OptKind.Value),
+            new OptSpec(CpPlan.OptTargetDirectory, 't', "target-directory", OptKind.Value),
+            new OptSpec(CpPlan.OptNoTargetDirectory, 'T', "no-target-directory"),
+            new OptSpec(CpPlan.OptReflink, '\0', "reflink", OptKind.OptionalValue),
+            new OptSpec(CpPlan.OptDereference, 'L', "dereference"),
+            new OptSpec(CpPlan.OptNoDereference, 'P', "no-dereference"),
+            new OptSpec(CpPlan.OptDerefCommandLine, 'H', null),
+            new OptSpec(CpPlan.OptNoDerefPreserveLinks, 'd', null),
+            new OptSpec(CpPlan.OptOneFileSystem, 'x', "one-file-system"),
+            new OptSpec(CpPlan.OptSparse, '\0', "sparse", OptKind.Value),
+            new OptSpec(CpPlan.OptStripSlashes, '\0', "strip-trailing-slashes"),
+            new OptSpec(CpPlan.OptAttributesOnly, '\0', "attributes-only"),
+            new OptSpec(CpPlan.OptRemoveDestination, '\0', "remove-destination"),
+            new OptSpec(CpPlan.OptParents, '\0', "parents"),
+            new OptSpec(CpPlan.OptDebug, '\0', "debug"),
         },
         validButUnsupported: CpValidButUnsupported,
         allowAbbrev: true,
         gnuInfoOptions: true,
         longOptionOrder: CpLongOptionOrder);
 
+    private const string TryHelp = "\nTry 'cp --help' for more information.";
+
     /// <summary>Pure argv scan (unit-test seam): options, operands and the first error.</summary>
     internal static ParsedArgs ScanArgs(string[] args) => ArgParser.Parse(args, CpSpec);
 
     protected override void ProcessRecord()
     {
-        // Re-inject every decoy-bound flag. The transpiler single-quotes each dash-leading word
-        // for cp (PsEmitter.OrderedArgCommands) so they arrive in Arguments in order; a DIRECT
-        // call (`Invoke-BashCp -v a b`, Pester) binds the decoys instead — bare -i/-d/-v/-p would
-        // crash the binder or be silently swallowed as common parameters. Prepending is safe:
-        // a decoy can only have been bound before any `--`.
+        if (InputObject != null) _stdin.Add(InputObject);
+    }
+
+    protected override void EndProcessing() => Execute();
+
+    private void Execute()
+    {
+        // Re-inject every decoy-bound flag. The transpiler single-quotes each dash-leading word for cp
+        // (PsEmitter.OrderedArgCommands) so they arrive in Arguments in order; a DIRECT call
+        // (`Invoke-BashCp -v a b`, Pester) binds the decoys instead. Prepending is safe: a decoy can only
+        // have been bound before any `--`.
         var args = BashRuntime.PrependDecoys(Arguments,
             (v.IsPresent, "-v"), (p.IsPresent, "-p"), (I.IsPresent, "-i"), (D.IsPresent, "-d"), (A.IsPresent, "-a"));
 
@@ -147,50 +143,31 @@ public sealed class InvokeBashCpCommand : PSCmdlet
         if (FileSystemHelpers.TryHandleVersion(this, "cp", args)) return;
         if (Array.IndexOf(args, "--help") >= 0)
         {
-            foreach (var line in InvokeCommand.InvokeScript(
-                         "param($n) Show-BashHelp $n", "cp"))
-            {
+            foreach (var line in InvokeCommand.InvokeScript("param($n) Show-BashHelp $n", "cp"))
                 WriteObject(line);
-            }
             return;
         }
 
-        // Shared ordered parser: bundles, `--`, long options and abbreviations, and the
-        // valid-but-unsupported / unknown classifier are all one scan (see CpSpec). Classification
-        // happens DURING the scan, so nothing after `--` is ever an option — `cp -- -a b` copies
-        // a file named "-a".
+        // Classification happens DURING the scan, so nothing after `--` is ever an option — `cp -- -a b`
+        // copies a file named "-a".
         var parsed = ScanArgs(args);
         if (FileSystemHelpers.TryWriteParseError(this, "cp", parsed)) return;
         if (FileSystemHelpers.TryHandleInfoOptions(this, "cp", parsed)) return;
 
-        // --update=WHEN: only the default/`older` policy (== -u) is implemented; refusing the
-        // rest loudly beats silently copying with the wrong overwrite policy.
-        foreach (var upd in parsed.All(OptUpdate))
+        if (!CpPlan.TryBuild(parsed, Environment.GetEnvironmentVariable, out var plan, out var planError))
         {
-            if (upd.Value is not null && upd.Value != "older")
-            {
-                FileSystemHelpers.WriteBashError(this,
-                    $"cp: option '--update={upd.Value}' is recognized but not supported by ps-bash");
-                FileSystemHelpers.SetLastExitCode(this, ArgError.UnsupportedExitCode);
-                return;
-            }
+            FileSystemHelpers.WriteBashError(this, planError!);
+            return;
         }
-
-        // -a / --archive == -dR --preserve=all; on Windows we honor the recursive +
-        // timestamp/attribute preservation that maps.
-        bool archive = parsed.Has(OptArchive);
-        bool recursive = archive || parsed.Has(OptRecursive);
-        bool noClobber = parsed.Has(OptNoClobber);
-        // coreutils 9.4 warns once per invocation, before any other diagnostic, and leaves the exit
-        // status alone. -n wins over -f in either order (oracle-checked), so `noClobber` ignores order.
-        if (noClobber)
+        // coreutils 9.4 warns once per invocation, before any other diagnostic, and leaves the exit status alone.
+        if (plan.NoClobberWarning)
             FileSystemHelpers.WriteStderr(this,
                 "cp: warning: behavior of -n is non-portable and may change in future; use --update=none instead");
-        bool force = parsed.Has(OptForce);
-        bool verbose = parsed.Has(OptVerbose);
-        // -p / -a / --preserve[=LIST] / --no-preserve=LIST, resolved in command-line order. A bad
-        // attribute word is a usage error; naming `context` needs SELinux, which is never present here.
-        if (!CpPreserve.TryFrom(parsed, OptPreserve, OptArchive, OptPreserveList, OptNoPreserve, out var preserve, out var preserveError))
+
+        // -p / -a / --preserve[=LIST] / --no-preserve=LIST, resolved in command-line order. A bad attribute
+        // word is a usage error; naming `context` needs SELinux, which is never present here.
+        if (!CpPreserve.TryFrom(parsed, CpPlan.OptPreserve, CpPlan.OptArchive, CpPlan.OptPreserveList, CpPlan.OptNoPreserve,
+                out var preserve, out var preserveError))
         {
             FileSystemHelpers.WriteBashError(this, preserveError!);
             return;
@@ -200,288 +177,187 @@ public sealed class InvokeBashCpCommand : PSCmdlet
             FileSystemHelpers.WriteBashError(this, "cp: cannot preserve security context without an SELinux-enabled kernel");
             return;
         }
-        bool update = parsed.Has(OptUpdate);
+
         var operands = parsed.Operands();
-
-        if (operands.Count < 2)
-        {
-            FileSystemHelpers.WriteBashError(this, "cp: missing file operand");
-            return;
-        }
-
-        var destRaw = operands[^1];
-        var sourceOperands = operands.GetRange(0, operands.Count - 1);
+        var shape = ResolveShape(plan, operands);
+        if (shape is null) return;
+        var (sourceOperands, destRaw, destIsDirectoryMode) = shape.Value;
 
         // Expand globs on the source list, preserving order.
         var sources = new List<FileSystemHelpers.OperandPath>();
         foreach (var s in sourceOperands)
         {
-            foreach (var expanded in FileSystemHelpers.ResolveOperands(this, s))
+            // --strip-trailing-slashes applies when the destination is a directory (GNU do_copy's directory
+            // branch); a single `cp -r --strip a/ b` leaves the slash, as GNU does.
+            var typed = plan.StripSlashes && destIsDirectoryMode ? StripSlashes(s) : s;
+            foreach (var expanded in FileSystemHelpers.ResolveOperands(this, typed)) sources.Add(expanded);
+        }
+
+        var destAbs = SessionState.Path.GetUnresolvedProviderPathFromPSPath(destRaw);
+
+        // Validate the operand shape BEFORE any write: several sources need an existing directory
+        // (`cp a b result` used to leave only b's bytes in a file named result).
+        if (!destIsDirectoryMode || plan.TargetDirectory is null)
+        {
+            var shapeError = TransferValidation.CheckOperandShape("cp", sources.Count, destRaw, destAbs);
+            if (shapeError != null)
             {
-                sources.Add(expanded);
+                FileSystemHelpers.WriteBashError(this, shapeError);
+                return;
             }
         }
 
-        bool hadError = false;
-        var destAbs = SessionState.Path.GetUnresolvedProviderPathFromPSPath(destRaw);
-        bool destIsExistingDir = Directory.Exists(destAbs);
-
-        // Validate the operand shape BEFORE any write: several sources need an existing
-        // directory (`cp a b result` used to leave only b's bytes in a file named result).
-        var shapeError = TransferValidation.CheckOperandShape("cp", sources.Count, destRaw, destAbs);
-        if (shapeError != null)
+        // Answers to -i prompts come from this command's stdin (the pipeline); none at all is EOF = "no".
+        var stdin = new StdinLineSource(this, _stdin);
+        bool Confirm(string prompt)
         {
-            FileSystemHelpers.WriteBashError(this, shapeError);
-            return;
+            FileSystemHelpers.WriteStderr(this, prompt);
+            return StdinLineSource.IsYes(stdin.ReadLine());
         }
 
+        var cwd = SessionState.Path.CurrentFileSystemLocation.ProviderPath;
+        var engine = new CpEngine(plan, preserve, Confirm,
+            say: text => WriteObject(BashRuntime.NewBashObject(text)),
+            error: message => FileSystemHelpers.WriteBashError(this, message),
+            cwd: cwd);
+
+        bool hadError = false;
         foreach (var operand in sources)
         {
             var src = operand.Path;
             var srcDisplay = operand.Display;
-            bool srcIsFile = File.Exists(src);
-            bool srcIsDir = !srcIsFile && Directory.Exists(src);
 
-            if (!srcIsFile && !srcIsDir)
+            // A dangling symbolic link is still an entry (copied as a link under -P); only a name that
+            // does not exist at all is "cannot stat".
+            if (!File.Exists(src) && !Directory.Exists(src) && !FileSystemHelpers.IsReparsePoint(src))
             {
-                FileSystemHelpers.WriteBashError(this,
-                    $"cp: cannot stat '{srcDisplay}': No such file or directory");
+                FileSystemHelpers.WriteBashError(this, $"cp: cannot stat '{srcDisplay}': No such file or directory");
                 hadError = true;
                 continue;
             }
 
-            if (srcIsDir && !recursive)
+            string target, targetDisplay;
+            if (plan.Parents)
             {
-                FileSystemHelpers.WriteBashError(this,
-                    $"cp: -r not specified; omitting directory '{srcDisplay}'");
-                hadError = true;
-                continue;
+                if (!TryParentsTarget(plan, engine, srcDisplay, destAbs, destRaw, out target, out targetDisplay)) { hadError = true; continue; }
+            }
+            else if (destIsDirectoryMode)
+            {
+                target = TransferValidation.ResolveTarget(src, destAbs, destIsDir: true);
+                // Diagnostics name the destination as typed (GNU): `cp f d/` reports 'd/f', not the full path.
+                targetDisplay = FileSystemHelpers.JoinDisplay(destRaw, srcDisplay);
+            }
+            else
+            {
+                target = destAbs;
+                targetDisplay = destRaw;
             }
 
-            var targetPath = TransferValidation.ResolveTarget(src, destAbs, destIsExistingDir);
-            // Diagnostics name the destination as typed (GNU): `cp f d/` reports 'd/f', not the full path.
-            var targetDisplay = destIsExistingDir ? FileSystemHelpers.JoinDisplay(destRaw, srcDisplay) : destRaw;
-
-            // -n skips an existing destination FILE before anything else is asked — even when it is
-            // the same file (GNU: `cp -n a a` and `cp -n a hardlink-of-a` are silent no-ops, exit 0).
-            if (noClobber && !srcIsDir && File.Exists(targetPath))
-            {
-                continue;
-            }
-
-            var identityError = TransferValidation.CheckIdentity("cp", src, srcIsDir, targetPath, srcDisplay, targetDisplay);
-            if (identityError != null)
-            {
-                FileSystemHelpers.WriteBashError(this, identityError);
-                hadError = true;
-                continue;
-            }
-
-            // Type conflicts (dir over file / file over dir) are errors; an existing target
-            // DIRECTORY is not — cp merges into it (replaceEmptyDirOnly: false).
-            var occupancyError = TransferValidation.CheckOccupancy("cp", src, srcIsDir, targetPath, replaceEmptyDirOnly: false,
-                srcDisplay, targetDisplay);
-            if (occupancyError != null)
-            {
-                FileSystemHelpers.WriteBashError(this, occupancyError);
-                hadError = true;
-                continue;
-            }
-
-            // GNU never creates missing parent directories for the destination
-            // (`cp f nodir/x` -> "cannot create regular file 'nodir/x': No such file or directory");
-            // only an explicit mkdir -p does. Refuse before any write.
-            var targetParent = Path.GetDirectoryName(targetPath);
-            if (!string.IsNullOrEmpty(targetParent) && !Directory.Exists(targetParent))
-            {
-                FileSystemHelpers.WriteBashError(this,
-                    $"cp: cannot create {(srcIsDir ? "directory" : "regular file")} '{targetDisplay}': No such file or directory");
-                hadError = true;
-                continue;
-            }
-
-            // -n skips a conflicting FILE. A directory source is traversed regardless: only the
-            // individual files that already exist are skipped (handled per file below).
-            if (noClobber && !srcIsDir && File.Exists(targetPath))
-            {
-                continue;
-            }
-
-            try
-            {
-                if (srcIsDir)
-                {
-                    // Merge: never delete the existing target tree. Same-named files are replaced
-                    // (unless -n), destination-only files survive.
-                    var errors = new List<string>();
-                    CopyDirectoryRecursive(src, targetPath, preserve, update, noClobber, force, errors,
-                        srcDisplay, targetDisplay);
-                    if (errors.Count > 0)
-                    {
-                        foreach (var e in errors) FileSystemHelpers.WriteBashError(this, e);
-                        hadError = true;
-                    }
-                }
-                else
-                {
-                    // -u: skip when the destination exists and is not older than the source.
-                    if (update && File.Exists(targetPath)
-                        && File.GetLastWriteTimeUtc(src) <= File.GetLastWriteTimeUtc(targetPath))
-                    {
-                        continue;
-                    }
-                    if (force) FileSystemHelpers.ClearReadOnly(targetPath);
-                    CopyFile(src, targetPath, preserve);
-                }
-            }
-            catch (Exception ex)
-            {
-                if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-                FileSystemHelpers.WriteBashError(this,
-                    $"cp: cannot copy '{srcDisplay}' to '{targetDisplay}': {ex.Message}");
-                hadError = true;
-                continue;
-            }
-
-            if (verbose)
-            {
-                WriteObject(BashRuntime.NewBashObject(
-                    $"'{FileSystemHelpers.ToBashPath(srcDisplay)}' -> '{FileSystemHelpers.ToBashPath(targetDisplay)}'\n"));
-            }
+            if (!engine.CopyEntry(src, srcDisplay, target, targetDisplay, commandLine: true)) hadError = true;
         }
 
         if (hadError) FileSystemHelpers.SetLastExitCode(this, 1);
     }
 
     /// <summary>
-    /// Merge-copies <paramref name="src"/> into <paramref name="dest"/> (created if absent). Existing
-    /// destination entries are never deleted: a same-named file is overwritten (skipped under
-    /// <paramref name="noClobber"/> / <paramref name="update"/>), a same-named directory is descended
-    /// into, and a file/dir type clash is appended to <paramref name="errors"/> and skipped.
+    /// Splits the operands into sources and destination per GNU's four forms: <c>-t DIR SOURCE...</c>,
+    /// <c>-T SOURCE DEST</c>, <c>SOURCE DEST</c> and <c>SOURCE... DIRECTORY</c> (the destination is
+    /// "directory mode" when it is an existing directory and <c>-T</c> is not given). Reports the GNU
+    /// diagnostic and returns null when the shape is wrong.
     /// </summary>
-    private static void CopyDirectoryRecursive(string src, string dest, CpPreserve preserve, bool update,
-        bool noClobber, bool force, List<string> errors, string srcDisplay, string destDisplay)
+    private (List<string> Sources, string Dest, bool DirectoryMode)? ResolveShape(CpPlan plan, List<string> operands)
     {
-        bool destExisted = Directory.Exists(dest);
-        int? previousMode = destExisted ? PlatformMode.TryGet(dest) : null;
-        Directory.CreateDirectory(dest);
-        foreach (var file in Directory.EnumerateFiles(src))
+        if (plan.TargetDirectory is { } tdir)
         {
-            var name = Path.GetFileName(file);
-            var target = Path.Combine(dest, name);
-            var clash = TransferValidation.CheckOccupancy("cp", file, srcIsDir: false, target, replaceEmptyDirOnly: false,
-                FileSystemHelpers.JoinDisplay(srcDisplay, name), FileSystemHelpers.JoinDisplay(destDisplay, name));
-            if (clash != null) { errors.Add(clash); continue; }
-            if (File.Exists(target))
+            if (operands.Count == 0)
             {
-                if (noClobber) continue;
-                if (update && File.GetLastWriteTimeUtc(file) <= File.GetLastWriteTimeUtc(target)) continue;
-                if (force) FileSystemHelpers.ClearReadOnly(target);
+                FileSystemHelpers.WriteBashError(this, "cp: missing file operand" + TryHelp);
+                return null;
             }
-            CopyFile(file, target, preserve);
+            var abs = SessionState.Path.GetUnresolvedProviderPathFromPSPath(tdir);
+            if (!Directory.Exists(abs))
+            {
+                FileSystemHelpers.WriteBashError(this, File.Exists(abs)
+                    ? $"cp: target directory '{tdir}': Not a directory"
+                    : $"cp: target directory '{tdir}': No such file or directory");
+                return null;
+            }
+            return (operands, tdir, true);
         }
-        foreach (var sub in Directory.EnumerateDirectories(src))
+
+        if (operands.Count == 0)
         {
-            var subDest = Path.Combine(dest, Path.GetFileName(sub));
-            // A directory junction / symlink must be copied as a LINK, never recursed into:
-            // recursing would copy the link TARGET's contents (a destructive escape out of the
-            // source tree), and a cycle (link -> ancestor) would recurse until the stack overflows.
-            if (FileSystemHelpers.IsReparsePoint(sub))
-            {
-                FileSystemHelpers.TryCopyDirectoryLink(sub, subDest);
-                continue;
-            }
-            var subName = Path.GetFileName(sub);
-            var subSrcDisplay = FileSystemHelpers.JoinDisplay(srcDisplay, subName);
-            var subDestDisplay = FileSystemHelpers.JoinDisplay(destDisplay, subName);
-            var subClash = TransferValidation.CheckOccupancy("cp", sub, srcIsDir: true, subDest, replaceEmptyDirOnly: false,
-                subSrcDisplay, subDestDisplay);
-            if (subClash != null) { errors.Add(subClash); continue; }
-            CopyDirectoryRecursive(sub, subDest, preserve, update, noClobber, force, errors, subSrcDisplay, subDestDisplay);
+            FileSystemHelpers.WriteBashError(this, "cp: missing file operand" + TryHelp);
+            return null;
         }
-        // Apply the directory's mode and timestamps LAST — writing children bumps the dir mtime
-        // (GNU cp -p restores it after the contents are in place) and a read-only directory must
-        // not block its own children.
-        ApplyAttributes(src, dest, isDir: true, preserve, destExisted, previousMode);
+        if (operands.Count == 1)
+        {
+            FileSystemHelpers.WriteBashError(this, $"cp: missing destination file operand after '{operands[0]}'" + TryHelp);
+            return null;
+        }
+
+        var destRaw = operands[^1];
+        var destAbs = SessionState.Path.GetUnresolvedProviderPathFromPSPath(destRaw);
+
+        if (plan.NoTargetDirectory)
+        {
+            if (operands.Count > 2)
+            {
+                FileSystemHelpers.WriteBashError(this, $"cp: extra operand '{operands[2]}'" + TryHelp);
+                return null;
+            }
+            return (new List<string> { operands[0] }, destRaw, false);
+        }
+
+        bool dirMode = Directory.Exists(destAbs);
+        if (plan.Parents && !dirMode)
+        {
+            FileSystemHelpers.WriteBashError(this, "cp: with --parents, the destination must be a directory" + TryHelp);
+            return null;
+        }
+        return (operands.GetRange(0, operands.Count - 1), destRaw, dirMode);
+    }
+
+    private static string StripSlashes(string operand)
+    {
+        var trimmed = operand.TrimEnd('/', '\\');
+        return trimmed.Length == 0 ? operand : trimmed;
     }
 
     /// <summary>
-    /// Copies one file and then applies the requested attribute policy (see
-    /// <see cref="CpPreserve"/>). The destination's prior Unix mode is captured BEFORE the copy
-    /// because <see cref="File.Copy(string, string, bool)"/> overwrites it with the source's.
+    /// <c>--parents</c>: the destination of <paramref name="srcDisplay"/> is DIR/&lt;its path as typed&gt;; the
+    /// leading directories are created, each announced as <c>SRCPREFIX -&gt; DESTPREFIX</c> (no quotes) under
+    /// <c>-v</c>/<c>--debug</c> (oracle: <c>p -&gt; out/p</c>, <c>/etc -&gt; out/etc</c>).
     /// </summary>
-    private static void CopyFile(string src, string dest, CpPreserve preserve)
+    private bool TryParentsTarget(CpPlan plan, CpEngine engine, string srcDisplay, string destAbs, string destRaw,
+        out string target, out string targetDisplay)
     {
-        bool existed = File.Exists(dest);
-        int? previousMode = existed ? PlatformMode.TryGet(dest) : null;
-        File.Copy(src, dest, overwrite: true);
-        ApplyAttributes(src, dest, isDir: false, preserve, existed, previousMode);
-    }
-
-    /// <summary>
-    /// Applies the attribute policy to a finished copy, best-effort (a locked attribute or an
-    /// unsupported timestamp must not fail the copy itself). <b>Mode</b> is the Unix permission bits
-    /// on Linux/macOS — GNU semantics: preserved exactly, cleared to 0666/0777 masked by the umask, or
-    /// by default the source's bits masked by the umask for a NEW file while an existing destination
-    /// keeps its own; on Windows, where there are no mode bits, the read-only / hidden / archive
-    /// attributes stand in (copied when preserving, read-only cleared by <c>--no-preserve=mode</c>).
-    /// <b>Timestamps</b> (creation too on Windows) are real on every OS. Ownership, links and xattr
-    /// have nothing to do.
-    /// </summary>
-    private static void ApplyAttributes(string src, string dest, bool isDir, CpPreserve preserve,
-        bool destExisted, int? previousMode)
-    {
-        try
+        _ = engine;
+        var rooted = srcDisplay.StartsWith('/');
+        var relative = srcDisplay.TrimStart('/');
+        var parts = relative.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        target = destAbs;
+        targetDisplay = destRaw;
+        var srcPrefix = rooted ? "/" : "";
+        for (int i = 0; i < parts.Length; i++)
         {
-            if (OperatingSystem.IsWindows())
+            target = Path.Combine(target, parts[i]);
+            targetDisplay = FileSystemHelpers.AppendDisplay(targetDisplay, parts[i]);
+            srcPrefix = srcPrefix.Length == 0 ? parts[i] : srcPrefix.EndsWith('/') ? srcPrefix + parts[i] : srcPrefix + "/" + parts[i];
+            if (i == parts.Length - 1) break;
+            if (Directory.Exists(target)) continue;
+            try
             {
-                if (preserve.Mode == CpModePolicy.Preserve)
-                {
-                    if (isDir) new DirectoryInfo(dest).Attributes = new DirectoryInfo(src).Attributes;
-                    else new FileInfo(dest).Attributes = new FileInfo(src).Attributes;
-                }
-                else if (preserve.Mode == CpModePolicy.Clear)
-                {
-                    FileSystemHelpers.ClearReadOnly(dest);
-                }
+                Directory.CreateDirectory(target);
             }
-            else
+            catch (Exception ex) when (!FileSystemHelpers.IsPipelineStop(ex))
             {
-                PlatformMode.Apply(src, dest, isDir, preserve.Mode, destExisted, previousMode);
+                FileSystemHelpers.WriteBashError(this, $"cp: cannot make directory '{targetDisplay}': {ex.Message}");
+                return false;
             }
-
-            if (!preserve.Timestamps)
-            {
-                // Windows CopyFile carries the source's modification time over; GNU stamps the
-                // copy with "now" unless timestamps are preserved. (Linux/macOS already do.)
-                if (OperatingSystem.IsWindows() && !isDir)
-                {
-                    var now = DateTime.UtcNow;
-                    File.SetLastWriteTimeUtc(dest, now);
-                    File.SetLastAccessTimeUtc(dest, now);
-                }
-            }
-            else
-            {
-                if (isDir)
-                {
-                    var s = new DirectoryInfo(src);
-                    var d = new DirectoryInfo(dest);
-                    d.CreationTimeUtc = s.CreationTimeUtc;
-                    d.LastWriteTimeUtc = s.LastWriteTimeUtc;
-                    d.LastAccessTimeUtc = s.LastAccessTimeUtc;
-                }
-                else
-                {
-                    File.SetCreationTimeUtc(dest, File.GetCreationTimeUtc(src));
-                    File.SetLastWriteTimeUtc(dest, File.GetLastWriteTimeUtc(src));
-                    File.SetLastAccessTimeUtc(dest, File.GetLastAccessTimeUtc(src));
-                }
-            }
+            if (plan.Verbose || plan.Debug)
+                WriteObject(BashRuntime.NewBashObject($"{srcPrefix} -> {FileSystemHelpers.ToBashPath(targetDisplay)}\n"));
         }
-        catch
-        {
-            // Preservation is best-effort; see above.
-        }
+        return parts.Length > 0;
     }
 }

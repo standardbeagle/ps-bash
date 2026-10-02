@@ -721,7 +721,7 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
     // (exit 2), like grep/cut/sort/etc.
 
     [Theory]
-    [InlineData("Invoke-BashCp --reflink a b")]      // valid GNU cp flag, unimplemented
+    [InlineData("Invoke-BashCp --context a b")]      // valid GNU cp flag (SELinux), unimplemented
     [InlineData("Invoke-BashMv --backup a b")]       // valid GNU mv flag, unimplemented
     [InlineData("Invoke-BashMkdir --context d")]     // valid GNU mkdir flag (SELinux), unimplemented
     [InlineData("Invoke-BashRmdir --ignore-fail-on-non-empty d")]
@@ -764,7 +764,7 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
         // not leak into the operand list because a later `--` appeared. (--reflink
         // is a catalog flag that reaches Arguments; bare -i would be eaten by the
         // -InformationAction binder collision before the cmdlet runs.)
-        Fail("Invoke-BashCp --reflink -- a b", 2);
+        Fail("Invoke-BashCp --context -- a b", 2);
     }
 
     [Fact]
@@ -829,13 +829,16 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
     }
 
     [Fact]
-    public void Cp_QuotedBareI_IsRefusedNotSwallowedByTheBinder()
+    public void Cp_QuotedBareI_PromptsNotSwallowedByTheBinder()
     {
+        // -i is implemented: with an existing destination and no answer on stdin (EOF = "no") nothing is
+        // copied and, unlike rm, GNU cp exits 1.
         var src = Path.Combine(_tmpRoot, "isrc.txt");
         File.WriteAllText(src, "x");
         var dst = Path.Combine(_tmpRoot, "idst.txt");
-        Fail($"Invoke-BashCp '-i' {Q(src)} {Q(dst)}", 2);
-        Assert.False(File.Exists(dst));
+        File.WriteAllText(dst, "old");
+        Fail($"Invoke-BashCp '-i' {Q(src)} {Q(dst)}", 1);
+        Assert.Equal("old", File.ReadAllText(dst));
     }
 
     [Fact]
@@ -899,12 +902,12 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
     }
 
     [Fact]
-    public void Cp_UpdateWithUnimplementedPolicy_IsRefusedLoudly()
+    public void Cp_UpdateWithAnUnknownPolicy_IsAUsageError()
     {
         var src = Path.Combine(_tmpRoot, "usrc.txt");
         File.WriteAllText(src, "x");
         var dst = Path.Combine(_tmpRoot, "udst.txt");
-        Fail($"Invoke-BashCp '--update=none' {Q(src)} {Q(dst)}", 2);
+        Fail($"Invoke-BashCp '--update=bogus' {Q(src)} {Q(dst)}", 1);
         Assert.False(File.Exists(dst));
         // `--update=older` is -u: copies when the destination is missing.
         Ok($"Invoke-BashCp '--update=older' {Q(src)} {Q(dst)}");
