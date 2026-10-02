@@ -898,13 +898,10 @@ public class InvokeBashFindCommandTests : IDisposable, IClassFixture<SharedPwshF
     public void Find_UnsupportedStandalonePredicate_EmitsError()
     {
         Mk("a.txt");
-        // -ls is still an unsupported standalone predicate (-delete/-prune/-depth are now supported).
+        // -ls is now implemented (prints the ls-style line): nothing errors.
         var results = RunAllowError(
             $"Invoke-BashFind '{Esc(_tmpDir)}' -ls -name 'a.txt' 2>&1");
-        bool matchedAfterError = results.Any(o =>
-            (string?)o.Properties["Name"]?.Value == "a.txt");
-        Assert.True(matchedAfterError,
-            "predicate parser should continue after a standalone-unsupported error");
+        Assert.DoesNotContain(results, o => o.BaseObject is ErrorRecord);
     }
 
     [Fact]
@@ -932,9 +929,9 @@ public class InvokeBashFindCommandTests : IDisposable, IClassFixture<SharedPwshF
         // no filter applied, all files returned.
         Mk("a.txt", "data");
         Mk("b.txt", "data");
-        var results = Run($"Invoke-BashFind '{Esc(_tmpDir)}' -type f -size 'garbage'");
-        Assert.True(results.Count >= 2,
-            "malformed -size should be inert, not exclusionary");
+        // GNU find rejects a malformed -size argument (exit 1); nothing is printed.
+        var results = RunAllowError($"Invoke-BashFind '{Esc(_tmpDir)}' -type f -size 'garbage' 2>&1");
+        Assert.DoesNotContain(results, o => o.TypeNames.Contains("PsBash.FindEntry"));
     }
 
     [Fact]
