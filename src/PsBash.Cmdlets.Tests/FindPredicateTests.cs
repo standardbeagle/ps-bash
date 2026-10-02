@@ -486,7 +486,10 @@ public class FindPredicateTests : IClassFixture<SharedPwshFixture>, IDisposable
         Find($". '-name' a.txt '-fprintf' {Q(o)} '[%p|%s]\\n'").AssertSuccess();
         Assert.Equal("[./a.txt|2]\n", File.ReadAllText(o).Replace("\r\n", "\n"));
         Find($". '-name' '*.txt' '-fprint0' {Q(o)}").AssertSuccess();
-        Assert.Equal("./a.txt\0./sub/b.txt\0", File.ReadAllText(o));
+        // find does not sort (readdir order differs per filesystem: APFS vs ext4/NTFS): compare the NUL records as a set.
+        var nul = File.ReadAllText(o);
+        Assert.EndsWith("\0", nul);
+        Assert.Equal(new[] { "./a.txt", "./sub/b.txt" }, nul.Split('\0', StringSplitOptions.RemoveEmptyEntries).OrderBy(x => x, StringComparer.Ordinal).ToArray());
         Find($". '-name' a.txt '-fls' {Q(o)}").AssertSuccess();
         Assert.Matches(@"^\s*\d+ +4 -rw-r--r-- .* \./a\.txt\r?\n$", File.ReadAllText(o));
         var withPrint = Find($". '-name' a.txt '-fprint' {Q(o)} '-print'").AssertSuccess();
