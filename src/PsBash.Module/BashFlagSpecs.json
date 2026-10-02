@@ -999,6 +999,186 @@
     {
       "flag": "--hidden",
       "desc": "include dotfiles"
+    },
+    {
+      "flag": "-e",
+      "desc": "pattern (repeatable)"
+    },
+    {
+      "flag": "-f",
+      "desc": "patterns from file"
+    },
+    {
+      "flag": "-S",
+      "desc": "smart case"
+    },
+    {
+      "flag": "-s",
+      "desc": "case sensitive"
+    },
+    {
+      "flag": "-x",
+      "desc": "line regexp"
+    },
+    {
+      "flag": "-u",
+      "desc": "unrestricted (-uu: hidden too)"
+    },
+    {
+      "flag": "-t",
+      "desc": "search only this file type"
+    },
+    {
+      "flag": "-T",
+      "desc": "exclude this file type"
+    },
+    {
+      "flag": "--type-list",
+      "desc": "list file types"
+    },
+    {
+      "flag": "--type-add",
+      "desc": "define a file type (name:glob)"
+    },
+    {
+      "flag": "--type-clear",
+      "desc": "clear a file type"
+    },
+    {
+      "flag": "-m",
+      "desc": "max matching lines per file"
+    },
+    {
+      "flag": "-q",
+      "desc": "quiet: exit status only"
+    },
+    {
+      "flag": "-H",
+      "desc": "print file names"
+    },
+    {
+      "flag": "-I",
+      "desc": "no file names"
+    },
+    {
+      "flag": "-r",
+      "desc": "replace matches ($1, ${name})"
+    },
+    {
+      "flag": "--passthru",
+      "desc": "print every line"
+    },
+    {
+      "flag": "--column",
+      "desc": "column numbers"
+    },
+    {
+      "flag": "--vimgrep",
+      "desc": "vim-style file:line:col:text"
+    },
+    {
+      "flag": "-b",
+      "desc": "byte offsets"
+    },
+    {
+      "flag": "-0",
+      "desc": "NUL after file names"
+    },
+    {
+      "flag": "--files",
+      "desc": "list searchable files"
+    },
+    {
+      "flag": "--sort",
+      "desc": "sort by path|modified|accessed|created"
+    },
+    {
+      "flag": "--sortr",
+      "desc": "reverse sort"
+    },
+    {
+      "flag": "-d",
+      "desc": "max directory depth"
+    },
+    {
+      "flag": "-L",
+      "desc": "follow symlinks"
+    },
+    {
+      "flag": "--json",
+      "desc": "JSON lines output"
+    },
+    {
+      "flag": "--stats",
+      "desc": "print statistics"
+    },
+    {
+      "flag": "-z",
+      "desc": "search gzip files"
+    },
+    {
+      "flag": "-a",
+      "desc": "search binary files as text"
+    },
+    {
+      "flag": "-E",
+      "desc": "text encoding"
+    },
+    {
+      "flag": "-P",
+      "desc": "PCRE2 regex (mapped to .NET)"
+    },
+    {
+      "flag": "-U",
+      "desc": "multiline"
+    },
+    {
+      "flag": "--multiline-dotall",
+      "desc": "dot matches newline"
+    },
+    {
+      "flag": "-p",
+      "desc": "pretty: color, heading, line numbers"
+    },
+    {
+      "flag": "--color",
+      "desc": "never|auto|always|ansi"
+    },
+    {
+      "flag": "--colors",
+      "desc": "color spec type:attr:value"
+    },
+    {
+      "flag": "--trim",
+      "desc": "trim leading whitespace"
+    },
+    {
+      "flag": "--iglob",
+      "desc": "case-insensitive glob"
+    },
+    {
+      "flag": "--count-matches",
+      "desc": "count individual matches"
+    },
+    {
+      "flag": "--files-without-match",
+      "desc": "files without a match"
+    },
+    {
+      "flag": "--heading",
+      "desc": "group by file"
+    },
+    {
+      "flag": "--no-heading",
+      "desc": "path on every line"
+    },
+    {
+      "flag": "--no-ignore",
+      "desc": "ignore no files"
+    },
+    {
+      "flag": "-j",
+      "desc": "threads (accepted)"
     }
   ],
   "rm": [

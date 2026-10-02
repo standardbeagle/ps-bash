@@ -33,7 +33,7 @@ internal static class RgInput
         {
             case "auto": return true;
             case "none": none = true; return true;
-            case "utf-8" or "utf8" or "unicode-1-1-utf-8": encoding = new UTF8Encoding(false); return true;
+            case "utf-8" or "utf8" or "unicode-1-1-utf-8": encoding = RawBytes.Encoding; return true;
             case "latin1" or "latin-1" or "iso-8859-1" or "l1" or "iso8859-1" or "windows-1252" or "cp1252":
                 encoding = Encoding.GetEncoding(1252); return true;
             case "utf-16" or "utf-16le" or "utf16" or "ucs-2": encoding = new UnicodeEncoding(false, false); return true;
