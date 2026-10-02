@@ -116,6 +116,15 @@ public class InvokeBashXargsCommandTests : IClassFixture<SharedPwshFixture>
     }
 
     [Fact]
+    public void Xargs_NullDelimWithReplace_RunsOncePerNulItem()
+    {
+        // -0 picks the delimiter even with -I: items split on NUL, not on lines.
+        var (result, _) = Run("\"a b`0c`0\" | Invoke-BashXargs -0 -I '{}' echo 'f:{}'");
+        var lines = JoinBashText(result).Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        Assert.Equal(new[] { "f:a b", "f:c" }, lines);
+    }
+
+    [Fact]
     public void Xargs_NoRunIfEmpty_DoesNotInvokeCommandWhenInputIsEmpty()
     {
         // -r: with no input items, the command must not run. We probe by
