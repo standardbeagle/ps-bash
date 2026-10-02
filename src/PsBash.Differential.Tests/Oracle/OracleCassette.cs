@@ -162,7 +162,7 @@ public static class OracleCassette
         try
         {
             if (!TryParse(File.ReadAllText(path), out entry) ||
-                !string.Equals(entry!.Script, script, StringComparison.Ordinal))
+                !string.Equals(entry!.Script, Lf(script), StringComparison.Ordinal))   // stored scripts are LF-normalized (Serialize); a script with a real CR must still match
             {
                 entry = null;
                 return CassetteLoadStatus.Corrupt;
