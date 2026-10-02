@@ -46,6 +46,8 @@ Consequences:
 
 ### Before reporting a ps-bash bug
 
+0. **Check `docs/specs/intentional-differences.md`** — platform mappings, architecture limits and
+   deliberately refused options (exit 2) are listed there with the reason.
 1. **Confirm against the oracle**: `wsl.exe -d Ubuntu-24.04 -- bash -c '<snippet>'`.
    Faithful bash behavior is not a bug — e.g. `alias <missing-name>` writing
    `alias: NAME: not found` to stderr is exactly what bash does.

@@ -22,6 +22,7 @@ Nav starts at /CODE_MAP.md. Keep this index complete — a guard test fails on a
 - [history-store-interface.md](history-store-interface.md) — IHistoryStore Interface Specification
 - [host-lifecycle-contract.md](host-lifecycle-contract.md) — Host Lifecycle Metadata and Ownership Contract
 - [interactive-completion.md](interactive-completion.md) — Interactive Completion Specification
+- [intentional-differences.md](intentional-differences.md) — Intentional Differences from bash / GNU (platform, architecture, deliberate choices, refused options)
 - [keybindings.md](keybindings.md) — Interactive Shell Keybindings
 - [lineeditor-vt100-design.md](lineeditor-vt100-design.md) — LineEditor VT100 Design
 - [on-cd-hooks.md](on-cd-hooks.md) — On-CD Hook Cmdlet API Specification
