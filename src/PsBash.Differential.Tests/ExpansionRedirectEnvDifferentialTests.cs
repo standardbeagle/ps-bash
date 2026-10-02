@@ -63,6 +63,59 @@ public class ExpansionRedirectEnvDifferentialTests
     public Task Operand_CommandSubstitutionResultIsGlobExpanded() =>
         EqualAsync(Tree(("x", "1"), ("y", "2")), "printf '[%s]' $(echo '*'); echo");
 
+    // ───────────── (2) redirections on commands that write nothing ─────────────
+
+    [SkippableFact] public Task Colon_RedirectOut_CreatesFile() =>
+        EqualAsync(Tree(("a", "A")), ": > f; echo rc=$?");
+
+    [SkippableFact] public Task Colon_RedirectOut_TruncatesExistingFile() =>
+        EqualAsync(Tree(("f", "old content")), ": > f; echo rc=$?");
+
+    [SkippableFact] public Task Colon_NoSpace_RedirectOut_Truncates() =>
+        EqualAsync(Tree(("f", "old content")), ":>f; echo rc=$?");
+
+    [SkippableFact] public Task Colon_RedirectAppend_CreatesAndKeepsContent() =>
+        EqualAsync(Tree(("keep", "stays")), ": >> new; : >> keep; echo rc=$?");
+
+    [SkippableFact] public Task True_RedirectOut_Truncates() =>
+        EqualAsync(Tree(("f", "old")), "true > f; echo rc=$?");
+
+    [SkippableFact] public Task True_RedirectAppend_Creates() =>
+        EqualAsync(Tree(("a", "A")), "true >> f; echo rc=$?");
+
+    [SkippableFact] public Task False_RedirectOut_CreatesFileAndFails() =>
+        EqualAsync(Tree(("a", "A")), "false > f; echo rc=$?");
+
+    [SkippableFact] public Task BareRedirect_CreatesFile() =>
+        EqualAsync(Tree(("a", "A")), "> f; echo rc=$?");
+
+    [SkippableFact] public Task BareRedirect_TruncatesExistingFile() =>
+        EqualAsync(Tree(("f", "old")), "> f; echo rc=$?");
+
+    [SkippableFact] public Task BareRedirect_Append_CreatesAndKeeps() =>
+        EqualAsync(Tree(("keep", "stays")), ">> new; >> keep; echo rc=$?");
+
+    [SkippableFact] public Task Colon_TwoRedirects_OpensBoth() =>
+        EqualAsync(Tree(("a", "old")), ": > a > b; echo rc=$?");
+
+    [SkippableFact] public Task Colon_RedirectToDevNull_CreatesNothing() =>
+        EqualAsync(Tree(("a", "A")), ": > /dev/null; echo rc=$?");
+
+    [SkippableFact] public Task Colon_RedirectInMissingDirectory_FailsWithStatus1() =>
+        EqualAsync(Tree(("a", "A")), "{ : > nodir/f; } 2>/dev/null; echo rc=$?");
+
+    [SkippableFact] public Task True_RedirectInMissingDirectory_FailsWithStatus1() =>
+        EqualAsync(Tree(("a", "A")), "{ true >> nodir/f; } 2>/dev/null; echo rc=$?");
+
+    [SkippableFact] public Task Colon_RedirectFailure_FlipsOrChain() =>
+        EqualAsync(Tree(("a", "A")), ": 2>/dev/null > nodir/f || echo failed; echo rc=$?");
+
+    [SkippableFact] public Task Colon_RedirectSuccess_DoesNotTakeOrBranch() =>
+        EqualAsync(Tree(("a", "A")), ": > f || echo failed; echo rc=$?");
+
+    [SkippableFact] public Task Echo_RedirectInMissingDirectory_FailsWithStatus1() =>
+        EqualAsync(Tree(("a", "A")), "{ echo hi > nodir/f; } 2>/dev/null; echo rc=$?");
+
     // The RC-7 / command-substitution operand hoist wraps the stage in a script block; the pipe input
     // must still reach the command (it used to be dropped: `printf … | grep $x` printed nothing).
     [SkippableTheory]

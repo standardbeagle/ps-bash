@@ -2628,6 +2628,63 @@ public class PsEmitterTests
         Assert.Equal(1, System.Text.RegularExpressions.Regex.Matches(result, @"\$input \|").Count);
     }
 
+    [Theory]
+    [InlineData(": > f", "$($global:LASTEXITCODE = 0; @() | Invoke-BashRedirect -Path f; if ($global:LASTEXITCODE -ne 0) { Write-Error '' -ErrorAction SilentlyContinue } else { [void]$true })")]
+    [InlineData(":>f", "$($global:LASTEXITCODE = 0; @() | Invoke-BashRedirect -Path f; if ($global:LASTEXITCODE -ne 0) { Write-Error '' -ErrorAction SilentlyContinue } else { [void]$true })")]
+    [InlineData("true >> f", "$($global:LASTEXITCODE = 0; @() | Invoke-BashRedirect -Path f -Append; if ($global:LASTEXITCODE -ne 0) { Write-Error '' -ErrorAction SilentlyContinue } else { [void]$true })")]
+    [InlineData("> f", "$($global:LASTEXITCODE = 0; @() | Invoke-BashRedirect -Path f; if ($global:LASTEXITCODE -ne 0) { Write-Error '' -ErrorAction SilentlyContinue } else { [void]$true })")]
+    public void Transpile_NoOpBuiltinWithRedirect_OpensTheTarget(string bash, string expected)
+    {
+        // bash opens (creates / truncates) a redirection target even when the command writes nothing.
+        Assert.Equal(expected, PsEmitter.Transpile(bash));
+    }
+
+    [Fact]
+    public void Transpile_NoOpBuiltin_StderrToNullSilencesOnlyTheTargetsAfterIt()
+    {
+        // Redirections apply left to right: `: 2>/dev/null > f` is quiet when f cannot be opened,
+        // `: > f 2>/dev/null` reports first (bash opens f before the stderr redirection exists).
+        var after = PsEmitter.Transpile(": 2>/dev/null > f");
+        var before = PsEmitter.Transpile(": > f 2>/dev/null");
+
+        Assert.Contains("Invoke-BashRedirect -Path f 2>$null;", after);
+        Assert.DoesNotContain("-Path f 2>$null", before);
+    }
+
+    [Fact]
+    public void Transpile_FalseWithRedirect_OpensTheTargetThenFails()
+    {
+        var result = PsEmitter.Transpile("false > f");
+
+        Assert.StartsWith("$(@() | Invoke-BashRedirect -Path f; $global:LASTEXITCODE = 1;", result);
+    }
+
+    [Fact]
+    public void Transpile_NoOpBuiltinWithTwoRedirects_OpensBothInOrder()
+    {
+        var result = PsEmitter.Transpile(": > a >> b");
+
+        Assert.Contains("Invoke-BashRedirect -Path a; @() | Invoke-BashRedirect -Path b -Append;", result);
+    }
+
+    [Theory]
+    [InlineData(": > /dev/null")]
+    [InlineData(": 2>&1")]
+    [InlineData("true >&2")]
+    public void Transpile_NoOpBuiltinWithNonFileRedirect_TouchesNothing(string bash)
+    {
+        Assert.DoesNotContain("Invoke-BashRedirect", PsEmitter.Transpile(bash));
+    }
+
+    [Fact]
+    public void Transpile_BareRedirect_IsNotAnEmptyPipeElement()
+    {
+        // `> f` alone used to emit ` | Invoke-BashRedirect -Path f` — "An empty pipe element is not allowed".
+        var result = PsEmitter.Transpile("> f");
+
+        Assert.StartsWith("$($global:LASTEXITCODE = 0; @() | Invoke-BashRedirect -Path f;", result);
+    }
+
     [Fact]
     public void Transpile_WhileReadMultipleVars_BindsEveryVariable()
     {

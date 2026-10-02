@@ -109,4 +109,45 @@ public class ConvertToBashWordsTests : IClassFixture<SharedPwshFixture>
         }
         finally { Environment.CurrentDirectory = previousCwd; Directory.Delete(dir, true); }
     }
+
+    // ───────────── Invoke-BashRedirect: a target that cannot be opened ─────────────
+
+    [Fact]
+    public void Redirect_MissingDirectory_FailsWithBashMessageAndStatus1()
+    {
+        var r = CmdResultRunTolerant("@() | Invoke-BashRedirect -Path 'nodir_psb/f'");
+
+        Assert.Equal(1, r.ExitCode);
+        Assert.Contains("bash: nodir_psb/f: No such file or directory", r.Error);
+    }
+
+    [Fact]
+    public void Redirect_NoRecords_StillCreatesAndTruncatesTarget()
+    {
+        var file = Path.Combine(Path.GetTempPath(), "psb-r-" + Guid.NewGuid().ToString("N")[..8]);
+        File.WriteAllText(file, "old content");
+        try
+        {
+            Run($"@() | Invoke-BashRedirect -Path '{file}'").AssertSuccess();
+            Assert.Equal("", File.ReadAllText(file));
+
+            Run($"@() | Invoke-BashRedirect -Path '{file}.new' -Append").AssertSuccess();
+            Assert.True(File.Exists(file + ".new"));
+        }
+        finally
+        {
+            File.Delete(file);
+            File.Delete(file + ".new");
+        }
+    }
+
+    // Runs a script whose pipeline is expected to end in a terminating error; returns exit status + message.
+    private (int ExitCode, string Error) CmdResultRunTolerant(string script)
+    {
+        var pwsh = _fixture.AcquireFresh();
+        pwsh.AddScript("$global:LASTEXITCODE = 0; try { " + script + " } catch { $_.Exception.Message }; $global:LASTEXITCODE");
+        var output = pwsh.Invoke().Select(o => o?.ToString() ?? "").ToList();
+        pwsh.Commands.Clear();
+        return (int.Parse(output[^1]), string.Join("\n", output.Take(output.Count - 1)));
+    }
 }

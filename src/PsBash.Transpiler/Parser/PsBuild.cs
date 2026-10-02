@@ -333,6 +333,17 @@ public static class PsBuild
         "@(if ([string]::IsNullOrEmpty(" + varRef + ")) { @() } "
         + "else { @(" + varRef + " -split '\\s+' | Where-Object { $_ -ne '' }) })";
 
+    // ───────────────────────── Redirect target without output ──────────────────────────
+
+    /// <summary>
+    /// Opens a <c>&gt; file</c> / <c>&gt;&gt; file</c> target for a command that writes NOTHING (<c>:</c>,
+    /// <c>true</c>, <c>false</c>, a bare <c>&gt; f</c>): <c>@() | Invoke-BashRedirect -Path f [-Append]</c>.
+    /// The cmdlet opens its target in <c>BeginProcessing</c> (truncate, or create for <c>-Append</c>)
+    /// whether or not a record arrives, which is exactly bash's "a redirection creates the file".
+    /// </summary>
+    public static string TouchRedirectTarget(string target, bool append) =>
+        "@() | Invoke-BashRedirect -Path " + target + (append ? " -Append" : "");
+
     // ─────────────────────── Null-safe pipeline text extraction ────────────────────────
 
     /// <summary>

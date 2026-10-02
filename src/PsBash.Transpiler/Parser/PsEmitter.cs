@@ -2385,6 +2385,59 @@ public static class PsEmitter
         return sb.ToString();
     }
 
+    /// <summary>
+    /// bash performs a command's redirections even when the command writes nothing: <c>: &gt; f</c> creates
+    /// or truncates f, <c>true &gt;&gt; f</c> creates it, and a target in a missing directory fails the
+    /// command (<c>bash: d/f: No such file or directory</c>, status 1) before it runs. Words expand first
+    /// (<see cref="EmitNoOpArgPrelude"/>), then the redirections open their targets, left to right.
+    /// A target that cannot be opened leaves <c>$global:LASTEXITCODE</c> at 1 (set by the cmdlet), so the
+    /// caller sets its own status to 0 BEFORE these statements and keeps the failure after them.
+    /// </summary>
+    private static string EmitNoOpRedirectTouches(Command.Simple cmd)
+    {
+        var sb = new StringBuilder();
+        // Redirections apply left to right, so `2>/dev/null` silences the failure of the targets AFTER it
+        // (`: 2>/dev/null > nodir/f` is quiet; `: > nodir/f 2>/dev/null` reports before the silencing).
+        bool stderrSilenced = false;
+        foreach (var redirect in cmd.Redirects)
+        {
+            bool append = redirect.Op is ">>" or "&>>";
+            bool opensFile = redirect.Op is ">" or ">>" or "&>" or "&>>"
+                || (redirect.Op == ">&" && redirect.Fd == 1);
+            if (!opensFile) continue;
+
+            var target = TransformRedirectTarget(EmitArgWord(redirect.Target));
+            // `/dev/null` maps to $null; `>&2` / `>&-` / `2>&1` duplicate or close a descriptor, not a file.
+            if (target == "$null" || (redirect.Op == ">&" && (IsAllDigits(target) || target == "-")))
+            {
+                stderrSilenced |= redirect.Fd == 2 && target == "$null";
+                continue;
+            }
+            sb.Append(PsBuild.TouchRedirectTarget(target, append));
+            if (stderrSilenced) sb.Append(" 2>$null");
+            sb.Append("; ");
+        }
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Body of the `$( … )` that stands for <c>:</c> / <c>true</c> / a bare redirection: expand the
+    /// arguments, set status 0, open the redirect targets, and — only when a target failed to open —
+    /// flip <c>$?</c> so a following <c>||</c> / <c>if</c> sees the failure (the cmdlet already set
+    /// <c>$global:LASTEXITCODE</c> to 1).
+    /// </summary>
+    private static string EmitNoOpSuccessBody(Command.Simple cmd)
+    {
+        var touches = EmitNoOpRedirectTouches(cmd);
+        var sb = new StringBuilder(EmitNoOpArgPrelude(cmd));
+        sb.Append("$global:LASTEXITCODE = 0; ").Append(touches);
+        // The failure flip must be the LAST statement: any later successful statement would reset `$?`.
+        sb.Append(touches.Length > 0
+            ? "if ($global:LASTEXITCODE -ne 0) { Write-Error '' -ErrorAction SilentlyContinue } else { [void]$true }"
+            : "[void]$true");
+        return sb.ToString();
+    }
+
     // Dispatch ladder for the bash-keyword / builtin branches that used to live
     // in one ~200-line else-if chain inside EmitSimple. Order is preserved
     // exactly (it is behavior): `unset`/`trap DEBUG` return immediately (outside
@@ -2394,7 +2447,15 @@ public static class PsEmitter
     {
         result = "";
         if (cmd.Words.Length < 1)
-            return false;
+        {
+            // A command made only of redirections (`> f`, `>> f`) still opens its targets: it is `:`
+            // with redirects. (Before this it emitted ` | Invoke-BashRedirect …` — an empty pipe element,
+            // a parse error that failed the whole script.)
+            if (cmd.Redirects.IsDefaultOrEmpty || !cmd.HereDocs.IsDefaultOrEmpty)
+                return false;
+            result = "$(" + EmitNoOpSuccessBody(cmd) + ")";
+            return true;
+        }
 
         var cmd0 = GetLiteralValue(cmd.Words[0]);
 
@@ -2455,10 +2516,11 @@ public static class PsEmitter
         // bash still EXPANDS them first (`: ${x:=5}` assigns, `: $(cmd)` runs cmd),
         // so the expansions run as `[void](word)` statements ahead of the status.
         else if (cmd0 is "true" or ":")
-            specialResult = "$(" + EmitNoOpArgPrelude(cmd) + "$global:LASTEXITCODE = 0; [void]$true)";
+            specialResult = "$(" + EmitNoOpSuccessBody(cmd) + ")";
         else if (cmd0 == "false")
         {
-            var argPrelude = EmitNoOpArgPrelude(cmd);
+            // Redirect targets are opened (created / truncated) even though `false` then fails.
+            var argPrelude = EmitNoOpArgPrelude(cmd) + EmitNoOpRedirectTouches(cmd);
             if (_context == TranspileContext.Eval)
                 // try/catch on (1/0) is the mechanism that flips $? to $false so bash `&&` short-circuits;
                 // Write-Error can't be used here because it propagates as a terminating error in eval scope.

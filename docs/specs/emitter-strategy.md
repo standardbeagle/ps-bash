@@ -433,6 +433,25 @@ cmdlet has no `[[` grammar).
 
 All three are no-argument builtins that ignore their arguments but still EXPAND them: `EmitNoOpArgPrelude` emits `[void](word);` for every non-literal argument (`: ${x:=5}` assigns, `: $(cmd)` runs cmd), then sets `$global:LASTEXITCODE` (`:`/`true` = 0, `false` = 1, with the errexit behaviour above). `:` was "command not found". As a `while`/`if` condition (`EmitWhileCondition` / `EmitCondition`) a bare `:` is the constant `$true`, and as a pipe target (`echo hi | :`) it is `Out-Null`.
 
+**Redirections are performed even though nothing is written.** bash opens a redirect target for any
+simple command: `: > f` creates or truncates f, `true >> f` creates it, `false > f` creates it and
+fails, a bare `> f` (no command word) is the same as `: > f`, and a target in a missing directory fails
+the command with status 1. The emitter used to drop the redirects of the three builtins and emitted a
+bare `> f` as ` | Invoke-BashRedirect -Path f` (an empty pipe element: a parse error that failed the
+whole script). `EmitNoOpRedirectTouches` renders each file-opening redirect (`>`, `>>`, `&>`, `&>>`,
+`>&file`, any fd; not `/dev/null`, `>&2`, `2>&1`) as `PsBuild.TouchRedirectTarget` =
+`@() | Invoke-BashRedirect -Path f [-Append]` (the cmdlet opens its target in `BeginProcessing`), after
+the argument expansions and left to right; a preceding `2>/dev/null` silences the later targets'
+failure (`: 2>/dev/null > d/f` is quiet, `: > d/f 2>/dev/null` is not, as in bash). The `true` / `:` /
+bare-redirect body sets status 0 first, opens the targets, and ENDS in
+`if ($global:LASTEXITCODE -ne 0) { Write-Error '' -ErrorAction SilentlyContinue } else { [void]$true }`
+when it had targets, so a failed open flips `$?` for a following `||` / `if`. `Invoke-BashRedirect`
+reports an unopenable target as `bash: d/f: No such file or directory` (also `Is a directory`,
+`Permission denied`) with `$global:LASTEXITCODE = 1` and a terminating error, so the upstream command
+never runs (this applies to `echo hi > nodir/f` too; it used to print PowerShell's own exception text
+and leave status 0). The failure message names the shell, not the script path and line that bash
+prints for a non-interactive shell (stderr text differs; status and tree match).
+
 ### `set`
 
 - `set -e` / `set -o errexit` -> `$ErrorActionPreference = 'Stop'; $global:__BashErrexit = $true`

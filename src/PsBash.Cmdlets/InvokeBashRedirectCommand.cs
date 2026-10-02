@@ -39,8 +39,24 @@ public sealed class InvokeBashRedirectCommand : PSCmdlet
     protected override void BeginProcessing()
     {
         if (Path is null) return;
-        _stream = new FileStream(Path, Append ? FileMode.Append : FileMode.Create,
-            FileAccess.Write, FileShare.ReadWrite, bufferSize: 64 * 1024);
+        try
+        {
+            _stream = new FileStream(Path, Append ? FileMode.Append : FileMode.Create,
+                FileAccess.Write, FileShare.ReadWrite, bufferSize: 64 * 1024);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
+                                       or ArgumentException or NotSupportedException)
+        {
+            // bash: a redirection that cannot be opened fails the command (status 1) before it runs:
+            // `bash: nodir/f: No such file or directory`, `bash: d: Is a directory`.
+            string reason = Directory.Exists(Path) ? "Is a directory"
+                : ex is UnauthorizedAccessException ? "Permission denied"
+                : FileSystemHelpers.ReadErrorMessage(ex);
+            FileSystemHelpers.SetLastExitCode(this, 1);
+            ThrowTerminatingError(new ErrorRecord(
+                new IOException($"bash: {Path}: {reason}"),
+                "BashRedirectError", ErrorCategory.WriteError, Path));
+        }
     }
 
     protected override void ProcessRecord()
