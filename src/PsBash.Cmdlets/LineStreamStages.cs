@@ -234,6 +234,7 @@ internal sealed class WcStage : ILineStreamStage
     {
         var plan = InvokeBashWcCommand.Plan(argv);
         if (plan.Declined || plan.Operands.Count > 0) return null; // file operands, errors, help
+        if (plan.Total != InvokeBashWcCommand.TotalMode.Auto || plan.Files0From is not null) return null;
         return new WcStage(plan.Lines, plan.Words, plan.Bytes, plan.Chars, plan.MaxLine);
     }
     public IEnumerable<string> Run(IEnumerable<string> input)
