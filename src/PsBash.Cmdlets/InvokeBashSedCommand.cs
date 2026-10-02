@@ -106,13 +106,140 @@ public sealed class InvokeBashSedCommand : PSCmdlet
     private Action? _fileRun;
     private readonly StringBuilder _nulTail = new();
     private List<PSObject>? _stdinBuffer;
+    private SedRuntime? _rt;
+    private RecordSink? _debugSink;
+    private readonly Dictionary<string, StreamWriter> _outFiles = new();
+    private readonly Dictionary<string, IEnumerator<string>?> _readFiles = new();
+
+    /// <summary>
+    /// Hooks the new commands call: <c>w</c> files are created/truncated NOW (GNU opens every named file at
+    /// program start, even one that is never written), <c>R</c> files are opened lazily and stay open, <c>r</c>
+    /// reads the whole file each time, <c>e</c> runs through ps-bash itself.
+    /// </summary>
+    private void WireRuntime(SedRuntime rt, List<SedCommand> commands)
+    {
+        foreach (var c in commands)
+        {
+            if (c.FileName != null && c.Type is 'w' or 'W' or 's')
+                OpenOutFile(c.FileName);
+        }
+
+        rt.ReadFile = name =>
+        {
+            try
+            {
+                string path = SessionState.Path.GetUnresolvedProviderPathFromPSPath(FileSystemHelpers.NormalizeOperandPath(name));
+                if (!File.Exists(path)) return null;
+                return BashFileSystem.ReadAllText(path);
+            }
+            catch (Exception ex) when (!FileSystemHelpers.IsPipelineStop(ex)) { return null; }
+        };
+        rt.ReadLine = name =>
+        {
+            if (!_readFiles.TryGetValue(name, out var en))
+            {
+                try
+                {
+                    string path = SessionState.Path.GetUnresolvedProviderPathFromPSPath(FileSystemHelpers.NormalizeOperandPath(name));
+                    en = File.Exists(path) ? ReadRawLines(path).GetEnumerator() : null;
+                }
+                catch (Exception ex) when (!FileSystemHelpers.IsPipelineStop(ex)) { en = null; }
+                _readFiles[name] = en;
+            }
+            return en != null && en.MoveNext() ? en.Current : null;
+        };
+        rt.WriteFile = (name, line) =>
+        {
+            if (name == "/dev/stderr") { FileSystemHelpers.WriteStderr(this, line); return; }
+            if (_outFiles.TryGetValue(name, out var w)) { w.Write(line); w.Write('\n'); }
+        };
+        rt.RunCommand = RunShell;
+    }
+
+    private static IEnumerable<string> ReadRawLines(string path)
+    {
+        foreach (var l in BashFileSystem.ReadTextLines(path)) yield return l.Text;
+    }
+
+    private void OpenOutFile(string name)
+    {
+        if (name is "/dev/stdout" or "/dev/stderr" or "/dev/null" || _outFiles.ContainsKey(name)) return;
+        try
+        {
+            string path = SessionState.Path.GetUnresolvedProviderPathFromPSPath(FileSystemHelpers.NormalizeOperandPath(name));
+            _outFiles[name] = new StreamWriter(
+                new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.ReadWrite), RawBytes.Encoding, 65536);
+        }
+        catch (Exception ex) when (!FileSystemHelpers.IsPipelineStop(ex))
+        {
+            EmitError($"sed: couldn't open file {name}: {FileSystemHelpers.ReadErrorMessage(ex)}");
+            FileSystemHelpers.SetLastExitCode(this, 4);
+        }
+    }
+
+    private void CloseFiles()
+    {
+        foreach (var w in _outFiles.Values)
+            try { w.Dispose(); } catch { /* best effort */ }
+        _outFiles.Clear();
+        foreach (var e in _readFiles.Values) e?.Dispose();
+        _readFiles.Clear();
+    }
+
+    protected override void StopProcessing() => CloseFiles();
+
+    /// <summary>
+    /// <c>e</c>: the command line runs through ps-bash itself (<c>ps-bash -c</c>, the same resolution awk's
+    /// <c>system()</c>/<c>getline</c> use; <c>cmd /c</c> / <c>/bin/sh -c</c> only when no ps-bash executable is
+    /// found), stdin closed, stdout returned. Bounded by <see cref="BashRuntime.RunChildProcess"/>.
+    /// </summary>
+    private string RunShell(string command)
+    {
+        // Everything sed itself wrote to a w file must be on disk for the command to see it.
+        foreach (var w in _outFiles.Values) w.Flush();
+
+        var psi = new System.Diagnostics.ProcessStartInfo();
+        string? exe = InvokeBashBashCommand.ResolvePsBashExecutable(this);
+        if (!string.IsNullOrEmpty(exe))
+        {
+            psi.FileName = exe;
+            psi.ArgumentList.Add("-c");
+            psi.ArgumentList.Add(command);
+        }
+        else if (OperatingSystem.IsWindows())
+        {
+            psi.FileName = "cmd.exe";
+            psi.Arguments = "/d /s /c \"" + command + "\"";
+        }
+        else
+        {
+            psi.FileName = "/bin/sh";
+            psi.ArgumentList.Add("-c");
+            psi.ArgumentList.Add(command);
+        }
+        psi.UseShellExecute = false;
+        psi.RedirectStandardInput = true;
+        psi.RedirectStandardOutput = true;
+        psi.RedirectStandardError = true;
+        psi.CreateNoWindow = true;
+        try
+        {
+            var loc = SessionState.Path.CurrentFileSystemLocation.ProviderPath;
+            if (!string.IsNullOrEmpty(loc)) psi.WorkingDirectory = loc;
+        }
+        catch { /* inherit */ }
+
+        var res = BashRuntime.RunChildProcess(psi);
+        if (!string.IsNullOrEmpty(res.Stderr)) FileSystemHelpers.WriteStderr(this, res.Stderr.TrimEnd('\n', '\r'));
+        return res.Stdout.Replace("\r\n", "\n");
+    }
 
     internal const string OptQuiet = "quiet", OptExpr = "expression", OptFile = "file",
         OptExtended = "extended", OptInPlace = "in-place", OptSeparate = "separate",
-        OptNullData = "null-data", OptLineLen = "line-length", OptNoop = "noop";
+        OptNullData = "null-data", OptLineLen = "line-length", OptNoop = "noop", OptDebug = "debug";
 
-    /// <summary>GNU sed options ps-bash refuses (exit 2): <c>--debug</c> annotates program execution.</summary>
-    private static readonly string[] SedValidButUnsupported = { "--debug" };
+    /// <summary>GNU sed options ps-bash refuses (exit 2): none left — <c>--debug</c> is implemented.</summary>
+    private static readonly string[] SedValidButUnsupported = Array.Empty<string>();
 
     /// <summary>
     /// sed's option surface (GNU sed 4.9). <c>-i[SUFFIX]</c> / <c>--in-place[=SUFFIX]</c> take an
@@ -139,6 +266,7 @@ public sealed class InvokeBashSedCommand : PSCmdlet
             new OptSpec(OptNoop, '\0', "posix"),
             new OptSpec(OptNoop, '\0', "sandbox"),
             new OptSpec(OptNoop, '\0', "follow-symlinks"),
+            new OptSpec(OptDebug, '\0', "debug"),
         },
         SedValidButUnsupported,
         allowAbbrev: true,
@@ -157,7 +285,10 @@ public sealed class InvokeBashSedCommand : PSCmdlet
     internal sealed class SedArgs
     {
         public ParsedArgs Parsed = null!;
-        public bool Quiet, Extended, Separate, NullData, InPlace;
+        public bool Quiet, Extended, Separate, NullData, InPlace, Debug;
+
+        /// <summary>The <c>-l N</c> wrap width of the <c>l</c> command (GNU default 70, 0 = never wrap).</summary>
+        public int LineLength = 70;
 
         /// <summary>The <c>-i</c> backup suffix (null = edit without a backup).</summary>
         public string? Suffix;
@@ -198,7 +329,11 @@ public sealed class InvokeBashSedCommand : PSCmdlet
                     s.InPlace = true;
                     s.Suffix = string.IsNullOrEmpty(tok.Value) ? null : tok.Value;
                     break;
-                // OptLineLen, OptNoop: accepted, no effect (only the `l` command wraps; nothing buffers).
+                case OptDebug: s.Debug = true; break;
+                case OptLineLen:
+                    if (int.TryParse(tok.Value, out int ll) && ll >= 0) s.LineLength = ll;
+                    break;
+                // OptNoop: accepted, no effect (nothing buffers).
             }
         }
         return s;
@@ -281,19 +416,11 @@ public sealed class InvokeBashSedCommand : PSCmdlet
             return;
         }
 
-        var commands = new List<SedCommand>();
-        foreach (var expr in expressions)
+        if (!BuildProgram(expressions, plan.Extended, out var commands, out string? buildError, out int buildCode))
         {
-            foreach (var part in SplitSedCommands(expr))
-            {
-                var parsed = ParseExpression(part, plan.Extended);
-                if (parsed == null)
-                {
-                    // ParseExpression already emitted a bash-style error + exit code.
-                    return;
-                }
-                commands.Add(parsed);
-            }
+            EmitError(buildError!);
+            SessionState.PSVariable.Set("global:LASTEXITCODE", buildCode);
+            return;
         }
 
         if (plan.InPlace && operands.Count == 0)
@@ -301,6 +428,24 @@ public sealed class InvokeBashSedCommand : PSCmdlet
             EmitError("sed: no input files");
             FileSystemHelpers.SetLastExitCode(this, 4);
             return;
+        }
+
+        // The external world of the new commands (hold space, r/R/w/W/e, --debug). A script of the original
+        // command set needs none of it, and then no runtime exists (the engine keeps its historical output order).
+        if (plan.Debug || SedEngine.UsesRuntimeFeatures(commands))
+        {
+            _rt = new SedRuntime { LineLength = plan.LineLength };
+            WireRuntime(_rt, commands);
+            if (plan.Debug)
+            {
+                // The program listing precedes every record, so it can be written directly. The per-cycle
+                // annotations go through the record sink (they interleave with the data it delays by one
+                // record) — except under -i, where the data goes to the edited file and the debug text to stdout.
+                void Direct(string line) => WriteObject(BashRuntime.NewBashObject(line + "\n"));
+                _rt.Debug = Direct;
+                SedDebugFormat.PrintProgram(commands, _rt);
+                _rt.Debug = line => { if (_debugSink != null) _debugSink.Add(line); else Direct(line); };
+            }
         }
 
         // No operand, or a lone `-` (the pipeline itself): stream records through the engine as they arrive.
@@ -373,7 +518,8 @@ public sealed class InvokeBashSedCommand : PSCmdlet
         _pipelineMode = true;
         _term = plan.NullData ? '\0' : '\n';
         _sink = new RecordSink(WriteStdoutRecord);
-        _engine = new SedEngine(commands, suppressDefault, _sink.Add);
+        _debugSink = _sink;
+        _engine = new SedEngine(commands, suppressDefault, _sink.Add, _rt);
     }
 
     protected override void ProcessRecord()
@@ -451,13 +597,25 @@ public sealed class InvokeBashSedCommand : PSCmdlet
     {
         if (_pipelineMode) FinishPipeline();
         else _fileRun?.Invoke();
+        CloseFiles();
     }
 
     private void FinishPipeline()
     {
         if (_pFinished) return;
         _pFinished = true;
-        if (!_sawRecord) return;
+        FinishPipelineCore();
+        if (_rt is { ExitCode: not 0 }) FileSystemHelpers.SetLastExitCode(this, _rt.ExitCode);
+    }
+
+    private void FinishPipelineCore()
+    {
+        if (!_sawRecord)
+        {
+            // No input at all: the cycle machinery never ran, but a script can still have files to flush.
+            _engine?.Finish();
+            return;
+        }
 
         bool trailing;
         if (_term == '\0')
@@ -639,10 +797,12 @@ public sealed class InvokeBashSedCommand : PSCmdlet
                 }
 
                 any = true;
+                if (_rt != null) _rt.FileName = operand == "-" ? "-" : (sources.Count == 1 ? operand : path!);
                 if (!separate)
                 {
                     oneSink ??= new RecordSink(WriteStdoutRecord);
-                    oneEngine ??= new SedEngine(commands, suppressDefault, oneSink.Add);
+                    _debugSink = oneSink;
+                    oneEngine ??= new SedEngine(commands, suppressDefault, oneSink.Add, _rt);
                     oneTrailing = Pump(lines, oneEngine, path);
                     if (oneEngine.Done) quitAll = true;
                     continue;
@@ -650,15 +810,18 @@ public sealed class InvokeBashSedCommand : PSCmdlet
 
                 if (plan.InPlace && path != null)
                 {
+                    _debugSink = null;
                     if (!EditInPlace(path, lines, term, commands, suppressDefault, ref readError)) return;
                     continue;
                 }
 
                 var sink = new RecordSink(WriteStdoutRecord);
-                var engine = new SedEngine(commands, suppressDefault, sink.Add);
+                _debugSink = sink;
+                var engine = new SedEngine(commands, suppressDefault, sink.Add, _rt);
                 bool trailing = Pump(lines, engine, path);
                 engine.Finish();
                 sink.Complete(trailing);
+                if (engine.Quit) quitAll = true;   // q/Q under -s ends the whole run, as GNU
             }
         }
 
@@ -668,7 +831,8 @@ public sealed class InvokeBashSedCommand : PSCmdlet
             oneSink!.Complete(oneTrailing);
         }
 
-        if (readError) FileSystemHelpers.SetLastExitCode(this, 2);
+        if (_rt is { ExitCode: not 0 }) FileSystemHelpers.SetLastExitCode(this, _rt.ExitCode);
+        else if (readError) FileSystemHelpers.SetLastExitCode(this, 2);
     }
 
     /// <summary>
@@ -699,7 +863,7 @@ public sealed class InvokeBashSedCommand : PSCmdlet
                     writer.Write(record);
                     if (terminated) writer.Write(term);
                 });
-                var engine = new SedEngine(commands, suppressDefault, sink.Add);
+                var engine = new SedEngine(commands, suppressDefault, sink.Add, _rt);
                 try
                 {
                     using var en = lines.GetEnumerator();
@@ -814,6 +978,17 @@ public sealed class InvokeBashSedCommand : PSCmdlet
         public string? Text;           // a / i / c
         public string? Source;         // y
         public string? Dest;           // y
+
+        // ---- commands beyond the original set (blocks, branches, hold space, files, e, l, --debug) ----
+        public string? Label;          // ':' name; b/t/T target label (null = end of script)
+        public int Jump = -1;          // '{' -> index of its '}'; b/t/T -> index of the target (Count = end of script)
+        public int IntArg = -1;        // l / q / Q operand as typed (-1 = none)
+        public string? FileName;       // r R w W; s///w
+        public string? Command;        // e
+        public string? SrcRegex;       // s: the regex as typed (--debug prints it)
+        public string? SrcReplacement; // s: the replacement as typed (--debug prints it)
+        public bool IgnoreCase, Multiline, Eval; // s flags I/i, M/m, e
+        public int EndPos;             // where this command ended in its expression (diagnostics)
     }
 
     /// <summary>
@@ -916,70 +1091,174 @@ public sealed class InvokeBashSedCommand : PSCmdlet
     /// remainder is emitted whole.
     /// </para>
     /// </summary>
-    internal static List<string> SplitSedCommands(string expression)
+    internal static List<string> SplitSedCommands(string expression) => SplitSedCommands(expression, out _);
+
+    /// <summary>
+    /// <see cref="SplitSedCommands(string)"/> that also reports where each part ended in
+    /// <paramref name="expression"/> (for GNU's "char N" in a diagnostic). Besides the original commands it
+    /// separates the block braces (<c>{</c> and <c>}</c> are commands of their own, and a <c>}</c> also ends
+    /// the command before it: <c>/x/{p;d}</c>), cuts <c>:label</c> / <c>b label</c> at <c>;</c>, takes
+    /// <c>r R w W e</c> operands to the end of the line, ends a one-line <c>a/i/c</c> text at its first
+    /// unescaped newline, drops <c>#</c> comments, and lets an <c>s</c> flag run end at <c>w FILE</c>'s newline.
+    /// </summary>
+    internal static List<string> SplitSedCommands(string expression, out List<int> ends)
     {
         var parts = new List<string>();
+        var partEnds = new List<int>();
+        ends = partEnds;
+        int n = expression.Length;
         int start = 0;
 
-        // Each iteration begins at a command position (`start`): skip the
-        // address prefix (if any), then dispatch on the command character. The
-        // address may itself contain `;` / newline inside a `/re/`, which
-        // <see cref="SkipSedAddress"/> consumes before any separator check.
-        while (start < expression.Length)
+        void Add(int s, int e)
         {
+            var p = expression.Substring(s, e - s);
+            if (p.Length == 0) return;
+            parts.Add(p);
+            partEnds.Add(e);
+        }
+
+        // Each iteration begins at a command position (`start`): skip the address prefix (if any), then
+        // dispatch on the command character. The address may itself contain `;` / newline inside a `/re/`,
+        // which <see cref="SkipSedAddress"/> consumes before any separator check.
+        while (start < n)
+        {
+            while (start < n && expression[start] is ' ' or '\t' or ';' or '\n' or '\r') start++;
+            if (start >= n) break;
+
             int cmdPos = SkipSedAddress(expression, start);
 
             // Optional negation / spaces between the address and the command.
-            while (cmdPos < expression.Length
-                   && (expression[cmdPos] == '!' || expression[cmdPos] == ' '))
-            {
+            while (cmdPos < n && (expression[cmdPos] == '!' || expression[cmdPos] == ' ' || expression[cmdPos] == '\t'))
                 cmdPos++;
-            }
 
-            if (cmdPos >= expression.Length)
+            if (cmdPos >= n)
             {
-                parts.Add(expression.Substring(start));
+                Add(start, n);
                 break;
             }
 
             char c = expression[cmdPos];
+            int end;
+            int next;
 
-            if (c == 's' || c == 'y')
+            switch (c)
             {
-                if (cmdPos + 1 < expression.Length)
+                case '{':
+                case '}':
+                    end = next = cmdPos + 1;
+                    break;
+
+                case '#':
                 {
-                    char delim = expression[cmdPos + 1];
-                    int segEnd = ScanDelimited(expression, cmdPos + 2, delim, 2);
-                    if (segEnd >= 0)
+                    int nl = expression.IndexOf('\n', cmdPos);
+                    start = nl < 0 ? n : nl + 1;
+                    continue;
+                }
+
+                case 's':
+                case 'y':
+                {
+                    end = -1;
+                    next = -1;
+                    if (cmdPos + 1 < n)
                     {
-                        int sep = FindSeparator(expression, segEnd);
-                        parts.Add(expression.Substring(start, sep - start));
-                        start = sep < expression.Length ? sep + 1 : expression.Length;
-                        continue;
+                        char delim = expression[cmdPos + 1];
+                        int segEnd = ScanDelimited(expression, cmdPos + 2, delim, 2);
+                        if (segEnd >= 0)
+                        {
+                            end = FindFlagsEnd(expression, segEnd, c == 's');
+                            next = end;
+                        }
                     }
+                    if (end < 0)
+                    {
+                        end = next = FindCmdEnd(expression, cmdPos + 1);
+                    }
+                    break;
                 }
-            }
-            else if (c == 'a' || c == 'i' || c == 'c')
-            {
-                // Text command: everything to the end of the expression is its
-                // text (a following `;` inside the text is literal, matching
-                // GNU). Only the `\`/newline/space/end form is the text form; a
-                // bare `c` is a complete command and `;` after it separates.
-                if (cmdPos + 1 >= expression.Length || expression[cmdPos + 1] == '\\'
-                    || expression[cmdPos + 1] == '\n' || expression[cmdPos + 1] == ' ')
+
+                case 'a':
+                case 'i':
+                case 'c':
+                    // Text command: the text runs to the first newline that is not escaped by a backslash (a
+                    // following `;` inside the text is literal, matching GNU). Only the `\`/newline/space/end
+                    // form is the text form; a bare `c` is a complete command and `;` after it separates.
+                    if (cmdPos + 1 >= n || expression[cmdPos + 1] is '\\' or '\n' or ' ')
+                    {
+                        int i = cmdPos + 1;
+                        while (i < n && expression[i] != '\n')
+                            i += expression[i] == '\\' ? 2 : 1;
+                        end = Math.Min(i, n);
+                        next = end;
+                    }
+                    else
+                    {
+                        end = next = FindCmdEnd(expression, cmdPos + 1);
+                    }
+                    break;
+
+                case 'r':
+                case 'R':
+                case 'w':
+                case 'W':
+                case 'e':
                 {
-                    parts.Add(expression.Substring(start));
-                    return TrimParts(parts);
+                    int nl = expression.IndexOf('\n', cmdPos);
+                    end = next = nl < 0 ? n : nl;
+                    break;
                 }
+
+                case ':':
+                {
+                    int i = cmdPos + 1;
+                    while (i < n && expression[i] is ' ' or '\t') i++;
+                    while (i < n && expression[i] is not (';' or '\n' or ' ' or '\t')) i++;
+                    end = next = i;
+                    break;
+                }
+
+                default:
+                    end = next = FindCmdEnd(expression, cmdPos + 1);
+                    break;
             }
 
-            // A plain command: emit up to the next real separator.
-            int next = FindSeparator(expression, cmdPos + 1);
-            parts.Add(expression.Substring(start, next - start));
-            start = next < expression.Length ? next + 1 : expression.Length;
+            Add(start, end);
+            start = next;
         }
 
-        return TrimParts(parts);
+        return parts;
+    }
+
+    /// <summary>
+    /// End of a plain command that started before <paramref name="pos"/>: the next top-level <c>;</c>,
+    /// newline or <c>}</c> (a command is closed by the brace that closes its block), else the end.
+    /// </summary>
+    private static int FindCmdEnd(string s, int pos)
+    {
+        for (int i = pos; i < s.Length; i++)
+        {
+            if (s[i] is ';' or '\n' or '}') return i;
+        }
+        return s.Length;
+    }
+
+    /// <summary>
+    /// End of an <c>s</c>/<c>y</c> command whose delimited part ended at <paramref name="pos"/>: the flags run to
+    /// the next <c>;</c>, newline or <c>}</c>, except that an <c>s</c> <c>w FILE</c> flag takes the whole line.
+    /// </summary>
+    private static int FindFlagsEnd(string s, int pos, bool isSubst)
+    {
+        for (int i = pos; i < s.Length; i++)
+        {
+            char ch = s[i];
+            if (ch is ';' or '\n' or '}') return i;
+            if (isSubst && ch == 'w')
+            {
+                int nl = s.IndexOf('\n', i);
+                return nl < 0 ? s.Length : nl;
+            }
+        }
+        return s.Length;
     }
 
     /// <summary>
@@ -1011,8 +1290,9 @@ public sealed class InvokeBashSedCommand : PSCmdlet
 
         if (s[pos] == '/')
         {
+            int origin = pos;
             pos = SkipRegex(s, pos);
-            if (pos < 0) return 0; // unterminated — let the parser report it
+            if (pos < 0) return origin; // unterminated — let the parser report it
             if (pos < s.Length && s[pos] == ','
                 && pos + 1 < s.Length && s[pos + 1] == '/')
             {
@@ -1136,16 +1416,80 @@ public sealed class InvokeBashSedCommand : PSCmdlet
     /// </summary>
     internal static bool TryBuildCommands(
         IEnumerable<string> expressions, bool extendedRegex, out List<SedCommand> commands)
+        => BuildProgram(expressions, extendedRegex, out commands, out _, out _);
+
+    /// <summary>
+    /// Split, parse and LINK a script: <c>{</c> learns its <c>}</c>, <c>b t T</c> their <c>:label</c> (or the end of
+    /// the script). A script error comes back as GNU's message and exit status (1 for syntax, 4 for a missing
+    /// label); no-op commands (<c>v</c>) are dropped.
+    /// </summary>
+    internal static bool BuildProgram(
+        IEnumerable<string> expressions, bool extendedRegex, out List<SedCommand> commands,
+        out string? error, out int exitCode)
     {
         commands = new List<SedCommand>();
+        error = null;
+        exitCode = 0;
+        int exprNo = 0;
         foreach (var expr in expressions)
         {
-            foreach (var part in SplitSedCommands(expr))
+            exprNo++;
+            var split = SplitSedCommands(expr, out var ends);
+            for (int pi = 0; pi < split.Count; pi++)
             {
-                var c = ParseExpressionCore(part, extendedRegex, out _, out _);
-                if (c == null) return false;
-                commands.Add(c);
+                var c = ParseExpressionCore(split[pi], extendedRegex, out string? err, out int code);
+                if (c == null)
+                {
+                    error = err ?? "sed: bad expression";
+                    exitCode = code == 0 ? 1 : code;
+                    return false;
+                }
+                c.EndPos = ends[pi];
+                if (c.Type != 'v') commands.Add(c);
             }
+        }
+        return LinkProgram(commands, out error, out exitCode);
+    }
+
+    private static bool LinkProgram(List<SedCommand> commands, out string? error, out int exitCode)
+    {
+        error = null;
+        exitCode = 0;
+        var open = new Stack<int>();
+        var labels = new Dictionary<string, int>(StringComparer.Ordinal);
+        for (int i = 0; i < commands.Count; i++)
+        {
+            var c = commands[i];
+            if (c.Type == '{') open.Push(i);
+            else if (c.Type == '}')
+            {
+                if (open.Count == 0)
+                {
+                    error = $"sed: -e expression #1, char {c.EndPos}: unexpected `}}'";
+                    exitCode = 1;
+                    return false;
+                }
+                commands[open.Pop()].Jump = i;
+            }
+            else if (c.Type == ':' && !labels.ContainsKey(c.Label!)) labels[c.Label!] = i;
+        }
+        if (open.Count > 0)
+        {
+            error = "sed: -e expression #1, char 0: unmatched `{'";
+            exitCode = 1;
+            return false;
+        }
+        foreach (var c in commands)
+        {
+            if (c.Type is not ('b' or 't' or 'T')) continue;
+            if (c.Label == null) { c.Jump = commands.Count; continue; }
+            if (!labels.TryGetValue(c.Label, out int target))
+            {
+                error = $"sed: can't find label for jump to `{c.Label}'";
+                exitCode = 4;
+                return false;
+            }
+            c.Jump = target;
         }
         return true;
     }
@@ -1339,6 +1683,7 @@ public sealed class InvokeBashSedCommand : PSCmdlet
                 var parts = new List<string>();
                 var current = new StringBuilder();
                 bool escaped = false;
+                string? flagsTail = null;   // everything after the second delimiter (flags, incl. `w FILE`)
                 for (int ci = 2; ci < remaining.Length; ci++)
                 {
                     char c = remaining[ci];
@@ -1361,11 +1706,16 @@ public sealed class InvokeBashSedCommand : PSCmdlet
                     {
                         parts.Add(current.ToString());
                         current = new StringBuilder();
+                        if (parts.Count == 2)
+                        {
+                            flagsTail = remaining.Substring(ci + 1);
+                            break;
+                        }
                         continue;
                     }
                     current.Append(c);
                 }
-                parts.Add(current.ToString());
+                if (flagsTail == null) parts.Add(current.ToString());
 
                 if (parts.Count < 2)
                 {
@@ -1374,7 +1724,8 @@ public sealed class InvokeBashSedCommand : PSCmdlet
 
                 string searchPattern = parts[0];
                 string replacement = parts[1];
-                string flags = parts.Count > 2 ? parts[2] : string.Empty;
+                string flags = flagsTail ?? string.Empty;
+                string srcRegex = searchPattern, srcReplacement = replacement;
 
                 // Parse the substitution flags. GNU allows g, i/I, p, and a
                 // numeric occurrence N (and the combination Ng = "Nth and
@@ -1383,13 +1734,23 @@ public sealed class InvokeBashSedCommand : PSCmdlet
                 // overflow trap on an absurd count (`s/x/y/9999999999`).
                 bool global = false;
                 int nth = 0;
-                bool printOnSub = false;
+                bool printOnSub = false, evalFlag = false, multiline = false;
+                string? wFile = null;
                 var numBuf = new StringBuilder();
-                foreach (char f in flags)
+                for (int fi = 0; fi < flags.Length; fi++)
                 {
+                    char f = flags[fi];
                     if (char.IsDigit(f)) { numBuf.Append(f); }
                     else if (f == 'g') { global = true; }
                     else if (f == 'p') { printOnSub = true; }
+                    else if (f == 'e') { evalFlag = true; }
+                    else if (f == 'm' || f == 'M') { multiline = true; }
+                    else if (f == 'w')
+                    {
+                        wFile = flags.Substring(fi + 1).TrimStart();
+                        if (wFile.Length == 0) return Fail("sed: -e expression #1, char 0: missing filename in r/R/w/W commands", 1);
+                        break;
+                    }
                 }
                 if (numBuf.Length > 0 && !int.TryParse(numBuf.ToString(), out nth)) { nth = 0; }
 
@@ -1411,10 +1772,14 @@ public sealed class InvokeBashSedCommand : PSCmdlet
                 replacement = BuildReplacement(replacement);
 
                 var regexOpts = RegexOptions.None;
-                if (flags.Contains('I') || flags.Contains('i'))
+                // Flag letters only count before a `w FILE` tail (the file name may contain an `i`).
+                string flagLetters = wFile != null ? flags.Substring(0, flags.IndexOf('w')) : flags;
+                bool ignoreCase = flagLetters.Contains('I') || flagLetters.Contains('i');
+                if (ignoreCase)
                 {
                     regexOpts |= RegexOptions.IgnoreCase;
                 }
+                if (multiline) regexOpts |= RegexOptions.Multiline;
 
                 // POSIX classes BEFORE the BRE translation: the rewrite introduces
                 // regex metacharacters (\s, \w) that the BRE pass must not re-escape.
@@ -1447,6 +1812,12 @@ public sealed class InvokeBashSedCommand : PSCmdlet
                     Global = global,
                     Nth = nth,
                     PrintOnSub = printOnSub,
+                    SrcRegex = srcRegex,
+                    SrcReplacement = srcReplacement,
+                    IgnoreCase = ignoreCase,
+                    Multiline = multiline,
+                    Eval = evalFlag,
+                    FileName = wFile,
                 };
             }
             case 'd':
@@ -1455,13 +1826,22 @@ public sealed class InvokeBashSedCommand : PSCmdlet
             case 'P':
             case 'N':
             case '=':
+            case 'n':
+            case 'g':
+            case 'G':
+            case 'h':
+            case 'H':
+            case 'x':
+            case 'z':
+            case 'F':
                 return new SedCommand { Type = cmdChar, Address = addr, Negate = negate };
             case 'q':
             case 'Q':
+            case 'l':
             {
                 // Q quits like q but WITHOUT auto-printing the pattern space.
-                // Both accept an optional exit code.
-                int exitCode = 0;
+                // q/Q accept an optional exit code; `l` an optional wrap width.
+                int exitCode = 0, intArg = -1;
                 if (remaining.Length > 1)
                 {
                     string qArg = remaining.Substring(1).Trim();
@@ -1469,11 +1849,16 @@ public sealed class InvokeBashSedCommand : PSCmdlet
                         && int.TryParse(qArg, out int parsed))
                     {
                         exitCode = parsed;
+                        intArg = parsed;
+                    }
+                    else if (qArg.Length > 0)
+                    {
+                        return Fail($"sed: -e expression #1, char {pos + remaining.Length}: extra characters after command", 1);
                     }
                 }
                 return new SedCommand
                 {
-                    Type = cmdChar, Address = addr, Negate = negate, ExitCode = exitCode,
+                    Type = cmdChar, Address = addr, Negate = negate, ExitCode = exitCode, IntArg = intArg,
                 };
             }
             case 'a':
@@ -1482,7 +1867,53 @@ public sealed class InvokeBashSedCommand : PSCmdlet
             {
                 string text = remaining.Length > 1 ? remaining.Substring(1) : string.Empty;
                 text = text.TrimStart('\\').TrimStart();
+                // A backslash before a newline continues the text onto the next line (the backslash is not text).
+                text = text.Replace("\\\r\n", "\n").Replace("\\\n", "\n");
                 return new SedCommand { Type = cmdChar, Address = addr, Negate = negate, Text = text };
+            }
+            case '{':
+                return new SedCommand { Type = '{', Address = addr, Negate = negate };
+            case '}':
+                if (addr != null) return Fail($"sed: -e expression #1, char {pos + 1}: }} doesn't want any addresses", 1);
+                return new SedCommand { Type = '}' };
+            case ':':
+            {
+                string label = remaining.Substring(1).Trim();
+                if (addr != null) return Fail($"sed: -e expression #1, char {pos + 1}: : doesn't want any addresses", 1);
+                if (label.Length == 0) return Fail("sed: -e expression #1, char 1: \":\" lacks a label", 1);
+                return new SedCommand { Type = ':', Label = label };
+            }
+            case 'b':
+            case 't':
+            case 'T':
+            {
+                string label = remaining.Substring(1).Trim();
+                return new SedCommand
+                {
+                    Type = cmdChar, Address = addr, Negate = negate, Label = label.Length == 0 ? null : label,
+                };
+            }
+            case 'r':
+            case 'R':
+            case 'w':
+            case 'W':
+            {
+                string file = remaining.Substring(1).TrimStart();
+                if (file.Length == 0) return Fail($"sed: -e expression #1, char {pos + 1}: missing filename in r/R/w/W commands", 1);
+                return new SedCommand { Type = cmdChar, Address = addr, Negate = negate, FileName = file };
+            }
+            case 'e':
+                return new SedCommand
+                {
+                    Type = 'e', Address = addr, Negate = negate, Command = remaining.Substring(1).TrimStart(),
+                };
+            case 'v':
+            {
+                // `v [VERSION]`: fails when the script asks for a newer sed than the 4.9 this follows.
+                string ver = remaining.Substring(1).Trim();
+                if (ver.Length > 0 && Version.TryParse(ver, out var wanted) && wanted > new Version(4, 9))
+                    return Fail($"sed: -e expression #1, char {pos + remaining.Length}: expected newer version of sed", 1);
+                return new SedCommand { Type = 'v' };
             }
             case 'y':
             {
@@ -1511,10 +1942,7 @@ public sealed class InvokeBashSedCommand : PSCmdlet
                 };
             }
             default:
-                // A real GNU command ps-bash does not run is ps-bash's own refusal (exit 2); anything
-                // else is a script error, which GNU reports with exit 1.
-                if ("{}=abcdDeFgGhHilnNpPqQrRstTvwWxyz:#".Contains(cmdChar))
-                    return Fail($"sed: unsupported command '{cmdChar}'", 2);
+                // Every GNU 4.9 command is implemented, so anything else is a script error (GNU: exit 1).
                 return Fail($"sed: -e expression #1, char {pos + 1}: unknown command: `{cmdChar}'", 1);
         }
         }

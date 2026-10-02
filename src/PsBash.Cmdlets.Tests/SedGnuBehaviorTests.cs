@@ -105,7 +105,10 @@ public class SedGnuBehaviorTests : IClassFixture<SharedPwshFixture>, IDisposable
         Run($"Invoke-BashSed '--bogus' p {_a}").AssertFailed(1, "unrecognized option '--bogus'");
         Run($"Invoke-BashSed 'foo' {_a}").AssertFailed(1, "unknown command");
         Run($"Invoke-BashSed '-n2p' {_a}").AssertFailed(1, "invalid option -- '2'");
-        Run($"Invoke-BashSed '--debug' p {_a}").AssertFailed(2, "not supported");
+        Run($"Invoke-BashSed '1{{p' {_a}").AssertFailed(1, "unmatched `{'");
+        Run($"Invoke-BashSed 'p}}' {_a}").AssertFailed(1, "char 2: unexpected `}'");
+        Run($"Invoke-BashSed 'bfoo' {_a}").AssertFailed(4, "can't find label for jump to `foo'");
+        Run($"Invoke-BashSed 'v 9.0' {_a}").AssertFailed(1, "expected newer version of sed");
     }
 
     [Fact]

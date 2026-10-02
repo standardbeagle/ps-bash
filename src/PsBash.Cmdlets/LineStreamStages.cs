@@ -408,6 +408,9 @@ internal sealed class SedStage : ILineStreamStage
 
         if (!InvokeBashSedCommand.TryBuildCommands(expressions, plan.Extended, out var commands))
             return null; // parse error → cmdlet reports it
+        // Blocks, branches, hold space, n/l/F/z, r/R/w/W/e, a q/Q exit status: the cmdlet's runtime owns them.
+        if (SedEngine.UsesRuntimeFeatures(commands)) return null;
+        if (plan.Debug) return null;
 
         return new SedStage(commands, plan.Quiet);
     }
