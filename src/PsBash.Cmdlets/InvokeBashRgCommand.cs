@@ -8,43 +8,27 @@ using PsBash.Cmdlets.Args;
 namespace PsBash.Cmdlets;
 
 /// <summary>
-/// Binary cmdlet replacement for the psm1 <c>Invoke-BashRg</c> function
-/// (REFACTOR-2 Phase 4 follow-on). Internal regex-search implementation
-/// that mirrors the psm1 oracle byte-for-byte, with an opt-in passthrough
-/// to the ripgrep binary <c>rg.exe</c>.
+/// Binary cmdlet for <c>rg</c>: an internal ripgrep-14.1-flavoured search engine (see <see cref="RgSearcher"/> for
+/// the search + print side, <see cref="RgWalker"/> for the directory walk, <see cref="RgTypes"/> /
+/// <see cref="RgColors"/> / <see cref="RgInput"/> / <see cref="PcreToDotNet"/> for the pieces), with an opt-in
+/// passthrough to the real ripgrep binary.
 ///
-/// Native passthrough, enabled by setting <c>PSBASH_RG_NATIVE</c> to a truthy
-/// value: <c>Get-Command rg -CommandType Application</c> via
-/// parameter-bound <see cref="CommandInvocationIntrinsics.InvokeScript(string, object[])"/>;
-/// when found, shells out via <see cref="Process"/> with
-/// <c>UseShellExecute=false</c>, <c>RedirectStandardOutput=true</c>, and
-/// arguments bound via <see cref="ProcessStartInfo.ArgumentList"/>
-/// (Directive 12: no shell, no string concatenation into the command line).
-/// Captured stdout is emitted line-by-line as bare <c>PsBash.TextOutput</c>
-/// strings.
+/// <para><b>Native passthrough</b>, enabled by setting <c>PSBASH_RG_NATIVE</c> to a truthy value (and a real
+/// <c>rg</c> on PATH, and no pipeline input): the argv is forwarded to the binary VERBATIM and in order, before any
+/// validation here, and its stdout is emitted line by line. It is no longer needed to reach any ripgrep flag — the
+/// internal engine implements them (the options it still refuses are listed in <see cref="RgValidButUnsupported"/>) — it
+/// remains the way to get ripgrep's own gitignore handling, PCRE2 engine and the rest of its filtering exactly.</para>
 ///
-/// Default internal mode: the cmdlet runs a ripgrep-flavoured subset over pipeline or recursive
-/// file-mode input: <c>-i -S -s -w -x -c -l -n -N -o -v -F -u</c> (counted), <c>-g GLOB</c>
-/// (repeatable, <c>!negation</c>), <c>-A/-B/-C N</c>, <c>-e PATTERN</c> (repeatable, OR),
-/// <c>--hidden --no-ignore --color WHEN</c>, plus the accepted no-ops <c>--no-heading --no-messages
-/// --no-config --mmap --no-mmap</c>. Exit status is ripgrep's: 0 a line matched, 1 none, 2 an error.
+/// <para>Option parsing is the shared ORDERED parser (<see cref="ArgParser"/>, ripgrep 14.1 rules: no long option
+/// abbreviation, attached short values, options after operands; see <see cref="Plan"/>). The transpiler single-quotes
+/// every flag (<c>PsEmitter.OrderedArgCommands</c>), so the whole argv reaches <see cref="Arguments"/> verbatim and in
+/// order. Typed directly at PowerShell the binder still intercepts colliding bare flags, so the decoys
+/// <see cref="I"/> <see cref="V"/> <see cref="C"/> <see cref="W"/> <see cref="O"/> <see cref="A"/> <see cref="B"/>
+/// <see cref="E"/> remain and are re-injected as ordinary tokens before parsing.</para>
 ///
-/// Option parsing is the shared ORDERED parser (<see cref="ArgParser"/>, ripgrep 14.1 rules: no long
-/// option abbreviation, attached short values, options after operands; see <see cref="Plan"/>); the
-/// ripgrep options the engine does not run (<c>-t -j -m --json -P -r ...</c>) are refused with exit 2
-/// rather than silently dropped. The transpiler single-quotes every flag
-/// (<c>PsEmitter.OrderedArgCommands</c>), so the whole argv reaches <see cref="Arguments"/> verbatim and
-/// in order — which is also exactly what the native passthrough forwards. Typed directly at PowerShell the
-/// binder still intercepts colliding bare flags, so the decoys <see cref="I"/> <see cref="V"/>
-/// <see cref="C"/> <see cref="W"/> <see cref="O"/> <see cref="A"/> <see cref="B"/> <see cref="E"/> remain and
-/// are re-injected as ordinary tokens before parsing.
-/// Output: when the internal fallback runs and produces a match, the
-/// cmdlet emits a typed <c>PsBash.RgMatch</c> PSObject per match with
-/// <c>FileName</c>, <c>LineNumber</c>, <c>Line</c>, and <c>BashText</c>
-/// properties (oracle parity). <c>-c</c> / <c>-l</c> emit bare strings
-/// via <see cref="BashRuntime.NewBashObject"/>. The native-passthrough
-/// branch emits the rg binary's stdout as bare <c>PsBash.TextOutput</c>
-/// strings (one per line). Errors route through <see cref="FileSystemHelpers.WriteBashError"/>.
+/// Output: file-mode lines are typed <c>PsBash.RgMatch</c> PSObjects (<c>FileName</c>, <c>LineNumber</c>, <c>Line</c>,
+/// <c>BashText</c>); a plain unprefixed pipeline match passes the original object through (rg is a filter there);
+/// everything else is a text record. Exit status is ripgrep's: 0 a line matched, 1 none, 2 an error.
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashRg")]
 [OutputType("PsBash.RgMatch")]
@@ -108,32 +92,40 @@ public sealed class InvokeBashRgCommand : PSCmdlet
         OptOnly = "only", OptInvert = "invert", OptFixed = "fixed", OptUnrestricted = "unrestricted",
         OptHidden = "hidden", OptNoIgnore = "no-ignore", OptGlob = "glob", OptAfter = "after",
         OptBefore = "before", OptContext = "context", OptRegexp = "regexp", OptColor = "color",
-        OptHeading = "heading", OptNoHeading = "no-heading", OptNoop = "noop";
+        OptHeading = "heading", OptNoHeading = "no-heading", OptNoop = "noop",
+        OptType = "type", OptTypeNot = "type-not", OptTypeAdd = "type-add", OptTypeClear = "type-clear",
+        OptTypeList = "type-list", OptSearchZip = "search-zip", OptMultiline = "multiline",
+        OptDotAll = "multiline-dotall", OptPcre2 = "pcre2", OptNoPcre2 = "no-pcre2", OptReplace = "replace",
+        OptFile = "file", OptMaxCount = "max-count", OptMaxDepth = "max-depth", OptFollow = "follow",
+        OptNull = "null", OptEncoding = "encoding", OptText = "text", OptPretty = "pretty",
+        OptByteOffset = "byte-offset", OptQuiet = "quiet", OptWithFilename = "with-filename",
+        OptNoFilename = "no-filename", OptFiles = "files", OptStats = "stats", OptVimgrep = "vimgrep",
+        OptJson = "json", OptSort = "sort", OptSortr = "sortr", OptPassthru = "passthru", OptColumn = "column",
+        OptTrim = "trim", OptIglob = "iglob", OptFilesWithout = "files-without", OptCountMatches = "count-matches",
+        OptColors = "colors";
 
     /// <summary>
-    /// ripgrep options the internal engine does not run (refused, exit 2, instead of being silently
-    /// dropped). With <c>PSBASH_RG_NATIVE</c> and a real <c>rg</c> on PATH none of this matters: the
-    /// native binary receives the argv verbatim and runs them all.
+    /// ripgrep options the internal engine does not run (refused, exit 2, instead of being silently dropped). With
+    /// <c>PSBASH_RG_NATIVE</c> and a real <c>rg</c> on PATH the native binary receives the argv verbatim and runs
+    /// them all.
     /// </summary>
     private static readonly string[] RgValidButUnsupported =
     {
-        "-t", "-T", "-j", "-z", "-U", "-P", "-r", "-f", "-m", "-d", "-L", "-0", "-E", "-a", "-p", "-b", "-q",
-        "-H", "-I", "-.",
-        "--type", "--type-not", "--type-add", "--type-clear", "--type-list", "--threads", "--json",
-        "--search-zip", "--multiline", "--multiline-dotall", "--pcre2", "--replace", "--file", "--max-count",
-        "--max-depth", "--maxdepth", "--max-filesize", "--follow", "--sort", "--sortr", "--files", "--stats",
-        "--vimgrep", "--passthru", "--null", "--column", "--debug", "--trace", "--pre",
-        "--pre-glob", "--encoding", "--text", "--binary", "--iglob", "--ignore-file", "--no-ignore-dot",
-        "--no-ignore-global", "--no-ignore-parent", "--no-ignore-files", "--pretty", "--null-data",
-        "--byte-offset", "--quiet", "--files-without-match", "--with-filename", "--no-filename", "--trim",
-        "--line-buffered", "--block-buffered",
+        "--debug", "--trace", "--pre", "--pre-glob", "--binary", "--max-filesize", "--ignore-file",
+        "--no-ignore-dot", "--no-ignore-global", "--no-ignore-parent", "--no-ignore-files", "--null-data",
+        "--no-ignore-exclude", "--no-ignore-messages", "--no-require-git", "--one-file-system", "--crlf",
+        "--engine", "--auto-hybrid-regex", "--hostname-bin", "--hyperlink-format", "--field-match-separator",
+        "--field-context-separator", "--context-separator", "--no-context-separator", "--path-separator",
+        "--regex-size-limit", "--dfa-size-limit", "--no-unicode", "--unicode", "--sort-files",
+        "--include-zero", "--max-columns", "--max-columns-preview", "-M", "--no-encoding",
+        "--ignore-file-case-insensitive", "--no-ignore-file-case-insensitive",
     };
 
     /// <summary>
     /// rg's option surface (ripgrep 14.1; lexopt-style: NO long-option abbreviation, attached short
     /// values <c>-A2 -g*.rs -epat</c>, counted <c>-uu</c>, options after operands). Usage errors exit 2.
     /// <c>--color WHEN</c> takes a REQUIRED value (<c>--color never</c> / <c>--color=never</c>);
-    /// <c>--no-heading --no-messages --no-config --mmap --no-mmap</c> are accepted no-ops.
+    /// <c>--no-heading --no-messages --no-config --mmap --no-mmap -j --line-buffered --block-buffered</c> are accepted no-ops.
     /// </summary>
     private static readonly OptSpecSet RgSpec = new(
         new[]
@@ -144,28 +136,69 @@ public sealed class InvokeBashRgCommand : PSCmdlet
             new OptSpec(OptWord, 'w', "word-regexp"),
             new OptSpec(OptLine, 'x', "line-regexp"),
             new OptSpec(OptCount, 'c', "count"),
+            new OptSpec(OptCountMatches, '\0', "count-matches"),
             new OptSpec(OptFilesWith, 'l', "files-with-matches"),
+            new OptSpec(OptFilesWithout, '\0', "files-without-match"),
             new OptSpec(OptLineNumber, 'n', "line-number"),
             new OptSpec(OptNoLineNumber, 'N', "no-line-number"),
             new OptSpec(OptOnly, 'o', "only-matching"),
             new OptSpec(OptInvert, 'v', "invert-match"),
             new OptSpec(OptFixed, 'F', "fixed-strings"),
             new OptSpec(OptUnrestricted, 'u', "unrestricted"),
-            new OptSpec(OptHidden, '\0', "hidden"),
+            new OptSpec(OptHidden, '.', "hidden"),
             new OptSpec(OptNoIgnore, '\0', "no-ignore"),
             new OptSpec(OptNoIgnore, '\0', "no-ignore-vcs"),
             new OptSpec(OptGlob, 'g', "glob", OptKind.Value),
+            new OptSpec(OptIglob, '\0', "iglob", OptKind.Value),
             new OptSpec(OptAfter, 'A', "after-context", OptKind.Value),
             new OptSpec(OptBefore, 'B', "before-context", OptKind.Value),
             new OptSpec(OptContext, 'C', "context", OptKind.Value),
             new OptSpec(OptRegexp, 'e', "regexp", OptKind.Value),
+            new OptSpec(OptFile, 'f', "file", OptKind.Value),
             new OptSpec(OptColor, '\0', "color", OptKind.Value),
+            new OptSpec(OptColors, '\0', "colors", OptKind.Value),
             new OptSpec(OptHeading, '\0', "heading"),
             new OptSpec(OptNoHeading, '\0', "no-heading"),
+            new OptSpec(OptType, 't', "type", OptKind.Value),
+            new OptSpec(OptTypeNot, 'T', "type-not", OptKind.Value),
+            new OptSpec(OptTypeAdd, '\0', "type-add", OptKind.Value),
+            new OptSpec(OptTypeClear, '\0', "type-clear", OptKind.Value),
+            new OptSpec(OptTypeList, '\0', "type-list"),
+            new OptSpec(OptNoop, 'j', "threads", OptKind.Value),
+            new OptSpec(OptSearchZip, 'z', "search-zip"),
+            new OptSpec(OptMultiline, 'U', "multiline"),
+            new OptSpec(OptDotAll, '\0', "multiline-dotall"),
+            new OptSpec(OptPcre2, 'P', "pcre2"),
+            new OptSpec(OptNoPcre2, '\0', "no-pcre2"),
+            new OptSpec(OptReplace, 'r', "replace", OptKind.Value),
+            new OptSpec(OptMaxCount, 'm', "max-count", OptKind.Value),
+            new OptSpec(OptMaxDepth, 'd', "max-depth", OptKind.Value),
+            new OptSpec(OptMaxDepth, '\0', "maxdepth", OptKind.Value),
+            new OptSpec(OptFollow, 'L', "follow"),
+            new OptSpec(OptNull, '0', "null"),
+            new OptSpec(OptEncoding, 'E', "encoding", OptKind.Value),
+            new OptSpec(OptText, 'a', "text"),
+            new OptSpec(OptPretty, 'p', "pretty"),
+            new OptSpec(OptByteOffset, 'b', "byte-offset"),
+            new OptSpec(OptQuiet, 'q', "quiet"),
+            new OptSpec(OptWithFilename, 'H', "with-filename"),
+            new OptSpec(OptNoFilename, 'I', "no-filename"),
+            new OptSpec(OptFiles, '\0', "files"),
+            new OptSpec(OptStats, '\0', "stats"),
+            new OptSpec(OptVimgrep, '\0', "vimgrep"),
+            new OptSpec(OptJson, '\0', "json"),
+            new OptSpec(OptSort, '\0', "sort", OptKind.Value),
+            new OptSpec(OptSortr, '\0', "sortr", OptKind.Value),
+            new OptSpec(OptPassthru, '\0', "passthru"),
+            new OptSpec(OptPassthru, '\0', "passthrough"),
+            new OptSpec(OptColumn, '\0', "column"),
+            new OptSpec(OptTrim, '\0', "trim"),
             new OptSpec(OptNoop, '\0', "no-messages"),
             new OptSpec(OptNoop, '\0', "no-config"),
             new OptSpec(OptNoop, '\0', "mmap"),
             new OptSpec(OptNoop, '\0', "no-mmap"),
+            new OptSpec(OptNoop, '\0', "line-buffered"),
+            new OptSpec(OptNoop, '\0', "block-buffered"),
             new OptSpec(OptSpecSet.HelpId, 'h', "help"),
             new OptSpec(OptSpecSet.VersionId, 'V', "version"),
         },
@@ -177,6 +210,7 @@ public sealed class InvokeBashRgCommand : PSCmdlet
     internal static ParsedArgs ScanArgs(string[] args) => ArgParser.Parse(args, RgSpec);
 
     private static readonly string[] ColorWhenWords = { "never", "auto", "always", "ansi" };
+    private static readonly string[] SortWords = { "none", "path", "modified", "accessed", "created" };
 
     internal sealed class RgArgs
     {
@@ -203,17 +237,42 @@ public sealed class InvokeBashRgCommand : PSCmdlet
 
         public bool Hidden, NoIgnore;
         public int After, Before;
-        public List<string> Globs = new(), Patterns = new(), Operands = new();
+        public List<string> Globs = new(), Patterns = new(), Operands = new(), IGlobs = new();
+
+        // ---- the batch-8 options ----
+        public List<string> PatternFiles = new(), ColorSpecs = new();
+        public string? Replace;
+        public int MaxCount = int.MaxValue;
+        public int MaxDepth = -1;
+        public bool Quiet, Null, Column, Vimgrep, Json, Stats, Passthru, Trim, Follow, Text, SearchZip, Pcre, Multiline, DotAll;
+        public bool ByteOffset, FilesList, FilesWithout, CountMatches, TypeList;
+        public bool? WithFilename;
+        public string? SortKey;
+        public bool SortReverse;
+        public string? ColorWhen;
+        public string? EncodingLabel;
+        public RgTypes.TypeSet Types = new();
 
         public bool Declined =>
             Parsed.HasError || Error is not null
             || Parsed.Has(OptSpecSet.HelpId) || Parsed.Has(OptSpecSet.VersionId);
     }
 
+    private static bool TryParseUnsigned(string s, out int n)
+    {
+        n = 0;
+        if (s.Length == 0) return false;
+        foreach (char c in s) if (c < '0' || c > '9') return false;
+        n = BashRuntime.ParseCountClamped(s);
+        return true;
+    }
+
     /// <summary>
     /// Scan + interpret. <c>-e PATTERN</c> (repeatable, OR) replaces the first-operand pattern; the last of
     /// <c>-i -s -S</c> wins; <c>-A/-B</c> beat <c>-C</c> in any order; <c>-uu</c> also includes hidden files;
-    /// a non-numeric context length or an unknown <c>--color</c> WHEN is a usage error (exit 2).
+    /// a non-numeric context length / <c>-m</c> / <c>--max-depth</c>, an unknown <c>--color</c> WHEN, <c>--sort</c> key,
+    /// <c>--colors</c> spec, <c>-E</c> label or file type is a usage error (exit 2). <c>--column</c>/<c>--vimgrep</c>/<c>-p</c>
+    /// turn line numbers on at their position (a later <c>-N</c> wins, as in ripgrep).
     /// </summary>
     internal static RgArgs Plan(string[] args)
     {
@@ -222,6 +281,8 @@ public sealed class InvokeBashRgCommand : PSCmdlet
         if (r.Parsed.HasError) return r;
         if (r.Parsed.Has(OptSpecSet.HelpId) || r.Parsed.Has(OptSpecSet.VersionId)) return r;
 
+        var selections = new List<(bool Negate, string Name)>();
+        var colorSpecs = r.ColorSpecs;
         int after = -1, before = -1, both = -1;
         foreach (var tok in r.Parsed.Tokens)
         {
@@ -235,7 +296,9 @@ public sealed class InvokeBashRgCommand : PSCmdlet
                 case OptWord: r.WordRegexp = true; break;
                 case OptLine: r.LineRegexp = true; break;
                 case OptCount: r.CountOnly = true; break;
+                case OptCountMatches: r.CountMatches = true; break;
                 case OptFilesWith: r.FilesOnly = true; break;
+                case OptFilesWithout: r.FilesWithout = true; break;
                 case OptLineNumber: r.LineNumberMode = true; break;
                 case OptNoLineNumber: r.LineNumberMode = false; break;
                 case OptHeading: r.HeadingMode = true; break;
@@ -247,13 +310,78 @@ public sealed class InvokeBashRgCommand : PSCmdlet
                 case OptHidden: r.Hidden = true; break;
                 case OptNoIgnore: r.NoIgnore = true; break;
                 case OptGlob: r.Globs.Add(v!); break;
+                case OptIglob: r.IGlobs.Add(v!); break;
                 case OptRegexp: r.Patterns.Add(v!); break;
+                case OptFile: r.PatternFiles.Add(v!); break;
+                case OptColors: colorSpecs.Add(v!); break;
+                case OptType: selections.Add((false, v!)); break;
+                case OptTypeNot: selections.Add((true, v!)); break;
+                case OptTypeAdd:
+                    if (r.Types.Add(v!) is { } addErr) { r.Error = $"rg: error parsing flag --type-add: {addErr}"; return r; }
+                    break;
+                case OptTypeClear: r.Types.Clear(v!); break;
+                case OptTypeList: r.TypeList = true; break;
+                case OptSearchZip: r.SearchZip = true; break;
+                case OptMultiline: r.Multiline = true; break;
+                case OptDotAll: r.DotAll = true; r.Multiline = true; break;
+                case OptPcre2: r.Pcre = true; break;
+                case OptNoPcre2: r.Pcre = false; break;
+                case OptReplace: r.Replace = v; break;
+                case OptFollow: r.Follow = true; break;
+                case OptNull: r.Null = true; break;
+                case OptText: r.Text = true; break;
+                case OptByteOffset: r.ByteOffset = true; break;
+                case OptQuiet: r.Quiet = true; break;
+                case OptWithFilename: r.WithFilename = true; break;
+                case OptNoFilename: r.WithFilename = false; break;
+                case OptFiles: r.FilesList = true; break;
+                case OptStats: r.Stats = true; break;
+                case OptJson: r.Json = true; break;
+                case OptTrim: r.Trim = true; break;
+                case OptPassthru: r.Passthru = true; break;
+                case OptColumn: r.Column = true; r.LineNumberMode = true; break;
+                case OptVimgrep: r.Vimgrep = true; r.Column = true; r.LineNumberMode = true; break;
+                case OptPretty: r.ColorWhen = "always"; r.HeadingMode = true; r.LineNumberMode = true; break;
+                case OptEncoding:
+                    if (!RgInput.TryResolveEncoding(v!, out _, out _, out var encErr))
+                    {
+                        r.Error = $"rg: error parsing flag -E: {encErr}";
+                        return r;
+                    }
+                    r.EncodingLabel = v;
+                    break;
+                case OptSort or OptSortr:
+                    if (Array.IndexOf(SortWords, v) < 0)
+                    {
+                        r.Error = $"rg: error parsing flag --{tok.OptId}: choice '{v}' is unrecognized";
+                        return r;
+                    }
+                    r.SortKey = v;
+                    r.SortReverse = tok.OptId == OptSortr;
+                    break;
+                case OptMaxCount:
+                    if (!TryParseUnsigned(v!, out int mc))
+                    {
+                        r.Error = "rg: error parsing flag -m: value is not a valid number: invalid digit found in string";
+                        return r;
+                    }
+                    r.MaxCount = mc;
+                    break;
+                case OptMaxDepth:
+                    if (!TryParseUnsigned(v!, out int md))
+                    {
+                        r.Error = "rg: error parsing flag --max-depth: value is not a valid number: invalid digit found in string";
+                        return r;
+                    }
+                    r.MaxDepth = md;
+                    break;
                 case OptColor:
                     if (Array.IndexOf(ColorWhenWords, v) < 0)
                     {
                         r.Error = $"rg: error parsing flag --color: choice '{v}' is unrecognized";
                         return r;
                     }
+                    r.ColorWhen = v;
                     break;
                 case OptAfter: case OptBefore: case OptContext:
                 {
@@ -268,6 +396,19 @@ public sealed class InvokeBashRgCommand : PSCmdlet
                     break;
                 }
             }
+        }
+
+        // Types: definitions first (above), then selections, so `-t foo --type-add foo:*.x` and `--type-clear` order never matters.
+        foreach (var (negate, name) in selections)
+        {
+            bool ok = negate ? r.Types.Negate(name) : r.Types.Select(name);
+            if (!ok) { r.Error = $"rg: unrecognized file type: {name}"; return r; }
+        }
+        var probe = new RgColors();
+        if (probe.Apply(colorSpecs) is { } colorErr)
+        {
+            r.Error = $"rg: error parsing flag --colors: {colorErr}";
+            return r;
         }
 
         if (r.Unrestricted >= 1) r.NoIgnore = true;
@@ -337,28 +478,52 @@ public sealed class InvokeBashRgCommand : PSCmdlet
             return;
         }
 
-        bool wordRegexp = plan.WordRegexp;
-        bool countOnly = plan.CountOnly;
-        bool invertMatch = plan.Invert;
-        bool filesOnly = plan.FilesOnly;
-        // ripgrep's terminal-dependent defaults (see StdoutIsTerminal): line numbers and headings are ON
-        // for a terminal, OFF for a pipe; an explicit -n/-N/--heading/--no-heading always wins. Searching
-        // stdin never defaults to line numbers, even on a terminal (oracle: `cat f | rg x` under a tty).
-        bool tty = StdoutIsTerminal();
-        bool showLineNumbers = plan.LineNumberMode ?? tty;
-        bool heading = plan.HeadingMode ?? tty;
-        bool onlyMatching = plan.OnlyMatching;
-        bool fixedStrings = plan.Fixed;
-        bool lineRegexp = plan.LineRegexp;
-        bool includeHidden = plan.Hidden;
-        bool noIgnore = plan.NoIgnore;
-        int afterContext = plan.After;
-        int beforeContext = plan.Before;
+        if (plan.TypeList)
+        {
+            foreach (var l in plan.Types.ListLines()) WriteObject(BashRuntime.NewBashObject(l));
+            return;
+        }
 
-        // -e PATTERN (repeatable) makes every operand a path; otherwise the first operand is the pattern.
-        var patterns = new List<string>(plan.Patterns);
+        var total = Stopwatch.StartNew();
+        try { Run(plan, total); }
+        catch (Exception ex) when (FileSystemHelpers.IsPipelineStop(ex)) { throw; }
+    }
+
+    private void Sink(RgEmit e)
+    {
+        if (e.Original is PSObject po) WriteObject(BashRuntime.PassTerminated(po));
+        else if (e.File is not null && e.Line is not null) WriteObject(BuildRgMatch(e.File, e.LineNumber, e.Line, e.Text));
+        else if (e.Unterminated) WriteObject(BashRuntime.TextRecord(e.Text, true));
+        else WriteObject(BashRuntime.NewBashObject(e.Text));
+    }
+
+    private bool ColorEnabled(RgArgs plan)
+    {
+        switch (plan.ColorWhen)
+        {
+            case "always" or "ansi": return true;
+            case "never": return false;
+        }
+        var o = Environment.GetEnvironmentVariable("PSBASH_RG_COLOR")?.Trim();
+        if (o is { Length: > 0 }) return BashRuntime.IsHostConfigTruthy("PSBASH_RG_COLOR");
+        // "auto": a real terminal only (the launcher's PTY hand-off). PSBASH_RG_TTY alone is a LAYOUT override.
+        return BashRuntime.IsHostConfigTruthy("PSBASH_PTY_ATTACHED");
+    }
+
+    /// <summary>Where the rest of the work happens: patterns, regex, inputs, search, stats, exit status.</summary>
+    private void Run(RgArgs plan, Stopwatch total)
+    {
         var operands = plan.Operands;
-        if (patterns.Count == 0)
+
+        // ---- patterns: -e, -f, or the first operand (not with --files) ----
+        var patterns = new List<string>(plan.Patterns);
+        bool sawPatternFile = false;
+        foreach (var pf in plan.PatternFiles)
+        {
+            sawPatternFile = true;
+            if (!TryReadPatternFile(pf, patterns)) { FileSystemHelpers.SetLastExitCode(this, 2); return; }
+        }
+        if (!plan.FilesList && patterns.Count == 0 && !sawPatternFile)
         {
             if (operands.Count == 0)
             {
@@ -370,11 +535,305 @@ public sealed class InvokeBashRgCommand : PSCmdlet
             operands.RemoveAt(0);
         }
 
-        // --- Internal fallback (psm1 oracle parity) ---
-        var fileOperands = operands;
+        // ---- terminal-dependent defaults (see StdoutIsTerminal) ----
+        bool tty = StdoutIsTerminal();
+        bool pipelineMode = _pipeline.Count > 0 && operands.Count == 0 && !plan.FilesList;
+        var colors = ColorEnabled(plan) ? new RgColors() : null;
+        colors?.Apply(plan.ColorSpecs);
 
-        // Case resolution: the last of -i / -s / -S wins; -S (smart-case) is insensitive only when
-        // no pattern has an uppercase letter.
+        var inputs = new List<(string Abs, string Display, bool Explicit)>();
+        bool pathError = false;
+        bool multipleFiles = false;
+        RgSource? stdinSource = null;
+
+        // ---- inputs ----
+        var types = plan.Types;
+        var walkOpts = new RgWalker.Options
+        {
+            IncludeIgnored = plan.NoIgnore || BashFileSystem.DefaultFilteringDisabled(),
+            IncludeHidden = plan.Hidden,
+            Follow = plan.Follow,
+            MaxDepth = plan.MaxDepth,
+        };
+        walkOpts.Accept = BuildAccept(plan, types);
+
+        if (pipelineMode)
+        {
+            stdinSource = BuildStdinSource(plan);
+        }
+        else
+        {
+            var targets = operands.Count > 0 ? operands : new List<string> { "" };
+            int fileTargets = 0;
+            bool anyDir = false;
+            var found = new List<(string Abs, string Display, bool Explicit)>();
+            foreach (var target in targets)
+            {
+                bool implicitRoot = target.Length == 0;
+                string abs;
+                try
+                {
+                    abs = SessionState.Path.GetUnresolvedProviderPathFromPSPath(
+                        implicitRoot ? "." : FileSystemHelpers.NormalizeOperandPath(target));
+                }
+                catch
+                {
+                    FileSystemHelpers.WriteBashError(this, $"rg: {target}: No such file or directory (os error 2)");
+                    pathError = true;
+                    continue;
+                }
+                if (Directory.Exists(abs))
+                {
+                    anyDir = true;
+                    foreach (var f in RgWalker.Walk(abs, implicitRoot ? "" : target, walkOpts)) found.Add((f.Abs, f.Display, false));
+                }
+                else if (File.Exists(abs) || FileSystemHelpers.IsNullDevice(abs))
+                {
+                    fileTargets++;
+                    found.Add((abs, target, true));
+                }
+                else
+                {
+                    FileSystemHelpers.WriteBashError(this, $"rg: {target}: No such file or directory (os error 2)");
+                    pathError = true;
+                }
+            }
+            multipleFiles = anyDir || fileTargets > 1;
+            inputs = found;
+            if (plan.SortKey is { } sk && sk != "none") inputs = SortInputs(inputs, sk, plan.SortReverse);
+        }
+
+        // ---- --files: list, no search ----
+        if (plan.FilesList)
+        {
+            int printed = 0;
+            foreach (var inp in inputs)
+            {
+                printed++;
+                if (plan.Null) WriteObject(BashRuntime.TextRecord(inp.Display + "\0", true));
+                else WriteObject(BashRuntime.NewBashObject(inp.Display));
+            }
+            FileSystemHelpers.SetLastExitCode(this, pathError ? 2 : printed == 0 ? 1 : 0);
+            return;
+        }
+
+        // ---- regex ----
+        if (!TryBuildRegex(plan, patterns, out var regex, out var regexError))
+        {
+            FileSystemHelpers.WriteBashError(this, regexError!);
+            FileSystemHelpers.SetLastExitCode(this, 2);
+            return;
+        }
+
+        // ---- settings ----
+        bool vimgrep = plan.Vimgrep;
+        bool lineNumbers = pipelineMode ? plan.LineNumberMode == true : plan.LineNumberMode ?? tty;
+        bool heading = !vimgrep && (plan.HeadingMode ?? tty);
+        bool showPath = pipelineMode
+            ? plan.WithFilename == true
+            : plan.WithFilename ?? (multipleFiles || vimgrep);
+        bool json = plan.Json && !plan.CountOnly && !plan.CountMatches && !plan.FilesOnly && !plan.FilesWithout;
+        var settings = new RgSettings
+        {
+            Regex = regex!,
+            Invert = plan.Invert,
+            Multiline = plan.Multiline,
+            OnlyMatching = plan.OnlyMatching,
+            Quiet = plan.Quiet,
+            Json = json,
+            Passthru = plan.Passthru,
+            Trim = plan.Trim,
+            Null = plan.Null,
+            ByteOffset = plan.ByteOffset,
+            Column = plan.Column,
+            Vimgrep = vimgrep,
+            CountOnly = plan.CountOnly,
+            CountMatches = plan.CountMatches,
+            FilesWith = plan.FilesOnly,
+            FilesWithout = plan.FilesWithout,
+            LineNumbers = lineNumbers,
+            UseHeading = heading && showPath,
+            ShowPath = showPath,
+            Stats = plan.Stats,
+            Replace = plan.Replace,
+            Before = plan.Passthru ? int.MaxValue / 2 : plan.Before,
+            After = plan.Passthru ? int.MaxValue / 2 : plan.After,
+            MaxCount = plan.MaxCount,
+            Colors = colors,
+        };
+
+        var stats = new RgStats();
+        var searcher = new RgSearcher(settings, Sink, stats);
+        var searching = new Stopwatch();
+        bool anyMatch = false;
+        bool neverMatch = patterns.Count == 0;   // an empty -f file matches nothing
+        var read = new RgReadOptions
+        {
+            Text = plan.Text,
+            SearchZip = plan.SearchZip,
+            Exact = plan.ByteOffset || json,
+        };
+        if (plan.EncodingLabel is { } label && RgInput.TryResolveEncoding(label, out var enc, out var none, out _))
+        {
+            read.Encoding = enc;
+            read.NoDecode = none;
+        }
+
+        if (!neverMatch)
+        {
+            if (stdinSource is not null)
+            {
+                searching.Start();
+                anyMatch = searcher.SearchOne(stdinSource);
+                searching.Stop();
+            }
+            else
+            {
+                foreach (var inp in inputs)
+                {
+                    RgSource? src;
+                    try { src = RgInput.Read(inp.Abs, inp.Display, inp.Explicit, read); }
+                    catch (Exception ex) when (!FileSystemHelpers.IsPipelineStop(ex))
+                    {
+                        FileSystemHelpers.WriteBashError(this, $"rg: {inp.Display}: {ex.Message}");
+                        pathError = true;
+                        continue;
+                    }
+                    if (src is null) continue;
+                    searching.Start();
+                    bool m = searcher.SearchOne(src);
+                    searching.Stop();
+                    if (m) { anyMatch = true; if (plan.Quiet) break; }
+                }
+            }
+        }
+
+        if (json) searcher.WriteJsonSummary(total, searching.Elapsed);
+        else if (plan.Stats) WriteStats(stats, searching.Elapsed, total.Elapsed);
+
+        int exit = plan.Quiet && anyMatch ? 0 : pathError ? 2 : anyMatch ? 0 : 1;
+        FileSystemHelpers.SetLastExitCode(this, exit);
+    }
+
+    private void WriteStats(RgStats s, TimeSpan searching, TimeSpan total)
+    {
+        WriteObject(BashRuntime.NewBashObject(""));
+        foreach (var l in new[]
+                 {
+                     $"{s.Matches} matches", $"{s.MatchedLines} matched lines", $"{s.FilesWithMatch} files contained matches",
+                     $"{s.Searches} files searched", $"{s.BytesPrinted} bytes printed", $"{s.BytesSearched} bytes searched",
+                     $"{searching.TotalSeconds:F6} seconds spent searching", $"{total.TotalSeconds:F6} seconds",
+                 })
+            WriteObject(BashRuntime.NewBashObject(l));
+    }
+
+    /// <summary>
+    /// The walked-file filter: the repeatable <c>-g</c>/<c>--iglob</c> filename globs (a file must match one positive glob when
+    /// any were given and none of the <c>!negated</c> ones; a positive glob match also OVERRIDES the <c>-t</c>/<c>-T</c> type
+    /// selection, as ripgrep's overrides do), then the type selection. Explicitly named files bypass both.
+    /// </summary>
+    private static Func<string, bool>? BuildAccept(RgArgs plan, RgTypes.TypeSet types)
+    {
+        if (plan.Globs.Count == 0 && plan.IGlobs.Count == 0 && !types.Active) return null;
+        var include = new List<WildcardPattern>();
+        var exclude = new List<WildcardPattern>();
+        foreach (var g in plan.Globs.Concat(plan.IGlobs))
+        {
+            if (g.StartsWith('!') && g.Length > 1) exclude.Add(WildcardPattern.Get(g.Substring(1), WildcardOptions.IgnoreCase));
+            else include.Add(WildcardPattern.Get(g, WildcardOptions.IgnoreCase));
+        }
+        return path =>
+        {
+            string name = Path.GetFileName(path);
+            foreach (var g in exclude) if (g.IsMatch(name)) return false;
+            if (include.Count > 0)
+            {
+                foreach (var g in include) if (g.IsMatch(name)) return true;
+                return false;
+            }
+            return types.Accepts(name);
+        };
+    }
+
+    private static List<(string Abs, string Display, bool Explicit)> SortInputs(
+        List<(string Abs, string Display, bool Explicit)> inputs, string key, bool reverse)
+    {
+        IEnumerable<(string Abs, string Display, bool Explicit)> sorted = key switch
+        {
+            "path" => inputs.OrderBy(i => i.Display.Replace('\\', '/'), StringComparer.Ordinal),
+            "modified" => inputs.OrderBy(i => SafeTime(() => File.GetLastWriteTimeUtc(i.Abs))),
+            "accessed" => inputs.OrderBy(i => SafeTime(() => File.GetLastAccessTimeUtc(i.Abs))),
+            "created" => inputs.OrderBy(i => SafeTime(() => File.GetCreationTimeUtc(i.Abs))),
+            _ => inputs,
+        };
+        var list = sorted.ToList();
+        if (reverse) list.Reverse();
+        return list;
+    }
+
+    private static DateTime SafeTime(Func<DateTime> f)
+    {
+        try { return f(); } catch { return DateTime.MinValue; }
+    }
+
+    private RgSource BuildStdinSource(RgArgs plan)
+    {
+        var src = new RgSource { Display = "<stdin>", IsStdin = true, Items = new List<object?>() };
+        foreach (var item in _pipeline)
+        {
+            string text = BashRuntime.GetBashText(item);
+            string trimmed = text.TrimEnd('\n');
+            if (trimmed.Contains('\n'))
+            {
+                foreach (var sub in trimmed.Split('\n')) { src.Lines.Add(sub); src.Items.Add(null); src.ByteSize += RawBytes_Count(sub) + 1; }
+            }
+            else
+            {
+                src.Lines.Add(trimmed);
+                src.Items.Add(item);
+                src.ByteSize += RawBytes_Count(trimmed) + 1;
+            }
+        }
+        return src;
+    }
+
+    private static int RawBytes_Count(string s) => PsBash.Core.RawBytes.GetByteCount(s);
+
+    /// <summary>Read <c>-f FILE</c> (one pattern per line; <c>-</c> = the pipeline). An unreadable file is fatal (exit 2).</summary>
+    private bool TryReadPatternFile(string raw, List<string> dest)
+    {
+        if (raw == "-")
+        {
+            foreach (var item in _pipeline)
+                foreach (var l in BashRuntime.GetBashText(item).TrimEnd('\n').Split('\n')) dest.Add(l.TrimEnd('\r'));
+            return true;
+        }
+        string path;
+        try { path = SessionState.Path.GetUnresolvedProviderPathFromPSPath(FileSystemHelpers.NormalizeOperandPath(raw)); }
+        catch { path = raw; }
+        try
+        {
+            foreach (var l in BashFileSystem.ReadLines(path)) dest.Add(l.TrimEnd('\r'));
+            return true;
+        }
+        catch (Exception ex) when (!FileSystemHelpers.IsPipelineStop(ex))
+        {
+            FileSystemHelpers.WriteBashError(this, $"rg: {raw}: No such file or directory (os error 2)");
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Build the single combined regex: patterns OR-ed, <c>-F</c> escaped, <c>-w</c> as <c>\b(?:…)\b</c>, <c>-x</c> as
+    /// <c>^(?:…)$</c>, smart-case, POSIX classes translated, PCRE2 (<c>-P</c>) and Rust-isms mapped through
+    /// <see cref="PcreToDotNet"/>. A literal <c>\n</c> in a pattern needs <c>-U</c>, as in ripgrep.
+    /// </summary>
+    private static bool TryBuildRegex(RgArgs plan, List<string> patterns, out Regex? regex, out string? error)
+    {
+        regex = null;
+        error = null;
+        if (patterns.Count == 0) { regex = new Regex("(?!)"); return true; }
+
         bool effectiveIgnore = plan.CaseMode switch
         {
             'i' => true,
@@ -386,52 +845,62 @@ public sealed class InvokeBashRgCommand : PSCmdlet
         foreach (var raw in patterns)
         {
             string pattern = raw;
-            if (fixedStrings) pattern = Regex.Escape(pattern);
-            if (wordRegexp) pattern = "\\b" + pattern + "\\b";
-            // -x / --line-regexp: anchor to the whole line.
-            if (lineRegexp) pattern = "^(?:" + pattern + ")$";
-            parts.Add(BashRuntime.TranslatePosixClasses(pattern));
+            if (plan.Fixed) pattern = Regex.Escape(pattern);
+            else
+            {
+                if (!plan.Multiline && HasLiteralNewlineEscape(pattern))
+                {
+                    error = "rg: the literal \"\\n\" is not allowed in a regex\n\nConsider enabling multiline mode with the --multiline flag (or -U for short).\nWhen multiline mode is enabled, new line characters can be matched.";
+                    return false;
+                }
+                pattern = BashRuntime.TranslatePosixClasses(pattern);
+                if (!PcreToDotNet.TryTranslate(pattern, plan.Pcre, out var translated, out var terr))
+                {
+                    error = plan.Pcre ? $"rg: PCRE2: error compiling pattern: {terr}" : $"rg: regex parse error: {terr}";
+                    return false;
+                }
+                pattern = translated;
+            }
+            if (plan.WordRegexp) pattern = "\\b(?:" + pattern + ")\\b";
+            if (plan.LineRegexp) pattern = "^(?:" + pattern + ")$";
+            parts.Add(pattern);
         }
         string combined = parts.Count == 1 ? parts[0] : string.Join("|", parts.Select(p => "(?:" + p + ")"));
 
-        var regexOpts = RegexOptions.None;
-        if (effectiveIgnore) regexOpts |= RegexOptions.IgnoreCase;
-
-        Regex regex;
+        var opts = RegexOptions.None;
+        if (effectiveIgnore) opts |= RegexOptions.IgnoreCase;
+        if (plan.Multiline) opts |= RegexOptions.Multiline;
+        if (plan.DotAll) opts |= RegexOptions.Singleline;
         try
         {
-            // .NET has no POSIX bracket classes; without this `[[:digit:]]` matches
-            // nothing and reports no error (see BashRuntime.TranslatePosixClasses).
-            regex = new Regex(combined, regexOpts);
+            regex = new Regex(combined, opts);
+            return true;
         }
         catch (ArgumentException ex)
         {
-            FileSystemHelpers.WriteBashError(this, $"rg: invalid regular expression: {ex.Message}");
-            FileSystemHelpers.SetLastExitCode(this, 2);
-            return;
+            error = plan.Pcre ? $"rg: PCRE2: error compiling pattern: {ex.Message}" : $"rg: regex parse error: {ex.Message}";
+            return false;
         }
+    }
 
-        // --- Pipeline mode ---
-        if (_pipeline.Count > 0 && fileOperands.Count == 0)
+    /// <summary>An unescaped backslash-n in the pattern text (an even run of backslashes before the <c>n</c> is a literal backslash).</summary>
+    private static bool HasLiteralNewlineEscape(string p)
+    {
+        for (int i = 0; i + 1 < p.Length; i++)
         {
-            if (!countOnly && (beforeContext > 0 || afterContext > 0))
-                RunPipelineContextMode(regex, invertMatch, onlyMatching, plan.LineNumberMode == true, beforeContext, afterContext);
-            else
-                RunPipelineMode(regex, invertMatch, countOnly, onlyMatching, plan.LineNumberMode == true);
-            return;
+            if (p[i] != '\\') continue;
+            if (p[i + 1] == 'n') return true;
+            i++;   // skip the escaped character
         }
-
-        // --- File mode (recursive by default; cwd if no operands) ---
-        RunFileMode(regex, fileOperands, invertMatch, showLineNumbers, heading, countOnly,
-            filesOnly, onlyMatching, includeHidden, noIgnore, plan.Globs,
-            beforeContext, afterContext);
+        return false;
     }
 
     /// <summary>
-    /// Is this output headed for a terminal? ripgrep keys its defaults (line numbers, headings, colour) on
+    /// Is this output headed for a terminal? ripgrep keys its defaults (line numbers, headings) on
     /// it. The host process's own stdout is always a pipe/IPC frame, so the signal is the launcher's
     /// hand-off: <c>PSBASH_PTY_ATTACHED=1</c> (interactive shell under a PTY). <c>PSBASH_RG_TTY</c>
-    /// (<c>1</c>/<c>0</c>) overrides it (tests, wrappers that know better). Known limit: an interactive
+    /// (<c>1</c>/<c>0</c>) overrides the LAYOUT defaults (tests, wrappers that know better); colour has its own
+    /// override <c>PSBASH_RG_COLOR</c> and otherwise follows only the real PTY signal. Known limit: an interactive
     /// <c>rg x | less</c> still counts as a terminal; <c>-c</c> one-shot runs never do.
     /// </summary>
     internal static bool StdoutIsTerminal()
@@ -493,10 +962,7 @@ public sealed class InvokeBashRgCommand : PSCmdlet
             }
 
             // Bounded spawn + concurrent stdout/stderr drain + kill-tree on timeout
-            // (BashRuntime.RunChildProcess). The old code drained stderr only AFTER
-            // the stdout ReadLine loop, so a large stderr burst from rg could fill
-            // its pipe buffer and deadlock; and the unbounded WaitForExit could
-            // wedge the host. Native rg here never reads stdin (only reached when
+            // (BashRuntime.RunChildProcess). Native rg here never reads stdin (only reached when
             // _pipeline.Count == 0), so the helper's closed stdin is safe.
             var spawn = BashRuntime.RunChildProcess(psi);
 
@@ -523,361 +989,6 @@ public sealed class InvokeBashRgCommand : PSCmdlet
     private static bool NativeRgPassthroughEnabled() => BashRuntime.IsHostConfigTruthy("PSBASH_RG_NATIVE");
 
     /// <summary>
-    /// Stdin search with <c>-A/-B/-C</c> (ripgrep 14.1): the lines around a match print with <c>-</c> where a
-    /// match has <c>:</c> (<c>2-b2</c> / <c>3:match</c> under <c>-n</c>), and non-adjacent groups are divided by
-    /// <c>--</c>. Context lines print whole even under <c>-o</c>. (Before this the pipeline form ignored context.)
-    /// </summary>
-    private void RunPipelineContextMode(Regex regex, bool invertMatch, bool onlyMatching, bool lineNumbers,
-        int beforeContext, int afterContext)
-    {
-        var lines = new List<(string Text, object? Item)>();
-        foreach (var item in _pipeline)
-        {
-            string trimmed = BashRuntime.GetBashText(item).TrimEnd('\n');
-            if (trimmed.Contains('\n'))
-                foreach (var sub in trimmed.Split('\n')) lines.Add((sub, null));
-            else
-                lines.Add((trimmed, item));
-        }
-
-        var isMatch = new bool[lines.Count];
-        int matchCount = 0;
-        var emit = new SortedSet<int>();
-        for (int i = 0; i < lines.Count; i++)
-        {
-            bool m = regex.IsMatch(lines[i].Text);
-            if (invertMatch) m = !m;
-            isMatch[i] = m;
-            if (!m) continue;
-            matchCount++;
-            for (int j = Math.Max(0, i - beforeContext); j <= Math.Min(lines.Count - 1, i + afterContext); j++) emit.Add(j);
-        }
-
-        int prev = -2;
-        foreach (int li in emit)
-        {
-            if (prev >= 0 && li != prev + 1) WriteObject(BashRuntime.NewBashObject("--"));
-            prev = li;
-            var (text, item) = lines[li];
-            string sep = isMatch[li] ? ":" : "-";
-            string pfx = lineNumbers ? (li + 1) + sep : "";
-            if (onlyMatching && isMatch[li])
-            {
-                foreach (Match m in regex.Matches(text)) WriteObject(BashRuntime.NewBashObject(pfx + m.Value));
-            }
-            else if (!lineNumbers && item is not null)
-                WriteObject(BashRuntime.PassTerminated(item));
-            else
-                WriteObject(BashRuntime.NewBashObject(pfx + text));
-        }
-
-        FileSystemHelpers.SetLastExitCode(this, matchCount == 0 ? 1 : 0);
-    }
-
-    private void RunPipelineMode(Regex regex, bool invertMatch, bool countOnly, bool onlyMatching, bool lineNumbers)
-    {
-        int matchCount = 0;
-        int lineNo = 0;
-        string Pfx() => lineNumbers ? lineNo + ":" : "";
-
-        foreach (var item in _pipeline)
-        {
-            string text = BashRuntime.GetBashText(item);
-            string trimmed = text.TrimEnd('\n');
-
-            if (trimmed.Contains('\n'))
-            {
-                foreach (var subLine in trimmed.Split('\n'))
-                {
-                    lineNo++;
-                    bool isMatch = regex.IsMatch(subLine);
-                    if (invertMatch) isMatch = !isMatch;
-                    if (isMatch)
-                    {
-                        matchCount++;
-                        if (!countOnly)
-                        {
-                            if (onlyMatching)
-                            {
-                                foreach (Match m in regex.Matches(subLine))
-                                {
-                                    WriteObject(BashRuntime.NewBashObject(Pfx() + m.Value));
-                                }
-                            }
-                            else
-                            {
-                                WriteObject(BashRuntime.NewBashObject(Pfx() + subLine));
-                            }
-                        }
-                    }
-                }
-            }
-            else
-            {
-                lineNo++;
-                bool isMatch = regex.IsMatch(trimmed);
-                if (invertMatch) isMatch = !isMatch;
-                if (isMatch)
-                {
-                    matchCount++;
-                    if (!countOnly)
-                    {
-                        if (onlyMatching)
-                        {
-                            foreach (Match m in regex.Matches(trimmed))
-                            {
-                                WriteObject(BashRuntime.NewBashObject(Pfx() + m.Value));
-                            }
-                        }
-                        else if (lineNumbers)
-                        {
-                            WriteObject(BashRuntime.NewBashObject(Pfx() + trimmed));
-                        }
-                        else
-                        {
-                            // Plain rg is a FILTER: pass the original object through (rg
-                            // terminates every output line, so strip a stale missing-newline flag).
-                            WriteObject(BashRuntime.PassTerminated(item));
-                        }
-                    }
-                }
-            }
-        }
-
-        // ripgrep: 0 = a line matched, 1 = none.
-        FileSystemHelpers.SetLastExitCode(this, matchCount == 0 ? 1 : 0);
-
-        if (countOnly)
-        {
-            WriteObject(BashRuntime.NewBashObject(matchCount.ToString()));
-        }
-    }
-
-    private void RunFileMode(
-        Regex regex, List<string> fileOperands, bool invertMatch,
-        bool showLineNumbers, bool heading, bool countOnly, bool filesOnly, bool onlyMatching,
-        bool includeHidden, bool noIgnore, List<string> globs,
-        int beforeContext, int afterContext)
-    {
-        var searchTargets = fileOperands.Count > 0 ? fileOperands : new List<string> { "." };
-        // ripgrep filters by default (.gitignore + hidden + .git). We approximate
-        // that with the shared directory-prune set; PSBASH_SEARCH_NO_IGNORE or the
-        // --no-ignore / -u flags turn it off. Pruning happens BEFORE descent in
-        // EnumerateSearchFiles, so .git / bin / obj / node_modules are never
-        // walked — this is the fix for the old AllDirectories walk that descended
-        // into them and went silent long enough to trip the host idle-timeout.
-        bool includeIgnored = noIgnore || BashFileSystem.DefaultFilteringDisabled();
-
-        // Resolve each target to either a single file or a lazy directory walk.
-        // multipleFiles must be known before emitting, so derive it from the
-        // target shapes (any directory target, or more than one file target).
-        var sources = new List<IEnumerable<string>>();
-        bool pathError = false;
-        bool anyTargetIsDir = false;
-        int fileTargetCount = 0;
-
-        foreach (var target in searchTargets)
-        {
-            string resolved;
-            try
-            {
-                resolved = SessionState.Path.GetUnresolvedProviderPathFromPSPath(target);
-            }
-            catch
-            {
-                FileSystemHelpers.WriteBashError(this, $"rg: {target}: No such file or directory (os error 2)");
-                pathError = true;
-                continue;
-            }
-
-            if (!File.Exists(resolved) && !Directory.Exists(resolved))
-            {
-                FileSystemHelpers.WriteBashError(this, $"rg: {target}: No such file or directory (os error 2)");
-                pathError = true;
-                continue;
-            }
-
-            if (Directory.Exists(resolved))
-            {
-                anyTargetIsDir = true;
-                sources.Add(WalkSearchDir(resolved, includeIgnored, includeHidden, globs));
-            }
-            else
-            {
-                fileTargetCount++;
-                sources.Add(new[] { resolved });
-            }
-        }
-
-        bool multipleFiles = anyTargetIsDir || fileTargetCount > 1;
-        var matchedFiles = new List<string>();
-        var perFileCounts = new Dictionary<string, int>();
-        // Files actually read, in walk order — drives the multi-file count pass.
-        var scanned = new List<string>();
-        int totalMatchCount = 0;
-        // Binary files are skipped (NUL probe) like ripgrep; the same
-        // PSBASH_SEARCH_NO_IGNORE escape hatch searches them too.
-        bool skipBinary = !BashFileSystem.DefaultFilteringDisabled();
-        // ripgrep heading layout: the path on its own line, the file's matches beneath it, a blank line
-        // between files. Only when several files are searched; the lines then carry no path prefix.
-        bool useHeading = heading && multipleFiles;
-        bool prefixPath = multipleFiles && !useHeading;
-        bool anyHeading = false;
-        bool printedAny = false;
-
-        foreach (var source in sources)
-        foreach (var filePath in source)
-        {
-            var lines = ReadFileLines(filePath, skipBinary);
-            if (lines == null) continue;
-            scanned.Add(filePath);
-
-            var matchIndices = new List<int>();
-            for (int li = 0; li < lines.Length; li++)
-            {
-                bool isMatch = regex.IsMatch(lines[li]);
-                if (invertMatch) isMatch = !isMatch;
-                if (isMatch) matchIndices.Add(li);
-            }
-
-            int fileMatchCount = matchIndices.Count;
-            totalMatchCount += fileMatchCount;
-            perFileCounts[filePath] = fileMatchCount;
-
-            if (filesOnly)
-            {
-                if (fileMatchCount > 0) matchedFiles.Add(filePath);
-                continue;
-            }
-
-            if (countOnly) continue;
-
-            var emitLines = new SortedSet<int>();
-            foreach (var mi in matchIndices)
-            {
-                int start = Math.Max(0, mi - beforeContext);
-                int end = Math.Min(lines.Length - 1, mi + afterContext);
-                for (int li = start; li <= end; li++) emitLines.Add(li);
-            }
-
-            // ripgrep context layout: `--` divides non-adjacent groups inside a file and (without
-            // headings) consecutive files; with headings a blank line + the path divides files instead.
-            // Nothing is divided without a context option (`-A0` / `-C0` print no separators).
-            bool contextOn = beforeContext > 0 || afterContext > 0;
-            if (useHeading && emitLines.Count > 0)
-            {
-                if (anyHeading) WriteObject(BashRuntime.NewBashObject(""));
-                WriteObject(BashRuntime.NewBashObject(filePath));
-                anyHeading = true;
-            }
-            else if (contextOn && printedAny && emitLines.Count > 0)
-            {
-                WriteObject(BashRuntime.NewBashObject("--"));
-            }
-            if (emitLines.Count > 0) printedAny = true;
-
-            var matchSet = new HashSet<int>(matchIndices);
-            int prevLine = -2;
-            foreach (var li in emitLines)
-            {
-                if (contextOn && prevLine >= 0 && li != prevLine + 1) WriteObject(BashRuntime.NewBashObject("--"));
-                prevLine = li;
-                string line = lines[li];
-                int lineNum = li + 1;
-                bool isMatchLine = matchSet.Contains(li);
-
-                if (onlyMatching && isMatchLine)
-                {
-                    foreach (Match m in regex.Matches(line))
-                    {
-                        string matchText = m.Value;
-                        string bashText = BuildBashText(filePath, lineNum, matchText, prefixPath, showLineNumbers, isContext: false);
-                        WriteObject(BuildRgMatch(filePath, lineNum, line, bashText));
-                    }
-                    continue;
-                }
-
-                string bt = BuildBashText(filePath, lineNum, line, prefixPath, showLineNumbers, isContext: !isMatchLine);
-                WriteObject(BuildRgMatch(filePath, lineNum, line, bt));
-            }
-        }
-
-        // ripgrep: 0 = a line matched, 1 = none, 2 = an error (an unreadable path) even when others matched.
-        FileSystemHelpers.SetLastExitCode(this, pathError ? 2 : totalMatchCount == 0 ? 1 : 0);
-
-        if (filesOnly)
-        {
-            foreach (var fp in matchedFiles)
-            {
-                WriteObject(BashRuntime.NewBashObject(fp));
-            }
-            return;
-        }
-
-        if (countOnly)
-        {
-            if (multipleFiles)
-            {
-                foreach (var fp in scanned)
-                {
-                    if (perFileCounts.TryGetValue(fp, out int n))
-                    {
-                        WriteObject(BashRuntime.NewBashObject($"{fp}:{n}"));
-                    }
-                }
-            }
-            else
-            {
-                WriteObject(BashRuntime.NewBashObject(totalMatchCount.ToString()));
-            }
-        }
-    }
-
-    /// <summary>
-    /// Lazy directory walk for one search-root directory: the shared
-    /// dir-pruning enumerator (<see cref="BashFileSystem.EnumerateSearchFiles"/>)
-    /// with the repeatable <c>-g</c>/<c>--glob</c> filename filters applied: a file must match one of
-    /// the positive globs (when any were given) and none of the <c>!negated</c> ones. Kept as
-    /// an iterator so the caller streams matches as files are visited.
-    /// </summary>
-    private static IEnumerable<string> WalkSearchDir(
-        string root, bool includeIgnored, bool includeHidden, List<string> globs)
-    {
-        var include = new List<WildcardPattern>();
-        var exclude = new List<WildcardPattern>();
-        foreach (var g in globs)
-        {
-            if (g.StartsWith('!') && g.Length > 1) exclude.Add(WildcardPattern.Get(g.Substring(1), WildcardOptions.IgnoreCase));
-            else include.Add(WildcardPattern.Get(g, WildcardOptions.IgnoreCase));
-        }
-
-        foreach (var fp in BashFileSystem.EnumerateSearchFiles(root, includeIgnored, includeHidden))
-        {
-            string name = Path.GetFileName(fp);
-            bool skip = false;
-            foreach (var g in exclude) { if (g.IsMatch(name)) { skip = true; break; } }
-            if (skip) continue;
-            if (include.Count > 0)
-            {
-                bool hit = false;
-                foreach (var g in include) { if (g.IsMatch(name)) { hit = true; break; } }
-                if (!hit) continue;
-            }
-            yield return fp;
-        }
-    }
-
-    /// <summary>A match line separates its fields with <c>:</c>, a context line with <c>-</c> (ripgrep).</summary>
-    private static string BuildBashText(string filePath, int lineNum, string body, bool multipleFiles, bool showLineNumbers, bool isContext)
-    {
-        char sep = isContext ? '-' : ':';
-        if (multipleFiles && showLineNumbers) return $"{filePath}{sep}{lineNum}{sep}{body}";
-        if (multipleFiles) return $"{filePath}{sep}{body}";
-        if (showLineNumbers) return $"{lineNum}{sep}{body}";
-        return body;
-    }
-
-    /// <summary>
     /// Build a typed <c>PsBash.RgMatch</c> PSObject (oracle parity).
     /// </summary>
     private static PSObject BuildRgMatch(string fileName, int lineNumber, string line, string bashText)
@@ -889,21 +1000,5 @@ public sealed class InvokeBashRgCommand : PSCmdlet
         obj.Properties.Add(new PSNoteProperty("Line", line));
         obj.Properties.Add(new PSNoteProperty("BashText", bashText));
         return obj;
-    }
-
-    private static string[]? ReadFileLines(string path, bool skipBinary)
-    {
-        try
-        {
-            // null => binary (NUL in first 8 KB) or IO error => caller skips it.
-            if (skipBinary && BashFileSystem.IsBinary(path)) return null;
-            var list = new List<string>();
-            foreach (var l in BashFileSystem.ReadLines(path)) list.Add(l);
-            return list.ToArray();
-        }
-        catch
-        {
-            return null;
-        }
     }
 }

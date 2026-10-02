@@ -60,8 +60,8 @@ public class RgBehaviorTests : IClassFixture<SharedPwshFixture>, IDisposable
         Run($"Invoke-BashRg '-A' x c3 {_g}").AssertFailed(2, "error parsing flag -A");
         Run($"Invoke-BashRg '--color' bogus c3 {_g}").AssertFailed(2, "choice 'bogus' is unrecognized");
         Run("Invoke-BashRg").AssertFailed(2, "requires at least one pattern");
-        Run($"Invoke-BashRg '-t' rust c3 {_g}").AssertFailed(2, "not supported");
-        Run($"Invoke-BashRg '-m1' c3 {_g}").AssertFailed(2, "not supported");
+        Run($"Invoke-BashRg '--pre' cat c3 {_g}").AssertFailed(2, "not supported");
+        Run($"Invoke-BashRg '--max-filesize' 1M c3 {_g}").AssertFailed(2, "not supported");
     }
 
     [Fact]
@@ -123,7 +123,7 @@ public class RgBehaviorTests : IClassFixture<SharedPwshFixture>, IDisposable
         foreach (var f in new[] { "--no-heading", "--no-messages", "--no-config", "--mmap", "--no-mmap" })
             Assert.Equal(new[] { "c3" }, Run($"Invoke-BashRg '-N' '{f}' c3 {_g}").AssertSuccess().Lines);
         Assert.Equal(new[] { "c3" }, Run($"Invoke-BashRg '-N' '--color' never c3 {_g}").AssertSuccess().Lines);
-        Assert.Equal(new[] { "c3" }, Run($"Invoke-BashRg '-N' '--color=always' c3 {_g}").AssertSuccess().Lines);
+        Assert.Equal(new[] { "c3" }, Run($"Invoke-BashRg '-N' '--color=auto' c3 {_g}").AssertSuccess().Lines);   // auto: colour only on a real terminal
     }
 
     [Fact]
