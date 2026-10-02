@@ -1,6 +1,7 @@
 using System.Linq;
 using System.Management.Automation;
 using PsBash.Cmdlets.Args;
+using PsBash.Core;
 
 namespace PsBash.Cmdlets;
 
@@ -98,14 +99,11 @@ public sealed class InvokeBashCatCommand : PSCmdlet
     /// <c>-v</c> caret/M- notation for non-printing characters, which is not implemented.
     /// (A string[] on purpose: CommonParameterCollisionGuardTests enumerates static string sets.)
     /// </summary>
-    private static readonly string[] CatValidButUnsupported =
-    {
-        "-A", "-t", "-v", "-e",
-        "--show-all", "--show-nonprinting",
-    };
+    private static readonly string[] CatValidButUnsupported = Array.Empty<string>();
 
     private const string OptNumber = "number", OptNonBlank = "nonblank", OptSqueeze = "squeeze",
-        OptEnds = "ends", OptTabs = "tabs", OptIgnored = "ignored";
+        OptEnds = "ends", OptTabs = "tabs", OptIgnored = "ignored",
+        OptShowAll = "showall", OptEndsNonprint = "e", OptTabsNonprint = "t", OptNonprint = "nonprint";
 
     /// <summary>GNU cat long_options[] order; getopt_long lists ambiguous-prefix candidates in it.</summary>
     private static readonly string[] CatLongOptionOrder = { "number-nonblank", "number", "squeeze-blank", "show-nonprinting", "show-ends", "show-tabs", "show-all" };
@@ -125,6 +123,10 @@ public sealed class InvokeBashCatCommand : PSCmdlet
             new OptSpec(OptEnds, 'E', "show-ends"),
             new OptSpec(OptTabs, 'T', "show-tabs"),
             new OptSpec(OptIgnored, 'u', null),
+            new OptSpec(OptShowAll, 'A', "show-all"),
+            new OptSpec(OptEndsNonprint, 'e', null),
+            new OptSpec(OptTabsNonprint, 't', null),
+            new OptSpec(OptNonprint, 'v', "show-nonprinting"),
         },
         validButUnsupported: CatValidButUnsupported,
         allowAbbrev: true,
@@ -139,13 +141,47 @@ public sealed class InvokeBashCatCommand : PSCmdlet
     {
         public ParsedArgs Parsed = null!;
         public bool NumberAll, NumberNonBlank, Squeeze, ShowEnds, ShowTabs;
+        /// <summary>-v / -A / -e / -t: control bytes as ^X, high bytes as M-X (GNU cat -v).</summary>
+        public bool ShowNonprinting;
         public List<string> Operands = new();
 
         /// <summary>True when nothing further should execute: scan error or --help/--version.</summary>
         public bool Declined =>
             Parsed.HasError || Parsed.Has(OptSpecSet.HelpId) || Parsed.Has(OptSpecSet.VersionId);
 
-        public bool HasFlags => NumberAll || NumberNonBlank || Squeeze || ShowEnds || ShowTabs;
+        public bool HasFlags => NumberAll || NumberNonBlank || Squeeze || ShowEnds || ShowTabs || ShowNonprinting;
+    }
+
+    /// <summary>
+    /// GNU <c>cat -v</c> rendering of one line: every BYTE of the line (escaped-byte markers are their
+    /// original byte, valid UTF-8 is its UTF-8 bytes) is shown as itself when printable ASCII, ^X for
+    /// control bytes (DEL = ^?), and M-X for bytes >= 128 (M-^X for 128..159, M-^? for 255). TAB is left
+    /// alone here (-T owns it; newline never occurs inside a line).
+    /// </summary>
+    internal static string ShowNonprintingBytes(string line)
+    {
+        if (line.Length == 0) return line;
+        bool plain = true;
+        foreach (var ch in line)
+            if (ch > 126 || (ch < 32 && ch != '\t')) { plain = false; break; }
+        if (plain) return line;
+
+        var bytes = RawBytes.GetBytes(line);
+        var sb = new System.Text.StringBuilder(bytes.Length + 8);
+        foreach (var b0 in bytes)
+        {
+            int b = b0;
+            if (b >= 128)
+            {
+                sb.Append("M-");
+                b -= 128;
+            }
+            if (b == 9 && b0 < 128) sb.Append('\t');
+            else if (b < 32) sb.Append('^').Append((char)(b + 64));
+            else if (b == 127) sb.Append("^?");
+            else sb.Append((char)b);
+        }
+        return sb.ToString();
     }
 
     /// <summary>Scan + resolve (any order, any bundling; repeats are harmless).</summary>
@@ -158,8 +194,9 @@ public sealed class InvokeBashCatCommand : PSCmdlet
             NumberAll = p.Has(OptNumber),
             NumberNonBlank = p.Has(OptNonBlank),
             Squeeze = p.Has(OptSqueeze),
-            ShowEnds = p.Has(OptEnds),
-            ShowTabs = p.Has(OptTabs),
+            ShowEnds = p.Has(OptEnds) || p.Has(OptShowAll) || p.Has(OptEndsNonprint),
+            ShowTabs = p.Has(OptTabs) || p.Has(OptShowAll) || p.Has(OptTabsNonprint),
+            ShowNonprinting = p.Has(OptNonprint) || p.Has(OptShowAll) || p.Has(OptEndsNonprint) || p.Has(OptTabsNonprint),
             Operands = p.Operands(),
         };
     }
@@ -172,7 +209,7 @@ public sealed class InvokeBashCatCommand : PSCmdlet
     private CatArgs? _plan;
     // Parsed-once flag / operand state.
     private bool _parsed;
-    private bool _numberAll, _numberNonBlank, _squeezeBlanks, _showEnds, _showTabs, _hasFlags;
+    private bool _numberAll, _numberNonBlank, _squeezeBlanks, _showEnds, _showTabs, _showNonprinting, _hasFlags;
     private List<string> _operands = new();
     private bool _readStdin;
     // True when stdin must NOT be streamed: a file-only invocation, or a
@@ -205,6 +242,7 @@ public sealed class InvokeBashCatCommand : PSCmdlet
         _squeezeBlanks = plan.Squeeze;
         _showEnds = plan.ShowEnds;
         _showTabs = plan.ShowTabs;
+        _showNonprinting = plan.ShowNonprinting;
         _hasFlags = plan.HasFlags;
         _operands = plan.Operands;
         _readStdin = _operands.Count == 0 || _operands.Contains("-");
@@ -316,9 +354,10 @@ public sealed class InvokeBashCatCommand : PSCmdlet
             {
                 try
                 {
-                    foreach (var line in BashFileSystem.ReadLines(filePath, exactIfBinary: true))
+                    // -v shows control bytes (a CR before the LF is ^M), so the read must be exact.
+                    foreach (var line in BashFileSystem.ReadTextLines(filePath, exact: _showNonprinting, exactIfBinary: true))
                     {
-                        EmitLine(line, filePath);
+                        EmitLine(line.Text, filePath, !line.HasTrailingNewline);
                     }
                 }
                 catch (Exception ex)
@@ -360,12 +399,17 @@ public sealed class InvokeBashCatCommand : PSCmdlet
         }
 
         string text = content;
+        if (_showNonprinting)
+        {
+            text = ShowNonprintingBytes(text);
+        }
         if (_showTabs)
         {
             text = text.Replace("\t", "^I");
         }
-        if (_showEnds)
+        if (_showEnds && !unterminated)
         {
+            // GNU prints the `$` just before the newline, so a last line without one gets none.
             text += "$";
         }
 
