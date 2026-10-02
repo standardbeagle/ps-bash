@@ -97,6 +97,14 @@
     {
       "flag": "-s",
       "desc": "separator"
+    },
+    {
+      "flag": "-c",
+      "desc": "output width (fill layout)"
+    },
+    {
+      "flag": "-x",
+      "desc": "fill rows before columns"
     }
   ],
   "comm": [

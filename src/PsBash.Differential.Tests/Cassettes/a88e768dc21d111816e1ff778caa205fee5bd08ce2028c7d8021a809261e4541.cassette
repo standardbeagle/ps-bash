@@ -1,0 +1,42 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 343
+stdout-length: 338
+stderr-length: 0
+==== SCRIPT ====
+__fs_snap() { find . | LC_ALL=C sort | while IFS= read -r p; do if [ -d "$p" ]; then echo "D $p"; else echo "F $p $(base64 -w0 "$p")"; fi; done; }
+d=$(mktemp -d) && cd "$d" && { :
+seq 1 40 > n40
+} >/dev/null 2>&1
+echo '== stdout'
+{ :
+COLUMNS=60 column -c 30 n40 | cat -A
+} 2>/dev/null
+echo "== exit $?"
+echo '== fs'
+__fs_snap
+cd /; rm -rf "$d"
+==== STDOUT ====
+== stdout
+1^I15^I29$
+2^I16^I30$
+3^I17^I31$
+4^I18^I32$
+5^I19^I33$
+6^I20^I34$
+7^I21^I35$
+8^I22^I36$
+9^I23^I37$
+10^I24^I38$
+11^I25^I39$
+12^I26^I40$
+13^I27$
+14^I28$
+== exit 0
+== fs
+D .
+F ./n40 MQoyCjMKNAo1CjYKNwo4CjkKMTAKMTEKMTIKMTMKMTQKMTUKMTYKMTcKMTgKMTkKMjAKMjEKMjIKMjMKMjQKMjUKMjYKMjcKMjgKMjkKMzAKMzEKMzIKMzMKMzQKMzUKMzYKMzcKMzgKMzkKNDAK
+
+==== STDERR ====
+

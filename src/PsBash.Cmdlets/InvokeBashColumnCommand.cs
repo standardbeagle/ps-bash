@@ -7,15 +7,19 @@ namespace PsBash.Cmdlets;
 /// <summary>
 /// Binary cmdlet for util-linux <c>column</c> (2.39): in <c>-t</c> (table) mode each input line is
 /// split into fields and the columns are padded to the per-column maximum width; without <c>-t</c>
-/// each line is emitted unchanged (ps-bash does not implement GNU's terminal-width "fill columns"
-/// layout — a documented divergence).
+/// the input lines are the ENTRIES of a fill layout (<see cref="RenderFill"/>: the BSD <c>column</c>
+/// algorithm util-linux kept — tab-separated columns of tab-stop-rounded width, filled down the
+/// columns, or across the rows with <c>-x</c>).
 ///
 /// <para><b>Arguments</b> go through the shared ordered parser (<see cref="ColumnSpec"/>; <c>column</c> is
 /// on <c>PsEmitter.OrderedArgCommands</c>). Implemented: <c>-t/--table</c>, <c>-s/--separator CHARS</c>
 /// (each character is a delimiter, empty fields are kept), <c>-o/--output-separator STR</c>,
 /// <c>-l/--table-columns-limit N</c> (the last column takes the rest of the line),
-/// <c>-L/--keep-empty-lines</c>; <c>-e</c> and <c>-d</c> are accepted no-ops (no headings exist without
-/// <c>-N</c>). The rest of column's table/tree/JSON/fill surface (<c>-x -c -n -N -O -C -E -m -H -R -T -W -J
+/// <c>-L/--keep-empty-lines</c>, <c>-c/--output-width N</c> and <c>-x/--fillrows</c> (the fill layout; the
+/// width defaults to <c>COLUMNS</c>, else 80 as util-linux does off a terminal; <c>-c</c> is accepted and
+/// ignored with <c>-t</c>, <c>-x</c> with <c>-t</c> is util-linux's "mutually exclusive" error);
+/// <c>-e</c> and <c>-d</c> are accepted no-ops (no headings exist without
+/// <c>-N</c>). The rest of column's table/tree/JSON surface (<c>-n -N -O -C -E -m -H -R -T -W -J
 /// -r -i -p</c>) is refused with exit 2. Usage errors exit 1 like util-linux.</para>
 ///
 /// <para>Table rendering follows util-linux: blank lines are ignored unless <c>-L</c>, a row with fewer
@@ -23,19 +27,20 @@ namespace PsBash.Cmdlets;
 /// never padded.</para>
 ///
 /// <para>Direct PowerShell calls: <c>-c -o -e -d -V</c> prefix-collide with common parameters and are
-/// declared decoys, re-injected before the scan; <c>-o</c> takes its value (<see cref="O"/> is a string).</para>
+/// declared decoys, re-injected before the scan; <c>-o</c> and <c>-c</c> take their value (<see cref="O"/> and
+/// <see cref="C"/> are strings).</para>
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashColumn")]
 [OutputType(typeof(string))]
 public sealed class InvokeBashColumnCommand : PSCmdlet
 {
     private const string OptTable = "table", OptSep = "separator", OptOutSep = "output-separator",
-        OptLimit = "limit", OptKeepEmpty = "keep-empty-lines", OptNoOp = "noop";
+        OptLimit = "limit", OptKeepEmpty = "keep-empty-lines", OptNoOp = "noop", OptWidth = "width", OptFillRows = "fillrows";
 
     /// <summary>util-linux column options ps-bash refuses (exit 2).</summary>
     private static readonly string[] ColumnValidButUnsupported =
     {
-        "-x", "--fillrows", "-c", "--output-width", "--columns", "-n", "--table-name", "-N", "--table-columns",
+        "--columns", "-n", "--table-name", "-N", "--table-columns",
         "-O", "--table-order", "-C", "--table-column", "-E", "--table-noextreme", "-m", "--table-maxout",
         "-H", "--table-hide", "-R", "--table-right", "-T", "--table-truncate", "-W", "--table-wrap",
         "-J", "--json", "-r", "--tree", "-i", "--tree-id", "-p", "--tree-parent",
@@ -49,6 +54,8 @@ public sealed class InvokeBashColumnCommand : PSCmdlet
             new OptSpec(OptTable, 't', "table"),
             new OptSpec(OptSep, 's', "separator", OptKind.Value),
             new OptSpec(OptOutSep, 'o', "output-separator", OptKind.Value),
+            new OptSpec(OptWidth, 'c', "output-width", OptKind.Value),
+            new OptSpec(OptFillRows, 'x', "fillrows"),
             new OptSpec(OptLimit, 'l', "table-columns-limit", OptKind.Value),
             new OptSpec(OptKeepEmpty, 'L', "keep-empty-lines"),
             new OptSpec(OptKeepEmpty, '\0', "table-empty-lines"),
@@ -75,7 +82,10 @@ public sealed class InvokeBashColumnCommand : PSCmdlet
     internal sealed class ColumnArgs
     {
         public ParsedArgs Parsed = null!;
-        public bool Table, KeepEmpty;
+        public bool Table, KeepEmpty, FillRows;
+
+        /// <summary>The fill-layout width from <c>-c</c> (null = <c>COLUMNS</c> / 80).</summary>
+        public long? Width;
         public string? Separators;   // null = whitespace
         public string OutputSeparator = "  ";
         public int Limit = int.MaxValue;
@@ -103,6 +113,17 @@ public sealed class InvokeBashColumnCommand : PSCmdlet
             {
                 case OptTable: p.Table = true; break;
                 case OptKeepEmpty: p.KeepEmpty = true; break;
+                case OptFillRows: p.FillRows = true; break;
+                case OptWidth:
+                    {
+                        if (!TryParseWidth(tok.Value!, out long width, out string widthError))
+                        {
+                            p.Error = $"column: invalid columns argument: '{tok.Value}'{widthError}";
+                            return p;
+                        }
+                        p.Width = width;
+                        break;
+                    }
                 case OptSep: p.Separators = tok.Value!; break;
                 case OptOutSep: p.OutputSeparator = tok.Value!; break;
                 case OptLimit:
@@ -118,7 +139,39 @@ public sealed class InvokeBashColumnCommand : PSCmdlet
                     }
             }
         }
+        if (p.Table && p.FillRows) p.Error = "column: mutually exclusive arguments: --table --fillrows";
         return p;
+    }
+
+    /// <summary>
+    /// util-linux's <c>strtou32_or_err</c>: leading blanks, an optional sign and decimal digits to the end;
+    /// anything else is invalid, a value past 32 bits (a negative number wraps to one) is out of range.
+    /// <paramref name="error"/> is the text appended to the message (empty, or <c>: Numerical result out of range</c>).
+    /// </summary>
+    internal static bool TryParseWidth(string s, out long width, out string error)
+    {
+        width = 0;
+        error = string.Empty;
+        int i = 0;
+        while (i < s.Length && char.IsWhiteSpace(s[i])) i++;
+        bool negative = false;
+        if (i < s.Length && (s[i] == '+' || s[i] == '-')) { negative = s[i] == '-'; i++; }
+        int digitsFrom = i;
+        long v = 0;
+        bool overflow = false;
+        for (; i < s.Length && s[i] >= '0' && s[i] <= '9'; i++)
+        {
+            if (v > (long.MaxValue - 9) / 10) overflow = true;
+            else v = v * 10 + (s[i] - '0');
+        }
+        if (i == digitsFrom || i < s.Length) return false;
+        if (overflow || (negative && v != 0) || v > uint.MaxValue)
+        {
+            error = ": Numerical result out of range";
+            return false;
+        }
+        width = v;
+        return true;
     }
 
     [Parameter(ValueFromRemainingArguments = true)]
@@ -127,9 +180,9 @@ public sealed class InvokeBashColumnCommand : PSCmdlet
     [Parameter(ValueFromPipeline = true)]
     public PSObject? InputObject { get; set; }
 
-    /// <summary>Decoy for the unsupported <c>-c</c> (--output-width). Bare <c>-c</c>
-    /// silently bound <c>-Confirm</c>; re-injected so the classifier fires.</summary>
-    [Parameter] public SwitchParameter C { get; set; }
+    /// <summary>The <c>-c WIDTH</c> output width. Bare <c>-c</c> prefix-collides with <c>-Confirm</c>;
+    /// declared value-bearing so the value binds with it, then re-injected.</summary>
+    [Parameter] public string? C { get; set; }
 
     /// <summary>The <c>-o STRING</c> output separator. Bare <c>-o</c> prefix-collides with
     /// <c>-OutVariable</c>/<c>-OutBuffer</c>; declared value-bearing so the value binds with it.</summary>
@@ -158,7 +211,7 @@ public sealed class InvokeBashColumnCommand : PSCmdlet
     {
         var raw = Arguments ?? Array.Empty<string>();
         var pre = new List<string>();
-        if (C.IsPresent) pre.Add("-c");
+        if (C is not null) { pre.Add("-c"); pre.Add(C); }
         if (E.IsPresent) pre.Add("-e");
         if (D.IsPresent) pre.Add("-d");
         if (V.IsPresent) pre.Add("-V");
@@ -226,9 +279,10 @@ public sealed class InvokeBashColumnCommand : PSCmdlet
 
         if (!plan.Table)
         {
-            foreach (var line in lines)
+            long width = plan.Width ?? TextWidth.DefaultTerminalColumns();
+            foreach (var row in RenderFill(lines, width, plan.FillRows, plan.KeepEmpty))
             {
-                WriteObject(BashRuntime.NewBashObject(line));
+                WriteObject(BashRuntime.NewBashObject(row));
             }
         }
         else
@@ -240,6 +294,64 @@ public sealed class InvokeBashColumnCommand : PSCmdlet
         }
 
         if (hadError) FileSystemHelpers.SetLastExitCode(this, 1);
+    }
+
+    /// <summary>
+    /// The fill layout (pure) of util-linux / BSD <c>column</c> without <c>-t</c>: every input line is one
+    /// ENTRY (blank lines are dropped unless <paramref name="keepEmpty"/>). The cell width is the widest
+    /// entry plus one, rounded up to a multiple of 8; <c>termWidth / cell</c> columns (at least 1) are filled
+    /// down the columns, or across the rows with <paramref name="fillRows"/>. Columns are separated by TABS:
+    /// after an entry the line is padded with tabs until the next tab stop would pass the column's end
+    /// (an empty entry therefore still consumes a column), and the last entry of a line is not padded.
+    /// Widths are display widths (<see cref="TextWidth"/>).
+    /// </summary>
+    internal static List<string> RenderFill(IReadOnlyList<string> lines, long termWidth, bool fillRows, bool keepEmpty)
+    {
+        var entries = new List<string>(lines.Count);
+        foreach (var line in lines)
+        {
+            if (line.Length == 0 && !keepEmpty) continue;
+            entries.Add(line);
+        }
+        var result = new List<string>();
+        int n = entries.Count;
+        if (n == 0) return result;
+
+        var widths = new int[n];
+        int maxLength = 0;
+        for (int i = 0; i < n; i++)
+        {
+            widths[i] = TextWidth.Of(entries[i]);
+            if (widths[i] > maxLength) maxLength = widths[i];
+        }
+        long cell = (maxLength + 8) & ~7L;
+        int numCols = (int)Math.Max(1, Math.Min(n, termWidth / cell));
+        int numRows = (n + numCols - 1) / numCols;
+
+        for (int row = 0; row < numRows; row++)
+        {
+            var sb = new StringBuilder();
+            long endCol = cell;
+            long chCount = 0;
+            for (int col = 0; col < numCols; col++)
+            {
+                int index = fillRows ? row * numCols + col : row + col * numRows;
+                if (index >= n) break;
+                sb.Append(entries[index]);
+                chCount += widths[index];
+                int next = fillRows ? index + 1 : index + numRows;
+                if (fillRows ? (col == numCols - 1 || next >= n) : next >= n) break;
+                long stop;
+                while ((stop = (chCount + 8) & ~7L) <= endCol)
+                {
+                    sb.Append('\t');
+                    chCount = stop;
+                }
+                endCol += cell;
+            }
+            result.Add(sb.ToString());
+        }
+        return result;
     }
 
     /// <summary>
