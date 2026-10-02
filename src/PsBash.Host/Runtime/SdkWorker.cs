@@ -329,6 +329,10 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
             ? new OutputBatcher(writeThrough, OutputBatcher.DefaultThresholdChars, OutputBatcher.DefaultDeadline)
             : null;
 
+        // Record boundary on the framed IPC stream is LF on every platform: the launcher's stdout is usually a file
+        // or pipe, where bash writes LF (a Windows console renders LF as a newline itself). In-process callers and
+        // the interactive PTY keep the platform newline.
+        string eol = batchOutput && output is not null ? "\n" : Environment.NewLine;
         Action<string> deliver = batcher is null ? writeThrough : batcher.Append;
         _host.HostUI.SetWriteLineForwarder(deliver);
 
@@ -409,7 +413,7 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
                 var results = fmt.Invoke(buffer);
                 if (fmt.HadErrors) return false;
                 foreach (var r in results)
-                    deliver((r?.ToString() ?? "") + Environment.NewLine);
+                    deliver((r?.ToString() ?? "") + eol);
                 return true;
             }
             catch
@@ -452,7 +456,7 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
                 var results = fmt.Invoke(buffer);
                 if (fmt.HadErrors) return false;
                 foreach (var r in results)
-                    deliver((r?.ToString() ?? "") + Environment.NewLine);
+                    deliver((r?.ToString() ?? "") + eol);
                 return true;
             }
             catch
@@ -512,7 +516,7 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
             try
             {
                 foreach (var fline in PSObjectFormatter.FormatAsTable(formatBuffer))
-                    deliver(fline + Environment.NewLine);
+                    deliver(fline + eol);
             }
             catch (Exception ex)
             {
@@ -521,7 +525,7 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
                 // user still sees something rather than silent loss.
                 deliverError($"ps-bash: formatter error: {ex.Message}");
                 foreach (var raw in formatBuffer)
-                    deliver((raw?.ToString() ?? "") + Environment.NewLine);
+                    deliver((raw?.ToString() ?? "") + eol);
             }
             formatBuffer.Clear();
         }
@@ -531,7 +535,7 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
             if (IsTextStreamItem(item))
             {
                 FlushFormatBufferCore();
-                var line = GetOutputText(item);
+                var line = GetOutputText(item, eol);
                 deliver(line);
             }
             else
@@ -730,7 +734,7 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
         }
     }
 
-    private static string GetOutputText(PSObject? item)
+    private static string GetOutputText(PSObject? item, string eol)
     {
         if (item is null)
             return "";
@@ -740,12 +744,12 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
         {
             var text = bashText.ToString() ?? "";
             var noTrailingNewline = item.Properties["NoTrailingNewline"]?.Value is true;
-            return noTrailingNewline ? text : text + Environment.NewLine;
+            return noTrailingNewline ? text : text + eol;
         }
 
         if (item.BaseObject is System.Management.Automation.ErrorRecord record)
-            return record.ToString() + Environment.NewLine;
-        return item.BaseObject is string s ? s + Environment.NewLine : item.ToString() + Environment.NewLine;
+            return record.ToString() + eol;
+        return item.BaseObject is string s ? s + eol : item.ToString() + eol;
     }
 
     /// <summary>
