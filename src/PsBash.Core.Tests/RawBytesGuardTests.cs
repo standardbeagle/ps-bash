@@ -38,6 +38,7 @@ public class RawBytesGuardTests
     private static readonly Dictionary<string, string> Allowed = new(StringComparer.Ordinal)
     {
         ["InvokeBashFileCommand.cs"] = "file(1) classification: a STRICT decoder that must throw on invalid UTF-8 to classify it",
+        ["FileMagic.cs"] = "file(1) magic sniffing: header bytes decoded as Latin-1 / strict UTF-8 only to classify the file, never emitted as data",
         ["InvokeBashPsCommand.cs"] = "/proc command lines: process metadata, not data",
         ["InvokeBashSourceCommand.cs"] = "writes an empty snapshot placeholder (string.Empty)",
         ["BashFileSystem.cs"] = "UTF-16 BOM path of OpenDocumentReader (a BOM-declared UTF-16 file) and doc comments",

@@ -389,7 +389,7 @@ public sealed class InvokeBashTarCommand : PSCmdlet
 
         // No -f: GNU's default archive is the TAPE environment variable, else stdin/stdout (`-`).
         string? archiveFile = plan.ArchiveFile;
-        if (string.IsNullOrEmpty(archiveFile)) archiveFile = Environment.GetEnvironmentVariable("TAPE");
+        if (string.IsNullOrEmpty(archiveFile)) archiveFile = BashVariableStore.Get("TAPE");
         bool stdio = string.IsNullOrEmpty(archiveFile) || archiveFile == "-";
         string? changeDir = plan.ChangeDir;
         bool gzipFilter = plan.Gzip;

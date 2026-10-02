@@ -195,7 +195,7 @@ public sealed class InvokeBashMvCommand : PSCmdlet
         var parsed = ScanArgs(args);
         if (FileSystemHelpers.TryWriteParseError(this, "mv", parsed)) return;
         if (FileSystemHelpers.TryHandleInfoOptions(this, "mv", parsed)) return;
-        if (!TryPlan(parsed, Environment.GetEnvironmentVariable, out var plan, out var planError))
+        if (!TryPlan(parsed, BashVariableStore.Get, out var plan, out var planError))
         {
             FileSystemHelpers.WriteBashError(this, planError!);
             return;

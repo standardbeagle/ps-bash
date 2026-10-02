@@ -320,6 +320,7 @@ internal sealed class AwkShell
     {
         var psi = BuildStartInfo(command);
         AwkCommandStream.Prepare(psi);
+        BashVariableStore.ApplyTo(psi); // Prepare already applies it; explicit so the spawn-site guard sees it
         try { return Process.Start(psi); }
         catch (Exception ex) when (!FileSystemHelpers.IsPipelineStop(ex)) { return null; }
     }

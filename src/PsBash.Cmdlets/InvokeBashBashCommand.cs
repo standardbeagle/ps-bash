@@ -227,7 +227,7 @@ public sealed class InvokeBashBashCommand : PSCmdlet
 
     internal static string? ResolvePsBashExecutable(PSCmdlet cmdlet)
     {
-        var explicitExe = Environment.GetEnvironmentVariable(NestedExeEnvVar);
+        var explicitExe = Environment.GetEnvironmentVariable("PSBASH_NESTED_EXE") /* = NestedExeEnvVar; host config, literal for the guard */;
         if (!string.IsNullOrEmpty(explicitExe) && System.IO.File.Exists(explicitExe))
             return explicitExe;
 
