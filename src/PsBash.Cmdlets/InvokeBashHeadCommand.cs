@@ -66,12 +66,10 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
     /// emit the "==> name &lt;==" headers at all; -z/--zero-terminated needs NUL records.
     /// (A string[] on purpose: CommonParameterCollisionGuardTests enumerates static string sets.)
     /// </summary>
-    private static readonly string[] HeadValidButUnsupported =
-    {
-        "-v", "-z", "--verbose", "--zero-terminated",
-    };
+    private static readonly string[] HeadValidButUnsupported = Array.Empty<string>();
 
-    private const string OptLines = "lines", OptBytes = "bytes", OptQuiet = "quiet", OptNum = "num";
+    private const string OptLines = "lines", OptBytes = "bytes", OptQuiet = "quiet", OptNum = "num",
+        OptVerbose = "verbose", OptZero = "zero";
 
     /// <summary>
     /// head's option surface (GNU coreutils 9.4: -c -n -q -v -z + long forms; -NUM obsolete
@@ -84,6 +82,8 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
             new OptSpec(OptLines, 'n', "lines", OptKind.Value),
             new OptSpec(OptQuiet, 'q', "quiet"),
             new OptSpec(OptQuiet, '\0', "silent"),
+            new OptSpec(OptVerbose, 'v', "verbose"),
+            new OptSpec(OptZero, 'z', "zero-terminated"),
         },
         validButUnsupported: HeadValidButUnsupported,
         allowAbbrev: true,
@@ -103,6 +103,10 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
         public int ByteCount;
         /// <summary>True when the LAST of -c / -n on the line was -c (GNU: last one wins).</summary>
         public bool BytesMode;
+        /// <summary>The LAST of -q/-v: when "==> name <==" headers print (GNU: -q never, -v always).</summary>
+        public FileHeaders.Mode Headers = FileHeaders.Mode.Default;
+        /// <summary>-z: records end at NUL instead of newline (line mode only).</summary>
+        public bool Zero;
         public List<string> Operands = new();
         /// <summary>A usage error the scan itself cannot see (bad NUM, misplaced -NUM); exit 1.</summary>
         public string? Error;
@@ -158,6 +162,9 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
                     h.ByteCount = bsign == '-' ? -bytes : bytes;
                     h.BytesMode = true;
                     break;
+                case OptQuiet: h.Headers = FileHeaders.Mode.Never; break;
+                case OptVerbose: h.Headers = FileHeaders.Mode.Always; break;
+                case OptZero: h.Zero = true; break;
             }
         }
 
@@ -233,6 +240,10 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
     private bool _streamingByteMode;
     private long _bytesRemaining;
     private bool _suppress; // --help or arg-only path; do not stream
+    private FileHeaders.Mode _headerMode;
+    private bool _zero;
+    private bool _anyHeader;       // a header was already written (the next one gets the blank separator)
+    private bool _stdinHeaderDone; // streaming pipeline mode printed its "standard input" header
 
     private void ParseFlagsOnce()
     {
@@ -240,6 +251,8 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
         _flagsParsed = true;
         var h = Plan(ArgsWithDecoys());
         _lineCount = h.Count;
+        _headerMode = h.Headers;
+        _zero = h.Zero;
         _byteCount = h.BytesMode ? h.ByteCount : null;
         // We stream the pipeline only when:
         //   - the argv is clean (a scan/NUM error or --help/--version goes through EndProcessing)
@@ -248,10 +261,18 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
         //   - a NON-negative line count. GNU `head -n -K` means "all lines but the
         //     last K", which is undecidable while streaming (you can't know which are
         //     the last K until input ends) — buffer and resolve in EndProcessing.
-        _streamingLineMode = !h.Declined && h.Operands.Count == 0 && _byteCount == null && _lineCount >= 0;
+        // -z reads NUL-terminated records out of the whole byte stream, so it buffers (EndProcessing).
+        _streamingLineMode = !h.Declined && h.Operands.Count == 0 && _byteCount == null && _lineCount >= 0 && !_zero;
         _streamingByteMode = !h.Declined && h.Operands.Count == 0 && _byteCount is >= 0;
         _bytesRemaining = _byteCount ?? 0;
-        if (h.Declined || h.Operands.Count > 0) _suppress = true;
+        // A "-" operand reads the pipeline, so it must still be collected.
+        if (h.Declined || (h.Operands.Count > 0 && !h.Operands.Contains("-"))) _suppress = true;
+    }
+
+    private void WriteHeader(string name)
+    {
+        WriteObject(FileHeaders.Record(name, first: !_anyHeader));
+        _anyHeader = true;
     }
 
     protected override void ProcessRecord()
@@ -259,6 +280,12 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
         if (InputObject == null) return;
 
         ParseFlagsOnce();
+
+        if ((_streamingLineMode || _streamingByteMode) && !_stdinHeaderDone)
+        {
+            _stdinHeaderDone = true;
+            if (_headerMode == FileHeaders.Mode.Always) WriteHeader(FileHeaders.StandardInput);
+        }
 
         if (_streamingLineMode)
         {
@@ -364,6 +391,7 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
         {
             return;
         }
+        _stdinHeaderDone = true;
 
         var args = ArgsWithDecoys();
 
@@ -393,13 +421,88 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
         int count = plan.Count;
         int? byteCount = plan.BytesMode ? plan.ByteCount : null;
         var operands = plan.Operands;
+        _headerMode = plan.Headers;
+        _zero = plan.Zero;
 
         // Pipeline mode
-        if (operands.Count == 0 && _pipeline.Count > 0)
+        if (operands.Count == 0)
         {
+            // `head -v` on an EMPTY stdin still prints the header (GNU).
+            if (_pipeline.Count == 0 && _headerMode == FileHeaders.Mode.Always) WriteHeader(FileHeaders.StandardInput);
+            if (_pipeline.Count > 0)
+            {
+                if (_headerMode == FileHeaders.Mode.Always) WriteHeader(FileHeaders.StandardInput);
+                EmitFromRecords(_pipeline, byteCount, count);
+            }
+            return;
+        }
+
+        // File mode
+        bool headers = FileHeaders.Wanted(_headerMode, operands.Count);
+        foreach (var filePath in ResolveGlob(operands))
+        {
+            if (filePath == "-")
+            {
+                if (headers) WriteHeader(FileHeaders.StandardInput);
+                EmitFromRecords(_pipeline, byteCount, count);
+                continue;
+            }
+            if (headers && File.Exists(filePath)) WriteHeader(FileHeaders.Display(this, filePath));
+            if (_zero && byteCount == null)
+            {
+                try
+                {
+                    byte[] all = BashFileSystem.ReadAllBytes(filePath);
+                    foreach (var rec in BashRuntime.ByteSliceRecords(ZeroHead(RawBytes.GetString(all), count)))
+                        WriteObject(rec);
+                }
+                catch (Exception ex)
+                {
+                    if (FileSystemHelpers.IsPipelineStop(ex)) throw;
+                    FileSystemHelpers.WriteBashError(this,
+                        $"head: cannot open '{filePath.Replace('\\', '/')}' for reading: {FileSystemHelpers.ReadErrorMessage(ex)}");
+                }
+                continue;
+            }
+            EmitFile(filePath, byteCount, count);
+        }
+    }
+
+    /// <summary>
+    /// GNU <c>head -z -n N</c> over a whole byte stream: the first N NUL-terminated pieces (a negative
+    /// count = all but the last K). The final piece may be unterminated and is then copied as it is.
+    /// </summary>
+    internal static string ZeroHead(string text, int count)
+    {
+        if (text.Length == 0) return text;
+        var pieces = new List<string>(text.Split('\0'));
+        bool endsWithNul = text.EndsWith('\0');
+        if (endsWithNul) pieces.RemoveAt(pieces.Count - 1);
+        int total = pieces.Count;
+        int limit = count >= 0 ? Math.Min(count, total) : Math.Max(0, total + count);
+        var sb = new StringBuilder();
+        for (int i = 0; i < limit; i++)
+        {
+            sb.Append(pieces[i]);
+            if (i < total - 1 || endsWithNul) sb.Append('\0');
+        }
+        return sb.ToString();
+    }
+
+    /// <summary>The pipeline-mode body (also serves a "-" operand): head of buffered records.</summary>
+    private void EmitFromRecords(List<PSObject> pipeline, int? byteCount, int count)
+    {
+        {
+            if (_zero && byteCount == null)
+            {
+                foreach (var rec in BashRuntime.ByteSliceRecords(
+                             ZeroHead(BashRuntime.RecordStreamText(pipeline), count)))
+                    WriteObject(rec);
+                return;
+            }
             if (byteCount != null)
             {
-                byte[] bytes = RawBytes.GetBytes(BashRuntime.RecordStreamText(_pipeline));
+                byte[] bytes = RawBytes.GetBytes(BashRuntime.RecordStreamText(pipeline));
                 // GNU head: -c N takes the first N bytes; -c -K takes all but the last K.
                 int take = byteCount.Value >= 0
                     ? Math.Min(byteCount.Value, bytes.Length)
@@ -417,13 +520,13 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
             if (count < 0)
             {
                 int total = 0;
-                foreach (var item in _pipeline)
+                foreach (var item in pipeline)
                     total += ItemLines(BashRuntime.GetBashText(item)).Length;
                 limit = Math.Max(0, total + count);
             }
 
             int emitted = 0;
-            foreach (var item in _pipeline)
+            foreach (var item in pipeline)
             {
                 if (emitted >= limit) break;
                 var lines = ItemLines(BashRuntime.GetBashText(item));
@@ -447,9 +550,11 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
             }
             return;
         }
+    }
 
-        // File mode
-        foreach (var filePath in ResolveGlob(operands))
+    /// <summary>File mode body for one resolved file (header already written).</summary>
+    private void EmitFile(string filePath, int? byteCount, int count)
+    {
         {
             if (byteCount != null)
             {
@@ -463,7 +568,7 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
                         int take = Math.Max(0, all.Length + byteCount.Value);
                         foreach (var rec in BashRuntime.ByteSliceRecords(RawBytes.GetString(all, 0, take)))
                             WriteObject(rec);
-                        continue;
+                        return;
                     }
                     // Stream at most N bytes — never read the whole file just to
                     // take the head of it. Chunked so a huge -c N on a small file
@@ -488,41 +593,43 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
                     if (FileSystemHelpers.IsPipelineStop(ex)) throw;
                     FileSystemHelpers.WriteBashError(this, $"head: cannot read '{filePath}': {ex.Message}");
                 }
-                continue;
+                return;
             }
 
-            StreamReader? reader = OpenReader(filePath, "head");
-            if (reader == null) continue;
-
+            // Line mode over text lines that remember whether the LAST one had its newline: GNU head
+            // copies a missing final newline through (the next header's separator then ends it).
             try
             {
                 if (count < 0)
                 {
                     // GNU head -n -K: emit all lines but the last K. Buffer the file's
                     // lines, then emit the first (total - K).
-                    var allLines = new List<string>();
-                    string? l;
-                    while ((l = reader.ReadLine()) != null) allLines.Add(l);
+                    var allLines = BashFileSystem.ReadTextLines(filePath).ToList();
                     int emit = Math.Max(0, allLines.Count + count);
                     for (int idx = 0; idx < emit; idx++)
                     {
-                        WriteCatLine(allLines[idx], idx + 1, filePath);
+                        WriteCatLine(allLines[idx].Text, idx + 1, filePath, !allLines[idx].HasTrailingNewline);
                     }
                 }
                 else
                 {
                     int li = 0;
-                    string? line;
-                    while (li < count && (line = reader.ReadLine()) != null)
+                    if (count == 0) return;
+                    foreach (var line in BashFileSystem.ReadTextLines(filePath))
                     {
                         li++;
-                        WriteCatLine(line, li, filePath);
+                        WriteCatLine(line.Text, li, filePath, !line.HasTrailingNewline);
+                        if (li >= count) break;
                     }
                 }
             }
-            finally
+            catch (Exception ex)
             {
-                reader.Dispose();
+                if (FileSystemHelpers.IsPipelineStop(ex)) throw;
+                // GNU: head: cannot open 'x' for reading: No such file or directory (path shown as
+                // typed by OperandDisplay at the stderr sink).
+                FileSystemHelpers.WriteBashError(this,
+                    $"head: cannot open '{filePath.Replace('\\', '/')}' for reading: {FileSystemHelpers.ReadErrorMessage(ex)}");
             }
         }
     }
@@ -531,7 +638,7 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
     /// Emit one <c>PsBash.CatLine</c> object for a file-mode line (shared by the
     /// positive first-N and the negative all-but-last-K paths).
     /// </summary>
-    private void WriteCatLine(string line, int lineNumber, string filePath)
+    private void WriteCatLine(string line, int lineNumber, string filePath, bool unterminated = false)
     {
         var obj = new PSObject();
         obj.TypeNames.Insert(0, "PsBash.CatLine");
@@ -540,6 +647,7 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
         obj.Properties.Add(new PSNoteProperty("FileName", filePath));
         obj.Properties.Add(new PSNoteProperty(
             "BashText", BashRuntime.NormalizeBashText(line)));
+        if (unterminated) obj.Properties.Add(new PSNoteProperty("NoTrailingNewline", true));
         WriteObject(obj);
     }
 
@@ -612,6 +720,7 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
     {
         foreach (var rawP in paths)
         {
+            if (rawP == "-") { yield return "-"; continue; }
             var p = FileSystemHelpers.NormalizeOperandPath(rawP);
             if (p.IndexOf('*') >= 0 || p.IndexOf('?') >= 0)
             {
@@ -643,7 +752,9 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
             }
             else
             {
-                yield return SessionState.Path.GetUnresolvedProviderPathFromPSPath(p);
+                var resolvedLiteral = SessionState.Path.GetUnresolvedProviderPathFromPSPath(p);
+                OperandDisplay.Remember(this, resolvedLiteral, rawP);
+                yield return resolvedLiteral;
             }
         }
     }

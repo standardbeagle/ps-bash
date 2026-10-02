@@ -63,8 +63,6 @@ public class HeadTailArgBehaviorTests : IClassFixture<SharedPwshFixture>, IDispo
     {
         Run($"{Four} | Invoke-BashHead '-x'").AssertFailed(1, "invalid option -- 'x'");
         Run($"{Four} | Invoke-BashHead '--bogus'").AssertFailed(1, "unrecognized option '--bogus'");
-        Run($"{Four} | Invoke-BashHead '-v'").AssertFailed(2, "not supported");
-        Run($"{Four} | Invoke-BashHead '--zero'").AssertFailed(2, "'--zero-terminated' is recognized but not supported");
     }
 
     [Theory]
@@ -113,10 +111,6 @@ public class HeadTailArgBehaviorTests : IClassFixture<SharedPwshFixture>, IDispo
     public void Tail_UnknownAndUnsupportedFlags_ExitStatuses()
     {
         Run($"{Four} | Invoke-BashTail '-x'").AssertFailed(1, "invalid option -- 'x'");
-        Run($"{Four} | Invoke-BashTail '-v'").AssertFailed(2, "not supported");
-        Run($"{Four} | Invoke-BashTail '-F'").AssertFailed(2, "not supported");
-        Run($"{Four} | Invoke-BashTail '--retry'").AssertFailed(2, "not supported");
-        Run($"{Four} | Invoke-BashTail '--pid=1'").AssertFailed(2, "'--pid' is recognized but not supported");
     }
 
     [Theory]
@@ -196,8 +190,7 @@ public class HeadTailArgBehaviorTests : IClassFixture<SharedPwshFixture>, IDispo
     [Fact]
     public void Cat_ErrorsAndExitStatuses()
     {
-        Run("'x' | Invoke-BashCat '-A'").AssertFailed(2, "option '-A' is recognized but not supported");
-        Run("'x' | Invoke-BashCat '-v'").AssertFailed(2, "not supported");
+        Run("'x' | Invoke-BashCat '-A'").AssertSuccess();   // -A is -vET since the show-nonprinting batch
         Run("'x' | Invoke-BashCat '--bogus'").AssertFailed(1, "unrecognized option '--bogus'");
         Run("'x' | Invoke-BashCat '-x'").AssertFailed(1, "invalid option -- 'x'");
         Run("'x' | Invoke-BashCat '--num'").AssertFailed(1, "option '--num' is ambiguous");

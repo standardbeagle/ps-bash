@@ -112,15 +112,6 @@ public class TailArgScanTests
     [InlineData("ERR tail: option used in invalid context -- 5", "-n1", "-5")]  // FIX (was: last wins)
     [InlineData("ERR tail: option used in invalid context -- 5", "-5", "-n1")]  // FIX
     [InlineData("ERR tail: option used in invalid context -- 5", "f", "-5")]  // FIX
-    [InlineData("ERR tail: option '-v' is recognized but not supported by ps-bash", "-v")]
-    [InlineData("ERR tail: option '-z' is recognized but not supported by ps-bash", "-z")]
-    [InlineData("ERR tail: option '-F' is recognized but not supported by ps-bash", "-F")]
-    [InlineData("ERR tail: option '--verbose' is recognized but not supported by ps-bash", "--verbose")]
-    [InlineData("ERR tail: option '--zero-terminated' is recognized but not supported by ps-bash", "--zero")]  // FIX
-    [InlineData("ERR tail: option '--retry' is recognized but not supported by ps-bash", "--retry")]
-    [InlineData("ERR tail: option '--pid' is recognized but not supported by ps-bash", "--pid=1")]
-    [InlineData("ERR tail: option '--pid' is recognized but not supported by ps-bash", "--pi", "1")]  // FIX
-    [InlineData("ERR tail: option '--max-unchanged-stats' is recognized but not supported by ps-bash", "--max-unchanged-stats=1")]
     [InlineData("ERR tail: option '--ver' is ambiguous; possibilities: '--verbose' '--version'", "--ver")]  // GNU: identical
     [InlineData("ERR tail: option '--s' is ambiguous; possibilities: '--silent' '--sleep-interval'", "--s")]  // GNU: identical
     [InlineData("ERR tail: unrecognized option '--bogus'", "--bogus")]
@@ -182,10 +173,6 @@ public class TailArgScanTests
     [InlineData("-x", 1)]
     [InlineData("-n", 1)]
     [InlineData("--s", 1)]
-    [InlineData("-v", 2)]
-    [InlineData("-F", 2)]
-    [InlineData("--retry", 2)]
-    [InlineData("--pid=1", 2)]
     public void ScanError_ExitStatus_IsGnuUsageStatusExceptOurOwnRefusal(string arg, int exit)
     {
         Assert.Equal(exit, InvokeBashTailCommand.ScanArgs(new[] { arg }).ErrorExitCode);

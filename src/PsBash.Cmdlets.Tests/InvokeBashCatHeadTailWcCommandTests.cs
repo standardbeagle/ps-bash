@@ -106,11 +106,8 @@ public class InvokeBashCatHeadTailWcCommandTests : IClassFixture<SharedPwshFixtu
     // ===== unsupported-flag classifier (head/tail/wc/cat) =====
 
     [Theory]
-    [InlineData("'a','b' | Invoke-BashHead -z", "head", "-z")]
-    [InlineData("'a','b' | Invoke-BashTail -z", "tail", "-z")]
     // wc -m / -L are now implemented; --files0-from remains valid-but-unsupported.
     [InlineData("'a','b' | Invoke-BashWc --files0-from", "wc", "--files0-from")]
-    [InlineData("'a','b' | Invoke-BashCat -t", "cat", "-t")]
     public void UnsupportedFlag_EmitsSpecificRefusal_NotFileError(string script, string cmd, string flag)
     {
         // A valid-but-unimplemented flag must say "not supported", NOT be
