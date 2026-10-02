@@ -191,6 +191,9 @@ internal sealed class SdkRunspace : IAsyncDisposable
         var psm1Path = Path.Combine(Path.GetDirectoryName(modulePath)!, "PsBash.psm1");
         if (File.Exists(psm1Path))
         {
+            // The psm1 runs as a script here, so it cannot discover its own path;
+            // pooled background runspaces need it to import the module.
+            runspace.SessionStateProxy.SetVariable("PsBashModulePsm1Path", psm1Path);
             var psm1Content = ReadStartupModule(psm1Path);
             Trace("psm1-read");
             ps.AddScript(psm1Content).Invoke();
