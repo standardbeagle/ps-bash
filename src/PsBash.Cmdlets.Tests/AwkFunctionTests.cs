@@ -222,19 +222,19 @@ public class AwkFunctionTests : IClassFixture<SharedPwshFixture>
             AwkStdin("line1\n", "function rd(  l){getline l; return l} BEGIN{print rd()}"));
     }
 
-    // ── errors (gawk exits 1/2; ps-bash reports exit 2 for every static error) ──
+    // ── errors (gawk 5.2.1: static `error:` / syntax errors exit 1, `fatal:` ones exit 2) ──
 
     [Theory]
-    [InlineData("function f(){return 1} function f(){return 2} BEGIN{print f()}", "previously defined")]
-    [InlineData("function f(){return 1} BEGIN{f=3; print f}", "function `f'")]
-    [InlineData("function f(f){return 1} BEGIN{print f(1)}", "cannot use function name as parameter name")]
-    [InlineData("function f(a,a){return 1} BEGIN{print f(1,2)}", "duplicates parameter")]
-    [InlineData("BEGIN{print nosuch(1)}", "function `nosuch' not defined")]
-    [InlineData("function f(a){return a} BEGIN{print f (1)}", "called with space")]
-    [InlineData("BEGIN{return 1}", "return")]
-    [InlineData("function length(x){return 1} BEGIN{print 1}", "built-in")]
-    public void Function_StaticErrors_ExitTwo(string program, string stderrFragment) =>
-        AwkR(program).AssertFailed(2, stderrFragment);
+    [InlineData("function f(){return 1} function f(){return 2} BEGIN{print f()}", "previously defined", 1)]
+    [InlineData("function f(){return 1} BEGIN{f=3; print f}", "function `f'", 1)]
+    [InlineData("function f(f){return 1} BEGIN{print f(1)}", "cannot use function name as parameter name", 1)]
+    [InlineData("function f(a,a){return 1} BEGIN{print f(1,2)}", "duplicates parameter", 1)]
+    [InlineData("BEGIN{print nosuch(1)}", "function `nosuch' not defined", 2)]
+    [InlineData("function f(a){return a} BEGIN{print f (1)}", "called with space", 1)]
+    [InlineData("BEGIN{return 1}", "return", 1)]
+    [InlineData("function length(x){return 1} BEGIN{print 1}", "built-in", 1)]
+    public void Function_StaticErrors_ExitLikeGawk(string program, string stderrFragment, int exit) =>
+        AwkR(program).AssertFailed(exit, stderrFragment);
 
     [Fact]
     public void Function_ScalarArgumentUsedAsArray_IsFatal() =>

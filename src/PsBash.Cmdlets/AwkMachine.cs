@@ -578,6 +578,8 @@ internal sealed class AwkMachine
         {
             double cur = GetLvalue(a.Target).ToNumber();
             double rhs = Eval(a.Value).ToNumber();
+            if (rhs == 0 && a.Op is "/=" or "%=")
+                throw new AwkInterpreter.AwkRuntimeException($"fatal: division by zero attempted in `{a.Op}'");
             double n = a.Op switch
             {
                 "+=" => cur + rhs,
@@ -620,6 +622,9 @@ internal sealed class AwkMachine
     {
         double l = Eval(a.Left).ToNumber();
         double r = Eval(a.Right).ToNumber();
+        if (r == 0 && a.Op is '/' or '%')
+            throw new AwkInterpreter.AwkRuntimeException(
+                a.Op == '%' ? "fatal: division by zero attempted in `%'" : "fatal: division by zero attempted");
         return AwkValue.Number(a.Op switch
         {
             '+' => l + r,

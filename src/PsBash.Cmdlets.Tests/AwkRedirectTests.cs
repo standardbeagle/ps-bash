@@ -196,7 +196,7 @@ public class AwkRedirectTests : IClassFixture<SharedPwshFixture>, IDisposable
     public void Print_UnparenthesizedTernaryAfterRedirectTarget_IsASyntaxError()
     {
         // gawk: the target is a concatenation-level expression, so `? :` after it is a syntax error.
-        Run("Invoke-BashAwk " + Q("BEGIN{ print 1 > 2 ? \"A\" : \"B\" }")).AssertFailed(2);
+        Run("Invoke-BashAwk " + Q("BEGIN{ print 1 > 2 ? \"A\" : \"B\" }")).AssertFailed(1);
     }
 
     [Fact]

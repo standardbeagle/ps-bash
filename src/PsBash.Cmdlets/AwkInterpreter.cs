@@ -35,7 +35,10 @@ internal static class AwkInterpreter
 
     public sealed class AwkSyntaxException : Exception
     {
-        public AwkSyntaxException(string message) : base(message) { }
+        /// <summary>gawk 5.2.1: syntax errors and static <c>error:</c> diagnostics exit 1, static <c>fatal:</c> ones 2.</summary>
+        public int ExitCode { get; }
+
+        public AwkSyntaxException(string message, int exitCode = 1) : base(message) { ExitCode = exitCode; }
     }
 
     /// <summary>

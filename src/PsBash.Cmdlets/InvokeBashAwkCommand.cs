@@ -189,7 +189,7 @@ public sealed class InvokeBashAwkCommand : PSCmdlet
         catch (AwkInterpreter.AwkSyntaxException ex)
         {
             FileSystemHelpers.WriteBashError(this, ex.Message);
-            SessionState.PSVariable.Set("global:LASTEXITCODE", 2);
+            SessionState.PSVariable.Set("global:LASTEXITCODE", ex.ExitCode);
             _halt = true;
             return;
         }
