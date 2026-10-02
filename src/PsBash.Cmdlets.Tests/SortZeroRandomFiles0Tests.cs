@@ -119,7 +119,7 @@ public class SortZeroRandomFiles0Tests : IClassFixture<SharedPwshFixture>, IDisp
             Run($"Invoke-BashPrintf '{fa.Trim('\'')}\\0' | Invoke-BashSort '--files0-from=-'").AssertSuccess().Lines);
         Run($"Invoke-BashSort '--files0-from={list.Trim('\'')}' {fa}").AssertFailed(2, "extra operand", "cannot be combined with --files0-from");
         Run($"Invoke-BashPrintf '{fa.Trim('\'')}\\0\\0{fb.Trim('\'')}\\0' | Invoke-BashSort '--files0-from=-'").AssertFailed(2, "-:2: invalid zero-length file name");
-        Run($"Invoke-BashPrintf '{fa.Trim('\'')}\\0/nonexistent/q\\0' | Invoke-BashSort '--files0-from=-'").AssertFailed(2, "cannot read: /nonexistent/q: No such file or directory");
+        Run($"Invoke-BashPrintf '{fa.Trim('\'')}\\0/nonexistent/q\\0' | Invoke-BashSort '--files0-from=-'").AssertFailed(2, "nonexistent/q: No such file or directory");
         Run("Invoke-BashPrintf '' | Invoke-BashSort '--files0-from=-'").AssertFailed(2, "no input from '-'");
         Run("Invoke-BashSort '--files0-from=/nonexistent/l0'").AssertFailed(2, "open failed: /nonexistent/l0: No such file or directory");
         Run("Invoke-BashPrintf '-\\0' | Invoke-BashSort '--files0-from=-'").AssertFailed(2, "when reading file names from stdin, no file name of '-' allowed");

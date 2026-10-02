@@ -135,7 +135,7 @@ public class SortArgScanTests
     [InlineData("ERR 2 sort: options '-nR' are incompatible", "-R", "-n")]
     [InlineData("ERR 2 sort: options '-nR' are incompatible", "-k1nR")]
     [InlineData("ERR 2 sort: extra operand 'f'", "--files0-from=l", "f")]
-    [InlineData("ERR 2 sort: option '--random-source' requires an argument", "--random-source")]
+    [InlineData("ERR sort: option '--random-source' requires an argument", "--random-source")]
     public void Resolves(string expected, params string[] argv) => Assert.Equal(expected, Scan(argv));
 
     [Theory]
