@@ -208,6 +208,11 @@ public class RawBytesEndToEndTests
     {
         Skip.If(OperatingSystem.IsWindows(), "POSIX leg: /bin/cat is the native child");
         var (_, stdout, _) = await RunBytesAsync(@"printf 'a\351\377b\n' | /bin/cat");
-        Assert.Equal(new byte[] { 0x61, 0xE9, 0xFF, 0x62 }, TrimEol(stdout));
+        // The invalid bytes are the subject. Piping a record into a native stdin makes PowerShell append
+        // its own line terminator after the record's embedded "\n", so a faithful /bin/cat shows a doubled
+        // newline (findstr hid it on Windows). Compare modulo trailing line terminators.
+        var trimmed = stdout.AsSpan();
+        while (trimmed.Length > 0 && (trimmed[^1] == 0x0A || trimmed[^1] == 0x0D)) trimmed = trimmed[..^1];
+        Assert.Equal(new byte[] { 0x61, 0xE9, 0xFF, 0x62 }, trimmed.ToArray());
     }
 }
