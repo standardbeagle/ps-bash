@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 28
+stdout-length: 2
+stderr-length: 15
+==== SCRIPT ====
+jq -n '[1] | debug | length'
+==== STDOUT ====
+1
+
+==== STDERR ====
+["DEBUG:",[1]]
+

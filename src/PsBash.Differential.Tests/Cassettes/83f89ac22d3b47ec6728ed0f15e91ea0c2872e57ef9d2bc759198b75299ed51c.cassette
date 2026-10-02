@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 73
+stdout-length: 23
+stderr-length: 0
+==== SCRIPT ====
+jq -n -c 'env | type, ($ENV | type), ($ENV | has("PATH") or has("Path"))'
+==== STDOUT ====
+"object"
+"object"
+true
+
+==== STDERR ====
+

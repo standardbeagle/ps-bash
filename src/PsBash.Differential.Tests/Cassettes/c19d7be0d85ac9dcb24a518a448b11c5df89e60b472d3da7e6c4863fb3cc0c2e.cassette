@@ -1,0 +1,18 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 161
+stdout-length: 66
+stderr-length: 0
+==== SCRIPT ====
+jq -n -c '[1,[2]] | (.. | numbers) |= . + 1, ([..] | length), (first(.[] | select(. == 1)) |= 10), (.[1][0] = 9), (.[5] = 1 | length), (try (.[-5] = 1) catch .)'
+==== STDOUT ====
+[2,[3]]
+4
+[10,[2]]
+[1,[9]]
+6
+"Out of bounds negative array index"
+
+==== STDERR ====
+

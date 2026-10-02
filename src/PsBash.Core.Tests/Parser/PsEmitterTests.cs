@@ -814,7 +814,7 @@ public class PsEmitterTests
         // Batch 1 of the shared ordered parser. Adding a command here also means adding it to
         // CommonParameterCollisionGuardTests.EmitterForceQuoted (Cmdlets.Tests) — that map is
         // how the guard knows the emitter, not a decoy, protects the colliding letters.
-        Assert.Equal(new[] { "awk", "base64", "bash", "cat", "column", "comm", "command", "cp", "cut", "du", "echo", "env", "expand", "file", "find", "fold", "grep", "gzip", "head", "join", "ln", "ls", "md5sum", "mkdir", "mv", "nl", "paste", "printf", "rg", "rm", "rmdir", "sed", "sha1sum", "sha256sum", "sort", "split", "stat", "strings", "tac", "tail", "tar", "tee", "test", "time", "touch", "tree", "unexpand", "uniq", "wc", "xargs" }, PsEmitter.OrderedArgCommands.OrderBy(x => x).ToArray());
+        Assert.Equal(new[] { "awk", "base64", "bash", "cat", "column", "comm", "command", "cp", "cut", "diff", "du", "echo", "env", "expand", "file", "find", "fold", "grep", "gzip", "head", "join", "jq", "ln", "ls", "md5sum", "mkdir", "mv", "nl", "paste", "printf", "rg", "rm", "rmdir", "sed", "sha1sum", "sha256sum", "sort", "split", "stat", "strings", "tac", "tail", "tar", "tee", "test", "time", "touch", "tree", "unexpand", "uniq", "wc", "xargs" }, PsEmitter.OrderedArgCommands.OrderBy(x => x).ToArray());
     }
 
     // `bash` is on OrderedArgCommands: the script's own args (`bash s.sh -v -e -c x`) and the
@@ -1009,7 +1009,7 @@ public class PsEmitterTests
     {
         Assert.Equal("Invoke-BashCp a/b c-d", PsEmitter.Transpile("cp a/b c-d"));
         // diff is not opted in: `-u` stays a bare flag
-        Assert.Contains("Invoke-BashDiff -u ", PsEmitter.Transpile("diff -u a b"));
+        Assert.Contains("Invoke-BashDiff '-u' ", PsEmitter.Transpile("diff -u a b"));
     }
 
     [Fact]

@@ -1,0 +1,21 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 141
+stdout-length: 138
+stderr-length: 0
+==== SCRIPT ====
+jq -n -c '{"a":1,"b":2} | (.a, .b) = 5, ((.a, .b) |= . + 1), (.[] += 1), (.c = .a + .b), (.a = (1,2)), (.a |= (.,.)), (.c //= 3), (.a //= 3)'
+==== STDOUT ====
+{"a":5,"b":5}
+{"a":2,"b":3}
+{"a":2,"b":3}
+{"a":1,"b":2,"c":3}
+{"a":1,"b":2}
+{"a":2,"b":2}
+{"a":1,"b":2}
+{"a":1,"b":2,"c":3}
+{"a":1,"b":2}
+
+==== STDERR ====
+

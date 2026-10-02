@@ -1,0 +1,17 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 141
+stdout-length: 225
+stderr-length: 0
+==== SCRIPT ====
+jq -n -c 'try ({} | @csv) catch ., try ([[1]] | @csv) catch ., try ({} | @sh) catch ., try (1 | @tsv) catch ., try ("!!" | @base64d) catch .'
+==== STDOUT ====
+"object ({}) cannot be csv-formatted, only array"
+"array ([1]) is not valid in a csv row"
+"object ({}) can not be escaped for shell"
+"number (1) cannot be tsv-formatted, only array"
+"string (\"!!\") is not valid base64 data"
+
+==== STDERR ====
+

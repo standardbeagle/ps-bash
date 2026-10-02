@@ -1,0 +1,22 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 5
+script-length: 284
+stdout-length: 43
+stderr-length: 58
+==== SCRIPT ====
+jq -n -c '[.[]?], [(1,null) | .a?], (try error("x") catch .), ([1,"a"] | map(try tonumber catch "bad")), [(1,2) | (if . == 1 then error("x") else . end)?], (try error catch .), (try error(null) catch .), ({} | try error catch .), (try error({"a":1}) catch .a), [.[] | try error("x")]'
+==== STDOUT ====
+[]
+[null]
+"x"
+[1,"bad"]
+[2]
+null
+null
+{}
+1
+
+==== STDERR ====
+jq: error (at <unknown>): Cannot iterate over null (null)
+

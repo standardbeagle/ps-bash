@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 59
+stdout-length: 34
+stderr-length: 0
+==== SCRIPT ====
+printf '%s' '{"b":1,"a":2}' | jq -c --sort-keys '., tojson'
+==== STDOUT ====
+{"a":2,"b":1}
+"{\"b\":1,\"a\":2}"
+
+==== STDERR ====
+

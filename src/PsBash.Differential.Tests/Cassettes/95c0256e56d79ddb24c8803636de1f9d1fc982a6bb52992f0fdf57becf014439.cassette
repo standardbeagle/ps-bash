@@ -1,0 +1,17 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 90
+stdout-length: 61
+stderr-length: 0
+==== SCRIPT ====
+printf '%s' '[5,6]' | jq -c 'keys, has(0), has(2), to_entries, length, (with_entries(.))?'
+==== STDOUT ====
+[0,1]
+true
+false
+[{"key":0,"value":5},{"key":1,"value":6}]
+2
+
+==== STDERR ====
+

@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 231
+stdout-length: 313
+stderr-length: 0
+==== SCRIPT ====
+jq -n -c '["abc" | try ltrimstr(1) catch ., try test(1) catch ., try (1|test("a")) catch ., try (1|split(",")) catch ., try ("a"|split(1)) catch ., try test("(") catch ., try startswith(1) catch ., try (1|startswith("a")) catch .]'
+==== STDOUT ====
+["abc","number not a string or array","number (1) cannot be matched, as it is not a string","split input and separator must be strings","split input and separator must be strings","Regex failure: end pattern with unmatched parenthesis","startswith() requires string inputs","startswith() requires string inputs"]
+
+==== STDERR ====
+

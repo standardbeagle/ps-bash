@@ -1,0 +1,18 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 112
+stdout-length: 19
+stderr-length: 0
+==== SCRIPT ====
+jq -n -c '[range(3)] | first, last, nth(1), (first(.[])), [.[] | select(. > 0)], [.[] | select(. > 0)] == .[1:]'
+==== STDOUT ====
+0
+2
+1
+0
+[1,2]
+true
+
+==== STDERR ====
+

@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 148
+stdout-length: 67
+stderr-length: 0
+==== SCRIPT ====
+jq -n -c '["é😀" | [match("."; "g") | .offset], (explode), (length), (utf8bytelength), (.[0:1]), (@json), (tojson), ([.] | tojson), ascii_downcase]'
+==== STDOUT ====
+[[0,1],[233,128512],2,6,"é","\"é😀\"","\"é😀\"","[\"é😀\"]","é😀"]
+
+==== STDERR ====
+

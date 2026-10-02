@@ -1,0 +1,17 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 3
+script-length: 36
+stdout-length: 0
+stderr-length: 161
+==== SCRIPT ====
+printf '%s' '1' | jq '1 | foo | bar'
+==== STDOUT ====
+
+==== STDERR ====
+jq: error: foo/0 is not defined at <top-level>, line 1:
+1 | foo | bar
+jq: error: bar/0 is not defined at <top-level>, line 1:
+1 | foo | bar
+jq: 2 compile errors
+

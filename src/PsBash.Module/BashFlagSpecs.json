@@ -338,6 +338,41 @@
     {
       "flag": "-i",
       "desc": "case-insensitive comparison"
+    },
+    {
+      "flag": "-s",
+      "desc": "report when two files are the same"
+    },
+    {
+      "flag": "-r",
+      "desc": "recurse into subdirectories"
+    },
+    {
+      "flag": "-N",
+      "desc": "treat absent files as empty"
+    },
+    {
+      "flag": "-a",
+      "desc": "treat all files as text"
+    },
+    {
+      "flag": "-U",
+      "desc": "output NUM lines of unified context",
+      "arg": "NUM"
+    },
+    {
+      "flag": "-C",
+      "desc": "output NUM lines of copied context",
+      "arg": "NUM"
+    },
+    {
+      "flag": "--label",
+      "desc": "use LABEL instead of the file name and timestamp",
+      "arg": "LABEL"
+    },
+    {
+      "flag": "--strip-trailing-cr",
+      "desc": "strip trailing carriage return on input"
     }
   ],
   "dirs": [
@@ -1218,6 +1253,64 @@
     {
       "flag": "-j",
       "desc": "join output (raw, no newline after each result)"
+    },
+    {
+      "flag": "-n",
+      "desc": "use null as the single input value"
+    },
+    {
+      "flag": "-e",
+      "desc": "set the exit status from the last output (1 for false/null, 4 for none)"
+    },
+    {
+      "flag": "-a",
+      "desc": "ASCII output (escape non-ASCII characters)"
+    },
+    {
+      "flag": "-f",
+      "desc": "read the program from FILE",
+      "arg": "FILE"
+    },
+    {
+      "flag": "--arg",
+      "desc": "set $NAME to the string VALUE",
+      "arg": "NAME VALUE"
+    },
+    {
+      "flag": "--argjson",
+      "desc": "set $NAME to the JSON text",
+      "arg": "NAME JSON"
+    },
+    {
+      "flag": "--slurpfile",
+      "desc": "set $NAME to the array of JSON values in FILE",
+      "arg": "NAME FILE"
+    },
+    {
+      "flag": "--rawfile",
+      "desc": "set $NAME to the contents of FILE as a string",
+      "arg": "NAME FILE"
+    },
+    {
+      "flag": "--args",
+      "desc": "remaining arguments are positional strings ($ARGS.positional)"
+    },
+    {
+      "flag": "--jsonargs",
+      "desc": "remaining arguments are positional JSON texts"
+    },
+    {
+      "flag": "--tab",
+      "desc": "indent with a tab"
+    },
+    {
+      "flag": "--indent",
+      "desc": "indent with N spaces (0-7)",
+      "arg": "N"
+    },
+    {
+      "flag": "--stream",
+      "desc": "output the input as path/leaf events"
     }
   ],
   "ln": [
@@ -1245,6 +1338,23 @@
     {
       "flag": "-T",
       "desc": "treat LINK_NAME as a normal file always"
+    },
+    {
+      "flag": "-i",
+      "desc": "prompt whether to remove destinations"
+    },
+    {
+      "flag": "-r",
+      "desc": "create symbolic links relative to link location"
+    },
+    {
+      "flag": "-b",
+      "desc": "make a backup of each existing destination file"
+    },
+    {
+      "flag": "-S",
+      "desc": "override the usual backup suffix",
+      "arg": "SUFFIX"
     }
   ],
   "ls": [
@@ -1494,6 +1604,32 @@
     {
       "flag": "-f",
       "desc": "force"
+    },
+    {
+      "flag": "-i",
+      "desc": "prompt before overwrite"
+    },
+    {
+      "flag": "-b",
+      "desc": "make a backup of each existing destination file"
+    },
+    {
+      "flag": "-S",
+      "desc": "override the usual backup suffix",
+      "arg": "SUFFIX"
+    },
+    {
+      "flag": "-t",
+      "desc": "move all SOURCE arguments into DIRECTORY",
+      "arg": "DIRECTORY"
+    },
+    {
+      "flag": "-T",
+      "desc": "treat DEST as a normal file"
+    },
+    {
+      "flag": "-u",
+      "desc": "move only when the source is newer than the destination"
     }
   ],
   "nl": [
@@ -2106,6 +2242,24 @@
     {
       "flag": "--exclude",
       "desc": "exclude pattern"
+    },
+    {
+      "flag": "-T",
+      "desc": "get names to extract or create from FILE",
+      "arg": "FILE"
+    },
+    {
+      "flag": "-X",
+      "desc": "exclude patterns listed in FILE",
+      "arg": "FILE"
+    },
+    {
+      "flag": "--wildcards",
+      "desc": "member names are glob patterns"
+    },
+    {
+      "flag": "--no-wildcards",
+      "desc": "member names are literal"
     }
   ],
   "tee": [

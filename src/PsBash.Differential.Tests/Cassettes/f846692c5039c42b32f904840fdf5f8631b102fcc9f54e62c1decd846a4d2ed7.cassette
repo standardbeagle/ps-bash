@@ -1,0 +1,20 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 171
+stdout-length: 282
+stderr-length: 0
+==== SCRIPT ====
+printf '%s' '{"a":[1,2,3],"b":{"c":4}}' | jq -c '[paths], [paths(type == "number")], [path(..)], [path(.a[])], [path(.a[1:])], path(.b.c), (path(.a | first)), [paths(..)]'
+==== STDOUT ====
+[["a"],["a",0],["a",1],["a",2],["b"],["b","c"]]
+[["a",0],["a",1],["a",2],["b","c"]]
+[[],["a"],["a",0],["a",1],["a",2],["b"],["b","c"]]
+[["a",0],["a",1],["a",2]]
+[["a",{"start":1,"end":null}]]
+["b","c"]
+["a",0]
+[["a"],["a"],["a"],["a"],["a",0],["a",1],["a",2],["b"],["b"],["b","c"]]
+
+==== STDERR ====
+

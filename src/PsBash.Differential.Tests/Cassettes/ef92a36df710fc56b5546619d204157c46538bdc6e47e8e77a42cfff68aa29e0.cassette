@@ -1,0 +1,16 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 87
+stdout-length: 77
+stderr-length: 0
+==== SCRIPT ====
+jq -n -c '[1,[2,[3,[4]]]] | flatten, flatten(1), flatten(0), (try flatten(-1) catch .)'
+==== STDOUT ====
+[1,2,3,4]
+[1,2,[3,[4]]]
+[1,[2,[3,[4]]]]
+"flatten depth must not be negative"
+
+==== STDERR ====
+

@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 166
+stdout-length: 20
+stderr-length: 0
+==== SCRIPT ====
+jq -n -c '[label $f | range(10) | ., (select(. == 3) | break $f)], [label $a | label $b | 1, break $a, 2], [range(3) | label $l | if . == 1 then break $l else . end]'
+==== STDOUT ====
+[0,1,2,3]
+[1]
+[0,2]
+
+==== STDERR ====
+

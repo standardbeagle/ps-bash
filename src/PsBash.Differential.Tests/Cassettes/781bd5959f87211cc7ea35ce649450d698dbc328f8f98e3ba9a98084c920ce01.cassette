@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 123
+stdout-length: 68
+stderr-length: 0
+==== SCRIPT ====
+jq -n -c '["a,b,c" | split(","), split(", *"; null), split(","; "g"), (split("") | length), [splits(",")], ascii_downcase]'
+==== STDOUT ====
+[["a","b","c"],["a","b","c"],["a","b","c"],5,["a","b","c"],"a,b,c"]
+
+==== STDERR ====
+

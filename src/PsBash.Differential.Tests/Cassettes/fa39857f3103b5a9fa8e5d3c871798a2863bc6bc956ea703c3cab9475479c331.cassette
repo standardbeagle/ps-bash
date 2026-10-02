@@ -1,0 +1,20 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 296
+stdout-length: 108
+stderr-length: 0
+==== SCRIPT ====
+jq -n -c '"x" | [limit(3; repeat(. + "b"))], ([1,2] | [limit(3; repeat(.[0] += 1))]), (2 | [limit(4; repeat(. * .))]), (1 | [limit(5; recurse(. + 1))]), ([2 | recurse(if . < 20 then . * . else empty end)]), ([1,[2]] | [recurse], [recurse(.[]?; . != 2)]), ([[1,2],[3]] | [recurse(.[]?)] | length)'
+==== STDOUT ====
+["xb","xb","xb"]
+[[2,2],[2,2],[2,2]]
+[4,4,4,4]
+[1,2,3,4,5]
+[2,4,16,256]
+[[1,[2]],1,[2],2]
+[[1,[2]],1,[2]]
+6
+
+==== STDERR ====
+

@@ -1,0 +1,17 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 87
+stdout-length: 59
+stderr-length: 0
+==== SCRIPT ====
+jq -n -c 'null | .a.b = 1, (.[2] = 1), (.a[1].b = 2), (.["k"] += 1), ([.[]?] | length)'
+==== STDOUT ====
+{"a":{"b":1}}
+[null,null,1]
+{"a":[null,{"b":2}]}
+{"k":1}
+0
+
+==== STDERR ====
+

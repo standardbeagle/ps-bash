@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 91
+stdout-length: 108
+stderr-length: 0
+==== SCRIPT ====
+printf '%s' '{"a":1}' | jq -c 'try (.a.b) catch ., try (.[0]) catch ., try (.a[0]) catch .'
+==== STDOUT ====
+"Cannot index number with string \"b\""
+"Cannot index object with number"
+"Cannot index number with number"
+
+==== STDERR ====
+

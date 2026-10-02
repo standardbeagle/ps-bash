@@ -1,0 +1,20 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 91
+stdout-length: 257
+stderr-length: 0
+==== SCRIPT ====
+jq -n -r '[1,"a b",null,true,"x\"y"] | @csv, @tsv, @sh, @json, @html, @uri, @text, @base64'
+==== STDOUT ====
+1,"a b",,true,"x""y"
+1	a b		true	x"y
+1 'a b' null true 'x"y'
+[1,"a b",null,true,"x\"y"]
+[1,&quot;a b&quot;,null,true,&quot;x\&quot;y&quot;]
+%5B1%2C%22a%20b%22%2Cnull%2Ctrue%2C%22x%5C%22y%22%5D
+[1,"a b",null,true,"x\"y"]
+WzEsImEgYiIsbnVsbCx0cnVlLCJ4XCJ5Il0=
+
+==== STDERR ====
+

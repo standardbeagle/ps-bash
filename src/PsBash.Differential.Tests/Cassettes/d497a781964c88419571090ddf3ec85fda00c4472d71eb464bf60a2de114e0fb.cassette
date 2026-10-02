@@ -1,0 +1,21 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 202
+stdout-length: 121
+stderr-length: 0
+==== SCRIPT ====
+printf '%s' '{"a":{"b":1}}' | jq -c 'setpath(["a","c"]; 2), setpath(["x","y","z"]; 1), (setpath([]; 5)), getpath(["a","b"]), (try setpath([0]; 1) catch .), (del(.a.b)), (del(.x)), (del(.a, .a)), del(.)'
+==== STDOUT ====
+{"a":{"b":1,"c":2}}
+{"a":{"b":1},"x":{"y":{"z":1}}}
+5
+1
+"Cannot index object with number"
+{"a":{}}
+{"a":{"b":1}}
+{}
+null
+
+==== STDERR ====
+

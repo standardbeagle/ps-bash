@@ -1,0 +1,17 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 134
+stdout-length: 52
+stderr-length: 0
+==== SCRIPT ====
+jq -n -c '["a\tb"|@json, tojson, (. | length)], ("x" * 3), ("abc" | .[1:]), ("a-b" | split("-") | join("+")), ("a" | . + "b" | . * 2)'
+==== STDOUT ====
+["\"a\\tb\"","\"a\\tb\"",3]
+"xxx"
+"bc"
+"a+b"
+"abab"
+
+==== STDERR ====
+

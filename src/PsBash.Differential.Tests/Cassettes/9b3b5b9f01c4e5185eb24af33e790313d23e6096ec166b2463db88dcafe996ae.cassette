@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 3
+script-length: 36
+stdout-length: 0
+stderr-length: 87
+==== SCRIPT ====
+printf '%s' '1' | jq '.a as $x | $y'
+==== STDOUT ====
+
+==== STDERR ====
+jq: error: $y is not defined at <top-level>, line 1:
+.a as $x | $y
+jq: 1 compile error
+

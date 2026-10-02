@@ -1,0 +1,18 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 171
+stdout-length: 161
+stderr-length: 0
+==== SCRIPT ====
+jq -n -c '["ÀB"|ascii_downcase], ["àb"|ascii_upcase], (try (1|ascii_downcase) catch .), (try (1|explode) catch .), (try (["a"]|implode) catch .), ([65,66,128512]|implode)'
+==== STDOUT ====
+["Àb"]
+["àB"]
+"explode input must be a string"
+"explode input must be a string"
+"string (\"a\") can't be imploded, unicode codepoint needs to be numeric"
+"AB😀"
+
+==== STDERR ====
+

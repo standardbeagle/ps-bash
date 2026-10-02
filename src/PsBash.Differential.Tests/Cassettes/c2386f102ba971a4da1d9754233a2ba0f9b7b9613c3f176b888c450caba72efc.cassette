@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 70
+stdout-length: 42
+stderr-length: 0
+==== SCRIPT ====
+jq -n -c '[[1,2],[3,4]] | [combinations], ([[1,2]]|[combinations(2)])'
+==== STDOUT ====
+[[1,3],[1,4],[2,3],[2,4]]
+[[[1,2],[1,2]]]
+
+==== STDERR ====
+

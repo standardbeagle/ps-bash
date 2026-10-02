@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 147
+stdout-length: 57
+stderr-length: 0
+==== SCRIPT ====
+jq -n -c '[any(1,2; . == 2), all(1,2; . == 2), any(empty; .), all(empty; .), ([true,false]|any,all), ([]|any,all), ([1,2]|any(. > 1), all(. > 1))]'
+==== STDOUT ====
+[true,false,false,true,true,false,false,true,true,false]
+
+==== STDERR ====
+

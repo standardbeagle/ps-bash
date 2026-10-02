@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 100
+stdout-length: 41
+stderr-length: 0
+==== SCRIPT ====
+printf '%s' '{"x":1,"y":"s"}' | jq -c '{a: .x, b: .y, "c": 3, (.y): 4, "d\(.x)": 5, @base64 "k": 6}'
+==== STDOUT ====
+{"a":1,"b":"s","c":3,"s":4,"d1":5,"k":6}
+
+==== STDERR ====
+

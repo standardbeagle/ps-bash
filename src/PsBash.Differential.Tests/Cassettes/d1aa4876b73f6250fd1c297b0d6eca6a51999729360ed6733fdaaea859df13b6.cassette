@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 3
+script-length: 27
+stdout-length: 0
+stderr-length: 192
+==== SCRIPT ====
+printf '%s' '1' | jq '"abc'
+==== STDOUT ====
+
+==== STDERR ====
+jq: error: syntax error, unexpected end of file, expecting QQSTRING_TEXT or QQSTRING_INTERP_START or QQSTRING_END (Unix shell quoting issues?) at <top-level>, line 1:
+"abc
+jq: 1 compile error
+

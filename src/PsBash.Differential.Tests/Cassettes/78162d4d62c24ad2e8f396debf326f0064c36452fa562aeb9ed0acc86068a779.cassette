@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 210
+stdout-length: 37
+stderr-length: 0
+==== SCRIPT ====
+jq -n -c '[[1,[2]]|walk(if type == "number" then . + 1 else . end)], [{"a":"b","c":[{"a":1}]} | walk(if type == "object" then del(.a) else . end)], [[[3,1],[2]] | walk(if type == "array" then sort else . end)]'
+==== STDOUT ====
+[[2,[3]]]
+[{"c":[{}]}]
+[[[1,3],[2]]]
+
+==== STDERR ====
+

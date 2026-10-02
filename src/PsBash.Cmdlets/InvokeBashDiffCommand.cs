@@ -1,42 +1,24 @@
 using System.Management.Automation;
+using PsBash.Cmdlets.Args;
 
 namespace PsBash.Cmdlets;
 
 /// <summary>
-/// Binary cmdlet replacement for the psm1 <c>Invoke-BashDiff</c> function
-/// (REFACTOR-2 follow-on). Compares two text files line-by-line via an
-/// LCS-based edit script (the exact slice the psm1 oracle used: an N+1 x M+1
-/// integer DP table backtracked into '=' / '-' / '+' edits), then emits the
-/// result in one of three formats: normal (default), unified (<c>-u</c>), or
-/// context (<c>-c</c>). When the two files compare equal under the active
-/// whitespace/case flags, no output is emitted (matching the oracle).
-///
-/// Behavioral parity oracle: the original psm1 function. Flags and their
-/// effects reproduce the oracle's switch byte-for-byte: <c>-u</c> unified,
-/// <c>-c</c> context, <c>-q</c>/<c>--brief</c> brief, <c>-w</c>/<c>--ignore-all-space</c>,
-/// <c>-b</c>/<c>--ignore-space-change</c>, <c>-B</c>/<c>--ignore-blank-lines</c>,
-/// <c>-i</c>/<c>--ignore-case</c>.
-///
-/// Flag-binding hazards declared explicitly: <c>-i</c> (prefix-collides with
-/// <c>-InformationAction</c>/<c>-InformationVariable</c>) and <c>-w</c>
-/// (prefix-collides with <c>-WarningAction</c>/<c>-WarningVariable</c>) are
-/// declared as named <see cref="SwitchParameter"/>s, as is <c>-c</c> (context
-/// format) — it prefix-collides with <c>-Confirm</c> and was silently dropped
-/// before this fix (an earlier audit wrongly called it collision-free). <c>-u</c>,
-/// <c>-b</c>, <c>-B</c>, <c>-q</c> share no prefix with PowerShell common
-/// parameters and stay in <see cref="Arguments"/>, parsed by the manual loop.
-/// Long forms (<c>--brief</c>, <c>--ignore-all-space</c>, etc.) also flow
-/// through <see cref="Arguments"/>.
-///
-/// File-only mode. Streams lines with CRLF normalization; the
-/// trailing-newline-eats-empty-line slice matches
-/// <c>StreamReader.ReadLine()</c> semantics (a file ending in <c>\n</c> does
-/// not produce a spurious empty final line). Each emitted line goes through
-/// <see cref="BashRuntime.NewBashObject(string)"/>.
-///
-/// Exit code: when the files differ under the active flags, sets
-/// <c>$global:LASTEXITCODE = 1</c> via
-/// <see cref="FileSystemHelpers.SetLastExitCode"/>; identical files leave it at 0.
+/// Binary cmdlet <c>Invoke-BashDiff</c>: GNU diffutils 3.10 <c>diff</c>. The comparison core is <see cref="DiffEngine"/> (a port
+/// of GNU's <c>diffseq.h</c> / <c>shift_boundaries</c>, so the edit scripts come out hunk for hunk the same), the output formats
+/// are <see cref="DiffFormatter"/>, the option rules <see cref="DiffPlan"/>; this class owns what touches the world: the operand
+/// shapes (file, directory, <c>-</c>), the directory walk (<c>Only in</c>, <c>Common subdirectories</c>, <c>-r</c>, <c>-N</c>), the
+/// per-file header of a directory comparison and the exit status (0 same, 1 different, 2 trouble).
+/// <para>
+/// Implemented: <c>-q -s -c -C N -u -U N -r -N -i -w -b -B -a</c>, <c>--strip-trailing-cr</c>, <c>--label</c> (and their long
+/// forms). Every other GNU option is valid-but-unsupported (exit 2). INTENTIONAL DIFFERENCES: long-option ambiguity lists use an
+/// alphabetical candidate order, and a binary file is recognised by a NUL in its first 4096 characters.
+/// </para>
+/// <para>
+/// <b>Argv</b> is parsed by the shared ordered parser; the transpiler single-quotes every dash-leading word for diff
+/// (<c>PsEmitter.OrderedArgCommands</c>). The <c>I</c>/<c>W</c>/<c>C</c> decoy switches exist ONLY for direct calls and are
+/// re-injected as <c>-i</c>/<c>-w</c>/<c>-c</c>; a bare <c>-C N</c> typed at PowerShell binds <c>C</c> (case-insensitive) — quote it.
+/// </para>
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashDiff")]
 [OutputType(typeof(string))]
@@ -45,442 +27,346 @@ public sealed class InvokeBashDiffCommand : PSCmdlet
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
-    /// <summary>
-    /// <c>-i</c> ignore-case — declared explicitly because the bare token
-    /// <c>-i</c> would otherwise prefix-match <c>-InformationAction</c> /
-    /// <c>-InformationVariable</c> under the PSCmdlet binder.
-    /// </summary>
+    /// <summary>The <c>-</c> operand's text: the pipeline records (read once, in <see cref="EndProcessing"/>).</summary>
+    [Parameter(ValueFromPipeline = true)]
+    public PSObject? InputObject { get; set; }
+
+    private readonly List<PSObject> _stdin = new();
+
+    /// <summary><c>-i</c> ignore-case — the bare token would prefix-match <c>-InformationAction</c>/<c>-InformationVariable</c>.</summary>
     [Parameter]
     public SwitchParameter I { get; set; }
 
-    /// <summary>
-    /// <c>-w</c> ignore-all-whitespace — declared explicitly because the bare
-    /// token <c>-w</c> would otherwise prefix-match <c>-WarningAction</c> /
-    /// <c>-WarningVariable</c>.
-    /// </summary>
+    /// <summary><c>-w</c> ignore-all-space — the bare token would prefix-match <c>-WarningAction</c>/<c>-WarningVariable</c>.</summary>
     [Parameter]
     public SwitchParameter W { get; set; }
 
-    /// <summary>
-    /// <c>-c</c> context-diff format — declared explicitly because the bare token
-    /// <c>-c</c> prefix-collides with the <c>-Confirm</c> common parameter and
-    /// would otherwise be silently bound (the flag dropped, normal format used)
-    /// before reaching <see cref="Arguments"/>.
-    /// </summary>
+    /// <summary><c>-c</c> context format — prefix-collides with <c>-Confirm</c> (and, case-folded, is also what a bare <c>-C</c> binds).</summary>
     [Parameter]
     public SwitchParameter C { get; set; }
 
+    private static readonly string[] DiffLongNames =
+    {
+        "binary", "brief", "changed-group-format", "color", "context", "ed", "exclude", "exclude-from", "expand-tabs", "from-file",
+        "horizon-lines", "ifdef", "ignore-all-space", "ignore-blank-lines", "ignore-case", "ignore-file-name-case",
+        "ignore-matching-lines", "ignore-space-change", "ignore-tab-expansion", "ignore-trailing-space", "initial-tab", "label",
+        "left-column", "line-format", "minimal", "new-file", "new-group-format", "new-line-format", "no-dereference",
+        "no-ignore-file-name-case", "normal", "old-group-format", "old-line-format", "paginate", "palette", "rcs", "recursive",
+        "report-identical-files", "show-c-function", "show-function-line", "side-by-side", "speed-large-files", "starting-file",
+        "strip-trailing-cr", "suppress-blank-empty", "suppress-common-lines", "tabsize", "text", "to-file", "unchanged-group-format",
+        "unchanged-line-format", "unidirectional-new-file", "unified", "version", "width",
+    };
+
+    private static readonly string[] DiffImplementedLongNames =
+    {
+        "brief", "context", "ignore-all-space", "ignore-blank-lines", "ignore-case", "ignore-space-change", "label", "new-file",
+        "recursive", "report-identical-files", "strip-trailing-cr", "text", "unified", "version",
+    };
+
+    private static string[] BuildValidButUnsupported()
+    {
+        var implemented = new HashSet<string>(DiffImplementedLongNames, StringComparer.Ordinal);
+        var list = new List<string>();
+        foreach (char c in "efnyDpFtTlWIxXSdEZPH") list.Add("-" + c);
+        foreach (var name in DiffLongNames) if (!implemented.Contains(name)) list.Add("--" + name);
+        return list.ToArray();
+    }
+
+    /// <summary>GNU diff options ps-bash refuses (exit 2). (A string[] on purpose: CommonParameterCollisionGuardTests enumerates it.)</summary>
+    private static readonly string[] DiffValidButUnsupported = BuildValidButUnsupported();
+
+    private static readonly OptSpecSet DiffSpec = new(
+        new[]
+        {
+            new OptSpec(DiffPlan.OptContext, 'c', null),
+            new OptSpec(DiffPlan.OptContextLong, 'C', null, OptKind.Value),
+            new OptSpec(DiffPlan.OptContextLong, '\0', "context", OptKind.OptionalValue),
+            new OptSpec(DiffPlan.OptUnified, 'u', null),
+            new OptSpec(DiffPlan.OptUnifiedLong, 'U', null, OptKind.Value),
+            new OptSpec(DiffPlan.OptUnifiedLong, '\0', "unified", OptKind.OptionalValue),
+            new OptSpec(DiffPlan.OptBrief, 'q', "brief"),
+            new OptSpec(DiffPlan.OptReport, 's', "report-identical-files"),
+            new OptSpec(DiffPlan.OptRecursive, 'r', "recursive"),
+            new OptSpec(DiffPlan.OptNewFile, 'N', "new-file"),
+            new OptSpec(DiffPlan.OptIgnoreCase, 'i', "ignore-case"),
+            new OptSpec(DiffPlan.OptIgnoreAllSpace, 'w', "ignore-all-space"),
+            new OptSpec(DiffPlan.OptIgnoreSpaceChange, 'b', "ignore-space-change"),
+            new OptSpec(DiffPlan.OptIgnoreBlankLines, 'B', "ignore-blank-lines"),
+            new OptSpec(DiffPlan.OptStripCr, '\0', "strip-trailing-cr"),
+            new OptSpec(DiffPlan.OptLabel, 'L', "label", OptKind.Value),
+            new OptSpec(DiffPlan.OptText, 'a', "text"),
+        },
+        validButUnsupported: DiffValidButUnsupported,
+        allowAbbrev: true,
+        gnuInfoOptions: true,
+        usageExitCode: 2,
+        longOptionOrder: DiffLongNames);
+
+    /// <summary>Pure argv scan (unit-test seam): options, operands and the first error.</summary>
+    internal static ParsedArgs ScanArgs(string[] args) => ArgParser.Parse(args, DiffSpec);
+
+    protected override void ProcessRecord()
+    {
+        if (InputObject != null) _stdin.Add(InputObject);
+    }
+
+    private int _status;
+    private DiffPlan _plan = null!;
+
     protected override void EndProcessing()
     {
-        var args = Arguments ?? Array.Empty<string>();
+        // Re-inject decoy-bound flags (the transpiler single-quotes every dash word, so they only bind on a direct call).
+        var args = BashRuntime.PrependDecoys(Arguments, (I.IsPresent, "-i"), (W.IsPresent, "-w"), (C.IsPresent, "-c"));
 
         FileSystemHelpers.SetLastExitCode(this, 0);
         if (FileSystemHelpers.TryHandleVersion(this, "diff", args)) return;
         if (Array.IndexOf(args, "--help") >= 0)
         {
-            foreach (var line in InvokeCommand.InvokeScript(
-                         "param($n) Show-BashHelp $n", "diff"))
-            {
+            foreach (var line in InvokeCommand.InvokeScript("param($n) Show-BashHelp $n", "diff"))
                 WriteObject(line);
-            }
             return;
         }
 
-        bool unified = false;
-        bool context = C.IsPresent;
-        bool brief = false;
-        bool ignoreAllSpace = W.IsPresent;
-        bool ignoreSpaceChange = false;
-        bool ignoreBlankLines = false;
-        bool ignoreCase = I.IsPresent;
-        var operands = new List<string>();
-        bool pastDoubleDash = false;
-
-        for (int i = 0; i < args.Length; i++)
+        var parsed = ScanArgs(args);
+        if (FileSystemHelpers.TryWriteParseError(this, "diff", parsed)) return;
+        if (FileSystemHelpers.TryHandleInfoOptions(this, "diff", parsed)) return;
+        if (!DiffPlan.TryBuild(args, parsed, out _plan, out var planError))
         {
-            string arg = args[i];
-            if (pastDoubleDash)
-            {
-                operands.Add(arg);
-                continue;
-            }
-
-            if (arg == "--") { pastDoubleDash = true; continue; }
-
-            // Case-sensitive matches mirror the oracle's `-ceq` slice.
-            if (arg.Equals("-u", StringComparison.Ordinal)) { unified = true; continue; }
-            if (arg.Equals("-c", StringComparison.Ordinal)) { context = true; continue; }
-            if (arg.Equals("-q", StringComparison.Ordinal) || arg == "--brief") { brief = true; continue; }
-            if (arg.Equals("-w", StringComparison.Ordinal) || arg == "--ignore-all-space") { ignoreAllSpace = true; continue; }
-            if (arg.Equals("-b", StringComparison.Ordinal) || arg == "--ignore-space-change") { ignoreSpaceChange = true; continue; }
-            if (arg.Equals("-B", StringComparison.Ordinal) || arg == "--ignore-blank-lines") { ignoreBlankLines = true; continue; }
-            if (arg.Equals("-i", StringComparison.Ordinal) || arg == "--ignore-case") { ignoreCase = true; continue; }
-
-            operands.Add(arg);
-        }
-
-        if (operands.Count < 2)
-        {
-            FileSystemHelpers.WriteBashError(this, "diff: missing operand");
+            FileSystemHelpers.WriteBashError(this, planError!);
+            FileSystemHelpers.SetLastExitCode(this, 2);
             return;
         }
 
-        string path1 = SessionState.Path.GetUnresolvedProviderPathFromPSPath(operands[0]);
-        string path2 = SessionState.Path.GetUnresolvedProviderPathFromPSPath(operands[1]);
+        CompareOperands(_plan.Operands[0], _plan.Operands[1]);
+        FileSystemHelpers.SetLastExitCode(this, _status);
+    }
 
-        string[]? lines1 = ReadFileLines(path1, out bool noNl1);
-        if (lines1 == null) return;
-        string[]? lines2 = ReadFileLines(path2, out bool noNl2);
-        if (lines2 == null) return;
+    private void Say(string line) => WriteObject(BashRuntime.NewBashObject(line));
 
-        // Build comparison keys applying whitespace/case flags. An unterminated last line gets a
-        // marker so it never equals the same text with a newline (GNU).
-        const string NoNlMark = "\u0000<no-newline>";
-        var cmp1 = new string[lines1.Length];
-        for (int xi = 0; xi < lines1.Length; xi++)
+    private void Trouble(string message)
+    {
+        FileSystemHelpers.WriteStderr(this, message);
+        _status = 2;
+    }
+
+    private void Differ() { if (_status < 1) _status = 1; }
+
+    private enum Kind { Missing, File, Directory, Stdin }
+
+    private string FullPath(string name) => SessionState.Path.GetUnresolvedProviderPathFromPSPath(name);
+
+    private Kind KindOf(string name)
+    {
+        if (name == "-") return Kind.Stdin;
+        if (FileSystemHelpers.IsNullDevice(name)) return Kind.File;
+        var path = FullPath(name);
+        if (Directory.Exists(path)) return Kind.Directory;
+        if (File.Exists(path)) return Kind.File;
+        return Kind.Missing;
+    }
+
+    /// <summary>GNU <c>file_name_concat</c>: a trailing slash on the directory is not doubled.</summary>
+    private static string Join(string dir, string name) =>
+        dir.EndsWith('/') || dir.EndsWith('\\') ? dir + name : dir + "/" + name;
+
+    private static string Leaf(string name) => Path.GetFileName(name.TrimEnd('/', '\\'));
+
+    // ───────────── operands ─────────────
+
+    private void CompareOperands(string op0, string op1)
+    {
+        var k0 = KindOf(op0);
+        var k1 = KindOf(op1);
+
+        // -N makes ONE missing operand an empty file; two missing operands are still errors.
+        bool bothMissing = k0 == Kind.Missing && k1 == Kind.Missing;
+        if (k0 == Kind.Missing && (!_plan.NewFile || bothMissing)) { Trouble($"diff: {op0}: No such file or directory"); }
+        if (k1 == Kind.Missing && (!_plan.NewFile || bothMissing)) { Trouble($"diff: {op1}: No such file or directory"); }
+        if (_status == 2) return;
+
+        if (k0 == Kind.Stdin && k1 == Kind.Stdin)
         {
-            cmp1[xi] = NormalizeKey(lines1[xi], ignoreAllSpace, ignoreSpaceChange, ignoreCase);
-            if (noNl1 && xi == lines1.Length - 1) cmp1[xi] += NoNlMark;
+            // The same stream twice is identical.
+            if (_plan.ReportIdentical) Say("Files - and - are identical");
+            return;
         }
-        var cmp2 = new string[lines2.Length];
-        for (int yi = 0; yi < lines2.Length; yi++)
+        if ((k0 == Kind.Stdin && k1 == Kind.Directory) || (k0 == Kind.Directory && k1 == Kind.Stdin))
         {
-            cmp2[yi] = NormalizeKey(lines2[yi], ignoreAllSpace, ignoreSpaceChange, ignoreCase);
-            if (noNl2 && yi == lines2.Length - 1) cmp2[yi] += NoNlMark;
-        }
-        bool Unterminated1(int line) => noNl1 && line == lines1.Length - 1;
-        bool Unterminated2(int line) => noNl2 && line == lines2.Length - 1;
-        // One diff output line, plus GNU's marker when that source line had no newline.
-        void Emit(string text, bool unterminated)
-        {
-            WriteObject(BashRuntime.NewBashObject(text));
-            if (unterminated) WriteObject(BashRuntime.NewBashObject("\\ No newline at end of file"));
-        }
-
-        // Build filtered indices (skip blank lines if -B is set).
-        var idx1 = new List<int>();
-        for (int xi = 0; xi < cmp1.Length; xi++)
-        {
-            if (ignoreBlankLines && cmp1[xi].Length == 0) continue;
-            idx1.Add(xi);
-        }
-        var idx2 = new List<int>();
-        for (int yi = 0; yi < cmp2.Length; yi++)
-        {
-            if (ignoreBlankLines && cmp2[yi].Length == 0) continue;
-            idx2.Add(yi);
-        }
-
-        int n = idx1.Count;
-        int m = idx2.Count;
-
-        // LCS DP table over filtered comparison keys.
-        var dp = new int[n + 1, m + 1];
-        for (int xi = n - 1; xi >= 0; xi--)
-        {
-            for (int yi = m - 1; yi >= 0; yi--)
-            {
-                if (string.Equals(cmp1[idx1[xi]], cmp2[idx2[yi]], StringComparison.Ordinal))
-                {
-                    dp[xi, yi] = dp[xi + 1, yi + 1] + 1;
-                }
-                else
-                {
-                    int a = dp[xi + 1, yi];
-                    int b = dp[xi, yi + 1];
-                    dp[xi, yi] = a >= b ? a : b;
-                }
-            }
-        }
-
-        // Backtrack into edit script using original indices.
-        var edits = new List<Edit>();
-        {
-            int xi = 0, yi = 0;
-            while (xi < n && yi < m)
-            {
-                if (string.Equals(cmp1[idx1[xi]], cmp2[idx2[yi]], StringComparison.Ordinal))
-                {
-                    edits.Add(new Edit('=', idx1[xi], idx2[yi]));
-                    xi++; yi++;
-                }
-                else if (dp[xi + 1, yi] >= dp[xi, yi + 1])
-                {
-                    edits.Add(new Edit('-', idx1[xi], -1));
-                    xi++;
-                }
-                else
-                {
-                    edits.Add(new Edit('+', -1, idx2[yi]));
-                    yi++;
-                }
-            }
-            while (xi < n) { edits.Add(new Edit('-', idx1[xi], -1)); xi++; }
-            while (yi < m) { edits.Add(new Edit('+', -1, idx2[yi])); yi++; }
-        }
-
-        bool hasDiff = edits.Any(e => e.Op != '=');
-        if (!hasDiff) return;
-
-        FileSystemHelpers.SetLastExitCode(this, 1);
-
-        if (brief)
-        {
-            WriteObject(BashRuntime.NewBashObject($"Files {operands[0]} and {operands[1]} differ"));
+            Trouble("diff: cannot compare '-' to a directory");
             return;
         }
 
-        if (unified || context)
+        if (k0 == Kind.Directory && k1 == Kind.Directory)
         {
-            const int contextLines = 3;
-            var hunkGroups = new List<List<Edit>>();
-            int ei = 0;
-            while (ei < edits.Count)
-            {
-                if (edits[ei].Op != '=')
-                {
-                    int start = Math.Max(0, ei - contextLines);
-                    int end = ei;
-                    while (end < edits.Count)
-                    {
-                        if (edits[end].Op != '=') { end++; continue; }
-                        int lookAhead = 0;
-                        int j = end;
-                        while (j < edits.Count && edits[j].Op == '=') { lookAhead++; j++; }
-                        if (lookAhead <= contextLines * 2 && j < edits.Count)
-                        {
-                            end = j;
-                        }
-                        else
-                        {
-                            end = Math.Min(end + contextLines, edits.Count);
-                            break;
-                        }
-                    }
-                    var group = new List<Edit>();
-                    for (int k = start; k < end; k++) group.Add(edits[k]);
-                    hunkGroups.Add(group);
-                    ei = end;
-                }
-                else
-                {
-                    ei++;
-                }
-            }
-
-            if (unified)
-            {
-                WriteObject(BashRuntime.NewBashObject($"--- {operands[0]}"));
-                WriteObject(BashRuntime.NewBashObject($"+++ {operands[1]}"));
-                foreach (var group in hunkGroups)
-                {
-                    int l1Start = -1, l1Count = 0, l2Start = -1, l2Count = 0;
-                    var hunkLines = new List<(string Text, bool Unterminated)>();
-                    foreach (var e in group)
-                    {
-                        switch (e.Op)
-                        {
-                            case '=':
-                                if (l1Start == -1) l1Start = e.Line1 + 1;
-                                if (l2Start == -1) l2Start = e.Line2 + 1;
-                                l1Count++; l2Count++;
-                                hunkLines.Add((" " + lines1[e.Line1], Unterminated1(e.Line1)));
-                                break;
-                            case '-':
-                                if (l1Start == -1) l1Start = e.Line1 + 1;
-                                if (l2Start == -1) l2Start = e.Line1 + 1;
-                                l1Count++;
-                                hunkLines.Add(("-" + lines1[e.Line1], Unterminated1(e.Line1)));
-                                break;
-                            case '+':
-                                if (l1Start == -1) l1Start = e.Line2 + 1;
-                                if (l2Start == -1) l2Start = e.Line2 + 1;
-                                l2Count++;
-                                hunkLines.Add(("+" + lines2[e.Line2], Unterminated2(e.Line2)));
-                                break;
-                        }
-                    }
-                    WriteObject(BashRuntime.NewBashObject($"@@ -{l1Start},{l1Count} +{l2Start},{l2Count} @@"));
-                    foreach (var (text, unterminated) in hunkLines) Emit(text, unterminated);
-                }
-            }
-            else // context
-            {
-                WriteObject(BashRuntime.NewBashObject($"*** {operands[0]}"));
-                WriteObject(BashRuntime.NewBashObject($"--- {operands[1]}"));
-                foreach (var group in hunkGroups)
-                {
-                    int l1Start = -1, l1End = -1, l2Start = -1, l2End = -1;
-                    foreach (var e in group)
-                    {
-                        switch (e.Op)
-                        {
-                            case '=':
-                                if (l1Start == -1) l1Start = e.Line1 + 1;
-                                l1End = e.Line1 + 1;
-                                if (l2Start == -1) l2Start = e.Line2 + 1;
-                                l2End = e.Line2 + 1;
-                                break;
-                            case '-':
-                                if (l1Start == -1) l1Start = e.Line1 + 1;
-                                l1End = e.Line1 + 1;
-                                break;
-                            case '+':
-                                if (l2Start == -1) l2Start = e.Line2 + 1;
-                                l2End = e.Line2 + 1;
-                                break;
-                        }
-                    }
-                    WriteObject(BashRuntime.NewBashObject("***************"));
-                    WriteObject(BashRuntime.NewBashObject($"*** {l1Start},{l1End}"));
-                    var changeLine1 = new HashSet<int>();
-                    for (int gi = 0; gi < group.Count; gi++)
-                    {
-                        if (group[gi].Op == '-' && gi + 1 < group.Count && group[gi + 1].Op == '+')
-                        {
-                            changeLine1.Add(group[gi].Line1);
-                        }
-                    }
-                    foreach (var e in group)
-                    {
-                        switch (e.Op)
-                        {
-                            case '=': Emit("  " + lines1[e.Line1], Unterminated1(e.Line1)); break;
-                            case '-':
-                                Emit((changeLine1.Contains(e.Line1) ? "! " : "- ") + lines1[e.Line1],
-                                    Unterminated1(e.Line1));
-                                break;
-                        }
-                    }
-                    WriteObject(BashRuntime.NewBashObject($"--- {l2Start},{l2End}"));
-                    var changeLine2 = new HashSet<int>();
-                    for (int gi = 0; gi < group.Count; gi++)
-                    {
-                        if (group[gi].Op == '+' && gi > 0 && group[gi - 1].Op == '-')
-                        {
-                            changeLine2.Add(group[gi].Line2);
-                        }
-                    }
-                    foreach (var e in group)
-                    {
-                        switch (e.Op)
-                        {
-                            case '=': Emit("  " + lines2[e.Line2], Unterminated2(e.Line2)); break;
-                            case '+':
-                                Emit((changeLine2.Contains(e.Line2) ? "! " : "+ ") + lines2[e.Line2],
-                                    Unterminated2(e.Line2));
-                                break;
-                        }
-                    }
-                }
-            }
+            CompareDirectories(op0, op1);
+        }
+        else if (k0 == Kind.Directory)
+        {
+            // `diff DIR FILE` compares DIR/FILE with FILE.
+            CompareFiles(Join(op0, Leaf(op1)), op1, listing: false);
+        }
+        else if (k1 == Kind.Directory)
+        {
+            CompareFiles(op0, Join(op1, Leaf(op0)), listing: false);
         }
         else
         {
-            // Normal diff format.
-            int ei = 0;
-            while (ei < edits.Count)
-            {
-                if (edits[ei].Op == '=') { ei++; continue; }
-
-                int delStart = -1, delEnd = -1, addStart = -1, addEnd = -1;
-                var delLines = new List<(string Text, bool Unterminated)>();
-                var addLines = new List<(string Text, bool Unterminated)>();
-
-                while (ei < edits.Count && edits[ei].Op != '=')
-                {
-                    var e = edits[ei];
-                    if (e.Op == '-')
-                    {
-                        if (delStart == -1) delStart = e.Line1 + 1;
-                        delEnd = e.Line1 + 1;
-                        delLines.Add((lines1[e.Line1], Unterminated1(e.Line1)));
-                    }
-                    else if (e.Op == '+')
-                    {
-                        if (addStart == -1) addStart = e.Line2 + 1;
-                        addEnd = e.Line2 + 1;
-                        addLines.Add((lines2[e.Line2], Unterminated2(e.Line2)));
-                    }
-                    ei++;
-                }
-
-                string delRange = (delStart == delEnd || delStart == -1) ? $"{delStart}" : $"{delStart},{delEnd}";
-                string addRange = (addStart == addEnd || addStart == -1) ? $"{addStart}" : $"{addStart},{addEnd}";
-
-                if (delLines.Count > 0 && addLines.Count > 0)
-                {
-                    WriteObject(BashRuntime.NewBashObject($"{delRange}c{addRange}"));
-                    foreach (var dl in delLines) Emit("< " + dl.Text, dl.Unterminated);
-                    WriteObject(BashRuntime.NewBashObject("---"));
-                    foreach (var al in addLines) Emit("> " + al.Text, al.Unterminated);
-                }
-                else if (delLines.Count > 0)
-                {
-                    int addPos = addStart == -1 ? (delStart > 1 ? delStart - 1 : 0) : addStart;
-                    WriteObject(BashRuntime.NewBashObject($"{delRange}d{addPos}"));
-                    foreach (var dl in delLines) Emit("< " + dl.Text, dl.Unterminated);
-                }
-                else if (addLines.Count > 0)
-                {
-                    int delPos = delStart == -1 ? (addStart > 1 ? addStart - 1 : 0) : delStart;
-                    WriteObject(BashRuntime.NewBashObject($"{delPos}a{addRange}"));
-                    foreach (var al in addLines) Emit("> " + al.Text, al.Unterminated);
-                }
-            }
+            CompareFiles(op0, op1, listing: false);
         }
     }
 
-    private static string NormalizeKey(string line, bool ignoreAllSpace, bool ignoreSpaceChange, bool ignoreCase)
-    {
-        string key = line;
-        if (ignoreAllSpace)
-        {
-            key = System.Text.RegularExpressions.Regex.Replace(key, @"\s", "");
-        }
-        else if (ignoreSpaceChange)
-        {
-            key = System.Text.RegularExpressions.Regex.Replace(key, @"^\s+", "");
-            key = System.Text.RegularExpressions.Regex.Replace(key, @"\s+$", "");
-            key = System.Text.RegularExpressions.Regex.Replace(key, @"\s+", " ");
-        }
-        if (ignoreCase) key = key.ToLowerInvariant();
-        return key;
-    }
+    // ───────────── directories ─────────────
 
-    // GNU diff treats a last line WITHOUT a newline as different from the same text WITH one, and
-    // prints `\ No newline at end of file` after it. Returns the lines and whether the last one
-    // was unterminated.
-    private string[]? ReadFileLines(string path, out bool lastUnterminated)
+    private List<string> NamesIn(string dir, Kind kind)
     {
-        lastUnterminated = false;
+        if (kind != Kind.Directory) return new List<string>();
         try
         {
-            var lines = new List<string>();
-            foreach (var l in BashFileSystem.ReadTextLines(path))
-            {
-                lines.Add(l.Text);
-                lastUnterminated = !l.HasTrailingNewline;
-            }
-            return lines.ToArray();
+            var names = Directory.EnumerateFileSystemEntries(FullPath(dir)).Select(Path.GetFileName).Where(n => !string.IsNullOrEmpty(n)).Select(n => n!).ToList();
+            names.Sort(StringComparer.Ordinal);
+            return names;
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!FileSystemHelpers.IsPipelineStop(ex))
         {
-            if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-            bool notFound = ex is FileNotFoundException or DirectoryNotFoundException
-                || ex.InnerException is FileNotFoundException or DirectoryNotFoundException;
-            string msg = notFound ? "No such file or directory" : ex.Message;
-            string normalized = path.Replace('\\', '/');
-            FileSystemHelpers.WriteBashError(this, $"diff: {normalized}: {msg}");
-            return null;
+            Trouble($"diff: {dir}: {ex.Message}");
+            return new List<string>();
         }
     }
 
-    private readonly struct Edit
+    private void CompareDirectories(string dir0, string dir1)
     {
-        public readonly char Op;
-        public readonly int Line1;
-        public readonly int Line2;
-        public Edit(char op, int line1, int line2) { Op = op; Line1 = line1; Line2 = line2; }
+        var kind0 = KindOf(dir0);
+        var kind1 = KindOf(dir1);
+        var names0 = NamesIn(dir0, kind0);
+        var names1 = NamesIn(dir1, kind1);
+        var set0 = new HashSet<string>(names0, StringComparer.Ordinal);
+        var set1 = new HashSet<string>(names1, StringComparer.Ordinal);
+        var all = new SortedSet<string>(names0, StringComparer.Ordinal);
+        all.UnionWith(names1);
+
+        foreach (var name in all)
+        {
+            var n0 = Join(dir0, name);
+            var n1 = Join(dir1, name);
+            bool in0 = set0.Contains(name), in1 = set1.Contains(name);
+            if ((!in0 || !in1) && !_plan.NewFile)
+            {
+                Say($"Only in {(in0 ? dir0 : dir1)}: {name}");
+                Differ();
+                continue;
+            }
+
+            // -N: a name only on one side is compared with an empty file / directory of the same kind.
+            var k0 = in0 ? KindOf(n0) : Kind.Missing;
+            var k1 = in1 ? KindOf(n1) : Kind.Missing;
+            if (k0 == Kind.Missing) k0 = k1 == Kind.Directory ? Kind.Directory : Kind.Missing;
+            if (k1 == Kind.Missing) k1 = k0 == Kind.Directory ? Kind.Directory : Kind.Missing;
+
+            if (k0 == Kind.Directory && k1 == Kind.Directory)
+            {
+                if (_plan.Recursive) CompareDirectories(n0, n1);
+                else Say($"Common subdirectories: {n0} and {n1}");
+            }
+            else if (k0 == Kind.Directory || k1 == Kind.Directory)
+            {
+                Say($"File {n0} is a {Describe(k0)} while file {n1} is a {Describe(k1)}");
+                Differ();
+            }
+            else
+            {
+                CompareFiles(n0, n1, listing: true);
+            }
+        }
+    }
+
+    private static string Describe(Kind kind) => kind == Kind.Directory ? "directory" : "regular file";
+
+    // ───────────── files ─────────────
+
+    private string ReadAll(string name, Kind kind)
+    {
+        if (kind == Kind.Missing) return "";
+        if (kind == Kind.Stdin)
+        {
+            return BashRuntime.RecordStreamText(_stdin.Cast<object>());
+        }
+        if (FileSystemHelpers.IsNullDevice(name)) return "";
+        return BashFileSystem.ReadAllTextRaw(FullPath(name));
+    }
+
+    private string HeaderFor(string name, Kind kind, int labelIndex)
+    {
+        if (_plan.Labels.Count > labelIndex) return _plan.Labels[labelIndex];
+        DateTimeOffset time = kind switch
+        {
+            Kind.Missing => DateTimeOffset.UnixEpoch.ToOffset(TimeSpan.Zero),
+            Kind.Stdin => DateTimeOffset.Now,
+            _ => FileSystemHelpers.IsNullDevice(name) ? DateTimeOffset.UnixEpoch : TimeZoneInfo.ConvertTime(new DateTimeOffset(File.GetLastWriteTimeUtc(FullPath(name)), TimeSpan.Zero), TimeZoneInfo.Local),
+        };
+        return name + "\t" + DiffFormatter.FormatTimestamp(time);
+    }
+
+    private void CompareFiles(string name0, string name1, bool listing)
+    {
+        var k0 = KindOf(name0);
+        var k1 = KindOf(name1);
+        if ((k0 == Kind.Missing || k1 == Kind.Missing) && !_plan.NewFile)
+        {
+            if (k0 == Kind.Missing) Trouble($"diff: {name0}: No such file or directory");
+            if (k1 == Kind.Missing) Trouble($"diff: {name1}: No such file or directory");
+            return;
+        }
+        if (k0 == Kind.Directory || k1 == Kind.Directory)
+        {
+            Say($"File {name0} is a {Describe(k0)} while file {name1} is a {Describe(k1)}");
+            Differ();
+            return;
+        }
+
+        string raw0, raw1;
+        try
+        {
+            raw0 = ReadAll(name0, k0);
+            raw1 = ReadAll(name1, k1);
+        }
+        catch (Exception ex) when (!FileSystemHelpers.IsPipelineStop(ex))
+        {
+            Trouble($"diff: {name0}: {ex.Message}");
+            return;
+        }
+
+        bool identicalBytes = string.Equals(raw0, raw1, StringComparison.Ordinal);
+        var t0 = DiffText.Parse(raw0, _plan.StripTrailingCr, _plan.Text);
+        var t1 = DiffText.Parse(raw1, _plan.StripTrailingCr, _plan.Text);
+
+        if (t0.Binary || t1.Binary)
+        {
+            if (identicalBytes) { ReportIdentical(name0, name1); return; }
+            Say(_plan.Brief ? $"Files {name0} and {name1} differ" : $"Binary files {name0} and {name1} differ");
+            Differ();
+            return;
+        }
+
+        var script = identicalBytes ? new List<DiffChange>() : DiffCompare.Script(t0, t1, _plan);
+        if (!DiffCompare.HasRealChange(script))
+        {
+            ReportIdentical(name0, name1);
+            return;
+        }
+
+        Differ();
+        if (_plan.Brief)
+        {
+            Say($"Files {name0} and {name1} differ");
+            return;
+        }
+
+        if (listing) Say($"diff{_plan.SwitchString} {name0} {name1}");
+        DiffFormatter.Write(_plan, t0, t1, script, HeaderFor(name0, k0, 0), HeaderFor(name1, k1, 1), Say);
+    }
+
+    private void ReportIdentical(string name0, string name1)
+    {
+        if (_plan.ReportIdentical) Say($"Files {name0} and {name1} are identical");
     }
 }

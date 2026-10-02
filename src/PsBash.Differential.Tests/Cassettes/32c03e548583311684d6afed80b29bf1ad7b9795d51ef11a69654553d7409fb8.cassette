@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 94
+stdout-length: 193
+stderr-length: 0
+==== SCRIPT ====
+jq -n -c '["[1,2]", "{\"a\":1}", "1 2", "", "{a", "nan", "\"x\""] | map(try fromjson catch .)'
+==== STDOUT ====
+[[1,2],{"a":1},"Unexpected extra JSON values (while parsing '1 2')","Expected JSON value (while parsing '')","Invalid numeric literal at EOF at line 1, column 2 (while parsing '{a')",null,"x"]
+
+==== STDERR ====
+

@@ -1,0 +1,16 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 72
+stdout-length: 95
+stderr-length: 0
+==== SCRIPT ====
+jq -n -r '"a-b_c.d~e/f ?&=é" | @uri, @html, @base64, (@base64|@base64d)'
+==== STDOUT ====
+a-b_c.d~e%2Ff%20%3F%26%3D%C3%A9
+a-b_c.d~e/f ?&amp;=é
+YS1iX2MuZH5lL2YgPyY9w6k=
+a-b_c.d~e/f ?&=é
+
+==== STDERR ====
+

@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 71
+stdout-length: 8
+stderr-length: 0
+==== SCRIPT ====
+jq -n -c '[{"key":"a","value":1},{"key":"a","value":2}] | from_entries'
+==== STDOUT ====
+{"a":2}
+
+==== STDERR ====
+

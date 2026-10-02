@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 5
+script-length: 27
+stdout-length: 0
+stderr-length: 60
+==== SCRIPT ====
+printf '%s' 'tru' | jq -c .
+==== STDOUT ====
+
+==== STDERR ====
+jq: parse error: Invalid literal at EOF at line 1, column 3
+

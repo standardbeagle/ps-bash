@@ -1,0 +1,17 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 88
+stdout-length: 47
+stderr-length: 0
+==== SCRIPT ====
+jq -n -c 'input_filename, input_line_number, ([.[]?]), ($__loc__), (null|ltrimstr("a"))'
+==== STDOUT ====
+null
+0
+[]
+{"file":"<top-level>","line":1}
+null
+
+==== STDERR ====
+

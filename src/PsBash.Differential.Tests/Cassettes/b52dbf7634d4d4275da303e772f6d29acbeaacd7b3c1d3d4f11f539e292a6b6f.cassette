@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 84
+stdout-length: 22
+stderr-length: 0
+==== SCRIPT ====
+jq -n -c '[1,null,2] | map(values), map(. // "x"), (.[1] | values), [.[] | numbers]'
+==== STDOUT ====
+[1,2]
+[1,"x",2]
+[1,2]
+
+==== STDERR ====
+

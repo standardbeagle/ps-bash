@@ -66,7 +66,8 @@ public sealed class InvokeBashTarCommand : PSCmdlet
 {
     private const string OptCreate = "create", OptExtract = "extract", OptList = "list", OptVerbose = "verbose",
         OptGzip = "gzip", OptKeep = "keep", OptAuto = "auto", OptStdout = "stdout", OptFile = "file",
-        OptDirectory = "directory", OptExclude = "exclude", OptStrip = "strip", OptNoOp = "noop";
+        OptDirectory = "directory", OptExclude = "exclude", OptStrip = "strip", OptNoOp = "noop",
+        OptFilesFrom = "files-from", OptExcludeFrom = "exclude-from", OptWildcards = "wildcards", OptNoWildcards = "no-wildcards";
 
     /// <summary>GNU tar 1.35 long options in argp table order (concatenated per-letter `--X` ambiguity lists
     /// from the oracle, so any abbreviation's candidate list is in GNU order). Every name here that is not
@@ -119,14 +120,14 @@ public sealed class InvokeBashTarCommand : PSCmdlet
         "create", "extract", "get", "list", "verbose", "gzip", "gunzip", "ungzip", "keep-old-files", "auto-compress",
         "to-stdout", "touch", "preserve-permissions", "same-permissions", "overwrite", "wildcards", "no-wildcards",
         "no-same-owner", "same-owner", "no-same-permissions", "file", "directory", "exclude", "strip-components",
-        "help", "version",
+        "files-from", "exclude-from", "help", "version",
     };
 
     private static string[] BuildTarValidButUnsupported()
     {
         var implemented = new HashSet<string>(TarImplementedLongNames, StringComparer.Ordinal);
         var list = new List<string>();
-        foreach (char c in "AdruGgnSTXUWsFLMbBiHVIjJZhKNPlRw") list.Add("-" + c);
+        foreach (char c in "AdruGgnSUWsFLMbBiHVIjJZhKNPlRw") list.Add("-" + c);
         foreach (var name in TarLongNamesInGnuOrder)
             if (!implemented.Contains(name)) list.Add("--" + name);
         return list.ToArray();
@@ -160,6 +161,10 @@ public sealed class InvokeBashTarCommand : PSCmdlet
             new OptSpec(OptDirectory, 'C', "directory", OptKind.Value),
             new OptSpec(OptExclude, '\0', "exclude", OptKind.Value),
             new OptSpec(OptStrip, '\0', "strip-components", OptKind.Value),
+            new OptSpec(OptFilesFrom, 'T', "files-from", OptKind.Value),
+            new OptSpec(OptExcludeFrom, 'X', "exclude-from", OptKind.Value),
+            new OptSpec(OptWildcards, '\0', "wildcards"),
+            new OptSpec(OptNoWildcards, '\0', "no-wildcards"),
             // Accepted no-ops. Each GNU option keeps its OWN id (never a shared catch-all): ids that
             // share a long name set count as ONE option for abbreviation, but GNU tar reports
             // --no-same / --no-sa as ambiguous (--no-same-owner vs --no-same-permissions).
@@ -167,8 +172,6 @@ public sealed class InvokeBashTarCommand : PSCmdlet
             new OptSpec(OptNoOp + ":preserve-permissions", 'p', "preserve-permissions"),
             new OptSpec(OptNoOp + ":preserve-permissions", '\0', "same-permissions"), // GNU alias of -p
             new OptSpec(OptNoOp + ":overwrite", '\0', "overwrite"),
-            new OptSpec(OptNoOp + ":wildcards", '\0', "wildcards"),
-            new OptSpec(OptNoOp + ":no-wildcards", '\0', "no-wildcards"),
             new OptSpec(OptNoOp + ":no-same-owner", '\0', "no-same-owner"),
             new OptSpec(OptNoOp + ":same-owner", '\0', "same-owner"),
             new OptSpec(OptNoOp + ":no-same-permissions", '\0', "no-same-permissions"),
@@ -211,9 +214,17 @@ public sealed class InvokeBashTarCommand : PSCmdlet
         /// <summary>Accumulated -C/--directory (extract/list destination).</summary>
         public string? ChangeDir;
         public List<string> Excludes = new();
+        /// <summary>-X / --exclude-from files, read (one pattern per line) when the command runs.</summary>
+        public List<string> ExcludeFiles = new();
         public int StripComponents;
-        /// <summary>Operands with the -C directory in effect where each appeared (create: -C is positional).</summary>
-        public List<(string? Dir, string Path)> Sources = new();
+        /// <summary>True when --wildcards or --no-wildcards appeared (silences GNU's pattern-characters warning).</summary>
+        public bool WildcardsExplicit;
+        /// <summary>One operand or -T list file, with the -C directory and the --wildcards state in effect where it appeared
+        /// (create: -C is positional; list/extract: --wildcards applies to the names AFTER it).</summary>
+        public sealed record TarItem(string? Dir, string Path, bool IsList, bool Wildcards);
+        public List<TarItem> Items = new();
+        /// <summary>The plain operands only (the -T list files are in <see cref="Items"/>).</summary>
+        public List<(string? Dir, string Path)> Sources => Items.Where(i => !i.IsList).Select(i => (i.Dir, i.Path)).ToList();
         public List<string> Operands = new();
         public string? Error;
         public int ErrorExit = 2;
@@ -235,9 +246,10 @@ public sealed class InvokeBashTarCommand : PSCmdlet
 
         var modes = new List<string>();
         string? dir = null;
+        bool wildcards = false;
         foreach (var tok in p.Parsed.Tokens)
         {
-            if (tok.Kind == ArgTokKind.Operand) { p.Sources.Add((dir, tok.Raw)); continue; }
+            if (tok.Kind == ArgTokKind.Operand) { p.Items.Add(new TarArgs.TarItem(dir, tok.Raw, false, wildcards)); continue; }
             if (tok.Kind != ArgTokKind.Option) continue;
             switch (tok.OptId)
             {
@@ -251,6 +263,10 @@ public sealed class InvokeBashTarCommand : PSCmdlet
                 case OptStdout: p.ToStdout = true; break;
                 case OptFile: p.ArchiveFile = tok.Value; break;
                 case OptExclude: p.Excludes.Add(tok.Value!); break;
+                case OptExcludeFrom: p.ExcludeFiles.Add(tok.Value!); break;
+                case OptFilesFrom: p.Items.Add(new TarArgs.TarItem(dir, tok.Value!, true, wildcards)); break;
+                case OptWildcards: wildcards = true; p.WildcardsExplicit = true; break;
+                case OptNoWildcards: wildcards = false; p.WildcardsExplicit = true; break;
                 case OptDirectory:
                     dir = dir is null || Path.IsPathRooted(tok.Value!) ? tok.Value : Path.Combine(dir, tok.Value!);
                     break;
@@ -339,6 +355,23 @@ public sealed class InvokeBashTarCommand : PSCmdlet
         return pre.Count == 0 ? rest : pre.Concat(rest).ToArray();
     }
 
+    /// <summary>The archive's bytes when it is stdin (<c>-f -</c>, or no <c>-f</c> at all): the pipeline records, read in <see cref="EndProcessing"/>.</summary>
+    [Parameter(ValueFromPipeline = true)]
+    public PSObject? InputObject { get; set; }
+
+    private readonly List<PSObject> _stdin = new();
+
+    protected override void ProcessRecord()
+    {
+        if (InputObject != null) _stdin.Add(InputObject);
+    }
+
+    /// <summary>GNU's closing line when errors were reported but the run went on (a missing member, an unreadable source).</summary>
+    private const string FailureStatusLine = "tar: Exiting with failure status due to previous errors";
+
+    /// <summary>GNU's closing line when it cannot go on at all (archive or list file cannot be opened, bad compression).</summary>
+    private const string NotRecoverableLine = "tar: Error is not recoverable: exiting now";
+
     protected override void EndProcessing()
     {
         var args = ArgsWithDecoys();
@@ -354,28 +387,22 @@ public sealed class InvokeBashTarCommand : PSCmdlet
             return;
         }
 
+        // No -f: GNU's default archive is the TAPE environment variable, else stdin/stdout (`-`).
         string? archiveFile = plan.ArchiveFile;
+        if (string.IsNullOrEmpty(archiveFile)) archiveFile = Environment.GetEnvironmentVariable("TAPE");
+        bool stdio = string.IsNullOrEmpty(archiveFile) || archiveFile == "-";
         string? changeDir = plan.ChangeDir;
         bool gzipFilter = plan.Gzip;
 
-        if (!string.IsNullOrEmpty(archiveFile))
-        {
-            archiveFile = SessionState.Path.GetUnresolvedProviderPathFromPSPath(archiveFile);
-        }
+        if (!stdio) archiveFile = SessionState.Path.GetUnresolvedProviderPathFromPSPath(archiveFile!);
         if (!string.IsNullOrEmpty(changeDir))
         {
             changeDir = SessionState.Path.GetUnresolvedProviderPathFromPSPath(changeDir);
         }
 
-        if (string.IsNullOrEmpty(archiveFile))
-        {
-            FileSystemHelpers.WriteBashError(this, "tar: you must specify -f archive");
-            return;
-        }
-
         // -a/--auto-compress: pick the filter from the archive extension. Only
         // gzip is available; a .bz2/.xz/.zst extension is the same .NET-codec gap.
-        if (plan.AutoCompress)
+        if (plan.AutoCompress && !stdio)
         {
             if (archiveFile!.EndsWith(".gz", StringComparison.OrdinalIgnoreCase)
                 || archiveFile.EndsWith(".tgz", StringComparison.OrdinalIgnoreCase))
@@ -394,20 +421,183 @@ public sealed class InvokeBashTarCommand : PSCmdlet
             }
         }
 
+        // --exclude patterns plus the lines of every -X file.
+        var excludePatterns = new List<string>(plan.Excludes);
+        foreach (var excludeFile in plan.ExcludeFiles)
+        {
+            if (!TryReadListFile(excludeFile, forExclude: true, out var lines)) return;
+            foreach (var line in lines) if (line.Length > 0) excludePatterns.Add(line);
+        }
+
+        // Member names (list/extract) / sources (create): the operands and the lines of every -T file, in order.
+        var names = new List<(string Text, bool Wildcard)>();
+        var sources = new List<(string? Dir, string Path)>();
+        foreach (var item in plan.Items)
+        {
+            if (!item.IsList)
+            {
+                names.Add((item.Path, item.Wildcards));
+                sources.Add((item.Dir, item.Path));
+                continue;
+            }
+            if (!TryReadListFile(item.Path, forExclude: false, out var lines)) return;
+            for (int n = 0; n < lines.Length; n++)
+            {
+                if (lines[n].Length == 0) continue;
+                if (lines[n][0] == '-')
+                {
+                    // GNU reads option lines (`-C dir`) from a file list; ps-bash refuses them rather than guess.
+                    FileSystemHelpers.WriteBashError(this,
+                        $"tar: {item.Path}:{n + 1}: option lines in a file list are not supported by ps-bash");
+                    FileSystemHelpers.SetLastExitCode(this, 2);
+                    return;
+                }
+                names.Add((lines[n], item.Wildcards));
+                sources.Add((item.Dir, lines[n]));
+            }
+        }
+
+        if (plan.Mode != OptCreate && !plan.WildcardsExplicit && names.Any(n => TarGlob.HasWildcard(n.Text)))
+        {
+            FileSystemHelpers.WriteStderr(this, "tar: Pattern matching characters used in file names");
+            FileSystemHelpers.WriteStderr(this, "tar: Use --wildcards to enable pattern matching, or --no-wildcards to suppress this warning");
+        }
+
+        var filter = new TarMemberFilter(names, excludePatterns);
         switch (plan.Mode)
         {
             case OptCreate:
-                DoCreate(archiveFile!, plan.Sources, gzipFilter, plan.Verbose, plan.Excludes);
+                DoCreate(stdio ? null : archiveFile, sources, gzipFilter, plan.Verbose, filter);
                 break;
             case OptExtract:
-                DoExtract(archiveFile!, gzipFilter, plan.Verbose, changeDir, plan.StripComponents, plan.ToStdout, plan.Keep);
+                DoExtract(archiveFile, stdio, gzipFilter, plan.Verbose, changeDir, plan.StripComponents, plan.ToStdout, plan.Keep, filter);
                 break;
             default:
-                DoList(archiveFile!, gzipFilter);
+                DoList(archiveFile, stdio, gzipFilter, filter);
                 break;
         }
     }
-    private void DoCreate(string archiveFile, List<(string? Dir, string Path)> sources, bool gzipFilter, bool verbose, List<string> excludePatterns)
+
+    /// <summary>
+    /// Reads a <c>-T</c> / <c>-X</c> list file (<c>-</c> = the pipeline). A missing file is GNU's pair of lines and exit 2:
+    /// <c>tar: F: Cannot stat: ...</c> for <c>-T</c>, <c>tar: F: No such file or directory</c> for <c>-X</c>, then
+    /// <c>tar: Error is not recoverable: exiting now</c>.
+    /// </summary>
+    private bool TryReadListFile(string file, bool forExclude, out string[] lines)
+    {
+        lines = Array.Empty<string>();
+        string text;
+        if (file == "-")
+        {
+            text = BashRuntime.RecordStreamText(_stdin.Cast<object>());
+        }
+        else
+        {
+            var abs = SessionState.Path.GetUnresolvedProviderPathFromPSPath(file);
+            if (!File.Exists(abs))
+            {
+                FileSystemHelpers.WriteBashError(this, forExclude
+                    ? $"tar: {file}: No such file or directory"
+                    : $"tar: {file}: Cannot stat: No such file or directory");
+                FileSystemHelpers.WriteStderr(this, NotRecoverableLine);
+                FileSystemHelpers.SetLastExitCode(this, 2);
+                return false;
+            }
+            text = BashFileSystem.ReadAllTextRaw(abs);
+        }
+        lines = TarMemberFilter.ReadListLines(text);
+        return true;
+    }
+
+    /// <summary>
+    /// Opens the archive for reading: a file, or the pipeline's bytes for <c>-f -</c>. A gzip stream is recognised by
+    /// its magic bytes — silently for a file (GNU decompresses without <c>-z</c>), an error for stdin without <c>-z</c>
+    /// (<c>Archive is compressed. Use -z option</c>); <c>-z</c> on data that is not gzip is GNU's gzip error. An empty
+    /// archive is <c>This does not look like a tar archive</c>. Returns null after reporting (exit 2).
+    /// </summary>
+    private Stream? OpenArchive(string? archiveFile, bool stdio, bool gzipFlag, List<IDisposable> owned)
+    {
+        Stream raw;
+        if (stdio)
+        {
+            var ms = new MemoryStream();
+            var encoder = new RecordByteEncoder();
+            foreach (var item in _stdin) encoder.Encode(item, bytes => ms.Write(bytes));
+            encoder.Finish(bytes => ms.Write(bytes));
+            ms.Position = 0;
+            raw = ms;
+        }
+        else
+        {
+            if (!File.Exists(archiveFile))
+            {
+                FileSystemHelpers.WriteBashError(this, $"tar: {archiveFile}: Cannot open: No such file or directory");
+                FileSystemHelpers.WriteStderr(this, NotRecoverableLine);
+                FileSystemHelpers.SetLastExitCode(this, 2);
+                return null;
+            }
+            raw = BashFileSystem.OpenRead(archiveFile!);
+        }
+        owned.Add(raw);
+
+        Span<byte> magic = stackalloc byte[2];
+        int got = raw.Read(magic);
+        raw.Position = 0;
+        bool isGzip = got == 2 && magic[0] == 0x1f && magic[1] == 0x8b;
+
+        if (gzipFlag && !isGzip)
+        {
+            FileSystemHelpers.WriteBashError(this, "gzip: stdin: not in gzip format");
+            FileSystemHelpers.WriteStderr(this, "tar: Child returned status 1");
+            FileSystemHelpers.WriteStderr(this, NotRecoverableLine);
+            FileSystemHelpers.SetLastExitCode(this, 2);
+            return null;
+        }
+        if (isGzip && !gzipFlag && stdio)
+        {
+            FileSystemHelpers.WriteBashError(this, "tar: Archive is compressed. Use -z option");
+            FileSystemHelpers.WriteStderr(this, NotRecoverableLine);
+            FileSystemHelpers.SetLastExitCode(this, 2);
+            return null;
+        }
+        if (!isGzip && raw.Length == 0)
+        {
+            NotATarArchive();
+            return null;
+        }
+        if (!isGzip) return raw;
+        var gz = new GZipStream(raw, CompressionMode.Decompress);
+        owned.Add(gz);
+        return gz;
+    }
+
+    private void NotATarArchive()
+    {
+        FileSystemHelpers.WriteBashError(this, "tar: This does not look like a tar archive");
+        FileSystemHelpers.WriteStderr(this, FailureStatusLine);
+        FileSystemHelpers.SetLastExitCode(this, 2);
+    }
+
+    /// <summary>After list/extract: every member name that selected nothing is <c>tar: X: Not found in archive</c>, and the run fails (exit 2).</summary>
+    private void ReportUnmatched(TarMemberFilter filter)
+    {
+        bool any = false;
+        foreach (var name in filter.Unmatched())
+        {
+            FileSystemHelpers.WriteStderr(this, $"tar: {name}: Not found in archive");
+            any = true;
+        }
+        if (!any) return;
+        FileSystemHelpers.WriteStderr(this, FailureStatusLine);
+        FileSystemHelpers.SetLastExitCode(this, 2);
+    }
+
+    private static void DisposeAll(List<IDisposable> owned)
+    {
+        for (int i = owned.Count - 1; i >= 0; i--) owned[i].Dispose();
+    }
+
+    private void DoCreate(string? archiveFile, List<(string? Dir, string Path)> sources, bool gzipFilter, bool verbose, TarMemberFilter excludes)
     {
         if (sources.Count == 0)
         {
@@ -416,21 +606,35 @@ public sealed class InvokeBashTarCommand : PSCmdlet
             return;
         }
 
-        FileStream? outStream = null;
+        // With the archive on stdout the verbose names ride stderr (the bytes own stdout), as in GNU.
+        bool toStdout = archiveFile is null;
+        void Say(string name)
+        {
+            if (!verbose) return;
+            if (toStdout) FileSystemHelpers.WriteStderr(this, name);
+            else WriteObject(BashRuntime.NewBashObject(name));
+        }
+
+        Stream? outStream = null;
         Stream? tarStream = null;
         TarWriter? writer = null;
+        ByteRecordEmitter? emitter = null;
+        bool hadError = false;
         try
         {
-            outStream = File.Open(archiveFile, FileMode.Create, FileAccess.Write, FileShare.None);
+            if (toStdout)
+            {
+                emitter = new ByteRecordEmitter(o => WriteObject(o));
+                outStream = new ByteRecordStream(emitter);
+            }
+            else
+            {
+                outStream = File.Open(archiveFile!, FileMode.Create, FileAccess.Write, FileShare.None);
+            }
             tarStream = gzipFilter
                 ? (Stream)new GZipStream(outStream, CompressionMode.Compress)
                 : outStream;
             writer = new TarWriter(tarStream);
-
-            // Compile each --exclude glob once. GNU tar matches the pattern
-            // (fnmatch glob) against the member name; a match on any path
-            // component prunes that component's whole subtree.
-            var excludeRegexes = BuildExcludeRegexes(excludePatterns);
 
             foreach (var (srcDir, src) in sources)
             {
@@ -444,33 +648,39 @@ public sealed class InvokeBashTarCommand : PSCmdlet
                 if (!File.Exists(resolved) && !Directory.Exists(resolved))
                 {
                     FileSystemHelpers.WriteBashError(this, $"tar: {src}: Cannot stat: No such file or directory");
+                    hadError = true;
                     continue;
                 }
 
+                // GNU stores a RELATIVE operand under the name as typed (`d/a.txt` stays `d/a.txt`, a trailing slash is dropped).
+                // An absolute operand keeps ps-bash's historical basename (GNU would store the whole path minus the leading
+                // slash; on Windows that is a drive-letter path nobody wants in an archive).
+                string typed = Path.IsPathRooted(src) ? "" : src.Replace('\\', '/').TrimEnd('/');
+                string leaf = typed.Length > 0 ? typed : Path.GetFileName(resolved);
+
                 if (Directory.Exists(resolved))
                 {
-                    string root = Path.GetFileName(resolved);
-                    string? baseDir = Path.GetDirectoryName(resolved);
-                    if (baseDir == null) { baseDir = string.Empty; }
+                    string root = leaf;
+                    if (excludes.IsExcluded(root)) { continue; }
                     // Reparse-point-safe walk: a directory junction / symlink is archived as its
                     // own entry but never descended into, so tar -c can't pack the link TARGET's
                     // contents (an escape out of the source tree) or loop on a cyclic link.
                     writer.WriteEntry(resolved, root);
-                    if (verbose) { WriteObject(BashRuntime.NewBashObject(root)); }
+                    Say(root + "/");
                     foreach (var childInfo in FileSystemHelpers.EnumerateNoFollow(new DirectoryInfo(resolved)))
                     {
                         string child = childInfo.FullName;
-                        string relPath = child.Substring(baseDir.Length + 1).Replace('\\', '/');
-                        if (IsExcluded(relPath, excludeRegexes)) { continue; }
-                        if (verbose) { WriteObject(BashRuntime.NewBashObject(relPath)); }
+                        string relPath = root + "/" + child.Substring(resolved.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).Length + 1).Replace('\\', '/');
+                        if (excludes.IsExcluded(relPath)) { continue; }
+                        Say(childInfo is DirectoryInfo ? relPath + "/" : relPath);
                         writer.WriteEntry(child, relPath);
                     }
                 }
                 else
                 {
-                    string relPath = Path.GetFileName(resolved);
-                    if (IsExcluded(relPath, excludeRegexes)) { continue; }
-                    if (verbose) { WriteObject(BashRuntime.NewBashObject(relPath)); }
+                    string relPath = leaf;
+                    if (excludes.IsExcluded(relPath)) { continue; }
+                    Say(relPath);
                     writer.WriteEntry(resolved, relPath);
                 }
             }
@@ -486,38 +696,36 @@ public sealed class InvokeBashTarCommand : PSCmdlet
             writer?.Dispose();
             if (gzipFilter) { tarStream?.Dispose(); }
             outStream?.Dispose();
+            emitter?.Finish();
+        }
+
+        if (hadError)
+        {
+            FileSystemHelpers.WriteStderr(this, FailureStatusLine);
+            FileSystemHelpers.SetLastExitCode(this, 2);
         }
     }
 
-    private void DoExtract(string archiveFile, bool gzipFilter, bool verbose, string? changeDir,
-        int stripComponents = 0, bool toStdout = false, bool keepOldFiles = false)
+    private void DoExtract(string? archiveFile, bool stdio, bool gzipFilter, bool verbose, string? changeDir,
+        int stripComponents, bool toStdout, bool keepOldFiles, TarMemberFilter filter)
     {
-        if (!File.Exists(archiveFile))
-        {
-            FileSystemHelpers.WriteBashError(this, $"tar: {archiveFile}: Cannot open: No such file or directory");
-            return;
-        }
-        bool isGz = gzipFilter
-            || archiveFile.EndsWith(".tar.gz", StringComparison.OrdinalIgnoreCase)
-            || archiveFile.EndsWith(".tgz", StringComparison.OrdinalIgnoreCase);
         string destDir = !string.IsNullOrEmpty(changeDir)
             ? changeDir!
             : SessionState.Path.CurrentLocation.ProviderPath;
 
-        FileStream? inStream = null;
-        Stream? tarStream = null;
+        var owned = new List<IDisposable>();
         TarReader? reader = null;
         try
         {
-            inStream = BashFileSystem.OpenRead(archiveFile);
-            tarStream = isGz
-                ? (Stream)new GZipStream(inStream, CompressionMode.Decompress)
-                : inStream;
+            var tarStream = OpenArchive(archiveFile, stdio, gzipFilter, owned);
+            if (tarStream is null) return;
             reader = new TarReader(tarStream);
 
             TarEntry? entry;
             while ((entry = reader.GetNextEntry(copyData: true)) != null)
             {
+                if (!filter.Selects(entry.Name)) { continue; }
+
                 // -O / --to-stdout: emit a regular file's content instead of writing.
                 if (toStdout)
                 {
@@ -549,7 +757,8 @@ public sealed class InvokeBashTarCommand : PSCmdlet
                     FileSystemHelpers.SetLastExitCode(this, 1);
                     continue;
                 }
-                if (verbose) { WriteObject(BashRuntime.NewBashObject(name)); }
+                if (verbose)
+                    WriteObject(BashRuntime.NewBashObject(entry.EntryType == TarEntryType.Directory ? name.TrimEnd('/') + "/" : name));
 
                 switch (entry.EntryType)
                 {
@@ -582,6 +791,11 @@ public sealed class InvokeBashTarCommand : PSCmdlet
                 using var fs = File.Create(targetPath);
                 entry.DataStream.CopyTo(fs);
             }
+            ReportUnmatched(filter);
+        }
+        catch (Exception ex) when (ex is InvalidDataException or EndOfStreamException)
+        {
+            NotATarArchive();
         }
         catch (Exception ex)
         {
@@ -592,8 +806,7 @@ public sealed class InvokeBashTarCommand : PSCmdlet
         finally
         {
             reader?.Dispose();
-            if (isGz) { tarStream?.Dispose(); }
-            inStream?.Dispose();
+            DisposeAll(owned);
         }
     }
 
@@ -698,81 +911,20 @@ public sealed class InvokeBashTarCommand : PSCmdlet
         }
     }
 
-    /// <summary>
-    /// Compile each non-empty <c>--exclude</c> glob into an anchored regex.
-    /// Empty patterns are dropped (an empty glob must match nothing, not
-    /// everything). <c>*</c> → <c>.*</c> (matches across <c>/</c>, like GNU
-    /// tar's default fnmatch), <c>?</c> → <c>.</c>, <c>[...]</c> preserved.
-    /// </summary>
-    private static List<System.Text.RegularExpressions.Regex> BuildExcludeRegexes(List<string> patterns)
+    private void DoList(string? archiveFile, bool stdio, bool gzipFilter, TarMemberFilter filter)
     {
-        var list = new List<System.Text.RegularExpressions.Regex>();
-        foreach (string pat in patterns)
-        {
-            if (string.IsNullOrEmpty(pat)) { continue; }
-            var sb = new StringBuilder("^");
-            foreach (char c in pat)
-            {
-                switch (c)
-                {
-                    case '*': sb.Append(".*"); break;
-                    case '?': sb.Append('.'); break;
-                    case '[': sb.Append('['); break;
-                    case ']': sb.Append(']'); break;
-                    default: sb.Append(System.Text.RegularExpressions.Regex.Escape(c.ToString())); break;
-                }
-            }
-            sb.Append('$');
-            list.Add(new System.Text.RegularExpressions.Regex(sb.ToString()));
-        }
-        return list;
-    }
-
-    /// <summary>
-    /// A member is excluded if any compiled pattern matches the full relative
-    /// path OR any single path component (so <c>--exclude=node_modules</c>
-    /// prunes the whole <c>node_modules/…</c> subtree, matching GNU tar).
-    /// </summary>
-    private static bool IsExcluded(string relPath, List<System.Text.RegularExpressions.Regex> excludeRegexes)
-    {
-        if (excludeRegexes.Count == 0) { return false; }
-        string norm = relPath.Replace('\\', '/');
-        foreach (var rx in excludeRegexes)
-        {
-            if (rx.IsMatch(norm)) { return true; }
-            foreach (string comp in norm.Split('/'))
-            {
-                if (comp.Length > 0 && rx.IsMatch(comp)) { return true; }
-            }
-        }
-        return false;
-    }
-
-    private void DoList(string archiveFile, bool gzipFilter)
-    {
-        if (!File.Exists(archiveFile))
-        {
-            FileSystemHelpers.WriteBashError(this, $"tar: {archiveFile}: Cannot open: No such file or directory");
-            return;
-        }
-        bool isGz = gzipFilter
-            || archiveFile.EndsWith(".tar.gz", StringComparison.OrdinalIgnoreCase)
-            || archiveFile.EndsWith(".tgz", StringComparison.OrdinalIgnoreCase);
-
-        FileStream? inStream = null;
-        Stream? tarStream = null;
+        var owned = new List<IDisposable>();
         TarReader? reader = null;
         try
         {
-            inStream = BashFileSystem.OpenRead(archiveFile);
-            tarStream = isGz
-                ? (Stream)new GZipStream(inStream, CompressionMode.Decompress)
-                : inStream;
+            var tarStream = OpenArchive(archiveFile, stdio, gzipFilter, owned);
+            if (tarStream is null) return;
             reader = new TarReader(tarStream);
 
             TarEntry? entry;
             while ((entry = reader.GetNextEntry(copyData: false)) != null)
             {
+                if (!filter.Selects(entry.Name)) { continue; }
                 string name = entry.Name;
                 if (entry.EntryType == TarEntryType.Directory)
                 {
@@ -785,6 +937,11 @@ public sealed class InvokeBashTarCommand : PSCmdlet
                 obj.Properties.Add(new PSNoteProperty("Name", leaf));
                 WriteObject(obj);
             }
+            ReportUnmatched(filter);
+        }
+        catch (Exception ex) when (ex is InvalidDataException or EndOfStreamException)
+        {
+            NotATarArchive();
         }
         catch (Exception ex)
         {
@@ -795,8 +952,7 @@ public sealed class InvokeBashTarCommand : PSCmdlet
         finally
         {
             reader?.Dispose();
-            if (isGz) { tarStream?.Dispose(); }
-            inStream?.Dispose();
+            DisposeAll(owned);
         }
     }
 }

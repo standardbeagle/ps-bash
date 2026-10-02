@@ -1,0 +1,18 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 52
+stdout-length: 19
+stderr-length: 0
+==== SCRIPT ====
+printf '%s' '{"a":1}' | jq -rn '"x", 1, null, ["y"]'
+==== STDOUT ====
+x
+1
+null
+[
+  "y"
+]
+
+==== STDERR ====
+

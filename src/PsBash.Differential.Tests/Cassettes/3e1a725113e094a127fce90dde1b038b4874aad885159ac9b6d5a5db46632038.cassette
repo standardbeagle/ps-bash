@@ -1,0 +1,16 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 117
+stdout-length: 143
+stderr-length: 0
+==== SCRIPT ====
+jq -n -c '["\u00e9\u0000\u001f\u007f\ud83d\ude00\"\\\/\b\f\n\r\t"] | tojson, .[0], (.[0] | length), (.[0] | explode)'
+==== STDOUT ====
+"[\"é\\u0000\\u001f\\u007f😀\\\"\\\\/\\b\\f\\n\\r\\t\"]"
+"é\u0000\u001f\u007f😀\"\\/\b\f\n\r\t"
+13
+[233,0,31,127,128512,34,92,47,8,12,10,13,9]
+
+==== STDERR ====
+

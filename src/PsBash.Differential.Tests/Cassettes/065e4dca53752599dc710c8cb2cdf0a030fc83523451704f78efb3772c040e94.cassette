@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 3
+script-length: 97
+stdout-length: 0
+stderr-length: 151
+==== SCRIPT ====
+printf '%s' '[1,[2]]' | jq -c '[recurse | numbers], [..] == [recurse], ([recurse_down] | length)'
+==== STDOUT ====
+
+==== STDERR ====
+jq: error: recurse_down/0 is not defined at <top-level>, line 1:
+[recurse | numbers], [..] == [recurse], ([recurse_down] | length)
+jq: 1 compile error
+

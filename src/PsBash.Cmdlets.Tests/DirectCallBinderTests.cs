@@ -108,6 +108,6 @@ public class DirectCallBinderTests : IDisposable, IClassFixture<SharedPwshFixtur
     {
         File.WriteAllText(P("s"), "x\n");
         var r = InTmp("Invoke-BashMv -v s d").AssertSuccess();
-        Assert.Equal("'s' -> 'd'", r.Stdout.Trim());
+        Assert.Equal("renamed 's' -> 'd'", r.Stdout.Trim());
     }
 }

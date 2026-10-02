@@ -1,0 +1,48 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 627
+stdout-length: 194
+stderr-length: 0
+==== SCRIPT ====
+__fs_snap() { find . | LC_ALL=C sort | while IFS= read -r p; do if [ -d "$p" ]; then echo "D $p"; else echo "F $p $(base64 -w0 "$p")"; fi; done; }
+d=$(mktemp -d) && cd "$d" && { :
+mkdir -p 'd'
+printf '%s\n' '1' > 'd/a.txt'
+mkdir -p 'd/sub'
+printf '%s\n' '2' > 'd/sub/b.txt'
+mkdir -p 'd/other'
+printf '%s\n' '3' > 'd/other/c.log'
+mkdir -p 'e'
+printf '%s\n' '4' > 'e/f.txt'
+printf '%s\n' 'top' > 't.txt'
+} >/dev/null 2>&1
+echo '== stdout'
+{ :
+tar cf a.tar d e t.txt; printf 't.txt\nd/sub\n' > list; tar tf a.tar -T list e/f.txt | sort; rm list; rm -f a.tar
+} 2>/dev/null
+echo "== exit $?"
+echo '== fs'
+__fs_snap
+cd /; rm -rf "$d"
+==== STDOUT ====
+== stdout
+d/sub/
+d/sub/b.txt
+e/f.txt
+t.txt
+== exit 0
+== fs
+D .
+D ./d
+F ./d/a.txt MQo=
+D ./d/other
+F ./d/other/c.log Mwo=
+D ./d/sub
+F ./d/sub/b.txt Mgo=
+D ./e
+F ./e/f.txt NAo=
+F ./t.txt dG9wCg==
+
+==== STDERR ====
+

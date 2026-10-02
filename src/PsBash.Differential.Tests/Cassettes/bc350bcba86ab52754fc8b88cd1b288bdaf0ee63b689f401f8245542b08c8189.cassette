@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 121
+stdout-length: 39
+stderr-length: 0
+==== SCRIPT ====
+printf '%s' '[1.10]' | jq -c '[.[0], (.[0]+0), (.[0]*1), (.[0]|floor), (.[0]|tostring), (.[0]==1.1), (.|add), (.[0]|-.)]'
+==== STDOUT ====
+[1.10,1.1,1.1,1,"1.10",true,1.10,-1.1]
+
+==== STDERR ====
+

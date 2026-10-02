@@ -488,8 +488,8 @@ public class InvokeBashJqCommandTests : IDisposable, IClassFixture<SharedPwshFix
     [Fact]
     public void Jq_NegativeLiteral_NotTreatedAsSubtraction()
     {
-        // A leading - is a sign, not a binary operator. Oracle: -1 -> -1.
-        var lines = RunText("'null' | Invoke-BashJq -c '-1'");
+        // A leading - is a sign, not a binary operator. Oracle: -1 -> -1. (As in jq, a program that starts with a dash needs `--`.)
+        var lines = RunText("'null' | Invoke-BashJq -c '--' '-1'");
         Assert.Equal(new[] { "-1" }, lines);
     }
 

@@ -1,0 +1,16 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 113
+stdout-length: 111
+stderr-length: 0
+==== SCRIPT ====
+printf '%s' '[1,2]' | jq -c 'try (.a) catch ., try (.["a"]) catch ., try (.[1.7]) catch ., try (.[null]) catch .'
+==== STDOUT ====
+"Cannot index array with string \"a\""
+"Cannot index array with string \"a\""
+2
+"Cannot index array with null"
+
+==== STDERR ====
+

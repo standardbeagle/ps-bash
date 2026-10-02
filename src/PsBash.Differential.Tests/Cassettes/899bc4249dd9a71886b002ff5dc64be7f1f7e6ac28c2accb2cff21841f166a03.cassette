@@ -1,0 +1,17 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 124
+stdout-length: 196
+stderr-length: 0
+==== SCRIPT ====
+printf '%s' '[1.0, 1.50, 100000000000000000000, 1e2, 0.10]' | jq -c 'map(tostring), map(tojson), sort, unique, (.[0:2]|add)'
+==== STDOUT ====
+["1.0","1.50","100000000000000000000","1E+2","0.10"]
+["1.0","1.50","100000000000000000000","1E+2","0.10"]
+[0.10,1.0,1.50,1E+2,100000000000000000000]
+[0.10,1.0,1.50,1E+2,100000000000000000000]
+2.5
+
+==== STDERR ====
+

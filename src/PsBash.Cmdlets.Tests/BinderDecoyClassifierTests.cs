@@ -37,9 +37,6 @@ public class BinderDecoyClassifierTests : IClassFixture<SharedPwshFixture>
     }
 
     [Theory]
-    // cp / mv interactive + copy-as-is (rm -i/-d are implemented now: see RmInteractiveTests)
-    [InlineData("Invoke-BashMv -i a b")]
-    // cat show-all / show-nonprinting
     // tee diagnose-write-errors
     [InlineData("'x' | Invoke-BashTee -p out.txt")]
     // column output width (-o is implemented now: a value-bearing decoy)
@@ -51,7 +48,6 @@ public class BinderDecoyClassifierTests : IClassFixture<SharedPwshFixture>
     // tree colorize / permissions
     [InlineData("Invoke-BashTree -p")]
     [InlineData("Invoke-BashTree -C")]
-    // head / tail verbose
     // grep directories / devices
     // du no-dereference (bare -P prefix-collides with -ProgressAction)
     [InlineData("Invoke-BashDu -P .")]

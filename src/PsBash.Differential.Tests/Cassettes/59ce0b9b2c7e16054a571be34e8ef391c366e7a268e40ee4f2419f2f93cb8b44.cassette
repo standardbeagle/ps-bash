@@ -1,0 +1,19 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 118
+stdout-length: 38
+stderr-length: 0
+==== SCRIPT ====
+printf '%s' '{"a":{"b":[1,2,{"c":3}]}}' | jq -c '.a.b[2].c, .a.b[-1], .a["b"][0], .a.b[1:], .a.b[:1], .a.b[5], .x.y.z'
+==== STDOUT ====
+3
+{"c":3}
+1
+[2,{"c":3}]
+[1]
+null
+null
+
+==== STDERR ====
+

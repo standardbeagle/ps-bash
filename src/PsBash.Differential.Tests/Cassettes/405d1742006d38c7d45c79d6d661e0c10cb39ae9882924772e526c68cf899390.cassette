@@ -1,0 +1,19 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 135
+stdout-length: 65
+stderr-length: 0
+==== SCRIPT ====
+jq -n -c '$__loc__, ($ENV | type), ([splits("a")?]), (["a","b"] | .[] as $x | $x), (1 as $x | 2 as $y | [$x,$y,$x+$y]), (. as $d | $d)'
+==== STDOUT ====
+{"file":"<top-level>","line":1}
+"object"
+[]
+"a"
+"b"
+[1,2,3]
+null
+
+==== STDERR ====
+

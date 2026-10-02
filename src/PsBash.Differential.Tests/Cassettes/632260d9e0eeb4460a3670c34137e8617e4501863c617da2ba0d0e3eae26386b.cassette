@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 101
+stdout-length: 84
+stderr-length: 0
+==== SCRIPT ====
+jq -n -c '[9007199254740993, 1e15, 1e16, 12345678901234567, 0.1e-6, 1e-7, 1.5e-10, 255] | map(. * 1)'
+==== STDOUT ====
+[9007199254740992,1000000000000000,1e+16,12345678901234568,1e-07,1e-07,1.5e-10,255]
+
+==== STDERR ====
+

@@ -1,0 +1,18 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 54
+stdout-length: 4
+stderr-length: 70
+==== SCRIPT ====
+printf '%s' '{"a":1}
+{"a":"x"}
+{"a":3}
+' | jq '.a + 1'
+==== STDOUT ====
+2
+4
+
+==== STDERR ====
+jq: error (at <stdin>:2): string ("x") and number (1) cannot be added
+

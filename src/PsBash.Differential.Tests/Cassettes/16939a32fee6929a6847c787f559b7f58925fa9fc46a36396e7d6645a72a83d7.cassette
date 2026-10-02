@@ -1,0 +1,17 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 131
+stdout-length: 62
+stderr-length: 0
+==== SCRIPT ====
+jq -n -c '[1,2,3] | IN(2), IN([1,2,3],[3]), ([{"id":1},{"id":2}] | INDEX(.id)), ({"a":{"b":1}} | pick(.a.b)), ([1,2,3]|pick(.[1]))'
+==== STDOUT ====
+false
+true
+{"1":{"id":1},"2":{"id":2}}
+{"a":{"b":1}}
+[null,2]
+
+==== STDERR ====
+

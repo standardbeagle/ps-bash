@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 121
+stdout-length: 18
+stderr-length: 0
+==== SCRIPT ====
+jq -n -c 'def f($a; $b): $a + $b; def h(g): [g, g]; def k($x): $x + x; [f(1;2), h(1,2), k(2), (1 | def m: . + 1; m | m)]'
+==== STDOUT ====
+[3,[1,2,1,2],4,3]
+
+==== STDERR ====
+

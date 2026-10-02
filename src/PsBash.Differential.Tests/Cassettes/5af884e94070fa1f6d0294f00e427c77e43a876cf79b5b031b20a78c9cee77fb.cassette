@@ -1,0 +1,16 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 92
+stdout-length: 11
+stderr-length: 0
+==== SCRIPT ====
+jq -n -c '[.[]?] | length, (empty | 1), ([empty]), [empty, 1, empty], ([range(0)] | length)'
+==== STDOUT ====
+0
+[]
+[1]
+0
+
+==== STDERR ====
+
