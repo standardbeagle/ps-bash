@@ -53,14 +53,19 @@ internal static class FindIdentity
         spec = default;
         try
         {
-            var psi = new System.Diagnostics.ProcessStartInfo(isUser ? "id" : "getent")
+            // macOS has no getent: the directory service answers `dscl . -read /Groups/NAME PrimaryGroupID`.
+            bool dscl = !isUser && OperatingSystem.IsMacOS();
+            var psi = new System.Diagnostics.ProcessStartInfo(isUser ? "id" : dscl ? "dscl" : "getent")
             { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
             if (isUser) { psi.ArgumentList.Add("-u"); psi.ArgumentList.Add("--"); psi.ArgumentList.Add(name); }
+            else if (dscl) { psi.ArgumentList.Add("."); psi.ArgumentList.Add("-read"); psi.ArgumentList.Add("/Groups/" + name); psi.ArgumentList.Add("PrimaryGroupID"); }
             else { psi.ArgumentList.Add("group"); psi.ArgumentList.Add(name); }
             var r = BashRuntime.RunChildProcess(psi);
             if (r.ExitCode != 0) return false;
             string text = r.Stdout.Trim();
-            string idText = isUser ? text : (text.Split(':').Length > 2 ? text.Split(':')[2] : "");
+            string idText = isUser ? text
+                : dscl ? (text.StartsWith("PrimaryGroupID:", StringComparison.Ordinal) ? text["PrimaryGroupID:".Length..].Trim() : "")
+                : (text.Split(':').Length > 2 ? text.Split(':')[2] : "");
             if (!long.TryParse(idText, NumberStyles.None, CultureInfo.InvariantCulture, out var id)) return false;
             spec = new FindIdSpec(id, null);
             return true;

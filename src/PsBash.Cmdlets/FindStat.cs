@@ -199,8 +199,11 @@ internal sealed class FindStat
         {
             var psi = new System.Diagnostics.ProcessStartInfo("stat")
             { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
-            psi.ArgumentList.Add("-c");
-            psi.ArgumentList.Add("%f|%u|%g|%U|%G|%i|%h|%b|%B|%Z|%d");
+            // GNU: -c FORMAT (%f = raw mode in hex). BSD/macOS stat has no -c: -f FORMAT with %p = st_mode in
+            // octal, %l links, %Su/%Sg names, %c ctime epoch, %b in fixed 512-byte blocks (so %B becomes 512).
+            bool bsd = OperatingSystem.IsMacOS();
+            psi.ArgumentList.Add(bsd ? "-f" : "-c");
+            psi.ArgumentList.Add(bsd ? "%p|%u|%g|%Su|%Sg|%i|%l|%b|512|%c|%d" : "%f|%u|%g|%U|%G|%i|%h|%b|%B|%Z|%d");
             if (following) psi.ArgumentList.Add("-L");
             psi.ArgumentList.Add("--");
             psi.ArgumentList.Add(eff.FullName);
@@ -208,13 +211,16 @@ internal sealed class FindStat
             var f = r.Stdout.Trim().Split('|');
             if (f.Length >= 11)
             {
-                int raw = int.Parse(f[0], NumberStyles.HexNumber, CultureInfo.InvariantCulture);
+                int raw = bsd
+                    ? Convert.ToInt32(f[0], 8)
+                    : int.Parse(f[0], NumberStyles.HexNumber, CultureInfo.InvariantCulture);
                 s.Mode = raw & 0xFFF;
                 s.TypeChar = (raw & 0xF000) switch { 0x4000 => 'd', 0xA000 => 'l', 0x1000 => 'p', 0xC000 => 's', 0x2000 => 'c', 0x6000 => 'b', _ => 'f' };
                 s.Uid = long.Parse(f[1], CultureInfo.InvariantCulture); s.Gid = long.Parse(f[2], CultureInfo.InvariantCulture);
                 // stat prints UNKNOWN when there is no passwd/group entry
-                s.UserKnown = f[3] != "UNKNOWN"; s.UserName = f[3];
-                s.GroupKnown = f[4] != "UNKNOWN"; s.GroupName = f[4];
+                // (BSD stat prints the number itself when there is no passwd/group entry)
+                s.UserKnown = f[3] != "UNKNOWN" && !(bsd && f[3] == f[1]); s.UserName = f[3];
+                s.GroupKnown = f[4] != "UNKNOWN" && !(bsd && f[4] == f[2]); s.GroupName = f[4];
                 s.Inode = ulong.Parse(f[5], CultureInfo.InvariantCulture);
                 s.Nlink = uint.Parse(f[6], CultureInfo.InvariantCulture);
                 long blocks = long.Parse(f[7], CultureInfo.InvariantCulture), bsz = long.Parse(f[8], CultureInfo.InvariantCulture);
@@ -259,7 +265,8 @@ internal sealed class FindStat
         try
         {
             var psi = new System.Diagnostics.ProcessStartInfo("stat") { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
-            psi.ArgumentList.Add("-c"); psi.ArgumentList.Add("%Z"); psi.ArgumentList.Add("--"); psi.ArgumentList.Add(info.FullName);
+            psi.ArgumentList.Add(OperatingSystem.IsMacOS() ? "-f" : "-c"); // BSD stat: -f FORMAT, %c = ctime epoch
+            psi.ArgumentList.Add(OperatingSystem.IsMacOS() ? "%c" : "%Z"); psi.ArgumentList.Add("--"); psi.ArgumentList.Add(info.FullName);
             var o = BashRuntime.RunChildProcess(psi).Stdout.Trim();
             if (long.TryParse(o, out var secs)) s.Ctime = DateTimeOffset.FromUnixTimeSeconds(secs).LocalDateTime;
         }
