@@ -208,6 +208,7 @@ public sealed class InvokeBashAwkCommand : PSCmdlet
             }
         }
 
+        machine.Warn = msg => FileSystemHelpers.WriteStderr(this, msg);
         _machine = machine;
         _program = program;
         _files = files;

@@ -566,6 +566,7 @@ internal sealed class AwkParser
             case TokKind.Regex:
             case TokKind.Name:
             case TokKind.FuncName:
+            case TokKind.Indirect:
             case TokKind.Builtin:
             case TokKind.Dollar:
             case TokKind.LParen:
@@ -674,6 +675,15 @@ internal sealed class AwkParser
                 var args = ParseCallArgs();
                 _callNames.Add(name);
                 return new Call { Name = name, Args = args };
+            }
+
+            case TokKind.Indirect:
+            {
+                string name = Advance().Text; // the VARIABLE holding the function name
+                Expect(TokKind.LParen, "'('");
+                var args = ParseCallArgs();
+                _usedNames.Add(name); // naming a real function here is gawk's "used as a variable" static error
+                return new Call { Name = name, Args = args, Indirect = true };
             }
 
             case TokKind.Builtin:

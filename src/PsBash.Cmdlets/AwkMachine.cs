@@ -684,6 +684,7 @@ internal sealed class AwkMachine
 
     private AwkValue EvalCall(Call call)
     {
+        if (call.Indirect) return CallIndirect(call);
         switch (call.Name)
         {
             case "length": return BuiltinLength(call.Args);
@@ -783,12 +784,27 @@ internal sealed class AwkMachine
         return new Cell { Scalar = Eval(arg), HasScalar = true };
     }
 
+    /// <summary>Non-fatal diagnostics (gawk's <c>warning:</c> lines) go to the command's stderr through this.</summary>
+    public Action<string>? Warn { get; set; }
+
+    /// <summary><c>@var(args)</c>: the function NAMED by the value of <c>var</c> (user functions only).</summary>
+    private AwkValue CallIndirect(Call call)
+    {
+        string target = Eval(new VarRef { Name = call.Name }).ToStr(Convfmt);
+        if (_prog.Functions.TryGetValue(target, out var fn)) return CallUser(fn, call.Args);
+        throw new AwkInterpreter.AwkRuntimeException(
+            $"fatal: `{target}' is not a function, so it cannot be called indirectly");
+    }
+
     private AwkValue CallUser(AwkFunction fn, List<AwkExpr> args)
     {
         // The recursion is on the managed stack: report a clean awk error instead of letting a
         // runaway function overflow it (which would kill the shared host process).
         if (!System.Runtime.CompilerServices.RuntimeHelpers.TryEnsureSufficientExecutionStack())
             throw new AwkInterpreter.AwkRuntimeException("fatal: function call nesting too deep");
+
+        if (args.Count > fn.Params.Count)
+            Warn?.Invoke($"awk: warning: function `{fn.Name}' called with more arguments than declared");
 
         var locals = new Dictionary<string, Cell>(fn.Params.Count);
         for (int i = 0; i < args.Count; i++)
