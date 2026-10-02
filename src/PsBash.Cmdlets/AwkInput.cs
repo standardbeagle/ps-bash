@@ -304,6 +304,20 @@ internal sealed class AwkShell
     public BashRuntime.ChildProcessResult RunWithInput(string command, string inputPath) =>
         BashRuntime.RunChildProcess(BuildStartInfo(command, inputPath));
 
+    /// <summary>
+    /// Start <paramref name="command"/> for WRITING (<c>print | "cmd"</c>): stdin, stdout and stderr are all
+    /// piped, so the caller feeds the command as awk prints and collects its output. The command line is
+    /// run as-is by a child ps-bash, which forwards its redirected stdin to the first stdin reader
+    /// (compound lists like <c>a; b</c> share it, as in a real shell). Null when it cannot start.
+    /// </summary>
+    public Process? StartPipe(string command)
+    {
+        var psi = BuildStartInfo(command);
+        AwkCommandStream.Prepare(psi);
+        try { return Process.Start(psi); }
+        catch (Exception ex) when (!FileSystemHelpers.IsPipelineStop(ex)) { return null; }
+    }
+
     public void KillAll()
     {
         foreach (var s in _streams) s.Kill();

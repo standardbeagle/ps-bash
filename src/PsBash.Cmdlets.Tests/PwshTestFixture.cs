@@ -61,6 +61,23 @@ namespace PsBash.Cmdlets.Tests;
 public static class PwshTestFixture
 {
     /// <summary>
+    /// Nested ps-bash children (awk <c>print | "cmd"</c>, <c>bash -c</c>) must be THIS build's launcher, not a
+    /// PATH-installed release that predates the feature under test. The test host sits beside no launcher,
+    /// so point the nested-exe override at the freshly built <c>PsBash.Shell</c> output.
+    /// </summary>
+    static PwshTestFixture()
+    {
+        if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("PSBASH_NESTED_EXE"))) return;
+        var bin = OperatingSystem.IsWindows() ? "ps-bash.exe" : "ps-bash";
+        var shellBin = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "PsBash.Shell", "bin"));
+        foreach (var cfg in new[] { "Debug", "Release" })
+        {
+            var p = Path.Combine(shellBin, cfg, "net10.0", bin);
+            if (File.Exists(p)) { Environment.SetEnvironmentVariable("PSBASH_NESTED_EXE", p); return; }
+        }
+    }
+
+    /// <summary>
     /// Locates the Microsoft.PowerShell.SDK module directory in the NuGet cache.
     /// </summary>
     private static string? FindSdkModulePath()

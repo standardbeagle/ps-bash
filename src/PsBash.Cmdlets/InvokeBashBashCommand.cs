@@ -221,8 +221,16 @@ public sealed class InvokeBashBashCommand : PSCmdlet
         return null;
     }
 
+    /// <summary>Explicit launcher for nested ps-bash children (<c>bash -c</c>, awk pipes/getline): a test seam and an
+    /// escape hatch for embeddings whose host does not sit beside its launcher.</summary>
+    internal const string NestedExeEnvVar = "PSBASH_NESTED_EXE";
+
     internal static string? ResolvePsBashExecutable(PSCmdlet cmdlet)
     {
+        var explicitExe = Environment.GetEnvironmentVariable(NestedExeEnvVar);
+        if (!string.IsNullOrEmpty(explicitExe) && System.IO.File.Exists(explicitExe))
+            return explicitExe;
+
         // Tier 0: a `ps-bash` beside the process we run in. Inside ps-bash-host that is the
         // launcher of the SAME build, so a nested child never lands on a different
         // (e.g. PATH-installed older) build — which would otherwise misjudge this host's
