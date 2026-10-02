@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 5
+script-length: 32
+stdout-length: 0
+stderr-length: 71
+==== SCRIPT ====
+printf '%s' '[1,2
+3]
+' | jq -c .
+==== STDOUT ====
+
+==== STDERR ====
+jq: parse error: Expected separator between values at line 2, column 2
+

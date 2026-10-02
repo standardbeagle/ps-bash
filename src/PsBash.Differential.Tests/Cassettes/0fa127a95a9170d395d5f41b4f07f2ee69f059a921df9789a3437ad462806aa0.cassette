@@ -1,0 +1,16 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 111
+stdout-length: 34
+stderr-length: 0
+==== SCRIPT ====
+jq -n -c '[[0,1],[1,2]] | (.[0][1], .[1][0]) |= . * 10, (.[][] |= . + 1), (map(.[0]) | add), (map(.[1]) | max)'
+==== STDOUT ====
+[[0,10],[10,2]]
+[[1,2],[2,3]]
+1
+2
+
+==== STDERR ====
+

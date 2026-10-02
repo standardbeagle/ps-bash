@@ -1,0 +1,12 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 5
+script-length: 25
+stdout-length: 0
+stderr-length: 0
+==== SCRIPT ====
+jq -n 'null | halt_error'
+==== STDOUT ====
+
+==== STDERR ====
+

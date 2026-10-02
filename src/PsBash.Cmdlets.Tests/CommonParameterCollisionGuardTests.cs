@@ -62,6 +62,8 @@ public class CommonParameterCollisionGuardTests
             ["tee"] = new(CollidingLetters),
             // diff: the emitter single-quotes every dash literal; I/W/C stay declared for direct calls.
             ["diff"] = new(CollidingLetters),
+            // jq: every dash literal (-c -e -a -r -n --arg ...) reaches Arguments verbatim; C/E/A stay declared for direct calls.
+            ["jq"] = new(CollidingLetters),
             ["cp"] = new(CollidingLetters),
             ["mv"] = new(CollidingLetters),
             ["rm"] = new(CollidingLetters),

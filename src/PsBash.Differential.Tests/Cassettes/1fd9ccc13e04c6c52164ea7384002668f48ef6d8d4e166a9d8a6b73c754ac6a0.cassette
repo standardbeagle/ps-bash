@@ -1,0 +1,22 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 199
+stdout-length: 142
+stderr-length: 0
+==== SCRIPT ====
+jq -n -c '[1,2,null,"a",[1],{"a":1}] | map(type), [.[] | numbers], [.[] | strings], [.[] | nulls], [.[] | arrays], [.[] | objects], [.[] | iterables], [.[] | scalars], [.[] | booleans], [.[]|values]'
+==== STDOUT ====
+["number","number","null","string","array","object"]
+[1,2]
+["a"]
+[null]
+[[1]]
+[{"a":1}]
+[[1],{"a":1}]
+[1,2,null,"a"]
+[]
+[1,2,"a",[1],{"a":1}]
+
+==== STDERR ====
+

@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 52
+stdout-length: 25
+stderr-length: 0
+==== SCRIPT ====
+jq -n -r '"\("a") \(null) \(true) \({a:1}) \(1.50)"'
+==== STDOUT ====
+a null true {"a":1} 1.50
+
+==== STDERR ====
+

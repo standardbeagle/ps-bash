@@ -1,0 +1,18 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 58
+stdout-length: 28
+stderr-length: 0
+==== SCRIPT ====
+printf '%s' '1 2
+[3]
+"x"' | jq -c '[., input_line_number]'
+==== STDOUT ====
+[1,1]
+[2,1]
+[[3],2]
+["x",2]
+
+==== STDERR ====
+

@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 114
+stdout-length: 202
+stderr-length: 0
+==== SCRIPT ====
+jq -n -c '[[{"key":1,"value":2}], [{"k":"b","v":2}], [{"key":true}], [null], [1]] | map(try from_entries catch .)'
+==== STDOUT ====
+["Cannot use number (1) as object key","Cannot use null (null) as object key","Cannot use boolean (true) as object key","Cannot use null (null) as object key","Cannot index number with string \"key\""]
+
+==== STDERR ====
+

@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 118
+stdout-length: 16
+stderr-length: 0
+==== SCRIPT ====
+jq -n -c 'def f(x): x * 2; def g: f(3); def fac: if . <= 1 then 1 else . * (. - 1 | fac) end; [g, f(1,2), (10 | fac)]'
+==== STDOUT ====
+[6,2,4,3628800]
+
+==== STDERR ====
+

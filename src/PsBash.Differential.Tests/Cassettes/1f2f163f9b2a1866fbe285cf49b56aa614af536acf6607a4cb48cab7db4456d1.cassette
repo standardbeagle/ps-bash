@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 45
+stdout-length: 24
+stderr-length: 0
+==== SCRIPT ====
+jq -n -c '[1,2] | @json, @text, (.|tostring)'
+==== STDOUT ====
+"[1,2]"
+"[1,2]"
+"[1,2]"
+
+==== STDERR ====
+

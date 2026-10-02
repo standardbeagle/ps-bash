@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 52
+stdout-length: 21
+stderr-length: 0
+==== SCRIPT ====
+printf '%s' '{"a":[1,{"b":null}]}' | jq --indent 0 .
+==== STDOUT ====
+{"a":[1,{"b":null}]}
+
+==== STDERR ====
+

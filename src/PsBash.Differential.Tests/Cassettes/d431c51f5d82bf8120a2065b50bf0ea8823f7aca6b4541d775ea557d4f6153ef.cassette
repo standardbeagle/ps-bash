@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 129
+stdout-length: 146
+stderr-length: 0
+==== SCRIPT ====
+printf '%s' '[0.1, 0.30000000000000004, 1e-7, 1.5e300, 123456789.123456789, -1.5e-10, 3e0]' | jq -c 'tojson, (.|map(.*1)|tojson)'
+==== STDOUT ====
+"[0.1,0.30000000000000004,1E-7,1.5E+300,123456789.123456789,-1.5E-10,3]"
+"[0.1,0.30000000000000004,1e-07,1.5e+300,123456789.12345679,-1.5e-10,3]"
+
+==== STDERR ====
+

@@ -1,0 +1,17 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 50
+stdout-length: 60
+stderr-length: 0
+==== SCRIPT ====
+printf '%s' '{"a":[1,{"b":2}]}' | jq -c --stream .
+==== STDOUT ====
+[["a",0],1]
+[["a",1,"b"],2]
+[["a",1,"b"]]
+[["a",1]]
+[["a"]]
+
+==== STDERR ====
+

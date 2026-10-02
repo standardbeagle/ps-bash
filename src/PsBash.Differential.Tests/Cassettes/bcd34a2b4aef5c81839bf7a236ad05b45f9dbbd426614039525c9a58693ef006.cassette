@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 3
+script-length: 26
+stdout-length: 0
+stderr-length: 142
+==== SCRIPT ====
+printf '%s' '1' | jq '..a'
+==== STDOUT ====
+
+==== STDERR ====
+jq: error: syntax error, unexpected IDENT, expecting end of file (Unix shell quoting issues?) at <top-level>, line 1:
+..a
+jq: 1 compile error
+

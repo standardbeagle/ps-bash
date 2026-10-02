@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 78
+stdout-length: 8
+stderr-length: 0
+==== SCRIPT ====
+jq -n -c '[1,2,3] | [.[] | select(. > 1 and . < 3), select(. == 1 or . == 3)]'
+==== STDOUT ====
+[1,2,3]
+
+==== STDERR ====
+

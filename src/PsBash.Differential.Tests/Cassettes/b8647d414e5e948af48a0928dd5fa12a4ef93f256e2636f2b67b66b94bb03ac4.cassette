@@ -1,0 +1,16 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 144
+stdout-length: 106
+stderr-length: 0
+==== SCRIPT ====
+jq -n -c '"abc" | [match("(?<x>b)") | .captures[0] | keys], [match("b") | keys], [match("(b)") | .captures[0].name], capture("(?<x>b)(?<y>z)?")'
+==== STDOUT ====
+[["length","name","offset","string"]]
+[["captures","length","offset","string"]]
+[null]
+{"x":"b","y":null}
+
+==== STDERR ====
+

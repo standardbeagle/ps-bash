@@ -1,0 +1,17 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 5
+script-length: 123
+stdout-length: 56
+stderr-length: 74
+==== SCRIPT ====
+jq -n -c '{} | .a.b.c = 1, (.a[2] = 1), (.["x"] = 1), (.a += 1), (.a -= 1), (.a *= 2), (.a //= 7), (try (.a /= 0) catch .)'
+==== STDOUT ====
+{"a":{"b":{"c":1}}}
+{"a":[null,null,1]}
+{"x":1}
+{"a":1}
+
+==== STDERR ====
+jq: error (at <unknown>): null (null) and number (1) cannot be subtracted
+

@@ -1,0 +1,19 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 204
+stdout-length: 100
+stderr-length: 0
+==== SCRIPT ====
+jq -n -c '[1,[2],{"a":3}] | contains([1]), ("foobar" | contains("bar")), ({"a":[1,2],"b":3} | contains({a:[1]})), (try (1|contains("a")) catch .), ("bar"|inside("foobar")), ("a"|in({"a":1})), (0|in([1]))'
+==== STDOUT ====
+true
+true
+true
+"number (1) and string (\"a\") cannot have their containment checked"
+true
+true
+true
+
+==== STDERR ====
+

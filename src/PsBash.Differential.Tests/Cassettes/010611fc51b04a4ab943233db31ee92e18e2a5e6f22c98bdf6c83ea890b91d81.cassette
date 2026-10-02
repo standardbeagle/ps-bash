@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 3
+script-length: 134
+stdout-length: 0
+stderr-length: 207
+==== SCRIPT ====
+jq -n -c '{"a":[1,{"b":2}]} | [tostream], fromstream(tostream), [leaf_paths?], ([1|truncate_stream([[0],1],[[1,0],2],[[1,0]],[[1]])])'
+==== STDOUT ====
+
+==== STDERR ====
+jq: error: leaf_paths/0 is not defined at <top-level>, line 1:
+{"a":[1,{"b":2}]} | [tostream], fromstream(tostream), [leaf_paths?], ([1|truncate_stream([[0],1],[[1,0],2],[[1,0]],[[1]])])
+jq: 1 compile error
+

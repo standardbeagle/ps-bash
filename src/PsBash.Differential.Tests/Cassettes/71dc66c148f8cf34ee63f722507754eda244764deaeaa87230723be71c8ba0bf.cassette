@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 77
+stdout-length: 28
+stderr-length: 0
+==== SCRIPT ====
+printf '%s' '{"a":1}' | jq -c '1 as $x | {$x, a}, ({a:1} | {a: .a} + {b: 2})'
+==== STDOUT ====
+{"x":1,"a":1}
+{"a":1,"b":2}
+
+==== STDERR ====
+

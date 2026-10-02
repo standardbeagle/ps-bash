@@ -1,0 +1,17 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 3
+script-length: 34
+stdout-length: 0
+stderr-length: 218
+==== SCRIPT ====
+printf '%s' '1' | jq 'if . then 1'
+==== STDOUT ====
+
+==== STDERR ====
+jq: error: syntax error, unexpected end of file (Unix shell quoting issues?) at <top-level>, line 1:
+if . then 1
+jq: error: Possibly unterminated 'if' statement at <top-level>, line 1:
+if . then 1
+jq: 2 compile errors
+

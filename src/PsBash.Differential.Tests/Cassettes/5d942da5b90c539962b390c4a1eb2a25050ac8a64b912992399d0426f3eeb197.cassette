@@ -1,0 +1,17 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 3
+script-length: 132
+stdout-length: 0
+stderr-length: 380
+==== SCRIPT ====
+jq -n -c '[pow(2;10), log2(8), exp10(2), (16|sqrt), (2|exp2), (100|log10), (8|cbrt), (1|atan*4|.*1000|floor), fmin(1;2), fmax(1;2)]'
+==== STDOUT ====
+
+==== STDERR ====
+jq: error: log2/1 is not defined at <top-level>, line 1:
+[pow(2;10), log2(8), exp10(2), (16|sqrt), (2|exp2), (100|log10), (8|cbrt), (1|atan*4|.*1000|floor), fmin(1;2), fmax(1;2)]
+jq: error: exp10/1 is not defined at <top-level>, line 1:
+[pow(2;10), log2(8), exp10(2), (16|sqrt), (2|exp2), (100|log10), (8|cbrt), (1|atan*4|.*1000|floor), fmin(1;2), fmax(1;2)]
+jq: 2 compile errors
+

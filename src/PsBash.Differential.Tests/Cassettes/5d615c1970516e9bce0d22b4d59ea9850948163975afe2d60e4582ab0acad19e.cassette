@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 5
+script-length: 29
+stdout-length: 0
+stderr-length: 61
+==== SCRIPT ====
+printf '%s' '# c
+1' | jq -c .
+==== STDOUT ====
+
+==== STDERR ====
+jq: parse error: Invalid numeric literal at line 1, column 2
+

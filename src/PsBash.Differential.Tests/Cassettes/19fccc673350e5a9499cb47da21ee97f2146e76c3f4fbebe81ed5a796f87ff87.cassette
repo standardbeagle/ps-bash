@@ -1,0 +1,17 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 131
+stdout-length: 95
+stderr-length: 0
+==== SCRIPT ====
+jq -n -c 'try (path(1)) catch ., try ([1] | path(.[0] + 1)) catch ., ({"a":1} | path(.a)), ([[1]] | path(.[0][0])), ({} | [paths])'
+==== STDOUT ====
+"Invalid path expression with result 1"
+"Invalid path expression with result 2"
+["a"]
+[0,0]
+[]
+
+==== STDERR ====
+

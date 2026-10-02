@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 46
+stdout-length: 33
+stderr-length: 0
+==== SCRIPT ====
+jq -n -r '["a\tb","c\\d","e\nf"] | @tsv, @csv'
+==== STDOUT ====
+a\tb	c\\d	e\nf
+"a	b","c\d","e
+f"
+
+==== STDERR ====
+

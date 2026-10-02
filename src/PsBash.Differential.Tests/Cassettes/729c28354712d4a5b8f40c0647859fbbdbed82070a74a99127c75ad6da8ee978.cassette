@@ -1,0 +1,26 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 215
+stdout-length: 157
+stderr-length: 0
+==== SCRIPT ====
+printf '%s' '{"b":1,"a":2}' | jq -c 'keys, keys_unsorted, [.[]], to_entries, (to_entries|from_entries), with_entries(.value += 1), map_values(.+1), (map(.+1)), length, tojson, has("a"), has("z"), (add), ([.[]]|add)'
+==== STDOUT ====
+["a","b"]
+["b","a"]
+[1,2]
+[{"key":"b","value":1},{"key":"a","value":2}]
+{"b":1,"a":2}
+{"b":2,"a":3}
+{"b":2,"a":3}
+[2,3]
+2
+"{\"b\":1,\"a\":2}"
+true
+false
+3
+3
+
+==== STDERR ====
+

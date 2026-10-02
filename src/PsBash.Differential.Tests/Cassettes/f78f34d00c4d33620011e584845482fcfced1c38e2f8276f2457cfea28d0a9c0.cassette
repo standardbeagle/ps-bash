@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 128
+stdout-length: 73
+stderr-length: 0
+==== SCRIPT ====
+jq -n -c '["a"+"b", null+1, 1+null, [1]+[2], {a:1}+{b:2}, {a:1}+{a:2}, [1,2,1]-[1], "ab"*3, "ab"*0, "ab"*0.5, 2*"x", "a,b"/","]'
+==== STDOUT ====
+["ab",1,1,[1,2],{"a":1,"b":2},{"a":2},[2],"ababab","","","xx",["a","b"]]
+
+==== STDERR ====
+

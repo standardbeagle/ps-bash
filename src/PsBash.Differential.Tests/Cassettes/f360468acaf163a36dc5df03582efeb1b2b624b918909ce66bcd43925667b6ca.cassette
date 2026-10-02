@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 3
+script-length: 21
+stdout-length: 0
+stderr-length: 92
+==== SCRIPT ====
+jq -n -n '$undefined'
+==== STDOUT ====
+
+==== STDERR ====
+jq: error: $undefined is not defined at <top-level>, line 1:
+$undefined
+jq: 1 compile error
+

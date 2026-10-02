@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 2
+script-length: 31
+stdout-length: 0
+stderr-length: 8
+==== SCRIPT ====
+jq -n '{"a":1} | halt_error(2)'
+==== STDOUT ====
+
+==== STDERR ====
+{"a":1}
+

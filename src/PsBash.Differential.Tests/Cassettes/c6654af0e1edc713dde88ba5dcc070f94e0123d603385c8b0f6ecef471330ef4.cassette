@@ -1,0 +1,26 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 326
+stdout-length: 114
+stderr-length: 0
+==== SCRIPT ====
+jq -n -c '[limit(3; repeat(1))], [limit(0; 1,2)], [limit(-1; 1,2)], [first(range(10))], [first(empty)], [last(range(10))], [last(empty)], [nth(2; range(10))], [nth(5; 1,2)], (try nth(-1; 1,2) catch .), [until(. > 100; . * 2)?], (1 | until(. > 100; . * 2)), [1 | while(. < 20; . * 2)], [isempty(empty), isempty(1, error("x"))]'
+==== STDOUT ====
+[1,1,1]
+[]
+[1,2]
+[0]
+[]
+[9]
+[null]
+[2]
+[]
+"nth doesn't support negative indices"
+[]
+128
+[1,2,4,8,16]
+[true,false]
+
+==== STDERR ====
+

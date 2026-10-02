@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 1
+script-length: 39
+stdout-length: 6
+stderr-length: 0
+==== SCRIPT ====
+printf '%s' '{"a":1}' | jq -e '.a == 2'
+==== STDOUT ====
+false
+
+==== STDERR ====
+

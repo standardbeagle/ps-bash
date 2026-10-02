@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 186
+stdout-length: 104
+stderr-length: 0
+==== SCRIPT ====
+jq -n -c '["foo bar" | test("BAR"; "i"), test("a.*b"), test("o+"), test("^foo"), test("x"), ([match("o"; "g") | .offset]), (match("(?<n>o+)") | .captures), ([match(""; "g") | .offset])]'
+==== STDOUT ====
+[true,false,true,true,false,[1,2],[{"offset":1,"length":2,"string":"oo","name":"n"}],[0,1,2,3,4,5,6,7]]
+
+==== STDERR ====
+

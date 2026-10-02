@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 2
+script-length: 37
+stdout-length: 0
+stderr-length: 153
+==== SCRIPT ====
+printf '%s' '{"a":[1]}' | jq --indent
+==== STDOUT ====
+
+==== STDERR ====
+jq: --indent takes one parameter
+Use jq --help for help with command-line options,
+or see the jq manpage, or online docs  at https://jqlang.github.io/jq
+

@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 46
+stdout-length: 50
+stderr-length: 0
+==== SCRIPT ====
+jq -n -r '"<a href=\"x\">&\u0027</a>" | @html'
+==== STDOUT ====
+&lt;a href=&quot;x&quot;&gt;&amp;&apos;&lt;/a&gt;
+
+==== STDERR ====
+

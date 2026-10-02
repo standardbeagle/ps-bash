@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 93
+stdout-length: 262
+stderr-length: 0
+==== SCRIPT ====
+jq -n -c '["1","1.5"," 2","-0","1e2","0x1","abc","","[1]","nan"] | map(try tonumber catch .)'
+==== STDOUT ====
+[1,1.5,2,-0,1E+2,"Invalid numeric literal at EOF at line 1, column 3 (while parsing '0x1')","Invalid numeric literal at EOF at line 1, column 3 (while parsing 'abc')","Expected JSON value (while parsing '')","string (\"[1]\") cannot be parsed as a number",null]
+
+==== STDERR ====
+

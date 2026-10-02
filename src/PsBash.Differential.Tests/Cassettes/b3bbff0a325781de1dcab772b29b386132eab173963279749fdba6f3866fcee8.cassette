@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 5
+script-length: 56
+stdout-length: 0
+stderr-length: 61
+==== SCRIPT ====
+printf '%s' '1' | jq '[1,2,3,4,5,6,7,8,9,10,11,12] | .a'
+==== STDOUT ====
+
+==== STDERR ====
+jq: error (at <stdin>:0): Cannot index array with string "a"
+

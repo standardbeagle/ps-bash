@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 122
+stdout-length: 49
+stderr-length: 0
+==== SCRIPT ====
+jq -n -c '["a1b22c" | [splits("[0-9]+")], ([match("[0-9]+"; "g") | .length]), (split("[0-9]+"; null)), (split("b"; "g"))]'
+==== STDOUT ====
+[["a","b","c"],[1,2],["a","b","c"],["a1","22c"]]
+
+==== STDERR ====
+

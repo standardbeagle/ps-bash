@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 193
+stdout-length: 61
+stderr-length: 0
+==== SCRIPT ====
+jq -n -c '["abc" | ltrimstr("a"), rtrimstr("c"), ltrimstr("x"), startswith("ab"), endswith("bc"), ascii_downcase, ascii_upcase, length, explode, (explode | implode), reverse?, ([.[]?]|length)]'
+==== STDOUT ====
+["bc","ab","abc",true,true,"abc","ABC",3,[97,98,99],"abc",0]
+
+==== STDERR ====
+

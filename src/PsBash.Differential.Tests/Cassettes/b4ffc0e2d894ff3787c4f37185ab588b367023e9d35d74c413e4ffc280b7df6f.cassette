@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 152
+stdout-length: 63
+stderr-length: 0
+==== SCRIPT ====
+jq -n -c '[1 < 2, 1 == 1.0, "a" < "b", [1] < [1,2], {} < [], null < false, false < true, true < 0, 0 < "a", "a" < [], ({a:1} < {a:2}), ({a:2} < {b:1})]'
+==== STDOUT ====
+[true,true,true,true,false,true,true,true,true,true,true,true]
+
+==== STDERR ====
+

@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 3
+script-length: 31
+stdout-length: 0
+stderr-length: 89
+==== SCRIPT ====
+printf '%s' '1' | jq 'break $x'
+==== STDOUT ====
+
+==== STDERR ====
+jq: error: $*label-x is not defined at <top-level>, line 1:
+break $x
+jq: 1 compile error
+

@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 61
+stdout-length: 2
+stderr-length: 0
+==== SCRIPT ====
+printf '%s' '1 2 3' | jq -n 'reduce inputs as $x (0; . + $x)'
+==== STDOUT ====
+6
+
+==== STDERR ====
+

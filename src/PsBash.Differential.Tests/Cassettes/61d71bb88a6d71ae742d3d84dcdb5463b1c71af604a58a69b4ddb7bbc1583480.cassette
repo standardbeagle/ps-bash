@@ -1,0 +1,18 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 165
+stdout-length: 90
+stderr-length: 0
+==== SCRIPT ====
+jq -n -c '[[1,null,"a",true] | join("-")], [[] | join(",")], [["a"] | join(",")], [[1.0,2] | join("-")], (try ([[1]] | join(",")) catch .), (["a","b"] | join(", "))'
+==== STDOUT ====
+["1--a-true"]
+[""]
+["a"]
+["1.0-2"]
+"string (\"\") and array ([1]) cannot be added"
+"a, b"
+
+==== STDERR ====
+

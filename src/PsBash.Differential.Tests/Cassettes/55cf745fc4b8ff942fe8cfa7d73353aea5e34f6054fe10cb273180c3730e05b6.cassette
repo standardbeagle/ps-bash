@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 5
+script-length: 28
+stdout-length: 0
+stderr-length: 68
+==== SCRIPT ====
+printf '%s' '[1,]' | jq -c .
+==== STDOUT ====
+
+==== STDERR ====
+jq: parse error: Expected another array element at line 1, column 4
+

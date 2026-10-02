@@ -1245,6 +1245,64 @@
     {
       "flag": "-j",
       "desc": "join output (raw, no newline after each result)"
+    },
+    {
+      "flag": "-n",
+      "desc": "use null as the single input value"
+    },
+    {
+      "flag": "-e",
+      "desc": "set the exit status from the last output (1 for false/null, 4 for none)"
+    },
+    {
+      "flag": "-a",
+      "desc": "ASCII output (escape non-ASCII characters)"
+    },
+    {
+      "flag": "-f",
+      "desc": "read the program from FILE",
+      "arg": "FILE"
+    },
+    {
+      "flag": "--arg",
+      "desc": "set $NAME to the string VALUE",
+      "arg": "NAME VALUE"
+    },
+    {
+      "flag": "--argjson",
+      "desc": "set $NAME to the JSON text",
+      "arg": "NAME JSON"
+    },
+    {
+      "flag": "--slurpfile",
+      "desc": "set $NAME to the array of JSON values in FILE",
+      "arg": "NAME FILE"
+    },
+    {
+      "flag": "--rawfile",
+      "desc": "set $NAME to the contents of FILE as a string",
+      "arg": "NAME FILE"
+    },
+    {
+      "flag": "--args",
+      "desc": "remaining arguments are positional strings ($ARGS.positional)"
+    },
+    {
+      "flag": "--jsonargs",
+      "desc": "remaining arguments are positional JSON texts"
+    },
+    {
+      "flag": "--tab",
+      "desc": "indent with a tab"
+    },
+    {
+      "flag": "--indent",
+      "desc": "indent with N spaces (0-7)",
+      "arg": "N"
+    },
+    {
+      "flag": "--stream",
+      "desc": "output the input as path/leaf events"
     }
   ],
   "ln": [

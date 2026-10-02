@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 3
+script-length: 30
+stdout-length: 0
+stderr-length: 99
+==== SCRIPT ====
+printf '%s' '1' | jq '{(1):2}'
+==== STDOUT ====
+
+==== STDERR ====
+jq: error: Cannot use number (1) as object key at <top-level>, line 1:
+{(1):2}
+jq: 1 compile error
+

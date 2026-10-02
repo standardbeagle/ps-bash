@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 3
+script-length: 33
+stdout-length: 0
+stderr-length: 103
+==== SCRIPT ====
+printf '%s' '1' | jq '{(null):2}'
+==== STDOUT ====
+
+==== STDERR ====
+jq: error: Cannot use null (null) as object key at <top-level>, line 1:
+{(null):2}
+jq: 1 compile error
+
