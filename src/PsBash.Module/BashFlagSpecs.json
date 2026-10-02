@@ -2023,6 +2023,24 @@
     {
       "flag": "--exclude",
       "desc": "exclude pattern"
+    },
+    {
+      "flag": "-T",
+      "desc": "get names to extract or create from FILE",
+      "arg": "FILE"
+    },
+    {
+      "flag": "-X",
+      "desc": "exclude patterns listed in FILE",
+      "arg": "FILE"
+    },
+    {
+      "flag": "--wildcards",
+      "desc": "member names are glob patterns"
+    },
+    {
+      "flag": "--no-wildcards",
+      "desc": "member names are literal"
     }
   ],
   "tee": [
