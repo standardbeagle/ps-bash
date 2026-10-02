@@ -54,6 +54,8 @@ public class OptSpecSharedIdGuardTests
         // and RgSpec is built with allowAbbrev:false, so shared ids can never resolve a prefix.
         "InvokeBashRgCommand.RgSpec no-ignore: no-ignore no-ignore-vcs",
         "InvokeBashRgCommand.RgSpec noop: no-messages no-config mmap no-mmap",
+        "InvokeBashRgCommand.RgSpec max-depth: max-depth maxdepth",          // ripgrep 14.1 alias (rg --maxdepth works)
+        "InvokeBashRgCommand.RgSpec passthru: passthru passthrough",        // ripgrep 14.1 alias (rg --passthrough works)
     };
 
     internal static IEnumerable<(string Owner, OptSpecSet Set)> AllSets()
