@@ -140,9 +140,10 @@ public class GrepGnuBehaviorTests : IClassFixture<SharedPwshFixture>, IDisposabl
     }
 
     [Fact]
-    public void Color_AndLineBuffered_AreAcceptedNoOps()
+    public void Color_AndLineBuffered_AreAccepted()
     {
-        Assert.Equal(new[] { "c3" }, Run($"Invoke-BashGrep '--colour=always' c3 {_g}").AssertSuccess().Lines);
+        // --colour=always colours (GNU default SGR); auto / bare --colo stay plain off a terminal.
+        Assert.Equal(new[] { "\u001b[01;31m\u001b[Kc3\u001b[m\u001b[K" }, Run($"Invoke-BashGrep '--colour=always' c3 {_g}").AssertSuccess().Lines);
         Assert.Equal(new[] { "c3" }, Run($"Invoke-BashGrep '--colo' c3 {_g}").AssertSuccess().Lines);
         Assert.Equal(new[] { "c3" }, Run($"Invoke-BashGrep '--line-buffered' c3 {_g}").AssertSuccess().Lines);
     }

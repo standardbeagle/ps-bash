@@ -22,7 +22,16 @@ public class RgArgScanTests
         string flags = (r.CaseMode != '\0' ? r.CaseMode.ToString() : "") + (r.WordRegexp ? "w" : "") + (r.LineRegexp ? "x" : "")
             + (r.CountOnly ? "c" : "") + (r.FilesOnly ? "l" : "") + (r.LineNumbers ? "" : "N") + (r.OnlyMatching ? "o" : "")
             + (r.Invert ? "v" : "") + (r.Fixed ? "F" : "") + (r.Hidden ? "H" : "") + (r.NoIgnore ? "I" : "");
-        return $"flags={flags} pat=[{string.Join(",", r.Patterns)}] ops=[{string.Join(",", r.Operands)}] ctx={r.After}/{r.Before} g=[{string.Join(",", r.Globs)}] u={r.Unrestricted}";
+        string extra = (r.MaxCount != int.MaxValue ? $" max={r.MaxCount}" : "") + (r.MaxDepth >= 0 ? $" depth={r.MaxDepth}" : "")
+            + (r.Quiet ? " quiet" : "") + (r.Json ? " json" : "") + (r.Pcre ? " pcre" : "")
+            + (r.Replace is not null ? $" repl=[{r.Replace}]" : "")
+            + (r.PatternFiles.Count > 0 ? $" files=[{string.Join(",", r.PatternFiles)}]" : "")
+            + (r.Null ? " null" : "") + (r.WithFilename is { } wf ? $" H={wf}" : "")
+            + (r.SortKey is not null ? $" sort={r.SortKey}{(r.SortReverse ? "R" : "")}" : "")
+            + (r.ColorWhen is not null ? $" color={r.ColorWhen}" : "") + (r.Stats ? " stats" : "")
+            + (r.Follow ? " follow" : "") + (r.Text ? " text" : "") + (r.SearchZip ? " zip" : "")
+            + (r.Multiline ? " multiline" : "") + (r.Vimgrep ? " vimgrep" : "") + (r.Column ? " column" : "");
+        return $"flags={flags} pat=[{string.Join(",", r.Patterns)}] ops=[{string.Join(",", r.Operands)}] ctx={r.After}/{r.Before} g=[{string.Join(",", r.Globs)}] u={r.Unrestricted}{extra}";
     }
 
     [Theory]
@@ -62,8 +71,8 @@ public class RgArgScanTests
     [InlineData("flags=I pat=[] ops=[3] ctx=0/0 g=[] u=0", "--no-ignore", "3")]
     [InlineData("flags=I pat=[] ops=[3] ctx=0/0 g=[] u=0", "--no-ignore-vcs", "3")]
     // accepted no-ops and --color WHEN (required value)
-    [InlineData("flags= pat=[] ops=[c3] ctx=0/0 g=[] u=0", "--color", "never", "c3")]
-    [InlineData("flags= pat=[] ops=[c3] ctx=0/0 g=[] u=0", "--color=auto", "c3")]
+    [InlineData("flags= pat=[] ops=[c3] ctx=0/0 g=[] u=0 color=never", "--color", "never", "c3")]
+    [InlineData("flags= pat=[] ops=[c3] ctx=0/0 g=[] u=0 color=auto", "--color=auto", "c3")]
     [InlineData("flags= pat=[] ops=[c3] ctx=0/0 g=[] u=0", "--no-heading", "--no-messages", "--no-config", "--mmap", "--no-mmap", "c3")]
     // errors
     [InlineData("ERR 2 rg: unrecognized option '--bogus'", "--bogus", "c3")]
@@ -76,13 +85,42 @@ public class RgArgScanTests
     [InlineData("ERR 2 rg: error parsing flag -C: value is not a valid number: invalid digit found in string", "-C", "-1", "c3")]
     [InlineData("ERR 2 rg: error parsing flag --color: choice 'bogus' is unrecognized", "--color", "bogus", "c3")]
     [InlineData("ERR 2 rg: option '--count' doesn't allow an argument", "--count=1", "c3")]
-    // valid ripgrep options the internal engine refuses (exit 2)
-    [InlineData("ERR 2 rg: option '-t' is recognized but not supported by ps-bash", "-t", "rust", "3")]
-    [InlineData("ERR 2 rg: option '-m' is recognized but not supported by ps-bash", "-m1", "3")]
-    [InlineData("ERR 2 rg: option '--json' is recognized but not supported by ps-bash", "--json", "3")]
-    [InlineData("ERR 2 rg: option '-P' is recognized but not supported by ps-bash", "-iP", "3")]
-    [InlineData("ERR 2 rg: option '--max-depth' is recognized but not supported by ps-bash", "--max-depth=1", "3")]
-    [InlineData("ERR 2 rg: option '-q' is recognized but not supported by ps-bash", "-q", "3")]
+    // valid ripgrep options the internal engine still refuses (exit 2)
+    [InlineData("ERR 2 rg: option '--pre' is recognized but not supported by ps-bash", "--pre", "cat", "3")]
+    [InlineData("ERR 2 rg: option '--max-filesize' is recognized but not supported by ps-bash", "--max-filesize=1M", "3")]
+    [InlineData("ERR 2 rg: option '--no-ignore-dot' is recognized but not supported by ps-bash", "--no-ignore-dot", "3")]
+    [InlineData("ERR 2 rg: option '--null-data' is recognized but not supported by ps-bash", "--null-data", "3")]
+    // the batch-8 options are implemented: they resolve like any other flag
+    [InlineData("flags= pat=[] ops=[3] ctx=0/0 g=[] u=0 max=1", "-m1", "3")]
+    [InlineData("flags= pat=[] ops=[3] ctx=0/0 g=[] u=0 max=7", "--max-count", "7", "3")]
+    [InlineData("flags= pat=[] ops=[3] ctx=0/0 g=[] u=0 depth=2", "--max-depth=2", "3")]
+    [InlineData("flags= pat=[] ops=[3] ctx=0/0 g=[] u=0 depth=1", "-d1", "3")]
+    [InlineData("flags= pat=[] ops=[3] ctx=0/0 g=[] u=0 quiet", "-q", "3")]
+    [InlineData("flags= pat=[] ops=[3] ctx=0/0 g=[] u=0 json", "--json", "3")]
+    [InlineData("flags=i pat=[] ops=[3] ctx=0/0 g=[] u=0 pcre", "-iP", "3")]
+    [InlineData("flags= pat=[] ops=[3] ctx=0/0 g=[] u=0 repl=[X$1]", "-r", "X$1", "3")]
+    [InlineData("flags= pat=[] ops=[3] ctx=0/0 g=[] u=0 files=[p1,p2]", "-f", "p1", "--file=p2", "3")]
+    [InlineData("flags= pat=[] ops=[3] ctx=0/0 g=[] u=0 null", "-0", "3")]
+    [InlineData("flags= pat=[] ops=[3] ctx=0/0 g=[] u=0 H=True", "-H", "3")]
+    [InlineData("flags= pat=[] ops=[3] ctx=0/0 g=[] u=0 H=False", "-H", "-I", "3")]
+    [InlineData("flags= pat=[] ops=[3] ctx=0/0 g=[] u=0 sort=path", "--sort", "path", "3")]
+    [InlineData("flags= pat=[] ops=[3] ctx=0/0 g=[] u=0 sort=pathR", "--sortr=path", "3")]
+    [InlineData("flags= pat=[] ops=[3] ctx=0/0 g=[] u=0 color=always", "--color=always", "3")]
+    [InlineData("flags= pat=[] ops=[3] ctx=0/0 g=[] u=0 stats follow text zip multiline", "--stats", "-L", "-a", "-z", "-U", "3")]
+    // --column / --vimgrep / -p switch line numbers ON at their position; a later -N wins
+    [InlineData("flags= pat=[] ops=[3] ctx=0/0 g=[] u=0 column", "--column", "3")]
+    [InlineData("flags=N pat=[] ops=[3] ctx=0/0 g=[] u=0 vimgrep column", "--vimgrep", "-N", "3")]
+    [InlineData("flags= pat=[] ops=[3] ctx=0/0 g=[] u=0 color=always", "-p", "3")]
+    // new usage errors (texts from ripgrep 14.1)
+    [InlineData("ERR 2 rg: error parsing flag -m: value is not a valid number: invalid digit found in string", "-m", "x", "3")]
+    [InlineData("ERR 2 rg: error parsing flag --max-depth: value is not a valid number: invalid digit found in string", "--max-depth", "x", "3")]
+    [InlineData("ERR 2 rg: error parsing flag --sort: choice 'bogus' is unrecognized", "--sort", "bogus", "3")]
+    [InlineData("ERR 2 rg: error parsing flag -E: grep config error: unknown encoding: bogus", "-E", "bogus", "3")]
+    [InlineData("ERR 2 rg: unrecognized file type: nosuch", "-t", "nosuch", "3")]
+    [InlineData("ERR 2 rg: unrecognized file type: rust", "--type-clear", "rust", "-t", "rust", "3")]
+    [InlineData("flags= pat=[] ops=[3] ctx=0/0 g=[] u=0", "--type-add", "foo:*.x", "-tfoo", "3")]
+    [InlineData("ERR 2 rg: error parsing flag --colors: unrecognized output type 'bogus'. Choose from: path, line, column, match.", "--colors", "bogus:fg:red", "3")]
+    [InlineData("ERR 2 rg: error parsing flag --colors: unrecognized color name 'nocolor'. Choose from: black, blue, green, red, cyan, magenta, yellow, white", "--colors", "match:fg:nocolor", "3")]
     // info
     [InlineData("HELP", "--help")]
     [InlineData("HELP", "-h")]

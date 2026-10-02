@@ -8,14 +8,17 @@ namespace PsBash.Cmdlets;
 /// <summary>
 /// Binary cmdlet replacement for the psm1 <c>Invoke-BashGrep</c> function
 /// (REFACTOR-2 Phase 4 follow-on). Searches input lines (pipeline or files)
-/// for a pattern, reproducing GNU coreutils <c>grep</c> byte-for-byte against
-/// the original psm1 oracle.
+/// for a pattern, reproducing GNU <c>grep</c> 3.11.
 ///
 /// Option parsing is the shared ORDERED parser (<see cref="ArgParser"/>, GNU grep 3.11 option table —
 /// see <see cref="Plan"/>): bundles (<c>-ie PAT</c>, <c>-ePAT</c>, <c>-1n</c>), repeated <c>-e</c> /
 /// <c>-f</c> / <c>--include</c> / <c>--exclude</c> / <c>--exclude-dir</c>, <c>-A/-B/-C N</c> and the
 /// <c>-NUM</c> shorthand, <c>--color[=WHEN]</c>, unique-prefix long options, usage errors exit 2.
 /// The first operand is the PATTERN unless <c>-e</c>/<c>-f</c> was given.
+///
+/// <para><b>One engine.</b> Stdin and every file go through <see cref="GrepScanner"/> (a push state machine:
+/// context ring, binary rules, <c>-o</c>, colours, <c>-b -T -Z -z</c>), so output decorations cannot drift
+/// between the pipeline and file paths. <see cref="GrepPcre"/> maps <c>-P</c> patterns onto .NET.</para>
 ///
 /// <para><b>Direct PowerShell calls.</b> The transpiler single-quotes every flag
 /// (<c>PsEmitter.OrderedArgCommands</c>) so the whole argv reaches <see cref="Arguments"/> verbatim and in
@@ -24,7 +27,7 @@ namespace PsBash.Cmdlets;
 /// <see cref="D"/> <see cref="A"/> <see cref="B"/> <see cref="E"/> remain and are re-injected as ordinary
 /// tokens before parsing; the psm1 <c>Invoke-BashGrep</c> proxy hands every argument over as a literal
 /// string so a repeated <c>-e</c> or a bundle like <c>-ve</c> never reaches the binder.</para>
-/// Output is a typed <c>PsBash.GrepMatch</c> PSObject per match with
+/// Output is a typed <c>PsBash.GrepMatch</c> PSObject per file match with
 /// <c>FileName</c>, <c>LineNumber</c>, <c>Line</c>, and <c>BashText</c>
 /// properties (oracle parity). <c>-c</c>/<c>-l</c> emit bare-string PSObjects
 /// via <see cref="BashRuntime.NewBashObject"/>. Exit code: <c>$LASTEXITCODE</c>
@@ -59,8 +62,8 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
     /// <summary>
     /// Bash <c>-P</c> (perl-regexp). Declared as an explicit switch decoy: a bare <c>-P</c>
     /// otherwise prefix-binds to the <c>-PipelineVariable</c> / <c>-ProgressAction</c> common
-    /// parameters and never reaches <see cref="Arguments"/>. Routed through the .NET-regex path
-    /// (see the <c>--perl-regexp</c> note); the bundled (<c>-iP</c>) and long (<c>--perl-regexp</c>)
+    /// parameters and never reaches <see cref="Arguments"/>. Routed through the PCRE translator
+    /// (<see cref="GrepPcre"/>); the bundled (<c>-iP</c>) and long (<c>--perl-regexp</c>)
     /// forms are handled in the argument scan.
     /// </summary>
     [Parameter] public SwitchParameter P { get; set; }
@@ -89,11 +92,10 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
     [Parameter] public int? B { get; set; }
 
     /// <summary>
-    /// Decoy for the valid-but-unsupported <c>-d</c> (--directories) / <c>-D</c>
-    /// (--devices). Bare <c>-d</c> silently bound <c>-Debug</c> and <c>-D</c> likewise,
-    /// so the classifier never fired. A single switch catches both (case-insensitive
-    /// binder); re-injected as <c>-d</c> so grep's scan emits exit 2. Both are
-    /// unsupported, so the shared representative token is harmless.
+    /// Decoy for <c>-d ACTION</c> (--directories) / <c>-D ACTION</c> (--devices). Bare <c>-d</c> silently
+    /// bound <c>-Debug</c> and <c>-D</c> likewise. A single switch catches both (case-insensitive binder);
+    /// the ACTION word stays in <see cref="Arguments"/>, and which spelling was typed is recovered from the
+    /// command's own pipeline segment (<see cref="CapitalDTyped"/>).
     /// </summary>
     [Parameter] public SwitchParameter D { get; set; }
 
@@ -111,17 +113,8 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
     /// <summary>GNU's label for stdin in a prefixed line (<c>grep -H x &lt; f</c>).</summary>
     private const string StdinLabel = "(standard input)";
 
-    /// <summary>GNU's default <c>--group-separator</c>, printed between non-adjacent context groups.</summary>
-    private const string GroupSeparator = "--";
-
-    /// <summary>A context group was already printed (a later group, even in another file, gets a separator).</summary>
-    private bool _contextGroupEmitted;
-
-    /// <summary>-A/-B/-C/-NUM present (possibly 0): the buffered window path runs and "--" separates groups.</summary>
-    private bool _contextRequested;
-
     /// <summary>
-    /// An input operand could not be read (missing / unreadable). GNU grep then exits 2
+    /// An input operand could not be read (missing / unreadable / a directory). GNU grep then exits 2
     /// whatever else matched — even under <c>-s</c> — except <c>-q</c> with a selected
     /// line (0). Sticky, because the final match-count status would otherwise overwrite it.
     /// </summary>
@@ -136,23 +129,23 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
         OptRecursive = "recursive", OptInclude = "include", OptExclude = "exclude",
         OptExcludeDir = "exclude-dir", OptExcludeFrom = "exclude-from", OptFilesWithout = "files-without",
         OptFilesWith = "files-with", OptCount = "count", OptAfter = "after", OptBefore = "before",
-        OptContext = "context", OptContextNum = "context-num", OptColor = "color", OptBinary = "binary";
+        OptContext = "context", OptContextNum = "context-num", OptColor = "color", OptBinary = "binary",
+        OptNullData = "null-data", OptNull = "null", OptText = "text", OptBinaryFiles = "binary-files",
+        OptBinaryWithoutMatch = "binary-without-match", OptByteOffset = "byte-offset",
+        OptDirectories = "directories", OptDevices = "devices", OptInitialTab = "initial-tab",
+        OptUnixOffsets = "unix-byte-offsets", OptLabel = "label", OptGroupSep = "group-separator",
+        OptNoGroupSep = "no-group-separator";
 
     /// <summary>
     /// GNU grep options that are valid but not implemented by ps-bash. Refused loudly (exit 2) rather than
     /// silently dropped. Written as typed; the <c>=VALUE</c> suffix of a long option is not part of the name.
+    /// None remain: <c>-z -Z -a -b -d -D -T -u -I --label --group-separator --binary-files</c> are implemented.
     /// </summary>
-    private static readonly string[] GrepValidButUnsupported =
-    {
-        "-z", "-Z", "-a", "-b", "-D", "-d", "-T", "-u", "-I",
-        "--null-data", "--null", "--text", "--byte-offset", "--binary-files", "--devices",
-        "--directories", "--initial-tab", "--label", "--group-separator", "--no-group-separator",
-        "--unix-byte-offsets",
-    };
+    private static readonly string[] GrepValidButUnsupported = Array.Empty<string>();
 
     /// <summary>
     /// grep's option surface (GNU grep 3.11). <c>-y</c> is the obsolete <c>-i</c>; <c>-V</c> is
-    /// <c>--version</c>; <c>--color</c>/<c>--colour</c> take an optional attached WHEN (accepted, no colouring);
+    /// <c>--version</c>; <c>--color</c>/<c>--colour</c> take an optional attached WHEN;
     /// <c>-NUM</c> anywhere in a bundle is the context shorthand. Ambiguity lists follow GNU's
     /// <c>long_options[]</c> table order (<c>--ex</c> = extended-regexp, exclude, exclude-from, exclude-dir).
     /// </summary>
@@ -196,6 +189,19 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
             new OptSpec(OptColor, '\0', "color", OptKind.OptionalValue),
             new OptSpec(OptColor, '\0', "colour", OptKind.OptionalValue),
             new OptSpec(OptBinary, 'U', "binary"),
+            new OptSpec(OptNullData, 'z', "null-data"),
+            new OptSpec(OptNull, 'Z', "null"),
+            new OptSpec(OptText, 'a', "text"),
+            new OptSpec(OptBinaryFiles, '\0', "binary-files", OptKind.Value),
+            new OptSpec(OptBinaryWithoutMatch, 'I', null),
+            new OptSpec(OptByteOffset, 'b', "byte-offset"),
+            new OptSpec(OptDirectories, 'd', "directories", OptKind.Value),
+            new OptSpec(OptDevices, 'D', "devices", OptKind.Value),
+            new OptSpec(OptInitialTab, 'T', "initial-tab"),
+            new OptSpec(OptUnixOffsets, 'u', "unix-byte-offsets"),
+            new OptSpec(OptLabel, '\0', "label", OptKind.Value),
+            new OptSpec(OptGroupSep, '\0', "group-separator", OptKind.Value),
+            new OptSpec(OptNoGroupSep, '\0', "no-group-separator"),
             new OptSpec(OptSpecSet.VersionId, 'V', "version"),
         },
         GrepValidButUnsupported,
@@ -218,9 +224,19 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
     /// <summary>Pure argv scan (unit-test seam).</summary>
     internal static ParsedArgs ScanArgs(string[] args) => ArgParser.Parse(args, GrepSpec);
 
-    /// <summary>GNU <c>--color=WHEN</c> spellings (grep accepts all of these; ps-bash never colours).</summary>
-    private static readonly string[] ColorWhenWords =
-        { "always", "yes", "force", "never", "no", "none", "auto", "tty", "if-tty" };
+    /// <summary>GNU <c>--color=WHEN</c> spellings: always|yes|force, never|no|none, auto|tty|if-tty.</summary>
+    private static bool TryParseColorWhen(string? v, out GrepColorMode mode)
+    {
+        mode = GrepColorMode.Auto;
+        if (v is null) return true;
+        switch (v.ToLowerInvariant())
+        {
+            case "always": case "yes": case "force": mode = GrepColorMode.Always; return true;
+            case "never": case "no": case "none": mode = GrepColorMode.Never; return true;
+            case "auto": case "tty": case "if-tty": mode = GrepColorMode.Auto; return true;
+            default: return false;
+        }
+    }
 
     internal sealed class GrepArgs
     {
@@ -230,7 +246,7 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
 
         public bool IgnoreCase, Invert, LineNumbers, Count, Quiet, Recursive, FilesWith, FilesWithout;
         public bool Word, OnlyMatching, ForceFileName, SuppressFileName, LineRegexp, NoMessages;
-        public bool Extended, Fixed;
+        public bool Extended, Fixed, Perl;
 
         /// <summary>Matcher letter (<c>G E F P</c>) or <c>'\0'</c>. GNU refuses two different matchers.</summary>
         public char Matcher;
@@ -240,6 +256,17 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
 
         /// <summary>Any of -A/-B/-C/-NUM was given (even 0): GNU then prints "--" between groups.</summary>
         public bool ContextRequested;
+
+        // ---- text/binary handling and output decoration
+        public bool NullData, NullAfterName, ByteOffset, InitialTab, UnixOffsetsWarning;
+        public GrepBinaryMode Binary = GrepBinaryMode.Binary;
+        public GrepDirectories Directories = GrepDirectories.Read;
+        public GrepDevices Devices = GrepDevices.Read;
+        public GrepColorMode Color = GrepColorMode.Never;
+        public string? Label;
+
+        /// <summary>The group separator (<c>--</c> default); <c>null</c> after <c>--no-group-separator</c>.</summary>
+        public string? GroupSeparator = "--";
 
         /// <summary>Every <c>-e PATTERN</c> / <c>-f FILE</c> in command-line order.</summary>
         public List<(bool IsFile, string Value)> PatternSources = new();
@@ -259,7 +286,8 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
     /// <c>-A/-B</c> beat <c>-C</c>/<c>-NUM</c> regardless of order; <c>-l</c>/<c>-L</c> and <c>-h</c>/<c>-H</c>
     /// are last-wins; two DIFFERENT matchers among <c>-E -F -G -P</c> are
     /// "conflicting matchers specified"; a bad context length is "X: invalid context length argument" and a bad
-    /// <c>-m</c> "invalid max count" (both exit 2) while a NEGATIVE <c>-m</c> means unlimited.
+    /// <c>-m</c> "invalid max count" (both exit 2) while a NEGATIVE <c>-m</c> means unlimited. <c>-a</c> / <c>-I</c> /
+    /// <c>--binary-files</c> and <c>-r</c> / <c>-d</c> are last-wins.
     /// </summary>
     internal static GrepArgs Plan(string[] args)
     {
@@ -286,6 +314,7 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
                     }
                     g.Matcher = m;
                     g.Extended = m is 'E' or 'P';   // -P runs on the .NET regex path, like -E
+                    g.Perl = m == 'P';
                     g.Fixed = m == 'F';
                     break;
                 }
@@ -303,13 +332,54 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
                 case OptOnly: g.OnlyMatching = true; break;
                 case OptQuiet: g.Quiet = true; break;
                 case OptCount: g.Count = true; break;
-                case OptRecursive: g.Recursive = true; break;
+                case OptRecursive: g.Directories = GrepDirectories.Recurse; break;
                 case OptFilesWith: g.FilesWith = true; g.FilesWithout = false; break;
                 case OptFilesWithout: g.FilesWithout = true; g.FilesWith = false; break;
                 case OptInclude: g.Include.Add(v!); break;
                 case OptExclude: g.Exclude.Add(v!); break;
                 case OptExcludeDir: g.ExcludeDir.Add(v!); break;
                 case OptExcludeFrom: g.ExcludeFromFiles.Add(v!); break;
+                case OptNullData: g.NullData = true; break;
+                case OptNull: g.NullAfterName = true; break;
+                case OptText: g.Binary = GrepBinaryMode.Text; break;
+                case OptBinaryWithoutMatch: g.Binary = GrepBinaryMode.WithoutMatch; break;
+                case OptBinaryFiles:
+                    switch (v)
+                    {
+                        case "binary": g.Binary = GrepBinaryMode.Binary; break;
+                        case "text": g.Binary = GrepBinaryMode.Text; break;
+                        case "without-match": g.Binary = GrepBinaryMode.WithoutMatch; break;
+                        default: g.Error = "grep: unknown binary-files type"; return g;
+                    }
+                    break;
+                case OptByteOffset: g.ByteOffset = true; break;
+                case OptUnixOffsets: g.UnixOffsetsWarning = true; break;
+                case OptInitialTab: g.InitialTab = true; break;
+                case OptLabel: g.Label = v; break;
+                case OptGroupSep: g.GroupSeparator = v; break;
+                case OptNoGroupSep: g.GroupSeparator = null; break;
+                case OptDirectories:
+                    switch (v)
+                    {
+                        case "read": g.Directories = GrepDirectories.Read; break;
+                        case "skip": g.Directories = GrepDirectories.Skip; break;
+                        case "recurse": g.Directories = GrepDirectories.Recurse; break;
+                        default:
+                            g.Error = $"grep: invalid argument '{v}' for '--directories'\n"
+                                + "Valid arguments are:\n  - 'read'\n  - 'recurse'\n  - 'skip'\n"
+                                + "Usage: grep [OPTION]... PATTERNS [FILE]...\n"
+                                + "Try 'grep --help' for more information.";
+                            return g;
+                    }
+                    break;
+                case OptDevices:
+                    switch (v)
+                    {
+                        case "read": g.Devices = GrepDevices.Read; break;
+                        case "skip": g.Devices = GrepDevices.Skip; break;
+                        default: g.Error = "grep: unknown devices method"; return g;
+                    }
+                    break;
                 case OptMax:
                 {
                     if (!TryParseMaxCount(v!, out int max))
@@ -333,16 +403,18 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
                     break;
                 }
                 case OptColor:
-                    if (v is not null && Array.IndexOf(ColorWhenWords, v) < 0)
+                    if (!TryParseColorWhen(v, out var cm))
                     {
                         g.Error = $"grep: invalid argument '{v}' for '--color'";
                         return g;
                     }
+                    g.Color = cm;
                     break;
                 // OptLineBuffered, OptBinary: accepted no-ops (nothing to flush / no CR stripping here).
             }
         }
 
+        g.Recursive = g.Directories == GrepDirectories.Recurse;
         g.ContextRequested = after >= 0 || before >= 0 || both >= 0;
         g.After = after >= 0 ? after : Math.Max(both, 0);
         g.Before = before >= 0 ? before : Math.Max(both, 0);
@@ -374,6 +446,15 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
         return true;
     }
 
+    // ---- processing state ----------------------------------------------------------------------
+
+    private GrepScanner? _scanner;
+    private GrepStdinFeeder? _feeder;
+    private GrepArgs _plan = null!;
+    private Action? _fileModeRun;
+    private bool _pipelineMode, _pDone, _pFinished, _collectStdin;
+    private readonly List<(string Text, bool Unterminated)> _stdinBuffer = new();
+
     /// <summary>
     /// Pipeline mode streams: each record is matched as it arrives (the cmdlet resolves its whole argv in
     /// <see cref="BeginProcessing"/>), so <c>ls | grep x</c> / <c>find | grep -m1 x</c> emit before the producer
@@ -382,6 +463,13 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
     /// </summary>
     protected override void ProcessRecord()
     {
+        if (_collectStdin)
+        {
+            // File mode with a `-` operand: the pipeline is that file; ProcessRecord only collects it.
+            if (InputObject != null)
+                _stdinBuffer.Add((BashRuntime.GetBashText(InputObject), BashRuntime.IsUnterminated(InputObject)));
+            return;
+        }
         if (!_pipelineMode || InputObject == null) return;
         if (_pDone)
         {
@@ -390,20 +478,8 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
             return;
         }
 
-        string text = BashRuntime.GetBashText(InputObject);
-        string trimmed = text.TrimEnd('\n');
-        if (trimmed.Contains('\n'))
-        {
-            foreach (var subLine in trimmed.Split('\n'))
-            {
-                if (_pDone) break;
-                FeedPipelineLine(subLine, InputObject, asNewObject: true);
-            }
-        }
-        else
-        {
-            FeedPipelineLine(trimmed, InputObject, asNewObject: false);
-        }
+        bool more = _feeder!.Add(BashRuntime.GetBashText(InputObject), BashRuntime.IsUnterminated(InputObject), InputObject);
+        if (!more || _scanner!.SourceDone || _scanner.QuitAll) _pDone = true;
 
         if (_pDone)
         {
@@ -418,6 +494,16 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
         else _fileModeRun?.Invoke();
     }
 
+    /// <summary>
+    /// Was the capital <c>-D</c> typed (devices) rather than <c>-d</c> (directories)? The binder's decoy switch
+    /// cannot tell; the command's own pipeline segment can.
+    /// </summary>
+    private bool CapitalDTyped()
+    {
+        string seg = BashRuntime.CurrentPipelineSegment(MyInvocation);
+        return Regex.IsMatch(seg, @"(?<![\w-])-D(?![\w-])");
+    }
+
     protected override void BeginProcessing()
     {
         // Direct PowerShell calls: a bare -d/-i/-v/-c/-w/-P/-o/-A/-B/-e binds a declared decoy parameter
@@ -425,7 +511,7 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
         // they stand for so the ordered parser sees them. Transpiled bash never gets here: the emitter
         // single-quotes every flag (OrderedArgCommands), so they arrive verbatim in Arguments.
         var args = BashRuntime.PrependDecoys(Arguments,
-            (D.IsPresent, "-d"), (I.IsPresent, "-i"), (V.IsPresent, "-v"), (C.IsPresent, "-c"),
+            (D.IsPresent, CapitalDTyped() ? "-D" : "-d"), (I.IsPresent, "-i"), (V.IsPresent, "-v"), (C.IsPresent, "-c"),
             (W.IsPresent, "-w"), (P.IsPresent, "-P"), (O.IsPresent, "-o"));
         if (A is not null || B is not null || E is { Length: > 0 })
         {
@@ -446,36 +532,17 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
             FileSystemHelpers.SetLastExitCode(this, plan.ErrorExit);
             return;
         }
+        _plan = plan;
 
-        bool ignoreCase = plan.IgnoreCase;
-        bool invertMatch = plan.Invert;
-        bool showLineNumbers = plan.LineNumbers;
-        bool countOnly = plan.Count;
-        bool quietMode = plan.Quiet;
-        bool recursive = plan.Recursive;
-        bool filesOnly = plan.FilesWith;
-        bool extendedRegex = plan.Extended;
-        bool fixedString = plan.Fixed;
-        bool wholeWord = plan.Word;
-        bool outputMatchOnly = plan.OnlyMatching;
-        bool forceFileName = plan.ForceFileName;
-        bool suppressFileName = plan.SuppressFileName;
-        int maxMatches = plan.MaxMatches;
-        int afterContext = plan.After;
-        int beforeContext = plan.Before;
-        _contextRequested = plan.ContextRequested;
-        bool filesWithoutMatch = plan.FilesWithout;
-        bool lineRegexp = plan.LineRegexp;
-        bool noMessages = plan.NoMessages;
-        // Recursive filename filters (basename fnmatch), GNU grep --include/--exclude/--exclude-dir.
-        var includeGlobs = plan.Include;
-        var excludeGlobs = plan.Exclude;
-        var excludeDirGlobs = plan.ExcludeDir;
+        if (plan.UnixOffsetsWarning)
+            FileSystemHelpers.WriteStderr(this, "grep: warning: --unix-byte-offsets (-u) is obsolete");
+
         var operands = plan.Operands;
 
         // -e / -f in command-line order. A missing -f / --exclude-from file is fatal (GNU: exit 2),
         // whatever -s says.
         var patterns = new List<string>();
+        var excludeGlobs = plan.Exclude;
         foreach (var (isFile, value) in plan.PatternSources)
         {
             if (!isFile) { patterns.Add(value); continue; }
@@ -510,33 +577,61 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
             return;
         }
 
-        // The pattern (or -e/-f patterns) is already removed, so operands now holds the file list.
-        var fileOperands = operands;
-
-        // Build regex list (OR logic across multiple patterns) via the shared ladder.
-        if (!TryBuildRegexes(patterns, fixedString, extendedRegex, wholeWord, lineRegexp,
-                ignoreCase, out var regexes, out var invalidRegex))
+        if (plan.Perl && patterns.Count > 1)
         {
-            FileSystemHelpers.WriteBashError(this, $"grep: invalid regular expression: {invalidRegex}");
+            FileSystemHelpers.WriteBashError(this, "grep: the -P option only supports a single pattern");
             FileSystemHelpers.SetLastExitCode(this, 2);
             return;
         }
 
-        // --- Pipeline mode ---
-        if (fileOperands.Count == 0 && !recursive)
+        // Build regex list (OR logic across multiple patterns) via the shared ladder.
+        if (!TryBuildRegexes(patterns, plan.Fixed, plan.Extended, plan.Word, plan.LineRegexp,
+                plan.IgnoreCase, out var regexes, out var invalidRegex, plan.Perl, plan.NullData))
         {
-            StartPipelineMode(regexes, invertMatch, showLineNumbers, countOnly,
-                quietMode, outputMatchOnly, forceFileName, maxMatches,
-                beforeContext, afterContext);
+            FileSystemHelpers.WriteBashError(this, plan.Perl
+                ? $"grep: {invalidRegex}"
+                : $"grep: invalid regular expression: {invalidRegex}");
+            FileSystemHelpers.SetLastExitCode(this, 2);
             return;
         }
 
-        // --- File mode (incl. recursive) --- runs in EndProcessing (pipeline input is ignored).
-        var recursiveFilter = BuildRecursiveFileFilter(includeGlobs, excludeGlobs, excludeDirGlobs);
-        _fileModeRun = () => RunFileMode(regexes, fileOperands, recursive, invertMatch, showLineNumbers,
-            countOnly, quietMode, filesOnly, filesWithoutMatch, noMessages, outputMatchOnly,
-            forceFileName, suppressFileName, maxMatches, beforeContext, afterContext,
-            recursiveFilter);
+        var style = GrepStyle.Create(plan.Color, Environment.GetEnvironmentVariable,
+            msg => FileSystemHelpers.WriteStderr(this, msg));
+        var opts = new GrepOptions
+        {
+            Invert = plan.Invert, LineNumbers = plan.LineNumbers, Count = plan.Count, Quiet = plan.Quiet,
+            FilesWith = plan.FilesWith, FilesWithout = plan.FilesWithout, OnlyMatching = plan.OnlyMatching,
+            NullData = plan.NullData, NullAfterName = plan.NullAfterName, ByteOffset = plan.ByteOffset,
+            InitialTab = plan.InitialTab, ContextRequested = plan.ContextRequested,
+            Max = plan.MaxMatches, After = plan.After, Before = plan.Before, Binary = plan.Binary,
+            GroupSeparator = plan.GroupSeparator, Style = style,
+        };
+        _scanner = new GrepScanner(opts, regexes, EmitScanned, msg => FileSystemHelpers.WriteStderr(this, msg));
+
+        // The pattern (or -e/-f patterns) is already removed, so operands now holds the file list.
+        // --- Pipeline mode ---
+        if (operands.Count == 0 && !plan.Recursive)
+        {
+            _pipelineMode = true;
+            _scanner.Begin(plan.Label ?? StdinLabel, plan.ForceFileName, startBinary: false, sizeHint: -1);
+            _feeder = new GrepStdinFeeder(_scanner, plan.NullData);
+            _pDone = _scanner.SourceDone;
+            return;
+        }
+
+        // --- File mode (incl. recursive) --- runs in EndProcessing.
+        _collectStdin = operands.Contains("-");
+        var walkFilter = BuildRecursiveFileFilter(plan.Include, excludeGlobs, plan.ExcludeDir);
+        _fileModeRun = () => RunFileMode(operands, walkFilter);
+    }
+
+    /// <summary>The scanner's output sink: a line / count / name becomes one pipeline record.</summary>
+    private void EmitScanned(string text, bool exact, string? label, int lineNo, string? line, object? original)
+    {
+        if (exact) WriteObject(BashRuntime.TextRecord(text, unterminated: true));
+        else if (original != null) WriteObject(BashRuntime.PassTerminated(original));
+        else if (label != null && line != null) WriteObject(BuildGrepMatch(label, lineNo, line, text));
+        else WriteObject(BashRuntime.NewBashObject(text));
     }
 
     /// <summary>
@@ -620,444 +715,141 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
         };
     }
 
-    // ---- Streaming pipeline mode -------------------------------------------------------------------
-    // State is set once in StartPipelineMode (BeginProcessing) and advanced per record in ProcessRecord.
-
-    private Action? _fileModeRun;
-    private bool _pipelineMode, _pDone, _pFinished;
-    private List<Regex> _pRegexes = null!;
-    private bool _pInvert, _pNumbers, _pCount, _pQuiet, _pOnly, _pForceName, _pContext;
-    private int _pMax, _pBefore, _pAfter, _pLineNum, _pMatchCount;
-    // Context window: -B ring of the most recent unprinted non-matching lines, -A countdown, the last
-    // printed line index (group separator), and "the -m limit was hit, only the trailing window remains".
-    private Queue<(int Index, string Text)>? _pRing;
-    private int _pAfterLeft, _pLastEmitted = -2;
-    private bool _pLimitReached;
-
-    private void StartPipelineMode(
-        List<Regex> regexes, bool invertMatch, bool showLineNumbers,
-        bool countOnly, bool quietMode, bool outputMatchOnly, bool forceFileName,
-        int maxMatches, int beforeContext, int afterContext)
-    {
-        _pipelineMode = true;
-        _pRegexes = regexes;
-        _pInvert = invertMatch;
-        _pNumbers = showLineNumbers;
-        _pCount = countOnly;
-        _pQuiet = quietMode;
-        _pOnly = outputMatchOnly;
-        _pForceName = forceFileName;
-        _pMax = maxMatches;
-        _pBefore = beforeContext;
-        _pAfter = afterContext;
-        // -c / -q print no lines, so context is moot for them (they only count).
-        _pContext = (_contextRequested || beforeContext > 0 || afterContext > 0) && !countOnly && !quietMode;
-        if (_pContext && beforeContext > 0) _pRing = new Queue<(int, string)>(Math.Min(beforeContext, 1024));
-        if (maxMatches <= 0) _pDone = true; // -m 0: select nothing (the first record stops the upstream)
-    }
-
-    private void FeedPipelineLine(string lineText, PSObject originalItem, bool asNewObject)
-    {
-        if (_pContext) { FeedContextLine(lineText); return; }
-
-        _pLineNum++;
-        Match? matchObject = MatchLine(_pRegexes, lineText, _pInvert, out bool isMatch);
-        _ = matchObject;
-        if (!isMatch) return;
-
-        _pMatchCount++;
-        if (_pMatchCount >= _pMax || _pQuiet) _pDone = true;
-        if (_pQuiet || _pCount) return;
-
-        string prefix = "";
-        if (_pForceName) prefix = StdinLabel + ':';
-        if (_pNumbers) prefix = prefix + _pLineNum + ":";
-
-        if (_pOnly)
-        {
-            // -o: EVERY non-overlapping match on the line, each on its own output line; the prefix
-            // (filename / line number) repeats on each, as GNU does.
-            foreach (var mv in AllMatchValues(_pRegexes, lineText))
-                WriteObject(BashRuntime.NewBashObject(prefix + mv));
-            return;
-        }
-
-        if (prefix.Length > 0)
-        {
-            WriteObject(BashRuntime.NewBashObject(prefix + lineText));
-        }
-        else if (asNewObject)
-        {
-            // Multi-line split: a fresh text record (the upstream object spans several lines).
-            WriteObject(BashRuntime.NewBashObject(lineText));
-        }
-        else
-        {
-            // Plain grep is a FILTER: the selected line IS the input record, so the ORIGINAL
-            // object passes through (ls | grep .txt keeps PsBash.LsEntry). grep always
-            // terminates its output line, so a stale missing-newline flag is stripped.
-            WriteObject(BashRuntime.PassTerminated(originalItem));
-        }
-    }
-
-    /// <summary>
-    /// Context path (-A/-B/-C): streams with a -B ring and an -A countdown. A matched line prints as
-    /// <c>NAME:NUM:text</c>, a context line <c>NAME-NUM-text</c>; non-adjacent groups are divided by
-    /// <c>--</c>. Context and matches are fresh text records (GNU prints context as plain text).
-    /// </summary>
-    private void FeedContextLine(string lineText)
-    {
-        int li = _pLineNum++;
-        MatchLine(_pRegexes, lineText, _pInvert, out bool isMatch);
-
-        if (_pLimitReached)
-        {
-            // -m N reached: only the trailing -A window of the Nth match remains.
-            if (_pAfterLeft > 0) { EmitContextLine(li, lineText, isMatch); _pAfterLeft--; }
-            if (_pAfterLeft <= 0) _pDone = true;
-            return;
-        }
-
-        if (isMatch)
-        {
-            _pMatchCount++;
-            if (_pRing is { Count: > 0 })
-            {
-                foreach (var (ri, rt) in _pRing) EmitContextLine(ri, rt, false);
-                _pRing.Clear();
-            }
-            EmitContextLine(li, lineText, true);
-            _pAfterLeft = _pAfter;
-            if (_pMatchCount >= _pMax)
-            {
-                _pLimitReached = true;
-                if (_pAfterLeft <= 0) _pDone = true;
-            }
-        }
-        else if (_pAfterLeft > 0)
-        {
-            EmitContextLine(li, lineText, false);
-            _pAfterLeft--;
-        }
-        else if (_pRing is not null)
-        {
-            _pRing.Enqueue((li, lineText));
-            if (_pRing.Count > _pBefore) _pRing.Dequeue();
-        }
-    }
-
-    private void EmitContextLine(int li, string lineText, bool isMatchLine)
-    {
-        char sep = isMatchLine ? ':' : '-';
-        string prefix = "";
-        if (_pForceName) prefix = StdinLabel + sep;
-        if (_pNumbers) prefix = prefix + (li + 1) + sep;
-
-        // Non-adjacent groups are divided by the default group separator "--".
-        if (li != _pLastEmitted + 1 && _pLastEmitted >= 0 && !_pOnly)
-            WriteObject(BashRuntime.NewBashObject(GroupSeparator));
-        _pLastEmitted = li;
-
-        if (_pOnly)
-        {
-            if (isMatchLine)
-                foreach (var mv in AllMatchValues(_pRegexes, lineText))
-                    WriteObject(BashRuntime.NewBashObject(prefix + mv));
-            return;
-        }
-        WriteObject(BashRuntime.NewBashObject(prefix + lineText));
-    }
-
     /// <summary>Exit status (and the -c count), once, whether the stream ended or grep stopped it.</summary>
     private void FinishPipeline()
     {
         if (_pFinished) return;
         _pFinished = true;
-        FileSystemHelpers.SetLastExitCode(this, _pMatchCount == 0 ? 1 : 0);
-        if (_pCount && !_pQuiet)
-            WriteObject(BashRuntime.NewBashObject(_pMatchCount.ToString()));
-    }
-    /// <summary>
-    /// All non-overlapping match strings on <paramref name="lineText"/> in
-    /// left-to-right order, for grep <c>-o</c>. Gathers matches from every
-    /// pattern (multiple <c>-e</c>), orders by start index (longest wins on a
-    /// tie), and skips any that overlap an already-emitted match — matching GNU
-    /// grep, which advances past each reported match.
-    /// </summary>
-    private static IEnumerable<string> AllMatchValues(List<Regex> regexes, string lineText)
-    {
-        var found = new List<(int Index, int Length, string Value)>();
-        foreach (var rx in regexes)
-            foreach (Match m in rx.Matches(lineText))
-                if (m.Length > 0)
-                    found.Add((m.Index, m.Length, m.Value));
-
-        found.Sort((a, b) => a.Index != b.Index ? a.Index - b.Index : b.Length - a.Length);
-
-        int consumedTo = -1;
-        foreach (var f in found)
-        {
-            if (f.Index <= consumedTo) continue; // overlaps a reported match
-            yield return f.Value;
-            consumedTo = f.Index + f.Length - 1;
-        }
+        _feeder!.Flush();
+        _scanner!.End();
+        FileSystemHelpers.SetLastExitCode(this, _scanner.AnyMatch ? 0 : 1);
     }
 
-    private void RunFileMode(
-        List<Regex> regexes, List<string> fileOperands, bool recursive,
-        bool invertMatch, bool showLineNumbers, bool countOnly, bool quietMode,
-        bool filesOnly, bool filesWithoutMatch, bool noMessages, bool outputMatchOnly,
-        bool forceFileName, bool suppressFileName, int maxMatches,
-        int beforeContext, int afterContext, Func<string, bool>? recursiveFilter)
+    // ---- file mode -------------------------------------------------------------------------------
+
+    private void RunFileMode(List<string> operands, Func<string, bool>? walkFilter)
     {
-        // -l (files-with-matches) and -L (files-without-match) both only need to know whether each
-        // file has ANY match, and neither emits per-line output — share the scanning shortcut.
-        bool fileListMode = filesOnly || filesWithoutMatch;
-        // File source is built lazily so a recursive search STREAMS — each file
-        // is read and its matches emitted as the tree is walked, instead of
-        // first draining the whole tree into a list (the old AllDirectories walk
-        // went silent for 120s on a big repo and tripped the host watchdog).
-        IEnumerable<string> fileSource;
-        bool multipleFiles;
+        var plan = _plan;
+        var scanner = _scanner!;
+        bool noIgnore = BashFileSystem.DefaultFilteringDisabled();
+        var opList = operands.Count > 0 ? operands : new List<string> { "." };
+        bool nameForOperands = plan.ForceFileName || (!plan.SuppressFileName && opList.Count > 1);
+        bool nameInWalk = plan.ForceFileName || !plan.SuppressFileName;
 
-        if (recursive)
+        foreach (var raw in opList)
         {
-            string searchDir = fileOperands.Count > 0 ? fileOperands[0] : ".";
-            string resolved = SessionState.Path.GetUnresolvedProviderPathFromPSPath(searchDir);
-            if (Directory.Exists(resolved))
+            if (scanner.QuitAll) break;
+            if (raw == "-")
             {
-                // grep -r searches dot-files too — only the prune set (.git,
-                // bin, obj, node_modules, …) is skipped, so a stray .env is
-                // still searched but .git is not. PSBASH_SEARCH_NO_IGNORE turns
-                // the prune set off entirely (restores GNU grep parity).
-                fileSource = BashFileSystem.EnumerateSearchFiles(
-                    resolved,
-                    includeIgnored: BashFileSystem.DefaultFilteringDisabled(),
-                    includeHidden: true);
-                // --include / --exclude / --exclude-dir apply to the recursive directory walk
-                // (an explicitly-named file is always searched, per grep semantics).
-                if (recursiveFilter != null)
-                    fileSource = fileSource.Where(recursiveFilter);
-            }
-            else if (File.Exists(resolved))
-            {
-                fileSource = new[] { resolved };
-            }
-            else
-            {
-                fileSource = Array.Empty<string>();
-            }
-            // -r always prefixes filenames (oracle parity: the old
-            // `|| recursive` term).
-            multipleFiles = true;
-        }
-        else
-        {
-            var resolvedList = new List<string>();
-            foreach (var raw in fileOperands)
-            {
-                bool any = false;
-                foreach (var fp in FileSystemHelpers.ResolveOperandPaths(this, raw))
-                {
-                    // The null device (/dev/null, NUL) is an empty file, not a missing one.
-                    if (File.Exists(fp) || Directory.Exists(fp) || FileSystemHelpers.IsNullDevice(fp))
-                    {
-                        resolvedList.Add(fp);
-                        any = true;
-                    }
-                }
-                if (!any)
-                {
-                    // -s / --no-messages suppresses the diagnostic but still sets the failure code.
-                    if (!noMessages)
-                    {
-                        string normalized = raw.Replace('\\', '/');
-                        FileSystemHelpers.WriteBashError(this, $"grep: {normalized}: No such file or directory");
-                    }
-                    _operandReadError = true;
-                    FileSystemHelpers.SetLastExitCode(this, 2);
-                }
-            }
-            fileSource = resolvedList;
-            multipleFiles = resolvedList.Count > 1 || forceFileName;
-        }
-
-        var matchedFiles = new List<string>();
-        var perFileCounts = new Dictionary<string, int>();
-        // Files actually visited, in order — used by the multi-file count pass
-        // below (replaces the old materialized filePaths list).
-        var scanned = new List<string>();
-        int totalMatchCount = 0;
-        // Binary files are skipped by default (NUL probe) — the same escape hatch
-        // (PSBASH_SEARCH_NO_IGNORE) that disables dir pruning also searches them.
-        bool skipBinary = !BashFileSystem.DefaultFilteringDisabled();
-        // Streaming fast path: with no context (-A/-B/-C) and no -m cap, every
-        // matching line emits the instant it is read — nothing is buffered, so a
-        // 2 GB log streams in constant memory. Context / -m need look-back or a
-        // global cap, so they fall back to a per-file pass (still a STREAMED read,
-        // still binary-skipped — only those rarer cases hold one file in memory).
-        bool needsBuffer = _contextRequested || beforeContext > 0 || afterContext > 0 || maxMatches != int.MaxValue;
-
-        foreach (var filePath in fileSource)
-        {
-            if (totalMatchCount >= maxMatches) break;
-            scanned.Add(filePath);
-            // Binary files are skipped entirely (not counted, not listed) — probe
-            // once here so a binary never lands in perFileCounts as a noisy ":0".
-            if (skipBinary && BashFileSystem.IsBinary(filePath)) continue;
-            bool showFile = multipleFiles && !suppressFileName;
-
-            if (!needsBuffer)
-            {
-                int fileMatches = 0;
-                int lineNum = 0;
-                foreach (var line in ReadFileLinesStream(filePath))
-                {
-                    lineNum++;
-                    var mo = MatchLine(regexes, line, invertMatch, out bool isMatch);
-                    if (!isMatch) continue;
-                    fileMatches++;
-                    if (quietMode) { FileSystemHelpers.SetLastExitCode(this, 0); return; }
-                    if (fileListMode) { matchedFiles.Add(filePath); break; }
-                    if (countOnly) continue;
-                    if (outputMatchOnly)
-                    {
-                        // -o: one output line per non-overlapping match (bash), not first only.
-                        foreach (var mv in AllMatchValues(regexes, line))
-                            EmitGrepLine(filePath, lineNum, line, mv, showFile, showLineNumbers);
-                        continue;
-                    }
-                    EmitGrepLine(filePath, lineNum, line, line, showFile, showLineNumbers);
-                }
-                totalMatchCount += fileMatches;
-                perFileCounts[filePath] = fileMatches;
+                SearchStdinOperand(nameForOperands);
                 continue;
             }
 
-            // --- context / -m fallback: this file's lines, read by streaming. ---
-            var lines = ReadFileLinesArray(filePath);
-            if (lines == null) continue;
-
-            var matchIndices = new List<int>();
-            var matchObjects = new Dictionary<int, Match>();
-            for (int li = 0; li < lines.Length; li++)
+            bool existed = false;
+            foreach (var fp in FileSystemHelpers.ResolveOperandPaths(this, raw))
             {
-                var mo = MatchLine(regexes, lines[li], invertMatch, out bool isMatch);
-                if (isMatch)
+                if (scanner.QuitAll) break;
+                if (Directory.Exists(fp))
                 {
-                    matchIndices.Add(li);
-                    if (mo != null) matchObjects[li] = mo;
-                }
-            }
-
-            int fileMatchCount = matchIndices.Count;
-            totalMatchCount += fileMatchCount;
-            perFileCounts[filePath] = fileMatchCount;
-
-            if (quietMode && fileMatchCount > 0)
-            {
-                FileSystemHelpers.SetLastExitCode(this, 0);
-                return;
-            }
-
-            if (fileListMode)
-            {
-                if (fileMatchCount > 0) matchedFiles.Add(filePath);
-                continue;
-            }
-
-            if (countOnly) continue;
-
-            // Determine emit set (matches + context, respecting -m).
-            var emitLines = new SortedSet<int>();
-            int emitCount = 0;
-            foreach (var mi in matchIndices)
-            {
-                if (emitCount >= maxMatches) break;
-                int start = Math.Max(0, mi - beforeContext);
-                int end = Math.Min(lines.Length - 1, mi + afterContext);
-                for (int li = start; li <= end; li++)
-                {
-                    emitLines.Add(li);
-                }
-                emitCount++;
-            }
-
-            var matchSet = new HashSet<int>(matchIndices);
-            bool contextActive = _contextRequested || beforeContext > 0 || afterContext > 0;
-            int prevEmitted = -2;
-            foreach (var li in emitLines)
-            {
-                bool isMatchLine = matchSet.Contains(li);
-                if (totalMatchCount > maxMatches && !isMatchLine) break;
-
-                string line = lines[li];
-                int lineNum = li + 1;
-                // GNU: "--" divides non-adjacent groups, also across files.
-                if (contextActive && !outputMatchOnly && li != prevEmitted + 1 && (prevEmitted >= 0 || _contextGroupEmitted))
-                    WriteObject(BashRuntime.NewBashObject(GroupSeparator));
-                prevEmitted = li;
-                if (contextActive) _contextGroupEmitted = true;
-
-                if (outputMatchOnly)
-                {
-                    // -o: emit every non-overlapping match (bash). Context lines
-                    // (non-match) produce no -o output, matching GNU grep.
-                    if (isMatchLine)
-                        foreach (var mv in AllMatchValues(regexes, line))
-                            EmitGrepLine(filePath, lineNum, line, mv, showFile, showLineNumbers);
+                    existed = true;
+                    if (plan.Directories == GrepDirectories.Recurse)
+                    {
+                        // grep -r searches dot-files too — only the prune set (.git, bin, obj, node_modules, …)
+                        // is skipped; PSBASH_SEARCH_NO_IGNORE turns the prune set off (GNU parity).
+                        IEnumerable<string> files = BashFileSystem.EnumerateSearchFiles(
+                            fp, includeIgnored: noIgnore, includeHidden: true);
+                        // --include / --exclude / --exclude-dir apply to the recursive directory walk
+                        // (an explicitly-named file is always searched, per grep semantics).
+                        if (walkFilter != null) files = files.Where(walkFilter);
+                        foreach (var f in files)
+                        {
+                            if (scanner.QuitAll) break;
+                            SearchFile(f, nameInWalk, walked: true, noIgnore);
+                        }
+                    }
+                    else if (plan.Directories == GrepDirectories.Read)
+                    {
+                        if (!plan.NoMessages)
+                            FileSystemHelpers.WriteBashError(this, $"grep: {raw.Replace('\\', '/')}: Is a directory");
+                        _operandReadError = true;
+                    }
                     continue;
                 }
-                EmitGrepLine(filePath, lineNum, line, line, showFile, showLineNumbers, isMatchLine ? ':' : '-');
-            }
-        }
-
-        if (quietMode)
-        {
-            FileSystemHelpers.SetLastExitCode(this, _operandReadError ? 2 : 1);
-            return;
-        }
-
-        FileSystemHelpers.SetLastExitCode(this, _operandReadError ? 2 : totalMatchCount == 0 ? 1 : 0);
-
-        if (filesOnly)
-        {
-            foreach (var fp in matchedFiles)
-            {
-                WriteObject(BashRuntime.NewBashObject(fp));
-            }
-            return;
-        }
-
-        if (filesWithoutMatch)
-        {
-            // -L: list the (non-binary) files that produced NO match, in scan order. perFileCounts
-            // holds only processed text files; a matched file has a positive count.
-            foreach (var fp in scanned)
-            {
-                if (perFileCounts.TryGetValue(fp, out int n) && n == 0)
-                    WriteObject(BashRuntime.NewBashObject(fp));
-            }
-            return;
-        }
-
-        if (countOnly)
-        {
-            if (multipleFiles)
-            {
-                foreach (var fp in scanned)
+                if (File.Exists(fp) || FileSystemHelpers.IsNullDevice(fp))
                 {
-                    if (perFileCounts.TryGetValue(fp, out int n))
-                    {
-                        WriteObject(BashRuntime.NewBashObject($"{fp}:{n}"));
-                    }
+                    existed = true;
+                    if (plan.Devices == GrepDevices.Skip && IsDeviceFile(fp)) continue;
+                    SearchFile(fp, nameForOperands, walked: false, noIgnore);
                 }
             }
-            else
+            if (!existed)
             {
-                WriteObject(BashRuntime.NewBashObject(totalMatchCount.ToString()));
+                // -s / --no-messages suppresses the diagnostic but still sets the failure code.
+                if (!plan.NoMessages)
+                    FileSystemHelpers.WriteBashError(this, $"grep: {raw.Replace('\\', '/')}: No such file or directory");
+                _operandReadError = true;
             }
         }
+
+        int exit = scanner.QuitAll ? 0 : _operandReadError ? 2 : scanner.AnyMatch ? 0 : 1;
+        FileSystemHelpers.SetLastExitCode(this, exit);
+    }
+
+    private static bool IsDeviceFile(string path)
+    {
+        if (FileSystemHelpers.IsNullDevice(path)) return true;
+        try { return (new FileInfo(path).Attributes & FileAttributes.Device) != 0; }
+        catch { return false; }
+    }
+
+    /// <summary>The <c>-</c> operand: the pipeline records collected in <see cref="ProcessRecord"/>.</summary>
+    private void SearchStdinOperand(bool showName)
+    {
+        var scanner = _scanner!;
+        scanner.Begin(_plan.Label ?? StdinLabel, showName, startBinary: false, sizeHint: -1);
+        var feeder = new GrepStdinFeeder(scanner, _plan.NullData);
+        foreach (var (text, unterminated) in _stdinBuffer)
+            if (!feeder.Add(text, unterminated, null)) break;
+        if (!scanner.SourceDone) feeder.Flush();
+        scanner.End();
+    }
+
+    /// <summary>
+    /// Search one file. The binary probe (a NUL in the first 96 KiB) decides how a match is reported; files
+    /// found by the recursive WALK that are binary stay skipped silently (ps-bash's default recursive prune —
+    /// <c>PSBASH_SEARCH_NO_IGNORE</c> or <c>-a</c> searches them).
+    /// </summary>
+    private void SearchFile(string path, bool showName, bool walked, bool noIgnore)
+    {
+        var scanner = _scanner!;
+        var plan = _plan;
+        bool failed = false;
+        try
+        {
+            bool binary = false;
+            if (plan.Binary != GrepBinaryMode.Text && !plan.NullData)
+            {
+                binary = walked ? BashFileSystem.IsBinary(path) : GrepIo.ProbeNul(path);
+                if (walked && binary && !noIgnore) return;
+            }
+
+            long size = -1;
+            if (plan.InitialTab)
+            {
+                try { size = FileSystemHelpers.IsNullDevice(path) ? 0 : new FileInfo(path).Length; } catch { size = -1; }
+            }
+
+            scanner.Begin(path, showName, binary, size, typed: true);
+            foreach (var (text, term) in GrepIo.ReadRecords(path, plan.NullData, exact: plan.ByteOffset))
+                if (!scanner.Feed(text, term, null)) break;
+        }
+        catch (Exception ex)
+        {
+            if (FileSystemHelpers.IsPipelineStop(ex)) throw;
+            EmitGrepReadError(path, ex);
+            failed = true;
+        }
+        if (!failed) scanner.End();
     }
 
     /// <summary>
@@ -1079,43 +871,60 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
     }
 
     /// <summary>
-    /// BRE → .NET escape: escape ( ) { } | + ? when not already preceded by a
-    /// backslash. Mirrors the oracle's <c>-replace</c> chain with
-    /// <c>(?&lt;!\\)\(</c> etc.
-    /// </summary>
-    /// <summary>
     /// The grep regex-assembly ladder, shared by the cmdlet and the fused-pipeline
     /// streaming stage so the two can never drift: per pattern, fixed → escape,
-    /// basic (BRE) → <see cref="EscapeBreMetas"/>, extended → verbatim; then the
+    /// basic (BRE) → <see cref="EscapeBreMetas"/>, extended → verbatim, perl → <see cref="GrepPcre"/>; then the
     /// optional word (<c>\b…\b</c>) and whole-line (<c>^(?:…)$</c>) wraps;
-    /// <c>-i</c> → <see cref="RegexOptions.IgnoreCase"/>. Returns false with
+    /// <c>-i</c> → <see cref="RegexOptions.IgnoreCase"/>; <c>-z</c> → <see cref="RegexOptions.Singleline"/> for
+    /// BRE/ERE (a record spans lines and <c>.</c> matches the newline; PCRE keeps its own dot). Returns false with
     /// <paramref name="invalidMessage"/> set (no error emission) on the first
     /// pattern that fails to compile — the caller decides how to report it.
     /// </summary>
     internal static bool TryBuildRegexes(
         IReadOnlyList<string> patterns, bool fixedString, bool extendedRegex,
         bool wholeWord, bool lineRegexp, bool ignoreCase,
-        out List<Regex> regexes, out string? invalidMessage)
+        out List<Regex> regexes, out string? invalidMessage,
+        bool perl = false, bool nullData = false)
     {
         regexes = new List<Regex>();
         invalidMessage = null;
         var opts = ignoreCase ? RegexOptions.IgnoreCase : RegexOptions.None;
+        if (nullData && !perl && !fixedString) opts |= RegexOptions.Singleline;
         foreach (var pat in patterns)
         {
-            // POSIX classes first, before BRE escaping: the rewrite introduces regex
-            // metacharacters (\s, \w, \p{P}) that must NOT then be escaped as literals.
-            // -F is a literal search, so it keeps `[[:digit:]]` verbatim.
-            string rp = fixedString ? Regex.Escape(pat)
-                      : !extendedRegex ? EscapeBreMetas(BashRuntime.TranslatePosixClasses(pat))
-                      : BashRuntime.TranslatePosixClasses(pat);
-            if (wholeWord) rp = "\\b" + rp + "\\b";
-            if (lineRegexp) rp = "^(?:" + rp + ")$";
+            string rp;
+            if (perl)
+            {
+                if (!GrepPcre.TryTranslate(BashRuntime.TranslatePosixClasses(pat), out rp, out var perr))
+                {
+                    invalidMessage = perr;
+                    return false;
+                }
+                if (wholeWord) rp = @"(?<!\w)(?:" + rp + @")(?!\w)";
+                if (lineRegexp) rp = "^(?:" + rp + ")$";
+            }
+            else
+            {
+                // POSIX classes first, before BRE escaping: the rewrite introduces regex
+                // metacharacters (\s, \w, \p{P}) that must NOT then be escaped as literals.
+                // -F is a literal search, so it keeps `[[:digit:]]` verbatim.
+                rp = fixedString ? Regex.Escape(pat)
+                   : !extendedRegex ? EscapeBreMetas(BashRuntime.TranslatePosixClasses(pat))
+                   : BashRuntime.TranslatePosixClasses(pat);
+                if (wholeWord) rp = "\\b" + rp + "\\b";
+                if (lineRegexp) rp = "^(?:" + rp + ")$";
+            }
             try { regexes.Add(new Regex(rp, opts)); }
             catch (ArgumentException ex) { invalidMessage = ex.Message; return false; }
         }
         return true;
     }
 
+    /// <summary>
+    /// BRE → .NET escape: escape ( ) { } | + ? when not already preceded by a
+    /// backslash. Mirrors the oracle's <c>-replace</c> chain with
+    /// <c>(?&lt;!\\)\(</c> etc.
+    /// </summary>
     internal static string EscapeBreMetas(string pat)
     {
         var escapeChars = new[] { '(', ')', '{', '}', '|', '+', '?' };
@@ -1128,8 +937,8 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
 
     /// <summary>
     /// First regex that matches <paramref name="line"/> (null if none), with
-    /// invert applied to <paramref name="isMatch"/>. Shared by the streaming fast
-    /// path and the context/-m fallback so match semantics stay identical.
+    /// invert applied to <paramref name="isMatch"/>. Shared with the fused-pipeline core so match
+    /// semantics stay identical.
     /// </summary>
     internal static Match? MatchLine(List<Regex> regexes, string line, bool invertMatch, out bool isMatch)
     {
@@ -1142,81 +951,6 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
         }
         isMatch = invertMatch ? !matched : matched;
         return mo;
-    }
-
-    /// <summary>Build the <c>file:line:</c> prefix and emit one GrepMatch.</summary>
-    private void EmitGrepLine(string filePath, int lineNum, string fullLine, string outputText,
-        bool showFile, bool showLineNumbers, char sep = ':')
-    {
-        string bashText;
-        if (showLineNumbers)
-        {
-            string prefix = showFile ? (filePath + sep) : "";
-            bashText = prefix + lineNum + sep + outputText;
-        }
-        else if (showFile)
-        {
-            bashText = filePath + sep + outputText;
-        }
-        else
-        {
-            bashText = outputText;
-        }
-        WriteObject(BuildGrepMatch(filePath, lineNum, fullLine, bashText));
-    }
-
-    /// <summary>
-    /// Stream a (known-text) file's lines for the fast path. The file is opened
-    /// lazily on first enumeration; an IO error there emits the grep-style message
-    /// and ends the stream cleanly. Binary skipping is done by the caller's probe.
-    /// </summary>
-    private IEnumerable<string> ReadFileLinesStream(string path)
-    {
-        IEnumerator<string>? it = null;
-        try
-        {
-            while (true)
-            {
-                string current;
-                try
-                {
-                    it ??= BashFileSystem.ReadLines(path).GetEnumerator();
-                    if (!it.MoveNext()) yield break;
-                    current = it.Current;
-                }
-                catch (Exception ex)
-                {
-                    if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-                    EmitGrepReadError(path, ex);
-                    yield break;
-                }
-                yield return current;
-            }
-        }
-        finally
-        {
-            it?.Dispose();
-        }
-    }
-
-    /// <summary>
-    /// Materialize a (known-text) file's lines for the context / -m fallback —
-    /// still a streamed read. Returns null on IO error (message emitted).
-    /// </summary>
-    private string[]? ReadFileLinesArray(string path)
-    {
-        try
-        {
-            var list = new List<string>();
-            foreach (var l in BashFileSystem.ReadLines(path)) list.Add(l);
-            return list.ToArray();
-        }
-        catch (Exception ex)
-        {
-            if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-            EmitGrepReadError(path, ex);
-            return null;
-        }
     }
 
     private void EmitGrepReadError(string path, Exception ex)

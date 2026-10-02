@@ -271,6 +271,11 @@ public sealed class InvokeBashFusedPipelineCommand : PSCmdlet
         }
         Flush(sb);
 
+        // A stage's stderr (grep's "binary file matches") is reported once its output is complete.
+        foreach (var stage in stages)
+            if (stage is ILineStreamDiagnostics d)
+                foreach (var msg in d.Diagnostics) FileSystemHelpers.WriteStderr(this, msg);
+
         // Exit code is valid only after the chain is fully enumerated (grep sets it
         // during iteration). Propagate the terminal stage's code, like a real pipe.
         FileSystemHelpers.SetLastExitCode(this, stages[^1].ExitCode);

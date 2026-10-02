@@ -427,7 +427,7 @@
     {
       "flag": "-prune",
       "desc": "do not descend into matched directories",
-      "detail": "When a matched entry is a directory, do not recurse into it (its contents are skipped). The directory itself is still listed. Note: the classic exclude idiom (-path X -prune -o -print) needs the -o operator, which ps-bash does not support yet, so -prune is currently only useful for stopping descent.",
+      "detail": "When a matched entry is a directory, do not recurse into it (its contents are skipped). The directory itself is still listed. The classic exclude idiom works: find . -path X -prune -o -print.",
       "examples": [
         "find . -name .git -prune"
       ]
@@ -438,6 +438,312 @@
       "detail": "Emit (or act on) the entries inside a directory before the directory itself. Implied by -delete so that directories are emptied before removal.",
       "examples": [
         "find . -depth -type d"
+      ]
+    },
+    {
+      "flag": "-perm",
+      "desc": "match permission bits",
+      "arg": "MODE",
+      "detail": "MODE exact, -MODE all of the bits, /MODE any of the bits; octal or symbolic (u=rw,g=r). On Windows the mode is synthesised (0644 files, 0755 dirs/executables).",
+      "examples": [
+        "find . -perm 644",
+        "find . -perm -u=x"
+      ]
+    },
+    {
+      "flag": "-user",
+      "desc": "owned by a user",
+      "arg": "NAME|UID",
+      "detail": "Match files owned by NAME (or numeric uid). Windows maps the owner SID to the account name.",
+      "examples": [
+        "find . -user root"
+      ]
+    },
+    {
+      "flag": "-group",
+      "desc": "owned by a group",
+      "arg": "NAME|GID",
+      "detail": "Match files whose group is NAME (or numeric gid).",
+      "examples": [
+        "find . -group staff"
+      ]
+    },
+    {
+      "flag": "-uid",
+      "desc": "owner uid comparison",
+      "arg": "[+-]N",
+      "detail": "Numeric owner id; +N greater, -N less.",
+      "examples": [
+        "find . -uid +1000"
+      ]
+    },
+    {
+      "flag": "-gid",
+      "desc": "group gid comparison",
+      "arg": "[+-]N",
+      "detail": "Numeric group id; +N greater, -N less.",
+      "examples": [
+        "find . -gid 0"
+      ]
+    },
+    {
+      "flag": "-nouser",
+      "desc": "owner has no account",
+      "detail": "Match files whose owner id has no user entry.",
+      "examples": [
+        "find . -nouser"
+      ]
+    },
+    {
+      "flag": "-nogroup",
+      "desc": "group has no entry",
+      "detail": "Match files whose group id has no group entry.",
+      "examples": [
+        "find . -nogroup"
+      ]
+    },
+    {
+      "flag": "-printf",
+      "desc": "print with a format",
+      "arg": "FORMAT",
+      "detail": "GNU -printf: %p %f %h %P %H %s %m %M %u %g %U %G %y %Y %l %d %n %i %k %b %S %t %T@ %Tk and friends; flags, width and precision (%-10p, %.3f). No newline is added; \\n \\t \\\\ \\NNN \\c are escapes.",
+      "examples": [
+        "find . -type f -printf '%s %p\\n'"
+      ]
+    },
+    {
+      "flag": "-fprint",
+      "desc": "print paths into a file",
+      "arg": "FILE",
+      "detail": "Like -print but writes to FILE (truncated when find starts; /dev/stdout and /dev/stderr work).",
+      "examples": [
+        "find . -name '*.c' -fprint list.txt"
+      ]
+    },
+    {
+      "flag": "-fprint0",
+      "desc": "NUL-terminated paths into a file",
+      "arg": "FILE",
+      "detail": "Like -print0 but writes to FILE.",
+      "examples": [
+        "find . -fprint0 list.bin"
+      ]
+    },
+    {
+      "flag": "-fprintf",
+      "desc": "-printf into a file",
+      "arg": "FILE FORMAT",
+      "detail": "Like -printf but writes to FILE.",
+      "examples": [
+        "find . -fprintf out.txt '%p\\n'"
+      ]
+    },
+    {
+      "flag": "-ls",
+      "desc": "ls -dils style listing",
+      "detail": "Print inode, blocks, mode, links, owner, group, size, date and name for each match.",
+      "examples": [
+        "find . -maxdepth 1 -ls"
+      ]
+    },
+    {
+      "flag": "-fls",
+      "desc": "-ls into a file",
+      "arg": "FILE",
+      "detail": "Like -ls but writes to FILE.",
+      "examples": [
+        "find . -fls listing.txt"
+      ]
+    },
+    {
+      "flag": "-newerXY",
+      "desc": "newer by chosen timestamps",
+      "arg": "FILE",
+      "detail": "Compare timestamp X of the entry (a access, B birth, c change, m modify) with timestamp Y of FILE; Y = t treats FILE as a date string.",
+      "examples": [
+        "find . -newermt 2024-01-01"
+      ]
+    },
+    {
+      "flag": "-amin",
+      "desc": "accessed N minutes ago",
+      "arg": "[+-]N",
+      "detail": "Access-time minutes; +N older, -N newer.",
+      "examples": [
+        "find . -amin -10"
+      ]
+    },
+    {
+      "flag": "-cmin",
+      "desc": "status changed N minutes ago",
+      "arg": "[+-]N",
+      "detail": "Change-time minutes; +N older, -N newer.",
+      "examples": [
+        "find . -cmin -10"
+      ]
+    },
+    {
+      "flag": "-mmin",
+      "desc": "modified N minutes ago",
+      "arg": "[+-]N",
+      "detail": "Modification-time minutes; +N older, -N newer.",
+      "examples": [
+        "find . -mmin -5"
+      ]
+    },
+    {
+      "flag": "-atime",
+      "desc": "accessed N days ago",
+      "arg": "[+-]N",
+      "detail": "Access-time days.",
+      "examples": [
+        "find . -atime +30"
+      ]
+    },
+    {
+      "flag": "-ctime",
+      "desc": "status changed N days ago",
+      "arg": "[+-]N",
+      "detail": "Change-time days.",
+      "examples": [
+        "find . -ctime -1"
+      ]
+    },
+    {
+      "flag": "-daystart",
+      "desc": "measure days from midnight",
+      "detail": "Measure -mtime/-atime/-ctime/-mmin from the start of today.",
+      "examples": [
+        "find . -daystart -mtime 0"
+      ]
+    },
+    {
+      "flag": "-links",
+      "desc": "link count",
+      "arg": "[+-]N",
+      "detail": "Match by hard-link count.",
+      "examples": [
+        "find . -links +1"
+      ]
+    },
+    {
+      "flag": "-inum",
+      "desc": "inode number",
+      "arg": "[+-]N",
+      "detail": "Match by inode number.",
+      "examples": [
+        "find . -inum 1234"
+      ]
+    },
+    {
+      "flag": "-samefile",
+      "desc": "same file as NAME",
+      "arg": "NAME",
+      "detail": "Match entries that are the same file (same inode) as NAME.",
+      "examples": [
+        "find . -samefile a.txt"
+      ]
+    },
+    {
+      "flag": "-executable",
+      "desc": "executable by this user",
+      "detail": "Match files the current user can execute (search permission for directories).",
+      "examples": [
+        "find . -type f -executable"
+      ]
+    },
+    {
+      "flag": "-readable",
+      "desc": "readable by this user",
+      "detail": "Match files the current user can read.",
+      "examples": [
+        "find . -readable"
+      ]
+    },
+    {
+      "flag": "-writable",
+      "desc": "writable by this user",
+      "detail": "Match files the current user can write.",
+      "examples": [
+        "find . -writable"
+      ]
+    },
+    {
+      "flag": "-lname",
+      "desc": "symlink target glob",
+      "arg": "PATTERN",
+      "detail": "Match symbolic links whose target matches PATTERN (-ilname ignores case).",
+      "examples": [
+        "find . -lname '*.so'"
+      ]
+    },
+    {
+      "flag": "-wholename",
+      "desc": "match whole path",
+      "arg": "PATTERN",
+      "detail": "Same as -path (-iwholename ignores case).",
+      "examples": [
+        "find . -wholename './src/*'"
+      ]
+    },
+    {
+      "flag": "-regextype",
+      "desc": "regex dialect for -regex",
+      "arg": "TYPE",
+      "detail": "emacs (default), posix-basic, posix-extended, egrep, awk, sed, grep ... translated to .NET regular expressions.",
+      "examples": [
+        "find . -regextype posix-extended -regex '.*\\.(c|h)'"
+      ]
+    },
+    {
+      "flag": "-quit",
+      "desc": "stop at the first reach",
+      "detail": "Exit immediately when evaluated.",
+      "examples": [
+        "find . -name x -print -quit"
+      ]
+    },
+    {
+      "flag": "-ok",
+      "desc": "-exec with confirmation",
+      "arg": "CMD {} ;",
+      "detail": "Ask on stderr before running each command; answers are read from standard input (y/Y runs it).",
+      "examples": [
+        "find . -name '*.bak' -ok rm {} ;"
+      ]
+    },
+    {
+      "flag": "-okdir",
+      "desc": "-execdir with confirmation",
+      "arg": "CMD {} ;",
+      "detail": "Like -ok but runs in the entry's directory.",
+      "examples": [
+        "find . -ok echo {} ;"
+      ]
+    },
+    {
+      "flag": "-execdir",
+      "desc": "run a command in the entry's directory",
+      "arg": "CMD {} ;",
+      "detail": "Like -exec but the command runs in the directory containing the match, with {} = ./name; + batches per directory.",
+      "examples": [
+        "find . -name '*.sh' -execdir chmod +x {} +"
+      ]
+    },
+    {
+      "flag": "-xdev",
+      "desc": "stay on one file system",
+      "detail": "Accepted; this walk never crosses mount points differently (no-op).",
+      "examples": [
+        "find . -xdev"
+      ]
+    },
+    {
+      "flag": "-follow",
+      "desc": "follow symbolic links",
+      "detail": "Same as -L.",
+      "examples": [
+        "find . -follow"
       ]
     }
   ],
@@ -555,6 +861,69 @@
     {
       "flag": "-m",
       "desc": "max count"
+    },
+    {
+      "flag": "-P",
+      "desc": "perl-compatible regex",
+      "detail": "PCRE patterns mapped onto the .NET engine: lookaround, \\K, \\Q..\\E, possessive quantifiers, named groups. Recursion, subroutine calls, branch reset and backtracking verbs are refused (exit 2). One pattern only."
+    },
+    {
+      "flag": "-z",
+      "desc": "NUL-separated input and output records"
+    },
+    {
+      "flag": "-Z",
+      "desc": "NUL after each file name"
+    },
+    {
+      "flag": "-a",
+      "desc": "treat binary files as text"
+    },
+    {
+      "flag": "-I",
+      "desc": "skip binary files (binary-files=without-match)"
+    },
+    {
+      "flag": "--binary-files",
+      "desc": "binary file handling",
+      "arg": "binary|text|without-match"
+    },
+    {
+      "flag": "-b",
+      "desc": "byte offset of each line"
+    },
+    {
+      "flag": "-T",
+      "desc": "align content with a tab after the prefix"
+    },
+    {
+      "flag": "-d",
+      "desc": "directories action",
+      "arg": "read|skip|recurse"
+    },
+    {
+      "flag": "-D",
+      "desc": "devices action",
+      "arg": "read|skip"
+    },
+    {
+      "flag": "--label",
+      "desc": "name to show for standard input",
+      "arg": "LABEL"
+    },
+    {
+      "flag": "--group-separator",
+      "desc": "line between context groups",
+      "arg": "SEP"
+    },
+    {
+      "flag": "--no-group-separator",
+      "desc": "no line between context groups"
+    },
+    {
+      "flag": "--color",
+      "desc": "colour matches",
+      "arg": "never|always|auto"
     }
   ],
   "gzip": [
@@ -999,6 +1368,186 @@
     {
       "flag": "--hidden",
       "desc": "include dotfiles"
+    },
+    {
+      "flag": "-e",
+      "desc": "pattern (repeatable)"
+    },
+    {
+      "flag": "-f",
+      "desc": "patterns from file"
+    },
+    {
+      "flag": "-S",
+      "desc": "smart case"
+    },
+    {
+      "flag": "-s",
+      "desc": "case sensitive"
+    },
+    {
+      "flag": "-x",
+      "desc": "line regexp"
+    },
+    {
+      "flag": "-u",
+      "desc": "unrestricted (-uu: hidden too)"
+    },
+    {
+      "flag": "-t",
+      "desc": "search only this file type"
+    },
+    {
+      "flag": "-T",
+      "desc": "exclude this file type"
+    },
+    {
+      "flag": "--type-list",
+      "desc": "list file types"
+    },
+    {
+      "flag": "--type-add",
+      "desc": "define a file type (name:glob)"
+    },
+    {
+      "flag": "--type-clear",
+      "desc": "clear a file type"
+    },
+    {
+      "flag": "-m",
+      "desc": "max matching lines per file"
+    },
+    {
+      "flag": "-q",
+      "desc": "quiet: exit status only"
+    },
+    {
+      "flag": "-H",
+      "desc": "print file names"
+    },
+    {
+      "flag": "-I",
+      "desc": "no file names"
+    },
+    {
+      "flag": "-r",
+      "desc": "replace matches ($1, ${name})"
+    },
+    {
+      "flag": "--passthru",
+      "desc": "print every line"
+    },
+    {
+      "flag": "--column",
+      "desc": "column numbers"
+    },
+    {
+      "flag": "--vimgrep",
+      "desc": "vim-style file:line:col:text"
+    },
+    {
+      "flag": "-b",
+      "desc": "byte offsets"
+    },
+    {
+      "flag": "-0",
+      "desc": "NUL after file names"
+    },
+    {
+      "flag": "--files",
+      "desc": "list searchable files"
+    },
+    {
+      "flag": "--sort",
+      "desc": "sort by path|modified|accessed|created"
+    },
+    {
+      "flag": "--sortr",
+      "desc": "reverse sort"
+    },
+    {
+      "flag": "-d",
+      "desc": "max directory depth"
+    },
+    {
+      "flag": "-L",
+      "desc": "follow symlinks"
+    },
+    {
+      "flag": "--json",
+      "desc": "JSON lines output"
+    },
+    {
+      "flag": "--stats",
+      "desc": "print statistics"
+    },
+    {
+      "flag": "-z",
+      "desc": "search gzip files"
+    },
+    {
+      "flag": "-a",
+      "desc": "search binary files as text"
+    },
+    {
+      "flag": "-E",
+      "desc": "text encoding"
+    },
+    {
+      "flag": "-P",
+      "desc": "PCRE2 regex (mapped to .NET)"
+    },
+    {
+      "flag": "-U",
+      "desc": "multiline"
+    },
+    {
+      "flag": "--multiline-dotall",
+      "desc": "dot matches newline"
+    },
+    {
+      "flag": "-p",
+      "desc": "pretty: color, heading, line numbers"
+    },
+    {
+      "flag": "--color",
+      "desc": "never|auto|always|ansi"
+    },
+    {
+      "flag": "--colors",
+      "desc": "color spec type:attr:value"
+    },
+    {
+      "flag": "--trim",
+      "desc": "trim leading whitespace"
+    },
+    {
+      "flag": "--iglob",
+      "desc": "case-insensitive glob"
+    },
+    {
+      "flag": "--count-matches",
+      "desc": "count individual matches"
+    },
+    {
+      "flag": "--files-without-match",
+      "desc": "files without a match"
+    },
+    {
+      "flag": "--heading",
+      "desc": "group by file"
+    },
+    {
+      "flag": "--no-heading",
+      "desc": "path on every line"
+    },
+    {
+      "flag": "--no-ignore",
+      "desc": "ignore no files"
+    },
+    {
+      "flag": "-j",
+      "desc": "threads (accepted)"
     }
   ],
   "rm": [
@@ -1058,6 +1607,26 @@
     {
       "flag": "-e",
       "desc": "expression"
+    },
+    {
+      "flag": "-f",
+      "desc": "script file"
+    },
+    {
+      "flag": "-s",
+      "desc": "separate files"
+    },
+    {
+      "flag": "-z",
+      "desc": "NUL-separated records"
+    },
+    {
+      "flag": "-l",
+      "desc": "line wrap length for l"
+    },
+    {
+      "flag": "--debug",
+      "desc": "annotate program execution"
     }
   ],
   "seq": [

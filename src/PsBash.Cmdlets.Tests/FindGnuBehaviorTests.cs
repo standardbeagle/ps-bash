@@ -88,7 +88,7 @@ public class FindGnuBehaviorTests : IClassFixture<SharedPwshFixture>, IDisposabl
         Find(". '-mindepth' -1").AssertFailed(1, "Expected a positive decimal integer argument to -mindepth");
         Find(". '-type' x").AssertFailed(1, "Unknown argument to -type: x");
         Find(". '-bogus'").AssertFailed(1, "unknown predicate `-bogus'");
-        Find(". '-perm' 644").AssertFailed(1, "unsupported predicate");
+        Find(". '-used' 1").AssertFailed(1, "unsupported predicate");
     }
 
     [Fact]

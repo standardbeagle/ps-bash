@@ -82,17 +82,23 @@ public class InvokeBashRgCommandTests : IDisposable, IClassFixture<SharedPwshFix
 
     [Theory]
     [InlineData("--color=auto")]
-    [InlineData("--color=always")]
     [InlineData("--color never")]   // rg's WHEN is a required value (there is no --colour)
     public void Rg_ColorFlag_AcceptedAndIgnored_InFallback(string colorFlag)
     {
         // Pipeline mode forces the internal fallback (native rg can't read
         // pipeline objects). The common `alias rg='rg --color=auto'` must not
         // make --color=auto the search pattern. The flag is swallowed; the
-        // real pattern still matches.
+        // real pattern still matches (auto = no colour off a real terminal).
         var lines = RunLines($"'apple','banana' | Invoke-BashRg {colorFlag} banana");
         Assert.Single(lines);
         Assert.Equal("banana", lines[0]);
+    }
+
+    [Fact]
+    public void Rg_ColorAlways_HighlightsTheMatch_InFallback()
+    {
+        var lines = RunLines("'apple','banana' | Invoke-BashRg --color=always banana");
+        Assert.Equal(new[] { "\u001b[0m\u001b[1m\u001b[31mbanana\u001b[0m" }, lines);
     }
 
     [Fact]
