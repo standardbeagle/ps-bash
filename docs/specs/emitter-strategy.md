@@ -198,11 +198,9 @@ any argument word whose `WordPart.Literal` parts contain `,`:
 - word mixing the comma literal with variables / quoted parts (`$x,y`, `a,"b"`)
   → flattened to ONE double-quoted string (`"$env:x,y"`);
 - flag-shaped words keep the historical `"-F,"` double-quote wrap above;
-- a plain literal+glob word (`ls *.c,x`, `cat f*,g`) becomes ONE single-quoted pattern
-  (`'*.c,x'`): the comma stays literal as in bash, and globbing still happens because the
-  mapped cmdlets expand their glob operands from the literal string (no match keeps the
-  literal word, nullglob-off). Glob words mixing in variables/escapes/quotes keep the bare
-  emission;
+- a glob word (`ls *.c,x`, `cat f*,g`) is expanded by the shell before the command runs (see
+  "Pathname expansion" in §4): the pattern is ONE single-quoted string (`'*.c,x'`), so the comma stays
+  literal as in bash and never becomes a PowerShell array;
 - words with a process-sub or brace part are left alone (`{a,b}` is a `BracedTuple`,
   never a comma literal);
 - already-quoted words (`"a,b"`, `'a,b'`) and backslash-escaped commas are untouched.
@@ -324,13 +322,65 @@ space/tab/newline; IFS whitespace folds and trims; every non-whitespace IFS char
 empty fields, a single trailing delimiter adds none; empty IFS splits nothing), yields NO word for an
 empty / blank result (zero iterations), and expands each word containing `* ? [` against the filesystem
 (nullglob off: no match keeps the literal word; matches of a relative pattern are printed relative).
-A list with any split word (`$a`, `$(cmd)`) is emitted as ONE flat `@( item; item; … )`: PowerShell's
-comma operator does not splice (`'a',@('b','c')` is two elements), which is why `for w in $a z` ran
-`x y` and `z` as two items. Whether a list word is a glob is decided from its PARTS
-(`WordIsGlob`: a `GlobPart` and glob characters), not from its emitted text alone — the
-`-replace '(\r?\n)+$'` inside a quoted capture used to make `for f in "$(cmd)"` look like a glob.
-Known gap: an unquoted `$x` in a list is still split on whitespace only (RC-7), not on `$IFS`, and is
-not glob-expanded.
+A list with any split word (`$a`, `$(cmd)`, a glob word) is emitted as ONE flat `@( item; item; … )`:
+PowerShell's comma operator does not splice (`'a',@('b','c')` is two elements), which is why
+`for w in $a z` ran `x y` and `z` as two items. Whether a list word is a glob is decided from its PARTS
+(`IsGlobWord`: an unquoted `GlobPart`), never from its emitted text — the `-replace '(\r?\n)+$'` inside a
+quoted capture used to make `for f in "$(cmd)"` look like a glob. An unquoted `$x` splits on `$IFS` and
+its words are pathname-expanded (`ConvertTo-BashWords`, below).
+
+### Pathname expansion (`ConvertTo-BashGlob`)
+
+bash's expansion order ends `… word splitting -> pathname expansion -> quote removal`, and the SHELL does
+it: `echo *` prints file names because `echo` is handed names. The emitter used to pass a glob word through
+as a literal and rely on each mapped cmdlet to expand it (some did, with their own dialect: hidden files
+included, ABSOLUTE paths, `[set]` unsupported by some), while `echo`, `printf`, user functions, native
+programs, `for` lists and array assignments never expanded at all — `echo *` printed `*`, `for f in *`
+iterated over absolute Windows paths including `.hid`.
+
+**Decision: every consumer gets names, expanded at the emitter step.** A glob word (`IsGlobWord`: a word
+with an unquoted `*`, `?` or `[set]` whose other parts are literals, quotes, expansions or a tilde; extglob,
+process substitution and quoted-brace mixes excluded) becomes `@(ConvertTo-BashGlob <pattern>)`:
+
+```powershell
+echo *.txt    ->  & { $__bashsplat0 = @(ConvertTo-BashGlob '*.txt'); Invoke-BashEcho @__bashsplat0 }
+for f in *    ->  foreach ($f in @(ConvertTo-BashGlob '*')) { … }
+arr=(a *.txt) ->  $arr = @("a"; @(ConvertTo-BashGlob '*.txt'))
+set -- *.txt  ->  $global:BashPositional = @(@(ConvertTo-BashGlob '*.txt'))
+echo sub/{a,b}* -> … @(@('sub/a*','sub/b*') | ConvertTo-BashGlob) …   (braces first, then glob)
+```
+
+It rides the RC-7 splat hoist (`IsUnquotedSplitWord` / `EmitCommandWithSplatArgs`, and the flat-list forms
+for `for`, arrays and `set --`), so an empty result (nullglob) is zero arguments and a pipe-stage input is
+forwarded (`$input | cmd @__bashsplat0`). The pattern text (`EmitGlobPatternExpr`) is bash's own dialect:
+glob parts verbatim, every quoted or escaped `* ? [ \` backslash-escaped (`"*"`, `\*`, `'a?'`), quoted
+expansions escaped at run time through `[PsBash.Cmdlets.BashGlobText]::Escape`, unquoted `$x` / `$(cmd)`
+spliced in active, `/tmp/` and a drive prefix mapped like any path word (forward slashes), and the `/` the
+parser eats after `~` re-added. A word with no unquoted glob part is unchanged (`echo "*"`, `echo \*`).
+
+The engine (`Cmdlets/BashGlob.cs`, `ConvertTo-BashGlob`, fnmatch core shared with `ls -I` as `LsGlob`):
+`/`-separated components matched directory by directory (`*` `?` `[set]` `[!set]` `[^set]` ranges
+`[[:class:]]`); a name that starts with `.` is matched only by a component with a literal leading `.`
+(or `shopt -s dotglob`); `.` and `..` are never matched by a glob (bash 5.2 `globskipdots`); matches are
+sorted ordinally per directory, depth first; a trailing `/` keeps only directories and the slash; results
+keep the spelling of the pattern (relative stays relative, `sub/*` -> `sub/a`); no match keeps the literal
+word (escapes removed) unless `nullglob` (no word) or `failglob` (`bash: no match: PAT`, status 1, the
+command is aborted). `shopt` options live per RUNSPACE (`InvokeBashShoptCommand.IsEnabled`), not per
+process, so `shopt -s nullglob` in one `-c` command cannot leak into the next on a pooled host.
+
+**Why not "expand only for the consumers that do not glob themselves":** the cmdlets that do (`cat`, `ls`,
+`grep`, `cp`, …) expanded differently — `ls *` listed hidden files, `grep -l y *` printed absolute paths —
+so two expansions with two dialects lived side by side and the two sets (`cat` globs only `*`/`?`, `ls`
+also `[`) drifted. Expanding once, in the shell, and handing every command plain names makes the result
+identical for all of them and the decision invisible to the cmdlet. They keep their own globbing for
+DIRECT PowerShell calls (`Invoke-BashCat *.txt`). Because that second expansion still runs on names that
+contain glob characters, `FileSystemHelpers.ResolveOperandPaths` now prefers a name that literally exists
+(`cp sub/*` copies a file called `a[1]` instead of re-globbing it into `a1`). `cat`/`wc` (own `*?`-only
+resolver) can still re-glob a name with `*`/`?` (only possible on Unix) — listed in intentional-differences.md.
+
+Words that are NOT expanded here: assignment values (`x=*`), `case` patterns, `[[ ]]` operands, redirect
+targets, here-strings. An unquoted `$x` / `$(cmd)` result is split and expanded by
+`ConvertTo-BashWords` (below), which uses the same engine.
 
 ### `read`
 
@@ -528,9 +578,13 @@ own dedicated expansions) -- the emitter hoists it to a temp variable holding
 the word-split array and PowerShell-splats it:
 
 ```powershell
-& { $__bashsplat0 = @(if ([string]::IsNullOrEmpty($env:x)) { @() }
-                      else { @($env:x -split '\s+') }); cmd a @__bashsplat0 b }
+& { $__bashsplat0 = @(ConvertTo-BashWords $env:x); cmd a @__bashsplat0 b }
 ```
+
+`ConvertTo-BashWords` (`PsBuild.WordSplitArray`) splits on `$IFS` (unset = space/tab/newline; IFS
+whitespace folds and is trimmed, an empty or blank value gives NO word) and then pathname-expands every
+word that has a glob character with the same engine as `ConvertTo-BashGlob` — `v='*'; echo $v` lists the
+directory, as bash does. (The hoist used to be `-split '\s+'`: whitespace only, no globbing.)
 
 The `& { ... }` wrapper keeps the temp assignment from leaking into a
 surrounding pipeline or and-or list.
@@ -553,15 +607,15 @@ affected; a plain command substitution earlier in the same command is fine
 because it does not mutate a variable the later operand reads.
 
 **Command substitutions are split words too.** A command operand that is a single unquoted
-`$(cmd)` / `` `cmd` `` (`IsUnquotedSplitWord` = pure variable OR pure command substitution) is hoisted
-the same way, with `@(ConvertTo-BashWords <text>)` as the temp's value (IFS split, then glob
+`$(cmd)` / `` `cmd` `` (`IsUnquotedSplitWord` = pure variable, pure command substitution OR glob word) is
+hoisted the same way, with `@(ConvertTo-BashWords <text>)` as the temp's value (IFS split, then glob
 expansion; see "`for x in LIST`"): `printf '%s\n' $(echo a b)` prints `a` and `b`, an empty result
 contributes no argument (it used to pass a spurious `$null`), and `"$(cmd)"` stays one argument.
 **On a pipe-target stage the splat block forwards its input** (`& { $__s = …; $input | cmd @__s }`,
 `_pipeStageFeedsInput`, cleared inside command / process substitution bodies by `EmitCaptured`): the
 hoist wraps the stage in a script block, which used to swallow the pipe, so
-`printf 'a\nb\n' | grep $x` printed nothing. The `@(...)` around the `if` is required:
-assigning a bare `if (...) { @() }` collapses the empty branch to `$null`, and
+`printf 'a\nb\n' | grep $x` printed nothing. The `@(...)` around the expansion is required:
+assigning a bare empty result collapses to `$null`, and
 splatting `$null` injects one spurious empty argument. This applies to both the
 general fallback path (`EmitSimple`) and the mapped passthrough path
 (`EmitPassthrough`), via `IsPureUnquotedVarWord` / `EmitCommandWithSplatArgs`.
@@ -693,7 +747,10 @@ The kill switch `PSBASH_FUSED=0` (falsy tokens) disables detection; default ON.
 
 Walks `CompoundWord` parts and concatenates their emitted text. Handles brace
 expansion (e.g., `file{1,2,3}.txt` -> `@('file1.txt','file2.txt','file3.txt')`).
-Calls `TransformWordPath` on the final result.
+Calls `TransformWordPath` on the final result. A word with an unquoted glob part never reaches it as an
+operand: the callers test `IsGlobWord` / `IsBraceGlobWord` first and emit the pattern through
+`EmitGlobPatternExpr` instead (§4 "Pathname expansion"); `EmitWord` still renders such a word bare for the
+positions that do not expand (assignment values, `case`, `[[ ]]`, redirect targets).
 
 ### `EmitDoubleQuoted`
 

@@ -41,34 +41,31 @@ public sealed class ConvertToBashWordsCommand : PSCmdlet
     }
 
     /// <summary>
-    /// Matches of one glob word, in the form bash prints them (relative when the pattern is relative);
-    /// the word itself when nothing matches (nullglob off). Resolution goes through the runtime's
-    /// <c>Resolve-BashGlob</c> so the pattern dialect and drive-path mapping are the one every cmdlet uses.
+    /// Pathname expansion of one split word (the shared <see cref="BashGlob"/> engine, so a word from a
+    /// substitution globs exactly like a literal pattern: relative matches, hidden files only for a
+    /// <c>.</c> pattern, sorted; no match keeps the word, <c>nullglob</c> / <c>failglob</c> honoured).
+    /// A Windows drive path written with backslashes is read as separators, not escapes.
     /// </summary>
     private IEnumerable<string> ExpandGlob(string word)
     {
-        List<string> matches;
-        try
-        {
-            var results = InvokeCommand.InvokeScript(
-                "param($p) Resolve-BashGlob -Paths $p", false,
-                System.Management.Automation.Runspaces.PipelineResultTypes.None,
-                null, word);
-            matches = new List<string>();
-            foreach (var r in results)
-                if (r?.BaseObject is string s) matches.Add(s);
-        }
-        catch (Exception)
-        {
-            return new[] { word };
-        }
-
-        // Resolve-BashGlob returns the pattern itself when nothing matched.
-        if (matches.Count == 0 || (matches.Count == 1 && matches[0] == word))
-            return new[] { word };
+        string pattern = OperatingSystem.IsWindows() && word.Length >= 3 && char.IsAsciiLetter(word[0])
+            && word[1] == ':' && word[2] == '\\'
+            ? word.Replace('\\', '/')
+            : word;
+        if (!BashGlob.HasPattern(pattern)) return new[] { word };
 
         string cwd = SessionState.Path.CurrentFileSystemLocation.ProviderPath;
-        return matches.Select(m => BashWordSplitter.RelativizeMatch(word, m, cwd));
+        var matches = BashGlob.Expand(pattern, cwd, InvokeBashShoptCommand.IsEnabled("dotglob"));
+        if (matches.Count > 0) return matches;
+
+        if (InvokeBashShoptCommand.IsEnabled("failglob"))
+        {
+            FileSystemHelpers.SetLastExitCode(this, 1);
+            ThrowTerminatingError(new ErrorRecord(
+                new InvalidOperationException("bash: no match: " + word),
+                "NoGlobMatch", ErrorCategory.ObjectNotFound, word));
+        }
+        return InvokeBashShoptCommand.IsEnabled("nullglob") ? Array.Empty<string>() : new[] { word };
     }
 }
 

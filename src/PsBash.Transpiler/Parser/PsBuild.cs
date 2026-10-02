@@ -315,23 +315,24 @@ public static class PsBuild
     // ─────────────────────────── RC-7 unquoted word-split splat ────────────────────────
 
     /// <summary>
-    /// The array an unquoted ordinary <c>$var</c> operand word-splits into, for
-    /// <c>@</c>-splatting: <c>@(if ([string]::IsNullOrEmpty(varRef)) { @() } else {
-    /// @(varRef -split '\s+' | Where-Object { $_ -ne '' }) })</c>. The OUTER
-    /// <c>@(...)</c> is required — assigning a bare <c>if (...) { @() }</c> collapses
-    /// the empty branch to <c>$null</c>, and splatting <c>$null</c> injects one
-    /// spurious empty argument; <c>@(...)</c> forces array context so the empty branch
-    /// stays an empty array that splats to nothing.
-    /// <para>The <c>Where-Object { $_ -ne '' }</c> is load-bearing: PowerShell's
-    /// <c>-split '\s+'</c> yields a LEADING empty field when the value has leading
-    /// whitespace (<c>"  a b" -split</c> → <c>['', 'a', 'b']</c>) and a trailing empty
-    /// for trailing whitespace, but bash IFS word-splitting discards both (<c>set -- $x</c>
-    /// on <c>"  a b"</c> gives 2 params, not 3). Filtering empties matches bash — and
-    /// also makes a whitespace-only value split to nothing.</para>
+    /// The array an unquoted ordinary <c>$var</c> operand expands into, for <c>@</c>-splatting:
+    /// <c>@(ConvertTo-BashWords varRef)</c> — bash's word splitting on <c>$IFS</c> (leading / trailing IFS
+    /// whitespace discarded, an empty or blank value gives NO word) followed by pathname expansion of every
+    /// word that has a glob character. The OUTER <c>@(...)</c> is required: an empty result must stay an
+    /// empty array that splats to nothing (a bare <c>$null</c> would inject one spurious empty argument).
     /// </summary>
     public static string WordSplitArray(string varRef) =>
-        "@(if ([string]::IsNullOrEmpty(" + varRef + ")) { @() } "
-        + "else { @(" + varRef + " -split '\\s+' | Where-Object { $_ -ne '' }) })";
+        "@(ConvertTo-BashWords " + varRef + ")";
+
+    /// <summary>
+    /// The array an unquoted GLOB word (<c>*.txt</c>, <c>src/*</c>, <c>$d/[ab]*</c>) pathname-expands into:
+    /// <c>@(ConvertTo-BashGlob &lt;pattern&gt; [-ForCmdlet])</c>. <paramref name="patternExpr"/> is a PowerShell
+    /// expression for the pattern text in bash's dialect (quoted glob characters already backslash-escaped, see
+    /// <c>PsEmitter.EmitGlobPatternExpr</c>). The outer <c>@(...)</c> keeps an empty result (nullglob) an
+    /// empty array that splats to nothing.
+    /// </summary>
+    public static string GlobWordArray(string patternExpr) =>
+        "@(ConvertTo-BashGlob " + patternExpr + ")";
 
     // ───────────────────────── Redirect target without output ──────────────────────────
 

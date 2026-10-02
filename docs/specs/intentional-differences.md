@@ -63,6 +63,12 @@ model in [runtime-functions.md](runtime-functions.md) "Raw bytes".
 | awk warnings | No `cmd. line:N:` prefix | Location tracking not kept |
 | `rg -P`, `grep -P` | Translated to .NET regex; constructs it cannot express (`\K`, `\X`, recursion, `(?\|`, verbs) are an error, never a silent mismatch | No PCRE2 engine |
 | `tree` | Follows tree(1) 2.1; checked against tree 2.1.1 | Not part of coreutils |
+| Pathname expansion: collation | Matches sort in ordinal (byte / UTF-16) order, like bash in the C / C.UTF-8 locale; no `en_US` collation | One locale-independent order, the one the oracle runs |
+| Pathname expansion: `**`, extglob, `nocaseglob` | `**` acts as `*`; `+(a\|b)` / `@(…)` words keep the pre-glob emission (the literal word); `shopt -s nocaseglob` is accepted and ignored. The matcher is case-sensitive on every OS, Windows included | Not implemented; `globstar` is listed by `shopt` but does nothing |
+| `shopt -s failglob` | The failing COMMAND is aborted with `bash: no match: PAT` and status 1, and the script continues with the next statement; bash discards the whole line | Statement-level abort in a PowerShell host |
+| Pathname expansion of a name that contains `* ? [` | Mapped cmdlets that expand their own operands (`cp`, `mv`, `ls`, …) receive the already-expanded NAMES; a name that literally exists is used as is, but a cmdlet that only looks at `*`/`?` may re-glob one that does not (a missing `a[1]` next to `a1`) | The cmdlets keep their own globbing for direct PowerShell calls; their dialects differ |
+| Pathname expansion inside redirect targets, `case` words, `[[ ]]` | Not expanded (a redirect target is the literal word; bash expands it and fails `ambiguous redirect` on several matches) | Rare; not modelled |
+| Windows drive paths in a glob word | A pattern spelled `/c/Users/*` (with `PSBASH_UNIX_PATHS=1`) or `C:/Users/*` is expanded with forward slashes (`C:/Users/x`), and a drive-letter prefix keeps the form it was typed | `/` is the pattern's only separator (`\` escapes) |
 
 ## Not implemented (refused, exit 2)
 

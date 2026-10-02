@@ -10,6 +10,13 @@ internal static class LsGlob
     public static bool Match(string pattern, string name)
         => MatchAt(pattern, 0, name, 0, name.Length > 0 && name[0] == '.');
 
+    /// <summary>
+    /// <see cref="Match(string, string)"/> with bash's <c>dotglob</c> switch: when <paramref name="allowLeadingPeriod"/>
+    /// a leading period needs no literal period in the pattern.
+    /// </summary>
+    public static bool Match(string pattern, string name, bool allowLeadingPeriod)
+        => MatchAt(pattern, 0, name, 0, !allowLeadingPeriod && name.Length > 0 && name[0] == '.');
+
     private static bool MatchAt(string p, int pi, string s, int si, bool periodGuard)
     {
         while (pi < p.Length)

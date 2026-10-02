@@ -505,6 +505,11 @@ public static class PsEmitter
             if (IsPureUnquotedCommandSubWord(list[0]))
                 return EmitUnquotedSplitWordArray(list[0]);
 
+            // `for f in *.txt`: pathname expansion by the shell (relative names, no hidden files, sorted;
+            // an unmatched pattern is the one literal item, nullglob off) -- see EmitGlobPatternExpr.
+            if (IsGlobWord(list[0]))
+                return EmitUnquotedSplitWordArray(list[0]);
+
             var single = EmitWord(list[0]);
             if (WordIsGlob(list[0], single))
                 // nullglob is OFF by default in bash: an unmatched glob iterates
@@ -2095,11 +2100,20 @@ public static class PsEmitter
                 sb.Append('$');
                 sb.Append(pair.Name);
                 sb.Append(pair.Op == AssignOp.PlusEqual ? " += @(" : " = @(");
+                // A glob element (`arr=(*.txt)`) expands to ZERO or more elements, which the comma
+                // form cannot splice (`'a',@('b','c')` is two elements). Such a list is emitted as
+                // `@( item; item; ... )`, whose statements each enumerate into one flat array.
+                bool anyGlobElement = pair.ArrayValue.Elements.Any(IsGlobWord);
                 for (int j = 0; j < pair.ArrayValue.Elements.Length; j++)
                 {
                     if (j > 0)
-                        sb.Append(',');
+                        sb.Append(anyGlobElement ? "; " : ",");
                     var elem = pair.ArrayValue.Elements[j];
+                    if (anyGlobElement && IsGlobWord(elem))
+                    {
+                        sb.Append(EmitUnquotedSplitWordArray(elem));
+                        continue;
+                    }
                     // Emit each element as a properly-quoted PS value expression. Naively
                     // wrapping EmitWord() in single quotes stored the literal string "$env:x"
                     // for a "$x" element and produced unbalanced quotes for $'a\'b' elements.
@@ -2643,8 +2657,13 @@ public static class PsEmitter
             {
                 // Quote each element so that bare literals like `a`, `b`, `c`
                 // are treated as strings, not variable/command references in PS.
-                var items = string.Join(", ", positionalWords.Select(w =>
+                // `set -- *.txt`: a glob word expands into zero or more parameters, which the comma
+                // form cannot splice -- such a list is built as `@( item; item; ... )` instead.
+                bool anyGlob = positionalWords.Any(IsUnquotedSplitWord);
+                var items = string.Join(anyGlob ? "; " : ", ", positionalWords.Select(w =>
                 {
+                    if (anyGlob && IsUnquotedSplitWord(w))
+                        return EmitUnquotedSplitWordArray(w);
                     var emitted = EmitWord(w);
                     // Already quoted (starts with ' or "), a variable ($), subexpr ((), or array (@): pass through.
                     if (emitted.Length > 0 && emitted[0] is '\'' or '"' or '$' or '(' or '@')
@@ -4299,17 +4318,191 @@ public static class PsEmitter
     /// <summary>A word whose expansion is word-split (and elided when empty): see RC-7 and
     /// <see cref="IsPureUnquotedCommandSubWord"/>.</summary>
     private static bool IsUnquotedSplitWord(CompoundWord word)
-        => IsPureUnquotedVarWord(word) || IsPureUnquotedCommandSubWord(word);
+        => IsPureUnquotedVarWord(word) || IsPureUnquotedCommandSubWord(word) || IsGlobWord(word)
+           || IsBraceGlobWord(word);
 
     /// <summary>
     /// The array an unquoted split word expands to, for PowerShell <c>@</c>-splatting or flattening into a
-    /// list: a variable keeps the RC-7 whitespace split; a command substitution goes through
-    /// <c>ConvertTo-BashWords</c> (IFS split, then pathname expansion), fed the substitution's whole text.
+    /// list: a variable or a command substitution goes through <c>ConvertTo-BashWords</c> (IFS split, then
+    /// pathname expansion of each word), fed the value / the substitution's whole text; a glob word goes
+    /// through <c>ConvertTo-BashGlob</c> (see <see cref="EmitGlobPatternExpr"/>).
     /// </summary>
     private static string EmitUnquotedSplitWordArray(CompoundWord word)
-        => word.Parts[0] is WordPart.CommandSub cs
-            ? "@(ConvertTo-BashWords " + EmitCommandSubString(cs, nested: false) + ")"
-            : EmitUnquotedVarSplitArray(word);
+        => IsBraceGlobWord(word)
+            // `*.{c,h}` / `sub/{a,b}*`: brace expansion comes FIRST, then every resulting word globs.
+            ? "@(" + EmitBraceExpandedWord(word.Parts) + " | ConvertTo-BashGlob)"
+            : IsGlobWord(word)
+            ? PsBuild.GlobWordArray(EmitGlobPatternExpr(word))
+            : word.Parts[0] is WordPart.CommandSub cs
+                ? "@(ConvertTo-BashWords " + EmitCommandSubString(cs, nested: false) + ")"
+                : EmitUnquotedVarSplitArray(word);
+
+    // ───────────────────────────── Pathname expansion (globbing) ─────────────────────────────
+    //
+    // bash's expansion order ends  … word splitting -> PATHNAME EXPANSION -> quote removal, and the
+    // SHELL does it: `echo *` prints file names because echo is handed names. The mapped cmdlets used to
+    // get the literal pattern (and some expanded it themselves, with their own dialect: hidden files
+    // included, absolute paths), while echo / printf / functions / natives / for lists / arrays never
+    // expanded at all. A glob word is therefore expanded HERE, by ConvertTo-BashGlob, and the command
+    // receives the names. See docs/specs/emitter-strategy.md "Pathname expansion".
+
+    /// <summary>
+    /// A word with an UNQUOTED glob part (<c>*</c>, <c>?</c>, <c>[set]</c>) the shell expands: every other
+    /// part must be one the pattern builder can render (literals, quotes, expansions, tilde). Words with an
+    /// extglob (<c>+(a|b)</c>, not implemented), process substitution or brace expansion (<c>*.{c,h}</c>: its
+    /// own array form) keep their old emission.
+    /// </summary>
+    private static bool IsGlobWord(CompoundWord word)
+    {
+        bool glob = false;
+        foreach (var part in word.Parts)
+        {
+            switch (part)
+            {
+                case WordPart.GlobPart gp:
+                    if (gp.Pattern.Length > 1 && gp.Pattern[1] == '(' && gp.Pattern[0] is '+' or '*' or '?' or '!' or '@')
+                        return false;
+                    glob = true;
+                    break;
+                case WordPart.Literal or WordPart.EscapedLiteral or WordPart.SingleQuoted or WordPart.AnsiCQuoted
+                    or WordPart.DoubleQuoted or WordPart.SimpleVarSub or WordPart.BracedVarSub
+                    or WordPart.CommandSub or WordPart.ArithSub or WordPart.TildeSub:
+                    break;
+                default:
+                    return false;
+            }
+        }
+        return glob;
+    }
+
+    /// <summary>Backslash-escapes <c>* ? [ \</c> so quoted / escaped text matches itself in a glob pattern.</summary>
+    private static string EscapeGlobLiteral(string text)
+    {
+        if (text.AsSpan().IndexOfAny("*?[\\") < 0) return text;
+        var sb = new StringBuilder(text.Length + 4);
+        foreach (char c in text)
+        {
+            if (c is '*' or '?' or '[' or '\\') sb.Append('\\');
+            sb.Append(c);
+        }
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// A word with a brace expansion AND a glob (<c>*.{c,h}</c>, <c>sub/{a,b}*</c>) made only of plain literals,
+    /// brace parts and glob parts. bash expands the braces first; the emitter's brace array carries each
+    /// resulting word's text with the glob characters intact, so piping it through <c>ConvertTo-BashGlob</c>
+    /// finishes the job. Quoted or dynamic parts beside a brace keep the existing emission.
+    /// </summary>
+    private static bool IsBraceGlobWord(CompoundWord word)
+    {
+        bool brace = false, glob = false;
+        foreach (var part in word.Parts)
+        {
+            switch (part)
+            {
+                case WordPart.BracedTuple or WordPart.BracedRange:
+                    brace = true;
+                    break;
+                case WordPart.GlobPart gp:
+                    if (gp.Pattern.Length > 1 && gp.Pattern[1] == '(' && gp.Pattern[0] is '+' or '*' or '?' or '!' or '@')
+                        return false;
+                    glob = true;
+                    break;
+                case WordPart.Literal:
+                    break;
+                default:
+                    return false;
+            }
+        }
+        return brace && glob;
+    }
+
+    /// <summary>
+    /// A PowerShell expression for the glob pattern TEXT of <paramref name="word"/> (guard with
+    /// <see cref="IsGlobWord"/>), in bash's dialect: glob parts verbatim, everything quoted or escaped
+    /// backslash-escaped, unquoted expansions spliced in active (their glob characters match, as in bash),
+    /// quoted expansions escaped at run time. A drive-style prefix (<c>/c/Users/</c>) and <c>/tmp/</c> are
+    /// mapped like any other path word, with forward slashes (the pattern's only separator).
+    /// </summary>
+    private static string EmitGlobPatternExpr(CompoundWord word)
+    {
+        const string Escape = "[PsBash.Cmdlets.BashGlobText]::Escape(";
+        var pieces = new List<string>();
+        var lit = new StringBuilder();
+
+        void Flush()
+        {
+            if (lit.Length == 0) return;
+            pieces.Add(PsBuild.SingleQuote(lit.ToString()));
+            lit.Clear();
+        }
+        void Dynamic(string expr)
+        {
+            Flush();
+            pieces.Add("(" + expr + ")");
+        }
+
+        for (int i = 0; i < word.Parts.Length; i++)
+        {
+            switch (word.Parts[i])
+            {
+                case WordPart.Literal l:
+                {
+                    string text = l.Value;
+                    if (i == 0 && text.StartsWith("/tmp/", StringComparison.Ordinal))
+                    {
+                        Dynamic(PsBuild.TempDirExpr + ".Replace('\\','/')");
+                        text = text[4..];
+                    }
+                    else if (i == 0 && TryTranslateMsysDrivePath(text, out var drive))
+                        text = drive.Replace('\\', '/');
+                    lit.Append(EscapeGlobLiteral(text));
+                    break;
+                }
+                case WordPart.EscapedLiteral e:
+                    lit.Append(EscapeGlobLiteral(e.Value));
+                    break;
+                case WordPart.SingleQuoted sq:
+                    lit.Append(EscapeGlobLiteral(sq.Value));
+                    break;
+                case WordPart.AnsiCQuoted aq:
+                    lit.Append(EscapeGlobLiteral(ExpandAnsiCEscapes(aq.Value)));
+                    break;
+                case WordPart.GlobPart gp:
+                    lit.Append(gp.Pattern);
+                    break;
+                case WordPart.DoubleQuoted dq:
+                    if (dq.Parts.All(p => p is WordPart.Literal or WordPart.EscapedLiteral)
+                        && TryGetStaticArgValue(new CompoundWord(ImmutableArray.Create<WordPart>(dq))) is { } dqText)
+                        lit.Append(EscapeGlobLiteral(dqText));
+                    else
+                        Dynamic(Escape + EmitDoubleQuoted(dq) + ")");
+                    break;
+                // The parser consumes the `/` after a tilde; EmitWord re-adds it when parts follow.
+                case WordPart.TildeSub { User: null or "+" or "-" } ts:
+                    Dynamic(Escape + "([string]" + EmitWordPart(ts) + ").Replace('\\','/'))");
+                    if (i + 1 < word.Parts.Length) lit.Append('/');
+                    break;
+                case WordPart.TildeSub ts:
+                    lit.Append(EscapeGlobLiteral("~" + ts.User));
+                    if (i + 1 < word.Parts.Length) lit.Append('/');
+                    break;
+                case WordPart.CommandSub cs:
+                    Dynamic(EmitCommandSubString(cs, nested: false));
+                    break;
+                default: // SimpleVarSub, BracedVarSub, ArithSub: unquoted, so glob-active
+                    Dynamic(EmitWordPart(word.Parts[i]));
+                    break;
+            }
+        }
+        Flush();
+
+        if (pieces.Count == 1)
+            return pieces[0];
+        // A leading '' forces string concatenation when the first piece is an expression.
+        return "('' + " + string.Join(" + ", pieces) + ")";
+    }
 
     /// <summary>
     /// PowerShell statement keywords that the emitter can produce as a "command
