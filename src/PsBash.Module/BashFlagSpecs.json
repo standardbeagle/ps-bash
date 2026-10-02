@@ -1359,6 +1359,29 @@
       "flag": "--tabsize",
       "desc": "assume tab stops every COLS",
       "arg": "COLS"
+    },
+    {
+      "flag": "-I",
+      "desc": "do not list entries matching PATTERN",
+      "arg": "PATTERN"
+    },
+    {
+      "flag": "--ignore",
+      "desc": "do not list entries matching PATTERN",
+      "arg": "PATTERN"
+    },
+    {
+      "flag": "--hide",
+      "desc": "do not list entries matching PATTERN (unless -a / -A)",
+      "arg": "PATTERN"
+    },
+    {
+      "flag": "-B",
+      "desc": "do not list entries ending with ~"
+    },
+    {
+      "flag": "--ignore-backups",
+      "desc": "do not list entries ending with ~"
     }
   ],
   "mapfile": [

@@ -111,7 +111,8 @@ public sealed class InvokeBashLsCommand : PSCmdlet
         OptClassify = "classify", OptColor = "color", OptInode = "inode", OptBlocks = "blocks",
         OptGroupDirsFirst = "group-dirs-first", OptSort = "sort",
         OptVertical = "vertical", OptAcross = "across", OptCommas = "commas", OptFormat = "format",
-        OptWidth = "width", OptTabsize = "tabsize";
+        OptWidth = "width", OptTabsize = "tabsize", OptIgnore = "ignore", OptHide = "hide",
+        OptIgnoreBackups = "ignore-backups";
 
     /// <summary>
     /// GNU options ps-bash refuses (exit 2): each changes the OUTPUT (columns, quoting, sort key,
@@ -122,11 +123,11 @@ public sealed class InvokeBashLsCommand : PSCmdlet
     private static readonly string[] LsUnsupported =
     {
         "-b", "-c", "-f", "-g", "-k", "-n", "-o", "-q", "-u", "-v",
-        "-B", "-D", "-G", "-H", "-I", "-L", "-N", "-Q", "-U", "-X", "-Z",
-        "--author", "--escape", "--block-size", "--ignore-backups", "--dired", "--file-type",
+        "-D", "-G", "-H", "-L", "-N", "-Q", "-U", "-X", "-Z",
+        "--author", "--escape", "--block-size", "--dired", "--file-type",
         "--full-time", "--no-group", "--si", "--dereference-command-line",
-        "--dereference-command-line-symlink-to-dir", "--hide", "--hyperlink", "--indicator-style",
-        "--ignore", "--kibibytes", "--dereference", "--numeric-uid-gid", "--literal",
+        "--dereference-command-line-symlink-to-dir", "--hyperlink", "--indicator-style",
+        "--kibibytes", "--dereference", "--numeric-uid-gid", "--literal",
         "--hide-control-chars", "--show-control-chars", "--quote-name", "--quoting-style", "--time",
         "--time-style", "--context", "--zero",
     };
@@ -169,6 +170,9 @@ public sealed class InvokeBashLsCommand : PSCmdlet
             new OptSpec(OptFormat, '\0', "format", OptKind.Value),
             new OptSpec(OptWidth, 'w', "width", OptKind.Value),
             new OptSpec(OptTabsize, 'T', "tabsize", OptKind.Value),
+            new OptSpec(OptIgnore, 'I', "ignore", OptKind.Value),
+            new OptSpec(OptHide, '\0', "hide", OptKind.Value),
+            new OptSpec(OptIgnoreBackups, 'B', "ignore-backups"),
         },
         LsUnsupported,
         allowAbbrev: true,
@@ -277,11 +281,16 @@ public sealed class InvokeBashLsCommand : PSCmdlet
         LsFormat format = LsFormat.OnePerLine;
         long? lineWidth = null;     // -w / --width (0 = unlimited)
         int? tabSizeOpt = null;     // -T / --tabsize
+        var ignorePatterns = new List<string>();   // -I / --ignore / -B: hide entries in every listing mode
+        var hidePatterns = new List<string>();     // --hide: only when neither -a nor -A is in effect
         foreach (var t in parsed.Tokens)
         {
             if (t.Kind != ArgTokKind.Option) continue;
             switch (t.OptId)
             {
+                case OptIgnore: ignorePatterns.Add(t.Value ?? ""); break;
+                case OptHide: hidePatterns.Add(t.Value ?? ""); break;
+                case OptIgnoreBackups: ignorePatterns.Add("*~"); ignorePatterns.Add(".*~"); break;
                 case OptLong: format = LsFormat.Long; break;
                 case OptOnePerLine: if (format != LsFormat.Long) format = LsFormat.OnePerLine; break;
                 case OptVertical: format = LsFormat.Vertical; break;
@@ -675,11 +684,16 @@ public sealed class InvokeBashLsCommand : PSCmdlet
                 var dirInfo = new DirectoryInfo(path);
                 if (showAll)
                 {
-                    entries.Add(DotEntry(dirInfo, "."));
-                    entries.Add(DotEntry(dirInfo.Parent ?? dirInfo, ".."));
+                    // -I applies to "." and ".." too (GNU runs every readdir name through file_ignored).
+                    if (!ignorePatterns.Exists(p => LsGlob.Match(p, ".")))
+                        entries.Add(DotEntry(dirInfo, "."));
+                    if (!ignorePatterns.Exists(p => LsGlob.Match(p, "..")))
+                        entries.Add(DotEntry(dirInfo.Parent ?? dirInfo, ".."));
                 }
                 foreach (var fsi in dirInfo.EnumerateFileSystemInfos("*", SearchOption.TopDirectoryOnly))
                 {
+                    if (!showHidden && hidePatterns.Exists(p => LsGlob.Match(p, fsi.Name))) continue;
+                    if (ignorePatterns.Exists(p => LsGlob.Match(p, fsi.Name))) continue;
                     if (!showHidden)
                     {
                         if (fsi.Name.Length > 0 && fsi.Name[0] == '.')

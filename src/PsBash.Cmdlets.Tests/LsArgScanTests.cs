@@ -43,6 +43,15 @@ public class LsArgScanTests : IClassFixture<SharedPwshFixture>
     [InlineData("-", "'-")]
     [InlineData("-Cx", "vertical,across")]
     [InlineData("-m", "commas")]
+    [InlineData("-I|*.c", "ignore=*.c")]
+    [InlineData("-I*.c", "ignore=*.c")]
+    [InlineData("--ignore=*.c", "ignore=*.c")]
+    [InlineData("--ignore|*.c", "ignore=*.c")]
+    [InlineData("--hide=*.c", "hide=*.c")]
+    [InlineData("--hide|x", "hide=x")]
+    [InlineData("-B", "ignore-backups")]
+    [InlineData("--ignore-backups", "ignore-backups")]
+    [InlineData("--ignore-b", "ignore-backups")]
     [InlineData("-w|40", "width=40")]
     [InlineData("-w40", "width=40")]
     [InlineData("--width=40", "width=40")]
@@ -60,6 +69,9 @@ public class LsArgScanTests : IClassFixture<SharedPwshFixture>
     [InlineData("--dir", ArgErrorKind.Ambiguous, 2)]          // '--directory' '--dired'
     [InlineData("--sort", ArgErrorKind.MissingValue, 2)]
     [InlineData("--all=x", ArgErrorKind.UnexpectedValue, 2)]
+    [InlineData("--ign=x", ArgErrorKind.Ambiguous, 2)]        // '--ignore-backups' '--ignore'
+    [InlineData("--hi=x", ArgErrorKind.Ambiguous, 2)]         // '--hide-control-chars' '--hide' '--hyperlink'
+    [InlineData("-I", ArgErrorKind.MissingValue, 2)]          // ls: option requires an argument -- 'I'
     [InlineData("-w", ArgErrorKind.MissingValue, 2)]          // ls: option requires an argument -- 'w'
     [InlineData("-T", ArgErrorKind.MissingValue, 2)]
     [InlineData("--format", ArgErrorKind.MissingValue, 2)]
