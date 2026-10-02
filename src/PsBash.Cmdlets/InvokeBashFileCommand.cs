@@ -398,7 +398,11 @@ public sealed class InvokeBashFileCommand : PSCmdlet
         }
         if (isDir) return ("directory", "inode/directory", "binary");
 
-        if (info is FileInfo { Exists: true, Length: 0 })
+        // FileInfo.Length of a symlink is the LINK's own size (0 on Windows): classify the final target.
+        FileSystemInfo sized = info;
+        try { if (info.LinkTarget is not null && info.ResolveLinkTarget(true) is { } final) sized = final; }
+        catch { /* unreadable link: fall back to the entry itself */ }
+        if (sized is FileInfo { Exists: true, Length: 0 })
             return ("empty", "inode/x-empty", "binary");
         return ClassifyContent(() => BashFileSystem.OpenRead(filePath));
     }
