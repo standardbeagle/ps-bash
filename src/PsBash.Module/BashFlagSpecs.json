@@ -1881,6 +1881,10 @@
       "desc": "lines per file"
     },
     {
+      "flag": "-n",
+      "desc": "CHUNKS output files: N, K/N, l/N, l/K/N, r/N, r/K/N"
+    },
+    {
       "flag": "-d",
       "desc": "numeric suffixes"
     },

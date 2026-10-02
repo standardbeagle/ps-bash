@@ -74,8 +74,9 @@ public class SplitArgScanTests
     [InlineData("ERR split: invalid option -- 'q'", "-q")]
     [InlineData("ERR split: invalid option -- 'z'", "-z")]  // FIX (was: classified "unsupported"; not a split option)
     [InlineData("ERR split: option '--ver' is ambiguous; possibilities: '--verbose' '--version'", "--ver")]
-    [InlineData("ERR split: option '-n' is recognized but not supported by ps-bash", "-n", "3")]
-    [InlineData("ERR split: option '--number' is recognized but not supported by ps-bash", "--number=3")]
+    [InlineData("l=1000 b=- a=2 d=False/0 add= ops=[]", "-n", "3")]   // -n CHUNKS is implemented (SplitChunksTests)
+    [InlineData("l=1000 b=- a=2 d=False/0 add= ops=[]", "--number=3")]
+    [InlineData("ERR split: option '--line-bytes' is recognized but not supported by ps-bash", "--line-bytes=6")]
     [InlineData("ERR split: option '-C' is recognized but not supported by ps-bash", "-C", "6")]
     [InlineData("ERR split: option '-t' is recognized but not supported by ps-bash", "-t", ":")]
     [InlineData("ERR split: option '-e' is recognized but not supported by ps-bash", "-e")]
@@ -105,6 +106,6 @@ public class SplitArgScanTests
     public void UsageErrors_Exit1_UnsupportedExit2()
     {
         Assert.Equal(1, InvokeBashSplitCommand.ScanArgs(new[] { "-q" }).ErrorExitCode);
-        Assert.Equal(2, InvokeBashSplitCommand.ScanArgs(new[] { "-n", "3" }).ErrorExitCode);
+        Assert.Equal(2, InvokeBashSplitCommand.ScanArgs(new[] { "-C", "3" }).ErrorExitCode);
     }
 }
