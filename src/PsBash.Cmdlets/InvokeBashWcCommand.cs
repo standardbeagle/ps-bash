@@ -99,10 +99,13 @@ public sealed class InvokeBashWcCommand : PSCmdlet
     /// GNU 9.4 options with no implementation here. (A string[] on purpose:
     /// CommonParameterCollisionGuardTests enumerates static string sets.)
     /// </summary>
-    private static readonly string[] WcValidButUnsupported = { "--files0-from", "--total" };
+    private static readonly string[] WcValidButUnsupported = Array.Empty<string>();
 
     private const string OptLines = "lines", OptWords = "words", OptBytes = "bytes",
-        OptChars = "chars", OptMaxLine = "maxline";
+        OptChars = "chars", OptMaxLine = "maxline", OptTotal = "total", OptFiles0 = "files0from";
+
+    /// <summary>GNU <c>--total=WHEN</c>: when the "total" line prints.</summary>
+    internal enum TotalMode { Auto, Always, Only, Never }
 
     /// <summary>
     /// wc's option surface (GNU coreutils 9.4: -c -m -l -L -w + --bytes --chars --lines
@@ -116,6 +119,8 @@ public sealed class InvokeBashWcCommand : PSCmdlet
             new OptSpec(OptLines, 'l', "lines"),
             new OptSpec(OptMaxLine, 'L', "max-line-length"),
             new OptSpec(OptWords, 'w', "words"),
+            new OptSpec(OptTotal, '\0', "total", OptKind.Value),
+            new OptSpec(OptFiles0, '\0', "files0-from", OptKind.Value),
         },
         validButUnsupported: WcValidButUnsupported,
         allowAbbrev: true,
@@ -129,18 +134,26 @@ public sealed class InvokeBashWcCommand : PSCmdlet
     {
         public ParsedArgs Parsed = null!;
         public bool Lines, Words, Bytes, Chars, MaxLine;
+        public TotalMode Total = TotalMode.Auto;
+        /// <summary>--files0-from=F ("-" = stdin): the NUL-separated list of names to count.</summary>
+        public string? Files0From;
         public List<string> Operands = new();
+        /// <summary>A usage error the scan cannot see (bad --total WHEN, operands with --files0-from); exit 1.</summary>
+        public string? Error;
 
         /// <summary>True when nothing further should execute: scan error or --help/--version.</summary>
         public bool Declined =>
-            Parsed.HasError || Parsed.Has(OptSpecSet.HelpId) || Parsed.Has(OptSpecSet.VersionId);
+            Parsed.HasError || Error is not null
+            || Parsed.Has(OptSpecSet.HelpId) || Parsed.Has(OptSpecSet.VersionId);
     }
+
+    private static readonly string[] TotalWords = { "auto", "always", "only", "never" };
 
     /// <summary>Scan + resolve the column selectors (any order, any bundling, repeats are harmless).</summary>
     internal static WcArgs Plan(string[] args)
     {
         var p = ScanArgs(args);
-        return new WcArgs
+        var w = new WcArgs
         {
             Parsed = p,
             Lines = p.Has(OptLines),
@@ -150,6 +163,33 @@ public sealed class InvokeBashWcCommand : PSCmdlet
             MaxLine = p.Has(OptMaxLine),
             Operands = p.Operands(),
         };
+        if (p.HasError) return w;
+
+        // --total=WHEN: argmatch (exact word, else a unique prefix); the LAST one wins.
+        if (p.Last(OptTotal)?.Value is { } when)
+        {
+            var hits = TotalWords.Where(t => t.StartsWith(when, StringComparison.Ordinal)).ToList();
+            if (when.Length == 0 || hits.Count == 0 || (hits.Count > 1 && !TotalWords.Contains(when)))
+            {
+                string what = hits.Count > 1 && when.Length > 0 ? "ambiguous" : "invalid";
+                w.Error = $"wc: {what} argument '{when}' for '--total'\nValid arguments are:\n"
+                          + string.Join("\n", TotalWords.Select(t => $"  - '{t}'"))
+                          + "\nTry 'wc --help' for more information.";
+                return w;
+            }
+            string chosen = TotalWords.Contains(when) ? when : hits[0];
+            w.Total = chosen switch { "always" => TotalMode.Always, "only" => TotalMode.Only, "never" => TotalMode.Never, _ => TotalMode.Auto };
+        }
+
+        if (p.Last(OptFiles0)?.Value is { } f0)
+        {
+            w.Files0From = f0;
+            if (w.Operands.Count > 0)
+            {
+                w.Error = $"wc: extra operand '{w.Operands[0]}'\nfile operands cannot be combined with --files0-from\nTry 'wc --help' for more information.";
+            }
+        }
+        return w;
     }
 
     /// <summary>Arguments with the decoy-bound flags re-injected (bare -w binds -WarningAction, bare
@@ -184,11 +224,16 @@ public sealed class InvokeBashWcCommand : PSCmdlet
         _operands = _plan.Operands;
         _suppressStdin = _plan.Declined || _operands.Count > 0;
     }
+
+    // --files0-from: the pipeline is the name list (or an entry "-"), so it is kept, not counted.
+    private readonly List<object> _stdinRecords = new();
+
     protected override void ProcessRecord()
     {
         if (InputObject == null) return;
 
         ParseOnce();
+        if (_plan is { Files0From: not null, Declined: false }) { _stdinRecords.Add(InputObject); return; }
         if (_suppressStdin) return;
 
         // Stream the counts instead of buffering the pipe — wc only ever needs
@@ -273,23 +318,57 @@ public sealed class InvokeBashWcCommand : PSCmdlet
         {
             if (FileSystemHelpers.TryWriteParseError(this, "wc", plan.Parsed)) return;
             if (FileSystemHelpers.TryHandleInfoOptions(this, "wc", plan.Parsed)) return;
+            if (plan.Error is { } planError)
+            {
+                FileSystemHelpers.WriteBashError(this, planError); // exit 1, GNU's usage status
+                return;
+            }
         }
+        var totalMode = _plan?.Total ?? TotalMode.Auto;
 
         // Pipeline mode: counts were streamed in ProcessRecord. Always emit, like GNU wc on an
         // empty stdin (`echo -n '' | wc -c` prints 0; `printf '' | wc` prints 0 0 0).
-        if (_operands.Count == 0)
+        if (_operands.Count == 0 && _plan?.Files0From is null)
         {
-            WriteObject(BuildResult(
-                _totalLines, _totalWords, _totalBytes, _totalChars, _maxLine, string.Empty));
+            // --total=only prints the single count line without a name; always adds a total line too.
+            if (totalMode != TotalMode.Only)
+                WriteObject(BuildResult(_totalLines, _totalWords, _totalBytes, _totalChars, _maxLine, string.Empty));
+            if (totalMode is TotalMode.Always or TotalMode.Only)
+                WriteObject(BuildResult(_totalLines, _totalWords, _totalBytes, _totalChars, _maxLine,
+                    totalMode == TotalMode.Only ? string.Empty : "total"));
             return;
         }
 
         // File mode
         int grandLines = 0, grandWords = 0, grandBytes = 0, grandChars = 0, grandMax = 0;
-        bool multipleFiles = _operands.Count > 1;
-
-        foreach (var filePath in ResolveGlob(_operands))
+        IEnumerable<string> names = _operands;
+        int nameCount = _operands.Count;
+        if (_plan?.Files0From is { } listSource)
         {
+            var listed = ReadFiles0List(listSource);
+            if (listed is null) return;
+            names = listed;
+            nameCount = listed.Count;
+        }
+        bool multipleFiles = nameCount > 1;
+        bool files0 = _plan?.Files0From is not null;
+        bool printTotal = totalMode switch
+        {
+            TotalMode.Always or TotalMode.Only => true,
+            TotalMode.Never => false,
+            _ => multipleFiles,
+        };
+
+        foreach (var filePath in files0 ? names.Select(n => n == "-" ? n : ResolveVerbatim(n)) : ResolveGlob(_operands))
+        {
+            if (filePath == "-" && files0)
+            {
+                var (sl, sw, sc, sm, sx) = CountRecords();
+                grandLines += sl; grandWords += sw; grandBytes += sc; grandChars += sm; if (sx > grandMax) grandMax = sx;
+                if (totalMode != TotalMode.Only)
+                    WriteObject(BuildResult(sl, sw, sc, sm, sx, string.Empty));
+                continue;
+            }
             // The null device (/dev/null, NUL) is an empty file, not a missing one.
             if (!File.Exists(filePath) && !Directory.Exists(filePath) && !FileSystemHelpers.IsNullDevice(filePath))
             {
@@ -337,15 +416,80 @@ public sealed class InvokeBashWcCommand : PSCmdlet
             grandChars += charCount;
             if (maxLineLen > grandMax) grandMax = maxLineLen;
 
-            WriteObject(BuildResult(
-                lineCount, wordCount, (int)fileBytes, charCount, maxLineLen, filePath));
+            if (totalMode != TotalMode.Only)
+                WriteObject(BuildResult(
+                    lineCount, wordCount, (int)fileBytes, charCount, maxLineLen, filePath));
         }
 
-        if (multipleFiles)
+        if (printTotal)
         {
             WriteObject(BuildResult(
-                grandLines, grandWords, grandBytes, grandChars, grandMax, "total"));
+                grandLines, grandWords, grandBytes, grandChars, grandMax,
+                totalMode == TotalMode.Only ? string.Empty : "total"));
         }
+    }
+
+    /// <summary>A --files0-from entry is used verbatim: no globbing, resolved against the PowerShell location.</summary>
+    private string ResolveVerbatim(string name)
+    {
+        var resolved = SessionState.Path.GetUnresolvedProviderPathFromPSPath(FileSystemHelpers.NormalizeOperandPath(name));
+        OperandDisplay.Remember(this, resolved, name);
+        return resolved;
+    }
+
+    /// <summary>The counts of the buffered pipeline (the "-" entry of a --files0-from list).</summary>
+    private (int Lines, int Words, int Bytes, int Chars, int Max) CountRecords()
+    {
+        _totalLines = _totalWords = _totalBytes = _totalChars = _maxLine = 0;
+        _inWord = false; _curLine = 0;
+        foreach (var rec in _stdinRecords)
+        {
+            string text = BashRuntime.GetBashText(rec);
+            if (!text.EndsWith('\n') && !BashRuntime.IsUnterminated(rec)) text += "\n";
+            AccumulateStream(text);
+        }
+        _stdinRecords.Clear();
+        return (_totalLines, _totalWords, _totalBytes, _totalChars, _maxLine);
+    }
+
+    /// <summary>
+    /// The NUL-separated name list of <c>--files0-from=SRC</c> (SRC = "-" is the pipeline). An empty
+    /// name is GNU's <c>wc: SRC:N: invalid zero-length file name</c> (exit 1, the rest still counted):
+    /// it is kept in the list as a null marker so the entry numbering and the total count stay GNU's.
+    /// Returns null (diagnostic written) when the list cannot be opened.
+    /// </summary>
+    private List<string>? ReadFiles0List(string source)
+    {
+        string text;
+        if (source == "-")
+        {
+            text = RawBytes.GetString(RawBytes.GetBytes(BashRuntime.RecordStreamText(_stdinRecords.Cast<object>())));
+            _stdinRecords.Clear();
+        }
+        else
+        {
+            try { text = RawBytes.GetString(BashFileSystem.ReadAllBytes(SessionState.Path.GetUnresolvedProviderPathFromPSPath(source))); }
+            catch (Exception ex)
+            {
+                if (FileSystemHelpers.IsPipelineStop(ex)) throw;
+                WriteBashError($"wc: cannot open '{source}' for reading: {FileSystemHelpers.ReadErrorMessage(ex)}");
+                return null;
+            }
+        }
+
+        var pieces = text.Split('\0').ToList();
+        if (pieces.Count > 0 && pieces[^1].Length == 0) pieces.RemoveAt(pieces.Count - 1);
+        var names = new List<string>();
+        for (int i = 0; i < pieces.Count; i++)
+        {
+            if (pieces[i].Length == 0)
+            {
+                WriteBashError($"wc: {source}:{i + 1}: invalid zero-length file name");
+                continue;
+            }
+            names.Add(pieces[i]);
+        }
+        return names;
     }
 
     private static int CountWords(string text)
@@ -471,6 +615,7 @@ public sealed class InvokeBashWcCommand : PSCmdlet
     private PSObject BuildResult(
         int lines, int words, int bytes, int chars, int maxLine, string fileName)
     {
+        fileName = fileName.Length > 0 && fileName != "total" ? OperandDisplay.Rewrite(this, fileName).Replace('\\', '/') : fileName;
         string bashText = FormatWcText(
             _linesOnly, _wordsOnly, _charsOnly, _bytesOnly, _maxLineOnly,
             lines, words, bytes, chars, maxLine, fileName);
@@ -530,7 +675,9 @@ public sealed class InvokeBashWcCommand : PSCmdlet
             }
             else
             {
-                yield return SessionState.Path.GetUnresolvedProviderPathFromPSPath(p);
+                var lit = SessionState.Path.GetUnresolvedProviderPathFromPSPath(p);
+                OperandDisplay.Remember(this, lit, p);
+                yield return lit;
             }
         }
     }

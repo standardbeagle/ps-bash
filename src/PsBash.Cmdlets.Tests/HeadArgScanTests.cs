@@ -94,12 +94,6 @@ public class HeadArgScanTests
     [InlineData("ERR head: invalid trailing option -- 5", "-n1", "-5")]  // FIX (was: last wins, n=5)
     [InlineData("ERR head: invalid trailing option -- 2", "-1", "-2")]  // FIX
     [InlineData("ERR head: invalid trailing option -- 5", "f", "-5")]  // FIX
-    [InlineData("ERR head: option '-v' is recognized but not supported by ps-bash", "-v")]
-    [InlineData("ERR head: option '-v' is recognized but not supported by ps-bash", "-qv")]
-    [InlineData("ERR head: option '-z' is recognized but not supported by ps-bash", "-z")]
-    [InlineData("ERR head: option '--verbose' is recognized but not supported by ps-bash", "--verbose")]
-    [InlineData("ERR head: option '--zero-terminated' is recognized but not supported by ps-bash", "--zero-terminated")]
-    [InlineData("ERR head: option '--zero-terminated' is recognized but not supported by ps-bash", "--zero")]  // FIX
     [InlineData("ERR head: option '--ver' is ambiguous; possibilities: '--verbose' '--version'", "--ver")]  // GNU: identical
     [InlineData("ERR head: unrecognized option '--bogus'", "--bogus")]
     [InlineData("ERR head: unrecognized option '--bogus=1'", "--bogus=1")]
@@ -131,8 +125,6 @@ public class HeadArgScanTests
     [InlineData("n=1 q=0 ops=[]", "-2", "-n1")]  // later options still apply
     [InlineData("c=1 q=0 ops=[]", "-5", "-c1")]
     [InlineData("n=2 q=0 ops=[f,g]", "-2", "f", "g")]
-    [InlineData("ERR head: option '-v' is recognized but not supported by ps-bash", "-2v")]
-    [InlineData("ERR head: option '-z' is recognized but not supported by ps-bash", "-2z")]
     [InlineData("ERR head: invalid trailing option -- n", "-5n")]  // FIX
     [InlineData("ERR head: invalid trailing option -- x", "-2x")]
     [InlineData("ERR head: invalid trailing option -- x", "-2cx")]
@@ -162,9 +154,6 @@ public class HeadArgScanTests
     [InlineData("-x", 1)]
     [InlineData("-n", 1)]
     [InlineData("--ver", 1)]
-    [InlineData("-v", 2)]
-    [InlineData("-z", 2)]
-    [InlineData("--verbose", 2)]
     public void ScanError_ExitStatus_IsGnuUsageStatusExceptOurOwnRefusal(string arg, int exit)
     {
         Assert.Equal(exit, InvokeBashHeadCommand.ScanArgs(new[] { arg }).ErrorExitCode);

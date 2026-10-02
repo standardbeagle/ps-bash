@@ -71,6 +71,22 @@
     {
       "flag": "-T",
       "desc": "show ^I for tabs"
+    },
+    {
+      "flag": "-A",
+      "desc": "show all: -vET"
+    },
+    {
+      "flag": "-e",
+      "desc": "-vE"
+    },
+    {
+      "flag": "-t",
+      "desc": "-vT"
+    },
+    {
+      "flag": "-v",
+      "desc": "show non-printing as ^X / M-X"
     }
   ],
   "column": [

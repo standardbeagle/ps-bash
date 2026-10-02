@@ -54,11 +54,6 @@ public class WcArgScanTests
     [InlineData("l---- ops=[-w]", "-l", "--", "-w")]
     [InlineData("----- ops=[-]", "-")]
     [InlineData("----- ops=[a,b]", "a", "b")]
-    [InlineData("ERR wc: option '--files0-from' is recognized but not supported by ps-bash", "--files0-from=f")]
-    [InlineData("ERR wc: option '--files0-from' is recognized but not supported by ps-bash", "--files0-from", "f")]
-    [InlineData("ERR wc: option '--files0-from' is recognized but not supported by ps-bash", "--f", "x")]  // FIX (was: operands)
-    [InlineData("ERR wc: option '--total' is recognized but not supported by ps-bash", "--total=always")]  // FIX (was: operands)
-    [InlineData("ERR wc: option '--total' is recognized but not supported by ps-bash", "--t=never")]  // FIX
     [InlineData("ERR wc: unrecognized option '--bogus'", "--bogus")]
     [InlineData("ERR wc: unrecognized option '--bogus=1'", "--bogus=1")]
     [InlineData("ERR wc: option '--lines' doesn't allow an argument", "--lines=1")]  // FIX
@@ -88,8 +83,6 @@ public class WcArgScanTests
     [InlineData("--bogus", 1)]
     [InlineData("-x", 1)]
     [InlineData("--lines=1", 1)]
-    [InlineData("--files0-from=f", 2)]
-    [InlineData("--total=always", 2)]
     public void ScanError_ExitStatus_IsGnuUsageStatusExceptOurOwnRefusal(string arg, int exit)
     {
         Assert.Equal(exit, InvokeBashWcCommand.ScanArgs(new[] { arg }).ErrorExitCode);

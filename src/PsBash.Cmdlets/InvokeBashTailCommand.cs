@@ -12,25 +12,26 @@ namespace PsBash.Cmdlets;
 /// (REFACTOR-2 Phase 1c). Emits the trailing lines (or bytes) of pipeline or
 /// file input, matching the bash <c>tail</c> command.
 ///
-/// Behavioral parity oracle: the original psm1 function. This cmdlet reproduces
-/// its exact value-flag parsing and dual-mode behavior:
+/// Behavioral parity oracle: GNU coreutils 9.4 <c>tail</c>:
 /// <list type="bullet">
 /// <item>Flags: <c>-n N</c> / <c>-nN</c> / <c>-n +N</c> (line count, default
 /// 10; the <c>+N</c> form switches to from-line mode), <c>-c N</c> / <c>-cN</c>
 /// / <c>-c +N</c> (byte count / from-byte), the legacy <c>-N</c> shorthand, a
-/// bare leading positional number, <c>-f</c> / <c>--follow</c>, <c>-s SECS</c>
-/// / <c>--sleep-interval SECS</c>, and <c>--</c> — parsed in the same order as
-/// the psm1 oracle's manual <c>while</c> loop.</item>
+/// bare leading positional number, <c>-q</c> / <c>-v</c> (the LAST wins) and the "==> name &lt;=="
+/// headers, <c>-z</c> (NUL-terminated records), <c>-f</c> / <c>--follow[=name|descriptor]</c> /
+/// <c>-F</c> / <c>--retry</c> / <c>--pid=PID</c> / <c>--max-unchanged-stats=N</c> / <c>-s SECS</c>,
+/// and <c>--</c>.</item>
 /// <item>Pipeline mode: from-line mode skips the first N-1 items and emits the
 /// rest; otherwise a circular buffer keeps only the last N items in memory.
 /// Multi-line items are split; single-line items pass through as their
 /// original typed object.</item>
-/// <item>File mode: byte mode emits the last N bytes (or from byte N for
-/// <c>+N</c>); from-line mode streams and emits from line N; otherwise a
-/// circular buffer emits the last N lines. Each file line is a typed
-/// <c>PsBash.CatLine</c> PSObject with <c>BashText</c> equal to the raw line.
-/// <c>-f</c> follow mode emits the initial tail then polls the file for
-/// appended content at the sleep interval.</item>
+/// <item>File mode: every operand in turn (a header before each when several, or with -v);
+/// byte mode emits the last N bytes (or from byte N for <c>+N</c>); from-line mode streams and
+/// emits from line N; otherwise a circular buffer emits the last N lines. Each file line is a typed
+/// <c>PsBash.CatLine</c> PSObject with <c>BashText</c> equal to the raw line; a missing final newline
+/// of the last line is copied through. The <c>-</c> operand is the pipeline.</item>
+/// <item>Follow mode emits the initial tail of every file, then polls ALL of them (<see cref="TailFollower"/>),
+/// printing a header whenever the output switches to another file.</item>
 /// </list>
 ///
 /// Common-parameter audit: <c>-n</c>, <c>-c</c>, <c>-f</c>, <c>-s</c> do not
@@ -54,9 +55,8 @@ public sealed class InvokeBashTailCommand : PSCmdlet
     // parameter so 'tail -c 30 file' binds correctly.
     [Parameter] public string? C { get; set; }
 
-    /// <summary>Decoy for the unsupported <c>-v</c> (--verbose, per-file headers).
-    /// Bare <c>-v</c> silently bound <c>-Verbose</c>; re-injected below so the
-    /// classifier fires exit 2.</summary>
+    /// <summary>Decoy for <c>-v</c> (--verbose, force headers).
+    /// Bare <c>-v</c> silently bound <c>-Verbose</c>; re-injected below.</summary>
     [Parameter] public SwitchParameter V { get; set; }
 
     [Parameter(ValueFromRemainingArguments = true)]
@@ -66,21 +66,15 @@ public sealed class InvokeBashTailCommand : PSCmdlet
     public PSObject? InputObject { get; set; }
 
     /// <summary>
-    /// Valid GNU <c>tail</c> options ps-bash does not implement, refused loudly (exit 2) by the
-    /// shared parser. -q/--quiet/--silent are accepted (no-op); --lines/--bytes alias -n/-c.
-    /// -v/--verbose (ps-bash tail emits no "==> name &lt;==" headers), -z, and the follow-by-name
-    /// family (-F, --retry, --pid, --max-unchanged-stats) are refused. (A string[] on purpose:
+    /// Valid GNU <c>tail</c> options ps-bash does not implement (none left: -v, -z, -F, --retry,
+    /// --pid, --max-unchanged-stats all work). (A string[] on purpose:
     /// CommonParameterCollisionGuardTests enumerates static string sets.)
     /// </summary>
-    private static readonly string[] TailValidButUnsupported =
-    {
-        "-v", "-z", "-F",
-        "--verbose", "--zero-terminated",
-        "--retry", "--max-unchanged-stats", "--pid",
-    };
+    private static readonly string[] TailValidButUnsupported = Array.Empty<string>();
 
     private const string OptLines = "lines", OptBytes = "bytes", OptQuiet = "quiet", OptNum = "num",
-        OptFollow = "follow", OptSleep = "sleep";
+        OptFollow = "follow", OptSleep = "sleep", OptVerbose = "verbose", OptZero = "zero",
+        OptFollowName = "followname", OptRetry = "retry", OptPid = "pid", OptMaxUnchanged = "maxunchanged";
 
     /// <summary>GNU tail long_options[] order; getopt_long lists ambiguous-prefix candidates in it.</summary>
     private static readonly string[] TailLongOptionOrder = { "silent", "sleep-interval", "verbose", "version" };
@@ -88,7 +82,7 @@ public sealed class InvokeBashTailCommand : PSCmdlet
     /// <summary>
     /// tail's option surface (GNU coreutils 9.4: -c -f -F -n -q -s -v -z + long forms; -NUM
     /// obsolete shorthand). <c>--follow</c> takes an OPTIONAL attached value (<c>name</c> /
-    /// <c>descriptor</c>), which ps-bash treats alike (it follows the resolved path).
+    /// <c>descriptor</c>).
     /// </summary>
     private static readonly OptSpecSet TailSpec = new(
         new[]
@@ -97,9 +91,15 @@ public sealed class InvokeBashTailCommand : PSCmdlet
             new OptSpec(OptLines, 'n', "lines", OptKind.Value),
             new OptSpec(OptFollow, 'f', null),                            // -f takes no value in a bundle
             new OptSpec(OptFollow, '\0', "follow", OptKind.OptionalValue), // --follow[=name|descriptor]
+            new OptSpec(OptFollowName, 'F', null),                        // -F = --follow=name --retry
             new OptSpec(OptQuiet, 'q', "quiet"),
             new OptSpec(OptQuiet, '\0', "silent"),
             new OptSpec(OptSleep, 's', "sleep-interval", OptKind.Value),
+            new OptSpec(OptVerbose, 'v', "verbose"),
+            new OptSpec(OptZero, 'z', "zero-terminated"),
+            new OptSpec(OptRetry, '\0', "retry"),
+            new OptSpec(OptPid, '\0', "pid", OptKind.Value),
+            new OptSpec(OptMaxUnchanged, '\0', "max-unchanged-stats", OptKind.Value),
         },
         validButUnsupported: TailValidButUnsupported,
         allowAbbrev: true,
@@ -124,7 +124,19 @@ public sealed class InvokeBashTailCommand : PSCmdlet
         /// <summary>True when the LAST of -c / -n on the line was -c (GNU: last one wins).</summary>
         public bool BytesMode;
         public bool Follow;
+        /// <summary>-F or --follow=name: follow the NAME (it can be replaced), not the open file.</summary>
+        public bool FollowName;
+        /// <summary>--retry or -F: keep trying files that are or become inaccessible.</summary>
+        public bool Retry;
+        /// <summary>--pid=PID (0 = none): stop following once that process has died.</summary>
+        public long Pid;
         public double SleepInterval = 1.0;
+        /// <summary>The LAST of -q/-v: when "==> name &lt;==" headers print.</summary>
+        public FileHeaders.Mode Headers = FileHeaders.Mode.Default;
+        /// <summary>-z: records end at NUL instead of newline (line mode only).</summary>
+        public bool Zero;
+        /// <summary>Warnings GNU prints before doing anything (--retry / --pid without -f).</summary>
+        public List<string> Warnings = new();
         public List<string> Operands = new();
         /// <summary>A usage error the scan itself cannot see (bad NUM, bad -s, bad --follow value); exit 1.</summary>
         public string? Error;
@@ -152,6 +164,7 @@ public sealed class InvokeBashTailCommand : PSCmdlet
         t.Operands = t.Parsed.Operands();
         if (t.Parsed.HasError) return t;
 
+        bool retryFlag = false, pidGiven = false;
         foreach (var tok in t.Parsed.Tokens)
         {
             if (tok.Kind != ArgTokKind.Option) continue;
@@ -178,13 +191,47 @@ public sealed class InvokeBashTailCommand : PSCmdlet
                     t.BytesMode = true;
                     break;
                 case OptFollow:
-                    if (tok.Value is { } how && !IsFollowHow(how))
+                    if (tok.Value is { } how)
                     {
-                        t.Error = $"tail: invalid argument '{how}' for '--follow'\n"
-                                  + "Valid arguments are:\n  - 'descriptor'\n  - 'name'";
-                        return t;
+                        if (!IsFollowHow(how))
+                        {
+                            t.Error = $"tail: invalid argument '{how}' for '--follow'\n"
+                                      + "Valid arguments are:\n  - 'descriptor'\n  - 'name'";
+                            return t;
+                        }
+                        t.FollowName = "name".StartsWith(how, StringComparison.Ordinal);
+                    }
+                    else
+                    {
+                        t.FollowName = false;
                     }
                     t.Follow = true;
+                    break;
+                case OptFollowName:
+                    t.Follow = true;
+                    t.FollowName = true;
+                    retryFlag = true;
+                    break;
+                case OptRetry:
+                    retryFlag = true;
+                    break;
+                case OptPid:
+                    if (!ulong.TryParse(tok.Value, System.Globalization.NumberStyles.None,
+                            System.Globalization.CultureInfo.InvariantCulture, out ulong pid) || pid > int.MaxValue)
+                    {
+                        t.Error = $"tail: invalid PID: '{tok.Value}'";
+                        return t;
+                    }
+                    t.Pid = (long)pid;
+                    pidGiven = true;
+                    break;
+                case OptMaxUnchanged:
+                    if (!ulong.TryParse(tok.Value, System.Globalization.NumberStyles.None,
+                            System.Globalization.CultureInfo.InvariantCulture, out _))
+                    {
+                        t.Error = $"tail: invalid maximum number of unchanged stats between opens: '{tok.Value}'";
+                        return t;
+                    }
                     break;
                 case OptSleep:
                     if (!double.TryParse(tok.Value, System.Globalization.NumberStyles.Float,
@@ -195,8 +242,20 @@ public sealed class InvokeBashTailCommand : PSCmdlet
                     }
                     t.SleepInterval = secs;
                     break;
+                case OptQuiet: t.Headers = FileHeaders.Mode.Never; break;
+                case OptVerbose: t.Headers = FileHeaders.Mode.Always; break;
+                case OptZero: t.Zero = true; break;
             }
         }
+
+        t.Retry = retryFlag;
+        // GNU's start-up warnings (stderr, no effect on the status).
+        if (retryFlag && !t.Follow)
+            t.Warnings.Add("tail: warning: --retry ignored; --retry is useful only when following");
+        else if (retryFlag && !t.FollowName)
+            t.Warnings.Add("tail: warning: --retry only effective for the initial open");
+        if (pidGiven && !t.Follow)
+            t.Warnings.Add("tail: warning: PID ignored; --pid=PID is useful only when following");
 
         // Legacy ps-bash extension, on the FIRST operand only and never after `--`:
         //   tail 5   -> line count 5 (Pester-pinned)
@@ -291,15 +350,21 @@ public sealed class InvokeBashTailCommand : PSCmdlet
     //   -n +N / -c +N  pure streaming (skip, then pass through);
     //   -n N           ring of the last N records (O(N));
     //   -c N           ring of the last >= N bytes of record text (O(N + one record)).
-    // File mode (operands present) is unchanged and runs in EndProcessing.
+    // -z (NUL records) and a "-" operand buffer the pipeline instead (EndProcessing).
+    // File mode (operands present) runs in EndProcessing.
     private TailArgs? _plan;
     private bool _halt;
     private bool _pipeMode;
+    private bool _bufferPipe;              // -z, or a "-" operand: keep every record for EndProcessing
+    private readonly List<PSObject> _buffered = new();
     private long _lineIdx;                 // -n +N: records/lines seen so far
     private long _bytesToSkip;             // -c +N: bytes still to skip
     private Queue<object>? _lineRing;      // -n N
     private Queue<byte[]>? _byteRing;      // -c N
     private long _byteRingTotal;
+    private bool _anyHeader;               // a header was written (the next one gets the blank separator)
+    private string? _lastHeaderName;       // follow: the file whose header is on screen
+    private bool _stdinHeaderDone;
 
     protected override void BeginProcessing()
     {
@@ -330,10 +395,17 @@ public sealed class InvokeBashTailCommand : PSCmdlet
             _halt = true;
             return;
         }
+        foreach (var w in plan.Warnings) FileSystemHelpers.WriteStderr(this, w);
 
         _plan = plan;
         _pipeMode = plan.Operands.Count == 0;
-        if (!_pipeMode) return;
+        bool dashOperand = plan.Operands.Contains("-");
+        _bufferPipe = (plan.Zero && !plan.BytesMode) || dashOperand;
+        if (!_pipeMode)
+        {
+            return;
+        }
+        if (_bufferPipe) return;
 
         if (plan.BytesMode)
         {
@@ -350,10 +422,33 @@ public sealed class InvokeBashTailCommand : PSCmdlet
         }
     }
 
+    private void WriteHeader(string name)
+    {
+        WriteObject(FileHeaders.Record(name, first: !_anyHeader));
+        _anyHeader = true;
+        _lastHeaderName = name;
+    }
+
     protected override void ProcessRecord()
     {
-        if (_halt || !_pipeMode || _plan is null || InputObject is null) return;
+        if (_halt || _plan is null || InputObject is null) return;
         var item = InputObject;
+
+        if (_bufferPipe)
+        {
+            _buffered.Add(item);
+            return;
+        }
+        if (!_pipeMode) return;
+
+        // `tail -v` on stdin: the header precedes the first output (which only appears at the end for
+        // the ring modes, but the header position is the same).
+        if (!_stdinHeaderDone)
+        {
+            _stdinHeaderDone = true;
+            if (_plan.Headers == FileHeaders.Mode.Always && (_plan.FromLine || (_plan.BytesMode && _plan.BytesFromStart)))
+                WriteHeader(FileHeaders.StandardInput);
+        }
 
         if (_plan.BytesMode)
         {
@@ -435,18 +530,20 @@ public sealed class InvokeBashTailCommand : PSCmdlet
     {
         if (_halt || _plan is null) return;
         var plan = _plan;
-
-        int count = plan.Count;
-        int? byteCount = plan.BytesMode ? plan.ByteCount : null;
-        bool fromLine = plan.FromLine;
-        bool bytesFromStart = plan.BytesFromStart;
-        bool followFile = plan.Follow;
-        double sleepInterval = plan.SleepInterval;
         var operands = plan.Operands;
 
         // Pipeline mode: the streaming parts already ran in ProcessRecord; flush the rings.
         if (_pipeMode)
         {
+            // -v: the header goes before everything (once, even for empty input).
+            if (plan.Headers == FileHeaders.Mode.Always && !(_stdinHeaderDone && (plan.FromLine || (plan.BytesMode && plan.BytesFromStart))))
+                WriteHeader(FileHeaders.StandardInput);
+
+            if (_bufferPipe)
+            {
+                EmitFromRecords(_buffered, plan);
+                return;
+            }
             if (_byteRing is not null)
             {
                 long keep = plan.ByteCount;
@@ -476,140 +573,223 @@ public sealed class InvokeBashTailCommand : PSCmdlet
             return;
         }
 
-        string firstFile = resolvedFiles[0];
-
-        // -c bytes mode
-        if (byteCount != null)
-        {
-            EmitFileBytes(firstFile, byteCount.Value, bytesFromStart, "tail");
-            return;
-        }
-
-        if (followFile)
-        {
-            FollowFile(firstFile, count, fromLine, sleepInterval);
-            return;
-        }
-
-        // Normal mode: emit last N lines (or from line N) per file.
+        bool headers = FileHeaders.Wanted(plan.Headers, operands.Count);
+        var targets = new List<TailFollower.Target>();
         foreach (var filePath in resolvedFiles)
         {
-            if (fromLine)
+            if (filePath == "-")
             {
-                StreamReader? reader = OpenReader(filePath, "tail");
-                if (reader == null) continue;
-                try
-                {
-                    int li = 0;
-                    string? line;
-                    while ((line = reader.ReadLine()) != null)
-                    {
-                        li++;
-                        if (li >= count)
-                        {
-                            WriteObject(MakeCatLine(li, line, filePath));
-                        }
-                    }
-                }
-                finally
-                {
-                    reader.Dispose();
-                }
+                if (headers) WriteHeader(FileHeaders.StandardInput);
+                EmitFromRecords(_buffered, plan);
+                continue;
+            }
+
+            var target = new TailFollower.Target { Path = filePath, Display = FileHeaders.Display(this, filePath) };
+            bool exists = File.Exists(filePath);
+            long? openedAt = null;
+            if (exists)
+            {
+                if (headers) WriteHeader(target.Display);
+                try { openedAt = new FileInfo(filePath).Length; } catch { /* reported by the reader below */ }
+                if (!EmitFile(filePath, plan)) openedAt = null;
             }
             else
             {
-                StreamReader? reader = OpenReader(filePath, "tail");
-                if (reader == null) continue;
-                try
-                {
-                    int cap = Math.Max(count, 1);
-                    var buf = new string[cap];
-                    int bufLen = 0, total = 0, pos = 0;
-                    string? line;
-                    while ((line = reader.ReadLine()) != null)
-                    {
-                        buf[pos] = line;
-                        pos = (pos + 1) % cap;
-                        if (bufLen < cap) bufLen++;
-                        total++;
-                    }
-
-                    if (count == 0) bufLen = 0; // GNU: 	ail -n 0 prints nothing
-                    int start = bufLen < cap ? 0 : pos;
-                    int lineNumOffset = total - bufLen;
-                    for (int k = 0; k < bufLen; k++)
-                    {
-                        int idx = (start + k) % cap;
-                        WriteObject(MakeCatLine(lineNumOffset + k + 1, buf[idx], filePath));
-                    }
-                }
-                finally
-                {
-                    reader.Dispose();
-                }
+                // GNU prints the diagnostic at the failed open, in operand order.
+                WriteFileReadError(filePath, "tail", new FileNotFoundException());
             }
+            targets.Add(target);
+            if (plan.Follow) target.Pos = openedAt ?? 0;
+            if (plan.Follow) _initialOpen[target] = openedAt;
         }
+
+        if (!plan.Follow) return;
+        FollowLoop(plan, targets, headers);
     }
 
+    private readonly Dictionary<TailFollower.Target, long?> _initialOpen = new();
+
     /// <summary>
-    /// psm1 oracle: <c>-f</c> follow mode — emit the initial tail, then poll the
-    /// file at <paramref name="sleepInterval"/> seconds for appended content,
-    /// re-reading only from the last known position. A shrunk file resets the
-    /// position (truncation / rotation). Runs until the pipeline is stopped.
+    /// Follow every target until the pipeline stops, <c>--pid</c> dies, or no target is left. The initial
+    /// output has been written; this prints only what is appended, with a header whenever the output
+    /// switches to another file (more than one file, or -v).
     /// </summary>
-    private void FollowFile(string filePath, int count, bool fromLine, double sleepInterval)
+    private void FollowLoop(TailArgs plan, List<TailFollower.Target> targets, bool headers)
     {
+        var follower = new TailFollower(targets, plan.FollowName, plan.Retry,
+            msg => FileSystemHelpers.WriteStderr(this, msg));
+        foreach (var t in targets) follower.Start(t, _initialOpen[t]);
+
+        if (!follower.AnyLeft)
+        {
+            FileSystemHelpers.WriteBashError(this, "tail: no files remaining");
+            return;
+        }
+
+        // -v (or several files) puts a header before the output of whichever file speaks next.
+        _lastHeaderName = headers && targets.Count > 0 ? targets.LastOrDefault(x => _initialOpen[x] is not null)?.Display : null;
+
         try
         {
-            EmitInitialFollowTail(filePath, count, fromLine);
-
-            long filePos = new FileInfo(filePath).Length;
-
             while (!Stopping)
             {
-                Thread.Sleep((int)(sleepInterval * 1000));
-                var info = new FileInfo(filePath);
-                if (info.Length > filePos)
+                bool pidDead = plan.Pid > 0 && !TailFollower.IsAlive(plan.Pid);
+                follower.Poll((t, lines) =>
                 {
-                    try
-                    {
-                        using var fs = new FileStream(
-                            filePath, FileMode.Open, FileAccess.Read,
-                            FileShare.ReadWrite);
-                        fs.Seek(filePos, SeekOrigin.Begin);
-                        long avail = info.Length - filePos;
-                        // Cap the per-poll read so a huge burst append doesn't allocate
-                        // unboundedly; the remainder is picked up on the next poll.
-                        int toRead = (int)Math.Min(avail, FollowReadCap);
-                        var buffer = new byte[toRead];
-                        int read = fs.Read(buffer, 0, toRead);
-
-                        var (advance, follows) = SplitFollowChunk(buffer, read, avail, FollowReadCap);
-                        if (advance == 0) continue; // fragment withheld — re-read next poll
-                        foreach (var l in follows)
-                        {
-                            foreach (var obj in BashRuntime.EmitBashLines(l))
-                            {
-                                WriteObject(obj);
-                            }
-                        }
-                        filePos += advance; // advance past COMPLETE lines only
-                    }
-                    catch
-                    {
-                        continue;
-                    }
-                }
-                else if (info.Length < filePos)
+                    if (headers && _lastHeaderName != t.Display) WriteHeader(t.Display);
+                    foreach (var l in lines)
+                        foreach (var obj in BashRuntime.EmitBashLines(l))
+                            WriteObject(obj);
+                });
+                if (pidDead) return;
+                if (!follower.AnyLeft)
                 {
-                    filePos = 0;
+                    FileSystemHelpers.WriteBashError(this, "tail: no files remaining");
+                    return;
                 }
+                Thread.Sleep((int)(plan.SleepInterval * 1000));
             }
         }
         catch (Exception ex)
         {
             if (FileSystemHelpers.IsPipelineStop(ex)) throw;
             FileSystemHelpers.WriteBashError(this, $"tail: cannot follow file: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// GNU <c>tail -z</c> over a whole byte stream: the last N NUL-terminated pieces (<c>-n +N</c>: from
+    /// piece N). The final piece may be unterminated and is then copied as it is.
+    /// </summary>
+    internal static string ZeroTail(string text, int count, bool fromStart)
+    {
+        if (text.Length == 0) return text;
+        var pieces = new List<string>(text.Split('\0'));
+        bool endsWithNul = text.EndsWith('\0');
+        if (endsWithNul) pieces.RemoveAt(pieces.Count - 1);
+        int total = pieces.Count;
+        int first = fromStart ? Math.Max(count - 1, 0) : Math.Max(total - count, 0);
+        if (!fromStart && count == 0) first = total;
+        var sb = new StringBuilder();
+        for (int i = first; i < total; i++)
+        {
+            sb.Append(pieces[i]);
+            if (i < total - 1 || endsWithNul) sb.Append('\0');
+        }
+        return sb.ToString();
+    }
+
+    /// <summary>The buffered-pipeline body (-z, or the "-" operand): tail of whole records.</summary>
+    private void EmitFromRecords(List<PSObject> records, TailArgs plan)
+    {
+        if (plan.BytesMode)
+        {
+            byte[] bytes = RawBytes.GetBytes(BashRuntime.RecordStreamText(records));
+            long start = plan.BytesFromStart
+                ? Math.Min(Math.Max((long)plan.ByteCount - 1, 0), bytes.Length)
+                : Math.Max(0, bytes.Length - (long)Math.Max(plan.ByteCount, 0));
+            foreach (var rec in BashRuntime.ByteSliceRecords(
+                         RawBytes.GetString(bytes, (int)start, (int)(bytes.Length - start))))
+                WriteObject(rec);
+            return;
+        }
+        if (plan.Zero)
+        {
+            foreach (var rec in BashRuntime.ByteSliceRecords(
+                         ZeroTail(BashRuntime.RecordStreamText(records), plan.Count, plan.FromLine)))
+                WriteObject(rec);
+            return;
+        }
+
+        // Newline records: split every item into lines (keeping typed single-line objects), then select.
+        var all = new List<object>();
+        foreach (var item in records)
+        {
+            string text = BashRuntime.GetBashText(item);
+            string trimmed = text.TrimEnd('\n');
+            if (trimmed.Contains('\n'))
+            {
+                bool unterminated = BashRuntime.IsUnterminated(item);
+                var pieces = trimmed.Split('\n');
+                for (int p = 0; p < pieces.Length; p++)
+                    all.Add(BashRuntime.TextRecord(pieces[p], unterminated && p == pieces.Length - 1));
+            }
+            else
+            {
+                all.Add(item);
+            }
+        }
+        int begin = plan.FromLine ? Math.Max(plan.Count - 1, 0) : Math.Max(all.Count - plan.Count, 0);
+        if (!plan.FromLine && plan.Count == 0) begin = all.Count;
+        for (int i = begin; i < all.Count; i++) WriteObject(all[i]);
+    }
+
+    /// <summary>
+    /// The initial (non-follow) output of one file: the last N lines / bytes, or from line / byte N.
+    /// Returns false when the file could not be read (the diagnostic has been written).
+    /// </summary>
+    private bool EmitFile(string filePath, TailArgs plan)
+    {
+        if (plan.BytesMode)
+            return EmitFileBytes(filePath, plan.ByteCount, plan.BytesFromStart, "tail");
+
+        if (plan.Zero)
+        {
+            try
+            {
+                string text = RawBytes.GetString(BashFileSystem.ReadAllBytes(filePath));
+                foreach (var rec in BashRuntime.ByteSliceRecords(ZeroTail(text, plan.Count, plan.FromLine)))
+                    WriteObject(rec);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                if (FileSystemHelpers.IsPipelineStop(ex)) throw;
+                WriteFileReadError(filePath, "tail", ex);
+                return false;
+            }
+        }
+
+        // Text lines that remember whether the LAST one had its newline: GNU copies a missing final
+        // newline through (a following header's separator then ends the line).
+        try
+        {
+            int count = plan.Count;
+            if (plan.FromLine)
+            {
+                int li = 0;
+                foreach (var line in BashFileSystem.ReadTextLines(filePath))
+                {
+                    li++;
+                    if (li >= count)
+                        WriteObject(MakeCatLine(li, line.Text, filePath, !line.HasTrailingNewline));
+                }
+                return true;
+            }
+
+            if (count == 0)
+            {
+                foreach (var _ in BashFileSystem.ReadTextLines(filePath)) { break; } // still opens/validates the file
+                return true;
+            }
+            var ring = new Queue<(string Text, bool Unterminated)>();
+            int total = 0;
+            foreach (var line in BashFileSystem.ReadTextLines(filePath))
+            {
+                ring.Enqueue((line.Text, !line.HasTrailingNewline));
+                if (ring.Count > count) ring.Dequeue();
+                total++;
+            }
+            int number = total - ring.Count;
+            foreach (var (text, unterminated) in ring)
+                WriteObject(MakeCatLine(++number, text, filePath, unterminated));
+            return true;
+        }
+        catch (Exception ex)
+        {
+            if (FileSystemHelpers.IsPipelineStop(ex)) throw;
+            WriteFileReadError(filePath, "tail", ex);
+            return false;
         }
     }
 
@@ -654,7 +834,7 @@ public sealed class InvokeBashTailCommand : PSCmdlet
         return (lastNl + 1, lines);
     }
 
-    private void EmitFileBytes(string path, int byteCount, bool fromByte, string command)
+    private bool EmitFileBytes(string path, int byteCount, bool fromByte, string command)
     {
         try
         {
@@ -674,63 +854,13 @@ public sealed class InvokeBashTailCommand : PSCmdlet
             foreach (var rec in BashRuntime.ByteSliceRecords(
                          RawBytes.GetString(ms.GetBuffer(), 0, (int)ms.Length)))
                 WriteObject(rec);
+            return true;
         }
         catch (Exception ex)
         {
             if (FileSystemHelpers.IsPipelineStop(ex)) throw;
             WriteFileReadError(path, command, ex);
-        }
-    }
-
-    private void EmitInitialFollowTail(string filePath, int count, bool fromLine)
-    {
-        StreamReader? reader = OpenReader(filePath, "tail");
-        if (reader == null) return;
-
-        try
-        {
-            if (fromLine)
-            {
-                int lineNumber = 0;
-                string? line;
-                while ((line = reader.ReadLine()) != null)
-                {
-                    lineNumber++;
-                    if (lineNumber >= count)
-                    {
-                        foreach (var obj in BashRuntime.EmitBashLines(line))
-                        {
-                            WriteObject(obj);
-                        }
-                    }
-                }
-                return;
-            }
-
-            int cap = Math.Max(count, 1);
-            var buf = new string[cap];
-            int bufLen = 0, pos = 0;
-            string? current;
-            while ((current = reader.ReadLine()) != null)
-            {
-                buf[pos] = current;
-                pos = (pos + 1) % cap;
-                if (bufLen < cap) bufLen++;
-            }
-
-            if (count == 0) bufLen = 0; // GNU: 	ail -n 0 -f starts with nothing
-            int start = bufLen < cap ? 0 : pos;
-            for (int k = 0; k < bufLen; k++)
-            {
-                foreach (var obj in BashRuntime.EmitBashLines(buf[(start + k) % cap]))
-                {
-                    WriteObject(obj);
-                }
-            }
-        }
-        finally
-        {
-            reader.Dispose();
+            return false;
         }
     }
 
@@ -741,7 +871,7 @@ public sealed class InvokeBashTailCommand : PSCmdlet
             $"{command}: cannot open '{path.Replace('\\', '/')}' for reading: {FileSystemHelpers.ReadErrorMessage(ex)}");
     }
 
-    private static PSObject MakeCatLine(int lineNumber, string content, string fileName)
+    private static PSObject MakeCatLine(int lineNumber, string content, string fileName, bool unterminated = false)
     {
         var obj = new PSObject();
         obj.TypeNames.Insert(0, "PsBash.CatLine");
@@ -750,41 +880,8 @@ public sealed class InvokeBashTailCommand : PSCmdlet
         obj.Properties.Add(new PSNoteProperty("FileName", fileName));
         obj.Properties.Add(new PSNoteProperty(
             "BashText", BashRuntime.NormalizeBashText(content)));
+        if (unterminated) obj.Properties.Add(new PSNoteProperty("NoTrailingNewline", true));
         return obj;
-    }
-
-    /// <summary>
-    /// psm1 oracle: <c>Open-BashFileReader</c> — sequential-scan
-    /// <see cref="FileStream"/>, BOM skip, BOM-less UTF-8
-    /// <see cref="StreamReader"/>. On failure emits a bash-style error via
-    /// <see cref="FileSystemHelpers.WriteBashError"/> and returns <c>null</c>.
-    /// </summary>
-    private StreamReader? OpenReader(string path, string command)
-    {
-        FileStream fs;
-        try
-        {
-            fs = new FileStream(
-                path, FileMode.Open, FileAccess.Read, FileShare.Read, 4096,
-                FileOptions.SequentialScan);
-        }
-        catch (Exception ex)
-        {
-            if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-            FileSystemHelpers.WriteBashError(this,
-                $"{command}: cannot open '{path.Replace('\\', '/')}' for reading: {FileSystemHelpers.ReadErrorMessage(ex)}");
-            return null;
-        }
-
-        var bom = new byte[3];
-        int read = fs.Read(bom, 0, 3);
-        bool hasBom = read >= 3 && bom[0] == 0xEF && bom[1] == 0xBB && bom[2] == 0xBF;
-        if (!hasBom && read > 0)
-        {
-            fs.Seek(0, SeekOrigin.Begin);
-        }
-
-        return new StreamReader(fs, RawBytes.Encoding, detectEncodingFromByteOrderMarks: false);
     }
 
     /// <summary>
@@ -795,6 +892,7 @@ public sealed class InvokeBashTailCommand : PSCmdlet
     {
         foreach (var rawP in paths)
         {
+            if (rawP == "-") { yield return "-"; continue; }
             var p = FileSystemHelpers.NormalizeOperandPath(rawP);
             if (p.IndexOf('*') >= 0 || p.IndexOf('?') >= 0)
             {
@@ -826,7 +924,9 @@ public sealed class InvokeBashTailCommand : PSCmdlet
             }
             else
             {
-                yield return SessionState.Path.GetUnresolvedProviderPathFromPSPath(p);
+                var resolvedLiteral = SessionState.Path.GetUnresolvedProviderPathFromPSPath(p);
+                OperandDisplay.Remember(this, resolvedLiteral, rawP);
+                yield return resolvedLiteral;
             }
         }
     }

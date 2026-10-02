@@ -56,16 +56,13 @@ public class CatArgScanTests
     [InlineData("n---- ops=[-,f]", "-n", "-", "f")]
     [InlineData("----- ops=[-n]", "--", "-n")]  // GNU: `cat -- -n` -> "cat: -n: No such file"
     [InlineData("n---- ops=[-E]", "-n", "--", "-E")]
-    [InlineData("ERR cat: option '-A' is recognized but not supported by ps-bash", "-A")]
-    [InlineData("ERR cat: option '-e' is recognized but not supported by ps-bash", "-e")]
-    [InlineData("ERR cat: option '-t' is recognized but not supported by ps-bash", "-t")]
-    [InlineData("ERR cat: option '-v' is recognized but not supported by ps-bash", "-v")]
-    [InlineData("ERR cat: option '-v' is recognized but not supported by ps-bash", "-nv")]
-    [InlineData("ERR cat: option '-A' is recognized but not supported by ps-bash", "-An")]
-    [InlineData("ERR cat: option '--show-all' is recognized but not supported by ps-bash", "--show-all")]
-    [InlineData("ERR cat: option '--show-nonprinting' is recognized but not supported by ps-bash", "--show-nonprinting")]
-    [InlineData("ERR cat: option '--show-nonprinting' is recognized but not supported by ps-bash", "--show-n")]  // FIX
-    [InlineData("ERR cat: option '--show-all' is recognized but not supported by ps-bash", "--show-a")]  // FIX
+    [InlineData("n--ET ops=[]", "-nA")]  // implemented: -A = -vET
+    [InlineData("---E- ops=[]", "-e")]  // -e = -vE
+    [InlineData("----T ops=[]", "-t")]  // -t = -vT
+    [InlineData("----- ops=[]", "-v")]
+    [InlineData("---ET ops=[]", "--show-all")]
+    [InlineData("----- ops=[]", "--show-nonprinting")]
+    [InlineData("---ET ops=[]", "--show-a")]
     [InlineData("ERR cat: option '--num' is ambiguous; possibilities: '--number-nonblank' '--number'", "--num")]  // GNU long_options[] order
     [InlineData("ERR cat: option '--n' is ambiguous; possibilities: '--number-nonblank' '--number'", "--n")]
     [InlineData("ERR cat: option '--show' is ambiguous; possibilities: '--show-nonprinting' '--show-ends' '--show-tabs' '--show-all'", "--show")]
@@ -97,9 +94,6 @@ public class CatArgScanTests
     [InlineData("-x", 1)]
     [InlineData("--n", 1)]
     [InlineData("--version=1", 1)]
-    [InlineData("-A", 2)]
-    [InlineData("-v", 2)]
-    [InlineData("--show-all", 2)]
     public void ScanError_ExitStatus_IsGnuUsageStatusExceptOurOwnRefusal(string arg, int exit)
     {
         Assert.Equal(exit, InvokeBashCatCommand.ScanArgs(new[] { arg }).ErrorExitCode);
