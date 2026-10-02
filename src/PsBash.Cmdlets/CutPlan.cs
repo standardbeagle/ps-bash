@@ -19,10 +19,9 @@ internal enum CutMode { Bytes, Chars, Fields }
 /// range actually yields a character. Positions past the end of a line are dropped.
 ///
 /// <para>Bytes vs characters: <c>-b</c> counts UTF-8 bytes. GNU 9.4 also counts bytes for
-/// <c>-c</c>; ps-bash deliberately keeps <c>-c</c> as characters (Unicode scalars), which is what
-/// callers mean and only differs for non-ASCII text. A <c>-b</c> slice that cuts a multi-byte
-/// character has no .NET string representation; it is decoded as Latin-1 (same known gap as
-/// <c>printf '\xe9'</c>, see runtime-functions.md "Raw bytes").</para>
+/// <c>-c</c>, and so does ps-bash (oracle-checked: <c>printf 'h\xc3\xa9llo' | cut -c1-2</c>
+/// emits <c>h\xc3</c>). A slice that cuts a multi-byte character keeps the lone byte as an
+/// escaped-byte marker (<see cref="RawBytes"/>), written back as the original byte.</para>
 /// </summary>
 internal sealed class CutPlan
 {
@@ -67,7 +66,7 @@ internal sealed class CutPlan
         return Mode switch
         {
             CutMode.Fields => ApplyFields(line),
-            CutMode.Chars => ApplyUnits(line, bytes: false),
+            // GNU 9.4 (non-multibyte -c): -c counts BYTES, exactly like -b.
             _ => ApplyUnits(line, bytes: true),
         };
     }

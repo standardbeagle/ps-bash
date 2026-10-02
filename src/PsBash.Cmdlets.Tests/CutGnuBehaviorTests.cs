@@ -49,13 +49,22 @@ public class CutGnuBehaviorTests : IClassFixture<SharedPwshFixture>
     }
 
     [Fact]
-    public void Bytes_CountUtf8Bytes_CharsCountCharacters()
+    public void Bytes_CountUtf8Bytes_AndSoDoesC()
     {
-        // é is 2 bytes (C3 A9). -b2-3 = A9 + 'l' would split the character; -b1-3 = 'h' + é.
-        Assert.Equal(new[] { "hé" }, Run("'héllo' | Invoke-BashCut '-b1-3'").AssertSuccess().Lines);   // FIX (was: unsupported)
-        Assert.Equal(new[] { "hél" }, Run("'héllo' | Invoke-BashCut '-c1-3'").AssertSuccess().Lines);
-        Assert.Equal(new[] { "é" }, Run("'héllo' | Invoke-BashCut '-c2'").AssertSuccess().Lines);
-        Assert.Equal(new[] { "\U0001F680a" }, Run("'\U0001F680abc' | Invoke-BashCut '-c1-2'").AssertSuccess().Lines);   // surrogate pair not split
+        // GNU 9.4 (oracle): -c counts BYTES exactly like -b. é is 2 bytes (C3 A9).
+        Assert.Equal(new[] { "hé" }, Run("'héllo' | Invoke-BashCut '-b1-3'").AssertSuccess().Lines);
+        Assert.Equal(new[] { "hé" }, Run("'héllo' | Invoke-BashCut '-c1-3'").AssertSuccess().Lines);
+        Assert.Equal(new[] { "l" }, Run("'héllo' | Invoke-BashCut '-c4'").AssertSuccess().Lines);
+        Assert.Equal(new[] { "\U0001F680" }, Run("'\U0001F680abc' | Invoke-BashCut '-c1-4'").AssertSuccess().Lines);
+        Assert.Equal(new[] { "héllo" }, Run("'héllo' | Invoke-BashCut '-c1-'").AssertSuccess().Lines);
+    }
+
+    [Fact]
+    public void C_SplitMultiByteChar_KeepsRawByteMarker()
+    {
+        // -c1-2 of "héllo" = 68 C3: the lone lead byte round-trips as an escaped-byte marker (U+DC00+0xC3).
+        // Byte stream is 68 C3 0A = 3 bytes (oracle: printf 'h\xc3\xa9llo\n' | cut -c1-2 | wc -c = 3).
+        Assert.Equal(new[] { "3" }, Run("'héllo' | Invoke-BashCut '-c1-2' | Invoke-BashWc '-c'").AssertSuccess().Lines);
     }
 
     [Fact]
