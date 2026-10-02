@@ -1322,6 +1322,43 @@
     {
       "flag": "--group-directories-first",
       "desc": "list directories before files"
+    },
+    {
+      "flag": "-C",
+      "desc": "list entries in columns, sorted down"
+    },
+    {
+      "flag": "-x",
+      "desc": "list entries in rows (across)"
+    },
+    {
+      "flag": "-m",
+      "desc": "comma-separated list, filled to the width"
+    },
+    {
+      "flag": "-w",
+      "desc": "set the output width (0 = no limit)",
+      "arg": "COLS"
+    },
+    {
+      "flag": "-T",
+      "desc": "assume tab stops every COLS (0 = spaces only)",
+      "arg": "COLS"
+    },
+    {
+      "flag": "--format",
+      "desc": "across, commas, horizontal, long, single-column, verbose, vertical",
+      "arg": "WORD"
+    },
+    {
+      "flag": "--width",
+      "desc": "set the output width (0 = no limit)",
+      "arg": "COLS"
+    },
+    {
+      "flag": "--tabsize",
+      "desc": "assume tab stops every COLS",
+      "arg": "COLS"
     }
   ],
   "mapfile": [

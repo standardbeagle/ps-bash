@@ -90,6 +90,13 @@ public sealed class InvokeBashLsCommand : PSCmdlet
     [Parameter]
     public SwitchParameter I { get; set; }
 
+    /// <summary>
+    /// The bash <c>-w COLS</c> (line width) value option — a bare <c>-w</c> is ambiguous between the
+    /// <c>-WarningAction</c> / <c>-WarningVariable</c> common parameters and crashes the binder. Re-injected as <c>-w COLS</c>.
+    /// </summary>
+    [Parameter]
+    public string? W { get; set; }
+
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
@@ -102,7 +109,9 @@ public sealed class InvokeBashLsCommand : PSCmdlet
         OptRecursive = "recursive", OptSortSize = "sort-size", OptSortTime = "sort-time", OptReverse = "reverse",
         OptOnePerLine = "one", OptSlash = "slash", OptDirectory = "directory", OptClassifyShort = "classify-short",
         OptClassify = "classify", OptColor = "color", OptInode = "inode", OptBlocks = "blocks",
-        OptGroupDirsFirst = "group-dirs-first", OptSort = "sort";
+        OptGroupDirsFirst = "group-dirs-first", OptSort = "sort",
+        OptVertical = "vertical", OptAcross = "across", OptCommas = "commas", OptFormat = "format",
+        OptWidth = "width", OptTabsize = "tabsize";
 
     /// <summary>
     /// GNU options ps-bash refuses (exit 2): each changes the OUTPUT (columns, quoting, sort key,
@@ -112,14 +121,14 @@ public sealed class InvokeBashLsCommand : PSCmdlet
     /// </summary>
     private static readonly string[] LsUnsupported =
     {
-        "-b", "-c", "-f", "-g", "-k", "-m", "-n", "-o", "-q", "-u", "-v", "-w", "-x",
-        "-B", "-C", "-D", "-G", "-H", "-I", "-L", "-N", "-Q", "-T", "-U", "-X", "-Z",
-        "--author", "--escape", "--block-size", "--ignore-backups", "--dired", "--file-type", "--format",
+        "-b", "-c", "-f", "-g", "-k", "-n", "-o", "-q", "-u", "-v",
+        "-B", "-D", "-G", "-H", "-I", "-L", "-N", "-Q", "-U", "-X", "-Z",
+        "--author", "--escape", "--block-size", "--ignore-backups", "--dired", "--file-type",
         "--full-time", "--no-group", "--si", "--dereference-command-line",
         "--dereference-command-line-symlink-to-dir", "--hide", "--hyperlink", "--indicator-style",
         "--ignore", "--kibibytes", "--dereference", "--numeric-uid-gid", "--literal",
         "--hide-control-chars", "--show-control-chars", "--quote-name", "--quoting-style", "--time",
-        "--time-style", "--tabsize", "--width", "--context", "--zero",
+        "--time-style", "--context", "--zero",
     };
 
     /// <summary>GNU's long_options[] order (what an ambiguous abbreviation lists), read from the oracle.</summary>
@@ -154,6 +163,12 @@ public sealed class InvokeBashLsCommand : PSCmdlet
             new OptSpec(OptBlocks, 's', "size"),
             new OptSpec(OptGroupDirsFirst, '\0', "group-directories-first"),
             new OptSpec(OptSort, '\0', "sort", OptKind.Value),
+            new OptSpec(OptVertical, 'C', null),
+            new OptSpec(OptAcross, 'x', null),
+            new OptSpec(OptCommas, 'm', null),
+            new OptSpec(OptFormat, '\0', "format", OptKind.Value),
+            new OptSpec(OptWidth, 'w', "width", OptKind.Value),
+            new OptSpec(OptTabsize, 'T', "tabsize", OptKind.Value),
         },
         LsUnsupported,
         allowAbbrev: true,
@@ -173,6 +188,54 @@ public sealed class InvokeBashLsCommand : PSCmdlet
         ("auto", 2), ("tty", 2), ("if-tty", 2),
     };
 
+    internal enum LsFormat { OnePerLine, Long, Vertical, Across, Commas }
+
+    private const string FormatValidBlock =
+        "  - 'verbose', 'long'\n  - 'commas'\n  - 'horizontal', 'across'\n  - 'vertical'\n  - 'single-column'";
+
+    private static readonly (string, LsFormat)[] FormatTable =
+    {
+        ("verbose", LsFormat.Long), ("long", LsFormat.Long), ("commas", LsFormat.Commas),
+        ("horizontal", LsFormat.Across), ("across", LsFormat.Across), ("vertical", LsFormat.Vertical),
+        ("single-column", LsFormat.OnePerLine),
+    };
+
+    /// <summary>A GNU <c>-w</c>/<c>-T</c> operand: plain decimal digits (0 allowed), nothing else.</summary>
+    private static bool TryParseCount(string? text, out long value)
+    {
+        value = 0;
+        if (string.IsNullOrEmpty(text)) return false;
+        foreach (char c in text) if (c is < '0' or > '9') return false;
+        if (!long.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out value))
+            value = long.MaxValue;    // beyond long: GNU saturates to "no practical limit"
+        return true;
+    }
+
+    /// <summary>
+    /// The line length when no <c>-w</c>: <c>$COLUMNS</c> when it is a number (0 = unlimited), else 80 (output
+    /// here is never a terminal, so GNU's ioctl is not consulted). An invalid value is warned about and ignored.
+    /// </summary>
+    private long EnvLineWidth()
+    {
+        string? raw = Environment.GetEnvironmentVariable("COLUMNS");
+        if (string.IsNullOrEmpty(raw)) return 80;
+        if (TryParseCount(raw, out long v)) return v;
+        FileSystemHelpers.WriteBashError(this,
+            $"ls: ignoring invalid width in environment variable COLUMNS: '{raw}'");
+        return 80;
+    }
+
+    /// <summary>The tab size when no <c>-T</c>: <c>$TABSIZE</c> when numeric, else 8.</summary>
+    private int EnvTabSize()
+    {
+        string? raw = Environment.GetEnvironmentVariable("TABSIZE");
+        if (string.IsNullOrEmpty(raw)) return 8;
+        if (TryParseCount(raw, out long v)) return (int)Math.Min(v, int.MaxValue);
+        FileSystemHelpers.WriteBashError(this,
+            $"ls: ignoring invalid tab size in environment variable TABSIZE: '{raw}'");
+        return 8;
+    }
+
     private static readonly (string, int)[] SortTable =
     {
         ("none", 0), ("time", 1), ("size", 2), ("extension", 3), ("version", 4), ("width", 5),
@@ -185,6 +248,7 @@ public sealed class InvokeBashLsCommand : PSCmdlet
         // (PsEmitter.OrderedArgCommands) so they arrive in Arguments, in order.
         var args = BashRuntime.PrependDecoys(Arguments, (A.IsPresent, "-a"), (D.IsPresent, "-d"),
             (P.IsPresent, "-p"), (I.IsPresent, "-i"));
+        if (W is not null) args = new[] { "-w", W }.Concat(args).ToArray();
 
         FileSystemHelpers.SetLastExitCode(this, 0);
         if (FileSystemHelpers.TryHandleVersion(this, "ls", args)) return;
@@ -209,11 +273,46 @@ public sealed class InvokeBashLsCommand : PSCmdlet
         int sortKey = 0; // 0 = name, 1 = time, 2 = size
         int indicatorStyle = 0; // 0 = none, 1 = slash (-p), 2 = classify (-F)
         bool colorOn = false;
+        // Output format is "last option wins" too, except that -1 never cancels -l (GNU ls.c).
+        LsFormat format = LsFormat.OnePerLine;
+        long? lineWidth = null;     // -w / --width (0 = unlimited)
+        int? tabSizeOpt = null;     // -T / --tabsize
         foreach (var t in parsed.Tokens)
         {
             if (t.Kind != ArgTokKind.Option) continue;
             switch (t.OptId)
             {
+                case OptLong: format = LsFormat.Long; break;
+                case OptOnePerLine: if (format != LsFormat.Long) format = LsFormat.OnePerLine; break;
+                case OptVertical: format = LsFormat.Vertical; break;
+                case OptAcross: format = LsFormat.Across; break;
+                case OptCommas: format = LsFormat.Commas; break;
+                case OptFormat:
+                    if (!GnuArgMatch.TryMatch("ls", "format", t.Value ?? "", FormatTable, FormatValidBlock,
+                            out LsFormat fv, out var ferr))
+                    {
+                        FileSystemHelpers.WriteBashError(this, ferr!);
+                        FileSystemHelpers.SetLastExitCode(this, 1);
+                        return;
+                    }
+                    format = fv;
+                    break;
+                case OptWidth:
+                    if (!TryParseCount(t.Value, out long wv))
+                    {
+                        WriteBashError($"ls: invalid line width: '{t.Value}'", 2);
+                        return;
+                    }
+                    lineWidth = wv;
+                    break;
+                case OptTabsize:
+                    if (!TryParseCount(t.Value, out long tv))
+                    {
+                        WriteBashError($"ls: invalid tab size: '{t.Value}'", 2);
+                        return;
+                    }
+                    tabSizeOpt = (int)Math.Min(tv, int.MaxValue);
+                    break;
                 case OptSortSize: sortKey = 2; break;
                 case OptSortTime: sortKey = 1; break;
                 case OptSlash: indicatorStyle = 1; break;
@@ -255,7 +354,15 @@ public sealed class InvokeBashLsCommand : PSCmdlet
             }
         }
 
-        bool longMode = parsed.Has(OptLong);
+        bool longMode = format == LsFormat.Long;
+        bool columnar = format is LsFormat.Vertical or LsFormat.Across or LsFormat.Commas;
+        long lineLength = 80;
+        int tabSize = 8;
+        if (columnar)
+        {
+            lineLength = lineWidth ?? EnvLineWidth();
+            tabSize = tabSizeOpt ?? EnvTabSize();
+        }
         bool showAll = parsed.Has(OptAll);          // -a: also "." and ".."
         bool showHidden = showAll || parsed.Has(OptAlmostAll);
         bool humanSizes = parsed.Has(OptHuman);
@@ -446,6 +553,8 @@ public sealed class InvokeBashLsCommand : PSCmdlet
             int inodeWidth = inodes is null ? 0 : inodes.Max(s => s.Length);
             int blockWidth = blockText is null ? 0 : blockText.Max(s => s.Length);
 
+            var cells = columnar ? new List<LsCell>(sorted.Count) : null;
+
             for (int idx = 0; idx < sorted.Count; idx++)
             {
                 var entry = sorted[idx];
@@ -477,8 +586,26 @@ public sealed class InvokeBashLsCommand : PSCmdlet
                 }
 
                 string prefix = string.Empty;
-                if (inodes is not null) prefix += inodes[idx].PadLeft(inodeWidth) + " ";
-                if (blockText is not null) prefix += blockText[idx].PadLeft(blockWidth) + " ";
+                // -m prints the inode / block columns unpadded (GNU: width 0 under with_commas).
+                int padInode = format == LsFormat.Commas ? 0 : inodeWidth;
+                int padBlock = format == LsFormat.Commas ? 0 : blockWidth;
+                if (inodes is not null) prefix += inodes[idx].PadLeft(padInode) + " ";
+                if (blockText is not null) prefix += blockText[idx].PadLeft(padBlock) + " ";
+
+                if (columnar)
+                {
+                    string rawName = GetDisplayName(entry);
+                    string shown = rawName;
+                    if (colorize)
+                    {
+                        if (isDir) shown = $"{blue}{bold}{rawName}{reset}";
+                        else if (isSymlink) shown = $"{cyan}{rawName}{reset}";
+                        else if (IsExecutable(entry)) shown = $"{green}{rawName}{reset}";
+                    }
+                    cells!.Add(new LsCell(prefix + shown + indicator,
+                        TextWidth.Of(prefix) + TextWidth.Of(rawName) + indicator.Length));
+                    continue;
+                }
 
                 string bashText;
                 if (longMode)
@@ -524,6 +651,16 @@ public sealed class InvokeBashLsCommand : PSCmdlet
                         "BashText", BashRuntime.NormalizeBashText(bashText)));
                 }
                 WriteObject(entry);
+            }
+
+            if (cells is not null)
+            {
+                // Multi-column rows hold several entries each, so they are plain text records (the LsEntry
+                // objects of the one-per-line and -l views cannot carry a shared line).
+                var rowsText = format == LsFormat.Commas
+                    ? LsColumns.RenderCommas(cells, lineLength)
+                    : LsColumns.Render(cells, lineLength, format == LsFormat.Across, tabSize);
+                foreach (var row in rowsText) WriteObject(BashRuntime.TextRecord(row, false));
             }
         }
 
