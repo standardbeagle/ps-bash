@@ -122,7 +122,7 @@ public class SortZeroRandomFiles0Tests : IClassFixture<SharedPwshFixture>, IDisp
         Run($"Invoke-BashPrintf '{fa.Trim('\'')}\\0/nonexistent/q\\0' | Invoke-BashSort '--files0-from=-'").AssertFailed(2, "nonexistent/q: No such file or directory");
         Run("Invoke-BashPrintf '' | Invoke-BashSort '--files0-from=-'").AssertFailed(2, "no input from '-'");
         Run("Invoke-BashSort '--files0-from=/nonexistent/l0'").AssertFailed(2, "open failed: /nonexistent/l0: No such file or directory");
-        Run("Invoke-BashPrintf '-\\0' | Invoke-BashSort '--files0-from=-'").AssertFailed(2, "when reading file names from stdin, no file name of '-' allowed");
+        Run("Invoke-BashPrintf '--' '-\\0' | Invoke-BashSort '--files0-from=-'").AssertFailed(2, "when reading file names from stdin, no file name of '-' allowed");
         // a final name without NUL is still a name
         Assert.Equal(new[] { "x", "y" }, Run($"Invoke-BashPrintf '{fa.Trim('\'')}' | Invoke-BashSort '--files0-from=-'").AssertSuccess().Lines);
     }
