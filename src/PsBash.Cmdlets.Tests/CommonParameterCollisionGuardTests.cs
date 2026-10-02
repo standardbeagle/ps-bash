@@ -60,6 +60,8 @@ public class CommonParameterCollisionGuardTests
             // awk: -v/-F/-f parsed from Arguments (repeated -v crashed the declared string[] V); V stays for one direct -v.
             ["awk"] = new(CollidingLetters),
             ["tee"] = new(CollidingLetters),
+            // diff: the emitter single-quotes every dash literal; I/W/C stay declared for direct calls.
+            ["diff"] = new(CollidingLetters),
             ["cp"] = new(CollidingLetters),
             ["mv"] = new(CollidingLetters),
             ["rm"] = new(CollidingLetters),

@@ -333,7 +333,7 @@ PowerShell's `$PWD`.
 
 The ordered getopt-style parser that replaces per-cmdlet hand scans. Pure and AOT-safe (no
 `PSCmdlet`/`SessionState`/reflection), so it is unit-tested in isolation
-(`ArgParserTests`). **Migrated so far: `tee`, `cp`, `mv`, `rm`, `mkdir`, `rmdir`, `ln`, `touch`, `head`, `tail`, `wc`, `cat`, `tac`, `nl`, `uniq`, `fold`, `expand`, `unexpand`, `paste`, `join`, `comm`, `split`, `strings`, `base64`, `stat`, `file`, `cut`, `sort`, `grep`, `sed`, `rg`, `find`, `ls`, `du`, `tree`, `column`, `gzip`, `tar`, `md5sum`, `sha1sum`, `sha256sum`; plus the bash BUILTINS `echo`, `printf`, `test` with their own scanners (batch 6 below).** `BashRuntime.ConvertFromBashArgs` is
+(`ArgParserTests`). **Migrated so far: `tee`, `cp`, `mv`, `rm`, `mkdir`, `rmdir`, `ln`, `touch`, `head`, `tail`, `wc`, `cat`, `tac`, `nl`, `uniq`, `fold`, `expand`, `unexpand`, `paste`, `join`, `comm`, `split`, `strings`, `base64`, `stat`, `file`, `cut`, `sort`, `grep`, `sed`, `rg`, `find`, `ls`, `du`, `tree`, `column`, `gzip`, `tar`, `md5sum`, `sha1sum`, `sha256sum`, `diff`; plus the bash BUILTINS `echo`, `printf`, `test` with their own scanners (batch 6 below).** `BashRuntime.ConvertFromBashArgs` is
 untouched — its contract (unknown flag becomes an operand) differs.
 
 **API** (`src/PsBash.Cmdlets/Args/`):
@@ -363,7 +363,7 @@ untouched — its contract (unknown flag becomes an operand) differs.
   so scripts can tell "ps-bash cannot do this" from "you typed it wrong". `TryHandleInfoOptions` acts on an abbreviated
   `--vers`/`--he`.
 
-**Emitter opt-in.** `PsEmitter.OrderedArgCommands` (tee, cp, mv, rm, mkdir, rmdir, ln, touch, head, tail, wc, cat, tac, nl, uniq, fold, expand, unexpand, paste, join, comm, split, strings, base64, stat, file, cut, sort, grep, sed, rg, find, ls, echo, printf, test, du, tree, column, gzip, tar, md5sum, sha1sum, sha256sum, awk, plus the command-running wrappers xargs, time, env, command, bash — these keep their manual scans, which stop at the first operand, and only take the emitter quoting so the INNER command's flags are safe): for these, `EmitPassthrough`
+**Emitter opt-in.** `PsEmitter.OrderedArgCommands` (tee, cp, mv, rm, mkdir, rmdir, ln, touch, head, tail, wc, cat, tac, nl, uniq, fold, expand, unexpand, paste, join, comm, split, strings, base64, stat, file, cut, sort, grep, sed, rg, find, ls, echo, printf, test, du, tree, column, gzip, tar, md5sum, sha1sum, sha256sum, awk, diff, plus the command-running wrappers xargs, time, env, command, bash — these keep their manual scans, which stop at the first operand, and only take the emitter quoting so the INNER command's flags are safe): for these, `EmitPassthrough`
 single-quotes EVERY dash-leading literal word and `--` (via `PsBuild.SingleQuote`; quoted and mixed
 words like `--x="a b"` collapse to one literal). No flag is then a PowerShell parameter token, so
 each reaches `[ValueFromRemainingArguments] Arguments` verbatim and in order — no prefix collision

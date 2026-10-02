@@ -330,6 +330,41 @@
     {
       "flag": "-i",
       "desc": "case-insensitive comparison"
+    },
+    {
+      "flag": "-s",
+      "desc": "report when two files are the same"
+    },
+    {
+      "flag": "-r",
+      "desc": "recurse into subdirectories"
+    },
+    {
+      "flag": "-N",
+      "desc": "treat absent files as empty"
+    },
+    {
+      "flag": "-a",
+      "desc": "treat all files as text"
+    },
+    {
+      "flag": "-U",
+      "desc": "output NUM lines of unified context",
+      "arg": "NUM"
+    },
+    {
+      "flag": "-C",
+      "desc": "output NUM lines of copied context",
+      "arg": "NUM"
+    },
+    {
+      "flag": "--label",
+      "desc": "use LABEL instead of the file name and timestamp",
+      "arg": "LABEL"
+    },
+    {
+      "flag": "--strip-trailing-cr",
+      "desc": "strip trailing carriage return on input"
     }
   ],
   "dirs": [

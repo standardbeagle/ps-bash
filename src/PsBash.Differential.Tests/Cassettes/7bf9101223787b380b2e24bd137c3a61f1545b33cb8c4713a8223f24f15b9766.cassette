@@ -1,0 +1,48 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 680
+stdout-length: 356
+stderr-length: 0
+==== SCRIPT ====
+__fs_snap() { find . | LC_ALL=C sort | while IFS= read -r p; do if [ -d "$p" ]; then echo "D $p"; else echo "F $p $(base64 -w0 "$p")"; fi; done; }
+d=$(mktemp -d) && cd "$d" && { :
+mkdir -p d1/sub d1/only1 d2/sub d2/only2 d1/both d2/both; echo same > d1/same; echo same > d2/same; echo one > d1/diff; echo two > d2/diff; echo x > d1/onlyfile1; echo y > d2/onlyfile2; echo s1 > d1/sub/f; echo s2 > d2/sub/f; echo c > d1/Zed; echo c > d2/zed; mkdir d1/dirvsfile; echo f > d2/dirvsfile
+} >/dev/null 2>&1
+echo '== stdout'
+{ :
+diff -r d1 nosuch > __out 2>/dev/null; echo "rc=$?"; sed 's/\t.*//' __out; rm -f __out
+} 2>/dev/null
+echo "== exit $?"
+echo '== fs'
+__fs_snap
+cd /; rm -rf "$d"
+==== STDOUT ====
+== stdout
+rc=2
+== exit 0
+== fs
+D .
+D ./d1
+F ./d1/Zed Ywo=
+D ./d1/both
+F ./d1/diff b25lCg==
+D ./d1/dirvsfile
+D ./d1/only1
+F ./d1/onlyfile1 eAo=
+F ./d1/same c2FtZQo=
+D ./d1/sub
+F ./d1/sub/f czEK
+D ./d2
+D ./d2/both
+F ./d2/diff dHdvCg==
+F ./d2/dirvsfile Zgo=
+D ./d2/only2
+F ./d2/onlyfile2 eQo=
+F ./d2/same c2FtZQo=
+D ./d2/sub
+F ./d2/sub/f czIK
+F ./d2/zed Ywo=
+
+==== STDERR ====
+

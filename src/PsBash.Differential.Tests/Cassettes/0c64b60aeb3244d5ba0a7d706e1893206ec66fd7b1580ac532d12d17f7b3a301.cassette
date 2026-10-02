@@ -1,0 +1,44 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 518
+stdout-length: 152
+stderr-length: 0
+==== SCRIPT ====
+__fs_snap() { find . | LC_ALL=C sort | while IFS= read -r p; do if [ -d "$p" ]; then echo "D $p"; else echo "F $p $(base64 -w0 "$p")"; fi; done; }
+d=$(mktemp -d) && cd "$d" && { :
+
+} >/dev/null 2>&1
+echo '== stdout'
+{ :
+printf 'x\ny\nx\ny\nx\n' > m1; printf 'y\nx\ny\nx\ny\n' > m2; diff m1 m2 > __out 2>/dev/null; echo "rc=$?"; sed 's/\t.*//' __out; rm -f __out; diff -u m1 m2 > __out 2>/dev/null; echo "rc=$?"; sed 's/\t.*//' __out; rm -f __out
+} 2>/dev/null
+echo "== exit $?"
+echo '== fs'
+__fs_snap
+cd /; rm -rf "$d"
+==== STDOUT ====
+== stdout
+rc=1
+1d0
+< x
+5a5
+> y
+rc=1
+--- m1
++++ m2
+@@ -1,5 +1,5 @@
+-x
+ y
+ x
+ y
+ x
++y
+== exit 0
+== fs
+D .
+F ./m1 eAp5CngKeQp4Cg==
+F ./m2 eQp4CnkKeAp5Cg==
+
+==== STDERR ====
+
