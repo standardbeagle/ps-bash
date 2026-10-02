@@ -846,7 +846,9 @@ Maps redirects to PowerShell: `>file`, `>>file`, `2>&1`, etc. Calls
   `TryTranslateMsysDrivePath` → `WindowsPath.TryMapUnixDrivePath`. Applied uniformly to
   redirect targets, command operands, and `cd` targets so an absolute drive path resolves
   the same way everywhere (otherwise `cat /c/x` resolves `\c\x` against the current drive
-  and becomes `C:\c\x`). Paths with no drive component (`/home/x`) are left alone.
+  and becomes `C:\c\x`). Paths with no drive component (`/home/x`) are left alone. A bare
+  one-letter operand (`/c`, `/e`, `/f`) is a Windows SWITCH (`cmd /c`, `robocopy /e`,
+  `taskkill /f`), not a drive root, and is never rewritten; only `cd /c` opts in to the bare root.
 
   This is **opt-in**: it fires only under `PSBASH_UNIX_PATHS=1`, set by the Shell layer
   from `--unix-paths`. Off by default so direct ps-bash users don't get surprise rewrites;

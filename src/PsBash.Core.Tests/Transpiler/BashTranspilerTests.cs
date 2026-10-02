@@ -282,6 +282,40 @@ public class BashTranspilerTests
         finally { Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", prior); }
     }
 
+    // Regression: a bare single-letter operand (`cmd /c echo hi`, `find /i`, `robocopy /e`,
+    // `taskkill /f /pid 1`) is a Windows SWITCH, not the drive root. It was rewritten to
+    // `C:\`, so cmd lost its /c and started an interactive shell. `/c/x` stays a drive path.
+    [Theory]
+    [InlineData("cmd /c echo hi", "/c")]
+    [InlineData("robocopy a b /e", "/e")]
+    [InlineData("taskkill /f /pid 1", "/f")]
+    [InlineData("find /i", "/i")]
+    public void SingleLetterSwitchOperand_NotTranslatedToDriveRoot_WhenUnixPathsOn(string script, string sw)
+    {
+        var prior = Environment.GetEnvironmentVariable("PSBASH_UNIX_PATHS");
+        Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", "1");
+        try
+        {
+            var result = BashTranspiler.Transpile(script);
+            Assert.Contains(sw, result);
+            Assert.DoesNotContain(":\\", result);
+        }
+        finally { Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", prior); }
+    }
+
+    [Fact]
+    public void BareDriveRootForCd_StillTranslated_WhenUnixPathsOn()
+    {
+        var prior = Environment.GetEnvironmentVariable("PSBASH_UNIX_PATHS");
+        Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", "1");
+        try
+        {
+            var result = BashTranspiler.Transpile("cd /c");
+            Assert.Contains("C:\\", result);
+        }
+        finally { Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", prior); }
+    }
+
     // WSL-style drive paths (/mnt/c/...) must translate the same as MSYS /c/...,
     // since LLMs emit both. Operand + cd both go through the shared WindowsPath
     // mapper now.

@@ -2953,9 +2953,13 @@ public static class PsEmitter
     /// way everywhere — otherwise <c>cat /c/x</c> / <c>cd /c/x</c> resolve
     /// <c>/c/x</c> against the current drive and become <c>C:\c\x</c>.
     /// </summary>
-    private static bool TryTranslateMsysDrivePath(string path, out string windowsPath)
+    private static bool TryTranslateMsysDrivePath(string path, out string windowsPath, bool allowBareDriveRoot = false)
     {
-        if (UnixPathTranslationEnabled && WindowsPath.TryMapUnixDrivePath(path, out windowsPath))
+        // A bare `/x` (one letter, nothing after) is a Windows switch as an operand
+        // (`cmd /c`, `robocopy /e`, `taskkill /f`), never a drive. Like MSYS, only `/x/...` is
+        // converted; `cd /c` (the one place a bare root is unambiguous) opts in.
+        bool bareSwitch = !allowBareDriveRoot && path.Length == 2 && path[0] == '/';
+        if (!bareSwitch && UnixPathTranslationEnabled && WindowsPath.TryMapUnixDrivePath(path, out windowsPath))
             return true;
         windowsPath = path;
         return false;
@@ -5720,7 +5724,7 @@ public static class PsEmitter
                 targetExpr = "$HOME";
             else if (literal.StartsWith("~/") || literal.StartsWith("~\\"))
                 targetExpr = "$HOME + " + QuotePsString("\\" + literal[2..]);
-            else if (TryTranslateMsysDrivePath(literal, out var winPath))
+            else if (TryTranslateMsysDrivePath(literal, out var winPath, allowBareDriveRoot: true))
                 targetExpr = QuotePsString(winPath);
             else
                 targetExpr = QuotePsString(literal);
