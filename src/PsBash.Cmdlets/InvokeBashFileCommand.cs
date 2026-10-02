@@ -7,22 +7,12 @@ namespace PsBash.Cmdlets;
 
 /// <summary>
 /// Binary cmdlet replacement for the psm1 <c>Invoke-BashFile</c> function
-/// (REFACTOR-2 follow-on). Detects the type of each operand file via a small
-/// magic-byte table (PNG, JPEG, PDF, Zip, ELF, GIF, RIFF) plus an
-/// ASCII-text / data fallback derived from a control-byte scan of the full
-/// content, matching GNU coreutils <c>file</c> behavior as implemented by the
-/// psm1 oracle.
+/// (REFACTOR-2 follow-on). The content classification (ELF, PE, gzip, zip, PNG,
+/// JPEG, PDF, <c>#!</c> scripts, the text scan) lives in <see cref="FileMagic"/>
+/// and follows file-5.45; this class owns the argv, operands, padding and output.
 ///
-/// Behavioral parity oracle: the original psm1 function. This cmdlet
-/// reproduces its exact behavior:
 /// <list type="bullet">
-/// <item>Reads the first 16 bytes of each operand for magic-byte detection.
-/// On a magic-byte match (PNG/JPEG/PDF/Zip/ELF/GIF/RIFF) emits the matching
-/// type description (and MIME type with <c>-i</c>).</item>
-/// <item>On no magic-byte match, reads the full file and scans every byte:
-/// bytes &lt; 0x07 or in [0x0E..0x1F] excluding 0x1B (ESC) mark the file as
-/// non-text. All-text → "ASCII text" (<c>text/plain</c>); else → "data"
-/// (<c>application/octet-stream</c>). This is the psm1 oracle's exact rule.</item>
+/// <item>Classification: see <see cref="FileMagic"/>.</item>
 /// <item><c>-b</c> brief: emits just the type description without the
 /// <c>PATH: </c> prefix.</item>
 /// <item><c>-i</c> / <c>--mime</c>: emits MIME type instead of the type
@@ -413,83 +403,10 @@ public sealed class InvokeBashFileCommand : PSCmdlet
         return ClassifyContent(() => BashFileSystem.OpenRead(filePath));
     }
 
-    /// <summary>Magic-byte table, then the control-byte text/data scan, over any re-openable byte source.</summary>
+    /// <summary>Content classification over any re-openable byte source: see <see cref="FileMagic"/>.</summary>
     private static (string FileType, string MimeType, string Encoding) ClassifyContent(Func<Stream> open)
     {
-        byte[] headBytes;
-        try
-        {
-            using var stream = open();
-            var buf = new byte[16];
-            int read = stream.Read(buf, 0, 16);
-            headBytes = read <= 0 ? Array.Empty<byte>() : buf.AsSpan(0, read).ToArray();
-        }
-        catch
-        {
-            // psm1 oracle: catch -> $bytes = @() then fall through to the content scan.
-            headBytes = Array.Empty<byte>();
-        }
-
-        if (headBytes.Length >= 8 && headBytes[0] == 0x89 && headBytes[1] == 0x50
-            && headBytes[2] == 0x4E && headBytes[3] == 0x47)
-            return ("PNG image data", "image/png", "binary");
-        if (headBytes.Length >= 2 && headBytes[0] == 0xFF && headBytes[1] == 0xD8)
-            return ("JPEG image data", "image/jpeg", "binary");
-        if (headBytes.Length >= 4 && headBytes[0] == 0x25 && headBytes[1] == 0x50
-            && headBytes[2] == 0x44 && headBytes[3] == 0x46)
-            return ("PDF document", "application/pdf", "binary");
-        if (headBytes.Length >= 4 && headBytes[0] == 0x50 && headBytes[1] == 0x4B
-            && headBytes[2] == 0x03 && headBytes[3] == 0x04)
-            return ("Zip archive data", "application/zip", "binary");
-        if (headBytes.Length >= 4 && headBytes[0] == 0x7F && headBytes[1] == 0x45
-            && headBytes[2] == 0x4C && headBytes[3] == 0x46)
-            return ("ELF executable", "application/x-executable", "binary");
-        if (headBytes.Length >= 4 && headBytes[0] == 0x47 && headBytes[1] == 0x49
-            && headBytes[2] == 0x46 && headBytes[3] == 0x38)
-            return ("GIF image data", "image/gif", "binary");
-        if (headBytes.Length >= 4 && headBytes[0] == 0x52 && headBytes[1] == 0x49
-            && headBytes[2] == 0x46 && headBytes[3] == 0x46)
-            return ("RIFF data", "application/octet-stream", "binary");
-
-        // Stream-scan the bytes (same test the psm1 oracle applied to the whole array) and stop at
-        // the first non-text byte — a binary is classified after a few KB, and an all-text file is
-        // never held in memory. An unreadable path reports "data" rather than throwing.
-        bool allText = true, sawHigh = false, utf8Ok = true;
-        try
-        {
-            using var s = open();
-            var buffer = new byte[65536];
-            var decoder = new UTF8Encoding(false, true).GetDecoder();
-            int read;
-            while (allText && (read = s.Read(buffer, 0, buffer.Length)) > 0)
-            {
-                for (int k = 0; k < read; k++)
-                {
-                    byte b = buffer[k];
-                    // psm1 oracle: b < 0x07 OR (b > 0x0D and b < 0x20 and b != 0x1B)
-                    if (b < 0x07 || (b > 0x0D && b < 0x20 && b != 0x1B))
-                    {
-                        allText = false;
-                        break;
-                    }
-                    if (b >= 0x80) sawHigh = true;
-                }
-                if (allText && utf8Ok)
-                {
-                    try { decoder.GetCharCount(buffer, 0, read, flush: false); }
-                    catch (DecoderFallbackException) { utf8Ok = false; }
-                }
-            }
-        }
-        catch
-        {
-            allText = false;
-        }
-
-        if (!allText) return ("data", "application/octet-stream", "binary");
-        if (!sawHigh) return ("ASCII text", "text/plain", "us-ascii");
-        return utf8Ok
-            ? ("Unicode text, UTF-8 text", "text/plain", "utf-8")
-            : ("ISO-8859 text", "text/plain", "iso-8859-1");
+        var k = FileMagic.Classify(open);
+        return (k.Type, k.Mime, k.Encoding);
     }
 }
