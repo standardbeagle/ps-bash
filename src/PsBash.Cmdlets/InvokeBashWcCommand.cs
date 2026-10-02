@@ -615,7 +615,7 @@ public sealed class InvokeBashWcCommand : PSCmdlet
     private PSObject BuildResult(
         int lines, int words, int bytes, int chars, int maxLine, string fileName)
     {
-        fileName = fileName.Length > 0 && fileName != "total" ? OperandDisplay.Rewrite(this, fileName).Replace('\\', '/') : fileName;
+        fileName = fileName.Length > 0 && fileName != "total" ? OperandDisplay.Rewrite(this, fileName) : fileName;
         string bashText = FormatWcText(
             _linesOnly, _wordsOnly, _charsOnly, _bytesOnly, _maxLineOnly,
             lines, words, bytes, chars, maxLine, fileName);

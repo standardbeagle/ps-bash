@@ -500,7 +500,7 @@ internal static class FileMagic
     private static FileKind? TryElf(Source src)
     {
         byte[] h = src.Head;
-        if (h.Length < 8 || h[0] != 0x7F || h[1] != 'E' || h[2] != 'L' || h[3] != 'F') return null;
+        if (h.Length < 6 || h[0] != 0x7F || h[1] != 'E' || h[2] != 'L' || h[3] != 'F') return null;   // file-5.45 names class+data from 6 bytes
         int cls = h[4], data = h[5];
         if ((cls != 1 && cls != 2) || (data != 1 && data != 2)) return null;
         bool is64 = cls == 2, le = data == 1;
@@ -511,7 +511,7 @@ internal static class FileMagic
         uint version = h.Length >= 24 ? U32(h, 20, le) : 0;
         bool hasFlags = h.Length >= (is64 ? 52 : 40);
         uint flags = hasFlags ? U32(h, is64 ? 48 : 36, le) : 0;
-        string? osabi = h[7] < ElfOsAbi.Length ? ElfOsAbi[h[7]] : null;
+        string? osabi = h.Length > 7 && h[7] < ElfOsAbi.Length ? ElfOsAbi[h[7]] : null;
 
         // Program headers (read first: whether an ET_DYN is a PIE executable depends on them).
         ulong phoff = 0, shoff = 0;

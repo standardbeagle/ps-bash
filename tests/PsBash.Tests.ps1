@@ -1776,7 +1776,7 @@ Describe 'Invoke-BashCp' {
         $result = Invoke-BashCp (Join-Path $cpDir 'src.txt') 2>&1
         $errMsgs = @($result | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })
         $errMsgs.Count | Should -BeGreaterOrEqual 1
-        "$($errMsgs[0])" | Should -Match 'missing file operand'
+        "$($errMsgs[0])" | Should -Match 'missing destination file operand after'   # GNU coreutils 9.4 wording
     }
 }
 
@@ -1899,7 +1899,7 @@ Describe 'Invoke-BashRm' {
         $result = Invoke-BashRm -rf $rootPath 2>&1
         $errMsgs = @($result | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })
         $errMsgs.Count | Should -BeGreaterOrEqual 1
-        "$($errMsgs[0])" | Should -Match 'protected path'
+        "$($errMsgs[0])" | Should -Match 'it is dangerous to operate recursively on'   # GNU --preserve-root wording
     }
 
     It 'rm refuses to delete home directory' {
@@ -3193,14 +3193,14 @@ Describe 'Invoke-BashDiff — Normal Format' {
     BeforeAll {
         $testDir = Join-Path ([System.IO.Path]::GetTempPath()) "psbash-diff-$([guid]::NewGuid().ToString('N').Substring(0,8))"
         New-Item -ItemType Directory -Path $testDir -Force | Out-Null
-        # Files END in a newline (Set-Content default): GNU diff treats a last line WITHOUT one as
+        # Files END in an LF newline (written explicitly: Set-Content would add CRLF on Windows, and GNU diff treats the CR as content): GNU diff treats a last line WITHOUT one as
         # different from the same text with one (`\ No newline at end of file`), so the
         # add/delete cases below are only pure additions/deletions when both sides terminate.
-        Set-Content -Path (Join-Path $testDir 'file1.txt') -Value "alpha`nbeta`ngamma"
-        Set-Content -Path (Join-Path $testDir 'file2.txt') -Value "alpha`nBETA`ngamma"
-        Set-Content -Path (Join-Path $testDir 'identical.txt') -Value "alpha`nbeta`ngamma"
-        Set-Content -Path (Join-Path $testDir 'added.txt') -Value "alpha`nbeta`ngamma`ndelta"
-        Set-Content -Path (Join-Path $testDir 'deleted.txt') -Value "alpha`ngamma"
+        Set-Content -Path (Join-Path $testDir 'file1.txt') -Value "alpha`nbeta`ngamma`n" -NoNewline
+        Set-Content -Path (Join-Path $testDir 'file2.txt') -Value "alpha`nBETA`ngamma`n" -NoNewline
+        Set-Content -Path (Join-Path $testDir 'identical.txt') -Value "alpha`nbeta`ngamma`n" -NoNewline
+        Set-Content -Path (Join-Path $testDir 'added.txt') -Value "alpha`nbeta`ngamma`ndelta`n" -NoNewline
+        Set-Content -Path (Join-Path $testDir 'deleted.txt') -Value "alpha`ngamma`n" -NoNewline
         Set-Content -Path (Join-Path $testDir 'nonl.txt') -Value "alpha`nbeta`ngamma" -NoNewline
     }
     AfterAll {
@@ -5660,7 +5660,7 @@ Describe 'Invoke-BashSha256sum — compute SHA256 hash' {
 Describe 'Invoke-BashFile — detect file type' {
     It 'detects PNG image by magic bytes' {
         $tmpFile = Join-Path $TestDrive 'test.png'
-        $bytes = [byte[]]@(0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D)
+        $bytes = [byte[]]@(0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00)   # signature + IHDR: file-5.45 says "data" for the bare signature
         [System.IO.File]::WriteAllBytes($tmpFile, $bytes)
         $result = file $tmpFile
         $result.BashText | Should -Match 'PNG image data'
@@ -5686,15 +5686,16 @@ Describe 'Invoke-BashFile — detect file type' {
 
     It 'detects ZIP by magic bytes' {
         $tmpFile = Join-Path $TestDrive 'test.zip'
-        $bytes = [byte[]]@(0x50, 0x4B, 0x03, 0x04, 0x00, 0x00)
-        [System.IO.File]::WriteAllBytes($tmpFile, $bytes)
+        # a REAL archive: file-5.45 reports a bare local-file-header prefix as "data"
+        $srcFile = Join-Path $TestDrive 'zipme.txt'; Set-Content -Path $srcFile -Value 'x'
+        Compress-Archive -Path $srcFile -DestinationPath $tmpFile -Force
         $result = file $tmpFile
         $result.FileType | Should -Match 'Zip'
     }
 
     It 'brief mode with -b omits filename' {
         $tmpFile = Join-Path $TestDrive 'brief.png'
-        $bytes = [byte[]]@(0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D)
+        $bytes = [byte[]]@(0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00)   # signature + IHDR: file-5.45 says "data" for the bare signature
         [System.IO.File]::WriteAllBytes($tmpFile, $bytes)
         $result = file -b $tmpFile
         $result.BashText | Should -Not -Match [regex]::Escape($tmpFile)
