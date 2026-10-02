@@ -1382,6 +1382,60 @@
     {
       "flag": "--ignore-backups",
       "desc": "do not list entries ending with ~"
+    },
+    {
+      "flag": "-n",
+      "desc": "long listing with numeric uid and gid"
+    },
+    {
+      "flag": "-g",
+      "desc": "long listing without the owner"
+    },
+    {
+      "flag": "-o",
+      "desc": "long listing without the group"
+    },
+    {
+      "flag": "-G",
+      "desc": "in a long listing, do not print the group"
+    },
+    {
+      "flag": "-U",
+      "desc": "do not sort (directory order)"
+    },
+    {
+      "flag": "-X",
+      "desc": "sort by extension"
+    },
+    {
+      "flag": "-u",
+      "desc": "with -l show and sort by access time, else sort by it"
+    },
+    {
+      "flag": "-c",
+      "desc": "with -l show and sort by change time, else sort by it"
+    },
+    {
+      "flag": "--time",
+      "desc": "atime, access, use, ctime, status, mtime, modification, birth, creation",
+      "arg": "WORD"
+    },
+    {
+      "flag": "--full-time",
+      "desc": "like -l --time-style=full-iso"
+    },
+    {
+      "flag": "--time-style",
+      "desc": "full-iso, long-iso, iso, locale (or posix- forms)",
+      "arg": "STYLE"
+    },
+    {
+      "flag": "--numeric-uid-gid",
+      "desc": "like -l, but list numeric user and group IDs"
+    },
+    {
+      "flag": "--no-group",
+      "desc": "in a long listing, do not print group names"
     }
   ],
   "mapfile": [

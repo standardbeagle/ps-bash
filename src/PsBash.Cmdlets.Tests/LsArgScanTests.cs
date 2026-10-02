@@ -43,6 +43,18 @@ public class LsArgScanTests : IClassFixture<SharedPwshFixture>
     [InlineData("-", "'-")]
     [InlineData("-Cx", "vertical,across")]
     [InlineData("-m", "commas")]
+    [InlineData("-ngo", "numeric,no-owner,no-group-long")]
+    [InlineData("-G", "no-group")]
+    [InlineData("--no-group", "no-group")]
+    [InlineData("--numeric", "numeric")]
+    [InlineData("--numeric-uid-gid", "numeric")]
+    [InlineData("-UXuc", "unsorted,extension,atime,ctime")]
+    [InlineData("--time=atime", "time=atime")]
+    [InlineData("--time|ctime", "time=ctime")]
+    [InlineData("--time-style=long-iso", "time-style=long-iso")]
+    [InlineData("--time-s=iso", "time-style=iso")]
+    [InlineData("--full-time", "full-time")]
+    [InlineData("--fo=x", "format=x")]
     [InlineData("-I|*.c", "ignore=*.c")]
     [InlineData("-I*.c", "ignore=*.c")]
     [InlineData("--ignore=*.c", "ignore=*.c")]
@@ -69,6 +81,7 @@ public class LsArgScanTests : IClassFixture<SharedPwshFixture>
     [InlineData("--dir", ArgErrorKind.Ambiguous, 2)]          // '--directory' '--dired'
     [InlineData("--sort", ArgErrorKind.MissingValue, 2)]
     [InlineData("--all=x", ArgErrorKind.UnexpectedValue, 2)]
+    [InlineData("--f=x", ArgErrorKind.Ambiguous, 2)]          // '--full-time' '--file-type' '--format'
     [InlineData("--ign=x", ArgErrorKind.Ambiguous, 2)]        // '--ignore-backups' '--ignore'
     [InlineData("--hi=x", ArgErrorKind.Ambiguous, 2)]         // '--hide-control-chars' '--hide' '--hyperlink'
     [InlineData("-I", ArgErrorKind.MissingValue, 2)]          // ls: option requires an argument -- 'I'
@@ -190,7 +203,9 @@ public class LsArgScanTests : IClassFixture<SharedPwshFixture>
     [InlineData("'--color=bogus'", 1, "invalid argument 'bogus' for '--color'")]
     [InlineData("'--classify=bogus'", 1, "invalid argument 'bogus' for '--classify'")]
     [InlineData("'--sort=bogus'", 1, "invalid argument 'bogus' for '--sort'")]
-    [InlineData("'--sort=none'", 2, "not supported by ps-bash")]
+    [InlineData("'--sort=version'", 2, "not supported by ps-bash")]
+    [InlineData("'--sort=width'", 2, "not supported by ps-bash")]
+    [InlineData("'--time=bogus'", 1, "invalid argument 'bogus' for '--time'")]
     public void UsageErrors_ExitLikeGnu(string args, int exit, string stderr)
         => CmdResult.Run(_fixture.AcquireFresh(), "Invoke-BashLs " + args).AssertFailed(exit, stderr);
 

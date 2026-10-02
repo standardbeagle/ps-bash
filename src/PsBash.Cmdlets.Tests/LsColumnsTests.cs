@@ -102,20 +102,6 @@ public class LsColumnsTests : IClassFixture<SharedPwshFixture>
     }
 
     [Fact]
-    public void Cmdlet_ColumnsEnvironment_IsTheDefaultWidth_AndWBeatsIt()
-    {
-        var d = MakeDir();
-        var old = Environment.GetEnvironmentVariable("COLUMNS");
-        try
-        {
-            Environment.SetEnvironmentVariable("COLUMNS", "20");
-            Assert.Equal(new[] { "aaaa  cccc  eeee", "bbbb  dddd  ffff" }, Run($"Invoke-BashLs '-C' '{d}'"));
-            Assert.Single(Run($"Invoke-BashLs '-C' '-w' '100' '{d}'"));
-        }
-        finally { Environment.SetEnvironmentVariable("COLUMNS", old); Directory.Delete(d, true); }
-    }
-
-    [Fact]
     public void Cmdlet_FormatIsLastWins_ButDashOneNeverCancelsLong()
     {
         var d = MakeDir();

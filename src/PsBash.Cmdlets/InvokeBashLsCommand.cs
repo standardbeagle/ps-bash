@@ -97,6 +97,13 @@ public sealed class InvokeBashLsCommand : PSCmdlet
     [Parameter]
     public string? W { get; set; }
 
+    /// <summary>
+    /// The bash <c>-o</c> (long listing without the group) switch — a bare <c>-o</c> is ambiguous between
+    /// <c>-OutVariable</c> and <c>-OutBuffer</c>. Re-injected as <c>-o</c>.
+    /// </summary>
+    [Parameter]
+    public SwitchParameter O { get; set; }
+
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
@@ -112,24 +119,26 @@ public sealed class InvokeBashLsCommand : PSCmdlet
         OptGroupDirsFirst = "group-dirs-first", OptSort = "sort",
         OptVertical = "vertical", OptAcross = "across", OptCommas = "commas", OptFormat = "format",
         OptWidth = "width", OptTabsize = "tabsize", OptIgnore = "ignore", OptHide = "hide",
-        OptIgnoreBackups = "ignore-backups";
+        OptIgnoreBackups = "ignore-backups", OptNumeric = "numeric", OptNoOwner = "no-owner",
+        OptNoGroupLong = "no-group-long", OptNoGroup = "no-group", OptUnsorted = "unsorted",
+        OptExtension = "extension", OptAtime = "atime", OptCtime = "ctime", OptTime = "time",
+        OptFullTime = "full-time", OptTimeStyle = "time-style";
 
     /// <summary>
-    /// GNU options ps-bash refuses (exit 2): each changes the OUTPUT (columns, quoting, sort key,
-    /// time format, owner columns...) in a way this cmdlet does not reproduce, so accepting and
-    /// ignoring them would be a silent wrong answer. <c>-w</c> / <c>-T</c> / <c>-I</c> take a value
-    /// but are refused before it is read. A <c>string[]</c> field so the collision guard sees them.
+    /// GNU options ps-bash refuses (exit 2): each changes the OUTPUT (quoting, symlink following, block
+    /// size units, ...) in a way this cmdlet does not reproduce, so accepting and ignoring them would be a
+    /// silent wrong answer. A <c>string[]</c> field so the collision guard sees them.
     /// </summary>
     private static readonly string[] LsUnsupported =
     {
-        "-b", "-c", "-f", "-g", "-k", "-n", "-o", "-q", "-u", "-v",
-        "-D", "-G", "-H", "-L", "-N", "-Q", "-U", "-X", "-Z",
+        "-b", "-f", "-k", "-q", "-v",
+        "-D", "-H", "-L", "-N", "-Q", "-Z",
         "--author", "--escape", "--block-size", "--dired", "--file-type",
-        "--full-time", "--no-group", "--si", "--dereference-command-line",
+        "--si", "--dereference-command-line",
         "--dereference-command-line-symlink-to-dir", "--hyperlink", "--indicator-style",
-        "--kibibytes", "--dereference", "--numeric-uid-gid", "--literal",
-        "--hide-control-chars", "--show-control-chars", "--quote-name", "--quoting-style", "--time",
-        "--time-style", "--context", "--zero",
+        "--kibibytes", "--dereference", "--literal",
+        "--hide-control-chars", "--show-control-chars", "--quote-name", "--quoting-style",
+        "--context", "--zero",
     };
 
     /// <summary>GNU's long_options[] order (what an ambiguous abbreviation lists), read from the oracle.</summary>
@@ -173,6 +182,17 @@ public sealed class InvokeBashLsCommand : PSCmdlet
             new OptSpec(OptIgnore, 'I', "ignore", OptKind.Value),
             new OptSpec(OptHide, '\0', "hide", OptKind.Value),
             new OptSpec(OptIgnoreBackups, 'B', "ignore-backups"),
+            new OptSpec(OptNumeric, 'n', "numeric-uid-gid"),
+            new OptSpec(OptNoOwner, 'g', null),
+            new OptSpec(OptNoGroupLong, 'o', null),
+            new OptSpec(OptNoGroup, 'G', "no-group"),
+            new OptSpec(OptUnsorted, 'U', null),
+            new OptSpec(OptExtension, 'X', null),
+            new OptSpec(OptAtime, 'u', null),
+            new OptSpec(OptCtime, 'c', null),
+            new OptSpec(OptTime, '\0', "time", OptKind.Value),
+            new OptSpec(OptFullTime, '\0', "full-time"),
+            new OptSpec(OptTimeStyle, '\0', "time-style", OptKind.Value),
         },
         LsUnsupported,
         allowAbbrev: true,
@@ -203,6 +223,53 @@ public sealed class InvokeBashLsCommand : PSCmdlet
         ("horizontal", LsFormat.Across), ("across", LsFormat.Across), ("vertical", LsFormat.Vertical),
         ("single-column", LsFormat.OnePerLine),
     };
+
+    /// <summary>Which timestamp <c>-l</c> shows and <c>-t</c> sorts by (<c>-u</c>, <c>-c</c>, <c>--time=WORD</c>).</summary>
+    internal enum LsTimeType { Modify, Access, Change, Birth }
+
+    private const string TimeWordValidBlock =
+        "  - 'atime', 'access', 'use'\n  - 'ctime', 'status'\n  - 'mtime', 'modification'\n  - 'birth', 'creation'";
+
+    private static readonly (string, LsTimeType)[] TimeWordTable =
+    {
+        ("atime", LsTimeType.Access), ("access", LsTimeType.Access), ("use", LsTimeType.Access),
+        ("ctime", LsTimeType.Change), ("status", LsTimeType.Change),
+        ("mtime", LsTimeType.Modify), ("modification", LsTimeType.Modify),
+        ("birth", LsTimeType.Birth), ("creation", LsTimeType.Birth),
+    };
+
+    private const string TimeStyleValidBlock =
+        "  - [posix-]full-iso\n  - [posix-]long-iso\n  - [posix-]iso\n  - [posix-]locale\n"
+        + "  - +FORMAT (e.g., +%H:%M) for a 'date'-style format";
+
+    // The posix- spellings only differ from the plain ones when the locale is POSIX/C (oracle: identical output under
+    // C.UTF-8); ps-bash never runs in that locale, so each is the same style as its plain spelling.
+    private static readonly (string, int)[] TimeStyleTable =
+    {
+        ("full-iso", 1), ("long-iso", 2), ("iso", 3), ("locale", 0),
+        ("posix-full-iso", 1), ("posix-long-iso", 2), ("posix-iso", 3), ("posix-locale", 0),
+    };
+
+    private static bool TryResolveTimeStyle(string arg, out LsTimeStyle style, out string? error, out int exit)
+    {
+        style = LsTimeStyle.Locale;
+        error = null;
+        exit = 2;   // GNU: a bad --time-style (or TIME_STYLE) word is exit 2, unlike --format/--time/--sort (1)
+        if (arg.StartsWith('+'))
+        {
+            // A strftime FORMAT (and its "old\nrecent" pair) is not reproduced: refuse rather than guess.
+            error = $"ls: option '--time-style={arg}' is recognized but not supported by ps-bash";
+            exit = ArgError.UnsupportedExitCode;
+            return false;
+        }
+        if (!GnuArgMatch.TryMatch("ls", "time-style", arg, TimeStyleTable, TimeStyleValidBlock, out int v, out error,
+                subject: "time style"))
+        {
+            return false;
+        }
+        style = v switch { 1 => LsTimeStyle.FullIso, 2 => LsTimeStyle.LongIso, 3 => LsTimeStyle.Iso, _ => LsTimeStyle.Locale };
+        return true;
+    }
 
     /// <summary>A GNU <c>-w</c>/<c>-T</c> operand: plain decimal digits (0 allowed), nothing else.</summary>
     private static bool TryParseCount(string? text, out long value)
@@ -251,7 +318,7 @@ public sealed class InvokeBashLsCommand : PSCmdlet
         // re-injected ahead of everything; the transpiler single-quotes every dash word for ls
         // (PsEmitter.OrderedArgCommands) so they arrive in Arguments, in order.
         var args = BashRuntime.PrependDecoys(Arguments, (A.IsPresent, "-a"), (D.IsPresent, "-d"),
-            (P.IsPresent, "-p"), (I.IsPresent, "-i"));
+            (P.IsPresent, "-p"), (I.IsPresent, "-i"), (O.IsPresent, "-o"));
         if (W is not null) args = new[] { "-w", W }.Concat(args).ToArray();
 
         FileSystemHelpers.SetLastExitCode(this, 0);
@@ -274,7 +341,11 @@ public sealed class InvokeBashLsCommand : PSCmdlet
         if (FileSystemHelpers.TryHandleInfoOptions(this, "ls", parsed)) return;
 
         // Sort key, indicator and colour are "last option wins" in GNU, so walk the tokens in order.
-        int sortKey = 0; // 0 = name, 1 = time, 2 = size
+        int sortKey = 0; // 0 = name, 1 = time, 2 = size, 3 = extension, 4 = none (directory order)
+        bool sortSpecified = false;
+        bool numericIds = false, showOwner = true, showGroup = true;
+        var timeType = LsTimeType.Modify;       // -u / -c / --time=WORD: which time -l shows and -t sorts by
+        string? timeStyleArg = null;            // --time-style / --full-time
         int indicatorStyle = 0; // 0 = none, 1 = slash (-p), 2 = classify (-F)
         bool colorOn = false;
         // Output format is "last option wins" too, except that -1 never cancels -l (GNU ls.c).
@@ -322,8 +393,28 @@ public sealed class InvokeBashLsCommand : PSCmdlet
                     }
                     tabSizeOpt = (int)Math.Min(tv, int.MaxValue);
                     break;
-                case OptSortSize: sortKey = 2; break;
-                case OptSortTime: sortKey = 1; break;
+                case OptSortSize: sortKey = 2; sortSpecified = true; break;
+                case OptSortTime: sortKey = 1; sortSpecified = true; break;
+                case OptUnsorted: sortKey = 4; sortSpecified = true; break;
+                case OptExtension: sortKey = 3; sortSpecified = true; break;
+                case OptNumeric: numericIds = true; format = LsFormat.Long; break;
+                case OptNoOwner: showOwner = false; format = LsFormat.Long; break;
+                case OptNoGroupLong: showGroup = false; format = LsFormat.Long; break;
+                case OptNoGroup: showGroup = false; break;
+                case OptAtime: timeType = LsTimeType.Access; break;
+                case OptCtime: timeType = LsTimeType.Change; break;
+                case OptTime:
+                    if (!GnuArgMatch.TryMatch("ls", "time", t.Value ?? "", TimeWordTable, TimeWordValidBlock,
+                            out LsTimeType tt, out var tterr))
+                    {
+                        FileSystemHelpers.WriteBashError(this, tterr!);
+                        FileSystemHelpers.SetLastExitCode(this, 1);
+                        return;
+                    }
+                    timeType = tt;
+                    break;
+                case OptFullTime: format = LsFormat.Long; timeStyleArg = "full-iso"; break;
+                case OptTimeStyle: timeStyleArg = t.Value ?? ""; break;
                 case OptSlash: indicatorStyle = 1; break;
                 case OptClassifyShort: indicatorStyle = 2; break;
                 case OptClassify:
@@ -355,7 +446,7 @@ public sealed class InvokeBashLsCommand : PSCmdlet
                         FileSystemHelpers.SetLastExitCode(this, 1);
                         return;
                     }
-                    if (sw is 1 or 2) { sortKey = sw; break; }
+                    if (sw is 0 or 1 or 2 or 3) { sortKey = sw == 0 ? 4 : sw; sortSpecified = true; break; }
                     FileSystemHelpers.WriteBashError(this,
                         $"ls: option '--sort={t.Value}' is recognized but not supported by ps-bash");
                     FileSystemHelpers.SetLastExitCode(this, ArgError.UnsupportedExitCode);
@@ -364,6 +455,21 @@ public sealed class InvokeBashLsCommand : PSCmdlet
         }
 
         bool longMode = format == LsFormat.Long;
+        // GNU: -u / -c / --time=atime|ctime|birth without -t / -S / -U / -X / --sort sorts by that time, newest
+        // first, unless the listing is long (then the entries stay in name order and only the shown time changes).
+        if (!sortSpecified && timeType != LsTimeType.Modify && !longMode) sortKey = 1;
+        var timeStyle = LsTimeStyle.Locale;
+        if (longMode)
+        {
+            // Only a long listing reads the style: a bogus --time-style is no error without -l (oracle).
+            string? styleArg = timeStyleArg ?? Environment.GetEnvironmentVariable("TIME_STYLE");
+            if (!string.IsNullOrEmpty(styleArg) && !TryResolveTimeStyle(styleArg, out timeStyle, out var styleErr, out int styleExit))
+            {
+                FileSystemHelpers.WriteBashError(this, styleErr!);
+                FileSystemHelpers.SetLastExitCode(this, styleExit);
+                return;
+            }
+        }
         bool columnar = format is LsFormat.Vertical or LsFormat.Across or LsFormat.Commas;
         long lineLength = 80;
         int tabSize = 8;
@@ -403,6 +509,15 @@ public sealed class InvokeBashLsCommand : PSCmdlet
         var dirTargets = new List<(string Path, string Display, DateTime Mtime)>();
         bool hadError = false;
 
+        // The time a directory OPERAND is ordered by (-t among several operands) follows -u / -c / --time too.
+        DateTime DirTime(string path) => timeType switch
+        {
+            LsTimeType.Access => Directory.GetLastAccessTime(path),
+            LsTimeType.Birth => Directory.GetCreationTime(path),
+            LsTimeType.Change => SafeChangeTime(path),
+            _ => Directory.GetLastWriteTime(path),
+        };
+
         foreach (var (target, typedOperand) in targets)
         {
             string? resolvedPath = null;
@@ -425,8 +540,7 @@ public sealed class InvokeBashLsCommand : PSCmdlet
                 }
                 else
                 {
-                    dirTargets.Add((resolvedPath, typedOperand ?? RelativeDisplay(resolvedPath),
-                        Directory.GetLastWriteTime(resolvedPath)));
+                    dirTargets.Add((resolvedPath, typedOperand ?? RelativeDisplay(resolvedPath), DirTime(resolvedPath)));
                 }
                 continue;
             }
@@ -484,10 +598,47 @@ public sealed class InvokeBashLsCommand : PSCmdlet
 
         // Sort — bash default is case-insensitive alphabetical with dirs and
         // files interleaved; -S sorts by size, -t by mtime (ties by name); -r reverses.
+        string timeProp = timeType switch
+        {
+            LsTimeType.Access => "AccessTime",
+            LsTimeType.Change => "ChangeTime",
+            LsTimeType.Birth => "BirthTime",
+            _ => "LastModified",
+        };
+
+        // The change time is not part of .NET's FileSystemInfo: read it (stat) only when it is displayed or sorted on.
+        void PrepareTimes(List<PSObject> entries)
+        {
+            if (timeType != LsTimeType.Change) return;
+            foreach (var e in entries)
+            {
+                if (e.Properties["ChangeTime"] is not null) continue;
+                var full = GetString(e, "FullPath");
+                if (full.Length == 0) continue;
+                FileSystemInfo fsi = GetBool(e, "IsDirectory") ? new DirectoryInfo(full) : new FileInfo(full);
+                DateTime ctime;
+                try { ctime = FindStat.Read(fsi, fsi, following: false).Ctime; }
+                catch { ctime = GetDate(e, "LastModified"); }
+                e.Properties.Add(new PSNoteProperty("ChangeTime", ctime));
+            }
+        }
+
+        static string ExtensionOf(string name)
+        {
+            int dot = name.LastIndexOf('.');
+            return dot < 0 ? string.Empty : name.Substring(dot);
+        }
+
         List<PSObject> Sort(List<PSObject> entries)
         {
+            PrepareTimes(entries);
             IEnumerable<PSObject> sorted;
-            if (sortBySize)
+            if (sortKey == 4)
+            {
+                // -U / --sort=none: directory order, as enumerated.
+                sorted = reverseSort ? Enumerable.Reverse(entries) : entries;
+            }
+            else if (sortBySize)
             {
                 sorted = entries.OrderByDescending(e => GetLong(e, "SizeBytes"))
                     .ThenBy(e => GetDisplayName(e), StringComparer.OrdinalIgnoreCase);
@@ -495,7 +646,14 @@ public sealed class InvokeBashLsCommand : PSCmdlet
             }
             else if (sortByTime)
             {
-                sorted = entries.OrderByDescending(e => GetDate(e, "LastModified"))
+                sorted = entries.OrderByDescending(e => GetDate(e, timeProp))
+                    .ThenBy(e => GetDisplayName(e), StringComparer.OrdinalIgnoreCase);
+                if (reverseSort) sorted = sorted.Reverse();
+            }
+            else if (sortKey == 3)
+            {
+                // -X / --sort=extension: by the text from the last '.' ("" when none), then by name.
+                sorted = entries.OrderBy(e => ExtensionOf(GetDisplayName(e)), StringComparer.OrdinalIgnoreCase)
                     .ThenBy(e => GetDisplayName(e), StringComparer.OrdinalIgnoreCase);
                 if (reverseSort) sorted = sorted.Reverse();
             }
@@ -549,8 +707,9 @@ public sealed class InvokeBashLsCommand : PSCmdlet
             if (longMode)
             {
                 var rows = new List<LsLongRow>(sorted.Count);
-                foreach (var e in sorted) rows.Add(LongRow(e, humanSizes));
-                longLines = LsLongFormat.Align(rows);
+                var now = DateTime.Now;
+                foreach (var e in sorted) rows.Add(LongRow(e, humanSizes, numericIds, timeProp, timeStyle, now));
+                longLines = LsLongFormat.Align(rows, showOwner, showGroup);
             }
 
             string[]? inodes = showInode ? sorted.Select(InodeText).ToArray() : null;
@@ -737,7 +896,17 @@ public sealed class InvokeBashLsCommand : PSCmdlet
         }
 
         IEnumerable<(string Path, string Display, DateTime Mtime)> orderedDirs;
-        if (sortBySize)
+        if (sortKey == 4)
+        {
+            orderedDirs = reverseSort ? Enumerable.Reverse(dirTargets) : dirTargets;
+        }
+        else if (sortKey == 3)
+        {
+            orderedDirs = dirTargets.OrderBy(t => ExtensionOf(t.Display), StringComparer.OrdinalIgnoreCase)
+                .ThenBy(t => t.Display, StringComparer.OrdinalIgnoreCase);
+            if (reverseSort) orderedDirs = orderedDirs.Reverse();
+        }
+        else if (sortBySize)
         {
             orderedDirs = dirTargets.OrderBy(t => t.Display, StringComparer.OrdinalIgnoreCase);
             if (reverseSort) orderedDirs = orderedDirs.Reverse();
@@ -763,6 +932,13 @@ public sealed class InvokeBashLsCommand : PSCmdlet
         {
             SessionState.PSVariable.Set("global:LASTEXITCODE", 2);
         }
+    }
+
+    private static DateTime SafeChangeTime(string dir)
+    {
+        var info = new DirectoryInfo(dir);
+        try { return FindStat.Read(info, info, following: false).Ctime; }
+        catch { return info.LastWriteTime; }
     }
 
     /// <summary>"." / ".." entries for <c>-a</c>: the directory itself or its parent, named as GNU names them.</summary>
@@ -848,6 +1024,7 @@ public sealed class InvokeBashLsCommand : PSCmdlet
         string owner;
         string group;
         int linkCount = 1;
+        string? uid = null, gid = null;
 
         if (IsWindows())
         {
@@ -871,9 +1048,10 @@ public sealed class InvokeBashLsCommand : PSCmdlet
             try
             {
                 bool isMac = OperatingSystem.IsMacOS();
+                // "LINKS UID GID OWNER GROUP" (the numeric ids serve `ls -n`).
                 var statArgs = isMac
-                    ? new[] { "-f", "%l %Su %Sg", item.FullName }
-                    : new[] { "-c", "%h %U %G", item.FullName };
+                    ? new[] { "-f", "%l %u %g %Su %Sg", item.FullName }
+                    : new[] { "-c", "%h %u %g %U %G", item.FullName };
                 var psi = new System.Diagnostics.ProcessStartInfo("/usr/bin/stat")
                 {
                     RedirectStandardOutput = true,
@@ -889,13 +1067,15 @@ public sealed class InvokeBashLsCommand : PSCmdlet
                 string statOut = BashRuntime.RunChildProcess(psi).Stdout.Trim();
                 if (statOut.Length > 0)
                 {
-                    // "LINKS OWNER GROUP": the group takes the remainder (it may contain spaces).
-                    var parts = statOut.Split(new[] { ' ' }, 3);
-                    if (parts.Length == 3 && int.TryParse(parts[0], out int links))
+                    // "LINKS UID GID OWNER GROUP": the group takes the remainder (it may contain spaces).
+                    var parts = statOut.Split(new[] { ' ' }, 5);
+                    if (parts.Length == 5 && int.TryParse(parts[0], out int links))
                     {
                         linkCount = links;
-                        owner = parts[1];
-                        group = parts[2];
+                        uid = parts[1];
+                        gid = parts[2];
+                        owner = parts[3];
+                        group = parts[4];
                     }
                 }
             }
@@ -933,6 +1113,13 @@ public sealed class InvokeBashLsCommand : PSCmdlet
         obj.Properties.Add(new PSNoteProperty("Owner", owner));
         obj.Properties.Add(new PSNoteProperty("Group", group));
         obj.Properties.Add(new PSNoteProperty("LastModified", item.LastWriteTime));
+        obj.Properties.Add(new PSNoteProperty("AccessTime", item.LastAccessTime));
+        obj.Properties.Add(new PSNoteProperty("BirthTime", item.CreationTime));
+        if (uid is not null && gid is not null)
+        {
+            obj.Properties.Add(new PSNoteProperty("Uid", uid));
+            obj.Properties.Add(new PSNoteProperty("Gid", gid));
+        }
         obj.Properties.Add(new PSNoteProperty("BashText", string.Empty));
         return obj;
     }
@@ -991,7 +1178,8 @@ public sealed class InvokeBashLsCommand : PSCmdlet
     /// padding is NOT done here — <see cref="LsLongFormat.Align"/> pads to the widest entry of the block.
     /// On Windows the NTFS hard-link count is read here (only <c>-l</c> pays for the handle open).
     /// </summary>
-    private static LsLongRow LongRow(PSObject entry, bool humanReadable)
+    private static LsLongRow LongRow(PSObject entry, bool humanReadable, bool numericIds, string timeProp,
+        LsTimeStyle timeStyle, DateTime now)
     {
         long sizeBytes = GetLong(entry, "SizeBytes");
         string size = humanReadable
@@ -1005,14 +1193,35 @@ public sealed class InvokeBashLsCommand : PSCmdlet
                 if (entry.Properties["LinkCount"] is { } lp) lp.Value = links;
             }
 
+        string owner = GetString(entry, "Owner"), group = GetString(entry, "Group");
+        if (numericIds) (owner, group) = NumericIds(entry);
+
         return new LsLongRow(
             GetString(entry, "Permissions"),
             links.ToString(CultureInfo.InvariantCulture),
-            GetString(entry, "Owner"),
-            GetString(entry, "Group"),
+            owner,
+            group,
             size,
-            LsLongFormat.Date(GetDate(entry, "LastModified"), DateTime.Now),
+            LsLongFormat.Date(GetDate(entry, timeProp), now, timeStyle),
             GetDisplayName(entry));
+    }
+
+    /// <summary>
+    /// The numeric uid / gid for <c>-n</c>: Unix reads them with the owner names (<c>stat</c>); Windows has no uids, so they are
+    /// the last sub-authority of the owner / primary-group SID (the same mapping <c>find -uid</c> uses).
+    /// </summary>
+    private static (string Uid, string Gid) NumericIds(PSObject entry)
+    {
+        if (entry.Properties["Uid"]?.Value is { } u && entry.Properties["Gid"]?.Value is { } g)
+            return (Convert.ToString(u, CultureInfo.InvariantCulture) ?? "0", Convert.ToString(g, CultureInfo.InvariantCulture) ?? "0");
+        var full = GetString(entry, "FullPath");
+        try
+        {
+            FileSystemInfo fsi = GetBool(entry, "IsDirectory") ? new DirectoryInfo(full) : new FileInfo(full);
+            var st = FindStat.Read(fsi, fsi, following: false);
+            return (st.Uid.ToString(CultureInfo.InvariantCulture), st.Gid.ToString(CultureInfo.InvariantCulture));
+        }
+        catch { return ("0", "0"); }
     }
     /// <summary>
     /// Reimplements the psm1 <c>Test-IsExecutable</c>: a directory or symlink is

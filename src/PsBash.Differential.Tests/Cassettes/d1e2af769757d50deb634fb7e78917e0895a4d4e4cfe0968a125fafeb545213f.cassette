@@ -1,0 +1,39 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 940
+stdout-length: 268
+stderr-length: 0
+==== SCRIPT ====
+__fs_snap() { find . | LC_ALL=C sort | while IFS= read -r p; do if [ -d "$p" ]; then echo "D $p"; else echo "F $p $(base64 -w0 "$p")"; fi; done; }
+d=$(mktemp -d) && cd "$d" && { :
+for f in aaaa.c bbbb.h cccc dddd.a.c ee.tar.gz ff; do printf 'x' > $f; done; touch -m -d '2024-01-01 10:00:00' aaaa.c; touch -m -d '2024-01-02 10:00:00' bbbb.h; touch -m -d '2024-01-03 10:00:00' cccc; touch -m -d '2023-06-01 10:00:00' dddd.a.c; touch -m -d '2099-01-02 03:04:05' ee.tar.gz; touch -m -d '2000-02-03 04:05:06' ff; touch -a -d '2022-01-01 10:00:00' aaaa.c; touch -a -d '2021-01-01 10:00:00' bbbb.h; touch -a -d '2020-01-01 10:00:00' cccc; touch -a -d '2023-06-01 10:00:00' dddd.a.c; touch -a -d '2019-01-01 10:00:00' ee.tar.gz; touch -a -d '2024-05-05 05:05:05' ff
+} >/dev/null 2>&1
+echo '== stdout'
+{ :
+ls -l --time-style=posix-long-iso | awk 'NF >= 8 { print $6, $7, $8 }'
+} 2>/dev/null
+echo "== exit $?"
+echo '== fs'
+__fs_snap
+cd /; rm -rf "$d"
+==== STDOUT ====
+== stdout
+2024-01-01 10:00 aaaa.c
+2024-01-02 10:00 bbbb.h
+2024-01-03 10:00 cccc
+2023-06-01 10:00 dddd.a.c
+2099-01-02 03:04 ee.tar.gz
+2000-02-03 04:05 ff
+== exit 0
+== fs
+D .
+F ./aaaa.c eA==
+F ./bbbb.h eA==
+F ./cccc eA==
+F ./dddd.a.c eA==
+F ./ee.tar.gz eA==
+F ./ff eA==
+
+==== STDERR ====
+
