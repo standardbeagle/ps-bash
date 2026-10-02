@@ -164,6 +164,19 @@ public class CpOptionsTests : IDisposable, IClassFixture<SharedPwshFixture>
     }
 
     [Fact]
+    public void LinkModes_OntoAnExistingHardLink_GnuOracle()   // GNU 9.4: -l = silent success (also -lf), -s = "same file"
+    {
+        Write("a", "A");
+        InTmp("Invoke-BashCp '-l' a ln1").AssertSuccess();
+        InTmp("Invoke-BashCp '-l' a ln1").AssertSuccess();
+        InTmp("Invoke-BashCp '-lf' a ln1").AssertSuccess();
+        InTmp("Invoke-BashCp '-s' a ln1").AssertFailed(1, "cp: 'a' and 'ln1' are the same file");
+        InTmp("Invoke-BashCp '-sf' a ln1").AssertFailed(1, "cp: 'a' and 'ln1' are the same file");
+        File.AppendAllText(Path.Combine(_tmp, "ln1"), "more");
+        Assert.Equal("Amore", Read("a"));                         // still one inode: -lf did not replace it
+    }
+
+    [Fact]
     public void Reflink_Always_IsGnusError_AndCreatesNothing()
     {
         Write("a");
