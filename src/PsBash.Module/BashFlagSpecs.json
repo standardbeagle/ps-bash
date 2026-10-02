@@ -679,6 +679,32 @@
     {
       "flag": "-i",
       "desc": "ignore case in comparing fields"
+    },
+    {
+      "flag": "-o",
+      "desc": "obey FORMAT while constructing output line (or auto)",
+      "arg": "FORMAT"
+    },
+    {
+      "flag": "-e",
+      "desc": "replace missing input fields with EMPTY",
+      "arg": "EMPTY"
+    },
+    {
+      "flag": "-z",
+      "desc": "line delimiter is NUL, not newline"
+    },
+    {
+      "flag": "--check-order",
+      "desc": "check that the input is correctly sorted"
+    },
+    {
+      "flag": "--nocheck-order",
+      "desc": "do not check that the input is correctly sorted"
+    },
+    {
+      "flag": "--header",
+      "desc": "treat the first line in each file as field headers"
     }
   ],
   "jq": [

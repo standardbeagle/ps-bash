@@ -214,6 +214,6 @@ public class InvokeBashJoinCommandTests : IDisposable, IClassFixture<SharedPwshF
             "Invoke-BashJoin --check-order /nonexistent-a /nonexistent-b 2>$null; $LASTEXITCODE").Invoke();
         pwsh.Commands.Clear();
         Assert.Single(result);
-        Assert.Equal(2, (int)result[0].BaseObject);
+        Assert.Equal(1, (int)result[0].BaseObject);   // --check-order is implemented; the missing file is the error
     }
 }

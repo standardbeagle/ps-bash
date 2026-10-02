@@ -1,52 +1,31 @@
 using System.Linq;
 using System.Management.Automation;
+using System.Text.RegularExpressions;
 using PsBash.Cmdlets.Args;
 
 namespace PsBash.Cmdlets;
 
 /// <summary>
-/// Binary cmdlet replacement for the psm1 <c>Invoke-BashJoin</c> function
-/// (REFACTOR-2 follow-on). Relational join of two files on a common key
-/// column, matching GNU coreutils <c>join</c>.
+/// Binary cmdlet for <c>join</c>: a port of GNU coreutils 9.4 <c>join.c</c> (a MERGE join over two files
+/// sorted on their join fields, with run lookahead), oracle-checked in `wsl bash`.
 ///
-/// Behavioral parity oracle: the original psm1 function. Flag surface:
-/// <c>-t SEP</c> (delimiter, defaults to a single space), joined form
-/// <c>-tC</c> (single-char delimiter); <c>-1 N</c> (key column for file 1,
-/// 1-based, default 1); <c>-2 N</c> (key column for file 2, default 1);
-/// <c>--</c> end-of-flags; <c>--help</c>.
+/// <para>Implemented: <c>-1 -2 -j -t -a -v -i -e -o FORMAT|auto --check-order --nocheck-order --header
+/// -z</c>. A line that lacks the join field has an EMPTY key; without <c>-t</c> fields are separated by
+/// runs of blanks (leading blanks ignored; under <c>-z</c> a newline is a blank too), with <c>-t</c> the
+/// split is exact. Output separator: the <c>-t</c> character, else one space.</para>
 ///
-/// Algorithm (byte-for-byte parity with the psm1 oracle):
-/// <list type="number">
-/// <item>Build a lookup from file 2 keyed by the join field. The lookup is
-/// a <c>Dictionary&lt;string, List&lt;string[]&gt;&gt;</c> so that duplicate
-/// keys preserve insertion order and emit one output row per file-2 match.</item>
-/// <item>Stream file 1 lines in order. For each, split on the delimiter,
-/// take the key field (skipping rows whose split has fewer fields than the
-/// key column), and for each matching file-2 row emit
-/// <c>key + delim + file1-rest + delim + file2-rest</c>.</item>
-/// </list>
+/// <para><b>Order check</b> (<c>check_order</c>): each line READ after a file's first is compared with the
+/// previous line of that file on the join field. By default only once an unpairable line has been seen
+/// (reads of lookahead lines before that are never checked); the first disorder per file prints
+/// <c>join: FILE:LINE: is not sorted: TEXT</c> and the run continues, ending with
+/// <c>join: input is not in sorted order</c> and exit 1. <c>--check-order</c> checks always and stops at
+/// the first disorder (exit 1); <c>--nocheck-order</c> never checks. After the merge loop the rest of both
+/// files is still read (and printed under -a/-v), so disorder there is found.</para>
 ///
-/// Both files stream with CRLF normalization and StreamReader.ReadLine
-/// semantics — a trailing newline does not produce a spurious empty final
-/// line. Paths resolve via
-/// <c>SessionState.Path.GetUnresolvedProviderPathFromPSPath</c> (no glob
-/// expansion — matching the oracle exactly). Missing files emit a bash-style
-/// <c>join: PATH: No such file or directory</c> error via
-/// <see cref="FileSystemHelpers.WriteBashError"/> and return with no further output. Missing
-/// operand (&lt; 2 file operands) emits <c>join: missing operand</c> and
-/// returns.
-///
-/// No PowerShell common-parameter prefix collision: <c>-t</c>, <c>-1</c>,
-/// and <c>-2</c> have no overlap with any common parameter, so all three
-/// stay in <see cref="Arguments"/> and are parsed by a manual value-flag
-/// scan.
-///
-/// Output: one bare <c>PsBash.TextOutput</c> string per joined row via
-/// <see cref="BashRuntime.NewBashObject(string)"/>.
-///
-/// AOT-safe: no <see cref="ScriptBlock"/> construction; <c>--help</c> and
-/// error emission route through parameter-bound
-/// <see cref="CommandInvocationIntrinsics.InvokeScript(string, object[])"/>.
+/// <para><b>-o</b> specs (comma or blank separated, repeatable and accumulating): <c>0</c> (the join
+/// field), <c>FILE.FIELD</c>; a missing/empty field prints the <c>-e</c> string (empty by default). With
+/// no <c>-o</c>, <c>-o auto</c> builds <c>0, 1.k.., 2.k..</c> from the FIRST line of each file (join
+/// fields excluded). <c>-e</c> also replaces empty fields in the default format.</para>
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashJoin")]
 [OutputType(typeof(string))]
@@ -55,25 +34,19 @@ public sealed class InvokeBashJoinCommand : PSCmdlet
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
-    /// <summary>
-    /// Valid GNU join options ps-bash does not implement, refused loudly (exit 2). <c>-o FORMAT</c> and
-    /// <c>-e STRING</c> used to be silently swallowed as file operands / ignored, so `join -o 0,1.2 a b`
-    /// printed the DEFAULT format. (A string[] on purpose: CommonParameterCollisionGuardTests
-    /// enumerates static string sets.)
-    /// </summary>
-    private static readonly string[] JoinValidButUnsupported =
-    {
-        "-o", "-e",
-        "--check-order", "--nocheck-order", "--header",
-        "-z", "--zero-terminated",
-    };
+    [Parameter(ValueFromPipeline = true)]
+    public PSObject? InputObject { get; set; }
+
+    /// <summary>Valid GNU join options ps-bash does not implement (none left).</summary>
+    private static readonly string[] JoinValidButUnsupported = Array.Empty<string>();
 
     private const string OptDelim = "t", OptField1 = "1", OptField2 = "2", OptJoinField = "j",
-        OptA = "a", OptV = "v", OptIgnoreCase = "i";
+        OptA = "a", OptV = "v", OptIgnoreCase = "i", OptO = "o", OptE = "e",
+        OptCheck = "check", OptNoCheck = "nocheck", OptHeader = "header", OptZero = "zero";
 
-    /// <summary>
-    /// join's option surface (GNU coreutils 9.4). Implemented: -1 -2 -j -t -a -v -i/--ignore-case.
-    /// </summary>
+    private static readonly string[] JoinLongOrder =
+        { "ignore-case", "check-order", "nocheck-order", "header", "zero-terminated" };
+
     private static readonly OptSpecSet JoinSpec = new(
         new[]
         {
@@ -83,42 +56,54 @@ public sealed class InvokeBashJoinCommand : PSCmdlet
             new OptSpec(OptDelim, 't', null, OptKind.Value),
             new OptSpec(OptA, 'a', null, OptKind.Value),
             new OptSpec(OptV, 'v', null, OptKind.Value),
+            new OptSpec(OptO, 'o', null, OptKind.Value),
+            new OptSpec(OptE, 'e', null, OptKind.Value),
             new OptSpec(OptIgnoreCase, 'i', "ignore-case"),
+            new OptSpec(OptCheck, '\0', "check-order"),
+            new OptSpec(OptNoCheck, '\0', "nocheck-order"),
+            new OptSpec(OptHeader, '\0', "header"),
+            new OptSpec(OptZero, 'z', "zero-terminated"),
         },
         validButUnsupported: JoinValidButUnsupported,
         allowAbbrev: true,
-        gnuInfoOptions: true);
+        gnuInfoOptions: true,
+        longOptionOrder: JoinLongOrder);
 
     /// <summary>Pure argv scan (unit-test seam).</summary>
     internal static ParsedArgs ScanArgs(string[] args) => ArgParser.Parse(args, JoinSpec);
+
+    /// <summary>One <c>-o</c> output spec: <c>File</c> 0 = the join field, else 1|2 and a 1-based <c>Field</c>.</summary>
+    internal readonly record struct OutSpec(int File, int Field);
 
     internal sealed class JoinArgs
     {
         public ParsedArgs Parsed = null!;
         public string Delimiter = " ";
-        /// <summary>
-        /// True once <c>-t</c> was given: fields are then split on EXACTLY that character. Without it GNU
-        /// separates fields by runs of blanks (space/tab) and ignores leading blanks.
-        /// </summary>
+        /// <summary>True once <c>-t</c> was given: fields split on EXACTLY that character.</summary>
         public bool DelimiterExplicit;
         public int Field1 = 1, Field2 = 1;
-        public bool IgnoreCase;
+        public bool IgnoreCase, Zero, Header, Auto;
         public HashSet<int> AFiles = new(), VFiles = new();
         public List<string> Operands = new();
+        public List<OutSpec> OutList = new();
+        public string? Filler;
+        public InvokeBashCommCommand.OrderCheck Check = InvokeBashCommCommand.OrderCheck.Default;
         public string? Error;
     }
 
     /// <summary>
-    /// Scan + validate like GNU: a field number must be a positive integer, <c>-a</c>/<c>-v</c> take 1 or
-    /// 2, <c>-t</c> a single character (<c>\0</c> = NUL). The old scan silently ignored a bad
-    /// <c>-1 x</c> (kept field 1), took <c>-a3</c> as an operand and accepted a multi-char <c>-t</c>.
-    /// Options are applied in argv order (last <c>-1</c>/<c>-2</c>/<c>-j</c> wins).
+    /// Scan + validate like GNU: a field number is a positive integer, <c>-a</c>/<c>-v</c> take 1 or 2,
+    /// <c>-t</c> a single character (<c>\0</c> = NUL; two different ones = "incompatible tabs"), a second
+    /// join field that differs from an earlier one is "incompatible join fields A, B" (0-based, as GNU
+    /// prints them), and <c>-o</c> specs are validated with GNU's three messages.
     /// </summary>
     internal static JoinArgs Plan(string[] args)
     {
         var j = new JoinArgs { Parsed = ScanArgs(args) };
         j.Operands = j.Parsed.Operands();
         if (j.Parsed.HasError) return j;
+        int f1 = -1, f2 = -1;   // 0-based, -1 = unset
+        bool tabSet = false;
 
         foreach (var tok in j.Parsed.Tokens)
         {
@@ -127,12 +112,25 @@ public sealed class InvokeBashJoinCommand : PSCmdlet
             switch (tok.OptId)
             {
                 case OptIgnoreCase: j.IgnoreCase = true; break;
+                case OptZero: j.Zero = true; break;
+                case OptHeader: j.Header = true; break;
+                case OptCheck: j.Check = InvokeBashCommCommand.OrderCheck.Enabled; break;
+                case OptNoCheck: j.Check = InvokeBashCommCommand.OrderCheck.Disabled; break;
                 case OptField1:
                 case OptField2:
                 case OptJoinField:
                     if (!TryField(v, out int n)) { j.Error = $"join: invalid field number: '{v}'"; return j; }
-                    if (tok.OptId != OptField2) j.Field1 = n;
-                    if (tok.OptId != OptField1) j.Field2 = n;
+                    n--;
+                    if (tok.OptId != OptField2)
+                    {
+                        if (f1 >= 0 && f1 != n) { j.Error = $"join: incompatible join fields {f1}, {n}"; return j; }
+                        f1 = n;
+                    }
+                    if (tok.OptId != OptField1)
+                    {
+                        if (f2 >= 0 && f2 != n) { j.Error = $"join: incompatible join fields {f2}, {n}"; return j; }
+                        f2 = n;
+                    }
                     break;
                 case OptA:
                 case OptV:
@@ -140,14 +138,45 @@ public sealed class InvokeBashJoinCommand : PSCmdlet
                     (tok.OptId == OptA ? j.AFiles : j.VFiles).Add(v[0] - '0');
                     break;
                 case OptDelim:
-                    j.DelimiterExplicit = true;
-                    if (v == "\\0") j.Delimiter = "\0";
+                    string d;
+                    if (v == "\\0") d = "\0";
                     else if (v.Length > 1) { j.Error = $"join: multi-character tab '{v}'"; return j; }
-                    else j.Delimiter = v;
+                    else d = v;
+                    if (tabSet && d != j.Delimiter) { j.Error = "join: incompatible tabs"; return j; }
+                    tabSet = true;
+                    j.DelimiterExplicit = true;
+                    j.Delimiter = d;
+                    break;
+                case OptE: j.Filler = v; break;
+                case OptO:
+                    if (v == "auto") { j.Auto = true; break; }
+                    foreach (var piece in v.Split(',', ' ', '\t'))
+                    {
+                        if (!TryOutSpec(piece, out var spec, out var err)) { j.Error = "join: " + err; return j; }
+                        j.OutList.Add(spec);
+                    }
                     break;
             }
         }
+        j.Field1 = f1 < 0 ? 1 : f1 + 1;
+        j.Field2 = f2 < 0 ? 1 : f2 + 1;
         return j;
+    }
+
+    private static bool TryOutSpec(string s, out OutSpec spec, out string error)
+    {
+        spec = default; error = "";
+        if (s == "0") { spec = new OutSpec(0, 0); return true; }
+        if (s.Length == 0 || s[0] is not ('1' or '2'))
+        {
+            error = s.Length > 0 && s[0] == '0' ? $"invalid field specifier: '{s}'" : $"invalid file number in field spec: '{s}'";
+            return false;
+        }
+        if (s.Length < 2 || s[1] != '.') { error = $"invalid field specifier: '{s}'"; return false; }
+        string num = s.Substring(2);
+        if (!TryField(num, out int n)) { error = $"invalid field number: '{num}'"; return false; }
+        spec = new OutSpec(s[0] - '0', n);
+        return true;
     }
 
     private static bool TryField(string s, out int n)
@@ -173,7 +202,12 @@ public sealed class InvokeBashJoinCommand : PSCmdlet
     /// <summary>-v FILENUM decoy: bare -v abbreviates -Verbose.</summary>
     [Parameter] public string? V { get; set; }
 
-    /// <summary>Arguments with the decoy-bound flags re-injected (<c>-i</c>, <c>-a N</c>, <c>-v N</c>).</summary>
+    /// <summary>-e STRING decoy: bare -e is ambiguous with -ErrorAction/-ErrorVariable.</summary>
+    [Parameter] public string? E { get; set; }
+
+    /// <summary>-o FORMAT decoy: bare -o is ambiguous with -OutVariable/-OutBuffer.</summary>
+    [Parameter] public string? O { get; set; }
+
     private string[] ArgsWithDecoys()
     {
         var args = Arguments ?? Array.Empty<string>();
@@ -181,7 +215,40 @@ public sealed class InvokeBashJoinCommand : PSCmdlet
         if (I.IsPresent) pre.Add("-i");
         if (A is not null) { pre.Add("-a"); pre.Add(A); }
         if (V is not null) { pre.Add("-v"); pre.Add(V); }
+        if (E is not null) { pre.Add("-e"); pre.Add(E); }
+        if (O is not null) { pre.Add("-o"); pre.Add(O); }
         return pre.Count == 0 ? args : pre.Concat(args).ToArray();
+    }
+
+    private readonly List<object> _stdin = new();
+
+    protected override void ProcessRecord()
+    {
+        if (InputObject is not null) _stdin.Add(InputObject);
+    }
+
+    /// <summary>One input line with its split fields and join key.</summary>
+    private sealed class Row
+    {
+        public string Text = "";
+        public string[] F = Array.Empty<string>();
+        public string Key = "";
+    }
+
+    /// <summary>Raised to end the run after a --check-order disorder (the message is already written).</summary>
+    private sealed class JoinAbort : Exception { }
+
+    /// <summary>One input file: lazy lines, one-line lookahead, per-file order-check state.</summary>
+    private sealed class Src
+    {
+        public string Name = "";
+        public int Which;           // 1 or 2
+        public IEnumerator<string> E = null!;
+        public int LineNo;
+        public Row? Pending;
+        public Row? Prev;
+        public Row? First;
+        public bool Issued;
     }
 
     protected override void EndProcessing()
@@ -209,14 +276,7 @@ public sealed class InvokeBashJoinCommand : PSCmdlet
             return;
         }
 
-        string delimiter = plan.Delimiter;
-        int field1 = plan.Field1;
-        int field2 = plan.Field2;
-        bool ignoreCase = plan.IgnoreCase;
-        var aFiles = plan.AFiles;   // -a FILENUM: also print that file's unpaired lines
-        var vFiles = plan.VFiles;   // -v FILENUM: print ONLY that file's unpaired lines
         var operands = plan.Operands;
-
         if (operands.Count < 2)
         {
             FileSystemHelpers.WriteBashError(this, operands.Count == 0
@@ -229,173 +289,252 @@ public sealed class InvokeBashJoinCommand : PSCmdlet
             FileSystemHelpers.WriteBashError(this, $"join: extra operand '{operands[2]}'");
             return;
         }
-        string path1 = SessionState.Path.GetUnresolvedProviderPathFromPSPath(operands[0]);
-        string path2 = SessionState.Path.GetUnresolvedProviderPathFromPSPath(operands[1]);
-
-        IEnumerator<string>? file1 = null;
-        bool hasFile1Line;
-        try
+        if (operands[0] == "-" && operands[1] == "-")
         {
-            file1 = BashFileSystem.ReadLines(path1).GetEnumerator();
-            hasFile1Line = file1.MoveNext();
-        }
-        catch (Exception ex)
-        {
-            if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-            file1?.Dispose();
-            WriteReadError(path1, ex);
+            FileSystemHelpers.WriteBashError(this, "join: both files cannot be standard input");
             return;
         }
 
-        // String.Split takes a char[]; we use a single-char or multi-char
-        // delimiter consistently via Split(string[], StringSplitOptions).
-        var delimAsArray = new[] { delimiter };
-        _blankMode = !plan.DelimiterExplicit;
+        new Merge(this, plan, operands, _stdin).Run();
+    }
 
-        // Output controls for -a / -v:
-        //   emitPaired   — print matched rows (suppressed when -v is given alone)
-        //   emitUnpaired1 — also print file-1 lines with no match (-a1 / -v1)
-        //   emitUnpaired2 — also print file-2 lines with no match (-a2 / -v2)
-        bool emitPaired = !(vFiles.Count > 0 && aFiles.Count == 0);
-        bool emitUnpaired1 = aFiles.Contains(1) || vFiles.Contains(1);
-        bool emitUnpaired2 = aFiles.Contains(2) || vFiles.Contains(2);
+    private sealed class Merge
+    {
+        private readonly InvokeBashJoinCommand _c;
+        private readonly JoinArgs _p;
+        private readonly Src[] _src = new Src[2];
+        private readonly int[] _keyIdx;
+        private readonly string _sep;
+        private readonly bool _blank, _zero;
+        private bool _seenUnpairable;
+        private bool _anyIssued;
+        private readonly bool _pairables, _unp1, _unp2;
+        private List<OutSpec>? _format;
+        private static readonly Regex s_blankRun = new("[ \t]+", RegexOptions.Compiled);
+        private static readonly Regex s_blankRunNl = new("[ \t\n]+", RegexOptions.Compiled);
 
-        // Build lookup from file2 keyed by join field. Comparer honors -i.
-        var cmp = ignoreCase ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
-        var file2Map = new Dictionary<string, List<string[]>>(cmp);
-        var matchedKeys2 = new HashSet<string>(cmp);
-        var file2Order = new List<string>(); // preserve key first-seen order for -a2/-v2 output
-        int keyIdx2 = field2 - 1;
-        try
+        public Merge(InvokeBashJoinCommand c, JoinArgs p, List<string> operands, List<object> stdin)
         {
-            foreach (var line in BashFileSystem.ReadLines(path2))
+            _c = c; _p = p;
+            _keyIdx = new[] { p.Field1 - 1, p.Field2 - 1 };
+            _sep = p.DelimiterExplicit ? p.Delimiter : " ";
+            _blank = !p.DelimiterExplicit;
+            _zero = p.Zero;
+            _pairables = p.VFiles.Count == 0;
+            _unp1 = p.AFiles.Contains(1) || p.VFiles.Contains(1);
+            _unp2 = p.AFiles.Contains(2) || p.VFiles.Contains(2);
+            for (int i = 0; i < 2; i++)
             {
-                var fields = SplitFields(line, delimAsArray);
-                if (keyIdx2 >= fields.Length) { continue; }
-                var key = fields[keyIdx2];
-                if (!file2Map.TryGetValue(key, out var bucket))
+                string op = operands[i];
+                IEnumerable<string> lines;
+                if (op == "-")
+                    lines = _zero ? NulRecords.FromPipeline(stdin)
+                                  : stdin.SelectMany(o => BashRuntime.RecordLines(o).Select(r => r.Text));
+                else
                 {
-                    bucket = new List<string[]>();
-                    file2Map[key] = bucket;
-                    file2Order.Add(key);
+                    string path = c.SessionState.Path.GetUnresolvedProviderPathFromPSPath(op);
+                    lines = _zero ? NulRecords.ReadFile(path) : BashFileSystem.ReadLines(path);
                 }
-                bucket.Add(fields);
+                _src[i] = new Src { Name = op, Which = i + 1, E = lines.GetEnumerator() };
+                _paths[i] = op == "-" ? "-" : c.SessionState.Path.GetUnresolvedProviderPathFromPSPath(op);
             }
         }
-        catch (Exception ex)
+
+        private readonly string[] _paths = new string[2];
+
+        private string[] Split(string line)
         {
-            if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-            file1?.Dispose();
-            WriteReadError(path2, ex);
-            return;
+            if (!_blank) return line.Split(_p.Delimiter, StringSplitOptions.None);
+            var rx = _zero ? s_blankRunNl : s_blankRun;
+            return rx.Split(line.TrimStart(' ', '\t', _zero ? '\n' : ' '));
         }
 
-        int keyIdx1 = field1 - 1;
-        try
-        {
-            while (hasFile1Line)
-            {
-                EmitJoinedRows(file1.Current, delimAsArray, keyIdx1, keyIdx2, file2Map,
-                    delimiter, emitPaired, emitUnpaired1, matchedKeys2);
-                hasFile1Line = file1.MoveNext();
-            }
+        private int Cmp(string a, string b)
+            => _p.IgnoreCase
+                ? Math.Sign(string.Compare(a, b, StringComparison.OrdinalIgnoreCase))
+                : Math.Sign(string.CompareOrdinal(a, b));
 
-            // -a2 / -v2: emit file-2 lines whose key never matched file 1.
-            if (emitUnpaired2)
+        private Row MakeRow(string text, int which)
+        {
+            var f = Split(text);
+            int k = _keyIdx[which - 1];
+            return new Row { Text = text, F = f, Key = k < f.Length ? f[k] : "" };
+        }
+
+        /// <summary>Read the next line of a file (no lookahead), applying GNU's check_order.</summary>
+        private Row? ReadRow(Src s, bool check = true)
+        {
+            if (!s.E.MoveNext()) return null;
+            s.LineNo++;
+            var row = MakeRow(s.E.Current, s.Which);
+            s.First ??= row;
+            if (check)
             {
-                foreach (var key in file2Order)
+                var mode = _p.Check;
+                if (s.Prev is { } prev && mode != InvokeBashCommCommand.OrderCheck.Disabled
+                    && (mode == InvokeBashCommCommand.OrderCheck.Enabled || _seenUnpairable)
+                    && !s.Issued && Cmp(prev.Key, row.Key) > 0)
                 {
-                    if (matchedKeys2.Contains(key)) continue;
-                    foreach (var fields2 in file2Map[key])
+                    _c.WriteObjectError($"join: {s.Name}:{s.LineNo}: is not sorted: {row.Text}");
+                    s.Issued = true;
+                    _anyIssued = true;
+                    if (mode == InvokeBashCommCommand.OrderCheck.Enabled) throw new JoinAbort();
+                }
+                s.Prev = row;
+            }
+            return row;
+        }
+
+        private Row? Next(Src s)
+        {
+            if (s.Pending is { } p) { s.Pending = null; return p; }
+            return ReadRow(s);
+        }
+
+        /// <summary>The rest of the run of lines whose key equals <paramref name="first"/> (GNU's equal-run read); the first different line becomes lookahead.</summary>
+        private List<Row> ReadRun(Src s, Row first)
+        {
+            var run = new List<Row> { first };
+            while (true)
+            {
+                var r = ReadRow(s);
+                if (r is null) break;
+                if (Cmp(first.Key, r.Key) == 0) run.Add(r);
+                else { s.Pending = r; break; }
+            }
+            return run;
+        }
+        private string Fill(string v) => v.Length == 0 && _p.Filler is { } f ? f : v;
+
+        private void Emit(IEnumerable<string> fields)
+        {
+            string text = string.Join(_sep, fields);
+            _c.WriteObject(_zero ? NulRecords.Record(text) : BashRuntime.NewBashObject(text));
+        }
+
+        private List<OutSpec>? Format()
+        {
+            if (_format is not null) return _format.Count == 0 ? null : _format;
+            _format = new List<OutSpec>(_p.OutList);
+            if (_format.Count == 0 && _p.Auto)
+            {
+                _format.Add(new OutSpec(0, 0));
+                for (int w = 1; w <= 2; w++)
+                {
+                    int n = _src[w - 1].First?.F.Length ?? 0;
+                    for (int i = 1; i <= n; i++)
+                        if (i - 1 != _keyIdx[w - 1]) _format.Add(new OutSpec(w, i));
+                }
+            }
+            return _format.Count == 0 ? null : _format;
+        }
+
+        private string Col(Row? r, int which, int field)
+            => r is not null && field - 1 < r.F.Length && field >= 1 ? Fill(r.F[field - 1]) : Fill("");
+
+        private void PrintPair(Row r1, Row r2)
+        {
+            if (Format() is { } fmt)
+            {
+                Emit(fmt.Select(s => s.File == 0 ? Fill(r1.Key) : s.File == 1 ? Col(r1, 1, s.Field) : Col(r2, 2, s.Field)));
+                return;
+            }
+            var parts = new List<string> { Fill(r1.Key) };
+            for (int c = 0; c < r1.F.Length; c++) if (c != _keyIdx[0]) parts.Add(Fill(r1.F[c]));
+            for (int c = 0; c < r2.F.Length; c++) if (c != _keyIdx[1]) parts.Add(Fill(r2.F[c]));
+            Emit(parts);
+        }
+
+        private void PrintUnpaired(Row r, int which)
+        {
+            if (Format() is { } fmt)
+            {
+                Emit(fmt.Select(s => s.File == 0 ? Fill(r.Key) : s.File == which ? Col(r, which, s.Field) : Fill("")));
+                return;
+            }
+            var parts = new List<string> { Fill(r.Key) };
+            for (int c = 0; c < r.F.Length; c++) if (c != _keyIdx[which - 1]) parts.Add(Fill(r.F[c]));
+            Emit(parts);
+        }
+
+        private Src _cur = null!;
+
+        public void Run()
+        {
+            _cur = _src[0];
+            try
+            {
+                if (_p.Header)
+                {
+                    _cur = _src[0]; var h1 = ReadRow(_src[0], check: false);
+                    _cur = _src[1]; var h2 = ReadRow(_src[1], check: false);
+                    if (h1 is not null && h2 is not null) PrintPair(h1, h2);
+                    else if (h1 is not null) PrintUnpaired(h1, 1);
+                    else if (h2 is not null) PrintUnpaired(h2, 2);
+                }
+                _cur = _src[0]; var l1 = Next(_src[0]);
+                _cur = _src[1]; var l2 = Next(_src[1]);
+
+                while (l1 is not null && l2 is not null)
+                {
+                    int d = Cmp(l1.Key, l2.Key);
+                    if (d < 0)
                     {
-                        WriteObject(BashRuntime.NewBashObject(ReorderKeyFirst(fields2, keyIdx2, delimiter)));
+                        if (_unp1) PrintUnpaired(l1, 1);
+                        _cur = _src[0]; l1 = Next(_src[0]);
+                        _seenUnpairable = true;   // set AFTER the advance: that read is not yet checked
+                    }
+                    else if (d > 0)
+                    {
+                        if (_unp2) PrintUnpaired(l2, 2);
+                        _cur = _src[1]; l2 = Next(_src[1]);
+                        _seenUnpairable = true;
+                    }
+                    else
+                    {
+                        _cur = _src[0]; var run1 = ReadRun(_src[0], l1);
+                        _cur = _src[1]; var run2 = ReadRun(_src[1], l2);
+                        if (_pairables)
+                            foreach (var a in run1) foreach (var b in run2) PrintPair(a, b);
+                        _cur = _src[0]; l1 = Next(_src[0]);
+                        _cur = _src[1]; l2 = Next(_src[1]);
                     }
                 }
+
+                Drain(l1, 1, _unp1);
+                Drain(l2, 2, _unp2);
+                if (_anyIssued) _c.WriteBashErrorPublic("join: input is not in sorted order");
             }
-        }
-        catch (Exception ex)
-        {
-            if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-            WriteReadError(path1, ex);
-        }
-        finally
-        {
-            file1?.Dispose();
-        }
-    }
-
-    // Default (no -t): GNU splits a line on RUNS of blanks and ignores leading blanks, so "a  b" has two
-    // fields; a trailing blank leaves one empty last field ("d 4 " is d, 4, ""). With -t the split is exact.
-    private bool _blankMode;
-    private static readonly System.Text.RegularExpressions.Regex s_blankRun = new("[ \t]+");
-
-    private string[] SplitFields(string line, string[] delimAsArray) =>
-        _blankMode
-            ? s_blankRun.Split(line.TrimStart(' ', '\t'))
-            : line.Split(delimAsArray, StringSplitOptions.None);
-
-    private void EmitJoinedRows(
-        string line,
-        string[] delimAsArray,
-        int keyIdx1,
-        int keyIdx2,
-        Dictionary<string, List<string[]>> file2Map,
-        string delimiter,
-        bool emitPaired,
-        bool emitUnpaired1,
-        HashSet<string> matchedKeys2)
-    {
-        var fields1 = SplitFields(line, delimAsArray);
-        if (keyIdx1 >= fields1.Length) { return; }
-        var key = fields1[keyIdx1];
-
-        if (!file2Map.TryGetValue(key, out var matches))
-        {
-            // Unpaired file-1 line: print it (key first) under -a1 / -v1.
-            if (emitUnpaired1)
+            catch (JoinAbort)
             {
-                WriteObject(BashRuntime.NewBashObject(ReorderKeyFirst(fields1, keyIdx1, delimiter)));
+                FileSystemHelpers.SetLastExitCode(_c, 1);
             }
-            return;
-        }
-
-        matchedKeys2.Add(key);
-        if (!emitPaired) return;
-
-        foreach (var fields2 in matches)
-        {
-            var parts = new List<string>();
-            parts.Add(key);
-            for (int c = 0; c < fields1.Length; c++)
+            catch (Exception ex)
             {
-                if (c != keyIdx1) { parts.Add(fields1[c]); }
+                if (FileSystemHelpers.IsPipelineStop(ex)) throw;
+                bool notFound = ex is FileNotFoundException or DirectoryNotFoundException
+                    || ex.InnerException is FileNotFoundException or DirectoryNotFoundException;
+                string msg = notFound ? "No such file or directory" : ex.Message;
+                FileSystemHelpers.WriteBashError(_c, $"join: {_cur.Name}: {msg}");
             }
-            for (int c = 0; c < fields2.Length; c++)
+            finally
             {
-                if (c != keyIdx2) { parts.Add(fields2[c]); }
+                _src[0].E.Dispose();
+                _src[1].E.Dispose();
             }
-            WriteObject(BashRuntime.NewBashObject(string.Join(delimiter, parts)));
         }
-    }
 
-    /// <summary>Reorder a line's fields with the join key first (GNU's unpaired-line shape).</summary>
-    private static string ReorderKeyFirst(string[] fields, int keyIdx, string delimiter)
-    {
-        if (keyIdx >= fields.Length) return string.Join(delimiter, fields);
-        var parts = new List<string> { fields[keyIdx] };
-        for (int c = 0; c < fields.Length; c++)
+        private void Drain(Row? first, int which, bool print)
         {
-            if (c != keyIdx) parts.Add(fields[c]);
+            var s = _src[which - 1];
+            _cur = s;
+            if (first is null) return;
+            if (print) PrintUnpaired(first, which);
+            Row? row;
+            while ((row = Next(s)) is not null)
+                if (print) PrintUnpaired(row, which);
         }
-        return string.Join(delimiter, parts);
     }
-
-    private void WriteReadError(string path, Exception ex)
-    {
-        bool notFound = ex is FileNotFoundException or DirectoryNotFoundException
-            || ex.InnerException is FileNotFoundException or DirectoryNotFoundException;
-        string msg = notFound ? "No such file or directory" : ex.Message;
-        string normalized = path.Replace('\\', '/');
-        FileSystemHelpers.WriteBashError(this, $"join: {normalized}: {msg}");
-    }
+    internal void WriteObjectError(string message) => FileSystemHelpers.WriteStderr(this, message);
+    internal void WriteBashErrorPublic(string message) => FileSystemHelpers.WriteBashError(this, message);
 }

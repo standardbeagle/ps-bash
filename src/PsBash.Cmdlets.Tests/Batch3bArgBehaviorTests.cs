@@ -151,8 +151,8 @@ public class Batch3bArgBehaviorTests : IClassFixture<SharedPwshFixture>, IDispos
     {
         string a = F("j1", "1 a\n2 b\n"), b = F("j2", "1 x\n3 y\n");
         Assert.Equal(new[] { "1 a x" }, Run($"Invoke-BashJoin {a} {b}").AssertSuccess().Lines);
-        Run($"Invoke-BashJoin '-o' '0,1.2' {a} {b}").AssertFailed(2, "option '-o' is recognized but not supported");   // FIX (was: default format)
-        Run($"Invoke-BashJoin '-e' X {a} {b}").AssertFailed(2, "option '-e' is recognized but not supported");
+        Assert.Equal(new[] { "1 x" }, Run($"Invoke-BashJoin '-o' '0,2.2' {a} {b}").AssertSuccess().Lines);   // FIX (was: default format)
+        Run($"Invoke-BashJoin '-e' X {a} {b}").AssertSuccess();
         Run($"Invoke-BashJoin '-1' x {a} {b}").AssertFailed(1, "invalid field number: 'x'");                             // FIX (was: field 1)
         Run($"Invoke-BashJoin '-a3' {a} {b}").AssertFailed(1, "invalid field number: '3'");                             // FIX (was: an operand)
         Run($"Invoke-BashJoin '-t' ab {a} {b}").AssertFailed(1, "multi-character tab 'ab'");
