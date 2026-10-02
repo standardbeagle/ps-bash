@@ -314,6 +314,24 @@ word made PowerShell invoke it as a command ("one: command not found"); only the
 multi-item path used to quote, which is what hid the bug. Words `EmitWord` already
 rendered as PowerShell values (`$x`, `"a"`, `(…)`, `@(…)`, numbers) pass through.
 
+An UNQUOTED `$(cmd)` / `` `cmd` `` word is word-split like an unquoted `$x`: bash expands it to TEXT,
+splits that text on `$IFS`, then glob-expands each word. The capture array only splits on LINES, so
+`for f in $(echo a b c)` used to iterate once over `a b c`. Such a word emits
+`@(ConvertTo-BashWords <the substitution's text>)` (`IsPureUnquotedCommandSubWord`; a quoted
+`"$(cmd)"` or a substitution glued into a longer word `x$(cmd)y` stays one word). The cmdlet
+(`ConvertToBashWordsCommand`, splitter = `BashWordSplitter`) follows bash's IFS rules (unset IFS =
+space/tab/newline; IFS whitespace folds and trims; every non-whitespace IFS character delimits and keeps
+empty fields, a single trailing delimiter adds none; empty IFS splits nothing), yields NO word for an
+empty / blank result (zero iterations), and expands each word containing `* ? [` against the filesystem
+(nullglob off: no match keeps the literal word; matches of a relative pattern are printed relative).
+A list with any split word (`$a`, `$(cmd)`) is emitted as ONE flat `@( item; item; … )`: PowerShell's
+comma operator does not splice (`'a',@('b','c')` is two elements), which is why `for w in $a z` ran
+`x y` and `z` as two items. Whether a list word is a glob is decided from its PARTS
+(`WordIsGlob`: a `GlobPart` and glob characters), not from its emitted text alone — the
+`-replace '(\r?\n)+$'` inside a quoted capture used to make `for f in "$(cmd)"` look like a glob.
+Known gap: an unquoted `$x` in a list is still split on whitespace only (RC-7), not on `$IFS`, and is
+not glob-expanded.
+
 ### `read`
 
 - `read [-r] [-p "prompt"] VAR` -> `Invoke-BashRead [-p "prompt"] VAR` (the
@@ -415,6 +433,25 @@ cmdlet has no `[[` grammar).
 
 All three are no-argument builtins that ignore their arguments but still EXPAND them: `EmitNoOpArgPrelude` emits `[void](word);` for every non-literal argument (`: ${x:=5}` assigns, `: $(cmd)` runs cmd), then sets `$global:LASTEXITCODE` (`:`/`true` = 0, `false` = 1, with the errexit behaviour above). `:` was "command not found". As a `while`/`if` condition (`EmitWhileCondition` / `EmitCondition`) a bare `:` is the constant `$true`, and as a pipe target (`echo hi | :`) it is `Out-Null`.
 
+**Redirections are performed even though nothing is written.** bash opens a redirect target for any
+simple command: `: > f` creates or truncates f, `true >> f` creates it, `false > f` creates it and
+fails, a bare `> f` (no command word) is the same as `: > f`, and a target in a missing directory fails
+the command with status 1. The emitter used to drop the redirects of the three builtins and emitted a
+bare `> f` as ` | Invoke-BashRedirect -Path f` (an empty pipe element: a parse error that failed the
+whole script). `EmitNoOpRedirectTouches` renders each file-opening redirect (`>`, `>>`, `&>`, `&>>`,
+`>&file`, any fd; not `/dev/null`, `>&2`, `2>&1`) as `PsBuild.TouchRedirectTarget` =
+`@() | Invoke-BashRedirect -Path f [-Append]` (the cmdlet opens its target in `BeginProcessing`), after
+the argument expansions and left to right; a preceding `2>/dev/null` silences the later targets'
+failure (`: 2>/dev/null > d/f` is quiet, `: > d/f 2>/dev/null` is not, as in bash). The `true` / `:` /
+bare-redirect body sets status 0 first, opens the targets, and ENDS in
+`if ($global:LASTEXITCODE -ne 0) { Write-Error '' -ErrorAction SilentlyContinue } else { [void]$true }`
+when it had targets, so a failed open flips `$?` for a following `||` / `if`. `Invoke-BashRedirect`
+reports an unopenable target as `bash: d/f: No such file or directory` (also `Is a directory`,
+`Permission denied`) with `$global:LASTEXITCODE = 1` and a terminating error, so the upstream command
+never runs (this applies to `echo hi > nodir/f` too; it used to print PowerShell's own exception text
+and leave status 0). The failure message names the shell, not the script path and line that bash
+prints for a non-interactive shell (stderr text differs; status and tree match).
+
 ### `set`
 
 - `set -e` / `set -o errexit` -> `$ErrorActionPreference = 'Stop'; $global:__BashErrexit = $true`
@@ -452,7 +489,25 @@ successful `cd` first records the directory it is leaving into `$env:OLDPWD` (ca
 ### Env pairs
 
 If a command has leading environment variable assignments
-(`NAME=value cmd args`), they are emitted as `$env:NAME = "value"; cmd args`.
+(`NAME=value cmd args`), they are emitted as `$env:NAME = "value"; cmd args`
+(a save / set / `try { cmd } finally { restore }` block, `WrapEnvPairs`), so the value is visible to that
+command only and never leaks.
+
+**On a pipe-target stage** (`seq 1 40 | COLUMNS=60 column`, `echo x | FOO=1 env | grep FOO`) the
+prefix used to be DROPPED: `EmitPipelineStages` sent a stage straight to `TryEmitMappedCommand`, which
+never looks at env pairs. `EmitSimplePipeStage` now emits the bare stage and the pipeline wraps it with
+`WrapEnvPairsForPipeStage`:
+
+```
+… | & { $__saved_COLUMNS = $env:COLUMNS; try { $env:COLUMNS = "60"; $input | Invoke-BashColumn } finally { $env:COLUMNS = $__saved_COLUMNS; } }
+```
+
+The block is a script block, and PowerShell hands a block's pipeline input to its `$input` only, never
+to the commands inside, so the stage's input is forwarded explicitly (`$input | stage`). The variable is
+restored after the stage (`echo x | FOO=1 cat; echo "[$FOO]"` prints `[]`). Limits: the block collects
+its input before the stage runs (an unbounded producer such as `yes | FOO=1 head -n1` does not stream
+into it), and a stage cmdlet must accept pipeline input — `Invoke-BashEnv` now declares and ignores a
+stdin sink (it rejected `echo x | env`).
 
 ### General fallback
 
@@ -495,7 +550,17 @@ ordered temp whenever any operand needs the splat — which changes argument
 semantics for arrays and quoted words, so it is deliberately not done for a case
 this narrow. Only side-effecting expansions (`$((x++))`, `$((x=…))`) are
 affected; a plain command substitution earlier in the same command is fine
-because it does not mutate a variable the later operand reads. The `@(...)` around the `if` is required:
+because it does not mutate a variable the later operand reads.
+
+**Command substitutions are split words too.** A command operand that is a single unquoted
+`$(cmd)` / `` `cmd` `` (`IsUnquotedSplitWord` = pure variable OR pure command substitution) is hoisted
+the same way, with `@(ConvertTo-BashWords <text>)` as the temp's value (IFS split, then glob
+expansion; see "`for x in LIST`"): `printf '%s\n' $(echo a b)` prints `a` and `b`, an empty result
+contributes no argument (it used to pass a spurious `$null`), and `"$(cmd)"` stays one argument.
+**On a pipe-target stage the splat block forwards its input** (`& { $__s = …; $input | cmd @__s }`,
+`_pipeStageFeedsInput`, cleared inside command / process substitution bodies by `EmitCaptured`): the
+hoist wraps the stage in a script block, which used to swallow the pipe, so
+`printf 'a\nb\n' | grep $x` printed nothing. The `@(...)` around the `if` is required:
 assigning a bare `if (...) { @() }` collapses the empty branch to `$null`, and
 splatting `$null` injects one spurious empty argument. This applies to both the
 general fallback path (`EmitSimple`) and the mapped passthrough path
@@ -519,6 +584,9 @@ general fallback path (`EmitSimple`) and the mapped passthrough path
    is identity on a string and on any object with no `BashText`, so the rule is
    safe for every non-mapped pipe target (native tool, PowerShell cmdlet, or a
    transpiled bash function).
+   A simple pipe-target stage is emitted by `EmitSimplePipeStage`; with an env prefix it is wrapped in
+   a save/set/restore script block that forwards `$input` (see "Env pairs"), and a stage that needs the
+   RC-7 splat hoist forwards `$input` inside its block.
 3. Pipe operators: `|` emits as ` | `, `|&` emits as ` 2>&1 | `.
 4. A **compound** stage (`subshell` / `brace group` / loop / `if` / `case`) emits
    PowerShell *statements*, not a pipeable expression, so it is wrapped in

@@ -139,7 +139,10 @@ CmdletsToExport = @(
     # Command-substitution capture: pipeline records -> the lines of their byte stream, gluing
     # exact (NoTrailingNewline) records so a streaming producer like tr joins correctly inside $(...).
     # Emitted by the transpiler for $( ); not a bash command alias.
-    'ConvertTo-BashCapture'
+    'ConvertTo-BashCapture',
+    # Word splitting + pathname expansion of an unquoted $(cmd) / `cmd` / $x in a for list
+    # (IFS-aware, nullglob off). Emitted by the transpiler; not a bash command alias.
+    'ConvertTo-BashWords'
 )
 
 VariablesToExport = @()

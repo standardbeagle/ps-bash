@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 44
+stdout-length: 6
+stderr-length: 0
+==== SCRIPT ====
+for f in "$(echo a b)"; do echo "<$f>"; done
+==== STDOUT ====
+<a b>
+
+==== STDERR ====
+

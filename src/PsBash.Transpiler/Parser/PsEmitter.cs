@@ -197,9 +197,22 @@ public static class PsEmitter
     private static string EmitCaptured(Command body)
     {
         _captureDepth++;
+        // A substitution body is its own pipeline: the enclosing stage's `$input` is not its stdin.
+        bool savedFeed = _pipeStageFeedsInput;
+        _pipeStageFeedsInput = false;
         try { return Emit(body); }
-        finally { _captureDepth--; }
+        finally { _captureDepth--; _pipeStageFeedsInput = savedFeed; }
     }
+
+    /// <summary>
+    /// True while the simple command being emitted is a PIPE-TARGET stage (index &gt; 0). A stage that the
+    /// emitter has to wrap in a script block (<c>&amp; { … }</c>: RC-7 splat hoisting, an env prefix) must
+    /// forward the stage's pipeline input explicitly — PowerShell hands it to the block's <c>$input</c> only,
+    /// never to the commands inside — so such wrappers emit <c>$input | cmd …</c> when this is set. Cleared
+    /// for the body of a command / process substitution (<see cref="EmitCaptured"/>).
+    /// </summary>
+    [ThreadStatic]
+    private static bool _pipeStageFeedsInput;
 
     /// <summary>
     /// Test seam: force the fused lane on/off for the current thread, bypassing the
@@ -487,8 +500,13 @@ public static class PsEmitter
             if (IsPureUnquotedVarWord(list[0]))
                 return EmitUnquotedVarSplitArray(list[0]);
 
+            // `for f in $(cmd)` / `` `cmd` ``: the substitution's TEXT is word-split on IFS and each
+            // word glob-expanded (the capture array only splits on lines, so `$(echo a b c)` ran once).
+            if (IsPureUnquotedCommandSubWord(list[0]))
+                return EmitUnquotedSplitWordArray(list[0]);
+
             var single = EmitWord(list[0]);
-            if (HasGlobChars(single))
+            if (WordIsGlob(list[0], single))
                 // nullglob is OFF by default in bash: an unmatched glob iterates
                 // ONCE with the literal pattern word, never zero times. Resolve-Path
                 // errors + yields nothing on no-match (=> zero iterations), diverging.
@@ -504,11 +522,38 @@ public static class PsEmitter
             return FormatForItem(single);
         }
 
+        // Multiple items. An unquoted ordinary variable or command substitution word-splits
+        // (`for w in $a $(cmd) z`), and each split array must FLATTEN into the list. PowerShell's comma
+        // operator does not splice (`'a',@('b','c')` is two elements, the second an array), so a list with
+        // any split word is emitted as `@( item; item; … )`, where every statement's output is enumerated
+        // into one flat array. A glob word in such a list expands on its own (`Resolve-BashGlob`).
+        bool anySplit = false;
+        foreach (var word in list)
+            anySplit |= IsUnquotedSplitWord(word);
+
+        if (anySplit)
+        {
+            var flat = new List<string>();
+            foreach (var word in list)
+            {
+                if (IsUnquotedSplitWord(word))
+                {
+                    flat.Add(EmitUnquotedSplitWordArray(word));
+                    continue;
+                }
+                string emitted = EmitWord(word);
+                flat.Add(WordIsGlob(word, emitted)
+                    ? "Resolve-BashGlob " + emitted
+                    : FormatForItem(emitted));
+            }
+            return "@(" + string.Join("; ", flat) + ")";
+        }
+
         // Check for glob patterns
         bool hasGlob = false;
         foreach (var word in list)
         {
-            if (HasGlobChars(EmitWord(word)))
+            if (WordIsGlob(word, EmitWord(word)))
             {
                 hasGlob = true;
                 break;
@@ -532,20 +577,10 @@ public static class PsEmitter
             return sb.ToString();
         }
 
-        // Multiple items: join with commas, quoting strings. An unquoted ordinary
-        // variable still word-splits (`for w in $a $b`), and its split array must
-        // flatten into the comma list rather than becoming one element — hence the
-        // @( … ) wrapper, which PowerShell's comma operator splices.
+        // Plain items: join with commas, quoting bare literals.
         var items = new List<string>();
         foreach (var word in list)
-        {
-            if (IsPureUnquotedVarWord(word))
-            {
-                items.Add(EmitUnquotedVarSplitArray(word));
-                continue;
-            }
             items.Add(FormatForItem(EmitWord(word)));
-        }
         return string.Join(",", items);
     }
 
@@ -1932,6 +1967,14 @@ public static class PsEmitter
             or WordPart.CommandSub
             or WordPart.ArithSub;
 
+    /// <summary>
+    /// A for-list word to expand against the filesystem: its EMITTED text carries a glob character AND the
+    /// word itself has an unquoted glob part. The text test alone matched the regex inside a quoted
+    /// <c>"$(cmd)"</c>'s emitted <c>-replace '(\r?\n)+$'</c>, so a quoted substitution was "globbed".
+    /// </summary>
+    private static bool WordIsGlob(CompoundWord word, string emitted)
+        => HasGlobChars(emitted) && word.Parts.Any(p => p is WordPart.GlobPart);
+
     private static bool HasGlobChars(string value) =>
         value.Contains('*') || value.Contains('?') || value.Contains('[');
 
@@ -2342,6 +2385,59 @@ public static class PsEmitter
         return sb.ToString();
     }
 
+    /// <summary>
+    /// bash performs a command's redirections even when the command writes nothing: <c>: &gt; f</c> creates
+    /// or truncates f, <c>true &gt;&gt; f</c> creates it, and a target in a missing directory fails the
+    /// command (<c>bash: d/f: No such file or directory</c>, status 1) before it runs. Words expand first
+    /// (<see cref="EmitNoOpArgPrelude"/>), then the redirections open their targets, left to right.
+    /// A target that cannot be opened leaves <c>$global:LASTEXITCODE</c> at 1 (set by the cmdlet), so the
+    /// caller sets its own status to 0 BEFORE these statements and keeps the failure after them.
+    /// </summary>
+    private static string EmitNoOpRedirectTouches(Command.Simple cmd)
+    {
+        var sb = new StringBuilder();
+        // Redirections apply left to right, so `2>/dev/null` silences the failure of the targets AFTER it
+        // (`: 2>/dev/null > nodir/f` is quiet; `: > nodir/f 2>/dev/null` reports before the silencing).
+        bool stderrSilenced = false;
+        foreach (var redirect in cmd.Redirects)
+        {
+            bool append = redirect.Op is ">>" or "&>>";
+            bool opensFile = redirect.Op is ">" or ">>" or "&>" or "&>>"
+                || (redirect.Op == ">&" && redirect.Fd == 1);
+            if (!opensFile) continue;
+
+            var target = TransformRedirectTarget(EmitArgWord(redirect.Target));
+            // `/dev/null` maps to $null; `>&2` / `>&-` / `2>&1` duplicate or close a descriptor, not a file.
+            if (target == "$null" || (redirect.Op == ">&" && (IsAllDigits(target) || target == "-")))
+            {
+                stderrSilenced |= redirect.Fd == 2 && target == "$null";
+                continue;
+            }
+            sb.Append(PsBuild.TouchRedirectTarget(target, append));
+            if (stderrSilenced) sb.Append(" 2>$null");
+            sb.Append("; ");
+        }
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Body of the `$( … )` that stands for <c>:</c> / <c>true</c> / a bare redirection: expand the
+    /// arguments, set status 0, open the redirect targets, and — only when a target failed to open —
+    /// flip <c>$?</c> so a following <c>||</c> / <c>if</c> sees the failure (the cmdlet already set
+    /// <c>$global:LASTEXITCODE</c> to 1).
+    /// </summary>
+    private static string EmitNoOpSuccessBody(Command.Simple cmd)
+    {
+        var touches = EmitNoOpRedirectTouches(cmd);
+        var sb = new StringBuilder(EmitNoOpArgPrelude(cmd));
+        sb.Append("$global:LASTEXITCODE = 0; ").Append(touches);
+        // The failure flip must be the LAST statement: any later successful statement would reset `$?`.
+        sb.Append(touches.Length > 0
+            ? "if ($global:LASTEXITCODE -ne 0) { Write-Error '' -ErrorAction SilentlyContinue } else { [void]$true }"
+            : "[void]$true");
+        return sb.ToString();
+    }
+
     // Dispatch ladder for the bash-keyword / builtin branches that used to live
     // in one ~200-line else-if chain inside EmitSimple. Order is preserved
     // exactly (it is behavior): `unset`/`trap DEBUG` return immediately (outside
@@ -2351,7 +2447,15 @@ public static class PsEmitter
     {
         result = "";
         if (cmd.Words.Length < 1)
-            return false;
+        {
+            // A command made only of redirections (`> f`, `>> f`) still opens its targets: it is `:`
+            // with redirects. (Before this it emitted ` | Invoke-BashRedirect …` — an empty pipe element,
+            // a parse error that failed the whole script.)
+            if (cmd.Redirects.IsDefaultOrEmpty || !cmd.HereDocs.IsDefaultOrEmpty)
+                return false;
+            result = "$(" + EmitNoOpSuccessBody(cmd) + ")";
+            return true;
+        }
 
         var cmd0 = GetLiteralValue(cmd.Words[0]);
 
@@ -2412,10 +2516,11 @@ public static class PsEmitter
         // bash still EXPANDS them first (`: ${x:=5}` assigns, `: $(cmd)` runs cmd),
         // so the expansions run as `[void](word)` statements ahead of the status.
         else if (cmd0 is "true" or ":")
-            specialResult = "$(" + EmitNoOpArgPrelude(cmd) + "$global:LASTEXITCODE = 0; [void]$true)";
+            specialResult = "$(" + EmitNoOpSuccessBody(cmd) + ")";
         else if (cmd0 == "false")
         {
-            var argPrelude = EmitNoOpArgPrelude(cmd);
+            // Redirect targets are opened (created / truncated) even though `false` then fails.
+            var argPrelude = EmitNoOpArgPrelude(cmd) + EmitNoOpRedirectTouches(cmd);
             if (_context == TranspileContext.Eval)
                 // try/catch on (1/0) is the mechanism that flips $? to $false so bash `&&` short-circuits;
                 // Write-Error can't be used here because it propagates as a terminating error in eval scope.
@@ -3849,15 +3954,16 @@ public static class PsEmitter
     /// <c>x=$(printf "a\nb")</c> collapsed to <c>a b</c> and <c>x=$(cat file)</c>
     /// flattened the file to one line.
     /// </summary>
-    private static string EmitCommandSubString(WordPart.CommandSub cs)
+    private static string EmitCommandSubString(WordPart.CommandSub cs, bool nested = true)
     {
         var body = (Command)cs.Body;
         // This `$( … )` is emitted INTO a double-quoted string, so everything inside
-        // it sits one string level deeper (see _dqNestDepth).
-        _dqNestDepth++;
+        // it sits one string level deeper (see _dqNestDepth). `nested: false` is the
+        // same value used as a bare argument expression (no enclosing string).
+        if (nested) _dqNestDepth++;
         string inner;
         try { inner = EmitCaptured(body); }
-        finally { _dqNestDepth--; }
+        finally { if (nested) _dqNestDepth--; }
         // The newline join uses [char]10, NOT a "`n" literal — the SAME reason
         // EmitArithCommandSubValue does. This fragment can land inside an
         // arbitrarily nested "$( … )", where the OUTER string scanner consumes
@@ -4183,6 +4289,29 @@ public static class PsEmitter
     }
 
     /// <summary>
+    /// True when <paramref name="word"/> is a single bare (unquoted) command substitution
+    /// (<c>$(cmd)</c> or <c>`cmd`</c>): bash word-splits its output on IFS and glob-expands each word.
+    /// A substitution mixed into a longer word (<c>x$(cmd)y</c>) or inside quotes is not "pure" here.
+    /// </summary>
+    private static bool IsPureUnquotedCommandSubWord(CompoundWord word)
+        => word.Parts.Length == 1 && word.Parts[0] is WordPart.CommandSub;
+
+    /// <summary>A word whose expansion is word-split (and elided when empty): see RC-7 and
+    /// <see cref="IsPureUnquotedCommandSubWord"/>.</summary>
+    private static bool IsUnquotedSplitWord(CompoundWord word)
+        => IsPureUnquotedVarWord(word) || IsPureUnquotedCommandSubWord(word);
+
+    /// <summary>
+    /// The array an unquoted split word expands to, for PowerShell <c>@</c>-splatting or flattening into a
+    /// list: a variable keeps the RC-7 whitespace split; a command substitution goes through
+    /// <c>ConvertTo-BashWords</c> (IFS split, then pathname expansion), fed the substitution's whole text.
+    /// </summary>
+    private static string EmitUnquotedSplitWordArray(CompoundWord word)
+        => word.Parts[0] is WordPart.CommandSub cs
+            ? "@(ConvertTo-BashWords " + EmitCommandSubString(cs, nested: false) + ")"
+            : EmitUnquotedVarSplitArray(word);
+
+    /// <summary>
     /// PowerShell statement keywords that the emitter can produce as a "command
     /// word". They are parsed as STATEMENTS, not commands, so a splatted
     /// argument (<c>@var</c>) after one is a hard PowerShell parse error
@@ -4238,7 +4367,7 @@ public static class PsEmitter
     {
         for (int i = 0; i < args.Length; i++)
         {
-            if (i != skipIndex && IsPureUnquotedVarWord(args[i]))
+            if (i != skipIndex && IsUnquotedSplitWord(args[i]))
                 return true;
         }
         return false;
@@ -4270,6 +4399,10 @@ public static class PsEmitter
     {
         var prelude = new StringBuilder();
         var call = new StringBuilder();
+        // The block below is a script block: the stage's pipeline input reaches its `$input`, not the
+        // command inside. Forward it (see _pipeStageFeedsInput). Read before the args are emitted, which
+        // may recurse (a nested substitution clears the flag for its own body).
+        if (_pipeStageFeedsInput) call.Append("$input | ");
         call.Append(leadingTokens);
         call.Append(commandName);
 
@@ -4277,12 +4410,12 @@ public static class PsEmitter
         for (int i = 0; i < args.Length; i++)
         {
             call.Append(' ');
-            if (IsPureUnquotedVarWord(args[i]))
+            if (IsUnquotedSplitWord(args[i]))
             {
                 string tempVar = $"$__bashsplat{splatCounter++}";
                 prelude.Append(tempVar)
                        .Append(" = ")
-                       .Append(EmitUnquotedVarSplitArray(args[i]))
+                       .Append(EmitUnquotedSplitWordArray(args[i]))
                        .Append("; ");
                 call.Append('@').Append(tempVar.AsSpan(1));
             }
@@ -5068,55 +5201,16 @@ public static class PsEmitter
             var cmd = pipeline.Commands[i];
             if (i > 0 && cmd is Command.Simple simple)
             {
-                // true/false as pipe targets need a cmdlet form, not a subexpression.
-                // $($global:LASTEXITCODE = 0; [void]$true) cannot be a pipeline segment.
-                var word0 = simple.Words.Length >= 1 ? GetLiteralValue(simple.Words[0]) : null;
-                // Redirects are allowed here (e.g. `… | true 2>&1`): `true`/`false` ignore
-                // stdin, so we emit Out-Null and append any redirects. Excluding the redirect
-                // case sent it to the Emit fallback, which emitted the bare subexpression
-                // `$($global:LASTEXITCODE = 0; [void]$true)` — not a valid pipeline segment.
-                if (simple.Words.Length >= 1 && simple.EnvPairs.IsEmpty
-                    && word0 is "true" or ":" or "false")
-                {
-                    if (word0 is "true" or ":")
-                    {
-                        // Consume all piped input and succeed (exit 0).
-                        // Out-Null is a valid pipeline cmdlet; after the pipeline set LASTEXITCODE=0.
-                        bool isLast = i == pipeline.Commands.Length - 1;
-                        sb.Append("Out-Null");
-                        EmitPipeTargetRedirects(simple, sb);
-                        if (isLast) sb.Append("; $global:LASTEXITCODE = 0");
-                        continue;
-                    }
-                    if (word0 == "false")
-                    {
-                        // Consume all piped input and fail (exit 1).
-                        bool isLast = i == pipeline.Commands.Length - 1;
-                        sb.Append("Out-Null");
-                        EmitPipeTargetRedirects(simple, sb);
-                        if (isLast) sb.Append("; $($global:LASTEXITCODE = 1; Write-Error '' -ErrorAction SilentlyContinue)");
-                        continue;
-                    }
-                }
-                if (TryEmitMappedCommand(simple, out var mapped))
-                {
-                    sb.Append(mapped);
-                    // Append any redirects from the pipe target (TryEmitMappedCommand only handles args)
-                    EmitPipeTargetRedirects(simple, sb);
-                }
+                bool isLastStage = i == pipeline.Commands.Length - 1;
+                if (simple.EnvPairs.IsEmpty)
+                    sb.Append(EmitSimplePipeStage(simple, isLastStage));
                 else
                 {
-                    // A non-mapped pipe target (native/external program, or a
-                    // PowerShell command ps-bash does not wrap) receives the
-                    // pipeline through PowerShell's native binder, which FORMATS
-                    // each object — a BashObject renders as its property table
-                    // ("BashText NoTrai…"), not its text. bash pipes bytes, so
-                    // convert every upstream object to its bash text first. This
-                    // is the ONE shared rule for cmdlet-output → native stdin;
-                    // Get-BashText is identity on a string and on any object with
-                    // no BashText, so it is safe for every pipe target.
-                    sb.Append("ForEach-Object { Get-BashText $_ } | ");
-                    sb.Append(WrapPipelineStageIfStatementList(Emit(cmd)));
+                    // `… | VAR=v cmd`: the prefix applies to THAT stage only. Emit the bare stage, then
+                    // wrap it in the save/set/restore block (which has to forward the stage's input).
+                    var bare = simple with { EnvPairs = ImmutableArray<EnvPair>.Empty };
+                    sb.Append(WrapEnvPairsForPipeStage(
+                        simple.EnvPairs, EmitSimplePipeStage(bare, isLastStage)));
                 }
             }
             else if (pipeline.Commands.Length > 1 && IsCompoundPipelineStage(cmd))
@@ -5181,6 +5275,72 @@ public static class PsEmitter
 
         return body;
     }
+
+    /// <summary>
+    /// One SIMPLE command as a pipe-target stage (index &gt; 0) of <see cref="EmitPipelineStages"/>, WITHOUT
+    /// its env prefix (the caller wraps that). The stage's pipeline input is forwarded by any script-block
+    /// wrapper the emission needs (<see cref="_pipeStageFeedsInput"/>).
+    /// </summary>
+    private static string EmitSimplePipeStage(Command.Simple simple, bool isLastStage)
+    {
+        bool savedFeed = _pipeStageFeedsInput;
+        _pipeStageFeedsInput = true;
+        try
+        {
+            // true/false as pipe targets need a cmdlet form, not a subexpression.
+            // $($global:LASTEXITCODE = 0; [void]$true) cannot be a pipeline segment.
+            var word0 = simple.Words.Length >= 1 ? GetLiteralValue(simple.Words[0]) : null;
+            // Redirects are allowed here (e.g. `… | true 2>&1`): `true`/`false` ignore
+            // stdin, so we emit Out-Null and append any redirects. Excluding the redirect
+            // case sent it to the Emit fallback, which emitted the bare subexpression
+            // `$($global:LASTEXITCODE = 0; [void]$true)` — not a valid pipeline segment.
+            if (simple.Words.Length >= 1 && simple.EnvPairs.IsEmpty
+                && word0 is "true" or ":" or "false")
+            {
+                var noop = new StringBuilder("Out-Null");
+                EmitPipeTargetRedirects(simple, noop);
+                if (isLastStage)
+                {
+                    // Consume all piped input; `true` / `:` succeed (exit 0), `false` fails (exit 1).
+                    // Out-Null is a valid pipeline cmdlet; the status is set after the pipeline.
+                    noop.Append(word0 == "false"
+                        ? "; $($global:LASTEXITCODE = 1; Write-Error '' -ErrorAction SilentlyContinue)"
+                        : "; $global:LASTEXITCODE = 0");
+                }
+                return noop.ToString();
+            }
+
+            if (TryEmitMappedCommand(simple, out var mapped))
+            {
+                var mappedSb = new StringBuilder(mapped);
+                // Append any redirects from the pipe target (TryEmitMappedCommand only handles args)
+                EmitPipeTargetRedirects(simple, mappedSb);
+                return mappedSb.ToString();
+            }
+
+            // A non-mapped pipe target (native/external program, or a
+            // PowerShell command ps-bash does not wrap) receives the
+            // pipeline through PowerShell's native binder, which FORMATS
+            // each object — a BashObject renders as its property table
+            // ("BashText NoTrai…"), not its text. bash pipes bytes, so
+            // convert every upstream object to its bash text first. This
+            // is the ONE shared rule for cmdlet-output → native stdin;
+            // Get-BashText is identity on a string and on any object with
+            // no BashText, so it is safe for every pipe target.
+            return "ForEach-Object { Get-BashText $_ } | "
+                + WrapPipelineStageIfStatementList(Emit(simple));
+        }
+        finally { _pipeStageFeedsInput = savedFeed; }
+    }
+
+    /// <summary>
+    /// <c>VAR=v</c> prefix on a pipe-target stage. The save/set/restore block is a statement list, so it
+    /// needs a script block to sit in a pipeline — and a script block does not hand the stage's pipeline
+    /// input to the command inside, so the input is forwarded explicitly (<c>$input | stage</c>). The
+    /// assignment is visible to that stage only and restored afterwards (no leak).
+    /// </summary>
+    private static string WrapEnvPairsForPipeStage(ImmutableArray<EnvPair> pairs, string stage)
+        => "& { " + WrapEnvPairs(pairs, "$input | " + stage) + " }";
 
     /// <summary>
     /// A compound command as a stage of a multi-stage pipeline: <c>&amp; { … }</c>. A stage AFTER the

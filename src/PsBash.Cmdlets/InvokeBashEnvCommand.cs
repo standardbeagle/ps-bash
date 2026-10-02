@@ -40,7 +40,20 @@ public sealed class InvokeBashEnvCommand : PSCmdlet
     /// </summary>
     [Parameter] public SwitchParameter i { get; set; }
 
-    protected override void ProcessRecord()
+    /// <summary>
+    /// Stdin sink. <c>env</c> ignores its standard input, but a cmdlet that declares no pipeline parameter
+    /// REJECTS piped records ("The input object cannot be bound"), so <c>echo x | FOO=1 env | grep FOO</c>
+    /// failed. The records are bound here and dropped.
+    /// </summary>
+    [Parameter(ValueFromPipeline = true)]
+    [System.Management.Automation.AllowNull]
+    public PSObject? InputObject { get; set; }
+
+    // The work runs ONCE, in EndProcessing: with a pipeline parameter PowerShell calls ProcessRecord per
+    // input record, and not at all when the upstream stage produced nothing.
+    protected override void ProcessRecord() { }
+
+    protected override void EndProcessing()
     {
         var args = Arguments ?? Array.Empty<string>();
 
