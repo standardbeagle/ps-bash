@@ -1237,6 +1237,23 @@
     {
       "flag": "-T",
       "desc": "treat LINK_NAME as a normal file always"
+    },
+    {
+      "flag": "-i",
+      "desc": "prompt whether to remove destinations"
+    },
+    {
+      "flag": "-r",
+      "desc": "create symbolic links relative to link location"
+    },
+    {
+      "flag": "-b",
+      "desc": "make a backup of each existing destination file"
+    },
+    {
+      "flag": "-S",
+      "desc": "override the usual backup suffix",
+      "arg": "SUFFIX"
     }
   ],
   "ls": [

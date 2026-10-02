@@ -62,29 +62,29 @@ public class LnArgScanTests
     [InlineData("s=1 f=0 v=0 n=0 ops=[-,b]", "-s", "-", "b")]
     [InlineData("s=0 f=0 v=0 n=0 ops=[]")]
     [InlineData("s=1 f=0 v=0 n=0 ops=[a]", "-s", "a")]
-    [InlineData("ERR ln: option '-b' is recognized but not supported by ps-bash", "-b", "a", "b")]  // FIX (was: operands)
-    [InlineData("ERR ln: option '--backup' is recognized but not supported by ps-bash", "--backup", "a", "b")]  // FIX (was: operands)
-    [InlineData("ERR ln: option '--backup' is recognized but not supported by ps-bash", "--backup=numbered", "a", "b")]  // FIX (was: operands)
-    [InlineData("ERR ln: option '--backup' is recognized but not supported by ps-bash", "--b", "a", "b")]  // FIX (was: operands)
+    [InlineData("s=0 f=0 v=0 n=0 ops=[a,b]", "-b", "a", "b")]
+    [InlineData("s=0 f=0 v=0 n=0 ops=[a,b]", "--backup", "a", "b")]
+    [InlineData("s=0 f=0 v=0 n=0 ops=[a,b]", "--backup=numbered", "a", "b")]
+    [InlineData("s=0 f=0 v=0 n=0 ops=[a,b]", "--b", "a", "b")]
     [InlineData("ERR ln: option '-d' is recognized but not supported by ps-bash", "-d", "a", "b")]  // FIX (was: operands)
     [InlineData("ERR ln: option '-F' is recognized but not supported by ps-bash", "-F", "a", "b")]  // FIX (was: operands)
     [InlineData("ERR ln: option '--directory' is recognized but not supported by ps-bash", "--directory", "a", "b")]  // FIX (was: operands)
     [InlineData("ERR ln: option '--directory' is recognized but not supported by ps-bash", "--d", "a", "b")]  // FIX (was: operands)
-    [InlineData("ERR ln: option '-i' is recognized but not supported by ps-bash", "-i", "a", "b")]  // FIX (was: operands)
-    [InlineData("ERR ln: option '--interactive' is recognized but not supported by ps-bash", "--interactive", "a", "b")]  // FIX (was: operands)
-    [InlineData("ERR ln: option '--interactive' is recognized but not supported by ps-bash", "--i", "a", "b")]  // FIX (was: operands)
+    [InlineData("s=0 f=0 v=0 n=0 ops=[a,b]", "-i", "a", "b")]
+    [InlineData("s=0 f=0 v=0 n=0 ops=[a,b]", "--interactive", "a", "b")]
+    [InlineData("s=0 f=0 v=0 n=0 ops=[a,b]", "--i", "a", "b")]
     [InlineData("ERR ln: option '-L' is recognized but not supported by ps-bash", "-L", "a", "b")]  // FIX (was: operands)
     [InlineData("ERR ln: option '--logical' is recognized but not supported by ps-bash", "--logical", "a", "b")]  // FIX (was: operands)
     [InlineData("ERR ln: option '--logical' is recognized but not supported by ps-bash", "--l", "a", "b")]  // FIX (was: operands)
     [InlineData("ERR ln: option '-P' is recognized but not supported by ps-bash", "-P", "a", "b")]  // FIX (was: operands)
     [InlineData("ERR ln: option '--physical' is recognized but not supported by ps-bash", "--physical", "a", "b")]  // FIX (was: operands)
     [InlineData("ERR ln: option '--physical' is recognized but not supported by ps-bash", "--ph", "a", "b")]  // FIX (was: operands)
-    [InlineData("ERR ln: option '-r' is recognized but not supported by ps-bash", "-r", "a", "b")]  // FIX (was: operands)
-    [InlineData("ERR ln: option '--relative' is recognized but not supported by ps-bash", "--relative", "a", "b")]  // FIX (was: operands)
-    [InlineData("ERR ln: option '--relative' is recognized but not supported by ps-bash", "--rel", "a", "b")]  // FIX (was: operands)
-    [InlineData("ERR ln: option '-S' is recognized but not supported by ps-bash", "-S", ".bak", "a", "b")]  // FIX (was: operands)
-    [InlineData("ERR ln: option '--suffix' is recognized but not supported by ps-bash", "--suffix=.bak", "a", "b")]  // FIX (was: operands)
-    [InlineData("ERR ln: option '--suffix' is recognized but not supported by ps-bash", "--suf", "a", "b")]  // FIX (was: operands)
+    [InlineData("s=0 f=0 v=0 n=0 ops=[a,b]", "-r", "a", "b")]
+    [InlineData("s=0 f=0 v=0 n=0 ops=[a,b]", "--relative", "a", "b")]
+    [InlineData("s=0 f=0 v=0 n=0 ops=[a,b]", "--rel", "a", "b")]
+    [InlineData("s=0 f=0 v=0 n=0 ops=[a,b]", "-S", ".bak", "a", "b")]
+    [InlineData("s=0 f=0 v=0 n=0 ops=[a,b]", "--suffix=.bak", "a", "b")]
+    [InlineData("s=0 f=0 v=0 n=0 ops=[b]", "--suf", "a", "b")]  // --suf takes "a" as its value
     // -t DIR / -T are IMPLEMENTED now (operand forms 3/4): the scan accepts them; -t consumes DIR.
     [InlineData("s=0 f=0 v=0 n=0 ops=[a]", "-t", "dir", "a")]
     [InlineData("s=0 f=0 v=0 n=0 ops=[a]", "-tdir", "a")]
@@ -93,7 +93,7 @@ public class LnArgScanTests
     [InlineData("s=0 f=0 v=0 n=0 ops=[a,b]", "-T", "a", "b")]
     [InlineData("s=0 f=0 v=0 n=0 ops=[a,b]", "--no-target-directory", "a", "b")]
     [InlineData("s=0 f=0 v=0 n=0 ops=[a,b]", "--no-t", "a", "b")]
-    [InlineData("ERR ln: option '-r' is recognized but not supported by ps-bash", "-sr", "a", "b")]  // FIX (was: operands [-sr,a,b])
+    [InlineData("s=1 f=0 v=0 n=0 ops=[a,b]", "-sr", "a", "b")]
     [InlineData("s=1 f=1 v=0 n=0 ops=[a,b]", "-sfT", "a", "b")]
     [InlineData("ERR ln: invalid option -- 'Z'", "-Z", "a", "b")]  // FIX (was: operands) — GNU ln 9.4 has no -Z
     [InlineData("ERR ln: unrecognized option '--context'", "--context", "a", "b")]  // FIX (was: operands)
@@ -131,8 +131,8 @@ public class LnArgScanTests
     [InlineData("-z", 1)]
     [InlineData("--symbolic=1", 1)]
     [InlineData("--s", 1)]
-    [InlineData("-r", 2)]
-    [InlineData("--backup", 2)]
+    [InlineData("-L", 2)]
+    [InlineData("--physical", 2)]
     public void ScanError_ExitStatus_IsGnuUsageStatusExceptOurOwnRefusal(string arg, int exit)
     {
         Assert.Equal(exit, InvokeBashLnCommand.ScanArgs(new[] { arg, "a", "b" }).ErrorExitCode);

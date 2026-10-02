@@ -8,7 +8,8 @@ namespace PsBash.Cmdlets;
 /// Binary cmdlet replacement for the psm1 <c>Invoke-BashLn</c> (REFACTOR-2).
 /// Creates hard links or symbolic links with GNU coreutils <c>ln</c> semantics. Supports
 /// <c>-s</c> (symbolic), <c>-f</c> (force — remove an existing link name first), <c>-v</c>
-/// (verbose), <c>-n</c>, <c>-t DIR</c> and <c>-T</c>.
+/// (verbose), <c>-n</c>, <c>-t DIR</c>, <c>-T</c>, <c>-r</c> (relative symbolic links), <c>-i</c>
+/// (prompt before replacing) and <c>-b</c>/<c>--backup[=CONTROL]</c>/<c>-S</c> (<see cref="BackupControl"/>).
 ///
 /// <para>
 /// <b>Operand forms</b> (oracle: coreutils 9.4, checked against <c>wsl bash</c>):
@@ -25,7 +26,16 @@ namespace PsBash.Cmdlets;
 /// A hard link needs an existing non-directory TARGET (GNU: "failed to access" / "hard link not
 /// allowed for directory"). Verbose output is <c>'link' =&gt; 'target'</c> (hard) or
 /// <c>'link' -&gt; 'target'</c> (symbolic), where a link made by concatenation shows
-/// <c>DIR/leaf</c> (form 2 shows <c>./leaf</c>).
+/// <c>DIR/leaf</c> (form 2 shows <c>./leaf</c>); a replaced name that was backed up is announced as
+/// <c>'link~' ~ 'link' -&gt; 'target'</c>.
+/// </para>
+/// <para>
+/// <b>Existing link name</b>: the LAST of <c>-f</c> / <c>-i</c> decides (<c>-if</c> never asks, <c>-fi</c> asks);
+/// <c>-i</c> prompts <c>ln: replace 'b'? </c> on stderr and reads the answer from the command's stdin (a declined
+/// or unanswered prompt skips the link and the exit status is 1); a backup option moves the old name aside
+/// first (also without <c>-f</c>), after the prompt when there is one.
+/// <b><c>-r</c></b> stores the path RELATIVE to the link's directory (<see cref="RelativeLinkPath"/>: both
+/// ends canonicalized, symlinks resolved) and requires <c>-s</c>.
 /// </para>
 /// <para>
 /// <b>Argv</b> is parsed by the shared ordered parser (<see cref="ArgParser"/>, spec
@@ -41,9 +51,9 @@ public sealed class InvokeBashLnCommand : PSCmdlet
 {
     [Parameter] public SwitchParameter v { get; set; }
 
-    /// <summary>Decoys for the valid-but-unsupported <c>-d</c> (Debug), <c>-i</c>
+    /// <summary>Decoys for the colliding <c>-d</c> (Debug), <c>-i</c>
     /// (InformationAction) and <c>-P</c> (ProgressAction / PipelineVariable) so a DIRECT
-    /// call (`Invoke-BashLn -i a b`) reaches the classifier instead of crashing or being swallowed by
+    /// call (`Invoke-BashLn -i a b`) reaches the scan instead of crashing or being swallowed by
     /// the binder. The transpiler never binds them (it single-quotes every dash word).</summary>
     [Parameter] public SwitchParameter D { get; set; }
     [Parameter] public SwitchParameter I { get; set; }
@@ -52,27 +62,35 @@ public sealed class InvokeBashLnCommand : PSCmdlet
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
+    /// <summary>The command's stdin, read only for an <c>-i</c> answer; the command runs once, in <see cref="EndProcessing"/>.</summary>
+    [Parameter(ValueFromPipeline = true)]
+    public PSObject? InputObject { get; set; }
+
+    private readonly List<PSObject> _stdin = new();
+
     /// <summary>
-    /// Valid GNU <c>ln</c> options ps-bash does not implement; refused loudly (exit 2). NOT
-    /// listed: <c>-n/--no-dereference</c>, <c>-t</c> and <c>-T</c>, which are accepted (see
-    /// <see cref="LnSpec"/>). GNU 9.4 ln has no <c>-Z</c>/<c>--context</c>. (A string[] on purpose:
+    /// Valid GNU <c>ln</c> options ps-bash does not implement; refused loudly (exit 2). GNU 9.4 ln has
+    /// no <c>-Z</c>/<c>--context</c>. (A string[] on purpose:
     /// CommonParameterCollisionGuardTests enumerates each cmdlet's static string sets.)
     /// </summary>
     private static readonly string[] LnValidButUnsupported =
     {
-        "-b", "--backup", "-d", "-F", "--directory", "-i", "--interactive",
-        "-L", "--logical", "-P", "--physical", "-r", "--relative",
-        "-S", "--suffix",
+        "-d", "-F", "--directory", "-L", "--logical", "-P", "--physical",
     };
 
     private const string OptSymbolic = "symbolic", OptForce = "force", OptVerbose = "verbose",
         OptNoDereference = "no-dereference", OptTargetDirectory = "target-directory",
-        OptNoTargetDirectory = "no-target-directory";
+        OptNoTargetDirectory = "no-target-directory", OptInteractive = "interactive", OptRelative = "relative",
+        OptBackup = "backup", OptBackupControl = "backup-control", OptSuffix = "suffix";
 
     private const string TryHelp = "\nTry 'ln --help' for more information.";
 
     /// <summary>GNU ln long_options[] order; getopt_long lists ambiguous-prefix candidates in it.</summary>
-    private static readonly string[] LnLongOptionOrder = { "no-dereference", "no-target-directory", "suffix", "symbolic", "verbose", "version" };
+    private static readonly string[] LnLongOptionOrder =
+    {
+        "backup", "directory", "no-dereference", "no-target-directory", "force", "interactive", "suffix",
+        "target-directory", "logical", "physical", "relative", "symbolic", "verbose", "version",
+    };
 
     /// <summary>
     /// ln's whole option surface, built once for the shared ordered parser.
@@ -90,6 +108,11 @@ public sealed class InvokeBashLnCommand : PSCmdlet
             new OptSpec(OptNoDereference, 'n', "no-dereference"),
             new OptSpec(OptTargetDirectory, 't', "target-directory", OptKind.Value),
             new OptSpec(OptNoTargetDirectory, 'T', "no-target-directory"),
+            new OptSpec(OptInteractive, 'i', "interactive"),
+            new OptSpec(OptRelative, 'r', "relative"),
+            new OptSpec(OptBackup, 'b', null),
+            new OptSpec(OptBackupControl, '\0', "backup", OptKind.OptionalValue),
+            new OptSpec(OptSuffix, 'S', "suffix", OptKind.Value),
         },
         validButUnsupported: LnValidButUnsupported,
         allowAbbrev: true,
@@ -99,7 +122,55 @@ public sealed class InvokeBashLnCommand : PSCmdlet
     /// <summary>Pure argv scan (unit-test seam): options, operands and the first error.</summary>
     internal static ParsedArgs ScanArgs(string[] args) => ArgParser.Parse(args, LnSpec);
 
+    /// <summary>What <c>ln</c> does when the link name already exists (the last of <c>-f</c>/<c>-i</c> wins).</summary>
+    internal enum LnExisting { Fail, Force, Ask }
+
+    /// <summary>The resolved replace/backup policy of one command line (pure; unit-test seam).</summary>
+    internal sealed record LnPlan(LnExisting Existing, bool BackupEnabled, BackupKind Backup, string BackupSuffix, bool Relative);
+
+    internal static bool TryPlan(ParsedArgs parsed, Func<string, string?> getenv, out LnPlan plan, out string? error)
+    {
+        error = null;
+        plan = default!;
+        var existing = LnExisting.Fail;
+        bool backup = false;
+        string? control = null, suffix = null;
+        foreach (var t in parsed.Tokens)
+        {
+            if (t.Kind != ArgTokKind.Option) continue;
+            switch (t.OptId)
+            {
+                case OptForce: existing = LnExisting.Force; break;
+                case OptInteractive: existing = LnExisting.Ask; break;
+                case OptBackup: backup = true; break;
+                case OptBackupControl: backup = true; control = t.Value; break;
+                case OptSuffix: backup = true; suffix = t.Value; break;
+            }
+        }
+
+        var kind = BackupKind.None;
+        var simple = "~";
+        if (backup)
+        {
+            if (!BackupControl.TryResolve("ln", control, getenv, out kind, out var backupError))
+            {
+                error = backupError;
+                return false;
+            }
+            simple = BackupControl.Suffix(suffix, getenv);
+        }
+        plan = new LnPlan(existing, backup, kind, simple, parsed.Has(OptRelative));
+        return true;
+    }
+
     protected override void ProcessRecord()
+    {
+        if (InputObject != null) _stdin.Add(InputObject);
+    }
+
+    protected override void EndProcessing() => Execute();
+
+    private void Execute()
     {
         // Re-inject every decoy-bound flag. The transpiler single-quotes each dash-leading word
         // for ln (PsEmitter.OrderedArgCommands) so they arrive in Arguments in order; a DIRECT
@@ -127,14 +198,23 @@ public sealed class InvokeBashLnCommand : PSCmdlet
         var parsed = ScanArgs(args);
         if (FileSystemHelpers.TryWriteParseError(this, "ln", parsed)) return;
         if (FileSystemHelpers.TryHandleInfoOptions(this, "ln", parsed)) return;
+        if (!TryPlan(parsed, Environment.GetEnvironmentVariable, out var plan, out var planError))
+        {
+            FileSystemHelpers.WriteBashError(this, planError!);
+            return;
+        }
 
         bool symbolic = parsed.Has(OptSymbolic);
-        bool force = parsed.Has(OptForce);
         bool verbose = parsed.Has(OptVerbose);
         bool noTargetDir = parsed.Has(OptNoTargetDirectory);
         string? targetDir = parsed.Last(OptTargetDirectory)?.Value;
         var operands = parsed.Operands();
 
+        if (plan.Relative && !symbolic)
+        {
+            FileSystemHelpers.WriteBashError(this, "ln: cannot do --relative without --symbolic");
+            return;
+        }
         if (targetDir != null && noTargetDir)
         {
             FileSystemHelpers.WriteBashError(this, "ln: cannot combine --target-directory and --no-target-directory");
@@ -197,10 +277,11 @@ public sealed class InvokeBashLnCommand : PSCmdlet
         }
 
         // GNU keeps going after a failed link and reports failure in the exit status.
+        var stdin = new StdinLineSource(this, _stdin);
         bool failed = false;
         foreach (var (target, linkName) in pairs)
         {
-            if (!CreateOne(target, linkName, symbolic, force, verbose)) failed = true;
+            if (!CreateOne(target, linkName, symbolic, verbose, plan, stdin)) failed = true;
         }
         if (failed) FileSystemHelpers.SetLastExitCode(this, 1);
     }
@@ -232,7 +313,7 @@ public sealed class InvokeBashLnCommand : PSCmdlet
     }
 
     /// <summary>Create one link; reports its own error and returns false on failure.</summary>
-    private bool CreateOne(string target, string linkName, bool symbolic, bool force, bool verbose)
+    private bool CreateOne(string target, string linkName, bool symbolic, bool verbose, LnPlan plan, StdinLineSource stdin)
     {
         var linkAbsolute = SessionState.Path.GetUnresolvedProviderPathFromPSPath(linkName);
         var targetPath = SessionState.Path.GetUnresolvedProviderPathFromPSPath(target);
@@ -253,15 +334,36 @@ public sealed class InvokeBashLnCommand : PSCmdlet
             }
         }
 
-        // -f force-removes an existing link name, but ONLY a file or a symlink.
-        // A real directory at the link path is left intact and falls
-        // through to the "File exists" guard below — matching GNU's refusal to
-        // overwrite a directory.
-        if (force && (File.Exists(linkAbsolute) || IsReparsePoint(linkAbsolute)))
+        // -r: the stored text is the path from the link's directory, with both ends canonicalized.
+        var linkText = target;
+        if (plan.Relative)
+        {
+            var linkDir = Path.GetDirectoryName(linkAbsolute);
+            linkText = RelativeLinkPath.Compute(targetPath, string.IsNullOrEmpty(linkDir) ? "." : linkDir,
+                RelativeLinkPath.ReadLinkOnDisk);
+        }
+
+        // An existing link name: -i asks first, a backup option moves it aside, -f removes it. A real
+        // directory at the link path is never touched and falls through to the "File exists" guard
+        // below — matching GNU's refusal to overwrite a directory.
+        string backupNote = "";
+        bool exists = File.Exists(linkAbsolute) || IsReparsePoint(linkAbsolute);
+        if (exists && plan.Existing == LnExisting.Ask)
+        {
+            FileSystemHelpers.WriteStderr(this, $"ln: replace '{linkName}'? ");
+            if (!StdinLineSource.IsYes(stdin.ReadLine())) return false;   // GNU: a declined prompt is exit 1
+        }
+        if (exists && (plan.BackupEnabled || plan.Existing != LnExisting.Fail))
         {
             try
             {
-                RemoveLinkOrFile(linkAbsolute);
+                string? suffix = plan.BackupEnabled
+                    ? BackupControl.MakeBackup(linkAbsolute, plan.Backup, plan.BackupSuffix)
+                    : null;
+                if (suffix is not null)
+                    backupNote = $"'{FileSystemHelpers.ToBashPath(linkName)}{suffix}' ~ ";
+                else
+                    RemoveLinkOrFile(linkAbsolute);
             }
             catch (Exception ex)
             {
@@ -287,17 +389,17 @@ public sealed class InvokeBashLnCommand : PSCmdlet
                 // file vs directory link type from whatever does exist at
                 // the target path. If the target doesn't exist, default to
                 // a file symlink (bash ln does the same).
-                var targetAbsolute = Path.IsPathRooted(target)
-                    ? target
-                    : Path.Combine(Path.GetDirectoryName(linkAbsolute) ?? "", target);
+                var targetAbsolute = Path.IsPathRooted(linkText)
+                    ? linkText
+                    : Path.Combine(Path.GetDirectoryName(linkAbsolute) ?? "", linkText);
 
                 if (Directory.Exists(targetAbsolute))
                 {
-                    Directory.CreateSymbolicLink(linkAbsolute, target);
+                    Directory.CreateSymbolicLink(linkAbsolute, linkText);
                 }
                 else
                 {
-                    File.CreateSymbolicLink(linkAbsolute, target);
+                    File.CreateSymbolicLink(linkAbsolute, linkText);
                 }
             }
             else
@@ -327,10 +429,10 @@ public sealed class InvokeBashLnCommand : PSCmdlet
         if (verbose)
         {
             var bashLink = FileSystemHelpers.ToBashPath(linkName);
-            var bashTarget = FileSystemHelpers.ToBashPath(target);
+            var bashTarget = FileSystemHelpers.ToBashPath(linkText);
             WriteObject(BashRuntime.NewBashObject(
-                symbolic ? $"'{bashLink}' -> '{bashTarget}'\n"
-                         : $"'{bashLink}' => '{bashTarget}'\n"));
+                symbolic ? $"{backupNote}'{bashLink}' -> '{bashTarget}'\n"
+                         : $"{backupNote}'{bashLink}' => '{bashTarget}'\n"));
         }
         return true;
     }

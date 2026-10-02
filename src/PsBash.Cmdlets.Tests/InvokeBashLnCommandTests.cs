@@ -209,10 +209,10 @@ public class InvokeBashLnCommandTests : IClassFixture<SharedPwshFixture>, IDispo
     }
 
     [Theory]
-    [InlineData("-r")]
-    [InlineData("-sr")]
-    [InlineData("--relative")]
-    [InlineData("--backup=numbered")]
+    [InlineData("-L")]
+    [InlineData("-d")]
+    [InlineData("--physical")]
+    [InlineData("--directory")]
     public void Ln_ValidButUnsupportedOption_IsRefusedAndCreatesNoLink(string flag)
     {
         // REGRESSION: with no classifier the flag was taken as the link TARGET and a wrongly named
@@ -255,13 +255,13 @@ public class InvokeBashLnCommandTests : IClassFixture<SharedPwshFixture>, IDispo
     }
 
     [Fact]
-    public void Ln_DirectCallDecoyI_IsClassifiedNotSwallowedByTheBinder()
+    public void Ln_DirectCallDecoyD_IsClassifiedNotSwallowedByTheBinder()
     {
-        // Pester/interactive path: bare -i would crash the binder (-InformationAction ambiguity);
+        // Pester/interactive path: bare -d silently binds -Debug;
         // the decoy re-injects it so the classifier refuses it (exit 2) and nothing is created.
         var target = Mk("dt.txt", "x");
         var link = Path.Combine(_tmpDir, "dl.txt");
-        Assert.Equal("2", RunLastExit($"Invoke-BashLn -i {Q(target)} {Q(link)}"));
+        Assert.Equal("2", RunLastExit($"Invoke-BashLn -d {Q(target)} {Q(link)}"));
         Assert.False(File.Exists(link));
     }
 
