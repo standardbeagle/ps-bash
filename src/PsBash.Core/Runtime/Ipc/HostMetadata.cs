@@ -15,7 +15,7 @@ namespace PsBash.Core.Runtime.Ipc;
 /// The record's <c>owner</c> is a display user name; it is advisory and, like
 /// the rest of the sidecar, is no longer the ownership proof on its own. The
 /// runtime directory (0700, per-user) gates who can write the record at all,
-/// and the kill gate (<see cref="HostOwnership.Classify"/>) additionally probes
+/// and the kill gate (<see cref="HostOwnership.Classify(HostMetadata?, string, out string)"/>) additionally probes
 /// the live process uid on POSIX. The user name is still matched against
 /// <see cref="Environment.UserName"/>.
 /// </remarks>
