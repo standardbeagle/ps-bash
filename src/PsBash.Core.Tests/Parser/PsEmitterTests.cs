@@ -2686,6 +2686,54 @@ public class PsEmitterTests
     }
 
     [Fact]
+    public void Transpile_EnvPrefixOnPipeTarget_WrapsStageAndForwardsInput()
+    {
+        // The emitter used to drop `VAR=v` on every pipe-target stage: `seq 1 40 | COLUMNS=60 column`
+        // ran `column` without COLUMNS.
+        var result = PsEmitter.Transpile("seq 1 40 | COLUMNS=60 column");
+
+        Assert.Equal(
+            "Invoke-BashSeq 1 40 | & { $__saved_COLUMNS = $env:COLUMNS; try { $env:COLUMNS = \"60\"; $input | Invoke-BashColumn } finally { $env:COLUMNS = $__saved_COLUMNS; } }",
+            result);
+    }
+
+    [Fact]
+    public void Transpile_EnvPrefixOnMiddleStage_LeavesOtherStagesPlain()
+    {
+        var result = PsEmitter.Transpile("echo x | FOO=1 env | grep FOO");
+
+        Assert.Equal(
+            "Invoke-BashEcho x | & { $__saved_FOO = $env:FOO; try { $env:FOO = \"1\"; $input | Invoke-BashEnv } finally { $env:FOO = $__saved_FOO; } } | Invoke-BashGrep FOO",
+            result);
+    }
+
+    [Fact]
+    public void Transpile_EnvPrefixOnNativePipeTarget_ConvertsTextInsideTheWrapper()
+    {
+        var result = PsEmitter.Transpile("echo x | FOO=1 python3");
+
+        Assert.Contains("try { $env:FOO = \"1\"; $input | ForEach-Object { Get-BashText $_ } | python3 }", result);
+    }
+
+    [Fact]
+    public void Transpile_EnvPrefixOnFirstStage_KeepsTheStandaloneWrap()
+    {
+        // The first stage reads no pipe: unchanged (no `$input`).
+        var result = PsEmitter.Transpile("FOO=1 env | grep FOO");
+
+        Assert.DoesNotContain("$input", result);
+        Assert.Contains("$__saved_FOO = $env:FOO; try {", result);
+    }
+
+    [Fact]
+    public void Transpile_EnvPrefixOnTrueStage_ConsumesInputInsideTheWrapper()
+    {
+        var result = PsEmitter.Transpile("echo hi | FOO=1 true");
+
+        Assert.Contains("$input | Out-Null; $global:LASTEXITCODE = 0 }", result);
+    }
+
+    [Fact]
     public void Transpile_WhileReadMultipleVars_BindsEveryVariable()
     {
         // `read a b` splits the line across BOTH: a=first field, b=the remainder.

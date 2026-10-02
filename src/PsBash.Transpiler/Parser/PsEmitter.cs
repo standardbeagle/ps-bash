@@ -5201,7 +5201,17 @@ public static class PsEmitter
             var cmd = pipeline.Commands[i];
             if (i > 0 && cmd is Command.Simple simple)
             {
-                sb.Append(EmitSimplePipeStage(simple, i == pipeline.Commands.Length - 1));
+                bool isLastStage = i == pipeline.Commands.Length - 1;
+                if (simple.EnvPairs.IsEmpty)
+                    sb.Append(EmitSimplePipeStage(simple, isLastStage));
+                else
+                {
+                    // `… | VAR=v cmd`: the prefix applies to THAT stage only. Emit the bare stage, then
+                    // wrap it in the save/set/restore block (which has to forward the stage's input).
+                    var bare = simple with { EnvPairs = ImmutableArray<EnvPair>.Empty };
+                    sb.Append(WrapEnvPairsForPipeStage(
+                        simple.EnvPairs, EmitSimplePipeStage(bare, isLastStage)));
+                }
             }
             else if (pipeline.Commands.Length > 1 && IsCompoundPipelineStage(cmd))
             {
@@ -5322,6 +5332,15 @@ public static class PsEmitter
         }
         finally { _pipeStageFeedsInput = savedFeed; }
     }
+
+    /// <summary>
+    /// <c>VAR=v</c> prefix on a pipe-target stage. The save/set/restore block is a statement list, so it
+    /// needs a script block to sit in a pipeline — and a script block does not hand the stage's pipeline
+    /// input to the command inside, so the input is forwarded explicitly (<c>$input | stage</c>). The
+    /// assignment is visible to that stage only and restored afterwards (no leak).
+    /// </summary>
+    private static string WrapEnvPairsForPipeStage(ImmutableArray<EnvPair> pairs, string stage)
+        => "& { " + WrapEnvPairs(pairs, "$input | " + stage) + " }";
 
     /// <summary>
     /// A compound command as a stage of a multi-stage pipeline: <c>&amp; { … }</c>. A stage AFTER the

@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 47
+stdout-length: 8
+stderr-length: 0
+==== SCRIPT ====
+echo x | A=1 B=2 env | grep -E '^(A|B)=' | sort
+==== STDOUT ====
+A=1
+B=2
+
+==== STDERR ====
+

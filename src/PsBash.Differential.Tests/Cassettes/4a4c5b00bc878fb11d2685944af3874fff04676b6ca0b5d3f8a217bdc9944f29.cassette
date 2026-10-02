@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 38
+stdout-length: 15
+stderr-length: 0
+==== SCRIPT ====
+seq 1 40 | COLUMNS=20 column | head -3
+==== STDOUT ====
+1	21
+2	22
+3	23
+
+==== STDERR ====
+

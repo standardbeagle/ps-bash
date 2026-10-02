@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 41
+stdout-length: 2
+stderr-length: 0
+==== SCRIPT ====
+printf 'b\na\n' | LC_ALL=C sort | head -1
+==== STDOUT ====
+a
+
+==== STDERR ====
+

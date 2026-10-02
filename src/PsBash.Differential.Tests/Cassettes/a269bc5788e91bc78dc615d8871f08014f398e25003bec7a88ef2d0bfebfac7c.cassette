@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 63
+stdout-length: 18
+stderr-length: 0
+==== SCRIPT ====
+FOO=outer; echo x | FOO=1 env | grep '^FOO='; echo "after=$FOO"
+==== STDOUT ====
+FOO=1
+after=outer
+
+==== STDERR ====
+

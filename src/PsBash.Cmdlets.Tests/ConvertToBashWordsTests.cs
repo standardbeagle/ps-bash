@@ -141,6 +141,35 @@ public class ConvertToBashWordsTests : IClassFixture<SharedPwshFixture>
         }
     }
 
+    // ───────────── Invoke-BashEnv: stdin is bound and ignored ─────────────
+
+    [Fact]
+    public void Env_AcceptsAndIgnoresPipelineInput()
+    {
+        var r = Run("$env:PSB_ENVTEST = 'v'; try { 'ignored' | Invoke-BashEnv | Where-Object { $_.BashText -eq 'PSB_ENVTEST=v' } } finally { $env:PSB_ENVTEST = $null }")
+            .AssertSuccess();
+
+        Assert.Single(r.Lines);
+    }
+
+    [Fact]
+    public void Env_RunsOnceWithoutInput()
+    {
+        var r = Run("$env:PSB_ENVTEST = 'v'; try { @(Invoke-BashEnv | Where-Object { $_.BashText -eq 'PSB_ENVTEST=v' }).Count } finally { $env:PSB_ENVTEST = $null }")
+            .AssertSuccess();
+
+        Assert.Equal("1", Assert.Single(r.Lines));
+    }
+
+    [Fact]
+    public void Env_WithManyInputRecords_StillRunsOnce()
+    {
+        var r = Run("$env:PSB_ENVTEST = 'v'; try { @(1..5 | Invoke-BashEnv | Where-Object { $_.BashText -eq 'PSB_ENVTEST=v' }).Count } finally { $env:PSB_ENVTEST = $null }")
+            .AssertSuccess();
+
+        Assert.Equal("1", Assert.Single(r.Lines));
+    }
+
     // Runs a script whose pipeline is expected to end in a terminating error; returns exit status + message.
     private (int ExitCode, string Error) CmdResultRunTolerant(string script)
     {

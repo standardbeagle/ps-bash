@@ -489,7 +489,25 @@ successful `cd` first records the directory it is leaving into `$env:OLDPWD` (ca
 ### Env pairs
 
 If a command has leading environment variable assignments
-(`NAME=value cmd args`), they are emitted as `$env:NAME = "value"; cmd args`.
+(`NAME=value cmd args`), they are emitted as `$env:NAME = "value"; cmd args`
+(a save / set / `try { cmd } finally { restore }` block, `WrapEnvPairs`), so the value is visible to that
+command only and never leaks.
+
+**On a pipe-target stage** (`seq 1 40 | COLUMNS=60 column`, `echo x | FOO=1 env | grep FOO`) the
+prefix used to be DROPPED: `EmitPipelineStages` sent a stage straight to `TryEmitMappedCommand`, which
+never looks at env pairs. `EmitSimplePipeStage` now emits the bare stage and the pipeline wraps it with
+`WrapEnvPairsForPipeStage`:
+
+```
+… | & { $__saved_COLUMNS = $env:COLUMNS; try { $env:COLUMNS = "60"; $input | Invoke-BashColumn } finally { $env:COLUMNS = $__saved_COLUMNS; } }
+```
+
+The block is a script block, and PowerShell hands a block's pipeline input to its `$input` only, never
+to the commands inside, so the stage's input is forwarded explicitly (`$input | stage`). The variable is
+restored after the stage (`echo x | FOO=1 cat; echo "[$FOO]"` prints `[]`). Limits: the block collects
+its input before the stage runs (an unbounded producer such as `yes | FOO=1 head -n1` does not stream
+into it), and a stage cmdlet must accept pipeline input — `Invoke-BashEnv` now declares and ignores a
+stdin sink (it rejected `echo x | env`).
 
 ### General fallback
 
@@ -566,6 +584,9 @@ general fallback path (`EmitSimple`) and the mapped passthrough path
    is identity on a string and on any object with no `BashText`, so the rule is
    safe for every non-mapped pipe target (native tool, PowerShell cmdlet, or a
    transpiled bash function).
+   A simple pipe-target stage is emitted by `EmitSimplePipeStage`; with an env prefix it is wrapped in
+   a save/set/restore script block that forwards `$input` (see "Env pairs"), and a stage that needs the
+   RC-7 splat hoist forwards `$input` inside its block.
 3. Pipe operators: `|` emits as ` | `, `|&` emits as ` 2>&1 | `.
 4. A **compound** stage (`subshell` / `brace group` / loop / `if` / `case`) emits
    PowerShell *statements*, not a pipeable expression, so it is wrapped in

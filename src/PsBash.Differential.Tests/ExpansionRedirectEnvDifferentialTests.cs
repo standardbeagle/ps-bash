@@ -116,6 +116,27 @@ public class ExpansionRedirectEnvDifferentialTests
     [SkippableFact] public Task Echo_RedirectInMissingDirectory_FailsWithStatus1() =>
         EqualAsync(Tree(("a", "A")), "{ echo hi > nodir/f; } 2>/dev/null; echo rc=$?");
 
+    // ───────────── (3) env prefix on a pipe-target stage ─────────────
+
+    [SkippableTheory]
+    [InlineData("seq 1 40 | COLUMNS=60 column")]
+    [InlineData("seq 1 40 | COLUMNS=20 column | head -3")]
+    [InlineData("echo x | FOO=1 env | grep FOO")]
+    [InlineData("echo x | FOO=1 cat; echo \"[$FOO]\"")]
+    [InlineData("FOO=outer; echo x | FOO=1 env | grep '^FOO='; echo \"after=$FOO\"")]
+    [InlineData("printf 'b\\na\\n' | LC_ALL=C sort")]
+    [InlineData("printf 'b\\na\\n' | LC_ALL=C sort | head -1")]
+    [InlineData("echo x | A=1 B=2 env | grep -E '^(A|B)=' | sort")]
+    [InlineData("echo hi | FOO=1 true; echo rc=$?")]
+    [InlineData("echo hi | FOO=1 grep -c hi; echo \"[$FOO]\"")]
+    [InlineData("echo a b | FOO=$(echo v) env | grep '^FOO='")]
+    public Task PipeTarget_EnvPrefix_AppliesToThatStageOnly(string script) => Eq(script);
+
+    [SkippableTheory]
+    [InlineData("FOO=1 env | grep '^FOO='; echo \"[$FOO]\"")]
+    [InlineData("env | FOO=1 grep -c '^FOO='")]
+    public Task EnvPrefix_StandaloneAndOnLaterStage(string script) => Eq(script);
+
     // The RC-7 / command-substitution operand hoist wraps the stage in a script block; the pipe input
     // must still reach the command (it used to be dropped: `printf … | grep $x` printed nothing).
     [SkippableTheory]
