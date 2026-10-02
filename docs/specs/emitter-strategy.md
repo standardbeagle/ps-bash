@@ -360,8 +360,13 @@ passes its pipeline to `$input` only, so the emitter builds the sharing itself
   typed objects and unterminated `printf` records survive), runs the body in `try`, and restores
   the previous queue in `finally`, so a nested compound stage never clobbers its parent's stdin.
   `< /dev/null` is a scope fed nothing. The queue is filled eagerly (a PowerShell script block
-  starts only after its upstream finished), so an infinite producer (`yes | { head -n1; }`)
-  does not terminate.
+  starts only after its upstream finished), so a general infinite producer does not terminate. The
+  exception is a literal `yes ...` / `seq ...` piped into a compound (`TryEmitLazyProducerStage`): the scope
+  (`PsBuild.StdinScopeLazy`) runs the producer on a background runspace behind a `StdinCursor` (lazy pull +
+  pushback for `read`) via `New-BashLazyStdin`, and its `finally` closes the cursor, which stops the producer —
+  `yes | { head -n1; }` and `yes | { read a; read b; }` terminate. The launcher's own stdin uses the same
+  `StdinCursor` over forwarded frames (runtime-functions.md "Deliberately left"). Arbitrary producers
+  (`cmd | { head -n1; }`) stay eager.
 - **Readers.** Inside a scope `EmitSimpleFed` prefixes a stdin-reading simple command with the lazy
   feed `& { while (queue.Count) { queue.Dequeue() } } | cmd`; `read` and the feed advance the same
   cursor, so `{ read x; sort; }` sorts the REST. Which commands read stdin is a syntactic estimate

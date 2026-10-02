@@ -88,6 +88,60 @@ public static class HostProtocol
     /// wire-compatible.
     /// </summary>
     public const string EnvironmentHeaderPrefix = "ENV:";
+
+    /// <summary>
+    /// Request header (Command frames only, in the header block next to <c>ENV:</c>) announcing that
+    /// the launcher will forward ITS OWN stdin after the <see cref="EndSentinel"/>: zero or more
+    /// <see cref="StdinFramePrefix"/> frames and then one <see cref="StdinEofSentinel"/>. Absent =
+    /// no stdin follows (wire-compatible with every older launcher and fixture).
+    /// </summary>
+    public const string StdinFeedHeader = "STDIN-FEED:1";
+
+    /// <summary>
+    /// Launcher-to-host stdin data frame, sent on the request stream AFTER the request's END
+    /// sentinel while the command runs: <c>STDIN:&lt;base64 bytes&gt;</c>. The payload is raw bytes
+    /// (a chunk may end mid-character); the host decodes them with the
+    /// <see cref="PsBash.Core.RawBytes"/> codec. One physical line per frame, like every other frame.
+    /// </summary>
+    public const string StdinFramePrefix = "STDIN:";
+
+    /// <summary>Launcher-to-host end-of-input marker closing the stdin frames (launcher stdin hit EOF).</summary>
+    public const string StdinEofSentinel = "<<<STDIN-EOF>>>";
+
+    /// <summary>Largest raw stdin chunk the launcher puts in ONE frame (base64 stays far under <see cref="MaxLineBytes"/>).</summary>
+    public const int MaxStdinChunkBytes = 48 * 1024;
+
+    /// <summary>Write one stdin data frame (<paramref name="bytes"/> must not exceed <see cref="MaxStdinChunkBytes"/>).</summary>
+    public static async Task WriteStdinFrameAsync(Stream stream, ReadOnlyMemory<byte> bytes, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+        var line = StdinFramePrefix + Convert.ToBase64String(bytes.Span) + "\n";
+        await stream.WriteAsync(Encoding.ASCII.GetBytes(line), ct).ConfigureAwait(false);
+        await stream.FlushAsync(ct).ConfigureAwait(false);
+    }
+
+    /// <summary>Write the end-of-input marker.</summary>
+    public static async Task WriteStdinEofAsync(Stream stream, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+        await stream.WriteAsync(Encoding.ASCII.GetBytes(StdinEofSentinel + "\n"), ct).ConfigureAwait(false);
+        await stream.FlushAsync(ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Classify one launcher-to-host line read after the request: a data frame (payload decoded into
+    /// <paramref name="bytes"/>), the end-of-input marker (<paramref name="eof"/>), or anything else
+    /// (returns false).
+    /// </summary>
+    public static bool TryParseStdinFrame(string line, out byte[]? bytes, out bool eof)
+    {
+        bytes = null;
+        eof = false;
+        if (line == StdinEofSentinel) { eof = true; return true; }
+        if (!line.StartsWith(StdinFramePrefix, StringComparison.Ordinal)) return false;
+        try { bytes = Convert.FromBase64String(line[StdinFramePrefix.Length..]); return true; }
+        catch (FormatException) { return false; }
+    }
     /// <summary>
     /// PTY-4: optional <c>SESSION:Framed</c> / <c>SESSION:Interactive</c> header
     /// emitted between <see cref="ModeHeaderPrefix"/> and the body for
@@ -286,6 +340,7 @@ public static class HostProtocol
                 sb.Append(ModeHeaderPrefix).Append("Command").Append('\n');
                 AppendSessionHeader(sb, cmd.Session);
                 AppendEnvironmentHeaders(sb, cmd.Environment);
+                if (cmd.StdinFollows) sb.Append(StdinFeedHeader).Append('\n');
                 sb.Append(cmd.Body);
                 if (!cmd.Body.EndsWith('\n')) sb.Append('\n');
                 break;
@@ -344,12 +399,12 @@ public static class HostProtocol
         {
             case "Command":
                 {
-                    var (body, session, environment) = await ReadBodyAndSessionAsync(reader, ct).ConfigureAwait(false);
-                    return new Mode.Command(body, session, environment);
+                    var (body, session, environment, stdinFollows) = await ReadBodyAndSessionAsync(reader, ct).ConfigureAwait(false);
+                    return new Mode.Command(body, session, environment, stdinFollows);
                 }
             case "Stdin":
                 {
-                    var (body, session, environment) = await ReadBodyAndSessionAsync(reader, ct).ConfigureAwait(false);
+                    var (body, session, environment, _) = await ReadBodyAndSessionAsync(reader, ct).ConfigureAwait(false);
                     return new Mode.Stdin(body, session, environment);
                 }
             case "Script":
@@ -469,7 +524,7 @@ public static class HostProtocol
         return SessionMode.Framed;
     }
 
-    private static async Task<(string Body, SessionMode Session, IReadOnlyList<KeyValuePair<string, string>>? Environment)>
+    private static async Task<(string Body, SessionMode Session, IReadOnlyList<KeyValuePair<string, string>>? Environment, bool StdinFollows)>
         ReadBodyAndSessionAsync(StreamLineReader reader, CancellationToken ct)
     {
         var first = await reader.ReadLineAsync(ct).ConfigureAwait(false)
@@ -480,12 +535,16 @@ public static class HostProtocol
         // R06: ENV: lines are headers and may only appear before the first body
         // line. After the body starts, an `ENV: ...` line is command data (e.g.
         // a heredoc) and must be delivered verbatim, never parsed as a header.
+        // The STDIN-FEED header follows the same rule.
         var inHeaderBlock = true;
+        var stdinFollows = false;
         if (carryover is not null)
         {
-            if (carryover == EndSentinel) return (string.Empty, session, null);
+            if (carryover == EndSentinel) return (string.Empty, session, null, false);
             if (carryover.StartsWith(EnvironmentHeaderPrefix, StringComparison.Ordinal))
                 (environment ??= new()).Add(ParseEnvironmentLine(carryover));
+            else if (carryover == StdinFeedHeader)
+                stdinFollows = true;
             else
             {
                 lines.Add(carryover);
@@ -502,10 +561,15 @@ public static class HostProtocol
                 (environment ??= new()).Add(ParseEnvironmentLine(line));
                 continue;
             }
+            if (inHeaderBlock && line == StdinFeedHeader)
+            {
+                stdinFollows = true;
+                continue;
+            }
             lines.Add(line);
             inHeaderBlock = false;
         }
-        return (string.Join('\n', lines), session, BuildEnvironmentBlock(environment));
+        return (string.Join('\n', lines), session, BuildEnvironmentBlock(environment), stdinFollows);
     }
 
     private static async Task<string> ReadBodyUntilEndAsync(StreamLineReader reader, CancellationToken ct)
@@ -962,6 +1026,21 @@ public static class HostProtocol
     /// production and break single-buffer/duplex test doubles. Exact mode keeps the
     /// historical one-byte-per-read frame-boundary guarantee.</para>
     /// </summary>
+    /// <summary>
+    /// Public, read-ahead line reader over a connection stream for the host's stdin-frame pump: after the
+    /// request has been consumed the stream carries only launcher-to-host stdin frames, so a single buffered
+    /// consumer is safe (and a 64 KB frame must not cost one read per byte).
+    /// </summary>
+    public sealed class FrameLineReader
+    {
+        private readonly StreamLineReader _reader;
+
+        public FrameLineReader(Stream stream) => _reader = new StreamLineReader(stream, readAhead: true);
+
+        /// <summary>The next LF-terminated line, or null at end of stream.</summary>
+        public Task<string?> ReadLineAsync(CancellationToken ct) => _reader.ReadLineAsync(ct);
+    }
+
     private sealed class StreamLineReader
     {
         private const int ReadChunkBytes = 64 * 1024;

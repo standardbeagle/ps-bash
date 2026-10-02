@@ -80,7 +80,8 @@ internal sealed class AwkParser
     // ── user-defined functions ─────────────────────────────────────────────
 
     /// <summary>A static (compile-time) error in gawk's wording; reported like any syntax error.</summary>
-    private static AwkInterpreter.AwkSyntaxException StaticErr(string kind, string msg) => new($"awk: {kind}: {msg}");
+    private static AwkInterpreter.AwkSyntaxException StaticErr(string kind, string msg) =>
+        new($"awk: {kind}: {msg}", kind == "fatal" ? 2 : 1);
 
     /// <summary><c>function name(p1, p2, local1) { body }</c> (also <c>func</c>). Newlines are allowed inside the
     /// parameter list and between <c>)</c> and <c>{</c>.</summary>
@@ -565,6 +566,7 @@ internal sealed class AwkParser
             case TokKind.Regex:
             case TokKind.Name:
             case TokKind.FuncName:
+            case TokKind.Indirect:
             case TokKind.Builtin:
             case TokKind.Dollar:
             case TokKind.LParen:
@@ -596,6 +598,9 @@ internal sealed class AwkParser
         {
             char op = Advance().Text[0];
             var right = ParseUnary();
+            // gawk folds a literal zero divisor at compile time: a static `error:` (exit 1), not the runtime fatal.
+            if (op is '/' or '%' && right is NumLit { Value: 0 })
+                throw StaticErr("error", op == '%' ? "division by zero attempted in `%'" : "division by zero attempted");
             left = new Arith { Op = op, Left = left, Right = right };
         }
         return left;
@@ -672,6 +677,15 @@ internal sealed class AwkParser
                 return new Call { Name = name, Args = args };
             }
 
+            case TokKind.Indirect:
+            {
+                string name = Advance().Text; // the VARIABLE holding the function name
+                Expect(TokKind.LParen, "'('");
+                var args = ParseCallArgs();
+                _usedNames.Add(name); // naming a real function here is gawk's "used as a variable" static error
+                return new Call { Name = name, Args = args, Indirect = true };
+            }
+
             case TokKind.Builtin:
             {
                 string name = Advance().Text;
@@ -728,7 +742,9 @@ internal sealed class AwkParser
         Advance(); // <
         var file = ParseAdditive();
         // A literal "-" / "/dev/stdin" names the main stdin, which a push-driven stdin run cannot serve.
-        if (file is StrLit { Value: "-" or "/dev/stdin" }) _usesMainInput = true;
+        // A name computed at run time (`f = "-"; getline l < f`) may name it too; it cannot be known statically,
+        // so any non-literal file operand takes the buffered pull path as well (stdin runs only).
+        if (file is not StrLit || file is StrLit { Value: "-" or "/dev/stdin" }) _usesMainInput = true;
         return new GetlineExpr { Source = GetlineSource.File, Target = target, Operand = file };
     }
 

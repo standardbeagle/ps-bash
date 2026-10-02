@@ -196,7 +196,7 @@ public class AwkRedirectTests : IClassFixture<SharedPwshFixture>, IDisposable
     public void Print_UnparenthesizedTernaryAfterRedirectTarget_IsASyntaxError()
     {
         // gawk: the target is a concatenation-level expression, so `? :` after it is a syntax error.
-        Run("Invoke-BashAwk " + Q("BEGIN{ print 1 > 2 ? \"A\" : \"B\" }")).AssertFailed(2);
+        Run("Invoke-BashAwk " + Q("BEGIN{ print 1 > 2 ? \"A\" : \"B\" }")).AssertFailed(1);
     }
 
     [Fact]
@@ -314,6 +314,40 @@ public class AwkRedirectTests : IClassFixture<SharedPwshFixture>, IDisposable
     public void Pipe_Printf_ToSort()
     {
         Assert.Equal(new[] { "a", "b" }, Awk("BEGIN{ printf \"b\\na\\n\" | \"sort\" }"));
+    }
+
+    // ── live pipe: the command runs concurrently and gets awk's records on its stdin ──
+
+    [Fact]
+    public void Pipe_CompoundCommand_ItsMembersShareTheStdin()
+    {
+        // gawk: `print "x" | "read l; echo got=$l; echo more"` -> got=x, more
+        Assert.Equal(new[] { "got=x", "more" },
+            Awk("BEGIN{ print \"x\" | \"read l; echo got=$l; echo more\" }"));
+    }
+
+    [Fact]
+    public void Pipe_CompoundCommand_CatThenSort()
+    {
+        Assert.Equal(new[] { "1", "2" }, Awk("BEGIN{ print \"2\\n1\" | \"sort; true\" }"));
+    }
+
+    [Fact]
+    public void Pipe_CommandThatExitsWhileAwkKeepsPrinting_IsGawksBrokenPipeFatal()
+    {
+        // gawk 5.2.1: `fatal: print to "head -n1" failed: Broken pipe`, exit 2 (it does not loop forever).
+        var r = AwkR("BEGIN{ for (;;) print \"y\" | \"head -n1\" }");
+        r.AssertFailed(2, "Broken pipe");
+        Assert.Contains("y", r.Lines.Select(l => l.TrimEnd('\n', '\r')));
+    }
+
+    [Fact]
+    public void Pipe_OutputBeyondTheStdioBuffer_ReachesTheCommandWhileAwkIsStillRunning()
+    {
+        // 200k lines (> the 64K pipe buffer): the command has consumed data before awk finishes, and every
+        // record arrives in order exactly once.
+        var r = AwkR("BEGIN{ for (i = 1; i <= 200000; i++) print i | \"wc -l\" }");
+        Assert.Equal(new[] { "200000" }, r.Lines.Select(l => l.Trim()).ToArray());
     }
 
     [Fact]

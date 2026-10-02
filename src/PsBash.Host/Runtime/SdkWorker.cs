@@ -175,7 +175,8 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
         Action<string>? output,
         Action<string>? errorOutput,
         CancellationToken ct = default,
-        IReadOnlyList<KeyValuePair<string, string>>? environment = null)
+        IReadOnlyList<KeyValuePair<string, string>>? environment = null,
+        PsBash.Core.StdinCursor? stdin = null)
     {
         ObjectDisposedException.ThrowIf(_disposed != 0, this);
         await _globalExecGate.WaitAsync(ct);
@@ -187,7 +188,7 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
                 // When ct fires mid-command (e.g. parent-death watcher), stop the PS
                 // pipeline so Invoke() returns instead of blocking indefinitely.
                 using var stopReg = ct.Register(() => _ps.Stop());
-                return await Task.Run(() => WithDefaultRunspace(() => RunCommand(command, output, errorOutput, batchOutput: true, environment)), ct);
+                return await Task.Run(() => WithDefaultRunspace(() => RunCommand(command, output, errorOutput, batchOutput: true, environment, stdin)), ct);
             }
             finally
             {
@@ -223,7 +224,8 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
     /// </param>
     private int RunCommand(string command, Action<string>? output, Action<string>? errorOutput,
                            bool batchOutput,
-                           IReadOnlyList<KeyValuePair<string, string>>? environment = null)
+                           IReadOnlyList<KeyValuePair<string, string>>? environment = null,
+                           PsBash.Core.StdinCursor? stdin = null)
     {
         // R06: reset the process environment to the caller's block BEFORE running.
         // The environment is process-global and shared by every pooled runspace,
@@ -259,6 +261,10 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
         _ps.Commands.Clear();
         _ps.Streams.Error.Clear();
         PeakRetainedOutput = 0;
+        // The launcher's forwarded stdin: the transpiled script (TranspileWithLauncherStdin) reads it from
+        // $global:__BashStdIn; cleared in the finally below so a pooled runspace never keeps a dead cursor.
+        if (stdin is not null)
+            _sdkRunspace.Runspace.SessionStateProxy.SetVariable("__BashStdIn", stdin);
         _ps.AddScript(command);
 
         // Forward formatted Out-Default lines to the same callback the output
@@ -323,6 +329,10 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
             ? new OutputBatcher(writeThrough, OutputBatcher.DefaultThresholdChars, OutputBatcher.DefaultDeadline)
             : null;
 
+        // Record boundary on the framed IPC stream is LF on every platform: the launcher's stdout is usually a file
+        // or pipe, where bash writes LF (a Windows console renders LF as a newline itself). In-process callers and
+        // the interactive PTY keep the platform newline.
+        string eol = batchOutput && output is not null ? "\n" : Environment.NewLine;
         Action<string> deliver = batcher is null ? writeThrough : batcher.Append;
         _host.HostUI.SetWriteLineForwarder(deliver);
 
@@ -403,7 +413,7 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
                 var results = fmt.Invoke(buffer);
                 if (fmt.HadErrors) return false;
                 foreach (var r in results)
-                    deliver((r?.ToString() ?? "") + Environment.NewLine);
+                    deliver((r?.ToString() ?? "") + eol);
                 return true;
             }
             catch
@@ -446,7 +456,7 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
                 var results = fmt.Invoke(buffer);
                 if (fmt.HadErrors) return false;
                 foreach (var r in results)
-                    deliver((r?.ToString() ?? "") + Environment.NewLine);
+                    deliver((r?.ToString() ?? "") + eol);
                 return true;
             }
             catch
@@ -506,7 +516,7 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
             try
             {
                 foreach (var fline in PSObjectFormatter.FormatAsTable(formatBuffer))
-                    deliver(fline + Environment.NewLine);
+                    deliver(fline + eol);
             }
             catch (Exception ex)
             {
@@ -515,7 +525,7 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
                 // user still sees something rather than silent loss.
                 deliverError($"ps-bash: formatter error: {ex.Message}");
                 foreach (var raw in formatBuffer)
-                    deliver((raw?.ToString() ?? "") + Environment.NewLine);
+                    deliver((raw?.ToString() ?? "") + eol);
             }
             formatBuffer.Clear();
         }
@@ -525,7 +535,7 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
             if (IsTextStreamItem(item))
             {
                 FlushFormatBufferCore();
-                var line = GetOutputText(item);
+                var line = GetOutputText(item, eol);
                 deliver(line);
             }
             else
@@ -704,6 +714,12 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
             _host.HostUI.SetWriteLineForwarder(null);
             _host.HostUI.SetWriteErrorLineForwarder(null);
 
+            if (stdin is not null)
+            {
+                try { _sdkRunspace.Runspace.SessionStateProxy.SetVariable("__BashStdIn", null); }
+                catch { /* runspace already closed */ }
+            }
+
             if (markedInsideHost)
             {
                 Environment.SetEnvironmentVariable(
@@ -718,7 +734,7 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
         }
     }
 
-    private static string GetOutputText(PSObject? item)
+    private static string GetOutputText(PSObject? item, string eol)
     {
         if (item is null)
             return "";
@@ -728,12 +744,12 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
         {
             var text = bashText.ToString() ?? "";
             var noTrailingNewline = item.Properties["NoTrailingNewline"]?.Value is true;
-            return noTrailingNewline ? text : text + Environment.NewLine;
+            return noTrailingNewline ? text : text + eol;
         }
 
         if (item.BaseObject is System.Management.Automation.ErrorRecord record)
-            return record.ToString() + Environment.NewLine;
-        return item.BaseObject is string s ? s + Environment.NewLine : item.ToString() + Environment.NewLine;
+            return record.ToString() + eol;
+        return item.BaseObject is string s ? s + eol : item.ToString() + eol;
     }
 
     /// <summary>

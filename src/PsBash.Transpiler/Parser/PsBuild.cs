@@ -370,6 +370,18 @@ public static class PsBuild
         + "foreach ($__psbash_stdin_line in $input) { $global:__BashStdIn.Enqueue($__psbash_stdin_line) }; "
         + "try { " + body + " } finally { $global:__BashStdIn = $__psbash_stdin_prev }";
 
+    /// <summary>
+    /// Like <see cref="StdinScope"/> but the stdin is a lazily-pulled background PRODUCER
+    /// (<c>New-BashLazyStdin</c>) instead of the incoming pipeline: for an unbounded producer
+    /// (<c>yes | { head -n1; }</c>) that a pipe could never hand over (the stage after a pipe starts only
+    /// when its upstream has finished). The scope's <c>finally</c> closes the cursor, which stops the producer.
+    /// A statement list: callers wrap it in <c>&amp; { … }</c>.
+    /// </summary>
+    public static string StdinScopeLazy(string producerCommand, string body) =>
+        "$__psbash_stdin_prev = Get-Variable -Name __BashStdIn -Scope Global -ValueOnly -ErrorAction SilentlyContinue; "
+        + "$global:__BashStdIn = New-BashLazyStdin " + SingleQuote(producerCommand) + "; "
+        + "try { " + body + " } finally { try { $global:__BashStdIn.Close() } catch { }; $global:__BashStdIn = $__psbash_stdin_prev }";
+
     // ───────────────────────── Positional-parameter expansion ──────────────────────────
 
     /// <summary>

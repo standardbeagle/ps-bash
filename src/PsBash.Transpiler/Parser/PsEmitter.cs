@@ -273,6 +273,35 @@ public static class PsEmitter
     }
 
     /// <summary>
+    /// True while emitting a script whose stdin is the LAUNCHER's own stdin
+    /// (<see cref="TranspileWithLauncherStdin"/>): the whole script is a stdin scope whose cursor the host
+    /// installs in <c>$global:__BashStdIn</c> before it runs. Function bodies opt out (see <see cref="EmitFunction"/>).
+    /// </summary>
+    [ThreadStatic]
+    private static bool _launcherStdin;
+
+    /// <summary>
+    /// Like <see cref="Transpile(string, TranspileContext)"/>, but the WHOLE script is emitted as a stdin
+    /// scope: every stdin-reading command (<see cref="StdinReaders"/>, <c>read</c>, <c>while read</c>) is fed
+    /// from <c>$global:__BashStdIn</c>, which the host fills lazily from the launcher's forwarded stdin. The
+    /// result mentions <c>__BashStdIn</c> iff some command can read stdin — a caller that sees no mention
+    /// should run the plain <see cref="Transpile(string, TranspileContext)"/> text and forward nothing.
+    /// </summary>
+    public static string? TranspileWithLauncherStdin(string bash, TranspileContext context)
+    {
+        var priorScope = _inStdinScope;
+        var priorLauncher = _launcherStdin;
+        _inStdinScope = true;
+        _launcherStdin = true;
+        try { return Transpile(bash, context); }
+        finally
+        {
+            _inStdinScope = priorScope;
+            _launcherStdin = priorLauncher;
+        }
+    }
+
+    /// <summary>
     /// Emit PowerShell for a pre-parsed AST under the given
     /// <see cref="TranspileContext"/>. Used by transpilers that need to
     /// emit per-statement while sharing a single context.
@@ -805,7 +834,9 @@ public static class PsEmitter
 
         try
         {
-            var body = Emit(func.Body);
+            // A function is typically a FILTER (`echo x | f`): its stdin is whatever it is called with, not the
+            // launcher's. Under the launcher-stdin scope its body therefore reads `$input`/the pipe as before.
+            var body = _launcherStdin ? WithStdinScope(false, () => Emit(func.Body)) : Emit(func.Body);
             // Wrap the function body with save/restore of $global:BashPositional so
             // that recursive calls each see their own positional args ($1, $2, $@, $#)
             // rather than the top-level caller's args. Without this, a recursive call
@@ -4985,8 +5016,40 @@ public static class PsEmitter
         finally { _inStdinScope = entryScope; }
     }
 
+    /// <summary>
+    /// <c>yes | { …; }</c> / <c>seq … | { …; }</c>: a literal-argument producer that can be unbounded, piped into a
+    /// compound that opens a stdin scope. The scope reads the producer lazily from a background runspace
+    /// (<see cref="PsBuild.StdinScopeLazy"/>) so a reader that stops early (<c>head -n1</c>, a lone <c>read</c>)
+    /// ends the producer — a script block after a pipe would only start once the producer finished (never).
+    /// Other producers keep the eager scope (<see cref="PsBuild.StdinScope"/>).
+    /// </summary>
+    private static bool TryEmitLazyProducerStage(Command.Pipeline pipeline, out string emitted)
+    {
+        emitted = "";
+        if (pipeline.Commands.Length != 2 || pipeline.Negated || pipeline.Ops[0] != "|"
+            || pipeline.Commands[0] is not Command.Simple producer
+            || !producer.EnvPairs.IsEmpty || !producer.HereDocs.IsDefaultOrEmpty
+            || !producer.Redirects.IsDefaultOrEmpty || producer.Words.IsDefaultOrEmpty
+            || GetLiteralValue(producer.Words[0]) is not ("yes" or "seq"))
+            return false;
+        foreach (var w in producer.Words)
+            if (GetLiteralValue(w) is null) return false;
+
+        var cmd = pipeline.Commands[1];
+        bool opensScope = cmd is Command.Subshell or Command.BraceGroup or Command.ForIn
+                or Command.ForArith or Command.If or Command.Case
+            || (cmd is Command.While loop && !IsWhileRead(loop.Cond, out _, out _));
+        if (!opensScope || !TryEmitMappedCommand(producer, out var producerText))
+            return false;
+
+        var body = WithStdinScope(true, () => Emit(cmd));
+        emitted = $"& {{ {PsBuild.StdinScopeLazy(producerText, body)} }}";
+        return true;
+    }
+
     private static string EmitPipelineStages(Command.Pipeline pipeline, bool entryScope)
     {
+        if (TryEmitLazyProducerStage(pipeline, out var lazy)) return lazy;
         var sb = new StringBuilder();
         for (int i = 0; i < pipeline.Commands.Length; i++)
         {

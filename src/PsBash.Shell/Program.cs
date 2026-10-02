@@ -358,6 +358,7 @@ if (compactOutput && !shellArgs.RawPowerShell)
 }
 
 string? pwshCommand;
+bool forwardStdin = false;
 if (shellArgs.RawPowerShell)
 {
     // PTY-9 follow-on: `--ps` passthrough — forward the command body to the
@@ -372,7 +373,14 @@ else
 {
     try
     {
-        pwshCommand = BashTranspiler.Transpile(bashCommand);
+        // Redirected stdin is the command's stdin (bash: `printf 'b\na\n' | bash -c sort`). Emit the script as
+        // one stdin scope only when something in it can read stdin; otherwise the plain text is used and
+        // nothing is forwarded, so a command that ignores stdin neither reads nor blocks on it.
+        var scopedCommand = Console.IsInputRedirected && !EnvFlags.IsTruthy("PSBASH_NO_STDIN_FORWARD")
+            ? BashTranspiler.TranspileWithLauncherStdin(bashCommand)
+            : null;
+        forwardStdin = scopedCommand is not null;
+        pwshCommand = scopedCommand ?? BashTranspiler.Transpile(bashCommand);
     }
     catch (ParseException ex)
     {
@@ -435,6 +443,8 @@ int exitCode;
 try
 {
     await using IWorker worker = await workerFactory();
+    if (forwardStdin && worker is IpcWorker ipcWorker)
+        ipcWorker.LauncherStdin = Console.OpenStandardInput();
     exitCode = await worker.ExecuteAsync(
         BuildInvocationCwdPreamble() + pwshCommand,
         environment: CaptureLauncherEnvironment());

@@ -4,7 +4,7 @@ namespace PsBash.Cmdlets;
 
 internal enum TokKind
 {
-    Number, String, Regex, Name, FuncName, Builtin, Keyword,
+    Number, String, Regex, Name, FuncName, Indirect, Builtin, Keyword,
     Dollar, LParen, RParen, LBrace, RBrace, LBracket, RBracket,
     Semicolon, Newline, Comma,
     Assign, AddAssign, SubAssign, MulAssign, DivAssign, ModAssign, PowAssign,
@@ -150,6 +150,19 @@ internal static class AwkLexer
                         Add(toks, TokKind.Name, word);
                 }
                 continue;
+            }
+
+            // gawk indirect call: @name(args) calls the function whose NAME is the value of variable `name`.
+            if (c == '@' && i + 1 < n && (src[i + 1] == '_' || char.IsLetter(src[i + 1])))
+            {
+                int s = i + 1, e = s;
+                while (e < n && (src[e] == '_' || char.IsLetterOrDigit(src[e]))) e++;
+                if (e < n && src[e] == '(')
+                {
+                    toks.Add(new Tok { Kind = TokKind.Indirect, Text = src.Substring(s, e - s) });
+                    i = e;
+                    continue;
+                }
             }
 
             // string literal

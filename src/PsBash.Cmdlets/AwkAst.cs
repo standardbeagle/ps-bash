@@ -25,7 +25,7 @@ internal sealed class Arith : AwkExpr { public char Op; public AwkExpr Left = nu
 internal sealed class Power : AwkExpr { public AwkExpr Left = null!; public AwkExpr Right = null!; }
 internal sealed class Unary : AwkExpr { public char Op; public AwkExpr Operand = null!; }
 internal sealed class IncDec : AwkExpr { public bool Increment; public bool Prefix; public AwkExpr Target = null!; }
-internal sealed class Call : AwkExpr { public string Name = ""; public List<AwkExpr> Args = new(); }
+internal sealed class Call : AwkExpr { public string Name = ""; public List<AwkExpr> Args = new(); public bool Indirect; }
 internal sealed class Grouping : AwkExpr { public AwkExpr Inner = null!; }
 
 /// <summary>Where a <c>getline</c> reads from.</summary>

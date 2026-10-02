@@ -77,10 +77,16 @@ public abstract record Mode
     /// command runs, so a var changed or removed in the launcher is observed by
     /// this invocation and no var set by a previous invocation survives.
     /// </param>
+    /// <param name="StdinFollows">
+    /// True when the launcher forwards its own stdin after the request (<see cref="HostProtocol.StdinFeedHeader"/>):
+    /// the host then reads <c>STDIN:</c> frames from the connection while the command runs and exposes them as
+    /// the command's stdin (<c>$global:__BashStdIn</c>, a lazy <c>StdinCursor</c>).
+    /// </param>
     public sealed record Command(
         string Body,
         SessionMode Session = SessionMode.Framed,
-        IReadOnlyList<KeyValuePair<string, string>>? Environment = null) : Mode;
+        IReadOnlyList<KeyValuePair<string, string>>? Environment = null,
+        bool StdinFollows = false) : Mode;
 
     /// <summary>
     /// Bash script body read from launcher's stdin, evaluated as a sequence of

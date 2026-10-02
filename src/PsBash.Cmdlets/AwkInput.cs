@@ -154,7 +154,7 @@ internal sealed class AwkSourceStream : IAwkLineStream
 /// </summary>
 internal sealed class AwkCommandStream : IAwkLineStream
 {
-    private static readonly TimeSpan CloseWait = TimeSpan.FromSeconds(3);
+    private static readonly TimeSpan PendingGrace = TimeSpan.FromSeconds(3);
 
     private readonly Process _proc;
     private readonly StreamReader _out;
@@ -248,15 +248,21 @@ internal sealed class AwkCommandStream : IAwkLineStream
     {
         if (_closed) return _status;
         _closed = true;
-        try { _out.Dispose(); } catch { /* ignore */ }
         try
         {
-            if (!_proc.WaitForExit((int)CloseWait.TotalMilliseconds))
+            // A command that still has output nobody read is, in gawk, killed by SIGPIPE when the read end
+            // closes: close() reports 128+13 = 141. One that merely finishes (its output fits the pipe buffer)
+            // reports its own status, so give a command that is about to exit a moment to do so BEFORE the
+            // pipe is closed; only a command still running (blocked writing, or never ending) gets 141.
+            bool exitedOnItsOwn = _proc.WaitForExit((int)PendingGrace.TotalMilliseconds);
+            try { _out.Dispose(); } catch { /* ignore */ }
+            if (!exitedOnItsOwn)
             {
                 Kill();
                 _proc.WaitForExit(2_000);
+                _status = 141;
             }
-            _status = _proc.ExitCode;
+            else _status = _proc.ExitCode;
         }
         catch { _status = -1; }
         _errPump.Join(TimeSpan.FromSeconds(1));
@@ -303,6 +309,20 @@ internal sealed class AwkShell
     /// </summary>
     public BashRuntime.ChildProcessResult RunWithInput(string command, string inputPath) =>
         BashRuntime.RunChildProcess(BuildStartInfo(command, inputPath));
+
+    /// <summary>
+    /// Start <paramref name="command"/> for WRITING (<c>print | "cmd"</c>): stdin, stdout and stderr are all
+    /// piped, so the caller feeds the command as awk prints and collects its output. The command line is
+    /// run as-is by a child ps-bash, which forwards its redirected stdin to the first stdin reader
+    /// (compound lists like <c>a; b</c> share it, as in a real shell). Null when it cannot start.
+    /// </summary>
+    public Process? StartPipe(string command)
+    {
+        var psi = BuildStartInfo(command);
+        AwkCommandStream.Prepare(psi);
+        try { return Process.Start(psi); }
+        catch (Exception ex) when (!FileSystemHelpers.IsPipelineStop(ex)) { return null; }
+    }
 
     public void KillAll()
     {

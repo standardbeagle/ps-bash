@@ -165,36 +165,91 @@ internal sealed class AwkFileSink : AwkOutSink
 }
 
 /// <summary>
-/// <c>print | "cmd"</c>. The data is collected in a temporary file and the command runs when the
-/// pipe is CLOSED (<c>close()</c> or end of program) as <c>{ cmd } &lt; file</c> through ps-bash itself
-/// — the launcher does not forward a pipe into a <c>-c</c> command, so a live stdin pipe would starve
-/// <c>sort</c>. For the filters awk programs pipe into (sort, uniq, wc, cat, tee, gzip …) this is
-/// indistinguishable from gawk's concurrent pipe, because they emit their results at end of input;
-/// close() returns the command's exit status and its output lands in awk's output at that moment.
+/// <c>print | "cmd"</c>: the command is started when the pipe is first written (a child ps-bash with
+/// piped stdin/stdout/stderr), awk's records are written to its stdin as they are printed (buffered like
+/// gawk's stdio pipe: published on <c>fflush</c>, <c>close()</c>, a full buffer or the end of the program)
+/// and its stdout/stderr are pumped by background threads into a queue that is drained on the cmdlet
+/// thread (output objects may only be written there) — straight into awk's output, never held, because it
+/// IS the real stdout. <c>close()</c> closes the command's stdin, waits for it to finish and returns its
+/// exit status. The child's launcher forwards the redirected stdin to the first stdin reader, so
+/// compound commands (<c>a; b</c>) get stdin too. A command that exits while awk is still printing is
+/// gawk's <c>fatal: print to "cmd" failed: Broken pipe</c> (exit 2).
 /// </summary>
 internal sealed class AwkPipeSink : AwkOutSink
 {
+    private static readonly TimeSpan RunLimit = TimeSpan.FromSeconds(120);
+
     private readonly string _command;
-    private readonly AwkShell? _shell;
     private readonly AwkStdout _stdout;
-    private readonly string _tmp;
-    private StreamWriter? _w;
+    private readonly System.Diagnostics.Process _proc;
+    private readonly StreamWriter _w;
+    private readonly System.Collections.Concurrent.ConcurrentQueue<(bool Err, string Text)> _queue = new();
+    private readonly Thread _outPump;
+    private readonly Thread _errPump;
     private bool _closed;
 
     public AwkPipeSink(string command, AwkShell? shell, AwkStdout stdout)
     {
         _command = command;
-        _shell = shell;
         _stdout = stdout;
-        string dir = Path.Combine(Path.GetTempPath(), "ps-bash", "awk-pipe");
-        Directory.CreateDirectory(dir);
-        _tmp = Path.Combine(dir, Guid.NewGuid().ToString("N"));
-        _w = new StreamWriter(new FileStream(_tmp, FileMode.Create, FileAccess.Write, FileShare.Read), RawBytes.Encoding, 1 << 16);
+        if (shell is null)
+            throw new AwkInterpreter.AwkRuntimeException($"fatal: cannot open pipe `{command}' (no shell available)");
+        _proc = shell.StartPipe(command)
+            ?? throw new AwkInterpreter.AwkRuntimeException($"fatal: cannot open pipe `{command}' (cannot start the command)");
+        _w = new StreamWriter(_proc.StandardInput.BaseStream, RawBytes.Encoding, 1 << 16);
+        _outPump = Pump(_proc.StandardOutput, err: false);
+        _errPump = Pump(_proc.StandardError, err: true);
         stdout.Holders++;
     }
 
-    public override void Write(string text) => _w?.Write(text);
-    public override void Flush() => _w?.Flush();
+    private Thread Pump(StreamReader reader, bool err)
+    {
+        var t = new Thread(() =>
+        {
+            try
+            {
+                var buf = new char[4096];
+                int n;
+                while ((n = reader.Read(buf, 0, buf.Length)) > 0)
+                    _queue.Enqueue((err, new string(buf, 0, n)));
+            }
+            catch { /* killed mid-read */ }
+        }) { IsBackground = true };
+        t.Start();
+        return t;
+    }
+
+    /// <summary>Hand what the command has written so far to awk's output (cmdlet thread only).</summary>
+    private void Drain()
+    {
+        while (_queue.TryDequeue(out var item))
+        {
+            if (item.Err) Console.Error.Write(item.Text);
+            else _stdout.WriteThrough(item.Text.Replace("\r\n", "\n"));
+        }
+    }
+
+    public override void Write(string text)
+    {
+        if (_closed) return;
+        try { _w.Write(text); }
+        catch (IOException) { throw BrokenPipe(); }
+        Drain();
+    }
+
+    public override void Flush()
+    {
+        if (_closed) return;
+        try { _w.Flush(); }
+        catch (IOException) { /* the command is gone: reported at the next write / close */ }
+        Drain();
+    }
+
+    private AwkInterpreter.AwkRuntimeException BrokenPipe()
+    {
+        Drain();
+        return new AwkInterpreter.AwkRuntimeException($"fatal: print to \"{_command}\" failed: Broken pipe");
+    }
 
     public override int Close() => CloseCore(flushStdoutFirst: true);
 
@@ -208,27 +263,23 @@ internal sealed class AwkPipeSink : AwkOutSink
         _closed = true;
         try
         {
-            _w?.Dispose();
-            _w = null;
+            try { _w.Dispose(); } catch (IOException) { /* command already exited */ }
 
             if (flushStdoutFirst) _stdout.FlushHeld();
             _stdout.Holders--;
 
-            if (_shell is null)
-                throw new AwkInterpreter.AwkRuntimeException($"fatal: cannot open pipe `{_command}' (no shell available)");
-
-            BashRuntime.ChildProcessResult r;
-            try { r = _shell.RunWithInput(_command, _tmp); }
-            catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException)
+            bool timedOut = !_proc.WaitForExit((int)RunLimit.TotalMilliseconds);
+            if (timedOut)
             {
-                throw new AwkInterpreter.AwkRuntimeException($"fatal: cannot open pipe `{_command}' ({ex.Message})");
+                try { _proc.Kill(entireProcessTree: true); } catch { /* gone */ }
+                _proc.WaitForExit(2_000);
             }
-
-            _stdout.WriteThrough(r.Stdout.Replace("\r\n", "\n"));
-            if (r.Stderr.Length > 0) Console.Error.Write(r.Stderr);
-            return r.TimedOut ? 124 : r.ExitCode;
+            _outPump.Join(TimeSpan.FromSeconds(5));
+            _errPump.Join(TimeSpan.FromSeconds(5));
+            Drain();
+            return timedOut ? 124 : _proc.ExitCode;
         }
-        finally { Cleanup(); }
+        finally { try { _proc.Dispose(); } catch { /* ignore */ } }
     }
 
     public override void Abort()
@@ -236,12 +287,8 @@ internal sealed class AwkPipeSink : AwkOutSink
         if (_closed) return;
         _closed = true;
         _stdout.Holders--;
-        try { _w?.Dispose(); } catch { /* best effort */ }
-        Cleanup();
-    }
-
-    private void Cleanup()
-    {
-        try { File.Delete(_tmp); } catch { /* best effort */ }
+        try { _proc.Kill(entireProcessTree: true); } catch { /* gone */ }
+        try { _w.Dispose(); } catch { /* best effort */ }
+        try { _proc.Dispose(); } catch { /* ignore */ }
     }
 }
