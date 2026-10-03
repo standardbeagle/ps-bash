@@ -53,7 +53,7 @@ public class LauncherStdinTests
         var ps = BashTranspiler.TranspileWithLauncherStdin("sort | uniq -c")!;
 
         // the first stage is fed; `uniq` reads the pipe
-        Assert.Equal(1, System.Text.RegularExpressions.Regex.Matches(ps, "__BashStdIn.Count").Count);
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(ps, "__BashStdIn.Count"));
     }
 
     [Fact]

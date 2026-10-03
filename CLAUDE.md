@@ -1,231 +1,52 @@
 # ps-bash project instructions
 
-**Navigation: read @CODE_MAP.md first** — the static structural index (projects, key files, where to find X). A compressed top-of-context map out-navigates on-demand search; see @.claude/rules/findability.md for the doctrine.
+**Navigation: read @CODE_MAP.md first** (projects, key files, where to find X).
 
 ## Architecture
 
-```
-bash input → BashLexer → BashParser → PsEmitter → IpcWorker → ps-bash-host/SdkWorker → Invoke-Bash* runtime
-```
-(Parser + emitter live in **PsBash.Transpiler**, not PsBash.Core.)
+`bash → BashLexer → BashParser → PsEmitter (PsBash.Transpiler) → IpcWorker → ps-bash-host/SdkWorker → Invoke-Bash* runtime`
 
-- **Lexer/Parser**: tokenizes and parses bash into an AST modeled on Oils syntax.asdl
-- **Emitter**: maps bash commands to `Invoke-Bash*` functions via **passthrough** — forwards all args, never translates flags
-- **Runtime**: PowerShell module (`PsBash.psm1`) with full bash-compatible flag parsing in each function
-
-## The Passthrough Principle
-
-The emitter maps command names (e.g., `head` → `Invoke-BashHead`) and forwards all arguments unchanged. The runtime functions handle all flag parsing. Never translate bash flags to PowerShell parameters in the emitter.
+**Passthrough principle:** the emitter maps a command name (`head` → `Invoke-BashHead`) and
+forwards every argument unchanged. Flag parsing lives in the runtime cmdlet. Never translate
+bash flags to PowerShell parameters in the emitter.
 
 ## The Bash tool IS ps-bash (dogfood)
 
-The Bash tool runs `~/.local/bin/bash.exe` — a copy of the installed `ps-bash.exe`, the
-**installed release, not your build** (`BASH_VERSION` reports `0.x.0(1)-release`). Claude Code
-only honours `CLAUDE_CODE_GIT_BASH_PATH` for a file named `bash.exe`; pointed at `ps-bash.exe`
-it silently falls back to Git Bash (`BASH_VERSION` `4.4.x`). **Check `echo $BASH_VERSION`
-before trusting Bash-tool output as ps-bash behavior** — setup: `docs/agent-setup.md`.
-Consequences:
+The Bash tool runs `~/.local/bin/bash.exe` = the **installed release, not your build**. If
+`echo $BASH_VERSION` shows `4.4.x` it silently fell back to Git Bash (setup: `docs/agent-setup.md`).
+- Not WSL, not Git Bash: `$PATH` is a Windows path string; distro-only tools need `wsl.exe -d Ubuntu-24.04`.
+- `PSBASH_UNIX_PATHS=1`: `/c/…`, `/mnt/c/…` operands become `C:\…`; `/home/x` is not rewritten.
+- Its cwd is separate from the PowerShell tool's — use absolute paths across tools.
+- Run `wsl.exe -- bash -lc '…'` from the Bash tool, single-quoted (PowerShell mangles `$`/`\`).
 
-- **It is not WSL and not Git Bash.** `$PATH` is a native Windows path string
-  (`C:\...;C:\...`), never `/mingw64/bin`. Anything installed only inside the distro
-  (docker, `wslpath`, `cygpath`) is absent — reach it via `wsl.exe -d Ubuntu-24.04`,
-  not the Bash tool.
-- **`PSBASH_UNIX_PATHS=1` is set by the wrapper**, so `/c/…` and `/mnt/c/…` operands are
-  rewritten to `C:\…` before any cmdlet sees them (`PsEmitter.TryTranslateMsysDrivePath`
-  → `WindowsPath.TryMapUnixDrivePath`). Paths with no drive component (`/home/x`) are NOT
-  rewritten. Correct for Windows-side tools; wrong if the path is meant to be consumed
-  *inside* the distro.
-- **cwd persists across Bash-tool calls and is tracked separately from the PowerShell
-  tool's cwd.** A relative path built under one and used in the other resolves wrong — and
-  `git log -- <bad path>` returns empty rather than erroring, so it reads as "no history".
-  Use absolute paths when crossing tools.
-- **For `wsl.exe -- bash -lc "…"`, invoke from the Bash tool, not PowerShell.** PowerShell
-  interpolates `$VAR` inside double quotes and leaves a bare `\`, producing
-  `line N: \: command not found`. ps-bash passes `\$` through correctly. Prefer
-  single-quoted `-lc '…'` either way.
+Before reporting a ps-bash bug: check `docs/specs/intentional-differences.md`; confirm against
+the oracle `wsl.exe -d Ubuntu-24.04 -- bash -c '<snippet>'`; re-run against the current build.
 
-### Before reporting a ps-bash bug
+## Build / test: always `tman`
 
-0. **Check `docs/specs/intentional-differences.md`** — platform mappings, architecture limits and
-   deliberately refused options (exit 2) are listed there with the reason.
-1. **Confirm against the oracle**: `wsl.exe -d Ubuntu-24.04 -- bash -c '<snippet>'`.
-   Faithful bash behavior is not a bug — e.g. `alias <missing-name>` writing
-   `alias: NAME: not found` to stderr is exactly what bash does.
-2. **Confirm the symbol/commit exists HERE**: `git cat-file -t <sha>`, `git grep <sym>`.
-   Consumer projects that embed PsBash keep their own memory; their notes are not ps-bash
-   facts.
-3. **Re-run the repro against the current build.** Several long-"known broken" items
-   (for-loop pipes, `/c/` path handling) now pass.
-
-## Running Tests
-
-Run builds and tests through **`tman`** (config: `.tman.kdl`). Never bare `dotnet build` /
-`dotnet test` — they leak MSBuild worker nodes and testhost processes, and two of them at
-once corrupt the shared `src/*/bin` outputs.
+Never bare `dotnet build` / `dotnet test` (leaks MSBuild nodes/testhosts; two at once corrupt `src/*/bin`).
 
 ```bash
-tman build                                        # dotnet build ps-bash.sln -c Debug -f net10.0
-tman test                                         # BUILD, then full suite (one job)
-tman test-proj src/PsBash.Core.Tests              # BUILD, then one project (one job)
-tman test-proj src/PsBash.Cmdlets.Tests --filter "FullyQualifiedName~Fused"
-tman pester [-Detailed] [-Filter '*echo*']        # release-blocking Pester gate (scripts/pester.ps1)
-tman ls --all | tman status <id> | tman kill all  # inspect / stop runs
+tman build | tman test | tman test-proj src/PsBash.Core.Tests [--filter "..."] | tman pester
+tman ls --all | tman status <id> | tman kill all
 ```
 
-How it is wired (all four aliases run `scripts/tman-job.ps1`):
+Test verbs build first in the same job; all aliases share one serialized lock plus a
+machine-wide 2-slot gate (`PSBASH_TMAN_MACHINE_SLOTS`). Quote any `--filter` containing `|`.
+Don't pass `-x:y`-style MSBuild switches through tman. Never trust results gathered while
+another build ran. Kill only DEV-BUILD `ps-bash-host`/`ps-bash` processes (under repo `bin`)
+on MSB3021 — never the `~/.local/bin` ones.
 
-1. **Test verbs always build first, in the same job** — `dotnet build ps-bash.sln` then
-   `dotnet test --no-build`. There is no separate "stale binaries" path and nothing can rebuild
-   between the two steps. (`test-proj` builds the whole solution, not just the project: suites
-   spawn `ps-bash.exe` / `ps-bash-host.exe`, which a project-only build does not relink.)
-2. **One serialized bucket across all aliases.** tman buckets by alias name, so the script takes
-   a per-checkout file lock: `build`/`test`/`test-proj`/`pester` queue behind each other.
-   Plus `max-parallel 1` and kill-tree on exit.
-3. **Machine-wide gate: 2 build/test slots across main + every worktree.** tman's
-   `max-parallel` is per DIRECTORY, so each agent worktree used to get its own slot
-   (4 agents = 4 solution builds + test hosts, which filled the disk and RAM). Holding the
-   per-checkout lock, the script re-runs itself as a nested `tman run --max-parallel 2` from
-   one shared directory (`%LOCALAPPDATA%\psbash-tman-gate`); a queued job prints
-   `slots busy, waiting` and shows in `tman ls`. `PSBASH_TMAN_MACHINE_SLOTS=N` changes the
-   count (`0` = off). The real `stall 5m` / `max-time 45m` limits sit on that inner run; the
-   alias's own limits are loose because it is silent while queued. The script clears
-   `TMAN_RUN_ID` for the inner call — tman exempts nested runs from queueing otherwise.
-   tman's `max-mem` is deliberately unused: in tman 0.5.1 it measures only the direct child
-   (pwsh), never the dotnet/testhost processes below it.
-4. **MSBuild switches live in the script, not the kdl.** tman 0.5.1 rewrites `-m:1` →
-   `-m: 1` and `-nodeReuse:false` → `-nodeReuse: false` in args it passes through. Only *your*
-   args (`--filter ...`) cross tman; avoid `-x:y`-style switches there.
-5. Quote any `--filter` containing `|` — an unquoted pipe becomes a shell pipe and hangs.
+## CI push discipline
 
-`scripts/test.sh` is a legacy runner (Stress split, coverage, timeouts), not the default; its
-cleanup only ever kills processes whose exe is under *this checkout's* `src/*/bin`.
+Each push fires ~9 CI jobs. Batch commits; don't push fixup loops. `**/*.md`, `docs/spikes/**`,
+`docs/solutions/**`, `.worktrack/**` skip CI via `paths-ignore`. Ask before pushing if unsure.
 
-**Never trust suite results gathered while another build was running.** `tman ls` shows live
-runs (other worktrees/sessions included).
+## Release
 
-Orphaned DEV-BUILD `ps-bash-host` / `ps-bash` processes (path under the repo's `bin`) lock
-output DLLs and cause MSB3021 on the next build. Kill only those — **never** the
-`~/.local/bin` ones, which serve the Bash tool.
+Use the `/publish` skill (`.claude/commands/publish.md`) — it is the release process.
 
-## CI Push Discipline
+## Specs (reference, not auto-loaded — read on demand)
 
-Every push to `main` and every PR fires three workflows (Build, CI Pester, Canary)
-across a 3-OS matrix — up to **9 jobs per push**. Multiply by N commits per task
-and CI minutes evaporate fast. Rules:
-
-1. **Batch commits.** Don't push after every tiny edit. Group related changes into
-   one commit before pushing.
-2. **Bookkeeping-only commits are auto-skipped** via `paths-ignore` in
-   `.github/workflows/{build,ci,canary}.yml`. Paths that DO NOT trigger CI:
-   - `.worktrack/**` (workspace binding `mcp.json` + template manifest `templates.json`)
-   - `docs/spikes/**`, `docs/solutions/**`
-   - `**/*.md` (READMEs, changelogs, plans)
-
-   Use `[skip ci]` in the commit message ONLY if you also touch a code path and
-   know the change is genuinely doc-only (e.g. inline doc comment edits inside a
-   .cs file). Default: trust `paths-ignore` and don't add `[skip ci]`.
-3. **Concurrency cancels superseded runs** — pushing a new commit cancels the
-   in-progress run for the same ref. Don't push hot loops of fixup commits.
-4. **Worktrack loop state is not in git.** Claims/leases live in the worktrack DB
-   (workspace `ps-bash`, bound by `.worktrack/mcp.json`), so the loop makes no
-   bookkeeping commits — only work commits, which touch code and trigger CI.
-   Template edits go in `.worktrack/templates.json` and are committed: the daemon
-   applies the manifest at start and on a repo's first binding, and it overwrites
-   edits made through the template verbs. `worktrack-mcp doctor` reports drift.
-
-If you're unsure whether a change needs CI, ask before pushing.
-
-## Release Process
-
-> Operational checklist: the `/publish` skill (`.claude/commands/publish.md`). Keep the two in sync.
-
-### 1. Update the ReleaseNotes (the only required manual edit)
-
-`publish.yml` **auto-patches every version from the release tag** — `ModuleVersion` in
-`PsBash.psd1` and `<Version>` in both `PsBash.Core.csproj` / `PsBash.Transpiler.csproj` — so
-you do NOT need to bump versions by hand (bumping is harmless hygiene if you want the source to
-match). What you MUST do: prepend a `vX.Y.Z: description.` entry to `ReleaseNotes` in
-`src/PsBash.Module/PsBash.psd1`. The whole string is **guard-capped at 10600 chars**
-(`ReleaseNotes_UnderPsGalleryLimit`, PSGallery 400s above it) — if you go over, trim your entry
-and drop the oldest entries (the trailing version-history URL still links them).
-
-### 2. Run the gate locally — Pester + Core.Tests, not just xunit
-
-The publish gate is the **Pester** suite (`tests/PsBash.Tests.ps1`) + **Core.Tests**; the other
-suites and every `Skip report` step are `continue-on-error` (non-fatal) in publish.yml. (build.yml,
-which runs on every push/PR, additionally gates on **Cmdlets.Tests**; publish.yml does not, because
-of an intermittent process-spawning hang on runners — revisit once that is proven stable.) A green
-`scripts/test.sh` / xunit run is NOT enough — Pester calls cmdlets directly
-(`Invoke-BashEcho -e '...'`), hitting bare-flag binder collisions and manifest invariants xunit
-never touches. Run Pester locally first (`tman pester`: builds, refreshes the gitignored beside-module DLL, runs
-`Invoke-Pester ./tests/`) — see the **release-pester-gate-local** memory and the `/publish`
-skill for the exact commands. Fix any failure before proceeding.
-
-### 3. Commit, tag, push
-
-```bash
-git add -A
-git commit -m "Release 0.8.2 — <short description>"
-git tag v0.8.2
-git push origin main --tags
-```
-
-### 4. Create GitHub release
-
-```bash
-gh release create v0.8.2 --title "v0.8.2" --notes "<description>"
-```
-
-This triggers the **Publish Release** workflow which:
-- Builds AOT binaries for win-x64, linux-x64, osx-arm64
-- Uploads zip archives to the GitHub release
-- Runs Pester tests across all platforms
-- Publishes the module to PSGallery
-- Publishes PsBash.Core NuGet package to nuget.org (requires `NUGET_API_KEY` secret)
-
-### 5. Verify GitHub Actions
-
-```bash
-gh run list --workflow=publish.yml --limit 1
-```
-
-Check the run status. If in progress, watch it:
-
-```bash
-gh run watch
-```
-
-All jobs must pass: `build-binaries` (3 matrix), `test` (3 OS matrix), `publish`. A gate failure
-shows `publish` as **skipped** (it `needs:` the test job).
-
-If any job fails:
-```bash
-gh run view <run-id> --log-failed
-```
-
-Fix on `main`, then re-cut. Because a skipped `publish` never reached PSGallery/nuget, the
-version is reusable: `gh release delete vX.Y.Z --yes --cleanup-tag`, re-tag the SAME version at
-the fix commit, push, and re-create the release (no patch number burned).
-
-### 6. Verify PSGallery publication
-
-```powershell
-Find-Module PsBash | Select-Object Version
-```
-
-Confirm the new version appears. If PSGallery publish failed but binaries succeeded,
-you can re-run just the publish job:
-
-```bash
-gh workflow run publish.yml -f version=0.8.2
-```
-
-## Specs
-
-- @docs/specs/parser-grammar.md — tokens, AST nodes, grammar productions, Oils gap analysis
-- @docs/specs/emitter-strategy.md — passthrough principle, pipe mappings, anti-patterns
-- @docs/specs/runtime-functions.md — BashObject model, arg-parsing patterns, escape handling, temp files, adding a command
-- @docs/specs/runtime-command-reference.md — per-command flag / arg-parsing lookup table
-- @docs/specs/interactive-completion.md — interactive shell Tab completion: engine, providers, the no-cursor-map PowerShell bridge, single flag-spec source
-- docs/specs/command-assist.md — interactive AI command assist (Ctrl-^): provider config, prompt redaction, output contract, safety classifier, review loop (reference only; not auto-loaded — interactive-only feature, not needed for transpiler/runtime work)
-- docs/specs/runtime-migrated-cmdlets.md — REFACTOR-2 binary-cmdlet migration history (reference only; not auto-loaded — it is ~126 KB and would dominate the session context window)
+Index: `docs/specs/README.md`. Most used: `parser-grammar.md`, `emitter-strategy.md`,
+`runtime-functions.md`, `runtime-command-reference.md` (per-command flags), `interactive-completion.md`.

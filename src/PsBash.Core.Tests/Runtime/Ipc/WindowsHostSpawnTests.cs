@@ -24,6 +24,7 @@ public class WindowsHostSpawnTests
     [InlineData("back\\\"slash-quote")]
     [InlineData("tab\there")]
     [InlineData("")]
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
     public void BuildCommandLine_RoundTripsThroughCommandLineToArgvW(string arg)
     {
         Skip.IfNot(OperatingSystem.IsWindows(), "CommandLineToArgvW is Windows-only");

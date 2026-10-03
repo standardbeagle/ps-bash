@@ -104,6 +104,7 @@ public class ProcessAncestrySessionAnchorTests
         var b = SelectFrom(5, immediateParent: 10, nodes);
 
         Assert.Equal(a, b);
+        Assert.NotNull(a);
         Assert.Equal(20, a.Value.Pid);
     }
 
@@ -121,6 +122,8 @@ public class ProcessAncestrySessionAnchorTests
             [20] = new ChainNode("opencode", 999, 0),
         });
 
+        Assert.NotNull(first);
+        Assert.NotNull(second);
         Assert.Equal(20, first.Value.Pid);
         Assert.Equal(20, second.Value.Pid);
         Assert.NotEqual(first.Value.StartTimeUtcTicks, second.Value.StartTimeUtcTicks);

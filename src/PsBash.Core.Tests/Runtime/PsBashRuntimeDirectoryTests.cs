@@ -94,6 +94,7 @@ public class PsBashRuntimeDirectoryTests : IDisposable
 
     [SkippableFact]
     [Trait("Platform", "Posix")]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public void EnsureDirectory_CreatesOwnerOnly0700()
     {
         Skip.If(RuntimeInformation.IsOSPlatform(OSPlatform.Windows),
@@ -119,6 +120,7 @@ public class PsBashRuntimeDirectoryTests : IDisposable
 
     [SkippableFact]
     [Trait("Platform", "Posix")]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public void EnsureDirectory_ExistingWorldWritableDir_Refuses()
     {
         Skip.If(RuntimeInformation.IsOSPlatform(OSPlatform.Windows),

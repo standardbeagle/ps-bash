@@ -59,10 +59,8 @@ Tests mirror projects: `*.Tests` + `PsBash.Differential.Tests` (bash-oracle), `P
 
 ## Specs (deep reference)
 
-Index: **`docs/specs/README.md`** — all specs, one line each (guard-enforced complete). The few
-auto-loaded ones are `@`-linked in CLAUDE.md (parser-grammar, emitter-strategy, runtime-functions,
-runtime-command-reference, interactive-completion); `runtime-migrated-cmdlets` is 126 KB, deliberately
-not auto-loaded.
+Index: **`docs/specs/README.md`** — all specs, one line each (guard-enforced complete). None are
+auto-loaded (context budget); read the relevant one on demand.
 
 ## Path-scoped rules (`.claude/rules/`, load by glob)
 

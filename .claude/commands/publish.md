@@ -1,7 +1,6 @@
 Publish a new version of PsBash to PSGallery + NuGet.
 
-Detailed reference: the "Release Process" section of CLAUDE.md. This command is the
-operational checklist; keep the two in sync.
+This is the single source for the release process (CLAUDE.md only points here).
 
 ## The gate (know it before you tag)
 
@@ -64,3 +63,6 @@ diagnose from `gh run view --job <id> --log`, fix on `main`, then
 `gh release delete vX.Y.Z --yes --cleanup-tag`, re-tag the SAME version at the fix commit,
 push, and re-create the release. Each attempt usually surfaces one real failure (e.g. a
 direct-cmdlet-call binder collision, or ReleaseNotes overflow).
+
+If binaries succeeded but only the PSGallery publish failed, re-run just that job:
+`gh workflow run publish.yml -f version=X.Y.Z`.

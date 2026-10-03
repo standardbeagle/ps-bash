@@ -472,7 +472,7 @@ public class PsEmitterTests
     {
         // bash expands ~ at the start of an assignment value AND after each
         // unquoted ':' — PATH=~/bin:~/x -> $HOME/bin:$HOME/x.
-        var result = PsEmitter.Transpile("PATH=~/bin:~/x");
+        var result = PsEmitter.Transpile("PATH=~/bin:~/x")!;
         var homeCount = System.Text.RegularExpressions.Regex.Matches(result, @"\$HOME").Count;
         Assert.True(homeCount >= 2, $"expected >= 2 $HOME, got {homeCount}: {result}");
     }
@@ -526,7 +526,7 @@ public class PsEmitterTests
     {
         // Guard the narrow claim: a genuinely unquoted PATH-style colon still
         // separates segments, so each `~` expands.
-        var result = PsEmitter.Transpile("PATH=~/bin:~/x");
+        var result = PsEmitter.Transpile("PATH=~/bin:~/x")!;
         var homeCount = System.Text.RegularExpressions.Regex.Matches(result, @"\$HOME").Count;
 
         Assert.True(homeCount >= 2, $"expected >= 2 $HOME, got {homeCount}: {result}");
@@ -931,7 +931,7 @@ public class PsEmitterTests
     [InlineData("strings -a -e S f", "Invoke-BashStrings '-a' '-e' S f")]
     [InlineData("base64 -w0 f", "Invoke-BashBase64 '-w0' f")]
     [InlineData("base64 -d", "Invoke-BashBase64 '-d'")]
-    [InlineData("base64 -di -w 0", "Invoke-BashBase64 '-di' '-w' 0")]    [InlineData("head -v -z f", "Invoke-BashHead '-v' '-z' f")]
+    [InlineData("base64 -di -w 0", "Invoke-BashBase64 '-di' '-w' 0")]
     [InlineData("head -v -z f", "Invoke-BashHead '-v' '-z' f")]
     [InlineData("tail -n 5 f", "Invoke-BashTail '-n' 5 f")]
     [InlineData("tail -n +3 f", "Invoke-BashTail '-n' +3 f")]
@@ -982,7 +982,8 @@ public class PsEmitterTests
     [InlineData("tar --exclude=x --strip-components=1 -xf a.tar", "Invoke-BashTar '--exclude=x' '--strip-components=1' '-xf' a.tar")]
     [InlineData("md5sum -c -w sums", "Invoke-BashMd5sum '-c' '-w' sums")]
     [InlineData("sha256sum --tag -z f", "Invoke-BashSha256sum '--tag' '-z' f")]
-    [InlineData("sha1sum -b -- -c", "Invoke-BashSha1sum '-b' '--' '-c'")]    public void Transpile_OrderedArgCommand_QuotesEveryDashLiteral(string bash, string expected)
+    [InlineData("sha1sum -b -- -c", "Invoke-BashSha1sum '-b' '--' '-c'")]
+    public void Transpile_OrderedArgCommand_QuotesEveryDashLiteral(string bash, string expected)
     {
         Assert.Equal(expected, PsEmitter.Transpile(bash));
     }
@@ -2620,9 +2621,9 @@ public class PsEmitterTests
     public void Transpile_CommandSubInsideSplatPipeStage_DoesNotStealTheStageInput()
     {
         // The substitution body is its own pipeline: no `$input |` inside it.
-        var result = PsEmitter.Transpile("echo a | grep $(echo b $y)");
+        var result = PsEmitter.Transpile("echo a | grep $(echo b $y)")!;
 
-        Assert.Equal(1, System.Text.RegularExpressions.Regex.Matches(result, @"\$input \|").Count);
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(result, @"\$input \|"));
     }
 
     [Theory]
@@ -3499,7 +3500,7 @@ public class PsEmitterTests
     [InlineData("echo $(($# + $? + $$ + $!))", "$global:BashBgLastPid")]
     public void Transpile_ArithSub_SpecialParameters_AreSplicedIntoUnifiedEvaluator(string source, string expected)
     {
-        string result = PsEmitter.Transpile(source);
+        string result = PsEmitter.Transpile(source)!;
 
         Assert.Contains("Invoke-BashArith", result);
         Assert.Contains(expected, result);
@@ -3510,7 +3511,7 @@ public class PsEmitterTests
     [Fact]
     public void Transpile_ArithCommand_WithPositional_UsesSameEvaluatorHandoff()
     {
-        string result = PsEmitter.Transpile("(( $1 ** 2 ))");
+        string result = PsEmitter.Transpile("(( $1 ** 2 ))")!;
 
         Assert.Contains("Invoke-BashArith", result);
         Assert.Contains("$global:BashPositional[0]", result);
@@ -3526,7 +3527,7 @@ public class PsEmitterTests
     public void Transpile_ArithmeticParameters_PreserveExpansionBoundariesAcrossContexts(
         string source, string expectedReference, string expectedLiteral)
     {
-        string result = PsEmitter.Transpile(source);
+        string result = PsEmitter.Transpile(source)!;
 
         Assert.Contains("Invoke-BashArith", result);
         Assert.Contains(expectedReference, result);
