@@ -3,7 +3,7 @@ paths:
   - "src/PsBash.Transpiler/Parser/**"
 ---
 
-# PARSER. Ref: @docs/specs/parser-grammar.md
+# PARSER. Ref: `docs/specs/parser-grammar.md`
 
 文言：詞法多字符長先匹，IoNumber須緊鄰，<( >( 先於 < >，{a,b} 先於 LBrace；AST皆不可變record，CompoundWord不用裸字串。
 

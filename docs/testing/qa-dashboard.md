@@ -122,7 +122,7 @@ If the gate fails, add tests covering the changed lines before merging.
 
 ## References
 
-- QA rubric: `.claude/rules/qa-rubric.md`
+- QA rubric: `docs/testing/qa-rubric.md`
 - Testing conventions: `.claude/rules/testing.md`
 - Coverage scripts: `scripts/coverage-report.sh`, `scripts/diff-coverage.sh`
 - Parity audit: `docs/testing/interactive-parity-audit.md`

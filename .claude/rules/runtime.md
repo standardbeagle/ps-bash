@@ -3,7 +3,7 @@ paths:
   - "src/PsBash.Module/**"
 ---
 
-# RUNTIME. Ref: @docs/specs/runtime-functions.md (table: runtime-command-reference.md; migrations: runtime-migrated-cmdlets.md)
+# RUNTIME. Ref: `docs/specs/runtime-functions.md` (table: runtime-command-reference.md; migrations: runtime-migrated-cmdlets.md)
 
 文言：Emit-BashLine分行、New-BashObject存型不分；消費者透傳原物件勿展平；$args手解旗；轉義用哨兵。
 

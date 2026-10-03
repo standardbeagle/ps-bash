@@ -8,7 +8,7 @@ disable-model-invocation: true
 
 Add a completion source for: $ARGUMENTS
 
-Ref: @docs/specs/interactive-completion.md · rule: @.claude/rules/completion.md
+Ref: `docs/specs/interactive-completion.md` · rule: `.claude/rules/completion.md`
 
 ## STEPS
 

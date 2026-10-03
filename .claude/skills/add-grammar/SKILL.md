@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 文言：token→詞法→AST record→parser production→emitter case→各層測試。皆在 PsBash.Transpiler/Parser。
 
-Add grammar for: $ARGUMENTS · Ref: @docs/specs/parser-grammar.md · all files under `src/PsBash.Transpiler/Parser/`
+Add grammar for: $ARGUMENTS · Ref: `docs/specs/parser-grammar.md` · all files under `src/PsBash.Transpiler/Parser/`
 
 ## STEPS
 1. **Token** (new op/keyword): add to `BashTokenKind` in `BashToken.cs`.

@@ -1,69 +1,48 @@
 # CODE_MAP — ps-bash structural index
 
-Static top-of-context repo map. Evergreen: edit when a project/responsibility moves, not for
-detail (detail lives in `docs/specs/*`, linked from CLAUDE.md). Keep small. Why a map not skills:
-a compressed static index out-navigates on-demand retrieval (see `.claude/rules/findability.md`).
+Evergreen nav map (loaded every session — keep small; edit on structure moves only). Detail → `docs/specs/*`.
 
-## Pipeline (one line)
+## Pipeline
 
-`bash text → BashLexer → BashParser → AST → PsEmitter → BashTranspiler` (all **PsBash.Transpiler**)
-`→ IpcWorker` (**PsBash.Core**) `→ ps-bash-host` (**PsBash.Host**: SdkWorker on one SDK runspace)
-`→ Invoke-Bash*` runtime (**PsBash.Module** psm1 + **PsBash.Cmdlets** binary cmdlets).
+`bash → BashLexer → BashParser → AST → PsEmitter → BashTranspiler` (**PsBash.Transpiler**)
+`→ IpcWorker` (**Core**) `→ ps-bash-host` (**Host**: SdkWorker, one SDK runspace) `→ Invoke-Bash*` (**Module** psm1 + **Cmdlets**).
+Launcher `ps-bash.exe` (**Shell**) talks IPC to `ps-bash-host.exe` (**Host**).
 
-Two binaries: `ps-bash.exe` launcher (**PsBash.Shell**) talks IPC to `ps-bash-host.exe` (**PsBash.Host**).
-
-## Projects → role → key files
+## Projects
 
 | Project | Role | Key files |
 |---|---|---|
-| **PsBash.Transpiler** | bash → PowerShell front end | `Parser/BashLexer.cs`, `Parser/BashParser{,.Simple,.Words}.cs` (one partial class: spine+compound / simple-command+redirects+heredoc / word decomposition), `Parser/BashToken.cs`, `Parser/Ast/{Commands,Words,Redirects,BashNode}.cs`, `Parser/PsEmitter.cs`, `Parser/FusedLane.cs` (fused-pipeline detection: allowlist, kill switch, unbounded-stage guard), `Parser/PsBuild.cs` (PS-text builder: quoting/exit-code/void/splat), `Transpiler/BashTranspiler.cs` |
-| **PsBash.Core** | runtime lib: IPC + module plumbing | `Runtime/IWorker.cs`, `Runtime/IpcWorker.cs`, `Runtime/ModuleExtractor.cs`, `Runtime/Compaction/*` (compact-output digest: `OutputCompactor`, `FilterEngine`), `Runtime/EnvFlags.cs` (shared truthy-env), `Runtime/Ipc/*` (transports, HostProtocol, HostMetadata). Embeds the module + per-TFM Cmdlets DLL as resources. |
-| **PsBash.Host** | in-process SDK runspace + interactive shell | `Runtime/SdkRunspace.cs`, `Runtime/SdkWorker.cs`, `Runtime/ICompletionWorker.cs`, `Resources/SdkRunspaceSetup.ps1`; `Shell/{InteractiveShell,LineEditor,CompletionEngine,TabCompleter,CompletionMerge,AliasExpander,HistoryExpander,Suggester,CtrlRSearch}.cs`, `Shell/{CommandAssistProvider,CommandAssistReview}.cs` (AI command assist), `FlagSpecs.cs` |
-| **PsBash.Cmdlets** | binary `Invoke-Bash*` cmdlets (**~100 — where the commands now live**) + `Format-Styled` | `*Command.cs` (one per cmdlet), `LineStreamStages.cs` + `LineStream/*.cs` (compiled streaming cores for the fused lane), `FormatStyledCommand.cs`, `Media/*.cs` (the `psav` ffmpeg wrapper: plans, options, probe, gallery), `BashRuntime.cs` (`RunChildProcess` = bounded spawn), `FileSystemHelpers.cs` (OS interface: `Delete*Force`/`ClearReadOnly`, version, exit-code), `styles/*.pcss` |
-| **PsBash.Module** | psm1: aliases, BashObject model, glob, jq/YAML engines, `ls` formatting, browse adapters, job control (`wait`/`jobs`/`fg`/`bg`) — **not** the commands any more | `PsBash.psm1`, `PsBash.psd1`, `BashFlagSpecs.json` (single flag-spec source), `PsBash.Format.ps1xml` |
-| **PsBash.Shell** | AOT launcher / CLI | `Program.cs`, `Args.cs`, `Pty/TerminalMode.cs` |
-| **PsBash.Testing** | shared test harness | `CanonicalEnv`, `PsBashRunner`, `ProcessSpawn` |
+| **Transpiler** | bash → PS | `Parser/BashLexer.cs`, `Parser/BashParser{,.Simple,.Words}.cs`, `Parser/Ast/*`, `Parser/PsEmitter.cs`, `Parser/FusedLane.cs`, `Parser/PsBuild.cs`, `Transpiler/BashTranspiler.cs` |
+| **Core** | IPC + module plumbing | `Runtime/IpcWorker.cs`, `Runtime/ModuleExtractor.cs`, `Runtime/Compaction/*`, `Runtime/Ipc/*` |
+| **Host** | SDK runspace + interactive shell | `Runtime/{SdkRunspace,SdkWorker,WorkerPool}.cs`, `Resources/SdkRunspaceSetup.ps1`, `Shell/*` (LineEditor, CompletionEngine, …) |
+| **Cmdlets** | ~100 binary `Invoke-Bash*` (**commands live here**) | `*Command.cs`, `Args/*`, `LineStream/*`, `BashRuntime.cs`, `FileSystemHelpers.cs`, `Media/*` |
+| **Module** | psm1: aliases, BashObject, job control | `PsBash.psm1`, `BashFlagSpecs.json` (single flag-spec source) |
+| **Shell** | AOT launcher | `Program.cs`, `Args.cs` |
+| **Testing** | harness | `CanonicalEnv`, `PsBashRunner`, `ProcessSpawn` |
 
-Tests mirror projects: `*.Tests` + `PsBash.Differential.Tests` (bash-oracle), `PsBash.Canary.Tests`, `PsBash.Escalation.Tests`.
+Tests: `*.Tests`, `Differential.Tests` (bash oracle), `Canary.Tests`, `Escalation.Tests`.
 
 ## Where to find X
 
-- **Map a bash command → cmdlet** → `PsEmitter.TryEmitMappedCommand` (Transpiler). Passthrough only; flags parsed in the runtime.
-- **Build emitted PowerShell text** (quoting/escaping, exit-code test, `[void]`, subshell, word-split splat, null-safe probe) → `Parser/PsBuild.cs`. NEVER hand-concatenate these in `PsEmitter` — route through `PsBuild` so the seam-escaping/`[void]` fixes stay in one place.
-- **Destructive filesystem op** (delete/overwrite for rm/cp/mv/find) → `FileSystemHelpers.Delete{Directory,File,Entry}Force` / `ClearReadOnly` (Cmdlets). NEVER raw `Directory.Delete`/`File.Delete` on a force path — they throw on Windows read-only descendants.
-- **Spawn a child process** → `BashRuntime.RunChildProcess` (timeout + kill-tree) for buffered shell-outs. Raw `Process.Start` only for streaming/interactive (traceroute/less) that handle `Stopping` themselves.
-- **Glob / pathname expansion** (`echo *`, `for f in *`, `arr=(*)`, `$v` holding `*`, `shopt dotglob/nullglob/failglob`) → shell step at the emitter: `PsEmitter.IsGlobWord`/`EmitGlobPatternExpr` → `Cmdlets/ConvertToBashGlobCommand.cs` (+ `ConvertToBashWordsCommand.cs` for IFS split) → engine `Cmdlets/BashGlob.cs` (+ `LsGlob` fnmatch); shopt state per runspace in `InvokeBashShoptCommand`. Spec: `emitter-strategy.md` "Pathname expansion".
-- **Implement/Parse a command's flags** → a `*Command.cs` binary cmdlet (Cmdlets) — the default; `Invoke-Bash*` in `PsBash.psm1` only for the runspace-stateful job-control set.
-- **Shared ordered argv parser** (bundles, `--`, long/abbrev, unsupported classifier; tee/cp/mv/rm/mkdir/rmdir/ln/touch/head/tail/wc/cat/tac/nl/uniq/fold/expand/unexpand/paste/join/comm/split/strings/base64/stat/file/cut/sort/grep/sed/rg/find/ls/du/tree/column/gzip/tar/md5sum/sha1sum/sha256sum/diff/jq migrated; echo/printf/test are bash BUILTINS on the same emitter opt-in with their own scanners `Cmdlets/Args/{EchoArgScan,PrintfArgScan}.cs` + `Cmdlets/BashTestExpr.cs` (`test.c` port) (`Cmdlets/TabStopList.cs` = expand/unexpand `-t` specs; `Cmdlets/CutPlan.cs` = cut's per-line engine; `Cmdlets/SortEngine.cs` = sort's key/compare/merge engine); fused cores call each cmdlet's `Plan` (cut/sort also share its engine) so they can't certify an argv it rejects) → `Cmdlets/Args/{ArgParser,OptSpec,ParsedArgs}.cs` + emitter opt-in `PsEmitter.OrderedArgCommands`. Spec: `runtime-functions.md` "Shared argument parser".
-- **Compound-command stdin** (`printf x | { sort; }`, `{ cat; } < f`, `( cat ) <<< hi`: every stdin-reading command inside shares one cursor with `read`) → emitter scope `PsEmitter._inStdinScope` + `PsBuild.StdinScope/StdinFeed` (queue `$global:__BashStdIn`), reader estimate `Parser/StdinReaders.cs`, runtime side `Cmdlets/SharedStdin.cs`. Spec: `emitter-strategy.md` "Compound-command stdin".
-- **Launcher stdin into `-c`** (`printf x | ps-bash -c sort`) → `Shell/Program.cs` (`TranspileWithLauncherStdin`, `IpcWorker.LauncherStdin`), wire `HostProtocol` `STDIN-FEED`/`STDIN:` frames, host `Server/LauncherStdinFeed.cs` + `Connection`, lazy `Transpiler/StdinCursor.cs` bound to `$global:__BashStdIn` (also `New-BashLazyStdin` for `yes | { …; }`). Spec: `runtime-functions.md` "Deliberately left".
-- **Fused pipeline** → detection in `Transpiler/Parser/FusedLane.cs`; execution in `Cmdlets/InvokeBashFusedPipelineCommand.cs`; compiled per-command streaming cores in `Cmdlets/LineStreamStages.cs` + `Cmdlets/LineStream/*.cs` (dispatch = `LineStreamRegistry.TryCreate`, per-argv certified, declines to the batch fallback). Spec: `emitter-strategy.md` §5.
-- **Wrap an external tool as typed objects** (`psav`/ffmpeg is the reference; `psgit` the other) → cmdlet in `Cmdlets/InvokeBash{Tool}Command.cs`, pure argv builders + option parsing + report parsing in `Cmdlets/Media/*.cs` (`FfmpegPlan`, `AvOptions`, `AvTime`, `FfprobeReport`, `AvRunner`, `AvGallery`). Plan first, run second — that split is what gives `--dry-run` and tests that pass with the tool uninstalled. Interactive gallery = `avtui` (`InvokeBashFfmpegTuiCommand.cs` + `StyledInteractiveSession.RunMediaGallery`, Strata-gated). Guides: `docs/src/content/docs/guides/build-a-cli-wrapper.mdx` (+ `-a-styled-media-tui`).
-- **diff engine** (GNU diffseq port: edit scripts hunk-for-hunk like GNU, then the three formats) → `Cmdlets/DiffEngine.cs` + `DiffFormat.cs` (`DiffCompare`, `DiffFormatter`) + `DiffPlan.cs` (option rules); command `InvokeBashDiffCommand.cs`.
-- **jq** (real language implementation) → parser `Cmdlets/JqSyntax.cs`, name check `JqChecker.cs`, evaluator `JqInterp.cs` (+ `JqPaths.cs`), built-ins `JqNatives.cs` + `JqPrelude.cs` (jq source), `JqRegex.cs`, `JqFormats.cs`, number/value model `JqValue.cs`, input parser `JqJson.cs` (jv_parse port), argv `JqOptions.cs`; command `InvokeBashJqCommand.cs`. Spec: `runtime-command-reference.md` jq row.
-- **Bash flag specs (completion)** → ONE source: `PsBash.Module/BashFlagSpecs.json` (host embeds it; psm1 loads it).
-- **Interactive completion** → `Shell/CompletionEngine.cs` (orchestrator) → `TabCompleter` (static base) + runspace queries. Spec: `docs/specs/interactive-completion.md`.
-- **AI command assist (Ctrl-^)** → `Shell/CommandAssistProvider.cs` + `CommandAssistReview.cs`; review loop in `InteractiveShell`. Spec: `docs/specs/command-assist.md`.
-- **Frecency dir jump (`z`/`zi`, zoxide-style)** → `Shell/SqliteFrecencyStore.cs` (scoring/aging/prune) + `IFrecencyStore`; `InteractiveShell` records cd visits in `SyncWorkerCwdAsync` and intercepts `z`/`zi` prompt-side → `cd` rewrite; Tab completion in `CompletionEngine`, ghost text in `Shell/FrecencySuggester.cs`. Interactive-only. Spec: `docs/specs/frecency-jump.md`.
-- **Compact output (`--compact-output`)** → `Runtime/Compaction/OutputCompactor.cs` (+ `FilterEngine`) + `IpcWorker` buffering. Spec: `docs/specs/compact-output.md`.
-- **Alias expansion** → `Shell/AliasExpander.cs`.
-- **History expansion** (`!!`, `!$`, `!n`, `!str`, `^old^new`) → `Shell/HistoryExpander.cs` (pure; REPL runs it pre-alias on the in-session list).
-- **Host startup / runspace** → `Runtime/SdkRunspace.cs` + `Resources/SdkRunspaceSetup.ps1` (CommandNotFoundAction, module-autoload recovery; its `Get-Module -ListAvailable` index is cached process-wide in `AppContext` + on disk `ps-bash/autoload-index-<fingerprint>.json` — an uncached miss costs ~8 s).
-- **Warm runspace pool** (each `-c` connection gets an isolated runspace, discarded on release → clean session per command; execution is still serialized process-wide by `SdkWorker`'s exec gate since env/cwd are process-global — real concurrency needs invocation-scoped env/cwd or separate processes; warmed on dedicated threads so warm-up can't starve the accept/health loop; `PSBASH_POOL_WARM=0` = ready immediately, create on demand) → `Runtime/WorkerPool.cs`. Sized via `PSBASH_POOL_WARM`/`PSBASH_POOL_MAX`. Spec: `docs/specs/host-lifecycle-contract.md`.
-- **IPC / host lifetime / timeouts** → `Runtime/IpcWorker.cs`, `Runtime/Ipc/*`. **`-c` defaults to `Lifetime.Daemon`** (warm pooled host reused across launchers; opt out with `PSBASH_PER_INVOCATION=1`). The host spawn MUST inherit nothing of the launcher's (`IpcWorker.StartHostProcess`: Windows = `Ipc/WindowsHostSpawn.cs`, `CreateProcessW` + `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` = NUL only, because `Process.Start` always inherits EVERY inheritable handle; POSIX = redirect+drain + `PSBASH_HOST_DETACH`) or a persisted daemon holds a parent's pipe open and hangs it (Bash tool; `tman test`).
-- **Nested ps-bash inside a host command** (`bash -c`, awk getline, xargs) → host sets `PSBASH_INSIDE_HOST` per command (`SdkWorker.RunCommand`); `IpcWorker.StartAsync` moves a Daemon launcher to a WARM daemon per nesting depth (`<endpoint>-nested<d>`, `IpcTransportFactory.ResolveNestedEndpoint`/`CurrentNestDepth`; host publishes `PSBASH_NEST_DEPTH` = its depth+1) — never the parent's host (exec-gate deadlock), never a cold private host per call. Spec: `host-lifecycle-contract.md` §Nested.
-- **Concurrent host-spawn arbitration** (Daemon single-flight; stops the cold-start thundering-herd that orphans N-1 runspaces) → `IpcWorker.EnsureHostReachableAsync` + `Runtime/Ipc/HostSpawnLock.cs` (endpoint-scoped exclusive FILE lock, NOT a thread-affine Mutex). Spec: `docs/specs/host-lifecycle-contract.md` §Concurrency.
-- **Bytes vs text (binary safety)** → `Transpiler/RawBytes.cs` (`PsBash.Core.RawBytes`, leaf assembly so every layer can use it): invalid UTF-8 bytes <-> markers U+DC80..U+DCFF (surrogateescape), plus `RawBytes.Encoding` for readers/writers/console/native children. EVERY text<->bytes boundary goes through it: file reads `BashFileSystem.OpenRawReader`/`OpenDocumentReader`, IPC `HostProtocol`, `Core/Runtime/RawConsole.cs`, `Invoke-BashRedirect`/`tee`/`split`/`gzip`/`base64`/`wc -c`. NEVER `Encoding.UTF8.GetBytes/GetString` on data. Incremental forms (records -> bytes -> hasher/compressor/base64, bytes -> records, `<(…)` temp file) = `Cmdlets/ByteRecordStreams.cs` + `ProcessSubFileWriter.cs`. Spec: `runtime-functions.md` "Raw bytes" + "Memory / streaming".
-- **Module/cmdlets extraction** → `Runtime/ModuleExtractor.cs` (extracts every embedded `cmdlets/{tfm}/*` DLL: Cmdlets + Transpiler + Parlot + Strata deps; embedding list = `EmbedCmdletsDll` in `PsBash.Core.csproj`, guarded by `ModuleExtractorTests.EmbeddedCmdletsFolder_CoversEveryNonFrameworkReference`).
-- **Strata on/off + feed discovery** (worktree-aware) → `src/Strata.props`; doc `docs/strata-integration.md`.
+- **bash cmd → cmdlet**: `PsEmitter.TryEmitMappedCommand` (passthrough only).
+- **Emitted PS text** (quoting, exit-code, `[void]`, splat): `Parser/PsBuild.cs` — never hand-concat in PsEmitter.
+- **Command flags**: `Cmdlets/*Command.cs`; shared argv parser `Cmdlets/Args/{ArgParser,OptSpec,ParsedArgs}.cs` + emitter opt-in `PsEmitter.OrderedArgCommands`.
+- **Destructive FS / spawn**: `FileSystemHelpers.Delete*Force`/`ClearReadOnly`; `BashRuntime.RunChildProcess`.
+- **Glob**: `PsEmitter.IsGlobWord` → `ConvertToBashGlobCommand.cs` → `BashGlob.cs`; shopt in `InvokeBashShoptCommand`.
+- **Compound-command stdin**: `PsEmitter._inStdinScope`, `PsBuild.StdinScope`, `Parser/StdinReaders.cs`, `Cmdlets/SharedStdin.cs`.
+- **Launcher stdin into `-c`**: `Shell/Program.cs`, `HostProtocol` STDIN frames, `Server/LauncherStdinFeed.cs`, `Transpiler/StdinCursor.cs`.
+- **Fused pipeline**: `FusedLane.cs` → `InvokeBashFusedPipelineCommand.cs` → `LineStreamStages.cs` + `LineStream/*`.
+- **External-tool wrapper** (psav/ffmpeg ref): `InvokeBash{Tool}Command.cs` + `Media/*` (plan first, run second).
+- **diff**: `DiffEngine.cs`, `DiffFormat.cs`, `DiffPlan.cs`. **jq**: `Jq*.cs`. **sort**: `SortEngine.cs`. **cut**: `CutPlan.cs`.
+- **Completion**: `Shell/CompletionEngine.cs` → `TabCompleter`. **Aliases**: `Shell/AliasExpander.cs`. **History `!!`**: `Shell/HistoryExpander.cs`.
+- **AI assist**: `Shell/CommandAssist*.cs`. **z/zi**: `Shell/SqliteFrecencyStore.cs`.
+- **Compact output**: `Runtime/Compaction/OutputCompactor.cs`.
+- **Host startup / autoload**: `SdkRunspace.cs` + `SdkRunspaceSetup.ps1`.
+- **Daemon / IPC / pool / nesting / spawn lock**: `IpcWorker.cs`, `Ipc/*` (`WindowsHostSpawn.cs` = no handle inheritance, `HostSpawnLock.cs`), `WorkerPool.cs`. Spec: `host-lifecycle-contract.md`.
+- **Bytes vs text**: `Transpiler/RawBytes.cs` at every text↔bytes boundary — never `Encoding.UTF8` on data; streams `Cmdlets/ByteRecordStreams.cs`.
+- **Embedded DLL extraction**: `ModuleExtractor.cs` (list = `EmbedCmdletsDll` in `PsBash.Core.csproj`).
+- **Strata**: `src/Strata.props`.
 
-## Specs (deep reference)
+## Specs & rules
 
-Index: **`docs/specs/README.md`** — all specs, one line each (guard-enforced complete). None are
-auto-loaded (context budget); read the relevant one on demand.
-
-## Path-scoped rules (`.claude/rules/`, load by glob)
-
-`parser.md`/`emitter.md` → Transpiler parser/emitter (`emitter.md` covers `PsBuild.cs`); `runtime.md`/`temp-files.md` → psm1 runtime;
-`os-interface.md` → `Cmdlets/**` (destructive FS + spawn + path helpers); `completion.md` → `Shell/**`;
-`testing.md`/`qa-rubric.md` → global; `findability.md` → global doctrine.
+Specs index: `docs/specs/README.md` (read on demand, never `@`-link). Path-scoped rules in `.claude/rules/` load by glob.

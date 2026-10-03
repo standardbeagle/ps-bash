@@ -4,7 +4,7 @@ paths:
   - "src/PsBash.Transpiler/Parser/PsBuild.cs"
 ---
 
-# EMITTER. Ref: @docs/specs/emitter-strategy.md
+# EMITTER. Ref: `docs/specs/emitter-strategy.md`
 
 文言：透傳為本——映命名、轉全參，旗由運行時解。勿譯旗、勿抽旗、勿臆旗、勿映原生cmdlet。逗號花括號之旗須引號。
 PS文須經PsBuild：引號轉義、退碼測試(必[void])、抑輸出、splat、空安全皆一源；勿手綴。

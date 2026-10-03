@@ -3,7 +3,7 @@ paths:
   - "src/PsBash.Core/Runtime/**"
 ---
 
-# TEMP FILES. Ref: @docs/specs/runtime-functions.md (Temp File Strategy)
+# TEMP FILES. Ref: `docs/specs/runtime-functions.md` (Temp File Strategy)
 
 文言：皆置 ps-bash/ 之下，勿用GetTempFileName；按時間戳失效；共享用FileShare.ReadWrite。
 

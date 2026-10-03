@@ -95,7 +95,7 @@ commented at the buffering site in `IpcWorker.cs`):
    line count. Only the *emitted* digest is bounded (`maxLines`), **not** the intake
    buffer — a command that prints gigabytes will buffer all of it. This is acceptable for
    the opt-in agent use case but is a real large-input risk
-   (cf. `.claude/rules/qa-rubric.md` Directive 3, axis 2). Do not enable compact mode for
+   (cf. `docs/testing/qa-rubric.md` Directive 3, axis 2). Do not enable compact mode for
    unbounded producers.
 2. **Stderr folds into stdout.** Both streams go into the one buffer (normal mode keeps
    stderr on `Console.Error`, never folded into `OutputCallback`). The stream distinction

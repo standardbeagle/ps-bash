@@ -5,7 +5,7 @@ paths:
   - "src/PsBash.Module/BashFlagSpecs.json"
 ---
 
-# COMPLETION CONVENTIONS. Ref: @docs/specs/interactive-completion.md
+# COMPLETION CONVENTIONS. Ref: `docs/specs/interactive-completion.md`
 
 文言：補全居CompletionEngine，運行時呼必設限，旗譜唯一源，名以內省、值以CompleteInput，不映游標。
 
