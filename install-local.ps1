@@ -10,7 +10,25 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 dotnet clean src/PsBash.Core -c Release
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-dotnet publish src/PsBash.Shell -c Release -r win-x64 -p:PublishAot=false --self-contained
+# Version stamp. The committed <Version>/ModuleVersion values are placeholders —
+# the publish workflow patches them at release time — so an unstamped local
+# build reports whatever stale number was last committed (0.10.19 from Core,
+# 0.10.23 from PsBash.psd1). Derive the real one from the nearest release tag:
+# at the tag it is X.Y.Z; N commits past it the informational version (what
+# `ps-bash --version` prints) is X.Y.Z-dev.N.<sha>.
+$moduleVersion = $null
+$versionArgs = @()
+$describe = git describe --tags --match 'v[0-9]*' --long 2>$null
+if ($describe -match '^v(\d+\.\d+\.\d+)-(\d+)-g([0-9a-f]+)$') {
+    $moduleVersion = $Matches[1]
+    $informational = if ([int]$Matches[2] -eq 0) { $moduleVersion } else { "$moduleVersion-dev.$($Matches[2]).$($Matches[3])" }
+    $versionArgs = @("-p:Version=$moduleVersion", "-p:InformationalVersion=$informational")
+    Write-Host "Stamping local build as $informational" -ForegroundColor DarkGray
+} else {
+    Write-Warning "git describe found no vX.Y.Z tag; building with the committed placeholder versions."
+}
+
+dotnet publish src/PsBash.Shell -c Release -r win-x64 -p:PublishAot=false --self-contained @versionArgs
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 # Release, not the default Debug: tman's build/test (and any drain running
@@ -163,7 +181,7 @@ $cmdletsBuildDir = Join-Path $env:TEMP 'ps-bash\module-build\PsBash.Cmdlets\net8
 Remove-Item $cmdletsBuildDir -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Path $cmdletsBuildDir -Force | Out-Null
 
-dotnet build src/PsBash.Cmdlets/PsBash.Cmdlets.csproj -c Release -f net8.0 --nologo -o $cmdletsBuildDir
+dotnet build src/PsBash.Cmdlets/PsBash.Cmdlets.csproj -c Release -f net8.0 --nologo -o $cmdletsBuildDir @versionArgs
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 if (-not (Test-Path "$cmdletsBuildDir\PsBash.Cmdlets.dll")) {
@@ -220,6 +238,20 @@ if ($psd1Patched -eq $psd1Content) {
     Write-Warning "Did not find RootModule = 'PsBash.Cmdlets.dll' to patch in $psd1Src — install may fail to auto-load cmdlets."
 }
 Set-Content -LiteralPath $psd1Dst -Value $psd1Patched -Encoding UTF8
+
+# Same version stamp as the binaries: `bash --version` in plain pwsh reads the
+# imported PsBash module's ModuleVersion. The Cmdlets psd1 also pins PsBash via
+# RequiredModules, so every ModuleVersion in both installed copies moves together.
+if ($moduleVersion) {
+    foreach ($manifest in @(
+            (Join-Path $psBashDir  'PsBash.psd1'),
+            (Join-Path $cmdletsDir 'PsBash.psd1'),
+            $psd1Dst)) {
+        $text = Get-Content -Raw -LiteralPath $manifest
+        $text = $text -replace "ModuleVersion\s*=\s*'[\d.]+'", "ModuleVersion = '$moduleVersion'"
+        Set-Content -LiteralPath $manifest -Value $text -Encoding UTF8
+    }
+}
 
 Write-Host "Installed PsBash + PsBash.Cmdlets modules to $moduleRoot" -ForegroundColor Green
 Write-Host "  (binary cmdlet DLL renamed to PsBash.Cmdlets.Runtime.dll to dodge dev-build file locks)" -ForegroundColor DarkGray

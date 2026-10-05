@@ -117,6 +117,30 @@ public class InvokeBashBashCommandTests : IClassFixture<SharedPwshFixture>
     }
 
     [Fact]
+    public void Bash_VersionFlag_BannerLastLineIsNewlineTerminated()
+    {
+        // Regression: the banner's last line was NoTrailingNewline, so the next
+        // command's output glued on ("...transpiler0.10.0(1)-release").
+        var (lines, err, _) = Run(
+            "(Invoke-BashBash --version | Select-Object -Last 1).NoTrailingNewline -eq $true");
+        Assert.True(string.IsNullOrEmpty(err), $"unexpected error: {err}");
+        Assert.Equal(new[] { "False" }, lines);
+    }
+
+    [Fact]
+    public void Bash_VersionFlag_ReportsPsBashVersionNotEmulatedBashVersion()
+    {
+        // Regression: in the ps-bash host (psm1 run as a script, no module object)
+        // the banner read $global:BashVersion — the emulated "X.Y.0(1)-release"
+        // $BASH_VERSION — instead of the ps-bash version.
+        var (lines, err, _) = Run(
+            "$global:PsBashVersion = '9.8.7'; $global:BashVersion = '9.8.0(1)-release'; " +
+            "Invoke-BashBash --version");
+        Assert.True(string.IsNullOrEmpty(err), $"unexpected error: {err}");
+        Assert.DoesNotContain(lines, l => l.Contains("(1)-release"));
+    }
+
+    [Fact]
     public void Bash_VersionFlag_DoesNotRequirePsBashBinary()
     {
         // --version is handled entirely in-cmdlet (no child spawn). This proves

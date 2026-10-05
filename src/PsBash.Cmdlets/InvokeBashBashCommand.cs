@@ -89,7 +89,9 @@ public sealed class InvokeBashBashCommand : PSCmdlet
         if (OptionZoneHas(forwarded, "--version"))
         {
             var version = ResolveModuleVersion() ?? "0.7.6";
-            var banner = $"ps-bash, version {version}\nBash-to-PowerShell transpiler";
+            // Trailing \n: without it the last line is NoTrailingNewline and the
+            // next command's output glues onto "transpiler".
+            var banner = $"ps-bash, version {version}\nBash-to-PowerShell transpiler\n";
             foreach (var obj in BashRuntime.EmitBashLines(banner))
             {
                 WriteObject(obj);
@@ -199,13 +201,14 @@ public sealed class InvokeBashBashCommand : PSCmdlet
         {
             // Two probe sources: (1) the imported PsBash module's Version
             // property when the manifest path was used; (2) the
-            // $global:BashVersion string the psm1 sets at the bottom of its
-            // body when loaded as a script. Either is acceptable — the
-            // oracle picked whichever was available, defaulting to "0.7.6".
+            // $global:PsBashVersion string the psm1 sets at the bottom of its
+            // body when loaded as a script (the ps-bash host). Not
+            // $global:BashVersion — that is the emulated "X.Y.0(1)-release"
+            // $BASH_VERSION, not the ps-bash version.
             var result = InvokeCommand.InvokeScript(
                 "$m = Get-Module PsBash -ErrorAction SilentlyContinue | Select-Object -First 1 ; " +
                 "if ($m -and $m.Version) { $m.Version.ToString() } " +
-                "elseif ($global:BashVersion) { $global:BashVersion } " +
+                "elseif ($global:PsBashVersion) { $global:PsBashVersion } " +
                 "else { $null }");
             if (result.Count > 0 && result[0] != null)
             {
