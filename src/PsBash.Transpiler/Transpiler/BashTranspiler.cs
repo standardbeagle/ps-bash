@@ -103,12 +103,14 @@ public static class BashTranspiler
 
     /// <summary>
     /// True when emitted PowerShell can read the shared stdin: a command was fed from the cursor variable, or a
-    /// builtin that takes its lines from it at RUN time (<c>read</c>, <c>mapfile</c>) is present.
+    /// builtin that takes its lines from it at RUN time (<c>read</c>, <c>mapfile</c>), or a native program given
+    /// it as its process stdin (<c>Enter-BashNativeStdin</c>) is present.
     /// </summary>
     private static bool ReadsSharedStdin(string emitted) =>
         emitted.Contains(LauncherStdinVariable, StringComparison.Ordinal)
         || emitted.Contains("Invoke-BashRead", StringComparison.Ordinal)
-        || emitted.Contains("Invoke-BashMapfile", StringComparison.Ordinal);
+        || emitted.Contains("Invoke-BashMapfile", StringComparison.Ordinal)
+        || emitted.Contains("Enter-BashNativeStdin", StringComparison.Ordinal);
 
     /// <summary>
     /// Transpile a bash command string to PowerShell, also producing a line

@@ -357,6 +357,18 @@ public static class PsBuild
     public const string NullSafeBashText =
         "if ($null -ne $_ -and $_.PSObject.Properties['BashText']) { $_.BashText } else { \"$_\" }";
 
+    // ───────────────────────────── Bash function definitions ─────────────────────────────
+
+    /// <summary>
+    /// The text every bash function body starts with (<c>function f {</c> + this + body + <see cref="FunctionEpilogue"/>
+    /// <c>}</c>): save/restore of <c>$global:BashPositional</c> so a recursive call sees its own <c>$1 $@ $#</c>. Also
+    /// the signature <c>declare -f</c>/<c>-F</c> use to tell a bash-defined function from the runtime's own.
+    /// </summary>
+    public const string FunctionPrologue = " $__bp = $global:BashPositional; $global:BashPositional = @() + $args; try { ";
+
+    /// <summary>The text every bash function body ends with (see <see cref="FunctionPrologue"/>).</summary>
+    public const string FunctionEpilogue = " } finally { $global:BashPositional = $__bp } ";
+
     // ───────────────────── Compound-command stdin (shared cursor) ──────────────────────
 
     /// <summary>
@@ -393,6 +405,49 @@ public static class PsBuild
         "$__psbash_stdin_prev = Get-Variable -Name __BashStdIn -Scope Global -ValueOnly -ErrorAction SilentlyContinue; "
         + "$global:__BashStdIn = New-BashLazyStdin " + SingleQuote(producerCommand) + "; "
         + "try { " + body + " } finally { try { $global:__BashStdIn.Close() } catch { }; $global:__BashStdIn = $__psbash_stdin_prev }";
+
+    /// <summary>
+    /// <c>cmd &lt; /dev/null</c>: run <paramref name="body"/> with an EMPTY stdin (end of input at once) instead
+    /// of whatever stdin surrounds it — under the launcher's forwarded stdin "the surrounding stdin" is a live
+    /// pipe, so simply dropping the redirect let <c>read</c>, <c>eval</c>'s commands and natives consume it.
+    /// Dot-sourced so the command's side effects (<c>read</c>'s variable, <c>eval</c>'s functions) stay in
+    /// the caller's scope; <paramref name="depth"/> makes the save variable unique per lexical nesting level
+    /// (a dot-sourced block shares its caller's scope, so an inner scope must not overwrite the outer save).
+    /// </summary>
+    public static string EmptyStdinScope(string body, int depth)
+    {
+        var prev = "$__psbash_nullin_prev" + depth.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        return ". { " + prev + " = Get-Variable -Name __BashStdIn -Scope Global -ValueOnly -ErrorAction SilentlyContinue; "
+            + "$global:__BashStdIn = [System.Collections.Generic.Queue[object]]::new(); "
+            + "try { " + body + " } finally { $global:__BashStdIn = " + prev + " } }";
+    }
+
+    /// <summary>
+    /// Give a statement-list command (a builtin the emitter expands inline: <c>cd</c>, <c>eval</c>,
+    /// <c>source</c>, <c>read</c>, …) its redirect tail: <c>. { statements } 2&gt;$null</c>. Dot-sourced, not
+    /// <c>&amp; { }</c>, so the builtin's side effects (variables, functions, cwd) land in the caller's scope;
+    /// a bare tail after a statement list would bind only to its LAST statement.
+    /// </summary>
+    public static string WithRedirectTail(string statements, Action<System.Text.StringBuilder> appendTail)
+    {
+        var sb = new System.Text.StringBuilder(". { ").Append(statements).Append(" }");
+        appendTail(sb);
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// A native program run with the surrounding shared stdin (<c>$global:__BashStdIn</c>) as its REAL
+    /// process stdin. <c>Enter-BashNativeStdin</c> hands the program an OS pipe that a background pump fills
+    /// from the shared stdin; <c>Exit-BashNativeStdin</c> (after the program exits) stops the pump and puts
+    /// back everything the program did not read. Unlike piping the records into the program
+    /// (<c>feed | prog</c>), the program starts at once and the command ends when the PROGRAM ends — a
+    /// program that never reads stdin (<c>git --version</c>) is not held hostage by a stdin that never ends.
+    /// <paramref name="name"/> is the literal command word: the pipe is only installed when it resolves to an
+    /// application (a function or alias of that name runs as before).
+    /// </summary>
+    public static string NativeStdinScope(string name, string command) =>
+        "& { $__psbash_native_stdin = Enter-BashNativeStdin " + SingleQuote(name) + "; try { " + command
+        + " } finally { Exit-BashNativeStdin $__psbash_native_stdin } }";
 
     // ───────────────────────── Positional-parameter expansion ──────────────────────────
 

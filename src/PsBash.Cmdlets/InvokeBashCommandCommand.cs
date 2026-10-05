@@ -16,8 +16,9 @@ namespace PsBash.Cmdlets;
 /// </para>
 /// <list type="bullet">
 /// <item><c>-v</c>/<c>-V</c> (also in a bundle: <c>-pv</c>) select the lookup form: for each operand
-/// run <c>Get-Command NAME</c> and emit the alias definition / function name / source; the first miss
-/// sets <c>$LASTEXITCODE = 1</c> and stops (parity with the psm1 oracle; -v and -V are identical).</item>
+/// run <c>Get-Command NAME</c> and print its bash name (a ps-bash command or function) or source (an
+/// application's path); a miss prints nothing and the status is 1 only when nothing resolved (-v and -V
+/// are identical).</item>
 /// <item>Without them NAME is RUN with the remaining args, bypassing shell FUNCTIONS (bash: functions
 /// are skipped; <c>f() { …; }; command f</c> is "command not found", exit 127). Resolution is
 /// alias, then cmdlet, then external application/script, so <c>command ls</c> reaches the runtime's
@@ -121,43 +122,44 @@ public sealed class InvokeBashCommandCommand : PSCmdlet
         else RunInner(rest);
     }
 
-    /// <summary>The -v/-V form: describe each operand (first miss = exit 1, stop).</summary>
+    /// <summary>
+    /// The -v/-V form: one line per operand that resolves; a name that does not resolve prints nothing.
+    /// Exit 1 only when NO operand resolved (bash 5.2: <c>command -v bash nosuch</c> prints bash's path, exit 0).
+    /// </summary>
     private void LookUp(string[] operands)
     {
+        bool anyFound = false;
         foreach (var name in operands)
         {
-            string? output = null;
+            var output = Describe(name);
+            if (output is null) continue;
+            anyFound = true;
+            foreach (var line in BashRuntime.EmitBashLines(output + "\n"))
+                WriteObject(line);
+        }
+        if (!anyFound && operands.Length > 0) FileSystemHelpers.SetLastExitCode(this, 1);
+    }
 
-            var cmd = ResolveCommand(name);
-            if (cmd != null)
-            {
-                switch (cmd.CommandType)
-                {
-                    case CommandTypes.Alias:
-                        output = ((AliasInfo)cmd).Definition;
-                        break;
-                    case CommandTypes.Function:
-                        output = cmd.Name;
-                        break;
-                    default:
-                        // Oracle: $cmd.Source (Application / Cmdlet / etc.).
-                        output = cmd.Source;
-                        break;
-                }
-            }
-
-            if (output != null)
-            {
-                foreach (var line in BashRuntime.EmitBashLines(output))
-                {
-                    WriteObject(line);
-                }
-            }
-            else
-            {
-                FileSystemHelpers.SetLastExitCode(this, 1);
-                return;
-            }
+    /// <summary>
+    /// What <c>command -v NAME</c> prints: a function's or builtin's name, an application's path. A ps-bash
+    /// command (a runtime alias to an <c>Invoke-Bash*</c> cmdlet) prints its BASH name — it is the shell's own
+    /// implementation of that command, with no file to point at, and the cmdlet name is an internal detail
+    /// (`$(command -v ls)` must still run ls). Other aliases print their definition.
+    /// </summary>
+    private string? Describe(string name)
+    {
+        var cmd = ResolveCommand(name);
+        if (cmd is null) return null;
+        switch (cmd.CommandType)
+        {
+            case CommandTypes.Alias:
+                var definition = ((AliasInfo)cmd).Definition;
+                return definition.StartsWith("Invoke-Bash", StringComparison.Ordinal) ? name : definition;
+            case CommandTypes.Function:
+                return cmd.Name;
+            default:
+                // Application: its path. Cmdlet: its module (the psm1 oracle's $cmd.Source).
+                return cmd.Source;
         }
     }
 

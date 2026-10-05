@@ -38,6 +38,10 @@ public static class PsEmitter
     [ThreadStatic]
     private static bool _inStdinScope;
 
+    /// <summary>Lexical nesting of <c>&lt; /dev/null</c> scopes (names <see cref="PsBuild.EmptyStdinScope"/>'s save variable).</summary>
+    [ThreadStatic]
+    private static int _emptyStdinDepth;
+
     /// <summary>Run <paramref name="emit"/> with <see cref="_inStdinScope"/> set to <paramref name="value"/>.</summary>
     private static string WithStdinScope(bool value, Func<string> emit)
     {
@@ -883,9 +887,9 @@ public static class PsEmitter
             // overwrites the global and the outer frame sees the inner frame's values.
             var sb = new StringBuilder("function ");
             sb.Append(func.Name);
-            sb.Append(" { $__bp = $global:BashPositional; $global:BashPositional = @() + $args; try { ");
+            sb.Append(" {").Append(PsBuild.FunctionPrologue);
             sb.Append(body);
-            sb.Append(" } finally { $global:BashPositional = $__bp } }");
+            sb.Append(PsBuild.FunctionEpilogue).Append('}');
             return sb.ToString();
         }
         finally
@@ -1036,9 +1040,10 @@ public static class PsEmitter
     /// stdin scope and is a command that reads stdin (<see cref="StdinReaders"/>): the emitted text
     /// becomes <c>feed | cmd</c>. A command that carries its own input (<c>&lt; file</c>, heredoc,
     /// env-pair prefix, or any statement-list emission) is left alone — its text is not a single
-    /// pipeable element. A non-ps-bash program is fed only when it resolves to an application AND
-    /// the queue is non-empty, so a user function or a program that ignores stdin is never starved
-    /// of what it would not have read.
+    /// pipeable element. A non-ps-bash program gets the shared stdin as its real process stdin
+    /// (<see cref="PsBuild.NativeStdinScope"/>) — only when it resolves to an application, and what it
+    /// does not read is put back — so a user function or a program that ignores stdin is never starved
+    /// of what it would not have read, nor blocked on a stdin that never ends.
     /// </summary>
     private static string EmitSimpleFed(Command.Simple simple)
     {
@@ -1063,9 +1068,11 @@ public static class PsEmitter
         if (StdinReaders.Classify(name) != StdinReaders.Kind.Native)
             return PsBuild.StdinFeed + " | " + text;
 
-        return "& { if ($global:__BashStdIn -and $global:__BashStdIn.Count -gt 0 -and (Get-Command "
-            + PsBuild.SingleQuote(name) + " -CommandType Application -ErrorAction SilentlyContinue)) { "
-            + PsBuild.StdinFeed + " | ForEach-Object { Get-BashText $_ } | " + text + " } else { " + text + " } }";
+        // Not `feed | prog`: probing the shared stdin before the program starts BLOCKED until a record
+        // arrived or the stdin ended, so under a launcher whose stdin is an open, silent pipe (an agent's
+        // shell tool) every native command hung — `git --version` included. The program gets the stdin as
+        // its real process stdin instead, and the command ends when the program does.
+        return PsBuild.NativeStdinScope(name, text);
     }
 
     private static string EmitBackground(Command.Background bg)
@@ -2270,8 +2277,8 @@ public static class PsEmitter
 
     // Input redirects (< file) become "Get-Content file | cmd".
     // Special case: `< /dev/null` means "no input" — `Get-Content $null`
-    // throws in PowerShell, so just drop the redirect (the command runs
-    // with whatever stdin it would otherwise have).
+    // throws in PowerShell, so the command runs inside an EMPTY stdin scope
+    // (PsBuild.EmptyStdinScope) where every stdin reader sees end of input.
     private static bool TryEmitInputRedirect(Command.Simple cmd, out string result)
     {
         var inputRedirect = cmd.Redirects.FirstOrDefault(r => r.Op == "<");
@@ -2287,7 +2294,13 @@ public static class PsEmitter
 
         if (target == "$null")
         {
-            result = EmitSimple(innerCmd);
+            // Dropping the redirect used to mean "no stdin"; since the launcher forwards its own stdin it
+            // meant the LIVE stdin (`read x </dev/null` read a line, `eval 'prog' </dev/null` fed prog).
+            // Inside the empty scope every reader is fed as in any stdin scope — natives get an OS pipe at
+            // EOF — so the result is end of input, whatever surrounds the command.
+            _emptyStdinDepth++;
+            try { result = PsBuild.EmptyStdinScope(WithStdinScope(true, () => EmitSimpleFed(innerCmd)), _emptyStdinDepth); }
+            finally { _emptyStdinDepth--; }
             return true;
         }
 
@@ -2335,12 +2348,15 @@ public static class PsEmitter
             var val = GetLiteralValue(word);
             if (val == "-A") isAssoc = true;
             else if (val == "-i") { /* integer — handled below */ }
-            else if (val == "-p" || val == "-f" || val == "-F") isPrint = true;
+            else if (val is { Length: > 1 } && val[0] == '-' && val.AsSpan(1).IndexOfAnyExcept("pfF") < 0) isPrint = true;
             else if (val is not null && !val.StartsWith('-')) varName = val;
         }
         if (isPrint)
         {
-            result = EmitPassthrough("Invoke-BashType", cmd.Words.Skip(1).ToImmutableArray());
+            // The print forms (`declare -f fn`, `-F`, `-p var`) are a runtime lookup. Through the mapped
+            // path so the redirects stay attached — `declare -f fn >/dev/null 2>&1` is the stock
+            // "is fn defined?" probe, and routing it to `type` both dropped them and rejected `-f`.
+            result = EmitMappedStandalone(cmd, EmitPassthrough("Invoke-BashDeclare", cmd.Words.Skip(1).ToImmutableArray()));
             return true;
         }
         if (varName is null)
@@ -2604,11 +2620,21 @@ public static class PsEmitter
         // through the host's existing aliases.
         else if (cmd0 is not null
             && TryEmitMappedCommand(cmd, out var mapped))
-            specialResult = EmitMappedStandalone(cmd, mapped);
+        {
+            // EmitMappedStandalone attaches the command's redirects itself.
+            result = EmitMappedStandalone(cmd, mapped);
+            return true;
+        }
 
         if (specialResult is not null)
         {
-            result = specialResult;
+            // cd / read / eval / readonly / set / source emit their own statement text, so the redirect
+            // tail (`eval '…' >f`, `source rc 2>/dev/null`, `cd d >/dev/null`) was silently dropped.
+            // Dot-source keeps their side effects (variables, functions, cwd) in the caller's scope.
+            result = cmd0 is "cd" or "read" or "eval" or "readonly" or "set" or "source" or "."
+                && !cmd.Redirects.IsDefaultOrEmpty
+                    ? PsBuild.WithRedirectTail(specialResult, tail => AppendRedirectTail(tail, cmd.Redirects))
+                    : specialResult;
             return true;
         }
         return false;
@@ -6528,7 +6554,7 @@ public static class PsEmitter
     /// cmdlet must be prepared to receive every flag as a plain string.
     /// </summary>
     internal static readonly IReadOnlySet<string> OrderedArgCommands =
-        new HashSet<string>(StringComparer.Ordinal) { "tee", "cp", "mv", "rm", "mkdir", "rmdir", "ln", "touch", "xargs", "time", "env", "command", "bash", "awk", "head", "tail", "wc", "cat", "tac", "nl", "uniq", "fold", "expand", "unexpand", "paste", "join", "comm", "split", "strings", "base64", "stat", "file", "cut", "sort", "grep", "sed", "rg", "find", "echo", "printf", "test", "ls", "du", "tree", "column", "gzip", "tar", "md5sum", "sha1sum", "sha256sum", "diff", "jq" };
+        new HashSet<string>(StringComparer.Ordinal) { "tee", "cp", "mv", "rm", "mkdir", "rmdir", "ln", "touch", "xargs", "time", "env", "command", "declare", "type", "bash", "awk", "head", "tail", "wc", "cat", "tac", "nl", "uniq", "fold", "expand", "unexpand", "paste", "join", "comm", "split", "strings", "base64", "stat", "file", "cut", "sort", "grep", "sed", "rg", "find", "echo", "printf", "test", "ls", "du", "tree", "column", "gzip", "tar", "md5sum", "sha1sum", "sha256sum", "diff", "jq" };
 
     /// <summary><c>Invoke-BashTee</c> -&gt; is <c>tee</c> in <see cref="OrderedArgCommands"/>?</summary>
     private static bool IsOrderedArgCmdlet(string cmdlet) =>

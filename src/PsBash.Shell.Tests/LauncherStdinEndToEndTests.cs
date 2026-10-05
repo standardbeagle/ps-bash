@@ -189,6 +189,57 @@ public class LauncherStdinEndToEndTests
         finally { release.TrySetResult(); }
     }
 
+    // A program that never reads stdin, and one that copies the lines matching "alp" from it.
+    private static readonly string NativeIgnorer = OperatingSystem.IsWindows() ? "cmd.exe /c echo ran" : "/bin/echo ran";
+    private static readonly string NativeReader = OperatingSystem.IsWindows() ? "findstr.exe alp" : "/usr/bin/grep alp";
+
+    [SkippableTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task OpenStdinThatIsNeverWritten_NativeCommandThatIgnoresStdin_DoesNotBlock(bool viaEvalDevNull)
+    {
+        // REGRESSION (v0.11.0): a native command probed the forwarded stdin BEFORE it started (`Count -gt 0`
+        // blocked until a record arrived or the stdin closed), so under an agent's shell tool — whose stdin is an
+        // open pipe nobody writes — `git --version` hung forever. The second shape is that tool's own wrapper,
+        // `eval '<cmd>' < /dev/null`, whose redirect used to be dropped.
+        var script = viaEvalDevNull ? $"eval '{NativeIgnorer}' < /dev/null" : NativeIgnorer;
+        var release = new TaskCompletionSource();
+        var run = RunAsync(script, async _ => await release.Task);
+        try
+        {
+            var r = await run;
+            Assert.True(r.ExitCode == 0, r.Stderr);
+            Assert.Equal("ran\n", Lf(r.Stdout));
+        }
+        finally { release.TrySetResult(); }
+    }
+
+    [SkippableFact]
+    public async Task PipedStdin_NativeThatReadsStdin_GetsTheForwardedLines()
+    {
+        var r = await RunAsync(NativeReader, Text("alpha\nbeta\nalpine\n"));
+        Assert.True(r.ExitCode == 0, r.Stderr);
+        Assert.Equal("alpha\nalpine\n", Lf(r.Stdout));
+    }
+
+    [SkippableFact]
+    public async Task PipedStdin_NativeThatIgnoresStdin_LeavesItForTheNextCommand()
+    {
+        // bash: `printf 'kept\n' | bash -c 'true; cat'` → kept. The program's stdin is a pipe the forwarded data is
+        // pumped into; what it did not read is put back in front of the shared stdin.
+        var r = await RunAsync(NativeIgnorer + " >/dev/null; cat", Text("kept1\nkept2\n"));
+        Assert.True(r.ExitCode == 0, r.Stderr);
+        Assert.Equal("kept1\nkept2\n", Lf(r.Stdout));
+    }
+
+    [SkippableFact]
+    public async Task PipedStdin_ReadFromDevNull_SeesEndOfInputAndLeavesTheStdinAlone()
+    {
+        // bash: `printf 'one\n' | bash -c 'read x </dev/null; echo "$? [$x]"; read y; echo "[$y]"'` → `1 []`, `[one]`.
+        var r = await RunAsync("read x </dev/null; echo \"$? [$x]\"; read y; echo \"[$y]\"", Text("one\n"));
+        Assert.Equal("1 []\n[one]\n", Lf(r.Stdout));
+    }
+
     [SkippableFact]
     public async Task EmptyStdin_Cat_PrintsNothingAndExitsZero()
     {

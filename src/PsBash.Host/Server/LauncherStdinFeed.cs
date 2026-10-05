@@ -30,7 +30,7 @@ internal sealed class LauncherStdinFeed : IDisposable
     internal LauncherStdinFeed(CancellationToken ct) => _ct = ct;
 
     /// <summary>The cursor the command reads (<c>$global:__BashStdIn</c>).</summary>
-    internal StdinCursor CreateCursor() => new(Records());
+    internal StdinCursor CreateCursor() => new(new RecordSource(this));
 
     /// <summary>
     /// Read stdin frames from <paramref name="stream"/> until the end-of-input marker or the stream closes.
@@ -57,52 +57,93 @@ internal sealed class LauncherStdinFeed : IDisposable
         }
     }
 
-    private IEnumerable<object> Records()
+    /// <summary>
+    /// The chunks decoded into line records, one at a time. A wait for the next chunk honours the caller's
+    /// token as well as the command's (<see cref="IStdinRecordSource"/>): the pump that feeds a native
+    /// program's stdin abandons a silent stdin without taking anything.
+    /// </summary>
+    private sealed class RecordSource : IStdinRecordSource
     {
-        var decoder = RawBytes.Encoding.GetDecoder();
-        var pending = new StringBuilder();
-        var chars = new char[HostProtocol.MaxStdinChunkBytes + 8];
+        private readonly LauncherStdinFeed _feed;
+        private readonly System.Text.Decoder _decoder = RawBytes.Encoding.GetDecoder();
+        private readonly StringBuilder _pending = new();
+        private readonly Queue<object> _ready = new();
+        private char[] _chars = new char[HostProtocol.MaxStdinChunkBytes + 8];
+        private bool _ended;
 
-        IEnumerable<byte[]> Chunks()
+        internal RecordSource(LauncherStdinFeed feed) => _feed = feed;
+
+        public bool TryReadNext(CancellationToken ct, out object? record)
         {
             while (true)
             {
-                byte[]? chunk = null;
-                bool got;
-                try { got = _chunks.TryTake(out chunk, Timeout.Infinite, _ct); }
-                catch (InvalidOperationException) { got = false; }   // completed and drained
-                catch (OperationCanceledException) { got = false; }  // the command was stopped
-                if (!got) yield break;
-                yield return chunk!;
+                if (_ready.TryDequeue(out record)) return true;
+                if (_ended) return false;
+
+                if (TryTakeChunk(ct, out var chunk)) Decode(chunk);
+                else Finish();
             }
         }
 
-        foreach (var chunk in Chunks())
+        private bool TryTakeChunk(CancellationToken ct, out byte[] chunk)
+        {
+            chunk = Array.Empty<byte>();
+            CancellationTokenSource? linked = null;
+            try
+            {
+                var token = _feed._ct;
+                if (ct.CanBeCanceled)
+                {
+                    linked = CancellationTokenSource.CreateLinkedTokenSource(ct, _feed._ct);
+                    token = linked.Token;
+                }
+                if (!_feed._chunks.TryTake(out var taken, Timeout.Infinite, token)) return false;
+                chunk = taken!;
+                return true;
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw new OperationCanceledException(ct); // the caller gave up waiting; nothing was taken
+            }
+            catch (OperationCanceledException) { return false; }  // the command was stopped
+            catch (InvalidOperationException) { return false; }   // completed and drained, or the feed is disposed
+            finally
+            {
+                linked?.Dispose();
+            }
+        }
+
+        private void Decode(byte[] chunk)
         {
             var needed = RawBytes.Encoding.GetMaxCharCount(chunk.Length);
-            if (chars.Length < needed) chars = new char[needed];
-            int n = decoder.GetChars(chunk, 0, chunk.Length, chars, 0, flush: false);
-            pending.Append(chars, 0, n);
+            if (_chars.Length < needed) _chars = new char[needed];
+            int n = _decoder.GetChars(chunk, 0, chunk.Length, _chars, 0, flush: false);
+            _pending.Append(_chars, 0, n);
             int start = 0;
-            for (int i = 0; i < pending.Length; i++)
+            for (int i = 0; i < _pending.Length; i++)
             {
-                if (pending[i] != '\n') continue;
-                yield return pending.ToString(start, i - start);
+                if (_pending[i] != '\n') continue;
+                _ready.Enqueue(_pending.ToString(start, i - start));
                 start = i + 1;
             }
-            if (start > 0) pending.Remove(0, start);
+            if (start > 0) _pending.Remove(0, start);
         }
 
-        int tail = decoder.GetChars(Array.Empty<byte>(), 0, 0, chars, 0, flush: true);
-        pending.Append(chars, 0, tail);
-        if (pending.Length > 0)
+        private void Finish()
         {
+            _ended = true;
+            int tail = _decoder.GetChars(Array.Empty<byte>(), 0, 0, _chars, 0, flush: true);
+            _pending.Append(_chars, 0, tail);
+            if (_pending.Length == 0) return;
             var obj = new PSObject();
             obj.TypeNames.Insert(0, "PsBash.TextOutput");
-            obj.Properties.Add(new PSNoteProperty("BashText", pending.ToString()));
+            obj.Properties.Add(new PSNoteProperty("BashText", _pending.ToString()));
             obj.Properties.Add(new PSNoteProperty("NoTrailingNewline", true));
-            yield return obj;
+            _ready.Enqueue(obj);
+            _pending.Clear();
         }
+
+        public void Dispose() { }
     }
 
     public void Dispose()

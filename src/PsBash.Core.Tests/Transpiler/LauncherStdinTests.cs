@@ -68,6 +68,20 @@ public class LauncherStdinTests
         Assert.Contains("__BashStdIn", ps[fnEnd..]); // the top-level `sort` still reads it
     }
 
+    [Theory]
+    [InlineData("git --version")]
+    [InlineData("wsl.exe -d Ubuntu -- bash -c 'cat'")]
+    public void LauncherStdin_NativeCommand_IsForwardedAndGetsItAsItsProcessStdin(string bash)
+    {
+        // The stdin is forwarded (a native may read it), but the program gets it as its real process stdin
+        // instead of a pre-probe of the cursor, which blocked forever on an open, silent launcher stdin.
+        var ps = BashTranspiler.TranspileWithLauncherStdin(bash);
+
+        Assert.NotNull(ps);
+        Assert.Contains("Enter-BashNativeStdin", ps);
+        Assert.DoesNotContain("Count -gt 0 -and", ps);
+    }
+
     [Fact]
     public void PlainTranspile_IsUnchangedByTheLauncherStdinScope()
     {
@@ -168,5 +182,66 @@ public class LauncherStdinTests
     {
         Assert.Equal(0, new StdinCursor(Enumerable.Empty<object>()).Count);
         Assert.Equal(0, new StdinCursor().Count);
+    }
+
+    /// <summary>A cancellable source over a blocking collection the test feeds by hand.</summary>
+    private sealed class HandFedSource : IStdinRecordSource
+    {
+        internal readonly System.Collections.Concurrent.BlockingCollection<object> Items = new();
+
+        public bool TryReadNext(CancellationToken ct, out object? record)
+        {
+            try
+            {
+                if (Items.TryTake(out var item, Timeout.Infinite, ct)) { record = item; return true; }
+            }
+            catch (InvalidOperationException) { }
+            record = null;
+            return false;
+        }
+
+        public void Dispose() { }
+    }
+
+    [Fact]
+    public void Cursor_TryDequeue_CancelledWhileTheSourceIsSilent_ThrowsAndTakesNothing()
+    {
+        // The native-stdin pump waits on a launcher stdin that may never speak; stopping it must not lose a record.
+        var source = new HandFedSource();
+        var cursor = new StdinCursor(source);
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        Assert.True(cursor.CanCancelWait);
+        Assert.Throws<OperationCanceledException>(() => cursor.TryDequeue(cts.Token, out _));
+
+        source.Items.Add("a");
+        source.Items.CompleteAdding();
+        Assert.True(cursor.TryDequeue(CancellationToken.None, out var record));
+        Assert.Equal("a", record);
+        Assert.False(cursor.TryDequeue(CancellationToken.None, out _));
+    }
+
+    [Fact]
+    public void Cursor_TryDequeue_ServesPushedBackRecordsBeforeTheSource()
+    {
+        var source = new HandFedSource();
+        source.Items.Add("c");
+        source.Items.CompleteAdding();
+        var cursor = new StdinCursor(source);
+        cursor.PushFront(new object[] { "a", "b" });
+
+        var got = new List<object?>();
+        while (cursor.TryDequeue(CancellationToken.None, out var r)) got.Add(r);
+
+        Assert.Equal(new object[] { "a", "b", "c" }, got);
+    }
+
+    [Fact]
+    public void Cursor_EnumeratorBacked_CannotCancelAWait()
+    {
+        // MoveNext blocks whatever the token says, so the native-stdin bridge refuses such a cursor.
+        Assert.False(new StdinCursor(new object[] { "a" }.AsEnumerable()).CanCancelWait);
+        Assert.True(new StdinCursor().CanCancelWait);
     }
 }

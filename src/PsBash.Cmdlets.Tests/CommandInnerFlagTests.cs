@@ -17,9 +17,8 @@ namespace PsBash.Cmdlets.Tests;
 /// taken from bash 5.2 via <c>wsl.exe -d Ubuntu-24.04 -- bash -c '…'</c>: <c>command ls -d f</c> -> <c>f</c>,
 /// <c>command -p echo -e 'a\tb'</c> -> <c>a&lt;TAB&gt;b</c>, <c>command grep -i x f</c> -> the matching lines,
 /// <c>command echo -v</c> -> <c>-v</c>, <c>command -x ls</c> -> "invalid option" + usage, exit 2,
-/// <c>command nosuch</c> -> "command not found", exit 127. (`command -v`/`-V` print the runtime's own
-/// definition here, not a filesystem path, so those stay parity-with-oracle tests in
-/// InvokeBashCommandCommandTests.)
+/// <c>command nosuch</c> -> "command not found", exit 127. (`command -v`/`-V` print the bash NAME of a
+/// runtime command, not a filesystem path — the runtime's ls has no file — see InvokeBashCommandCommandTests.)
 /// </summary>
 public class CommandInnerFlagTests : IClassFixture<SharedPwshFixture>, IDisposable
 {
@@ -97,10 +96,10 @@ public class CommandInnerFlagTests : IClassFixture<SharedPwshFixture>, IDisposab
     [InlineData("command -pv ls")]
     public void Transpile_CommandLookupForms_ReportTheAlias(string bash)
     {
-        // Parity with the psm1 oracle: -v and -V both emit the alias definition (bundles too).
+        // -v and -V (bundles too) print the BASH name of the runtime's own ls — runnable, unlike the cmdlet name.
         var (lines, exit, err) = Run(bash);
         Assert.True(exit == 0, err);
-        Assert.Equal(new[] { "Invoke-BashLs" }, lines);
+        Assert.Equal(new[] { "ls" }, lines);
     }
 
     [Fact]

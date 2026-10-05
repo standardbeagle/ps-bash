@@ -2521,7 +2521,17 @@ try {
 } catch { }
 
 $global:BashStartTime = [DateTime]::UtcNow
-$__bashVer = try { $MyInvocation.MyCommand.Module?.Version ?? [version]'0.8.0' } catch { [version]'0.8.0' }
+# The module's own version when imported as a module. The ps-bash host does not import it — it runs this
+# file as a script, so there is no module object — and there the version is the runtime assembly's (stamped
+# from <Version> at release). Without that fallback every host session reported the 0.8.0 placeholder.
+$__bashVer = try { $ExecutionContext.SessionState.Module?.Version } catch { $null }
+if (-not $__bashVer) {
+    $__bashVer = try {
+        $__psbashAsmVer = [PsBash.Core.RawBytes].Assembly.GetName().Version
+        [version]::new($__psbashAsmVer.Major, $__psbashAsmVer.Minor, [Math]::Max(0, $__psbashAsmVer.Build))
+    } catch { $null }
+}
+if (-not $__bashVer) { $__bashVer = [version]'0.8.0' }
 # The real ps-bash module version (distinct from the emulated $BASH_VERSION above). Binary cmdlets
 # and runtime functions read this for `<cmd> --version`, so tooling can identify it is ps-bash.
 $global:PsBashVersion = $__bashVer.ToString()

@@ -3,34 +3,25 @@ using System.Management.Automation;
 namespace PsBash.Cmdlets;
 
 /// <summary>
-/// Binary cmdlet replacement for the psm1 <c>Invoke-BashType</c> function
-/// (REFACTOR-2 follow-on). Implements the bash <c>type</c> builtin: classify
-/// a command name as alias / function / builtin / file, or print the value
-/// of a variable in <c>-p</c>-on-bash-declare-style form.
-///
-/// Behavioral parity oracle: the original psm1 function. Dispatch order:
+/// The bash <c>type</c> builtin: describe how each NAME would be run. Oracle: bash 5.2 (`wsl bash`).
 /// <list type="bullet">
-/// <item><c>--help</c> → <c>Show-BashHelp 'type'</c>.</item>
-/// <item>No operands → bash-style "type: missing operand" error and return.</item>
-/// <item><c>-p</c> mode → read variable from global PS scope then env, emit
-/// <c>declare -- name="value"</c> / <c>declare -a/-A …</c>; on miss, emit
-/// <c>bash: declare: NAME: not found</c> error.</item>
-/// <item>Otherwise → walk built-in list, alias table, then <c>Get-Command</c>
-/// for cmdlet/function/file resolution. Emit typed <c>PsBash.TypeOutput</c>
-/// PSObjects. <c>-t</c> kind-only, <c>-a</c> all matches, default first hit.
-/// Missing → <c>bash: type: NAME: not found</c>.</item>
+/// <item>default: <c>NAME is a shell builtin</c> / <c>NAME is a function</c> / <c>NAME is PATH</c>; a miss prints
+/// <c>bash: type: NAME: not found</c>, status 1.</item>
+/// <item><c>-t</c>: just the kind (<c>builtin</c> / <c>function</c> / <c>file</c>); a miss prints nothing, status 1.</item>
+/// <item><c>-p</c>: the path of a NAME that would run a file; a builtin or function prints NOTHING with status 0
+/// (<c>type -p cd</c>); a miss prints nothing, status 1. <c>-P</c>: the PATH search only (a builtin is a miss).</item>
+/// <item><c>-a</c>: every match instead of the first. <c>-f</c>: skip functions.</item>
 /// </list>
-///
-/// Flag collisions per the playbook table:
-/// <list type="bullet">
-/// <item><c>-t</c> — no PowerShell common-parameter prefix overlap, stays in
-/// <c>Arguments</c>.</item>
-/// <item><c>-a</c> — prefix-matches <c>-Arguments</c> (the catch-all), so it
-/// is declared as an explicit <see cref="SwitchParameter"/> named <c>A</c>.</item>
-/// <item><c>-p</c> — prefix-matches <c>-PipelineVariable</c> /
-/// <c>-ProgressAction</c>, declared as an explicit <see cref="SwitchParameter"/>
-/// named <c>P</c>. Exact-name match beats common-parameter prefix-match.</item>
-/// </list>
+/// A ps-bash command (a runtime alias to an <c>Invoke-Bash*</c> cmdlet, <c>ls</c>) is the shell's own
+/// implementation with no file: it is reported as a <c>file</c> whose path is its bash NAME (<c>ls is ls</c>,
+/// <c>type -p ls</c> → <c>ls</c>), so availability probes (<c>type -p jq &gt;/dev/null</c>) work and the internal
+/// cmdlet name never leaks — the same rule as <c>command -v</c> and <c>which</c>.
+/// <para>
+/// Flag collisions: <c>type</c> is on <c>PsEmitter.OrderedArgCommands</c>, so transpiled calls pass every flag
+/// single-quoted, in order and with its case (<c>-p</c> vs <c>-P</c>). The <c>A</c>/<c>P</c> decoys
+/// (<c>-a</c> prefix-matches <c>-Arguments</c>, <c>-p</c> <c>-PipelineVariable</c>) are for direct calls only;
+/// the binder folds case, so a direct <c>-P</c> reads as <c>-p</c>.
+/// </para>
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashType")]
 [OutputType(typeof(PSObject))]
@@ -43,250 +34,152 @@ public sealed class InvokeBashTypeCommand : PSCmdlet
         "alias", "unalias", "test", "[", "true", "false",
     };
 
-    // Declared because the bare token -a prefix-matches the cmdlet's own
-    // -Arguments parameter under PSCmdlet binding (same hazard ls / uname hit).
     [Parameter] public SwitchParameter A { get; set; }
 
-    // Declared because -p prefix-matches -PipelineVariable / -ProgressAction.
     [Parameter] public SwitchParameter P { get; set; }
 
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
+    private enum Mode { Describe, Kind, Path, PathSearch }
+
+    /// <summary>One way NAME could run: its kind, the default-mode sentence, and its path (files only).</summary>
+    private sealed record Match(string Kind, string Text, string? Path);
+
     protected override void ProcessRecord()
     {
-        var args = Arguments ?? Array.Empty<string>();
+        var args = BashRuntime.PrependDecoys(Arguments, (A.IsPresent, "-a"), (P.IsPresent, "-p"));
 
         FileSystemHelpers.SetLastExitCode(this, 0);
         if (FileSystemHelpers.TryHandleVersion(this, "type", args)) return;
         if (Array.IndexOf(args, "--help") >= 0)
         {
-            foreach (var line in InvokeCommand.InvokeScript(
-                         "param($n) Show-BashHelp $n", "type"))
-            {
+            foreach (var line in InvokeCommand.InvokeScript("param($n) Show-BashHelp $n", "type"))
                 WriteObject(line);
-            }
             return;
         }
 
-        bool typeOnly = false;
-        bool showAll = A.IsPresent;
-        bool printMode = P.IsPresent;
-
+        var mode = Mode.Describe;
+        bool showAll = false, skipFunctions = false, optionsDone = false;
         var operands = new List<string>();
         foreach (var arg in args)
         {
-            // Case-sensitive comparisons mirror the oracle's `-ceq` slice.
-            if (string.Equals(arg, "-t", StringComparison.Ordinal)) typeOnly = true;
-            else if (string.Equals(arg, "-a", StringComparison.Ordinal) ||
-                     string.Equals(arg, "--all", StringComparison.Ordinal)) showAll = true;
-            else if (string.Equals(arg, "-p", StringComparison.Ordinal)) printMode = true;
-            else operands.Add(arg);
+            if (!optionsDone && arg == "--") { optionsDone = true; continue; }
+            if (!optionsDone && arg == "--all") { showAll = true; continue; }
+            if (!optionsDone && arg.Length > 1 && arg[0] == '-' && arg[1] != '-')
+            {
+                foreach (var c in arg.AsSpan(1))
+                {
+                    switch (c)
+                    {
+                        case 't': mode = Mode.Kind; break;
+                        case 'p': if (mode != Mode.PathSearch) mode = Mode.Path; break;
+                        case 'P': mode = Mode.PathSearch; break;
+                        case 'a': showAll = true; break;
+                        case 'f': skipFunctions = true; break;
+                        default:
+                            FileSystemHelpers.WriteBashError(this, $"bash: type: -{c}: invalid option\n"
+                                + "type: usage: type [-afptP] name [name ...]");
+                            FileSystemHelpers.SetLastExitCode(this, 2);
+                            return;
+                    }
+                }
+                continue;
+            }
+            optionsDone = true;
+            operands.Add(arg);
         }
 
-        if (operands.Count == 0)
-        {
-            FileSystemHelpers.WriteBashError(this, "type: missing operand");
-            return;
-        }
+        if (operands.Count == 0) return; // bash: `type` alone is a no-op, status 0
 
         foreach (var name in operands)
         {
-            if (printMode)
+            var matches = Resolve(name, mode == Mode.PathSearch, skipFunctions);
+            if (matches.Count == 0)
             {
-                EmitPrintMode(name);
-                continue;
-            }
-
-            var results = new List<PSObject>();
-            var isBuiltin = Builtins.Contains(name);
-
-            if (isBuiltin)
-            {
-                results.Add(BuildEntry(name, "builtin",
-                    typeOnly ? "builtin" : $"{name} is a shell builtin"));
-
-                if (!showAll)
-                {
-                    WriteObject(results[0]);
-                    continue;
-                }
-            }
-
-            // Alias probe — only emit if the alias is one of the ps-bash
-            // runtime aliases (matches the oracle's `-match` predicate).
-            var aliasInfo = ResolveAlias(name);
-            if (aliasInfo != null)
-            {
-                results.Add(BuildEntry(name, "alias",
-                    typeOnly ? "alias" : $"{name} is aliased to `{aliasInfo}'"));
-            }
-
-            // Get-Command lookup — skip if already classified as builtin (oracle).
-            if (!isBuiltin)
-            {
-                var cmd = ResolveCommand(name);
-                if (cmd != null)
-                {
-                    string kind, text;
-                    switch (cmd.CommandType)
-                    {
-                        case CommandTypes.Alias:
-                            kind = "alias";
-                            text = typeOnly ? kind
-                                : $"{name} is aliased to `{((AliasInfo)cmd).Definition}'";
-                            break;
-                        case CommandTypes.Function:
-                            kind = "function";
-                            text = typeOnly ? kind : $"{name} is a function";
-                            break;
-                        default:
-                            kind = "file";
-                            text = typeOnly ? kind : $"{name} is {cmd.Source}";
-                            break;
-                    }
-                    results.Add(BuildEntry(name, kind, text));
-                }
-            }
-
-            if (results.Count == 0)
-            {
-                FileSystemHelpers.WriteBashError(this, $"bash: type: {name}: not found");
+                if (mode == Mode.Describe) FileSystemHelpers.WriteBashError(this, $"bash: type: {name}: not found");
                 FileSystemHelpers.SetLastExitCode(this, 1);
                 continue;
             }
 
-            if (!showAll && !isBuiltin)
+            foreach (var m in showAll ? matches : matches.Take(1))
             {
-                WriteObject(results[0]);
-                continue;
+                switch (mode)
+                {
+                    case Mode.Describe: WriteObject(BuildEntry(name, m.Kind, m.Text)); break;
+                    case Mode.Kind: WriteObject(BuildEntry(name, m.Kind, m.Kind)); break;
+                    default:
+                        // -p/-P print a path only for a file; a builtin/function prints nothing (status stays 0).
+                        if (m.Path is not null) WriteObject(BuildEntry(name, m.Kind, m.Path));
+                        break;
+                }
             }
-
-            foreach (var r in results) WriteObject(r);
         }
     }
 
-    private void EmitPrintMode(string name)
+    /// <summary>Every way NAME could run, in bash's lookup order (function, builtin, then files).</summary>
+    private List<Match> Resolve(string name, bool pathSearchOnly, bool skipFunctions)
     {
-        // Try global PS variable first, then env. Oracle's exact slice.
-        object? val = null;
-        string source = "variable";
+        var matches = new List<Match>();
+        if (!pathSearchOnly)
+        {
+            if (!skipFunctions && DeclarePrinter.FindBashFunction(this, name) is not null)
+                matches.Add(new Match("function", $"{name} is a function", null));
+            if (Builtins.Contains(name))
+                matches.Add(new Match("builtin", $"{name} is a shell builtin", null));
+        }
+
+        if (IsPsBashCommand(name) && !Builtins.Contains(name))
+            matches.Add(new Match("file", $"{name} is {name}", name));
+
+        foreach (var cmd in ResolveCommands(name))
+        {
+            switch (cmd.CommandType)
+            {
+                case CommandTypes.Function:
+                    // A bash function was handled above; the runtime's own PowerShell functions are not shell functions.
+                    break;
+                default:
+                    var path = cmd.Source;
+                    if (string.IsNullOrEmpty(path)) break;
+                    matches.Add(new Match("file", $"{name} is {path}", path));
+                    break;
+            }
+        }
+        return matches;
+    }
+
+    /// <summary>True when NAME is a runtime alias to one of the ps-bash command cmdlets.</summary>
+    private bool IsPsBashCommand(string name)
+    {
         try
         {
-            var psVar = SessionState.PSVariable.GetValue($"global:{name}");
-            if (psVar != null) val = psVar;
+            return InvokeCommand.GetCommand(name, CommandTypes.Alias) is AliasInfo alias
+                && (alias.Definition ?? "").StartsWith("Invoke-Bash", StringComparison.Ordinal);
         }
         catch
         {
-            // Variable doesn't exist; fall through to env probe.
-        }
-
-        if (val == null)
-        {
-            var envVal = BashVariableStore.Get(name);
-            if (envVal != null) { val = envVal; source = "environment"; }
-        }
-        _ = source; // parity placeholder (oracle tracked it but did not surface it)
-
-        if (val != null)
-        {
-            // Oracle: dictionaries → "declare -A NAME=JSON";
-            // arrays/lists → "declare -a NAME=JSON";
-            // scalars → "declare -- NAME=\"VAL\"".
-            string text;
-            if (val is System.Collections.IDictionary)
-            {
-                text = $"declare -A {name}={ToCompactJson(val)}";
-            }
-            else if (val is System.Collections.IList && val is not string)
-            {
-                text = $"declare -a {name}={ToCompactJson(val)}";
-            }
-            else
-            {
-                text = $"declare -- {name}=\"{val}\"";
-            }
-            foreach (var line in BashRuntime.EmitBashLines(text))
-            {
-                WriteObject(line);
-            }
-        }
-        else
-        {
-            FileSystemHelpers.WriteBashError(this, $"bash: declare: {name}: not found");
-            FileSystemHelpers.SetLastExitCode(this, 1);
+            return false;
         }
     }
 
-    private string ToCompactJson(object val)
+    private IEnumerable<CommandInfo> ResolveCommands(string name)
     {
-        // The oracle pipes through ConvertTo-Json -Compress. Delegate to the
-        // PowerShell cmdlet so the format matches byte-for-byte (e.g. integer
-        // vs string boxing, key escaping).
+        // Applications and cmdlets (all of them, for -a). Parameter-bound: the name never becomes script text.
+        var found = new List<CommandInfo>();
         try
         {
-            var results = InvokeCommand.InvokeScript(
-                "param($v) $v | ConvertTo-Json -Compress", val);
-            if (results.Count > 0 && results[0] != null)
+            foreach (var r in InvokeCommand.InvokeScript(
+                         "param($n) Get-Command $n -CommandType Application,Cmdlet -All -ErrorAction SilentlyContinue", name))
             {
-                return results[0].ToString() ?? "";
+                if (r?.BaseObject is CommandInfo ci) found.Add(ci);
             }
         }
         catch
         {
-            // Fall through to empty repr.
+            // Unresolvable name: no file matches.
         }
-        return "";
-    }
-
-    private string? ResolveAlias(string name)
-    {
-        // The psm1 oracle gates emit on definition matching
-        // ^Invoke-Bash|^Get-Bash|^Set-Bash|^ConvertFrom-. Preserved here.
-        try
-        {
-            var results = InvokeCommand.InvokeScript(
-                "param($n) Get-Alias $n -ErrorAction SilentlyContinue", name);
-            if (results.Count == 0) return null;
-            var first = results[0];
-            if (first == null) return null;
-            var aliasInfo = first.BaseObject as AliasInfo;
-            if (aliasInfo == null) return null;
-            var def = aliasInfo.Definition ?? "";
-            if (def.StartsWith("Invoke-Bash", StringComparison.Ordinal) ||
-                def.StartsWith("Get-Bash", StringComparison.Ordinal) ||
-                def.StartsWith("Set-Bash", StringComparison.Ordinal) ||
-                def.StartsWith("ConvertFrom-", StringComparison.Ordinal))
-            {
-                return def;
-            }
-        }
-        catch
-        {
-            return null;
-        }
-        return null;
-    }
-
-    private CommandInfo? ResolveCommand(string name)
-    {
-        // The oracle calls Get-Command -CommandType Application,Cmdlet,Function
-        // — first match wins (or null on miss).
-        try
-        {
-            var results = InvokeCommand.InvokeScript(
-                "param($n) Get-Command $n -CommandType Application,Cmdlet,Function -ErrorAction SilentlyContinue",
-                name);
-            foreach (var r in results)
-            {
-                if (r?.BaseObject is CommandInfo ci) return ci;
-            }
-        }
-        catch
-        {
-            return null;
-        }
-        return null;
+        return found;
     }
 
     private static PSObject BuildEntry(string name, string kind, string text)

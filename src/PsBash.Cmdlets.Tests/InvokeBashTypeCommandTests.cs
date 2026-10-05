@@ -55,15 +55,58 @@ public class InvokeBashTypeCommandTests : IClassFixture<SharedPwshFixture>
     }
 
     [Fact]
-    public void Type_BashAlias_ResolvesViaPsm1Alias()
+    public void Type_PsBashCommand_IsAFileNamedByItsBashName()
     {
-        // `ls` is a psm1 alias for Invoke-BashLs — the alias-probe branch
-        // gates on `^Invoke-Bash|^Get-Bash|^Set-Bash|^ConvertFrom-`, so this
-        // hits and emits "ls is aliased to `Invoke-BashLs'".
+        // `ls` is the runtime's own ls (alias to Invoke-BashLs): no file, so its "path" is its bash name. The
+        // cmdlet name used to leak ("ls is aliased to `Invoke-BashLs'").
         var lines = RunLines("Invoke-BashType ls");
-        Assert.NotEmpty(lines);
-        Assert.Contains(lines, l => l.Contains("ls is aliased to") &&
-                                    l.Contains("Invoke-BashLs"));
+        Assert.Equal(new[] { "ls is ls" }, lines);
+        Assert.Equal(new[] { "file" }, RunLines("Invoke-BashType '-t' ls"));
+    }
+
+    private (string[] lines, int exit) RunWithExit(string script)
+    {
+        // One runspace: the status is appended as the last line.
+        var all = RunLines("$global:LASTEXITCODE = 0; " + script + "; \"rc=$global:LASTEXITCODE\"");
+        return (all[..^1], int.Parse(all[^1]["rc=".Length..]));
+    }
+
+    [Fact]
+    public void Type_DashP_PsBashCommand_PrintsItsName()
+    {
+        // `type -p jq >/dev/null` is a stock availability probe; it must succeed for the runtime's own commands.
+        var (lines, exit) = RunWithExit("Invoke-BashType '-p' ls");
+        Assert.Equal(new[] { "ls" }, lines);
+        Assert.Equal(0, exit);
+    }
+
+    [Fact]
+    public void Type_DashP_Builtin_PrintsNothingStatusZero()
+    {
+        // bash 5.2: `type -p cd` → no output, status 0; `type -P cd` → no output, status 1.
+        var (lines, exit) = RunWithExit("Invoke-BashType '-p' echo");
+        Assert.Empty(lines);
+        Assert.Equal(0, exit);
+
+        var (big, bigExit) = RunWithExit("Invoke-BashType '-P' echo");
+        Assert.Empty(big);
+        Assert.Equal(1, bigExit);
+    }
+
+    [Fact]
+    public void Type_DashT_Missing_PrintsNothingStatusOne()
+    {
+        var (lines, exit) = RunWithExit("Invoke-BashType '-t' definitely_not_a_real_command_xyz 2>&1");
+        Assert.Empty(lines);
+        Assert.Equal(1, exit);
+    }
+
+    [Fact]
+    public void Type_BashFunction_IsAFunction()
+    {
+        var def = "function psbtype_fn {" + PsBash.Core.Parser.PsBuild.FunctionPrologue + "1"
+            + PsBash.Core.Parser.PsBuild.FunctionEpilogue + "}; ";
+        Assert.Equal(new[] { "function" }, RunLines(def + "Invoke-BashType '-t' psbtype_fn"));
     }
 
     [Fact]
@@ -95,20 +138,12 @@ public class InvokeBashTypeCommandTests : IClassFixture<SharedPwshFixture>
     }
 
     [Fact]
-    public void Type_DashP_KnownVariable_EmitsDeclareLine()
+    public void Type_DashP_DirectCall_IsThePathForm()
     {
-        // -p mode formats a global PowerShell variable as bash declare syntax.
-        var lines = RunLines("$global:myvar = 'hello'; Invoke-BashType -p myvar");
-        Assert.Single(lines);
-        Assert.Equal("declare -- myvar=\"hello\"", lines[0]);
-    }
-
-    [Fact]
-    public void Type_DashP_MissingName_NoSuccessOutput()
-    {
-        // -p on a non-existent variable hits the not-found error branch.
-        var lines = RunLines("Invoke-BashType -p totally_nonexistent_var_zz");
-        Assert.Empty(lines);
+        // `-p` is bash's path form (it used to print a VARIABLE — that is `declare -p`, Invoke-BashDeclare).
+        // A bare direct-call -p binds the P decoy; a missing name prints nothing.
+        Assert.Equal(new[] { "ls" }, RunLines("Invoke-BashType -p ls"));
+        Assert.Empty(RunLines("Invoke-BashType -p totally_nonexistent_cmd_zz"));
     }
 
     [Fact]

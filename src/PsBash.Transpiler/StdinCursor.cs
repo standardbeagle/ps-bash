@@ -20,6 +20,7 @@ namespace PsBash.Core;
 public sealed class StdinCursor
 {
     private readonly IEnumerator<object>? _source;
+    private readonly IStdinRecordSource? _waitable;
     private readonly LinkedList<object> _buffer = new();
     private bool _sourceDone;
 
@@ -38,6 +39,41 @@ public sealed class StdinCursor
     /// <summary>A cursor over <paramref name="source"/>, enumerated one record at a time on demand.</summary>
     public StdinCursor(IEnumerable<object> source) : this((source ?? throw new ArgumentNullException(nameof(source))).GetEnumerator())
     {
+    }
+
+    /// <summary>
+    /// A cursor over a source whose wait for the next record can be CANCELLED (<see cref="TryDequeue"/>), so a
+    /// background reader — the pump feeding a native program's stdin — can be stopped while the source is
+    /// silent without losing or half-taking a record.
+    /// </summary>
+    public StdinCursor(IStdinRecordSource source)
+    {
+        _waitable = source ?? throw new ArgumentNullException(nameof(source));
+    }
+
+    /// <summary>
+    /// True when a wait for the next record can be cancelled (<see cref="TryDequeue"/> honours its token
+    /// while blocked) — a cancellable source, or none left to wait on. An enumerator-backed cursor blocks in
+    /// <c>MoveNext</c> regardless of the token.
+    /// </summary>
+    public bool CanCancelWait => _waitable is not null || _sourceDone || _source is null;
+
+    /// <summary>
+    /// Take the next record, waiting for one until <paramref name="ct"/> is cancelled. False at end of input.
+    /// Cancellation throws <see cref="OperationCanceledException"/> and consumes nothing.
+    /// </summary>
+    public bool TryDequeue(CancellationToken ct, out object? record)
+    {
+        record = null;
+        if (_buffer.First is null)
+        {
+            ct.ThrowIfCancellationRequested();
+            FillOne(ct);
+            if (_buffer.First is null) return false;
+        }
+        record = _buffer.First.Value;
+        _buffer.RemoveFirst();
+        return true;
     }
 
     /// <summary>Number of records that can be read right now: 0 only at end of input, else the buffered count (at least 1).</summary>
@@ -83,11 +119,25 @@ public sealed class StdinCursor
         OnClose = null;
         try { close?.Invoke(); } catch { /* best effort */ }
         try { _source?.Dispose(); } catch { /* best effort */ }
+        try { _waitable?.Dispose(); } catch { /* best effort */ }
     }
 
-    private void FillOne()
+    private void FillOne(CancellationToken ct = default)
     {
-        if (_buffer.Count > 0 || _sourceDone || _source is null) return;
+        if (_buffer.Count > 0 || _sourceDone) return;
+        if (_waitable is not null)
+        {
+            // Cancellation propagates out before anything is taken.
+            if (_waitable.TryReadNext(ct, out var record))
+            {
+                _buffer.AddLast(record ?? "");
+                return;
+            }
+            _sourceDone = true;
+            _waitable.Dispose();
+            return;
+        }
+        if (_source is null) return;
         if (_source.MoveNext())
         {
             _buffer.AddLast(_source.Current);
@@ -96,4 +146,18 @@ public sealed class StdinCursor
         _sourceDone = true;
         _source.Dispose();
     }
+}
+
+/// <summary>
+/// A record source whose wait for the next record honours a <see cref="CancellationToken"/>: the backing of a
+/// <see cref="StdinCursor"/> that a background reader must be able to abandon while the input is silent (the
+/// launcher's forwarded stdin, a lazy producer).
+/// </summary>
+public interface IStdinRecordSource : IDisposable
+{
+    /// <summary>
+    /// Block until the next record (true), end of input (false), or cancellation of <paramref name="ct"/>
+    /// (<see cref="OperationCanceledException"/>, nothing consumed).
+    /// </summary>
+    bool TryReadNext(CancellationToken ct, out object? record);
 }

@@ -145,7 +145,13 @@ CmdletsToExport = @(
     'ConvertTo-BashWords',
     # Pathname expansion of one unquoted glob word (echo *.txt, for f in *, arr=(*)): bash's
     # filename-expansion step, done by the shell. Emitted by the transpiler; not a bash command alias.
-    'ConvertTo-BashGlob'
+    'ConvertTo-BashGlob',
+    # The print forms of declare/typeset (-f / -F / -p). Emitted by the transpiler.
+    'Invoke-BashDeclare',
+    # A native program run with the shell's shared stdin as its real process stdin (an OS pipe a
+    # background pump fills; the unread rest is put back). Emitted by the transpiler around natives.
+    'Enter-BashNativeStdin',
+    'Exit-BashNativeStdin'
 )
 
 VariablesToExport = @()

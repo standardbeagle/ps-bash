@@ -41,7 +41,7 @@ model in [runtime-functions.md](runtime-functions.md) "Raw bytes".
 | Native child argv / env, file names | Cannot carry an invalid byte | The OS passes UTF-16 (Windows) or re-encodes (Unix) |
 | `{ head -n1; cat; } < file` | Prints `1`; bash prints `1 2 3` | GNU `head` seeks a regular file back; ps-bash models a pipe, where the two agree |
 | `cmd \| { head -n1; }` | The compound reads lazily only for a literal `yes`/`seq` producer; other producers finish before the compound reads | PowerShell runs a script block after its upstream completes |
-| Compound stdin and natives | A native program inside a compound that ignores its stdin still consumes the shared queue | No per-fd ownership in an object pipeline |
+| Shared stdin and natives | A native program gets the shared stdin (forwarded launcher stdin or a compound's) as its real process stdin, an OS pipe a pump fills; what it did not read is put back, so `prog; cat` behaves like bash. A function or alias of the same name gets nothing | Natives run under PowerShell, whose `feed \| prog` cannot end before its feed does |
 | Stdin forwarding | Forwarded into `-c` commands; not into piped scripts, script files or the interactive shell | Those already read stdin as the script / keyboard |
 | `tail -f` in a fused pipeline | Never fuses | Fused frames are cut by size; flushing on idle needs a timer thread |
 | `grep -r`, `rg` (internal engine) | Prune `.git`, `node_modules`, `bin`, `obj`, … before descending (`PSBASH_SEARCH_NO_IGNORE=1` disables) | Keeps big trees under the host idle timeout; `rg` approximates gitignore this way |
@@ -71,6 +71,8 @@ model in [runtime-functions.md](runtime-functions.md) "Raw bytes".
 | Command substitution glued into a longer word (`x$(cmd)y`) | Not word-split | Only a bare `$(…)` / `` `…` `` word goes through `ConvertTo-BashWords` |
 | Redirect failure message (`echo > nodir/f`) | `bash: nodir/f: No such file or directory`; bash prints `script: line N: nodir/f: …` | No line tracking at runtime; status and filesystem state match |
 | Env prefix on a pipe stage (`yes \| FOO=1 head -n1`) | The stage collects its input before running, so an unbounded producer does not stream into it | The save/set/restore wrapper is a script block, which starts after its upstream completes |
+| `declare -f fn` | Prints bash's layout (`fn () `, `{ `, body, `}`) but the body is the function's emitted PowerShell | The bash source is not kept once a function is defined |
+| `command -v ls`, `type ls`, `which ls` (any ps-bash command) | The "path" is the name: `ls`, `ls is ls`, `type -t` = `file`; a real program prints its path | The command is the runtime's own implementation, with no file; the name still runs it |
 | Windows drive paths in a glob word | A pattern spelled `/c/Users/*` (with `PSBASH_UNIX_PATHS=1`) or `C:/Users/*` is expanded with forward slashes (`C:/Users/x`), and a drive-letter prefix keeps the form it was typed | `/` is the pattern's only separator (`\` escapes) |
 
 ## Not implemented (refused, exit 2)

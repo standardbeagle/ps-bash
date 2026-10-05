@@ -85,6 +85,7 @@ public sealed class InvokeBashWhichCommand : PSCmdlet
             if (cmds.Count == 0 || cmds[0] == null)
             {
                 FileSystemHelpers.WriteBashError(this, $"which: no {name} in PATH");
+                FileSystemHelpers.SetLastExitCode(this, 1); // bash/GNU which: any miss = status 1
                 continue;
             }
 
@@ -97,9 +98,13 @@ public sealed class InvokeBashWhichCommand : PSCmdlet
                 var definition = pso.Properties["Definition"]?.Value as string;
                 var typeValue = pso.Properties["CommandType"]?.Value;
 
-                var path = !string.IsNullOrEmpty(source)
-                    ? source
-                    : (!string.IsNullOrEmpty(definition) ? definition : name);
+                // A ps-bash command (alias to an Invoke-Bash* cmdlet) has no file: report its bash name, which
+                // still runs it — the cmdlet name is an internal detail (same rule as `command -v` / `type`).
+                var path = definition is not null && definition.StartsWith("Invoke-Bash", StringComparison.Ordinal)
+                    ? name
+                    : !string.IsNullOrEmpty(source)
+                        ? source
+                        : (!string.IsNullOrEmpty(definition) ? definition : name);
                 var type = typeValue?.ToString()?.ToLowerInvariant() ?? "unknown";
 
                 var output = new PSObject();

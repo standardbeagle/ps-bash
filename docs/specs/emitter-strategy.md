@@ -443,10 +443,19 @@ passes its pipeline to `$input` only, so the emitter builds the sharing itself
   there is no file operand (value-taking flags like `head -n 2`, `sort -k 2` are skipped, a lone
   `-` always feeds); `grep sed awk rg jq yq` when the only positional is the pattern/program (or
   `-e`/`-f` supplied it); builtins (`echo printf cd test …`) and file mutators never. A command
-  that is not a ps-bash command nor a builtin is fed only at runtime, when it resolves to an
-  application and the queue is non-empty (`Get-Command -CommandType Application`), so user functions
-  and programs that ignore stdin are not starved. Commands with an env prefix, their own heredoc /
-  `< file`, or a statement-list / RC-7 splat emission are left alone.
+  that is not a ps-bash command nor a builtin is wrapped in `PsBuild.NativeStdinScope`:
+  `Enter-BashNativeStdin NAME` — when NAME resolves to an application (not a function/alias) — makes an
+  OS pipe the PROCESS stdin and pumps the shared stdin into it (`NativeStdinBridge`);
+  `Exit-BashNativeStdin` restores it, cancels the pump and puts the unread bytes back in front. The
+  program starts at once and the command ends when the program does. (The old `if (queue.Count -gt 0)
+  { feed | prog }` form blocked before the program started, so under an open, silent launcher stdin —
+  an agent's shell tool — every native hung.) Commands with an env prefix, their own heredoc /
+  `< file`, or a statement-list / RC-7 splat emission are left alone. `cmd < /dev/null` runs inside
+  `PsBuild.EmptyStdinScope` (an empty queue, dot-sourced) so every reader in it — natives included —
+  sees end of input; the redirect used to be dropped, which meant the LIVE launcher stdin.
+- **Redirects on statement-list builtins.** `cd`, `eval`, `source`/`.`, `read`, `readonly`, `set` emit
+  statements, not one pipeable command; their redirect tail is applied to a dot-sourced block
+  (`PsBuild.WithRedirectTail`: `. { … } 2>$null`) so side effects stay in the caller's scope.
 - **Pipelines inside a scope.** Only the FIRST stage reads the scope; later stages read the pipe
   (`{ grep a | sort; }`). A fused-lane pipeline is not formed inside a scope (the compiled cores
   know no feed).
@@ -456,9 +465,8 @@ passes its pipeline to `$input` only, so the emitter builds the sharing itself
 
 Known divergences (oracle bash 5.2 / GNU coreutils 9.4): `{ head -n1; cat; } < file` prints `1 2 3`
 in bash (GNU head seeks a regular file back) but `1` here — the same as bash when the data comes
-from a PIPE, which is what ps-bash models (`printf '1\n2\n3\n' | { head -n1; cat; }` matches); a
-native program that ignores its stdin still consumes the queue; commands emitted as a statement list
-(env prefix, `& { …splat… }`) never read the scope.
+from a PIPE, which is what ps-bash models (`printf '1\n2\n3\n' | { head -n1; cat; }` matches);
+commands emitted as a statement list (env prefix, `& { …splat… }`) never read the scope.
 
 ### `[[ … =~ … ]]` and `BASH_REMATCH`
 

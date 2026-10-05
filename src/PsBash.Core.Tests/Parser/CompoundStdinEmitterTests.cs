@@ -1,5 +1,6 @@
 using Xunit;
 using PsBash.Core.Parser;
+using PsBash.Core.Transpiler;
 
 namespace PsBash.Core.Tests.Parser;
 
@@ -121,12 +122,106 @@ public class CompoundStdinEmitterTests
     }
 
     [Fact]
-    public void Transpile_NativeInsideCompound_IsFedOnlyWhenItResolvesToAnApplication()
+    public void Transpile_NativeInsideCompound_GetsTheScopeAsItsProcessStdin()
     {
         var ps = T("echo a | { somenativetool -x; }");
 
-        Assert.Contains("-CommandType Application", ps);
-        Assert.Contains("somenativetool", ps);
+        // Enter-BashNativeStdin resolves the name at run time (only an application gets the pipe).
+        Assert.Contains(PsBuild.NativeStdinScope("somenativetool", "somenativetool -x"), ps);
+    }
+
+    [Fact]
+    public void Transpile_NativeInsideCompound_NeverProbesTheStdinBeforeTheProgramStarts()
+    {
+        // REGRESSION (v0.11.0): `if ($global:__BashStdIn.Count -gt 0 …) { feed | prog }` blocked until a record
+        // arrived or stdin ended, so under a launcher whose stdin is open and silent (an agent shell tool) every
+        // native command hung — `git --version` included.
+        var ps = T("echo a | { git --version; }");
+
+        Assert.DoesNotContain("Count -gt 0 -and", ps);
+        Assert.DoesNotContain("| git --version", ps);
+        Assert.Contains("Enter-BashNativeStdin 'git'", ps);
+    }
+
+    // ---- `< /dev/null` --------------------------------------------------------------------------------
+
+    [Theory]
+    [InlineData("read x < /dev/null")]
+    [InlineData("cat < /dev/null")]
+    [InlineData("somenativetool < /dev/null")]
+    [InlineData("eval 'cat' < /dev/null")]
+    public void Transpile_DevNullInput_RunsTheCommandInAnEmptyStdinScope(string bash)
+    {
+        // REGRESSION: `< /dev/null` was DROPPED, so the command read whatever stdin surrounded it — under the
+        // launcher's forwarded stdin, the live pipe (`read x </dev/null` read a line).
+        var ps = T(bash);
+
+        Assert.StartsWith(". { $__psbash_nullin_prev1 = ", ps);
+        Assert.Contains("$global:__BashStdIn = [System.Collections.Generic.Queue[object]]::new()", ps);
+        Assert.EndsWith("finally { $global:__BashStdIn = $__psbash_nullin_prev1 } }", ps);
+    }
+
+    [Fact]
+    public void Transpile_DevNullInputOnANative_HandsItAnEmptyPipe()
+    {
+        var ps = T("somenativetool -x < /dev/null");
+
+        Assert.Contains(PsBuild.NativeStdinScope("somenativetool", "somenativetool -x"), ps);
+    }
+
+    [Fact]
+    public void Transpile_EvalWithDevNullInput_InnerNativeSeesTheEmptyScope()
+    {
+        // The Claude Code Bash-tool prologue shape: `eval '<cmd>' < /dev/null`.
+        var ps = PsEmitter.TranspileWithLauncherStdin("eval 'git status' < /dev/null", TranspileContext.Default)!;
+
+        var scope = ps.IndexOf("Queue[object]]::new()", StringComparison.Ordinal);
+        var native = ps.IndexOf("Enter-BashNativeStdin 'git'", StringComparison.Ordinal);
+        Assert.True(scope >= 0 && native > scope, ps);
+    }
+
+    // ---- redirects on statement-list builtins -------------------------------------------------------------
+
+    [Theory]
+    [InlineData("eval 'echo hi' > out.txt", " | Invoke-BashRedirect -Path out.txt")]
+    [InlineData("eval 'echo hi' 2>/dev/null", " 2>$null")]
+    [InlineData("eval \"echo $x\" > out.txt", " | Invoke-BashRedirect -Path out.txt")]
+    [InlineData("source ./rc 2>/dev/null", " 2>$null")]
+    [InlineData(". ./rc >/dev/null 2>&1", " >$null 2>&1")]
+    [InlineData("cd /tmp >/dev/null", " >$null")]
+    [InlineData("cd nosuch 2>/dev/null", " 2>$null")]
+    [InlineData("set -e 2>/dev/null", " 2>$null")]
+    public void Transpile_StatementListBuiltin_KeepsItsRedirects(string bash, string tail)
+    {
+        // REGRESSION: cd / eval / source / read / readonly / set emit their own statement text and the redirect
+        // tail was silently dropped (`eval 'echo hi' > f` printed hi and created no file).
+        var ps = T(bash);
+
+        Assert.StartsWith(". { ", ps);
+        Assert.Contains(" }" + tail, ps);
+    }
+
+    [Fact]
+    public void Transpile_StatementListBuiltin_WithoutRedirects_IsUnchanged()
+    {
+        Assert.DoesNotContain(". {", T("eval 'echo hi'"));
+        Assert.DoesNotContain(". {", T("cd /tmp"));
+    }
+
+    // ---- declare / typeset print forms ----------------------------------------------------------------
+
+    [Theory]
+    [InlineData("declare -f f >/dev/null 2>&1", "Invoke-BashDeclare '-f' f >$null 2>&1")]
+    [InlineData("typeset -f rg >/dev/null 2>&1", "Invoke-BashDeclare '-f' rg >$null 2>&1")]
+    [InlineData("declare -F", "Invoke-BashDeclare '-F'")]
+    [InlineData("declare -p x", "Invoke-BashDeclare '-p' x")]
+    [InlineData("declare -pf f", "Invoke-BashDeclare '-pf' f")]
+    public void Transpile_DeclarePrintForms_GoToInvokeBashDeclareWithTheirRedirects(string bash, string expected)
+    {
+        // REGRESSION: the print forms were rewritten to `Invoke-BashType <args>` with the redirects dropped;
+        // `type` rejects -f ("bash: type: -f: not found"), and the stock probe
+        // `typeset -f rg >/dev/null 2>&1` printed that on every agent shell call.
+        Assert.Equal(expected, T(bash));
     }
 
     [Theory]

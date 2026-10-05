@@ -80,12 +80,23 @@ public class InvokeBashCommandCommandTests : IClassFixture<SharedPwshFixture>
     }
 
     [Fact]
-    public void Command_DashV_BashAlias_EmitsAliasDefinition()
+    public void Command_DashV_PsBashCommand_EmitsItsBashNameNotTheCmdlet()
     {
-        // `ls` is a psm1 alias for Invoke-BashLs — oracle emits $cmd.Definition.
+        // `ls` is the runtime's own ls (an alias to Invoke-BashLs). bash prints a name it can run
+        // (`$(command -v ls)` must still be ls); the cmdlet name is an internal detail.
         var lines = RunLines("Invoke-BashCommand -v ls");
         Assert.Single(lines);
-        Assert.Equal("Invoke-BashLs", lines[0]);
+        Assert.Equal("ls", lines[0]);
+    }
+
+    [Fact]
+    public void Command_DashV_EveryLineIsNewlineTerminated()
+    {
+        // Regression: the lines were emitted NoTrailingNewline, so `command -v a b` printed "ab" with no
+        // separator and `x=$(command -v a); echo after` glued onto the next output.
+        var output = RunRaw("Invoke-BashCommand -v ls cat");
+        Assert.Equal(2, output.Count);
+        Assert.All(output, o => Assert.NotEqual(true, o.Properties["NoTrailingNewline"]?.Value));
     }
 
     [Fact]
@@ -99,14 +110,13 @@ public class InvokeBashCommandCommandTests : IClassFixture<SharedPwshFixture>
     }
 
     [Fact]
-    public void Command_BigV_BashAlias_EmitsAliasDefinition()
+    public void Command_BigV_PsBashCommand_EmitsItsBashName()
     {
-        // -V is treated identically to -v by the oracle (both set verbose).
-        // The case-insensitive cmdlet binder collapses them onto the same V
-        // switch — preserved parity.
+        // -V is treated identically to -v (both set verbose). The case-insensitive cmdlet binder
+        // collapses them onto the same V switch.
         var lines = RunLines("Invoke-BashCommand -V ls");
         Assert.Single(lines);
-        Assert.Equal("Invoke-BashLs", lines[0]);
+        Assert.Equal("ls", lines[0]);
     }
 
     [Fact]
@@ -124,9 +134,9 @@ public class InvokeBashCommandCommandTests : IClassFixture<SharedPwshFixture>
     {
         // Pester / interactive PowerShell binds -v and -p to the declared decoy switches; they are
         // re-injected ahead of the operands (`-pv` needs the quoted form, the binder eats bare -pv).
-        Assert.Equal("Invoke-BashLs", RunLines("Invoke-BashCommand -v ls")[0]);
-        Assert.Equal("Invoke-BashLs", RunLines("Invoke-BashCommand -p -v ls")[0]);
-        Assert.Equal("Invoke-BashLs", RunLines("Invoke-BashCommand '-pv' ls")[0]);
+        Assert.Equal("ls", RunLines("Invoke-BashCommand -v ls")[0]);
+        Assert.Equal("ls", RunLines("Invoke-BashCommand -p -v ls")[0]);
+        Assert.Equal("ls", RunLines("Invoke-BashCommand '-pv' ls")[0]);
     }
 
     [Fact]
@@ -146,17 +156,26 @@ public class InvokeBashCommandCommandTests : IClassFixture<SharedPwshFixture>
         // sequence.
         var lines = RunLines("Invoke-BashCommand -v ls cat");
         Assert.Equal(2, lines.Length);
-        Assert.Equal("Invoke-BashLs", lines[0]);
-        Assert.Equal("Invoke-BashCat", lines[1]);
+        Assert.Equal("ls", lines[0]);
+        Assert.Equal("cat", lines[1]);
     }
 
     [Fact]
-    public void Command_DashV_FirstMissingSecondPresent_StopsAtFirstMiss()
+    public void Command_DashV_MissingOperand_IsSkippedAndTheRestStillResolve()
     {
-        // The oracle: on miss it RETURNS — no further operands are checked.
-        // Preserved here. Output is empty and exit code is 1.
+        // bash 5.2: `command -v nosuch bash` prints bash's path and exits 0 — a miss prints nothing and
+        // does not stop the scan; the status is 1 only when NOTHING resolved.
         var (lines, exit) = RunAndCaptureExit(
             "Invoke-BashCommand -v missing_xyzzy_zzz ls");
+        Assert.Equal(new[] { "ls" }, lines);
+        Assert.Equal(0, exit);
+    }
+
+    [Fact]
+    public void Command_DashV_AllOperandsMissing_ExitOne()
+    {
+        var (lines, exit) = RunAndCaptureExit(
+            "Invoke-BashCommand -v missing_xyzzy_a missing_xyzzy_b");
         Assert.Empty(lines);
         Assert.Equal(1, exit);
     }
@@ -167,7 +186,7 @@ public class InvokeBashCommandCommandTests : IClassFixture<SharedPwshFixture>
         // The `command` alias (declared in psm1) must resolve to the cmdlet.
         var lines = RunLines("command -v ls");
         Assert.Single(lines);
-        Assert.Equal("Invoke-BashLs", lines[0]);
+        Assert.Equal("ls", lines[0]);
     }
 
     [Fact]
