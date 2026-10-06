@@ -555,6 +555,9 @@ public sealed class IpcWorker : IWorker
         catch (SocketException) { return HostHealthState.Unhealthy; }
         catch (IOException) { return HostHealthState.Unhealthy; }
         catch (TimeoutException) { return HostHealthState.Unhealthy; }
+        // A pipe whose DACL does not admit this token (e.g. a restricted-token sandbox
+        // against an owner-only pipe) — unreachable, not a launcher crash.
+        catch (UnauthorizedAccessException) { return HostHealthState.Unhealthy; }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested) { return HostHealthState.Unhealthy; }
     }
 

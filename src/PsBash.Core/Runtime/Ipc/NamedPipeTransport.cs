@@ -145,14 +145,12 @@ public sealed class NamedPipeTransport : IIpcTransport
     [SupportedOSPlatform("windows")]
     private NamedPipeServerStream CreateWindowsPipeServer()
     {
-        // Owner-only DACL: deny everyone except the current user.
-        var security = new PipeSecurity();
         var currentUser = WindowsIdentity.GetCurrent().User
             ?? throw new InvalidOperationException("Unable to resolve current Windows user SID");
-        security.AddAccessRule(new PipeAccessRule(
-            currentUser,
-            PipeAccessRights.FullControl,
-            AccessControlType.Allow));
+        var restrictingLogonSids = RestrictedToken.IsCurrentProcessRestricted()
+            ? RestrictedToken.CurrentRestrictingLogonSids()
+            : [];
+        var security = BuildPipeSecurity(currentUser, restrictingLogonSids);
 
         // Explicit 64 KB buffers: CreateNamedPipe with size 0 may mean "no kernel
         // buffer" on some Windows builds, causing WriteAsync to block until the
@@ -166,6 +164,29 @@ public sealed class NamedPipeTransport : IIpcTransport
             inBufferSize: 65536,
             outBufferSize: 65536,
             pipeSecurity: security);
+    }
+
+    /// <summary>
+    /// The pipe DACL: the current user, plus the restricting logon SIDs of a restricted
+    /// token. A restricted client must pass a second access check against its restricting
+    /// SIDs, so an owner-only DACL locks a sandboxed launcher out of its own host's pipe
+    /// (see <see cref="RestrictedToken"/>). Nothing else is granted.
+    /// </summary>
+    [SupportedOSPlatform("windows")]
+    internal static PipeSecurity BuildPipeSecurity(
+        SecurityIdentifier currentUser, IReadOnlyList<SecurityIdentifier> restrictingLogonSids)
+    {
+        var security = new PipeSecurity();
+        security.AddAccessRule(new PipeAccessRule(
+            currentUser,
+            PipeAccessRights.FullControl,
+            AccessControlType.Allow));
+        foreach (var logonSid in restrictingLogonSids)
+            security.AddAccessRule(new PipeAccessRule(
+                logonSid,
+                PipeAccessRights.ReadWrite | PipeAccessRights.Synchronize,
+                AccessControlType.Allow));
+        return security;
     }
 
     private void DeletePipeSocketFile()

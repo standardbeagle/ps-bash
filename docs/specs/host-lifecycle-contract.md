@@ -431,6 +431,14 @@ because that would defeat warm-pool reuse (every command would cold-start its ow
 daemon). `Lifetime.PerInvocation` is the dedicated path for process-local
 endpoints (`ResolvePerInvocationEndpoint`).
 
+Scheme choice: `unix` unless `IsUnixSocketSupported()` is false — pre-1803 Windows, a
+socket path over the `sun_path` budget, or a **restricted token** (a sandbox such as
+codex's). A read-only sandbox denies creating the socket file, so `bind` fails with
+WSAEACCES; a pipe needs no filesystem write. A restricted client must also pass a check
+against its restricting SIDs, so the pipe DACL grants the user SID plus the token's
+restricting **logon** SIDs, never Everyone or a capability SID (`RestrictedToken`,
+`NamedPipeTransport.BuildPipeSecurity`).
+
 `IpcTransportFactory.RetireEndpoint()` remains endpoint cleanup only. For `unix`
 it may unlink the socket path after lifecycle validation has decided cleanup is
 allowed. For `pipe` it must remain a no-op for the endpoint, because Windows

@@ -114,17 +114,25 @@ public static class IpcTransportFactory
     internal static Func<int>? ProcessIdOverride { get; set; }
 
 
+    /// <summary>
+    /// True when this process can bind and connect an AF_UNIX endpoint. False on pre-1803
+    /// Windows and under a restricted token (a read-only sandbox such as codex's denies
+    /// creating the socket file; see <see cref="RestrictedToken"/>), so every resolver picks
+    /// the pipe scheme.
+    /// </summary>
     public static bool IsUnixSocketSupported()
     {
         if (UnixSocketSupportedOverride is { } fn) return fn();
-        return !OperatingSystem.IsWindows() || Environment.OSVersion.Version.Build >= 17063;
+        if (!OperatingSystem.IsWindows()) return true;
+        return Environment.OSVersion.Version.Build >= 17063 && !RestrictedToken.IsCurrentProcessRestricted();
     }
 
     /// <summary>
     /// Resolve the endpoint a host should bind / a client should connect to.
     /// Precedence: <paramref name="cliOverride"/> &gt; <c>PSBASH_IPC_ENDPOINT</c>
     /// env var &gt; canonical per-session endpoint. The canonical endpoint is a
-    /// filesystem path on POSIX, named-pipe name on pre-1803 Windows. One daemon per
+    /// filesystem path, or a named-pipe name when <see cref="IsUnixSocketSupported"/> is
+    /// false (pre-1803 Windows, restricted-token sandbox). One daemon per
     /// <c>(user, session)</c> (session = <c>PSBASH_SESSION</c> or session anchor; see
     /// <see cref="ResolveSessionToken"/>), per-session not per-process so warm reuse
     /// within a session is preserved.
