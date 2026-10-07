@@ -36,6 +36,7 @@ public class ProcessLifecycleTests
             UseShellExecute = false,
             CreateNoWindow = true,
         };
+        PsBashTestProcess.ClearInheritedNesting(psi);
         using var process = Process.Start(psi)!;
         try
         {
@@ -77,6 +78,7 @@ public class ProcessLifecycleTests
         };
         psi.Environment[IpcTransportFactory.EndpointEnvVar] = PsBashTestProcess.CreateEndpoint();
         psi.Environment["PSBASH_HOST_IDLE_SECS"] = "1";
+        PsBashTestProcess.ClearInheritedNesting(psi);
         using var process = Process.Start(psi)!;
         int ourPid = process.Id;
         try
@@ -155,6 +157,7 @@ public class ProcessLifecycleTests
         // Under the default shared daemon the host kept running Start-Sleep and then
         // idled for 600 s after the launcher this test is about had exited.
         psi.Environment["PSBASH_PER_INVOCATION"] = "1";
+        PsBashTestProcess.ClearInheritedNesting(psi);
         using var parent = Process.Start(psi)!;
         int? psBashPid = null;
         try
@@ -261,6 +264,8 @@ public class ProcessLifecycleTests
         psi.Environment[IpcTransportFactory.EndpointEnvVar] = endpoint;
         psi.Environment["PSBASH_HOST_IDLE_SECS"] = "2";
         psi.Environment["PSBASH_PER_INVOCATION"] = "0";
+        // The sidecar below is named after THIS endpoint, which only a top-level launcher binds.
+        PsBashTestProcess.ClearInheritedNesting(psi);
 
         var colon = endpoint.IndexOf(':');
         var scheme = endpoint[..colon];
@@ -347,6 +352,7 @@ public class ProcessLifecycleTests
                 psi.Environment["PSBASH_IPC_ENDPOINT"] = null;
                 psi.Environment["PSBASH_PER_INVOCATION"] = "0";
                 psi.Environment["PSBASH_HOST_IDLE_SECS"] = "30";
+                PsBashTestProcess.ClearInheritedNesting(psi);
 
                 using var child = Process.Start(psi)!;
                 using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(40));

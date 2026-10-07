@@ -32,6 +32,8 @@ internal static class PsBashTestProcess
             foreach (var (key, value) in env)
                 psi.Environment[key] = value;
         }
+        if (env is null || !(env.ContainsKey(IpcTransportFactory.InsideHostEnvVar) || env.ContainsKey(IpcTransportFactory.NestDepthEnvVar)))
+            ClearInheritedNesting(psi);
 
         // Host lifetime. The launcher default is a shared daemon that idles for 600 s,
         // so every test endpoint left a dev-build host alive after the run, holding
@@ -64,6 +66,18 @@ internal static class PsBashTestProcess
     {
         if (env is null || !env.ContainsKey(key))
             psi.Environment[key] = value;
+    }
+
+    /// <summary>
+    /// Start the launcher top-level, as on CI. A suite run from inside a ps-bash command (tman
+    /// from the agent's Bash tool) inherits PSBASH_INSIDE_HOST / PSBASH_NEST_DEPTH, and a nested
+    /// launcher deliberately serves from <c>&lt;endpoint&gt;-nested&lt;depth&gt;</c> instead — so a test that
+    /// pins an endpoint and reads its host sidecar looked for a file that never existed.
+    /// </summary>
+    public static void ClearInheritedNesting(ProcessStartInfo psi)
+    {
+        psi.Environment[IpcTransportFactory.InsideHostEnvVar] = null;
+        psi.Environment[IpcTransportFactory.NestDepthEnvVar] = null;
     }
 
     public static string CreateEndpoint()
