@@ -42,12 +42,21 @@ public sealed class BashArithmeticParser
     private ArithmeticExpr ParseComma()
     {
         var value = ParseAssignment();
-        while (Accept(T.Comma)) value = new ArithmeticExpr.Binary(ArithmeticBinaryOp.Comma, value, ParseAssignment());
+        int count = 0;
+        while (Accept(T.Comma))
+        {
+            NestingGuard.CheckArithmeticBreadth(++count, NestingGuard.MaxChainLength, "comma list");
+            value = new ArithmeticExpr.Binary(ArithmeticBinaryOp.Comma, value, ParseAssignment());
+        }
         return value;
     }
 
+    // NestingGuard bounds the three self-recursions — assignment chains (a=b=…), ** chains, and
+    // ParseUnary, which every paren group (( … )) and unary chain (- - … x) passes through — so no
+    // expression can overflow the stack (at transpile time or in the runtime arithmetic evaluator).
     private ArithmeticExpr ParseAssignment()
     {
+        using var nesting = NestingGuard.EnterArithmetic();
         if (Current.Kind == T.Ident && TryAssignmentOp(_tokens[_position + 1].Kind, out var op))
         {
             string name = Current.Text!;
@@ -82,10 +91,13 @@ public sealed class BashArithmeticParser
     private ArithmeticExpr ParseLeft(Func<ArithmeticExpr> operand, params (T Token, ArithmeticBinaryOp Op)[] operators)
     {
         var value = operand();
+        int count = 0;
         while (true)
         {
             int index = Array.FindIndex(operators, pair => pair.Token == Current.Kind);
             if (index < 0) return value;
+            // A flat run (1+1+…) becomes a left-deep tree, both here and in the PowerShell it emits.
+            NestingGuard.CheckArithmeticBreadth(++count, NestingGuard.MaxChainLength, "operator chain");
             _position++;
             value = new ArithmeticExpr.Binary(operators[index].Op, value, operand());
         }
@@ -93,6 +105,7 @@ public sealed class BashArithmeticParser
 
     private ArithmeticExpr ParsePower()
     {
+        using var nesting = NestingGuard.EnterArithmetic();
         var value = ParseUnary();
         return Accept(T.StarStar)
             ? new ArithmeticExpr.Binary(ArithmeticBinaryOp.Power, value, ParsePower())
@@ -101,6 +114,7 @@ public sealed class BashArithmeticParser
 
     private ArithmeticExpr ParseUnary()
     {
+        using var nesting = NestingGuard.EnterArithmetic();
         if (Accept(T.Plus)) return new ArithmeticExpr.Unary(ArithmeticUnaryOp.Plus, ParseUnary());
         if (Accept(T.Minus)) return new ArithmeticExpr.Unary(ArithmeticUnaryOp.Negate, ParseUnary());
         if (Accept(T.Bang)) return new ArithmeticExpr.Unary(ArithmeticUnaryOp.LogicalNot, ParseUnary());

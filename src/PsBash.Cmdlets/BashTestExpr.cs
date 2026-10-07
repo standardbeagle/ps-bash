@@ -159,14 +159,28 @@ internal sealed class BashTestExpr
         return Or();
     }
 
+    /// <summary>
+    /// One recursion level of the evaluator (parenthesised groups, `!`). This runs at RUN time on
+    /// the host's pipeline thread, so a deep `[ ( ( … ) ) ]` or a long `-o` chain overflowed the stack and
+    /// killed the shared host; NestingGuard turns it into the test command's own syntax error.
+    /// </summary>
+    private static PsBash.Core.Parser.NestingGuard.Scope Nest()
+    {
+        try { return PsBash.Core.Parser.NestingGuard.Enter(); }
+        catch (PsBash.Core.Parser.ParseException) { throw new TestSyntaxException("expression too deeply nested"); }
+    }
+
+    // -o / -a chains are LOOPS, not recursion (they recursed once per operator, so a long chain
+    // overflowed the host's stack). || and && are associative and nothing short-circuits — every
+    // operand is still parsed — so the value is unchanged.
     private bool Or()
     {
         bool value = And();
-        if (_pos < _a.Length && IsWord(_a[_pos], "-o"))
+        while (_pos < _a.Length && IsWord(_a[_pos], "-o"))
         {
             Advance(false);
-            bool v2 = Or(); // no short-circuit: the rest must still parse
-            return value || v2;
+            bool v2 = And(); // no short-circuit: the rest must still parse
+            value = value || v2;
         }
         return value;
     }
@@ -174,17 +188,18 @@ internal sealed class BashTestExpr
     private bool And()
     {
         bool value = Term();
-        if (_pos < _a.Length && IsWord(_a[_pos], "-a"))
+        while (_pos < _a.Length && IsWord(_a[_pos], "-a"))
         {
             Advance(false);
-            bool v2 = And();
-            return value && v2;
+            bool v2 = Term();
+            value = value && v2;
         }
         return value;
     }
 
     private bool Term()
     {
+        using var nesting = Nest();
         if (_pos >= _a.Length) throw new TestSyntaxException("argument expected");
 
         if (IsWord(_a[_pos], "!"))

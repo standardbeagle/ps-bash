@@ -66,6 +66,28 @@ public static class BashTranspiler
     /// <returns>The equivalent PowerShell command string.</returns>
     /// <exception cref="ParseException">Thrown when the bash input cannot be parsed.</exception>
     public static string Transpile(string bashCommand, TranspileContext context)
+        => Guarded(() => TranspileCore(bashCommand, context));
+
+    /// <summary>
+    /// Every public entry runs here. The lexer/parser/emitter recursion is bounded by
+    /// <see cref="NestingGuard"/>, so no input can overflow the stack (the transpiler runs inside the
+    /// shared host for eval/source, where an overflow killed the daemon). Inline on the caller's thread;
+    /// if that thread's stack is too small for an input the depth cap still accepts, retried once on a
+    /// large-stack worker, carrying the emitter's thread-affine test seam across the hop.
+    /// </summary>
+    private static T Guarded<T>(Func<T> work)
+    {
+        var fusion = PsEmitter.FusionEnabledOverride;
+        return NestingGuard.WithStackFallback(() =>
+        {
+            var prior = PsEmitter.FusionEnabledOverride;
+            PsEmitter.FusionEnabledOverride = fusion;
+            try { return work(); }
+            finally { PsEmitter.FusionEnabledOverride = prior; }
+        });
+    }
+
+    private static string TranspileCore(string bashCommand, TranspileContext context)
     {
         bool debug = IsDebug;
         try
@@ -93,13 +115,13 @@ public static class BashTranspiler
     /// should use <see cref="Transpile(string)"/>, whose text is unchanged.
     /// </summary>
     /// <exception cref="ParseException">Thrown when the bash input cannot be parsed.</exception>
-    public static string? TranspileWithLauncherStdin(string bashCommand)
+    public static string? TranspileWithLauncherStdin(string bashCommand) => Guarded(() =>
     {
         var emitted = PsEmitter.TranspileWithLauncherStdin(bashCommand, TranspileContext.Default);
         if (emitted is null || !ReadsSharedStdin(emitted))
             return null;
         return WrapWithTrapEpilogue(bashCommand, emitted);
-    }
+    });
 
     /// <summary>
     /// True when emitted PowerShell can read the shared stdin: a command was fed from the cursor variable, or a
@@ -132,6 +154,9 @@ public static class BashTranspiler
     /// covered by the next statement's mapping.
     /// </remarks>
     public static TranspileResult TranspileWithMap(string bashCommand, TranspileContext context)
+        => Guarded(() => TranspileWithMapCore(bashCommand, context));
+
+    private static TranspileResult TranspileWithMapCore(string bashCommand, TranspileContext context)
     {
         bool debug = IsDebug;
         try

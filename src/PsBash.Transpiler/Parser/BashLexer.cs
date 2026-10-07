@@ -774,6 +774,9 @@ public static class BashLexer
     /// </summary>
     internal static int ScanBalancedParens(string input, int pos, int depth)
     {
+        // Recursion: $( → here → nested $( / "…$(…)…" → here. Bounded (NestingGuard) so input can
+        // never overflow the stack.
+        using var nesting = NestingGuard.Enter();
         int len = input.Length;
         // Case-arm pattern terminators introduce UNMATCHED ')' (e.g. `case $y in a) cmd;; esac`).
         // A naive paren count closes the region early at the first pattern ')'. Track the paren

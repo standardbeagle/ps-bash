@@ -381,7 +381,9 @@ public static class PsEmitter
     internal static bool IsFusionDisabledByEnvValue(string? value)
         => FusedLane.IsFusionDisabledByEnvValue(value);
 
-    public static string Emit(Command cmd) => cmd switch
+    // StackGuarded: every command-level recursion of the emitter passes here; the stack probe keeps a
+    // deep (but depth-cap-accepted) AST from overflowing a small caller stack (NestingGuard).
+    public static string Emit(Command cmd) => StackGuarded(cmd) switch
     {
         Command.If ifCmd => EmitCompoundBody(ifCmd.Redirects, () => EmitIf(ifCmd)),
         Command.BoolExpr boolExpr => EmitBoolExpr(boolExpr),
@@ -402,6 +404,12 @@ public static class PsEmitter
         Command.CommandList list => EmitCommandList(list),
         _ => throw new NotSupportedException($"Unknown command type: {cmd.GetType().Name}"),
     };
+
+    private static T StackGuarded<T>(T node)
+    {
+        NestingGuard.EnsureStack();
+        return node;
+    }
 
     /// <summary>
     /// Parse bash input and emit equivalent PowerShell using the
@@ -4105,6 +4113,7 @@ public static class PsEmitter
                 List<string> segment = part is WordPart.BracedTuple or WordPart.BracedRange
                     ? ExpandBrace(part)
                     : new List<string> { EmitWordPart(part) };
+                CheckBraceWords((long)combos.Count * segment.Count); // bound the product before building it
                 var next = new List<string>(combos.Count * segment.Count);
                 foreach (string head in combos)
                     foreach (string s in segment)
@@ -4165,10 +4174,15 @@ public static class PsEmitter
             return new List<string>(tuple.Items);
 
         var range = (WordPart.BracedRange)part;
-        var items = new List<string>();
-        int step = range.Step != 0 ? Math.Abs(range.Step) * (range.Start <= range.End ? 1 : -1)
-                                   : (range.Start <= range.End ? 1 : -1);
-        for (int v = range.Start;
+        // long arithmetic: with an int counter `{2147483600..2147483647}` overflowed `v += step`
+        // past End and looped forever, allocating until the process died. Counted (and bounded,
+        // see MaxBraceWords) BEFORE anything is materialized.
+        long step = range.Step != 0 ? Math.Abs((long)range.Step) * (range.Start <= range.End ? 1 : -1)
+                                    : (range.Start <= range.End ? 1 : -1);
+        long count = (Math.Abs((long)range.End - range.Start) / Math.Abs(step)) + 1;
+        CheckBraceWords(count);
+        var items = new List<string>((int)count);
+        for (long v = range.Start;
              step > 0 ? v <= range.End : v >= range.End;
              v += step)
         {
@@ -4178,6 +4192,21 @@ public static class PsEmitter
                 items.Add(v.ToString());
         }
         return items;
+    }
+
+    /// <summary>
+    /// Most words one brace-expanded word may produce. Expansion happens at TRANSPILE time — in the
+    /// launcher, or inside the shared host for eval/source — so an unbounded product
+    /// (<c>{a,b}</c>×30 = 2^30 words) exhausted memory and killed the process. Past the cap the word is
+    /// a clean parse error (bash would grind through it until malloc fails).
+    /// </summary>
+    internal const long MaxBraceWords = 1_000_000;
+
+    private static void CheckBraceWords(long count)
+    {
+        if (count > MaxBraceWords)
+            throw new ParseException(
+                $"brace expansion too large ({count} words; the limit is {MaxBraceWords})", 1, 1, "brace");
     }
 
     private static string FormatBraceArray(List<string> items)
@@ -5214,6 +5243,7 @@ public static class PsEmitter
 
     private static string EmitBracedVar(WordPart.BracedVarSub bvs, bool inDoubleQuote = false)
     {
+        NestingGuard.EnsureStack(); // ${x:-${x:-…}} recurses here without passing Emit(Command)
         if (bvs.Suffix is null)
             return EmitSimpleVar(bvs.Name);
 

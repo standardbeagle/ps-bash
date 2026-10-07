@@ -367,6 +367,8 @@ public sealed partial class BashParser
 
     private static int ParseBracedVar(string raw, int pos, ImmutableArray<WordPart>.Builder parts)
     {
+        // ${x:-${x:-…}} recurses through the argument word: bounded (NestingGuard).
+        using var nesting = NestingGuard.Enter();
         pos += 2; // skip ${
         int len = raw.Length;
 

@@ -261,6 +261,7 @@ public sealed partial class BashParser
         {
             var opToken = Advance();
             ops.Add(opToken.Value);
+            NestingGuard.CheckBreadth(ops.Count, NestingGuard.MaxChainLength, "&&/|| list");
             // In bash, a newline after && or || is a line continuation.
             SkipNewlines();
             commands.Add(RequireCommand(ParsePipeline, $"after '{opToken.Value}'", "ParseAndOr"));
@@ -301,6 +302,7 @@ public sealed partial class BashParser
             Advance(); // consume | or |&
 
             ops.Add(isPipeAmp ? "|&" : "|");
+            NestingGuard.CheckBreadth(ops.Count + 1, NestingGuard.MaxPipelineStages, "pipeline");
 
             // In bash, a newline after | is a line continuation — skip newlines
             // before reading the next pipeline command.
@@ -314,6 +316,9 @@ public sealed partial class BashParser
 
     private Command ParseCompoundOrSimple()
     {
+        // Every compound nesting (if/while/for/case/(…)/{…}, and command-sub bodies, which re-enter
+        // the parser) passes through here once per level. Bounded so input cannot overflow the stack.
+        using var nesting = NestingGuard.Enter();
         if (Peek().Kind == BashTokenKind.Word && Peek().Value == "if")
             return ParseIf();
 
@@ -448,6 +453,9 @@ public sealed partial class BashParser
             }
         }
 
+        // Each -o/-a/&&/|| costs about two words; bound the expression before the emitter lowers it to
+        // a PowerShell -or/-and chain (see NestingGuard.MaxChainLength).
+        NestingGuard.CheckBreadth(inner.Count, 2 * NestingGuard.MaxChainLength, "test expression");
         return new Command.BoolExpr(inner.ToImmutable(), extended);
     }
 
