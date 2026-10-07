@@ -38,6 +38,7 @@ Tests: `*.Tests`, `Differential.Tests` (bash oracle), `Canary.Tests`, `Escalatio
 - **AI assist**: `Shell/CommandAssist*.cs`. **z/zi**: `Shell/SqliteFrecencyStore.cs`.
 - **Compact output**: `Runtime/Compaction/OutputCompactor.cs`.
 - **Host startup / autoload**: `SdkRunspace.cs` + `SdkRunspaceSetup.ps1`.
+- **Host must survive input** (recursion bound, host log, stuck-command poison): `Parser/NestingGuard.cs` (every recursive descent enters it), `Host/Server/HostLog.cs`, `Host/Runtime/StuckCommandWatchdog.cs`. Spec: `host-lifecycle-contract.md` §No input may take the host down.
 - **Daemon / IPC / pool / nesting / spawn lock**: `IpcWorker.cs`, `Ipc/*` (`WindowsHostSpawn.cs` = no handle inheritance, `HostSpawnLock.cs`), `WorkerPool.cs`. Spec: `host-lifecycle-contract.md`.
 - **Bytes vs text**: `Transpiler/RawBytes.cs` at every text↔bytes boundary — never `Encoding.UTF8` on data; streams `Cmdlets/ByteRecordStreams.cs`.
 - **Embedded DLL extraction**: `ModuleExtractor.cs` (list = `EmbedCmdletsDll` in `PsBash.Core.csproj`).

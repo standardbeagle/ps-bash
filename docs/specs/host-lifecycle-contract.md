@@ -456,3 +456,41 @@ the shared `Daemon` host and `PSBASH_PER_INVOCATION=1` alike — it is host beha
 of lifetime. Coverage: `PsBash.Host.Tests/Runtime/SdkWorkerParseErrorTests` (worker level) and
 `PsBash.Shell.Tests/ProgramEndToEndTests.UnparseableScript_*` (launcher, -c / -s × daemon /
 per-invocation).
+
+## No input may take the host down
+
+The daemon serves every command of a session under one process-wide exec gate (env vars and cwd are
+process-global), so one hostile command used to cost every session: a stack overflow killed the
+process, and a command that could not be stopped held the gate forever. The rules:
+
+- **Recursion is bounded.** Every recursive scanner/parser/evaluator cycle enters `NestingGuard`
+  (lexer `ScanBalancedParens`, `BashParser.ParseCompoundOrSimple`, `ParseBracedVar`, the arithmetic
+  parser, the `test` evaluator). Past 1000 levels, or near the end of the thread's stack, it throws a
+  normal parse error. The emitter's two recursion entries (`Emit(Command)`, `EmitBracedVar`) probe the
+  stack too. Transpiles run inline; one that runs out of stack (not the depth cap) is retried on a
+  large-stack worker (`NestingGuard.WithStackFallback`) — inline, because a thread hop costs
+  milliseconds on an STA caller. A new recursive descent MUST enter the guard.
+- **Transpile-time expansion is bounded.** Brace expansion beyond 1,000,000 words is a parse error.
+- **Regex matches time out.** `HostRegexTimeout` sets the process default (15 s) before any `Regex`
+  exists; a managed match cannot be stopped any other way.
+- **A cancelled command that will not stop poisons the host.** `StuckCommandWatchdog` (daemon only):
+  20 s after a command's cancellation fired, the host logs the reason and exits; launchers respawn.
+- **`kill $$` ends the command, not the host.** `$$` is the host's pid; the kill cmdlet applies bash's
+  outcome (the script dies of the signal, status 128+N) to the current command.
+- **Every accepted connection is answered.** A failure escaping `Connection.HandleAsync` is caught
+  while the stream is still open (`HostServer.TryAnswerFailureAsync`: stderr frame + EXIT 125, logged
+  with type and top frame); a request that never arrives or is malformed gets EXIT 2. Only a client
+  that is already gone gets no frame. (A late catch here was "Response stream closed before EXIT
+  sentinel" under load.)
+- **Pipe instances never cap below connections.** `NamedPipeTransport` allows the OS maximum; the
+  accept loop backs off exponentially and logs once per failure streak.- **The launcher never dumps a stack trace.** Every execute path (`-c`, `.sh`, `.ps1`) goes through
+  `HostFailureGuard`: timeout → 124, host failure → one `ps-bash:` line + 125.
+- **Every failure is attributable.** `~/.psbash/host.log` (`HostLog`; `PSBASH_HOST_LOG` overrides;
+  rotated at 4 MB) prefixes each line with `pid=`, `ep=`, `v=`; each host logs `start` and
+  `exit code=N reason=…` (idle timeout, launcher exited, client shutdown request, console signal,
+  unhandled exception, or `none recorded` for an Environment.Exit outside the host / a signal). A
+  start line with no exit line means an uncatchable death (stack overflow, FailFast, kill). A reset
+  after STARTED tells the launcher user whether the host process exited (with its code) or a live
+  host dropped the connection (`IpcWorker.DescribeStartedReset`).
+- **Not covered:** PowerShell code a command runs in-process (`Invoke-Expression`, .NET calls) can
+  always end the host; only a process per command could isolate it.

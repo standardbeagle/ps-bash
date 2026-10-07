@@ -50,6 +50,11 @@ model in [runtime-functions.md](runtime-functions.md) "Raw bytes".
 | `--sort` tuning (`sort -S -T --parallel …`) | Accepted and ignored | They change how GNU sorts, not what it prints; nothing spills |
 | `cp --sparse`, `--reflink=auto` | Accepted; a normal copy | No sparse/reflink control from .NET |
 | Exit status 2 | Always "ps-bash refuses this real option" | Lets scripts tell "unsupported" from "you typed it wrong" |
+| Nesting depth | More than 1000 levels of `$( )`, `${x:-…}`, compound commands (`if`/`while`/`( )`/`{ }`), or ~333 of arithmetic / `test` parentheses is a parse error (`nesting too deep`); bash recurses until it runs out of stack | The transpiler and evaluators run inside the shared host; a .NET stack overflow cannot be caught and killed every session on it (`NestingGuard`) |
+| Brace expansion size | A word expanding to more than 1,000,000 words (`{a,b}`×30, `{1..2000000}`) is a parse error | Expansion happens at transpile time in the launcher or host; the full product exhausted memory |
+| Regex match time | One regex match running longer than 15 s fails the command (`PSBASH_REGEX_TIMEOUT_SECS`, `0` = off); GNU tools never backtrack | .NET's engine backtracks (`(a+)+$` is exponential) and a running match cannot be stopped, so it held the host's exec gate forever |
+| A command that cannot be stopped | If a command whose launcher left has not stopped 20 s later (`PSBASH_STUCK_GRACE_SECS`), the shared host logs why and exits; launchers then start a fresh one | Commands share one exec gate; a stuck one would otherwise hang every later command on the host |
+| In-process PowerShell | PowerShell code reached from a command (`Invoke-Expression '[Environment]::Exit(3)'`) runs IN the host and can end it; the host log records the exit as `reason=none recorded` | It is code execution in the host process; only a process per command could isolate it |
 
 ## Deliberate choices
 
