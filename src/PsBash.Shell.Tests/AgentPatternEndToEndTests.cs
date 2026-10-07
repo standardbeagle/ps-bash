@@ -58,6 +58,70 @@ public class AgentPatternEndToEndTests
     }
 
     [SkippableFact]
+    public async Task FailedRedirect_InsideStdinScopedEval_FailsOnlyThatCommand()
+    {
+        // bash oracle: `eval 'echo hi > /nodir/x; echo "rc=$?"' < /dev/null; echo tail` prints
+        // the error, then rc=1 and tail. The Claude Code Bash tool wraps every command exactly so
+        // (`eval '…' < /dev/null`): the stdin scope emits a `try { }`, and Invoke-BashRedirect's
+        // terminating error aborted the rest of the block — every later statement vanished.
+        var missing = "/psb_nodir_" + Guid.NewGuid().ToString("N")[..8] + "/x";
+        var (exitCode, stdout, stderr) = await RunShellAsync(
+            "-c",
+            $"eval 'echo hi > {missing}; echo \"rc=$?\"' < /dev/null; {{ echo a; }} > {missing}; echo \"grp rc=$?\"; echo tail");
+
+        Assert.Contains("No such file or directory", stderr);
+        Assert.Equal(new[] { "rc=1", "grp rc=1", "tail" },
+            stdout.Replace("\r", "").TrimEnd('\n').Split('\n'));
+        Assert.Equal(0, exitCode);
+    }
+
+    [SkippableFact]
+    public async Task FailedRedirect_UnderSetE_StillStopsTheScript()
+    {
+        // bash oracle: `set -e; echo hi > /nodir/x; echo after` prints only the error, exit 1.
+        var missing = "/psb_nodir_" + Guid.NewGuid().ToString("N")[..8] + "/x";
+        var (exitCode, stdout, stderr) = await RunShellAsync(
+            "-c", $"set -e; echo hi > {missing}; echo after");
+
+        Assert.Contains("No such file or directory", stderr);
+        Assert.DoesNotContain("after", stdout);
+        Assert.Equal(1, exitCode);
+    }
+
+    [SkippableFact]
+    public async Task ExpandedUnixDriveRedirectTargets_WithUnixPaths_WriteTheFiles()
+    {
+        // With PSBASH_UNIX_PATHS=1 a LITERAL `> /c/...` target was rewritten, but one built by
+        // expansion (`d=/c/...; echo hi > $d/f`) was not: "No such file or directory".
+        Skip.IfNot(OperatingSystem.IsWindows(), "drive-letter paths are Windows-only");
+        var tempDir = Path.Combine(Path.GetTempPath(), "ps-bash-unixredir-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(tempDir);
+        var full = Path.GetFullPath(tempDir);
+        var unix = "/" + char.ToLowerInvariant(full[0]) + full[2..].Replace('\\', '/');
+        try
+        {
+            var (exitCode, stdout, stderr) = await RunShellAsync(
+                ["-c", $"d={unix}; echo o > $d/o; echo a >> \"$d/o\"; ls psb_nosuch 2>$d/e; "
+                     + "echo b &> $d/b; cat < $d/o; echo \"rc=$?\""],
+                timeout: null,
+                env: new Dictionary<string, string?> { ["PSBASH_UNIX_PATHS"] = "1" });
+
+            Assert.Equal("", stderr.Trim());
+            Assert.Equal(new[] { "o", "a", "rc=0" }, stdout.Replace("\r", "").TrimEnd('\n').Split('\n'));
+            Assert.Equal(0, exitCode);
+            Assert.Equal("o\na\n", File.ReadAllText(Path.Combine(tempDir, "o")));
+            Assert.Contains("psb_nosuch", File.ReadAllText(Path.Combine(tempDir, "e")));
+            // `&>` is a native PowerShell redirect, which writes CRLF (a separate divergence from
+            // bash's "b\n"); this test pins only that the file lands at the mapped drive path.
+            Assert.Equal("b", File.ReadAllText(Path.Combine(tempDir, "b")).TrimEnd('\r', '\n'));
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, recursive: true); } catch { }
+        }
+    }
+
+    [SkippableFact]
     public async Task TmpWordWithQuotedPart_NamesTheUnquotedFile()
     {
         // bash oracle: `echo c > /tmp/psb_'s p'` writes the file `psb_s p` (the quotes are

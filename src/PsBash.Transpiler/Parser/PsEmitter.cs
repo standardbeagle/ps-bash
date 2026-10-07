@@ -2892,6 +2892,12 @@ public static class PsEmitter
     private static string EmitRedirect(Redirect r)
     {
         var target = TransformRedirectTarget(EmitArgWord(r.Target));
+        // An expanded file target (`2> $dir/f`, dir=/c/Users/...) is only known at run time,
+        // so the literal `/c/…` rewrite above cannot see it: map it when it is evaluated.
+        // fd-dup/close ops (`>&`, `<&`) take an fd number, not a path — left alone.
+        if (UnixPathTranslationEnabled && r.Op is not (">&" or "<&")
+            && TryGetStaticArgValue(r.Target) is null)
+            target = PsBuild.RuntimeWindowsPath(target);
 
         return r.Op switch
         {

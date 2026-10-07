@@ -251,6 +251,53 @@ public class BashTranspilerTests
         finally { Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", prior); }
     }
 
+    // Regression: an EXPANDED redirect target (`2> $d/e`, d=/c/Users/...) was emitted as a raw
+    // PowerShell redirect to `$env:d/e`, resolved against the current drive (`C:\c\Users\...`):
+    // "No such file or directory". Only a literal `/c/…` word was rewritten. Now the target is
+    // mapped at run time; a literal target keeps the static rewrite.
+    [Theory]
+    [InlineData("ls x 2>$d/e", "2>")]
+    [InlineData("ls x 2>>\"$d/e\"", "2>>")]
+    [InlineData("echo hi &> $d/e", ">")]
+    public void ExpandedRedirectTarget_MappedAtRuntime_WhenUnixPathsOn(string bash, string op)
+    {
+        var prior = Environment.GetEnvironmentVariable("PSBASH_UNIX_PATHS");
+        Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", "1");
+        try
+        {
+            var result = BashTranspiler.Transpile(bash);
+            Assert.Contains(op + "$(& { [PsBash.Core.WindowsPath]::Normalize([string]$args[0]) } ", result);
+        }
+        finally { Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", prior); }
+    }
+
+    [Fact]
+    public void ExpandedRedirectTarget_LeftRaw_WhenUnixPathsOff()
+    {
+        var prior = Environment.GetEnvironmentVariable("PSBASH_UNIX_PATHS");
+        Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", "0");
+        try
+        {
+            var result = BashTranspiler.Transpile("ls x 2>$d/e");
+            Assert.DoesNotContain("WindowsPath", result);
+        }
+        finally { Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", prior); }
+    }
+
+    [Fact]
+    public void LiteralStderrRedirectTarget_StaticRewriteOnly_WhenUnixPathsOn()
+    {
+        var prior = Environment.GetEnvironmentVariable("PSBASH_UNIX_PATHS");
+        Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", "1");
+        try
+        {
+            var result = BashTranspiler.Transpile("ls x 2>/c/x/e");
+            Assert.Contains("2>C:\\x\\e", result);
+            Assert.DoesNotContain("WindowsPath", result);
+        }
+        finally { Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", prior); }
+    }
+
     // Regression: MSYS drive paths were translated only in redirect targets, not
     // in plain command operands. `cat /c/Users/andyb/foo` passed `/c/Users/...`
     // through verbatim; the runtime resolved it against the current drive and got

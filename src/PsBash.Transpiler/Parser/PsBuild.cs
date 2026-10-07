@@ -50,6 +50,16 @@ public static class PsBuild
         => rest.Contains('"')
             ? "$env:TEMP\\" + rest
             : "\"" + TempDirExpr + "/" + rest + "\"";
+
+    /// <summary>
+    /// A path word whose value is only known at run time (<c>2&gt; $dir/f</c>), mapped through
+    /// <c>WindowsPath.Normalize</c> (<c>/c/x</c> → <c>C:\x</c>) when it is evaluated — the
+    /// run-time twin of the emitter's literal <c>/c/…</c> rewrite. <paramref name="argWord"/> is
+    /// emitted ARGUMENT-mode text (<c>$env:d/f</c>, <c>"$env:d/f"</c>), so it is passed as an
+    /// argument to a script block, never spliced into an expression (where <c>/</c> divides).
+    /// </summary>
+    public static string RuntimeWindowsPath(string argWord)
+        => "$(& { [PsBash.Core.WindowsPath]::Normalize([string]$args[0]) } " + argWord + ")";
     // ─────────────────────────────── Quoting / escaping ───────────────────────────────
 
     /// <summary>The chars that must be escaped inside a PowerShell double-quoted string.</summary>

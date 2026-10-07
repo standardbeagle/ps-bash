@@ -10,6 +10,16 @@ namespace PsBash.Core.Tests.Parser;
 /// </summary>
 public class PsBuildTests
 {
+    // ─────────────── RuntimeWindowsPath ───────────────
+
+    [Fact]
+    public void RuntimeWindowsPath_PassesWordAsScriptBlockArgument()
+        // The word stays in ARGUMENT mode after the script block: spliced into the method call
+        // (`Normalize($env:d/e)`) the `/` would divide.
+        => Assert.Equal(
+            "$(& { [PsBash.Core.WindowsPath]::Normalize([string]$args[0]) } $env:d/e)",
+            PsBuild.RuntimeWindowsPath("$env:d/e"));
+
     // ─────────────── SingleQuote ───────────────
 
     [Fact]

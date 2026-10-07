@@ -98,4 +98,33 @@ public class RedirectStreamingTests : IClassFixture<SharedPwshFixture>, IDisposa
         Assert.NotEmpty(errors);
         Assert.False(File.Exists(f));
     }
+
+    [Fact]
+    public void Redirect_MissingDirectory_InsideTryBlock_DoesNotAbortLaterStatements()
+    {
+        // bash: a redirect that cannot be opened fails THAT command (status 1) and the script goes
+        // on. The emitter wraps bodies in `try { }` (stdin scope, env prefix, …), where a
+        // terminating error aborted every later statement in the block. The upstream is a real
+        // cmdlet: it finishes after the redirect's BeginProcessing and resets the status to 0.
+        var f = Path.Combine(_dir, "nodir", "x.txt");
+        var (output, errors) = Run(
+            $"try {{ Invoke-BashEcho x | Invoke-BashRedirect -Path '{f}'; \"rc=$global:LASTEXITCODE\" }} finally {{ }}");
+        Assert.Equal(new[] { "rc=1" }, output);
+        Assert.Contains(errors, e => e.ToString().Contains("No such file or directory"));
+        Assert.False(File.Exists(f));
+    }
+
+    [SkippableFact]
+    [Trait("Platform", "Windows")]
+    public void Redirect_UnixDrivePathTarget_IsMappedToTheDrive()
+    {
+        // `d=/c/Users/...; echo hi > $d/f` reaches the cmdlet as `/c/Users/.../f` (the emitter
+        // only rewrites a LITERAL `/c/…` word); it resolved against the current drive.
+        Skip.IfNot(OperatingSystem.IsWindows(), "drive-letter paths are Windows-only");
+        var f = Path.GetFullPath(P("u.txt"));
+        var unix = "/" + char.ToLowerInvariant(f[0]) + f[2..].Replace('\\', '/');
+        var (_, errors) = Run($"'x' | Invoke-BashRedirect -Path '{unix}'");
+        Assert.Empty(errors);
+        Assert.Equal("x\n", File.ReadAllText(f));
+    }
 }

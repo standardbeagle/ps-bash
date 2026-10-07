@@ -34,30 +34,42 @@ public sealed class InvokeBashRedirectCommand : PSCmdlet
     // arrives through a 64 KB-buffered FileStream, so `big | cmd > f` holds O(buffer), not the
     // whole output. Opening in BeginProcessing also gives bash's ordering: the redirect truncates
     // the target BEFORE the command runs (`cat f > f` leaves f empty, as in bash) and creates it
-    // even when the command prints nothing. A target that cannot be opened (missing directory)
-    // fails here, so the upstream command never runs, as in bash.
+    // even when the command prints nothing.
     protected override void BeginProcessing()
     {
         if (Path is null) return;
+        // A target built by expansion (`> $dir/f`, dir=/c/Users/...) reaches here unmapped — the
+        // emitter can only rewrite a literal `/c/...` word — so map it like any cmdlet operand.
+        string target = FileSystemHelpers.NormalizeOperandPath(Path);
         try
         {
-            _stream = new FileStream(Path, Append ? FileMode.Append : FileMode.Create,
+            _stream = new FileStream(target, Append ? FileMode.Append : FileMode.Create,
                 FileAccess.Write, FileShare.ReadWrite, bufferSize: 64 * 1024);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
                                        or ArgumentException or NotSupportedException)
         {
-            // bash: a redirection that cannot be opened fails the command (status 1) before it runs:
-            // `bash: nodir/f: No such file or directory`, `bash: d: Is a directory`.
-            string reason = Directory.Exists(Path) ? "Is a directory"
+            // bash: a redirection that cannot be opened fails the command (status 1) and the
+            // script goes on: `bash: nodir/f: No such file or directory`, `bash: d: Is a directory`.
+            // NOT a terminating error: inside an emitted `try { }` (stdin scope, env prefix, …)
+            // one aborts every later statement in the block. The command's output is discarded.
+            // Under `set -e` stopping the script IS the bash behavior, so terminate then.
+            string reason = Directory.Exists(target) ? "Is a directory"
                 : ex is UnauthorizedAccessException ? "Permission denied"
                 : FileSystemHelpers.ReadErrorMessage(ex);
-            FileSystemHelpers.SetLastExitCode(this, 1);
-            ThrowTerminatingError(new ErrorRecord(
-                new IOException($"bash: {Path}: {reason}"),
-                "BashRedirectError", ErrorCategory.WriteError, Path));
+            string message = $"bash: {Path}: {reason}";
+            if (SessionState.PSVariable.GetValue("__BashErrexit") is true)
+            {
+                FileSystemHelpers.SetLastExitCode(this, 1);
+                ThrowTerminatingError(new ErrorRecord(
+                    new IOException(message), "BashRedirectError", ErrorCategory.WriteError, Path));
+            }
+            FileSystemHelpers.WriteBashError(this, message);
+            _openFailed = true;
         }
     }
+
+    private bool _openFailed;
 
     protected override void ProcessRecord()
     {
@@ -72,7 +84,13 @@ public sealed class InvokeBashRedirectCommand : PSCmdlet
         _stream.Write(bytes, 0, bytes.Length);
     }
 
-    protected override void EndProcessing() => Close();
+    protected override void EndProcessing()
+    {
+        Close();
+        // The upstream command still ran (and set its own status) after BeginProcessing; the
+        // failed redirect is the pipeline's status, so `$?` and `set -e` see 1.
+        if (_openFailed) FileSystemHelpers.SetLastExitCode(this, 1);
+    }
 
     protected override void StopProcessing() => Close();
 
