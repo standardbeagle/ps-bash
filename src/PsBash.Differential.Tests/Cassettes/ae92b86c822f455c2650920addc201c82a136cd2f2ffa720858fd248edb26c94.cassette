@@ -1,0 +1,16 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 92
+stdout-length: 40
+stderr-length: 0
+==== SCRIPT ====
+date -d @0.1234567 -u +%N; date -d @1.25 -u +%T.%3N; date -d @0 -u +%N; date -d @1,5 -u +%6N
+==== STDOUT ====
+123456700
+00:00:01.250
+000000000
+500000
+
+==== STDERR ====
+

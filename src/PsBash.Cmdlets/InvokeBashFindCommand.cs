@@ -185,8 +185,7 @@ public sealed class InvokeBashFindCommand : PSCmdlet
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
                 {
-                    string why = ex is UnauthorizedAccessException ? "Permission denied"
-                        : ex is DirectoryNotFoundException or FileNotFoundException ? "No such file or directory" : ex.Message;
+                    string why = FileSystemHelpers.ReadErrorMessage(ex);
                     EmitError($"find: ‘{path}’: {why}");
                     return null;
                 }

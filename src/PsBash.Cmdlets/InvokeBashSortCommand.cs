@@ -577,8 +577,7 @@ public sealed class InvokeBashSortCommand : PSCmdlet
             catch (Exception ex)
             {
                 if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-                string reason = ex is DirectoryNotFoundException or FileNotFoundException
-                    ? "No such file or directory" : ex.Message;
+                string reason = FileSystemHelpers.ReadErrorMessage(ex);
                 FileSystemHelpers.WriteBashError(this, $"sort: open failed: {plan.Output.Replace('\\', '/')}: {reason}");
                 FileSystemHelpers.SetLastExitCode(this, 2);
             }
@@ -634,7 +633,7 @@ public sealed class InvokeBashSortCommand : PSCmdlet
         catch (Exception ex)
         {
             if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-            string reason = ex is DirectoryNotFoundException or FileNotFoundException ? "No such file or directory" : ex.Message;
+            string reason = FileSystemHelpers.ReadErrorMessage(ex);
             FileSystemHelpers.WriteBashError(this, $"sort: open failed: {source.Replace('\\', '/')}: {reason}");
             FileSystemHelpers.SetLastExitCode(this, 2);
             return false;
@@ -687,7 +686,7 @@ public sealed class InvokeBashSortCommand : PSCmdlet
         catch (Exception ex)
         {
             if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-            string reason = ex is DirectoryNotFoundException or FileNotFoundException ? "No such file or directory" : ex.Message;
+            string reason = FileSystemHelpers.ReadErrorMessage(ex);
             FileSystemHelpers.WriteBashError(this, $"sort: open failed: {source.Replace('\\', '/')}: {reason}");
             FileSystemHelpers.SetLastExitCode(this, 2);
             return false;
@@ -696,9 +695,7 @@ public sealed class InvokeBashSortCommand : PSCmdlet
 
     private void WriteReadError(string path, Exception ex)
     {
-        bool notFound = ex is FileNotFoundException or DirectoryNotFoundException
-            || ex.InnerException is FileNotFoundException or DirectoryNotFoundException;
-        string msg = notFound ? "No such file or directory" : ex.Message;
+        string msg = FileSystemHelpers.ReadErrorMessage(ex);
         string normalized = path.Replace('\\', '/');
         FileSystemHelpers.WriteBashError(this, $"sort: cannot read: {normalized}: {msg}");
     }

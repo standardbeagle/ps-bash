@@ -142,9 +142,17 @@ internal static class FileSystemHelpers
         static bool NotFound(Exception e) =>
             e is FileNotFoundException or DirectoryNotFoundException
             || (OperatingSystem.IsWindows() && e is IOException && (e.HResult & 0xFFFF) == 0x7B); // ERROR_INVALID_NAME
-        return NotFound(ex) || (ex.InnerException is { } inner && NotFound(inner))
-            ? "No such file or directory"
-            : ex.Message;
+        // EACCES: no access, or (Windows only) a file another process holds open without sharing —
+        // ERROR_SHARING_VIOLATION / ERROR_LOCK_VIOLATION. The raw .NET text ("The process cannot
+        // access the file … because it is being used by another process") is no bash message.
+        static bool Denied(Exception e) =>
+            e is UnauthorizedAccessException
+            || (OperatingSystem.IsWindows() && e is IOException && (e.HResult & 0xFFFF) is 0x20 or 0x21);
+        if (NotFound(ex) || (ex.InnerException is { } inner && NotFound(inner)))
+            return "No such file or directory";
+        if (Denied(ex) || (ex.InnerException is { } inner2 && Denied(inner2)))
+            return "Permission denied";
+        return ex.Message;
     }
 
     /// <summary>

@@ -31,6 +31,7 @@ model in [runtime-functions.md](runtime-functions.md) "Raw bytes".
 | Symlink tests | Need the Windows symlink privilege; tests skip without it | OS policy |
 | `mkdir -Z`, `cp -Z`/`--context`, `find -context` | Refused | No SELinux |
 | `find -used` | Refused | No reliable access-vs-change data |
+| `date +%N`, `date -d @S.FFFFFFFFF` | Sub-second resolution is 100 ns: `%N`'s last two digits are always `0`, and an input fraction past 7 digits is truncated | .NET time is 100 ns ticks |
 | Raw byte in a variable on **Linux/macOS** | `x=$(printf '\xe9')` loses the byte (becomes U+FFFD) | Variables live in the process environment, and .NET re-encodes it on Unix; Windows keeps it |
 
 ## Architecture
@@ -44,7 +45,7 @@ model in [runtime-functions.md](runtime-functions.md) "Raw bytes".
 | Shared stdin and natives | A native program gets the shared stdin (forwarded launcher stdin or a compound's) as its real process stdin, an OS pipe a pump fills; what it did not read is put back, so `prog; cat` behaves like bash. A function or alias of the same name gets nothing | Natives run under PowerShell, whose `feed \| prog` cannot end before its feed does |
 | Stdin forwarding | Forwarded into `-c` commands; not into piped scripts, script files or the interactive shell | Those already read stdin as the script / keyboard |
 | `tail -f` in a fused pipeline | Never fuses | Fused frames are cut by size; flushing on idle needs a timer thread |
-| `grep -r`, `rg` (internal engine) | Prune `.git`, `node_modules`, `bin`, `obj`, … before descending (`PSBASH_SEARCH_NO_IGNORE=1` disables) | Keeps big trees under the host idle timeout; `rg` approximates gitignore this way |
+| `grep -r`, `rg` (internal engine) | Prune `.git`, `node_modules`, `bin`, `obj`, … before descending, and skip a WALKED binary file silently — no `binary file matches`, no `-c`/`-l` line (`PSBASH_SEARCH_NO_IGNORE=1` or `-a` disables both; a binary file named as an operand is reported as GNU does) | Keeps big trees under the host idle timeout; `rg` approximates gitignore this way |
 | Direct PowerShell calls | A bare multi-letter bundle that prefixes a common parameter (`Invoke-BashMkdir -pv d`) or a repeated bare `-e` must be quoted | The PowerShell binder sees it first; transpiled bash is unaffected |
 | `--sort` tuning (`sort -S -T --parallel …`) | Accepted and ignored | They change how GNU sorts, not what it prints; nothing spills |
 | `cp --sparse`, `--reflink=auto` | Accepted; a normal copy | No sparse/reflink control from .NET |

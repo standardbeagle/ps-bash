@@ -227,6 +227,18 @@ public sealed class InvokeBashDateCommand : PSCmdlet
         {
             if (format[i] == '%' && (i + 1) < format.Length)
             {
+                // %N nanoseconds (9 digits); %1N..%9N GNU width form, truncated (not rounded).
+                // .NET ticks are 100 ns, so the last two digits are always 0.
+                int nWidth = 9, nAt = i + 1;
+                if (format[nAt] is >= '1' and <= '9' && nAt + 1 < format.Length && format[nAt + 1] == 'N')
+                    nWidth = format[nAt++] - '0';
+                if (format[nAt] == 'N')
+                {
+                    long nanos = dto.UtcTicks % TimeSpan.TicksPerSecond * 100;
+                    sb.Append(nanos.ToString("000000000", ci), 0, nWidth);
+                    i = nAt + 1;
+                    continue;
+                }
                 char spec = format[i + 1];
                 switch (spec)
                 {

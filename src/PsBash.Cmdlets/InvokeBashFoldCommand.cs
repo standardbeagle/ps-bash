@@ -303,9 +303,7 @@ public sealed class InvokeBashFoldCommand : PSCmdlet
 
     private void WriteReadError(string path, Exception ex)
     {
-        bool notFound = ex is FileNotFoundException or DirectoryNotFoundException
-            || ex.InnerException is FileNotFoundException or DirectoryNotFoundException;
-        string msg = notFound ? "No such file or directory" : ex.Message;
+        string msg = FileSystemHelpers.ReadErrorMessage(ex);
         string normalized = path.Replace('\\', '/');
         FileSystemHelpers.WriteBashError(this, $"fold: {normalized}: {msg}");
     }

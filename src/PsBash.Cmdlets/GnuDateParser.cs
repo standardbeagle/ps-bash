@@ -43,7 +43,7 @@ internal static class GnuDateParser
 
     private static Regex R(string p) => new(@"\G" + p, Ro);
 
-    private static readonly Regex Epoch = R(@"@(-?\d+)(?:[.,]\d+)?");
+    private static readonly Regex Epoch = R(@"@(-?)(\d+)(?:[.,](\d+))?");
     private static readonly Regex IsoDate = R(@"(\d{4})-(\d{1,2})-(\d{1,2})(?!\d)");
     private static readonly Regex SlashYmd = R(@"(\d{4})/(\d{1,2})/(\d{1,2})(?!\d)");
     private static readonly Regex Compact = R(@"(\d{4})(\d{2})(\d{2})(?!\d)");
@@ -82,7 +82,7 @@ internal static class GnuDateParser
         long ticks = nowLocal.Ticks % TimeSpan.TicksPerSecond;
 
         bool datesSeen = false, timesSeen = false, daysSeen = false, relsSeen = false, zoneSeen = false;
-        long? epoch = null;
+        long? epochTicks = null;
         TimeSpan zone = TimeSpan.Zero;
         long relYear = 0, relMonth = 0, relDay = 0, relHour = 0, relMin = 0, relSec = 0;
         int dayNumber = -1, dayOrdinal = 0;
@@ -97,8 +97,12 @@ internal static class GnuDateParser
 
             if ((m = Epoch.Match(text, pos)).Success)
             {
-                if (epoch is not null) return false;
-                epoch = long.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture);
+                if (epochTicks is not null) return false;
+                // @SECS[.FRAC]: keep the fraction to tick (100 ns) precision — `%N` reads it.
+                string frac = (m.Groups[3].Value + "0000000")[..7];
+                long magnitude = long.Parse(m.Groups[2].Value, CultureInfo.InvariantCulture) * TimeSpan.TicksPerSecond
+                    + long.Parse(frac, CultureInfo.InvariantCulture);
+                epochTicks = m.Groups[1].Value == "-" ? -magnitude : magnitude;
             }
             else if ((m = IsoDate.Match(text, pos)).Success)
             {
@@ -247,10 +251,10 @@ internal static class GnuDateParser
             pos = m.Index + m.Length;
         }
 
-        if (epoch is not null)
+        if (epochTicks is not null)
         {
             if (datesSeen || timesSeen || daysSeen || relsSeen || zoneSeen) return false;
-            result = TimeZoneInfo.ConvertTime(DateTimeOffset.FromUnixTimeSeconds(epoch.Value), tz);
+            result = TimeZoneInfo.ConvertTime(DateTimeOffset.UnixEpoch.AddTicks(epochTicks.Value), tz);
             return true;
         }
 

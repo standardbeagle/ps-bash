@@ -403,10 +403,7 @@ public sealed class InvokeBashWcCommand : PSCmdlet
             {
                 if (FileSystemHelpers.IsPipelineStop(ex)) throw;
                 string normalized = filePath.Replace('\\', '/');
-                bool notFound = ex is FileNotFoundException or DirectoryNotFoundException
-                    || ex.InnerException is FileNotFoundException or DirectoryNotFoundException;
-                string msg = notFound ? "No such file or directory" : ex.Message;
-                WriteBashError($"wc: {normalized}: {msg}");
+                WriteBashError($"wc: {normalized}: {FileSystemHelpers.ReadErrorMessage(ex)}");
                 continue;
             }
 
