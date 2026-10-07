@@ -886,16 +886,7 @@ public sealed partial class BashParser
     private static int ParseExtGlob(string raw, int pos, ImmutableArray<WordPart>.Builder parts)
     {
         int start = pos;
-        pos += 2; // skip operator + '('
-        int depth = 1;
-        while (pos < raw.Length && depth > 0)
-        {
-            if (raw[pos] == '(') depth++;
-            else if (raw[pos] == ')') depth--;
-            if (depth > 0) pos++;
-        }
-        if (pos < raw.Length)
-            pos++; // skip closing )
+        pos = BashLexer.ScanExtGlob(raw, pos + 2); // quote/escape-aware, same scan as the lexer
         parts.Add(new WordPart.GlobPart(raw[start..pos]));
         return pos;
     }

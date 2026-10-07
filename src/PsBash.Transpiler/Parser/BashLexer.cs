@@ -362,6 +362,30 @@ public static class BashLexer
     }
 
     /// <summary>
+    /// Advance past an extglob pattern list (<c>@( … )</c>, <c>+( … )</c>, …). <paramref name="pos"/>
+    /// is just inside the opening <c>(</c>; returns one past the matching <c>)</c> (or end of input).
+    /// Quotes and backslash escapes are taken whole so <c>@('a)'|b)</c> and <c>@(x\(y)</c> close at
+    /// the right paren. Unlike <see cref="ScanBalancedParens"/> there is no <c>case</c>/heredoc
+    /// handling: the list holds patterns, not commands. Shared by the lexer and the word parser.
+    /// </summary>
+    internal static int ScanExtGlob(string input, int pos)
+    {
+        int len = input.Length;
+        int depth = 1;
+        while (pos < len)
+        {
+            char c = input[pos];
+            if (c == '\'') { pos = ScanSingleQuoted(input, pos); continue; }
+            if (c == '"') { pos = ScanDoubleQuoted(input, pos); continue; }
+            if (c == '\\' && pos + 1 < len) { pos += 2; continue; }
+            pos++;
+            if (c == '(') depth++;
+            else if (c == ')' && --depth == 0) break;
+        }
+        return pos;
+    }
+
+    /// <summary>
     /// Read the delimiter word after a <c>&lt;&lt;</c>/<c>&lt;&lt;-</c> inside a raw-scanned
     /// region (<see cref="ScanBalancedParens"/>). <paramref name="pos"/> is just past the
     /// operator; blanks are skipped, then the word runs to whitespace or a metachar, with
@@ -486,16 +510,7 @@ public static class BashLexer
             // Extglob: +(...) *(...) ?(...) !(...) @(...) — consume through matching ')'.
             if ((c is '+' or '*' or '?' or '!' or '@') && pos + 1 < len && input[pos + 1] == '(')
             {
-                pos += 2; // skip operator + '('
-                int depth = 1;
-                while (pos < len && depth > 0)
-                {
-                    if (input[pos] == '(') depth++;
-                    else if (input[pos] == ')') depth--;
-                    if (depth > 0) pos++;
-                }
-                if (pos < len)
-                    pos++; // skip closing )
+                pos = ScanExtGlob(input, pos + 2);
                 continue;
             }
 

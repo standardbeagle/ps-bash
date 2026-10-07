@@ -98,6 +98,8 @@ public class TranspileParseabilityCorpusTests
     [InlineData("m=\"$(cat <<-EOF\n\tit's ) tabbed\n\tEOF\n)\"; echo \"$m\"")]
     [InlineData("m=\"$(cat <<A; cat <<'B'\nit's a\nA\nit's ) b\nB\n)\"; echo \"$m\"")]
     [InlineData("v=$( (( n = 1 << 3 )); echo \"$n it's\" ); echo \"$v\"")]
+    // fixed: a quoted/escaped paren inside an extglob closed it early (naive paren count).
+    [InlineData("shopt -s extglob; case $w in @('a)'|b)) echo y ;; @(x\\(y)) echo z ;; esac")]
     // compound bodies — fixed: switch/foreach/if statement can't head a pipe ("empty pipe element").
     [InlineData("echo $(case $x in a) echo A;; esac)")]
     [InlineData("echo $(for i in 1 2; do echo $i; done)")]

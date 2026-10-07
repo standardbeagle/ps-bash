@@ -124,6 +124,19 @@ public class BashLexerTests
         Assert.Equal(new[] { input, "tail" }, words.Select(t => t.Value));
     }
 
+    // An extglob list holds quoted / escaped parens as literals: a naive paren count closed
+    // `@('a)'|b)` at the quoted `)` and the stray `|b)` failed the whole script's parse.
+    [Theory]
+    [InlineData("@('a)'|b)")]
+    [InlineData("@(x\\(y)")]
+    [InlineData("+(\"(\"|z)")]
+    [InlineData("@(case|esac)")]   // no `case` keyword handling inside a pattern list
+    public void Tokenize_ExtGlobWithQuotedParens_IsOneWord(string glob)
+    {
+        var words = Tokenize("echo " + glob + " tail").Where(t => t.Kind != BashTokenKind.Eof).ToList();
+        Assert.Equal(new[] { "echo", glob, "tail" }, words.Select(t => t.Value));
+    }
+
     [Fact]
     public void Tokenize_CommandSubContainingCase_CapturedAsSingleToken()
     {
