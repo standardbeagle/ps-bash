@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 97
+stdout-length: 9
+stderr-length: 0
+==== SCRIPT ====
+if echo c1; false; then echo b1; elif echo c2; true; then echo b2; elif echo c3; then echo b3; fi
+==== STDOUT ====
+c1
+c2
+b2
+
+==== STDERR ====
+

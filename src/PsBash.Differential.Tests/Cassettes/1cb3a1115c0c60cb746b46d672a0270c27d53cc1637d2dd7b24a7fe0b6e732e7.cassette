@@ -1,0 +1,17 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 110
+stdout-length: 27
+stderr-length: 0
+==== SCRIPT ====
+if echo piped; then echo body; fi | tr a-z A-Z
+x=$(if echo captured; then echo body; fi); printf '[%s]\n' "$x"
+==== STDOUT ====
+PIPED
+BODY
+[captured
+body]
+
+==== STDERR ====
+

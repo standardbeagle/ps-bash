@@ -1457,6 +1457,28 @@ public class BashParserTests
         Assert.Equal(3, forIn.List.Length);
     }
 
+    // bash's if/while/until condition is a compound_list; `while a; b; do` was "Expected 'do' but
+    // got '['". Its status is the last command's, so the condition is a CommandList.
+    [Theory]
+    [InlineData("while echo x; [ -n y ]; do :; done")]
+    [InlineData("until echo x; true; do :; done")]
+    [InlineData("while\n echo x\n [ -n y ]\ndo :; done")]
+    public void Parse_LoopConditionList_ReturnsCommandListCond(string input)
+    {
+        var whileCmd = Assert.IsType<Command.While>(Parse(input));
+        var cond = Assert.IsType<Command.CommandList>(whileCmd.Cond);
+        Assert.Equal(2, cond.Commands.Length);
+    }
+
+    [Theory]
+    [InlineData("if echo x; [ -n y ]; then :; fi")]
+    [InlineData("if :; then :; elif echo a; echo b; then :; fi")]
+    public void Parse_IfConditionList_ReturnsCommandListCond(string input)
+    {
+        var ifCmd = Assert.IsType<Command.If>(Parse(input));
+        Assert.Contains(ifCmd.Arms, arm => arm.Cond is Command.CommandList { Commands.Length: 2 });
+    }
+
     [Fact]
     public void Parse_WhileTrue_ReturnsWhileNode()
     {

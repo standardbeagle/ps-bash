@@ -521,22 +521,35 @@ public static class PsEmitter
     };
 
     private static string EmitIf(Command.If ifCmd)
+        => ApplyCompoundRedirects(EmitIfFromArm(ifCmd, 0), ifCmd.Redirects);
+
+    /// <summary>
+    /// The <c>if</c> from arm <paramref name="start"/> on. A pure-test arm (<c>[ ]</c>, <c>(( ))</c>,
+    /// <c>true</c>) keeps its boolean-expression form and chains with <c>elseif</c>; an arm whose
+    /// condition RUNS a command is hoisted (<see cref="IsHoistedCondition"/>): the condition runs
+    /// as a statement — so its output streams, as bash prints it — and the arm tests the status
+    /// it left. An <c>elif</c> arm that is hoisted nests in the previous arm's <c>else</c>, since
+    /// its condition must run only when every earlier one failed.
+    /// </summary>
+    private static string EmitIfFromArm(Command.If ifCmd, int start)
     {
         var sb = new StringBuilder();
-
-        for (int i = 0; i < ifCmd.Arms.Length; i++)
+        bool anyHoisted = false;
+        for (int i = start; i < ifCmd.Arms.Length; i++)
         {
             var arm = ifCmd.Arms[i];
-            if (i == 0)
-                sb.Append("if");
+            bool hoist = IsHoistedCondition(arm.Cond);
+            if (i > start && hoist)
+            {
+                sb.Append(" else { ").Append(EmitIfFromArm(ifCmd, i)).Append(" }");
+                return sb.ToString();
+            }
+            anyHoisted |= hoist;
+            if (hoist)
+                sb.Append(EmitHoistedCondition(arm.Cond)).Append("if (").Append(PsBuild.LastStatusTest()).Append(')');
             else
-                sb.Append(" elseif");
-
-            sb.Append(" (");
-            sb.Append(EmitGuardedCondition(arm.Cond, EmitCondition));
-            sb.Append(") { ");
-            sb.Append(EmitBody(arm.Body));
-            sb.Append(" }");
+                sb.Append(i == start ? "if (" : " elseif (").Append(EmitGuardedCondition(arm.Cond, EmitCondition)).Append(')');
+            sb.Append(" { ").Append(EmitBody(arm.Body)).Append(" }");
         }
 
         if (ifCmd.ElseBody is not null)
@@ -545,14 +558,31 @@ public static class PsEmitter
             sb.Append(EmitBody(ifCmd.ElseBody));
             sb.Append(" }");
         }
-        else if (_errexitMode)
+        else if (_errexitMode || anyHoisted)
         {
             // bash: an `if` whose branch is not taken has status 0. The failed condition's code
-            // must not leak out — `f() { if false; then :; fi; }; set -e; f` keeps going.
+            // must not leak out — `f() { if false; then :; fi; }; set -e; f` keeps going, and
+            // `if grep -q x f; then …; fi; echo $?` prints 0.
             sb.Append(" else { $global:LASTEXITCODE = 0 }");
         }
 
-        return ApplyCompoundRedirects(sb.ToString(), ifCmd.Redirects);
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// A condition is hoisted to statement position when it runs a command (anything but a pure
+    /// <c>[ ]</c>/<c>[[ ]]</c>/<c>(( ))</c>/<c>true</c>/<c>false</c> test): in expression position
+    /// (<see cref="PsBuild.ExitCodeTest"/>) its output must be <c>[void]</c>-ed, and bash prints it.
+    /// </summary>
+    private static bool IsHoistedCondition(Command cond) => ConditionRunsCommand(cond);
+
+    /// <summary>The hoisted condition statement(s), errexit-exempt (and suppressed under
+    /// errexit) like <see cref="EmitGuardedCondition"/>, followed by "; ".</summary>
+    private static string EmitHoistedCondition(Command cond)
+    {
+        var text = WithErrexitExempt(() => Emit(cond));
+        if (_errexitMode) text = PsBuild.ErrexitSuppressed(text);
+        return PsBuild.HoistedCondition(text);
     }
 
     private static string EmitForIn(Command.ForIn forIn)
@@ -845,6 +875,24 @@ public static class PsEmitter
         {
             var sb = new StringBuilder();
             sb.Append(IterGuardPrefix(depth));
+
+            if (IsHoistedCondition(whileCmd.Cond))
+            {
+                // The condition runs as a statement at the top of each pass (its output streams;
+                // `continue` re-runs it, as bash does). bash's loop status is the last body
+                // command's, or 0 when the body never ran — never the failed condition's, so the
+                // body's status is saved per pass and restored on the way out.
+                string st = "$__psbash_wst" + depth;
+                sb.Append(st).Append(" = 0; while ($true) { ");
+                sb.Append(IterGuardCheck(depth));
+                sb.Append(EmitHoistedCondition(whileCmd.Cond));
+                sb.Append("if (").Append(PsBuild.LastStatusTest(negate: !whileCmd.IsUntil)).Append(") { ");
+                sb.Append("$global:LASTEXITCODE = ").Append(st).Append("; break }; ");
+                sb.Append(EmitBody(whileCmd.Body));
+                sb.Append("; ").Append(st).Append(" = $global:LASTEXITCODE }");
+                return ApplyCompoundRedirects(sb.ToString(), whileCmd.Redirects);
+            }
+
             sb.Append("while (");
             var condText = EmitGuardedCondition(whileCmd.Cond, EmitWhileCondition);
 
@@ -2334,6 +2382,10 @@ public static class PsEmitter
                 sb.Append(EmitAssignmentValue(pair.Value));
             }
         }
+        // `local`/`export x=$(false)`: the status is the BUILTIN's (0), not the substitution's —
+        // the substitution left its own code in LASTEXITCODE. (A plain `x=$(false)` keeps it.)
+        if ((cmd.IsLocal || cmd.IsExport) && ContainsCommandSub(cmd))
+            sb.Append("; " + PsBuild.SetStatus(0));
         return sb.ToString();
     }
 
@@ -2515,6 +2567,9 @@ public static class PsEmitter
         bool isAssoc = false;
         bool isPrint = false;
         string? varName = null;
+        // `declare x=$(cmd)` / `declare x="$y"`: an initializer with expansions (not one literal).
+        string? exprName = null;
+        CompoundWord? exprValue = null;
         foreach (var word in cmd.Words.Skip(1))
         {
             var val = GetLiteralValue(word);
@@ -2522,6 +2577,18 @@ public static class PsEmitter
             else if (val == "-i") { /* integer — handled below */ }
             else if (val is { Length: > 1 } && val[0] == '-' && val.AsSpan(1).IndexOfAnyExcept("pfF") < 0) isPrint = true;
             else if (val is not null && !val.StartsWith('-')) varName = val;
+            else if (val is null && TrySplitInitializer(word, out var n, out var v)) { exprName = n; exprValue = v; }
+        }
+        if (!isPrint && exprName is not null && !isAssoc)
+        {
+            // Value through the assignment machinery (TryEmitJoinedValue for a $( )); the status
+            // is declare's own (0), not the substitution's.
+            string value = EmitAssignmentValue(exprValue);
+            bool intAttr = cmd.Words.Skip(1).Any(w => GetLiteralValue(w) == "-i");
+            result = "$env:" + exprName + " = "
+                + (intAttr ? "[string](Invoke-BashArith ([string](" + value + ")))" : value)
+                + "; " + PsBuild.SetStatus(0);
+            return true;
         }
         if (isPrint)
         {
@@ -2539,6 +2606,8 @@ public static class PsEmitter
         // `[int]$global:n=5 = 0`. No `=` → the bare-declaration defaults below.
         int eq = varName.IndexOf('=');
         bool isInt = cmd.Words.Skip(1).Any(w => GetLiteralValue(w) == "-i");
+        // A scalar lives where every bash variable read looks: `$env:NAME` (`$x`, `[int]$env:x` in
+        // arithmetic). `$global:NAME` was never read back — `declare x=hello; echo $x` printed "".
         if (eq >= 0)
         {
             string declName = varName[..eq];
@@ -2555,12 +2624,12 @@ public static class PsEmitter
                 // integer literal is emitted directly; any expression routes through
                 // the shared arithmetic evaluator instead of silently collapsing to 0.
                 string intVal = long.TryParse(rawVal, out _)
-                    ? rawVal
-                    : $"(Invoke-BashArith {PsBuild.SingleQuote(rawVal)})";
-                result = "[int]$global:" + declName + " = " + intVal;
+                    ? PsBuild.SingleQuote(rawVal)
+                    : $"[string](Invoke-BashArith {PsBuild.SingleQuote(rawVal)})";
+                result = "$env:" + declName + " = " + intVal;
                 return true;
             }
-            result = "$global:" + declName + " = " + PsBuild.SingleQuote(rawVal);
+            result = "$env:" + declName + " = " + PsBuild.SingleQuote(rawVal);
             return true;
         }
         if (isAssoc)
@@ -2568,9 +2637,35 @@ public static class PsEmitter
             result = "$global:" + varName + " = @{}";
             return true;
         }
-        result = isInt ? "[int]$global:" + varName + " = 0" : "$global:" + varName + " = @()";
+        result = isInt ? "$env:" + varName + " = '0'" : "$global:" + varName + " = @()";
         return true;
     }
+
+    /// <summary>
+    /// Split a <c>NAME=value</c> word whose value has expansions (<c>x=$(cmd)</c>, <c>x="$y"</c>):
+    /// its first part is a literal starting with a valid name and <c>=</c>. False otherwise.
+    /// </summary>
+    private static bool TrySplitInitializer(CompoundWord word, out string name, out CompoundWord value)
+    {
+        name = "";
+        value = word;
+        if (word.Parts.IsDefaultOrEmpty || word.Parts[0] is not WordPart.Literal first) return false;
+        int eq = first.Value.IndexOf('=');
+        if (eq <= 0 || !IsValidVarName(first.Value[..eq])) return false;
+        name = first.Value[..eq];
+        var rest = first.Value[(eq + 1)..];
+        var parts = word.Parts.RemoveAt(0);
+        if (rest.Length > 0) parts = parts.Insert(0, new WordPart.Literal(rest));
+        value = new CompoundWord(parts);
+        return true;
+    }
+
+    private static bool IsValidVarName(string s) =>
+        s.Length > 0 && (char.IsAsciiLetter(s[0]) || s[0] == '_')
+        && s.AsSpan(1).IndexOfAnyExcept(VarNameChars) < 0;
+
+    private static readonly System.Buffers.SearchValues<char> VarNameChars =
+        System.Buffers.SearchValues.Create("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_");
 
     // Arguments of `:` / `true` / `false` are ignored but still expanded (side effects
     // of `${x:=v}`, `$(cmd)`, `$((i++))`). Plain literals have no effect and are skipped
@@ -2816,28 +2911,33 @@ public static class PsEmitter
     }
 
     // readonly VAR=val -> Set-Variable -Name VAR -Value val -Option Constant
+    /// <summary>
+    /// <c>readonly NAME=value …</c>: assigns like any scalar (<c>$env:NAME</c>, where every read looks),
+    /// then sets readonly's own status 0. It used to create a CONSTANT PowerShell global that no read
+    /// ever reached (<c>readonly r=5; echo $r</c> printed "") and skipped any value with an expansion.
+    /// Read-only-ness itself is not enforced (an env var cannot be a constant) — see
+    /// intentional-differences.md.
+    /// </summary>
     private static string EmitReadonly(Command.Simple cmd)
     {
         var roSb = new StringBuilder();
         for (int i = 1; i < cmd.Words.Length; i++)
         {
-            if (i > 1) roSb.Append("; ");
-            var val = GetLiteralValue(cmd.Words[i]);
-            if (val is null) continue;
-            if (val.StartsWith('-')) continue; // skip flags like -p, -r
-            int eq = val.IndexOf('=');
-            if (eq > 0)
+            var word = cmd.Words[i];
+            var val = GetLiteralValue(word);
+            if (val is not null && val.StartsWith('-')) continue; // flags like -p, -r
+            if (val is not null)
             {
-                string varName = val[..eq];
-                string varVal = val[(eq + 1)..];
-                roSb.Append($"Set-Variable -Name {varName} -Value '{SqEsc(varVal)}' -Option Constant -Scope Global");
+                int eq = val.IndexOf('=');
+                if (eq <= 0) continue; // `readonly NAME`: marks an existing variable; nothing to assign
+                roSb.Append("$env:").Append(val[..eq]).Append(" = ").Append(PsBuild.SingleQuote(val[(eq + 1)..])).Append("; ");
             }
-            else
+            else if (TrySplitInitializer(word, out var name, out var value))
             {
-                roSb.Append($"Set-Variable -Name {val} -Option Constant -Scope Global");
+                roSb.Append("$env:").Append(name).Append(" = ").Append(EmitAssignmentValue(value)).Append("; ");
             }
         }
-        return string.IsNullOrEmpty(roSb.ToString()) ? "[void]$true" : roSb.ToString();
+        return roSb.Append(PsBuild.SetStatus(0)).ToString();
     }
 
     // set -- a b c -> reset positional parameters
@@ -5591,9 +5691,11 @@ public static class PsEmitter
                 Ops = andOr.Ops.RemoveAt(andOr.Ops.Length - 1),
             });
 
-        // `&&` runs the keyword when the condition SUCCEEDED, `||` when it failed.
+        // `&&` runs the keyword when the condition SUCCEEDED, `||` when it failed. The condition
+        // runs as a statement so its output streams (`grep pat f || exit 1` prints the matches);
+        // ExitCodeTest's expression position would [void] it.
         bool negate = andOr.Ops[^1] == "||";
-        return $"if ({PsBuild.ExitCodeTest(condition, negate)}) {{ {Emit(last)} }}";
+        return $"{PsBuild.HoistedCondition(condition)}if ({PsBuild.LastStatusTest(negate)}) {{ {Emit(last)} }}";
     }
 
     /// <param name="errexitFinalOperand">
@@ -5676,6 +5778,11 @@ public static class PsEmitter
                 // require a pipeline operand, so wrap only those statement rewrites.
                 var simpleText = EmitSimpleFed(simple);
                 sb.Append(NeedsChainOperandSubexpression(simpleText) ? $"$({simpleText})" : simpleText);
+                // `&&`/`||` test PowerShell's $?, which a bash function's `return 3` (or a cmdlet
+                // that sets only the exit code) leaves true — `f || echo fb` never fell back.
+                // Bridge the exit code exactly as the pipeline operand does; the final operand's
+                // status is read from LASTEXITCODE by whatever follows, so it needs no bridge.
+                if (!isFinal) sb.Append("; " + PsBuild.SignalFailIfFailed());
             }
             else
             {
@@ -5691,6 +5798,9 @@ public static class PsEmitter
                 sb.Append(NeedsChainOperandSubexpression(compoundText)
                     ? PsBuild.Subexpr(compoundText)
                     : compoundText);
+                // A `$( … )` operand never propagates $? (see the pipeline case), so `(exit 4) ||
+                // echo fb` never fell back: bridge the exit code.
+                if (!isFinal) sb.Append("; " + PsBuild.SignalFailIfFailed());
             }
             }
             finally

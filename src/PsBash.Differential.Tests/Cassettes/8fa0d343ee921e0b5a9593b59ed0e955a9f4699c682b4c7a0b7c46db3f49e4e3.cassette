@@ -1,0 +1,19 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 190
+stdout-length: 38
+stderr-length: 0
+==== SCRIPT ====
+declare x=hello; echo "[$x]"; readonly q=5; echo "[$q]"; declare -i n=2+3; echo "[$n] $((n * 2))"
+typeset t=v; echo "[$t]"; declare d="$x-$q"; echo "[$d]"; readonly e=$(echo ro); echo "[$e]"
+==== STDOUT ====
+[hello]
+[5]
+[5] 10
+[v]
+[hello-5]
+[ro]
+
+==== STDERR ====
+

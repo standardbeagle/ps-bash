@@ -144,8 +144,9 @@ public class BashTranspilerTests
     [Fact]
     public void Transpile_ReadonlyPlainValue_StillSingleQuoted()
     {
-        // Guards the readonly value path (SqEsc hardening) — a plain value is unchanged.
-        Assert.Contains("-Value 'ab'", BashTranspiler.Transpile("readonly X=ab"));
+        // Guards the readonly value path (SqEsc hardening) — a plain value is unchanged. It is an
+        // ordinary scalar ($env:X), where `$X` reads look; a constant PS global was never read back.
+        Assert.Contains("$env:X = 'ab'", BashTranspiler.Transpile("readonly X=ab"));
     }
 
     // ===================== declare -i: arithmetic RHS, not silent 0 =====================
@@ -154,7 +155,7 @@ public class BashTranspilerTests
     public void Transpile_DeclareIntExpression_RoutesThroughArith()
     {
         // `declare -i n=2+3` must evaluate the RHS (bash sets n=5), not collapse to 0.
-        Assert.Equal("[int]$global:n = (Invoke-BashArith '2+3')",
+        Assert.Equal("$env:n = [string](Invoke-BashArith '2+3')",
             BashTranspiler.Transpile("declare -i n=2+3"));
     }
 
@@ -162,7 +163,8 @@ public class BashTranspilerTests
     public void Transpile_DeclareIntLiteral_EmittedDirectly()
     {
         // A plain integer literal keeps the direct, allocation-free form.
-        Assert.Equal("[int]$global:m = 5", BashTranspiler.Transpile("declare -i m=5"));
+        // A scalar is $env:NAME, where every read (`$m`, arithmetic's [int]$env:m) looks.
+        Assert.Equal("$env:m = '5'", BashTranspiler.Transpile("declare -i m=5"));
     }
 
     // Regression: a path-like `.sh` script invocation must run through `bash`, not be emitted

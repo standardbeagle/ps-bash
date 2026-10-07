@@ -1080,7 +1080,7 @@ public class PsEmitterTests
 
         var result = PsEmitter.Emit(andOr);
 
-        Assert.Equal("cmd1 && cmd2", result);
+        Assert.Equal("cmd1; $(if (-not $? -or $global:LASTEXITCODE -ne 0) { Write-Error '' -ErrorAction SilentlyContinue }) && cmd2", result);
     }
 
     [Fact]
@@ -1399,7 +1399,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("mkdir dir && cd dir");
 
-        Assert.StartsWith("Invoke-BashMkdir dir && $($__psbash_cd_target = 'dir'", result);
+        Assert.StartsWith("Invoke-BashMkdir dir; $(if (-not $? -or $global:LASTEXITCODE -ne 0) { Write-Error '' -ErrorAction SilentlyContinue }) && $($__psbash_cd_target = 'dir'", result);
         Assert.Contains("$global:__PsBashCwd = $__psbash_cd_resolved", result);
         Assert.Contains("[System.Environment]::CurrentDirectory = $__psbash_cd_resolved", result);
         Assert.Contains("$env:PWD = $__psbash_cd_resolved", result);
@@ -1410,7 +1410,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("test -f file || echo missing");
 
-        Assert.Equal("Invoke-BashTest '-f' file || Invoke-BashEcho missing", result);
+        Assert.Equal("Invoke-BashTest '-f' file; $(if (-not $? -or $global:LASTEXITCODE -ne 0) { Write-Error '' -ErrorAction SilentlyContinue }) || Invoke-BashEcho missing", result);
     }
 
     [Fact]
@@ -1418,7 +1418,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("cmd1 && cmd2 || cmd3");
 
-        Assert.Equal("cmd1 && cmd2 || cmd3", result);
+        Assert.Equal("cmd1; $(if (-not $? -or $global:LASTEXITCODE -ne 0) { Write-Error '' -ErrorAction SilentlyContinue }) && cmd2; $(if (-not $? -or $global:LASTEXITCODE -ne 0) { Write-Error '' -ErrorAction SilentlyContinue }) || cmd3", result);
     }
 
     [Fact]
@@ -1438,7 +1438,7 @@ public class PsEmitterTests
 
         var result = PsEmitter.Emit(andOr);
 
-        Assert.Equal("Invoke-BashTest '-f' file || Invoke-BashEcho missing", result);
+        Assert.Equal("Invoke-BashTest '-f' file; $(if (-not $? -or $global:LASTEXITCODE -ne 0) { Write-Error '' -ErrorAction SilentlyContinue }) || Invoke-BashEcho missing", result);
     }
 
     [Fact]
@@ -2144,7 +2144,7 @@ public class PsEmitterTests
         var result = PsEmitter.Transpile("if cmd; then echo yes; fi");
 
         // A command condition tests its EXIT CODE (bash semantics), not its output truthiness.
-        Assert.Equal("if ((& { [void](cmd); $global:LASTEXITCODE -eq 0 })) { Invoke-BashEcho yes }", result);
+        Assert.Equal("cmd; if ($global:LASTEXITCODE -eq 0) { Invoke-BashEcho yes } else { $global:LASTEXITCODE = 0 }", result);
     }
 
     [Fact]
@@ -2152,19 +2152,19 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("if cmd; then a; else b; fi");
 
-        Assert.Equal("if ((& { [void](cmd); $global:LASTEXITCODE -eq 0 })) { a } else { b }", result);
+        Assert.Equal("cmd; if ($global:LASTEXITCODE -eq 0) { a } else { b }", result);
     }
 
     [Fact]
-    public void Transpile_IfNegatedCommandCondition_SuppressesOutputWithVoid()
+    public void Transpile_IfNegatedCommandCondition_RunsAsStatementWithFlippedStatus()
     {
-        // Regression: a negated-pipeline condition (`if ! cmd`) must wrap the command in
-        // [void]. Without it, `& { cmd; $global:LASTEXITCODE -ne 0 }` returns the command's
-        // OUTPUT alongside the boolean — a 2-element array PowerShell reads as truthy — so the
-        // condition silently inverts (`if ! echo X; then A; else B` ran A and swallowed X).
+        // `if ! echo X; then A; else B` must print X and take B. The condition once ran inside
+        // `& { cmd; … }` in expression position, where its output joined the boolean as a truthy
+        // array (inverting the branch); the [void] fix then swallowed X. Now it runs as a
+        // statement — output streams, nothing pollutes the test — and `!` flips the status.
         var result = PsEmitter.Transpile("if ! cmd; then a; else b; fi");
 
-        Assert.Equal("if ((& { [void](cmd); $global:LASTEXITCODE -ne 0 })) { a } else { b }", result);
+        Assert.Equal("cmd; $global:LASTEXITCODE = if ($global:LASTEXITCODE -eq 0) { 1 } else { 0 }; if ($global:LASTEXITCODE -eq 0) { a } else { b }", result);
     }
 
     [Fact]
@@ -2172,7 +2172,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("if cmd1; then a; elif cmd2; then b; else c; fi");
 
-        Assert.Equal("if ((& { [void](cmd1); $global:LASTEXITCODE -eq 0 })) { a } elseif ((& { [void](cmd2); $global:LASTEXITCODE -eq 0 })) { b } else { c }", result);
+        Assert.Equal("cmd1; if ($global:LASTEXITCODE -eq 0) { a } else { cmd2; if ($global:LASTEXITCODE -eq 0) { b } else { c } }", result);
     }
 
     [Fact]
@@ -2188,7 +2188,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("if cmd1; then if cmd2; then inner; fi; fi");
 
-        Assert.Equal("if ((& { [void](cmd1); $global:LASTEXITCODE -eq 0 })) { if ((& { [void](cmd2); $global:LASTEXITCODE -eq 0 })) { inner } }", result);
+        Assert.Equal("cmd1; if ($global:LASTEXITCODE -eq 0) { cmd2; if ($global:LASTEXITCODE -eq 0) { inner } else { $global:LASTEXITCODE = 0 } } else { $global:LASTEXITCODE = 0 }", result);
     }
 
     [Fact]
@@ -2204,7 +2204,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("if cmd; then a; b; fi");
 
-        Assert.Equal("if ((& { [void](cmd); $global:LASTEXITCODE -eq 0 })) { a; b }", result);
+        Assert.Equal("cmd; if ($global:LASTEXITCODE -eq 0) { a; b } else { $global:LASTEXITCODE = 0 }", result);
     }
 
     [Fact]
@@ -2852,13 +2852,12 @@ public class PsEmitterTests
     [Fact]
     public void Transpile_IfCdThen_UsesSubexpressionForMultiStatementCondition()
     {
-        // Regression: `cd` emits a multi-statement block, so the if-condition exit-code
-        // test must wrap it in [void]$(...) (a subexpression). [void](...) (grouping
-        // parens) cannot hold a statement list — `if cd /tmp; then …` was unparseable
-        // PowerShell ("Missing closing ')'").
+        // Regression: `cd` emits a multi-statement block, which `[void](...)` (grouping parens)
+        // cannot hold — `if cd /tmp; then …` was unparseable ("Missing closing ')'"). The
+        // condition now runs as statements BEFORE the test, so the list needs no wrapper at all.
         var result = PsEmitter.Transpile("if cd /tmp; then echo ok; fi");
-        Assert.Contains("[void]$(", result);
-        Assert.DoesNotContain("[void]($__psbash_cd_target", result);
+        Assert.StartsWith("$__psbash_cd_target = '/tmp'; ", result);
+        Assert.EndsWith("; if ($global:LASTEXITCODE -eq 0) { Invoke-BashEcho ok } else { $global:LASTEXITCODE = 0 }", result);
     }
 
     [Fact]
@@ -3041,7 +3040,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("while cmd; do body; done");
 
-        Assert.Equal("$__psbash_iter = 0; while ((& { [void](cmd); $global:LASTEXITCODE -eq 0 })) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; body }", result);
+        Assert.Equal("$__psbash_iter = 0; $__psbash_wst0 = 0; while ($true) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; cmd; if ($global:LASTEXITCODE -ne 0) { $global:LASTEXITCODE = $__psbash_wst0; break }; body; $__psbash_wst0 = $global:LASTEXITCODE }", result);
     }
 
     [Fact]
@@ -3049,7 +3048,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("until cmd; do body; done");
 
-        Assert.Equal("$__psbash_iter = 0; while (-not ((& { [void](cmd); $global:LASTEXITCODE -eq 0 }))) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; body }", result);
+        Assert.Equal("$__psbash_iter = 0; $__psbash_wst0 = 0; while ($true) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; cmd; if ($global:LASTEXITCODE -eq 0) { $global:LASTEXITCODE = $__psbash_wst0; break }; body; $__psbash_wst0 = $global:LASTEXITCODE }", result);
     }
 
     [Fact]
@@ -3337,7 +3336,7 @@ public class PsEmitterTests
         // PowerShell at all ("Unexpected token '&&'"), which this assertion used
         // to pin. Same reason `while` / `case` operands are wrapped.
         Assert.StartsWith("$(try { Push-Location; $($__psbash_cd_target = '/tmp'", result);
-        Assert.Contains("&& Invoke-BashPwd } " + SubshellPop + ") && Invoke-BashPwd", result);
+        Assert.Contains("&& Invoke-BashPwd } " + SubshellPop + "); $(if (-not $? -or $global:LASTEXITCODE -ne 0) { Write-Error '' -ErrorAction SilentlyContinue }) && Invoke-BashPwd", result);
     }
 
     [Theory]
@@ -4336,7 +4335,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("cat <<EOF && echo ok\nhello\nEOF");
 
-        Assert.Equal("@\"\nhello\n\n\"@ | Emit-BashLine | Invoke-BashCat && Invoke-BashEcho ok", result);
+        Assert.Equal("@\"\nhello\n\n\"@ | Emit-BashLine | Invoke-BashCat; $(if (-not $? -or $global:LASTEXITCODE -ne 0) { Write-Error '' -ErrorAction SilentlyContinue }) && Invoke-BashEcho ok", result);
     }
 
     [Fact]
@@ -4823,12 +4822,12 @@ public class PsEmitterTests
         Assert.Contains("file.txt", result);
     }
 
-    // declare -i -> [int]$global:var = 0
+    // declare -i -> $env:var = '0' (a scalar lives where bash reads look: $env:NAME)
     [Fact]
     public void Transpile_DeclareInt_EmitsTypedVar()
     {
         var result = PsEmitter.Transpile("declare -i count");
-        Assert.Equal("[int]$global:count = 0", result);
+        Assert.Equal("$env:count = '0'", result);
     }
 
     // ${str/foo/bar} -> replace first
@@ -5747,16 +5746,16 @@ public class PsEmitterTests
     // there is parsed as a command NAME. `&& break` printed "The term 'break' is
     // not recognized" and the loop ran on, and `|| exit 1` simply DID NOT EXIT —
     // the script sailed past the guard it was written to enforce.
-    [InlineData("cmd || exit 1", "-ne 0 })) { exit 1 }")]
-    [InlineData("cmd && continue", "-eq 0 })) { continue }")]
-    [InlineData("cmd && break", "-eq 0 })) { break }")]
-    [InlineData("cmd || return", "-ne 0 })) { return }")]
+    [InlineData("cmd || exit 1", "-ne 0) { exit 1 }")]
+    [InlineData("cmd && continue", "-eq 0) { continue }")]
+    [InlineData("cmd && break", "-eq 0) { break }")]
+    [InlineData("cmd || return", "-ne 0) { return }")]
     public void Transpile_ChainEndingInStatementKeyword_RewritesToIf(
         string bash, string expectedTail)
     {
         var result = PsEmitter.Transpile(bash);
 
-        Assert.StartsWith("if ((& { [void](cmd);", result);
+        Assert.StartsWith("cmd; if ($global:LASTEXITCODE ", result);
         Assert.EndsWith(expectedTail, result);
     }
 
@@ -5764,7 +5763,7 @@ public class PsEmitterTests
     public void Transpile_ChainOfOrdinaryCommands_KeepsNativeChainOperator()
     {
         // Only a trailing statement KEYWORD forces the rewrite.
-        Assert.Equal("a && b", PsEmitter.Transpile("a && b"));
+        Assert.Equal("a; $(if (-not $? -or $global:LASTEXITCODE -ne 0) { Write-Error '' -ErrorAction SilentlyContinue }) && b", PsEmitter.Transpile("a && b"));
     }
 
     [Fact]
@@ -5772,7 +5771,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("a && b || exit 1");
 
-        Assert.Equal("if ((& { [void](a && b); $global:LASTEXITCODE -ne 0 })) { exit 1 }", result);
+        Assert.Equal("a; $(if (-not $? -or $global:LASTEXITCODE -ne 0) { Write-Error '' -ErrorAction SilentlyContinue }) && b; if ($global:LASTEXITCODE -ne 0) { exit 1 }", result);
     }
 
     // ---- subshell exit scoping / glob class with an expansion --------------

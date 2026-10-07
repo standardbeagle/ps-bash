@@ -548,6 +548,21 @@ and process substitutions. An `&&`/`||` list leaves only if its final command ra
 (`$global:__BashErrexitTail`). An untaken `if` and a finished `while`/`until` set status 0, so a function
 ending in one does not leak the failed condition's code to its caller's check.
 
+**Conditions and chain status** (`PsEmitter.EmitIfFromArm`, `EmitWhileLoop`, `EmitAndOrList`). An
+if/elif/while/until condition is a `compound_list` (`while a; b; do` — status of the last command). A
+condition that RUNS A COMMAND (`IsHoistedCondition`: anything but a pure `[ ]`/`[[ ]]`/`(( ))`/`true`/
+`false`) is hoisted to statement position — `cond; if ($global:LASTEXITCODE -eq 0) { … }`
+(`PsBuild.HoistedCondition` + `LastStatusTest`) — because in expression position
+(`PsBuild.ExitCodeTest`) its output must be `[void]`-ed, and bash prints it (`if echo in; then …`). A hoisted
+`elif` nests in the previous arm's `else` (it runs only after every earlier condition failed); a hoisted
+loop is `while ($true) { cond; if (failed) { restore body status; break }; body }`, so `continue` re-runs
+the condition and the loop's status is the last body command's (0 if none), never the failed condition's.
+An untaken hoisted `if` sets status 0. The `cmd && break` / `cmd || exit 1` keyword form hoists the same
+way (`grep pat f || exit 1` prints the matches). In a `&&`/`||` chain every non-final operand is followed
+by `PsBuild.SignalFailIfFailed()`: PowerShell's chain operators test `$?`, which a bash function's
+`return 3` or a subshell's `exit 4` leaves true; the bridge fails the chain on `-not $?` OR a non-zero
+exit code.
+
 The `$global:__BashErrexit` guard variable prevents strict-mode crashes when checking `$?` in error handlers. When `set -e` is active, PowerShell's `Set-StrictMode -Version Latest` would throw on null property accesses in conditions like `if [ $? -ne 0 ]`. The guard allows the emitter to conditionally suppress strict-mode behavior around exit-code checks.
 
 ### `cd`

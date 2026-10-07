@@ -67,6 +67,17 @@ public class TranspileParseabilityCorpusTests
     [InlineData("echo $(date)")]
     [InlineData("echo `date`")]
     [InlineData("echo $(echo $(echo nested))")]
+    // fixed: a condition that runs a command is hoisted to statement position (its output streams);
+    // condition LISTS parse; chains bridge a function's `return N` / a subshell's exit to $?.
+    [InlineData("if echo in; then echo yes; elif grep -q x f; then :; else echo no; fi")]
+    [InlineData("if ! cd /nope; then echo n; fi; if cd /tmp && echo ok; then :; fi")]
+    [InlineData("while echo w; [ -n \"$x\" ]; do x=; done; until echo u; true; do :; done")]
+    [InlineData("for i in 1 2; do grep -q x f || continue; echo $i && break; done")]
+    [InlineData("f(){ return 3; }; f || echo fb; (exit 4) && echo no || echo yes")]
+    [InlineData("x=$(if echo c; then echo b; fi); if echo p; then echo q; fi | cat")]
+    [InlineData("a && if echo c; then echo d; fi || while echo e; false; do :; done")]
+    [InlineData("f(){ local x=$(false); declare y=$(echo v); readonly z=$(echo r); }")]
+    [InlineData("declare -i n=2+3; declare x=hello; readonly q=5 r=\"$x\"")]
     // fixed: PowerShell finds a string's (and a bareword's) $( ) end by NAIVE paren counting,
     // ignoring quotes/here-strings inside — one odd paren in quoted command text failed the
     // whole script ("Missing closing ')' in subexpression"). Quoted / glued $( ) is now a join

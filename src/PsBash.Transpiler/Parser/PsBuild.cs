@@ -241,6 +241,24 @@ public static class PsBuild
     /// <c>false</c> → test success (<c>-eq 0</c>); <c>true</c> → test failure
     /// (<c>-ne 0</c>), i.e. bash <c>! cmd</c> which succeeds when <paramref name="emittedCmd"/> fails.
     /// </param>
+    /// <summary>
+    /// The test for a condition that RAN AS A STATEMENT just before it (see
+    /// <see cref="HoistedCondition"/>): <c>$global:LASTEXITCODE -eq 0</c> (<c>-ne</c> when negated).
+    /// </summary>
+    public static string LastStatusTest(bool negate = false) =>
+        "$global:LASTEXITCODE " + (negate ? "-ne" : "-eq") + " 0";
+
+    /// <summary>Set bash's <c>$?</c> to a fixed status: <c>$global:LASTEXITCODE = N</c>.</summary>
+    public static string SetStatus(int status) => "$global:LASTEXITCODE = " + status;
+
+    /// <summary>
+    /// An <c>if</c>/<c>while</c> condition that runs a command, hoisted to statement position:
+    /// <c>condStatements; </c> — the caller then tests <see cref="LastStatusTest"/>. Unlike
+    /// <see cref="ExitCodeTest"/>, whose expression position forces <c>[void]</c>, the command's
+    /// OUTPUT streams like any statement's (bash: <c>if echo in; then …</c> prints <c>in</c>).
+    /// </summary>
+    public static string HoistedCondition(string condStatements) => condStatements + "; ";
+
     public static string ExitCodeTest(string emittedCmd, bool negate = false) =>
         // Suppress the command's output via VoidStatement, which picks [void]$(...) over
         // [void](...) when the emitted text is a statement LIST (contains "; "). A grouping
@@ -272,6 +290,15 @@ public static class PsBuild
     /// </summary>
     public static string SignalFailIfNonZero() =>
         "$(if ($global:LASTEXITCODE -ne 0) { Write-Error '' -ErrorAction SilentlyContinue })";
+
+    /// <summary>
+    /// <see cref="SignalFailIfNonZero"/> for an operand whose failure may show in EITHER signal:
+    /// a cmdlet error clears <c>$?</c> (still the operand's at the start of this subexpression),
+    /// while a bash function's <c>return 3</c> or a subshell's <c>exit 4</c> sets only the exit
+    /// code and leaves <c>$?</c> true. Fails the chain when either says so.
+    /// </summary>
+    public static string SignalFailIfFailed() =>
+        "$(if (-not $? -or $global:LASTEXITCODE -ne 0) { Write-Error '' -ErrorAction SilentlyContinue })";
 
     /// <summary>
     /// A standalone <c>[ ... ]</c> / <c>[[ ... ]]</c> test as its OWN statement: bash

@@ -72,6 +72,8 @@ model in [runtime-functions.md](runtime-functions.md) "Raw bytes".
 | Command substitution glued into a longer word (`x$(cmd)y`) | Not word-split | Only a bare `$(…)` / `` `…` `` word goes through `ConvertTo-BashWords` |
 | Redirect failure message (`echo > nodir/f`) | `bash: nodir/f: No such file or directory`; bash prints `script: line N: nodir/f: …` | No line tracking at runtime; status and filesystem state match |
 | Env prefix on a pipe stage (`yes \| FOO=1 head -n1`) | The stage collects its input before running, so an unbounded producer does not stream into it | The save/set/restore wrapper is a script block, which starts after its upstream completes |
+| `declare x=v` inside a function | Assigns the global scalar (`$env:x`); bash makes it local to the function | Scalars are `$env:` vars; only `local` tracks function scope |
+| `readonly x=v` | Assigns `x`, status 0, but a later `x=w` is not rejected | A scalar is an env var, which cannot be made constant |
 | `declare -f fn` | Prints bash's layout (`fn () `, `{ `, body, `}`) but the body is the function's emitted PowerShell | The bash source is not kept once a function is defined |
 | `command -v ls`, `type ls`, `which ls` (any ps-bash command) | The "path" is the name: `ls`, `ls is ls`, `type -t` = `file`; a real program prints its path | The command is the runtime's own implementation, with no file; the name still runs it |
 | `set -e`: failure inside a pipeline stage (`f \| cat`, f fails midway) | The stage runs to its end (errexit suppressed there); only the last stage's status can end the script. bash stops that stage's subshell at the failure | A PowerShell pipeline stage cannot be exited on its own; suppressing never ends the script early |

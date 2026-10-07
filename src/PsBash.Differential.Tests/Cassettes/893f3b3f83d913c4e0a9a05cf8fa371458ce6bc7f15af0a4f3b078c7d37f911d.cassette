@@ -1,0 +1,19 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 145
+stdout-length: 66
+stderr-length: 0
+==== SCRIPT ====
+n=0; while echo in-while $n; [ $n -lt 2 ]; do n=$((n+1)); done; echo "after rc=$?"
+m=0; until echo in-until $m; [ $m -ge 1 ]; do m=$((m+1)); done
+==== STDOUT ====
+in-while 0
+in-while 1
+in-while 2
+after rc=0
+in-until 0
+in-until 1
+
+==== STDERR ====
+

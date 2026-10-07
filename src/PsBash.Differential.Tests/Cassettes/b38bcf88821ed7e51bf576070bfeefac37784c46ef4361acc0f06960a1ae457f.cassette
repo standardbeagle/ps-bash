@@ -1,0 +1,24 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 180
+stdout-length: 46
+stderr-length: 0
+==== SCRIPT ====
+g(){ return 3; }
+g || echo "fb rc=$?"
+g; echo "g rc=$?"
+g && echo nope || echo "and-or rc=$?"
+(exit 4) || echo "sub fb"
+(exit 0) && echo "sub ok"
+h(){ return 0; }; h && echo "h ok"
+==== STDOUT ====
+fb rc=3
+g rc=3
+and-or rc=3
+sub fb
+sub ok
+h ok
+
+==== STDERR ====
+

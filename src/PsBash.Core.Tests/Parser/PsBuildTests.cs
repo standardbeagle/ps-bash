@@ -92,6 +92,32 @@ public class PsBuildTests
         Assert.Equal("[void]$($env:x = 1; $env:y = 2)", PsBuild.VoidStatement("$env:x = 1; $env:y = 2"));
     }
 
+    // ─────────────── Hoisted conditions / status ───────────────
+    // A condition that runs a command executes as a STATEMENT (its output streams, as bash prints
+    // `if echo in; then …`'s `in`), then the branch tests the status it left.
+
+    [Fact]
+    public void HoistedCondition_IsTheStatementsThenSeparator()
+        => Assert.Equal("echo in; ", PsBuild.HoistedCondition("echo in"));
+
+    [Theory]
+    [InlineData(false, "$global:LASTEXITCODE -eq 0")]
+    [InlineData(true, "$global:LASTEXITCODE -ne 0")]
+    public void LastStatusTest_TestsTheExitCodeLeftBehind(bool negate, string expected)
+        => Assert.Equal(expected, PsBuild.LastStatusTest(negate));
+
+    [Fact]
+    public void SetStatus_SetsLastExitCode()
+        => Assert.Equal("$global:LASTEXITCODE = 0", PsBuild.SetStatus(0));
+
+    [Fact]
+    public void SignalFailIfFailed_ChecksBothDollarQuestionAndExitCode()
+    {
+        // A cmdlet error clears $?; a function's `return 3` sets only the exit code.
+        Assert.Equal("$(if (-not $? -or $global:LASTEXITCODE -ne 0) { Write-Error '' -ErrorAction SilentlyContinue })",
+            PsBuild.SignalFailIfFailed());
+    }
+
     // ─────────────── ExitCodeTest ───────────────
 
     [Fact]

@@ -1,0 +1,27 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 221
+stdout-length: 53
+stderr-length: 0
+==== SCRIPT ====
+if echo in-if; then echo yes; fi
+if ! echo in-not; then echo no; else echo else; fi
+if echo a && echo b; then echo both; fi
+if false || echo c; then echo or; fi
+f(){ echo in-func; return 0; }; if f; then echo func-yes; fi
+==== STDOUT ====
+in-if
+yes
+in-not
+else
+a
+b
+both
+c
+or
+in-func
+func-yes
+
+==== STDERR ====
+

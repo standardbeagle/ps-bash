@@ -666,10 +666,17 @@ public sealed partial class BashParser
         return new Command.If(arms.ToImmutable(), elseBody, ParseTrailingRedirects());
     }
 
+    /// <summary>The words that end an if/while condition list: its keyword, plus every closing
+    /// reserved word (a malformed `if a; b; fi` then fails at the keyword's Expect).</summary>
+    private static string[] ConditionStopWords(string keyword) =>
+        [keyword, "fi", "done", "esac", "else", "elif", "then", "do"];
+
     private IfArm ParseIfArm()
     {
         SkipTerminators();
-        var cond = ParseAndOr();
+        // bash's condition is a compound_list (`if a; b; then`): its status is the last command's.
+        // It also stops at a closing word, so a missing `then` reports "Expected 'then' but got 'fi'".
+        var cond = ParseCompoundBody(ConditionStopWords("then"));
         SkipTerminators();
         Expect("then");
         SkipTerminators();
@@ -921,7 +928,8 @@ public sealed partial class BashParser
         bool isUntil = keyword.Value == "until";
 
         SkipTerminators();
-        var cond = ParseAndOr();
+        // A compound_list, like if's (`while read x; [ -n "$x" ]; do`).
+        var cond = ParseCompoundBody(ConditionStopWords("do"));
         SkipTerminators();
         Expect("do");
         SkipTerminators();

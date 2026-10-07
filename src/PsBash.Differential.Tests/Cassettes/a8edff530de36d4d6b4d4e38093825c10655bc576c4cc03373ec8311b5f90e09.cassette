@@ -1,0 +1,23 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 258
+stdout-length: 86
+stderr-length: 0
+==== SCRIPT ====
+f2(){ local x=$(false); echo "local rc=$?"; }; f2
+export y=$(false); echo "export rc=$?"
+declare z=$(echo hi); echo "declare [$z] rc=$?"
+declare w=$(false); echo "declare rc=$?"
+v=$(false); echo "plain assign rc=$?"
+readonly r=$(false); echo "readonly rc=$?"
+==== STDOUT ====
+local rc=0
+export rc=0
+declare [hi] rc=0
+declare rc=0
+plain assign rc=1
+readonly rc=0
+
+==== STDERR ====
+
