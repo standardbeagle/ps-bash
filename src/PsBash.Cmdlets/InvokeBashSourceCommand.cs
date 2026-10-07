@@ -46,64 +46,74 @@ public sealed class InvokeBashSourceCommand : PSCmdlet
         if (System.IO.Path.GetExtension(resolvedPath).Equals(".ps1", StringComparison.OrdinalIgnoreCase))
         {
             var dotSource = ScriptBlock.Create($". '{resolvedPath.Replace("'", "''")}'");
-            InvokeCommand.InvokeScript(
+            WriteAll(InvokeCommand.InvokeScript(
                 useLocalScope: false,
                 dotSource,
                 input: null,
-                args: null);
+                args: null));
         }
         else
         {
-            if (Arguments != null && Arguments.Length > 0)
-            {
-                var items = string.Join(", ", Arguments.Select(a => $"'{a.Replace("'", "''")}'"));
-                var setPositional = ScriptBlock.Create($"$global:BashPositional = @({items})");
-                InvokeCommand.InvokeScript(
-                    useLocalScope: false,
-                    setPositional,
-                    input: null,
-                    args: null);
-            }
-            else
-            {
-                var clearPositional = ScriptBlock.Create("$global:BashPositional = $null");
-                InvokeCommand.InvokeScript(
-                    useLocalScope: false,
-                    clearPositional,
-                    input: null,
-                    args: null);
-            }
-
-            string content;
+            // bash: `source f a b` sets $1.. to a b for the file, then RESTORES the caller's; with no
+            // arguments the caller's positional parameters stay visible. This used to clear them
+            // (`set -- a b; . ./lib.sh; echo $1` printed nothing) and never restored after args.
+            bool withArgs = Arguments is { Length: > 0 };
+            object? savedPositional = SessionState.PSVariable.GetValue("global:BashPositional");
+            if (withArgs)
+                SessionState.PSVariable.Set("global:BashPositional", Arguments!.Cast<object>().ToArray());
             try
             {
-                content = BashFileSystem.ReadAllTextRaw(resolvedPath);
+                SourceBashFile(resolvedPath);
             }
-            catch (IOException ex)
+            finally
             {
-                WriteError(new ErrorRecord(
-                    ex,
-                    "SourceReadFailed",
-                    ErrorCategory.ReadError,
-                    resolvedPath));
-                SessionState.PSVariable.Set("global:LASTEXITCODE", 1);
-                return;
+                if (withArgs)
+                    SessionState.PSVariable.Set("global:BashPositional", savedPositional);
             }
-
-            if (string.IsNullOrWhiteSpace(content))
-                return;
-
-            var result = BashTranspiler.Transpile(content, TranspileContext.Eval);
-            if (string.IsNullOrEmpty(result))
-                return;
-
-            var sb = ScriptBlock.Create(result);
-            InvokeCommand.InvokeScript(
-                useLocalScope: false,
-                sb,
-                input: null,
-                args: null);
         }
+    }
+
+    /// <summary>
+    /// Every record the sourced code produced, to this cmdlet's output. <c>InvokeScript</c> RETURNS the
+    /// output instead of writing it, and it was discarded: a sourced file's `echo` printed nothing.
+    /// </summary>
+    private void WriteAll(System.Collections.ObjectModel.Collection<PSObject> output)
+    {
+        foreach (var record in output)
+            WriteObject(record);
+    }
+
+    private void SourceBashFile(string resolvedPath)
+    {
+        string content;
+        try
+        {
+            content = BashFileSystem.ReadAllTextRaw(resolvedPath);
+        }
+        catch (IOException ex)
+        {
+            WriteError(new ErrorRecord(
+                ex,
+                "SourceReadFailed",
+                ErrorCategory.ReadError,
+                resolvedPath));
+            SessionState.PSVariable.Set("global:LASTEXITCODE", 1);
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(content))
+            return;
+
+        var result = BashTranspiler.Transpile(content, TranspileContext.Eval);
+        if (string.IsNullOrEmpty(result))
+            return;
+
+        var sb = ScriptBlock.Create(result);
+        WriteAll(InvokeCommand.InvokeScript(
+            useLocalScope: false,
+            sb,
+            input: null,
+            args: null));
     }
 
     // The shared runtime path policy (ProviderPath → RuntimePath.Map). This used to carry its own
