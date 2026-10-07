@@ -2524,14 +2524,24 @@ $global:BashStartTime = [DateTime]::UtcNow
 # The module's own version when imported as a module. The ps-bash host does not import it — it runs this
 # file as a script, so there is no module object — and there the version is the runtime assembly's (stamped
 # from <Version> at release). Without that fallback every host session reported the 0.8.0 placeholder.
+# A 0.0 version is "absent" at every step, never a value: while a manifest import runs this body the module
+# object's Version is still 0.0 (the manifest's ModuleVersion lands after the root module loads), and a bare
+# psm1 import is 0.0 for good. [version]'0.0' is truthy, so accepting it made BASH_VERSION 0.0.0(1)-release.
 $__bashVer = try { $ExecutionContext.SessionState.Module?.Version } catch { $null }
-if (-not $__bashVer) {
+if (-not $__bashVer -or ($__bashVer.Major + $__bashVer.Minor) -eq 0) {
+    $__bashVer = try {
+        if ($PSScriptRoot) {
+            [version](Import-PowerShellDataFile -LiteralPath (Join-Path $PSScriptRoot 'PsBash.psd1')).ModuleVersion
+        }
+    } catch { $null }
+}
+if (-not $__bashVer -or ($__bashVer.Major + $__bashVer.Minor) -eq 0) {
     $__bashVer = try {
         $__psbashAsmVer = [PsBash.Core.RawBytes].Assembly.GetName().Version
         [version]::new($__psbashAsmVer.Major, $__psbashAsmVer.Minor, [Math]::Max(0, $__psbashAsmVer.Build))
     } catch { $null }
 }
-if (-not $__bashVer) { $__bashVer = [version]'0.8.0' }
+if (-not $__bashVer -or ($__bashVer.Major + $__bashVer.Minor) -eq 0) { $__bashVer = [version]'0.8.0' }
 # The real ps-bash module version (distinct from the emulated $BASH_VERSION above). Binary cmdlets
 # and runtime functions read this for `<cmd> --version`, so tooling can identify it is ps-bash.
 $global:PsBashVersion = $__bashVer.ToString()

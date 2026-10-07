@@ -44,6 +44,48 @@ public class InvokeBashDeclareCommandTests : IClassFixture<SharedPwshFixture>
     }
 
     [Fact]
+    public void DeclareF_NameExportedByAnInstalledModule_DoesNotAutoloadIt()
+    {
+        // Regression: the lookup ran command discovery, so a name some module on PSModulePath exports got
+        // that module auto-imported. In the ps-bash host the Bash tool snapshot's `typeset -f rg` imported the
+        // installed PsBash (it exports `rg`), re-ran the psm1 and reset BASH_VERSION to 0.0.0(1)-release.
+        var token = Guid.NewGuid().ToString("N")[..8];
+        var name = "psbfn_auto" + token;
+        var modName = "PsbAutoload" + token;
+        var root = Path.Combine(Path.GetTempPath(), "ps-bash", "declare-autoload-" + token);
+        var modDir = Path.Combine(root, modName);
+        Directory.CreateDirectory(modDir);
+        try
+        {
+            File.WriteAllText(Path.Combine(modDir, modName + ".psm1"),
+                "$global:PsbAutoImported = 'yes'\n" +
+                $"function {name} {{ 'ran' }}\n" +
+                $"Export-ModuleMember -Function {name}\n");
+            File.WriteAllText(Path.Combine(modDir, modName + ".psd1"),
+                "@{\n" +
+                $"  RootModule = '{modName}.psm1'\n" +
+                "  ModuleVersion = '1.0.0'\n" +
+                $"  GUID = '{Guid.NewGuid()}'\n" +
+                $"  FunctionsToExport = @('{name}')\n" +
+                "  CmdletsToExport = @()\n" +
+                "  AliasesToExport = @()\n" +
+                "  VariablesToExport = @()\n" +
+                "}\n");
+
+            var r = Run(
+                $"$env:PSModulePath = '{root.Replace("'", "''")}' + [IO.Path]::PathSeparator + $env:PSModulePath; " +
+                $"Invoke-BashDeclare '-f' {name}; " +
+                "\"imported=[$global:PsbAutoImported]\"");
+
+            Assert.Equal(new[] { "imported=[]" }, Texts(r));
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { /* best effort */ }
+        }
+    }
+
+    [Fact]
     public void DeclareF_PowerShellFunctionThatIsNotABashFunction_CountsAsMissing()
     {
         // The runtime's own PowerShell functions are not shell functions.

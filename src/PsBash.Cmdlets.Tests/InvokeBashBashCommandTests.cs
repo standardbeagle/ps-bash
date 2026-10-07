@@ -141,6 +141,32 @@ public class InvokeBashBashCommandTests : IClassFixture<SharedPwshFixture>
     }
 
     [Fact]
+    public void Bash_VersionFlag_SkipsZeroModuleVersion_UsesPsBashVersion()
+    {
+        // Regression: a PsBash module object can carry the 0.0 placeholder (a bare-psm1
+        // import), and [version]'0.0' is truthy, so the banner printed "version 0.0".
+        var (lines, err, _) = Run(
+            "New-Module -Name PsBash -ScriptBlock { } | Import-Module; " +
+            "$global:PsBashVersion = '9.8.7'; " +
+            "Invoke-BashBash --version");
+        Assert.True(string.IsNullOrEmpty(err), $"unexpected error: {err}");
+        Assert.Equal("ps-bash, version 9.8.7", lines[0]);
+    }
+
+    [Fact]
+    public void Bash_VersionFlag_ZeroPsBashVersion_IsNotReported()
+    {
+        // Regression: $global:PsBashVersion = '0.0' (the psm1 having run mid-import) was
+        // printed as the ps-bash version.
+        var (lines, err, _) = Run(
+            "New-Module -Name PsBash -ScriptBlock { } | Import-Module; " +
+            "$global:PsBashVersion = '0.0'; " +
+            "Invoke-BashBash --version");
+        Assert.True(string.IsNullOrEmpty(err), $"unexpected error: {err}");
+        Assert.NotEqual("ps-bash, version 0.0", lines[0]);
+    }
+
+    [Fact]
     public void Bash_VersionFlag_DoesNotRequirePsBashBinary()
     {
         // --version is handled entirely in-cmdlet (no child spawn). This proves

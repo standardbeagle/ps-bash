@@ -30,6 +30,15 @@ Describe 'Module Loading' {
         $alias = Get-Alias printf
         $alias.Definition | Should -Be 'Invoke-BashPrintf'
     }
+
+    # Regression: during a manifest import the module object's Version is still 0.0 while the
+    # psm1 body runs, and [version]'0.0' is truthy — every Import-Module PsBash got
+    # BASH_VERSION 0.0.0(1)-release and PsBashVersion 0.0.
+    It 'sets PsBashVersion from the manifest, not the 0.0 placeholder' {
+        $mod = Get-Module PsBash | Select-Object -First 1
+        $global:PsBashVersion | Should -Be $mod.Version.ToString()
+        $global:BashVersion | Should -Not -BeLike '0.0.*'
+    }
 }
 
 Describe 'Get-BashPlatform' {

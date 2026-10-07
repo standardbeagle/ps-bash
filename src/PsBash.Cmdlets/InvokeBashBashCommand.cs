@@ -204,17 +204,16 @@ public sealed class InvokeBashBashCommand : PSCmdlet
             // $global:PsBashVersion string the psm1 sets at the bottom of its
             // body when loaded as a script (the ps-bash host). Not
             // $global:BashVersion — that is the emulated "X.Y.0(1)-release"
-            // $BASH_VERSION, not the ps-bash version.
+            // $BASH_VERSION, not the ps-bash version. Either source can be a 0.0
+            // placeholder (a bare-psm1 module, or the psm1 having run mid-import),
+            // so both come back in order and the first real one wins.
             var result = InvokeCommand.InvokeScript(
                 "$m = Get-Module PsBash -ErrorAction SilentlyContinue | Select-Object -First 1 ; " +
-                "if ($m -and $m.Version) { $m.Version.ToString() } " +
-                "elseif ($global:PsBashVersion) { $global:PsBashVersion } " +
-                "else { $null }");
-            if (result.Count > 0 && result[0] != null)
+                "[string]$m.Version ; [string]$global:PsBashVersion");
+            foreach (var item in result)
             {
-                var s = result[0].BaseObject as string;
-                if (!string.IsNullOrEmpty(s))
-                    return s;
+                if (IsRealVersion(item?.BaseObject as string))
+                    return (string)item!.BaseObject;
             }
         }
         catch
@@ -223,6 +222,10 @@ public sealed class InvokeBashBashCommand : PSCmdlet
         }
         return null;
     }
+
+    /// <summary>A parseable version other than the 0.0 placeholder.</summary>
+    internal static bool IsRealVersion(string? s) =>
+        Version.TryParse(s, out var v) && (v.Major != 0 || v.Minor != 0);
 
     /// <summary>Explicit launcher for nested ps-bash children (<c>bash -c</c>, awk pipes/getline): a test seam and an
     /// escape hatch for embeddings whose host does not sit beside its launcher.</summary>

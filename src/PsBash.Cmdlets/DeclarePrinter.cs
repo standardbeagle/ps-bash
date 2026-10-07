@@ -46,11 +46,20 @@ internal static class DeclarePrinter
     }
 
     /// <summary>The bash-defined function NAME, or null when NAME is not one.</summary>
+    /// <remarks>
+    /// A <c>function:</c> provider read, NOT <c>InvokeCommand.GetCommand</c>: command discovery auto-imports
+    /// whatever PSModulePath module exports NAME. In the ps-bash host (psm1 run as a script, so no PsBash module
+    /// object) the Bash tool snapshot's <c>typeset -f rg</c> imported the installed PsBash, which re-ran the whole
+    /// psm1 mid-session and reset <c>$BASH_VERSION</c> to <c>0.0.0(1)-release</c>. A bash function is defined
+    /// in the session, never in a not-yet-loaded module, so the session table is the complete answer.
+    /// </remarks>
     internal static FunctionInfo? FindBashFunction(PSCmdlet cmdlet, string name)
     {
         try
         {
-            return cmdlet.InvokeCommand.GetCommand(name, CommandTypes.Function) is FunctionInfo fn && IsBashFunction(fn)
+            var items = cmdlet.SessionState.InvokeProvider.Item.Get(
+                new[] { @"function:\" + name }, force: false, literalPath: true);
+            return items.Count > 0 && items[0].BaseObject is FunctionInfo fn && IsBashFunction(fn)
                 ? fn
                 : null;
         }
