@@ -319,34 +319,70 @@ public static class BashLexer
         List<(string Delim, bool StripTabs, int DelimTokenIndex)> pending,
         List<BashToken> tokens)
     {
-        int len = input.Length;
         foreach (var (delim, stripTabs, delimTokenIndex) in pending)
         {
             int bodyStart = pos;
-            int bodyEnd = pos;
-            while (pos < len)
-            {
-                int nlPos = input.IndexOf('\n', pos);
-                int lineEnd = nlPos < 0 ? len : nlPos;
-                int textEnd = lineEnd > pos && input[lineEnd - 1] == '\r' ? lineEnd - 1 : lineEnd;
-                string line = input.Substring(pos, textEnd - pos);
-                string trimmed = stripTabs ? line.TrimStart('\t') : line;
-                bool isDelim = trimmed == delim;
-                if (isDelim)
-                {
-                    bodyEnd = pos;
-                    pos = nlPos < 0 ? len : nlPos + 1;
-                    break;
-                }
-                bodyEnd = nlPos < 0 ? len : nlPos + 1;
-                pos = bodyEnd;
-            }
+            pos = SkipHeredocBody(input, pos, delim, stripTabs, out int bodyEnd);
             tokens[delimTokenIndex] = tokens[delimTokenIndex] with
             {
                 BodyStart = bodyStart,
                 BodyEnd = bodyEnd,
             };
         }
+        return pos;
+    }
+
+    /// <summary>
+    /// Skip one heredoc body starting at <paramref name="pos"/> (the first body line): whole
+    /// physical lines, no quote or comment interpretation, until a line equal to
+    /// <paramref name="delim"/> (leading tabs stripped for <c>&lt;&lt;-</c>) or end of input.
+    /// Returns the offset just past the delimiter line; <paramref name="bodyEnd"/> is where
+    /// the delimiter line starts (the end of the body text).
+    /// </summary>
+    private static int SkipHeredocBody(string input, int pos, string delim, bool stripTabs, out int bodyEnd)
+    {
+        int len = input.Length;
+        bodyEnd = pos;
+        while (pos < len)
+        {
+            int nlPos = input.IndexOf('\n', pos);
+            int lineEnd = nlPos < 0 ? len : nlPos;
+            int textEnd = lineEnd > pos && input[lineEnd - 1] == '\r' ? lineEnd - 1 : lineEnd;
+            var line = input.AsSpan(pos, textEnd - pos);
+            if (stripTabs) line = line.TrimStart('\t');
+            if (line.SequenceEqual(delim))
+            {
+                bodyEnd = pos;
+                return nlPos < 0 ? len : nlPos + 1;
+            }
+            bodyEnd = nlPos < 0 ? len : nlPos + 1;
+            pos = bodyEnd;
+        }
+        return pos;
+    }
+
+    /// <summary>
+    /// Read the delimiter word after a <c>&lt;&lt;</c>/<c>&lt;&lt;-</c> inside a raw-scanned
+    /// region (<see cref="ScanBalancedParens"/>). <paramref name="pos"/> is just past the
+    /// operator; blanks are skipped, then the word runs to whitespace or a metachar, with
+    /// quoted segments taken whole (<c>'E O F'</c>). Returns the offset past the word, or
+    /// <paramref name="pos"/> unchanged (and an empty <paramref name="rawDelim"/>) when none.
+    /// </summary>
+    private static int ReadRawHeredocDelimiter(string input, int pos, out string rawDelim)
+    {
+        int len = input.Length;
+        while (pos < len && input[pos] is ' ' or '\t') pos++;
+        int start = pos;
+        while (pos < len)
+        {
+            char c = input[pos];
+            if (c == '\'') { pos = ScanSingleQuoted(input, pos); continue; }
+            if (c == '"') { pos = ScanDoubleQuoted(input, pos); continue; }
+            if (c == '\\' && pos + 1 < len) { pos += 2; continue; }
+            if (char.IsWhiteSpace(c) || c is ';' or '&' or '|' or '<' or '>' or '(' or ')') break;
+            pos++;
+        }
+        rawDelim = input[start..pos];
         return pos;
     }
 
@@ -659,10 +695,13 @@ public static class BashLexer
     }
 
     /// <summary>Advance past $(( ... )). input[pos]=='$', [pos+1]=='(', [pos+2]=='('.</summary>
-    internal static int ScanArith(string input, int pos)
+    internal static int ScanArith(string input, int pos) => ScanArithBody(input, pos + 3);
+
+    /// <summary>Advance past an arithmetic body to one past its closing <c>))</c>.
+    /// <paramref name="pos"/> is just inside the opening <c>((</c>.</summary>
+    private static int ScanArithBody(string input, int pos)
     {
         int len = input.Length;
-        pos += 3; // skip $((
         int depth = 1;
         while (pos < len && depth > 0)
         {
@@ -701,9 +740,37 @@ public static class BashLexer
         // (skip it), a ')' deeper is a real subshell close, and `esac` pops the case. The
         // command-sub/process-sub closer is the ')' that brings depth to 0 with no open case.
         var caseDepths = new List<int>();
+        // Heredocs inside the region (`$(cat <<'EOF' … EOF\n)`, the commit-message idiom): the
+        // body is raw text, so an apostrophe (`it's`) or `)` in it must not be read as a quote or
+        // the closer. Delimiters queue at `<<`; at the next newline their bodies are skipped
+        // whole, exactly as the top-level lexer does (SkipHeredocBody).
+        List<(string Delim, bool StripTabs)>? heredocs = null;
         while (pos < len && depth > 0)
         {
             char c = input[pos];
+            if (c == '\n' && heredocs is { Count: > 0 })
+            {
+                pos++;
+                foreach (var (delim, stripTabs) in heredocs)
+                    pos = SkipHeredocBody(input, pos, delim, stripTabs, out _);
+                heredocs.Clear();
+                continue;
+            }
+            if (c == '<' && pos + 1 < len && input[pos + 1] == '<')
+            {
+                if (pos + 2 < len && input[pos + 2] == '<') { pos += 3; continue; } // here-string
+                bool stripTabs = pos + 2 < len && input[pos + 2] == '-';
+                int after = ReadRawHeredocDelimiter(input, pos + (stripTabs ? 3 : 2), out var rawDelim);
+                if (rawDelim.Length > 0)
+                    (heredocs ??= new()).Add((ParseHeredocDelimiter(rawDelim).Delimiter, stripTabs));
+                pos = after;
+                continue;
+            }
+            // `\)` / `\(` / `\'` are escaped literals, not a closer, opener, or quote:
+            // `echo "$(echo \))"` prints `)` in bash.
+            if (c == '\\' && pos + 1 < len) { pos += 2; continue; }
+            // `(( … ))` is arithmetic: its `<<` is a shift, never a heredoc.
+            if (c == '(' && pos + 1 < len && input[pos + 1] == '(') { pos = ScanArithBody(input, pos + 2); continue; }
             if (c == '\'') { pos = ScanSingleQuoted(input, pos); continue; }
             if (c == '"') { pos = ScanDoubleQuoted(input, pos); continue; }
             if (c == '`') { pos = ScanBacktick(input, pos); continue; }

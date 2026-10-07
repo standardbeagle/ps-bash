@@ -102,6 +102,28 @@ public class BashLexerTests
             (BashTokenKind.Word, "\\"));
     }
 
+    // A heredoc body inside $( ) is raw text: an apostrophe must not open a quote and a `)`
+    // must not close the substitution (`git commit -m "$(cat <<'EOF' … EOF)"` with "it's").
+    // A `(( … << … ))` shift is not a heredoc; `\)` is an escaped literal, not the closer.
+    [Theory]
+    [InlineData("x=$(cat <<'EOF'\nit's ) here\nEOF\n)")]
+    [InlineData("x=\"$(cat <<'EOF'\nit's ) here\nEOF\n)\"")]
+    [InlineData("x=$(cat <<EOF\nps-bash's\nEOF\n)")]
+    [InlineData("x=$(cat <<-EOF\n\tit's )\n\tEOF\n)")]
+    [InlineData("x=$(cat <<A; cat <<'B'\nit's\nA\n) it's\nB\n)")]
+    [InlineData("x=$( (( n = 1 << 3 )); echo it )")]
+    [InlineData("x=$(echo \\))")]
+    // `<<<` is a here-string: taken as `<<` + delimiter `word`, the scan would skip to a line
+    // `word` that never comes and swallow the closing `)`.
+    [InlineData("x=$(cat <<< word\necho it)")]
+    public void Tokenize_CommandSubWithRawRegions_CapturedAsSingleToken(string input)
+    {
+        // A trailing word proves the region ends exactly at its own `)`: an unbalanced quote
+        // swallows the rest of the input, an early close splits the substitution.
+        var words = Tokenize(input + " tail").Where(t => t.Kind != BashTokenKind.Eof).ToList();
+        Assert.Equal(new[] { input, "tail" }, words.Select(t => t.Value));
+    }
+
     [Fact]
     public void Tokenize_CommandSubContainingCase_CapturedAsSingleToken()
     {

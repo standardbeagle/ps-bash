@@ -1,0 +1,30 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 150
+stdout-length: 43
+stderr-length: 0
+==== SCRIPT ====
+a=$(cat <<EOF
+it's $((1+1))
+EOF
+)
+b="$(cat <<-EOF
+	it's ) tabbed
+	EOF
+)"
+c="$(cat <<A; cat <<'B'
+it's a
+A
+it's ) b
+B
+)"
+printf '[%s]\n' "$a" "$b" "$c"
+==== STDOUT ====
+[it's 2]
+[it's ) tabbed]
+[it's a
+it's ) b]
+
+==== STDERR ====
+

@@ -1,0 +1,17 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 86
+stdout-length: 44
+stderr-length: 0
+==== SCRIPT ====
+m="$(cat <<'EOF'
+- rc kept: ps-bash's own shell :) (mostly
+EOF
+)"
+printf '[%s]\n' "$m"
+==== STDOUT ====
+[- rc kept: ps-bash's own shell :) (mostly]
+
+==== STDERR ====
+

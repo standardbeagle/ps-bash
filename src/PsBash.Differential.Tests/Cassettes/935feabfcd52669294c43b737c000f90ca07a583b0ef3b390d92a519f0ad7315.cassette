@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 113
+stdout-length: 37
+stderr-length: 0
+==== SCRIPT ====
+y=$(echo 'bare ) ok'); echo "[$y]"; echo [$(echo ')')] pre$(echo '(')post; echo "a $(echo "b $(echo 'c ) d')") e"
+==== STDOUT ====
+[bare ) ok]
+[)] pre(post
+a b c ) d e
+
+==== STDERR ====
+

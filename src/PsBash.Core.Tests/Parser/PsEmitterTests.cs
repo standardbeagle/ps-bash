@@ -451,13 +451,13 @@ public class PsEmitterTests
     [Fact]
     public void Transpile_NestedEmptyDoubleQuotedString_EmitsSingleQuotedEmpty()
     {
-        // `X="$(cmd || echo "")"` — an inner `""` closes the OUTER string, so
-        // PowerShell reports "The string is missing the terminator" and the whole
-        // file fails. `''` is inert at any nesting depth. (stop-hook.sh)
+        // `X="$(cmd || echo "")"` — an inner `""` used to close the OUTER string ("The string
+        // is missing the terminator", stop-hook.sh). The value is now a bare $( ) with no
+        // outer string at all, so the inner empty literal cannot terminate anything.
         var result = PsEmitter.Transpile("X=\"$(echo \"\")\"");
 
-        Assert.Contains("Invoke-BashEcho ''", result);
-        Assert.DoesNotContain("Invoke-BashEcho \"\"", result);
+        Assert.StartsWith("$env:X = $((@(Invoke-BashEcho ", result);
+        Assert.DoesNotContain("= \"$(", result);
     }
 
     [Fact]
@@ -483,10 +483,10 @@ public class PsEmitterTests
     // A nested command substitution has its OWN quotes, so the region ended at the
     // INNER quote and the colon after it looked unquoted — the value was split
     // there, tearing `:b f)` out of the command and leaving a mangled pattern.
-    // A nested pure literal emits SINGLE-quoted (safe at any depth); a word carrying
-    // an expansion stays double-quoted. Either way the colon must survive un-split.
-    [InlineData("X=\"$(grep \"a:b\" f)\"", "'a:b' f")]
-    [InlineData("X=\"$(echo \"p\" | grep \"a:b\")\"", "'a:b'")]
+    // The value is a bare $( ) (no outer string), so inner literals keep their plain
+    // double-quoted form. Either way the colon must survive un-split.
+    [InlineData("X=\"$(grep \"a:b\" f)\"", "Invoke-BashGrep \"a:b\" f")]
+    [InlineData("X=\"$(echo \"p\" | grep \"a:b\")\"", "Invoke-BashGrep \"a:b\"")]
     [InlineData("X=\"$(grep \"^$v:\" f)\"", "\"^${env:v}:\" f")]
     public void Transpile_AssignmentWithNestedQuotedColonInCommandSub_NotSplit(
         string bash, string expectedFragment)
@@ -1853,8 +1853,10 @@ public class PsEmitterTests
 
         // RC-8d: command-substitution emit wraps inner output in
         // `| ForEach-Object { Get-BashText $_ }` so the captured value is the
-        // bash-text payload, never a typed BashObject's default ToString().
-        Assert.Equal("Invoke-BashEcho x$(Invoke-BashWhoami | ConvertTo-BashCapture)", result);
+        // bash-text payload, never a typed BashObject's default ToString(). Glued to `x`, the
+        // whole word is one join expression (a bareword `x$( … )` has PowerShell's naive
+        // paren scan — see TryEmitJoinedWord).
+        Assert.Equal("Invoke-BashEcho (-join @('x', (@(Invoke-BashWhoami | ConvertTo-BashCapture) -join ' ')))", result);
     }
 
     [Fact]
@@ -1862,7 +1864,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("echo x$(ls | grep foo)");
 
-        Assert.Equal("Invoke-BashEcho x$(Invoke-BashLs | Invoke-BashGrep foo | ConvertTo-BashCapture)", result);
+        Assert.Equal("Invoke-BashEcho (-join @('x', (@(Invoke-BashLs | Invoke-BashGrep foo | ConvertTo-BashCapture) -join ' ')))", result);
     }
 
     [Fact]
@@ -1870,7 +1872,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("echo x`date`");
 
-        Assert.Equal("Invoke-BashEcho x$(Invoke-BashDate | ConvertTo-BashCapture)", result);
+        Assert.Equal("Invoke-BashEcho (-join @('x', (@(Invoke-BashDate | ConvertTo-BashCapture) -join ' ')))", result);
     }
 
     [Fact]
@@ -1880,9 +1882,8 @@ public class PsEmitterTests
 
         // Assignment command-sub preserves internal newlines and strips trailing ones
         // (bash), instead of the array $OFS-joining with a space (which flattened the
-        // file to one line). The newline join is [char]10, not a "`n" literal, so the
-        // fragment survives nesting inside another double-quoted string.
-        Assert.Equal("$env:VAR = \"$((@(Invoke-BashCat file | ConvertTo-BashCapture) -join [string][char]10) -replace '(\\r?\\n)+$','')\"", result);
+        // file to one line). A bare value, not wrapped in a "…" string (TryEmitJoinedValue).
+        Assert.Equal("$env:VAR = $((@(Invoke-BashCat file | ConvertTo-BashCapture) -join [string][char]10) -replace '(\\r?\\n)+$','')", result);
     }
 
     [Fact]
@@ -1890,7 +1891,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("echo x$(echo y$(whoami))");
 
-        Assert.Equal("Invoke-BashEcho x$(Invoke-BashEcho y$(Invoke-BashWhoami | ConvertTo-BashCapture) | ConvertTo-BashCapture)", result);
+        Assert.Equal("Invoke-BashEcho (-join @('x', (@(Invoke-BashEcho (-join @('y', (@(Invoke-BashWhoami | ConvertTo-BashCapture) -join ' '))) | ConvertTo-BashCapture) -join ' ')))", result);
     }
 
     /// <summary>
@@ -1905,7 +1906,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("dir=$(pwd)");
 
-        Assert.Equal("$env:dir = \"$((@(Invoke-BashPwd | ConvertTo-BashCapture) -join [string][char]10) -replace '(\\r?\\n)+$','')\"", result);
+        Assert.Equal("$env:dir = $((@(Invoke-BashPwd | ConvertTo-BashCapture) -join [string][char]10) -replace '(\\r?\\n)+$','')", result);
     }
 
     [Fact]
@@ -4281,15 +4282,11 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("echo \"$(echo \"hi there\")\"");
 
-        // The nested literal is SINGLE-quoted: inside another double-quoted string a
-        // double-quoted literal is at best fragile and, when empty, an outright parse
-        // error (`X="$(echo "")"`). Single quotes are inert at any nesting depth.
-        // The newline join is [char]10, not a "`n" literal: the OUTER string scanner
-        // would consume the backtick escape and end the inner string early ("The
-        // string is missing the terminator") — which is exactly what broke
-        // git-completion.bash at two levels of nesting.
+        // The quoted $( ) is emitted as a bare value, never inside a PS "…" string, so the
+        // inner "hi there" is not nested in anything (see TryEmitJoinedWord: PowerShell finds
+        // a string's $( ) end by naive paren counting, so command text never goes in one).
         Assert.Equal(
-            "Invoke-BashEcho \"$((@(Invoke-BashEcho 'hi there' | ConvertTo-BashCapture) -join [string][char]10) -replace '(\\r?\\n)+$','')\"",
+            "Invoke-BashEcho $((@(Invoke-BashEcho \"hi there\" | ConvertTo-BashCapture) -join [string][char]10) -replace '(\\r?\\n)+$','')",
             result);
     }
 
@@ -5782,8 +5779,10 @@ public class PsEmitterTests
         // missing the terminator") — it broke git-completion.bash.
         var result = PsEmitter.Transpile("echo \"$(git ${x:+--dir=$x} rev-parse)\"");
 
-        Assert.Contains(" : '')", result);
-        Assert.DoesNotContain(" : \"\")", result);
+        // The quoted $( ) is a bare value now, so the body is not inside any string and the
+        // `""` alternative is safe; what must hold is that no outer "$( … )" string exists.
+        Assert.StartsWith("Invoke-BashEcho $((@(git ($env:x ? ", result);
+        Assert.DoesNotContain("\"$(", result);
     }
 
     [Fact]
@@ -6012,7 +6011,7 @@ public class PsEmitterTests
         // "An empty pipe element is not allowed" (Go's make.bash).
         var result = PsEmitter.Transpile("echo x$(LC_TIME=C date)");
 
-        Assert.Contains("$(& { $__saved_LC_TIME", result);
+        Assert.Contains("@(& { $__saved_LC_TIME", result);
         Assert.Contains("} | ConvertTo-BashCapture)", result);
     }
 
@@ -6023,7 +6022,7 @@ public class PsEmitterTests
         // AST-type-only check called it pipeable and broke the parse.
         var result = PsEmitter.Transpile("echo x$(cd /tmp)");
 
-        Assert.Contains("$(& { $__psbash_cd_target", result);
+        Assert.Contains("@(& { $__psbash_cd_target", result);
     }
 
     [Fact]

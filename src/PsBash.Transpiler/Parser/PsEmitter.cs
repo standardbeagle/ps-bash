@@ -3236,6 +3236,11 @@ public static class PsEmitter
         if (value.Parts.Length == 1 && value.Parts[0] is WordPart.SingleQuoted)
             return EmitWordPart(value.Parts[0]);
 
+        // A command substitution anywhere in the value (`y=$(cmd)`, `y=a"$(cmd)"`): one join
+        // expression, never `$( )` text inside the flattened "…" (see TryEmitJoinedWord).
+        if (TryEmitJoinedValue(value.Parts, out var joined))
+            return joined;
+
         // Multi-part value: flatten into one PS double-quoted string.
         // EmitWord wraps each DoubleQuoted part in its own "...", which produces
         // ""segment1":"segment2"" when combined — invalid PowerShell.
@@ -3384,6 +3389,11 @@ public static class PsEmitter
         if (NeedsAdjacencyFlatten(word.Parts))
             return TransformWordPath(FlattenPartsToDoubleQuotedString(word.Parts));
 
+        // `pre"$(cmd)"`: a bareword-led word would glue the join expression onto the bareword,
+        // which PowerShell splits into two arguments — emit the WHOLE word as one join.
+        if (TryEmitJoinedWord(word.Parts, out var joinedWord))
+            return joinedWord;
+
         var sb = new StringBuilder();
         for (int i = 0; i < word.Parts.Length; i++)
         {
@@ -3449,6 +3459,9 @@ public static class PsEmitter
     /// </summary>
     private static string FlattenPartsToDoubleQuotedString(ImmutableArray<WordPart> parts)
     {
+        if (TryEmitJoinedWord(parts, out var joined))
+            return joined;
+
         // Same rule as EmitDoubleQuoted: a word whose value is fully known at
         // transpile time emits as a SINGLE-quoted PowerShell string when the
         // double-quoted form would need a backtick escape. The escape does not
@@ -3466,6 +3479,142 @@ public static class PsEmitter
         AppendFlattenedParts(sb, parts);
         sb.Append('"');
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// A word whose emitted PowerShell would put a command substitution INSIDE a double-quoted
+    /// string (<c>"$(cmd)"</c>, <c>"a$(cmd)b"</c>, <c>"${x:+$(cmd)}"</c>) is emitted instead as one
+    /// expression, <c>(-join @(seg, seg, …))</c>, so no command text ever sits in a PS string.
+    /// <para>
+    /// Why: PowerShell finds the end of a <c>$( … )</c> inside an expandable string by counting
+    /// parens WITHOUT honouring the quotes or here-strings within it. <c>"$('a ) b')"</c> and
+    /// <c>"$('a ( b')"</c> are parse errors, so bash's <c>echo "$(echo ')')"</c>, a <c>:)</c> in a
+    /// <c>"$(cat &lt;&lt;'EOF' … EOF)"</c> commit message, or any odd paren in quoted command text
+    /// made the WHOLE script fail to parse. Earlier fixes (<see cref="_dqNestDepth"/>, the
+    /// <c>[char]10</c> join, single-quoting nested literals) each dodged one shape of this
+    /// in-string scan; leaving the string removes the class. Segments: quoted/literal text →
+    /// single-quoted; a nested run without command text → its ordinary <c>"…"</c> (variables
+    /// are safe in a string); each command substitution → <see cref="EmitCommandSubString"/>
+    /// as a bare value (<c>nested: false</c> — it is no longer inside a string).
+    /// </para>
+    /// Returns false (caller keeps the string form) when no command text would be embedded, or
+    /// the word has a part with its own emission (glob, tilde, brace, process substitution).
+    /// </summary>
+    private static bool TryEmitJoinedWord(ImmutableArray<WordPart> parts, out string expr)
+    {
+        expr = "";
+        return EmbedsCommandSubInString(parts, inDq: false) && TryJoin(parts, inDq: false, out expr);
+    }
+
+    /// <summary>
+    /// <see cref="TryEmitJoinedWord"/> for a word that is string context as a whole even when
+    /// unquoted: an assignment value (<c>y=$(cmd)</c> — no word splitting) or a
+    /// <c>${x:-W}</c> argument W. Any command substitution in it would otherwise be flattened
+    /// into the value's <c>"…"</c>.
+    /// </summary>
+    private static bool TryEmitJoinedValue(ImmutableArray<WordPart> parts, out string expr)
+    {
+        expr = "";
+        return ContainsCommandSub(parts) && TryJoin(parts, inDq: true, out expr);
+    }
+
+    private static bool TryJoin(ImmutableArray<WordPart> parts, bool inDq, out string expr)
+    {
+        expr = "";
+        var segs = new List<string>();
+        if (!AppendJoinSegments(segs, parts, inDq)) return false;
+        // A lone quoted $( ) is already a string-valued expression (`x="$(cmd)"`, `y=$(cmd)`):
+        // emit it bare. Any other lone segment keeps the join, which also turns a $null
+        // (`${x:+…}` unset) into "" rather than unsetting an assigned variable.
+        expr = segs.Count == 1 && segs[0].StartsWith(CommandSubStringPrefix, StringComparison.Ordinal)
+            ? segs[0]
+            : "(-join @(" + string.Join(", ", segs) + "))";
+        return true;
+    }
+
+    /// <summary>How every <see cref="EmitCommandSubString"/> value starts.</summary>
+    private const string CommandSubStringPrefix = "$((@(";
+
+    /// <summary>True when emitting <paramref name="parts"/> as a PS string would embed a command
+    /// substitution's text in it: a <c>$( )</c> inside double quotes, or a <c>${x:-W}</c> in
+    /// double quotes whose argument word holds one.</summary>
+    private static bool EmbedsCommandSubInString(ImmutableArray<WordPart> parts, bool inDq)
+    {
+        foreach (var p in parts)
+        {
+            switch (p)
+            {
+                case WordPart.CommandSub when inDq: return true;
+                // Glued to other text (`[$(cmd)]`), an unquoted $( ) is emitted inside a PS
+                // argument-mode bareword, whose $( ) end is found by the same naive paren count.
+                case WordPart.CommandSub when parts.Length > 1: return true;
+                case WordPart.DoubleQuoted dq when EmbedsCommandSubInString(dq.Parts, inDq: true): return true;
+                case WordPart.BracedVarSub { ArgWord: { } arg } when inDq && ContainsCommandSub(arg): return true;
+            }
+        }
+        return false;
+    }
+
+    private static bool ContainsCommandSub(ImmutableArray<WordPart> parts)
+    {
+        foreach (var p in parts)
+        {
+            if (p is WordPart.CommandSub) return true;
+            if (p is WordPart.DoubleQuoted dq && ContainsCommandSub(dq.Parts)) return true;
+            if (p is WordPart.BracedVarSub { ArgWord: { } arg } && ContainsCommandSub(arg)) return true;
+        }
+        return false;
+    }
+
+    /// <summary>Emit <paramref name="parts"/> as join segments (see <see cref="TryEmitJoinedWord"/>);
+    /// false for a part this form does not model.</summary>
+    private static bool AppendJoinSegments(List<string> segs, ImmutableArray<WordPart> parts, bool inDq)
+    {
+        // Consecutive string-safe parts inside double quotes collect into one "…" run.
+        var run = ImmutableArray.CreateBuilder<WordPart>();
+        void FlushRun()
+        {
+            if (run.Count == 0) return;
+            segs.Add(EmitDoubleQuoted(new WordPart.DoubleQuoted(run.ToImmutable())));
+            run.Clear();
+        }
+        foreach (var p in parts)
+        {
+            switch (p)
+            {
+                case WordPart.Literal or WordPart.EscapedLiteral when inDq:
+                    run.Add(p);
+                    break;
+                case WordPart.Literal or WordPart.EscapedLiteral or WordPart.SingleQuoted or WordPart.AnsiCQuoted:
+                    FlushRun();
+                    TryGetPureLiteralText(ImmutableArray.Create(p), out var lit);
+                    segs.Add(PsBuild.SingleQuote(lit));
+                    break;
+                case WordPart.DoubleQuoted dq:
+                    FlushRun();
+                    if (!AppendJoinSegments(segs, dq.Parts, inDq: true)) return false;
+                    break;
+                case WordPart.CommandSub cs:
+                    FlushRun();
+                    // Quoted: newline-preserving string value. Unquoted inside a mixed word: the
+                    // lines space-joined, as the glued bareword's $OFS join gave before (its bash
+                    // word-splitting is not modelled here).
+                    segs.Add(inDq ? EmitCommandSubString(cs, nested: false) : $"(@{EmitCommandSub(cs)[1..]} -join ' ')");
+                    break;
+                case WordPart.BracedVarSub { ArgWord: { } arg } bvs when inDq && ContainsCommandSub(arg):
+                    FlushRun();
+                    segs.Add(EmitBracedVar(bvs, inDoubleQuote: false));
+                    break;
+                case WordPart.SimpleVarSub or WordPart.BracedVarSub or WordPart.ArithSub:
+                    if (inDq) { run.Add(p); break; }
+                    segs.Add(EmitWordPart(p));
+                    break;
+                default:
+                    return false;
+            }
+        }
+        FlushRun();
+        return true;
     }
 
     /// <summary>
@@ -3540,6 +3689,11 @@ public static class PsEmitter
     /// </summary>
     private static string EmitBracedArgWordValue(ImmutableArray<WordPart> parts)
     {
+        // A command substitution in W must not land inside the flattened "…" string either (see
+        // TryEmitJoinedWord); W's value is the string form, so its $( ) is quoted-context.
+        if (TryEmitJoinedValue(parts, out var joined))
+            return joined;
+
         var sb = new StringBuilder();
         foreach (var part in parts)
         {
@@ -4025,7 +4179,7 @@ public static class PsEmitter
         // the backtick escape and the inner string ends early ("The string is
         // missing the terminator"). Hit git-completion.bash, where a command sub
         // nested two double-quote levels deep broke the whole file's parse.
-        return $"$((@({PipelineHead(body, inner)} | ConvertTo-BashCapture) -join [string][char]10) -replace '(\\r?\\n)+$','')";
+        return $"{CommandSubStringPrefix}{PipelineHead(body, inner)} | ConvertTo-BashCapture) -join [string][char]10) -replace '(\\r?\\n)+$','')";
     }
 
     private static string EmitProcessSub(WordPart.ProcessSub ps)
@@ -4797,9 +4951,11 @@ public static class PsEmitter
         // Bare context: the double-quoted flatten is safe (not nested) and matches the
         // historical literal emission. Inside an outer "$( … )" string a nested double-quoted
         // value mis-parses when empty / quote-bearing, so use the single-quote-safe path there.
+        // A $( ) in W: one join expression in both contexts, never command text in "…".
         string ArgVal(string rawSlice) =>
             !argWord.HasValue
                 ? (nested ? PsBuild.SingleQuote(rawSlice) : $"\"{rawSlice}\"")
+            : TryEmitJoinedValue(argWord.Value, out var joinedArg) ? joinedArg
             : nested ? EmitBracedArgWordValue(argWord.Value)
             : FlattenPartsToDoubleQuotedString(argWord.Value);
 
@@ -5125,6 +5281,9 @@ public static class PsEmitter
         {
             return PsBuild.SingleQuote(literal);
         }
+
+        if (TryEmitJoinedWord(ImmutableArray.Create<WordPart>(dq), out var joined))
+            return joined;
 
         var sb = new StringBuilder();
         sb.Append('"');

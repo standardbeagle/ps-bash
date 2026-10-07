@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 52
+stdout-length: 9
+stderr-length: 0
+==== SCRIPT ====
+v=$( (( n = 1 << 3 )); echo "$n it's" ); echo "[$v]"
+==== STDOUT ====
+[8 it's]
+
+==== STDERR ====
+

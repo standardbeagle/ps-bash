@@ -67,6 +67,26 @@ public class TranspileParseabilityCorpusTests
     [InlineData("echo $(date)")]
     [InlineData("echo `date`")]
     [InlineData("echo $(echo $(echo nested))")]
+    // fixed: PowerShell finds a string's (and a bareword's) $( ) end by NAIVE paren counting,
+    // ignoring quotes/here-strings inside — one odd paren in quoted command text failed the
+    // whole script ("Missing closing ')' in subexpression"). Quoted / glued $( ) is now a join
+    // expression, never command text inside a PS string (PsEmitter.TryEmitJoinedWord).
+    [InlineData("echo \"[$(echo 'a ) b')]\"")]
+    [InlineData("echo \"[$(echo \"a ( b\")]\"")]
+    [InlineData("x=\"$(printf '%s' ':)')\"; echo \"$x\"")]
+    [InlineData("y=$(echo 'bare ) ok'); echo \"$y\"")]
+    [InlineData("echo \"[${HOME:+$(echo 'x)')}]\"")]
+    [InlineData("echo [$(echo ')')] pre$(echo '(')post")]
+    [InlineData("echo \"a $(echo \"b $(echo 'c ) d')\") e\"")]
+    // fixed: `\)` closed the $( ) early in the lexer's balanced scan.
+    [InlineData("echo \"[$(echo \\))]\" [$(echo \\()]")]
+    // fixed: a heredoc body inside $( ) was scanned as code — an apostrophe opened a quote,
+    // a `)` closed the substitution. The commit-message idiom `git commit -m "$(cat <<'EOF' …)"`.
+    [InlineData("m=\"$(cat <<'EOF'\nit's done :) (mostly\nEOF\n)\"; echo \"$m\"")]
+    [InlineData("m=$(cat <<EOF\nps-bash's own $HOME\nEOF\n); echo \"$m\"")]
+    [InlineData("m=\"$(cat <<-EOF\n\tit's ) tabbed\n\tEOF\n)\"; echo \"$m\"")]
+    [InlineData("m=\"$(cat <<A; cat <<'B'\nit's a\nA\nit's ) b\nB\n)\"; echo \"$m\"")]
+    [InlineData("v=$( (( n = 1 << 3 )); echo \"$n it's\" ); echo \"$v\"")]
     // compound bodies — fixed: switch/foreach/if statement can't head a pipe ("empty pipe element").
     [InlineData("echo $(case $x in a) echo A;; esac)")]
     [InlineData("echo $(for i in 1 2; do echo $i; done)")]
