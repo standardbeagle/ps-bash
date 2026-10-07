@@ -98,6 +98,29 @@ public class AgentPatternEndToEndTests
         finally { Directory.Delete(dir, recursive: true); }
     }
 
+    // The real terminal stderr bytes (the differential oracle trims, so it cannot see a stray final
+    // newline). bash writes exactly what the command wrote: `printf x >&2` is the one byte `x`. Every
+    // stderr record used to get a newline from the host's frame convention. Oracle: bash 5.2.
+    [SkippableTheory]
+    [InlineData("printf x >&2", "x")]
+    [InlineData("printf 'a\\nb' >&2", "a\nb")]
+    [InlineData("echo -n y >&2", "y")]
+    [InlineData("echo line >&2", "line\n")]
+    [InlineData("printf x >&2; echo y >&2", "xy\n")]
+    public async Task StderrRecord_ExactBytesOnTheTerminal(string script, string expectedStderr)
+    {
+        var (exitCode, _, stderr) = await RunShellAsync("-c", script);
+        Assert.Equal(0, exitCode);
+        Assert.Equal(expectedStderr, stderr);
+    }
+
+    [SkippableFact]
+    public async Task StderrRecord_CmdletDiagnostic_StillEndsInNewline()
+    {
+        var (_, _, stderr) = await RunShellAsync("-c", "cat /psb-nonexistent-zz; printf after >&2");
+        Assert.EndsWith("No such file or directory\nafter", stderr);
+    }
+
     [SkippableFact]
     public async Task FailedRedirect_UnderSetE_StillStopsTheScript()
     {

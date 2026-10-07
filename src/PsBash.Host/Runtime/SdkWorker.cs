@@ -342,9 +342,11 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
         // ExitTrackingHostUI.WriteErrorLine → the forwarder set below) — routes
         // through this single sink. When errorOutput is null (the in-process
         // IWorker.ExecuteAsync path) we keep the historical Console.Error
-        // fallback. Convention: errorOutput receives a line WITHOUT a trailing
-        // newline; the IPC frame writer adds the record boundary.
-        Action<string> deliverError = line =>
+        // fallback. Convention: the sink receives EXACT BYTES — every STDERR frame is written raw
+        // by the launcher. An error RECORD's bytes come from PsBash.Core.StderrRecord (a line, or
+        // no newline at all for `printf x >&2`): deliverErrorBytes. Host text that is a line
+        // (exception messages, WriteErrorLine) goes through deliverError, which adds the LF.
+        Action<string> deliverErrorBytes = payload =>
         {
             // S1: stdout is batched, stderr is not. Without this flush the two
             // streams would REORDER — buffered stdout would surface after an error
@@ -354,8 +356,8 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
             batcher?.Flush();
             try
             {
-                if (errorOutput is not null) errorOutput(line);
-                else Console.Error.WriteLine(line);
+                if (errorOutput is not null) errorOutput(payload);
+                else Console.Error.Write(payload);
             }
             catch
             {
@@ -366,6 +368,7 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
                 _ps.BeginStop(null, null);
             }
         };
+        Action<string> deliverError = line => deliverErrorBytes(line.EndsWith('\n') ? line : line + "\n");
         _host.HostUI.SetWriteErrorLineForwarder(errorOutput is not null ? deliverError : null);
 
         // Stream output via DataAdded so results are delivered as they arrive rather
@@ -582,7 +585,9 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
             {
                 lastErrorRecord = record;
                 FlushFormatBufferCore();
-                deliverError(record.ToString());
+                // The record's exact bytes: a line, or — `printf x >&2` — no newline at all
+                // (PsBash.Core.StderrRecord, the rule `2> f` and `2>&1` share).
+                deliverErrorBytes(PsBash.Core.StderrRecord.Payload(record.ToString(), record.TargetObject));
             }
         }
         EventHandler<System.Management.Automation.DataAddedEventArgs> onErrorAdded = (_, _) =>

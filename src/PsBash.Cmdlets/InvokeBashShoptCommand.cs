@@ -75,6 +75,17 @@ public sealed class InvokeBashShoptCommand : PSCmdlet
     /// <summary>Current value of a shell option in the calling runspace (false for an unknown name).</summary>
     internal static bool IsEnabled(string name) => Options.TryGetValue(name, out var on) && on;
 
+    /// <summary>A copy of the calling runspace's option table (<see cref="BashShellState"/>: subshell scope).</summary>
+    internal static Dictionary<string, bool> SnapshotOptions() => new(Options, StringComparer.Ordinal);
+
+    /// <summary>Put a <see cref="SnapshotOptions"/> copy back, in place (the per-runspace table is shared by reference).</summary>
+    internal static void RestoreOptions(Dictionary<string, bool> snapshot)
+    {
+        var options = Options;
+        options.Clear();
+        foreach (var (k, v) in snapshot) options[k] = v;
+    }
+
     /// <summary>
     /// Declared explicitly because the bare token <c>-p</c> prefix-matches
     /// <c>-PipelineVariable</c> / <c>-ProgressAction</c> under

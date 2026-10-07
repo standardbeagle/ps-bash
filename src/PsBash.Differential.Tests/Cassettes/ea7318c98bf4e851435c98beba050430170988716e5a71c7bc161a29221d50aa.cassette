@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 89
+stdout-length: 2
+stderr-length: 3
+==== SCRIPT ====
+printf x >&2; echo y >&2; f=$(mktemp); { printf z >&2; } 2>"$f"; wc -c < "$f"; rm -f "$f"
+==== STDOUT ====
+1
+
+==== STDERR ====
+xy
+

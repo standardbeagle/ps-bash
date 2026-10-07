@@ -173,11 +173,12 @@ public sealed class InvokeBashRedirectCommand : PSCmdlet
         Write(_stream, BashRuntime.RecordFilePayload(InputObject));
     }
 
-    /// <summary>One stderr line as bash writes it: the message only, LF-terminated.</summary>
+    /// <summary>One stderr record as bash writes it: the message only, LF-terminated unless the writer
+    /// marked it (<c>printf x &gt;&amp;2 2&gt; f</c> writes exactly <c>x</c>) — <see cref="PsBash.Core.StderrRecord"/>.</summary>
     private static string ErrorPayload(ErrorRecord er)
     {
         string text = er.ErrorDetails?.Message ?? er.Exception?.Message ?? er.ToString();
-        return text.EndsWith('\n') ? text : text + "\n";
+        return PsBash.Core.StderrRecord.Payload(text, er.TargetObject);
     }
 
     private static void Write(FileStream? stream, string payload)

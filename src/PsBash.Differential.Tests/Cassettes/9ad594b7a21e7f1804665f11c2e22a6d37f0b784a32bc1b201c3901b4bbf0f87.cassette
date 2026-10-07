@@ -1,0 +1,16 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 231
+stdout-length: 54
+stderr-length: 0
+==== SCRIPT ====
+x=outer; ( x=inner; export X2=1 ); echo "$x [${X2:-unset}]"; ( cd / ); [ "$PWD" != / ] && echo cd-local; ( shopt -s nullglob ); for f in /nonexist-zz/*; do echo "glob $f"; done; ( trap 'echo T' USR1 ); trap -p USR1; echo trap-local
+==== STDOUT ====
+outer [unset]
+cd-local
+glob /nonexist-zz/*
+trap-local
+
+==== STDERR ====
+

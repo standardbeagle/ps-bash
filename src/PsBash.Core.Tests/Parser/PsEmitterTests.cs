@@ -14,6 +14,10 @@ public class PsEmitterTests
     /// </summary>
     private const string SubshellPop = "finally { " + PsBuild.PopLocationRestoringProcessCwd + " }";
 
+    /// <summary>The emitted `( BODY )`: the subshell scope (state save/restore) around the cwd push/pop.</summary>
+    private static string Sub(string body) =>
+        PsBuild.ShellStateScope("Push-Location; " + body, PsBuild.PopLocationRestoringProcessCwd);
+
     [Fact]
     public void Transpile_SubshellExit_RestoresProcessWorkingDirectoryNotJustPsLocation()
     {
@@ -29,11 +33,12 @@ public class PsEmitterTests
         Assert.Contains("[System.Environment]::CurrentDirectory = $__psbash_subshell_pop.ProviderPath",
             result);
         // The restore must be in the FINALLY, so it also runs when the body throws or
-        // takes the scoped-`exit` return.
-        Assert.EndsWith(SubshellPop, result);
+        // takes the scoped-`exit` return. It is the last statement of that finally.
+        Assert.Contains("} finally { ", result);
+        Assert.EndsWith(PsBuild.PopLocationRestoringProcessCwd + " } }", result);
         Assert.Contains("$global:LASTEXITCODE = 7; return",
             PsEmitter.Transpile("(cd sub; exit 7)")!);
-        Assert.EndsWith(SubshellPop + " }", PsEmitter.Transpile("(cd sub; exit 7)")!);
+        Assert.EndsWith(PsBuild.PopLocationRestoringProcessCwd + " } }", PsEmitter.Transpile("(cd sub; exit 7)")!);
     }
 
     [Fact]
@@ -3292,7 +3297,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("(Invoke-BashEcho hello; Invoke-BashEcho world)");
 
-        Assert.Equal("try { Push-Location; Invoke-BashEcho hello; Invoke-BashEcho world } " + SubshellPop, result);
+        Assert.Equal(Sub("Invoke-BashEcho hello; Invoke-BashEcho world"), result);
     }
 
     [Fact]
@@ -3308,9 +3313,9 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("(echo hello) > out.txt");
 
-        // The try/finally body is a STATEMENT and cannot head the redirect pipe
-        // ("An empty pipe element is not allowed"), so it is wrapped in `& { }`.
-        Assert.Equal("& { try { Push-Location; Invoke-BashEcho hello } " + SubshellPop + " } | Invoke-BashRedirect -Path out.txt", result);
+        // The subshell scope is `& { }` — an expression, so it heads the redirect pipe directly
+        // (a bare try/finally statement could not: "An empty pipe element is not allowed").
+        Assert.Equal(Sub("Invoke-BashEcho hello") + " | Invoke-BashRedirect -Path out.txt", result);
     }
 
     [Fact]
@@ -3318,11 +3323,9 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("(echo a; (echo b))");
 
-        // Nesting: the SAME `$__psbash_subshell_pop` temp appears at both levels, which is
-        // safe because the inner `finally` runs to completion inside the outer body — the
-        // assignment and its reads never interleave across levels.
-        Assert.Equal("try { Push-Location; Invoke-BashEcho a; try { Push-Location; Invoke-BashEcho b } "
-            + SubshellPop + " } " + SubshellPop, result);
+        // Nesting: each level is its own `& { }` child scope, so its `$__psbash_ss` snapshot and
+        // `$__psbash_subshell_pop` temp are per level — the inner restore can never clobber the outer's.
+        Assert.Equal(Sub("Invoke-BashEcho a; " + Sub("Invoke-BashEcho b")), result);
     }
 
     [Fact]
@@ -3335,8 +3338,11 @@ public class PsEmitterTests
         // previous bare `try { … } finally { … } && …` was not parseable
         // PowerShell at all ("Unexpected token '&&'"), which this assertion used
         // to pin. Same reason `while` / `case` operands are wrapped.
-        Assert.StartsWith("$(try { Push-Location; $($__psbash_cd_target = '/tmp'", result);
-        Assert.Contains("&& Invoke-BashPwd } " + SubshellPop + "); $(if (-not $? -or $global:LASTEXITCODE -ne 0) { Write-Error '' -ErrorAction SilentlyContinue }) && Invoke-BashPwd", result);
+        Assert.StartsWith("$(& { $__psbash_ss = ", result);
+        Assert.Contains("try { Push-Location; $($__psbash_cd_target = '/tmp'", result);
+        Assert.Contains("&& Invoke-BashPwd } finally { ", result);
+        Assert.EndsWith(PsBuild.PopLocationRestoringProcessCwd
+            + " } }); $(if (-not $? -or $global:LASTEXITCODE -ne 0) { Write-Error '' -ErrorAction SilentlyContinue }) && Invoke-BashPwd", result);
     }
 
     [Theory]
@@ -3345,7 +3351,7 @@ public class PsEmitterTests
     // were both parse errors that broke the whole file.
     [InlineData("true || case $x in a) echo a;; esac", "|| $(switch")]
     [InlineData("true && while false; do echo x; done", "&& $(")]
-    [InlineData("true || (echo a)", "|| $(try {")]
+    [InlineData("true || (echo a)", "|| $(& { $__psbash_ss")]
     public void Transpile_CompoundCommandInAndOrChain_IsWrappedInSubexpression(
         string bash, string expected)
     {
@@ -4770,7 +4776,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("set -e; (cat /nofile; echo in); echo after")!;
         Assert.Contains(PsBuild.ErrexitCheck("return"), result);
-        Assert.StartsWith("& { try { Push-Location;", result[(result.IndexOf("& { try", StringComparison.Ordinal))..]);
+        Assert.Contains("& { $__psbash_ss = ", result);
     }
 
     [Fact]
@@ -4782,7 +4788,8 @@ public class PsEmitterTests
     public void Transpile_SetX_EmitsPSDebugTrace()
     {
         var result = PsEmitter.Transpile("set -x");
-        Assert.Equal("Set-PSDebug -Trace 1", result);
+        // The flag lets a subshell scope (BashShellState) undo a `set -x` made inside it.
+        Assert.Equal("Set-PSDebug -Trace 1; $global:__BashXtrace = $true", result);
     }
 
     [Fact]
@@ -5800,7 +5807,7 @@ public class PsEmitterTests
         // never ran — found by the oracle differential sweep.
         var result = PsEmitter.Transpile("(exit 7); echo $?");
 
-        Assert.StartsWith("& { try { Push-Location;", result);
+        Assert.StartsWith("& { $__psbash_ss = ", result);
         Assert.Contains("$global:LASTEXITCODE = 7; return", result);
         Assert.EndsWith("Invoke-BashEcho $global:LASTEXITCODE", result);
     }
@@ -5812,12 +5819,46 @@ public class PsEmitterTests
     }
 
     [Fact]
-    public void Transpile_SubshellWithoutExit_NotWrappedInScriptBlock()
+    public void Transpile_CommandSub_ScopeOnlyWhenTheBodyCouldChangeShellState()
     {
-        // The script block is only needed to give the scoped `return` something to
-        // return from; a plain subshell keeps its cheaper emission.
-        Assert.Equal("try { Push-Location; Invoke-BashEcho a } " + SubshellPop,
-            PsEmitter.Transpile("(echo a)"));
+        // A pipeline of mapped, inert commands cannot change shell state: it keeps the cheap form.
+        Assert.DoesNotContain("$__psbash_ss", PsEmitter.Transpile("v=$(echo a | tr a b)"));
+        Assert.DoesNotContain("$__psbash_ss", PsEmitter.Transpile("v=$(printf '%s' x)"));
+        // A possible function, a state builtin, `printf -v`, or a list must get the subshell scope.
+        foreach (var bash in new[] { "v=$(f)", "v=$(cd /)", "v=$(printf -v q x)", "v=$(x=1; echo $x)", "v=$(shopt -s nullglob)" })
+            Assert.Contains("[PsBash.Cmdlets.BashShellState]::Save(", PsEmitter.Transpile(bash));
+    }
+
+    [Theory]
+    [InlineData("set -o pipefail")]
+    [InlineData("set +o pipefail")]
+    [InlineData("set -o noclobber")]
+    public void Transpile_SetUnsupportedLongOption_IsAStatusZeroNoOp(string bash)
+    {
+        // Fell through to a bare `set …` — PowerShell's Set-Variable alias ("Cannot bind parameter 'Option'").
+        Assert.Equal(PsBuild.SetStatus(0), PsEmitter.Transpile(bash));
+    }
+
+    [Fact]
+    public void Transpile_SetPlusOXtrace_TurnsTracingOffAndClearsTheFlag()
+        => Assert.Equal("Set-PSDebug -Off; $global:__BashXtrace = $false", PsEmitter.Transpile("set +o xtrace"));
+
+    [Fact]
+    public void Transpile_CommandSubWithOwnSetE_StartsErrexitOffAndChecksItsBody()
+    {
+        // bash: errexit is not inherited into $( ), but a set -e inside applies there.
+        var result = PsEmitter.Transpile("v=$(set -e; false; echo after)");
+        Assert.Contains("$global:__BashErrexit = $false; " + PsBuild.ErrexitSuppressVar + " = 0; ", result);
+        Assert.Contains(PsBuild.ErrexitCheck("return"), result);
+    }
+
+    [Fact]
+    public void Transpile_PlainSubshell_GetsTheShellStateScope()
+    {
+        // Every subshell is the full scope: even `(echo a)` could not be proven free of state
+        // changes once its body grows, and a scope-less subshell let `( set -e )` / `( x=1 )`
+        // leak into the parent. The script block also serves the scoped `exit` return.
+        Assert.Equal(Sub("Invoke-BashEcho a"), PsEmitter.Transpile("(echo a)"));
     }
 
     [Fact]
@@ -5895,7 +5936,9 @@ public class PsEmitterTests
 
         // The quoted $( ) is a bare value now, so the body is not inside any string and the
         // `""` alternative is safe; what must hold is that no outer "$( … )" string exists.
-        Assert.StartsWith("Invoke-BashEcho $((@(git ($env:x ? ", result);
+        // `git` is not a mapped command (it could be a function), so the body gets the subshell scope.
+        Assert.StartsWith("Invoke-BashEcho $((@(& { $__psbash_ss = ", result);
+        Assert.Contains("try { git ($env:x ? ", result);
         Assert.DoesNotContain("\"$(", result);
     }
 
@@ -6076,8 +6119,8 @@ public class PsEmitterTests
         // cannot head the `| Invoke-BashRedirect` pipe. Hit Go's mkerrors.sh.
         var result = PsEmitter.Transpile("(echo a; echo b) > f");
 
-        Assert.StartsWith("& { try { Push-Location;", result);
-        Assert.Contains("} | Invoke-BashRedirect -Path f", result);
+        Assert.StartsWith("& { $__psbash_ss = ", result);
+        Assert.Contains("} } | Invoke-BashRedirect -Path f", result);
     }
 
     [Fact]
@@ -6125,7 +6168,8 @@ public class PsEmitterTests
         // "An empty pipe element is not allowed" (Go's make.bash).
         var result = PsEmitter.Transpile("echo x$(LC_TIME=C date)");
 
-        Assert.Contains("@(& { $__saved_LC_TIME", result);
+        Assert.Contains("@(& { $__psbash_ss = ", result);
+        Assert.Contains("try { $__saved_LC_TIME", result);
         Assert.Contains("} | ConvertTo-BashCapture)", result);
     }
 
@@ -6136,7 +6180,9 @@ public class PsEmitterTests
         // AST-type-only check called it pipeable and broke the parse.
         var result = PsEmitter.Transpile("echo x$(cd /tmp)");
 
-        Assert.Contains("@(& { $__psbash_cd_target", result);
+        // Wrapped in the subshell scope (cd changes shell state), whose body is the cd list.
+        Assert.Contains("@(& { $__psbash_ss = ", result);
+        Assert.Contains("try { $__psbash_cd_target", result);
     }
 
     [Fact]

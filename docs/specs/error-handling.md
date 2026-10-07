@@ -374,6 +374,14 @@ by `SdkWorker` to a STDERR-tagged IPC frame inline, in order with stdout.
 failure), so the same redirection applies. Nothing writes `$Host.UI.WriteErrorLine`,
 which no redirection can see (`{ echo e >&2; } 2>/dev/null` used to print `e`).
 
+A stderr record's BYTES follow one rule, `PsBash.Core.StderrRecord.Payload`: a line
+(LF-terminated) unless the record is marked unterminated — `Write-BashHostStderr`
+sets `TargetObject` to `StderrRecord.NoTrailingNewlineMarker` when its input carries
+`NoTrailingNewline`, so `printf x >&2` writes exactly `x` (terminal, `2> f`, `2>&1`
+alike). STDERR IPC frames carry exact bytes: the host adds the LF to every line it
+sends (records via the rule, host text via `deliverError`), and the launcher writes
+the payload raw — it used to append a "missing" LF, giving every record a newline.
+
 ---
 
 ## 5. Error Handling Migration Status

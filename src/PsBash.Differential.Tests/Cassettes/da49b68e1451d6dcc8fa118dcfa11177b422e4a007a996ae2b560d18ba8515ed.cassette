@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 124
+stdout-length: 47
+stderr-length: 0
+==== SCRIPT ====
+f() { ( set -e; false ); echo "fn survived rc=$?"; }; f; set -e; ( set +e; false; echo inner-continues ); echo outer-still-e
+==== STDOUT ====
+fn survived rc=1
+inner-continues
+outer-still-e
+
+==== STDERR ====
+

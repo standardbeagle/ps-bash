@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 101
+stdout-length: 18
+stderr-length: 0
+==== SCRIPT ====
+( set -e; true ); false; echo survived; set +e; ( set -e; false; echo not-printed ); echo "sub rc=$?"
+==== STDOUT ====
+survived
+sub rc=1
+
+==== STDERR ====
+

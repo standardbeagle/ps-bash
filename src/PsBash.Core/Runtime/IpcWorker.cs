@@ -848,7 +848,10 @@ public sealed class IpcWorker : IWorker
     {
         if (tag == StreamTag.Stderr)
         {
-            Console.Error.Write(line.EndsWith('\n') ? line : line + "\n");
+            // Exact bytes: the host sends every line with its LF and an unterminated record
+            // (`printf x >&2`) without one. Adding a "missing" LF here gave every record a newline.
+            // The launcher only reuses a host of its own build, so both sides move together.
+            Console.Error.Write(line);
             return;
         }
         if (OutputCallback is { } cb) cb(line);

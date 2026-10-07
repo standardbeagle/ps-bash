@@ -262,30 +262,25 @@ public static class PsEmitter
     }
 
     /// <summary>
-    /// True when <paramref name="command"/> lexically contains an <c>exit</c>
-    /// builtin, so <see cref="EmitSubshell"/> knows it must supply the script block
-    /// the scoped <c>return</c> returns from. A function DEFINITION inside the
-    /// subshell counts: in bash such a function cannot escape the subshell anyway.
+    /// True when <paramref name="command"/> runs a <c>set</c> that turns errexit on (<c>-e</c> in a flag
+    /// word, or <c>-o errexit</c>) at its own level — not inside a nested subshell, which has its own scope.
     /// </summary>
-    private static bool ContainsExitCommand(BashNode? command) => command switch
+    private static bool BodySetsErrexit(BashNode? command) => command switch
     {
-        null => false,
-        Command.Simple s => s.Words.Length > 0 && GetLiteralValue(s.Words[0]) == "exit",
-        Command.Pipeline p => p.Commands.Any(ContainsExitCommand),
-        Command.AndOrList a => a.Commands.Any(ContainsExitCommand),
-        Command.CommandList l => l.Commands.Any(ContainsExitCommand),
-        Command.If i => i.Arms.Any(arm => ContainsExitCommand(arm.Cond)
-                                       || ContainsExitCommand(arm.Body))
-                        || ContainsExitCommand(i.ElseBody),
-        Command.ForIn f => ContainsExitCommand(f.Body),
-        Command.ForArith f => ContainsExitCommand(f.Body),
-        Command.While w => ContainsExitCommand(w.Cond) || ContainsExitCommand(w.Body),
-        Command.Case c => c.Arms.Any(arm => ContainsExitCommand(arm.Body)),
-        Command.ShFunction f => ContainsExitCommand(f.Body),
-        Command.BraceGroup b => ContainsExitCommand(b.Body),
-        // A NESTED subshell handles its own exit scoping, so it does not force a
-        // script block on the outer one.
-        Command.Subshell => false,
+        Command.Simple { Words.Length: > 1 } s when GetLiteralValue(s.Words[0]) == "set" =>
+            s.Words.Skip(1).Select(GetLiteralValue).ToList() is var a
+            && (a.Any(w => w is { Length: > 1 } && w[0] == '-' && w[1] != '-' && w.Contains('e'))
+                || a.SkipWhile(w => w != "-o").Skip(1).FirstOrDefault() == "errexit"),
+        Command.Pipeline p => p.Commands.Any(BodySetsErrexit),
+        Command.AndOrList a => a.Commands.Any(BodySetsErrexit),
+        Command.CommandList l => l.Commands.Any(BodySetsErrexit),
+        Command.If i => i.Arms.Any(arm => BodySetsErrexit(arm.Cond) || BodySetsErrexit(arm.Body))
+                        || BodySetsErrexit(i.ElseBody),
+        Command.ForIn f => BodySetsErrexit(f.Body),
+        Command.ForArith f => BodySetsErrexit(f.Body),
+        Command.While w => BodySetsErrexit(w.Cond) || BodySetsErrexit(w.Body),
+        Command.Case c => c.Arms.Any(arm => BodySetsErrexit(arm.Body)),
+        Command.BraceGroup b => BodySetsErrexit(b.Body),
         _ => false,
     };
 
@@ -330,13 +325,30 @@ public static class PsEmitter
         _pipeStageFeedsInput = false;
         // bash does not inherit errexit into `$( … )` (no inherit_errexit): `x=$(f)` runs all of f.
         // Only the substitution's final status matters, checked after the assignment.
-        _errexitExemptDepth++;
+        // But a `set -e` INSIDE the body does apply there: `v=$(set -e; false; echo x)` leaves v empty
+        // and $? = 1. Such a body starts with errexit OFF (not inherited) and gets its own checks; the
+        // subshell scope (PipelineHead → PsBuild.ShellStateScope) restores the parent's flags after.
+        bool ownErrexit = BodySetsErrexit(body);
+        bool savedMode = _errexitMode;
+        int savedExempt = _errexitExemptDepth;
+        if (ownErrexit) { _errexitMode = true; _errexitExemptDepth = 0; }
+        else _errexitExemptDepth++;
+        // A substitution body is a SUBSHELL: `exit N` inside `$( … )` / `<( … )` leaves only it
+        // (`v=$(exit 3); echo $?` prints 3). Raise the depth so `exit` emits the scoped `return`;
+        // PipelineHead / Invoke-ProcessSub supply the script block it returns from.
+        _subshellDepth++;
         try
         {
             var text = Emit(body);
+            if (ownErrexit)
+                return "$global:__BashErrexit = $false; " + PsBuild.ErrexitSuppressVar + " = 0; " + text;
             return _errexitMode && ConditionRunsCommand(body) ? PsBuild.ErrexitSuppressed(text) : text;
         }
-        finally { _captureDepth--; _pipeStageFeedsInput = savedFeed; _errexitExemptDepth--; }
+        finally
+        {
+            _captureDepth--; _pipeStageFeedsInput = savedFeed; _subshellDepth--;
+            _errexitMode = savedMode; _errexitExemptDepth = savedExempt;
+        }
     }
 
     /// <summary>
@@ -1188,20 +1200,16 @@ public static class PsEmitter
         try { body = EmitCompoundBody(subshell.Redirects, () => EmitBody(subshell.Body)); }
         finally { _subshellDepth--; }
 
-        // Under errexit a failure inside the body leaves only the subshell (a scoped `return`,
-        // see ErrexitExitStatement), so it needs the script block too.
-        bool scopedExit = ContainsExitCommand(subshell.Body) || (_errexitMode && _errexitExemptDepth == 0);
-        // The `finally` restores BOTH halves of the working directory (PowerShell
-        // location + [System.Environment]::CurrentDirectory) — see
-        // PsBuild.PopLocationRestoringProcessCwd for why a bare `Pop-Location` silently
-        // made `(cd sub); cat data.txt | …` stream the wrong file. It is a `finally`, so
-        // it also runs on the scoped-exit path below (`$LASTEXITCODE = N; return`) and on
-        // any exception out of the body.
-        var sb = new StringBuilder("try { Push-Location; ");
-        sb.Append(body);
-        sb.Append(" } finally { ").Append(PsBuild.PopLocationRestoringProcessCwd).Append(" }");
-        if (scopedExit)
-            sb.Insert(0, "& { ").Append(" }");
+        // One subshell scope (PsBuild.ShellStateScope): a child PS scope plus save/restore of the
+        // shell state a scope does not isolate, so nothing the body changes — `set -e`, variables,
+        // `shopt`, traps, positionals — leaks into the parent. It is always a script block, which also
+        // gives `exit` / an errexit failure their scoped `return` (ErrexitExitStatement). The `finally`
+        // then restores BOTH halves of the working directory (PowerShell location +
+        // [System.Environment]::CurrentDirectory) — see PsBuild.PopLocationRestoringProcessCwd for why
+        // a bare `Pop-Location` silently made `(cd sub); cat data.txt | …` stream the wrong file. It
+        // runs on the scoped-exit path (`$LASTEXITCODE = N; return`) and on any exception too.
+        var sb = new StringBuilder(PsBuild.ShellStateScope(
+            "Push-Location; " + body, PsBuild.PopLocationRestoringProcessCwd));
 
         // Partition out the input redirect: `(cmd) < file` feeds the file to the
         // subshell's stdin and wraps the WHOLE result (`Get-Content file | & { … }`),
@@ -1218,18 +1226,9 @@ public static class PsEmitter
             else
                 tailRedirects.Add(redirect);
         }
-        // A subshell body is `try { … } finally { … }` — a STATEMENT, which cannot
-        // head a pipeline. AppendRedirectTail pipes a stdout file redirect into
-        // Invoke-BashRedirect, so `( … ) > file` emitted
-        // `try { … } finally { … } | Invoke-BashRedirect` = "An empty pipe element
-        // is not allowed" (Go's mkerrors.sh). Wrap it into a pipeable child scope
-        // first. Only when a redirect will actually be appended, so the common
-        // redirect-less subshell keeps its cheaper emission. (When the body has a
-        // scoped exit it is already wrapped above.)
-        if (tailRedirects.Count > 0 && !scopedExit)
-        {
-            sb.Insert(0, "& { ").Append(" }");
-        }
+        // The scope is `& { … }`, an expression that can head a pipeline, so `( … ) > file` pipes
+        // straight into the redirect tail (a bare `try`/`finally` statement could not — "An empty
+        // pipe element is not allowed", Go's mkerrors.sh).
         AppendRedirectTail(sb, tailRedirects);
 
         string result = sb.ToString();
@@ -2966,6 +2965,12 @@ public static class PsEmitter
         "$global:__BashErrexit = $true; if (-not (Test-Path variable:global:__BashErrexitSuppress)) { "
         + PsBuild.ErrexitSuppressVar + " = 0 }";
 
+    /// <summary>
+    /// Turn xtrace on. <c>Set-PSDebug</c> is session-wide and has no query, so the flag records it for
+    /// the subshell scope (<c>BashShellState</c>), which re-applies the parent's level on the way out.
+    /// </summary>
+    private const string SetXtraceOn = "Set-PSDebug -Trace 1; $global:__BashXtrace = $true";
+
     private static string? EmitSet(Command.Simple cmd)
     {
         string? specialResult = null;
@@ -3006,12 +3011,22 @@ public static class PsEmitter
                 || args.SkipWhile(a => a != "+o").Skip(1).FirstOrDefault() == "errexit";
             if (errexitOff && !longOpt && !args.Any(a => a is not null && a.StartsWith('-')))
                 specialResult = "$ErrorActionPreference = 'Continue'; $global:__BashErrexit = $false";
+            // `set +o NAME` (other than errexit, above): xtrace off, anything else a no-op — never the
+            // bare `set` fallthrough (PowerShell's Set-Variable alias).
+            else if (!longOpt && args.Contains("+o"))
+                specialResult = args.SkipWhile(a => a != "+o").Skip(1).FirstOrDefault() == "xtrace"
+                    ? "Set-PSDebug -Off; $global:__BashXtrace = $false"
+                    : PsBuild.SetStatus(0);
             else if (longOpt)
             {
                 var optVal = args.SkipWhile(a => a != "-o").Skip(1).FirstOrDefault();
                 if (optVal == "errexit") specialResult = "$ErrorActionPreference = 'Stop'; " + SetErrexitOn;
-                else if (optVal == "xtrace") specialResult = "Set-PSDebug -Trace 1";
+                else if (optVal == "xtrace") specialResult = SetXtraceOn;
                 else if (optVal == "nounset") specialResult = "Set-StrictMode -Version Latest";
+                // Any other `-o NAME` (pipefail — a recorded won't-fix — noclobber, …) is accepted as a
+                // no-op. Falling through emitted a bare `set -o pipefail`, and `set` is PowerShell's
+                // Set-Variable alias: "Cannot bind parameter 'Option'" on every such script.
+                else specialResult = PsBuild.SetStatus(0);
             }
             else
             {
@@ -3022,7 +3037,7 @@ public static class PsEmitter
                 var parts = new List<string>();
                 if (e) parts.AddRange(new[]{"$ErrorActionPreference = 'Stop'", SetErrexitOn});
                 if (u) parts.Add("Set-StrictMode -Version Latest");
-                if (x) parts.Add("Set-PSDebug -Trace 1");
+                if (x) parts.Add(SetXtraceOn);
                 if (parts.Count > 0) specialResult = string.Join("; ", parts);
             }
         }
@@ -4437,15 +4452,50 @@ public static class PsEmitter
     /// <see cref="PsBuild.IsStatementList"/> so any current or future
     /// statement-list emitter is covered without re-enumerating builtins.
     /// </para>
-    /// The <c>&amp; { … }</c> child scope also matches bash's command-substitution
-    /// subshell semantics, so the wrap is never semantically wrong — only more
-    /// expensive, which is why the single-pipeline fast path is kept.
+    /// The wrap is the full SUBSHELL scope (<see cref="PsBuild.ShellStateScope"/>): bash runs
+    /// <c>$( … )</c> in a subshell, so <c>v=$(x=1; set -e; echo)</c> must leave <c>x</c> and errexit
+    /// unchanged in the parent — a bare child scope isolated neither (both are process/global state).
+    /// The cheap unwrapped form is kept only for a pipeline that provably cannot change shell state
+    /// (<see cref="CannotChangeShellState"/>): every stage a mapped <c>Invoke-Bash*</c> command — not a
+    /// function, not a state builtin. A native (<c>$(git …)</c>) takes the scope too; its process spawn
+    /// dwarfs the snapshot.
     /// </summary>
     private static string PipelineHead(Command body, string inner)
     {
         bool pipeable = body is Command.Simple or Command.Pipeline
                         && !PsBuild.IsStatementList(inner);
-        return pipeable ? inner : PsBuild.Subshell(inner);
+        return pipeable && CannotChangeShellState(body) ? inner : PsBuild.ShellStateScope(inner);
+    }
+
+    /// <summary>Builtins that change shell state even though they map to a runtime command.</summary>
+    private static readonly HashSet<string> StateChangingBuiltins = new(StringComparer.Ordinal)
+    {
+        "set", "shopt", "trap", "alias", "unalias", "export", "unset", "declare", "typeset", "local",
+        "readonly", "cd", "pushd", "popd", "source", ".", "eval", "shift", "getopts", "read", "mapfile",
+        "readarray", "let", "exec", "umask", "hash", "builtin", "command", "enable", "exit",
+        "return", "wait",
+    };
+
+    /// <summary>
+    /// True when <paramref name="body"/> is a simple command or pipeline whose every stage is a literal,
+    /// MAPPED command (so it cannot be a user function) that is not a state-changing builtin and carries
+    /// no assignment. Anything else might change shell state and needs the subshell scope.
+    /// </summary>
+    private static bool CannotChangeShellState(Command body)
+    {
+        static bool StageIsInert(Command c) =>
+            c is Command.Simple { Words.Length: > 0, EnvPairs.Length: 0 } s
+            && GetLiteralValue(s.Words[0]) is { } name
+            && !StateChangingBuiltins.Contains(name)
+            // `printf -v VAR` assigns; plain `$(printf …)` is common and inert.
+            && !(name == "printf" && s.Words.Skip(1).Any(w => GetLiteralValue(w) is { } a && a.StartsWith("-v", StringComparison.Ordinal)))
+            && TryEmitMappedCommand(new Command.Simple([s.Words[0]], [], []), out _);
+        return body switch
+        {
+            Command.Simple s => StageIsInert(s),
+            Command.Pipeline p => p.Commands.All(StageIsInert),
+            _ => false,
+        };
     }
 
     private static string EmitCommandSub(WordPart.CommandSub cs)

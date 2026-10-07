@@ -267,9 +267,10 @@ internal sealed class Connection
             var detail = string.IsNullOrWhiteSpace(ex.Message)
                 ? ex.GetType().Name
                 : ex.Message;
+            // STDERR frames are exact bytes (the launcher writes them raw), so a line carries its LF.
             await HostProtocol.WriteResponseLineAsync(
                 _stream,
-                $"ps-bash-host worker failure: {detail}",
+                $"ps-bash-host worker failure: {detail}\n",
                 StreamTag.Stderr,
                 ct).ConfigureAwait(false);
             await HostProtocol.WriteExitAsync(_stream, 1, ct).ConfigureAwait(false);

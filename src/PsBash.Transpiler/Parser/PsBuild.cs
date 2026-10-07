@@ -107,6 +107,24 @@ public static class PsBuild
     /// <summary>Isolate a body in a scriptblock invocation: <c>&amp; { body }</c>.</summary>
     public static string Subshell(string body) => "& { " + body + " }";
 
+    /// <summary>
+    /// A bash SUBSHELL scope: <c>&amp; { save; try { BODY } finally { restore } }</c>. The child scope
+    /// isolates PS-scoped state (arrays, functions, <c>set -e</c>'s <c>$ErrorActionPreference</c>,
+    /// <c>set -u</c>'s StrictMode); <c>PsBash.Cmdlets.BashShellState</c> saves and restores what a scope
+    /// does not — env-var bash variables, the <c>$global:</c> shell flags/positionals/traps, <c>shopt</c> —
+    /// and reports a <c>set -x</c> to undo. Without it <c>( set -e; true ); false; echo ok</c> stopped the
+    /// PARENT at <c>false</c>, and <c>( x=1 ); echo $x</c> printed 1. <paramref name="finallyTail"/> runs
+    /// after the restore (the working-directory pop). <c>$?</c> is deliberately not restored.
+    /// The temp is per child scope, so nested subshells never share it.
+    /// </summary>
+    public static string ShellStateScope(string body, string? finallyTail = null) =>
+        "& { $__psbash_ss = [PsBash.Cmdlets.BashShellState]::Save($ExecutionContext.SessionState); try { "
+        + body
+        + " } finally { $__psbash_xt = [PsBash.Cmdlets.BashShellState]::Restore($ExecutionContext.SessionState, $__psbash_ss); "
+        + "if ($null -ne $__psbash_xt) { if ($__psbash_xt) { Set-PSDebug -Trace 1 } else { Set-PSDebug -Off } }"
+        + (finallyTail is null ? "" : "; " + finallyTail)
+        + " } }";
+
     /// <summary>Wrap in a subexpression: <c>$(expr)</c>.</summary>
     public static string Subexpr(string expr) => "$(" + expr + ")";
 

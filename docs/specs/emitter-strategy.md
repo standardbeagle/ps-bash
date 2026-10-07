@@ -1030,9 +1030,24 @@ set):
    subshell and sets `$?` in the parent, so `(exit 7); echo $?` prints 7 and
    keeps running — a bare PowerShell `exit` killed the whole shell. At
    `_subshellDepth > 0`, `exit N` emits `$global:LASTEXITCODE = N; return`, and
-   `EmitSubshell` supplies the `& { }` script block that `return` returns from
-   (only when the body actually contains an `exit`, so a plain subshell keeps its
-   cheaper emission).
+   the subshell scope (below) supplies the `& { }` script block that `return`
+   returns from. `$( … )` / `<( … )` bodies are subshells too (`EmitCaptured`
+   raises the depth): `v=$(exit 4); echo $?` prints 4.
+
+4. **A subshell changes nothing in its parent.** bash forks; ps-bash runs the body
+   in the same runspace, so every `( … )` — and every `$( … )` whose body could
+   change shell state — is `PsBuild.ShellStateScope`:
+   `& { $__psbash_ss = [PsBash.Cmdlets.BashShellState]::Save(…); try { BODY } finally { Restore; … } }`.
+   The child scope isolates PS-scoped state (arrays, functions, `set -e`'s
+   `$ErrorActionPreference`, `set -u`'s StrictMode); `BashShellState` saves and restores
+   what a scope does not: bash variables (through `BashVariableStore`), the `$global:`
+   shell state (errexit, `$-`, positionals, `BASH_REMATCH`, traps, `$!`), the `shopt`
+   table, and `set -x` (session-wide `Set-PSDebug`, tracked by `$global:__BashXtrace`).
+   `$?` is not restored — the subshell's status is the parent's `$?`. The cwd pop stays
+   last in the `finally`. A `$( … )` keeps the cheap unwrapped form only when every
+   pipeline stage is a mapped, inert `Invoke-Bash*` command (`CannotChangeShellState`):
+   an unmapped word may be a function. A `$( … )` body with its own `set -e` starts with
+   errexit OFF (bash does not inherit it) and gets checks for its body.
 
 ## 8. Anti-patterns
 

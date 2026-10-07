@@ -108,11 +108,14 @@ function Write-BashStderrRecord {
     # public writer wrote it, `echo x >&2 || echo fb` would run fb and `$?` would read 1.
     # A record written by a function the caller's command CALLS leaves the caller's $? true.
     [CmdletBinding()]
-    param([string]$Text)
+    param([string]$Text, [switch]$NoNewline)
     # A bash stderr line never terminates anything, whatever the caller's preference.
     $ErrorActionPreference = 'Continue'
+    # `printf x >&2` / `echo -n x >&2` write no newline: mark the record so every consumer (host STDERR
+    # frame, `2> f`, `2>&1`) writes exactly the text — the rule is [PsBash.Core.StderrRecord]::Payload.
+    $target = if ($NoNewline) { [PsBash.Core.StderrRecord]::NoTrailingNewlineMarker } else { $null }
     $PSCmdlet.WriteError([System.Management.Automation.ErrorRecord]::new(
-        [System.IO.IOException]::new($Text), 'BashError', 'NotSpecified', $null))
+        [System.IO.IOException]::new($Text), 'BashError', 'NotSpecified', $target))
 }
 
 function Write-BashHostStderr {
@@ -137,7 +140,10 @@ function Write-BashHostStderr {
     )
     process {
         if ($PSBoundParameters.ContainsKey('InputObject')) {
-            if ($null -ne $InputObject) { Write-BashStderrRecord -Text (Get-BashText -InputObject $InputObject) }
+            if ($null -ne $InputObject) {
+                $nnl = $InputObject.PSObject.Properties['NoTrailingNewline']
+                Write-BashStderrRecord -Text (Get-BashText -InputObject $InputObject) -NoNewline:([bool]($nnl -and $nnl.Value))
+            }
         } elseif ($PSBoundParameters.ContainsKey('Message')) {
             Write-BashStderrRecord -Text $Message
         }

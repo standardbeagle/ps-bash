@@ -59,7 +59,8 @@ public sealed class ConnectionBackPressureTests
             var exitCode = await stream.ReadResponseAsync((line, tag) => frames.Add((line, tag)));
 
             Assert.Equal(0, exitCode);
-            Assert.Contains(frames, f => f.Tag == StreamTag.Stderr && f.Line == "line 4200");
+            // STDERR frames carry exact bytes (StderrRecord.Payload): a line arrives with its LF.
+            Assert.Contains(frames, f => f.Tag == StreamTag.Stderr && f.Line == "line 4200\n");
         }
         finally
         {
