@@ -115,10 +115,10 @@ public class ConvertToBashWordsTests : IClassFixture<SharedPwshFixture>
     [Fact]
     public void Redirect_MissingDirectory_FailsWithBashMessageAndStatus1()
     {
-        var r = CmdResultRunTolerant("@() | Invoke-BashRedirect -Path 'nodir_psb/f'");
-
-        Assert.Equal(1, r.ExitCode);
-        Assert.Contains("bash: nodir_psb/f: No such file or directory", r.Error);
+        // Non-terminating (outside `set -e`): a terminating error would abort every later
+        // statement in an emitted `try { }`. Upstream is stopped instead, so status 1 + stderr.
+        Run("@() | Invoke-BashRedirect -Path 'nodir_psb/f'")
+            .AssertFailed(1, "bash: nodir_psb/f: No such file or directory");
     }
 
     [Fact]
@@ -171,12 +171,4 @@ public class ConvertToBashWordsTests : IClassFixture<SharedPwshFixture>
     }
 
     // Runs a script whose pipeline is expected to end in a terminating error; returns exit status + message.
-    private (int ExitCode, string Error) CmdResultRunTolerant(string script)
-    {
-        var pwsh = _fixture.AcquireFresh();
-        pwsh.AddScript("$global:LASTEXITCODE = 0; try { " + script + " } catch { $_.Exception.Message }; $global:LASTEXITCODE");
-        var output = pwsh.Invoke().Select(o => o?.ToString() ?? "").ToList();
-        pwsh.Commands.Clear();
-        return (int.Parse(output[^1]), string.Join("\n", output.Take(output.Count - 1)));
-    }
 }

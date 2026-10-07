@@ -51,9 +51,11 @@ public sealed class InvokeBashRedirectCommand : PSCmdlet
         {
             // bash: a redirection that cannot be opened fails the command (status 1) and the
             // script goes on: `bash: nodir/f: No such file or directory`, `bash: d: Is a directory`.
-            // NOT a terminating error: inside an emitted `try { }` (stdin scope, env prefix, …)
-            // one aborts every later statement in the block. The command's output is discarded.
-            // Under `set -e` stopping the script IS the bash behavior, so terminate then.
+            // The command must never run (`rm -rf build > /nodir/log` must not delete), but NOT via
+            // a terminating error: inside an emitted `try { }` (stdin scope, env prefix, …) one
+            // aborts every later statement in the block. UpstreamStop ends the upstream stages the
+            // way `Select-Object -First` does — not an error, so the statement just ends with
+            // status 1. Under `set -e` stopping the script IS the bash behavior, so terminate then.
             string reason = Directory.Exists(target) ? "Is a directory"
                 : ex is UnauthorizedAccessException ? "Permission denied"
                 : FileSystemHelpers.ReadErrorMessage(ex);
@@ -65,7 +67,9 @@ public sealed class InvokeBashRedirectCommand : PSCmdlet
                     new IOException(message), "BashRedirectError", ErrorCategory.WriteError, Path));
             }
             FileSystemHelpers.WriteBashError(this, message);
+            FileSystemHelpers.SetLastExitCode(this, 1);
             _openFailed = true;
+            UpstreamStop.Throw(this);
         }
     }
 

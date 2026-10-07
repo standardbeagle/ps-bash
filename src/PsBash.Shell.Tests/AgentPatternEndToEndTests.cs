@@ -76,6 +76,29 @@ public class AgentPatternEndToEndTests
     }
 
     [SkippableFact]
+    public async Task FailedRedirect_InsideStdinScopedEval_CommandNeverRuns()
+    {
+        // bash oracle: a redirect that cannot be opened means the command is never executed —
+        // `{ touch m; } > /nodir/x` and `touch m > /nodir/x` both leave m absent. Running it anyway
+        // would let `rm -rf build > /nodir/log` delete while "failing".
+        var missing = "/psb_nodir_" + Guid.NewGuid().ToString("N")[..8] + "/x";
+        var dir = Path.Combine(Path.GetTempPath(), "ps-bash", "redir-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var d = dir.Replace('\\', '/');
+            var (_, stdout, _) = await RunShellAsync(
+                "-c",
+                $"eval '{{ touch {d}/grp; }} > {missing}; touch {d}/plain > {missing}; echo \"rc=$?\"' < /dev/null; echo tail");
+
+            Assert.Equal(new[] { "rc=1", "tail" }, stdout.Replace("\r", "").TrimEnd('\n').Split('\n'));
+            Assert.False(File.Exists(Path.Combine(dir, "grp")), "brace group ran despite its failed redirect");
+            Assert.False(File.Exists(Path.Combine(dir, "plain")), "touch ran despite its failed redirect");
+        }
+        finally { Directory.Delete(dir, recursive: true); }
+    }
+
+    [SkippableFact]
     public async Task FailedRedirect_UnderSetE_StillStopsTheScript()
     {
         // bash oracle: `set -e; echo hi > /nodir/x; echo after` prints only the error, exit 1.
