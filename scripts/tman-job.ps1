@@ -35,7 +35,7 @@
 #>
 param(
     [Parameter(Mandatory, Position = 0)]
-    [ValidateSet('build', 'test', 'test-proj', 'pester')]
+    [ValidateSet('build', 'test', 'test-proj', 'pester', 'dev')]
     [string]$Verb,
 
     [Parameter(ValueFromRemainingArguments)]
@@ -74,7 +74,9 @@ while (-not $isInner) {
 try {
     # --- machine-wide gate (see DESCRIPTION 4) ---------------------------------------------------
     $slots = if ($env:PSBASH_TMAN_MACHINE_SLOTS) { [int]$env:PSBASH_TMAN_MACHINE_SLOTS } else { 2 }
-    if (-not $isInner -and $slots -gt 0 -and (Get-Command tman -ErrorAction SilentlyContinue)) {
+    # `dev` is a probe, not a build/test: it needs this checkout's lock (so a build can't swap the
+    # DLLs under it) but not a machine slot. Its build step is incremental and usually a no-op.
+    if ($Verb -ne 'dev' -and -not $isInner -and $slots -gt 0 -and (Get-Command tman -ErrorAction SilentlyContinue)) {
         $gateDir = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'psbash-tman-gate'
         New-Item -ItemType Directory -Force $gateDir | Out-Null
         $env:PSBASH_TMAN_GATE_INNER = '1'
@@ -129,6 +131,19 @@ try {
             # pester.ps1 does its own build (same flags) + DLL refresh; it must run under our lock.
             # Child pwsh so -Detailed / -Filter parse as real parameters (array splat would not).
             & pwsh -NoProfile -File (Join-Path $PSScriptRoot 'pester.ps1') @Rest
+            exit $LASTEXITCODE
+        }
+        'dev' {
+            # Run THIS checkout's dev ps-bash (`tman dev -c 'snippet'`, `tman dev script.sh`) under the
+            # checkout lock, after an up-to-date build. A bare `src/PsBash.Shell/bin/.../ps-bash.exe`
+            # run takes no lock: a concurrent build swaps DLLs under it (connection resets), and the
+            # daemon it leaves behind holds bin/ open so the NEXT build fails MSB3021. A per-invocation
+            # host dies with its launcher, so nothing outlives the probe.
+            Build-Solution
+            $exe = Join-Path $repo 'src/PsBash.Shell/bin/Debug/net10.0/ps-bash.exe'
+            if (-not $IsWindows) { $exe = $exe -replace '\.exe$', '' }
+            $env:PSBASH_PER_INVOCATION = '1'
+            & $exe @Rest
             exit $LASTEXITCODE
         }
     }

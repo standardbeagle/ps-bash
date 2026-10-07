@@ -59,6 +59,13 @@ alias "test-proj" {
     args "-NoProfile" "-File" "scripts/tman-job.ps1" "test-proj"
 }
 
+// Ad-hoc probe of this checkout's dev build: `tman dev -c 'snippet'` / `tman dev script.sh`.
+// Never run src/*/bin ps-bash directly — see the 'dev' verb in scripts/tman-job.ps1.
+alias "dev" {
+    command "pwsh"
+    args "-NoProfile" "-File" "scripts/tman-job.ps1" "dev"
+}
+
 // Release-blocking Pester gate (scripts/pester.ps1: builds cmdlets, refreshes beside-module DLLs).
 alias "pester" {
     command "pwsh"
