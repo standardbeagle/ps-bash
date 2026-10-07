@@ -97,6 +97,15 @@ function Move-OutOfTheWay($path) {
 }
 
 if (Test-Path $destDir) {
+    # Backups from earlier installs that nobody holds any more (Move-OutOfTheWay only clears the
+    # one slot it is about to reuse, so .old.<n> siblings otherwise accumulate). ~/.local/bin is
+    # shared with other tools: only backups of a file THIS install publishes are ours to delete.
+    $ours = @{}
+    Get-ChildItem $publishDir -File | ForEach-Object { $ours[$_.Name] = $true }
+    $ours['bash.exe'] = $true
+    Get-ChildItem $destDir -File -Filter '*.old*' | Where-Object {
+        $ours.ContainsKey(($_.Name -replace '(\.old(\.\d+)?)+$', ''))
+    } | ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
     Get-ChildItem $destDir -File -Filter 'ps-bash*' | ForEach-Object {
         if ($_.Name -like '*.old*') { return }
         Move-OutOfTheWay $_.FullName
@@ -195,7 +204,14 @@ if (-not (Test-Path "$cmdletsBuildDir\PsBash.Cmdlets.dll")) {
 foreach ($dir in @($psBashDir, $cmdletsDir)) {
     Ensure-RealDirectory $dir
     if (Test-Path $dir) {
+        # Backups from earlier installs: delete every one nobody still holds open. Then rename
+        # only LIVE files — this loop used to re-rename the backups too (X.old → X.old.old …),
+        # doubling them per install until names hit MAX_PATH (685 files, 255-char names).
         Get-ChildItem $dir -File -Recurse -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -like '*.old*' } |
+            ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
+        Get-ChildItem $dir -File -Recurse -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -notlike '*.old*' } |
             ForEach-Object { Move-OutOfTheWay $_.FullName }
     }
 }
