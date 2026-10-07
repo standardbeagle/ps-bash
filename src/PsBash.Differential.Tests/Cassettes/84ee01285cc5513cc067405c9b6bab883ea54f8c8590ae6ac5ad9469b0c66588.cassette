@@ -1,0 +1,16 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 107
+stdout-length: 21
+stderr-length: 4
+==== SCRIPT ====
+f() { echo f-out; echo f-err >&2; return 3; }; v=$(echo cap >&2); echo "v=[$v]"; w=$(f 2>&1); echo "w=[$w]"
+==== STDOUT ====
+v=[]
+w=[f-out
+f-err]
+
+==== STDERR ====
+cap
+

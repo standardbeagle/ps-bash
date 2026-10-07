@@ -102,21 +102,46 @@ function Set-BashErrorMode {
     $script:BashErrorMode = $Mode
 }
 
+function Write-BashStderrRecord {
+    # The record writer behind Write-BashHostStderr. It is a SEPARATE function on purpose:
+    # PowerShell sets $? = $false for the command that writes an error record, so if the
+    # public writer wrote it, `echo x >&2 || echo fb` would run fb and `$?` would read 1.
+    # A record written by a function the caller's command CALLS leaves the caller's $? true.
+    [CmdletBinding()]
+    param([string]$Text)
+    # A bash stderr line never terminates anything, whatever the caller's preference.
+    $ErrorActionPreference = 'Continue'
+    $PSCmdlet.WriteError([System.Management.Automation.ErrorRecord]::new(
+        [System.IO.IOException]::new($Text), 'BashError', 'NotSpecified', $null))
+}
+
 function Write-BashHostStderr {
     <#
     .SYNOPSIS
-        Emit a line to the host's stderr stream.
+        Write bash stderr text: the target of `cmd >&2` (piped) and of Write-BashError in
+        Bash error mode (-Message).
     .DESCRIPTION
-        REFACTOR-4: all host -> launcher output travels the single IPC channel
-        the launcher drains. The host's inherited fd 2 is detached to /dev/null
-        (commit cc8bf88's hang fix), so a direct [Console]::Error.WriteLine is
-        silently lost. $Host.UI.WriteErrorLine is wired by the host's SdkWorker
-        to a STDERR-tagged IPC frame; the launcher routes that frame to its own
-        Console.Error. This is the runtime target the emitter rewrites `cmd >&2`
-        to, and the sink Write-BashError uses in Bash error mode.
+        Emitted as an ErrorRecord on PowerShell's error stream — the same channel every
+        cmdlet diagnostic uses — so bash redirection applies to it: `f 2>/dev/null` (2>$null)
+        silences it, `2>&1` merges it into stdout, `2> file` writes it (Invoke-BashRedirect
+        -ErrorPath), and `$(…)` does not capture it. Unredirected, the host's SdkWorker delivers
+        each record inline, in order with stdout, as a STDERR frame (the host's own fd 2 is
+        detached, so this is its only stderr path). It used to call $Host.UI.WriteErrorLine,
+        which NO redirection can see: `{ echo e >&2; } 2>/dev/null` still printed `e`.
+        Writing stderr is not a failure in bash: $? stays true, $LASTEXITCODE is untouched
+        (see Write-BashStderrRecord).
     #>
-    param([string]$Message)
-    $Host.UI.WriteErrorLine($Message)
+    param(
+        [Parameter(Position = 0)][string]$Message,
+        [Parameter(ValueFromPipeline)]$InputObject
+    )
+    process {
+        if ($PSBoundParameters.ContainsKey('InputObject')) {
+            if ($null -ne $InputObject) { Write-BashStderrRecord -Text (Get-BashText -InputObject $InputObject) }
+        } elseif ($PSBoundParameters.ContainsKey('Message')) {
+            Write-BashStderrRecord -Text $Message
+        }
+    }
 }
 
 function Write-BashError {

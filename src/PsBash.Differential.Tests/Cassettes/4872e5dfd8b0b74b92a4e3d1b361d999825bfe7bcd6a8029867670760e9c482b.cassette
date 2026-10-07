@@ -1,0 +1,19 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 117
+stdout-length: 19
+stderr-length: 8
+==== SCRIPT ====
+echo x >&2 || echo FALLBACK; echo y >&2 && echo AND-RAN; echo z >&2; echo "rc=$?"; ( set -e; echo q >&2; echo after )
+==== STDOUT ====
+AND-RAN
+rc=0
+after
+
+==== STDERR ====
+x
+y
+z
+q
+

@@ -146,8 +146,8 @@ function Write-BashError {
 psm1 functions should use `Write-BashError` instead of `Write-Error` directly.
 Binary cmdlets must NOT call it: they use `FileSystemHelpers.WriteBashError`
 (one `ErrorRecord`). Calling both printed every diagnostic twice, and the
-`Write-BashError` copy -- written through `$Host.UI.WriteErrorLine` in Bash mode
--- could not be silenced by `2>/dev/null`.
+`Write-BashError` copy -- then written through `$Host.UI.WriteErrorLine` in Bash mode
+-- could not be silenced by `2>/dev/null` (it is an ErrorRecord now; see §4).
 
 ### 2.3 Exit Code Flow
 
@@ -367,10 +367,12 @@ piped (`|&`), or captured independently.
 **ps-bash**: Cmdlet diagnostics are PowerShell `ErrorRecord`s, so `2>/dev/null`
 discards them and `2>&1` / `|&` (emitted as `2>&1 |`) merge them into the
 pipeline as one line of text each. Records that survive redirection are streamed
-by `SdkWorker` to a STDERR-tagged IPC frame inline, in order with stdout. Text
-written through `$Host.UI.WriteErrorLine` (`Write-BashHostStderr`, the psm1
-`Write-BashError` in Bash mode) goes straight to that stderr frame and is NOT
-subject to PowerShell redirection.
+by `SdkWorker` to a STDERR-tagged IPC frame inline, in order with stdout.
+`cmd >&2` output and the psm1 `Write-BashError` (Bash mode) are ErrorRecords too:
+`Write-BashHostStderr` writes each line to the error stream (through the separate
+`Write-BashStderrRecord`, so the CALLER's `$?` stays true: writing stderr is not a
+failure), so the same redirection applies. Nothing writes `$Host.UI.WriteErrorLine`,
+which no redirection can see (`{ echo e >&2; } 2>/dev/null` used to print `e`).
 
 ---
 

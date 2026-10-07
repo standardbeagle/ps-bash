@@ -427,6 +427,24 @@ public static class PsBuild
     public static string GlobWordArray(string patternExpr) =>
         "@(ConvertTo-BashGlob " + patternExpr + ")";
 
+    // ───────────────────────── Stdout to stderr (`>&2`) ──────────────────────────
+
+    /// <summary>
+    /// The tail stage that sends a command's stdout to bash's stderr (<c>cmd &gt;&amp;2</c>): each
+    /// record becomes an error-stream record (<c>Write-BashHostStderr</c>), so a LATER <c>2&gt;</c>
+    /// on an enclosing command, <c>2&gt;&amp;1</c>, or <c>2&gt;/dev/null</c> applies to it as bash
+    /// expects, while <c>$?</c> and the exit status stay the command's own.
+    /// </summary>
+    public const string StdoutToStderrStage = " | Write-BashHostStderr";
+
+    /// <summary>
+    /// A bare <c>2&gt;&amp;1</c> (stderr to the terminal's stdout): PowerShell's merge plus a stage
+    /// that turns each merged error record into a stdout text record. Left as ErrorRecords, an
+    /// enclosing <c>2&gt; f</c> stage or a capture would read them as stderr again —
+    /// <c>{ echo e &gt;&amp;2; } 2&gt;&amp;1</c> under an outer <c>2&gt; f</c> wrote <c>e</c> to f.
+    /// </summary>
+    public const string MergeStderrIntoStdout = " 2>&1 | Invoke-BashRedirect -MergeErrors";
+
     // ───────────────────────── Redirect target without output ──────────────────────────
 
     /// <summary>

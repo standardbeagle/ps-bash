@@ -523,9 +523,12 @@ written byte-faithfully (LF, message only) instead of by PowerShell's native `2>
 (PowerShell rejects redirecting a stream twice, which made `cmd >/dev/null >/dev/null` a parse error
 for the whole script). Superseded file targets are still opened, as bash opens them (`echo x >a >b`
 leaves an empty `a`): `-Truncate` / `-Touch`. A tail with a redirect outside the model (user fds,
-`<&`, numeric merges other than `2>&1`) keeps the legacy emission. Known gap: `>&2` inside a group whose
-stderr is redirected (`{ echo e >&2; } 2> f`) still reaches the terminal — `Write-BashHostStderr` writes
-to the host directly, not to the error stream a redirect captures.
+`<&`, numeric merges other than `2>&1`/`>&2`) keeps the legacy emission. `>&2` is part of the model: fd 1 copies fd 2's
+CURRENT target (`>&2 2>/dev/null` still shows the line, `2>/dev/null >&2` discards it, `2>f >&2` writes both to
+f), and stdout bound for the terminal's stderr ends the tail with `PsBuild.StdoutToStderrStage`: each record becomes
+an error-stream record (`Write-BashHostStderr`), so an ENCLOSING `2>/dev/null` / `2>&1` / `2> f` applies to it and
+`True` stays true. A bare `2>&1` is `PsBuild.MergeStderrIntoStdout` (`| Invoke-BashRedirect -MergeErrors`): the merged
+records become stdout TEXT, so an enclosing stage no longer reads them as stderr.
 
 ### `set`
 

@@ -658,7 +658,7 @@ public class PsEmitterTests
         // Regression guard: the normal merge form `2>&1` (target "1", not "-")
         // must NOT be treated as a close.
         var result = PsEmitter.Transpile("cmd 2>&1");
-        Assert.Equal("cmd 2>&1", result);
+        Assert.Equal("cmd 2>&1 | Invoke-BashRedirect -MergeErrors", result);
     }
 
     [Fact]
@@ -697,7 +697,7 @@ public class PsEmitterTests
     public void Transpile_SupportedFdMergeIntoStdout_Kept()
     {
         // `n>&1` (n != 1) IS valid PowerShell and must keep the real merge.
-        Assert.Equal("cmd 2>&1", PsEmitter.Transpile("cmd 2>&1"));
+        Assert.Equal("cmd 2>&1 | Invoke-BashRedirect -MergeErrors", PsEmitter.Transpile("cmd 2>&1"));
         Assert.Equal("cmd 3>&1", PsEmitter.Transpile("cmd 3>&1"));
     }
 
@@ -1375,7 +1375,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("cmd 2>&1");
 
-        Assert.Equal("cmd 2>&1", result);
+        Assert.Equal("cmd 2>&1 | Invoke-BashRedirect -MergeErrors", result);
     }
 
     [Fact]
@@ -4442,7 +4442,7 @@ public class PsEmitterTests
     public void Transpile_StderrToStdout_2And1Passthrough()
     {
         var result = PsEmitter.Transpile("cmd 2>&1");
-        Assert.Equal("cmd 2>&1", result);
+        Assert.Equal("cmd 2>&1 | Invoke-BashRedirect -MergeErrors", result);
     }
 
     [Fact]
@@ -4489,22 +4489,37 @@ public class PsEmitterTests
         Assert.Equal("cmd 3>f", PsEmitter.Transpile("cmd 3>f"));
     }
 
-    // REFACTOR-4: `cmd >&2` rewrites to Write-BashHostStderr, NOT
-    // [Console]::Error.WriteLine. The host's inherited fd 2 is detached to
-    // /dev/null (commit cc8bf88's hang fix); Write-BashHostStderr routes
-    // through $Host.UI.WriteErrorLine into a STDERR-tagged IPC frame.
+    // `cmd >&2` pipes into Write-BashHostStderr, which writes each record to PowerShell's
+    // ERROR STREAM (not $Host.UI.WriteErrorLine, which no redirection can see), so an
+    // enclosing `2>/dev/null` / `2>&1` / `2> f` applies to it; the host delivers it as stderr.
+    // `>&2` copies fd 2's CURRENT target (bash dup2, left to right): after `2>/dev/null` stdout is
+    // discarded, before it stdout still reaches the terminal's stderr; `>f >&2` still truncates f;
+    // `2>f >&2` sends both to f. Oracle: StderrRedirectDifferentialTests.
+    [Theory]
+    [InlineData("echo x >&2 2>/dev/null", "Invoke-BashEcho x 2>$null | Write-BashHostStderr")]
+    [InlineData("echo x 2>/dev/null >&2", "Invoke-BashEcho x >$null 2>&1")]
+    [InlineData("echo x 2>&1 >&2", "Invoke-BashEcho x 2>&1 | Invoke-BashRedirect -MergeErrors")]
+    [InlineData("echo x >&2 2>&1", "Invoke-BashEcho x | Write-BashHostStderr")]
+    [InlineData("echo x >f >&2", "Invoke-BashEcho x | Invoke-BashRedirect -Truncate @(& { $args } f) | Write-BashHostStderr")]
+    [InlineData("echo x 2>f >&2", "Invoke-BashEcho x 2>&1 | Invoke-BashRedirect -Path f")]
+    [InlineData("echo x >&2 2>f", "Invoke-BashEcho x 2>&1 | Invoke-BashRedirect -ErrorPath f | Write-BashHostStderr")]
+    [InlineData("echo x >&2 >f", "Invoke-BashEcho x | Invoke-BashRedirect -Path f")]
+    [InlineData("{ echo e >&2; } 2>/dev/null", "& { Invoke-BashEcho e | Write-BashHostStderr } 2>$null")]
+    public void Transpile_StdoutDupToStderr_AppliedInRedirectOrder(string bash, string expected)
+        => Assert.Equal(expected, PsEmitter.Transpile(bash));
+
     [Fact]
     public void Transpile_StdoutToStderr_EmitsHostStderrPipe()
     {
         var result = PsEmitter.Transpile("echo hello >&2");
-        Assert.Equal("Invoke-BashEcho hello | ForEach-Object { Write-BashHostStderr $_ }", result);
+        Assert.Equal("Invoke-BashEcho hello | Write-BashHostStderr", result);
     }
 
     [Fact]
     public void Transpile_ExplicitFd1ToStderr_EmitsHostStderrPipe()
     {
         var result = PsEmitter.Transpile("echo hello 1>&2");
-        Assert.Equal("Invoke-BashEcho hello | ForEach-Object { Write-BashHostStderr $_ }", result);
+        Assert.Equal("Invoke-BashEcho hello | Write-BashHostStderr", result);
     }
 
     // Backslash escapes inside double quotes

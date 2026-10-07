@@ -67,6 +67,11 @@ public class TranspileParseabilityCorpusTests
     [InlineData("echo $(date)")]
     [InlineData("echo `date`")]
     [InlineData("echo $(echo $(echo nested))")]
+    // `>&2` as an error-stream tail, in every redirect order, on simple + compound commands.
+    [InlineData("echo x >&2 2>/dev/null; echo y 2>/dev/null >&2; echo z 2>&1 >&2; echo w >&2 2>&1")]
+    [InlineData("echo x >f >&2; echo y 2>f >&2; echo z >&2 2>f; echo w >&2 >f")]
+    [InlineData("{ echo e >&2; } 2>/dev/null; ( echo s >&2 ) 2>&1; f() { echo e >&2; }; f 2>&1 | cat")]
+    [InlineData("v=$(echo cap >&2); w=\"$(f 2>&1)\"; echo x >&2 || echo fb; echo y >&2 && echo ok")]
     // fixed: a condition that runs a command is hoisted to statement position (its output streams);
     // condition LISTS parse; chains bridge a function's `return N` / a subshell's exit to $?.
     [InlineData("if echo in; then echo yes; elif grep -q x f; then :; else echo no; fi")]

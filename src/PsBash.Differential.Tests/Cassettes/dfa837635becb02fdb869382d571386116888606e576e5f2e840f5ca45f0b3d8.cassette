@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 195
+stdout-length: 22
+stderr-length: 4
+==== SCRIPT ====
+d=$(mktemp -d); echo x >"$d/t" >&2; echo y 2>"$d/u" >&2; echo z >&2 2>"$d/w"; { echo e >&2; } 2>"$d/g"; echo "t=[$(cat "$d/t")] u=[$(cat "$d/u")] w=[$(cat "$d/w")] g=[$(cat "$d/g")]"; rm -rf "$d"
+==== STDOUT ====
+t=[] u=[y] w=[] g=[e]
+
+==== STDERR ====
+x
+z
+

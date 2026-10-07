@@ -2477,27 +2477,40 @@ public static class PsEmitter
                 : $"@'\n{body}\n'@");
     }
 
-    // Stdout-to-stderr redirects (>&2 or 1>&2). REFACTOR-4: route through
-    // Write-BashHostStderr, which writes into the host's STDERR-tagged IPC
-    // frame, instead of [Console]::Error.WriteLine. The host's inherited
-    // fd 2 is detached to /dev/null (commit cc8bf88's hang fix), so a direct
-    // [Console]::Error write would be silently lost — all host output must
-    // travel the single IPC channel the launcher drains.
+    // Stdout-to-stderr redirects (>&2 or 1>&2). The command's stdout/stderr redirects are
+    // applied by the fd model (TryAppendModelledRedirectTail) in bash's left-to-right dup
+    // order — `>&2 2>/dev/null` still shows the output, `2>/dev/null >&2` discards it, `>f >&2`
+    // truncates f — and stdout bound for stderr goes through PsBuild.StdoutToStderrStage, an
+    // error-stream record, so redirects of an ENCLOSING command (`{ echo e >&2; } 2>/dev/null`)
+    // and `2>&1` apply to it. Every other redirect (`< f`, …) stays on the command.
     private static bool TryEmitStderrRedirect(Command.Simple cmd, out string result)
     {
-        var stderrRedirect = cmd.Redirects.FirstOrDefault(r =>
-            r.Op == ">&" && r.Fd == 1 && GetLiteralValue(r.Target) == "2");
-        if (stderrRedirect is null)
-        {
-            result = "";
+        result = "";
+        if (!cmd.Redirects.Any(IsStdoutToStderrDup))
             return false;
+
+        static bool IsOutputRedirect(Redirect r) =>
+            r.Fd is 1 or 2 && r.Op is ">" or ">|" or ">>" or "&>" or "&>>" or ">&";
+        var output = cmd.Redirects.Where(IsOutputRedirect).ToList();
+        var innerCmd = new Command.Simple(cmd.Words, cmd.EnvPairs,
+            cmd.Redirects.Where(r => !IsOutputRedirect(r)).ToImmutableArray());
+
+        var tail = new StringBuilder();
+        if (TryAppendModelledRedirectTail(tail, output))
+        {
+            result = EmitSimple(innerCmd) + tail;
+            return true;
         }
 
-        var remaining = cmd.Redirects.Remove(stderrRedirect);
-        var innerCmd = new Command.Simple(cmd.Words, cmd.EnvPairs, remaining);
-        result = $"{EmitSimple(innerCmd)} | ForEach-Object {{ Write-BashHostStderr $_ }}";
+        // A list the model does not cover (user fds): the first `>&2` wins, as before.
+        var dup = cmd.Redirects.First(IsStdoutToStderrDup);
+        var rest = new Command.Simple(cmd.Words, cmd.EnvPairs, cmd.Redirects.Remove(dup));
+        result = EmitSimple(rest) + PsBuild.StdoutToStderrStage;
         return true;
     }
+
+    private static bool IsStdoutToStderrDup(Redirect r) =>
+        r.Op == ">&" && r.Fd == 1 && GetLiteralValue(r.Target) == "2";
 
     // Input redirects (< file) become "Get-Content file | cmd".
     // Special case: `< /dev/null` means "no input" — `Get-Content $null`
@@ -6123,9 +6136,10 @@ public static class PsEmitter
     }
 
     // One fd's destination while a redirect list is applied: the terminal default, the null
-    // device, an opened file (index into the open list), or — fd 2 only — fd 1's DEFAULT
-    // destination captured by `2>&1` before fd 1 was redirected (`2>&1 >f`).
-    private enum FdDestKind { Default, Null, File, StdoutDefault }
+    // device, an opened file (index into the open list), or a copy of the OTHER fd's default
+    // taken by a dup before that fd was redirected — fd 2: `2>&1 >f` (StdoutDefault); fd 1:
+    // `>&2 2>/dev/null` (StderrDefault — stdout still reaches the terminal's stderr).
+    private enum FdDestKind { Default, Null, File, StdoutDefault, StderrDefault }
 
     private readonly record struct FdDest(FdDestKind Kind, int File = -1);
 
@@ -6167,9 +6181,26 @@ public static class PsEmitter
                 case ">&" when target == "-":
                     if (r.Fd == 1) fd1 = new FdDest(FdDestKind.Null); else fd2 = new FdDest(FdDestKind.Null);
                     break;
+                case ">&" when target == r.Fd.ToString(System.Globalization.CultureInfo.InvariantCulture):
+                    break; // `1>&1` / `2>&2`: a dup onto itself changes nothing
                 case ">&" when r.Fd == 2 && target == "1":
                     // fd 2 becomes a copy of fd 1 AS IT IS NOW (bash dup2 semantics).
-                    fd2 = fd1.Kind == FdDestKind.Default ? new FdDest(FdDestKind.StdoutDefault) : fd1;
+                    fd2 = fd1.Kind switch
+                    {
+                        FdDestKind.Default => new FdDest(FdDestKind.StdoutDefault),
+                        FdDestKind.StderrDefault => new FdDest(FdDestKind.Default), // `>&2 2>&1`
+                        _ => fd1,
+                    };
+                    break;
+                case ">&" when r.Fd == 1 && target == "2":
+                    // `>&2`: fd 1 becomes a copy of fd 2 AS IT IS NOW — `2>/dev/null >&2` discards
+                    // stdout, `>&2 2>/dev/null` still shows it, `2>f >&2` writes both to f.
+                    fd1 = fd2.Kind switch
+                    {
+                        FdDestKind.Default => new FdDest(FdDestKind.StderrDefault),
+                        FdDestKind.StdoutDefault => new FdDest(FdDestKind.Default), // `2>&1 >&2`
+                        _ => fd2,
+                    };
                     break;
                 case ">&" when r.Fd == 1 && !IsAllDigits(target):
                     // `>&file` is bash's synonym for `&>file`.
@@ -6200,7 +6231,10 @@ public static class PsEmitter
             if (fd1.Kind == FdDestKind.Null) sb.Append(" >$null");
             // Both discarded: the familiar `>$null 2>&1` (stderr follows stdout into $null).
             if (fd2.Kind == FdDestKind.Null) sb.Append(fd1.Kind == FdDestKind.Null ? " 2>&1" : " 2>$null");
-            else if (fd2.Kind == FdDestKind.StdoutDefault) sb.Append(" 2>&1");
+            else if (fd2.Kind == FdDestKind.StdoutDefault) sb.Append(PsBuild.MergeStderrIntoStdout);
+            // After the command's own stderr handling: its stdout records become stderr records,
+            // which that `2>…` (on the command, not on this stage) no longer touches.
+            if (fd1.Kind == FdDestKind.StderrDefault) sb.Append(PsBuild.StdoutToStderrStage);
             return true;
         }
 
@@ -6226,6 +6260,8 @@ public static class PsEmitter
             errorPath, errorAppend,
             passErrors: fd2.Kind == FdDestKind.StdoutDefault,
             truncate, touch));
+        // `>f >&2`, `2>f >&2`-style lists: the stage (no -Path) passes stdout on to stderr.
+        if (fd1.Kind == FdDestKind.StderrDefault) sb.Append(PsBuild.StdoutToStderrStage);
         return true;
     }
 

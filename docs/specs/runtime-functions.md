@@ -108,8 +108,8 @@ decides its fate — `2>/dev/null` discards it, `2>&1` merges it into stdout as 
 one-line message — and the host (`SdkWorker`) streams the surviving records to
 stderr **inline, in order with the surrounding stdout** (via `Streams.Error`
 `DataAdded`), not after the run. Calling `Write-BashError` as well used to print
-every diagnostic twice and made it immune to `2>/dev/null`, because Bash mode
-writes through `$Host.UI.WriteErrorLine`. `Write-BashError` remains only for the
+every diagnostic twice (its Bash-mode copy then went through `$Host.UI.WriteErrorLine`,
+immune to `2>/dev/null`; it is an ErrorRecord now, like `>&2` output). `Write-BashError` remains only for the
 psm1 helpers (`Get-BashItem`, `Read-BashFile*`) and the job-control functions.
 
 **Diagnostics name operands as typed.** GNU quotes the argv element, never the resolved full path

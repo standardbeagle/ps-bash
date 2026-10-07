@@ -51,6 +51,14 @@ public sealed class InvokeBashRedirectCommand : PSCmdlet
     [Parameter]
     public SwitchParameter PassErrors { get; set; }
 
+    /// <summary>
+    /// A bare <c>2&gt;&amp;1</c>: error records go on as ordinary stdout TEXT records. PowerShell's
+    /// merge leaves them ErrorRecord objects, and any later stage (an enclosing command's
+    /// <c>2&gt; f</c>, a capture) reads an ErrorRecord as stderr — after <c>2&gt;&amp;1</c> it is stdout.
+    /// </summary>
+    [Parameter]
+    public SwitchParameter MergeErrors { get; set; }
+
     /// <summary>Superseded <c>&gt; f</c> targets: opened (truncated) and closed before the command runs.</summary>
     [Parameter]
     public string[]? Truncate { get; set; }
@@ -148,7 +156,12 @@ public sealed class InvokeBashRedirectCommand : PSCmdlet
         if (InputObject.BaseObject is ErrorRecord er)
         {
             if (_stderrToFile) { Write(_errorStream, ErrorPayload(er)); return; }
-            if (PassErrors) { WriteObject(InputObject); return; }
+            // Now stdout data (`2>&1 >f`, a bare `2>&1`): a text record, no longer an ErrorRecord.
+            if (PassErrors || MergeErrors)
+            {
+                foreach (var line in BashRuntime.EmitBashLines(ErrorPayload(er))) WriteObject(line);
+                return;
+            }
             // Merged into stdout (`&> f`, `>f 2>&1`): written with the stdout records below.
             if (_stdoutToFile) { Write(_stream, ErrorPayload(er)); return; }
             WriteObject(InputObject);
