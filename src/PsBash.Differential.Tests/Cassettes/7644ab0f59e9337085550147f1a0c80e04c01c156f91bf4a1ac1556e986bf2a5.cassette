@@ -1,0 +1,21 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 352
+stdout-length: 52
+stderr-length: 0
+==== SCRIPT ====
+for i in 1 2; do for j in a b; do echo "$i$j"; break 2; done; done; echo after
+for i in 1 2 3; do for j in a b; do [ $j = a ] && continue 2; echo no; done; echo never; done; echo after2
+for i in 1 2; do case $i in 1) continue ;; esac; echo "case-continue $i"; done
+for i in 1 2 3; do case $i in 2) break ;; esac; echo "case-break $i"; done; echo after3
+==== STDOUT ====
+1a
+after
+after2
+case-continue 2
+case-break 1
+after3
+
+==== STDERR ====
+

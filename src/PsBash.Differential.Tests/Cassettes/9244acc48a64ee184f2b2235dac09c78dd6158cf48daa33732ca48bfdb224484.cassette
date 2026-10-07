@@ -1,0 +1,42 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 742
+stdout-length: 101
+stderr-length: 0
+==== SCRIPT ====
+x=abc
+case $x in A*) echo 1-yes ;; *) echo 1-no ;; esac
+case ABC in abc) echo 2-yes ;; *) echo 2-no ;; esac
+[[ $x == A* ]] && echo 3-yes || echo 3-no
+[[ abc == ABC ]] && echo 4-yes || echo 4-no
+[[ $x != A* ]] && echo 5-ne-true || echo 5-ne-false
+[ abc = ABC ] && echo 6-yes || echo 6-no
+[ abc = 'a*' ] && echo 7-yes || echo 7-no
+case $x in [A-Z]*) echo 8-class ;; *) echo 8-no ;; esac
+case abc in *) echo 9-star-first ;; abc) echo 9-literal ;; esac
+shopt -s nocasematch
+case $x in A*) echo 10-nocase ;; *) echo 10-no ;; esac
+[[ $x == ABC ]] && echo 11-nocase || echo 11-no
+[ abc = ABC ] && echo 12-yes || echo 12-no
+shopt -u nocasematch
+[[ $x == A* ]] && echo 13-yes || echo 13-no
+case 'a[b' in 'a[b') echo 14-bracket ;; *) echo 14-no ;; esac
+==== STDOUT ====
+1-no
+2-no
+3-no
+4-no
+5-ne-true
+6-no
+7-no
+8-no
+9-star-first
+10-nocase
+11-nocase
+12-no
+13-no
+14-bracket
+
+==== STDERR ====
+

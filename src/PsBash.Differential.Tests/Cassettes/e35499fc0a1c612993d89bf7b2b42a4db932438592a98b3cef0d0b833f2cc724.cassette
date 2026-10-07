@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 78
+stdout-length: 23
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit 1; f=report; touch $f.bak && cp $f.bak $f.copy && ls
+==== STDOUT ====
+report.bak
+report.copy
+
+==== STDERR ====
+

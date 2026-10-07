@@ -1,0 +1,17 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 165
+stdout-length: 53
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit 1; printf 'echo "lib says [$1]"\nX=1\n' > lib.sh
+set -- a b; . ./lib.sh; echo "X=$X 1=$1"; source ./lib.sh p q; echo "after-args 1=$1 2=$2"
+==== STDOUT ====
+lib says [a]
+X=1 1=a
+lib says [p]
+after-args 1=a 2=b
+
+==== STDERR ====
+

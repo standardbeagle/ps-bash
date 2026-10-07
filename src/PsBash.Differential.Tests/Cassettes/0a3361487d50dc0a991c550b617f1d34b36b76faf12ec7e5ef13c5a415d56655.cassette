@@ -1,0 +1,31 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 643
+stdout-length: 77
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit 1; printf 'a\nb\nc\n' > in.txt
+while read -r l; do [ "$l" = b ] && break; echo "1 $l"; done < in.txt; echo 1-after
+while read -r l; do [ "$l" = b ] && continue; echo "2 $l"; done < in.txt; echo 2-after
+printf 'a\nb\n' | while read -r l; do [ "$l" = b ] && break; echo "3 $l"; done; echo 3-after
+s=$'x\ny\nz'; while read -r l; do [ "$l" = y ] && break; echo "4 $l"; done <<< "$s"; echo 4-after
+f() { while read -r l; do [ "$l" = b ] && return 7; echo "5 $l"; done < in.txt; echo never; }; f; echo "5 rc=$?"
+for i in 1 2; do while read -r l; do [ "$l" = b ] && break 2; echo "6 $i $l"; done < in.txt; done; echo 6-after
+==== STDOUT ====
+1 a
+1-after
+2 a
+2 c
+2-after
+3 a
+3-after
+4 x
+4-after
+5 a
+5 rc=7
+6 1 a
+6-after
+
+==== STDERR ====
+

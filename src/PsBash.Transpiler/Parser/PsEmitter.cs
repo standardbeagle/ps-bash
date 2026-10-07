@@ -605,13 +605,56 @@ public static class PsEmitter
         return PsBuild.HoistedCondition(text);
     }
 
+    // ── Loop control: labels for break N / continue N ─────────────────────────────────────
+    //
+    // A PowerShell `break` / `continue` takes a LABEL, not a count, and is dynamically scoped:
+    // `break 2` meant "the loop labelled 2", found none, and unwound the WHOLE script (bash: leave
+    // two loops). Every emitted loop is labelled `:__psbash_l<depth>`, and `break N` / `continue N`
+    // name the N-th enclosing one (clamped to the outermost, as bash does). The lexical stack is
+    // reset for a function body, where a bare keyword keeps bash's dynamic behaviour (`break` in a
+    // function called from a loop leaves the caller's loop). The `while read` loop is two PS loops
+    // (records, then the lines of a record), so its entry has distinct break / continue labels.
+    [ThreadStatic]
+    private static List<(string Break, string Continue)>? _loopLabels;
+
+    /// <summary>Push the label pair for a loop at <paramref name="depth"/>; returns the
+    /// <c>:label </c> prefix to put directly before the (outer) loop keyword.</summary>
+    private static string PushLoopLabel(int depth, string? continueLabel = null)
+    {
+        string label = "__psbash_l" + depth;
+        (_loopLabels ??= new()).Add((label, continueLabel ?? label));
+        return ":" + label + " ";
+    }
+
+    private static void PopLoopLabel() => _loopLabels!.RemoveAt(_loopLabels.Count - 1);
+
+    /// <summary><c>break [N]</c> / <c>continue [N]</c> → the labelled PowerShell keyword.</summary>
+    private static string EmitLoopControl(string keyword, Command.Simple cmd)
+    {
+        if (_loopLabels is not { Count: > 0 } labels)
+            return keyword; // no lexical loop (a function body): bash's dynamic scope, as before
+        int n = 1;
+        if (cmd.Words.Length >= 2)
+        {
+            // A literal count only. `break $n` is rare and not modelled: it leaves the innermost.
+            if (TryGetPureLiteralText(cmd.Words[1].Parts, out var countText)
+                && int.TryParse(countText, System.Globalization.NumberStyles.None,
+                       System.Globalization.CultureInfo.InvariantCulture, out var parsed) && parsed > 0)
+                n = parsed;
+        }
+        var target = labels[Math.Max(0, labels.Count - n)];
+        return keyword + " " + (keyword == "break" ? target.Break : target.Continue);
+    }
+
     private static string EmitForIn(Command.ForIn forIn)
     {
         int depth = _loopDepth++;
+        string label = PushLoopLabel(depth);
         try
         {
             var sb = new StringBuilder();
             sb.Append(IterGuardPrefix(depth));
+            sb.Append(label);
 
             // Empty list means implicit $@ -> use BashPositional if set, else $args
             if (forIn.List.IsEmpty)
@@ -643,6 +686,7 @@ public static class PsEmitter
         }
         finally
         {
+            PopLoopLabel();
             _loopDepth--;
         }
     }
@@ -836,6 +880,7 @@ public static class PsEmitter
     private static string EmitForArith(Command.ForArith forArith)
     {
         int depth = _loopDepth++;
+        string label = PushLoopLabel(depth);
         try
         {
             // Register loop var before emitting header so init/cond/step all use $var
@@ -846,7 +891,7 @@ public static class PsEmitter
             {
                 var sb = new StringBuilder();
                 sb.Append(IterGuardPrefix(depth));
-                sb.Append("for (");
+                sb.Append(label).Append("for (");
                 sb.Append(EmitForArithClause(forArith.Init, initializeLoopVar: loopVar));
                 sb.Append("; ");
                 sb.Append(EmitForArithCondition(forArith.Cond));
@@ -865,6 +910,7 @@ public static class PsEmitter
         }
         finally
         {
+            PopLoopLabel();
             _loopDepth--;
         }
     }
@@ -879,6 +925,14 @@ public static class PsEmitter
         // `< file` the body runs outside any scope and the redirect feeds `$input`.
         if (IsWhileRead(whileCmd.Cond, out var readVar, out var readIfs))
         {
+            // Its ONLY redirect is its own input (`done < f`, `<<< "$s"`, a heredoc): read the source
+            // straight into the loop header. bash runs this loop in the CURRENT shell (only a pipe makes
+            // a subshell), but the general `Get-Content f | & { … }` form put it in a script block, so a
+            // `return` in a function's read loop left only that block (`echo never` still ran).
+            if (!whileCmd.Redirects.IsDefaultOrEmpty
+                && whileCmd.Redirects is [{ Fd: 0, Op: "<" or "<<" or "<<<" } only])
+                return WithStdinScope(false, () => EmitWhileRead(readVar, readIfs, whileCmd.Body, ReadLoopSource(only)));
+
             bool readsQueue = _inStdinScope && !HasInputRedirect(whileCmd.Redirects);
             return ApplyCompoundRedirects(
                 WithStdinScope(readsQueue, () => EmitWhileRead(readVar, readIfs, whileCmd.Body)),
@@ -891,6 +945,7 @@ public static class PsEmitter
     private static string EmitWhileLoop(Command.While whileCmd)
     {
         int depth = _loopDepth++;
+        string label = PushLoopLabel(depth);
         try
         {
             var sb = new StringBuilder();
@@ -903,7 +958,7 @@ public static class PsEmitter
                 // command's, or 0 when the body never ran — never the failed condition's, so the
                 // body's status is saved per pass and restored on the way out.
                 string st = "$__psbash_wst" + depth;
-                sb.Append(st).Append(" = 0; while ($true) { ");
+                sb.Append(st).Append(" = 0; ").Append(label).Append("while ($true) { ");
                 sb.Append(IterGuardCheck(depth));
                 sb.Append(EmitHoistedCondition(whileCmd.Cond));
                 sb.Append("if (").Append(PsBuild.LastStatusTest(negate: !whileCmd.IsUntil)).Append(") { ");
@@ -913,7 +968,7 @@ public static class PsEmitter
                 return ApplyCompoundRedirects(sb.ToString(), whileCmd.Redirects);
             }
 
-            sb.Append("while (");
+            sb.Append(label).Append("while (");
             var condText = EmitGuardedCondition(whileCmd.Cond, EmitWhileCondition);
 
             if (whileCmd.IsUntil)
@@ -940,6 +995,7 @@ public static class PsEmitter
         }
         finally
         {
+            PopLoopLabel();
             _loopDepth--;
         }
     }
@@ -1025,30 +1081,13 @@ public static class PsEmitter
 
     private static string EmitCase(Command.Case caseCmd)
     {
-        // An extglob arm (`@(a|b)`, `!(*.log)`): PowerShell wildcards have no equivalent, so the
-        // whole switch matches by regex, every pattern through BashPattern (case-sensitive and
-        // anchored, as bash's case is). Without one the -Wildcard emission below is unchanged.
-        bool useRegex = caseCmd.Arms.Any(a => a.Patterns.Any(p => BashPattern.HasExtGlob(p)));
-        bool useWildcard = false;
-        foreach (var arm in caseCmd.Arms)
-        {
-            foreach (var pattern in arm.Patterns)
-            {
-                if (pattern != "*" && HasGlobChars(pattern))
-                {
-                    useWildcard = true;
-                    break;
-                }
-            }
-            if (useWildcard) break;
-        }
-
-        var sb = new StringBuilder("switch");
-        if (useRegex)
-            sb.Append(" -Regex -CaseSensitive");
-        else if (useWildcard)
-            sb.Append(" -Wildcard");
-        sb.Append(" (");
+        // Every arm matches through BashPattern (bash glob/extglob → anchored regex) tested by the
+        // runtime's BashPatternMatch: CASE-SENSITIVE, as bash's case is, unless `shopt -s
+        // nocasematch` is on at run time. PowerShell's own `switch` (-eq) and `switch -Wildcard`
+        // are case-insensitive, so `case abc in A*)` and `case ABC in abc)` both matched. Each
+        // clause is a script-block test in the arms' own order, so a mid-list `*)` wins where bash
+        // says it does (a PS `default` only ran when nothing else matched).
+        var sb = new StringBuilder("switch (");
         sb.Append(EmitCaseExpr(caseCmd.Expr));
         sb.Append(") { ");
 
@@ -1057,26 +1096,13 @@ public static class PsEmitter
             if (i > 0) sb.Append(' ');
             var arm = caseCmd.Arms[i];
             var bodyText = EmitCaseArmBody(caseCmd.Arms, i);
-
-            if (arm.Patterns.Length == 1 && arm.Patterns[0] == "*")
+            for (int p = 0; p < arm.Patterns.Length; p++)
             {
-                sb.Append("default { ");
-                sb.Append(bodyText);
-                sb.Append(" }");
-            }
-            else
-            {
-                for (int p = 0; p < arm.Patterns.Length; p++)
-                {
-                    if (p > 0) sb.Append(' ');
-                    sb.Append('\'');
-                    sb.Append(SqEsc(useRegex
-                        ? BashPattern.ToAnchoredRegex(arm.Patterns[p])
-                        : NormalizeCasePattern(arm.Patterns[p])));
-                    sb.Append("' { ");
-                    sb.Append(bodyText);
-                    sb.Append(" }");
-                }
+                if (p > 0) sb.Append(' ');
+                sb.Append(arm.Patterns[p] == "*"
+                    ? "{ $true }"
+                    : "{ " + PsBuild.PatternTest("$_", BashPattern.ToAnchoredRegex(arm.Patterns[p])) + " }");
+                sb.Append(" { ").Append(bodyText).Append(" }");
             }
         }
 
@@ -1152,6 +1178,9 @@ public static class PsEmitter
         var added = new List<string>();
         foreach (var v in localVars)
             if (vars.Add(v)) added.Add(v);
+        // A function body starts with no lexical loop: its `break` stays bare (dynamic, as bash).
+        var outerLabels = _loopLabels;
+        _loopLabels = null;
 
         try
         {
@@ -1171,6 +1200,7 @@ public static class PsEmitter
         }
         finally
         {
+            _loopLabels = outerLabels;
             foreach (var v in added) vars.Remove(v);
         }
     }
@@ -1505,7 +1535,20 @@ public static class PsEmitter
         return varNames.Count > 0;
     }
 
-    private static string EmitWhileRead(List<string> varNames, string? ifs, Command body)
+    /// <summary>The records of a read loop's own input redirect, as an array expression: the file's
+    /// lines (`/dev/null` = none) or the here-string / heredoc body — the same feeds
+    /// <see cref="ApplyCompoundRedirects"/> pipes in.</summary>
+    private static string ReadLoopSource(Redirect input)
+    {
+        if (input.Here is { } here)
+            return $"@({EmitHereDocLiteral(here)} | Emit-BashLine)";
+        var target = TransformRedirectTarget(EmitArgWord(input.Target));
+        return target == "$null" ? "@()" : $"@(Get-Content {target})";
+    }
+
+    /// <param name="sourceExpr">The records to iterate when the loop has its own input redirect
+    /// (<see cref="ReadLoopSource"/>); null = the pipeline (<c>$input</c>) or the shared stdin queue.</param>
+    private static string EmitWhileRead(List<string> varNames, string? ifs, Command body, string? sourceExpr = null)
     {
         // The `read` variables are the loop bindings for this construct: register
         // them as loop vars so the body emits them bare ($line, not $env:line) and
@@ -1518,6 +1561,15 @@ public static class PsEmitter
             if (vars.Add(name)) added.Add(name);
         }
 
+        // A real (labelled) loop, not a `ForEach-Object` pipeline: inside a ForEach-Object script
+        // block `break` does not stop the pipeline — it unwinds to the nearest ENCLOSING loop, and
+        // with none it ended the whole script (`while read …; do break; done < f; echo after`
+        // printed nothing after the loop); `continue` acted like break and `return` only ended the
+        // current line. Two PS loops — records, then the lines of a record (one record can carry
+        // several) — so `break` names the outer label and `continue` the inner one.
+        int depth = _loopDepth++;
+        string recLabel = "__psbash_l" + depth, lineLabel = "__psbash_lc" + depth;
+        (_loopLabels ??= new()).Add((recLabel, lineLabel));
         string bodyText;
         try
         {
@@ -1525,6 +1577,8 @@ public static class PsEmitter
         }
         finally
         {
+            PopLoopLabel();
+            _loopDepth--;
             foreach (var name in added)
                 vars.Remove(name);
         }
@@ -1544,10 +1598,20 @@ public static class PsEmitter
             ? $"${{{varNames[0]}}} = $_; "
             : BuildReadFieldBindings(varNames, ifs);
 
+        // The lines of one record: its BashText (null-safe), the trailing newline dropped, split.
+        string rec = "$__psbash_rec" + depth;
+        string lines = $"@(($(if ($null -ne {rec} -and {rec}.PSObject.Properties['BashText']) {{ {rec}.BashText }} else {{ \"{rec}\" }}) -replace \"`n$\",\"\") -split \"`n\")";
+        string inner = $":{lineLabel} foreach ($_ in {lines}) {{ {bind}{bodyText} }}";
+
         // Inheriting a compound's stdin, the lines come from the shared queue (a `read` or `cat`
-        // before the loop already advanced it), not from `$input`.
-        var source = _inStdinScope ? PsBuild.StdinFeed : "$input";
-        return $"{source} | ForEach-Object {{ {PsBuild.NullSafeBashText} }} | ForEach-Object {{ ($_ -replace \"`n$\",\"\") -split \"`n\" }} | ForEach-Object {{ {bind}{bodyText} }}";
+        // before the loop already advanced it), not from `$input` — dequeued one record per pass,
+        // so a `read` in the body still takes the NEXT record (a `foreach` over the feed would
+        // drain the queue up front). `$input` is an enumerator: `foreach` over it streams.
+        if (sourceExpr is not null)
+            return $":{recLabel} foreach ({rec} in {sourceExpr}) {{ {inner} }}";
+        return _inStdinScope
+            ? $":{recLabel} while ($global:__BashStdIn -and $global:__BashStdIn.Count -gt 0) {{ {rec} = $global:__BashStdIn.Dequeue(); {inner} }}"
+            : $":{recLabel} foreach ({rec} in $input) {{ {inner} }}";
     }
 
     /// <summary>
@@ -2038,42 +2102,34 @@ public static class PsEmitter
                        "else { $global:BASH_REMATCH = $null }; $__psbash_m )";
             }
 
-            // An extglob RHS (`[[ $f == !(*.log) ]]`, `@(a|b)`): bash pattern → anchored,
-            // case-sensitive regex. [string] keeps an unset LHS an empty string (`!(x)` matches it).
-            if (op is "==" or "=" or "!=" && TryGetStaticPatternText(words[2], out var extPat)
-                && BashPattern.HasExtGlob(extPat))
+            // `==` / `=` / `!=`: bash PATTERN-matches the right-hand word, case-sensitively unless
+            // `shopt -s nocasematch` (PowerShell's -eq / -like are case-insensitive: `[[ abc == A* ]]`
+            // and `[[ abc == ABC ]]` were both true). `!=` is the exact mirror (oracle:
+            // `[[ https://a != "http"* ]]` is FALSE).
+            if (op is "==" or "=" or "!=")
             {
-                string matchOp = op == "!=" ? "-cnotmatch" : "-cmatch";
-                return $"[string]({lhs}) {matchOp} '{SqEsc(BashPattern.ToAnchoredRegex(extPat))}'";
-            }
-
-            if (op is "==" or "=")
-            {
-                // NormalizeCasePattern, not StripQuotes: the RHS is a bash WORD, so
-                // quoting is per-SEGMENT, not just around the whole thing. bash drops
-                // the quotes during expansion and the quoted chars stay literal —
-                // `"http"*` is the pattern http* — but StripQuotes only handles a
-                // fully-enclosing pair, so the inner quotes leaked into the pattern
-                // (`-like '"http"*'`, which can never match) and a fully-quoted
-                // `"a*b"` wrongly kept its `*` ACTIVE. Same rule as case patterns.
+                bool negate = op == "!=";
+                // `[ a = b ]` is plain string equality — no pattern, and nocasematch does not
+                // apply (`[ abc = a* ]` is false; `[ abc = ABC ]` is false). It was -like / -eq.
+                if (!extended)
+                    return $"{lhs} {(negate ? "-cne" : "-ceq")} {EmitTestOperand(words[2])}";
+                // A static RHS — literal, quoted segments (`"http"*` is the pattern http* with the
+                // quoted chars literal), glob, extglob — is one BashPattern regex.
+                if (TryGetStaticPatternText(words[2], out var patText))
+                {
+                    string test = PsBuild.PatternTest(lhs, BashPattern.ToAnchoredRegex(patText));
+                    return negate ? $"(-not {test})" : test;
+                }
+                // A run-time RHS. A glob in it keeps the wildcard path (the expanded value is
+                // only known at run time), case-sensitive unless nocasematch.
                 var pattern = NormalizeCasePattern(EmitWord(words[2]));
                 if (HasGlobChars(pattern))
-                    return $"{lhs} -like '{SqEsc(pattern)}'";
-                return $"{lhs} -eq {EmitTestOperand(words[2])}";
-            }
-
-            // `!=` is the exact mirror of `==`: inside [[ ]] bash GLOB-matches the
-            // right-hand pattern (oracle: `[[ https://a != "http"* ]]` is FALSE).
-            // Only `==` had the glob branch, so a glob RHS fell through to the bare
-            // operand join and emitted `$env:x -ne "http"*` — "You must provide a
-            // value expression following the '*' operator", which broke the parse of
-            // the whole file (dotnet-install.sh).
-            if (op == "!=")
-            {
-                var pattern = NormalizeCasePattern(EmitWord(words[2]));
-                if (HasGlobChars(pattern))
-                    return $"{lhs} -notlike '{SqEsc(pattern)}'";
-                return $"{lhs} -ne {EmitTestOperand(words[2])}";
+                {
+                    string like = negate ? "-notlike" : "-like", clike = negate ? "-cnotlike" : "-clike";
+                    return $"$(if ([PsBash.Cmdlets.BashPatternMatch]::NoCase) {{ {lhs} {like} '{SqEsc(pattern)}' }} else {{ {lhs} {clike} '{SqEsc(pattern)}' }})";
+                }
+                string eq = PsBuild.StringEqualsTest(lhs, EmitTestOperand(words[2]));
+                return negate ? $"(-not {eq})" : eq;
             }
 
             // In [[ ]], < and > are lexicographic string comparisons.
@@ -2878,8 +2934,12 @@ public static class PsEmitter
 
         string? specialResult = null;
 
+        // break [N] / continue [N] -> the labelled keyword for the N-th enclosing loop.
+        if (cmd0 is "break" or "continue")
+            specialResult = EmitLoopControl(cmd0, cmd);
+
         // return N -> capture exit code for $?
-        if (cmd0 == "return")
+        else if (cmd0 == "return")
         {
             if (cmd.Words.Length >= 2)
             {
@@ -3822,9 +3882,10 @@ public static class PsEmitter
             : emitted;
 
     /// <summary>
-    /// True when a multi-part word's leading part is a self-delimiting PowerShell
-    /// token ('...', "...", or $(...)) so naive part concatenation would split
-    /// into multiple arguments or corrupt content. Words containing glob,
+    /// True when naive part concatenation of a multi-part word would split it into
+    /// multiple arguments or corrupt content: the leading part is a self-delimiting
+    /// PowerShell token ('...', "...", or $(...)), or an expansion is followed by
+    /// more text (member access / indexing — see below). Words containing glob,
     /// process-substitution, tilde, or brace parts are excluded — they require
     /// their own emission and do not lead with a self-delimiting quote in
     /// practice.
@@ -3833,16 +3894,29 @@ public static class PsEmitter
     {
         if (parts.Length < 2)
             return false;
-        if (parts[0] is not (WordPart.SingleQuoted or WordPart.DoubleQuoted
-                          or WordPart.AnsiCQuoted or WordPart.CommandSub))
-            return false;
         foreach (var p in parts)
         {
             if (p is WordPart.GlobPart or WordPart.ProcessSub or WordPart.TildeSub
                   or WordPart.BracedTuple or WordPart.BracedRange)
                 return false;
         }
-        return true;
+        if (parts[0] is WordPart.SingleQuoted or WordPart.DoubleQuoted
+                     or WordPart.AnsiCQuoted or WordPart.CommandSub)
+            return true;
+        // An expansion followed by more text (`$f.txt`, `$f[0]`, `${f}:x`, `$f,x`, `$((n)).x`).
+        // Glued in a PowerShell argument-mode bareword, the text folds into the variable token:
+        // `.txt` is MEMBER ACCESS (even on `${env:f}`), `[0]` indexing, `,` an array — so
+        // `echo $f.txt` printed "" and `touch $f.bak` got an empty operand. Inside one "…"
+        // string none of these apply (FlattenPartsToDoubleQuotedString braces `${…}` itself).
+        for (int i = 0; i < parts.Length - 1; i++)
+        {
+            // `$@x` / `${a[@]}x` expand to several words: not a single-string word.
+            if (parts[i] is WordPart.SimpleVarSub { Name: not ("@" or "*") }
+                or WordPart.BracedVarSub { Name: not ("@" or "*"), Suffix: not ("[@]" or "[*]") }
+                or WordPart.ArithSub)
+                return true;
+        }
+        return false;
     }
 
     /// <summary>
@@ -5793,12 +5867,17 @@ public static class PsEmitter
 
     private static bool NextPartNeedsBracing(WordPart part)
     {
-        // ':' → PS drive reference ($env:PATH: misparse)
-        // '.' → PS property access ($file.txt misparse)
+        // Text that would FOLD INTO the preceding PowerShell variable token inside a "…" string:
+        // ':' → drive/scope reference ($env:PATH: misparse), '.' → property access, and every char
+        // PowerShell reads as part of a variable NAME — letters, digits, '_', '?'. bash ends the name
+        // at the closing brace, so `"${f}x"` / `"${f}_bak"` / `x="${f}1"` emitted `$env:fx` (another,
+        // unset variable) and printed "" silently. A `$f` (no braces) is never followed by a name
+        // char — the parser takes it into the name — but `$f?` is.
+        static bool Folds(char c) => c is ':' or '.' or '_' or '?' || char.IsAsciiLetterOrDigit(c);
         if (part is WordPart.Literal lit)
-            return lit.Value.Length > 0 && (lit.Value[0] == ':' || lit.Value[0] == '.');
+            return lit.Value.Length > 0 && Folds(lit.Value[0]);
         if (part is WordPart.EscapedLiteral el)
-            return el.Value == ":" || el.Value == ".";
+            return el.Value.Length > 0 && Folds(el.Value[0]);
         return false;
     }
 

@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 125
+stdout-length: 123
+stderr-length: 0
+==== SCRIPT ====
+f=report; echo $f.txt $f:x ${f}x ${f}.txt $f.$f pre$f.txt; echo "[${f}x] [${f}_bak] [${f}1] [$f?]"; x="${f}suffix"; echo "$x"
+==== STDOUT ====
+report.txt report:x reportx report.txt report.report prereport.txt
+[reportx] [report_bak] [report1] [report?]
+reportsuffix
+
+==== STDERR ====
+

@@ -529,6 +529,21 @@ public static class PsBuild
     /// on a <c>$null</c> item, and short-circuit order means the guard MUST precede the
     /// property probe. Used to drain <c>while read</c> input.
     /// </summary>
+    /// <summary>
+    /// <c>[PsBash.Cmdlets.BashPatternMatch]::IsMatch(value, 'regex')</c>: a bash pattern test (case arm,
+    /// <c>[[ == ]]</c>) — case-sensitive unless <c>shopt -s nocasematch</c> is on at run time.
+    /// <paramref name="anchoredRegex"/> comes from <c>BashPattern.ToAnchoredRegex</c>.
+    /// </summary>
+    public static string PatternTest(string valueExpr, string anchoredRegex) =>
+        "[PsBash.Cmdlets.BashPatternMatch]::IsMatch(" + valueExpr + ", " + SingleQuote(anchoredRegex) + ")";
+
+    /// <summary>
+    /// <c>[[ a == b ]]</c> with a run-time RHS: ordinal string equality, ignore-case under
+    /// <c>nocasematch</c> (PowerShell's <c>-eq</c> is case-insensitive).
+    /// </summary>
+    public static string StringEqualsTest(string leftExpr, string rightExpr) =>
+        "[PsBash.Cmdlets.BashPatternMatch]::StringEquals(" + leftExpr + ", " + rightExpr + ")";
+
     public const string NullSafeBashText =
         "if ($null -ne $_ -and $_.PSObject.Properties['BashText']) { $_.BashText } else { \"$_\" }";
 

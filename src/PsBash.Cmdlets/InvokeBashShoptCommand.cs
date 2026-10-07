@@ -48,6 +48,8 @@ public sealed class InvokeBashShoptCommand : PSCmdlet
         ["nullglob"] = false,
         ["failglob"] = false,
         ["nocaseglob"] = false,
+        // case / [[ == ]] pattern matching ignores case (read by BashPatternMatch at match time).
+        ["nocasematch"] = false,
         ["expand_aliases"] = true,
         ["cmdhist"] = true,
         ["histappend"] = true,

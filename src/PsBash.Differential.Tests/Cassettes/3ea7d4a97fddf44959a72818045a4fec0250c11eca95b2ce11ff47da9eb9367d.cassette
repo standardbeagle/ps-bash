@@ -1,0 +1,18 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 126
+stdout-length: 26
+stderr-length: 48
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit 1; touch canary; mkdir sub; rm -rf ''; echo rc=$?; rm -rf "$nope"; echo rc=$?; rm ''; echo rc=$?; ls
+==== STDOUT ====
+rc=0
+rc=0
+rc=1
+canary
+sub
+
+==== STDERR ====
+rm: cannot remove '': No such file or directory
+
