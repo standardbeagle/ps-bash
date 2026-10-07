@@ -527,6 +527,10 @@ public class BashParserTests
         var result = Parse("export FOO=bar");
 
         var assign = Assert.IsType<Command.ShAssignment>(result);
+        // errexit needs it: `export X=$(false)` is export's status (0), unlike `X=$(false)`.
+        Assert.True(assign.IsExport);
+        Assert.False(assign.IsLocal);
+        Assert.False(Assert.IsType<Command.ShAssignment>(Parse("FOO=bar")).IsExport);
         var pair = Assert.Single(assign.Pairs);
         Assert.Equal("FOO", pair.Name);
         Assert.Equal(AssignOp.Equal, pair.Op);

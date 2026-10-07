@@ -4684,15 +4684,85 @@ public class PsEmitterTests
     public void Transpile_SetEuoPipefail_EmitsErrorActionStopAndStrictMode()
     {
         var result = PsEmitter.Transpile("set -euo pipefail");
-        Assert.Equal("$ErrorActionPreference = 'Stop'; $global:__BashErrexit = $true; Set-StrictMode -Version Latest", result);
+        Assert.Equal("$ErrorActionPreference = 'Stop'; $global:__BashErrexit = $true; if (-not (Test-Path variable:global:__BashErrexitSuppress)) { $global:__BashErrexitSuppress = 0 }; Set-StrictMode -Version Latest", result);
     }
 
     [Fact]
     public void Transpile_SetOErrexit_EmitsErrorActionStop()
     {
         var result = PsEmitter.Transpile("set -o errexit");
-        Assert.Equal("$ErrorActionPreference = 'Stop'; $global:__BashErrexit = $true", result);
+        Assert.Equal("$ErrorActionPreference = 'Stop'; $global:__BashErrexit = $true; if (-not (Test-Path variable:global:__BashErrexitSuppress)) { $global:__BashErrexitSuppress = 0 }", result);
     }
+
+    // errexit: a failing command at statement position must end a `set -e` script. Only the
+    // `false` builtin and PowerShell-terminating errors did — `set -e; cat /nofile; echo after`
+    // printed "after" and exited 0.
+
+    [Theory]
+    [InlineData("set -e", true)]
+    [InlineData("set -euo pipefail", true)]
+    [InlineData("set -o errexit", true)]
+    [InlineData("set -o pipefail -e", true)]
+    [InlineData("eval 'set -e; cat x'", true)]
+    [InlineData("set -o pipefail", false)]
+    [InlineData("set -u; echo reset -e", false)]
+    [InlineData("echo set", false)]
+    public void EnablesErrexit_DetectsSetE(string bash, bool expected)
+        => Assert.Equal(expected, PsEmitter.EnablesErrexit(bash));
+
+    [Fact]
+    public void Transpile_WithoutSetE_EmitsNoErrexitChecks()
+    {
+        // Scripts that never use set -e must emit exactly what they always did.
+        var result = PsEmitter.Transpile("cat /nofile; if f; then g; fi; a && b");
+        Assert.DoesNotContain("__BashErrexit", result);
+    }
+
+    [Fact]
+    public void Transpile_SetE_ChecksStatementButNotExemptOperands()
+    {
+        var result = PsEmitter.Transpile("set -e; cat /nofile; echo after")!;
+        var check = PsBuild.ErrexitCheck("exit $global:LASTEXITCODE");
+        Assert.Contains("Invoke-BashCat /nofile; " + check + "; Invoke-BashEcho after", result);
+
+        // `a || b`: a is exempt; the script leaves only when the FINAL command ran and failed.
+        var chain = PsEmitter.Transpile("set -e; cat /nofile || echo fallback")!;
+        Assert.Contains("$global:__BashErrexitTail -ne 0", chain);
+        Assert.DoesNotContain("Invoke-BashCat /nofile; " + check, chain);
+    }
+
+    [Fact]
+    public void Transpile_SetE_ConditionRunsSuppressed_AndUntakenIfIsStatusZero()
+    {
+        // A function called from a condition keeps going past its own failures (bash ignores -e
+        // there), and an `if` whose branch is not taken has status 0.
+        var result = PsEmitter.Transpile("set -e; if f; then echo y; fi")!;
+        Assert.Contains("$global:__BashErrexitSuppress++; try {", result);
+        Assert.Contains("else { $global:LASTEXITCODE = 0 }", result);
+    }
+
+    [Fact]
+    public void Transpile_SetE_ExportOfCommandSubIsNotChecked()
+    {
+        // bash: `export X=$(false)` has export's status (0); a bare `X=$(false)` fails.
+        var check = PsBuild.ErrexitCheck("exit $global:LASTEXITCODE");
+        Assert.DoesNotContain(check, PsEmitter.Transpile("set -e; export X=$(false)")!.Replace(
+            PsEmitter.Transpile("set -e")!, ""));
+        Assert.Contains(check, PsEmitter.Transpile("set -e; X=$(false)")!);
+    }
+
+    [Fact]
+    public void Transpile_SetE_InsideSubshell_LeavesOnlyTheSubshell()
+    {
+        var result = PsEmitter.Transpile("set -e; (cat /nofile; echo in); echo after")!;
+        Assert.Contains(PsBuild.ErrexitCheck("return"), result);
+        Assert.StartsWith("& { try { Push-Location;", result[(result.IndexOf("& { try", StringComparison.Ordinal))..]);
+    }
+
+    [Fact]
+    public void Transpile_SetPlusE_TurnsErrexitOff()
+        => Assert.Equal("$ErrorActionPreference = 'Continue'; $global:__BashErrexit = $false",
+            PsEmitter.Transpile("set +e"));
 
     [Fact]
     public void Transpile_SetX_EmitsPSDebugTrace()
@@ -4719,7 +4789,7 @@ public class PsEmitterTests
     public void Transpile_SetEU_EmitsErrorActionStopAndStrictMode()
     {
         var result = PsEmitter.Transpile("set -eu");
-        Assert.Equal("$ErrorActionPreference = 'Stop'; $global:__BashErrexit = $true; Set-StrictMode -Version Latest", result);
+        Assert.Equal("$ErrorActionPreference = 'Stop'; $global:__BashErrexit = $true; if (-not (Test-Path variable:global:__BashErrexitSuppress)) { $global:__BashErrexitSuppress = 0 }; Set-StrictMode -Version Latest", result);
     }
 
     // source file.sh -> Invoke-BashSource ./lib.sh

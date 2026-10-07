@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 1
+script-length: 103
+stdout-length: 6
+stderr-length: 0
+==== SCRIPT ====
+set -e; if true; then echo t; fi; for i in 1 2; do echo i=$i; cat /nofile 2>/dev/null; done; echo never
+==== STDOUT ====
+t
+i=1
+
+==== STDERR ====
+

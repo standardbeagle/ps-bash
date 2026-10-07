@@ -43,12 +43,15 @@ public abstract record Command : BashNode
     public sealed record CommandList(ImmutableArray<Command> Commands) : Command;
 
     /// <summary>
-    /// A bare assignment command, e.g. <c>x=1 y=2</c>.
+    /// A bare assignment command, e.g. <c>x=1 y=2</c>, or <c>local</c> / <c>export</c> NAME=VAL.
+    /// <see cref="IsExport"/> matters for errexit: <c>export X=$(false)</c> has the status of
+    /// <c>export</c> (0), unlike a bare <c>X=$(false)</c>.
     /// Modeled after oils command.ShAssignment.
     /// </summary>
     public sealed record ShAssignment(
         ImmutableArray<Assignment> Pairs,
-        bool IsLocal = false) : Command;
+        bool IsLocal = false,
+        bool IsExport = false) : Command;
 
     /// <summary>
     /// An if/elif/else statement.

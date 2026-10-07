@@ -138,6 +138,130 @@ public static class PsEmitter
     private static int _andOrChainDepth;
 
     /// <summary>
+    /// True while transpiling a script that turns errexit on (<c>set -e</c> / <c>set -o errexit</c>,
+    /// <see cref="EnablesErrexit"/>). Only then does <see cref="EmitStatement"/> add the errexit checks and exempt
+    /// contexts their runtime suppression — a script that never uses <c>set -e</c> emits exactly
+    /// what it always did.
+    /// </summary>
+    [ThreadStatic]
+    private static bool _errexitMode;
+
+    /// <summary>
+    /// Non-zero while emitting text that is errexit-EXEMPT in bash: a condition, a non-final
+    /// <c>&amp;&amp;</c>/<c>||</c> operand, a negated or multi-stage pipeline, a command or process
+    /// substitution, a background job. No errexit check is emitted inside one.
+    /// </summary>
+    [ThreadStatic]
+    private static int _errexitExemptDepth;
+
+    private static readonly System.Text.RegularExpressions.Regex SetErrexitPattern = new(
+        // `set`, then any words of the SAME command (no ; & | ( ) newline), then -…e… or -o errexit.
+        @"\bset[ \t]+(?:[^\s;&|()]+[ \t]+)*?(?:-[A-Za-z]*e[A-Za-z]*\b|-o[ \t]+errexit\b)",
+        System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+    /// <summary>True when <paramref name="bash"/> can turn errexit on (a <c>set -e</c>-style word).</summary>
+    internal static bool EnablesErrexit(string bash) =>
+        bash.Contains("set", StringComparison.Ordinal) && SetErrexitPattern.IsMatch(bash);
+
+    private static T WithErrexitExempt<T>(Func<T> emit)
+    {
+        _errexitExemptDepth++;
+        try { return emit(); }
+        finally { _errexitExemptDepth--; }
+    }
+
+    /// <summary>How to leave on an errexit failure from here: the script, or only the enclosing subshell.</summary>
+    private static string ErrexitExitStatement() =>
+        _subshellDepth > 0 ? "return" : "exit $global:LASTEXITCODE";
+
+    /// <summary>Builtins whose status is not an errexit failure (bash ignores <c>export x=$(false)</c>) or that leave themselves.</summary>
+    private static readonly HashSet<string> ErrexitNeutralBuiltins = new(StringComparer.Ordinal)
+    {
+        "export", "local", "declare", "typeset", "readonly", "set", "shift", "unset", "alias", "unalias",
+        "trap", "shopt", "return", "exit", "break", "continue", ":", "true",
+    };
+
+    /// <summary>
+    /// A body (if/loop/case arm/function/group/subshell) or the whole script: each command in
+    /// it is at statement position.
+    /// </summary>
+    private static string EmitBody(Command body) =>
+        body is Command.CommandList list ? EmitCommandList(list) : EmitStatement(body);
+
+    /// <summary>
+    /// A command at STATEMENT position — where bash's errexit applies. Under
+    /// <see cref="_errexitMode"/>, a command whose failure ends a <c>set -e</c> script is followed by
+    /// <see cref="PsBuild.ErrexitCheck"/>; exempt constructs run under runtime suppression so a
+    /// function they call keeps going. Compound commands other than a subshell are not checked
+    /// themselves (bash: their status never triggers errexit) — their bodies are.
+    /// </summary>
+    private static string EmitStatement(Command cmd)
+    {
+        if (!_errexitMode || _errexitExemptDepth > 0)
+            return Emit(cmd);
+
+        switch (cmd)
+        {
+            case Command.AndOrList andOr:
+                return EmitAndOrStatement(andOr);
+            case Command.Pipeline { Negated: true }:
+                return PsBuild.ErrexitSuppressed(WithErrexitExempt(() => Emit(cmd)));
+            case Command.Pipeline pipeline:
+            {
+                // Every stage is a subshell in bash: a failure INSIDE a stage never ends the
+                // script; only the last stage's status counts.
+                var text = PsBuild.ErrexitSuppressed(WithErrexitExempt(() => Emit(cmd)));
+                return text + "; " + PsBuild.ErrexitCheck(ErrexitExitStatement());
+            }
+            case Command.Background:
+                return WithErrexitExempt(() => Emit(cmd));
+            case Command.Simple simple when IsErrexitCheckedSimple(simple):
+            // `x=$(false)` fails with the substitution; `local`/`export x=$(false)` has the builtin's status (0).
+            case Command.ShAssignment assign when !assign.IsLocal && !assign.IsExport && ContainsCommandSub(assign):
+            case Command.BoolExpr:
+            case Command.ArithCommand:
+            case Command.Subshell:
+                return Emit(cmd) + "; " + PsBuild.ErrexitCheck(ErrexitExitStatement());
+            default:
+                return Emit(cmd);
+        }
+    }
+
+    private static bool IsErrexitCheckedSimple(Command.Simple simple) =>
+        !simple.Words.IsDefaultOrEmpty
+        && !(GetLiteralValue(simple.Words[0]) is { } name && ErrexitNeutralBuiltins.Contains(name));
+
+    private static bool ContainsCommandSub(Command.ShAssignment assign)
+    {
+        foreach (var pair in assign.Pairs)
+        {
+            if (pair.Value is null) continue;
+            foreach (var part in pair.Value.Parts)
+            {
+                if (part is WordPart.CommandSub)
+                    return true;
+                if (part is WordPart.DoubleQuoted dq && dq.Parts.Any(q => q is WordPart.CommandSub))
+                    return true;
+            }
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// <c>a &amp;&amp; b || c</c> at statement position under errexit: the non-final operands are
+    /// exempt; the script leaves only when the FINAL command ran and failed.
+    /// </summary>
+    private static string EmitAndOrStatement(Command.AndOrList andOr)
+    {
+        // `cmd || exit 1` / `cmd && break`: the condition part is exempt, the keyword leaves by itself.
+        if (WithErrexitExempt(() => TryEmitAndOrEndingInStatementKeyword(andOr)) is { } keywordForm)
+            return PsBuild.ErrexitSuppressed(keywordForm);
+
+        var chain = EmitAndOrList(andOr, errexitFinalOperand: true);
+        return PsBuild.ErrexitAndOrList(chain, ErrexitExitStatement());
+    }
+
+    /// <summary>
     /// True when <paramref name="command"/> lexically contains an <c>exit</c>
     /// builtin, so <see cref="EmitSubshell"/> knows it must supply the script block
     /// the scoped <c>return</c> returns from. A function DEFINITION inside the
@@ -204,8 +328,15 @@ public static class PsEmitter
         // A substitution body is its own pipeline: the enclosing stage's `$input` is not its stdin.
         bool savedFeed = _pipeStageFeedsInput;
         _pipeStageFeedsInput = false;
-        try { return Emit(body); }
-        finally { _captureDepth--; _pipeStageFeedsInput = savedFeed; }
+        // bash does not inherit errexit into `$( … )` (no inherit_errexit): `x=$(f)` runs all of f.
+        // Only the substitution's final status matters, checked after the assignment.
+        _errexitExemptDepth++;
+        try
+        {
+            var text = Emit(body);
+            return _errexitMode && ConditionRunsCommand(body) ? PsBuild.ErrexitSuppressed(text) : text;
+        }
+        finally { _captureDepth--; _pipeStageFeedsInput = savedFeed; _errexitExemptDepth--; }
     }
 
     /// <summary>
@@ -275,17 +406,25 @@ public static class PsEmitter
     public static string? Transpile(string bash, TranspileContext context)
     {
         var prior = _context;
+        var priorErrexit = _errexitMode;
+        var priorExempt = _errexitExemptDepth;
         _context = context;
+        // Only a script that itself turns errexit on gets the checks (a sourced file running under
+        // its caller's `set -e` does not — see intentional-differences.md).
+        _errexitMode = EnablesErrexit(bash);
+        _errexitExemptDepth = 0;
         try
         {
             var cmd = BashParser.Parse(bash);
             if (cmd is null)
                 return null;
-            return Emit(cmd);
+            return EmitBody(cmd);
         }
         finally
         {
             _context = prior;
+            _errexitMode = priorErrexit;
+            _errexitExemptDepth = priorExempt;
         }
     }
 
@@ -361,6 +500,26 @@ public static class PsEmitter
         return null;
     }
 
+    /// <summary>
+    /// An <c>if</c>/<c>elif</c>/<c>while</c>/<c>until</c> condition: errexit-exempt in bash, so nothing
+    /// emitted inside it is checked, and under errexit a condition that runs a command runs it
+    /// suppressed — a function called there must keep going past its own failures.
+    /// </summary>
+    private static string EmitGuardedCondition(Command cond, Func<Command, string> emit)
+    {
+        var text = WithErrexitExempt(() => emit(cond));
+        return _errexitMode && ConditionRunsCommand(cond) ? PsBuild.ErrexitSuppressedExpr(text) : text;
+    }
+
+    private static bool ConditionRunsCommand(Command cond) => cond switch
+    {
+        Command.BoolExpr or Command.ArithCommand => false,
+        Command.Simple s when s.Words.Length == 1 && s.EnvPairs.IsEmpty && s.Redirects.IsEmpty
+            && GetLiteralValue(s.Words[0]) is "true" or ":" or "false" => false,
+        Command.AndOrList a => a.Commands.Any(ConditionRunsCommand),
+        _ => true,
+    };
+
     private static string EmitIf(Command.If ifCmd)
     {
         var sb = new StringBuilder();
@@ -374,17 +533,23 @@ public static class PsEmitter
                 sb.Append(" elseif");
 
             sb.Append(" (");
-            sb.Append(EmitCondition(arm.Cond));
+            sb.Append(EmitGuardedCondition(arm.Cond, EmitCondition));
             sb.Append(") { ");
-            sb.Append(Emit(arm.Body));
+            sb.Append(EmitBody(arm.Body));
             sb.Append(" }");
         }
 
         if (ifCmd.ElseBody is not null)
         {
             sb.Append(" else { ");
-            sb.Append(Emit(ifCmd.ElseBody));
+            sb.Append(EmitBody(ifCmd.ElseBody));
             sb.Append(" }");
+        }
+        else if (_errexitMode)
+        {
+            // bash: an `if` whose branch is not taken has status 0. The failed condition's code
+            // must not leak out — `f() { if false; then :; fi; }; set -e; f` keeps going.
+            sb.Append(" else { $global:LASTEXITCODE = 0 }");
         }
 
         return ApplyCompoundRedirects(sb.ToString(), ifCmd.Redirects);
@@ -416,7 +581,7 @@ public static class PsEmitter
             bool added = vars.Add(forIn.Var);
             try
             {
-                sb.Append(Emit(forIn.Body));
+                sb.Append(EmitBody(forIn.Body));
             }
             finally
             {
@@ -639,7 +804,7 @@ public static class PsEmitter
                 sb.Append(EmitForArithClause(forArith.Step, initializeLoopVar: null));
                 sb.Append(") { ");
                 sb.Append(IterGuardCheck(depth));
-                sb.Append(Emit(forArith.Body));
+                sb.Append(EmitBody(forArith.Body));
                 sb.Append(" }");
                 return ApplyCompoundRedirects(sb.ToString(), forArith.Redirects);
         }
@@ -681,7 +846,7 @@ public static class PsEmitter
             var sb = new StringBuilder();
             sb.Append(IterGuardPrefix(depth));
             sb.Append("while (");
-            var condText = EmitWhileCondition(whileCmd.Cond);
+            var condText = EmitGuardedCondition(whileCmd.Cond, EmitWhileCondition);
 
             if (whileCmd.IsUntil)
             {
@@ -696,8 +861,13 @@ public static class PsEmitter
 
             sb.Append(") { ");
             sb.Append(IterGuardCheck(depth));
-            sb.Append(Emit(whileCmd.Body));
+            sb.Append(EmitBody(whileCmd.Body));
             sb.Append(" }");
+            // bash: a loop ended by its condition has the last body command's status (0 here,
+            // or errexit would have left) — not the failed condition's, which must not leak out
+            // of a function ending in `while [ $i -lt 3 ]; do …; done`.
+            if (_errexitMode && whileCmd.Redirects.IsDefaultOrEmpty)
+                sb.Append("; $global:LASTEXITCODE = 0");
             return ApplyCompoundRedirects(sb.ToString(), whileCmd.Redirects);
         }
         finally
@@ -832,7 +1002,7 @@ public static class PsEmitter
         while (true)
         {
             if (j > i) sb.Append("; ");
-            sb.Append(Emit(arms[j].Body));
+            sb.Append(EmitBody(arms[j].Body));
             if (arms[j].Terminator == CaseTerminator.FallThrough && j + 1 < arms.Length)
                 j++;
             else
@@ -880,7 +1050,7 @@ public static class PsEmitter
         {
             // A function is typically a FILTER (`echo x | f`): its stdin is whatever it is called with, not the
             // launcher's. Under the launcher-stdin scope its body therefore reads `$input`/the pipe as before.
-            var body = _launcherStdin ? WithStdinScope(false, () => Emit(func.Body)) : Emit(func.Body);
+            var body = _launcherStdin ? WithStdinScope(false, () => EmitBody(func.Body)) : EmitBody(func.Body);
             // Wrap the function body with save/restore of $global:BashPositional so
             // that recursive calls each see their own positional args ($1, $2, $@, $#)
             // rather than the top-level caller's args. Without this, a recursive call
@@ -967,10 +1137,12 @@ public static class PsEmitter
         _subshellDepth++;
         string body;
         // `( … ) < file` gives the body its own stdin (a scope); otherwise it inherits the enclosing one.
-        try { body = EmitCompoundBody(subshell.Redirects, () => Emit(subshell.Body)); }
+        try { body = EmitCompoundBody(subshell.Redirects, () => EmitBody(subshell.Body)); }
         finally { _subshellDepth--; }
 
-        bool scopedExit = ContainsExitCommand(subshell.Body);
+        // Under errexit a failure inside the body leaves only the subshell (a scoped `return`,
+        // see ErrexitExitStatement), so it needs the script block too.
+        bool scopedExit = ContainsExitCommand(subshell.Body) || (_errexitMode && _errexitExemptDepth == 0);
         // The `finally` restores BOTH halves of the working directory (PowerShell
         // location + [System.Environment]::CurrentDirectory) — see
         // PsBuild.PopLocationRestoringProcessCwd for why a bare `Pop-Location` silently
@@ -1032,7 +1204,7 @@ public static class PsEmitter
 
     private static string EmitBraceGroup(Command.BraceGroup braceGroup)
     {
-        return ApplyCompoundRedirects(Emit(braceGroup.Body), braceGroup.Redirects);
+        return ApplyCompoundRedirects(EmitBody(braceGroup.Body), braceGroup.Redirects);
     }
 
     /// <summary>
@@ -2555,10 +2727,13 @@ public static class PsEmitter
                 // try/catch on (1/0) is the mechanism that flips $? to $false so bash `&&` short-circuits;
                 // Write-Error can't be used here because it propagates as a terminating error in eval scope.
                 specialResult = "$(" + argPrelude + "$global:LASTEXITCODE = 1; try { [void](1/0) } catch { }; if ($global:__BashErrexit) { throw 'PsBash.FalseErrexit' })";
-            else if (_andOrChainDepth > 0)
+            else if (_andOrChainDepth > 0 || _errexitMode)
                 // Inside an && / || list: bash exempts every list member from
                 // errexit, so `set -e; false || true` must survive. Non-terminating
-                // Write-Error still flips $? for the chain operator.
+                // Write-Error still flips $? for the chain operator. Under _errexitMode the
+                // statement's own errexit check (EmitStatement) decides whether to leave —
+                // it honours runtime suppression and subshell scope, which a bare `exit` here
+                // did not (`f() { false; }; set -e; f || echo caught` aborted).
                 specialResult = "$(" + argPrelude + "$global:LASTEXITCODE = 1; Write-Error '' -ErrorAction SilentlyContinue)";
             else
                 // A standalone `false` under errexit must ABORT the script (bash
@@ -2669,6 +2844,15 @@ public static class PsEmitter
     // set -e / set -o errexit -> $ErrorActionPreference = 'Stop'
     // set -x / set -o xtrace -> Set-PSDebug -Trace 1
     // set -u / set -o nounset -> Set-StrictMode -Version Latest
+    /// <summary>
+    /// Turn errexit on. The suppression counter (<see cref="PsBuild.ErrexitSuppressVar"/>) is created
+    /// only when absent: <c>set -e</c> run inside an exempt context must not reset it, and reading an
+    /// unset variable throws under <c>set -u</c> (Set-StrictMode).
+    /// </summary>
+    private const string SetErrexitOn =
+        "$global:__BashErrexit = $true; if (-not (Test-Path variable:global:__BashErrexitSuppress)) { "
+        + PsBuild.ErrexitSuppressVar + " = 0 }";
+
     private static string? EmitSet(Command.Simple cmd)
     {
         string? specialResult = null;
@@ -2704,10 +2888,15 @@ public static class PsEmitter
         {
             var args = literalArgs;
             bool longOpt = args.Any(a => a == "-o");
-            if (longOpt)
+            // `set +e` / `set +o errexit` turn errexit back off (the runtime checks read the flag).
+            bool errexitOff = args.Any(a => a is not null && a.StartsWith('+') && a.Contains('e'))
+                || args.SkipWhile(a => a != "+o").Skip(1).FirstOrDefault() == "errexit";
+            if (errexitOff && !longOpt && !args.Any(a => a is not null && a.StartsWith('-')))
+                specialResult = "$ErrorActionPreference = 'Continue'; $global:__BashErrexit = $false";
+            else if (longOpt)
             {
                 var optVal = args.SkipWhile(a => a != "-o").Skip(1).FirstOrDefault();
-                if (optVal == "errexit") specialResult = "$ErrorActionPreference = 'Stop'; $global:__BashErrexit = $true";
+                if (optVal == "errexit") specialResult = "$ErrorActionPreference = 'Stop'; " + SetErrexitOn;
                 else if (optVal == "xtrace") specialResult = "Set-PSDebug -Trace 1";
                 else if (optVal == "nounset") specialResult = "Set-StrictMode -Version Latest";
             }
@@ -2718,7 +2907,7 @@ public static class PsEmitter
                 bool x = flags.Any(f => f!.Contains('x'));
                 bool u = flags.Any(f => f!.Contains('u'));
                 var parts = new List<string>();
-                if (e) parts.AddRange(new[]{"$ErrorActionPreference = 'Stop'", "$global:__BashErrexit = $true"});
+                if (e) parts.AddRange(new[]{"$ErrorActionPreference = 'Stop'", SetErrexitOn});
                 if (u) parts.Add("Set-StrictMode -Version Latest");
                 if (x) parts.Add("Set-PSDebug -Trace 1");
                 if (parts.Count > 0) specialResult = string.Join("; ", parts);
@@ -5361,7 +5550,7 @@ public static class PsEmitter
         {
             if (i > 0)
                 sb.Append("; ");
-            sb.Append(Emit(list.Commands[i]));
+            sb.Append(EmitStatement(list.Commands[i]));
         }
         return sb.ToString();
     }
@@ -5407,7 +5596,11 @@ public static class PsEmitter
         return $"if ({PsBuild.ExitCodeTest(condition, negate)}) {{ {Emit(last)} }}";
     }
 
-    private static string EmitAndOrList(Command.AndOrList andOr)
+    /// <param name="errexitFinalOperand">
+    /// At statement position under errexit (<see cref="EmitAndOrStatement"/>): the final operand is
+    /// emitted as errexit-active and records its status (<see cref="PsBuild.ErrexitFinalOperand"/>).
+    /// </param>
+    private static string EmitAndOrList(Command.AndOrList andOr, bool errexitFinalOperand = false)
     {
         if (TryEmitAndOrEndingInStatementKeyword(andOr) is { } keywordForm)
             return keywordForm;
@@ -5415,6 +5608,10 @@ public static class PsEmitter
         var sb = new StringBuilder();
         for (int i = 0; i < andOr.Commands.Length; i++)
         {
+            bool isFinal = i == andOr.Commands.Length - 1;
+            // bash exempts every operand but the last from errexit.
+            if (!isFinal) _errexitExemptDepth++;
+            int operandStart = sb.Length;
             _andOrChainDepth++;
             try
             {
@@ -5496,7 +5693,20 @@ public static class PsEmitter
                     : compoundText);
             }
             }
-            finally { _andOrChainDepth--; }
+            finally
+            {
+                _andOrChainDepth--;
+                if (!isFinal) _errexitExemptDepth--;
+            }
+
+            if (isFinal && errexitFinalOperand)
+            {
+                // Re-wrap the final operand (everything after its leading " op ").
+                int textStart = i > 0 ? operandStart + andOr.Ops[i - 1].Length + 2 : operandStart;
+                var operand = sb.ToString(textStart, sb.Length - textStart);
+                sb.Length = textStart;
+                sb.Append(PsBuild.ErrexitFinalOperand(operand));
+            }
         }
 
         return sb.ToString();
@@ -5533,8 +5743,15 @@ public static class PsEmitter
     private static string EmitPipeline(Command.Pipeline pipeline)
     {
         var entryScope = _inStdinScope;
+        // Each stage of a real pipeline is a subshell in bash: errexit inside one never ends the script.
+        bool exempt = pipeline.Commands.Length > 1 || pipeline.Negated;
+        if (exempt) _errexitExemptDepth++;
         try { return EmitPipelineStages(pipeline, entryScope); }
-        finally { _inStdinScope = entryScope; }
+        finally
+        {
+            _inStdinScope = entryScope;
+            if (exempt) _errexitExemptDepth--;
+        }
     }
 
     /// <summary>

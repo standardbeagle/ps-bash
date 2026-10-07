@@ -19,6 +19,9 @@ internal sealed class Connection
     // single-worker / warm-spare edge correct.
     private const string PerInvocationReset =
         "$global:__BashErrexit = $false; " +
+        // The errexit-exempt-context counter (PsBuild.ErrexitSuppressVar): exists from the start so
+        // a condition's `++` works under `set -u` even before the script's `set -e` runs.
+        "$global:__BashErrexitSuppress = 0; " +
         "$ErrorActionPreference = 'Continue'; " +
         "$global:LASTEXITCODE = 0; " +
         "$global:BashPositional = $null; " +

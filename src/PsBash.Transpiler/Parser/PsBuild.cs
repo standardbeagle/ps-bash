@@ -283,6 +283,62 @@ public static class PsBuild
     public static string SilentExitFromBool(string boolExpr) =>
         "$(if (" + boolExpr + ") { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1 })";
 
+    // ─────────────────────────────── errexit (set -e) ───────────────────────────────
+
+    /// <summary>
+    /// The runtime counter of enclosing errexit-EXEMPT contexts (an <c>if</c>/<c>while</c>
+    /// condition, a non-final <c>&amp;&amp;</c>/<c>||</c> operand, <c>!</c>, a command
+    /// substitution). bash ignores <c>-e</c> for everything run inside one — including the
+    /// body of a FUNCTION called there, which only a runtime counter can see. Initialised
+    /// per command by the host and by <c>set -e</c>.
+    /// </summary>
+    public const string ErrexitSuppressVar = "$global:__BashErrexitSuppress";
+
+    /// <summary>Whether errexit fires right now: <c>set -e</c> is on and no exempt context is active.</summary>
+    private const string ErrexitArmed = "$global:__BashErrexit -and -not " + ErrexitSuppressVar;
+
+    /// <summary>
+    /// After a command at statement position under <c>set -e</c>: leave when it failed.
+    /// <paramref name="exitStatement"/> is how to leave from here — a real <c>exit</c>, or a
+    /// scoped <c>return</c> inside a subshell. <paramref name="status"/> is the status to test.
+    /// </summary>
+    public static string ErrexitCheck(string exitStatement, string status = "$global:LASTEXITCODE") =>
+        "if (" + ErrexitArmed + " -and " + status + " -ne 0) { " + exitStatement + " }";
+
+    /// <summary>
+    /// Run statement(s) with errexit suppressed (an exempt context): no command inside —
+    /// nor any function it calls — may end the script for failing.
+    /// </summary>
+    public static string ErrexitSuppressed(string statements) =>
+        ErrexitSuppressVar + "++; try { " + statements + " } finally { " + ErrexitSuppressVar + "-- }";
+
+    /// <summary>
+    /// <see cref="ErrexitSuppressed"/> for a boolean CONDITION expression (<c>if</c>/<c>while</c>):
+    /// a script block, so it stays an expression whose value is the condition's.
+    /// </summary>
+    public static string ErrexitSuppressedExpr(string condition) =>
+        "(& { " + ErrexitSuppressed(condition) + " })";
+
+    /// <summary>
+    /// The FINAL operand of an <c>&amp;&amp;</c>/<c>||</c> list at statement position: it is NOT
+    /// exempt (bash exits when it runs and fails), so it lifts one level of the list's
+    /// suppression, and records its status in <c>$global:__BashErrexitTail</c> — the list's
+    /// own status cannot tell "the last command failed" from "an earlier one failed and
+    /// short-circuited it". Dot-sourced: current scope, streams, and is a valid chain operand.
+    /// </summary>
+    public static string ErrexitFinalOperand(string operand) =>
+        ". { " + ErrexitSuppressVar + "--; try { " + operand + " } finally { " + ErrexitSuppressVar
+        + "++ }; $global:__BashErrexitTail = $global:LASTEXITCODE }";
+
+    /// <summary>
+    /// An <c>&amp;&amp;</c>/<c>||</c> list at statement position under <c>set -e</c>: every operand
+    /// runs suppressed except the final one (<see cref="ErrexitFinalOperand"/>), then the
+    /// script leaves only if that final command ran and failed.
+    /// </summary>
+    public static string ErrexitAndOrList(string chain, string exitStatement) =>
+        "$global:__BashErrexitTail = 0; " + ErrexitSuppressed(chain) + "; "
+        + ErrexitCheck(exitStatement, "$global:__BashErrexitTail");
+
     // ────────────────────────── Subshell working-directory restore ─────────────────────
 
     /// <summary>

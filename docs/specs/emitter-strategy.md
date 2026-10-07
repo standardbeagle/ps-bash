@@ -529,10 +529,24 @@ to the host directly, not to the error stream a redirect captures.
 
 ### `set`
 
-- `set -e` / `set -o errexit` -> `$ErrorActionPreference = 'Stop'; $global:__BashErrexit = $true`
+- `set -e` / `set -o errexit` -> `$ErrorActionPreference = 'Stop'; $global:__BashErrexit = $true` (+ create `$global:__BashErrexitSuppress` if absent)
+- `set +e` / `set +o errexit` -> `$ErrorActionPreference = 'Continue'; $global:__BashErrexit = $false`
 - `set -x` / `set -o xtrace` -> `Set-PSDebug -Trace 1`
 - `set -u` / `set -o nounset` -> `Set-StrictMode -Version Latest`
 - Combined flags (e.g., `set -euo pipefail`) are decomposed.
+
+**errexit checks** (`PsEmitter.EmitStatement`, `PsBuild.Errexit*`). Emitted only when the script itself
+contains `set -e`/`-o errexit` (`PsEmitter.EnablesErrexit`); every other script is byte-identical. Each
+command at STATEMENT position (`EmitBody`/`EmitCommandList`: script top level, if/loop/case/function/group/
+subshell bodies) that bash's errexit applies to — a simple command (not a status-neutral builtin such as
+`export`/`local`/`set`), a pipeline (last stage's status), `[ ]`, `(( ))`, a subshell, `X=$(…)` — is followed by
+`if ($global:__BashErrexit -and -not $global:__BashErrexitSuppress -and $global:LASTEXITCODE -ne 0) { exit … }`
+(a scoped `return` inside a subshell). bash's exempt contexts emit no check inside (`_errexitExemptDepth`)
+AND raise the runtime `$global:__BashErrexitSuppress` counter, so a FUNCTION called there runs past its
+own failures: if/elif/while/until conditions, non-final `&&`/`||` operands, `!`, pipeline stages, command
+and process substitutions. An `&&`/`||` list leaves only if its final command ran and failed
+(`$global:__BashErrexitTail`). An untaken `if` and a finished `while`/`until` set status 0, so a function
+ending in one does not leak the failed condition's code to its caller's check.
 
 The `$global:__BashErrexit` guard variable prevents strict-mode crashes when checking `$?` in error handlers. When `set -e` is active, PowerShell's `Set-StrictMode -Version Latest` would throw on null property accesses in conditions like `if [ $? -ne 0 ]`. The guard allows the emitter to conditionally suppress strict-mode behavior around exit-code checks.
 

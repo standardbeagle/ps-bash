@@ -20,7 +20,7 @@ public sealed partial class BashParser
             Advance(); // consume the keyword
 
             if (ParseDeclarationPairs() is { } pairs)
-                return new Command.ShAssignment(pairs, IsLocal: isLocal);
+                return new Command.ShAssignment(pairs, IsLocal: isLocal, IsExport: !isLocal);
 
             // No assignment or name followed — rewind and parse as a normal command
             // so forms like `export -p` still reach the general path.

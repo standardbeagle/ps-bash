@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 115
+stdout-length: 19
+stderr-length: 0
+==== SCRIPT ====
+set -e; cat /nofile 2>/dev/null || echo fallback; for i in 1 2; do [ $i = 2 ] && break; echo i=$i; done; echo after
+==== STDOUT ====
+fallback
+i=1
+after
+
+==== STDERR ====
+
