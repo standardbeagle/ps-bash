@@ -106,27 +106,10 @@ public sealed class InvokeBashSourceCommand : PSCmdlet
         }
     }
 
-    private string ResolveSourcePath(string rawPath)
-    {
-        if (Environment.GetEnvironmentVariable("PSBASH_UNIX_PATHS") == "1")
-        {
-            if (OperatingSystem.IsWindows() && rawPath.StartsWith("/tmp/", StringComparison.Ordinal))
-            {
-                return System.IO.Path.Combine(
-                    System.IO.Path.GetTempPath(),
-                    rawPath[5..].Replace('/', System.IO.Path.DirectorySeparatorChar));
-            }
-
-            if (OperatingSystem.IsWindows()
-                && rawPath.Length >= 3 && rawPath[0] == '/' && rawPath[2] == '/'
-                && char.IsAsciiLetter(rawPath[1]))
-            {
-                return $"{char.ToUpperInvariant(rawPath[1])}:\\{rawPath[3..].Replace('/', '\\')}";
-            }
-        }
-
-        return FileSystemHelpers.ProviderPath(this, rawPath);
-    }
+    // The shared runtime path policy (ProviderPath → RuntimePath.Map). This used to carry its own
+    // copy — /tmp → GetTempPath (not $env:TEMP) and /c/ — only under PSBASH_UNIX_PATHS=1, so
+    // `. $d/f` (d=/tmp) and `cat $d/f` could name different files.
+    private string ResolveSourcePath(string rawPath) => FileSystemHelpers.ProviderPath(this, rawPath);
 
     private bool TryCreateOptionalSnapshot(string resolvedPath, string rawPath)
     {

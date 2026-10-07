@@ -1,0 +1,26 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 210
+stdout-length: 36
+stderr-length: 0
+==== SCRIPT ====
+d=/tmp; f=psb_rt_$$
+echo x > $d/$f; echo y >> "$d/$f"
+cat /tmp/$f
+[ -e $d/$f ] && echo test-e
+[[ -f "$d/$f" ]] && echo dbl-f
+while read -r l; do echo "read $l"; done < $d/$f
+rm $d/$f
+[ -e /tmp/$f ] || echo gone
+==== STDOUT ====
+x
+y
+test-e
+dbl-f
+read x
+read y
+gone
+
+==== STDERR ====
+

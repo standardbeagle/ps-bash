@@ -33,6 +33,10 @@ internal static class FileSystemHelpers
     /// </summary>
     public static string ProviderPath(PSCmdlet cmdlet, string psPath)
     {
+        // The runtime path policy first (RuntimePath.Map: /tmp → $env:TEMP, unix drive paths) — this is
+        // the chokepoint most cmdlets resolve operands through, so an expanded `$d/f` (d=/tmp) reaches
+        // the same file the emitter's literal /tmp rewrite does. Idempotent on an already-mapped path.
+        psPath = NormalizeOperandPath(psPath);
         try { return cmdlet.SessionState.Path.GetUnresolvedProviderPathFromPSPath(psPath); }
         catch (System.Management.Automation.DriveNotFoundException) { return psPath; }
     }
@@ -315,7 +319,7 @@ internal static class FileSystemHelpers
     /// Both paths share the SAME <see cref="WindowsPath"/> rules.
     /// </summary>
     public static string NormalizeOperandPath(string raw)
-        => OperatingSystem.IsWindows() ? WindowsPath.Normalize(raw) : raw;
+        => RuntimePath.Map(raw);
 
     /// <summary>
     /// True when <paramref name="token"/> looks like an option (a dash flag),

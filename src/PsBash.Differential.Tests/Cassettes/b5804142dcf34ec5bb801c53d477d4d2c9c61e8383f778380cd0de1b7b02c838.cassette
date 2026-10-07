@@ -1,0 +1,23 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 265
+stdout-length: 28
+stderr-length: 0
+==== SCRIPT ====
+d=/tmp; f=psb_rtd_$$
+mkdir $d/$f && touch $d/$f/t
+[ -e /tmp/$f/t ] && echo mkdir-touch
+cp /tmp/$f/t $d/$f/u && mv $d/$f/u $d/$f/v && [ -e /tmp/$f/v ] && echo cp-mv
+find $d/$f -name v | wc -l
+(cd $d/$f && [ -e t ] && echo cd)
+rm -r $d/$f; [ -e /tmp/$f ] || echo gone
+==== STDOUT ====
+mkdir-touch
+cp-mv
+1
+cd
+gone
+
+==== STDERR ====
+

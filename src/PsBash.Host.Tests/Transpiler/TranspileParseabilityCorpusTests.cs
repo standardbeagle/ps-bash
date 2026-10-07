@@ -67,6 +67,9 @@ public class TranspileParseabilityCorpusTests
     [InlineData("echo $(date)")]
     [InlineData("echo `date`")]
     [InlineData("echo $(echo $(echo nested))")]
+    // fixed: runtime-known paths go through the runtime path policy; `cd $d/sub` used to emit an
+    // expression-mode `$env:d/sub` (a division) and fail outright.
+    [InlineData("d=/tmp; cd $d/sub; [ -e \"$d/f\" ] && [[ -d $d ]]; while read l; do :; done < $d/f")]
     // `>&2` as an error-stream tail, in every redirect order, on simple + compound commands.
     [InlineData("echo x >&2 2>/dev/null; echo y 2>/dev/null >&2; echo z 2>&1 >&2; echo w >&2 2>&1")]
     [InlineData("echo x >f >&2; echo y 2>f >&2; echo z >&2 2>f; echo w >&2 >f")]

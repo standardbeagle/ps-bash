@@ -52,14 +52,24 @@ public static class PsBuild
             : "\"" + TempDirExpr + "/" + rest + "\"";
 
     /// <summary>
-    /// A path word whose value is only known at run time (<c>2&gt; $dir/f</c>), mapped through
-    /// <c>WindowsPath.Normalize</c> (<c>/c/x</c> → <c>C:\x</c>) when it is evaluated — the
-    /// run-time twin of the emitter's literal <c>/c/…</c> rewrite. <paramref name="argWord"/> is
+    /// <paramref name="valueExpr"/> (a PowerShell VALUE expression) through the runtime path policy:
+    /// <c>[PsBash.Cmdlets.BashRuntime]::MapPath([string](expr))</c> — <c>/tmp</c> → <c>$env:TEMP</c> and
+    /// unix drive paths on Windows, unchanged elsewhere (PsBash.Core.RuntimePath). For paths only
+    /// known at run time (<c>cd $d</c>, <c>[ -e "$d/f" ]</c>); the Cmdlets static, not the Transpiler
+    /// type, so it resolves in any runspace that has the cmdlets loaded.
+    /// </summary>
+    public static string RuntimeMapPath(string valueExpr)
+        => "[PsBash.Cmdlets.BashRuntime]::MapPath([string](" + valueExpr + "))";
+
+    /// <summary>
+    /// A path word whose value is only known at run time (<c>2&gt; $dir/f</c>), mapped through the
+    /// runtime path policy (<see cref="RuntimeMapPath"/>) when it is evaluated — the run-time twin of
+    /// the emitter's literal <c>/c/…</c> and <c>/tmp/</c> rewrites. <paramref name="argWord"/> is
     /// emitted ARGUMENT-mode text (<c>$env:d/f</c>, <c>"$env:d/f"</c>), so it is passed as an
     /// argument to a script block, never spliced into an expression (where <c>/</c> divides).
     /// </summary>
     public static string RuntimeWindowsPath(string argWord)
-        => "$(& { [PsBash.Core.WindowsPath]::Normalize([string]$args[0]) } " + argWord + ")";
+        => "$(& { " + RuntimeMapPath("$args[0]") + " } " + argWord + ")";
     // ─────────────────────────────── Quoting / escaping ───────────────────────────────
 
     /// <summary>The chars that must be escaped inside a PowerShell double-quoted string.</summary>

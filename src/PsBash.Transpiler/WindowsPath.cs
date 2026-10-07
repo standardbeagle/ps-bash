@@ -99,6 +99,27 @@ public static class WindowsPath
     }
 
     /// <summary>
+    /// Map a <b>/tmp-rooted path</b> (<c>/tmp</c>, <c>/tmp/x</c>, <c>/tmp\x</c>) onto
+    /// <paramref name="tempDir"/> — the RUNTIME twin of the emitter's literal rewrite
+    /// (<c>PsBuild.TempDirExpr</c>, which reads <c>$env:TEMP</c> on Windows), for a path that
+    /// arrives by expansion (<c>d=/tmp; cat $d/f</c>). Only the whole <c>/tmp</c> segment matches:
+    /// <c>/tmpx</c>, <c>/var/tmp</c>, <c>./tmp</c> are not rewritten. Pure: the caller supplies
+    /// the temp directory and decides when it applies (Windows only — see <see cref="RuntimePath"/>).
+    /// </summary>
+    public static bool TryMapTmpRoot(string? path, string tempDir, out string result)
+    {
+        result = path ?? string.Empty;
+        if (string.IsNullOrEmpty(path) || string.IsNullOrEmpty(tempDir)
+            || !path.StartsWith("/tmp", System.StringComparison.Ordinal)
+            || (path.Length > 4 && path[4] is not ('/' or '\\')))
+            return false;
+        var rest = path.Substring(4).TrimStart('/', '\\').Replace('/', '\\');
+        var root = tempDir.TrimEnd('/', '\\');
+        result = rest.Length == 0 ? root : root + "\\" + rest;
+        return true;
+    }
+
+    /// <summary>
     /// Build <c>X:\rest</c> from a drive letter and the remainder of a unix drive
     /// path (which begins with the post-drive segment, e.g. <c>/Users/x</c> or the
     /// empty string for a bare drive root). Separators are canonicalized to

@@ -2017,6 +2017,24 @@ public class PsEmitterTests
         Assert.Equal("Invoke-BashEcho a; Invoke-BashEcho b; Invoke-BashEcho c", result);
     }
 
+    // A path known only at run time (`d=/tmp; … $d/f`) goes through the runtime path policy
+    // (BashRuntime.MapPath → RuntimePath.Map), as the emitter's literal /tmp rewrite does at
+    // transpile time; a literal keeps its transpile-time mapping and no runtime call.
+    [Theory]
+    [InlineData("cd $d/sub", "$__psbash_cd_target = $(& { [string]$args[0] } $env:d/sub);")]
+    [InlineData("cd $d/sub", "GetFullPath([PsBash.Cmdlets.BashRuntime]::MapPath([string]([string]$__psbash_cd_target))")]
+    [InlineData("[ -e \"$d/f\" ]", "Test-Path $(& { [PsBash.Cmdlets.BashRuntime]::MapPath([string]($args[0])) } \"$env:d/f\")")]
+    [InlineData("while read l; do :; done < $d/f", "Get-Content $(& { [PsBash.Cmdlets.BashRuntime]::MapPath([string]($args[0])) } $env:d/f)")]
+    public void Transpile_RuntimeKnownPath_GoesThroughRuntimePathPolicy(string bash, string fragment)
+        => Assert.Contains(fragment, PsEmitter.Transpile(bash));
+
+    [Theory]
+    [InlineData("[ -e /tmp/x ]")]
+    [InlineData("[ -f plain ]")]
+    [InlineData("cat < plain")]
+    public void Transpile_LiteralPath_NoRuntimePathCall(string bash)
+        => Assert.DoesNotContain("MapPath", PsEmitter.Transpile(bash));
+
     [Fact]
     public void Transpile_BareTilde_EmitsHome()
     {

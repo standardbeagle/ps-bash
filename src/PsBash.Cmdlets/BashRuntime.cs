@@ -340,8 +340,15 @@ public static class BashRuntime
     /// beside Cmdlets.dll on first call. No-op off Windows, where <c>/c/..</c>
     /// and <c>/mnt/c/..</c> can be real paths.
     /// </summary>
-    public static string NormalizeWindowsPath(string path)
-        => OperatingSystem.IsWindows() ? PsBash.Core.WindowsPath.Normalize(path) : path;
+    public static string NormalizeWindowsPath(string path) => MapPath(path);
+
+    /// <summary>
+    /// The runtime path policy (<see cref="PsBash.Core.RuntimePath.Map"/>: <c>/tmp</c> →
+    /// <c>$env:TEMP</c>, unix drive paths; no-op off Windows) for psm1 helpers AND emitted code
+    /// (<c>cd</c>, <c>[ -e ]</c>). Emitted text calls this Cmdlets static rather than the Transpiler
+    /// type directly for the load-order reason above.
+    /// </summary>
+    public static string MapPath(string path) => PsBash.Core.RuntimePath.Map(path);
 
     // ---- Raw (escaped-byte) text I/O for the psm1 helpers --------------------------------------
     // The psm1 cannot reliably resolve [PsBash.Core.RawBytes] (Transpiler.dll may not be loaded when a

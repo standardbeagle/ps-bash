@@ -1285,7 +1285,7 @@ public static class PsEmitter
         }
         else if (inputRedirect is not null)
         {
-            var inTarget = TransformRedirectTarget(EmitArgWord(inputRedirect.Target));
+            var inTarget = EmitInputRedirectTarget(inputRedirect.Target);
             // /dev/null maps to $null; `Get-Content $null` errors. Its stdin is EMPTY (EOF), so feed
             // the scope nothing explicitly (it must not see an outer pipe's or queue's data).
             result = inTarget != "$null"
@@ -1992,6 +1992,13 @@ public static class PsEmitter
                 var path = operand.Length > 0 && operand[0] is '"' or '\'' or '$' or '('
                     ? operand
                     : $"\"{operand}\"";
+                // A non-literal operand (`[ -e "$d/f" ]`, d=/tmp) is only known at run time: map it
+                // through the runtime path policy, as the cmdlets do. A literal was already mapped
+                // here (TransformWordPath), so its emission stays unchanged.
+                // `path` is ARGUMENT-mode text (`$env:d/$env:f`), so it rides as a script-block
+                // argument — spliced into an expression its `/` would divide.
+                if (!TryGetPureLiteralText(words[1].Parts, out _))
+                    path = PsBuild.RuntimeWindowsPath(path);
                 return flag switch
                 {
                     "-f" => $"Test-Path {path} -PathType Leaf",
@@ -2567,6 +2574,20 @@ public static class PsEmitter
     private static bool IsStdoutToStderrDup(Redirect r) =>
         r.Op == ">&" && r.Fd == 1 && GetLiteralValue(r.Target) == "2";
 
+    /// <summary>
+    /// The file of a <c>&lt; file</c> redirect, as an argument for the native <c>Get-Content</c> that
+    /// reads it. A literal was mapped by <see cref="TransformRedirectTarget"/>; a target known only at
+    /// run time (<c>&lt; $d/f</c>, d=/tmp) goes through the runtime path policy, or Get-Content —
+    /// which no ps-bash resolver sees — read <c>C:\tmp\f</c> where every cmdlet reads <c>$env:TEMP\f</c>.
+    /// </summary>
+    private static string EmitInputRedirectTarget(CompoundWord word)
+    {
+        var target = TransformRedirectTarget(EmitArgWord(word));
+        return target == "$null" || TryGetPureLiteralText(word.Parts, out _)
+            ? target
+            : PsBuild.RuntimeWindowsPath(target);
+    }
+
     // Input redirects (< file) become "Get-Content file | cmd".
     // Special case: `< /dev/null` means "no input" — `Get-Content $null`
     // throws in PowerShell, so the command runs inside an EMPTY stdin scope
@@ -2582,7 +2603,7 @@ public static class PsEmitter
 
         var remaining = cmd.Redirects.Remove(inputRedirect);
         var innerCmd = new Command.Simple(cmd.Words, cmd.EnvPairs, remaining);
-        var target = TransformRedirectTarget(EmitArgWord(inputRedirect.Target));
+        var target = EmitInputRedirectTarget(inputRedirect.Target);
 
         if (target == "$null")
         {
@@ -6500,7 +6521,7 @@ public static class PsEmitter
         }
         else if (inputRedirect is not null)
         {
-            var inTarget = TransformRedirectTarget(EmitArgWord(inputRedirect.Target));
+            var inTarget = EmitInputRedirectTarget(inputRedirect.Target);
             // /dev/null maps to $null; `Get-Content $null` errors. Its stdin is EMPTY (EOF), which
             // for a stdin scope must still replace any outer pipe, so feed it nothing explicitly.
             if (inTarget != "$null")
@@ -6559,14 +6580,22 @@ public static class PsEmitter
                 // branch) — quote it through PsBuild so the assignment is a valid PS string
                 // literal, not an invalid bareword (`$__psbash_cd_target = ~user`).
                 targetExpr = QuotePsString(emitted);
+            else if (args[0].Parts.Length > 1 && !TryGetPureLiteralText(args[0].Parts, out _))
+                // A glued multi-part word is ARGUMENT-mode text (`$env:d/sub`): an assignment RHS is
+                // expression mode, where that `/` DIVIDES — `cd $d/sub` failed outright. Evaluate it
+                // as an argument. A single part (`$HOME`, `$env:x`, `"…"`) is already a value.
+                targetExpr = "$(& { [string]$args[0] } " + emitted + ")";
             else
                 targetExpr = emitted;
         }
 
         // The success branch captures the dir we are leaving into $OLDPWD BEFORE
         // overwriting CurrentDirectory, so the next `cd -` can return to it.
+        // The target goes through the runtime path policy (BashRuntime.MapPath: /tmp → $env:TEMP,
+        // unix drive paths) — an expanded `cd $d` (d=/tmp) must reach the directory `cd /tmp` and
+        // every cmdlet resolve, not GetFullPath's `C:\tmp`.
         var resolveAndAct =
-            "$__psbash_cd_resolved = [System.IO.Path]::GetFullPath([string]$__psbash_cd_target, [System.Environment]::CurrentDirectory); " +
+            "$__psbash_cd_resolved = [System.IO.Path]::GetFullPath(" + PsBuild.RuntimeMapPath("[string]$__psbash_cd_target") + ", [System.Environment]::CurrentDirectory); " +
             "if ([System.IO.Directory]::Exists($__psbash_cd_resolved)) { " +
             "$env:OLDPWD = [System.Environment]::CurrentDirectory; " +
             "$global:__PsBashCwd = $__psbash_cd_resolved; " +

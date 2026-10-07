@@ -479,7 +479,9 @@ function Get-BashItem {
     )
 
     try {
-        Get-Item -LiteralPath $Path -Force -ErrorAction Stop
+        # The runtime path policy (/tmp → $env:TEMP, unix drive paths) — as every cmdlet resolver,
+        # so `find $d` (d=/tmp) walks the directory `cat $d/f` reads. Errors keep the typed $Path.
+        Get-Item -LiteralPath ([PsBash.Cmdlets.BashRuntime]::MapPath($Path)) -Force -ErrorAction Stop
     } catch {
         $normalized = $Path -replace '\\', '/'
         $ex = $_.Exception

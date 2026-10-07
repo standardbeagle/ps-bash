@@ -894,6 +894,17 @@ Maps redirects to PowerShell: `>file`, `>>file`, `2>&1`, etc. Calls
   process-sub words decline to their dedicated emitters; `$HOME/tmp`, `/var/tmp`, `./tmp` are never
   rewritten. Splicing emitted text into a string (the old `TempPath(emitted)`) is the bug class
   this replaced — the text still carried bash's quote characters.
+  **Runtime twin — one policy for paths known only at run time** (`d=/tmp; … $d/f`):
+  `PsBash.Core.RuntimePath.Map` (Windows: `/tmp[/…]` → `$env:TEMP[\…]`, then
+  `WindowsPath.Normalize`'s unix-drive rules; elsewhere unchanged). Every resolver uses it, so a
+  redirect, `cat`, `rm`, `cd` and `[ -e ]` agree on which file a spelling names:
+  cmdlet operands via `FileSystemHelpers.NormalizeOperandPath` / `ProviderPath` (the chokepoint
+  most cmdlets resolve through), psm1 helpers (`Get-BashItem`, readers) and emitted code via
+  `BashRuntime.MapPath` — `cd` maps its target before `GetFullPath`; a non-literal `[ -e W ]` /
+  `[[ -f W ]]` operand and a non-literal `< W` (read by native `Get-Content`) are wrapped with
+  `PsBuild.RuntimeWindowsPath` (the word rides as a script-block argument; spliced into an
+  expression its `/` would divide). A literal operand keeps its transpile-time rewrite and no
+  runtime call. `source` uses `ProviderPath` too (its private `/tmp`→`GetTempPath` copy is gone).
 - `/dev/null` -> `$null` — **redirect targets ONLY**. As a command *operand*, bash's
   `/dev/null` is an empty FILE (`grep x /dev/null` reads it and exits 1), not the `$null`
   discard sink — mapping it in `TransformWordPath` crashed cmdlets with "Value cannot be

@@ -10,6 +10,35 @@ namespace PsBash.Core.Tests.Transpiler;
 /// </summary>
 public class WindowsPathTests
 {
+    // --- TryMapTmpRoot: the runtime twin of the emitter's literal /tmp/ rewrite ---
+
+    [Theory]
+    [InlineData("/tmp", "C:\\T")]
+    [InlineData("/tmp/", "C:\\T")]
+    [InlineData("/tmp/f", "C:\\T\\f")]
+    [InlineData("/tmp/a/b.txt", "C:\\T\\a\\b.txt")]
+    [InlineData("/tmp\\a", "C:\\T\\a")]
+    [InlineData("/tmp//a", "C:\\T\\a")]
+    public void TryMapTmpRoot_MapsTheTmpSegment(string input, string expected)
+    {
+        Assert.True(WindowsPath.TryMapTmpRoot(input, "C:\\T\\", out var result));
+        Assert.Equal(expected, result);
+    }
+
+    [Theory]
+    [InlineData("/tmpx")]         // not the /tmp segment
+    [InlineData("/tmp.d/x")]
+    [InlineData("/var/tmp/x")]
+    [InlineData("./tmp/x")]
+    [InlineData("tmp/x")]
+    [InlineData("C:\\tmp\\x")]    // native, typed explicitly — never rewritten
+    [InlineData("")]
+    public void TryMapTmpRoot_LeavesOtherPathsAlone(string input)
+    {
+        Assert.False(WindowsPath.TryMapTmpRoot(input, "C:\\T", out var result));
+        Assert.Equal(input, result);
+    }
+
     // --- TryMapUnixDrivePath: the narrow /c/ /mnt/c/ transform ---
 
     [Theory]
