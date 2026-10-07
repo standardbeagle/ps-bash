@@ -170,7 +170,10 @@ public sealed class NamedPipeTransport : IIpcTransport
     /// The pipe DACL: the current user, plus the restricting logon SIDs of a restricted
     /// token. A restricted client must pass a second access check against its restricting
     /// SIDs, so an owner-only DACL locks a sandboxed launcher out of its own host's pipe
-    /// (see <see cref="RestrictedToken"/>). Nothing else is granted.
+    /// (see <see cref="RestrictedToken"/>). <c>CreateNewInstance</c> is needed too: a
+    /// restricted HOST opens every instance after the first against this DACL, and the
+    /// accept loop creates the next instance while a connection is still live. Nothing
+    /// else is granted.
     /// </summary>
     [SupportedOSPlatform("windows")]
     internal static PipeSecurity BuildPipeSecurity(
@@ -184,7 +187,7 @@ public sealed class NamedPipeTransport : IIpcTransport
         foreach (var logonSid in restrictingLogonSids)
             security.AddAccessRule(new PipeAccessRule(
                 logonSid,
-                PipeAccessRights.ReadWrite | PipeAccessRights.Synchronize,
+                PipeAccessRights.ReadWrite | PipeAccessRights.CreateNewInstance | PipeAccessRights.Synchronize,
                 AccessControlType.Allow));
         return security;
     }

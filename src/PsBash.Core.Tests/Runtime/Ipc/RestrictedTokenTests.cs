@@ -57,6 +57,28 @@ public class RestrictedTokenTests
         ConnectAsRestricted(NamedPipeTransport.BuildPipeSecurity(user, [Native.CurrentLogonSid()]));
     }
 
+    [SkippableFact]
+    public void RestrictedHost_CanCreateSecondPipeInstance()
+    {
+        // Regression: HostServer's accept loop creates the next instance while a connection
+        // is live. A restricted host opens that instance against the pipe's DACL, so the
+        // logon-SID ACE must grant CreateNewInstance — else every instance after the first
+        // fails and concurrent clients from inside the sandbox are locked out.
+        Skip.IfNot(OperatingSystem.IsWindows(), "Windows tokens");
+        var user = WindowsIdentity.GetCurrent().User!;
+        var security = NamedPipeTransport.BuildPipeSecurity(user, [Native.CurrentLogonSid()]);
+        var name = "psbash-rtok-" + Guid.NewGuid().ToString("N");
+
+        using var restricted = Native.CreateCodexStyleRestrictedToken();
+        WindowsIdentity.RunImpersonated(restricted, () =>
+        {
+            using var first = NamedPipeServerStreamAcl.Create(name, PipeDirection.InOut, 16,
+                PipeTransmissionMode.Byte, PipeOptions.Asynchronous, 4096, 4096, security);
+            using var second = NamedPipeServerStreamAcl.Create(name, PipeDirection.InOut, 16,
+                PipeTransmissionMode.Byte, PipeOptions.Asynchronous, 4096, 4096, security);
+        });
+    }
+
     [SupportedOSPlatform("windows")]
     private static void ConnectAsRestricted(PipeSecurity security)
     {
