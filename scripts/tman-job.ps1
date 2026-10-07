@@ -20,7 +20,12 @@
          While holding the per-checkout lock, this script re-runs itself through a NESTED
          `tman run --max-parallel N` started from one shared directory, so all checkouts on the
          machine share N slots (tman buckets by executable@cwd — pwsh.exe@<gate dir>).
-         N = $env:PSBASH_TMAN_MACHINE_SLOTS (default 2; 0 = no machine-wide gate). The inner run
+         N = $env:PSBASH_TMAN_MACHINE_SLOTS (default 1; 0 = no machine-wide gate). Default 1, not
+         2 (2026-10-07): with 2 slots one checkout's build ran beside another's tests, and the
+         spawn/timing-sensitive suites (Host server/lifecycle, Shell, Differential) timed out or
+         dropped connections under that load — 10 Host.Tests red that passed alone, 16-connection
+         "stream closed before EXIT". A job holds its slot for build AND test, so with N=1 no
+         build ever overlaps a test anywhere on the machine. `dev` probes queue here too. The inner run
          carries the real stall/max-time limits; the outer alias limits are loose because the
          outer run is silent while queued. tman's max-mem is NOT used: in tman 0.5.1 it only
          measures the direct child (pwsh), not dotnet/testhost below it, so it never fires.
@@ -73,10 +78,10 @@ while (-not $isInner) {
 
 try {
     # --- machine-wide gate (see DESCRIPTION 4) ---------------------------------------------------
-    $slots = if ($env:PSBASH_TMAN_MACHINE_SLOTS) { [int]$env:PSBASH_TMAN_MACHINE_SLOTS } else { 2 }
-    # `dev` is a probe, not a build/test: it needs this checkout's lock (so a build can't swap the
-    # DLLs under it) but not a machine slot. Its build step is incremental and usually a no-op.
-    if ($Verb -ne 'dev' -and -not $isInner -and $slots -gt 0 -and (Get-Command tman -ErrorAction SilentlyContinue)) {
+    $slots = if ($env:PSBASH_TMAN_MACHINE_SLOTS) { [int]$env:PSBASH_TMAN_MACHINE_SLOTS } else { 1 }
+    # `dev` takes the machine slot too: it builds, and its probe would otherwise run beside another
+    # checkout's timing-sensitive tests.
+    if (-not $isInner -and $slots -gt 0 -and (Get-Command tman -ErrorAction SilentlyContinue)) {
         $gateDir = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'psbash-tman-gate'
         New-Item -ItemType Directory -Force $gateDir | Out-Null
         $env:PSBASH_TMAN_GATE_INNER = '1'

@@ -18,8 +18,8 @@ defaults {
     max-parallel 1
 
     // Machine-wide gate: tman-job.ps1 re-runs itself as a NESTED `tman run --max-parallel 2`
-    // from one shared directory, so main + every agent worktree share 2 build/test slots
-    // (PSBASH_TMAN_MACHINE_SLOTS). The REAL limits live on that inner run: stall 5m (a run
+    // from one shared directory, so main + every agent worktree share ONE build/test slot
+    // (PSBASH_TMAN_MACHINE_SLOTS, default 1): no build overlaps a test anywhere on the machine. The REAL limits live on that inner run: stall 5m (a run
     // with no output and no cpu/io for this long is wedged — classically a spawned ps-bash host
     // waiting on a runspace that never came up) and max-time 45m. These OUTER limits only have
     // to outlast a silent wait in the machine queue (queue-timeout 60m) plus the run itself.

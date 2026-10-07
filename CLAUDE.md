@@ -38,8 +38,9 @@ under it, and its leftover daemon holds `bin/` (next build MSB3021). `tman dev` 
 checkout lock, and uses a per-invocation host. In an agent worktree without it: set
 `PSBASH_PER_INVOCATION=1` and probe only between tman jobs.
 
-Test verbs build first in the same job; all aliases share one serialized lock plus a
-machine-wide 2-slot gate (`PSBASH_TMAN_MACHINE_SLOTS`). Quote any `--filter` containing `|`.
+Test verbs build first in the same job; all aliases (and `tman dev`) share one serialized lock
+plus a machine-wide 1-slot gate (`PSBASH_TMAN_MACHINE_SLOTS`): builds and tests never overlap,
+across every checkout and agent worktree. Queued jobs wait; don't work around the queue. Quote any `--filter` containing `|`.
 Don't pass `-x:y`-style MSBuild switches through tman. Never trust results gathered while
 another build ran. Kill only DEV-BUILD `ps-bash-host`/`ps-bash` processes (under repo `bin`)
 on MSB3021 — never the `~/.local/bin` ones.
