@@ -10,7 +10,16 @@ internal sealed class Program
 {
     static async Task<int> Main(string[] args)
     {
+        // Before anything that can fail: every exit (and unhandled crash) is logged with its reason.
+        HostLog.InstallProcessHandlers();
+        // Before ANY Regex is constructed (the default is read once): user patterns from grep/sed/awk/
+        // [[ =~ ]] run on .NET's backtracking engine, where `(a+)+$` against "aaaa…!" never finishes —
+        // and a managed regex loop cannot be stopped, so the command held the host's process-wide exec
+        // gate forever and every later command on the host hung behind it. With a default timeout a
+        // pathological match fails that command (RegexMatchTimeoutException) instead.
+        HostRegexTimeout.Install();
         var exitCode = await MainCoreAsync(args);
+        HostLog.SetExitReason("main returned (server stopped)");
         // End the process explicitly. Returning from Main is not enough: the
         // process lives until its last FOREGROUND thread ends, and PowerShell
         // creates foreground PipelineThreads for runspaces that user commands
@@ -117,7 +126,12 @@ internal sealed class Program
         // Same TryCancel + unsubscribe discipline as the interactive branch
         // above (see the comment there): raw Cancel() can race disposal, and
         // the static event must not outlive this scope's cts.
-        ConsoleCancelEventHandler cancelHandler = (_, e) => { e.Cancel = true; cts.TryCancel(); };
+        ConsoleCancelEventHandler cancelHandler = (_, e) =>
+        {
+            e.Cancel = true;
+            HostLog.SetExitReason($"console {e.SpecialKey}");
+            cts.TryCancel();
+        };
         Console.CancelKeyPress += cancelHandler;
         try
         {
@@ -138,6 +152,9 @@ internal sealed class Program
         // each connection checks out its own isolated worker (clean session per
         // command, concurrent across launchers). Sized from the environment
         // (PSBASH_POOL_WARM / PSBASH_POOL_MAX).
+        // The shared daemon: a cancelled command that cannot be stopped poisons the host (it would
+        // hold the exec gate forever) — exit so launchers respawn, instead of hanging every session.
+        StuckCommandWatchdog.Enabled = true;
         await using var pool = WorkerPool.FromEnvironment();
 
         // Janitor: reap endpoint sockets / sidecars / spawn locks left behind by
@@ -148,6 +165,8 @@ internal sealed class Program
         try { StaleArtifactReaper.Reap(); } catch { /* never block startup on cleanup */ }
 
         var (transport, scheme, endpoint) = CreateTransport(args);
+        HostLog.SetEndpoint(scheme, endpoint);
+        HostLog.Write($"start launcher-pid={GetNonInteractiveLauncherPid(args)?.ToString() ?? "-"} exe={Environment.ProcessPath}");
 
         var idleTimeout = IdleShutdown.DefaultTimeout;
         using var idle = new IdleShutdown(cts, idleTimeout);

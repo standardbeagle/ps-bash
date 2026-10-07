@@ -108,8 +108,18 @@ public sealed class InvokeBashKillCommand : PSCmdlet
 
         bool existenceOnly = signalName == "SIG0";
         bool hadError = false;
+        bool signalSelf = false;
         foreach (var procId in pids)
         {
+            // `kill $$` signals the SHELL. Here the shell process is the shared ps-bash host, which
+            // runs every command of the session: Process.Kill on it ended all of them (and the
+            // daemon). bash's outcome — the current script dies of the signal — is applied to this
+            // command instead, below, after the other pids are signalled.
+            if (procId == Environment.ProcessId && !existenceOnly)
+            {
+                signalSelf = true;
+                continue;
+            }
             try
             {
                 using var proc = Process.GetProcessById(procId);
@@ -129,6 +139,25 @@ public sealed class InvokeBashKillCommand : PSCmdlet
             }
         }
 
+        if (signalSelf)
+        {
+            // The script ends as if killed by the signal: status 128+N (137 for -9, 143 for TERM).
+            // SetShouldExit records it on the host (the same channel bash `exit` uses); the pipeline
+            // stop ends the script, running its finally blocks, and the worker reports that status.
+            int status = 128 + SignalNumber(signalName ?? "SIGTERM");
+            FileSystemHelpers.SetLastExitCode(this, status);
+            Host.SetShouldExit(status);
+            throw new PipelineStoppedException();
+        }
+
         FileSystemHelpers.SetLastExitCode(this, hadError ? 1 : 0);
+    }
+
+    /// <summary>The number of a resolved signal name (<c>SIGKILL</c> → 9); 15 (TERM) when unknown.</summary>
+    private static int SignalNumber(string signalName)
+    {
+        foreach (var (key, value) in Signals)
+            if (value == signalName && int.TryParse(key, out var n)) return n;
+        return 15;
     }
 }

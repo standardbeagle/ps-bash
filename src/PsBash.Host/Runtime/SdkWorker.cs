@@ -79,8 +79,19 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
                 // returns instead of running to completion while holding the gate.
                 // Without this a runaway command holds _globalExecGate forever
                 // (Task.Run's ct only affects scheduling, not an in-flight delegate).
-                using var stopReg = ct.Register(() => _ps.Stop());
-                return await Task.Run(() => WithDefaultRunspace(() => RunCommand(command, callback, null, batchOutput: false, environment)), ct);
+                // The command's own token: ct, or the host outgrowing its memory limit
+                // (HostMemoryGuard), which stops this command rather than the host.
+                using var cmdCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                using var memory = HostMemoryGuard.Watch(cmdCts);
+                using var stopReg = cmdCts.Token.Register(() => _ps.Stop());
+                var run = Task.Run(() => WithDefaultRunspace(() => RunCommand(command, callback, null, batchOutput: false, environment)), ct);
+                // Registered AFTER stopReg so it runs FIRST (cancellation callbacks are LIFO): a Stop()
+                // that never returns must not keep the stuck-command backstop from arming.
+                using var stuckReg = cmdCts.Token.Register(() => StuckCommandWatchdog.OnCancelled(run, "ExecuteAsync"));
+                int exitCode = await run;
+                if (!memory.Breached) return exitCode;
+                Console.Error.WriteLine(memory.Message);
+                return HostMemoryGuard.ExitCode;
             }
             finally
             {
@@ -186,9 +197,19 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
             try
             {
                 // When ct fires mid-command (e.g. parent-death watcher), stop the PS
-                // pipeline so Invoke() returns instead of blocking indefinitely.
-                using var stopReg = ct.Register(() => _ps.Stop());
-                return await Task.Run(() => WithDefaultRunspace(() => RunCommand(command, output, errorOutput, batchOutput: true, environment, stdin)), ct);
+                // pipeline so Invoke() returns instead of blocking indefinitely. The
+                // command's own token also fires when the host outgrows its memory
+                // limit (HostMemoryGuard): that stops THIS command, not the host.
+                using var cmdCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                using var memory = HostMemoryGuard.Watch(cmdCts);
+                using var stopReg = cmdCts.Token.Register(() => _ps.Stop());
+                var run = Task.Run(() => WithDefaultRunspace(() => RunCommand(command, output, errorOutput, batchOutput: true, environment, stdin)), ct);
+                // After stopReg ⇒ runs first (LIFO); see ExecuteAsync.
+                using var stuckReg = cmdCts.Token.Register(() => StuckCommandWatchdog.OnCancelled(run, "command"));
+                int exitCode = await run;
+                if (!memory.Breached) return exitCode;
+                if (errorOutput is not null) errorOutput(memory.Message); else Console.Error.WriteLine(memory.Message);
+                return HostMemoryGuard.ExitCode;
             }
             finally
             {
@@ -607,7 +628,10 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
             }
             catch (System.Management.Automation.PipelineStoppedException)
             {
-                return 130; // Convention: pipeline stopped (analogous to SIGINT exit code)
+                // A stop the script itself asked for (`kill $$`: the cmdlet records 128+signal via
+                // SetShouldExit, then stops the pipeline) carries its status; any other stop is the
+                // SIGINT convention.
+                return _host.ShouldExit ? _host.ExitCode : 130;
             }
             catch (System.Management.Automation.ExitException ex)
             {
