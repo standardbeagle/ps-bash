@@ -254,19 +254,24 @@ public class BashTranspilerTests
     // Regression: an EXPANDED redirect target (`2> $d/e`, d=/c/Users/...) was emitted as a raw
     // PowerShell redirect to `$env:d/e`, resolved against the current drive (`C:\c\Users\...`):
     // "No such file or directory". Only a literal `/c/…` word was rewritten. Now the target is
-    // mapped at run time; a literal target keeps the static rewrite.
+    // mapped at run time; a literal target keeps the static rewrite. File targets — stderr too — go
+    // through the Invoke-BashRedirect stage, which maps its targets (WindowsPath rules) when it opens
+    // them (RedirectStreamingTests.Redirect_UnixDrivePathTarget_IsMappedToTheDrive), never as a raw
+    // PowerShell `2>` resolved against the current drive.
     [Theory]
-    [InlineData("ls x 2>$d/e", "2>")]
-    [InlineData("ls x 2>>\"$d/e\"", "2>>")]
-    [InlineData("echo hi &> $d/e", ">")]
-    public void ExpandedRedirectTarget_MappedAtRuntime_WhenUnixPathsOn(string bash, string op)
+    [InlineData("ls x 2>$d/e", " -ErrorPath ", "2>$")]
+    [InlineData("ls x 2>>\"$d/e\"", " -ErrorPath ", "2>>")]
+    [InlineData("echo hi &> $d/e", " -Path ", ">$")]
+    public void ExpandedRedirectTarget_GoesToRuntimeMappedStage_WhenUnixPathsOn(string bash, string param, string nativeForm)
     {
         var prior = Environment.GetEnvironmentVariable("PSBASH_UNIX_PATHS");
         Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", "1");
         try
         {
             var result = BashTranspiler.Transpile(bash);
-            Assert.Contains(op + "$(& { [PsBash.Core.WindowsPath]::Normalize([string]$args[0]) } ", result);
+            Assert.Contains("| Invoke-BashRedirect", result);
+            Assert.Contains(param + "$env:d/e", result.Replace("\"", ""));
+            Assert.DoesNotContain(nativeForm, result);
         }
         finally { Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", prior); }
     }
@@ -292,7 +297,7 @@ public class BashTranspilerTests
         try
         {
             var result = BashTranspiler.Transpile("ls x 2>/c/x/e");
-            Assert.Contains("2>C:\\x\\e", result);
+            Assert.Contains("-ErrorPath C:\\x\\e", result);
             Assert.DoesNotContain("WindowsPath", result);
         }
         finally { Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", prior); }

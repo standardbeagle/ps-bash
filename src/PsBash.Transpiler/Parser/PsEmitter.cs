@@ -5773,12 +5773,14 @@ public static class PsEmitter
     }
 
     /// <summary>
-    /// Append a command's redirect tail to <paramref name="sb"/>: every NON-stdout-file
-    /// redirect (<c>2&gt;&amp;1</c>, <c>&amp;&gt;</c>, <c>&lt;&amp;-</c>, …) is emitted
-    /// inline via <see cref="EmitRedirect"/>, while the FIRST stdout file redirect
-    /// (<c>&gt; file</c> / <c>&gt;&gt; file</c>) is piped through
-    /// <c>Invoke-BashRedirect</c> instead — a raw <c>&gt;</c> left a lingering file
-    /// handle that threw IOException in chained commands.
+    /// Append a command's redirect tail to <paramref name="sb"/>. Stdout/stderr redirects are
+    /// modelled as bash applies them — left to right, per fd, LAST one wins — by
+    /// <see cref="TryAppendModelledRedirectTail"/>: every FILE target goes through one
+    /// <c>Invoke-BashRedirect</c> stage (stderr via a <c>2&gt;&amp;1</c> merge, so it is written
+    /// byte-faithfully, not by PowerShell's CRLF/cmdlet-prefixed native <c>2&gt; f</c>), and only
+    /// <c>$null</c> / the <c>2&gt;&amp;1</c> merge stay native, each at most once (PowerShell
+    /// rejects redirecting a stream twice). A tail with a redirect the model does not cover
+    /// (user fds, <c>&lt;&amp;</c>, …) keeps the legacy emission below.
     /// <para>Single source for EmitSimple, EmitSubshell, and
     /// <see cref="EmitPipeTargetRedirects"/>: the subshell <c>&lt; file</c> bug came
     /// from this selection being copy-pasted three times and a fix landing in only one.
@@ -5786,6 +5788,126 @@ public static class PsEmitter
     /// the whole command (<c>Get-Content | …</c>), so partition them out first.</para>
     /// </summary>
     private static void AppendRedirectTail(StringBuilder sb, IEnumerable<Redirect> redirects)
+    {
+        var list = redirects as IReadOnlyList<Redirect> ?? redirects.ToList();
+        if (TryAppendModelledRedirectTail(sb, list))
+            return;
+        AppendLegacyRedirectTail(sb, list);
+    }
+
+    // One fd's destination while a redirect list is applied: the terminal default, the null
+    // device, an opened file (index into the open list), or — fd 2 only — fd 1's DEFAULT
+    // destination captured by `2>&1` before fd 1 was redirected (`2>&1 >f`).
+    private enum FdDestKind { Default, Null, File, StdoutDefault }
+
+    private readonly record struct FdDest(FdDestKind Kind, int File = -1);
+
+    /// <summary>
+    /// Emit a stdout/stderr redirect list as bash's fd model (see <see cref="AppendRedirectTail"/>).
+    /// False — nothing appended — when a redirect is outside the model.
+    /// </summary>
+    private static bool TryAppendModelledRedirectTail(StringBuilder sb, IReadOnlyList<Redirect> redirects)
+    {
+        if (redirects.Count == 0)
+            return true;
+
+        var opened = new List<(string Target, bool Append)>();
+        var fd1 = new FdDest(FdDestKind.Default);
+        var fd2 = new FdDest(FdDestKind.Default);
+        FdDest Open(string target, bool append)
+        {
+            if (target == "$null") return new FdDest(FdDestKind.Null);
+            opened.Add((target, append));
+            return new FdDest(FdDestKind.File, opened.Count - 1);
+        }
+
+        foreach (var r in redirects)
+        {
+            if (r.Fd is not (1 or 2))
+                return false;
+            var target = TransformRedirectTarget(EmitArgWord(r.Target));
+            switch (r.Op)
+            {
+                case ">" or ">|" or ">>":
+                {
+                    var dest = Open(target, r.Op == ">>");
+                    if (r.Fd == 1) fd1 = dest; else fd2 = dest;
+                    break;
+                }
+                case "&>" or "&>>":
+                    fd1 = fd2 = Open(target, r.Op == "&>>");
+                    break;
+                case ">&" when target == "-":
+                    if (r.Fd == 1) fd1 = new FdDest(FdDestKind.Null); else fd2 = new FdDest(FdDestKind.Null);
+                    break;
+                case ">&" when r.Fd == 2 && target == "1":
+                    // fd 2 becomes a copy of fd 1 AS IT IS NOW (bash dup2 semantics).
+                    fd2 = fd1.Kind == FdDestKind.Default ? new FdDest(FdDestKind.StdoutDefault) : fd1;
+                    break;
+                case ">&" when r.Fd == 1 && !IsAllDigits(target):
+                    // `>&file` is bash's synonym for `&>file`.
+                    fd1 = fd2 = Open(target, append: false);
+                    break;
+                default:
+                    return false;
+            }
+        }
+
+        // The open files the final fds no longer point at were still opened (created / truncated)
+        // in order by bash: `echo x >a >b` leaves an empty `a`.
+        var truncate = new List<string>();
+        var touch = new List<string>();
+        for (int i = 0; i < opened.Count; i++)
+        {
+            if ((fd1.Kind == FdDestKind.File && fd1.File == i) || (fd2.Kind == FdDestKind.File && fd2.File == i))
+                continue;
+            (opened[i].Append ? touch : truncate).Add(opened[i].Target);
+        }
+
+        bool needsStage = fd1.Kind == FdDestKind.File || fd2.Kind == FdDestKind.File
+            || truncate.Count > 0 || touch.Count > 0
+            || (fd2.Kind == FdDestKind.StdoutDefault && fd1.Kind != FdDestKind.Default);
+
+        if (!needsStage)
+        {
+            if (fd1.Kind == FdDestKind.Null) sb.Append(" >$null");
+            // Both discarded: the familiar `>$null 2>&1` (stderr follows stdout into $null).
+            if (fd2.Kind == FdDestKind.Null) sb.Append(fd1.Kind == FdDestKind.Null ? " 2>&1" : " 2>$null");
+            else if (fd2.Kind == FdDestKind.StdoutDefault) sb.Append(" 2>&1");
+            return true;
+        }
+
+        // Error records enter the stage only when stderr is redirected somewhere other than its default.
+        if (fd2.Kind == FdDestKind.Null) sb.Append(" 2>$null");
+        else if (fd2.Kind != FdDestKind.Default) sb.Append(" 2>&1");
+
+        string? stdoutPath = fd1.Kind switch
+        {
+            FdDestKind.File => opened[fd1.File].Target,
+            FdDestKind.Null => "$null",
+            _ => null,
+        };
+        string? errorPath = null;
+        bool errorAppend = false;
+        if (fd2.Kind == FdDestKind.File && !(fd1.Kind == FdDestKind.File && fd1.File == fd2.File))
+        {
+            errorPath = opened[fd2.File].Target;
+            errorAppend = opened[fd2.File].Append;
+        }
+        sb.Append(PsBuild.RedirectStage(
+            stdoutPath, fd1.Kind == FdDestKind.File && opened[fd1.File].Append,
+            errorPath, errorAppend,
+            passErrors: fd2.Kind == FdDestKind.StdoutDefault,
+            truncate, touch));
+        return true;
+    }
+
+    /// <summary>
+    /// The pre-model tail: every NON-stdout-file redirect inline via <see cref="EmitRedirect"/>, the
+    /// FIRST stdout file redirect piped through <c>Invoke-BashRedirect</c>. Kept for the redirect
+    /// lists <see cref="TryAppendModelledRedirectTail"/> does not cover.
+    /// </summary>
+    private static void AppendLegacyRedirectTail(StringBuilder sb, IReadOnlyList<Redirect> redirects)
     {
         Redirect? fileRedirect = null;
         // PowerShell rejects redirecting the same stream twice ("The error stream

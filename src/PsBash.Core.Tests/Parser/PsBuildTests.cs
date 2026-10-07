@@ -218,4 +218,24 @@ public class PsBuildTests
         // `" is an escaped quote, so the ';' after it is still inside the string.
         Assert.False(PsBuild.IsStatementList("Invoke-BashEcho \"a`\"b;c\""));
     }
+
+    [Fact]
+    public void RedirectStage_StdoutOnly_IsThePathForm()
+        => Assert.Equal(" | Invoke-BashRedirect -Path f -Append",
+            PsBuild.RedirectStage("f", true, null, false, false, [], []));
+
+    [Fact]
+    public void RedirectStage_AllParts_InFixedOrder()
+        => Assert.Equal(
+            " | Invoke-BashRedirect -Path o -ErrorPath e -ErrorAppend -PassErrors"
+            + " -Truncate @(& { $args } a b) -Touch @(& { $args } s)",
+            PsBuild.RedirectStage("o", false, "e", true, true, ["a", "b"], ["s"]));
+
+    [Fact]
+    public void ArgWordArray_KeepsArgumentModeWordsAsArguments()
+    {
+        // `$env:d/a` must stay an ARGUMENT: spliced into an expression the `/` would divide.
+        // Run-time evaluation is covered by Differential_Redirect_SameFdTwice_Files_LastWins.
+        Assert.Equal("@(& { $args } $env:d/a 'b c')", PsBuild.ArgWordArray(["$env:d/a", "'b c'"]));
+    }
 }

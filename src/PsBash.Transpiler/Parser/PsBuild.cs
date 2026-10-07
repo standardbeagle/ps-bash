@@ -355,6 +355,42 @@ public static class PsBuild
     public static string TouchRedirectTarget(string target, bool append) =>
         "@() | Invoke-BashRedirect -Path " + target + (append ? " -Append" : "");
 
+    /// <summary>
+    /// The <c> | Invoke-BashRedirect …</c> stage that applies a command's final stdout/stderr
+    /// destinations (see <c>PsEmitter.AppendRedirectTail</c>). Targets are emitted ARGUMENT-mode
+    /// words (<c>'f'</c>, <c>$env:d/f</c>, <c>$null</c>); <paramref name="stdoutPath"/> null = stdout
+    /// passes through, <c>"$null"</c> = discarded. <paramref name="truncate"/> / <paramref name="touch"/>
+    /// are superseded targets, passed through <see cref="ArgWordArray"/> so each stays an argument.
+    /// </summary>
+    public static string RedirectStage(
+        string? stdoutPath, bool append, string? errorPath, bool errorAppend, bool passErrors,
+        IReadOnlyList<string> truncate, IReadOnlyList<string> touch)
+    {
+        var sb = new System.Text.StringBuilder(" | Invoke-BashRedirect");
+        if (stdoutPath is not null)
+        {
+            sb.Append(" -Path ").Append(stdoutPath);
+            if (append) sb.Append(" -Append");
+        }
+        if (errorPath is not null)
+        {
+            sb.Append(" -ErrorPath ").Append(errorPath);
+            if (errorAppend) sb.Append(" -ErrorAppend");
+        }
+        if (passErrors) sb.Append(" -PassErrors");
+        if (truncate.Count > 0) sb.Append(" -Truncate ").Append(ArgWordArray(truncate));
+        if (touch.Count > 0) sb.Append(" -Touch ").Append(ArgWordArray(touch));
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// An array of ARGUMENT-mode words as one argument: <c>@(&amp; { $args } w1 w2)</c>. The words are
+    /// arguments to a script block, never spliced into an expression (where <c>/</c> divides and a
+    /// bare word is a command).
+    /// </summary>
+    public static string ArgWordArray(IReadOnlyList<string> argWords) =>
+        "@(& { $args } " + string.Join(' ', argWords) + ")";
+
     // ─────────────────────── Null-safe pipeline text extraction ────────────────────────
 
     /// <summary>

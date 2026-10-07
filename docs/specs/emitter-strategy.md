@@ -505,10 +505,27 @@ bare-redirect body sets status 0 first, opens the targets, and ENDS in
 `if ($global:LASTEXITCODE -ne 0) { Write-Error '' -ErrorAction SilentlyContinue } else { [void]$true }`
 when it had targets, so a failed open flips `$?` for a following `||` / `if`. `Invoke-BashRedirect`
 reports an unopenable target as `bash: d/f: No such file or directory` (also `Is a directory`,
-`Permission denied`) with `$global:LASTEXITCODE = 1` and a terminating error, so the upstream command
-never runs (this applies to `echo hi > nodir/f` too; it used to print PowerShell's own exception text
-and leave status 0). The failure message names the shell, not the script path and line that bash
-prints for a non-interactive shell (stderr text differs; status and tree match).
+`Permission denied`) with `$global:LASTEXITCODE = 1` and stops the upstream stages (`UpstreamStop`, the
+`Select-Object -First` mechanism — not an error, so an emitted `try { }` is not aborted), so the upstream
+command never runs and the script continues (this applies to `echo hi > nodir/f` too; it used to print
+PowerShell's own exception text and leave status 0). Under `set -e` it is a terminating error. The failure
+message names the shell, not the script path and line that bash prints for a non-interactive shell
+(stderr text differs; status and tree match).
+
+### Output redirects: the per-fd model
+
+`AppendRedirectTail` applies a command's stdout/stderr redirects as bash does: left to right, per fd,
+LAST one wins, `2>&1` copying fd 1's destination at that point (`2>&1 >o` sends stderr to the ORIGINAL
+stdout, `>o 2>&1` to `o`). Every FILE destination — stderr too — goes through one
+`Invoke-BashRedirect` stage (`PsBuild.RedirectStage`): stderr enters it via a `2>&1` merge and is
+written byte-faithfully (LF, message only) instead of by PowerShell's native `2> f` (CRLF,
+`Invoke-BashLs:` prefix). Only `>$null`, `2>$null` and the `2>&1` merge stay native, each at most once
+(PowerShell rejects redirecting a stream twice, which made `cmd >/dev/null >/dev/null` a parse error
+for the whole script). Superseded file targets are still opened, as bash opens them (`echo x >a >b`
+leaves an empty `a`): `-Truncate` / `-Touch`. A tail with a redirect outside the model (user fds,
+`<&`, numeric merges other than `2>&1`) keeps the legacy emission. Known gap: `>&2` inside a group whose
+stderr is redirected (`{ echo e >&2; } 2> f`) still reaches the terminal — `Write-BashHostStderr` writes
+to the host directly, not to the error stream a redirect captures.
 
 ### `set`
 

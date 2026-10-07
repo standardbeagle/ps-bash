@@ -15,6 +15,21 @@ namespace PsBash.Cmdlets;
 /// bash flags, so they bind directly with no collision. The file path resolves
 /// against the process working directory, which the emitted <c>cd</c> keeps in
 /// sync with the shell cwd — byte-identical to the psm1's File.WriteAllText.
+/// <para>
+/// STDERR (<c>2&gt; f</c>, <c>&amp;&gt; f</c>): the emitter merges the command's error stream into
+/// its output (<c>2&gt;&amp;1</c>) and pipes both here, so stderr is written by the same
+/// byte-faithful writer as stdout — LF, no <c>Invoke-BashLs:</c> prefix (PowerShell's native
+/// <c>2&gt; f</c> formats each record with the cmdlet name and CRLF). An <see cref="ErrorRecord"/>
+/// goes to <see cref="ErrorPath"/> when bound, is passed on as output with
+/// <see cref="PassErrors"/> (<c>2&gt;&amp;1 &gt;f</c>: stderr to the ORIGINAL stdout), and otherwise
+/// is written with the stdout records (<c>&amp;&gt; f</c>, <c>&gt;f 2&gt;&amp;1</c>). With no
+/// <see cref="Path"/> the stdout records pass through unchanged; <c>-Path $null</c> discards them.
+/// </para>
+/// <para>
+/// SUPERSEDED TARGETS (<c>echo x &gt;a &gt;b</c>): bash opens every redirect in order and the last
+/// per fd wins, so <c>a</c> is still created/truncated. <see cref="Truncate"/> / <see cref="Touch"/>
+/// open those (truncate, or create-without-truncating for <c>&gt;&gt;</c>) and close them at once.
+/// </para>
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashRedirect")]
 public sealed class InvokeBashRedirectCommand : PSCmdlet
@@ -25,10 +40,32 @@ public sealed class InvokeBashRedirectCommand : PSCmdlet
     [Parameter]
     public SwitchParameter Append { get; set; }
 
+    /// <summary>The stderr target (<c>2&gt; f</c> / <c>2&gt;&gt; f</c>); <c>$null</c> discards.</summary>
+    [Parameter]
+    public string? ErrorPath { get; set; }
+
+    [Parameter]
+    public SwitchParameter ErrorAppend { get; set; }
+
+    /// <summary>Error records go on as output (stderr dup'd to the original stdout).</summary>
+    [Parameter]
+    public SwitchParameter PassErrors { get; set; }
+
+    /// <summary>Superseded <c>&gt; f</c> targets: opened (truncated) and closed before the command runs.</summary>
+    [Parameter]
+    public string[]? Truncate { get; set; }
+
+    /// <summary>Superseded <c>&gt;&gt; f</c> targets: created if missing, never truncated.</summary>
+    [Parameter]
+    public string[]? Touch { get; set; }
+
     [Parameter(ValueFromPipeline = true)]
     public PSObject? InputObject { get; set; }
 
     private FileStream? _stream;
+    private FileStream? _errorStream;
+    private bool _stdoutToFile;
+    private bool _stderrToFile;
 
     // STREAMING (memory bound): the target is opened up front and every record is written as it
     // arrives through a 64 KB-buffered FileStream, so `big | cmd > f` holds O(buffer), not the
@@ -37,14 +74,42 @@ public sealed class InvokeBashRedirectCommand : PSCmdlet
     // even when the command prints nothing.
     protected override void BeginProcessing()
     {
-        if (Path is null) return;
-        // A target built by expansion (`> $dir/f`, dir=/c/Users/...) reaches here unmapped — the
-        // emitter can only rewrite a literal `/c/...` word — so map it like any cmdlet operand.
-        string target = FileSystemHelpers.NormalizeOperandPath(Path);
+        _stdoutToFile = MyInvocation.BoundParameters.ContainsKey(nameof(Path));
+        _stderrToFile = MyInvocation.BoundParameters.ContainsKey(nameof(ErrorPath));
+
+        foreach (var t in Truncate ?? [])
+            if (!TryOpen(t, append: false, out var s)) return; else s?.Dispose();
+        foreach (var t in Touch ?? [])
+            if (!TryOpen(t, append: true, out var s)) return; else s?.Dispose();
+        if (Path is not null && !TryOpen(Path, Append, out _stream)) return;
+        if (ErrorPath is not null && !TryOpen(ErrorPath, ErrorAppend, out _errorStream)) return;
+    }
+
+    /// <summary>
+    /// A redirect target as the OS path to open, resolved like any cmdlet file operand: a target
+    /// built by expansion (<c>&gt; $dir/f</c>, dir=/c/Users/...) reaches here unmapped — the emitter
+    /// can only rewrite a literal word — so <see cref="FileSystemHelpers.NormalizeOperandPath"/>
+    /// maps it. Null for the null device (<c>f=/dev/null; cmd &gt; $f</c>), which operands also
+    /// read as empty. NOT <c>/tmp</c>: an expanded <c>/tmp/x</c> operand is not mapped either, and
+    /// <c>echo &gt; "$f"; cat "$f"</c> must agree on the file.
+    /// </summary>
+    internal static string? ResolveTarget(string raw)
+        => FileSystemHelpers.IsNullDevice(raw) ? null : FileSystemHelpers.NormalizeOperandPath(raw);
+
+    /// <summary>
+    /// Open one target; false (after reporting and stopping upstream) when it cannot be opened.
+    /// <paramref name="stream"/> is null for the null device (writes are discarded).
+    /// </summary>
+    private bool TryOpen(string raw, bool append, out FileStream? stream)
+    {
+        stream = null;
+        string? target = ResolveTarget(raw);
+        if (target is null) return true;
         try
         {
-            _stream = new FileStream(target, Append ? FileMode.Append : FileMode.Create,
+            stream = new FileStream(target, append ? FileMode.Append : FileMode.Create,
                 FileAccess.Write, FileShare.ReadWrite, bufferSize: 64 * 1024);
+            return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
                                        or ArgumentException or NotSupportedException)
@@ -59,17 +124,19 @@ public sealed class InvokeBashRedirectCommand : PSCmdlet
             string reason = Directory.Exists(target) ? "Is a directory"
                 : ex is UnauthorizedAccessException ? "Permission denied"
                 : FileSystemHelpers.ReadErrorMessage(ex);
-            string message = $"bash: {Path}: {reason}";
+            string message = $"bash: {raw}: {reason}";
             if (SessionState.PSVariable.GetValue("__BashErrexit") is true)
             {
                 FileSystemHelpers.SetLastExitCode(this, 1);
                 ThrowTerminatingError(new ErrorRecord(
-                    new IOException(message), "BashRedirectError", ErrorCategory.WriteError, Path));
+                    new IOException(message), "BashRedirectError", ErrorCategory.WriteError, raw));
             }
             FileSystemHelpers.WriteBashError(this, message);
             FileSystemHelpers.SetLastExitCode(this, 1);
             _openFailed = true;
+            Close();
             UpstreamStop.Throw(this);
+            return false; // UpstreamStop unavailable: the cmdlet then just drops its input
         }
     }
 
@@ -77,22 +144,43 @@ public sealed class InvokeBashRedirectCommand : PSCmdlet
 
     protected override void ProcessRecord()
     {
-        if (InputObject is null || _stream is null) return;
+        if (InputObject is null || _openFailed) return;
+        if (InputObject.BaseObject is ErrorRecord er)
+        {
+            if (_stderrToFile) { Write(_errorStream, ErrorPayload(er)); return; }
+            if (PassErrors) { WriteObject(InputObject); return; }
+            // Merged into stdout (`&> f`, `>f 2>&1`): written with the stdout records below.
+            if (_stdoutToFile) { Write(_stream, ErrorPayload(er)); return; }
+            WriteObject(InputObject);
+            return;
+        }
+        if (!_stdoutToFile) { WriteObject(InputObject); return; }
         // Same per-record rule as tee: record boundary "\n" unless the record is marked
         // NoTrailingNewline (printf x / echo -n x), so `printf x > f` writes exactly "x".
-        var payload = BashRuntime.RecordFilePayload(InputObject);
-        if (payload.Length == 0) return;
+        Write(_stream, BashRuntime.RecordFilePayload(InputObject));
+    }
+
+    /// <summary>One stderr line as bash writes it: the message only, LF-terminated.</summary>
+    private static string ErrorPayload(ErrorRecord er)
+    {
+        string text = er.ErrorDetails?.Message ?? er.Exception?.Message ?? er.ToString();
+        return text.EndsWith('\n') ? text : text + "\n";
+    }
+
+    private static void Write(FileStream? stream, string payload)
+    {
+        if (stream is null || payload.Length == 0) return;
         // The exact bytes: escaped-byte markers (invalid UTF-8, see RawBytes) are written back as the
         // single original byte, everything else as UTF-8 — `printf '\xe9' > f` is ONE byte.
         var bytes = RawBytes.GetBytes(payload);
-        _stream.Write(bytes, 0, bytes.Length);
+        stream.Write(bytes, 0, bytes.Length);
     }
 
     protected override void EndProcessing()
     {
         Close();
-        // The upstream command still ran (and set its own status) after BeginProcessing; the
-        // failed redirect is the pipeline's status, so `$?` and `set -e` see 1.
+        // A failed open stopped upstream, but a stage that already finished may have reset the
+        // status; the failed redirect is the pipeline's status, so `$?` and `set -e` see 1.
         if (_openFailed) FileSystemHelpers.SetLastExitCode(this, 1);
     }
 
@@ -100,8 +188,9 @@ public sealed class InvokeBashRedirectCommand : PSCmdlet
 
     private void Close()
     {
-        var s = _stream;
+        foreach (var s in new[] { _stream, _errorStream })
+            try { s?.Dispose(); } catch { /* best-effort */ }
         _stream = null;
-        try { s?.Dispose(); } catch { /* best-effort */ }
+        _errorStream = null;
     }
 }

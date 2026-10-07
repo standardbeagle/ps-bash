@@ -269,7 +269,7 @@ public class PsEmitterTests
         // Previously `&` lexed as background, dropping the stderr redirect.
         var result = PsEmitter.Transpile("cmd &> out.log");
 
-        Assert.Equal("cmd >out.log 2>&1", result);
+        Assert.Equal("cmd 2>&1 | Invoke-BashRedirect -Path out.log", result);
     }
 
     [Fact]
@@ -277,7 +277,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("cmd &>> out.log");
 
-        Assert.Equal("cmd >>out.log 2>&1", result);
+        Assert.Equal("cmd 2>&1 | Invoke-BashRedirect -Path out.log -Append", result);
     }
 
     [Fact]
@@ -667,7 +667,7 @@ public class PsEmitterTests
         // `cmd >&file` is a bash synonym for `&>file`: stdout AND stderr to the FILE.
         // `1>&file` is invalid PowerShell (>& takes a stream number), so emit `&>` form.
         var result = PsEmitter.Transpile("cmd >&out.txt");
-        Assert.Equal("cmd >out.txt 2>&1", result);
+        Assert.Equal("cmd 2>&1 | Invoke-BashRedirect -Path out.txt", result);
     }
 
     [Fact]
@@ -4457,7 +4457,37 @@ public class PsEmitterTests
     public void Transpile_StderrToFile_EmitsFileRedirect()
     {
         var result = PsEmitter.Transpile("cmd 2> err.log");
-        Assert.Equal("cmd 2>err.log", result);
+        Assert.Equal("cmd 2>&1 | Invoke-BashRedirect -ErrorPath err.log", result);
+    }
+
+    // The fd model (AppendRedirectTail): bash applies redirects left to right, per fd, last wins.
+    // PowerShell rejects redirecting a stream twice, so a repeated redirect was a parse error for
+    // the whole script; superseded file targets are still opened (created / truncated) by bash.
+    [Theory]
+    [InlineData("cmd >/dev/null >/dev/null", "cmd >$null")]
+    [InlineData("cmd 2>/dev/null 2>/dev/null", "cmd 2>$null")]
+    [InlineData("cmd &>/dev/null 2>&1", "cmd >$null 2>&1")]
+    [InlineData("cmd >a >b", "cmd | Invoke-BashRedirect -Path b -Truncate @(& { $args } a)")]
+    [InlineData("cmd >p >q >r", "cmd | Invoke-BashRedirect -Path r -Truncate @(& { $args } p q)")]
+    [InlineData("cmd >>s >u", "cmd | Invoke-BashRedirect -Path u -Touch @(& { $args } s)")]
+    [InlineData("cmd 2>f1 2>f2", "cmd 2>&1 | Invoke-BashRedirect -ErrorPath f2 -Truncate @(& { $args } f1)")]
+    [InlineData("cmd >/dev/null >f", "cmd | Invoke-BashRedirect -Path f")]
+    [InlineData("cmd >f >/dev/null", "cmd | Invoke-BashRedirect -Path $null -Truncate @(& { $args } f)")]
+    [InlineData("cmd 2>>e", "cmd 2>&1 | Invoke-BashRedirect -ErrorPath e -ErrorAppend")]
+    [InlineData("cmd >o 2>e", "cmd 2>&1 | Invoke-BashRedirect -Path o -ErrorPath e")]
+    [InlineData("cmd >o 2>/dev/null", "cmd 2>$null | Invoke-BashRedirect -Path o")]
+    [InlineData("cmd >/dev/null 2>e", "cmd 2>&1 | Invoke-BashRedirect -Path $null -ErrorPath e")]
+    // `2>&1 >o`: stderr dup'd to the ORIGINAL stdout before stdout moves — it flows on, not into o.
+    [InlineData("cmd 2>&1 >o", "cmd 2>&1 | Invoke-BashRedirect -Path o -PassErrors")]
+    [InlineData("cmd >o 2>&1", "cmd 2>&1 | Invoke-BashRedirect -Path o")]
+    public void Transpile_RedirectFdModel_LastWinsPerFd(string bash, string expected)
+        => Assert.Equal(expected, PsEmitter.Transpile(bash));
+
+    [Fact]
+    public void Transpile_RedirectFdModel_UserFd_KeepsLegacyEmission()
+    {
+        // fd 3 is outside the model: the tail falls back to the pre-model emission unchanged.
+        Assert.Equal("cmd 3>f", PsEmitter.Transpile("cmd 3>f"));
     }
 
     // REFACTOR-4: `cmd >&2` rewrites to Write-BashHostStderr, NOT

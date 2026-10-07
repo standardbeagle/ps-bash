@@ -313,4 +313,49 @@ public class RedirectionDifferentialTests
             "cat <<A <<B\nalpha\nA\nbeta\nB\necho END",
             timeout: TimeSpan.FromSeconds(15));
     }
+
+    // -----------------------------------------------------------------------
+    // fd model: stderr file bytes, and several redirects of one fd (last wins).
+    // Each runs in its own temp dir; `cat -A` shows a CR as ^M and each line end as $.
+    // -----------------------------------------------------------------------
+
+    private static Task InTempDir(string body) =>
+        AssertOracle.EqualAsync(
+            "t=$(mktemp -d); cd \"$t\" || exit 1; " + body + "; cd /; rm -rf \"$t\"",
+            timeout: TimeSpan.FromSeconds(30));
+
+    // PowerShell's native `2> f` wrote "Invoke-BashLs: …" with CRLF.
+    [SkippableFact]
+    public Task Differential_Redirect_StderrToFile_RawBytesNoCmdletPrefix()
+        => InTempDir("ls /nonexistent_psb 2> e; echo rc=$?; ls /nonexistent_psb2 2>> e; cat -A e");
+
+    [SkippableFact]
+    public Task Differential_Redirect_BothStreamsToFile_InOrder()
+        => InTempDir("{ echo out; ls /nonexistent_psb; echo out2; } &> e; cat -A e; ls /nonexistent_psb >&e2; cat -A e2");
+
+    // A second redirect of the same stream was a PowerShell parse error for the WHOLE script.
+    [SkippableFact]
+    public Task Differential_Redirect_SameFdTwice_DevNull_Parses()
+        => InTempDir("echo x >/dev/null >/dev/null; echo rc=$?; ls /nonexistent_psb 2>/dev/null 2>/dev/null; echo rc=$?; echo after");
+
+    // bash opens every target in order; the last per fd gets the data, the others are created/truncated.
+    [SkippableFact]
+    public Task Differential_Redirect_SameFdTwice_Files_LastWins()
+        => InTempDir("echo x >a >b; echo y >p >q >r; echo old > s; echo new >>s >u; "
+            + "d=.; echo z >$d/m >\"$d/n\"; "
+            + "ls /nonexistent_psb 2>f1 2>f2; "
+            + "for f in a b p q r s u m n; do printf '%s=[%s]\\n' $f \"$(cat $f)\"; done; wc -c < f1; cat f2");
+
+    // `2>&1 >o`: stderr is dup'd to the ORIGINAL stdout (the pipe) before stdout moves to o.
+    [SkippableFact]
+    public Task Differential_Redirect_DupBeforeFile_StderrToPipe()
+        => InTempDir("ls /nonexistent_psb 2>&1 >o | tr a-z A-Z; echo \"o=[$(cat o)]\"");
+
+    [SkippableFact]
+    public Task Differential_Redirect_PipeStage_StderrToFile_StdoutFlows()
+        => InTempDir("{ echo a; ls /nonexistent_psb; } 2>e | tr a-z A-Z; cat -A e");
+
+    [SkippableFact]
+    public Task Differential_Redirect_ExpandedDevNullTarget_Discards()
+        => InTempDir("n=/dev/null; echo hi > $n; echo rc=$?; ls /nonexistent_psb 2> $n; echo rc=$?; ls");
 }

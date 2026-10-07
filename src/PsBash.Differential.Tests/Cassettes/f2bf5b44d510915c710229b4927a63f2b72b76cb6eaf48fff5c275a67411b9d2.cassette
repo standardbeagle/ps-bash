@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 128
+stdout-length: 136
+stderr-length: 0
+==== SCRIPT ====
+t=$(mktemp -d); cd "$t" || exit 1; ls /nonexistent_psb 2> e; echo rc=$?; ls /nonexistent_psb2 2>> e; cat -A e; cd /; rm -rf "$t"
+==== STDOUT ====
+rc=2
+ls: cannot access '/nonexistent_psb': No such file or directory$
+ls: cannot access '/nonexistent_psb2': No such file or directory$
+
+==== STDERR ====
+
