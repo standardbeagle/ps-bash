@@ -638,8 +638,9 @@ function Resolve-BashGlob {
                 foreach ($e in $expanded) { $resolved.Add($e) }
             }
         } else {
-            # Resolve relative paths against PowerShell's $PWD (not .NET CurrentDirectory)
-            $resolved.Add($ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($p))
+            # Resolve relative paths against PowerShell's $PWD (not .NET CurrentDirectory). An EMPTY
+            # operand stays empty: PowerShell resolves '' to the current directory (FileSystemHelpers.ProviderPath).
+            $resolved.Add($(if ($p -eq '') { '' } else { $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($p) }))
         }
     }
     $resolved

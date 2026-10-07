@@ -267,6 +267,18 @@ public sealed class InvokeBashRmCommand : PSCmdlet
             // Diagnostics quote the operand AS TYPED (GNU: `rm: cannot remove 'nosuch'`), never the
             // resolved full path.
             var display = operand.Display;
+            // An EMPTY operand (`rm -rf "$unset"`) names no file — never the current directory, which
+            // is what PowerShell path resolution makes of "" (that wiped the cwd). GNU: missing operand
+            // error, silent under -f. Checked on BOTH spellings, independent of any resolver.
+            if (display.Length == 0 || target.Length == 0)
+            {
+                if (!ignoreMissing)
+                {
+                    FileSystemHelpers.WriteBashError(this, "rm: cannot remove '': No such file or directory");
+                    hadError = true;
+                }
+                continue;
+            }
             // Windows reserved-device-name guard (psm1 oracle parity).
             if (isWindows)
             {

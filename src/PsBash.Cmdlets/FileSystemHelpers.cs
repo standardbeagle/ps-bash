@@ -33,7 +33,13 @@ internal static class FileSystemHelpers
     /// </summary>
     public static string ProviderPath(PSCmdlet cmdlet, string psPath)
     {
-        // The runtime path policy first (RuntimePath.Map: /tmp → $env:TEMP, unix drive paths) — this is
+        // An EMPTY operand names no file. PowerShell resolves "" to the CURRENT DIRECTORY, so
+        // `rm -rf "$unset"` deleted everything in the cwd (bash: nothing — `rm: cannot remove ''`,
+        // silent under -f) and `touch ''` hit the directory. Keep it empty: the access that follows
+        // fails "No such file or directory" like any missing operand. Checked BEFORE the mapping below
+        // so no path policy can ever turn "" into a real path.
+        if (string.IsNullOrEmpty(psPath)) return string.Empty;
+        // The runtime path policy (RuntimePath.Map: /tmp → $env:TEMP, unix drive paths) — this is
         // the chokepoint most cmdlets resolve operands through, so an expanded `$d/f` (d=/tmp) reaches
         // the same file the emitter's literal /tmp rewrite does. Idempotent on an already-mapped path.
         psPath = NormalizeOperandPath(psPath);
