@@ -20,7 +20,10 @@ namespace PsBash.Core.Runtime.Ipc;
 /// </remarks>
 public sealed class NamedPipeTransport : IIpcTransport
 {
-    private const int MaxInstances = 16;
+    // The OS maximum (254), not 16: HostServer admits 64 concurrent connections, so with 16 clients
+    // connected the accept loop could not create its listening instance ("All pipe instances are
+    // busy") and spun every 10 ms, flooding host.log, until one finished.
+    private const int MaxInstances = NamedPipeServerStream.MaxAllowedServerInstances;
     private readonly string _pipeName;
     private bool _listening;
     private int _disposed;

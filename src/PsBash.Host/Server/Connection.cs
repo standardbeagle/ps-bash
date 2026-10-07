@@ -55,14 +55,20 @@ internal sealed class Connection
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            // The read deadline elapsed with no complete request: the client is
-            // idle or gone. Unwind quietly; caller cancellation still propagates.
+            // The read deadline elapsed with no complete request: the client is idle, gone, or
+            // (under heavy load) slow. Answer anyway — a waiting launcher otherwise saw only
+            // "stream closed before EXIT" — and log it; caller cancellation still propagates.
             WorkerPool<SdkWorker>.DiagLog("Connection: request read timed out; closing idle connection");
+            HostLog.Write($"request not received within {RequestReadTimeoutMs()} ms; connection closed");
+            await HostServer.TryAnswerFailureAsync(_stream,
+                $"ps-bash-host: request not received within {RequestReadTimeoutMs()} ms", exitCode: 2);
             return;
         }
         catch (Exception ex) when (ex is IOException or InvalidDataException or FormatException)
         {
             WorkerPool<SdkWorker>.DiagLog($"Connection: malformed request: {ex.Message}");
+            HostLog.Write($"malformed request: {ex.GetType().Name}: {ex.Message}");
+            await HostServer.TryAnswerFailureAsync(_stream, $"ps-bash-host: malformed request: {ex.Message}", exitCode: 2);
             return;
         }
 
@@ -319,6 +325,9 @@ internal sealed class Connection
             return;
         }
 
+        // Outside every catch above: a failure from here on (or from the finally's output drain)
+        // escapes HandleAsync — HostServer answers it (HostServer.TryAnswerFailureAsync).
+        FaultForTest?.Invoke("before-exit");
         await HostProtocol.WriteExitAsync(_stream, exitCode, ct);
         WorkerPool<SdkWorker>.DiagLog("Connection: wrote exit");
 
@@ -496,6 +505,14 @@ internal sealed class Connection
                 : DefaultCapacity;
         }
     }
+
+    /// <summary>
+    /// Test seam: called with a stage name ("before-exit" — the command ran and its output drained,
+    /// its EXIT frame not yet written; nothing in Connection catches a failure there) so a test can
+    /// inject an escaping failure into a real connection and prove the client still gets an answer.
+    /// Null in production.
+    /// </summary>
+    internal static Action<string>? FaultForTest { get; set; }
 
     private static int RequestReadTimeoutMs()
     {

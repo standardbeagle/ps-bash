@@ -100,12 +100,15 @@ public sealed class HostServer : IAsyncDisposable
 
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, _acceptStop.Token);
 
+        int acceptFailures = 0;
         while (!linked.IsCancellationRequested)
         {
             Stream stream;
             try
             {
                 stream = await _transport.AcceptAsync(linked.Token);
+                if (acceptFailures > 0) Log($"accept recovered after {acceptFailures} failure(s)");
+                acceptFailures = 0;
             }
             catch (OperationCanceledException)
             {
@@ -113,10 +116,11 @@ public sealed class HostServer : IAsyncDisposable
             }
             catch (Exception ex)
             {
-                Log($"accept error: {ex.Message}");
-                // Small delay prevents a tight busy-loop if AcceptAsync keeps failing
-                // (e.g., transport in a persistently broken state).
-                try { await Task.Delay(10, linked.Token); } catch (OperationCanceledException) { break; }
+                // Exponential backoff (10 ms → 1 s) instead of a fixed 10 ms spin, and one log line
+                // per failure streak: a persistent failure used to append ~100 lines a second.
+                if (acceptFailures++ == 0) Log($"accept error: {ex.Message}");
+                int delayMs = Math.Min(1000, 10 << Math.Min(acceptFailures - 1, 7));
+                try { await Task.Delay(delayMs, linked.Token); } catch (OperationCanceledException) { break; }
                 continue;
             }
 
@@ -151,13 +155,25 @@ public sealed class HostServer : IAsyncDisposable
         {
             await using (stream)
             {
-                var conn = new Connection(stream, _pool, this);
-                await conn.HandleAsync(ct);
+                try
+                {
+                    var conn = new Connection(stream, _pool, this);
+                    await conn.HandleAsync(ct);
+                }
+                catch (Exception ex)
+                {
+                    // Answered while the stream is still OPEN. This catch used to sit outside the
+                    // `await using`, so a failure here only closed the stream: the launcher saw
+                    // "Response stream closed before EXIT sentinel" / "host connection reset" with
+                    // nothing to say why. Now it gets the error and a nonzero exit, and it is logged.
+                    Log($"connection error: {ex.GetType().Name}: {ex.Message} at {TopFrame(ex)}");
+                    await TryAnswerFailureAsync(stream, $"ps-bash-host: internal error: {ex.Message}");
+                }
             }
         }
         catch (Exception ex)
         {
-            Log($"connection error: {ex.Message}");
+            Log($"connection teardown error: {ex.GetType().Name}: {ex.Message}");
         }
         finally
         {
@@ -198,6 +214,7 @@ public sealed class HostServer : IAsyncDisposable
     /// </remarks>
     public async Task RequestShutdownAsync(int deadlineMs)
     {
+        HostLog.SetExitReason("shutdown requested by a client (replace/retire)");
         try { _acceptStop.Cancel(); } catch (ObjectDisposedException) { }
 
         Task drainTask;
@@ -228,18 +245,33 @@ public sealed class HostServer : IAsyncDisposable
         }
     }
 
-    private static void Log(string message)
+    private static void Log(string message) => HostLog.Write(message);
+
+    /// <summary>Exit status for a request the host failed to serve (the launcher's infrastructure code).</summary>
+    internal const int HostFailureExitCode = 125;
+
+    /// <summary>
+    /// Best-effort terminal answer on a connection the host could not serve: one stderr frame and an
+    /// EXIT frame, bounded so a dead peer cannot hold the connection task. Any failure is swallowed — the
+    /// peer may already be gone, which is exactly what the frame cannot fix.
+    /// </summary>
+    internal static async Task TryAnswerFailureAsync(Stream stream, string message, int exitCode = HostFailureExitCode)
     {
         try
         {
-            var logDir = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-                ".psbash");
-            Directory.CreateDirectory(logDir);
-            File.AppendAllText(
-                Path.Combine(logDir, "host.log"),
-                $"{DateTime.UtcNow:O} {message}{Environment.NewLine}");
+            if (!stream.CanWrite) return;
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+            await HostProtocol.WriteResponseLineAsync(stream, message, StreamTag.Stderr, cts.Token).ConfigureAwait(false);
+            await HostProtocol.WriteExitAsync(stream, exitCode, cts.Token).ConfigureAwait(false);
         }
-        catch { }
+        catch { /* peer gone / stream broken */ }
+    }
+
+    private static string TopFrame(Exception ex)
+    {
+        var trace = ex.StackTrace;
+        if (string.IsNullOrEmpty(trace)) return "<no stack>";
+        var first = trace.Split('\n', 2)[0].Trim();
+        return first.StartsWith("at ", StringComparison.Ordinal) ? first[3..] : first;
     }
 }

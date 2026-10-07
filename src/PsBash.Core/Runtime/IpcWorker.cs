@@ -817,6 +817,10 @@ public sealed class IpcWorker : IWorker
                     catch { /* partial flush is best-effort */ }
                     compactFrames = null;
                 }
+                // Diagnose BEFORE retiring: retirement may itself end the host process.
+                var obs = _lastHostObservation;
+                obs?.Refresh();
+                bool aliveNow = obs is { Pid: > 0 } && !obs.Exited && IsProcessAlive(obs.Pid);
                 // Output already streamed (unsafe to retry) or retries exhausted:
                 // retire so the next invocation self-heals, then surface the
                 // failure (Program.cs maps it to a one-line diagnostic + exit 125).
@@ -826,10 +830,9 @@ public sealed class IpcWorker : IWorker
                     // R05: the host acknowledged execution-start, so the command
                     // may already have run (silently) before the reset. Surface a
                     // clear error (Program.cs maps it to exit 125) rather than
-                    // re-running it and doubling its side effect.
-                    throw new IOException(
-                        "host connection reset after the command started executing; " +
-                        "not retrying because the command may already have run.", ex);
+                    // re-running it and doubling its side effect — naming whether
+                    // the host process died (and its exit code) or merely dropped us.
+                    throw new IOException(DescribeStartedReset(obs, aliveNow), ex);
                 }
                 throw;
             }
@@ -956,8 +959,10 @@ public sealed class IpcWorker : IWorker
             _hostBinaryPath,
             HostOwnership.ProbeProcess);
         using var watchdogStop = new CancellationTokenSource();
+        var observation = new HostObservation { Pid = hostPid };
+        Interlocked.Exchange(ref _lastHostObservation, observation)?.Dispose();
         Task? watchdog = hostPid > 0
-            ? StartHostLivenessWatchdog(hostPid, _hostBinaryPath, hostDeadCts, watchdogStop.Token)
+            ? StartHostLivenessWatchdog(hostPid, _hostBinaryPath, hostDeadCts, watchdogStop.Token, observation)
             : null;
 
         using var stdinPumpStop = new CancellationTokenSource();
@@ -1197,13 +1202,16 @@ public sealed class IpcWorker : IWorker
     /// of erroring loudly.</para>
     /// </summary>
     private static Task StartHostLivenessWatchdog(
-        int pid, string? hostBinaryPath, CancellationTokenSource hostDeadCts, CancellationToken stop)
+        int pid, string? hostBinaryPath, CancellationTokenSource hostDeadCts, CancellationToken stop,
+        HostObservation? observation = null)
         => Task.Run(async () =>
         {
+            Process? proc = null;
+            bool attached = false;
             try
             {
-                using var proc = Process.GetProcessById(pid);
-                if (proc.HasExited) { try { hostDeadCts.Cancel(); } catch { } return; }
+                proc = Process.GetProcessById(pid);
+                if (proc.HasExited) { observation?.RecordExit(proc); try { hostDeadCts.Cancel(); } catch { } return; }
 
                 string? exe = null;
                 try { exe = proc.MainModule?.FileName; }
@@ -1216,16 +1224,79 @@ public sealed class IpcWorker : IWorker
                     return;
                 }
 
+                // Our host: the observation owns the handle from here (disposed with it), so the
+                // diagnosis can read the exit code even if the reset outruns this watchdog.
+                if (observation is not null) { observation.Attach(proc); attached = true; }
                 await proc.WaitForExitAsync(stop).ConfigureAwait(false);
-                // Returned without cancellation ⇒ the host PROCESS exited.
+                // Returned without cancellation ⇒ the host PROCESS exited. The handle is still
+                // open, so its exit code is readable (Windows; a non-child on Unix has none).
+                observation?.RecordExit(proc);
                 try { hostDeadCts.Cancel(); } catch { }
             }
             catch (OperationCanceledException) { /* exchange finished — normal stop */ }
             // No such process / already exited / no handle ⇒ host is gone.
-            catch (ArgumentException) { try { hostDeadCts.Cancel(); } catch { } }
-            catch (InvalidOperationException) { try { hostDeadCts.Cancel(); } catch { } }
+            catch (ArgumentException) { observation?.RecordExit(null); try { hostDeadCts.Cancel(); } catch { } }
+            catch (InvalidOperationException) { observation?.RecordExit(null); try { hostDeadCts.Cancel(); } catch { } }
             catch { /* never let the watchdog throw into the void */ }
+            finally { if (!attached) proc?.Dispose(); }
         }, CancellationToken.None);
+
+    /// <summary>
+    /// What the launcher saw of the host serving one exchange: its PID and, if the liveness
+    /// watchdog saw it die, its exit code. Lets a mid-command reset say WHICH failure happened —
+    /// the host process exited (crashed / was killed, with its code) vs. a live host dropped the
+    /// connection — instead of one undifferentiated "connection reset".
+    /// </summary>
+    internal sealed class HostObservation : IDisposable
+    {
+        private Process? _handle;
+
+        public int Pid { get; init; }
+        public bool Exited { get; private set; }
+        public int? ExitCode { get; private set; }
+
+        /// <summary>Keep the watchdog's process handle: an exit code is readable only through a
+        /// handle opened while the process was alive, and the transport reset can reach the launcher
+        /// before the watchdog notices the exit.</summary>
+        public void Attach(Process proc) => Interlocked.Exchange(ref _handle, proc)?.Dispose();
+
+        public void RecordExit(Process? proc)
+        {
+            Exited = true;
+            try { if (proc is not null) ExitCode = proc.ExitCode; }
+            catch { /* not our child (Unix) / no access: exit code unknown */ }
+        }
+
+        /// <summary>Re-check the held handle (the diagnosis may run before the watchdog wakes).</summary>
+        public void Refresh()
+        {
+            var h = Volatile.Read(ref _handle);
+            if (Exited && ExitCode is not null || h is null) return;
+            try { if (h.HasExited) RecordExit(h); } catch { }
+        }
+
+        public void Dispose() => Interlocked.Exchange(ref _handle, null)?.Dispose();
+    }
+
+    /// <summary>
+    /// The one-line diagnostic for a reset after the host acknowledged execution start. Pure so
+    /// each branch is unit-testable. <paramref name="aliveNow"/> is a fresh probe for the case the
+    /// watchdog did not see an exit (the exchange may end before the watchdog wakes).
+    /// </summary>
+    internal static string DescribeStartedReset(HostObservation? obs, bool aliveNow)
+    {
+        string what = obs is not { Pid: > 0 } ? "host connection reset (host pid unknown)"
+            : obs.Exited || !aliveNow
+                ? obs.ExitCode is { } code
+                    ? $"host process (pid {obs.Pid}) exited with code {code}"
+                    : $"host process (pid {obs.Pid}) exited"
+            : $"host (pid {obs.Pid}) is still running but dropped the connection";
+        return what + " after the command started executing; not retrying because the command " +
+               "may already have run (host log: ~/.psbash/host.log).";
+    }
+
+    /// <summary>The host observed by the most recent exchange (see <see cref="HostObservation"/>).</summary>
+    private HostObservation? _lastHostObservation;
 
     /// <summary>
     /// True while process <paramref name="pid"/> is running. A gone PID (or a
@@ -1534,6 +1605,7 @@ public sealed class IpcWorker : IWorker
     public ValueTask DisposeAsync()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return ValueTask.CompletedTask;
+        Interlocked.Exchange(ref _lastHostObservation, null)?.Dispose();
 
         // REFACTOR-7: PerInvocation owns its private host — kill the tree so the
         // host never outlives this launcher, then unlink the process-local

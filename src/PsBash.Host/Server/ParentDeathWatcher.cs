@@ -20,9 +20,12 @@ public sealed class ParentDeathWatcher : IDisposable, IAsyncDisposable
     private readonly CancellationTokenSource _watcherCts = new();
     private readonly Task _watchTask;
 
-    private ParentDeathWatcher(int launcherPid, CancellationTokenSource cts, TimeSpan pollInterval)
+    private readonly Action<string> _recordExitReason;
+
+    private ParentDeathWatcher(int launcherPid, CancellationTokenSource cts, TimeSpan pollInterval, Action<string>? recordExitReason)
     {
         _cts = cts;
+        _recordExitReason = recordExitReason ?? HostLog.SetExitReason;
         _watchTask = WatchAsync(launcherPid, pollInterval, _watcherCts.Token);
     }
 
@@ -31,13 +34,16 @@ public sealed class ParentDeathWatcher : IDisposable, IAsyncDisposable
     /// <paramref name="launcherPid"/> is null (no-op mode, e.g. during tests or
     /// when the host is run standalone).
     /// </summary>
+    /// <param name="recordExitReason">Where the "launcher exited" exit reason goes (default
+    /// <see cref="HostLog.SetExitReason"/>); a seam so tests need not share the process-wide one.</param>
     public static ParentDeathWatcher? TryCreate(
         int? launcherPid,
         CancellationTokenSource cts,
-        TimeSpan? pollInterval = null)
+        TimeSpan? pollInterval = null,
+        Action<string>? recordExitReason = null)
     {
         if (launcherPid is null) return null;
-        return new ParentDeathWatcher(launcherPid.Value, cts, pollInterval ?? PollInterval);
+        return new ParentDeathWatcher(launcherPid.Value, cts, pollInterval ?? PollInterval, recordExitReason);
     }
 
     private async Task WatchAsync(int pid, TimeSpan interval, CancellationToken ct)
@@ -49,6 +55,7 @@ public sealed class ParentDeathWatcher : IDisposable, IAsyncDisposable
                 await Task.Delay(interval, ct).ConfigureAwait(false);
                 if (!IsAlive(pid))
                 {
+                    _recordExitReason($"launcher pid {pid} exited");
                     _cts.TryCancel();
                     return;
                 }

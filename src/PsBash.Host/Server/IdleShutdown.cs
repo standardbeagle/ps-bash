@@ -36,10 +36,15 @@ public sealed class IdleShutdown : IDisposable
     // (a callback queued just before ConnectionStarted() must not tear down a live connection).
     private int _generation;
 
-    public IdleShutdown(CancellationTokenSource cts, TimeSpan? timeout = null)
+    private readonly Action<string> _recordExitReason;
+
+    /// <param name="recordExitReason">Where the "idle timeout" exit reason goes (default
+    /// <see cref="HostLog.SetExitReason"/>); a seam so tests need not share the process-wide one.</param>
+    public IdleShutdown(CancellationTokenSource cts, TimeSpan? timeout = null, Action<string>? recordExitReason = null)
     {
         _cts = cts;
         _timeout = timeout ?? DefaultTimeout;
+        _recordExitReason = recordExitReason ?? HostLog.SetExitReason;
         // Host starts idle; schedule first fire.
         lock (_gate) ScheduleTimer();
     }
@@ -84,6 +89,7 @@ public sealed class IdleShutdown : IDisposable
         {
             if (generation != _generation) return; // superseded — a newer schedule/cancel won the race
             if (_inFlight > 0) return;              // a connection started concurrently — do not tear down
+            _recordExitReason($"idle timeout ({_timeout.TotalSeconds:0}s with no connection)");
             _cts.TryCancel();
         }
     }

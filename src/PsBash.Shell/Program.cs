@@ -161,15 +161,17 @@ if (shellArgs.ScriptPath is not null)
 
     if (shellArgs.ScriptPath.EndsWith(".ps1", StringComparison.OrdinalIgnoreCase))
     {
-        await using IWorker ps1Worker = await workerFactory();
-
         if (compactOutput)
             Environment.SetEnvironmentVariable("PSBASH_COMPACT_COMMAND", $"{shellArgs.ScriptPath} {string.Join(' ', shellArgs.ScriptArgs)}");
         var ps1Preamble = BuildPositionalPreamble(shellArgs.ScriptPath, shellArgs.ScriptArgs);
         var escapedPath = shellArgs.ScriptPath.Replace("'", "''");
-        return await ps1Worker.ExecuteAsync(
-            BuildInvocationCwdPreamble() + ps1Preamble + ". '" + escapedPath + "'",
-            environment: CaptureLauncherEnvironment());
+        return await HostFailureGuard.RunAsync(async () =>
+        {
+            await using IWorker ps1Worker = await workerFactory();
+            return await ps1Worker.ExecuteAsync(
+                BuildInvocationCwdPreamble() + ps1Preamble + ". '" + escapedPath + "'",
+                environment: CaptureLauncherEnvironment());
+        });
     }
 
     // .sh execution: read, transpile, build positional preamble, execute.
@@ -200,14 +202,16 @@ if (shellArgs.ScriptPath is not null)
         return 2;
     }
 
-    await using IWorker scriptWorker = await workerFactory();
-
     if (compactOutput)
         Environment.SetEnvironmentVariable("PSBASH_COMPACT_COMMAND", $"{shellArgs.ScriptPath} {string.Join(' ', shellArgs.ScriptArgs)}");
     var preamble = BuildPositionalPreamble(shellArgs.ScriptPath, shellArgs.ScriptArgs);
-    return await scriptWorker.ExecuteAsync(
-        BuildInvocationCwdPreamble() + preamble + pwshScriptCommand,
-        environment: CaptureLauncherEnvironment());
+    return await HostFailureGuard.RunAsync(async () =>
+    {
+        await using IWorker scriptWorker = await workerFactory();
+        return await scriptWorker.ExecuteAsync(
+            BuildInvocationCwdPreamble() + preamble + pwshScriptCommand,
+            environment: CaptureLauncherEnvironment());
+    });
 }
 
 // Auto-detect piped stdin: if no command given and stdin is redirected, try reading it.
@@ -439,36 +443,15 @@ if (debug)
 // propagated a raw OperationCanceledException out of Main and the runtime
 // dumped a managed stack trace with exit code 82, which is what an embedding
 // parent (e.g. the Claude Code Bash tool) saw when the host wedged.
-int exitCode;
-try
+int exitCode = await HostFailureGuard.RunAsync(async () =>
 {
     await using IWorker worker = await workerFactory();
     if (forwardStdin && worker is IpcWorker ipcWorker)
         ipcWorker.LauncherStdin = Console.OpenStandardInput();
-    exitCode = await worker.ExecuteAsync(
+    return await worker.ExecuteAsync(
         BuildInvocationCwdPreamble() + pwshCommand,
         environment: CaptureLauncherEnvironment());
-}
-catch (TimeoutException ex)
-{
-    // Host did not accept a connection / respond within the call budget.
-    // Mirror GNU `timeout`'s exit code so callers can detect the condition.
-    Console.Error.WriteLine(
-        ex.Message.StartsWith("ps-bash:", StringComparison.Ordinal) ? ex.Message : $"ps-bash: {ex.Message}");
-    return 124;
-}
-catch (HostUnavailableException ex)
-{
-    Console.Error.WriteLine($"ps-bash: {ex.Message}");
-    return 125;
-}
-catch (Exception ex) when (ex is System.IO.IOException
-                              or System.Net.Sockets.SocketException
-                              or OperationCanceledException)
-{
-    Console.Error.WriteLine($"ps-bash: host communication failed: {ex.Message}");
-    return 125;
-}
+});
 
 if (debug)
 {
