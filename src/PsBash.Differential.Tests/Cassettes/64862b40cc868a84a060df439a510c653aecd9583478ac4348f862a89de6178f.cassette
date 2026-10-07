@@ -1,0 +1,22 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 246
+stdout-length: 131
+stderr-length: 0
+==== SCRIPT ====
+shopt -s extglob
+for p in 'a:!(a)*' 'ab:!(a)b' 'b:!(a)b' 'ab:@(a)!(c)' 'ac:@(a)!(c)' 'foo.log.txt:!(*.log)' 'foo.log:!(*.log)' 'zoo:!(f*|b*)' 'foo:!(f*|b*)'; do s=${p%%:*}; pat=${p#*:}; eval "[[ \$s == $pat ]]" && echo "1 $p" || echo "0 $p"; done
+==== STDOUT ====
+1 a:!(a)*
+0 ab:!(a)b
+1 b:!(a)b
+1 ab:@(a)!(c)
+0 ac:@(a)!(c)
+1 foo.log.txt:!(*.log)
+0 foo.log:!(*.log)
+1 zoo:!(f*|b*)
+0 foo:!(f*|b*)
+
+==== STDERR ====
+

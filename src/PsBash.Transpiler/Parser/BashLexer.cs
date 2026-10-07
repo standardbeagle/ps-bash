@@ -234,9 +234,15 @@ public static class BashLexer
                 continue;
             }
 
+            // `!(` is the extglob NEGATION in argument / pattern position (`[[ x == !(*.log) ]]`,
+            // `case $f in !(*.o))`), but at command position `!(false)` is `!` + a subshell
+            // (oracle). Skip the Bang operator there so the word scan takes the extglob whole.
+            bool extGlobBang = c == '!' && pos + 1 < len && input[pos + 1] == '('
+                && IsArgumentOrPatternPosition(tokens);
+
             // Single-character operators. Interned literal token text avoids the
             // per-token c.ToString() allocation.
-            (BashTokenKind Kind, string Text)? one = c switch
+            (BashTokenKind Kind, string Text)? one = extGlobBang ? null : c switch
             {
                 '|' => (BashTokenKind.Pipe, "|"),
                 ';' => (BashTokenKind.Semi, ";"),
@@ -359,6 +365,26 @@ public static class BashLexer
             pos = bodyEnd;
         }
         return pos;
+    }
+
+    /// <summary>
+    /// Is the next token an argument or a case pattern (not a command start)? True right after a
+    /// non-reserved word; or after <c>in</c> (a for-list / the first case pattern) or a case-arm
+    /// terminator <c>;;</c> <c>;&amp;</c> <c>;;&amp;</c> (the next pattern), newlines allowed between.
+    /// </summary>
+    private static bool IsArgumentOrPatternPosition(List<BashToken> tokens)
+    {
+        int i = tokens.Count - 1;
+        if (i < 0) return false;
+        if (tokens[i].Kind == BashTokenKind.Word && !IsReservedWord(tokens[i].Value)) return true;
+        while (i >= 0 && tokens[i].Kind == BashTokenKind.Newline) i--;
+        if (i < 0) return false;
+        if (tokens[i].Kind == BashTokenKind.Word) return tokens[i].Value == "in";
+        // ;; / ;& / ;;& — the lexer emits these as Semi Semi / Semi Amp / Semi Semi Amp.
+        bool amp = tokens[i].Kind == BashTokenKind.Amp;
+        int j = amp ? i - 1 : i;
+        if (j < 0 || tokens[j].Kind != BashTokenKind.Semi) return false;
+        return amp || (j >= 1 && tokens[j - 1].Kind == BashTokenKind.Semi);
     }
 
     /// <summary>

@@ -1,0 +1,19 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 220
+stdout-length: 35
+stderr-length: 0
+==== SCRIPT ====
+shopt -s extglob
+for s in '' a aa ab abab b; do [[ $s == ?(a) ]] && printf q; [[ $s == *(ab) ]] && printf s; [[ $s == +(ab) ]] && printf p; [[ $s == @(a|b) ]] && printf a; [[ $s != @(a|b) ]] && printf n; echo "|$s"; done
+==== STDOUT ====
+qsn|
+qa|a
+n|aa
+spn|ab
+spn|abab
+a|b
+
+==== STDERR ====
+

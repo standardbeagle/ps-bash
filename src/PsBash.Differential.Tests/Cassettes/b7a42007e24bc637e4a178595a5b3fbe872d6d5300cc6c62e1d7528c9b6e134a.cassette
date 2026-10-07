@@ -1,0 +1,18 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 294
+stdout-length: 121
+stderr-length: 0
+==== SCRIPT ====
+shopt -s extglob
+v=aaa.tar.gz; echo "${v#+(a)}|${v##+(a)}|${v#*(a)}|${v##*(a).}"; echo "${v%.@(gz|bz2)}|${v%%.@(tar|gz)*}|${v%?(.gz)}|${v%%?(.gz)}"; echo "${v#!(a)}|${v##!(z)}|${v%!(z)}|${v%%!(z)}"; echo "${v/+(a)/X}|${v//@(a|z)/Y}|${v/!(a)/N}"; w=foo.log.txt; echo "${w%.!(txt)}|${w%%.!(log)}"
+==== STDOUT ====
+aa.tar.gz|.tar.gz|aaa.tar.gz|tar.gz
+aaa.tar|aaa|aaa.tar.gz|aaa.tar
+aaa.tar.gz||aaa.tar.gz|
+X.tar.gz|YYY.tYr.gY|N
+foo|foo
+
+==== STDERR ====
+

@@ -3133,6 +3133,28 @@ public class PsEmitterTests
     }
 
     [Fact]
+    public void Transpile_CaseExtGlobArm_SwitchesWholeCaseToAnchoredRegex()
+    {
+        // PowerShell wildcards have no extglob; an extglob arm makes the switch -Regex (case-
+        // sensitive, like bash) with EVERY pattern converted — `x*` too, not left as a wildcard.
+        var result = PsEmitter.Transpile("case $x in @(a|b)) echo ab;; x*) echo x;; *) echo other;; esac");
+
+        Assert.Equal("switch -Regex -CaseSensitive ($env:x) { '(?s)^(?:(?:a|b))\\z' { Invoke-BashEcho ab; break } "
+            + "'(?s)^(?:x.*)\\z' { Invoke-BashEcho x; break } default { Invoke-BashEcho other; break } }", result);
+    }
+
+    [Theory]
+    [InlineData("[[ $x == @(a|b) ]]", "[string]($env:x) -cmatch '(?s)^(?:(?:a|b))\\z'")]
+    [InlineData("[[ $x != !(*.log) ]]", "[string]($env:x) -cnotmatch '(?s)^(?:(?<psbx0>.*)")]
+    [InlineData("[[ $x == 'v'@(1|2) ]]", "-cmatch '(?s)^(?:v(?:1|2))\\z'")]
+    public void Transpile_DoubleBracketExtGlobRhs_EmitsAnchoredRegexMatch(string bash, string fragment)
+        => Assert.Contains(fragment, PsEmitter.Transpile(bash));
+
+    [Fact]
+    public void Transpile_DoubleBracketPlainGlobRhs_KeepsLike()
+        => Assert.Contains("-like 'a*'", PsEmitter.Transpile("[[ $x == a* ]]"));
+
+    [Fact]
     public void Transpile_CaseDefaultStar_EmitsDefault()
     {
         var result = PsEmitter.Transpile("case $x in a) echo a;; *) echo other;; esac");

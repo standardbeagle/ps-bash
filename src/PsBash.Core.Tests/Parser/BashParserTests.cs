@@ -2463,15 +2463,17 @@ public class BashParserTests
     // early stop (`after` was lost, exit 0). The parser must now reject the leftover
     // token with a located ParseException instead of returning a truncated script.
 
-    // Unsupported grammar (the `time`/`coproc` keywords, extglob `!(…)`) must fail
-    // LOUDLY. So must a `}` argument: bash prints "hi }", but the lexer splits `}x`
+    // Unsupported grammar (the `time`/`coproc` keywords) and a bash syntax error (`x (keep)`:
+    // "unexpected token `('") must fail LOUDLY. (Extglob `!(keep).txt` used to be the example;
+    // it is a valid pattern word in argument position now — Parse_ExtGlobBangArgument_ParsesWholeScript.)
+    // So must a `}` argument: bash prints "hi }", but the lexer splits `}x`
     // into two tokens and the emitter does not quote a bare `}`, so accepting it
     // would trade a loud error for wrong output. The three other original repros
     // are valid bash and are fixed at their root — see *_ParsesWholeScript below.
     [Theory]
     [InlineData("echo a; time { echo hi; }; echo after")]
     [InlineData("echo hi }; echo after")]
-    [InlineData("rm -f !(keep).txt; echo after")]
+    [InlineData("rm -f x (keep); echo after")]
     [InlineData("coproc { echo x; }; echo after")]
     public void Parse_LeftoverTokenAfterStatement_ThrowsInsteadOfDroppingTail(string input)
     {
@@ -2481,7 +2483,7 @@ public class BashParserTests
     [Theory]
     [InlineData("echo a; time { echo hi; }; echo after")]
     [InlineData("echo hi }; echo after")]
-    [InlineData("rm -f !(keep).txt; echo after")]
+    [InlineData("rm -f x (keep); echo after")]
     [InlineData("coproc { echo x; }; echo after")]
     public void ParseTopLevelWithPositions_LeftoverTokenAfterStatement_ThrowsInsteadOfDroppingTail(string input)
     {
@@ -2490,29 +2492,41 @@ public class BashParserTests
         Assert.Throws<ParseException>(() => BashParser.ParseTopLevelWithPositions(input));
     }
 
+    // `!(` in argument position is extglob negation (bash, `shopt -s extglob`), one word — the
+    // whole script parses, `echo after` included, in every body form.
+    [Theory]
+    [InlineData("rm -f !(keep).txt; echo after", 2)]
+    [InlineData("{ rm -f !(keep).txt; }; echo after", 2)]
+    [InlineData("case a in a) rm -f !(keep).txt ;; esac; echo after", 2)]
+    public void Parse_ExtGlobBangArgument_ParsesWholeScript(string input, int statements)
+    {
+        var parsed = BashParser.ParseTopLevelWithPositions(input);
+        Assert.Equal(statements, parsed.Count);
+    }
+
     [Fact]
     public void Parse_LeftoverTokenError_NamesTokenAndPosition()
     {
-        var ex = Assert.Throws<ParseException>(() => Parse("echo a\nrm -f !(keep).txt; echo after"));
+        var ex = Assert.Throws<ParseException>(() => Parse("echo a\nrm -f x (keep); echo after"));
 
         Assert.Contains("(", ex.Message);
         Assert.Equal(2, ex.Line);
     }
 
     // A leftover token inside a NESTED statement list (compound bodies) used to be
-    // re-read as the start of a new command with no separator: `!(keep).txt` became
-    // `rm -f !`, a subshell `(keep)`, and a command `.txt`. Every body loop must
+    // re-read as the start of a new command with no separator: `rm -f x (keep)` became
+    // `rm -f x` and a subshell `(keep)` (bash: a syntax error). Every body loop must
     // apply the same rule as the top level — after a statement only `;`/newline,
     // `&`, end of input, or that body's own closing token may follow.
     [Theory]
-    [InlineData("{ rm -f !(keep).txt; }")]
-    [InlineData("( rm -f !(keep).txt )")]
-    [InlineData("if true; then rm -f !(keep).txt; fi")]
-    [InlineData("if true; then :; else rm -f !(keep).txt; fi")]
-    [InlineData("while true; do rm -f !(keep).txt; done")]
-    [InlineData("for x in a; do rm -f !(keep).txt; done")]
-    [InlineData("case a in a) rm -f !(keep).txt ;; esac")]
-    [InlineData("f() { rm -f !(keep).txt; }")]
+    [InlineData("{ rm -f x (keep); }")]
+    [InlineData("( rm -f x (keep) )")]
+    [InlineData("if true; then rm -f x (keep); fi")]
+    [InlineData("if true; then :; else rm -f x (keep); fi")]
+    [InlineData("while true; do rm -f x (keep); done")]
+    [InlineData("for x in a; do rm -f x (keep); done")]
+    [InlineData("case a in a) rm -f x (keep) ;; esac")]
+    [InlineData("f() { rm -f x (keep); }")]
     [InlineData("if true; then time { echo hi; }; fi")]
     public void Parse_LeftoverTokenInNestedBody_Throws(string input)
     {

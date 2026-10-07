@@ -1,0 +1,22 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 332
+stdout-length: 27
+stderr-length: 0
+==== SCRIPT ====
+shopt -s extglob
+[[ 'a)' == @('a)'|z) ]] && echo q1; [[ 'x(y' == @(x\(y) ]] && echo q2; [[ 'a|b' == @('a|b') ]] && echo q3; [[ axc == @(a@(b|x)c) ]] && echo q4; [[ file.c == *.@(c|h) ]] && echo q5; [[ file.o == *.@(c|h) ]] || echo q6; [[ A == @(a) ]] || echo q7; [[ 7 == @([[:digit:]]) ]] && echo q8; [[ b == @([!a-c]) ]] || echo q9
+==== STDOUT ====
+q1
+q2
+q3
+q4
+q5
+q6
+q7
+q8
+q9
+
+==== STDERR ====
+

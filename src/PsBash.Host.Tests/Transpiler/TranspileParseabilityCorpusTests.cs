@@ -105,6 +105,13 @@ public class TranspileParseabilityCorpusTests
     [InlineData("v=$( (( n = 1 << 3 )); echo \"$n it's\" ); echo \"$v\"")]
     // fixed: a quoted/escaped paren inside an extglob closed it early (naive paren count).
     [InlineData("shopt -s extglob; case $w in @('a)'|b)) echo y ;; @(x\\(y)) echo z ;; esac")]
+    // extglob matching: case → switch -Regex, [[ == ]] → -cmatch, ${v%pat} / ${v//pat/r}; a `'` in
+    // a converted pattern must survive the single-quoted PS string (SqEsc).
+    [InlineData("shopt -s extglob; case $w in !(*.log|x)) echo a ;; +(\"it's\")) echo b ;; *) echo c ;; esac")]
+    [InlineData("[[ $w == !(*.log) ]] && [[ $w != @(a|b) ]] && echo ok")]
+    [InlineData("[[ $w == @(\"it's\"|x) ]] && echo q")]
+    [InlineData("v=a.tar.gz; echo ${v%.@(gz|bz2)} ${v##+(a)} ${v//@(a|z)/Y} ${v#!(a)}")]
+    [InlineData("!(false); if !(false); then echo neg; fi")]
     // compound bodies — fixed: switch/foreach/if statement can't head a pipe ("empty pipe element").
     [InlineData("echo $(case $x in a) echo A;; esac)")]
     [InlineData("echo $(for i in 1 2; do echo $i; done)")]

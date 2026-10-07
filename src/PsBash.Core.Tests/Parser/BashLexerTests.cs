@@ -137,6 +137,32 @@ public class BashLexerTests
         Assert.Equal(new[] { "echo", glob, "tail" }, words.Select(t => t.Value));
     }
 
+    // `!(` is extglob negation in argument / pattern position, but `!` + subshell at command
+    // position (oracle: `!(false); echo $?` prints 0).
+    [Theory]
+    [InlineData("[[ $x == !(*.log) ]]", "!(*.log)")]
+    [InlineData("echo !(a|b)", "!(a|b)")]
+    [InlineData("for f in !(x); do :; done", "!(x)")]
+    [InlineData("case $f in !(*.o)) :;; esac", "!(*.o))")]
+    [InlineData("case $f in\n  !(*.o)) :;; esac", "!(*.o))")]
+    [InlineData("case $f in a) :;; !(*.o)) :;; esac", "!(*.o))")]
+    [InlineData("case $f in a) :;& !(*.o)) :;; esac", "!(*.o))")]
+    public void Tokenize_BangParenInArgumentPosition_IsExtGlobWord(string input, string wordStart)
+    {
+        var tokens = Tokenize(input);
+        Assert.DoesNotContain(tokens, t => t.Kind == BashTokenKind.Bang);
+        Assert.Contains(tokens, t => t.Kind == BashTokenKind.Word && t.Value.StartsWith(wordStart[..^1]));
+    }
+
+    [Theory]
+    [InlineData("!(false)")]
+    [InlineData("x; !(false)")]
+    [InlineData("echo a\n!(false)")]
+    [InlineData("if !(false); then :; fi")]
+    [InlineData("true && !(false)")]
+    public void Tokenize_BangParenAtCommandPosition_StaysNegation(string input)
+        => Assert.Contains(Tokenize(input), t => t.Kind == BashTokenKind.Bang);
+
     [Fact]
     public void Tokenize_CommandSubContainingCase_CapturedAsSingleToken()
     {

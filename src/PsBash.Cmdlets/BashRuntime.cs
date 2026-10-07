@@ -793,23 +793,8 @@ public static class BashRuntime
                 int close = pattern.IndexOf(":]", i + 2, System.StringComparison.Ordinal);
                 if (close > 0)
                 {
-                    string? repl = pattern[(i + 2)..close] switch
-                    {
-                        "alnum" => "a-zA-Z0-9",
-                        "alpha" => "a-zA-Z",
-                        "blank" => @" \t",
-                        "cntrl" => @"\x00-\x1f\x7f",
-                        "digit" => "0-9",
-                        "graph" => @"\x21-\x7e",
-                        "lower" => "a-z",
-                        "print" => @"\x20-\x7e",
-                        "punct" => @"\p{P}\p{S}",
-                        "space" => @"\s",
-                        "upper" => "A-Z",
-                        "word" => @"\w",
-                        "xdigit" => "A-Fa-f0-9",
-                        _ => null,
-                    };
+                    // One table, shared with the transpiler's pattern converter.
+                    string? repl = PsBash.Core.Parser.BashPattern.PosixClass(pattern[(i + 2)..close]);
                     if (repl is not null)
                     {
                         sb.Append(repl);

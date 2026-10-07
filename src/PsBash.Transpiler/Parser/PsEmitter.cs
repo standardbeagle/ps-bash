@@ -976,6 +976,37 @@ public static class PsEmitter
         return sb.ToString();
     }
 
+    /// <summary>
+    /// The bash PATTERN text of a word whose value is static (literals, quotes, glob parts), for
+    /// <see cref="BashPattern"/>: unquoted literal text is backslash-escaped char by char, quoted
+    /// text likewise (both are literal in a pattern), glob/extglob parts keep their raw spelling.
+    /// False when the word holds an expansion — its pattern is only known at run time.
+    /// </summary>
+    private static bool TryGetStaticPatternText(CompoundWord word, out string raw)
+    {
+        var sb = new StringBuilder();
+        raw = "";
+        foreach (var part in word.Parts)
+        {
+            switch (part)
+            {
+                case WordPart.GlobPart g: sb.Append(g.Pattern); break;
+                case WordPart.Literal or WordPart.EscapedLiteral or WordPart.SingleQuoted
+                    or WordPart.AnsiCQuoted or WordPart.DoubleQuoted:
+                    if (!TryGetPureLiteralText(ImmutableArray.Create(part), out var lit)) return false;
+                    foreach (char c in lit)
+                    {
+                        if (!char.IsLetterOrDigit(c)) sb.Append('\\');
+                        sb.Append(c);
+                    }
+                    break;
+                default: return false;
+            }
+        }
+        raw = sb.ToString();
+        return true;
+    }
+
     private static void AppendLiteralWildcardChar(StringBuilder sb, char c)
     {
         // Backtick is the PowerShell -Wildcard escape; it survives verbatim inside the
@@ -986,6 +1017,10 @@ public static class PsEmitter
 
     private static string EmitCase(Command.Case caseCmd)
     {
+        // An extglob arm (`@(a|b)`, `!(*.log)`): PowerShell wildcards have no equivalent, so the
+        // whole switch matches by regex, every pattern through BashPattern (case-sensitive and
+        // anchored, as bash's case is). Without one the -Wildcard emission below is unchanged.
+        bool useRegex = caseCmd.Arms.Any(a => a.Patterns.Any(p => BashPattern.HasExtGlob(p)));
         bool useWildcard = false;
         foreach (var arm in caseCmd.Arms)
         {
@@ -1001,7 +1036,9 @@ public static class PsEmitter
         }
 
         var sb = new StringBuilder("switch");
-        if (useWildcard)
+        if (useRegex)
+            sb.Append(" -Regex -CaseSensitive");
+        else if (useWildcard)
             sb.Append(" -Wildcard");
         sb.Append(" (");
         sb.Append(EmitCaseExpr(caseCmd.Expr));
@@ -1025,7 +1062,9 @@ public static class PsEmitter
                 {
                     if (p > 0) sb.Append(' ');
                     sb.Append('\'');
-                    sb.Append(SqEsc(NormalizeCasePattern(arm.Patterns[p])));
+                    sb.Append(SqEsc(useRegex
+                        ? BashPattern.ToAnchoredRegex(arm.Patterns[p])
+                        : NormalizeCasePattern(arm.Patterns[p])));
                     sb.Append("' { ");
                     sb.Append(bodyText);
                     sb.Append(" }");
@@ -1982,6 +2021,15 @@ public static class PsEmitter
                 return "$( $__psbash_m = " + matchExpr +
                        "; if ($__psbash_m) { $global:BASH_REMATCH = $Matches } " +
                        "else { $global:BASH_REMATCH = $null }; $__psbash_m )";
+            }
+
+            // An extglob RHS (`[[ $f == !(*.log) ]]`, `@(a|b)`): bash pattern → anchored,
+            // case-sensitive regex. [string] keeps an unset LHS an empty string (`!(x)` matches it).
+            if (op is "==" or "=" or "!=" && TryGetStaticPatternText(words[2], out var extPat)
+                && BashPattern.HasExtGlob(extPat))
+            {
+                string matchOp = op == "!=" ? "-cnotmatch" : "-cmatch";
+                return $"[string]({lhs}) {matchOp} '{SqEsc(BashPattern.ToAnchoredRegex(extPat))}'";
             }
 
             if (op is "==" or "=")
@@ -5380,15 +5428,21 @@ public static class PsEmitter
         {
             var parts = suffix[1..].Split('/', 2);
             string find = parts[0], replace = parts.Length > 1 ? parts[1] : "";
-            return $"{open}([regex][regex]::Escape('{SqEsc(find)}')).Replace({varRef}, '{SqEsc(replace)}', 1))";
+            return $"{open}([regex]{ReplaceFindRegex(find)}).Replace({varRef}, '{SqEsc(replace)}', 1))";
         }
         // Replace all: ${VAR//find/replace} — escape find literally; 2-arg overload = all.
         if (suffix.StartsWith("//"))
         {
             var parts = suffix[2..].Split('/', 2);
             string find = parts[0], replace = parts.Length > 1 ? parts[1] : "";
-            return $"{open}([regex][regex]::Escape('{SqEsc(find)}')).Replace({varRef}, '{SqEsc(replace)}'))";
+            return $"{open}([regex]{ReplaceFindRegex(find)}).Replace({varRef}, '{SqEsc(replace)}'))";
         }
+
+        // The `find` of ${VAR/find/rep}: an extglob pattern is matched as one (`${v//@(a|z)/Y}`);
+        // anything else stays the historical LITERAL match (plain-glob find is not modelled).
+        static string ReplaceFindRegex(string find) => BashPattern.HasExtGlob(find)
+            ? $"'(?s){SqEsc(BashPattern.ToRegex(find))}'"
+            : $"[regex]::Escape('{SqEsc(find)}')";
 
         // Slice: ${VAR:offset:length} or ${VAR:offset}. The body is trimmed so a
         // negative offset written with the disambiguating space — ${VAR: -2}
@@ -7534,6 +7588,11 @@ public static class PsEmitter
     /// </param>
     private static string GlobToRegex(string glob, bool lazy)
     {
+        // Extglob forms (`${v%.@(gz|bz2)}`, `${v##+(a)}`) — the shared converter. Plain globs keep
+        // the historical translation below.
+        if (BashPattern.HasExtGlob(glob))
+            return BashPattern.ToRegex(glob, lazy);
+
         var sb = new StringBuilder(glob.Length * 2);
         int i = 0;
         while (i < glob.Length)

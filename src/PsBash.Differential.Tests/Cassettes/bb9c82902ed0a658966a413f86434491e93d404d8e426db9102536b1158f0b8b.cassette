@@ -1,0 +1,20 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 193
+stdout-length: 73
+stderr-length: 0
+==== SCRIPT ====
+shopt -s extglob
+for w in b c foo.log foo.txt xyz 'x(y' A; do case $w in @(a|b)) echo "$w arm1" ;; @(x\(y)) echo "$w esc" ;; !(*.log|xyz|A)) echo "$w arm2" ;; *) echo "$w default" ;; esac; done
+==== STDOUT ====
+b arm1
+c arm2
+foo.log default
+foo.txt arm2
+xyz default
+x(y esc
+A default
+
+==== STDERR ====
+
