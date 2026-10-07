@@ -48,4 +48,34 @@ public class GrepDifferentialTests
     [SkippableFact]
     public Task Grep_PipelineContextC_EmitsAround()
         => Eq("printf 'a\\nb\\nc\\nd\\ne\\n' | grep -C1 c");
+
+    // BRE escaped metachars are GNU operators: `\|` alternation, `\(…\)` group + backref,
+    // `\{n\}` interval, `\+` / `\?`. They were left as .NET literals, so `grep 'a\|b'`
+    // matched nothing (exit 1). Bare `| ( { + ?` stay literal.
+    private const string BreInput = "printf 'foo\\nbar\\na|b\\n(foo)\\nfo{2}\\nfoofoo\\nfofo\\nx?\\n'";
+
+    [SkippableFact]
+    public Task Grep_Bre_EscapedPipe_IsAlternation()
+        => Eq(BreInput + " | grep 'foo\\|bar'");
+
+    [SkippableFact]
+    public Task Grep_Bre_EscapedGroup_Backref()
+        => Eq(BreInput + " | grep '\\(fo\\)\\1'");
+
+    [SkippableFact]
+    public Task Grep_Bre_EscapedInterval_PlusQuestion()
+        => Eq(BreInput + " | grep -e 'o\\{2\\}' -e 'r\\+$' -e '^x\\?f'");
+
+    [SkippableFact]
+    public Task Grep_Bre_BareMetachars_AreLiteral()
+        => Eq(BreInput + " | grep -e 'a|b' -e '(foo)' -e 'fo{2}' -e 'x?'");
+
+    [SkippableFact]
+    public Task Grep_Bre_GroupedAlternation_Anchored()
+        => Eq(BreInput + " | grep '^\\(a\\|b\\)'");
+
+    // `[[:punct:]]` rewrites to `\p{P}\p{S}`; the BRE pass escaped its braces → "Malformed \p{X}".
+    [SkippableFact]
+    public Task Grep_Bre_PunctClass_Compiles()
+        => Eq("printf 'a!b\\nab\\n' | grep '[[:punct:]]'");
 }

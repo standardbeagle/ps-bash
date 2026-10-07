@@ -1,0 +1,16 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 102
+stdout-length: 19
+stderr-length: 0
+==== SCRIPT ====
+printf 'foo\nbar\na|b\n(foo)\nfo{2}\nfoofoo\nfofo\nx?\n' | grep -e 'a|b' -e '(foo)' -e 'fo{2}' -e 'x?'
+==== STDOUT ====
+a|b
+(foo)
+fo{2}
+x?
+
+==== STDERR ====
+

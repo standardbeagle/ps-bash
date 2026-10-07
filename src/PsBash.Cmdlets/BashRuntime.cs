@@ -827,6 +827,64 @@ public static class BashRuntime
     }
 
     /// <summary>
+    /// Translate a POSIX Basic Regular Expression (grep's and sed's default) to a .NET regex.
+    /// In BRE, <c>( ) { } | + ?</c> are LITERAL unless backslash-escaped, and the
+    /// backslash-escaped forms <c>\( \) \{ \} \| \+ \?</c> are the metacharacters (GNU) —
+    /// the exact inverse of .NET. A left-to-right walk tracks the escape state, so
+    /// <c>\\(</c> (escaped backslash, then a literal paren) is not mistaken for a group.
+    /// Run it AFTER <see cref="TranslatePosixClasses"/>: a <c>\p{…}</c> / <c>\P{…}</c> escape
+    /// (only that rewrite produces one) is copied through whole, braces included.
+    /// </summary>
+    public static string TranslateBre(string bre)
+    {
+        var sb = new System.Text.StringBuilder(bre.Length + 8);
+        for (int i = 0; i < bre.Length; i++)
+        {
+            char c = bre[i];
+            if (c == '\\' && i + 1 < bre.Length)
+            {
+                char n = bre[i + 1];
+                if (n is 'p' or 'P' && i + 2 < bre.Length && bre[i + 2] == '{')
+                {
+                    int close = bre.IndexOf('}', i + 3);
+                    if (close > 0)
+                    {
+                        sb.Append(bre, i, close - i + 1);
+                        i = close;
+                        continue;
+                    }
+                }
+                switch (n)
+                {
+                    // BRE escaped metachar → .NET metachar (drop the backslash).
+                    case '(': case ')': case '{': case '}': case '|': case '+': case '?':
+                        sb.Append(n);
+                        break;
+                    // Everything else (\\, \., \1 backref, \n, \w, \< …) passes through
+                    // verbatim — including \\, which consumes both backslashes here so a
+                    // following bare metachar is correctly treated as a literal.
+                    default:
+                        sb.Append('\\').Append(n);
+                        break;
+                }
+                i++; // consumed the escaped char
+                continue;
+            }
+            switch (c)
+            {
+                // BRE bare metachar → literal (escape for .NET).
+                case '(': case ')': case '{': case '}': case '|': case '+': case '?':
+                    sb.Append('\\').Append(c);
+                    break;
+                default:
+                    sb.Append(c);
+                    break;
+            }
+        }
+        return sb.ToString();
+    }
+
+    /// <summary>
     /// Result of a <see cref="RunChildProcess(string, IReadOnlyList{string}?, System.TimeSpan?)"/>
     /// call: the child's captured stdout/stderr, its exit code, whether the wait
     /// budget elapsed, and whether either captured stream was truncated at the

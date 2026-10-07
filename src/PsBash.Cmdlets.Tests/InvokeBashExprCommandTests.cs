@@ -176,10 +176,8 @@ public class InvokeBashExprCommandTests : IClassFixture<SharedPwshFixture>
     [Fact]
     public void Expr_Match_AnchoredAtStart_NoCaptureGroupReturnsLength()
     {
-        // 'abc123' matches '^[a-z]+' -> 3-char match -> "3".
-        // .NET regex engine; the psm1 oracle only translates BRE \(...\) -> (...).
-        // We pass a regex that's valid in .NET directly.
-        Assert.Equal("3", RunBashText("Invoke-BashExpr match abc123 '[a-z]+'"));
+        // BRE: `\+` is one-or-more (GNU) -> 3-char match -> "3".
+        Assert.Equal("3", RunBashText(@"Invoke-BashExpr match abc123 '[a-z]\+'"));
     }
 
     [Fact]

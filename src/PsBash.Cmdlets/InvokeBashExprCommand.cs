@@ -15,7 +15,7 @@ namespace PsBash.Cmdlets;
 /// <item><c>length STR</c> — string length</item>
 /// <item><c>substr STR POS LEN</c> — 1-based substring</item>
 /// <item><c>index STR CHARS</c> — first occurrence (1-based) of any char in CHARS</item>
-/// <item><c>match STR REGEX</c> — POSIX BRE anchored at start; emits group 1 or match length</item>
+/// <item><c>match STR REGEX</c> / <c>STR : REGEX</c> — POSIX BRE anchored at start; emits group 1 or match length</item>
 /// <item>Infix <c>OP1 OP OP2</c> — when both sides are numeric (regex <c>^-?\d+$</c>),
 /// evaluate <c>+ - * / % &lt; &lt;= = != &gt;= &gt;</c> as 64-bit integer math; otherwise
 /// string compare (case-sensitive for <c>=</c> / <c>!=</c>, case-insensitive
@@ -118,37 +118,13 @@ public sealed class InvokeBashExprCommand : PSCmdlet
         }
         else if (string.Equals(keyword, "match", StringComparison.Ordinal) && args.Length >= 3)
         {
-            var str = args[1];
-            var pattern = args[2];
-            // POSIX BRE \(...\) -> .NET (...) per the oracle's two -replace passes.
-            var netPattern = pattern.Replace("\\(", "(").Replace("\\)", ")");
-            if (!netPattern.StartsWith('^')) netPattern = "^" + netPattern;
-            Match m;
-            try
-            {
-                m = Regex.Match(str, netPattern);
-            }
-            catch (ArgumentException)
-            {
-                WriteBashErrorWithExitCode("expr: invalid regular expression", 2);
-                return;
-            }
-            if (m.Success)
-            {
-                // Oracle uses PowerShell $Matches.Count > 1 (i.e. at least one capture group).
-                if (m.Groups.Count > 1)
-                {
-                    result = m.Groups[1].Value;
-                }
-                else
-                {
-                    result = m.Value.Length.ToString(System.Globalization.CultureInfo.InvariantCulture);
-                }
-            }
-            else
-            {
-                result = "0";
-            }
+            result = Match(args[1], args[2]);
+            if (result is null) return;
+        }
+        else if (args.Length >= 3 && args[1] == ":")
+        {
+            result = Match(args[0], args[2]);
+            if (result is null) return;
         }
         else if (args.Length >= 3)
         {
@@ -245,6 +221,32 @@ public sealed class InvokeBashExprCommand : PSCmdlet
         obj.Properties.Add(new PSNoteProperty("Value", value));
         obj.Properties.Add(new PSNoteProperty("BashText", result));
         WriteObject(obj);
+
+        // GNU: exit 1 when the result is null (empty) or zero — `if expr "$x" : 'y' >/dev/null`.
+        if (result.Length == 0 || (numericResult && value switch { long l => l == 0, BigInteger b => b.IsZero, _ => false }))
+            FileSystemHelpers.SetLastExitCode(this, 1);
+    }
+
+    /// <summary>
+    /// <c>STR : REGEX</c> / <c>match STR REGEX</c>: REGEX is a POSIX BRE anchored at the start.
+    /// With a <c>\(…\)</c> group the result is group 1 (empty on no match), else the match
+    /// length (<c>0</c> on no match). Null after reporting an invalid regex.
+    /// </summary>
+    private string? Match(string str, string pattern)
+    {
+        var netPattern = BashRuntime.TranslateBre(BashRuntime.TranslatePosixClasses(pattern));
+        if (!netPattern.StartsWith('^')) netPattern = "^" + netPattern;
+        Regex rx;
+        try { rx = new Regex(netPattern); }
+        catch (ArgumentException)
+        {
+            WriteBashErrorWithExitCode("expr: invalid regular expression", 2);
+            return null;
+        }
+        var m = rx.Match(str);
+        bool hasGroup = rx.GetGroupNumbers().Length > 1;
+        if (hasGroup) return m.Success ? m.Groups[1].Value : "";
+        return (m.Success ? m.Value.Length : 0).ToString(System.Globalization.CultureInfo.InvariantCulture);
     }
 
     /// <summary>

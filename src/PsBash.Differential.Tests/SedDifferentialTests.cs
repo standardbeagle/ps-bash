@@ -63,4 +63,9 @@ public class SedDifferentialTests
     [SkippableFact]
     public Task Sed_RangeAddress_EndRegexSemicolonAnchor()
         => Eq("printf 'a;b\\nc;d\\ne\\n' | sed '1,/;$/d'");
+
+    // `[[:punct:]]` rewrites to `\p{P}\p{S}`; the BRE pass escaped its braces → "Malformed \p{X}".
+    [SkippableFact]
+    public Task Sed_Bre_PunctClass_Compiles()
+        => Eq("printf 'a!b\\n' | sed 's/[[:punct:]]/_/'");
 }

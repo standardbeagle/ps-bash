@@ -888,7 +888,7 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
     /// <summary>
     /// The grep regex-assembly ladder, shared by the cmdlet and the fused-pipeline
     /// streaming stage so the two can never drift: per pattern, fixed → escape,
-    /// basic (BRE) → <see cref="EscapeBreMetas"/>, extended → verbatim, perl → <see cref="GrepPcre"/>; then the
+    /// basic (BRE) → <see cref="BashRuntime.TranslateBre"/>, extended → verbatim, perl → <see cref="GrepPcre"/>; then the
     /// optional word (<c>\b…\b</c>) and whole-line (<c>^(?:…)$</c>) wraps;
     /// <c>-i</c> → <see cref="RegexOptions.IgnoreCase"/>; <c>-z</c> → <see cref="RegexOptions.Singleline"/> for
     /// BRE/ERE (a record spans lines and <c>.</c> matches the newline; PCRE keeps its own dot). Returns false with
@@ -924,7 +924,7 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
                 // metacharacters (\s, \w, \p{P}) that must NOT then be escaped as literals.
                 // -F is a literal search, so it keeps `[[:digit:]]` verbatim.
                 rp = fixedString ? Regex.Escape(pat)
-                   : !extendedRegex ? EscapeBreMetas(BashRuntime.TranslatePosixClasses(pat))
+                   : !extendedRegex ? BashRuntime.TranslateBre(BashRuntime.TranslatePosixClasses(pat))
                    : BashRuntime.TranslatePosixClasses(pat);
                 if (wholeWord) rp = "\\b" + rp + "\\b";
                 if (lineRegexp) rp = "^(?:" + rp + ")$";
@@ -933,21 +933,6 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
             catch (ArgumentException ex) { invalidMessage = ex.Message; return false; }
         }
         return true;
-    }
-
-    /// <summary>
-    /// BRE → .NET escape: escape ( ) { } | + ? when not already preceded by a
-    /// backslash. Mirrors the oracle's <c>-replace</c> chain with
-    /// <c>(?&lt;!\\)\(</c> etc.
-    /// </summary>
-    internal static string EscapeBreMetas(string pat)
-    {
-        var escapeChars = new[] { '(', ')', '{', '}', '|', '+', '?' };
-        foreach (var ch in escapeChars)
-        {
-            pat = Regex.Replace(pat, $@"(?<!\\)\{ch}", "\\" + ch);
-        }
-        return pat;
     }
 
     /// <summary>

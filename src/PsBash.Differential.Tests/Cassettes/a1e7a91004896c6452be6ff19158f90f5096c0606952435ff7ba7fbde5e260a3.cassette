@@ -1,0 +1,20 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 104
+stdout-length: 27
+stderr-length: 0
+==== SCRIPT ====
+expr 1 - 1; echo rc=$?; expr abc : z; echo rc=$?; expr abc : '\(z\)'; echo rc=$?; expr 2 + 3; echo rc=$?
+==== STDOUT ====
+0
+rc=1
+0
+rc=1
+
+rc=1
+5
+rc=0
+
+==== STDERR ====
+
