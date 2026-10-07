@@ -213,7 +213,7 @@ public sealed class InvokeBashMvCommand : PSCmdlet
                 FileSystemHelpers.WriteBashError(this, "mv: missing file operand" + TryHelp);
                 return;
             }
-            var tabs = SessionState.Path.GetUnresolvedProviderPathFromPSPath(tdir);
+            var tabs = FileSystemHelpers.ProviderPath(this, tdir);
             if (!Directory.Exists(tabs))
             {
                 FileSystemHelpers.WriteBashError(this, File.Exists(tabs)
@@ -254,7 +254,7 @@ public sealed class InvokeBashMvCommand : PSCmdlet
         }
 
         bool hadError = false;
-        var destAbs = SessionState.Path.GetUnresolvedProviderPathFromPSPath(destRaw);
+        var destAbs = FileSystemHelpers.ProviderPath(this, destRaw);
         bool destIsExistingDir = forceDirectory || (!plan.NoTargetDirectory && Directory.Exists(destAbs));
 
         // Validate the operand shape BEFORE any mutation (several sources need a directory).

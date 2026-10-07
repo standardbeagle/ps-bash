@@ -301,7 +301,7 @@ public sealed class InvokeBashBase64Command : PSCmdlet
         if (operands.Count > 0 && operands[0] != "-")
         {
             // Oracle uses operands[0] directly — later operands are ignored.
-            string filePath = SessionState.Path.GetUnresolvedProviderPathFromPSPath(operands[0]);
+            string filePath = FileSystemHelpers.ProviderPath(this, operands[0]);
             if (decode)
             {
                 string output;

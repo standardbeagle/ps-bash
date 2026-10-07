@@ -332,11 +332,11 @@ public sealed class InvokeBashJoinCommand : PSCmdlet
                                   : stdin.SelectMany(o => BashRuntime.RecordLines(o).Select(r => r.Text));
                 else
                 {
-                    string path = c.SessionState.Path.GetUnresolvedProviderPathFromPSPath(op);
+                    string path = FileSystemHelpers.ProviderPath(c, op);
                     lines = _zero ? NulRecords.ReadFile(path) : BashFileSystem.ReadLines(path);
                 }
                 _src[i] = new Src { Name = op, Which = i + 1, E = lines.GetEnumerator() };
-                _paths[i] = op == "-" ? "-" : c.SessionState.Path.GetUnresolvedProviderPathFromPSPath(op);
+                _paths[i] = op == "-" ? "-" : FileSystemHelpers.ProviderPath(c, op);
             }
         }
 

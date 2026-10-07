@@ -202,7 +202,7 @@ public sealed class InvokeBashInstallCommand : PSCmdlet
         bool anyOperandIsFile = false;
         foreach (var op in operands)
         {
-            var oabs = SessionState.Path.GetUnresolvedProviderPathFromPSPath(op);
+            var oabs = FileSystemHelpers.ProviderPath(this, op);
             if (File.Exists(oabs)) { anyOperandIsFile = true; break; }
         }
 
@@ -211,7 +211,7 @@ public sealed class InvokeBashInstallCommand : PSCmdlet
             // Treat as -d create-directories mode (oracle's first branch).
             foreach (var dir in operands)
             {
-                var abs = SessionState.Path.GetUnresolvedProviderPathFromPSPath(dir);
+                var abs = FileSystemHelpers.ProviderPath(this, dir);
                 if (!Directory.Exists(abs) && !File.Exists(abs))
                 {
                     try
@@ -267,7 +267,7 @@ public sealed class InvokeBashInstallCommand : PSCmdlet
             }
         }
 
-        var destAbs = SessionState.Path.GetUnresolvedProviderPathFromPSPath(destRaw);
+        var destAbs = FileSystemHelpers.ProviderPath(this, destRaw);
 
         // -D / dBit on the copy path → create leading components of dest.
         if (dBit)

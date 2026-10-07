@@ -571,7 +571,7 @@ public sealed class InvokeBashSortCommand : PSCmdlet
             foreach (int idx in order) sb.Append(texts[idx]).Append(NulRecords.Terminator(plan.Plan.Zero));
             try
             {
-                var outPath = SessionState.Path.GetUnresolvedProviderPathFromPSPath(plan.Output);
+                var outPath = FileSystemHelpers.ProviderPath(this, plan.Output);
                 File.WriteAllBytes(outPath, RawBytes.GetBytes(sb.ToString()));
             }
             catch (Exception ex)
@@ -626,7 +626,7 @@ public sealed class InvokeBashSortCommand : PSCmdlet
             if (source == "-") records = NulRecords.FromPipeline(_pipeline);
             else
             {
-                string path = SessionState.Path.GetUnresolvedProviderPathFromPSPath(source);
+                string path = FileSystemHelpers.ProviderPath(this, source);
                 records = NulRecords.ReadFile(path).ToList();   // open + read now: a failure is "open failed"
             }
         }
@@ -671,7 +671,7 @@ public sealed class InvokeBashSortCommand : PSCmdlet
         seed = new byte[16];
         try
         {
-            string path = SessionState.Path.GetUnresolvedProviderPathFromPSPath(source);
+            string path = FileSystemHelpers.ProviderPath(this, source);
             using var fs = BashFileSystem.OpenRead(path);
             int got = 0, r;
             while (got < 16 && (r = fs.Read(seed, got, 16 - got)) > 0) got += r;

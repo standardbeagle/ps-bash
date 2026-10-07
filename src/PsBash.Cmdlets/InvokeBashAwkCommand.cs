@@ -151,7 +151,7 @@ public sealed class InvokeBashAwkCommand : PSCmdlet
             foreach (var pf in programFiles)
             {
                 string resolved;
-                try { resolved = SessionState.Path.GetUnresolvedProviderPathFromPSPath(pf); }
+                try { resolved = FileSystemHelpers.ProviderPath(this, pf); }
                 catch (Exception ex)
                 {
                     if (FileSystemHelpers.IsPipelineStop(ex)) throw;
@@ -344,7 +344,7 @@ public sealed class InvokeBashAwkCommand : PSCmdlet
     private IEnumerator<string>? OpenOperand(string file)
     {
         string resolved;
-        try { resolved = SessionState.Path.GetUnresolvedProviderPathFromPSPath(file); }
+        try { resolved = FileSystemHelpers.ProviderPath(this, file); }
         catch (Exception ex)
         {
             if (FileSystemHelpers.IsPipelineStop(ex)) throw;
@@ -364,7 +364,7 @@ public sealed class InvokeBashAwkCommand : PSCmdlet
     /// <summary>A getline file name as a path: relative names resolve against the PowerShell location.</summary>
     private string ResolveGetlineFile(string name)
     {
-        try { return SessionState.Path.GetUnresolvedProviderPathFromPSPath(name); }
+        try { return FileSystemHelpers.ProviderPath(this, name); }
         catch (Exception ex)
         {
             if (FileSystemHelpers.IsPipelineStop(ex)) throw;

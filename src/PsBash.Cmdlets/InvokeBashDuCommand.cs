@@ -259,8 +259,7 @@ public sealed class InvokeBashDuCommand : PSCmdlet
             FileSystemInfo? rootItem;
             try
             {
-                string resolved = SessionState.Path
-                    .GetUnresolvedProviderPathFromPSPath(target);
+                string resolved = FileSystemHelpers.ProviderPath(this, target);
                 if (Directory.Exists(resolved))
                 {
                     rootItem = new DirectoryInfo(resolved);

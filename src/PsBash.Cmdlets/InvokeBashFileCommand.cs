@@ -253,7 +253,7 @@ public sealed class InvokeBashFileCommand : PSCmdlet
         if (name == "-") return new Target(null, name, "/dev/stdin", false);
         string shown = EscapeName(name);
         if (name.Length == 0) return new Target("", name, shown, true);
-        return new Target(SessionState.Path.GetUnresolvedProviderPathFromPSPath(name), name, shown, false);
+        return new Target(FileSystemHelpers.ProviderPath(this, name), name, shown, false);
     }
 
     /// <summary>file prints control characters of a name as octal (<c>a.txt\015</c>).</summary>
@@ -290,7 +290,7 @@ public sealed class InvokeBashFileCommand : PSCmdlet
                 if (all.EndsWith('\n')) names.RemoveAt(names.Count - 1);
                 return true;
             }
-            string path = SessionState.Path.GetUnresolvedProviderPathFromPSPath(nameFile);
+            string path = FileSystemHelpers.ProviderPath(this, nameFile);
             if (!File.Exists(path)) return false;
             foreach (var line in BashFileSystem.ReadTextLines(path, exact: true)) names.Add(line.Text);
             return true;

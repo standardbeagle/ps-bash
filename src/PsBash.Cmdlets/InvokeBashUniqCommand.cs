@@ -371,7 +371,7 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
         if (_outWriter is not null || _outFailed || _outputFile is null) return _outWriter;
         try
         {
-            var path = SessionState.Path.GetUnresolvedProviderPathFromPSPath(_outputFile);
+            var path = FileSystemHelpers.ProviderPath(this, _outputFile);
             _outWriter = new StreamWriter(path, false, RawBytes.Encoding);
         }
         catch (Exception ex)

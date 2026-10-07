@@ -219,7 +219,7 @@ public sealed class InvokeBashFusedPipelineCommand : PSCmdlet
     {
         try
         {
-            return SessionState.Path.GetUnresolvedProviderPathFromPSPath(operand);
+            return FileSystemHelpers.ProviderPath(this, operand);
         }
         catch
         {

@@ -171,7 +171,7 @@ public sealed class InvokeBashTestCommand : PSCmdlet
 
     private string Resolve(string raw)
     {
-        try { return SessionState.Path.GetUnresolvedProviderPathFromPSPath(FileSystemHelpers.NormalizeOperandPath(raw)); }
+        try { return FileSystemHelpers.ProviderPath(this, FileSystemHelpers.NormalizeOperandPath(raw)); }
         catch { return raw; }
     }
 

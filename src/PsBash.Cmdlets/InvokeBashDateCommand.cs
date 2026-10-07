@@ -137,7 +137,7 @@ public sealed class InvokeBashDateCommand : PSCmdlet
         if (refFile != null)
         {
             string resolved =
-                SessionState.Path.GetUnresolvedProviderPathFromPSPath(refFile);
+                FileSystemHelpers.ProviderPath(this, refFile);
             if (!System.IO.File.Exists(resolved)
                 && !System.IO.Directory.Exists(resolved))
             {

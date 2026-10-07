@@ -153,7 +153,7 @@ public sealed class InvokeBashDiffCommand : PSCmdlet
 
     private enum Kind { Missing, File, Directory, Stdin }
 
-    private string FullPath(string name) => SessionState.Path.GetUnresolvedProviderPathFromPSPath(name);
+    private string FullPath(string name) => FileSystemHelpers.ProviderPath(this, name);
 
     private Kind KindOf(string name)
     {

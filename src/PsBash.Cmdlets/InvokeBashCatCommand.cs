@@ -439,7 +439,7 @@ public sealed class InvokeBashCatCommand : PSCmdlet
     private void EmitReadError(string path, string command, Exception ex)
     {
         FileSystemHelpers.WriteBashError(this,
-            $"{command}: {path.Replace('\\', '/')}: {FileSystemHelpers.ReadErrorMessage(ex)}");
+            $"{command}: {path.Replace('\\', '/')}: {FileSystemHelpers.ReadErrorMessage(ex, path)}");
     }
 
     /// <summary>
@@ -484,7 +484,7 @@ public sealed class InvokeBashCatCommand : PSCmdlet
             }
             else
             {
-                yield return SessionState.Path.GetUnresolvedProviderPathFromPSPath(p);
+                yield return FileSystemHelpers.ProviderPath(this, p);
             }
         }
     }

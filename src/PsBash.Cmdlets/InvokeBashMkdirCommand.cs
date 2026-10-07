@@ -130,7 +130,7 @@ public sealed class InvokeBashMkdirCommand : PSCmdlet
             // The psm1 oracle used Test-Path -LiteralPath, which on Windows
             // matches both files and directories. System.IO.File.Exists OR
             // Directory.Exists gives the same answer.
-            var absolute = SessionState.Path.GetUnresolvedProviderPathFromPSPath(dir);
+            var absolute = FileSystemHelpers.ProviderPath(this, dir);
             bool exists = File.Exists(absolute) || Directory.Exists(absolute);
 
             if (exists)

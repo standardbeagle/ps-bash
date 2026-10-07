@@ -261,7 +261,7 @@ public sealed class InvokeBashLnCommand : PSCmdlet
             // created INSIDE it as basename(TARGET) — the directory is never removed. (The old
             // code ran Directory.Delete(recursive:true) here, silently destroying a populated
             // tree on `ln -sf x existing_dir`.) A symlink-to-directory LINK_NAME stays a plain name.
-            var abs = SessionState.Path.GetUnresolvedProviderPathFromPSPath(operands[1]);
+            var abs = FileSystemHelpers.ProviderPath(this, operands[1]);
             var leaf = LeafOf(operands[0]);
             pairs.Add(Directory.Exists(abs) && !IsReparsePoint(abs) && leaf.Length > 0
                 ? (operands[0], ConcatName(operands[1], leaf))
@@ -303,7 +303,7 @@ public sealed class InvokeBashLnCommand : PSCmdlet
     /// </summary>
     private bool RequireDirectory(string dir, bool viaTargetOperand)
     {
-        var abs = SessionState.Path.GetUnresolvedProviderPathFromPSPath(dir);
+        var abs = FileSystemHelpers.ProviderPath(this, dir);
         if (Directory.Exists(abs)) return true;
         FileSystemHelpers.WriteBashError(this, File.Exists(abs)
             ? $"ln: target '{dir}': Not a directory"
@@ -315,8 +315,8 @@ public sealed class InvokeBashLnCommand : PSCmdlet
     /// <summary>Create one link; reports its own error and returns false on failure.</summary>
     private bool CreateOne(string target, string linkName, bool symbolic, bool verbose, LnPlan plan, StdinLineSource stdin)
     {
-        var linkAbsolute = SessionState.Path.GetUnresolvedProviderPathFromPSPath(linkName);
-        var targetPath = SessionState.Path.GetUnresolvedProviderPathFromPSPath(target);
+        var linkAbsolute = FileSystemHelpers.ProviderPath(this, linkName);
+        var targetPath = FileSystemHelpers.ProviderPath(this, target);
 
         if (!symbolic)
         {

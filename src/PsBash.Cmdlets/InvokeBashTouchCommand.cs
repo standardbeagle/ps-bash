@@ -179,7 +179,7 @@ public sealed class InvokeBashTouchCommand : PSCmdlet
         DateTime atime = mtime;
         if (refFile is not null)
         {
-            var refAbs = SessionState.Path.GetUnresolvedProviderPathFromPSPath(refFile);
+            var refAbs = FileSystemHelpers.ProviderPath(this, refFile);
             if (!File.Exists(refAbs) && !Directory.Exists(refAbs))
             {
                 FileSystemHelpers.WriteBashError(this,
@@ -211,7 +211,7 @@ public sealed class InvokeBashTouchCommand : PSCmdlet
 
         foreach (var file in operands)
         {
-            var absolute = SessionState.Path.GetUnresolvedProviderPathFromPSPath(file);
+            var absolute = FileSystemHelpers.ProviderPath(this, file);
             bool isLink = FileTimes.IsLink(absolute);
             // A dangling link is a real entry for -h (it stamps the link), but not otherwise.
             bool exists = File.Exists(absolute) || Directory.Exists(absolute) || (noDereference && isLink);

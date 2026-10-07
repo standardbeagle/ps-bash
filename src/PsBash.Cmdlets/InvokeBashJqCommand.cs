@@ -92,7 +92,7 @@ public sealed class InvokeBashJqCommand : PSCmdlet
 
     private string ReadSmallFile(string name)
     {
-        var path = SessionState.Path.GetUnresolvedProviderPathFromPSPath(name);
+        var path = FileSystemHelpers.ProviderPath(this, name);
         if (!File.Exists(path)) throw new FileNotFoundException(name);
         return BashFileSystem.ReadAllTextRaw(path);
     }
@@ -282,7 +282,7 @@ public sealed class InvokeBashJqCommand : PSCmdlet
                 continue;
             }
             string path;
-            try { path = SessionState.Path.GetUnresolvedProviderPathFromPSPath(file); }
+            try { path = FileSystemHelpers.ProviderPath(this, file); }
             catch (Exception ex) when (!FileSystemHelpers.IsPipelineStop(ex))
             {
                 Say($"jq: error: Could not open {file}: {ex.Message}");

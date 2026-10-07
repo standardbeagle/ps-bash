@@ -103,7 +103,7 @@ public sealed class InvokeBashRmdirCommand : PSCmdlet
 
         foreach (var dir in operands)
         {
-            var absolute = SessionState.Path.GetUnresolvedProviderPathFromPSPath(dir);
+            var absolute = FileSystemHelpers.ProviderPath(this, dir);
 
             if (!Directory.Exists(absolute))
             {

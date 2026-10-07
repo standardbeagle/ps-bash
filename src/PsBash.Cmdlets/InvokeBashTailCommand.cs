@@ -924,7 +924,7 @@ public sealed class InvokeBashTailCommand : PSCmdlet
             }
             else
             {
-                var resolvedLiteral = SessionState.Path.GetUnresolvedProviderPathFromPSPath(p);
+                var resolvedLiteral = FileSystemHelpers.ProviderPath(this, p);
                 OperandDisplay.Remember(this, resolvedLiteral, rawP);
                 yield return resolvedLiteral;
             }

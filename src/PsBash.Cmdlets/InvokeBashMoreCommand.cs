@@ -86,7 +86,7 @@ public sealed class InvokeBashMoreCommand : PSCmdlet
             if (op.Length == 0) continue;
             if (op[0] == '-' || op[0] == '+') continue;
             string full;
-            try { full = SessionState.Path.GetUnresolvedProviderPathFromPSPath(op); }
+            try { full = FileSystemHelpers.ProviderPath(this, op); }
             catch
             {
                 FileSystemHelpers.WriteBashError(this,

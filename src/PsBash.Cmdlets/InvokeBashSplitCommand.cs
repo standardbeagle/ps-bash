@@ -354,7 +354,7 @@ public sealed class InvokeBashSplitCommand : PSCmdlet
             string filePath = operands[0];
             if (filePath != "-")
             {
-                filePath = SessionState.Path.GetUnresolvedProviderPathFromPSPath(filePath);
+                filePath = FileSystemHelpers.ProviderPath(this, filePath);
             }
             if (filePath == "-")
             {

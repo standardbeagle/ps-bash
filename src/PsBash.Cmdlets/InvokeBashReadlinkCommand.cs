@@ -124,7 +124,7 @@ public sealed class InvokeBashReadlinkCommand : PSCmdlet
                 string fullPath;
                 try
                 {
-                    fullPath = SessionState.Path.GetUnresolvedProviderPathFromPSPath(path);
+                    fullPath = FileSystemHelpers.ProviderPath(this, path);
                 }
                 catch
                 {

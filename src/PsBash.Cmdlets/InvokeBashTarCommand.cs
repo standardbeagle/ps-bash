@@ -394,10 +394,10 @@ public sealed class InvokeBashTarCommand : PSCmdlet
         string? changeDir = plan.ChangeDir;
         bool gzipFilter = plan.Gzip;
 
-        if (!stdio) archiveFile = SessionState.Path.GetUnresolvedProviderPathFromPSPath(archiveFile!);
+        if (!stdio) archiveFile = FileSystemHelpers.ProviderPath(this, archiveFile!);
         if (!string.IsNullOrEmpty(changeDir))
         {
-            changeDir = SessionState.Path.GetUnresolvedProviderPathFromPSPath(changeDir);
+            changeDir = FileSystemHelpers.ProviderPath(this, changeDir);
         }
 
         // -a/--auto-compress: pick the filter from the archive extension. Only
@@ -493,7 +493,7 @@ public sealed class InvokeBashTarCommand : PSCmdlet
         }
         else
         {
-            var abs = SessionState.Path.GetUnresolvedProviderPathFromPSPath(file);
+            var abs = FileSystemHelpers.ProviderPath(this, file);
             if (!File.Exists(abs))
             {
                 FileSystemHelpers.WriteBashError(this, forExclude
@@ -638,11 +638,11 @@ public sealed class InvokeBashTarCommand : PSCmdlet
 
             foreach (var (srcDir, src) in sources)
             {
-                string resolved = SessionState.Path.GetUnresolvedProviderPathFromPSPath(src);
+                string resolved = FileSystemHelpers.ProviderPath(this, src);
                 if (!string.IsNullOrEmpty(srcDir) && !Path.IsPathRooted(src))
                 {
                     // -C DIR before this operand: members are taken relative to DIR (GNU tar).
-                    string dirResolved = SessionState.Path.GetUnresolvedProviderPathFromPSPath(srcDir);
+                    string dirResolved = FileSystemHelpers.ProviderPath(this, srcDir);
                     resolved = Path.GetFullPath(Path.Combine(dirResolved, src));
                 }
                 if (!File.Exists(resolved) && !Directory.Exists(resolved))

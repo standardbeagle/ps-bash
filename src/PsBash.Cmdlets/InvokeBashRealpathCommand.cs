@@ -95,7 +95,7 @@ public sealed class InvokeBashRealpathCommand : PSCmdlet
             }
             catch
             {
-                full = SessionState.Path.GetUnresolvedProviderPathFromPSPath(path);
+                full = FileSystemHelpers.ProviderPath(this, path);
             }
 
             if (requireExists && !File.Exists(full) && !Directory.Exists(full))

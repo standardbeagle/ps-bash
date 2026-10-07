@@ -343,6 +343,27 @@ public class InvokeBashCatHeadTailWcCommandTests : IClassFixture<SharedPwshFixtu
         Assert.Equal(new[] { "x^Iy$" }, lines);
     }
 
+    // A drive PowerShell does not know (`Q:\x`, or `/q/x` mapped under PSBASH_UNIX_PATHS) threw
+    // DriveNotFoundException out of the operand resolution — outside the per-file error handling —
+    // so `cat /x` printed "Cannot find drive" and exited 0. Every cmdlet resolves through
+    // FileSystemHelpers.ProviderPath now; these pin the bash result for a few of them.
+    [SkippableTheory]
+    [InlineData("Invoke-BashCat '{0}:\\nope'", "cat: ")]
+    [InlineData("Invoke-BashCat '{0}:\\'", "cat: ")]
+    [InlineData("Invoke-BashWc '{0}:\\nope'", "wc: ")]
+    [InlineData("Invoke-BashHead '{0}:\\nope'", "head: ")]
+    public void MissingDrive_ReportsNoSuchFile_Status1(string scriptFormat, string prefix)
+    {
+        Skip.IfNot(OperatingSystem.IsWindows(), "drive letters are Windows-only");
+        char? free = null;
+        for (char d = 'Z'; d >= 'G'; d--)
+            if (!Directory.Exists(d + ":\\")) { free = d; break; }
+        Skip.If(free is null, "no unused drive letter");
+
+        CmdResult.Run(_fixture.AcquireFresh(), string.Format(scriptFormat, free))
+            .AssertFailed(1, prefix, "No such file or directory");
+    }
+
     [Fact]
     public void Cat_MissingFile_SetsExitCodeOne()
     {

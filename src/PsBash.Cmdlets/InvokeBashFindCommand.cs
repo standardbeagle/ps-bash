@@ -180,7 +180,7 @@ public sealed class InvokeBashFindCommand : PSCmdlet
             {
                 try
                 {
-                    var full = SessionState.Path.GetUnresolvedProviderPathFromPSPath(FileSystemHelpers.NormalizeOperandPath(path));
+                    var full = FileSystemHelpers.ProviderPath(this, FileSystemHelpers.NormalizeOperandPath(path));
                     sink = new FileSink(new StreamWriter(new FileStream(full, FileMode.Create, FileAccess.Write, FileShare.ReadWrite), RawBytes.Encoding, 65536));
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
@@ -517,7 +517,7 @@ public sealed class InvokeBashFindCommand : PSCmdlet
                     string refPath;
                     try
                     {
-                        refPath = SessionState.Path.GetUnresolvedProviderPathFromPSPath(FileSystemHelpers.NormalizeOperandPath(f));
+                        refPath = FileSystemHelpers.ProviderPath(this, FileSystemHelpers.NormalizeOperandPath(f));
                         if (!File.Exists(refPath) && !Directory.Exists(refPath) && !FindStat.IsLinkEntry(new FileInfo(refPath))) throw new FileNotFoundException();
                     }
                     catch { EmitError($"find: ‘{f}’: No such file or directory"); return; }
@@ -587,7 +587,7 @@ public sealed class InvokeBashFindCommand : PSCmdlet
                         {
                             try
                             {
-                                var full = SessionState.Path.GetUnresolvedProviderPathFromPSPath(FileSystemHelpers.NormalizeOperandPath(refArg));
+                                var full = FileSystemHelpers.ProviderPath(this, FileSystemHelpers.NormalizeOperandPath(refArg));
                                 FileSystemInfo info = Directory.Exists(full) ? new DirectoryInfo(full) : new FileInfo(full);
                                 if (!info.Exists && !FindStat.IsLinkEntry(info)) throw new FileNotFoundException();
                                 refTime = y switch { 'a' => info.LastAccessTime, 'B' => info.CreationTime, 'c' => FindStat.ChangeTimeOf(info), _ => info.LastWriteTime };

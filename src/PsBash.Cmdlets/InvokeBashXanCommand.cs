@@ -193,7 +193,7 @@ public sealed class InvokeBashXanCommand : PSCmdlet
             string resolved;
             try
             {
-                resolved = SessionState.Path.GetUnresolvedProviderPathFromPSPath(fileArg);
+                resolved = FileSystemHelpers.ProviderPath(this, fileArg);
             }
             catch (Exception ex)
             {

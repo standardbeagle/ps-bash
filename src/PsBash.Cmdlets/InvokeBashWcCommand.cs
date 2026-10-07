@@ -429,7 +429,7 @@ public sealed class InvokeBashWcCommand : PSCmdlet
     /// <summary>A --files0-from entry is used verbatim: no globbing, resolved against the PowerShell location.</summary>
     private string ResolveVerbatim(string name)
     {
-        var resolved = SessionState.Path.GetUnresolvedProviderPathFromPSPath(FileSystemHelpers.NormalizeOperandPath(name));
+        var resolved = FileSystemHelpers.ProviderPath(this, FileSystemHelpers.NormalizeOperandPath(name));
         OperandDisplay.Remember(this, resolved, name);
         return resolved;
     }
@@ -465,7 +465,7 @@ public sealed class InvokeBashWcCommand : PSCmdlet
         }
         else
         {
-            try { text = RawBytes.GetString(BashFileSystem.ReadAllBytes(SessionState.Path.GetUnresolvedProviderPathFromPSPath(source))); }
+            try { text = RawBytes.GetString(BashFileSystem.ReadAllBytes(FileSystemHelpers.ProviderPath(this, source))); }
             catch (Exception ex)
             {
                 if (FileSystemHelpers.IsPipelineStop(ex)) throw;
@@ -672,7 +672,7 @@ public sealed class InvokeBashWcCommand : PSCmdlet
             }
             else
             {
-                var lit = SessionState.Path.GetUnresolvedProviderPathFromPSPath(p);
+                var lit = FileSystemHelpers.ProviderPath(this, p);
                 OperandDisplay.Remember(this, lit, p);
                 yield return lit;
             }

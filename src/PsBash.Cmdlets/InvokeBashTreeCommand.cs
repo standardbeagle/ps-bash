@@ -250,7 +250,7 @@ public sealed class InvokeBashTreeCommand : PSCmdlet
         string rootName;
         try
         {
-            resolved = SessionState.Path.GetUnresolvedProviderPathFromPSPath(target);
+            resolved = FileSystemHelpers.ProviderPath(this, target);
             if (Directory.Exists(resolved))
             {
                 var dirInfo = new DirectoryInfo(resolved);

@@ -345,7 +345,7 @@ public sealed class InvokeBashStringsCommand : PSCmdlet
             }
             else
             {
-                yield return SessionState.Path.GetUnresolvedProviderPathFromPSPath(p);
+                yield return FileSystemHelpers.ProviderPath(this, p);
             }
         }
     }

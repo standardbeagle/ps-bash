@@ -573,7 +573,7 @@ public sealed class InvokeBashRgCommand : PSCmdlet
                 string abs;
                 try
                 {
-                    abs = SessionState.Path.GetUnresolvedProviderPathFromPSPath(
+                    abs = FileSystemHelpers.ProviderPath(this, 
                         implicitRoot ? "." : FileSystemHelpers.NormalizeOperandPath(target));
                 }
                 catch
@@ -809,7 +809,7 @@ public sealed class InvokeBashRgCommand : PSCmdlet
             return true;
         }
         string path;
-        try { path = SessionState.Path.GetUnresolvedProviderPathFromPSPath(FileSystemHelpers.NormalizeOperandPath(raw)); }
+        try { path = FileSystemHelpers.ProviderPath(this, FileSystemHelpers.NormalizeOperandPath(raw)); }
         catch { path = raw; }
         try
         {

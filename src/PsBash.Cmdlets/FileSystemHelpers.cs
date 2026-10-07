@@ -23,6 +23,20 @@ internal static class FileSystemHelpers
     /// and fall through as literal if nothing matches. Same slice
     /// <see cref="InvokeBashCatCommand"/> and the ChecksumEngine use.
     /// </summary>
+    /// <summary>
+    /// <c>GetUnresolvedProviderPathFromPSPath</c> for a file operand, minus its one throw that is not
+    /// a path error: a drive PowerShell does not know (<c>Q:\x</c>, or <c>/q/x</c> mapped under
+    /// <c>PSBASH_UNIX_PATHS</c>) raised <c>DriveNotFoundException</c> ("Cannot find drive") out of the
+    /// cmdlet — outside its per-file error handling, so <c>cat /x</c> printed PowerShell's text and
+    /// exited 0. Such a path is returned as typed; the file access that follows then fails with the
+    /// ordinary not-found error every cmdlet already reports bash-style (status 1).
+    /// </summary>
+    public static string ProviderPath(PSCmdlet cmdlet, string psPath)
+    {
+        try { return cmdlet.SessionState.Path.GetUnresolvedProviderPathFromPSPath(psPath); }
+        catch (System.Management.Automation.DriveNotFoundException) { return psPath; }
+    }
+
     public static IEnumerable<string> ResolveOperandPaths(PSCmdlet cmdlet, string raw)
     {
         string typed = raw;
@@ -31,7 +45,7 @@ internal static class FileSystemHelpers
         // nothing and falls through to literal passthrough (bash-literal semantics).
         if (raw.IndexOf('*') < 0 && raw.IndexOf('?') < 0 && raw.IndexOf('[') < 0)
         {
-            string resolved = cmdlet.SessionState.Path.GetUnresolvedProviderPathFromPSPath(raw);
+            string resolved = FileSystemHelpers.ProviderPath(cmdlet, raw);
             OperandDisplay.Remember(cmdlet, resolved, typed);
             yield return resolved;
             yield break;
@@ -40,7 +54,7 @@ internal static class FileSystemHelpers
         // The shell has already expanded an unquoted pattern, so what arrives here is a NAME: a file
         // that literally exists under this spelling (`a[1]`, whose class form would match `a1`) is
         // that file, never a pattern.
-        string literal = cmdlet.SessionState.Path.GetUnresolvedProviderPathFromPSPath(raw);
+        string literal = FileSystemHelpers.ProviderPath(cmdlet, raw);
         if (File.Exists(literal) || Directory.Exists(literal))
         {
             OperandDisplay.Remember(cmdlet, literal, typed);
@@ -137,6 +151,19 @@ internal static class FileSystemHelpers
     /// definition every reader uses (the per-cmdlet copies missed the invalid-name case, so
     /// <c>cat '*.zz'</c> said "The filename, directory name, or volume label syntax is incorrect").
     /// </summary>
+    /// <summary>
+    /// <see cref="ReadErrorMessage(Exception)"/> knowing the path: on a drive that does not exist
+    /// (<c>/x</c> → <c>X:\</c> under <c>PSBASH_UNIX_PATHS</c>) .NET raises "Access to the path 'X:\'
+    /// is denied" for the bare root; bash reports the path missing.
+    /// </summary>
+    public static string ReadErrorMessage(Exception ex, string path)
+    {
+        if (OperatingSystem.IsWindows() && Path.GetPathRoot(path) is { Length: 3 } root
+            && root[1] == ':' && !Directory.Exists(root))
+            return "No such file or directory";
+        return ReadErrorMessage(ex);
+    }
+
     public static string ReadErrorMessage(Exception ex)
     {
         static bool NotFound(Exception e) =>

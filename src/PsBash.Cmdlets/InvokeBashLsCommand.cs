@@ -1322,7 +1322,7 @@ public sealed class InvokeBashLsCommand : PSCmdlet
             }
             else
             {
-                result.Add((SessionState.Path.GetUnresolvedProviderPathFromPSPath(p), p));
+                result.Add((FileSystemHelpers.ProviderPath(this, p), p));
             }
         }
         return result;

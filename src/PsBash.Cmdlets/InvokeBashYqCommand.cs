@@ -145,7 +145,7 @@ foreach ($result in $results) {
                 string resolved;
                 try
                 {
-                    resolved = SessionState.Path.GetUnresolvedProviderPathFromPSPath(file);
+                    resolved = FileSystemHelpers.ProviderPath(this, file);
                 }
                 catch (Exception ex)
                 {

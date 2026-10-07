@@ -128,7 +128,7 @@ public sealed class InvokeBashSedCommand : PSCmdlet
         {
             try
             {
-                string path = SessionState.Path.GetUnresolvedProviderPathFromPSPath(FileSystemHelpers.NormalizeOperandPath(name));
+                string path = FileSystemHelpers.ProviderPath(this, FileSystemHelpers.NormalizeOperandPath(name));
                 if (!File.Exists(path)) return null;
                 return BashFileSystem.ReadAllText(path);
             }
@@ -140,7 +140,7 @@ public sealed class InvokeBashSedCommand : PSCmdlet
             {
                 try
                 {
-                    string path = SessionState.Path.GetUnresolvedProviderPathFromPSPath(FileSystemHelpers.NormalizeOperandPath(name));
+                    string path = FileSystemHelpers.ProviderPath(this, FileSystemHelpers.NormalizeOperandPath(name));
                     en = File.Exists(path) ? ReadRawLines(path).GetEnumerator() : null;
                 }
                 catch (Exception ex) when (!FileSystemHelpers.IsPipelineStop(ex)) { en = null; }
@@ -166,7 +166,7 @@ public sealed class InvokeBashSedCommand : PSCmdlet
         if (name is "/dev/stdout" or "/dev/stderr" or "/dev/null" || _outFiles.ContainsKey(name)) return;
         try
         {
-            string path = SessionState.Path.GetUnresolvedProviderPathFromPSPath(FileSystemHelpers.NormalizeOperandPath(name));
+            string path = FileSystemHelpers.ProviderPath(this, FileSystemHelpers.NormalizeOperandPath(name));
             _outFiles[name] = new StreamWriter(
                 new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.ReadWrite), RawBytes.Encoding, 65536);
         }
@@ -1909,8 +1909,7 @@ public sealed class InvokeBashSedCommand : PSCmdlet
     {
         try
         {
-            string resolved = SessionState.Path
-                .GetUnresolvedProviderPathFromPSPath(path);
+            string resolved = FileSystemHelpers.ProviderPath(this, path);
             return File.Exists(resolved) ? resolved : null;
         }
         catch

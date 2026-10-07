@@ -125,7 +125,7 @@ public sealed class InvokeBashSourceCommand : PSCmdlet
             }
         }
 
-        return GetUnresolvedProviderPathFromPSPath(rawPath);
+        return FileSystemHelpers.ProviderPath(this, rawPath);
     }
 
     private bool TryCreateOptionalSnapshot(string resolvedPath, string rawPath)

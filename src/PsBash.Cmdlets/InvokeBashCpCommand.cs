@@ -193,7 +193,7 @@ public sealed class InvokeBashCpCommand : PSCmdlet
             foreach (var expanded in FileSystemHelpers.ResolveOperands(this, typed)) sources.Add(expanded);
         }
 
-        var destAbs = SessionState.Path.GetUnresolvedProviderPathFromPSPath(destRaw);
+        var destAbs = FileSystemHelpers.ProviderPath(this, destRaw);
 
         // Validate the operand shape BEFORE any write: several sources need an existing directory
         // (`cp a b result` used to leave only b's bytes in a file named result).
@@ -274,7 +274,7 @@ public sealed class InvokeBashCpCommand : PSCmdlet
                 FileSystemHelpers.WriteBashError(this, "cp: missing file operand" + TryHelp);
                 return null;
             }
-            var abs = SessionState.Path.GetUnresolvedProviderPathFromPSPath(tdir);
+            var abs = FileSystemHelpers.ProviderPath(this, tdir);
             if (!Directory.Exists(abs))
             {
                 FileSystemHelpers.WriteBashError(this, File.Exists(abs)
@@ -297,7 +297,7 @@ public sealed class InvokeBashCpCommand : PSCmdlet
         }
 
         var destRaw = operands[^1];
-        var destAbs = SessionState.Path.GetUnresolvedProviderPathFromPSPath(destRaw);
+        var destAbs = FileSystemHelpers.ProviderPath(this, destRaw);
 
         if (plan.NoTargetDirectory)
         {

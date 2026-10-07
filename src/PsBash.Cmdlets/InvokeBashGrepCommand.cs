@@ -644,7 +644,7 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
         string path;
         try
         {
-            path = SessionState.Path.GetUnresolvedProviderPathFromPSPath(
+            path = FileSystemHelpers.ProviderPath(this, 
                 FileSystemHelpers.NormalizeOperandPath(rawPath));
         }
         catch

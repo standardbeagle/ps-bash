@@ -367,7 +367,7 @@ internal static class ChecksumEngine
                 ? "\\" + parsed.Name.Replace("\\", "\\\\").Replace("\n", "\\n")
                 : parsed.Name;
             string fpath;
-            try { fpath = cmdlet.SessionState.Path.GetUnresolvedProviderPathFromPSPath(parsed.Name); }
+            try { fpath = FileSystemHelpers.ProviderPath(cmdlet, parsed.Name); }
             catch { fpath = parsed.Name; }
 
             bool isDir = Directory.Exists(fpath);

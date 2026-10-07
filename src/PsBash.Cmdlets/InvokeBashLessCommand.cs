@@ -106,7 +106,7 @@ public sealed class InvokeBashLessCommand : PSCmdlet
                 string full;
                 try
                 {
-                    full = SessionState.Path.GetUnresolvedProviderPathFromPSPath(path);
+                    full = FileSystemHelpers.ProviderPath(this, path);
                 }
                 catch
                 {
