@@ -5866,6 +5866,7 @@ public static class PsEmitter
         return $"{PsBuild.HoistedCondition(condition)}if ({PsBuild.LastStatusTest(negate)}) {{ {Emit(last)} }}";
     }
 
+    /// <param name="andOr">The <c>&amp;&amp;</c>/<c>||</c> chain to emit.</param>
     /// <param name="errexitFinalOperand">
     /// At statement position under errexit (<see cref="EmitAndOrStatement"/>): the final operand is
     /// emitted as errexit-active and records its status (<see cref="PsBuild.ErrexitFinalOperand"/>).

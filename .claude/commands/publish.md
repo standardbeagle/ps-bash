@@ -68,8 +68,11 @@ invariants** (`ReleaseNotes_UnderPsGalleryLimit`, cap 10600 chars). Run Pester l
 
 When `publish` was **skipped**, nothing reached PSGallery/nuget, so the version is reusable:
 diagnose from `gh run view --job <id> --log`, fix on `main`, then
-`gh release delete vX.Y.Z --yes --cleanup-tag`, re-tag the SAME version at the fix commit,
-push, and re-create the release. Each attempt usually surfaces one real failure (e.g. a
+`gh release delete vX.Y.Z --yes --cleanup-tag`, `git tag -d vX.Y.Z`, re-tag the SAME version
+at the fix commit, and push main + that tag (the tag push re-creates the release; then re-apply
+the notes with `gh release edit`). Before tagging, build locally: Transpiler/Core generate XML
+docs and the binaries job builds with `/warnaserror`, so a stale `<param>`/`<paramref>` or a
+missing `<param>` fails all three binaries. Each attempt usually surfaces one real failure (e.g. a
 direct-cmdlet-call binder collision, or ReleaseNotes overflow).
 
 If binaries succeeded but only the PSGallery publish failed, re-run just that job:

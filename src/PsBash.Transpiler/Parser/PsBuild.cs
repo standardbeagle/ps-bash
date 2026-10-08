@@ -257,19 +257,6 @@ public static class PsBuild
     // ───────────────────────────────── Exit-code tests ────────────────────────────────
 
     /// <summary>
-    /// A boolean expression that runs <paramref name="emittedCmd"/> and tests its EXIT
-    /// CODE (bash semantics), suitable inside <c>if (...)</c>/<c>while (...)</c>:
-    /// <c>(&amp; { [void](cmd); $global:LASTEXITCODE -eq 0 })</c>. The <see cref="Void"/>
-    /// is NOT optional — without it the scriptblock returns the command's output objects
-    /// alongside the boolean, and PowerShell evaluates the resulting multi-element array
-    /// as truthy, silently inverting the condition.
-    /// </summary>
-    /// <param name="emittedCmd">The already-emitted PowerShell command/pipeline text to test.</param>
-    /// <param name="negate">
-    /// <c>false</c> → test success (<c>-eq 0</c>); <c>true</c> → test failure
-    /// (<c>-ne 0</c>), i.e. bash <c>! cmd</c> which succeeds when <paramref name="emittedCmd"/> fails.
-    /// </param>
-    /// <summary>
     /// The test for a condition that RAN AS A STATEMENT just before it (see
     /// <see cref="HoistedCondition"/>): <c>$global:LASTEXITCODE -eq 0</c> (<c>-ne</c> when negated).
     /// </summary>
@@ -287,6 +274,19 @@ public static class PsBuild
     /// </summary>
     public static string HoistedCondition(string condStatements) => condStatements + "; ";
 
+    /// <summary>
+    /// A boolean expression that runs <paramref name="emittedCmd"/> and tests its EXIT
+    /// CODE (bash semantics), suitable inside <c>if (...)</c>/<c>while (...)</c>:
+    /// <c>(&amp; { [void](cmd); $global:LASTEXITCODE -eq 0 })</c>. The <see cref="Void"/>
+    /// is NOT optional — without it the scriptblock returns the command's output objects
+    /// alongside the boolean, and PowerShell evaluates the resulting multi-element array
+    /// as truthy, silently inverting the condition.
+    /// </summary>
+    /// <param name="emittedCmd">The already-emitted PowerShell command/pipeline text to test.</param>
+    /// <param name="negate">
+    /// <c>false</c> → test success (<c>-eq 0</c>); <c>true</c> → test failure
+    /// (<c>-ne 0</c>), i.e. bash <c>! cmd</c> which succeeds when <paramref name="emittedCmd"/> fails.
+    /// </param>
     public static string ExitCodeTest(string emittedCmd, bool negate = false) =>
         // Suppress the command's output via VoidStatement, which picks [void]$(...) over
         // [void](...) when the emitted text is a statement LIST (contains "; "). A grouping
