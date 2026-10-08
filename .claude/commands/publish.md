@@ -44,15 +44,23 @@ invariants** (`ReleaseNotes_UnderPsGalleryLimit`, cap 10600 chars). Run Pester l
 3. **Pick the version.** `gh release list --repo standardbeagle/ps-bash --limit 1`. Use the
    user's version if given, else bump the patch. Confirm no stale draft release for that tag.
 
-4. **Tag + release** (the workflow patches `ModuleVersion` in the psd1 AND `<Version>` in both
+4. **Tag = deploy** (the workflow patches `ModuleVersion` in the psd1 AND `<Version>` in both
    PsBash.Core/PsBash.Transpiler csprojs from the tag at publish time, so you do NOT need to
    edit any version by hand — only the ReleaseNotes in step 1). Commit the ReleaseNotes edit,
-   then `git tag vX.Y.Z && git push origin main --tags`, then
-   `gh release create vX.Y.Z --repo standardbeagle/ps-bash --title "vX.Y.Z" --notes "<notes>"`
-   (release notes derived from `git log <last-tag>..HEAD --oneline`, grouped fix/feat/etc.).
+   then push the branch and ONLY the new tag:
+   `git tag vX.Y.Z && git push origin main && git push origin vX.Y.Z`.
+   - NEVER `git push --tags`: it pushes every local tag, and `publish.yml` runs on ANY `v*` tag
+     push — a stale local tag (v0.10.24, 2026-10-08) started a publish of an old commit.
+   - Do NOT `gh release create`: the workflow's `release-tag` job creates the release for the
+     pushed tag. A release created by hand fires the `release` event = a SECOND publish run of
+     the same version (racing PSGallery / asset uploads). Set the notes AFTER the run creates
+     the release: `gh release edit vX.Y.Z --repo standardbeagle/ps-bash --notes-file notes.md`
+     (derived from `git log <last-tag>..HEAD --oneline`, grouped fix/feat/etc.).
 
-5. **Watch publish.yml to completion**:
-   `gh run watch <id> --exit-status` (or `gh run list --workflow=publish.yml --limit 1`).
+5. **Watch publish.yml to completion** — exactly ONE run for the tag (`event: push`):
+   `gh run list --repo standardbeagle/ps-bash --workflow=publish.yml --limit 3` then
+   `gh run watch <id> --exit-status`. A second run for the same version (`event: release`) or a run
+   for another tag means step 4 went wrong — `gh run cancel` it before its `publish` job starts.
    All build-binaries (×3) + test (×3) + publish must be green. Verify
    `Find-Module PsBash | Select Version` shows the new version.
 
