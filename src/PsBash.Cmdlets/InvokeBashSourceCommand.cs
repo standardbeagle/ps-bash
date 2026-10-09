@@ -17,17 +17,46 @@ public sealed class InvokeBashSourceCommand : PSCmdlet
     [Parameter(Position = 1, ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
+    /// <summary>
+    /// Return the code to source as a script block instead of running it — the transpiler emits
+    /// <c>. $(Invoke-BashSource -AsScriptBlock f …)</c> so the CALLER dot-sources it and its output
+    /// streams. Run here, <c>InvokeScript</c> can only hand the output back once the file finished.
+    /// </summary>
+    [Parameter(DontShow = true)]
+    public SwitchParameter AsScriptBlock { get; set; }
+
+    private static int _positionalSaves;
+
     protected override void ProcessRecord()
     {
-        if (string.IsNullOrEmpty(Path))
+        var code = Prepare();
+        if (AsScriptBlock)
+        {
+            WriteObject(code ?? ScriptBlock.Create(""));
             return;
+        }
+        if (code is not null)
+        {
+            // InvokeScript RETURNS the output instead of writing it; it was discarded, so a
+            // sourced file's `echo` printed nothing.
+            foreach (var record in InvokeCommand.InvokeScript(useLocalScope: false, code, input: null, args: null))
+                WriteObject(record);
+        }
+    }
+
+    /// <summary>The code that sources <see cref="Path"/> in the caller's scope, or null when there is
+    /// nothing to run (missing or unreadable file — error written, status 1 — or an empty one).</summary>
+    private ScriptBlock? Prepare()
+    {
+        if (string.IsNullOrEmpty(Path))
+            return null;
 
         string resolvedPath = ResolveSourcePath(Path);
 
         if (!System.IO.File.Exists(resolvedPath))
         {
             if (TryCreateOptionalSnapshot(resolvedPath, Path))
-                return;
+                return null;
 
             WriteError(new ErrorRecord(
                 new System.IO.FileNotFoundException($"ps-bash: {Path}: No such file or directory"),
@@ -40,51 +69,12 @@ public sealed class InvokeBashSourceCommand : PSCmdlet
             // non-zero exit code into the global so the outer eval picks
             // it up.
             SessionState.PSVariable.Set("global:LASTEXITCODE", 1);
-            return;
+            return null;
         }
 
         if (System.IO.Path.GetExtension(resolvedPath).Equals(".ps1", StringComparison.OrdinalIgnoreCase))
-        {
-            var dotSource = ScriptBlock.Create($". '{resolvedPath.Replace("'", "''")}'");
-            WriteAll(InvokeCommand.InvokeScript(
-                useLocalScope: false,
-                dotSource,
-                input: null,
-                args: null));
-        }
-        else
-        {
-            // bash: `source f a b` sets $1.. to a b for the file, then RESTORES the caller's; with no
-            // arguments the caller's positional parameters stay visible. This used to clear them
-            // (`set -- a b; . ./lib.sh; echo $1` printed nothing) and never restored after args.
-            bool withArgs = Arguments is { Length: > 0 };
-            object? savedPositional = SessionState.PSVariable.GetValue("global:BashPositional");
-            if (withArgs)
-                SessionState.PSVariable.Set("global:BashPositional", Arguments!.Cast<object>().ToArray());
-            try
-            {
-                SourceBashFile(resolvedPath);
-            }
-            finally
-            {
-                if (withArgs)
-                    SessionState.PSVariable.Set("global:BashPositional", savedPositional);
-            }
-        }
-    }
+            return ScriptBlock.Create($". '{resolvedPath.Replace("'", "''")}'");
 
-    /// <summary>
-    /// Every record the sourced code produced, to this cmdlet's output. <c>InvokeScript</c> RETURNS the
-    /// output instead of writing it, and it was discarded: a sourced file's `echo` printed nothing.
-    /// </summary>
-    private void WriteAll(System.Collections.ObjectModel.Collection<PSObject> output)
-    {
-        foreach (var record in output)
-            WriteObject(record);
-    }
-
-    private void SourceBashFile(string resolvedPath)
-    {
         string content;
         try
         {
@@ -98,24 +88,30 @@ public sealed class InvokeBashSourceCommand : PSCmdlet
                 ErrorCategory.ReadError,
                 resolvedPath));
             SessionState.PSVariable.Set("global:LASTEXITCODE", 1);
-            return;
+            return null;
         }
 
         if (string.IsNullOrWhiteSpace(content))
-            return;
+            return null;
 
         var result = BashTranspiler.Transpile(content, TranspileContext.Eval);
         if (string.IsNullOrEmpty(result))
-            return;
+            return null;
 
-        var sb = ScriptBlock.Create(result);
-        WriteAll(InvokeCommand.InvokeScript(
-            useLocalScope: false,
-            sb,
-            input: null,
-            args: null));
+        // bash: `source f a b` sets $1.. to a b for the file, then RESTORES the caller's; with no
+        // arguments the caller's positional parameters stay visible. This used to clear them
+        // (`set -- a b; . ./lib.sh; echo $1` printed nothing) and never restored after args. The
+        // saved value gets its own global — a nested `source x args` runs in the same scope.
+        if (Arguments is { Length: > 0 })
+        {
+            string saved = "__psbash_srcpos" + Interlocked.Increment(ref _positionalSaves);
+            SessionState.PSVariable.Set("global:" + saved, SessionState.PSVariable.GetValue("global:BashPositional"));
+            SessionState.PSVariable.Set("global:BashPositional", Arguments.Cast<object>().ToArray());
+            result = "try {\n" + result + "\n} finally { $global:BashPositional = $global:" + saved
+                + "; Remove-Variable -Name " + saved + " -Scope Global -ErrorAction SilentlyContinue }";
+        }
+        return ScriptBlock.Create(result);
     }
-
     // The shared runtime path policy (ProviderPath → RuntimePath.Map). This used to carry its own
     // copy — /tmp → GetTempPath (not $env:TEMP) and /c/ — only under PSBASH_UNIX_PATHS=1, so
     // `. $d/f` (d=/tmp) and `cat $d/f` could name different files.

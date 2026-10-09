@@ -1,0 +1,35 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 528
+stdout-length: 149
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit 1; printf 'echo 1\necho 2 >&2\necho 3\n' > order.sh
+source ./order.sh 2>&1
+printf 'echo "lib [$1] [$#]"\nf() { echo "f [$1]"; }\n' > lib.sh
+set -- a b; source ./lib.sh p -x; echo "after-args 1=$1 #=$#"
+printf 'echo "outer [$1]"\nsource ./lib.sh inner\necho "outer-again [$1]"\n' > nest.sh
+source ./nest.sh OUT; echo "after-nest 1=$1"; f z
+printf 'echo r1\nreturn 4\necho never\n' > ret.sh; source ./ret.sh; echo "ret rc=$?"
+g() { source ./lib.sh G; echo "in-g 1=$1"; }; g H
+source ./lib.sh | tr a-z A-Z
+==== STDOUT ====
+1
+2
+3
+lib [p] [2]
+after-args 1=a #=2
+outer [OUT]
+lib [inner] [1]
+outer-again [OUT]
+after-nest 1=a
+f [z]
+r1
+ret rc=4
+lib [G] [1]
+in-g 1=H
+LIB [A] [2]
+
+==== STDERR ====
+

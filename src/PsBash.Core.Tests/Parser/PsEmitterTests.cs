@@ -819,7 +819,7 @@ public class PsEmitterTests
         // Batch 1 of the shared ordered parser. Adding a command here also means adding it to
         // CommonParameterCollisionGuardTests.EmitterForceQuoted (Cmdlets.Tests) — that map is
         // how the guard knows the emitter, not a decoy, protects the colliding letters.
-        Assert.Equal(new[] { "awk", "base64", "bash", "cat", "column", "comm", "command", "cp", "cut", "declare", "diff", "du", "echo", "env", "expand", "file", "find", "fold", "grep", "gzip", "head", "join", "jq", "ln", "ls", "md5sum", "mkdir", "mv", "nl", "paste", "printf", "rg", "rm", "rmdir", "sed", "sha1sum", "sha256sum", "sort", "split", "stat", "strings", "tac", "tail", "tar", "tee", "test", "time", "touch", "tree", "type", "unexpand", "uniq", "wc", "xargs" }, PsEmitter.OrderedArgCommands.OrderBy(x => x).ToArray());
+        Assert.Equal(new[] { "awk", "base64", "bash", "cat", "column", "comm", "command", "cp", "cut", "declare", "diff", "du", "echo", "env", "expand", "file", "find", "fold", "grep", "gzip", "head", "join", "jq", "ln", "ls", "md5sum", "mkdir", "mv", "nl", "paste", "printf", "rg", "rm", "rmdir", "sed", "sha1sum", "sha256sum", "sort", "source", "split", "stat", "strings", "tac", "tail", "tar", "tee", "test", "time", "touch", "tree", "type", "unexpand", "uniq", "wc", "xargs" }, PsEmitter.OrderedArgCommands.OrderBy(x => x).ToArray());
     }
 
     // `bash` is on OrderedArgCommands: the script's own args (`bash s.sh -v -e -c x`) and the
@@ -4106,7 +4106,7 @@ public class PsEmitterTests
         // the string-capture path — it goes through Invoke-BashSource as a
         // normal file argument. This guards against the classifier overreaching.
         var result = PsEmitter.Transpile("source script.sh");
-        Assert.Equal("Invoke-BashSource script.sh", result);
+        Assert.Equal(". $(Invoke-BashSource -AsScriptBlock script.sh)", result);
     }
 
     // --- Array and associative array tests ---
@@ -4872,26 +4872,28 @@ public class PsEmitterTests
         Assert.Equal("$ErrorActionPreference = 'Stop'; $global:__BashErrexit = $true; if (-not (Test-Path variable:global:__BashErrexitSuppress)) { $global:__BashErrexitSuppress = 0 }; Set-StrictMode -Version Latest", result);
     }
 
-    // source file.sh -> Invoke-BashSource ./lib.sh
+    // source file.sh -> the CALLER dot-sources the prepared block, so the file's output streams
     [Fact]
     public void Transpile_SourceShFile_EmitsInvokeBashSource()
     {
         var result = PsEmitter.Transpile("source ./lib.sh");
-        Assert.Equal("Invoke-BashSource ./lib.sh", result);
+        Assert.Equal(". $(Invoke-BashSource -AsScriptBlock ./lib.sh)", result);
     }
 
     [Fact]
     public void Transpile_DotSourceShFile_EmitsInvokeBashSource()
     {
         var result = PsEmitter.Transpile(". ./lib.sh");
-        Assert.Equal("Invoke-BashSource ./lib.sh", result);
+        Assert.Equal(". $(Invoke-BashSource -AsScriptBlock ./lib.sh)", result);
     }
 
     [Fact]
     public void Transpile_SourceShFileWithArgs_EmitsInvokeBashSourceWithArgs()
     {
         var result = PsEmitter.Transpile("source ./setup.sh arg1 arg2");
-        Assert.Equal("Invoke-BashSource ./setup.sh arg1 arg2", result);
+        Assert.Equal(". $(Invoke-BashSource -AsScriptBlock ./setup.sh arg1 arg2)", result);
+        // A dash argument is $1.. for the file — single-quoted, so it never binds a cmdlet parameter.
+        Assert.Equal(". $(Invoke-BashSource -AsScriptBlock ./setup.sh '-x' '-AsScriptBlock')", PsEmitter.Transpile("source ./setup.sh -x -AsScriptBlock"));
     }
 
     // -e file exists test

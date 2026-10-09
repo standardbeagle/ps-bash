@@ -56,6 +56,21 @@ public class CommonPatternDifferentialTests
         => Eq("cd \"$(mktemp -d)\" || exit 1; printf 'echo \"lib says [$1]\"\\nX=1\\n' > lib.sh\n"
             + "set -- a b; . ./lib.sh; echo \"X=$X 1=$1\"; source ./lib.sh p q; echo \"after-args 1=$1 2=$2\"");
 
+    // A sourced file's output streams: run inside the cmdlet it was collected and written only once
+    // the file finished, so `2>&1` printed its stderr line first (2 1 3). Also nesting with
+    // arguments, return, a dash argument, a function-local source, and a pipeline.
+    [SkippableFact]
+    public Task Source_StreamsOutputInOrder_NestedArgsAndReturn()
+        => Eq("cd \"$(mktemp -d)\" || exit 1; printf 'echo 1\\necho 2 >&2\\necho 3\\n' > order.sh\n"
+            + "source ./order.sh 2>&1\n"
+            + "printf 'echo \"lib [$1] [$#]\"\\nf() { echo \"f [$1]\"; }\\n' > lib.sh\n"
+            + "set -- a b; source ./lib.sh p -x; echo \"after-args 1=$1 #=$#\"\n"
+            + "printf 'echo \"outer [$1]\"\\nsource ./lib.sh inner\\necho \"outer-again [$1]\"\\n' > nest.sh\n"
+            + "source ./nest.sh OUT; echo \"after-nest 1=$1\"; f z\n"
+            + "printf 'echo r1\\nreturn 4\\necho never\\n' > ret.sh; source ./ret.sh; echo \"ret rc=$?\"\n"
+            + "g() { source ./lib.sh G; echo \"in-g 1=$1\"; }; g H\n"
+            + "source ./lib.sh | tr a-z A-Z");
+
     [SkippableFact]
     public Task CaseAndTest_AreCaseSensitive_NocasematchToggles()
         => Eq("x=abc\n"

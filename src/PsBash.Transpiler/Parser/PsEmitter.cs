@@ -3185,7 +3185,9 @@ public static class PsEmitter
         return specialResult;
     }
 
-    // source FILE / . FILE -> Invoke-BashSource FILE @args
+    // source FILE / . FILE -> . $(Invoke-BashSource -AsScriptBlock FILE args): the cmdlet resolves,
+    // transpiles and sets $1.. (restored by the block's own finally); the CALLER dot-sources the
+    // block, so its output streams (run inside the cmdlet it arrived only once the file finished).
     // source <(cmd) / . <(cmd) -> Invoke-ProcessSubSource { transpiled_cmd }
     // The process-substitution form captures the producer's stdout as bash text,
     // transpiles it, and executes the result in the caller's scope (source semantics).
@@ -3197,7 +3199,13 @@ public static class PsEmitter
             string inner = EmitCaptured((Command)procSub.Body);
             return $"Invoke-ProcessSubSource {{ {inner} }}";
         }
-        return EmitPassthrough("Invoke-BashSource", cmd.Words.RemoveAt(0));
+        // The switch goes right after the cmdlet name: a word-split operand wraps the call in
+        // `& { $__bashsplat0 = …; Invoke-BashSource @__bashsplat0 }`, where a trailing switch would be
+        // an argument of the script block. The operands are ordered-arg quoted, so none binds to it.
+        const string Cmdlet = "Invoke-BashSource";
+        string call = EmitPassthrough(Cmdlet, cmd.Words.RemoveAt(0));
+        int at = call.LastIndexOf(Cmdlet, StringComparison.Ordinal) + Cmdlet.Length;
+        return ". $(" + call.Insert(at, " -AsScriptBlock") + ")";
     }
 
     private static string EmitMappedStandalone(Command.Simple cmd, string mapped)
@@ -7454,7 +7462,7 @@ public static class PsEmitter
     /// cmdlet must be prepared to receive every flag as a plain string.
     /// </summary>
     internal static readonly IReadOnlySet<string> OrderedArgCommands =
-        new HashSet<string>(StringComparer.Ordinal) { "tee", "cp", "mv", "rm", "mkdir", "rmdir", "ln", "touch", "xargs", "time", "env", "command", "declare", "type", "bash", "awk", "head", "tail", "wc", "cat", "tac", "nl", "uniq", "fold", "expand", "unexpand", "paste", "join", "comm", "split", "strings", "base64", "stat", "file", "cut", "sort", "grep", "sed", "rg", "find", "echo", "printf", "test", "ls", "du", "tree", "column", "gzip", "tar", "md5sum", "sha1sum", "sha256sum", "diff", "jq" };
+        new HashSet<string>(StringComparer.Ordinal) { "source", "tee", "cp", "mv", "rm", "mkdir", "rmdir", "ln", "touch", "xargs", "time", "env", "command", "declare", "type", "bash", "awk", "head", "tail", "wc", "cat", "tac", "nl", "uniq", "fold", "expand", "unexpand", "paste", "join", "comm", "split", "strings", "base64", "stat", "file", "cut", "sort", "grep", "sed", "rg", "find", "echo", "printf", "test", "ls", "du", "tree", "column", "gzip", "tar", "md5sum", "sha1sum", "sha256sum", "diff", "jq" };
 
     /// <summary><c>Invoke-BashTee</c> -&gt; is <c>tee</c> in <see cref="OrderedArgCommands"/>?</summary>
     private static bool IsOrderedArgCmdlet(string cmdlet) =>
