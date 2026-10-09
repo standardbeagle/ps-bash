@@ -115,8 +115,8 @@ public class BashTranspilerTests
     public void Transpile_CaseArms_EmitBreakSoOnlyFirstMatchRuns()
     {
         var result = BashTranspiler.Transpile("case $x in a) echo A;; b) echo B;; esac");
-        Assert.Contains("'a' { Invoke-BashEcho A; break }", result);
-        Assert.Contains("'b' { Invoke-BashEcho B; break }", result);
+        Assert.Contains("IsMatch($_, '(?s)^(?:a)\\z') } { Invoke-BashEcho A; break }", result);
+        Assert.Contains("IsMatch($_, '(?s)^(?:b)\\z') } { Invoke-BashEcho B; break }", result);
     }
 
     [Fact]
@@ -126,10 +126,10 @@ public class BashTranspilerTests
         // The embedded single quote is doubled so the PS clause literal does not
         // break out. The `*` is inside DOUBLE QUOTES, so bash treats it as a
         // LITERAL asterisk (oracle: `x="a'zzz"` does NOT match `"a'*"`), hence the
-        // backtick escape. This previously asserted an unescaped `*`, i.e. an
+        // regex escape `\*`. This previously asserted an unescaped `*`, i.e. an
         // active wildcard — a silent wrong-match that the quote-per-segment
         // pattern normalization fixed.
-        Assert.Contains("-like 'a''`*'", result);
+        Assert.Contains("IsMatch($env:x, '(?s)^(?:a''\\*)\\z')", result);
     }
 
     [Fact]
@@ -138,7 +138,7 @@ public class BashTranspilerTests
         var result = BashTranspiler.Transpile("case $x in \"a'b\") echo hi;; esac");
         // Bash strips the pattern's quotes ("a'b" matches the string a'b); the embedded
         // single quote is doubled so the PS clause literal does not break out.
-        Assert.Contains("'a''b'", result);
+        Assert.Contains("'(?s)^(?:a''b)\\z'", result);
     }
 
     [Fact]
@@ -934,8 +934,9 @@ public class BashTranspilerTests
     public void Transpile_WhileReadWithInputRedirect_FeedsFileViaGetContent()
     {
         var result = BashTranspiler.Transpile("while read line; do echo $line; done < input.txt");
-        // The file must be fed into the loop, not left unbound.
-        Assert.StartsWith("Get-Content input.txt |", result);
+        // The file must be fed into the loop, not left unbound: the loop header reads it directly
+        // (no script block, so `return` in the body still leaves an enclosing function).
+        Assert.StartsWith(":__psbash_l0 foreach ($__psbash_rec0 in @(Get-Content input.txt))", result);
     }
 
     [Fact]
@@ -981,8 +982,8 @@ public class BashTranspilerTests
     {
         // Cascade repro: the dropped redirect used to also swallow the `| sort` stage.
         var result = BashTranspiler.Transpile("while read a; do echo $a; done < f | sort");
-        Assert.Contains("Get-Content f |", result);
-        Assert.Contains("Invoke-BashSort", result);
+        Assert.Contains("in @(Get-Content f))", result);
+        Assert.EndsWith("} | Invoke-BashSort", result);
     }
 
     [Fact]

@@ -56,7 +56,7 @@ public class InvokeBashShoptCommandTests : IClassFixture<SharedPwshFixture>
     {
         // -p with no operands prints every option as "shopt -s NAME", sorted.
         var lines = RunLines("Invoke-BashShopt -p");
-        Assert.Equal(15, lines.Length);
+        Assert.Equal(16, lines.Length);
         Assert.All(lines, l => Assert.StartsWith("shopt -s ", l));
         // Sorted ordinal — "checkwinsize" comes before "cmdhist" comes before "dotglob".
         var idxChk = Array.IndexOf(lines, "shopt -s checkwinsize");
@@ -163,6 +163,6 @@ public class InvokeBashShoptCommandTests : IClassFixture<SharedPwshFixture>
         // empty output or an "ambiguous parameter name" exception, the
         // declared SwitchParameter P has regressed.
         var lines = RunLines("Invoke-BashShopt -p");
-        Assert.Equal(15, lines.Length);
+        Assert.Equal(16, lines.Length);
     }
 }

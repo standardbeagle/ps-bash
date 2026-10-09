@@ -109,7 +109,9 @@ public class CompoundStdinEmitterTests
     {
         var ps = T("{ while read l; do echo $l; done; } < f");
 
-        Assert.Contains(PsBuild.StdinFeed + " | ForEach-Object", ps);
+        // Each record is dequeued from the shared stdin queue, not read from $input.
+        Assert.Contains("$__psbash_rec0 = $global:__BashStdIn.Dequeue()", ps);
+        Assert.DoesNotContain("$__psbash_rec0 in $input", ps);
     }
 
     [Fact]
@@ -117,7 +119,7 @@ public class CompoundStdinEmitterTests
     {
         var ps = T("printf 'a\\n' | while read l; do echo $l; done");
 
-        Assert.Contains("$input | ForEach-Object", ps);
+        Assert.Contains(":__psbash_l0 foreach ($__psbash_rec0 in $input)", ps);
         Assert.DoesNotContain("__BashStdIn", ps);
     }
 

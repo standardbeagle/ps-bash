@@ -2021,10 +2021,10 @@ public class PsEmitterTests
     // (BashRuntime.MapPath → RuntimePath.Map), as the emitter's literal /tmp rewrite does at
     // transpile time; a literal keeps its transpile-time mapping and no runtime call.
     [Theory]
-    [InlineData("cd $d/sub", "$__psbash_cd_target = $(& { [string]$args[0] } $env:d/sub);")]
+    [InlineData("cd $d/sub", "$__psbash_cd_target = $(& { [string]$args[0] } \"$env:d/sub\");")]
     [InlineData("cd $d/sub", "GetFullPath([PsBash.Cmdlets.BashRuntime]::MapPath([string]([string]$__psbash_cd_target))")]
     [InlineData("[ -e \"$d/f\" ]", "Test-Path $(& { [PsBash.Cmdlets.BashRuntime]::MapPath([string]($args[0])) } \"$env:d/f\")")]
-    [InlineData("while read l; do :; done < $d/f", "Get-Content $(& { [PsBash.Cmdlets.BashRuntime]::MapPath([string]($args[0])) } $env:d/f)")]
+    [InlineData("while read l; do :; done < $d/f", "Get-Content $(& { [PsBash.Cmdlets.BashRuntime]::MapPath([string]($args[0])) } \"$env:d/f\")")]
     public void Transpile_RuntimeKnownPath_GoesThroughRuntimePathPolicy(string bash, string fragment)
         => Assert.Contains(fragment, PsEmitter.Transpile(bash));
 
@@ -2279,13 +2279,13 @@ public class PsEmitterTests
     }
 
     [Fact]
-    public void Transpile_ExtendedStringEquals_EmitsEq()
+    public void Transpile_ExtendedStringEquals_EmitsCaseSensitivePatternMatch()
     {
         var result = PsEmitter.Transpile("[[ $var == \"foo\" ]]");
 
-        // Literal operands are single-quoted (equivalent to "foo" for comparison,
-        // and avoids accidental PowerShell interpolation).
-        Assert.Equal("$(if (($env:var -eq 'foo')) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1 })", result);
+        // `==` matches through the runtime BashPatternMatch (case-sensitive, honours nocasematch);
+        // PowerShell's -eq is case-INSENSITIVE, so `[[ foo == FOO ]]` used to be true.
+        Assert.Equal("$(if (([PsBash.Cmdlets.BashPatternMatch]::IsMatch($env:var, '(?s)^(?:foo)\\z'))) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1 })", result);
     }
 
     [Fact]
@@ -2387,7 +2387,7 @@ public class PsEmitterTests
     }
 
     [Theory]
-    [InlineData("[ -f = -f ]", "'-f' -eq '-f'")]            // arity 3: the middle operator wins
+    [InlineData("[ -f = -f ]", "'-f' -ceq '-f'")]           // arity 3: the middle operator wins
     public void Transpile_BracketArity3_OperatorInTheMiddleWins(string script, string expected)
         => Assert.Contains(expected, PsEmitter.Transpile(script));
 
@@ -2793,11 +2793,12 @@ public class PsEmitterTests
     }
 
     [Fact]
-    public void Transpile_ExtendedGlob_EmitsLike()
+    public void Transpile_ExtendedGlob_EmitsCaseSensitivePatternMatch()
     {
         var result = PsEmitter.Transpile("[[ $a == foo* ]]");
 
-        Assert.Equal("$(if (($env:a -like 'foo*')) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1 })", result);
+        // -like is case-INSENSITIVE; bash's [[ == ]] glob is not (`[[ FOOx == foo* ]]` is false).
+        Assert.Equal("$(if (([PsBash.Cmdlets.BashPatternMatch]::IsMatch($env:a, '(?s)^(?:foo.*)\\z'))) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1 })", result);
     }
 
     [Fact]
@@ -2813,15 +2814,15 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("[[ $a == \"x\" || $b == \"y\" ]]");
 
-        Assert.Equal("$(if ((($env:a -eq 'x') -or ($env:b -eq 'y'))) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1 })", result);
+        Assert.Equal("$(if ((([PsBash.Cmdlets.BashPatternMatch]::IsMatch($env:a, '(?s)^(?:x)\\z')) -or ([PsBash.Cmdlets.BashPatternMatch]::IsMatch($env:b, '(?s)^(?:y)\\z')))) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1 })", result);
     }
 
     [Fact]
-    public void Transpile_ExtendedNotEquals_EmitsNe()
+    public void Transpile_ExtendedNotEquals_EmitsNegatedPatternMatch()
     {
         var result = PsEmitter.Transpile("[[ $a != \"bar\" ]]");
 
-        Assert.Equal("$(if (($env:a -ne 'bar')) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1 })", result);
+        Assert.Equal("$(if (((-not [PsBash.Cmdlets.BashPatternMatch]::IsMatch($env:a, '(?s)^(?:bar)\\z')))) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1 })", result);
     }
 
     [Fact]
@@ -2830,9 +2831,10 @@ public class PsEmitterTests
         // Regression: `[ abc = abc ]` emitted `(abc -eq abc)` — bare `abc` ran as
         // a PowerShell command ("command not found"). Literal operands must be
         // single-quoted strings. Numeric operands stay bare for numeric compares.
-        Assert.Contains("'abc' -eq 'abc'", PsEmitter.Transpile("[ abc = abc ]"));
-        Assert.Contains("'abc' -ne 'xyz'", PsEmitter.Transpile("[ abc != xyz ]"));
-        Assert.Contains("$env:x -eq 'abc'", PsEmitter.Transpile("x=1; [ $x = abc ]"));
+        // `[ = ]` is plain case-sensitive equality (-ceq/-cne), never a pattern.
+        Assert.Contains("'abc' -ceq 'abc'", PsEmitter.Transpile("[ abc = abc ]"));
+        Assert.Contains("'abc' -cne 'xyz'", PsEmitter.Transpile("[ abc != xyz ]"));
+        Assert.Contains("$env:x -ceq 'abc'", PsEmitter.Transpile("x=1; [ $x = abc ]"));
         Assert.Contains("[long](5) -eq [long](5)", PsEmitter.Transpile("[ 5 -eq 5 ]"));   // numeric compare casts to [long]
     }
 
@@ -2908,7 +2910,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("for x in a b c; do echo $x; done");
 
-        Assert.Equal("$__psbash_iter = 0; foreach ($x in 'a','b','c') { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; Invoke-BashEcho $x }", result);
+        Assert.Equal("$__psbash_iter = 0; :__psbash_l0 foreach ($x in 'a','b','c') { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; Invoke-BashEcho $x }", result);
     }
 
     [Fact]
@@ -2916,7 +2918,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("for i in 1 2 3; do echo $i; done");
 
-        Assert.Equal("$__psbash_iter = 0; foreach ($i in 1,2,3) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; Invoke-BashEcho $i }", result);
+        Assert.Equal("$__psbash_iter = 0; :__psbash_l0 foreach ($i in 1,2,3) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; Invoke-BashEcho $i }", result);
     }
 
     [Fact]
@@ -2927,7 +2929,7 @@ public class PsEmitterTests
         // ConvertTo-BashGlob: the shell's pathname expansion (relative names, no hidden files,
         // sorted); an unmatched glob falls back to the literal word so the loop still runs
         // once — bash nullglob is OFF by default.
-        Assert.Equal("$__psbash_iter = 0; foreach ($f in @(ConvertTo-BashGlob '*.txt')) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; Invoke-BashCat $f }", result);
+        Assert.Equal("$__psbash_iter = 0; :__psbash_l0 foreach ($f in @(ConvertTo-BashGlob '*.txt')) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; Invoke-BashCat $f }", result);
     }
 
     [Fact]
@@ -2962,7 +2964,7 @@ public class PsEmitterTests
         // $(if ...) subexpression — a bare (if ...) is parsed by PowerShell as an
         // invocation of a command named "if" and fails at runtime; the subexpression
         // operator is required for the implicit-$@ iteration to actually run.
-        Assert.Equal("$__psbash_iter = 0; foreach ($x in $(if ($global:BashPositional) { $global:BashPositional } else { $args })) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; Invoke-BashEcho $x }", result);
+        Assert.Equal("$__psbash_iter = 0; :__psbash_l0 foreach ($x in $(if ($global:BashPositional) { $global:BashPositional } else { $args })) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; Invoke-BashEcho $x }", result);
     }
 
     [Fact]
@@ -2974,7 +2976,7 @@ public class PsEmitterTests
         // (( … )) condition) rather than the old naive </> string-replace, so the
         // full C operator set — including << / >> shifts — is honored. See
         // Transpile_ForArith_ShiftOperatorInCondition_NotShredded.
-        Assert.Equal("$__psbash_iter = 0; for (${i} = $(Invoke-BashArith 'i=0'); ((Invoke-BashArith 'i<10') -ne 0); $null = Invoke-BashArith 'i++') { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; Invoke-BashEcho $i }", result);
+        Assert.Equal("$__psbash_iter = 0; :__psbash_l0 for (${i} = $(Invoke-BashArith 'i=0'); ((Invoke-BashArith 'i<10') -ne 0); $null = Invoke-BashArith 'i++') { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; Invoke-BashEcho $i }", result);
     }
 
     // Regression: TranslateArithCondition string-replaced < and > unconditionally,
@@ -3055,7 +3057,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("while true; do echo hi; done");
 
-        Assert.Equal("$__psbash_iter = 0; while ($true) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; Invoke-BashEcho hi }", result);
+        Assert.Equal("$__psbash_iter = 0; :__psbash_l0 while ($true) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; Invoke-BashEcho hi }", result);
     }
 
     [Fact]
@@ -3063,7 +3065,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("while cmd; do body; done");
 
-        Assert.Equal("$__psbash_iter = 0; $__psbash_wst0 = 0; while ($true) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; cmd; if ($global:LASTEXITCODE -ne 0) { $global:LASTEXITCODE = $__psbash_wst0; break }; body; $__psbash_wst0 = $global:LASTEXITCODE }", result);
+        Assert.Equal("$__psbash_iter = 0; $__psbash_wst0 = 0; :__psbash_l0 while ($true) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; cmd; if ($global:LASTEXITCODE -ne 0) { $global:LASTEXITCODE = $__psbash_wst0; break }; body; $__psbash_wst0 = $global:LASTEXITCODE }", result);
     }
 
     [Fact]
@@ -3071,20 +3073,20 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("until cmd; do body; done");
 
-        Assert.Equal("$__psbash_iter = 0; $__psbash_wst0 = 0; while ($true) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; cmd; if ($global:LASTEXITCODE -eq 0) { $global:LASTEXITCODE = $__psbash_wst0; break }; body; $__psbash_wst0 = $global:LASTEXITCODE }", result);
+        Assert.Equal("$__psbash_iter = 0; $__psbash_wst0 = 0; :__psbash_l0 while ($true) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; cmd; if ($global:LASTEXITCODE -eq 0) { $global:LASTEXITCODE = $__psbash_wst0; break }; body; $__psbash_wst0 = $global:LASTEXITCODE }", result);
     }
 
     [Fact]
-    public void Transpile_WhileReadLine_EmitsForEachObjectPipeline()
+    public void Transpile_WhileReadLine_EmitsLabelledRecordAndLineLoops()
     {
         var result = PsEmitter.Transpile("while read line; do echo $line; done");
 
-        // `$input |` drains the scriptblock's piped input into the chain (a leading ForEach-Object
-        // does not auto-receive it when this is a pipe target wrapped in `& { ... }`); the
-        // `$null -ne $_` guard makes the BashText probe null-safe. The read var is bound with a real
+        // A real two-level labelled loop (records from $input, then the lines of each record), not a
+        // ForEach-Object pipeline: a PS `break` inside ForEach-Object unwound the WHOLE script. The
+        // `$null -ne` guard makes the BashText probe null-safe. The read var is bound with a real
         // `${line} = $_` assignment (not a text rewrite of $line -> $_, which clobbered literals).
         Assert.Equal(
-            "$input | ForEach-Object { if ($null -ne $_ -and $_.PSObject.Properties['BashText']) { $_.BashText } else { \"$_\" } } | ForEach-Object { ($_ -replace \"`n$\",\"\") -split \"`n\" } | ForEach-Object { ${line} = $_; Invoke-BashEcho $line }",
+            ":__psbash_l0 foreach ($__psbash_rec0 in $input) { :__psbash_lc0 foreach ($_ in @(($(if ($null -ne $__psbash_rec0 -and $__psbash_rec0.PSObject.Properties['BashText']) { $__psbash_rec0.BashText } else { \"$__psbash_rec0\" }) -replace \"`n$\",\"\") -split \"`n\")) { ${line} = $_; Invoke-BashEcho $line } }",
             result);
     }
 
@@ -3115,7 +3117,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("while [ -f file ]; do echo yes; done");
 
-        Assert.Equal("$__psbash_iter = 0; while ((Test-Path \"file\" -PathType Leaf)) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; Invoke-BashEcho yes }", result);
+        Assert.Equal("$__psbash_iter = 0; :__psbash_l0 while ((Test-Path \"file\" -PathType Leaf)) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; Invoke-BashEcho yes }", result);
     }
 
     [Fact]
@@ -3123,7 +3125,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("until [ -f file ]; do sleep 1; done");
 
-        Assert.Equal("$__psbash_iter = 0; while (-not ((Test-Path \"file\" -PathType Leaf))) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; Invoke-BashSleep 1 }", result);
+        Assert.Equal("$__psbash_iter = 0; :__psbash_l0 while (-not ((Test-Path \"file\" -PathType Leaf))) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; Invoke-BashSleep 1 }", result);
     }
 
     [Fact]
@@ -3131,7 +3133,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("while true; do echo a; echo b; done");
 
-        Assert.Equal("$__psbash_iter = 0; while ($true) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; Invoke-BashEcho a; Invoke-BashEcho b }", result);
+        Assert.Equal("$__psbash_iter = 0; :__psbash_l0 while ($true) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; Invoke-BashEcho a; Invoke-BashEcho b }", result);
     }
 
     [Fact]
@@ -3139,7 +3141,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("case $x in a) echo a;; b) echo b;; esac");
 
-        Assert.Equal("switch ($env:x) { 'a' { Invoke-BashEcho a; break } 'b' { Invoke-BashEcho b; break } }", result);
+        Assert.Equal("switch ($env:x) { { [PsBash.Cmdlets.BashPatternMatch]::IsMatch($_, '(?s)^(?:a)\\z') } { Invoke-BashEcho a; break } { [PsBash.Cmdlets.BashPatternMatch]::IsMatch($_, '(?s)^(?:b)\\z') } { Invoke-BashEcho b; break } }", result);
     }
 
     [Fact]
@@ -3147,37 +3149,42 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("case $x in a|b) echo ab;; esac");
 
-        Assert.Equal("switch ($env:x) { 'a' { Invoke-BashEcho ab; break } 'b' { Invoke-BashEcho ab; break } }", result);
+        Assert.Equal("switch ($env:x) { { [PsBash.Cmdlets.BashPatternMatch]::IsMatch($_, '(?s)^(?:a)\\z') } { Invoke-BashEcho ab; break } { [PsBash.Cmdlets.BashPatternMatch]::IsMatch($_, '(?s)^(?:b)\\z') } { Invoke-BashEcho ab; break } }", result);
     }
 
     [Fact]
-    public void Transpile_CaseExtGlobArm_SwitchesWholeCaseToAnchoredRegex()
+    public void Transpile_CaseExtGlobArm_MatchesEveryArmAsAnchoredRegex()
     {
-        // PowerShell wildcards have no extglob; an extglob arm makes the switch -Regex (case-
-        // sensitive, like bash) with EVERY pattern converted — `x*` too, not left as a wildcard.
+        // PowerShell wildcards have no extglob; every arm (extglob or not — `x*` too) is an anchored
+        // regex matched case-sensitively by BashPatternMatch, tested in bash's order (`*)` = { $true }).
         var result = PsEmitter.Transpile("case $x in @(a|b)) echo ab;; x*) echo x;; *) echo other;; esac");
 
-        Assert.Equal("switch -Regex -CaseSensitive ($env:x) { '(?s)^(?:(?:a|b))\\z' { Invoke-BashEcho ab; break } "
-            + "'(?s)^(?:x.*)\\z' { Invoke-BashEcho x; break } default { Invoke-BashEcho other; break } }", result);
+        Assert.Equal("switch ($env:x) { { [PsBash.Cmdlets.BashPatternMatch]::IsMatch($_, '(?s)^(?:(?:a|b))\\z') } { Invoke-BashEcho ab; break } "
+            + "{ [PsBash.Cmdlets.BashPatternMatch]::IsMatch($_, '(?s)^(?:x.*)\\z') } { Invoke-BashEcho x; break } { $true } { Invoke-BashEcho other; break } }", result);
     }
 
     [Theory]
-    [InlineData("[[ $x == @(a|b) ]]", "[string]($env:x) -cmatch '(?s)^(?:(?:a|b))\\z'")]
-    [InlineData("[[ $x != !(*.log) ]]", "[string]($env:x) -cnotmatch '(?s)^(?:(?<psbx0>.*)")]
-    [InlineData("[[ $x == 'v'@(1|2) ]]", "-cmatch '(?s)^(?:v(?:1|2))\\z'")]
+    [InlineData("[[ $x == @(a|b) ]]", "[PsBash.Cmdlets.BashPatternMatch]::IsMatch($env:x, '(?s)^(?:(?:a|b))\\z')")]
+    [InlineData("[[ $x != !(*.log) ]]", "-not [PsBash.Cmdlets.BashPatternMatch]::IsMatch($env:x, '(?s)^(?:(?<psbx0>.*)")]
+    [InlineData("[[ $x == 'v'@(1|2) ]]", "IsMatch($env:x, '(?s)^(?:v(?:1|2))\\z')")]
     public void Transpile_DoubleBracketExtGlobRhs_EmitsAnchoredRegexMatch(string bash, string fragment)
         => Assert.Contains(fragment, PsEmitter.Transpile(bash));
 
     [Fact]
-    public void Transpile_DoubleBracketPlainGlobRhs_KeepsLike()
-        => Assert.Contains("-like 'a*'", PsEmitter.Transpile("[[ $x == a* ]]"));
+    public void Transpile_DoubleBracketPlainGlobRhs_IsCaseSensitivePatternMatchNotLike()
+    {
+        // -like is case-INSENSITIVE (`[[ ABC == a* ]]` matched); the RHS glob is a case-sensitive regex.
+        var result = PsEmitter.Transpile("[[ $x == a* ]]");
+        Assert.Contains("[PsBash.Cmdlets.BashPatternMatch]::IsMatch($env:x, '(?s)^(?:a.*)\\z')", result);
+        Assert.DoesNotContain("-like", result);
+    }
 
     [Fact]
     public void Transpile_CaseDefaultStar_EmitsDefault()
     {
         var result = PsEmitter.Transpile("case $x in a) echo a;; *) echo other;; esac");
 
-        Assert.Equal("switch ($env:x) { 'a' { Invoke-BashEcho a; break } default { Invoke-BashEcho other; break } }", result);
+        Assert.Equal("switch ($env:x) { { [PsBash.Cmdlets.BashPatternMatch]::IsMatch($_, '(?s)^(?:a)\\z') } { Invoke-BashEcho a; break } { $true } { Invoke-BashEcho other; break } }", result);
     }
 
     [Fact]
@@ -3189,7 +3196,7 @@ public class PsEmitterTests
         var result = PsEmitter.Transpile("case $x in a) echo a ;& b) echo b;; esac");
 
         Assert.Equal(
-            "switch ($env:x) { 'a' { Invoke-BashEcho a; Invoke-BashEcho b; break } 'b' { Invoke-BashEcho b; break } }",
+            "switch ($env:x) { { [PsBash.Cmdlets.BashPatternMatch]::IsMatch($_, '(?s)^(?:a)\\z') } { Invoke-BashEcho a; Invoke-BashEcho b; break } { [PsBash.Cmdlets.BashPatternMatch]::IsMatch($_, '(?s)^(?:b)\\z') } { Invoke-BashEcho b; break } }",
             result);
     }
 
@@ -3223,7 +3230,7 @@ public class PsEmitterTests
 
         // The ;;& arm 'a' emits no break (continue testing); the trailing ;; arm 'b' does.
         Assert.Equal(
-            "switch ($env:x) { 'a' { Invoke-BashEcho a } 'b' { Invoke-BashEcho b; break } }",
+            "switch ($env:x) { { [PsBash.Cmdlets.BashPatternMatch]::IsMatch($_, '(?s)^(?:a)\\z') } { Invoke-BashEcho a } { [PsBash.Cmdlets.BashPatternMatch]::IsMatch($_, '(?s)^(?:b)\\z') } { Invoke-BashEcho b; break } }",
             result);
     }
 
@@ -3235,9 +3242,9 @@ public class PsEmitterTests
 
         Assert.Equal(
             "switch ($env:x) { " +
-            "'a' { Invoke-BashEcho a; Invoke-BashEcho b; Invoke-BashEcho c; break } " +
-            "'b' { Invoke-BashEcho b; Invoke-BashEcho c; break } " +
-            "'c' { Invoke-BashEcho c; break } }",
+            "{ [PsBash.Cmdlets.BashPatternMatch]::IsMatch($_, '(?s)^(?:a)\\z') } { Invoke-BashEcho a; Invoke-BashEcho b; Invoke-BashEcho c; break } " +
+            "{ [PsBash.Cmdlets.BashPatternMatch]::IsMatch($_, '(?s)^(?:b)\\z') } { Invoke-BashEcho b; Invoke-BashEcho c; break } " +
+            "{ [PsBash.Cmdlets.BashPatternMatch]::IsMatch($_, '(?s)^(?:c)\\z') } { Invoke-BashEcho c; break } }",
             result);
     }
 
@@ -3248,7 +3255,7 @@ public class PsEmitterTests
             "case $x in a) case $y in b) echo b;; esac;; esac");
 
         Assert.Equal(
-            "switch ($env:x) { 'a' { switch ($env:y) { 'b' { Invoke-BashEcho b; break } }; break } }",
+            "switch ($env:x) { { [PsBash.Cmdlets.BashPatternMatch]::IsMatch($_, '(?s)^(?:a)\\z') } { switch ($env:y) { { [PsBash.Cmdlets.BashPatternMatch]::IsMatch($_, '(?s)^(?:b)\\z') } { Invoke-BashEcho b; break } }; break } }",
             result);
     }
 
@@ -3258,7 +3265,7 @@ public class PsEmitterTests
         var result = PsEmitter.Transpile("case $f in *.txt) echo text;; *) echo other;; esac");
 
         Assert.Equal(
-            "switch -Wildcard ($env:f) { '*.txt' { Invoke-BashEcho text; break } default { Invoke-BashEcho other; break } }",
+            "switch ($env:f) { { [PsBash.Cmdlets.BashPatternMatch]::IsMatch($_, '(?s)^(?:.*\\.txt)\\z') } { Invoke-BashEcho text; break } { $true } { Invoke-BashEcho other; break } }",
             result);
     }
 
@@ -3864,7 +3871,7 @@ public class PsEmitterTests
     public void Transpile_ForInGlobCharClass_EmitsConvertToBashGlob()
     {
         var result = PsEmitter.Transpile("for f in [abc]*.txt; do cat $f; done");
-        Assert.Equal("$__psbash_iter = 0; foreach ($f in @(ConvertTo-BashGlob '[abc]*.txt')) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; Invoke-BashCat $f }", result);
+        Assert.Equal("$__psbash_iter = 0; :__psbash_l0 foreach ($f in @(ConvertTo-BashGlob '[abc]*.txt')) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; Invoke-BashCat $f }", result);
     }
 
     [Fact]
@@ -4138,7 +4145,7 @@ public class PsEmitterTests
     public void Transpile_ArrayIteration_EmitsForEachOverArray()
     {
         var result = PsEmitter.Transpile("for item in ${arr[@]}; do echo $item; done");
-        Assert.Equal("$__psbash_iter = 0; foreach ($item in $arr) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; Invoke-BashEcho $item }", result);
+        Assert.Equal("$__psbash_iter = 0; :__psbash_l0 foreach ($item in $arr) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; Invoke-BashEcho $item }", result);
     }
 
     [Fact]
@@ -4469,7 +4476,7 @@ public class PsEmitterTests
     public void Transpile_SingleBracketNotEqual_EmitsCorrectly()
     {
         var result = PsEmitter.Transpile("[ \"$A\" != \"$B\" ] && echo diff");
-        Assert.Contains("-ne", result);
+        Assert.Contains("$env:A -cne $env:B", result);   // case-sensitive string inequality
         Assert.Contains("$env:A", result);
         Assert.Contains("$env:B", result);
     }
@@ -4478,9 +4485,7 @@ public class PsEmitterTests
     public void Transpile_ExtendedTestNotEqual_EmitsCorrectly()
     {
         var result = PsEmitter.Transpile("[[ $A != $B ]]");
-        Assert.Contains("$env:A", result);
-        Assert.Contains("$env:B", result);
-        Assert.Contains("-ne", result);
+        Assert.Contains("-not [PsBash.Cmdlets.BashPatternMatch]::StringEquals($env:A, $env:B)", result);
     }
 
     // IoNumber reclassification edge cases
@@ -4714,12 +4719,13 @@ public class PsEmitterTests
         Assert.Contains("$Fruits += @('Watermelon')", result);
     }
 
-    // while read -r VAR (with flag) triggers ForEach-Object path
+    // while read -r VAR (with flag) takes the same labelled read-loop path as plain `read VAR`
     [Fact]
-    public void Transpile_WhileReadDashR_EmitsForEachObject()
+    public void Transpile_WhileReadDashR_EmitsLabelledReadLoop()
     {
         var result = PsEmitter.Transpile("while read -r line; do echo $line; done");
-        Assert.Contains("ForEach-Object", result);
+        Assert.Contains(":__psbash_l0 foreach ($__psbash_rec0 in $input)", result);
+        Assert.Contains("${line} = $_", result);
     }
 
     // read -p "prompt" VAR -> Invoke-BashRead -p "prompt" VAR
@@ -5305,7 +5311,7 @@ public class PsEmitterTests
     public void Transpile_WhileRead_StripsTrailingNewlineBeforeSplit()
     {
         var result = PsEmitter.Transpile("while read x; do echo $x; done");
-        Assert.Contains(@"($_ -replace ""`n$"","""") -split ""`n""", result);
+        Assert.Contains(@"-replace ""`n$"","""") -split ""`n""", result);
     }
 
     [Fact]
@@ -5907,8 +5913,8 @@ public class PsEmitterTests
         // `[$x]` was swallowed whole into a GlobPart, so the emitted pattern text
         // `[$x]` made PowerShell read `$x` as ITS OWN (undefined) variable and
         // `x="a b"; echo [$x]` printed `[]` — total, silent data loss.
-        Assert.Equal("Invoke-BashEcho [$env:x]", PsEmitter.Transpile("echo [$x]"));
-        Assert.Equal("Invoke-BashEcho x[$env:y]z", PsEmitter.Transpile("echo x[$y]z"));
+        Assert.Equal("Invoke-BashEcho \"[$env:x]\"", PsEmitter.Transpile("echo [$x]"));
+        Assert.Equal("Invoke-BashEcho \"x[$env:y]z\"", PsEmitter.Transpile("echo x[$y]z"));
     }
 
     [Fact]
@@ -5941,11 +5947,11 @@ public class PsEmitterTests
     [Theory]
     // Oracle-verified: inside [[ ]] both == and != GLOB-match, and quoting is
     // per-SEGMENT — bash drops the quotes and the quoted chars stay literal.
-    [InlineData("[[ \"$x\" != \"http\"* ]]", "-notlike 'http*'")]
-    [InlineData("[[ \"$x\" == \"http\"* ]]", "-like 'http*'")]
-    [InlineData("[[ \"$x\" == http* ]]", "-like 'http*'")]
+    [InlineData("[[ \"$x\" != \"http\"* ]]", "-not [PsBash.Cmdlets.BashPatternMatch]::IsMatch($env:x, '(?s)^(?:http.*)\\z')")]
+    [InlineData("[[ \"$x\" == \"http\"* ]]", "IsMatch($env:x, '(?s)^(?:http.*)\\z')")]
+    [InlineData("[[ \"$x\" == http* ]]", "IsMatch($env:x, '(?s)^(?:http.*)\\z')")]
     // A fully-quoted pattern is LITERAL: `*` must be escaped, not left active.
-    [InlineData("[[ \"$x\" == \"a*b\" ]]", "-like 'a`*b'")]
+    [InlineData("[[ \"$x\" == \"a*b\" ]]", "IsMatch($env:x, '(?s)^(?:a\\*b)\\z')")]
     public void Transpile_ExtendedTestGlob_NormalizesPatternPerSegment(
         string bash, string expected)
         => Assert.Contains(expected, PsEmitter.Transpile(bash));
