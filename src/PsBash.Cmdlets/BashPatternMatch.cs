@@ -15,6 +15,8 @@ public static class BashPatternMatch
 {
     // Regex.IsMatch's static cache holds 15 patterns; a script's case statements easily exceed it.
     private static readonly ConcurrentDictionary<(string, bool), Regex> Cache = new();
+    // The host is long-lived and a run-time pattern can differ every iteration: bound both caches.
+    private const int MaxCached = 512;
 
     /// <summary>True when <c>shopt -s nocasematch</c> is set in the calling runspace.</summary>
     public static bool NoCase => InvokeBashShoptCommand.IsEnabled("nocasematch");
@@ -23,9 +25,23 @@ public static class BashPatternMatch
     public static bool IsMatch(object? input, string regex)
     {
         bool noCase = NoCase;
+        if (Cache.Count > MaxCached) Cache.Clear();
         var rx = Cache.GetOrAdd((regex, noCase), static k => new Regex(k.Item1,
             RegexOptions.CultureInvariant | (k.Item2 ? RegexOptions.IgnoreCase : RegexOptions.None)));
         return rx.IsMatch(Text(input));
+    }
+
+    // Bash pattern text → anchored regex, for patterns assembled at run time (one script line in a
+    // loop evaluates the same pattern every iteration).
+    private static readonly ConcurrentDictionary<string, string> PatternRegex = new();
+
+    /// <summary>Does <paramref name="input"/> match the bash <paramref name="pattern"/> text (from
+    /// <c>[[ x == $pat ]]</c>; <c>\c</c> = literal c, quotes already escaped by the transpiler)?</summary>
+    public static bool MatchesPattern(object? input, object? pattern)
+    {
+        if (PatternRegex.Count > MaxCached) PatternRegex.Clear();
+        return IsMatch(input, PatternRegex.GetOrAdd(Text(pattern),
+            static p => PsBash.Core.Parser.BashPattern.ToAnchoredRegex(p, honorQuotes: false)));
     }
 
     /// <summary>String equality with bash's case rule (ordinal; ignore-case under nocasematch).</summary>

@@ -4482,10 +4482,23 @@ public class PsEmitterTests
     }
 
     [Fact]
-    public void Transpile_ExtendedTestNotEqual_EmitsCorrectly()
+    public void Transpile_ExtendedTestNotEqual_UnquotedRhsIsRuntimePattern()
     {
+        // Unquoted $B is pattern text (B='a*' matches abc); a wholly quoted "$B" is literal.
         var result = PsEmitter.Transpile("[[ $A != $B ]]");
-        Assert.Contains("-not [PsBash.Cmdlets.BashPatternMatch]::StringEquals($env:A, $env:B)", result);
+        Assert.Contains("-not [PsBash.Cmdlets.BashPatternMatch]::MatchesPattern($env:A, ($env:B))", result);
+        var quoted = PsEmitter.Transpile("[[ $A != \"$B\" ]]");
+        Assert.Contains("-not [PsBash.Cmdlets.BashPatternMatch]::StringEquals($env:A,", quoted);
+    }
+
+    [Fact]
+    public void Transpile_ExtendedTestEqual_QuotedPartOfRuntimePatternIsEscaped()
+    {
+        // "$S"b: the quoted expansion's glob chars are literal; /tmp/ in a pattern is text, not a path.
+        var result = PsEmitter.Transpile("[[ $A == \"$S\"b ]]");
+        Assert.Contains("MatchesPattern($env:A, ('' + ([PsBash.Cmdlets.BashGlobText]::Escape(\"$env:S\")) + 'b'))", result);
+        var tmp = PsEmitter.Transpile("[[ $A == /tmp/$x ]]");
+        Assert.Contains("MatchesPattern($env:A, ('' + '/tmp/' + ($env:x)))", tmp);
     }
 
     // IoNumber reclassification edge cases

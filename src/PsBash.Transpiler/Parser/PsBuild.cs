@@ -520,15 +520,8 @@ public static class PsBuild
     public static string ArgWordArray(IReadOnlyList<string> argWords) =>
         "@(& { $args } " + string.Join(' ', argWords) + ")";
 
-    // ─────────────────────── Null-safe pipeline text extraction ────────────────────────
+    // ───────────────────────────── Bash pattern tests ─────────────────────────────
 
-    /// <summary>
-    /// A <c>ForEach-Object</c> body that extracts a pipeline object's <c>BashText</c>
-    /// (else stringifies it), null-safe. The <c>$null -ne $_</c> guard is load-bearing:
-    /// <c>$_.PSObject.Properties['BashText']</c> throws "Cannot index into a null array"
-    /// on a <c>$null</c> item, and short-circuit order means the guard MUST precede the
-    /// property probe. Used to drain <c>while read</c> input.
-    /// </summary>
     /// <summary>
     /// <c>[PsBash.Cmdlets.BashPatternMatch]::IsMatch(value, 'regex')</c>: a bash pattern test (case arm,
     /// <c>[[ == ]]</c>) — case-sensitive unless <c>shopt -s nocasematch</c> is on at run time.
@@ -544,6 +537,22 @@ public static class PsBuild
     public static string StringEqualsTest(string leftExpr, string rightExpr) =>
         "[PsBash.Cmdlets.BashPatternMatch]::StringEquals(" + leftExpr + ", " + rightExpr + ")";
 
+    /// <summary>
+    /// <c>[[ a == $pat ]]</c> with a pattern known only at run time: <c>MatchesPattern(value, text)</c>
+    /// converts the bash pattern text (quoted parts backslash-escaped by the caller) at run time.
+    /// </summary>
+    public static string DynamicPatternTest(string valueExpr, string patternExpr) =>
+        "[PsBash.Cmdlets.BashPatternMatch]::MatchesPattern(" + valueExpr + ", " + patternExpr + ")";
+
+    // ─────────────────────── Null-safe pipeline text extraction ────────────────────────
+
+    /// <summary>
+    /// A <c>ForEach-Object</c> body that extracts a pipeline object's <c>BashText</c>
+    /// (else stringifies it), null-safe. The <c>$null -ne $_</c> guard is load-bearing:
+    /// <c>$_.PSObject.Properties['BashText']</c> throws "Cannot index into a null array"
+    /// on a <c>$null</c> item, and short-circuit order means the guard MUST precede the
+    /// property probe. Used to drain <c>while read</c> input.
+    /// </summary>
     public const string NullSafeBashText =
         "if ($null -ne $_ -and $_.PSObject.Properties['BashText']) { $_.BashText } else { \"$_\" }";
 

@@ -2123,16 +2123,17 @@ public static class PsEmitter
                     string test = PsBuild.PatternTest(lhs, BashPattern.ToAnchoredRegex(patText));
                     return negate ? $"(-not {test})" : test;
                 }
-                // A run-time RHS. A glob in it keeps the wildcard path (the expanded value is
-                // only known at run time), case-sensitive unless nocasematch.
-                var pattern = NormalizeCasePattern(EmitWord(words[2]));
-                if (HasGlobChars(pattern))
+                // A wholly double-quoted run-time RHS ("$B") is literal text: plain string equality.
+                if (words[2].Parts is [WordPart.DoubleQuoted])
                 {
-                    string like = negate ? "-notlike" : "-like", clike = negate ? "-cnotlike" : "-clike";
-                    return $"$(if ([PsBash.Cmdlets.BashPatternMatch]::NoCase) {{ {lhs} {like} '{SqEsc(pattern)}' }} else {{ {lhs} {clike} '{SqEsc(pattern)}' }})";
+                    string eq = PsBuild.StringEqualsTest(lhs, EmitTestOperand(words[2]));
+                    return negate ? $"(-not {eq})" : eq;
                 }
-                string eq = PsBuild.StringEqualsTest(lhs, EmitTestOperand(words[2]));
-                return negate ? $"(-not {eq})" : eq;
+                // Any other run-time RHS is a pattern assembled at run time: an UNQUOTED expansion's
+                // value is pattern text (oracle: B='a*'; [[ abc == $B ]] is true), quoted parts are
+                // escaped. It compared literally (StringEquals), or through case-insensitive -like.
+                string dyn = PsBuild.DynamicPatternTest(lhs, EmitGlobPatternExpr(words[2], mapPaths: false));
+                return negate ? $"(-not {dyn})" : dyn;
             }
 
             // In [[ ]], < and > are lexicographic string comparisons.
@@ -5142,7 +5143,10 @@ public static class PsEmitter
     /// quoted expansions escaped at run time. A drive-style prefix (<c>/c/Users/</c>) and <c>/tmp/</c> are
     /// mapped like any other path word, with forward slashes (the pattern's only separator).
     /// </summary>
-    private static string EmitGlobPatternExpr(CompoundWord word)
+    /// <param name="word">The glob word.</param>
+    /// <param name="mapPaths">False for a pattern that is not a path (<c>[[ $p == /tmp/$x ]]</c> compares
+    /// text): no <c>/tmp/</c> or drive-prefix mapping.</param>
+    private static string EmitGlobPatternExpr(CompoundWord word, bool mapPaths = true)
     {
         const string Escape = "[PsBash.Cmdlets.BashGlobText]::Escape(";
         var pieces = new List<string>();
@@ -5167,12 +5171,12 @@ public static class PsEmitter
                 case WordPart.Literal l:
                 {
                     string text = l.Value;
-                    if (i == 0 && text.StartsWith("/tmp/", StringComparison.Ordinal))
+                    if (mapPaths && i == 0 && text.StartsWith("/tmp/", StringComparison.Ordinal))
                     {
                         Dynamic(PsBuild.TempDirExpr + ".Replace('\\','/')");
                         text = text[4..];
                     }
-                    else if (i == 0 && TryTranslateMsysDrivePath(text, out var drive))
+                    else if (mapPaths && i == 0 && TryTranslateMsysDrivePath(text, out var drive))
                         text = drive.Replace('\\', '/');
                     lit.Append(EscapeGlobLiteral(text));
                     break;

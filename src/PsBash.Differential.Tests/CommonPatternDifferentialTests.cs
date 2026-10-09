@@ -75,4 +75,24 @@ public class CommonPatternDifferentialTests
             + "shopt -u nocasematch\n"
             + "[[ $x == A* ]] && echo 13-yes || echo 13-no\n"
             + "case 'a[b' in 'a[b') echo 14-bracket ;; *) echo 14-no ;; esac");
+
+    // An UNQUOTED expansion on the [[ == ]] right is pattern text; a quoted one is literal. It
+    // compared literally (StringEquals) whenever the RHS was known only at run time.
+    [SkippableFact]
+    public Task DoubleBracket_UnquotedExpansionRhs_IsAPattern()
+        => Eq("A=abc; B='a*'; P='a?c'; D='a[b]c'; E='@(x|abc)'; S='a*'\n"
+            + "[[ $A == $B ]] && echo 1-yes || echo 1-no\n"
+            + "[[ $A == \"$B\" ]] && echo 2-yes || echo 2-no\n"
+            + "[[ $A != $B ]] && echo 3-yes || echo 3-no\n"
+            + "[[ $A == ${P} ]] && echo 4-yes || echo 4-no\n"
+            + "[[ $A == $D ]] && echo 5-yes || echo 5-no\n"
+            + "[[ $A == $E ]] && echo 6-yes || echo 6-no\n"
+            + "[[ 'a*b' == \"$S\"b ]] && echo 7-yes || echo 7-no\n"
+            + "[[ axb == \"$S\"b ]] && echo 8-yes || echo 8-no\n"
+            + "[[ $A == $B\"x\" ]] && echo 9-yes || echo 9-no\n"
+            + "C=ABC; [[ $A == $C ]] && echo 10-yes || echo 10-no\n"
+            + "shopt -s nocasematch; [[ $A == $C ]] && echo 11-yes || echo 11-no; shopt -u nocasematch\n"
+            + "I='$(echo hi)'; [[ '$(echo hi)' == $I ]] && echo 12-yes || echo 12-no\n"
+            + "J=\"a'b\"; [[ \"a'b\" == $J ]] && echo 13-yes || echo 13-no\n"
+            + "K='a\\*'; [[ 'a*' == $K ]] && echo 14-yes || echo 14-no; [[ ab == $K ]] && echo 15-yes || echo 15-no");
 }
