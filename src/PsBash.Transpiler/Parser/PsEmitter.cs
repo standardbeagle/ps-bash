@@ -1542,10 +1542,13 @@ public static class PsEmitter
     {
         if (input.Here is { } here)
             return $"@({EmitHereDocLiteral(here)} | Emit-BashLine)";
-        var target = TransformRedirectTarget(EmitArgWord(input.Target));
+        var target = EmitInputRedirectTarget(input.Target);
         return target == "$null" ? "@()" : $"@(Get-Content {target})";
     }
 
+    /// <param name="varNames">The <c>read</c> variables, bound per line as loop variables.</param>
+    /// <param name="ifs">The loop's <c>IFS=</c> prefix value, or null for the default field split.</param>
+    /// <param name="body">The loop body.</param>
     /// <param name="sourceExpr">The records to iterate when the loop has its own input redirect
     /// (<see cref="ReadLoopSource"/>); null = the pipeline (<c>$input</c>) or the shared stdin queue.</param>
     private static string EmitWhileRead(List<string> varNames, string? ifs, Command body, string? sourceExpr = null)
