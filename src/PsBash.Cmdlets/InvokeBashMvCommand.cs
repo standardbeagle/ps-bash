@@ -349,27 +349,38 @@ public sealed class InvokeBashMvCommand : PSCmdlet
                 }
             }
 
+            // What this operand changed before the move itself, undone if the move fails: a failed mv
+            // leaves the destination as it found it (GNU's rename is atomic; here it is two steps).
+            string? backupPath = null, emptyDirAside = null;
             try
             {
                 string note = "";
                 if (targetExists && !caseOnlyRename && plan.BackupEnabled)
                 {
                     var suffix = BackupControl.MakeBackup(targetPath, plan.Backup, plan.BackupSuffix);
-                    if (suffix is not null) note = $" (backup: '{FileSystemHelpers.ToBashPath(targetDisplay)}{suffix}')";
+                    if (suffix is not null)
+                    {
+                        backupPath = targetPath + suffix;
+                        note = $" (backup: '{FileSystemHelpers.ToBashPath(targetDisplay)}{suffix}')";
+                    }
                 }
 
                 if (srcIsDir)
                 {
-                    // Directory.Move doesn't take an overwrite param. CheckOccupancy already proved
-                    // an existing target is an EMPTY directory (GNU lets that be replaced), so this
-                    // delete can never destroy content. Force variant: the empty dir may be read-only.
+                    // A directory rename cannot replace. CheckOccupancy already proved an existing target
+                    // is an EMPTY directory (GNU lets that be replaced): move it aside, drop it once the
+                    // move is done. Deleted outright only when it cannot be renamed.
                     if (!caseOnlyRename && Directory.Exists(targetPath))
-                        FileSystemHelpers.DeleteDirectoryForce(targetPath);
-                    Directory.Move(src, targetPath);
+                    {
+                        emptyDirAside = FileTransfer.MoveAside(targetPath);
+                        if (emptyDirAside is null) FileSystemHelpers.DeleteDirectoryForce(targetPath);
+                    }
+                    FileTransfer.MoveDirectory(src, targetPath);
+                    if (emptyDirAside is not null) FileTransfer.Discard(emptyDirAside);
                 }
                 else
                 {
-                    File.Move(src, targetPath, overwrite: true);
+                    FileTransfer.MoveFile(src, targetPath);
                 }
 
                 if (plan.Verbose)
@@ -381,8 +392,19 @@ public sealed class InvokeBashMvCommand : PSCmdlet
             catch (Exception ex)
             {
                 if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-                FileSystemHelpers.WriteBashError(this,
-                    $"mv: cannot move '{srcDisplay}' to '{targetDisplay}': {ex.Message}");
+                if (ex is FileTransfer.SourceNotRemovedException)
+                {
+                    // Across volumes the copy is complete; only removing the source failed (GNU's wording).
+                    FileSystemHelpers.WriteBashError(this, $"mv: cannot remove '{srcDisplay}': {FileTransfer.Reason(ex, src, srcDisplay)}");
+                }
+                else
+                {
+                    bool targetFree = !File.Exists(targetPath) && !Directory.Exists(targetPath);
+                    if (emptyDirAside is not null && targetFree) FileTransfer.Restore(emptyDirAside, targetPath);
+                    else if (backupPath is not null && targetFree) FileTransfer.Restore(backupPath, targetPath);
+                    FileSystemHelpers.WriteBashError(this,
+                        $"mv: cannot move '{srcDisplay}' to '{targetDisplay}': {FileTransfer.Reason(ex, src, srcDisplay)}");
+                }
                 hadError = true;
             }
         }

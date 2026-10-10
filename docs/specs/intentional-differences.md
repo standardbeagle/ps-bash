@@ -32,6 +32,7 @@ model in [runtime-functions.md](runtime-functions.md) "Raw bytes".
 | `mkdir -Z`, `cp -Z`/`--context`, `find -context` | Refused | No SELinux |
 | `find -used` | Refused | No reliable access-vs-change data |
 | `date +%N`, `date -d @S.FFFFFFFFF` | Sub-second resolution is 100 ns: `%N`'s last two digits are always `0`, and an input fraction past 7 digits is truncated | .NET time is 100 ns ticks |
+| `mv` / `cp` onto a file in use | Replaced like Linux: a read-only or in-use destination (a running `.exe`) is renamed aside and the new file takes its name. An old program that is still running cannot be deleted, so it stays as a hidden `.NAME.psbash-replaced-XXXXXXXX` beside it until the next replace in that directory after it exits. A file a process holds open **without delete sharing** cannot be renamed or replaced at all: `Device or resource busy (open in NAME.exe, pid N)`, reported at once with nothing changed. A lock with no process to blame (antivirus, indexer) is retried for about a second (`FileTransfer`) | Windows refuses to overwrite or rename open files; Linux unlinks and keeps the old inode alive |
 | Raw byte in a variable on **Linux/macOS** | `x=$(printf '\xe9')` loses the byte (becomes U+FFFD) | Variables live in the process environment, and .NET re-encodes it on Unix; Windows keeps it |
 
 ## Architecture

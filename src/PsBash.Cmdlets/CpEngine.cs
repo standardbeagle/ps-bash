@@ -102,7 +102,7 @@ internal sealed class CpEngine
         catch (Exception ex)
         {
             if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-            _error($"cp: cannot copy '{srcDisplay}' to '{destDisplay}': {ex.Message}");
+            _error($"cp: cannot copy '{srcDisplay}' to '{destDisplay}': {FileTransfer.Reason(ex, src, srcDisplay)}");
             return false;
         }
     }
@@ -315,13 +315,14 @@ internal sealed class CpEngine
     /// <summary>
     /// Copies one file and then applies the requested attribute policy (see <see cref="CpPreserve"/>). The
     /// destination's prior Unix mode is captured BEFORE the copy because <see cref="File.Copy(string, string, bool)"/>
-    /// overwrites it with the source's.
+    /// overwrites it with the source's. The bytes go through <see cref="FileTransfer.CopyFile"/> (an in-use
+    /// destination is replaced, a held one reported with its process).
     /// </summary>
     private static void CopyFile(string src, string dest, CpPreserve preserve)
     {
         bool existed = File.Exists(dest);
         int? previousMode = existed ? PlatformMode.TryGet(dest) : null;
-        File.Copy(src, dest, overwrite: true);
+        FileTransfer.CopyFile(src, dest);
         ApplyAttributes(src, dest, isDir: false, preserve, existed, previousMode);
     }
 
