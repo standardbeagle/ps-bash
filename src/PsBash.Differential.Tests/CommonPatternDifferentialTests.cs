@@ -110,4 +110,20 @@ public class CommonPatternDifferentialTests
             + "I='$(echo hi)'; [[ '$(echo hi)' == $I ]] && echo 12-yes || echo 12-no\n"
             + "J=\"a'b\"; [[ \"a'b\" == $J ]] && echo 13-yes || echo 13-no\n"
             + "K='a\\*'; [[ 'a*' == $K ]] && echo 14-yes || echo 14-no; [[ ab == $K ]] && echo 15-yes || echo 15-no");
+
+    // /tmp is the Windows temp dir underneath, but [[ == ]] compares the script's spelling: a
+    // literal /tmp/x and $PWD after `cd /tmp` came out as C:\…\Temp and never matched /tmp patterns.
+    [SkippableFact]
+    public Task DoubleBracket_TmpPaths_CompareAsBashSpellsThem()
+        => Eq("p=/tmp/x; q='/tmp/*'\n"
+            + "[[ /tmp/x == /tmp/x ]] && echo 1-yes || echo 1-no\n"
+            + "[[ /tmp/x == $p ]] && echo 2-yes || echo 2-no\n"
+            + "[[ /tmp/x == $q ]] && echo 3-yes || echo 3-no\n"
+            + "[[ /tmp/x == \"$p\" ]] && echo 4-yes || echo 4-no\n"
+            + "[[ /tmp/x != /tmp/x ]] && echo 5-yes || echo 5-no\n"
+            + "[[ /tmpx == /tmp* ]] && echo 6-yes || echo 6-no\n"
+            + "cd /tmp || exit 1\n"
+            + "[[ $PWD == /tmp ]] && echo 7-yes || echo 7-no\n"
+            + "[[ $PWD == /tmp* ]] && echo 8-yes || echo 8-no\n"
+            + "[[ $PWD == /var* ]] && echo 9-yes || echo 9-no");
 }

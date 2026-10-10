@@ -28,7 +28,10 @@ public static class BashPatternMatch
         if (Cache.Count > MaxCached) Cache.Clear();
         var rx = Cache.GetOrAdd((regex, noCase), static k => new Regex(k.Item1,
             RegexOptions.CultureInvariant | (k.Item2 ? RegexOptions.IgnoreCase : RegexOptions.None)));
-        return rx.IsMatch(Text(input));
+        string text = Text(input);
+        // A temp-dir value is /tmp to the script (`cd /tmp; [[ $PWD == /tmp* ]]`): match either spelling.
+        return rx.IsMatch(text)
+            || (PsBash.Core.RuntimePath.TryUnmapTmp(text, out var bash) && rx.IsMatch(bash));
     }
 
     // Bash pattern text → anchored regex, for patterns assembled at run time (one script line in a
@@ -45,8 +48,15 @@ public static class BashPatternMatch
     }
 
     /// <summary>String equality with bash's case rule (ordinal; ignore-case under nocasematch).</summary>
-    public static bool StringEquals(object? left, object? right) =>
-        string.Equals(Text(left), Text(right), NoCase ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+    public static bool StringEquals(object? left, object? right)
+    {
+        var cmp = NoCase ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        string l = Text(left), r = Text(right);
+        return string.Equals(l, r, cmp) || string.Equals(BashSpelling(l), BashSpelling(r), cmp);
+    }
+
+    private static string BashSpelling(string s) =>
+        PsBash.Core.RuntimePath.TryUnmapTmp(s, out var bash) ? bash : s;
 
     // A BashObject carries its text in BashText; anything else stringifies (null = "").
     private static string Text(object? value) => BashRuntime.GetBashText(value);

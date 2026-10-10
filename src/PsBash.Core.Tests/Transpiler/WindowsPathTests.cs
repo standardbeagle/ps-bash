@@ -25,6 +25,30 @@ public class WindowsPathTests
         Assert.Equal(expected, result);
     }
 
+    // --- TryUnmapTmpRoot: a temp-dir value as bash spells it, for [[ == ]] text compares ---
+
+    [Theory]
+    [InlineData("C:\\T", "/tmp")]
+    [InlineData("C:\\T\\", "/tmp/")]
+    [InlineData("c:\\t\\a\\b.txt", "/tmp/a/b.txt")]
+    [InlineData("C:\\T/x", "/tmp/x")]          // the emitter's literal /tmp/x rewrite
+    public void TryUnmapTmpRoot_SpellsTempDirAsTmp(string input, string expected)
+    {
+        Assert.True(WindowsPath.TryUnmapTmpRoot(input, "C:\\T\\", out var result));
+        Assert.Equal(expected, result);
+    }
+
+    [Theory]
+    [InlineData("C:\\Tx\\a")]     // a sibling that shares the prefix
+    [InlineData("C:\\a\\T")]
+    [InlineData("/tmp/x")]
+    [InlineData("")]
+    public void TryUnmapTmpRoot_LeavesOtherValuesAlone(string input)
+    {
+        Assert.False(WindowsPath.TryUnmapTmpRoot(input, "C:\\T", out var result));
+        Assert.Equal(input, result);
+    }
+
     [Theory]
     [InlineData("/tmpx")]         // not the /tmp segment
     [InlineData("/tmp.d/x")]

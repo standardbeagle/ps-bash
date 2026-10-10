@@ -1,0 +1,31 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 466
+stdout-length: 52
+stderr-length: 0
+==== SCRIPT ====
+p=/tmp/x; q='/tmp/*'
+[[ /tmp/x == /tmp/x ]] && echo 1-yes || echo 1-no
+[[ /tmp/x == $p ]] && echo 2-yes || echo 2-no
+[[ /tmp/x == $q ]] && echo 3-yes || echo 3-no
+[[ /tmp/x == "$p" ]] && echo 4-yes || echo 4-no
+[[ /tmp/x != /tmp/x ]] && echo 5-yes || echo 5-no
+[[ /tmpx == /tmp* ]] && echo 6-yes || echo 6-no
+cd /tmp || exit 1
+[[ $PWD == /tmp ]] && echo 7-yes || echo 7-no
+[[ $PWD == /tmp* ]] && echo 8-yes || echo 8-no
+[[ $PWD == /var* ]] && echo 9-yes || echo 9-no
+==== STDOUT ====
+1-yes
+2-yes
+3-yes
+4-yes
+5-no
+6-yes
+7-yes
+8-yes
+9-no
+
+==== STDERR ====
+

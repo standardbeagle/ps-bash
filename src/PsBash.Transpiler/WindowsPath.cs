@@ -120,6 +120,24 @@ public static class WindowsPath
     }
 
     /// <summary>
+    /// The inverse of <see cref="TryMapTmpRoot"/>, for TEXT comparisons: a value at or under
+    /// <paramref name="tempDir"/> (case-insensitive, either separator) as bash spells it,
+    /// <c>/tmp[/…]</c> with forward slashes. <c>C:\T</c> → <c>/tmp</c>, <c>C:\T\a/b</c> →
+    /// <c>/tmp/a/b</c>; <c>C:\Tx</c> is not under it. Pure, like its twin.
+    /// </summary>
+    public static bool TryUnmapTmpRoot(string? value, string tempDir, out string result)
+    {
+        result = value ?? string.Empty;
+        var root = (tempDir ?? string.Empty).TrimEnd('/', '\\');
+        if (string.IsNullOrEmpty(value) || root.Length == 0
+            || !value.StartsWith(root, System.StringComparison.OrdinalIgnoreCase)
+            || (value.Length > root.Length && value[root.Length] is not ('/' or '\\')))
+            return false;
+        result = "/tmp" + value.Substring(root.Length).Replace('\\', '/');
+        return true;
+    }
+
+    /// <summary>
     /// Build <c>X:\rest</c> from a drive letter and the remainder of a unix drive
     /// path (which begins with the post-drive segment, e.g. <c>/Users/x</c> or the
     /// empty string for a bare drive root). Separators are canonicalized to

@@ -26,6 +26,17 @@ public static class RuntimePath
         return WindowsPath.Normalize(path);
     }
 
+    /// <summary>
+    /// The inverse of the <c>/tmp</c> mapping, for TEXT comparisons: a value at or under the temp
+    /// directory (<c>$PWD</c> after <c>cd /tmp</c>, a literal <c>/tmp/x</c> the emitter rewrote) as
+    /// bash spells it, <c>/tmp[/…]</c> with forward slashes. False off Windows or outside the temp dir.
+    /// </summary>
+    public static bool TryUnmapTmp(string? value, out string bashPath)
+    {
+        bashPath = value ?? string.Empty;
+        return System.OperatingSystem.IsWindows() && WindowsPath.TryUnmapTmpRoot(value, TempDir(), out bashPath);
+    }
+
     /// <summary><c>$env:TEMP</c> as the emitted <c>TempDirExpr</c> reads it (live: a script may change
     /// it), falling back to the platform temp directory.</summary>
     private static string TempDir()
