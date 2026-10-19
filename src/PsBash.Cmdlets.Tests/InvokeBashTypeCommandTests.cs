@@ -88,7 +88,9 @@ public class InvokeBashTypeCommandTests : IClassFixture<SharedPwshFixture>
         Assert.Empty(lines);
         Assert.Equal(0, exit);
 
-        var (big, bigExit) = RunWithExit("Invoke-BashType '-P' echo");
+        // `cd`, not `echo`: CI runners have an echo PROGRAM on PATH (/usr/bin/echo, Git's echo.exe), which -P
+        // rightly finds; no platform ships a cd binary on PATH.
+        var (big, bigExit) = RunWithExit("Invoke-BashType '-P' cd");
         Assert.Empty(big);
         Assert.Equal(1, bigExit);
     }
