@@ -70,7 +70,6 @@ v=abc
 echo ${v%[[:alpha:]]}
 ## stdout: ab
 ## status: 0
-## XFAIL ps-bash gap-oils-var-op-strip var-op-strip (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Strip unicode prefix
@@ -163,7 +162,6 @@ foo]
 foo]
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-var-op-strip var-op-strip (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### strip unquoted and quoted []
@@ -181,7 +179,6 @@ foo[]
 foo[]
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-var-op-strip var-op-strip (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### strip unquoted and quoted ?
@@ -212,7 +209,6 @@ foo[]
 foo[]
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-var-op-strip var-op-strip (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Nested % and # operators (bug reported by Crestwave)

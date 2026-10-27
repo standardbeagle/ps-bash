@@ -497,3 +497,13 @@ two words -n
 
 piped
 ## END
+
+#### the trim idiom: a quoted expansion as a strip pattern is matched as its value
+s="   trim me  "
+s="${s#"${s%%[![:space:]]*}"}"
+s="${s%"${s##*[![:space:]]}"}"
+echo "[$s]"; f=a.txt; e=.txt; echo "${f%"$e"} ${f%$e}"
+## STDOUT:
+[trim me]
+a a
+## END

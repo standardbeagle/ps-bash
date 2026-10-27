@@ -231,6 +231,23 @@ public class BashTranspilerReviewRegressionTests
     public void Transpile_SubstituteVariablePattern_EmptyValueMatchesNothing()
         => Assert.Contains("(?!)", BashTranspiler.Transpile("x=ab; echo ${x//$foo/r}"));
 
+    // Oracle: the trim idiom `${s#"${s%%[![:space:]]*}"}`: a quoted / expanded strip pattern is the quote-removed value,
+    // matched literally. The pattern text was regex-escaped as source (`"${s%%...}"` never matched).
+    [Theory]
+    [InlineData("s=\"  a\"; echo \"${s#\"${s%%[![:space:]]*}\"}\"")]
+    [InlineData("s=\"a  \"; echo \"${s%\"${s##*[![:space:]]}\"}\"")]
+    [InlineData("f=a.txt; e=.txt; echo \"${f%\"$e\"}\"")]
+    public void Transpile_StripQuotedExpansionPattern_IsMatchedAsTheValue(string bash)
+        => Assert.Contains("[regex]::Escape(", BashTranspiler.Transpile(bash));
+
+    // Oracle: `[!x]` negates and `[[:space:]]` is a POSIX class in a strip pattern; the first `]` is not the close.
+    [Theory]
+    [InlineData("echo ${s%%[![:space:]]*}", "[^\\s]")]
+    [InlineData("echo ${s#[[:digit:]]}", "[0-9]")]
+    [InlineData("echo ${s#[!a]}", "[^a]")]
+    public void Transpile_StripGlobBracketExpression_IsTranslatedToARegexClass(string bash, string expectedClass)
+        => Assert.Contains(expectedClass, BashTranspiler.Transpile(bash));
+
     // Oracle: a function is a filter: `indent() { sed 's/^/  /'; }; cmd | indent`. The piped input never reached
     // the commands in the body (sed/grep/tr/cat/read saw an empty stdin). A body that reads stdin takes the pipe
     // it is called with; one that does not is unchanged.

@@ -6208,9 +6208,25 @@ public static class PsEmitter
             }
             else if (c == '"')
             {
-                int end = raw.IndexOf('"', i + 1);
-                if (end < 0 || raw.IndexOf('$', i + 1, end - i - 1) >= 0) return null;
-                lit.Append(raw, i + 1, end - i - 1);
+                int end = -1;
+                for (int j = i + 1; j < raw.Length && end < 0; j++)
+                {
+                    if (raw[j] == '"') end = j;
+                    else if (raw[j] == '$' && j + 1 < raw.Length && raw[j + 1] == '{')
+                    {
+                        j = FindBraceEnd(raw, j + 1);
+                        if (j < 0) return null;
+                    }
+                }
+                if (end < 0) return null;
+                string inner = raw[(i + 1)..end];
+                if (inner.IndexOf('$') >= 0)
+                {
+                    // "${s%%[![:space:]]*}" / "$x-$y": expanded by the shell, then matched as literal text.
+                    if (BashParser.Parse("echo \"" + inner + "\"") is not Command.Simple { Words.Length: 2 } echoCmd) return null;
+                    Flush(); segs.Add("[string](" + EmitWord(echoCmd.Words[1]) + ")");
+                }
+                else lit.Append(inner);
                 i = end;
             }
             else if (c == '$' && i + 1 < raw.Length && (char.IsAsciiLetter(raw[i + 1]) || raw[i + 1] == '_' || raw[i + 1] == '{'))
@@ -6473,6 +6489,19 @@ public static class PsEmitter
         // Every embed below lands inside a PowerShell single-quoted string, so any literal
         // ' in the pattern/replacement (e.g. from a $'…' word inside ${VAR##pat}) must be
         // doubled or it breaks out and emits unparseable PowerShell (grammar-fuzz find).
+        // A quoted / expanded pattern (`${s#"${s%%[![:space:]]*}"}`, `${f%"$ext"}`) is the quote-removed VALUE, matched
+        // literally (its glob characters are quoted); an empty one removes nothing.
+        if ((suffix.StartsWith("%%") || suffix.StartsWith("##") ? suffix[2..] : suffix.StartsWith("%") || suffix.StartsWith("#") ? suffix[1..] : null)
+                is { } stripPat && suffix[0] is '%' or '#' && TryEmitSubstitutionOperand(stripPat) is { } stripExpr)
+        {
+            string esc = $"[regex]::Escape({stripExpr})";
+            string guard = $"$(if ({stripExpr}) {{ {esc} }} else {{ '(?!)' }})";
+            return suffix[0] == '#'
+                ? $"{open}{varRef} -replace ('^' + {guard}), '')"
+                : suffix.StartsWith("%%")
+                    ? $"{open}{varRef} -replace ({guard} + '$'), '')"
+                    : $"{open}{varRef} -replace ('^(.*)' + {guard} + '$'), '$1')";
+        }
         if (suffix.StartsWith("%%"))
             return $"{open}{varRef} -replace '{SqEsc(GlobToRegex(suffix[2..], lazy: false))}$','')";
         if (suffix.StartsWith("%"))
@@ -8833,11 +8862,23 @@ public static class PsEmitter
             }
             else if (c == '[')
             {
-                // Pass character class through unchanged — already valid regex syntax.
-                int close = glob.IndexOf(']', i + 1);
+                // A bracket expression is nearly valid regex: `[!x]` negates (regex `[^x]`), a leading `]` is
+                // literal, and `[:space:]` inside it is a POSIX class (so the first `]` is not always the close).
+                int close = -1, j = i + 1;
+                if (j < glob.Length && glob[j] is '!' or '^') j++;
+                if (j < glob.Length && glob[j] == ']') j++;
+                for (; j < glob.Length && close < 0; j++)
+                {
+                    if (glob[j] == '[' && j + 1 < glob.Length && glob[j + 1] == ':' && glob.IndexOf(":]", j + 2, StringComparison.Ordinal) is > 0 and var pe) j = pe + 1;
+                    else if (glob[j] == ']') close = j;
+                }
                 if (close >= 0)
                 {
-                    sb.Append(glob, i, close - i + 1);
+                    string body = glob[(i + 1)..close];
+                    if (body.Length > 0 && body[0] is '!' or '^') body = "^" + body[1..];
+                    int lead = body.StartsWith('^') ? 1 : 0;
+                    if (body.Length > lead && body[lead] == ']') body = body[..lead] + "\\]" + body[(lead + 1)..];
+                    sb.Append('[').Append(BashParser.TranslatePosixClassesForRegex(body)).Append(']');
                     i = close + 1;
                 }
                 else

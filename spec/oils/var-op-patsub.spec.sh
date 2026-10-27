@@ -297,7 +297,6 @@ echo ${v/$x/_}
 --_--
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-var-op-patsub var-op-patsub (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Substitute glob characters in pattern, quoted and unquoted
