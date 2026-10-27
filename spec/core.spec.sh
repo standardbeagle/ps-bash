@@ -438,3 +438,17 @@ p q r
 x,y
 a b c
 ## END
+
+#### ${x//$'\n'/,} and ${x//$nl/,} replace the quote-removed / variable operand
+x=$'a\nb c'; nl=$'\n'; sep=-
+echo "[${x//$'\n'/,}]"; echo "[${x//$nl/;}]"; echo "[${x// /$sep}]"; echo "[${x/'b'/B}]"; echo "[${x//b/'$1'}]"
+## STDOUT:
+[a,b c]
+[a;b c]
+[a
+b-c]
+[a
+B c]
+[a
+$1 c]
+## END

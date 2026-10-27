@@ -196,6 +196,20 @@ public class BashTranspilerReviewRegressionTests
     public void Transpile_LinenoLookalike_IsNotSubstituted(string bash)
         => Assert.DoesNotContain("echo 1", BashTranspiler.Transpile(bash).Replace("Invoke-BashEcho", "echo"));
 
+
+    // Oracle: `${x//$'\n'/,}` replaces newlines (the operand is the quote-removed value). The raw source text
+    // `$'\n'` was matched literally, so the join-lines idiom changed nothing.
+
+    [Theory]
+    [InlineData("echo \"${x//$'\\n'/,}\"")]
+    [InlineData("echo \"${x//$nl/,}\"")]
+    [InlineData("echo \"${x/'b'/B}\"")]
+    public void Transpile_SubstituteQuotedOrVariableOperand_MatchesTheValue(string bash)
+    {
+        string ps = BashTranspiler.Transpile(bash);
+        Assert.Contains("[regex]::Escape(", ps);
+        Assert.DoesNotContain("$'", ps);
+    }
     // Oracle: `f() { trap 'echo ret' RETURN; echo in; }; f` prints in then ret - a RETURN trap runs when the
     // function returns (it was never run). A function with no trap carries no wrapper.
 

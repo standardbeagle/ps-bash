@@ -6080,6 +6080,70 @@ public static class PsEmitter
         return false;
     }
 
+
+    /// <summary>
+    /// The text of a <c>${v/find/rep}</c> operand that carries quoting or a variable (<c>$'\n'</c>, <c>'x'</c>,
+    /// <c>"x"</c>, <c>$nl</c>, <c>${nl}</c>) as one PowerShell string expression, so the match is the quote-removed
+    /// value and not the raw source text. Null when the operand has none of these (the plain literal path applies)
+    /// or contains an unquoted glob character (kept on the pattern path).
+    /// </summary>
+    private static string? TryEmitSubstitutionOperand(string raw)
+    {
+        if (raw.IndexOfAny(['$', '\'', '"']) < 0) return null;
+        var segs = new List<string>();
+        var lit = new StringBuilder();
+        void Flush() { if (lit.Length > 0) { segs.Add(PsBuild.SingleQuote(lit.ToString())); lit.Clear(); } }
+        for (int i = 0; i < raw.Length; i++)
+        {
+            char c = raw[i];
+            if (c == '$' && i + 1 < raw.Length && raw[i + 1] == '\'')
+            {
+                int end = raw.IndexOf('\'', i + 2);
+                while (end > 0 && raw[end - 1] == '\\' && (end < 2 || raw[end - 2] != '\\')) end = raw.IndexOf('\'', end + 1);
+                if (end < 0) return null;
+                lit.Append(ExpandAnsiCEscapes(raw[(i + 2)..end]));
+                i = end;
+            }
+            else if (c == '\'')
+            {
+                int end = raw.IndexOf('\'', i + 1);
+                if (end < 0) return null;
+                lit.Append(raw, i + 1, end - i - 1);
+                i = end;
+            }
+            else if (c == '"')
+            {
+                int end = raw.IndexOf('"', i + 1);
+                if (end < 0 || raw.IndexOf('$', i + 1, end - i - 1) >= 0) return null;
+                lit.Append(raw, i + 1, end - i - 1);
+                i = end;
+            }
+            else if (c == '$' && i + 1 < raw.Length && (char.IsAsciiLetter(raw[i + 1]) || raw[i + 1] == '_' || raw[i + 1] == '{'))
+            {
+                int s = i + 1, e;
+                if (raw[s] == '{')
+                {
+                    e = raw.IndexOf('}', s);
+                    if (e < 0) return null;
+                    string name = raw[(s + 1)..e];
+                    if (name.Length == 0 || !name.All(ch => char.IsAsciiLetterOrDigit(ch) || ch == '_')) return null;
+                    Flush(); segs.Add("[string](" + EmitSimpleVar(name, strict: true) + ")");
+                    i = e;
+                }
+                else
+                {
+                    e = s;
+                    while (e < raw.Length && (char.IsAsciiLetterOrDigit(raw[e]) || raw[e] == '_')) e++;
+                    Flush(); segs.Add("[string](" + EmitSimpleVar(raw[s..e], strict: true) + ")");
+                    i = e - 1;
+                }
+            }
+            else if (c is '*' or '?' or '[' or '\\' or '$') return null;
+            else lit.Append(c);
+        }
+        Flush();
+        return segs.Count == 0 ? "''" : "(-join @(" + string.Join(", ", segs) + "))";
+    }
     private static string EmitBracedVar(WordPart.BracedVarSub bvs, bool inDoubleQuote = false)
     {
         NestingGuard.EnsureStack(); // ${x:-${x:-…}} recurses here without passing Emit(Command)
@@ -6327,16 +6391,29 @@ public static class PsEmitter
         {
             var parts = suffix[1..].Split('/', 2);
             string find = parts[0], replace = parts.Length > 1 ? parts[1] : "";
-            return $"{open}([regex]{ReplaceFindRegex(find)}).Replace({varRef}, '{SqEsc(replace)}', 1))";
+            return SubstituteExpr(open, varRef, find, replace, first: true);
         }
         // Replace all: ${VAR//find/replace} — escape find literally; 2-arg overload = all.
         if (suffix.StartsWith("//"))
         {
             var parts = suffix[2..].Split('/', 2);
             string find = parts[0], replace = parts.Length > 1 ? parts[1] : "";
-            return $"{open}([regex]{ReplaceFindRegex(find)}).Replace({varRef}, '{SqEsc(replace)}'))";
+            return SubstituteExpr(open, varRef, find, replace, first: false);
         }
 
+        // A quoted / variable operand (`$'\n'`, `$nl`, `'x'`) is the quote-removed VALUE, matched literally; `$` in the
+        // replacement is doubled because .NET reads `$1` / `$&` there.
+        static string SubstituteExpr(string open, string varRef, string find, string replace, bool first)
+        {
+            string tail = first ? ", 1" : "";
+            string? findExpr = TryEmitSubstitutionOperand(find);
+            string? repExpr = TryEmitSubstitutionOperand(replace);
+            if (findExpr is null && repExpr is null)
+                return $"{open}([regex]{ReplaceFindRegex(find)}).Replace({varRef}, '{SqEsc(replace)}'{tail}))";
+            string regex = findExpr is null ? ReplaceFindRegex(find) : $"[regex]::Escape({findExpr})";
+            string rep = repExpr is null ? $"'{SqEsc(replace)}'" : $"({repExpr}).Replace('$', '$$')";
+            return $"{open}([regex]{regex}).Replace({varRef}, {rep}{tail}))";
+        }
         // The `find` of ${VAR/find/rep}: an extglob pattern is matched as one (`${v//@(a|z)/Y}`);
         // anything else stays the historical LITERAL match (plain-glob find is not modelled).
         // A leading `#` / `%` anchors the match to the start / end of the value (`${s/#xx/yy}`, `${s/%xx/yy}`); a
