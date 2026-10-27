@@ -210,6 +210,20 @@ public class BashTranspilerReviewRegressionTests
         Assert.Contains("[regex]::Escape(", ps);
         Assert.DoesNotContain("$'", ps);
     }
+
+    // Oracle: `${#@}` / `${#*}` are the positional count (`$#`); they parsed as the length of a variable named
+    // "@" and printed `0@}`, and failed outright inside `$(( ))`.
+
+    [Theory]
+    [InlineData("echo ${#@}")]
+    [InlineData("echo ${#*}")]
+    [InlineData("echo $(( ${#@} + 1 ))")]
+    public void Transpile_PositionalCountBraced_IsTheArgCount(string bash)
+    {
+        string ps = BashTranspiler.Transpile(bash);
+        Assert.DoesNotContain("@}", ps);
+        Assert.Contains("BashPositional", ps);
+    }
     // Oracle: `f() { trap 'echo ret' RETURN; echo in; }; f` prints in then ret - a RETURN trap runs when the
     // function returns (it was never run). A function with no trap carries no wrapper.
 

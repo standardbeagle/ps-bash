@@ -5456,6 +5456,9 @@ public static class PsEmitter
         else return false;
         if (i == keyStart) return false;
         key = expr[keyStart..i];
+        // `${#@}` / `${#*}` count the positionals, like `$#`.
+        if (braced && key == "#" && i + 1 < expr.Length && expr[i] is '@' or '*' && expr[i + 1] == '}')
+            i++;
         if (braced)
         {
             if (i >= expr.Length || expr[i] != '}') return false;

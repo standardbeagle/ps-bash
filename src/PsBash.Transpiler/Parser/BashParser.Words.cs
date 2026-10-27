@@ -431,6 +431,12 @@ public sealed partial class BashParser
             return pos;
         }
 
+        // ${#@} / ${#*}: the number of positional parameters, i.e. $#.
+        if (pos + 2 < len && raw[pos] == '#' && raw[pos + 1] is '@' or '*' && raw[pos + 2] == '}')
+        {
+            parts.Add(new WordPart.BracedVarSub("#", null));
+            return pos + 3;
+        }
         // ${#VAR} or ${#arr[@]} -> length operator
         if (pos < len && raw[pos] == '#')
         {

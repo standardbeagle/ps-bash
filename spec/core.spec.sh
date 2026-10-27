@@ -452,3 +452,8 @@ B c]
 [a
 $1 c]
 ## END
+
+#### ${#@} and ${#*} are the positional count, also inside $(( ))
+set -- a b c
+echo ${#@} ${#*} "${#@}" $(( ${#@} + 1 ))
+## stdout: 3 3 3 4

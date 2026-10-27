@@ -240,6 +240,7 @@ public sealed class BashArithmeticParser
                     if (i >= source.Length || i == keyStart)
                         throw new BashArithmeticParseException($"invalid arithmetic parameter near '{source[start..]}'");
                     string key = source[keyStart..i];
+                    if (key is "#@" or "#*") key = "#"; // ${#@} is $#
                     // Array-length expansion is valid inside arithmetic contexts
                     // (for example `${#arr[@]} + 1`). Preserve it as an opaque
                     // parameter lookup so the typed arithmetic parser does not
@@ -247,7 +248,7 @@ public sealed class BashArithmeticParser
                     if (!IsParameterKey(key) && !IsArrayLengthParameterKey(key))
                         throw new BashArithmeticParseException($"invalid arithmetic parameter '${{{key}}}'");
                     i++;
-                    result.Add(new Tok(T.Parameter, Text: source[start..i], Key: key));
+                    result.Add(new Tok(T.Parameter, Text: key == "#" ? "$#" : source[start..i], Key: key));
                     continue;
                 }
                 if (char.IsDigit(source[i]))
