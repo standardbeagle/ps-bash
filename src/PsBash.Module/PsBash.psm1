@@ -2649,11 +2649,11 @@ if (-not $__bashVer -or ($__bashVer.Major + $__bashVer.Minor) -eq 0) {
     } catch { $null }
 }
 if (-not $__bashVer -or ($__bashVer.Major + $__bashVer.Minor) -eq 0) { $__bashVer = [version]'0.8.0' }
-# The real ps-bash module version (distinct from the emulated $BASH_VERSION above). Binary cmdlets
+# $BASH_VERSION / BASH_VERSINFO claim bash 5.2 compatibility, like a browser User-Agent claiming Mozilla/5.0: scripts gate on `>= 4` (mapfile, assoc arrays, ${x,,}) and ps-bash supports those. The real ps-bash module version (distinct from the emulated $BASH_VERSION). Binary cmdlets
 # and runtime functions read this for `<cmd> --version`, so tooling can identify it is ps-bash.
 $global:PsBashVersion = $__bashVer.ToString()
-$global:BashVersion = "$($__bashVer.Major).$($__bashVer.Minor).0(1)-release"
-$global:BashVersionInfo = @($__bashVer.Major, $__bashVer.Minor, 0, 1, 'release', "$($__bashVer.Major).$($__bashVer.Minor).0")
+$global:BashVersion = '5.2.37(1)-release'
+$global:BashVersionInfo = @(5, 2, 37, 1, 'release', 'x86_64-pc-ps-bash')
 # bash default shell flags: h (hash commands), B (brace expansion enabled)
 $global:BashFlags = 'hB'
 $global:BashLastArg = ''

@@ -39,6 +39,14 @@ Describe 'Module Loading' {
         $global:PsBashVersion | Should -Be $mod.Version.ToString()
         $global:BashVersion | Should -Not -BeLike '0.0.*'
     }
+
+    # Scripts gate features on `$BASH_VERSINFO[0] -ge 4` (mapfile, assoc arrays); like a browser
+    # User-Agent, the emulated version claims bash 5.2 while PsBashVersion identifies ps-bash.
+    It 'reports a bash 5.2-compatible BASH_VERSION and BASH_VERSINFO' {
+        $global:BashVersion | Should -BeLike '5.2.*(1)-release'
+        $global:BashVersionInfo[0] | Should -Be 5
+        $global:BashVersionInfo[1] | Should -Be 2
+    }
 }
 
 Describe 'Get-BashPlatform' {
