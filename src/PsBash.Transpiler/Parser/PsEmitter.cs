@@ -3086,7 +3086,9 @@ public static class PsEmitter
             if (lit is null) { if (TrySplitInitializer(w, out var n0, out _)) names.Add(n0); }
             else if (!lit.StartsWith('-')) names.Add(lit.Split('=')[0]);
         }
-        if (!hasR || names.Count == 0)
+        // bash ignores -r on a nameref (`typeset -n -r ref=x` still lets `ref=v` assign through).
+        bool isNameref = cmd.Words.Skip(1).Any(w => GetLiteralValue(w) is { Length: > 1 } f && f[0] == '-' && f.AsSpan(1).IndexOfAnyExcept("pfF") >= 0 && f.Contains('n'));
+        if (!hasR || isNameref || names.Count == 0)
             return TryEmitDeclareCore(cmd, out result);
         if (!TryEmitDeclareCore(cmd with { Words = [.. kept] }, out var core))
             return false;

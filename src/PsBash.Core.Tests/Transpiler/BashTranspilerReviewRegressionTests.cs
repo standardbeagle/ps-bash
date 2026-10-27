@@ -321,6 +321,11 @@ public class BashTranspilerReviewRegressionTests
         Assert.DoesNotContain("$global:st", ps);
     }
 
+    // Oracle: bash ignores -r on a nameref - `typeset -n -r ref=x; ref=v` still assigns through it.
+    [Fact]
+    public void Transpile_DeclareNamerefReadonly_DoesNotMarkReadonly()
+        => Assert.DoesNotContain("MarkReadonly(", BashTranspiler.Transpile("x=1; typeset -n -r ref=x; ref=2"));
+
     // Oracle: a function is a filter: `indent() { sed 's/^/  /'; }; cmd | indent`. The piped input never reached
     // the commands in the body (sed/grep/tr/cat/read saw an empty stdin). A body that reads stdin takes the pipe
     // it is called with; one that does not is unchanged.

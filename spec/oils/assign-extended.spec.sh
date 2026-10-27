@@ -678,7 +678,6 @@ status=1
 status=1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-assign-extended assign-extended (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### typeset -ar makes it readonly
