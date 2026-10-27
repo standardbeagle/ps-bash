@@ -6508,7 +6508,7 @@ public static class PsEmitter
             string? repExpr = TryEmitSubstitutionOperand(replace);
             if (findExpr is null && repExpr is null)
                 return $"{open}([regex]{ReplaceFindRegex(find)}).Replace({varRef}, '{SqEsc(replace)}'{tail}))";
-            string regex = findExpr is null ? ReplaceFindRegex(find) : $"[regex]::Escape({findExpr})";
+            string regex = findExpr is null ? ReplaceFindRegex(find) : $"$(if ({findExpr}) {{ [regex]::Escape({findExpr}) }} else {{ '(?!)' }})";
             string rep = repExpr is null ? $"'{SqEsc(replace)}'" : $"({repExpr}).Replace('$', '$$')";
             return $"{open}([regex]{regex}).Replace({varRef}, {rep}{tail}))";
         }

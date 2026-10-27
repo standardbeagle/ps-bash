@@ -226,6 +226,11 @@ public class BashTranspilerReviewRegressionTests
     }
     // Oracle: `f() { trap 'echo ret' RETURN; echo in; }; f` prints in then ret - a RETURN trap runs when the
 
+    // Oracle: an empty pattern (`${x//$unset/r}`) replaces nothing; an empty regex would match between every character.
+    [Fact]
+    public void Transpile_SubstituteVariablePattern_EmptyValueMatchesNothing()
+        => Assert.Contains("(?!)", BashTranspiler.Transpile("x=ab; echo ${x//$foo/r}"));
+
     // Oracle: a function is a filter: `indent() { sed 's/^/  /'; }; cmd | indent`. The piped input never reached
     // the commands in the body (sed/grep/tr/cat/read saw an empty stdin). A body that reads stdin takes the pipe
     // it is called with; one that does not is unchanged.
