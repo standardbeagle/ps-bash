@@ -5413,6 +5413,25 @@ public static class PsEmitter
                 spanEnd = i + length;
                 replacement = PositionalRefExpr(key);
             }
+            else if (c == '$' && i + 1 < expr.Length && expr[i + 1] == '{' && FindBraceEnd(expr, i + 1) is var braceEnd and > 0
+                     && !expr[(i + 2)..braceEnd].All(ch => char.IsAsciiLetterOrDigit(ch) || ch == '_')) // ${x}: the evaluator resolves a plain name
+            {
+                // `${a[i]}` / `${m[$k]:-0}` / `${x:-7}`: a full parameter expansion, expanded by the shell
+                // BEFORE the arithmetic is evaluated (bash expands, then evaluates). An empty result is 0.
+                spanEnd = braceEnd + 1;
+                var expansion = BashParser.Parse("echo \"" + expr[i..spanEnd] + "\"") is Command.Simple { Words.Length: 2 } echoCmd
+                    ? EmitWord(echoCmd.Words[1])
+                    : null;
+                if (expansion is null) continue;
+                replacement = ZeroDefault(expansion);
+            }
+            else if (char.IsAsciiLetter(c) && (i == 0 || !(char.IsAsciiLetterOrDigit(expr[i - 1]) || expr[i - 1] is '_' or '$' or '{'))
+                     && TryMatchArithDynamicSpecial(expr, i, out int nameLen, out string dynamicExpr))
+            {
+                // `$(( RANDOM % 6 ))`: the evaluator reads variables, not the shell's computed ones.
+                spanEnd = i + nameLen;
+                replacement = ZeroDefault(dynamicExpr);
+            }
             else continue;
 
             parts ??= [];
@@ -5425,6 +5444,36 @@ public static class PsEmitter
         if (parts is null) return null;
         if (last < expr.Length) parts.Add(PsBuild.SingleQuote(expr[last..]));
         return parts;
+    }
+
+    /// <summary>A bare RANDOM / SECONDS / EPOCHSECONDS / BASHPID / PPID / UID / EUID in an arithmetic expression that
+    /// is READ (not assigned): its computed value, from the same mapping the plain `$NAME` expansion uses.</summary>
+    private static bool TryMatchArithDynamicSpecial(string expr, int start, out int length, out string valueExpr)
+    {
+        length = 0; valueExpr = "";
+        int end = start;
+        while (end < expr.Length && (char.IsAsciiLetterOrDigit(expr[end]) || expr[end] == '_')) end++;
+        string name = expr[start..end];
+        if (name is not ("RANDOM" or "SECONDS" or "EPOCHSECONDS" or "BASHPID" or "PPID" or "UID" or "EUID")) return false;
+        int k = end;
+        while (k < expr.Length && expr[k] == ' ') k++;
+        if (k < expr.Length && expr[k] == '=' && !(k + 1 < expr.Length && expr[k + 1] == '=')) return false; // assignment
+        if (k + 1 < expr.Length && expr[k + 1] == '=' && expr[k] is '+' or '-' or '*' or '/' or '%') return false;
+        if (PsBuild.TryMapSpecialVar(name, braced: false, inDoubleQuote: false) is not { } mapped) return false;
+        length = end - start;
+        valueExpr = mapped;
+        return true;
+    }
+
+    /// <summary>Index of the `}` closing the `{` at <paramref name="open"/>, counting nested braces; -1 when unclosed.</summary>
+    private static int FindBraceEnd(string s, int open)
+    {
+        for (int depth = 0, i = open; i < s.Length; i++)
+        {
+            if (s[i] == '{') depth++;
+            else if (s[i] == '}' && --depth == 0) return i;
+        }
+        return -1;
     }
 
     /// <summary>
@@ -6210,7 +6259,10 @@ public static class PsEmitter
                 // scalar suffix operator the plain-variable path uses.
                 string elemRef = int.TryParse(subscript, out _)
                     ? $"{arrayVar}[{subscript}]"
-                    : $"{arrayVar}['{SqEsc(subscript)}']";
+                    // ${m[$k]:-0}: a variable subscript is the variable's value, as in the operator-less form above.
+                    : System.Text.RegularExpressions.Regex.Match(subscript, @"^\$\{?(\w+)\}?$") is { Success: true } subVar
+                        ? $"{arrayVar}[{EmitSimpleVar(subVar.Groups[1].Value)}]"
+                        : $"{arrayVar}['{SqEsc(subscript)}']";
                 return EmitScalarSuffix(elemRef, subOp, inDoubleQuote, bvs.ArgWord)
                     ?? (inDoubleQuote ? $"$({elemRef})" : elemRef);
             }

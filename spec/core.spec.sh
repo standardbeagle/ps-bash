@@ -457,3 +457,10 @@ $1 c]
 set -- a b c
 echo ${#@} ${#*} "${#@}" $(( ${#@} + 1 ))
 ## stdout: 3 3 3 4
+
+#### counting idiom: ${seen[$w]:-0} in $(( )), ${a[1]} in $(( )), bare RANDOM under set -u
+declare -A seen; a=(5 6)
+for w in x y x; do seen[$w]=$(( ${seen[$w]:-0} + 1 )); done
+set -u
+echo "${seen[x]} ${seen[y]} $(( ${a[1]} + 1 )) $(( RANDOM % 1 ))"
+## stdout: 2 1 7 0

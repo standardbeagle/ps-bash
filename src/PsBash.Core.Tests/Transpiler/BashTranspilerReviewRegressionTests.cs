@@ -225,6 +225,38 @@ public class BashTranspilerReviewRegressionTests
         Assert.Contains("BashPositional", ps);
     }
     // Oracle: `f() { trap 'echo ret' RETURN; echo in; }; f` prints in then ret - a RETURN trap runs when the
+
+    // Oracle: `seen[$w]=$(( ${seen[$w]:-0} + 1 ))` is the counting idiom. The subscript of `${m[$k]:-d}` was the
+    // literal text `$k`; `${a[1]}` inside `$(( ))` was a parse error; and a bare RANDOM / SECONDS there read as 0.
+
+    [Fact]
+    public void Transpile_ElementWithOperatorAndVariableSubscript_UsesTheVariablesValue()
+    {
+        string ps = BashTranspiler.Transpile("echo \"${m[$k]:-0}\"");
+        Assert.Contains("[$env:k]", ps);
+        Assert.DoesNotContain("'$k'", ps);
+    }
+
+    [Theory]
+    [InlineData("echo $(( ${a[1]} + 1 ))")]
+    [InlineData("echo $(( ${m[$k]:-0} + 1 ))")]
+    [InlineData("echo $(( ${x:-7} * 2 ))")]
+    public void Transpile_ParameterExpansionInArithmetic_IsExpandedBeforeEvaluation(string bash)
+    {
+        string ps = BashTranspiler.Transpile(bash);
+        Assert.DoesNotContain("${", ps);
+    }
+
+    [Theory]
+    [InlineData("echo $(( RANDOM % 6 ))", true)]
+    [InlineData("echo $(( SECONDS + 1 ))", true)]
+    [InlineData("(( RANDOM = 5 ))", false)]
+    [InlineData("echo $(( XRANDOM + 1 ))", false)]
+    public void Transpile_ComputedSpecialVarInArithmetic_IsReadFromTheShell(string bash, bool expanded)
+    {
+        string ps = BashTranspiler.Transpile(bash);
+        Assert.Equal(expanded, ps.Contains("Get-Random") || ps.Contains("[DateTime]") || ps.Contains("BashStartTime"));
+    }
     // function returns (it was never run). A function with no trap carries no wrapper.
 
     [Fact]

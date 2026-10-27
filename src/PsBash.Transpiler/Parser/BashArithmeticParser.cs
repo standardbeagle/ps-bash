@@ -236,7 +236,12 @@ public sealed class BashArithmeticParser
                 if (source[i] == '{')
                 {
                     int keyStart = ++i;
-                    while (i < source.Length && source[i] != '}') i++;
+                    // A full parameter expansion (`${a[i]}`, `${m[$k]:-0}`) may nest braces.
+                    for (int depth = 1; i < source.Length; i++)
+                    {
+                        if (source[i] == '{') depth++;
+                        else if (source[i] == '}' && --depth == 0) break;
+                    }
                     if (i >= source.Length || i == keyStart)
                         throw new BashArithmeticParseException($"invalid arithmetic parameter near '{source[start..]}'");
                     string key = source[keyStart..i];
@@ -245,8 +250,7 @@ public sealed class BashArithmeticParser
                     // (for example `${#arr[@]} + 1`). Preserve it as an opaque
                     // parameter lookup so the typed arithmetic parser does not
                     // reject an otherwise valid bash command.
-                    if (!IsParameterKey(key) && !IsArrayLengthParameterKey(key))
-                        throw new BashArithmeticParseException($"invalid arithmetic parameter '${{{key}}}'");
+                    // Any other expansion is the shell's to expand before evaluation (the emitter splices it in).
                     i++;
                     result.Add(new Tok(T.Parameter, Text: key == "#" ? "$#" : source[start..i], Key: key));
                     continue;
