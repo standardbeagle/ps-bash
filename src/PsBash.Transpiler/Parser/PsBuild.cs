@@ -634,6 +634,18 @@ public static class PsBuild
         + "try { " + body + " } finally { $global:__BashStdIn = $__psbash_stdin_prev }";
 
     /// <summary>
+    /// A function body that reads stdin: when the function is called with a pipe (<c>echo x | f</c>,
+    /// <c>f &lt;&lt;&lt; x</c>) that pipe is its stdin (<see cref="StdinScope"/>); called without one it keeps the
+    /// stdin of its caller (the enclosing compound's queue, or the launcher's).
+    /// </summary>
+    public static string FunctionStdinScope(string body) =>
+        "$__psbash_fin = $MyInvocation.ExpectingInput; "
+        + "if ($__psbash_fin) { $__psbash_fprev = Get-Variable -Name __BashStdIn -Scope Global -ValueOnly -ErrorAction SilentlyContinue; "
+        + "$global:__BashStdIn = [System.Collections.Generic.Queue[object]]::new(); "
+        + "foreach ($__psbash_fl in $input) { $global:__BashStdIn.Enqueue($__psbash_fl) } }; "
+        + "try { " + body + " } finally { if ($__psbash_fin) { $global:__BashStdIn = $__psbash_fprev } }";
+
+    /// <summary>
     /// Like <see cref="StdinScope"/> but the stdin is a lazily-pulled background PRODUCER
     /// (<c>New-BashLazyStdin</c>) instead of the incoming pipeline: for an unbounded producer
     /// (<c>yes | { head -n1; }</c>) that a pipe could never hand over (the stage after a pipe starts only

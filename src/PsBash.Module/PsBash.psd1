@@ -150,6 +150,7 @@ FunctionsToExport = @(
     'Register-BashLsProvider',
     'Remove-BashBgFinished',
     'Remove-BashBgState',
+    'Resolve-BashCommand',
     'Resolve-BashGlob',
     'Resolve-BrowseAdapter',
     'Resolve-JqDotPath',

@@ -464,3 +464,36 @@ for w in x y x; do seen[$w]=$(( ${seen[$w]:-0} + 1 )); done
 set -u
 echo "${seen[x]} ${seen[y]} $(( ${a[1]} + 1 )) $(( RANDOM % 1 ))"
 ## stdout: 2 1 7 0
+
+#### a function is a filter: the pipe (or here-string) it is called with is its stdin
+indent() { sed 's/^/> /'; }
+count() { grep -c a; }
+first() { read -r x; echo "first=$x"; }
+lines() { mapfile -t a; echo "${#a[@]} ${a[1]}"; }
+echo x | indent; printf 'a\nb\na\n' | count; echo hi | first; first <<< again; printf 'p\nq\n' | lines
+## STDOUT:
+> x
+2
+first=hi
+first=again
+2 q
+## END
+
+#### a run-time command name resolves like bash: "$@", $cmd, "${arr[@]}" (false/true/echo/test/[ are builtins)
+run() { if "$@"; then echo ok; else echo fail; fi; }
+run false; run true; run test -d /; run [ 1 -eq 1 ]; run [ -f /nonexistent_zz ]; run echo hi
+c=false; $c; echo "rc=$?"; cmd=(echo "two words" -n); "${cmd[@]}"; echo
+echo piped | { c=cat; $c; }
+## STDOUT:
+fail
+ok
+ok
+ok
+fail
+hi
+ok
+rc=1
+two words -n
+
+piped
+## END

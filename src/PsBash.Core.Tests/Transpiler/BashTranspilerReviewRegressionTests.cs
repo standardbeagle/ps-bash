@@ -226,6 +226,39 @@ public class BashTranspilerReviewRegressionTests
     }
     // Oracle: `f() { trap 'echo ret' RETURN; echo in; }; f` prints in then ret - a RETURN trap runs when the
 
+    // Oracle: a function is a filter: `indent() { sed 's/^/  /'; }; cmd | indent`. The piped input never reached
+    // the commands in the body (sed/grep/tr/cat/read saw an empty stdin). A body that reads stdin takes the pipe
+    // it is called with; one that does not is unchanged.
+
+    [Theory]
+    [InlineData("f() { sed 's/^/> /'; }")]
+    [InlineData("f() { cat | wc -l; }")]
+    [InlineData("f() { read -r x; echo $x; }")]
+    [InlineData("f() { mapfile -t a; echo ${#a[@]}; }")]
+    public void Transpile_FunctionThatReadsStdin_TakesThePipeItIsCalledWith(string bash)
+        => Assert.Contains("$MyInvocation.ExpectingInput", BashTranspiler.Transpile(bash));
+
+    [Theory]
+    [InlineData("f() { echo hi; }")]
+    [InlineData("f() { local x=1; echo $x; }")]
+    public void Transpile_FunctionThatReadsNoStdin_HasNoStdinScope(string bash)
+        => Assert.DoesNotContain("ExpectingInput", BashTranspiler.Transpile(bash));
+
+    // Oracle: `"$@"` / `$cmd` run the named command as bash resolves it: a function, then a builtin (`false`,
+    // `true`, `echo`, `test`, `[` are not PowerShell commands of those names), then PATH.
+
+    [Theory]
+    [InlineData("r() { \"$@\"; }")]
+    [InlineData("c=false; $c")]
+    [InlineData("\"$tool\" --version")]
+    public void Transpile_RunTimeCommandName_IsResolvedAsBashDoes(string bash)
+        => Assert.Contains("Resolve-BashCommand", BashTranspiler.Transpile(bash));
+
+    [Theory]
+    [InlineData("echo hi")]
+    [InlineData("ls -l")]
+    public void Transpile_LiteralCommandName_IsNotResolvedAtRunTime(string bash)
+        => Assert.DoesNotContain("Resolve-BashCommand", BashTranspiler.Transpile(bash));
     // Oracle: `seen[$w]=$(( ${seen[$w]:-0} + 1 ))` is the counting idiom. The subscript of `${m[$k]:-d}` was the
     // literal text `$k`; `${a[1]}` inside `$(( ))` was a parse error; and a bare RANDOM / SECONDS there read as 0.
 

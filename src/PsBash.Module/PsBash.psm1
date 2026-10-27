@@ -98,6 +98,27 @@ function Get-BashFuncNames {
     } | ForEach-Object { $_.InvocationInfo.MyCommand.Name })
 }
 
+# A command word that is only known at run time (`"$@"`, `$cmd`, `"$tool"`) is looked up as bash does: a shell
+# function, then a builtin / ps-bash command (`false`, `true`, `echo`, `test` are not PowerShell commands of
+# those names), then whatever PowerShell can find (a program on PATH). Returns something `&` can call.
+function Resolve-BashCommand {
+    param([string]$Name)
+    if ([string]::IsNullOrEmpty($Name) -or $Name.Contains('/') -or $Name.Contains('\')) { return $Name }
+    if ($Name -eq '[') {
+        # [ ... ]: the closing bracket is not an operand of test.
+        return { $a = @($args); if ($a.Count -gt 0 -and $a[-1] -eq ']') { $a = @($a | Select-Object -First ($a.Count - 1)) }; Invoke-BashTest @a }
+    }
+    if (Get-Command -Name ([WildcardPattern]::Escape($Name)) -CommandType Function -ErrorAction Ignore) { return $Name }
+    switch -CaseSensitive ($Name) {
+        'true'  { return { $global:LASTEXITCODE = 0 } }
+        ':'     { return { $global:LASTEXITCODE = 0 } }
+        'false' { return { $global:LASTEXITCODE = 1 } }
+    }
+    $cmd = Get-Command -Name ('Invoke-Bash' + [WildcardPattern]::Escape($Name)) -CommandType Cmdlet, Function -ErrorAction Ignore
+    if ($cmd) { return $cmd.Name }
+    return $Name
+}
+
 # BASH_SOURCE: the script file (and, while `source` runs, the sourced files above it); empty for `-c`.
 if (-not (Get-Variable -Name BASH_SOURCE -Scope global -ErrorAction SilentlyContinue)) {
     $global:BASH_SOURCE = @()

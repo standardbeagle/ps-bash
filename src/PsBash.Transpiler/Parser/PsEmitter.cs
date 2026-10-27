@@ -1392,7 +1392,18 @@ public static class PsEmitter
             // launcher's. Under the launcher-stdin scope its body therefore reads `$input`/the pipe as before.
             _functionDepth++;
             string body;
-            try { body = _launcherStdin ? WithStdinScope(false, () => EmitBody(func.Body)) : EmitBody(func.Body); }
+            // The body is emitted as inside a stdin scope; one that reads no stdin comes out unchanged. One that does
+            // (`indent() { sed 's/^/  /'; }`, `f() { read -r x; }`) takes the pipe it is called with as its stdin
+            // (PsBuild.FunctionStdinScope) and otherwise the stdin of whatever called it.
+            try
+            {
+                body = WithStdinScope(true, () => EmitBody(func.Body));
+                if (body.Contains("__BashStdIn", StringComparison.Ordinal) || body.Contains("Invoke-BashRead", StringComparison.Ordinal)
+                    || body.Contains("Invoke-BashMapfile", StringComparison.Ordinal))
+                    body = PsBuild.FunctionStdinScope(body);
+                else
+                    body = _launcherStdin ? WithStdinScope(false, () => EmitBody(func.Body)) : EmitBody(func.Body);
+            }
             finally { _functionDepth--; }
             // `trap '...' RETURN` inside the function runs when the function returns (then is spent, so a
             // later call does not re-fire it). Only a body that calls `trap` pays for the wrapper.
@@ -1585,6 +1596,10 @@ public static class PsEmitter
     private static string EmitSimpleFed(Command.Simple simple)
     {
         var text = EmitSimple(simple);
+        // A run-time command name (`$c`, `"$tool"`) may read stdin: feed the scope's queue as a pipeline.
+        if (_inStdinScope && simple.EnvPairs.IsEmpty && simple.HereDocs.IsDefaultOrEmpty && !HasInputRedirect(simple.Redirects)
+            && text.StartsWith("& (Resolve-BashCommand ", StringComparison.Ordinal) && !PsBuild.IsStatementList(text))
+            return PsBuild.StdinFeed + " | " + text;
         if (!_inStdinScope
             || !simple.EnvPairs.IsEmpty
             || !simple.HereDocs.IsDefaultOrEmpty
@@ -3785,6 +3800,10 @@ public static class PsEmitter
         bool needsCallOperator =
             !isScriptCommand && cmd.Words.Length > 0
             && (IsExpandedCommandWord(cmd.Words[0]) || dashName is not null);
+        // A run-time command name (`"$@"`, `$cmd`, `"$tool"`) is looked up as bash does (function, then builtin such
+        // as `false` / `echo` / `test`, then PATH): Resolve-BashCommand returns what `&` can call.
+        bool dynamicName = needsCallOperator && dashName is null && IsBareVariableCommandWord(cmd.Words[0]);
+        bool arrayName = dynamicName && (IsQuotedArrayAllWord(cmd.Words[0]) || IsUnquotedArrayAllWord(cmd.Words[0]));
         string leading = cmd.Words.Length == 0 ? ""
             : isScriptCommand ? "bash "
             : needsCallOperator ? "& "
@@ -3802,6 +3821,30 @@ public static class PsEmitter
                 ? TransformWordPath(
                     FlattenPartsToDoubleQuotedString(cmd.Words[0].Parts))
                 : EmitWord(cmd.Words[0]);
+
+        if (arrayName)
+        {
+            // `"$@" extra`: the first element is the command, the rest of the array and the operands its arguments.
+            var extra = new StringBuilder();
+            for (int i = 1; i < cmd.Words.Length; i++)
+                extra.Append(' ').Append(QuoteGeneralArgIfNeeded(EmitWord(cmd.Words[i])));
+            string wordsExpr = EmitUnquotedSplitWordArray(cmd.Words[0]);
+            sb.Append("& { $__dyn = " + wordsExpr + "; if ($__dyn.Count -gt 0) { $__dynrest = @($__dyn | Select-Object -Skip 1); & (Resolve-BashCommand $__dyn[0]) @__dynrest" + extra + " } else { $global:LASTEXITCODE = 0 } }");
+            AppendRedirectTail(sb, cmd.Redirects);
+            if (!cmd.EnvPairs.IsEmpty)
+            {
+                sb.Append(" } finally { ");
+                foreach (var envPair in cmd.EnvPairs)
+                    sb.Append($"$env:{envPair.Name} = $__saved_{envPair.Name}; ");
+                sb.Append('}');
+            }
+            return sb.ToString();
+        }
+        if (dynamicName)
+        {
+            leading = "& (Resolve-BashCommand ";
+            commandWordText += ")";
+        }
 
         // A PowerShell statement keyword (exit/return/break/…) cannot take a
         // splatted argument — `exit @__bashsplat0` is a parse error that poisons
@@ -8261,6 +8304,15 @@ public static class PsEmitter
         if (word.Parts.Length != 1)
             return false;
         return word.Parts[0] is WordPart.SimpleVarSub or WordPart.BracedVarSub;
+    }
+
+    /// <summary>A command word that is just a variable expansion (`$c`, `${c}`, `"$c"`, `"$@"`, `"${a[@]}"`): the name is
+    /// only known at run time. A composed word (`$dir/$name`, `"$HOME/bin/x"`) is a path and stays a plain call.</summary>
+    private static bool IsBareVariableCommandWord(CompoundWord word)
+    {
+        if (word.Parts.Length != 1) return false;
+        var part = word.Parts[0] is WordPart.DoubleQuoted { Parts.Length: 1 } dq ? dq.Parts[0] : word.Parts[0];
+        return part is WordPart.SimpleVarSub or WordPart.BracedVarSub;
     }
 
     /// <summary>
