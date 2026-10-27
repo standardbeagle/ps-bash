@@ -265,6 +265,18 @@ public class BashTranspilerReviewRegressionTests
     public void Transpile_LoneQuotedArrayArgumentToFunction_IsSplatted(string bash)
         => Assert.Contains("@__bashsplat", BashTranspiler.Transpile(bash));
 
+    // Oracle: `${!#}` is the last argument, `${!n}` the positional named by n, `${@:$#}` / `${a[@]:$i:2}` slice by a variable,
+    // and `${a[@]:-w}` / `${m[@]:+w}` test the elements (an associative array printed "System.Collections.Hashtable").
+    [Theory]
+    [InlineData("echo \"${!#}\"", "$__pp")]
+    [InlineData("n=2; echo \"${!n}\"", "$__pp")]
+    [InlineData("echo \"${@:$#}\"", "$__psbO")]
+    [InlineData("echo \"${a[@]:$i:2}\"", "$__psbN")]
+    [InlineData("echo \"${m[@]:-none}\"", ".Count -gt 0")]
+    [InlineData("echo \"${m[@]:+yes}\"", ".Count -gt 0")]
+    public void Transpile_IndirectPositionalVariableSliceAndArrayDefault_AreRuntimeEvaluated(string bash, string expected)
+        => Assert.Contains(expected, BashTranspiler.Transpile(bash));
+
     // Oracle: a function is a filter: `indent() { sed 's/^/  /'; }; cmd | indent`. The piped input never reached
     // the commands in the body (sed/grep/tr/cat/read saw an empty stdin). A body that reads stdin takes the pipe
     // it is called with; one that does not is unchanged.

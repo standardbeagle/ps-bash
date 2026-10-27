@@ -390,6 +390,12 @@ public sealed partial class BashParser
         if (pos < len && raw[pos] == '!')
         {
             pos++; // skip !
+            if (pos + 1 < len && raw[pos] == '#' && raw[pos + 1] == '}')
+            {
+                pos += 2; // ${!#}: the value of the variable named by $# = the last positional parameter
+                parts.Add(new WordPart.BracedVarSub("#", "!indirect"));
+                return pos;
+            }
             int nameStart = pos;
             while (pos < len && IsVarChar(raw[pos]))
                 pos++;

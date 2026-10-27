@@ -550,3 +550,16 @@ key=k2
 rc=1 [l1
 l2]
 ## END
+
+#### ${!#} ${!n} ${@:$#} ${a[@]:$i} and ${a[@]:-w} on empty / non-empty arrays
+set -- a "b c" d; n=2; arr=(p q r s); i=1; e=()
+echo "${!#}" "${!n}" "${@:$#}" "${@:2:1}"; echo "${arr[@]:$i:2}" "${arr[@]:$i}"
+echo "${e[@]:-none}" "${arr[@]:-none}" "${e[@]:+alt}" "${arr[@]:+alt}"
+declare -A m; echo "${m[@]:-none}"; m[k]=v; echo "${m[@]:-none}"
+## STDOUT:
+d b c d b c
+q r q r s
+none p q r s  alt
+none
+v
+## END

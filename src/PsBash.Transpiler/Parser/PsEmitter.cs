@@ -6346,6 +6346,18 @@ public static class PsEmitter
                                 : $"$({mapped})";
                         }
                     }
+                    // `${a[@]:-word}` / `${a[@]:+word}`: "the array has elements" is the test (an associative array: its values).
+                    if (subOp.Length > 1 && (subOp.StartsWith(":-") || subOp.StartsWith(":+") || subOp[0] is '-' or '+'))
+                    {
+                        bool alt = subOp.Contains('+');
+                        string word = subOp.StartsWith(':') ? subOp[2..] : subOp[1..];
+                        // The scalar emitter renders `word` (with its own quoting / expansions) as the default / alternative arm.
+                        string arm = EmitScalarSuffix("$null", ":-" + word, false, bvs.ArgWord) ?? "''";
+                        string src = $"@(if ({arrayVar} -is [System.Collections.IDictionary]) {{ {arrayVar}.Values }} else {{ {arrayVar} }})";
+                        return alt
+                            ? $"$(if ({src}.Count -gt 0) {{ {arm} }} else {{ '' }})"
+                            : $"$(if ({src}.Count -gt 0) {{ {src} }} else {{ {arm} }})";
+                    }
                     return arrayVar;
                 }
 
@@ -6382,8 +6394,12 @@ public static class PsEmitter
         // Indirect expansion ${!a}: the value of the variable whose NAME is $a's value.
         if (bvs.Suffix == "!indirect")
         {
-            string lookup = $"[System.Environment]::GetEnvironmentVariable({varRef})";
-            return inDoubleQuote ? $"$({lookup})" : $"({lookup})";
+            // The name's value is a variable name, or a positional index (`n=2; ${!n}`, `${!#}` = the last argument).
+            string lookup = "& { $__ind = [string](" + EmitSimpleVar(bvs.Name, strict: true) + "); "
+                + "if ($__ind -match '^[0-9]+$') { $__pp = @(" + PsBuild.BuildPositionalExpansion("@") + "); "
+                + "if ([int]$__ind -eq 0) { " + EmitSimpleVar("0", strict: true) + " } elseif ([int]$__ind -le $__pp.Count) { $__pp[[int]$__ind - 1] } } "
+                + "else { [System.Environment]::GetEnvironmentVariable($__ind) } }";
+            return inDoubleQuote ? $"$({lookup})" : $"$({lookup})";
         }
 
         if (bvs.Suffix == "!names")
@@ -6709,10 +6725,9 @@ public static class PsEmitter
     {
         var body = suffix[1..].Trim();
         var parts = body.Split(':', 2);
-        if (!int.TryParse(parts[0].Trim(), out int offset))
-            return null;
-        if (parts.Length == 2 && !int.TryParse(parts[1].Trim(), out _))
-            return null;
+        if (!int.TryParse(parts[0].Trim(), out int offset)
+            || (parts.Length == 2 && !int.TryParse(parts[1].Trim(), out _)))
+            return EmitArraySlice(PsBuild.BuildPositionalExpansion("@"), suffix, inDoubleQuote, positional: true);
 
         int shifted = offset > 0 ? offset - 1 : offset;
         string op = parts.Length == 2
@@ -6727,19 +6742,27 @@ public static class PsEmitter
     // Returns null when `op` is not a `:`-prefixed numeric slice (caller degrades to the
     // whole array). bash element indices map directly: offset..(offset+length-1), and
     // negative offsets index from the end (PowerShell supports negative range bounds).
-    private static string? EmitArraySlice(string arrayVar, string op, bool inDoubleQuote)
+    private static string? EmitArraySlice(string arrayVar, string op, bool inDoubleQuote, bool positional = false)
     {
         if (!op.StartsWith(":"))
             return null;
         var body = op[1..].Trim();
         var parts = body.Split(':', 2);
-        if (!int.TryParse(parts[0].Trim(), out int offset))
+        // A bound is an integer or a variable (`${a[@]:$i}`, `${@:$#}`, `${a[@]:$i:$n}`): its value is read at run time.
+        static string? Bound(string text)
+        {
+            text = text.Trim();
+            if (int.TryParse(text, out int n)) return n.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            var m = System.Text.RegularExpressions.Regex.Match(text, @"^\$(?:\{(\w+|#)\}|(\w+|#))$");
+            return m.Success ? "[int](" + ZeroDefault(EmitSimpleVar(m.Groups[1].Success ? m.Groups[1].Value : m.Groups[2].Value, strict: true)) + ")" : null;
+        }
+        if (Bound(parts[0]) is not { } offset)
             return null;
 
-        int? length = null;
+        string? length = null;
         if (parts.Length == 2)
         {
-            if (!int.TryParse(parts[1].Trim(), out int len))
+            if (Bound(parts[1]) is not { } len)
                 return null;
             length = len;
         }
@@ -6755,10 +6778,11 @@ public static class PsEmitter
         var sb = new StringBuilder("& { $__psbA = @(");
         sb.Append(arrayVar);
         sb.Append("); $__psbO = ").Append(offset).Append("; ");
+        if (positional) sb.Append("if ($__psbO -gt 0) { $__psbO-- }; ");   // $@ counts from 1
         sb.Append("if ($__psbO -lt 0) { $__psbO = $__psbA.Count + $__psbO }; ");
         sb.Append("$__psbO = [Math]::Max(0, [Math]::Min($__psbO, $__psbA.Count)); ");
-        if (length is int litLen)
-            sb.Append("$__psbN = ").Append(litLen).Append("; ");
+        if (length is not null)
+            sb.Append("$__psbN = ").Append(length).Append("; ");
         else
             sb.Append("$__psbN = $__psbA.Count - $__psbO; ");
         sb.Append("if ($__psbN -lt 0) { $__psbN = 0 }; ");
