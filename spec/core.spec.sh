@@ -571,3 +571,10 @@ f
 ## STDOUT:
 bye rc=4
 ## END
+
+#### declare -r makes the variable readonly
+declare -r B=1; (B=2) 2>/dev/null; echo "rc=$?"; echo "B=$B"
+## STDOUT:
+rc=1
+B=1
+## END

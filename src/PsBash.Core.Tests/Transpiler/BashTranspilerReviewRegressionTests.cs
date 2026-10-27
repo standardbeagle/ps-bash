@@ -282,6 +282,14 @@ public class BashTranspilerReviewRegressionTests
     public void Transpile_ExitWithCode_RecordsStatusForExitTrap()
         => Assert.Contains("$global:LASTEXITCODE = 4; exit $global:LASTEXITCODE", BashTranspiler.Transpile("trap 'echo rc=$?' EXIT; exit 4"));
 
+    // Oracle: `declare -r B=1; B=2` fails "B: readonly variable" like `readonly B=1`.
+    [Theory]
+    [InlineData("declare -r B=1; B=2")]
+    [InlineData("declare -ri N=5")]
+    [InlineData("typeset -r B")]
+    public void Transpile_DeclareReadonly_MarksTheName(string bash)
+        => Assert.Contains("MarkReadonly(", BashTranspiler.Transpile(bash));
+
     // Oracle: a function is a filter: `indent() { sed 's/^/  /'; }; cmd | indent`. The piped input never reached
     // the commands in the body (sed/grep/tr/cat/read saw an empty stdin). A body that reads stdin takes the pipe
     // it is called with; one that does not is unchanged.

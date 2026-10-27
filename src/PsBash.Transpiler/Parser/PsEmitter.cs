@@ -3054,6 +3054,44 @@ public static class PsEmitter
     private static bool TryEmitDeclare(Command.Simple cmd, out string result)
     {
         result = "";
+        if (cmd.Words.Length < 2 || GetLiteralValue(cmd.Words[0]) is not ("declare" or "typeset"))
+            return TryEmitDeclareCore(cmd, out result);
+
+        // `declare -r X=1` is `readonly X=1`: emit the declaration without the r attribute, then mark each name.
+        bool hasR = false;
+        var kept = new List<CompoundWord> { cmd.Words[0] };
+        var names = new List<string>();
+        foreach (var w in cmd.Words.Skip(1))
+        {
+            var lit = GetLiteralValue(w);
+            if (lit is { Length: > 1 } && lit[0] == '-' && lit.AsSpan(1).IndexOfAnyExcept("pfF") >= 0 && lit.Contains('r'))
+            {
+                hasR = true;
+                var rest = lit.Replace("r", "");
+                if (rest.Length > 1) kept.Add(new CompoundWord([new WordPart.Literal(rest)]));
+                continue;
+            }
+            kept.Add(w);
+            if (lit is null) { if (TrySplitInitializer(w, out var n0, out _)) names.Add(n0); }
+            else if (!lit.StartsWith('-')) names.Add(lit.Split('=')[0]);
+        }
+        if (!hasR || names.Count == 0)
+            return TryEmitDeclareCore(cmd, out result);
+        if (!TryEmitDeclareCore(cmd with { Words = [.. kept] }, out var core))
+            return false;
+        var mark = new StringBuilder();
+        foreach (var n in names)
+        {
+            mark.Append("; [PsBash.Cmdlets.BashShellState]::MarkReadonly(").Append(PsBuild.SingleQuote(n)).Append(")");
+            _readonlyVars?.Add(n);
+        }
+        result = core + mark;
+        return true;
+    }
+
+    private static bool TryEmitDeclareCore(Command.Simple cmd, out string result)
+    {
+        result = "";
         if (cmd.Words.Length < 2)
             return false;
 
