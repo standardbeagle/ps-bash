@@ -63,6 +63,8 @@ Describe 'Installer safety' {
         New-Item -ItemType Directory -Path $target | Out-Null
         [IO.File]::WriteAllText((Join-Path $target '.ps-bash-package'), 'ps-bash')
         Set-Content -LiteralPath (Join-Path $target 'ps-bash.exe') -Value 'original'
+        # Pester 6 throws for a filtered mock with no default: pass other moves (the backup) through.
+        Mock Move-Item { [IO.Directory]::Move($LiteralPath, $Destination) }
         Mock Move-Item { throw 'promotion failed' } -ParameterFilter { $LiteralPath -eq $stage }
 
         { Install-PsBashWindowsPackage -Stage $stage -InstallDir $target } | Should -Throw '*promotion failed*'
