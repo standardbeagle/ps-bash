@@ -34,7 +34,6 @@ echo $(($j + 42))
 echo $((${j:-5} + 1))
 ## stdout: 6
 ## status: 0
-## XFAIL ps-bash gap-oils-arith arith (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Arith word part

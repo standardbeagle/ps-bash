@@ -263,7 +263,6 @@ v=xx
 echo ${v/x/"?"}
 ## stdout: ?x
 ## status: 0
-## XFAIL ps-bash gap-oils-var-op-patsub var-op-patsub (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Replace backslash

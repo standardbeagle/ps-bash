@@ -128,7 +128,6 @@ hi
 hi
 ## END
 ## status: 127
-## XFAIL ps-bash gap-oils-ysh-options ysh-options (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### shopt -s strict:all
