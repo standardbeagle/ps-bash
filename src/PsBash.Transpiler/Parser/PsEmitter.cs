@@ -906,6 +906,9 @@ public static class PsEmitter
             // `for x in "${arr[@]}"` (and bare ${arr[@]}/${arr[*]}) iterates per
             // element. Quoted "${arr[@]}" would otherwise stringify the array into
             // one space-joined word and run once. Emit the array variable directly.
+            if (list[0].Parts is [WordPart.DoubleQuoted { Parts: [WordPart.BracedVarSub { Suffix: { } opSuffix } opVar] }]
+                && IsArrayElementOperator(opSuffix))
+                return EmitBracedVar(opVar);
             if (IsArrayAllWord(list[0], out var arrName))
                 return $"$(if (${arrName} -is [System.Collections.IDictionary]) {{ ${arrName}.Values }} else {{ ${arrName} }})";
             // `for k in "${!m[@]}"`: the KEYS (or indices), one iteration each.
@@ -3853,7 +3856,7 @@ public static class PsEmitter
             || GetLiteralValue(cmd.Words[0]) is not string cw
             || !PsStatementKeywordCommands.Contains(cw);
 
-        if (splatSafeCommand && HasUnquotedVarSplatArg(commandArgs))
+        if (splatSafeCommand && HasUnquotedVarSplatArg(commandArgs, loneArraySplats: true))
         {
             // Hoist each unquoted-variable operand to a temp var and splat it.
             // The command word keeps its existing emission (incl. the `& `
@@ -5817,9 +5820,14 @@ public static class PsEmitter
     /// </summary>
     private static bool IsQuotedArrayAllWord(CompoundWord word)
         => word.Parts is [WordPart.DoubleQuoted { Parts: [var only] }]
-           && only is WordPart.SimpleVarSub { Name: "@" }
+           && (only is WordPart.SimpleVarSub { Name: "@" }
                or WordPart.BracedVarSub { Name: "@", Suffix: null }
-               or WordPart.BracedVarSub { Suffix: "[@]" or "![@]" };
+               or WordPart.BracedVarSub { Suffix: "[@]" or "![@]" }
+               || only is WordPart.BracedVarSub { Suffix: { } opSfx } && IsArrayElementOperator(opSfx));
+
+    /// <summary>`[@]` followed by a per-element operator (`/ # % ^ ,`): `${a[@]/o/0}`, `${a[@]%.*}`, `${a[@]^^}`.</summary>
+    private static bool IsArrayElementOperator(string suffix)
+        => suffix.Length > 3 && suffix.StartsWith("[@]", StringComparison.Ordinal) && suffix[3] is '/' or '#' or '%' or '^' or ',';
 
     /// <summary>A brace expansion (<c>{1..5}</c>, <c>x{a,b}</c>) with no glob part: an array of words at run time.</summary>
     private static bool IsPlainBraceWord(CompoundWord word)
@@ -6082,16 +6090,18 @@ public static class PsEmitter
     /// <summary>
     /// True when any operand in <paramref name="args"/> (optionally skipping the
     /// pipeline-process-sub operand at <paramref name="skipIndex"/>) is a pure
-    /// unquoted ordinary variable that needs RC-7 word-splitting.
+    /// unquoted ordinary variable that needs RC-7 word-splitting. A lone array word binds as the array itself for a
+    /// mapped cmdlet, but a function / native command receives it as ONE argument unless splatted
+    /// (<paramref name="loneArraySplats"/>).
     /// </summary>
     private static bool HasUnquotedVarSplatArg(
-        ImmutableArray<CompoundWord> args, int skipIndex = -1)
+        ImmutableArray<CompoundWord> args, int skipIndex = -1, bool loneArraySplats = false)
     {
         for (int i = 0; i < args.Length; i++)
         {
             // A LONE array word binds as the array itself; only beside another argument must it splat.
             if (i != skipIndex && IsUnquotedSplitWord(args[i])
-                && !(args.Length == 1 && IsArrayValuedWord(args[i])))
+                && !(args.Length == 1 && !loneArraySplats && IsArrayValuedWord(args[i])))
                 return true;
         }
         return false;
@@ -6312,7 +6322,23 @@ public static class PsEmitter
                 // Whole-array operator: only slicing (${arr[@]:off:len}) maps cleanly to
                 // a PowerShell range index; other ops degrade to the whole array.
                 if (subscript is "@" or "*")
-                    return EmitArraySlice(arrayVar, subOp, inDoubleQuote) ?? arrayVar;
+                {
+                    if (EmitArraySlice(arrayVar, subOp, inDoubleQuote) is { } slice) return slice;
+                    // `${a[@]/o/0}` `${a[@]%o}` `${a[@]#?}` `${a[@]^^}`: the operator applies to EACH element.
+                    if (subOp[0] is '/' or '#' or '%' or '^' or ',')
+                    {
+                        const string elem = "$__ae";
+                        string source = $"$(if ({arrayVar} -is [System.Collections.IDictionary]) {{ {arrayVar}.Values }} else {{ {arrayVar} }})";
+                        if (EmitScalarSuffix(elem, subOp, false, bvs.ArgWord) is { } perElement)
+                        {
+                            string mapped = $"@({source}) | ForEach-Object {{ {elem} = [string]$_; {perElement} }}";
+                            return subscript == "*" && inDoubleQuote
+                                ? $"$(@({mapped}) -join {PsBuild.IfsJoinSeparator})"
+                                : $"$({mapped})";
+                        }
+                    }
+                    return arrayVar;
+                }
 
                 // Single element: the indexed value is a scalar string — apply the same
                 // scalar suffix operator the plain-variable path uses.

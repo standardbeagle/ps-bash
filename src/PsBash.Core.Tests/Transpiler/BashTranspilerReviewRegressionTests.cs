@@ -248,6 +248,23 @@ public class BashTranspilerReviewRegressionTests
     public void Transpile_StripGlobBracketExpression_IsTranslatedToARegexClass(string bash, string expectedClass)
         => Assert.Contains(expectedClass, BashTranspiler.Transpile(bash));
 
+    // Oracle: an operator on a whole-array expansion applies to EACH element (`${a[@]/o/0}`, `"${a[@]%o}"` is N words),
+    // and a lone `"${a[@]}"` argument to a function is N arguments, not one joined string.
+    [Theory]
+    [InlineData("echo ${a[@]/o/0}")]
+    [InlineData("echo \"${a[*]//o/0}\"")]
+    [InlineData("echo ${a[@]#?}")]
+    [InlineData("echo ${a[@]%o}")]
+    [InlineData("echo ${a[@]^^}")]
+    public void Transpile_OperatorOnWholeArray_MapsEachElement(string bash)
+        => Assert.Contains("ForEach-Object", BashTranspiler.Transpile(bash));
+
+    [Theory]
+    [InlineData("f \"${a[@]}\"")]
+    [InlineData("f \"${a[@]%o}\"")]
+    public void Transpile_LoneQuotedArrayArgumentToFunction_IsSplatted(string bash)
+        => Assert.Contains("@__bashsplat", BashTranspiler.Transpile(bash));
+
     // Oracle: a function is a filter: `indent() { sed 's/^/  /'; }; cmd | indent`. The piped input never reached
     // the commands in the body (sed/grep/tr/cat/read saw an empty stdin). A body that reads stdin takes the pipe
     // it is called with; one that does not is unchanged.

@@ -514,3 +514,17 @@ a=(x y z); unset 'a[-1]'; echo "${#a[@]} ${a[*]}"; unset "a[0]"; echo "${#a[@]} 
 2 x y
 1 y
 ## END
+
+#### an operator on "${a[@]}" applies per element, and the elements stay separate words
+arr=(foo boo zoo); f() { echo $#; }
+printf '[%s]' "${arr[@]%o}"; echo; echo "${arr[*]/o/0}" "${arr[@]//o/0}"; f "${arr[@]}"; f "${arr[@]#?}"
+for x in "${arr[@]%o}"; do echo "<$x>"; done
+## STDOUT:
+[fo][bo][zo]
+f0o b0o z0o f00 b00 z00
+3
+3
+<fo>
+<bo>
+<zo>
+## END
