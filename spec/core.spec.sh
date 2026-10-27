@@ -578,3 +578,20 @@ declare -r B=1; (B=2) 2>/dev/null; echo "rc=$?"; echo "B=$B"
 rc=1
 B=1
 ## END
+
+#### arithmetic on array elements, and a bare-name subscript is an arithmetic index
+declare -A c; for w in a b a; do ((c[$w]++)); done; echo "${c[a]} ${c[b]}"
+arr=(1 2 3); i=1; ((arr[i]*=10)); ((arr[0]++)); echo "${arr[*]} $((arr[i] + arr[2])) ${arr[i]} ${arr[i+1]} ${arr[-1]}"
+declare -A m; m[foo]=3; foo=zzz; ((m[foo]+=2)); echo "${m[foo]}"
+## STDOUT:
+2 1
+2 20 3 23 20 3 3
+5
+## END
+
+#### ${unset[@]+w} under set -u is empty, not an unbound-variable error
+set -u
+echo plus /"${array[@]+foo}"/ minus /"${array[@]-foo}"/
+## STDOUT:
+plus // minus /foo/
+## END

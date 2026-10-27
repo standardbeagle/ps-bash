@@ -192,6 +192,18 @@ public sealed class BashArithmeticParser
             {
                 int start = i++;
                 while (i < source.Length && (source[i] == '_' || char.IsLetterOrDigit(source[i]))) i++;
+                // `a[i]` / `m[$k]` / `c[x+1]++`: an array element is one operand; the evaluator's read / write callbacks resolve it.
+                if (i < source.Length && source[i] == '[')
+                {
+                    int depth = 0, j = i;
+                    for (; j < source.Length; j++)
+                    {
+                        if (source[j] == '[') depth++;
+                        else if (source[j] == ']' && --depth == 0) break;
+                    }
+                    if (j >= source.Length) throw new BashArithmeticParseException($"unterminated array subscript near '{source[start..]}'");
+                    i = j + 1;
+                }
                 result.Add(new Tok(T.Ident, Text: source[start..i])); continue;
             }
             if (char.IsDigit(c))

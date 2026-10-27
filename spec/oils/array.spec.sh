@@ -186,7 +186,6 @@ a=()
 argv.py "${!a[@]}"
 ## stdout:
 ## status: 127
-## XFAIL ps-bash gap-oils-array array (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### ${!a[1]} is named ref in bash
@@ -366,7 +365,6 @@ argv.py "${a[@]}"
 argv.py "${a[99]}" "${a[100]}" "${a[101]}"
 ## stdout:
 ## status: 127
-## XFAIL ps-bash gap-oils-array array (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Slice of sparse array with [@]
@@ -377,7 +375,6 @@ argv.py "${a[99]}" "${a[100]}" "${a[101]}"
 argv.py "${a[@]:15:2}"
 ## stdout:
 ## status: 127
-## XFAIL ps-bash gap-oils-array array (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Using an array itself as the index on LHS
@@ -854,6 +851,5 @@ echo $?
 0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array array (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher

@@ -1763,7 +1763,7 @@ public class PsEmitterTests
     public void Transpile_AssocElementAlternative_AppliesScalarOpToKey()
     {
         var result = PsEmitter.Transpile("echo ${m[key]:+yes}");
-        Assert.Equal("Invoke-BashEcho ($m['key'] ? \"yes\" : \"\")", result);
+        Assert.Equal("Invoke-BashEcho ($m[$(if ($m -is [System.Collections.IDictionary]) { 'key' } else { [long](Invoke-BashArith 'key') })] ? \"yes\" : \"\")", result);
     }
 
     [Fact]
@@ -4242,7 +4242,7 @@ public class PsEmitterTests
     public void Transpile_AssociativeArrayAccess_EmitsHashtableAccess()
     {
         var result = PsEmitter.Transpile("echo ${map[key]}");
-        Assert.Equal("Invoke-BashEcho $map['key']", result);
+        Assert.Equal("Invoke-BashEcho $map[$(if ($map -is [System.Collections.IDictionary]) { 'key' } else { [long](Invoke-BashArith 'key') })]", result);
     }
 
     [Fact]

@@ -166,7 +166,6 @@ a=(5 6 7 8)
 echo "${a[@]}" - "${undef[@]}"
 ## stdout: 6 7 6 7 - 1 1 -1 -1
 ## status: 0
-## XFAIL ps-bash gap-oils-arith arith (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Increment undefined variables with nounset
@@ -281,7 +280,6 @@ array=(1 2 3 4)
 echo $((array[1] + array[2]*3))
 ## stdout: 11
 ## status: 0
-## XFAIL ps-bash gap-oils-arith arith (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Constants in base 36
@@ -540,7 +538,6 @@ echo last=$last
 last=6
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-arith arith (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### assignment with dynamic var name
@@ -860,7 +857,6 @@ echo UNSET $(( undef[0] ))
 echo status=$?
 ## stdout:
 ## status: 1
-## XFAIL ps-bash gap-oils-arith arith (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -883,7 +879,6 @@ status=1
 
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-arith arith (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -898,6 +893,5 @@ echo status=$?
 status=0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-arith arith (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher

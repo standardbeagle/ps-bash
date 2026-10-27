@@ -106,8 +106,72 @@ public sealed class InvokeBashArithmeticCommand : PSCmdlet
         }
     }
 
+    /// <summary>`name[subscript]` as the evaluator passes an array element.</summary>
+    private static bool TrySplitElement(string name, out string baseName, out string subscript)
+    {
+        int open = name.IndexOf('[');
+        if (open > 0 && name.EndsWith(']'))
+        {
+            baseName = name[..open];
+            subscript = name[(open + 1)..^1];
+            return true;
+        }
+        baseName = subscript = "";
+        return false;
+    }
+
+    // An associative array's key: the subscript text with `$k` / `${k}` replaced by the variable's value.
+    private string ExpandKey(string subscript) =>
+        System.Text.RegularExpressions.Regex.Replace(subscript.Trim(), @"\$\{?(\w+)\}?", m => ReadRawVar(m.Groups[1].Value) ?? "");
+
+    // An indexed array's subscript is itself an arithmetic expression; negative counts from the end.
+    private long ElementIndex(string subscript, int count)
+    {
+        long index = BashArith.Evaluate(subscript, n => ReadVar(n), WriteVar, ReadRawVar);
+        return index < 0 ? index + count : index;
+    }
+
+    private string? ReadElement(string baseName, string subscript)
+    {
+        object? holder = SessionState.PSVariable.GetValue(baseName);
+        if (holder is PSObject wrapped) holder = wrapped.BaseObject;
+        if (holder is System.Collections.IDictionary dict)
+        {
+            string key = ExpandKey(subscript);
+            return dict.Contains(key) ? dict[key]?.ToString() ?? "" : null;
+        }
+        if (holder is System.Collections.IList list)
+        {
+            long index = ElementIndex(subscript, list.Count);
+            return index >= 0 && index < list.Count ? list[(int)index]?.ToString() ?? "" : null;
+        }
+        // A scalar behaves as a one-element array.
+        string? scalar = BashVariableStore.Get(baseName);
+        return scalar is not null && ElementIndex(subscript, 1) == 0 ? scalar : null;
+    }
+
+    private void WriteElement(string baseName, string subscript, string value)
+    {
+        object? holder = SessionState.PSVariable.GetValue(baseName);
+        if (holder is PSObject wrapped) holder = wrapped.BaseObject;
+        if (holder is System.Collections.IDictionary dict)
+        {
+            dict[ExpandKey(subscript)] = value;
+            return;
+        }
+        var items = new List<object?>();
+        if (holder is System.Collections.IEnumerable seq && holder is not string)
+            foreach (var item in seq) items.Add(item);
+        long index = ElementIndex(subscript, items.Count);
+        if (index < 0) return;
+        while (items.Count <= index) items.Add("");
+        items[(int)index] = value;
+        SessionState.PSVariable.Set(baseName, items.ToArray());
+    }
+
     private string? ReadRawVar(string name)
     {
+        if (TrySplitElement(name, out var elemBase, out var elemSub)) return ReadElement(elemBase, elemSub);
         // PowerShell variable first (loop variables are emitted as $name).
         try
         {
@@ -129,6 +193,7 @@ public sealed class InvokeBashArithmeticCommand : PSCmdlet
     private void WriteVar(string name, long value)
     {
         var s = value.ToString(CultureInfo.InvariantCulture);
+        if (TrySplitElement(name, out var elemBase, out var elemSub)) { WriteElement(elemBase, elemSub, s); return; }
         BashVariableStore.Set(name, s);
         try
         {

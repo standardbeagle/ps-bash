@@ -320,7 +320,6 @@ declare -a a=([0]="1" [1]="2" [2]="3" [3]="4" [4]="5" [5]="6" [6]="7" [7]="x")
 declare -a a=([0]="1" [1]="2" [2]="3" [3]="4" [4]="5" [5]="6" [6]="x")
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array-sparse array-sparse (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -400,7 +399,6 @@ unset -v 'a[2]' 'a[3]' 'a[7]'
 echo $((a[-10]))
 ## stdout: 0
 ## status: 0
-## XFAIL ps-bash gap-oils-array-sparse array-sparse (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 

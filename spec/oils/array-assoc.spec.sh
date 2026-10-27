@@ -127,7 +127,6 @@ ccc
 ddd
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array-assoc array-assoc (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### ${A[@]#prefix}
@@ -144,7 +143,6 @@ one
 wo
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array-assoc array-assoc (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### ${assoc} is like ${assoc[0]}
@@ -403,7 +401,6 @@ argv.py "${!A[@]}"
 argv.py "${A[@]}"
 ## stdout:
 ## status: 127
-## XFAIL ps-bash gap-oils-array-assoc array-assoc (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Implicit increment of keys

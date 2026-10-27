@@ -290,6 +290,19 @@ public class BashTranspilerReviewRegressionTests
     public void Transpile_DeclareReadonly_MarksTheName(string bash)
         => Assert.Contains("MarkReadonly(", BashTranspiler.Transpile(bash));
 
+    // Oracle: `((c[$k]++))`, `((a[i]*=10))`, `$((a[i]+a[2]))` operate on array elements (they were a parse error), and
+    // `${a[i]}` with a bare-name subscript is the arithmetic index (it read the literal key "i").
+    [Theory]
+    [InlineData("((c[$k]++))", "c[$k]++")]
+    [InlineData("((arr[i]*=10))", "arr[i]*=10")]
+    [InlineData("echo $((arr[i] + arr[2]))", "arr[i] + arr[2]")]
+    public void Transpile_ArithmeticArrayElement_ParsesAsOneOperand(string bash, string expected)
+        => Assert.Contains(expected, BashTranspiler.Transpile(bash));
+
+    [Fact]
+    public void Transpile_BareNameSubscript_IsArithmeticOnIndexedArrays()
+        => Assert.Contains("Invoke-BashArith", BashTranspiler.Transpile("a=(x y); i=0; echo \"${a[i+1]}\""));
+
     // Oracle: a function is a filter: `indent() { sed 's/^/  /'; }; cmd | indent`. The piped input never reached
     // the commands in the body (sed/grep/tr/cat/read saw an empty stdin). A body that reads stdin takes the pipe
     // it is called with; one that does not is unchanged.

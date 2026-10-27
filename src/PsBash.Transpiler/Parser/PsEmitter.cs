@@ -6368,7 +6368,8 @@ public static class PsEmitter
                     }
                     if (int.TryParse(subscript, out _))
                         return inDoubleQuote ? $"$({arrayVar}[{subscript}])" : $"{arrayVar}[{subscript}]";
-                    return inDoubleQuote ? $"$({arrayVar}['{SqEsc(subscript)}'])" : $"{arrayVar}['{SqEsc(subscript)}']";
+                    string keyRef = $"{arrayVar}[{EmitWordSubscript(arrayVar, subscript)}]";
+                    return inDoubleQuote ? $"$({keyRef})" : keyRef;
                 }
 
                 // Whole-array operator: only slicing (${arr[@]:off:len}) maps cleanly to
@@ -6396,7 +6397,11 @@ public static class PsEmitter
                         string word = subOp.StartsWith(':') ? subOp[2..] : subOp[1..];
                         // The scalar emitter renders `word` (with its own quoting / expansions) as the default / alternative arm.
                         string arm = EmitScalarSuffix("$null", ":-" + word, false, bvs.ArgWord) ?? "''";
-                        string src = $"@(if ({arrayVar} -is [System.Collections.IDictionary]) {{ {arrayVar}.Values }} else {{ {arrayVar} }})";
+                        // Read through Get-Variable: an unset array must be "empty", not an unbound-variable error under `set -u`.
+                        string av = arrayVar.StartsWith("$") && arrayVar.AsSpan(1).IndexOfAnyExcept(VarNameChars) < 0
+                            ? $"(Get-Variable -Name {arrayVar[1..]} -ValueOnly -ErrorAction SilentlyContinue)"
+                            : arrayVar;
+                        string src = $"@(if ({av} -is [System.Collections.IDictionary]) {{ {av}.Values }} else {{ {av} }})";
                         return alt
                             ? $"$(if ({src}.Count -gt 0) {{ {arm} }} else {{ '' }})"
                             : $"$(if ({src}.Count -gt 0) {{ {src} }} else {{ {arm} }})";
@@ -6411,7 +6416,7 @@ public static class PsEmitter
                     // ${m[$k]:-0}: a variable subscript is the variable's value, as in the operator-less form above.
                     : System.Text.RegularExpressions.Regex.Match(subscript, @"^\$\{?(\w+)\}?$") is { Success: true } subVar
                         ? $"{arrayVar}[{EmitSimpleVar(subVar.Groups[1].Value)}]"
-                        : $"{arrayVar}['{SqEsc(subscript)}']";
+                        : $"{arrayVar}[{EmitWordSubscript(arrayVar, subscript)}]";
                 return EmitScalarSuffix(elemRef, subOp, inDoubleQuote, bvs.ArgWord)
                     ?? (inDoubleQuote ? $"$({elemRef})" : elemRef);
             }
@@ -6779,6 +6784,16 @@ public static class PsEmitter
 
         return EmitArraySlice(
             PsBuild.BuildPositionalExpansion("@"), op, inDoubleQuote);
+    }
+
+    // `${a[i]}` / `${a[i+1]}`: on an indexed array the subscript is an arithmetic expression (bare names are
+    // variables); on an associative array it is the literal key. The array kind is known only at run time.
+    private static string EmitWordSubscript(string arrayVar, string subscript)
+    {
+        string key = PsBuild.SingleQuote(subscript);
+        if (!System.Text.RegularExpressions.Regex.IsMatch(subscript, @"^[\w+\-*/% ()]+$"))
+            return key;
+        return $"$(if ({arrayVar} -is [System.Collections.IDictionary]) {{ {key} }} else {{ [long](Invoke-BashArith {key}) }})";
     }
 
     // Emit a bash array slice ${arr[@]:offset[:length]} as a PowerShell range index.
