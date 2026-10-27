@@ -172,4 +172,9 @@ public class InvokeBashUnsetCommandTests : IClassFixture<SharedPwshFixture>
         // The literal env var should still exist and be readable.
         Assert.Contains("safe", lines);
     }
+
+    // Oracle: `a=(x y z); unset "a[-1]"` removes the LAST element (negative subscripts count from the end).
+    [Fact]
+    public void Unset_NegativeArrayIndex_RemovesFromTheEnd()
+        => Assert.Equal("x y", RunAndReadVar("$a = @('x','y','z'); Invoke-BashUnset 'a[-1]'", "a"));
 }

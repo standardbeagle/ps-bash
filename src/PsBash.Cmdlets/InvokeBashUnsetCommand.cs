@@ -65,6 +65,7 @@ public sealed class InvokeBashUnsetCommand : PSCmdlet
         }
         if (value is System.Collections.IList list && int.TryParse(key, out int index))
         {
+            if (index < 0) index += list.Count;   // `unset 'a[-1]'`: counted from the end
             if (index >= 0 && index < list.Count)
             {
                 var kept = new List<object?>(list.Count - 1);

@@ -507,3 +507,10 @@ echo "[$s]"; f=a.txt; e=.txt; echo "${f%"$e"} ${f%$e}"
 [trim me]
 a a
 ## END
+
+#### unset 'a[-1]' removes the last element
+a=(x y z); unset 'a[-1]'; echo "${#a[@]} ${a[*]}"; unset "a[0]"; echo "${#a[@]} ${a[*]}"
+## STDOUT:
+2 x y
+1 y
+## END
