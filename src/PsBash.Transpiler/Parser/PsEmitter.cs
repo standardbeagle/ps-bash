@@ -1815,8 +1815,8 @@ public static class PsEmitter
         // loop's field splitter uses the caller's IFS instead of whitespace.
         foreach (var pair in simple.EnvPairs)
         {
-            if (pair.Name == "IFS" && pair.Value is not null)
-                ifs = GetLiteralValue(pair.Value);
+            if (pair.Name == "IFS")
+                ifs = pair.Value is null ? "" : GetLiteralValue(pair.Value) ?? (pair.Value.Parts.IsDefaultOrEmpty ? "" : null);   // `IFS= read`: an empty IFS
         }
         // Accept: read VAR  or  read -r VAR  or  read -r a b c.
         // EVERY non-flag word is a target variable — `read a b` splits the line
@@ -1825,6 +1825,9 @@ public static class PsEmitter
         for (int i = 1; i < simple.Words.Length; i++)
         {
             var val = GetLiteralValue(simple.Words[i]);
+            // `read -d DELIM` reads records, not lines: the generic loop (Invoke-BashRead) handles it.
+            if (val is not null && val.Length > 1 && val[0] == '-' && val[1] != '-' && val.Contains('d'))
+                return false;
             if (val is not null && !val.StartsWith('-'))
                 varNames.Add(val);
         }
@@ -1893,8 +1896,14 @@ public static class PsEmitter
         // drained explicitly via `$input`. Without it the chain got zero input and the leading
         // ForEach-Object ran once with a null `$_`, hitting "Cannot index into a null array" on the
         // property probe. The `$null -ne $_` guard makes that probe null-safe regardless.
+        // A lone variable still has the IFS whitespace (space, tab) trimmed from both ends; `IFS= read` keeps the line.
+        var trimChars = new List<string>();
+        if (ifs is null || ifs.Contains(' ')) trimChars.Add("32");
+        if (ifs is null || ifs.Contains('\t')) trimChars.Add("9");
         string bind = varNames.Count == 1
-            ? $"${{{varNames[0]}}} = $_; "
+            ? trimChars.Count == 0
+                ? $"${{{varNames[0]}}} = $_; "
+                : $"${{{varNames[0]}}} = $_.Trim([char[]]@({string.Join(",", trimChars)})); "
             : BuildReadFieldBindings(varNames, ifs);
 
         // The lines of one record: its BashText (null-safe), the trailing newline dropped, split.

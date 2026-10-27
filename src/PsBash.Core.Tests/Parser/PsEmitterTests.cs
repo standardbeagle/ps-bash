@@ -3123,8 +3123,16 @@ public class PsEmitterTests
         // `$null -ne` guard makes the BashText probe null-safe. The read var is bound with a real
         // `${line} = $_` assignment (not a text rewrite of $line -> $_, which clobbered literals).
         Assert.Equal(
-            ":__psbash_l0 foreach ($__psbash_rec0 in $input) { :__psbash_lc0 foreach ($_ in @(($(if ($null -ne $__psbash_rec0 -and $__psbash_rec0.PSObject.Properties['BashText']) { $__psbash_rec0.BashText } else { \"$__psbash_rec0\" }) -replace \"`n$\",\"\") -split \"`n\")) { ${line} = $_; Invoke-BashEcho $line } }",
+            ":__psbash_l0 foreach ($__psbash_rec0 in $input) { :__psbash_lc0 foreach ($_ in @(($(if ($null -ne $__psbash_rec0 -and $__psbash_rec0.PSObject.Properties['BashText']) { $__psbash_rec0.BashText } else { \"$__psbash_rec0\" }) -replace \"`n$\",\"\") -split \"`n\")) { ${line} = $_.Trim([char[]]@(32,9)); Invoke-BashEcho $line } }",
             result);
+    }
+
+    // Oracle: a lone read variable has IFS whitespace trimmed (`while read l` -> "s1" for "  s1  "); `IFS= read` keeps it.
+    [Fact]
+    public void Transpile_WhileReadLine_IfsEmptyKeepsTheLineAndDelimiterReadsRecords()
+    {
+        Assert.Contains("${line} = $_;", PsEmitter.Transpile("while IFS= read -r line; do echo $line; done")!);
+        Assert.DoesNotContain("foreach ($_ in @((", PsEmitter.Transpile("while read -r -d '' line; do echo $line; done")!);
     }
 
     [Fact]
@@ -3135,7 +3143,7 @@ public class PsEmitterTests
         // prints it verbatim), so the emitted single-quoted string must be untouched.
         var result = PsEmitter.Transpile("while read line; do echo 'lit=$line'; done");
 
-        Assert.Contains("${line} = $_;", result);
+        Assert.Contains("${line} = $_.Trim([char[]]@(32,9));", result);
         Assert.Contains("'lit=$line'", result);   // literal preserved, NOT rewritten to $_
         Assert.DoesNotContain("'lit=$_'", result);
     }

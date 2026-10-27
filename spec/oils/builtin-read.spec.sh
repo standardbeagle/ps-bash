@@ -197,7 +197,6 @@ foo
 bar
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-read builtin-read (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### read -d when there's no delimiter
@@ -213,7 +212,6 @@ foo 0
 bar 1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-read builtin-read (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### read -t -0.5 is invalid

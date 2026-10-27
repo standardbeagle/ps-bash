@@ -75,6 +75,13 @@ public sealed class InvokeBashReadCommand : PSCmdlet
     [Parameter]
     public string? A { get; set; }
 
+    /// <summary>
+    /// <c>-d DELIM</c> — read up to DELIM (NUL when empty) instead of a newline. Declared explicitly because the bare
+    /// token <c>-d</c> prefix-matches <c>-Debug</c>.
+    /// </summary>
+    [Parameter]
+    public string? D { get; set; }
+
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
@@ -125,6 +132,8 @@ public sealed class InvokeBashReadCommand : PSCmdlet
         int? maxChars = null;
         int? exactChars = null;
         double? timeoutSecs = null;
+        char? recordDelim = D is null ? null : D.Length == 0 ? '\0' : D[0];   // -d DELIM: read up to DELIM (NUL for an empty DELIM) instead of a line
+        bool recordTerminated = true;
         int? fromFd = null;   // -u N: read from descriptor N (opened by `exec N<file`) instead of stdin
         var varNames = new List<string>();
 
@@ -158,6 +167,11 @@ public sealed class InvokeBashReadCommand : PSCmdlet
             if (a == "-N" && i + 1 < args.Length)
             {
                 if (int.TryParse(args[i + 1], out var n)) exactChars = n;
+                i += 2; continue;
+            }
+            if (a == "-d" && i + 1 < args.Length)
+            {
+                recordDelim = args[i + 1].Length == 0 ? '\0' : args[i + 1][0];
                 i += 2; continue;
             }
             if (a == "-u" && i + 1 < args.Length)
@@ -227,6 +241,11 @@ public sealed class InvokeBashReadCommand : PSCmdlet
                 return;
             }
         }
+        else if (recordDelim is char rd && _pipeline.Count == 0
+                 && SharedStdin.TryDequeueRecord(SessionState, rd, out var record, out recordTerminated))
+        {
+            inputLine = record;
+        }
         else if (_pipeline.Count > 0)
         {
             // Pipeline mode — concatenate pipeline item text, strip trailing
@@ -235,10 +254,23 @@ public sealed class InvokeBashReadCommand : PSCmdlet
             foreach (var item in _pipeline)
             {
                 var text = BashRuntime.GetBashText(item);
+                if (recordDelim is not null && sb.Length > 0 && !sb.ToString().EndsWith('\n')) sb.Append('\n');
                 if (!string.IsNullOrEmpty(text)) sb.Append(text);
             }
             inputLine = sb.ToString().Replace("\r\n", "\n");
-            if (inputLine.EndsWith('\n')) inputLine = inputLine.Substring(0, inputLine.Length - 1);
+            if (recordDelim is char pd)
+            {
+                // -d DELIM: up to the first DELIM; the rest goes back to the shared stdin for the next read.
+                int at = inputLine.IndexOf(pd);
+                recordTerminated = at >= 0;
+                if (at >= 0)
+                {
+                    SharedStdin.PushFront(SessionState, inputLine.Substring(at + 1));
+                    inputLine = inputLine.Substring(0, at);
+                }
+                else if (!inputLine.EndsWith('\n')) inputLine += "\n";
+            }
+            else if (inputLine.EndsWith('\n')) inputLine = inputLine.Substring(0, inputLine.Length - 1);
         }
         else if (TryDequeueSharedStdin(out var queuedLine))
         {
@@ -342,7 +374,11 @@ public sealed class InvokeBashReadCommand : PSCmdlet
 
         if (varNames.Count == 1)
         {
-            AssignVariable(varNames[0], inputLine);
+            // A lone variable still has the IFS WHITESPACE trimmed from both ends (`read x <<< "  a  "` is `a`);
+            // `IFS= read` (empty IFS) keeps the line exactly.
+            string? ifsValue = BashVariableStore.Get("IFS");
+            char[] ifsWhitespace = (ifsValue ?? " \t\n").Where(ch => ch is ' ' or '\t' or '\n').ToArray();
+            AssignVariable(varNames[0], ifsWhitespace.Length == 0 ? inputLine : inputLine.Trim(ifsWhitespace));
         }
         else if (varNames.Count > 1)
         {
@@ -354,7 +390,7 @@ public sealed class InvokeBashReadCommand : PSCmdlet
                 AssignVariable(varNames[j], j < parts.Length ? parts[j] : "");
         }
 
-        FileSystemHelpers.SetLastExitCode(this, 0);
+        FileSystemHelpers.SetLastExitCode(this, recordTerminated ? 0 : 1);   // -d: the stream ended before the delimiter
     }
 
     /// <summary>

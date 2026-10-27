@@ -72,4 +72,59 @@ internal static class SharedStdin
                 return false;
         }
     }
+
+    /// <summary>
+    /// <c>read -d DELIM</c>: everything up to the first <paramref name="delim"/> (NUL for <c>-d ''</c>) across lines. The
+    /// queue holds lines, so they are re-joined with newlines (the stream ends in one, as a heredoc / here-string / printf
+    /// does); the text after the delimiter goes back to the front of the stream. <paramref name="terminated"/> is false
+    /// when the stream ended first (bash assigns what it read and returns 1). False when the stdin is absent or at end.
+    /// </summary>
+    internal static bool TryDequeueRecord(SessionState state, char delim, out string? record, out bool terminated)
+    {
+        record = null;
+        terminated = false;
+        var items = new List<object>();
+        switch (Get(state))
+        {
+            case StdinCursor cursor:
+                while (cursor.Count > 0) items.Add(cursor.Dequeue());
+                break;
+            case Queue<object> queue:
+                while (queue.Count > 0) items.Add(queue.Dequeue());
+                break;
+            default:
+                return false;
+        }
+        if (items.Count == 0) return false;
+        var text = string.Join("\n", items.Select(o => BashRuntime.GetBashText(o).Replace("\r\n", "\n").TrimEnd('\n')))
+                   + "\n";
+        int at = text.IndexOf(delim);
+        string rest = "";
+        if (at >= 0) { record = text.Substring(0, at); rest = text.Substring(at + 1); terminated = true; }
+        else record = text;
+        if (rest.Length > 0)
+        {
+            switch (Get(state))
+            {
+                case StdinCursor c: c.PushFront(new object[] { rest }); break;
+                case Queue<object> q: q.Enqueue(rest); break;
+            }
+        }
+        return true;
+    }
+
+    /// <summary>Put <paramref name="text"/> back at the FRONT of the shared stdin (nothing when it is empty).</summary>
+    internal static void PushFront(SessionState state, string text)
+    {
+        if (text.Length == 0) return;
+        switch (Get(state))
+        {
+            case StdinCursor c: c.PushFront(new object[] { text }); break;
+            case Queue<object> q:
+                var rest = new List<object> { text };
+                while (q.Count > 0) rest.Add(q.Dequeue());
+                foreach (var item in rest) q.Enqueue(item);
+                break;
+        }
+    }
 }

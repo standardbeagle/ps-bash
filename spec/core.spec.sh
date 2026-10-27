@@ -528,3 +528,25 @@ f0o b0o z0o f00 b00 z00
 <bo>
 <zo>
 ## END
+
+#### read trims IFS whitespace for a lone variable; IFS= keeps it; -d reads records (NUL for '')
+read x <<< "  a  b  "; echo "[$x]"
+IFS= read -r y <<< "  a  b  "; echo "[$y]"
+printf '  s1  \n' | while read -r l; do echo "[$l]"; done
+printf 'k1\0k2\0' | while IFS= read -r -d '' k; do echo "key=$k"; done
+printf 'a:b:c' | { read -r -d ':' f1; echo "[$f1]"; }
+read -r -d '' blob <<'EOF'
+l1
+l2
+EOF
+echo "rc=$? [${blob%$'\n'}]"
+## STDOUT:
+[a  b]
+[  a  b  ]
+[s1]
+key=k1
+key=k2
+[a]
+rc=1 [l1
+l2]
+## END
