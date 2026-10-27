@@ -411,7 +411,7 @@ public sealed class InvokeBashReadCommand : PSCmdlet
     /// </summary>
     private void AssignVariable(string name, object value)
     {
-        SessionState.PSVariable.Set(name, value);
+        FileSystemHelpers.SetShellVariable(SessionState, name, value);
         // Mirror the oracle's Set-Item Env:$name slice. For array values,
         // join with spaces — bash exports arrays as scalars too.
         string envVal = value switch

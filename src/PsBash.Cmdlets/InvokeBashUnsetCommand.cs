@@ -58,25 +58,44 @@ public sealed class InvokeBashUnsetCommand : PSCmdlet
         if (key is "@" or "*") return false;
 
         var value = SessionState.PSVariable.GetValue(baseName);
+        long ReadNumber(string n)
+        {
+            var raw = SessionState.PSVariable.GetValue(n)?.ToString() ?? BashVariableStore.Get(n);
+            return long.TryParse(raw?.Trim(), out var v) ? v : 0;
+        }
         if (value is System.Collections.IDictionary dict)
         {
-            dict.Remove(key);
+            // `unset "m[$k]"` arrives already expanded; a quoted `$k` is expanded here.
+            dict.Remove(System.Text.RegularExpressions.Regex.Replace(key, @"\$\{?(\w+)\}?",
+                m => SessionState.PSVariable.GetValue(m.Groups[1].Value)?.ToString() ?? BashVariableStore.Get(m.Groups[1].Value) ?? ""));
             return true;
         }
-        if (value is System.Collections.IList list && int.TryParse(key, out int index))
+        // An indexed array's subscript is an arithmetic expression (`unset 'stack[n-1]'`).
+        long parsed = 0;
+        bool numeric = value is System.Collections.IList && (long.TryParse(key, out parsed) || TryEvaluate(key, ReadNumber, out parsed));
+        if (value is System.Collections.IList list && numeric)
         {
+            int index = (int)parsed;
             if (index < 0) index += list.Count;   // `unset 'a[-1]'`: counted from the end
             if (index >= 0 && index < list.Count)
             {
                 var kept = new List<object?>(list.Count - 1);
                 for (int i = 0; i < list.Count; i++)
                     if (i != index) kept.Add(list[i]);
-                SessionState.PSVariable.Set(baseName, kept.ToArray());
+                // Through the owning scope's variable, so a function unsetting a global array's element reaches the caller.
+                if (SessionState.PSVariable.Get(baseName) is { } owner) owner.Value = kept.ToArray();
+                else SessionState.PSVariable.Set(baseName, kept.ToArray());
             }
             return true;
         }
         return false;
     }
+    private static bool TryEvaluate(string expr, Func<string, long> read, out long result)
+    {
+        try { result = BashArith.Evaluate(expr, read, (_, _) => { }); return true; }
+        catch (BashArith.BashArithException) { result = 0; return false; }
+    }
+
     protected override void EndProcessing()
     {
         var args = Arguments ?? Array.Empty<string>();

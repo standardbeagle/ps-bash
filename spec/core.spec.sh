@@ -595,3 +595,23 @@ echo plus /"${array[@]+foo}"/ minus /"${array[@]-foo}"/
 ## STDOUT:
 plus // minus /foo/
 ## END
+
+#### arrays written inside a function reach the caller unless declared local
+st=(); push() { st+=("$1"); }; push a; push b
+pop() { local n=${#st[@]}; echo "${st[n-1]}"; unset 'st[n-1]'; }
+pop; pop; echo "left=${#st[@]}"
+f() { arr=(x y); arr+=(z); local own=(1); own+=(2); }; f; echo "${arr[*]} ${own[*]:-none}"
+## STDOUT:
+b
+a
+left=0
+x y z none
+## END
+
+#### mapfile / read -a / (( a[i]++ )) inside a function write the shell's arrays
+arr=(0 0); declare -A h
+f() { ((arr[1]++)); ((h[x]+=2)); mapfile -t cnt <<< $'a\nb'; read -ra rd <<< "p q r"; printf -v pv '%s' z; }
+f; echo "${arr[*]} ${h[x]} ${cnt[*]} ${rd[*]} $pv"
+## STDOUT:
+0 1 2 a b p q r z
+## END

@@ -299,6 +299,21 @@ internal static class FileSystemHelpers
            || ex.InnerException is System.Management.Automation.PipelineStoppedException;
 
     /// <summary>
+    /// Assign a shell variable the way bash scopes it: the existing variable (in whichever scope owns it - a function
+    /// writing a caller's array reaches the caller), else a new GLOBAL. A bare <c>PSVariable.Set</c> from a cmdlet
+    /// creates the variable in the calling function's own scope, so <c>mapfile arr</c> / <c>read -a arr</c> inside a
+    /// function never reached the shell.
+    /// </summary>
+    internal static void SetShellVariable(System.Management.Automation.SessionState state, string name, object? value)
+    {
+        var existing = state.PSVariable.Get(name);
+        if (existing is not null && (existing.Options & (System.Management.Automation.ScopedItemOptions.ReadOnly | System.Management.Automation.ScopedItemOptions.Constant)) == 0)
+            existing.Value = value;
+        else
+            state.PSVariable.Set("global:" + name, value);
+    }
+
+    /// <summary>
     /// Sets the bash-visible exit code via the global LASTEXITCODE. The psm1
     /// mutator oracles all do this on the last error in a multi-operand run;
     /// we mirror it exactly.

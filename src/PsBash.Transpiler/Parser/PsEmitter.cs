@@ -31,6 +31,8 @@ public static class PsEmitter
     // sink CollectLocalVars fills while scanning the body.
     [ThreadStatic]
     private static HashSet<string>? _dynLocals;
+    // Names the enclosing function declared `local`; every other array it writes is the shell's (a global), not a copy.
+    private static HashSet<string>? _functionLocalNames;
 
     // The script being emitted mentions `pipefail`: every multi-stage pipeline records per-stage status.
     [ThreadStatic]
@@ -1367,6 +1369,13 @@ public static class PsEmitter
         "where", "wjb", "write",
     };
 
+    /// <summary>`$name` for an array write: inside a function (outside any subshell) an array the function did not declare
+    /// `local` is the shell's own, so `stack+=(x)` / `a=(...)` / `a[i]=v` must reach the caller, not a function-local copy.</summary>
+    private static string ArrayWriteTarget(string name) =>
+        _functionDepth > 0 && _subshellDepth == 0 && _functionLocalNames is { } locals && !locals.Contains(name)
+            ? "$global:" + name
+            : "$" + name;
+
     private static string EmitFunction(Command.ShFunction func)
     {
         (_unitFunctions ??= new HashSet<string>(StringComparer.Ordinal)).Add(func.Name);
@@ -1381,6 +1390,8 @@ public static class PsEmitter
         finally { _collectScalarLocals = priorCollect; }
         var priorDyn = _dynLocals;
         _dynLocals = dynLocals;
+        var priorFunctionLocals = _functionLocalNames;
+        _functionLocalNames = new HashSet<string>(localVars.Concat(dynLocals), StringComparer.Ordinal);
         var vars = _loopVars ??= new HashSet<string>();
         var added = new List<string>();
         foreach (var v in localVars)
@@ -1444,6 +1455,7 @@ public static class PsEmitter
         finally
         {
             _dynLocals = priorDyn;
+            _functionLocalNames = priorFunctionLocals;
             _loopLabels = outerLabels;
             foreach (var v in added) vars.Remove(v);
         }
@@ -2778,11 +2790,10 @@ public static class PsEmitter
             {
                 if (pair.Op == AssignOp.Equal && TryEmitAssocLiteral(pair.ArrayValue, out var assoc))
                 {
-                    sb.Append('$').Append(pair.Name).Append(" = ").Append(assoc);
+                    sb.Append(ArrayWriteTarget(pair.Name)).Append(" = ").Append(assoc);
                     continue;
                 }
-                sb.Append('$');
-                sb.Append(pair.Name);
+                sb.Append(ArrayWriteTarget(pair.Name));
                 sb.Append(pair.Op == AssignOp.PlusEqual ? " += @(" : " = @(");
                 // A glob element (`arr=(*.txt)`) expands to ZERO or more elements, which the comma
                 // form cannot splice (`'a',@('b','c')` is two elements). Such a list is emitted as
@@ -2816,7 +2827,7 @@ public static class PsEmitter
                 string subscript = pair.Name[(bracketIdx + 1)..^1]; // strip [ and ]
                 // `a[$i]=v` / `a[i+1]+=v` / `m[key]=v`: the subscript is a WORD (expanded here) and, for an indexed
                 // array, then evaluated as arithmetic at run time; Set-BashElement pads/keys and returns the container.
-                string target = "$" + ResolveNameref(baseName);
+                string target = ArrayWriteTarget(ResolveNameref(baseName));
                 sb.Append(target).Append(" = Set-BashElement ").Append(target).Append(' ')
                   .Append(FlattenPartsToDoubleQuotedString(BashParser.DecomposeWord(subscript))).Append(' ')
                   .Append(EmitAssignmentValue(pair.Value));

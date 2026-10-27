@@ -303,6 +303,24 @@ public class BashTranspilerReviewRegressionTests
     public void Transpile_BareNameSubscript_IsArithmeticOnIndexedArrays()
         => Assert.Contains("Invoke-BashArith", BashTranspiler.Transpile("a=(x y); i=0; echo \"${a[i+1]}\""));
 
+    // Oracle: an array a function writes without declaring it `local` is the shell's own - push() { st+=("$1"); } must reach the caller.
+    [Theory]
+    [InlineData("push() { st+=(\"$1\"); }; push a", "$global:st += @(")]
+    [InlineData("f() { a=(x y); }; f", "$global:a = @(")]
+    [InlineData("f() { a[2]=z; }; f", "$global:a = Set-BashElement $global:a")]
+    public void Transpile_ArrayWrittenInFunction_TargetsTheGlobal(string bash, string expected)
+        => Assert.Contains(expected, BashTranspiler.Transpile(bash));
+
+    [Theory]
+    [InlineData("f() { local st=(a); st+=(b); }; f", "$st += @(")]
+    [InlineData("f() { ( st+=(b) ); }; f", "$st += @(")]
+    public void Transpile_LocalOrSubshellArrayWrite_StaysLocal(string bash, string expected)
+    {
+        var ps = BashTranspiler.Transpile(bash);
+        Assert.Contains(expected, ps);
+        Assert.DoesNotContain("$global:st", ps);
+    }
+
     // Oracle: a function is a filter: `indent() { sed 's/^/  /'; }; cmd | indent`. The piped input never reached
     // the commands in the body (sed/grep/tr/cat/read saw an empty stdin). A body that reads stdin takes the pipe
     // it is called with; one that does not is unchanged.

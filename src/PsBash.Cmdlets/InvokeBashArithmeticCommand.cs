@@ -166,7 +166,8 @@ public sealed class InvokeBashArithmeticCommand : PSCmdlet
         if (index < 0) return;
         while (items.Count <= index) items.Add("");
         items[(int)index] = value;
-        SessionState.PSVariable.Set(baseName, items.ToArray());
+        if (SessionState.PSVariable.Get(baseName) is { } owner) owner.Value = items.ToArray();
+        else SessionState.PSVariable.Set(baseName, items.ToArray());
     }
 
     private string? ReadRawVar(string name)

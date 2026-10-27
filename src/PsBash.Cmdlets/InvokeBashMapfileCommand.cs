@@ -227,6 +227,6 @@ public sealed class InvokeBashMapfileCommand : PSCmdlet
         // binary cmdlet, SessionState.PSVariable.Set has the same effect
         // (sets the variable in the runspace's current scope, which is the
         // caller's scope when called from a script / interactive session).
-        SessionState.PSVariable.Set(varName, result);
+        FileSystemHelpers.SetShellVariable(SessionState, varName, result);
     }
 }

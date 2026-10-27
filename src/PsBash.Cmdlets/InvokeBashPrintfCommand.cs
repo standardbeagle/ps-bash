@@ -441,7 +441,7 @@ public sealed class InvokeBashPrintfCommand : PSCmdlet
         else if (existing is string one) items.Add(one);
         while (items.Count <= idx) items.Add("");
         items[idx] = value;
-        SessionState.PSVariable.Set(name, items.ToArray());
+        FileSystemHelpers.SetShellVariable(SessionState, name, items.ToArray());
     }
 
     /// <summary>
