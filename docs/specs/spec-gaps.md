@@ -236,9 +236,17 @@ regression tests:
 | `seq -s, / -s' ' / -f FMT` | rejected |
 | function defined inside a function | local to the outer function |
 | `bash -c 'echo hi'; echo next` | `hinext` (last newline dropped) |
+| `f() { sed ...; }; cmd | f` (also `grep`, `read`, `mapfile`, `<<<`) | the pipe never reached the body: empty stdin |
+| `"$@"`, `$cmd`, `"${cmd[@]}"` as the command | `false` / `true` / `echo` / `test` / `[` "command not found" |
+| `f "${arr[@]}"` | one space-joined argument, not N |
+| `${a[@]/o/0}`, `${a[@]%o}`, `${a[@]#?}`, `${a[@]^^}` | operator ignored (whole array printed) |
+| `${s#"${s%%[![:space:]]*}"}` (trim idiom), `[!x]` / `[[:class:]]` in strip globs | did not trim; first `]` closed the bracket |
+| `${x//$'\n'/,}`, `${x//$nl/,}`, `${x//$empty/r}` | matched the source text; empty pattern matched everywhere |
+| `${#@}`, `${#*}`; `$(( ${m[$k]:-0} + 1 ))`, `$(( a[1] ))`, bare `RANDOM` / `SECONDS` in `$(( ))` | parse error or 0 |
+| `unset 'a[-1]'`; `kill -9999` | ignored; treated as TERM |
 
 Still open from that pass (bash is the oracle): `set -x` prints no `+ cmd` trace lines (it drives `Set-PSDebug`); `trap ... EXIT`
 inside `( )` and `trap ... RETURN` never fire; `$LINENO` is empty; `declare -p` prints arrays and attributes in its own
 format; sparse arrays are padded, not sparse (`${#a[@]}` counts the gap, `unset a[i]` leaves a hole); `local -n r=$1`
-(a nameref whose target is dynamic) does not write through; `sh` is not found; `BASH_VERSION` / `BASH_VERSINFO` report
-ps-bash's own version (`0.10.0`, major 0), so a script guarding on `BASH_VERSINFO[0] >= 4` takes the wrong branch.
+(a nameref whose target is dynamic) does not write through; `sh` is not found. `BASH_VERSION` / `BASH_VERSINFO` now claim
+bash 5.2 compatibility (like a User-Agent string); the real version is `$PsBashVersion`.
