@@ -3467,6 +3467,11 @@ public static class PsEmitter
                  && IsPureUnquotedVarWord(cmd.Words[1]))
             specialResult = EmitExitWithUnquotedVar(cmd.Words[1]);
 
+        // `exit N` also records N as the status, so an EXIT trap (`trap 'echo rc=$?' EXIT`) sees it: PowerShell's
+        // `exit` leaves $global:LASTEXITCODE as it was.
+        else if (cmd0 == "exit" && cmd.Words.Length == 2 && _context != TranspileContext.Eval)
+            specialResult = $"$global:LASTEXITCODE = {EmitExitCodeValue(cmd.Words[1])}; exit $global:LASTEXITCODE";
+
         else if (cmd0 == "cd")
             specialResult = EmitCd(cmd.Words.RemoveAt(0));
 

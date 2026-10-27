@@ -277,6 +277,11 @@ public class BashTranspilerReviewRegressionTests
     public void Transpile_IndirectPositionalVariableSliceAndArrayDefault_AreRuntimeEvaluated(string bash, string expected)
         => Assert.Contains(expected, BashTranspiler.Transpile(bash));
 
+    // Oracle: `trap 'echo rc=$?' EXIT; exit 4` prints rc=4 - `exit N` records N as the status the EXIT trap sees.
+    [Fact]
+    public void Transpile_ExitWithCode_RecordsStatusForExitTrap()
+        => Assert.Contains("$global:LASTEXITCODE = 4; exit $global:LASTEXITCODE", BashTranspiler.Transpile("trap 'echo rc=$?' EXIT; exit 4"));
+
     // Oracle: a function is a filter: `indent() { sed 's/^/  /'; }; cmd | indent`. The piped input never reached
     // the commands in the body (sed/grep/tr/cat/read saw an empty stdin). A body that reads stdin takes the pipe
     // it is called with; one that does not is unchanged.

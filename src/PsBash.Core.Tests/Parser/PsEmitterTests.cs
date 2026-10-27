@@ -5990,7 +5990,7 @@ public class PsEmitterTests
     // there is parsed as a command NAME. `&& break` printed "The term 'break' is
     // not recognized" and the loop ran on, and `|| exit 1` simply DID NOT EXIT —
     // the script sailed past the guard it was written to enforce.
-    [InlineData("cmd || exit 1", "-ne 0) { exit 1 }")]
+    [InlineData("cmd || exit 1", "-ne 0) { $global:LASTEXITCODE = 1; exit $global:LASTEXITCODE }")]
     [InlineData("cmd && continue", "-eq 0) { continue }")]
     [InlineData("cmd && break", "-eq 0) { break }")]
     [InlineData("cmd || return", "-ne 0) { return }")]
@@ -6015,7 +6015,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("a && b || exit 1");
 
-        Assert.Equal("a; $(if (-not $? -or $global:LASTEXITCODE -ne 0) { Write-Error '' -ErrorAction SilentlyContinue }) && b; if ($global:LASTEXITCODE -ne 0) { exit 1 }", result);
+        Assert.Equal("a; $(if (-not $? -or $global:LASTEXITCODE -ne 0) { Write-Error '' -ErrorAction SilentlyContinue }) && b; if ($global:LASTEXITCODE -ne 0) { $global:LASTEXITCODE = 1; exit $global:LASTEXITCODE }", result);
     }
 
     // ---- subshell exit scoping / glob class with an expansion --------------
@@ -6037,7 +6037,7 @@ public class PsEmitterTests
     [Fact]
     public void Transpile_ExitOutsideSubshell_StaysProcessExit()
     {
-        Assert.Equal("exit 5", PsEmitter.Transpile("exit 5"));
+        Assert.Equal("$global:LASTEXITCODE = 5; exit $global:LASTEXITCODE", PsEmitter.Transpile("exit 5"));
     }
 
     [Fact]

@@ -563,3 +563,11 @@ none p q r s  alt
 none
 v
 ## END
+
+#### exit N is the status an EXIT trap sees
+trap 'echo "bye rc=$?"' EXIT
+f() { exit 4; }
+f
+## STDOUT:
+bye rc=4
+## END
