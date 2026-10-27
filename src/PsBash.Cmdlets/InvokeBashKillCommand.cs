@@ -85,6 +85,13 @@ public sealed class InvokeBashKillCommand : PSCmdlet
                 continue;
             }
             var mNum = NumSignal.Match(a);
+            if (mNum.Success && BashRuntime.ParseCountClamped(mNum.Groups[1].Value) > 64)
+            {
+                // No such signal (the highest real-time one is 64): nothing is signalled.
+                FileSystemHelpers.WriteBashError(this, $"kill: {a[1..]}: invalid signal specification");
+                FileSystemHelpers.SetLastExitCode(this, 1);
+                return;
+            }
             if (mNum.Success) { signalName = ResolveSignal(mNum.Groups[1].Value); i++; continue; }
 
             // Named-signal short form (-KILL, -SIGINT, ...) — before the pid scan.

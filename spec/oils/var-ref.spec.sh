@@ -381,7 +381,6 @@ test-rep 'a3[@]'
 ==== a3[@] ====
 ## END
 ## status: 127
-## XFAIL ps-bash gap-oils-var-ref var-ref (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Array indirect expansion with @? conversion
@@ -425,7 +424,6 @@ test-op0 'a3[@]'
 ==== a3[@] ====
 ## END
 ## status: 127
-## XFAIL ps-bash gap-oils-var-ref var-ref (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### array ref with strict_array

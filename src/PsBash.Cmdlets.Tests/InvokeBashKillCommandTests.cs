@@ -56,6 +56,14 @@ public class InvokeBashKillCommandTests : IClassFixture<SharedPwshFixture>
         return errs;
     }
 
+    // Oracle: `kill -9999 $pid` prints "invalid signal specification", exits 1 and signals nothing.
+    [Fact]
+    public void Kill_SignalNumberOutOfRange_IsRejectedAndSignalsNothing()
+    {
+        var errs = RunErrors("$p = Start-Process -PassThru -WindowStyle Hidden pwsh -ArgumentList '-NoProfile','-Command','Start-Sleep 5'; try { Invoke-BashKill -9999 $p.Id; \"rc=$global:LASTEXITCODE alive=$(-not $p.HasExited)\" | Out-Null; $global:__k = \"rc=$global:LASTEXITCODE alive=$(-not $p.HasExited)\" } finally { Stop-Process -Id $p.Id -Force -ErrorAction Ignore }");
+        Assert.Contains(errs, e => e.Contains("invalid signal specification"));
+    }
+
     // Oracle: `trap 'echo got' USR1; kill -USR1 $$; echo after` prints got then after - the trap runs and the script
     // carries on (it ended the script with status 138). `trap '' USR2` ignores the signal.
     [Fact]
