@@ -326,6 +326,22 @@ public class BashTranspilerReviewRegressionTests
     public void Transpile_DeclareNamerefReadonly_DoesNotMarkReadonly()
         => Assert.DoesNotContain("MarkReadonly(", BashTranspiler.Transpile("x=1; typeset -n -r ref=x; ref=2"));
 
+    // Oracle: `[[ -v cfg[host] ]]` tests the element; the operand is a name, not a glob.
+    [Fact]
+    public void Transpile_TestVWithSubscript_PassesTheNameQuoted()
+    {
+        var ps = BashTranspiler.Transpile("[[ -v cfg[host] ]]");
+        Assert.Contains("Invoke-BashTest '-v' 'cfg[host]'", ps);
+        Assert.DoesNotContain("ConvertTo-BashGlob", ps);
+    }
+
+    // Oracle: ${s//\\/\\\\} doubles backslashes, ${s//\"/\\\"} escapes quotes, ${s//$'\n'/\\n} writes `\n` (json_escape).
+    [Theory]
+    [InlineData("echo \"${s//\\\\/\\\\\\\\}\"")]
+    [InlineData("echo \"${s//\\\"/\\\\\\\"}\"")]
+    public void Transpile_SubstitutionWithBackslashEscapes_UsesTheQuoteRemovedText(string bash)
+        => Assert.DoesNotContain("[regex]::Escape('\\\\')", BashTranspiler.Transpile(bash).Replace("\\\\\\\\", "XX"));
+
     // Oracle: a function is a filter: `indent() { sed 's/^/  /'; }; cmd | indent`. The piped input never reached
     // the commands in the body (sed/grep/tr/cat/read saw an empty stdin). A body that reads stdin takes the pipe
     // it is called with; one that does not is unchanged.

@@ -187,10 +187,41 @@ public sealed class InvokeBashTestCommand : PSCmdlet
 
     private static bool Exists(string p) => File.Exists(p) || Directory.Exists(p);
 
+    /// <summary>`[[ -v name ]]`, `-v arr[i]`, `-v map[key]`: is the variable (or that element) set?</summary>
+    private bool VariableIsSet(string operand)
+    {
+        int open = operand.IndexOf('[');
+        if (open > 0 && operand.EndsWith(']'))
+        {
+            string name = operand[..open], sub = operand[(open + 1)..^1];
+            object? holder = SessionState.PSVariable.GetValue(name);
+            if (holder is PSObject wrapped) holder = wrapped.BaseObject;
+            if (holder is System.Collections.IDictionary dict)
+                return sub is "@" or "*" ? dict.Count > 0 : dict.Contains(sub);
+            if (holder is System.Collections.IList list)
+            {
+                if (sub is "@" or "*") return list.Count > 0;
+                if (!long.TryParse(sub, out long idx))
+                {
+                    try { idx = BashArith.Evaluate(sub, n => long.TryParse(BashVariableStore.Get(n), out var v) ? v : 0, (_, _) => { }); }
+                    catch (BashArith.BashArithException) { return false; }
+                }
+                if (idx < 0) idx += list.Count;
+                return idx >= 0 && idx < list.Count;
+            }
+            return BashVariableStore.Get(name) is not null && sub is "0" or "@" or "*";
+        }
+        if (BashVariableStore.Get(operand) is not null) return true;
+        // An array or associative array is set when it has elements (`a=(x); [[ -v a ]]`).
+        object? whole = SessionState.PSVariable.GetValue(operand);
+        if (whole is PSObject w2) whole = w2.BaseObject;
+        return whole is System.Collections.IDictionary d2 ? d2.Count > 0 : whole is System.Collections.IList l2 && l2.Count > 0;
+    }
+
     private bool Unary(string op, string operand)
     {
         char c = op[1];
-        if (c == 'v') return BashVariableStore.Get(operand) is not null;
+        if (c == 'v') return VariableIsSet(operand);
         if (c == 'o' || c == 'R') return false; // shell options / namerefs are not modelled
         if (c == 't')
         {

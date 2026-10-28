@@ -615,3 +615,20 @@ f; echo "${arr[*]} ${h[x]} ${cnt[*]} ${rd[*]} $pv"
 ## STDOUT:
 0 1 2 a b p q r z
 ## END
+
+#### [[ -v arr[i] ]] and json-style escaping substitutions with backslash / quote patterns
+declare -A cfg=([host]=1); a=(x y)
+[[ -v cfg[host] ]] && echo has; [[ -v cfg[zz] ]] || echo nozz; [[ -v a[1] ]] && echo a1; [[ -v a[5] ]] || echo no5
+s=$'a\\b"c\nd'
+echo "1:${s//\\/\\\\}"; echo "2:${s//\"/\\\"}"; echo "3:${s//$'\n'/\\n}"
+## STDOUT:
+has
+nozz
+a1
+no5
+1:a\\b"c
+d
+2:a\b\"c
+d
+3:a\b"c\nd
+## END

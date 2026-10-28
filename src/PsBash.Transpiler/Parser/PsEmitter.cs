@@ -2508,6 +2508,9 @@ public static class PsEmitter
         // knows `( )`, `-o NAME`, `-v`, `-R`, usage errors (exit 2) and every shape above
         // verbatim. `[[ ]]` keeps the diagnostic: the cmdlet has no `[[` grammar.
         // `[[ -v name ]]` / `[[ -R name ]]` (is-set / is-nameref) are the same unary operators; the cmdlet owns them.
+        // The operand of -v is a variable NAME (`cfg[host]`, `a[1]`), never a glob: pass it as a literal.
+        if (words.Length == 2 && GetLiteralValue(words[0]) == "-v" && TryGetVarOperandName(words[1]) is { } varOperand)
+            return PsBuild.ExitCodeTest($"Invoke-BashTest '-v' {PsBuild.SingleQuote(varOperand)}", negate: false);
         if (!extended || (words.Length == 2 && GetLiteralValue(words[0]) is "-v" or "-R"))
             return PsBuild.ExitCodeTest(EmitPassthrough("Invoke-BashTest", words), negate: false);
 
@@ -6257,9 +6260,9 @@ public static class PsEmitter
     /// value and not the raw source text. Null when the operand has none of these (the plain literal path applies)
     /// or contains an unquoted glob character (kept on the pattern path).
     /// </summary>
-    private static string? TryEmitSubstitutionOperand(string raw)
+    private static string? TryEmitSubstitutionOperand(string raw, bool backslashEscapes = false)
     {
-        if (raw.IndexOfAny(['$', '\'', '"']) < 0) return null;
+        if (raw.IndexOfAny(backslashEscapes ? ['$', '\'', '"', '\\'] : ['$', '\'', '"']) < 0) return null;
         var segs = new List<string>();
         var lit = new StringBuilder();
         void Flush() { if (lit.Length > 0) { segs.Add(PsBuild.SingleQuote(lit.ToString())); lit.Clear(); } }
@@ -6323,6 +6326,11 @@ public static class PsEmitter
                     Flush(); segs.Add("[string](" + EmitSimpleVar(raw[s..e], strict: true) + ")");
                     i = e - 1;
                 }
+            }
+            else if (c == '\\' && backslashEscapes)
+            {
+                // Quote removal: `\\` is one backslash, `\"` a quote, `\*` a literal star, `\n` the letter n.
+                if (i + 1 < raw.Length) lit.Append(raw[++i]); else lit.Append(c);
             }
             else if (c is '*' or '?' or '[' or '\\' or '$') return null;
             else lit.Append(c);
@@ -6645,8 +6653,8 @@ public static class PsEmitter
         static string SubstituteExpr(string open, string varRef, string find, string replace, bool first)
         {
             string tail = first ? ", 1" : "";
-            string? findExpr = TryEmitSubstitutionOperand(find);
-            string? repExpr = TryEmitSubstitutionOperand(replace);
+            string? findExpr = TryEmitSubstitutionOperand(find, backslashEscapes: true);
+            string? repExpr = TryEmitSubstitutionOperand(replace, backslashEscapes: true);
             if (findExpr is null && repExpr is null)
                 return $"{open}([regex]{ReplaceFindRegex(find)}).Replace({varRef}, '{SqEsc(replace)}'{tail}))";
             string regex = findExpr is null ? ReplaceFindRegex(find) : $"$(if ({findExpr}) {{ [regex]::Escape({findExpr}) }} else {{ '(?!)' }})";
@@ -8359,6 +8367,19 @@ public static class PsEmitter
     /// instead of re-wrapping already-quoted emitted text.
     /// </summary>
     // internal, not private: also the fused lane's compile-time-static arg test.
+    /// <summary>The name operand of `[[ -v name ]]`: literal text, where `[..]` (a subscript) arrives as a glob part.</summary>
+    private static string? TryGetVarOperandName(CompoundWord word)
+    {
+        var sb = new StringBuilder();
+        foreach (var part in word.Parts)
+        {
+            if (part is WordPart.GlobPart g) sb.Append(g.Pattern);
+            else if (TryGetStaticArgValue(new CompoundWord(ImmutableArray.Create(part))) is { } s) sb.Append(s);
+            else return null;
+        }
+        return sb.ToString();
+    }
+
     internal static string? TryGetStaticArgValue(CompoundWord word)
     {
         var sb = new StringBuilder();
