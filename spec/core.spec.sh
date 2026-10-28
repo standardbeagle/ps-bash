@@ -753,3 +753,15 @@ hello
 preserve rc=143
 usage rc=125
 ## END
+
+#### wait -n returns the status of the next job to finish
+(sleep 0.4; exit 3) &
+(sleep 0.1; exit 5) &
+wait -n; echo "first rc=$?"
+wait -n; echo "second rc=$?"
+wait -n; echo "none rc=$?"
+## STDOUT:
+first rc=5
+second rc=3
+none rc=127
+## END

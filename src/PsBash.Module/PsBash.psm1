@@ -2794,6 +2794,26 @@ function Invoke-BashWait {
     if ($Arguments -contains '--help') { return Show-BashHelp 'wait' }
 
     $global:LASTEXITCODE = 0
+    # wait -n [-f] [id ...]: return when the NEXT of the named jobs (default: every job) finishes, with its status;
+    # 127 when there is no job to wait for.
+    if ($Arguments -contains '-n') {
+        $named = @($Arguments | Where-Object { $_ -notmatch '^-' })
+        $pool = @($script:BashBgJobs)
+        if ($named.Count -gt 0) {
+            $pool = @($pool | Where-Object { $j = $_; $named | Where-Object { $_ -eq [string]$j.Id } })
+        }
+        if ($pool.Count -eq 0) { $global:LASTEXITCODE = 127; return }
+        $done = $pool | Where-Object { $_.AsyncResult.IsCompleted } | Select-Object -First 1
+        if (-not $done) {
+            $handles = [System.Threading.WaitHandle[]]@($pool | ForEach-Object { $_.AsyncResult.AsyncWaitHandle })
+            $done = $pool[[System.Threading.WaitHandle]::WaitAny($handles)]
+        }
+        Complete-BashBgJob -Job $done
+        $code = if ($null -eq $done.ExitCode) { 0 } else { [int]$done.ExitCode }
+        [void]$script:BashBgJobs.Remove($done)
+        $global:LASTEXITCODE = $code
+        return
+    }
     if ($Arguments.Count -gt 0) {
         # wait $! / wait <id>: wait for a synthetic background-job id; wait %N: the
         # bash job number (positional, 1-based) shown by `jobs` — NOT the id.
