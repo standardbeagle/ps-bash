@@ -5,7 +5,6 @@
 echo {foo}
 ## stdout: {foo}
 ## status: 0
-## XFAIL ps-bash gap-oils-brace-expansion brace-expansion (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### incomplete trailing expansion
@@ -18,7 +17,6 @@ echo {a,b}_{
 echo }_{a,b}
 ## stdout: }_a }_b
 ## status: 0
-## XFAIL ps-bash gap-oils-brace-expansion brace-expansion (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Char range expansion
@@ -105,7 +103,6 @@ echo {a,b}{}
 a{} b{}
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-brace-expansion brace-expansion (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### OSH provides an alternative to invalid syntax
@@ -118,7 +115,6 @@ echo {a,b}\{\}
 a{} b{}
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-brace-expansion brace-expansion (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Side effect in expansion
@@ -140,14 +136,12 @@ echo {1__3}
 {1__3}
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-brace-expansion brace-expansion (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### partial leading expansion 2
 echo {x}_{a,b}
 ## stdout: {x}_a {x}_b
 ## status: 0
-## XFAIL ps-bash gap-oils-brace-expansion brace-expansion (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### } in expansion
@@ -180,14 +174,12 @@ echo {0,1}{0,1}{0,1}
 echo {'a',b}_{c,"d"}
 ## stdout: a_c a_d b_c b_d
 ## status: 0
-## XFAIL ps-bash gap-oils-brace-expansion brace-expansion (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### expansion with mixed quotes
 echo -{\X"b",'cd'}-
 ## stdout: -Xb- -cd-
 ## status: 0
-## XFAIL ps-bash gap-oils-brace-expansion brace-expansion (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### expansion with simple var
@@ -262,7 +254,6 @@ echo {{a,b}
 echo \{{a,b}
 ## stdout: {a {b
 ## status: 0
-## XFAIL ps-bash gap-oils-brace-expansion brace-expansion (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Empty expansion
@@ -331,7 +322,6 @@ echo ~
 /home/bar
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-brace-expansion brace-expansion (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Tilde expansion with brace expansion
@@ -414,7 +404,6 @@ echo $foo
 ~
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-brace-expansion brace-expansion (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Number range expansion
@@ -506,6 +495,5 @@ echo {z..3}
 {z..3}
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-brace-expansion brace-expansion (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher

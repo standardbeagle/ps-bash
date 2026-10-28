@@ -69,9 +69,33 @@ public class BashTranspilerReviewRegressionTests
     [Fact]
     public void Transpile_BraceExpansionItemWithQuote_EscapesQuote()
     {
+        var ps = BashTranspiler.Transpile("echo {a,b\\'c}");
+        Assert.Contains("'b''c'", ps);         // ' doubled inside the PS literal (bash prints b'c)
+        Assert.DoesNotContain("'b'c'", ps);    // never the broken un-escaped form
+    }
+
+    [Fact]
+    public void Transpile_BraceExpansionQuotedItem_DropsTheQuotes()
+    {
+        // Oracle: bash prints `a bcd` for `echo {a,b'c'd}`.
         var ps = BashTranspiler.Transpile("echo {a,b'c'd}");
-        Assert.Contains("'b''c''d'", ps);      // ' doubled inside the PS literal
-        Assert.DoesNotContain("'b'c'd'", ps);  // never the broken un-escaped form
+        Assert.Contains("'bcd'", ps);
+    }
+
+    [Fact]
+    public void Transpile_InvalidBraceRange_KeepsTheBracesLiteral()
+    {
+        // Oracle: bash prints `-a{1...3}- -b{1...3}-`.
+        var ps = BashTranspiler.Transpile("echo -{a,b}{1...3}-");
+        Assert.Contains("-a{1...3}-", ps);
+    }
+
+    [Fact]
+    public void Transpile_LiteralBracesInsideAWord_AreNotAScriptBlock()
+    {
+        // Oracle: bash prints `a{b}c`; bare `a{b}c` is `a`, a scriptblock and `c` in PowerShell.
+        var ps = BashTranspiler.Transpile("echo a{b}c");
+        Assert.Contains("\"a{b}c\"", ps);
     }
 
     // Oracle: bash prints `a1 b1` for `x=1; echo {a,b}$x`; the variable was spliced into a single-quoted item as `$env:x`.

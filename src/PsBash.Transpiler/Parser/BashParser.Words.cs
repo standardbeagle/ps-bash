@@ -1,3 +1,4 @@
+using System.Text;
 using System.Collections.Immutable;
 using PsBash.Core.Parser.Ast;
 
@@ -1106,12 +1107,55 @@ public sealed partial class BashParser
 
         // Comma-separated tuple: split on top-level commas only (depth-aware),
         // then recursively expand any nested brace items (e.g. b{1,2} -> b1, b2).
+        // No top-level comma and not a valid range (`{1...3}`, `{x{a,b}y}`): the braces stay literal around
+        // whatever expands inside, as in bash.
+        if (!HasTopLevelComma(inner))
+        {
+            var wrapped = ImmutableArray.CreateBuilder<string>();
+            foreach (var inside in ExpandNestedBraces(inner))
+                wrapped.Add(RestoreKeptBraces(KeptOpen + inside + KeptClose));
+            parts.Add(new WordPart.BracedTuple(wrapped.ToImmutable()));
+            return closePos;
+        }
+
         var rawItems = SplitTopLevelCommas(inner);
         var expandedItems = new List<string>();
         foreach (var item in rawItems)
             expandedItems.AddRange(ExpandNestedBraces(item));
-        parts.Add(new WordPart.BracedTuple(ImmutableArray.CreateRange(expandedItems)));
+        parts.Add(new WordPart.BracedTuple(ImmutableArray.CreateRange(expandedItems.ConvertAll(RestoreKeptBraces))));
         return closePos;
+    }
+
+    // A brace pair that stays literal (`{1...3}`) is held as private-use characters while the rest expands, so the
+    // expansion scan does not mistake it for syntax again; they turn back into `{` `}` on the finished item.
+    private const char KeptOpen = '', KeptClose = '';
+
+    private static string RestoreKeptBraces(string s)
+    {
+        string d = DequoteBraceItem(s);
+        return d.Replace(KeptOpen, '{').Replace(KeptClose, '}');
+    }
+
+    /// <summary>Quote removal on a finished brace item (`{'a',b}`, `{a,\{x\}}`): the quotes and backslashes that
+    /// protected a `,` or brace during splitting are not part of the word. Items with a `$` expansion keep their text.</summary>
+    private static string DequoteBraceItem(string s)
+    {
+        if (s.IndexOfAny(['\'', '"', '\\']) < 0 || s.Contains('$') || s.Contains('`')) return s;
+        var sb = new StringBuilder();
+        for (int i = 0; i < s.Length; i++)
+        {
+            char c = s[i];
+            if (c == '\\' && i + 1 < s.Length) sb.Append(s[++i]);
+            else if (c is '\'' or '"')
+            {
+                int close = s.IndexOf(c, i + 1);
+                if (close < 0) { sb.Append(c); continue; }
+                sb.Append(s, i + 1, close - i - 1);
+                i = close;
+            }
+            else sb.Append(c);
+        }
+        return sb.ToString();
     }
 
     /// <summary>
@@ -1233,6 +1277,13 @@ public sealed partial class BashParser
                     letters.Add(((char)v).ToString());
                 return letters;
             }
+        }
+        if (!HasTopLevelComma(inner))
+        {
+            var kept = new List<string>();
+            foreach (var inside in ExpandNestedBraces(inner))
+                kept.Add(KeptOpen + inside + KeptClose);
+            return kept;
         }
         var rawItems = SplitTopLevelCommas(inner);
         var result = new List<string>();

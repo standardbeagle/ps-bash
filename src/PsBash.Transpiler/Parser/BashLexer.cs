@@ -222,6 +222,17 @@ public static class BashLexer
                 continue;
             }
 
+            // `{` / `}` glued to more word text (`}_{a,b}`, `{x}_a`, `{1.3}`) are ordinary characters of a word:
+            // they are reserved only as a standalone token.
+            if ((c == '{' || c == '}') && pos + 1 < len && !IsBlankOrOperatorChar(input[pos + 1])
+                && !(c == '{' && TryScanNamedFd(input, pos, out _)))
+            {
+                int glued = pos;
+                pos = ScanWord(input, pos + 1);
+                tokens.Add(new BashToken(BashTokenKind.Word, input[glued..pos], glued));
+                continue;
+            }
+
             // Named-fd redirect prefix: {name}>file / {name}<file (bash allocates
             // a free fd into $name). Emit {name} as a Word so it is NOT lexed as
             // LBrace — otherwise the parser tries to parse a brace group and throws
@@ -520,6 +531,9 @@ public static class BashLexer
         end = p; // Word spans {name}; redirect operator starts here.
         return true;
     }
+
+    private static bool IsBlankOrOperatorChar(char c)
+        => c is ' ' or '\t' or '\n' or '\r' or '|' or '&' or ';' or '(' or ')' or '<' or '>';
 
     private static bool IsBraceExpansion(string input, int pos)
     {

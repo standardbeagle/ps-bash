@@ -4727,7 +4727,7 @@ public static partial class PsEmitter
 
         if (word.Parts.Length == 1)
             return EscapeLeadingSplatSigil(
-                word, TransformWordPath(EmitWordPart(word.Parts[0])));
+                word, TransformWordPath(EmitBarewordPart(word.Parts[0], wholeWord: true)));
 
         // Adjacent-quote concatenation. When a word's FIRST part is a
         // self-delimiting token ('...', "...", or $(...)), PowerShell tokenizes a
@@ -4751,7 +4751,7 @@ public static partial class PsEmitter
         for (int i = 0; i < word.Parts.Length; i++)
         {
             var part = word.Parts[i];
-            sb.Append(EmitWordPart(part));
+            sb.Append(EmitBarewordPart(part));
 
             // After TildeSub, restore the '/' ParseTilde consumed if more parts follow. bash
             // appends the rest of the word verbatim; a '\' here made `~/x` a literal
@@ -5100,6 +5100,14 @@ public static partial class PsEmitter
         return false;
     }
 
+    /// <summary>The text a prefix/suffix part contributes to every brace item: a quoted or escaped literal is
+    /// its value (`\{`, `'x'` have no quote/backtick left to print), anything else is emitted as before.</summary>
+    private static string BraceAffixText(WordPart part)
+        => part is WordPart.Literal or WordPart.EscapedLiteral or WordPart.SingleQuoted
+           && TryGetPureLiteralText(ImmutableArray.Create(part), out var text)
+            ? text
+            : EmitWordPart(part);
+
     private static string EmitBraceExpandedWord(ImmutableArray<WordPart> parts)
     {
         // Adjacent brace expansions cross-multiply: bash `{a..c}{1..2}` -> a1 a2 b1 b2 c1 c2.
@@ -5140,7 +5148,7 @@ public static partial class PsEmitter
             {
                 List<string> segment = part is WordPart.BracedTuple or WordPart.BracedRange
                     ? ExpandBrace(part)
-                    : new List<string> { EmitWordPart(part) };
+                    : new List<string> { BraceAffixText(part) };
                 CheckBraceWords((long)combos.Count * segment.Count); // bound the product before building it
                 var next = new List<string>(combos.Count * segment.Count);
                 foreach (string head in combos)
@@ -5170,11 +5178,11 @@ public static partial class PsEmitter
             }
             else if (!foundBrace)
             {
-                prefix.Append(EmitWordPart(part));
+                prefix.Append(BraceAffixText(part));
             }
             else
             {
-                suffix.Append(EmitWordPart(part));
+                suffix.Append(BraceAffixText(part));
             }
         }
 
@@ -5306,6 +5314,13 @@ public static partial class PsEmitter
             return translated;
         return value;
     }
+
+    /// <summary>A part spliced into an unquoted PowerShell word: a literal `{` / `}` would start a scriptblock
+    /// (`echo a{b}c` split into `a`, a block and `c`), so it is backtick-escaped.</summary>
+    private static string EmitBarewordPart(WordPart part, bool wholeWord = false)
+        => part is WordPart.Literal { Value: var v } && (v.Contains('{') || v.Contains('}'))
+            ? wholeWord ? PsBuild.DoubleQuote(v) : v.Replace("{", "`{").Replace("}", "`}")
+            : EmitWordPart(part);
 
     private static string EmitWordPart(WordPart part) => part switch
     {
