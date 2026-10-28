@@ -1016,14 +1016,17 @@ public sealed partial class BashParser
         bool hasComma = false;
         bool hasDotDot = false;
 
+        int depth = 0; // `{${a},b}`: the braces of an inner `${a}` do not close the outer pair
         while (i < len)
         {
             char c = raw[i];
-            if (c == '}')
+            if (c == '{' && i > 0 && raw[i - 1] == '$') depth++;
+            else if (c == '}' && depth > 0) depth--;
+            else if (c == '}')
                 return hasComma || hasDotDot;
-            if (c == ',')
+            else if (c == ',' && depth == 0)
                 hasComma = true;
-            if (c == '.' && i + 1 < len && raw[i + 1] == '.')
+            else if (c == '.' && depth == 0 && i + 1 < len && raw[i + 1] == '.')
                 hasDotDot = true;
             i++;
         }

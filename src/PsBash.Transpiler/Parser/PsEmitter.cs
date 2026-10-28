@@ -5204,6 +5204,30 @@ public static partial class PsEmitter
             ? text
             : EmitWordPart(part);
 
+    // A brace item with an expansion (`{$a,b}`) is word text: decompose it; a plain item stays one literal.
+    private static ImmutableArray<WordPart> BraceItemParts(string item)
+        => item.Contains('$') || item.Contains('`')
+            ? BashParser.DecomposeWord(item)
+            : ImmutableArray.Create<WordPart>(new WordPart.Literal(item));
+
+    // Joining text after an item that ends in a variable name continues that NAME, as in bash's textual
+    // expansion (`{$a,b}_c` reads `$a_c`).
+    private static ImmutableArray<WordPart> AppendBraceParts(ImmutableArray<WordPart> head, ImmutableArray<WordPart> tail)
+    {
+        if (head.Length > 0 && head[^1] is WordPart.SimpleVarSub v && tail.Length > 0 && tail[0] is WordPart.Literal lit)
+        {
+            int n = 0;
+            while (n < lit.Value.Length && (char.IsAsciiLetterOrDigit(lit.Value[n]) || lit.Value[n] == '_')) n++;
+            if (n > 0)
+            {
+                var merged = head.RemoveAt(head.Length - 1).Add(new WordPart.SimpleVarSub(v.Name + lit.Value[..n]));
+                if (n < lit.Value.Length) merged = merged.Add(new WordPart.Literal(lit.Value[n..]));
+                return merged.AddRange(tail.RemoveAt(0));
+            }
+        }
+        return head.AddRange(tail);
+    }
+
     private static string EmitBraceExpandedWord(ImmutableArray<WordPart> parts)
     {
         // Adjacent brace expansions cross-multiply: bash `{a..c}{1..2}` -> a1 a2 b1 b2 c1 c2.
@@ -5211,10 +5235,16 @@ public static partial class PsEmitter
         // (each brace contributes its item list; every other part is one literal segment).
         int braceCount = 0;
         bool dynamicPart = false;
+        bool dynamicItems = false;
         foreach (var p in parts)
         {
             if (p is WordPart.BracedTuple or WordPart.BracedRange)
+            {
                 braceCount++;
+                // `{$a,b}`: an item with an expansion is text that must be expanded, not printed.
+                if (p is WordPart.BracedTuple t && t.Items.Any(i => i.Contains('$') || i.Contains('`')))
+                    dynamicPart = dynamicItems = true;
+            }
             else if (p is not (WordPart.Literal or WordPart.EscapedLiteral or WordPart.SingleQuoted or WordPart.GlobPart))
                 dynamicPart = true;
         }
@@ -5226,16 +5256,18 @@ public static partial class PsEmitter
             foreach (var part in parts)
             {
                 var alts = part is WordPart.BracedTuple or WordPart.BracedRange
-                    ? ExpandBrace(part).ConvertAll(s => (WordPart)new WordPart.Literal(s))
-                    : new List<WordPart> { part };
+                    ? ExpandBrace(part).ConvertAll(BraceItemParts)
+                    : new List<ImmutableArray<WordPart>> { ImmutableArray.Create(part) };
                 CheckBraceWords((long)combos.Count * alts.Count);
                 var next = new List<ImmutableArray<WordPart>>(combos.Count * alts.Count);
                 foreach (var head in combos)
                     foreach (var alt in alts)
-                        next.Add(head.Add(alt));
+                        next.Add(AppendBraceParts(head, alt));
                 combos = next;
             }
-            return $"@({string.Join(',', combos.ConvertAll(FlattenPartsToDoubleQuotedString))})";
+            var combined = $"@({string.Join(',', combos.ConvertAll(FlattenPartsToDoubleQuotedString))})";
+            // An unquoted expansion that comes out empty is dropped from the word list (`{$a,b}_c` with `$a_c` unset).
+            return dynamicItems ? $"@({combined} | Where-Object {{ $_ -ne '' }})" : combined;
         }
         if (braceCount >= 2)
         {

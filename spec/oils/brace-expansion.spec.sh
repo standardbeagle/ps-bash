@@ -187,7 +187,6 @@ a=A
 echo -{$a,b}-
 ## stdout: -A- -b-
 ## status: 0
-## XFAIL ps-bash gap-oils-brace-expansion brace-expansion (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### double expansion with simple var -- bash bug
@@ -196,7 +195,6 @@ a=A
 echo {$a,b}_{c,d}
 ## stdout: b_c b_d
 ## status: 0
-## XFAIL ps-bash gap-oils-brace-expansion brace-expansion (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### double expansion with braced variable
@@ -205,7 +203,6 @@ a=A
 echo {${a},b}_{c,d}
 ## stdout: A_c A_d b_c b_d
 ## status: 0
-## XFAIL ps-bash gap-oils-brace-expansion brace-expansion (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### double expansion with literal and simple var
@@ -213,7 +210,6 @@ a=A
 echo {_$a,b}_{c,d}
 ## stdout: _ _ b_c b_d
 ## status: 0
-## XFAIL ps-bash gap-oils-brace-expansion brace-expansion (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### expansion with command sub
@@ -221,7 +217,6 @@ a=A
 echo -{$(echo a),b}-
 ## stdout: -a- -b-
 ## status: 0
-## XFAIL ps-bash gap-oils-brace-expansion brace-expansion (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### expansion with arith sub
@@ -229,7 +224,6 @@ a=A
 echo -{$((1 + 2)),b}-
 ## stdout: -3- -b-
 ## status: 0
-## XFAIL ps-bash gap-oils-brace-expansion brace-expansion (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### double expansion with escaped literals
@@ -237,7 +231,6 @@ a=A
 echo -{\$,\[,\]}-
 ## stdout: -$- -[- -]-
 ## status: 0
-## XFAIL ps-bash gap-oils-brace-expansion brace-expansion (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### { in expansion

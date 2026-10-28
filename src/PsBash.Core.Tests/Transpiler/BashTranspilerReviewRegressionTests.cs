@@ -949,4 +949,16 @@ public class BashTranspilerReviewRegressionTests
     [Fact]
     public void Transpile_SetUnknownLongOption_IsARuntimeError()
         => Assert.Contains("set: NOSUCH: invalid option name", BashTranspiler.Transpile("set -o NOSUCH || true"));
+
+    // Oracle: `a=A; echo -{$a,b}-` is `-A- -b-`; `{${a},b}` nests a braced expansion; an empty unquoted result is dropped.
+    [Theory]
+    [InlineData("a=A; echo -{$a,b}-", "$env:a")]
+    [InlineData("a=A; echo {${a},b}_{c,d}", "$env:a")]
+    [InlineData("a=A; echo {$a,b}_{c,d}", "Where-Object")]
+    public void Transpile_BraceItemWithExpansion_ExpandsTheItem(string script, string expected)
+    {
+        var ps = BashTranspiler.Transpile(script);
+        Assert.Contains(expected, ps);
+        Assert.DoesNotContain("'-$a-'", ps);
+    }
 }
