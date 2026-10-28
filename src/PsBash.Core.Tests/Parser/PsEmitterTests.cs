@@ -2427,8 +2427,8 @@ public class PsEmitterTests
         => Assert.Contains(expected, PsEmitter.Transpile(script));
 
     [Fact]
-    public void Transpile_BracketParens_RunTheTestCmdlet()
-        => Assert.Contains("Invoke-BashTest `( '-n' x `)", PsEmitter.Transpile(@"[ \( -n x \) -a -n y ]"));
+    public void Transpile_BracketParens_AreTranslatedAsGrouping()
+        => Assert.DoesNotContain("`(", PsEmitter.Transpile(@"[ \( -n x \) -a -n y ]"));   // grouping is translated, not passed to the cmdlet
     [Fact]
     public void Transpile_SingleOperandTest_StillTestsNonEmpty()
     {
