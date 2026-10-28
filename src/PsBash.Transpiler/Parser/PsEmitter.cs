@@ -2420,6 +2420,19 @@ public static partial class PsEmitter
         return string.Join(" -or ", groups);
     }
 
+    // In `[ ]` the grouping parens arrive escaped or quoted (`\(`, '('): bash groups on the word text.
+    private static ImmutableArray<CompoundWord> WithLiteralParens(ImmutableArray<CompoundWord> words)
+    {
+        var b = ImmutableArray.CreateBuilder<CompoundWord>(words.Length);
+        foreach (var w in words)
+        {
+            string? text = w.Parts is [WordPart.EscapedLiteral e] ? e.Value
+                : w.Parts is [WordPart.SingleQuoted q] ? q.Value : null;
+            b.Add(text is "(" or ")" ? new CompoundWord(ImmutableArray.Create<WordPart>(new WordPart.Literal(text))) : w);
+        }
+        return b.MoveToImmutable();
+    }
+
     private static string TranslateTestCondition(ImmutableArray<CompoundWord> words, bool extended)
     {
         // Grouping: `[[ ( -f $f && ! -L $f ) ]]`. Unwrap one enclosing pair and
@@ -2427,6 +2440,12 @@ public static partial class PsEmitter
         // translated, then re-parenthesize for PowerShell precedence.
         if (extended && TryUnwrapTestGroup(words, out var grouped))
             return $"({EmitExtendedTest(grouped)})";
+
+        // `[ \( A \) ]`: bash's 3-arg form `( X )` is just X (a lone word is then a non-empty test), and the
+        // 4-arg form groups a unary test. Arity 3 is checked first so `[ ( = ) ]`-style operators still apply.
+        if (!extended && TryUnwrapTestGroup(WithLiteralParens(words), out var bracketGrouped)
+            && !(words.Length == 3 && GetLiteralValue(words[1]) is { } gm && (IsBinaryTestOp(gm) || gm is "-a" or "-o")))
+            return $"({TranslateTestCondition(bracketGrouped, extended: false)})";
 
         // `[ A op B ]`: bash picks the arity-3 shape from the OPERATOR in the middle, before it
         // looks at A — so `[ -f = -f ]` compares two strings, `[ ! = ! ]` is true, and

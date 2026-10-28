@@ -926,4 +926,11 @@ public class BashTranspilerReviewRegressionTests
         Assert.Contains("Invoke-BashTestInt", ps);
         Assert.Contains("if ($global:__BashTestBad) { 2 }", ps);
     }
+
+    // Oracle: `[ \( foo \) ]` groups (true for a non-empty word); the escaped parens are not operands.
+    [Theory]
+    [InlineData("[ \\( foo \\) ]")]
+    [InlineData("[ \\( -z foo \\) ]")]
+    public void Transpile_BracketEscapedParens_AreGroupingNotStrings(string script)
+        => Assert.DoesNotContain("'`('", BashTranspiler.Transpile(script));
 }
