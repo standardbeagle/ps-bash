@@ -126,6 +126,19 @@ public class BashTranspilerTests
         Assert.DoesNotContain("'\\('", result);
     }
 
+    // `${@-w}` / `${@:+w}` test the positional LIST: one empty parameter is set (`-`) but null (`:-`); a bare
+    // one is a word list, so it can sit beside other arguments.
+    [Fact]
+    public void Transpile_PositionalListDefaultOperators_TestTheListNotAString()
+    {
+        var result = BashTranspilerTests_Transpile("echo ${@:-x} z");
+        Assert.Contains("@($(if (@(", result);
+        Assert.Contains(".Count -eq 1 -and -not [string]", result);
+        Assert.DoesNotContain("$null ?? \"x\"", result);
+    }
+
+    private static string BashTranspilerTests_Transpile(string bash) => BashTranspiler.Transpile(bash);
+
     // `declare -A m=()` is an empty ASSOCIATIVE array (a hashtable), not `@()`.
     [Fact]
     public void Transpile_DeclareAssocEmptyInitializer_IsHashtable()

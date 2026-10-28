@@ -6048,12 +6048,16 @@ public static partial class PsEmitter
     /// </summary>
     private static bool IsUnquotedDefaultAltWord(CompoundWord word)
         => word.Parts is [WordPart.BracedVarSub { Suffix: { } s, Name: var n }]
-           && n is not ("@" or "*") && IsOrdinaryVarName(n)
+           && (IsOrdinaryVarName(n) && n is not ("@" or "*") || IsPositionalListDefaultAlt(n, s))
            && (s.StartsWith(":-") || s.StartsWith(":+") || (s.Length > 0 && s[0] is '-' or '+')
                // Trim / replace / slice / case-change results are split like any other unquoted expansion:
                // `${s#*o}` of "Hello World" is the two words " World" -> World, not one argument with its space.
                || (s.Length > 0 && s[0] is '#' or '%' or '/' or '^' or ',' && !IsLengthSuffix(s))
                || (s.Length > 1 && s[0] == ':' && s[1] is not ('-' or '+' or '=' or '?')));
+
+    /// <summary>`${@-w}` `${*:+w}`: the default / alternative operators on the positional LIST (see <see cref="EmitPositionalWordOp"/>).</summary>
+    private static bool IsPositionalListDefaultAlt(string name, string suffix)
+        => name is "@" or "*" && (suffix.StartsWith(":-") || suffix.StartsWith(":+") || suffix.StartsWith('-') || suffix.StartsWith('+'));
 
     /// <summary>
     /// Bare <c>${a[@]}</c> / <c>${a[*]}</c>: every element, each split again on IFS. Left as a bare array it is
@@ -6118,6 +6122,8 @@ public static partial class PsEmitter
             ? "@(" + EmitBraceExpandedWord(word.Parts) + " | ConvertTo-BashGlob)"
             : IsGlobWord(word)
             ? PsBuild.GlobWordArray(EmitGlobPatternExpr(word))
+            : IsUnquotedDefaultAltWord(word) && word.Parts[0] is WordPart.BracedVarSub { Name: "@" or "*" }
+                ? "@(" + EmitBracedVar((WordPart.BracedVarSub)word.Parts[0]) + ")"
             : IsUnquotedDefaultAltWord(word)
                 ? PsBuild.WordSplitArray("(" + EmitBracedVar((WordPart.BracedVarSub)word.Parts[0]) + ")")
             : word.Parts[0] is WordPart.CommandSub cs
@@ -6683,7 +6689,34 @@ public static partial class PsEmitter
 
         // Scalar suffix operators (default/assign/alt/error, removal, replace, slice,
         // case, @-transform). Shared with array-element expansions like ${arr[0]##*/}.
+        if (bvs.Name is "@" or "*" && EmitPositionalWordOp(bvs.Name, bvs.Suffix, inDoubleQuote, bvs.ArgWord) is { } posOp)
+            return posOp;
         return EmitScalarSuffix(varRef, bvs.Suffix, inDoubleQuote, bvs.ArgWord) ?? varRef;
+    }
+
+    // `${@-w}` `${@:+w}` `${*:-w}` …: the operand is the positional LIST, not a string. `-` / `+` test only whether
+    // any parameter is set; `:-` / `:+` also treat the expansion as null: no words, one empty word, or (`"$*"`) a
+    // join that is empty. Two empty parameters are two words, so not null.
+    private static string? EmitPositionalWordOp(string name, string suffix, bool inDoubleQuote, ImmutableArray<WordPart>? argWord)
+    {
+        bool colon = suffix.StartsWith(':');
+        string op = colon ? suffix[1..] : suffix;
+        if (op.Length == 0 || op[0] is not ('-' or '+')) return null;
+        // `set -- ""` is a ONE-element list holding "", which a plain `if ($list)` takes for empty.
+        string pos = "$(if ($null -ne $global:BashPositional -and $global:BashPositional.Count) { $global:BashPositional } else { $args })";
+        bool joined = name == "*" && inDoubleQuote;
+        string value = joined ? $"(@({pos}) -join {PsBuild.IfsJoinSeparator})"
+            : inDoubleQuote ? pos
+            : $"@(@({pos}) | Where-Object {{ $_ -ne '' }})"; // unquoted: empty words vanish
+        string isNull = !colon
+            ? $"@({pos}).Count -eq 0"
+            : joined
+                ? $"-not {value}"
+                : $"@({pos}).Count -eq 0 -or (@({pos}).Count -eq 1 -and -not [string]@({pos})[0])";
+        string arm = EmitScalarSuffix("$null", ":-" + op[1..], inDoubleQuote, argWord) ?? "''";
+        return op[0] == '-'
+            ? $"$(if ({isNull}) {{ {arm} }} else {{ {value} }})"
+            : $"$(if ({isNull}) {{ '' }} else {{ {arm} }})";
     }
 
     // Emit a scalar parameter-expansion suffix operator applied to an arbitrary base
