@@ -840,4 +840,17 @@ public class BashTranspilerReviewRegressionTests
     [InlineData("echo $(( '1' + 2 ))")]
     public void Transpile_ArithSyntaxError_IsDeferredToRunTime(string bash)
         => Assert.Contains("Invoke-BashArith", BashTranspiler.Transpile(bash));
+
+    // Oracle: inside [[ ]] numeric operands are arithmetic expressions (`[[ 017 -eq 15 ]]` is true); [ ] keeps plain integers.
+    [Fact]
+    public void Transpile_DoubleBracketNumericOperands_AreEvaluatedAsArithmetic()
+    {
+        Assert.Contains("Invoke-BashArith", BashTranspiler.Transpile("[[ a -eq 5 ]]"));
+        Assert.DoesNotContain("Invoke-BashArith", BashTranspiler.Transpile("[ 1 -eq 5 ]"));
+    }
+
+    // Oracle: `[[ True || '' && '' ]]` is true — && binds tighter than ||.
+    [Fact]
+    public void Transpile_DoubleBracketAndBindsTighterThanOr()
+        => Assert.Contains("-or ((", BashTranspiler.Transpile("[[ -n a || -n b && -n c ]]"));
 }

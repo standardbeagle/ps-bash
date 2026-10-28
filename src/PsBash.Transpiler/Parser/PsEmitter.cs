@@ -2390,22 +2390,29 @@ public static partial class PsEmitter
         if (segments.Count == 1)
             return TranslateTestCondition(segments[0].Words, extended: true);
 
-        var sb = new StringBuilder();
+        // && binds tighter than || in [[ ]], but PowerShell's -and / -or have EQUAL precedence:
+        // group each run of && operands in its own parens, then join the groups with -or.
+        var groups = new List<string>();
+        var group = new StringBuilder();
+        bool mixed = false;
         for (int i = 0; i < segments.Count; i++)
         {
-            if (i > 0)
-            {
-                sb.Append(' ');
-                sb.Append(segments[i - 1].TrailingOp);
-                sb.Append(' ');
-            }
             // Wrap each segment in parens so that -and / -or are not parsed as
             // additional flags to the preceding cmdlet (e.g. Test-Path ... -and ...).
-            sb.Append('(');
-            sb.Append(TranslateTestCondition(segments[i].Words, extended: true));
-            sb.Append(')');
+            if (group.Length > 0) group.Append(" -and ");
+            group.Append('(').Append(TranslateTestCondition(segments[i].Words, extended: true)).Append(')');
+            if (segments[i].TrailingOp != "-and")
+            {
+                groups.Add(group.ToString());
+                mixed |= group.ToString().Contains(" -and ");
+                group.Clear();
+            }
         }
-        return sb.ToString();
+        // Parenthesize an && run only when it sits beside a ||.
+        if (mixed && groups.Count > 1)
+            for (int g = 0; g < groups.Count; g++)
+                if (groups[g].Contains(" -and ")) groups[g] = "(" + groups[g] + ")";
+        return string.Join(" -or ", groups);
     }
 
     private static string TranslateTestCondition(ImmutableArray<CompoundWord> words, bool extended)
@@ -2575,7 +2582,19 @@ public static partial class PsEmitter
             // Cast both operands to [long] so the compare is numeric like bash. (The
             // string operators == / = / != are handled above/below and stay string.)
             if (op is "-eq" or "-ne" or "-lt" or "-le" or "-gt" or "-ge")
+            {
+                // Inside [[ ]] each operand is an ARITHMETIC expression (`[[ a -eq a ]]` reads
+                // variables a, `017` is octal, an unset name is 0); `[ ]` takes plain integers.
+                if (extended)
+                {
+                    // A bare integer literal would lose its leading zero (`017` is octal 15).
+                    static string ArithOperand(string e) =>
+                        e.Length > 0 && (char.IsDigit(e[0]) || e[0] == '-' || e[0] == '+') && !e.Contains('$')
+                            ? "'" + e + "'" : e;
+                    return $"[long](Invoke-BashArith ([string]({ArithOperand(lhs)}))) {op} [long](Invoke-BashArith ([string]({ArithOperand(EmitTestOperand(words[2]))})))";
+                }
                 return $"[long]({lhs}) {op} [long]({EmitTestOperand(words[2])})";
+            }
 
             // File-comparison operators: mtime ordering (-nt/-ot) and same-file
             // (-ef). Unimplemented, these fell through to the bare-operand join

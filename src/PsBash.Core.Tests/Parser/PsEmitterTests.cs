@@ -2330,7 +2330,7 @@ public class PsEmitterTests
 
         // Numeric operators cast both operands to [long] so the compare is integer, not
         // string ('10' -gt 9 must be true).
-        Assert.Equal("$(if (([long]($env:a) -eq [long]($env:b))) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1 })", result);
+        Assert.Equal("$(if (([long](Invoke-BashArith ([string]($env:a))) -eq [long](Invoke-BashArith ([string]($env:b))))) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1 })", result);
     }
 
     // ── a double-quoted test operand keeps its expansions live ───────────────
@@ -2898,7 +2898,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("[[ $a -lt $b ]]");
 
-        Assert.Equal("$(if (([long]($env:a) -lt [long]($env:b))) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1 })", result);
+        Assert.Equal("$(if (([long](Invoke-BashArith ([string]($env:a))) -lt [long](Invoke-BashArith ([string]($env:b))))) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1 })", result);
     }
 
     [Fact]
@@ -2906,7 +2906,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("[[ $a -gt $b ]]");
 
-        Assert.Equal("$(if (([long]($env:a) -gt [long]($env:b))) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1 })", result);
+        Assert.Equal("$(if (([long](Invoke-BashArith ([string]($env:a))) -gt [long](Invoke-BashArith ([string]($env:b))))) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1 })", result);
     }
 
     [Fact]

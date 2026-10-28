@@ -43,6 +43,8 @@ public sealed class InvokeBashArithmeticCommand : PSCmdlet
         // The transpiler emits a single quoted argument, but accept multiple
         // tokens (joined with spaces) so an unquoted expression still works.
         var expr = Tokens is { Length: > 0 } ? string.Join(" ", Tokens) : "0";
+        // An empty / blank expression is 0 in bash (`$(( ))`, `[[ "" -eq 0 ]]`).
+        if (string.IsNullOrWhiteSpace(expr)) expr = "0";
 
         FileSystemHelpers.SetLastExitCode(this, 0);
         try
