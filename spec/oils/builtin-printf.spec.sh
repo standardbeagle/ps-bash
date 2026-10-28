@@ -65,7 +65,6 @@ declare $var="${val@Q}"
 echo "$foo"
 ## stdout: '"quoted" with spaces and \'
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-printf builtin-printf (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### printf with too few arguments

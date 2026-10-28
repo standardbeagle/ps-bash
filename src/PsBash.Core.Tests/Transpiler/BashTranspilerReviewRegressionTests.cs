@@ -961,4 +961,16 @@ public class BashTranspilerReviewRegressionTests
         Assert.Contains(expected, ps);
         Assert.DoesNotContain("'-$a-'", ps);
     }
+
+    // Oracle: `declare $var=x`, `declare "n=5"`, `export "$k=8"` assign the named scalar (they were "command not found").
+    [Theory]
+    [InlineData("declare $var=x")]
+    [InlineData("declare \"n=5\"")]
+    [InlineData("export \"$k=8\"")]
+    public void Transpile_DeclareOrExportWithQuotedOrDynamicAssignment_AssignsTheScalar(string script)
+    {
+        var ps = BashTranspiler.Transpile(script);
+        Assert.Contains("Set-Item -LiteralPath ('Env:'", ps);
+        Assert.DoesNotContain("declare \"", ps);
+    }
 }

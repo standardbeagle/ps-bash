@@ -130,7 +130,6 @@ ref1=one
 ref2=two
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-var-ref var-ref (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### var ref: 1, @, *
@@ -654,7 +653,6 @@ cycle=x
 cycle=
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-var-ref var-ref (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Var Ref Code Injection $(tee PWNED)

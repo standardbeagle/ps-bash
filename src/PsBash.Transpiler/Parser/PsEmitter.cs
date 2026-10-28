@@ -3044,6 +3044,49 @@ public static partial class PsEmitter
         return sb.ToString();
     }
 
+    // `declare $var="x"`, `export "$k=$v"`, `readonly $n=1`: the variable NAME is only known at run time, so the
+    // static declaration machinery cannot see it. Assign the named scalar directly (the value is data, never re-parsed).
+    private static bool TryEmitDynamicAssignmentBuiltin(Command.Simple cmd, out string result)
+    {
+        result = "";
+        var name = cmd.Words.Length < 2 ? null : GetLiteralValue(cmd.Words[0]);
+        if (name is not ("declare" or "typeset" or "local" or "export" or "readonly"))
+            return false;
+        static bool IsDynamicAssignment(CompoundWord w)
+        {
+            if (w.Parts.IsDefaultOrEmpty) return false;
+            bool dynamicFirst = w.Parts[0] is WordPart.SimpleVarSub or WordPart.BracedVarSub or WordPart.DoubleQuoted or WordPart.SingleQuoted;
+            if (!dynamicFirst) return false;
+            static bool HasEquals(ImmutableArray<WordPart> ps) => ps.Any(p => p is WordPart.Literal l && l.Value.Contains('=')
+                || p is WordPart.SingleQuoted sq && sq.Value.Contains('=')
+                || p is WordPart.DoubleQuoted d && HasEquals(d.Parts));
+            return HasEquals(w.Parts);
+        }
+        if (!cmd.Words.Skip(1).Any(IsDynamicAssignment)) return false;
+
+        // Everything that is not a dynamic assignment keeps its normal path; each dynamic one assigns the scalar
+        // named at run time (all scalars live in the environment store).
+        static bool IsAssignment(CompoundWord w) => IsDynamicAssignment(w) || TrySplitInitializer(w, out _, out _);
+        var plain = cmd.Words.Where((w, i) => i == 0 || !IsAssignment(w)).ToImmutableArray();
+        var sbOut = new StringBuilder();
+        if (plain.Skip(1).Any(w => !(GetLiteralValue(w) is { Length: > 1 } f && f[0] == '-')))
+            sbOut.Append(EmitSimple(cmd with { Words = plain })).Append("; ");
+        foreach (var w in cmd.Words.Skip(1).Where(IsAssignment))
+        {
+            if (!IsDynamicAssignment(w) && TrySplitInitializer(w, out var staticName, out var staticValue))
+            {
+                sbOut.Append("$env:").Append(staticName).Append(" = ").Append(EmitAssignmentValue(staticValue)).Append("; ");
+                continue;
+            }
+            string expr = "[string](" + EmitWord(w) + ")";
+            sbOut.Append($"$__psbD = {expr}; $__psbI = $__psbD.IndexOf('='); ")
+                 .Append("if ($__psbI -gt 0) { Set-Item -LiteralPath ('Env:' + $__psbD.Substring(0, $__psbI)) -Value $__psbD.Substring($__psbI + 1) }; ");
+        }
+        sbOut.Append(PsBuild.SetStatus(0));
+        result = sbOut.ToString();
+        return true;
+    }
+
     private static string EmitSimple(Command.Simple cmd)
     {
         if (TryEmitEnvPairsWrap(cmd, out var envWrapResult))
@@ -3060,6 +3103,9 @@ public static partial class PsEmitter
 
         if (TryEmitInputRedirect(cmd, out var inputResult))
             return inputResult;
+
+        if (TryEmitDynamicAssignmentBuiltin(cmd, out var dynamicAssignResult))
+            return dynamicAssignResult;
 
         if (TryEmitDeclare(cmd, out var declareResult))
             return declareResult;
