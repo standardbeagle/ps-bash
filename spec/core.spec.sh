@@ -810,3 +810,17 @@ in f a b
 + set +x
 done
 ## END
+
+#### an EXIT trap set by a function runs when its subshell or command substitution ends
+f() { trap 'echo f-exit' EXIT; echo in-f; }
+( f )
+out=$( trap 'echo cs-exit' EXIT; echo body )
+echo "got: $out"
+echo end
+## STDOUT:
+in-f
+f-exit
+got: body
+cs-exit
+end
+## END

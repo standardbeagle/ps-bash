@@ -674,4 +674,15 @@ public class BashTranspilerReviewRegressionTests
     [Fact]
     public void Transpile_ScriptWithoutSetX_HasNoXtraceCalls()
         => Assert.DoesNotContain("Write-BashXtrace", BashTranspiler.Transpile("echo hi"));
+
+    // A subshell / $( ) runs the EXIT trap a function it calls set; the body text has no `trap` of its own.
+    [Theory]
+    [InlineData("f() { trap 'echo x' EXIT; }\n( f )")]
+    [InlineData("f() { trap 'echo x' EXIT; }\nv=$( f; echo b )")]
+    public void Transpile_SubshellCallingATrapSettingFunction_FiresTheExitTrapAtItsEnd(string bash)
+        => Assert.Contains("$global:__BashTrapEXIT = $null; try {", BashTranspiler.Transpile(bash));
+
+    [Fact]
+    public void Transpile_SubshellInAScriptWithoutTrap_PaysNothingForExitTraps()
+        => Assert.DoesNotContain("__BashTrapEXIT", BashTranspiler.Transpile("( echo a; cd /tmp )"));
 }

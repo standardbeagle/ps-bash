@@ -44,6 +44,9 @@ public static class PsEmitter
     /// <summary>The script can turn xtrace on: a statement-level command is preceded by a runtime-checked trace line.</summary>
     [ThreadStatic]
     private static bool _xtraceMode;
+    /// <summary>The script mentions <c>trap</c>: a subshell or <c>$( )</c> may run a function that sets an EXIT trap.</summary>
+    [ThreadStatic]
+    private static bool _trapMode;
     // The script can turn nounset on: simple `$x` / `${x}` reads then check the flag at runtime.
     [ThreadStatic]
     private static bool _nounsetMode;
@@ -582,6 +585,8 @@ public static class PsEmitter
             || System.Text.RegularExpressions.Regex.IsMatch(bash, @"\bset\s+(?:-[a-zA-Z]+\s+)*-[a-zA-Z]*u");
         _pipeStatusMode = bash.Contains("PIPESTATUS", StringComparison.Ordinal);
         var priorXtrace = _xtraceMode;
+        var priorTrap = _trapMode;
+        _trapMode = System.Text.RegularExpressions.Regex.IsMatch(bash, @"\btrap\b");
         _xtraceMode = System.Text.RegularExpressions.Regex.IsMatch(bash, @"\bset\s+(?:-[a-zA-Z]+\s+)*(?:-[a-zA-Z]*x|-o\s+xtrace)");
         _pipefailMode = priorPipefail || InheritedPipefail || bash.Contains("pipefail", StringComparison.Ordinal) || bash.Contains("PIPESTATUS", StringComparison.Ordinal);
         try
@@ -603,6 +608,7 @@ public static class PsEmitter
             _nounsetMode = priorNounset;
             _unitFunctions = priorUnitFunctions;
             _xtraceMode = priorXtrace;
+            _trapMode = priorTrap;
         }
     }
 
@@ -1591,6 +1597,16 @@ public static class PsEmitter
         }
     }
 
+    /// <summary>
+    /// A subshell (also <c>$( )</c>) starts with no EXIT trap and fires the one it sets when it ends. Only a body that
+    /// calls <c>trap</c> — or can call a function that does, in a script that mentions <c>trap</c> — pays for it.
+    /// </summary>
+    private static string WithSubshellExitTrap(string body) =>
+        _trapMode || body.Contains("Invoke-BashTrap", StringComparison.Ordinal)
+            ? "$global:__BashTrapEXIT = $null; try { " + body + " } finally { "
+              + "$__psbash_xs = $global:LASTEXITCODE; try { if ($global:__BashTrapEXIT) { & $global:__BashTrapEXIT } } catch { }; $global:LASTEXITCODE = $__psbash_xs }"
+            : body;
+
     private static string EmitSubshell(Command.Subshell subshell)
     {
         // `exit` inside a subshell exits only the SUBSHELL and sets $? in the
@@ -1615,9 +1631,7 @@ public static class PsEmitter
         // runs on the scoped-exit path (`$LASTEXITCODE = N; return`) and on any exception too.
         // A subshell starts with no EXIT trap (bash resets traps) and fires the one it sets when it ends:
         // `( trap 'echo bye' EXIT; echo body )` prints body, then bye. Only a body that calls `trap` pays for it.
-        if (body.Contains("Invoke-BashTrap", StringComparison.Ordinal))
-            body = "$global:__BashTrapEXIT = $null; try { " + body + " } finally { "
-                 + "$__psbash_xs = $global:LASTEXITCODE; try { if ($global:__BashTrapEXIT) { & $global:__BashTrapEXIT } } catch { }; $global:LASTEXITCODE = $__psbash_xs }";
+        body = WithSubshellExitTrap(body);
         var sb = new StringBuilder(PsBuild.ShellStateScope(
             "Push-Location; " + body, PsBuild.PopLocationRestoringProcessCwd));
 
@@ -5498,7 +5512,7 @@ public static class PsEmitter
                         && !PsBuild.IsStatementList(inner);
         // `${x:?}` inside ends only the substitution (bash: a subshell), so it needs the scope that catches it.
         return pipeable && CannotChangeShellState(body) && !inner.Contains("BashParamErrorException", StringComparison.Ordinal)
-            ? inner : PsBuild.ShellStateScope(inner);
+            ? inner : PsBuild.ShellStateScope(WithSubshellExitTrap(inner));
     }
 
     /// <summary>Builtins that change shell state even though they map to a runtime command.</summary>
