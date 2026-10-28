@@ -256,7 +256,7 @@ public static class BashTranspiler
         if (string.IsNullOrEmpty(bash)) return false;
         // `trap 'body' EXIT` / `trap handler ERR` / `trap - 0` etc.
         if (System.Text.RegularExpressions.Regex.IsMatch(
-                bash, @"\btrap\b[^\n;|&]*\b(EXIT|EXIT_SIGNAL|ERR|0)\b",
+                bash, @"\btrap\s+(?:'[^']*'|""[^""]*""|[^\s'""]+)[^\n;|&]*\b(EXIT|EXIT_SIGNAL|ERR|0)\b",
                 System.Text.RegularExpressions.RegexOptions.IgnoreCase))
             return true;
         // `trap 'body'` with no signal operand (defaults to EXIT).

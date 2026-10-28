@@ -856,6 +856,14 @@ directory
 z.tar
 ## END
 
+#### an EXIT trap whose quoted handler holds a semicolon still fires at script end
+tmp=$(mktemp); trap 'rm -f "$tmp"; echo cleanup' EXIT
+echo body
+## STDOUT:
+body
+cleanup
+## END
+
 #### local -n names the caller's variable: scalar, array and associative array
 setv() { local -n r=$1; r="set-by-fn"; }
 setv foo

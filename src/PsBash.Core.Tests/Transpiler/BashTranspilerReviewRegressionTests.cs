@@ -162,6 +162,14 @@ public class BashTranspilerReviewRegressionTests
         Assert.DoesNotContain("function global:o", ps);   // the outer one keeps its plain definition
     }
 
+    // Oracle: `trap 'rm -f x; echo cleanup' EXIT` fires at script end - a `;` inside the quoted handler must not hide the EXIT from the wrapper detection.
+    [Theory]
+    [InlineData("trap 'rm -f x; echo cleanup' EXIT; echo a")]
+    [InlineData("trap \"rm -f x; echo cleanup\" EXIT; echo a")]
+    [InlineData("trap 'a | b & c' ERR; echo a")]
+    public void Transpile_TrapHandlerWithSemicolon_StillFiresAtScriptEnd(string bash)
+        => Assert.Contains("Test-Path Variable:Global:__BashTrapEXIT", BashTranspiler.Transpile(bash));
+
     // Oracle: `( trap 'echo bye' EXIT; echo body )` prints body then bye - a subshell fires its own EXIT trap
     // when it ends (it never fired), and a subshell with no trap pays nothing for it.
 
