@@ -374,6 +374,11 @@ public class BashTranspilerReviewRegressionTests
     public void Transpile_ParamErrorAtTopLevel_IsNotCaught()
         => Assert.DoesNotContain("catch [PsBash.Cmdlets.BashParamErrorException]", BashTranspiler.Transpile("echo \"${var:?top}\"; echo not-reached"));
 
+    // Oracle: `declare -x e=2; declare -p e` prints `declare -x e="2"`.
+    [Fact]
+    public void Transpile_DeclareExport_MarksTheAttribute()
+        => Assert.Contains("MarkAttribute('e', 'x')", BashTranspiler.Transpile("declare -x e=2"));
+
     // Oracle: a function is a filter: `indent() { sed 's/^/  /'; }; cmd | indent`. The piped input never reached
     // the commands in the body (sed/grep/tr/cat/read saw an empty stdin). A body that reads stdin takes the pipe
     // it is called with; one that does not is unchanged.

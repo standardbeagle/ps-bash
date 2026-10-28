@@ -34,11 +34,14 @@ internal static class DeclarePrinter
 
         string text;
         if (val is System.Collections.IDictionary dict)
-            text = $"declare -A {name}={FormatAssociative(dict)}";
+            text = $"declare -A{BashShellState.AttributeLetters(name)} {name}={FormatAssociative(dict)}";
         else if (val is System.Collections.IList list && val is not string)
-            text = $"declare -a {name}={FormatIndexed(list)}";
+            text = $"declare -a{BashShellState.AttributeLetters(name)} {name}={FormatIndexed(list)}";
         else
-            text = $"declare -- {name}={QuoteValue(val.ToString())}";
+        {
+            string letters = BashShellState.AttributeLetters(name);
+            text = $"declare -{(letters.Length == 0 ? "-" : letters)} {name}={QuoteValue(val.ToString())}";
+        }
 
         foreach (var line in BashRuntime.EmitBashLines(text + "\n"))
             cmdlet.WriteObject(line);

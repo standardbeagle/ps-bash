@@ -2744,6 +2744,11 @@ public static class PsEmitter
 
     private static string EmitShAssignment(Command.ShAssignment cmd)
     {
+        return EmitShAssignmentCore(cmd);
+    }
+
+    private static string EmitShAssignmentCore(Command.ShAssignment cmd)
+    {
         var sb = new StringBuilder();
         for (int i = 0; i < cmd.Pairs.Length; i++)
         {
@@ -3087,11 +3092,16 @@ public static class PsEmitter
 
         // `declare -r X=1` is `readonly X=1`: emit the declaration without the r attribute, then mark each name.
         bool hasR = false;
+        var attrs = new HashSet<char>();
         var kept = new List<CompoundWord> { cmd.Words[0] };
         var names = new List<string>();
         foreach (var w in cmd.Words.Skip(1))
         {
             var lit = GetLiteralValue(w);
+            if (lit is { Length: > 1 } && lit[0] == '-' && lit.AsSpan(1).IndexOfAnyExcept("pfF") >= 0)
+            {
+                if (lit.Contains('x')) attrs.Add('x');
+            }
             if (lit is { Length: > 1 } && lit[0] == '-' && lit.AsSpan(1).IndexOfAnyExcept("pfF") >= 0 && lit.Contains('r'))
             {
                 hasR = true;
@@ -3105,13 +3115,16 @@ public static class PsEmitter
         }
         // bash ignores -r on a nameref (`typeset -n -r ref=x` still lets `ref=v` assign through).
         bool isNameref = cmd.Words.Skip(1).Any(w => GetLiteralValue(w) is { Length: > 1 } f && f[0] == '-' && f.AsSpan(1).IndexOfAnyExcept("pfF") >= 0 && f.Contains('n'));
-        if (!hasR || isNameref || names.Count == 0)
+        if (!(hasR || attrs.Count > 0) || isNameref || names.Count == 0)
             return TryEmitDeclareCore(cmd, out result);
         if (!TryEmitDeclareCore(cmd with { Words = [.. kept] }, out var core))
             return false;
         var mark = new StringBuilder();
         foreach (var n in names)
         {
+            foreach (var a in attrs)
+                mark.Append("; [PsBash.Cmdlets.BashShellState]::MarkAttribute(").Append(PsBuild.SingleQuote(n)).Append(", '").Append(a).Append("')");
+            if (!hasR) continue;
             mark.Append("; [PsBash.Cmdlets.BashShellState]::MarkReadonly(").Append(PsBuild.SingleQuote(n)).Append(")");
             _readonlyVars?.Add(n);
         }

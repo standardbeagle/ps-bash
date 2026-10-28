@@ -29,7 +29,29 @@ public static class BashShellState
     public static void MarkReadonly(string name) { lock (ReadonlyNames) ReadonlyNames.Add(name); }
 
     /// <summary>A new, independent invocation starts with nothing readonly (the daemon outlives the scripts it runs).</summary>
-    public static void ClearReadonly() { lock (ReadonlyNames) ReadonlyNames.Clear(); }
+    public static void ClearReadonly() { lock (ReadonlyNames) ReadonlyNames.Clear(); lock (Attributes) Attributes.Clear(); }
+
+    private static readonly Dictionary<string, string> Attributes = new(StringComparer.Ordinal);
+
+    /// <summary>Records a <c>declare</c> attribute letter (<c>i</c> integer, <c>x</c> exported) for <c>declare -p</c>.</summary>
+    public static void MarkAttribute(string name, string letter)
+    {
+        lock (Attributes)
+            if (!(Attributes.TryGetValue(name, out var cur) && cur.Contains(letter)))
+                Attributes[name] = (cur ?? "") + letter;
+    }
+
+    /// <summary>The <c>declare -p</c> flag letters of NAME in bash order (<c>i</c>, <c>r</c>, <c>x</c>), "" for none.</summary>
+    internal static string AttributeLetters(string name)
+    {
+        string set;
+        lock (Attributes) set = Attributes.TryGetValue(name, out var s) ? s : "";
+        var sb = new System.Text.StringBuilder();
+        if (set.Contains('i')) sb.Append('i');
+        if (IsReadonly(name)) sb.Append('r');
+        if (set.Contains('x')) sb.Append('x');
+        return sb.ToString();
+    }
 
     internal static bool IsReadonly(string name) { lock (ReadonlyNames) return ReadonlyNames.Contains(name); }
 

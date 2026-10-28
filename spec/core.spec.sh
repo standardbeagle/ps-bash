@@ -669,3 +669,13 @@ after-pipe
 after-cmdsub [] 1
 after-subshell 1
 ## END
+
+#### declare -p shows the readonly and export attributes
+declare -r r=1; declare -p r
+declare -x e=2; declare -p e
+s=plain; declare -p s
+## STDOUT:
+declare -r r="1"
+declare -x e="2"
+declare -- s="plain"
+## END
