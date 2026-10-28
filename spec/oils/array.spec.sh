@@ -147,7 +147,6 @@ len=3
 len=2
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array array (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Retrieve index that is a variable
@@ -449,7 +448,6 @@ three
 three
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array array (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Is element set?  test -v a[i]
@@ -472,7 +470,6 @@ empty=0
 unset=1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array array (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### [[ -v a[i] ]]
@@ -490,7 +487,6 @@ status=0
 status=1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array array (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### test -v a[i] with arith expressions
@@ -520,7 +516,6 @@ status=0
 status=1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array array (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### More arith expressions in [[ -v array[expr]] ]]
@@ -718,7 +713,6 @@ a=(~/src ~/git)
 echo "${a[@]}"
 ## stdout: /home/bob/src /home/bob/git
 ## status: 0
-## XFAIL ps-bash gap-oils-array array (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Brace Expansion within Array
@@ -753,7 +747,6 @@ echo ${#c[@]} ${#d[@]}
 1 1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array array (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### a+=() modifies existing instance of BashArray
@@ -800,7 +793,6 @@ begin=-4 -> (1 2 3 4)
 begin=-5 -> ()
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array array (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 

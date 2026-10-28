@@ -510,7 +510,7 @@ public class BashTranspilerReviewRegressionTests
     public void Transpile_ElementWithOperatorAndVariableSubscript_UsesTheVariablesValue()
     {
         string ps = BashTranspiler.Transpile("echo \"${m[$k]:-0}\"");
-        Assert.Contains("[$env:k]", ps);
+        Assert.Contains("$env:k", ps);
         Assert.DoesNotContain("'$k'", ps);
     }
 
@@ -886,4 +886,22 @@ public class BashTranspilerReviewRegressionTests
     [InlineData("echo ${v,,A}")]
     public void Transpile_CaseConversion_IsNullSafeAndParseable(string bash)
         => Assert.DoesNotContain(".ToLower()", BashTranspiler.Transpile(bash).Replace("$args[0].Value.ToLower()", ""));
+
+    // Oracle: `code='1+2'; ${a[$code]}` evaluates the variable's value as arithmetic on an indexed array (a[3]).
+    [Fact]
+    public void Transpile_IndexedArraySubscriptFromVariable_IsEvaluatedAsArithmetic()
+        => Assert.Contains("Invoke-BashArith", BashTranspiler.Transpile("echo ${a[$code]}"));
+
+    // Oracle: `${#a[0]}` is the length of ONE element; a plain scalar counts as a one-element array.
+    [Fact]
+    public void Transpile_ElementLengthAndScalarCount_UseTheElement()
+    {
+        Assert.Contains(".Length", BashTranspiler.Transpile("echo ${#a[0]}"));
+        Assert.Contains("elseif ($null -ne $env:c) { 1 }", BashTranspiler.Transpile("echo ${#c[@]}"));
+    }
+
+    // Oracle: `${a[@]: -5}` of 4 elements is empty (the offset reaches before the first element).
+    [Fact]
+    public void Transpile_ArraySliceNegativeOffsetBeforeStart_IsEmpty()
+        => Assert.Contains("if ($__psbO -lt 0) { $__psbO = $__psbA.Count } }", BashTranspiler.Transpile("echo \"${a[@]: -5}\""));
 }

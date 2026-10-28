@@ -6734,7 +6734,7 @@ public static partial class PsEmitter
                     // ${m[$k]} / ${a[$i]}: the subscript is a variable's value.
                     if (System.Text.RegularExpressions.Regex.Match(subscript, @"^\$\{?(\w+)\}?$") is { Success: true } sv)
                     {
-                        string subRef = $"{arrayVar}[{EmitSimpleVar(sv.Groups[1].Value)}]";
+                        string subRef = $"{arrayVar}[{EmitVarSubscript(arrayVar, EmitSimpleVar(sv.Groups[1].Value))}]";
                         return inDoubleQuote ? $"$({subRef})" : subRef;
                     }
                     if (int.TryParse(subscript, out _))
@@ -6786,7 +6786,7 @@ public static partial class PsEmitter
                     ? $"{arrayVar}[{subscript}]"
                     // ${m[$k]:-0}: a variable subscript is the variable's value, as in the operator-less form above.
                     : System.Text.RegularExpressions.Regex.Match(subscript, @"^\$\{?(\w+)\}?$") is { Success: true } subVar
-                        ? $"{arrayVar}[{EmitSimpleVar(subVar.Groups[1].Value)}]"
+                        ? $"{arrayVar}[{EmitVarSubscript(arrayVar, EmitSimpleVar(subVar.Groups[1].Value))}]"
                         : $"{arrayVar}[{EmitWordSubscript(arrayVar, subscript)}]";
                 return EmitScalarSuffix(elemRef, subOp, inDoubleQuote, bvs.ArgWord)
                     ?? (inDoubleQuote ? $"$({elemRef})" : elemRef);
@@ -6800,7 +6800,22 @@ public static partial class PsEmitter
             if (subscript is "@" or "*")
             {
                 string lenArr = bvs.Name switch { "FUNCNAME" => "@(Get-BashFuncNames)", "BASH_VERSINFO" => "$global:BashVersionInfo", _ => $"${bvs.Name}" };
+                // A plain scalar counts as a one-element array (`c="a b"; ${#c[@]}` is 1).
+                if (IsOrdinaryVarName(bvs.Name) && bvs.Name.All(ch => char.IsAsciiLetterOrDigit(ch) || ch == '_'))
+                    return $"$(if ($null -ne {lenArr}) {{ {lenArr}.Count }} elseif ($null -ne $env:{bvs.Name}) {{ 1 }} else {{ 0 }})";
                 return inDoubleQuote ? $"$({lenArr}.Count)" : $"{lenArr}.Count";
+            }
+            // `${#a[0]}` / `${#a[i]}`: the length of ONE element.
+            // (`${s#[0-9]}` is a strip pattern that merely starts with `[`: the subscript must be arithmetic text.)
+            if (bvs.Name is not ("FUNCNAME" or "BASH_VERSINFO")
+                && System.Text.RegularExpressions.Regex.IsMatch(subscript, @"^[\w+\-*/% ]+$"))
+            {
+                string arr = $"${bvs.Name}";
+                string idx = int.TryParse(subscript, out _) ? subscript : EmitWordSubscript(arr, subscript);
+                // A plain scalar is element 0 of itself.
+                if (IsOrdinaryVarName(bvs.Name) && bvs.Name.All(ch => char.IsAsciiLetterOrDigit(ch) || ch == '_'))
+                    return $"$(if ($null -ne {arr}) {{ ([string]{arr}[{idx}]).Length }} elseif (({idx}) -eq 0) {{ ([string]$env:{bvs.Name}).Length }} else {{ 0 }})";
+                return $"$(([string]{arr}[{idx}]).Length)";
             }
         }
 
@@ -7206,6 +7221,11 @@ public static partial class PsEmitter
             PsBuild.BuildPositionalExpansion("@"), op, inDoubleQuote);
     }
 
+    // `${a[$i]}`: an associative array uses the value as the key; an indexed array evaluates it as an arithmetic
+    // expression (`code='1+2'; ${a[$code]}` is a[3]). A plain integer skips the evaluator.
+    private static string EmitVarSubscript(string arrayVar, string valueRef)
+        => $"$(if ({arrayVar} -is [System.Collections.IDictionary]) {{ {valueRef} }} elseif ([string]{valueRef} -match '^-?[0-9]+$') {{ [long]{valueRef} }} else {{ [long](Invoke-BashArith ([string]{valueRef})) }})";
+
     // `${a[i]}` / `${a[i+1]}`: on an indexed array the subscript is an arithmetic expression (bare names are
     // variables); on an associative array it is the literal key. The array kind is known only at run time.
     private static string EmitWordSubscript(string arrayVar, string subscript)
@@ -7261,7 +7281,8 @@ public static partial class PsEmitter
         sb.Append(arrayVar);
         sb.Append("); $__psbO = ").Append(offset).Append("; ");
         if (positional) sb.Append("if ($__psbO -gt 0) { $__psbO-- }; ");   // $@ counts from 1
-        sb.Append("if ($__psbO -lt 0) { $__psbO = $__psbA.Count + $__psbO }; ");
+        // A negative offset reaching before the first element selects nothing (`${a[@]: -5}` of 4 elements is empty).
+        sb.Append("if ($__psbO -lt 0) { $__psbO = $__psbA.Count + $__psbO; if ($__psbO -lt 0) { $__psbO = $__psbA.Count } }; ");
         sb.Append("$__psbO = [Math]::Max(0, [Math]::Min($__psbO, $__psbA.Count)); ");
         if (length is not null)
             sb.Append("$__psbN = ").Append(length).Append("; ");
