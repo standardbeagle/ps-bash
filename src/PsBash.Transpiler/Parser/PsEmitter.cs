@@ -1015,7 +1015,7 @@ public static partial class PsEmitter
 
             // `for f in *.txt`: pathname expansion by the shell (relative names, no hidden files, sorted;
             // an unmatched pattern is the one literal item, nullglob off) -- see EmitGlobPatternExpr.
-            if (IsGlobWord(list[0]))
+            if (IsGlobWord(list[0]) || IsUnquotedDefaultAltWord(list[0]))
                 return EmitUnquotedSplitWordArray(list[0]);
 
             var single = EmitWord(list[0]);
@@ -6449,6 +6449,61 @@ public static partial class PsEmitter
 
 
     /// <summary>
+    /// Split the text after <c>${v/</c> (or <c>${v//</c>) into find and replacement at the first UNQUOTED, UNESCAPED
+    /// <c>/</c>. The first character is always part of the pattern, so <c>${p////\\/}</c> (<c>//</c>, pattern <c>/</c>,
+    /// replacement <c>\\/</c>) and <c>${x///}</c> (delete every slash) read as bash reads them.
+    /// </summary>
+    private static (string Find, string Replace) SplitPatsubOperands(string s)
+    {
+        for (int i = 0; i < s.Length; i++)
+        {
+            char c = s[i];
+            if (c == '\\') { i++; continue; }
+            if (c == '\'' || c == '"')
+            {
+                for (i++; i < s.Length && s[i] != c; i++)
+                    if (c == '"' && s[i] == '\\') i++;
+                continue;
+            }
+            if (c == '$' && i + 1 < s.Length && s[i + 1] == '{') { int e = FindBraceEnd(s, i + 1); if (e < 0) break; i = e; continue; }
+            if (c == '$' && i + 1 < s.Length && s[i + 1] == '(') { i = BashLexer.ScanBalancedParens(s, i + 2, 1) - 1; continue; }
+            if (c == '/' && i > 0) return (s[..i], s[(i + 1)..]);
+        }
+        return (s, "");
+    }
+
+    /// <summary>
+    /// A glob pattern with its quotes removed and every QUOTED character backslash-escaped so it stays literal
+    /// (<c>[^'&gt;&lt;+-.,[]']</c>). Null when there is nothing to do: no quotes, a <c>$</c> expansion, or no unquoted glob character.
+    /// </summary>
+    private static string? UnquoteGlobPattern(string raw)
+    {
+        if (raw.IndexOfAny(['\'', '"']) < 0 || raw.IndexOf('$') >= 0) return null;
+        var sb = new StringBuilder(raw.Length + 8);
+        bool anyGlob = false;
+        for (int i = 0; i < raw.Length; i++)
+        {
+            char c = raw[i];
+            if (c == '\\' && i + 1 < raw.Length) { sb.Append(c).Append(raw[++i]); continue; }
+            if (c is '\'' or '"')
+            {
+                int end = raw.IndexOf(c, i + 1);
+                if (end < 0) return null;
+                for (int j = i + 1; j < end; j++)
+                {
+                    if (!char.IsAsciiLetterOrDigit(raw[j])) sb.Append('\\');
+                    sb.Append(raw[j]);
+                }
+                i = end;
+                continue;
+            }
+            if (c is '*' or '?' or '[') anyGlob = true;
+            sb.Append(c);
+        }
+        return anyGlob ? sb.ToString() : null;
+    }
+
+    /// <summary>
     /// The text of a <c>${v/find/rep}</c> operand that carries quoting or a variable (<c>$'\n'</c>, <c>'x'</c>,
     /// <c>"x"</c>, <c>$nl</c>, <c>${nl}</c>) as one PowerShell string expression, so the match is the quote-removed
     /// value and not the raw source text. Null when the operand has none of these (the plain literal path applies)
@@ -6650,7 +6705,7 @@ public static partial class PsEmitter
             }
         }
 
-        string varRef = EmitSimpleVar(bvs.Name);
+        string varRef = EmitSimpleVar(bvs.Name, strict: bvs.Suffix.StartsWith("/", StringComparison.Ordinal));
 
         // Name-prefix expansion: ${!prefix*} / ${!prefix@} -> the NAMES of
         // variables starting with `prefix`. ps-bash models bash variables as
@@ -6873,15 +6928,13 @@ public static partial class PsEmitter
         // Replace first: ${VAR/find/replace} — instance overload .Replace(str, rep, 1).
         if (suffix.StartsWith("/") && !suffix.StartsWith("//"))
         {
-            var parts = suffix[1..].Split('/', 2);
-            string find = parts[0], replace = parts.Length > 1 ? parts[1] : "";
+            var (find, replace) = SplitPatsubOperands(suffix[1..]);
             return SubstituteExpr(open, varRef, find, replace, first: true);
         }
         // Replace all: ${VAR//find/replace} — escape find literally; 2-arg overload = all.
         if (suffix.StartsWith("//"))
         {
-            var parts = suffix[2..].Split('/', 2);
-            string find = parts[0], replace = parts.Length > 1 ? parts[1] : "";
+            var (find, replace) = SplitPatsubOperands(suffix[2..]);
             return SubstituteExpr(open, varRef, find, replace, first: false);
         }
 
@@ -6890,11 +6943,17 @@ public static partial class PsEmitter
         static string SubstituteExpr(string open, string varRef, string find, string replace, bool first)
         {
             string tail = first ? ", 1" : "";
+            // A quoted glob (`[^'><+-.,[]']`): quotes come off, the quoted characters stay literal.
+            if (UnquoteGlobPattern(find) is { } unquotedFind) find = unquotedFind;
             string? findExpr = TryEmitSubstitutionOperand(find, backslashEscapes: true);
             string? repExpr = TryEmitSubstitutionOperand(replace, backslashEscapes: true);
             if (findExpr is null && repExpr is null)
                 return $"{open}([regex]{ReplaceFindRegex(find)}).Replace({varRef}, '{SqEsc(replace)}'{tail}))";
-            string regex = findExpr is null ? ReplaceFindRegex(find) : $"$(if ({findExpr}) {{ [regex]::Escape({findExpr}) }} else {{ '(?!)' }})";
+            // An unquoted `$g` is a PATTERN (`g='*'; ${v//$g/-}` replaces the whole value); "$g" is the literal text.
+            string regex = findExpr is null ? ReplaceFindRegex(find)
+                : System.Text.RegularExpressions.Regex.IsMatch(find, @"^\$(\w+|\{\w+\})$")
+                    ? $"$(if ({findExpr}) {{ '(?:(?=[\\s\\S])|\\A)(?:' + [PsBash.Core.Parser.BashPattern]::ToRegex([string]({findExpr}), $false, $false) + ')' }} else {{ '(?!)' }})"
+                    : $"$(if ({findExpr}) {{ [regex]::Escape({findExpr}) }} else {{ '(?!)' }})";
             string rep = repExpr is null ? $"'{SqEsc(replace)}'" : $"({repExpr}).Replace('$', '$$')";
             return $"{open}([regex]{regex}).Replace({varRef}, {rep}{tail}))";
         }
@@ -6911,7 +6970,9 @@ public static partial class PsEmitter
             if (!isGlob && pre.Length == 0 && post.Length == 0)
                 return $"[regex]::Escape('{SqEsc(find)}')";
             string body = isGlob ? SqEsc(BashPattern.ToRegex(find)) : SqEsc(System.Text.RegularExpressions.Regex.Escape(find));
-            return $"'(?s){pre}{body}{post}'";
+            // `${v//*/-}`: no empty match at the end of the value (bash replaces once, .NET would twice).
+            string noEmptyTail = isGlob && pre.Length == 0 && post.Length == 0 && find.Trim('*').Length == 0 ? "(?:(?=[\\s\\S])|\\A)" : "";
+            return $"'(?s){noEmptyTail}{pre}{body}{post}'";
         }
 
         // Slice: ${VAR:offset:length} or ${VAR:offset}. The body is trimmed so a
@@ -9304,7 +9365,8 @@ public static partial class PsEmitter
                 if (j < glob.Length && glob[j] == ']') j++;
                 for (; j < glob.Length && close < 0; j++)
                 {
-                    if (glob[j] == '[' && j + 1 < glob.Length && glob[j + 1] == ':' && glob.IndexOf(":]", j + 2, StringComparison.Ordinal) is > 0 and var pe) j = pe + 1;
+                    if (glob[j] == '\\' && j + 1 < glob.Length) j++; // an escaped ] [ - stays inside the bracket
+                    else if (glob[j] == '[' && j + 1 < glob.Length && glob[j + 1] == ':' && glob.IndexOf(":]", j + 2, StringComparison.Ordinal) is > 0 and var pe) j = pe + 1;
                     else if (glob[j] == ']') close = j;
                 }
                 if (close >= 0)

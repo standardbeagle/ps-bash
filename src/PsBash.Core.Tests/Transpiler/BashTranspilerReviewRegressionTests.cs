@@ -238,13 +238,44 @@ public class BashTranspilerReviewRegressionTests
 
     [Theory]
     [InlineData("echo \"${x//$'\\n'/,}\"")]
-    [InlineData("echo \"${x//$nl/,}\"")]
     [InlineData("echo \"${x/'b'/B}\"")]
     public void Transpile_SubstituteQuotedOrVariableOperand_MatchesTheValue(string bash)
     {
         string ps = BashTranspiler.Transpile(bash);
         Assert.Contains("[regex]::Escape(", ps);
         Assert.DoesNotContain("$'", ps);
+    }
+
+    // Oracle: an UNQUOTED `$g` in the pattern is a glob, even inside "…" (`g='*'; "${v//$g/-}"` is `-`);
+    // "$g" is the literal text.
+    [Fact]
+    public void Transpile_SubstituteUnquotedVariablePattern_IsConvertedAsAGlobAtRunTime()
+    {
+        string ps = BashTranspiler.Transpile("echo \"${x//$g/,}\"");
+        Assert.Contains("BashPattern]::ToRegex(", ps);
+        string quoted = BashTranspiler.Transpile("echo \"${x//\"$g\"/,}\"");
+        Assert.Contains("[regex]::Escape(", quoted);
+    }
+
+    // Oracle: the delimiter `/` is the first UNQUOTED one after the first character: `${p////\\/}` replaces `/`
+    // with `\/`, `${p//'/'/x}` likewise, and `${x///}` deletes every slash.
+    [Theory]
+    [InlineData("echo ${p////\\\\/}")]
+    [InlineData("echo ${p//'/'/\\\\/}")]
+    [InlineData("echo ${p///}")]
+    public void Transpile_SubstituteSlashInPattern_SplitsAtTheFirstUnquotedSlashAfterTheFirstChar(string bash)
+    {
+        string ps = BashTranspiler.Transpile(bash);
+        Assert.DoesNotContain("/\\\\//", ps);
+        Assert.Contains("[regex]::Escape(", ps);
+    }
+
+    // Oracle: quotes inside a bracket expression come off and the quoted characters stay literal.
+    [Fact]
+    public void Transpile_SubstituteQuotedBracketGlob_RemovesQuotes()
+    {
+        string ps = BashTranspiler.Transpile("echo ${p//[^'><+-.,[]']}");
+        Assert.DoesNotContain("'><", ps);
     }
 
     // Oracle: `${#@}` / `${#*}` are the positional count (`$#`); they parsed as the length of a variable named
@@ -755,4 +786,19 @@ public class BashTranspilerReviewRegressionTests
     [Fact]
     public void Transpile_LocalNamerefNeverCalledWithALiteral_KeepsTheOrdinaryLocal()
         => Assert.DoesNotContain("__nrt", BashTranspiler.Transpile("setv() { local -n r=$1; r=x; }\nsetv \"$name\""));
+    [Fact]
+    public void Transpile_PatsubOfAnUnsetVarUnderNounset_ReadsItStrictly()
+        => Assert.Contains("unbound variable", BashTranspiler.Transpile("set -o nounset\necho -${v/x/y}-"));
+
+    [Fact]
+    public void Transpile_PatsubWithoutNounset_DoesNotReadStrictly()
+        => Assert.DoesNotContain("unbound variable", BashTranspiler.Transpile("echo -${v/x/y}-"));
+
+    [Fact]
+    public void Transpile_ForOverASingleDefaultExpansion_SplitsItsValue()
+        => Assert.Contains("ConvertTo-BashWords", BashTranspiler.Transpile("for x in ${L:-zz}; do echo \"[$x]\"; done"));
+
+    [Fact]
+    public void Transpile_PatsubWithUnquotedVarBracketClass_UsesTheGlobEngine()
+        => Assert.Contains("BashPattern]::ToRegex(", BashTranspiler.Transpile("p='[z-a]'; t=foo; echo ${t//$p/z}"));
 }

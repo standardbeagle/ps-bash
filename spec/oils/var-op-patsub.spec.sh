@@ -18,7 +18,6 @@ echo -${v/x/y}-
 status=0
 ## END
 ## status: 1
-## XFAIL ps-bash gap-oils-var-op-patsub var-op-patsub (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Replace is longest match
@@ -103,7 +102,6 @@ echo 4 ${x//*\(\)/z}
 4 z
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-var-op-patsub var-op-patsub (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### patsub with single quotes and hyphen in character class (regression)
@@ -115,7 +113,6 @@ program=${program//[^'><+-.,[]']}
 echo $program
 ## stdout: ++--.,<>[]
 ## status: 0
-## XFAIL ps-bash gap-oils-var-op-patsub var-op-patsub (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### patsub with [^]]
@@ -226,7 +223,6 @@ c_c
 c_c
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-var-op-patsub var-op-patsub (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Synthesized ${x///} bug (similar to above)
@@ -244,7 +240,6 @@ ambiguous: slash brace } hi
 quoted:    slash brace } hi
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-var-op-patsub var-op-patsub (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### ${v/a} is the same as ${v/a/}  -- no replacement string
@@ -284,7 +279,6 @@ echo ${v/\\f/_}
 [_]
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-var-op-patsub var-op-patsub (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Replace right ]
@@ -313,7 +307,6 @@ a-b
 -
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-var-op-patsub var-op-patsub (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -352,6 +345,5 @@ echo ${HOST_PATH//'/'/\\/}
 \/foo\/bar\/baz
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-var-op-patsub var-op-patsub (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
