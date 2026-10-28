@@ -19,6 +19,7 @@ public class ShellStateInventoryGuardTests
         ["LASTEXITCODE"] = "PowerShell's own; the status is carried by the command result, not copied",
         ["PsBashVersion"] = "constant, set at module load",
         ["BashVersionInfo"] = "constant, set at module load",
+        ["BASH_VERSINFO"] = "constant alias of BashVersionInfo, set at module load (so declare -p sees it)",
         ["BashVersion"] = "constant, set at module load",
         ["BashStartTime"] = "constant, set at module load (SECONDS base)",
         ["__PsBashCwd"] = "host plumbing: the worker's working-directory request",

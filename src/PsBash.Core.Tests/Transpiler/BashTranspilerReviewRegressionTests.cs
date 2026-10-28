@@ -647,4 +647,12 @@ public class BashTranspilerReviewRegressionTests
         Assert.Contains("Invoke-BashTimeout 5 grep '-v' foo file", ps);
         Assert.DoesNotContain("& (Resolve-BashCommand", ps);
     }
+
+    // `${#BASH_VERSINFO[@]}` counted the (nonexistent) variable $BASH_VERSINFO: 0 instead of 6.
+    [Fact]
+    public void Transpile_LengthOfBashVersinfo_CountsTheMappedArray()
+    {
+        var ps = BashTranspiler.Transpile("echo ${#BASH_VERSINFO[@]}");
+        Assert.Contains("$global:BashVersionInfo", ps);
+    }
 }

@@ -765,3 +765,17 @@ first rc=5
 second rc=3
 none rc=127
 ## END
+
+#### BASH_VERSINFO is a six-element array and FUNCNAME ends in main
+echo "${#BASH_VERSINFO[@]} ${BASH_VERSINFO[0]:+major}"
+declare -p BASH_VERSINFO >/dev/null; echo "declare rc=$?"
+g() { echo "${FUNCNAME[0]} ${FUNCNAME[1]:-top} ${#FUNCNAME[@]}"; }
+g
+h() { g; }
+h
+## STDOUT:
+6 major
+declare rc=0
+g main 2
+g h 3
+## END

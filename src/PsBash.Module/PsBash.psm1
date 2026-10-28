@@ -92,10 +92,13 @@ if (-not (Get-Variable -Name BashPositional0 -Scope global -ErrorAction Silently
 # FUNCNAME: the shell functions on the call stack, innermost first (empty at top level). A shell function is a
 # global function with no module; the runtime's own helpers belong to the PsBash module.
 function Get-BashFuncNames {
-    @(Get-PSCallStack | Select-Object -Skip 1 | Where-Object {
+    $names = @(Get-PSCallStack | Select-Object -Skip 1 | Where-Object {
         $c = $_.InvocationInfo.MyCommand
         $c -and $c.CommandType -eq 'Function' -and -not $c.Module -and $c.Name -and $c.Name -notlike 'Invoke-Bash*' -and $c.Name -ne 'prompt'
     } | ForEach-Object { $_.InvocationInfo.MyCommand.Name })
+    # Inside any function the outermost frame is the script itself, named main (empty at top level).
+    if ($names.Count -gt 0) { $names += 'main' }
+    $names
 }
 
 # A command word that is only known at run time (`"$@"`, `$cmd`, `"$tool"`) is looked up as bash does: a shell
@@ -2675,6 +2678,7 @@ if (-not $__bashVer -or ($__bashVer.Major + $__bashVer.Minor) -eq 0) { $__bashVe
 $global:PsBashVersion = $__bashVer.ToString()
 $global:BashVersion = '5.2.37(1)-release'
 $global:BashVersionInfo = @(5, 2, 37, 1, 'release', 'x86_64-pc-ps-bash')
+$global:BASH_VERSINFO = $global:BashVersionInfo
 # bash default shell flags: h (hash commands), B (brace expansion enabled)
 $global:BashFlags = 'hB'
 $global:BashLastArg = ''

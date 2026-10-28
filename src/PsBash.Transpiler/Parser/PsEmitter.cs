@@ -6513,7 +6513,7 @@ public static class PsEmitter
             string subscript = bvs.Suffix[2..^1]; // strip #[ and ]
             if (subscript is "@" or "*")
             {
-                string lenArr = bvs.Name == "FUNCNAME" ? "@(Get-BashFuncNames)" : $"${bvs.Name}";
+                string lenArr = bvs.Name switch { "FUNCNAME" => "@(Get-BashFuncNames)", "BASH_VERSINFO" => "$global:BashVersionInfo", _ => $"${bvs.Name}" };
                 return inDoubleQuote ? $"$({lenArr}.Count)" : $"{lenArr}.Count";
             }
         }
