@@ -132,6 +132,17 @@ public sealed partial class BashParser
                 // After command words have started, treat assignment-like tokens as arguments.
                 var token = Advance();
                 var parts = DecomposeWord(token.Value);
+                // bash treats a word that LOOKS like an assignment (`echo x=~`, `PATH=~/bin:~/x`) as one for tilde
+                // expansion: a ~ at the start of the value or after a ':' expands.
+                int eqAt = token.Value.IndexOf('=');
+                if (eqAt > 0 && IsValidVariableName(token.Value[..eqAt])
+                    && (token.Value[(eqAt + 1)..].StartsWith('~') || token.Value.Contains(":~")))
+                {
+                    var tildeParts = ImmutableArray.CreateBuilder<WordPart>();
+                    tildeParts.Add(new WordPart.Literal(token.Value[..(eqAt + 1)]));
+                    tildeParts.AddRange(DecomposeAssignmentValue(token.Value[(eqAt + 1)..]));
+                    parts = tildeParts.ToImmutable();
+                }
                 words.Add(new CompoundWord(parts));
             }
             else if (kind == BashTokenKind.Bang && words.Count > 0)

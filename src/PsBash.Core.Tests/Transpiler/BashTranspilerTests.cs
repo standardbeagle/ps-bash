@@ -139,6 +139,30 @@ public class BashTranspilerTests
 
     private static string BashTranspilerTests_Transpile(string bash) => BashTranspiler.Transpile(bash);
 
+    // A script that assigns HOME must see it through `~` and `$HOME`, which read PowerShell's read-only $HOME.
+    [Fact]
+    public void Transpile_HomeAssignment_RepointsPowerShellHome()
+    {
+        var result = BashTranspiler.Transpile("HOME=/home/bob");
+        Assert.Contains("Set-Variable -Name HOME -Value $env:HOME", result);
+    }
+
+    // The `/` after `~` is restored only when the parser consumed one: `x=~:foo` is not `HOME/:foo`.
+    [Fact]
+    public void Transpile_AssignmentTildeBeforeColon_AddsNoSlash()
+    {
+        var result = BashTranspiler.Transpile("x=~:foo");
+        Assert.DoesNotContain("/:", result);
+    }
+
+    // bash expands the tilde of a word that merely LOOKS like an assignment: `echo x=~`.
+    [Fact]
+    public void Transpile_AssignmentLookingArgument_ExpandsTilde()
+    {
+        var result = BashTranspiler.Transpile("echo x=~");
+        Assert.Contains("x=$HOME", result);
+    }
+
     // `declare -A m=()` is an empty ASSOCIATIVE array (a hashtable), not `@()`.
     [Fact]
     public void Transpile_DeclareAssocEmptyInitializer_IsHashtable()

@@ -369,6 +369,8 @@ public sealed partial class BashParser
     // Doubling every other backslash lets DecomposeWord's unquoted rule give the same result.
     private static string KeepNonSpecialBackslashes(string val)
     {
+        // No tilde expansion inside double quotes: `"${u:-~}"` is a literal ~.
+        if (val.StartsWith('~')) val = "'~'" + val[1..];
         if (val.IndexOf('\\') < 0) return val;
         var sb = new System.Text.StringBuilder(val.Length + 4);
         for (int i = 0; i < val.Length; i++)
@@ -814,12 +816,12 @@ public sealed partial class BashParser
             pos++;
 
         string? user = pos > start ? raw[start..pos] : null;
-        parts.Add(new WordPart.TildeSub(user));
-
         // Consume the '/' separator so it doesn't appear in the following literal;
-        // the emitter re-inserts a platform separator after a TildeSub (see
+        // the emitter re-inserts a platform separator after a TildeSub that consumed one (see
         // PsEmitter.EmitWord / AppendTildeSeparator).
-        if (pos < len && raw[pos] == '/')
+        bool slash = pos < len && raw[pos] == '/';
+        parts.Add(new WordPart.TildeSub(user, slash));
+        if (slash)
             pos++;
 
         return pos;

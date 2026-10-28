@@ -2989,6 +2989,10 @@ public static partial class PsEmitter
         // the substitution left its own code in LASTEXITCODE. (A plain `x=$(false)` keeps it.)
         if ((cmd.IsLocal || cmd.IsExport) && ContainsCommandSub(cmd))
             sb.Append("; " + PsBuild.SetStatus(0));
+        // `~` and `$HOME` read PowerShell's own read-only $HOME (the launcher's home), which `HOME=/x` never touched;
+        // re-point it so a script that assigns HOME sees it (`HOME=/home/bob; echo ~` prints /home/bob).
+        if (!cmd.IsLocal && cmd.Pairs.Any(p => p.Name == "HOME" && p.ArrayValue is null && p.Op == AssignOp.Equal))
+            sb.Append("; Microsoft.PowerShell.Utility\\Set-Variable -Name HOME -Value $env:HOME -Option ReadOnly,AllScope -Scope Global -Force");
         // `export X=1` / `export X`: `declare -p X` shows the x attribute.
         if (cmd.IsExport && !cmd.IsLocal && _declarePrintMode)
             foreach (var pair in cmd.Pairs)
@@ -4752,7 +4756,7 @@ public static partial class PsEmitter
             // After TildeSub, restore the '/' ParseTilde consumed if more parts follow. bash
             // appends the rest of the word verbatim; a '\' here made `~/x` a literal
             // `/home/u\x` on Linux, so `cd ~/x` failed. Windows accepts '/' too.
-            if (part is WordPart.TildeSub && i + 1 < word.Parts.Length)
+            if (part is WordPart.TildeSub { SlashConsumed: true })
                 sb.Append('/');
         }
         return EscapeLeadingSplatSigil(word, TransformWordPath(sb.ToString()));
@@ -5035,6 +5039,9 @@ public static partial class PsEmitter
                 // Assignment/flatten context (x=$(cmd)) preserves internal newlines and
                 // strips trailing ones, like bash — not the array $OFS-join a space.
                 sb.Append(EmitCommandSubString(ncs));
+            else if (part is WordPart.TildeSub { User: null, SlashConsumed: false }
+                     && i + 1 < parts.Length && parts[i + 1] is WordPart.Literal { Value: [':' or '_' or (>= '0' and <= '9') or (>= 'A' and <= 'Z') or (>= 'a' and <= 'z'), ..] })
+                sb.Append("${HOME}"); // braced: "$HOME:x" would read `$HOME:` as a drive reference
             else
                 sb.Append(EmitWordPart(part));
 
@@ -5042,7 +5049,7 @@ public static partial class PsEmitter
             // separator back. EmitWord does this; this flatten path did not, so
             // `PATH=~/bin:~/x` emitted "$HOMEbin:$HOMEx" — and `$HOMEbin` is not a
             // valid PowerShell variable reference, so the whole file failed to parse.
-            if (part is WordPart.TildeSub && i + 1 < parts.Length)
+            if (part is WordPart.TildeSub { SlashConsumed: true })
                 sb.Append('/');
         }
     }
@@ -6274,11 +6281,11 @@ public static partial class PsEmitter
                 // The parser consumes the `/` after a tilde; EmitWord re-adds it when parts follow.
                 case WordPart.TildeSub { User: null or "+" or "-" } ts:
                     Dynamic(Escape + "([string]" + EmitWordPart(ts) + ").Replace('\\','/'))");
-                    if (i + 1 < word.Parts.Length) lit.Append('/');
+                    if (ts.SlashConsumed && i + 1 < word.Parts.Length) lit.Append('/');
                     break;
                 case WordPart.TildeSub ts:
                     lit.Append(EscapeGlobLiteral("~" + ts.User));
-                    if (i + 1 < word.Parts.Length) lit.Append('/');
+                    if (ts.SlashConsumed && i + 1 < word.Parts.Length) lit.Append('/');
                     break;
                 case WordPart.CommandSub cs:
                     Dynamic(EmitCommandSubString(cs, nested: false));
