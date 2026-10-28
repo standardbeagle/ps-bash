@@ -257,8 +257,7 @@ regression tests:
 | `declare -p` of a readonly or `declare -x` variable | printed `declare --` |
 
 Still open from that pass (bash is the oracle): `set -x` prints no `+ cmd` trace lines (it drives `Set-PSDebug`); `trap ... EXIT`
-inside `( )` and `trap ... RETURN` never fire; `$LINENO` is empty; `declare -p` omits the `-i` attribute and
-the `x` of a plain `export`; `declare -f` prints the emitted PowerShell, not the bash source; `local -r` is not enforced;
-`PIPESTATUS` right after an `if ... fi` block is stale; sparse arrays are padded, not sparse (`${#a[@]}` counts the gap, `unset a[i]` leaves a hole); `local -n r=$1`
-(a nameref whose target is dynamic) does not write through; `sh` is not found. `BASH_VERSION` / `BASH_VERSINFO` now claim
+inside `( )` and `trap ... RETURN` never fire; `declare -p` omits the `-i` attribute and
+the `x` of a plain `export`; `declare -f` prints the emitted PowerShell, not the bash source; `PIPESTATUS` right after an `if ... fi` block is stale; sparse arrays are padded, not sparse (`${#a[@]}` counts the gap, `unset a[i]` leaves a hole); `local -n r=$1`
+(a nameref whose target is dynamic) does not write through; `BASH_VERSION` / `BASH_VERSINFO` now claim
 bash 5.2 compatibility (like a User-Agent string); the real version is `$PsBashVersion`.
