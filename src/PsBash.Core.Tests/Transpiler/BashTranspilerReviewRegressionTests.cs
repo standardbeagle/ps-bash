@@ -362,6 +362,18 @@ public class BashTranspilerReviewRegressionTests
         Assert.DoesNotContain(PsBuild.SignalFailIfFailed(), BashTranspiler.Transpile("r=1 || echo fb"));
     }
 
+    // Oracle: `${x:?}` in a pipeline stage or a command substitution ends only that subshell, not the script.
+    [Theory]
+    [InlineData("echo \"${var:?}\" | head -1; echo after")]
+    [InlineData("echo a | cat \"${v:?}\"; echo after")]
+    [InlineData("x=$(echo \"${var:?}\"); echo after")]
+    public void Transpile_ParamErrorInStageOrCommandSub_IsCaughtThere(string bash)
+        => Assert.Contains("catch [PsBash.Cmdlets.BashParamErrorException]", BashTranspiler.Transpile(bash));
+
+    [Fact]
+    public void Transpile_ParamErrorAtTopLevel_IsNotCaught()
+        => Assert.DoesNotContain("catch [PsBash.Cmdlets.BashParamErrorException]", BashTranspiler.Transpile("echo \"${var:?top}\"; echo not-reached"));
+
     // Oracle: a function is a filter: `indent() { sed 's/^/  /'; }; cmd | indent`. The piped input never reached
     // the commands in the body (sed/grep/tr/cat/read saw an empty stdin). A body that reads stdin takes the pipe
     // it is called with; one that does not is unchanged.

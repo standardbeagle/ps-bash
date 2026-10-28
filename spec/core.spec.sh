@@ -659,3 +659,13 @@ caught 1
 ok1
 caught 4
 ## END
+
+#### ${x:?} inside a pipeline stage / command substitution ends only that subshell
+echo "${nope_a:?}" 2>/dev/null | head -1; echo "after-pipe"
+x=$(echo "${nope_b:?}" 2>/dev/null); echo "after-cmdsub [$x] $?"
+( echo "${nope_c:?}" ) 2>/dev/null; echo "after-subshell $?"
+## STDOUT:
+after-pipe
+after-cmdsub [] 1
+after-subshell 1
+## END

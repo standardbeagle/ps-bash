@@ -5398,7 +5398,9 @@ public static class PsEmitter
     {
         bool pipeable = body is Command.Simple or Command.Pipeline
                         && !PsBuild.IsStatementList(inner);
-        return pipeable && CannotChangeShellState(body) ? inner : PsBuild.ShellStateScope(inner);
+        // `${x:?}` inside ends only the substitution (bash: a subshell), so it needs the scope that catches it.
+        return pipeable && CannotChangeShellState(body) && !inner.Contains("BashParamErrorException", StringComparison.Ordinal)
+            ? inner : PsBuild.ShellStateScope(inner);
     }
 
     /// <summary>Builtins that change shell state even though they map to a runtime command.</summary>
@@ -7354,6 +7356,18 @@ public static class PsEmitter
                 sb.Append(WrapPipelineStageIfStatementList(Emit(cmd)));
             else
                 sb.Append(Emit(cmd));
+
+            // `echo "${x:?}" | head`: each stage is a subshell, so the parameter error ends only that stage.
+            if (pipeline.Commands.Length > 1)
+            {
+                var rawStage = sb.ToString(stageStart, sb.Length - stageStart);
+                if (rawStage.Contains("BashParamErrorException]::Reported", StringComparison.Ordinal)
+                    && !rawStage.Contains("catch [PsBash.Cmdlets.BashParamErrorException]", StringComparison.Ordinal))
+                {
+                    sb.Length = stageStart;
+                    sb.Append(i == 0 ? PsBuild.ShellStateScope(rawStage) : "& { " + PsBuild.ShellStateGuard("$input | " + rawStage) + " }");
+                }
+            }
 
             if (perStage)
             {
