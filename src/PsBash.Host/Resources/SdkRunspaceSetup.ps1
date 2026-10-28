@@ -221,8 +221,9 @@ $ExecutionContext.InvokeCommand.CommandNotFoundAction = {
     $wslHint = Get-BashWslPathHint
     $EventArgs.CommandScriptBlock = {
         $msg = "bash: ${name}: command not found"
-        Write-Error -Message $msg -Category ObjectNotFound -TargetObject $name
-        if ($wslHint) { Write-Error -Message $wslHint -Category ResourceUnavailable }
+        # Non-terminating whatever $ErrorActionPreference is (errexit sets Stop): `missing || fallback` must still run.
+        Write-Error -Message $msg -Category ObjectNotFound -TargetObject $name -ErrorAction Continue
+        if ($wslHint) { Write-Error -Message $wslHint -Category ResourceUnavailable -ErrorAction Continue }
         $global:LASTEXITCODE = 127
     }.GetNewClosure()
     $EventArgs.StopSearch = $true

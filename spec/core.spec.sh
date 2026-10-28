@@ -679,3 +679,17 @@ declare -r r="1"
 declare -x e="2"
 declare -- s="plain"
 ## END
+
+#### under set -e, a missing command is an ordinary status 127 that || and if can handle
+set -e
+nonexistent_cmd_xyz 2>/dev/null || echo "fb $?"
+if nonexistent_cmd_xyz 2>/dev/null; then :; else echo "else $?"; fi
+env nonexistent_cmd_xyz 2>/dev/null || echo "env $?"
+echo end
+set +e
+## STDOUT:
+fb 127
+else 127
+env 127
+end
+## END
