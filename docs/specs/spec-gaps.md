@@ -244,9 +244,21 @@ regression tests:
 | `${x//$'\n'/,}`, `${x//$nl/,}`, `${x//$empty/r}` | matched the source text; empty pattern matched everywhere |
 | `${#@}`, `${#*}`; `$(( ${m[$k]:-0} + 1 ))`, `$(( a[1] ))`, bare `RANDOM` / `SECONDS` in `$(( ))` | parse error or 0 |
 | `unset 'a[-1]'`; `kill -9999` | ignored; treated as TERM |
+| `read -d`, lone-var IFS trim, `${!#}` / `${!n}`, `${@:$#}`, `${a[@]:$i:2}`, `${a[@]:-w}` | wrong value or error |
+| `exit N` in an EXIT trap | trap saw `$?` = 0 |
+| `declare -r` / `typeset -r` (ignored on a nameref, as bash does) | variable stayed writable |
+| `((a[i]++))`, `$(( a[i] + 1 ))`, a bare name as a subscript (`a[n-1]`) | element ignored or parse error |
+| array written inside a function (assign, append, element, `unset 'a[n-1]'`, `mapfile`, `read -a`, `printf -v`) | caller never saw it |
+| `[[ -v arr[key] ]]`, `[[ -v arr ]]` | always false |
+| `${s//\\/\\\\}`, `${s//\"/\\\"}` (the `json_escape` idiom) | backslash kept literally, so nothing escaped |
+| `${PIPESTATUS[*]}` after a plain command; pipeline ending in `cmd >/dev/null` | stale value; NullReferenceException |
+| `r=$(false \| cat) \|\| echo caught` | `\|\|` never fired (assignment status not bridged) |
+| `${x:?}` inside a pipeline stage or `$( )` | ended the whole script, not just that subshell |
+| `declare -p` of a readonly or `declare -x` variable | printed `declare --` |
 
 Still open from that pass (bash is the oracle): `set -x` prints no `+ cmd` trace lines (it drives `Set-PSDebug`); `trap ... EXIT`
-inside `( )` and `trap ... RETURN` never fire; `$LINENO` is empty; `declare -p` prints arrays and attributes in its own
-format; sparse arrays are padded, not sparse (`${#a[@]}` counts the gap, `unset a[i]` leaves a hole); `local -n r=$1`
+inside `( )` and `trap ... RETURN` never fire; `$LINENO` is empty; `declare -p` omits the `-i` attribute and
+the `x` of a plain `export`; `declare -f` prints the emitted PowerShell, not the bash source; `local -r` is not enforced;
+`PIPESTATUS` right after an `if ... fi` block is stale; sparse arrays are padded, not sparse (`${#a[@]}` counts the gap, `unset a[i]` leaves a hole); `local -n r=$1`
 (a nameref whose target is dynamic) does not write through; `sh` is not found. `BASH_VERSION` / `BASH_VERSINFO` now claim
 bash 5.2 compatibility (like a User-Agent string); the real version is `$PsBashVersion`.
