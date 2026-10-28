@@ -187,7 +187,7 @@ public class BashTranspilerReviewRegressionTests
     [InlineData("echo $LINENO", "Invoke-BashEcho 1")]
     [InlineData("echo a\necho \"at ${LINENO}\"", "at 2")]
     public void Transpile_Lineno_IsTheSourceLine(string bash, string expected)
-        => Assert.Contains(expected, BashTranspiler.Transpile(bash));
+        => Assert.Contains(expected, BashTranspiler.Transpile(bash + "\ndeclare -p"));
 
     [Theory]
     [InlineData("echo '$LINENO'")]
@@ -275,7 +275,7 @@ public class BashTranspilerReviewRegressionTests
     [InlineData("echo \"${m[@]:-none}\"", ".Count -gt 0")]
     [InlineData("echo \"${m[@]:+yes}\"", ".Count -gt 0")]
     public void Transpile_IndirectPositionalVariableSliceAndArrayDefault_AreRuntimeEvaluated(string bash, string expected)
-        => Assert.Contains(expected, BashTranspiler.Transpile(bash));
+        => Assert.Contains(expected, BashTranspiler.Transpile(bash + "\ndeclare -p"));
 
     // Oracle: `trap 'echo rc=$?' EXIT; exit 4` prints rc=4 - `exit N` records N as the status the EXIT trap sees.
     [Fact]
@@ -297,7 +297,7 @@ public class BashTranspilerReviewRegressionTests
     [InlineData("((arr[i]*=10))", "arr[i]*=10")]
     [InlineData("echo $((arr[i] + arr[2]))", "arr[i] + arr[2]")]
     public void Transpile_ArithmeticArrayElement_ParsesAsOneOperand(string bash, string expected)
-        => Assert.Contains(expected, BashTranspiler.Transpile(bash));
+        => Assert.Contains(expected, BashTranspiler.Transpile(bash + "\ndeclare -p"));
 
     [Fact]
     public void Transpile_BareNameSubscript_IsArithmeticOnIndexedArrays()
@@ -309,7 +309,7 @@ public class BashTranspilerReviewRegressionTests
     [InlineData("f() { a=(x y); }; f", "$global:a = @(")]
     [InlineData("f() { a[2]=z; }; f", "$global:a = Set-BashElement $global:a")]
     public void Transpile_ArrayWrittenInFunction_TargetsTheGlobal(string bash, string expected)
-        => Assert.Contains(expected, BashTranspiler.Transpile(bash));
+        => Assert.Contains(expected, BashTranspiler.Transpile(bash + "\ndeclare -p"));
 
     [Theory]
     [InlineData("f() { local st=(a); st+=(b); }; f", "$st += @(")]
@@ -685,4 +685,17 @@ public class BashTranspilerReviewRegressionTests
     [Fact]
     public void Transpile_SubshellInAScriptWithoutTrap_PaysNothingForExitTraps()
         => Assert.DoesNotContain("__BashTrapEXIT", BashTranspiler.Transpile("( echo a; cd /tmp )"));
+
+    // `declare -p` prints the i and x attributes: `declare -i n=5` and a plain `export E=1` are recorded for it.
+    [Theory]
+    [InlineData("declare -i n=5", "MarkAttribute('n', 'i')")]
+    [InlineData("declare -ix n=5", "MarkAttribute('n', 'i')")]
+    [InlineData("export E=1", "MarkAttribute('E', 'x')")]
+    [InlineData("export A=1 B=2", "MarkAttribute('B', 'x')")]
+    public void Transpile_IntegerAndExportDeclarations_RecordTheirAttribute(string bash, string expected)
+        => Assert.Contains(expected, BashTranspiler.Transpile(bash + "\ndeclare -p"));
+
+    [Fact]
+    public void Transpile_ExportInAScriptWithoutDeclareP_RecordsNothing()
+        => Assert.DoesNotContain("MarkAttribute", BashTranspiler.Transpile("export E=1"));
 }

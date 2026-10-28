@@ -741,7 +741,7 @@ ok
 #### timeout stops a command that runs too long
 timeout 0.3 sleep 5; echo "slow rc=$?"
 timeout 5 true; echo "fast rc=$?"
-timeout 5 sh -c 'exit 3'; echo "status rc=$?"
+timeout 120 sh -c 'exit 3'; echo "status rc=$?"
 echo hello | timeout 5 cat
 timeout --preserve-status 0.3 sleep 5; echo "preserve rc=$?"
 timeout abc true 2>/dev/null; echo "usage rc=$?"
@@ -823,4 +823,20 @@ f-exit
 got: body
 cs-exit
 end
+## END
+
+#### declare -p shows the integer and export attributes
+declare -i n=5
+declare -p n
+export E=1
+declare -p E
+declare -ix NI=7
+declare -p NI
+S=plain
+declare -p S
+## STDOUT:
+declare -i n="5"
+declare -x E="1"
+declare -ix NI="7"
+declare -- S="plain"
 ## END

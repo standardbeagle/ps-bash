@@ -47,6 +47,9 @@ public static class PsEmitter
     /// <summary>The script mentions <c>trap</c>: a subshell or <c>$( )</c> may run a function that sets an EXIT trap.</summary>
     [ThreadStatic]
     private static bool _trapMode;
+    /// <summary>The script prints variables with <c>declare -p</c>: <c>export</c> and <c>declare -i</c> record their attribute for it.</summary>
+    [ThreadStatic]
+    private static bool _declarePrintMode;
     // The script can turn nounset on: simple `$x` / `${x}` reads then check the flag at runtime.
     [ThreadStatic]
     private static bool _nounsetMode;
@@ -586,6 +589,8 @@ public static class PsEmitter
         _pipeStatusMode = bash.Contains("PIPESTATUS", StringComparison.Ordinal);
         var priorXtrace = _xtraceMode;
         var priorTrap = _trapMode;
+        var priorDeclarePrint = _declarePrintMode;
+        _declarePrintMode = System.Text.RegularExpressions.Regex.IsMatch(bash, @"\b(?:declare|typeset)\s+(?:-[a-zA-Z]+\s+)*-[a-zA-Z]*p");
         _trapMode = System.Text.RegularExpressions.Regex.IsMatch(bash, @"\btrap\b");
         _xtraceMode = System.Text.RegularExpressions.Regex.IsMatch(bash, @"\bset\s+(?:-[a-zA-Z]+\s+)*(?:-[a-zA-Z]*x|-o\s+xtrace)");
         _pipefailMode = priorPipefail || InheritedPipefail || bash.Contains("pipefail", StringComparison.Ordinal) || bash.Contains("PIPESTATUS", StringComparison.Ordinal);
@@ -609,6 +614,7 @@ public static class PsEmitter
             _unitFunctions = priorUnitFunctions;
             _xtraceMode = priorXtrace;
             _trapMode = priorTrap;
+            _declarePrintMode = priorDeclarePrint;
         }
     }
 
@@ -2951,6 +2957,11 @@ public static class PsEmitter
         // the substitution left its own code in LASTEXITCODE. (A plain `x=$(false)` keeps it.)
         if ((cmd.IsLocal || cmd.IsExport) && ContainsCommandSub(cmd))
             sb.Append("; " + PsBuild.SetStatus(0));
+        // `export X=1` / `export X`: `declare -p X` shows the x attribute.
+        if (cmd.IsExport && !cmd.IsLocal && _declarePrintMode)
+            foreach (var pair in cmd.Pairs)
+                if (pair.ArrayValue is null && !pair.Name.Contains('['))
+                    sb.Append("; [PsBash.Cmdlets.BashShellState]::MarkAttribute(").Append(PsBuild.SingleQuote(pair.Name)).Append(", 'x')");
         return sb.ToString();
     }
 
@@ -3169,6 +3180,7 @@ public static class PsEmitter
             if (lit is { Length: > 1 } && lit[0] == '-' && lit.AsSpan(1).IndexOfAnyExcept("pfF") >= 0)
             {
                 if (lit.Contains('x')) attrs.Add('x');
+                if (lit.Contains('i') && _declarePrintMode) attrs.Add('i');
             }
             if (lit is { Length: > 1 } && lit[0] == '-' && lit.AsSpan(1).IndexOfAnyExcept("pfF") >= 0 && lit.Contains('r'))
             {
