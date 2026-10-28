@@ -2364,7 +2364,11 @@ public static partial class PsEmitter
     // Callers needing the bare boolean expression (conditions, && / || chains) use EmitBoolExprInner.
     private static string EmitBoolExpr(Command.BoolExpr expr)
     {
-        return PsBuild.SilentExitFromBool("(" + EmitBoolExprInner(expr) + ")");
+        string inner = EmitBoolExprInner(expr);
+        // A bad integer operand (`[ a -eq 1 ]`) is status 2, not just false.
+        if (inner.Contains("Invoke-BashTestInt"))
+            return "$($global:__BashTestBad = $false; $__psbTestR = (" + inner + "); $global:LASTEXITCODE = $(if ($global:__BashTestBad) { 2 } elseif ($__psbTestR) { 0 } else { 1 }))";
+        return PsBuild.SilentExitFromBool("(" + inner + ")");
     }
 
     private static string EmitBoolExprInner(Command.BoolExpr expr)
@@ -2594,7 +2598,7 @@ public static partial class PsEmitter
                             ? "'" + e + "'" : e;
                     return $"[long](Invoke-BashArith ([string]({ArithOperand(lhs)}))) {op} [long](Invoke-BashArith ([string]({ArithOperand(EmitTestOperand(words[2]))})))";
                 }
-                return $"[long]({lhs}) {op} [long]({EmitTestOperand(words[2])})";
+                return $"(Invoke-BashTestInt ({lhs})) {op} (Invoke-BashTestInt -Second ({EmitTestOperand(words[2])}))";
             }
 
             // File-comparison operators: mtime ordering (-nt/-ot) and same-file

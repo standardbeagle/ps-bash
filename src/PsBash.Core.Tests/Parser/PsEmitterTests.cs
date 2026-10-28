@@ -2870,7 +2870,7 @@ public class PsEmitterTests
         Assert.Contains("'abc' -ceq 'abc'", PsEmitter.Transpile("[ abc = abc ]"));
         Assert.Contains("'abc' -cne 'xyz'", PsEmitter.Transpile("[ abc != xyz ]"));
         Assert.Contains("$env:x -ceq 'abc'", PsEmitter.Transpile("x=1; [ $x = abc ]"));
-        Assert.Contains("[long](5) -eq [long](5)", PsEmitter.Transpile("[ 5 -eq 5 ]"));   // numeric compare casts to [long]
+        Assert.Contains("(Invoke-BashTestInt (5)) -eq (Invoke-BashTestInt -Second (5))", PsEmitter.Transpile("[ 5 -eq 5 ]"));   // strict decimal operands
     }
 
     [Fact]
@@ -5733,7 +5733,7 @@ public class PsEmitterTests
         // if [ 1 -eq 1 ] && [ 2 -eq 2 ]; then echo yes; fi
         // Both sides are BoolExpr — no LASTEXITCODE wrapper needed.
         var result = PsEmitter.Transpile("if [ 1 -eq 1 ] && [ 2 -eq 2 ]; then echo yes; fi");
-        Assert.Equal("if ((([long](1) -eq [long](1)) -and ([long](2) -eq [long](2)))) { Invoke-BashEcho yes }", result);
+        Assert.Equal("if ((((Invoke-BashTestInt (1)) -eq (Invoke-BashTestInt -Second (1))) -and ((Invoke-BashTestInt (2)) -eq (Invoke-BashTestInt -Second (2))))) { Invoke-BashEcho yes }", result);
     }
 
     [Fact]

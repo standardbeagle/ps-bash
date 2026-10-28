@@ -130,6 +130,8 @@ CmdletsToExport = @(
     # ternary, bases) that PowerShell's $( ) subexpression mistranslated. Emitted
     # by the transpiler as $(Invoke-BashArith '<expr>'); not a bash command alias.
     'Invoke-BashArith',
+    # Strict decimal operand of a `[ a -eq b ]` test ("integer expression expected" -> status 2).
+    'Invoke-BashTestInt',
     # Fused-pipeline lane (PERF phase 2): when every stage of a bash pipeline maps
     # to our own line-oriented Invoke-Bash* commands, the transpiler wraps the whole
     # emitted pipeline in Invoke-BashFusedPipeline { … } so the result returns to the

@@ -917,4 +917,13 @@ public class BashTranspilerReviewRegressionTests
     [InlineData("[ -z -a ] ]")]
     public void Transpile_BracketWithOperandCloser_ParsesLastBracketAsTheClose(string script)
         => Assert.DoesNotContain("parse error", BashTranspiler.Transpile(script));
+
+    // Oracle: `[ a -eq 1 ]` is status 2 ("integer expression expected"), not false and not a cast exception.
+    [Fact]
+    public void Transpile_BracketNumericTest_ReportsABadOperandAsStatus2()
+    {
+        var ps = BashTranspiler.Transpile("[ a -eq 1 ]");
+        Assert.Contains("Invoke-BashTestInt", ps);
+        Assert.Contains("if ($global:__BashTestBad) { 2 }", ps);
+    }
 }
