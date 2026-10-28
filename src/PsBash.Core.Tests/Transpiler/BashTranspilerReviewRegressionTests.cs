@@ -909,4 +909,12 @@ public class BashTranspilerReviewRegressionTests
     [Fact]
     public void Transpile_Unalias_RoutesToTheRemovalMode()
         => Assert.Contains("Invoke-BashAlias -u foo", BashTranspiler.Transpile("unalias foo"));
+
+    // Oracle: `[ ] ]` tests the one-word string "]" (true); only the LAST `]` closes a `[` command.
+    [Theory]
+    [InlineData("[ ] ]")]
+    [InlineData("[ -z ] ]")]
+    [InlineData("[ -z -a ] ]")]
+    public void Transpile_BracketWithOperandCloser_ParsesLastBracketAsTheClose(string script)
+        => Assert.DoesNotContain("parse error", BashTranspiler.Transpile(script));
 }

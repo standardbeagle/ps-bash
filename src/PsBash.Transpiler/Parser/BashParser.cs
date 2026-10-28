@@ -175,6 +175,8 @@ public sealed partial class BashParser
     // Peek clamps to the trailing Eof sentinel so an unguarded read at/just-past the end
     // returns Eof rather than throwing ArgumentOutOfRangeException (a raw crash). Eof at the
     // tail is a legitimate Peek target (loops guard on `Peek().Kind != Eof`).
+    private bool NextTokenIsWord() => _pos + 1 < _tokens.Count && _tokens[_pos + 1].Kind == BashTokenKind.Word;
+
     private BashToken Peek() => _tokens[_pos < _tokens.Count ? _pos : _tokens.Count - 1];
 
     // Advance, by contrast, must REFUSE to consume the Eof sentinel: a truncated construct
@@ -379,8 +381,10 @@ public sealed partial class BashParser
         var inner = ImmutableArray.CreateBuilder<CompoundWord>();
         while (Peek().Kind != BashTokenKind.Eof)
         {
-            if (Peek().Kind == BashTokenKind.Word && Peek().Value == close)
+            if (Peek().Kind == BashTokenKind.Word && Peek().Value == close
+                && (extended || !NextTokenIsWord()))
             {
+                // `[` closes on its LAST word only: in `[ ] ]` the first `]` is an operand.
                 Advance(); // consume closing bracket
                 break;
             }

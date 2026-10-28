@@ -435,7 +435,6 @@ status=0
 status=0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-bracket builtin-bracket (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### no recursive arith [ 1+2 -eq 3 ]
@@ -552,7 +551,6 @@ true
 echo status=$?
 ## stdout: status=0
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-bracket builtin-bracket (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### operator/operand ambiguity with -a
