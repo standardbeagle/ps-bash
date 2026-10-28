@@ -101,6 +101,17 @@ function Get-BashFuncNames {
     $names
 }
 
+# set -x: the "+ cmd args" line bash prints on stderr before a command. Words print as bash does: bare when made of
+# safe characters, otherwise single-quoted. The emitter calls this only in scripts that mention set -x.
+function Write-BashXtrace {
+    if (-not $global:__BashXtrace) { return }
+    $words = foreach ($w in $args) {
+        $s = [string]$w
+        if ($s -match '^[A-Za-z0-9_./:+@%=,^~-]+$') { $s } else { "'" + $s.Replace("'", "'\''") + "'" }
+    }
+    Write-BashHostStderr ('+ ' + ($words -join ' '))
+}
+
 # A command word that is only known at run time (`"$@"`, `$cmd`, `"$tool"`) is looked up as bash does: a shell
 # function, then a builtin / ps-bash command (`false`, `true`, `echo`, `test` are not PowerShell commands of
 # those names), then whatever PowerShell can find (a program on PATH). Returns something `&` can call.

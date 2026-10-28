@@ -41,6 +41,9 @@ public static class PsEmitter
     /// <summary>The script reads PIPESTATUS, so a plain command records its own status there.</summary>
     [ThreadStatic]
     private static bool _pipeStatusMode;
+    /// <summary>The script can turn xtrace on: a statement-level command is preceded by a runtime-checked trace line.</summary>
+    [ThreadStatic]
+    private static bool _xtraceMode;
     // The script can turn nounset on: simple `$x` / `${x}` reads then check the flag at runtime.
     [ThreadStatic]
     private static bool _nounsetMode;
@@ -276,10 +279,54 @@ public static class PsEmitter
     private static string EmitStatement(Command cmd)
     {
         string text = EmitStatementCore(cmd);
+        if (_xtraceMode && TryEmitXtrace(cmd) is { } trace)
+            text = trace + "; " + text;
         // A plain command is a one-stage pipeline: `false; echo ${PIPESTATUS[*]}` is `1`, not the last real pipeline's.
         return _pipeStatusMode && cmd is Command.Simple { Words.Length: > 0 }
             ? text + "; $global:PIPESTATUS = @([int]$global:LASTEXITCODE)"
             : text;
+    }
+
+    /// <summary>
+    /// The <c>+ cmd args</c> line <c>set -x</c> prints before a command, as a call that checks the flag at run time.
+    /// Only words whose value can be rendered without running anything (literals, quoted text, variables) are traced:
+    /// a command substitution or glob would run twice, so such a command is left untraced.
+    /// </summary>
+    private static string? TryEmitXtrace(Command cmd)
+    {
+        var parts = new List<string>();
+        switch (cmd)
+        {
+            case Command.Simple { Words.Length: > 0, EnvPairs.IsEmpty: true } simple:
+                foreach (var w in simple.Words)
+                    if (XtraceWord(w) is { } e) parts.Add(e); else return null;
+                break;
+            case Command.ShAssignment { IsLocal: false, IsExport: false } assign:
+                foreach (var pair in assign.Pairs)
+                {
+                    if (pair.Op != AssignOp.Equal || pair.ArrayValue is not null) return null;
+                    if (pair.Value is null) { parts.Add(PsBuild.SingleQuote(pair.Name + "=")); continue; }
+                    if (XtraceWord(pair.Value) is not { } v) return null;
+                    parts.Add("(\"" + pair.Name + "=\" + " + v + ")");
+                }
+                break;
+            default:
+                return null;
+        }
+        return "Write-BashXtrace " + string.Join(" ", parts);
+    }
+
+    private static string? XtraceWord(CompoundWord word)
+    {
+        if (TryGetStaticArgValue(word) is { } literal) return PsBuild.SingleQuote(literal);
+        foreach (var part in word.Parts)
+        {
+            var p = part is WordPart.DoubleQuoted dq ? dq.Parts : System.Collections.Immutable.ImmutableArray.Create(part);
+            foreach (var q in p)
+                if (q is not (WordPart.Literal or WordPart.SimpleVarSub or WordPart.SingleQuoted or WordPart.EscapedLiteral)) return null;
+        }
+        var emitted = EmitWord(word);
+        return emitted.Length > 0 && (emitted[0] == (char)34 || emitted[0] == (char)36) ? "([string](" + emitted + "))" : null;
     }
 
     private static string EmitStatementCore(Command cmd)
@@ -534,6 +581,8 @@ public static class PsEmitter
         _nounsetMode = priorNounset || InheritedNounset || bash.Contains("nounset", StringComparison.Ordinal)
             || System.Text.RegularExpressions.Regex.IsMatch(bash, @"\bset\s+(?:-[a-zA-Z]+\s+)*-[a-zA-Z]*u");
         _pipeStatusMode = bash.Contains("PIPESTATUS", StringComparison.Ordinal);
+        var priorXtrace = _xtraceMode;
+        _xtraceMode = System.Text.RegularExpressions.Regex.IsMatch(bash, @"\bset\s+(?:-[a-zA-Z]+\s+)*(?:-[a-zA-Z]*x|-o\s+xtrace)");
         _pipefailMode = priorPipefail || InheritedPipefail || bash.Contains("pipefail", StringComparison.Ordinal) || bash.Contains("PIPESTATUS", StringComparison.Ordinal);
         try
         {
@@ -553,6 +602,7 @@ public static class PsEmitter
             _pipefailMode = priorPipefail;
             _nounsetMode = priorNounset;
             _unitFunctions = priorUnitFunctions;
+            _xtraceMode = priorXtrace;
         }
     }
 

@@ -655,4 +655,23 @@ public class BashTranspilerReviewRegressionTests
         var ps = BashTranspiler.Transpile("echo ${#BASH_VERSINFO[@]}");
         Assert.Contains("$global:BashVersionInfo", ps);
     }
+
+    // `set -x` prints `+ cmd args` before each command; only words that render without running anything are traced.
+    [Fact]
+    public void Transpile_CommandAfterSetX_IsPrecededByAnXtraceCall()
+    {
+        var ps = BashTranspiler.Transpile("set -x\necho \"hi $x\" -n");
+        Assert.Contains("Write-BashXtrace 'echo' ([string](\"hi $env:x\")) '-n'; ", ps);
+    }
+
+    [Fact]
+    public void Transpile_CommandSubstitutionArgAfterSetX_IsNotTraced()
+    {
+        var ps = BashTranspiler.Transpile("set -x\necho $(date)");
+        Assert.DoesNotContain("Write-BashXtrace 'echo'", ps);
+    }
+
+    [Fact]
+    public void Transpile_ScriptWithoutSetX_HasNoXtraceCalls()
+        => Assert.DoesNotContain("Write-BashXtrace", BashTranspiler.Transpile("echo hi"));
 }

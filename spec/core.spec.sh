@@ -790,3 +790,23 @@ wait $q; echo "fn rc=$?"
 grp rc=4
 fn rc=7
 ## END
+
+#### set -x traces each command on stderr before it runs
+{
+x=5
+set -x
+echo "hi $x"
+f() { echo "in f $1"; }
+f 'a b'
+set +x
+echo done
+} 2>&1
+## STDOUT:
++ echo 'hi 5'
+hi 5
++ f 'a b'
++ echo 'in f a b'
+in f a b
++ set +x
+done
+## END

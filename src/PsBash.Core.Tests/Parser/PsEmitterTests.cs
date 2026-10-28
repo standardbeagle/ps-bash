@@ -5021,7 +5021,8 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("set -x");
         // The flag lets a subshell scope (BashShellState) undo a `set -x` made inside it.
-        Assert.Equal("Set-PSDebug -Trace 1; $global:__BashXtrace = $true", result);
+        // The statement is itself traced first (a no-op unless xtrace is already on, as in bash).
+        Assert.Equal("Write-BashXtrace 'set' '-x'; Set-PSDebug -Trace 1; $global:__BashXtrace = $true", result);
     }
 
     [Fact]
