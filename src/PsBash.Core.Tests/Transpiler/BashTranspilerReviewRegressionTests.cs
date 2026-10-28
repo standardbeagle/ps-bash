@@ -904,4 +904,9 @@ public class BashTranspilerReviewRegressionTests
     [Fact]
     public void Transpile_ArraySliceNegativeOffsetBeforeStart_IsEmpty()
         => Assert.Contains("if ($__psbO -lt 0) { $__psbO = $__psbA.Count } }", BashTranspiler.Transpile("echo \"${a[@]: -5}\""));
+
+    // Oracle: `unalias NAME` removes the alias; the shared alias cmdlet needs -u to tell the two apart.
+    [Fact]
+    public void Transpile_Unalias_RoutesToTheRemovalMode()
+        => Assert.Contains("Invoke-BashAlias -u foo", BashTranspiler.Transpile("unalias foo"));
 }

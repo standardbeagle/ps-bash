@@ -8689,6 +8689,10 @@ public static partial class PsEmitter
             case "readarray":
                 result = EmitPassthrough("Invoke-BashMapfile", args);
                 return true;
+            case "unalias":
+                // The cmdlet is shared with `alias`; `-u` selects removal (a bare PS alias could not tell them apart).
+                result = EmitPassthrough("Invoke-BashAlias", args, cmdletSwitch: " -u");
+                return true;
             case "eval":
                 result = EmitEval(args);
                 return true;

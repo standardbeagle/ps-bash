@@ -94,11 +94,16 @@ public sealed class InvokeBashAliasCommand : PSCmdlet
         bool removeAll = A.IsPresent;
         var operands = new List<string>();
 
+        bool endOfOptions = false;
         foreach (var arg in args)
         {
-            if (arg == "-u") { unaliasMode = true; continue; }
-            if (arg == "-a") { removeAll = true; continue; }
-            if (arg == "-p") { continue; } // no-op (oracle parity)
+            if (!endOfOptions)
+            {
+                if (arg == "--") { endOfOptions = true; continue; }
+                if (arg == "-u") { unaliasMode = true; continue; }
+                if (arg == "-a") { removeAll = true; continue; }
+                if (arg == "-p") { continue; } // no-op (oracle parity)
+            }
             operands.Add(arg);
         }
 
@@ -123,6 +128,12 @@ public sealed class InvokeBashAliasCommand : PSCmdlet
                 return;
             }
 
+            if (operands.Count == 0)
+            {
+                FileSystemHelpers.WriteBashError(this, "unalias: usage: unalias [-a] name [name ...]");
+                FileSystemHelpers.SetLastExitCode(this, 2);
+                return;
+            }
             foreach (var name in operands)
             {
                 var dict = GetAliasDict();
