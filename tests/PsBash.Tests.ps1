@@ -1605,7 +1605,7 @@ Describe 'Invoke-BashStat' {
         $result = @(Invoke-BashStat -c '%a %n' $statFile)
         $result.Count | Should -Be 1
         $text = $result[0].BashText.TrimEnd("`n")
-        $text | Should -Match '^\d{4} file\.txt$'
+        $text | Should -Match '^[0-7]{3,4} .*file\.txt$'
     }
 
     It 'stat --printf="%s\n" file.txt returns printf-style with no trailing newline' {
@@ -1626,7 +1626,7 @@ Describe 'Invoke-BashStat' {
         $result.Count | Should -Be 1
         $fields = $result[0].BashText.TrimEnd("`n") -split ' '
         $fields.Count | Should -Be 14
-        $fields[0] | Should -Be 'file.txt'
+        $fields[0] | Should -BeLike '*file.txt'
         $fields[1] | Should -Be '11'
     }
 

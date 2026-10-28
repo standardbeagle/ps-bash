@@ -240,6 +240,24 @@ public class BashTranspilerTests
         finally { Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", prior); }
     }
 
+    [Theory]
+    [InlineData("dirname /x/y/z", "/x/y/z")]
+    [InlineData("basename /c/Users/x.txt", "/c/Users/x.txt")]
+    [InlineData("dirname /tmp/a/b", "/tmp/a/b")]
+    public void Transpile_DirnameBasenameOperand_IsTextNotRewrittenToAWindowsPath(string bash, string expected)
+    {
+        var prior = Environment.GetEnvironmentVariable("PSBASH_UNIX_PATHS");
+        Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", "1");
+        try
+        {
+            var result = BashTranspiler.Transpile(bash);
+            Assert.Contains(expected, result);
+            Assert.DoesNotContain("TEMP", result);
+            Assert.DoesNotContain(":\\", result);
+        }
+        finally { Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", prior); }
+    }
+
     [Fact]
     public void MsysDrivePathInRedirectTarget_PreservedLiteral_WhenUnixPathsOff()
     {

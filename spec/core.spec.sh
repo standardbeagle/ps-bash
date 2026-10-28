@@ -841,6 +841,21 @@ declare -ix NI="7"
 declare -- S="plain"
 ## END
 
+#### stat prints the operand as written; dirname and basename only cut text
+d=$(mktemp -d); mkdir "$d/sub"; printf x > "$d/sub/f.txt"; : > "$d/e.txt"
+cd "$d"
+stat -c '%n|%F|%a' sub/f.txt | sed 's/|[0-7]*$//'
+stat -c '%F' e.txt sub
+dirname /x/y/z.tar.gz; basename /x/y/z.tar.gz .gz
+cd /; rm -rf "$d"
+## STDOUT:
+sub/f.txt|regular file
+regular empty file
+directory
+/x/y
+z.tar
+## END
+
 #### local -n names the caller's variable: scalar, array and associative array
 setv() { local -n r=$1; r="set-by-fn"; }
 setv foo

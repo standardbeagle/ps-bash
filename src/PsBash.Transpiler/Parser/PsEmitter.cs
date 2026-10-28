@@ -4264,7 +4264,7 @@ public static partial class PsEmitter
         // (`cmd /c`, `robocopy /e`, `taskkill /f`), never a drive. Like MSYS, only `/x/...` is
         // converted; `cd /c` (the one place a bare root is unambiguous) opts in.
         bool bareSwitch = !allowBareDriveRoot && path.Length == 2 && path[0] == '/';
-        if (!bareSwitch && UnixPathTranslationEnabled && WindowsPath.TryMapUnixDrivePath(path, out windowsPath))
+        if (!bareSwitch && !_operandsAreText && UnixPathTranslationEnabled && WindowsPath.TryMapUnixDrivePath(path, out windowsPath))
             return true;
         windowsPath = path;
         return false;
@@ -4624,7 +4624,7 @@ public static partial class PsEmitter
     private static bool TryEmitTmpRootedWord(ImmutableArray<WordPart> parts, out string emitted)
     {
         emitted = "";
-        if (!TryStripTmpPrefix(parts, out var rest))
+        if (_operandsAreText || !TryStripTmpPrefix(parts, out var rest))
             return false;
         foreach (var p in rest)
             if (p is WordPart.ProcessSub or WordPart.TildeSub or WordPart.BracedTuple or WordPart.BracedRange)
@@ -4646,7 +4646,7 @@ public static partial class PsEmitter
     private static bool TryEmitTmpBraceWord(ImmutableArray<WordPart> parts, out string emitted)
     {
         emitted = "";
-        if (!TryStripTmpPrefix(parts, out var rest))
+        if (_operandsAreText || !TryStripTmpPrefix(parts, out var rest))
             return false;
         // The stripped prefix must have been BARE literal text (a quoted `/tmp/` brace word is
         // not brace-expanded in bash).
@@ -5265,7 +5265,7 @@ public static partial class PsEmitter
         // (which crashed cmdlets with "Value cannot be null"). The literal /dev/null flows to the
         // runtime, where BashFileSystem.OpenRead (via FileSystemHelpers.IsNullDevice) serves it
         // from the OS-native null device as empty.
-        if (value.StartsWith("/tmp/"))
+        if (value.StartsWith("/tmp/") && !_operandsAreText)
             return PsBuild.TempPath(value[5..]);
         if (TryTranslateMsysDrivePath(value, out var translated))
             return translated;
@@ -8910,11 +8910,30 @@ public static partial class PsEmitter
         return value;
     }
 
+    /// <summary>Set while the operands of a pure string-manipulation command are emitted: they are text, not filesystem paths.</summary>
+    [ThreadStatic]
+    private static bool _operandsAreText;
+
     private static string EmitPassthrough(
         string cmdlet,
         ImmutableArray<CompoundWord> args,
         IReadOnlySet<string>? forceQuoteFlags = null,
         string cmdletSwitch = "")
+    {
+        // `dirname /x/y/z` and `basename /a/b` only cut a string: rewriting `/x/y` to `X:\y` (PSBASH_UNIX_PATHS) changed the answer.
+        if (cmdlet is not ("Invoke-BashDirname" or "Invoke-BashBasename"))
+            return EmitPassthroughCore(cmdlet, args, forceQuoteFlags, cmdletSwitch);
+        bool prior = _operandsAreText;
+        _operandsAreText = true;
+        try { return EmitPassthroughCore(cmdlet, args, forceQuoteFlags, cmdletSwitch); }
+        finally { _operandsAreText = prior; }
+    }
+
+    private static string EmitPassthroughCore(
+        string cmdlet,
+        ImmutableArray<CompoundWord> args,
+        IReadOnlySet<string>? forceQuoteFlags,
+        string cmdletSwitch)
     {
         if (args.IsEmpty)
             return cmdlet + cmdletSwitch;
