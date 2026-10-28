@@ -933,4 +933,20 @@ public class BashTranspilerReviewRegressionTests
     [InlineData("[ \\( -z foo \\) ]")]
     public void Transpile_BracketEscapedParens_AreGroupingNotStrings(string script)
         => Assert.DoesNotContain("'`('", BashTranspiler.Transpile(script));
+
+    // Oracle: `set -u -- x y z` and `set -o errexit a b c` apply the options AND assign the parameters.
+    [Theory]
+    [InlineData("set -u -- x y z", "'x', 'y', 'z'")]
+    [InlineData("set -o errexit a b c", "'a', 'b', 'c'")]
+    public void Transpile_SetOptionsThenPositionals_AppliesBoth(string script, string positional)
+    {
+        var ps = BashTranspiler.Transpile(script);
+        Assert.Contains("BashPositional = @(" + positional + ")", ps);
+        Assert.DoesNotContain("'--'", ps);
+    }
+
+    // Oracle: `set -o NOSUCH` reports "invalid option name" and returns 1 at run time; it is not a transpile failure.
+    [Fact]
+    public void Transpile_SetUnknownLongOption_IsARuntimeError()
+        => Assert.Contains("set: NOSUCH: invalid option name", BashTranspiler.Transpile("set -o NOSUCH || true"));
 }

@@ -11,7 +11,6 @@ set -o STRICT || true # unknown option
 echo hello
 ## stdout: hello
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-set builtin-set (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### set with both options and argv
@@ -21,7 +20,6 @@ false
 echo done
 ## stdout: a b c
 ## status: 1
-## XFAIL ps-bash gap-oils-builtin-set builtin-set (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### nounset with "$@"
@@ -30,7 +28,6 @@ set -u  # shouldn't touch argv
 echo "$@"
 ## stdout: a b c
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-set builtin-set (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### set -u -- clears argv
@@ -41,7 +38,6 @@ echo "$@"
 
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-set builtin-set (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### set -u -- x y z
@@ -50,7 +46,6 @@ set -u -- x y z
 echo "$@"
 ## stdout: x y z
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-set builtin-set (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### reset option with long flag

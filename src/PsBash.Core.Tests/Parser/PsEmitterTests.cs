@@ -4918,8 +4918,6 @@ public class PsEmitterTests
     [InlineData("set -o \"$option\"")]
     [InlineData("set -n")]
     [InlineData("set -o noexec")]
-    [InlineData("set -o unknown")]
-    [InlineData("set -e -- value")]
     public void Transpile_SetUnsupportedSafetyOption_RefusesBeforeExecution(string bash)
     {
         var error = Assert.Throws<ParseException>(() => PsEmitter.Transpile(bash + "; echo unsafe"));

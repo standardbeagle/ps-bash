@@ -3903,10 +3903,74 @@ public static partial class PsEmitter
         return kept;
     }
 
+    // Leading options followed by positional parameters (`set -o errexit a b c`, `set -u -- x y z`):
+    // optEnd = words that are options, posStart = first positional word (after any `--`).
+    private static bool TrySplitOptionsFromPositionals(List<string?> args, out int optEnd, out int posStart)
+    {
+        optEnd = posStart = 0;
+        int i = 0;
+        while (i < args.Count)
+        {
+            var a = args[i];
+            if (a is null) return false;
+            if (a == "--") { optEnd = i; posStart = i + 1; return optEnd > 0; }
+            if (a.Length > 1 && (a[0] == '-' || a[0] == '+'))
+            {
+                i += a.EndsWith('o') ? 2 : 1;
+                continue;
+            }
+            optEnd = posStart = i;
+            return optEnd > 0;
+        }
+        return false;
+    }
+
+    private static string EmitSetPositionals(List<CompoundWord> positionalWords)
+    {
+        if (positionalWords.Count == 0)
+            return "$global:BashPositional = @()";
+        else
+        {
+            // Quote each element so that bare literals like `a`, `b`, `c`
+            // are treated as strings, not variable/command references in PS.
+            // `set -- *.txt`: a glob word expands into zero or more parameters, which the comma
+            // form cannot splice -- such a list is built as `@( item; item; ... )` instead.
+            bool anyGlob = positionalWords.Any(IsUnquotedSplitWord);
+            var items = string.Join(anyGlob ? "; " : ", ", positionalWords.Select(w =>
+            {
+                if (anyGlob && IsUnquotedSplitWord(w))
+                    return EmitUnquotedSplitWordArray(w);
+                var emitted = EmitWord(w);
+                // Already quoted (starts with ' or "), a variable ($), subexpr ((), or array (@): pass through.
+                if (emitted.Length > 0 && emitted[0] is '\'' or '"' or '$' or '(' or '@')
+                    return emitted;
+                // Bare literal — wrap in single quotes.
+                return PsBuild.SingleQuote(emitted);
+            }));
+            return $"$global:BashPositional = @({items})";
+    }
+    }
+
+    // `set -o NAME` names bash knows (the rest are "invalid option name").
+    private static readonly HashSet<string> BashOptionNames = new(StringComparer.Ordinal)
+    {
+        "allexport", "braceexpand", "emacs", "errexit", "errtrace", "functrace", "hashall", "histexpand", "history",
+        "ignoreeof", "interactive-comments", "keyword", "monitor", "noclobber", "noexec", "noglob", "nolog", "notify",
+        "nounset", "onecmd", "physical", "pipefail", "posix", "privileged", "verbose", "vi", "xtrace",
+    };
+
     private static string? EmitSet(Command.Simple cmd, List<string?>? argsOverride = null)
     {
         string? specialResult = null;
         var literalArgs = argsOverride ?? cmd.Words.Skip(1).Select(TryGetStaticArgValue).ToList();
+        // `set -o errexit a b c` / `set -u -- x`: leading options, then positional parameters. Apply the
+        // options first, then assign the rest exactly as `set -- rest...` would.
+        if (argsOverride is null && TrySplitOptionsFromPositionals(literalArgs, out int optEnd, out int posStart))
+        {
+            var optText = EmitSet(cmd with { Words = cmd.Words.Take(1 + optEnd).ToImmutableArray() });
+            var positionalText = EmitSetPositionals(cmd.Words.Skip(1 + posStart).ToList());
+            return (optText is null ? "" : optText + "; ") + positionalText;
+        }
         if (literalArgs.Count > 0)
         {
             var stripped = StripInertSetOptions(literalArgs);
@@ -3934,6 +3998,10 @@ public static partial class PsEmitter
             (optionWords.Any(a => a is "-o" or "+o") && literalArgs.Count != 2) ||
             (optionWords.Any(a => a?.StartsWith('+') == true) && optionWords.Count > 1))
             throw new ParseException("set: combined shell option forms are not supported; use separate set commands", 1, 1, "shell-option");
+        // `set -o NOSUCH` is a run-time error in bash (status 1, the script goes on), not a refusal.
+        for (int i = 0; i + 1 < literalArgs.Count && literalArgs[i] != "--"; i++)
+            if (literalArgs[i] is "-o" or "+o" && literalArgs[i + 1] is { } optName && !BashOptionNames.Contains(optName))
+                return $"Write-Error {PsBuild.SingleQuote($"set: {optName}: invalid option name")} -ErrorAction Continue; {PsBuild.SetStatus(1)}";
         // Refuse every unsupported option before any part of the script runs.
         for (int i = 0; i < literalArgs.Count && literalArgs[i] != "--"; i++)
         {
@@ -3954,29 +4022,9 @@ public static partial class PsEmitter
         }
         if (dashDashIdx >= 0)
         {
-            var positionalWords = cmd.Words.Skip(1 + dashDashIdx + (implicitDashDash ? 0 : 1)).ToList();
-            if (positionalWords.Count == 0)
-                specialResult = "$global:BashPositional = @()";
-            else
-            {
-                // Quote each element so that bare literals like `a`, `b`, `c`
-                // are treated as strings, not variable/command references in PS.
-                // `set -- *.txt`: a glob word expands into zero or more parameters, which the comma
-                // form cannot splice -- such a list is built as `@( item; item; ... )` instead.
-                bool anyGlob = positionalWords.Any(IsUnquotedSplitWord);
-                var items = string.Join(anyGlob ? "; " : ", ", positionalWords.Select(w =>
-                {
-                    if (anyGlob && IsUnquotedSplitWord(w))
-                        return EmitUnquotedSplitWordArray(w);
-                    var emitted = EmitWord(w);
-                    // Already quoted (starts with ' or "), a variable ($), subexpr ((), or array (@): pass through.
-                    if (emitted.Length > 0 && emitted[0] is '\'' or '"' or '$' or '(' or '@')
-                        return emitted;
-                    // Bare literal — wrap in single quotes.
-                    return PsBuild.SingleQuote(emitted);
-                }));
-                specialResult = $"$global:BashPositional = @({items})";
-            }
+            // The `--` position comes from the ORIGINAL words: an inert/runtime option may have been dropped from literalArgs.
+            int dashWord = implicitDashDash ? -1 : cmd.Words.Select((w, k) => (w, k)).Skip(1).First(t => GetLiteralValue(t.w) == "--").k;
+            specialResult = EmitSetPositionals(cmd.Words.Skip(implicitDashDash ? 1 : dashWord + 1).ToList());
         }
         else
         {
