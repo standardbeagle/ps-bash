@@ -31,7 +31,7 @@ public sealed partial class BashParser
             Advance(); // consume the keyword
 
             if (ParseDeclarationPairs() is { } pairs)
-                return new Command.ShAssignment(pairs, IsLocal: isLocal, IsExport: !isLocal);
+                return new Command.ShAssignment(pairs, IsLocal: isLocal, IsExport: !isLocal, IsReadonly: isLocal && _declSawReadonly);
 
             // No assignment or name followed — rewind and parse as a normal command
             // so forms like `export -p` still reach the general path.
@@ -280,8 +280,12 @@ public sealed partial class BashParser
     /// not model bash variable attributes, so dropping the flag is the honest mapping;
     /// the initializer it decorates is what carries meaning.
     /// </summary>
+    /// <summary>Set by <see cref="ParseDeclarationPairs"/> when an attribute flag of the declaration carried `r`.</summary>
+    private bool _declSawReadonly;
+
     private ImmutableArray<Assignment>? ParseDeclarationPairs()
     {
+        _declSawReadonly = false;
         var pairs = ImmutableArray.CreateBuilder<Assignment>();
 
         while (Peek().Kind is BashTokenKind.AssignmentWord or BashTokenKind.Word
@@ -312,6 +316,7 @@ public sealed partial class BashParser
             // start with '-', so leaving it to the name branch keeps prior behavior.
             if (value.Length > 1 && value[0] == '-')
             {
+                if (value[1] != '-' && value.Contains('r')) _declSawReadonly = true;
                 Advance();
                 continue;
             }

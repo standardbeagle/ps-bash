@@ -1405,6 +1405,7 @@ public static class PsEmitter
         var priorDyn = _dynLocals;
         _dynLocals = dynLocals;
         var priorFunctionLocals = _functionLocalNames;
+        var priorFunctionReadonly = _readonlyVars is null ? null : new HashSet<string>(_readonlyVars, StringComparer.Ordinal);
         _functionLocalNames = new HashSet<string>(localVars.Concat(dynLocals), StringComparer.Ordinal);
         var vars = _loopVars ??= new HashSet<string>();
         var added = new List<string>();
@@ -1470,6 +1471,7 @@ public static class PsEmitter
         {
             _dynLocals = priorDyn;
             _functionLocalNames = priorFunctionLocals;
+            if (priorFunctionReadonly is not null) _readonlyVars = priorFunctionReadonly;
             _loopLabels = outerLabels;
             foreach (var v in added) vars.Remove(v);
         }
@@ -2780,6 +2782,8 @@ public static class PsEmitter
                 continue;
             }
 
+            // `local -r x=1`: later writes to x in this function are refused (the set is restored when the function ends).
+            if (cmd.IsLocal && cmd.IsReadonly) _readonlyVars?.Add(pair.Name);
             if (!cmd.IsLocal && !cmd.IsExport && _readonlyVars?.Contains(pair.Name) == true)
             {
                 sb.Append("Write-Error ").Append(PsBuild.SingleQuote($"ps-bash: {pair.Name}: readonly variable"))

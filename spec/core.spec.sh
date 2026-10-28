@@ -718,3 +718,11 @@ command -v sh >/dev/null && echo found
 item
 found
 ## END
+#### local -r refuses later writes inside the function only
+f() { local -r x=1; x=2 2>/dev/null; echo "in: $x"; }
+f
+x=9; echo "out: $x"
+## STDOUT:
+in: 1
+out: 9
+## END

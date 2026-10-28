@@ -609,4 +609,14 @@ public class BashTranspilerReviewRegressionTests
         var ex = Record.Exception(() => BashTranspiler.Transpile("echo ${x:-\"}\"}"));
         Assert.True(ex is null or ParseException, $"unexpected {ex?.GetType().Name}");
     }
+
+    // bash refuses writes to a `local -r` variable inside the function; outside it the name is free again.
+    [Fact]
+    public void Transpile_LocalReadonly_RefusesLaterWritesOnlyInsideTheFunction()
+    {
+        var ps = BashTranspiler.Transpile("f() { local -r x=1; x=2; }; f; x=9");
+        Assert.Contains("x: readonly variable", ps);
+        Assert.Equal(1, System.Text.RegularExpressions.Regex.Matches(ps, "readonly variable").Count);
+        Assert.Contains("$env:x = \"9\"", ps);
+    }
 }

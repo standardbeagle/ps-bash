@@ -51,7 +51,8 @@ public abstract record Command : BashNode
     public sealed record ShAssignment(
         ImmutableArray<Assignment> Pairs,
         bool IsLocal = false,
-        bool IsExport = false) : Command;
+        bool IsExport = false,
+        bool IsReadonly = false) : Command;
 
     /// <summary>
     /// An if/elif/else statement.
