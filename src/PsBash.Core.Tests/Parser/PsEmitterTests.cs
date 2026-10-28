@@ -1538,7 +1538,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("echo $@");
 
-        Assert.Equal("Invoke-BashEcho $(if ($global:BashPositional) { $global:BashPositional } else { $args })", result);
+        Assert.Contains("| ConvertTo-BashWords", result);
     }
 
     [Fact]
@@ -1778,14 +1778,14 @@ public class PsEmitterTests
     public void Transpile_BracedParamAt_EmitsArgs()
     {
         var result = PsEmitter.Transpile("echo ${@}");
-        Assert.Equal("Invoke-BashEcho $(if ($global:BashPositional) { $global:BashPositional } else { $args })", result);
+        Assert.Contains("| ConvertTo-BashWords", result);
     }
 
     [Fact]
     public void Transpile_BracedParamStar_EmitsArgs()
     {
         var result = PsEmitter.Transpile("echo ${*}");
-        Assert.Equal("Invoke-BashEcho $(if ($global:BashPositional) { $global:BashPositional } else { $args })", result);
+        Assert.Contains("| ConvertTo-BashWords", result);
     }
 
     [Fact]
@@ -1861,7 +1861,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("echo $*");
 
-        Assert.Equal("Invoke-BashEcho $(if ($global:BashPositional) { $global:BashPositional } else { $args })", result);
+        Assert.Contains("| ConvertTo-BashWords", result);
     }
 
     [Fact]
@@ -5916,13 +5916,13 @@ public class PsEmitterTests
     }
 
     [Fact]
-    public void Transpile_SpecialParamArg_NotSplatByRc7()
+    public void Transpile_UnquotedPositionalList_SplitsEachParameterOnIfs()
     {
-        // $@ has its own dedicated expansion and must not be routed through the
-        // RC-7 word-split splat.
+        // Unquoted $@ is word-split like any expansion (IFS='' keeps each parameter whole), through
+        // the splat so a custom IFS and globbing apply per parameter.
         var result = PsEmitter.Transpile("echo $@");
 
-        Assert.DoesNotContain("__bashsplat", result);
+        Assert.Contains("| ConvertTo-BashWords", result);
     }
 
     [Fact]

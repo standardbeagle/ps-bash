@@ -853,4 +853,14 @@ public class BashTranspilerReviewRegressionTests
     [Fact]
     public void Transpile_DoubleBracketAndBindsTighterThanOr()
         => Assert.Contains("-or ((", BashTranspiler.Transpile("[[ -n a || -n b && -n c ]]"));
+
+    // Oracle: `set a b c` (no `--`) sets $1 $2 $3 exactly like `set -- a b c`.
+    [Fact]
+    public void Transpile_SetWithoutDashDash_SetsPositionalParameters()
+        => Assert.Contains("BashPositional = @('a', 'b', 'c')", BashTranspiler.Transpile("set a b c"));
+
+    // Oracle: unquoted $@ / $* split each parameter on IFS (IFS='' keeps "b c" whole) — never a bare array argument.
+    [Fact]
+    public void Transpile_UnquotedPositionalList_IsSplitPerParameter()
+        => Assert.Contains("| ConvertTo-BashWords", BashTranspiler.Transpile("printf '[%s]\\n' $@"));
 }

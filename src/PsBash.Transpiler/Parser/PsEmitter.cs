@@ -979,7 +979,8 @@ public static partial class PsEmitter
             // "$@" as a double-quoted string that $OFS-joins the array into a
             // single space-separated word, so the loop would run once over the
             // whole join. Emit the positional array directly instead.
-            if (IsPositionalAllWord(list[0]))
+            // Unquoted $@ / $* splits each parameter again on IFS, so it takes the split path below.
+            if (IsPositionalAllWord(list[0]) && !IsUnquotedPositionalListWord(list[0]))
                 return PsBuild.BuildPositionalExpansion("@");
 
             // `for x in "${arr[@]}"` (and bare ${arr[@]}/${arr[*]}) iterates per
@@ -1015,7 +1016,7 @@ public static partial class PsEmitter
 
             // `for f in *.txt`: pathname expansion by the shell (relative names, no hidden files, sorted;
             // an unmatched pattern is the one literal item, nullglob off) -- see EmitGlobPatternExpr.
-            if (IsGlobWord(list[0]) || IsUnquotedDefaultAltWord(list[0]))
+            if (IsGlobWord(list[0]) || IsUnquotedDefaultAltWord(list[0]) || IsUnquotedPositionalListWord(list[0]))
                 return EmitUnquotedSplitWordArray(list[0]);
 
             var single = EmitWord(list[0]);
@@ -3896,6 +3897,11 @@ public static partial class PsEmitter
             var otherText = EmitSet(cmd, otherOptions);
             return otherText is null ? setFlag + "; " + PsBuild.SetStatus(0) : setFlag + "; " + otherText;
         }
+        // `set a b c` / `set $@ $res`: a first word that is not an option starts the positional
+        // parameters, exactly like `set -- a b c`.
+        bool implicitDashDash = argsOverride is null && literalArgs.Count > 0
+            && ((literalArgs[0] is null && IsUnquotedPositionalListWord(cmd.Words[1])) || (literalArgs[0] is not null &&!literalArgs[0]!.StartsWith('-') && !literalArgs[0]!.StartsWith('+')));
+        if (implicitDashDash) literalArgs = new List<string?>(literalArgs.Prepend("--"));
         int dashDashIdx = literalArgs.IndexOf("--");
         var optionWords = literalArgs.TakeWhile(a => a != "--" &&
             (a is null || a.StartsWith('-') || a.StartsWith('+'))).ToList();
@@ -3925,7 +3931,7 @@ public static partial class PsEmitter
         }
         if (dashDashIdx >= 0)
         {
-            var positionalWords = cmd.Words.Skip(1 + dashDashIdx + 1).ToList();
+            var positionalWords = cmd.Words.Skip(1 + dashDashIdx + (implicitDashDash ? 0 : 1)).ToList();
             if (positionalWords.Count == 0)
                 specialResult = "$global:BashPositional = @()";
             else
@@ -6083,8 +6089,13 @@ public static partial class PsEmitter
     /// <summary>A word whose expansion is word-split (and elided when empty): see RC-7 and
     /// <see cref="IsPureUnquotedCommandSubWord"/>.</summary>
     private static bool IsUnquotedSplitWord(CompoundWord word)
-        => IsPureUnquotedVarWord(word) || IsPureUnquotedCommandSubWord(word) || IsGlobWord(word)
+        => IsPureUnquotedVarWord(word) || IsUnquotedPositionalListWord(word) || IsPureUnquotedCommandSubWord(word) || IsGlobWord(word)
            || IsBraceGlobWord(word) || IsArrayValuedWord(word) || IsUnquotedDefaultAltWord(word);
+
+    /// <summary>Bare <c>$@</c> / <c>$*</c> (also <c>${@}</c>): every parameter, each split again on IFS and globbed.</summary>
+    private static bool IsUnquotedPositionalListWord(CompoundWord word)
+        => word.Parts is [WordPart.SimpleVarSub { Name: "@" or "*" }]
+           or [WordPart.BracedVarSub { Name: "@" or "*", Suffix: null }];
 
     /// <summary>The suffix of <c>${#v}</c> / <c>${#a[@]}</c> / <c>${#a[0]}</c>: a number, never split.</summary>
     private static bool IsLengthSuffix(string s)
@@ -6098,6 +6109,8 @@ public static partial class PsEmitter
     private static bool IsUnquotedDefaultAltWord(CompoundWord word)
         => word.Parts is [WordPart.BracedVarSub { Suffix: { } s, Name: var n }]
            && (IsOrdinaryVarName(n) && n is not ("@" or "*") || IsPositionalListDefaultAlt(n, s))
+           // `${v:-"A B"}`: the quoted default is one word and is not split again.
+           && !(s.Length > 1 && s[0] is ':' or '-' or '+' && s.IndexOf('"') > 0)
            && (s.StartsWith(":-") || s.StartsWith(":+") || (s.Length > 0 && s[0] is '-' or '+')
                // Trim / replace / slice / case-change results are split like any other unquoted expansion:
                // `${s#*o}` of "Hello World" is the two words " World" -> World, not one argument with its space.
@@ -6166,6 +6179,9 @@ public static partial class PsEmitter
             : IsUnquotedArrayAllWord(word)
             // ConvertTo-BashWords takes ONE string: the elements joined by a space split back apart on IFS.
             ? PsBuild.WordSplitArray("(@(" + EmitBracedVar((WordPart.BracedVarSub)word.Parts[0]) + ") -join ' ')")
+            : IsUnquotedPositionalListWord(word)
+            // Each parameter is split on IFS on its own (IFS='' keeps `b c` whole) and globbed.
+            ? "@(" + PsBuild.BuildPositionalExpansion("@") + " | ConvertTo-BashWords)"
             : IsBraceGlobWord(word)
             // `*.{c,h}` / `sub/{a,b}*`: brace expansion comes FIRST, then every resulting word globs.
             ? "@(" + EmitBraceExpandedWord(word.Parts) + " | ConvertTo-BashGlob)"

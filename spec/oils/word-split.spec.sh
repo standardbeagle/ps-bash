@@ -266,7 +266,6 @@ echo ["$*"]
 [abc]
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-word-split word-split (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Unset IFS (regression for bug)
@@ -275,7 +274,6 @@ unset IFS
 echo ["$*"]
 ## stdout: [a b c]
 ## status: 0
-## XFAIL ps-bash gap-oils-word-split word-split (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### IFS=o (regression for bug)
@@ -367,7 +365,6 @@ printf '[%s]\n' $*
 [b c]
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-word-split word-split (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### IFS='' with ${a[@]} and ${a[*]} (bug #627)
@@ -503,7 +500,6 @@ sum 12 30 # fails with "fatal: Undefined variable '2'" on res=$(($1 + $2))
 12 + 30 = 42
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-word-split word-split (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Unicode in IFS
