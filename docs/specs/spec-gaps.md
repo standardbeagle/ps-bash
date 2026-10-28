@@ -258,6 +258,6 @@ regression tests:
 
 Still open from that pass (bash is the oracle): `set -x` prints no `+ cmd` trace lines (it drives `Set-PSDebug`); `trap ... EXIT`
 inside `( )` and `trap ... RETURN` never fire; `declare -p` omits the `-i` attribute and
-the `x` of a plain `export`; `declare -f` prints the emitted PowerShell, not the bash source; `PIPESTATUS` right after an `if ... fi` block is stale; sparse arrays are padded, not sparse (`${#a[@]}` counts the gap, `unset a[i]` leaves a hole); `local -n r=$1`
+the `x` of a plain `export`; `declare -f` prints the emitted PowerShell, not the bash source; `PIPESTATUS` right after an `if ... fi` block is stale; `$LINENO` / `$BASH_COMMAND` inside a `trap ... ERR` action give line 1 / empty (the action is transpiled apart from the script; commands carry no source line); sparse arrays are padded, not sparse (`${#a[@]}` counts the gap, `unset a[i]` leaves a hole); `local -n r=$1`
 (a nameref whose target is dynamic) does not write through; `BASH_VERSION` / `BASH_VERSINFO` now claim
 bash 5.2 compatibility (like a User-Agent string); the real version is `$PsBashVersion`.

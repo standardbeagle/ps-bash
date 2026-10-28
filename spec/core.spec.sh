@@ -726,3 +726,14 @@ x=9; echo "out: $x"
 in: 1
 out: 9
 ## END
+
+#### set accepts -E and the other options that change nothing here
+set -eEuo pipefail
+set -E
+set -o errtrace
+set +o functrace
+set -Eeu
+echo ok
+## STDOUT:
+ok
+## END

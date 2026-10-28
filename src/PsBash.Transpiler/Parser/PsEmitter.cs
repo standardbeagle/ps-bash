@@ -3714,10 +3714,41 @@ public static class PsEmitter
         }
         return effects.Count > 0;
     }
+    /// <summary>
+    /// Options that change nothing ps-bash models (errtrace, functrace, histexpand, braceexpand, hashall, monitor):
+    /// `set -eEuo pipefail` is the standard script preamble, so they are accepted and dropped rather than refused.
+    /// </summary>
+    private static List<string?> StripInertSetOptions(List<string?> args)
+    {
+        var kept = new List<string?>();
+        for (int i = 0; i < args.Count; i++)
+        {
+            var a = args[i];
+            if (a is null || a == "--") { for (; i < args.Count; i++) kept.Add(args[i]); break; }
+            if (a is "-o" or "+o" && i + 1 < args.Count && args[i + 1] is "errtrace" or "functrace" or "histexpand" or "braceexpand" or "hashall" or "monitor")
+            { i++; continue; }
+            if (a.Length >= 2 && (a[0] == '-' || a[0] == '+') && a[1] != '-' && a.Skip(1).All(char.IsAsciiLetter))
+            {
+                var letters = new string(a.Skip(1).Where(c => c is not ('E' or 'T' or 'H' or 'B' or 'h' or 'm')).ToArray());
+                if (letters.Length == 0) continue;
+                kept.Add(a[0] + letters);
+                continue;
+            }
+            kept.Add(a);
+        }
+        return kept;
+    }
+
     private static string? EmitSet(Command.Simple cmd, List<string?>? argsOverride = null)
     {
         string? specialResult = null;
         var literalArgs = argsOverride ?? cmd.Words.Skip(1).Select(TryGetStaticArgValue).ToList();
+        if (literalArgs.Count > 0)
+        {
+            var stripped = StripInertSetOptions(literalArgs);
+            if (stripped.Count == 0) return PsBuild.SetStatus(0);
+            literalArgs = stripped;
+        }
         if (argsOverride is null && TrySplitRuntimeOptions(literalArgs, out var runtimeEffects, out var otherOptions))
         {
             var setFlag = string.Join("; ", runtimeEffects.Select(e => "$global:" + e.Flag + " = " + (e.On ? "$true" : "$false")));

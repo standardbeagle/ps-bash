@@ -619,4 +619,23 @@ public class BashTranspilerReviewRegressionTests
         Assert.Equal(1, System.Text.RegularExpressions.Regex.Matches(ps, "readonly variable").Count);
         Assert.Contains("$env:x = \"9\"", ps);
     }
+
+    // `set -eEuo pipefail` is the standard preamble; options that change nothing here must not abort the transpile.
+    [Theory]
+    [InlineData("set -eEuo pipefail")]
+    [InlineData("set -E")]
+    [InlineData("set -o errtrace")]
+    [InlineData("set +o functrace")]
+    [InlineData("set -Eeu")]
+    public void Transpile_SetWithInertOptions_IsAccepted(string script)
+    {
+        var ex = Record.Exception(() => BashTranspiler.Transpile(script + "; echo ok"));
+        Assert.Null(ex);
+    }
+
+    [Fact]
+    public void Transpile_SetErrtraceWithErrexit_StillEnablesErrexit()
+    {
+        Assert.Contains("__BashErrexit = $true", BashTranspiler.Transpile("set -eE"));
+    }
 }
