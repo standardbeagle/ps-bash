@@ -5675,7 +5675,7 @@ public static partial class PsEmitter
     private static string EmitArithmeticInvocation(ArithmeticSyntax syntax)
     {
         string expr = syntax.Source.Trim();
-        var fragments = BuildArithFragments(expr);
+        var fragments = BuildArithFragments(expr, textual: syntax.Root is ArithmeticExpr.Deferred);
         string argument = fragments is null
             ? PsBuild.SingleQuote(expr)
             : $"('' + {string.Join(" + ", fragments)})";
@@ -5698,7 +5698,7 @@ public static partial class PsEmitter
     /// single-quoted literal for the evaluator to resolve. Returns <c>null</c> when no span
     /// needs substituting, so the common case still emits one plain quoted literal.
     /// </summary>
-    private static List<string>? BuildArithFragments(string expr)
+    private static List<string>? BuildArithFragments(string expr, bool textual = false)
     {
         List<string>? parts = null;
         int last = 0;
@@ -5731,7 +5731,7 @@ public static partial class PsEmitter
                 replacement = PositionalRefExpr(key);
             }
             else if (c == '$' && i + 1 < expr.Length && expr[i + 1] == '{' && FindBraceEnd(expr, i + 1) is var braceEnd and > 0
-                     && !expr[(i + 2)..braceEnd].All(ch => char.IsAsciiLetterOrDigit(ch) || ch == '_')) // ${x}: the evaluator resolves a plain name
+                     && (textual || !expr[(i + 2)..braceEnd].All(ch => char.IsAsciiLetterOrDigit(ch) || ch == '_'))) // ${x}: the evaluator resolves a plain name, unless the text is expanded first
             {
                 // `${a[i]}` / `${m[$k]:-0}` / `${x:-7}`: a full parameter expansion, expanded by the shell
                 // BEFORE the arithmetic is evaluated (bash expands, then evaluates). An empty result is 0.
@@ -5740,7 +5740,15 @@ public static partial class PsEmitter
                     ? EmitWord(echoCmd.Words[1])
                     : null;
                 if (expansion is null) continue;
-                replacement = ZeroDefault(expansion);
+                replacement = textual ? expansion : ZeroDefault(expansion);
+            }
+            else if (textual && c == '$' && i + 1 < expr.Length && (char.IsAsciiLetter(expr[i + 1]) || expr[i + 1] == '_'))
+            {
+                // `f$x`: in a deferred expression every `$name` is replaced by its text before evaluation.
+                int end = i + 1;
+                while (end < expr.Length && (char.IsAsciiLetterOrDigit(expr[end]) || expr[end] == '_')) end++;
+                spanEnd = end;
+                replacement = EmitSimpleVar(expr[(i + 1)..end]);
             }
             else if (char.IsAsciiLetter(c) && (i == 0 || !(char.IsAsciiLetterOrDigit(expr[i - 1]) || expr[i - 1] is '_' or '$' or '{'))
                      && TryMatchArithDynamicSpecial(expr, i, out int nameLen, out string dynamicExpr))

@@ -47,7 +47,6 @@ foo=1; echo $((foo+1))bar$(($foo+1))
 echo $((1 + $(echo 1)${undefined:-3}))
 ## stdout: 14
 ## status: 0
-## XFAIL ps-bash gap-oils-arith arith (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Constant with quotes like '1'
@@ -56,7 +55,6 @@ echo $((1 + $(echo 1)${undefined:-3}))
 echo $(('1' + 2))
 ## stdout:
 ## status: 1
-## XFAIL ps-bash gap-oils-arith arith (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Arith sub within arith sub
@@ -271,7 +269,6 @@ echo $((- a + + b))
 echo $((1 + 2.3))
 ## stdout:
 ## status: 1
-## XFAIL ps-bash gap-oils-arith arith (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Array indexing in arith
@@ -306,7 +303,6 @@ base=16
 echo $(( ${base}#a ))
 ## stdout: 10
 ## status: 0
-## XFAIL ps-bash gap-oils-arith arith (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Octal constant
@@ -320,7 +316,6 @@ zero=0
 echo $(( ${zero}11 ))
 ## stdout: 9
 ## status: 0
-## XFAIL ps-bash gap-oils-arith arith (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Dynamic hex constants
@@ -328,7 +323,6 @@ zero=0
 echo $(( ${zero}xAB ))
 ## stdout: 171
 ## status: 0
-## XFAIL ps-bash gap-oils-arith arith (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Hex constant with capital X
@@ -343,7 +337,6 @@ x=oo
 echo $(( foo + f$x + 1 ))
 ## stdout: 11
 ## status: 0
-## XFAIL ps-bash gap-oils-arith arith (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Recursive name evaluation is a result of runtime parse/eval
@@ -399,7 +392,6 @@ echo $a
 #   dash doesn't implement assignment
 ## stdout: 9
 ## status: 0
-## XFAIL ps-bash gap-oils-arith arith (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Invalid LValue that looks like array
@@ -497,7 +489,6 @@ echo $(( a[1] ))
 echo $(( a[1][1] ))
 ## stdout: 2
 ## status: 1
-## XFAIL ps-bash gap-oils-arith arith (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### result of ArithSub -- array[0] decay
@@ -549,7 +540,6 @@ echo xbar=$xbar
 xbar=42
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-arith arith (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### array assignment with dynamic array name
@@ -561,7 +551,6 @@ echo 'xbar[5]='${xbar[5]}
 xbar[5]=42
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-arith arith (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### unary assignment with dynamic var name
@@ -574,7 +563,6 @@ echo xbar=$xbar
 xbar=43
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-arith arith (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### unary array assignment with dynamic var name
@@ -587,7 +575,6 @@ echo 'xbar[5]='${xbar[5]}
 xbar[5]=43
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-arith arith (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Dynamic parsing of arithmetic
@@ -791,7 +778,6 @@ status=1
 status=1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-arith arith (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 

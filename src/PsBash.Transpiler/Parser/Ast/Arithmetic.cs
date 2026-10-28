@@ -35,6 +35,9 @@ public abstract record ArithmeticExpr : BashNode
     public sealed record Conditional(ArithmeticExpr Condition, ArithmeticExpr WhenTrue, ArithmeticExpr WhenFalse) : ArithmeticExpr;
     public sealed record Assignment(string Name, ArithmeticAssignmentOp Op, ArithmeticExpr Value) : ArithmeticExpr;
     public sealed record Increment(string Name, int Delta, bool Prefix) : ArithmeticExpr;
+    /// <summary>An expression the static parser rejects (`${z}11`, `$(cmd)${v:-3}`, `1 + 2.3`): bash expands its text first and
+    /// evaluates it at run time, so the emitter substitutes the expansions and the evaluator reports any error then.</summary>
+    public sealed record Deferred(string Text) : ArithmeticExpr;
 }
 
 public enum ArithmeticUnaryOp { Plus, Negate, LogicalNot, BitwiseNot }

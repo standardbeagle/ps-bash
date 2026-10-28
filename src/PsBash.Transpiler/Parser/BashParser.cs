@@ -946,7 +946,7 @@ public sealed partial class BashParser
     }
 
     private static ArithmeticSyntax? ParseOptionalArithmetic(string source) =>
-        string.IsNullOrWhiteSpace(source) ? null : BashArithmeticParser.Parse(source);
+        string.IsNullOrWhiteSpace(source) ? null : BashArithmeticParser.ParseOrDefer(source);
 
     private Command.While ParseWhile()
     {
@@ -1236,7 +1236,7 @@ public sealed partial class BashParser
                 Advance(); // consume first )
                 Advance(); // consume second )
                 string expr = _input[exprStart..exprEnd];
-                return new Command.ArithCommand(BashArithmeticParser.Parse(expr));
+                return new Command.ArithCommand(BashArithmeticParser.ParseOrDefer(expr));
             }
 
             if (Peek().Kind == BashTokenKind.LParen) nestedDepth++;

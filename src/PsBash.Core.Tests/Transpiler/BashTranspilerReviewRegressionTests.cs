@@ -825,4 +825,19 @@ public class BashTranspilerReviewRegressionTests
     [Fact]
     public void Transpile_PatsubWithUnquotedVarBracketClass_UsesTheGlobEngine()
         => Assert.Contains("BashPattern]::ToRegex(", BashTranspiler.Transpile("p='[z-a]'; t=foo; echo ${t//$p/z}"));
+
+    // Oracle: bash expands the text first, then evaluates (`zero=0; echo $(( ${zero}11 ))` is octal 011 = 9).
+    [Fact]
+    public void Transpile_ArithWithAdjacentExpansion_SubstitutesTheTextBeforeEvaluating()
+    {
+        var ps = BashTranspiler.Transpile("zero=0\necho $(( ${zero}11 ))");
+        Assert.Contains("Invoke-BashArith ('' + ", ps);
+    }
+
+    // Oracle: bash reports a bad arithmetic expression when it RUNS (status 1) and keeps going; it is no parse error.
+    [Theory]
+    [InlineData("echo $(( 1 + 2.3 ))")]
+    [InlineData("echo $(( '1' + 2 ))")]
+    public void Transpile_ArithSyntaxError_IsDeferredToRunTime(string bash)
+        => Assert.Contains("Invoke-BashArith", BashTranspiler.Transpile(bash));
 }

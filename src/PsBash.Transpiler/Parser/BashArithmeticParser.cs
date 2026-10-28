@@ -34,6 +34,20 @@ public sealed class BashArithmeticParser
         return new ArithmeticSyntax(parser._source, root);
     }
 
+    /// <summary>Like <see cref="Parse"/>, but an expression the static grammar rejects becomes a <see cref="ArithmeticExpr.Deferred"/>
+    /// node (bash expands its text and reports any syntax error only when it runs).</summary>
+    public static ArithmeticSyntax ParseOrDefer(string? source)
+    {
+        try { return Parse(source); }
+        // The resource limits are not syntax errors: they must reach the caller (and its large-stack retry).
+        catch (BashArithmeticParseException ex) when (!ex.Message.Contains(NestingGuard.TooDeepMessage, StringComparison.Ordinal)
+                                                      && !ex.Message.Contains(NestingGuard.TooLongMessage, StringComparison.Ordinal))
+        {
+            string text = source ?? string.Empty;
+            return new ArithmeticSyntax(text, new ArithmeticExpr.Deferred(text));
+        }
+    }
+
     private Tok Current => _tokens[_position];
     private bool Accept(T kind) { if (Current.Kind != kind) return false; _position++; return true; }
     private void Expect(T kind) { if (!Accept(kind)) Error($"expected '{kind}'"); }
