@@ -3011,7 +3011,7 @@ public class PsEmitterTests
         // (( … )) condition) rather than the old naive </> string-replace, so the
         // full C operator set — including << / >> shifts — is honored. See
         // Transpile_ForArith_ShiftOperatorInCondition_NotShredded.
-        Assert.Equal("$__psbash_iter = 0; :__psbash_l0 for (${i} = $(Invoke-BashArith 'i=0'); ((Invoke-BashArith 'i<10') -ne 0); $null = Invoke-BashArith 'i++') { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; Invoke-BashEcho $i }", result);
+        Assert.Equal("$__psbash_iter = 0; :__psbash_l0 for (${i} = $(Invoke-BashArith 'i=0'); (@(Invoke-BashArith 'i<10') -ne 0); $null = Invoke-BashArith 'i++') { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; Invoke-BashEcho $i }", result);
     }
 
     // Regression: TranslateArithCondition string-replaced < and > unconditionally,

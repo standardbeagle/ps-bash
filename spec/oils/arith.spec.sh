@@ -399,7 +399,6 @@ echo $a
 echo "status=$?"
 ## stdout: status=1
 ## status: 0
-## XFAIL ps-bash gap-oils-arith arith (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Invalid LValue: two sets of brackets
@@ -409,7 +408,6 @@ echo "status=$?"
 #   dash doesn't implement assignment
 ## stdout: status=1
 ## status: 0
-## XFAIL ps-bash gap-oils-arith arith (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Operator Precedence
@@ -443,7 +441,6 @@ echo $(( -3 ** 2 ))
 echo $(( 2**-1 * 5 ))
 ## stdout:
 ## status: 1
-## XFAIL ps-bash gap-oils-arith arith (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Comment not allowed in the middle of multiline arithmetic
@@ -471,7 +468,6 @@ declare -a array=(1 2 3)
 echo $((array + 5))
 ## stdout: 6
 ## status: 0
-## XFAIL ps-bash gap-oils-arith arith (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Add integer to associative array (a[0] decay)
@@ -480,7 +476,6 @@ assoc[0]=42
 echo $((assoc + 5))
 ## stdout: 47
 ## status: 0
-## XFAIL ps-bash gap-oils-arith arith (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Double subscript
@@ -501,7 +496,6 @@ declared
 4
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-arith arith (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### result of ArithSub -- assoc[0] decay
@@ -589,7 +583,6 @@ true
 status=2
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-arith arith (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Dynamic parsing on empty string

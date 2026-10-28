@@ -1800,14 +1800,14 @@ public static partial class PsEmitter
     /// <see cref="EmitCondition"/> via <see cref="EmitArithConditionExpr"/>.
     /// </summary>
     private static string EmitArithCommand(Command.ArithCommand arith)
-        => PsBuild.SilentExitFromBool($"({EmitArithmeticInvocation(arith.Expr)}) -ne 0");
+        => PsBuild.SilentExitFromBool($"@({EmitArithmeticInvocation(arith.Expr)}) -ne 0");
 
     /// <summary>
     /// Boolean expression for <c>(( expr ))</c> used as an <c>if</c>/<c>while</c>
     /// condition: true iff the evaluated result is non-zero.
     /// </summary>
     private static string EmitArithConditionExpr(ArithmeticSyntax syntax)
-        => $"(({EmitArithmeticInvocation(syntax)}) -ne 0)";
+        => $"(@({EmitArithmeticInvocation(syntax)}) -ne 0)"; // a failed evaluation yields no value: false, status 1
 
     private static string EmitArithCommandLegacy(string expr)
     {

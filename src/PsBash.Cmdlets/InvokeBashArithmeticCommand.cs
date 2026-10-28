@@ -180,7 +180,15 @@ public sealed class InvokeBashArithmeticCommand : PSCmdlet
         {
             var variable = SessionState.PSVariable.Get(name);
             if (variable is not null)
-                return variable.Value?.ToString() ?? string.Empty;
+            {
+                // An array / associative array used as a plain name reads element 0 (`a=(1 2 3); $((a + 5))` is 6).
+                object? held = variable.Value is PSObject w ? w.BaseObject : variable.Value;
+                if (held is System.Collections.IDictionary dict)
+                    return dict.Contains("0") ? dict["0"]?.ToString() ?? "" : "";
+                if (held is System.Collections.IList list && held is not string)
+                    return list.Count > 0 ? list[0]?.ToString() ?? "" : "";
+                return held?.ToString() ?? string.Empty;
+            }
         }
         catch { /* not a readable PS variable in scope */ }
 
