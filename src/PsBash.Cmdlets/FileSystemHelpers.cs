@@ -515,6 +515,7 @@ internal static class FileSystemHelpers
     /// </summary>
     public static void DeleteDirectoryForce(string dir)
     {
+        StepOutOfDirectory(dir);
         try
         {
             Directory.Delete(dir, recursive: true);
@@ -526,6 +527,27 @@ internal static class FileSystemHelpers
             // and retries; a genuine failure resurfaces from the fallback.
             ForceDeleteDirectoryRecursive(dir);
         }
+    }
+
+    /// <summary>
+    /// bash can remove its own working directory (`cd "$tmp"; rm -rf "$tmp"` is the standard EXIT-trap cleanup);
+    /// Windows refuses while the process's current directory is inside it. Move the process out, to the parent
+    /// of the directory being removed, first.
+    /// </summary>
+    internal static void StepOutOfDirectory(string dir)
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        try
+        {
+            string full = Path.TrimEndingDirectorySeparator(Path.GetFullPath(dir));
+            string cwd = Path.TrimEndingDirectorySeparator(Directory.GetCurrentDirectory());
+            if (cwd.Equals(full, StringComparison.OrdinalIgnoreCase)
+                || cwd.StartsWith(full + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+            {
+                if (Path.GetDirectoryName(full) is { } parent) Directory.SetCurrentDirectory(parent);
+            }
+        }
+        catch { /* best effort: the delete below reports a genuine failure */ }
     }
 
     /// <summary>
