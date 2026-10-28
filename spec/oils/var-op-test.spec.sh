@@ -280,7 +280,6 @@ echo ${#arr[@]}
 1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-var-op-test var-op-test (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### "\z" as arg
@@ -300,14 +299,12 @@ $
 \
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-var-op-test var-op-test (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### "\e" as arg
 echo "${undef-\e}"
 ## stdout: \e
 ## status: 0
-## XFAIL ps-bash gap-oils-var-op-test var-op-test (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### "${array[@]} with set -u (bash is outlier)

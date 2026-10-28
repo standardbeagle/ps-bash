@@ -109,6 +109,31 @@ public class BashTranspilerTests
         Assert.DoesNotContain("$env:x:-fallback", result);
     }
 
+    // Inside "...", a backslash in a ${v-WORD} operand escapes only $ ` " \ newline: `"${u-\z}"` is `\z`,
+    // and a literal paren must not reach PowerShell's naive "$( )" paren scan.
+    [Fact]
+    public void Transpile_DoubleQuotedDefaultOperand_KeepsNonSpecialBackslash()
+    {
+        var result = BashTranspiler.Transpile("echo \"${u-\\z}\"");
+        Assert.Contains("'\\z'", result);
+    }
+
+    [Fact]
+    public void Transpile_DoubleQuotedDefaultOperand_ParenIsNotRawInSubexpression()
+    {
+        var result = BashTranspiler.Transpile("echo \"${u-\\(}\"");
+        Assert.Contains("[char]40", result);
+        Assert.DoesNotContain("'\\('", result);
+    }
+
+    // `declare -A m=()` is an empty ASSOCIATIVE array (a hashtable), not `@()`.
+    [Fact]
+    public void Transpile_DeclareAssocEmptyInitializer_IsHashtable()
+    {
+        var result = BashTranspiler.Transpile("declare -A m=()");
+        Assert.Contains("= @{}", result);
+    }
+
     // #4: case arms emitted no break, so PowerShell's switch ran EVERY matching
     // clause; bash runs only the first. Overlapping patterns are the failure case.
     [Fact]

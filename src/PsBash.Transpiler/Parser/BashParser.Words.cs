@@ -299,7 +299,7 @@ public sealed partial class BashParser
             }
             else if (c == '$' && pos + 1 < len && raw[pos + 1] == '{')
             {
-                pos = ParseBracedVar(raw, pos, innerParts);
+                pos = ParseBracedVar(raw, pos, innerParts, inDoubleQuote: true);
             }
             else if (c == '$' && pos + 1 < len && IsVarStart(raw[pos + 1]))
             {
@@ -365,7 +365,41 @@ public sealed partial class BashParser
         return pos;
     }
 
-    private static int ParseBracedVar(string raw, int pos, ImmutableArray<WordPart>.Builder parts)
+    // Inside "...", a backslash in a ${v-WORD} operand escapes only $ ` " \ newline (`"${u-\z}"` is `\z`).
+    // Doubling every other backslash lets DecomposeWord's unquoted rule give the same result.
+    private static string KeepNonSpecialBackslashes(string val)
+    {
+        if (val.IndexOf('\\') < 0) return val;
+        var sb = new System.Text.StringBuilder(val.Length + 4);
+        for (int i = 0; i < val.Length; i++)
+        {
+            char c = val[i];
+            if (c == '\\' && i + 1 < val.Length)
+            {
+                char next = val[i + 1];
+                if (next is '$' or '`' or '"' or '\\' or '\n') sb.Append(c).Append(next);
+                else sb.Append("\\\\").Append(next);
+                i++;
+            }
+            else if (c == '\'')
+            {
+                int j = val.IndexOf('\'', i + 1);
+                j = j < 0 ? val.Length : j + 1;
+                sb.Append(val, i, j - i);
+                i = j - 1;
+            }
+            else if (c == '$' && i + 1 < val.Length && val[i + 1] == '(')
+            {
+                int end = BashLexer.ScanBalancedParens(val, i + 2, 1);
+                sb.Append(val, i, end - i);
+                i = end - 1;
+            }
+            else sb.Append(c);
+        }
+        return sb.ToString();
+    }
+
+    private static int ParseBracedVar(string raw, int pos, ImmutableArray<WordPart>.Builder parts, bool inDoubleQuote = false)
     {
         // ${x:-${x:-…}} recurses through the argument word: bounded (NestingGuard).
         using var nesting = NestingGuard.Enter();
@@ -643,7 +677,7 @@ public sealed partial class BashParser
             // / @-transform operators take no expandable word argument: leave ArgWord
             // null so the emitter keeps the raw-slice path.
             if (IsWordBearingBracedOp(op))
-                argWord = DecomposeWord(val);
+                argWord = DecomposeWord(inDoubleQuote ? KeepNonSpecialBackslashes(val) : val);
         }
 
         if (pos < len && raw[pos] == '}')

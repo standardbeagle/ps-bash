@@ -53,7 +53,7 @@ public sealed partial class BashParser
             Advance(); // consume the keyword
 
             if (ParseDeclarationPairs() is { } declPairs)
-                return new Command.ShAssignment(declPairs);
+                return new Command.ShAssignment(declPairs, IsAssoc: _declSawAssoc);
 
             _pos = saved;
         }
@@ -284,11 +284,14 @@ public sealed partial class BashParser
     private bool _declSawReadonly;
     /// <summary>Set by <see cref="ParseDeclarationPairs"/> when an attribute flag of the declaration carried `n` (a nameref).</summary>
     private bool _declSawNameref;
+    /// <summary>Set by <see cref="ParseDeclarationPairs"/> when an attribute flag of the declaration carried `A` (an associative array).</summary>
+    private bool _declSawAssoc;
 
     private ImmutableArray<Assignment>? ParseDeclarationPairs()
     {
         _declSawReadonly = false;
         _declSawNameref = false;
+        _declSawAssoc = false;
         var pairs = ImmutableArray.CreateBuilder<Assignment>();
 
         while (Peek().Kind is BashTokenKind.AssignmentWord or BashTokenKind.Word
@@ -321,6 +324,7 @@ public sealed partial class BashParser
             {
                 if (value[1] != '-' && value.Contains('r')) _declSawReadonly = true;
                 if (value[1] != '-' && value.Contains('n')) _declSawNameref = true;
+                if (value[1] != '-' && value.Contains('A')) _declSawAssoc = true;
                 Advance();
                 continue;
             }

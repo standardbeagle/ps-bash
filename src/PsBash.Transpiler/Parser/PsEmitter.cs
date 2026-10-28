@@ -2915,6 +2915,12 @@ public static partial class PsEmitter
                     sb.Append(ArrayWriteTarget(pair.Name)).Append(" = ").Append(assoc);
                     continue;
                 }
+                // `declare -A m=()` is an EMPTY ASSOCIATIVE array, not an empty indexed one.
+                if (cmd.IsAssoc && pair.Op == AssignOp.Equal && pair.ArrayValue.Elements.IsEmpty)
+                {
+                    sb.Append(ArrayWriteTarget(pair.Name)).Append(" = @{}");
+                    continue;
+                }
                 sb.Append(ArrayWriteTarget(pair.Name));
                 sb.Append(pair.Op == AssignOp.PlusEqual ? " += @(" : " = @(");
                 // A glob element (`arr=(*.txt)`) expands to ZERO or more elements, which the comma
@@ -6726,7 +6732,21 @@ public static partial class PsEmitter
         // historical literal emission. Inside an outer "$( … )" string a nested double-quoted
         // value mis-parses when empty / quote-bearing, so use the single-quote-safe path there.
         // A $( ) in W: one join expression in both contexts, never command text in "…".
-        string ArgVal(string rawSlice) =>
+        string ArgVal(string rawSlice) => inDoubleQuote ? ParenSafeLiteral(ArgValRaw(rawSlice)) : ArgValRaw(rawSlice);
+
+        // PowerShell finds the end of "$( … )" by counting parens WITHOUT honouring the quotes inside, so a
+        // literal operand holding an unbalanced ( or ) (`"${u-\(}"`) must not carry a raw paren there.
+        static string ParenSafeLiteral(string expr)
+        {
+            if (expr.Length < 2 || expr[0] != '\'' || expr[^1] != '\'' || (expr.IndexOf('(') < 0 && expr.IndexOf(')') < 0))
+                return expr;
+            for (int i = 1; i < expr.Length - 1; i++)
+                if (expr[i] == '\'' && expr[i + 1] != '\'' ) return expr;
+                else if (expr[i] == '\'') i++;
+            return "(" + expr.Replace("(", "' + [char]40 + '").Replace(")", "' + [char]41 + '") + ")";
+        }
+
+        string ArgValRaw(string rawSlice) =>
             !argWord.HasValue
                 ? (nested ? PsBuild.SingleQuote(rawSlice) : $"\"{rawSlice}\"")
             : TryEmitJoinedValue(argWord.Value, out var joinedArg) ? joinedArg
@@ -6988,6 +7008,10 @@ public static partial class PsEmitter
     // variables); on an associative array it is the literal key. The array kind is known only at run time.
     private static string EmitWordSubscript(string arrayVar, string subscript)
     {
+        // `${m["k"]}` / `${m['k']}`: a quoted literal subscript is its quote-removed text.
+        if (subscript.Length >= 2 && subscript[0] is '"' or '\'' && subscript[^1] == subscript[0]
+            && subscript.AsSpan(1, subscript.Length - 2).IndexOfAny("$`\\\"'") < 0)
+            subscript = subscript[1..^1];
         string key = PsBuild.SingleQuote(subscript);
         if (!System.Text.RegularExpressions.Regex.IsMatch(subscript, @"^[\w+\-*/% ()]+$"))
             return key;

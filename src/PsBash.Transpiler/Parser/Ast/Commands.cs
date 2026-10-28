@@ -53,7 +53,8 @@ public abstract record Command : BashNode
         bool IsLocal = false,
         bool IsExport = false,
         bool IsReadonly = false,
-        bool IsNameref = false) : Command;
+        bool IsNameref = false,
+        bool IsAssoc = false) : Command;
 
     /// <summary>
     /// An if/elif/else statement.
