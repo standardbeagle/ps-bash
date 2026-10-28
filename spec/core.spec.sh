@@ -632,3 +632,17 @@ d
 d
 3:a\b"c\nd
 ## END
+
+#### PIPESTATUS after a plain command, and after a pipeline whose last stage redirects
+true | false | true; echo "${PIPESTATUS[*]}"
+false; echo "${PIPESTATUS[*]}"
+echo hi | cat >/dev/null; echo "${PIPESTATUS[*]}"
+(exit 3) | true; echo "${PIPESTATUS[@]}"
+true; echo "${PIPESTATUS[*]}" "${#PIPESTATUS[@]}"
+## STDOUT:
+0 1 0
+1
+0 0
+3 0
+0 1
+## END

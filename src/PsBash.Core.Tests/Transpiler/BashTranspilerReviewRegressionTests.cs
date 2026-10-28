@@ -342,6 +342,16 @@ public class BashTranspilerReviewRegressionTests
     public void Transpile_SubstitutionWithBackslashEscapes_UsesTheQuoteRemovedText(string bash)
         => Assert.DoesNotContain("[regex]::Escape('\\\\')", BashTranspiler.Transpile(bash).Replace("\\\\\\\\", "XX"));
 
+    // Oracle: `false; echo ${PIPESTATUS[*]}` is `1` - a plain command is a one-stage pipeline.
+    [Fact]
+    public void Transpile_PipestatusAfterPlainCommand_RecordsItsStatus()
+        => Assert.Contains("$global:PIPESTATUS = @([int]$global:LASTEXITCODE)", BashTranspiler.Transpile("false; echo ${PIPESTATUS[*]}"));
+
+    // Oracle: a per-stage pipeline whose last stage redirects (`cat >/dev/null`) threw a NullReferenceException.
+    [Fact]
+    public void Transpile_PipestatusPipelineEndingInRedirect_WrapsTheRedirectedStage()
+        => Assert.Contains("& { $input | Invoke-BashCat >$null }", BashTranspiler.Transpile("echo hi | cat >/dev/null; echo ${PIPESTATUS[*]}"));
+
     // Oracle: a function is a filter: `indent() { sed 's/^/  /'; }; cmd | indent`. The piped input never reached
     // the commands in the body (sed/grep/tr/cat/read saw an empty stdin). A body that reads stdin takes the pipe
     // it is called with; one that does not is unchanged.

@@ -32,11 +32,15 @@ public static class PsEmitter
     [ThreadStatic]
     private static HashSet<string>? _dynLocals;
     // Names the enclosing function declared `local`; every other array it writes is the shell's (a global), not a copy.
+    [ThreadStatic]
     private static HashSet<string>? _functionLocalNames;
 
     // The script being emitted mentions `pipefail`: every multi-stage pipeline records per-stage status.
     [ThreadStatic]
     private static bool _pipefailMode;
+    /// <summary>The script reads PIPESTATUS, so a plain command records its own status there.</summary>
+    [ThreadStatic]
+    private static bool _pipeStatusMode;
     // The script can turn nounset on: simple `$x` / `${x}` reads then check the flag at runtime.
     [ThreadStatic]
     private static bool _nounsetMode;
@@ -270,6 +274,15 @@ public static class PsEmitter
     /// themselves (bash: their status never triggers errexit) — their bodies are.
     /// </summary>
     private static string EmitStatement(Command cmd)
+    {
+        string text = EmitStatementCore(cmd);
+        // A plain command is a one-stage pipeline: `false; echo ${PIPESTATUS[*]}` is `1`, not the last real pipeline's.
+        return _pipeStatusMode && cmd is Command.Simple { Words.Length: > 0 }
+            ? text + "; $global:PIPESTATUS = @([int]$global:LASTEXITCODE)"
+            : text;
+    }
+
+    private static string EmitStatementCore(Command cmd)
     {
         if (!_errexitMode || _errexitExemptDepth > 0)
             return Emit(cmd);
@@ -520,6 +533,7 @@ public static class PsEmitter
         var priorNounset = _nounsetMode;
         _nounsetMode = priorNounset || InheritedNounset || bash.Contains("nounset", StringComparison.Ordinal)
             || System.Text.RegularExpressions.Regex.IsMatch(bash, @"\bset\s+(?:-[a-zA-Z]+\s+)*-[a-zA-Z]*u");
+        _pipeStatusMode = bash.Contains("PIPESTATUS", StringComparison.Ordinal);
         _pipefailMode = priorPipefail || InheritedPipefail || bash.Contains("pipefail", StringComparison.Ordinal) || bash.Contains("PIPESTATUS", StringComparison.Ordinal);
         try
         {
@@ -7346,6 +7360,11 @@ public static class PsEmitter
                 stageText = i == 0 && !stageText.StartsWith("& {", StringComparison.Ordinal)
                     ? $"& {{ {stageText} }}"
                     : WrapPipelineStageIfStatementList(stageText);
+                // A trailing redirection (`cat >/dev/null`) cannot be the root of a steppable pipeline (it throws a
+                // NullReferenceException on Begin): run it in a script block that feeds `$input` to the stage.
+                if (i > 0 && !stageText.StartsWith("& {", StringComparison.Ordinal)
+                    && System.Text.RegularExpressions.Regex.IsMatch(stageText, @"\s\d?>{1,2}[&\s]?\S"))
+                    stageText = $"& {{ $input | {stageText} }}";
                 sb.Length = stageStart;
                 sb.Append($"Invoke-BashPipeStage -Slot $__pf -Index {i} -Script {{ {stageText} }}");
             }
