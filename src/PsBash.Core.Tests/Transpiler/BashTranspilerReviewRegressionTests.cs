@@ -162,6 +162,34 @@ public class BashTranspilerReviewRegressionTests
         Assert.DoesNotContain("function global:o", ps);   // the outer one keeps its plain definition
     }
 
+    // Oracle: `[ "$(echo -n)" = "" ]` is true - an empty command substitution is $null in PowerShell, and `$null -ceq ''` is false.
+    [Theory]
+    [InlineData("[ \"$(echo -n)\" = \"\" ]")]
+    [InlineData("[ \"$(true)\" != \"x\" ]")]
+    public void Transpile_TestOfAnEmptyCommandSub_ComparesAsAString(string bash)
+        => Assert.Contains("(@($(", BashTranspiler.Transpile(bash));
+
+    // Oracle: `for i in 1 2; do worker $i & done` runs worker with 1 and 2 - the loop variable is a PowerShell variable the job cannot see, so its value is handed over at launch.
+    [Fact]
+    public void Transpile_BackgroundJobInALoop_HandsOverTheLoopVariable()
+    {
+        var ps = BashTranspiler.Transpile("f() { return $1; }; for i in 1 2; do f $i & done");
+        Assert.Contains("-Vars @{ 'i' = $i } {", ps);
+    }
+
+    [Fact]
+    public void Transpile_BackgroundJobNotUsingTheLoopVariable_KeepsTheBareEmission()
+        => Assert.Contains("Invoke-BashBackground {", BashTranspiler.Transpile("for i in 1 2; do sleep 1 & done"));
+
+    // Oracle: `exec 4<<<"fdline"; read -r -u 4 v` reads fdline - the fd number used to become a command word and emit a parse error that failed the whole script.
+    [Fact]
+    public void Transpile_ExecFdHereString_OpensTheDescriptorOnTheText()
+    {
+        var ps = BashTranspiler.Transpile("exec 4<<<\"fdline\"; read -r -u 4 v");
+        Assert.StartsWith("Invoke-BashExecFd 4 '<' (Invoke-ProcessSub", ps);
+        Assert.Contains("fdline", ps);
+    }
+
     // Oracle: `trap 'rm -f x; echo cleanup' EXIT` fires at script end - a `;` inside the quoted handler must not hide the EXIT from the wrapper detection.
     [Theory]
     [InlineData("trap 'rm -f x; echo cleanup' EXIT; echo a")]

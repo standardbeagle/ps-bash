@@ -2704,8 +2704,15 @@ function Invoke-BashBackground {
         [scriptblock]$Command,
         # The emitter found the job able to change shell state (assignments, cd, options, functions): it
         # must not share this process's environment and cwd, so it gets a host of its own.
-        [switch]$Isolated
+        [switch]$Isolated,
+        # For-loop variables the body reads, as of the launch (the loop moves on before the job runs).
+        [hashtable]$Vars
     )
+
+    if ($Vars -and $Vars.Count) {
+        $__bgPrefix = ($Vars.GetEnumerator() | ForEach-Object { '$' + $_.Key + " = '" + ("$($_.Value)" -replace "'", "''") + "'" }) -join '; '
+        $Command = [scriptblock]::Create($__bgPrefix + "`n" + $Command.ToString())
+    }
 
     # PSBASH_BG_MODE=process: run the job in its own ps-bash-host process (private env/cwd, real pid).
     # -Isolated jobs take it unless PSBASH_BG_MODE=inproc; other jobs stay in-process until it meets the

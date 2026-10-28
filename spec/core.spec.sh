@@ -864,6 +864,21 @@ body
 cleanup
 ## END
 
+#### a background job in a loop sees the loop variable as of its launch
+worker() { sleep 0.2; return $(( $1 % 2 )); }
+pids=()
+for i in 1 2 3; do worker $i & pids+=($!); done
+fail=0
+for p in "${pids[@]}"; do wait "$p" || fail=$((fail+1)); done
+echo "fail=$fail"
+[ "$(echo -n)" = "" ] && echo empty-sub-equals-empty
+exec 4<<<"fdline"; read -r -u 4 v; echo "$v"
+## STDOUT:
+fail=2
+empty-sub-equals-empty
+fdline
+## END
+
 #### local -n names the caller's variable: scalar, array and associative array
 setv() { local -n r=$1; r="set-by-fn"; }
 setv foo

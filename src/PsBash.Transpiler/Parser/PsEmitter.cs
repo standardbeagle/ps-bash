@@ -1741,9 +1741,18 @@ public static partial class PsEmitter
         // A job that can change shell state (variables, cwd, options, functions) must not share this
         // process's environment and cwd: it runs in a host of its own (-Isolated). A job that only runs
         // programs keeps the cheap in-process path, whose text is unchanged.
+        // A for-loop variable is a PowerShell variable the job (another runspace or process) cannot see, and the
+        // loop moves on before the job reads it: hand over its value at launch.
+        string vars = "";
+        if (_loopVars is { Count: > 0 })
+        {
+            var used = _loopVars.Where(v => inner.Contains("$" + v, StringComparison.Ordinal)).OrderBy(v => v, StringComparer.Ordinal).ToList();
+            if (used.Count > 0)
+                vars = " -Vars @{ " + string.Join("; ", used.Select(v => $"{PsBuild.SingleQuote(v)} = ${v}")) + " }";
+        }
         return MayMutateShellState(bg.Inner)
-            ? $"Invoke-BashBackground -Isolated {{ {inner} }}"
-            : $"Invoke-BashBackground {{ {inner} }}";
+            ? $"Invoke-BashBackground -Isolated{vars} {{ {inner} }}"
+            : $"Invoke-BashBackground{vars} {{ {inner} }}";
     }
 
     private static readonly HashSet<string> _stateBuiltins = new(StringComparer.Ordinal)
@@ -2525,7 +2534,11 @@ public static partial class PsEmitter
                 // `[ a = b ]` is plain string equality — no pattern, and nocasematch does not
                 // apply (`[ abc = a* ]` is false; `[ abc = ABC ]` is false). It was -like / -eq.
                 if (!extended)
-                    return $"{lhs} {(negate ? "-cne" : "-ceq")} {EmitTestOperand(words[2])}";
+                {
+                    // An empty `$( )` yields nothing and `[string]` of that is not '', so `[ "$(true)" = "" ]` was false: join the lines.
+                    string left = lhs.StartsWith("$(", StringComparison.Ordinal) ? $"(@({lhs}) -join \"`n\")" : lhs;
+                    return $"{left} {(negate ? "-cne" : "-ceq")} {EmitTestOperand(words[2])}";
+                }
                 // A static RHS — literal, quoted segments (`"http"*` is the pattern http* with the
                 // quoted chars literal), glob, extglob — is one BashPattern regex.
                 if (TryGetStaticPatternText(words[2], out var patText))
@@ -3030,6 +3043,15 @@ public static partial class PsEmitter
         {
             result = "";
             return false;
+        }
+
+        // `exec 4<<<"text"`: the parser leaves the fd as a lone numeric word beside the here-document.
+        if (cmd.Words.Length == 2 && cmd.HereDocs.Length == 1 && cmd.Redirects.IsDefaultOrEmpty && cmd.EnvPairs.IsEmpty
+            && GetLiteralValue(cmd.Words[0]) == "exec"
+            && GetLiteralValue(cmd.Words[1]) is { Length: > 0 } fdText && fdText.All(char.IsAsciiDigit))
+        {
+            result = $"Invoke-BashExecFd {fdText} '<' (Invoke-ProcessSub {{ {EmitHereDocLiteral(cmd.HereDocs[0])} | Emit-BashLine }})";
+            return true;
         }
 
         // When multiple heredocs exist, use the last one for stdin (bash behavior).
