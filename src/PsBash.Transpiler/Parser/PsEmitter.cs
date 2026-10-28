@@ -6567,6 +6567,47 @@ public static partial class PsEmitter
     /// value and not the raw source text. Null when the operand has none of these (the plain literal path applies)
     /// or contains an unquoted glob character (kept on the pattern path).
     /// </summary>
+    /// <summary>
+    /// A glob pattern with its quoting removed: <c>$'b'*</c> / <c>'a'*</c> / <c>"x"?</c> become the pattern text
+    /// where the QUOTED characters are backslash-escaped (literal) and the bare <c>* ? [</c> keep their meaning.
+    /// A pattern with an expansion in it (or no quote at all) is returned unchanged.
+    /// </summary>
+    private static string UnquoteForGlob(string raw)
+    {
+        if (raw.IndexOfAny(['\'', '"']) < 0) return raw;
+        var sb = new StringBuilder(raw.Length + 4);
+        void Lit(string s) { foreach (char ch in s) { if (ch is '*' or '?' or '[' or ']' or '\\') sb.Append('\\'); sb.Append(ch); } }
+        for (int i = 0; i < raw.Length; i++)
+        {
+            char c = raw[i];
+            if (c == '$' && i + 1 < raw.Length && raw[i + 1] == '\'')
+            {
+                int end = raw.IndexOf('\'', i + 2);
+                while (end > 0 && raw[end - 1] == '\\' && (end < 2 || raw[end - 2] != '\\')) end = raw.IndexOf('\'', end + 1);
+                if (end < 0) return raw;
+                Lit(ExpandAnsiCEscapes(raw[(i + 2)..end]));
+                i = end;
+            }
+            else if (c == '\'')
+            {
+                int end = raw.IndexOf('\'', i + 1);
+                if (end < 0) return raw;
+                Lit(raw[(i + 1)..end]);
+                i = end;
+            }
+            else if (c == '"')
+            {
+                int end = raw.IndexOf('"', i + 1);
+                if (end < 0 || raw.AsSpan(i + 1, end - i - 1).IndexOf('$') >= 0) return raw;
+                Lit(raw[(i + 1)..end]);
+                i = end;
+            }
+            else if (c == '\\' && i + 1 < raw.Length) { sb.Append(c).Append(raw[++i]); }
+            else sb.Append(c);
+        }
+        return sb.ToString();
+    }
+
     private static string? TryEmitSubstitutionOperand(string raw, bool backslashEscapes = false)
     {
         if (raw.IndexOfAny(backslashEscapes ? ['$', '\'', '"', '\\'] : ['$', '\'', '"']) < 0) return null;
@@ -6973,15 +7014,15 @@ public static partial class PsEmitter
                     : $"{open}{varRef} -replace ('^(.*)' + {guard} + '$'), '$1')";
         }
         if (suffix.StartsWith("%%"))
-            return $"{open}{varRef} -replace '{SqEsc(GlobToRegex(suffix[2..], lazy: false))}$','')";
+            return $"{open}{varRef} -replace '{SqEsc(GlobToRegex(UnquoteForGlob(suffix[2..]), lazy: false))}$','')";
         if (suffix.StartsWith("%"))
-            return $"{open}{varRef} -replace '^(.*){SqEsc(GlobToRegex(suffix[1..], lazy: false))}$','$1')";
+            return $"{open}{varRef} -replace '^(.*){SqEsc(GlobToRegex(UnquoteForGlob(suffix[1..]), lazy: false))}$','$1')";
 
         // Remove prefix: ${VAR##pattern} (greedy) / ${VAR#pattern} (lazy).
         if (suffix.StartsWith("##"))
-            return $"{open}{varRef} -replace '^{SqEsc(GlobToRegex(suffix[2..], lazy: false))}','')";
+            return $"{open}{varRef} -replace '^{SqEsc(GlobToRegex(UnquoteForGlob(suffix[2..]), lazy: false))}','')";
         if (suffix.StartsWith("#"))
-            return $"{open}{varRef} -replace '^{SqEsc(GlobToRegex(suffix[1..], lazy: true))}','')";
+            return $"{open}{varRef} -replace '^{SqEsc(GlobToRegex(UnquoteForGlob(suffix[1..]), lazy: true))}','')";
 
         // Replace first: ${VAR/find/replace} — instance overload .Replace(str, rep, 1).
         if (suffix.StartsWith("/") && !suffix.StartsWith("//"))
@@ -9187,6 +9228,12 @@ public static partial class PsEmitter
                 {
                     return PsBuild.SingleQuote(staticValue);
                 }
+                // A dynamic word with quotes (`-"$v"-`): wrapping the emitted text in more quotes splits it
+                // into several arguments; build ONE double-quoted string from the parts instead.
+                if (emitted.IndexOf('"') >= 0 && args[i].Parts.Length > 1
+                    && !args[i].Parts.Any(p => p is WordPart.GlobPart or WordPart.ProcessSub or WordPart.TildeSub
+                        or WordPart.BracedTuple or WordPart.BracedRange))
+                    return FlattenPartsToDoubleQuotedString(args[i].Parts);
                 return $"\"{emitted}\"";
             }
             // A bare `,` literal (sed -n 725,750p) is a PowerShell array separator.

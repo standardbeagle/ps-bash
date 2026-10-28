@@ -372,7 +372,7 @@ public sealed partial class BashParser
     {
         // No tilde expansion inside double quotes: `"${u:-~}"` is a literal ~.
         if (val.StartsWith('~')) val = "'~'" + val[1..];
-        if (val.IndexOf('\\') < 0) return val;
+        if (val.IndexOf('\\') < 0 && val.IndexOf('\'') < 0) return val;
         var sb = new System.Text.StringBuilder(val.Length + 4);
         for (int i = 0; i < val.Length; i++)
         {
@@ -380,17 +380,14 @@ public sealed partial class BashParser
             if (c == '\\' && i + 1 < val.Length)
             {
                 char next = val[i + 1];
-                if (next is '$' or '`' or '"' or '\\' or '\n') sb.Append(c).Append(next);
+                if (next == '\n') { /* line continuation: removed */ }
+                else if (next is '$' or '`' or '"' or '\\' or '}') sb.Append(c).Append(next);
                 else sb.Append("\\\\").Append(next);
                 i++;
             }
+            // Inside "…" a single quote is an ordinary character: "${u:-'a'}" is the text 'a' with its quotes.
             else if (c == '\'')
-            {
-                int j = val.IndexOf('\'', i + 1);
-                j = j < 0 ? val.Length : j + 1;
-                sb.Append(val, i, j - i);
-                i = j - 1;
-            }
+                sb.Append("\\'");
             else if (c == '$' && i + 1 < val.Length && val[i + 1] == '(')
             {
                 int end = BashLexer.ScanBalancedParens(val, i + 2, 1);

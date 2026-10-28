@@ -863,4 +863,19 @@ public class BashTranspilerReviewRegressionTests
     [Fact]
     public void Transpile_UnquotedPositionalList_IsSplitPerParameter()
         => Assert.Contains("| ConvertTo-BashWords", BashTranspiler.Transpile("printf '[%s]\\n' $@"));
+
+    // Oracle: `echo -"$v"-` is ONE argument (-abc-); wrapping the dash-led word in more quotes split it into three.
+    [Fact]
+    public void Transpile_DashLedWordWithQuotedExpansion_IsOneArgument()
+        => Assert.Contains("\"-$env:v-\"", BashTranspiler.Transpile("echo -\"$v\"-"));
+
+    // Oracle: inside "…" a single quote in a ${v:-…} operand is an ordinary character.
+    [Fact]
+    public void Transpile_SingleQuotesInsideDoubleQuotedDefault_AreLiteral()
+        => Assert.Contains("'a'", BashTranspiler.Transpile("echo \"${unset:-'a'}\""));
+
+    // Oracle: ${x%$'b'*} removes from the quoted b on — the quoted part is literal, the * still a glob.
+    [Fact]
+    public void Transpile_PatternStripWithQuotedPartAndGlob_KeepsTheGlob()
+        => Assert.Contains("b.*", BashTranspiler.Transpile("x=abc; echo ${x%$'b'*}"));
 }
