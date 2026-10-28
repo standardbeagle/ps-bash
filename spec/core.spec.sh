@@ -779,3 +779,14 @@ declare rc=0
 g main 2
 g h 3
 ## END
+
+#### wait reports the exit status a background group chose with exit
+{ exit 4; } & r=$!
+wait $r; echo "grp rc=$?"
+f() { return 7; }
+f & q=$!
+wait $q; echo "fn rc=$?"
+## STDOUT:
+grp rc=4
+fn rc=7
+## END

@@ -2743,7 +2743,9 @@ try {
 '@ + "`n" + $Command.ToString() + "`n" + @'
     $__bgOk = $true
 } finally {
-    $__bgCode = if ($__bgOk) { $x = $global:LASTEXITCODE; if ($null -eq $x) { 0 } else { [int]$x } } else { 1 }
+    # A body that ended early (`exit N` stops the pipeline) leaves its status in LASTEXITCODE; an error with none is 1.
+    $x = $global:LASTEXITCODE
+    $__bgCode = if ($__bgOk) { if ($null -eq $x) { 0 } else { [int]$x } } elseif ($x) { [int]$x } else { 1 }
     $__bgAfter = if ($__bgRestore) { [Environment]::GetEnvironmentVariables() } else { @{} }
     foreach ($__bgKey in @($__bgAfter.Keys) + @($__bgBefore.Keys)) {
         $__bgNew = $__bgAfter[$__bgKey]
