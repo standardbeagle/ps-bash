@@ -7135,10 +7135,14 @@ public static class PsEmitter
             // ("Missing closing ')'"), only the subexpression `$(...)` can — so use
             // `[void]$(...)` for the multi-statement case. A single pair stays in the
             // cheaper `[void](...)` form (bit-identical to prior output).
-            else if (cmd is Command.ShAssignment)
+            else if (cmd is Command.ShAssignment shAssign)
             {
                 var assignText = Emit(cmd);
                 sb.Append(PsBuild.VoidStatement(assignText));
+                // `r=$(false) || echo fb`: the assignment's status is its command substitution's, which `||` only sees
+                // once bridged from LASTEXITCODE to $? (a plain `x=1` is always 0).
+                if (!isFinal && !shAssign.IsLocal && !shAssign.IsExport && ContainsCommandSub(shAssign))
+                    sb.Append("; " + PsBuild.SignalFailIfFailed());
             }
             else if (cmd is Command.Pipeline { Negated: true } negPipelineInChain)
             {

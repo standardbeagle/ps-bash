@@ -352,6 +352,16 @@ public class BashTranspilerReviewRegressionTests
     public void Transpile_PipestatusPipelineEndingInRedirect_WrapsTheRedirectedStage()
         => Assert.Contains("& { $input | Invoke-BashCat >$null }", BashTranspiler.Transpile("echo hi | cat >/dev/null; echo ${PIPESTATUS[*]}"));
 
+    // Oracle: `r=$(exit 4) || echo caught` falls back with 4 - the assignment's status is its command substitution's.
+    [Fact]
+    public void Transpile_CommandSubAssignmentBeforeOr_BridgesItsExitStatus()
+    {
+        var ps = BashTranspiler.Transpile("r=$(exit 4) || echo fb");
+        Assert.Matches(@"\|\| ?Invoke-BashEcho fb", ps);
+        Assert.Contains(PsBuild.SignalFailIfFailed(), ps);
+        Assert.DoesNotContain(PsBuild.SignalFailIfFailed(), BashTranspiler.Transpile("r=1 || echo fb"));
+    }
+
     // Oracle: a function is a filter: `indent() { sed 's/^/  /'; }; cmd | indent`. The piped input never reached
     // the commands in the body (sed/grep/tr/cat/read saw an empty stdin). A body that reads stdin takes the pipe
     // it is called with; one that does not is unchanged.

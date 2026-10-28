@@ -646,3 +646,16 @@ true; echo "${PIPESTATUS[*]}" "${#PIPESTATUS[@]}"
 3 0
 0 1
 ## END
+
+#### a failing command-substitution assignment drives || and &&
+set -o pipefail
+r=$(false | cat) || echo "caught $?"
+r=$(true) && echo ok1
+r=$(exit 4) || echo "caught $?"
+x=1 || echo never
+set +o pipefail
+## STDOUT:
+caught 1
+ok1
+caught 4
+## END
