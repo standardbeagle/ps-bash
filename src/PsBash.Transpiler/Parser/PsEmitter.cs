@@ -4845,7 +4845,7 @@ public static partial class PsEmitter
         // A trailing `${v:-x}` / `${v:+x}` (…) emits as a parenthesised expression, which PowerShell reads as a
         // SEPARATE argument after a bareword (`echo a${v:+foo}` printed "a foo").
         if (parts[^1] is WordPart.BracedVarSub { Name: not ("@" or "*"), Suffix: { Length: > 0 } sfx }
-            && sfx[0] is ':' or '-' or '+' or '=' or '?')
+            && sfx[0] is ':' or '-' or '+' or '=' or '?' or '^' or ',' or '#' or '%' or '/' or '@')
             return true;
         return false;
     }
@@ -7138,14 +7138,16 @@ public static partial class PsEmitter
         }
 
         // Case conversion: ${VAR^^} ${VAR,,} ${VAR^} ${VAR,}
-        if (suffix == "^^")
-            return inDoubleQuote ? $"$({varRef}.ToUpper())" : $"{varRef}.ToUpper()";
-        if (suffix == ",,")
-            return inDoubleQuote ? $"$({varRef}.ToLower())" : $"{varRef}.ToLower()";
-        if (suffix == "^")
-            return $"{open}{varRef}.Substring(0,1).ToUpper() + {varRef}.Substring(1))";
-        if (suffix == ",")
-            return $"{open}{varRef}.Substring(0,1).ToLower() + {varRef}.Substring(1))";
+        // An optional glob PATTERN (`${x,A}`, `${x^^[a-c]}`) limits the conversion to characters it matches;
+        // an unset variable converts to the empty string.
+        if (suffix.Length > 0 && suffix[0] is '^' or ',')
+        {
+            bool all = suffix.Length > 1 && suffix[1] == suffix[0];
+            string pat = suffix[(all ? 2 : 1)..];
+            string re = "(?s)" + (pat.Length == 0 ? "." : "(?:" + GlobToRegex(UnquoteForGlob(pat), lazy: false) + ")");
+            string conv = suffix[0] == '^' ? "ToUpper" : "ToLower";
+            return $"{open}([regex]'{SqEsc(re)}').Replace([string]({varRef}), {{ $args[0].Value.{conv}() }}{(all ? "" : ", 1")}))";
+        }
 
         // Transform operators ${VAR@op} (bash 4.4+/5.1). @Q (quote-for-reuse) and the case
         // transforms map cleanly; @E/@P/@A/@a have no PowerShell equivalent and degrade to

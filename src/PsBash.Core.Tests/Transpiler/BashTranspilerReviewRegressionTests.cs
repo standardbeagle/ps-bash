@@ -878,4 +878,12 @@ public class BashTranspilerReviewRegressionTests
     [Fact]
     public void Transpile_PatternStripWithQuotedPartAndGlob_KeepsTheGlob()
         => Assert.Contains("b.*", BashTranspiler.Transpile("x=abc; echo ${x%$'b'*}"));
+
+    // Oracle: `echo empty=${empty,}` — an unset variable converts to "" (no null-method call) beside a literal prefix.
+    [Theory]
+    [InlineData("echo e=${v,}")]
+    [InlineData("echo e=${v^^}")]
+    [InlineData("echo ${v,,A}")]
+    public void Transpile_CaseConversion_IsNullSafeAndParseable(string bash)
+        => Assert.DoesNotContain(".ToLower()", BashTranspiler.Transpile(bash).Replace("$args[0].Value.ToLower()", ""));
 }
