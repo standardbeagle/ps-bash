@@ -198,6 +198,7 @@ public static class InteractiveShell
 
                 // readyWorker is null while the runspace warms up: ReadInputAsync draws the builtin
                 // prompt and accepts type-ahead; the worker-dependent prompt (PS1) kicks in once ready.
+                TerminalTitle.Set(TerminalTitle.Idle(_lastDir));
                 var input = await ReadInputAsync(readyWorker);
                 if (input is null)
                 {
@@ -368,6 +369,7 @@ public static class InteractiveShell
 
                 var stopwatch = Stopwatch.StartNew();
                 int? exitCodeResult = null;
+                TerminalTitle.Set(TerminalTitle.Running(trimmed));
 
                 try
                 {
