@@ -9,7 +9,7 @@ namespace PsBash.Core.Parser;
 /// <summary>
 /// Walks parsed AST nodes and emits equivalent PowerShell strings.
 /// </summary>
-public static class PsEmitter
+public static partial class PsEmitter
 {
     /// <summary>
     /// Emit PowerShell for the given command AST node.
@@ -599,6 +599,7 @@ public static class PsEmitter
             var cmd = BashParser.Parse(bash);
             if (cmd is null)
                 return null;
+            CollectCallSites(cmd);
             return EmitBody(cmd);
         }
         finally
@@ -957,13 +958,13 @@ public static class PsEmitter
             return false;
         if (w.Parts[0] is WordPart.BracedVarSub b && b.Suffix is "[@]" or "[*]")
         {
-            arrayName = b.Name;
+            arrayName = ResolveNameref(b.Name);
             return true;
         }
         if (w.Parts[0] is WordPart.DoubleQuoted dq && dq.Parts.Length == 1
             && dq.Parts[0] is WordPart.BracedVarSub qb && qb.Suffix == "[@]")
         {
-            arrayName = qb.Name;
+            arrayName = ResolveNameref(qb.Name);
             return true;
         }
         return false;
@@ -1448,6 +1449,7 @@ public static class PsEmitter
     /// <summary>`$name` for an array write: inside a function (outside any subshell) an array the function did not declare
     /// `local` is the shell's own, so `stack+=(x)` / `a=(...)` / `a[i]=v` must reach the caller, not a function-local copy.</summary>
     private static string ArrayWriteTarget(string name) =>
+        ResolveNameref(name) is var resolved && resolved != name ? ArrayWriteTarget(resolved) :
         _functionDepth > 0 && _subshellDepth == 0 && _functionLocalNames is { } locals && !locals.Contains(name)
             ? "$global:" + name
             : "$" + name;
@@ -1486,14 +1488,19 @@ public static class PsEmitter
             // The body is emitted as inside a stdin scope; one that reads no stdin comes out unchanged. One that does
             // (`indent() { sed 's/^/  /'; }`, `f() { read -r x; }`) takes the pipe it is called with as its stdin
             // (PsBuild.FunctionStdinScope) and otherwise the stdin of whatever called it.
+            string ComputeBody()
+            {
+                string text = WithStdinScope(true, () => EmitBody(func.Body));
+                if (text.Contains("__BashStdIn", StringComparison.Ordinal) || text.Contains("Invoke-BashRead", StringComparison.Ordinal)
+                    || text.Contains("Invoke-BashMapfile", StringComparison.Ordinal))
+                    return PsBuild.FunctionStdinScope(text);
+                return _launcherStdin ? WithStdinScope(false, () => EmitBody(func.Body)) : EmitBody(func.Body);
+            }
             try
             {
-                body = WithStdinScope(true, () => EmitBody(func.Body));
-                if (body.Contains("__BashStdIn", StringComparison.Ordinal) || body.Contains("Invoke-BashRead", StringComparison.Ordinal)
-                    || body.Contains("Invoke-BashMapfile", StringComparison.Ordinal))
-                    body = PsBuild.FunctionStdinScope(body);
-                else
-                    body = _launcherStdin ? WithStdinScope(false, () => EmitBody(func.Body)) : EmitBody(func.Body);
+                body = FindDynamicNameref(func.Body) is { } dynamicNameref
+                    ? EmitNamerefVariants(func.Name, dynamicNameref, ComputeBody)
+                    : ComputeBody();
             }
             finally { _functionDepth--; }
             // `trap '...' RETURN` inside the function runs when the function returns (then is spent, so a
@@ -2852,6 +2859,12 @@ public static class PsEmitter
                 continue;
             }
 
+            // `local -n r=$1` in a variant where r is already resolved to its target: nothing to declare.
+            if (cmd.IsLocal && cmd.IsNameref && _namerefs is not null && _namerefs.ContainsKey(pair.Name))
+            {
+                sb.Append(PsBuild.SetStatus(0));
+                continue;
+            }
             // `local -r x=1`: later writes to x in this function are refused (the set is restored when the function ends).
             if (cmd.IsLocal && cmd.IsReadonly) _readonlyVars?.Add(pair.Name);
             if (!cmd.IsLocal && !cmd.IsExport && _readonlyVars?.Contains(pair.Name) == true)
@@ -6481,6 +6494,8 @@ public static class PsEmitter
     private static string EmitBracedVar(WordPart.BracedVarSub bvs, bool inDoubleQuote = false)
     {
         NestingGuard.EnsureStack(); // ${x:-${x:-…}} recurses here without passing Emit(Command)
+        if (_namerefs is { Count: > 0 } && _namerefs.ContainsKey(bvs.Name))
+            bvs = bvs with { Name = ResolveNameref(bvs.Name) };
         if (bvs.Suffix is null)
             return EmitSimpleVar(bvs.Name, strict: true);
 

@@ -698,4 +698,25 @@ public class BashTranspilerReviewRegressionTests
     [Fact]
     public void Transpile_ExportInAScriptWithoutDeclareP_RecordsNothing()
         => Assert.DoesNotContain("MarkAttribute", BashTranspiler.Transpile("export E=1"));
+
+    // `local -n r=$1`: the target is only known at run time, so the body is emitted once per literal name the
+    // script passes, with r resolved statically, and chosen by the argument.
+    [Fact]
+    public void Transpile_LocalNamerefFromPositional_EmitsOneBodyPerLiteralCaller()
+    {
+        var ps = BashTranspiler.Transpile("setv() { local -n r=$1; r=x; }\nsetv foo\nsetv bar");
+        Assert.Contains("if ($__nrt -ceq 'foo') { $global:LASTEXITCODE = 0; $env:foo = \"x\" }", ps);
+        Assert.Contains("elseif ($__nrt -ceq 'bar') {", ps);
+    }
+
+    [Fact]
+    public void Transpile_LocalNamerefToAnArray_AppendsToTheCallersArray()
+    {
+        var ps = BashTranspiler.Transpile("addto() { local -n a=$1; a+=(\"$2\"); }\nl=(a)\naddto l c");
+        Assert.Contains("$global:l += @(", ps);
+    }
+
+    [Fact]
+    public void Transpile_LocalNamerefNeverCalledWithALiteral_KeepsTheOrdinaryLocal()
+        => Assert.DoesNotContain("__nrt", BashTranspiler.Transpile("setv() { local -n r=$1; r=x; }\nsetv \"$name\""));
 }

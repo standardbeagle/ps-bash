@@ -840,3 +840,27 @@ declare -x E="1"
 declare -ix NI="7"
 declare -- S="plain"
 ## END
+
+#### local -n names the caller's variable: scalar, array and associative array
+setv() { local -n r=$1; r="set-by-fn"; }
+setv foo
+echo "foo=$foo"
+addto() { local -n arr=$1; arr+=("$2"); }
+list=(a b)
+addto list c
+echo "${list[@]}"
+show() { local -n a=$1; echo "${#a[@]} ${a[1]}"; for e in "${a[@]}"; do echo "e=$e"; done; }
+show list
+declare -A m=([k]=v)
+mset() { local -n mm=$1; mm[z]=w; }
+mset m
+echo "${m[z]}"
+## STDOUT:
+foo=set-by-fn
+a b c
+3 b
+e=a
+e=b
+e=c
+w
+## END

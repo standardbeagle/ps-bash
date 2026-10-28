@@ -52,7 +52,8 @@ public abstract record Command : BashNode
         ImmutableArray<Assignment> Pairs,
         bool IsLocal = false,
         bool IsExport = false,
-        bool IsReadonly = false) : Command;
+        bool IsReadonly = false,
+        bool IsNameref = false) : Command;
 
     /// <summary>
     /// An if/elif/else statement.

@@ -31,7 +31,7 @@ public sealed partial class BashParser
             Advance(); // consume the keyword
 
             if (ParseDeclarationPairs() is { } pairs)
-                return new Command.ShAssignment(pairs, IsLocal: isLocal, IsExport: !isLocal, IsReadonly: isLocal && _declSawReadonly);
+                return new Command.ShAssignment(pairs, IsLocal: isLocal, IsExport: !isLocal, IsReadonly: isLocal && _declSawReadonly, IsNameref: isLocal && _declSawNameref);
 
             // No assignment or name followed — rewind and parse as a normal command
             // so forms like `export -p` still reach the general path.
@@ -282,10 +282,13 @@ public sealed partial class BashParser
     /// </summary>
     /// <summary>Set by <see cref="ParseDeclarationPairs"/> when an attribute flag of the declaration carried `r`.</summary>
     private bool _declSawReadonly;
+    /// <summary>Set by <see cref="ParseDeclarationPairs"/> when an attribute flag of the declaration carried `n` (a nameref).</summary>
+    private bool _declSawNameref;
 
     private ImmutableArray<Assignment>? ParseDeclarationPairs()
     {
         _declSawReadonly = false;
+        _declSawNameref = false;
         var pairs = ImmutableArray.CreateBuilder<Assignment>();
 
         while (Peek().Kind is BashTokenKind.AssignmentWord or BashTokenKind.Word
@@ -317,6 +320,7 @@ public sealed partial class BashParser
             if (value.Length > 1 && value[0] == '-')
             {
                 if (value[1] != '-' && value.Contains('r')) _declSawReadonly = true;
+                if (value[1] != '-' && value.Contains('n')) _declSawNameref = true;
                 Advance();
                 continue;
             }
