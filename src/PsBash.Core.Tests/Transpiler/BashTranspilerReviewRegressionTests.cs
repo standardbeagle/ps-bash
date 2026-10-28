@@ -973,4 +973,13 @@ public class BashTranspilerReviewRegressionTests
         Assert.Contains("Set-Item -LiteralPath ('Env:'", ps);
         Assert.DoesNotContain("declare \"", ps);
     }
+
+    // Oracle: `[[ foo =~ * ]] && echo true` is status 2 (malformed regex), and the chain does not run the echo.
+    [Fact]
+    public void Transpile_DoubleBracketBadRegexInChain_IsStatus2()
+    {
+        var ps = BashTranspiler.Transpile("[[ foo.py =~ * ]] && echo true");
+        Assert.Contains("catch [System.ArgumentException]", ps);
+        Assert.Contains("$global:__BashTestBad) { 2 }", ps);
+    }
 }

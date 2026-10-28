@@ -2366,7 +2366,7 @@ public static partial class PsEmitter
     {
         string inner = EmitBoolExprInner(expr);
         // A bad integer operand (`[ a -eq 1 ]`) is status 2, not just false.
-        if (inner.Contains("Invoke-BashTestInt"))
+        if (inner.Contains("Invoke-BashTestInt") || inner.Contains("__BashTestBad"))
             return "$($global:__BashTestBad = $false; $__psbTestR = (" + inner + "); $global:LASTEXITCODE = $(if ($global:__BashTestBad) { 2 } elseif ($__psbTestR) { 0 } else { 1 }))";
         return PsBuild.SilentExitFromBool("(" + inner + ")");
     }
@@ -2550,7 +2550,8 @@ public static partial class PsEmitter
                 // copy it across ($Matches[0] is the whole match, same as bash).
                 // The subexpression keeps the result ONE expression usable in an
                 // `if ( ( … ) )` condition while the assignment is a side effect.
-                return "$( $__psbash_m = " + matchExpr +
+                // A malformed regex is status 2 (the standalone-statement wrapper turns __BashTestBad into it).
+                return "$( try { $__psbash_m = " + matchExpr + " } catch [System.ArgumentException] { $__psbash_m = $false; $global:__BashTestBad = $true; Write-Error 'syntax error in regular expression' -ErrorAction Continue }" +
                        "; if ($__psbash_m) { $global:BASH_REMATCH = $Matches } " +
                        "else { $global:BASH_REMATCH = $null }; $__psbash_m )";
             }
@@ -7685,7 +7686,12 @@ public static partial class PsEmitter
                 // statement form for a standalone BoolExpr) — this site supplies its own exit-code
                 // wrapper below.
                 var boolText = "(" + EmitBoolExprInner(boolExprInChain) + ")";
-                sb.Append(PsBuild.SetExitFromBool(boolText));
+                // A bad integer operand / malformed regex is status 2, not just false.
+                if (boolText.Contains("Invoke-BashTestInt") || boolText.Contains("__BashTestBad"))
+                    sb.Append("$($global:__BashTestBad = $false; $__psbTestR = " + boolText + "; if ($__psbTestR -and -not $global:__BashTestBad) { $global:LASTEXITCODE = 0 } "
+                        + "else { $global:LASTEXITCODE = $(if ($global:__BashTestBad) { 2 } else { 1 }); Write-Error '' -ErrorAction SilentlyContinue })");
+                else
+                    sb.Append(PsBuild.SetExitFromBool(boolText));
             }
             // ShAssignment in && / || chains: wrap so PS doesn't output the value.
             // A multi-pair assignment (e.g. `TEMP=x TMP=y`, as Claude Code's Bash
