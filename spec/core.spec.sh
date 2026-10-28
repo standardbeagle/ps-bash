@@ -737,3 +737,19 @@ echo ok
 ## STDOUT:
 ok
 ## END
+
+#### timeout stops a command that runs too long
+timeout 0.3 sleep 5; echo "slow rc=$?"
+timeout 5 true; echo "fast rc=$?"
+timeout 5 sh -c 'exit 3'; echo "status rc=$?"
+echo hello | timeout 5 cat
+timeout --preserve-status 0.3 sleep 5; echo "preserve rc=$?"
+timeout abc true 2>/dev/null; echo "usage rc=$?"
+## STDOUT:
+slow rc=124
+fast rc=0
+status rc=3
+hello
+preserve rc=143
+usage rc=125
+## END

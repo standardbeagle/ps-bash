@@ -638,4 +638,13 @@ public class BashTranspilerReviewRegressionTests
     {
         Assert.Contains("__BashErrexit = $true", BashTranspiler.Transpile("set -eE"));
     }
+
+    // `timeout` must reach Invoke-BashTimeout (Windows' timeout.exe waits for a keypress), with every flag of the inner command intact.
+    [Fact]
+    public void Transpile_TimeoutWithInnerFlags_MapsToTheCmdletAndKeepsTheFlags()
+    {
+        var ps = BashTranspiler.Transpile("timeout 5 grep -v foo file");
+        Assert.Contains("Invoke-BashTimeout 5 grep '-v' foo file", ps);
+        Assert.DoesNotContain("& (Resolve-BashCommand", ps);
+    }
 }
