@@ -3018,6 +3018,7 @@ $script:BashHelpSpecs = @{
     'mktemp'   = 'Create a temporary file or directory.'
     'type'     = 'Display information about command type.'
     'bash'     = 'Invoke ps-bash transpiler for nested bash execution.'
+    'sh'       = 'Run a script with ps-bash, as bash does for sh.'
     'wait'     = 'Wait for background processes to finish.'
     'jobs'     = 'List background processes and their status.'
     'fg'       = 'Bring a background job to the foreground.'
@@ -3338,6 +3339,7 @@ Set-Alias -Name 'readlink' -Value 'Invoke-BashReadlink' -Force -Scope Global -Op
 Set-Alias -Name 'mktemp'   -Value 'Invoke-BashMktemp'   -Force -Scope Global -Option AllScope
 Set-Alias -Name 'type'     -Value 'Invoke-BashType'     -Force -Scope Global -Option AllScope
 Set-Alias -Name 'bash'     -Value 'Invoke-BashBash'     -Force -Scope Global -Option AllScope
+Set-Alias -Name 'sh'       -Value 'Invoke-BashBash'     -Force -Scope Global -Option AllScope
 Set-Alias -Name 'wait'     -Value 'Invoke-BashWait'     -Force -Scope Global -Option AllScope
 Set-Alias -Name 'jobs'     -Value 'Invoke-BashJobs'     -Force -Scope Global -Option AllScope
 Set-Alias -Name 'fg'       -Value 'Invoke-BashFg'       -Force -Scope Global -Option AllScope

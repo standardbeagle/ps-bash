@@ -930,7 +930,7 @@ public static class BashRuntime
     /// vars, working directory, etc.). The redirection + no-shell invariants the
     /// spawn contract requires are forced on regardless of how the caller built it.
     /// </summary>
-    public static ChildProcessResult RunChildProcess(ProcessStartInfo startInfo, System.TimeSpan? timeout = null)
+    public static ChildProcessResult RunChildProcess(ProcessStartInfo startInfo, System.TimeSpan? timeout = null, string? stdinText = null)
     {
         ArgumentNullException.ThrowIfNull(startInfo);
 
@@ -959,8 +959,20 @@ public static class BashRuntime
         using var proc = Process.Start(startInfo)
             ?? throw new InvalidOperationException($"Failed to start process '{startInfo.FileName}'.");
 
-        // Hand the child an EOF-closed stdin so it never hangs waiting for input.
-        try { proc.StandardInput.Close(); } catch { /* child may not have opened it */ }
+        // Hand the child an EOF-closed stdin so it never hangs waiting for input; `stdinText` (a piped-in
+        // program or data for a nested `bash -c`) is written first. Written on a worker so a child that
+        // never reads cannot block us on a full pipe.
+        if (!string.IsNullOrEmpty(stdinText))
+        {
+            var writer = proc.StandardInput;
+            _ = Task.Run(() =>
+            {
+                try { writer.Write(stdinText); writer.Flush(); } catch { /* child closed its stdin early */ }
+                try { writer.Close(); } catch { }
+            });
+        }
+        else
+            try { proc.StandardInput.Close(); } catch { /* child may not have opened it */ }
 
         // Drain BOTH streams concurrently. Each drain keeps reading after the
         // capture cap and discards excess text, so a noisy child cannot exhaust

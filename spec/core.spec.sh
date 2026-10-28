@@ -693,3 +693,28 @@ else 127
 env 127
 end
 ## END
+
+#### a script piped or here-stringed into bash and sh runs
+echo 'echo piped' | bash
+sh <<< 'echo here'
+printf 'echo a\necho b\n' | sh
+echo 'exit 3' | sh; echo rc=$?
+echo hi | bash -c 'cat'
+## STDOUT:
+piped
+here
+a
+b
+rc=3
+hi
+## END
+
+#### sh is found by env, xargs and command -v
+env FOO=1 sh -c 'echo $FOO'
+echo item | xargs -I{} sh -c 'echo {}'
+command -v sh >/dev/null && echo found
+## STDOUT:
+1
+item
+found
+## END
