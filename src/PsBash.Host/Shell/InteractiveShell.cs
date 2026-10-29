@@ -928,13 +928,16 @@ public static class InteractiveShell
         if (keywords.Length == 0)
             return interactive ? await PickFrecencyAsync(keywords) : "cd ~";
 
-        // `z <existing-path>`: when the single arg looks like a path AND resolves to
-        // a real directory, cd straight there (zoxide passthrough) — no frecency query.
-        if (!interactive && keywords.Length == 1 && LooksLikePath(keywords[0]))
+        // `z <existing-directory>`: one argument that names a real directory cds
+        // there — a bare name under the current directory as well as a path.
+        // zoxide tries the directory; LooksLikePath is only a string shape check
+        // and misses `somedir`. Quote the expanded path: `cd '~'` looks for a
+        // directory named "~".
+        if (!interactive && keywords.Length == 1)
         {
-            var resolved = ResolveAgainstCwd(keywords[0]);
-            if (resolved != null && Directory.Exists(resolved))
-                return "cd " + SingleQuoteBash(keywords[0]);
+            var cd = CdRewriteForExistingDirectory(keywords[0], _lastDir, _homeDir);
+            if (cd is not null)
+                return cd;
         }
 
         return interactive ? await PickFrecencyAsync(keywords) : await JumpFrecencyAsync(keywords);
@@ -977,21 +980,41 @@ public static class InteractiveShell
         return null;
     }
 
-    /// <summary>True when a z arg should be treated as a literal path, not a keyword.</summary>
+    /// <summary>
+    /// True when a z arg is shaped like a path (separator, <c>~</c>, <c>.</c>/<c>..</c>,
+    /// or a drive letter). A bare name is false even when that directory exists;
+    /// existence is a filesystem check (<see cref="CdRewriteForExistingDirectory"/>).
+    /// </summary>
     internal static bool LooksLikePath(string token)
         => token.Length > 0
            && (token.Contains('/') || token.Contains('\\') || token[0] == '~'
                || token == "." || token == ".."
                || (token.Length >= 2 && token[1] == ':'));   // drive-letter form C:
 
-    private static string? ResolveAgainstCwd(string token)
+    /// <summary>
+    /// When <paramref name="token"/> names an existing directory, return
+    /// <c>cd '&lt;expanded&gt;'</c>. <c>~</c> and <c>~/…</c> are expanded before
+    /// quoting so the shell does not look for a directory named <c>~</c>. A bare
+    /// name is resolved under <paramref name="cwd"/>. Returns null when the token
+    /// is not an existing directory (the caller then tries frecency).
+    /// </summary>
+    internal static string? CdRewriteForExistingDirectory(string token, string cwd, string home)
+    {
+        var resolved = ResolveAgainst(token, cwd, home);
+        if (resolved is null || !Directory.Exists(resolved))
+            return null;
+        return "cd " + SingleQuoteBash(resolved);
+    }
+
+    private static string? ResolveAgainst(string token, string cwd, string home)
     {
         try
         {
-            var t = token.StartsWith('~') ? _homeDir + token[1..] : token;
+            // "~" → home, "~/x" → home + "/x". "~user" is not expanded (not in scope).
+            var t = token.StartsWith('~') ? home + token[1..] : token;
             if (!Path.IsPathRooted(t))
-                t = Path.GetFullPath(Path.Combine(_lastDir, t));
-            return t;
+                t = Path.Combine(cwd, t);
+            return Path.GetFullPath(t);
         }
         catch { return null; }
     }
