@@ -258,7 +258,8 @@ if (shellArgs.ReadFromStdin || (!shellArgs.Interactive && shellArgs.Command is n
         shellArgs = shellArgs with { Command = stdinCommand };
 }
 
-if (shellArgs.Interactive || shellArgs.Command is null)
+// `bash -i -c 'cmd'` runs cmd and exits; -i alone (no -c string) opens the prompt.
+if (shellArgs.Command is null)
 {
     // Interactive mode: spawn ps-bash-host --interactive so the host inherits
     // the real tty (Console.Clear / WindowWidth / VT all work against the

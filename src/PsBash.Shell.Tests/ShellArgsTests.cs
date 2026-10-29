@@ -145,6 +145,22 @@ public class ShellArgsTests
     }
 
     [Fact]
+    public void Parse_RcfileWithInteractiveCommand_ConsumesRcfileValue()
+    {
+        var result = ShellArgs.Parse(["--rcfile", "/dev/null", "-i", "-c", "echo hi"]);
+
+        Assert.Null(result.Error);
+        Assert.Null(result.ScriptPath);
+        Assert.True(result.Interactive);
+        Assert.Equal("echo hi", result.Command);
+    }
+
+    [Fact]
+    public void Parse_InitFileWithoutValue_IsAnError()
+    {
+        Assert.NotNull(ShellArgs.Parse(["--init-file"]).Error);
+    }
+    [Fact]
     public void Parse_CommandFlagAtEnd_CommandIsNull()
     {
         var result = ShellArgs.Parse(["-i", "-c"]);
