@@ -176,4 +176,34 @@ public class InvokeBashTrapCommandTests : IClassFixture<SharedPwshFixture>
         Assert.Contains("$(throw", action);
         Assert.Contains("PWNED", action);
     }
+
+    [Theory]
+    [InlineData("INT", "INT")]
+    [InlineData("SIGTERM", "TERM")]
+    [InlineData("2", "INT")]
+    [InlineData("0", "EXIT")]
+    [InlineData("sigusr1", "USR1")]
+    public void Trap_SignalSpec_IsStoredUnderItsBareName(string spec, string key)
+    {
+        var raw = RunRaw($"Invoke-BashTrap 'echo x' {spec}; $global:BashTrapHandlers.Keys");
+        Assert.Contains(key, raw.Select(o => o.ToString()));
+    }
+
+    [Fact]
+    public void Trap_InvalidSignalSpec_ReportsAndExitsOne()
+    {
+        var raw = RunRaw("Invoke-BashTrap 'foo' SIGINVALID 2>&1; $global:LASTEXITCODE; $global:BashTrapHandlers.Count");
+        Assert.Contains(raw, o => o.ToString()!.Contains("SIGINVALID: invalid signal specification"));
+        Assert.Equal("1", raw[^2].ToString());
+        Assert.Equal("0", raw[^1].ToString());
+    }
+
+    [Fact]
+    public void Trap_SingleNonSignalOperand_IsUsageErrorTwo()
+    {
+        var raw = RunRaw("Invoke-BashTrap 'foo' 2>&1; $global:LASTEXITCODE; $global:BashTrapHandlers.Count");
+        Assert.Contains(raw, o => o.ToString()!.Contains("trap: usage:"));
+        Assert.Equal("2", raw[^2].ToString());
+        Assert.Equal("0", raw[^1].ToString());
+    }
 }

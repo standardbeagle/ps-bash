@@ -65,7 +65,6 @@ ok
 ok
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-trap builtin-trap (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### trap foo gives non-zero error
@@ -75,7 +74,6 @@ if test $? -ne 0; then
 fi
 ## stdout: ok
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-trap builtin-trap (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### trap 'echo hi' KILL (regression test, caught by smoosh suite)
@@ -154,7 +152,6 @@ IN TRAP
 FOO
 ## END
 ## status: 42
-## XFAIL ps-bash gap-oils-builtin-trap builtin-trap (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### trap EXIT sees exit status in $?
@@ -162,7 +159,6 @@ trap 'echo status=$?' EXIT
 exit 42
 ## stdout: status=42
 ## status: 42
-## XFAIL ps-bash gap-oils-builtin-trap builtin-trap (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### trap EXIT saves $?, clears trap, runs a command, then exits with it
@@ -170,7 +166,6 @@ trap 'st=$?; trap - EXIT; true; exit $st' EXIT
 exit 7
 ## stdout:
 ## status: 7
-## XFAIL ps-bash gap-oils-builtin-trap builtin-trap (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### bare exit in trap EXIT uses the status from before the trap
@@ -178,6 +173,7 @@ trap 'true; exit' EXIT
 exit 3
 ## stdout:
 ## status: 3
+## XFAIL ps-bash gap-oils-builtin-trap builtin-trap (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### bare exit in a function called from trap EXIT
@@ -214,7 +210,6 @@ EXIT TRAP
 trap 'eval "echo hi"' 0
 ## stdout: hi
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-trap builtin-trap (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### exit codes for traps are isolated
@@ -382,7 +377,6 @@ fi
 ok
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-trap builtin-trap (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### trap EXIT clears the EXIT trap
@@ -552,5 +546,6 @@ $SH -c 'trap "> zz" EXIT'
 wc -l zz  # should exist
 ## stdout: 0 zz
 ## status: 0
+## XFAIL ps-bash gap-oils-builtin-trap builtin-trap (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher

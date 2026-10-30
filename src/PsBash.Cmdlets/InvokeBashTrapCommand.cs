@@ -52,6 +52,31 @@ public sealed class InvokeBashTrapCommand : PSCmdlet
         "EXIT", "ERR", "INT", "TERM", "HUP", "QUIT", "PIPE", "ALRM", "USR1", "USR2"
     };
 
+    // Linux x86-64 signal numbers (bash's `trap -l` table); index = number.
+    private static readonly string[] SignalByNumber =
+    {
+        "EXIT", "HUP", "INT", "QUIT", "ILL", "TRAP", "ABRT", "BUS", "FPE", "KILL", "USR1", "SEGV", "USR2", "PIPE",
+        "ALRM", "TERM", "STKFLT", "CHLD", "CONT", "STOP", "TSTP", "TTIN", "TTOU", "URG", "XCPU", "XFSZ", "VTALRM",
+        "PROF", "WINCH", "IO", "PWR", "SYS",
+    };
+
+    private static readonly HashSet<string> PseudoSignals = new(StringComparer.Ordinal) { "EXIT", "ERR", "DEBUG", "RETURN" };
+
+    /// <summary>A bash signal spec (<c>INT</c>, <c>SIGINT</c>, <c>2</c>, <c>0</c>, <c>ERR</c>) as its bare upper-case name, or null when it is not one.</summary>
+    internal static string? NormalizeSignal(string spec)
+    {
+        if (spec.Length > 0 && char.IsAsciiDigit(spec[0]))
+        {
+            if (!int.TryParse(spec, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var n)) return null;
+            if (n < SignalByNumber.Length) return SignalByNumber[n];
+            return n <= 64 ? "RTMIN+" + (n - 34) : null;
+        }
+        var name = spec.ToUpperInvariant();
+        if (name.StartsWith("SIG", StringComparison.Ordinal)) name = name[3..];
+        if (PseudoSignals.Contains(name) || Array.IndexOf(SignalByNumber, name) > 0) return name;
+        return name is "RTMIN" or "RTMAX" ? name : null;
+    }
+
     protected override void EndProcessing()
     {
         var args = Arguments ?? Array.Empty<string>();
@@ -93,7 +118,8 @@ public sealed class InvokeBashTrapCommand : PSCmdlet
         bool resetMode;
         int firstSignal;
 
-        if (args[0] == "-" || args[0] == "--")
+        if (args[0] == "--" && args.Length > 1) args = args[1..];
+        if (args[0] == "-")
         {
             action = null;
             resetMode = true;
@@ -106,16 +132,24 @@ public sealed class InvokeBashTrapCommand : PSCmdlet
             firstSignal = 1;
         }
 
+        if (args.Length == 1 && !resetMode)
+        {
+            // One operand: a signal spec resets that signal, anything else is a usage error.
+            if (NormalizeSignal(args[0]) is { } only) { action = null; resetMode = true; firstSignal = 0; }
+            else
+            {
+                FileSystemHelpers.WriteBashError(this, "trap: usage: trap [-lp] [[arg] signal_spec ...]");
+                FileSystemHelpers.SetLastExitCode(this, 2);
+                return;
+            }
+        }
+
         var signals = new List<string>();
         for (int i = firstSignal; i < args.Length; i++)
         {
-            signals.Add(args[i].ToUpperInvariant());
-        }
-
-        if (signals.Count == 0)
-        {
-            // Bash default when only an action is given: EXIT.
-            signals.Add("EXIT");
+            if (NormalizeSignal(args[i]) is { } sig) { signals.Add(sig); continue; }
+            FileSystemHelpers.WriteBashError(this, $"trap: {args[i]}: invalid signal specification");
+            FileSystemHelpers.SetLastExitCode(this, 1);
         }
 
         var dict = GetTrapDict();
