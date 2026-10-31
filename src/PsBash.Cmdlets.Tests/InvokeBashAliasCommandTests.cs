@@ -188,4 +188,11 @@ public class InvokeBashAliasCommandTests : IClassFixture<SharedPwshFixture>
         var lines = RunLines("Invoke-BashAlias '$(throw \"pwn\");evil'");
         Assert.Empty(lines);
     }
+
+    [Fact]
+    public void Alias_BodyIsBash_VariableExpandsAtCallTimeAndArgsStayQuoted()
+    {
+        var lines = RunLines("$env:aq_x = 'late'; Invoke-BashAlias 'aq=echo $aq_x'; aq \"it's\" 'a b'");
+        Assert.Equal("late it's a b", string.Join("\n", lines).Trim());
+    }
 }

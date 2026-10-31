@@ -197,10 +197,18 @@ public sealed class InvokeBashAliasCommand : PSCmdlet
                 // the global scope and is reachable via Get-Command from
                 // the test's session — not buried in the cmdlet's own
                 // session state where the caller can't see it.
+                // The alias text is BASH (`$x`, quotes, keywords, `&&`), so the call runs it through eval with the
+                // arguments appended single-quoted; PowerShell never sees it as code.
                 InvokeCommand.InvokeScript(
-                    "param($n, $v) " +
-                    "$body = [scriptblock]::Create(\"& $v `@args\"); " +
-                    "Set-Item -Path ('Function:\\global:' + $n) -Value $body -Force",
+                    """
+                    param($n, $v)
+                    $body = {
+                        $words = foreach ($a in $args) { "'" + ([string]$a).Replace("'", "'\''") + "'" }
+                        $src = (@($v) + @($words)) -join ' '
+                        Invoke-Expression ([PsBash.Core.Transpiler.BashTranspiler, PsBash.Transpiler]::Transpile($src, [PsBash.Core.Transpiler.TranspileContext, PsBash.Transpiler]::Eval))
+                    }.GetNewClosure()
+                    Set-Item -Path ('Function:\global:' + $n) -Value $body -Force
+                    """,
                     aliasName, aliasValue);
             }
             else

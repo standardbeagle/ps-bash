@@ -4122,6 +4122,13 @@ public class PsEmitterTests
         Assert.Equal("Invoke-BashDiff (Invoke-ProcessSub { Invoke-BashSort file1 | Invoke-BashUniq }) file2", result);
     }
 
+    [Theory]
+    [InlineData("egrep 'a|b' f", "Invoke-BashGrep '-E' 'a|b' f")]
+    [InlineData("fgrep a.b f", "Invoke-BashGrep '-F' a.b f")]
+    public void Transpile_EgrepFgrep_ArePassthroughGrepWithTheModeFlag(string bash, string expected)
+    {
+        Assert.Equal(expected, PsEmitter.Transpile(bash));
+    }
     [Fact]
     public void Transpile_GrepWithProcessSub()
     {

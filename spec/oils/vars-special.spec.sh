@@ -61,7 +61,6 @@ echo $$ | egrep -q '[0-9]+'  # Test that it has decimal digits
 echo status=$?
 ## stdout: status=0
 ## status: 0
-## XFAIL ps-bash gap-oils-vars-special vars-special (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### $$ doesn't change with subshell or command sub
@@ -127,7 +126,6 @@ echo $pid | egrep '[0-9]+' >/dev/null
 echo status=$?
 ## stdout: status=0
 ## status: 0
-## XFAIL ps-bash gap-oils-vars-special vars-special (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### $PPID
@@ -165,7 +163,6 @@ echo $EUID | egrep -o '[0-9]+' >/dev/null
 echo status=$?
 ## stdout: status=0
 ## status: 0
-## XFAIL ps-bash gap-oils-vars-special vars-special (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### $OSTYPE is non-empty
@@ -235,6 +232,7 @@ grep '=xx' out.txt
 echo status=$?
 ## stdout: status=1
 ## status: 0
+## XFAIL ps-bash gap-oils-vars-special vars-special (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 

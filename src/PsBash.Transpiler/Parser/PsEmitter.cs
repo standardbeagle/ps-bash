@@ -8595,6 +8595,12 @@ public static partial class PsEmitter
             case "grep":
                 result = EmitPassthrough("Invoke-BashGrep", args);
                 return true;
+            case "egrep":
+            case "fgrep":
+                // GNU wrappers: `egrep` is `grep -E`, `fgrep` is `grep -F`.
+                result = EmitPassthrough("Invoke-BashGrep",
+                    args.Insert(0, new CompoundWord([new WordPart.Literal(name == "egrep" ? "-E" : "-F")])));
+                return true;
             case "head":
                 result = EmitPassthrough("Invoke-BashHead", args);
                 return true;
