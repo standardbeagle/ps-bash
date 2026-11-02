@@ -26,7 +26,8 @@ public class ShellStateInventoryGuardTests
         ["__parentPid"] = "host plumbing: the owning process id",
         ["__BashStdIn"] = "per-command stdin plumbing, rebuilt for every command",
         ["__BashUnbound"] = "one-statement hand-off from Invoke-BashArith to the emitted nounset guard, cleared at once",
-        ["BashHookErrors"] = "diagnostic buffer, per runspace",
+        ["__BashTestBad"] = "one-statement hand-off from Invoke-BashTestInt/[[ =~ ]] to the emitted status-2 wrapper, reset before each test",
+        ["BashHookErrors"] ="diagnostic buffer, per runspace",
         ["__BashEvalDepth"] = "eval recursion counter; a job process starts at 0",
         ["__BashBaselineFunctions"] = "names of the functions every host defines at startup; read by BashStateSnapshot",
     };
