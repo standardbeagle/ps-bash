@@ -6638,13 +6638,33 @@ public static partial class PsEmitter
         // env vars, so match over env:. (bash * joins on IFS, @ keeps words
         // separate; both yield the same name set here.)
         // Indirect expansion ${!a}: the value of the variable whose NAME is $a's value.
+        if (bvs.Suffix is { } indSfx && indSfx.StartsWith("!indirect", StringComparison.Ordinal) && indSfx.Length > "!indirect".Length)
+        {
+            // ${!ref OP word}: the operator applies to the value of the variable NAMED by $ref.
+            string op = indSfx["!indirect".Length..];
+            string IndLookup(bool nameOnly) =>
+                "Get-BashIndirectValue -Ref (" + EmitSimpleVar(bvs.Name) + ") -RefName "
+                + PsBuild.SingleQuote(System.Text.RegularExpressions.Regex.IsMatch(bvs.Name, @"^[A-Za-z_]\w*$") ? bvs.Name : "")
+                + " -Pos @(" + PsBuild.BuildPositionalExpansion("@") + ")" + (nameOnly ? " -NameOnly" : "");
+            if (op.StartsWith(":=", StringComparison.Ordinal) || op.StartsWith('='))
+            {
+                string assigned = EmitScalarSuffix("$__iv", op, false, bvs.ArgWord) ?? "$__iv";
+                return "$(& { $__iv0 = $(" + IndLookup(false) + "); $__iv = $__iv0; $__ir = " + assigned + "; "
+                    + "if ($__iv -cne $__iv0) { [System.Environment]::SetEnvironmentVariable($(" + IndLookup(true) + "), [string]$__iv) }; $__ir })";
+            }
+            string indRef = "$(" + IndLookup(false) + ")";
+            // Always the `$( … )` subexpression form: it stays one word beside a literal prefix (`x=${!ref-d}`).
+            return EmitScalarSuffix(indRef, op, true, bvs.ArgWord) ?? indRef;
+        }
         if (bvs.Suffix == "!indirect")
         {
             // The name's value is a variable name, or a positional index (`n=2; ${!n}`, `${!#}` = the last argument).
             string lookup = "& { $__ind = [string](" + EmitSimpleVar(bvs.Name, strict: true) + "); "
                 + "if ($__ind -match '^[0-9]+$') { $__pp = @(" + PsBuild.BuildPositionalExpansion("@") + "); "
                 + "if ([int]$__ind -eq 0) { " + EmitSimpleVar("0", strict: true) + " } elseif ([int]$__ind -le $__pp.Count) { $__pp[[int]$__ind - 1] } } "
-                + "else { [System.Environment]::GetEnvironmentVariable($__ind) } }";
+                + "else { Get-BashIndirectValue -Ref $(if ($__ind) { $__ind } else { $null }) -RefName "
+                + PsBuild.SingleQuote(System.Text.RegularExpressions.Regex.IsMatch(bvs.Name, @"^[A-Za-z_]\w*$") ? bvs.Name : "")
+                + " -Pos @(" + PsBuild.BuildPositionalExpansion("@") + ") } }";
             return inDoubleQuote ? $"$({lookup})" : $"$({lookup})";
         }
 

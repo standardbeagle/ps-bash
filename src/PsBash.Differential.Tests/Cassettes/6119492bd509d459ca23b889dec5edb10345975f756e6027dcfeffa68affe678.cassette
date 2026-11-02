@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 81
+stdout-length: 27
+stderr-length: 0
+==== SCRIPT ====
+x=xx; xx=aaabcc; echo ${!x:2} ${!x:2:2} ${!x#*a} ${!x%%c*} ${!x/a*b/d} ${!x:+foo}
+==== STDOUT ====
+abcc ab aabcc aaab dcc foo
+
+==== STDERR ====
+

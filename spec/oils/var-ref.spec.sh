@@ -24,7 +24,6 @@ x=
 x=foo
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-var-ref var-ref (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### ${!undef:-}
@@ -116,7 +115,6 @@ ref='@'
 echo ref=${!ref}
 ## stdout: ref=one two
 ## status: 0
-## XFAIL ps-bash gap-oils-var-ref var-ref (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### var ref to $1 and $2 with 1 and 2
@@ -130,7 +128,6 @@ ref1=one
 ref2=two
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-var-ref var-ref (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### var ref: 1, @, *
@@ -175,7 +172,6 @@ foo
 foo
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-var-ref var-ref (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Var ref, then error with ${ ? }
@@ -185,7 +181,6 @@ echo ${!w:?'my message'}
 echo done
 ## stdout:
 ## status: 1
-## XFAIL ps-bash gap-oils-var-ref var-ref (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Indirect expansion, THEN suffix operators
@@ -264,7 +259,6 @@ first=
 first=zzz
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-var-ref var-ref (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### array ref
@@ -274,7 +268,6 @@ ref='array[0]'
 echo ${!ref}
 ## stdout: ale
 ## status: 0
-## XFAIL ps-bash gap-oils-var-ref var-ref (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### ${!array_ref:-set} and ${!array_ref:=assign}
@@ -434,7 +427,6 @@ ref='array'
 echo ${!ref}
 ## stdout: ale
 ## status: 0
-## XFAIL ps-bash gap-oils-var-ref var-ref (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### var ref TO array var
@@ -452,7 +444,6 @@ ale
 ale bean
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-var-ref var-ref (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### var ref TO array var, with subscripts
@@ -654,7 +645,6 @@ cycle=x
 cycle=
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-var-ref var-ref (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Var Ref Code Injection $(tee PWNED)

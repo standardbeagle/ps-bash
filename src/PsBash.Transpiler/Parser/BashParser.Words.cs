@@ -405,6 +405,21 @@ public sealed partial class BashParser
             // with `prefix` (distinct from the ${!arr[@]} keys form). The `*`/`@`
             // comes immediately after the name with no `[`. Without this it fell
             // through and mis-emitted $prefix.Keys.
+            // ${!ref OP …}: an operator after the name applies to the indirect value. Re-parse `${ref OP …}` and
+            // tag its suffix so the emitter swaps ref's value for the value of the variable it names.
+            if (name.Length > 0 && pos < len && (raw[pos] is ':' or '-' or '=' or '+' or '?' or '%' or '#' or '/' or '^' or ','
+                || (raw[pos] == '@' && pos + 1 < len && raw[pos + 1] != '}')))
+            {
+                var inner = ImmutableArray.CreateBuilder<WordPart>();
+                string synthetic = "${" + name + raw[pos..];
+                int end = ParseBracedVar(synthetic, 0, inner);
+                if (inner.Count == 1 && inner[0] is WordPart.BracedVarSub { Suffix: { } innerSfx } innerBvs && innerBvs.Name == name)
+                {
+                    parts.Add(new WordPart.BracedVarSub(name, "!indirect" + innerSfx, innerBvs.ArgWord));
+                    return pos + (end - (2 + name.Length));
+                }
+            }
+
             if (pos < len && (raw[pos] == '*' || raw[pos] == '@'))
             {
                 pos++; // skip * or @

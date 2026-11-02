@@ -101,6 +101,48 @@ function Get-BashFuncNames {
     $names
 }
 
+# ${!ref}: the value of the variable NAMED by $ref. $Ref is the value of ref ($null when unset); $RefName is ref's own
+# name (an array `ref` reads as its element 0); $Pos the positional parameters. The target is a variable name, a
+# positional index, a special parameter (@ * # ?), or an array reference (`a[0]`, `a[@]`, `m[key]`).
+# -NameOnly returns the plain variable name the target denotes (for ${!ref:=word}).
+function Get-BashIndirectValue {
+    param([AllowNull()]$Ref, [string]$RefName, [object[]]$Pos = @(), [switch]$NameOnly)
+    if ($null -eq $Ref -and $RefName) {
+        $rv = Get-Variable -Name $RefName -ValueOnly -ErrorAction Ignore
+        if ($null -ne $rv) { $Ref = if ($rv -is [System.Collections.IDictionary]) { $rv['0'] } elseif ($rv -is [array]) { $rv[0] } else { $rv } }
+    }
+    $n = [string]$Ref
+    if ($n -eq '') { return $null }
+    if ($NameOnly) { return ($n -replace '\[.*$', '') }
+    if ($n -match '^[0-9]+$') {
+        if ([int]$n -eq 0) { return 'bash' }
+        if ([int]$n -le $Pos.Count) { return [string]$Pos[[int]$n - 1] }
+        return $null
+    }
+    if ($n -eq '@' -or $n -eq '*') { return ($Pos -join ' ') }
+    if ($n -eq '#') { return [string]$Pos.Count }
+    if ($n -eq '?') { return [string]$global:LASTEXITCODE }
+    if ($n -match '^([A-Za-z_][A-Za-z0-9_]*)\[(.*)\]$') {
+        $v = Get-Variable -Name $Matches[1] -ValueOnly -ErrorAction Ignore
+        $sub = $Matches[2].Trim('"', "'")
+        if ($null -eq $v) { return $null }
+        if ($v -is [System.Collections.IDictionary]) {
+            if ($sub -eq '@' -or $sub -eq '*') { return (@($v.Values) -join ' ') }
+            return $v[$sub]
+        }
+        if ($sub -eq '@' -or $sub -eq '*') { return (@($v) -join ' ') }
+        if ($sub -match '^-?[0-9]+$') { $i = [int]$sub; if ($i -lt 0) { $i += @($v).Count }; $all = @($v); if ($i -ge 0 -and $i -lt $all.Count) { return $all[$i] } }
+        return $null
+    }
+    if ($n -notmatch '^[A-Za-z_][A-Za-z0-9_]*$') { return $null }
+    $e = [System.Environment]::GetEnvironmentVariable($n)
+    if ($null -ne $e) { return $e }
+    $pv = Get-Variable -Name $n -ValueOnly -ErrorAction Ignore
+    if ($pv -is [System.Collections.IDictionary]) { return $pv['0'] }
+    if ($pv -is [array]) { return $pv[0] }
+    $pv
+}
+
 # set -x: the "+ cmd args" line bash prints on stderr before a command. Words print as bash does: bare when made of
 # safe characters, otherwise single-quoted. The emitter calls this only in scripts that mention set -x.
 function Write-BashXtrace {

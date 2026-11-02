@@ -17,7 +17,7 @@ Known ps-bash/bash 5.2 divergences recorded as XFAIL in the spec corpus, grouped
 | `gap-oils-sh-options` | `spec/oils/sh-options.spec.sh` | 27 |
 | `gap-oils-vars-special` | `spec/oils/vars-special.spec.sh` | 26 |
 | `gap-oils-assign-extended` | `spec/oils/assign-extended.spec.sh` | 26 |
-| `gap-oils-var-ref` | `spec/oils/var-ref.spec.sh` | 26 |
+| `gap-oils-var-ref` | `spec/oils/var-ref.spec.sh` | 14 |
 | `gap-oils-builtin-trap` | `spec/oils/builtin-trap.spec.sh` | 26 |
 | `gap-oils-builtin-read` | `spec/oils/builtin-read.spec.sh` | 24 |
 | `gap-oils-nameref` | `spec/oils/nameref.spec.sh` | 23 |
