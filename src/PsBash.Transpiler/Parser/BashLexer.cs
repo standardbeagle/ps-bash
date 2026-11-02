@@ -37,6 +37,8 @@ public static class BashLexer
         var pendingHeredocs = new List<(string Delim, bool StripTabs, int DelimTokenIndex)>();
         // The next word token is a heredoc delimiter: 0 = none, 1 = `<<`, 2 = `<<-`.
         int heredocDelimPending = 0;
+        // Line of the `for` command whose header word list is being scanned (0 = none).
+        int forLine = 0;
 
         while (pos < len)
         {
@@ -293,8 +295,14 @@ public static class BashLexer
                 continue;
             }
 
+            // A `for` header's word list reports the line of the `for` command (bash), not of each
+            // word on a continued line; the list ends at the first `;` or newline.
+            if (tokens.Count > 0 && tokens[^1].Kind is BashTokenKind.Newline or BashTokenKind.Semi)
+                forLine = 0;
+            if (value == "for" && (tokens.Count == 0 || !(tokens[^1].Kind == BashTokenKind.Word && !IsReservedWord(tokens[^1].Value))))
+                forLine = LineAt(input, wordStart);
             if (value.Contains("LINENO", StringComparison.Ordinal))
-                value = SubstituteLineNumber(value, input, wordStart);
+                value = SubstituteLineNumber(value, input, wordStart, forLine > 0 ? forLine : 0);
             BashTokenKind wordKind = ClassifyWord(value);
             tokens.Add(new BashToken(wordKind, value, wordStart));
 
@@ -389,11 +397,41 @@ public static class BashLexer
     /// Replaces <c>$LINENO</c> / <c>${LINENO}</c> in a word with the 1-based source line the word starts on
     /// (bash: the line of the command being run). Single-quoted spans and a backslash-escaped <c>$</c> stay literal.
     /// </summary>
-    private static string SubstituteLineNumber(string word, string input, int wordStart)
+    /// <summary>1-based source line of offset <paramref name="pos"/>.</summary>
+    internal static int LineAt(string input, int pos)
     {
         int line = 1;
-        for (int i = 0; i < wordStart; i++)
+        int end = Math.Min(pos, input.Length);
+        for (int i = 0; i < end; i++)
             if (input[i] == (char)10) line++;
+        return line;
+    }
+
+    /// <summary>
+    /// Replaces <c>LINENO</c> (bare, <c>$LINENO</c>, <c>${LINENO}</c>) in a raw arithmetic expression
+    /// with <paramref name="line"/>; bare identifiers like <c>MYLINENO</c> / <c>LINENO2</c> are left alone.
+    /// </summary>
+    internal static string SubstituteArithLineNumber(string expr, int line)
+    {
+        if (!expr.Contains("LINENO", StringComparison.Ordinal)) return expr;
+        string lineText = line.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var sb = new System.Text.StringBuilder(expr.Length);
+        for (int i = 0; i < expr.Length; i++)
+        {
+            if (string.CompareOrdinal(expr, i, "${LINENO}", 0, 9) == 0) { sb.Append(lineText); i += 8; continue; }
+            int s = expr[i] == '$' ? i + 1 : i;
+            if (string.CompareOrdinal(expr, s, "LINENO", 0, 6) == 0
+                && (s == i ? i == 0 || !(char.IsLetterOrDigit(expr[i - 1]) || expr[i - 1] == '_') : true)
+                && (s + 6 >= expr.Length || !(char.IsLetterOrDigit(expr[s + 6]) || expr[s + 6] == '_')))
+            { sb.Append(lineText); i = s + 5; continue; }
+            sb.Append(expr[i]);
+        }
+        return sb.ToString();
+    }
+
+    private static string SubstituteLineNumber(string word, string input, int wordStart, int line = 0)
+    {
+        if (line == 0) line = LineAt(input, wordStart);
         string lineText = line.ToString(System.Globalization.CultureInfo.InvariantCulture);
 
         var sb = new System.Text.StringBuilder(word.Length);

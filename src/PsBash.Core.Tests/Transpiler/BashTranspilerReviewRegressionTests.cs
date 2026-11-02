@@ -256,6 +256,31 @@ public class BashTranspilerReviewRegressionTests
     public void Transpile_LinenoLookalike_IsNotSubstituted(string bash)
         => Assert.DoesNotContain("echo 1", BashTranspiler.Transpile(bash).Replace("Invoke-BashEcho", "echo"));
 
+    // Oracle: a bare `LINENO` identifier inside arithmetic is the line too; lookalikes are not.
+    [Theory]
+    [InlineData("MYLINENO + 1", "MYLINENO + 1")]
+    [InlineData("LINENO2", "LINENO2")]
+    [InlineData("LINENO_x", "LINENO_x")]
+    [InlineData("x = LINENO", "x = 7")]
+    [InlineData("x = $LINENO + ${LINENO}", "x = 7 + 7")]
+    [InlineData("LINENO+LINENO", "7+7")]
+    public void SubstituteArithLineNumber_OnlyTheWholeIdentifier(string expr, string expected)
+        => Assert.Equal(expected, PsBash.Core.Parser.BashLexer.SubstituteArithLineNumber(expr, 7));
+
+    // Oracle: a for-list reports the line of the `for` command, even when the list continues on later lines.
+    [Fact]
+    public void Transpile_Lineno_ForListUsesTheForLine()
+    {
+        var ps = BashTranspiler.Transpile("echo one\nfor x in \\\n$LINENO zzz; do echo $x; done");
+        Assert.Contains("2", ps);
+        Assert.DoesNotContain("'3'", ps);
+        Assert.DoesNotContain("\"3\"", ps);
+    }
+
+    [Fact]
+    public void Transpile_Lineno_AfterForLoopIsItsOwnLine()
+        => Assert.Contains("Invoke-BashEcho 3", BashTranspiler.Transpile("for x in a; do :; done\n\necho $LINENO"));
+
 
     // Oracle: `${x//$'\n'/,}` replaces newlines (the operand is the quote-removed value). The raw source text
     // `$'\n'` was matched literally, so the join-lines idiom changed nothing.

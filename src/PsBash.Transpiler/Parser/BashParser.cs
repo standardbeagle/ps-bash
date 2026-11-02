@@ -901,6 +901,7 @@ public sealed partial class BashParser
             Advance();
         }
         string header = exprEnd >= 0 ? _input[exprStart..exprEnd] : _input[exprStart..];
+        header = BashLexer.SubstituteArithLineNumber(header, BashLexer.LineAt(_input, exprStart));
         var (init, cond, step) = SplitArithClauses(header);
 
         SkipTerminators();
@@ -1227,10 +1228,11 @@ public sealed partial class BashParser
 
     private Command.ArithCommand ParseArithCommand()
     {
-        Advance(); // consume first (
+        var firstParen = Advance(); // consume first (
         var secondParen = Advance(); // consume second (
         int exprStart = secondParen.Position + 1;
         int nestedDepth = 0;
+        int cmdLine = BashLexer.LineAt(_input, firstParen.Position);
 
         while (Peek().Kind != BashTokenKind.Eof)
         {
@@ -1239,7 +1241,7 @@ public sealed partial class BashParser
                 int exprEnd = Peek().Position;
                 Advance(); // consume first )
                 Advance(); // consume second )
-                string expr = _input[exprStart..exprEnd];
+                string expr = BashLexer.SubstituteArithLineNumber(_input[exprStart..exprEnd], cmdLine);
                 return new Command.ArithCommand(BashArithmeticParser.ParseOrDefer(expr));
             }
 
@@ -1249,7 +1251,7 @@ public sealed partial class BashParser
         }
 
         // Reached EOF without finding ))
-        string remaining = _input[exprStart..];
+        string remaining = BashLexer.SubstituteArithLineNumber(_input[exprStart..], cmdLine);
         return new Command.ArithCommand(BashArithmeticParser.Parse(remaining));
     }
 

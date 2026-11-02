@@ -301,7 +301,6 @@ one
 2
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-vars-special vars-special (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### $LINENO in for loop
@@ -317,7 +316,6 @@ one
 zzz
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-vars-special vars-special (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### $LINENO in other for loops
@@ -348,7 +346,6 @@ one
 3
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-vars-special vars-special (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### $LINENO for assignment
