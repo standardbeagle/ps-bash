@@ -7,7 +7,7 @@ Known ps-bash/bash 5.2 divergences recorded as XFAIL in the spec corpus, grouped
 | `gap-differential-nativestdiobytes` | `spec/differential/nativestdiobytes.spec.sh` | 46 |
 | `gap-oils-array-assoc` | `spec/oils/array-assoc.spec.sh` | 36 |
 | `gap-oils-arith` | `spec/oils/arith.spec.sh` | 33 |
-| `gap-oils-array` | `spec/oils/array.spec.sh` | 33 |
+| `gap-oils-array` | `spec/oils/array.spec.sh` | 16 |
 | `gap-oils-builtin-completion` | `spec/oils/builtin-completion.spec.sh` | 33 |
 | `gap-oils-brace-expansion` | `spec/oils/brace-expansion.spec.sh` | 29 |
 | `gap-oils-builtin-printf` | `spec/oils/builtin-printf.spec.sh` | 29 |
@@ -15,11 +15,11 @@ Known ps-bash/bash 5.2 divergences recorded as XFAIL in the spec corpus, grouped
 | `gap-oils-alias` | `spec/oils/alias.spec.sh` | 27 |
 | `gap-oils-array-sparse` | `spec/oils/array-sparse.spec.sh` | 27 |
 | `gap-oils-sh-options` | `spec/oils/sh-options.spec.sh` | 27 |
-| `gap-oils-vars-special` | `spec/oils/vars-special.spec.sh` | 26 |
+| `gap-oils-vars-special` | `spec/oils/vars-special.spec.sh` | 14 |
 | `gap-oils-assign-extended` | `spec/oils/assign-extended.spec.sh` | 26 |
 | `gap-oils-var-ref` | `spec/oils/var-ref.spec.sh` | 14 |
 | `gap-oils-builtin-trap` | `spec/oils/builtin-trap.spec.sh` | 26 |
-| `gap-oils-builtin-read` | `spec/oils/builtin-read.spec.sh` | 8 |
+| `gap-oils-builtin-read` | `spec/oils/builtin-read.spec.sh` | 5 |
 | `gap-oils-nameref` | `spec/oils/nameref.spec.sh` | 23 |
 | `gap-oils-builtin-type-bash` | `spec/oils/builtin-type-bash.spec.sh` | 20 |
 | `gap-oils-builtin-kill` | `spec/oils/builtin-kill.spec.sh` | 19 |
@@ -48,7 +48,7 @@ Known ps-bash/bash 5.2 divergences recorded as XFAIL in the spec corpus, grouped
 | `gap-oils-builtin-meta-assign` | `spec/oils/builtin-meta-assign.spec.sh` | 11 |
 | `gap-oils-interactive` | `spec/oils/interactive.spec.sh` | 11 |
 | `gap-oils-builtin-fc` | `spec/oils/builtin-fc.spec.sh` | 11 |
-| `gap-oils-sh-usage` | `spec/oils/sh-usage.spec.sh` | 10 |
+| `gap-oils-sh-usage` | `spec/oils/sh-usage.spec.sh` | 9 |
 | `gap-oils-tilde` | `spec/oils/tilde.spec.sh` | 11 |
 | `gap-differential-bashparitygap` | `spec/differential/bashparitygap.spec.sh` | 11 |
 | `gap-oils-errexit` | `spec/oils/errexit.spec.sh` | 10 |
