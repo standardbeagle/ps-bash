@@ -6554,10 +6554,20 @@ public static partial class PsEmitter
                 {
                     // ${arr[@]} -> $arr (whole array); an associative array (hashtable) yields its VALUES.
                     // "${a[*]}" joins with the first character of IFS ("${a[@]}" with a space).
+                    // A SCALAR (`s=abc`) lives in the environment, not in a PowerShell variable: `${s[@]}` / `${s[0]}` are
+                    // the scalar itself (bash treats it as a one-element array).
+                    string whole = bvs.Name.All(c => char.IsAsciiLetterOrDigit(c) || c == '_') && !char.IsAsciiDigit(bvs.Name[0])
+                        && bvs.Name is not ("BASH_VERSINFO" or "BASH_SOURCE" or "FUNCNAME")
+                        ? $"$(if ($null -ne {arrayVar}) {{ {arrayVar} }} else {{ {EmitSimpleVar(bvs.Name)} }})"
+                        : arrayVar;
+                    if (subscript == "0" && !ReferenceEquals(whole, arrayVar))
+                    {
+                        return $"$(if ($null -eq {arrayVar}) {{ {EmitSimpleVar(bvs.Name)} }} else {{ {arrayVar}[0] }})";
+                    }
                     if (subscript == "*" && inDoubleQuote)
-                        return $"$(@(if ({arrayVar} -is [System.Collections.IDictionary]) {{ {arrayVar}.Values }} else {{ {arrayVar} }}) -join {PsBuild.IfsJoinSeparator})";
+                        return $"$(@(if ({arrayVar} -is [System.Collections.IDictionary]) {{ {arrayVar}.Values }} else {{ {whole} }}) -join {PsBuild.IfsJoinSeparator})";
                     if (subscript is "@" or "*")
-                        return $"$(if ({arrayVar} -is [System.Collections.IDictionary]) {{ {arrayVar}.Values }} else {{ {arrayVar} }})";
+                        return $"$(if ({arrayVar} -is [System.Collections.IDictionary]) {{ {arrayVar}.Values }} else {{ {whole} }})";
                     // ${m[$k]} / ${a[$i]}: the subscript is a variable's value.
                     if (System.Text.RegularExpressions.Regex.Match(subscript, @"^\$\{?(\w+)\}?$") is { Success: true } sv)
                     {
@@ -6627,8 +6637,15 @@ public static partial class PsEmitter
             if (subscript is "@" or "*")
             {
                 string lenArr = bvs.Name switch { "FUNCNAME" => "@(Get-BashFuncNames)", "BASH_VERSINFO" => "$global:BashVersionInfo", _ => $"${bvs.Name}" };
-                return inDoubleQuote ? $"$({lenArr}.Count)" : $"{lenArr}.Count";
+                // Always a subexpression: bare `$a.Count` glued to a literal (`len=${#a[@]}`) expands only `$a`.
+                // A scalar (`s=abc`, an env var) is a one-element array: `${#s[@]}` is 1.
+                if (lenArr.AsSpan(1).IndexOfAnyExcept(VarNameChars) < 0 && bvs.Name.Length > 0)
+                    return $"$(if ({lenArr} -is [System.Collections.IDictionary]) {{ {lenArr}.Count }} elseif ($null -ne {lenArr}) {{ @({lenArr}).Count }} elseif ($null -ne {EmitSimpleVar(bvs.Name)}) {{ 1 }} else {{ 0 }})";
+                return $"$({lenArr}.Count)";
             }
+            // ${#a[N]}: the length of ONE element (a string), not of the array.
+            string elemLen = EmitBracedVar(bvs with { Suffix = "[" + subscript + "]" });
+            return $"$(([string]({elemLen})).Length)";
         }
 
         string varRef = EmitSimpleVar(bvs.Name);
@@ -7035,7 +7052,8 @@ public static partial class PsEmitter
         sb.Append(arrayVar);
         sb.Append("); $__psbO = ").Append(offset).Append("; ");
         if (positional) sb.Append("if ($__psbO -gt 0) { $__psbO-- }; ");   // $@ counts from 1
-        sb.Append("if ($__psbO -lt 0) { $__psbO = $__psbA.Count + $__psbO }; ");
+        // A negative offset reaching before the first element is an EMPTY slice in bash, not a clamp to the start.
+        sb.Append("if ($__psbO -lt 0) { $__psbO = $__psbA.Count + $__psbO; if ($__psbO -lt 0) { return @() } }; ");
         sb.Append("$__psbO = [Math]::Max(0, [Math]::Min($__psbO, $__psbA.Count)); ");
         if (length is not null)
             sb.Append("$__psbN = ").Append(length).Append("; ");

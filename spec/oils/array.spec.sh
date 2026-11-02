@@ -147,7 +147,6 @@ len=3
 len=2
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array array (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Retrieve index that is a variable
@@ -472,7 +471,6 @@ empty=0
 unset=1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array array (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### [[ -v a[i] ]]
@@ -490,7 +488,6 @@ status=0
 status=1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array array (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### test -v a[i] with arith expressions
@@ -520,7 +517,6 @@ status=0
 status=1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array array (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### More arith expressions in [[ -v array[expr]] ]]
@@ -581,7 +577,6 @@ one=0
 two=1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array array (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Regression: Assigning with out-of-range negative index
@@ -682,7 +677,6 @@ abc
 abc
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array array (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### ${mystr[@]} and ${mystr[*]} disallowed with strict_array
@@ -753,7 +747,6 @@ echo ${#c[@]} ${#d[@]}
 1 1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array array (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### a+=() modifies existing instance of BashArray
@@ -777,7 +770,6 @@ a=(1)
 unset -v 'a[-2]'
 ## stdout:
 ## status: 1
-## XFAIL ps-bash gap-oils-array array (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -800,7 +792,6 @@ begin=-4 -> (1 2 3 4)
 begin=-5 -> ()
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array array (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
