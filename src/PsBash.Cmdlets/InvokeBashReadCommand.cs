@@ -142,11 +142,23 @@ public sealed class InvokeBashReadCommand : PSCmdlet
         // with '-' so it was not a var name either), so `-a` never fired and the
         // whole line landed in a scalar `parts`. bash puts a value-taking flag
         // last in a bundle; its value is the following argument (handled below).
+        // A value flag may carry its value in the same token (`-rn1`, `-n5`, `-d,`): split it off.
         var debundled = new List<string>();
+        bool raw = false;
         foreach (var a in args)
         {
-            if (a.Length > 2 && a[0] == '-' && a[1] != '-' && a.Skip(1).All(char.IsLetter))
-                foreach (var ch in a.Skip(1)) debundled.Add("-" + ch);
+            if (a.Length > 2 && a[0] == '-' && a[1] != '-' && char.IsLetter(a[1]))
+            {
+                for (int k = 1; k < a.Length; k++)
+                {
+                    debundled.Add("-" + a[k]);
+                    if ("pandNtu".IndexOf(a[k]) >= 0)
+                    {
+                        if (k + 1 < a.Length) debundled.Add(a.Substring(k + 1));
+                        break;
+                    }
+                }
+            }
             else
                 debundled.Add(a);
         }
@@ -156,17 +168,19 @@ public sealed class InvokeBashReadCommand : PSCmdlet
         while (i < args.Length)
         {
             var a = args[i];
-            if (a == "-r" || a == "-s") { i++; continue; }
+            if (a == "-r") { raw = true; i++; continue; }
+            if (a == "-s") { i++; continue; }
             if (a == "-p" && i + 1 < args.Length) { prompt = args[i + 1]; i += 2; continue; }
             if (a == "-a" && i + 1 < args.Length) { arrayName = args[i + 1]; i += 2; continue; }
-            if (a == "-n" && i + 1 < args.Length)
+            if ((a == "-n" || a == "-N") && i + 1 < args.Length)
             {
-                if (int.TryParse(args[i + 1], out var n)) maxChars = n;
-                i += 2; continue;
-            }
-            if (a == "-N" && i + 1 < args.Length)
-            {
-                if (int.TryParse(args[i + 1], out var n)) exactChars = n;
+                if (!int.TryParse(args[i + 1], out var n) || n < 0)
+                {
+                    FileSystemHelpers.WriteBashError(this, $"read: {args[i + 1]}: invalid number");
+                    FileSystemHelpers.SetLastExitCode(this, 1);
+                    return;
+                }
+                if (a == "-n") maxChars = n; else exactChars = n;
                 i += 2; continue;
             }
             if (a == "-d" && i + 1 < args.Length)
@@ -189,7 +203,7 @@ public sealed class InvokeBashReadCommand : PSCmdlet
             {
                 if (double.TryParse(args[i + 1], System.Globalization.NumberStyles.Float,
                         System.Globalization.CultureInfo.InvariantCulture, out var t))
-                    timeoutSecs = t;
+                    timeoutSecs = Math.Abs(t);   // bash takes the absolute value of a negative timeout
                 i += 2; continue;
             }
             // Non-flag token: a destination variable name. Validate up-front
@@ -224,13 +238,23 @@ public sealed class InvokeBashReadCommand : PSCmdlet
         }
 
         // Default variable name when none given is REPLY (bash default).
-        if (varNames.Count == 0 && arrayName == null)
+        bool noNames = varNames.Count == 0 && arrayName == null;   // `read` / `read -n 3`: REPLY keeps the line as read
+        if (noNames)
         {
             varNames.Add("REPLY");
         }
 
+        // `read -t 0` only asks whether input is available; it consumes nothing and assigns nothing.
+        if (timeoutSecs == 0 && fromFd is null)
+        {
+            bool available = _pipeline.Count > 0 || SharedStdin.Get(SessionState) is not null || Console.IsInputRedirected;
+            FileSystemHelpers.SetLastExitCode(this, available ? 0 : 1);
+            return;
+        }
+
         // Source the input line.
         string? inputLine;
+        string pushBack = "";   // input read past what this call consumes (-n), returned to the front of stdin
         if (fromFd is int ufd2 && ufd2 > 2)
         {
             try { inputLine = BashFdTable.ReadLine(ufd2); }
@@ -241,38 +265,59 @@ public sealed class InvokeBashReadCommand : PSCmdlet
                 return;
             }
         }
-        else if (recordDelim is char rd && _pipeline.Count == 0
+        else if (exactChars is int exactN && _pipeline.Count == 0
+                 && SharedStdin.TryDequeueChars(SessionState, exactN, out var exactText, out var exactComplete))
+        {
+            // -N N: exactly N characters; neither a newline nor -d ends it.
+            inputLine = exactText;
+            recordTerminated = exactComplete;
+        }
+        else if (recordDelim is char rd && exactChars is null && _pipeline.Count == 0
                  && SharedStdin.TryDequeueRecord(SessionState, rd, out var record, out recordTerminated))
         {
             inputLine = record;
         }
         else if (_pipeline.Count > 0)
         {
-            // Pipeline mode — concatenate pipeline item text, strip trailing
-            // newlines (oracle's `-replace "`r`n","`n" -replace "`n$",''` slice).
-            var sb = new System.Text.StringBuilder();
-            foreach (var item in _pipeline)
+            // Pipeline mode (here-document / here-string / piped records): the stream's bytes, one record per
+            // line unless it is the unterminated tail. Take one line (or -d record, or -N characters) from it and
+            // hand the rest back to the shared stdin for the next read.
+            string text = BashRuntime.RecordStreamText(_pipeline).Replace("\r\n", "\n");
+            string rest = "";
+            if (exactChars is int en)
             {
-                var text = BashRuntime.GetBashText(item);
-                if (recordDelim is not null && sb.Length > 0 && !sb.ToString().EndsWith('\n')) sb.Append('\n');
-                if (!string.IsNullOrEmpty(text)) sb.Append(text);
+                recordTerminated = text.Length >= en;
+                if (text.Length > en) { rest = text.Substring(en); text = text.Substring(0, en); }
+                inputLine = text;
             }
-            inputLine = sb.ToString().Replace("\r\n", "\n");
-            if (recordDelim is char pd)
+            else if (recordDelim is char pd)
             {
-                // -d DELIM: up to the first DELIM; the rest goes back to the shared stdin for the next read.
-                int at = inputLine.IndexOf(pd);
+                // -d DELIM: up to the first DELIM.
+                int at = text.IndexOf(pd);
                 recordTerminated = at >= 0;
-                if (at >= 0)
-                {
-                    SharedStdin.PushFront(SessionState, inputLine.Substring(at + 1));
-                    inputLine = inputLine.Substring(0, at);
-                }
-                else if (!inputLine.EndsWith('\n')) inputLine += "\n";
+                if (at >= 0) { rest = text.Substring(at + 1); text = text.Substring(0, at); }
+                inputLine = text;
             }
-            else if (inputLine.EndsWith('\n')) inputLine = inputLine.Substring(0, inputLine.Length - 1);
+            else
+            {
+                int pos = 0;
+                var lineSb = new System.Text.StringBuilder();
+                while (true)
+                {
+                    int at = text.IndexOf('\n', pos);
+                    if (at < 0) { lineSb.Append(text, pos, text.Length - pos); recordTerminated = false; break; }
+                    lineSb.Append(text, pos, at - pos);
+                    pos = at + 1;
+                    recordTerminated = true;
+                    if (!raw && EndsWithOddBackslashes(lineSb)) { lineSb.Length--; continue; }   // backslash-newline continues the line
+                    break;
+                }
+                rest = text.Substring(pos);
+                inputLine = lineSb.ToString();
+            }
+            if (rest.Length > 0) pushBack = rest;
         }
-        else if (TryDequeueSharedStdin(out var queuedLine))
+        else if (recordDelim is null && exactChars is null && TryDequeueSharedStdinLine(raw, out var queuedLine, out recordTerminated))
         {
             // A brace group used as a pipe target drains the incoming pipeline
             // into $global:__BashStdIn (the emitter's BraceGroupStdinPrelude), so
@@ -282,6 +327,7 @@ public sealed class InvokeBashReadCommand : PSCmdlet
         }
         else
         {
+            recordTerminated = true;
             // Interactive fallback — write prompt then [Console]::In.ReadLine().
             // Task spec: preserve the oracle's PTY-safe slave-fd read path.
             if (prompt != null)
@@ -350,15 +396,15 @@ public sealed class InvokeBashReadCommand : PSCmdlet
             return;
         }
 
-        // Apply -n / -N character limits.
-        if (exactChars.HasValue && inputLine.Length > exactChars.Value)
+        // -n N: at most N characters; what was read past them stays in the input for the next read.
+        if (maxChars.HasValue && exactChars is null && inputLine.Length >= maxChars.Value && fromFd is null)
         {
-            inputLine = inputLine.Substring(0, exactChars.Value);
-        }
-        else if (maxChars.HasValue && inputLine.Length > maxChars.Value)
-        {
+            string tail = inputLine.Substring(maxChars.Value) + (recordTerminated ? (recordDelim ?? '\n').ToString() : "");
             inputLine = inputLine.Substring(0, maxChars.Value);
+            recordTerminated = true;
+            if (tail.Length > 0) pushBack = tail + pushBack;
         }
+        if (pushBack.Length > 0) SharedStdin.PushFront(SessionState, pushBack);
 
         // Assign.
         if (arrayName != null)
@@ -372,13 +418,19 @@ public sealed class InvokeBashReadCommand : PSCmdlet
             // none alongside).
         }
 
-        if (varNames.Count == 1)
+        if (noNames)
+        {
+            // REPLY gets the line exactly as read: no IFS trimming or splitting (backslash escapes still apply without -r).
+            AssignVariable("REPLY", raw ? inputLine : RemoveBackslashEscapes(inputLine));
+        }
+        else if (varNames.Count == 1)
         {
             // A lone variable still has the IFS WHITESPACE trimmed from both ends (`read x <<< "  a  "` is `a`);
             // `IFS= read` (empty IFS) keeps the line exactly.
             string? ifsValue = BashVariableStore.Get("IFS");
             char[] ifsWhitespace = (ifsValue ?? " \t\n").Where(ch => ch is ' ' or '\t' or '\n').ToArray();
-            AssignVariable(varNames[0], ifsWhitespace.Length == 0 ? inputLine : inputLine.Trim(ifsWhitespace));
+            string one = ifsWhitespace.Length == 0 ? inputLine : inputLine.Trim(ifsWhitespace);
+            AssignVariable(varNames[0], raw ? one : RemoveBackslashEscapes(one));
         }
         else if (varNames.Count > 1)
         {
@@ -400,8 +452,40 @@ public sealed class InvokeBashReadCommand : PSCmdlet
     /// read. The cast goes through <see cref="PSObject.Base(object)"/> so a
     /// PSObject-wrapped value still resolves.
     /// </summary>
-    private bool TryDequeueSharedStdin(out string? line) =>
-        SharedStdin.TryDequeueLine(SessionState, out line);
+    private bool TryDequeueSharedStdinLine(bool raw, out string? line, out bool terminated)
+    {
+        if (!SharedStdin.TryDequeueLine(SessionState, out line, out terminated)) return false;
+        // Without -r a trailing backslash joins the next line.
+        var sb = new System.Text.StringBuilder(line);
+        while (!raw && terminated && EndsWithOddBackslashes(sb))
+        {
+            sb.Length--;
+            if (!SharedStdin.TryDequeueLine(SessionState, out var next, out terminated)) { terminated = false; break; }
+            sb.Append(next);
+        }
+        line = sb.ToString();
+        return true;
+    }
+
+    private static bool EndsWithOddBackslashes(System.Text.StringBuilder sb)
+    {
+        int n = 0;
+        for (int k = sb.Length - 1; k >= 0 && sb[k] == '\\'; k--) n++;
+        return (n & 1) == 1;
+    }
+
+    /// <summary>Without <c>-r</c>, a backslash quotes the next character and is dropped (a lone trailing one too).</summary>
+    private static string RemoveBackslashEscapes(string s)
+    {
+        if (s.IndexOf('\\') < 0) return s;
+        var sb = new System.Text.StringBuilder(s.Length);
+        for (int k = 0; k < s.Length; k++)
+        {
+            if (s[k] == '\\') { if (k + 1 < s.Length) sb.Append(s[++k]); }
+            else sb.Append(s[k]);
+        }
+        return sb.ToString();
+    }
 
     /// <summary>
     /// Assign value to a variable in the caller's scope plus the process

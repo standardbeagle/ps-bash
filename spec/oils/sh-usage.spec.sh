@@ -22,7 +22,6 @@ exit
 echo 'foo-bar' | { read -d -; echo reply=$REPLY; }
 ## stdout: reply=foo
 ## status: 0
-## XFAIL ps-bash gap-oils-sh-usage sh-usage (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### sh +c is accepted
