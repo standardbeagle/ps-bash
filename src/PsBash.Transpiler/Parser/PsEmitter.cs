@@ -6877,10 +6877,20 @@ public static partial class PsEmitter
                 {
                     // ${arr[@]} -> $arr (whole array); an associative array (hashtable) yields its VALUES.
                     // "${a[*]}" joins with the first character of IFS ("${a[@]}" with a space).
+                    // A SCALAR (`s=abc`) lives in the environment, not in a PowerShell variable: `${s[@]}` / `${s[0]}` are
+                    // the scalar itself (bash treats it as a one-element array).
+                    string whole = bvs.Name.All(c => char.IsAsciiLetterOrDigit(c) || c == '_') && !char.IsAsciiDigit(bvs.Name[0])
+                        && bvs.Name is not ("BASH_VERSINFO" or "BASH_SOURCE" or "FUNCNAME")
+                        ? $"$(if ($null -ne {arrayVar}) {{ {arrayVar} }} else {{ {EmitSimpleVar(bvs.Name)} }})"
+                        : arrayVar;
+                    if (subscript == "0" && !ReferenceEquals(whole, arrayVar))
+                    {
+                        return $"$(if ($null -eq {arrayVar}) {{ {EmitSimpleVar(bvs.Name)} }} else {{ {arrayVar}[0] }})";
+                    }
                     if (subscript == "*" && inDoubleQuote)
-                        return $"$(@(if ({arrayVar} -is [System.Collections.IDictionary]) {{ {arrayVar}.Values }} else {{ {arrayVar} }}) -join {PsBuild.IfsJoinSeparator})";
+                        return $"$(@(if ({arrayVar} -is [System.Collections.IDictionary]) {{ {arrayVar}.Values }} else {{ {whole} }}) -join {PsBuild.IfsJoinSeparator})";
                     if (subscript is "@" or "*")
-                        return $"$(if ({arrayVar} -is [System.Collections.IDictionary]) {{ {arrayVar}.Values }} else {{ {arrayVar} }})";
+                        return $"$(if ({arrayVar} -is [System.Collections.IDictionary]) {{ {arrayVar}.Values }} else {{ {whole} }})";
                     // ${m[$k]} / ${a[$i]}: the subscript is a variable's value.
                     if (System.Text.RegularExpressions.Regex.Match(subscript, @"^\$\{?(\w+)\}?$") is { Success: true } sv)
                     {
@@ -6950,22 +6960,18 @@ public static partial class PsEmitter
             if (subscript is "@" or "*")
             {
                 string lenArr = bvs.Name switch { "FUNCNAME" => "@(Get-BashFuncNames)", "BASH_VERSINFO" => "$global:BashVersionInfo", _ => $"${bvs.Name}" };
-                // A plain scalar counts as a one-element array (`c="a b"; ${#c[@]}` is 1).
-                if (IsOrdinaryVarName(bvs.Name) && bvs.Name.All(ch => char.IsAsciiLetterOrDigit(ch) || ch == '_'))
-                    return $"$(if ($null -ne {lenArr}) {{ {lenArr}.Count }} elseif ($null -ne $env:{bvs.Name}) {{ 1 }} else {{ 0 }})";
-                return inDoubleQuote ? $"$({lenArr}.Count)" : $"{lenArr}.Count";
+                // Always a subexpression: bare `$a.Count` glued to a literal (`len=${#a[@]}`) expands only `$a`.
+                // A scalar (`s=abc`, an env var) is a one-element array: `${#s[@]}` is 1.
+                if (lenArr.AsSpan(1).IndexOfAnyExcept(VarNameChars) < 0 && bvs.Name.Length > 0)
+                    return $"$(if ({lenArr} -is [System.Collections.IDictionary]) {{ {lenArr}.Count }} elseif ($null -ne {lenArr}) {{ @({lenArr}).Count }} elseif ($null -ne {EmitSimpleVar(bvs.Name)}) {{ 1 }} else {{ 0 }})";
+                return $"$({lenArr}.Count)";
             }
-            // `${#a[0]}` / `${#a[i]}`: the length of ONE element.
+            // ${#a[N]}: the length of ONE element (a string), not of the array.
             // (`${s#[0-9]}` is a strip pattern that merely starts with `[`: the subscript must be arithmetic text.)
-            if (bvs.Name is not ("FUNCNAME" or "BASH_VERSINFO")
-                && System.Text.RegularExpressions.Regex.IsMatch(subscript, @"^[\w+\-*/% ]+$"))
+            if (System.Text.RegularExpressions.Regex.IsMatch(subscript, @"^[\w+\-*/% ]+$"))
             {
-                string arr = $"${bvs.Name}";
-                string idx = int.TryParse(subscript, out _) ? subscript : EmitWordSubscript(arr, subscript);
-                // A plain scalar is element 0 of itself.
-                if (IsOrdinaryVarName(bvs.Name) && bvs.Name.All(ch => char.IsAsciiLetterOrDigit(ch) || ch == '_'))
-                    return $"$(if ($null -ne {arr}) {{ ([string]{arr}[{idx}]).Length }} elseif (({idx}) -eq 0) {{ ([string]$env:{bvs.Name}).Length }} else {{ 0 }})";
-                return $"$(([string]{arr}[{idx}]).Length)";
+                string elemLen = EmitBracedVar(bvs with { Suffix = "[" + subscript + "]" });
+                return $"$(([string]({elemLen})).Length)";
             }
         }
 

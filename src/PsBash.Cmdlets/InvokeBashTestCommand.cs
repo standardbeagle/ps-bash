@@ -203,7 +203,16 @@ public sealed class InvokeBashTestCommand : PSCmdlet
                 if (sub is "@" or "*") return list.Count > 0;
                 if (!long.TryParse(sub, out long idx))
                 {
-                    try { idx = BashArith.Evaluate(sub, n => long.TryParse(BashVariableStore.Get(n), out var v) ? v : 0, (_, _) => { }); }
+                    // A variable holding an expression is itself evaluated (`i='0+2'; [[ -v a[i] ]]` is index 2).
+                    long Read(string n, int depth)
+                    {
+                        string? raw = BashVariableStore.Get(n)?.Trim();
+                        if (long.TryParse(raw, out var v)) return v;
+                        if (string.IsNullOrEmpty(raw) || depth > 8) return 0;
+                        try { return BashArith.Evaluate(raw, m => Read(m, depth + 1), (_, _) => { }); }
+                        catch (BashArith.BashArithException) { return 0; }
+                    }
+                    try { idx = BashArith.Evaluate(sub, n => Read(n, 0), (_, _) => { }); }
                     catch (BashArith.BashArithException) { return false; }
                 }
                 if (idx < 0) idx += list.Count;

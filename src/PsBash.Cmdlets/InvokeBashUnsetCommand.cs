@@ -77,6 +77,13 @@ public sealed class InvokeBashUnsetCommand : PSCmdlet
         {
             int index = (int)parsed;
             if (index < 0) index += list.Count;   // `unset 'a[-1]'`: counted from the end
+            if (index < 0 && parsed < 0)
+            {
+                // Counted from the end past the first element: bash reports it and fails (status 1).
+                FileSystemHelpers.WriteStderr(this, $"unset: [{key}]: bad array subscript");
+                FileSystemHelpers.SetLastExitCode(this, 1);
+                return true;
+            }
             if (index >= 0 && index < list.Count)
             {
                 var kept = new List<object?>(list.Count - 1);

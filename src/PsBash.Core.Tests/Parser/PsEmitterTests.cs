@@ -4196,21 +4196,21 @@ public class PsEmitterTests
     public void Transpile_ArrayIndexAccess_EmitsPsIndex()
     {
         var result = PsEmitter.Transpile("echo ${arr[0]}");
-        Assert.Equal("Invoke-BashEcho $arr[0]", result);
+        Assert.Equal("Invoke-BashEcho $(if ($null -eq $arr) { $env:arr } else { $arr[0] })", result);
     }
 
     [Fact]
     public void Transpile_ArrayAllElements_EmitsPsArrayRef()
     {
         var result = PsEmitter.Transpile("echo ${arr[@]}");
-        Assert.Equal("Invoke-BashEcho $(if ($arr -is [System.Collections.IDictionary]) { $arr.Values } else { $arr })", result);
+        Assert.Equal("Invoke-BashEcho $(if ($arr -is [System.Collections.IDictionary]) { $arr.Values } else { $(if ($null -ne $arr) { $arr } else { $env:arr }) })", result);
     }
 
     [Fact]
     public void Transpile_ArrayLength_EmitsPsCount()
     {
         var result = PsEmitter.Transpile("echo ${#arr[@]}");
-        Assert.Equal("Invoke-BashEcho $(if ($null -ne $arr) { $arr.Count } elseif ($null -ne $env:arr) { 1 } else { 0 })", result);
+        Assert.Equal("Invoke-BashEcho $(if ($arr -is [System.Collections.IDictionary]) { $arr.Count } elseif ($null -ne $arr) { @($arr).Count } elseif ($null -ne $env:arr) { 1 } else { 0 })", result);
     }
 
     [Fact]

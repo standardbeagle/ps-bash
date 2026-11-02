@@ -576,7 +576,6 @@ one=0
 two=1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array array (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Regression: Assigning with out-of-range negative index
@@ -677,7 +676,6 @@ abc
 abc
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array array (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### ${mystr[@]} and ${mystr[*]} disallowed with strict_array
@@ -770,7 +768,6 @@ a=(1)
 unset -v 'a[-2]'
 ## stdout:
 ## status: 1
-## XFAIL ps-bash gap-oils-array array (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
