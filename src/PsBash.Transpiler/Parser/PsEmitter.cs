@@ -4150,6 +4150,28 @@ public static partial class PsEmitter
         return mappedSb.ToString();
     }
 
+    /// <summary>The text of a command word that is all literal/glob/quoted text and starts with an unquoted `[` (other than
+    /// `[` and `[[` themselves): bash looks that up as a command name, PowerShell would read it as a type literal.</summary>
+    private static string? StaticBracketCommandName(CompoundWord word)
+    {
+        if (word.Parts.IsEmpty) return null;
+        var sb = new StringBuilder();
+        foreach (var part in word.Parts)
+        {
+            switch (part)
+            {
+                case WordPart.Literal l: sb.Append(l.Value); break;
+                case WordPart.GlobPart g: sb.Append(g.Pattern); break;
+                case WordPart.EscapedLiteral e: sb.Append(e.Value); break;
+                case WordPart.SingleQuoted q: sb.Append(q.Value); break;
+                default: return null;
+            }
+        }
+        string name = sb.ToString();
+        bool unquotedLead = word.Parts[0] is WordPart.Literal or WordPart.GlobPart;
+        return unquotedLead && name.Length > 1 && name[0] == '[' && name != "[[" ? name : null;
+    }
+
     // The general fallback: no special form matched, emit the command word(s),
     // arguments (with env-prefix save/restore and unquoted-var splat handling),
     // and any trailing redirects.
@@ -4192,8 +4214,11 @@ public static partial class PsEmitter
         bool isScriptCommand =
             cmd.Words.Length > 0 && IsLocalShellScriptCommand(cmd.Words[0]);
         // A literal command name starting with - or + (`--`, `-x`) would read as a PowerShell operator or parameter.
+        // A command name starting with `[` (but not `[` / `[[` themselves) would read as a PowerShell type literal.
         string? dashName = cmd.Words.Length > 0 && GetLiteralValue(cmd.Words[0]) is { Length: > 0 } dn && dn[0] is '-' or '+'
             ? GetLiteralValue(cmd.Words[0]) : null;
+        if (dashName is null && cmd.Words.Length > 0 && StaticBracketCommandName(cmd.Words[0]) is { } bracketName)
+            dashName = bracketName;
         bool needsCallOperator =
             !isScriptCommand && cmd.Words.Length > 0
             && (IsExpandedCommandWord(cmd.Words[0]) || dashName is not null);
