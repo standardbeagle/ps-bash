@@ -26,7 +26,8 @@ internal static class TerminalTitle
 
     internal static string Idle(string cwd)
     {
-        var name = Path.GetFileName(cwd.TrimEnd('\\', '/'));
+        var trimmed = cwd.TrimEnd('\\', '/');
+        var name = trimmed[(trimmed.LastIndexOfAny(['\\', '/']) + 1)..]; // either separator, on every OS
         return Sanitize("ps-bash: " + (name.Length > 0 ? name : cwd));
     }
 

@@ -39,6 +39,38 @@ public sealed class InvokeBashPrintfCommand : PSCmdlet
     private const string EscapedPercentSentinel = "\0ESCAPED_PERCENT\0";
 
     /// <summary>
+    /// An escape that DECODES to a percent sign (<c>\045</c>, <c>\x25</c>, <c>\u0025</c>) is a literal
+    /// percent in bash, never the start of a conversion; swap it for the sentinel before escapes are expanded.
+    /// </summary>
+    private static string ProtectEscapedPercent(string format)
+    {
+        if (format.IndexOf('\\') < 0) return format;
+        var sb = new StringBuilder(format.Length);
+        for (int i = 0; i < format.Length; i++)
+        {
+            char c = format[i];
+            if (c != '\\' || i + 1 >= format.Length) { sb.Append(c); continue; }
+            string rest = format.Substring(i + 1);
+            string? hit = null;
+            foreach (var cand in new[] { "0045", "045", "45", "x25", "u0025", "U00000025" })
+                if (rest.StartsWith(cand, StringComparison.Ordinal)) { hit = cand; break; }
+            // `\45` is only an octal escape when the next char is not another octal digit (\450 is \45 then 0? bash takes up to 3 digits).
+            if (hit is "45" or "045" or "0045")
+            {
+                int digits = 0;
+                while (digits < rest.Length && digits < 3 && rest[digits] >= '0' && rest[digits] <= '7') digits++;
+                if (!(digits == hit.Length || (hit == "0045" && digits == 3))) hit = null;
+                else if (hit == "0045") hit = "045";
+            }
+            if (hit is null) { sb.Append(c).Append(format[i + 1]); i++; continue; }
+            sb.Append(EscapedPercentSentinel);
+            i += hit.Length;
+        }
+        return sb.ToString();
+    }
+
+
+    /// <summary>
     /// Decoy for a bare <c>-v</c> typed DIRECTLY at PowerShell (it prefix-matches
     /// <c>-Verbose</c>); the transpiler single-quotes every dash word, so it never binds there.
     /// <c>-v</c> must be printf's first argument, so it is re-injected at the head.
@@ -126,6 +158,7 @@ public sealed class InvokeBashPrintfCommand : PSCmdlet
         }
 
         format = format.Replace("%%", EscapedPercentSentinel);
+        format = ProtectEscapedPercent(format);
         format = BashEscapes.Expand(format, EscapeDialect.PrintfFormat);
 
         var sb = new StringBuilder();
