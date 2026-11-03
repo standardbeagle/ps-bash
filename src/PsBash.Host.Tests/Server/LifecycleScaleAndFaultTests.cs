@@ -420,7 +420,7 @@ public sealed class LifecycleScaleAndFaultTests
         var priorEndpoint = Environment.GetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar);
         var priorTimeout = Environment.GetEnvironmentVariable("PSBASH_TIMEOUT");
         Environment.SetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar, spec);
-        Environment.SetEnvironmentVariable("PSBASH_TIMEOUT", "1"); // 1s IDLE window
+        Environment.SetEnvironmentVariable("PSBASH_TIMEOUT", "2"); // 2s IDLE window (1s tripped on a cold, loaded CI runner before the first frame)
 
         await using var transport = NewTransport(scheme, endpoint);
         await using var pool = new WorkerPool<SdkWorker>(1, 2, SdkWorker.Create);
@@ -447,13 +447,13 @@ public sealed class LifecycleScaleAndFaultTests
             // one-shot total timeout of 1s would have killed it mid-stream.)
             var sw = Stopwatch.StartNew();
             await ipc.QueryAsync(
-                "1..8 | ForEach-Object { Write-Host 'tick'; Start-Sleep -Milliseconds 300 }");
+                "1..12 | ForEach-Object { Write-Host 'tick'; Start-Sleep -Milliseconds 300 }");
             sw.Stop();
 
             // No TimeoutException means the per-frame re-arm kept the call alive.
             // Assert the run outlasted the idle window so the result is meaningful.
-            Assert.True(sw.Elapsed > TimeSpan.FromSeconds(1.2),
-                $"streaming run should outlast the 1s idle window; took {sw.ElapsedMilliseconds}ms");
+            Assert.True(sw.Elapsed > TimeSpan.FromSeconds(2.4),
+                $"streaming run should outlast the 2s idle window; took {sw.ElapsedMilliseconds}ms");
         }
         finally
         {
