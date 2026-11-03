@@ -210,17 +210,13 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
         }
     }
 
-    /// <param name="batchOutput">
-    /// Coalesce stdout into large chunks (S1). Only the IPC path passes true. The
-    /// <see cref="OutputCallback"/> path must NOT batch: its documented convention is
-    /// ONE CALL PER LINE, and in-process consumers (and tests) index on that granularity —
-    /// batching there silently turned N line-callbacks into one multi-line callback. It
-    /// would also buy nothing, since that path has no IPC frame to amortize.
-    /// </param>
     /// <summary>
     /// A new invocation starts with nothing `readonly`. The Cmdlets assembly is not referenced by the host (it is
     /// loaded into the runspace), so the call goes through reflection and is a no-op until the assembly is loaded.
     /// </summary>
+    [System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage(
+        "Trimming", "IL2075",
+        Justification = "Best-effort lookup of a type in an assembly that is loaded into the runspace at run time; if it is trimmed away the call is a no-op.")]
     private static void ClearReadonlyNames()
     {
         try
@@ -233,6 +229,13 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
         catch (Exception) { /* best effort: a stale readonly name only makes a later `unset` refuse */ }
     }
 
+    /// <param name="batchOutput">
+    /// Coalesce stdout into large chunks (S1). Only the IPC path passes true. The
+    /// <see cref="OutputCallback"/> path must NOT batch: its documented convention is
+    /// ONE CALL PER LINE, and in-process consumers (and tests) index on that granularity —
+    /// batching there silently turned N line-callbacks into one multi-line callback. It
+    /// would also buy nothing, since that path has no IPC frame to amortize.
+    /// </param>
     private int RunCommand(string command, Action<string>? output, Action<string>? errorOutput,
                            bool batchOutput,
                            IReadOnlyList<KeyValuePair<string, string>>? environment = null,
