@@ -100,6 +100,11 @@ public static class CanonicalEnv
         // cleanup and the isolation the oracle/differential suites already assume.
         env["PSBASH_PER_INVOCATION"] = "1";
 
+        // The differential suites assert output parity, not the host memory guard (it has its own unit tests).
+        // On a 6 GB CI runner the default (a quarter of RAM = 1.5 GB) stopped ordinary commands with exit 137,
+        // so give the test hosts the same headroom the old 4 GB default had.
+        env["PSBASH_HOST_MAX_MB"] = "4096";
+
         // The ps-bash launcher is a framework-dependent apphost: it must find
         // the shared .NET runtime. DOTNET_ROOT (and the dotnet dir on PATH) is
         // how a non-default install location is discovered. Preserve whatever
