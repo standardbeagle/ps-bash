@@ -429,6 +429,9 @@ jobs:
     needs: [release-tag, test, build-binaries]
     if: ${{ github.event_name == 'push' || inputs.dry_run != true }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # NuGet trusted publishing (OIDC)
     steps:
       - uses: actions/checkout@v4
         with:
@@ -507,10 +510,16 @@ jobs:
       # module is redundant — and its publish never actually succeeded (the step
       # reported a false green while silently exiting 1). Removed deliberately.
 
+      - name: NuGet login (trusted publishing)
+        id: nuget-login
+        uses: NuGet/login@v1
+        with:
+          user: ${{ secrets.NUGET_USER }}
+
       - name: Pack and publish to NuGet
         shell: pwsh
         env:
-          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+          NUGET_API_KEY: ${{ steps.nuget-login.outputs.NUGET_API_KEY }}
         run: |
           $version = '${{ needs.release-tag.outputs.tag }}' -replace '^v', ''
           # Sync BOTH package versions to the release. PsBash.Core takes a
