@@ -3880,11 +3880,6 @@ public static partial class PsEmitter
     private const string SetXtraceOn = "Set-PSDebug -Trace 1; $global:__BashXtrace = $true";
 
     /// <summary>
-    /// Splits <c>-o pipefail</c> / <c>+o pipefail</c> (also the clustered <c>-eo pipefail</c>) out of
-    /// <paramref name="args"/>: <paramref name="on"/> is the new setting, <paramref name="rest"/> the other
-    /// options, ready for the ordinary option handling.
-    /// </summary>
-    /// <summary>
     /// Pulls the options ps-bash tracks at runtime (<c>pipefail</c>, <c>nounset</c>/<c>-u</c>) out of a
     /// <c>set</c> argument list, in any bundling (<c>-eu</c>, <c>-euo pipefail</c>, <c>-o nounset</c>);
     /// the remaining options go back through the normal <c>set</c> handling.
@@ -8598,11 +8593,7 @@ public static partial class PsEmitter
 
     private static string QuotePsString(string value) => PsBuild.SingleQuote(value);
 
-    /// <summary>
-    /// Tries to emit a mapped PowerShell equivalent for known bash pipe-target commands.
-    /// Returns false if the command is not a recognized pipe target.
-    /// </summary>
-    /// <summary>A let operand's text: literals, quotes and the unquoted * of =3*4 (an arithmetic operator here).</summary>
+    /// <summary>A let operand's text: literals, quotes and the unquoted * of x=3*4 (an arithmetic operator here).</summary>
     private static bool TryGetLetOperandText(CompoundWord word, out string text)
     {
         var sb = new StringBuilder();
@@ -8629,6 +8620,10 @@ public static partial class PsEmitter
         return string.Join("; ", statements);
     }
 
+    /// <summary>
+    /// Tries to emit a mapped PowerShell equivalent for known bash pipe-target commands.
+    /// Returns false if the command is not a recognized pipe target.
+    /// </summary>
     private static bool TryEmitMappedCommand(Command.Simple cmd, out string result)
     {
         result = "";
@@ -9020,17 +9015,6 @@ public static partial class PsEmitter
         return null;
     }
 
-    /// <summary>
-    /// Collapses a word to its literal string VALUE when every part is static (bare
-    /// literals, escaped literals, single-quoted, or double-quoted runs of literals) —
-    /// i.e. no variable/command/arith substitution, no glob. Unlike
-    /// <see cref="ExtractSingleQuotedOrLiteralValue"/> this handles MIXED words such as
-    /// <c>-F","</c> (a bare <c>-F</c> literal adjacent to a double-quoted <c>,</c>).
-    /// Returns <c>null</c> for any word carrying dynamic parts. Used by passthrough
-    /// force-quoting so a flag needing protection becomes ONE single-quoted PS string
-    /// instead of re-wrapping already-quoted emitted text.
-    /// </summary>
-    // internal, not private: also the fused lane's compile-time-static arg test.
     /// <summary>The name operand of `[[ -v name ]]`: literal text, where `[..]` (a subscript) arrives as a glob part.</summary>
     private static string? TryGetVarOperandName(CompoundWord word)
     {
@@ -9044,6 +9028,17 @@ public static partial class PsEmitter
         return sb.ToString();
     }
 
+    /// <summary>
+    /// Collapses a word to its literal string VALUE when every part is static (bare
+    /// literals, escaped literals, single-quoted, or double-quoted runs of literals) —
+    /// i.e. no variable/command/arith substitution, no glob. Unlike
+    /// <see cref="ExtractSingleQuotedOrLiteralValue"/> this handles MIXED words such as
+    /// <c>-F","</c> (a bare <c>-F</c> literal adjacent to a double-quoted <c>,</c>).
+    /// Returns <c>null</c> for any word carrying dynamic parts. Used by passthrough
+    /// force-quoting so a flag needing protection becomes ONE single-quoted PS string
+    /// instead of re-wrapping already-quoted emitted text.
+    /// </summary>
+    // internal, not private: also the fused lane's compile-time-static arg test.
     internal static string? TryGetStaticArgValue(CompoundWord word)
     {
         var sb = new StringBuilder();

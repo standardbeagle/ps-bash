@@ -42,7 +42,7 @@ public sealed class InvokeBashPipeStageCommand : PSCmdlet
     protected override void EndProcessing()
     {
         try { _stage!.End(); }
-        finally { _stage.Dispose(); }
+        finally { _stage!.Dispose(); }
         int code = 0;
         try
         {
