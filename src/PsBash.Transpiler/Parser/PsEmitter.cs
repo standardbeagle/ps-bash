@@ -2936,14 +2936,20 @@ public static partial class PsEmitter
             {
                 // Park the caller's value once per call (restored by EmitFunction's finally), then assign.
                 // `local x` alone leaves x unset, as in bash.
+                // `local s+=x`: the first declaration in this call starts from empty (not the caller's s); later ones append.
+                if (pair.Op == AssignOp.PlusEqual && pair.Value is not null)
+                    sb.Append($"$__psbashLocBase = if ($null -eq $__lsd_{pair.Name}) {{ '' }} else {{ $env:{pair.Name} }}; ");
                 sb.Append($"if ($null -eq $__lsd_{pair.Name}) {{ $__lsd_{pair.Name} = @{{ v = $env:{pair.Name} }} }}; $env:{pair.Name} = ");
                 if (pair.Value is null) sb.Append("$null");
                 else
                 {
                     string localAssigned = EmitAssignmentValue(pair.Value);
+                    // `local s+=x` appends to the value already there (the caller's, or this function's earlier one).
                     sb.Append(pair.Op == AssignOp.Equal && _intVars?.Contains(pair.Name) == true
                         ? "[string](Invoke-BashArith ([string](" + localAssigned + ")))"
-                        : localAssigned);
+                        : pair.Op == AssignOp.PlusEqual
+                            ? "$__psbashLocBase + (" + localAssigned + ")"
+                            : localAssigned);
                 }
                 continue;
             }
@@ -3512,6 +3518,22 @@ public static partial class PsEmitter
         return true;
     }
 
+    /// <summary><c>NAME+=value</c> as one word whose first part carries the name: splits off the name and the value.</summary>
+    private static bool TrySplitAppendInitializer(CompoundWord word, out string name, out CompoundWord value)
+    {
+        name = "";
+        value = word;
+        if (word.Parts.IsDefaultOrEmpty || word.Parts[0] is not WordPart.Literal first) return false;
+        int eq = first.Value.IndexOf("+=", StringComparison.Ordinal);
+        if (eq <= 0 || !IsValidVarName(first.Value[..eq])) return false;
+        name = first.Value[..eq];
+        var rest = first.Value[(eq + 2)..];
+        var parts = word.Parts.RemoveAt(0);
+        if (rest.Length > 0) parts = parts.Insert(0, new WordPart.Literal(rest));
+        value = new CompoundWord(parts);
+        return true;
+    }
+
     private static bool IsValidVarName(string s) =>
         s.Length > 0 && (char.IsAsciiLetter(s[0]) || s[0] == '_')
         && s.AsSpan(1).IndexOfAnyExcept(VarNameChars) < 0;
@@ -3867,9 +3889,19 @@ public static partial class PsEmitter
                     _readonlyVars?.Add(val);
                     continue;
                 }
-                roSb.Append("[PsBash.Cmdlets.BashShellState]::MarkReadonly(").Append(PsBuild.SingleQuote(val[..eq])).Append("); ");
-                _readonlyVars?.Add(val[..eq]);
-                roSb.Append("$env:").Append(val[..eq]).Append(" = ").Append(PsBuild.SingleQuote(val[(eq + 1)..])).Append("; ");
+                // `readonly NAME+=text` appends to the current value.
+                bool append = val[eq - 1] == '+';
+                string roName = append ? val[..(eq - 1)] : val[..eq];
+                roSb.Append("[PsBash.Cmdlets.BashShellState]::MarkReadonly(").Append(PsBuild.SingleQuote(roName)).Append("); ");
+                _readonlyVars?.Add(roName);
+                roSb.Append("$env:").Append(roName).Append(" = ").Append(append ? "$env:" + roName + " + " : "")
+                    .Append(PsBuild.SingleQuote(val[(eq + 1)..])).Append("; ");
+            }
+            else if (TrySplitAppendInitializer(word, out var appName, out var appValue))
+            {
+                roSb.Append("$env:").Append(appName).Append(" = $env:").Append(appName).Append(" + ")
+                    .Append(EmitAssignmentValue(appValue)).Append("; ");
+                roSb.Append("[PsBash.Cmdlets.BashShellState]::MarkReadonly(").Append(PsBuild.SingleQuote(appName)).Append("); ");
             }
             else if (TrySplitInitializer(word, out var name, out var value))
             {

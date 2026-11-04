@@ -127,7 +127,6 @@ echo foo\
 $
 ## stdout: foo$
 ## status: 0
-## XFAIL ps-bash gap-oils-quote quote (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Line continuation inside double quotes
@@ -135,7 +134,6 @@ echo "foo\
 $"
 ## stdout: foo$
 ## status: 0
-## XFAIL ps-bash gap-oils-quote quote (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### $'' octal escapes with fewer than 3 chars

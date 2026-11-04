@@ -43,7 +43,15 @@ public sealed partial class BashParser
             }
             else if (c == '\\')
             {
-                if (pos + 1 < len)
+                if (pos + 1 < len && raw[pos + 1] == '\n')
+                {
+                    pos += 2;   // line continuation inside a word: removed ("foo\<nl>bar" is "foobar")
+                }
+                else if (pos + 2 < len && raw[pos + 1] == '\r' && raw[pos + 2] == '\n')
+                {
+                    pos += 3;
+                }
+                else if (pos + 1 < len)
                 {
                     parts.Add(new WordPart.EscapedLiteral(raw[pos + 1].ToString()));
                     pos += 2;
@@ -278,7 +286,15 @@ public sealed partial class BashParser
                 char next = raw[pos + 1];
                 // Inside double quotes, only these characters are special after backslash:
                 // $ ` " \ newline
-                if (next is '$' or '`' or '"' or '\\' or '\n')
+                if (next == '\n')
+                {
+                    pos += 2;   // line continuation: the pair is removed ("a\<nl>b" is "ab")
+                }
+                else if (next == '\r' && pos + 2 < len && raw[pos + 2] == '\n')
+                {
+                    pos += 3;
+                }
+                else if (next is '$' or '`' or '"' or '\\')
                 {
                     innerParts.Add(new WordPart.Literal(next.ToString()));
                     pos += 2;

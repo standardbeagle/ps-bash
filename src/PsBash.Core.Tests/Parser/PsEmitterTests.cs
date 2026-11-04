@@ -18,6 +18,33 @@ public class PsEmitterTests
     private static string Sub(string body) =>
         PsBuild.ShellStateScope("Push-Location; " + body, PsBuild.PopLocationRestoringProcessCwd);
 
+    [Theory]
+    [InlineData("echo foo\\\nbar", "foobar")]
+    [InlineData("echo \"x\\\ny\"", "xy")]
+    public void Transpile_BackslashNewlineInsideAWord_IsRemoved(string src, string joined)
+    {
+        // `foo\<nl>bar` is `foobar` (also inside double quotes); it used to become foo, newline, bar.
+        var ps = PsEmitter.Transpile(src)!;
+        Assert.Contains(joined, ps);
+        Assert.DoesNotContain("\n", ps.Replace("\r", "").TrimEnd('\n').Replace("Invoke-BashEcho", ""));
+    }
+
+    [Fact]
+    public void Transpile_ReadonlyPlusEquals_AppendsInsteadOfEmittingAnInvalidAssignment()
+    {
+        var ps = PsEmitter.Transpile("readonly r+=bar")!;
+        Assert.DoesNotContain("$env:r+", ps);
+        Assert.Contains("$env:r = $env:r + 'bar'", ps);
+    }
+
+    [Fact]
+    public void Transpile_LocalPlusEquals_StartsEmptyThenAppendsWithinTheCall()
+    {
+        var ps = PsEmitter.Transpile("f() { local s+=a; local s+=b; }")!;
+        Assert.Contains("$__psbashLocBase = if ($null -eq $__lsd_s)", ps);
+        Assert.Contains("$env:s = $__psbashLocBase + (", ps);
+    }
+
     [Fact]
     public void Transpile_NumberedHeredoc_OpensDescriptorAroundCommandAndKeepsStatus()
     {
