@@ -3816,6 +3816,11 @@ public static partial class PsEmitter
                 : "return";
         }
 
+        // A bare `exit` leaves with the status of the last command; inside an EXIT trap handler that is the status
+        // from before the handler ran (see BashTranspiler.TrapEpilogueClose).
+        else if (cmd0 == "exit" && cmd.Words.Length == 1)
+            specialResult = "exit $(if ($null -ne $global:__BashPreTrapStatus) { $global:__BashPreTrapStatus } else { $global:LASTEXITCODE })";
+
         else if (cmd0 == "exit" && cmd.Words.Length == 2
                  && IsPureUnquotedVarWord(cmd.Words[1]))
             specialResult = EmitExitWithUnquotedVar(cmd.Words[1]);

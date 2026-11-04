@@ -124,7 +124,6 @@ cleanup() {
 trap 'cleanup x y z' EXIT
 ## stdout: cleanup [x y z]
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-trap builtin-trap (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### trap EXIT with PARSE error
@@ -173,7 +172,6 @@ trap 'true; exit' EXIT
 exit 3
 ## stdout:
 ## status: 3
-## XFAIL ps-bash gap-oils-builtin-trap builtin-trap (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### bare exit in a function called from trap EXIT
@@ -186,7 +184,6 @@ trap cleanup EXIT
 false
 ## stdout: cleanup
 ## status: 1
-## XFAIL ps-bash gap-oils-builtin-trap builtin-trap (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### trap EXIT with command sub / subshell / pipeline
