@@ -148,6 +148,15 @@ public class PsEmitterTests
         Assert.Contains("finally", result);
     }
 
+    [Theory]
+    [InlineData("[ a ] 2>/dev/null")]
+    [InlineData("[ -f x ] >/dev/null || echo no")]
+    [InlineData("if [ a ] 2>&1; then echo y; fi")]
+    public void Transpile_SingleBracketTestWithTrailingRedirect_Parses(string bash)
+    {
+        Assert.False(string.IsNullOrEmpty(PsEmitter.Transpile(bash)));
+    }
+
     [Fact]
     public void Transpile_RegexMatch_IsCaseSensitiveUnlessNocasematch()
     {

@@ -340,8 +340,7 @@ public sealed partial class BashParser
             return ParseFunction();
 
         if (Peek().Kind == BashTokenKind.Word && Peek().Value is "[" or "[[")
-            // `[ ]` keeps the redirect handling it already had; only `[[ ]]` needed the group wrap.
-            return Peek().Value == "[[" ? WithTrailingRedirects(ParseTestExpr()) : ParseTestExpr();
+            return WithTrailingRedirects(ParseTestExpr());
 
         // name() { body } form: Word followed by LParen RParen
         if (Peek().Kind == BashTokenKind.Word && IsParensFunctionDef())
