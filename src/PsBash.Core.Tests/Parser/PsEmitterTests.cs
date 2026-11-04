@@ -212,6 +212,14 @@ public class PsEmitterTests
     }
 
     [Fact]
+    public void Transpile_BracketWithVariableOperator_DelegatesToRuntimeTest()
+    {
+        var ps = PsEmitter.Transpile("op='='; [ a $op a ] && echo true")!;
+        Assert.Contains("Invoke-BashTest @__psbT", ps);
+        Assert.Contains("ConvertTo-BashWords", ps);
+    }
+
+    [Fact]
     public void Transpile_RegexMatch_IsCaseSensitiveUnlessNocasematch()
     {
         var ps = PsEmitter.Transpile("[[ ABC =~ abc ]]")!;

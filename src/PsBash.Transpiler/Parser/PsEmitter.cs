@@ -2484,6 +2484,16 @@ public static partial class PsEmitter
             && !(words.Length == 3 && GetLiteralValue(words[1]) is { } gm && (IsBinaryTestOp(gm) || gm is "-a" or "-o")))
             return $"({TranslateTestCondition(bracketGrouped, extended: false)})";
 
+        // `[ a $op a ]`: the operator is only known at run time (and the expansion may split into several
+        // words), so hand the IFS-split word list to the runtime `test` evaluator.
+        if (!extended && words.Length == 3 && GetLiteralValue(words[1]) is null && IsUnquotedSplitWord(words[1])
+            && !words.Any(w => w.Parts.Any(p => p is WordPart.GlobPart)))
+        {
+            string a0 = IsUnquotedSplitWord(words[0]) ? EmitUnquotedSplitWordArray(words[0]) : EmitTestOperand(words[0]);
+            string a2 = IsUnquotedSplitWord(words[2]) ? EmitUnquotedSplitWordArray(words[2]) : EmitTestOperand(words[2]);
+            return $"$(& {{ $__psbT = @({a0}; {EmitUnquotedSplitWordArray(words[1])}; {a2}); Invoke-BashTest @__psbT; $global:LASTEXITCODE -eq 0 }})";
+        }
+
         // `[ A op B ]`: bash picks the arity-3 shape from the OPERATOR in the middle, before it
         // looks at A — so `[ -f = -f ]` compares two strings, `[ ! = ! ]` is true, and
         // `[ -z -a -z ]` is the AND of two non-empty strings. None of the word-0 heuristics
