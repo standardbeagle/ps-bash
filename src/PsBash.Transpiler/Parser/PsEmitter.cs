@@ -6439,7 +6439,7 @@ public static partial class PsEmitter
 
     /// <summary>The suffix of <c>${#v}</c> / <c>${#a[@]}</c> / <c>${#a[0]}</c>: a number, never split.</summary>
     private static bool IsLengthSuffix(string s)
-        => s == "#" || (s.Length > 3 && s[0] == '#' && s[1] == 'L' && s[2] == '[' && s[^1] == ']' && s.IndexOf(']') == s.Length - 1);
+        => s == "#L" || (s.Length > 3 && s[0] == '#' && s[1] == 'L' && s[2] == '[' && s[^1] == ']' && s.IndexOf(']') == s.Length - 1);
 
     /// <summary>
     /// Bare <c>${v:-x}</c> / <c>${v+x}</c> / <c>${v#p}</c> / <c>${v/a/b}</c> / <c>${v:1}</c> / <c>${v^^}</c>: the result is word-split like any unquoted
@@ -7329,7 +7329,7 @@ public static partial class PsEmitter
             : FlattenPartsToDoubleQuotedString(argWord.Value);
 
         // Length: ${#VAR}
-        if (suffix == "#")
+        if (suffix == "#L")
             return inDoubleQuote ? $"$({varRef}.Length)" : $"{varRef}.Length";
 
         // The `:`-prefixed forms act when the variable is unset OR EMPTY.

@@ -80,6 +80,14 @@ public class PsEmitterTests
     }
 
     [Fact]
+    public void Transpile_EmptyStripPattern_IsAStripNotALength()
+    {
+        var ps = PsEmitter.Transpile("echo \"${var#}}\"")!;
+        Assert.DoesNotContain(".Length", ps);
+        Assert.Contains(".Length", PsEmitter.Transpile("echo \"${#var}\""));
+    }
+
+    [Fact]
     public void Transpile_RegexMatch_IsCaseSensitiveUnlessNocasematch()
     {
         var ps = PsEmitter.Transpile("[[ ABC =~ abc ]]")!;

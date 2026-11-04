@@ -308,7 +308,6 @@ echo 13 "${var#"}"}"
 13 
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-var-op-strip var-op-strip (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### \(\) in pattern (regression)

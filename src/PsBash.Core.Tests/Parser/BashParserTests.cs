@@ -785,7 +785,7 @@ public class BashParserTests
         var simple = Assert.IsType<Command.Simple>(result);
         var bvs = Assert.IsType<WordPart.BracedVarSub>(Assert.Single(simple.Words[1].Parts));
         Assert.Equal("VAR", bvs.Name);
-        Assert.Equal("#", bvs.Suffix);
+        Assert.Equal("#L", bvs.Suffix);
     }
 
     [Fact]

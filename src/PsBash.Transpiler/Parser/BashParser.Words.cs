@@ -518,7 +518,7 @@ public sealed partial class BashParser
             string name = raw[nameStart..pos];
 
             // Check for array subscript: ${#arr[@]} or ${#arr[*]}
-            string lengthSuffix = "#";
+            string lengthSuffix = "#L"; // "#L" = length; a bare "#" suffix is an EMPTY strip pattern (${v#})
             if (pos < len && raw[pos] == '[')
             {
                 int subStart = pos;
