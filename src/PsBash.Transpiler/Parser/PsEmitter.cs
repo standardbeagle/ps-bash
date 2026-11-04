@@ -105,6 +105,7 @@ public static partial class PsEmitter
     private static HashSet<string>? _intVars;
 
     /// <summary>Names declared <c>declare -l</c> (false) / <c>declare -u</c> (true): later assignments are case-converted.</summary>
+    [ThreadStatic]
     private static Dictionary<string, bool>? _caseVars;
 
     /// <summary>A <c>declare -l/-u</c> variable converts the value it is assigned.</summary>
@@ -4974,6 +4975,16 @@ public static partial class PsEmitter
     {
         if (value is null)
             return "\"\"";
+
+        // Brace expansion does not happen on the right of an assignment: `v={X,Y}` stores the text `{X,Y}`.
+        if (value.Parts.Any(p => p is WordPart.BracedTuple or WordPart.BracedRange))
+            value = new CompoundWord(value.Parts.Select(p => p switch
+            {
+                WordPart.BracedTuple t => (WordPart)new WordPart.Literal("{" + string.Join(",", t.Items) + "}"),
+                WordPart.BracedRange r => new WordPart.Literal("{" + r.Start.ToString().PadLeft(r.ZeroPad, '0') + ".." + r.End.ToString().PadLeft(r.ZeroPad, '0')
+                    + (r.Step != 0 ? ".." + r.Step : "") + "}"),
+                _ => p,
+            }).ToImmutableArray());
 
         // If the value is a single double-quoted part, emit it directly (already has quotes).
         if (value.Parts.Length == 1 && value.Parts[0] is WordPart.DoubleQuoted)

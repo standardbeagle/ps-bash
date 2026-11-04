@@ -200,6 +200,17 @@ public class PsEmitterTests
         Assert.Contains("\\x28", result);
     }
 
+    [Theory]
+    [InlineData("v={X,Y}", "{X,Y}")]
+    [InlineData("v=a{b,c}d", "a{b,c}d")]
+    [InlineData("v={1..3}", "{1..3}")]
+    public void Transpile_BraceExpansionOnAssignmentRhs_StaysLiteral(string bash, string stored)
+    {
+        var result = PsEmitter.Transpile(bash);
+        Assert.Contains(stored, result);
+        Assert.DoesNotContain("@(", result);
+    }
+
     [Fact]
     public void Transpile_RegexMatch_IsCaseSensitiveUnlessNocasematch()
     {
