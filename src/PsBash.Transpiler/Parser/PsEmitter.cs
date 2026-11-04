@@ -2557,9 +2557,13 @@ public static partial class PsEmitter
                 // regex (it avoids bash's own quoting pitfalls). Single-quoting the
                 // emitted `$env:re` would match the literal text "$env:re" instead of
                 // the pattern it holds, so pass a lone expansion through bare.
-                string matchExpr = IsSoleExpansionWord(words[2])
-                    ? $"{lhs} -match {EmitWord(words[2])}"
-                    : $"{lhs} -match '{SqEsc(StripQuotes(EmitWord(words[2])))}'";
+                string patExpr = IsSoleExpansionWord(words[2])
+                    ? EmitWord(words[2])
+                    : TryBuildRegexPattern(words[2], out var builtPattern)
+                        ? builtPattern
+                        : $"'{SqEsc(StripQuotes(EmitWord(words[2])))}'";
+                // =~ is case-sensitive (PowerShell's -match is not) unless `shopt -s nocasematch`.
+                string matchExpr = $"$(if ([PsBash.Cmdlets.BashPatternMatch]::NoCase) {{ {lhs} -match {patExpr} }} else {{ {lhs} -cmatch {patExpr} }})";
                 // Bash's `=~` also fills BASH_REMATCH with the whole match and each
                 // capture group. `-match` fills the automatic $Matches hashtable, so
                 // copy it across ($Matches[0] is the whole match, same as bash).
@@ -2741,6 +2745,63 @@ public static partial class PsEmitter
     /// PowerShell expression and must not be wrapped in a single-quoted literal.
     /// A mixed word (<c>^${p}[0-9]+$</c>) is not sole and keeps the literal path.
     /// </summary>
+    /// <summary>
+    /// The regex of <c>[[ x =~ WORD ]]</c> assembled part by part, as bash does: UNQUOTED text (and an unquoted
+    /// <c>$var</c>) is regex syntax, while every QUOTED part (<c>'a.c'</c>, <c>"$v"</c>, <c>\.</c>) matches
+    /// itself — so <c>a"."c</c> is a, a literal dot, c. Returns false for a word with no quoted/escaped/dynamic
+    /// part (the plain text path handles it) or with a part this builder does not model.
+    /// </summary>
+    private static bool TryBuildRegexPattern(CompoundWord word, out string patExpr)
+    {
+        patExpr = "";
+        bool needsBuilder = false;
+        foreach (var part in word.Parts)
+        {
+            switch (part)
+            {
+                case WordPart.Literal or WordPart.GlobPart:
+                    break;
+                case WordPart.SingleQuoted or WordPart.EscapedLiteral or WordPart.DoubleQuoted
+                    or WordPart.SimpleVarSub or WordPart.BracedVarSub:
+                    needsBuilder = true;
+                    break;
+                default:
+                    return false;
+            }
+        }
+        if (!needsBuilder) return false;
+
+        var pieces = new List<string>(word.Parts.Length);
+        foreach (var part in word.Parts)
+        {
+            switch (part)
+            {
+                case WordPart.Literal l:
+                    pieces.Add(PsBuild.SingleQuote(l.Value));
+                    break;
+                case WordPart.GlobPart g:
+                    pieces.Add(PsBuild.SingleQuote(g.Pattern));
+                    break;
+                case WordPart.SingleQuoted sq:
+                    pieces.Add(PsBuild.SingleQuote(System.Text.RegularExpressions.Regex.Escape(sq.Value)));
+                    break;
+                case WordPart.EscapedLiteral el:
+                    pieces.Add(PsBuild.SingleQuote(System.Text.RegularExpressions.Regex.Escape(el.Value)));
+                    break;
+                case WordPart.DoubleQuoted dq:
+                    if (dq.Parts.IsDefaultOrEmpty) break;
+                    pieces.Add("[regex]::Escape([string](" + EmitWord(new CompoundWord(ImmutableArray.Create<WordPart>(dq))) + "))");
+                    break;
+                default: // an unquoted expansion: its VALUE is regex text
+                    pieces.Add("[string](" + EmitWord(new CompoundWord(ImmutableArray.Create(part))) + ")");
+                    break;
+            }
+        }
+        if (pieces.Count == 0) { patExpr = "''"; return true; }
+        patExpr = "(" + string.Join(" + ", pieces) + ")";
+        return true;
+    }
+
     private static bool IsSoleExpansionWord(CompoundWord word)
         => word.Parts.Length == 1
         && word.Parts[0] is WordPart.SimpleVarSub

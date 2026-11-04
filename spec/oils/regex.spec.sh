@@ -39,7 +39,6 @@ status=1
 [[ 'a b' =~ '^(a b)$' ]] && echo true
 ## stdout:
 ## status: 1
-## XFAIL ps-bash gap-oils-regex regex (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Regex quoted with double quotes
@@ -47,7 +46,6 @@ status=1
 [[ 'a b' =~ "^(a b)$" ]] && echo true
 ## stdout:
 ## status: 1
-## XFAIL ps-bash gap-oils-regex regex (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Fix single quotes by storing in variable
@@ -79,7 +77,6 @@ true
 true
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-regex regex (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Regex with == and not =~ is parse error, different lexer mode required
@@ -168,6 +165,7 @@ echo status=$?
 echo status=$?
 ## stdout: status=1
 ## status: 0
+## XFAIL ps-bash gap-oils-regex regex (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Quoted { and +
@@ -225,6 +223,7 @@ status=0
 [[ '$PA' =~ ^(\$\{?)([A-Za-z0-9_]*)$ ]] && argv.py "${BASH_REMATCH[@]}"
 ## stdout:
 ## status: 127
+## XFAIL ps-bash gap-oils-regex regex (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Escaped { stored in variable first
@@ -274,7 +273,6 @@ status=0
 status=1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-regex regex (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### pattern a=(1)
@@ -318,7 +316,6 @@ one
 two
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-regex regex (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### unquoted (a  b) as pattern, (a  b|c)

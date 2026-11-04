@@ -43,6 +43,29 @@ public class PsEmitterTests
         Assert.DoesNotContain("'-P'", ps);
     }
 
+    [Fact]
+    public void Transpile_RegexMatch_IsCaseSensitiveUnlessNocasematch()
+    {
+        var ps = PsEmitter.Transpile("[[ ABC =~ abc ]]")!;
+        Assert.Contains("-cmatch", ps);
+        Assert.Contains("BashPatternMatch]::NoCase", ps);
+    }
+
+    [Theory]
+    [InlineData("[[ 'a.c' =~ a\".\"c ]]", "[regex]::Escape")]
+    [InlineData("[[ 'a b' =~ 'a 'b ]]", "a\\ ")]
+    public void Transpile_RegexMatch_QuotedPartsMatchThemselves(string src, string expected)
+    {
+        Assert.Contains(expected, PsEmitter.Transpile(src)!);
+    }
+
+    [Fact]
+    public void Transpile_RegexMatch_UnbalancedCloseParenEndsTheRegexOperand()
+    {
+        var ps = PsEmitter.Transpile("[[ ! (\" x \" =~ \" -a \" || \" x \" =~ \" -b \") ]]")!;
+        Assert.DoesNotContain("unsupported test operator", ps);
+    }
+
     [Theory]
     [InlineData("cd a b")]
     [InlineData("cd -- a b c")]
@@ -2636,10 +2659,11 @@ public class PsEmitterTests
     [Fact]
     public void Transpile_ExtendedRegexRhs_MixedLiteralAndVar_StaysQuoted()
     {
-        // Only a SOLE expansion goes bare; a mixed word keeps the literal path.
+        // Only a SOLE expansion goes bare; a mixed word is built part by part (literal text + the variable's value).
         var result = PsEmitter.Transpile("[[ $a =~ ^${p}[0-9]+$ ]]");
 
-        Assert.Contains("-match '", result);
+        Assert.Contains("'^' + [string](", result);
+        Assert.Contains("'[0-9]+$'", result);
     }
 
     // ── here-string on a COMPOUND command, `for` single item, multi-var `read` ──

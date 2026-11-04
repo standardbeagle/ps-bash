@@ -497,6 +497,7 @@ public sealed partial class BashParser
         int start = Peek().Position;
         int i = start;
         char quote = '\0';
+        int parenDepth = 0;
 
         while (i < _input.Length)
         {
@@ -513,6 +514,9 @@ public sealed partial class BashParser
                 continue;
             }
             if (c is ' ' or '\t' or '\n' or '\r') break;
+            // Regex parens nest; an UNBALANCED `)` closes the enclosing test group (`[[ ! ( a =~ b ) ]]`).
+            if (c == '(') parenDepth++;
+            else if (c == ')' && parenDepth-- == 0) break;
             i++;
         }
 
@@ -554,6 +558,30 @@ public sealed partial class BashParser
 
         for (int i = 0; i < raw.Length;)
         {
+            // A backslash pair is regex syntax (`\.`): keep both characters verbatim.
+            if (raw[i] == '\\' && i + 1 < raw.Length)
+            {
+                literal.Append(raw[i]).Append(raw[i + 1]);
+                i += 2;
+                continue;
+            }
+            // Quoted segments match THEMSELVES in bash (`a"."c` is a, literal dot, c): keep them as
+            // quoted parts so the emitter escapes them instead of treating them as regex syntax.
+            if (raw[i] is '\'' or '"')
+            {
+                char q = raw[i];
+                int j = i + 1;
+                while (j < raw.Length && raw[j] != q)
+                    j += (q == '"' && raw[j] == '\\' && j + 1 < raw.Length) ? 2 : 1;
+                if (j < raw.Length)
+                {
+                    FlushLiteral();
+                    if (q == '\'') parts.Add(new WordPart.SingleQuoted(raw[(i + 1)..j]));
+                    else parts.AddRange(DecomposeWord(raw[i..(j + 1)]));
+                    i = j + 1;
+                    continue;
+                }
+            }
             if (raw[i] == '$' && i + 1 < raw.Length && IsExpansionStart(raw[i + 1]))
             {
                 int end = FindExpansionEnd(raw, i);
