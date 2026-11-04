@@ -70,7 +70,6 @@ end
 ---
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-redirect-command redirect-command (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### < file in pipeline and subshell doesn't work
@@ -82,7 +81,6 @@ echo FOO > file2
 echo end
 ## stdout: end
 ## status: 0
-## XFAIL ps-bash gap-oils-redirect-command redirect-command (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Redirect in command sub

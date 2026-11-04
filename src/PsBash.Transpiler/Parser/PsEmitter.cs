@@ -467,7 +467,18 @@ public static partial class PsEmitter
     /// not written to the terminal — suppresses fused-pipeline wrapping for the
     /// duration so nested pipelines keep today's per-object shape.
     /// </summary>
+    /// <summary>The body of the innermost <c>$( )</c> being emitted; a bare <c>&lt; file</c> prints the file only when it IS that body.</summary>
+    [ThreadStatic] private static Command? _captureBody;
+
     private static string EmitCaptured(Command body)
+    {
+        var savedCaptureBody = _captureBody;
+        _captureBody = body;
+        try { return EmitCapturedCore(body); }
+        finally { _captureBody = savedCaptureBody; }
+    }
+
+    private static string EmitCapturedCore(Command body)
     {
         _captureDepth++;
         // A substitution body is its own pipeline: the enclosing stage's `$input` is not its stdin.
@@ -3457,7 +3468,8 @@ public static partial class PsEmitter
         var inner = EmitSimple(innerCmd);
         if (inner.Length == 0)
         {
-            result = $"Get-Content {target}";
+            // Only a lone `$(< file)` reads the file out; any other bare redirect just opens it.
+            result = ReferenceEquals(cmd, _captureBody) ? $"Get-Content {target}" : $"Get-Content {target} | Out-Null";
             return true;
         }
 

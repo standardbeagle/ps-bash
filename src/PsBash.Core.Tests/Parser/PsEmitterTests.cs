@@ -230,6 +230,25 @@ public class PsEmitterTests
     }
 
     [Fact]
+    public void Transpile_LoneInputRedirectInCommandSub_ReadsTheFile()
+    {
+        var ps = PsEmitter.Transpile("x=$(< f)")!;
+        Assert.Contains("Get-Content", ps);
+        Assert.DoesNotContain("Out-Null", ps);
+    }
+
+    [Theory]
+    [InlineData("x=$(echo a; < f)")]
+    [InlineData("( < f )")]
+    [InlineData("< f | tr a b")]
+    public void Transpile_BareInputRedirectElsewhere_OnlyOpensTheFile(string bash)
+    {
+        var ps = PsEmitter.Transpile(bash)!;
+        Assert.Contains("Get-Content", ps);
+        Assert.Contains("Out-Null", ps);
+    }
+
+    [Fact]
     public void Transpile_GlobArgument_StopsBeforeCommandWhenExpansionFails()
     {
         var ps = PsEmitter.Transpile("echo *.ZZ")!;
