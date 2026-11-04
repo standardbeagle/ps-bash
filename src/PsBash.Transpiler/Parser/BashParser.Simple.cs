@@ -143,6 +143,10 @@ public sealed partial class BashParser
                     tildeParts.AddRange(DecomposeAssignmentValue(token.Value[(eqAt + 1)..]));
                     parts = tildeParts.ToImmutable();
                 }
+                // `let x=( 1 )`: let's operand is arithmetic text, so the parenthesised tail belongs to this argument.
+                if (words.Count > 0 && token.Value.EndsWith('=') && Peek().Kind == BashTokenKind.LParen
+                    && words[0].Parts is [WordPart.Literal { Value: "let" }] && TakeBalancedParenText() is { } parenText)
+                    parts = parts.Add(new WordPart.SingleQuoted(parenText));
                 words.Add(new CompoundWord(parts));
             }
             else if (kind == BashTokenKind.Bang && words.Count > 0)
@@ -392,6 +396,26 @@ public sealed partial class BashParser
             if (kind != BashTokenKind.Word) return false;
         }
         return false;
+    }
+
+    /// <summary>
+    /// At an <c>(</c> token: returns the raw source text of the balanced <c>( … )</c> group and consumes the tokens it
+    /// spans, or null (nothing consumed) when it never closes.
+    /// </summary>
+    private string? TakeBalancedParenText()
+    {
+        int start = Peek().Position;
+        int depth = 0;
+        for (int i = start; i < _input.Length; i++)
+        {
+            if (_input[i] == '(') depth++;
+            else if (_input[i] == ')' && --depth == 0)
+            {
+                while (Peek().Kind != BashTokenKind.Eof && Peek().Position <= i) Advance();
+                return _input[start..(i + 1)];
+            }
+        }
+        return null;
     }
 
     private Assignment ParseAssignmentWord()

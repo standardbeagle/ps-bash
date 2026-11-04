@@ -1428,6 +1428,15 @@ public class BashParserTests
     }
 
     [Fact]
+    public void Parse_LetOperandWithParenthesisedValue_IsOneArgument()
+    {
+        var result = Parse("let x=( 1 + 2 ) y=3");
+
+        var simple = Assert.IsType<Command.Simple>(result);
+        Assert.Equal(3, simple.Words.Length); // let, x=( 1 + 2 ), y=3
+    }
+
+    [Fact]
     public void Parse_ForArith_InnerParensInClause_NotTruncated()
     {
         // H2: the old per-token collector stopped at the FIRST `)`, truncating
