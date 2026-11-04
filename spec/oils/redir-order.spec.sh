@@ -9,7 +9,6 @@ echo `cat OSCFLAGS` "world" > OSCFLAGS
 cat OSCFLAGS
 ## stdout: hello world
 ## status: 0
-## XFAIL ps-bash gap-oils-redir-order redir-order (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### subshell + redirect order

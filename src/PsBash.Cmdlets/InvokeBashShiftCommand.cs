@@ -44,6 +44,12 @@ public sealed class InvokeBashShiftCommand : PSCmdlet
             return;
         }
 
+        if (args.Length > 1)
+        {
+            FileSystemHelpers.WriteBashError(this, "shift: too many arguments");
+            return;
+        }
+
         int n = 1;
         if (args.Length > 0)
         {

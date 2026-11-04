@@ -93,6 +93,17 @@ public class PsEmitterTests
     public void Transpile_PatsubTildePattern_IsTheHomeDirectory(string src)
         => Assert.Contains("$HOME", PsEmitter.Transpile(src));
 
+    [Theory]
+    [InlineData("echo `cat F` world > F")]
+    [InlineData("echo $(cat F) world >> F")]
+    public void Transpile_CommandSubInWordsOfRedirectedCommand_RunsBeforeTheRedirectOpens(string src)
+    {
+        // bash expands the words first; the redirect stage truncates its file as the pipeline starts.
+        var ps = PsEmitter.Transpile(src)!;
+        Assert.Contains("@(", ps);
+        Assert.StartsWith("@(", ps.TrimStart());
+    }
+
     [Fact]
     public void Transpile_RegexMatch_IsCaseSensitiveUnlessNocasematch()
     {

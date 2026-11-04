@@ -4307,6 +4307,13 @@ public static partial class PsEmitter
         if (cmd.Redirects.IsEmpty)
             return mapped;
 
+        // bash expands the words BEFORE it opens (and truncates) the redirect target: `echo $(cat f) x > f` reads the old f.
+        // The redirect stage opens its file as the pipeline starts, so run the command to completion first.
+        bool wordsRunCommands = false;
+        foreach (var w in cmd.Words) wordsRunCommands |= ContainsCommandSub(w.Parts);
+        bool onlyStdoutFiles = true;
+        foreach (var r in cmd.Redirects) onlyStdoutFiles &= r.Fd == 1 && r.Op is ">" or ">>";
+        if (wordsRunCommands && onlyStdoutFiles) mapped = "@(" + mapped + ")";
         var mappedSb = new StringBuilder(mapped);
         EmitPipeTargetRedirects(cmd, mappedSb);
         return mappedSb.ToString();
