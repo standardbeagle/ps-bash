@@ -212,6 +212,14 @@ public class PsEmitterTests
     }
 
     [Fact]
+    public void Transpile_GlobArgument_StopsBeforeCommandWhenExpansionFails()
+    {
+        var ps = PsEmitter.Transpile("echo *.ZZ")!;
+        Assert.Contains("if (-not $?) { return }", ps);
+        Assert.True(ps.IndexOf("if (-not $?)", StringComparison.Ordinal) < ps.IndexOf("Invoke-BashEcho @", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Transpile_BracketWithVariableOperator_DelegatesToRuntimeTest()
     {
         var ps = PsEmitter.Transpile("op='='; [ a $op a ] && echo true")!;
@@ -3979,7 +3987,7 @@ public class PsEmitterTests
     // A glob word is expanded by the SHELL (ConvertTo-BashGlob), so echo receives file names.
     // See emitter-strategy.md "Pathname expansion".
     private static string GlobSplat(string pattern, string command = "Invoke-BashEcho") =>
-        $"& {{ $__bashsplat0 = @(ConvertTo-BashGlob '{pattern}'); {command} @__bashsplat0 }}";
+        $"& {{ $__bashsplat0 = @(ConvertTo-BashGlob '{pattern}'); if (-not $?) {{ return }}; {command} @__bashsplat0 }}";
 
     [Fact]
     public void Transpile_GlobStar_ExpandsViaConvertToBashGlob()
@@ -4043,7 +4051,7 @@ public class PsEmitterTests
     public void Transpile_PrintfWithGlobOperand_ExpandsTheGlobOnly()
     {
         Assert.Equal(
-            "& { $__bashsplat0 = @(ConvertTo-BashGlob '*'); Invoke-BashPrintf '%s\\n' @__bashsplat0 }",
+            "& { $__bashsplat0 = @(ConvertTo-BashGlob '*'); if (-not $?) { return }; Invoke-BashPrintf '%s\\n' @__bashsplat0 }",
             PsEmitter.Transpile("printf '%s\\n' *"));
     }
 
@@ -4147,7 +4155,7 @@ public class PsEmitterTests
     public void Transpile_BraceExpansionWithGlob_ExpandsBracesThenGlobsEachWord()
     {
         Assert.Equal(
-            "& { $__bashsplat0 = @(@('sub/a*','sub/b*') | ConvertTo-BashGlob); Invoke-BashEcho @__bashsplat0 }",
+            "& { $__bashsplat0 = @(@('sub/a*','sub/b*') | ConvertTo-BashGlob); if (-not $?) { return }; Invoke-BashEcho @__bashsplat0 }",
             PsEmitter.Transpile("echo sub/{a,b}*"));
         // No glob character: the plain brace array is unchanged.
         Assert.Equal("Invoke-BashEcho @('a','b')", PsEmitter.Transpile("echo {a,b}"));

@@ -6902,6 +6902,8 @@ public static partial class PsEmitter
                        .Append(" = ")
                        .Append(EmitUnquotedSplitWordArray(args[i]))
                        .Append("; ");
+                // failglob: the expansion error ends only its own statement, so stop before the command runs.
+                if (IsGlobWord(args[i]) || IsBraceGlobWord(args[i])) prelude.Append("if (-not $?) { return }; ");
                 call.Append('@').Append(tempVar.AsSpan(1));
             }
             else
