@@ -53,6 +53,32 @@ public class PsEmitterTests
         Assert.DoesNotContain(".Length", ps);
     }
 
+    [Theory]
+    [InlineData("test a != b", "Invoke-BashTest a '!=' b")]
+    [InlineData("echo a != b", "a != b")]
+    [InlineData("echo x !=y", "!=y")]
+    public void Transpile_BangEqualsInArguments_IsOneWord(string src, string expected)
+    {
+        var ps = PsEmitter.Transpile(src)!;
+        Assert.DoesNotContain("! =", ps);
+        Assert.Contains(expected.Replace("'!='", "!="), ps.Replace("'!='", "!="));
+    }
+
+    [Fact]
+    public void Transpile_BracketNegationBindsTighterThanOr_NegatesOnlyTheFirstClause()
+    {
+        var ps = PsEmitter.Transpile("[ ! -n x -o -z \"\" ]")!;
+        Assert.Contains(" -or ", ps);
+        Assert.DoesNotContain("!((", ps);
+    }
+
+    [Fact]
+    public void Transpile_TestWithOperatorWordAsOperand_IsNotSplitThere()
+    {
+        var ps = PsEmitter.Transpile("[ 1 -ne 0 -a -o != -- ]")!;
+        Assert.DoesNotContain(" -or ", ps);
+    }
+
     [Fact]
     public void Transpile_RegexMatch_IsCaseSensitiveUnlessNocasematch()
     {

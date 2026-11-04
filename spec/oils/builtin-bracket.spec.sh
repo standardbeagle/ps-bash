@@ -288,7 +288,6 @@ test "$ipv6" = "yes" -a "$ipv6lib" != "none"
 echo status=$?
 ## stdout: status=1
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-bracket builtin-bracket (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### test -c

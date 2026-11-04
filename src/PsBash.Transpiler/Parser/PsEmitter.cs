@@ -2476,7 +2476,7 @@ public static partial class PsEmitter
         }
 
         // Handle leading ! negation: [ ! -f x ] → !(Test-Path ...)
-        if (!arity3 && words.Length >= 1 && GetLiteralValue(words[0]) == "!")
+        if (!arity3 && words.Length >= 1 && GetLiteralValue(words[0]) == "!" && (extended || words.Length <= 3 || TestCombinatorIndices(words).Count == 0))
         {
             var inner = words.RemoveAt(0);
             return $"!({TranslateTestCondition(inner, extended)})";
@@ -2698,15 +2698,49 @@ public static partial class PsEmitter
     // at the edge is a unary file test, not a combinator. Returns false if the token
     // does not appear in a separator position, so the caller falls through to the
     // single-clause translation.
+    // Indices of the `-a` / `-o` words that really JOIN clauses. A clause is parsed the way bash's test does it
+    // (binary operator in the middle wins, then a unary operator, else a lone word), so an `-o` that is an OPERAND
+    // (`test 1 -ne 0 -a -o != --`) or the operand of a comparison is not a combinator.
+    private static HashSet<int> TestCombinatorIndices(ImmutableArray<CompoundWord> words)
+    {
+        var found = new HashSet<int>();
+        words = WithLiteralParens(words);
+        int n = words.Length, p = 0;
+        while (p < n)
+        {
+            while (p < n && GetLiteralValue(words[p]) == "!" && !(p + 2 < n && IsBinaryTestOp(GetLiteralValue(words[p + 1]) ?? "")))
+                p++;
+            if (p >= n) break;
+            string? w0 = GetLiteralValue(words[p]);
+            if (w0 == "(")
+            {
+                int depth = 0;
+                for (; p < n; p++)
+                {
+                    string? t = GetLiteralValue(words[p]);
+                    if (t == "(") depth++;
+                    else if (t == ")" && --depth == 0) { p++; break; }
+                }
+            }
+            else if (p + 2 < n && IsBinaryTestOp(GetLiteralValue(words[p + 1]) ?? "")) p += 3;
+            else if (w0 is { Length: 2 } && w0[0] == '-' && p + 1 < n) p += 2;
+            else p += 1;
+            if (p < n && GetLiteralValue(words[p]) is "-a" or "-o") { found.Add(p); p++; }
+            else break;
+        }
+        return found;
+    }
+
     private static bool TrySplitTestCombinator(
         ImmutableArray<CompoundWord> words, string token, string psOp, out string result)
     {
         result = string.Empty;
         var clauses = new List<ImmutableArray<CompoundWord>>();
         int start = 0;
+        var combinators = TestCombinatorIndices(words);
         for (int i = 1; i < words.Length - 1; i++)
         {
-            if (GetLiteralValue(words[i]) == token)
+            if (GetLiteralValue(words[i]) == token && combinators.Contains(i))
             {
                 clauses.Add(ImmutableArray.CreateRange(words.Skip(start).Take(i - start)));
                 start = i + 1;
