@@ -192,6 +192,15 @@ public class PsEmitterTests
     }
 
     [Fact]
+    public void Transpile_StripPatternWithLiteralParen_KeepsTheSubexpressionBalanced()
+    {
+        // A raw `\(` inside "$( … )" unbalances PowerShell's naive paren scan ("missing the closing ')'").
+        var result = PsEmitter.Transpile("echo \"${line##*([}\"");
+        Assert.DoesNotContain("\\(", result);
+        Assert.Contains("\\x28", result);
+    }
+
+    [Fact]
     public void Transpile_RegexMatch_IsCaseSensitiveUnlessNocasematch()
     {
         var ps = PsEmitter.Transpile("[[ ABC =~ abc ]]")!;

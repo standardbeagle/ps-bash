@@ -9923,7 +9923,28 @@ public static partial class PsEmitter
     /// When <c>true</c>, <c>*</c> translates to <c>.*?</c> (lazy/shortest match).
     /// When <c>false</c>, <c>*</c> translates to <c>.*</c> (greedy/longest match).
     /// </param>
+    /// <summary>
+    /// The regex for a glob, with every literal parenthesis written as <c>\x28</c> / <c>\x29</c>: the pattern is emitted inside
+    /// <c>"$( … )"</c>, whose closing paren PowerShell finds by counting parens even inside quotes (see the naive-scan memory).
+    /// </summary>
     private static string GlobToRegex(string glob, bool lazy)
+    {
+        string re = GlobToRegexCore(glob, lazy);
+        if (re.IndexOf("\\(", StringComparison.Ordinal) < 0 && re.IndexOf("\\)", StringComparison.Ordinal) < 0) return re;
+        var sb = new StringBuilder(re.Length + 8);
+        for (int i = 0; i < re.Length; i++)
+        {
+            if (re[i] == '\\' && i + 1 < re.Length)
+            {
+                char n = re[++i];
+                sb.Append(n == '(' ? "\\x28" : n == ')' ? "\\x29" : "\\" + n);
+            }
+            else sb.Append(re[i]);
+        }
+        return sb.ToString();
+    }
+
+    private static string GlobToRegexCore(string glob, bool lazy)
     {
         // Extglob forms (`${v%.@(gz|bz2)}`, `${v##+(a)}`) — the shared converter. Plain globs keep
         // the historical translation below.
