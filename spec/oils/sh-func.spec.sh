@@ -118,7 +118,6 @@ f
 status=2
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-sh-func sh-func (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### return $empty
@@ -135,7 +134,6 @@ f
 status=0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-sh-func sh-func (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Subshell function

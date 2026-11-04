@@ -3865,8 +3865,24 @@ public static partial class PsEmitter
         {
             if (cmd.Words.Length >= 2)
             {
-                var retCode = EmitWord(cmd.Words[1]);
-                specialResult = $"$global:LASTEXITCODE = {retCode}; return";
+                if (TryGetPureLiteralText(cmd.Words[1].Parts, out var retLiteral)
+                    && int.TryParse(retLiteral, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out _))
+                {
+                    specialResult = $"$global:LASTEXITCODE = {retLiteral}; return";
+                }
+                else
+                {
+                    // A run-time status: an unquoted variable that expands to nothing is no argument at all
+                    // (`return $empty` keeps $?), while anything else must be a number or it is bash's status-2
+                    // "numeric argument required"; a number wraps modulo 256.
+                    string retValue = IsPureUnquotedVarWord(cmd.Words[1])
+                        ? "$__psb_rs = @(" + EmitUnquotedSplitWordArray(cmd.Words[1]) + "); $__psb_r = if ($__psb_rs.Count) { [string]$__psb_rs[0] } else { $null }"
+                        : TryGetPureLiteralText(cmd.Words[1].Parts, out var retText)
+                            ? "$__psb_r = " + PsBuild.SingleQuote(retText)
+                            : "$__psb_r = [string](" + EmitWord(cmd.Words[1]) + ")";
+                    specialResult = retValue + "; if ($null -ne $__psb_r) { if ($__psb_r -match '^-?[0-9]+$') { $global:LASTEXITCODE = (([long]$__psb_r % 256) + 256) % 256 } "
+                        + "else { Write-Error ('return: ' + $__psb_r + ': numeric argument required') -ErrorAction Continue; $global:LASTEXITCODE = 2 } }; return";
+                }
             }
             else
             {

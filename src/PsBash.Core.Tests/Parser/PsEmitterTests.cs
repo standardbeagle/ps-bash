@@ -158,6 +158,18 @@ public class PsEmitterTests
     }
 
     [Fact]
+    public void Transpile_ReturnWithNonNumericWord_ReportsNumericArgumentRequired()
+    {
+        var result = PsEmitter.Transpile("f() { return abc; }");
+        Assert.Contains("numeric argument required", result);
+        Assert.DoesNotContain("LASTEXITCODE = abc", result);
+    }
+
+    [Fact]
+    public void Transpile_ReturnLiteralNumber_IsUnchanged() =>
+        Assert.Contains("$global:LASTEXITCODE = 3; return", PsEmitter.Transpile("f() { return 3; }"));
+
+    [Fact]
     public void Transpile_RegexMatch_IsCaseSensitiveUnlessNocasematch()
     {
         var ps = PsEmitter.Transpile("[[ ABC =~ abc ]]")!;
