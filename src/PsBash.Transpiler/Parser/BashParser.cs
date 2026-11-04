@@ -755,6 +755,12 @@ public sealed partial class BashParser
             commands.Add(ParseListStatement(AtStopWord, "ParseCompoundBody"));
         }
 
+        // bash: a then/do/else/elif/condition list needs at least one command (`while false; do done` is a syntax error).
+        if (commands.Count == 0)
+            throw MakeError(
+                $"syntax error near unexpected token `{Peek().Value}'",
+                Peek().Position, "ParseCompoundBody");
+
         if (commands.Count == 1)
             return commands[0];
 
@@ -1002,6 +1008,8 @@ public sealed partial class BashParser
     {
         Expect("case");
 
+        if (Peek().Kind != BashTokenKind.Word)
+            throw MakeError($"syntax error near unexpected token `{Peek().Value}'", Peek().Position, "ParseCase");
         var exprToken = Advance();
         var exprParts = DecomposeWord(exprToken.Value);
         var expr = new CompoundWord(exprParts);

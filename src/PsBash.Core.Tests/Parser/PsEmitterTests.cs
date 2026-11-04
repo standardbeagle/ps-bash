@@ -109,6 +109,22 @@ public class PsEmitterTests
         => Assert.Contains("switch ([string]$(", PsEmitter.Transpile("case `true` in *) echo two;; esac"));
 
     [Fact]
+    public void Transpile_CaseWithNoArms_DoesNothingInsteadOfAnEmptySwitch()
+    {
+        var ps = PsEmitter.Transpile("case foo in\nesac\necho empty")!;
+        Assert.DoesNotContain("switch", ps);
+        Assert.Contains("Invoke-BashEcho empty", ps);
+    }
+
+    [Theory]
+    [InlineData("while false; do\ndone")]
+    [InlineData("if true; then\nfi")]
+    [InlineData("for x in a; do\ndone")]
+    [InlineData("if true; then :; else\nfi")]
+    public void Transpile_EmptyCompoundBody_IsASyntaxError(string src)
+        => Assert.ThrowsAny<PsBash.Core.Parser.ParseException>(() => PsEmitter.Transpile(src));
+
+    [Fact]
     public void Transpile_RegexMatch_IsCaseSensitiveUnlessNocasematch()
     {
         var ps = PsEmitter.Transpile("[[ ABC =~ abc ]]")!;

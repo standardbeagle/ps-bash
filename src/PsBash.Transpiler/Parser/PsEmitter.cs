@@ -1364,6 +1364,9 @@ public static partial class PsEmitter
         // are case-insensitive, so `case abc in A*)` and `case ABC in abc)` both matched. Each
         // clause is a script-block test in the arms' own order, so a mid-list `*)` wins where bash
         // says it does (a PS `default` only ran when nothing else matched).
+        // `case x in esac` is valid and does nothing (status 0); a `switch` with no clause is a PowerShell error.
+        if (caseCmd.Arms.IsDefaultOrEmpty)
+            return $"[void]({EmitCaseExpr(caseCmd.Expr)}); {PsBuild.SetStatus(0)}";
         var sb = new StringBuilder("switch (");
         sb.Append(EmitCaseExpr(caseCmd.Expr));
         sb.Append(") { ");
