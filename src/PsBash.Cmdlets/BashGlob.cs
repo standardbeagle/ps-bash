@@ -172,7 +172,13 @@ internal static class BashGlob
 
         var results = new List<string>(frontier.Count);
         foreach (var (pfx, _) in frontier) results.Add(dirOnly ? pfx + "/" : pfx);
-        if (globStar) results.Sort(StringComparer.Ordinal);
+        if (globStar)
+        {
+            results.Sort(StringComparer.Ordinal);
+            // Two `**` components can reach the same path by several routes (`**/**/*.*`): list each once.
+            for (int k = results.Count - 1; k > 0; k--)
+                if (results[k] == results[k - 1]) results.RemoveAt(k);
+        }
         return results;
     }
 
