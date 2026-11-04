@@ -566,7 +566,6 @@ EOF
 echo reply=$REPLY
 ## stdout: reply=hi
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-read builtin-read (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -580,7 +579,6 @@ EOF
 echo reply=$REPLY
 ## stdout: reply=hi
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-read builtin-read (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -594,7 +592,6 @@ EOF
 echo reply=$REPLY
 ## stdout: reply=1234
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-read builtin-read (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 

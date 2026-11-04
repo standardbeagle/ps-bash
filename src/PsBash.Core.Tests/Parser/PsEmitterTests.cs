@@ -19,6 +19,17 @@ public class PsEmitterTests
         PsBuild.ShellStateScope("Push-Location; " + body, PsBuild.PopLocationRestoringProcessCwd);
 
     [Fact]
+    public void Transpile_NumberedHeredoc_OpensDescriptorAroundCommandAndKeepsStatus()
+    {
+        // `cmd 3<<EOF` feeds descriptor 3 (read -u 3), not stdin; the command's status survives the close.
+        var ps = PsEmitter.Transpile("read -u 3 x 3<<EOF\nhi\nEOF")!;
+        Assert.Contains("Invoke-BashExecFd 3 '<'", ps);
+        Assert.Contains("Invoke-BashExecFd 3 '<&' '-'", ps);
+        Assert.Contains("$global:LASTEXITCODE = $__psbashFdRc", ps);
+        Assert.DoesNotContain("| Emit-BashLine | Invoke-BashRead", ps);
+    }
+
+    [Fact]
     public void Transpile_SubshellExit_RestoresProcessWorkingDirectoryNotJustPsLocation()
     {
         // REGRESSION. A bash working directory is BOTH the PowerShell location and

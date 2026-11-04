@@ -3145,6 +3145,26 @@ public static partial class PsEmitter
             return false;
         }
 
+        // `cmd 3<<EOF` / `exec 3<<EOF`: the body is descriptor 3's input (`read -u 3`), not stdin.
+        if (cmd.HereDocs.Any(h => h.Fd >= 3))
+        {
+            var fdDocs = cmd.HereDocs.Where(h => h.Fd >= 3).ToList();
+            var opens = string.Join("; ", fdDocs.Select(h =>
+                $"Invoke-BashExecFd {h.Fd} '<' (Invoke-ProcessSub {{ {EmitHereDocLiteral(h)} | Emit-BashLine }})"));
+            bool isExec = cmd.Words.Length == 1 && GetLiteralValue(cmd.Words[0]) == "exec";
+            if (isExec && cmd.HereDocs.Length == fdDocs.Count)
+            {
+                result = opens;
+                return true;
+            }
+            var others = cmd.HereDocs.RemoveRange(fdDocs);
+            string inner = EmitSimple(new Command.Simple(cmd.Words, cmd.EnvPairs, cmd.Redirects, others));
+            var closes = string.Join("; ", fdDocs.Select(h => $"Invoke-BashExecFd {h.Fd} '<&' '-'"));
+            // Closing resets the status, so keep the command's own.
+            result = $". {{ {opens}; {inner}; $__psbashFdRc = $global:LASTEXITCODE; {closes}; $global:LASTEXITCODE = $__psbashFdRc }}";
+            return true;
+        }
+
         // `exec 4<<<"text"`: the parser leaves the fd as a lone numeric word beside the here-document.
         if (cmd.Words.Length == 2 && cmd.HereDocs.Length == 1 && cmd.Redirects.IsDefaultOrEmpty && cmd.EnvPairs.IsEmpty
             && GetLiteralValue(cmd.Words[0]) == "exec"

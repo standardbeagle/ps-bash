@@ -34,7 +34,7 @@ public sealed record Redirect(
 /// <paramref name="Expand"/> is true when variable expansion should occur (unquoted delimiter).
 /// <paramref name="StripTabs"/> is true for <c>&lt;&lt;-</c> (leading tabs stripped from body).
 /// </summary>
-public sealed record HereDoc(string Body, bool Expand, bool StripTabs, string? FdVar = null) : BashNode;
+public sealed record HereDoc(string Body, bool Expand, bool StripTabs, string? FdVar = null, int Fd = 0) : BashNode;
 
 /// <summary>
 /// Assignment operator: <c>=</c> or <c>+=</c>.

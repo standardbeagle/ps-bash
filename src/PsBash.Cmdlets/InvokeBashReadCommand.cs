@@ -257,7 +257,12 @@ public sealed class InvokeBashReadCommand : PSCmdlet
         string pushBack = "";   // input read past what this call consumes (-n), returned to the front of stdin
         if (fromFd is int ufd2 && ufd2 > 2)
         {
-            try { inputLine = BashFdTable.ReadLine(ufd2); }
+            try
+            {
+                if (exactChars is int fdN) { inputLine = BashFdTable.ReadRecord(ufd2, null, fdN, out recordTerminated); }
+                else if (recordDelim is char fdD) { inputLine = BashFdTable.ReadRecord(ufd2, fdD, -1, out recordTerminated); }
+                else { inputLine = BashFdTable.ReadLine(ufd2); }
+            }
             catch (InvalidOperationException ex)
             {
                 FileSystemHelpers.WriteBashError(this, $"read: {ex.Message}");

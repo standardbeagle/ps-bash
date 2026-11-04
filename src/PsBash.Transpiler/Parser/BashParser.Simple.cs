@@ -79,7 +79,7 @@ public sealed partial class BashParser
         var words = ImmutableArray.CreateBuilder<CompoundWord>();
         var redirects = ImmutableArray.CreateBuilder<Redirect>();
         var hereDocs = ImmutableArray.CreateBuilder<HereDoc>();
-        var pendingHeredocs = new List<(string Delimiter, bool Expand, bool StripTabs, string? FdVar, int BodyStart, int BodyEnd)>();
+        var pendingHeredocs = new List<(string Delimiter, bool Expand, bool StripTabs, string? FdVar, int BodyStart, int BodyEnd, int Fd)>();
 
         while (true)
         {
@@ -102,7 +102,7 @@ public sealed partial class BashParser
                         Advance();
                         var delimToken = Advance();
                         var (delimiter, expand) = BashLexer.ParseHeredocDelimiter(delimToken.Value);
-                        pendingHeredocs.Add((delimiter, expand, stripTabs, fdVar, delimToken.BodyStart, delimToken.BodyEnd));
+                        pendingHeredocs.Add((delimiter, expand, stripTabs, fdVar, delimToken.BodyStart, delimToken.BodyEnd, 0));
                     }
                     else
                     {
@@ -171,7 +171,19 @@ public sealed partial class BashParser
                 // lexer's body-skip also uses, so the two can't disagree on the
                 // terminator.
                 var (delimiter, expand) = BashLexer.ParseHeredocDelimiter(delimToken.Value);
-                pendingHeredocs.Add((delimiter, expand, stripTabs, null, delimToken.BodyStart, delimToken.BodyEnd));
+                pendingHeredocs.Add((delimiter, expand, stripTabs, null, delimToken.BodyStart, delimToken.BodyEnd, 0));
+            }
+            else if (kind == BashTokenKind.IoNumber && _pos + 1 < _tokens.Count
+                && _tokens[_pos + 1].Kind is BashTokenKind.DLess or BashTokenKind.DLessDash
+                && int.TryParse(Peek().Value, out var hereFd) && hereFd >= 3)
+            {
+                // `cmd 3<<EOF`: the here-document is descriptor N's input (read with `read -u N`), not stdin.
+                Advance();
+                bool stripTabsN = Peek().Kind == BashTokenKind.DLessDash;
+                Advance();
+                var delimTokenN = Advance();
+                var (delimiterN, expandN) = BashLexer.ParseHeredocDelimiter(delimTokenN.Value);
+                pendingHeredocs.Add((delimiterN, expandN, stripTabsN, null, delimTokenN.BodyStart, delimTokenN.BodyEnd, hereFd));
             }
             else if (kind == BashTokenKind.IoNumber || IsRedirectOp(kind))
             {
@@ -237,10 +249,10 @@ public sealed partial class BashParser
     /// remains for <c>ParseList</c> to see the separator and parse what follows.
     /// </remarks>
     private void CollectHereDocBodies(
-        List<(string Delimiter, bool Expand, bool StripTabs, string? FdVar, int BodyStart, int BodyEnd)> pending,
+        List<(string Delimiter, bool Expand, bool StripTabs, string? FdVar, int BodyStart, int BodyEnd, int Fd)> pending,
         ImmutableArray<HereDoc>.Builder hereDocs)
     {
-        foreach (var (delimiter, expand, stripTabs, fdVar, bodyStart, bodyEnd) in pending)
+        foreach (var (delimiter, expand, stripTabs, fdVar, bodyStart, bodyEnd, hereFd) in pending)
         {
             string body;
             if (bodyStart < 0 || bodyEnd <= bodyStart)
@@ -260,7 +272,7 @@ public sealed partial class BashParser
                 if (stripTabs)
                     body = StripHereDocTabs(body);
             }
-            hereDocs.Add(new HereDoc(body, expand, stripTabs, fdVar));
+            hereDocs.Add(new HereDoc(body, expand, stripTabs, fdVar, hereFd));
         }
     }
 
@@ -636,7 +648,7 @@ public sealed partial class BashParser
                 var (delimiter, expand) = BashLexer.ParseHeredocDelimiter(delimToken.Value);
                 var docs = ImmutableArray.CreateBuilder<HereDoc>(1);
                 CollectHereDocBodies(
-                    new() { (delimiter, expand, stripTabs, null, delimToken.BodyStart, delimToken.BodyEnd) },
+                    new() { (delimiter, expand, stripTabs, null, delimToken.BodyStart, delimToken.BodyEnd, 0) },
                     docs);
                 redirects.Add(new Redirect("<<", 0, new CompoundWord(
                     ImmutableArray<WordPart>.Empty), FdVar: null, Here: docs[0]));
