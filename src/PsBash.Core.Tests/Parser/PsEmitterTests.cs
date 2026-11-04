@@ -30,6 +30,30 @@ public class PsEmitterTests
     }
 
     [Theory]
+    [InlineData("break")]
+    [InlineData("continue")]
+    [InlineData("if true; then echo one; continue; echo two; fi")]
+    public void Transpile_BreakContinueOutsideAnyLoop_WarnsAndKeepsGoing(string src)
+    {
+        // A bare PowerShell break/continue outside a loop ends the whole pipeline (the client then waits on a
+        // dead command); bash warns and returns 0.
+        var ps = PsEmitter.Transpile(src)!;
+        Assert.Contains("only meaningful in a", ps);
+        Assert.DoesNotMatch(@"(^|[;{]\s*)(break|continue)\s*($|[;}])", ps);
+    }
+
+    [Theory]
+    [InlineData("for i in 1 2; do break; done", "break")]
+    [InlineData("for i in 1 2; do continue; done", "continue")]
+    [InlineData("f() { break; }", "break")]
+    public void Transpile_BreakContinueInsideALoopOrFunction_StaysTheKeyword(string src, string keyword)
+    {
+        var ps = PsEmitter.Transpile(src)!;
+        Assert.DoesNotContain("only meaningful", ps);
+        Assert.Contains(keyword, ps);
+    }
+
+    [Theory]
     [InlineData("for d in ~/src ~/git; do echo $d; done")]
     [InlineData("for d in ~/src; do echo $d; done")]
     public void Transpile_TildeWordsInAForList_AreStringsNotADivision(string src)
@@ -6057,8 +6081,6 @@ public class PsEmitterTests
     // not recognized" and the loop ran on, and `|| exit 1` simply DID NOT EXIT —
     // the script sailed past the guard it was written to enforce.
     [InlineData("cmd || exit 1", "-ne 0) { $global:LASTEXITCODE = 1; exit $global:LASTEXITCODE }")]
-    [InlineData("cmd && continue", "-eq 0) { continue }")]
-    [InlineData("cmd && break", "-eq 0) { break }")]
     [InlineData("cmd || return", "-ne 0) { return }")]
     public void Transpile_ChainEndingInStatementKeyword_RewritesToIf(
         string bash, string expectedTail)
@@ -6067,6 +6089,15 @@ public class PsEmitterTests
 
         Assert.StartsWith("cmd; if ($global:LASTEXITCODE ", result);
         Assert.EndsWith(expectedTail, result);
+    }
+
+    [Theory]
+    [InlineData("for i in 1 2; do cmd && continue; done", "-eq 0) { continue ")]
+    [InlineData("for i in 1 2; do cmd && break; done", "-eq 0) { break ")]
+    public void Transpile_LoopControlEndingAChainInALoop_RewritesToIf(string bash, string expectedPart)
+    {
+        // Same rewrite as above, inside the loop the keyword needs (a loop-less top-level one is a warning no-op).
+        Assert.Contains(expectedPart, PsEmitter.Transpile(bash));
     }
 
     [Fact]

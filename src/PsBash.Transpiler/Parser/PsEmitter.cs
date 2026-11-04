@@ -810,7 +810,14 @@ public static partial class PsEmitter
     private static string EmitLoopControl(string keyword, Command.Simple cmd)
     {
         if (_loopLabels is not { Count: > 0 } labels)
+        {
+            // At the top of a script (no loop, no function body, not eval/source text that runs inside its
+            // caller's loop) bash warns and carries on with status 0. A bare PowerShell `break`/`continue`
+            // there ends the whole pipeline instead, which left the client waiting on a dead command.
+            if (_functionDepth == 0 && _context == TranspileContext.Default)
+                return $"Write-Error {PsBuild.SingleQuote(keyword + ": only meaningful in a `for', `while', or `until' loop")} -ErrorAction Continue; {PsBuild.SetStatus(0)}";
             return keyword; // no lexical loop (a function body): bash's dynamic scope, as before
+        }
         int n = 1;
         string? check = null;
         if (cmd.Words.Length >= 2)
