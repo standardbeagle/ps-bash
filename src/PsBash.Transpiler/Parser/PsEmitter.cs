@@ -8516,6 +8516,18 @@ public static partial class PsEmitter
 
     private static string EmitCd(ImmutableArray<CompoundWord> args)
     {
+        // Leading options: `--` ends them (`cd -- "$dir"` is the safe spelling for a dir that starts with `-`);
+        // -L / -P pick logical / physical symlink handling, which this cd does not distinguish, so they are accepted.
+        while (!args.IsEmpty && GetLiteralValue(args[0]) is "--" or "-L" or "-P")
+        {
+            bool endOfOptions = GetLiteralValue(args[0]) == "--";
+            args = args.RemoveAt(0);
+            if (endOfOptions) break;
+        }
+        // bash: `cd a b` is "too many arguments", status 1, and the directory does not change.
+        if (args.Length > 1)
+            return $"Write-Error 'cd: too many arguments' -ErrorAction Continue; {PsBuild.SetStatus(1)}";
+
         string targetExpr;
         // `cd -` switches to the previous directory ($OLDPWD) and, like bash, echoes
         // the directory it lands in. Bash also records $OLDPWD on EVERY successful cd,

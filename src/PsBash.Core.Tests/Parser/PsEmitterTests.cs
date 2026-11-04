@@ -30,6 +30,31 @@ public class PsEmitterTests
     }
 
     [Theory]
+    [InlineData("cd -- sub", "'sub'")]
+    [InlineData("cd -L sub", "'sub'")]
+    [InlineData("cd -P -- sub", "'sub'")]
+    public void Transpile_CdLeadingOptions_AreNotTheDirectory(string src, string target)
+    {
+        // `cd -- dir` tried to enter a directory named `--` ("No such file or directory").
+        var ps = PsEmitter.Transpile(src)!;
+        Assert.Contains(target, ps);
+        Assert.DoesNotContain("'--'", ps);
+        Assert.DoesNotContain("'-L'", ps);
+        Assert.DoesNotContain("'-P'", ps);
+    }
+
+    [Theory]
+    [InlineData("cd a b")]
+    [InlineData("cd -- a b c")]
+    public void Transpile_CdWithTwoOperands_FailsWithoutChangingDirectory(string src)
+    {
+        var ps = PsEmitter.Transpile(src)!;
+        Assert.Contains("cd: too many arguments", ps);
+        Assert.Contains("$global:LASTEXITCODE = 1", ps);
+        Assert.DoesNotContain("Set-Location", ps);
+    }
+
+    [Theory]
     [InlineData("declare -A a=(['a+1']=c)", "'a+1' = ")]
     [InlineData("declare -A a=([\"q r\"]=2)", "'q r' = ")]
     [InlineData("declare -A a=([plain]=v ['k']=w)", "'k' = ")]
