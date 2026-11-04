@@ -1442,6 +1442,9 @@ public static partial class PsEmitter
     {
         var emitted = EmitWord(expr);
         // Already a PowerShell expression: variable, quoted string, subexpression.
+        // An empty `$(cmd)` yields NO value and a `switch` over nothing runs no arm (bash: the word is '' and `*)` matches).
+        if (emitted.StartsWith("$(", StringComparison.Ordinal))
+            return "[string]" + emitted;
         if (emitted.Length > 0 && (emitted[0] == '$' || emitted[0] == '"' || emitted[0] == '\'' || emitted[0] == '('))
             return emitted;
         // Bare literal — wrap in single quotes so PowerShell treats it as a string.

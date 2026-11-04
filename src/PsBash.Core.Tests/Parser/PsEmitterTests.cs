@@ -105,6 +105,10 @@ public class PsEmitterTests
     }
 
     [Fact]
+    public void Transpile_CaseOnCommandSub_SwitchesOnAStringSoAnEmptyResultStillMatches()
+        => Assert.Contains("switch ([string]$(", PsEmitter.Transpile("case `true` in *) echo two;; esac"));
+
+    [Fact]
     public void Transpile_RegexMatch_IsCaseSensitiveUnlessNocasematch()
     {
         var ps = PsEmitter.Transpile("[[ ABC =~ abc ]]")!;
