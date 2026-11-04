@@ -50,7 +50,6 @@ for ((a=1; a <= 3; a++)) {
 3
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-for-expr for-expr (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Empty init
@@ -113,7 +112,6 @@ for ((i = $"3"; i < $"5"; ++i)); do echo $i; done
 4
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-for-expr for-expr (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Integers near 31, 32, 62 bits

@@ -28,7 +28,7 @@ public sealed class BashArithmeticParser
 
     public static ArithmeticSyntax Parse(string? source)
     {
-        var parser = new BashArithmeticParser(source ?? string.Empty);
+        var parser = new BashArithmeticParser(StripDoubleQuotes(source));
         ArithmeticExpr root = parser.ParseComma();
         if (parser.Current.Kind != T.End) parser.Error("unexpected token");
         return new ArithmeticSyntax(parser._source, root);
@@ -43,9 +43,37 @@ public sealed class BashArithmeticParser
         catch (BashArithmeticParseException ex) when (!ex.Message.Contains(NestingGuard.TooDeepMessage, StringComparison.Ordinal)
                                                       && !ex.Message.Contains(NestingGuard.TooLongMessage, StringComparison.Ordinal))
         {
-            string text = source ?? string.Empty;
+            string text = StripDoubleQuotes(source);
             return new ArithmeticSyntax(text, new ArithmeticExpr.Deferred(text));
         }
+    }
+
+    /// <summary>bash removes double quotes (and the <c>$</c> of <c>$"…"</c>) from an arithmetic expression: <c>(( "1" + "2" ))</c> is 3.</summary>
+    private static string StripDoubleQuotes(string? source)
+    {
+        string text = source ?? string.Empty;
+        if (!text.Contains('"')) return text;
+        var sb = new System.Text.StringBuilder(text.Length);
+        int sub = 0;            // depth inside $( … ): copied verbatim, its quotes belong to the command
+        char inner = '\0';      // quote char open inside such a substitution
+        for (int i = 0; i < text.Length; i++)
+        {
+            char c = text[i];
+            if (sub > 0)
+            {
+                sb.Append(c);
+                if (inner != '\0') { if (c == inner) inner = '\0'; }
+                else if (c is '"' or '\'') inner = c;
+                else if (c == '(') sub++;
+                else if (c == ')') sub--;
+                continue;
+            }
+            if (c == '$' && i + 1 < text.Length && text[i + 1] == '(') { sb.Append("$("); i++; sub = 1; continue; }
+            if (c == '$' && i + 1 < text.Length && text[i + 1] == '"') continue; // $"…" → "…"
+            if (c == '"') continue;
+            sb.Append(c);
+        }
+        return sb.ToString();
     }
 
     private Tok Current => _tokens[_position];

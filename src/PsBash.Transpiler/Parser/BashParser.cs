@@ -939,10 +939,18 @@ public sealed partial class BashParser
         var (init, cond, step) = SplitArithClauses(header);
 
         SkipTerminators();
-        Expect("do");
-        SkipTerminators();
-        var body = ParseCompoundBody("done");
-        Expect("done");
+        Command body;
+        if (Peek().Kind == BashTokenKind.LBrace)
+        {
+            body = ParseBraceGroup(); // bash also accepts `for ((;;)) { ...; }`
+        }
+        else
+        {
+            Expect("do");
+            SkipTerminators();
+            body = ParseCompoundBody("done");
+            Expect("done");
+        }
 
         return new Command.ForArith(
             ParseOptionalArithmetic(init),

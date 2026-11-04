@@ -1412,6 +1412,22 @@ public class BashParserTests
     }
 
     [Fact]
+    public void Parse_ForArith_BraceBody_ParsesLikeDoDone()
+    {
+        var result = Parse("for ((a=1; a<=3; a++)) { echo $a; }");
+
+        var forArith = Assert.IsType<Command.ForArith>(result);
+        Assert.NotNull(forArith.Body);
+    }
+
+    [Fact]
+    public void Parse_Arithmetic_DoubleQuotesAreRemoved()
+    {
+        Assert.Equal("1 + 2", BashArithmeticParser.Parse("\"1 + 2\"").Source);
+        Assert.Equal("3", BashArithmeticParser.Parse("$\"3\"").Source);
+    }
+
+    [Fact]
     public void Parse_ForArith_InnerParensInClause_NotTruncated()
     {
         // H2: the old per-token collector stopped at the FIRST `)`, truncating
