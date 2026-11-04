@@ -76,5 +76,4 @@ a a
 A A
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-nocasematch-match nocasematch-match (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10

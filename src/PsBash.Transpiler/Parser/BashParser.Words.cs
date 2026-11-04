@@ -527,7 +527,7 @@ public sealed partial class BashParser
                     pos++;
                 if (pos < len)
                     pos++; // skip ]
-                lengthSuffix = "#" + raw[subStart..pos];
+                lengthSuffix = "#L" + raw[subStart..pos]; // "#L[" = length of an element/array; "#[" is a strip pattern
             }
 
             if (pos < len && raw[pos] == '}')

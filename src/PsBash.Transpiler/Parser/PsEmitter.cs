@@ -6405,7 +6405,7 @@ public static partial class PsEmitter
 
     /// <summary>The suffix of <c>${#v}</c> / <c>${#a[@]}</c> / <c>${#a[0]}</c>: a number, never split.</summary>
     private static bool IsLengthSuffix(string s)
-        => s == "#" || (s.Length > 2 && s[0] == '#' && s[1] == '[' && s[^1] == ']' && s.IndexOf(']') == s.Length - 1);
+        => s == "#" || (s.Length > 3 && s[0] == '#' && s[1] == 'L' && s[2] == '[' && s[^1] == ']' && s.IndexOf(']') == s.Length - 1);
 
     /// <summary>
     /// Bare <c>${v:-x}</c> / <c>${v+x}</c> / <c>${v#p}</c> / <c>${v/a/b}</c> / <c>${v:1}</c> / <c>${v^^}</c>: the result is word-split like any unquoted
@@ -7110,9 +7110,9 @@ public static partial class PsEmitter
         }
 
         // Array length: ${#arr[@]} or ${#arr[*]} -> $arr.Count
-        if (bvs.Suffix.StartsWith("#[") && bvs.Suffix.EndsWith(']'))
+        if (bvs.Suffix.StartsWith("#L[", StringComparison.Ordinal) && bvs.Suffix.EndsWith(']'))
         {
-            string subscript = bvs.Suffix[2..^1]; // strip #[ and ]
+            string subscript = bvs.Suffix[3..^1]; // strip #L[ and ]
             if (subscript is "@" or "*")
             {
                 string lenArr = bvs.Name switch { "FUNCNAME" => "@(Get-BashFuncNames)", "BASH_VERSINFO" => "$global:BashVersionInfo", _ => $"${bvs.Name}" };
@@ -7355,21 +7355,21 @@ public static partial class PsEmitter
             string esc = $"[regex]::Escape({stripExpr})";
             string guard = $"$(if ({stripExpr}) {{ {esc} }} else {{ '(?!)' }})";
             return suffix[0] == '#'
-                ? $"{open}{varRef} -replace ('^' + {guard}), '')"
+                ? $"{open}{varRef} -creplace ('^' + {guard}), '')"
                 : suffix.StartsWith("%%")
-                    ? $"{open}{varRef} -replace ({guard} + '$'), '')"
-                    : $"{open}{varRef} -replace ('^(.*)' + {guard} + '$'), '$1')";
+                    ? $"{open}{varRef} -creplace ({guard} + '$'), '')"
+                    : $"{open}{varRef} -creplace ('^(.*)' + {guard} + '$'), '$1')";
         }
         if (suffix.StartsWith("%%"))
-            return $"{open}{varRef} -replace '{SqEsc(GlobToRegex(UnquoteForGlob(suffix[2..]), lazy: false))}$','')";
+            return $"{open}{varRef} -creplace '{SqEsc(GlobToRegex(UnquoteForGlob(suffix[2..]), lazy: false))}$','')";
         if (suffix.StartsWith("%"))
-            return $"{open}{varRef} -replace '^(.*){SqEsc(GlobToRegex(UnquoteForGlob(suffix[1..]), lazy: false))}$','$1')";
+            return $"{open}{varRef} -creplace '^(.*){SqEsc(GlobToRegex(UnquoteForGlob(suffix[1..]), lazy: false))}$','$1')";
 
         // Remove prefix: ${VAR##pattern} (greedy) / ${VAR#pattern} (lazy).
         if (suffix.StartsWith("##"))
-            return $"{open}{varRef} -replace '^{SqEsc(GlobToRegex(UnquoteForGlob(suffix[2..]), lazy: false))}','')";
+            return $"{open}{varRef} -creplace '^{SqEsc(GlobToRegex(UnquoteForGlob(suffix[2..]), lazy: false))}','')";
         if (suffix.StartsWith("#"))
-            return $"{open}{varRef} -replace '^{SqEsc(GlobToRegex(UnquoteForGlob(suffix[1..]), lazy: true))}','')";
+            return $"{open}{varRef} -creplace '^{SqEsc(GlobToRegex(UnquoteForGlob(suffix[1..]), lazy: true))}','')";
 
         // Replace first: ${VAR/find/replace} — instance overload .Replace(str, rep, 1).
         if (suffix.StartsWith("/") && !suffix.StartsWith("//"))

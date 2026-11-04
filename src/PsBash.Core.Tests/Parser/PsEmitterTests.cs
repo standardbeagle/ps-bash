@@ -43,6 +43,16 @@ public class PsEmitterTests
         Assert.DoesNotContain("'-P'", ps);
     }
 
+    [Theory]
+    [InlineData("foo=a; echo \"${foo#[b]}\"")]
+    [InlineData("foo=a; echo \"${foo#[A]}\"")]
+    public void Transpile_PrefixStripWithBracketPattern_IsAStripNotAnElementLength(string src)
+    {
+        var ps = PsEmitter.Transpile(src)!;
+        Assert.Contains("-creplace '^[", ps);
+        Assert.DoesNotContain(".Length", ps);
+    }
+
     [Fact]
     public void Transpile_RegexMatch_IsCaseSensitiveUnlessNocasematch()
     {
@@ -1952,7 +1962,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("echo ${VAR%%pattern}");
 
-        Assert.Contains("$env:VAR -replace 'pattern$',''", result); // the result is then word-split (unquoted)
+        Assert.Contains("$env:VAR -creplace 'pattern$',''", result); // the result is then word-split (unquoted)
     }
 
     [Theory]
@@ -1962,14 +1972,14 @@ public class PsEmitterTests
     // actual backslash before the quote and therefore NEVER matched: the standard
     // quote-stripping idiom silently did nothing.
     // Oracle: `value="'hi'"; value="${value%\'}"; value="${value#\'}"` -> `hi`.
-    [InlineData(@"echo ${VAR%\'}", @"-replace '^(.*)''$','$1'")]
-    [InlineData(@"echo ${VAR#\'}", @"-replace '^''',''")]
-    [InlineData(@"echo ${VAR%\""}", @"-replace '^(.*)""$','$1'")]
+    [InlineData(@"echo ${VAR%\'}", @"-creplace '^(.*)''$','$1'")]
+    [InlineData(@"echo ${VAR#\'}", @"-creplace '^''',''")]
+    [InlineData(@"echo ${VAR%\""}", @"-creplace '^(.*)""$','$1'")]
     // An escaped glob metachar becomes a literal one, not a wildcard.
-    [InlineData(@"echo ${VAR%\*}", @"-replace '^(.*)\*$','$1'")]
-    [InlineData(@"echo ${VAR%\?}", @"-replace '^(.*)\?$','$1'")]
+    [InlineData(@"echo ${VAR%\*}", @"-creplace '^(.*)\*$','$1'")]
+    [InlineData(@"echo ${VAR%\?}", @"-creplace '^(.*)\?$','$1'")]
     // An escaped backslash is one literal backslash.
-    [InlineData(@"echo ${VAR%\\}", @"-replace '^(.*)\\$','$1'")]
+    [InlineData(@"echo ${VAR%\\}", @"-creplace '^(.*)\\$','$1'")]
     public void Transpile_BracedVarPatternWithEscape_TreatsNextCharAsLiteral(
         string bash, string expected)
     {
@@ -1981,7 +1991,7 @@ public class PsEmitterTests
     {
         // Guard the narrow claim: only a BACKSLASH-escaped metachar becomes literal;
         // an unescaped one keeps its glob meaning.
-        Assert.Contains("-replace '^(.*).*$','$1'", PsEmitter.Transpile("echo ${VAR%*}"));
+        Assert.Contains("-creplace '^(.*).*$','$1'", PsEmitter.Transpile("echo ${VAR%*}"));
     }
 
     [Fact]
@@ -1989,7 +1999,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("echo ${VAR##pattern}");
 
-        Assert.Contains("$env:VAR -replace '^pattern',''", result);
+        Assert.Contains("$env:VAR -creplace '^pattern',''", result);
     }
 
     [Fact]
@@ -5276,7 +5286,7 @@ public class PsEmitterTests
         // ${p%.*} removes the SHORTEST suffix matching `.*` -> keep `foo.bar`,
         // not `foo`. Emitted as `^(.*)\..*$` -> `$1` (greedy prefix capture).
         var result = PsEmitter.Transpile("echo ${p%.*}");
-        Assert.Contains("-replace '^(.*)", result);
+        Assert.Contains("-creplace '^(.*)", result);
         Assert.Contains("$1", result);
     }
 
@@ -5408,7 +5418,7 @@ public class PsEmitterTests
     {
         // GlobToRegex translates glob * to regex .* so l* becomes l.* (greedy longest suffix).
         var result = PsEmitter.Transpile("echo \"${FOO%%l*}\"");
-        Assert.Equal("Invoke-BashEcho \"$($env:FOO -replace 'l.*$','')\"", result);
+        Assert.Equal("Invoke-BashEcho \"$($env:FOO -creplace 'l.*$','')\"", result);
     }
 
     [Fact]
@@ -5423,7 +5433,7 @@ public class PsEmitterTests
     {
         // GlobToRegex translates glob * to regex .* so */ becomes .* + / = .*/ (greedy longest prefix).
         var result = PsEmitter.Transpile("echo \"${PATH##*/}\"");
-        Assert.Equal("Invoke-BashEcho \"$($env:PATH -replace '^.*/','')\"", result);
+        Assert.Equal("Invoke-BashEcho \"$($env:PATH -creplace '^.*/','')\"", result);
     }
 
     [Fact]
