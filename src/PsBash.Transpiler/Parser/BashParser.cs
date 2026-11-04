@@ -1234,6 +1234,9 @@ public sealed partial class BashParser
 
     private Command ParseFunctionBodyCore()
     {
+        // `f() g() { :; }`: a function body is a compound command, never another definition.
+        if (Peek().Kind == BashTokenKind.Word && IsParensFunctionDef() && Peek().Value is not ("[" or "[["))
+            throw MakeError($"syntax error near unexpected token `{Peek().Value}'", Peek().Position, "ParseFunctionBody");
         if (Peek().Kind != BashTokenKind.LBrace)
             return ParseCompoundOrSimple();
 

@@ -1478,6 +1478,9 @@ public static partial class PsEmitter
 
     private static string EmitFunction(Command.ShFunction func)
     {
+        // `$foo-bar() { :; }` / `foo-$(x)() { :; }`: the name is not expanded, so it is not a valid identifier (status 1).
+        if (func.Name.AsSpan().IndexOfAny('$', '`') >= 0)
+            return $"Write-Error {PsBuild.SingleQuote("`" + func.Name + "': not a valid identifier")} -ErrorAction Continue; {PsBuild.SetStatus(1)}";
         (_unitFunctions ??= new HashSet<string>(StringComparer.Ordinal)).Add(func.Name);
         // A scalar `local` is dynamically scoped (bash): a function this one calls sees the local value.
         // So it lives in the shell variable itself (`$env:x`), saved on first `local` and restored when the

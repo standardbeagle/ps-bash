@@ -169,6 +169,20 @@ public class PsEmitterTests
     public void Transpile_ReturnLiteralNumber_IsUnchanged() =>
         Assert.Contains("$global:LASTEXITCODE = 3; return", PsEmitter.Transpile("f() { return 3; }"));
 
+    [Theory]
+    [InlineData("$foo-bar() { ls; }")]
+    [InlineData("foo-$(echo hi)() { ls; }")]
+    public void Transpile_FunctionNameWithExpansion_IsNotAValidIdentifier(string bash)
+    {
+        var result = PsEmitter.Transpile(bash);
+        Assert.Contains("not a valid identifier", result);
+        Assert.DoesNotContain("function ", result);
+    }
+
+    [Fact]
+    public void Transpile_FunctionDefinedAsFunctionBody_IsASyntaxError() =>
+        Assert.ThrowsAny<Exception>(() => PsEmitter.Transpile("f() g() { echo hi; }"));
+
     [Fact]
     public void Transpile_RegexMatch_IsCaseSensitiveUnlessNocasematch()
     {
