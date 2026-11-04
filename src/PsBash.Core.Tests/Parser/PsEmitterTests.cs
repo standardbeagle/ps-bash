@@ -223,6 +223,13 @@ public class PsEmitterTests
     }
 
     [Fact]
+    public void Transpile_BracedVarWithInvalidOperatorChar_IsBadSubstitution()
+    {
+        var ps = PsEmitter.Transpile("echo ${a&}")!;
+        Assert.Contains("bad substitution", ps);
+    }
+
+    [Fact]
     public void Transpile_GlobArgument_StopsBeforeCommandWhenExpansionFails()
     {
         var ps = PsEmitter.Transpile("echo *.ZZ")!;

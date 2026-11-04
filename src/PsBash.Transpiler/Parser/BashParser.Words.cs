@@ -675,6 +675,14 @@ public sealed partial class BashParser
                     pos++;
             }
             string op = raw[opStart..pos];
+            if (op.Length == 0 && raw[pos] != ':')
+            {
+                // ${a&}: no operator can start here. bash reports 'bad substitution' when it runs.
+                int close = raw.IndexOf('}', pos);
+                int end = close < 0 ? len : close + 1;
+                parts.Add(new WordPart.BracedVarSub(varName, "#BAD:" + raw[Math.Max(0, varStart - 2)..end]));
+                return end;
+            }
 
             // Read value until closing brace. A brace inside a quoted / escaped
             // span is literal (`${x:-"}"}` must close at the LAST `}`), so skip
