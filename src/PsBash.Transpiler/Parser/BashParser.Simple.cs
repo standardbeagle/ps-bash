@@ -175,7 +175,7 @@ public sealed partial class BashParser
             }
             else if (kind == BashTokenKind.IoNumber && _pos + 1 < _tokens.Count
                 && _tokens[_pos + 1].Kind is BashTokenKind.DLess or BashTokenKind.DLessDash
-                && int.TryParse(Peek().Value, out var hereFd) && hereFd >= 3)
+                && int.TryParse(Peek().Value, out var hereFd) && (hereFd >= 3 || hereFd == 0))
             {
                 // `cmd 3<<EOF`: the here-document is descriptor N's input (read with `read -u N`), not stdin.
                 Advance();

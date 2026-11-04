@@ -455,6 +455,7 @@ public class BashParserTests
     [InlineData("read -u 3 3<<EOF\nhi\nEOF", 3, 3)]
     [InlineData("read -u 7 7<<-EOF\n\thi\nEOF", 7, 3)]
     [InlineData("read -u 3 3 <<EOF\nhi\nEOF", 0, 4)]   // `3 <<` is an operand then stdin, not fd 3
+    [InlineData("cat 0<<EOF\nhi\nEOF", 0, 1)]           // `0<<` is plain stdin, not an operand and not a lost body
     public void Parse_NumberedHeredoc_CarriesDescriptorOnlyWhenAdjacent(string src, int fd, int words)
     {
         var simple = Assert.IsType<Command.Simple>(Parse(src));

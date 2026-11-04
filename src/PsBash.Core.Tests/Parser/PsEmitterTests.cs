@@ -29,6 +29,28 @@ public class PsEmitterTests
         Assert.DoesNotContain("\n", ps.Replace("\r", "").TrimEnd('\n').Replace("Invoke-BashEcho", ""));
     }
 
+    [Theory]
+    [InlineData("for d in ~/src ~/git; do echo $d; done")]
+    [InlineData("for d in ~/src; do echo $d; done")]
+    public void Transpile_TildeWordsInAForList_AreStringsNotADivision(string src)
+    {
+        // `$HOME/src,$HOME/git` parsed as a division: the whole script failed with a PowerShell parse error.
+        var ps = PsEmitter.Transpile(src)!;
+        Assert.Contains("($HOME + '/src')", ps);
+        Assert.DoesNotContain("$HOME/src", ps);
+    }
+
+    [Theory]
+    [InlineData("(( x = 1 << 4 )); echo after")]
+    [InlineData("for ((i = 1 << 2; i < 6; ++i)); do echo $i; done; echo after")]
+    [InlineData("if (( 2 << 1 == 4 )); then echo yes; fi; echo after")]
+    public void Transpile_ShiftInsideArithmeticHeader_IsNotAHeredoc(string src)
+    {
+        // The `<<` used to open a heredoc whose body swallowed every following line (silent truncation).
+        var ps = PsEmitter.Transpile(src)!;
+        Assert.Contains("after", ps);
+    }
+
     [Fact]
     public void Transpile_ReadonlyPlusEquals_AppendsInsteadOfEmittingAnInvalidAssignment()
     {

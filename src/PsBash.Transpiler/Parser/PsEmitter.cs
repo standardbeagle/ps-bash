@@ -1098,6 +1098,9 @@ public static partial class PsEmitter
         return string.Join(",", items);
     }
 
+    private static readonly System.Text.RegularExpressions.Regex TildeBarewordItem =
+        new(@"^(\$(?:HOME|PWD|env:OLDPWD))([/\\][^$`""'()@{}]*)$");
+
     private static string FormatForItem(string item)
     {
         if (item.Length == 0) return "''";
@@ -1106,6 +1109,11 @@ public static partial class PsEmitter
         // or a brace-expansion array (@('a','')) — must pass through untouched; re-wrapping it
         // in '…' produced ''a\t1'' and '@('a','')', neither of which parses (grammar-fuzz find).
         char c = item[0];
+        // A tilde word (`~/src`) renders as the bareword `$HOME/src`, valid as a command argument but not as a
+        // list element (`$HOME/src,$HOME/git` parses as a division): make it a string concatenation.
+        var tildeWord = TildeBarewordItem.Match(item);
+        if (tildeWord.Success)
+            return "(" + tildeWord.Groups[1].Value + " + '" + tildeWord.Groups[2].Value.Replace("'", "''") + "')";
         if (c is '$' or '"' or '\'' or '(' or '@') return item;
         if (double.TryParse(item, System.Globalization.NumberStyles.Any,
             System.Globalization.CultureInfo.InvariantCulture, out _))

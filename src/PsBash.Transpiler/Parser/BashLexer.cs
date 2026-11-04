@@ -39,6 +39,8 @@ public static class BashLexer
         int heredocDelimPending = 0;
         // Line of the `for` command whose header word list is being scanned (0 = none).
         int forLine = 0;
+        // End offset of the `(( … ))` arithmetic header being scanned: a `<<` before it is a shift, not a heredoc.
+        int arithEnd = 0;
 
         while (pos < len)
         {
@@ -49,6 +51,14 @@ public static class BashLexer
             {
                 pos++;
                 continue;
+            }
+
+            // `(( i = 1 << 3 ))` / `for ((i = 1 << 3; …))`: arithmetic, so its `<<` is a shift. The parser slices these
+            // headers from the raw text; only the heredoc detection below needs to know where they end.
+            if (c == '(' && pos + 1 < len && input[pos + 1] == '(' && pos >= arithEnd && AtArithHeaderPosition(tokens))
+            {
+                int end = ScanArithBody(input, pos + 2);
+                if (end >= pos + 4 && input[end - 1] == ')' && input[end - 2] == ')') arithEnd = end;
             }
 
             // Comments: skip to end of line.
@@ -129,7 +139,7 @@ public static class BashLexer
                 char c3 = pos + 2 < len ? input[pos + 2] : '\0';
 
                 // `<<` family: `<<<` (here-string) and `<<-` are checked before plain `<<`.
-                if (c == '<' && c2 == '<')
+                if (c == '<' && c2 == '<' && pos >= arithEnd)
                 {
                     if (c3 == '<')
                     {
@@ -818,6 +828,17 @@ public static class BashLexer
         if (pos + 2 < len && input[pos + 2] == '(')
             return ScanArith(input, pos);
         return ScanBalancedParens(input, pos + 2, 1); // skip $(
+    }
+
+    /// <summary>True where a `((` opens an arithmetic command or a C-style `for` header (command position, or after `for`/`do`/`then`…).</summary>
+    private static bool AtArithHeaderPosition(List<BashToken> tokens)
+    {
+        if (tokens.Count == 0) return true;
+        var last = tokens[^1];
+        return last.Kind is BashTokenKind.Newline or BashTokenKind.Semi or BashTokenKind.Amp or BashTokenKind.Pipe
+                or BashTokenKind.AndIf or BashTokenKind.OrIf or BashTokenKind.LBrace
+            || (last.Kind == BashTokenKind.Word
+                && last.Value is "for" or "do" or "then" or "else" or "elif" or "if" or "while" or "until");
     }
 
     /// <summary>Advance past $(( ... )). input[pos]=='$', [pos+1]=='(', [pos+2]=='('.</summary>
