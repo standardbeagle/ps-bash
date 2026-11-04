@@ -30,6 +30,18 @@ public class PsEmitterTests
     }
 
     [Theory]
+    [InlineData("declare -A a=(['a+1']=c)", "'a+1' = ")]
+    [InlineData("declare -A a=([\"q r\"]=2)", "'q r' = ")]
+    [InlineData("declare -A a=([plain]=v ['k']=w)", "'k' = ")]
+    public void Transpile_AssocLiteralWithQuotedKey_StoresTheKeyWithoutItsQuotes(string src, string entry)
+    {
+        // `['a+1']=c` stored the key as 'a+1' WITH the quotes, so `${a[a+1]}` never found it.
+        var ps = PsEmitter.Transpile(src)!;
+        Assert.Contains(entry, ps);
+        Assert.DoesNotContain("''a", ps);
+    }
+
+    [Theory]
     [InlineData("break")]
     [InlineData("continue")]
     [InlineData("if true; then echo one; continue; echo two; fi")]

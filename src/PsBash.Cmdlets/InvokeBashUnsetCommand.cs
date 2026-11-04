@@ -56,6 +56,8 @@ public sealed class InvokeBashUnsetCommand : PSCmdlet
         string baseName = name[..open];
         string key = name[(open + 1)..^1];
         if (key is "@" or "*") return false;
+        // `unset -v 'assoc["K"]'` / `unset 'assoc[K]'`: the quotes delimit the key, they are not part of it.
+        if (key.Length >= 2 && key[0] is '"' or '\'' && key[^1] == key[0]) key = key[1..^1];
 
         var value = SessionState.PSVariable.GetValue(baseName);
         long ReadNumber(string n)

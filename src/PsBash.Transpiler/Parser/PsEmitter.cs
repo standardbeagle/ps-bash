@@ -4799,8 +4799,11 @@ public static partial class PsEmitter
                 head = first[(close + 2)..];
                 parts = elem.Parts.RemoveAt(0);
             }
+            // `['a+1']=c` / `["q r"]=2`: the quotes delimit the key, they are not part of it.
             if (key.Length == 0 || key.All(char.IsDigit)) return false;
-            if (head.Length > 0) parts = parts.Insert(0, new WordPart.Literal(head));            entries.Add(PsBuild.SingleQuote(key) + " = " + EmitAssignmentValue(new CompoundWord(parts)));
+            if (key.Length >= 2 && key[0] is '\'' or '"' && key[^1] == key[0]) key = key[1..^1];
+            if (head.Length > 0) parts = parts.Insert(0, new WordPart.Literal(head));
+            entries.Add(PsBuild.SingleQuote(key) + " = " + EmitAssignmentValue(new CompoundWord(parts)));
         }
         literal = "@{ " + string.Join("; ", entries) + " }";
         return true;

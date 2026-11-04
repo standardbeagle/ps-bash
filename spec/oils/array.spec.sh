@@ -392,7 +392,6 @@ a=(1 2 3)
 echo $x
 ## stdout: 2
 ## status: 0
-## XFAIL ps-bash gap-oils-array array (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### a[$x$y] on LHS and RHS
