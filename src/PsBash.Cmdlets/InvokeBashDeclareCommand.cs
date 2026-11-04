@@ -39,12 +39,14 @@ public sealed class InvokeBashDeclareCommand : PSCmdlet
         var args = BashRuntime.PrependDecoys(Arguments, (P.IsPresent, "-p"));
         FileSystemHelpers.SetLastExitCode(this, 0);
 
-        bool functions = false, namesOnly = false;
+        bool functions = false, namesOnly = false, bareList = false;
         var names = new List<string>();
         bool optionsDone = false;
         foreach (var a in args)
         {
             if (!optionsDone && a == "--") { optionsDone = true; continue; }
+            // Emitted for a bare `set` / `declare` / `typeset`: the plain `name=value` listing, not `declare -x`.
+            if (!optionsDone && a == "--bare-list") { bareList = true; continue; }
             if (!optionsDone && a.Length > 1 && a[0] == '-')
             {
                 foreach (var c in a.AsSpan(1))
@@ -67,7 +69,8 @@ public sealed class InvokeBashDeclareCommand : PSCmdlet
             names.Add(a);
         }
 
-        if (functions) PrintFunctions(names, namesOnly);
+        if (bareList && !functions && names.Count == 0) PrintBareVariables();
+        else if (functions) PrintFunctions(names, namesOnly);
         else PrintVariables(names);
     }
 
@@ -93,6 +96,22 @@ public sealed class InvokeBashDeclareCommand : PSCmdlet
             }
             if (namesOnly) WriteLine(fn.Name);
             else DeclarePrinter.PrintFunction(this, fn);
+        }
+    }
+
+    private void PrintBareVariables()
+    {
+        var env = Environment.GetEnvironmentVariables();
+        var keys = new List<string>();
+        foreach (System.Collections.DictionaryEntry e in env) keys.Add((string)e.Key);
+        keys.Sort(string.CompareOrdinal);
+        foreach (var key in keys)
+        {
+            string v = (string?)env[key] ?? string.Empty;
+            bool plain = true;
+            foreach (char c in v)
+                if (!(char.IsAsciiLetterOrDigit(c) || "_-./:+=@%,".IndexOf(c) >= 0)) { plain = false; break; }
+            WriteLine(key + "=" + (plain ? v : BashQuoteText.ForReuse(v)));
         }
     }
 

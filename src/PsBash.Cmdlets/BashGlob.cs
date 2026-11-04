@@ -27,6 +27,19 @@ public static class BashGlobText
     }
 }
 
+/// <summary>bash <c>${v@Q}</c>. Emitted PowerShell reaches it as <c>[PsBash.Cmdlets.BashQuoteText]::ForReuse(...)</c>.</summary>
+public static class BashQuoteText
+{
+    /// <summary>Single-quoted form (<c>'</c> written as <c>'\''</c>); a control character switches to <c>$'...'</c>.</summary>
+    public static string ForReuse(string? value)
+    {
+        value ??= string.Empty;
+        foreach (char c in value)
+            if (c < ' ' || c == '\u007f') return InvokeBashPrintfCommand.ShellQuote(value);
+        return "'" + value.Replace("'", "'\\''") + "'";
+    }
+}
+
 /// <summary>
 /// Pathname expansion (bash "Filename Expansion") of ONE word: the pure engine behind
 /// <c>ConvertTo-BashGlob</c> and <c>ConvertTo-BashWords</c>.

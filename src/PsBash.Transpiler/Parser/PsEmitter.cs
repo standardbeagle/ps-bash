@@ -4007,6 +4007,11 @@ public static partial class PsEmitter
         else if (cmd0 == "readonly")
             specialResult = EmitReadonly(cmd);
 
+        // Bare `set` / `declare` / `typeset`: list the variables as `name=value` lines.
+        else if (cmd0 is "set" or "declare" or "typeset" && cmd.Words.Length == 1)
+            specialResult = EmitMappedStandalone(cmd, EmitPassthrough("Invoke-BashDeclare",
+                ImmutableArray.Create(new CompoundWord(ImmutableArray.Create<WordPart>(new WordPart.Literal("--bare-list"))))));
+
         else if (cmd0 == "set" && cmd.Words.Length >= 2)
             specialResult = EmitSet(cmd);
 
@@ -7629,7 +7634,7 @@ public static partial class PsEmitter
             switch (suffix[1])
             {
                 case 'Q':
-                    return $"{open}\"'\" + ({varRef} -replace \"'\",\"'\\''\") + \"'\")";
+                    return $"{open}[PsBash.Cmdlets.BashQuoteText]::ForReuse({varRef}))";
                 case 'U':
                     return inDoubleQuote ? $"$({varRef}.ToUpper())" : $"{varRef}.ToUpper()";
                 case 'L':

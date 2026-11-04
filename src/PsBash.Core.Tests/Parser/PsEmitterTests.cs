@@ -211,6 +211,17 @@ public class PsEmitterTests
         Assert.DoesNotContain("@(", result);
     }
 
+    [Theory]
+    [InlineData("set")]
+    [InlineData("declare")]
+    [InlineData("typeset")]
+    public void Transpile_BareVariableListing_UsesPlainListMode(string cmd)
+    {
+        var ps = PsEmitter.Transpile(cmd + " | grep x")!;
+        Assert.Contains("Invoke-BashDeclare", ps);
+        Assert.Contains("--bare-list", ps);
+    }
+
     [Fact]
     public void Transpile_GlobArgument_StopsBeforeCommandWhenExpansionFails()
     {
@@ -1972,7 +1983,7 @@ public class PsEmitterTests
         // ${VAR@Q} quotes the value for reuse as input — must not drop to bare $env:VAR.
         var result = PsEmitter.Transpile("echo ${VAR@Q}");
 
-        Assert.Equal("Invoke-BashEcho (\"'\" + ($env:VAR -replace \"'\",\"'\\''\") + \"'\")", result);
+        Assert.Equal("Invoke-BashEcho ([PsBash.Cmdlets.BashQuoteText]::ForReuse($env:VAR))", result);
     }
 
     [Fact]
