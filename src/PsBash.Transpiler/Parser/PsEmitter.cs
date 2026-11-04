@@ -103,6 +103,15 @@ public static partial class PsEmitter
     /// <summary>Names declared <c>declare -i</c> in the script being emitted: later plain assignments evaluate arithmetically.</summary>
     [ThreadStatic]
     private static HashSet<string>? _intVars;
+
+    /// <summary>Names declared <c>declare -l</c> (false) / <c>declare -u</c> (true): later assignments are case-converted.</summary>
+    private static Dictionary<string, bool>? _caseVars;
+
+    /// <summary>A <c>declare -l/-u</c> variable converts the value it is assigned.</summary>
+    private static string CaseAttr(string name, string valueExpr) =>
+        _caseVars is not null && _caseVars.TryGetValue(name, out bool upper)
+            ? "([string](" + valueExpr + "))." + (upper ? "ToUpperInvariant()" : "ToLowerInvariant()")
+            : valueExpr;
     // Names a literal `readonly NAME` made read-only earlier in this script: a later plain assignment is refused.
     [ThreadStatic]
     private static HashSet<string>? _readonlyVars;
@@ -569,6 +578,8 @@ public static partial class PsEmitter
         var priorErrexit = _errexitMode;
         var priorExempt = _errexitExemptDepth;
         var priorIntVars = _intVars;
+        var priorCaseVars = _caseVars;
+        _caseVars = new Dictionary<string, bool>(StringComparer.Ordinal);
         _intVars = new HashSet<string>(StringComparer.Ordinal);
         var priorReadonly = _readonlyVars;
         _readonlyVars = new HashSet<string>(StringComparer.Ordinal);
@@ -606,6 +617,7 @@ public static partial class PsEmitter
         {
             _context = prior;
             _intVars = priorIntVars;
+            _caseVars = priorCaseVars;
             _readonlyVars = priorReadonly;
             _namerefs = priorNamerefs;
             _errexitMode = priorErrexit;
@@ -3068,7 +3080,7 @@ public static partial class PsEmitter
                         ? "[string](Invoke-BashArith ([string](" + localAssigned + ")))"
                         : pair.Op == AssignOp.PlusEqual
                             ? "$__psbashLocBase + (" + localAssigned + ")"
-                            : localAssigned);
+                            : CaseAttr(pair.Name, localAssigned));
                 }
                 continue;
             }
@@ -3151,7 +3163,7 @@ public static partial class PsEmitter
                     ? "[string](Invoke-BashArith (" + PsBuild.SingleQuote(pair.Name + "+(") + " + [string](" + assigned + ") + ')'))"
                     : pair.Op == AssignOp.Equal && _intVars?.Contains(pair.Name) == true
                         ? "[string](Invoke-BashArith ([string](" + assigned + ")))"
-                        : assigned);
+                        : pair.Op == AssignOp.Equal ? CaseAttr(pair.Name, assigned) : assigned);
             }
         }
         // `local`/`export x=$(false)`: the status is the BUILTIN's (0), not the substitution's —
@@ -3195,7 +3207,7 @@ public static partial class PsEmitter
         static bool IsAssignment(CompoundWord w) => IsDynamicAssignment(w) || TrySplitInitializer(w, out _, out _);
         var plain = cmd.Words.Where((w, i) => i == 0 || !IsAssignment(w)).ToImmutableArray();
         var sbOut = new StringBuilder();
-        if (plain.Skip(1).Any(w => !(GetLiteralValue(w) is { Length: > 1 } f && f[0] == '-')))
+        if (plain.Skip(1).Any(w => !(GetLiteralValue(w) is { Length: > 1 } f && f[0] is '-' or '+')))
             sbOut.Append(EmitSimple(cmd with { Words = plain })).Append("; ");
         foreach (var w in cmd.Words.Skip(1).Where(IsAssignment))
         {
@@ -3550,6 +3562,7 @@ public static partial class PsEmitter
             else if (val == "-n") isNameref = true;
             else if (val == "-i") { /* integer — handled below */ }
             else if (val is { Length: > 1 } && val[0] == '-' && val.AsSpan(1).IndexOfAnyExcept("pfF") < 0) isPrint = true;
+            else if (val is { Length: > 1 } && val[0] == '+' && val.AsSpan(1).IndexOfAnyExcept("aAilnrtux") < 0) { /* `declare +a x`: drops an attribute; nothing to record */ }
             else if (val is not null && !val.StartsWith('-')) varName = val;
             else if (val is null && TrySplitInitializer(word, out var n, out var v)) { exprName = n; exprValue = v; }
         }
@@ -3557,6 +3570,13 @@ public static partial class PsEmitter
         {
             string? intName = exprName ?? (varName is null ? null : varName.Split('=')[0]);
             if (intName is not null && IsValidVarName(intName)) _intVars.Add(intName);
+        }
+        if (!isPrint && !isAssoc && _caseVars is not null
+            && (cmd.Words.Skip(1).Any(w => GetLiteralValue(w) == "-l") || cmd.Words.Skip(1).Any(w => GetLiteralValue(w) == "-u")))
+        {
+            string? caseName = exprName ?? (varName is null ? null : varName.Split('=')[0]);
+            if (caseName is not null && IsValidVarName(caseName))
+                _caseVars[caseName] = cmd.Words.Skip(1).Any(w => GetLiteralValue(w) == "-u") && !cmd.Words.Skip(1).Any(w => GetLiteralValue(w) == "-l");
         }
         if (isNameref && varName is not null && varName.IndexOf('=') is var neq and > 0
             && IsValidVarName(varName[..neq]) && IsValidVarName(varName[(neq + 1)..]) && _namerefs is not null)
@@ -3572,7 +3592,7 @@ public static partial class PsEmitter
             string value = EmitAssignmentValue(exprValue);
             bool intAttr = cmd.Words.Skip(1).Any(w => GetLiteralValue(w) == "-i");
             result = "$env:" + exprName + " = "
-                + (intAttr ? "[string](Invoke-BashArith ([string](" + value + ")))" : value)
+                + (intAttr ? "[string](Invoke-BashArith ([string](" + value + ")))" : CaseAttr(exprName, value))
                 + "; " + PsBuild.SetStatus(0);
             return true;
         }
@@ -3615,7 +3635,7 @@ public static partial class PsEmitter
                 result = "$env:" + declName + " = " + intVal;
                 return true;
             }
-            result = "$env:" + declName + " = " + PsBuild.SingleQuote(rawVal);
+            result = "$env:" + declName + " = " + CaseAttr(declName, PsBuild.SingleQuote(rawVal));
             return true;
         }
         if (isAssoc)

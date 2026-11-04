@@ -184,6 +184,14 @@ public class PsEmitterTests
         Assert.ThrowsAny<Exception>(() => PsEmitter.Transpile("f() g() { echo hi; }"));
 
     [Fact]
+    public void Transpile_DeclareLowerUpper_ConvertsLaterAssignments()
+    {
+        var result = PsEmitter.Transpile("declare -l q; q=ABC; declare -u w=abc; w=xyz");
+        Assert.Contains("ToLowerInvariant()", result);
+        Assert.Contains("ToUpperInvariant()", result);
+    }
+
+    [Fact]
     public void Transpile_RegexMatch_IsCaseSensitiveUnlessNocasematch()
     {
         var ps = PsEmitter.Transpile("[[ ABC =~ abc ]]")!;
