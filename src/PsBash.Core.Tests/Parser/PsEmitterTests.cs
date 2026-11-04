@@ -125,6 +125,21 @@ public class PsEmitterTests
         => Assert.ThrowsAny<PsBash.Core.Parser.ParseException>(() => PsEmitter.Transpile(src));
 
     [Fact]
+    public void Transpile_LengthOperatorFollowedByTestOperator_IsABadSubstitution()
+    {
+        var result = PsEmitter.Transpile("echo ${#x-default}");
+        Assert.Contains("bad substitution", result);
+        Assert.Contains("${#x-default}", result);
+    }
+
+    [Fact]
+    public void Transpile_LengthOfUnsetUnderNounset_ReadsTheVariableStrictly()
+    {
+        var result = PsEmitter.Transpile("set -u; echo ${#undef}");
+        Assert.Contains("unbound variable", result);
+    }
+
+    [Fact]
     public void Transpile_RegexMatch_IsCaseSensitiveUnlessNocasematch()
     {
         var ps = PsEmitter.Transpile("[[ ABC =~ abc ]]")!;

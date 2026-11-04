@@ -530,6 +530,15 @@ public sealed partial class BashParser
                 lengthSuffix = "#L" + raw[subStart..pos]; // "#L[" = length of an element/array; "#[" is a strip pattern
             }
 
+            if (name.Length > 0 && pos < len && raw[pos] != '}')
+            {
+                // ${#x-default}: no operator may follow the length operator. bash reports 'bad substitution' when it runs.
+                int close = raw.IndexOf('}', pos);
+                int end = close < 0 ? len : close + 1;
+                parts.Add(new WordPart.BracedVarSub(name, "#BAD:" + raw[Math.Max(0, nameStart - 3)..end]));
+                return end;
+            }
+
             if (pos < len && raw[pos] == '}')
                 pos++; // skip }
             parts.Add(new WordPart.BracedVarSub(name, lengthSuffix));

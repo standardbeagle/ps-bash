@@ -7047,6 +7047,9 @@ public static partial class PsEmitter
         if (bvs.Suffix is null)
             return EmitSimpleVar(bvs.Name, strict: true);
 
+        if (bvs.Suffix.StartsWith("#BAD:", StringComparison.Ordinal))
+            return "$(" + PsBuild.ParamErrorThrowStatements(PsBuild.SingleQuote(bvs.Suffix[5..] + ": "), "'bad substitution'") + ")";
+
         // Positional-parameter SLICE: ${@:offset[:length]} / ${*:…}. Unhandled, this
         // fell through to the ordinary-variable path and emitted the bare `$env:`
         // (empty name) — "':' was not followed by a valid variable name character",
@@ -7178,7 +7181,7 @@ public static partial class PsEmitter
             }
         }
 
-        string varRef = EmitSimpleVar(bvs.Name, strict: bvs.Suffix.StartsWith("/", StringComparison.Ordinal));
+        string varRef = EmitSimpleVar(bvs.Name, strict: bvs.Suffix.StartsWith("/", StringComparison.Ordinal) || bvs.Suffix == "#L");
 
         // Name-prefix expansion: ${!prefix*} / ${!prefix@} -> the NAMES of
         // variables starting with `prefix`. ps-bash models bash variables as
