@@ -7409,14 +7409,18 @@ public static partial class PsEmitter
         if (suffix.StartsWith("/") && !suffix.StartsWith("//"))
         {
             var (find, replace) = SplitPatsubOperands(suffix[1..]);
-            return SubstituteExpr(open, varRef, find, replace, first: true);
+            return SubstituteExpr(open, varRef, TildeFind(find), replace, first: true);
         }
         // Replace all: ${VAR//find/replace} — escape find literally; 2-arg overload = all.
         if (suffix.StartsWith("//"))
         {
             var (find, replace) = SplitPatsubOperands(suffix[2..]);
-            return SubstituteExpr(open, varRef, find, replace, first: false);
+            return SubstituteExpr(open, varRef, TildeFind(find), replace, first: false);
         }
+
+        // A leading unquoted `~` / `~/` of the pattern is the home directory (matched literally).
+        static string TildeFind(string find)
+            => find == "~" || find.StartsWith("~/", StringComparison.Ordinal) ? "\"$HOME\"" + find[1..] : find;
 
         // A quoted / variable operand (`$'\n'`, `$nl`, `'x'`) is the quote-removed VALUE, matched literally; `$` in the
         // replacement is doubled because .NET reads `$1` / `$&` there.

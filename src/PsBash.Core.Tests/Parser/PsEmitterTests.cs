@@ -87,6 +87,12 @@ public class PsEmitterTests
         Assert.Contains(".Length", PsEmitter.Transpile("echo \"${#var}\""));
     }
 
+    [Theory]
+    [InlineData("echo ${p/~/z}")]
+    [InlineData("echo ${p//~/z}")]
+    public void Transpile_PatsubTildePattern_IsTheHomeDirectory(string src)
+        => Assert.Contains("$HOME", PsEmitter.Transpile(src));
+
     [Fact]
     public void Transpile_RegexMatch_IsCaseSensitiveUnlessNocasematch()
     {
