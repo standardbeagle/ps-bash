@@ -49,7 +49,7 @@ public sealed class InvokeBashArithmeticCommand : PSCmdlet
         FileSystemHelpers.SetLastExitCode(this, 0);
         try
         {
-            long result = BashArith.Evaluate(expr, ReadVar, WriteVar, ReadRawVar);
+            long result = BashArith.Evaluate(SubstituteExpressionVariables(expr), ReadVar, WriteVar, ReadRawVar);
             WriteObject(result);
         }
         catch (UnboundVariableException)
@@ -70,6 +70,22 @@ public sealed class InvokeBashArithmeticCommand : PSCmdlet
     /// semantics), guarded against reference cycles.
     /// </summary>
     private sealed class UnboundVariableException : Exception { }
+
+    /// <summary>
+    /// bash expands <c>$x</c> / <c>${x}</c> TEXTUALLY before parsing, so x='1 + 2' gives <c>$(( $x * 3 ))</c> = 7,
+    /// not 9. Only a value that is more than one plain integer needs this; a plain integer reads the same either way.
+    /// </summary>
+    private string SubstituteExpressionVariables(string expr)
+    {
+        if (expr.IndexOf('$') < 0) return expr;
+        return System.Text.RegularExpressions.Regex.Replace(expr, @"\$(?:\{([A-Za-z_]\w*)\}|([A-Za-z_]\w*))(?![\w\[])", m =>
+        {
+            string name = m.Groups[1].Success ? m.Groups[1].Value : m.Groups[2].Value;
+            string? raw = ReadRawVar(name);
+            if (string.IsNullOrEmpty(raw) || System.Text.RegularExpressions.Regex.IsMatch(raw, @"^\s*-?\d+\s*$")) return m.Value;
+            return " " + raw + " ";
+        });
+    }
 
     private long ReadVar(string name) => ReadVar(name, new HashSet<string>(StringComparer.Ordinal));
 

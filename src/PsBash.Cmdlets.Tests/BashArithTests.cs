@@ -353,6 +353,16 @@ public class InvokeBashArithmeticRawReaderTests : IClassFixture<SharedPwshFixtur
         Assert.Equal("0", Assert.Single(result).ToString());
     }
 
+    // Oracle: `x='1 + 2'; echo $(( $x * 3 ))` is 7 -- $x is substituted as TEXT before the expression is parsed.
+    [Fact]
+    public void InvokeBashArith_DollarVariableIsSubstitutedTextually()
+    {
+        var pwsh = _fixture.AcquireFresh();
+        var result = pwsh.AddScript("$env:x = '1 + 2'; Invoke-BashArith '$x * 3'").Invoke();
+
+        Assert.Equal("7", Assert.Single(result).ToString());
+    }
+
     // Oracle: an array used as a plain name reads element 0 (`a=(1 2 3); echo $((a + 5))` is 6).
     [Fact]
     public void InvokeBashArith_ArrayNameDecaysToElementZero()
