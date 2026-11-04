@@ -45,7 +45,6 @@ foo=alive! $unset
 echo $foo
 ## stdout: alive!
 ## status: 0
-## XFAIL ps-bash gap-oils-temp-binding temp-binding (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Temp bindings with unset

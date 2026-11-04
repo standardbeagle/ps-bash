@@ -140,6 +140,15 @@ public class PsEmitterTests
     }
 
     [Fact]
+    public void Transpile_EnvPrefixBeforeEmptyExpandingCommandWord_PersistsTheAssignment()
+    {
+        var result = PsEmitter.Transpile("foo=alive! $unset");
+        // Empty expansion → plain assignment (no save/restore); otherwise the temporary binding.
+        Assert.Contains("Count -eq 0) { $env:foo = ", result);
+        Assert.Contains("finally", result);
+    }
+
+    [Fact]
     public void Transpile_RegexMatch_IsCaseSensitiveUnlessNocasematch()
     {
         var ps = PsEmitter.Transpile("[[ ABC =~ abc ]]")!;

@@ -3255,6 +3255,15 @@ public static partial class PsEmitter
 
         var bare = cmd with { EnvPairs = ImmutableArray<EnvPair>.Empty };
         result = WrapEnvPairs(cmd.EnvPairs, WithEnvShadow(cmd.EnvPairs, () => EmitSimple(bare)));
+        // `foo=bar $unset`: a command word that expands to NOTHING leaves no command, so the assignment persists
+        // (only a command that actually runs gets the temporary binding).
+        if (cmd.Words.Length > 0 && IsPureUnquotedVarWord(cmd.Words[0]))
+        {
+            string nameWords = EmitUnquotedSplitWordArray(cmd.Words[0]);
+            string assignOnly = EmitShAssignment(new Command.ShAssignment(
+                cmd.EnvPairs.Select(p => new Assignment(p.Name, AssignOp.Equal, p.Value)).ToImmutableArray()));
+            result = $"if (@({nameWords}).Count -eq 0) {{ {assignOnly} }} else {{ {result} }}";
+        }
         return true;
     }
 
