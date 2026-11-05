@@ -52,12 +52,14 @@ internal sealed partial class PtyHarness : IAsyncDisposable
     public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(5);
     public static readonly TimeSpan DefaultStartTimeout = TimeSpan.FromSeconds(15);
 
-    // Strips ANSI/VT control sequences: CSI (ESC[ … letter), ESC= / ESC>
+    // Strips ANSI/VT control sequences: OSC (ESC] … BEL or ESC\, the window-title
+    // the shell sets around every command), CSI (ESC[ … letter), ESC= / ESC>
     // (keypad mode), and lone two-char escapes. The PTY-rendered transcript is
     // full of cursor-movement and color codes; matching prompts / output text
-    // requires a clean stream.
+    // requires a clean stream. An OSC left in place put `]0;ps-bash: echo hi` between
+    // the echoed command and its output, so `\nhi\n` never matched.
     private static readonly Regex AnsiEscape = new(
-        @"\x1b\[[0-9;?]*[a-zA-Z]|\x1b[=>]|\x1b[()][AB0-2]", RegexOptions.Compiled);
+        @"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b\[[0-9;?]*[a-zA-Z]|\x1b[=>]|\x1b[()][AB0-2]", RegexOptions.Compiled);
 
     private readonly IPty _pty;
     private readonly PtySpawner _spawner;
