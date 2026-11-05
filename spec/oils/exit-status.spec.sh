@@ -51,7 +51,6 @@ if `sh -c 'echo X; true'`; then echo TRUE; else echo FALSE; fi
 ## stdout: FALSE
 ## status: 0
 ## timeout: 10
-## XFAIL ps-bash triage differs from bash 5.2 (auto-marked; investigate)
 
 #### If subshell true WITH ARGUMENT
 if `true` X; then echo TRUE; else echo FALSE; fi

@@ -398,6 +398,15 @@ public static class PsBuild
         + "$__psbErr = " + status + "; " + (TrapLine > 0 ? "$env:__psbLine = " + TrapLine + "; " : "")
         + "& $global:__BashTrapERR; $global:LASTEXITCODE = $__psbErr }; ";
 
+    /// <summary>
+    /// Run the <c>trap ... DEBUG</c> action before a command. The action sees the command's line as <c>$LINENO</c>,
+    /// does not itself trigger DEBUG, and leaves the status the command will be run with unchanged.
+    /// </summary>
+    public static string DebugTrapRun(int line) =>
+        "if ((Test-Path variable:global:__BashTrapDEBUG) -and $global:__BashTrapDEBUG -and -not $global:__BashInDebug) { "
+        + "$global:__BashInDebug = $true; $__psbDbg = $global:LASTEXITCODE; $env:__psbLine = " + line + "; "
+        + "try { & $global:__BashTrapDEBUG } finally { $global:__BashInDebug = $false }; $global:LASTEXITCODE = $__psbDbg }; ";
+
     /// <summary>The value of <c>$-</c>: the single-letter options currently on, in bash's order.</summary>
     public const string ShellFlagsExpr =
         "$f = ''; if ($global:__BashErrexit) { $f += 'e' }; if ($global:__BashNoglob) { $f += 'f' }; $f += 'h'; "

@@ -47,6 +47,9 @@ public static partial class PsEmitter
     /// <summary>The script mentions <c>trap</c>: a subshell or <c>$( )</c> may run a function that sets an EXIT trap.</summary>
     [ThreadStatic]
     private static bool _trapMode;
+    // A multi-statement script that sets a DEBUG trap: every top-level simple command first runs it (bash semantics).
+    // A lone `trap 'cmd' DEBUG` line (an interactive prompt hook) keeps its directory-change mapping.
+    private static bool _debugTrapMode;
     /// <summary>The script prints variables with <c>declare -p</c>: <c>export</c> and <c>declare -i</c> record their attribute for it.</summary>
     [ThreadStatic]
     private static bool _declarePrintMode;
@@ -348,6 +351,16 @@ public static partial class PsEmitter
     private static string EmitStatementCore(Command cmd)
     {
         if (cmd is Command.Simple { Line: > 0 } lined) PsBuild.TrapLine = lined.Line;
+        if (_debugTrapMode && _functionDepth == 0 && cmd is Command.Simple { Line: > 0 } dbg && !IsTrapCommand(dbg))
+            return PsBuild.DebugTrapRun(dbg.Line) + EmitStatementBody(cmd);
+        return EmitStatementBody(cmd);
+    }
+
+    private static bool IsTrapCommand(Command.Simple simple)
+        => simple.Words.Length > 0 && TryGetStaticArgValue(simple.Words[0]) == "trap";
+
+    private static string EmitStatementBody(Command cmd)
+    {
         if (!_errexitMode || _errexitExemptDepth > 0)
             return Emit(cmd);
 
@@ -613,6 +626,9 @@ public static partial class PsEmitter
         _pipeStatusMode = bash.Contains("PIPESTATUS", StringComparison.Ordinal);
         var priorXtrace = _xtraceMode;
         var priorTrap = _trapMode;
+        var priorDebugTrap = _debugTrapMode;
+        _debugTrapMode = System.Text.RegularExpressions.Regex.IsMatch(bash, @"\btrap\s+(?:'[^'\n]*'|\x22[^\x22\n]*\x22)\s+DEBUG\b")
+            && bash.Split('\n').Count(l => l.Trim() is { Length: > 0 } t && t[0] != '#') >= 3;
         var priorDeclarePrint = _declarePrintMode;
         _declarePrintMode = System.Text.RegularExpressions.Regex.IsMatch(bash, @"\b(?:declare|typeset)\s+(?:-[a-zA-Z]+\s+)*-[a-zA-Z]*p")
             || System.Text.RegularExpressions.Regex.IsMatch(bash, @"\bexport\s*(?:-p\s*)?(?:[|;&)}]|\r?\n|$)");
@@ -641,6 +657,7 @@ public static partial class PsEmitter
             _unitFunctions = priorUnitFunctions;
             _xtraceMode = priorXtrace;
             _trapMode = priorTrap;
+            _debugTrapMode = priorDebugTrap;
             _declarePrintMode = priorDeclarePrint;
         }
     }
@@ -3900,7 +3917,7 @@ public static partial class PsEmitter
         // trap - DEBUG      -> Unregister-BashChpwdHook for the previously registered hook
         // Checked early (outside the else-if chain) so that `trap 'CMD' EXIT` and
         // other non-DEBUG signals still fall through to TryEmitMappedCommand -> Invoke-BashTrap.
-        if (cmd0 == "trap" && cmd.Words.Length >= 3
+        if (cmd0 == "trap" && cmd.Words.Length >= 3 && !_debugTrapMode
             && GetLiteralValue(cmd.Words[^1]) == "DEBUG")
         {
             var trapArgs = cmd.Words.Skip(1).Take(cmd.Words.Length - 2).ToList();

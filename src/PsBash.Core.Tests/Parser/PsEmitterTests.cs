@@ -6178,6 +6178,25 @@ public class PsEmitterTests
     }
 
     [Fact]
+    public void Transpile_TrapDebug_MultiStatementScript_RunsTrapBeforeEachCommand()
+    {
+        // A multi-statement script gets real DEBUG semantics, not the chpwd-hook mapping.
+        var result = PsEmitter.Transpile("trap 'echo T' DEBUG\necho a\necho b");
+
+        Assert.Contains("Invoke-BashTrap", result);
+        Assert.Contains("__BashTrapDEBUG", result);
+        Assert.DoesNotContain("Register-BashChpwdHook", result);
+    }
+
+    [Fact]
+    public void Transpile_TrapDebug_LoneLine_KeepsChpwdHookMapping()
+    {
+        var result = PsEmitter.Transpile("trap 'echo T' DEBUG");
+
+        Assert.Contains("Register-BashChpwdHook", result);
+    }
+
+    [Fact]
     public void Transpile_TrapOtherSignal_PassesThroughToInvokeBashTrap()
     {
         // trap 'cleanup' EXIT  ->  Invoke-BashTrap 'cleanup' EXIT  (not a hook)

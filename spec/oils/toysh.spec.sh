@@ -123,6 +123,5 @@ xx() { echo "${@@Q}";}; xx a b c d
 'a' 'b' 'c' 'd'
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-toysh toysh (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher

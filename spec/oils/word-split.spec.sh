@@ -689,7 +689,6 @@ argv.py $*
 ['', '', '', '', '']
 ## stdout:
 ## status: 127
-## XFAIL ps-bash gap-oils-word-split word-split (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### ""$A"" - empty string on both sides - derived from spec/toysh-posix #15
