@@ -60,6 +60,7 @@ public sealed partial class BashParser
 
         // Collect leading assignment words (VAR=val ...).
         // Array assignments like arr=(a b c) are detected and consumed here.
+        int simpleLine = BashLexer.LineAt(_input, Peek().Position);
         var assignmentPairs = ImmutableArray.CreateBuilder<Assignment>();
         var envPairs = ImmutableArray.CreateBuilder<EnvPair>();
         bool hasArrayAssignment = false;
@@ -220,7 +221,8 @@ public sealed partial class BashParser
             words.ToImmutable(),
             envPairs.ToImmutable(),
             redirects.ToImmutable(),
-            hereDocs.ToImmutable());
+            hereDocs.ToImmutable(),
+            simpleLine);
     }
 
     private static string? EscapedControlBuiltin(CompoundWord word)

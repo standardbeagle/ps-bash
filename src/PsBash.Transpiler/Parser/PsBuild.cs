@@ -395,7 +395,11 @@ public static class PsBuild
     /// </summary>
     public static string ErrTrapCheck(string status = "$global:LASTEXITCODE") =>
         "if (" + status + " -ne 0 -and -not " + ErrexitSuppressVar + " -and (Test-Path variable:global:__BashTrapERR) -and $global:__BashTrapERR) { "
-        + "$__psbErr = " + status + "; & $global:__BashTrapERR; $global:LASTEXITCODE = $__psbErr }; ";
+        + "$__psbErr = " + status + "; " + (TrapLine > 0 ? "$env:__psbLine = " + TrapLine + "; " : "")
+        + "& $global:__BashTrapERR; $global:LASTEXITCODE = $__psbErr }; ";
+
+    /// <summary>Source line of the statement being emitted; the ERR trap reads it as <c>$LINENO</c>.</summary>
+    [ThreadStatic] public static int TrapLine;
 
     /// <summary>
     /// Run statement(s) with errexit suppressed (an exempt context): no command inside —

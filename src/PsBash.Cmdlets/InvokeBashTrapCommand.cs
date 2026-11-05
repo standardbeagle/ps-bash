@@ -158,9 +158,11 @@ public sealed class InvokeBashTrapCommand : PSCmdlet
             bool drop = resetMode || action == "";
             // `trap '' USR2` IGNORES the signal (kept as an empty action so `kill -USR2 $$` does nothing);
             // only EXIT/ERR/RETURN have no meaning as "ignore" and are simply dropped.
-            if (!resetMode && action == "" && dict != null && signal is not ("EXIT" or "ERR" or "RETURN" or "0"))
+            if (!resetMode && action == "" && dict != null)
             {
                 dict[signal] = "";
+                if (signal is "EXIT" or "ERR" or "RETURN")
+                    InvokeCommand.InvokeScript("param($n) Set-Variable -Name $n -Value ([scriptblock]::Create('')) -Scope Global -Force", "__BashTrap" + signal);
                 continue;
             }
             if (drop)
@@ -199,6 +201,7 @@ public sealed class InvokeBashTrapCommand : PSCmdlet
     /// <summary>The action is bash text (<c>$?</c>, <c>$((..))</c>, ...), so it runs transpiled; text that does not parse runs as written.</summary>
     internal static string TranspileAction(string action)
     {
+        action = action.Replace("${LINENO}", "$__psbLine").Replace("$LINENO", "$__psbLine");
         try { return PsBash.Core.Transpiler.BashTranspiler.Transpile(action, PsBash.Core.Transpiler.TranspileContext.Eval) ?? action; }
         catch (Exception) { return action; }
     }
@@ -223,15 +226,23 @@ public sealed class InvokeBashTrapCommand : PSCmdlet
         {
             return;
         }
+        var entries = new List<(int Order, string Signal, string Action)>();
         foreach (System.Collections.DictionaryEntry entry in dict)
         {
-            var signal = entry.Key?.ToString() ?? "";
-            var action = entry.Value?.ToString() ?? "";
+            var key = entry.Key?.ToString() ?? "";
+            int order = Array.IndexOf(SignalByNumber, key);
+            if (order < 0) order = key switch { "DEBUG" => 1000, "ERR" => 1001, "RETURN" => 1002, _ => 2000 };
+            entries.Add((order, key, entry.Value?.ToString() ?? ""));
+        }
+        entries.Sort((a, b) => a.Order != b.Order ? a.Order.CompareTo(b.Order) : string.CompareOrdinal(a.Signal, b.Signal));
+        foreach (var (order, signal, action) in entries)
+        {
+            var shown = order is >= 1 and < 1000 || order == 2000 ? "SIG" + signal : signal;
             var obj = new PSObject();
             obj.TypeNames.Insert(0, "PsBash.TrapOutput");
             obj.Properties.Add(new PSNoteProperty("Signal", signal));
             obj.Properties.Add(new PSNoteProperty("Action", action));
-            obj.Properties.Add(new PSNoteProperty("BashText", $"trap -- '{action}' {signal}"));
+            obj.Properties.Add(new PSNoteProperty("BashText", $"trap -- '{action.Replace("'", "'\\''")}' {shown}"));
             WriteObject(obj);
         }
     }

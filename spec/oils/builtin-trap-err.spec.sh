@@ -14,7 +14,6 @@ line=5
 ok
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-trap-err builtin-trap-err (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### trap ERR and set -o errexit
@@ -36,7 +35,6 @@ b
 line=10
 ## END
 ## status: 1
-## XFAIL ps-bash gap-oils-builtin-trap-err builtin-trap-err (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### trap ERR and errexit disabled context
@@ -60,7 +58,6 @@ b
 c
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-trap-err builtin-trap-err (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### trap ERR and if statement
@@ -371,7 +368,6 @@ line=13
 ok
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-trap-err builtin-trap-err (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### trap ERR with redirect

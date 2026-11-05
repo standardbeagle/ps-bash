@@ -271,7 +271,6 @@ trap '' USR1
 trap
 ## stdout: trap -- '' SIGUSR1
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-trap builtin-trap (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### trap '' with multiple signals
@@ -283,7 +282,6 @@ trap -- '' SIGUSR1
 trap -- '' SIGUSR2
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-trap builtin-trap (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### SIGINT and INT are aliases
@@ -325,7 +323,6 @@ echo 2
 echo 3' SIGINT
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-trap builtin-trap (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### trap -p is like trap: it prints the handlers and full signal names
@@ -353,7 +350,6 @@ trap -- 'echo test' SIGTERM
 test
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-trap builtin-trap (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Remove multiple handlers with trap -
@@ -394,7 +390,6 @@ trap -- 'echo INT' SIGINT
 ---
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-trap builtin-trap (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### trap 0 is equivalent to trap EXIT
@@ -411,7 +406,6 @@ trap -- 'echo INT' SIGINT
 trap -- 'echo INT' SIGINT
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-trap builtin-trap (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### trap 1 is equivalent to SIGHUP; HUP is equivalent to SIGHUP
@@ -475,7 +469,6 @@ trap -- '' EXIT
 trap -- '# comment' EXIT
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-trap builtin-trap (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### trap EXIT sees $? of the last command, with sh -c

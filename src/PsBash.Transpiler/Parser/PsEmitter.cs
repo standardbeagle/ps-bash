@@ -347,6 +347,7 @@ public static partial class PsEmitter
 
     private static string EmitStatementCore(Command cmd)
     {
+        if (cmd is Command.Simple { Line: > 0 } lined) PsBuild.TrapLine = lined.Line;
         if (!_errexitMode || _errexitExemptDepth > 0)
             return Emit(cmd);
 
