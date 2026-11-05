@@ -9,7 +9,6 @@ while is a shell keyword
 cd is a shell builtin
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-type builtin-type (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### type -> alias external
@@ -94,7 +93,6 @@ true is a shell builtin
 export is a shell builtin
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-type builtin-type (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### more special builtins
