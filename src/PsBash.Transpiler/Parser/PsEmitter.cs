@@ -4551,7 +4551,9 @@ public static partial class PsEmitter
             dashName = bracketName;
         bool needsCallOperator =
             !isScriptCommand && cmd.Words.Length > 0
-            && (IsExpandedCommandWord(cmd.Words[0]) || dashName is not null);
+            && (IsExpandedCommandWord(cmd.Words[0]) || dashName is not null
+                // `/tmp/x` is emitted as the quoted TempPath string; unquoted-by-`&` it would print itself.
+                || GetLiteralValue(cmd.Words[0]) is { } tmpCmd && tmpCmd.StartsWith("/tmp/", StringComparison.Ordinal));
         // A run-time command name (`"$@"`, `$cmd`, `"$tool"`) is looked up as bash does (function, then builtin such
         // as `false` / `echo` / `test`, then PATH): Resolve-BashCommand returns what `&` can call.
         bool dynamicName = needsCallOperator && dashName is null && IsBareVariableCommandWord(cmd.Words[0]);
