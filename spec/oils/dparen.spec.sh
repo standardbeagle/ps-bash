@@ -95,7 +95,6 @@ keys = K
 values = 0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-dparen dparen (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### literal strings inside (( ))

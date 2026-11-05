@@ -201,7 +201,6 @@ declare -a a2=([0]="1" [1]="2")
 declare -a a=([0]="x" [1]="y" [2]="z" [3]="w" [500]="100" [1000]="100")
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array-sparse array-sparse (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -221,7 +220,6 @@ declare -a sp1=([9]=x)
 declare -a sp1=([0]=D [2]=C [6]=B [9]=A)
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array-sparse array-sparse (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -246,7 +244,6 @@ echo "${#sp1[@]}"
 6
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array-sparse array-sparse (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -258,7 +255,6 @@ sp1[-11]=E
 declare -p sp1
 ## stdout: declare -a sp1=([9]="x")
 ## status: 0
-## XFAIL ps-bash gap-oils-array-sparse array-sparse (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -271,7 +267,6 @@ sp1[-21]=F
 declare -p sp1
 ## stdout: declare -a sp1=([9]="x")
 ## status: 0
-## XFAIL ps-bash gap-oils-array-sparse array-sparse (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -283,7 +278,6 @@ set -x
 sp1+=(2)
 ## stdout:
 ## status: 0
-## XFAIL ps-bash triage differs from bash 5.2 (auto-marked; investigate)
 ## timeout: 10
 ## real-launcher
 
@@ -361,7 +355,6 @@ unset -v 'sp3[4]'
 0 (expect 0)
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array-sparse array-sparse (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 

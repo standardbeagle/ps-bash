@@ -336,7 +336,6 @@ trap -- 'echo INT' SIGINT
 EXIT
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-trap builtin-trap (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -479,7 +478,6 @@ status=5
 outer=5
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-trap builtin-trap (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 

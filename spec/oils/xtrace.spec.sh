@@ -12,7 +12,6 @@ foo
 bar
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-xtrace xtrace (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### xtrace with paths

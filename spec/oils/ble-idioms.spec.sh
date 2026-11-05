@@ -149,7 +149,6 @@ a[i]=1
 echo len=${#a[@]}
 ## stdout: len=1
 ## status: 0
-## XFAIL ps-bash gap-oils-ble-idioms ble-idioms (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Issue #1069 [49] BUG: \return 0 does not work
