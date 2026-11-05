@@ -64,6 +64,18 @@ public class InvokeBashKillCommandTests : IClassFixture<SharedPwshFixture>
         Assert.Contains(errs, e => e.Contains("invalid signal specification"));
     }
 
+    [Fact]
+    public void Kill_SDashUnknownSignal_IsRejected_AndListNamesAndNumbersRoundTrip()
+    {
+        var errs = RunErrors("Invoke-BashKill '-s' 9999 ([System.Environment]::ProcessId); Invoke-BashKill '-s' FOO ([System.Environment]::ProcessId)");
+        Assert.Equal(2, errs.Count(e => e.Contains("invalid signal specification")));
+
+        // kill -l: 128+N prints the name N has, 0 is EXIT, a name prints its number, 128 itself is invalid.
+        var lines = RunBashText("Invoke-BashKill '-l' 134 0 SIGTERM");
+        Assert.Equal(new[] { "ABRT", "EXIT", "15" }, lines);
+        Assert.Contains(RunErrors("Invoke-BashKill '-l' 128"), e => e.Contains("128: invalid signal specification"));
+    }
+
     // Oracle: `trap 'echo got' USR1; kill -USR1 $$; echo after` prints got then after - the trap runs and the script
     // carries on (it ended the script with status 138). `trap '' USR2` ignores the signal.
     [Fact]

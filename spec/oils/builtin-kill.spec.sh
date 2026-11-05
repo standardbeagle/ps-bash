@@ -35,7 +35,6 @@ wait=143
 kill -l 134 # 128 + 6 (ABRT)
 ## stdout: ABRT
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-kill builtin-kill (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### kill -l with 128 is invalid
@@ -45,14 +44,12 @@ if [ $? -ne 0 ]; then
 fi
 ## stdout: invalid
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-kill builtin-kill (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### kill -l 0 returns EXIT
 kill -l 0
 ## stdout: EXIT
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-kill builtin-kill (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### kill -l 0 INT lists both signals
@@ -62,7 +59,6 @@ EXIT
 2
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-kill builtin-kill (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### kill multiple pids at once
@@ -106,7 +102,6 @@ kill=1
 wait=0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-kill builtin-kill (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### kill -15 kills the process with SIGTERM
@@ -195,7 +190,6 @@ builtin kill -l | grep HUP > /dev/null
 echo $?
 ## stdout: 0
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-kill builtin-kill (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -243,7 +237,6 @@ status=0
 
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-kill builtin-kill (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 

@@ -134,7 +134,22 @@ public sealed class InvokeBashKillCommand : PSCmdlet
             if (a == "-s" || a == "--signal")
             {
                 i++;
-                if (i < args.Length) signalName = ResolveSignal(args[i]);
+                if (i < args.Length)
+                {
+                    string spec = args[i];
+                    string nm = spec.StartsWith("SIG", StringComparison.OrdinalIgnoreCase) ? spec[3..] : spec;
+                    bool known = int.TryParse(spec, out var sn)
+                        ? sn >= 0 && sn <= 64
+                        : Array.Exists(LinuxSignalNames, x => x != null && x.Equals(nm, StringComparison.OrdinalIgnoreCase))
+                          || Regex.IsMatch(nm, @"^(RTMIN|RTMAX)(\+\d+|-\d+)?$", RegexOptions.IgnoreCase);
+                    if (!known)
+                    {
+                        FileSystemHelpers.WriteBashError(this, $"kill: {spec}: invalid signal specification");
+                        FileSystemHelpers.SetLastExitCode(this, 1);
+                        return;
+                    }
+                    signalName = ResolveSignal(spec);
+                }
                 i++;
                 continue;
             }
