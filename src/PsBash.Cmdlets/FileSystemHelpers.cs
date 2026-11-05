@@ -532,7 +532,11 @@ internal static class FileSystemHelpers
                 // file): retry a few times with a short backoff before reporting it.
                 for (int attempt = 1; ; attempt++)
                 {
-                    // Backoff 100..500 ms, ~9 s in all: a CI runner's scanner has held a fresh temp file past 4 s.
+                    // A handle this process opened and abandoned (an enumerator or stream the pipeline stopped
+                    // reading, closed only by its finalizer) blocks the delete on Windows but never on bash:
+                    // release those first, then back off 100..500 ms (~9 s in all) for an external scanner.
+                    GC.Collect();
+                    GC.WaitForPendingFinalizers();
                     System.Threading.Thread.Sleep(Math.Min(100 * attempt, 500));
                     try { ForceDeleteDirectoryRecursive(dir); return; }
                     catch (IOException) when (attempt < 20) { }
