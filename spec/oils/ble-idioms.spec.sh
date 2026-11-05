@@ -311,7 +311,6 @@ function f {
 f 'echo hello'
 ## stdout: hello
 ## status: 0
-## XFAIL ps-bash gap-oils-ble-idioms ble-idioms (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 

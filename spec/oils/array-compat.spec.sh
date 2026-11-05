@@ -177,6 +177,5 @@ argv.py keys "${!A[@]}"
 argv.py values "${A[@]}"
 ## stdout: declare -A A=([k]="v" )
 ## status: 127
-## XFAIL ps-bash gap-oils-array-compat array-compat (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher

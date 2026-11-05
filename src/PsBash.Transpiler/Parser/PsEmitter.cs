@@ -617,6 +617,7 @@ public static partial class PsEmitter
         _errexitMode = EnablesErrexit(bash);
         _errexitExemptDepth = 0;
         // Only a script that mentions pipefail pays for per-stage status capture (it also leaves the fused lane).
+        var priorDefined = _definedFunctions;
         var priorUnitFunctions = _unitFunctions;
         _unitFunctions = null;
         var priorPipefail = _pipefailMode;
@@ -655,6 +656,7 @@ public static partial class PsEmitter
             _pipefailMode = priorPipefail;
             _nounsetMode = priorNounset;
             _unitFunctions = priorUnitFunctions;
+            _definedFunctions = priorDefined;
             _xtraceMode = priorXtrace;
             _trapMode = priorTrap;
             _debugTrapMode = priorDebugTrap;
@@ -3890,6 +3892,9 @@ public static partial class PsEmitter
         }
 
         var cmd0 = GetLiteralValue(cmd.Words[0]);
+        // A script-defined function of the same name wins over the special-cased builtin (`cd() { …; }`).
+        if (cmd0 is not null && _definedFunctions is { Count: > 0 } && _definedFunctions.Contains(cmd0) && cmd0 is not ("command" or "builtin"))
+            return false;
 
         if (cmd0 == "exec" && cmd.HereDocs.IsDefaultOrEmpty && cmd.EnvPairs.IsEmpty)
             return TryEmitExec(cmd, out result);
@@ -4569,6 +4574,16 @@ public static partial class PsEmitter
         {
             leading = "& (Resolve-BashCommand ";
             commandWordText += ")";
+        }
+
+        // A script-defined function named like a mapped command (`cd() { …; }`, `seq() { …; }`): PowerShell resolves an
+        // alias before a function, and the command is aliased — so call the function explicitly (bash: functions first).
+        if (!dynamicName && !needsCallOperator && cmd.Words.Length > 0 && GetLiteralValue(cmd.Words[0]) is { Length: > 0 } fnName
+            && _definedFunctions is { Count: > 0 } && _definedFunctions.Contains(fnName) && IsMappedCommandName(fnName))
+        {
+            var q = PsBuild.SingleQuote(fnName);
+            leading = "& ((Get-Command -Name " + q + " -CommandType Function -ErrorAction SilentlyContinue) ?? " + q + ") ";
+            commandWordText = "";
         }
 
         // A PowerShell statement keyword (exit/return/break/â€¦) cannot take a
@@ -7244,7 +7259,11 @@ public static partial class PsEmitter
                         return inDoubleQuote ? $"$({subRef})" : subRef;
                     }
                     if (int.TryParse(subscript, out _))
-                        return inDoubleQuote ? $"$({arrayVar}['{subscript}'])" : $"{arrayVar}['{subscript}']";
+                    {
+                        // $Matches (BASH_REMATCH) is keyed by int; every other array reads by the string key.
+                        string key = bvs.Name == "BASH_REMATCH" ? subscript : $"'{subscript}'";
+                        return inDoubleQuote ? $"$({arrayVar}[{key}])" : $"{arrayVar}[{key}]";
+                    }
                     string keyRef = $"{arrayVar}[{EmitWordSubscript(arrayVar, subscript)}]";
                     return inDoubleQuote ? $"$({keyRef})" : keyRef;
                 }
@@ -8990,6 +9009,22 @@ public static partial class PsEmitter
     /// Tries to emit a mapped PowerShell equivalent for known bash pipe-target commands.
     /// Returns false if the command is not a recognized pipe target.
     /// </summary>
+    /// <summary>PowerShell default aliases that would otherwise beat a same-named shell function.</summary>
+    private static readonly HashSet<string> PsAliasNames = new(StringComparer.Ordinal)
+    {
+        "type", "ls", "cat", "cp", "mv", "rm", "pwd", "echo", "sleep", "sort", "kill", "ps", "diff", "man", "mount", "rmdir", "clear", "history", "tee", "write", "where", "sc", "gc", "gm", "gl", "gi", "sl", "md",
+    };
+
+    /// <summary>True when <paramref name="name"/> is a command the emitter maps to an <c>Invoke-Bash*</c> cmdlet (ignoring script-defined functions).</summary>
+    private static bool IsMappedCommandName(string name)
+    {
+        if (_stateBuiltins.Contains(name) || PsAliasNames.Contains(name)) return true;
+        var prior = _definedFunctions;
+        _definedFunctions = null;
+        try { return TryEmitMappedCommand(new Command.Simple([new CompoundWord([new WordPart.Literal(name)])], [], []), out _); }
+        finally { _definedFunctions = prior; }
+    }
+
     private static bool TryEmitMappedCommand(Command.Simple cmd, out string result)
     {
         result = "";
@@ -8998,6 +9033,10 @@ public static partial class PsEmitter
 
         var name = GetLiteralValue(cmd.Words[0]);
         if (name is null)
+            return false;
+
+        // A function the script defines under a mapped command's name wins over it (bash: functions precede builtins and PATH).
+        if (_definedFunctions is { Count: > 0 } && _definedFunctions.Contains(name) && name is not ("command" or "builtin"))
             return false;
 
         var args = cmd.Words.RemoveAt(0);
@@ -9313,6 +9352,23 @@ public static partial class PsEmitter
                 // Reached only when no static declaration path took it (e.g. `typeset -a "$code"`): the runtime parses the words.
                 result = EmitPassthrough("Invoke-BashDeclare", args);
                 return true;
+            case "builtin":
+            {
+                // Runs the named builtin, skipping any shell function of that name: the rest is emitted as
+                // an ordinary command with that one function hidden.
+                var rest = args;
+                if (!rest.IsEmpty && GetLiteralValue(rest[0]) == "--") rest = rest.RemoveAt(0);
+                if (rest.IsEmpty) { result = PsBuild.SetStatus(0); return true; }
+                var priorFns = _definedFunctions;
+                if (priorFns is not null && GetLiteralValue(rest[0]) is { } bn && priorFns.Contains(bn))
+                {
+                    _definedFunctions = new HashSet<string>(priorFns, StringComparer.Ordinal);
+                    _definedFunctions.Remove(bn);
+                }
+                try { result = EmitSimple(cmd with { Words = rest }); }
+                finally { _definedFunctions = priorFns; }
+                return true;
+            }
             case "unset":
                 result = EmitPassthrough("Invoke-BashUnset", args);
                 return true;

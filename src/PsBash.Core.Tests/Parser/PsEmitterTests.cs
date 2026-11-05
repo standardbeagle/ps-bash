@@ -6210,6 +6210,42 @@ public class PsEmitterTests
     }
 
     [Fact]
+    public void Transpile_FunctionNamedLikeMappedCommand_CallsTheFunction()
+    {
+        var r = PsEmitter.Transpile("seq() { echo my; }\nseq 3")!;
+        Assert.DoesNotContain("Invoke-BashSeq", r);
+        Assert.Contains("-CommandType Function", r);
+    }
+
+    [Fact]
+    public void Transpile_FunctionNamedCd_SkipsTheInlineCd()
+    {
+        var r = PsEmitter.Transpile("cd() { echo hi; }\ncd /")!;
+        Assert.DoesNotContain("__psbash_cd_target", r);
+    }
+
+    [Fact]
+    public void Transpile_BuiltinCd_BypassesAFunctionOfTheSameName()
+    {
+        var r = PsEmitter.Transpile("cd() { echo hi; }\nbuiltin cd /")!;
+        Assert.Contains("__psbash_cd_target", r.Substring(r.IndexOf("}; ", StringComparison.Ordinal)));
+    }
+
+    [Fact]
+    public void Transpile_BuiltinWithNoCommand_Succeeds()
+    {
+        Assert.Contains("LASTEXITCODE = 0", PsEmitter.Transpile("builtin")!);
+    }
+
+    [Fact]
+    public void Transpile_BashRematchElement_ReadsByIntKey()
+    {
+        var r = PsEmitter.Transpile("echo ${BASH_REMATCH[1]}")!;
+        Assert.Contains("$BASH_REMATCH[1]", r);
+        Assert.DoesNotContain("$BASH_REMATCH['1']", r);
+    }
+
+    [Fact]
     public void Transpile_Hostname_IsLowerCasedLikeTheHostnameCommand()
     {
         Assert.Contains("MachineName.ToLowerInvariant()", PsEmitter.Transpile("echo $HOSTNAME"));

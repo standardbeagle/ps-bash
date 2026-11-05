@@ -37,6 +37,9 @@ public static partial class PsEmitter
         }
     }
 
+    /// <summary>Function names this unit defines: a call to one is the FUNCTION, never the same-named mapped command.</summary>
+    [ThreadStatic] private static HashSet<string>? _definedFunctions;
+
     private static void CollectCallSites(Command root)
     {
         var sites = new Dictionary<string, List<ImmutableArray<CompoundWord>>>(StringComparer.Ordinal);
@@ -48,6 +51,9 @@ public static partial class PsEmitter
                 list.Add(s.Words.RemoveAt(0));
             }
         });
+        var fns = new HashSet<string>(StringComparer.Ordinal);
+        VisitCommands(root, c => { if (c is Command.ShFunction f) fns.Add(f.Name); });
+        _definedFunctions = fns;
         _callSites = sites;
     }
 
