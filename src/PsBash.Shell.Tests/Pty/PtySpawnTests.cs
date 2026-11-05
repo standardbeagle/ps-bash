@@ -172,7 +172,7 @@ public class PtySpawnTests
         Assert.True(ptyCallIdx > 0, "RunHostUnderPtyAsync invocation missing from Program.cs");
 
         int interactiveBranchIdx = src.IndexOf(
-            "if (shellArgs.Interactive || shellArgs.Command is null)",
+            "if (shellArgs.Command is null)",
             StringComparison.Ordinal);
         Assert.True(interactiveBranchIdx > 0,
             "Interactive branch guard missing from Program.cs — PTY spawn must be gated on it");
@@ -281,7 +281,7 @@ public class PtySpawnTests
         // Program.cs is the launcher entry point. The interactive branch must
         // be before worker factory use and must spawn the host directly; daemon
         // lifetime is allowed only for the non-interactive worker factory.
-        int interactiveIdx = src.IndexOf("if (shellArgs.Interactive || shellArgs.Command is null)", StringComparison.Ordinal);
+        int interactiveIdx = src.IndexOf("if (shellArgs.Command is null)", StringComparison.Ordinal);
         int runPtyIdx = src.IndexOf("RunHostUnderPtyAsync(hostBinary, shellArgs)", interactiveIdx, StringComparison.Ordinal);
         int daemonIdx = src.IndexOf("Lifetime.Daemon", StringComparison.Ordinal);
         Assert.True(interactiveIdx > 0, "Interactive launch branch missing");
