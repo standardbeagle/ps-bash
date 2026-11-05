@@ -20,6 +20,19 @@ public sealed class InvokeBashKillCommand : PSCmdlet
     public string[]? Arguments { get; set; }
 
     // Number/name -> canonical SIGxxx, mirroring the psm1 table.
+    /// <summary>Linux: a terminated-but-unreaped child (state Z in /proc) is already gone for <c>kill -0</c>, as in bash.</summary>
+    private static bool IsZombie(int pid)
+    {
+        if (!OperatingSystem.IsLinux()) return false;
+        try
+        {
+            var stat = System.IO.File.ReadAllBytes("/proc/" + pid.ToString(System.Globalization.CultureInfo.InvariantCulture) + "/stat");
+            int close = Array.LastIndexOf(stat, (byte)')');
+            return close >= 0 && close + 2 < stat.Length && stat[close + 2] == (byte)'Z';
+        }
+        catch (Exception) { return false; }
+    }
+
     private static readonly Dictionary<string, string> Signals = new(StringComparer.Ordinal)
     {
         ["1"] = "SIGHUP", ["HUP"] = "SIGHUP",
@@ -160,6 +173,7 @@ public sealed class InvokeBashKillCommand : PSCmdlet
                 // GetProcessById throws if the PID is unknown; a process object that
                 // has already exited also counts as "no such process".
                 if (proc.HasExited) throw new ArgumentException("exited");
+                if (IsZombie(procId)) throw new ArgumentException("zombie");
                 if (!existenceOnly)
                     proc.Kill();
             }

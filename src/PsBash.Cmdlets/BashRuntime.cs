@@ -943,6 +943,13 @@ public static class BashRuntime
         try { Directory.SetCurrentDirectory(fallback); } catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
     }
 
+    private static bool CwdVanished()
+    {
+        try { _ = System.IO.Directory.GetCurrentDirectory(); return false; }
+        catch (System.IO.IOException) { return true; }
+        catch (System.UnauthorizedAccessException) { return true; }
+    }
+
     /// <summary>
     /// <see cref="RunChildProcess(string, IReadOnlyList{string}?, System.TimeSpan?)"/>
     /// overload taking a caller-prepared <see cref="ProcessStartInfo"/> (for env
@@ -977,7 +984,18 @@ public static class BashRuntime
 
         var budget = timeout ?? GetChildProcessTimeout();
 
-        using var proc = Process.Start(startInfo)
+        Process? started = null;
+        for (int spawnTry = 0; ; spawnTry++)
+        {
+            try { started = Process.Start(startInfo); break; }
+            catch (System.IO.FileNotFoundException) when (spawnTry == 0 && CwdVanished())
+            {
+                // Another thread removed the process-wide cwd between EnsureLiveCurrentDirectory and the
+                // spawn (Process.Start resolves a bare file name against it): re-anchor and retry once.
+                EnsureLiveCurrentDirectory(startInfo);
+            }
+        }
+        using var proc = started
             ?? throw new InvalidOperationException($"Failed to start process '{startInfo.FileName}'.");
 
         // Hand the child an EOF-closed stdin so it never hangs waiting for input; `stdinText` (a piped-in

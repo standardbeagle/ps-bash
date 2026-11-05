@@ -525,7 +525,18 @@ internal static class FileSystemHelpers
             // IOException too: a read-only DIRECTORY itself (not just a read-only descendant) makes
             // the native recursive delete throw IOException on Windows. The fallback clears the bit
             // and retries; a genuine failure resurfaces from the fallback.
-            ForceDeleteDirectoryRecursive(dir);
+            try { ForceDeleteDirectoryRecursive(dir); }
+            catch (IOException) when (OperatingSystem.IsWindows())
+            {
+                // A sharing violation is often transient (an indexer/AV scan still holding a freshly written
+                // file): retry a few times with a short backoff before reporting it.
+                for (int attempt = 1; ; attempt++)
+                {
+                    System.Threading.Thread.Sleep(50 * attempt);
+                    try { ForceDeleteDirectoryRecursive(dir); return; }
+                    catch (IOException) when (attempt < 5) { }
+                }
+            }
         }
     }
 
