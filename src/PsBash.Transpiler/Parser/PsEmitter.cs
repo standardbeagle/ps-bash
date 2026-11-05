@@ -3126,7 +3126,9 @@ public static partial class PsEmitter
                     continue;
                 }
                 sb.Append(ArrayWriteTarget(pair.Name));
-                sb.Append(pair.Op == AssignOp.PlusEqual ? " += @(" : " = @(");
+                // `a+=(x)` goes through Add-BashArray: a sparse array appends after its highest subscript,
+                // which PowerShell's own `+=` cannot do on a dictionary.
+                sb.Append(pair.Op == AssignOp.PlusEqual ? " = Add-BashArray " + ArrayWriteTarget(pair.Name) + " @(" : " = @(");
                 // A glob element (`arr=(*.txt)`) expands to ZERO or more elements, which the comma
                 // form cannot splice (`'a',@('b','c')` is two elements). Such a list is emitted as
                 // `@( item; item; ... )`, whose statements each enumerate into one flat array. An unquoted `$x` /

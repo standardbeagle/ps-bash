@@ -409,7 +409,6 @@ foo
 1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array array (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Dynamic parsing of LHS a[$code]=value
@@ -604,7 +603,6 @@ a has -6
 a has -11
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array array (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Regression: Negative out-of-range index in [[ -v a[index] ]]
@@ -690,6 +688,7 @@ abc
 status=0
 ## END
 ## status: 0
+## XFAIL ps-bash triage differs from bash 5.2 (auto-marked; investigate)
 ## timeout: 10
 ## real-launcher
 

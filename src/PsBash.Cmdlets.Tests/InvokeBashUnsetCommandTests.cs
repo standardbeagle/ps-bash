@@ -84,7 +84,7 @@ public class InvokeBashUnsetCommandTests : IClassFixture<SharedPwshFixture>
         // `unset -v 'assoc["K"]'` looked up the key WITH its quotes and removed nothing (oils array-assoc).
         var lines = RunLines(
             "$assoc = @{ 'K' = 'val'; 'L' = 'x' }; " +
-            $"Invoke-BashUnset -v '{target}'; " +
+            $"Invoke-BashUnset -v '{target.Replace("'", "''")}'; " +
             "($assoc.Keys | Sort-Object) -join ','");
         Assert.Equal("L", Assert.Single(lines));
     }

@@ -642,6 +642,17 @@ function Write-BashFileRaw {
 
 # --- BashObject Factory ---
 
+function Add-BashArray {
+    param($Current, $Items)
+    if ($Current -is [PsBash.Cmdlets.BashSparseArray]) {
+        $n = $Current.NextIndex
+        foreach ($i in @($Items)) { $Current[$n] = $i; $n++ }
+        return $Current
+    }
+    if ($null -eq $Current) { return ,@($Items) }
+    return ,@(@($Current) + @($Items))
+}
+
 function Set-BashElement {
     <#
     .SYNOPSIS
@@ -650,16 +661,29 @@ function Set-BashElement {
         (a PowerShell array cannot be indexed past its Count). Returns the array/table to assign back.
     #>
     param($__psbashTarget, [string]$__psbashKey, $__psbashValue, [Alias('Append')][switch]$__psbashAppend)
-    if ($__psbashTarget -is [System.Collections.IDictionary]) {
+    $__psbashSparse = $__psbashTarget -is [PsBash.Cmdlets.BashSparseArray]
+    if ($__psbashTarget -is [System.Collections.IDictionary] -and -not $__psbashSparse) {
         $__psbashTarget[$__psbashKey] = if ($__psbashAppend) { "$($__psbashTarget[$__psbashKey])$__psbashValue" } else { $__psbashValue }
         return $__psbashTarget
     }
     $__psbashIdx = 0L
     if (-not [long]::TryParse($__psbashKey, [ref]$__psbashIdx)) { $__psbashIdx = [long](Invoke-BashArith $__psbashKey) }
+    if ($__psbashSparse) {
+        $__psbashAt = $__psbashTarget.Resolve($__psbashIdx)
+        if ($null -eq $__psbashAt) { Write-BashHostStderr "bash: ${__psbashKey}: bad array subscript"; $global:LASTEXITCODE = 1; return $__psbashTarget }
+        $__psbashTarget[$__psbashAt] = if ($__psbashAppend) { "$($__psbashTarget[$__psbashAt])$__psbashValue" } else { $__psbashValue }
+        return $__psbashTarget
+    }
     $__psbashArr = [System.Collections.Generic.List[object]]::new()
     if ($null -ne $__psbashTarget) { $__psbashArr.AddRange([object[]]@($__psbashTarget)) }
     if ($__psbashIdx -lt 0) { $__psbashIdx += $__psbashArr.Count }
     if ($__psbashIdx -lt 0) { Write-BashHostStderr "bash: ${__psbashKey}: bad array subscript"; $global:LASTEXITCODE = 1; return ,$__psbashArr.ToArray() }
+    if ($__psbashIdx -gt $__psbashArr.Count) {
+        # A gap: a dense PowerShell array cannot hold it, so the array becomes a sparse one.
+        $__psbashSp = [PsBash.Cmdlets.BashSparseArray]::FromList($__psbashArr)
+        $__psbashSp[$__psbashIdx] = if ($__psbashAppend) { "$($__psbashValue)" } else { $__psbashValue }
+        return $__psbashSp
+    }
     while ($__psbashArr.Count -le $__psbashIdx) { $__psbashArr.Add($null) }
     $__psbashArr[[int]$__psbashIdx] = if ($__psbashAppend) { "$($__psbashArr[[int]$__psbashIdx])$__psbashValue" } else { $__psbashValue }
     return ,$__psbashArr.ToArray()

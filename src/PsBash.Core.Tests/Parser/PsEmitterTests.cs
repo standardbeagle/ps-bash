@@ -5196,7 +5196,7 @@ public class PsEmitterTests
     public void Transpile_ArrayAppend_EmitsPlusEquals()
     {
         var result = PsEmitter.Transpile("Fruits+=('Watermelon')");
-        Assert.Contains("$Fruits += @('Watermelon')", result);
+        Assert.Contains("$Fruits = Add-BashArray $Fruits @('Watermelon')", result);
     }
 
     // while read -r VAR (with flag) takes the same labelled read-loop path as plain `read VAR`

@@ -33,7 +33,9 @@ internal static class DeclarePrinter
         if (val is null) return false;
 
         string text;
-        if (val is System.Collections.IDictionary dict)
+        if (val is BashSparseArray sparse)
+            text = $"declare -a{BashShellState.AttributeLetters(name)} {name}={FormatSparse(sparse)}";
+        else if (val is System.Collections.IDictionary dict)
             text = $"declare -A{BashShellState.AttributeLetters(name)} {name}={FormatAssociative(dict)}";
         else if (val is System.Collections.IList list && val is not string)
             text = $"declare -a{BashShellState.AttributeLetters(name)} {name}={FormatIndexed(list)}";
@@ -68,6 +70,20 @@ internal static class DeclarePrinter
         {
             if (i > 0) sb.Append((char)32);
             sb.Append("[").Append(i).Append("]=").Append(QuoteValue(list[i]?.ToString()));
+        }
+        return sb.Append(")").ToString();
+    }
+
+    /// <summary>Indexed array with holes: <c>([0]="x" [7]="q")</c>, keeping the real subscripts.</summary>
+    internal static string FormatSparse(BashSparseArray sparse)
+    {
+        var sb = new System.Text.StringBuilder("(");
+        bool first = true;
+        foreach (System.Collections.DictionaryEntry e in sparse)
+        {
+            if (!first) sb.Append((char)32);
+            first = false;
+            sb.Append("[").Append(e.Key).Append("]=").Append(QuoteValue(e.Value?.ToString()));
         }
         return sb.Append(")").ToString();
     }

@@ -65,6 +65,17 @@ public sealed class InvokeBashUnsetCommand : PSCmdlet
             var raw = SessionState.PSVariable.GetValue(n)?.ToString() ?? BashVariableStore.Get(n);
             return long.TryParse(raw?.Trim(), out var v) ? v : 0;
         }
+        if (value is BashSparseArray sparse && (long.TryParse(key, out var sparseIdx) || TryEvaluate(key, ReadNumber, out sparseIdx)))
+        {
+            if (sparseIdx < 0 && sparse.Resolve(sparseIdx) is null)
+            {
+                FileSystemHelpers.WriteStderr(this, $"unset: [{key}]: bad array subscript");
+                FileSystemHelpers.SetLastExitCode(this, 1);
+                return true;
+            }
+            sparse.RemoveAt(sparseIdx);
+            return true;
+        }
         if (value is System.Collections.IDictionary dict)
         {
             // `unset "m[$k]"` arrives already expanded; a quoted `$k` is expanded here.
@@ -88,12 +99,24 @@ public sealed class InvokeBashUnsetCommand : PSCmdlet
             }
             if (index >= 0 && index < list.Count)
             {
-                var kept = new List<object?>(list.Count - 1);
-                for (int i = 0; i < list.Count; i++)
-                    if (i != index) kept.Add(list[i]);
+                // Subscripts of the other elements do not move (`unset 'a[1]'` leaves a[2] as a[2]): dropping the
+                // last element just shortens the array, anything else turns it into a sparse one.
+                object? replacement;
+                if (index == list.Count - 1)
+                {
+                    var kept = new List<object?>(list.Count - 1);
+                    for (int i = 0; i < index; i++) kept.Add(list[i]);
+                    replacement = kept.ToArray();
+                }
+                else
+                {
+                    var sp = BashSparseArray.FromList(list);
+                    sp.RemoveAt(index);
+                    replacement = sp;
+                }
                 // Through the owning scope's variable, so a function unsetting a global array's element reaches the caller.
-                if (SessionState.PSVariable.Get(baseName) is { } owner) owner.Value = kept.ToArray();
-                else SessionState.PSVariable.Set(baseName, kept.ToArray());
+                if (SessionState.PSVariable.Get(baseName) is { } owner) owner.Value = replacement;
+                else SessionState.PSVariable.Set(baseName, replacement);
             }
             return true;
         }
