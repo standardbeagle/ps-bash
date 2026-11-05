@@ -1007,4 +1007,15 @@ public class BashTranspilerReviewRegressionTests
         Assert.Contains("catch [System.ArgumentException]", ps);
         Assert.Contains("$global:__BashTestBad) { 2 }", ps);
     }
+
+    // A /tmp/... command word is emitted as the quoted TempPath string; without the call operator
+    // it is a bare string expression, so `/tmp/x` printed itself instead of running (Linux/macOS).
+    [Theory]
+    [InlineData("/tmp/tool")]
+    [InlineData("/tmp/tool arg")]
+    public void Transpile_TmpCommandWord_IsInvokedNotEchoed(string script)
+    {
+        var ps = BashTranspiler.Transpile(script);
+        Assert.Contains("& \"", ps);
+    }
 }
