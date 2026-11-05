@@ -21,6 +21,13 @@ namespace PsBash.Shell.Tests.Pty;
 [Collection("PtyHarness")]
 public class ShowStyledPtyTests
 {
+    // Strata is optional (src/Strata.props): without ../strata/local-feed the Show-Styled cmdlet is compiled
+    // out, so the shell answers `bash: Show-Styled: command not found` and these tests can never pass.
+    // Detected by type presence, like PsBash.Cmdlets.Tests' StrataBuild, so it follows what was built.
+    private static readonly bool StrataBuiltIn =
+        Type.GetType("PsBash.Cmdlets.ShowStyledCommand, PsBash.Cmdlets") is not null;
+    private const string NoStrata = "Strata is not built in (UseStrata=false): Show-Styled is compiled out.";
+
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(10);
 
     /// <summary>
@@ -33,6 +40,8 @@ public class ShowStyledPtyTests
     {
         Skip.If(RuntimeInformation.IsOSPlatform(OSPlatform.Windows),
             "POSIX-only — Windows ConPTY runtime verification is CI-gated");
+
+        Skip.IfNot(StrataBuiltIn, NoStrata);
 
         var psBash = PtyHarness.FindPsBashBinary();
         Skip.If(psBash is null, "ps-bash launcher binary not found — build src/PsBash.Shell first");
@@ -73,6 +82,8 @@ public class ShowStyledPtyTests
     {
         Skip.If(RuntimeInformation.IsOSPlatform(OSPlatform.Windows),
             "POSIX-only — Windows ConPTY runtime verification is CI-gated");
+
+        Skip.IfNot(StrataBuiltIn, NoStrata);
 
         var psBash = PtyHarness.FindPsBashBinary();
         Skip.If(psBash is null, "ps-bash launcher binary not found — build src/PsBash.Shell first");
