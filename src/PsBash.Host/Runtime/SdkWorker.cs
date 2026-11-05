@@ -640,7 +640,10 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
                     || ex.InnerException?.Data["psbash.reported"] is true;
                 if (!reported) deliverError($"ps-bash: {ex.Message}");
                 _ps.Commands.Clear();
-                return 1;
+                // The expansion error carries bash's status (127 for ${x?} / unbound variable, 1 for a bad substitution).
+                int paramStatus = ex.ErrorRecord?.Exception?.Data["psbash.exitcode"] as int?
+                    ?? ex.InnerException?.Data["psbash.exitcode"] as int? ?? 1;
+                return paramStatus;
             }
 
             // DataAdded can lag the synchronous Invoke() return for the final

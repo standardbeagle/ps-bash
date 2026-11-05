@@ -186,6 +186,8 @@ public sealed class BashParamErrorException : Exception
     {
         var ex = new BashParamErrorException(name, message);
         ex.Data["psbash.reported"] = true;
+        // bash ends a non-interactive shell with 127 for `${x?}` / unbound variable, 1 for a bad substitution.
+        ex.Data["psbash.exitcode"] = message == "bad substitution" ? 1 : 127;
         return ex;
     }
 }
