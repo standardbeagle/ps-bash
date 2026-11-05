@@ -925,6 +925,25 @@ public static class BashRuntime
     }
 
     /// <summary>
+    /// A script may delete the directory it is standing in (<c>cd "$d"; ...; rm -rf "$d"</c>) and keep
+    /// running commands, which bash allows. .NET resolves a bare program name (<c>git</c>) against the
+    /// process cwd on Unix, and throws <see cref="FileNotFoundException"/> from getcwd when that
+    /// directory is gone, so every later spawn failed with an error naming no file. Move the process
+    /// to a directory that exists first: the child's own working directory when it has one, else temp.
+    /// Windows refuses to delete an in-use cwd, so this never fires there.
+    /// </summary>
+    private static void EnsureLiveCurrentDirectory(ProcessStartInfo startInfo)
+    {
+        try { _ = Directory.GetCurrentDirectory(); return; }
+        catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException) { }
+
+        var fallback = !string.IsNullOrEmpty(startInfo.WorkingDirectory) && Directory.Exists(startInfo.WorkingDirectory)
+            ? startInfo.WorkingDirectory
+            : Path.GetTempPath();
+        try { Directory.SetCurrentDirectory(fallback); } catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+    }
+
+    /// <summary>
     /// <see cref="RunChildProcess(string, IReadOnlyList{string}?, System.TimeSpan?)"/>
     /// overload taking a caller-prepared <see cref="ProcessStartInfo"/> (for env
     /// vars, working directory, etc.). The redirection + no-shell invariants the
@@ -941,6 +960,8 @@ public static class BashRuntime
         // environment is a one-method change rather than an audit of every spawn
         // site. See BashVariableStore.ApplyTo.
         BashVariableStore.ApplyTo(startInfo);
+
+        EnsureLiveCurrentDirectory(startInfo);
 
         startInfo.UseShellExecute = false;
         startInfo.RedirectStandardOutput = true;

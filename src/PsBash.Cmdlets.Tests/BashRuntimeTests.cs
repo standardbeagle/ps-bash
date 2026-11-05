@@ -564,4 +564,29 @@ public class BashRuntimeTests
         Assert.False(result.TimedOut, "closed stdin must give the child EOF so it does not hang");
         Assert.Contains("done-eof", result.Stdout);
     }
+
+    [SkippableFact]
+    public void RunChildProcess_StillResolvesABareProgram_WhenTheScriptDeletedItsOwnCwd()
+    {
+        // bash lets a script rm -rf the directory it stands in and keep working; .NET's PATH
+        // lookup for a bare name calls getcwd, which then throws FileNotFoundException.
+        Skip.If(OperatingSystem.IsWindows(), "Windows refuses to delete a directory that is the process cwd");
+        var original = Directory.GetCurrentDirectory();
+        var doomed = Path.Combine(Path.GetTempPath(), "psbash-doomed-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(doomed);
+        try
+        {
+            Directory.SetCurrentDirectory(doomed);
+            Directory.Delete(doomed);
+
+            var result = BashRuntime.RunChildProcess("echo", new[] { "still-works" });
+
+            Assert.Equal(0, result.ExitCode);
+            Assert.Contains("still-works", result.Stdout);
+        }
+        finally
+        {
+            Directory.SetCurrentDirectory(original);
+        }
+    }
 }
