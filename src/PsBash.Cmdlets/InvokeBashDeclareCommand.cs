@@ -56,7 +56,7 @@ public sealed class InvokeBashDeclareCommand : PSCmdlet
                     {
                         case 'f': functions = true; break;
                         case 'F': functions = true; namesOnly = true; break;
-                        case 'p': break;
+                        case 'p' or 'g': break;
                         case 'a' or 'A' or 'n' or 'r' or 'x': select.Add(c); break;
                         default:
                             FileSystemHelpers.WriteBashError(this, $"bash: declare: -{c}: invalid option\n"

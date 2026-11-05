@@ -5768,6 +5768,13 @@ public class PsEmitterTests
     }
 
     [Fact]
+    public void Transpile_ReadonlyArray_RefusesLaterAssignmentAndAppend()
+    {
+        var result = PsEmitter.Transpile("typeset -ar arr=(1 2)\narr=(c)\narr+=(e)")!;
+        Assert.Equal(2, System.Text.RegularExpressions.Regex.Matches(result, "arr: readonly variable").Count);
+    }
+
+    [Fact]
     public void Transpile_TrapEmptyInt_EmitsPassthrough()
     {
         var result = PsEmitter.Transpile("trap '' INT");

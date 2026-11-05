@@ -3293,7 +3293,10 @@ public static partial class PsEmitter
         if (cmd.IsReadonly)
             foreach (var pair in cmd.Pairs)
                 if (pair.ArrayValue is not null)
+                {
                     sb.Append("; [PsBash.Cmdlets.BashShellState]::MarkReadonly(").Append(PsBuild.SingleQuote(pair.Name)).Append(")");
+                    if (!cmd.IsLocal) _readonlyVars?.Add(pair.Name);
+                }
         return sb.ToString();
     }
 
