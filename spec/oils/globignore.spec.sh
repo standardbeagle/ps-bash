@@ -8,7 +8,6 @@ GLOBIGNORE=-*:zzzzz  # colon-separated pattern list
 echo -* hello zzzz?
 ## stdout: -* hello zzzz?
 ## status: 0
-## XFAIL ps-bash gap-oils-globignore globignore (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Ignore *.txt
@@ -30,7 +29,6 @@ GLOBIGNORE=?.txt
 echo *.* foo/*.*
 ## stdout: 10.txt foo/2.txt foo/20.txt
 ## status: 0
-## XFAIL ps-bash gap-oils-globignore globignore (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Ignore *.o:*.h
@@ -39,7 +37,6 @@ GLOBIGNORE=*.o:*.h
 echo hello*
 ## stdout: hello hello.c
 ## status: 0
-## XFAIL ps-bash gap-oils-globignore globignore (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Ignore single file src/__main__.py
@@ -49,7 +46,6 @@ GLOBIGNORE='src/__init__.py'
 echo src/*
 ## stdout: src/__main__.py
 ## status: 0
-## XFAIL ps-bash gap-oils-globignore globignore (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Ignore dirs dist/*:node_modules/*
@@ -62,7 +58,6 @@ GLOBIGNORE=dist/*:node_modules/*
 echo */*
 ## stdout: compose/base.compose.yaml compose/dev.compose.yaml src/a.js src/b.js
 ## status: 0
-## XFAIL ps-bash gap-oils-globignore globignore (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### find files in subdirectory but not the ignored pattern
@@ -73,7 +68,6 @@ GLOBIGNORE=*/ignore*
 echo */*
 ## stdout: dir1/a.txt dir2/a.txt
 ## status: 0
-## XFAIL ps-bash gap-oils-globignore globignore (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Ignore globs with char patterns like [!ab]
@@ -122,7 +116,6 @@ GLOBIGNORE=*
 echo *
 ## stdout: *
 ## status: 0
-## XFAIL ps-bash gap-oils-globignore globignore (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### treat escaped patterns literally
@@ -144,7 +137,6 @@ echo *.*
 reset.txt
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-globignore globignore (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Ignore .:..
@@ -182,7 +174,6 @@ echo *
 *
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-globignore globignore (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### . and .. always filtered when GLOBIGNORE is set
@@ -216,7 +207,6 @@ echo nullglob *t
 nullglob
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-globignore globignore (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Extended glob expansion combined with GLOBIGNORE
@@ -231,7 +221,6 @@ bar.cc bar.h foo.cc foo.h
 bar.cc bar.h
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-globignore globignore (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### When GLOBIGNORE is set, no_dash_glob isn't respected

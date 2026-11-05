@@ -109,6 +109,33 @@ internal static class BashGlob
     /// <summary>Matches of <paramref name="pattern"/>, resolved against <paramref name="cwd"/>; empty when nothing matches.</summary>
     public static List<string> Expand(string pattern, string cwd, bool dotGlob, bool globStar = false, bool noCase = false)
     {
+        var ignore = GlobIgnorePatterns();
+        if (ignore is null) return ExpandCore(pattern, cwd, dotGlob, globStar, noCase);
+        // GLOBIGNORE set (non-empty): dotfiles become matchable, `.` / `..` never are, and matches equal to an ignore pattern drop out.
+        var all = ExpandCore(pattern, cwd, dotGlob: true, globStar, noCase);
+        all.RemoveAll(m => { var b = m.TrimEnd('/'); b = b[(b.LastIndexOf('/') + 1)..]; return b is "." or ".." || ignore.Exists(re => re.IsMatch(m)); });
+        return all;
+    }
+
+    private static List<System.Text.RegularExpressions.Regex>? GlobIgnorePatterns()
+    {
+        var v = BashVariableStore.Get("GLOBIGNORE");
+        if (string.IsNullOrEmpty(v)) return null;
+        var list = new List<System.Text.RegularExpressions.Regex>();
+        var cur = new System.Text.StringBuilder();
+        void Flush() { if (cur.Length > 0) list.Add(new System.Text.RegularExpressions.Regex(PsBash.Core.Parser.BashPattern.ToAnchoredRegex(cur.ToString(), honorQuotes: false), System.Text.RegularExpressions.RegexOptions.Singleline)); cur.Clear(); }
+        for (int i = 0; i < v.Length; i++)
+        {
+            if (v[i] == '\\' && i + 1 < v.Length) { cur.Append(v[i]).Append(v[++i]); continue; }
+            if (v[i] == ':') { Flush(); continue; }
+            cur.Append(v[i]);
+        }
+        Flush();
+        return list;
+    }
+
+    private static List<string> ExpandCore(string pattern, string cwd, bool dotGlob, bool globStar, bool noCase)
+    {
         string prefix = "";
         string dir = cwd;
         string rest = pattern;
