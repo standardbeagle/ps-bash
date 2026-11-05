@@ -16,6 +16,7 @@ public class ShellStateInventoryGuardTests
     /// <summary>Globals that are not per-shell state, each with why.</summary>
     private static readonly Dictionary<string, string> NotShellState = new(StringComparer.Ordinal)
     {
+        ["COMPREPLY"] = "completion-function hand-off, reset before and read back by each compgen -F call",
         ["LASTEXITCODE"] = "PowerShell's own; the status is carried by the command result, not copied",
         ["PsBashVersion"] = "constant, set at module load",
         ["BashVersionInfo"] = "constant, set at module load",
