@@ -7223,6 +7223,18 @@ public static partial class PsEmitter
                 if (subscript is "@" or "*")
                 {
                     if (EmitArraySlice(arrayVar, subOp, inDoubleQuote) is { } slice) return slice;
+                    // `${a[@]@Q}` / `${a[@]@a}`: quote-for-reuse and the attribute letters apply to EACH element.
+                    if (subOp is "@Q" or "@a")
+                    {
+                        string srcv = $"$(if ({arrayVar} -is [System.Collections.IDictionary]) {{ {arrayVar}.Values }} else {{ {arrayVar} }})";
+                        string each = subOp == "@Q"
+                            ? "[PsBash.Cmdlets.BashQuoteText]::ForReuse([string]$_)"
+                            : $"$(if ({arrayVar} -is [System.Collections.IDictionary]) {{ 'A' }} else {{ 'a' }})";
+                        string mappedQ = $"@({srcv}) | ForEach-Object {{ {each} }}";
+                        return subscript == "*" && inDoubleQuote
+                            ? $"$(@({mappedQ}) -join {PsBuild.IfsJoinSeparator})"
+                            : $"$({mappedQ})";
+                    }
                     // `${a[@]/o/0}` `${a[@]%o}` `${a[@]#?}` `${a[@]^^}`: the operator applies to EACH element.
                     if (subOp[0] is '/' or '#' or '%' or '^' or ',')
                     {
@@ -7290,6 +7302,14 @@ public static partial class PsEmitter
             }
         }
 
+        // `${@@Q}` / `${*@Q}`: quote-for-reuse applies to EACH positional parameter.
+        if (bvs.Name is "@" or "*" && bvs.Suffix == "@Q")
+        {
+            string posQ = $"@({PsBuild.BuildPositionalExpansion("@")}) | ForEach-Object {{ [PsBash.Cmdlets.BashQuoteText]::ForReuse([string]$_) }}";
+            return bvs.Name == "*" && inDoubleQuote
+                ? $"$(@({posQ}) -join {PsBuild.IfsJoinSeparator})"
+                : $"$({posQ})";
+        }
         string varRef = EmitSimpleVar(bvs.Name, strict: bvs.Suffix.StartsWith("/", StringComparison.Ordinal) || bvs.Suffix == "#L");
 
         // Name-prefix expansion: ${!prefix*} / ${!prefix@} -> the NAMES of
@@ -7667,7 +7687,7 @@ public static partial class PsEmitter
             switch (suffix[1])
             {
                 case 'Q':
-                    return $"{open}[PsBash.Cmdlets.BashQuoteText]::ForReuse({varRef}))";
+                    return $"$(if ($null -eq {varRef}) {{ '' }} else {{ [PsBash.Cmdlets.BashQuoteText]::ForReuse({varRef}) }})";
                 case 'P':
                     return $"{open}[PsBash.Cmdlets.BashPromptText]::Expand({varRef}))";
                 case 'E':
