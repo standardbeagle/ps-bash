@@ -30,6 +30,13 @@ public static class BashGlobText
 /// <summary>bash <c>${v@Q}</c>. Emitted PowerShell reaches it as <c>[PsBash.Cmdlets.BashQuoteText]::ForReuse(...)</c>.</summary>
 public static class BashQuoteText
 {
+    /// <summary>The <c>${v@a}</c> attribute letters: <c>a</c>/<c>A</c> for an array kind, then <c>i</c>, <c>r</c>, <c>x</c>.</summary>
+    public static string Attributes(string name, object? value)
+    {
+        string kind = value is System.Collections.IDictionary ? "A" : value is System.Collections.IList ? "a" : "";
+        return kind + BashShellState.AttributeLetters(name);
+    }
+
     /// <summary>Single-quoted form (<c>'</c> written as <c>'\''</c>); a control character switches to <c>$'...'</c>.</summary>
     public static string ForReuse(string? value)
     {

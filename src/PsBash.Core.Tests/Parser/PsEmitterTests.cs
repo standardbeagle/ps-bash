@@ -5710,6 +5710,16 @@ public class PsEmitterTests
         Assert.Contains("$env:__psbLine = 3", result);              // top-level list: its line
     }
 
+    [Theory]
+    [InlineData("echo ${v@a}")]
+    [InlineData("echo ${a[0]@a}")]
+    public void Transpile_AttributeTransform_AsksTheRuntimeForTheLetters(string src)
+        => Assert.Contains("BashQuoteText]::Attributes(", PsEmitter.Transpile(src));
+
+    [Fact]
+    public void Transpile_ReadonlyArray_MarksTheNameReadonly()
+        => Assert.Contains("MarkReadonly('arr')", PsEmitter.Transpile("readonly arr=(a b)"));
+
     [Fact]
     public void Transpile_TrapEmptyInt_EmitsPassthrough()
     {

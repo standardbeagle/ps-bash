@@ -50,10 +50,11 @@ public sealed partial class BashParser
             && DeclarationHasArrayInitializer())
         {
             int saved = _pos;
+            bool isReadonlyKw = Peek().Value == "readonly";
             Advance(); // consume the keyword
 
             if (ParseDeclarationPairs() is { } declPairs)
-                return new Command.ShAssignment(declPairs, IsAssoc: _declSawAssoc);
+                return new Command.ShAssignment(declPairs, IsReadonly: isReadonlyKw || _declSawReadonly, IsAssoc: _declSawAssoc);
 
             _pos = saved;
         }

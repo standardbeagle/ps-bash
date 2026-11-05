@@ -3258,6 +3258,11 @@ public static partial class PsEmitter
             foreach (var pair in cmd.Pairs)
                 if (pair.ArrayValue is null && !pair.Name.Contains('['))
                     sb.Append("; [PsBash.Cmdlets.BashShellState]::MarkAttribute(").Append(PsBuild.SingleQuote(pair.Name)).Append(", 'x')");
+        // `declare -r a=(x y)` / `readonly a=(...)`: the array is read-only too (`${a@a}` says `ar`).
+        if (cmd.IsReadonly)
+            foreach (var pair in cmd.Pairs)
+                if (pair.ArrayValue is not null)
+                    sb.Append("; [PsBash.Cmdlets.BashShellState]::MarkReadonly(").Append(PsBuild.SingleQuote(pair.Name)).Append(")");
         return sb.ToString();
     }
 
@@ -7266,6 +7271,13 @@ public static partial class PsEmitter
             return posSlice;
         }
 
+        // `${v@a}` / `${a[0]@a}`: the attribute letters of the variable (array kind, then i/r/x).
+        if (System.Text.RegularExpressions.Regex.IsMatch(bvs.Name, @"^[A-Za-z_]\w*$")
+            && System.Text.RegularExpressions.Regex.IsMatch(bvs.Suffix, @"^(\[[^@*\]]*\])?@a$"))
+        {
+            string attrs = $"[PsBash.Cmdlets.BashQuoteText]::Attributes({PsBuild.SingleQuote(bvs.Name)}, (Get-Variable -Name {PsBuild.SingleQuote(bvs.Name)} -ValueOnly -ErrorAction Ignore))";
+            return "$(" + attrs + ")";
+        }
         // Array subscript access: ${arr[0]}, ${arr[@]}, ${arr[*]}, ${arr[key]}, plus
         // the subscript-PLUS-operator forms ${arr[@]:1:2}, ${arr[0]##*/}, ${arr[i]:-x}.
         if (bvs.Suffix.StartsWith('['))
