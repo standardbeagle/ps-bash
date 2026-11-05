@@ -252,7 +252,7 @@ public class ResolveCommandTests
         {
             var scriptPath = Path.Combine(tmp.Path, "test-script");
             File.WriteAllText(scriptPath, "#!/bin/sh\necho hi\n");
-            File.SetUnixFileMode(scriptPath, UnixFileMode.UserExecute);
+            File.SetUnixFileMode(scriptPath, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
             var result = InteractiveShell.ResolveCommand("test-script", tmp.Path);
             Assert.NotNull(result);
             Assert.True(File.Exists(result));
@@ -275,7 +275,7 @@ public class ResolveCommandTests
         {
             var scriptPath = Path.Combine(tmp.Path, "unique-test-cmd-1234");
             File.WriteAllText(scriptPath, "#!/bin/sh\necho hi\n");
-            File.SetUnixFileMode(scriptPath, UnixFileMode.UserExecute);
+            File.SetUnixFileMode(scriptPath, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
             var result = InteractiveShell.ResolveCommand("unique-test-cmd-1234", tmp.Path);
             Assert.NotNull(result);
             Assert.True(File.Exists(result));

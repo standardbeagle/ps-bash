@@ -401,7 +401,7 @@ public class PromptRenderingIntegrationTests
             else
             {
                 await File.WriteAllTextAsync(scriptPath, "#!/bin/sh\necho external-ok\n");
-                File.SetUnixFileMode(scriptPath, UnixFileMode.UserExecute);
+                File.SetUnixFileMode(scriptPath, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
             }
 
             await using var harness = await StartAsync();
