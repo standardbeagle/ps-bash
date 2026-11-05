@@ -2642,7 +2642,7 @@ public static partial class PsEmitter
                 // here (TransformWordPath), so its emission stays unchanged.
                 // `path` is ARGUMENT-mode text (`$env:d/$env:f`), so it rides as a script-block
                 // argument — spliced into an expression its `/` would divide.
-                if (!TryGetPureLiteralText(words[1].Parts, out _))
+                if (!TryGetPureLiteralText(words[1].Parts, out var fileTestLiteral) || fileTestLiteral == "/tmp")
                     path = PsBuild.RuntimeWindowsPath(path);
                 return flag switch
                 {
