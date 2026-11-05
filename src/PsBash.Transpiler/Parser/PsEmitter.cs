@@ -4434,7 +4434,7 @@ public static partial class PsEmitter
             foreach (var a in literalArgs)
                 foreach (var c in a!.Skip(1))
                 {
-                    var one = EmitSet(cmd, new List<string?> { a[0].ToString() + c });
+                    var one = EmitSet(cmd, new List<string?> { a![0].ToString() + c });
                     if (one is not null) single.Add(one);
                 }
             return single.Count == 0 ? PsBuild.SetStatus(0) : string.Join("; ", single) + "; " + PsBuild.SetStatus(0);

@@ -50,6 +50,13 @@ public sealed class InvokeBashKillCommand : PSCmdlet
         ["28"] = "SIGWINCH", ["WINCH"] = "SIGWINCH",
     };
 
+    private static readonly string?[] LinuxSignalNames =
+    {
+        null, "HUP", "INT", "QUIT", "ILL", "TRAP", "ABRT", "BUS", "FPE", "KILL", "USR1", "SEGV", "USR2", "PIPE",
+        "ALRM", "TERM", "STKFLT", "CHLD", "CONT", "STOP", "TSTP", "TTIN", "TTOU", "URG", "XCPU", "XFSZ",
+        "VTALRM", "PROF", "WINCH", "IO", "PWR", "SYS",
+    };
+
     private static readonly Regex NumSignal = new(@"^-(\d+)$", RegexOptions.Compiled);
     private static readonly Regex NamedSignal = new(@"^-(SIG)?([A-Za-z][A-Za-z0-9]*)$", RegexOptions.Compiled);
     private static readonly Regex LongSignal = new(@"^--signal=(.+)$", RegexOptions.Compiled);
@@ -79,6 +86,40 @@ public sealed class InvokeBashKillCommand : PSCmdlet
         {
             var a = args[i];
 
+            if ((a == "-l" || a == "--list") && i + 1 < args.Length)
+            {
+                // kill -l SIGSPEC...: a number (or 128+number) prints its name, a name prints its number.
+                int bad = 0;
+                for (int k = i + 1; k < args.Length; k++)
+                {
+                    string t = args[k];
+                    string? shown = null;
+                    if (int.TryParse(t, out var n) && n >= 0)
+                    {
+                        if (n > 128) n -= 128;
+                        if (n == 0 && t == "0") shown = "EXIT";
+                        else if (n >= 1 && n < LinuxSignalNames.Length) shown = LinuxSignalNames[n];
+                    }
+                    else
+                    {
+                        string nm = t.StartsWith("SIG", StringComparison.OrdinalIgnoreCase) ? t[3..] : t;
+                        if (nm.Equals("EXIT", StringComparison.OrdinalIgnoreCase)) shown = "0";
+                        else
+                        {
+                            int idx = Array.FindIndex(LinuxSignalNames, x => x != null && x.Equals(nm, StringComparison.OrdinalIgnoreCase));
+                            if (idx > 0) shown = idx.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                        }
+                    }
+                    if (shown == null)
+                    {
+                        FileSystemHelpers.WriteBashError(this, $"kill: {t}: invalid signal specification");
+                        bad = 1;
+                    }
+                    else WriteObject(BashRuntime.NewBashObject(shown));
+                }
+                FileSystemHelpers.SetLastExitCode(this, bad);
+                return;
+            }
             if (a == "-l" || a == "--list")
             {
                 // Signal names ordered by signal number (psm1 parity).

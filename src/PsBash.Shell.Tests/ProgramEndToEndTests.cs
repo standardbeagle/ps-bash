@@ -36,7 +36,7 @@ public class ProgramEndToEndTests
     [InlineData(true)]
     public async Task UnsupportedSafetyOption_DoesNotFallBackToPowerShell(bool stdin)
     {
-        const string script = "set -o posix; Write-Output 'unsafe'"; // -u is supported now
+        const string script = "set -b; Write-Output 'unsafe'"; // -u and -o posix are supported now; -b is not
         var (code, output, error) = stdin
             ? await RunShellWithStdinAsync(script, "-s")
             : await RunShellAsync("-c", script);
