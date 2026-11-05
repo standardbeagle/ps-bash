@@ -99,12 +99,14 @@ public class InvokeBashDirsCommandTests : IClassFixture<SharedPwshFixture>
             RunLines(pwsh, $"Invoke-BashPushd '{d1}'");   // stack: [tmp]
             RunLines(pwsh, $"Invoke-BashPushd '{d2}'");   // stack: [d1, tmp]
             var lines = RunLines(pwsh, "Invoke-BashDirs -v");
-            Assert.Equal(2, lines.Length);
-            // After [array]::Reverse, indices read bottom-first: 0=tmp, 1=d1.
-            Assert.StartsWith("0  ", lines[0]);
-            Assert.StartsWith("1  ", lines[1]);
-            Assert.EndsWith(tmp, lines[0]);
+            // bash: the current directory is entry 0, then the most recently pushed-from first (" 0  d2").
+            Assert.Equal(3, lines.Length);
+            Assert.StartsWith(" 0  ", lines[0]);
+            Assert.StartsWith(" 1  ", lines[1]);
+            Assert.StartsWith(" 2  ", lines[2]);
+            Assert.EndsWith(d2, lines[0]);
             Assert.EndsWith(d1, lines[1]);
+            Assert.EndsWith(tmp, lines[2]);
         }
         finally
         {
@@ -127,8 +129,10 @@ public class InvokeBashDirsCommandTests : IClassFixture<SharedPwshFixture>
             RunLines(pwsh, $"Set-Location '{tmp}'");
             RunLines(pwsh, $"Invoke-BashPushd '{d1}'");
             var lines = RunLines(pwsh, "Invoke-BashDirs -p");
-            Assert.Single(lines);
-            Assert.Equal(tmp, lines[0]);
+            // bash lists the current directory first, then the stack.
+            Assert.Equal(2, lines.Length);
+            Assert.Equal(d1, lines[0]);
+            Assert.Equal(tmp, lines[1]);
         }
         finally
         {
@@ -157,6 +161,30 @@ public class InvokeBashDirsCommandTests : IClassFixture<SharedPwshFixture>
             RunLines(pwsh, $"Invoke-BashPushd '{d1}'");
             var ex = Record.Exception(() => RunLines(pwsh, "Invoke-BashDirs -c"));
             Assert.Null(ex);
+        }
+        finally
+        {
+            LeaveTestDirs(pwsh, tmp);
+            Directory.Delete(d1);
+        }
+    }
+
+    [Fact]
+    public void Dirs_CFlag_ClearsTheStack_AndKeepsTheCurrentDirectory()
+    {
+        // Regression: -c used `Pop-Location -Stack` (a parameter-binding failure that popped nothing) and
+        // a naive fix would pop the cwd away; bash clears the stack and stays where it is.
+        var pwsh = NewPwsh();
+        var tmp = Path.GetTempPath().TrimEnd(Path.DirectorySeparatorChar);
+        var d1 = Path.Combine(tmp, "psbash-dirs-c2-" + Guid.NewGuid().ToString("N").Substring(0, 8));
+        Directory.CreateDirectory(d1);
+        try
+        {
+            RunLines(pwsh, $"Set-Location '{tmp}'");
+            RunLines(pwsh, $"Invoke-BashPushd '{d1}'");
+            RunLines(pwsh, "Invoke-BashDirs -c");
+            var lines = RunLines(pwsh, "Invoke-BashDirs -p");
+            Assert.Equal(new[] { d1 }, lines);
         }
         finally
         {
@@ -205,9 +233,9 @@ public class InvokeBashDirsCommandTests : IClassFixture<SharedPwshFixture>
         var pwsh = NewPwsh();
         var tmp = Path.GetTempPath().TrimEnd(Path.DirectorySeparatorChar);
         RunLines(pwsh, $"Set-Location '{tmp}'");
-        // With empty stack, -p emits zero lines (no stack entries).
+        // With an empty stack, -p still prints the current directory (one line).
         var lines = RunLines(pwsh, "Invoke-BashDirs -p");
-        Assert.Empty(lines);
+        Assert.Single(lines);
     }
 
     [Fact]
@@ -217,9 +245,10 @@ public class InvokeBashDirsCommandTests : IClassFixture<SharedPwshFixture>
         var pwsh = NewPwsh();
         var tmp = Path.GetTempPath().TrimEnd(Path.DirectorySeparatorChar);
         RunLines(pwsh, $"Set-Location '{tmp}'");
-        // Empty stack means -v emits zero lines.
+        // An empty stack still lists the current directory as entry 0.
         var lines = RunLines(pwsh, "Invoke-BashDirs -v");
-        Assert.Empty(lines);
+        Assert.Single(lines);
+        Assert.StartsWith(" 0  ", lines[0]);
     }
 
     [Fact]

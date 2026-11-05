@@ -73,56 +73,47 @@ public sealed class InvokeBashDirsCommand : PSCmdlet
 
         if (C.IsPresent)
         {
-            // Oracle: drain the stack via Pop-Location -Stack until empty.
-            InvokeCommand.InvokeScript(
-                @"while (Get-Location -Stack -ErrorAction SilentlyContinue) {
-                    Pop-Location -Stack -ErrorAction SilentlyContinue
-                }");
+            // Drain the location stack without moving the current directory (Pop-Location moves it).
+            string? keep = SessionState.Path.CurrentFileSystemLocation?.Path;
+            // Pop until the stack is empty (PopLocation throws once it is), then return to where we were.
+            int depth = SessionState.Path.LocationStack(null).Count;
+            for (int i = 0; i < depth; i++)
+            {
+                try { SessionState.Path.PopLocation(null); } catch (InvalidOperationException) { break; }
+            }
+            if (keep != null) SessionState.Path.SetLocation(keep);
             return;
         }
 
-        // Collect stack entries: Get-Location -Stack returns a Stack<PathInfo>
-        // (top-first). The oracle reverses to bottom-first, then either
-        // numbers or one-per-lines or joins with the current location.
-        var stackResult = InvokeCommand.InvokeScript(
-            @"@(Get-Location -Stack | ForEach-Object { $_.Path })");
-        var stack = new List<string>();
-        foreach (var item in stackResult)
+        // Get-Location -Stack is top-first (most recently pushed-from directory first) — bash's order,
+        // after the current directory.
+        var entries = new List<string>();
+        foreach (var item in InvokeCommand.InvokeScript("(Get-Location).Path"))
         {
-            if (item?.BaseObject is string s)
-            {
-                stack.Add(s);
-            }
+            if (item?.BaseObject is string c) { entries.Add(c); break; }
         }
-        // [array]::Reverse — oracle's reverse step.
-        stack.Reverse();
+        foreach (var item in InvokeCommand.InvokeScript(@"@(Get-Location -Stack | ForEach-Object { $_.Path })"))
+        {
+            if (item?.BaseObject is string s) entries.Add(s);
+        }
 
         if (V.IsPresent)
         {
-            for (int i = 0; i < stack.Count; i++)
+            for (int i = 0; i < entries.Count; i++)
             {
-                WriteObject(BashRuntime.NewBashObject($"{i}  {stack[i]}"));
+                WriteObject(BashRuntime.NewBashObject($"{i,2}  {entries[i]}"));
             }
         }
         else if (P.IsPresent)
         {
-            foreach (var entry in stack)
+            foreach (var entry in entries)
             {
                 WriteObject(BashRuntime.NewBashObject(entry));
             }
         }
         else
         {
-            // Default: current location followed by reversed stack, space-joined.
-            var currentResult = InvokeCommand.InvokeScript("(Get-Location).Path");
-            string current = string.Empty;
-            foreach (var item in currentResult)
-            {
-                if (item?.BaseObject is string s) { current = s; break; }
-            }
-            var parts = new List<string> { current };
-            parts.AddRange(stack);
-            WriteObject(BashRuntime.NewBashObject(string.Join(' ', parts)));
+            WriteObject(BashRuntime.NewBashObject(string.Join(' ', entries)));
         }
     }
 }
