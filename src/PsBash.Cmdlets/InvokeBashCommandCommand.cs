@@ -68,6 +68,8 @@ public sealed class InvokeBashCommandCommand : PSCmdlet
     protected override void EndProcessing()
     {
         var args = BashRuntime.PrependDecoys(Arguments, (V.IsPresent, "-v"), (P.IsPresent, "-p"));
+        // The binder is case-insensitive, so a swallowed `-V` is recovered from this command's own text.
+        _verboseText = V.IsPresent && System.Text.RegularExpressions.Regex.IsMatch(BashRuntime.CurrentPipelineSegment(MyInvocation) ?? "", @"(?:^|\s)(?:command|Invoke-BashCommand)\s+(?:-[a-zA-Z]*\s+)*-[a-zA-Z]*V");
 
         FileSystemHelpers.SetLastExitCode(this, 0);
 
@@ -103,6 +105,7 @@ public sealed class InvokeBashCommandCommand : PSCmdlet
                     case 'v':
                     case 'V':
                         verbose = true;
+                        if (a[k] == 'V') _verboseText = true;
                         break;
                     case 'p':
                         break; // default PATH: accepted, ignored
@@ -126,6 +129,8 @@ public sealed class InvokeBashCommandCommand : PSCmdlet
     /// The -v/-V form: one line per operand that resolves; a name that does not resolve prints nothing.
     /// Exit 1 only when NO operand resolved (bash 5.2: <c>command -v bash nosuch</c> prints bash's path, exit 0).
     /// </summary>
+    private bool _verboseText;
+
     private void LookUp(string[] operands)
     {
         bool anyFound = false;
@@ -148,6 +153,15 @@ public sealed class InvokeBashCommandCommand : PSCmdlet
     /// </summary>
     private string? Describe(string name)
     {
+        if (name.Length == 0) return null;
+        if (_verboseText)
+        {
+            if (SessionState.PSVariable.GetValue("BashUserAliases") is System.Collections.IDictionary al && al.Contains(name))
+                return $"{name} is aliased to `{al[name]}'";
+            if (InvokeBashTypeCommand.Keywords.Contains(name)) return $"{name} is a shell keyword";
+            if (InvokeBashTypeCommand.Builtins.Contains(name)) return $"{name} is a shell builtin";
+        }
+        else if (InvokeBashTypeCommand.Keywords.Contains(name)) return name;
         var cmd = ResolveCommand(name);
         if (cmd is null) return null;
         switch (cmd.CommandType)

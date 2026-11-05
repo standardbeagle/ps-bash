@@ -28,7 +28,6 @@ for
 0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-meta builtin-meta (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### command -v executable, builtin
@@ -68,7 +67,6 @@ for
 status=0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-meta builtin-meta (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### command -v doesn't find non-executable file

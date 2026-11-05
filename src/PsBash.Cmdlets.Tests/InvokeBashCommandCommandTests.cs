@@ -80,6 +80,22 @@ public class InvokeBashCommandCommandTests : IClassFixture<SharedPwshFixture>
     }
 
     [Fact]
+    public void Command_DashV_Keyword_PrintsTheKeyword()
+    {
+        var lines = RunLines("Invoke-BashCommand -v for");
+        Assert.Single(lines);
+        Assert.Equal("for", lines[0]);
+    }
+
+    [Fact]
+    public void Command_DashCapitalV_Builtin_DescribesIt()
+    {
+        var lines = RunLines("Invoke-BashCommand -V echo");
+        Assert.Single(lines);
+        Assert.Equal("echo is a shell builtin", lines[0]);
+    }
+
+    [Fact]
     public void Command_DashV_PsBashCommand_EmitsItsBashNameNotTheCmdlet()
     {
         // `ls` is the runtime's own ls (an alias to Invoke-BashLs). bash prints a name it can run

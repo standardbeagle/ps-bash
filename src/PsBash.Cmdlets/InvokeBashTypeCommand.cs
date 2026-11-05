@@ -28,7 +28,7 @@ namespace PsBash.Cmdlets;
 public sealed class InvokeBashTypeCommand : PSCmdlet
 {
     // bash 5.2's `enable -a` list (the names `type` calls "a shell builtin").
-    private static readonly HashSet<string> Builtins = new(StringComparer.Ordinal)
+    internal static readonly HashSet<string> Builtins = new(StringComparer.Ordinal)
     {
         ".", ":", "[", "alias", "bg", "bind", "break", "builtin", "caller", "cd", "command", "compgen", "complete",
         "compopt", "continue", "declare", "dirs", "disown", "echo", "enable", "eval", "exec", "exit", "export",
@@ -38,7 +38,7 @@ public sealed class InvokeBashTypeCommand : PSCmdlet
         "unalias", "unset", "wait",
     };
 
-    private static readonly HashSet<string> Keywords = new(StringComparer.Ordinal)
+    internal static readonly HashSet<string> Keywords = new(StringComparer.Ordinal)
     {
         "!", "[[", "]]", "{", "}", "case", "coproc", "do", "done", "elif", "else", "esac", "fi", "for", "function",
         "if", "in", "select", "then", "time", "until", "while",
