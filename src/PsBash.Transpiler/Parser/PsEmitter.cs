@@ -49,6 +49,7 @@ public static partial class PsEmitter
     private static bool _trapMode;
     // A multi-statement script that sets a DEBUG trap: every top-level simple command first runs it (bash semantics).
     // A lone `trap 'cmd' DEBUG` line (an interactive prompt hook) keeps its directory-change mapping.
+    [ThreadStatic]
     private static bool _debugTrapMode;
     /// <summary>The script prints variables with <c>declare -p</c>: <c>export</c> and <c>declare -i</c> record their attribute for it.</summary>
     [ThreadStatic]
@@ -124,6 +125,14 @@ public static partial class PsEmitter
     /// Static only (a literal target, resolved at emit time); a nameref set at run time is not modelled.</summary>
     [ThreadStatic]
     private static Dictionary<string, string>? _namerefs;
+
+    /// <summary>Names assigned a literal string so far (`ref=x`): `typeset -n ref` later turns that string into the target.</summary>
+    [ThreadStatic]
+    private static Dictionary<string, string>? _litAssigned;
+
+    /// <summary>Namerefs declared without a target (`typeset -n ref`): the next literal assignment names it.</summary>
+    [ThreadStatic]
+    private static HashSet<string>? _pendingNamerefs;
 
     private static string ResolveNameref(string name)
     {
@@ -622,6 +631,8 @@ public static partial class PsEmitter
         _readonlyVars = new HashSet<string>(StringComparer.Ordinal);
         var priorNamerefs = _namerefs;
         _namerefs = new Dictionary<string, string>(StringComparer.Ordinal);
+        var priorLitAssigned = _litAssigned; var priorPendingNamerefs = _pendingNamerefs;
+        _litAssigned = new Dictionary<string, string>(StringComparer.Ordinal); _pendingNamerefs = new HashSet<string>(StringComparer.Ordinal);
         _context = context;
         // Only a script that itself turns errexit on gets the checks (a sourced file running under
         // its caller's `set -e` does not — see intentional-differences.md).
@@ -664,6 +675,7 @@ public static partial class PsEmitter
             _caseVars = priorCaseVars;
             _readonlyVars = priorReadonly;
             _namerefs = priorNamerefs;
+            _litAssigned = priorLitAssigned; _pendingNamerefs = priorPendingNamerefs;
             _errexitMode = priorErrexit;
             _errexitExemptDepth = priorExempt;
             _pipefailMode = priorPipefail;
@@ -3104,6 +3116,22 @@ public static partial class PsEmitter
 
             var pair = cmd.Pairs[i];
 
+            // `typeset -n ref` came first: this literal assignment names its target (and is not a value write).
+            if (!cmd.IsLocal && !cmd.IsExport && pair.ArrayValue is null && pair.Op == AssignOp.Equal && _pendingNamerefs is { Count: > 0 } && _pendingNamerefs.Contains(pair.Name)
+                && pair.Value is not null && ExtractSingleQuotedOrLiteralValue(pair.Value) is { } refTarget && IsValidVarName(refTarget) && _namerefs is not null)
+            {
+                _pendingNamerefs.Remove(pair.Name);
+                _namerefs[pair.Name] = refTarget;
+                sb.Append(PsBuild.SetStatus(0));
+                continue;
+            }
+            if (!cmd.IsLocal && !cmd.IsExport && _litAssigned is not null && !pair.Name.Contains('['))
+            {
+                if (pair.ArrayValue is null && pair.Op == AssignOp.Equal && pair.Value is not null && ExtractSingleQuotedOrLiteralValue(pair.Value) is { } litVal)
+                    _litAssigned[pair.Name] = litVal;
+                else _litAssigned.Remove(pair.Name);
+            }
+
             // PROMPT_COMMAND='CMD' or PROMPT_COMMAND="CMD" ->
             //   Register-BashPromptHook -Name 'prompt-command' -ScriptBlock { Invoke-Expression 'CMD_transpiled' }
             // Only intercept plain (non-local, non-append) assignments with a value.
@@ -3624,9 +3652,9 @@ public static partial class PsEmitter
             foreach (var w in cmd.Words.Skip(1))
             {
                 var lit = GetLiteralValue(w);
-                (lit is { Length: > 1 } && lit[0] == '-' ? flagWords : nameWords).Add(w);
+                (lit is { Length: > 1 } && (lit[0] == '-' || lit.Contains('n')) ? flagWords : nameWords).Add(w);
             }
-            bool printForm = flagWords.Any(w => GetLiteralValue(w) is { } f && f.AsSpan(1).IndexOfAnyExcept("pfF") < 0);
+            bool printForm = flagWords.Any(w => GetLiteralValue(w) is { } f && f[0] == '-' && f.AsSpan(1).IndexOfAnyExcept("pfF") < 0);
             if (nameWords.Count > 1 && !printForm)
             {
                 var parts = new List<string>();
@@ -3670,6 +3698,23 @@ public static partial class PsEmitter
             string? caseName = exprName ?? (varName is null ? null : varName.Split('=')[0]);
             if (caseName is not null && IsValidVarName(caseName))
                 _caseVars[caseName] = cmd.Words.Skip(1).Any(w => GetLiteralValue(w) == "-u") && !cmd.Words.Skip(1).Any(w => GetLiteralValue(w) == "-l");
+        }
+        // `typeset +n ref` drops the nameref attribute: `ref` is the plain string again.
+        if (!isPrint && varName is not null && IsValidVarName(varName) && _namerefs is not null
+            && cmd.Words.Skip(1).Any(w => GetLiteralValue(w) is { Length: > 1 } f && f[0] == '+' && f.Contains('n')))
+        {
+            _namerefs.Remove(varName); _pendingNamerefs?.Remove(varName);
+            result = PsBuild.SetStatus(0);
+            return true;
+        }
+        // `typeset -n ref` with no target: a string assigned earlier (`ref=x`) becomes the target; otherwise the next literal assignment names it.
+        if (isNameref && !isPrint && varName is not null && IsValidVarName(varName) && _namerefs is not null && !_namerefs.ContainsKey(varName))
+        {
+            if (_litAssigned is not null && _litAssigned.TryGetValue(varName, out var known) && IsValidVarName(known) && known != varName)
+                _namerefs[varName] = known;
+            else if (_litAssigned is null || !_litAssigned.ContainsKey(varName)) _pendingNamerefs?.Add(varName);
+            result = PsBuild.SetStatus(0);
+            return true;
         }
         if (isNameref && varName is not null && varName.IndexOf('=') is var neq and > 0
             && IsValidVarName(varName[..neq]) && IsValidVarName(varName[(neq + 1)..]) && _namerefs is not null)

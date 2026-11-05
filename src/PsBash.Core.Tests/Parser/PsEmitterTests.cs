@@ -5746,6 +5746,28 @@ public class PsEmitterTests
     }
 
     [Fact]
+    public void Transpile_TypesetN_OnAnAssignedString_MakesThatStringTheTarget()
+    {
+        var result = PsEmitter.Transpile("x=foo\nref=x\ntypeset -n ref\necho $ref")!;
+        Assert.Contains("$env:x", result.Substring(result.LastIndexOf("& {", StringComparison.Ordinal)));
+    }
+
+    [Fact]
+    public void Transpile_TypesetN_BeforeAnyValue_TakesTheNextLiteralAssignmentAsTarget()
+    {
+        var result = PsEmitter.Transpile("typeset -n ref\nref=x\necho $ref")!;
+        Assert.Contains("$env:x", result.Substring(result.LastIndexOf("& {", StringComparison.Ordinal)));
+    }
+
+    [Fact]
+    public void Transpile_TypesetPlusN_DropsTheNamerefAttribute()
+    {
+        var result = PsEmitter.Transpile("x=foo\nref=x\ntypeset -n ref\ntypeset +n ref\necho $ref")!;
+        Assert.DoesNotContain("Invoke-BashDeclare", result);
+        Assert.Contains("$env:ref", result.Substring(result.LastIndexOf("& {", StringComparison.Ordinal)));
+    }
+
+    [Fact]
     public void Transpile_TrapEmptyInt_EmitsPassthrough()
     {
         var result = PsEmitter.Transpile("trap '' INT");

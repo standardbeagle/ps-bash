@@ -78,7 +78,6 @@ ref=bar
 ref=x
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-nameref nameref (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### mutating through nameref: ref=
@@ -106,7 +105,6 @@ echo 4 y=$y
 4 y=XXXX
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-nameref nameref (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### flag -n combined ${!ref} -- bash INVERTS
@@ -197,7 +195,6 @@ ref3=x
 ref3=foo
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-nameref nameref (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### assign to invalid ref
@@ -256,7 +253,6 @@ ref2=
 ref2=x
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-nameref nameref (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### -n attribute before it has a value
@@ -273,7 +269,6 @@ ref=
 ref=XX
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-nameref nameref (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### -n attribute on array is hard error, not a warning
