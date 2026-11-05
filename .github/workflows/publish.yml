@@ -207,7 +207,8 @@ jobs:
     # Backstop only. Each non-blocking suite carries its own step-level
     # timeout-minutes so a slow/hung one is killed without cancelling the whole
     # leg (a job-level timeout cancels every step, even the already-passed gate).
-    timeout-minutes: 40
+    # 80: the macOS leg's blocking Differential run reached the old 30-minute step limit with no failing test.
+    timeout-minutes: 80
     needs: release-tag
     steps:
       - uses: actions/checkout@v4
@@ -354,7 +355,7 @@ jobs:
       # Blocking cassette replay on every OS: recorded Bash results vs this build.
       # Live-only cases remain the separate cassette-audit workflow's job.
       - name: Run PsBash.Differential.Tests
-        timeout-minutes: 30
+        timeout-minutes: 45
         shell: bash
         run: |
           export UPDATE_GOLDENS=0 PSBASH_ORACLE_LIVE=0 PSBASH_ORACLE_RECORD=0
