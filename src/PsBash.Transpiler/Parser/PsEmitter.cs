@@ -3732,7 +3732,9 @@ public static partial class PsEmitter
             result = "$global:" + varName + " = @{}";
             return true;
         }
-        result = isInt ? "$env:" + varName + " = '0'" : "$global:" + varName + " = @()";
+        result = isInt ? "$env:" + varName + " = '0'"
+            // `declare x` on an existing scalar leaves its value alone; only a name with nothing yet becomes the empty array.
+            : "if ($null -eq $env:" + varName + " -and $null -eq (Get-Variable -Name " + PsBuild.SingleQuote(varName) + " -Scope Global -ValueOnly -ErrorAction Ignore)) { $global:" + varName + " = @() }";
         return true;
     }
 
@@ -6676,6 +6678,7 @@ public static partial class PsEmitter
                // Trim / replace / slice / case-change results are split like any other unquoted expansion:
                // `${s#*o}` of "Hello World" is the two words " World" -> World, not one argument with its space.
                || (s.Length > 0 && s[0] is '#' or '%' or '/' or '^' or ',' && !IsLengthSuffix(s))
+               || (s.Length == 2 && s[0] == '@' && s[1] is 'Q' or 'K' or 'k' or 'A' or 'a')
                || (s.Length > 1 && s[0] == ':' && s[1] is not ('-' or '+' or '=' or '?')));
 
     /// <summary>`${@-w}` `${*:+w}`: the default / alternative operators on the positional LIST (see <see cref="EmitPositionalWordOp"/>).</summary>
@@ -7272,6 +7275,12 @@ public static partial class PsEmitter
         }
 
         // `${v@a}` / `${a[0]@a}`: the attribute letters of the variable (array kind, then i/r/x).
+        if (System.Text.RegularExpressions.Regex.IsMatch(bvs.Name, @"^[A-Za-z_]\w*$")
+            && System.Text.RegularExpressions.Regex.IsMatch(bvs.Suffix, @"^@[AKk]$"))
+        {
+            string q = PsBuild.SingleQuote(bvs.Name);
+            return "$([PsBash.Cmdlets.BashQuoteText]::Transform('" + bvs.Suffix[1] + "', " + q + ", (Get-Variable -Name " + q + " -ValueOnly -ErrorAction Ignore)))";
+        }
         if (System.Text.RegularExpressions.Regex.IsMatch(bvs.Name, @"^[A-Za-z_]\w*$")
             && System.Text.RegularExpressions.Regex.IsMatch(bvs.Suffix, @"^(\[[^@*\]]*\])?@a$"))
         {

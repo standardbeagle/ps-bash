@@ -30,6 +30,18 @@ public static class BashGlobText
 /// <summary>bash <c>${v@Q}</c>. Emitted PowerShell reaches it as <c>[PsBash.Cmdlets.BashQuoteText]::ForReuse(...)</c>.</summary>
 public static class BashQuoteText
 {
+    /// <summary>Scalar <c>${v@K}</c> / <c>${v@k}</c> (quoted value) and <c>${v@A}</c> (the assignment that recreates it); "" when unset.</summary>
+    public static string Transform(char op, string name, object? psVar)
+    {
+        if (psVar is System.Collections.IDictionary or System.Collections.IList) return "";
+        string? env = BashVariableStore.Get(name);
+        if (env is null) return "";
+        string q = ForReuse(env);
+        if (op != 'A') return q;
+        string attrs = Attributes(name, psVar);
+        return (attrs.Length == 0 ? "" : "declare -" + attrs + " ") + name + "=" + q;
+    }
+
     /// <summary>The <c>${v@a}</c> attribute letters: <c>a</c>/<c>A</c> for an array kind, then <c>i</c>, <c>r</c>, <c>x</c>.</summary>
     public static string Attributes(string name, object? value)
     {

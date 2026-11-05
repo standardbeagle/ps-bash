@@ -2009,7 +2009,9 @@ public class PsEmitterTests
         // ${VAR@Q} quotes the value for reuse as input — must not drop to bare $env:VAR.
         var result = PsEmitter.Transpile("echo ${VAR@Q}");
 
-        Assert.Equal("Invoke-BashEcho $(if ($null -eq $env:VAR) { '' } else { [PsBash.Cmdlets.BashQuoteText]::ForReuse($env:VAR) })", result);
+        // Unquoted, so the result is word-split: an unset VAR is no argument at all.
+        Assert.Contains("ConvertTo-BashWords", result);
+        Assert.Contains("$(if ($null -eq $env:VAR) { '' } else { [PsBash.Cmdlets.BashQuoteText]::ForReuse($env:VAR) })", result);
     }
 
     [Fact]
