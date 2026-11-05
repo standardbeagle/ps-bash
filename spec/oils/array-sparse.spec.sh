@@ -301,7 +301,6 @@ unset -v "a[-2]"
 unset -v "a[-3]"
 ## stdout:
 ## status: 1
-## XFAIL ps-bash gap-oils-array-sparse array-sparse (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 

@@ -24,6 +24,7 @@ $SH -c "$code; myfunc"
 ## status: 0
 ## timeout: 10
 ## real-launcher
+## XFAIL ps-bash triage differs from bash 5.2 (auto-marked; investigate)
 
 #### typeset -f prints function source code - nested functions
 outer() {

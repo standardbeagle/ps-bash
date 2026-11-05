@@ -47,7 +47,6 @@ cc() { for i in $*; do echo -$i-; done;}; cc "" "" "" "" ""
 cc() { echo =$1$2=;}; cc "" ""
 ## stdout: ==
 ## status: 0
-## XFAIL ps-bash gap-oils-toysh-posix toysh-posix (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Command Sub Syntax Error

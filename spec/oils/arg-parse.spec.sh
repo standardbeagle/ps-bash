@@ -17,7 +17,6 @@ if test $? -eq 0; then
 fi
 ## stdout:
 ## status: 0
-## XFAIL ps-bash gap-oils-arg-parse arg-parse (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 

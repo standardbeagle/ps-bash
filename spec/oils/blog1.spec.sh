@@ -61,7 +61,6 @@ echo ${#1#'###'}
 # dash and zsh accept; mksh/bash/osh don't.
 ## stdout:
 ## status: 1
-## XFAIL ps-bash gap-oils-blog1 blog1 (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Julia example from spec/oil-user-feedback

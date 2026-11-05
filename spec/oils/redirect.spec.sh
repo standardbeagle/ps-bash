@@ -223,7 +223,6 @@ grep STDOUT $tmp
 grep STDERR $tmp
 ## stdout:
 ## status: 1
-## XFAIL ps-bash gap-oils-redirect redirect (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 

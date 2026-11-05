@@ -75,7 +75,6 @@ status=1
 zz: not found
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-type builtin-type (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### special builtins are called out

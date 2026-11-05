@@ -663,7 +663,6 @@ a=('123' '456')
 echo "${#a[0]}" "${#a[0]/1/xxx}"
 ## stdout:
 ## status: 1
-## XFAIL ps-bash gap-oils-array array (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### ${mystr[@]} and ${mystr[*]} are no-ops
@@ -691,7 +690,6 @@ abc
 status=0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array array (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 

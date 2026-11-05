@@ -189,7 +189,6 @@ v1
 v2
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array-literal array-literal (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### [k1]=v1 looking like brace expansions (BashAssoc)
@@ -198,7 +197,6 @@ a=([k2]=-{a,b}-)
 echo ${a["k2"]}
 ## stdout: -{a,b}-
 ## status: 0
-## XFAIL ps-bash gap-oils-array-literal array-literal (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### [k1]=v1 looking like brace expansions (BashArray)

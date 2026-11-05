@@ -192,7 +192,6 @@ __mylocal=L
 __var_in_parent_scope=D
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-sh-options sh-options (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### set without args and array variables

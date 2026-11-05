@@ -250,7 +250,6 @@ fun() {
 fun '_tmp/*.B'
 ## stdout: _tmp/b.B
 ## status: 0
-## XFAIL ps-bash gap-oils-glob glob (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### no glob after ~ expansion
@@ -258,7 +257,6 @@ HOME=*
 echo ~/*.py
 ## stdout: */*.py
 ## status: 0
-## XFAIL ps-bash gap-oils-glob glob (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### store literal globs in array then expand

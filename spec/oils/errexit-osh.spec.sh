@@ -533,7 +533,6 @@ readonly -a myarray=( one "$(date %x)" two )
 argv.py "${myarray[@]}"
 ## stdout:
 ## status: 127
-## XFAIL ps-bash gap-oils-errexit-osh errexit-osh (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 

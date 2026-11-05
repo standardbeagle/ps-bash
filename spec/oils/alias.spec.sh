@@ -136,7 +136,6 @@ unalias
 if test "$?" != 0; then echo usage-error; fi
 ## stdout: usage-error
 ## status: 0
-## XFAIL ps-bash gap-oils-alias alias (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### alias with trailing space causes alias expansion on second word

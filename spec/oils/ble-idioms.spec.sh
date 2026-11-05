@@ -71,7 +71,6 @@ text[3]='text[2]'
 echo $((a=text[3]))
 ## stdout: 123
 ## status: 0
-## XFAIL ps-bash gap-oils-ble-idioms ble-idioms (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### dynamic arith varname: assign
@@ -89,7 +88,6 @@ a_x=3 a_y=4
 b_x=5 b_y=12
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-ble-idioms ble-idioms (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### dynamic arith varname: read
@@ -104,7 +102,6 @@ vec2_load a
 echo x=$x y=$y
 ## stdout: x=12 y=34
 ## status: 0
-## XFAIL ps-bash gap-oils-ble-idioms ble-idioms (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### dynamic arith varname: copy/add
@@ -131,7 +128,6 @@ c_x=3 c_y=4
 c_x=7 c_y=24
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-ble-idioms ble-idioms (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Sparse array with big index

@@ -45,7 +45,6 @@ status=0
 failed with multiple args
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-cd builtin-cd (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### cd with 2 or more args is allowed (strict_arg_parse disabled)
@@ -54,7 +53,6 @@ mkdir -p foo
 cd foo bar
 ## stdout:
 ## status: 1
-## XFAIL ps-bash gap-oils-builtin-cd builtin-cd (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### cd - without OLDPWD

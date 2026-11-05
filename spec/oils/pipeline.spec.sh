@@ -52,7 +52,6 @@ tr a-z A-Z     # transform
 echo a | egrep '[0-9]+'
 ## stdout:
 ## status: 1
-## XFAIL ps-bash gap-oils-pipeline pipeline (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### PIPESTATUS
@@ -211,7 +210,6 @@ case $SH in dash|zsh) exit ;; esac
 echo pipestatus ${PIPESTATUS[@]}
 ## stdout: pipestatus 0
 ## status: 0
-## XFAIL ps-bash gap-oils-pipeline pipeline (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 

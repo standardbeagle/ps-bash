@@ -227,7 +227,6 @@ typeset +x e=E2
 printenv.py e  # no longer exported
 ## stdout:
 ## status: 127
-## XFAIL ps-bash gap-oils-assign-extended assign-extended (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### typeset +r removes read-only attribute (TODO: documented in bash to do nothing)
@@ -252,7 +251,6 @@ r=r1
 r=r1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-assign-extended assign-extended (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### function name with /

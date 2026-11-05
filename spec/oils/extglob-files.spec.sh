@@ -205,7 +205,6 @@ argv.py star extglob "$*"*@(.py|cc)
 argv.py at extglob "$@"*@(.py|cc)
 ## stdout:
 ## status: 127
-## XFAIL ps-bash gap-oils-extglob-files extglob-files (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Extended glob with word splitting
@@ -297,7 +296,6 @@ foo
 status=0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-extglob-files extglob-files (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### no match
