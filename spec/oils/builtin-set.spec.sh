@@ -77,7 +77,6 @@ echo status=$?
 set -o | grep -o noexec
 ## stdout: noexec
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-set builtin-set (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### set - - and so forth
@@ -105,7 +104,6 @@ a b
 --
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-set builtin-set (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### set - leading single dash is ignored, turns off xtrace verbose (#2364)

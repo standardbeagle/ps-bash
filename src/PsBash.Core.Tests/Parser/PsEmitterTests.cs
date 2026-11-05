@@ -6246,6 +6246,21 @@ public class PsEmitterTests
     }
 
     [Fact]
+    public void Transpile_SetDashO_Alone_ListsOptions()
+    {
+        Assert.Contains("Invoke-BashShopt '-o'", PsEmitter.Transpile("set -o")!);
+        Assert.Contains("Invoke-BashShopt '-po'", PsEmitter.Transpile("set +o")!);
+    }
+
+    [Fact]
+    public void Transpile_SetLoneDash_EndsOptionsLikeDashDash()
+    {
+        var r = PsEmitter.Transpile("set - a b")!;
+        Assert.Contains("BashPositional", r);
+        Assert.Contains("'a', 'b'", r);
+    }
+
+    [Fact]
     public void Transpile_Hostname_IsLowerCasedLikeTheHostnameCommand()
     {
         Assert.Contains("MachineName.ToLowerInvariant()", PsEmitter.Transpile("echo $HOSTNAME"));

@@ -4327,6 +4327,16 @@ public static partial class PsEmitter
         if (argsOverride is null && literalArgs.Count == 2 && literalArgs[0] is "-o" or "+o" && literalArgs[1] is { } remembered
             && BashOptionNames.Contains(remembered) && remembered is not ("errexit" or "xtrace" or "pipefail" or "noglob" or "nounset" or "noclobber" or "noexec" or "onecmd"))
             return "Invoke-BashShopt '-o' " + (literalArgs[0] == "-o" ? "'-s'" : "'-u'") + " " + PsBuild.SingleQuote(remembered);
+        // `set -o` / `set +o` alone list the options (the shopt -o table, same two formats).
+        if (argsOverride is null && literalArgs.Count == 1 && literalArgs[0] is "-o" or "+o")
+            return literalArgs[0] == "-o" ? "Invoke-BashShopt '-o'" : "Invoke-BashShopt '-po'";
+        // `set - a b`: a lone leading `-` ends the options (and turns off -x / -v) like `--`; `set -` alone changes nothing.
+        if (argsOverride is null && literalArgs.Count > 0 && literalArgs[0] == "-")
+        {
+            var rest = cmd.Words.Skip(1).ToList();
+            if (rest.Count == 1) return PsBuild.SetStatus(0);
+            return "$global:__BashXtrace = $false; Set-PSDebug -Off; " + EmitSetPositionals(rest.Skip(1).ToList());
+        }
         if (literalArgs.Count > 0)
         {
             var stripped = StripInertSetOptions(literalArgs);
