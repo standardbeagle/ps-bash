@@ -6196,6 +6196,15 @@ public class PsEmitterTests
         Assert.Contains("Register-BashChpwdHook", result);
     }
 
+    [Theory]
+    [InlineData("[[ { =~ \"{\" ]]")]
+    [InlineData("[[ a=x =~ a=(x) ]]")]
+    [InlineData("[[ 'a  b' =~ (a  b) ]]")]
+    public void Transpile_RegexMatch_OddOperandsAndSpacedGroup_Parses(string src)
+    {
+        Assert.NotNull(PsEmitter.Transpile(src));
+    }
+
     [Fact]
     public void Transpile_TrapOtherSignal_PassesThroughToInvokeBashTrap()
     {

@@ -455,7 +455,7 @@ public sealed partial class BashParser
                 continue;
             }
 
-            if (Peek().Kind == BashTokenKind.Word)
+            if (Peek().Kind is BashTokenKind.Word or BashTokenKind.AssignmentWord or BashTokenKind.LBrace or BashTokenKind.RBrace)
             {
                 var token = Advance();
                 var parts = DecomposeWord(token.Value);
@@ -512,7 +512,8 @@ public sealed partial class BashParser
                 i++;
                 continue;
             }
-            if (c is ' ' or '\t' or '\n' or '\r') break;
+            // Whitespace inside `( )` belongs to the regex (`(a  b)`); only top-level whitespace ends the operand.
+            if (parenDepth == 0 && c is ' ' or '\t' or '\n' or '\r') break;
             // Regex parens nest; an UNBALANCED `)` closes the enclosing test group (`[[ ! ( a =~ b ) ]]`).
             if (c == '(') parenDepth++;
             else if (c == ')' && parenDepth-- == 0) break;
