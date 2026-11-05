@@ -7648,6 +7648,10 @@ public static partial class PsEmitter
             {
                 case 'Q':
                     return $"{open}[PsBash.Cmdlets.BashQuoteText]::ForReuse({varRef}))";
+                case 'P':
+                    return $"{open}[PsBash.Cmdlets.BashPromptText]::Expand({varRef}))";
+                case 'E':
+                    return $"{open}[PsBash.Cmdlets.BashPromptText]::Unescape({varRef}))";
                 case 'U':
                     return inDoubleQuote ? $"$({varRef}.ToUpper())" : $"{varRef}.ToUpper()";
                 case 'L':
