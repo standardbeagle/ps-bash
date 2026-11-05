@@ -1200,7 +1200,7 @@ public class PsEmitterTests
         // Batch 1 of the shared ordered parser. Adding a command here also means adding it to
         // CommonParameterCollisionGuardTests.EmitterForceQuoted (Cmdlets.Tests) — that map is
         // how the guard knows the emitter, not a decoy, protects the colliding letters.
-        Assert.Equal(new[] { "awk", "base64", "bash", "cat", "column", "comm", "command", "compgen", "complete", "compopt", "cp", "cut", "declare", "diff", "du", "echo", "env", "expand", "file", "find", "flock", "fold", "getopts", "grep", "gzip", "hash", "head", "join", "jq", "ln", "ls", "md5sum", "mkdir", "mv", "nl", "paste", "printf", "rg", "rm", "rmdir", "sed", "sh", "sha1sum", "sha256sum", "sort", "source", "split", "stat", "strings", "tac", "tail", "tar", "tee", "test", "time", "timeout", "times", "touch", "tree", "type", "ulimit", "umask", "unexpand", "uniq", "wc", "xargs" }, PsEmitter.OrderedArgCommands.OrderBy(x => x).ToArray());
+        Assert.Equal(new[] { "awk", "base64", "bash", "cat", "column", "comm", "command", "compgen", "complete", "compopt", "cp", "cut", "declare", "diff", "du", "echo", "env", "expand", "file", "find", "flock", "fold", "getopts", "grep", "gzip", "hash", "head", "join", "jq", "ln", "ls", "md5sum", "mkdir", "mv", "nl", "paste", "printf", "rg", "rm", "rmdir", "sed", "sh", "sha1sum", "sha256sum", "shopt", "sort", "source", "split", "stat", "strings", "tac", "tail", "tar", "tee", "test", "time", "timeout", "times", "touch", "tree", "type", "ulimit", "umask", "unexpand", "uniq", "wc", "xargs" }, PsEmitter.OrderedArgCommands.OrderBy(x => x).ToArray());
     }
 
     // `bash` is on OrderedArgCommands: the script's own args (`bash s.sh -v -e -c x`) and the
@@ -2027,6 +2027,26 @@ public class PsEmitterTests
 
         Assert.Equal("Invoke-BashEcho $env:VAR.ToLower()", result);
     }
+
+    [Fact]
+    public void Transpile_DollarDash_ReflectsTheOptionsThatAreOn()
+    {
+        var result = PsEmitter.Transpile("echo $-");
+
+        Assert.Contains("$global:__BashNounset", result);
+        Assert.Contains("$global:__BashErrexit", result);
+    }
+
+    [Theory]
+    [InlineData("set +efuC")]
+    [InlineData("set -e -f")]
+    [InlineData("set -efuC")]
+    public void Transpile_BundledShortSetOptions_AreAccepted(string bash)
+        => Assert.NotEmpty(PsEmitter.Transpile(bash + "; echo ok"));
+
+    [Fact]
+    public void Transpile_SetOptionTheShellOnlyRemembers_GoesToShopt()
+        => Assert.Equal("Invoke-BashShopt '-o' '-s' 'vi'", PsEmitter.Transpile("set -o vi"));
 
     [Fact]
     public void Transpile_BracedVarTransformPrompt_PreservesValue()

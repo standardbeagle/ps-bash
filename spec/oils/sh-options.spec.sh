@@ -6,7 +6,6 @@ set -o pipefail -o nounset
 echo $-
 ## stdout: huB
 ## status: 0
-## XFAIL ps-bash gap-oils-sh-options sh-options (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### $- and more options
@@ -23,7 +22,6 @@ yes
 yes
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-sh-options sh-options (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### set -o vi/emacs
@@ -36,7 +34,6 @@ echo $?
 0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-sh-options sh-options (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### vi and emacs are mutually exclusive
@@ -63,7 +60,6 @@ set -o vi
 ___
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-sh-options sh-options (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### nounset
@@ -122,7 +118,6 @@ shopt -u nullglob
 shopt -s nullglob
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-sh-options sh-options (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### noclobber off
@@ -237,7 +232,6 @@ nullglob,failglob=1
 nullglob,failglob=0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-sh-options sh-options (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### shopt -q invalid
@@ -266,7 +260,6 @@ show-strict
 -
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-sh-options sh-options (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### shopt allows for backward compatibility like bash
@@ -287,7 +280,6 @@ status=0
 shopt -s nullglob
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-sh-options sh-options (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### shopt -p -o validates option names
@@ -299,7 +291,6 @@ set +o nounset
 status=1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-sh-options sh-options (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### stubbed out bash options
@@ -315,7 +306,6 @@ done
 0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-sh-options sh-options (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### no-ops not shown by shopt -p
@@ -327,7 +317,6 @@ shopt -u xpg_echo
 --
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-sh-options sh-options (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### $- with -c
@@ -438,7 +427,6 @@ nounset
 --
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-sh-options sh-options (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -493,7 +481,6 @@ noflag=1
 set=1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-sh-options sh-options (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -529,7 +516,6 @@ noflag=1
 set=1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-sh-options sh-options (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 

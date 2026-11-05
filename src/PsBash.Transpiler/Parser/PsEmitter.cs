@@ -4263,6 +4263,10 @@ public static partial class PsEmitter
             var positionalText = EmitSetPositionals(cmd.Words.Skip(1 + posStart).ToList());
             return (optText is null ? "" : optText + "; ") + positionalText;
         }
+        // `set -o vi` / `set +o emacs`: option names ps-bash only remembers (for `shopt -po`) go to the shopt table.
+        if (argsOverride is null && literalArgs.Count == 2 && literalArgs[0] is "-o" or "+o" && literalArgs[1] is { } remembered
+            && BashOptionNames.Contains(remembered) && remembered is not ("errexit" or "xtrace" or "pipefail" or "noglob" or "nounset" or "noclobber" or "noexec" or "onecmd"))
+            return "Invoke-BashShopt '-o' " + (literalArgs[0] == "-o" ? "'-s'" : "'-u'") + " " + PsBuild.SingleQuote(remembered);
         if (literalArgs.Count > 0)
         {
             var stripped = StripInertSetOptions(literalArgs);
@@ -4275,6 +4279,20 @@ public static partial class PsEmitter
             if (otherOptions.Count == 0) return setFlag + "; " + PsBuild.SetStatus(0);
             var otherText = EmitSet(cmd, otherOptions);
             return otherText is null ? setFlag + "; " + PsBuild.SetStatus(0) : setFlag + "; " + otherText;
+        }
+        // `set +efuC` / `set -e -f`: all short options, several letters in all. Each letter is its own `set`.
+        if (literalArgs.Count > 0
+            && literalArgs.All(a => a is { Length: >= 2 } w && (w[0] == '-' || w[0] == '+') && w[1] != '-' && w.Skip(1).All(c => char.IsAsciiLetter(c) && c != 'o'))
+            && literalArgs.Sum(a => a!.Length - 1) > 1)
+        {
+            var single = new List<string>();
+            foreach (var a in literalArgs)
+                foreach (var c in a!.Skip(1))
+                {
+                    var one = EmitSet(cmd, new List<string?> { a[0].ToString() + c });
+                    if (one is not null) single.Add(one);
+                }
+            return single.Count == 0 ? PsBuild.SetStatus(0) : string.Join("; ", single) + "; " + PsBuild.SetStatus(0);
         }
         // `set a b c` / `set $@ $res`: a first word that is not an option starts the positional
         // parameters, exactly like `set -- a b c`.
@@ -9670,7 +9688,7 @@ public static partial class PsEmitter
     /// cmdlet must be prepared to receive every flag as a plain string.
     /// </summary>
     internal static readonly IReadOnlySet<string> OrderedArgCommands =
-        new HashSet<string>(StringComparer.Ordinal) { "source", "getopts", "flock", "timeout", "times", "hash", "umask", "ulimit", "compgen", "complete", "compopt", "tee", "cp", "mv", "rm", "mkdir", "rmdir", "ln", "touch", "xargs", "time", "env", "command", "declare", "type", "bash", "sh", "awk", "head", "tail", "wc", "cat", "tac", "nl", "uniq", "fold", "expand", "unexpand", "paste", "join", "comm", "split", "strings", "base64", "stat", "file", "cut", "sort", "grep", "sed", "rg", "find", "echo", "printf", "test", "ls", "du", "tree", "column", "gzip", "tar", "md5sum", "sha1sum", "sha256sum", "diff", "jq" };
+        new HashSet<string>(StringComparer.Ordinal) { "source", "getopts", "flock", "timeout", "times", "hash", "umask", "ulimit", "compgen", "shopt", "complete", "compopt", "tee", "cp", "mv", "rm", "mkdir", "rmdir", "ln", "touch", "xargs", "time", "env", "command", "declare", "type", "bash", "sh", "awk", "head", "tail", "wc", "cat", "tac", "nl", "uniq", "fold", "expand", "unexpand", "paste", "join", "comm", "split", "strings", "base64", "stat", "file", "cut", "sort", "grep", "sed", "rg", "find", "echo", "printf", "test", "ls", "du", "tree", "column", "gzip", "tar", "md5sum", "sha1sum", "sha256sum", "diff", "jq" };
 
     /// <summary><c>Invoke-BashTee</c> -&gt; is <c>tee</c> in <see cref="OrderedArgCommands"/>?</summary>
     private static bool IsOrderedArgCmdlet(string cmdlet) =>

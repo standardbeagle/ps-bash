@@ -398,6 +398,11 @@ public static class PsBuild
         + "$__psbErr = " + status + "; " + (TrapLine > 0 ? "$env:__psbLine = " + TrapLine + "; " : "")
         + "& $global:__BashTrapERR; $global:LASTEXITCODE = $__psbErr }; ";
 
+    /// <summary>The value of <c>$-</c>: the single-letter options currently on, in bash's order.</summary>
+    public const string ShellFlagsExpr =
+        "$f = ''; if ($global:__BashErrexit) { $f += 'e' }; if ($global:__BashNoglob) { $f += 'f' }; $f += 'h'; "
+        + "if ($global:__BashNounset) { $f += 'u' }; $f += 'B'; if ($global:__BashNoclobber) { $f += 'C' }; $f";
+
     /// <summary>Source line of the statement being emitted; the ERR trap reads it as <c>$LINENO</c>.</summary>
     [ThreadStatic] public static int TrapLine;
 
@@ -805,7 +810,7 @@ public static class PsBuild
             case "!":
                 return braced ? "${global:BashBgLastPid}" : "$global:BashBgLastPid";
             case "-":
-                return braced ? "${global:BashFlags}" : "$global:BashFlags";
+                return "$(" + ShellFlagsExpr + ")";
             case "_":
                 return braced ? "${global:BashLastArg}" : "$global:BashLastArg";
             case "SECONDS":

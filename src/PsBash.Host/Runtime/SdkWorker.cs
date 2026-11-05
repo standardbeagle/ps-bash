@@ -643,6 +643,9 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
                 // The expansion error carries bash's status (127 for ${x?} / unbound variable, 1 for a bad substitution).
                 int paramStatus = ex.ErrorRecord?.Exception?.Data["psbash.exitcode"] as int?
                     ?? ex.InnerException?.Data["psbash.exitcode"] as int? ?? 1;
+                // 127 is the `-c` status; a script file or stdin exits 1 for the same error.
+                if (paramStatus == 127 && Environment.GetEnvironmentVariable("PSBASH_DASH_C") != "1")
+                    paramStatus = 1;
                 return paramStatus;
             }
 

@@ -186,7 +186,6 @@ VAR2=value2
 printenv.py VAR1 VAR2
 ## stdout:
 ## status: 127
-## XFAIL ps-bash gap-oils-builtin-set builtin-set (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### set -u with undefined variable exits the interpreter
