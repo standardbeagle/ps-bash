@@ -14,7 +14,6 @@ alias foo=bar
 type -t foo
 ## stdout: alias
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-type-bash builtin-type-bash (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### type -t -> builtin
@@ -28,7 +27,6 @@ builtin
 builtin
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-type-bash builtin-type-bash (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### type -t -> keyword
@@ -59,7 +57,6 @@ builtin
 builtin
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-type-bash builtin-type-bash (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### type -t -> file
@@ -128,7 +125,6 @@ type -p FOO BAR NOT_FOUND
 type -p cd type builtin command
 ## stdout:
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-type-bash builtin-type-bash (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### type -P builtin -> not found
@@ -141,7 +137,6 @@ type -P FOO BAR NOT_FOUND
 type -P cd type builtin command
 ## stdout:
 ## status: 1
-## XFAIL ps-bash gap-oils-builtin-type-bash builtin-type-bash (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### type -P builtin -> not a file but file found
@@ -222,7 +217,6 @@ alias ll="ls -lha"
 type -a ll
 ## stdout: ll is aliased to `ls -lha'
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-type-bash builtin-type-bash (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### type -ap -> alias
@@ -231,7 +225,6 @@ alias ll="ls -lha"
 type -ap ll
 ## stdout:
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-type-bash builtin-type-bash (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### type -a -> builtin
@@ -250,7 +243,6 @@ type -ap cd
 type -a while
 ## stdout: while is a shell keyword
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-type-bash builtin-type-bash (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### type -a -> file

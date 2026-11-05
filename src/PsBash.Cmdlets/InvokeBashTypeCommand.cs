@@ -27,11 +27,21 @@ namespace PsBash.Cmdlets;
 [OutputType(typeof(PSObject))]
 public sealed class InvokeBashTypeCommand : PSCmdlet
 {
+    // bash 5.2's `enable -a` list (the names `type` calls "a shell builtin").
     private static readonly HashSet<string> Builtins = new(StringComparer.Ordinal)
     {
-        "echo", "printf", "type", "cd", "exit", "return", "export",
-        "unset", "set", "shift", "read", "eval", "source", "trap",
-        "alias", "unalias", "test", "[", "true", "false",
+        ".", ":", "[", "alias", "bg", "bind", "break", "builtin", "caller", "cd", "command", "compgen", "complete",
+        "compopt", "continue", "declare", "dirs", "disown", "echo", "enable", "eval", "exec", "exit", "export",
+        "false", "fc", "fg", "getopts", "hash", "help", "history", "jobs", "kill", "let", "local", "logout",
+        "mapfile", "popd", "printf", "pushd", "pwd", "read", "readarray", "readonly", "return", "set", "shift",
+        "shopt", "source", "suspend", "test", "times", "trap", "true", "type", "typeset", "ulimit", "umask",
+        "unalias", "unset", "wait",
+    };
+
+    private static readonly HashSet<string> Keywords = new(StringComparer.Ordinal)
+    {
+        "!", "[[", "]]", "{", "}", "case", "coproc", "do", "done", "elif", "else", "esac", "fi", "for", "function",
+        "if", "in", "select", "then", "time", "until", "while",
     };
 
     [Parameter] public SwitchParameter A { get; set; }
@@ -123,6 +133,11 @@ public sealed class InvokeBashTypeCommand : PSCmdlet
         var matches = new List<Match>();
         if (!pathSearchOnly)
         {
+            if (SessionState.PSVariable.GetValue("BashUserAliases") is System.Collections.IDictionary aliases
+                && aliases.Contains(name))
+                matches.Add(new Match("alias", $"{name} is aliased to `{aliases[name]}'", null));
+            if (Keywords.Contains(name))
+                matches.Add(new Match("keyword", $"{name} is a shell keyword", null));
             if (!skipFunctions && DeclarePrinter.FindBashFunction(this, name) is not null)
                 matches.Add(new Match("function", $"{name} is a function", null));
             if (Builtins.Contains(name))
