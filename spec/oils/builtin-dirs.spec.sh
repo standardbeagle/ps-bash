@@ -31,7 +31,6 @@ status=0
 status=0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-dirs builtin-dirs (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### popd usage error
@@ -50,7 +49,6 @@ status=0
 status=2
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-dirs builtin-dirs (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### popd returns error on empty directory stack
@@ -62,7 +60,6 @@ echo "$message" | grep -o "directory stack"
 directory stack
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-dirs builtin-dirs (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### cd replaces the lowest entry on the directory stack!
@@ -264,7 +261,6 @@ dirs
 pushd . . >/dev/null || echo too many args!
 ## stdout: too many args!
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-dirs builtin-dirs (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### dirs does not take arguments
@@ -275,5 +271,4 @@ failed
 failed
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-dirs builtin-dirs (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10

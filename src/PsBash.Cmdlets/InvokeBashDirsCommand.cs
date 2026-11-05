@@ -53,6 +53,24 @@ public sealed class InvokeBashDirsCommand : PSCmdlet
             return;
         }
 
+        // `dirs` takes only +N / -N (and `-l`); any other operand is an error (status 1).
+        foreach (var a in args)
+        {
+            if (a == "--" || a == "-l") continue;
+            bool numbered = a.Length > 1 && a[0] is '+' or '-' && a.Skip(1).All(char.IsAsciiDigit);
+            if (numbered) continue;
+            if (a.Length > 1 && a[0] == '-')
+            {
+                FileSystemHelpers.WriteBashError(this, $"dirs: {a}: invalid option");
+                FileSystemHelpers.WriteBashError(this, "dirs: usage: dirs [-clpv] [+N] [-N]");
+                FileSystemHelpers.SetLastExitCode(this, 2);
+                return;
+            }
+            FileSystemHelpers.WriteBashError(this, $"dirs: {a}: invalid number");
+            FileSystemHelpers.SetLastExitCode(this, 1);
+            return;
+        }
+
         if (C.IsPresent)
         {
             // Oracle: drain the stack via Pop-Location -Stack until empty.

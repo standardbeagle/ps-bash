@@ -53,6 +53,30 @@ public sealed class InvokeBashPushdCommand : PSCmdlet
             return;
         }
 
+        // Option / operand validation (bash): `--` ends options, only `-n` is a valid option, one operand at most.
+        var operands = new List<string>();
+        bool optionsDone = false;
+        foreach (var a in args)
+        {
+            if (!optionsDone && a == "--") { optionsDone = true; continue; }
+            if (!optionsDone && a.Length > 1 && a[0] == '-' && !char.IsAsciiDigit(a[1]))
+            {
+                if (a == "-n") continue;
+                FileSystemHelpers.WriteBashError(this, $"pushd: {a}: invalid option");
+                FileSystemHelpers.WriteBashError(this, "pushd: usage: pushd [-n] [+N | -N | dir]");
+                FileSystemHelpers.SetLastExitCode(this, 2);
+                return;
+            }
+            operands.Add(a);
+        }
+        if (operands.Count > 1)
+        {
+            FileSystemHelpers.WriteBashError(this, "pushd: too many arguments");
+            FileSystemHelpers.SetLastExitCode(this, 1);
+            return;
+        }
+        args = operands.ToArray();
+
         // +N rotation: oracle's `^\+(\d+)$` match.
         if (args.Length > 0 && System.Text.RegularExpressions.Regex.IsMatch(args[0], @"^\+(\d+)$"))
         {
