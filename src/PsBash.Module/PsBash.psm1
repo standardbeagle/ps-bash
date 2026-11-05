@@ -111,6 +111,7 @@ function Get-BashIndirectValue {
         $rv = Get-Variable -Name $RefName -ValueOnly -ErrorAction Ignore
         if ($null -ne $rv) { $Ref = if ($rv -is [System.Collections.IDictionary]) { $rv['0'] } elseif ($rv -is [array]) { $rv[0] } else { $rv } }
     }
+    if ($null -eq $Ref -and $RefName -eq 'OPTIND') { $Ref = '1' }
     $n = [string]$Ref
     if ($n -eq '') { return $null }
     if ($NameOnly) { return ($n -replace '\[.*$', '') }
@@ -122,6 +123,8 @@ function Get-BashIndirectValue {
     if ($n -eq '@' -or $n -eq '*') { return ($Pos -join ' ') }
     if ($n -eq '#') { return [string]$Pos.Count }
     if ($n -eq '?') { return [string]$global:LASTEXITCODE }
+    if ($n -eq 'FUNCNAME') { return ([string]@(Get-BashFuncNames | Where-Object { $_ -ne 'Get-BashIndirectValue' })[0]) }
+    if ($n -eq 'OPTIND' -and $null -eq [System.Environment]::GetEnvironmentVariable('OPTIND') -and $null -eq (Get-Variable -Name OPTIND -ValueOnly -ErrorAction Ignore)) { return '1' }
     if ($n -match '^([A-Za-z_][A-Za-z0-9_]*)\[(.*)\]$') {
         $v = Get-Variable -Name $Matches[1] -ValueOnly -ErrorAction Ignore
         $sub = $Matches[2].Trim('"', "'")

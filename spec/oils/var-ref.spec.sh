@@ -159,7 +159,6 @@ myfunc
 0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-var-ref var-ref (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Var ref, then assignment with ${ := }
@@ -629,7 +628,6 @@ x
 y
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-var-ref var-ref (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### var ref doesn't need cycle detection

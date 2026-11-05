@@ -29,4 +29,6 @@ public class LetIndirectEvalTests
     [InlineData("x=1; eval echo $x \\$x")]
     [InlineData("eval echo a\\ b")]
     public Task Matches_Bash(string script) => AssertOracle.EqualAsync(script);
+
+    [Fact] public Task Indirect_ToFuncnameAndOptind() => AssertOracle.EqualAsync("f() { local r=$1; echo ${!r}; }; f FUNCNAME; set -- a b c; echo ${!OPTIND}; g() { local OPTIND=2; echo ${!OPTIND}; }; g x y z");
 }
