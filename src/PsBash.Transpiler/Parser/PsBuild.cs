@@ -394,7 +394,7 @@ public static class PsBuild
     /// the failing status in <c>$?</c>/<c>$LASTEXITCODE</c>, which it leaves unchanged.
     /// </summary>
     public static string ErrTrapCheck(string status = "$global:LASTEXITCODE") =>
-        "if (" + status + " -ne 0 -and -not " + ErrexitSuppressVar + " -and (Test-Path variable:global:__BashTrapERR) -and $global:__BashTrapERR) { "
+        "if (" + status + " -ne 0 -and -not " + ErrexitSuppressVar + (ErrTrapNeedsErrtrace ? " -and $global:__BashErrtrace" : "") + " -and (Test-Path variable:global:__BashTrapERR) -and $global:__BashTrapERR) { "
         + "$__psbErr = " + status + "; " + (TrapLine > 0 ? "$env:__psbLine = " + TrapLine + "; " : "")
         + "& $global:__BashTrapERR; $global:LASTEXITCODE = $__psbErr }; ";
 
@@ -414,6 +414,9 @@ public static class PsBuild
 
     /// <summary>Source line of the statement being emitted; the ERR trap reads it as <c>$LINENO</c>.</summary>
     [ThreadStatic] public static int TrapLine;
+
+    /// <summary>True inside a function or subshell: bash fires the ERR trap there only under <c>set -E</c>.</summary>
+    [ThreadStatic] public static bool ErrTrapNeedsErrtrace;
 
     /// <summary>
     /// Run statement(s) with errexit suppressed (an exempt context): no command inside —

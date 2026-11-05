@@ -351,10 +351,20 @@ public static partial class PsEmitter
     private static string EmitStatementCore(Command cmd)
     {
         if (cmd is Command.Simple { Line: > 0 } lined) PsBuild.TrapLine = lined.Line;
+        else if (LastSimpleLine(cmd) is > 0 and var lastLine) PsBuild.TrapLine = lastLine;
         if (_debugTrapMode && _functionDepth == 0 && cmd is Command.Simple { Line: > 0 } dbg && !IsTrapCommand(dbg))
             return PsBuild.DebugTrapRun(dbg.Line) + EmitStatementBody(cmd);
         return EmitStatementBody(cmd);
     }
+
+    /// <summary>Line of the last simple command a list or pipeline runs (bash reports that line for <c>trap ERR</c>'s <c>$LINENO</c>); 0 when unknown.</summary>
+    private static int LastSimpleLine(Command cmd) => cmd switch
+    {
+        Command.Simple s => s.Line,
+        Command.AndOrList a when a.Commands.Length > 0 => LastSimpleLine(a.Commands[^1]),
+        Command.Pipeline p when p.Commands.Length > 0 => LastSimpleLine(p.Commands[^1]),
+        _ => 0,
+    };
 
     private static bool IsTrapCommand(Command.Simple simple)
         => simple.Words.Length > 0 && TryGetStaticArgValue(simple.Words[0]) == "trap";
@@ -512,6 +522,7 @@ public static partial class PsEmitter
         // (`v=$(exit 3); echo $?` prints 3). Raise the depth so `exit` emits the scoped `return`;
         // PipelineHead / Invoke-ProcessSub supply the script block it returns from.
         _subshellDepth++;
+        bool savedErrTrapSub = PsBuild.ErrTrapNeedsErrtrace; PsBuild.ErrTrapNeedsErrtrace = true;
         try
         {
             var text = Emit(body);
@@ -521,7 +532,7 @@ public static partial class PsEmitter
         }
         finally
         {
-            _captureDepth--; _pipeStageFeedsInput = savedFeed; _subshellDepth--;
+            _captureDepth--; _pipeStageFeedsInput = savedFeed; _subshellDepth--; PsBuild.ErrTrapNeedsErrtrace = savedErrTrapSub;
             _errexitMode = savedMode; _errexitExemptDepth = savedExempt;
         }
     }
@@ -1554,6 +1565,7 @@ public static partial class PsEmitter
             // A function is typically a FILTER (`echo x | f`): its stdin is whatever it is called with, not the
             // launcher's. Under the launcher-stdin scope its body therefore reads `$input`/the pipe as before.
             _functionDepth++;
+            bool savedErrTrap = PsBuild.ErrTrapNeedsErrtrace; PsBuild.ErrTrapNeedsErrtrace = true;
             string body;
             // The body is emitted as inside a stdin scope; one that reads no stdin comes out unchanged. One that does
             // (`indent() { sed 's/^/  /'; }`, `f() { read -r x; }`) takes the pipe it is called with as its stdin
@@ -1572,7 +1584,7 @@ public static partial class PsEmitter
                     ? EmitNamerefVariants(func.Name, dynamicNameref, ComputeBody)
                     : ComputeBody();
             }
-            finally { _functionDepth--; }
+            finally { _functionDepth--; PsBuild.ErrTrapNeedsErrtrace = savedErrTrap; }
             // `trap '...' RETURN` inside the function runs when the function returns (then is spent, so a
             // later call does not re-fire it). Only a body that calls `trap` pays for the wrapper.
             if (body.Contains("Invoke-BashTrap", StringComparison.Ordinal))
@@ -1699,10 +1711,10 @@ public static partial class PsEmitter
         // depth raised so `exit N` becomes a SCOPED `$LASTEXITCODE = N; return`,
         // and give that `return` a script block to return from.
         _subshellDepth++;
-        string body;
+        string body; bool savedErrTrapSh = PsBuild.ErrTrapNeedsErrtrace; PsBuild.ErrTrapNeedsErrtrace = true;
         // `( … ) < file` gives the body its own stdin (a scope); otherwise it inherits the enclosing one.
         try { body = EmitCompoundBody(subshell.Redirects, () => EmitBody(subshell.Body)); }
-        finally { _subshellDepth--; }
+        finally { _subshellDepth--; PsBuild.ErrTrapNeedsErrtrace = savedErrTrapSh; }
 
         // One subshell scope (PsBuild.ShellStateScope): a child PS scope plus save/restore of the
         // shell state a scope does not isolate, so nothing the body changes — `set -e`, variables,
@@ -4327,6 +4339,10 @@ public static partial class PsEmitter
         if (argsOverride is null && literalArgs.Count == 2 && literalArgs[0] is "-o" or "+o" && literalArgs[1] is { } remembered
             && BashOptionNames.Contains(remembered) && remembered is not ("errexit" or "xtrace" or "pipefail" or "noglob" or "nounset" or "noclobber" or "noexec" or "onecmd"))
             return "Invoke-BashShopt '-o' " + (literalArgs[0] == "-o" ? "'-s'" : "'-u'") + " " + PsBuild.SingleQuote(remembered);
+        // errtrace (`set -E` / `set -o errtrace`): the ERR trap also fires inside functions and subshells.
+        if (argsOverride is null && (literalArgs.Count == 1 && literalArgs[0] is "-E" or "+E"
+            || literalArgs.Count == 2 && literalArgs[0] is "-o" or "+o" && literalArgs[1] == "errtrace"))
+            return "$global:__BashErrtrace = " + (literalArgs[0]![0] == '-' ? "$true" : "$false") + "; " + PsBuild.SetStatus(0);
         // `set -o` / `set +o` alone list the options (the shopt -o table, same two formats).
         if (argsOverride is null && literalArgs.Count == 1 && literalArgs[0] is "-o" or "+o")
             return literalArgs[0] == "-o" ? "Invoke-BashShopt '-o'" : "Invoke-BashShopt '-po'";

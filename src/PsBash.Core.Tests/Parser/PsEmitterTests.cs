@@ -5392,11 +5392,18 @@ public class PsEmitterTests
         Assert.Contains(check, PsEmitter.Transpile("set -e; X=$(false)")!);
     }
 
+    // Inside a function/subshell/command-sub the ERR-trap half of the check is gated on errtrace (set -E).
+    private static string ErrexitCheckInsideScope(string exit)
+    {
+        bool saved = PsBuild.ErrTrapNeedsErrtrace; PsBuild.ErrTrapNeedsErrtrace = true;
+        try { return PsBuild.ErrexitCheck(exit); } finally { PsBuild.ErrTrapNeedsErrtrace = saved; }
+    }
+
     [Fact]
     public void Transpile_SetE_InsideSubshell_LeavesOnlyTheSubshell()
     {
         var result = PsEmitter.Transpile("set -e; (cat /nofile; echo in); echo after")!;
-        Assert.Contains(PsBuild.ErrexitCheck("return"), result);
+        Assert.Contains(ErrexitCheckInsideScope("return"), result);
         Assert.Contains("& { $__psbash_ss = ", result);
     }
 
@@ -5692,6 +5699,15 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("trap 'echo error' ERR");
         Assert.Equal("Invoke-BashTrap 'echo error' ERR", result);
+    }
+
+    [Fact]
+    public void Transpile_ErrTrap_InFunctionNeedsErrtrace_AndLineIsLastCommandOfList()
+    {
+        var result = PsEmitter.Transpile("trap 'echo e' ERR\nf() { false; }\nfalse || false\nset -E");
+        Assert.Contains("$global:__BashErrtrace", result);          // gate inside the function body
+        Assert.Contains("$global:__BashErrtrace = $true", result);   // `set -E` turns it on
+        Assert.Contains("$env:__psbLine = 3", result);              // top-level list: its line
     }
 
     [Fact]
@@ -6636,7 +6652,7 @@ public class PsEmitterTests
         // bash: errexit is not inherited into $( ), but a set -e inside applies there.
         var result = PsEmitter.Transpile("v=$(set -e; false; echo after)");
         Assert.Contains("$global:__BashErrexit = $false; " + PsBuild.ErrexitSuppressVar + " = 0; ", result);
-        Assert.Contains(PsBuild.ErrexitCheck("return"), result);
+        Assert.Contains(ErrexitCheckInsideScope("return"), result);
     }
 
     [Fact]
