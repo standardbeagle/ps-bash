@@ -6196,6 +6196,12 @@ public class PsEmitterTests
         Assert.Contains("Register-BashChpwdHook", result);
     }
 
+    [Fact]
+    public void Transpile_Hostname_IsLowerCasedLikeTheHostnameCommand()
+    {
+        Assert.Contains("MachineName.ToLowerInvariant()", PsEmitter.Transpile("echo $HOSTNAME"));
+    }
+
     [Theory]
     [InlineData("[[ { =~ \"{\" ]]")]
     [InlineData("[[ a=x =~ a=(x) ]]")]
