@@ -2502,6 +2502,20 @@ public static partial class PsEmitter
         return b.MoveToImmutable();
     }
 
+    private const int MaxStaticTestGroupDepth = 32;
+    [ThreadStatic] private static int t_testGroupDepth;
+
+    // Groups unwrapped by WithLiteralParens carry bare `(`/`)` literals; handed to the runtime evaluator they
+    // must reach it as the words `(`/`)`, not as PowerShell grouping.
+    private static ImmutableArray<CompoundWord> QuoteBareTestParens(ImmutableArray<CompoundWord> words)
+    {
+        var b = ImmutableArray.CreateBuilder<CompoundWord>(words.Length);
+        foreach (var w in words)
+            b.Add(w.Parts is [WordPart.Literal { Value: "(" or ")" } l]
+                ? new CompoundWord(ImmutableArray.Create<WordPart>(new WordPart.SingleQuoted(l.Value))) : w);
+        return b.MoveToImmutable();
+    }
+
     private static string TranslateTestCondition(ImmutableArray<CompoundWord> words, bool extended)
     {
         // Grouping: `[[ ( -f $f && ! -L $f ) ]]`. Unwrap one enclosing pair and
@@ -2512,9 +2526,17 @@ public static partial class PsEmitter
 
         // `[ \( A \) ]`: bash's 3-arg form `( X )` is just X (a lone word is then a non-empty test), and the
         // 4-arg form groups a unary test. Arity 3 is checked first so `[ ( = ) ]`-style operators still apply.
-        if (!extended && TryUnwrapTestGroup(WithLiteralParens(words), out var bracketGrouped)
+        // Real scripts group a level or two. Past MaxStaticTestGroupDepth the group is left to the runtime
+        // `test` evaluator (which bounds its own nesting) so a hostile `[ \( \( … \) \) ]` cannot overflow
+        // the emitter or hand PowerShell a thousand-deep paren tower.
+        if (!extended && t_testGroupDepth < MaxStaticTestGroupDepth
+            && TryUnwrapTestGroup(WithLiteralParens(words), out var bracketGrouped)
             && !(words.Length == 3 && GetLiteralValue(words[1]) is { } gm && (IsBinaryTestOp(gm) || gm is "-a" or "-o")))
-            return $"({TranslateTestCondition(bracketGrouped, extended: false)})";
+        {
+            t_testGroupDepth++;
+            try { return $"({TranslateTestCondition(bracketGrouped, extended: false)})"; }
+            finally { t_testGroupDepth--; }
+        }
 
         // `[ a $op a ]`: the operator is only known at run time (and the expansion may split into several
         // words), so hand the IFS-split word list to the runtime `test` evaluator.
@@ -2745,7 +2767,7 @@ public static partial class PsEmitter
         if (words.Length == 2 && GetLiteralValue(words[0]) == "-v" && TryGetVarOperandName(words[1]) is { } varOperand)
             return PsBuild.ExitCodeTest($"Invoke-BashTest '-v' {PsBuild.SingleQuote(varOperand)}", negate: false);
         if (!extended || (words.Length == 2 && GetLiteralValue(words[0]) is "-v" or "-R"))
-            return PsBuild.ExitCodeTest(EmitPassthrough("Invoke-BashTest", words), negate: false);
+            return PsBuild.ExitCodeTest(EmitPassthrough("Invoke-BashTest", QuoteBareTestParens(words)), negate: false);
 
         var opName = GetLiteralValue(words[0]) ?? "";
         var message = PsBuild.SingleQuote(
