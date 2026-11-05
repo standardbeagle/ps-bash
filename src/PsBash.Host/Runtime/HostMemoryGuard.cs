@@ -18,12 +18,34 @@ internal sealed class HostMemoryGuard : IDisposable
     internal static long LimitBytes { get; set; } = ResolveLimit(
         Environment.GetEnvironmentVariable("PSBASH_HOST_MAX_MB"), GC.GetGCMemoryInfo().TotalAvailableMemoryBytes);
 
-    /// <summary>How usage is measured. Test seam; production reads the process's private bytes.</summary>
+    /// <summary>
+    /// Cheap first look, read on every poll: the process working set. A free-running GC keeps free pages
+    /// resident (and private bytes only ever creeps up), so this alone proves nothing is wrong when it is
+    /// UNDER the limit but cannot condemn a command when it is over. Test seam.
+    /// </summary>
     internal static Func<long> ReadUsage { get; set; } = static () =>
     {
         using var self = Process.GetCurrentProcess();
-        return self.PrivateMemorySize64;
+        return self.WorkingSet64;
     };
+
+    /// <summary>
+    /// Runs when the cheap look is over the limit, before any verdict: a full blocking, compacting
+    /// collection (finalizers included) so that only memory still reachable is left. Test seam.
+    /// </summary>
+    internal static Action Reclaim { get; set; } = static () =>
+    {
+        GC.Collect(GC.MaxGeneration, GCCollectionMode.Aggressive, blocking: true, compacting: true);
+        GC.WaitForPendingFinalizers();
+        GC.Collect(GC.MaxGeneration, GCCollectionMode.Aggressive, blocking: true, compacting: true);
+    };
+
+    /// <summary>
+    /// The verdict measure, read after <see cref="Reclaim"/>: bytes of managed objects still live. This is the
+    /// minimal working set the command truly needs (the buffers a runaway <c>yes | sort</c> keeps referencing),
+    /// independent of how many free pages the GC chooses to keep. Test seam.
+    /// </summary>
+    internal static Func<long> ReadLive { get; set; } = static () => GC.GetTotalMemory(forceFullCollection: false);
 
     internal static TimeSpan PollInterval { get; set; } = TimeSpan.FromMilliseconds(500);
 
@@ -64,6 +86,9 @@ internal sealed class HostMemoryGuard : IDisposable
         if (Breached) return;
         long used;
         try { used = ReadUsage(); } catch { return; }
+        if (used <= LimitBytes) return;
+        // Over the limit: reclaim first. Only memory that survives a full collection is the command's.
+        try { Reclaim(); used = ReadLive(); } catch { return; }
         if (used <= LimitBytes) return;
         if (Interlocked.Exchange(ref _breached, 1) != 0) return;
         try { _toCancel.Cancel(); } catch (ObjectDisposedException) { }
