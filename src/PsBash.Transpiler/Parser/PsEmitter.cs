@@ -614,7 +614,8 @@ public static partial class PsEmitter
         var priorXtrace = _xtraceMode;
         var priorTrap = _trapMode;
         var priorDeclarePrint = _declarePrintMode;
-        _declarePrintMode = System.Text.RegularExpressions.Regex.IsMatch(bash, @"\b(?:declare|typeset)\s+(?:-[a-zA-Z]+\s+)*-[a-zA-Z]*p");
+        _declarePrintMode = System.Text.RegularExpressions.Regex.IsMatch(bash, @"\b(?:declare|typeset)\s+(?:-[a-zA-Z]+\s+)*-[a-zA-Z]*p")
+            || System.Text.RegularExpressions.Regex.IsMatch(bash, @"\bexport\s*(?:-p\s*)?(?:[|;&)}]|\r?\n|$)");
         _trapMode = System.Text.RegularExpressions.Regex.IsMatch(bash, @"\btrap\b");
         _xtraceMode = System.Text.RegularExpressions.Regex.IsMatch(bash, @"\bset\s+(?:-[a-zA-Z]+\s+)*(?:-[a-zA-Z]*x|-o\s+xtrace)");
         _pipefailMode = priorPipefail || InheritedPipefail || bash.Contains("pipefail", StringComparison.Ordinal) || bash.Contains("PIPESTATUS", StringComparison.Ordinal);
@@ -3496,6 +3497,10 @@ public static partial class PsEmitter
         if (cmd.Words.Length < 2 || GetLiteralValue(cmd.Words[0]) is not ("declare" or "typeset"))
             return TryEmitDeclareCore(cmd, out result);
 
+        // `declare -pr` / `-pa` / `-px`: a print form whose other letters SELECT variables; nothing is declared.
+        if (cmd.Words.Skip(1).Any(w => GetLiteralValue(w) is { Length: > 1 } pf && pf[0] == '-' && pf[1] != '-' && pf.Contains('p')))
+            return TryEmitDeclareCore(cmd, out result);
+
         // `declare -r X=1` is `readonly X=1`: emit the declaration without the r attribute, then mark each name.
         bool hasR = false;
         var attrs = new HashSet<char>();
@@ -3587,7 +3592,7 @@ public static partial class PsEmitter
             if (val == "-A") isAssoc = true;
             else if (val == "-n") isNameref = true;
             else if (val == "-i") { /* integer — handled below */ }
-            else if (val is { Length: > 1 } && val[0] == '-' && val.AsSpan(1).IndexOfAnyExcept("pfF") < 0) isPrint = true;
+            else if (val is { Length: > 1 } && val[0] == '-' && (val.AsSpan(1).IndexOfAnyExcept("pfF") < 0 || (val[1] != '-' && val.Contains('p')))) isPrint = true;
             else if (val is { Length: > 1 } && val[0] == '+' && val.AsSpan(1).IndexOfAnyExcept("aAilnrtux") < 0) { /* `declare +a x`: drops an attribute; nothing to record */ }
             else if (val is not null && !val.StartsWith('-')) varName = val;
             else if (val is null && TrySplitInitializer(word, out var n, out var v)) { exprName = n; exprValue = v; }
@@ -3879,6 +3884,15 @@ public static partial class PsEmitter
             && GetLiteralValue(cmd.Words[1]) == "PROMPT_COMMAND")
         {
             result = "Unregister-BashPromptHook -Name 'prompt-command'";
+            return true;
+        }
+
+        // Bare `readonly` / `export` (optionally `-p`): list the read-only / exported variables as `declare -r` / `declare -x`.
+        if (cmd0 is "readonly" or "export" && cmd.EnvPairs.IsEmpty && cmd.HereDocs.IsDefaultOrEmpty
+            && cmd.Words.Skip(1).All(w => GetLiteralValue(w) == "-p"))
+        {
+            var selector = new CompoundWord([new WordPart.Literal(cmd0 == "readonly" ? "-pr" : "-px")]);
+            result = EmitMappedStandalone(cmd, EmitPassthrough("Invoke-BashDeclare", ImmutableArray.Create(selector)));
             return true;
         }
 

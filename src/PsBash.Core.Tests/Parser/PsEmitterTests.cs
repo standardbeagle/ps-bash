@@ -7193,4 +7193,25 @@ public class PsEmitterTests
         var result = PsEmitter.Transpile(bash)!;
         Assert.DoesNotMatch("`[a-zA-Z0-9]", result);
     }
+
+    [Theory]
+    [InlineData("readonly", "-pr")]
+    [InlineData("readonly -p", "-pr")]
+    [InlineData("export", "-px")]
+    [InlineData("export -p", "-px")]
+    public void Transpile_BareReadonlyOrExport_ListsThroughDeclare(string bash, string selector)
+    {
+        // Bare `readonly` / `export` list their variables as `declare -r` / `declare -x`; they are not external commands.
+        var result = PsEmitter.Transpile(bash);
+        Assert.Contains("Invoke-BashDeclare", result);
+        Assert.Contains(selector, result);
+    }
+
+    [Fact]
+    public void Transpile_DeclarePrintWithSelectors_StaysAPrintForm()
+    {
+        // `declare -pr` selects read-only variables; it must not be read as `declare -r` of nothing.
+        var result = PsEmitter.Transpile("declare -pa");
+        Assert.Contains("Invoke-BashDeclare", result);
+    }
 }

@@ -40,6 +40,7 @@ public sealed class InvokeBashDeclareCommand : PSCmdlet
         FileSystemHelpers.SetLastExitCode(this, 0);
 
         bool functions = false, namesOnly = false, bareList = false;
+        var select = new HashSet<char>();
         var names = new List<string>();
         bool optionsDone = false;
         foreach (var a in args)
@@ -56,6 +57,7 @@ public sealed class InvokeBashDeclareCommand : PSCmdlet
                         case 'f': functions = true; break;
                         case 'F': functions = true; namesOnly = true; break;
                         case 'p': break;
+                        case 'a' or 'A' or 'n' or 'r' or 'x': select.Add(c); break;
                         default:
                             FileSystemHelpers.WriteBashError(this, $"bash: declare: -{c}: invalid option\n"
                                 + "declare: usage: declare [-aAfFgiIlnrtux] [name[=value] ...] or declare -p [-aAfFilnrtux] [name ...]");
@@ -71,7 +73,7 @@ public sealed class InvokeBashDeclareCommand : PSCmdlet
 
         if (bareList && !functions && names.Count == 0) PrintBareVariables();
         else if (functions) PrintFunctions(names, namesOnly);
-        else PrintVariables(names);
+        else PrintVariables(names, select);
     }
 
     private void PrintFunctions(List<string> names, bool namesOnly)
@@ -115,16 +117,66 @@ public sealed class InvokeBashDeclareCommand : PSCmdlet
         }
     }
 
-    private void PrintVariables(List<string> names)
+    // PowerShell's own globals (and the runtime's), which are not bash variables.
+    private static readonly HashSet<string> NotBashVariables = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Error", "args", "input", "Matches", "PSBoundParameters", "PSCmdlet", "PSItem", "_", "foreach", "switch", "this",
+        "PWD", "OLDPWD", "StackTrace", "ExecutionContext", "Host", "PSHOME", "PID", "ShellId", "MyInvocation",
+        "PSCommandPath", "PSScriptRoot", "PSCulture", "PSUICulture", "PSVersionTable", "PSEdition", "PSDefaultParameterValues",
+        "PSSessionOption", "PSEmailServer", "PSSessionApplicationName", "PSSessionConfigurationName", "NestedPromptLevel",
+        "Profile", "ProgressPreference", "VerbosePreference", "WarningPreference", "DebugPreference", "ErrorActionPreference",
+        "InformationPreference", "ConfirmPreference", "WhatIfPreference", "ErrorView", "OutputEncoding", "FormatEnumerationLimit",
+        "MaximumHistoryCount", "EnabledExperimentalFeatures", "IsLinux", "IsMacOS", "IsWindows", "IsCoreCLR", "LASTEXITCODE",
+        "PSNativeCommandUseErrorActionPreference", "PSModuleAutoLoadingPreference", "PSStyle", "PSReadLineOption", "true", "false", "null",
+        "HOME", "Home",
+    };
+
+    /// <summary>Every bash variable as (name, value): the environment's, then the shell's array / associative globals.</summary>
+    private List<(string Name, object? Value)> AllVariables()
+    {
+        var result = new List<(string, object?)>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var env = Environment.GetEnvironmentVariables();
+        foreach (System.Collections.DictionaryEntry e in env)
+            if (e.Key is string k && !k.StartsWith("__", StringComparison.Ordinal) && seen.Add(k)) result.Add((k, e.Value));
+        try
+        {
+            foreach (var v in SessionState.InvokeProvider.Item.Get(new[] { @"variable:\*" }, force: false, literalPath: false))
+            {
+                if (v.BaseObject is not PSVariable pv) continue;
+                string name = pv.Name;
+                if (NotBashVariables.Contains(name) || name.StartsWith("__", StringComparison.Ordinal) || name.StartsWith("PS", StringComparison.Ordinal)
+                    || name.StartsWith("Bash", StringComparison.Ordinal) || BashShellState.AllGlobalNames.Contains(name)) continue;
+                if (pv.Value is System.Collections.IDictionary || (pv.Value is System.Collections.IList && pv.Value is not string))
+                {
+                    if (seen.Add(name)) result.Add((name, pv.Value));
+                }
+            }
+        }
+        catch
+        {
+            // Variable provider unavailable: environment variables only.
+        }
+        result.Sort((a, b) => string.CompareOrdinal(a.Item1, b.Item1));
+        return result;
+    }
+
+    private void PrintVariables(List<string> names, HashSet<char> select)
     {
         if (names.Count == 0)
         {
-            var env = Environment.GetEnvironmentVariables();
-            var keys = new List<string>();
-            foreach (System.Collections.DictionaryEntry e in env) keys.Add((string)e.Key);
-            keys.Sort(string.CompareOrdinal);
-            foreach (var key in keys)
-                WriteLine($"declare -x {key}=\"{env[key]}\"");
+            foreach (var (name, value) in AllVariables())
+            {
+                bool isAssoc = value is System.Collections.IDictionary and not BashSparseArray;
+                bool isIndexed = value is BashSparseArray || (value is System.Collections.IList && value is not string);
+                string letters = BashShellState.AttributeLetters(name);
+                if (select.Contains('a') && !isIndexed) continue;
+                if (select.Contains('A') && !isAssoc) continue;
+                if (select.Contains('r') && !letters.Contains('r')) continue;
+                if (select.Contains('x') && !letters.Contains('x')) continue;
+                if (select.Contains('n')) continue;
+                DeclarePrinter.TryPrintVariable(this, name);
+            }
             return;
         }
 
