@@ -146,6 +146,7 @@ public sealed class InvokeBashUnsetCommand : PSCmdlet
 
         bool functionMode = false;
         var names = new List<string>();
+        bool explicitVar = V.IsPresent;
 
         // If -V was bound by the binder it acts as a no-op mode hint (variable
         // is already the default). The manual scan then walks the remaining
@@ -153,8 +154,8 @@ public sealed class InvokeBashUnsetCommand : PSCmdlet
         // (oracle parity — the mode is per-iteration, not global).
         foreach (var arg in args)
         {
-            if (arg == "-f") { functionMode = true; continue; }
-            if (arg == "-v") { functionMode = false; continue; }
+            if (arg == "-f") { functionMode = true; explicitVar = false; continue; }
+            if (arg == "-v") { functionMode = false; explicitVar = true; continue; }
             if (arg.StartsWith('-')) continue;
             names.Add(arg);
         }
@@ -188,10 +189,13 @@ public sealed class InvokeBashUnsetCommand : PSCmdlet
                 // to the local-or-parent scope chain (matching the oracle's
                 // observable contract — the variable disappears for the
                 // caller).
+                // Bash: with neither -f nor -v, a name that is no variable at all unsets the function of that name.
                 InvokeCommand.InvokeScript(
-                    "param($n) Remove-Variable -Name $n -Scope 1 -ErrorAction SilentlyContinue; " +
-                    "if (Test-Path ('Env:\\' + $n)) { Remove-Item -Path ('Env:\\' + $n) -Force -ErrorAction SilentlyContinue }",
-                    name);
+                    "param($n, $explicitVar) $isVar = (Get-Variable -Name $n -Scope 1 -ErrorAction SilentlyContinue) -or (Test-Path ('Env:\\' + $n)); " +
+                    "Remove-Variable -Name $n -Scope 1 -ErrorAction SilentlyContinue; " +
+                    "if (Test-Path ('Env:\\' + $n)) { Remove-Item -Path ('Env:\\' + $n) -Force -ErrorAction SilentlyContinue } " +
+                    "elseif (-not $isVar -and -not $explicitVar -and -not $n.Contains('[')) { Remove-Item -Path ('Function:\\' + $n) -Force -ErrorAction SilentlyContinue }",
+                    name, explicitVar);
             }
         }
     }

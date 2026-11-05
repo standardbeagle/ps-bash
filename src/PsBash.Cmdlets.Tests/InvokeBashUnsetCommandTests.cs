@@ -90,6 +90,26 @@ public class InvokeBashUnsetCommandTests : IClassFixture<SharedPwshFixture>
     }
 
     [Fact]
+    public void Unset_PlainName_NotAVariable_RemovesFunction()
+    {
+        var stillExists = RunAndCheckFunctionExists(
+            "function Test-PsBashUnsetPlain { 'hi' }; " +
+            "Invoke-BashUnset Test-PsBashUnsetPlain",
+            "Test-PsBashUnsetPlain");
+        Assert.False(stillExists);
+    }
+
+    [Fact]
+    public void Unset_VariableFlag_KeepsFunction()
+    {
+        var stillExists = RunAndCheckFunctionExists(
+            "function Test-PsBashUnsetKeep { 'hi' }; " +
+            "Invoke-BashUnset -v Test-PsBashUnsetKeep",
+            "Test-PsBashUnsetKeep");
+        Assert.True(stillExists);
+    }
+
+    [Fact]
     public void Unset_FunctionFlag_RemovesFunction()
     {
         var stillExists = RunAndCheckFunctionExists(
@@ -100,14 +120,14 @@ public class InvokeBashUnsetCommandTests : IClassFixture<SharedPwshFixture>
     }
 
     [Fact]
-    public void Unset_DefaultMode_IsVariableNotFunction()
+    public void Unset_DefaultMode_WithNoSuchVariable_FallsBackToTheFunction()
     {
-        // Without -f, a function with the same name should NOT be removed.
+        // bash 5.2: with neither -f nor -v, a name that is no variable unsets the function of that name (oracle-checked).
         var stillExists = RunAndCheckFunctionExists(
             "function Test-PsBashKeepMe { 'hi' }; " +
             "Invoke-BashUnset Test-PsBashKeepMe",
             "Test-PsBashKeepMe");
-        Assert.True(stillExists);
+        Assert.False(stillExists);
     }
 
     [Fact]

@@ -12,7 +12,6 @@ echo $a
 eval -- echo hi
 ## stdout: hi
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-eval-source builtin-eval-source (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### eval usage

@@ -9308,6 +9308,11 @@ public static partial class PsEmitter
             case "command":
                 result = EmitPassthrough("Invoke-BashCommand", args);
                 return true;
+            case "declare":
+            case "typeset":
+                // Reached only when no static declaration path took it (e.g. `typeset -a "$code"`): the runtime parses the words.
+                result = EmitPassthrough("Invoke-BashDeclare", args);
+                return true;
             case "unset":
                 result = EmitPassthrough("Invoke-BashUnset", args);
                 return true;
@@ -9600,6 +9605,8 @@ public static partial class PsEmitter
     /// </remarks>
     private static string EmitEval(ImmutableArray<CompoundWord> args)
     {
+        // `eval -- body`: `--` ends eval's own options and is not part of the evaluated text.
+        if (!args.IsEmpty && GetLiteralValue(args[0]) == "--") args = args.RemoveAt(0);
         if (args.IsEmpty)
             return "$global:LASTEXITCODE = 0";
 

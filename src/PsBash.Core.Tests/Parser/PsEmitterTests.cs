@@ -6197,6 +6197,19 @@ public class PsEmitterTests
     }
 
     [Fact]
+    public void Transpile_EvalDashDash_DropsTheSeparator()
+    {
+        var r = PsEmitter.Transpile("eval -- \"echo hi\"");
+        Assert.DoesNotContain("'--'", r);
+    }
+
+    [Fact]
+    public void Transpile_TypesetWithQuotedDynamicArg_MapsToInvokeBashDeclare()
+    {
+        Assert.Contains("Invoke-BashDeclare", PsEmitter.Transpile("typeset -a \"$code\""));
+    }
+
+    [Fact]
     public void Transpile_Hostname_IsLowerCasedLikeTheHostnameCommand()
     {
         Assert.Contains("MachineName.ToLowerInvariant()", PsEmitter.Transpile("echo $HOSTNAME"));

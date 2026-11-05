@@ -288,7 +288,6 @@ bar
 declare -f foo
 ## END
 ## status: 127
-## XFAIL ps-bash gap-oils-assign-extended assign-extended (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### declare -p doesn't print binary data, but can be loaded into bash
@@ -381,7 +380,6 @@ declare -A test_arr6=([c]="3" [b]="2" [a]="1" )
 declare -a test_arr7=([3]="foo")
 ## END
 ## status: 0
-## XFAIL ps-bash triage differs from bash 5.2 (auto-marked; investigate)
 ## timeout: 10
 
 #### declare -p foo=bar doesn't make sense
