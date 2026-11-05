@@ -24,7 +24,7 @@ public static class BashPromptText
                 case '\\': sb.Append('\\'); break;
                 case '$': sb.Append('$'); break;
                 case '[': case ']': break;
-                case 'u': sb.Append(Environment.GetEnvironmentVariable("USER") ?? Environment.UserName); break;
+                case 'u': sb.Append(BashVariableStore.Get("USER") ?? Environment.UserName); break;
                 case 'h': { var h = Environment.MachineName.ToLowerInvariant(); int dot = h.IndexOf('.'); sb.Append(dot > 0 ? h[..dot] : h); break; }
                 case 'H': sb.Append(Environment.MachineName.ToLowerInvariant()); break;
                 case 's': sb.Append("bash"); break;
@@ -35,8 +35,8 @@ public static class BashPromptText
                 case '!': case '#': sb.Append('1'); break;
                 case 'w': case 'W':
                 {
-                    var pwd = Environment.GetEnvironmentVariable("PWD") ?? Environment.CurrentDirectory;
-                    var home = Environment.GetEnvironmentVariable("HOME");
+                    var pwd = BashVariableStore.Get("PWD") ?? Environment.CurrentDirectory;
+                    var home = BashVariableStore.Get("HOME");
                     if (n == 'W') { var t = pwd.TrimEnd('/', '\\'); int s = Math.Max(t.LastIndexOf('/'), t.LastIndexOf('\\')); sb.Append(pwd == home ? "~" : t.Length == 0 ? "/" : t[(s + 1)..]); break; }
                     if (!string.IsNullOrEmpty(home) && pwd == home) sb.Append('~');
                     else if (!string.IsNullOrEmpty(home) && pwd.StartsWith(home + "/", StringComparison.Ordinal)) sb.Append('~').Append(pwd[home.Length..]);

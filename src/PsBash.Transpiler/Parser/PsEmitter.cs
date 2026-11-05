@@ -9225,6 +9225,12 @@ public static partial class PsEmitter
             case "compgen":
                 result = EmitPassthrough("Invoke-BashCompgen", args);
                 return true;
+            case "complete":
+                result = EmitPassthrough("Invoke-BashComplete", args);
+                return true;
+            case "compopt":
+                result = EmitPassthrough("Invoke-BashCompopt", args);
+                return true;
             case "realpath":
                 result = EmitPassthrough("Invoke-BashRealpath", args);
                 return true;
@@ -9664,7 +9670,7 @@ public static partial class PsEmitter
     /// cmdlet must be prepared to receive every flag as a plain string.
     /// </summary>
     internal static readonly IReadOnlySet<string> OrderedArgCommands =
-        new HashSet<string>(StringComparer.Ordinal) { "source", "getopts", "flock", "timeout", "times", "hash", "umask", "ulimit", "compgen", "tee", "cp", "mv", "rm", "mkdir", "rmdir", "ln", "touch", "xargs", "time", "env", "command", "declare", "type", "bash", "sh", "awk", "head", "tail", "wc", "cat", "tac", "nl", "uniq", "fold", "expand", "unexpand", "paste", "join", "comm", "split", "strings", "base64", "stat", "file", "cut", "sort", "grep", "sed", "rg", "find", "echo", "printf", "test", "ls", "du", "tree", "column", "gzip", "tar", "md5sum", "sha1sum", "sha256sum", "diff", "jq" };
+        new HashSet<string>(StringComparer.Ordinal) { "source", "getopts", "flock", "timeout", "times", "hash", "umask", "ulimit", "compgen", "complete", "compopt", "tee", "cp", "mv", "rm", "mkdir", "rmdir", "ln", "touch", "xargs", "time", "env", "command", "declare", "type", "bash", "sh", "awk", "head", "tail", "wc", "cat", "tac", "nl", "uniq", "fold", "expand", "unexpand", "paste", "join", "comm", "split", "strings", "base64", "stat", "file", "cut", "sort", "grep", "sed", "rg", "find", "echo", "printf", "test", "ls", "du", "tree", "column", "gzip", "tar", "md5sum", "sha1sum", "sha256sum", "diff", "jq" };
 
     /// <summary><c>Invoke-BashTee</c> -&gt; is <c>tee</c> in <see cref="OrderedArgCommands"/>?</summary>
     private static bool IsOrderedArgCmdlet(string cmdlet) =>

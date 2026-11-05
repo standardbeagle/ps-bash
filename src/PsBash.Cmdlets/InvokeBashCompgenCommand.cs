@@ -27,7 +27,19 @@ public sealed class InvokeBashCompgenCommand : PSCmdlet
             string a = args[i];
             if (a == "--") { if (i + 1 < args.Length) prefix = args[i + 1]; break; }
             if (a == "-W" && i + 1 < args.Length) { wordList = args[++i]; continue; }
-            if (a == "-A" && i + 1 < args.Length) { kinds.Add(args[++i]); continue; }
+            if (a == "-A" && i + 1 < args.Length)
+            {
+                var kind = args[++i];
+                if (!KnownKinds.Contains(kind))
+                {
+                    FileSystemHelpers.WriteBashError(this, $"compgen: {kind}: invalid action name");
+                    FileSystemHelpers.SetLastExitCode(this, 2);
+                    return;
+                }
+                kinds.Add(kind);
+                continue;
+            }
+            if (a == "-e") { kinds.Add("export"); continue; }
             if (a == "-f") { kinds.Add("file"); continue; }
             if (a == "-d") { kinds.Add("directory"); continue; }
             if (a == "-v") { kinds.Add("variable"); continue; }
@@ -58,9 +70,13 @@ public sealed class InvokeBashCompgenCommand : PSCmdlet
             case "directory":
                 return PathCandidates(prefix, kind == "directory");
             case "variable":
-                return Script("Get-Variable | ForEach-Object Name").Concat(Script("Get-ChildItem Env: | ForEach-Object Name"));
+                return Script("Get-Variable | ForEach-Object Name").Concat(Script("Get-ChildItem Env: | ForEach-Object { if ($_.Name -ieq 'Path') { 'PATH' } else { $_.Name } }"));
             case "function":
-                return Script("Get-ChildItem Function: | Where-Object { -not $_.Module -and $_.Name -notmatch '^([A-Za-z]:|(Get|Set|Invoke|Register|Write|Show|New|Test|ConvertTo|ConvertFrom|Update|Remove|Add|Import|Initialize|Resolve|Read|Clear|Enter|Exit|Out|Format|Find|Select|Start|Stop)-.*|prompt|mkdir|more|help|man|Clear-Host|TabExpansion2|oss|Pause|[A-Z]:)$' } | ForEach-Object Name");
+                return DeclarePrinter.AllBashFunctions(this).Select(f => f.Name);
+            case "export":
+                return Script("Get-ChildItem Env: | ForEach-Object Name");
+            case "setopt":
+                return SetOptions;
             case "alias":
                 return Script("Get-Alias | ForEach-Object Name");
             case "command":
@@ -69,6 +85,19 @@ public sealed class InvokeBashCompgenCommand : PSCmdlet
                 return Array.Empty<string>();
         }
     }
+
+    private static readonly string[] SetOptions =
+    {
+        "allexport", "braceexpand", "emacs", "errexit", "errtrace", "functrace", "hashall", "histexpand", "history", "ignoreeof",
+        "interactive-comments", "keyword", "monitor", "noclobber", "noexec", "noglob", "nolog", "notify", "nounset", "onecmd",
+        "physical", "pipefail", "posix", "privileged", "verbose", "vi", "xtrace",
+    };
+
+    private static readonly HashSet<string> KnownKinds = new(StringComparer.Ordinal)
+    {
+        "alias", "arrayvar", "binding", "builtin", "command", "directory", "disabled", "enabled", "export", "file", "function",
+        "group", "helptopic", "hostname", "job", "keyword", "running", "service", "setopt", "shopt", "signal", "stopped", "user", "variable",
+    };
 
     private IEnumerable<string> Script(string script)
     {

@@ -1200,7 +1200,7 @@ public class PsEmitterTests
         // Batch 1 of the shared ordered parser. Adding a command here also means adding it to
         // CommonParameterCollisionGuardTests.EmitterForceQuoted (Cmdlets.Tests) — that map is
         // how the guard knows the emitter, not a decoy, protects the colliding letters.
-        Assert.Equal(new[] { "awk", "base64", "bash", "cat", "column", "comm", "command", "compgen", "cp", "cut", "declare", "diff", "du", "echo", "env", "expand", "file", "find", "flock", "fold", "getopts", "grep", "gzip", "hash", "head", "join", "jq", "ln", "ls", "md5sum", "mkdir", "mv", "nl", "paste", "printf", "rg", "rm", "rmdir", "sed", "sh", "sha1sum", "sha256sum", "sort", "source", "split", "stat", "strings", "tac", "tail", "tar", "tee", "test", "time", "timeout", "times", "touch", "tree", "type", "ulimit", "umask", "unexpand", "uniq", "wc", "xargs" }, PsEmitter.OrderedArgCommands.OrderBy(x => x).ToArray());
+        Assert.Equal(new[] { "awk", "base64", "bash", "cat", "column", "comm", "command", "compgen", "complete", "compopt", "cp", "cut", "declare", "diff", "du", "echo", "env", "expand", "file", "find", "flock", "fold", "getopts", "grep", "gzip", "hash", "head", "join", "jq", "ln", "ls", "md5sum", "mkdir", "mv", "nl", "paste", "printf", "rg", "rm", "rmdir", "sed", "sh", "sha1sum", "sha256sum", "sort", "source", "split", "stat", "strings", "tac", "tail", "tar", "tee", "test", "time", "timeout", "times", "touch", "tree", "type", "ulimit", "umask", "unexpand", "uniq", "wc", "xargs" }, PsEmitter.OrderedArgCommands.OrderBy(x => x).ToArray());
     }
 
     // `bash` is on OrderedArgCommands: the script's own args (`bash s.sh -v -e -c x`) and the
@@ -2031,11 +2031,9 @@ public class PsEmitterTests
     [Fact]
     public void Transpile_BracedVarTransformPrompt_PreservesValue()
     {
-        // @P has no PowerShell equivalent: degrade to the bare value, not a silent total drop
-        // of the whole expansion — the variable still expands.
         var result = PsEmitter.Transpile("echo ${VAR@P}");
 
-        Assert.Equal("Invoke-BashEcho $env:VAR", result);
+        Assert.Contains("[PsBash.Cmdlets.BashPromptText]::Expand(", result);
     }
 
     [Fact]

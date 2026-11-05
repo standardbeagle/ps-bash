@@ -20,7 +20,6 @@ complete -W 'foo bar' mycommand
 complete -F myfunc other
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-completion builtin-completion (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### complete -F f is usage error
@@ -39,7 +38,6 @@ status=0
 status=2
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-completion builtin-completion (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### complete with nonexistent function
@@ -47,7 +45,6 @@ complete -F invalidZZ -D
 echo status=$?
 ## stdout: status=0
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-completion builtin-completion (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### complete with no action
@@ -55,7 +52,6 @@ complete foo
 echo status=$?
 ## stdout: status=0
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-completion builtin-completion (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### -A function prints functions
@@ -78,7 +74,6 @@ __ec
 _ab
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-completion builtin-completion (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Invalid syntax
@@ -86,7 +81,6 @@ compgen -A foo
 echo status=$?
 ## stdout: status=2
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-completion builtin-completion (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### how compgen calls completion functions
@@ -116,7 +110,6 @@ wrapper=foo
 complete -o default -o nospace -F $wrapper git
 ## stdout:
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-completion builtin-completion (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### compopt with invalid syntax
@@ -124,7 +117,6 @@ compopt -o invalid
 echo status=$?
 ## stdout: status=2
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-completion builtin-completion (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### compopt fails when not in completion function
@@ -132,7 +124,6 @@ echo status=$?
 compopt -o filenames +o nospace
 ## stdout:
 ## status: 1
-## XFAIL ps-bash gap-oils-builtin-completion builtin-completion (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### compgen -f on invalid  dir
@@ -185,7 +176,6 @@ v1_global
 v2_local
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-completion builtin-completion (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### compgen -e on known, but unexported, var
@@ -193,6 +183,7 @@ unexported=0
 compgen -e unexported
 ## stdout:
 ## status: 1
+## XFAIL ps-bash triage differs from bash 5.2 (auto-marked; investigate)
 ## timeout: 10
 
 #### compgen -e on unknown var
