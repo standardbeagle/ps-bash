@@ -28,7 +28,6 @@ hi
 expected failure
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-alias alias (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### define and use alias on a single line
@@ -40,7 +39,6 @@ two
 three
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-alias alias (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### alias can override builtin
@@ -49,7 +47,6 @@ alias echo='echo foo'
 echo bar
 ## stdout: foo bar
 ## status: 0
-## XFAIL ps-bash gap-oils-alias alias (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### defining multiple aliases, then unalias
@@ -174,7 +171,6 @@ alias e_='echo one '
 e_ two hello world
 ## stdout: one TWO hello world
 ## status: 0
-## XFAIL ps-bash gap-oils-alias alias (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Expansion of alias with variable
@@ -299,7 +295,6 @@ alias echo-x='echo $x '  # nothing is evaluated here
 echo-x echo-x
 ## stdout: x echo x
 ## status: 0
-## XFAIL ps-bash gap-oils-alias alias (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Invalid syntax of alias
@@ -435,7 +430,6 @@ alias WC='wc '
 SEQ THREE | WC -l
 ## stdout: 3
 ## status: 0
-## XFAIL ps-bash gap-oils-alias alias (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Alias not respected inside $()
@@ -456,7 +450,6 @@ alias sayhi='echo hello'; sayhi same line
 sayhi other line
 ## stdout: hello other line
 ## status: 0
-## XFAIL ps-bash gap-oils-alias alias (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Alias is respected inside eval
@@ -492,7 +485,6 @@ e_ one \
   one
 ## stdout: ONE TWO ONE TWO THREE two one
 ## status: 0
-## XFAIL ps-bash gap-oils-alias alias (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### alias for left brace

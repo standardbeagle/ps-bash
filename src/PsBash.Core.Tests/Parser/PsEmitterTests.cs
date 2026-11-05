@@ -5723,6 +5723,29 @@ public class PsEmitterTests
         => Assert.Contains("MarkReadonly('arr')", PsEmitter.Transpile("readonly arr=(a b)"));
 
     [Fact]
+    public void Transpile_Alias_ExpandedAtTranspileTimeOnLaterLines()
+    {
+        var result = PsEmitter.Transpile("shopt -s expand_aliases\nalias hi='echo hello world'\nhi there")!;
+        Assert.Contains("-NoFunction", result);                    // no run-time function: `'hi'` / `$cmd` are not aliases
+        Assert.Matches(@"Invoke-BashEcho \S*hello\S* \S*world\S* \S*there\S*", result);
+    }
+
+    [Fact]
+    public void Transpile_Alias_UsedOnItsOwnLine_IsNotExpanded()
+    {
+        var result = PsEmitter.Transpile("shopt -s expand_aliases\nalias e=echo; e one")!;
+        Assert.DoesNotContain("Invoke-BashEcho", result);
+    }
+
+    [Fact]
+    public void Transpile_Alias_TrailingBlankExpandsTheNextWord()
+    {
+        var result = PsEmitter.Transpile("shopt -s expand_aliases\nalias a='echo A '\nalias b='B'\na b")!;
+        Assert.DoesNotContain("Invoke-Bash b", result);
+        Assert.Matches(@"Invoke-BashEcho \S*A\S* \S*B\S*", result);
+    }
+
+    [Fact]
     public void Transpile_TrapEmptyInt_EmitsPassthrough()
     {
         var result = PsEmitter.Transpile("trap '' INT");

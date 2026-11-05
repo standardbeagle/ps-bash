@@ -629,6 +629,7 @@ public static partial class PsEmitter
         _errexitExemptDepth = 0;
         // Only a script that mentions pipefail pays for per-stage status capture (it also leaves the fused lane).
         var priorDefined = _definedFunctions;
+        var priorAliasDefs = _aliasDefs; var priorAliasLine = _expandAliasesLine; var priorAliasStatic = _aliasStaticOnly; _aliasDefs = null; _aliasStaticOnly = false;
         var priorUnitFunctions = _unitFunctions;
         _unitFunctions = null;
         var priorPipefail = _pipefailMode;
@@ -653,6 +654,7 @@ public static partial class PsEmitter
             if (cmd is null)
                 return null;
             CollectCallSites(cmd);
+            CollectAliasDefs(cmd, bash);
             return EmitBody(cmd);
         }
         finally
@@ -668,6 +670,7 @@ public static partial class PsEmitter
             _nounsetMode = priorNounset;
             _unitFunctions = priorUnitFunctions;
             _definedFunctions = priorDefined;
+            _aliasDefs = priorAliasDefs; _expandAliasesLine = priorAliasLine; _aliasStaticOnly = priorAliasStatic;
             _xtraceMode = priorXtrace;
             _trapMode = priorTrap;
             _debugTrapMode = priorDebugTrap;
@@ -3311,6 +3314,7 @@ public static partial class PsEmitter
 
     private static string EmitSimple(Command.Simple cmd)
     {
+        cmd = ExpandAliases(cmd);
         if (TryEmitEnvPairsWrap(cmd, out var envWrapResult))
             return envWrapResult;
 
@@ -9371,6 +9375,10 @@ public static partial class PsEmitter
             case "mapfile":
             case "readarray":
                 result = EmitPassthrough("Invoke-BashMapfile", args);
+                return true;
+            case "alias" when _aliasStaticOnly:
+                // Expanded at transpile time (PsEmitter.Aliases.cs): record the alias for `alias` listings, define no function.
+                result = EmitPassthrough("Invoke-BashAlias", args, cmdletSwitch: " -NoFunction");
                 return true;
             case "unalias":
                 // The cmdlet is shared with `alias`; `-u` selects removal (a bare PS alias could not tell them apart).

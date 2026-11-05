@@ -58,6 +58,10 @@ public sealed class InvokeBashAliasCommand : PSCmdlet
     [Parameter]
     public SwitchParameter A { get; set; }
 
+    /// <summary>Record the alias only: the transpiler already expanded its uses (no run-time function, so a quoted or variable command word is not an alias).</summary>
+    [Parameter]
+    public SwitchParameter NoFunction { get; set; }
+
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
@@ -199,6 +203,7 @@ public sealed class InvokeBashAliasCommand : PSCmdlet
                 // session state where the caller can't see it.
                 // The alias text is BASH (`$x`, quotes, keywords, `&&`), so the call runs it through eval with the
                 // arguments appended single-quoted; PowerShell never sees it as code.
+                if (NoFunction.IsPresent) continue;
                 InvokeCommand.InvokeScript(
                     """
                     param($n, $v)
