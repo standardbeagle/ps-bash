@@ -7200,7 +7200,7 @@ public static partial class PsEmitter
                         : arrayVar;
                     if (subscript == "0" && !ReferenceEquals(whole, arrayVar))
                     {
-                        return $"$(if ($null -eq {arrayVar}) {{ {EmitSimpleVar(bvs.Name)} }} else {{ {arrayVar}[0] }})";
+                        return $"$(if ($null -eq {arrayVar}) {{ {EmitSimpleVar(bvs.Name)} }} else {{ {arrayVar}['0'] }})";
                     }
                     if (subscript == "*" && inDoubleQuote)
                         return $"$(@(if ({arrayVar} -is [System.Collections.IDictionary]) {{ {arrayVar}.Values }} else {{ {whole} }}) -join {PsBuild.IfsJoinSeparator})";
@@ -7213,7 +7213,7 @@ public static partial class PsEmitter
                         return inDoubleQuote ? $"$({subRef})" : subRef;
                     }
                     if (int.TryParse(subscript, out _))
-                        return inDoubleQuote ? $"$({arrayVar}[{subscript}])" : $"{arrayVar}[{subscript}]";
+                        return inDoubleQuote ? $"$({arrayVar}['{subscript}'])" : $"{arrayVar}['{subscript}']";
                     string keyRef = $"{arrayVar}[{EmitWordSubscript(arrayVar, subscript)}]";
                     return inDoubleQuote ? $"$({keyRef})" : keyRef;
                 }

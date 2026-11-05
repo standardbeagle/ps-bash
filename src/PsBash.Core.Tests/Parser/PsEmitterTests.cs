@@ -4580,7 +4580,7 @@ public class PsEmitterTests
     public void Transpile_ArrayIndexAccess_EmitsPsIndex()
     {
         var result = PsEmitter.Transpile("echo ${arr[0]}");
-        Assert.Equal("Invoke-BashEcho $(if ($null -eq $arr) { $env:arr } else { $arr[0] })", result);
+        Assert.Equal("Invoke-BashEcho $(if ($null -eq $arr) { $env:arr } else { $arr['0'] })", result);
     }
 
     [Fact]

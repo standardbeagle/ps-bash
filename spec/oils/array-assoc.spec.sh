@@ -181,7 +181,6 @@ a["2"]=c
 echo 0 "${a[0]}" 1 "${a[1]}" 2 "${a[2]}"
 ## stdout: 0 a 1 b 2 c
 ## status: 0
-## XFAIL ps-bash gap-oils-array-assoc array-assoc (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### lookup with double quoted strings "mykey"
@@ -708,7 +707,6 @@ echo $var
 42
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array-assoc array-assoc (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### (( A[5] += 42 ))
@@ -718,7 +716,6 @@ declare -A A
 echo ${A[5]}
 ## stdout: 16
 ## status: 0
-## XFAIL ps-bash gap-oils-array-assoc array-assoc (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### (( A[5] += 42 )) with empty cell
@@ -728,7 +725,6 @@ declare -A A
 echo ${A[5]}
 ## stdout: 6
 ## status: 0
-## XFAIL ps-bash gap-oils-array-assoc array-assoc (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### setting key to itself (from bash-bug mailing list)
