@@ -112,7 +112,7 @@ public class ErrexitDifferentialTests
         // GNU bash 5.2: prints "before", reports `bash: line 1: x: unbound variable`, exits 1. The message prefix
         // differs by design (intentional-differences.md), so stdout and status are asserted directly.
         var result = await AssertOracle.RunPsBashOnlyAsync("set -eu; echo before; echo [$undefined_var_x]; echo never", TimeSpan.FromSeconds(30));
-        Assert.Equal(1, result.ExitCode);
+        Assert.Equal(127, result.ExitCode); // bash -c: a fatal unbound-variable read ends the shell with 127
         Assert.Equal("before", result.Stdout.Trim());
         Assert.Contains("undefined_var_x: unbound variable", result.Stderr);
     }
@@ -127,7 +127,7 @@ public class ErrexitDifferentialTests
     public async Task ParamError_UnderGroupRedirect_IsSilencedAndEndsTheScript(string script)
     {
         var result = await AssertOracle.RunPsBashOnlyAsync(script, TimeSpan.FromSeconds(30));
-        Assert.Equal(1, result.ExitCode);
+        Assert.Equal(127, result.ExitCode);
         Assert.Equal("before", result.Stdout.Trim());
         Assert.DoesNotContain(result.Stderr.Split('\n'), l => l.StartsWith("ps-bash: ", StringComparison.Ordinal)); // [ps-bash] lines are the harness trace
     }

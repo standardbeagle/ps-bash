@@ -3163,9 +3163,10 @@ public static partial class PsEmitter
             }
             // `local -r x=1`: later writes to x in this function are refused (the set is restored when the function ends).
             if (cmd.IsLocal && cmd.IsReadonly) _readonlyVars?.Add(pair.Name);
-            if (!cmd.IsLocal && !cmd.IsExport && _readonlyVars?.Contains(pair.Name) == true)
+            string roBase = pair.Name.Contains('[') ? pair.Name[..pair.Name.IndexOf('[')] : pair.Name;
+            if (!cmd.IsLocal && !cmd.IsExport && _readonlyVars?.Contains(roBase) == true)
             {
-                sb.Append("Write-Error ").Append(PsBuild.SingleQuote($"ps-bash: {pair.Name}: readonly variable"))
+                sb.Append("Write-Error ").Append(PsBuild.SingleQuote($"ps-bash: {roBase}: readonly variable"))
                   .Append(" -ErrorAction Continue; ").Append(PsBuild.SetStatus(1));
                 continue;
             }

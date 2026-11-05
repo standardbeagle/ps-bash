@@ -532,9 +532,9 @@ internal static class FileSystemHelpers
                 // file): retry a few times with a short backoff before reporting it.
                 for (int attempt = 1; ; attempt++)
                 {
-                    System.Threading.Thread.Sleep(50 * attempt);
+                    System.Threading.Thread.Sleep(100 * attempt);
                     try { ForceDeleteDirectoryRecursive(dir); return; }
-                    catch (IOException) when (attempt < 5) { }
+                    catch (IOException) when (attempt < 8) { }
                 }
             }
         }

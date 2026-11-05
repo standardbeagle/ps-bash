@@ -1,2 +1,5 @@
 # Binary test fixtures — never apply CRLF conversion
 *.bin binary
+
+# Golden outputs are LF; a CRLF checkout (core.autocrlf) breaks byte comparisons on Windows CI
+*.golden.txt text eol=lf

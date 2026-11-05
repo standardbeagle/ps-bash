@@ -197,7 +197,17 @@ public sealed class InvokeBashTestCommand : PSCmdlet
             object? holder = SessionState.PSVariable.GetValue(name);
             if (holder is PSObject wrapped) holder = wrapped.BaseObject;
             if (holder is System.Collections.IDictionary dict)
-                return sub is "@" or "*" ? dict.Count > 0 : dict.Contains(sub);
+            {
+                if (sub is "@" or "*") return dict.Count > 0;
+                // `-v 'assoc["k"]'` / `-v 'assoc[$key]'`: the subscript is still a word — drop quotes, expand a plain $name.
+                if (sub.Length >= 2 && (sub[0] == '"' && sub[^1] == '"' || sub[0] == '\'' && sub[^1] == '\'')) sub = sub[1..^1];
+                else if (sub.Length > 1 && sub[0] == '$')
+                {
+                    string vn = sub[1] == '{' && sub.EndsWith('}') ? sub[2..^1] : sub[1..];
+                    if (vn.Length > 0 && vn.All(ch => char.IsAsciiLetterOrDigit(ch) || ch == '_')) sub = BashVariableStore.Get(vn) ?? "";
+                }
+                return dict.Contains(sub);
+            }
             if (holder is System.Collections.IList list)
             {
                 if (sub is "@" or "*") return list.Count > 0;
