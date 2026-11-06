@@ -50,7 +50,7 @@ internal static class WindowsFileLockers
                 if (c.StartsWith(root, StringComparison.OrdinalIgnoreCase))
                 {
                     string name; try { name = p.ProcessName; } catch { name = "?"; }
-                    found.Add($"{name} (pid {p.Id}, cwd {cwd})");
+                    found.Add($"{name} (pid {p.Id}, parent {TryParentAndCommandLine(p.Id)}, cwd {cwd})");
                     if (found.Count >= 8) break;
                 }
             }
@@ -78,6 +78,36 @@ internal static class WindowsFileLockers
             var chars = new byte[length];
             if (!ReadProcessMemory(h, bufferPtr, chars, length, out _)) return null;
             return Encoding.Unicode.GetString(chars);
+        }
+        finally { CloseHandle(h); }
+    }
+
+    /// <summary>"N, cmd: ..." - the parent pid and the command line (RTL_USER_PROCESS_PARAMETERS.CommandLine @ +0x70).</summary>
+    private static string TryParentAndCommandLine(int pid)
+    {
+        var h = OpenProcess(ProcessQueryInformation | ProcessVmRead, false, pid);
+        if (h == IntPtr.Zero) return "?";
+        try
+        {
+            var pbi = new ProcessBasicInformation();
+            if (NtQueryInformationProcess(h, 0, ref pbi, Marshal.SizeOf<ProcessBasicInformation>(), out _) != 0) return "?";
+            var parent = (long)pbi.InheritedFromUniqueProcessId;
+            string cmd = "?";
+            var buf = new byte[8];
+            if (ReadProcessMemory(h, pbi.PebBaseAddress + 0x20, buf, 8, out _))
+            {
+                var parameters = (IntPtr)BitConverter.ToInt64(buf, 0);
+                var us = new byte[16];
+                if (ReadProcessMemory(h, parameters + 0x70, us, 16, out _))
+                {
+                    int length = BitConverter.ToUInt16(us, 0);
+                    var bufferPtr = (IntPtr)BitConverter.ToInt64(us, 8);
+                    var chars = new byte[Math.Min(length, 600)];
+                    if (length > 0 && ReadProcessMemory(h, bufferPtr, chars, chars.Length, out _))
+                        cmd = Encoding.Unicode.GetString(chars);
+                }
+            }
+            return $"{parent}, cmd: {cmd}";
         }
         finally { CloseHandle(h); }
     }

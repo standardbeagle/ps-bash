@@ -42,7 +42,9 @@ public class WindowsFileLockersTests
 
             var described = WindowsFileLockers.Describe(dir);
 
-            Assert.Contains($"pid {child.Id}, cwd", described);
+            Assert.Contains($"pid {child.Id}, parent {Environment.ProcessId}, cmd: ", described);
+            Assert.Contains("ping -n 11", described);   // the command line is reported too
+            Assert.Contains(", cwd ", described);
         }
         finally
         {
