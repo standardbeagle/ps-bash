@@ -28,7 +28,9 @@ public class WindowsFileLockersTests
 
     private static bool Holds(string described)
         => described.Contains($"pid {Environment.ProcessId}", StringComparison.Ordinal)
-           || described == WindowsFileLockers.ProtectedHolder;
+           || described.StartsWith(WindowsFileLockers.ProtectedHolder, StringComparison.Ordinal)
+           || described.Contains("open elsewhere", StringComparison.Ordinal)   // the exclusive-open probe saw it locked
+           || described.Contains("locked files:", StringComparison.Ordinal);
 
     [SkippableFact]
     public void Describe_AFileNobodyHolds_IsEmpty_AndAMissingPathNeverThrows()

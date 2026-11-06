@@ -20,8 +20,40 @@ internal static class WindowsFileLockers
     public static string Describe(string path)
     {
         if (!OperatingSystem.IsWindows()) return "";
-        try { return DescribeCore(path); }
-        catch { return ""; }
+        string holders = "";
+        try { holders = DescribeCore(path); } catch { }
+        string locked = "";
+        try { locked = LockedEntries(path); } catch { }
+        return holders.Length == 0 ? locked : locked.Length == 0 ? holders : holders + "; " + locked;
+    }
+
+    /// <summary>
+    /// Which entries refuse an exclusive open (a handle without FILE_SHARE_* is open on them). The Restart Manager
+    /// often cannot say who (access denied), and it never sees a process's working directory - so when a directory
+    /// has NO locked file the likely holder is a directory handle or another process's cwd, and the message says so.
+    /// </summary>
+    private static string LockedEntries(string path)
+    {
+        if (File.Exists(path)) return IsLocked(path) ? "file is open elsewhere" : "";
+        if (!Directory.Exists(path)) return "";
+        var locked = new List<string>();
+        int seen = 0;
+        foreach (var f in Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories))
+        {
+            if (++seen > MaxFiles) break;
+            if (IsLocked(f)) locked.Add(Path.GetRelativePath(path, f));
+            if (locked.Count >= 5) break;
+        }
+        return locked.Count > 0
+            ? "locked files: " + string.Join(", ", locked)
+            : "no file is locked (a directory handle, or a process using it as its working directory)";
+    }
+
+    private static bool IsLocked(string file)
+    {
+        try { using var _ = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.None); return false; }
+        catch (IOException) { return true; }
+        catch (UnauthorizedAccessException) { return false; }
     }
 
     private const int ErrorMoreData = 234;
