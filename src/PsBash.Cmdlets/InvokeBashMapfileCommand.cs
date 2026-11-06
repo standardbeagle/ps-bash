@@ -81,11 +81,19 @@ public sealed class InvokeBashMapfileCommand : PSCmdlet
     [Parameter(ValueFromPipeline = true)]
     public PSObject? InputObject { get; set; }
 
-    private readonly List<PSObject> _pipeline = new();
+    // The input as ONE text stream, built as records arrive. Keeping the records themselves (PSObjects with note
+    // properties, several KB each) cost ~100x the data for `mapfile -t a < big`; only their text is needed.
+    private readonly System.Text.StringBuilder _stream = new();
+    private bool _lastNeedsNewline;
 
     protected override void ProcessRecord()
     {
-        if (InputObject != null) _pipeline.Add(InputObject);
+        if (InputObject == null) return;
+        // A record is a line: the PREVIOUS record gets its newline now (it was not the last), unless its text already ended with one.
+        if (_lastNeedsNewline) _stream.Append('\n');
+        string text = BashRuntime.GetBashText(InputObject).Replace("\r\n", "\n");
+        _stream.Append(text);
+        _lastNeedsNewline = !text.EndsWith('\n');
     }
 
     protected override void EndProcessing()
@@ -178,16 +186,10 @@ public sealed class InvokeBashMapfileCommand : PSCmdlet
         // at the delimiter like bash: empty records are kept, an unterminated tail is the last element, and without
         // -t every element keeps its delimiter. (A non-newline delimiter leaves the records' joins as plain newlines.)
         var lines = new List<string>();
-        var sbAll = new System.Text.StringBuilder();
-        for (int r = 0; r < _pipeline.Count; r++)
-        {
-            string text = BashRuntime.GetBashText(_pipeline[r]).Replace("\r\n", "\n");
-            sbAll.Append(text);
-            // A record is a line: it ends with a newline unless the text already does (or it is the last
-            // record of a stream cut at some other delimiter).
-            if (!text.EndsWith('\n') && (delim == '\n' || r < _pipeline.Count - 1)) sbAll.Append('\n');
-        }
-        string stream = sbAll.ToString();
+        // The last record ends with a newline unless its text already did (or the stream is cut at some other delimiter).
+        if (_lastNeedsNewline && delim == '\n') _stream.Append('\n');
+        string stream = _stream.ToString();
+        _stream.Clear();
         int startAt = 0;
         while (startAt < stream.Length)
         {
