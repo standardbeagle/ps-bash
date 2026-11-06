@@ -2294,7 +2294,7 @@ public class PsEmitterTests
         // Assignment command-sub preserves internal newlines and strips trailing ones
         // (bash), instead of the array $OFS-joining with a space (which flattened the
         // file to one line). A bare value, not wrapped in a "…" string (TryEmitJoinedValue).
-        Assert.Equal("$env:VAR = $((@(Invoke-BashCat file | ConvertTo-BashCapture) -join [string][char]10) -replace '(\\r?\\n)+$','')", result);
+        Assert.Equal("$env:VAR = $((@(Invoke-BashCat file | ConvertTo-BashCapture -Join)))", result);
     }
 
     [Fact]
@@ -2317,7 +2317,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("dir=$(pwd)");
 
-        Assert.Equal("$env:dir = $((@(Invoke-BashPwd | ConvertTo-BashCapture) -join [string][char]10) -replace '(\\r?\\n)+$','')", result);
+        Assert.Equal("$env:dir = $((@(Invoke-BashPwd | ConvertTo-BashCapture -Join)))", result);
     }
 
     [Fact]
@@ -2993,7 +2993,7 @@ public class PsEmitterTests
         // `for f in $(echo a b c)` ran ONCE over "a b c": the capture array only splits on lines.
         var result = PsEmitter.Transpile("for f in $(echo a b c); do echo \"<$f>\"; done");
 
-        Assert.Contains("foreach ($f in @(ConvertTo-BashWords $((@(Invoke-BashEcho a b c | ConvertTo-BashCapture)", result);
+        Assert.Contains("foreach ($f in @(ConvertTo-BashWords $((@(Invoke-BashEcho a b c | ConvertTo-BashCapture -Join", result);
     }
 
     [Fact]
@@ -3031,7 +3031,7 @@ public class PsEmitterTests
         // elided) exactly like an unquoted $var operand (RC-7).
         var result = PsEmitter.Transpile("printf '%s\\n' $(echo a b)");
 
-        Assert.StartsWith("& { $__bashsplat0 = @(ConvertTo-BashWords $((@(Invoke-BashEcho a b | ConvertTo-BashCapture)", result);
+        Assert.StartsWith("& { $__bashsplat0 = @(ConvertTo-BashWords $((@(Invoke-BashEcho a b | ConvertTo-BashCapture -Join", result);
         Assert.EndsWith("; Invoke-BashPrintf '%s\\n' @__bashsplat0 }", result);
     }
 
@@ -4807,7 +4807,7 @@ public class PsEmitterTests
         // inner "hi there" is not nested in anything (see TryEmitJoinedWord: PowerShell finds
         // a string's $( ) end by naive paren counting, so command text never goes in one).
         Assert.Equal(
-            "Invoke-BashEcho $((@(Invoke-BashEcho \"hi there\" | ConvertTo-BashCapture) -join [string][char]10) -replace '(\\r?\\n)+$','')",
+            "Invoke-BashEcho $((@(Invoke-BashEcho \"hi there\" | ConvertTo-BashCapture -Join)))",
             result);
     }
 

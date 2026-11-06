@@ -2048,12 +2048,20 @@ public static partial class PsEmitter
     /// <summary>The records of a read loop's own input redirect, as an array expression: the file's
     /// lines (`/dev/null` = none) or the here-string / heredoc body — the same feeds
     /// <see cref="ApplyCompoundRedirects"/> pipes in.</summary>
+    /// <summary>
+    /// Stage that turns each input record into its plain text BEFORE the loop collects them with <c>@(.)</c>. A record is
+    /// a PSObject carrying BashText/NoTrailingNewline note properties (several KB each on a PowerShell object); holding
+    /// 100k of them for a <c>while read</c> over a file cost ~520 MB for 5 MB of text. The loop reads each record as
+    /// <c>BashText</c> else its string, so a plain string is the same input at ~100 bytes per line.
+    /// </summary>
+    private const string RecordText =
+        "ForEach-Object { if ($null -ne $_ -and $_.PSObject.Properties['BashText']) { \"$($_.BashText)\" } else { \"$_\" } }";
     private static string ReadLoopSource(Redirect input)
     {
         if (input.Here is { } here)
-            return $"@({EmitHereDocLiteral(here)} | Emit-BashLine)";
+            return $"@({EmitHereDocLiteral(here)} | Emit-BashLine | {RecordText})";
         var target = EmitInputRedirectTarget(input.Target);
-        return target == "$null" ? "@()" : $"@(Invoke-BashCat {target} -RawStdinBytes)";
+        return target == "$null" ? "@()" : $"@(Invoke-BashCat {target} -RawStdinBytes | {RecordText})";
     }
 
     /// <param name="varNames">The <c>read</c> variables, bound per line as loop variables.</param>
@@ -6295,7 +6303,7 @@ public static partial class PsEmitter
         // the backtick escape and the inner string ends early ("The string is
         // missing the terminator"). Hit git-completion.bash, where a command sub
         // nested two double-quote levels deep broke the whole file's parse.
-        return $"{CommandSubStringPrefix}{PipelineHead(body, inner)} | ConvertTo-BashCapture) -join [string][char]10) -replace '(\\r?\\n)+$','')";
+        return $"{CommandSubStringPrefix}{PipelineHead(body, inner)} | ConvertTo-BashCapture -Join)))";
     }
 
     private static string EmitProcessSub(WordPart.ProcessSub ps)

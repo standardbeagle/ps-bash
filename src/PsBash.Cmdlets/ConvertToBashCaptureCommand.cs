@@ -28,8 +28,24 @@ public sealed class ConvertToBashCaptureCommand : PSCmdlet
     [Parameter(ValueFromPipeline = true)]
     public PSObject? InputObject { get; set; }
 
+    /// <summary>
+    /// Quoted / assignment context: emit ONE string (lines joined by a newline, trailing newlines stripped, as bash
+    /// does) instead of one string per line. The caller used to <c>@(…) -join "`n"</c> then <c>-replace '(\r?\n)+$'</c>,
+    /// which held the line array, the joined text and the replaced copy at once (~15x the data at peak for
+    /// <c>x=$(cat big)</c>); this keeps only the builder and the final string.
+    /// </summary>
+    [Parameter]
+    public SwitchParameter Join { get; set; }
+
     private readonly StringBuilder _pending = new();
+    private StringBuilder? _joined;
     private bool _hasPending;
+
+    private void Emit(string line)
+    {
+        if (!Join) { WriteObject(line); return; }
+        (_joined ??= new StringBuilder()).Append(line).Append('\n');
+    }
 
     protected override void ProcessRecord()
     {
@@ -49,13 +65,23 @@ public sealed class ConvertToBashCaptureCommand : PSCmdlet
             text = text[..^1];
         _pending.Append(text);
 
-        WriteObject(_pending.ToString());
+        Emit(_pending.ToString());
         _pending.Clear();
         _hasPending = false;
     }
 
     protected override void EndProcessing()
     {
-        if (_hasPending) WriteObject(_pending.ToString());
+        if (_hasPending) Emit(_pending.ToString());
+        if (!Join) return;
+
+        // Same as -replace '(\r?\n)+$','': drop every trailing newline (and the CR before each).
+        var sb = _joined ?? new StringBuilder();
+        while (sb.Length > 0 && sb[^1] == '\n')
+        {
+            sb.Length--;
+            if (sb.Length > 0 && sb[^1] == '\r') sb.Length--;
+        }
+        WriteObject(sb.ToString());
     }
 }

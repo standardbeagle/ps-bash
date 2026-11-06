@@ -1017,7 +1017,7 @@ public class BashTranspilerTests
         var result = BashTranspiler.Transpile("while read line; do echo $line; done < input.txt");
         // The file must be fed into the loop, not left unbound: the loop header reads it directly
         // (no script block, so `return` in the body still leaves an enclosing function).
-        Assert.StartsWith(":__psbash_l0 foreach ($__psbash_rec0 in @(Invoke-BashCat input.txt -RawStdinBytes))", result);
+        Assert.StartsWith(":__psbash_l0 foreach ($__psbash_rec0 in @(Invoke-BashCat input.txt -RawStdinBytes | ForEach-Object {", result);
     }
 
     [Fact]
@@ -1063,7 +1063,7 @@ public class BashTranspilerTests
     {
         // Cascade repro: the dropped redirect used to also swallow the `| sort` stage.
         var result = BashTranspiler.Transpile("while read a; do echo $a; done < f | sort");
-        Assert.Contains("in @(Invoke-BashCat f -RawStdinBytes))", result);
+        Assert.Contains("in @(Invoke-BashCat f -RawStdinBytes | ForEach-Object {", result);
         Assert.EndsWith("} | Invoke-BashSort", result);
     }
 
