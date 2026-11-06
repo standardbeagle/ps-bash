@@ -367,7 +367,7 @@ status=3
 status=9
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-background background (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-oils-background background (oils): runspace-pool jobs start ~140 ms apart, so completion order differs from the 60 ms the case allows; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 

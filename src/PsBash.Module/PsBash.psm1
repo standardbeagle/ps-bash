@@ -2823,7 +2823,7 @@ function Invoke-BashBackground {
     # different value) — only for an -Isolated job that found no host of its own to run in: the environment is
     # process-wide, so the diff cannot tell the job's writes from the parent's, and applying it to a job that
     # changes nothing undid the parent's assignments. It also reports the body's exit status for `wait`.
-    $status = [hashtable]::Synchronized(@{ Code = 0 })
+    $status = [hashtable]::Synchronized(@{ Code = 0; At = 0L })
     $wrapped = @'
 param($__bgStatus, $__bgRestore)
 $__bgBefore = if ($__bgRestore) { [Environment]::GetEnvironmentVariables() } else { @{} }
@@ -2845,6 +2845,7 @@ try {
         }
     }
     $__bgStatus.Code = $__bgCode
+    $__bgStatus.At = [System.Diagnostics.Stopwatch]::GetTimestamp()
 }
 '@
     [void]$ps.AddScript($wrapped).AddArgument($status).AddArgument([bool]$Isolated)
@@ -2902,7 +2903,8 @@ function Invoke-BashWait {
             if (-not (@($script:BashBgJobs) | Where-Object { [string]$_.Id -eq $n })) { Write-BashHostStderr "bash: wait: ${n}: no such job" }
         }
         if ($pool.Count -eq 0) { $global:LASTEXITCODE = 127; return }
-        $done = $pool | Where-Object { $_.AsyncResult.IsCompleted } | Select-Object -First 1
+        # The job that finished FIRST (bash reaps in completion order), not the first one launched.
+        $done = $pool | Where-Object { $_.AsyncResult.IsCompleted } | Sort-Object { if ($_.Status -is [System.Collections.IDictionary] -and $_.Status.At) { $_.Status.At } else { 0 } } | Select-Object -First 1
         if (-not $done) {
             $handles = [System.Threading.WaitHandle[]]@($pool | ForEach-Object { $_.AsyncResult.AsyncWaitHandle })
             $done = $pool[[System.Threading.WaitHandle]::WaitAny($handles)]
