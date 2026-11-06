@@ -190,7 +190,6 @@ wait  # wait for all gives 0
 echo "status=$?"
 ## stdout: status=0
 ## status: 0
-## XFAIL ps-bash gap-oils-background background (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Wait on background process PID
@@ -207,7 +206,6 @@ status=7
 status=9
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-background background (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Wait on multiple specific IDs returns last status
@@ -221,7 +219,6 @@ wait $jid1 $jid2 $jid3  # NOTE: not using %1 %2 %3 syntax on purpose
 echo "status=$?"  # third job I think
 ## stdout: status=7
 ## status: 0
-## XFAIL ps-bash gap-oils-background background (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Async for loop
@@ -271,7 +268,6 @@ end
 status=42
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-background background (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### jobs prints one line per job
@@ -354,7 +350,6 @@ status=0
 status=99
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-background background (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 

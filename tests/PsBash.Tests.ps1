@@ -7005,6 +7005,20 @@ Describe 'Invoke-BashWait' {
             $out[0].NoTrailingNewline | Should -Not -BeTrue
         }
 
+        It 'does not let a background job''s exit end the shell with that status' {
+            # End-to-end check lives in spec/oils/background (exit status of the script); here: wait still reports 0.
+            Invoke-BashBackground { exit 3 }
+            Invoke-BashWait
+            $global:LASTEXITCODE | Should -Be 0
+        }
+
+        It 'names an operand of wait -n that matches no job' {
+            Invoke-BashBackground { Invoke-BashEcho 'x' }
+            $id = $script:BashBgPids[-1].Id
+            $err = & { Invoke-BashWait -n $id 'nojob' 2>&1 } | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] -or "$_" -match 'no such job' }
+            "$err" | Should -Match 'wait: nojob: no such job'
+        }
+
         It 'reports 127 for an unknown job id' {
             Invoke-BashWait 987654 2>$null
             $global:LASTEXITCODE | Should -Be 127

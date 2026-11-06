@@ -2610,7 +2610,9 @@ function Get-BashBgRunspacePool {
         if ($script:BashBgModulePath -and (Test-Path $script:BashBgModulePath)) {
             $iss.ImportPSModule(@($script:BashBgModulePath))
         }
-        $pool = [RunspaceFactory]::CreateRunspacePool(1, 8, $iss, $Host)
+        # No shared host: a job's `exit N` calls PSHost.SetShouldExit, which on the shell's own host ended the whole script with that status (reported to `wait` instead).
+        $pool = [RunspaceFactory]::CreateRunspacePool($iss)
+        [void]$pool.SetMaxRunspaces(8)
         $pool.Open()
         $script:BashBgPool = $pool
     }
@@ -2894,6 +2896,10 @@ function Invoke-BashWait {
         $pool = @($script:BashBgJobs)
         if ($named.Count -gt 0) {
             $pool = @($pool | Where-Object { $j = $_; $named | Where-Object { $_ -eq [string]$j.Id } })
+        }
+        # bash reports each operand that names no job; the status is still 127 when nothing is left to wait for.
+        foreach ($n in $named) {
+            if (-not (@($script:BashBgJobs) | Where-Object { [string]$_.Id -eq $n })) { Write-BashHostStderr "bash: wait: ${n}: no such job" }
         }
         if ($pool.Count -eq 0) { $global:LASTEXITCODE = 127; return }
         $done = $pool | Where-Object { $_.AsyncResult.IsCompleted } | Select-Object -First 1
