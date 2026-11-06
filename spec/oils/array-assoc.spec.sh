@@ -209,7 +209,6 @@ A['x']=1
 echo status=$?
 ## stdout: status=1
 ## status: 0
-## XFAIL ps-bash gap-oils-array-assoc array-assoc (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### associative array and brace expansion
@@ -445,7 +444,6 @@ k=0
 nonexistent=1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array-assoc array-assoc (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### test -v with dynamic parsing
@@ -470,7 +468,6 @@ k=0
 nonexistent=1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array-assoc array-assoc (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### [[ -v assoc[key] ]]
@@ -535,7 +532,6 @@ k=0
 nonexistent=1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array-assoc array-assoc (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### [[ -v assoc[key] ]] syntax errors
