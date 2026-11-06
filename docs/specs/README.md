@@ -23,6 +23,7 @@ Nav starts at /CODE_MAP.md. Keep this index complete — a guard test fails on a
 - [host-lifecycle-contract.md](host-lifecycle-contract.md) — Host Lifecycle Metadata and Ownership Contract
 - [spec-suite.md](spec-suite.md) — fast bash-conformance corpus + runner (DESIGN; in-host execution, executor-slot parallelism, absorbs overlapping tests)
 - [spec-gaps.md](spec-gaps.md) — known bash divergences (XFAIL cases) in the spec corpus, grouped by area
+- [xfail-triage.md](xfail-triage.md) — XFAIL backlog by agent-relevance tier (agent-facing scripting first, interactive-only last)
 - [bash-feature-coverage.md](bash-feature-coverage.md) — measured bash-feature coverage (344-snippet probe vs bash 5.2): what matches, what is fixed, what is open
 - [executor-slots.md](executor-slots.md) — one command per host + launcher-side executor slots (replaces the global exec gate and nested hosts)
 - [shell-fds-and-bash-source.md](shell-fds-and-bash-source.md) — `BASH_SOURCE`, `exec N<file` / `read -u` / `>&N` descriptors, `exec cmd`

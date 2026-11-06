@@ -8267,7 +8267,8 @@ public static partial class PsEmitter
                 // Use Write-Error to set $?=false when negation yields failure so the
                 // chain operators observe the correct success/failure state.
                 var unnegated = negPipelineInChain with { Negated = false };
-                sb.Append(PsBuild.SetExitFromBool(PsBuild.ExitCodeTest(EmitPipeline(unnegated), negate: true)));
+                // The command's own output must still reach stdout (`! echo hi || .` prints hi): run it as a statement, then invert its status.
+                sb.Append(EmitPipeline(unnegated) + "; " + PsBuild.SetExitFromBool("$global:LASTEXITCODE -ne 0"));
             }
             else if (cmd is Command.Pipeline pipeline)
             {
