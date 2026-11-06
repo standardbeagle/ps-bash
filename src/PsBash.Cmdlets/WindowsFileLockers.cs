@@ -24,8 +24,86 @@ internal static class WindowsFileLockers
         try { holders = DescribeCore(path); } catch { }
         string locked = "";
         try { locked = LockedEntries(path); } catch { }
-        return holders.Length == 0 ? locked : locked.Length == 0 ? holders : holders + "; " + locked;
+        string cwds = "";
+        try { cwds = ProcessesWithWorkingDirectoryUnder(path); } catch { }
+        return string.Join("; ", new[] { holders, locked, cwds }.Where(s => s.Length > 0));
     }
+
+    /// <summary>
+    /// "name (pid N, cwd X)" for each OTHER process whose working directory is <paramref name="path"/> or inside it.
+    /// A live process's cwd makes a directory undeletable on Windows yet is invisible to the Restart Manager.
+    /// Reads each process's PEB (x64); a process we cannot open is skipped.
+    /// </summary>
+    private static string ProcessesWithWorkingDirectoryUnder(string path)
+    {
+        if (!Directory.Exists(path) || IntPtr.Size != 8) return "";
+        var root = Path.GetFullPath(path).TrimEnd('\\') + "\\";
+        var found = new List<string>();
+        foreach (var p in System.Diagnostics.Process.GetProcesses())
+        {
+            using (p)
+            {
+                if (p.Id == Environment.ProcessId || p.Id == 0 || p.Id == 4) continue;
+                string? cwd = TryReadWorkingDirectory(p.Id);
+                if (cwd is null) continue;
+                var c = cwd.TrimEnd('\\') + "\\";
+                if (c.StartsWith(root, StringComparison.OrdinalIgnoreCase))
+                {
+                    string name; try { name = p.ProcessName; } catch { name = "?"; }
+                    found.Add($"{name} (pid {p.Id}, cwd {cwd})");
+                    if (found.Count >= 8) break;
+                }
+            }
+        }
+        return found.Count == 0 ? "" : "working directory of: " + string.Join(", ", found);
+    }
+
+    private static string? TryReadWorkingDirectory(int pid)
+    {
+        var h = OpenProcess(ProcessQueryInformation | ProcessVmRead, false, pid);
+        if (h == IntPtr.Zero) return null;
+        try
+        {
+            var pbi = new ProcessBasicInformation();
+            if (NtQueryInformationProcess(h, 0, ref pbi, Marshal.SizeOf<ProcessBasicInformation>(), out _) != 0) return null;
+            var buf = new byte[8];
+            // PEB.ProcessParameters @ +0x20; RTL_USER_PROCESS_PARAMETERS.CurrentDirectory.DosPath (UNICODE_STRING) @ +0x38.
+            if (!ReadProcessMemory(h, pbi.PebBaseAddress + 0x20, buf, 8, out _)) return null;
+            var parameters = (IntPtr)BitConverter.ToInt64(buf, 0);
+            var us = new byte[16];
+            if (!ReadProcessMemory(h, parameters + 0x38, us, 16, out _)) return null;
+            int length = BitConverter.ToUInt16(us, 0);
+            var bufferPtr = (IntPtr)BitConverter.ToInt64(us, 8);
+            if (length == 0 || length > 32000) return null;
+            var chars = new byte[length];
+            if (!ReadProcessMemory(h, bufferPtr, chars, length, out _)) return null;
+            return Encoding.Unicode.GetString(chars);
+        }
+        finally { CloseHandle(h); }
+    }
+
+    private const uint ProcessQueryInformation = 0x0400;
+    private const uint ProcessVmRead = 0x0010;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ProcessBasicInformation
+    {
+        public IntPtr ExitStatus, PebBaseAddress, AffinityMask, BasePriority, UniqueProcessId, InheritedFromUniqueProcessId;
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr OpenProcess(uint access, [MarshalAs(UnmanagedType.Bool)] bool inherit, int pid);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool CloseHandle(IntPtr h);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool ReadProcessMemory(IntPtr h, IntPtr address, byte[] buffer, int size, out IntPtr read);
+
+    [DllImport("ntdll.dll")]
+    private static extern int NtQueryInformationProcess(IntPtr h, int infoClass, ref ProcessBasicInformation info, int size, out int returned);
 
     /// <summary>
     /// Which entries refuse an exclusive open (a handle without FILE_SHARE_* is open on them). The Restart Manager

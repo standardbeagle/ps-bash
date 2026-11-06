@@ -26,6 +26,31 @@ public class WindowsFileLockersTests
         finally { try { Directory.Delete(dir, recursive: true); } catch { } }
     }
 
+    [SkippableFact]
+    public void Describe_ADirectoryThatAnotherProcessUsesAsItsCwd_NamesThatProcess()
+    {
+        Skip.IfNot(OperatingSystem.IsWindows(), "working directories pin directories on Windows only");
+        var dir = Directory.CreateTempSubdirectory("ps-bash-lockers-cwd-").FullName;
+        System.Diagnostics.Process? child = null;
+        try
+        {
+            var psi = new System.Diagnostics.ProcessStartInfo("cmd.exe", "/c ping -n 11 127.0.0.1 >nul")
+            {
+                WorkingDirectory = dir, UseShellExecute = false, CreateNoWindow = true,
+            };
+            child = System.Diagnostics.Process.Start(psi)!;
+
+            var described = WindowsFileLockers.Describe(dir);
+
+            Assert.Contains($"pid {child.Id}, cwd", described);
+        }
+        finally
+        {
+            try { child?.Kill(entireProcessTree: true); child?.WaitForExit(5000); } catch { }
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
     private static bool Holds(string described)
         => described.Contains($"pid {Environment.ProcessId}", StringComparison.Ordinal)
            || described.StartsWith(WindowsFileLockers.ProtectedHolder, StringComparison.Ordinal)

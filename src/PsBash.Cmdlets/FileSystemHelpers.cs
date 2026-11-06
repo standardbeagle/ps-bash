@@ -536,7 +536,8 @@ internal static class FileSystemHelpers
                     // reading, closed only by its finalizer) blocks the delete on Windows but never on bash:
                     // release those first, then back off 100..500 ms (~9 s in all) for an external scanner.
                     // Bounded: a finalizer closing a handle with a pending synchronous read can block for good.
-                    System.Threading.Tasks.Task.Run(() => { GC.Collect(); GC.WaitForPendingFinalizers(); }).Wait(2000);
+                    if (attempt <= 3)
+                        System.Threading.Tasks.Task.Run(() => { GC.Collect(); GC.WaitForPendingFinalizers(); }).Wait(2000);
                     System.Threading.Thread.Sleep(Math.Min(100 * attempt, 500));
                     try { ForceDeleteDirectoryRecursive(dir); return; }
                     catch (IOException) when (attempt < 20) { }
