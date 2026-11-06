@@ -145,7 +145,6 @@ argv=minus
 argv=
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-var-op-test var-op-test (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### $@ ("") and - and +
@@ -164,7 +163,6 @@ argv=minus
 argv=
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-var-op-test var-op-test (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### $@ ("" "") and - and +
@@ -180,7 +178,6 @@ argv=
 argv=plus
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-var-op-test var-op-test (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### $* ("" "") and - and + (IFS=)
@@ -197,7 +194,6 @@ argv=
 argv=plus
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-var-op-test var-op-test (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### "$*" ("" "") and - and + (IFS=)
@@ -214,7 +210,6 @@ argv=minus
 argv=
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-var-op-test var-op-test (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Error when empty
@@ -280,7 +275,6 @@ echo ${#arr[@]}
 1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-var-op-test var-op-test (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### "\z" as arg
@@ -300,14 +294,12 @@ $
 \
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-var-op-test var-op-test (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### "\e" as arg
 echo "${undef-\e}"
 ## stdout: \e
 ## status: 0
-## XFAIL ps-bash gap-oils-var-op-test var-op-test (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### "${array[@]} with set -u (bash is outlier)
@@ -542,7 +534,6 @@ assoc=v
 assoc=plus
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-var-op-test var-op-test (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 

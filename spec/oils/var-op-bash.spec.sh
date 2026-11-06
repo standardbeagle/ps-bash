@@ -14,7 +14,6 @@ empty=
 empty=
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-var-op-bash var-op-bash (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Upper Case with ^ and ^^
@@ -30,7 +29,6 @@ empty=
 empty=
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-var-op-bash var-op-bash (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Case folding - Unicode characters
@@ -152,7 +150,6 @@ aAA ABC DEF
 aaa aBC DEF
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-var-op-bash var-op-bash (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Lower Case glob
@@ -261,7 +258,6 @@ ar
 rx
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-var-op-bash var-op-bash (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### ${var@a} error conditions
@@ -318,7 +314,6 @@ x='x' empty='' x='x'
 r r
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-var-op-bash var-op-bash (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### -o nounset with var ops
@@ -346,7 +341,6 @@ attr = 'a'
 attr = 'a'
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-var-op-bash var-op-bash (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### ${!r@a} with r='a[0]' (attribute for indirect expansion of an array element)
@@ -480,6 +474,5 @@ fail
 fail
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-var-op-bash var-op-bash (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher

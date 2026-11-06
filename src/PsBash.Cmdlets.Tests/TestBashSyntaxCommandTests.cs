@@ -33,6 +33,6 @@ public class TestBashSyntaxCommandTests : IClassFixture<SharedPwshFixture>
 
         var errorRecord = pwsh.Streams.Error.LastOrDefault();
         Assert.NotNull(errorRecord);
-        Assert.Contains("Expected 'fi'", errorRecord.Exception.Message);
+        Assert.Contains("Expected 'then'", errorRecord.Exception.Message);
     }
 }

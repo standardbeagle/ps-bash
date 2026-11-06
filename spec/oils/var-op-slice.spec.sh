@@ -15,7 +15,6 @@ echo ${#v:1:3}
 # zsh actually implements this!
 ## stdout:
 ## status: 1
-## XFAIL ps-bash gap-oils-var-op-slice var-op-slice (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Out of range string slice: begin
@@ -128,7 +127,6 @@ assigned
 de
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-var-op-slice var-op-slice (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Slice with an assoc array

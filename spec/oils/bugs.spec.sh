@@ -247,7 +247,6 @@ printf '%u\n' 2147483648
 2147483648
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-bugs bugs (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### autotools as_fn_arith bug in configure
@@ -354,7 +353,6 @@ status=0
 yes
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-bugs bugs (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -375,7 +373,6 @@ fi
 foo
 ## stdout: len=2
 ## status: 0
-## XFAIL ps-bash gap-oils-bugs bugs (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 

@@ -92,10 +92,90 @@ if (-not (Get-Variable -Name BashPositional0 -Scope global -ErrorAction Silently
 # FUNCNAME: the shell functions on the call stack, innermost first (empty at top level). A shell function is a
 # global function with no module; the runtime's own helpers belong to the PsBash module.
 function Get-BashFuncNames {
-    @(Get-PSCallStack | Select-Object -Skip 1 | Where-Object {
+    $names = @(Get-PSCallStack | Select-Object -Skip 1 | Where-Object {
         $c = $_.InvocationInfo.MyCommand
         $c -and $c.CommandType -eq 'Function' -and -not $c.Module -and $c.Name -and $c.Name -notlike 'Invoke-Bash*' -and $c.Name -ne 'prompt'
     } | ForEach-Object { $_.InvocationInfo.MyCommand.Name })
+    # Inside any function the outermost frame is the script itself, named main (empty at top level).
+    if ($names.Count -gt 0) { $names += 'main' }
+    $names
+}
+
+# ${!ref}: the value of the variable NAMED by $ref. $Ref is the value of ref ($null when unset); $RefName is ref's own
+# name (an array `ref` reads as its element 0); $Pos the positional parameters. The target is a variable name, a
+# positional index, a special parameter (@ * # ?), or an array reference (`a[0]`, `a[@]`, `m[key]`).
+# -NameOnly returns the plain variable name the target denotes (for ${!ref:=word}).
+function Get-BashIndirectValue {
+    param([AllowNull()]$Ref, [string]$RefName, [object[]]$Pos = @(), [switch]$NameOnly)
+    if ($null -eq $Ref -and $RefName) {
+        $rv = Get-Variable -Name $RefName -ValueOnly -ErrorAction Ignore
+        if ($null -ne $rv) { $Ref = if ($rv -is [System.Collections.IDictionary]) { $rv['0'] } elseif ($rv -is [array]) { $rv[0] } else { $rv } }
+    }
+    if ($null -eq $Ref -and $RefName -eq 'OPTIND') { $Ref = '1' }
+    $n = [string]$Ref
+    if ($n -eq '') { return $null }
+    if ($NameOnly) { return ($n -replace '\[.*$', '') }
+    if ($n -match '^[0-9]+$') {
+        if ([int]$n -eq 0) { return 'bash' }
+        if ([int]$n -le $Pos.Count) { return [string]$Pos[[int]$n - 1] }
+        return $null
+    }
+    if ($n -eq '@' -or $n -eq '*') { return ($Pos -join ' ') }
+    if ($n -eq '#') { return [string]$Pos.Count }
+    if ($n -eq '?') { return [string]$global:LASTEXITCODE }
+    if ($n -eq 'FUNCNAME') { return ([string]@(Get-BashFuncNames | Where-Object { $_ -ne 'Get-BashIndirectValue' })[0]) }
+    if ($n -eq 'OPTIND' -and $null -eq [System.Environment]::GetEnvironmentVariable('OPTIND') -and $null -eq (Get-Variable -Name OPTIND -ValueOnly -ErrorAction Ignore)) { return '1' }
+    if ($n -match '^([A-Za-z_][A-Za-z0-9_]*)\[(.*)\]$') {
+        $v = Get-Variable -Name $Matches[1] -ValueOnly -ErrorAction Ignore
+        $sub = $Matches[2].Trim('"', "'")
+        if ($null -eq $v) { return $null }
+        if ($v -is [System.Collections.IDictionary]) {
+            if ($sub -eq '@' -or $sub -eq '*') { return (@($v.Values) -join ' ') }
+            return $v[$sub]
+        }
+        if ($sub -eq '@' -or $sub -eq '*') { return (@($v) -join ' ') }
+        if ($sub -match '^-?[0-9]+$') { $i = [int]$sub; if ($i -lt 0) { $i += @($v).Count }; $all = @($v); if ($i -ge 0 -and $i -lt $all.Count) { return $all[$i] } }
+        return $null
+    }
+    if ($n -notmatch '^[A-Za-z_][A-Za-z0-9_]*$') { return $null }
+    $e = [System.Environment]::GetEnvironmentVariable($n)
+    if ($null -ne $e) { return $e }
+    $pv = Get-Variable -Name $n -ValueOnly -ErrorAction Ignore
+    if ($pv -is [System.Collections.IDictionary]) { return $pv['0'] }
+    if ($pv -is [array]) { return $pv[0] }
+    $pv
+}
+
+# set -x: the "+ cmd args" line bash prints on stderr before a command. Words print as bash does: bare when made of
+# safe characters, otherwise single-quoted. The emitter calls this only in scripts that mention set -x.
+function Write-BashXtrace {
+    if (-not $global:__BashXtrace) { return }
+    $words = foreach ($w in $args) {
+        $s = [string]$w
+        if ($s -match '^[A-Za-z0-9_./:+@%=,^~-]+$') { $s } else { "'" + $s.Replace("'", "'\''") + "'" }
+    }
+    Write-BashHostStderr ('+ ' + ($words -join ' '))
+}
+
+# A command word that is only known at run time (`"$@"`, `$cmd`, `"$tool"`) is looked up as bash does: a shell
+# function, then a builtin / ps-bash command (`false`, `true`, `echo`, `test` are not PowerShell commands of
+# those names), then whatever PowerShell can find (a program on PATH). Returns something `&` can call.
+function Resolve-BashCommand {
+    param([string]$Name)
+    if ([string]::IsNullOrEmpty($Name) -or $Name.Contains('/') -or $Name.Contains('\')) { return $Name }
+    if ($Name -eq '[') {
+        # [ ... ]: the closing bracket is not an operand of test.
+        return { $a = @($args); if ($a.Count -gt 0 -and $a[-1] -eq ']') { $a = @($a | Select-Object -First ($a.Count - 1)) }; Invoke-BashTest @a }
+    }
+    if (Get-Command -Name ([WildcardPattern]::Escape($Name)) -CommandType Function -ErrorAction Ignore) { return $Name }
+    switch -CaseSensitive ($Name) {
+        'true'  { return { $global:LASTEXITCODE = 0 } }
+        ':'     { return { $global:LASTEXITCODE = 0 } }
+        'false' { return { $global:LASTEXITCODE = 1 } }
+    }
+    $cmd = Get-Command -Name ('Invoke-Bash' + [WildcardPattern]::Escape($Name)) -CommandType Cmdlet, Function -ErrorAction Ignore
+    if ($cmd) { return $cmd.Name }
+    return $Name
 }
 
 # BASH_SOURCE: the script file (and, while `source` runs, the sourced files above it); empty for `-c`.
@@ -565,6 +645,17 @@ function Write-BashFileRaw {
 
 # --- BashObject Factory ---
 
+function Add-BashArray {
+    param($Current, $Items)
+    if ($Current -is [PsBash.Cmdlets.BashSparseArray]) {
+        $n = $Current.NextIndex
+        foreach ($i in @($Items)) { $Current[$n] = $i; $n++ }
+        return $Current
+    }
+    if ($null -eq $Current) { return ,@($Items) }
+    return ,@(@($Current) + @($Items))
+}
+
 function Set-BashElement {
     <#
     .SYNOPSIS
@@ -573,16 +664,29 @@ function Set-BashElement {
         (a PowerShell array cannot be indexed past its Count). Returns the array/table to assign back.
     #>
     param($__psbashTarget, [string]$__psbashKey, $__psbashValue, [Alias('Append')][switch]$__psbashAppend)
-    if ($__psbashTarget -is [System.Collections.IDictionary]) {
+    $__psbashSparse = $__psbashTarget -is [PsBash.Cmdlets.BashSparseArray]
+    if ($__psbashTarget -is [System.Collections.IDictionary] -and -not $__psbashSparse) {
         $__psbashTarget[$__psbashKey] = if ($__psbashAppend) { "$($__psbashTarget[$__psbashKey])$__psbashValue" } else { $__psbashValue }
         return $__psbashTarget
     }
     $__psbashIdx = 0L
     if (-not [long]::TryParse($__psbashKey, [ref]$__psbashIdx)) { $__psbashIdx = [long](Invoke-BashArith $__psbashKey) }
+    if ($__psbashSparse) {
+        $__psbashAt = $__psbashTarget.Resolve($__psbashIdx)
+        if ($null -eq $__psbashAt) { Write-BashHostStderr "bash: ${__psbashKey}: bad array subscript"; $global:LASTEXITCODE = 1; return $__psbashTarget }
+        $__psbashTarget[$__psbashAt] = if ($__psbashAppend) { "$($__psbashTarget[$__psbashAt])$__psbashValue" } else { $__psbashValue }
+        return $__psbashTarget
+    }
     $__psbashArr = [System.Collections.Generic.List[object]]::new()
     if ($null -ne $__psbashTarget) { $__psbashArr.AddRange([object[]]@($__psbashTarget)) }
     if ($__psbashIdx -lt 0) { $__psbashIdx += $__psbashArr.Count }
     if ($__psbashIdx -lt 0) { Write-BashHostStderr "bash: ${__psbashKey}: bad array subscript"; $global:LASTEXITCODE = 1; return ,$__psbashArr.ToArray() }
+    if ($__psbashIdx -gt $__psbashArr.Count) {
+        # A gap: a dense PowerShell array cannot hold it, so the array becomes a sparse one.
+        $__psbashSp = [PsBash.Cmdlets.BashSparseArray]::FromList($__psbashArr)
+        $__psbashSp[$__psbashIdx] = if ($__psbashAppend) { "$($__psbashValue)" } else { $__psbashValue }
+        return $__psbashSp
+    }
     while ($__psbashArr.Count -le $__psbashIdx) { $__psbashArr.Add($null) }
     $__psbashArr[[int]$__psbashIdx] = if ($__psbashAppend) { "$($__psbashArr[[int]$__psbashIdx])$__psbashValue" } else { $__psbashValue }
     return ,$__psbashArr.ToArray()
@@ -2649,11 +2753,12 @@ if (-not $__bashVer -or ($__bashVer.Major + $__bashVer.Minor) -eq 0) {
     } catch { $null }
 }
 if (-not $__bashVer -or ($__bashVer.Major + $__bashVer.Minor) -eq 0) { $__bashVer = [version]'0.8.0' }
-# The real ps-bash module version (distinct from the emulated $BASH_VERSION above). Binary cmdlets
+# $BASH_VERSION / BASH_VERSINFO claim bash 5.2 compatibility, like a browser User-Agent claiming Mozilla/5.0: scripts gate on `>= 4` (mapfile, assoc arrays, ${x,,}) and ps-bash supports those. The real ps-bash module version (distinct from the emulated $BASH_VERSION). Binary cmdlets
 # and runtime functions read this for `<cmd> --version`, so tooling can identify it is ps-bash.
 $global:PsBashVersion = $__bashVer.ToString()
-$global:BashVersion = "$($__bashVer.Major).$($__bashVer.Minor).0(1)-release"
-$global:BashVersionInfo = @($__bashVer.Major, $__bashVer.Minor, 0, 1, 'release', "$($__bashVer.Major).$($__bashVer.Minor).0")
+$global:BashVersion = '5.2.37(1)-release'
+$global:BashVersionInfo = @(5, 2, 37, 1, 'release', 'x86_64-pc-ps-bash')
+$global:BASH_VERSINFO = $global:BashVersionInfo
 # bash default shell flags: h (hash commands), B (brace expansion enabled)
 $global:BashFlags = 'hB'
 $global:BashLastArg = ''
@@ -2668,8 +2773,15 @@ function Invoke-BashBackground {
         [scriptblock]$Command,
         # The emitter found the job able to change shell state (assignments, cd, options, functions): it
         # must not share this process's environment and cwd, so it gets a host of its own.
-        [switch]$Isolated
+        [switch]$Isolated,
+        # For-loop variables the body reads, as of the launch (the loop moves on before the job runs).
+        [hashtable]$Vars
     )
+
+    if ($Vars -and $Vars.Count) {
+        $__bgPrefix = ($Vars.GetEnumerator() | ForEach-Object { '$' + $_.Key + " = '" + ("$($_.Value)" -replace "'", "''") + "'" }) -join '; '
+        $Command = [scriptblock]::Create($__bgPrefix + "`n" + $Command.ToString())
+    }
 
     # PSBASH_BG_MODE=process: run the job in its own ps-bash-host process (private env/cwd, real pid).
     # -Isolated jobs take it unless PSBASH_BG_MODE=inproc; other jobs stay in-process until it meets the
@@ -2718,7 +2830,9 @@ try {
 '@ + "`n" + $Command.ToString() + "`n" + @'
     $__bgOk = $true
 } finally {
-    $__bgCode = if ($__bgOk) { $x = $global:LASTEXITCODE; if ($null -eq $x) { 0 } else { [int]$x } } else { 1 }
+    # A body that ended early (`exit N` stops the pipeline) leaves its status in LASTEXITCODE; an error with none is 1.
+    $x = $global:LASTEXITCODE
+    $__bgCode = if ($__bgOk) { if ($null -eq $x) { 0 } else { [int]$x } } elseif ($x) { [int]$x } else { 1 }
     $__bgAfter = if ($__bgRestore) { [Environment]::GetEnvironmentVariables() } else { @{} }
     foreach ($__bgKey in @($__bgAfter.Keys) + @($__bgBefore.Keys)) {
         $__bgNew = $__bgAfter[$__bgKey]
@@ -2773,6 +2887,26 @@ function Invoke-BashWait {
     if ($Arguments -contains '--help') { return Show-BashHelp 'wait' }
 
     $global:LASTEXITCODE = 0
+    # wait -n [-f] [id ...]: return when the NEXT of the named jobs (default: every job) finishes, with its status;
+    # 127 when there is no job to wait for.
+    if ($Arguments -contains '-n') {
+        $named = @($Arguments | Where-Object { $_ -notmatch '^-' })
+        $pool = @($script:BashBgJobs)
+        if ($named.Count -gt 0) {
+            $pool = @($pool | Where-Object { $j = $_; $named | Where-Object { $_ -eq [string]$j.Id } })
+        }
+        if ($pool.Count -eq 0) { $global:LASTEXITCODE = 127; return }
+        $done = $pool | Where-Object { $_.AsyncResult.IsCompleted } | Select-Object -First 1
+        if (-not $done) {
+            $handles = [System.Threading.WaitHandle[]]@($pool | ForEach-Object { $_.AsyncResult.AsyncWaitHandle })
+            $done = $pool[[System.Threading.WaitHandle]::WaitAny($handles)]
+        }
+        Complete-BashBgJob -Job $done
+        $code = if ($null -eq $done.ExitCode) { 0 } else { [int]$done.ExitCode }
+        [void]$script:BashBgJobs.Remove($done)
+        $global:LASTEXITCODE = $code
+        return
+    }
     if ($Arguments.Count -gt 0) {
         # wait $! / wait <id>: wait for a synthetic background-job id; wait %N: the
         # bash job number (positional, 1-based) shown by `jobs` — NOT the id.
@@ -2997,6 +3131,7 @@ $script:BashHelpSpecs = @{
     'mktemp'   = 'Create a temporary file or directory.'
     'type'     = 'Display information about command type.'
     'bash'     = 'Invoke ps-bash transpiler for nested bash execution.'
+    'sh'       = 'Run a script with ps-bash, as bash does for sh.'
     'wait'     = 'Wait for background processes to finish.'
     'jobs'     = 'List background processes and their status.'
     'fg'       = 'Bring a background job to the foreground.'
@@ -3317,6 +3452,7 @@ Set-Alias -Name 'readlink' -Value 'Invoke-BashReadlink' -Force -Scope Global -Op
 Set-Alias -Name 'mktemp'   -Value 'Invoke-BashMktemp'   -Force -Scope Global -Option AllScope
 Set-Alias -Name 'type'     -Value 'Invoke-BashType'     -Force -Scope Global -Option AllScope
 Set-Alias -Name 'bash'     -Value 'Invoke-BashBash'     -Force -Scope Global -Option AllScope
+Set-Alias -Name 'sh'       -Value 'Invoke-BashBash'     -Force -Scope Global -Option AllScope
 Set-Alias -Name 'wait'     -Value 'Invoke-BashWait'     -Force -Scope Global -Option AllScope
 Set-Alias -Name 'jobs'     -Value 'Invoke-BashJobs'     -Force -Scope Global -Option AllScope
 Set-Alias -Name 'fg'       -Value 'Invoke-BashFg'       -Force -Scope Global -Option AllScope
@@ -3324,6 +3460,7 @@ Set-Alias -Name 'bg'       -Value 'Invoke-BashBg'       -Force -Scope Global -Op
 Set-Alias -Name 'shift'    -Value 'Invoke-BashShift'    -Force -Scope Global -Option AllScope
 Set-Alias -Name 'getopts' -Value 'Invoke-BashGetopts' -Force -Scope Global -Option AllScope
 Set-Alias -Name 'flock' -Value 'Invoke-BashFlock' -Force -Scope Global -Option AllScope
+Set-Alias -Name 'timeout' -Value 'Invoke-BashTimeout' -Force -Scope Global -Option AllScope
 Set-Alias -Name 'times' -Value 'Invoke-BashTimes' -Force -Scope Global -Option AllScope
 Set-Alias -Name 'hash' -Value 'Invoke-BashHash' -Force -Scope Global -Option AllScope
 Set-Alias -Name 'umask' -Value 'Invoke-BashUmask' -Force -Scope Global -Option AllScope

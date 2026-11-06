@@ -22,6 +22,8 @@ public sealed class IpcWorkerExecutorSlotTests
         private Task? _loop;
         private readonly bool _busy;
         public int Commands;
+        /// <summary>Completes when this host has received its second command (a retry), so tests wait on the event, not the clock.</summary>
+        public readonly TaskCompletionSource SecondCommand = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public string Endpoint { get; }
 
         public SlotHost(string endpoint, bool busy)
@@ -53,7 +55,7 @@ public sealed class IpcWorkerExecutorSlotTests
                 var mode = await HostProtocol.ReadRequestAsync(stream, _cts.Token);
                 if (mode is Mode.Command)
                 {
-                    Interlocked.Increment(ref Commands);
+                    if (Interlocked.Increment(ref Commands) >= 2) SecondCommand.TrySetResult();
                     if (_busy)
                     {
                         await HostProtocol.WriteExitAsync(stream, HostProtocol.ExecBusyExitCode, _cts.Token);
@@ -120,12 +122,16 @@ public sealed class IpcWorkerExecutorSlotTests
         await busy.StartAsync();
         await using var worker = IpcWorker.ConnectForTest("unix", baseEndpoint, Path.Combine(Path.GetTempPath(), "ps-bash-host-fake"));
         worker.AssumeSlotHostsReachableForTest = true;
-        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(400));
+        // Safety net only: the test cancels itself as soon as the busy host has seen the retry.
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
 
         // A very long spill delay: the launcher must back off on slot 0, never move, never run the command.
         await WithSpillDelay("600000", async () =>
         {
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => worker.QueryAsync("echo x", cts.Token));
+            var query = worker.QueryAsync("echo x", cts.Token);
+            await busy.SecondCommand.Task.WaitAsync(TimeSpan.FromSeconds(30));   // the retry arrived: no clock race
+            cts.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => query);
             return 0;
         });
 

@@ -5,7 +5,6 @@
 echo ${a&}
 ## stdout:
 ## status: 1
-## XFAIL ps-bash gap-oils-var-sub var-sub (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Braced block inside ${}

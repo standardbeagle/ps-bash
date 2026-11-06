@@ -149,6 +149,13 @@ public static class BashPattern
             return $"(?<{x}>{any})(?=(?<{t}>.*))(?<!(?=(?:{list})\\k<{t}>\\z)\\k<{x}>)";
         }
 
+        // A class .NET rejects (`[^]` after the empty negation, a reversed range `[z-a]`) matches nothing, as in bash.
+        private static string ValidClass(string cls)
+        {
+            try { _ = new Regex(cls); return cls; }
+            catch (ArgumentException) { return "(?!)"; }
+        }
+
         // [ … ] at pos. `!` or `^` first negates; a `]` first is literal; [:name:] classes map to
         // their .NET ranges. False (nothing consumed) when unclosed: the `[` is literal.
         private bool TryBracket(ref int pos, out string cls)
@@ -156,12 +163,13 @@ public static class BashPattern
             cls = "";
             int p = pos + 1;
             var sb = new StringBuilder("[");
-            if (p < raw.Length && raw[p] is '!' or '^') { sb.Append('^'); p++; }
+            bool negated = false;
+            if (p < raw.Length && raw[p] is '!' or '^') { sb.Append('^'); p++; negated = true; }
             bool first = true;
             while (p < raw.Length)
             {
                 char c = raw[p];
-                if (c == ']' && !first) { sb.Append(']'); pos = p + 1; cls = sb.ToString(); return true; }
+                if (c == ']' && (!first || negated)) { sb.Append(']'); pos = p + 1; cls = ValidClass(sb.ToString()); return true; }
                 first = false;
                 if (c == '[' && p + 1 < raw.Length && raw[p + 1] == ':')
                 {

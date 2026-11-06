@@ -54,7 +54,23 @@ public sealed class InvokeBashBashCommand : PSCmdlet
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
+    /// <summary>The script text of `echo cmd | bash`, `bash <<< cmd`, `curl … | sh`: bash reads its program from stdin.</summary>
+    [Parameter(ValueFromPipeline = true)]
+    [AllowNull]
+    public PSObject? InputObject { get; set; }
+
+    private System.Text.StringBuilder? _stdinScript;
+
     protected override void ProcessRecord()
+    {
+        if (InputObject is null) return;
+        _stdinScript ??= new System.Text.StringBuilder();
+        var text = BashRuntime.GetBashText(InputObject);
+        _stdinScript.Append(text);
+        if (!text.EndsWith('\n')) _stdinScript.Append('\n');
+    }
+
+    protected override void EndProcessing()
     {
         // Reconstruct the argument vector exactly as the oracle saw it. The
         // binder may have consumed the bare token "-c <value>" into the C
@@ -69,6 +85,15 @@ public sealed class InvokeBashBashCommand : PSCmdlet
         if (Arguments != null)
         {
             forwarded.AddRange(Arguments);
+        }
+        bool stdinWasScript = false;
+        // No -c and no script operand: the program is on stdin. A nested ps-bash given it as -c runs the same text.
+        if (_stdinScript is { Length: > 0 } && !forwarded.Contains("-c") && forwarded.All(a => a.StartsWith('-') && a.Length > 1 || a == "-s"))
+        {
+            forwarded.RemoveAll(a => a is "-s" or "-");
+            forwarded.Add("-c");
+            forwarded.Add(_stdinScript.ToString());
+            stdinWasScript = true;
         }
 
         // Only flags in bash's OPTION zone (before the script path / -c string) are bash's own;
@@ -136,7 +161,9 @@ public sealed class InvokeBashBashCommand : PSCmdlet
             // REPL-mode child sees EOF and exits instead of hanging on a read,
             // and a nested ps-bash that itself wedges can no longer block the
             // parent host runspace forever (the #3 wedge, recursively).
-            var spawn = BashRuntime.RunChildProcess(psi);
+            // Piped text that was not itself the program (`echo hi | bash -c cat`) is the child's stdin.
+            string? childStdin = _stdinScript is { Length: > 0 } && !stdinWasScript ? _stdinScript.ToString() : null;
+            var spawn = BashRuntime.RunChildProcess(psi, null, childStdin);
             stdout = spawn.Stdout;
             stderr = spawn.Stderr;
             exitCode = spawn.ExitCode;

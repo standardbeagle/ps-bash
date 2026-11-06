@@ -210,17 +210,13 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
         }
     }
 
-    /// <param name="batchOutput">
-    /// Coalesce stdout into large chunks (S1). Only the IPC path passes true. The
-    /// <see cref="OutputCallback"/> path must NOT batch: its documented convention is
-    /// ONE CALL PER LINE, and in-process consumers (and tests) index on that granularity —
-    /// batching there silently turned N line-callbacks into one multi-line callback. It
-    /// would also buy nothing, since that path has no IPC frame to amortize.
-    /// </param>
     /// <summary>
     /// A new invocation starts with nothing `readonly`. The Cmdlets assembly is not referenced by the host (it is
     /// loaded into the runspace), so the call goes through reflection and is a no-op until the assembly is loaded.
     /// </summary>
+    [System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage(
+        "Trimming", "IL2075",
+        Justification = "Best-effort lookup of a type in an assembly that is loaded into the runspace at run time; if it is trimmed away the call is a no-op.")]
     private static void ClearReadonlyNames()
     {
         try
@@ -233,6 +229,13 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
         catch (Exception) { /* best effort: a stale readonly name only makes a later `unset` refuse */ }
     }
 
+    /// <param name="batchOutput">
+    /// Coalesce stdout into large chunks (S1). Only the IPC path passes true. The
+    /// <see cref="OutputCallback"/> path must NOT batch: its documented convention is
+    /// ONE CALL PER LINE, and in-process consumers (and tests) index on that granularity —
+    /// batching there silently turned N line-callbacks into one multi-line callback. It
+    /// would also buy nothing, since that path has no IPC frame to amortize.
+    /// </param>
     private int RunCommand(string command, Action<string>? output, Action<string>? errorOutput,
                            bool batchOutput,
                            IReadOnlyList<KeyValuePair<string, string>>? environment = null,
@@ -637,7 +640,13 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
                     || ex.InnerException?.Data["psbash.reported"] is true;
                 if (!reported) deliverError($"ps-bash: {ex.Message}");
                 _ps.Commands.Clear();
-                return 1;
+                // The expansion error carries bash's status (127 for ${x?} / unbound variable, 1 for a bad substitution).
+                int paramStatus = ex.ErrorRecord?.Exception?.Data["psbash.exitcode"] as int?
+                    ?? ex.InnerException?.Data["psbash.exitcode"] as int? ?? 1;
+                // 127 is the `-c` status; a script file or stdin exits 1 for the same error.
+                if (paramStatus == 127 && Environment.GetEnvironmentVariable("PSBASH_DASH_C") != "1")
+                    paramStatus = 1;
+                return paramStatus;
             }
 
             // DataAdded can lag the synchronous Invoke() return for the final

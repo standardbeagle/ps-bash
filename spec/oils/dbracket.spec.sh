@@ -56,7 +56,6 @@ false
 [[ foo.py =~ * ]] && echo true
 ## stdout:
 ## status: 2
-## XFAIL ps-bash gap-oils-dbracket dbracket (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### [[ has no word splitting
@@ -114,7 +113,6 @@ false
 [[ True || '' && '' ]] && echo true
 ## stdout: true
 ## status: 0
-## XFAIL ps-bash gap-oils-dbracket dbracket (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### precedence of && and || in a command context
@@ -141,7 +139,6 @@ true
 false
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-dbracket dbracket (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Hex literals with -eq
@@ -194,7 +191,6 @@ true
 true
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-dbracket dbracket (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### [[ compare with literal -f (compare with test-builtin.test.sh)
@@ -304,7 +300,6 @@ status=0
 status=1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-dbracket dbracket (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### more tilde expansion
@@ -332,7 +327,6 @@ fnmatch=0
 fnmatch=0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-dbracket dbracket (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### special chars
@@ -386,7 +380,6 @@ hex=0
 baseN=0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-dbracket dbracket (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### [[ with unquoted empty var (compare with test-builtin.test.sh)
@@ -496,7 +489,6 @@ true
 true
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-dbracket dbracket (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### -eq coercion produces weird results

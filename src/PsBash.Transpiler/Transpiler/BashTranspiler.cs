@@ -237,9 +237,14 @@ public static class BashTranspiler
 
     private const int TrapEpiloguePreludeLineCount = 1;
 
+    // The handler's own status never becomes the script's (bash ignores an EXIT trap's return value), and a bare
+    // `exit` inside it uses the status from BEFORE the handler ran: record it in __BashPreTrapStatus (read by the
+    // emitted bare `exit`), and put it back when the handler finishes.
     private const string TrapEpilogueClose =
         "} finally { " +
-        "try { if ((Test-Path Variable:Global:__BashTrapEXIT) -and $global:__BashTrapEXIT) { & $global:__BashTrapEXIT } } catch { } " +
+        "$__psbash_xs = $global:LASTEXITCODE; $global:__BashPreTrapStatus = $__psbash_xs; " +
+        "try { if ((Test-Path Variable:Global:__BashTrapEXIT) -and $global:__BashTrapEXIT) { & $global:__BashTrapEXIT } } catch { }; " +
+        "$global:__BashPreTrapStatus = $null; $global:LASTEXITCODE = $__psbash_xs " +
         "}";
 
     /// <summary>
@@ -256,7 +261,7 @@ public static class BashTranspiler
         if (string.IsNullOrEmpty(bash)) return false;
         // `trap 'body' EXIT` / `trap handler ERR` / `trap - 0` etc.
         if (System.Text.RegularExpressions.Regex.IsMatch(
-                bash, @"\btrap\b[^\n;|&]*\b(EXIT|EXIT_SIGNAL|ERR|0)\b",
+                bash, @"\btrap\s+(?:'[^']*'|""[^""]*""|[^\s'""]+)[^\n;|&]*\b(EXIT|EXIT_SIGNAL|ERR|0)\b",
                 System.Text.RegularExpressions.RegexOptions.IgnoreCase))
             return true;
         // `trap 'body'` with no signal operand (defaults to EXIT).

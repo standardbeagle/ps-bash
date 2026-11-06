@@ -117,6 +117,32 @@ internal static class BashFdTable
     }
 
     /// <summary>
+    /// <c>read -u N -d DELIM</c> / <c>-N COUNT</c>: characters up to the first <paramref name="delim"/> (consumed, not
+    /// returned) or at most <paramref name="limit"/> characters (-1 = unbounded). Null at end of file with nothing read;
+    /// <paramref name="terminated"/> is false when the data ran out before the delimiter or count was reached.
+    /// </summary>
+    public static string? ReadRecord(int fd, char? delim, int limit, out bool terminated)
+    {
+        StreamReader reader;
+        lock (Gate)
+        {
+            if (!Fds.TryGetValue(fd, out var h)) throw new InvalidOperationException($"{fd}: invalid file descriptor: Bad file descriptor");
+            reader = h.Reader ?? throw new InvalidOperationException($"{fd}: Bad file descriptor");
+        }
+        var sb = new StringBuilder();
+        terminated = false;
+        while (limit < 0 || sb.Length < limit)
+        {
+            int c = reader.Read();
+            if (c < 0) return sb.Length == 0 ? null : sb.ToString();
+            if (delim is char d && c == d) { terminated = true; return sb.ToString(); }
+            sb.Append((char)c);
+        }
+        terminated = true;
+        return sb.ToString();
+    }
+
+    /// <summary>
     /// Write text to a descriptor opened for writing. Returns 0 once written to a file; 1 or 2 when the descriptor
     /// is a duplicate of the shell's stdout/stderr (the caller sends it down that stream). Throws when the descriptor
     /// is not open for writing.

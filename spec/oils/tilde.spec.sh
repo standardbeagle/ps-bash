@@ -7,7 +7,6 @@ a=~/src
 echo $a
 ## stdout: /home/bob/src
 ## status: 0
-## XFAIL ps-bash gap-oils-tilde tilde (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### ~ expansion in readonly assignment
@@ -18,7 +17,6 @@ readonly const=~/src
 echo $const
 ## stdout: /home/bob/src
 ## status: 0
-## XFAIL ps-bash gap-oils-tilde tilde (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### No ~ expansion in dynamic assignment
@@ -39,7 +37,6 @@ HOME=/home/bob
 echo x=~
 ## stdout: x=/home/bob
 ## status: 0
-## XFAIL ps-bash gap-oils-tilde tilde (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### other user
@@ -62,8 +59,8 @@ echo ${undef:-"~"}
 ~
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-tilde tilde (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
+## XFAIL ps-bash triage differs from bash 5.2 (auto-marked; investigate)
 
 #### ${x//~/~root}
 HOME=/home/bar
@@ -109,7 +106,6 @@ foo:~,
 foo:~
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-tilde tilde (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### tilde expansion an assignment keyword
@@ -121,7 +117,6 @@ f() {
 f
 ## stdout: foo:/home/bar
 ## status: 0
-## XFAIL ps-bash gap-oils-tilde tilde (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### x=${undef-~:~}
@@ -184,6 +179,5 @@ foo:/home/bar
 foo:/home/bar
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-tilde tilde (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher

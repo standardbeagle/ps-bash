@@ -439,8 +439,12 @@ public sealed class InvokeBashRmCommand : PSCmdlet
             catch (Exception ex)
             {
                 if (FileSystemHelpers.IsPipelineStop(ex)) throw;
+                // A sharing violation that survived the retries: say WHO holds the file (Restart Manager), so a
+                // flaky Windows "being used by another process" is attributable instead of a mystery.
+                var holders = ex is IOException && OperatingSystem.IsWindows()
+                    ? WindowsFileLockers.Describe(target) : "";
                 FileSystemHelpers.WriteBashError(this,
-                    $"rm: cannot remove '{display}': {ex.Message}");
+                    $"rm: cannot remove '{display}': {ex.Message}" + (holders.Length > 0 ? $" [held by: {holders}]" : ""));
                 hadError = true;
                 continue;
             }

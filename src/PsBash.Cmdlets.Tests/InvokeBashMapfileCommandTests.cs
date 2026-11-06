@@ -71,7 +71,7 @@ public class InvokeBashMapfileCommandTests
     public void Mapfile_BasicStdin_PopulatesMapfileVariable()
     {
         var arr = RunAndReadArray(
-            "'a','b','c' | Invoke-BashMapfile",
+            "'a','b','c' | Invoke-BashMapfile -t",
             "MAPFILE");
         Assert.Equal(new[] { "a", "b", "c" }, arr);
     }
@@ -80,7 +80,7 @@ public class InvokeBashMapfileCommandTests
     public void Mapfile_MaxLines_CapsAtN()
     {
         var arr = RunAndReadArray(
-            "'one','two','three','four' | Invoke-BashMapfile -n 2",
+            "'one','two','three','four' | Invoke-BashMapfile -t -n 2",
             "MAPFILE");
         Assert.Equal(new[] { "one", "two" }, arr);
     }
@@ -91,7 +91,7 @@ public class InvokeBashMapfileCommandTests
         // -O 5 means destination indices 0..4 are empty strings and the
         // pipeline lines start at index 5.
         var arr = RunAndReadArray(
-            "'x','y' | Invoke-BashMapfile -O 5",
+            "'x','y' | Invoke-BashMapfile -t -O 5",
             "MAPFILE");
         Assert.Equal(7, arr.Length);
         for (int i = 0; i < 5; i++) Assert.Equal("", arr[i]);
@@ -102,23 +102,19 @@ public class InvokeBashMapfileCommandTests
     [Fact]
     public void Mapfile_StripTrailingNewline_TrimsCRLF()
     {
-        // -t strips trailing \r and \n. Build pipeline items with embedded
-        // CRs so the strip is observable.
+        // -t strips only the trailing delimiter (newline), as in bash: a CR is data and stays.
         var arr = RunAndReadArray(
             "\"line1`r\",\"line2`r\" | Invoke-BashMapfile -t",
             "MAPFILE");
-        // After empty-line drop + \r-trim, both lines survive without the CR.
-        Assert.Equal(new[] { "line1", "line2" }, arr);
+        Assert.Equal(new[] { "line1\r", "line2\r" }, arr);
     }
 
     [Fact]
-    public void Mapfile_CustomDelimiter_AcceptedButIgnored()
+    public void Mapfile_CustomDelimiter_SplitsTheStream()
     {
-        // Oracle parity: -d is consumed but the value is not used (split is
-        // always on \n). 'a','b','c' through a `,`-delim becomes the same as
-        // no-delim — three lines.
+        // -d cuts the stream at the delimiter: one record "a,b,c" is three elements.
         var arr = RunAndReadArray(
-            "'a','b','c' | Invoke-BashMapfile -d ','",
+            "'a,b,c' | Invoke-BashMapfile -t -d ','",
             "MAPFILE");
         Assert.Equal(new[] { "a", "b", "c" }, arr);
     }
@@ -127,7 +123,7 @@ public class InvokeBashMapfileCommandTests
     public void Mapfile_SkipLines_DropsFirstN()
     {
         var arr = RunAndReadArray(
-            "'a','b','c','d' | Invoke-BashMapfile -s 1",
+            "'a','b','c','d' | Invoke-BashMapfile -t -s 1",
             "MAPFILE");
         Assert.Equal(new[] { "b", "c", "d" }, arr);
     }
@@ -136,7 +132,7 @@ public class InvokeBashMapfileCommandTests
     public void Mapfile_CustomArrayName_AssignsToNamedVariable()
     {
         var arr = RunAndReadArray(
-            "'foo','bar' | Invoke-BashMapfile MYARR",
+            "'foo','bar' | Invoke-BashMapfile -t MYARR",
             "MYARR");
         Assert.Equal(new[] { "foo", "bar" }, arr);
         // And MAPFILE should NOT have been touched.
@@ -150,7 +146,7 @@ public class InvokeBashMapfileCommandTests
     public void Mapfile_AliasMapfile_ResolvesToCmdlet()
     {
         var arr = RunAndReadArray(
-            "'a','b' | mapfile",
+            "'a','b' | mapfile -t",
             "MAPFILE");
         Assert.Equal(new[] { "a", "b" }, arr);
     }
@@ -159,9 +155,27 @@ public class InvokeBashMapfileCommandTests
     public void Mapfile_AliasReadarray_ResolvesToCmdlet()
     {
         var arr = RunAndReadArray(
-            "'a','b' | readarray",
+            "'a','b' | readarray -t",
             "MAPFILE");
         Assert.Equal(new[] { "a", "b" }, arr);
+    }
+
+    [Fact]
+    public void Mapfile_KeepsEmptyLinesAndTheNewlineWithoutT()
+    {
+        var kept = RunAndReadArray("\"a`n`nb`n\" | Invoke-BashMapfile", "MAPFILE");
+        Assert.Equal(new[] { "a\n", "\n", "b\n" }, kept);
+        var stripped = RunAndReadArray("\"a`n`nb`n\" | Invoke-BashMapfile -t", "MAPFILE");
+        Assert.Equal(new[] { "a", "", "b" }, stripped);
+    }
+
+    [Fact]
+    public void Mapfile_DelimiterKeptWithoutT_AndNulDelimiterDropped()
+    {
+        var kept = RunAndReadArray("'1:3:' | Invoke-BashMapfile -d ':'", "MAPFILE");
+        Assert.Equal(new[] { "1:", "3:" }, kept);
+        var nul = RunAndReadArray("\"1`03`0\" | Invoke-BashMapfile -d ''", "MAPFILE");
+        Assert.Equal(new[] { "1", "3" }, nul);
     }
 
     [Fact]

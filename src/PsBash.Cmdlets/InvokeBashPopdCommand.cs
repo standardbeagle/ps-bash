@@ -42,6 +42,40 @@ public sealed class InvokeBashPopdCommand : PSCmdlet
             return;
         }
 
+        // Option / operand validation (bash): `--` ends options, `-n` is accepted, `+N` / `-N` index the stack,
+        // anything else is an invalid argument (status 2).
+        var operands = new List<string>();
+        bool optionsDone = false;
+        foreach (var a in args)
+        {
+            if (!optionsDone && a == "--") { optionsDone = true; continue; }
+            bool numbered = a.Length > 1 && a[0] is '+' or '-' && a.Skip(1).All(char.IsAsciiDigit);
+            if (!optionsDone && !numbered && a.Length > 1 && a[0] == '-')
+            {
+                if (a == "-n") continue;
+                FileSystemHelpers.WriteBashError(this, $"popd: {a}: invalid option");
+                FileSystemHelpers.WriteBashError(this, "popd: usage: popd [-n] [+N | -N]");
+                FileSystemHelpers.SetLastExitCode(this, 2);
+                return;
+            }
+            if (!numbered)
+            {
+                FileSystemHelpers.WriteBashError(this, $"popd: {a}: invalid argument");
+                FileSystemHelpers.SetLastExitCode(this, 2);
+                return;
+            }
+            operands.Add(a);
+        }
+        args = operands.ToArray();
+
+        var stackNow = InvokeCommand.InvokeScript("@(Get-Location -Stack | ForEach-Object { $_.Path } | Where-Object { $_ }).Count");
+        if (stackNow.Count > 0 && stackNow[0]?.BaseObject is int depth && depth == 0)
+        {
+            FileSystemHelpers.WriteBashError(this, "popd: directory stack empty");
+            FileSystemHelpers.SetLastExitCode(this, 1);
+            return;
+        }
+
         // +N: oracle pops (N+1) entries from the stack via Pop-Location -Stack.
         if (args.Length > 0 && System.Text.RegularExpressions.Regex.IsMatch(args[0], @"^\+(\d+)$"))
         {

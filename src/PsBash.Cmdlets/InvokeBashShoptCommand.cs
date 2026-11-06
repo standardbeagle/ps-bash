@@ -36,30 +36,47 @@ namespace PsBash.Cmdlets;
 [OutputType(typeof(string))]
 public sealed class InvokeBashShoptCommand : PSCmdlet
 {
-    // Mirror of the psm1 oracle's $script:BashShoptOptions defaults. The
-    // state was scoped to Invoke-BashShopt only; no other psm1 function
-    // reads or writes BashShoptOptions, so consolidating ownership here
-    // preserves single-source semantics.
-    private static Dictionary<string, bool> NewDefaults() => new(StringComparer.Ordinal)
+    // bash 5.2's shopt table, in the order `shopt` lists it, with the defaults of a non-interactive shell.
+    private static readonly (string Name, bool On)[] ShoptTable =
     {
-        ["extglob"] = false,
-        ["globstar"] = false,
-        ["dotglob"] = false,
-        ["nullglob"] = false,
-        ["failglob"] = false,
-        ["nocaseglob"] = false,
-        // case / [[ == ]] pattern matching ignores case (read by BashPatternMatch at match time).
-        ["nocasematch"] = false,
-        ["expand_aliases"] = true,
-        ["cmdhist"] = true,
-        ["histappend"] = true,
-        ["checkwinsize"] = true,
-        ["progcomp"] = true,
-        ["login_shell"] = false,
-        ["interactive_comments"] = true,
-        ["sourcepath"] = true,
-        ["hostcomplete"] = true,
+        ("autocd", false), ("assoc_expand_once", false), ("cdable_vars", false), ("cdspell", false), ("checkhash", false),
+        ("checkjobs", false), ("checkwinsize", true), ("cmdhist", true), ("compat31", false), ("compat32", false),
+        ("compat40", false), ("compat41", false), ("compat42", false), ("compat43", false), ("compat44", false),
+        ("complete_fullquote", true), ("direxpand", false), ("dirspell", false), ("dotglob", false), ("execfail", false),
+        ("expand_aliases", false), ("extdebug", false), ("extglob", false), ("extquote", true), ("failglob", false),
+        ("force_fignore", true), ("globasciiranges", true), ("globskipdots", true), ("globstar", false), ("gnu_errfmt", false),
+        ("histappend", false), ("histreedit", false), ("histverify", false), ("hostcomplete", true), ("huponexit", false),
+        ("inherit_errexit", false), ("interactive_comments", true), ("lastpipe", false), ("lithist", false),
+        ("localvar_inherit", false), ("localvar_unset", false), ("login_shell", false), ("mailwarn", false),
+        ("no_empty_cmd_completion", false), ("nocaseglob", false), ("nocasematch", false), ("noexpand_translation", false),
+        ("nullglob", false), ("patsub_replacement", true), ("progcomp", true), ("progcomp_alias", false), ("promptvars", true),
+        ("restricted_shell", false), ("shift_verbose", false), ("sourcepath", true), ("varredir_close", false), ("xpg_echo", false),
     };
+
+    // `set -o` names in `shopt -o` order. The first six are real runtime flags kept in globals (and set by `set`);
+    // the others are remembered here so `set -o vi` / `shopt -po` agree with each other.
+    private static readonly (string Name, bool On)[] SetoptTable =
+    {
+        ("allexport", false), ("braceexpand", true), ("emacs", false), ("errexit", false), ("errtrace", false),
+        ("functrace", false), ("hashall", true), ("histexpand", false), ("history", false), ("ignoreeof", false),
+        ("interactive-comments", true), ("keyword", false), ("monitor", false), ("noclobber", false), ("noexec", false),
+        ("noglob", false), ("nolog", false), ("notify", false), ("nounset", false), ("onecmd", false), ("physical", false),
+        ("pipefail", false), ("posix", false), ("privileged", false), ("verbose", false), ("vi", false), ("xtrace", false),
+    };
+
+    private static readonly Dictionary<string, string> SetoptGlobals = new(StringComparer.Ordinal)
+    {
+        ["errexit"] = "__BashErrexit", ["noclobber"] = "__BashNoclobber", ["noglob"] = "__BashNoglob",
+        ["nounset"] = "__BashNounset", ["pipefail"] = "__BashPipefail", ["xtrace"] = "__BashXtrace",
+    };
+
+    private static Dictionary<string, bool> NewDefaults()
+    {
+        var d = new Dictionary<string, bool>(StringComparer.Ordinal);
+        foreach (var (name, on) in ShoptTable) d[name] = on;
+        foreach (var (name, on) in SetoptTable) if (!SetoptGlobals.ContainsKey(name)) d["set:" + name] = on;
+        return d;
+    }
 
     // Option state belongs to the SHELL SESSION, i.e. the runspace: the host process outlives a `-c`
     // command (a pooled daemon serves many), and a `shopt -s nullglob` in one command must not change
@@ -118,67 +135,92 @@ public sealed class InvokeBashShoptCommand : PSCmdlet
             return;
         }
 
-        bool setMode = false;
-        bool unsetMode = false;
-        bool printMode = P.IsPresent;
-        // queryMode is accepted for arg-compat but only affects exit-code in
-        // bash; the psm1 oracle never wired it to anything observable, so
-        // we keep parity (silently accept).
-        bool queryMode = false;
-
+        bool setMode = false, unsetMode = false, printMode = P.IsPresent, quiet = false, setoptMode = false;
         var operands = new List<string>();
+        bool endOfFlags = false;
         foreach (var arg in args)
         {
-            switch (arg)
+            if (endOfFlags || arg.Length < 2 || arg[0] != '-') { operands.Add(arg); continue; }
+            if (arg == "--") { endOfFlags = true; continue; }
+            foreach (char f in arg.AsSpan(1))
             {
-                case "-s": setMode = true; break;
-                case "-u": unsetMode = true; break;
-                case "-p": printMode = true; break;
-                case "-q": queryMode = true; break;
-                default: operands.Add(arg); break;
+                switch (f)
+                {
+                    case 's': setMode = true; break;
+                    case 'u': unsetMode = true; break;
+                    case 'p': printMode = true; break;
+                    case 'q': quiet = true; break;
+                    case 'o': setoptMode = true; break;
+                    default:
+                        FileSystemHelpers.WriteBashError(this, $"shopt: -{f}: invalid option");
+                        FileSystemHelpers.WriteBashError(this, "shopt: usage: shopt [-pqsu] [-o] [optname ...]");
+                        FileSystemHelpers.SetLastExitCode(this, 2);
+                        return;
+                }
             }
         }
-        _ = queryMode; // suppress unused-warning; parity placeholder
-
-        if (printMode && operands.Count == 0)
+        if (setMode && unsetMode)
         {
-            // List all options as "shopt -s NAME" lines, sorted by name —
-            // matches the oracle's `Sort-Object Key` pass.
-            var keys = new List<string>(Options.Keys);
-            keys.Sort(StringComparer.Ordinal);
-            foreach (var key in keys)
+            FileSystemHelpers.WriteBashError(this, "shopt: cannot set and unset shell options simultaneously");
+            FileSystemHelpers.SetLastExitCode(this, 1);
+            return;
+        }
+
+        var table = setoptMode ? SetoptTable : ShoptTable;
+        int status = 0;
+        if (operands.Count == 0)
+        {
+            foreach (var (name, _) in table)
             {
-                // The oracle emits "shopt -s NAME" regardless of the
-                // stored on/off value (a quirk preserved from psm1).
-                WriteObject(BashRuntime.NewBashObject($"shopt -s {key}"));
+                bool on = Get(name, setoptMode);
+                if ((setMode && !on) || (unsetMode && on)) continue;
+                if (!quiet) WriteObject(BashRuntime.NewBashObject(Line(name, on, printMode, setoptMode)));
             }
             return;
         }
 
         foreach (var opt in operands)
         {
-            if (setMode)
+            if (Array.FindIndex(table, t => t.Name == opt) < 0)
             {
-                Options[opt] = true;
+                FileSystemHelpers.WriteBashError(this, $"shopt: {opt}: invalid {(setoptMode ? "option" : "shell option")} name");
+                status = 1;
+                continue;
             }
-            else if (unsetMode)
+            if (setMode || unsetMode)
             {
-                Options[opt] = false;
+                Set(opt, setMode, setoptMode);
+                continue;
             }
-            else
-            {
-                if (Options.TryGetValue(opt, out var val))
-                {
-                    var state = val ? "on" : "off";
-                    WriteObject(BashRuntime.NewBashObject($"{opt} {state}"));
-                }
-                else
-                {
-                    FileSystemHelpers.WriteBashError(
-                        this, $"bash: shopt: {opt}: invalid shell option name");
-                }
-            }
+            bool on = Get(opt, setoptMode);
+            if (!on) status = 1;
+            if (!quiet) WriteObject(BashRuntime.NewBashObject(Line(opt, on, printMode, setoptMode)));
         }
+        FileSystemHelpers.SetLastExitCode(this, status);
+    }
+
+    private static string Line(string name, bool on, bool print, bool setopt) =>
+        print ? (setopt ? $"set {(on ? "-o" : "+o")} {name}" : $"shopt {(on ? "-s" : "-u")} {name}")
+              : $"{name,-15}\t{(on ? "on" : "off")}";
+
+    private bool Get(string name, bool setopt)
+    {
+        if (!setopt) return Options.TryGetValue(name, out var v) && v;
+        if (SetoptGlobals.TryGetValue(name, out var global)) return SessionState.PSVariable.GetValue(global) is true;
+        return Options.TryGetValue("set:" + name, out var w) ? w : false;
+    }
+
+    private void Set(string name, bool on, bool setopt)
+    {
+        if (!setopt) { Options[name] = on; return; }
+        if (SetoptGlobals.TryGetValue(name, out var global))
+        {
+            InvokeCommand.InvokeScript("param($n, $v) Set-Variable -Name $n -Value $v -Scope Global -Force", global, on);
+            return;
+        }
+        if (on && name == "vi") Options["set:emacs"] = false;
+        if (on && name == "emacs") Options["set:vi"] = false;
+        Options["set:" + name] = on;
     }
 
     /// <summary>

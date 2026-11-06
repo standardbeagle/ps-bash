@@ -227,7 +227,6 @@ typeset +x e=E2
 printenv.py e  # no longer exported
 ## stdout:
 ## status: 127
-## XFAIL ps-bash gap-oils-assign-extended assign-extended (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### typeset +r removes read-only attribute (TODO: documented in bash to do nothing)
@@ -252,7 +251,6 @@ r=r1
 r=r1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-assign-extended assign-extended (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### function name with /
@@ -290,7 +288,6 @@ bar
 declare -f foo
 ## END
 ## status: 127
-## XFAIL ps-bash gap-oils-assign-extended assign-extended (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### declare -p doesn't print binary data, but can be loaded into bash
@@ -383,7 +380,6 @@ declare -A test_arr6=([c]="3" [b]="2" [a]="1" )
 declare -a test_arr7=([3]="foo")
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-assign-extended assign-extended (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### declare -p foo=bar doesn't make sense
@@ -453,7 +449,6 @@ declare -a test_var6=()
 declare -A test_var7=()
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-assign-extended assign-extended (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### declare -pnrx var
@@ -510,7 +505,6 @@ f1() {
 f1
 ## stdout: declare -- test_var1="local"
 ## status: 0
-## XFAIL ps-bash gap-oils-assign-extended assign-extended (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### declare -pg var
@@ -524,7 +518,6 @@ f1() {
 f1
 ## stdout: declare -- test_var1="local"
 ## status: 0
-## XFAIL ps-bash gap-oils-assign-extended assign-extended (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### ble.sh: eval -- "$(declare -p var arr)"
@@ -678,7 +671,6 @@ status=1
 status=1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-assign-extended assign-extended (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### typeset -ar makes it readonly
@@ -708,7 +700,6 @@ status=1
 status=1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-assign-extended assign-extended (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### typeset -x makes it exported

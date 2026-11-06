@@ -51,7 +51,8 @@ public class InvokeBashStatCommandTests : IDisposable, IClassFixture<SharedPwshF
     private System.Collections.ObjectModel.Collection<PSObject> Run(string script)
     {
         var pwsh = _fixture.AcquireFresh();
-        var result = pwsh.AddScript(script).Invoke();
+        // Relative operands: stat prints the path as written, so name checks use the file name from here.
+        var result = pwsh.AddScript($"Set-Location '{Esc(_tmpDir)}'; " + script).Invoke();
         pwsh.Commands.Clear();
         return result;
     }
@@ -85,7 +86,7 @@ public class InvokeBashStatCommandTests : IDisposable, IClassFixture<SharedPwshF
     public void DefaultOutput_RegularFile_EmitsMultiLineBlockWithFileLabel()
     {
         var f = Mk("regular.txt", "hello");
-        var results = Run($"Invoke-BashStat '{Esc(f)}'");
+        var results = Run($"Invoke-BashStat 'regular.txt'");
         Assert.Single(results);
         var bashText = (string?)results[0].Properties["BashText"]?.Value;
         Assert.NotNull(bashText);
@@ -115,9 +116,9 @@ public class InvokeBashStatCommandTests : IDisposable, IClassFixture<SharedPwshF
     public void FormatC_PercentN_EmitsName()
     {
         var f = Mk("namefile.txt");
-        var results = Run($"Invoke-BashStat -c '%n' '{Esc(f)}'");
+        var results = Run($"Invoke-BashStat -c '%n' 'namefile.txt'");
         var bashText = (string?)results[0].Properties["BashText"]?.Value;
-        Assert.Equal("namefile.txt\n", bashText);
+        Assert.Equal("namefile.txt", bashText);
     }
 
     [Fact]
@@ -126,7 +127,7 @@ public class InvokeBashStatCommandTests : IDisposable, IClassFixture<SharedPwshF
         var f = Mk("size7.txt", "1234567");
         var results = Run($"Invoke-BashStat -c '%s' '{Esc(f)}'");
         var bashText = (string?)results[0].Properties["BashText"]?.Value;
-        Assert.Equal("7\n", bashText);
+        Assert.Equal("7", bashText);
     }
 
     [Fact]
@@ -141,23 +142,43 @@ public class InvokeBashStatCommandTests : IDisposable, IClassFixture<SharedPwshF
     }
 
     [Fact]
+    public void FormatC_PercentN_KeepsTheOperandAsWritten()
+    {
+        Directory.CreateDirectory(Path.Combine(_tmpDir, "sub"));
+        Mk(Path.Combine("sub", "rel.txt"), "x");
+        var results = Run("Invoke-BashStat -c '%n|%N' './sub/rel.txt'");
+        Assert.Equal("./sub/rel.txt|'./sub/rel.txt'", results[0].Properties["BashText"]?.Value);
+    }
+
+    [Fact]
+    public void FormatC_TypeAndModeSpecs_MatchGnu()
+    {
+        Mk("full.txt", "x");
+        Mk("empty.txt", "");
+        var results = Run("Invoke-BashStat -c '%F|%u|%g' 'full.txt' 'empty.txt'; Invoke-BashStat -c '%F' .");
+        Assert.Equal("regular file|0|0", results[0].Properties["BashText"]?.Value);
+        Assert.Equal("regular empty file|0|0", results[1].Properties["BashText"]?.Value);
+        Assert.Equal("directory", results[2].Properties["BashText"]?.Value);
+    }
+
+    [Fact]
     public void FormatC_PercentF_UnknownSpec_PreservesLiteral()
     {
         // Oracle: unknown spec → append the percent and advance by one; the
         // next iteration handles the spec char as a regular literal.
         var f = Mk("unkF.txt");
-        var results = Run($"Invoke-BashStat -c '%F' '{Esc(f)}'");
+        var results = Run($"Invoke-BashStat -c '%Q' '{Esc(f)}'");
         var bashText = (string?)results[0].Properties["BashText"]?.Value;
-        Assert.Equal("%F\n", bashText);
+        Assert.Equal("%Q", bashText);
     }
 
     [Fact]
     public void FormatC_MultiToken_EmitsConcatenatedSpace()
     {
         var f = Mk("multi.txt", "12345");
-        var results = Run($"Invoke-BashStat -c '%n %s' '{Esc(f)}'");
+        var results = Run($"Invoke-BashStat -c '%n %s' 'multi.txt'");
         var bashText = (string?)results[0].Properties["BashText"]?.Value;
-        Assert.Equal("multi.txt 5\n", bashText);
+        Assert.Equal("multi.txt 5", bashText);
     }
 
     [Fact]
@@ -166,7 +187,7 @@ public class InvokeBashStatCommandTests : IDisposable, IClassFixture<SharedPwshF
         var f = Mk("pct.txt");
         var results = Run($"Invoke-BashStat -c '%%' '{Esc(f)}'");
         var bashText = (string?)results[0].Properties["BashText"]?.Value;
-        Assert.Equal("%\n", bashText);
+        Assert.Equal("%", bashText);
     }
 
     // ===================== --printf=FORMAT =====================
@@ -178,7 +199,7 @@ public class InvokeBashStatCommandTests : IDisposable, IClassFixture<SharedPwshF
         // (oracle), so \n in the format becomes a real newline AND the
         // result is NOT suffixed with an extra newline (unlike -c).
         var f = Mk("printf.txt", "abc");
-        var results = Run($"Invoke-BashStat --printf=%n--%s '{Esc(f)}'");
+        var results = Run($"Invoke-BashStat --printf=%n--%s 'printf.txt'");
         var bashText = (string?)results[0].Properties["BashText"]?.Value;
         // No trailing newline (printf path); name then literal "--" then size.
         Assert.Equal("printf.txt--3", bashText);
@@ -190,7 +211,7 @@ public class InvokeBashStatCommandTests : IDisposable, IClassFixture<SharedPwshF
     public void TerseMode_EmitsFourteenSpaceSepFields()
     {
         var f = Mk("terse.txt", "xy");
-        var results = Run($"Invoke-BashStat -t '{Esc(f)}'");
+        var results = Run($"Invoke-BashStat -t 'terse.txt'");
         var bashText = ((string?)results[0].Properties["BashText"]?.Value)?.TrimEnd('\n');
         Assert.NotNull(bashText);
         var fields = bashText!.Split(' ');
@@ -206,10 +227,10 @@ public class InvokeBashStatCommandTests : IDisposable, IClassFixture<SharedPwshF
     {
         var f1 = Mk("a.txt", "a");
         var f2 = Mk("b.txt", "bb");
-        var results = Run($"Invoke-BashStat -c '%n' '{Esc(f1)}' '{Esc(f2)}'");
+        var results = Run($"Invoke-BashStat -c '%n' 'a.txt' 'b.txt'");
         Assert.Equal(2, results.Count);
-        Assert.Equal("a.txt\n", results[0].Properties["BashText"]?.Value);
-        Assert.Equal("b.txt\n", results[1].Properties["BashText"]?.Value);
+        Assert.Equal("a.txt", results[0].Properties["BashText"]?.Value);
+        Assert.Equal("b.txt", results[1].Properties["BashText"]?.Value);
     }
 
     // ===================== Negative path =====================
@@ -251,9 +272,9 @@ public class InvokeBashStatCommandTests : IDisposable, IClassFixture<SharedPwshF
     public void UnicodeFilename_EmitsNameUnchanged()
     {
         var f = Mk("héllo-世界-🦄.txt", "u");
-        var results = Run($"Invoke-BashStat -c '%n' '{Esc(f)}'");
+        var results = Run($"Invoke-BashStat -c '%n' 'héllo-世界-🦄.txt'");
         var bashText = (string?)results[0].Properties["BashText"]?.Value;
-        Assert.Equal("héllo-世界-🦄.txt\n", bashText);
+        Assert.Equal("héllo-世界-🦄.txt", bashText);
     }
 
     // ===================== Alias resolution =====================
@@ -262,9 +283,9 @@ public class InvokeBashStatCommandTests : IDisposable, IClassFixture<SharedPwshF
     public void StatAlias_ResolvesToCmdlet()
     {
         var f = Mk("aliased.txt", "x");
-        var results = Run($"stat -c '%n' '{Esc(f)}'");
+        var results = Run($"stat -c '%n' 'aliased.txt'");
         Assert.Single(results);
-        Assert.Equal("aliased.txt\n", results[0].Properties["BashText"]?.Value);
+        Assert.Equal("aliased.txt", results[0].Properties["BashText"]?.Value);
     }
 
     // ===================== --help =====================
@@ -288,10 +309,10 @@ public class InvokeBashStatCommandTests : IDisposable, IClassFixture<SharedPwshF
         var f = Mk("safe.txt", "z");
         // PowerShell single-quoted string escapes ' by doubling it.
         var fmt = "%n$(throw ''pwn'')";
-        var results = Run($"Invoke-BashStat -c '{fmt}' '{Esc(f)}'");
+        var results = Run($"Invoke-BashStat -c '{fmt}' 'safe.txt'");
         Assert.Single(results);
         var bashText = (string?)results[0].Properties["BashText"]?.Value;
-        Assert.Equal("safe.txt$(throw 'pwn')\n", bashText);
+        Assert.Equal("safe.txt$(throw 'pwn')", bashText);
     }
 
     // ===================== Typed-output shape =====================

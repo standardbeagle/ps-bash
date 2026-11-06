@@ -31,7 +31,7 @@ public sealed partial class BashParser
             Advance(); // consume the keyword
 
             if (ParseDeclarationPairs() is { } pairs)
-                return new Command.ShAssignment(pairs, IsLocal: isLocal, IsExport: !isLocal);
+                return new Command.ShAssignment(pairs, IsLocal: isLocal, IsExport: !isLocal, IsReadonly: isLocal && _declSawReadonly, IsNameref: isLocal && _declSawNameref);
 
             // No assignment or name followed — rewind and parse as a normal command
             // so forms like `export -p` still reach the general path.
@@ -50,16 +50,18 @@ public sealed partial class BashParser
             && DeclarationHasArrayInitializer())
         {
             int saved = _pos;
+            bool isReadonlyKw = Peek().Value == "readonly";
             Advance(); // consume the keyword
 
             if (ParseDeclarationPairs() is { } declPairs)
-                return new Command.ShAssignment(declPairs);
+                return new Command.ShAssignment(declPairs, IsReadonly: isReadonlyKw || _declSawReadonly, IsAssoc: _declSawAssoc);
 
             _pos = saved;
         }
 
         // Collect leading assignment words (VAR=val ...).
         // Array assignments like arr=(a b c) are detected and consumed here.
+        int simpleLine = BashLexer.LineAt(_input, Peek().Position);
         var assignmentPairs = ImmutableArray.CreateBuilder<Assignment>();
         var envPairs = ImmutableArray.CreateBuilder<EnvPair>();
         bool hasArrayAssignment = false;
@@ -79,7 +81,7 @@ public sealed partial class BashParser
         var words = ImmutableArray.CreateBuilder<CompoundWord>();
         var redirects = ImmutableArray.CreateBuilder<Redirect>();
         var hereDocs = ImmutableArray.CreateBuilder<HereDoc>();
-        var pendingHeredocs = new List<(string Delimiter, bool Expand, bool StripTabs, string? FdVar, int BodyStart, int BodyEnd)>();
+        var pendingHeredocs = new List<(string Delimiter, bool Expand, bool StripTabs, string? FdVar, int BodyStart, int BodyEnd, int Fd)>();
 
         while (true)
         {
@@ -102,7 +104,7 @@ public sealed partial class BashParser
                         Advance();
                         var delimToken = Advance();
                         var (delimiter, expand) = BashLexer.ParseHeredocDelimiter(delimToken.Value);
-                        pendingHeredocs.Add((delimiter, expand, stripTabs, fdVar, delimToken.BodyStart, delimToken.BodyEnd));
+                        pendingHeredocs.Add((delimiter, expand, stripTabs, fdVar, delimToken.BodyStart, delimToken.BodyEnd, 0));
                     }
                     else
                     {
@@ -132,6 +134,21 @@ public sealed partial class BashParser
                 // After command words have started, treat assignment-like tokens as arguments.
                 var token = Advance();
                 var parts = DecomposeWord(token.Value);
+                // bash treats a word that LOOKS like an assignment (`echo x=~`, `PATH=~/bin:~/x`) as one for tilde
+                // expansion: a ~ at the start of the value or after a ':' expands.
+                int eqAt = token.Value.IndexOf('=');
+                if (eqAt > 0 && IsValidVariableName(token.Value[..eqAt])
+                    && (token.Value[(eqAt + 1)..].StartsWith('~') || token.Value.Contains(":~")))
+                {
+                    var tildeParts = ImmutableArray.CreateBuilder<WordPart>();
+                    tildeParts.Add(new WordPart.Literal(token.Value[..(eqAt + 1)]));
+                    tildeParts.AddRange(DecomposeAssignmentValue(token.Value[(eqAt + 1)..]));
+                    parts = tildeParts.ToImmutable();
+                }
+                // `let x=( 1 )`: let's operand is arithmetic text, so the parenthesised tail belongs to this argument.
+                if (words.Count > 0 && token.Value.EndsWith('=') && Peek().Kind == BashTokenKind.LParen
+                    && words[0].Parts is [WordPart.Literal { Value: "let" }] && TakeBalancedParenText() is { } parenText)
+                    parts = parts.Add(new WordPart.SingleQuoted(parenText));
                 words.Add(new CompoundWord(parts));
             }
             else if (kind == BashTokenKind.Bang && words.Count > 0)
@@ -144,7 +161,11 @@ public sealed partial class BashParser
                 // fell to the `else break`, ending the command and leaving
                 // `! -name x` to be mis-parsed as a separate negated pipeline.
                 var token = Advance();
-                words.Add(new CompoundWord(DecomposeWord(token.Value)));
+                // `!=` / `!x` is ONE word when the text is adjacent (`test a != b`, `echo a !=b`).
+                string bangText = token.Value;
+                while (Peek().Kind == BashTokenKind.Word && Peek().Position == token.Position + bangText.Length)
+                    bangText += Advance().Value;
+                words.Add(new CompoundWord(DecomposeWord(bangText)));
             }
             else if (kind == BashTokenKind.TLess)
             {
@@ -160,7 +181,19 @@ public sealed partial class BashParser
                 // lexer's body-skip also uses, so the two can't disagree on the
                 // terminator.
                 var (delimiter, expand) = BashLexer.ParseHeredocDelimiter(delimToken.Value);
-                pendingHeredocs.Add((delimiter, expand, stripTabs, null, delimToken.BodyStart, delimToken.BodyEnd));
+                pendingHeredocs.Add((delimiter, expand, stripTabs, null, delimToken.BodyStart, delimToken.BodyEnd, 0));
+            }
+            else if (kind == BashTokenKind.IoNumber && _pos + 1 < _tokens.Count
+                && _tokens[_pos + 1].Kind is BashTokenKind.DLess or BashTokenKind.DLessDash
+                && int.TryParse(Peek().Value, out var hereFd) && (hereFd >= 3 || hereFd == 0))
+            {
+                // `cmd 3<<EOF`: the here-document is descriptor N's input (read with `read -u N`), not stdin.
+                Advance();
+                bool stripTabsN = Peek().Kind == BashTokenKind.DLessDash;
+                Advance();
+                var delimTokenN = Advance();
+                var (delimiterN, expandN) = BashLexer.ParseHeredocDelimiter(delimTokenN.Value);
+                pendingHeredocs.Add((delimiterN, expandN, stripTabsN, null, delimTokenN.BodyStart, delimTokenN.BodyEnd, hereFd));
             }
             else if (kind == BashTokenKind.IoNumber || IsRedirectOp(kind))
             {
@@ -189,7 +222,8 @@ public sealed partial class BashParser
             words.ToImmutable(),
             envPairs.ToImmutable(),
             redirects.ToImmutable(),
-            hereDocs.ToImmutable());
+            hereDocs.ToImmutable(),
+            simpleLine);
     }
 
     private static string? EscapedControlBuiltin(CompoundWord word)
@@ -226,10 +260,10 @@ public sealed partial class BashParser
     /// remains for <c>ParseList</c> to see the separator and parse what follows.
     /// </remarks>
     private void CollectHereDocBodies(
-        List<(string Delimiter, bool Expand, bool StripTabs, string? FdVar, int BodyStart, int BodyEnd)> pending,
+        List<(string Delimiter, bool Expand, bool StripTabs, string? FdVar, int BodyStart, int BodyEnd, int Fd)> pending,
         ImmutableArray<HereDoc>.Builder hereDocs)
     {
-        foreach (var (delimiter, expand, stripTabs, fdVar, bodyStart, bodyEnd) in pending)
+        foreach (var (delimiter, expand, stripTabs, fdVar, bodyStart, bodyEnd, hereFd) in pending)
         {
             string body;
             if (bodyStart < 0 || bodyEnd <= bodyStart)
@@ -249,7 +283,7 @@ public sealed partial class BashParser
                 if (stripTabs)
                     body = StripHereDocTabs(body);
             }
-            hereDocs.Add(new HereDoc(body, expand, stripTabs, fdVar));
+            hereDocs.Add(new HereDoc(body, expand, stripTabs, fdVar, hereFd));
         }
     }
 
@@ -280,8 +314,18 @@ public sealed partial class BashParser
     /// not model bash variable attributes, so dropping the flag is the honest mapping;
     /// the initializer it decorates is what carries meaning.
     /// </summary>
+    /// <summary>Set by <see cref="ParseDeclarationPairs"/> when an attribute flag of the declaration carried `r`.</summary>
+    private bool _declSawReadonly;
+    /// <summary>Set by <see cref="ParseDeclarationPairs"/> when an attribute flag of the declaration carried `n` (a nameref).</summary>
+    private bool _declSawNameref;
+    /// <summary>Set by <see cref="ParseDeclarationPairs"/> when an attribute flag of the declaration carried `A` (an associative array).</summary>
+    private bool _declSawAssoc;
+
     private ImmutableArray<Assignment>? ParseDeclarationPairs()
     {
+        _declSawReadonly = false;
+        _declSawNameref = false;
+        _declSawAssoc = false;
         var pairs = ImmutableArray.CreateBuilder<Assignment>();
 
         while (Peek().Kind is BashTokenKind.AssignmentWord or BashTokenKind.Word
@@ -312,6 +356,9 @@ public sealed partial class BashParser
             // start with '-', so leaving it to the name branch keeps prior behavior.
             if (value.Length > 1 && value[0] == '-')
             {
+                if (value[1] != '-' && value.Contains('r')) _declSawReadonly = true;
+                if (value[1] != '-' && value.Contains('n')) _declSawNameref = true;
+                if (value[1] != '-' && value.Contains('A')) _declSawAssoc = true;
                 Advance();
                 continue;
             }
@@ -352,6 +399,26 @@ public sealed partial class BashParser
             if (kind != BashTokenKind.Word) return false;
         }
         return false;
+    }
+
+    /// <summary>
+    /// At an <c>(</c> token: returns the raw source text of the balanced <c>( … )</c> group and consumes the tokens it
+    /// spans, or null (nothing consumed) when it never closes.
+    /// </summary>
+    private string? TakeBalancedParenText()
+    {
+        int start = Peek().Position;
+        int depth = 0;
+        for (int i = start; i < _input.Length; i++)
+        {
+            if (_input[i] == '(') depth++;
+            else if (_input[i] == ')' && --depth == 0)
+            {
+                while (Peek().Kind != BashTokenKind.Eof && Peek().Position <= i) Advance();
+                return _input[start..(i + 1)];
+            }
+        }
+        return null;
     }
 
     private Assignment ParseAssignmentWord()
@@ -612,7 +679,7 @@ public sealed partial class BashParser
                 var (delimiter, expand) = BashLexer.ParseHeredocDelimiter(delimToken.Value);
                 var docs = ImmutableArray.CreateBuilder<HereDoc>(1);
                 CollectHereDocBodies(
-                    new() { (delimiter, expand, stripTabs, null, delimToken.BodyStart, delimToken.BodyEnd) },
+                    new() { (delimiter, expand, stripTabs, null, delimToken.BodyStart, delimToken.BodyEnd, 0) },
                     docs);
                 redirects.Add(new Redirect("<<", 0, new CompoundWord(
                     ImmutableArray<WordPart>.Empty), FdVar: null, Here: docs[0]));

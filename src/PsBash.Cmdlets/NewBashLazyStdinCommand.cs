@@ -40,6 +40,15 @@ public sealed class NewBashLazyStdinCommand : PSCmdlet
 
         var output = new PSDataCollection<PSObject>();
         var source = new ProducerSource(output);
+        // A caller-supplied output collection is NOT closed when the pipeline ends, so a reader draining to
+        // end of input (`seq 3 | { while read x; …; done; }`) would wait forever. Close it on any terminal state.
+        ps.InvocationStateChanged += (_, e) =>
+        {
+            if (e.InvocationStateInfo.State is PSInvocationState.Completed or PSInvocationState.Failed or PSInvocationState.Stopped)
+            {
+                try { output.Complete(); } catch { /* already closed */ }
+            }
+        };
         var async = ps.BeginInvoke<PSObject, PSObject>(null, output);
 
         var cursor = new StdinCursor(source);

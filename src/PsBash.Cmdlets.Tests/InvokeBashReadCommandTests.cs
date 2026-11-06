@@ -241,6 +241,55 @@ public class InvokeBashReadCommandTests : IClassFixture<SharedPwshFixture>
         Assert.Equal("2,3", b[0]?.ToString());
     }
 
+    // ---- oils builtin-read gaps (oracle: bash 5.2) ----
+
+    [Fact]
+    public void Read_HereDocRecords_TakesOnlyTheFirstLine()
+    {
+        // read x <<EOF / "A B" / "FG" / EOF -> x is "A B" (the records used to be glued: "A BFG").
+        Assert.Equal("A B", ReadVariable("@('A B','FG') | Invoke-BashRead x", "x"));
+    }
+
+    [Fact]
+    public void Read_NoNames_KeepsLeadingAndTrailingWhitespaceInReply()
+    {
+        Assert.Equal("  a b  ", ReadVariable("Remove-Variable REPLY -Scope Global -ErrorAction SilentlyContinue; '  a b  ' | Invoke-BashRead", "REPLY"));
+        Assert.Equal("a b", ReadVariable("'  a b  ' | Invoke-BashRead myvar", "myvar"));
+    }
+
+    [Fact]
+    public void Read_BackslashNewline_JoinsLinesUnlessRaw()
+    {
+        Assert.Equal("a b  line2", ReadVariable("@('a b  \\','line2') | Invoke-BashRead v", "v"));
+        Assert.Equal("a b  \\", ReadVariable("@('a b  \\','line2') | Invoke-BashRead -r v", "v"));
+    }
+
+    [Fact]
+    public void Read_SmooshedValueFlag_ReadsOneCharacter()
+    {
+        Assert.Equal("h", ReadVariable("'hi' | Invoke-BashRead -rn1 var", "var"));
+    }
+
+    [Fact]
+    public void Read_ExactCount_IgnoresTheDelimiterButMaxCountStopsAtIt()
+    {
+        Assert.Equal("fooba", ReadVariable("'foobar' | Invoke-BashRead -N 5 -d b; $r=$REPLY; Remove-Variable REPLY -Scope Global; Set-Variable out $r -Scope Global", "out"));
+        Assert.Equal("foo", ReadVariable("'foobar' | Invoke-BashRead -n 5 -d b; $r=$REPLY; Remove-Variable REPLY -Scope Global; Set-Variable out $r -Scope Global", "out"));
+    }
+
+    [Fact]
+    public void Read_TimeoutZero_OnlyTestsForInputAndConsumesNothing()
+    {
+        Assert.Equal("", ReadVariable("Remove-Variable REPLY -Scope Global -ErrorAction SilentlyContinue; 'foo' | Invoke-BashRead -t 0", "REPLY"));
+    }
+
+    [Fact]
+    public void Read_InvalidCount_IsAnErrorWithStatusOne()
+    {
+        var lines = RunLines("Invoke-BashRead -n -1; $LASTEXITCODE");
+        Assert.Equal("1", lines[^1]);
+    }
+
     // ---- Directive 12 injection probe ----
 
     [Fact]
@@ -260,7 +309,7 @@ public class InvokeBashReadCommandTests : IClassFixture<SharedPwshFixture>
         // value because the explicit name argument was rejected before
         // even being treated as a name fallback".
         var v = ReadVariable(
-            "'value' | Invoke-BashRead \"`$(throw 'pwn')\"",
+            "Remove-Variable REPLY -Scope Global -ErrorAction SilentlyContinue; 'value' | Invoke-BashRead \"`$(throw 'pwn')\"",
             "REPLY");
         Assert.True(string.IsNullOrEmpty(v),
             "REPLY should not be assigned when the name argument is rejected");

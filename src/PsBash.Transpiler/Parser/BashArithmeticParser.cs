@@ -28,10 +28,52 @@ public sealed class BashArithmeticParser
 
     public static ArithmeticSyntax Parse(string? source)
     {
-        var parser = new BashArithmeticParser(source ?? string.Empty);
+        var parser = new BashArithmeticParser(StripDoubleQuotes(source));
         ArithmeticExpr root = parser.ParseComma();
         if (parser.Current.Kind != T.End) parser.Error("unexpected token");
         return new ArithmeticSyntax(parser._source, root);
+    }
+
+    /// <summary>Like <see cref="Parse"/>, but an expression the static grammar rejects becomes a <see cref="ArithmeticExpr.Deferred"/>
+    /// node (bash expands its text and reports any syntax error only when it runs).</summary>
+    public static ArithmeticSyntax ParseOrDefer(string? source)
+    {
+        try { return Parse(source); }
+        // The resource limits are not syntax errors: they must reach the caller (and its large-stack retry).
+        catch (BashArithmeticParseException ex) when (!ex.Message.Contains(NestingGuard.TooDeepMessage, StringComparison.Ordinal)
+                                                      && !ex.Message.Contains(NestingGuard.TooLongMessage, StringComparison.Ordinal))
+        {
+            string text = StripDoubleQuotes(source);
+            return new ArithmeticSyntax(text, new ArithmeticExpr.Deferred(text));
+        }
+    }
+
+    /// <summary>bash removes double quotes (and the <c>$</c> of <c>$"…"</c>) from an arithmetic expression: <c>(( "1" + "2" ))</c> is 3.</summary>
+    private static string StripDoubleQuotes(string? source)
+    {
+        string text = source ?? string.Empty;
+        if (!text.Contains('"')) return text;
+        var sb = new System.Text.StringBuilder(text.Length);
+        int sub = 0;            // depth inside $( … ): copied verbatim, its quotes belong to the command
+        char inner = '\0';      // quote char open inside such a substitution
+        for (int i = 0; i < text.Length; i++)
+        {
+            char c = text[i];
+            if (sub > 0)
+            {
+                sb.Append(c);
+                if (inner != '\0') { if (c == inner) inner = '\0'; }
+                else if (c is '"' or '\'') inner = c;
+                else if (c == '(') sub++;
+                else if (c == ')') sub--;
+                continue;
+            }
+            if (c == '$' && i + 1 < text.Length && text[i + 1] == '(') { sb.Append("$("); i++; sub = 1; continue; }
+            if (c == '$' && i + 1 < text.Length && text[i + 1] == '"') continue; // $"…" → "…"
+            if (c == '"') continue;
+            sb.Append(c);
+        }
+        return sb.ToString();
     }
 
     private Tok Current => _tokens[_position];
@@ -192,6 +234,18 @@ public sealed class BashArithmeticParser
             {
                 int start = i++;
                 while (i < source.Length && (source[i] == '_' || char.IsLetterOrDigit(source[i]))) i++;
+                // `a[i]` / `m[$k]` / `c[x+1]++`: an array element is one operand; the evaluator's read / write callbacks resolve it.
+                if (i < source.Length && source[i] == '[')
+                {
+                    int depth = 0, j = i;
+                    for (; j < source.Length; j++)
+                    {
+                        if (source[j] == '[') depth++;
+                        else if (source[j] == ']' && --depth == 0) break;
+                    }
+                    if (j >= source.Length) throw new BashArithmeticParseException($"unterminated array subscript near '{source[start..]}'");
+                    i = j + 1;
+                }
                 result.Add(new Tok(T.Ident, Text: source[start..i])); continue;
             }
             if (char.IsDigit(c))
@@ -236,18 +290,23 @@ public sealed class BashArithmeticParser
                 if (source[i] == '{')
                 {
                     int keyStart = ++i;
-                    while (i < source.Length && source[i] != '}') i++;
+                    // A full parameter expansion (`${a[i]}`, `${m[$k]:-0}`) may nest braces.
+                    for (int depth = 1; i < source.Length; i++)
+                    {
+                        if (source[i] == '{') depth++;
+                        else if (source[i] == '}' && --depth == 0) break;
+                    }
                     if (i >= source.Length || i == keyStart)
                         throw new BashArithmeticParseException($"invalid arithmetic parameter near '{source[start..]}'");
                     string key = source[keyStart..i];
+                    if (key is "#@" or "#*") key = "#"; // ${#@} is $#
                     // Array-length expansion is valid inside arithmetic contexts
                     // (for example `${#arr[@]} + 1`). Preserve it as an opaque
                     // parameter lookup so the typed arithmetic parser does not
                     // reject an otherwise valid bash command.
-                    if (!IsParameterKey(key) && !IsArrayLengthParameterKey(key))
-                        throw new BashArithmeticParseException($"invalid arithmetic parameter '${{{key}}}'");
+                    // Any other expansion is the shell's to expand before evaluation (the emitter splices it in).
                     i++;
-                    result.Add(new Tok(T.Parameter, Text: source[start..i], Key: key));
+                    result.Add(new Tok(T.Parameter, Text: key == "#" ? "$#" : source[start..i], Key: key));
                     continue;
                 }
                 if (char.IsDigit(source[i]))

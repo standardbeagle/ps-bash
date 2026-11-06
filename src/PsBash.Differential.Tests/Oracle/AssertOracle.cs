@@ -414,7 +414,8 @@ public static class AssertOracle
                 $"golden file missing: {goldenPath}. Run with UPDATE_GOLDENS=1 to record.");
         }
 
-        var expected = await File.ReadAllTextAsync(goldenPath);
+        // Windows checkouts with core.autocrlf turn the golden's LF into CRLF; the canonicalized output is LF.
+        var expected = (await File.ReadAllTextAsync(goldenPath)).Replace("\r\n", "\n");
 
         if (expected != canonicalized)
         {

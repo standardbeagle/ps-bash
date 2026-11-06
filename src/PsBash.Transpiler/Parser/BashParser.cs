@@ -175,6 +175,8 @@ public sealed partial class BashParser
     // Peek clamps to the trailing Eof sentinel so an unguarded read at/just-past the end
     // returns Eof rather than throwing ArgumentOutOfRangeException (a raw crash). Eof at the
     // tail is a legitimate Peek target (loops guard on `Peek().Kind != Eof`).
+    private bool NextTokenIsWord() => _pos + 1 < _tokens.Count && _tokens[_pos + 1].Kind == BashTokenKind.Word;
+
     private BashToken Peek() => _tokens[_pos < _tokens.Count ? _pos : _tokens.Count - 1];
 
     // Advance, by contrast, must REFUSE to consume the Eof sentinel: a truncated construct
@@ -338,8 +340,7 @@ public sealed partial class BashParser
             return ParseFunction();
 
         if (Peek().Kind == BashTokenKind.Word && Peek().Value is "[" or "[[")
-            // `[ ]` keeps the redirect handling it already had; only `[[ ]]` needed the group wrap.
-            return Peek().Value == "[[" ? WithTrailingRedirects(ParseTestExpr()) : ParseTestExpr();
+            return WithTrailingRedirects(ParseTestExpr());
 
         // name() { body } form: Word followed by LParen RParen
         if (Peek().Kind == BashTokenKind.Word && IsParensFunctionDef())
@@ -379,8 +380,10 @@ public sealed partial class BashParser
         var inner = ImmutableArray.CreateBuilder<CompoundWord>();
         while (Peek().Kind != BashTokenKind.Eof)
         {
-            if (Peek().Kind == BashTokenKind.Word && Peek().Value == close)
+            if (Peek().Kind == BashTokenKind.Word && Peek().Value == close
+                && (extended || !NextTokenIsWord()))
             {
+                // `[` closes on its LAST word only: in `[ ] ]` the first `]` is an operand.
                 Advance(); // consume closing bracket
                 break;
             }
@@ -452,7 +455,7 @@ public sealed partial class BashParser
                 continue;
             }
 
-            if (Peek().Kind == BashTokenKind.Word)
+            if (Peek().Kind is BashTokenKind.Word or BashTokenKind.AssignmentWord or BashTokenKind.LBrace or BashTokenKind.RBrace)
             {
                 var token = Advance();
                 var parts = DecomposeWord(token.Value);
@@ -493,6 +496,7 @@ public sealed partial class BashParser
         int start = Peek().Position;
         int i = start;
         char quote = '\0';
+        int parenDepth = 0;
 
         while (i < _input.Length)
         {
@@ -508,7 +512,11 @@ public sealed partial class BashParser
                 i++;
                 continue;
             }
-            if (c is ' ' or '\t' or '\n' or '\r') break;
+            // Whitespace inside `( )` belongs to the regex (`(a  b)`); only top-level whitespace ends the operand.
+            if (parenDepth == 0 && c is ' ' or '\t' or '\n' or '\r') break;
+            // Regex parens nest; an UNBALANCED `)` closes the enclosing test group (`[[ ! ( a =~ b ) ]]`).
+            if (c == '(') parenDepth++;
+            else if (c == ')' && parenDepth-- == 0) break;
             i++;
         }
 
@@ -550,6 +558,30 @@ public sealed partial class BashParser
 
         for (int i = 0; i < raw.Length;)
         {
+            // A backslash pair is regex syntax (`\.`): keep both characters verbatim.
+            if (raw[i] == '\\' && i + 1 < raw.Length)
+            {
+                literal.Append(raw[i]).Append(raw[i + 1]);
+                i += 2;
+                continue;
+            }
+            // Quoted segments match THEMSELVES in bash (`a"."c` is a, literal dot, c): keep them as
+            // quoted parts so the emitter escapes them instead of treating them as regex syntax.
+            if (raw[i] is '\'' or '"')
+            {
+                char q = raw[i];
+                int j = i + 1;
+                while (j < raw.Length && raw[j] != q)
+                    j += (q == '"' && raw[j] == '\\' && j + 1 < raw.Length) ? 2 : 1;
+                if (j < raw.Length)
+                {
+                    FlushLiteral();
+                    if (q == '\'') parts.Add(new WordPart.SingleQuoted(raw[(i + 1)..j]));
+                    else parts.AddRange(DecomposeWord(raw[i..(j + 1)]));
+                    i = j + 1;
+                    continue;
+                }
+            }
             if (raw[i] == '$' && i + 1 < raw.Length && IsExpansionStart(raw[i + 1]))
             {
                 int end = FindExpansionEnd(raw, i);
@@ -722,6 +754,12 @@ public sealed partial class BashParser
 
             commands.Add(ParseListStatement(AtStopWord, "ParseCompoundBody"));
         }
+
+        // bash: a then/do/else/elif/condition list needs at least one command (`while false; do done` is a syntax error).
+        if (commands.Count == 0)
+            throw MakeError(
+                $"syntax error near unexpected token `{Peek().Value}'",
+                Peek().Position, "ParseCompoundBody");
 
         if (commands.Count == 1)
             return commands[0];
@@ -897,13 +935,22 @@ public sealed partial class BashParser
             Advance();
         }
         string header = exprEnd >= 0 ? _input[exprStart..exprEnd] : _input[exprStart..];
+        header = BashLexer.SubstituteArithLineNumber(header, BashLexer.LineAt(_input, exprStart));
         var (init, cond, step) = SplitArithClauses(header);
 
         SkipTerminators();
-        Expect("do");
-        SkipTerminators();
-        var body = ParseCompoundBody("done");
-        Expect("done");
+        Command body;
+        if (Peek().Kind == BashTokenKind.LBrace)
+        {
+            body = ParseBraceGroup(); // bash also accepts `for ((;;)) { ...; }`
+        }
+        else
+        {
+            Expect("do");
+            SkipTerminators();
+            body = ParseCompoundBody("done");
+            Expect("done");
+        }
 
         return new Command.ForArith(
             ParseOptionalArithmetic(init),
@@ -946,7 +993,7 @@ public sealed partial class BashParser
     }
 
     private static ArithmeticSyntax? ParseOptionalArithmetic(string source) =>
-        string.IsNullOrWhiteSpace(source) ? null : BashArithmeticParser.Parse(source);
+        string.IsNullOrWhiteSpace(source) ? null : BashArithmeticParser.ParseOrDefer(source);
 
     private Command.While ParseWhile()
     {
@@ -969,6 +1016,8 @@ public sealed partial class BashParser
     {
         Expect("case");
 
+        if (Peek().Kind != BashTokenKind.Word)
+            throw MakeError($"syntax error near unexpected token `{Peek().Value}'", Peek().Position, "ParseCase");
         var exprToken = Advance();
         var exprParts = DecomposeWord(exprToken.Value);
         var expr = new CompoundWord(exprParts);
@@ -1186,6 +1235,9 @@ public sealed partial class BashParser
 
     private Command ParseFunctionBodyCore()
     {
+        // `f() g() { :; }`: a function body is a compound command, never another definition.
+        if (Peek().Kind == BashTokenKind.Word && IsParensFunctionDef() && Peek().Value is not ("[" or "[["))
+            throw MakeError($"syntax error near unexpected token `{Peek().Value}'", Peek().Position, "ParseFunctionBody");
         if (Peek().Kind != BashTokenKind.LBrace)
             return ParseCompoundOrSimple();
 
@@ -1223,10 +1275,11 @@ public sealed partial class BashParser
 
     private Command.ArithCommand ParseArithCommand()
     {
-        Advance(); // consume first (
+        var firstParen = Advance(); // consume first (
         var secondParen = Advance(); // consume second (
         int exprStart = secondParen.Position + 1;
         int nestedDepth = 0;
+        int cmdLine = BashLexer.LineAt(_input, firstParen.Position);
 
         while (Peek().Kind != BashTokenKind.Eof)
         {
@@ -1235,8 +1288,8 @@ public sealed partial class BashParser
                 int exprEnd = Peek().Position;
                 Advance(); // consume first )
                 Advance(); // consume second )
-                string expr = _input[exprStart..exprEnd];
-                return new Command.ArithCommand(BashArithmeticParser.Parse(expr));
+                string expr = BashLexer.SubstituteArithLineNumber(_input[exprStart..exprEnd], cmdLine);
+                return new Command.ArithCommand(BashArithmeticParser.ParseOrDefer(expr));
             }
 
             if (Peek().Kind == BashTokenKind.LParen) nestedDepth++;
@@ -1245,7 +1298,7 @@ public sealed partial class BashParser
         }
 
         // Reached EOF without finding ))
-        string remaining = _input[exprStart..];
+        string remaining = BashLexer.SubstituteArithLineNumber(_input[exprStart..], cmdLine);
         return new Command.ArithCommand(BashArithmeticParser.Parse(remaining));
     }
 

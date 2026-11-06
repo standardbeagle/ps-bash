@@ -37,6 +37,10 @@ public static class BashLexer
         var pendingHeredocs = new List<(string Delim, bool StripTabs, int DelimTokenIndex)>();
         // The next word token is a heredoc delimiter: 0 = none, 1 = `<<`, 2 = `<<-`.
         int heredocDelimPending = 0;
+        // Line of the `for` command whose header word list is being scanned (0 = none).
+        int forLine = 0;
+        // End offset of the `(( … ))` arithmetic header being scanned: a `<<` before it is a shift, not a heredoc.
+        int arithEnd = 0;
 
         while (pos < len)
         {
@@ -47,6 +51,14 @@ public static class BashLexer
             {
                 pos++;
                 continue;
+            }
+
+            // `(( i = 1 << 3 ))` / `for ((i = 1 << 3; …))`: arithmetic, so its `<<` is a shift. The parser slices these
+            // headers from the raw text; only the heredoc detection below needs to know where they end.
+            if (c == '(' && pos + 1 < len && input[pos + 1] == '(' && pos >= arithEnd && AtArithHeaderPosition(tokens))
+            {
+                int end = ScanArithBody(input, pos + 2);
+                if (end >= pos + 4 && input[end - 1] == ')' && input[end - 2] == ')') arithEnd = end;
             }
 
             // Comments: skip to end of line.
@@ -127,7 +139,7 @@ public static class BashLexer
                 char c3 = pos + 2 < len ? input[pos + 2] : '\0';
 
                 // `<<` family: `<<<` (here-string) and `<<-` are checked before plain `<<`.
-                if (c == '<' && c2 == '<')
+                if (c == '<' && c2 == '<' && pos >= arithEnd)
                 {
                     if (c3 == '<')
                     {
@@ -222,6 +234,17 @@ public static class BashLexer
                 continue;
             }
 
+            // `{` / `}` glued to more word text (`}_{a,b}`, `{x}_a`, `{1.3}`) are ordinary characters of a word:
+            // they are reserved only as a standalone token.
+            if ((c == '{' || c == '}') && pos + 1 < len && !IsBlankOrOperatorChar(input[pos + 1])
+                && !(c == '{' && TryScanNamedFd(input, pos, out _)))
+            {
+                int glued = pos;
+                pos = ScanWord(input, pos + 1);
+                tokens.Add(new BashToken(BashTokenKind.Word, input[glued..pos], glued));
+                continue;
+            }
+
             // Named-fd redirect prefix: {name}>file / {name}<file (bash allocates
             // a free fd into $name). Emit {name} as a Word so it is NOT lexed as
             // LBrace — otherwise the parser tries to parse a brace group and throws
@@ -282,8 +305,14 @@ public static class BashLexer
                 continue;
             }
 
+            // A `for` header's word list reports the line of the `for` command (bash), not of each
+            // word on a continued line; the list ends at the first `;` or newline.
+            if (tokens.Count > 0 && tokens[^1].Kind is BashTokenKind.Newline or BashTokenKind.Semi)
+                forLine = 0;
+            if (value == "for" && (tokens.Count == 0 || !(tokens[^1].Kind == BashTokenKind.Word && !IsReservedWord(tokens[^1].Value))))
+                forLine = LineAt(input, wordStart);
             if (value.Contains("LINENO", StringComparison.Ordinal))
-                value = SubstituteLineNumber(value, input, wordStart);
+                value = SubstituteLineNumber(value, input, wordStart, forLine > 0 ? forLine : 0);
             BashTokenKind wordKind = ClassifyWord(value);
             tokens.Add(new BashToken(wordKind, value, wordStart));
 
@@ -378,11 +407,41 @@ public static class BashLexer
     /// Replaces <c>$LINENO</c> / <c>${LINENO}</c> in a word with the 1-based source line the word starts on
     /// (bash: the line of the command being run). Single-quoted spans and a backslash-escaped <c>$</c> stay literal.
     /// </summary>
-    private static string SubstituteLineNumber(string word, string input, int wordStart)
+    /// <summary>1-based source line of offset <paramref name="pos"/>.</summary>
+    internal static int LineAt(string input, int pos)
     {
         int line = 1;
-        for (int i = 0; i < wordStart; i++)
+        int end = Math.Min(pos, input.Length);
+        for (int i = 0; i < end; i++)
             if (input[i] == (char)10) line++;
+        return line;
+    }
+
+    /// <summary>
+    /// Replaces <c>LINENO</c> (bare, <c>$LINENO</c>, <c>${LINENO}</c>) in a raw arithmetic expression
+    /// with <paramref name="line"/>; bare identifiers like <c>MYLINENO</c> / <c>LINENO2</c> are left alone.
+    /// </summary>
+    internal static string SubstituteArithLineNumber(string expr, int line)
+    {
+        if (!expr.Contains("LINENO", StringComparison.Ordinal)) return expr;
+        string lineText = line.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var sb = new System.Text.StringBuilder(expr.Length);
+        for (int i = 0; i < expr.Length; i++)
+        {
+            if (string.CompareOrdinal(expr, i, "${LINENO}", 0, 9) == 0) { sb.Append(lineText); i += 8; continue; }
+            int s = expr[i] == '$' ? i + 1 : i;
+            if (string.CompareOrdinal(expr, s, "LINENO", 0, 6) == 0
+                && (s == i ? i == 0 || !(char.IsLetterOrDigit(expr[i - 1]) || expr[i - 1] == '_') : true)
+                && (s + 6 >= expr.Length || !(char.IsLetterOrDigit(expr[s + 6]) || expr[s + 6] == '_')))
+            { sb.Append(lineText); i = s + 5; continue; }
+            sb.Append(expr[i]);
+        }
+        return sb.ToString();
+    }
+
+    private static string SubstituteLineNumber(string word, string input, int wordStart, int line = 0)
+    {
+        if (line == 0) line = LineAt(input, wordStart);
         string lineText = line.ToString(System.Globalization.CultureInfo.InvariantCulture);
 
         var sb = new System.Text.StringBuilder(word.Length);
@@ -520,6 +579,9 @@ public static class BashLexer
         end = p; // Word spans {name}; redirect operator starts here.
         return true;
     }
+
+    private static bool IsBlankOrOperatorChar(char c)
+        => c is ' ' or '\t' or '\n' or '\r' or '|' or '&' or ';' or '(' or ')' or '<' or '>';
 
     private static bool IsBraceExpansion(string input, int pos)
     {
@@ -766,6 +828,17 @@ public static class BashLexer
         if (pos + 2 < len && input[pos + 2] == '(')
             return ScanArith(input, pos);
         return ScanBalancedParens(input, pos + 2, 1); // skip $(
+    }
+
+    /// <summary>True where a `((` opens an arithmetic command or a C-style `for` header (command position, or after `for`/`do`/`then`…).</summary>
+    private static bool AtArithHeaderPosition(List<BashToken> tokens)
+    {
+        if (tokens.Count == 0) return true;
+        var last = tokens[^1];
+        return last.Kind is BashTokenKind.Newline or BashTokenKind.Semi or BashTokenKind.Amp or BashTokenKind.Pipe
+                or BashTokenKind.AndIf or BashTokenKind.OrIf or BashTokenKind.LBrace
+            || (last.Kind == BashTokenKind.Word
+                && last.Value is "for" or "do" or "then" or "else" or "elif" or "if" or "while" or "until");
     }
 
     /// <summary>Advance past $(( ... )). input[pos]=='$', [pos+1]=='(', [pos+2]=='('.</summary>

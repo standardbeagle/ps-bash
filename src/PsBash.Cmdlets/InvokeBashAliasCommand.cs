@@ -58,6 +58,10 @@ public sealed class InvokeBashAliasCommand : PSCmdlet
     [Parameter]
     public SwitchParameter A { get; set; }
 
+    /// <summary>Record the alias only: the transpiler already expanded its uses (no run-time function, so a quoted or variable command word is not an alias).</summary>
+    [Parameter]
+    public SwitchParameter NoFunction { get; set; }
+
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
@@ -94,11 +98,16 @@ public sealed class InvokeBashAliasCommand : PSCmdlet
         bool removeAll = A.IsPresent;
         var operands = new List<string>();
 
+        bool endOfOptions = false;
         foreach (var arg in args)
         {
-            if (arg == "-u") { unaliasMode = true; continue; }
-            if (arg == "-a") { removeAll = true; continue; }
-            if (arg == "-p") { continue; } // no-op (oracle parity)
+            if (!endOfOptions)
+            {
+                if (arg == "--") { endOfOptions = true; continue; }
+                if (arg == "-u") { unaliasMode = true; continue; }
+                if (arg == "-a") { removeAll = true; continue; }
+                if (arg == "-p") { continue; } // no-op (oracle parity)
+            }
             operands.Add(arg);
         }
 
@@ -123,6 +132,12 @@ public sealed class InvokeBashAliasCommand : PSCmdlet
                 return;
             }
 
+            if (operands.Count == 0)
+            {
+                FileSystemHelpers.WriteBashError(this, "unalias: usage: unalias [-a] name [name ...]");
+                FileSystemHelpers.SetLastExitCode(this, 2);
+                return;
+            }
             foreach (var name in operands)
             {
                 var dict = GetAliasDict();
@@ -186,10 +201,19 @@ public sealed class InvokeBashAliasCommand : PSCmdlet
                 // the global scope and is reachable via Get-Command from
                 // the test's session — not buried in the cmdlet's own
                 // session state where the caller can't see it.
+                // The alias text is BASH (`$x`, quotes, keywords, `&&`), so the call runs it through eval with the
+                // arguments appended single-quoted; PowerShell never sees it as code.
+                if (NoFunction.IsPresent) continue;
                 InvokeCommand.InvokeScript(
-                    "param($n, $v) " +
-                    "$body = [scriptblock]::Create(\"& $v `@args\"); " +
-                    "Set-Item -Path ('Function:\\global:' + $n) -Value $body -Force",
+                    """
+                    param($n, $v)
+                    $body = {
+                        $words = foreach ($a in $args) { "'" + ([string]$a).Replace("'", "'\''") + "'" }
+                        $src = (@($v) + @($words)) -join ' '
+                        Invoke-Expression ([PsBash.Core.Transpiler.BashTranspiler, PsBash.Transpiler]::Transpile($src, [PsBash.Core.Transpiler.TranspileContext, PsBash.Transpiler]::Eval))
+                    }.GetNewClosure()
+                    Set-Item -Path ('Function:\global:' + $n) -Value $body -Force
+                    """,
                     aliasName, aliasValue);
             }
             else

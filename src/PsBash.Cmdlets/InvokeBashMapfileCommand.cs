@@ -109,11 +109,13 @@ public sealed class InvokeBashMapfileCommand : PSCmdlet
         int origin = O ?? 0;
         int skip = 0;
         bool stripTrailing = false;
+        char delim = '\n';
         string varName = "MAPFILE";
 
         // Manual scan recovers joined short forms (-nN / -OORIGIN / -dDELIM)
         // and value-flag pairs the binder did not consume. The explicit -O
         // and -D parameters above are also honored (set the locals first).
+        if (D is not null) delim = D.Length == 0 ? '\0' : D[0];
         int i = 0;
         while (i < args.Length)
         {
@@ -151,8 +153,8 @@ public sealed class InvokeBashMapfileCommand : PSCmdlet
             }
             // -d DELIM and -dDELIM: consumed but the resulting value is
             // not used (oracle parity — always split on \n).
-            if (a == "-d" && i + 1 < args.Length) { i += 2; continue; }
-            if (a.StartsWith("-d") && a.Length > 2) { i++; continue; }
+            if (a == "-d" && i + 1 < args.Length) { delim = args[i + 1].Length == 0 ? '\0' : args[i + 1][0]; i += 2; continue; }
+            if (a.StartsWith("-d") && a.Length > 2) { delim = a[2]; i++; continue; }
 
             // Non-flag = destination variable name. Matches the oracle's
             // "last non-flag wins" contract. Reject inputs containing
@@ -172,19 +174,28 @@ public sealed class InvokeBashMapfileCommand : PSCmdlet
             i++;
         }
 
-        // Collect pipeline input into lines, dropping empty lines (oracle
-        // parity — the psm1 oracle's `if ($line -ne '') { $lines.Add }`
-        // branch is reproduced byte-for-byte).
+        // The pipeline carries one record per input line (newline already removed). Rebuild the stream and cut it
+        // at the delimiter like bash: empty records are kept, an unterminated tail is the last element, and without
+        // -t every element keeps its delimiter. (A non-newline delimiter leaves the records' joins as plain newlines.)
         var lines = new List<string>();
-        foreach (var item in _pipeline)
+        var sbAll = new System.Text.StringBuilder();
+        for (int r = 0; r < _pipeline.Count; r++)
         {
-            var text = BashRuntime.GetBashText(item);
-            if (string.IsNullOrEmpty(text)) continue;
-            var normalized = text.Replace("\r\n", "\n");
-            foreach (var line in normalized.Split('\n'))
-            {
-                if (line.Length > 0) lines.Add(line);
-            }
+            string text = BashRuntime.GetBashText(_pipeline[r]).Replace("\r\n", "\n");
+            sbAll.Append(text);
+            // A record is a line: it ends with a newline unless the text already does (or it is the last
+            // record of a stream cut at some other delimiter).
+            if (!text.EndsWith('\n') && (delim == '\n' || r < _pipeline.Count - 1)) sbAll.Append('\n');
+        }
+        string stream = sbAll.ToString();
+        int startAt = 0;
+        while (startAt < stream.Length)
+        {
+            int cut = stream.IndexOf(delim, startAt);
+            if (cut < 0) { lines.Add(stream[startAt..]); break; }
+            // A NUL delimiter can never be stored in a variable, so it is always dropped.
+            lines.Add(stripTrailing || delim == '\0' ? stream[startAt..cut] : stream[startAt..(cut + 1)]);
+            startAt = cut + 1;
         }
 
         // -s N: skip the first N lines (cmdlet addition; oracle did not
@@ -196,15 +207,6 @@ public sealed class InvokeBashMapfileCommand : PSCmdlet
         if (count.HasValue && lines.Count > count.Value)
         {
             lines = lines.GetRange(0, count.Value);
-        }
-
-        // -t: strip trailing CR/LF from each line.
-        if (stripTrailing)
-        {
-            for (int j = 0; j < lines.Count; j++)
-            {
-                lines[j] = lines[j].TrimEnd('\n', '\r');
-            }
         }
 
         // Build result array. With origin > 0, prefix with that many empty
@@ -227,6 +229,6 @@ public sealed class InvokeBashMapfileCommand : PSCmdlet
         // binary cmdlet, SessionState.PSVariable.Set has the same effect
         // (sets the variable in the runspace's current scope, which is the
         // caller's scope when called from a script / interactive session).
-        SessionState.PSVariable.Set(varName, result);
+        FileSystemHelpers.SetShellVariable(SessionState, varName, result);
     }
 }

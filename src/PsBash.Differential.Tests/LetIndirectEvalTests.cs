@@ -19,9 +19,16 @@ public class LetIndirectEvalTests
     [InlineData("a=b; b=val; echo ${!a}")]
     [InlineData("a=b; b=val; echo \"[${!a}]\"; x=zz; echo \"[${!x}]\"")]
     [InlineData("a=(p q); echo ${!a[@]}")]
+    [InlineData("ref=x; echo x=${!ref-default}; x=''; echo x=${!ref-default}; x=foo; echo x=${!ref-default}")]
+    [InlineData("z=zz; zz=; echo ${!z:=foo}; echo ${!z:=bar}; echo zz=$zz")]
+    [InlineData("set -- one two; ref=@; echo ref=${!ref}; ref=2; echo ${!ref}")]
+    [InlineData("x=xx; xx=aaabcc; echo ${!x:2} ${!x:2:2} ${!x#*a} ${!x%%c*} ${!x/a*b/d} ${!x:+foo}")]
+    [InlineData("declare -a a=(ale bean); echo first=${!a}; ale=zzz; echo first=${!a}; ref='a[1]'; echo ${!ref}")]
     [InlineData("a=b; b=c; eval echo \\$$a")]
     [InlineData("a=b; b=c; eval echo $a")]
     [InlineData("x=1; eval echo $x \\$x")]
     [InlineData("eval echo a\\ b")]
     public Task Matches_Bash(string script) => AssertOracle.EqualAsync(script);
+
+    [Fact] public Task Indirect_ToFuncnameAndOptind() => AssertOracle.EqualAsync("f() { local r=$1; echo ${!r}; }; f FUNCNAME; set -- a b c; echo ${!OPTIND}; g() { local OPTIND=2; echo ${!OPTIND}; }; g x y z");
 }

@@ -202,7 +202,6 @@ f() {
 f
 ## stdout: foo
 ## status: 0
-## XFAIL ps-bash gap-oils-assign assign (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### readonly $x where x='b c'
@@ -288,7 +287,6 @@ foo["$key"]=value
 echo ${foo["bar"]}
 ## stdout: value
 ## status: 0
-## XFAIL ps-bash gap-oils-assign assign (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### declare in an if statement
@@ -496,7 +494,6 @@ declare -a arr
 echo arr:${#arr[@]}
 ## stdout: arr:3
 ## status: 0
-## XFAIL ps-bash gap-oils-assign assign (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -536,7 +533,6 @@ arr:3
 dict:3
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-assign assign (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 

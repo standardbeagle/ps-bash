@@ -16,16 +16,19 @@ public class ShellStateInventoryGuardTests
     /// <summary>Globals that are not per-shell state, each with why.</summary>
     private static readonly Dictionary<string, string> NotShellState = new(StringComparer.Ordinal)
     {
+        ["COMPREPLY"] = "completion-function hand-off, reset before and read back by each compgen -F call",
         ["LASTEXITCODE"] = "PowerShell's own; the status is carried by the command result, not copied",
         ["PsBashVersion"] = "constant, set at module load",
         ["BashVersionInfo"] = "constant, set at module load",
+        ["BASH_VERSINFO"] = "constant alias of BashVersionInfo, set at module load (so declare -p sees it)",
         ["BashVersion"] = "constant, set at module load",
         ["BashStartTime"] = "constant, set at module load (SECONDS base)",
         ["__PsBashCwd"] = "host plumbing: the worker's working-directory request",
         ["__parentPid"] = "host plumbing: the owning process id",
         ["__BashStdIn"] = "per-command stdin plumbing, rebuilt for every command",
         ["__BashUnbound"] = "one-statement hand-off from Invoke-BashArith to the emitted nounset guard, cleared at once",
-        ["BashHookErrors"] = "diagnostic buffer, per runspace",
+        ["__BashTestBad"] = "one-statement hand-off from Invoke-BashTestInt/[[ =~ ]] to the emitted status-2 wrapper, reset before each test",
+        ["BashHookErrors"] ="diagnostic buffer, per runspace",
         ["__BashEvalDepth"] = "eval recursion counter; a job process starts at 0",
         ["__BashBaselineFunctions"] = "names of the functions every host defines at startup; read by BashStateSnapshot",
     };

@@ -10,7 +10,6 @@ exit 42
 '
 ## stdout: one
 ## status: 42
-## XFAIL ps-bash gap-oils-interactive interactive (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 

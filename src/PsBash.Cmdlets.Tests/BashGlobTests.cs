@@ -57,6 +57,12 @@ public class BashGlobTests : IClassFixture<SharedPwshFixture>, IDisposable
         Assert.Equal(expected, Glob(pattern));
 
     [Fact]
+    public void Expand_RepeatedGlobStarListsEachPathOnce() =>
+        Assert.Equal("sub/a1|sub/b1",
+            string.Join("|", BashGlob.Expand("**/**/*1", _dir, false, globStar: true)
+                .Where(x => x.StartsWith("sub/"))));
+
+    [Fact]
     public void Expand_DotGlobIncludesHiddenNamesButNeverDotOrDotDot() =>
         Assert.Equal(".hid|Zed|apple|sub|x|y.txt", Glob("*", dotGlob: true));
 
@@ -172,11 +178,11 @@ public class BashGlobTests : IClassFixture<SharedPwshFixture>, IDisposable
     {
         InvokeBashShoptCommand.ResetForTests();
         var r = Run("Invoke-BashShopt -s nullglob; Invoke-BashShopt nullglob").AssertSuccess();
-        Assert.Equal("nullglob on", Assert.Single(r.Lines));
+        Assert.Equal("nullglob       \ton", Assert.Single(r.Lines));
 
         // another session (runspace) starts from the defaults; one command's `shopt -s` must not leak.
         using var other = PwshTestFixture.Create();
-        var r2 = CmdResult.Run(other, "Invoke-BashShopt nullglob").AssertSuccess();
-        Assert.Equal("nullglob off", Assert.Single(r2.Lines));
+        var r2 = CmdResult.Run(other, "Invoke-BashShopt nullglob");
+        Assert.Equal("nullglob       \toff", Assert.Single(r2.Lines));
     }
 }

@@ -762,8 +762,18 @@ public sealed class InvokeBashFindCommand : PSCmdlet
         obj.Properties.Add(new PSNoteProperty("SizeBytes", fileInfo.SizeBytes));
         obj.Properties.Add(new PSNoteProperty("Permissions", fileInfo.Permissions));
         obj.Properties.Add(new PSNoteProperty("LinkCount", fileInfo.LinkCount));
-        obj.Properties.Add(new PSNoteProperty("Owner", fileInfo.Owner));
-        obj.Properties.Add(new PSNoteProperty("Group", fileInfo.Group));
+        if (OperatingSystem.IsWindows())
+        {
+            obj.Properties.Add(new PSNoteProperty("Owner", fileInfo.Owner));
+            obj.Properties.Add(new PSNoteProperty("Group", fileInfo.Group));
+        }
+        else
+        {
+            var item = c.Item;
+            var ownerGroup = new Lazy<(string Owner, string Group)>(() => ResolveOwnerGroup(item));
+            obj.Properties.Add(new LazyNoteProperty("Owner", () => ownerGroup.Value.Owner));
+            obj.Properties.Add(new LazyNoteProperty("Group", () => ownerGroup.Value.Group));
+        }
         obj.Properties.Add(new PSNoteProperty("LastModified", c.Item.LastWriteTime));
         obj.Properties.Add(new PSNoteProperty("BashText", c.Display));
         WriteObject(obj);
@@ -1208,37 +1218,59 @@ public sealed class InvokeBashFindCommand : PSCmdlet
         {
             int mode = (int)item.UnixFileMode;
             info.Permissions = $"{typeChar}{ConvertToPermissionString(mode)}";
-            try
-            {
-                bool isMac = OperatingSystem.IsMacOS();
-                var statArgs = isMac
-                    ? new[] { "-f", "%Su %Sg", item.FullName }
-                    : new[] { "-c", "%U %G", item.FullName };
-                var psi = new System.Diagnostics.ProcessStartInfo("/usr/bin/stat")
-                {
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    UseShellExecute = false,
-                };
-                foreach (var a in statArgs) psi.ArgumentList.Add(a);
-                // Bounded spawn + concurrent drain + kill-tree on timeout so a hung /usr/bin/stat cannot wedge the host.
-                string statOut = BashRuntime.RunChildProcess(psi).Stdout.Trim();
-                if (statOut.Length > 0)
-                {
-                    var parts = statOut.Split(new[] { ' ' }, 2);
-                    info.Owner = parts[0];
-                    info.Group = parts.Length > 1 ? parts[1] : string.Empty;
-                }
-            }
-            catch
-            {
-                // /usr/bin/stat unavailable — match the oracle's 2>$null swallow.
-            }
+            // Owner/Group are NOT resolved here: .NET has no uid->name call, so they cost a /usr/bin/stat process
+            // per entry (24 ms each on macOS: `find .` over 701 files took 17 s). EmitEntry exposes them lazily.
         }
 
         info.SizeBytes = isDir ? 4096L : ((FileInfo)item).Length;
         info.LinkCount = 1;
         return info;
+    }
+
+    /// <summary>Unix owner and group NAMES of <paramref name="item"/> (one bounded /usr/bin/stat); empty when unavailable.</summary>
+    private static (string Owner, string Group) ResolveOwnerGroup(FileSystemInfo item)
+    {
+        try
+        {
+            var statArgs = OperatingSystem.IsMacOS()
+                ? new[] { "-f", "%Su %Sg", item.FullName }
+                : new[] { "-c", "%U %G", item.FullName };
+            var psi = new System.Diagnostics.ProcessStartInfo("/usr/bin/stat")
+            {
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+            };
+            foreach (var a in statArgs) psi.ArgumentList.Add(a);
+            // Bounded spawn + concurrent drain + kill-tree on timeout so a hung /usr/bin/stat cannot wedge the host.
+            string statOut = BashRuntime.RunChildProcess(psi).Stdout.Trim();
+            if (statOut.Length > 0)
+            {
+                var parts = statOut.Split(new[] { ' ' }, 2);
+                return (parts[0], parts.Length > 1 ? parts[1] : string.Empty);
+            }
+        }
+        catch
+        {
+            // /usr/bin/stat unavailable — match the oracle's 2>$null swallow.
+        }
+        return (string.Empty, string.Empty);
+    }
+
+    /// <summary>A read-only note property whose value is computed on first read (never, for a plain `find` listing).</summary>
+    private sealed class LazyNoteProperty : PSPropertyInfo
+    {
+        private readonly Func<string> _compute;
+        private string? _value;
+
+        public LazyNoteProperty(string name, Func<string> compute) { SetMemberName(name); _compute = compute; }
+
+        public override PSMemberTypes MemberType => PSMemberTypes.NoteProperty;
+        public override string TypeNameOfValue => typeof(string).FullName!;
+        public override bool IsSettable => false;
+        public override bool IsGettable => true;
+        public override object Value { get => _value ??= _compute(); set => throw new SetValueException(Name); }
+        public override PSMemberInfo Copy() => new LazyNoteProperty(Name, _compute);
     }
 
     private static bool IsExecExtension(string ext)

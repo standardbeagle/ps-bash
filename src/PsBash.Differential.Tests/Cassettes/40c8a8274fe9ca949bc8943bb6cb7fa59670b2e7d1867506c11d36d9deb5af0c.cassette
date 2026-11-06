@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 47
+stdout-length: 12
+stderr-length: 0
+==== SCRIPT ====
+s=abc; echo ${s[@]}; echo ${s[*]}; echo ${s[0]}
+==== STDOUT ====
+abc
+abc
+abc
+
+==== STDERR ====
+

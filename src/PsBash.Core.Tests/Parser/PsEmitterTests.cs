@@ -18,6 +18,371 @@ public class PsEmitterTests
     private static string Sub(string body) =>
         PsBuild.ShellStateScope("Push-Location; " + body, PsBuild.PopLocationRestoringProcessCwd);
 
+    [Theory]
+    [InlineData("echo foo\\\nbar", "foobar")]
+    [InlineData("echo \"x\\\ny\"", "xy")]
+    public void Transpile_BackslashNewlineInsideAWord_IsRemoved(string src, string joined)
+    {
+        // `foo\<nl>bar` is `foobar` (also inside double quotes); it used to become foo, newline, bar.
+        var ps = PsEmitter.Transpile(src)!;
+        Assert.Contains(joined, ps);
+        Assert.DoesNotContain("\n", ps.Replace("\r", "").TrimEnd('\n').Replace("Invoke-BashEcho", ""));
+    }
+
+    [Theory]
+    [InlineData("cd -- sub", "'sub'")]
+    [InlineData("cd -L sub", "'sub'")]
+    [InlineData("cd -P -- sub", "'sub'")]
+    public void Transpile_CdLeadingOptions_AreNotTheDirectory(string src, string target)
+    {
+        // `cd -- dir` tried to enter a directory named `--` ("No such file or directory").
+        var ps = PsEmitter.Transpile(src)!;
+        Assert.Contains(target, ps);
+        Assert.DoesNotContain("'--'", ps);
+        Assert.DoesNotContain("'-L'", ps);
+        Assert.DoesNotContain("'-P'", ps);
+    }
+
+    [Theory]
+    [InlineData("foo=a; echo \"${foo#[b]}\"")]
+    [InlineData("foo=a; echo \"${foo#[A]}\"")]
+    public void Transpile_PrefixStripWithBracketPattern_IsAStripNotAnElementLength(string src)
+    {
+        var ps = PsEmitter.Transpile(src)!;
+        Assert.Contains("-creplace '^[", ps);
+        Assert.DoesNotContain(".Length", ps);
+    }
+
+    [Theory]
+    [InlineData("test a != b", "Invoke-BashTest a '!=' b")]
+    [InlineData("echo a != b", "a != b")]
+    [InlineData("echo x !=y", "!=y")]
+    public void Transpile_BangEqualsInArguments_IsOneWord(string src, string expected)
+    {
+        var ps = PsEmitter.Transpile(src)!;
+        Assert.DoesNotContain("! =", ps);
+        Assert.Contains(expected.Replace("'!='", "!="), ps.Replace("'!='", "!="));
+    }
+
+    [Fact]
+    public void Transpile_BracketNegationBindsTighterThanOr_NegatesOnlyTheFirstClause()
+    {
+        var ps = PsEmitter.Transpile("[ ! -n x -o -z \"\" ]")!;
+        Assert.Contains(" -or ", ps);
+        Assert.DoesNotContain("!((", ps);
+    }
+
+    [Fact]
+    public void Transpile_TestWithOperatorWordAsOperand_IsNotSplitThere()
+    {
+        var ps = PsEmitter.Transpile("[ 1 -ne 0 -a -o != -- ]")!;
+        Assert.DoesNotContain(" -or ", ps);
+    }
+
+    [Fact]
+    public void Transpile_EmptyStripPattern_IsAStripNotALength()
+    {
+        var ps = PsEmitter.Transpile("echo \"${var#}}\"")!;
+        Assert.DoesNotContain(".Length", ps);
+        Assert.Contains(".Length", PsEmitter.Transpile("echo \"${#var}\""));
+    }
+
+    [Theory]
+    [InlineData("echo ${p/~/z}")]
+    [InlineData("echo ${p//~/z}")]
+    public void Transpile_PatsubTildePattern_IsTheHomeDirectory(string src)
+        => Assert.Contains("$HOME", PsEmitter.Transpile(src));
+
+    [Theory]
+    [InlineData("echo `cat F` world > F")]
+    [InlineData("echo $(cat F) world >> F")]
+    public void Transpile_CommandSubInWordsOfRedirectedCommand_RunsBeforeTheRedirectOpens(string src)
+    {
+        // bash expands the words first; the redirect stage truncates its file as the pipeline starts.
+        var ps = PsEmitter.Transpile(src)!;
+        Assert.Contains("@(", ps);
+        Assert.StartsWith("@(", ps.TrimStart());
+    }
+
+    [Fact]
+    public void Transpile_CaseOnCommandSub_SwitchesOnAStringSoAnEmptyResultStillMatches()
+        => Assert.Contains("switch ([string]$(", PsEmitter.Transpile("case `true` in *) echo two;; esac"));
+
+    [Fact]
+    public void Transpile_CaseWithNoArms_DoesNothingInsteadOfAnEmptySwitch()
+    {
+        var ps = PsEmitter.Transpile("case foo in\nesac\necho empty")!;
+        Assert.DoesNotContain("switch", ps);
+        Assert.Contains("Invoke-BashEcho empty", ps);
+    }
+
+    [Theory]
+    [InlineData("while false; do\ndone")]
+    [InlineData("if true; then\nfi")]
+    [InlineData("for x in a; do\ndone")]
+    [InlineData("if true; then :; else\nfi")]
+    public void Transpile_EmptyCompoundBody_IsASyntaxError(string src)
+        => Assert.ThrowsAny<PsBash.Core.Parser.ParseException>(() => PsEmitter.Transpile(src));
+
+    [Fact]
+    public void Transpile_LengthOperatorFollowedByTestOperator_IsABadSubstitution()
+    {
+        var result = PsEmitter.Transpile("echo ${#x-default}");
+        Assert.Contains("bad substitution", result);
+        Assert.Contains("${#x-default}", result);
+    }
+
+    [Fact]
+    public void Transpile_LengthOfUnsetUnderNounset_ReadsTheVariableStrictly()
+    {
+        var result = PsEmitter.Transpile("set -u; echo ${#undef}");
+        Assert.Contains("unbound variable", result);
+    }
+
+    [Fact]
+    public void Transpile_EnvPrefixBeforeEmptyExpandingCommandWord_PersistsTheAssignment()
+    {
+        var result = PsEmitter.Transpile("foo=alive! $unset");
+        // Empty expansion → plain assignment (no save/restore); otherwise the temporary binding.
+        Assert.Contains("Count -eq 0) { $env:foo = ", result);
+        Assert.Contains("finally", result);
+    }
+
+    [Theory]
+    [InlineData("[ a ] 2>/dev/null")]
+    [InlineData("[ -f x ] >/dev/null || echo no")]
+    [InlineData("if [ a ] 2>&1; then echo y; fi")]
+    public void Transpile_SingleBracketTestWithTrailingRedirect_Parses(string bash)
+    {
+        Assert.False(string.IsNullOrEmpty(PsEmitter.Transpile(bash)));
+    }
+
+    [Fact]
+    public void Transpile_ReturnWithNonNumericWord_ReportsNumericArgumentRequired()
+    {
+        var result = PsEmitter.Transpile("f() { return abc; }");
+        Assert.Contains("numeric argument required", result);
+        Assert.DoesNotContain("LASTEXITCODE = abc", result);
+    }
+
+    [Fact]
+    public void Transpile_ReturnLiteralNumber_IsUnchanged() =>
+        Assert.Contains("$global:LASTEXITCODE = 3; return", PsEmitter.Transpile("f() { return 3; }"));
+
+    [Theory]
+    [InlineData("$foo-bar() { ls; }")]
+    [InlineData("foo-$(echo hi)() { ls; }")]
+    public void Transpile_FunctionNameWithExpansion_IsNotAValidIdentifier(string bash)
+    {
+        var result = PsEmitter.Transpile(bash);
+        Assert.Contains("not a valid identifier", result);
+        Assert.DoesNotContain("function ", result);
+    }
+
+    [Fact]
+    public void Transpile_FunctionDefinedAsFunctionBody_IsASyntaxError() =>
+        Assert.ThrowsAny<Exception>(() => PsEmitter.Transpile("f() g() { echo hi; }"));
+
+    [Fact]
+    public void Transpile_DeclareLowerUpper_ConvertsLaterAssignments()
+    {
+        var result = PsEmitter.Transpile("declare -l q; q=ABC; declare -u w=abc; w=xyz");
+        Assert.Contains("ToLowerInvariant()", result);
+        Assert.Contains("ToUpperInvariant()", result);
+    }
+
+    [Fact]
+    public void Transpile_StripPatternWithLiteralParen_KeepsTheSubexpressionBalanced()
+    {
+        // A raw `\(` inside "$( … )" unbalances PowerShell's naive paren scan ("missing the closing ')'").
+        var result = PsEmitter.Transpile("echo \"${line##*([}\"");
+        Assert.DoesNotContain("\\(", result);
+        Assert.Contains("\\x28", result);
+    }
+
+    [Theory]
+    [InlineData("v={X,Y}", "{X,Y}")]
+    [InlineData("v=a{b,c}d", "a{b,c}d")]
+    [InlineData("v={1..3}", "{1..3}")]
+    public void Transpile_BraceExpansionOnAssignmentRhs_StaysLiteral(string bash, string stored)
+    {
+        var result = PsEmitter.Transpile(bash);
+        Assert.Contains(stored, result);
+        Assert.DoesNotContain("@(", result);
+    }
+
+    [Theory]
+    [InlineData("set")]
+    [InlineData("declare")]
+    [InlineData("typeset")]
+    public void Transpile_BareVariableListing_UsesPlainListMode(string cmd)
+    {
+        var ps = PsEmitter.Transpile(cmd + " | grep x")!;
+        Assert.Contains("Invoke-BashDeclare", ps);
+        Assert.Contains("--bare-list", ps);
+    }
+
+    [Fact]
+    public void Transpile_BracedVarWithInvalidOperatorChar_IsBadSubstitution()
+    {
+        var ps = PsEmitter.Transpile("echo ${a&}")!;
+        Assert.Contains("bad substitution", ps);
+    }
+
+    [Fact]
+    public void Transpile_LoneInputRedirectInCommandSub_ReadsTheFile()
+    {
+        var ps = PsEmitter.Transpile("x=$(< f)")!;
+        Assert.Contains("Get-Content", ps);
+        Assert.DoesNotContain("Out-Null", ps);
+    }
+
+    [Theory]
+    [InlineData("x=$(echo a; < f)")]
+    [InlineData("( < f )")]
+    [InlineData("< f | tr a b")]
+    public void Transpile_BareInputRedirectElsewhere_OnlyOpensTheFile(string bash)
+    {
+        var ps = PsEmitter.Transpile(bash)!;
+        Assert.Contains("Get-Content", ps);
+        Assert.Contains("Out-Null", ps);
+    }
+
+    [Fact]
+    public void Transpile_GlobArgument_StopsBeforeCommandWhenExpansionFails()
+    {
+        var ps = PsEmitter.Transpile("echo *.ZZ")!;
+        Assert.Contains("if (-not $?) { return }", ps);
+        Assert.True(ps.IndexOf("if (-not $?)", StringComparison.Ordinal) < ps.IndexOf("Invoke-BashEcho @", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Transpile_BracketWithVariableOperator_DelegatesToRuntimeTest()
+    {
+        var ps = PsEmitter.Transpile("op='='; [ a $op a ] && echo true")!;
+        Assert.Contains("Invoke-BashTest @__psbT", ps);
+        Assert.Contains("ConvertTo-BashWords", ps);
+    }
+
+    [Fact]
+    public void Transpile_RegexMatch_IsCaseSensitiveUnlessNocasematch()
+    {
+        var ps = PsEmitter.Transpile("[[ ABC =~ abc ]]")!;
+        Assert.Contains("-cmatch", ps);
+        Assert.Contains("BashPatternMatch]::NoCase", ps);
+    }
+
+    [Theory]
+    [InlineData("[[ 'a.c' =~ a\".\"c ]]", "[regex]::Escape")]
+    [InlineData("[[ 'a b' =~ 'a 'b ]]", "a\\ ")]
+    public void Transpile_RegexMatch_QuotedPartsMatchThemselves(string src, string expected)
+    {
+        Assert.Contains(expected, PsEmitter.Transpile(src)!);
+    }
+
+    [Fact]
+    public void Transpile_RegexMatch_UnbalancedCloseParenEndsTheRegexOperand()
+    {
+        var ps = PsEmitter.Transpile("[[ ! (\" x \" =~ \" -a \" || \" x \" =~ \" -b \") ]]")!;
+        Assert.DoesNotContain("unsupported test operator", ps);
+    }
+
+    [Theory]
+    [InlineData("cd a b")]
+    [InlineData("cd -- a b c")]
+    public void Transpile_CdWithTwoOperands_FailsWithoutChangingDirectory(string src)
+    {
+        var ps = PsEmitter.Transpile(src)!;
+        Assert.Contains("cd: too many arguments", ps);
+        Assert.Contains("$global:LASTEXITCODE = 1", ps);
+        Assert.DoesNotContain("Set-Location", ps);
+    }
+
+    [Theory]
+    [InlineData("declare -A a=(['a+1']=c)", "'a+1' = ")]
+    [InlineData("declare -A a=([\"q r\"]=2)", "'q r' = ")]
+    [InlineData("declare -A a=([plain]=v ['k']=w)", "'k' = ")]
+    public void Transpile_AssocLiteralWithQuotedKey_StoresTheKeyWithoutItsQuotes(string src, string entry)
+    {
+        // `['a+1']=c` stored the key as 'a+1' WITH the quotes, so `${a[a+1]}` never found it.
+        var ps = PsEmitter.Transpile(src)!;
+        Assert.Contains(entry, ps);
+        Assert.DoesNotContain("''a", ps);
+    }
+
+    [Theory]
+    [InlineData("break")]
+    [InlineData("continue")]
+    [InlineData("if true; then echo one; continue; echo two; fi")]
+    public void Transpile_BreakContinueOutsideAnyLoop_WarnsAndKeepsGoing(string src)
+    {
+        // A bare PowerShell break/continue outside a loop ends the whole pipeline (the client then waits on a
+        // dead command); bash warns and returns 0.
+        var ps = PsEmitter.Transpile(src)!;
+        Assert.Contains("only meaningful in a", ps);
+        Assert.DoesNotMatch(@"(^|[;{]\s*)(break|continue)\s*($|[;}])", ps);
+    }
+
+    [Theory]
+    [InlineData("for i in 1 2; do break; done", "break")]
+    [InlineData("for i in 1 2; do continue; done", "continue")]
+    [InlineData("f() { break; }", "break")]
+    public void Transpile_BreakContinueInsideALoopOrFunction_StaysTheKeyword(string src, string keyword)
+    {
+        var ps = PsEmitter.Transpile(src)!;
+        Assert.DoesNotContain("only meaningful", ps);
+        Assert.Contains(keyword, ps);
+    }
+
+    [Theory]
+    [InlineData("for d in ~/src ~/git; do echo $d; done")]
+    [InlineData("for d in ~/src; do echo $d; done")]
+    public void Transpile_TildeWordsInAForList_AreStringsNotADivision(string src)
+    {
+        // `$HOME/src,$HOME/git` parsed as a division: the whole script failed with a PowerShell parse error.
+        var ps = PsEmitter.Transpile(src)!;
+        Assert.Contains("($HOME + '/src')", ps);
+        Assert.DoesNotContain("$HOME/src", ps);
+    }
+
+    [Theory]
+    [InlineData("(( x = 1 << 4 )); echo after")]
+    [InlineData("for ((i = 1 << 2; i < 6; ++i)); do echo $i; done; echo after")]
+    [InlineData("if (( 2 << 1 == 4 )); then echo yes; fi; echo after")]
+    public void Transpile_ShiftInsideArithmeticHeader_IsNotAHeredoc(string src)
+    {
+        // The `<<` used to open a heredoc whose body swallowed every following line (silent truncation).
+        var ps = PsEmitter.Transpile(src)!;
+        Assert.Contains("after", ps);
+    }
+
+    [Fact]
+    public void Transpile_ReadonlyPlusEquals_AppendsInsteadOfEmittingAnInvalidAssignment()
+    {
+        var ps = PsEmitter.Transpile("readonly r+=bar")!;
+        Assert.DoesNotContain("$env:r+", ps);
+        Assert.Contains("$env:r = $env:r + 'bar'", ps);
+    }
+
+    [Fact]
+    public void Transpile_LocalPlusEquals_StartsEmptyThenAppendsWithinTheCall()
+    {
+        var ps = PsEmitter.Transpile("f() { local s+=a; local s+=b; }")!;
+        Assert.Contains("$__psbashLocBase = if ($null -eq $__lsd_s)", ps);
+        Assert.Contains("$env:s = $__psbashLocBase + (", ps);
+    }
+
+    [Fact]
+    public void Transpile_NumberedHeredoc_OpensDescriptorAroundCommandAndKeepsStatus()
+    {
+        // `cmd 3<<EOF` feeds descriptor 3 (read -u 3), not stdin; the command's status survives the close.
+        var ps = PsEmitter.Transpile("read -u 3 x 3<<EOF\nhi\nEOF")!;
+        Assert.Contains("Invoke-BashExecFd 3 '<'", ps);
+        Assert.Contains("Invoke-BashExecFd 3 '<&' '-'", ps);
+        Assert.Contains("$global:LASTEXITCODE = $__psbashFdRc", ps);
+        Assert.DoesNotContain("| Emit-BashLine | Invoke-BashRead", ps);
+    }
+
     [Fact]
     public void Transpile_SubshellExit_RestoresProcessWorkingDirectoryNotJustPsLocation()
     {
@@ -835,7 +1200,7 @@ public class PsEmitterTests
         // Batch 1 of the shared ordered parser. Adding a command here also means adding it to
         // CommonParameterCollisionGuardTests.EmitterForceQuoted (Cmdlets.Tests) — that map is
         // how the guard knows the emitter, not a decoy, protects the colliding letters.
-        Assert.Equal(new[] { "awk", "base64", "bash", "cat", "column", "comm", "command", "compgen", "cp", "cut", "declare", "diff", "du", "echo", "env", "expand", "file", "find", "flock", "fold", "getopts", "grep", "gzip", "hash", "head", "join", "jq", "ln", "ls", "md5sum", "mkdir", "mv", "nl", "paste", "printf", "rg", "rm", "rmdir", "sed", "sh", "sha1sum", "sha256sum", "sort", "source", "split", "stat", "strings", "tac", "tail", "tar", "tee", "test", "time", "times", "touch", "tree", "type", "ulimit", "umask", "unexpand", "uniq", "wc", "xargs" }, PsEmitter.OrderedArgCommands.OrderBy(x => x).ToArray());
+        Assert.Equal(new[] { "awk", "base64", "bash", "cat", "column", "comm", "command", "compgen", "complete", "compopt", "cp", "cut", "declare", "diff", "du", "echo", "env", "expand", "file", "find", "flock", "fold", "getopts", "grep", "gzip", "hash", "head", "join", "jq", "ln", "ls", "md5sum", "mkdir", "mv", "nl", "paste", "printf", "rg", "rm", "rmdir", "sed", "sh", "sha1sum", "sha256sum", "shopt", "sort", "source", "split", "stat", "strings", "tac", "tail", "tar", "tee", "test", "time", "timeout", "times", "touch", "tree", "type", "ulimit", "umask", "unexpand", "uniq", "wc", "xargs" }, PsEmitter.OrderedArgCommands.OrderBy(x => x).ToArray());
     }
 
     // `bash` is on OrderedArgCommands: the script's own args (`bash s.sh -v -e -c x`) and the
@@ -1538,7 +1903,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("echo $@");
 
-        Assert.Equal("Invoke-BashEcho $(if ($global:BashPositional) { $global:BashPositional } else { $args })", result);
+        Assert.Contains("| ConvertTo-BashWords", result);
     }
 
     [Fact]
@@ -1644,7 +2009,9 @@ public class PsEmitterTests
         // ${VAR@Q} quotes the value for reuse as input — must not drop to bare $env:VAR.
         var result = PsEmitter.Transpile("echo ${VAR@Q}");
 
-        Assert.Equal("Invoke-BashEcho (\"'\" + ($env:VAR -replace \"'\",\"'\\''\") + \"'\")", result);
+        // Unquoted, so the result is word-split: an unset VAR is no argument at all.
+        Assert.Contains("ConvertTo-BashWords", result);
+        Assert.Contains("$(if ($null -eq $env:VAR) { '' } else { [PsBash.Cmdlets.BashQuoteText]::ForReuse($env:VAR) })", result);
     }
 
     [Fact]
@@ -1664,13 +2031,31 @@ public class PsEmitterTests
     }
 
     [Fact]
+    public void Transpile_DollarDash_ReflectsTheOptionsThatAreOn()
+    {
+        var result = PsEmitter.Transpile("echo $-");
+
+        Assert.Contains("$global:__BashNounset", result);
+        Assert.Contains("$global:__BashErrexit", result);
+    }
+
+    [Theory]
+    [InlineData("set +efuC")]
+    [InlineData("set -e -f")]
+    [InlineData("set -efuC")]
+    public void Transpile_BundledShortSetOptions_AreAccepted(string bash)
+        => Assert.NotEmpty(PsEmitter.Transpile(bash + "; echo ok"));
+
+    [Fact]
+    public void Transpile_SetOptionTheShellOnlyRemembers_GoesToShopt()
+        => Assert.Equal("Invoke-BashShopt '-o' '-s' 'vi'", PsEmitter.Transpile("set -o vi"));
+
+    [Fact]
     public void Transpile_BracedVarTransformPrompt_PreservesValue()
     {
-        // @P has no PowerShell equivalent: degrade to the bare value, not a silent total drop
-        // of the whole expansion — the variable still expands.
         var result = PsEmitter.Transpile("echo ${VAR@P}");
 
-        Assert.Equal("Invoke-BashEcho $env:VAR", result);
+        Assert.Contains("[PsBash.Cmdlets.BashPromptText]::Expand(", result);
     }
 
     [Fact]
@@ -1681,14 +2066,14 @@ public class PsEmitterTests
         // Runtime-clamped slice (bash offset/length semantics) so an out-of-range
         // offset yields @() instead of a reversed PowerShell range. Wrapped in $(...)
         // so the scriptblock is a valid command argument.
-        Assert.Equal("Invoke-BashEcho $(& { $__psbA = @($a); $__psbO = 1; if ($__psbO -lt 0) { $__psbO = $__psbA.Count + $__psbO }; $__psbO = [Math]::Max(0, [Math]::Min($__psbO, $__psbA.Count)); $__psbN = 2; if ($__psbN -lt 0) { $__psbN = 0 }; $__psbN = [Math]::Min($__psbN, $__psbA.Count - $__psbO); if ($__psbN -le 0) { @() } else { $__psbA[$__psbO..($__psbO + $__psbN - 1)] } })", result);
+        Assert.Equal("Invoke-BashEcho $(& { $__psbA = @($a); $__psbO = 1; if ($__psbO -lt 0) { $__psbO = $__psbA.Count + $__psbO; if ($__psbO -lt 0) { $__psbO = $__psbA.Count } }; $__psbO = [Math]::Max(0, [Math]::Min($__psbO, $__psbA.Count)); $__psbN = 2; if ($__psbN -lt 0) { $__psbN = 0 }; $__psbN = [Math]::Min($__psbN, $__psbA.Count - $__psbO); if ($__psbN -le 0) { @() } else { $__psbA[$__psbO..($__psbO + $__psbN - 1)] } })", result);
     }
 
     [Fact]
     public void Transpile_ArraySliceOffsetOnly_EmitsRangeToEnd()
     {
         var result = PsEmitter.Transpile("echo ${a[@]:2}");
-        Assert.Equal("Invoke-BashEcho $(& { $__psbA = @($a); $__psbO = 2; if ($__psbO -lt 0) { $__psbO = $__psbA.Count + $__psbO }; $__psbO = [Math]::Max(0, [Math]::Min($__psbO, $__psbA.Count)); $__psbN = $__psbA.Count - $__psbO; if ($__psbN -lt 0) { $__psbN = 0 }; $__psbN = [Math]::Min($__psbN, $__psbA.Count - $__psbO); if ($__psbN -le 0) { @() } else { $__psbA[$__psbO..($__psbO + $__psbN - 1)] } })", result);
+        Assert.Equal("Invoke-BashEcho $(& { $__psbA = @($a); $__psbO = 2; if ($__psbO -lt 0) { $__psbO = $__psbA.Count + $__psbO; if ($__psbO -lt 0) { $__psbO = $__psbA.Count } }; $__psbO = [Math]::Max(0, [Math]::Min($__psbO, $__psbA.Count)); $__psbN = $__psbA.Count - $__psbO; if ($__psbN -lt 0) { $__psbN = 0 }; $__psbN = [Math]::Min($__psbN, $__psbA.Count - $__psbO); if ($__psbN -le 0) { @() } else { $__psbA[$__psbO..($__psbO + $__psbN - 1)] } })", result);
     }
 
     [Fact]
@@ -1696,7 +2081,7 @@ public class PsEmitterTests
     {
         // ${arr[@]: -2} -> last 2 elements, runtime-clamped (negative offset from end).
         var result = PsEmitter.Transpile("echo ${arr[@]: -2}");
-        Assert.Equal("Invoke-BashEcho $(& { $__psbA = @($arr); $__psbO = -2; if ($__psbO -lt 0) { $__psbO = $__psbA.Count + $__psbO }; $__psbO = [Math]::Max(0, [Math]::Min($__psbO, $__psbA.Count)); $__psbN = $__psbA.Count - $__psbO; if ($__psbN -lt 0) { $__psbN = 0 }; $__psbN = [Math]::Min($__psbN, $__psbA.Count - $__psbO); if ($__psbN -le 0) { @() } else { $__psbA[$__psbO..($__psbO + $__psbN - 1)] } })", result);
+        Assert.Equal("Invoke-BashEcho $(& { $__psbA = @($arr); $__psbO = -2; if ($__psbO -lt 0) { $__psbO = $__psbA.Count + $__psbO; if ($__psbO -lt 0) { $__psbO = $__psbA.Count } }; $__psbO = [Math]::Max(0, [Math]::Min($__psbO, $__psbA.Count)); $__psbN = $__psbA.Count - $__psbO; if ($__psbN -lt 0) { $__psbN = 0 }; $__psbN = [Math]::Min($__psbN, $__psbA.Count - $__psbO); if ($__psbN -le 0) { @() } else { $__psbA[$__psbO..($__psbO + $__psbN - 1)] } })", result);
     }
 
     [Fact]
@@ -1763,7 +2148,7 @@ public class PsEmitterTests
     public void Transpile_AssocElementAlternative_AppliesScalarOpToKey()
     {
         var result = PsEmitter.Transpile("echo ${m[key]:+yes}");
-        Assert.Equal("Invoke-BashEcho ($m['key'] ? \"yes\" : \"\")", result);
+        Assert.Equal("Invoke-BashEcho ($m[$(if ($m -is [System.Collections.IDictionary]) { 'key' } else { [long](Invoke-BashArith 'key') })] ? \"yes\" : \"\")", result);
     }
 
     [Fact]
@@ -1778,14 +2163,14 @@ public class PsEmitterTests
     public void Transpile_BracedParamAt_EmitsArgs()
     {
         var result = PsEmitter.Transpile("echo ${@}");
-        Assert.Equal("Invoke-BashEcho $(if ($global:BashPositional) { $global:BashPositional } else { $args })", result);
+        Assert.Contains("| ConvertTo-BashWords", result);
     }
 
     [Fact]
     public void Transpile_BracedParamStar_EmitsArgs()
     {
         var result = PsEmitter.Transpile("echo ${*}");
-        Assert.Equal("Invoke-BashEcho $(if ($global:BashPositional) { $global:BashPositional } else { $args })", result);
+        Assert.Contains("| ConvertTo-BashWords", result);
     }
 
     [Fact]
@@ -1808,7 +2193,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("echo ${VAR%%pattern}");
 
-        Assert.Contains("$env:VAR -replace 'pattern$',''", result); // the result is then word-split (unquoted)
+        Assert.Contains("$env:VAR -creplace 'pattern$',''", result); // the result is then word-split (unquoted)
     }
 
     [Theory]
@@ -1818,14 +2203,14 @@ public class PsEmitterTests
     // actual backslash before the quote and therefore NEVER matched: the standard
     // quote-stripping idiom silently did nothing.
     // Oracle: `value="'hi'"; value="${value%\'}"; value="${value#\'}"` -> `hi`.
-    [InlineData(@"echo ${VAR%\'}", @"-replace '^(.*)''$','$1'")]
-    [InlineData(@"echo ${VAR#\'}", @"-replace '^''',''")]
-    [InlineData(@"echo ${VAR%\""}", @"-replace '^(.*)""$','$1'")]
+    [InlineData(@"echo ${VAR%\'}", @"-creplace '^(.*)''$','$1'")]
+    [InlineData(@"echo ${VAR#\'}", @"-creplace '^''',''")]
+    [InlineData(@"echo ${VAR%\""}", @"-creplace '^(.*)""$','$1'")]
     // An escaped glob metachar becomes a literal one, not a wildcard.
-    [InlineData(@"echo ${VAR%\*}", @"-replace '^(.*)\*$','$1'")]
-    [InlineData(@"echo ${VAR%\?}", @"-replace '^(.*)\?$','$1'")]
+    [InlineData(@"echo ${VAR%\*}", @"-creplace '^(.*)\*$','$1'")]
+    [InlineData(@"echo ${VAR%\?}", @"-creplace '^(.*)\?$','$1'")]
     // An escaped backslash is one literal backslash.
-    [InlineData(@"echo ${VAR%\\}", @"-replace '^(.*)\\$','$1'")]
+    [InlineData(@"echo ${VAR%\\}", @"-creplace '^(.*)\\$','$1'")]
     public void Transpile_BracedVarPatternWithEscape_TreatsNextCharAsLiteral(
         string bash, string expected)
     {
@@ -1837,7 +2222,7 @@ public class PsEmitterTests
     {
         // Guard the narrow claim: only a BACKSLASH-escaped metachar becomes literal;
         // an unescaped one keeps its glob meaning.
-        Assert.Contains("-replace '^(.*).*$','$1'", PsEmitter.Transpile("echo ${VAR%*}"));
+        Assert.Contains("-creplace '^(.*).*$','$1'", PsEmitter.Transpile("echo ${VAR%*}"));
     }
 
     [Fact]
@@ -1845,7 +2230,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("echo ${VAR##pattern}");
 
-        Assert.Contains("$env:VAR -replace '^pattern',''", result);
+        Assert.Contains("$env:VAR -creplace '^pattern',''", result);
     }
 
     [Fact]
@@ -1861,7 +2246,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("echo $*");
 
-        Assert.Equal("Invoke-BashEcho $(if ($global:BashPositional) { $global:BashPositional } else { $args })", result);
+        Assert.Contains("| ConvertTo-BashWords", result);
     }
 
     [Fact]
@@ -2330,7 +2715,7 @@ public class PsEmitterTests
 
         // Numeric operators cast both operands to [long] so the compare is integer, not
         // string ('10' -gt 9 must be true).
-        Assert.Equal("$(if (([long]($env:a) -eq [long]($env:b))) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1 })", result);
+        Assert.Equal("$(if (([long](Invoke-BashArith ([string]($env:a))) -eq [long](Invoke-BashArith ([string]($env:b))))) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1 })", result);
     }
 
     // ── a double-quoted test operand keeps its expansions live ───────────────
@@ -2427,8 +2812,8 @@ public class PsEmitterTests
         => Assert.Contains(expected, PsEmitter.Transpile(script));
 
     [Fact]
-    public void Transpile_BracketParens_RunTheTestCmdlet()
-        => Assert.Contains("Invoke-BashTest `( '-n' x `)", PsEmitter.Transpile(@"[ \( -n x \) -a -n y ]"));
+    public void Transpile_BracketParens_AreTranslatedAsGrouping()
+        => Assert.DoesNotContain("`(", PsEmitter.Transpile(@"[ \( -n x \) -a -n y ]"));   // grouping is translated, not passed to the cmdlet
     [Fact]
     public void Transpile_SingleOperandTest_StillTestsNonEmpty()
     {
@@ -2515,10 +2900,11 @@ public class PsEmitterTests
     [Fact]
     public void Transpile_ExtendedRegexRhs_MixedLiteralAndVar_StaysQuoted()
     {
-        // Only a SOLE expansion goes bare; a mixed word keeps the literal path.
+        // Only a SOLE expansion goes bare; a mixed word is built part by part (literal text + the variable's value).
         var result = PsEmitter.Transpile("[[ $a =~ ^${p}[0-9]+$ ]]");
 
-        Assert.Contains("-match '", result);
+        Assert.Contains("'^' + [string](", result);
+        Assert.Contains("'[0-9]+$'", result);
     }
 
     // ── here-string on a COMPOUND command, `for` single item, multi-var `read` ──
@@ -2870,7 +3256,7 @@ public class PsEmitterTests
         Assert.Contains("'abc' -ceq 'abc'", PsEmitter.Transpile("[ abc = abc ]"));
         Assert.Contains("'abc' -cne 'xyz'", PsEmitter.Transpile("[ abc != xyz ]"));
         Assert.Contains("$env:x -ceq 'abc'", PsEmitter.Transpile("x=1; [ $x = abc ]"));
-        Assert.Contains("[long](5) -eq [long](5)", PsEmitter.Transpile("[ 5 -eq 5 ]"));   // numeric compare casts to [long]
+        Assert.Contains("(Invoke-BashTestInt (5)) -eq (Invoke-BashTestInt -Second (5))", PsEmitter.Transpile("[ 5 -eq 5 ]"));   // strict decimal operands
     }
 
     [Fact]
@@ -2898,7 +3284,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("[[ $a -lt $b ]]");
 
-        Assert.Equal("$(if (([long]($env:a) -lt [long]($env:b))) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1 })", result);
+        Assert.Equal("$(if (([long](Invoke-BashArith ([string]($env:a))) -lt [long](Invoke-BashArith ([string]($env:b))))) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1 })", result);
     }
 
     [Fact]
@@ -2906,7 +3292,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("[[ $a -gt $b ]]");
 
-        Assert.Equal("$(if (([long]($env:a) -gt [long]($env:b))) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1 })", result);
+        Assert.Equal("$(if (([long](Invoke-BashArith ([string]($env:a))) -gt [long](Invoke-BashArith ([string]($env:b))))) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1 })", result);
     }
 
     [Fact]
@@ -3011,7 +3397,7 @@ public class PsEmitterTests
         // (( … )) condition) rather than the old naive </> string-replace, so the
         // full C operator set — including << / >> shifts — is honored. See
         // Transpile_ForArith_ShiftOperatorInCondition_NotShredded.
-        Assert.Equal("$__psbash_iter = 0; :__psbash_l0 for (${i} = $(Invoke-BashArith 'i=0'); ((Invoke-BashArith 'i<10') -ne 0); $null = Invoke-BashArith 'i++') { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; Invoke-BashEcho $i }", result);
+        Assert.Equal("$__psbash_iter = 0; :__psbash_l0 for (${i} = $(Invoke-BashArith 'i=0'); (@(Invoke-BashArith 'i<10') -ne 0); $null = Invoke-BashArith 'i++') { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; Invoke-BashEcho $i }", result);
     }
 
     // Regression: TranslateArithCondition string-replaced < and > unconditionally,
@@ -3123,8 +3509,16 @@ public class PsEmitterTests
         // `$null -ne` guard makes the BashText probe null-safe. The read var is bound with a real
         // `${line} = $_` assignment (not a text rewrite of $line -> $_, which clobbered literals).
         Assert.Equal(
-            ":__psbash_l0 foreach ($__psbash_rec0 in $input) { :__psbash_lc0 foreach ($_ in @(($(if ($null -ne $__psbash_rec0 -and $__psbash_rec0.PSObject.Properties['BashText']) { $__psbash_rec0.BashText } else { \"$__psbash_rec0\" }) -replace \"`n$\",\"\") -split \"`n\")) { ${line} = $_; Invoke-BashEcho $line } }",
+            ":__psbash_l0 foreach ($__psbash_rec0 in $input) { :__psbash_lc0 foreach ($_ in @(($(if ($null -ne $__psbash_rec0 -and $__psbash_rec0.PSObject.Properties['BashText']) { $__psbash_rec0.BashText } else { \"$__psbash_rec0\" }) -replace \"`n$\",\"\") -split \"`n\")) { ${line} = $_.Trim([char[]]@(32,9)); Invoke-BashEcho $line } }",
             result);
+    }
+
+    // Oracle: a lone read variable has IFS whitespace trimmed (`while read l` -> "s1" for "  s1  "); `IFS= read` keeps it.
+    [Fact]
+    public void Transpile_WhileReadLine_IfsEmptyKeepsTheLineAndDelimiterReadsRecords()
+    {
+        Assert.Contains("${line} = $_;", PsEmitter.Transpile("while IFS= read -r line; do echo $line; done")!);
+        Assert.DoesNotContain("foreach ($_ in @((", PsEmitter.Transpile("while read -r -d '' line; do echo $line; done")!);
     }
 
     [Fact]
@@ -3135,7 +3529,7 @@ public class PsEmitterTests
         // prints it verbatim), so the emitted single-quoted string must be untouched.
         var result = PsEmitter.Transpile("while read line; do echo 'lit=$line'; done");
 
-        Assert.Contains("${line} = $_;", result);
+        Assert.Contains("${line} = $_.Trim([char[]]@(32,9));", result);
         Assert.Contains("'lit=$line'", result);   // literal preserved, NOT rewritten to $_
         Assert.DoesNotContain("'lit=$_'", result);
     }
@@ -3650,7 +4044,7 @@ public class PsEmitterTests
     // A glob word is expanded by the SHELL (ConvertTo-BashGlob), so echo receives file names.
     // See emitter-strategy.md "Pathname expansion".
     private static string GlobSplat(string pattern, string command = "Invoke-BashEcho") =>
-        $"& {{ $__bashsplat0 = @(ConvertTo-BashGlob '{pattern}'); {command} @__bashsplat0 }}";
+        $"& {{ $__bashsplat0 = @(ConvertTo-BashGlob '{pattern}'); if (-not $?) {{ return }}; {command} @__bashsplat0 }}";
 
     [Fact]
     public void Transpile_GlobStar_ExpandsViaConvertToBashGlob()
@@ -3714,7 +4108,7 @@ public class PsEmitterTests
     public void Transpile_PrintfWithGlobOperand_ExpandsTheGlobOnly()
     {
         Assert.Equal(
-            "& { $__bashsplat0 = @(ConvertTo-BashGlob '*'); Invoke-BashPrintf '%s\\n' @__bashsplat0 }",
+            "& { $__bashsplat0 = @(ConvertTo-BashGlob '*'); if (-not $?) { return }; Invoke-BashPrintf '%s\\n' @__bashsplat0 }",
             PsEmitter.Transpile("printf '%s\\n' *"));
     }
 
@@ -3818,7 +4212,7 @@ public class PsEmitterTests
     public void Transpile_BraceExpansionWithGlob_ExpandsBracesThenGlobsEachWord()
     {
         Assert.Equal(
-            "& { $__bashsplat0 = @(@('sub/a*','sub/b*') | ConvertTo-BashGlob); Invoke-BashEcho @__bashsplat0 }",
+            "& { $__bashsplat0 = @(@('sub/a*','sub/b*') | ConvertTo-BashGlob); if (-not $?) { return }; Invoke-BashEcho @__bashsplat0 }",
             PsEmitter.Transpile("echo sub/{a,b}*"));
         // No glob character: the plain brace array is unchanged.
         Assert.Equal("Invoke-BashEcho @('a','b')", PsEmitter.Transpile("echo {a,b}"));
@@ -4114,6 +4508,13 @@ public class PsEmitterTests
         Assert.Equal("Invoke-BashDiff (Invoke-ProcessSub { Invoke-BashSort file1 | Invoke-BashUniq }) file2", result);
     }
 
+    [Theory]
+    [InlineData("egrep 'a|b' f", "Invoke-BashGrep '-E' 'a|b' f")]
+    [InlineData("fgrep a.b f", "Invoke-BashGrep '-F' a.b f")]
+    public void Transpile_EgrepFgrep_ArePassthroughGrepWithTheModeFlag(string bash, string expected)
+    {
+        Assert.Equal(expected, PsEmitter.Transpile(bash));
+    }
     [Fact]
     public void Transpile_GrepWithProcessSub()
     {
@@ -4181,21 +4582,21 @@ public class PsEmitterTests
     public void Transpile_ArrayIndexAccess_EmitsPsIndex()
     {
         var result = PsEmitter.Transpile("echo ${arr[0]}");
-        Assert.Equal("Invoke-BashEcho $arr[0]", result);
+        Assert.Equal("Invoke-BashEcho $(if ($null -eq $arr) { $env:arr } else { $arr['0'] })", result);
     }
 
     [Fact]
     public void Transpile_ArrayAllElements_EmitsPsArrayRef()
     {
         var result = PsEmitter.Transpile("echo ${arr[@]}");
-        Assert.Equal("Invoke-BashEcho $(if ($arr -is [System.Collections.IDictionary]) { $arr.Values } else { $arr })", result);
+        Assert.Equal("Invoke-BashEcho $(if ($arr -is [System.Collections.IDictionary]) { $arr.Values } else { $(if ($null -ne $arr) { $arr } else { $env:arr }) })", result);
     }
 
     [Fact]
     public void Transpile_ArrayLength_EmitsPsCount()
     {
         var result = PsEmitter.Transpile("echo ${#arr[@]}");
-        Assert.Equal("Invoke-BashEcho $arr.Count", result);
+        Assert.Equal("Invoke-BashEcho $(if ($arr -is [System.Collections.IDictionary]) { $arr.Count } elseif ($null -ne $arr) { @($arr).Count } elseif ($null -ne $env:arr) { 1 } else { 0 })", result);
     }
 
     [Fact]
@@ -4234,7 +4635,7 @@ public class PsEmitterTests
     public void Transpile_AssociativeArrayAccess_EmitsHashtableAccess()
     {
         var result = PsEmitter.Transpile("echo ${map[key]}");
-        Assert.Equal("Invoke-BashEcho $map['key']", result);
+        Assert.Equal("Invoke-BashEcho $map[$(if ($map -is [System.Collections.IDictionary]) { 'key' } else { [long](Invoke-BashArith 'key') })]", result);
     }
 
     [Fact]
@@ -4797,7 +5198,7 @@ public class PsEmitterTests
     public void Transpile_ArrayAppend_EmitsPlusEquals()
     {
         var result = PsEmitter.Transpile("Fruits+=('Watermelon')");
-        Assert.Contains("$Fruits += @('Watermelon')", result);
+        Assert.Contains("$Fruits = Add-BashArray $Fruits @('Watermelon')", result);
     }
 
     // while read -r VAR (with flag) takes the same labelled read-loop path as plain `read VAR`
@@ -4910,8 +5311,6 @@ public class PsEmitterTests
     [InlineData("set -o \"$option\"")]
     [InlineData("set -n")]
     [InlineData("set -o noexec")]
-    [InlineData("set -o unknown")]
-    [InlineData("set -e -- value")]
     public void Transpile_SetUnsupportedSafetyOption_RefusesBeforeExecution(string bash)
     {
         var error = Assert.Throws<ParseException>(() => PsEmitter.Transpile(bash + "; echo unsafe"));
@@ -4995,11 +5394,18 @@ public class PsEmitterTests
         Assert.Contains(check, PsEmitter.Transpile("set -e; X=$(false)")!);
     }
 
+    // Inside a function/subshell/command-sub the ERR-trap half of the check is gated on errtrace (set -E).
+    private static string ErrexitCheckInsideScope(string exit)
+    {
+        bool saved = PsBuild.ErrTrapNeedsErrtrace; PsBuild.ErrTrapNeedsErrtrace = true;
+        try { return PsBuild.ErrexitCheck(exit); } finally { PsBuild.ErrTrapNeedsErrtrace = saved; }
+    }
+
     [Fact]
     public void Transpile_SetE_InsideSubshell_LeavesOnlyTheSubshell()
     {
         var result = PsEmitter.Transpile("set -e; (cat /nofile; echo in); echo after")!;
-        Assert.Contains(PsBuild.ErrexitCheck("return"), result);
+        Assert.Contains(ErrexitCheckInsideScope("return"), result);
         Assert.Contains("& { $__psbash_ss = ", result);
     }
 
@@ -5013,7 +5419,8 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("set -x");
         // The flag lets a subshell scope (BashShellState) undo a `set -x` made inside it.
-        Assert.Equal("Set-PSDebug -Trace 1; $global:__BashXtrace = $true", result);
+        // The statement is itself traced first (a no-op unless xtrace is already on, as in bash).
+        Assert.Equal("Write-BashXtrace 'set' '-x'; Set-PSDebug -Trace 1; $global:__BashXtrace = $true", result);
     }
 
     [Fact]
@@ -5117,7 +5524,7 @@ public class PsEmitterTests
         // ${p%.*} removes the SHORTEST suffix matching `.*` -> keep `foo.bar`,
         // not `foo`. Emitted as `^(.*)\..*$` -> `$1` (greedy prefix capture).
         var result = PsEmitter.Transpile("echo ${p%.*}");
-        Assert.Contains("-replace '^(.*)", result);
+        Assert.Contains("-creplace '^(.*)", result);
         Assert.Contains("$1", result);
     }
 
@@ -5249,7 +5656,7 @@ public class PsEmitterTests
     {
         // GlobToRegex translates glob * to regex .* so l* becomes l.* (greedy longest suffix).
         var result = PsEmitter.Transpile("echo \"${FOO%%l*}\"");
-        Assert.Equal("Invoke-BashEcho \"$($env:FOO -replace 'l.*$','')\"", result);
+        Assert.Equal("Invoke-BashEcho \"$($env:FOO -creplace 'l.*$','')\"", result);
     }
 
     [Fact]
@@ -5264,7 +5671,7 @@ public class PsEmitterTests
     {
         // GlobToRegex translates glob * to regex .* so */ becomes .* + / = .*/ (greedy longest prefix).
         var result = PsEmitter.Transpile("echo \"${PATH##*/}\"");
-        Assert.Equal("Invoke-BashEcho \"$($env:PATH -replace '^.*/','')\"", result);
+        Assert.Equal("Invoke-BashEcho \"$($env:PATH -creplace '^.*/','')\"", result);
     }
 
     [Fact]
@@ -5294,6 +5701,77 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("trap 'echo error' ERR");
         Assert.Equal("Invoke-BashTrap 'echo error' ERR", result);
+    }
+
+    [Fact]
+    public void Transpile_ErrTrap_InFunctionNeedsErrtrace_AndLineIsLastCommandOfList()
+    {
+        var result = PsEmitter.Transpile("trap 'echo e' ERR\nf() { false; }\nfalse || false\nset -E");
+        Assert.Contains("$global:__BashErrtrace", result);          // gate inside the function body
+        Assert.Contains("$global:__BashErrtrace = $true", result);   // `set -E` turns it on
+        Assert.Contains("$env:__psbLine = 3", result);              // top-level list: its line
+    }
+
+    [Theory]
+    [InlineData("echo ${v@a}")]
+    [InlineData("echo ${a[0]@a}")]
+    public void Transpile_AttributeTransform_AsksTheRuntimeForTheLetters(string src)
+        => Assert.Contains("BashQuoteText]::Attributes(", PsEmitter.Transpile(src));
+
+    [Fact]
+    public void Transpile_ReadonlyArray_MarksTheNameReadonly()
+        => Assert.Contains("MarkReadonly('arr')", PsEmitter.Transpile("readonly arr=(a b)"));
+
+    [Fact]
+    public void Transpile_Alias_ExpandedAtTranspileTimeOnLaterLines()
+    {
+        var result = PsEmitter.Transpile("shopt -s expand_aliases\nalias hi='echo hello world'\nhi there")!;
+        Assert.Contains("-NoFunction", result);                    // no run-time function: `'hi'` / `$cmd` are not aliases
+        Assert.Matches(@"Invoke-BashEcho \S*hello\S* \S*world\S* \S*there\S*", result);
+    }
+
+    [Fact]
+    public void Transpile_Alias_UsedOnItsOwnLine_IsNotExpanded()
+    {
+        var result = PsEmitter.Transpile("shopt -s expand_aliases\nalias e=echo; e one")!;
+        Assert.DoesNotContain("Invoke-BashEcho", result);
+    }
+
+    [Fact]
+    public void Transpile_Alias_TrailingBlankExpandsTheNextWord()
+    {
+        var result = PsEmitter.Transpile("shopt -s expand_aliases\nalias a='echo A '\nalias b='B'\na b")!;
+        Assert.DoesNotContain("Invoke-Bash b", result);
+        Assert.Matches(@"Invoke-BashEcho \S*A\S* \S*B\S*", result);
+    }
+
+    [Fact]
+    public void Transpile_TypesetN_OnAnAssignedString_MakesThatStringTheTarget()
+    {
+        var result = PsEmitter.Transpile("x=foo\nref=x\ntypeset -n ref\necho $ref")!;
+        Assert.Contains("$env:x", result.Substring(result.LastIndexOf("& {", StringComparison.Ordinal)));
+    }
+
+    [Fact]
+    public void Transpile_TypesetN_BeforeAnyValue_TakesTheNextLiteralAssignmentAsTarget()
+    {
+        var result = PsEmitter.Transpile("typeset -n ref\nref=x\necho $ref")!;
+        Assert.Contains("$env:x", result.Substring(result.LastIndexOf("& {", StringComparison.Ordinal)));
+    }
+
+    [Fact]
+    public void Transpile_TypesetPlusN_DropsTheNamerefAttribute()
+    {
+        var result = PsEmitter.Transpile("x=foo\nref=x\ntypeset -n ref\ntypeset +n ref\necho $ref")!;
+        Assert.DoesNotContain("Invoke-BashDeclare", result);
+        Assert.Contains("$env:ref", result.Substring(result.LastIndexOf("& {", StringComparison.Ordinal)));
+    }
+
+    [Fact]
+    public void Transpile_ReadonlyArray_RefusesLaterAssignmentAndAppend()
+    {
+        var result = PsEmitter.Transpile("typeset -ar arr=(1 2)\narr=(c)\narr+=(e)")!;
+        Assert.Equal(2, System.Text.RegularExpressions.Regex.Matches(result, "arr: readonly variable").Count);
     }
 
     [Fact]
@@ -5724,7 +6202,7 @@ public class PsEmitterTests
         // if [ 1 -eq 1 ] && [ 2 -eq 2 ]; then echo yes; fi
         // Both sides are BoolExpr — no LASTEXITCODE wrapper needed.
         var result = PsEmitter.Transpile("if [ 1 -eq 1 ] && [ 2 -eq 2 ]; then echo yes; fi");
-        Assert.Equal("if ((([long](1) -eq [long](1)) -and ([long](2) -eq [long](2)))) { Invoke-BashEcho yes }", result);
+        Assert.Equal("if ((((Invoke-BashTestInt (1)) -eq (Invoke-BashTestInt -Second (1))) -and ((Invoke-BashTestInt (2)) -eq (Invoke-BashTestInt -Second (2))))) { Invoke-BashEcho yes }", result);
     }
 
     [Fact]
@@ -5777,6 +6255,104 @@ public class PsEmitterTests
         var result = PsEmitter.Transpile("trap - DEBUG");
 
         Assert.Equal("Unregister-BashChpwdHook -Name '336d5ebc'", result);
+    }
+
+    [Fact]
+    public void Transpile_TrapDebug_MultiStatementScript_RunsTrapBeforeEachCommand()
+    {
+        // A multi-statement script gets real DEBUG semantics, not the chpwd-hook mapping.
+        var result = PsEmitter.Transpile("trap 'echo T' DEBUG\necho a\necho b");
+
+        Assert.Contains("Invoke-BashTrap", result);
+        Assert.Contains("__BashTrapDEBUG", result);
+        Assert.DoesNotContain("Register-BashChpwdHook", result);
+    }
+
+    [Fact]
+    public void Transpile_TrapDebug_LoneLine_KeepsChpwdHookMapping()
+    {
+        var result = PsEmitter.Transpile("trap 'echo T' DEBUG");
+
+        Assert.Contains("Register-BashChpwdHook", result);
+    }
+
+    [Fact]
+    public void Transpile_EvalDashDash_DropsTheSeparator()
+    {
+        var r = PsEmitter.Transpile("eval -- \"echo hi\"");
+        Assert.DoesNotContain("'--'", r);
+    }
+
+    [Fact]
+    public void Transpile_TypesetWithQuotedDynamicArg_MapsToInvokeBashDeclare()
+    {
+        Assert.Contains("Invoke-BashDeclare", PsEmitter.Transpile("typeset -a \"$code\""));
+    }
+
+    [Fact]
+    public void Transpile_FunctionNamedLikeMappedCommand_CallsTheFunction()
+    {
+        var r = PsEmitter.Transpile("seq() { echo my; }\nseq 3")!;
+        Assert.DoesNotContain("Invoke-BashSeq", r);
+        Assert.Contains("-CommandType Function", r);
+    }
+
+    [Fact]
+    public void Transpile_FunctionNamedCd_SkipsTheInlineCd()
+    {
+        var r = PsEmitter.Transpile("cd() { echo hi; }\ncd /")!;
+        Assert.DoesNotContain("__psbash_cd_target", r);
+    }
+
+    [Fact]
+    public void Transpile_BuiltinCd_BypassesAFunctionOfTheSameName()
+    {
+        var r = PsEmitter.Transpile("cd() { echo hi; }\nbuiltin cd /")!;
+        Assert.Contains("__psbash_cd_target", r.Substring(r.IndexOf("}; ", StringComparison.Ordinal)));
+    }
+
+    [Fact]
+    public void Transpile_BuiltinWithNoCommand_Succeeds()
+    {
+        Assert.Contains("LASTEXITCODE = 0", PsEmitter.Transpile("builtin")!);
+    }
+
+    [Fact]
+    public void Transpile_BashRematchElement_ReadsByIntKey()
+    {
+        var r = PsEmitter.Transpile("echo ${BASH_REMATCH[1]}")!;
+        Assert.Contains("$BASH_REMATCH[1]", r);
+        Assert.DoesNotContain("$BASH_REMATCH['1']", r);
+    }
+
+    [Fact]
+    public void Transpile_SetDashO_Alone_ListsOptions()
+    {
+        Assert.Contains("Invoke-BashShopt '-o'", PsEmitter.Transpile("set -o")!);
+        Assert.Contains("Invoke-BashShopt '-po'", PsEmitter.Transpile("set +o")!);
+    }
+
+    [Fact]
+    public void Transpile_SetLoneDash_EndsOptionsLikeDashDash()
+    {
+        var r = PsEmitter.Transpile("set - a b")!;
+        Assert.Contains("BashPositional", r);
+        Assert.Contains("'a', 'b'", r);
+    }
+
+    [Fact]
+    public void Transpile_Hostname_IsLowerCasedLikeTheHostnameCommand()
+    {
+        Assert.Contains("MachineName.ToLowerInvariant()", PsEmitter.Transpile("echo $HOSTNAME"));
+    }
+
+    [Theory]
+    [InlineData("[[ { =~ \"{\" ]]")]
+    [InlineData("[[ a=x =~ a=(x) ]]")]
+    [InlineData("[[ 'a  b' =~ (a  b) ]]")]
+    public void Transpile_RegexMatch_OddOperandsAndSpacedGroup_Parses(string src)
+    {
+        Assert.NotNull(PsEmitter.Transpile(src));
     }
 
     [Fact]
@@ -5907,13 +6483,13 @@ public class PsEmitterTests
     }
 
     [Fact]
-    public void Transpile_SpecialParamArg_NotSplatByRc7()
+    public void Transpile_UnquotedPositionalList_SplitsEachParameterOnIfs()
     {
-        // $@ has its own dedicated expansion and must not be routed through the
-        // RC-7 word-split splat.
+        // Unquoted $@ is word-split like any expansion (IFS='' keeps each parameter whole), through
+        // the splat so a custom IFS and globbing apply per parameter.
         var result = PsEmitter.Transpile("echo $@");
 
-        Assert.DoesNotContain("__bashsplat", result);
+        Assert.Contains("| ConvertTo-BashWords", result);
     }
 
     [Fact]
@@ -5982,9 +6558,7 @@ public class PsEmitterTests
     // there is parsed as a command NAME. `&& break` printed "The term 'break' is
     // not recognized" and the loop ran on, and `|| exit 1` simply DID NOT EXIT —
     // the script sailed past the guard it was written to enforce.
-    [InlineData("cmd || exit 1", "-ne 0) { exit 1 }")]
-    [InlineData("cmd && continue", "-eq 0) { continue }")]
-    [InlineData("cmd && break", "-eq 0) { break }")]
+    [InlineData("cmd || exit 1", "-ne 0) { $global:LASTEXITCODE = 1; exit $global:LASTEXITCODE }")]
     [InlineData("cmd || return", "-ne 0) { return }")]
     public void Transpile_ChainEndingInStatementKeyword_RewritesToIf(
         string bash, string expectedTail)
@@ -5993,6 +6567,15 @@ public class PsEmitterTests
 
         Assert.StartsWith("cmd; if ($global:LASTEXITCODE ", result);
         Assert.EndsWith(expectedTail, result);
+    }
+
+    [Theory]
+    [InlineData("for i in 1 2; do cmd && continue; done", "-eq 0) { continue ")]
+    [InlineData("for i in 1 2; do cmd && break; done", "-eq 0) { break ")]
+    public void Transpile_LoopControlEndingAChainInALoop_RewritesToIf(string bash, string expectedPart)
+    {
+        // Same rewrite as above, inside the loop the keyword needs (a loop-less top-level one is a warning no-op).
+        Assert.Contains(expectedPart, PsEmitter.Transpile(bash));
     }
 
     [Fact]
@@ -6007,7 +6590,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("a && b || exit 1");
 
-        Assert.Equal("a; $(if (-not $? -or $global:LASTEXITCODE -ne 0) { Write-Error '' -ErrorAction SilentlyContinue }) && b; if ($global:LASTEXITCODE -ne 0) { exit 1 }", result);
+        Assert.Equal("a; $(if (-not $? -or $global:LASTEXITCODE -ne 0) { Write-Error '' -ErrorAction SilentlyContinue }) && b; if ($global:LASTEXITCODE -ne 0) { $global:LASTEXITCODE = 1; exit $global:LASTEXITCODE }", result);
     }
 
     // ---- subshell exit scoping / glob class with an expansion --------------
@@ -6029,7 +6612,7 @@ public class PsEmitterTests
     [Fact]
     public void Transpile_ExitOutsideSubshell_StaysProcessExit()
     {
-        Assert.Equal("exit 5", PsEmitter.Transpile("exit 5"));
+        Assert.Equal("$global:LASTEXITCODE = 5; exit $global:LASTEXITCODE", PsEmitter.Transpile("exit 5"));
     }
 
     [Fact]
@@ -6133,7 +6716,7 @@ public class PsEmitterTests
         // bash: errexit is not inherited into $( ), but a set -e inside applies there.
         var result = PsEmitter.Transpile("v=$(set -e; false; echo after)");
         Assert.Contains("$global:__BashErrexit = $false; " + PsBuild.ErrexitSuppressVar + " = 0; ", result);
-        Assert.Contains(PsBuild.ErrexitCheck("return"), result);
+        Assert.Contains(ErrexitCheckInsideScope("return"), result);
     }
 
     [Fact]
@@ -6787,5 +7370,26 @@ public class PsEmitterTests
         // `b `e `n... are PowerShell escapes (bell, ESC, LF); bash treats \b \e \n outside quotes as the bare letter.
         var result = PsEmitter.Transpile(bash)!;
         Assert.DoesNotMatch("`[a-zA-Z0-9]", result);
+    }
+
+    [Theory]
+    [InlineData("readonly", "-pr")]
+    [InlineData("readonly -p", "-pr")]
+    [InlineData("export", "-px")]
+    [InlineData("export -p", "-px")]
+    public void Transpile_BareReadonlyOrExport_ListsThroughDeclare(string bash, string selector)
+    {
+        // Bare `readonly` / `export` list their variables as `declare -r` / `declare -x`; they are not external commands.
+        var result = PsEmitter.Transpile(bash);
+        Assert.Contains("Invoke-BashDeclare", result);
+        Assert.Contains(selector, result);
+    }
+
+    [Fact]
+    public void Transpile_DeclarePrintWithSelectors_StaysAPrintForm()
+    {
+        // `declare -pr` selects read-only variables; it must not be read as `declare -r` of nothing.
+        var result = PsEmitter.Transpile("declare -pa");
+        Assert.Contains("Invoke-BashDeclare", result);
     }
 }

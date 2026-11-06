@@ -451,6 +451,20 @@ public class BashParserTests
         Assert.Equal(stripTabs, hereDoc.StripTabs);
     }
 
+    [Theory]
+    [InlineData("read -u 3 3<<EOF\nhi\nEOF", 3, 3)]
+    [InlineData("read -u 7 7<<-EOF\n\thi\nEOF", 7, 3)]
+    [InlineData("read -u 3 3 <<EOF\nhi\nEOF", 0, 4)]   // `3 <<` is an operand then stdin, not fd 3
+    [InlineData("cat 0<<EOF\nhi\nEOF", 0, 1)]           // `0<<` is plain stdin, not an operand and not a lost body
+    public void Parse_NumberedHeredoc_CarriesDescriptorOnlyWhenAdjacent(string src, int fd, int words)
+    {
+        var simple = Assert.IsType<Command.Simple>(Parse(src));
+        var hereDoc = Assert.Single(simple.HereDocs);
+        Assert.Equal(fd, hereDoc.Fd);
+        Assert.Equal(words, simple.Words.Length);
+        Assert.Equal("hi\n", hereDoc.Body);
+    }
+
     [Fact]
     public void Parse_NamedFdRedirectAfterBraceGroup_CapturesFdVar()
     {
@@ -771,7 +785,7 @@ public class BashParserTests
         var simple = Assert.IsType<Command.Simple>(result);
         var bvs = Assert.IsType<WordPart.BracedVarSub>(Assert.Single(simple.Words[1].Parts));
         Assert.Equal("VAR", bvs.Name);
-        Assert.Equal("#", bvs.Suffix);
+        Assert.Equal("#L", bvs.Suffix);
     }
 
     [Fact]
@@ -1395,6 +1409,31 @@ public class BashParserTests
         // become a silently-match-nothing arm.
         Assert.Throws<ParseException>(() => Parse("case x in ) esac"));
         Assert.Throws<ParseException>(() => Parse("case x in a|) echo a;; esac"));
+    }
+
+    [Fact]
+    public void Parse_ForArith_BraceBody_ParsesLikeDoDone()
+    {
+        var result = Parse("for ((a=1; a<=3; a++)) { echo $a; }");
+
+        var forArith = Assert.IsType<Command.ForArith>(result);
+        Assert.NotNull(forArith.Body);
+    }
+
+    [Fact]
+    public void Parse_Arithmetic_DoubleQuotesAreRemoved()
+    {
+        Assert.Equal("1 + 2", BashArithmeticParser.Parse("\"1 + 2\"").Source);
+        Assert.Equal("3", BashArithmeticParser.Parse("$\"3\"").Source);
+    }
+
+    [Fact]
+    public void Parse_LetOperandWithParenthesisedValue_IsOneArgument()
+    {
+        var result = Parse("let x=( 1 + 2 ) y=3");
+
+        var simple = Assert.IsType<Command.Simple>(result);
+        Assert.Equal(3, simple.Words.Length); // let, x=( 1 + 2 ), y=3
     }
 
     [Fact]

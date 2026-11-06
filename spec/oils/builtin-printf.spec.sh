@@ -65,7 +65,6 @@ declare $var="${val@Q}"
 echo "$foo"
 ## stdout: '"quoted" with spaces and \'
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-printf builtin-printf (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### printf with too few arguments
@@ -306,7 +305,6 @@ done
 
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-printf builtin-printf (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### empty string (osh is more strict)
@@ -410,7 +408,6 @@ status=0
 status=0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-printf builtin-printf (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### printf floating point (not required, but they all implement it)
@@ -534,7 +531,6 @@ status=1
 status=1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-printf builtin-printf (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### printf %q
@@ -554,7 +550,6 @@ printf '[%1q]\n' "$x"
 [a\ b]
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-printf builtin-printf (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### printf negative numbers
@@ -599,7 +594,6 @@ exit 0  # ok
 [-42] status=1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-printf builtin-printf (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### printf + and space flags
@@ -637,7 +631,6 @@ printf '[%g][%#g]\n' 3 3
 [3][3.00000]
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-printf builtin-printf (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Runtime error for invalid integer
@@ -656,7 +649,6 @@ status=1
 status=1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-printf builtin-printf (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### %(strftime format)T
@@ -946,7 +938,6 @@ octal 5
 2D
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-printf builtin-printf (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### printf -v dynamic scope
@@ -1052,7 +1043,6 @@ hex uppercase
 171
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-printf builtin-printf (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### leading spaces are accepted in value given to %d %X, but not trailing spaces
@@ -1094,7 +1084,6 @@ ff
 status=0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-printf builtin-printf (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -1111,5 +1100,4 @@ echo status=$?
 status=1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-printf builtin-printf (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10

@@ -32,30 +32,39 @@ internal static class SharedStdin
     /// lines (<c>printf 'a\nb\n'</c> is one record) yields its first line and keeps the remainder at
     /// the FRONT of the stream. False when the stdin is absent or at end of input.
     /// </summary>
-    internal static bool TryDequeueLine(SessionState state, out string? line)
+    internal static bool TryDequeueLine(SessionState state, out string? line) => TryDequeueLine(state, out line, out _);
+
+    /// <summary>As above; <paramref name="terminated"/> is false when the line was the unterminated tail of the input
+    /// (<c>printf abc</c>, <c>echo -n abc</c>), which bash's <c>read</c> reports with status 1.</summary>
+    internal static bool TryDequeueLine(SessionState state, out string? line, out bool terminated)
     {
         line = null;
+        terminated = true;
         switch (Get(state))
         {
             case StdinCursor cursor:
             {
                 if (cursor.Count == 0) return false;
-                var text = BashRuntime.GetBashText(cursor.Dequeue()).Replace("\r\n", "\n");
+                var item = cursor.Dequeue();
+                var text = BashRuntime.GetBashText(item).Replace("\r\n", "\n");
                 int nl = text.IndexOf('\n');
+                if (nl < 0 && BashRuntime.IsUnterminated(item)) terminated = false;
                 if (nl < 0 || nl == text.Length - 1)
                 {
                     line = nl < 0 ? text : text.Substring(0, nl);
                     return true;
                 }
                 line = text.Substring(0, nl);
-                cursor.PushFront(new object[] { text.Substring(nl + 1) });
+                cursor.PushFront(new object[] { BashRuntime.TextRecord(text.Substring(nl + 1), BashRuntime.IsUnterminated(item)) });
                 return true;
             }
             case Queue<object> queue:
             {
                 if (queue.Count == 0) return false;
-                var text = BashRuntime.GetBashText(queue.Dequeue()).Replace("\r\n", "\n");
+                var qitem = queue.Dequeue();
+                var text = BashRuntime.GetBashText(qitem).Replace("\r\n", "\n");
                 int nl = text.IndexOf('\n');
+                if (nl < 0 && BashRuntime.IsUnterminated(qitem)) terminated = false;
                 if (nl < 0 || nl == text.Length - 1)
                 {
                     line = nl < 0 ? text : text.Substring(0, nl);
@@ -70,6 +79,90 @@ internal static class SharedStdin
             }
             default:
                 return false;
+        }
+    }
+
+    /// <summary>
+    /// <c>read -d DELIM</c>: everything up to the first <paramref name="delim"/> (NUL for <c>-d ''</c>) across lines. The
+    /// queue holds lines, so they are re-joined with newlines (the stream ends in one, as a heredoc / here-string / printf
+    /// does); the text after the delimiter goes back to the front of the stream. <paramref name="terminated"/> is false
+    /// when the stream ended first (bash assigns what it read and returns 1). False when the stdin is absent or at end.
+    /// </summary>
+    internal static bool TryDequeueRecord(SessionState state, char delim, out string? record, out bool terminated)
+    {
+        record = null;
+        terminated = false;
+        var items = new List<object>();
+        switch (Get(state))
+        {
+            case StdinCursor cursor:
+                while (cursor.Count > 0) items.Add(cursor.Dequeue());
+                break;
+            case Queue<object> queue:
+                while (queue.Count > 0) items.Add(queue.Dequeue());
+                break;
+            default:
+                return false;
+        }
+        if (items.Count == 0) return false;
+        // Each record ends in a newline unless it is the unterminated tail (printf abc): the stream's exact bytes.
+        var text = BashRuntime.RecordStreamText(items).Replace("\r\n", "\n");
+        int at = text.IndexOf(delim);
+        string rest = "";
+        if (at >= 0) { record = text.Substring(0, at); rest = text.Substring(at + 1); terminated = true; }
+        else record = text;
+        if (rest.Length > 0)
+        {
+            bool tailUnterminated = BashRuntime.IsUnterminated(items[^1]);
+            object restRec = BashRuntime.TextRecord(rest, tailUnterminated && !rest.EndsWith('\n'));
+            switch (Get(state))
+            {
+                case StdinCursor c: c.PushFront(new object[] { restRec }); break;
+                case Queue<object> q: q.Enqueue(restRec); break;
+            }
+        }
+        return true;
+    }
+
+    /// <summary><c>read -N N</c>: exactly <paramref name="count"/> characters of the stream (delimiters and newlines
+    /// included); the remainder goes back to the front. <paramref name="complete"/> is false when the input ended first.</summary>
+    internal static bool TryDequeueChars(SessionState state, int count, out string? chars, out bool complete)
+    {
+        chars = null;
+        complete = false;
+        var items = new List<object>();
+        switch (Get(state))
+        {
+            case StdinCursor cursor:
+                while (cursor.Count > 0) items.Add(cursor.Dequeue());
+                break;
+            case Queue<object> queue:
+                while (queue.Count > 0) items.Add(queue.Dequeue());
+                break;
+            default:
+                return false;
+        }
+        if (items.Count == 0) return false;
+        var text = BashRuntime.RecordStreamText(items).Replace("\r\n", "\n");
+        if (text.Length <= count) { chars = text; complete = text.Length == count; return true; }
+        chars = text.Substring(0, count);
+        complete = true;
+        PushFront(state, text.Substring(count));
+        return true;
+    }
+
+    /// <summary>Put <paramref name="text"/> back at the FRONT of the shared stdin (nothing when it is empty).</summary>
+    internal static void PushFront(SessionState state, string text)
+    {
+        if (text.Length == 0) return;
+        switch (Get(state))
+        {
+            case StdinCursor c: c.PushFront(new object[] { text }); break;
+            case Queue<object> q:
+                var rest = new List<object> { text };
+                while (q.Count > 0) rest.Add(q.Dequeue());
+                foreach (var item in rest) q.Enqueue(item);
+                break;
         }
     }
 }

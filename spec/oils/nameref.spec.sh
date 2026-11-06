@@ -11,7 +11,6 @@ shadock=(ga bu zo meu)
 show_value shadock 2
 ## stdout: zo
 ## status: 0
-## XFAIL ps-bash gap-oils-nameref nameref (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### mutate array by reference
@@ -25,7 +24,6 @@ set1 shadock ZZZ
 echo ${shadock[@]}
 ## stdout: a ZZZ c d
 ## status: 0
-## XFAIL ps-bash gap-oils-nameref nameref (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### pass assoc array by reference
@@ -39,7 +37,6 @@ show_value days sunday
 #  mksh note: it coerces "days" to 0?  Horrible.
 ## stdout: jam
 ## status: 0
-## XFAIL ps-bash gap-oils-nameref nameref (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### pass local array by reference, relying on DYNAMIC SCOPING
@@ -56,7 +53,6 @@ caller
 # mksh appears not to have local arrays!
 ## stdout: zo
 ## status: 0
-## XFAIL ps-bash gap-oils-nameref nameref (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### flag -n and +n
@@ -82,7 +78,6 @@ ref=bar
 ref=x
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-nameref nameref (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### mutating through nameref: ref=
@@ -110,7 +105,6 @@ echo 4 y=$y
 4 y=XXXX
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-nameref nameref (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### flag -n combined ${!ref} -- bash INVERTS
@@ -201,7 +195,6 @@ ref3=x
 ref3=foo
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-nameref nameref (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### assign to invalid ref
@@ -260,7 +253,6 @@ ref2=
 ref2=x
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-nameref nameref (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### -n attribute before it has a value
@@ -277,7 +269,6 @@ ref=
 ref=XX
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-nameref nameref (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### -n attribute on array is hard error, not a warning

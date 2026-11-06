@@ -57,7 +57,7 @@ public abstract record WordPart : BashNode
     }
 
     /// <summary>A tilde substitution, e.g. <c>~</c> or <c>~user</c>.</summary>
-    public sealed record TildeSub(string? User) : WordPart;
+    public sealed record TildeSub(string? User, bool SlashConsumed = true) : WordPart;
 
     /// <summary>
     /// A glob pattern fragment: <c>*</c>, <c>?</c>, <c>[abc]</c>, or an extglob

@@ -34,7 +34,28 @@ public static class RuntimePath
     public static bool TryUnmapTmp(string? value, out string bashPath)
     {
         bashPath = value ?? string.Empty;
-        return System.OperatingSystem.IsWindows() && WindowsPath.TryUnmapTmpRoot(value, TempDir(), out bashPath);
+        if (!System.OperatingSystem.IsWindows()) return false;
+        if (WindowsPath.TryUnmapTmpRoot(value, TempDir(), out bashPath)) return true;
+        // TEMP can be spelled 8.3 (C:\Users\RUNNER~1\…, as on a CI runner) while the working directory the
+        // OS resolved is the long form (or the reverse): the same directory, two spellings.
+        var tempLong = ToLongPath(TempDir());
+        var valueLong = ToLongPath(value);
+        return (tempLong != TempDir() || valueLong != value) && WindowsPath.TryUnmapTmpRoot(valueLong, tempLong, out bashPath);
+    }
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode, EntryPoint = "GetLongPathNameW")]
+    private static extern uint GetLongPathName(string shortPath, System.Text.StringBuilder longPath, uint cchBuffer);
+
+    private static string ToLongPath(string? path)
+    {
+        if (string.IsNullOrEmpty(path) || path.IndexOf('~') < 0) return path ?? string.Empty;
+        try
+        {
+            var sb = new System.Text.StringBuilder(1024);
+            var n = GetLongPathName(path, sb, (uint)sb.Capacity);
+            return n > 0 && n < sb.Capacity ? sb.ToString() : path;
+        }
+        catch (System.Exception) { return path; }
     }
 
     /// <summary><c>$env:TEMP</c> as the emitted <c>TempDirExpr</c> reads it (live: a script may change

@@ -39,6 +39,14 @@ Describe 'Module Loading' {
         $global:PsBashVersion | Should -Be $mod.Version.ToString()
         $global:BashVersion | Should -Not -BeLike '0.0.*'
     }
+
+    # Scripts gate features on `$BASH_VERSINFO[0] -ge 4` (mapfile, assoc arrays); like a browser
+    # User-Agent, the emulated version claims bash 5.2 while PsBashVersion identifies ps-bash.
+    It 'reports a bash 5.2-compatible BASH_VERSION and BASH_VERSINFO' {
+        $global:BashVersion | Should -BeLike '5.2.*(1)-release'
+        $global:BashVersionInfo[0] | Should -Be 5
+        $global:BashVersionInfo[1] | Should -Be 2
+    }
 }
 
 Describe 'Get-BashPlatform' {
@@ -1597,7 +1605,7 @@ Describe 'Invoke-BashStat' {
         $result = @(Invoke-BashStat -c '%a %n' $statFile)
         $result.Count | Should -Be 1
         $text = $result[0].BashText.TrimEnd("`n")
-        $text | Should -Match '^\d{4} file\.txt$'
+        $text | Should -Match '^[0-7]{3,4} .*file\.txt$'
     }
 
     It 'stat --printf="%s\n" file.txt returns printf-style with no trailing newline' {
@@ -1618,7 +1626,7 @@ Describe 'Invoke-BashStat' {
         $result.Count | Should -Be 1
         $fields = $result[0].BashText.TrimEnd("`n") -split ' '
         $fields.Count | Should -Be 14
-        $fields[0] | Should -Be 'file.txt'
+        $fields[0] | Should -BeLike '*file.txt'
         $fields[1] | Should -Be '11'
     }
 

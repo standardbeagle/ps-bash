@@ -13,7 +13,6 @@ true func
 status=0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-special builtin-special (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### true is not special; prefix assignments don't persist, it can be redefined
@@ -37,7 +36,6 @@ true func
 foo=
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-special builtin-special (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Prefix assignments persist after special builtins, like : (set -o posix)
@@ -114,7 +112,6 @@ eval 'echo hi'
 # should not allow redefinition
 ## stdout: eval func echo hi
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-special builtin-special (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Special builtins can't be redefined as shell functions (set -o posix)

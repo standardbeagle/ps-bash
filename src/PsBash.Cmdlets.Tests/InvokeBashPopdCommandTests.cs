@@ -200,4 +200,19 @@ public class InvokeBashPopdCommandTests : IClassFixture<SharedPwshFixture>
         var ex = Record.Exception(() => RunLines(pwsh, "Invoke-BashPopd '+0$(throw \"pwn\")'"));
         Assert.Null(ex);
     }
+
+    [Theory]
+    [InlineData("Invoke-BashPopd zzz; $global:LASTEXITCODE", "2")]
+    [InlineData("Invoke-BashPopd -z; $global:LASTEXITCODE", "2")]
+    [InlineData("Invoke-BashPopd; $global:LASTEXITCODE", "1")]
+    [InlineData("Invoke-BashPushd -z; $global:LASTEXITCODE", "2")]
+    [InlineData("Invoke-BashPushd . .; $global:LASTEXITCODE", "1")]
+    [InlineData("Invoke-BashDirs a; $global:LASTEXITCODE", "1")]
+    public void DirStackBuiltins_BadUsage_FailWithBashStatus(string script, string expectedStatus)
+    {
+        // Usage errors are the shared bash contract (status 2 for a bad option/argument, 1 for an empty stack or too many operands).
+        var pwsh = NewPwsh();
+        var lines = RunLines(pwsh, script);
+        Assert.Equal(expectedStatus, lines[^1]);
+    }
 }

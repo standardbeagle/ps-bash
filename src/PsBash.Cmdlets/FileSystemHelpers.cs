@@ -299,6 +299,21 @@ internal static class FileSystemHelpers
            || ex.InnerException is System.Management.Automation.PipelineStoppedException;
 
     /// <summary>
+    /// Assign a shell variable the way bash scopes it: the existing variable (in whichever scope owns it - a function
+    /// writing a caller's array reaches the caller), else a new GLOBAL. A bare <c>PSVariable.Set</c> from a cmdlet
+    /// creates the variable in the calling function's own scope, so <c>mapfile arr</c> / <c>read -a arr</c> inside a
+    /// function never reached the shell.
+    /// </summary>
+    internal static void SetShellVariable(System.Management.Automation.SessionState state, string name, object? value)
+    {
+        var existing = state.PSVariable.Get(name);
+        if (existing is not null && (existing.Options & (System.Management.Automation.ScopedItemOptions.ReadOnly | System.Management.Automation.ScopedItemOptions.Constant)) == 0)
+            existing.Value = value;
+        else
+            state.PSVariable.Set("global:" + name, value);
+    }
+
+    /// <summary>
     /// Sets the bash-visible exit code via the global LASTEXITCODE. The psm1
     /// mutator oracles all do this on the last error in a multi-operand run;
     /// we mirror it exactly.
@@ -500,6 +515,7 @@ internal static class FileSystemHelpers
     /// </summary>
     public static void DeleteDirectoryForce(string dir)
     {
+        StepOutOfDirectory(dir);
         try
         {
             Directory.Delete(dir, recursive: true);
@@ -509,8 +525,47 @@ internal static class FileSystemHelpers
             // IOException too: a read-only DIRECTORY itself (not just a read-only descendant) makes
             // the native recursive delete throw IOException on Windows. The fallback clears the bit
             // and retries; a genuine failure resurfaces from the fallback.
-            ForceDeleteDirectoryRecursive(dir);
+            try { ForceDeleteDirectoryRecursive(dir); }
+            catch (IOException) when (OperatingSystem.IsWindows())
+            {
+                // A sharing violation is often transient (an indexer/AV scan still holding a freshly written
+                // file): retry a few times with a short backoff before reporting it.
+                for (int attempt = 1; ; attempt++)
+                {
+                    // A handle this process opened and abandoned (an enumerator or stream the pipeline stopped
+                    // reading, closed only by its finalizer) blocks the delete on Windows but never on bash:
+                    // release those first, then back off 100..500 ms (~9 s in all) for an external scanner.
+                    // Bounded: a finalizer closing a handle with a pending synchronous read can block for good.
+                    if (attempt == 1) WindowsFileLockers.ReleaseOwnCompatSessions(dir);
+                    if (attempt <= 3)
+                        System.Threading.Tasks.Task.Run(() => { GC.Collect(); GC.WaitForPendingFinalizers(); }).Wait(2000);
+                    System.Threading.Thread.Sleep(Math.Min(100 * attempt, 500));
+                    try { ForceDeleteDirectoryRecursive(dir); return; }
+                    catch (IOException) when (attempt < 20) { }
+                }
+            }
         }
+    }
+
+    /// <summary>
+    /// bash can remove its own working directory (`cd "$tmp"; rm -rf "$tmp"` is the standard EXIT-trap cleanup);
+    /// Windows refuses while the process's current directory is inside it. Move the process out, to the parent
+    /// of the directory being removed, first.
+    /// </summary>
+    internal static void StepOutOfDirectory(string dir)
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        try
+        {
+            string full = Path.TrimEndingDirectorySeparator(Path.GetFullPath(dir));
+            string cwd = Path.TrimEndingDirectorySeparator(Directory.GetCurrentDirectory());
+            if (cwd.Equals(full, StringComparison.OrdinalIgnoreCase)
+                || cwd.StartsWith(full + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+            {
+                if (Path.GetDirectoryName(full) is { } parent) Directory.SetCurrentDirectory(parent);
+            }
+        }
+        catch { /* best effort: the delete below reports a genuine failure */ }
     }
 
     /// <summary>

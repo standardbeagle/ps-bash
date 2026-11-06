@@ -27,6 +27,38 @@ public static class BashGlobText
     }
 }
 
+/// <summary>bash <c>${v@Q}</c>. Emitted PowerShell reaches it as <c>[PsBash.Cmdlets.BashQuoteText]::ForReuse(...)</c>.</summary>
+public static class BashQuoteText
+{
+    /// <summary>Scalar <c>${v@K}</c> / <c>${v@k}</c> (quoted value) and <c>${v@A}</c> (the assignment that recreates it); "" when unset.</summary>
+    public static string Transform(char op, string name, object? psVar)
+    {
+        if (psVar is System.Collections.IDictionary or System.Collections.IList) return "";
+        string? env = BashVariableStore.Get(name);
+        if (env is null) return "";
+        string q = ForReuse(env);
+        if (op != 'A') return q;
+        string attrs = Attributes(name, psVar);
+        return (attrs.Length == 0 ? "" : "declare -" + attrs + " ") + name + "=" + q;
+    }
+
+    /// <summary>The <c>${v@a}</c> attribute letters: <c>a</c>/<c>A</c> for an array kind, then <c>i</c>, <c>r</c>, <c>x</c>.</summary>
+    public static string Attributes(string name, object? value)
+    {
+        string kind = value is System.Collections.IDictionary ? "A" : value is System.Collections.IList ? "a" : "";
+        return kind + BashShellState.AttributeLetters(name);
+    }
+
+    /// <summary>Single-quoted form (<c>'</c> written as <c>'\''</c>); a control character switches to <c>$'...'</c>.</summary>
+    public static string ForReuse(string? value)
+    {
+        value ??= string.Empty;
+        foreach (char c in value)
+            if (c < ' ' || c == '\u007f') return InvokeBashPrintfCommand.ShellQuote(value);
+        return "'" + value.Replace("'", "'\\''") + "'";
+    }
+}
+
 /// <summary>
 /// Pathname expansion (bash "Filename Expansion") of ONE word: the pure engine behind
 /// <c>ConvertTo-BashGlob</c> and <c>ConvertTo-BashWords</c>.
@@ -95,6 +127,33 @@ internal static class BashGlob
 
     /// <summary>Matches of <paramref name="pattern"/>, resolved against <paramref name="cwd"/>; empty when nothing matches.</summary>
     public static List<string> Expand(string pattern, string cwd, bool dotGlob, bool globStar = false, bool noCase = false)
+    {
+        var ignore = GlobIgnorePatterns();
+        if (ignore is null) return ExpandCore(pattern, cwd, dotGlob, globStar, noCase);
+        // GLOBIGNORE set (non-empty): dotfiles become matchable, `.` / `..` never are, and matches equal to an ignore pattern drop out.
+        var all = ExpandCore(pattern, cwd, dotGlob: true, globStar, noCase);
+        all.RemoveAll(m => { var b = m.TrimEnd('/'); b = b[(b.LastIndexOf('/') + 1)..]; return b is "." or ".." || ignore.Exists(re => re.IsMatch(m)); });
+        return all;
+    }
+
+    private static List<System.Text.RegularExpressions.Regex>? GlobIgnorePatterns()
+    {
+        var v = BashVariableStore.Get("GLOBIGNORE");
+        if (string.IsNullOrEmpty(v)) return null;
+        var list = new List<System.Text.RegularExpressions.Regex>();
+        var cur = new System.Text.StringBuilder();
+        void Flush() { if (cur.Length > 0) list.Add(new System.Text.RegularExpressions.Regex(PsBash.Core.Parser.BashPattern.ToAnchoredRegex(cur.ToString(), honorQuotes: false), System.Text.RegularExpressions.RegexOptions.Singleline)); cur.Clear(); }
+        for (int i = 0; i < v.Length; i++)
+        {
+            if (v[i] == '\\' && i + 1 < v.Length) { cur.Append(v[i]).Append(v[++i]); continue; }
+            if (v[i] == ':') { Flush(); continue; }
+            cur.Append(v[i]);
+        }
+        Flush();
+        return list;
+    }
+
+    private static List<string> ExpandCore(string pattern, string cwd, bool dotGlob, bool globStar, bool noCase)
     {
         string prefix = "";
         string dir = cwd;
@@ -172,7 +231,13 @@ internal static class BashGlob
 
         var results = new List<string>(frontier.Count);
         foreach (var (pfx, _) in frontier) results.Add(dirOnly ? pfx + "/" : pfx);
-        if (globStar) results.Sort(StringComparer.Ordinal);
+        if (globStar)
+        {
+            results.Sort(StringComparer.Ordinal);
+            // Two `**` components can reach the same path by several routes (`**/**/*.*`): list each once.
+            for (int k = results.Count - 1; k > 0; k--)
+                if (results[k] == results[k - 1]) results.RemoveAt(k);
+        }
         return results;
     }
 

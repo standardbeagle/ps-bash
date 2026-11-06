@@ -238,6 +238,7 @@ public sealed class InvokeBashStatCommand : PSCmdlet
             }
 
             var entry = BuildStatEntry(item);
+            entry.Operand = target;
 
             // Format output per oracle dispatch order. BashText is stored
             // normalized (no trailing newline); the display layer adds it
@@ -266,10 +267,10 @@ public sealed class InvokeBashStatCommand : PSCmdlet
                 entry.BashText = string.Format(
                     CultureInfo.InvariantCulture,
                     "{0} {1} {2} {3} {4} {5} {6} {7} {8} {9} {10} {11} {12} {13}\n",
-                    entry.Name,
+                    entry.Operand,
                     entry.SizeBytes,
                     entry.Blocks,
-                    entry.OctalPerms,
+                    entry.OctalPerms.TrimStart('0') is { Length: > 0 } terseOctal ? terseOctal : "0",
                     entry.Owner,
                     entry.Group,
                     entry.Device,
@@ -285,7 +286,7 @@ public sealed class InvokeBashStatCommand : PSCmdlet
             {
                 string typeDesc = entry.IsDirectory ? "directory" : "regular file";
                 var sb = new StringBuilder();
-                sb.Append("  File: ").Append(entry.Name).Append('\n');
+                sb.Append("  File: ").Append(entry.Operand).Append('\n');
                 sb.Append("  Size: ").Append(entry.SizeBytes)
                     .Append("\tBlocks: ").Append(entry.Blocks)
                     .Append("\tIO Block: 4096\t").Append(typeDesc).Append('\n');
@@ -299,6 +300,9 @@ public sealed class InvokeBashStatCommand : PSCmdlet
                     "yyyy-MM-dd HH:mm:ss.fffffff zzz", CultureInfo.InvariantCulture));
                 entry.BashText = sb.ToString() + "\n";
             }
+
+            // The serializer ends each record with a newline; a stored one printed a blank line after every stat.
+            entry.BashText = BashRuntime.NormalizeBashText(entry.BashText);
 
             var obj = new PSObject();
             obj.TypeNames.Insert(0, "PsBash.StatEntry");
@@ -350,10 +354,14 @@ public sealed class InvokeBashStatCommand : PSCmdlet
                 switch (spec)
                 {
                     case 's': sb.Append(entry.SizeBytes); i += 2; continue;
-                    case 'a': sb.Append(entry.OctalPerms); i += 2; continue;
+                    case 'a': sb.Append(entry.OctalPerms.TrimStart('0') is { Length: > 0 } octal ? octal : "0"); i += 2; continue;
+                    case 'F': sb.Append(entry.IsDirectory ? "directory" : entry.SizeBytes == 0 ? "regular empty file" : "regular file"); i += 2; continue;
+                    case 'u': case 'g': sb.Append('0'); i += 2; continue;
+                    case 'X': sb.Append(entry.AtimeEpoch); i += 2; continue;
+                    case 'Z': sb.Append(entry.MtimeEpoch); i += 2; continue;
                     case 'A': sb.Append(entry.Permissions); i += 2; continue;
-                    case 'n': sb.Append(entry.Name); i += 2; continue;
-                    case 'N': sb.Append(entry.FullPath); i += 2; continue;
+                    case 'n': sb.Append(entry.Operand.Length > 0 ? entry.Operand : entry.Name); i += 2; continue;
+                    case 'N': sb.Append('\'').Append(entry.Operand.Length > 0 ? entry.Operand : entry.FullPath).Append('\''); i += 2; continue;
                     case 'U': sb.Append(entry.Owner); i += 2; continue;
                     case 'G': sb.Append(entry.Group); i += 2; continue;
                     case 'i': sb.Append(entry.Inode); i += 2; continue;
@@ -379,6 +387,8 @@ public sealed class InvokeBashStatCommand : PSCmdlet
     private sealed class StatEntry
     {
         public string Name = string.Empty;
+        /// <summary>The path as the caller wrote it: what <c>%n</c>, <c>File:</c> and the terse form print.</summary>
+        public string Operand = string.Empty;
         public string FullPath = string.Empty;
         public bool IsDirectory;
         public long SizeBytes;

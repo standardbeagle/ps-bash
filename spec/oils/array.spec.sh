@@ -147,7 +147,6 @@ len=3
 len=2
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array array (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Retrieve index that is a variable
@@ -186,7 +185,6 @@ a=()
 argv.py "${!a[@]}"
 ## stdout:
 ## status: 127
-## XFAIL ps-bash gap-oils-array array (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### ${!a[1]} is named ref in bash
@@ -366,7 +364,6 @@ argv.py "${a[@]}"
 argv.py "${a[99]}" "${a[100]}" "${a[101]}"
 ## stdout:
 ## status: 127
-## XFAIL ps-bash gap-oils-array array (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Slice of sparse array with [@]
@@ -377,7 +374,6 @@ argv.py "${a[99]}" "${a[100]}" "${a[101]}"
 argv.py "${a[@]:15:2}"
 ## stdout:
 ## status: 127
-## XFAIL ps-bash gap-oils-array array (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Using an array itself as the index on LHS
@@ -396,7 +392,6 @@ a=(1 2 3)
 echo $x
 ## stdout: 2
 ## status: 0
-## XFAIL ps-bash gap-oils-array array (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### a[$x$y] on LHS and RHS
@@ -414,7 +409,6 @@ foo
 1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array array (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Dynamic parsing of LHS a[$code]=value
@@ -452,7 +446,6 @@ three
 three
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array array (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Is element set?  test -v a[i]
@@ -475,7 +468,6 @@ empty=0
 unset=1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array array (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### [[ -v a[i] ]]
@@ -493,7 +485,6 @@ status=0
 status=1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array array (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### test -v a[i] with arith expressions
@@ -523,7 +514,6 @@ status=0
 status=1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array array (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### More arith expressions in [[ -v array[expr]] ]]
@@ -584,7 +574,6 @@ one=0
 two=1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array array (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Regression: Assigning with out-of-range negative index
@@ -614,7 +603,6 @@ a has -6
 a has -11
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array array (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Regression: Negative out-of-range index in [[ -v a[index] ]]
@@ -673,7 +661,6 @@ a=('123' '456')
 echo "${#a[0]}" "${#a[0]/1/xxx}"
 ## stdout:
 ## status: 1
-## XFAIL ps-bash gap-oils-array array (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### ${mystr[@]} and ${mystr[*]} are no-ops
@@ -685,7 +672,6 @@ abc
 abc
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array array (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### ${mystr[@]} and ${mystr[*]} disallowed with strict_array
@@ -702,7 +688,6 @@ abc
 status=0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array array (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -721,7 +706,6 @@ a=(~/src ~/git)
 echo "${a[@]}"
 ## stdout: /home/bob/src /home/bob/git
 ## status: 0
-## XFAIL ps-bash gap-oils-array array (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Brace Expansion within Array
@@ -756,7 +740,6 @@ echo ${#c[@]} ${#d[@]}
 1 1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array array (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### a+=() modifies existing instance of BashArray
@@ -780,7 +763,6 @@ a=(1)
 unset -v 'a[-2]'
 ## stdout:
 ## status: 1
-## XFAIL ps-bash gap-oils-array array (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -803,7 +785,6 @@ begin=-4 -> (1 2 3 4)
 begin=-5 -> ()
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array array (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -835,7 +816,6 @@ a[2]=y
 echo "quoted = (${a[@]@Q})"
 ## stdout: quoted = ('x' 'y')
 ## status: 0
-## XFAIL ps-bash gap-oils-array array (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -854,6 +834,5 @@ echo $?
 0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array array (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher

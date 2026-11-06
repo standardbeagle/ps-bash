@@ -27,6 +27,6 @@ public class ArrayElementDefaultWordTests
     public void Transpile_BashSourceIndex_ReadsTheGlobalArray()
     {
         var ps = BashTranspiler.Transpile("echo \"${BASH_SOURCE[0]}\" \"${#BASH_SOURCE[@]}\"");
-        Assert.Contains("$global:BASH_SOURCE[0]", ps);
+        Assert.Contains("$global:BASH_SOURCE['0']", ps);
     }
 }

@@ -20,7 +20,6 @@ c/subdir/leaf.md
 leaf.md
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-globstar globstar (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### within braces, globstar works when there is a comma

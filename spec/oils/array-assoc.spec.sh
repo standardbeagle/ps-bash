@@ -13,7 +13,6 @@ bar
 c
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array-assoc array-assoc (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### set associative array to indexed array literal (very surprising bash behavior)
@@ -55,7 +54,6 @@ A['foo']=bar
 echo ${A['foo']}
 ## stdout: bar
 ## status: 0
-## XFAIL ps-bash gap-oils-array-assoc array-assoc (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Empty value (doesn't use EmptyWord?)
@@ -127,7 +125,6 @@ ccc
 ddd
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array-assoc array-assoc (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### ${A[@]#prefix}
@@ -144,7 +141,6 @@ one
 wo
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array-assoc array-assoc (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### ${assoc} is like ${assoc[0]}
@@ -185,7 +181,6 @@ a["2"]=c
 echo 0 "${a[0]}" 1 "${a[1]}" 2 "${a[2]}"
 ## stdout: 0 a 1 b 2 c
 ## status: 0
-## XFAIL ps-bash gap-oils-array-assoc array-assoc (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### lookup with double quoted strings "mykey"
@@ -196,7 +191,6 @@ a['a+1']=c
 echo "${a["aa"]}" "${a["foo"]}" "${a["a+1"]}"
 ## stdout: b bar c
 ## status: 0
-## XFAIL ps-bash gap-oils-array-assoc array-assoc (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### lookup with single quoted string
@@ -207,7 +201,6 @@ a['a+1']=c
 echo "${a['a+1']}"
 ## stdout: c
 ## status: 0
-## XFAIL ps-bash gap-oils-array-assoc array-assoc (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### readonly associative array can't be modified
@@ -216,7 +209,6 @@ A['x']=1
 echo status=$?
 ## stdout: status=1
 ## status: 0
-## XFAIL ps-bash gap-oils-array-assoc array-assoc (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### associative array and brace expansion
@@ -228,7 +220,6 @@ v
 -{a,b}-
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array-assoc array-assoc (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### declare -A A=() allowed
@@ -253,7 +244,6 @@ len=1
 unset len=0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array-assoc array-assoc (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### unset -v and assoc array
@@ -403,7 +393,6 @@ argv.py "${!A[@]}"
 argv.py "${A[@]}"
 ## stdout:
 ## status: 127
-## XFAIL ps-bash gap-oils-array-assoc array-assoc (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Implicit increment of keys
@@ -455,7 +444,6 @@ k=0
 nonexistent=1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array-assoc array-assoc (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### test -v with dynamic parsing
@@ -480,7 +468,6 @@ k=0
 nonexistent=1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array-assoc array-assoc (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### [[ -v assoc[key] ]]
@@ -545,7 +532,6 @@ k=0
 nonexistent=1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array-assoc array-assoc (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### [[ -v assoc[key] ]] syntax errors
@@ -567,7 +553,6 @@ k=0
 typo=1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array-assoc array-assoc (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### lookup with unquoted $key and quoted "$i$i"
@@ -626,7 +611,6 @@ assoc[i]=string
 assoc[i+1]=string+1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array-assoc array-assoc (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Array stored in associative array gets converted to string (without strict_array)
@@ -719,7 +703,6 @@ echo $var
 42
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array-assoc array-assoc (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### (( A[5] += 42 ))
@@ -729,7 +712,6 @@ declare -A A
 echo ${A[5]}
 ## stdout: 16
 ## status: 0
-## XFAIL ps-bash gap-oils-array-assoc array-assoc (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### (( A[5] += 42 )) with empty cell
@@ -739,7 +721,6 @@ declare -A A
 echo ${A[5]}
 ## stdout: 6
 ## status: 0
-## XFAIL ps-bash gap-oils-array-assoc array-assoc (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### setting key to itself (from bash-bug mailing list)

@@ -925,12 +925,38 @@ public static class BashRuntime
     }
 
     /// <summary>
+    /// A script may delete the directory it is standing in (<c>cd "$d"; ...; rm -rf "$d"</c>) and keep
+    /// running commands, which bash allows. .NET resolves a bare program name (<c>git</c>) against the
+    /// process cwd on Unix, and throws <see cref="FileNotFoundException"/> from getcwd when that
+    /// directory is gone, so every later spawn failed with an error naming no file. Move the process
+    /// to a directory that exists first: the child's own working directory when it has one, else temp.
+    /// Windows refuses to delete an in-use cwd, so this never fires there.
+    /// </summary>
+    private static void EnsureLiveCurrentDirectory(ProcessStartInfo startInfo)
+    {
+        try { _ = Directory.GetCurrentDirectory(); return; }
+        catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException) { }
+
+        var fallback = !string.IsNullOrEmpty(startInfo.WorkingDirectory) && Directory.Exists(startInfo.WorkingDirectory)
+            ? startInfo.WorkingDirectory
+            : Path.GetTempPath();
+        try { Directory.SetCurrentDirectory(fallback); } catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+    }
+
+    private static bool CwdVanished()
+    {
+        try { _ = System.IO.Directory.GetCurrentDirectory(); return false; }
+        catch (System.IO.IOException) { return true; }
+        catch (System.UnauthorizedAccessException) { return true; }
+    }
+
+    /// <summary>
     /// <see cref="RunChildProcess(string, IReadOnlyList{string}?, System.TimeSpan?)"/>
     /// overload taking a caller-prepared <see cref="ProcessStartInfo"/> (for env
     /// vars, working directory, etc.). The redirection + no-shell invariants the
     /// spawn contract requires are forced on regardless of how the caller built it.
     /// </summary>
-    public static ChildProcessResult RunChildProcess(ProcessStartInfo startInfo, System.TimeSpan? timeout = null)
+    public static ChildProcessResult RunChildProcess(ProcessStartInfo startInfo, System.TimeSpan? timeout = null, string? stdinText = null)
     {
         ArgumentNullException.ThrowIfNull(startInfo);
 
@@ -941,6 +967,8 @@ public static class BashRuntime
         // environment is a one-method change rather than an audit of every spawn
         // site. See BashVariableStore.ApplyTo.
         BashVariableStore.ApplyTo(startInfo);
+
+        EnsureLiveCurrentDirectory(startInfo);
 
         startInfo.UseShellExecute = false;
         startInfo.RedirectStandardOutput = true;
@@ -956,11 +984,34 @@ public static class BashRuntime
 
         var budget = timeout ?? GetChildProcessTimeout();
 
-        using var proc = Process.Start(startInfo)
+        Process? started = null;
+        for (int spawnTry = 0; ; spawnTry++)
+        {
+            try { started = Process.Start(startInfo); break; }
+            catch (System.IO.FileNotFoundException) when (spawnTry == 0 && CwdVanished())
+            {
+                // Another thread removed the process-wide cwd between EnsureLiveCurrentDirectory and the
+                // spawn (Process.Start resolves a bare file name against it): re-anchor and retry once.
+                EnsureLiveCurrentDirectory(startInfo);
+            }
+        }
+        using var proc = started
             ?? throw new InvalidOperationException($"Failed to start process '{startInfo.FileName}'.");
 
-        // Hand the child an EOF-closed stdin so it never hangs waiting for input.
-        try { proc.StandardInput.Close(); } catch { /* child may not have opened it */ }
+        // Hand the child an EOF-closed stdin so it never hangs waiting for input; `stdinText` (a piped-in
+        // program or data for a nested `bash -c`) is written first. Written on a worker so a child that
+        // never reads cannot block us on a full pipe.
+        if (!string.IsNullOrEmpty(stdinText))
+        {
+            var writer = proc.StandardInput;
+            _ = Task.Run(() =>
+            {
+                try { writer.Write(stdinText); writer.Flush(); } catch { /* child closed its stdin early */ }
+                try { writer.Close(); } catch { }
+            });
+        }
+        else
+            try { proc.StandardInput.Close(); } catch { /* child may not have opened it */ }
 
         // Drain BOTH streams concurrently. Each drain keeps reading after the
         // capture cap and discards excess text, so a noisy child cannot exhaust

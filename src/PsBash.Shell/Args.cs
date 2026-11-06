@@ -73,6 +73,14 @@ public record ShellArgs(
                 else error ??= "--timeout requires an argument";
                 continue;
             }
+            // --rcfile/--init-file <file>: bash startup-file override. The value is consumed so
+            // it is not mistaken for a script path; ps-bash does not source it.
+            if (expanded[i] is "--rcfile" or "--init-file")
+            {
+                if (i + 1 < expanded.Count) i++;
+                else error ??= $"{expanded[i]}: option requires an argument";
+                continue;
+            }
             if (expanded[i].StartsWith("--timeout=", StringComparison.Ordinal))
             {
                 timeout = expanded[i]["--timeout=".Length..];
@@ -210,7 +218,7 @@ public record ShellArgs(
             if (past) { result.Add(a); continue; }
             if (a == "--") { past = true; result.Add(a); continue; }
             if (valueNext) { valueNext = false; result.Add(a); continue; }
-            if (a == "--timeout") { valueNext = true; result.Add(a); continue; }
+            if (a is "--timeout" or "--rcfile" or "--init-file") { valueNext = true; result.Add(a); continue; }
             // The first non-dash word is the script path (or, after -c, the command string);
             // everything after it is positional and must not be bundle-expanded.
             if (a.Length == 0 || a[0] != '-') { past = true; result.Add(a); continue; }

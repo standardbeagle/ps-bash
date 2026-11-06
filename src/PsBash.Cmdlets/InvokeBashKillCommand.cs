@@ -20,6 +20,19 @@ public sealed class InvokeBashKillCommand : PSCmdlet
     public string[]? Arguments { get; set; }
 
     // Number/name -> canonical SIGxxx, mirroring the psm1 table.
+    /// <summary>Linux: a terminated-but-unreaped child (state Z in /proc) is already gone for <c>kill -0</c>, as in bash.</summary>
+    private static bool IsZombie(int pid)
+    {
+        if (!OperatingSystem.IsLinux()) return false;
+        try
+        {
+            var stat = System.IO.File.ReadAllBytes("/proc/" + pid.ToString(System.Globalization.CultureInfo.InvariantCulture) + "/stat");
+            int close = Array.LastIndexOf(stat, (byte)')');
+            return close >= 0 && close + 2 < stat.Length && stat[close + 2] == (byte)'Z';
+        }
+        catch (Exception) { return false; }
+    }
+
     private static readonly Dictionary<string, string> Signals = new(StringComparer.Ordinal)
     {
         ["1"] = "SIGHUP", ["HUP"] = "SIGHUP",
@@ -35,6 +48,13 @@ public sealed class InvokeBashKillCommand : PSCmdlet
         ["19"] = "SIGSTOP", ["STOP"] = "SIGSTOP",
         ["20"] = "SIGTSTP", ["TSTP"] = "SIGTSTP",
         ["28"] = "SIGWINCH", ["WINCH"] = "SIGWINCH",
+    };
+
+    private static readonly string?[] LinuxSignalNames =
+    {
+        null, "HUP", "INT", "QUIT", "ILL", "TRAP", "ABRT", "BUS", "FPE", "KILL", "USR1", "SEGV", "USR2", "PIPE",
+        "ALRM", "TERM", "STKFLT", "CHLD", "CONT", "STOP", "TSTP", "TTIN", "TTOU", "URG", "XCPU", "XFSZ",
+        "VTALRM", "PROF", "WINCH", "IO", "PWR", "SYS",
     };
 
     private static readonly Regex NumSignal = new(@"^-(\d+)$", RegexOptions.Compiled);
@@ -66,6 +86,40 @@ public sealed class InvokeBashKillCommand : PSCmdlet
         {
             var a = args[i];
 
+            if ((a == "-l" || a == "--list") && i + 1 < args.Length)
+            {
+                // kill -l SIGSPEC...: a number (or 128+number) prints its name, a name prints its number.
+                int bad = 0;
+                for (int k = i + 1; k < args.Length; k++)
+                {
+                    string t = args[k];
+                    string? shown = null;
+                    if (int.TryParse(t, out var n) && n >= 0)
+                    {
+                        if (n > 128) n -= 128;
+                        if (n == 0 && t == "0") shown = "EXIT";
+                        else if (n >= 1 && n < LinuxSignalNames.Length) shown = LinuxSignalNames[n];
+                    }
+                    else
+                    {
+                        string nm = t.StartsWith("SIG", StringComparison.OrdinalIgnoreCase) ? t[3..] : t;
+                        if (nm.Equals("EXIT", StringComparison.OrdinalIgnoreCase)) shown = "0";
+                        else
+                        {
+                            int idx = Array.FindIndex(LinuxSignalNames, x => x != null && x.Equals(nm, StringComparison.OrdinalIgnoreCase));
+                            if (idx > 0) shown = idx.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                        }
+                    }
+                    if (shown == null)
+                    {
+                        FileSystemHelpers.WriteBashError(this, $"kill: {t}: invalid signal specification");
+                        bad = 1;
+                    }
+                    else WriteObject(BashRuntime.NewBashObject(shown));
+                }
+                FileSystemHelpers.SetLastExitCode(this, bad);
+                return;
+            }
             if (a == "-l" || a == "--list")
             {
                 // Signal names ordered by signal number (psm1 parity).
@@ -80,11 +134,33 @@ public sealed class InvokeBashKillCommand : PSCmdlet
             if (a == "-s" || a == "--signal")
             {
                 i++;
-                if (i < args.Length) signalName = ResolveSignal(args[i]);
+                if (i < args.Length)
+                {
+                    string spec = args[i];
+                    string nm = spec.StartsWith("SIG", StringComparison.OrdinalIgnoreCase) ? spec[3..] : spec;
+                    bool known = int.TryParse(spec, out var sn)
+                        ? sn >= 0 && sn <= 64
+                        : Array.Exists(LinuxSignalNames, x => x != null && x.Equals(nm, StringComparison.OrdinalIgnoreCase))
+                          || Regex.IsMatch(nm, @"^(RTMIN|RTMAX)(\+\d+|-\d+)?$", RegexOptions.IgnoreCase);
+                    if (!known)
+                    {
+                        FileSystemHelpers.WriteBashError(this, $"kill: {spec}: invalid signal specification");
+                        FileSystemHelpers.SetLastExitCode(this, 1);
+                        return;
+                    }
+                    signalName = ResolveSignal(spec);
+                }
                 i++;
                 continue;
             }
             var mNum = NumSignal.Match(a);
+            if (mNum.Success && BashRuntime.ParseCountClamped(mNum.Groups[1].Value) > 64)
+            {
+                // No such signal (the highest real-time one is 64): nothing is signalled.
+                FileSystemHelpers.WriteBashError(this, $"kill: {a[1..]}: invalid signal specification");
+                FileSystemHelpers.SetLastExitCode(this, 1);
+                return;
+            }
             if (mNum.Success) { signalName = ResolveSignal(mNum.Groups[1].Value); i++; continue; }
 
             // Named-signal short form (-KILL, -SIGINT, ...) — before the pid scan.
@@ -153,6 +229,7 @@ public sealed class InvokeBashKillCommand : PSCmdlet
                 // GetProcessById throws if the PID is unknown; a process object that
                 // has already exited also counts as "no such process".
                 if (proc.HasExited) throw new ArgumentException("exited");
+                if (IsZombie(procId)) throw new ArgumentException("zombie");
                 if (!existenceOnly)
                     proc.Kill();
             }

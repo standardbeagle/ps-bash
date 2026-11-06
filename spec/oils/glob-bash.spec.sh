@@ -16,7 +16,6 @@ argv.py *.ZZ  # nothing is printed, not []
 echo status=$?
 ## stdout: status=1
 ## status: 0
-## XFAIL ps-bash gap-oils-glob-bash glob-bash (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### shopt -s failglob in loop context
@@ -54,7 +53,6 @@ argv.py *.ZZ
 echo status=$?
 ## stdout:
 ## status: 127
-## XFAIL ps-bash gap-oils-glob-bash glob-bash (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### shopt -s failglob exits properly in loop context with set -e

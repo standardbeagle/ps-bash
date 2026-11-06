@@ -207,7 +207,7 @@ public static class BashArith
 
     private static long Power(long value, long exponent)
     {
-        if (exponent < 0) return 0;
+        if (exponent < 0) throw new BashArithException("exponent less than 0");
         long result = 1;
         for (long i = 0; i < exponent; i++) result *= value;
         return result;

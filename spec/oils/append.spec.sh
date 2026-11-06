@@ -76,7 +76,6 @@ r=bar
 e=foofoo
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-append append (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### local +=
@@ -96,7 +95,6 @@ s=foo
 s=foofoo
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-append append (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### assign builtin appending array: declare d+=(d e)

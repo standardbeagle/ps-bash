@@ -59,12 +59,12 @@ public class LauncherStdinTests
     [Fact]
     public void LauncherStdin_FunctionBody_ReadsItsOwnPipeNotTheLauncherStdin()
     {
-        // `echo x | f` must feed f from the pipe: a function is a filter, not a reader of the shell's stdin.
+        // `echo x | f` must feed f from the pipe: a function is a filter. Called without a pipe it keeps the shell's stdin.
         var ps = BashTranspiler.TranspileWithLauncherStdin("f() { cat; }; echo x | f; sort")!;
         var fnEnd = ps.IndexOf("} finally { $global:BashPositional = $__bp }", StringComparison.Ordinal);
 
         Assert.True(fnEnd > 0);
-        Assert.DoesNotContain("__BashStdIn", ps[..fnEnd]);
+        Assert.Contains("$MyInvocation.ExpectingInput", ps[..fnEnd]);
         Assert.Contains("__BashStdIn", ps[fnEnd..]); // the top-level `sort` still reads it
     }
 

@@ -5,7 +5,6 @@
 shopt -s strict_arith
 ## stdout:
 ## status: 1
-## XFAIL ps-bash gap-oils-strict-options strict-options (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### shopt -s strict_control_flow
@@ -18,7 +17,6 @@ break
 hi
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-strict-options strict-options (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### continue at top level is NOT an error
@@ -27,7 +25,6 @@ continue
 echo status=$?
 ## stdout: status=0
 ## status: 0
-## XFAIL ps-bash gap-oils-strict-options strict-options (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### break at top level is NOT an error
@@ -35,7 +32,6 @@ break
 echo status=$?
 ## stdout: status=0
 ## status: 0
-## XFAIL ps-bash gap-oils-strict-options strict-options (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### empty argv WITHOUT strict_argv

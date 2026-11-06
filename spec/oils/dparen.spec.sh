@@ -7,7 +7,6 @@ a=(4 5 6)
 echo $sum
 ## stdout: 15
 ## status: 0
-## XFAIL ps-bash gap-oils-dparen dparen (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### (( )) with error
@@ -42,7 +41,6 @@ keys = 0
 values = 0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-dparen dparen (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### bash: K in (( A[K] = V )) is a constant string
@@ -77,7 +75,6 @@ A[K]=oops2
 echo V=$V
 ## stdout: V=0
 ## status: 0
-## XFAIL ps-bash gap-oils-dparen dparen (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### bash: V in (( A["K"] = V )) gets coerced to integer
@@ -98,7 +95,6 @@ keys = K
 values = 0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-dparen dparen (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### literal strings inside (( ))
@@ -125,7 +121,6 @@ echo "${b[@]}"
 4
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-dparen dparen (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### set associative array

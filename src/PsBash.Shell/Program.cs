@@ -258,7 +258,8 @@ if (shellArgs.ReadFromStdin || (!shellArgs.Interactive && shellArgs.Command is n
         shellArgs = shellArgs with { Command = stdinCommand };
 }
 
-if (shellArgs.Interactive || shellArgs.Command is null)
+// `bash -i -c 'cmd'` runs cmd and exits; -i alone (no -c string) opens the prompt.
+if (shellArgs.Command is null)
 {
     // Interactive mode: spawn ps-bash-host --interactive so the host inherits
     // the real tty (Console.Clear / WindowWidth / VT all work against the
@@ -470,7 +471,7 @@ int exitCode = await HostFailureGuard.RunAsync(async () =>
         ipcWorker.LauncherStdin = Console.OpenStandardInput();
     var rc = await worker.ExecuteAsync(
         BuildInvocationCwdPreamble() + pwshCommand,
-        environment: CaptureLauncherEnvironment());
+        environment: CaptureLauncherEnvironment(dashC: shellArgs.Command is not null));
     Stamp("executed");
     return rc;
 });
@@ -573,14 +574,16 @@ static bool LooksLikePowerShell(string input)
 // The host is a shared daemon whose environment is process-global, so without
 // this a `-c` invocation inherits the env of whichever launcher spawned the
 // daemon plus every `$env:`/`export` write from earlier requests. R06.
-static IReadOnlyList<KeyValuePair<string, string>> CaptureLauncherEnvironment()
+// PSBASH_DASH_C is the launcher's own mark ("this is a -c command"): never inherited from a parent shell.
+static IReadOnlyList<KeyValuePair<string, string>> CaptureLauncherEnvironment(bool dashC = false)
 {
     var entries = new List<KeyValuePair<string, string>>();
     foreach (System.Collections.DictionaryEntry e in Environment.GetEnvironmentVariables())
     {
-        if (e.Key is string name)
+        if (e.Key is string name && name != "PSBASH_DASH_C")
             entries.Add(new KeyValuePair<string, string>(name, e.Value as string ?? string.Empty));
     }
+    if (dashC) entries.Add(new KeyValuePair<string, string>("PSBASH_DASH_C", "1"));
     return entries;
 }
 

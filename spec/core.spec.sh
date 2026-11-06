@@ -438,3 +438,467 @@ p q r
 x,y
 a b c
 ## END
+
+#### ${x//$'\n'/,} and ${x//$nl/,} replace the quote-removed / variable operand
+x=$'a\nb c'; nl=$'\n'; sep=-
+echo "[${x//$'\n'/,}]"; echo "[${x//$nl/;}]"; echo "[${x// /$sep}]"; echo "[${x/'b'/B}]"; echo "[${x//b/'$1'}]"
+## STDOUT:
+[a,b c]
+[a;b c]
+[a
+b-c]
+[a
+B c]
+[a
+$1 c]
+## END
+
+#### ${#@} and ${#*} are the positional count, also inside $(( ))
+set -- a b c
+echo ${#@} ${#*} "${#@}" $(( ${#@} + 1 ))
+## stdout: 3 3 3 4
+
+#### counting idiom: ${seen[$w]:-0} in $(( )), ${a[1]} in $(( )), bare RANDOM under set -u
+declare -A seen; a=(5 6)
+for w in x y x; do seen[$w]=$(( ${seen[$w]:-0} + 1 )); done
+set -u
+echo "${seen[x]} ${seen[y]} $(( ${a[1]} + 1 )) $(( RANDOM % 1 ))"
+## stdout: 2 1 7 0
+
+#### a function is a filter: the pipe (or here-string) it is called with is its stdin
+indent() { sed 's/^/> /'; }
+count() { grep -c a; }
+first() { read -r x; echo "first=$x"; }
+lines() { mapfile -t a; echo "${#a[@]} ${a[1]}"; }
+echo x | indent; printf 'a\nb\na\n' | count; echo hi | first; first <<< again; printf 'p\nq\n' | lines
+## STDOUT:
+> x
+2
+first=hi
+first=again
+2 q
+## END
+
+#### a run-time command name resolves like bash: "$@", $cmd, "${arr[@]}" (false/true/echo/test/[ are builtins)
+run() { if "$@"; then echo ok; else echo fail; fi; }
+run false; run true; run test -d /; run [ 1 -eq 1 ]; run [ -f /nonexistent_zz ]; run echo hi
+c=false; $c; echo "rc=$?"; cmd=(echo "two words" -n); "${cmd[@]}"; echo
+echo piped | { c=cat; $c; }
+## STDOUT:
+fail
+ok
+ok
+ok
+fail
+hi
+ok
+rc=1
+two words -n
+
+piped
+## END
+
+#### the trim idiom: a quoted expansion as a strip pattern is matched as its value
+s="   trim me  "
+s="${s#"${s%%[![:space:]]*}"}"
+s="${s%"${s##*[![:space:]]}"}"
+echo "[$s]"; f=a.txt; e=.txt; echo "${f%"$e"} ${f%$e}"
+## STDOUT:
+[trim me]
+a a
+## END
+
+#### unset 'a[-1]' removes the last element
+a=(x y z); unset 'a[-1]'; echo "${#a[@]} ${a[*]}"; unset "a[0]"; echo "${#a[@]} ${a[*]}"
+## STDOUT:
+2 x y
+1 y
+## END
+
+#### an operator on "${a[@]}" applies per element, and the elements stay separate words
+arr=(foo boo zoo); f() { echo $#; }
+printf '[%s]' "${arr[@]%o}"; echo; echo "${arr[*]/o/0}" "${arr[@]//o/0}"; f "${arr[@]}"; f "${arr[@]#?}"
+for x in "${arr[@]%o}"; do echo "<$x>"; done
+## STDOUT:
+[fo][bo][zo]
+f0o b0o z0o f00 b00 z00
+3
+3
+<fo>
+<bo>
+<zo>
+## END
+
+#### read trims IFS whitespace for a lone variable; IFS= keeps it; -d reads records (NUL for '')
+read x <<< "  a  b  "; echo "[$x]"
+IFS= read -r y <<< "  a  b  "; echo "[$y]"
+printf '  s1  \n' | while read -r l; do echo "[$l]"; done
+printf 'k1\0k2\0' | while IFS= read -r -d '' k; do echo "key=$k"; done
+printf 'a:b:c' | { read -r -d ':' f1; echo "[$f1]"; }
+read -r -d '' blob <<'EOF'
+l1
+l2
+EOF
+echo "rc=$? [${blob%$'\n'}]"
+## STDOUT:
+[a  b]
+[  a  b  ]
+[s1]
+key=k1
+key=k2
+[a]
+rc=1 [l1
+l2]
+## END
+
+#### ${!#} ${!n} ${@:$#} ${a[@]:$i} and ${a[@]:-w} on empty / non-empty arrays
+set -- a "b c" d; n=2; arr=(p q r s); i=1; e=()
+echo "${!#}" "${!n}" "${@:$#}" "${@:2:1}"; echo "${arr[@]:$i:2}" "${arr[@]:$i}"
+echo "${e[@]:-none}" "${arr[@]:-none}" "${e[@]:+alt}" "${arr[@]:+alt}"
+declare -A m; echo "${m[@]:-none}"; m[k]=v; echo "${m[@]:-none}"
+## STDOUT:
+d b c d b c
+q r q r s
+none p q r s  alt
+none
+v
+## END
+
+#### exit N is the status an EXIT trap sees
+trap 'echo "bye rc=$?"' EXIT
+f() { exit 4; }
+f
+## STDOUT:
+bye rc=4
+## END
+
+#### declare -r makes the variable readonly
+declare -r B=1; (B=2) 2>/dev/null; echo "rc=$?"; echo "B=$B"
+## STDOUT:
+rc=1
+B=1
+## END
+
+#### arithmetic on array elements, and a bare-name subscript is an arithmetic index
+declare -A c; for w in a b a; do ((c[$w]++)); done; echo "${c[a]} ${c[b]}"
+arr=(1 2 3); i=1; ((arr[i]*=10)); ((arr[0]++)); echo "${arr[*]} $((arr[i] + arr[2])) ${arr[i]} ${arr[i+1]} ${arr[-1]}"
+declare -A m; m[foo]=3; foo=zzz; ((m[foo]+=2)); echo "${m[foo]}"
+## STDOUT:
+2 1
+2 20 3 23 20 3 3
+5
+## END
+
+#### ${unset[@]+w} under set -u is empty, not an unbound-variable error
+set -u
+echo plus /"${array[@]+foo}"/ minus /"${array[@]-foo}"/
+## STDOUT:
+plus // minus /foo/
+## END
+
+#### arrays written inside a function reach the caller unless declared local
+st=(); push() { st+=("$1"); }; push a; push b
+pop() { local n=${#st[@]}; echo "${st[n-1]}"; unset 'st[n-1]'; }
+pop; pop; echo "left=${#st[@]}"
+f() { arr=(x y); arr+=(z); local own=(1); own+=(2); }; f; echo "${arr[*]} ${own[*]:-none}"
+## STDOUT:
+b
+a
+left=0
+x y z none
+## END
+
+#### mapfile / read -a / (( a[i]++ )) inside a function write the shell's arrays
+arr=(0 0); declare -A h
+f() { ((arr[1]++)); ((h[x]+=2)); mapfile -t cnt <<< $'a\nb'; read -ra rd <<< "p q r"; printf -v pv '%s' z; }
+f; echo "${arr[*]} ${h[x]} ${cnt[*]} ${rd[*]} $pv"
+## STDOUT:
+0 1 2 a b p q r z
+## END
+
+#### [[ -v arr[i] ]] and json-style escaping substitutions with backslash / quote patterns
+declare -A cfg=([host]=1); a=(x y)
+[[ -v cfg[host] ]] && echo has; [[ -v cfg[zz] ]] || echo nozz; [[ -v a[1] ]] && echo a1; [[ -v a[5] ]] || echo no5
+s=$'a\\b"c\nd'
+echo "1:${s//\\/\\\\}"; echo "2:${s//\"/\\\"}"; echo "3:${s//$'\n'/\\n}"
+## STDOUT:
+has
+nozz
+a1
+no5
+1:a\\b"c
+d
+2:a\b\"c
+d
+3:a\b"c\nd
+## END
+
+#### PIPESTATUS after a plain command, and after a pipeline whose last stage redirects
+true | false | true; echo "${PIPESTATUS[*]}"
+false; echo "${PIPESTATUS[*]}"
+echo hi | cat >/dev/null; echo "${PIPESTATUS[*]}"
+(exit 3) | true; echo "${PIPESTATUS[@]}"
+true; echo "${PIPESTATUS[*]}" "${#PIPESTATUS[@]}"
+## STDOUT:
+0 1 0
+1
+0 0
+3 0
+0 1
+## END
+
+#### a failing command-substitution assignment drives || and &&
+set -o pipefail
+r=$(false | cat) || echo "caught $?"
+r=$(true) && echo ok1
+r=$(exit 4) || echo "caught $?"
+x=1 || echo never
+set +o pipefail
+## STDOUT:
+caught 1
+ok1
+caught 4
+## END
+
+#### ${x:?} inside a pipeline stage / command substitution ends only that subshell
+echo "${nope_a:?}" 2>/dev/null | head -1; echo "after-pipe"
+x=$(echo "${nope_b:?}" 2>/dev/null); echo "after-cmdsub [$x] $?"
+( echo "${nope_c:?}" ) 2>/dev/null; echo "after-subshell $?"
+## STDOUT:
+after-pipe
+after-cmdsub [] 1
+after-subshell 1
+## END
+
+#### declare -p shows the readonly and export attributes
+declare -r r=1; declare -p r
+declare -x e=2; declare -p e
+s=plain; declare -p s
+## STDOUT:
+declare -r r="1"
+declare -x e="2"
+declare -- s="plain"
+## END
+
+#### under set -e, a missing command is an ordinary status 127 that || and if can handle
+set -e
+nonexistent_cmd_xyz 2>/dev/null || echo "fb $?"
+if nonexistent_cmd_xyz 2>/dev/null; then :; else echo "else $?"; fi
+env nonexistent_cmd_xyz 2>/dev/null || echo "env $?"
+echo end
+set +e
+## STDOUT:
+fb 127
+else 127
+env 127
+end
+## END
+
+#### a script piped or here-stringed into bash and sh runs
+echo 'echo piped' | bash
+sh <<< 'echo here'
+printf 'echo a\necho b\n' | sh
+echo 'exit 3' | sh; echo rc=$?
+echo hi | bash -c 'cat'
+## STDOUT:
+piped
+here
+a
+b
+rc=3
+hi
+## END
+
+#### sh is found by env, xargs and command -v
+env FOO=1 sh -c 'echo $FOO'
+echo item | xargs -I{} sh -c 'echo {}'
+command -v sh >/dev/null && echo found
+## STDOUT:
+1
+item
+found
+## END
+#### local -r refuses later writes inside the function only
+f() { local -r x=1; x=2 2>/dev/null; echo "in: $x"; }
+f
+x=9; echo "out: $x"
+## STDOUT:
+in: 1
+out: 9
+## END
+
+#### set accepts -E and the other options that change nothing here
+set -eEuo pipefail
+set -E
+set -o errtrace
+set +o functrace
+set -Eeu
+echo ok
+## STDOUT:
+ok
+## END
+
+#### timeout stops a command that runs too long
+timeout 0.3 sleep 5; echo "slow rc=$?"
+timeout 5 true; echo "fast rc=$?"
+timeout 120 sh -c 'exit 3'; echo "status rc=$?"
+echo hello | timeout 5 cat
+timeout --preserve-status 0.3 sleep 5; echo "preserve rc=$?"
+timeout abc true 2>/dev/null; echo "usage rc=$?"
+## STDOUT:
+slow rc=124
+fast rc=0
+status rc=3
+hello
+preserve rc=143
+usage rc=125
+## END
+
+#### wait -n returns the status of the next job to finish
+(sleep 0.4; exit 3) &
+(sleep 0.1; exit 5) &
+wait -n; echo "first rc=$?"
+wait -n; echo "second rc=$?"
+wait -n; echo "none rc=$?"
+## STDOUT:
+first rc=5
+second rc=3
+none rc=127
+## END
+
+#### BASH_VERSINFO is a six-element array and FUNCNAME ends in main
+echo "${#BASH_VERSINFO[@]} ${BASH_VERSINFO[0]:+major}"
+declare -p BASH_VERSINFO >/dev/null; echo "declare rc=$?"
+g() { echo "${FUNCNAME[0]} ${FUNCNAME[1]:-top} ${#FUNCNAME[@]}"; }
+g
+h() { g; }
+h
+## STDOUT:
+6 major
+declare rc=0
+g main 2
+g h 3
+## END
+
+#### wait reports the exit status a background group chose with exit
+{ exit 4; } & r=$!
+wait $r; echo "grp rc=$?"
+f() { return 7; }
+f & q=$!
+wait $q; echo "fn rc=$?"
+## STDOUT:
+grp rc=4
+fn rc=7
+## END
+
+#### set -x traces each command on stderr before it runs
+{
+x=5
+set -x
+echo "hi $x"
+f() { echo "in f $1"; }
+f 'a b'
+set +x
+echo done
+} 2>&1
+## STDOUT:
++ echo 'hi 5'
+hi 5
++ f 'a b'
++ echo 'in f a b'
+in f a b
++ set +x
+done
+## END
+
+#### an EXIT trap set by a function runs when its subshell or command substitution ends
+f() { trap 'echo f-exit' EXIT; echo in-f; }
+( f )
+out=$( trap 'echo cs-exit' EXIT; echo body )
+echo "got: $out"
+echo end
+## STDOUT:
+in-f
+f-exit
+got: body
+cs-exit
+end
+## END
+
+#### declare -p shows the integer and export attributes
+declare -i n=5
+declare -p n
+export E=1
+declare -p E
+declare -ix NI=7
+declare -p NI
+S=plain
+declare -p S
+## STDOUT:
+declare -i n="5"
+declare -x E="1"
+declare -ix NI="7"
+declare -- S="plain"
+## END
+
+#### stat prints the operand as written; dirname and basename only cut text
+d=$(mktemp -d); mkdir "$d/sub"; printf x > "$d/sub/f.txt"; : > "$d/e.txt"
+cd "$d"
+stat -c '%n|%F|%a' sub/f.txt | sed 's/|[0-7]*$//'
+stat -c '%F' e.txt sub
+dirname /x/y/z.tar.gz; basename /x/y/z.tar.gz .gz
+cd /; rm -rf "$d"
+## STDOUT:
+sub/f.txt|regular file
+regular empty file
+directory
+/x/y
+z.tar
+## END
+
+#### an EXIT trap whose quoted handler holds a semicolon still fires at script end
+tmp=$(mktemp); trap 'rm -f "$tmp"; echo cleanup' EXIT
+echo body
+## STDOUT:
+body
+cleanup
+## END
+
+#### a background job in a loop sees the loop variable as of its launch
+worker() { sleep 0.2; return $(( $1 % 2 )); }
+pids=()
+for i in 1 2 3; do worker $i & pids+=($!); done
+fail=0
+for p in "${pids[@]}"; do wait "$p" || fail=$((fail+1)); done
+echo "fail=$fail"
+[ "$(echo -n)" = "" ] && echo empty-sub-equals-empty
+exec 4<<<"fdline"; read -r -u 4 v; echo "$v"
+## STDOUT:
+fail=2
+empty-sub-equals-empty
+fdline
+## END
+
+#### local -n names the caller's variable: scalar, array and associative array
+setv() { local -n r=$1; r="set-by-fn"; }
+setv foo
+echo "foo=$foo"
+addto() { local -n arr=$1; arr+=("$2"); }
+list=(a b)
+addto list c
+echo "${list[@]}"
+show() { local -n a=$1; echo "${#a[@]} ${a[1]}"; for e in "${a[@]}"; do echo "e=$e"; done; }
+show list
+declare -A m=([k]=v)
+mset() { local -n mm=$1; mm[z]=w; }
+mset m
+echo "${m[z]}"
+## STDOUT:
+foo=set-by-fn
+a b c
+3 b
+e=a
+e=b
+e=c
+w
+## END

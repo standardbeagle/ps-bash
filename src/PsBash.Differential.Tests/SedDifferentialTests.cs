@@ -33,6 +33,9 @@ public class SedDifferentialTests
         // conversion rule itself is proven deterministically (and on every OS) by
         // PsEmitterTests.Transpile_PipeToNativeCommand_ConvertsObjectsToBashText.
         Skip.If(OperatingSystem.IsWindows(), "no native od on Windows");
+        // BSD od (macOS) pads its -c columns one space wider than the GNU od the oracle recorded; the program's output
+        // layout is not what this case tests (what bytes ps-bash feeds it is), so there is nothing to compare there.
+        Skip.If(OperatingSystem.IsMacOS(), "BSD od formats -c differently from GNU od");
         await Eq("printf 'a\\n' | sed s/a/b/ | od -c");
     }
 

@@ -333,8 +333,8 @@ public class BashArithTests
         => Assert.Throws<BashArith.BashArithException>(() => Eval(expression));
 
     [Fact]
-    public void Evaluate_NegativeExponent_PreservesZeroResult()
-        => Assert.Equal(0, Eval("2 ** -1"));
+    public void Evaluate_NegativeExponent_IsAnError()   // oracle: "exponent less than 0", no value
+        => Assert.Throws<BashArith.BashArithException>(() => Eval("2 ** -1"));
 }
 
 public class InvokeBashArithmeticRawReaderTests : IClassFixture<SharedPwshFixture>
@@ -351,5 +351,25 @@ public class InvokeBashArithmeticRawReaderTests : IClassFixture<SharedPwshFixtur
             "$env:x = '9'; $x = ''; Invoke-BashArith '$x'").Invoke();
 
         Assert.Equal("0", Assert.Single(result).ToString());
+    }
+
+    // Oracle: `x='1 + 2'; echo $(( $x * 3 ))` is 7 -- $x is substituted as TEXT before the expression is parsed.
+    [Fact]
+    public void InvokeBashArith_DollarVariableIsSubstitutedTextually()
+    {
+        var pwsh = _fixture.AcquireFresh();
+        var result = pwsh.AddScript("$env:x = '1 + 2'; Invoke-BashArith '$x * 3'").Invoke();
+
+        Assert.Equal("7", Assert.Single(result).ToString());
+    }
+
+    // Oracle: an array used as a plain name reads element 0 (`a=(1 2 3); echo $((a + 5))` is 6).
+    [Fact]
+    public void InvokeBashArith_ArrayNameDecaysToElementZero()
+    {
+        var pwsh = _fixture.AcquireFresh();
+        var result = pwsh.AddScript("$a = @('1','2','3'); Invoke-BashArith 'a + 5'").Invoke();
+
+        Assert.Equal("6", Assert.Single(result).ToString());
     }
 }

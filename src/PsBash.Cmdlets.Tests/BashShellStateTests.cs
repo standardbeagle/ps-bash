@@ -30,7 +30,7 @@ public class BashShellStateTests : IClassFixture<SharedPwshFixture>
             + "\"keep=$env:PSB_SS_KEEP new=[$env:PSB_SS_NEW] errexit=$global:__BashErrexit "
             + "pos=$($global:BashPositional -join ',') xt=[$xt]\"; "
             + "$sh = (Invoke-BashShopt nullglob | ForEach-Object { [string]$_ }) -join ''; \"shopt=[$sh]\"; "
-            + "Remove-Item Env:PSB_SS_KEEP").AssertSuccess();
+            + "Remove-Item Env:PSB_SS_KEEP; $global:LASTEXITCODE = 0").AssertSuccess();
 
         Assert.Contains("keep=outer new=[] errexit=False pos=a,b xt=[]", r.Stdout);
         Assert.Matches(@"shopt=\[nullglob\s+off\]", r.Stdout);   // the body's `shopt -s` is undone

@@ -65,7 +65,6 @@ ok
 ok
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-trap builtin-trap (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### trap foo gives non-zero error
@@ -75,7 +74,6 @@ if test $? -ne 0; then
 fi
 ## stdout: ok
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-trap builtin-trap (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### trap 'echo hi' KILL (regression test, caught by smoosh suite)
@@ -126,7 +124,6 @@ cleanup() {
 trap 'cleanup x y z' EXIT
 ## stdout: cleanup [x y z]
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-trap builtin-trap (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### trap EXIT with PARSE error
@@ -154,7 +151,6 @@ IN TRAP
 FOO
 ## END
 ## status: 42
-## XFAIL ps-bash gap-oils-builtin-trap builtin-trap (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### trap EXIT sees exit status in $?
@@ -162,7 +158,6 @@ trap 'echo status=$?' EXIT
 exit 42
 ## stdout: status=42
 ## status: 42
-## XFAIL ps-bash gap-oils-builtin-trap builtin-trap (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### trap EXIT saves $?, clears trap, runs a command, then exits with it
@@ -170,7 +165,6 @@ trap 'st=$?; trap - EXIT; true; exit $st' EXIT
 exit 7
 ## stdout:
 ## status: 7
-## XFAIL ps-bash gap-oils-builtin-trap builtin-trap (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### bare exit in trap EXIT uses the status from before the trap
@@ -190,7 +184,6 @@ trap cleanup EXIT
 false
 ## stdout: cleanup
 ## status: 1
-## XFAIL ps-bash gap-oils-builtin-trap builtin-trap (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### trap EXIT with command sub / subshell / pipeline
@@ -214,7 +207,6 @@ EXIT TRAP
 trap 'eval "echo hi"' 0
 ## stdout: hi
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-trap builtin-trap (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### exit codes for traps are isolated
@@ -279,7 +271,6 @@ trap '' USR1
 trap
 ## stdout: trap -- '' SIGUSR1
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-trap builtin-trap (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### trap '' with multiple signals
@@ -291,7 +282,6 @@ trap -- '' SIGUSR1
 trap -- '' SIGUSR2
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-trap builtin-trap (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### SIGINT and INT are aliases
@@ -333,7 +323,6 @@ echo 2
 echo 3' SIGINT
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-trap builtin-trap (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### trap -p is like trap: it prints the handlers and full signal names
@@ -347,7 +336,6 @@ trap -- 'echo INT' SIGINT
 EXIT
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-trap builtin-trap (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -361,7 +349,6 @@ trap -- 'echo test' SIGTERM
 test
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-trap builtin-trap (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Remove multiple handlers with trap -
@@ -382,7 +369,6 @@ fi
 ok
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-trap builtin-trap (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### trap EXIT clears the EXIT trap
@@ -403,7 +389,6 @@ trap -- 'echo INT' SIGINT
 ---
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-trap builtin-trap (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### trap 0 is equivalent to trap EXIT
@@ -420,7 +405,6 @@ trap -- 'echo INT' SIGINT
 trap -- 'echo INT' SIGINT
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-trap builtin-trap (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### trap 1 is equivalent to SIGHUP; HUP is equivalent to SIGHUP
@@ -484,7 +468,6 @@ trap -- '' EXIT
 trap -- '# comment' EXIT
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-trap builtin-trap (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### trap EXIT sees $? of the last command, with sh -c
@@ -495,7 +478,6 @@ status=5
 outer=5
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-trap builtin-trap (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 

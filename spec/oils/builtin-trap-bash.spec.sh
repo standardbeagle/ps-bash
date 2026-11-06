@@ -73,7 +73,6 @@ B
 status=0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-trap-bash builtin-trap-bash (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### but trap DEBUG respects errexit
@@ -126,7 +125,6 @@ B
 status=0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-trap-bash builtin-trap-bash (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### trap DEBUG with 'exit'
@@ -295,7 +293,6 @@ i=Y
 ok
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-trap-bash builtin-trap-bash (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### trap DEBUG case

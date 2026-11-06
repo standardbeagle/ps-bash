@@ -1,2 +1,11 @@
 # Binary test fixtures — never apply CRLF conversion
 *.bin binary
+
+# Golden outputs are LF; a CRLF checkout (core.autocrlf) breaks byte comparisons on Windows CI
+*.golden.txt text eol=lf
+
+# Sources: test scripts live in C# raw-string literals and are hashed (oracle cassette key), so a CRLF
+# checkout on Windows CI changed the script bytes and the key ("oracle cassette missing"). Pin LF.
+*.cs text eol=lf
+*.sh text eol=lf
+*.cassette text eol=lf

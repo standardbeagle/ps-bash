@@ -35,7 +35,6 @@ for k in "${(@k)assoc}"; do
 done
 ## stdout:
 ## status: 1
-## XFAIL ps-bash gap-oils-zsh-assoc zsh-assoc (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### iterate over both keys and values
@@ -54,7 +53,6 @@ assoc=(k1 v1 k2 v2 k3 v3)
 echo ${#assoc} ${#assoc[k1]}
 ## stdout: 0 2
 ## status: 0
-## XFAIL ps-bash gap-oils-zsh-assoc zsh-assoc (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### index by integer does not work

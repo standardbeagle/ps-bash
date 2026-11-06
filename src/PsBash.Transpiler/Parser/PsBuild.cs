@@ -394,8 +394,29 @@ public static class PsBuild
     /// the failing status in <c>$?</c>/<c>$LASTEXITCODE</c>, which it leaves unchanged.
     /// </summary>
     public static string ErrTrapCheck(string status = "$global:LASTEXITCODE") =>
-        "if (" + status + " -ne 0 -and -not " + ErrexitSuppressVar + " -and (Test-Path variable:global:__BashTrapERR) -and $global:__BashTrapERR) { "
-        + "$__psbErr = " + status + "; & $global:__BashTrapERR; $global:LASTEXITCODE = $__psbErr }; ";
+        "if (" + status + " -ne 0 -and -not " + ErrexitSuppressVar + (ErrTrapNeedsErrtrace ? " -and $global:__BashErrtrace" : "") + " -and (Test-Path variable:global:__BashTrapERR) -and $global:__BashTrapERR) { "
+        + "$__psbErr = " + status + "; " + (TrapLine > 0 ? "$env:__psbLine = " + TrapLine + "; " : "")
+        + "& $global:__BashTrapERR; $global:LASTEXITCODE = $__psbErr }; ";
+
+    /// <summary>
+    /// Run the <c>trap ... DEBUG</c> action before a command. The action sees the command's line as <c>$LINENO</c>,
+    /// does not itself trigger DEBUG, and leaves the status the command will be run with unchanged.
+    /// </summary>
+    public static string DebugTrapRun(int line) =>
+        "if ((Test-Path variable:global:__BashTrapDEBUG) -and $global:__BashTrapDEBUG -and -not $global:__BashInDebug) { "
+        + "$global:__BashInDebug = $true; $__psbDbg = $global:LASTEXITCODE; $env:__psbLine = " + line + "; "
+        + "try { & $global:__BashTrapDEBUG } finally { $global:__BashInDebug = $false }; $global:LASTEXITCODE = $__psbDbg }; ";
+
+    /// <summary>The value of <c>$-</c>: the single-letter options currently on, in bash's order.</summary>
+    public const string ShellFlagsExpr =
+        "$f = ''; if ($global:__BashErrexit) { $f += 'e' }; if ($global:__BashNoglob) { $f += 'f' }; $f += 'h'; "
+        + "if ($global:__BashNounset) { $f += 'u' }; $f += 'B'; if ($global:__BashNoclobber) { $f += 'C' }; $f";
+
+    /// <summary>Source line of the statement being emitted; the ERR trap reads it as <c>$LINENO</c>.</summary>
+    [ThreadStatic] public static int TrapLine;
+
+    /// <summary>True inside a function or subshell: bash fires the ERR trap there only under <c>set -E</c>.</summary>
+    [ThreadStatic] public static bool ErrTrapNeedsErrtrace;
 
     /// <summary>
     /// Run statement(s) with errexit suppressed (an exempt context): no command inside —
@@ -634,6 +655,18 @@ public static class PsBuild
         + "try { " + body + " } finally { $global:__BashStdIn = $__psbash_stdin_prev }";
 
     /// <summary>
+    /// A function body that reads stdin: when the function is called with a pipe (<c>echo x | f</c>,
+    /// <c>f &lt;&lt;&lt; x</c>) that pipe is its stdin (<see cref="StdinScope"/>); called without one it keeps the
+    /// stdin of its caller (the enclosing compound's queue, or the launcher's).
+    /// </summary>
+    public static string FunctionStdinScope(string body) =>
+        "$__psbash_fin = $MyInvocation.ExpectingInput; "
+        + "if ($__psbash_fin) { $__psbash_fprev = Get-Variable -Name __BashStdIn -Scope Global -ValueOnly -ErrorAction SilentlyContinue; "
+        + "$global:__BashStdIn = [System.Collections.Generic.Queue[object]]::new(); "
+        + "foreach ($__psbash_fl in $input) { $global:__BashStdIn.Enqueue($__psbash_fl) } }; "
+        + "try { " + body + " } finally { if ($__psbash_fin) { $global:__BashStdIn = $__psbash_fprev } }";
+
+    /// <summary>
     /// Like <see cref="StdinScope"/> but the stdin is a lazily-pulled background PRODUCER
     /// (<c>New-BashLazyStdin</c>) instead of the incoming pipeline: for an unbounded producer
     /// (<c>yes | { head -n1; }</c>) that a pipe could never hand over (the stage after a pipe starts only
@@ -789,7 +822,7 @@ public static class PsBuild
             case "!":
                 return braced ? "${global:BashBgLastPid}" : "$global:BashBgLastPid";
             case "-":
-                return braced ? "${global:BashFlags}" : "$global:BashFlags";
+                return "$(" + ShellFlagsExpr + ")";
             case "_":
                 return braced ? "${global:BashLastArg}" : "$global:BashLastArg";
             case "SECONDS":
@@ -808,7 +841,7 @@ public static class PsBuild
             case "MACHTYPE":
                 return "$(($(if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq 'Arm64') { 'aarch64' } else { 'x86_64' })) + $(if ($IsWindows) { '-pc-msys' } elseif ($IsMacOS) { '-apple-darwin' } else { '-pc-linux-gnu' }))";
             case "HOSTNAME":
-                return "$([System.Environment]::MachineName)";
+                return "$([System.Environment]::MachineName.ToLowerInvariant())";
             case "PS4":
                 return "$(if ($null -ne $env:PS4) { $env:PS4 } else { '+ ' })";
             case "BASHPID":

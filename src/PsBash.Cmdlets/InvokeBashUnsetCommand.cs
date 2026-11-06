@@ -56,26 +56,78 @@ public sealed class InvokeBashUnsetCommand : PSCmdlet
         string baseName = name[..open];
         string key = name[(open + 1)..^1];
         if (key is "@" or "*") return false;
+        // `unset -v 'assoc["K"]'` / `unset 'assoc[K]'`: the quotes delimit the key, they are not part of it.
+        if (key.Length >= 2 && key[0] is '"' or '\'' && key[^1] == key[0]) key = key[1..^1];
 
         var value = SessionState.PSVariable.GetValue(baseName);
-        if (value is System.Collections.IDictionary dict)
+        long ReadNumber(string n)
         {
-            dict.Remove(key);
+            var raw = SessionState.PSVariable.GetValue(n)?.ToString() ?? BashVariableStore.Get(n);
+            return long.TryParse(raw?.Trim(), out var v) ? v : 0;
+        }
+        if (value is BashSparseArray sparse && (long.TryParse(key, out var sparseIdx) || TryEvaluate(key, ReadNumber, out sparseIdx)))
+        {
+            if (sparseIdx < 0 && sparse.Resolve(sparseIdx) is null)
+            {
+                FileSystemHelpers.WriteStderr(this, $"unset: [{key}]: bad array subscript");
+                FileSystemHelpers.SetLastExitCode(this, 1);
+                return true;
+            }
+            sparse.RemoveAt(sparseIdx);
             return true;
         }
-        if (value is System.Collections.IList list && int.TryParse(key, out int index))
+        if (value is System.Collections.IDictionary dict)
         {
+            // `unset "m[$k]"` arrives already expanded; a quoted `$k` is expanded here.
+            dict.Remove(System.Text.RegularExpressions.Regex.Replace(key, @"\$\{?(\w+)\}?",
+                m => SessionState.PSVariable.GetValue(m.Groups[1].Value)?.ToString() ?? BashVariableStore.Get(m.Groups[1].Value) ?? ""));
+            return true;
+        }
+        // An indexed array's subscript is an arithmetic expression (`unset 'stack[n-1]'`).
+        long parsed = 0;
+        bool numeric = value is System.Collections.IList && (long.TryParse(key, out parsed) || TryEvaluate(key, ReadNumber, out parsed));
+        if (value is System.Collections.IList list && numeric)
+        {
+            int index = (int)parsed;
+            if (index < 0) index += list.Count;   // `unset 'a[-1]'`: counted from the end
+            if (index < 0 && parsed < 0)
+            {
+                // Counted from the end past the first element: bash reports it and fails (status 1).
+                FileSystemHelpers.WriteStderr(this, $"unset: [{key}]: bad array subscript");
+                FileSystemHelpers.SetLastExitCode(this, 1);
+                return true;
+            }
             if (index >= 0 && index < list.Count)
             {
-                var kept = new List<object?>(list.Count - 1);
-                for (int i = 0; i < list.Count; i++)
-                    if (i != index) kept.Add(list[i]);
-                SessionState.PSVariable.Set(baseName, kept.ToArray());
+                // Subscripts of the other elements do not move (`unset 'a[1]'` leaves a[2] as a[2]): dropping the
+                // last element just shortens the array, anything else turns it into a sparse one.
+                object? replacement;
+                if (index == list.Count - 1)
+                {
+                    var kept = new List<object?>(list.Count - 1);
+                    for (int i = 0; i < index; i++) kept.Add(list[i]);
+                    replacement = kept.ToArray();
+                }
+                else
+                {
+                    var sp = BashSparseArray.FromList(list);
+                    sp.RemoveAt(index);
+                    replacement = sp;
+                }
+                // Through the owning scope's variable, so a function unsetting a global array's element reaches the caller.
+                if (SessionState.PSVariable.Get(baseName) is { } owner) owner.Value = replacement;
+                else SessionState.PSVariable.Set(baseName, replacement);
             }
             return true;
         }
         return false;
     }
+    private static bool TryEvaluate(string expr, Func<string, long> read, out long result)
+    {
+        try { result = BashArith.Evaluate(expr, read, (_, _) => { }); return true; }
+        catch (BashArith.BashArithException) { result = 0; return false; }
+    }
+
     protected override void EndProcessing()
     {
         var args = Arguments ?? Array.Empty<string>();
@@ -94,6 +146,7 @@ public sealed class InvokeBashUnsetCommand : PSCmdlet
 
         bool functionMode = false;
         var names = new List<string>();
+        bool explicitVar = V.IsPresent;
 
         // If -V was bound by the binder it acts as a no-op mode hint (variable
         // is already the default). The manual scan then walks the remaining
@@ -101,8 +154,8 @@ public sealed class InvokeBashUnsetCommand : PSCmdlet
         // (oracle parity — the mode is per-iteration, not global).
         foreach (var arg in args)
         {
-            if (arg == "-f") { functionMode = true; continue; }
-            if (arg == "-v") { functionMode = false; continue; }
+            if (arg == "-f") { functionMode = true; explicitVar = false; continue; }
+            if (arg == "-v") { functionMode = false; explicitVar = true; continue; }
             if (arg.StartsWith('-')) continue;
             names.Add(arg);
         }
@@ -136,10 +189,13 @@ public sealed class InvokeBashUnsetCommand : PSCmdlet
                 // to the local-or-parent scope chain (matching the oracle's
                 // observable contract — the variable disappears for the
                 // caller).
+                // Bash: with neither -f nor -v, a name that is no variable at all unsets the function of that name.
                 InvokeCommand.InvokeScript(
-                    "param($n) Remove-Variable -Name $n -Scope 1 -ErrorAction SilentlyContinue; " +
-                    "if (Test-Path ('Env:\\' + $n)) { Remove-Item -Path ('Env:\\' + $n) -Force -ErrorAction SilentlyContinue }",
-                    name);
+                    "param($n, $explicitVar) $isVar = (Get-Variable -Name $n -Scope 1 -ErrorAction SilentlyContinue) -or (Test-Path ('Env:\\' + $n)); " +
+                    "Remove-Variable -Name $n -Scope 1 -ErrorAction SilentlyContinue; " +
+                    "if (Test-Path ('Env:\\' + $n)) { Remove-Item -Path ('Env:\\' + $n) -Force -ErrorAction SilentlyContinue } " +
+                    "elseif (-not $isVar -and -not $explicitVar -and -not $n.Contains('[')) { Remove-Item -Path ('Function:\\' + $n) -Force -ErrorAction SilentlyContinue }",
+                    name, explicitVar);
             }
         }
     }

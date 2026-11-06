@@ -64,7 +64,8 @@ public class BashTranspilerTests
     public void Transpile_RegexMatchPatternWithQuote_EscapesSingleQuote()
     {
         var result = BashTranspiler.Transpile("[[ $x =~ \"a'b\" ]]");
-        Assert.Contains("-match 'a''b'", result);
+        Assert.Contains("[regex]::Escape", result);
+        Assert.Contains("a'b", result);
     }
 
     // ===================== Emitted-PS correctness regressions =====================
@@ -77,7 +78,7 @@ public class BashTranspilerTests
     public void Transpile_VariableInCommandPosition_UsesCallOperator()
     {
         var result = BashTranspiler.Transpile("CMD=echo; $CMD hello");
-        Assert.Contains("& $env:CMD hello", result);
+        Assert.Contains("& (Resolve-BashCommand $env:CMD) hello", result);
     }
 
     // #2: array elements were blindly single-quoted around EmitWord, storing the
@@ -107,6 +108,68 @@ public class BashTranspilerTests
         var result = BashTranspiler.Transpile("cat <<EOF\nv=${x:-fallback}\nEOF");
         Assert.Contains("$(($env:x ? $env:x : \"fallback\"))", result);
         Assert.DoesNotContain("$env:x:-fallback", result);
+    }
+
+    // Inside "...", a backslash in a ${v-WORD} operand escapes only $ ` " \ newline: `"${u-\z}"` is `\z`,
+    // and a literal paren must not reach PowerShell's naive "$( )" paren scan.
+    [Fact]
+    public void Transpile_DoubleQuotedDefaultOperand_KeepsNonSpecialBackslash()
+    {
+        var result = BashTranspiler.Transpile("echo \"${u-\\z}\"");
+        Assert.Contains("'\\z'", result);
+    }
+
+    [Fact]
+    public void Transpile_DoubleQuotedDefaultOperand_ParenIsNotRawInSubexpression()
+    {
+        var result = BashTranspiler.Transpile("echo \"${u-\\(}\"");
+        Assert.Contains("[char]40", result);
+        Assert.DoesNotContain("'\\('", result);
+    }
+
+    // `${@-w}` / `${@:+w}` test the positional LIST: one empty parameter is set (`-`) but null (`:-`); a bare
+    // one is a word list, so it can sit beside other arguments.
+    [Fact]
+    public void Transpile_PositionalListDefaultOperators_TestTheListNotAString()
+    {
+        var result = BashTranspilerTests_Transpile("echo ${@:-x} z");
+        Assert.Contains("@($(if (@(", result);
+        Assert.Contains(".Count -eq 1 -and -not [string]", result);
+        Assert.DoesNotContain("$null ?? \"x\"", result);
+    }
+
+    private static string BashTranspilerTests_Transpile(string bash) => BashTranspiler.Transpile(bash);
+
+    // A script that assigns HOME must see it through `~` and `$HOME`, which read PowerShell's read-only $HOME.
+    [Fact]
+    public void Transpile_HomeAssignment_RepointsPowerShellHome()
+    {
+        var result = BashTranspiler.Transpile("HOME=/home/bob");
+        Assert.Contains("Set-Variable -Name HOME -Value $env:HOME", result);
+    }
+
+    // The `/` after `~` is restored only when the parser consumed one: `x=~:foo` is not `HOME/:foo`.
+    [Fact]
+    public void Transpile_AssignmentTildeBeforeColon_AddsNoSlash()
+    {
+        var result = BashTranspiler.Transpile("x=~:foo");
+        Assert.DoesNotContain("/:", result);
+    }
+
+    // bash expands the tilde of a word that merely LOOKS like an assignment: `echo x=~`.
+    [Fact]
+    public void Transpile_AssignmentLookingArgument_ExpandsTilde()
+    {
+        var result = BashTranspiler.Transpile("echo x=~");
+        Assert.Contains("x=$HOME", result);
+    }
+
+    // `declare -A m=()` is an empty ASSOCIATIVE array (a hashtable), not `@()`.
+    [Fact]
+    public void Transpile_DeclareAssocEmptyInitializer_IsHashtable()
+    {
+        var result = BashTranspiler.Transpile("declare -A m=()");
+        Assert.Contains("= @{}", result);
     }
 
     // #4: case arms emitted no break, so PowerShell's switch ran EVERY matching
@@ -236,6 +299,24 @@ public class BashTranspilerTests
         {
             var result = BashTranspiler.Transpile("echo hi > /c/Users/andyb/foo.log");
             Assert.Contains("Invoke-BashRedirect -Path C:\\Users\\andyb\\foo.log", result);
+        }
+        finally { Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", prior); }
+    }
+
+    [Theory]
+    [InlineData("dirname /x/y/z", "/x/y/z")]
+    [InlineData("basename /c/Users/x.txt", "/c/Users/x.txt")]
+    [InlineData("dirname /tmp/a/b", "/tmp/a/b")]
+    public void Transpile_DirnameBasenameOperand_IsTextNotRewrittenToAWindowsPath(string bash, string expected)
+    {
+        var prior = Environment.GetEnvironmentVariable("PSBASH_UNIX_PATHS");
+        Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", "1");
+        try
+        {
+            var result = BashTranspiler.Transpile(bash);
+            Assert.Contains(expected, result);
+            Assert.DoesNotContain("TEMP", result);
+            Assert.DoesNotContain(":\\", result);
         }
         finally { Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", prior); }
     }

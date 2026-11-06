@@ -455,4 +455,44 @@ public class InvokeBashPrintfPwdCommandTests : IClassFixture<SharedPwshFixture>
         Assert.NotEmpty(lines);
         Assert.Contains(lines, l => l.Contains("Usage: pwd"));
     }
+
+    // Oracle: bash 5.2 (WSL Ubuntu-24.04) -- integer conversions are 64-bit.
+    [Theory]
+    [InlineData("'[%u][%o][%x][%X]' 4294967296 4294967296 4294967296 4294967296", "[4294967296][40000000000][100000000][100000000]")]
+    [InlineData("'[%u][%x]' -42 -42", "[18446744073709551574][ffffffffffffffd6]")]
+    [InlineData("'%d' 9223372036854775807", "9223372036854775807")]
+    [InlineData("'[%6q]' 'a b'", "[  a\\ b]")]
+    [InlineData("'[%#.0f][%#g]' 3 3", "[3.][3.00000]")]
+    [InlineData("'%ld %zd' 5 6", "5 6")]
+    public void Printf_IntegerWidthAndFlags_MatchBash(string args, string expected)
+        => Assert.Equal(expected, CmdResult.Run(_fixture.AcquireFresh(), "Invoke-BashPrintf " + args).Stdout);
+
+    // Negative: an invalid conversion prints what came before, complains, and exits 1.
+    [Fact]
+    public void Printf_InvalidConversion_FailsWithStatus1AfterEarlierText()
+    {
+        var r = CmdResult.Run(_fixture.AcquireFresh(), "Invoke-BashPrintf 'a%yb'");
+        Assert.Equal("a", r.Stdout);
+        r.AssertFailed(1, "`y': invalid format character");
+    }
+
+    // Negative: trailing junk or a fraction is "invalid number"; the numeric prefix still prints, status 1.
+    [Theory]
+    [InlineData("-42z", "-42")]
+    [InlineData("3.5", "3")]
+    [InlineData("abc", "0")]
+    public void Printf_InvalidNumber_PrintsPrefixAndFails(string arg, string expected)
+    {
+        var r = CmdResult.Run(_fixture.AcquireFresh(), $"Invoke-BashPrintf '%d' '{arg}'");
+        Assert.Equal(expected, r.Stdout);
+        r.AssertFailed(1, "invalid number");
+    }
+
+    // Hex, octal and a leading blank are valid integer input.
+    [Theory]
+    [InlineData("0x2a", "42")]
+    [InlineData("052", "42")]
+    [InlineData(" 7", "7")]
+    public void Printf_HexOctalAndBlank_AreIntegers(string arg, string expected)
+        => Assert.Equal(expected, CmdResult.Run(_fixture.AcquireFresh(), $"Invoke-BashPrintf '%d' '{arg}'").Stdout);
 }

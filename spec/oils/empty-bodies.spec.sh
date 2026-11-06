@@ -7,7 +7,6 @@ done
 echo empty
 ## stdout:
 ## status: 2
-## XFAIL ps-bash gap-oils-empty-bodies empty-bodies (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Empty case/esac
@@ -16,7 +15,6 @@ esac
 echo empty
 ## stdout: empty
 ## status: 0
-## XFAIL ps-bash gap-oils-empty-bodies empty-bodies (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Empty then/fi
@@ -25,5 +23,4 @@ fi
 echo empty
 ## stdout:
 ## status: 2
-## XFAIL ps-bash gap-oils-empty-bodies empty-bodies (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10

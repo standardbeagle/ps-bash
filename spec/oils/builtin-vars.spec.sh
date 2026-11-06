@@ -269,7 +269,6 @@ unset f
 f
 ## stdout: foo
 ## status: 127
-## XFAIL ps-bash gap-oils-builtin-vars builtin-vars (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Unset has dynamic scope

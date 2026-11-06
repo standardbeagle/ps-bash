@@ -75,6 +75,40 @@ public class InvokeBashUnsetCommandTests : IClassFixture<SharedPwshFixture>
         Assert.Equal("NULL", after);
     }
 
+    [Theory]
+    [InlineData("assoc[\"K\"]")]
+    [InlineData("assoc['K']")]
+    [InlineData("assoc[K]")]
+    public void Unset_AssocElementWithQuotedKey_RemovesTheKey(string target)
+    {
+        // `unset -v 'assoc["K"]'` looked up the key WITH its quotes and removed nothing (oils array-assoc).
+        var lines = RunLines(
+            "$assoc = @{ 'K' = 'val'; 'L' = 'x' }; " +
+            $"Invoke-BashUnset -v '{target.Replace("'", "''")}'; " +
+            "($assoc.Keys | Sort-Object) -join ','");
+        Assert.Equal("L", Assert.Single(lines));
+    }
+
+    [Fact]
+    public void Unset_PlainName_NotAVariable_RemovesFunction()
+    {
+        var stillExists = RunAndCheckFunctionExists(
+            "function Test-PsBashUnsetPlain { 'hi' }; " +
+            "Invoke-BashUnset Test-PsBashUnsetPlain",
+            "Test-PsBashUnsetPlain");
+        Assert.False(stillExists);
+    }
+
+    [Fact]
+    public void Unset_VariableFlag_KeepsFunction()
+    {
+        var stillExists = RunAndCheckFunctionExists(
+            "function Test-PsBashUnsetKeep { 'hi' }; " +
+            "Invoke-BashUnset -v Test-PsBashUnsetKeep",
+            "Test-PsBashUnsetKeep");
+        Assert.True(stillExists);
+    }
+
     [Fact]
     public void Unset_FunctionFlag_RemovesFunction()
     {
@@ -86,14 +120,14 @@ public class InvokeBashUnsetCommandTests : IClassFixture<SharedPwshFixture>
     }
 
     [Fact]
-    public void Unset_DefaultMode_IsVariableNotFunction()
+    public void Unset_DefaultMode_WithNoSuchVariable_FallsBackToTheFunction()
     {
-        // Without -f, a function with the same name should NOT be removed.
+        // bash 5.2: with neither -f nor -v, a name that is no variable unsets the function of that name (oracle-checked).
         var stillExists = RunAndCheckFunctionExists(
             "function Test-PsBashKeepMe { 'hi' }; " +
             "Invoke-BashUnset Test-PsBashKeepMe",
             "Test-PsBashKeepMe");
-        Assert.True(stillExists);
+        Assert.False(stillExists);
     }
 
     [Fact]
@@ -172,4 +206,9 @@ public class InvokeBashUnsetCommandTests : IClassFixture<SharedPwshFixture>
         // The literal env var should still exist and be readable.
         Assert.Contains("safe", lines);
     }
+
+    // Oracle: `a=(x y z); unset "a[-1]"` removes the LAST element (negative subscripts count from the end).
+    [Fact]
+    public void Unset_NegativeArrayIndex_RemovesFromTheEnd()
+        => Assert.Equal("x y", RunAndReadVar("$a = @('x','y','z'); Invoke-BashUnset 'a[-1]'", "a"));
 }

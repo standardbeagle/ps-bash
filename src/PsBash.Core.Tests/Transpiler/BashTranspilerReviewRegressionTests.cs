@@ -69,9 +69,33 @@ public class BashTranspilerReviewRegressionTests
     [Fact]
     public void Transpile_BraceExpansionItemWithQuote_EscapesQuote()
     {
+        var ps = BashTranspiler.Transpile("echo {a,b\\'c}");
+        Assert.Contains("'b''c'", ps);         // ' doubled inside the PS literal (bash prints b'c)
+        Assert.DoesNotContain("'b'c'", ps);    // never the broken un-escaped form
+    }
+
+    [Fact]
+    public void Transpile_BraceExpansionQuotedItem_DropsTheQuotes()
+    {
+        // Oracle: bash prints `a bcd` for `echo {a,b'c'd}`.
         var ps = BashTranspiler.Transpile("echo {a,b'c'd}");
-        Assert.Contains("'b''c''d'", ps);      // ' doubled inside the PS literal
-        Assert.DoesNotContain("'b'c'd'", ps);  // never the broken un-escaped form
+        Assert.Contains("'bcd'", ps);
+    }
+
+    [Fact]
+    public void Transpile_InvalidBraceRange_KeepsTheBracesLiteral()
+    {
+        // Oracle: bash prints `-a{1...3}- -b{1...3}-`.
+        var ps = BashTranspiler.Transpile("echo -{a,b}{1...3}-");
+        Assert.Contains("-a{1...3}-", ps);
+    }
+
+    [Fact]
+    public void Transpile_LiteralBracesInsideAWord_AreNotAScriptBlock()
+    {
+        // Oracle: bash prints `a{b}c`; bare `a{b}c` is `a`, a scriptblock and `c` in PowerShell.
+        var ps = BashTranspiler.Transpile("echo a{b}c");
+        Assert.Contains("\"a{b}c\"", ps);
     }
 
     // Oracle: bash prints `a1 b1` for `x=1; echo {a,b}$x`; the variable was spliced into a single-quoted item as `$env:x`.
@@ -162,6 +186,42 @@ public class BashTranspilerReviewRegressionTests
         Assert.DoesNotContain("function global:o", ps);   // the outer one keeps its plain definition
     }
 
+    // Oracle: `[ "$(echo -n)" = "" ]` is true - an empty command substitution is $null in PowerShell, and `$null -ceq ''` is false.
+    [Theory]
+    [InlineData("[ \"$(echo -n)\" = \"\" ]")]
+    [InlineData("[ \"$(true)\" != \"x\" ]")]
+    public void Transpile_TestOfAnEmptyCommandSub_ComparesAsAString(string bash)
+        => Assert.Contains("(@($(", BashTranspiler.Transpile(bash));
+
+    // Oracle: `for i in 1 2; do worker $i & done` runs worker with 1 and 2 - the loop variable is a PowerShell variable the job cannot see, so its value is handed over at launch.
+    [Fact]
+    public void Transpile_BackgroundJobInALoop_HandsOverTheLoopVariable()
+    {
+        var ps = BashTranspiler.Transpile("f() { return $1; }; for i in 1 2; do f $i & done");
+        Assert.Contains("-Vars @{ 'i' = $i } {", ps);
+    }
+
+    [Fact]
+    public void Transpile_BackgroundJobNotUsingTheLoopVariable_KeepsTheBareEmission()
+        => Assert.Contains("Invoke-BashBackground {", BashTranspiler.Transpile("for i in 1 2; do sleep 1 & done"));
+
+    // Oracle: `exec 4<<<"fdline"; read -r -u 4 v` reads fdline - the fd number used to become a command word and emit a parse error that failed the whole script.
+    [Fact]
+    public void Transpile_ExecFdHereString_OpensTheDescriptorOnTheText()
+    {
+        var ps = BashTranspiler.Transpile("exec 4<<<\"fdline\"; read -r -u 4 v");
+        Assert.StartsWith("Invoke-BashExecFd 4 '<' (Invoke-ProcessSub", ps);
+        Assert.Contains("fdline", ps);
+    }
+
+    // Oracle: `trap 'rm -f x; echo cleanup' EXIT` fires at script end - a `;` inside the quoted handler must not hide the EXIT from the wrapper detection.
+    [Theory]
+    [InlineData("trap 'rm -f x; echo cleanup' EXIT; echo a")]
+    [InlineData("trap \"rm -f x; echo cleanup\" EXIT; echo a")]
+    [InlineData("trap 'a | b & c' ERR; echo a")]
+    public void Transpile_TrapHandlerWithSemicolon_StillFiresAtScriptEnd(string bash)
+        => Assert.Contains("Test-Path Variable:Global:__BashTrapEXIT", BashTranspiler.Transpile(bash));
+
     // Oracle: `( trap 'echo bye' EXIT; echo body )` prints body then bye - a subshell fires its own EXIT trap
     // when it ends (it never fired), and a subshell with no trap pays nothing for it.
 
@@ -187,7 +247,7 @@ public class BashTranspilerReviewRegressionTests
     [InlineData("echo $LINENO", "Invoke-BashEcho 1")]
     [InlineData("echo a\necho \"at ${LINENO}\"", "at 2")]
     public void Transpile_Lineno_IsTheSourceLine(string bash, string expected)
-        => Assert.Contains(expected, BashTranspiler.Transpile(bash));
+        => Assert.Contains(expected, BashTranspiler.Transpile(bash + "\ndeclare -p"));
 
     [Theory]
     [InlineData("echo '$LINENO'")]
@@ -196,7 +256,309 @@ public class BashTranspilerReviewRegressionTests
     public void Transpile_LinenoLookalike_IsNotSubstituted(string bash)
         => Assert.DoesNotContain("echo 1", BashTranspiler.Transpile(bash).Replace("Invoke-BashEcho", "echo"));
 
+    // Oracle: a bare `LINENO` identifier inside arithmetic is the line too; lookalikes are not.
+    [Theory]
+    [InlineData("MYLINENO + 1", "MYLINENO + 1")]
+    [InlineData("LINENO2", "LINENO2")]
+    [InlineData("LINENO_x", "LINENO_x")]
+    [InlineData("x = LINENO", "x = 7")]
+    [InlineData("x = $LINENO + ${LINENO}", "x = 7 + 7")]
+    [InlineData("LINENO+LINENO", "7+7")]
+    public void SubstituteArithLineNumber_OnlyTheWholeIdentifier(string expr, string expected)
+        => Assert.Equal(expected, PsBash.Core.Parser.BashLexer.SubstituteArithLineNumber(expr, 7));
+
+    // Oracle: a for-list reports the line of the `for` command, even when the list continues on later lines.
+    [Fact]
+    public void Transpile_Lineno_ForListUsesTheForLine()
+    {
+        var ps = BashTranspiler.Transpile("echo one\nfor x in \\\n$LINENO zzz; do echo $x; done");
+        Assert.Contains("2", ps);
+        Assert.DoesNotContain("'3'", ps);
+        Assert.DoesNotContain("\"3\"", ps);
+    }
+
+    [Fact]
+    public void Transpile_Lineno_AfterForLoopIsItsOwnLine()
+        => Assert.Contains("Invoke-BashEcho 3", BashTranspiler.Transpile("for x in a; do :; done\n\necho $LINENO"));
+
+
+    // Oracle: `${x//$'\n'/,}` replaces newlines (the operand is the quote-removed value). The raw source text
+    // `$'\n'` was matched literally, so the join-lines idiom changed nothing.
+
+    [Theory]
+    [InlineData("echo \"${x//$'\\n'/,}\"")]
+    [InlineData("echo \"${x/'b'/B}\"")]
+    public void Transpile_SubstituteQuotedOrVariableOperand_MatchesTheValue(string bash)
+    {
+        string ps = BashTranspiler.Transpile(bash);
+        Assert.Contains("[regex]::Escape(", ps);
+        Assert.DoesNotContain("$'", ps);
+    }
+
+    // Oracle: an UNQUOTED `$g` in the pattern is a glob, even inside "…" (`g='*'; "${v//$g/-}"` is `-`);
+    // "$g" is the literal text.
+    [Fact]
+    public void Transpile_SubstituteUnquotedVariablePattern_IsConvertedAsAGlobAtRunTime()
+    {
+        string ps = BashTranspiler.Transpile("echo \"${x//$g/,}\"");
+        Assert.Contains("BashPattern]::ToRegex(", ps);
+        string quoted = BashTranspiler.Transpile("echo \"${x//\"$g\"/,}\"");
+        Assert.Contains("[regex]::Escape(", quoted);
+    }
+
+    // Oracle: the delimiter `/` is the first UNQUOTED one after the first character: `${p////\\/}` replaces `/`
+    // with `\/`, `${p//'/'/x}` likewise, and `${x///}` deletes every slash.
+    [Theory]
+    [InlineData("echo ${p////\\\\/}")]
+    [InlineData("echo ${p//'/'/\\\\/}")]
+    [InlineData("echo ${p///}")]
+    public void Transpile_SubstituteSlashInPattern_SplitsAtTheFirstUnquotedSlashAfterTheFirstChar(string bash)
+    {
+        string ps = BashTranspiler.Transpile(bash);
+        Assert.DoesNotContain("/\\\\//", ps);
+        Assert.Contains("[regex]::Escape(", ps);
+    }
+
+    // Oracle: quotes inside a bracket expression come off and the quoted characters stay literal.
+    [Fact]
+    public void Transpile_SubstituteQuotedBracketGlob_RemovesQuotes()
+    {
+        string ps = BashTranspiler.Transpile("echo ${p//[^'><+-.,[]']}");
+        Assert.DoesNotContain("'><", ps);
+    }
+
+    // Oracle: `${#@}` / `${#*}` are the positional count (`$#`); they parsed as the length of a variable named
+    // "@" and printed `0@}`, and failed outright inside `$(( ))`.
+
+    [Theory]
+    [InlineData("echo ${#@}")]
+    [InlineData("echo ${#*}")]
+    [InlineData("echo $(( ${#@} + 1 ))")]
+    public void Transpile_PositionalCountBraced_IsTheArgCount(string bash)
+    {
+        string ps = BashTranspiler.Transpile(bash);
+        Assert.DoesNotContain("@}", ps);
+        Assert.Contains("BashPositional", ps);
+    }
     // Oracle: `f() { trap 'echo ret' RETURN; echo in; }; f` prints in then ret - a RETURN trap runs when the
+
+    // Oracle: an empty pattern (`${x//$unset/r}`) replaces nothing; an empty regex would match between every character.
+    [Fact]
+    public void Transpile_SubstituteVariablePattern_EmptyValueMatchesNothing()
+        => Assert.Contains("(?!)", BashTranspiler.Transpile("x=ab; echo ${x//$foo/r}"));
+
+    // Oracle: the trim idiom `${s#"${s%%[![:space:]]*}"}`: a quoted / expanded strip pattern is the quote-removed value,
+    // matched literally. The pattern text was regex-escaped as source (`"${s%%...}"` never matched).
+    [Theory]
+    [InlineData("s=\"  a\"; echo \"${s#\"${s%%[![:space:]]*}\"}\"")]
+    [InlineData("s=\"a  \"; echo \"${s%\"${s##*[![:space:]]}\"}\"")]
+    [InlineData("f=a.txt; e=.txt; echo \"${f%\"$e\"}\"")]
+    public void Transpile_StripQuotedExpansionPattern_IsMatchedAsTheValue(string bash)
+        => Assert.Contains("[regex]::Escape(", BashTranspiler.Transpile(bash));
+
+    // Oracle: `[!x]` negates and `[[:space:]]` is a POSIX class in a strip pattern; the first `]` is not the close.
+    [Theory]
+    [InlineData("echo ${s%%[![:space:]]*}", "[^\\s]")]
+    [InlineData("echo ${s#[[:digit:]]}", "[0-9]")]
+    [InlineData("echo ${s#[!a]}", "[^a]")]
+    public void Transpile_StripGlobBracketExpression_IsTranslatedToARegexClass(string bash, string expectedClass)
+        => Assert.Contains(expectedClass, BashTranspiler.Transpile(bash));
+
+    // Oracle: an operator on a whole-array expansion applies to EACH element (`${a[@]/o/0}`, `"${a[@]%o}"` is N words),
+    // and a lone `"${a[@]}"` argument to a function is N arguments, not one joined string.
+    [Theory]
+    [InlineData("echo ${a[@]/o/0}")]
+    [InlineData("echo \"${a[*]//o/0}\"")]
+    [InlineData("echo ${a[@]#?}")]
+    [InlineData("echo ${a[@]%o}")]
+    [InlineData("echo ${a[@]^^}")]
+    public void Transpile_OperatorOnWholeArray_MapsEachElement(string bash)
+        => Assert.Contains("ForEach-Object", BashTranspiler.Transpile(bash));
+
+    [Theory]
+    [InlineData("f \"${a[@]}\"")]
+    [InlineData("f \"${a[@]%o}\"")]
+    public void Transpile_LoneQuotedArrayArgumentToFunction_IsSplatted(string bash)
+        => Assert.Contains("@__bashsplat", BashTranspiler.Transpile(bash));
+
+    // Oracle: `${!#}` is the last argument, `${!n}` the positional named by n, `${@:$#}` / `${a[@]:$i:2}` slice by a variable,
+    // and `${a[@]:-w}` / `${m[@]:+w}` test the elements (an associative array printed "System.Collections.Hashtable").
+    [Theory]
+    [InlineData("echo \"${!#}\"", "$__pp")]
+    [InlineData("n=2; echo \"${!n}\"", "$__pp")]
+    [InlineData("echo \"${@:$#}\"", "$__psbO")]
+    [InlineData("echo \"${a[@]:$i:2}\"", "$__psbN")]
+    [InlineData("echo \"${m[@]:-none}\"", ".Count -gt 0")]
+    [InlineData("echo \"${m[@]:+yes}\"", ".Count -gt 0")]
+    public void Transpile_IndirectPositionalVariableSliceAndArrayDefault_AreRuntimeEvaluated(string bash, string expected)
+        => Assert.Contains(expected, BashTranspiler.Transpile(bash + "\ndeclare -p"));
+
+    // Oracle: `trap 'echo rc=$?' EXIT; exit 4` prints rc=4 - `exit N` records N as the status the EXIT trap sees.
+    [Fact]
+    public void Transpile_ExitWithCode_RecordsStatusForExitTrap()
+        => Assert.Contains("$global:LASTEXITCODE = 4; exit $global:LASTEXITCODE", BashTranspiler.Transpile("trap 'echo rc=$?' EXIT; exit 4"));
+
+    // Oracle: `declare -r B=1; B=2` fails "B: readonly variable" like `readonly B=1`.
+    [Theory]
+    [InlineData("declare -r B=1; B=2")]
+    [InlineData("declare -ri N=5")]
+    [InlineData("typeset -r B")]
+    public void Transpile_DeclareReadonly_MarksTheName(string bash)
+        => Assert.Contains("MarkReadonly(", BashTranspiler.Transpile(bash));
+
+    // Oracle: `((c[$k]++))`, `((a[i]*=10))`, `$((a[i]+a[2]))` operate on array elements (they were a parse error), and
+    // `${a[i]}` with a bare-name subscript is the arithmetic index (it read the literal key "i").
+    [Theory]
+    [InlineData("((c[$k]++))", "c[$k]++")]
+    [InlineData("((arr[i]*=10))", "arr[i]*=10")]
+    [InlineData("echo $((arr[i] + arr[2]))", "arr[i] + arr[2]")]
+    public void Transpile_ArithmeticArrayElement_ParsesAsOneOperand(string bash, string expected)
+        => Assert.Contains(expected, BashTranspiler.Transpile(bash + "\ndeclare -p"));
+
+    [Fact]
+    public void Transpile_BareNameSubscript_IsArithmeticOnIndexedArrays()
+        => Assert.Contains("Invoke-BashArith", BashTranspiler.Transpile("a=(x y); i=0; echo \"${a[i+1]}\""));
+
+    // Oracle: an array a function writes without declaring it `local` is the shell's own - push() { st+=("$1"); } must reach the caller.
+    [Theory]
+    [InlineData("push() { st+=(\"$1\"); }; push a", "$global:st = Add-BashArray $global:st @(")]
+    [InlineData("f() { a=(x y); }; f", "$global:a = @(")]
+    [InlineData("f() { a[2]=z; }; f", "$global:a = Set-BashElement $global:a")]
+    public void Transpile_ArrayWrittenInFunction_TargetsTheGlobal(string bash, string expected)
+        => Assert.Contains(expected, BashTranspiler.Transpile(bash + "\ndeclare -p"));
+
+    [Theory]
+    [InlineData("f() { local st=(a); st+=(b); }; f", "$st = Add-BashArray $st @(")]
+    [InlineData("f() { ( st+=(b) ); }; f", "$st = Add-BashArray $st @(")]
+    public void Transpile_LocalOrSubshellArrayWrite_StaysLocal(string bash, string expected)
+    {
+        var ps = BashTranspiler.Transpile(bash);
+        Assert.Contains(expected, ps);
+        Assert.DoesNotContain("$global:st", ps);
+    }
+
+    // Oracle: bash ignores -r on a nameref - `typeset -n -r ref=x; ref=v` still assigns through it.
+    [Fact]
+    public void Transpile_DeclareNamerefReadonly_DoesNotMarkReadonly()
+        => Assert.DoesNotContain("MarkReadonly(", BashTranspiler.Transpile("x=1; typeset -n -r ref=x; ref=2"));
+
+    // Oracle: `[[ -v cfg[host] ]]` tests the element; the operand is a name, not a glob.
+    [Fact]
+    public void Transpile_TestVWithSubscript_PassesTheNameQuoted()
+    {
+        var ps = BashTranspiler.Transpile("[[ -v cfg[host] ]]");
+        Assert.Contains("Invoke-BashTest '-v' 'cfg[host]'", ps);
+        Assert.DoesNotContain("ConvertTo-BashGlob", ps);
+    }
+
+    // Oracle: ${s//\\/\\\\} doubles backslashes, ${s//\"/\\\"} escapes quotes, ${s//$'\n'/\\n} writes `\n` (json_escape).
+    [Theory]
+    [InlineData("echo \"${s//\\\\/\\\\\\\\}\"")]
+    [InlineData("echo \"${s//\\\"/\\\\\\\"}\"")]
+    public void Transpile_SubstitutionWithBackslashEscapes_UsesTheQuoteRemovedText(string bash)
+        => Assert.DoesNotContain("[regex]::Escape('\\\\')", BashTranspiler.Transpile(bash).Replace("\\\\\\\\", "XX"));
+
+    // Oracle: `false; echo ${PIPESTATUS[*]}` is `1` - a plain command is a one-stage pipeline.
+    [Fact]
+    public void Transpile_PipestatusAfterPlainCommand_RecordsItsStatus()
+        => Assert.Contains("$global:PIPESTATUS = @([int]$global:LASTEXITCODE)", BashTranspiler.Transpile("false; echo ${PIPESTATUS[*]}"));
+
+    // Oracle: a per-stage pipeline whose last stage redirects (`cat >/dev/null`) threw a NullReferenceException.
+    [Fact]
+    public void Transpile_PipestatusPipelineEndingInRedirect_WrapsTheRedirectedStage()
+        => Assert.Contains("& { $input | Invoke-BashCat >$null }", BashTranspiler.Transpile("echo hi | cat >/dev/null; echo ${PIPESTATUS[*]}"));
+
+    // Oracle: `r=$(exit 4) || echo caught` falls back with 4 - the assignment's status is its command substitution's.
+    [Fact]
+    public void Transpile_CommandSubAssignmentBeforeOr_BridgesItsExitStatus()
+    {
+        var ps = BashTranspiler.Transpile("r=$(exit 4) || echo fb");
+        Assert.Matches(@"\|\| ?Invoke-BashEcho fb", ps);
+        Assert.Contains(PsBuild.SignalFailIfFailed(), ps);
+        Assert.DoesNotContain(PsBuild.SignalFailIfFailed(), BashTranspiler.Transpile("r=1 || echo fb"));
+    }
+
+    // Oracle: `${x:?}` in a pipeline stage or a command substitution ends only that subshell, not the script.
+    [Theory]
+    [InlineData("echo \"${var:?}\" | head -1; echo after")]
+    [InlineData("echo a | cat \"${v:?}\"; echo after")]
+    [InlineData("x=$(echo \"${var:?}\"); echo after")]
+    public void Transpile_ParamErrorInStageOrCommandSub_IsCaughtThere(string bash)
+        => Assert.Contains("catch [PsBash.Cmdlets.BashParamErrorException]", BashTranspiler.Transpile(bash));
+
+    [Fact]
+    public void Transpile_ParamErrorAtTopLevel_IsNotCaught()
+        => Assert.DoesNotContain("catch [PsBash.Cmdlets.BashParamErrorException]", BashTranspiler.Transpile("echo \"${var:?top}\"; echo not-reached"));
+
+    // Oracle: `declare -x e=2; declare -p e` prints `declare -x e="2"`.
+    [Fact]
+    public void Transpile_DeclareExport_MarksTheAttribute()
+        => Assert.Contains("MarkAttribute('e', 'x')", BashTranspiler.Transpile("declare -x e=2"));
+
+    // Oracle: a function is a filter: `indent() { sed 's/^/  /'; }; cmd | indent`. The piped input never reached
+    // the commands in the body (sed/grep/tr/cat/read saw an empty stdin). A body that reads stdin takes the pipe
+    // it is called with; one that does not is unchanged.
+
+    [Theory]
+    [InlineData("f() { sed 's/^/> /'; }")]
+    [InlineData("f() { cat | wc -l; }")]
+    [InlineData("f() { read -r x; echo $x; }")]
+    [InlineData("f() { mapfile -t a; echo ${#a[@]}; }")]
+    public void Transpile_FunctionThatReadsStdin_TakesThePipeItIsCalledWith(string bash)
+        => Assert.Contains("$MyInvocation.ExpectingInput", BashTranspiler.Transpile(bash));
+
+    [Theory]
+    [InlineData("f() { echo hi; }")]
+    [InlineData("f() { local x=1; echo $x; }")]
+    public void Transpile_FunctionThatReadsNoStdin_HasNoStdinScope(string bash)
+        => Assert.DoesNotContain("ExpectingInput", BashTranspiler.Transpile(bash));
+
+    // Oracle: `"$@"` / `$cmd` run the named command as bash resolves it: a function, then a builtin (`false`,
+    // `true`, `echo`, `test`, `[` are not PowerShell commands of those names), then PATH.
+
+    [Theory]
+    [InlineData("r() { \"$@\"; }")]
+    [InlineData("c=false; $c")]
+    [InlineData("\"$tool\" --version")]
+    public void Transpile_RunTimeCommandName_IsResolvedAsBashDoes(string bash)
+        => Assert.Contains("Resolve-BashCommand", BashTranspiler.Transpile(bash));
+
+    [Theory]
+    [InlineData("echo hi")]
+    [InlineData("ls -l")]
+    public void Transpile_LiteralCommandName_IsNotResolvedAtRunTime(string bash)
+        => Assert.DoesNotContain("Resolve-BashCommand", BashTranspiler.Transpile(bash));
+    // Oracle: `seen[$w]=$(( ${seen[$w]:-0} + 1 ))` is the counting idiom. The subscript of `${m[$k]:-d}` was the
+    // literal text `$k`; `${a[1]}` inside `$(( ))` was a parse error; and a bare RANDOM / SECONDS there read as 0.
+
+    [Fact]
+    public void Transpile_ElementWithOperatorAndVariableSubscript_UsesTheVariablesValue()
+    {
+        string ps = BashTranspiler.Transpile("echo \"${m[$k]:-0}\"");
+        Assert.Contains("$env:k", ps);
+        Assert.DoesNotContain("'$k'", ps);
+    }
+
+    [Theory]
+    [InlineData("echo $(( ${a[1]} + 1 ))")]
+    [InlineData("echo $(( ${m[$k]:-0} + 1 ))")]
+    [InlineData("echo $(( ${x:-7} * 2 ))")]
+    public void Transpile_ParameterExpansionInArithmetic_IsExpandedBeforeEvaluation(string bash)
+    {
+        string ps = BashTranspiler.Transpile(bash);
+        Assert.DoesNotContain("${", ps);
+    }
+
+    [Theory]
+    [InlineData("echo $(( RANDOM % 6 ))", true)]
+    [InlineData("echo $(( SECONDS + 1 ))", true)]
+    [InlineData("(( RANDOM = 5 ))", false)]
+    [InlineData("echo $(( XRANDOM + 1 ))", false)]
+    public void Transpile_ComputedSpecialVarInArithmetic_IsReadFromTheShell(string bash, bool expanded)
+    {
+        string ps = BashTranspiler.Transpile(bash);
+        Assert.Equal(expanded, ps.Contains("Get-Random") || ps.Contains("[DateTime]") || ps.Contains("BashStartTime"));
+    }
     // function returns (it was never run). A function with no trap carries no wrapper.
 
     [Fact]
@@ -362,5 +724,298 @@ public class BashTranspilerReviewRegressionTests
     {
         var ex = Record.Exception(() => BashTranspiler.Transpile("echo ${x:-\"}\"}"));
         Assert.True(ex is null or ParseException, $"unexpected {ex?.GetType().Name}");
+    }
+
+    // bash refuses writes to a `local -r` variable inside the function; outside it the name is free again.
+    [Fact]
+    public void Transpile_LocalReadonly_RefusesLaterWritesOnlyInsideTheFunction()
+    {
+        var ps = BashTranspiler.Transpile("f() { local -r x=1; x=2; }; f; x=9");
+        Assert.Contains("x: readonly variable", ps);
+        Assert.Equal(1, System.Text.RegularExpressions.Regex.Matches(ps, "readonly variable").Count);
+        Assert.Contains("$env:x = \"9\"", ps);
+    }
+
+    // `set -eEuo pipefail` is the standard preamble; options that change nothing here must not abort the transpile.
+    [Theory]
+    [InlineData("set -eEuo pipefail")]
+    [InlineData("set -E")]
+    [InlineData("set -o errtrace")]
+    [InlineData("set +o functrace")]
+    [InlineData("set -Eeu")]
+    public void Transpile_SetWithInertOptions_IsAccepted(string script)
+    {
+        var ex = Record.Exception(() => BashTranspiler.Transpile(script + "; echo ok"));
+        Assert.Null(ex);
+    }
+
+    [Fact]
+    public void Transpile_SetErrtraceWithErrexit_StillEnablesErrexit()
+    {
+        Assert.Contains("__BashErrexit = $true", BashTranspiler.Transpile("set -eE"));
+    }
+
+    // `timeout` must reach Invoke-BashTimeout (Windows' timeout.exe waits for a keypress), with every flag of the inner command intact.
+    [Fact]
+    public void Transpile_TimeoutWithInnerFlags_MapsToTheCmdletAndKeepsTheFlags()
+    {
+        var ps = BashTranspiler.Transpile("timeout 5 grep -v foo file");
+        Assert.Contains("Invoke-BashTimeout 5 grep '-v' foo file", ps);
+        Assert.DoesNotContain("& (Resolve-BashCommand", ps);
+    }
+
+    // `${#BASH_VERSINFO[@]}` counted the (nonexistent) variable $BASH_VERSINFO: 0 instead of 6.
+    [Fact]
+    public void Transpile_LengthOfBashVersinfo_CountsTheMappedArray()
+    {
+        var ps = BashTranspiler.Transpile("echo ${#BASH_VERSINFO[@]}");
+        Assert.Contains("$global:BashVersionInfo", ps);
+    }
+
+    // `set -x` prints `+ cmd args` before each command; only words that render without running anything are traced.
+    [Fact]
+    public void Transpile_CommandAfterSetX_IsPrecededByAnXtraceCall()
+    {
+        var ps = BashTranspiler.Transpile("set -x\necho \"hi $x\" -n");
+        Assert.Contains("Write-BashXtrace 'echo' ([string](\"hi $env:x\")) '-n'; ", ps);
+    }
+
+    [Fact]
+    public void Transpile_CommandSubstitutionArgAfterSetX_IsNotTraced()
+    {
+        var ps = BashTranspiler.Transpile("set -x\necho $(date)");
+        Assert.DoesNotContain("Write-BashXtrace 'echo'", ps);
+    }
+
+    [Fact]
+    public void Transpile_ScriptWithoutSetX_HasNoXtraceCalls()
+        => Assert.DoesNotContain("Write-BashXtrace", BashTranspiler.Transpile("echo hi"));
+
+    // A subshell / $( ) runs the EXIT trap a function it calls set; the body text has no `trap` of its own.
+    [Theory]
+    [InlineData("f() { trap 'echo x' EXIT; }\n( f )")]
+    [InlineData("f() { trap 'echo x' EXIT; }\nv=$( f; echo b )")]
+    public void Transpile_SubshellCallingATrapSettingFunction_FiresTheExitTrapAtItsEnd(string bash)
+        => Assert.Contains("$global:__BashTrapEXIT = $null; try {", BashTranspiler.Transpile(bash));
+
+    [Fact]
+    public void Transpile_SubshellInAScriptWithoutTrap_PaysNothingForExitTraps()
+        => Assert.DoesNotContain("__BashTrapEXIT", BashTranspiler.Transpile("( echo a; cd /tmp )"));
+
+    // `declare -p` prints the i and x attributes: `declare -i n=5` and a plain `export E=1` are recorded for it.
+    [Theory]
+    [InlineData("declare -i n=5", "MarkAttribute('n', 'i')")]
+    [InlineData("declare -ix n=5", "MarkAttribute('n', 'i')")]
+    [InlineData("export E=1", "MarkAttribute('E', 'x')")]
+    [InlineData("export A=1 B=2", "MarkAttribute('B', 'x')")]
+    public void Transpile_IntegerAndExportDeclarations_RecordTheirAttribute(string bash, string expected)
+        => Assert.Contains(expected, BashTranspiler.Transpile(bash + "\ndeclare -p"));
+
+    [Fact]
+    public void Transpile_ExportInAScriptWithoutDeclareP_RecordsNothing()
+        => Assert.DoesNotContain("MarkAttribute", BashTranspiler.Transpile("export E=1"));
+
+    // `local -n r=$1`: the target is only known at run time, so the body is emitted once per literal name the
+    // script passes, with r resolved statically, and chosen by the argument.
+    [Fact]
+    public void Transpile_LocalNamerefFromPositional_EmitsOneBodyPerLiteralCaller()
+    {
+        var ps = BashTranspiler.Transpile("setv() { local -n r=$1; r=x; }\nsetv foo\nsetv bar");
+        Assert.Contains("if ($__nrt -ceq 'foo') { $global:LASTEXITCODE = 0; $env:foo = \"x\" }", ps);
+        Assert.Contains("elseif ($__nrt -ceq 'bar') {", ps);
+    }
+
+    [Fact]
+    public void Transpile_LocalNamerefToAnArray_AppendsToTheCallersArray()
+    {
+        var ps = BashTranspiler.Transpile("addto() { local -n a=$1; a+=(\"$2\"); }\nl=(a)\naddto l c");
+        Assert.Contains("$global:l = Add-BashArray $global:l @(", ps);
+    }
+
+    [Fact]
+    public void Transpile_LocalNamerefNeverCalledWithALiteral_KeepsTheOrdinaryLocal()
+        => Assert.DoesNotContain("__nrt", BashTranspiler.Transpile("setv() { local -n r=$1; r=x; }\nsetv \"$name\""));
+    [Fact]
+    public void Transpile_PatsubOfAnUnsetVarUnderNounset_ReadsItStrictly()
+        => Assert.Contains("unbound variable", BashTranspiler.Transpile("set -o nounset\necho -${v/x/y}-"));
+
+    [Fact]
+    public void Transpile_PatsubWithoutNounset_DoesNotReadStrictly()
+        => Assert.DoesNotContain("unbound variable", BashTranspiler.Transpile("echo -${v/x/y}-"));
+
+    [Fact]
+    public void Transpile_ForOverASingleDefaultExpansion_SplitsItsValue()
+        => Assert.Contains("ConvertTo-BashWords", BashTranspiler.Transpile("for x in ${L:-zz}; do echo \"[$x]\"; done"));
+
+    [Fact]
+    public void Transpile_PatsubWithUnquotedVarBracketClass_UsesTheGlobEngine()
+        => Assert.Contains("BashPattern]::ToRegex(", BashTranspiler.Transpile("p='[z-a]'; t=foo; echo ${t//$p/z}"));
+
+    // Oracle: bash expands the text first, then evaluates (`zero=0; echo $(( ${zero}11 ))` is octal 011 = 9).
+    [Fact]
+    public void Transpile_ArithWithAdjacentExpansion_SubstitutesTheTextBeforeEvaluating()
+    {
+        var ps = BashTranspiler.Transpile("zero=0\necho $(( ${zero}11 ))");
+        Assert.Contains("Invoke-BashArith ('' + ", ps);
+    }
+
+    // Oracle: bash reports a bad arithmetic expression when it RUNS (status 1) and keeps going; it is no parse error.
+    [Theory]
+    [InlineData("echo $(( 1 + 2.3 ))")]
+    [InlineData("echo $(( '1' + 2 ))")]
+    public void Transpile_ArithSyntaxError_IsDeferredToRunTime(string bash)
+        => Assert.Contains("Invoke-BashArith", BashTranspiler.Transpile(bash));
+
+    // Oracle: inside [[ ]] numeric operands are arithmetic expressions (`[[ 017 -eq 15 ]]` is true); [ ] keeps plain integers.
+    [Fact]
+    public void Transpile_DoubleBracketNumericOperands_AreEvaluatedAsArithmetic()
+    {
+        Assert.Contains("Invoke-BashArith", BashTranspiler.Transpile("[[ a -eq 5 ]]"));
+        Assert.DoesNotContain("Invoke-BashArith", BashTranspiler.Transpile("[ 1 -eq 5 ]"));
+    }
+
+    // Oracle: `[[ True || '' && '' ]]` is true — && binds tighter than ||.
+    [Fact]
+    public void Transpile_DoubleBracketAndBindsTighterThanOr()
+        => Assert.Contains("-or ((", BashTranspiler.Transpile("[[ -n a || -n b && -n c ]]"));
+
+    // Oracle: `set a b c` (no `--`) sets $1 $2 $3 exactly like `set -- a b c`.
+    [Fact]
+    public void Transpile_SetWithoutDashDash_SetsPositionalParameters()
+        => Assert.Contains("BashPositional = @('a', 'b', 'c')", BashTranspiler.Transpile("set a b c"));
+
+    // Oracle: unquoted $@ / $* split each parameter on IFS (IFS='' keeps "b c" whole) — never a bare array argument.
+    [Fact]
+    public void Transpile_UnquotedPositionalList_IsSplitPerParameter()
+        => Assert.Contains("| ConvertTo-BashWords", BashTranspiler.Transpile("printf '[%s]\\n' $@"));
+
+    // Oracle: `echo -"$v"-` is ONE argument (-abc-); wrapping the dash-led word in more quotes split it into three.
+    [Fact]
+    public void Transpile_DashLedWordWithQuotedExpansion_IsOneArgument()
+        => Assert.Contains("\"-$env:v-\"", BashTranspiler.Transpile("echo -\"$v\"-"));
+
+    // Oracle: inside "…" a single quote in a ${v:-…} operand is an ordinary character.
+    [Fact]
+    public void Transpile_SingleQuotesInsideDoubleQuotedDefault_AreLiteral()
+        => Assert.Contains("'a'", BashTranspiler.Transpile("echo \"${unset:-'a'}\""));
+
+    // Oracle: ${x%$'b'*} removes from the quoted b on — the quoted part is literal, the * still a glob.
+    [Fact]
+    public void Transpile_PatternStripWithQuotedPartAndGlob_KeepsTheGlob()
+        => Assert.Contains("b.*", BashTranspiler.Transpile("x=abc; echo ${x%$'b'*}"));
+
+    // Oracle: `echo empty=${empty,}` — an unset variable converts to "" (no null-method call) beside a literal prefix.
+    [Theory]
+    [InlineData("echo e=${v,}")]
+    [InlineData("echo e=${v^^}")]
+    [InlineData("echo ${v,,A}")]
+    public void Transpile_CaseConversion_IsNullSafeAndParseable(string bash)
+        => Assert.DoesNotContain(".ToLower()", BashTranspiler.Transpile(bash).Replace("$args[0].Value.ToLower()", ""));
+
+    // Oracle: `code='1+2'; ${a[$code]}` evaluates the variable's value as arithmetic on an indexed array (a[3]).
+    [Fact]
+    public void Transpile_IndexedArraySubscriptFromVariable_IsEvaluatedAsArithmetic()
+        => Assert.Contains("Invoke-BashArith", BashTranspiler.Transpile("echo ${a[$code]}"));
+
+    // Oracle: `${#a[0]}` is the length of ONE element; a plain scalar counts as a one-element array.
+    [Fact]
+    public void Transpile_ElementLengthAndScalarCount_UseTheElement()
+    {
+        Assert.Contains(".Length", BashTranspiler.Transpile("echo ${#a[0]}"));
+        Assert.Contains("elseif ($null -ne $env:c) { 1 }", BashTranspiler.Transpile("echo ${#c[@]}"));
+    }
+
+    // Oracle: `${a[@]: -5}` of 4 elements is empty (the offset reaches before the first element).
+    [Fact]
+    public void Transpile_ArraySliceNegativeOffsetBeforeStart_IsEmpty()
+        => Assert.Contains("if ($__psbO -lt 0) { $__psbO = $__psbA.Count } }", BashTranspiler.Transpile("echo \"${a[@]: -5}\""));
+
+    // Oracle: `unalias NAME` removes the alias; the shared alias cmdlet needs -u to tell the two apart.
+    [Fact]
+    public void Transpile_Unalias_RoutesToTheRemovalMode()
+        => Assert.Contains("Invoke-BashAlias -u foo", BashTranspiler.Transpile("unalias foo"));
+
+    // Oracle: `[ ] ]` tests the one-word string "]" (true); only the LAST `]` closes a `[` command.
+    [Theory]
+    [InlineData("[ ] ]")]
+    [InlineData("[ -z ] ]")]
+    [InlineData("[ -z -a ] ]")]
+    public void Transpile_BracketWithOperandCloser_ParsesLastBracketAsTheClose(string script)
+        => Assert.DoesNotContain("parse error", BashTranspiler.Transpile(script));
+
+    // Oracle: `[ a -eq 1 ]` is status 2 ("integer expression expected"), not false and not a cast exception.
+    [Fact]
+    public void Transpile_BracketNumericTest_ReportsABadOperandAsStatus2()
+    {
+        var ps = BashTranspiler.Transpile("[ a -eq 1 ]");
+        Assert.Contains("Invoke-BashTestInt", ps);
+        Assert.Contains("if ($global:__BashTestBad) { 2 }", ps);
+    }
+
+    // Oracle: `[ \( foo \) ]` groups (true for a non-empty word); the escaped parens are not operands.
+    [Theory]
+    [InlineData("[ \\( foo \\) ]")]
+    [InlineData("[ \\( -z foo \\) ]")]
+    public void Transpile_BracketEscapedParens_AreGroupingNotStrings(string script)
+        => Assert.DoesNotContain("'`('", BashTranspiler.Transpile(script));
+
+    // Oracle: `set -u -- x y z` and `set -o errexit a b c` apply the options AND assign the parameters.
+    [Theory]
+    [InlineData("set -u -- x y z", "'x', 'y', 'z'")]
+    [InlineData("set -o errexit a b c", "'a', 'b', 'c'")]
+    public void Transpile_SetOptionsThenPositionals_AppliesBoth(string script, string positional)
+    {
+        var ps = BashTranspiler.Transpile(script);
+        Assert.Contains("BashPositional = @(" + positional + ")", ps);
+        Assert.DoesNotContain("'--'", ps);
+    }
+
+    // Oracle: `set -o NOSUCH` reports "invalid option name" and returns 1 at run time; it is not a transpile failure.
+    [Fact]
+    public void Transpile_SetUnknownLongOption_IsARuntimeError()
+        => Assert.Contains("set: NOSUCH: invalid option name", BashTranspiler.Transpile("set -o NOSUCH || true"));
+
+    // Oracle: `a=A; echo -{$a,b}-` is `-A- -b-`; `{${a},b}` nests a braced expansion; an empty unquoted result is dropped.
+    [Theory]
+    [InlineData("a=A; echo -{$a,b}-", "$env:a")]
+    [InlineData("a=A; echo {${a},b}_{c,d}", "$env:a")]
+    [InlineData("a=A; echo {$a,b}_{c,d}", "Where-Object")]
+    public void Transpile_BraceItemWithExpansion_ExpandsTheItem(string script, string expected)
+    {
+        var ps = BashTranspiler.Transpile(script);
+        Assert.Contains(expected, ps);
+        Assert.DoesNotContain("'-$a-'", ps);
+    }
+
+    // Oracle: `declare $var=x`, `declare "n=5"`, `export "$k=8"` assign the named scalar (they were "command not found").
+    [Theory]
+    [InlineData("declare $var=x")]
+    [InlineData("declare \"n=5\"")]
+    [InlineData("export \"$k=8\"")]
+    public void Transpile_DeclareOrExportWithQuotedOrDynamicAssignment_AssignsTheScalar(string script)
+    {
+        var ps = BashTranspiler.Transpile(script);
+        Assert.Contains("Set-Item -LiteralPath ('Env:'", ps);
+        Assert.DoesNotContain("declare \"", ps);
+    }
+
+    // Oracle: `[[ foo =~ * ]] && echo true` is status 2 (malformed regex), and the chain does not run the echo.
+    [Fact]
+    public void Transpile_DoubleBracketBadRegexInChain_IsStatus2()
+    {
+        var ps = BashTranspiler.Transpile("[[ foo.py =~ * ]] && echo true");
+        Assert.Contains("catch [System.ArgumentException]", ps);
+        Assert.Contains("$global:__BashTestBad) { 2 }", ps);
+    }
+
+    // A /tmp/... command word is emitted as the quoted TempPath string; without the call operator
+    // it is a bare string expression, so `/tmp/x` printed itself instead of running (Linux/macOS).
+    [Theory]
+    [InlineData("/tmp/tool")]
+    [InlineData("/tmp/tool arg")]
+    public void Transpile_TmpCommandWord_IsInvokedNotEchoed(string script)
+    {
+        var ps = BashTranspiler.Transpile(script);
+        Assert.Contains("& \"", ps);
     }
 }

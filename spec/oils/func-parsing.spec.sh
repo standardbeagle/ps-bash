@@ -76,14 +76,12 @@ func-name=ext
 $foo-bar() { ls ; }
 ## stdout:
 ## status: 1
-## XFAIL ps-bash gap-oils-func-parsing func-parsing (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Function name with command sub
 foo-$(echo hi)() { ls ; }
 ## stdout:
 ## status: 1
-## XFAIL ps-bash gap-oils-func-parsing func-parsing (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Function name with !

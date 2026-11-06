@@ -127,7 +127,6 @@ echo foo\
 $
 ## stdout: foo$
 ## status: 0
-## XFAIL ps-bash gap-oils-quote quote (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Line continuation inside double quotes
@@ -135,7 +134,6 @@ echo "foo\
 $"
 ## stdout: foo$
 ## status: 0
-## XFAIL ps-bash gap-oils-quote quote (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### $'' octal escapes with fewer than 3 chars
@@ -249,7 +247,7 @@ col3
 #### $'' octal escapes don't have leading 0
 # echo -e syntax is echo -e \0377
 echo -n $'\001' $'\377' | od -A n -c | sed 's/ \+/ /g'
-## stdout:  001 377
+## stdout: 001 377
 ## status: 0
 ## XFAIL ps-bash gap-oils-quote quote (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10

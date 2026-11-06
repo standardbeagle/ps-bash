@@ -100,6 +100,7 @@ public class StuckCommandTests : IDisposable
             HostMemoryGuard.LimitBytes = 1000;
             long usage = 10;
             HostMemoryGuard.ReadUsage = () => usage;
+            HostMemoryGuard.ReadLive = () => usage;             // everything is live: the verdict agrees with the cheap look
             using var cts = new CancellationTokenSource();
             using var guard = HostMemoryGuard.Watch(cts);
 
@@ -117,6 +118,69 @@ public class StuckCommandTests : IDisposable
         {
             HostMemoryGuard.LimitBytes = priorLimit;
             HostMemoryGuard.ReadUsage = priorRead;
+        }
+    }
+
+    [Theory]
+    [InlineData(500L, false)]   // reclaimed memory (garbage / committed-but-free pages) never kills a command
+    [InlineData(5000L, true)]   // memory that survives a full collection is the command's: stop it
+    public void MemoryGuard_OnlyCountsWhatSurvivesAReclaim(long usageAfterReclaim, bool expectBreach)
+    {
+        var priorLimit = HostMemoryGuard.LimitBytes;
+        var priorRead = HostMemoryGuard.ReadUsage;
+        var priorReclaim = HostMemoryGuard.Reclaim;
+        var priorLive = HostMemoryGuard.ReadLive;
+        try
+        {
+            HostMemoryGuard.LimitBytes = 1000;
+            long live = 5000;                                   // working set is over the limit before the reclaim
+            var reclaims = 0;
+            HostMemoryGuard.ReadUsage = () => 5000;
+            HostMemoryGuard.Reclaim = () => { reclaims++; live = usageAfterReclaim; };
+            HostMemoryGuard.ReadLive = () => live;
+            using var cts = new CancellationTokenSource();
+            using var guard = HostMemoryGuard.Watch(cts);
+
+            guard.Check();
+
+            Assert.Equal(1, reclaims);
+            Assert.Equal(expectBreach, guard.Breached);
+            Assert.Equal(expectBreach, cts.IsCancellationRequested);
+        }
+        finally
+        {
+            HostMemoryGuard.LimitBytes = priorLimit;
+            HostMemoryGuard.ReadUsage = priorRead;
+            HostMemoryGuard.Reclaim = priorReclaim;
+            HostMemoryGuard.ReadLive = priorLive;
+        }
+    }
+
+    [Fact]
+    public void MemoryGuard_UnderLimit_DoesNotPayForAReclaim()
+    {
+        var priorLimit = HostMemoryGuard.LimitBytes;
+        var priorRead = HostMemoryGuard.ReadUsage;
+        var priorReclaim = HostMemoryGuard.Reclaim;
+        try
+        {
+            HostMemoryGuard.LimitBytes = 1000;
+            var reclaims = 0;
+            HostMemoryGuard.ReadUsage = () => 10;
+            HostMemoryGuard.Reclaim = () => reclaims++;
+            using var cts = new CancellationTokenSource();
+            using var guard = HostMemoryGuard.Watch(cts);
+
+            guard.Check();
+
+            Assert.Equal(0, reclaims);                          // the 500 ms poll must stay cheap
+            Assert.False(guard.Breached);
+        }
+        finally
+        {
+            HostMemoryGuard.LimitBytes = priorLimit;
+            HostMemoryGuard.ReadUsage = priorRead;
+            HostMemoryGuard.Reclaim = priorReclaim;
         }
     }
 

@@ -56,6 +56,15 @@ public class InvokeBashShiftCommandTests : IClassFixture<SharedPwshFixture>
         Assert.Equal(new object?[] { "c", "d" }, arr);
     }
 
+    // Oracle: bash 5.2 `shift 1 extra` -> "shift: too many arguments", status 1, positionals untouched.
+    [Fact]
+    public void Shift_WithTwoOperands_IsTooManyArgumentsAndLeavesPositionals()
+    {
+        var arr = RunAndReadPositional(
+            "$global:BashPositional = @('a','b','c'); Invoke-BashShift 1 extra");
+        Assert.Equal(new object?[] { "a", "b", "c" }, arr);
+    }
+
     [Fact]
     public void Shift_ByZero_LeavesArrayUnchanged()
     {

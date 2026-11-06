@@ -37,7 +37,9 @@ public class ProcessSubStreamingTests : IClassFixture<SharedPwshFixture>
             "  if ($_ -eq 110000) { " +
             "    $new = @(Get-SubNames | Where-Object { $before -notcontains $_ }); " +
             "    $dir = Join-Path ([System.IO.Path]::GetTempPath()) 'ps-bash/proc-sub'; " +
-            "    $global:mid = (Get-Item (Join-Path $dir $new[0])).Length } " +
+            "    $f = Join-Path $dir $new[0]; $sw = [Diagnostics.Stopwatch]::StartNew(); " +
+            "    while ((Get-Item $f).Length -le 0 -and $sw.ElapsedMilliseconds -lt 5000) { [Threading.Thread]::Yield() | Out-Null } " +
+            "    $global:mid = (Get-Item $f).Length } " +
             "  \"row $_ of the stream, padded out a little\" } }; " +
             "$final = (Get-Item $p).Length; Remove-Item $p; \"$($global:mid -gt 0) $($global:mid -lt $final) $final\"");
         Assert.StartsWith("True True ", got[0]);

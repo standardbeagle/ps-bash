@@ -54,6 +54,8 @@ public class CommonParameterCollisionGuardTests
             ["getopts"] = new(CollidingLetters),
             // flock: -n/-x/-s/-w/-E/-c are the script's own flags; every dash word is single-quoted.
             ["flock"] = new(CollidingLetters),
+            // timeout: -s/-k/-v are its own flags and the inner command's flags follow; every dash word is single-quoted.
+            ["timeout"] = new(CollidingLetters),
             // times/hash/umask: argv is the script's own; every dash word is single-quoted.
             ["times"] = new(CollidingLetters),
             ["hash"] = new(CollidingLetters),
@@ -109,6 +111,7 @@ public class CommonParameterCollisionGuardTests
             ["grep"] = new(CollidingLetters),
             // sed: GNU getopt via the shared parser; direct calls go through the psm1 literal-args proxy.
             ["sed"] = new(CollidingLetters),
+["shopt"] = new(CollidingLetters),
             // rg: ripgrep-flavoured ordered parser; the native passthrough receives the argv verbatim.
             ["rg"] = new(CollidingLetters),
             ["echo"] = new(CollidingLetters),

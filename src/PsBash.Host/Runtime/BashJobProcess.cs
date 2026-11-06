@@ -87,6 +87,23 @@ public sealed class BashJobProcess : IDisposable
         _signal = signal;
         try { _cancel.Cancel(); } catch (ObjectDisposedException) { }
         Dispose();
+        WaitUntilGone();
+    }
+
+    /// <summary>
+    /// `kill $!; wait $!; kill -0 $!` must see the job gone: the kill is asynchronous in the OS, so a status
+    /// reported before the process is torn down lets a following existence probe still find it (Linux CI).
+    /// </summary>
+    private void WaitUntilGone()
+    {
+        try
+        {
+            using var proc = System.Diagnostics.Process.GetProcessById(Pid);
+            proc.WaitForExit(5000);
+        }
+        catch (ArgumentException) { /* already gone */ }
+        catch (InvalidOperationException) { /* already gone */ }
+        catch (System.ComponentModel.Win32Exception) { /* cannot open: nothing more to wait on */ }
     }
 
     public void Dispose()

@@ -17,7 +17,8 @@ public abstract record Command : BashNode
         ImmutableArray<CompoundWord> Words,
         ImmutableArray<EnvPair> EnvPairs,
         ImmutableArray<Redirect> Redirects,
-        ImmutableArray<HereDoc> HereDocs = default) : Command;
+        ImmutableArray<HereDoc> HereDocs = default,
+        int Line = 0) : Command;
 
     /// <summary>
     /// A pipeline of commands connected by <c>|</c> or <c>|&amp;</c>.
@@ -51,7 +52,10 @@ public abstract record Command : BashNode
     public sealed record ShAssignment(
         ImmutableArray<Assignment> Pairs,
         bool IsLocal = false,
-        bool IsExport = false) : Command;
+        bool IsExport = false,
+        bool IsReadonly = false,
+        bool IsNameref = false,
+        bool IsAssoc = false) : Command;
 
     /// <summary>
     /// An if/elif/else statement.

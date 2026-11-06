@@ -43,12 +43,12 @@ public class InvokeBashShoptCommandTests : IClassFixture<SharedPwshFixture>
     }
 
     [Fact]
-    public void Shopt_NoArgs_EmitsNothing()
+    public void Shopt_NoArgs_ListsEveryOption()
     {
         // The psm1 oracle's no-arg path (no -p, no operands) falls through
         // the operand loop and emits nothing. Preserved here.
         var lines = RunLines("Invoke-BashShopt");
-        Assert.Empty(lines);
+        Assert.Equal(57, lines.Length);   // bash lists every option as "name<pad>\ton|off"
     }
 
     [Fact]
@@ -56,12 +56,11 @@ public class InvokeBashShoptCommandTests : IClassFixture<SharedPwshFixture>
     {
         // -p with no operands prints every option as "shopt -s NAME", sorted.
         var lines = RunLines("Invoke-BashShopt -p");
-        Assert.Equal(16, lines.Length);
-        Assert.All(lines, l => Assert.StartsWith("shopt -s ", l));
-        // Sorted ordinal — "checkwinsize" comes before "cmdhist" comes before "dotglob".
+        Assert.Equal(57, lines.Length);
+        Assert.All(lines, l => Assert.Matches("^shopt -[su] ", l));
         var idxChk = Array.IndexOf(lines, "shopt -s checkwinsize");
         var idxCmd = Array.IndexOf(lines, "shopt -s cmdhist");
-        var idxDot = Array.IndexOf(lines, "shopt -s dotglob");
+        var idxDot = Array.IndexOf(lines, "shopt -u dotglob");
         Assert.True(idxChk >= 0 && idxCmd >= 0 && idxDot >= 0,
             $"expected all three options listed; got: {string.Join(", ", lines)}");
         Assert.True(idxChk < idxCmd, "checkwinsize must precede cmdhist");
@@ -75,7 +74,7 @@ public class InvokeBashShoptCommandTests : IClassFixture<SharedPwshFixture>
         // Default: nullglob = false.
         var lines = RunLines("Invoke-BashShopt nullglob");
         Assert.Single(lines);
-        Assert.Equal("nullglob off", lines[0]);
+        Assert.Equal("nullglob       \toff", lines[0]);
     }
 
     [Fact]
@@ -84,7 +83,7 @@ public class InvokeBashShoptCommandTests : IClassFixture<SharedPwshFixture>
         // cmdhist defaults to true (per oracle table); globstar is off, as in bash.
         var lines = RunLines("Invoke-BashShopt cmdhist");
         Assert.Single(lines);
-        Assert.Equal("cmdhist on", lines[0]);
+        Assert.Equal("cmdhist        \ton", lines[0]);
     }
 
     [Fact]
@@ -94,7 +93,7 @@ public class InvokeBashShoptCommandTests : IClassFixture<SharedPwshFixture>
         var lines = RunLines(
             "Invoke-BashShopt -s nullglob; Invoke-BashShopt nullglob");
         Assert.Single(lines);
-        Assert.Equal("nullglob on", lines[0]);
+        Assert.Equal("nullglob       \ton", lines[0]);
     }
 
     [Fact]
@@ -104,7 +103,7 @@ public class InvokeBashShoptCommandTests : IClassFixture<SharedPwshFixture>
         var lines = RunLines(
             "Invoke-BashShopt -u globstar; Invoke-BashShopt globstar");
         Assert.Single(lines);
-        Assert.Equal("globstar off", lines[0]);
+        Assert.Equal("globstar       \toff", lines[0]);
     }
 
     [Fact]
@@ -126,7 +125,7 @@ public class InvokeBashShoptCommandTests : IClassFixture<SharedPwshFixture>
         // The `shopt` alias (declared in psm1) must resolve to the cmdlet.
         var lines = RunLines("shopt globstar");
         Assert.Single(lines);
-        Assert.Equal("globstar off", lines[0]);
+        Assert.Equal("globstar       \toff", lines[0]);
     }
 
     [Fact]
@@ -163,6 +162,6 @@ public class InvokeBashShoptCommandTests : IClassFixture<SharedPwshFixture>
         // empty output or an "ambiguous parameter name" exception, the
         // declared SwitchParameter P has regressed.
         var lines = RunLines("Invoke-BashShopt -p");
-        Assert.Equal(16, lines.Length);
+        Assert.Equal(57, lines.Length);
     }
 }

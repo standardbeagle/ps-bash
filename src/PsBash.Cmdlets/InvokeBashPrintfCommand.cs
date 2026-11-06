@@ -39,6 +39,38 @@ public sealed class InvokeBashPrintfCommand : PSCmdlet
     private const string EscapedPercentSentinel = "\0ESCAPED_PERCENT\0";
 
     /// <summary>
+    /// An escape that DECODES to a percent sign (<c>\045</c>, <c>\x25</c>, <c>\u0025</c>) is a literal
+    /// percent in bash, never the start of a conversion; swap it for the sentinel before escapes are expanded.
+    /// </summary>
+    private static string ProtectEscapedPercent(string format)
+    {
+        if (format.IndexOf('\\') < 0) return format;
+        var sb = new StringBuilder(format.Length);
+        for (int i = 0; i < format.Length; i++)
+        {
+            char c = format[i];
+            if (c != '\\' || i + 1 >= format.Length) { sb.Append(c); continue; }
+            string rest = format.Substring(i + 1);
+            string? hit = null;
+            foreach (var cand in new[] { "0045", "045", "45", "x25", "u0025", "U00000025" })
+                if (rest.StartsWith(cand, StringComparison.Ordinal)) { hit = cand; break; }
+            // `\45` is only an octal escape when the next char is not another octal digit (\450 is \45 then 0? bash takes up to 3 digits).
+            if (hit is "45" or "045" or "0045")
+            {
+                int digits = 0;
+                while (digits < rest.Length && digits < 3 && rest[digits] >= '0' && rest[digits] <= '7') digits++;
+                if (!(digits == hit.Length || (hit == "0045" && digits == 3))) hit = null;
+                else if (hit == "0045") hit = "045";
+            }
+            if (hit is null) { sb.Append(c).Append(format[i + 1]); i++; continue; }
+            sb.Append(EscapedPercentSentinel);
+            i += hit.Length;
+        }
+        return sb.ToString();
+    }
+
+
+    /// <summary>
     /// Decoy for a bare <c>-v</c> typed DIRECTLY at PowerShell (it prefix-matches
     /// <c>-Verbose</c>); the transpiler single-quotes every dash word, so it never binds there.
     /// <c>-v</c> must be printf's first argument, so it is re-injected at the head.
@@ -109,7 +141,7 @@ public sealed class InvokeBashPrintfCommand : PSCmdlet
                 // POSIX: a leading quote makes the value the character code of the next character (`printf %d \'a` -> 97).
                 converted.Add(char.ConvertToUtf32(a, 1));
             }
-            else if (int.TryParse(a, out int intVal))
+            else if (long.TryParse(a, out long intVal))
             {
                 converted.Add(intVal);
             }
@@ -126,11 +158,48 @@ public sealed class InvokeBashPrintfCommand : PSCmdlet
         }
 
         format = format.Replace("%%", EscapedPercentSentinel);
+        format = ProtectEscapedPercent(format);
         format = BashEscapes.Expand(format, EscapeDialect.PrintfFormat);
 
         var sb = new StringBuilder();
         int argIdx = 0;
         bool stoppedByC = false; // %b hit \c: bash suppresses ALL further output
+        string? badFormat = null, badSpec = "";
+        bool numErr = false;
+
+        // Integer conversions read the argument like strtoimax: 0x hex, 0 octal, a leading blank and a sign are fine,
+        // trailing text is "invalid number" (the numeric prefix still prints and the status becomes 1).
+        long IntArg(int idx)
+        {
+            string a = argList[idx];
+            if (a.Length >= 2 && (a[0] == '\'' || a[0] == '"')) return ToLong(converted[idx]);
+            if (a is "'" or "\"") return 0; // no character after the quote: code point 0, no complaint
+            int p = 0;
+            while (p < a.Length && char.IsWhiteSpace(a[p])) p++;
+            bool neg = false;
+            if (p < a.Length && (a[p] == '-' || a[p] == '+')) neg = a[p++] == '-';
+            int radix = 10;
+            if (p + 1 < a.Length && a[p] == '0' && (a[p + 1] is 'x' or 'X')) { radix = 16; p += 2; }
+            else if (p < a.Length && a[p] == '0') radix = 8;
+            int start = p;
+            ulong acc = 0;
+            bool over = false;
+            while (p < a.Length)
+            {
+                int dv = a[p] >= '0' && a[p] <= '9' ? a[p] - '0' : a[p] >= 'a' && a[p] <= 'f' ? a[p] - 'a' + 10 : a[p] >= 'A' && a[p] <= 'F' ? a[p] - 'A' + 10 : 99;
+                if (dv >= radix) break;
+                if (acc > (ulong.MaxValue - (ulong)dv) / (ulong)radix) over = true; else acc = acc * (ulong)radix + (ulong)dv;
+                p++;
+            }
+            if (a.Length > 0 && (p < a.Length || (p == start && radix != 8)))
+            {
+                FileSystemHelpers.WriteBashError(this, $"printf: {a}: invalid number");
+                numErr = true;
+            }
+            if (over) { FileSystemHelpers.WriteBashError(this, $"printf: {a}: Numerical result out of range"); numErr = true; return neg ? long.MinValue : long.MaxValue; }
+            if (neg) return acc > (ulong)long.MaxValue + 1 ? long.MinValue : unchecked(-(long)acc);
+            return acc > long.MaxValue ? long.MaxValue : (long)acc;
+        }
         // bash reuses (recycles) the format string until the argument list is
         // exhausted: `printf '%s\n' a b c` prints three lines. We repeat the
         // whole format while a pass consumes at least one more argument; a format
@@ -184,6 +253,7 @@ public sealed class InvokeBashPrintfCommand : PSCmdlet
                         j++;
                     }
                 }
+                while (j < format.Length && "hlLjzt".IndexOf(format[j]) >= 0 && j + 1 < format.Length && format[j + 1] != '%') j++; // length modifiers carry no meaning here
                 char spec = j < format.Length ? format[j] : '\0';
                 string flagStr = flags.ToString();
                 string widthStr = width.ToString();
@@ -210,7 +280,11 @@ public sealed class InvokeBashPrintfCommand : PSCmdlet
                 {
                     case 'q':
                         if (argIdx < converted.Count)
-                            sb.Append(ShellQuote(argList[argIdx]));
+                        {
+                            string q = ShellQuote(argList[argIdx]);
+                            if (widthStr.Length > 0) q = flagStr.Contains('-') ? q.PadRight(ParseFieldWidth(widthStr)) : q.PadLeft(ParseFieldWidth(widthStr));
+                            sb.Append(q);
+                        }
                         argIdx++;
                         i = j + 1;
                         break;
@@ -236,13 +310,13 @@ public sealed class InvokeBashPrintfCommand : PSCmdlet
                     case 'i': // %i is an alias of %d
                         if (argIdx < converted.Count)
                         {
-                            int val = ToInt(converted[argIdx]);
+                            long val = IntArg(argIdx);
                             if (widthStr.Length > 0 || hasPrecision || flagStr.IndexOfAny(['+', ' ']) >= 0)
                             {
                                 bool leftAlign = flagStr.Contains('-');
                                 bool zeroPad = flagStr.Contains('0') && !hasPrecision; // C: an explicit precision cancels the 0 flag
                                 bool showPlus = flagStr.Contains('+');
-                                string digits = Math.Abs((long)val).ToString(CultureInfo.InvariantCulture);
+                                string digits = (val < 0 ? unchecked((ulong)(-(val + 1)) + 1UL) : (ulong)val).ToString(CultureInfo.InvariantCulture);
                                 if (hasPrecision) digits = digits.PadLeft(precStr.Length > 0 ? ParseFieldWidth(precStr) : 0, '0');
                                 string sign = val < 0 ? "-" : showPlus ? "+" : flagStr.Contains(' ') ? " " : string.Empty;
                                 string str = sign + digits;
@@ -267,7 +341,7 @@ public sealed class InvokeBashPrintfCommand : PSCmdlet
                     case 'u': // unsigned decimal
                         if (argIdx < converted.Count)
                         {
-                            uint uval = unchecked((uint)ToInt(converted[argIdx]));
+                            ulong uval = unchecked((ulong)IntArg(argIdx));
                             string str = uval.ToString(CultureInfo.InvariantCulture);
                             if (widthStr.Length > 0)
                             {
@@ -292,6 +366,19 @@ public sealed class InvokeBashPrintfCommand : PSCmdlet
                                 // 2-digit exponent like C printf (not .NET's 3-digit "E+00n").
                                 ? d.ToString("0." + new string('0', prec) + (spec == 'e' ? "e+00" : "E+00"), CultureInfo.InvariantCulture)
                                 : d.ToString((spec == 'g' ? "G" : "G") + prec, CultureInfo.InvariantCulture);
+                            if ((spec == 'g' || spec == 'G') && flagStr.Contains('#') && d != 0 && !double.IsNaN(d) && !double.IsInfinity(d))
+                            {
+                                // `#` keeps the trailing zeros: P significant digits, the point always shown.
+                                int sig = prec == 0 ? 1 : prec;
+                                int exp10 = (int)Math.Floor(Math.Log10(Math.Abs(d)));
+                                if (exp10 >= -4 && exp10 < sig)
+                                {
+                                    formatted = d.ToString("F" + (sig - 1 - exp10), CultureInfo.InvariantCulture);
+                                    if (!formatted.Contains('.')) formatted += ".";
+                                }
+                            }
+                            else if ((spec == 'g' || spec == 'G') && flagStr.Contains('#') && d == 0)
+                                formatted = "0." + new string('0', Math.Max((prec == 0 ? 1 : prec) - 1, 0));
                             if (spec == 'G') formatted = formatted.ToUpperInvariant();
                             if (widthStr.Length > 0) formatted = formatted.PadLeft(ParseFieldWidth(widthStr));
                             sb.Append(formatted);
@@ -306,6 +393,7 @@ public sealed class InvokeBashPrintfCommand : PSCmdlet
                             double d = ToDouble(converted[argIdx]);
                             string formatted = d.ToString(
                                 "F" + prec, CultureInfo.InvariantCulture);
+                            if (prec == 0 && flagStr.Contains('#')) formatted += "."; // `#` always shows the point
                             if (widthStr.Length > 0)
                             {
                                 // Honor the field width with the right fill: `0` flag
@@ -324,7 +412,7 @@ public sealed class InvokeBashPrintfCommand : PSCmdlet
                     case 'x':
                         if (argIdx < converted.Count)
                         {
-                            int val = ToInt(converted[argIdx]);
+                            long val = IntArg(argIdx);
                             string str = FormatRadix(val.ToString("x", CultureInfo.InvariantCulture), val != 0 && flagStr.Contains('#') ? "0x" : "", widthStr, precStr, hasPrecision, flagStr);
                             sb.Append(str);
                         }
@@ -334,7 +422,7 @@ public sealed class InvokeBashPrintfCommand : PSCmdlet
                     case 'X':
                         if (argIdx < converted.Count)
                         {
-                            int val = ToInt(converted[argIdx]);
+                            long val = IntArg(argIdx);
                             string str = FormatRadix(val.ToString("X", CultureInfo.InvariantCulture), val != 0 && flagStr.Contains('#') ? "0X" : "", widthStr, precStr, hasPrecision, flagStr);
                             sb.Append(str);
                         }
@@ -344,7 +432,7 @@ public sealed class InvokeBashPrintfCommand : PSCmdlet
                     case 'o':
                         if (argIdx < converted.Count)
                         {
-                            int val = ToInt(converted[argIdx]);
+                            long val = IntArg(argIdx);
                             string str = FormatRadix(Convert.ToString(val, 8), "", widthStr, precStr, hasPrecision, flagStr, octalAlt: flagStr.Contains('#'));
                             sb.Append(str);
                         }
@@ -376,8 +464,11 @@ public sealed class InvokeBashPrintfCommand : PSCmdlet
                         i = j + 1;
                         break;
                     default:
-                        sb.Append(format[i]);
-                        i++;
+                        // bash prints what came before, reports the bad conversion, and stops with status 1.
+                        badFormat = j >= format.Length || (j + 1 >= format.Length && "hlLjzt".IndexOf(spec) >= 0)
+                            ? "missing format character" : "invalid format character";
+                        badSpec = badFormat[0] == 'm' ? format.Substring(i, Math.Min(j + 1, format.Length) - i) : spec.ToString();
+                        stoppedByC = true;
                         break;
                 }
                 if (stoppedByC) break;
@@ -398,11 +489,15 @@ public sealed class InvokeBashPrintfCommand : PSCmdlet
         if (assignTo is not null)
         {
             AssignVariable(assignTo, result);
+            if (badFormat is not null || numErr) FileSystemHelpers.SetLastExitCode(this, 1);
             return;
         }
 
         WriteObject(BashRuntime.NewBashObject(
             result, "PsBash.TextOutput", noTrailingNewline: true, command: "printf"));
+        if (badFormat is not null)
+            FileSystemHelpers.WriteBashError(this, $"printf: `{badSpec}': {badFormat}");
+        if (badFormat is not null || numErr) FileSystemHelpers.SetLastExitCode(this, 1);
     }
 
     // NAME or NAME[subscript] (bash accepts an array element as the -v target).
@@ -441,7 +536,7 @@ public sealed class InvokeBashPrintfCommand : PSCmdlet
         else if (existing is string one) items.Add(one);
         while (items.Count <= idx) items.Add("");
         items[idx] = value;
-        SessionState.PSVariable.Set(name, items.ToArray());
+        FileSystemHelpers.SetShellVariable(SessionState, name, items.ToArray());
     }
 
     /// <summary>
@@ -529,6 +624,15 @@ public sealed class InvokeBashPrintfCommand : PSCmdlet
             return s.PadLeft(width, '0');
         }
         return s.PadLeft(width);
+    }
+
+    // 64-bit like bash's intmax_t; a fraction truncates and a value past the range clamps (bash warns "out of range").
+    private static long ToLong(object o)
+    {
+        if (o is long l) return l;
+        if (o is int i) return i;
+        if (o is double d) return double.IsNaN(d) ? 0 : d >= long.MaxValue ? long.MaxValue : d <= long.MinValue ? long.MinValue : (long)d;
+        return long.TryParse(o?.ToString(), out long parsed) ? parsed : 0;
     }
 
     private static int ToInt(object o)

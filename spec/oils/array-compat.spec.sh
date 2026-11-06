@@ -58,7 +58,6 @@ a[6]=6
 echo "${a[@]}" ${#a[@]}
 ## stdout: 5 6 2
 ## status: 0
-## XFAIL ps-bash gap-oils-array-compat array-compat (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### a[40] grows array
@@ -69,7 +68,6 @@ a[10]=20
 echo "${a[@]}" "${#a[@]}"  # length is 1
 ## stdout: 1 5 3 20 30 5
 ## status: 0
-## XFAIL ps-bash gap-oils-array-compat array-compat (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### array decays to string when comparing with [[ a = b ]]
@@ -179,6 +177,5 @@ argv.py keys "${!A[@]}"
 argv.py values "${A[@]}"
 ## stdout: declare -A A=([k]="v" )
 ## status: 127
-## XFAIL ps-bash gap-oils-array-compat array-compat (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher

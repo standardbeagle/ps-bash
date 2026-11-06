@@ -212,4 +212,22 @@ public class InvokeBashTypeCommandTests : IClassFixture<SharedPwshFixture>
         var lines = RunLines("Invoke-BashType '$(throw \"pwn\")'");
         Assert.Empty(lines);
     }
+
+    [Theory]
+    [InlineData("Invoke-BashType '-t' 'while'", "keyword")]
+    [InlineData("Invoke-BashType '-t' 'local'", "builtin")]
+    [InlineData("Invoke-BashType '-t' 'command'", "builtin")]
+    [InlineData("Invoke-BashType '-a' 'while'", "while is a shell keyword")]
+    [InlineData("$global:BashUserAliases = @{ ll = 'ls -lha' }; Invoke-BashType '-a' 'll'", "ll is aliased to `ls -lha'")]
+    public void Type_KeywordsAliasesAndTheFullBuiltinList_AreClassifiedLikeBash(string script, string expected)
+    {
+        Assert.Equal(expected, RunLines(script)[0]);
+    }
+
+    [Fact]
+    public void Type_PathModeOnABuiltinThatWasMissingFromTheList_PrintsNothing()
+    {
+        // `command` is a builtin: `type -p command` prints nothing (it used to be reported as a file).
+        Assert.Empty(RunLines("Invoke-BashType '-p' 'command'"));
+    }
 }

@@ -6,12 +6,10 @@ export FOO=bar
 set | grep bar | head -n 1
 ## stdout: FOO=bar
 ## status: 0
-## XFAIL ps-bash gap-oils-known-differences known-differences (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### nested function declaration - xcb-util-renderutil
 f() g() { echo 'hi'; }
 ## stdout:
 ## status: 2
-## XFAIL ps-bash gap-oils-known-differences known-differences (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10

@@ -100,6 +100,11 @@ jobs:
       # diagnostic and the runner should bail fast.
       - name: Run filtered test
         timeout-minutes: 10
+        env:
+          # Same mode as the release gate (publish.yml): replay the frozen bash oracle, no live bash.
+          UPDATE_GOLDENS: "0"
+          PSBASH_ORACLE_LIVE: "0"
+          PSBASH_ORACLE_RECORD: "0"
         run: |
           dotnet test ${{ inputs.project }} --no-build -c Release \
             --filter "${{ inputs.filter }}" \

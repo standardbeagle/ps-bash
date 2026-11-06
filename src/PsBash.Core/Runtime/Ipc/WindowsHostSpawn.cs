@@ -41,6 +41,10 @@ internal static unsafe partial class WindowsHostSpawn
         var nulName = Marshal.StringToHGlobalUni("NUL");
         // CreateProcessW may write into lpCommandLine, so it must be a mutable buffer.
         var cmdLine = Marshal.StringToHGlobalUni(commandLine);
+        // The host is told its directory per command; it must NOT inherit its spawner's. A child that keeps a
+        // caller's working directory as ITS cwd (a spare or pooled host spawned mid-command) makes that directory
+        // undeletable on Windows for as long as the child lives - bash's rm -rf $d just works.
+        var neutralCwd = Marshal.StringToHGlobalUni(NeutralWorkingDirectory());
         IntPtr nul = InvalidHandle;
         IntPtr attrList = IntPtr.Zero;
         IntPtr handleArray = IntPtr.Zero;
@@ -86,7 +90,7 @@ internal static unsafe partial class WindowsHostSpawn
             // token (cwd, then PATH), so a relative or bare PSBASH_HOST override keeps
             // working exactly as it did under Process.Start.
             if (CreateProcessW(IntPtr.Zero, cmdLine, IntPtr.Zero, IntPtr.Zero, 1,
-                    CreateNoWindow | ExtendedStartupInfoPresent, IntPtr.Zero, IntPtr.Zero,
+                    CreateNoWindow | ExtendedStartupInfoPresent, IntPtr.Zero, neutralCwd,
                     &si, &pi) == 0)
                 throw Win32Failure($"CreateProcessW('{exe}')");
 
@@ -120,6 +124,22 @@ internal static unsafe partial class WindowsHostSpawn
             if (nul != InvalidHandle) CloseHandle(nul);
             Marshal.FreeHGlobal(cmdLine);
             Marshal.FreeHGlobal(nulName);
+            Marshal.FreeHGlobal(neutralCwd);
+        }
+    }
+
+    /// <summary>The ps-bash runtime directory (created if missing), falling back to the system temp directory.</summary>
+    private static string NeutralWorkingDirectory()
+    {
+        try
+        {
+            var dir = PsBashRuntimeDirectory.GetPath();
+            Directory.CreateDirectory(dir);
+            return dir;
+        }
+        catch (Exception)
+        {
+            return Path.GetTempPath();
         }
     }
 

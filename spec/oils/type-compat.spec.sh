@@ -47,7 +47,6 @@ echo [$j]
 [2]
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-type-compat type-compat (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### declare -i with arithmetic inside strings (Nix, issue 864)
@@ -68,7 +67,6 @@ s=3
 item=3
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-type-compat type-compat (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### append in arith context
@@ -125,5 +123,4 @@ foo
 FOO
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-type-compat type-compat (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
