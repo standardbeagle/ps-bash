@@ -221,8 +221,10 @@ public class FsStateDifferentialTests
 
     [SkippableFact] public Task Rm_InteractiveRecursive_DecliningADescentKeepsTheSubtree() =>
         EqualAsync(
-            Tree(("p/q/r/f", "x"), ("p/top", "t")),
-            "printf 'y\\nn\\ny\\n' | rm -ir p");
+            // One entry per directory: with siblings (p/q and p/top) the answers pair with whichever the filesystem lists
+            // first, and readdir order differs per OS/filesystem (GNU rm does not sort), so the kept set differed on macOS.
+            Tree(("p/q/r/f", "x")),
+            "printf 'y\\nn\\n' | rm -ir p");
 
     [SkippableFact] public Task Rm_LastOfFAndIWins() =>
         EqualAsync(
