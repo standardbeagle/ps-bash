@@ -155,7 +155,6 @@ if test "$?" != 0; then
 fi
 ## stdout: status=1
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-special builtin-special (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -178,7 +177,6 @@ ok
 should not get here
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-special builtin-special (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
