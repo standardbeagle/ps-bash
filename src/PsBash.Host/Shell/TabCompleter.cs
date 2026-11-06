@@ -1,3 +1,4 @@
+using PsBash.Core;
 using PsBash.Core.Parser;
 
 namespace PsBash.Host.Shell;
@@ -264,20 +265,20 @@ internal static class TabCompleter
                 return _pathCommandCache;
 
             var names = new SortedSet<string>(StringComparer.Ordinal);
-            foreach (var dir in pathVar.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
+            foreach (var dir in pathVar.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
             {
                 try
                 {
                     foreach (var file in Directory.EnumerateFiles(dir))
                     {
+                        // Windows: only executable extensions are commands. Unix: only files with an execute bit.
                         if (OperatingSystem.IsWindows())
                         {
-                            // Only executable extensions count as commands on Windows.
                             var ext = Path.GetExtension(file).ToUpperInvariant();
                             if (ext is ".EXE" or ".CMD" or ".BAT" or ".PS1")
                                 names.Add(Path.GetFileName(file));
                         }
-                        else
+                        else if (ExecutableLookup.IsRunnable(file))
                         {
                             names.Add(Path.GetFileName(file));
                         }

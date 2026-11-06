@@ -1,3 +1,4 @@
+using PsBash.Core;
 using System.Diagnostics;
 using System.Management.Automation;
 using System.Net.NetworkInformation;
@@ -209,28 +210,7 @@ public sealed class InvokeBashTracerouteCommand : PSCmdlet
         }
     }
 
-    private static string? ResolveOnPath(string exe)
-    {
-        var names = OperatingSystem.IsWindows() ? new[] { exe + ".exe", exe } : new[] { exe };
-        var path = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
-        foreach (var dir in path.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
-        {
-            foreach (var name in names)
-            {
-                try
-                {
-                    var candidate = Path.Combine(dir, name);
-                    if (File.Exists(candidate))
-                    {
-                        return candidate;
-                    }
-                }
-                catch { /* malformed PATH entry */ }
-            }
-        }
-
-        return null;
-    }
+    private static string? ResolveOnPath(string exe) => ExecutableLookup.Find(exe);
 
     private static string LatencyClass(double ms) => ms switch
     {

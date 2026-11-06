@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
+using PsBash.Core;
 using PsBash.Core.Parser;
 using PsBash.Core.Parser.Ast;
 using PsBash.Core.Runtime;
@@ -700,46 +701,14 @@ public static class InteractiveShell
 
     internal static string? ResolveCommand(string cmdName, string? workDir)
     {
+        // An explicit path is run as typed: a file without the execute bit is the OS's "permission denied" to report.
         if (Path.IsPathRooted(cmdName))
             return File.Exists(cmdName) ? cmdName : null;
 
-        var extensions = OperatingSystem.IsWindows()
-            ? (Environment.GetEnvironmentVariable("PATHEXT")?.Split(';') ?? [".EXE", ".CMD", ".BAT"])
-                .Concat([".PS1"])
-                .DistinctBy(e => e, StringComparer.OrdinalIgnoreCase)
-                .ToArray()
-            : null;
-
-        var pathDirs = (Environment.GetEnvironmentVariable("PATH") ?? "")
-            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries);
-
-        var searchDirs = workDir is not null
-            ? [workDir, .. pathDirs]
-            : pathDirs;
-
-        foreach (var dir in searchDirs)
-        {
-            if (extensions is not null)
-            {
-                foreach (var ext in extensions)
-                {
-                    var full = Path.Combine(dir, cmdName + ext);
-                    if (File.Exists(full))
-                        return full;
-                }
-                var exact = Path.Combine(dir, cmdName);
-                if (File.Exists(exact))
-                    return exact;
-            }
-            else
-            {
-                var full = Path.Combine(dir, cmdName);
-                if (File.Exists(full))
-                    return full;
-            }
-        }
-
-        return null;
+        // A bare name is searched like the OS does (shared with every other PATH lookup): working directory first, then
+        // $PATH, skipping directories and files that are not runnable. A PowerShell script (name.ps1) is tried last.
+        return ExecutableLookup.Find(cmdName, workDir)
+            ?? (OperatingSystem.IsWindows() ? ExecutableLookup.Find(cmdName + ".ps1", workDir) : null);
     }
 
     internal static ProcessStartInfo BuildDirectProcessStartInfo(
@@ -796,26 +765,7 @@ public static class InteractiveShell
         return psi;
     }
 
-    private static string ResolvePowerShellHost()
-    {
-        var pathDirs = (Environment.GetEnvironmentVariable("PATH") ?? "")
-            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries);
-        foreach (var dir in pathDirs)
-        {
-            try
-            {
-                var pwsh = Path.Combine(dir, "pwsh.exe");
-                if (File.Exists(pwsh))
-                    return pwsh;
-            }
-            catch
-            {
-                // Ignore malformed PATH entries and fall through to powershell.exe.
-            }
-        }
-
-        return "powershell.exe";
-    }
+    private static string ResolvePowerShellHost() => ExecutableLookup.Find("pwsh.exe") ?? "powershell.exe";
 
     private static async Task SyncWorkerCwdAsync(IWorker worker)
     {

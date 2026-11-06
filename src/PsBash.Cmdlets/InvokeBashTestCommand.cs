@@ -1,3 +1,4 @@
+using PsBash.Core;
 using System.Globalization;
 using System.IO;
 using System.Management.Automation;
@@ -275,10 +276,7 @@ public sealed class InvokeBashTestCommand : PSCmdlet
             case 'x':
                 // Windows has no exec bit: an existing file is taken as executable (historic parity).
                 if (Directory.Exists(p)) return true;
-                if (!File.Exists(p)) return false;
-                if (OperatingSystem.IsWindows()) return true;
-                try { return (File.GetUnixFileMode(p) & (UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute)) != 0; }
-                catch { return false; }
+                return ExecutableLookup.IsRunnable(p);   // regular file; Unix needs an exec bit, Windows takes existence
             case 's':
                 if (Directory.Exists(p)) return true;
                 try { return File.Exists(p) && new FileInfo(p).Length > 0; }
