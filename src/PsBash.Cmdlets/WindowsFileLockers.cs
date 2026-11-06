@@ -107,7 +107,8 @@ internal static class WindowsFileLockers
                         cmd = Encoding.Unicode.GetString(chars);
                 }
             }
-            return $"{parent}, cmd: {cmd}";
+            string pn = "?"; try { pn = System.Diagnostics.Process.GetProcessById((int)parent).ProcessName; } catch { }
+            return $"{parent} ({pn}), cmd: {cmd}";
         }
         finally { CloseHandle(h); }
     }
