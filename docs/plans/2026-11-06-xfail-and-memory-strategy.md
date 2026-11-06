@@ -52,3 +52,17 @@ regression test that fails pre-fix, plus a Windows + macOS check through `single
 
 Phase 1 first (it makes every later number meaningful), Phase 3.1 in parallel (it protects the machine while Phase 1
 runs the corpus), then Phase 2. Report the labelled table, the XPASS removals, and the new count before any Phase 2 code.
+
+## Measured so far (2026-11-06)
+
+Soak through ONE warm dev host (`tman dev script.sh`, working set sampled externally every 5-6 s):
+
+| Workload | Commands | Host working set | Private bytes |
+|---|---|---|---|
+| 40 rounds x 500 iterations of `$(echo\|sed\|awk)`, `cat\|grep`, `sort\|uniq\|wc`, `head\|cut` | ~200,000 | 133-146 MB, flat | 57-72 MB, flat |
+| 25 rounds over a 300,000-line file (`sort -rn`, `grep`, `awk`, `cat\|wc`, `find`, `sed`) | ~150 big pipelines | 167-182 MB, flat | 91-107 MB, flat |
+
+No growth across rounds in either run: no leak in the command path, and the working set is bounded by the largest
+single command (the 300k-line file), not by how many commands ran. The 1.1 GB installed host seen earlier in a
+long agent session had exited by the next check, so it is not a standing leak; it was a session that ran very large
+commands. Open follow-up: record peak private bytes per large command (the real "low memory" risk), not idle size.
