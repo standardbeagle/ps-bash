@@ -53,6 +53,32 @@ public class WindowsFileLockersTests
         }
     }
 
+    [SkippableFact]
+    public void DeleteDirectoryForce_ADirectoryOurOwnCompatSessionUsesAsCwd_IsStillRemoved()
+    {
+        Skip.IfNot(OperatingSystem.IsWindows(), "working directories pin directories on Windows only");
+        var dir = Directory.CreateTempSubdirectory("ps-bash-compat-cwd-").FullName;
+        System.Diagnostics.Process? child = null;
+        try
+        {
+            // Same command-line shape as pwsh's implicit Windows PowerShell compatibility session (-Version 5.1 -s...).
+            var psi = new System.Diagnostics.ProcessStartInfo("powershell.exe",
+                "-Version 5.1 -sta -NoLogo -NoProfile -Command Start-Sleep -Seconds 30")
+            { WorkingDirectory = dir, UseShellExecute = false, CreateNoWindow = true };
+            child = System.Diagnostics.Process.Start(psi)!;
+            for (int i = 0; i < 50 && !WindowsFileLockers.Describe(dir).Contains($"pid {child.Id}"); i++) child.WaitForExit(100);
+
+            FileSystemHelpers.DeleteDirectoryForce(dir);
+
+            Assert.False(Directory.Exists(dir));
+        }
+        finally
+        {
+            try { child?.Kill(entireProcessTree: true); child?.WaitForExit(5000); } catch { }
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
     private static bool Holds(string described)
         => described.Contains($"pid {Environment.ProcessId}", StringComparison.Ordinal)
            || described.StartsWith(WindowsFileLockers.ProtectedHolder, StringComparison.Ordinal)

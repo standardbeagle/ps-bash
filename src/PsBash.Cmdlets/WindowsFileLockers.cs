@@ -58,6 +58,42 @@ internal static class WindowsFileLockers
         return found.Count == 0 ? "" : "working directory of: " + string.Join(", ", found);
     }
 
+    /// <summary>
+    /// Ends the Windows PowerShell 5.1 compatibility sessions (<c>powershell.exe -Version 5.1 -s</c>) THIS process
+    /// spawned that use <paramref name="path"/> as their working directory. PowerShell starts one lazily, mid-command,
+    /// and the child inherits our cwd - which pins a directory the script has already left (bash can delete a
+    /// directory regardless). The session is a recreatable helper, so ending it loses nothing. Returns the count.
+    /// </summary>
+    public static int ReleaseOwnCompatSessions(string path)
+    {
+        if (!OperatingSystem.IsWindows()) return 0;
+        int ended = 0;
+        try
+        {
+            var root = Path.GetFullPath(path).TrimEnd('\\') + "\\";
+            foreach (var p in System.Diagnostics.Process.GetProcessesByName("powershell"))
+            {
+                using (p)
+                {
+                    try
+                    {
+                        var cwd = TryReadWorkingDirectory(p.Id);
+                        if (cwd is null || !(cwd.TrimEnd('\\') + "\\").StartsWith(root, StringComparison.OrdinalIgnoreCase)) continue;
+                        var info = TryParentAndCommandLine(p.Id);
+                        if (!info.StartsWith(Environment.ProcessId + " (", StringComparison.Ordinal)) continue;   // not ours
+                        if (!info.Contains("-Version 5.1 -s", StringComparison.Ordinal)) continue;               // not the compat session
+                        p.Kill();
+                        p.WaitForExit(2000);
+                        ended++;
+                    }
+                    catch { }
+                }
+            }
+        }
+        catch { }
+        return ended;
+    }
+
     private static string? TryReadWorkingDirectory(int pid)
     {
         var h = OpenProcess(ProcessQueryInformation | ProcessVmRead, false, pid);
