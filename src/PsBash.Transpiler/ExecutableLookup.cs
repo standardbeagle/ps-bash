@@ -29,6 +29,16 @@ public static class ExecutableLookup
         catch (Exception) { return false; }
     }
 
+    /// <summary>The directories of $PATH (empty entries dropped), preceded by <paramref name="firstDir"/> when given
+    /// (the shell's working directory, searched before PATH).</summary>
+    public static IEnumerable<string> PathDirectories(string? firstDir = null)
+    {
+        if (!string.IsNullOrEmpty(firstDir)) yield return firstDir;
+        var path = Environment.GetEnvironmentVariable("PATH") ?? "";
+        foreach (var dir in path.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            yield return dir;
+    }
+
     /// <summary>First runnable <paramref name="command"/> in <paramref name="directories"/>, in order;
     /// null when none. Blank and malformed directory entries are skipped, never thrown on.</summary>
     public static string? Find(string command, IEnumerable<string> directories) =>

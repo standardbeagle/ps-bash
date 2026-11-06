@@ -1,3 +1,4 @@
+using PsBash.Core;
 using PsBash.Core.Parser;
 
 namespace PsBash.Host.Shell;
@@ -277,7 +278,7 @@ internal static class TabCompleter
                             if (ext is ".EXE" or ".CMD" or ".BAT" or ".PS1")
                                 names.Add(Path.GetFileName(file));
                         }
-                        else
+                        else if (ExecutableLookup.IsExecutableFile(file))
                         {
                             names.Add(Path.GetFileName(file));
                         }

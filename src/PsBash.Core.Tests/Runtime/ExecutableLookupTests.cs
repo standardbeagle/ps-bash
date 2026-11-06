@@ -87,4 +87,19 @@ public class ExecutableLookupTests : IDisposable
         Assert.Null(ExecutableLookup.Find("", [Path.GetTempPath()]));
         Assert.Null(ExecutableLookup.Find("definitely-not-here-xyz", [Path.GetTempPath()]));
     }
-}
+
+    [Fact]
+    public void PathDirectories_PutsFirstDirAheadOfPath_AndDropsEmptyEntries()
+    {
+        var a = Dir(); var b = Dir(); var first = Dir();
+        var old = Environment.GetEnvironmentVariable("PATH");
+        try
+        {
+            Environment.SetEnvironmentVariable("PATH", string.Join(Path.PathSeparator, a, "", " ", b));
+            Assert.Equal(new[] { first, a, b }, ExecutableLookup.PathDirectories(first).Where(d => !string.IsNullOrWhiteSpace(d)));
+            Assert.Equal(new[] { a, b }, ExecutableLookup.PathDirectories());
+            Make(b, "tool", true);
+            Same(Path.Combine(b, Name("tool")), ExecutableLookup.Find("tool", ExecutableLookup.PathDirectories(first)));
+        }
+        finally { Environment.SetEnvironmentVariable("PATH", old); }
+    }}
