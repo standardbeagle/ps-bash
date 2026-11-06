@@ -35,9 +35,11 @@ public sealed class InvokeBashUlimitCommand : PSCmdlet
         char flag = 'f';
         bool all = false;
         string? value = null;
+        bool optionsDone = false;
         foreach (var a in args)
         {
-            if (a.Length >= 2 && a[0] == '-' && a[1] != '-')
+            if (!optionsDone && a == "--") { optionsDone = true; continue; }
+            if (!optionsDone && a.Length >= 2 && a[0] == '-' && a[1] != '-')
             {
                 foreach (var ch in a.AsSpan(1))
                 {
@@ -61,7 +63,7 @@ public sealed class InvokeBashUlimitCommand : PSCmdlet
             return;
         }
         if (value is null) { WriteObject(Get(flag)); return; }
-        if (value != "unlimited" && !long.TryParse(value, out _))
+        if (value != "unlimited" && (!long.TryParse(value, out var n) || n < 0))
         {
             FileSystemHelpers.WriteStderr(this, $"ulimit: {value}: invalid number");
             FileSystemHelpers.SetLastExitCode(this, 1);

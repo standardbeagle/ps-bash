@@ -53,6 +53,7 @@ inside=1
 outside=0
 ## END
 ## status: 0
+## XFAIL ps-bash gap-oils-fatal-errors fatal-errors (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
