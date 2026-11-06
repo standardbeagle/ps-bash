@@ -23,3 +23,14 @@ builtin-completion 11, interactive 10, history/readline/prompt files.
 Strip a file's markers in a scratch edit, run `tman test-proj src/PsBash.Spec.Tests --filter "DisplayName~oils/<f>.spec"`,
 read the `[Fail]` cases, confirm each against `wsl.exe -d Ubuntu-24.04 -e bash`, then label. Restore with `git checkout`.
 Per-case labels are added below as files are worked.
+
+## Findings so far (2026-11-06)
+
+| File | Case(s) | Label | Note |
+|---|---|---|---|
+| pipeline | `! cmd \|\| x`, `! { }`, `! ( )` | FIXED | negated command lost its stdout (`[void]`); markers removed |
+| pipeline | Nested pipelines, `PIPESTATUS` family | GAP | arg-only cmdlets (`seq`, `date`, `id`, `hostname`, ...) never run when the upstream stage emits nothing and error ("cannot be bound") when it emits records; fix = accept and ignore pipeline input in those cmdlets; low agent value |
+| pipeline | SIGPIPE 141, lastpipe | GAP-large | process model |
+| nameref | 12 cases | GAP-large | namerefs are resolved statically at emit time (`ResolveNameref`); a name forwarded through a second function (`f3 "$@"`) or `a[2]` targets need a runtime nameref |
+| vars-special | `$PPID`, `$RANDOM`, `$HOME` unset, HOSTNAME/OSTYPE, OILS_VERSION | ARTIFACT/WINDOWS | recorded values or other-shell-only |
+| vars-special | `$_` family (4), `$BASHPID` | GAP | emitter hot path; only `echo` sets `$_`; plan: transpile-time flag when the script mentions `$_` |
