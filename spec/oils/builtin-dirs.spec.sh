@@ -184,7 +184,7 @@ dirs -l
 /tmp/oil_test /
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-dirs builtin-dirs (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash platform-windows-paths Windows paths print as C:\... (drive letter, backslash); bash prints /tmp (intentional-differences.md, Platform: paths)
 ## timeout: 10
 
 #### dirs to print using tilde-prefix format
@@ -195,7 +195,7 @@ pushd $HOME/oil_test >/dev/null
 dirs
 ## stdout: ~/oil_test /
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-dirs builtin-dirs (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash platform-windows-paths Windows paths print as C:\... (drive letter, backslash); bash prints /tmp (intentional-differences.md, Platform: paths)
 ## timeout: 10
 
 #### dirs test converting true home directory to tilde
@@ -206,7 +206,7 @@ pushd $HOME/oil_test/$HOME >/dev/null
 dirs
 ## stdout: ~/oil_test/tmp /
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-dirs builtin-dirs (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash platform-windows-paths Windows paths print as C:\... (drive letter, backslash); bash prints /tmp (intentional-differences.md, Platform: paths)
 ## timeout: 10
 
 #### dirs don't convert to tilde when $HOME is substring
@@ -221,7 +221,7 @@ dirs
 /tmp/oil_tests /
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-dirs builtin-dirs (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash platform-windows-paths Windows paths print as C:\... (drive letter, backslash); bash prints /tmp (intentional-differences.md, Platform: paths)
 ## timeout: 10
 
 #### dirs tilde test when $HOME is exactly $PWD
@@ -236,7 +236,7 @@ dirs
 ~ /
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-dirs builtin-dirs (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash platform-windows-paths Windows paths print as C:\... (drive letter, backslash); bash prints /tmp (intentional-differences.md, Platform: paths)
 ## timeout: 10
 
 #### dirs test of path alias `..`

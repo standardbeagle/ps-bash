@@ -103,11 +103,13 @@ public sealed class InvokeBashPushdCommand : PSCmdlet
         // The path token is bound as a positional $args[0] so a path containing
         // ; / $() / scriptblock chars stays a literal path (Directive 12).
         var path = args.Length > 0 ? args[0] : ".";
+        // A bare `/tmp` (or `/tmp/x` built at run time) is the temp dir, as for `cd`; the emitter only rewrites literal `/tmp/…` words.
+        string target = path.StartsWith('/') ? BashRuntime.MapPath(path) : path;
         try
         {
             InvokeCommand.InvokeScript(
                 "param($p) Push-Location -Path $p",
-                path);
+                target);
             SyncProcessWorkingDirectory(this);
         }
         catch (System.Management.Automation.RuntimeException ex)
@@ -162,7 +164,15 @@ public sealed class InvokeBashPushdCommand : PSCmdlet
             var path = cmdlet.SessionState.Path.CurrentFileSystemLocation?.Path;
             if (!string.IsNullOrEmpty(path) && Directory.Exists(path))
             {
+                var previous = Environment.CurrentDirectory;
                 Environment.CurrentDirectory = path;
+                // The same three writes the emitter's `cd` makes: `pwd` reads __PsBashCwd, `$PWD`/`$OLDPWD` read the env store.
+                cmdlet.SessionState.PSVariable.Set("global:__PsBashCwd", path);
+                if (!string.Equals(previous, path, StringComparison.Ordinal))
+                {
+                    Environment.SetEnvironmentVariable("OLDPWD", previous);
+                }
+                Environment.SetEnvironmentVariable("PWD", path);
             }
         }
         catch

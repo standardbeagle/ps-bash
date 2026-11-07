@@ -54,9 +54,11 @@ public sealed class InvokeBashDirsCommand : PSCmdlet
         }
 
         // `dirs` takes only +N / -N (and `-l`); any other operand is an error (status 1).
+        bool longForm = false;
         foreach (var a in args)
         {
-            if (a == "--" || a == "-l") continue;
+            if (a == "-l") { longForm = true; continue; }
+            if (a == "--") continue;
             bool numbered = a.Length > 1 && a[0] is '+' or '-' && a.Skip(1).All(char.IsAsciiDigit);
             if (numbered) continue;
             if (a.Length > 1 && a[0] == '-')
@@ -97,6 +99,13 @@ public sealed class InvokeBashDirsCommand : PSCmdlet
             if (item?.BaseObject is string s) entries.Add(s);
         }
 
+        // bash abbreviates a leading $HOME to ~ unless -l (long form) is given.
+        if (!longForm)
+        {
+            var home = BashRuntime.MapPath(Environment.GetEnvironmentVariable("HOME") ?? "");
+            for (int i = 0; i < entries.Count; i++) entries[i] = TildeAbbreviate(entries[i], home);
+        }
+
         if (V.IsPresent)
         {
             for (int i = 0; i < entries.Count; i++)
@@ -115,5 +124,19 @@ public sealed class InvokeBashDirsCommand : PSCmdlet
         {
             WriteObject(BashRuntime.NewBashObject(string.Join(' ', entries)));
         }
+    }
+
+    /// <summary>
+    /// <c>$HOME[/rest]</c> as <c>~[/rest]</c>, only at a directory boundary (<c>/tmp/oil_tests</c> is not under
+    /// <c>HOME=/tmp/oil</c>) and never for an empty or root HOME. Separators in <paramref name="rest"/> are kept as they are.
+    /// </summary>
+    internal static string TildeAbbreviate(string path, string? home)
+    {
+        if (string.IsNullOrEmpty(home)) return path;
+        var h = home.TrimEnd('/', '\\');
+        if (h.Length == 0 || (h.Length == 2 && h[1] == ':')) return path;
+        if (!path.StartsWith(h, StringComparison.OrdinalIgnoreCase)) return path;
+        if (path.Length == h.Length) return "~";
+        return path[h.Length] is '/' or '\\' ? "~" + path[h.Length..] : path;
     }
 }

@@ -204,4 +204,25 @@ public class InvokeBashPushdCommandTests : IClassFixture<SharedPwshFixture>
             RunLines(pwsh, "Invoke-BashPushd '$(throw \"pwn\");rm-rf'"));
         Assert.Null(ex);
     }
+
+    [Fact]
+    public void Pushd_BarePwd_FollowsPushdAndPopd()
+    {
+        // `pwd`, $PWD and $OLDPWD must move with pushd/popd exactly as with cd (they read the same cwd state).
+        var pwsh = NewPwsh();
+        var tmp = Path.GetTempPath().TrimEnd(Path.DirectorySeparatorChar, '/');
+        var sub = Path.Combine(tmp, "psbash-pushd-pwd-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(sub);
+        try
+        {
+            RunLines(pwsh, $"Set-Location '{tmp}'");
+            var lines = RunLines(pwsh,
+                $"Invoke-BashPushd '{sub}'; (Invoke-BashPwd).BashText; $env:PWD; Invoke-BashPopd | Out-Null; (Invoke-BashPwd).BashText; $env:OLDPWD");
+            Assert.Equal(sub.Replace('\\', '/'), lines[0].Replace('\\', '/'));
+            Assert.Equal(sub.Replace('\\', '/'), lines[1].Replace('\\', '/'));
+            Assert.Equal(tmp.Replace('\\', '/'), lines[2].Replace('\\', '/'));
+            Assert.Equal(sub.Replace('\\', '/'), lines[3].Replace('\\', '/'));
+        }
+        finally { Directory.Delete(sub); }
+    }
 }
