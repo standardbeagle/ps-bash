@@ -3870,7 +3870,8 @@ public static partial class PsEmitter
         }
         if (isAssoc)
         {
-            result = "$global:" + varName + " = @{}";
+            // Re-declaring an existing associative array keeps its entries (bash: `declare -A d` twice).
+            result = "if ($global:" + varName + " -isnot [System.Collections.IDictionary]) { $global:" + varName + " = @{} }";
             return true;
         }
         result = isInt ? "$env:" + varName + " = '0'"

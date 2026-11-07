@@ -4609,7 +4609,7 @@ public class PsEmitterTests
     public void Transpile_DeclareAssociativeArray_EmitsHashtable()
     {
         var result = PsEmitter.Transpile("declare -A map");
-        Assert.Equal("$global:map = @{}" + "", result);
+        Assert.Equal("if ($global:map -isnot [System.Collections.IDictionary]) { $global:map = @{} }", result);
     }
 
     [Fact]
