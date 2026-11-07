@@ -4,7 +4,7 @@ Priority is set by who runs the shell: **agents run non-interactive scripts and 
 arrays, parameter expansion, tests, redirects, exit statuses, cd, background jobs, parse errors). Features only a person
 at a terminal uses come last and are fixed only when cheap.
 
-Labels: XPASS (passes; delete marker) / ARTIFACT (expectation nondeterministic or other-shell-only) / WINDOWS /
+Labels: XPASS (passes; delete marker) / ARTIFACT (expectation nondeterministic or other-shell-only) / WINDOWS (an OS difference: marked `platform-windows-<topic>`, not `gap-*`, and listed under "Platform (Windows)" in intentional-differences.md) /
 GAP (real difference). Counts are `## XFAIL ps-bash` lines per file (2026-11-06, ~714 total).
 
 ## Tier 1: agent-facing scripting (fix first)

@@ -38,7 +38,7 @@ FOO=foo\<foo printenv.py FOO
 FOO=foo echo "[$foo]"
 ## stdout: []
 ## status: 0
-## XFAIL ps-bash gap-oils-assign assign (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash platform-windows-env-case Windows environment is case-insensitive: $foo reads FOO (intentional-differences.md, Platform: variable names differing only in case)
 ## timeout: 10
 
 #### FOO=foo fun
@@ -71,7 +71,7 @@ f [] [A]
 --- f() ---
 ## END
 ## status: 127
-## XFAIL ps-bash gap-oils-assign assign (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash platform-windows-env-case Windows environment is case-insensitive: $foo reads FOO (intentional-differences.md, Platform: variable names differing only in case)
 ## timeout: 10
 
 #### Escaped = in command name
