@@ -20,8 +20,31 @@ public sealed partial class BashParser
            && _tokens[_pos + 1] is { Kind: BashTokenKind.Word or BashTokenKind.AssignmentWord } next
            && !next.Value.StartsWith('-');
 
+    /// <summary>`command export x=1`, `builtin local y`, `\builtin declare z`, `command command readonly r=1`: the wrappers
+    /// only bypass functions and aliases, so a declaration builtin behind them is parsed exactly as the bare form (otherwise
+    /// the runtime looks `export` up as an external command and reports "command not found").</summary>
+    private void SkipDeclarationWrappers()
+    {
+        int k = 0;
+        static string Bare(string v) => v.StartsWith('\\') ? v[1..] : v;
+        while (_pos + k + 1 < _tokens.Count
+               && _tokens[_pos + k] is { Kind: BashTokenKind.Word } w && Bare(w.Value) is "builtin" or "command"
+               && _tokens[_pos + k + 1] is { Kind: BashTokenKind.Word or BashTokenKind.AssignmentWord } nx
+               && !nx.Value.StartsWith('-'))
+            k++;
+        if (k == 0) return;
+        if (_tokens[_pos + k] is { Kind: BashTokenKind.Word } d && Bare(d.Value) is "export" or "local" or "declare" or "typeset" or "readonly")
+        {
+            // `builtin declare a=(x y)` is a syntax error in bash (an array literal needs the bare declaration builtin).
+            int saved = _pos;
+            _pos += k;
+            if (DeclarationHasArrayInitializer()) _pos = saved;
+        }
+    }
+
     private Command ParseSimpleCommand()
     {
+        SkipDeclarationWrappers();
         // `export` / `local` NAME=VAL … — see ParseDeclarationPairs for the shape.
         if (Peek().Kind == BashTokenKind.Word && (Peek().Value is "export" or "local" || IsFunctionScopedDeclare()))
         {

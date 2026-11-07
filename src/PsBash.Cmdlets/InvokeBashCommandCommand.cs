@@ -182,8 +182,21 @@ public sealed class InvokeBashCommandCommand : PSCmdlet
     /// rest is splatted as an array of strings, which PowerShell binds as positional ARGUMENTS (never as
     /// parameter tokens) — the same shape the transpiler's single-quoted flags have.
     /// </summary>
+    private static readonly HashSet<string> DeclarationBuiltins = new(StringComparer.Ordinal) { "export", "readonly", "local", "declare", "typeset" };
+
     private void RunInner(string[] argv)
     {
+        // command command x, command builtin x: the wrappers only bypass functions, so peel them.
+        while (argv.Length > 1 && argv[0] is "command" or "builtin" && !argv[1].StartsWith('-')) argv = argv[1..];
+        // A declaration builtin has no cmdlet to resolve: run it as bash source (the operands are already expanded).
+        if (DeclarationBuiltins.Contains(argv[0]))
+        {
+            var src = string.Join(' ', argv.Select(a => "'" + a.Replace("'", "'\\''") + "'"));
+            src = argv[0] + src[(argv[0].Length + 2)..];
+            var ps = PsBash.Core.Transpiler.BashTranspiler.TranspileWithMap(src, PsBash.Core.Transpiler.TranspileContext.Eval).PowerShell;
+            foreach (var o in InvokeCommand.InvokeScript(false, ScriptBlock.Create(ps), null, Array.Empty<object>())) WriteObject(o);
+            return;
+        }
         var name = argv[0];
         CommandInfo? target = null;
         try
