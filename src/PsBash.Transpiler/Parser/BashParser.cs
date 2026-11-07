@@ -378,6 +378,7 @@ public sealed partial class BashParser
         string close = extended ? "]]" : "]";
 
         var inner = ImmutableArray.CreateBuilder<CompoundWord>();
+        bool closed = false;
         while (Peek().Kind != BashTokenKind.Eof)
         {
             if (Peek().Kind == BashTokenKind.Word && Peek().Value == close
@@ -385,6 +386,7 @@ public sealed partial class BashParser
             {
                 // `[` closes on its LAST word only: in `[ ] ]` the first `]` is an operand.
                 Advance(); // consume closing bracket
+                closed = true;
                 break;
             }
 
@@ -470,6 +472,9 @@ public sealed partial class BashParser
         // Each -o/-a/&&/|| costs about two words; bound the expression before the emitter lowers it to
         // a PowerShell -or/-and chain (see NestingGuard.MaxChainLength).
         NestingGuard.CheckBreadth(inner.Count, 2 * NestingGuard.MaxChainLength, "test expression");
+        if (extended && closed && !DoubleBracketGrammar.IsWellFormed(
+                inner.Select(w => w.Parts.Length == 1 && w.Parts[0] is WordPart.Literal l ? l.Value : null).ToList()))
+            throw new ParseException("syntax error in conditional expression", BashLexer.LineAt(_input, open.Position), 1, "[[");
         return new Command.BoolExpr(inner.ToImmutable(), extended);
     }
 

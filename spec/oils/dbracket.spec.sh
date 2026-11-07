@@ -218,7 +218,6 @@ op='=='
 echo status=$?
 ## stdout:
 ## status: 2
-## XFAIL ps-bash gap-oils-dbracket dbracket (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### empty ! is treated as literal
@@ -233,7 +232,6 @@ echo status=$?
 echo status=$?
 ## stdout:
 ## status: 2
-## XFAIL ps-bash gap-oils-dbracket dbracket (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### [[ -z '>' ]]
@@ -247,7 +245,6 @@ echo status=$?
 echo status=$?
 ## stdout:
 ## status: 2
-## XFAIL ps-bash gap-oils-dbracket dbracket (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### test whether ']]' is empty
@@ -262,7 +259,6 @@ echo status=$?
 echo status=$?
 ## stdout:
 ## status: 2
-## XFAIL ps-bash gap-oils-dbracket dbracket (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### [[ && ]] is syntax error
@@ -270,7 +266,6 @@ echo status=$?
 echo status=$?
 ## stdout:
 ## status: 2
-## XFAIL ps-bash gap-oils-dbracket dbracket (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### [[ a 3< b ]] doesn't work (bug regression)

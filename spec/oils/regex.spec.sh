@@ -84,7 +84,6 @@ true
 [[ '^(a b)$' == ^(a\ b)$ ]] && echo true
 ## stdout:
 ## status: 2
-## XFAIL ps-bash gap-oils-regex regex (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Omitting ( )
@@ -99,7 +98,6 @@ true
 [[ 'a b' =~ ^)a\ b($ ]] && echo true
 ## stdout:
 ## status: 2
-## XFAIL ps-bash gap-oils-regex regex (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Regex with |
@@ -383,7 +381,6 @@ if [[ a =~ c a ]]; then
 fi
 ## stdout:
 ## status: 2
-## XFAIL ps-bash gap-oils-regex regex (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### make a lisp example
