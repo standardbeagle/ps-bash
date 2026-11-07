@@ -3875,7 +3875,7 @@ public static partial class PsEmitter
         }
         result = isInt ? "$env:" + varName + " = '0'"
             // `declare x` on an existing scalar leaves its value alone; only a name with nothing yet becomes the empty array.
-            : "if ($null -eq $env:" + varName + " -and $null -eq (Get-Variable -Name " + PsBuild.SingleQuote(varName) + " -Scope Global -ValueOnly -ErrorAction Ignore)) { $global:" + varName + " = @() }";
+            : "if ($null -eq $env:" + varName + " -and $null -eq (Get-Variable -Name " + PsBuild.SingleQuote(varName) + " -Scope Global -ValueOnly -ErrorAction Ignore)) { $global:" + varName + " = @()" + "; [PsBash.Cmdlets.BashShellState]::MarkAttribute(" + PsBuild.SingleQuote(varName) + ", '" + (cmd.Words.Skip(1).Any(w => GetLiteralValue(w) is { Length: > 1 } fl && fl[0] == '-' && fl.Contains('a')) ? "~" : "-") + "')" + " }";
         return true;
     }
 

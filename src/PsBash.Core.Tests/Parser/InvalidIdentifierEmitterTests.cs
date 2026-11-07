@@ -27,4 +27,8 @@ public class InvalidIdentifierEmitterTests
     [Fact] public void Transpile_ValidName_NoError() => Assert.DoesNotContain("not a valid identifier", T("export A_1=2"));
 
     [Fact] public void Transpile_FunctionForm_NotTreatedAsVariable() => Assert.DoesNotContain("not a valid identifier", T("declare -f my-func"));
+
+    [Fact] public void Transpile_PlainDeclareNoValue_MarksScalar() => Assert.Contains("MarkAttribute('x', '-')", T("declare x"));
+
+    [Fact] public void Transpile_DeclareArrayNoValue_MarkedUnsetArray() => Assert.Contains("MarkAttribute('x', '~')", T("declare -a x"));
 }

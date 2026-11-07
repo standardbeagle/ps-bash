@@ -37,6 +37,11 @@ internal static class DeclarePrinter
             text = $"declare -a{BashShellState.AttributeLetters(name)} {name}={FormatSparse(sparse)}";
         else if (val is System.Collections.IDictionary dict)
             text = $"declare -A{BashShellState.AttributeLetters(name)} {name}={FormatAssociative(dict)}";
+        else if (val is System.Collections.IList { Count: 0 } && val is not string && BashShellState.IsDeclaredUnset(name))
+            {
+            string attrs = BashShellState.AttributeLetters(name);
+            text = BashShellState.IsDeclaredScalar(name) ? $"declare -{(attrs.Length > 0 ? attrs : "-")} {name}" : $"declare -a{attrs} {name}";
+        }
         else if (val is System.Collections.IList list && val is not string)
             text = $"declare -a{BashShellState.AttributeLetters(name)} {name}={FormatIndexed(list)}";
         else

@@ -41,6 +41,12 @@ public static class BashShellState
                 Attributes[name] = (cur ?? "") + letter;
     }
 
+    /// <summary><c>declare x</c> (no value, no -a): declared as a scalar that is still unset.</summary>
+    internal static bool IsDeclaredScalar(string name) { lock (Attributes) return Attributes.TryGetValue(name, out var s) && s.Contains('-'); }
+
+    /// <summary><c>declare x</c> / <c>declare -a x</c> with no value: declared but unset, so <c>declare -p</c> shows no <c>=()</c>.</summary>
+    internal static bool IsDeclaredUnset(string name) { lock (Attributes) return Attributes.TryGetValue(name, out var s) && (s.Contains('-') || s.Contains('~')); }
+
     /// <summary>The <c>declare -p</c> flag letters of NAME in bash order (<c>i</c>, <c>r</c>, <c>x</c>), "" for none.</summary>
     internal static string AttributeLetters(string name)
     {
