@@ -3392,6 +3392,43 @@ public static partial class PsEmitter
         return true;
     }
 
+    /// <summary>`declare foo/bar=1`, `export 1x=2`, `local a-b`: a literal operand whose NAME is not an identifier is
+    /// reported (``NAME=v': not a valid identifier`, status 1) and dropped, instead of emitting `$env:foo/bar` (a PowerShell
+    /// parse error that kills the whole script). Valid operands still run.</summary>
+    private static bool TryEmitInvalidIdentifiers(ref Command.Simple cmd, out string result)
+    {
+        result = "";
+        var cname = cmd.Words.Length < 2 ? null : GetLiteralValue(cmd.Words[0]);
+        if (cname is not ("declare" or "typeset" or "local" or "export" or "readonly")) return false;
+        // Function/print forms take names that are not variables.
+        foreach (var w in cmd.Words.Skip(1))
+            if (GetLiteralValue(w) is { Length: > 1 } f && f[0] == '-' && f.AsSpan(1).IndexOfAny('f', 'F', 'p') >= 0) return false;
+        var keep = new List<CompoundWord> { cmd.Words[0] };
+        var errs = new StringBuilder();
+        foreach (var w in cmd.Words.Skip(1))
+        {
+            string? text = w.Parts.IsDefaultOrEmpty ? null : w.Parts[0] is WordPart.Literal l0 && w.Parts.All(p => p is WordPart.Literal) ? string.Concat(w.Parts.Select(p => ((WordPart.Literal)p).Value)) : null;
+            if (text is null && !w.Parts.IsDefaultOrEmpty && w.Parts[0] is WordPart.Literal first && first.Value.Contains('='))
+                text = first.Value;
+            if (text is null || text.Length == 0 || text[0] is '-' or '+') { keep.Add(w); continue; }
+            int eq = text.IndexOf('=');
+            string nm = eq < 0 ? text : text[..eq];
+            if (nm.EndsWith('+')) nm = nm[..^1];
+            int br = nm.IndexOf('[');
+            if (br > 0 && nm.EndsWith(']')) nm = nm[..br];
+            if (IsValidVarName(nm) || nm.IndexOfAny(['$', '`', '\'', '"']) >= 0) { keep.Add(w); continue; }
+            errs.Append("Write-Error ").Append(PsBuild.SingleQuote(cname + ": `" + text + "': not a valid identifier")).Append(" -ErrorAction Continue; ");
+        }
+        if (errs.Length == 0) return false;
+        if (keep.Count == 1)
+        {
+            result = errs + PsBuild.SetStatus(1);
+            return true;
+        }
+        var rest = EmitSimple(cmd with { Words = [.. keep] });
+        result = errs + rest + "; " + PsBuild.SetStatus(1);
+        return true;
+    }
     private static string EmitSimple(Command.Simple cmd)
     {
         cmd = ExpandAliases(cmd);
@@ -3409,6 +3446,9 @@ public static partial class PsEmitter
 
         if (TryEmitInputRedirect(cmd, out var inputResult))
             return inputResult;
+
+        if (TryEmitInvalidIdentifiers(ref cmd, out var invalidIdResult))
+            return invalidIdResult;
 
         if (TryEmitDynamicAssignmentBuiltin(cmd, out var dynamicAssignResult))
             return dynamicAssignResult;

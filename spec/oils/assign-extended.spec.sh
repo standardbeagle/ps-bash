@@ -268,7 +268,6 @@ status=0
 typeset foo/bar
 ## stdout:
 ## status: 1
-## XFAIL ps-bash gap-oils-assign-extended assign-extended (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### unset and shell funcs
