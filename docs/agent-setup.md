@@ -224,3 +224,14 @@ Windows tools stay reachable by full path (`/mnt/c/Windows/System32/notepad.exe`
 the few you need back to `PATH`.
 
 **Interactive tools (claude, copilot) crash in ps-bash shell** — Make sure you're running v0.8.7+. Earlier versions routed all commands through a pipe protocol that broke interactive executables.
+
+## Detached processes (`nohup`)
+
+`nohup cmd > log 2>&1 &` starts `cmd` in its own process: no pipe of the calling shell is inherited (a tool
+call waiting for EOF returns at once), `$!` is the real pid, and `cmd` keeps running after the shell and its
+host exit. Exit codes follow GNU nohup (125 own failure, 127 not found). A plain `cmd &` is a shell job and
+ends with the host.
+
+Under `tman` (`tman dev`, `tman test`) the supervised process tree is killed when the run ends, detached
+children included: that is tman's containment, not a nohup failure. To see a detached process survive, start it
+from a plain terminal, not through tman.

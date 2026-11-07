@@ -50,7 +50,10 @@ Recognized in the REPL after alias/complete handling, before the worker gate
 and cwd tracking all apply. The original `z …` line is what gets recorded in history.
 
 - `z` (no args) → `cd ~`.
-- `z <existing-path>` (token looks like a path AND resolves) → literal `cd` passthrough.
+- `z <existing-directory>` — one argument that names a real directory (bare name
+  under the current directory, relative, absolute, or `~` / `~/…`) → `cd '<expanded>'`.
+  `~` is expanded before quoting. A bare name matches even if that directory was
+  never visited. A missing name falls through to frecency (no `cd` error).
 - `z <keywords>` → highest-frecency match, or `ps-bash: z: no match for '…'` on miss.
 - `zi [keywords]` → numbered list of matches, read a selection, cd to it (no fzf dep).
 
