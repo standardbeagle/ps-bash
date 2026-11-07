@@ -4391,7 +4391,7 @@ public static partial class PsEmitter
         return effects.Count > 0;
     }
     /// <summary>
-    /// Options that change nothing ps-bash models (errtrace, functrace, histexpand, braceexpand, hashall, monitor):
+    /// Options that change nothing ps-bash models (errtrace, functrace, histexpand, braceexpand, hashall, monitor, allexport -- every\n    /// variable already lives in the exported environment, so set -a; . .env; set +a just works):
     /// `set -eEuo pipefail` is the standard script preamble, so they are accepted and dropped rather than refused.
     /// </summary>
     private static List<string?> StripInertSetOptions(List<string?> args)
@@ -4401,11 +4401,11 @@ public static partial class PsEmitter
         {
             var a = args[i];
             if (a is null || a == "--") { for (; i < args.Count; i++) kept.Add(args[i]); break; }
-            if (a is "-o" or "+o" && i + 1 < args.Count && args[i + 1] is "errtrace" or "functrace" or "histexpand" or "braceexpand" or "hashall" or "monitor")
+            if (a is "-o" or "+o" && i + 1 < args.Count && args[i + 1] is "errtrace" or "functrace" or "histexpand" or "braceexpand" or "hashall" or "monitor" or "allexport")
             { i++; continue; }
             if (a.Length >= 2 && (a[0] == '-' || a[0] == '+') && a[1] != '-' && a.Skip(1).All(char.IsAsciiLetter))
             {
-                var letters = new string(a.Skip(1).Where(c => c is not ('E' or 'T' or 'H' or 'B' or 'h' or 'm')).ToArray());
+                var letters = new string(a.Skip(1).Where(c => c is not ('E' or 'T' or 'H' or 'B' or 'h' or 'm' or 'a')).ToArray());
                 if (letters.Length == 0) continue;
                 kept.Add(a[0] + letters);
                 continue;

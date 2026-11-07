@@ -162,7 +162,6 @@ BAZ=qux
 printenv.py FOO BAZ
 ## stdout:
 ## status: 127
-## XFAIL ps-bash gap-oils-builtin-set builtin-set (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### set +a stops exporting
@@ -173,7 +172,6 @@ BAR=not_exported
 printenv.py FOO BAR
 ## stdout:
 ## status: 127
-## XFAIL ps-bash gap-oils-builtin-set builtin-set (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### set -o allexport (long form)
@@ -323,7 +321,6 @@ AFTER=after_value
 printenv.py BEFORE AFTER
 ## stdout:
 ## status: 127
-## XFAIL ps-bash gap-oils-builtin-set builtin-set (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### set -a exports local variables
@@ -335,7 +332,6 @@ f() {
 f
 ## stdout:
 ## status: 127
-## XFAIL ps-bash gap-oils-builtin-set builtin-set (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### set -a exports declare variables
@@ -344,5 +340,4 @@ declare ZZZ=zzz
 printenv.py ZZZ
 ## stdout:
 ## status: 127
-## XFAIL ps-bash gap-oils-builtin-set builtin-set (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
