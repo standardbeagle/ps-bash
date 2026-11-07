@@ -60,7 +60,6 @@ echo ${undef:-"~"}
 ## END
 ## status: 0
 ## timeout: 10
-## XFAIL ps-bash triage differs from bash 5.2 (auto-marked; investigate)
 
 #### ${x//~/~root}
 HOME=/home/bar

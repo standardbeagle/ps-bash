@@ -387,8 +387,9 @@ public sealed partial class BashParser
     private static string KeepNonSpecialBackslashes(string val)
     {
         // No tilde expansion inside double quotes: `"${u:-~}"` is a literal ~.
-        if (val.StartsWith('~')) val = "'~'" + val[1..];
-        if (val.IndexOf('\\') < 0 && val.IndexOf('\'') < 0) return val;
+        // (A backslash keeps DecomposeWord from reading the leading ~ as a tilde prefix.)
+        string lead = val.StartsWith('~') ? "\\" : "";
+        if (val.IndexOf('\\') < 0 && val.IndexOf('\'') < 0) return lead + val;
         var sb = new System.Text.StringBuilder(val.Length + 4);
         for (int i = 0; i < val.Length; i++)
         {
@@ -412,7 +413,7 @@ public sealed partial class BashParser
             }
             else sb.Append(c);
         }
-        return sb.ToString();
+        return lead + sb.ToString();
     }
 
     private static int ParseBracedVar(string raw, int pos, ImmutableArray<WordPart>.Builder parts, bool inDoubleQuote = false)
@@ -856,12 +857,20 @@ public sealed partial class BashParser
         int pos = 1; // skip ~
         int len = raw.Length;
 
-        // Read optional username until '/' or end of word.
+        // Read optional username until '/' or end of word. A quoted or substituted character in the prefix (~'x',
+        // ~"x", ~\x, ~$u, ~cmd) means bash does not expand the tilde at all: return 0 so the caller reads the
+        // word as plain text.
         int start = pos;
         while (pos < len && raw[pos] != '/')
+        {
+            if (raw[pos] is '\'' or '"' or '\\' or '$' or '`') return 0;
             pos++;
+        }
 
         string? user = pos > start ? raw[start..pos] : null;
+        // ~CURRENTUSER is the home directory (there is no passwd database to ask for any other login name).
+        if (user is not null && string.Equals(user, Environment.UserName, StringComparison.OrdinalIgnoreCase))
+            user = null;
         // Consume the '/' separator so it doesn't appear in the following literal;
         // the emitter re-inserts a platform separator after a TildeSub that consumed one (see
         // PsEmitter.EmitWord / AppendTildeSeparator).

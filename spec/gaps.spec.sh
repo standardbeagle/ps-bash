@@ -19,7 +19,6 @@ readonly v=1; unset v 2>/dev/null; echo $?
 a=(); a[3]=x; echo ${#a[@]} ${!a[@]}
 ## stdout: 1 3
 ## status: 0
-## XFAIL ps-bash sparse-array PowerShell arrays are dense
 
 #### trap ERR
 trap 'echo err' ERR; false; echo done

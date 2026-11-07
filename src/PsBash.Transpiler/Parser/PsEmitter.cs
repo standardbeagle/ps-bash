@@ -1420,7 +1420,8 @@ public static partial class PsEmitter
     /// </summary>
     private static string EmitCasePatternTest(string raw)
     {
-        if (raw.IndexOfAny(['$', '`']) >= 0)
+        // A leading ~ expands in a case pattern too (`case /home/u in ~)`).
+        if (raw.IndexOfAny(['$', '`']) >= 0 || raw.StartsWith('~'))
         {
             var word = new CompoundWord(BashParser.DecomposeWord(raw));
             if (!TryGetStaticPatternText(word, out _))
@@ -5381,6 +5382,10 @@ public static partial class PsEmitter
                 ? tmpBrace
                 : EmitBraceExpandedWord(word.Parts);
 
+        // ~/ alone: the parser consumed the '/', so only the string form keeps it.
+        if (word.Parts is [WordPart.TildeSub { User: null or "+" or "-", SlashConsumed: true }])
+            return TransformWordPath(FlattenPartsToDoubleQuotedString(word.Parts));
+
         if (word.Parts.Length == 1)
             return EscapeLeadingSplatSigil(
                 word, TransformWordPath(EmitBarewordPart(word.Parts[0], wholeWord: true)));
@@ -5396,6 +5401,12 @@ public static partial class PsEmitter
         // expand). A bareword/$var first part already absorbs following parts
         // (`pre"mid"suf`, `$x"a"`), so those keep their cheaper emission.
         if (NeedsAdjacencyFlatten(word.Parts))
+            return TransformWordPath(FlattenPartsToDoubleQuotedString(word.Parts));
+
+        // A tilde word (~/x, a=~:y, ~/) renders as ONE string: the bareword $HOME/x is only valid as a command
+        // argument (in an array element or a test operand it parses as a division), loses a trailing '/', and
+        // $HOME:y reads $HOME: as a drive reference.
+        if (NeedsTildeFlatten(word.Parts))
             return TransformWordPath(FlattenPartsToDoubleQuotedString(word.Parts));
 
         // `pre"$(cmd)"`: a bareword-led word would glue the join expression onto the bareword,
@@ -5437,6 +5448,18 @@ public static partial class PsEmitter
         emitted.StartsWith('@') && word.Parts is [WordPart.Literal, ..]
             ? "`" + emitted
             : emitted;
+
+    /// <summary>True for a word holding an expandable tilde (~, ~+, ~-) that can render as one string: no glob, brace or process-substitution part (those keep their dedicated emitters).</summary>
+    private static bool NeedsTildeFlatten(ImmutableArray<WordPart> parts)
+    {
+        bool tilde = false;
+        foreach (var p in parts)
+        {
+            if (p is WordPart.GlobPart or WordPart.ProcessSub or WordPart.BracedTuple or WordPart.BracedRange) return false;
+            if (p is WordPart.TildeSub { User: null or "+" or "-" }) tilde = true;
+        }
+        return tilde;
+    }
 
     /// <summary>
     /// True when naive part concatenation of a multi-part word would split it into
@@ -5765,8 +5788,9 @@ public static partial class PsEmitter
             : EmitWordPart(part);
 
     // A brace item with an expansion (`{$a,b}`) is word text: decompose it; a plain item stays one literal.
-    private static ImmutableArray<WordPart> BraceItemParts(string item)
-        => item.Contains('$') || item.Contains('`')
+    // A LEADING item that starts with ~ (`{~,~/x}`) is tilde-expanded once the braces are gone, as in bash.
+    private static ImmutableArray<WordPart> BraceItemParts(string item, bool leading = false)
+        => item.Contains('$') || item.Contains('`') || (leading && item.StartsWith('~'))
             ? BashParser.DecomposeWord(item)
             : ImmutableArray.Create<WordPart>(new WordPart.Literal(item));
 
@@ -5804,6 +5828,8 @@ public static partial class PsEmitter
                 // `{$a,b}`: an item with an expansion is text that must be expanded, not printed.
                 if (p is WordPart.BracedTuple t && t.Items.Any(i => i.Contains('$') || i.Contains('`')))
                     dynamicPart = dynamicItems = true;
+                else if (braceCount == 1 && ReferenceEquals(p, parts[0]) && p is WordPart.BracedTuple lead && lead.Items.Any(i => i.StartsWith('~')))
+                    dynamicPart = true;
             }
             else if (p is not (WordPart.Literal or WordPart.EscapedLiteral or WordPart.SingleQuoted or WordPart.GlobPart))
                 dynamicPart = true;
@@ -5816,7 +5842,7 @@ public static partial class PsEmitter
             foreach (var part in parts)
             {
                 var alts = part is WordPart.BracedTuple or WordPart.BracedRange
-                    ? ExpandBrace(part).ConvertAll(BraceItemParts)
+                    ? ExpandBrace(part).ConvertAll(it => BraceItemParts(it, leading: combos.Count == 1 && combos[0].IsEmpty))
                     : new List<ImmutableArray<WordPart>> { ImmutableArray.Create(part) };
                 CheckBraceWords((long)combos.Count * alts.Count);
                 var next = new List<ImmutableArray<WordPart>>(combos.Count * alts.Count);
@@ -7003,11 +7029,11 @@ public static partial class PsEmitter
                 // The parser consumes the `/` after a tilde; EmitWord re-adds it when parts follow.
                 case WordPart.TildeSub { User: null or "+" or "-" } ts:
                     Dynamic(Escape + "([string]" + EmitWordPart(ts) + ").Replace('\\','/'))");
-                    if (ts.SlashConsumed && i + 1 < word.Parts.Length) lit.Append('/');
+                    if (ts.SlashConsumed) lit.Append('/');
                     break;
                 case WordPart.TildeSub ts:
                     lit.Append(EscapeGlobLiteral("~" + ts.User));
-                    if (ts.SlashConsumed && i + 1 < word.Parts.Length) lit.Append('/');
+                    if (ts.SlashConsumed) lit.Append('/');
                     break;
                 case WordPart.CommandSub cs:
                     Dynamic(EmitCommandSubString(cs, nested: false));
@@ -7749,6 +7775,14 @@ public static partial class PsEmitter
         // doubled or it breaks out and emits unparseable PowerShell (grammar-fuzz find).
         // A quoted / expanded pattern (`${s#"${s%%[![:space:]]*}"}`, `${f%"$ext"}`) is the quote-removed VALUE, matched
         // literally (its glob characters are quoted); an empty one removes nothing.
+        // A leading unquoted `~` / `~/` of a removal pattern is the home directory, matched literally (``).
+        if (suffix.Length > 1 && suffix[0] is '%' or '#')
+        {
+            int skip = suffix[1] == suffix[0] ? 2 : 1;
+            var removalPat = suffix[skip..];
+            if (removalPat.IndexOfAny(['*', '?', '[', '\\', '\'', '"']) < 0 && TildeFind(removalPat) is var homePat && !ReferenceEquals(homePat, removalPat))
+                suffix = suffix[..skip] + homePat;
+        }
         if ((suffix.StartsWith("%%") || suffix.StartsWith("##") ? suffix[2..] : suffix.StartsWith("%") || suffix.StartsWith("#") ? suffix[1..] : null)
                 is { } stripPat && suffix[0] is '%' or '#' && TryEmitSubstitutionOperand(stripPat) is { } stripExpr)
         {

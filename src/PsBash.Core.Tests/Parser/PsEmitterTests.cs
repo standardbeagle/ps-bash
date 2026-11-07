@@ -341,8 +341,7 @@ public class PsEmitterTests
     {
         // `$HOME/src,$HOME/git` parsed as a division: the whole script failed with a PowerShell parse error.
         var ps = PsEmitter.Transpile(src)!;
-        Assert.Contains("($HOME + '/src')", ps);
-        Assert.DoesNotContain("$HOME/src", ps);
+        Assert.Contains("\"$HOME/src\"", ps);   // one string, never the bareword $HOME/src (a division in a list)
     }
 
     [Theory]
@@ -2325,7 +2324,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("ls ~/docs");
 
-        Assert.Equal("Invoke-BashLs $HOME/docs", result);
+        Assert.Equal("Invoke-BashLs \"$HOME/docs\"", result);
     }
 
     [Fact]
@@ -2451,8 +2450,8 @@ public class PsEmitterTests
     }
 
     [Theory]
-    [InlineData("cd ~/work/x", "$__psbash_cd_target = $HOME + '/work/x'")]
-    [InlineData("ls ~/work/x", "Invoke-BashLs $HOME/work/x")]
+    [InlineData("cd ~/work/x", "$__psbash_cd_target = $(& { [string]$args[0] } \"$HOME/work/x\")")]
+    [InlineData("ls ~/work/x", "Invoke-BashLs \"$HOME/work/x\"")]
     public void Transpile_TildeSlash_KeepsForwardSlashSeparator(string bash, string expectedPrefix)
     {
         // bash appends the rest of the word to $HOME verbatim. A hard-coded '\' made `cd ~/x`
@@ -2562,7 +2561,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("ls ~/.config/app");
 
-        Assert.Equal("Invoke-BashLs $HOME/.config/app", result);
+        Assert.Equal("Invoke-BashLs \"$HOME/.config/app\"", result);
     }
 
     [Fact]

@@ -616,10 +616,12 @@ public sealed partial class BashParser
         // SAME single char — is not sliced to a start-past-end range (raw[1..^1] on
         // length 1 threw ArgumentOutOfRangeException).
         bool expand = true;
+        bool unquoted = true;
         // `<<< $'a\nb'`: an ANSI-C word is decoded here (its escapes are the text) and is never re-expanded.
         if (raw.Length >= 3 && raw.StartsWith("$'", StringComparison.Ordinal) && raw.EndsWith('\''))
         {
             expand = false;
+            unquoted = false;
             raw = PsEmitter.ExpandAnsiCEscapes(raw[2..^1]);
         }
         else if (raw.Length >= 2
@@ -627,6 +629,7 @@ public sealed partial class BashParser
                 || (raw.StartsWith('"') && raw.EndsWith('"'))))
         {
             expand = raw[0] == '"';
+            unquoted = false;
             raw = raw[1..^1];
         }
 
@@ -634,6 +637,16 @@ public sealed partial class BashParser
         // command's stdin. `cat <<< "hello"` prints "hello\n", not "hello". The emitter
         // wraps the body in a here-string @"..."@ which itself swallows the @-line
         // newlines, so encode the trailing newline into the body value here.
+        // An unquoted <<< ~/x word expands its tilde (the body is a PowerShell here-string, which expands $HOME).
+        if (unquoted && raw.Length > 0 && raw[0] == '~')
+        {
+            int slash = raw.IndexOf('/');
+            string prefix = slash < 0 ? raw[1..] : raw[1..slash];
+            string? home = prefix switch { "" => "${HOME}", "+" => "${PWD}", "-" => "${env:OLDPWD}", _ => null };
+            if (home is not null)
+                raw = home + (slash < 0 ? "" : raw[slash..]);
+        }
+
         if (!raw.EndsWith('\n'))
             raw += "\n";
 
