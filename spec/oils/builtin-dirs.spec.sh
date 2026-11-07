@@ -15,7 +15,7 @@ pwd=/tmp
 pwd=/
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-dirs builtin-dirs (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash platform-windows-paths Windows paths print as C:\... (drive letter, backslash); bash prints /tmp (intentional-differences.md, Platform: paths)
 ## timeout: 10
 
 #### pushd usage
@@ -94,7 +94,7 @@ popd=0
 popd=1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-dirs builtin-dirs (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash platform-windows-paths Windows paths print as C:\... (drive letter, backslash); bash prints /tmp (intentional-differences.md, Platform: paths)
 ## timeout: 10
 
 #### dirs builtin
@@ -102,7 +102,7 @@ cd /
 dirs
 ## stdout: /
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-dirs builtin-dirs (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash platform-windows-paths Windows paths print as C:\... (drive letter, backslash); bash prints /tmp (intentional-differences.md, Platform: paths)
 ## timeout: 10
 
 #### dirs -c to clear the stack
@@ -121,7 +121,7 @@ dirs
 /tmp
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-dirs builtin-dirs (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash platform-windows-paths Windows paths print as C:\... (drive letter, backslash); bash prints /tmp (intentional-differences.md, Platform: paths)
 ## timeout: 10
 
 #### dirs -v to print numbered stack, one entry per line
@@ -145,7 +145,7 @@ dirs -v
  2  /
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-dirs builtin-dirs (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash platform-windows-paths Windows paths print as C:\... (drive letter, backslash); bash prints /tmp (intentional-differences.md, Platform: paths)
 ## timeout: 10
 
 #### dirs -p to print one entry per line
@@ -167,7 +167,7 @@ dirs -p
 /
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-dirs builtin-dirs (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash platform-windows-paths Windows paths print as C:\... (drive letter, backslash); bash prints /tmp (intentional-differences.md, Platform: paths)
 ## timeout: 10
 
 #### dirs -l to print in long format, no tilde prefix
@@ -245,7 +245,7 @@ pushd .. >/dev/null
 dirs
 ## stdout: / /tmp
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-dirs builtin-dirs (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash platform-windows-paths Windows paths print as C:\... (drive letter, backslash); bash prints /tmp (intentional-differences.md, Platform: paths)
 ## timeout: 10
 
 #### dirs test of path alias `.`
@@ -254,7 +254,7 @@ pushd . >/dev/null
 dirs
 ## stdout: /tmp /tmp
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-dirs builtin-dirs (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash platform-windows-paths Windows paths print as C:\... (drive letter, backslash); bash prints /tmp (intentional-differences.md, Platform: paths)
 ## timeout: 10
 
 #### pushd does not take more than one argument
