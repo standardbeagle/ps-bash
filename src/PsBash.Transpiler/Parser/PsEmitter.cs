@@ -591,8 +591,10 @@ public static partial class PsEmitter
         Command.Subshell subshell => EmitSubshell(subshell),
         Command.BraceGroup braceGroup => EmitCompoundBody(braceGroup.Redirects, () => EmitBraceGroup(braceGroup)),
         Command.ShFunction func => EmitFunction(func),
+        // `nohup CMD &` detaches itself and returns at once: no host job, so `&` adds nothing (and would hide the real $!).
+        Command.Background { Inner: Command.Simple nohupBg } when IsNohup(nohupBg) => EmitSimpleFed(RewriteNohup(nohupBg)),
         Command.Background bg => EmitBackground(bg),
-        Command.Simple simple => EmitSimpleFed(simple),
+        Command.Simple simple => EmitSimpleFed(IsNohup(simple) ? RewriteNohup(simple) : simple),
         Command.Pipeline pipeline => EmitPipeline(pipeline),
         Command.AndOrList andOr => EmitAndOrList(andOr),
         Command.ShAssignment assign => EmitShAssignment(assign),
@@ -1832,6 +1834,43 @@ public static partial class PsEmitter
         return PsBuild.NativeStdinScope(name, text);
     }
 
+    private static bool IsNohup(Command.Simple s) =>
+        !s.Words.IsDefaultOrEmpty && s.EnvPairs.IsEmpty && GetLiteralValue(s.Words[0]) == "nohup";
+
+    private static CompoundWord LiteralWord(string text) =>
+        new(ImmutableArray.Create<WordPart>(new WordPart.SingleQuoted(text)));
+
+    /// <summary>
+    /// A redirect on <c>nohup CMD</c> is meant for CMD, but CMD runs detached in another process, where a host-side
+    /// redirect never reaches it. The stdout/stderr file redirects move into leading private flags of
+    /// <c>Invoke-BashNohup</c> (<c>--psbash-out FILE [--psbash-append] [--psbash-err FILE|&amp;1]</c>), which opens them for the child.
+    /// </summary>
+    private static Command.Simple RewriteNohup(Command.Simple s)
+    {
+        var keep = ImmutableArray.CreateBuilder<Redirect>();
+        var lead = new List<CompoundWord>();
+        CompoundWord? outTarget = null; bool append = false; CompoundWord? errTarget = null; bool errToOut = false;
+        foreach (var r in s.Redirects)
+        {
+            if (r.Op is ">" or ">>" or ">|" && r.Fd == 1) { outTarget = r.Target; append = r.Op == ">>"; }
+            else if (r.Op is "&>" or "&>>") { outTarget = r.Target; append = r.Op == "&>>"; errToOut = true; }
+            else if (r.Op == ">&" && r.Fd == 2 && GetLiteralValue(r.Target) == "1") errToOut = true;
+            else if (r.Op is ">" or ">>" && r.Fd == 2) errTarget = r.Target;
+            else keep.Add(r);
+        }
+        if (outTarget is not null)
+        {
+            lead.Add(LiteralWord("--psbash-out")); lead.Add(outTarget);
+            if (append) lead.Add(LiteralWord("--psbash-append"));
+            if (errToOut) { lead.Add(LiteralWord("--psbash-err")); lead.Add(LiteralWord("&1")); }
+            else if (errTarget is not null) { lead.Add(LiteralWord("--psbash-err")); lead.Add(errTarget); }
+        }
+        else keep.AddRange(s.Redirects.Where(r => r.Fd == 1 || r.Fd == 2 || r.Op is "&>" or "&>>")); // stderr-only redirects keep the old behaviour
+        if (outTarget is null) return s;
+        var words = ImmutableArray.CreateBuilder<CompoundWord>();
+        words.Add(s.Words[0]); words.AddRange(lead); for (int i = 1; i < s.Words.Length; i++) words.Add(s.Words[i]);
+        return s with { Words = words.ToImmutable(), Redirects = keep.ToImmutable() };
+    }
     private static string EmitBackground(Command.Background bg)
     {
         string inner = Emit(bg.Inner);
@@ -9319,6 +9358,9 @@ public static partial class PsEmitter
                 return true;
             case "env":
                 result = EmitPassthrough("Invoke-BashEnv", args);
+                return true;
+            case "nohup":
+                result = EmitPassthrough("Invoke-BashNohup", args);
                 return true;
             case "basename":
                 result = EmitPassthrough("Invoke-BashBasename", args);

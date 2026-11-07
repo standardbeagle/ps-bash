@@ -3110,6 +3110,7 @@ $script:BashHelpSpecs = @{
     'dirname'  = 'Strip last component from file name.'
     'pwd'      = 'Print name of current/working directory.'
     'hostname' = 'Show the system host name.'
+    'nohup'    = 'Run a command detached so it outlives the shell; output goes to nohup.out.'
     'whoami'   = 'Print effective userid.'
     'uname'    = 'Print system information.'
     'fold'     = 'Wrap each input line to fit in specified width.'
@@ -3406,6 +3407,7 @@ Set-Alias -Name 'expr'    -Value 'Invoke-BashExpr'    -Force -Scope Global -Opti
 Set-Alias -Name 'du'      -Value 'Invoke-BashDu'      -Force -Scope Global -Option AllScope
 Set-Alias -Name 'tree'    -Value 'Invoke-BashTree'    -Force -Scope Global -Option AllScope
 Set-Alias -Name 'env'      -Value 'Invoke-BashEnv'      -Force -Scope Global -Option AllScope
+Set-Alias -Name 'nohup'    -Value 'Invoke-BashNohup'    -Force -Scope Global -Option AllScope
 Set-Alias -Name 'printenv' -Value 'Invoke-BashEnv'      -Force -Scope Global -Option AllScope
 Set-Alias -Name 'basename' -Value 'Invoke-BashBasename' -Force -Scope Global -Option AllScope
 Set-Alias -Name 'dirname'  -Value 'Invoke-BashDirname'  -Force -Scope Global -Option AllScope
