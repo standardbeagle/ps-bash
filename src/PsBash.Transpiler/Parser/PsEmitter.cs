@@ -4119,6 +4119,22 @@ public static partial class PsEmitter
         if (cmd0 == "exec" && cmd.HereDocs.IsDefaultOrEmpty && cmd.EnvPairs.IsEmpty)
             return TryEmitExec(cmd, out result);
 
+        // `unset -n ref` removes the reference itself, so later reads of `ref` are plain again.
+        if (cmd0 == "unset" && _namerefs is { Count: > 0 } && cmd.Words.Length >= 3
+            && GetLiteralValue(cmd.Words[1]) == "-n")
+            foreach (var w in cmd.Words.Skip(2))
+                if (GetLiteralValue(w) is { } dropped) { _namerefs.Remove(dropped); _pendingNamerefs?.Remove(dropped); }
+
+        // `unset ref` on a nameref unsets the variable it names (bash); `unset -n ref` removes the reference itself.
+        if (cmd0 == "unset" && _namerefs is { Count: > 0 } && cmd.Words.Length >= 2
+            && !cmd.Words.Skip(1).Any(w => GetLiteralValue(w) is { } fl && fl.StartsWith('-') && fl.Contains('n'))
+            && cmd.Words.Skip(1).Any(w => GetLiteralValue(w) is { } nm && _namerefs.ContainsKey(nm)))
+        {
+            var words = cmd.Words.Select((w, i) => i > 0 && GetLiteralValue(w) is { } nm && _namerefs.ContainsKey(nm)
+                ? new CompoundWord([new WordPart.Literal(ResolveNameref(nm))]) : w).ToImmutableArray();
+            cmd = new Command.Simple(words, cmd.EnvPairs, cmd.Redirects);
+        }
+
         // unset PROMPT_COMMAND -> Unregister-BashPromptHook -Name 'prompt-command'
         // Checked early (outside the else-if chain) so that `unset OTHER_VAR` still
         // falls through to TryEmitMappedCommand -> Invoke-BashUnset.
