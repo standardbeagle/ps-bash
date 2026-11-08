@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 30
+stdout-length: 6
+stderr-length: 91
+==== SCRIPT ====
+a[1]=v nosuchcmd_zz; echo s=$?
+==== STDOUT ====
+s=127
+
+==== STDERR ====
+bash: line 1: `a[1]': not a valid identifier
+bash: line 1: nosuchcmd_zz: command not found
+

@@ -56,7 +56,6 @@ echo status=$?
 argv.py "${a[@]}"
 ## stdout: status=0
 ## status: 127
-## XFAIL ps-bash gap-oils-array-assign array-assign (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -107,7 +106,6 @@ declare -a a=([0]="0" [1]="" [2]="2")
 declare -a b=([0]="3" [1]="4" [2]="/home/spec-test/src")
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array-assign array-assign (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 

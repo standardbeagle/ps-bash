@@ -609,9 +609,41 @@ public static class BashLexer
         return false;
     }
 
+    /// <summary>
+    /// `a[1 + 2]=x`: at the start of a word, a subscript that holds blanks belongs to the assignment word when the matching `]` is
+    /// followed by `=` or `+=`. Returns the offset just past that `]` (the scan then carries on through the value), else
+    /// <paramref name="pos"/> unchanged. Subscripts without blanks already scan as one word and are left alone.
+    /// </summary>
+    private static int SkipSpacedSubscript(string input, int pos)
+    {
+        int len = input.Length, i = pos;
+        if (i >= len || !IsNameStart(input[i])) return pos;
+        while (i < len && IsNameChar(input[i])) i++;
+        if (i >= len || input[i] != '[') return pos;
+        int depth = 0, j = i;
+        bool blank = false;
+        for (; j < len; j++)
+        {
+            char c = input[j];
+            if (c == '\\' && j + 1 < len) { j++; continue; }
+            if (c == '\'') { j = ScanSingleQuoted(input, j) - 1; continue; }
+            if (c == '"') { j = ScanDoubleQuoted(input, j) - 1; continue; }
+            if (c == '$' && j + 1 < len && input[j + 1] == '(') { j = ScanDollarParen(input, j) - 1; continue; }
+            if (c == '$' && j + 1 < len && input[j + 1] == '{') { j = ScanDollarBrace(input, j) - 1; continue; }
+            if (c == '[') depth++;
+            else if (c == ']') { if (--depth == 0) break; }
+            else if (c is ' ' or '\t') blank = true;
+            else if (c is '\n' or ';' or '|' or '&' or '<' or '>' or '(' or ')' or '#') return pos;
+        }
+        if (!blank || j >= len) return pos;
+        int k = j + 1;
+        if (k < len && input[k] == '+') k++;
+        return k < len && input[k] == '=' ? j + 1 : pos;
+    }
     private static int ScanWord(string input, int pos)
     {
         int len = input.Length;
+        pos = SkipSpacedSubscript(input, pos);
 
         while (pos < len)
         {

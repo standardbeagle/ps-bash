@@ -3497,6 +3497,14 @@ public static partial class PsEmitter
             return false;
         }
 
+        // [1]=v cmd: an element is not an environment binding (it cannot be exported), so it is not wrapped around the command.
+        if (cmd.EnvPairs.Any(p => p.Name.Contains('[')))
+        {
+            var kept = cmd.EnvPairs.RemoveAll(p => p.Name.Contains('['));
+            result = EmitSimple(cmd with { EnvPairs = kept });
+            return true;
+        }
+
         var bare = cmd with { EnvPairs = ImmutableArray<EnvPair>.Empty };
         result = WrapEnvPairs(cmd.EnvPairs, WithEnvShadow(cmd.EnvPairs, () => EmitSimple(bare)));
         // `foo=bar $unset`: a command word that expands to NOTHING leaves no command, so the assignment persists
