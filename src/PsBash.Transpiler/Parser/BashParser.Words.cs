@@ -452,6 +452,18 @@ public sealed partial class BashParser
                 pos++;
             string name = raw[nameStart..pos];
 
+            // ${!a[1]}: indirection through ONE array element (`a[1]` binds first, there is no "(!a)[1]"). Only `[@]`/`[*]`
+            // keep the keys meaning. The synthetic name carries the subscript, so every operator form below sees `a[1]`.
+            if (name.Length > 0 && pos < len && raw[pos] == '[')
+            {
+                int close = raw.IndexOf(']', pos + 1);
+                if (close > pos + 1 && close + 1 < len && raw[pos + 1] is not ('@' or '*' or ']'))
+                {
+                    name = raw[nameStart..(close + 1)];
+                    pos = close + 1;
+                }
+            }
+
             // ${!prefix*} / ${!prefix@} — names of variables whose name starts
             // with `prefix` (distinct from the ${!arr[@]} keys form). The `*`/`@`
             // comes immediately after the name with no `[`. Without this it fell
@@ -462,10 +474,15 @@ public sealed partial class BashParser
                 || (raw[pos] == '@' && pos + 1 < len && raw[pos + 1] != '}')))
             {
                 var inner = ImmutableArray.CreateBuilder<WordPart>();
-                string synthetic = "${" + name + raw[pos..];
+                string synthetic = "${" + name + raw[pos..];   // `${a[1]:-d}` keeps the element
                 int end = ParseBracedVar(synthetic, 0, inner);
-                if (inner.Count == 1 && inner[0] is WordPart.BracedVarSub { Suffix: { } innerSfx } innerBvs && innerBvs.Name == name)
+                int elemOpen = name.IndexOf('[');
+                string baseName = elemOpen > 0 ? name[..elemOpen] : name;
+                string elemPrefix = elemOpen > 0 ? name[elemOpen..] : "";   // `[1]` of `${!a[1]:-d}`: the suffix then carries it before the operator
+                if (inner.Count == 1 && inner[0] is WordPart.BracedVarSub { Suffix: { } rawSfx } innerBvs && innerBvs.Name == baseName
+                    && rawSfx.StartsWith(elemPrefix, StringComparison.Ordinal))
                 {
+                    string innerSfx = rawSfx[elemPrefix.Length..];
                     parts.Add(new WordPart.BracedVarSub(name, "!indirect" + innerSfx, innerBvs.ArgWord));
                     return pos + (end - (2 + name.Length));
                 }

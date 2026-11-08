@@ -3295,9 +3295,10 @@ public static partial class PsEmitter
                 string subscript = pair.Name[(bracketIdx + 1)..^1]; // strip [ and ]
                 // `a[$i]=v` / `a[i+1]+=v` / `m[key]=v`: the subscript is a WORD (expanded here) and, for an indexed
                 // array, then evaluated as arithmetic at run time; Set-BashElement pads/keys and returns the container.
+                // A leading `~` is not a tilde prefix in a subscript (`m[~]=v` keys `~`, not $HOME).
                 string target = ArrayWriteTarget(ResolveNameref(baseName));
                 sb.Append(target).Append(" = Set-BashElement ").Append(target).Append(' ')
-                  .Append(FlattenPartsToDoubleQuotedString(BashParser.DecomposeWord(subscript))).Append(' ')
+                  .Append(FlattenPartsToDoubleQuotedString(BashParser.DecomposeWord(subscript.StartsWith('~') ? "\\" + subscript : subscript))).Append(' ')
                   .Append(EmitAssignmentValue(pair.Value));
                 if (pair.Op == AssignOp.PlusEqual) sb.Append(" -Append");
                 continue;
@@ -7419,6 +7420,14 @@ public static partial class PsEmitter
         Flush();
         return segs.Count == 0 ? "''" : "(-join @(" + string.Join(", ", segs) + "))";
     }
+    // `${!a[1]}`: the indirection's reference is the value of ONE array element (the parser keeps `a[1]` as the name).
+    private static string IndirectRef(string name, bool strict)
+    {
+        var m = System.Text.RegularExpressions.Regex.Match(name, @"^([A-Za-z_]\w*)\[(.+)\]$");
+        return m.Success
+            ? EmitBracedVar(new WordPart.BracedVarSub(m.Groups[1].Value, "[" + m.Groups[2].Value + "]"))
+            : EmitSimpleVar(name, strict: strict);
+    }
     private static string EmitBracedVar(WordPart.BracedVarSub bvs, bool inDoubleQuote = false)
     {
         NestingGuard.EnsureStack(); // ${x:-${x:-…}} recurses here without passing Emit(Command)
@@ -7610,7 +7619,7 @@ public static partial class PsEmitter
             // ${!ref OP word}: the operator applies to the value of the variable NAMED by $ref.
             string op = indSfx["!indirect".Length..];
             string IndLookup(bool nameOnly) =>
-                "Get-BashIndirectValue -Ref (" + EmitSimpleVar(bvs.Name) + ") -RefName "
+                "Get-BashIndirectValue -Ref (" + IndirectRef(bvs.Name, false) + ") -RefName "
                 + PsBuild.SingleQuote(System.Text.RegularExpressions.Regex.IsMatch(bvs.Name, @"^[A-Za-z_]\w*$") ? bvs.Name : "")
                 + " -Pos @(" + PsBuild.BuildPositionalExpansion("@") + ")" + (nameOnly ? " -NameOnly" : "");
             if (op.StartsWith(":=", StringComparison.Ordinal) || op.StartsWith('='))
@@ -7626,7 +7635,7 @@ public static partial class PsEmitter
         if (bvs.Suffix == "!indirect")
         {
             // The name's value is a variable name, or a positional index (`n=2; ${!n}`, `${!#}` = the last argument).
-            string lookup = "& { $__ind = [string](" + EmitSimpleVar(bvs.Name, strict: true) + "); "
+            string lookup = "& { $__ind = [string](" + IndirectRef(bvs.Name, true) + "); "
                 + "if ($__ind -match '^[0-9]+$') { $__pp = @(" + PsBuild.BuildPositionalExpansion("@") + "); "
                 + "if ([int]$__ind -eq 0) { " + EmitSimpleVar("0", strict: true) + " } elseif ([int]$__ind -le $__pp.Count) { $__pp[[int]$__ind - 1] } } "
                 + "else { Get-BashIndirectValue -Ref $(if ($__ind) { $__ind } else { $null }) -RefName "

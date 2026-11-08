@@ -244,7 +244,6 @@ check_expand '${!p@P}' '$ '
 echo ok
 ## stdout: ok
 ## status: 0
-## XFAIL ps-bash gap-oils-var-ref var-ref (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### var ref OF array var -- silent a[0] decay

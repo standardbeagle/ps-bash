@@ -35,4 +35,6 @@ public class TildeExpansionEmitterTests
     [Fact] public void Transpile_RemovalPatternTilde_ExpandsHome() => Assert.Contains("$HOME", T("echo ${HOME#~}"));
 
     [Fact] public void Transpile_QuotedDefaultTilde_HasNoQuoteCharacters() => Assert.DoesNotContain("'''", T("echo \"${u:-~}\""));
+
+    [Fact] public void Transpile_SubscriptAssignTilde_IsALiteralKeyNotHome() => Assert.DoesNotContain("$HOME", T("declare -A m; m[~]=v"));
 }
