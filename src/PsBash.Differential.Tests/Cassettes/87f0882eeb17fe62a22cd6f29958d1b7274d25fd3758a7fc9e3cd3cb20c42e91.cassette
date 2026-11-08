@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 65
+stdout-length: 5
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)"; mkdir -p d; cd "$_"; pwd | sed 's|.*/d$|OK d|'
+==== STDOUT ====
+OK d
+
+==== STDERR ====
+

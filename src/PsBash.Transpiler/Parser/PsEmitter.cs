@@ -8375,8 +8375,82 @@ public static partial class PsEmitter
         return strict && _nounsetMode && EnvShadowName(name) is null ? StrictRead(name, plain) : plain;
     }
 
+    /// <summary>
+    /// <c>$_</c> is the last argument of the previous command. Inside one <c>;</c> / <c>&amp;&amp;</c> / <c>||</c> list the
+    /// previous simple command is known when emitting (<c>mkdir -p a/b &amp;&amp; cd $_</c>), so a whole-word <c>$_</c> /
+    /// <c>"$_"</c> is replaced by that command's last word when it is a plain literal (no expansion to run twice).
+    /// Anything else keeps reading <c>$global:BashLastArg</c>.
+    /// </summary>
+    private static ImmutableArray<Command> ResolveLastArgRefs(ImmutableArray<Command> cmds)
+    {
+        CompoundWord? prevLast = null;
+        ImmutableArray<Command>.Builder? rewritten = null;
+        for (int i = 0; i < cmds.Length; i++)
+        {
+            var cmd = cmds[i];
+            if (cmd is Command.Simple y && y.Words.Length > 0)
+            {
+                if (prevLast is not null && y.Words.Skip(1).Any(HasLastArgRef))
+                {
+                    var words = y.Words.Select((w, k) => k > 0 && HasLastArgRef(w) ? ReplaceLastArgRef(w, prevLast) : w).ToImmutableArray();
+                    cmd = y with { Words = words };
+                    rewritten ??= cmds.ToBuilder();
+                    rewritten[i] = cmd;
+                }
+                var last = ((Command.Simple)cmd).Words[^1];
+                prevLast = PlainLastArgValue(last) is not null ? last : null;
+            }
+            else prevLast = null;
+        }
+        return rewritten?.ToImmutable() ?? cmds;
+    }
+
+    private static bool IsLastArgPart(WordPart p)
+        => p is WordPart.SimpleVarSub { Name: "_" } or WordPart.BracedVarSub { Name: "_", Suffix: null or "" };
+
+    private static bool HasLastArgRef(CompoundWord w)
+        => w.Parts.Any(p => IsLastArgPart(p) || p is WordPart.DoubleQuoted dq && dq.Parts.Any(IsLastArgPart));
+
+    /// <summary>The text of a word made only of literal/quoted-literal parts (nothing to expand), else null.</summary>
+    private static string? PlainLastArgValue(CompoundWord w)
+    {
+        var sb = new System.Text.StringBuilder();
+        foreach (var p in w.Parts)
+        {
+            switch (p)
+            {
+                case WordPart.Literal l: sb.Append(l.Value); break;
+                case WordPart.EscapedLiteral e: sb.Append(e.Value); break;
+                case WordPart.SingleQuoted q: sb.Append(q.Value); break;
+                case WordPart.DoubleQuoted d when d.Parts.All(x => x is WordPart.Literal or WordPart.EscapedLiteral):
+                    foreach (var x in d.Parts) sb.Append(x is WordPart.Literal l2 ? l2.Value : ((WordPart.EscapedLiteral)x).Value);
+                    break;
+                default: return null;
+            }
+        }
+        return w.Parts.Length > 0 ? sb.ToString() : null;
+    }
+
+    private static CompoundWord ReplaceLastArgRef(CompoundWord w, CompoundWord prev)
+    {
+        string value = PlainLastArgValue(prev)!;
+        if (value.IndexOfAny(['$', '`', '"', '\\']) >= 0) return w;
+        // Unquoted, `$_` is word-split and globbed: only a value with nothing to split or glob is safe to inline as a literal.
+        bool safeUnquoted = value.Length > 0 && value.IndexOfAny([' ', '\t', '\n', '*', '?', '[', '\\', '"', '\'', '$', '`', '~', '{', '}', '(', ')', '<', '>', '|', '&', ';', '#', '!']) < 0;
+        var parts = ImmutableArray.CreateBuilder<WordPart>();
+        foreach (var p in w.Parts)
+        {
+            if (IsLastArgPart(p)) { if (safeUnquoted) parts.Add(new WordPart.Literal(value)); else return w; }
+            else if (p is WordPart.DoubleQuoted dq && dq.Parts.Any(IsLastArgPart))
+                parts.Add(new WordPart.DoubleQuoted(dq.Parts.Select(x => IsLastArgPart(x) ? new WordPart.Literal(value) : x).ToImmutableArray()));
+            else parts.Add(p);
+        }
+        return new CompoundWord(parts.ToImmutable());
+    }
+
     private static string EmitCommandList(Command.CommandList list)
     {
+        list = list with { Commands = ResolveLastArgRefs(list.Commands) };
         var sb = new StringBuilder();
         for (int i = 0; i < list.Commands.Length; i++)
         {
@@ -8437,6 +8511,7 @@ public static partial class PsEmitter
     /// </param>
     private static string EmitAndOrList(Command.AndOrList andOr, bool errexitFinalOperand = false)
     {
+        andOr = andOr with { Commands = ResolveLastArgRefs(andOr.Commands) };
         if (TryEmitAndOrEndingInStatementKeyword(andOr) is { } keywordForm)
             return keywordForm;
 

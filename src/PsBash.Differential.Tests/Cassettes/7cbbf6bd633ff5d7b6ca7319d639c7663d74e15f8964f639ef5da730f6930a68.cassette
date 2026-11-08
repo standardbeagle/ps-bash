@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 62
+stdout-length: 22
+stderr-length: 0
+==== SCRIPT ====
+_var=value; : 42; echo $_ $_var ${_}var; : 'foo'"bar"; echo $_
+==== STDOUT ====
+42 value 42var
+foobar
+
+==== STDERR ====
+

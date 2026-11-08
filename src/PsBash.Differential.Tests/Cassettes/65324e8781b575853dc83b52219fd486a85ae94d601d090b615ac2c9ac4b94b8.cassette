@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 34
+stdout-length: 25
+stderr-length: 0
+==== SCRIPT ====
+echo one two three; echo "last=$_"
+==== STDOUT ====
+one two three
+last=three
+
+==== STDERR ====
+
