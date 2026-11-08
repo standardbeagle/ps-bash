@@ -97,7 +97,6 @@ FOO-BAR=foo
 export FOO-BAR=foo
 ## stdout:
 ## status: 1
-## XFAIL ps-bash gap-oils-parse-errors parse-errors (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### bad var name in local
@@ -108,7 +107,6 @@ f() {
 f
 ## stdout:
 ## status: 1
-## XFAIL ps-bash gap-oils-parse-errors parse-errors (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### misplaced parentheses are not a subshell
@@ -144,7 +142,6 @@ echo 1 ;; echo 2
 [[ || true ]]
 ## stdout:
 ## status: 2
-## XFAIL ps-bash gap-oils-parse-errors parse-errors (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### array literal inside array is a parse error
