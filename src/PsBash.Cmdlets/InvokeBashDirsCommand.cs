@@ -102,7 +102,7 @@ public sealed class InvokeBashDirsCommand : PSCmdlet
         // bash abbreviates a leading $HOME to ~ unless -l (long form) is given.
         if (!longForm)
         {
-            var home = BashRuntime.MapPath(Environment.GetEnvironmentVariable("HOME") ?? "");
+            var home = BashRuntime.MapPath(BashVariableStore.Get("HOME") ?? "");
             for (int i = 0; i < entries.Count; i++) entries[i] = TildeAbbreviate(entries[i], home);
         }
 

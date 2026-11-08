@@ -170,9 +170,9 @@ public sealed class InvokeBashPushdCommand : PSCmdlet
                 cmdlet.SessionState.PSVariable.Set("global:__PsBashCwd", path);
                 if (!string.Equals(previous, path, StringComparison.Ordinal))
                 {
-                    Environment.SetEnvironmentVariable("OLDPWD", previous);
+                    BashVariableStore.Set("OLDPWD", previous);
                 }
-                Environment.SetEnvironmentVariable("PWD", path);
+                BashVariableStore.Set("PWD", path);
             }
         }
         catch

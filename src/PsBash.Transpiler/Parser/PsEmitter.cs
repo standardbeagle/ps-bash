@@ -9138,7 +9138,7 @@ public static partial class PsEmitter
         // every cmdlet resolve, not GetFullPath's `C:\tmp`.
         var resolveAndAct =
             "$__psbash_cd_resolved = [System.IO.Path]::GetFullPath(" + PsBuild.RuntimeMapPath("[string]$__psbash_cd_target") + ", [System.Environment]::CurrentDirectory); " +
-            "if ([System.IO.Directory]::Exists($__psbash_cd_resolved)) { " +
+            "if ([System.IO.Directory]::Exists($__psbash_cd_resolved) -and [PsBash.Cmdlets.BashRuntime]::CdPathWalkExists(" + PsBuild.RuntimeMapPath("[string]$__psbash_cd_target") + ", [System.Environment]::CurrentDirectory)) { " +
             "$env:OLDPWD = [System.Environment]::CurrentDirectory; " +
             "$global:__PsBashCwd = $__psbash_cd_resolved; " +
             "[System.Environment]::CurrentDirectory = $__psbash_cd_resolved; " +

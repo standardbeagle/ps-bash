@@ -350,6 +350,39 @@ public static class BashRuntime
     /// </summary>
     public static string MapPath(string path) => PsBash.Core.RuntimePath.Map(path);
 
+    /// <summary>
+    /// bash's logical <c>cd</c> checks each directory it walks through before applying a <c>..</c>:
+    /// <c>cd nonexistent/..</c> fails, whereas <c>GetFullPath</c> collapses it to the current directory. True when the
+    /// path has no <c>..</c> segment or every directory component before a <c>..</c> exists.
+    /// </summary>
+    public static bool CdPathWalkExists(string path, string cwd)
+    {
+        if (string.IsNullOrEmpty(path) || path.IndexOf("..", StringComparison.Ordinal) < 0) return true;
+        var segments = path.Split('/', '\\');
+        if (Array.IndexOf(segments, "..") < 0) return true;
+        string current;
+        int i = 0;
+        if (Path.IsPathRooted(path))
+        {
+            current = Path.GetPathRoot(path)!;
+            var rest = path[current.Length..];
+            segments = rest.Split('/', '\\');
+        }
+        else
+        {
+            current = cwd;
+        }
+        for (; i < segments.Length; i++)
+        {
+            var seg = segments[i];
+            if (seg.Length == 0 || seg == ".") continue;
+            if (seg == "..") { current = Path.GetDirectoryName(current.TrimEnd('/', '\\')) ?? current; continue; }
+            current = Path.Combine(current, seg);
+            if (!Directory.Exists(current)) return false;
+        }
+        return true;
+    }
+
     // ---- Raw (escaped-byte) text I/O for the psm1 helpers --------------------------------------
     // The psm1 cannot reliably resolve [PsBash.Core.RawBytes] (Transpiler.dll may not be loaded when a
     // psm1 function runs, see NormalizeWindowsPath), so it reaches the codec through these.
