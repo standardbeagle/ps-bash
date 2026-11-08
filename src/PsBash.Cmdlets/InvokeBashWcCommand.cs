@@ -359,7 +359,9 @@ public sealed class InvokeBashWcCommand : PSCmdlet
             _ => multipleFiles,
         };
 
-        foreach (var filePath in files0 ? names.Select(n => n == "-" ? n : ResolveVerbatim(n)) : ResolveGlob(_operands))
+        var operandPaths = (files0 ? names.Select(n => n == "-" ? n : ResolveVerbatim(n)) : ResolveGlob(_operands)).ToList();
+        _fileWidth = files0 ? 0 : FileColumnWidth(operandPaths);
+        foreach (var filePath in operandPaths)
         {
             if (filePath == "-" && files0)
             {
@@ -565,6 +567,24 @@ public sealed class InvokeBashWcCommand : PSCmdlet
         return (lines, words, chars, maxLine);
     }
 
+    private int _fileWidth;   // 0 = stdin layout (legacy 7/8-wide, first column trimmed)
+
+    /// <summary>GNU wc pads every count to the digit width of the files' TOTAL size (1 for one file with one column;
+    /// 7 when an operand is not a regular file, e.g. a directory or the null device).</summary>
+    private int FileColumnWidth(List<string> paths)
+    {
+        int selected = (_linesOnly ? 1 : 0) + (_wordsOnly ? 1 : 0) + (_charsOnly ? 1 : 0) + (_bytesOnly ? 1 : 0) + (_maxLineOnly ? 1 : 0);
+        if (paths.Count == 1 && selected == 1) return 1;
+        long total = 0;
+        foreach (var path in paths)
+        {
+            if (path == "-" || FileSystemHelpers.IsNullDevice(path) || Directory.Exists(path)) return 7;
+            if (!File.Exists(path)) continue;
+            try { total += new FileInfo(path).Length; } catch { return 7; }
+        }
+        return Math.Max(1, total.ToString(System.Globalization.CultureInfo.InvariantCulture).Length);
+    }
+
     /// <summary>
     /// Format the wc output line (the exact <c>BashText</c> the cmdlet emits),
     /// shared with the fused-pipeline streaming stage so the fused lane's bytes
@@ -574,7 +594,7 @@ public sealed class InvokeBashWcCommand : PSCmdlet
     /// </summary>
     internal static string FormatWcText(
         bool linesOnly, bool wordsOnly, bool charsOnly, bool bytesOnly, bool maxLineOnly,
-        int lines, int words, int bytes, int chars, int maxLine, string fileName)
+        int lines, int words, int bytes, int chars, int maxLine, string fileName, int width = 0)
     {
         // GNU prints the SELECTED columns in a fixed order: lines, words, chars,
         // bytes, max-line-length. With no selector, the default is lines/words/bytes.
@@ -587,6 +607,14 @@ public sealed class InvokeBashWcCommand : PSCmdlet
         if (cols.Count == 0) { cols.Add(lines); cols.Add(words); cols.Add(bytes); }
 
         var sb = new StringBuilder();
+        if (width > 0)
+        {
+            // File operands: every count right-aligned to one common width, joined by single spaces, nothing trimmed.
+            for (int k = 0; k < cols.Count; k++)
+                sb.Append(k == 0 ? "" : " ").Append(cols[k].ToString().PadLeft(width));
+            if (fileName.Length > 0) sb.Append(' ').Append(fileName);
+            return BashRuntime.NormalizeBashText(sb.ToString());
+        }
         for (int k = 0; k < cols.Count; k++)
         {
             // Width parity with the oracle: first column 7-wide, the rest 8-wide
@@ -615,7 +643,7 @@ public sealed class InvokeBashWcCommand : PSCmdlet
         fileName = fileName.Length > 0 && fileName != "total" ? OperandDisplay.Rewrite(this, fileName) : fileName;
         string bashText = FormatWcText(
             _linesOnly, _wordsOnly, _charsOnly, _bytesOnly, _maxLineOnly,
-            lines, words, bytes, chars, maxLine, fileName);
+            lines, words, bytes, chars, maxLine, fileName, _fileWidth);
 
         var obj = new PSObject();
         obj.TypeNames.Insert(0, "PsBash.WcResult");

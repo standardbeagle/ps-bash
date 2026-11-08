@@ -3256,13 +3256,19 @@ public static partial class PsEmitter
             if (pair.ArrayValue is not null)
             {
                 if (cmd.IsAssoc) _assocVars?.Add(pair.Name);
-                if (pair.Op is AssignOp.Equal or AssignOp.PlusEqual && TryEmitAssocLiteral(pair.ArrayValue, out var assoc))
+                if (pair.Op is AssignOp.Equal or AssignOp.PlusEqual && TryEmitAssocLiteral(pair.ArrayValue, out var assoc, cmd.IsAssoc || _assocVars?.Contains(pair.Name) == true))
                 {
                     // `a+=([k]=v)` merges into the existing table (a changed value keeps its place, a new key joins).
                     sb.Append(ArrayWriteTarget(pair.Name)).Append(" = ");
                     sb.Append(pair.Op == AssignOp.PlusEqual
                         ? "[PsBash.Cmdlets.BashAssoc]::Merge(" + ArrayWriteTarget(pair.Name) + ", " + assoc + ")"
                         : assoc);
+                    continue;
+                }
+                // `a=([2]=p [5]=q)`: explicit numeric subscripts; the gaps stay UNSET (a sparse array), as in bash.
+                if (pair.Op == AssignOp.Equal && !cmd.IsAssoc && _assocVars?.Contains(pair.Name) != true && TryEmitIndexedLiteral(pair.ArrayValue, out var indexed))
+                {
+                    sb.Append(ArrayWriteTarget(pair.Name)).Append(" = ").Append(indexed);
                     continue;
                 }
                 // `declare -A m=()` is an EMPTY ASSOCIATIVE array, not an empty indexed one.
@@ -3793,6 +3799,14 @@ public static partial class PsEmitter
             else if (val is { Length: > 1 } && val[0] == '+' && val.AsSpan(1).IndexOfAnyExcept("aAilnrtux") < 0) { /* `declare +a x`: drops an attribute; nothing to record */ }
             else if (val is not null && !val.StartsWith('-')) varName = val;
             else if (val is null && TrySplitInitializer(word, out var n, out var v)) { exprName = n; exprValue = v; }
+        }
+        // `declare -p ref` for a nameref prints the attribute line; the reference itself is resolved at transpile time, so the
+        // runtime has no variable to show.
+        if (isPrint && varName is not null && IsValidVarName(varName) && _namerefs is not null && _namerefs.TryGetValue(varName, out var refTargetName)
+            && cmd.Words.Skip(1).Count(w => GetLiteralValue(w) is { } x && !x.StartsWith('-')) == 1)
+        {
+            result = "Invoke-BashEcho " + PsBuild.SingleQuote("declare -n " + varName + "=\"" + refTargetName + "\"") + "; " + PsBuild.SetStatus(0);
+            return true;
         }
         if (isAssoc && !isPrint && _assocVars is not null)
         {
@@ -5239,11 +5253,48 @@ public static partial class PsEmitter
     /// Emit a value in assignment context: bare literals get wrapped in double quotes,
     /// already-quoted values are emitted as-is.
     /// </summary>
+    /// <summary>`a=([2]=p [5]=q)` with every element a numeric `[N]=value`: a bash indexed array with explicit subscripts.
+    /// Mixed or non-numeric forms are not handled here (non-numeric keys are the associative form).</summary>
+    private static bool TryEmitIndexedLiteral(ArrayWord array, out string literal)
+    {
+        literal = "";
+        if (array.Elements.IsDefaultOrEmpty) return false;
+        var entries = new List<string>(array.Elements.Length * 2);
+        foreach (var elem in array.Elements)
+        {
+            string? first = elem.Parts.IsDefaultOrEmpty ? null : elem.Parts[0] switch
+            {
+                WordPart.Literal l => l.Value,
+                WordPart.GlobPart g => g.Pattern,
+                _ => null,
+            };
+            if (first is not { Length: > 2 } || first[0] != '[') return false;
+            string key, head;
+            ImmutableArray<WordPart> parts;
+            if (first[^1] == ']' && elem.Parts.Length > 1 && elem.Parts[1] is WordPart.Literal { Value: var eqTail } && eqTail.StartsWith('='))
+            {
+                key = first[1..^1]; head = eqTail[1..]; parts = elem.Parts.RemoveRange(0, 2);
+            }
+            else
+            {
+                int close = first.IndexOf("]=", StringComparison.Ordinal);
+                if (close < 2) return false;
+                key = first[1..close]; head = first[(close + 2)..]; parts = elem.Parts.RemoveAt(0);
+            }
+            if (key.Length == 0 || key.Length > 9 || !key.All(char.IsDigit)) return false;
+            if (head.Length > 0) parts = parts.Insert(0, new WordPart.Literal(head));
+            entries.Add(PsBuild.SingleQuote(key));
+            entries.Add("(" + EmitAssignmentValue(new CompoundWord(parts)) + ")");
+        }
+        literal = "[PsBash.Cmdlets.BashSparseArray]::FromEntries(" + string.Join(", ", entries) + ")";
+        return true;
+    }
+
     /// <summary>
     /// <c>m=([k1]=v1 [k2]=v2)</c> with non-numeric keys: an associative array, a PowerShell hashtable (the shape
     /// <c>declare -A m; m[k]=v</c> already builds). Numeric keys stay on the indexed-array path.
     /// </summary>
-    private static bool TryEmitAssocLiteral(ArrayWord array, out string literal)
+    private static bool TryEmitAssocLiteral(ArrayWord array, out string literal, bool numericKeysAllowed = false)
     {
         literal = "";
         if (array.Elements.IsDefaultOrEmpty) return false;
@@ -5275,7 +5326,7 @@ public static partial class PsEmitter
                 parts = elem.Parts.RemoveAt(0);
             }
             // `['a+1']=c` / `["q r"]=2`: the quotes delimit the key, they are not part of it.
-            if (key.Length == 0 || key.All(char.IsDigit)) return false;
+            if (key.Length == 0 || (!numericKeysAllowed && key.All(char.IsDigit))) return false;
             if (key.Length >= 2 && key[0] is '\'' or '"' && key[^1] == key[0]) key = key[1..^1];
             if (head.Length > 0) parts = parts.Insert(0, new WordPart.Literal(head));
             entries.Add(PsBuild.SingleQuote(key) + ", (" + EmitAssignmentValue(new CompoundWord(parts)) + ")");
@@ -7828,7 +7879,8 @@ public static partial class PsEmitter
         if (suffix.StartsWith("="))
             return $"{open}{varRef} ?? ({varRef} = {ArgVal(suffix[1..])}))";
         if (suffix.StartsWith("+"))
-            return $"{open}{varRef} ? {ArgVal(suffix[1..])} : {q}{q})";
+            // Set-but-EMPTY counts as set here (an array element can hold ""), so test for $null, not truthiness.
+            return $"{open}$null -ne {varRef} ? {ArgVal(suffix[1..])} : {q}{q})";
         if (suffix.StartsWith("?"))
             return $"{open}{varRef} ?? {ParamErrorThrow(varRef, ArgVal(suffix[1..]))})";
 

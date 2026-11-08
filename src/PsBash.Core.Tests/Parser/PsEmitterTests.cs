@@ -1991,7 +1991,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("echo ${VAR+yes}");
 
-        Assert.Equal(SplitEcho("($env:VAR ? \"yes\" : \"\")"), result);
+        Assert.Equal(SplitEcho("($null -ne $env:VAR ? \"yes\" : \"\")"), result);
     }
 
     [Fact]

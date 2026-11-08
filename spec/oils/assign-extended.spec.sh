@@ -543,7 +543,6 @@ arr[2]=a8
 arr[3]=a10
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-assign-extended assign-extended (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### declare -p and value.Undef
@@ -578,7 +577,6 @@ arr[3]: set ... []
 arr[4]: set ... [foo]
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-assign-extended assign-extended (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### declare -p UNDEF (and typeset) -- prints something to stderr
@@ -619,7 +617,6 @@ declare -rx x="42"
   4 total
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-assign-extended assign-extended (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### typeset -p

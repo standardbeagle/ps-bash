@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 70
+stdout-length: 39
+stderr-length: 0
+==== SCRIPT ====
+declare -a b=([2]=p [5]="q r"); declare -p b; echo "${#b[@]} ${!b[@]}"
+==== STDOUT ====
+declare -a b=([2]="p" [5]="q r")
+2 2 5
+
+==== STDERR ====
+

@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 52
+stdout-length: 41
+stderr-length: 0
+==== SCRIPT ====
+c=([0]=a [1]=b [2]=c); declare -p c; echo "${#c[@]}"
+==== STDOUT ====
+declare -a c=([0]="a" [1]="b" [2]="c")
+3
+
+==== STDERR ====
+

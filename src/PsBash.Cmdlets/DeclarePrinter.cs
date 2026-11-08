@@ -22,7 +22,8 @@ internal static class DeclarePrinter
         object? val = null;
         try
         {
-            val = cmdlet.SessionState.PSVariable.GetValue($"global:{name}");
+            // The caller's own scope first: inside a subshell / function block the array is a local, not a global.
+            val = cmdlet.GetVariableValue(name) ?? cmdlet.SessionState.PSVariable.GetValue($"global:{name}");
         }
         catch
         {

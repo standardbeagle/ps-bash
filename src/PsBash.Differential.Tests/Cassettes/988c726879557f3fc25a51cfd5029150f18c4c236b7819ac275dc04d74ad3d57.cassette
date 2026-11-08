@@ -1,0 +1,20 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 161
+stdout-length: 96
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)"; printf 'a\nb\n' > f1; for i in $(seq 1 30); do echo "line number $i of the bigger file"; done > f2; wc -l f1 f2; wc f1 f2; wc -l f1; wc -lw f1
+==== STDOUT ====
+   2 f1
+  30 f2
+  32 total
+   2    2    4 f1
+  30  210 1011 f2
+  32  212 1015 total
+2 f1
+2 2 f1
+
+==== STDERR ====
+

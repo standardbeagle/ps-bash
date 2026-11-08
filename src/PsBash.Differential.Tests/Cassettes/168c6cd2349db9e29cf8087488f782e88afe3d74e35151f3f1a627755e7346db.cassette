@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 103
+stdout-length: 68
+stderr-length: 0
+==== SCRIPT ====
+arr=(1 2 3); x="$(arr=(); arr[3]= arr[4]=foo; declare -p arr)"; echo "$x"; eval -- "$x"; declare -p arr
+==== STDOUT ====
+declare -a arr=([3]="" [4]="foo")
+declare -a arr=([3]="" [4]="foo")
+
+==== STDERR ====
+

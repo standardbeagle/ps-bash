@@ -28,6 +28,19 @@ public sealed class BashSparseArray : IDictionary
         return sparse;
     }
 
+    /// <summary><c>a=([2]=p [5]=q)</c>: subscript/value pairs (later pairs win). A run 0..n-1 with no gap is an ordinary dense
+    /// array (returned as <c>object[]</c>); anything else stays sparse so the holes remain unset.</summary>
+    public static object FromEntries(params object?[] subscriptValuePairs)
+    {
+        var sparse = new BashSparseArray();
+        for (int i = 0; i + 1 < subscriptValuePairs.Length; i += 2)
+            if (long.TryParse(Convert.ToString(subscriptValuePairs[i], System.Globalization.CultureInfo.InvariantCulture), out var at))
+                sparse._items[at] = subscriptValuePairs[i + 1] ?? "";
+        long n = 0;
+        foreach (var k in sparse._items.Keys) { if (k != n) return sparse; n++; }
+        return sparse._items.Values.ToArray();
+    }
+
     /// <summary><c>a+=(x y)</c>: the new elements take the subscripts after the highest one in use.</summary>
     public static BashSparseArray operator +(BashSparseArray array, object? appended)
     {
