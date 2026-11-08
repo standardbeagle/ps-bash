@@ -388,8 +388,8 @@ public class BashTranspilerReviewRegressionTests
     [InlineData("n=2; echo \"${!n}\"", "$__pp")]
     [InlineData("echo \"${@:$#}\"", "$__psbO")]
     [InlineData("echo \"${a[@]:$i:2}\"", "$__psbN")]
-    [InlineData("echo \"${m[@]:-none}\"", ".Count -gt 0")]
-    [InlineData("echo \"${m[@]:+yes}\"", ".Count -gt 0")]
+    [InlineData("echo \"${m[@]:-none}\"", ".Count -gt 1 -or (")]
+    [InlineData("echo \"${m[@]:+yes}\"", ".Count -gt 1 -or (")]
     public void Transpile_IndirectPositionalVariableSliceAndArrayDefault_AreRuntimeEvaluated(string bash, string expected)
         => Assert.Contains(expected, BashTranspiler.Transpile(bash + "\ndeclare -p"));
 

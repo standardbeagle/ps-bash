@@ -7627,9 +7627,13 @@ public static partial class PsEmitter
                             ? $"(Get-Variable -Name {arrayVar[1..]} -ValueOnly -ErrorAction SilentlyContinue)"
                             : arrayVar;
                         string src = $"@(if ({av} -is [System.Collections.IDictionary]) {{ {av}.Values }} else {{ {av} }})";
+                        // The colon forms also treat a lone empty element as null (`a=(""); ${a[@]:-w}` is w); two empties are not.
+                        string has = subOp.StartsWith(':')
+                            ? $"({src}.Count -gt 1 -or ({src}.Count -eq 1 -and {src}[0]))"
+                            : $"{src}.Count -gt 0";
                         return alt
-                            ? $"$(if ({src}.Count -gt 0) {{ {arm} }} else {{ '' }})"
-                            : $"$(if ({src}.Count -gt 0) {{ {src} }} else {{ {arm} }})";
+                            ? $"$(if ({has}) {{ {arm} }} else {{ '' }})"
+                            : $"$(if ({has}) {{ {src} }} else {{ {arm} }})";
                     }
                     return arrayVar;
                 }
@@ -8173,9 +8177,12 @@ public static partial class PsEmitter
         // normalizes a negative offset (from the end), clamps to [0, Count], and
         // yields @() whenever the resulting count is <= 0 so no reversed range forms.
         // A sparse or associative table is a dictionary: slice its VALUES, not the one-element wrapper `@($table)` makes.
+        // A SPARSE array's offset is a subscript (the elements at index >= offset), not a position among the values.
         var sb = new StringBuilder("& { $__psbS = ");
         sb.Append(arrayVar);
-        sb.Append("; $__psbA = @(if ($__psbS -is [System.Collections.IDictionary]) { $__psbS.Values } else { $__psbS }); $__psbO = ").Append(offset).Append("; ");
+        sb.Append("; if ($__psbS -is [PsBash.Cmdlets.BashSparseArray]) { $__psbS.Slice(").Append(offset).Append(", ")
+          .Append(length is null ? "-1" : "[Math]::Max(0, " + length + ")").Append(") } else { ");
+        sb.Append("$__psbA = @(if ($__psbS -is [System.Collections.IDictionary]) { $__psbS.Values } else { $__psbS }); $__psbO = ").Append(offset).Append("; ");
         if (positional) sb.Append("if ($__psbO -gt 0) { $__psbO-- }; ");   // $@ counts from 1
         // A negative offset reaching before the first element selects nothing (`${a[@]: -5}` of 4 elements is empty).
         sb.Append("if ($__psbO -lt 0) { $__psbO = $__psbA.Count + $__psbO; if ($__psbO -lt 0) { $__psbO = $__psbA.Count } }; ");
@@ -8186,7 +8193,7 @@ public static partial class PsEmitter
             sb.Append("$__psbN = $__psbA.Count - $__psbO; ");
         sb.Append("if ($__psbN -lt 0) { $__psbN = 0 }; ");
         sb.Append("$__psbN = [Math]::Min($__psbN, $__psbA.Count - $__psbO); ");
-        sb.Append("if ($__psbN -le 0) { @() } else { $__psbA[$__psbO..($__psbO + $__psbN - 1)] } }");
+        sb.Append("if ($__psbN -le 0) { @() } else { $__psbA[$__psbO..($__psbO + $__psbN - 1)] } } }");
         // Always wrap the scriptblock invocation in a subexpression: a bare `& { … }`
         // is NOT a valid command argument (`cmd & {…}` parses `&` as the PS background
         // operator). `$(& { … })` is a valid argument in every context and splats the

@@ -17,4 +17,8 @@ public class IndexedArrayLiteralTests
     [Fact] public Task ParamAlt_EmptyArrayElementIsSet() => AssertOracle.EqualAsync("a=(1 \"\" x); echo \"[${a[1]+set}] [${a[1]-unset}] [${a[1]:+set}] [${a[1]:-def}] [${a[5]+set}] [${a[5]-unset}]\"");
     // wc pads every count to the digit width of the files' total size.
     [Fact] public Task Wc_MultipleFiles_UsesCommonWidth() => AssertOracle.EqualAsync("cd \"$(mktemp -d)\"; printf 'a\\nb\\n' > f1; for i in $(seq 1 30); do echo \"line number $i of the bigger file\"; done > f2; wc -l f1 f2; wc f1 f2; wc -l f1; wc -lw f1");
+    // A sparse array's slice offset is a SUBSCRIPT, not a position; a negative offset counts back from one past the highest.
+    [Fact] public Task Slice_SparseOffsetIsSubscript() => AssertOracle.EqualAsync("a=(v{0..9}); unset -v 'a[2]' 'a[3]' 'a[4]' 'a[7]'; for o in 0 2 3 5 9 10 -1 -2 -5 -9 -11; do echo \"[$o:${a[@]:$o}]\"; done; for l in 0 1 3 20; do echo \"[${a[@]:3:$l}]\"; done");
+    // `${a[@]:-w}`: a lone empty element is null, two are not.
+    [Fact] public Task ParamDefault_ArrayAllEmptyElements() => AssertOracle.EqualAsync("a1=(); a2=(\"\"); a3=(\"\" \"\"); a4=(x); for n in 1 2 3 4; do eval \"echo \\\"[\\${a$n[@]-U}] [\\${a$n[@]:-E}] [\\${a$n[@]+P}] [\\${a$n[@]:+Q}]\\\"\"; done");
 }

@@ -41,6 +41,21 @@ public sealed class BashSparseArray : IDictionary
         return sparse._items.Values.ToArray();
     }
 
+    /// <summary><c>${a[@]:offset:length}</c>: the offset is a SUBSCRIPT, not a position (the elements at index >= offset), and a
+    /// negative one counts back from one past the highest subscript. <paramref name="length"/> &lt; 0 means "to the end".</summary>
+    public object[] Slice(long offset, long length)
+    {
+        if (offset < 0) { offset += NextIndex; if (offset < 0) return Array.Empty<object>(); }
+        var picked = new List<object>();
+        foreach (var kv in _items)
+        {
+            if (kv.Key < offset) continue;
+            if (length >= 0 && picked.Count >= length) break;
+            picked.Add(kv.Value ?? "");
+        }
+        return picked.ToArray();
+    }
+
     /// <summary><c>a+=(x y)</c>: the new elements take the subscripts after the highest one in use.</summary>
     public static BashSparseArray operator +(BashSparseArray array, object? appended)
     {

@@ -142,7 +142,6 @@ a3 unset: [ ]
 a3 empty: [ ]
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array-sparse array-sparse (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### ${a-}
@@ -513,7 +512,6 @@ echo "[${a[@]:10:1}][${a[*]:10:1}]"
 [][]
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array-sparse array-sparse (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
