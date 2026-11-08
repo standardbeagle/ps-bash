@@ -8551,6 +8551,14 @@ public static partial class PsEmitter
         return true;
     }
 
+    // Mapped commands whose cmdlet has no pipeline-input parameter (bash ignores stdin for them too).
+    private static readonly HashSet<string> StdinIgnoringCommands = new(StringComparer.Ordinal)
+    {
+        "seq", "sleep", "pwd", "date", "basename", "dirname", "uname", "whoami", "hostname", "id", "echo",
+        "printf", "expr", "mktemp", "readlink", "realpath", "which", "ls", "ps", "stat", "du", "touch", "mkdir",
+        "rmdir", "tree", "kill", "yes", "tput", "ping", "traceroute", "umask", "ulimit",
+    };
+
     private static string EmitPipelineStages(Command.Pipeline pipeline, bool entryScope)
     {
         if (TryEmitLazyProducerStage(pipeline, out var lazy)) return lazy;
@@ -8577,6 +8585,12 @@ public static partial class PsEmitter
             if (i > 0 && cmd is Command.Simple simple)
             {
                 bool isLastStage = i == pipeline.Commands.Length - 1;
+                // A command that never reads stdin has no pipeline-input parameter, so PowerShell rejects the upstream
+                // records (`echo a | seq 2`), and a ProcessRecord cmdlet with an empty upstream never runs (`sleep 0.1 | seq 3`).
+                // Drain the input inside a block and run the command once, as bash does.
+                bool ignoresStdin = simple.Words.Length >= 1 && simple.EnvPairs.IsEmpty && GetLiteralValue(simple.Words[0]) is { } stdinName
+                    && StdinIgnoringCommands.Contains(stdinName);
+                if (ignoresStdin) sb.Append("& { $null = @($input); ");
                 if (simple.EnvPairs.IsEmpty)
                     sb.Append(EmitSimplePipeStage(simple, isLastStage));
                 else
@@ -8587,6 +8601,7 @@ public static partial class PsEmitter
                     sb.Append(WrapEnvPairsForPipeStage(
                         simple.EnvPairs, WithEnvShadow(simple.EnvPairs, () => EmitSimplePipeStage(bare, isLastStage))));
                 }
+                if (ignoresStdin) sb.Append(" }");
             }
             else if (pipeline.Commands.Length > 1 && IsCompoundPipelineStage(cmd))
             {

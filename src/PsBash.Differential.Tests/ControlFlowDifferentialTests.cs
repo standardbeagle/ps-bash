@@ -281,4 +281,7 @@ public class ControlFlowDifferentialTests
             "x=outer; f() { local x=inner; echo $x; }; f; echo $x",
             timeout: TimeSpan.FromSeconds(15));
     }
+
+    // A command that ignores stdin still runs once when something is piped into it.
+    [Fact] public Task Pipe_IntoStdinIgnoringCommand_RunsOnce() => AssertOracle.EqualAsync("echo a | seq 2; echo st=$?; { sleep 0.1 | seq 3; } | cat; echo x | basename /p/q");
 }
