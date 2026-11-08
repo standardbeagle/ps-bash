@@ -341,6 +341,8 @@ JobObjectWatchdog.StartParentDeathWatcher(parentPid);
 // follows the same ExpandAliases → Transpile → worker.ExecuteAsync sequence
 // as the interactive loop, so future alias wiring stays unified.
 var bashCommand = shellArgs.Command;
+if (bashCommand is not null && shellArgs.Prelude is { Length: > 0 } prelude)
+    bashCommand = prelude + "; " + bashCommand;
 if (compactOutput)
     Environment.SetEnvironmentVariable("PSBASH_COMPACT_COMMAND", bashCommand);
 

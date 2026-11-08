@@ -9,10 +9,35 @@ namespace PsBash.Shell.Tests;
 public class ProgramEndToEndTests
 {
     [SkippableTheory]
-    [InlineData("-e")]
-    [InlineData("-u")]
+    [InlineData("-e|false; echo status=$?|", 1)]
+    [InlineData("-u|echo ${nope}x; echo after|", 127)]
+    public async Task ShellOptionFlags_ApplyToTheCommandString(string spec, int expectedCode)
+    {
+        var parts = spec.Split('|');
+        var (code, output, _) = await RunShellAsync(parts[0], "-c", parts[1]);
+        Assert.Equal(expectedCode, code);
+        Assert.DoesNotContain("status=", output);
+        Assert.DoesNotContain("after", output);
+    }
+
+    [SkippableFact]
+    public async Task OptionName_O_NullglobApplies()
+    {
+        var (code, output, _) = await RunShellAsync("-O", "nullglob", "-c", "echo foo *.nonexistent bar");
+        Assert.Equal(0, code);
+        Assert.Equal("foo bar", output.Trim());
+    }
+
+    [SkippableFact]
+    public async Task ShellOptionFlags_WithoutC_AreRefused()
+    {
+        var (code, _, error) = await RunShellAsync("-e", "script.sh");
+        Assert.Equal(2, code);
+        Assert.Contains("only supported together with -c", error);
+    }
+
+    [SkippableTheory]
     [InlineData("-C")]
-    [InlineData("-eu")]
     [InlineData("--unknown-option")]
     public async Task UnsupportedLauncherOption_RefusesBeforeRunningCommand(string option)
     {

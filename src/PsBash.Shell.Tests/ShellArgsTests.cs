@@ -161,6 +161,18 @@ public class ShellArgsTests
         Assert.NotNull(ShellArgs.Parse(["--init-file"]).Error);
     }
     [Fact]
+    public void Parse_OptionFlags_BuildAPreludeForTheCommand()
+    {
+        var r = ShellArgs.Parse(["-eu", "-o", "pipefail", "-O", "nullglob", "+O", "extglob", "-c", "true"]);
+        Assert.Null(r.Error);
+        Assert.Equal("set -e; set -u; set -o pipefail; shopt -s nullglob; shopt -u extglob", r.Prelude);
+        Assert.Equal("true", r.Command);
+    }
+
+    [Fact] public void Parse_OptionFlagsWithoutC_AreAnError() => Assert.NotNull(ShellArgs.Parse(["-e", "s.sh"]).Error);
+    [Fact] public void Parse_OptionNameWithMetacharacters_IsRefused() => Assert.NotNull(ShellArgs.Parse(["-o", "x;rm", "-c", "true"]).Error);
+
+    [Fact]
     public void Parse_CommandFlagAtEnd_CommandIsNull()
     {
         var result = ShellArgs.Parse(["-i", "-c"]);

@@ -15,13 +15,14 @@ public record ShellArgs(
     string? Timeout = null,
     bool? CompactOutput = null,
     bool Verbose = false,
-    string? Error = null)
+    string? Error = null,
+    string? Prelude = null)
 {
     // Bash-compatible short flags ps-bash recognizes. Used to expand bundled
     // forms like `-lc` and to let `-c` skip past intervening flags when callers
     // (e.g. Claude Code) pass `-c -l "cmd"` instead of the canonical
     // `-l -c "cmd"`. Unsupported flags are reported before executing anything.
-    private static readonly HashSet<char> KnownShortFlags = new() { 'l', 'i', 's', 'c' };
+    private static readonly HashSet<char> KnownShortFlags = new() { 'l', 'i', 's', 'c', 'e', 'u' };
 
     // Long flags that take no value and must not be mistaken for the `-c`
     // command argument when callers pass flags after `-c`.
@@ -50,6 +51,8 @@ public record ShellArgs(
         string[] scriptArgs = [];
         string? timeout = null;
         string? error = null;
+        // `-e` / `-u` / `-o NAME` / `-O NAME` / `+O NAME`: shell options given on the command line, run as `set`/`shopt` ahead of the -c string.
+        var prelude = new List<string>();
 
         for (int i = 0; i < expanded.Count; i++)
         {
@@ -119,6 +122,32 @@ public record ShellArgs(
                         i = j;
                     }
                     break;
+                case "-e":
+                    prelude.Add("set -e");
+                    break;
+                case "-u":
+                    prelude.Add("set -u");
+                    break;
+                case "-o":
+                case "+o":
+                case "-O":
+                case "+O":
+                    if (i + 1 < expanded.Count)
+                    {
+                        string name = expanded[++i];
+                        if (!System.Text.RegularExpressions.Regex.IsMatch(name, "^[A-Za-z0-9_]+$"))
+                            error ??= $"{expanded[i - 1]}: invalid option name '{name}'";
+                        else
+                            prelude.Add(expanded[i - 1] switch
+                            {
+                                "-o" => $"set -o {name}",
+                                "+o" => $"set +o {name}",
+                                "-O" => $"shopt -s {name}",
+                                _ => $"shopt -u {name}",
+                            });
+                    }
+                    else error ??= $"{expanded[i]}: option requires an argument";
+                    break;
                 case "-i":
                     interactive = true;
                     break;
@@ -180,8 +209,7 @@ public record ShellArgs(
                 default:
                     if (expanded[i].StartsWith('-'))
                     {
-                        error ??= $"unsupported option '{expanded[i]}'" +
-                            (expanded[i] == "-e" ? "; use 'set -e' in the script to enable errexit" : "");
+                        error ??= $"unsupported option '{expanded[i]}'";
                         break;
                     }
                     // Non-flag positional argument: first becomes ScriptPath,
@@ -202,7 +230,12 @@ public record ShellArgs(
             }
         }
 
-        return new ShellArgs(command, interactive, login, stdin, noprofile, unixPaths, scriptPath, scriptArgs, rawPs, showVersion, showHelp, timeout, compactOutput, verbose, error);
+        // Only a -c string can carry the options; a script or stdin run would silently drop them, so refuse that.
+        if (prelude.Count > 0 && command is null)
+            error ??= "-e, -u, -o and -O are only supported together with -c";
+
+        return new ShellArgs(command, interactive, login, stdin, noprofile, unixPaths, scriptPath, scriptArgs, rawPs, showVersion, showHelp, timeout, compactOutput, verbose, error,
+            prelude.Count > 0 ? string.Join("; ", prelude) : null);
     }
 
     // Expands `-lc` -> `-l`, `-c`. Single-char flags (`-c`, `-l`) and long
@@ -218,7 +251,7 @@ public record ShellArgs(
             if (past) { result.Add(a); continue; }
             if (a == "--") { past = true; result.Add(a); continue; }
             if (valueNext) { valueNext = false; result.Add(a); continue; }
-            if (a is "--timeout" or "--rcfile" or "--init-file") { valueNext = true; result.Add(a); continue; }
+            if (a is "--timeout" or "--rcfile" or "--init-file" or "-o" or "+o" or "-O" or "+O") { valueNext = true; result.Add(a); continue; }
             // The first non-dash word is the script path (or, after -c, the command string);
             // everything after it is positional and must not be bundle-expanded.
             if (a.Length == 0 || a[0] != '-') { past = true; result.Add(a); continue; }
