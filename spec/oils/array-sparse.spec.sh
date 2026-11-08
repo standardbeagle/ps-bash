@@ -669,7 +669,6 @@ a=(v1 v2)
 echo "${!a[0]}, ${!a[1]}"
 ## stdout: hello, world
 ## status: 0
-## XFAIL ps-bash gap-oils-array-sparse array-sparse (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 

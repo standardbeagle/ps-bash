@@ -115,7 +115,6 @@ echo ${a[@]}
 0 2 72
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array array (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Negative index and sparse array
@@ -133,7 +132,6 @@ echo ${a[3]} $((a[3]))
 0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array array (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Length after unset

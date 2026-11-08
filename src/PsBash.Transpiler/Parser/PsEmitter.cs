@@ -6919,13 +6919,21 @@ public static partial class PsEmitter
     /// <see cref="IsPureUnquotedCommandSubWord"/>.</summary>
     private static bool IsUnquotedSplitWord(CompoundWord word)
         => IsPureUnquotedVarWord(word) || IsUnquotedPositionalListWord(word) || IsPureUnquotedCommandSubWord(word) || IsGlobWord(word)
-           || IsBraceGlobWord(word) || IsArrayValuedWord(word) || IsUnquotedDefaultAltWord(word);
+           || IsBraceGlobWord(word) || IsArrayValuedWord(word) || IsUnquotedDefaultAltWord(word) || IsUnquotedElementWord(word);
 
     /// <summary>Bare <c>$@</c> / <c>$*</c> (also <c>${@}</c>): every parameter, each split again on IFS and globbed.</summary>
     private static bool IsUnquotedPositionalListWord(CompoundWord word)
         => word.Parts is [WordPart.SimpleVarSub { Name: "@" or "*" }]
            or [WordPart.BracedVarSub { Name: "@" or "*", Suffix: null }];
 
+    /// <summary>
+    /// Bare <c>${a[i]}</c> (one subscript, not <c>@</c>/<c>*</c>): the element is word-split like any unquoted expansion, so an
+    /// unset or empty element is no argument at all (<c>echo x ${a[7]} y</c> prints <c>x y</c>).
+    /// </summary>
+    private static bool IsUnquotedElementWord(CompoundWord word)
+        => word.Parts is [WordPart.BracedVarSub { Name: var n, Suffix: { Length: > 2 } s }]
+           && IsOrdinaryVarName(n) && s[0] == '[' && s[^1] == ']' && s.IndexOf(']') == s.Length - 1
+           && s is not ("[@]" or "[*]") && s[1] != '@' && s[1] != '*';
     /// <summary>The suffix of <c>${#v}</c> / <c>${#a[@]}</c> / <c>${#a[0]}</c>: a number, never split.</summary>
     private static bool IsLengthSuffix(string s)
         => s == "#L" || (s.Length > 3 && s[0] == '#' && s[1] == 'L' && s[2] == '[' && s[^1] == ']' && s.IndexOf(']') == s.Length - 1);
@@ -7019,7 +7027,7 @@ public static partial class PsEmitter
             ? PsBuild.GlobWordArray(EmitGlobPatternExpr(word))
             : IsUnquotedDefaultAltWord(word) && word.Parts[0] is WordPart.BracedVarSub { Name: "@" or "*" }
                 ? "@(" + EmitBracedVar((WordPart.BracedVarSub)word.Parts[0]) + ")"
-            : IsUnquotedDefaultAltWord(word)
+            : IsUnquotedDefaultAltWord(word) || IsUnquotedElementWord(word)
                 ? PsBuild.WordSplitArray("(" + EmitBracedVar((WordPart.BracedVarSub)word.Parts[0]) + ")")
             : word.Parts[0] is WordPart.CommandSub cs
                 ? "@(ConvertTo-BashWords " + EmitCommandSubString(cs, nested: false) + ")"

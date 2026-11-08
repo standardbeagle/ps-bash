@@ -4580,8 +4580,8 @@ public class PsEmitterTests
     [Fact]
     public void Transpile_ArrayIndexAccess_EmitsPsIndex()
     {
-        var result = PsEmitter.Transpile("echo ${arr[0]}");
-        Assert.Equal("Invoke-BashEcho $(if ($null -eq $arr) { $env:arr } else { $arr['0'] })", result);
+        var result = PsEmitter.Transpile("echo \"${arr[0]}\"");
+        Assert.Contains("$(if ($null -eq $arr) { $env:arr } else { $arr['0'] })", result); // quoted: one word, no splitting
     }
 
     [Fact]
@@ -4633,8 +4633,8 @@ public class PsEmitterTests
     [Fact]
     public void Transpile_AssociativeArrayAccess_EmitsHashtableAccess()
     {
-        var result = PsEmitter.Transpile("echo ${map[key]}");
-        Assert.Equal("Invoke-BashEcho $map[$(if ($map -is [System.Collections.IDictionary]) { 'key' } else { [long](Invoke-BashArith 'key') })]", result);
+        var result = PsEmitter.Transpile("echo \"${map[key]}\"");
+        Assert.Contains("$map[$(if ($map -is [System.Collections.IDictionary]) { 'key' } else { [long](Invoke-BashArith 'key') })]", result);
     }
 
     [Fact]
