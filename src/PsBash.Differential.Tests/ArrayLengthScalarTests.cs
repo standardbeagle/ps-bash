@@ -21,4 +21,8 @@ public class ArrayLengthScalarTests
     [InlineData("a=(1); unset -v 'a[-2]' 2>/dev/null; echo status=$?")]
     [InlineData("array=('' nonempty); i='0+1'; [[ -v array[i] ]]; echo $?; i='0+2'; [[ -v array[i] ]]; echo $?")]
     public Task Matches_Bash(string script) => AssertOracle.EqualAsync(script);
+
+    // An arithmetic element write past the end leaves the gap UNSET (a sparse array), it does not pad with empty strings.
+    [Fact] public Task Arith_IndexAssignPastEnd_IsSparse() => AssertOracle.EqualAsync("declare -a a; (( a[99]=1 )); echo \"${#a[@]} ${!a[@]}\"; b=(x); (( b[5]=2 )); (( b[5]+=3 )); echo \"${#b[@]} ${!b[@]} ${b[5]}\"");
+    [Fact] public Task Slice_SparseArrayTail() => AssertOracle.EqualAsync("a=(x); a[9]=y; echo \"${a[@]: -1};${a[@]:0:1}\"");
 }

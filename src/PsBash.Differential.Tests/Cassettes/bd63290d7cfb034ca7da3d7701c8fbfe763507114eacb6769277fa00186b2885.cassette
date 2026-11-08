@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 123
+stdout-length: 13
+stderr-length: 0
+==== SCRIPT ====
+declare -a a; (( a[99]=1 )); echo "${#a[@]} ${!a[@]}"; b=(x); (( b[5]=2 )); (( b[5]+=3 )); echo "${#b[@]} ${!b[@]} ${b[5]}"
+==== STDOUT ====
+1 99
+2 0 5 5
+
+==== STDERR ====
+

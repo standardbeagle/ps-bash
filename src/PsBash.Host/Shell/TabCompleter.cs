@@ -125,7 +125,10 @@ internal static class TabCompleter
         if (!afterRedirect && TryCompleteGrepPatternValue(line, cursor, aliases, token, cwd, out var grepPatternCompletions))
             return grepPatternCompletions;
 
-        return CompletePath(token, cwd);
+        // cd / pushd / rmdir take directories only (bash's `compgen -d`); listing files there buries the folders.
+        var argBefore = line[..Math.Max(0, Math.Min(cursor, line.Length) - token.Length)];
+        var argCmd = GetCommandNameAtCursor(argBefore, argBefore.Length, aliases);
+        return CompletePath(token, cwd, dirsOnly: argCmd is "cd" or "pushd" or "rmdir" or "z");
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -532,7 +535,7 @@ internal static class TabCompleter
     // Path completion (arguments)
     // ─────────────────────────────────────────────────────────────────────────
 
-    private static IReadOnlyList<CompletionItem> CompletePath(string token, string cwd)
+    private static IReadOnlyList<CompletionItem> CompletePath(string token, string cwd, bool dirsOnly = false)
     {
         try
         {
@@ -571,8 +574,10 @@ internal static class TabCompleter
                 if (name.StartsWith(filePrefix, StringComparison.Ordinal)
                     || name.StartsWith(filePrefix, StringComparison.OrdinalIgnoreCase))
                 {
+                    bool isDir = Directory.Exists(entry);
+                    if (dirsOnly && !isDir) continue;
                     var completion = prefix + name;
-                    if (Directory.Exists(entry))
+                    if (isDir)
                         completion += '/';
                     results.Add(completion);
                 }

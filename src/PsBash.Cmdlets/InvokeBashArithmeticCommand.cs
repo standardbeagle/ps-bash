@@ -172,6 +172,12 @@ public sealed class InvokeBashArithmeticCommand : PSCmdlet
     {
         object? holder = SessionState.PSVariable.GetValue(baseName);
         if (holder is PSObject wrapped) holder = wrapped.BaseObject;
+        if (holder is BashSparseArray sparse)
+        {
+            long at = ElementIndex(subscript, sparse.Count == 0 ? 0 : (int)sparse.NextIndex);
+            if (at >= 0) sparse[at] = value;
+            return;
+        }
         if (holder is System.Collections.IDictionary dict)
         {
             dict[ExpandKey(subscript)] = value;
@@ -182,6 +188,14 @@ public sealed class InvokeBashArithmeticCommand : PSCmdlet
             foreach (var item in seq) items.Add(item);
         long index = ElementIndex(subscript, items.Count);
         if (index < 0) return;
+        if (index > items.Count)
+        {
+            // A gap: a dense array can't hold it (bash keeps the holes unset), so it becomes a sparse one.
+            var sp = BashSparseArray.FromList(items);
+            sp[index] = value;
+            if (SessionState.PSVariable.Get(baseName) is { } o) o.Value = sp; else SessionState.PSVariable.Set(baseName, sp);
+            return;
+        }
         while (items.Count <= index) items.Add("");
         items[(int)index] = value;
         if (SessionState.PSVariable.Get(baseName) is { } owner) owner.Value = items.ToArray();
