@@ -19,7 +19,6 @@ echo 'to stderr'
 exec -- echo hi
 ## stdout: hi
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-process builtin-process (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### exec -- 2>&1
@@ -27,7 +26,6 @@ exec -- 3>&1
 echo stdout 1>&3
 ## stdout: stdout
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-process builtin-process (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### exec -a sets argv[0]
@@ -50,7 +48,6 @@ exit invalid
 # Rationale: runtime errors are 1
 ## stdout:
 ## status: 2
-## XFAIL ps-bash gap-oils-builtin-process builtin-process (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Exit builtin with too many args
@@ -59,7 +56,6 @@ exit 7 8 9
 echo status=$?
 ## stdout: status=1
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-process builtin-process (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### time with brace group argument
@@ -283,7 +279,6 @@ cat err.txt
 
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-process builtin-process (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### ulimit -S for soft limit (default), -H for hard limit

@@ -4071,6 +4071,9 @@ public static partial class PsEmitter
     /// </summary>
     private static bool TryEmitExec(Command.Simple cmd, out string result)
     {
+        // `exec -- cmd` : the `--` ends option parsing, it is not the command.
+        if (cmd.Words.Length > 1 && GetLiteralValue(cmd.Words[1]) == "--")
+            cmd = new Command.Simple(cmd.Words.RemoveAt(1), cmd.EnvPairs, cmd.Redirects);
         if (cmd.Words.Length > 1)
         {
             var inner = new Command.Simple(cmd.Words.RemoveAt(0), cmd.EnvPairs, cmd.Redirects);
@@ -4246,6 +4249,15 @@ public static partial class PsEmitter
 
         // A bare `exit` leaves with the status of the last command; inside an EXIT trap handler that is the status
         // from before the handler ran (see BashTranspiler.TrapEpilogueClose).
+        // `exit 7 8 9`: "too many arguments", status 1, and the shell stays (bash 5.2).
+        else if (cmd0 == "exit" && cmd.Words.Length > 2 && _context != TranspileContext.Eval)
+            specialResult = $"Write-Error 'exit: too many arguments' -ErrorAction Continue; {PsBuild.SetStatus(1)}";
+
+        // `exit word` with a literal non-numeric word: "numeric argument required", and the shell leaves with 2.
+        else if (cmd0 == "exit" && cmd.Words.Length == 2 && GetLiteralValue(cmd.Words[1]) is { } exitLit
+                 && !System.Text.RegularExpressions.Regex.IsMatch(exitLit, @"^[+-]?[0-9]+$"))
+            specialResult = $"Write-Error {PsBuild.SingleQuote("exit: " + exitLit + ": numeric argument required")} -ErrorAction Continue; $global:LASTEXITCODE = 2; exit 2";
+
         else if (cmd0 == "exit" && cmd.Words.Length == 1)
             specialResult = "exit $(if ($null -ne $global:__BashPreTrapStatus) { $global:__BashPreTrapStatus } else { $global:LASTEXITCODE })";
 
