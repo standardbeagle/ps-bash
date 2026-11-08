@@ -14,10 +14,14 @@ public static class SpecRunner
     /// <summary>A known gap is only checked for "still fails / now passes"; a hang must not cost its whole timeout every run.</summary>
     public static readonly TimeSpan KnownGapTimeout = TimeSpan.FromSeconds(3);
 
+    /// <summary>A real-launcher case may have to cold-start a host (about 2-3 s), so a known-gap cap below that only measures start-up.</summary>
+    public static readonly TimeSpan RealLauncherGapTimeout = TimeSpan.FromSeconds(12);
+
     public static TimeSpan TimeoutFor(SpecCase c)
     {
         var limit = c.Timeout ?? DefaultTimeout;
-        return c.Xfail is not null && limit > KnownGapTimeout ? KnownGapTimeout : limit;
+        var cap = c.RealLauncher ? RealLauncherGapTimeout : KnownGapTimeout;
+        return c.Xfail is not null && limit > cap ? cap : limit;
     }
 
     public static async Task<IReadOnlyList<CaseResult>> RunAsync(
@@ -26,8 +30,15 @@ public static class SpecRunner
     {
         var results = new CaseResult[file.Cases.Count];
         using var gate = new SemaphoreSlim(Math.Max(1, parallelism));
+        // Launcher cases share one daemon endpoint and each nests another launcher: run concurrently they
+        // fan out across executor slots, each a cold host, and the cold starts eat the case timeouts.
+        using var launcherGate = new SemaphoreSlim(1);
         var tasks = file.Cases.Select(async (c, index) =>
         {
+            var viaLauncher = c.RealLauncher && launcher is not null;
+            if (viaLauncher) await launcherGate.WaitAsync(cancel);
+            try
+            {
             await gate.WaitAsync(cancel);
             try
             {
@@ -42,6 +53,8 @@ public static class SpecRunner
                 results[index] = Judge(c, actual);
             }
             finally { gate.Release(); }
+            }
+            finally { if (viaLauncher) launcherGate.Release(); }
         });
         await Task.WhenAll(tasks);
         return results;

@@ -344,7 +344,6 @@ TRUE
 $SH -e -c 'false; echo status=$?'
 ## stdout:
 ## status: 1
-## XFAIL ps-bash gap-oils-sh-options sh-options (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -352,7 +351,6 @@ $SH -e -c 'false; echo status=$?'
 $SH -o errexit -c 'false; echo status=$?'
 ## stdout:
 ## status: 1
-## XFAIL ps-bash gap-oils-sh-options sh-options (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -364,7 +362,6 @@ foo *.nonexistent bar
 foo bar
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-sh-options sh-options (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 

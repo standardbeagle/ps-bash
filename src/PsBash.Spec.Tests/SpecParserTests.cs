@@ -223,4 +223,12 @@ public class SpecRunnerTimeoutTests
     [Fact]
     public void A_case_expected_to_pass_keeps_its_own_timeout()
         => Assert.Equal(TimeSpan.FromSeconds(10), SpecRunner.TimeoutFor(Case(null, TimeSpan.FromSeconds(10))));
+
+    [Fact]
+    public void A_real_launcher_known_gap_is_not_capped_below_a_cold_host_start()
+    {
+        var c = new SpecCase("c", "echo", new Expectation(null, null, null), Array.Empty<Expectation>(), new XfailMark("g", "r"), TimeSpan.FromSeconds(30), true);
+        Assert.Equal(SpecRunner.RealLauncherGapTimeout, SpecRunner.TimeoutFor(c));
+        Assert.True(SpecRunner.RealLauncherGapTimeout >= TimeSpan.FromSeconds(8));
+    }
 }
