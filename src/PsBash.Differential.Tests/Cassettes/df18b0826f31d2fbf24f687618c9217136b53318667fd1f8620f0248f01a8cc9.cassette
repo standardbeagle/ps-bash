@@ -1,0 +1,16 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 138
+stdout-length: 8
+stderr-length: 0
+==== SCRIPT ====
+d="$(mktemp -d)"; cd /; pushd /tmp > "$d/1"; pushd /tmp > "$d/2"; popd > "$d/3"; popd > "$d/4"; for i in 1 2 3 4; do wc -w < "$d/$i"; done
+==== STDOUT ====
+2
+3
+2
+1
+
+==== STDERR ====
+

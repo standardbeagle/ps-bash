@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 98
+stdout-length: 7
+stderr-length: 0
+==== SCRIPT ====
+d="$(mktemp -d)"; cd /; pushd /nonexistent-dir-zz > "$d/f" 2>/dev/null; echo rc=$?; wc -c < "$d/f"
+==== STDOUT ====
+rc=1
+0
+
+==== STDERR ====
+

@@ -1,0 +1,18 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 72
+stdout-length: 8
+stderr-length: 84
+==== SCRIPT ====
+cd /; pushd /tmp | wc -w; pushd /tmp | wc -w; popd | wc -w; popd | wc -w
+==== STDOUT ====
+2
+2
+0
+0
+
+==== STDERR ====
+bash: line 1: popd: directory stack empty
+bash: line 1: popd: directory stack empty
+

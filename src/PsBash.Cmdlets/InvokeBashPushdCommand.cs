@@ -96,6 +96,7 @@ public sealed class InvokeBashPushdCommand : PSCmdlet
                 }",
                 n);
             SyncProcessWorkingDirectory(this);
+            InvokeBashDirsCommand.PrintStack(this);
             return;
         }
 
@@ -105,12 +106,19 @@ public sealed class InvokeBashPushdCommand : PSCmdlet
         var path = args.Length > 0 ? args[0] : ".";
         // A bare `/tmp` (or `/tmp/x` built at run time) is the temp dir, as for `cd`; the emitter only rewrites literal `/tmp/…` words.
         string target = path.StartsWith('/') ? BashRuntime.MapPath(path) : path;
+        if (!System.IO.Directory.Exists(System.IO.Path.GetFullPath(target, Environment.CurrentDirectory)))
+        {
+            FileSystemHelpers.WriteBashError(this, $"pushd: {path}: " + (System.IO.File.Exists(System.IO.Path.GetFullPath(target, Environment.CurrentDirectory)) ? "Not a directory" : "No such file or directory"));
+            FileSystemHelpers.SetLastExitCode(this, 1);
+            return;
+        }
         try
         {
             InvokeCommand.InvokeScript(
                 "param($p) Push-Location -Path $p",
                 target);
             SyncProcessWorkingDirectory(this);
+            InvokeBashDirsCommand.PrintStack(this);
         }
         catch (System.Management.Automation.RuntimeException ex)
         {

@@ -217,7 +217,7 @@ public class InvokeBashPushdCommandTests : IClassFixture<SharedPwshFixture>
         {
             RunLines(pwsh, $"Set-Location '{tmp}'");
             var lines = RunLines(pwsh,
-                $"Invoke-BashPushd '{sub}'; (Invoke-BashPwd).BashText; $env:PWD; Invoke-BashPopd | Out-Null; (Invoke-BashPwd).BashText; $env:OLDPWD");
+                $"Invoke-BashPushd '{sub}' | Out-Null; (Invoke-BashPwd).BashText; $env:PWD; Invoke-BashPopd | Out-Null; (Invoke-BashPwd).BashText; $env:OLDPWD");
             Assert.Equal(sub.Replace('\\', '/'), lines[0].Replace('\\', '/'));
             Assert.Equal(sub.Replace('\\', '/'), lines[1].Replace('\\', '/'));
             Assert.Equal(tmp.Replace('\\', '/'), lines[2].Replace('\\', '/'));

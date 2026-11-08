@@ -87,24 +87,7 @@ public sealed class InvokeBashDirsCommand : PSCmdlet
             return;
         }
 
-        // Get-Location -Stack is top-first (most recently pushed-from directory first) — bash's order,
-        // after the current directory.
-        var entries = new List<string>();
-        foreach (var item in InvokeCommand.InvokeScript("(Get-Location).Path"))
-        {
-            if (item?.BaseObject is string c) { entries.Add(c); break; }
-        }
-        foreach (var item in InvokeCommand.InvokeScript(@"@(Get-Location -Stack | ForEach-Object { $_.Path })"))
-        {
-            if (item?.BaseObject is string s) entries.Add(s);
-        }
-
-        // bash abbreviates a leading $HOME to ~ unless -l (long form) is given.
-        if (!longForm)
-        {
-            var home = BashRuntime.MapPath(BashVariableStore.Get("HOME") ?? "");
-            for (int i = 0; i < entries.Count; i++) entries[i] = TildeAbbreviate(entries[i], home);
-        }
+        var entries = StackEntries(this, longForm);
 
         if (V.IsPresent)
         {
@@ -125,6 +108,34 @@ public sealed class InvokeBashDirsCommand : PSCmdlet
             WriteObject(BashRuntime.NewBashObject(string.Join(' ', entries)));
         }
     }
+
+    /// <summary>The directory stack, current directory first (bash's order); a leading $HOME shows as ~ unless <paramref name="longForm"/>.</summary>
+    internal static List<string> StackEntries(PSCmdlet cmdlet, bool longForm)
+    {
+        // Get-Location -Stack is top-first (most recently pushed-from directory first) @T bash's order,
+        // after the current directory.
+        var entries = new List<string>();
+        foreach (var item in cmdlet.InvokeCommand.InvokeScript("(Get-Location).Path"))
+        {
+            if (item?.BaseObject is string c) { entries.Add(c); break; }
+        }
+        foreach (var item in cmdlet.InvokeCommand.InvokeScript(@"@(Get-Location -Stack | ForEach-Object { $_.Path })"))
+        {
+            if (item?.BaseObject is string s) entries.Add(s);
+        }
+
+        // bash abbreviates a leading $HOME to ~ unless -l (long form) is given.
+        if (!longForm)
+        {
+            var home = BashRuntime.MapPath(BashVariableStore.Get("HOME") ?? "");
+            for (int i = 0; i < entries.Count; i++) entries[i] = TildeAbbreviate(entries[i], home);
+        }
+        return entries;
+    }
+
+    /// <summary>pushd / popd print the new stack on one line after a successful change, as bash does.</summary>
+    internal static void PrintStack(PSCmdlet cmdlet)
+        => cmdlet.WriteObject(BashRuntime.NewBashObject(string.Join(' ', StackEntries(cmdlet, false))));
 
     /// <summary>
     /// <c>$HOME[/rest]</c> as <c>~[/rest]</c>, only at a directory boundary (<c>/tmp/oil_tests</c> is not under

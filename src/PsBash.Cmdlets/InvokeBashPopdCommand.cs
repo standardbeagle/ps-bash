@@ -87,6 +87,7 @@ public sealed class InvokeBashPopdCommand : PSCmdlet
                 for ($i = 0; $i -le $n; $i++) { Pop-Location -Stack -ErrorAction SilentlyContinue }",
                 n);
             SyncProcessWorkingDirectory();
+            InvokeBashDirsCommand.PrintStack(this);
             return;
         }
 
@@ -95,6 +96,7 @@ public sealed class InvokeBashPopdCommand : PSCmdlet
         {
             InvokeCommand.InvokeScript("Pop-Location");
             SyncProcessWorkingDirectory();
+            InvokeBashDirsCommand.PrintStack(this);
         }
         catch (System.Management.Automation.RuntimeException ex)
         {
