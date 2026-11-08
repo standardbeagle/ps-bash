@@ -16,6 +16,14 @@ public class IndirectArrayElementTests
         Assert.DoesNotContain(".Keys", ps);
     }
 
+    // A sparse/assoc table is an IDictionary: `@($table)` would wrap it as ONE element, so a slice must read .Values.
+    [Fact] public void Transpile_ArraySlice_ReadsDictionaryValuesNotTheWrapper()
+    {
+        var ps = T("echo \"${a[@]: -1}\"");
+        Assert.Contains("IDictionary", ps);
+        Assert.Contains(".Values", ps);
+    }
+
     [Fact] public void Transpile_IndirectKeysForm_StillListsKeys() => Assert.Contains(".Keys", T("echo \"${!a[@]}\""));
 
     [Theory]

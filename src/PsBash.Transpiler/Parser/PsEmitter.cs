@@ -8120,9 +8120,10 @@ public static partial class PsEmitter
         // elements instead of the empty slice bash produces. The scriptblock
         // normalizes a negative offset (from the end), clamps to [0, Count], and
         // yields @() whenever the resulting count is <= 0 so no reversed range forms.
-        var sb = new StringBuilder("& { $__psbA = @(");
+        // A sparse or associative table is a dictionary: slice its VALUES, not the one-element wrapper `@($table)` makes.
+        var sb = new StringBuilder("& { $__psbS = ");
         sb.Append(arrayVar);
-        sb.Append("); $__psbO = ").Append(offset).Append("; ");
+        sb.Append("; $__psbA = @(if ($__psbS -is [System.Collections.IDictionary]) { $__psbS.Values } else { $__psbS }); $__psbO = ").Append(offset).Append("; ");
         if (positional) sb.Append("if ($__psbO -gt 0) { $__psbO-- }; ");   // $@ counts from 1
         // A negative offset reaching before the first element selects nothing (`${a[@]: -5}` of 4 elements is empty).
         sb.Append("if ($__psbO -lt 0) { $__psbO = $__psbA.Count + $__psbO; if ($__psbO -lt 0) { $__psbO = $__psbA.Count } }; ");
