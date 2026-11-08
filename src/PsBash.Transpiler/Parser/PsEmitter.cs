@@ -108,6 +108,10 @@ public static partial class PsEmitter
     [ThreadStatic]
     private static HashSet<string>? _intVars;
 
+    /// <summary>Names declared <c>declare -A</c> in the script being emitted: a later <c>a=(k v ...)</c> is key/value pairs (bash 5.1+).</summary>
+    [ThreadStatic]
+    private static HashSet<string>? _assocVars;
+
     /// <summary>Names declared <c>declare -l</c> (false) / <c>declare -u</c> (true): later assignments are case-converted.</summary>
     [ThreadStatic]
     private static Dictionary<string, bool>? _caseVars;
@@ -626,6 +630,8 @@ public static partial class PsEmitter
         var priorErrexit = _errexitMode;
         var priorExempt = _errexitExemptDepth;
         var priorIntVars = _intVars;
+        var priorAssocVars = _assocVars;
+        _assocVars = new HashSet<string>(StringComparer.Ordinal);
         var priorCaseVars = _caseVars;
         _caseVars = new Dictionary<string, bool>(StringComparer.Ordinal);
         _intVars = new HashSet<string>(StringComparer.Ordinal);
@@ -674,6 +680,7 @@ public static partial class PsEmitter
         {
             _context = prior;
             _intVars = priorIntVars;
+            _assocVars = priorAssocVars;
             _caseVars = priorCaseVars;
             _readonlyVars = priorReadonly;
             _namerefs = priorNamerefs;
@@ -3248,21 +3255,28 @@ public static partial class PsEmitter
             // Array append:     arr+=('x')  -> $arr += @('x')
             if (pair.ArrayValue is not null)
             {
-                if (pair.Op == AssignOp.Equal && TryEmitAssocLiteral(pair.ArrayValue, out var assoc))
+                if (cmd.IsAssoc) _assocVars?.Add(pair.Name);
+                if (pair.Op is AssignOp.Equal or AssignOp.PlusEqual && TryEmitAssocLiteral(pair.ArrayValue, out var assoc))
                 {
-                    sb.Append(ArrayWriteTarget(pair.Name)).Append(" = ").Append(assoc);
+                    // `a+=([k]=v)` merges into the existing table (a changed value keeps its place, a new key joins).
+                    sb.Append(ArrayWriteTarget(pair.Name)).Append(" = ");
+                    sb.Append(pair.Op == AssignOp.PlusEqual
+                        ? "[PsBash.Cmdlets.BashAssoc]::Merge(" + ArrayWriteTarget(pair.Name) + ", " + assoc + ")"
+                        : assoc);
                     continue;
                 }
                 // `declare -A m=()` is an EMPTY ASSOCIATIVE array, not an empty indexed one.
                 if (cmd.IsAssoc && pair.Op == AssignOp.Equal && pair.ArrayValue.Elements.IsEmpty)
                 {
-                    sb.Append(ArrayWriteTarget(pair.Name)).Append(" = @{}");
+                    sb.Append(ArrayWriteTarget(pair.Name)).Append(" = [PsBash.Cmdlets.BashAssoc]::new()");
                     continue;
                 }
+                // `declare -A a; a=(k v k2 v2)` (bash 5.1+): bare words are key/value pairs, a lone last key gets "".
+                bool wordsArePairs = pair.Op == AssignOp.Equal && _assocVars?.Contains(pair.Name) == true;
                 sb.Append(ArrayWriteTarget(pair.Name));
                 // `a+=(x)` goes through Add-BashArray: a sparse array appends after its highest subscript,
                 // which PowerShell's own `+=` cannot do on a dictionary.
-                sb.Append(pair.Op == AssignOp.PlusEqual ? " = Add-BashArray " + ArrayWriteTarget(pair.Name) + " @(" : " = @(");
+                sb.Append(pair.Op == AssignOp.PlusEqual ? " = Add-BashArray " + ArrayWriteTarget(pair.Name) + " @(" : wordsArePairs ? " = [PsBash.Cmdlets.BashAssoc]::FromWords(@(" : " = @(");
                 // A glob element (`arr=(*.txt)`) expands to ZERO or more elements, which the comma
                 // form cannot splice (`'a',@('b','c')` is two elements). Such a list is emitted as
                 // `@( item; item; ... )`, whose statements each enumerate into one flat array. An unquoted `$x` /
@@ -3283,7 +3297,7 @@ public static partial class PsEmitter
                     // for a "$x" element and produced unbalanced quotes for $'a\'b' elements.
                     sb.Append(EmitAssignmentValue(elem));
                 }
-                sb.Append(')');
+                sb.Append(wordsArePairs ? "))" : ")");
                 continue;
             }
 
@@ -3780,6 +3794,11 @@ public static partial class PsEmitter
             else if (val is not null && !val.StartsWith('-')) varName = val;
             else if (val is null && TrySplitInitializer(word, out var n, out var v)) { exprName = n; exprValue = v; }
         }
+        if (isAssoc && !isPrint && _assocVars is not null)
+        {
+            string? assocName = exprName ?? (varName is null ? null : varName.Split('=')[0]);
+            if (assocName is not null && IsValidVarName(assocName)) _assocVars.Add(assocName);
+        }
         if (!isPrint && !isAssoc && _intVars is not null && cmd.Words.Skip(1).Any(w => GetLiteralValue(w) == "-i"))
         {
             string? intName = exprName ?? (varName is null ? null : varName.Split('=')[0]);
@@ -3851,7 +3870,7 @@ public static partial class PsEmitter
             string rawVal = varName[(eq + 1)..];
             if (isAssoc)
             {
-                result = "$global:" + declName + " = @{}";
+                result = "$global:" + declName + " = [PsBash.Cmdlets.BashAssoc]::new()";
                 return true;
             }
             if (isInt)
@@ -3872,7 +3891,7 @@ public static partial class PsEmitter
         if (isAssoc)
         {
             // Re-declaring an existing associative array keeps its entries (bash: `declare -A d` twice).
-            result = "if ($global:" + varName + " -isnot [System.Collections.IDictionary]) { $global:" + varName + " = @{} }";
+            result = "if ($global:" + varName + " -isnot [System.Collections.IDictionary]) { $global:" + varName + " = [PsBash.Cmdlets.BashAssoc]::new() }";
             return true;
         }
         result = isInt ? "$env:" + varName + " = '0'"
@@ -5259,9 +5278,9 @@ public static partial class PsEmitter
             if (key.Length == 0 || key.All(char.IsDigit)) return false;
             if (key.Length >= 2 && key[0] is '\'' or '"' && key[^1] == key[0]) key = key[1..^1];
             if (head.Length > 0) parts = parts.Insert(0, new WordPart.Literal(head));
-            entries.Add(PsBuild.SingleQuote(key) + " = " + EmitAssignmentValue(new CompoundWord(parts)));
+            entries.Add(PsBuild.SingleQuote(key) + ", (" + EmitAssignmentValue(new CompoundWord(parts)) + ")");
         }
-        literal = "@{ " + string.Join("; ", entries) + " }";
+        literal = "[PsBash.Cmdlets.BashAssoc]::FromPairs(" + string.Join(", ", entries) + ")";   // bash's key order and case-sensitive keys, not a @{} literal
         return true;
     }
 

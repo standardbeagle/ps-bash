@@ -10,11 +10,13 @@ leaves `$?` = 1; the next line runs. ps-bash only sets `$?` = 1 and carries on i
 per-top-level-list catch emitted only for lists that contain an arithmetic expansion (about ten emit sites call
 `Invoke-BashArith`); not started. `${x?msg}` already ends the script via `BashParamErrorException`.
 
-## Associative array iteration order (assign-extended `declare -p arr`)
+## Associative array iteration order (implemented)
 
-bash walks its hash table (FNV-1 hash over 1024 buckets, newest entry first in a bucket), so `declare -A a=([a]=1
-[b]=2 [c]=3)` prints `c b a`. ps-bash keeps insertion order. Matching it means emulating that table for `declare -p`,
-`${!A[@]}` and `${A[@]}`; scripts must not depend on the order, so this is low priority.
+Associative arrays are `PsBash.Cmdlets.BashAssoc`: keys are case-sensitive and enumerate in bash 5.2's own order
+(1024 buckets, FNV-1 over the key bytes with signed-char sign extension, newest key first inside a bucket, an existing
+key keeps its place), so `${!A[@]}`, `${A[@]}`, `for k in "${!A[@]}"` and `declare -p A` list keys as bash does.
+Verified against the oracle (`AssociativeArrayTests`: random keys, non-ASCII, delete and re-add, 60 keys). Not covered:
+bash's table never rehashes, so any bash build that changes `ASSOC_HASH_BUCKETS` would reorder.
 
 ## Job start skew (background wait -n)
 

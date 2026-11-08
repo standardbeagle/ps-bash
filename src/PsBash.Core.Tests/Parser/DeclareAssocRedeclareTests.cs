@@ -9,6 +9,6 @@ public class DeclareAssocRedeclareTests
     {
         var ps = PsEmitter.Transpile("declare -A d")!;
         Assert.Contains("-isnot", ps);
-        Assert.Contains("@{}", ps);
+        Assert.Contains("BashAssoc", ps);
     }
 }

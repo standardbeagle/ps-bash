@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 91
+stdout-length: 67
+stderr-length: 0
+==== SCRIPT ====
+declare -A a=([apple]=red [orange]=orange); a+=([lemon]=yellow [apple]=green); declare -p a
+==== STDOUT ====
+declare -A a=([orange]="orange" [lemon]="yellow" [apple]="green" )
+
+==== STDERR ====
+

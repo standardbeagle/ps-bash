@@ -29,7 +29,6 @@ declare -A assoc=([k1]="foo" [k2]="spam eggs" )
 declare -A assoc=([foo]="spam eggs" )
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array-assoc array-assoc (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Can initialize assoc array with the "(key value ...)" sequence
@@ -43,7 +42,6 @@ status=0
 declare -A A=([3]="" [1]="2" )
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array-assoc array-assoc (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### create empty assoc array, put, then get
@@ -751,7 +749,6 @@ lemon is yellow
 banana is yellow
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array-assoc array-assoc (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### BashAssoc ${a[@]@Q}
@@ -768,5 +765,4 @@ echo "[${a[*]@Q}]"
 ['[]*?' '()<>&|' '"' ''\'''\''']
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array-assoc array-assoc (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10

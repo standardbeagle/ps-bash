@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 71
+stdout-length: 231
+stderr-length: 0
+==== SCRIPT ====
+declare -A m; for i in $(seq 1 60); do m[k$i]=$i; done; echo "${!m[@]}"
+==== STDOUT ====
+k28 k29 k22 k23 k20 k21 k26 k27 k24 k25 k59 k58 k53 k52 k51 k50 k57 k56 k55 k54 k8 k9 k4 k5 k6 k7 k1 k2 k3 k39 k38 k35 k34 k37 k36 k31 k30 k33 k32 k60 k48 k49 k40 k41 k42 k43 k44 k45 k46 k47 k17 k16 k15 k14 k13 k12 k11 k10 k19 k18
+
+==== STDERR ====
+

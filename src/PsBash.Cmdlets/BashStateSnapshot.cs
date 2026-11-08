@@ -112,6 +112,13 @@ public static class BashStateSnapshot
         }
         if (depth >= MaxDepth) return PsBuild.SingleQuote(raw.ToString() ?? "");
 
+        if (raw is BashAssoc assoc)
+        {
+            // Replayed oldest-first so the rebuilt table enumerates in the same (bash hash) order.
+            var args = new List<string>();
+            foreach (var kv in assoc.ReplayOrder()) { args.Add(PsBuild.SingleQuote(kv.Key)); args.Add(Literal(kv.Value, depth + 1)); }
+            return "[PsBash.Cmdlets.BashAssoc]::FromPairs(" + string.Join(", ", args) + ")";
+        }
         if (raw is IDictionary d)
         {
             var sb = new StringBuilder(raw is System.Collections.Specialized.IOrderedDictionary ? "[ordered]@{" : "@{");

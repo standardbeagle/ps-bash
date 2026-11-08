@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 115
+stdout-length: 28
+stderr-length: 0
+==== SCRIPT ====
+declare -A m; for k in a b c d e f; do m[$k]=1; done; unset 'm[c]'; m[c]=2; m[g]=3; echo "${!m[@]}"; echo "${m[@]}"
+==== STDOUT ====
+g f e d c b a
+3 1 1 1 2 1 1
+
+==== STDERR ====
+

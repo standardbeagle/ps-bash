@@ -169,7 +169,7 @@ public class BashTranspilerTests
     public void Transpile_DeclareAssocEmptyInitializer_IsHashtable()
     {
         var result = BashTranspiler.Transpile("declare -A m=()");
-        Assert.Contains("= @{}", result);
+        Assert.Contains("= [PsBash.Cmdlets.BashAssoc]::new()", result);
     }
 
     // #4: case arms emitted no break, so PowerShell's switch ran EVERY matching

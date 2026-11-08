@@ -299,9 +299,9 @@ public class PsEmitterTests
     }
 
     [Theory]
-    [InlineData("declare -A a=(['a+1']=c)", "'a+1' = ")]
-    [InlineData("declare -A a=([\"q r\"]=2)", "'q r' = ")]
-    [InlineData("declare -A a=([plain]=v ['k']=w)", "'k' = ")]
+    [InlineData("declare -A a=(['a+1']=c)", "'a+1', (")]
+    [InlineData("declare -A a=([\"q r\"]=2)", "'q r', (")]
+    [InlineData("declare -A a=([plain]=v ['k']=w)", "'k', (")]
     public void Transpile_AssocLiteralWithQuotedKey_StoresTheKeyWithoutItsQuotes(string src, string entry)
     {
         // `['a+1']=c` stored the key as 'a+1' WITH the quotes, so `${a[a+1]}` never found it.
@@ -4609,7 +4609,7 @@ public class PsEmitterTests
     public void Transpile_DeclareAssociativeArray_EmitsHashtable()
     {
         var result = PsEmitter.Transpile("declare -A map");
-        Assert.Equal("if ($global:map -isnot [System.Collections.IDictionary]) { $global:map = @{} }", result);
+        Assert.Equal("if ($global:map -isnot [System.Collections.IDictionary]) { $global:map = [PsBash.Cmdlets.BashAssoc]::new() }", result);
     }
 
     [Fact]

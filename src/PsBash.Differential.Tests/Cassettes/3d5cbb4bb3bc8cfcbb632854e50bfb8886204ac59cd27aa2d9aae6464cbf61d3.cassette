@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 61
+stdout-length: 6
+stderr-length: 0
+==== SCRIPT ====
+declare -A m; m[a]=1; m[A]=2; echo "${#m[@]} ${m[a]} ${m[A]}"
+==== STDOUT ====
+2 1 2
+
+==== STDERR ====
+
