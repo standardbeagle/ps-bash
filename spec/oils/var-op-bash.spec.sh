@@ -238,7 +238,6 @@ hello1 hello2 hello3
 hello hello1 hello2 hello3
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-var-op-bash var-op-bash (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### ${var@a} for attributes

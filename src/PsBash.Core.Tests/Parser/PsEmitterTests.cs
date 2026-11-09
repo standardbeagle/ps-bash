@@ -960,7 +960,8 @@ public class PsEmitterTests
         var result = PsEmitter.Transpile("echo ${!FOO*}");
 
         Assert.Contains("Get-ChildItem env:", result);
-        Assert.Contains("-like 'FOO*'", result);
+        Assert.Contains("-clike 'FOO*'", result);
+        Assert.Contains("Get-Variable -Name 'FOO*'", result);
         Assert.DoesNotContain(".Keys", result);
     }
 
@@ -970,7 +971,8 @@ public class PsEmitterTests
         var result = PsEmitter.Transpile("echo ${!FOO@}");
 
         Assert.Contains("Get-ChildItem env:", result);
-        Assert.Contains("-like 'FOO*'", result);
+        Assert.Contains("-clike 'FOO*'", result);
+        Assert.Contains("Get-Variable -Name 'FOO*'", result);
     }
 
     [Fact]

@@ -7784,7 +7784,7 @@ public static partial class PsEmitter
 
         if (bvs.Suffix == "!names")
         {
-            string expr = $"@(Get-ChildItem env: | Where-Object {{ $_.Name -like '{bvs.Name}*' }} | ForEach-Object {{ $_.Name }})";
+            string expr = $"@(@(Get-ChildItem env: | Where-Object {{ $_.Name -clike '{bvs.Name}*' }} | ForEach-Object {{ $_.Name }}) + @(Get-Variable -Name '{bvs.Name}*' -ErrorAction SilentlyContinue | Where-Object {{ $_.Name -clike '{bvs.Name}*' -and $_.Options -eq 'None' -and ($_.Value -is [array] -or $_.Value -is [System.Collections.IDictionary]) -and $_.Name -cnotin 'args','input','Error','Matches','PSBoundParameters' }} | ForEach-Object {{ $_.Name }}) | Sort-Object -Unique -CaseSensitive)";
             return inDoubleQuote ? $"$({expr})" : expr;
         }
 
