@@ -45,4 +45,8 @@ public class EvalArrayScopeTests
     [Fact]
     public Task NumericCommandWord_IsCommandNotFound() => AssertOracle.EqualAsync(
         "{ 127; } 2>/dev/null\necho s=$?\n{ 0; } 2>/dev/null\necho s=$?");
+
+    [Fact]
+    public Task AssignmentShapedWord_ExpandsItsQuotedTail() => AssertOracle.EqualAsync(
+        "z=5\nset -- y=\"$z\" --o=\"a b\" plain\nprintf '%s|' \"$@\"; echo\na=(k=\"$z\" m); echo \"${a[@]}\"\nfor i in x q=\"$z\" r=1; do echo $i; done\neval echo y=\"$z\"\nx='~'; eval y=\"$x\"; [ \"$y\" != \"~\" ] && echo expanded");
 }

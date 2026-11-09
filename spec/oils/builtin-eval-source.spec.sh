@@ -107,7 +107,7 @@ FALSE
 TRUE
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-eval-source builtin-eval-source (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash platform-windows-paths Windows paths print as C:\... (drive letter, backslash); bash prints /tmp (intentional-differences.md, Platform: paths)
 ## timeout: 10
 
 #### Eval in bash does tilde expansion in array
@@ -132,7 +132,7 @@ FALSE
 TRUE
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-eval-source builtin-eval-source (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash platform-windows-paths Windows paths print as C:\... (drive letter, backslash); bash prints /tmp (intentional-differences.md, Platform: paths)
 ## timeout: 10
 
 #### source looks in PATH for files

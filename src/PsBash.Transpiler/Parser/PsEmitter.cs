@@ -1044,6 +1044,8 @@ public static partial class PsEmitter
         };
     }
 
+    private static readonly System.Text.RegularExpressions.Regex BarePrefixDoubleQuotedItem = new(@"^([A-Za-z0-9_.+/:@%^~=-]+)(""(?:[^""`]|`.)*"")$", System.Text.RegularExpressions.RegexOptions.Compiled);
+
     /// <summary>
     /// True when a word is a whole-array expansion that iterates once per element
     /// in a for-in list: bare <c>${arr[@]}</c>/<c>${arr[*]}</c> and quoted
@@ -1214,6 +1216,10 @@ public static partial class PsEmitter
         var tildeWord = TildeBarewordItem.Match(item);
         if (tildeWord.Success)
             return "(" + tildeWord.Groups[1].Value + " + '" + tildeWord.Groups[2].Value.Replace("'", "''") + "')";
+        // A bare prefix glued to a double-quoted part (`y="$x"`, `--opt="a b"`) is command-mode text: the quoted tail must still expand.
+        var gluedQuote = BarePrefixDoubleQuotedItem.Match(item);
+        if (gluedQuote.Success)
+            return "('" + gluedQuote.Groups[1].Value.Replace("'", "''") + "' + " + gluedQuote.Groups[2].Value + ")";
         if (c is '$' or '"' or '\'' or '(' or '@') return item;
         if (double.TryParse(item, System.Globalization.NumberStyles.Any,
             System.Globalization.CultureInfo.InvariantCulture, out _))
@@ -4609,6 +4615,7 @@ public static partial class PsEmitter
                     return EmitUnquotedSplitWordArray(w);
                 var emitted = EmitWord(w);
                 // Already quoted (starts with ' or "), a variable ($), subexpr ((), or array (@): pass through.
+                if (BarePrefixDoubleQuotedItem.IsMatch(emitted)) return FormatForItem(emitted);
                 if (emitted.Length > 0 && emitted[0] is '\'' or '"' or '$' or '(' or '@')
                     return emitted;
                 // Bare literal — wrap in single quotes.

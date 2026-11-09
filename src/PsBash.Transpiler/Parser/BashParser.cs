@@ -853,7 +853,7 @@ public sealed partial class BashParser
             Advance(); // consume "in"
             explicitIn = true;
 
-            while (Peek().Kind == BashTokenKind.Word
+            while (Peek().Kind is BashTokenKind.Word or BashTokenKind.AssignmentWord
                 && Peek().Value != "do"
                 && !IsCompoundDelimiter(Peek().Value))
             {
@@ -894,7 +894,7 @@ public sealed partial class BashParser
         if (Peek().Kind == BashTokenKind.Word && Peek().Value == "in")
         {
             Advance(); // consume "in"
-            while (Peek().Kind == BashTokenKind.Word
+            while (Peek().Kind is BashTokenKind.Word or BashTokenKind.AssignmentWord
                 && Peek().Value != "do"
                 && !IsCompoundDelimiter(Peek().Value))
             {

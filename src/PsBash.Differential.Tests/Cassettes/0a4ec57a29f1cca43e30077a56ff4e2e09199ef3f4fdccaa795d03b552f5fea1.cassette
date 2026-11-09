@@ -1,0 +1,25 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 196
+stdout-length: 48
+stderr-length: 0
+==== SCRIPT ====
+z=5
+set -- y="$z" --o="a b" plain
+printf '%s|' "$@"; echo
+a=(k="$z" m); echo "${a[@]}"
+for i in x q="$z" r=1; do echo $i; done
+eval echo y="$z"
+x='~'; eval y="$x"; [ "$y" != "~" ] && echo expanded
+==== STDOUT ====
+y=5|--o=a b|plain|
+k=5 m
+x
+q=5
+r=1
+y=5
+expanded
+
+==== STDERR ====
+
