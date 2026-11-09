@@ -3239,7 +3239,7 @@ public static partial class PsEmitter
             else if (cmd.Pairs.Length > 0 && cmd.Pairs[^1].ArrayValue is not null) text += "; $global:BashLastArg = " + PsBuild.SingleQuote(cmd.Pairs[^1].Name);
         }
         if (!_scriptReadsStatus || ContainsCommandSub(cmd)) return text;
-        if (cmd.Pairs.Any(p => _readonlyVars?.Contains(p.Name) == true || ResolveNameref(p.Name) != p.Name)) return text;
+        if (cmd.Pairs.Any(p => _readonlyVars?.Contains(p.Name.Contains('[') ? p.Name[..p.Name.IndexOf('[')] : p.Name) == true || ResolveNameref(p.Name) != p.Name)) return text;
         return text + "; $global:LASTEXITCODE = 0";
     }
 
@@ -7111,7 +7111,11 @@ public static partial class PsEmitter
     /// <see cref="IsPureUnquotedCommandSubWord"/>.</summary>
     private static bool IsUnquotedSplitWord(CompoundWord word)
         => IsPureUnquotedVarWord(word) || IsUnquotedPositionalListWord(word) || IsPureUnquotedCommandSubWord(word) || IsGlobWord(word)
-           || IsBraceGlobWord(word) || IsArrayValuedWord(word) || IsUnquotedDefaultAltWord(word) || IsUnquotedElementWord(word);
+           || IsBraceGlobWord(word) || IsArrayValuedWord(word) || IsUnquotedDefaultAltWord(word) || IsUnquotedElementWord(word) || IsUnquotedPositionalOpWord(word);
+
+    /// <summary>Bare <c>${@#a}</c> / <c>${*/x/y}</c> / <c>${@%d}</c>: the operator applies to each parameter, so the result is a list of words.</summary>
+    private static bool IsUnquotedPositionalOpWord(CompoundWord word)
+        => word.Parts is [WordPart.BracedVarSub { Name: "@" or "*", Suffix: { Length: > 0 } s }] && (s[0] is '^' or ',' || s.Length > 1 && s[0] is '/' or '%' or '#');
 
     /// <summary>Bare <c>$@</c> / <c>$*</c> (also <c>${@}</c>): every parameter, each split again on IFS and globbed.</summary>
     private static bool IsUnquotedPositionalListWord(CompoundWord word)
@@ -7205,7 +7209,9 @@ public static partial class PsEmitter
     };
 
     private static string EmitUnquotedSplitWordArray(CompoundWord word)
-        => IsQuotedArrayAllWord(word)
+        => IsUnquotedPositionalOpWord(word)
+            ? "@(" + EmitBracedVar((WordPart.BracedVarSub)word.Parts[0]) + " | ConvertTo-BashWords)"
+            : IsQuotedArrayAllWord(word)
             ? EmitQuotedArrayElements(((WordPart.DoubleQuoted)word.Parts[0]).Parts[0])
             : IsPlainBraceWord(word)
             ? "@(" + EmitBraceExpandedWord(word.Parts) + ")"
@@ -7988,6 +7994,14 @@ public static partial class PsEmitter
         // case, @-transform). Shared with array-element expansions like ${arr[0]##*/}.
         if (bvs.Name is "@" or "*" && EmitPositionalWordOp(bvs.Name, bvs.Suffix, inDoubleQuote, bvs.ArgWord) is { } posOp)
             return posOp;
+        // ${@#a} ${*/x/y} ${@%d} ${*^}: the operator applies to EACH parameter, then the words are joined (* quoted) or kept apart.
+        if (bvs.Name is "@" or "*" && bvs.Suffix.Length > 0 && (bvs.Suffix[0] is '^' or ',' || bvs.Suffix.Length > 1 && bvs.Suffix[0] is '/' or '%' or '#'))
+        {
+            string elem = EmitScalarSuffix("$__psbpe", bvs.Suffix, false, bvs.ArgWord) ?? "$__psbpe";
+            string list = "$(if ($null -ne $global:BashPositional -and $global:BashPositional.Count) { $global:BashPositional } else { $args })";
+            string each = $"@(@({list}) | ForEach-Object {{ $__psbpe = [string]$_; {elem} }})";
+            return !inDoubleQuote ? each : bvs.Name == "*" ? $"$((@({list}) | ForEach-Object {{ $__psbpe = [string]$_; {elem} }}) -join {PsBuild.IfsJoinSeparator})" : "$" + each[1..];
+        }
         return EmitScalarSuffix(varRef, bvs.Suffix, inDoubleQuote, bvs.ArgWord) ?? varRef;
     }
 
