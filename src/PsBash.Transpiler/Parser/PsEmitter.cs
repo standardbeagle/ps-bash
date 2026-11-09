@@ -140,6 +140,10 @@ public static partial class PsEmitter
     [ThreadStatic]
     private static HashSet<string>? _pendingNamerefs;
 
+    /// <summary>`a[2]` / `a[i+1]`: a nameref target that names one array element.</summary>
+    private static bool IsNamerefElementTarget(string target) =>
+        target.Length > 3 && target[^1] == ']' && target.IndexOf('[') is var lb and > 0 && IsValidVarName(target[..lb]);
+
     private static string ResolveNameref(string name)
     {
         for (int hops = 0; hops < 8 && _namerefs is not null && _namerefs.TryGetValue(name, out var target); hops++)
@@ -3233,7 +3237,8 @@ public static partial class PsEmitter
             }
             // `local -r x=1`: later writes to x in this function are refused (the set is restored when the function ends).
             if (cmd.IsLocal && cmd.IsReadonly) _readonlyVars?.Add(pair.Name);
-            string roBase = pair.Name.Contains('[') ? pair.Name[..pair.Name.IndexOf('[')] : pair.Name;
+            string roName = ResolveNameref(pair.Name); // a write through a nameref is a write to its target
+            string roBase = roName.Contains('[') ? roName[..roName.IndexOf('[')] : roName;
             if (!cmd.IsLocal && !cmd.IsExport && _readonlyVars?.Contains(roBase) == true)
             {
                 sb.Append("Write-Error ").Append(PsBuild.SingleQuote($"ps-bash: {roBase}: readonly variable"))
@@ -3323,6 +3328,9 @@ public static partial class PsEmitter
                 continue;
             }
 
+            // A nameref to an array element (`declare -n ref='a[2]'; ref=X`) writes that element.
+            if (!pair.Name.Contains('[') && ResolveNameref(pair.Name) is var elemTarget && IsNamerefElementTarget(elemTarget))
+                pair = pair with { Name = elemTarget };
             // Subscript assignment: map[key]=val -> $map['key'] = 'val'
             if (pair.Name.Contains('['))
             {
@@ -3866,8 +3874,16 @@ public static partial class PsEmitter
             result = PsBuild.SetStatus(0);
             return true;
         }
+        // `declare -n ref='a[2]'` (a quoted element target makes the word non-literal, so it arrives as name + value).
+        if (isNameref && !isPrint && exprName is not null && IsValidVarName(exprName) && exprValue is not null && _namerefs is not null
+            && ExtractSingleQuotedOrLiteralValue(exprValue) is { } elemRefTarget && IsNamerefElementTarget(elemRefTarget))
+        {
+            _namerefs[exprName] = elemRefTarget;
+            result = PsBuild.SetStatus(0);
+            return true;
+        }
         if (isNameref && varName is not null && varName.IndexOf('=') is var neq and > 0
-            && IsValidVarName(varName[..neq]) && IsValidVarName(varName[(neq + 1)..]) && _namerefs is not null)
+            && IsValidVarName(varName[..neq]) && (IsValidVarName(varName[(neq + 1)..]) || IsNamerefElementTarget(varName[(neq + 1)..])) && _namerefs is not null)
         {
             _namerefs[varName[..neq]] = varName[(neq + 1)..];
             result = PsBuild.SetStatus(0);
@@ -6847,6 +6863,14 @@ public static partial class PsEmitter
             return "''";
 
         name = ResolveNameref(name);
+        // `declare -n ref='a[2]'`: the nameref names an array element.
+        if (IsNamerefElementTarget(name))
+        {
+            int lb = name.IndexOf('[');
+            string elem = EmitBracedVar(new WordPart.BracedVarSub(name[..lb], name[lb..]), inDoubleQuote);
+            // Glued to a literal (`ref=$ref`) a bare `$a['2']` would expand only `$a`.
+            return !inDoubleQuote && elem.StartsWith('$') && !elem.StartsWith("$(") ? "$(" + elem + ")" : elem;
+        }
         // Loop variables emit as $var, not $env:var
         if (_loopVars is not null && _loopVars.Contains(name))
             return $"${name}";
@@ -8239,6 +8263,12 @@ public static partial class PsEmitter
         if (subscript.Length >= 2 && subscript[0] is '"' or '\'' && subscript[^1] == subscript[0]
             && subscript.AsSpan(1, subscript.Length - 2).IndexOfAny("$`\\\"'") < 0)
             subscript = subscript[1..^1];
+        // `${a[$(cmd) + 1]}`: a command substitution in the subscript is expanded first, then the result evaluated.
+        if (subscript.Contains("$(") || subscript.Contains('`'))
+        {
+            string dyn = FlattenPartsToDoubleQuotedString(BashParser.DecomposeWord(subscript));
+            return $"$(if ({arrayVar} -is [System.Collections.IDictionary]) {{ {dyn} }} else {{ [long](Invoke-BashArith {dyn}) }})";
+        }
         string key = PsBuild.SingleQuote(subscript);
         if (!System.Text.RegularExpressions.Regex.IsMatch(subscript, @"^[\w+\-*/% ()]+$"))
             return key;

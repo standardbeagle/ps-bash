@@ -346,7 +346,6 @@ ref=XX
 x=XX
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-nameref nameref (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### unset nameref
@@ -493,7 +492,6 @@ a=(zero one two three)
 echo ref=$ref
 ## stdout: ref=two
 ## status: 0
-## XFAIL ps-bash gap-oils-nameref nameref (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### a[expr] in nameref
@@ -504,7 +502,6 @@ a=(zero one two three)
 echo ref=$ref
 ## stdout: ref=three
 ## status: 0
-## XFAIL ps-bash gap-oils-nameref nameref (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### a[@] in nameref

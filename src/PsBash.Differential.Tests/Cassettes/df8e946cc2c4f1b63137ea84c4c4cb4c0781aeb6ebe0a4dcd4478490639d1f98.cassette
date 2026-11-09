@@ -1,0 +1,20 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 101
+stdout-length: 19
+stderr-length: 0
+==== SCRIPT ====
+x=X
+typeset -n -r ref=x
+ref=XX
+echo ref=$ref
+typeset -r x
+{ ref=XXX; } 2>/dev/null
+echo ref=$ref x=$x
+==== STDOUT ====
+ref=XX
+ref=XX x=XX
+
+==== STDERR ====
+
