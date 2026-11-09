@@ -204,7 +204,6 @@ __assoc[a]=b
 set | grep '^__'
 ## stdout: __assoc=([a]="b" ["k e y"]="v a l" )
 ## status: 0
-## XFAIL ps-bash gap-oils-sh-options sh-options (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### shopt -q

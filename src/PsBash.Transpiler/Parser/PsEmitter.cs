@@ -3242,6 +3242,7 @@ public static partial class PsEmitter
             if (!cmd.IsDeclare) text += "; $global:BashLastArg = ''";
             else if (cmd.Pairs.Length > 0 && cmd.Pairs[^1].ArrayValue is not null) text += "; $global:BashLastArg = " + PsBuild.SingleQuote(cmd.Pairs[^1].Name);
         }
+        if (text.Contains("circular name reference", StringComparison.Ordinal)) return text; // the refusal set status 1
         if (!_scriptReadsStatus || ContainsCommandSub(cmd)) return text;
         if (cmd.Pairs.Any(p => _readonlyVars?.Contains(p.Name.Contains('[') ? p.Name[..p.Name.IndexOf('[')] : p.Name) == true || ResolveNameref(p.Name) != p.Name)) return text;
         // An array literal whose glob fails under failglob ends the statement with status 1; keep it.
