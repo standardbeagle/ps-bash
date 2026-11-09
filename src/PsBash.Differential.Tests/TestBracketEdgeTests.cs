@@ -25,4 +25,8 @@ public class TestBracketEdgeTests
     [Fact]
     public Task BareAssignment_ResetsStatusToZero() => AssertOracle.EqualAsync(
         "false; y=${u-$y}; echo s1=$?\nfalse; z=1; echo s2=$?\nfalse; w=$(true); echo s3=$?\nfalse; x=$(false); echo s4=$?\nfalse; a=(1 2); echo s5=$?\nfalse && z=2; echo s6=$?\nset -e\nx=$(false) || true\n[ -n \"$APORTSDIR\" ] && true\nB=${_B-$B}\necho s7=$?");
+
+    [Fact]
+    public Task LocalExportDeclare_ResetStatusToZero() => AssertOracle.EqualAsync(
+        "f() { false; local q=1; echo s1=$?; false; local r; echo s2=$?; false; export Z=1; echo s3=$?; false; declare d=1; echo s4=$?; }\nf\nfalse; export Y=1; echo s5=$?");
 }

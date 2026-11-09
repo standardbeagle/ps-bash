@@ -69,7 +69,6 @@ public static class BashTranspiler
         => Guarded(() => TranspileCore(bashCommand, context));
 
     /// <summary>
-    /// <summary>
     /// <see cref="Transpile(string, TranspileContext)"/> for the text of an <c>eval</c> run inside a function:
     /// <paramref name="evalLocalNames"/> are the names that function declared <c>local</c> (an array it assigns is
     /// otherwise the shell's own, not a copy local to the eval).

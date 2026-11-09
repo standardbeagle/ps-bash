@@ -3218,7 +3218,7 @@ public static partial class PsEmitter
     private static string EmitShAssignmentStatement(Command.ShAssignment cmd)
     {
         string text = EmitShAssignment(cmd);
-        if (!_scriptReadsStatus || cmd.IsLocal || cmd.IsExport || ContainsCommandSub(cmd)) return text;
+        if (!_scriptReadsStatus || ContainsCommandSub(cmd)) return text;
         if (cmd.Pairs.Any(p => _readonlyVars?.Contains(p.Name) == true || ResolveNameref(p.Name) != p.Name)) return text;
         return text + "; $global:LASTEXITCODE = 0";
     }
