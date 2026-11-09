@@ -56,7 +56,6 @@ builtin export e='E'
 echo e=$e
 ## stdout: e=E
 ## status: 0
-## XFAIL ps-bash gap-oils-assign-deferred assign-deferred (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### 'command' prefix is allowed on assignments
@@ -69,7 +68,6 @@ r1=R1
 r2=R2
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-assign-deferred assign-deferred (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### is 'builtin' prefix and array allowed?  OSH is smarter

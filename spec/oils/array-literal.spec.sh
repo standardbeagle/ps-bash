@@ -11,7 +11,6 @@ echo "${a[4]}"
 /home/user:/home/user:/home/user
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array-literal array-literal (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Tilde expansions in RHS of [k]=v (BashAssoc)

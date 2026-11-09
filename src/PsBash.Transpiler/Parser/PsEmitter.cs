@@ -5385,6 +5385,9 @@ public static partial class PsEmitter
             if (key.Length == 0 || (!numericKeysAllowed && key.All(char.IsDigit))) return false;
             if (key.Length >= 2 && key[0] is '\'' or '"' && key[^1] == key[0]) key = key[1..^1];
             if (head.Length > 0) parts = parts.Insert(0, new WordPart.Literal(head));
+            // bash 5.2 leaves a tilde on the right of an associative `[key]=value` literal (an indexed one expands it).
+            if (parts.Any(p => p is WordPart.TildeSub))
+                parts = parts.Select(p => p is WordPart.TildeSub ts ? (WordPart)new WordPart.Literal("~" + ts.User + (ts.SlashConsumed ? "/" : "")) : p).ToImmutableArray();
             entries.Add(PsBuild.SingleQuote(key) + ", (" + EmitAssignmentValue(new CompoundWord(parts)) + ")");
         }
         literal = "[PsBash.Cmdlets.BashAssoc]::FromPairs(" + string.Join(", ", entries) + ")";   // bash's key order and case-sensitive keys, not a @{} literal

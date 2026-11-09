@@ -488,7 +488,17 @@ public sealed partial class BashParser
                 if (Peek().Kind is BashTokenKind.Word or BashTokenKind.AssignmentWord)
                 {
                     var wordToken = Advance();
-                    elements.Add(new CompoundWord(DecomposeWord(wordToken.Value)));
+                    // [k]=~ / [k]=a:~: the value of a subscripted element is an assignment value, so a tilde at its start
+                    // or after a : expands (bash), which a plain word decomposition would leave literal.
+                    var subscript = System.Text.RegularExpressions.Regex.Match(wordToken.Value, @"^\[[^\[\]]+\]=");
+                    if (subscript.Success && subscript.Length < wordToken.Value.Length)
+                    {
+                        var elemParts = DecomposeWord(subscript.Value).ToBuilder();
+                        elemParts.AddRange(DecomposeAssignmentValue(wordToken.Value[subscript.Length..]));
+                        elements.Add(new CompoundWord(elemParts.ToImmutable()));
+                    }
+                    else
+                        elements.Add(new CompoundWord(DecomposeWord(wordToken.Value)));
                 }
                 else
                 {
