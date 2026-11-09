@@ -664,6 +664,7 @@ public static partial class PsEmitter
         _scriptReadsStatus = priorReadsStatus || bash.Contains("$?") || bash.Contains("${?");
         var priorReadonly = _readonlyVars;
         _readonlyVars = new HashSet<string>(StringComparer.Ordinal);
+        _readonlyVars.Add("SHELLOPTS"); _readonlyVars.Add("BASHOPTS");
         var priorNamerefs = _namerefs;
         _namerefs = new Dictionary<string, string>(StringComparer.Ordinal);
         var priorLitAssigned = _litAssigned; var priorPendingNamerefs = _pendingNamerefs;

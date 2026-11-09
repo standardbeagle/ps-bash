@@ -8,7 +8,6 @@ echo status=$?
 # Setting a readonly variable in osh is a hard failure.
 ## stdout: status=1
 ## status: 0
-## XFAIL ps-bash gap-oils-sh-options-bash sh-options-bash (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### SHELLOPTS and BASHOPTS are non-empty
@@ -63,7 +62,6 @@ echo $?
 1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-sh-options-bash sh-options-bash (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -152,6 +150,6 @@ set +x
 echo SHELLOPTS=$SHELLOPTS
 ## stdout:
 ## status: 0
-## XFAIL ps-bash gap-oils-sh-options-bash sh-options-bash (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
+## XFAIL ps-bash gap-oils-sh-options-bash sh-options-bash (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## real-launcher

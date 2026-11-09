@@ -419,6 +419,13 @@ public static class PsBuild
         "$f = ''; if ($global:__BashErrexit) { $f += 'e' }; if ($global:__BashNoglob) { $f += 'f' }; $f += 'h'; "
         + "if ($global:__BashNounset) { $f += 'u' }; $f += 'B'; if ($global:__BashNoclobber) { $f += 'C' }; $f";
 
+    /// <summary>The value of <c>$SHELLOPTS</c>: the <c>set -o</c> options currently on, alphabetical, colon-joined.</summary>
+    public const string ShellOptsExpr =
+        "$o = @('braceexpand'); if ($global:__BashErrexit) { $o += 'errexit' }; $o += 'hashall'; $o += 'interactive-comments'; "
+        + "if ($global:__BashNoclobber) { $o += 'noclobber' }; if ($global:__BashNoglob) { $o += 'noglob' }; "
+        + "if ($global:__BashNounset) { $o += 'nounset' }; if ($global:__BashPipefail) { $o += 'pipefail' }; "
+        + "if ($global:__BashXtrace) { $o += 'xtrace' }; $o -join ':'";
+
     /// <summary>Source line of the statement being emitted; the ERR trap reads it as <c>$LINENO</c>.</summary>
     [ThreadStatic] public static int TrapLine;
 
@@ -868,6 +875,8 @@ public static class PsBuild
                 return "$(if ($null -ne $env:PS4) { $env:PS4 } else { '+ ' })";
             case "BASHPID":
                 return "$PID";
+            case "SHELLOPTS":
+                return "$(" + ShellOptsExpr + ")";
             case "EPOCHSECONDS":
                 return "$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())";
             case "EPOCHREALTIME":
