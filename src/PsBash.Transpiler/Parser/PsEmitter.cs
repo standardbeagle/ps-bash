@@ -303,7 +303,7 @@ public static partial class PsEmitter
     private static readonly HashSet<string> ErrexitNeutralBuiltins = new(StringComparer.Ordinal)
     {
         "export", "local", "declare", "typeset", "readonly", "set", "shift", "unset", "alias", "unalias",
-        "trap", "shopt", "return", "exit", "break", "continue", ":", "true",
+        "shopt", "return", "exit", "break", "continue", ":", "true",
     };
 
     /// <summary>

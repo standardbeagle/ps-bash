@@ -125,6 +125,19 @@ public sealed class InvokeBashTrapCommand : PSCmdlet
             resetMode = true;
             firstSignal = 1;
         }
+        else if (args.Length > 1 && IsUnsignedInteger(args[0]))
+        {
+            // "If ARG is absent or an unsigned integer, each SIGNAL_SPEC is reset": the integer is itself a signal spec.
+            action = null;
+            resetMode = true;
+            firstSignal = 0;
+        }
+        else if (args[0].Length > 1 && args[0][0] == '-' && args[0] != "--")
+        {
+            FileSystemHelpers.WriteBashError(this, $"trap: {args[0]}: invalid option");
+            FileSystemHelpers.SetLastExitCode(this, 2);
+            return;
+        }
         else
         {
             action = args[0];
@@ -147,7 +160,7 @@ public sealed class InvokeBashTrapCommand : PSCmdlet
         var signals = new List<string>();
         for (int i = firstSignal; i < args.Length; i++)
         {
-            if (NormalizeSignal(args[i]) is { } sig) { signals.Add(sig); continue; }
+            if (NormalizeSignal(args[i].Trim()) is { } sig) { signals.Add(sig); continue; }
             FileSystemHelpers.WriteBashError(this, $"trap: {args[i]}: invalid signal specification");
             FileSystemHelpers.SetLastExitCode(this, 1);
         }
@@ -196,6 +209,12 @@ public sealed class InvokeBashTrapCommand : PSCmdlet
                     slotName, TranspileAction(action!));
             }
         }
+    }
+
+    private static bool IsUnsignedInteger(string s)
+    {
+        s = s.Trim();
+        return s.Length > 0 && s.All(char.IsAsciiDigit);
     }
 
     /// <summary>The action is bash text (<c>$?</c>, <c>$((..))</c>, ...), so it runs transpiled; text that does not parse runs as written.</summary>

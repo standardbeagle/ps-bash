@@ -5701,7 +5701,7 @@ public class PsEmitterTests
     public void Transpile_TrapCommandErr_EmitsPassthrough()
     {
         var result = PsEmitter.Transpile("trap 'echo error' ERR");
-        Assert.Equal("Invoke-BashTrap 'echo error' ERR", result);
+        Assert.StartsWith("Invoke-BashTrap 'echo error' ERR", result);
     }
 
     [Fact]
