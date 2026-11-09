@@ -1384,6 +1384,25 @@ public sealed partial class BashParser
     /// Parse a brace group: <c>{ commands }</c>.
     /// Used for function bodies and standalone brace groups.
     /// </summary>
+    private int _braceDepth;
+
+    /// <summary>
+    /// A <c>}</c> after a command word is an argument in bash (<c>echo }</c>). Outside any brace group it always is.
+    /// Inside one, ps-bash keeps accepting <c>f() { echo hi }</c> (bash wants <c>; }</c>), so the <c>}</c> is an
+    /// argument only when the group is still closed afterwards: a terminator and then another <c>}</c> follow.
+    /// </summary>
+    private bool RBraceIsArgument()
+    {
+        if (_braceDepth == 0) return true;
+        int i = _pos + 1;
+        // `}x`: glued text makes it a word, never the closing brace.
+        if (i < _tokens.Count && _tokens[i].Kind == BashTokenKind.Word && _tokens[i].Position == _tokens[_pos].Position + 1)
+            return true;
+        bool sawTerminator = false;
+        while (i < _tokens.Count && _tokens[i].Kind is BashTokenKind.Semi or BashTokenKind.Newline) { sawTerminator = true; i++; }
+        return sawTerminator && i < _tokens.Count && _tokens[i].Kind == BashTokenKind.RBrace;
+    }
+
     private Command ParseBraceGroup()
     {
         if (Peek().Kind != BashTokenKind.LBrace)
@@ -1395,16 +1414,21 @@ public sealed partial class BashParser
 
         var commands = ImmutableArray.CreateBuilder<Command>();
 
-        while (true)
+        _braceDepth++;
+        try
         {
-            SkipTerminators();
-            if (Peek().Kind == BashTokenKind.Eof)
-                break;
-            if (Peek().Kind == BashTokenKind.RBrace)
-                break;
+            while (true)
+            {
+                SkipTerminators();
+                if (Peek().Kind == BashTokenKind.Eof)
+                    break;
+                if (Peek().Kind == BashTokenKind.RBrace)
+                    break;
 
-            commands.Add(ParseListStatement(() => Peek().Kind == BashTokenKind.RBrace, "ParseBraceGroup"));
+                commands.Add(ParseListStatement(() => Peek().Kind == BashTokenKind.RBrace, "ParseBraceGroup"));
+            }
         }
+        finally { _braceDepth--; }
 
         if (Peek().Kind != BashTokenKind.RBrace)
             throw MakeError(

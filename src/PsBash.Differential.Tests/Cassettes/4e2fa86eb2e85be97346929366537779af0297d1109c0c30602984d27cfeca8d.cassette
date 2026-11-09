@@ -1,0 +1,16 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 141
+stdout-length: 14
+stderr-length: 0
+==== SCRIPT ====
+arr=(); echo ${#arr[@]}; : ${arr[0]=x}; echo ${#arr[@]} ${arr[0]}; : ${arr[0]=y} ${arr[2]:=z}; echo "${arr[@]}"; : ${s=1} ${t:=2}; echo $s $t
+==== STDOUT ====
+0
+1 x
+x z
+1 2
+
+==== STDERR ====
+

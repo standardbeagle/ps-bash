@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 64
+stdout-length: 14
+stderr-length: 0
+==== SCRIPT ====
+echo -${undef:1:2}- -${undef:3}-; x=abcdef; echo ${x:1:2} ${x:2}
+==== STDOUT ====
+-- --
+bc cdef
+
+==== STDERR ====
+

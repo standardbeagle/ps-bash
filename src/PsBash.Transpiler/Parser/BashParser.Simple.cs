@@ -188,6 +188,15 @@ public sealed partial class BashParser
                 // `{` AFTER the command word is an ordinary argument (`echo a {`, `type -t {`); it is reserved only in command position.
                 words.Add(new CompoundWord(DecomposeWord(Advance().Value)));
             }
+            else if (kind == BashTokenKind.RBrace && words.Count > 0 && RBraceIsArgument())
+            {
+                // `}` AFTER the command word is an ordinary argument too (`echo }`, `echo }x`).
+                var token = Advance();
+                string braceText = token.Value;
+                while (Peek().Kind == BashTokenKind.Word && Peek().Position == token.Position + braceText.Length)
+                    braceText += Advance().Value;
+                words.Add(new CompoundWord(DecomposeWord(braceText)));
+            }
             else if (kind == BashTokenKind.Bang && words.Count > 0)
             {
                 // A `!` AFTER the command word is a literal argument, not negation:

@@ -1,0 +1,23 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 200
+stdout-length: 37
+stderr-length: 0
+==== SCRIPT ====
+set a b c; echo ${@:1:1}; echo ${@:2}; echo ${@: -1}; echo ${@:1}; echo "${@:2:2}"; echo ${@:5}; echo x ${@:9} y
+r=$(echo ${@:0:1}); echo ${r//"$0"/SHELL}; f() { echo ${@:2}; echo ${*:1:2}; }; f x y z
+==== STDOUT ====
+a
+b c
+c
+a b c
+b c
+
+x y
+SHELL
+y z
+x y
+
+==== STDERR ====
+

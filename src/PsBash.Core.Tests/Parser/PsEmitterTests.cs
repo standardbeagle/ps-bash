@@ -2142,7 +2142,7 @@ public class PsEmitterTests
         // Substring indices are clamped so an out-of-range slice yields "" rather
         // than throwing (bash is lenient where .NET Substring is strict).
         var result = PsEmitter.Transpile("echo ${c[1]:0:2}");
-        Assert.Contains("$c[1].Substring([Math]::Min(0, $c[1].Length)", result);
+        Assert.Contains("([string]$c[1]).Substring([Math]::Min(0, ([string]$c[1]).Length)", result);
     }
 
     [Fact]
@@ -5507,7 +5507,7 @@ public class PsEmitterTests
     public void Transpile_ParamSlice_EmitsSubstring()
     {
         var result = PsEmitter.Transpile("echo ${name:0:2}");
-        Assert.Contains("$env:name.Substring([Math]::Min(0, $env:name.Length)", result);
+        Assert.Contains("([string]$env:name).Substring([Math]::Min(0, ([string]$env:name).Length)", result);
     }
 
     [Fact]
@@ -5516,7 +5516,7 @@ public class PsEmitterTests
         // ${s: -2} (space disambiguates from the :-default operator) = last 2
         // chars; offset maps to Length - 2. Regression: was ignored, returning $s.
         var result = PsEmitter.Transpile("echo ${s: -2}");
-        Assert.Contains("Substring([Math]::Max(0, $env:s.Length - 2))", result);
+        Assert.Contains("Substring([Math]::Max(0, ([string]$env:s).Length - 2))", result);
     }
 
     [Fact]
@@ -6942,8 +6942,8 @@ public class PsEmitterTests
     // Oracle-verified index mapping: bash counts positionals from $1, but the
     // emitted array's index 0 already holds $1, so a POSITIVE offset shifts down
     // by one while a NEGATIVE offset (counting from the end) passes through.
-    [InlineData("echo \"${@:1}\"", "$__psbO = 0;")]
-    [InlineData("echo \"${@:2}\"", "$__psbO = 1;")]
+    [InlineData("echo \"${@:1}\"", "$__psbO = 1;")]
+    [InlineData("echo \"${@:2}\"", "$__psbO = 2;")]
     [InlineData("echo \"${@: -1}\"", "$__psbO = -1;")]
     [InlineData("echo \"${@: -2}\"", "$__psbO = -2;")]
     public void Transpile_PositionalSlice_MapsOffsetToArrayIndex(

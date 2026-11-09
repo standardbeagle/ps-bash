@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 51
+stdout-length: 8
+stderr-length: 0
+==== SCRIPT ====
+rbrace() { echo }; }; rbrace; { echo a; }; echo } {
+==== STDOUT ====
+}
+a
+} {
+
+==== STDERR ====
+

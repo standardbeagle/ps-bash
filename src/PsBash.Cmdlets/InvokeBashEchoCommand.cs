@@ -40,6 +40,8 @@ public sealed class InvokeBashEchoCommand : PSCmdlet
     protected override void EndProcessing()
     {
         var args = Arguments ?? Array.Empty<string>();
+        // An expansion to NO words (`echo ${@:5}` past the last parameter) binds as a null element: bash passes no word.
+        if (Array.IndexOf(args, null) >= 0) args = Array.FindAll(args, a => a is not null);
 
         // Direct-call decoy fired: the bare -e/-E was swallowed by the E switch
         // and is absent from Arguments. Recover its case from the invocation line

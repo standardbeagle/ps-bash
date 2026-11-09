@@ -52,7 +52,6 @@ echo $i $j
 rbrace() { echo }; }; rbrace
 ## stdout: }
 ## status: 0
-## XFAIL ps-bash gap-oils-func-parsing func-parsing (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### . in function name

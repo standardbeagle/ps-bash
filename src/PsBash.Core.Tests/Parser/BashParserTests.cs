@@ -2573,13 +2573,21 @@ public class BashParserTests
     // Unsupported grammar (the `time`/`coproc` keywords) and a bash syntax error (`x (keep)`:
     // "unexpected token `('") must fail LOUDLY. (Extglob `!(keep).txt` used to be the example;
     // it is a valid pattern word in argument position now — Parse_ExtGlobBangArgument_ParsesWholeScript.)
-    // So must a `}` argument: bash prints "hi }", but the lexer splits `}x`
-    // into two tokens and the emitter does not quote a bare `}`, so accepting it
-    // would trade a loud error for wrong output. The three other original repros
-    // are valid bash and are fixed at their root — see *_ParsesWholeScript below.
+    // A `}` argument (`echo hi }`) is valid bash and parses now - Parse_RBraceAfterCommandWord_IsAnArgument.
+    // The three other original repros are valid bash and are fixed at their root — see *_ParsesWholeScript below.
+    [Theory]
+    [InlineData("echo hi }; echo after", 2)]
+    [InlineData("rbrace() { echo }; }; rbrace", 2)]
+    [InlineData("echo }x; echo after", 2)]
+    public void Parse_RBraceAfterCommandWord_IsAnArgument(string input, int statements)
+        => Assert.Equal(statements, BashParser.ParseTopLevelWithPositions(input).Count);
+
+    [Fact]
+    public void Parse_BraceGroupClosedWithoutSemicolon_StillParses()
+        => Assert.IsType<Command.ShFunction>(Parse("greet() { echo hello }"));
+
     [Theory]
     [InlineData("echo a; time { echo hi; }; echo after")]
-    [InlineData("echo hi }; echo after")]
     [InlineData("rm -f x (keep); echo after")]
     [InlineData("coproc { echo x; }; echo after")]
     public void Parse_LeftoverTokenAfterStatement_ThrowsInsteadOfDroppingTail(string input)
@@ -2589,7 +2597,6 @@ public class BashParserTests
 
     [Theory]
     [InlineData("echo a; time { echo hi; }; echo after")]
-    [InlineData("echo hi }; echo after")]
     [InlineData("rm -f x (keep); echo after")]
     [InlineData("coproc { echo x; }; echo after")]
     public void ParseTopLevelWithPositions_LeftoverTokenAfterStatement_ThrowsInsteadOfDroppingTail(string input)

@@ -87,7 +87,6 @@ echo -done-
 # mksh doesn't respect nounset!
 ## stdout: --
 ## status: 1
-## XFAIL ps-bash gap-oils-var-op-slice var-op-slice (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Slice UTF-8 String
@@ -162,7 +161,6 @@ result=$(echo ${@:0:1})
 echo ${result//"$0"/'SHELL'}
 ## stdout: SHELL
 ## status: 0
-## XFAIL ps-bash gap-oils-var-op-slice var-op-slice (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Permutations of implicit begin and length

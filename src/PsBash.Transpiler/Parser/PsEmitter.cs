@@ -7953,7 +7953,7 @@ public static partial class PsEmitter
                 ? $"$(@({posQ}) -join {PsBuild.IfsJoinSeparator})"
                 : $"$({posQ})";
         }
-        string varRef = EmitSimpleVar(bvs.Name, strict: bvs.Suffix.StartsWith("/", StringComparison.Ordinal) || bvs.Suffix == "#L");
+        string varRef = EmitSimpleVar(bvs.Name, strict: bvs.Suffix.StartsWith("/", StringComparison.Ordinal) || bvs.Suffix == "#L" || IsSliceSuffix(bvs.Suffix));
 
         // Name-prefix expansion: ${!prefix*} / ${!prefix@} -> the NAMES of
         // variables starting with `prefix`. ps-bash models bash variables as
@@ -8068,6 +8068,20 @@ public static partial class PsEmitter
     // reference. Keeping this independent of the variable name lets ${arr[0]##*/},
     // ${arr[i]:-x}, etc. reuse the exact same operator semantics as ${VAR##*/}.
     /// <summary>`${x:?msg}` / `${x?msg}`: throw the typed error a subshell scope catches (bash ends only the subshell).</summary>
+    /// <summary><c>${x:1}</c> / <c>${x: -1:2}</c> (a substring), as opposed to <c>${x:-d}</c> <c>${x:=d}</c> <c>${x:+d}</c> <c>${x:?m}</c>.</summary>
+    private static bool IsSliceSuffix(string suffix)
+        => suffix.Length > 1 && suffix[0] == ':' && suffix[1] is not ('-' or '=' or '+' or '?');
+
+    /// <summary>The assigning half of <c>${x=d}</c> / <c>${x:=d}</c>. An array element (<c>${arr[0]=d}</c>) goes through
+    /// <c>Set-BashElement</c>, which grows the array; a plain PowerShell index assignment throws past the end.</summary>
+    private static string AssignDefault(string varRef, string value)
+    {
+        var m = System.Text.RegularExpressions.Regex.Match(varRef, @"^\$([A-Za-z_]\w*)\[(.+)\]$");
+        if (!m.Success) return $"({varRef} = {value})";
+        string arr = "$" + m.Groups[1].Value;
+        return $"$($__psbV = {value}; {arr} = Set-BashElement {arr} {m.Groups[2].Value} $__psbV; $__psbV)";
+    }
+
     private static string ParamErrorThrow(string varRef, string argVal)
     {
         var name = varRef.StartsWith("$env:", StringComparison.Ordinal) ? varRef[5..].Trim('{', '}', '(', ')') : "";
@@ -8154,7 +8168,7 @@ public static partial class PsEmitter
             return $"{open}{varRef} ? {varRef} : {ArgVal(suffix[2..])})";
         // Assign default: ${VAR:=default}
         if (suffix.StartsWith(":="))
-            return $"{open}{varRef} ? {varRef} : ({varRef} = {ArgVal(suffix[2..])}))";
+            return $"{open}{varRef} ? {varRef} : {AssignDefault(varRef, ArgVal(suffix[2..]))})";
         // Use alternative: ${VAR:+alt}
         if (suffix.StartsWith(":+"))
             return $"{open}{varRef} ? {ArgVal(suffix[2..])} : {q}{q})";
@@ -8170,7 +8184,7 @@ public static partial class PsEmitter
         if (suffix.StartsWith("-"))
             return $"{open}{varRef} ?? {ArgVal(suffix[1..])})";
         if (suffix.StartsWith("="))
-            return $"{open}{varRef} ?? ({varRef} = {ArgVal(suffix[1..])}))";
+            return $"{open}{varRef} ?? {AssignDefault(varRef, ArgVal(suffix[1..]))})";
         if (suffix.StartsWith("+"))
             // Set-but-EMPTY counts as set here (an array element can hold ""), so test for $null, not truthiness.
             return $"{open}$null -ne {varRef} ? {ArgVal(suffix[1..])} : {q}{q})";
@@ -8289,15 +8303,16 @@ public static partial class PsEmitter
                 var sliceParts = sliceBody.Split(':', 2);
                 if (int.TryParse(sliceParts[0].Trim(), out int offset))
                 {
-                    string len = $"{varRef}.Length";
+                    string sv = "([string]" + varRef + ")";   // an unset variable slices as the empty string
+                    string len = $"{sv}.Length";
                     string start = offset >= 0
                         ? $"[Math]::Min({offset}, {len})"
                         : $"[Math]::Max(0, {len} - {-offset})";
                     string? expr = null;
                     if (sliceParts.Length == 1)
-                        expr = $"{varRef}.Substring({start})";
+                        expr = $"{sv}.Substring({start})";
                     else if (int.TryParse(sliceParts[1].Trim(), out int length) && length >= 0)
-                        expr = $"{varRef}.Substring({start}, [Math]::Min({length}, {len} - ({start})))";
+                        expr = $"{sv}.Substring({start}, [Math]::Min({length}, {len} - ({start})))";
                     if (expr is not null)
                         return inDoubleQuote ? $"$({expr})" : expr;
                 }
@@ -8383,31 +8398,13 @@ public static partial class PsEmitter
     /// the positional array. Returns null when the suffix is not a numeric slice, so
     /// the caller degrades instead of emitting something broken.
     /// <para>
-    /// One index adjustment, oracle-verified: bash counts positional parameters from
-    /// <c>$1</c>, so <c>${@:1}</c> is the WHOLE list, while the emitted array's index
-    /// 0 already holds <c>$1</c>. A positive offset therefore shifts down by one. A
-    /// NEGATIVE offset counts from the end in both models and passes through
-    /// unchanged (<c>${@: -1}</c> = last). <c>${@:0}</c> is the one lossy case: bash
-    /// prepends <c>$0</c> (the script name), which the positional array does not
-    /// carry, so it degrades to the whole list rather than inventing an element.
+    /// Oracle-verified indexing: bash slices the list <c>$0 $1 $2 ...</c>, so <c>${@:1}</c> is the whole
+    /// positional list and <c>${@:0}</c> starts with <c>$0</c>. <see cref="EmitArraySlice"/> puts <c>$0</c>
+    /// in front when <c>positional</c> is set; a negative offset counts from the end (<c>${@: -1}</c> = last).
     /// </para>
     /// </summary>
     private static string? EmitPositionalSlice(string suffix, bool inDoubleQuote)
-    {
-        var body = suffix[1..].Trim();
-        var parts = body.Split(':', 2);
-        if (!int.TryParse(parts[0].Trim(), out int offset)
-            || (parts.Length == 2 && !int.TryParse(parts[1].Trim(), out _)))
-            return EmitArraySlice(PsBuild.BuildPositionalExpansion("@"), suffix, inDoubleQuote, positional: true);
-
-        int shifted = offset > 0 ? offset - 1 : offset;
-        string op = parts.Length == 2
-            ? $":{shifted}:{parts[1].Trim()}"
-            : $":{shifted}";
-
-        return EmitArraySlice(
-            PsBuild.BuildPositionalExpansion("@"), op, inDoubleQuote);
-    }
+        => EmitArraySlice(PsBuild.BuildPositionalExpansion("@"), suffix, inDoubleQuote, positional: true);
 
     // `${a[$i]}`: an associative array uses the value as the key; an indexed array evaluates it as an arithmetic
     // expression (`code='1+2'; ${a[$code]}` is a[3]). A plain integer skips the evaluator.
@@ -8478,7 +8475,8 @@ public static partial class PsEmitter
         sb.Append("; if ($__psbS -is [PsBash.Cmdlets.BashSparseArray]) { $__psbS.Slice(").Append(offset).Append(", ")
           .Append(length is null ? "-1" : "[Math]::Max(0, " + length + ")").Append(") } else { ");
         sb.Append("$__psbA = @(if ($__psbS -is [System.Collections.IDictionary]) { $__psbS.Values } else { $__psbS }); $__psbO = ").Append(offset).Append("; ");
-        if (positional) sb.Append("if ($__psbO -gt 0) { $__psbO-- }; ");   // $@ counts from 1
+        // ${@:0} starts at $0 and ${@:1} at $1: slice the list with $0 in front.
+        if (positional) sb.Append("$__psbA = @(").Append(PsBuild.TryMapSpecialVar("0", braced: false, inDoubleQuote: false)).Append(") + $__psbA; ");
         // A negative offset reaching before the first element selects nothing (`${a[@]: -5}` of 4 elements is empty).
         sb.Append("if ($__psbO -lt 0) { $__psbO = $__psbA.Count + $__psbO; if ($__psbO -lt 0) { $__psbO = $__psbA.Count } }; ");
         sb.Append("$__psbO = [Math]::Max(0, [Math]::Min($__psbO, $__psbA.Count)); ");

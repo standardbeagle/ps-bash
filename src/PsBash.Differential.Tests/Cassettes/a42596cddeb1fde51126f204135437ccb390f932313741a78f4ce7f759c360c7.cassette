@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 85
+stdout-length: 9
+stderr-length: 0
+==== SCRIPT ====
+( set -o nounset; echo -${undef:1:2}-; echo not-reached ) 2>/dev/null; echo status=$?
+==== STDOUT ====
+status=1
+
+==== STDERR ====
+
