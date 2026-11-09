@@ -21,4 +21,8 @@ public class TestBracketEdgeTests
     [Fact]
     public Task OpenBrace_AfterCommandWord_IsAnArgument() => AssertOracle.EqualAsync(
         "echo a {\necho { b\ntype -t for time ! fi do {");
+
+    [Fact]
+    public Task BareAssignment_ResetsStatusToZero() => AssertOracle.EqualAsync(
+        "false; y=${u-$y}; echo s1=$?\nfalse; z=1; echo s2=$?\nfalse; w=$(true); echo s3=$?\nfalse; x=$(false); echo s4=$?\nfalse; a=(1 2); echo s5=$?\nfalse && z=2; echo s6=$?\nset -e\nx=$(false) || true\n[ -n \"$APORTSDIR\" ] && true\nB=${_B-$B}\necho s7=$?");
 }

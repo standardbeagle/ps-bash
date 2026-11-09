@@ -126,6 +126,8 @@ public static partial class PsEmitter
     // Names a literal `readonly NAME` made read-only earlier in this script: a later plain assignment is refused.
     [ThreadStatic]
     private static HashSet<string>? _readonlyVars;
+    /// <summary>True when the script text reads `$?` somewhere: only then does a bare assignment need to reset the status to 0.</summary>
+    [ThreadStatic] private static bool _scriptReadsStatus;
 
     /// <summary><c>declare -n ref=target</c> in the script being emitted: <c>ref</c> reads and writes <c>target</c>.
     /// Static only (a literal target, resolved at emit time); a nameref set at run time is not modelled.</summary>
@@ -611,7 +613,7 @@ public static partial class PsEmitter
         Command.Simple simple => EmitSimpleFed(IsNohup(simple) ? RewriteNohup(simple) : simple),
         Command.Pipeline pipeline => EmitPipeline(pipeline),
         Command.AndOrList andOr => EmitAndOrList(andOr),
-        Command.ShAssignment assign => EmitShAssignment(assign),
+        Command.ShAssignment assign => EmitShAssignmentStatement(assign),
         Command.CommandList list => EmitCommandList(list),
         _ => throw new NotSupportedException($"Unknown command type: {cmd.GetType().Name}"),
     };
@@ -647,6 +649,8 @@ public static partial class PsEmitter
         var priorCaseVars = _caseVars;
         _caseVars = new Dictionary<string, bool>(StringComparer.Ordinal);
         _intVars = new HashSet<string>(StringComparer.Ordinal);
+        var priorReadsStatus = _scriptReadsStatus;
+        _scriptReadsStatus = priorReadsStatus || bash.Contains("$?") || bash.Contains("${?");
         var priorReadonly = _readonlyVars;
         _readonlyVars = new HashSet<string>(StringComparer.Ordinal);
         var priorNamerefs = _namerefs;
@@ -695,6 +699,7 @@ public static partial class PsEmitter
             _assocVars = priorAssocVars;
             _arrayVars = priorArrayVars;
             _caseVars = priorCaseVars;
+            _scriptReadsStatus = priorReadsStatus;
             _readonlyVars = priorReadonly;
             _namerefs = priorNamerefs;
             _litAssigned = priorLitAssigned; _pendingNamerefs = priorPendingNamerefs;
@@ -3205,6 +3210,18 @@ public static partial class PsEmitter
         return true;
     }
 
+
+    /// <summary>
+    /// A bare assignment statement ends with status 0 (`false; x=1; echo $?` prints 0), unless a command substitution
+    /// supplies the status or the target is readonly (the refusal sets 1).
+    /// </summary>
+    private static string EmitShAssignmentStatement(Command.ShAssignment cmd)
+    {
+        string text = EmitShAssignment(cmd);
+        if (!_scriptReadsStatus || cmd.IsLocal || cmd.IsExport || ContainsCommandSub(cmd)) return text;
+        if (cmd.Pairs.Any(p => _readonlyVars?.Contains(p.Name) == true || ResolveNameref(p.Name) != p.Name)) return text;
+        return text + "; $global:LASTEXITCODE = 0";
+    }
 
     private static string EmitShAssignment(Command.ShAssignment cmd)
     {

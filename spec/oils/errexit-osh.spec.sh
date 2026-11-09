@@ -303,7 +303,6 @@ BUILDDIR=${_BUILDDIR-$BUILDDIR}
 echo status=$?
 ## stdout: status=0
 ## status: 0
-## XFAIL ps-bash gap-oils-errexit-osh errexit-osh (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### strict_errexit prevents errexit from being disabled in function

@@ -1,0 +1,29 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 238
+stdout-length: 35
+stderr-length: 0
+==== SCRIPT ====
+false; y=${u-$y}; echo s1=$?
+false; z=1; echo s2=$?
+false; w=$(true); echo s3=$?
+false; x=$(false); echo s4=$?
+false; a=(1 2); echo s5=$?
+false && z=2; echo s6=$?
+set -e
+x=$(false) || true
+[ -n "$APORTSDIR" ] && true
+B=${_B-$B}
+echo s7=$?
+==== STDOUT ====
+s1=0
+s2=0
+s3=0
+s4=1
+s5=0
+s6=1
+s7=0
+
+==== STDERR ====
+

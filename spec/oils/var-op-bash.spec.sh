@@ -361,7 +361,6 @@ A
 A
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-var-op-bash var-op-bash (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### undef and @P @Q @a
