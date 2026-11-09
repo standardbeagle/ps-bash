@@ -21,4 +21,8 @@ public class ArrayBareNameTests
     [Fact]
     public Task UnquotedElement_UnsetIsNoWord() => AssertOracle.EqualAsync(
         "b=(0 1); unset 'b[-1]'; b+=(2 3); echo [${b[3]}] x${b[9]}y");
+
+    [Fact]
+    public Task UnquotedElement_GluedToLiteral() => AssertOracle.EqualAsync(
+        "a=(1 2 3); unset 'a[-1]'; echo last=${a[-1]} p${a[0]} p${a[1]}q");
 }

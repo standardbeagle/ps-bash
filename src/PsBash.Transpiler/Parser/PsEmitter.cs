@@ -5617,7 +5617,11 @@ public static partial class PsEmitter
         for (int i = 0; i < word.Parts.Length; i++)
         {
             var part = word.Parts[i];
-            sb.Append(EmitBarewordPart(part));
+            string bare = EmitBarewordPart(part);
+            // `p${a[1]}` / `last=${a[-1]}`: glued to a literal, a bare `$a['1']` would expand only `$a` and keep `['1']` as text.
+            if (word.Parts.Length > 1 && part is WordPart.BracedVarSub && System.Text.RegularExpressions.Regex.IsMatch(bare, @"^\$\w+\[.*\]$"))
+                bare = "$(" + bare + ")";
+            sb.Append(bare);
 
             // After TildeSub, restore the '/' ParseTilde consumed if more parts follow. bash
             // appends the rest of the word verbatim; a '\' here made `~/x` a literal

@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 129
+stdout-length: 28
+stderr-length: 0
+==== SCRIPT ====
+set -- -h; OPTIND=9; getopts 'hc:' o; echo "rc=$? OPTIND=$OPTIND"; set --; OPTIND=4; getopts 'hc:' o; echo "rc=$? OPTIND=$OPTIND"
+==== STDOUT ====
+rc=1 OPTIND=2
+rc=1 OPTIND=1
+
+==== STDERR ====
+

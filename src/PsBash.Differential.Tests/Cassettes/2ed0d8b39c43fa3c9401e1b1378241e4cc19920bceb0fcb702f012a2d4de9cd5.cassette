@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 99
+stdout-length: 22
+stderr-length: 0
+==== SCRIPT ====
+HOME=/h; a=([2]=~ [4]=~:~:~ [5]=x~ [6]="~" [7]=~/y); echo "${a[2]}|${a[4]}|${a[5]}|${a[6]}|${a[7]}"
+==== STDOUT ====
+/h|/h:/h:/h|x~|~|/h/y
+
+==== STDERR ====
+

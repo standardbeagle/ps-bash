@@ -334,7 +334,6 @@ last=2
 1 42
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-vars builtin-vars (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -359,6 +358,5 @@ len=2 a=0 2
 last=2 second= third=0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-vars builtin-vars (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher

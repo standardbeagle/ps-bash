@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 61
+stdout-length: 34
+stderr-length: 0
+==== SCRIPT ====
+hello1=1 hello2=2; echo ${!hello@}; hello=(); echo ${!hello@}
+==== STDOUT ====
+hello1 hello2
+hello hello1 hello2
+
+==== STDERR ====
+

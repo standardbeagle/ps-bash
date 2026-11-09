@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 58
+stdout-length: 6
+stderr-length: 0
+==== SCRIPT ====
+b=(0 1); unset 'b[-1]'; b+=(2 3); echo [${b[3]}] x${b[9]}y
+==== STDOUT ====
+[] xy
+
+==== STDERR ====
+

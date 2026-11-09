@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 2
+script-length: 105
+stdout-length: 0
+stderr-length: 183
+==== SCRIPT ====
+shopt -s extglob; cd "$(mktemp -d)"; touch foo-bar; echo hi > @(*-bar|other); echo status=$?; cat foo-bar
+==== STDOUT ====
+
+==== STDERR ====
+bash: -c: line 1: syntax error near unexpected token `('
+bash: -c: line 1: `shopt -s extglob; cd "$(mktemp -d)"; touch foo-bar; echo hi > @(*-bar|other); echo status=$?; cat foo-bar'
+

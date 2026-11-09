@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 63
+stdout-length: 14
+stderr-length: 0
+==== SCRIPT ====
+a=(1 2 3); unset 'a[-1]'; echo last=${a[-1]} p${a[0]} p${a[1]}q
+==== STDOUT ====
+last=2 p1 p2q
+
+==== STDERR ====
+

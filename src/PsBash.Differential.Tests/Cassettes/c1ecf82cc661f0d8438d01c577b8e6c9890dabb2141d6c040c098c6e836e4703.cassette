@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 119
+stdout-length: 41
+stderr-length: 0
+==== SCRIPT ====
+declare -A A=([0]=zero [k]=v); echo "[${A}] [${A@Q}] [${A:-d}] [${#A}] [${A^^}]"; unset 'A[0]'; echo "[${A}] [${A:-d}]"
+==== STDOUT ====
+[zero] ['zero'] [zero] [4] [ZERO]
+[] [d]
+
+==== STDERR ====
+

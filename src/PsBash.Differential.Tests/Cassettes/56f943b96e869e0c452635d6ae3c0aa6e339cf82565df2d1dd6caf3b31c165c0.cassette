@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 94
+stdout-length: 29
+stderr-length: 0
+==== SCRIPT ====
+set -- -c foo -h; getopts 'hc:' opt- 2>/dev/null; echo status=$? OPTARG=$OPTARG OPTIND=$OPTIND
+==== STDOUT ====
+status=1 OPTARG=foo OPTIND=3
+
+==== STDERR ====
+
