@@ -15,7 +15,6 @@ echo 3
 3
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-paren-ambiguity paren-ambiguity (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### $(( closed with ) ) after multiple lines is command - #2337
@@ -49,7 +48,6 @@ good
 bad
 ## stdout:
 ## status: 0
-## XFAIL ps-bash gap-oils-paren-ambiguity paren-ambiguity (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### ((gzip example - zdiff package - #2337
@@ -77,7 +75,6 @@ icu_cppflags=`((pkg-config --cflags icu-uc icu-i18n) ||
 echo bye
 ## stdout: bye
 ## status: 0
-## XFAIL ps-bash gap-oils-paren-ambiguity paren-ambiguity (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### ((test example - liblo package - #2337
@@ -88,7 +85,6 @@ fi
 echo bye
 ## stdout: bye
 ## status: 0
-## XFAIL ps-bash gap-oils-paren-ambiguity paren-ambiguity (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### $((which example - command sub versus arith sub - gnunet-gtk package

@@ -348,7 +348,7 @@ public sealed partial class BashParser
 
         // Standalone arithmetic: (( expr ))
         if (Peek().Kind == BashTokenKind.LParen && IsDoubleLParen())
-            return WithTrailingRedirects(ParseArithCommand());
+            return WithTrailingRedirects(ParseArithOrNestedSubshell());
 
         // Subshell: (cmd1; cmd2)
         if (Peek().Kind == BashTokenKind.LParen)
@@ -934,7 +934,7 @@ public sealed partial class BashParser
         int nestedDepth = 0;
         while (Peek().Kind != BashTokenKind.Eof)
         {
-            if (Peek().Kind == BashTokenKind.RParen && nestedDepth == 0 && IsDoubleRParen())
+            if (Peek().Kind == BashTokenKind.RParen && nestedDepth == 0 && IsDoubleRParen() && _tokens[_pos + 1].Position == Peek().Position + 1)
             {
                 exprEnd = Peek().Position;
                 Advance(); // consume first )
@@ -1284,7 +1284,16 @@ public sealed partial class BashParser
         _pos + 1 < _tokens.Count
         && _tokens[_pos + 1].Kind == BashTokenKind.LParen;
 
-    private Command.ArithCommand ParseArithCommand()
+    /// <summary>`((` opens an arithmetic command only when an adjacent `))` closes it; otherwise (`(( cmd ) )`, `((grep x) | y)`) it is two nested subshells.</summary>
+    private Command ParseArithOrNestedSubshell()
+    {
+        int saved = _pos;
+        if (ParseArithCommand() is { } arith) return arith;
+        _pos = saved;
+        return ParseSubshell();
+    }
+
+    private Command.ArithCommand? ParseArithCommand()
     {
         var firstParen = Advance(); // consume first (
         var secondParen = Advance(); // consume second (
@@ -1294,7 +1303,8 @@ public sealed partial class BashParser
 
         while (Peek().Kind != BashTokenKind.Eof)
         {
-            if (Peek().Kind == BashTokenKind.RParen && nestedDepth == 0 && IsDoubleRParen())
+            if (Peek().Kind == BashTokenKind.RParen && nestedDepth == 0 && IsDoubleRParen()
+                && _tokens[_pos + 1].Position == Peek().Position + 1)
             {
                 int exprEnd = Peek().Position;
                 Advance(); // consume first )
@@ -1308,9 +1318,8 @@ public sealed partial class BashParser
             Advance();
         }
 
-        // Reached EOF without finding ))
-        string remaining = BashLexer.SubstituteArithLineNumber(_input[exprStart..], cmdLine);
-        return new Command.ArithCommand(BashArithmeticParser.Parse(remaining));
+        // Reached EOF without an adjacent ))
+        return null;
     }
 
     private bool IsDoubleRParen() =>
