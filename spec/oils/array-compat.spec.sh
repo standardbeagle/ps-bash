@@ -39,7 +39,6 @@ a=(1 '2 3')
 echo $a
 ## stdout: 1
 ## status: 0
-## XFAIL ps-bash gap-oils-array-compat array-compat (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### strict_array: ${array} is not valid in OSH, is ${array[0]} in ksh/bash
@@ -49,7 +48,6 @@ a=(1 '2 3')
 echo ${a}
 ## stdout: 1
 ## status: 0
-## XFAIL ps-bash gap-oils-array-compat array-compat (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Assign to array index without initialization

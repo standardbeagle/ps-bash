@@ -158,7 +158,6 @@ echo "$a3, ${a3-(unset)}, ${a3:-(empty)};"
 foo, foo, foo;
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array-sparse array-sparse (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### "${a[*]}"

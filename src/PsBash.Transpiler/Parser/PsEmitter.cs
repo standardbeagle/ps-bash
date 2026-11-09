@@ -111,6 +111,8 @@ public static partial class PsEmitter
     /// <summary>Names declared <c>declare -A</c> in the script being emitted: a later <c>a=(k v ...)</c> is key/value pairs (bash 5.1+).</summary>
     [ThreadStatic]
     private static HashSet<string>? _assocVars;
+    // Names assigned an array/assoc literal earlier in this unit: a bare `$a` / `${a}` then reads element 0, as in bash.
+    private static HashSet<string>? _arrayVars;
 
     /// <summary>Names declared <c>declare -l</c> (false) / <c>declare -u</c> (true): later assignments are case-converted.</summary>
     [ThreadStatic]
@@ -632,6 +634,8 @@ public static partial class PsEmitter
         var priorIntVars = _intVars;
         var priorAssocVars = _assocVars;
         _assocVars = new HashSet<string>(StringComparer.Ordinal);
+        var priorArrayVars = _arrayVars;
+        _arrayVars = new HashSet<string>(StringComparer.Ordinal);
         var priorCaseVars = _caseVars;
         _caseVars = new Dictionary<string, bool>(StringComparer.Ordinal);
         _intVars = new HashSet<string>(StringComparer.Ordinal);
@@ -681,6 +685,7 @@ public static partial class PsEmitter
             _context = prior;
             _intVars = priorIntVars;
             _assocVars = priorAssocVars;
+            _arrayVars = priorArrayVars;
             _caseVars = priorCaseVars;
             _readonlyVars = priorReadonly;
             _namerefs = priorNamerefs;
@@ -3256,6 +3261,7 @@ public static partial class PsEmitter
             if (pair.ArrayValue is not null)
             {
                 if (cmd.IsAssoc) _assocVars?.Add(pair.Name);
+                if (IsValidVarName(pair.Name)) _arrayVars?.Add(pair.Name);
                 if (pair.Op is AssignOp.Equal or AssignOp.PlusEqual && TryEmitAssocLiteral(pair.ArrayValue, out var assoc, cmd.IsAssoc || _assocVars?.Contains(pair.Name) == true))
                 {
                     // `a+=([k]=v)` merges into the existing table (a changed value keeps its place, a new key joins).
@@ -6798,7 +6804,7 @@ public static partial class PsEmitter
     private static string ZeroDefault(string valueExpr) =>
         $"$(\"$({valueExpr})\" -replace '^$','0')";
 
-    private static string EmitSimpleVar(string name, bool inDoubleQuote = false, bool strict = false)
+    private static string EmitSimpleVar(string name, bool inDoubleQuote = false, bool strict = false, bool arrayElem0 = true)
     {
         // An EMPTY name is never a valid bash variable. It arises from a
         // substitution this parser does not model — in practice ZSH-only syntax
@@ -6818,6 +6824,9 @@ public static partial class PsEmitter
         // Loop variables emit as $var, not $env:var
         if (_loopVars is not null && _loopVars.Contains(name))
             return $"${name}";
+
+        if (arrayElem0 && _arrayVars is not null && _arrayVars.Contains(name))
+            return "$(if ($null -eq $" + name + ") { $env:" + name + " } else { $" + name + "['0'] })";
 
         var special = PsBuild.TryMapSpecialVar(name, braced: false, inDoubleQuote);
         if (special is not null) return strict && _nounsetMode ? StrictPositional(name, special) : special;
@@ -6910,7 +6919,7 @@ public static partial class PsEmitter
         // EmitSimpleVar would render it as `$env:NAME`. Loop vars, special
         // params, positional digits, and PS-builtin-backed names all take a
         // different branch in EmitSimpleVar and must not be word-split.
-        return EmitSimpleVar(name).StartsWith("$env:", StringComparison.Ordinal);
+        return EmitSimpleVar(name, arrayElem0: false).StartsWith("$env:", StringComparison.Ordinal);
     }
 
     /// <summary>

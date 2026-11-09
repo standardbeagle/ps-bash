@@ -158,7 +158,6 @@ a=zzz
 a=yyy
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array-assoc array-assoc (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### length ${#a[@]}

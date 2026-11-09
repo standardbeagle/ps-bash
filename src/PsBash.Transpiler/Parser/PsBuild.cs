@@ -838,18 +838,18 @@ public static class PsBuild
             case "PPID":
                 return braced ? null : "(Get-Process -Id $PID -ErrorAction SilentlyContinue).Parent.Id";
             // Variables bash defines about the machine and the shell. Computed on read; an env variable of the
-            // same name (HOSTNAME on some hosts) is not consulted, as in bash these are the shell's own.
+            // same name wins for HOSTNAME and OSTYPE (bash only sets those when the environment lacks them).
             case "UID":
             case "EUID":
                 return "$(if ($IsWindows) { [long][System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value.Split('-')[-1] } else { [long](id -u) })";
             case "OSTYPE":
-                return "$(if ($IsWindows) { 'msys' } elseif ($IsMacOS) { 'darwin' } else { 'linux-gnu' })";
+                return "$(if ($null -ne $env:OSTYPE) { $env:OSTYPE } elseif ($IsWindows) { 'msys' } elseif ($IsMacOS) { 'darwin' } else { 'linux-gnu' })";
             case "HOSTTYPE":
                 return "$(if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq 'Arm64') { 'aarch64' } else { 'x86_64' })";
             case "MACHTYPE":
                 return "$(($(if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq 'Arm64') { 'aarch64' } else { 'x86_64' })) + $(if ($IsWindows) { '-pc-msys' } elseif ($IsMacOS) { '-apple-darwin' } else { '-pc-linux-gnu' }))";
             case "HOSTNAME":
-                return "$([System.Environment]::MachineName.ToLowerInvariant())";
+                return "$(if ($null -ne $env:HOSTNAME) { $env:HOSTNAME } else { [System.Environment]::MachineName.ToLowerInvariant() })";
             case "PS4":
                 return "$(if ($null -ne $env:PS4) { $env:PS4 } else { '+ ' })";
             case "BASHPID":
