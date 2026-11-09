@@ -195,7 +195,6 @@ __array=(1 2 '3 4')
 set | grep '^__'
 ## stdout: __array=([0]="1" [1]="2" [2]="3 4")
 ## status: 0
-## XFAIL ps-bash gap-oils-sh-options sh-options (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### set without args and assoc array variables (not in OSH)

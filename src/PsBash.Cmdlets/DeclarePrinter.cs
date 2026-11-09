@@ -101,12 +101,21 @@ internal static class DeclarePrinter
         return sb.Append(")").ToString();
     }
 
+    /// <summary>An associative-array key as bash prints it: bare when plain, double-quoted when it holds a shell-special character.</summary>
+    internal static string QuoteKey(string? key)
+    {
+        key ??= string.Empty;
+        foreach (char c in key)
+            if (!(char.IsAsciiLetterOrDigit(c) || "_-./:@%+,=".IndexOf(c) >= 0)) return QuoteValue(key);
+        return key.Length == 0 ? QuoteValue(key) : key;
+    }
+
     /// <summary>bash associative-array form: <c>([k]="v" [j]="w" )</c> (note the trailing space bash prints).</summary>
     internal static string FormatAssociative(System.Collections.IDictionary dict)
     {
         var sb = new System.Text.StringBuilder("(");
         foreach (System.Collections.DictionaryEntry e in dict)
-            sb.Append("[").Append(e.Key).Append("]=").Append(QuoteValue(e.Value?.ToString())).Append((char)32);
+            sb.Append("[").Append(QuoteKey(e.Key?.ToString())).Append("]=").Append(QuoteValue(e.Value?.ToString())).Append((char)32);
         return sb.Append(")").ToString();
     }
 

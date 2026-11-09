@@ -108,15 +108,38 @@ public sealed class InvokeBashDeclareCommand : PSCmdlet
         foreach (System.Collections.DictionaryEntry e in env) keys.Add((string)e.Key);
         foreach (var nr in BashShellState.NamerefNames())
             if (!keys.Contains(nr)) keys.Add(nr);
+        var arrays = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (an, av) in AllVariables())
+        {
+            if (env.Contains(an)) continue;
+            string? text = av switch
+            {
+                BashSparseArray sp => DeclarePrinter.FormatSparse(sp),
+                System.Collections.IDictionary d => DeclarePrinter.FormatAssociative(d),
+                System.Collections.IList l => DeclarePrinter.FormatIndexed(l),
+                _ => null,
+            };
+            if (text is not null) { arrays[an] = text; keys.Add(an); }
+        }
         keys.Sort(string.CompareOrdinal);
         foreach (var key in keys)
         {
+            if (arrays.TryGetValue(key, out var arrText)) { WriteLine(key + "=" + arrText); continue; }
             string v = (string?)env[key] ?? BashShellState.NamerefTarget(key) ?? string.Empty;
             bool plain = true;
             foreach (char c in v)
                 if (!(char.IsAsciiLetterOrDigit(c) || "_-./:+=@%,".IndexOf(c) >= 0)) { plain = false; break; }
             WriteLine(key + "=" + (plain ? v : BashQuoteText.ForReuse(v)));
         }
+    }
+
+    /// <summary>Runtime scratch variables (<c>__psbash*</c>, <c>__Bash*</c>, loop temporaries): never user variables.</summary>
+    private static bool IsInternalName(string name)
+    {
+        if (!name.StartsWith("__", StringComparison.Ordinal)) return false;
+        foreach (var p in new[] { "__Bash", "__psb", "__bg", "__lsd", "__dyn", "__bashsplat", "__bashVer", "__bashexit", "__PsBash", "__parentPid" })
+            if (name.StartsWith(p, StringComparison.Ordinal)) return true;
+        return name is "__ae" or "__bp" or "__in" or "__ind" or "__ir" or "__iv" or "__nrt" or "__pf" or "__pp" or "__prog" or "__rt" or "__s" or "__saved";
     }
 
     // PowerShell's own globals (and the runtime's), which are not bash variables.
@@ -147,7 +170,7 @@ public sealed class InvokeBashDeclareCommand : PSCmdlet
             {
                 if (v.BaseObject is not PSVariable pv) continue;
                 string name = pv.Name;
-                if (NotBashVariables.Contains(name) || name.StartsWith("__", StringComparison.Ordinal) || name.StartsWith("PS", StringComparison.Ordinal)
+                if (NotBashVariables.Contains(name) || IsInternalName(name) || name.StartsWith("PS", StringComparison.Ordinal)
                     || name.StartsWith("Bash", StringComparison.Ordinal) || BashShellState.AllGlobalNames.Contains(name)) continue;
                 if (pv.Value is System.Collections.IDictionary || (pv.Value is System.Collections.IList && pv.Value is not string))
                 {
