@@ -1,0 +1,21 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 243
+stdout-length: 37
+stderr-length: 0
+==== SCRIPT ====
+a=(1 2 3 4); a=("${a[@]:1}"); echo ${#a[@]}; b=("${a[@]:1:1}" x); echo ${#b[@]} "${b[@]}"; set -- "${a[@]:1}"; echo $#; printf '[%s]' "${a[@]:1}"; echo; for i in "${a[@]:0:2}"; do echo "i=$i"; done; for i in "${a[@]:1}" z; do echo "j=$i"; done
+==== STDOUT ====
+3
+2 3 x
+2
+[3][4]
+i=2
+i=3
+j=3
+j=4
+j=z
+
+==== STDERR ====
+

@@ -1,0 +1,19 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 157
+stdout-length: 9
+stderr-length: 0
+==== SCRIPT ====
+function rev { builtin eval "
+  set -- \"\${$1[@]}\"; $1=()
+  local e$1 i$1=\$#
+  for e$1; do $1[--i$1]=\"\$e$1\"; done"; }
+a=(99 4 5 6)
+rev a
+echo "${a[@]}"
+==== STDOUT ====
+6 5 4 99
+
+==== STDERR ====
+

@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 79
+stdout-length: 7
+stderr-length: 0
+==== SCRIPT ====
+f() { local -a b; b=(z); eval "b=(y w)"; echo "${b[@]}"; }; f; echo "[${b[@]}]"
+==== STDOUT ====
+y w
+[]
+
+==== STDERR ====
+

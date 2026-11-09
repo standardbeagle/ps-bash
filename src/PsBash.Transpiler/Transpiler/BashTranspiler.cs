@@ -69,6 +69,21 @@ public static class BashTranspiler
         => Guarded(() => TranspileCore(bashCommand, context));
 
     /// <summary>
+    /// <summary>
+    /// <see cref="Transpile(string, TranspileContext)"/> for the text of an <c>eval</c> run inside a function:
+    /// <paramref name="evalLocalNames"/> are the names that function declared <c>local</c> (an array it assigns is
+    /// otherwise the shell's own, not a copy local to the eval).
+    /// </summary>
+    public static string Transpile(string bashCommand, TranspileContext context, string[]? evalLocalNames)
+        => Guarded(() =>
+        {
+            var prior = PsEmitter.EvalLocalNames;
+            PsEmitter.EvalLocalNames = evalLocalNames is null ? null : new HashSet<string>(evalLocalNames, StringComparer.Ordinal);
+            try { return TranspileCore(bashCommand, context); }
+            finally { PsEmitter.EvalLocalNames = prior; }
+        });
+
+    /// <summary>
     /// Every public entry runs here. The lexer/parser/emitter recursion is bounded by
     /// <see cref="NestingGuard"/>, so no input can overflow the stack (the transpiler runs inside the
     /// shared host for eval/source, where an overflow killed the daemon). Inline on the caller's thread;

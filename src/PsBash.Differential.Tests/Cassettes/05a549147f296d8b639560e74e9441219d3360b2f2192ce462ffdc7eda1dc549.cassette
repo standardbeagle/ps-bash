@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 108
+stdout-length: 14
+stderr-length: 0
+==== SCRIPT ====
+a=(1 2 3); k() { eval "$1=(m n)"; }; k a; echo "${a[@]}"; ev() { eval "$1+=(added)"; }; ev a; echo "${a[@]}"
+==== STDOUT ====
+m n
+m n added
+
+==== STDERR ====
+

@@ -1087,7 +1087,7 @@ public static partial class PsEmitter
             // element. Quoted "${arr[@]}" would otherwise stringify the array into
             // one space-joined word and run once. Emit the array variable directly.
             if (list[0].Parts is [WordPart.DoubleQuoted { Parts: [WordPart.BracedVarSub { Suffix: { } opSuffix } opVar] }]
-                && IsArrayElementOperator(opSuffix))
+                && (IsArrayElementOperator(opSuffix) || IsArraySliceSuffix(opSuffix)))
                 return EmitBracedVar(opVar);
             if (IsArrayAllWord(list[0], out var arrName))
                 return $"$(if (${arrName} -is [System.Collections.IDictionary]) {{ ${arrName}.Values }} else {{ ${arrName} }})";
@@ -1570,8 +1570,15 @@ public static partial class PsEmitter
 
     /// <summary>`$name` for an array write: inside a function (outside any subshell) an array the function did not declare
     /// `local` is the shell's own, so `stack+=(x)` / `a=(...)` / `a[i]=v` must reach the caller, not a function-local copy.</summary>
+    /// <summary>Names the function that runs an <c>eval</c> declared <c>local</c>: set around the run-time transpile of the eval text.</summary>
+    [ThreadStatic]
+    internal static HashSet<string>? EvalLocalNames;
+
     private static string ArrayWriteTarget(string name) =>
         ResolveNameref(name) is var resolved && resolved != name ? ArrayWriteTarget(resolved) :
+        // eval'd text runs in the calling function's scope: an array it assigns is the shell's own unless that function declared it `local`.
+        _context == TranspileContext.Eval && _functionDepth == 0 && _subshellDepth == 0
+            ? (EvalLocalNames?.Contains(name) == true ? "$" + name : "$global:" + name) :
         _functionDepth > 0 && _subshellDepth == 0 && _functionLocalNames is { } locals && !locals.Contains(name)
             ? "$global:" + name
             : "$" + name;
@@ -1675,6 +1682,20 @@ public static partial class PsEmitter
     /// <summary>
     /// Recursively collect variable names declared with 'local' in a command tree.
     /// </summary>
+    /// <summary>The source text of a static <c>eval</c> / <c>builtin eval</c> body (every argument a literal), else null.</summary>
+    private static string? EvalLiteralBody(Command.Simple cmd)
+    {
+        int at = GetLiteralValue(cmd.Words[0]) switch { "eval" => 1, "builtin" when cmd.Words.Length > 2 && GetLiteralValue(cmd.Words[1]) == "eval" => 2, _ => -1 };
+        if (at < 0) return null;
+        var parts = new List<string>();
+        for (int i = at; i < cmd.Words.Length; i++)
+        {
+            if (i == at && GetLiteralValue(cmd.Words[i]) == "--") continue;
+            if (TryReconstructBashSource(cmd.Words[i]) is not { } s) return null;
+            parts.Add(s);
+        }
+        return parts.Count == 0 ? null : string.Join(' ', parts);
+    }
     private static List<string> CollectLocalVars(Command cmd)
     {
         var result = new List<string>();
@@ -1730,7 +1751,11 @@ public static partial class PsEmitter
             case Command.Subshell sub:
                 CollectLocalVars(sub.Body, result);
                 break;
-            case Command.ShFunction fn:
+            // `eval 'local x=1; .'`: a literal eval body is inlined into the function, so its `local`s are the function's.
+            case Command.Simple { Words.Length: > 1 } ev when EvalLiteralBody(ev) is { } evalBody:
+                try { if (BashParser.Parse(evalBody) is { } parsedEval) CollectLocalVars(parsedEval, result); }
+                catch (ParseException) { }
+                break;            case Command.ShFunction fn:
                 CollectLocalVars(fn.Body, result);
                 break;
         }
@@ -3254,7 +3279,9 @@ public static partial class PsEmitter
             }
 
             if (cmd.IsLocal && pair.ArrayValue is null && !pair.Name.Contains('[')
-                && _dynLocals?.Contains(pair.Name) == true)
+                && (_dynLocals?.Contains(pair.Name) == true
+                    // eval text built at run time declares `local`s of the CALLING function, which cannot know them: they live in the shell variable.
+                    || (_context == TranspileContext.Eval && _functionDepth == 0 && _dynLocals is null && IsDynamicLocalName(pair.Name))))
             {
                 // Park the caller's value once per call (restored by EmitFunction's finally), then assign.
                 // `local x` alone leaves x unset, as in bash.
@@ -7087,8 +7114,11 @@ public static partial class PsEmitter
            && (only is WordPart.SimpleVarSub { Name: "@" }
                or WordPart.BracedVarSub { Name: "@", Suffix: null }
                or WordPart.BracedVarSub { Suffix: "[@]" or "![@]" }
-               || only is WordPart.BracedVarSub { Suffix: { } opSfx } && IsArrayElementOperator(opSfx));
+               || only is WordPart.BracedVarSub { Suffix: { } opSfx } && (IsArrayElementOperator(opSfx) || IsArraySliceSuffix(opSfx)));
 
+    /// <summary>`[@]:off` / `[@]:off:len`: a slice of the array (`:-` `:=` `:+` `:?` are the default operators, not slices).</summary>
+    private static bool IsArraySliceSuffix(string suffix)
+        => suffix.Length > 4 && suffix.StartsWith("[@]:", StringComparison.Ordinal) && (char.IsAsciiDigit(suffix[4]) || suffix[4] is ' ' or '$' or '(');
     /// <summary>`[@]` followed by a per-element operator (`/ # % ^ ,`): `${a[@]/o/0}`, `${a[@]%.*}`, `${a[@]^^}`.</summary>
     private static bool IsArrayElementOperator(string suffix)
         => suffix.Length > 3 && suffix.StartsWith("[@]", StringComparison.Ordinal) && suffix[3] is '/' or '#' or '%' or '^' or ',';
@@ -10327,11 +10357,17 @@ public static partial class PsEmitter
             // assembly-qualified — given the assembly name it loads the assembly
             // on demand. A bare [PsBash.Core.Transpiler.BashTranspiler] silently
             // failed to resolve there, so eval emitted empty output.
-            "$__psbash_eval_pwsh = [PsBash.Core.Transpiler.BashTranspiler, PsBash.Transpiler]::Transpile($__psbash_eval_src, [PsBash.Core.Transpiler.TranspileContext, PsBash.Transpiler]::Eval); " +
+            "$__psbash_eval_pwsh = [PsBash.Core.Transpiler.BashTranspiler, PsBash.Transpiler]::Transpile($__psbash_eval_src, [PsBash.Core.Transpiler.TranspileContext, PsBash.Transpiler]::Eval" + EvalLocalNamesArg() + "); " +
             "Invoke-Expression $__psbash_eval_pwsh " +
             "} finally { $global:__BashEvalDepth = $__psbash_eval_depth } " +
             "}";
     }
+
+    /// <summary>`, [string[]]@('a','b')`: the locals of the function this eval runs in (empty at top level).</summary>
+    private static string EvalLocalNamesArg() =>
+        _functionDepth > 0 && _functionLocalNames is { Count: > 0 } locals
+            ? ", [string[]]@(" + string.Join(",", locals.Where(IsValidVarName).Select(PsBuild.SingleQuote)) + ")"
+            : "";
 
     /// <summary>
     /// Recover the post-quote-removal string value of a <see cref="CompoundWord"/>

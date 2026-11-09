@@ -207,7 +207,6 @@ f() {
 f h e l l o
 ## stdout: v=hello
 ## status: 0
-## XFAIL ps-bash gap-oils-ble-idioms ble-idioms (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### is-array with ${var@a}
@@ -292,7 +291,6 @@ echo "${a[@]}"
 6 5 4 99
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-ble-idioms ble-idioms (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -423,7 +421,6 @@ l:1
 g:x
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-ble-idioms ble-idioms (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
