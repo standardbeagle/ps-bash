@@ -1017,7 +1017,7 @@ public class BashTranspilerTests
         var result = BashTranspiler.Transpile("while read line; do echo $line; done < input.txt");
         // The file must be fed into the loop, not left unbound: the loop header reads it directly
         // (no script block, so `return` in the body still leaves an enclosing function).
-        Assert.StartsWith(":__psbash_l0 foreach ($__psbash_rec0 in @(Invoke-BashCat input.txt -RawStdinBytes | ForEach-Object {", result);
+        Assert.Contains(":__psbash_l0 foreach ($__psbash_rec0 in @(Invoke-BashCat input.txt -RawStdinBytes | ForEach-Object {", result);
     }
 
     [Fact]

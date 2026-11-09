@@ -655,12 +655,19 @@ public static class PsBuild
         + "try { " + body + " } finally { $global:__BashStdIn = $__psbash_stdin_prev }";
 
     /// <summary>
+    /// <see cref="InputRedirectGuard"/> without its own scope, for a loop whose variables must stay in the caller's scope
+    /// (a function's `local`s are plain PowerShell variables).
+    /// </summary>
+    public static string InputRedirectGuardInline(string target, string ok, string? onFail = null) =>
+        "$__psbash_ir = [string](Write-Output " + target + "); Invoke-BashTest -e $__psbash_ir; if ($global:LASTEXITCODE -eq 0) { " + ok
+        + " } else { Write-Error -Message \"${__psbash_ir}: No such file or directory\" -ErrorAction Continue; $global:LASTEXITCODE = 1" + (onFail is null ? "" : "; " + onFail) + " }";
+    /// <summary>
     /// A compound command's <c>&lt; file</c> that cannot be opened fails the command: bash reports
     /// <c>file: No such file or directory</c>, sets status 1 and never runs the body.
     /// </summary>
-    public static string InputRedirectGuard(string target, string ok) =>
+    public static string InputRedirectGuard(string target, string ok, string? onFail = null) =>
         "& { $__psbash_ir = [string](Write-Output " + target + "); Invoke-BashTest -e $__psbash_ir; if ($global:LASTEXITCODE -eq 0) { " + ok
-        + " } else { Write-Error -Message \"${__psbash_ir}: No such file or directory\" -ErrorAction Continue; $global:LASTEXITCODE = 1 } }";
+        + " } else { Write-Error -Message \"${__psbash_ir}: No such file or directory\" -ErrorAction Continue; $global:LASTEXITCODE = 1" + (onFail is null ? "" : "; " + onFail) + " } }";
 
     /// <summary>
     /// A function body that reads stdin: when the function is called with a pipe (<c>echo x | f</c>,

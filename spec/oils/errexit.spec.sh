@@ -171,7 +171,6 @@ echo status=$?
 echo 'should not get here'
 ## stdout:
 ## status: 1
-## XFAIL ps-bash gap-oils-errexit errexit (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### errexit and compound command with redirect, ending with && (regression)
@@ -467,5 +466,4 @@ echo status=$?
 echo 'should not get here'
 ## stdout:
 ## status: 1
-## XFAIL ps-bash gap-oils-errexit errexit (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10

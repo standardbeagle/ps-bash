@@ -286,6 +286,10 @@ public static partial class PsEmitter
     }
 
     /// <summary>How to leave on an errexit failure from here: the script, or only the enclosing subshell.</summary>
+    /// <summary>Under an armed set -e, what a failed compound input redirect runs to end the script (null otherwise).</summary>
+    private static string? RedirectFailExit() =>
+        _errexitMode && _errexitExemptDepth == 0 ? PsBuild.ErrexitCheck(ErrexitExitStatement()) : null;
+
     private static string ErrexitExitStatement() =>
         _subshellDepth > 0 ? "return" : "exit $global:LASTEXITCODE";
 
@@ -1277,7 +1281,13 @@ public static partial class PsEmitter
             // `return` in a function's read loop left only that block (`echo never` still ran).
             if (!whileCmd.Redirects.IsDefaultOrEmpty
                 && whileCmd.Redirects is [{ Fd: 0, Op: "<" or "<<" or "<<<" } only])
-                return WithStdinScope(false, () => EmitWhileRead(readVar, readIfs, whileCmd.Body, ReadLoopSource(only)));
+            {
+                string readLoop = WithStdinScope(false, () => EmitWhileRead(readVar, readIfs, whileCmd.Body, ReadLoopSource(only)));
+                // `done < missing`: the redirect fails the loop (status 1, body never runs, and under set -e the script ends).
+                if (only is { Op: "<" } && EmitInputRedirectTarget(only.Target) is var readTarget && readTarget != "$null")
+                    readLoop = PsBuild.InputRedirectGuardInline(readTarget, readLoop, RedirectFailExit());
+                return readLoop;
+            }
 
             bool readsQueue = _inStdinScope && !HasInputRedirect(whileCmd.Redirects);
             return ApplyCompoundRedirects(
@@ -1791,7 +1801,7 @@ public static partial class PsEmitter
             // /dev/null maps to $null; `Get-Content $null` errors. Its stdin is EMPTY (EOF), so feed
             // the scope nothing explicitly (it must not see an outer pipe's or queue's data).
             result = inTarget != "$null"
-                ? PsBuild.InputRedirectGuard(inTarget, $"Invoke-BashCat {inTarget} -RawStdinBytes | & {{ {PsBuild.StdinScope(result)} }}")
+                ? PsBuild.InputRedirectGuard(inTarget, $"Invoke-BashCat {inTarget} -RawStdinBytes | & {{ {PsBuild.StdinScope(result)} }}", RedirectFailExit())
                 : $"@() | & {{ {PsBuild.StdinScope(result)} }}";
         }
 
@@ -9326,7 +9336,7 @@ public static partial class PsEmitter
             // /dev/null maps to $null; `Get-Content $null` errors. Its stdin is EMPTY (EOF), which
             // for a stdin scope must still replace any outer pipe, so feed it nothing explicitly.
             if (inTarget != "$null")
-                result = PsBuild.InputRedirectGuard(inTarget, $"Invoke-BashCat {inTarget} -RawStdinBytes | {result}");
+                result = PsBuild.InputRedirectGuard(inTarget, $"Invoke-BashCat {inTarget} -RawStdinBytes | {result}", RedirectFailExit());
             else if (stdinScope)
                 result = $"@() | {result}";
         }
