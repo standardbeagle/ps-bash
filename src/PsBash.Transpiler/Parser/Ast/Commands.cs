@@ -55,7 +55,8 @@ public abstract record Command : BashNode
         bool IsExport = false,
         bool IsReadonly = false,
         bool IsNameref = false,
-        bool IsAssoc = false) : Command;
+        bool IsAssoc = false,
+        bool IsDeclare = false) : Command;
 
     /// <summary>
     /// An if/elif/else statement.

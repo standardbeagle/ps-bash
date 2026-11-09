@@ -151,7 +151,6 @@ hello world !!!
 hello world punct
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-alias alias (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Recursive alias expansion of first word

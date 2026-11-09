@@ -128,6 +128,7 @@ public static partial class PsEmitter
     private static HashSet<string>? _readonlyVars;
     /// <summary>True when the script text reads `$?` somewhere: only then does a bare assignment need to reset the status to 0.</summary>
     [ThreadStatic] private static bool _scriptReadsStatus;
+    [ThreadStatic] private static bool _scriptReadsLastArg;
 
     /// <summary><c>declare -n ref=target</c> in the script being emitted: <c>ref</c> reads and writes <c>target</c>.
     /// Static only (a literal target, resolved at emit time); a nameref set at run time is not modelled.</summary>
@@ -650,6 +651,8 @@ public static partial class PsEmitter
         _caseVars = new Dictionary<string, bool>(StringComparer.Ordinal);
         _intVars = new HashSet<string>(StringComparer.Ordinal);
         var priorReadsStatus = _scriptReadsStatus;
+        var priorReadsLastArg = _scriptReadsLastArg;
+        _scriptReadsLastArg = priorReadsLastArg || System.Text.RegularExpressions.Regex.IsMatch(bash, @"\$(_(?![A-Za-z0-9_])|\{_[^A-Za-z0-9_])");
         _scriptReadsStatus = priorReadsStatus || bash.Contains("$?") || bash.Contains("${?");
         var priorReadonly = _readonlyVars;
         _readonlyVars = new HashSet<string>(StringComparer.Ordinal);
@@ -700,6 +703,7 @@ public static partial class PsEmitter
             _arrayVars = priorArrayVars;
             _caseVars = priorCaseVars;
             _scriptReadsStatus = priorReadsStatus;
+            _scriptReadsLastArg = priorReadsLastArg;
             _readonlyVars = priorReadonly;
             _namerefs = priorNamerefs;
             _litAssigned = priorLitAssigned; _pendingNamerefs = priorPendingNamerefs;
@@ -3218,6 +3222,12 @@ public static partial class PsEmitter
     private static string EmitShAssignmentStatement(Command.ShAssignment cmd)
     {
         string text = EmitShAssignment(cmd);
+        // bash: a bare assignment resets $_ to empty.
+        if (_scriptReadsLastArg && !cmd.IsLocal && !cmd.IsExport)
+        {
+            if (!cmd.IsDeclare) text += "; $global:BashLastArg = ''";
+            else if (cmd.Pairs.Length > 0 && cmd.Pairs[^1].ArrayValue is not null) text += "; $global:BashLastArg = " + PsBuild.SingleQuote(cmd.Pairs[^1].Name);
+        }
         if (!_scriptReadsStatus || ContainsCommandSub(cmd)) return text;
         if (cmd.Pairs.Any(p => _readonlyVars?.Contains(p.Name) == true || ResolveNameref(p.Name) != p.Name)) return text;
         return text + "; $global:LASTEXITCODE = 0";

@@ -69,6 +69,16 @@ public static partial class PsEmitter
         return null;
     }
 
+    // An alias value such as `!!!` is one plain word the parser would read as an operator; bash still uses it as the word.
+    private static Command.Simple? PlainWordAlias(string text)
+    {
+        var w = text.Trim();
+        if (w.Length == 0) return null;
+        foreach (char c in w)
+            if (!(char.IsAsciiLetterOrDigit(c) || "!%+,-./:=@^_~".IndexOf(c) >= 0)) return null;
+        return new Command.Simple([new CompoundWord([new WordPart.Literal(w)])], ImmutableArray<EnvPair>.Empty, ImmutableArray<Redirect>.Empty);
+    }
+
     private static Command.Simple ExpandAliases(Command.Simple cmd)
     {
         if (_aliasDefs is null || cmd.Words.IsDefaultOrEmpty || cmd.Line <= _expandAliasesLine) return cmd;
@@ -85,7 +95,8 @@ public static partial class PsEmitter
             if (text.Trim().Length == 0) break;
             Command.Simple? parsed;
             try { parsed = BashParser.Parse(text) as Command.Simple; }
-            catch (ParseException) { break; }
+            catch (ParseException) { parsed = PlainWordAlias(text); if (parsed is null) break; }
+            if (parsed is null) parsed = PlainWordAlias(text);
             if (parsed is null || parsed.Words.IsDefaultOrEmpty || !parsed.HereDocs.IsDefaultOrEmpty && parsed.HereDocs.Length > 0) break;
             words = words.RemoveRange(idx, 1).InsertRange(idx, parsed.Words);
             if (idx == 0 && !parsed.EnvPairs.IsDefaultOrEmpty) envPairs = parsed.EnvPairs.AddRange(envPairs.IsDefault ? [] : envPairs);

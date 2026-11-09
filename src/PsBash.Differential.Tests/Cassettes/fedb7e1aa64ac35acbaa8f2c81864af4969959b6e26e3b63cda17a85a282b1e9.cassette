@@ -1,0 +1,29 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 199
+stdout-length: 87
+stderr-length: 0
+==== SCRIPT ====
+: foo
+echo "colon [$_]"
+s=bar
+echo "bare assign [$_]"
+declare s=bar
+echo "declare [$_]"
+a=(1 2)
+echo "array [$_]"
+declare a=(1 2)
+echo "declare array [$_]"
+declare -g d=(1 2)
+echo "declare flag [$_]"
+==== STDOUT ====
+colon [foo]
+bare assign []
+declare [s=bar]
+array []
+declare array [a]
+declare flag [d]
+
+==== STDERR ====
+
