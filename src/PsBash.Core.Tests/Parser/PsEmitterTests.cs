@@ -410,7 +410,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile(": ${x:=5}")!;
         Assert.DoesNotContain("Invoke-Expression", result);
-        Assert.Contains("[void](", result);
+        Assert.Contains("$global:BashLastArg = [string](", result); // the lone word is also `$_` for the next command
         Assert.Contains("$global:LASTEXITCODE = 0", result);
         Assert.DoesNotMatch(@"(^|;)\s*:\s", result);
     }

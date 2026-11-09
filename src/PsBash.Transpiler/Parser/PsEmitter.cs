@@ -4013,6 +4013,20 @@ public static partial class PsEmitter
         {
             var lit = GetLiteralValue(cmd.Words[i]);
             if (lit is not null) continue; // a plain literal has no side effects
+            bool isLast = i == cmd.Words.Length - 1;
+            if (IsUnquotedSplitWord(cmd.Words[i]))
+            {
+                // `: $x` / `: *.txt`: the word splits / globs, and `$_` becomes the LAST resulting word.
+                sb.Append("$__psbash_nv = @(").Append(EmitUnquotedSplitWordArray(cmd.Words[i])).Append("); ");
+                if (isLast)
+                    sb.Append("$global:BashLastArg = if ($__psbash_nv.Count) { [string]$__psbash_nv[-1] } else { ':' }; ");
+                continue;
+            }
+            if (isLast)
+            {
+                sb.Append("$global:BashLastArg = [string](").Append(EmitWord(cmd.Words[i])).Append("); ");
+                continue;
+            }
             sb.Append("[void](").Append(EmitWord(cmd.Words[i])).Append("); ");
         }
         return sb.ToString();

@@ -1,0 +1,18 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 132
+stdout-length: 34
+stderr-length: 0
+==== SCRIPT ====
+x='with spaces'; : $x; echo $_; : a b; echo $_; : $x "$x"; echo $_; : *.zzz; echo $_; : ${y:=5}; echo $y $_; : "$(echo hi)"; echo $_
+==== STDOUT ====
+spaces
+b
+with spaces
+*.zzz
+5 5
+hi
+
+==== STDERR ====
+

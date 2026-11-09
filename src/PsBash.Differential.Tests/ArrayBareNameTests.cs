@@ -25,4 +25,8 @@ public class ArrayBareNameTests
     [Fact]
     public Task UnquotedElement_GluedToLiteral() => AssertOracle.EqualAsync(
         "a=(1 2 3); unset 'a[-1]'; echo last=${a[-1]} p${a[0]} p${a[1]}q");
+
+    [Fact]
+    public Task LastArg_AfterNoOpWithExpansion() => AssertOracle.EqualAsync(
+        "x='with spaces'; : $x; echo $_; : a b; echo $_; : $x \"$x\"; echo $_; : *.zzz; echo $_; : ${y:=5}; echo $y $_; : \"$(echo hi)\"; echo $_");
 }
