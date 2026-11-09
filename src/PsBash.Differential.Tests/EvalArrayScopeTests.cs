@@ -29,4 +29,8 @@ public class EvalArrayScopeTests
     [Fact]
     public Task Eval_ArrayReverseHelper_WithRunTimeNames() => AssertOracle.EqualAsync(
         "function rev { builtin eval \"\n  set -- \\\"\\${$1[@]}\\\"; $1=()\n  local e$1 i$1=\\$#\n  for e$1; do $1[--i$1]=\\\"\\$e$1\\\"; done\"; }\na=(99 4 5 6)\nrev a\necho \"${a[@]}\"");
+
+    [Fact]
+    public Task Eval_SyntaxError_IsStatus2() => AssertOracle.EqualAsync(
+        "{ eval 'echo >'; } 2>/dev/null\necho status=$?\nx='echo >'\n{ eval \"$x\"; } 2>/dev/null\necho s2=$?\neval 'echo ok'\necho s3=$?");
 }

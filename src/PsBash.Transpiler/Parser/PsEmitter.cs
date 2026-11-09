@@ -10357,8 +10357,10 @@ public static partial class PsEmitter
             // assembly-qualified — given the assembly name it loads the assembly
             // on demand. A bare [PsBash.Core.Transpiler.BashTranspiler] silently
             // failed to resolve there, so eval emitted empty output.
-            "$__psbash_eval_pwsh = [PsBash.Core.Transpiler.BashTranspiler, PsBash.Transpiler]::Transpile($__psbash_eval_src, [PsBash.Core.Transpiler.TranspileContext, PsBash.Transpiler]::Eval" + EvalLocalNamesArg() + "); " +
-            "Invoke-Expression $__psbash_eval_pwsh " +
+            "$__psbash_eval_pwsh = $null; try { $__psbash_eval_pwsh = [PsBash.Core.Transpiler.BashTranspiler, PsBash.Transpiler]::Transpile($__psbash_eval_src, [PsBash.Core.Transpiler.TranspileContext, PsBash.Transpiler]::Eval" + EvalLocalNamesArg() + ") } " +
+            // A syntax error in the eval text is eval's own failure (status 2), not an exception out of the surrounding script.
+            "catch { Write-Error ('ps-bash: eval: ' + $(if ($_.Exception.InnerException) { $_.Exception.InnerException.Message } else { $_.Exception.Message })) -ErrorAction Continue; $global:LASTEXITCODE = 2 }; " +
+            "if ($null -ne $__psbash_eval_pwsh) { Invoke-Expression $__psbash_eval_pwsh } " +
             "} finally { $global:__BashEvalDepth = $__psbash_eval_depth } " +
             "}";
     }
