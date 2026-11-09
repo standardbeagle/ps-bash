@@ -30,14 +30,12 @@ status=255
 status=254
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-exit-status exit-status (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### If empty command
 if ''; then echo TRUE; else echo FALSE; fi
 ## stdout: FALSE
 ## status: 0
-## XFAIL ps-bash gap-oils-exit-status exit-status (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### If subshell true
@@ -91,7 +89,6 @@ eval false; echo $?
 1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-exit-status exit-status (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### More test cases with empty argv
@@ -261,6 +258,5 @@ status=0
 status=1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-exit-status exit-status (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher

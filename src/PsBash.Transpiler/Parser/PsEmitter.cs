@@ -4195,9 +4195,10 @@ public static partial class PsEmitter
             if (cmd.Words.Length >= 2)
             {
                 if (TryGetPureLiteralText(cmd.Words[1].Parts, out var retLiteral)
-                    && int.TryParse(retLiteral, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out _))
+                    && long.TryParse(retLiteral, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var retNum))
                 {
-                    specialResult = $"$global:LASTEXITCODE = {retLiteral}; return";
+                    // The status is the low 8 bits: `return 256` is 0, `return 257` is 1.
+                    specialResult = $"$global:LASTEXITCODE = {retNum % 256}; return";
                 }
                 else
                 {
@@ -4750,9 +4751,28 @@ public static partial class PsEmitter
     // The general fallback: no special form matched, emit the command word(s),
     // arguments (with env-prefix save/restore and unquoted-var splat handling),
     // and any trailing redirects.
+    private static bool IsEmptyQuotedWord(CompoundWord w)
+    {
+        if (w.Parts.IsEmpty) return false;
+        foreach (var part in w.Parts)
+        {
+            if (part is WordPart.SingleQuoted { Value.Length: 0 }) continue;
+            if (part is WordPart.DoubleQuoted { Parts.IsEmpty: true }) continue;
+            return false;
+        }
+        return true;
+    }
     private static string EmitGeneralCommand(Command.Simple cmd)
     {
         var sb = new StringBuilder();
+        // An empty command word ('' , "" ) names no command: bash reports ": command not found" (127).
+        if (cmd.EnvPairs.IsEmpty && cmd.Words.Length > 0 && IsEmptyQuotedWord(cmd.Words[0]))
+            return "[Console]::Error.WriteLine('ps-bash: : command not found'); $global:LASTEXITCODE = 127";
+        // A command word that is only a command substitution: the substitution runs, and when it expands to
+        // nothing no command runs and the status is the substitution's (+""+"true"+""+, $(false), $(exit 42)).
+        if (cmd.EnvPairs.IsEmpty && cmd.Words.Length == 1 && cmd.Words[0].Parts.Length == 1
+            && cmd.Words[0].Parts[0] is WordPart.CommandSub)
+            return "$__psbash_cs = " + EmitAssignmentValue(cmd.Words[0]) + "; if ($__psbash_cs) { $__psbash_cw = @(ConvertTo-BashWords $__psbash_cs); & (Resolve-BashCommand $__psbash_cw[0]) @($__psbash_cw | Select-Object -Skip 1) }";
 
         // Env-var prefix: VAR=value cmd — set VAR only for the duration of cmd,
         // then restore to its previous value to prevent leaking into the shell.
