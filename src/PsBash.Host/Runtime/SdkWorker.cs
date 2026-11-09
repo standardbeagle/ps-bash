@@ -830,6 +830,9 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
             Environment.SetEnvironmentVariable(entry.Key, entry.Value);
         }
 
+        // bash starts every shell with OPTIND=1; seed it when the launcher did not supply one.
+        if (keep.Add("OPTIND")) Environment.SetEnvironmentVariable("OPTIND", "1");
+
         // Remove anything not in the launcher block (vars written by an earlier
         // invocation such as `export Y=leak`, and host-only vars the launcher
         // never saw). Snapshot first: mutating while enumerating throws.

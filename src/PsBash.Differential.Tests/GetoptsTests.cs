@@ -33,4 +33,19 @@ public class GetoptsTests
     [Fact]
     public Task InsideFunction_UsesFunctionArguments() => AssertOracle.EqualAsync(
         "f() { OPTIND=1; while getopts 'n:v' o; do echo \"$o=$OPTARG\"; done; }; f -n 5 -v; f -v");
+
+    [Fact]
+    public Task Optind_StartsAtOne() => AssertOracle.EqualAsync("echo \"[$OPTIND]\"");
+
+    [Fact]
+    public Task OptindPastTheEnd_ClampsToArgCountPlusOne() => AssertOracle.EqualAsync(
+        "set -- -h; OPTIND=9; getopts 'hc:' o; echo \"rc=$? OPTIND=$OPTIND\"; set --; OPTIND=4; getopts 'hc:' o; echo \"rc=$? OPTIND=$OPTIND\"");
+
+    [Fact]
+    public Task SetPositionals_DoesNotResetOptind() => AssertOracle.EqualAsync(
+        "set -- -a; while getopts 'ab:' o; do :; done; echo OPTIND=$OPTIND; set -- -c -d; while getopts 'cd' o; do echo $o; done; echo OPTIND=$OPTIND");
+
+    [Fact]
+    public Task InvalidVariableName_FailsButScans() => AssertOracle.EqualAsync(
+        "set -- -c foo -h; getopts 'hc:' opt- 2>/dev/null; echo status=$? OPTARG=$OPTARG OPTIND=$OPTIND");
 }

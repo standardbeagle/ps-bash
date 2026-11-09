@@ -41,17 +41,21 @@ public sealed class InvokeBashGetoptsCommand : PSCmdlet
         string[] args = a.Length > 2 ? a[2..] : PositionalParameters();
 
         int optind = int.TryParse(BashVariableStore.Get("OPTIND"), out var oi) && oi >= 1 ? oi : 1;
+        // An OPTIND past the end of the (new) argument list is pulled back to just past it (bash).
+        if (optind > args.Length + 1) optind = args.Length + 1;
         int charPos = ReadCharPos(optind);
 
         var result = Next(spec, silent, args, ref optind, ref charPos);
 
         Assign("OPTIND", optind.ToString());
         BashVariableStore.Set(PosVar, charPos == 0 ? null : optind + ":" + charPos);
-        Assign(name, result.Name);
+        bool validName = System.Text.RegularExpressions.Regex.IsMatch(name, "^[A-Za-z_][A-Za-z0-9_]*$");
+        if (validName) Assign(name, result.Name);
+        else FileSystemHelpers.WriteStderr(this, $"getopts: `{name}': not a valid identifier");
         if (result.OptArg is null) Unassign("OPTARG");
         else Assign("OPTARG", result.OptArg);
         if (result.Error is not null) FileSystemHelpers.WriteStderr(this, result.Error);
-        FileSystemHelpers.SetLastExitCode(this, result.Found ? 0 : 1);
+        FileSystemHelpers.SetLastExitCode(this, result.Found && validName ? 0 : 1);
     }
 
     /// <summary>One step of the scan; pure, so the option grammar is testable without a runspace.</summary>

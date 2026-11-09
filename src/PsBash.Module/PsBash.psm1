@@ -178,6 +178,9 @@ function Resolve-BashCommand {
     return $Name
 }
 
+# OPTIND starts at 1 (getopts reads it; scripts print it); the host setup script does the same before the first command.
+if ($null -eq $env:OPTIND) { $env:OPTIND = '1' }
+
 # BASH_SOURCE: the script file (and, while `source` runs, the sourced files above it); empty for `-c`.
 if (-not (Get-Variable -Name BASH_SOURCE -Scope global -ErrorAction SilentlyContinue)) {
     $global:BASH_SOURCE = @()

@@ -228,3 +228,6 @@ $ExecutionContext.InvokeCommand.CommandNotFoundAction = {
     }.GetNewClosure()
     $EventArgs.StopSearch = $true
 }.GetNewClosure()
+
+# OPTIND starts at 1 (getopts reads it; scripts print it).
+if ($null -eq $env:OPTIND) { $env:OPTIND = '1' }
