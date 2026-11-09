@@ -1,4 +1,4 @@
-using System.Collections.Immutable;
+﻿using System.Collections.Immutable;
 using PsBash.Core.Parser;
 
 namespace PsBash.Core.Parser.Ast;
@@ -56,7 +56,8 @@ public abstract record Command : BashNode
         bool IsReadonly = false,
         bool IsNameref = false,
         bool IsAssoc = false,
-        bool IsDeclare = false) : Command;
+        bool IsDeclare = false,
+        int Line = 0) : Command;
 
     /// <summary>
     /// An if/elif/else statement.

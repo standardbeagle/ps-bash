@@ -29,7 +29,6 @@ echo $a
 readonly x=1; x=2; echo hi
 ## stdout:
 ## status: 1
-## XFAIL ps-bash gap-oils-bugs bugs (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### assign readonly -- multiple lines
@@ -47,7 +46,6 @@ x=2
 echo hi
 ## stdout:
 ## status: 1
-## XFAIL ps-bash gap-oils-bugs bugs (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### unset readonly -- one line

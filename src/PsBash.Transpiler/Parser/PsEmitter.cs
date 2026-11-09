@@ -129,6 +129,9 @@ public static partial class PsEmitter
     /// <summary>True when the script text reads `$?` somewhere: only then does a bare assignment need to reset the status to 0.</summary>
     [ThreadStatic] private static bool _scriptReadsStatus;
     [ThreadStatic] private static bool _scriptReadsLastArg;
+    /// <summary>Set when an assignment to a readonly variable was emitted: bash drops the rest of that input line.</summary>
+    [ThreadStatic] private static bool _readonlyViolation;
+    [ThreadStatic] private static bool _scriptPosix;
 
     /// <summary><c>declare -n ref=target</c> in the script being emitted: <c>ref</c> reads and writes <c>target</c>.
     /// Static only (a literal target, resolved at emit time); a nameref set at run time is not modelled.</summary>
@@ -652,6 +655,8 @@ public static partial class PsEmitter
         _intVars = new HashSet<string>(StringComparer.Ordinal);
         var priorReadsStatus = _scriptReadsStatus;
         var priorReadsLastArg = _scriptReadsLastArg;
+        var priorPosix = _scriptPosix;
+        _scriptPosix = priorPosix || bash.Contains("set -o posix");
         _scriptReadsLastArg = priorReadsLastArg || System.Text.RegularExpressions.Regex.IsMatch(bash, @"\$(_(?![A-Za-z0-9_])|\{_[^A-Za-z0-9_])");
         _scriptReadsStatus = priorReadsStatus || bash.Contains("$?") || bash.Contains("${?");
         var priorReadonly = _readonlyVars;
@@ -704,6 +709,7 @@ public static partial class PsEmitter
             _caseVars = priorCaseVars;
             _scriptReadsStatus = priorReadsStatus;
             _scriptReadsLastArg = priorReadsLastArg;
+            _scriptPosix = priorPosix;
             _readonlyVars = priorReadonly;
             _namerefs = priorNamerefs;
             _litAssigned = priorLitAssigned; _pendingNamerefs = priorPendingNamerefs;
@@ -3306,6 +3312,7 @@ public static partial class PsEmitter
             string roBase = roName.Contains('[') ? roName[..roName.IndexOf('[')] : roName;
             if (!cmd.IsLocal && !cmd.IsExport && _readonlyVars?.Contains(roBase) == true)
             {
+                _readonlyViolation = true;
                 sb.Append("Write-Error ").Append(PsBuild.SingleQuote($"ps-bash: {roBase}: readonly variable"))
                   .Append(" -ErrorAction Continue; ").Append(PsBuild.SetStatus(1));
                 continue;
@@ -8658,6 +8665,9 @@ public static partial class PsEmitter
         return new CompoundWord(parts.ToImmutable());
     }
 
+    private static int SourceLine(Command c) => c switch { Command.Simple s => s.Line, Command.ShAssignment a => a.Line, _ => 0 };
+
+
     private static string EmitCommandList(Command.CommandList list)
     {
         list = list with { Commands = ResolveLastArgRefs(list.Commands) };
@@ -8666,7 +8676,14 @@ public static partial class PsEmitter
         {
             if (i > 0)
                 sb.Append("; ");
+            _readonlyViolation = false;
             sb.Append(EmitStatement(list.Commands[i]));
+            if (_readonlyViolation)
+            {
+                if (_scriptPosix && _functionDepth == 0) break;
+                int failedLine = SourceLine(list.Commands[i]);
+                while (failedLine > 0 && i + 1 < list.Commands.Length && SourceLine(list.Commands[i + 1]) == failedLine) i++;
+            }
         }
         return sb.ToString();
     }

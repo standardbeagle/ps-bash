@@ -1,0 +1,16 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 36
+stdout-length: 3
+stderr-length: 35
+==== SCRIPT ====
+readonly x=1
+x=2 2>/dev/null
+echo hi
+==== STDOUT ====
+hi
+
+==== STDERR ====
+bash: line 2: x: readonly variable
+

@@ -1,4 +1,4 @@
-using System.Collections.Immutable;
+﻿using System.Collections.Immutable;
 using PsBash.Core.Parser.Ast;
 
 namespace PsBash.Core.Parser;
@@ -43,6 +43,13 @@ public sealed partial class BashParser
     }
 
     private Command ParseSimpleCommand()
+    {
+        int startLine = BashLexer.LineAt(_input, Peek().Position);
+        var parsed = ParseSimpleCommandCore();
+        return parsed is Command.ShAssignment asg ? asg with { Line = startLine } : parsed;
+    }
+
+    private Command ParseSimpleCommandCore()
     {
         SkipDeclarationWrappers();
         // `export` / `local` NAME=VAL … — see ParseDeclarationPairs for the shape.
