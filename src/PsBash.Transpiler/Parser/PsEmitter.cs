@@ -4400,6 +4400,9 @@ public static partial class PsEmitter
         else if (cmd0 == "set" && cmd.Words.Length >= 2)
             specialResult = EmitSet(cmd);
 
+        else if ((cmd0 == "source" || cmd0 == ".") && cmd.Words.Length == 1)
+            specialResult = "Write-Error '" + cmd0 + ": filename argument required' -ErrorAction Continue; $global:LASTEXITCODE = 2";
+
         else if ((cmd0 == "source" || cmd0 == ".") && cmd.Words.Length >= 2)
             specialResult = EmitSourceOrDot(cmd);
 

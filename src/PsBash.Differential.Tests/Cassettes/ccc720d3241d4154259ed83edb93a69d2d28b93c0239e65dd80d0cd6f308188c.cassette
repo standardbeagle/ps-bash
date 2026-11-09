@@ -1,0 +1,17 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 68
+stdout-length: 13
+stderr-length: 0
+==== SCRIPT ====
+{ source; } 2>/dev/null
+echo status=$?
+{ . ; } 2>/dev/null
+echo s=$?
+==== STDOUT ====
+status=2
+s=2
+
+==== STDERR ====
+

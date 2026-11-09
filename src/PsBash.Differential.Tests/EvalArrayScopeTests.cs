@@ -33,4 +33,8 @@ public class EvalArrayScopeTests
     [Fact]
     public Task Eval_SyntaxError_IsStatus2() => AssertOracle.EqualAsync(
         "{ eval 'echo >'; } 2>/dev/null\necho status=$?\nx='echo >'\n{ eval \"$x\"; } 2>/dev/null\necho s2=$?\neval 'echo ok'\necho s3=$?");
+
+    [Fact]
+    public Task Source_WithoutArguments_IsStatus2() => AssertOracle.EqualAsync(
+        "{ source; } 2>/dev/null\necho status=$?\n{ . ; } 2>/dev/null\necho s=$?");
 }

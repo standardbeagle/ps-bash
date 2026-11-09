@@ -84,7 +84,6 @@ source
 echo status=$?
 ## stdout: status=2
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-eval-source builtin-eval-source (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Eval with syntax error
