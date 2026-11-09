@@ -29,7 +29,19 @@ public static class BashShellState
     public static void MarkReadonly(string name) { lock (ReadonlyNames) ReadonlyNames.Add(name); }
 
     /// <summary>A new, independent invocation starts with nothing readonly (the daemon outlives the scripts it runs).</summary>
-    public static void ClearReadonly() { lock (ReadonlyNames) ReadonlyNames.Clear(); lock (Attributes) Attributes.Clear(); }
+    public static void ClearReadonly() { lock (ReadonlyNames) ReadonlyNames.Clear(); lock (Attributes) Attributes.Clear(); lock (Namerefs) Namerefs.Clear(); }
+
+    private static readonly Dictionary<string, string> Namerefs = new(StringComparer.Ordinal);
+
+    /// <summary>Records <c>declare -n NAME=TARGET</c> so <c>declare -p</c> can list it (the emitter resolves the reference itself).</summary>
+    public static void SetNameref(string name, string target) { lock (Namerefs) Namerefs[name] = target; }
+
+    /// <summary><c>declare +n NAME</c>: the name is a plain variable again.</summary>
+    public static void ClearNameref(string name) { lock (Namerefs) Namerefs.Remove(name); }
+
+    internal static string? NamerefTarget(string name) { lock (Namerefs) return Namerefs.TryGetValue(name, out var t) ? t : null; }
+
+    internal static string[] NamerefNames() { lock (Namerefs) return [.. Namerefs.Keys]; }
 
     private static readonly Dictionary<string, string> Attributes = new(StringComparer.Ordinal);
 

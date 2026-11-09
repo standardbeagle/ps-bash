@@ -112,7 +112,6 @@ declare -x test_var3="333"
 declare -- test_var5="555"
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-assign-extended assign-extended (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### declare -p
@@ -151,7 +150,6 @@ declare -x test_var3="333"
 declare -- test_var5="555"
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-assign-extended assign-extended (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### typeset -f
@@ -426,7 +424,6 @@ declare -r test_var2="222"
 declare -x test_var3="333"
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-assign-extended assign-extended (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### declare -paA
@@ -490,7 +487,6 @@ declare -n test_var4="test_var1"
 declare -- test_var5="555"
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-assign-extended assign-extended (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### declare -pg

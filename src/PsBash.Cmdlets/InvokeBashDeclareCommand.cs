@@ -106,10 +106,12 @@ public sealed class InvokeBashDeclareCommand : PSCmdlet
         var env = Environment.GetEnvironmentVariables();
         var keys = new List<string>();
         foreach (System.Collections.DictionaryEntry e in env) keys.Add((string)e.Key);
+        foreach (var nr in BashShellState.NamerefNames())
+            if (!keys.Contains(nr)) keys.Add(nr);
         keys.Sort(string.CompareOrdinal);
         foreach (var key in keys)
         {
-            string v = (string?)env[key] ?? string.Empty;
+            string v = (string?)env[key] ?? BashShellState.NamerefTarget(key) ?? string.Empty;
             bool plain = true;
             foreach (char c in v)
                 if (!(char.IsAsciiLetterOrDigit(c) || "_-./:+=@%,".IndexOf(c) >= 0)) { plain = false; break; }
@@ -157,6 +159,8 @@ public sealed class InvokeBashDeclareCommand : PSCmdlet
         {
             // Variable provider unavailable: environment variables only.
         }
+        foreach (var nr in BashShellState.NamerefNames())
+            if (seen.Add(nr)) result.Add((nr, null));
         result.Sort((a, b) => string.CompareOrdinal(a.Item1, b.Item1));
         return result;
     }
@@ -174,7 +178,8 @@ public sealed class InvokeBashDeclareCommand : PSCmdlet
                 if (select.Contains('A') && !isAssoc) continue;
                 if (select.Contains('r') && !letters.Contains('r')) continue;
                 if (select.Contains('x') && !letters.Contains('x')) continue;
-                if (select.Contains('n')) continue;
+                bool isNameref = BashShellState.NamerefTarget(name) is not null;
+                if (select.Contains('n') != isNameref && (select.Contains('n') || select.Count > 0)) continue;
                 DeclarePrinter.TryPrintVariable(this, name);
             }
             return;

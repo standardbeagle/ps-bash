@@ -3229,6 +3229,9 @@ public static partial class PsEmitter
     /// A bare assignment statement ends with status 0 (`false; x=1; echo $?` prints 0), unless a command substitution
     /// supplies the status or the target is readonly (the refusal sets 1).
     /// </summary>
+    private static string NamerefMark(string name, string target) =>
+        "[PsBash.Cmdlets.BashShellState]::SetNameref(" + PsBuild.SingleQuote(name) + ", " + PsBuild.SingleQuote(target) + ")";
+
     private static string EmitShAssignmentStatement(Command.ShAssignment cmd)
     {
         string text = EmitShAssignment(cmd);
@@ -3264,7 +3267,7 @@ public static partial class PsEmitter
             {
                 _pendingNamerefs.Remove(pair.Name);
                 _namerefs[pair.Name] = refTarget;
-                sb.Append(PsBuild.SetStatus(0));
+                sb.Append(NamerefMark(pair.Name, refTarget)).Append("; ").Append(PsBuild.SetStatus(0));
                 continue;
             }
             if (!cmd.IsLocal && !cmd.IsExport && _litAssigned is not null && !pair.Name.Contains('['))
@@ -3470,6 +3473,14 @@ public static partial class PsEmitter
                     if (!cmd.IsLocal) _readonlyVars?.Add(pair.Name);
                 }
         return sb.ToString();
+    }
+
+    // `local`, `local -p`, `local -p a b`: a listing (no assignments, no other flags).
+    private static bool IsLocalListing(Command.Simple cmd)
+    {
+        for (int k = 1; k < cmd.Words.Length; k++)
+            if (GetLiteralValue(cmd.Words[k]) is not { } s || s.Contains('=') || (s.StartsWith('-') && s != "-p") || s.Length == 0) return false;
+        return true;
     }
 
     // `declare $var="x"`, `export "$k=$v"`, `readonly $n=1`: the variable NAME is only known at run time, so the
@@ -3940,16 +3951,17 @@ public static partial class PsEmitter
             && cmd.Words.Skip(1).Any(w => GetLiteralValue(w) is { Length: > 1 } f && f[0] == '+' && f.Contains('n')))
         {
             _namerefs.Remove(varName); _pendingNamerefs?.Remove(varName);
-            result = PsBuild.SetStatus(0);
+            result = "[PsBash.Cmdlets.BashShellState]::ClearNameref(" + PsBuild.SingleQuote(varName) + "); " + PsBuild.SetStatus(0);
             return true;
         }
         // `typeset -n ref` with no target: a string assigned earlier (`ref=x`) becomes the target; otherwise the next literal assignment names it.
         if (isNameref && !isPrint && varName is not null && IsValidVarName(varName) && _namerefs is not null && !_namerefs.ContainsKey(varName))
         {
+            string nrMark = "";
             if (_litAssigned is not null && _litAssigned.TryGetValue(varName, out var known) && IsValidVarName(known) && known != varName)
-                _namerefs[varName] = known;
+            { _namerefs[varName] = known; nrMark = NamerefMark(varName, known) + "; "; }
             else if (_litAssigned is null || !_litAssigned.ContainsKey(varName)) _pendingNamerefs?.Add(varName);
-            result = PsBuild.SetStatus(0);
+            result = nrMark + PsBuild.SetStatus(0);
             return true;
         }
         // `declare -n ref='a[2]'` (a quoted element target makes the word non-literal, so it arrives as name + value).
@@ -3957,14 +3969,14 @@ public static partial class PsEmitter
             && ExtractSingleQuotedOrLiteralValue(exprValue) is { } elemRefTarget && IsNamerefElementTarget(elemRefTarget))
         {
             _namerefs[exprName] = elemRefTarget;
-            result = PsBuild.SetStatus(0);
+            result = NamerefMark(exprName, elemRefTarget) + "; " + PsBuild.SetStatus(0);
             return true;
         }
         if (isNameref && varName is not null && varName.IndexOf('=') is var neq and > 0
             && IsValidVarName(varName[..neq]) && (IsValidVarName(varName[(neq + 1)..]) || IsNamerefElementTarget(varName[(neq + 1)..])) && _namerefs is not null)
         {
             _namerefs[varName[..neq]] = varName[(neq + 1)..];
-            result = PsBuild.SetStatus(0);
+            result = NamerefMark(varName[..neq], varName[(neq + 1)..]) + "; " + PsBuild.SetStatus(0);
             return true;
         }
         if (!isPrint && exprName is not null && !isAssoc)
@@ -4435,6 +4447,14 @@ public static partial class PsEmitter
 
         else if (cmd0 == "readonly")
             specialResult = EmitReadonly(cmd);
+
+        // `local` / `local -p [NAME...]` inside a function: list the function's locals as `declare -- n="v"` lines.
+        else if (cmd0 == "local" && _functionDepth > 0 && _functionLocalNames is { Count: > 0 } fnLocals && IsLocalListing(cmd))
+            specialResult = EmitMappedStandalone(cmd, EmitPassthrough("Invoke-BashDeclare",
+                ImmutableArray.Create(new CompoundWord(ImmutableArray.Create<WordPart>(new WordPart.Literal("-p")))).AddRange(
+                    (cmd.Words.Length > 1 && cmd.Words.Skip(1).Any(w => GetLiteralValue(w) is { } s && s != "-p")
+                        ? cmd.Words.Skip(1).Where(w => GetLiteralValue(w) != "-p")
+                        : fnLocals.Select(n => new CompoundWord(ImmutableArray.Create<WordPart>(new WordPart.Literal(n))))))));
 
         // Bare `set` / `declare` / `typeset`: list the variables as `name=value` lines.
         else if (cmd0 is "set" or "declare" or "typeset" && cmd.Words.Length == 1)

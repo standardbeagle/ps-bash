@@ -60,7 +60,9 @@ public sealed partial class BashParser
             int saved = _pos;
             Advance(); // consume the keyword
 
-            if (ParseDeclarationPairs() is { } pairs)
+            // `local -p [NAME…]` is a listing, not a declaration: leave it to the emitter.
+            if (!(Peek().Kind == BashTokenKind.Word && Peek().Value == "-p" && _tokens[saved].Value == "local")
+                && ParseDeclarationPairs() is { } pairs)
                 return new Command.ShAssignment(pairs, IsLocal: isLocal, IsExport: !isLocal, IsReadonly: isLocal && _declSawReadonly, IsNameref: isLocal && _declSawNameref);
 
             // No assignment or name followed — rewind and parse as a normal command

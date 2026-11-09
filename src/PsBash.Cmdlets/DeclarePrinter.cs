@@ -19,6 +19,13 @@ internal static class DeclarePrinter
     /// </summary>
     internal static bool TryPrintVariable(PSCmdlet cmdlet, string name)
     {
+        if (BashShellState.NamerefTarget(name) is { } refTarget)
+        {
+            foreach (var line in BashRuntime.EmitBashLines($"declare -n {name}={QuoteValue(refTarget)}\n"))
+                cmdlet.WriteObject(line);
+            return true;
+        }
+
         object? val = null;
         try
         {
