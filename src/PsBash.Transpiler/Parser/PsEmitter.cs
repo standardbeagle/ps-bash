@@ -3244,6 +3244,8 @@ public static partial class PsEmitter
         }
         if (!_scriptReadsStatus || ContainsCommandSub(cmd)) return text;
         if (cmd.Pairs.Any(p => _readonlyVars?.Contains(p.Name.Contains('[') ? p.Name[..p.Name.IndexOf('[')] : p.Name) == true || ResolveNameref(p.Name) != p.Name)) return text;
+        // An array literal whose glob fails under failglob ends the statement with status 1; keep it.
+        if (cmd.Pairs.Any(p => p.ArrayValue is not null)) return text + "; if ($?) { $global:LASTEXITCODE = 0 }";
         return text + "; $global:LASTEXITCODE = 0";
     }
 

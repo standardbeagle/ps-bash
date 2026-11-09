@@ -64,7 +64,9 @@ internal static class DoubleBracketGrammar
         // A unary operator with no operand (`[[ -z ]]`) is a syntax error, not a one-word test.
         if (cur is not null && Unary.Contains(cur)) return false;
         // &&, ||, ) and a symbolic binary operator cannot start an operand.
-        if (Structural(cur) || cur is "==" or "!=" or "=~" or "<" or ">") return false;
+        // A lone operator word with nothing after it (`[[ = ]]`, `[[ == ]]`) is a one-word string test (true).
+        bool loneWord = i + 1 >= t.Count || Structural(t[i + 1]);
+        if (Structural(cur) || (!loneWord && cur is "==" or "!=" or "=~" or "<" or ">")) return false;
         i++; // operand word
         if (i < t.Count && t[i] is { } op && Binary.Contains(op))
         {

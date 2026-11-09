@@ -1,0 +1,18 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 78
+stdout-length: 11
+stderr-length: 0
+==== SCRIPT ====
+shopt -s failglob
+{ myarr=(*.ZZ); } 2>/dev/null
+echo status=$?
+a=(x y)
+echo $?
+==== STDOUT ====
+status=1
+0
+
+==== STDERR ====
+
