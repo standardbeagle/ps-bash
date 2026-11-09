@@ -3237,6 +3237,13 @@ public static partial class PsEmitter
             }
             // `local -r x=1`: later writes to x in this function are refused (the set is restored when the function ends).
             if (cmd.IsLocal && cmd.IsReadonly) _readonlyVars?.Add(pair.Name);
+            // Mutually recursive namerefs (`ref1 -> ref2 -> ref1`) are only detected when written through.
+            if (!cmd.IsLocal && !cmd.IsExport && _namerefs is { Count: > 0 } && _namerefs.ContainsKey(pair.Name) && _namerefs.ContainsKey(ResolveNameref(pair.Name)))
+            {
+                sb.Append("Write-Error ").Append(PsBuild.SingleQuote($"ps-bash: {pair.Name}: circular name reference"))
+                  .Append(" -ErrorAction Continue; ").Append(PsBuild.SetStatus(1));
+                continue;
+            }
             string roName = ResolveNameref(pair.Name); // a write through a nameref is a write to its target
             string roBase = roName.Contains('[') ? roName[..roName.IndexOf('[')] : roName;
             if (!cmd.IsLocal && !cmd.IsExport && _readonlyVars?.Contains(roBase) == true)
@@ -7627,6 +7634,9 @@ public static partial class PsEmitter
     private static string EmitBracedVar(WordPart.BracedVarSub bvs, bool inDoubleQuote = false)
     {
         NestingGuard.EnsureStack(); // ${x:-${x:-…}} recurses here without passing Emit(Command)
+        // `${!ref}` of a nameref is the NAME it refers to (bash inverts the usual meaning).
+        if (bvs.Suffix == "!indirect" && _namerefs is { Count: > 0 } && _namerefs.TryGetValue(bvs.Name, out var namerefTargetName))
+            return inDoubleQuote ? "$(" + PsBuild.SingleQuote(namerefTargetName) + ")" : PsBuild.SingleQuote(namerefTargetName);
         if (_namerefs is { Count: > 0 } && _namerefs.ContainsKey(bvs.Name))
             bvs = bvs with { Name = ResolveNameref(bvs.Name) };
         if (bvs.Suffix is null)

@@ -21,4 +21,12 @@ public class NamerefElementTests
     [Fact]
     public Task Nameref_WriteToReadonlyTarget_IsRefused() => AssertOracle.EqualAsync(
         "x=X\ntypeset -n -r ref=x\nref=XX\necho ref=$ref\ntypeset -r x\n{ ref=XXX; } 2>/dev/null\necho ref=$ref x=$x");
+
+    [Fact]
+    public Task Nameref_IndirectExpansion_IsTheTargetName() => AssertOracle.EqualAsync(
+        "foo=FOO\nx=foo\nref=x\necho ref=$ref \"!ref=${!ref}\"\ntypeset -n ref\necho ref=$ref\necho \"!ref=${!ref}\" ${!ref}");
+
+    [Fact]
+    public Task Nameref_Cycle_WriteFails() => AssertOracle.EqualAsync(
+        "typeset -n ref1=ref2\ntypeset -n ref2=ref1\necho defined $?\n{ ref1=z; } 2>/dev/null\necho mutated $?");
 }

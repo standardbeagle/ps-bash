@@ -129,7 +129,6 @@ ref=foo
 !ref=x
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-nameref nameref (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### named ref with $# doesn't work
@@ -403,7 +402,6 @@ defined 0
 mutated 1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-nameref nameref (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### assign to invalid ref with strict_nameref
