@@ -4006,7 +4006,7 @@ public static partial class PsEmitter
                 || (redirect.Op == ">&" && redirect.Fd == 1);
             if (!opensFile) continue;
 
-            var target = TransformRedirectTarget(EmitArgWord(redirect.Target));
+            var target = EmitFileRedirectTarget(redirect.Target);
             // `/dev/null` maps to $null; `>&2` / `>&-` / `2>&1` duplicate or close a descriptor, not a file.
             if (target == "$null" || (redirect.Op == ">&" && (IsAllDigits(target) || target == "-")))
             {
@@ -4974,7 +4974,7 @@ public static partial class PsEmitter
 
     private static string EmitRedirect(Redirect r)
     {
-        var target = TransformRedirectTarget(EmitArgWord(r.Target));
+        var target = EmitFileRedirectTarget(r.Target);
         // An expanded file target (`2> $dir/f`, dir=/c/Users/...) is only known at run time,
         // so the literal `/c/…` rewrite above cannot see it: map it when it is evaluated.
         // fd-dup/close ops (`>&`, `<&`) take an fd number, not a path — left alone.
@@ -5039,6 +5039,18 @@ public static partial class PsEmitter
             if (c < '0' || c > '9')
                 return false;
         return true;
+    }
+
+    /// <summary>
+    /// The path of a `> word` / `>> word` / `2> word` file redirect. An unquoted glob or variable is expanded like any word: exactly
+    /// one result is the file (no match leaves a glob as its own text); several, or none for a variable, is "ambiguous redirect" --
+    /// the empty path, which fails the redirect with status 1 as `> ''` does.
+    /// </summary>
+    private static string EmitFileRedirectTarget(CompoundWord word)
+    {
+        if (IsGlobWord(word) || IsPureUnquotedVarWord(word))
+            return "$(& { $__rt = @(" + EmitUnquotedSplitWordArray(word) + "); if ($__rt.Count -eq 1) { $__rt[0] } else { '' } })";
+        return TransformRedirectTarget(EmitArgWord(word));
     }
 
     private static string TransformRedirectTarget(string target)
@@ -9106,7 +9118,7 @@ public static partial class PsEmitter
         {
             if (r.Fd is not (1 or 2))
                 return false;
-            var target = TransformRedirectTarget(EmitArgWord(r.Target));
+            var target = EmitFileRedirectTarget(r.Target);
             switch (r.Op)
             {
                 case ">" or ">|" or ">>":
@@ -9223,7 +9235,7 @@ public static partial class PsEmitter
         bool stderrMerged = false;
         foreach (var redirect in redirects)
         {
-            var target = TransformRedirectTarget(EmitArgWord(redirect.Target));
+            var target = EmitFileRedirectTarget(redirect.Target);
             bool isStdoutFile = redirect.Fd == 1
                 && (redirect.Op == ">" || redirect.Op == ">>")
                 && target != "$null";
@@ -9251,7 +9263,7 @@ public static partial class PsEmitter
 
         if (fileRedirect is not null)
         {
-            var target = TransformRedirectTarget(EmitArgWord(fileRedirect.Target));
+            var target = EmitFileRedirectTarget(fileRedirect.Target);
             sb.Append(" | Invoke-BashRedirect -Path ");
             sb.Append(target);
             if (fileRedirect.Op == ">>")
