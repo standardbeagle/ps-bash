@@ -17,7 +17,8 @@ public class ShellStateInventoryGuardTests
     private static readonly Dictionary<string, string> NotShellState = new(StringComparer.Ordinal)
     {
         ["COMPREPLY"] = "completion-function hand-off, reset before and read back by each compgen -F call",
-        ["LASTEXITCODE"] = "PowerShell's own; the status is carried by the command result, not copied",
+        ["__BashIndirectBad"] = "one-command hand-off: set by a bad ${!ref}, read and cleared before the command runs",
+        ["LASTEXITCODE"] ="PowerShell's own; the status is carried by the command result, not copied",
         ["PsBashVersion"] = "constant, set at module load",
         ["BashVersionInfo"] = "constant, set at module load",
         ["BASH_VERSINFO"] = "constant alias of BashVersionInfo, set at module load (so declare -p sees it)",

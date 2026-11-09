@@ -7544,12 +7544,15 @@ public static partial class PsEmitter
             else if (IsUnquotedSplitWord(args[i]))
             {
                 string tempVar = $"$__bashsplat{splatCounter++}";
+                string emitted = EmitUnquotedSplitWordArray(args[i]);
                 prelude.Append(tempVar)
                        .Append(" = ")
-                       .Append(EmitUnquotedSplitWordArray(args[i]))
+                       .Append(emitted)
                        .Append("; ");
                 // failglob: the expansion error ends only its own statement, so stop before the command runs.
+                // An invalid indirect reference (`${!a}`, a=/) abandons the command too.
                 if (IsGlobWord(args[i]) || IsBraceGlobWord(args[i])) prelude.Append("if (-not $?) { return }; ");
+                else if (emitted.Contains("Get-BashIndirectValue")) prelude.Append("if ($global:__BashIndirectBad) { $global:__BashIndirectBad = $false; return }; ");
                 call.Append('@').Append(tempVar.AsSpan(1));
             }
             else

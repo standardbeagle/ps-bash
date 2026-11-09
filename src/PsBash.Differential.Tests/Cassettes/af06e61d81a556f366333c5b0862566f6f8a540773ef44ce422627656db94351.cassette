@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 52
+stdout-length: 9
+stderr-length: 0
+==== SCRIPT ====
+b='/'
+{ echo ref ${!b}; } 2>/dev/null
+echo status=$?
+==== STDOUT ====
+status=1
+
+==== STDERR ====
+

@@ -137,7 +137,13 @@ function Get-BashIndirectValue {
         if ($sub -match '^-?[0-9]+$') { $i = [int]$sub; if ($i -lt 0) { $i += @($v).Count }; $all = @($v); if ($i -ge 0 -and $i -lt $all.Count) { return $all[$i] } }
         return $null
     }
-    if ($n -notmatch '^[A-Za-z_][A-Za-z0-9_]*$') { return $null }
+    if ($n -notmatch '^[A-Za-z_][A-Za-z0-9_]*$') {
+        # bash: `${!a}` with a='bad var name' is "invalid variable name"; the command is abandoned with status 1.
+        $global:LASTEXITCODE = 1
+        $global:__BashIndirectBad = $true
+        Write-BashHostStderr "bash: ${n}: invalid variable name"
+        return $null
+    }
     $e = [System.Environment]::GetEnvironmentVariable($n)
     if ($null -ne $e) { return $e }
     $pv = Get-Variable -Name $n -ValueOnly -ErrorAction Ignore
