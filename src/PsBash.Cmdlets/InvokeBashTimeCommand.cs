@@ -135,8 +135,10 @@ public sealed class InvokeBashTimeCommand : PSCmdlet
         pso.Properties.Add(new PSNoteProperty("Command", cmd));
         pso.Properties.Add(new PSNoteProperty("ExitCode", exitCode));
         pso.Properties.Add(new PSNoteProperty("BashText", outputText));
-        // No output means no stdout record: the empty TimeOutput would print a blank line bash does not.
-        if (outputText.Length > 0 || faulted) WriteObject(pso);
+        // A silent command still yields the timing record (direct callers read .RealTime), but as an unterminated
+        // empty text: a plain empty TimeOutput would print a blank line bash does not.
+        if (outputText.Length == 0 && !faulted) pso.Properties.Add(new PSNoteProperty("NoTrailingNewline", true));
+        WriteObject(pso);
         FileSystemHelpers.SetLastExitCode(this, exitCode);
     }
 }
