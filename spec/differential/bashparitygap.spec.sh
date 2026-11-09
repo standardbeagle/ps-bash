@@ -19,7 +19,6 @@ f(){ declare y=5; }; f; echo "[${y-unset}]"
 readonly r=1; r=2; echo "r=$r"
 ## stdout:
 ## status: 1
-## XFAIL ps-bash triage bash exits the script on a readonly assignment; ps-bash reports it and continues (intentional-differences.md)
 
 #### VariableNames_AreCaseSensitive
 x=1; X=2; echo "$x $X"

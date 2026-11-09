@@ -1403,6 +1403,14 @@ public class BashParserTests
     }
 
     [Fact]
+    public void Parse_DoubleSemiOutsideCase_IsSyntaxError()
+    {
+        Assert.Throws<ParseException>(() => Parse("echo 1 ;; echo 2"));
+        Assert.Throws<ParseException>(() => Parse("echo 1; ; echo 2"));
+        Parse("echo 1; echo 2;\ncase a in a) echo A;; b) echo B;; esac");
+    }
+
+    [Fact]
     public void Parse_CaseEmptyPattern_Throws()
     {
         // `case x in ) esac` is a bash syntax error; an empty pattern must not

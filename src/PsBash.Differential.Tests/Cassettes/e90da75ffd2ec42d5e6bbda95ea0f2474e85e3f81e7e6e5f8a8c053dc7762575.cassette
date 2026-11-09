@@ -1,0 +1,16 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 54
+stdout-length: 6
+stderr-length: 0
+==== SCRIPT ====
+echo 1; echo 2;
+case a in a) echo A;; b) echo B;; esac
+==== STDOUT ====
+1
+2
+A
+
+==== STDERR ====
+

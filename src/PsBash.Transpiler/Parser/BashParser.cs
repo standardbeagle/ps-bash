@@ -122,7 +122,7 @@ public sealed partial class BashParser
         {
             int startPos = Peek().Position;
             result.Add((ParseListStatement(AtEndOfInputOnly, "ParseTopLevelWithPositions"), startPos));
-            SkipTerminators();
+            SkipTopLevelTerminators();
         }
         return result;
     }
@@ -216,7 +216,7 @@ public sealed partial class BashParser
 
         while (true)
         {
-            SkipTerminators();
+            SkipTopLevelTerminators();
             if (Peek().Kind == BashTokenKind.Eof)
                 break;
 
@@ -810,6 +810,19 @@ public sealed partial class BashParser
     /// <summary>
     /// Skip semicolons and newlines (used between compound command parts).
     /// </summary>
+    /// <summary>Terminators after a top-level statement: one `;` (any newlines); a second `;` right after it (`echo 1 ;; echo 2`) is a syntax error.</summary>
+    private void SkipTopLevelTerminators()
+    {
+        bool lastWasSemi = false;
+        while (Peek().Kind is BashTokenKind.Semi or BashTokenKind.Newline)
+        {
+            if (Peek().Kind == BashTokenKind.Semi && lastWasSemi)
+                throw MakeError("syntax error near unexpected token `;;'", Peek().Position, "SkipTopLevelTerminators");
+            lastWasSemi = Peek().Kind == BashTokenKind.Semi;
+            _pos++;
+        }
+    }
+
     private void SkipTerminators()
     {
         while (Peek().Kind is BashTokenKind.Semi or BashTokenKind.Newline)

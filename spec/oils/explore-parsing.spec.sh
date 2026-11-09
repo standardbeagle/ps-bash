@@ -6,7 +6,6 @@ fun() { echo ${##}; }
 fun 0 1 2 3 4 5 6 7 8 
 ## stdout: 1
 ## status: 0
-## XFAIL ps-bash gap-oils-explore-parsing explore-parsing (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Length of length of ARGS!  2 digit
@@ -14,7 +13,6 @@ fun() { echo ${##}; }
 fun 0 1 2 3 4 5 6 7 8 9
 ## stdout: 2
 ## status: 0
-## XFAIL ps-bash gap-oils-explore-parsing explore-parsing (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### readonly +

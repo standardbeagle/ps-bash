@@ -28,7 +28,6 @@ status=0
 echo status=$?
 ## stdout: status=127
 ## status: 0
-## XFAIL ps-bash gap-oils-redirect redirect (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Descriptor redirect with spaces
