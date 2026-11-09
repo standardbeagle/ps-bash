@@ -95,7 +95,6 @@ error
 0524
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-umask builtin-umask (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### usage: invalid octal digits
@@ -157,7 +156,6 @@ umask | tail -c 4
 777
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-umask builtin-umask (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### umask sequential actions
@@ -237,7 +235,6 @@ status5=0
 737
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-umask builtin-umask (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### umask with too many arguments (i.e. extra spaces)
@@ -262,7 +259,6 @@ umask u=rwx,u=rw,u=r,u=,g=rwx
 umask | tail -c 4
 ## stdout: 701
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-umask builtin-umask (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### umask a is valid who
@@ -283,7 +279,6 @@ umask | tail -c 4
 564
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-umask builtin-umask (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### umask X perm
@@ -390,7 +385,6 @@ ret = 0
 124
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-umask builtin-umask (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### umask bare op

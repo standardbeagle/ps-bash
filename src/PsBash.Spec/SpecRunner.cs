@@ -71,7 +71,7 @@ public static class SpecRunner
             (false, true) => Verdict.XFail,
             (true, true) => Verdict.XPass,
         };
-        return new CaseResult(c, verdict, actual, verdict is Verdict.Fail or Verdict.XPass ? Describe(c, actual) : null);
+        return new CaseResult(c, verdict, actual, Describe(c, actual));
     }
 
     public static bool Matches(Expectation e, ExecResult actual)

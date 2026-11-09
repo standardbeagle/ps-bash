@@ -5,6 +5,7 @@ namespace PsBash.Spec.Tests;
 /// <summary>Runs every <c>spec/*.spec.sh</c> case against ps-bash; an XFAIL case that passes is an error (XPASS).</summary>
 public class CorpusTests
 {
+private static readonly object DumpLock = new();
     private static string SpecDir()
     {
         var d = new DirectoryInfo(AppContext.BaseDirectory);
@@ -140,6 +141,10 @@ public class CorpusTests
                     $"fast path and launcher disagree on '{c.Name}': in-host {results[i].Verdict}, launcher {viaLauncher.Verdict}");
             }
         }
+        // Triage aid: PSBASH_SPEC_DUMP_XFAIL=<file> appends every known gap with its expected and actual output.
+        if (Environment.GetEnvironmentVariable("PSBASH_SPEC_DUMP_XFAIL") is { Length: > 0 } dumpPath)
+            lock (DumpLock)
+                File.AppendAllText(dumpPath, string.Concat(results.Where(r => r.Verdict == Verdict.XFail).Select(r => $"##### {name}\n{r.Diff}\n=====\n")));
         var bad = results.Where(r => r.Verdict is Verdict.Fail or Verdict.XPass).ToList();
         Assert.True(bad.Count == 0, SpecRunner.Summarize(file, results) + "\n\n" +
             string.Join("\n---\n", bad.Select(b => $"[{b.Verdict}] {b.Diff}")));

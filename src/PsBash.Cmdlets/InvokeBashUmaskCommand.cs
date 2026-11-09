@@ -26,6 +26,16 @@ public sealed class InvokeBashUmaskCommand : PSCmdlet
             WriteObject(symbolic ? Symbolic(_mask) : Convert.ToString(_mask, 8).PadLeft(4, '0'));
             return;
         }
+        if (operand.Length > 0 && !char.IsDigit(operand[0]))
+        {
+            if (UmaskSymbolic.TryApply(_mask, operand, out var applied)) _mask = applied;
+            else
+            {
+                FileSystemHelpers.WriteStderr(this, $"umask: {operand}: invalid symbolic mode operator");
+                FileSystemHelpers.SetLastExitCode(this, 1);
+            }
+            return;
+        }
         try
         {
             int v = Convert.ToInt32(operand, 8);
