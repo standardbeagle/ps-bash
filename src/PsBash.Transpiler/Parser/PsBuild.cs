@@ -303,6 +303,13 @@ public static class PsBuild
     public static string HoistedCondition(string condStatements) => condStatements + "; ";
 
     /// <summary>
+    /// <see cref="ExitCodeTest"/> for the runtime <c>test</c> evaluator: its status 2 (a malformed expression) is recorded in
+    /// <c>$global:__BashTestBad</c> so the enclosing test statement ends with 2, not the 1 of a plain false.
+    /// </summary>
+    public static string ExitCodeTestFlaggingBad(string emittedCmd) =>
+        "(& { " + VoidStatement(emittedCmd) + "; if ($global:LASTEXITCODE -eq 2) { $global:__BashTestBad = $true }; $global:LASTEXITCODE -eq 0 })";
+
+    /// <summary>
     /// A boolean expression that runs <paramref name="emittedCmd"/> and tests its EXIT
     /// CODE (bash semantics), suitable inside <c>if (...)</c>/<c>while (...)</c>:
     /// <c>(&amp; { [void](cmd); $global:LASTEXITCODE -eq 0 })</c>. The <see cref="Void"/>

@@ -371,7 +371,7 @@ public sealed partial class BashParser
         return redirects.IsDefaultOrEmpty ? command : new Command.BraceGroup(command, redirects);
     }
 
-    private Command.BoolExpr ParseTestExpr()
+    private Command ParseTestExpr()
     {
         var open = Advance(); // consume "[" or "[["
         bool extended = open.Value == "[[";
@@ -475,6 +475,12 @@ public sealed partial class BashParser
         if (extended && closed && !DoubleBracketGrammar.IsWellFormed(
                 inner.Select(w => w.Parts.Length == 1 && w.Parts[0] is WordPart.Literal l ? l.Value : null).ToList()))
             throw new ParseException("syntax error in conditional expression", BashLexer.LineAt(_input, open.Position), 1, "[[");
+        // `[` whose last word is not `]` (`[ -n x`, `[ -n x ] y`) is the command `[` called with those arguments: the runtime
+        // reports "missing `]'" with status 2, as bash does.
+        if (!extended && !closed)
+            return new Command.Simple(
+                ImmutableArray.Create(new CompoundWord(ImmutableArray.Create<WordPart>(new WordPart.Literal("[")))).AddRange(inner.ToImmutable()),
+                ImmutableArray<EnvPair>.Empty, ImmutableArray<Redirect>.Empty);
         return new Command.BoolExpr(inner.ToImmutable(), extended);
     }
 

@@ -237,11 +237,26 @@ public sealed class InvokeBashTestCommand : PSCmdlet
         return whole is System.Collections.IDictionary d2 ? d2.Count > 0 : whole is System.Collections.IList l2 && l2.Count > 0;
     }
 
+    /// <summary>`test -o NAME`: true when the `set -o` option the shell models is on (an unknown or unmodelled name is false).</summary>
+    private bool ShellOptionIsOn(string name)
+    {
+        string? flag = name switch
+        {
+            "nounset" => "__BashNounset", "pipefail" => "__BashPipefail", "noclobber" => "__BashNoclobber",
+            "errexit" => "__BashErrexit", "xtrace" => "__BashXtrace", "noglob" => "__BashNoglob", _ => null,
+        };
+        if (flag is null) return false;
+        object? v = SessionState.PSVariable.GetValue(flag);
+        if (v is PSObject wrapped) v = wrapped.BaseObject;
+        return v is bool b && b;
+    }
+
     private bool Unary(string op, string operand)
     {
         char c = op[1];
         if (c == 'v') return VariableIsSet(operand);
-        if (c == 'o' || c == 'R') return false; // shell options / namerefs are not modelled
+        if (c == 'o') return ShellOptionIsOn(operand);
+        if (c == 'R') return false; // namerefs are not modelled
         if (c == 't')
         {
             return int.TryParse(operand, out int fd) && fd switch

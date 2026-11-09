@@ -2677,7 +2677,7 @@ public static partial class PsEmitter
         {
             string a0 = IsUnquotedSplitWord(words[0]) ? EmitUnquotedSplitWordArray(words[0]) : EmitTestOperand(words[0]);
             string a2 = IsUnquotedSplitWord(words[2]) ? EmitUnquotedSplitWordArray(words[2]) : EmitTestOperand(words[2]);
-            return $"$(& {{ $__psbT = @({a0}; {EmitUnquotedSplitWordArray(words[1])}; {a2}); Invoke-BashTest @__psbT; $global:LASTEXITCODE -eq 0 }})";
+            return $"$(& {{ $__psbT = @({a0}; {EmitUnquotedSplitWordArray(words[1])}; {a2}); Invoke-BashTest @__psbT; if ($global:LASTEXITCODE -eq 2) {{ $global:__BashTestBad = $true }}; $global:LASTEXITCODE -eq 0 }})";
         }
 
         // `[ A op B ]`: bash picks the arity-3 shape from the OPERATOR in the middle, before it
@@ -2899,7 +2899,7 @@ public static partial class PsEmitter
         if (words.Length == 2 && GetLiteralValue(words[0]) == "-v" && TryGetVarOperandName(words[1]) is { } varOperand)
             return PsBuild.ExitCodeTest($"Invoke-BashTest '-v' {PsBuild.SingleQuote(varOperand)}", negate: false);
         if (!extended || (words.Length == 2 && GetLiteralValue(words[0]) is "-v" or "-R"))
-            return PsBuild.ExitCodeTest(EmitPassthrough("Invoke-BashTest", QuoteBareTestParens(words)), negate: false);
+            return PsBuild.ExitCodeTestFlaggingBad(EmitPassthrough("Invoke-BashTest", QuoteBareTestParens(words)));
 
         var opName = GetLiteralValue(words[0]) ?? "";
         var message = PsBuild.SingleQuote(
@@ -4835,7 +4835,7 @@ public static partial class PsEmitter
         }
         string name = sb.ToString();
         bool unquotedLead = word.Parts[0] is WordPart.Literal or WordPart.GlobPart;
-        return unquotedLead && name.Length > 1 && name[0] == '[' && name != "[[" ? name : null;
+        return unquotedLead && name.Length >= 1 && name[0] == '[' && name != "[[" ? name : null;
     }
 
     // The general fallback: no special form matched, emit the command word(s),

@@ -174,6 +174,11 @@ public sealed partial class BashParser
                     parts = parts.Add(new WordPart.SingleQuoted(parenText));
                 words.Add(new CompoundWord(parts));
             }
+            else if (kind == BashTokenKind.LBrace && words.Count > 0)
+            {
+                // `{` AFTER the command word is an ordinary argument (`echo a {`, `type -t {`); it is reserved only in command position.
+                words.Add(new CompoundWord(DecomposeWord(Advance().Value)));
+            }
             else if (kind == BashTokenKind.Bang && words.Count > 0)
             {
                 // A `!` AFTER the command word is a literal argument, not negation:

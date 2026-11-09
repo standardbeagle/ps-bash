@@ -1,0 +1,27 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 208
+stdout-length: 25
+stderr-length: 0
+==== SCRIPT ====
+test -o nounset; echo o1=$?
+set -o nounset
+test -o nounset; echo o2=$?
+[ -o nounset ] && echo on
+set +o nounset
+[ -o nounset ]; echo o3=$?
+test -o _bad_name_; echo o4=$?
+set -e
+[ -o errexit ] && echo e
+set +e
+==== STDOUT ====
+o1=1
+o2=0
+on
+o3=1
+o4=1
+e
+
+==== STDERR ====
+

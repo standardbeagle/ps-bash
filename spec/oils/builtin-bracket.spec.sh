@@ -130,7 +130,6 @@ status=2
 status=2
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-bracket builtin-bracket (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### -n
@@ -266,7 +265,6 @@ status=0
 status=1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-bracket builtin-bracket (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### -nt -ot
@@ -519,7 +517,6 @@ true
 echo status=$?
 ## stdout: status=2
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-bracket builtin-bracket (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### -z '>' implies two token lookahead
