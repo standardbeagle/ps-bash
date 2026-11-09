@@ -796,6 +796,8 @@ public sealed partial class BashParser
         // Quote-aware boundary via the lexer's shared scanner: a ')' inside a
         // string in the command sub must not close the region (e.g. $(grep ")" f)).
         int end = BashLexer.ScanBalancedParens(raw, start, 1);
+        if (!(end > start && raw[end - 1] == ')'))
+            throw new ParseException("unexpected EOF while looking for matching `)'", 1, 1, "CommandSub");
         int innerEnd = end > start && raw[end - 1] == ')' ? end - 1 : end;
         string inner = raw[start..innerEnd];
 
@@ -818,8 +820,9 @@ public sealed partial class BashParser
             pos++;
         }
         string inner = raw[start..pos];
-        if (pos < raw.Length)
-            pos++; // skip closing `
+        if (pos >= raw.Length)
+            throw new ParseException("unexpected EOF while looking for matching ``'", 1, 1, "BacktickSub");
+        pos++; // skip closing `
 
         // bash strips ONE level of backslash before `\`, `$`, and `\` itself
         // inside backtick command substitution, before re-parsing the body.

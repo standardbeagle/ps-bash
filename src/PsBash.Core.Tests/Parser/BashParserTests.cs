@@ -1403,6 +1403,14 @@ public class BashParserTests
     }
 
     [Fact]
+    public void Parse_UnterminatedCommandSub_IsSyntaxError()
+    {
+        Assert.Throws<ParseException>(() => Parse("$(x"));
+        Assert.Throws<ParseException>(() => Parse("echo `x"));
+        Parse("echo $(echo ok) `echo hi` \"$(echo \"a)b\")\"");
+    }
+
+    [Fact]
     public void Parse_DoubleSemiOutsideCase_IsSyntaxError()
     {
         Assert.Throws<ParseException>(() => Parse("echo 1 ;; echo 2"));
