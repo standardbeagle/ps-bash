@@ -149,7 +149,6 @@ echo hi | read line
 echo "line=$line"
 ## stdout: line=
 ## status: 0
-## XFAIL ps-bash gap-oils-pipeline pipeline (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### shopt -s lastpipe (always on in OSH)
@@ -169,7 +168,6 @@ done
 echo i=$i
 ## stdout: i=3
 ## status: 0
-## XFAIL ps-bash gap-oils-pipeline pipeline (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### SIGPIPE causes pipeline to die (regression for issue #295)

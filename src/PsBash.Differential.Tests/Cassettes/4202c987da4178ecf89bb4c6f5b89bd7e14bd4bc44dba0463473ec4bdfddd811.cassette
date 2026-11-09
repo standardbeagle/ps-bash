@@ -1,0 +1,18 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 122
+stdout-length: 12
+stderr-length: 0
+==== SCRIPT ====
+echo hi | read line
+echo "line=$line"
+printf 'a\nb\n' | read -r x y; echo "x=$x"
+f() { echo hi | read v; echo "v=$v"; }; f
+==== STDOUT ====
+line=
+x=
+v=
+
+==== STDERR ====
+

@@ -132,6 +132,7 @@ public static partial class PsEmitter
     /// <summary>Set when an assignment to a readonly variable was emitted: bash drops the rest of that input line.</summary>
     [ThreadStatic] private static bool _readonlyViolation;
     [ThreadStatic] private static bool _scriptPosix;
+    [ThreadStatic] private static bool _scriptLastpipe;
 
     /// <summary><c>declare -n ref=target</c> in the script being emitted: <c>ref</c> reads and writes <c>target</c>.
     /// Static only (a literal target, resolved at emit time); a nameref set at run time is not modelled.</summary>
@@ -656,6 +657,8 @@ public static partial class PsEmitter
         var priorReadsStatus = _scriptReadsStatus;
         var priorReadsLastArg = _scriptReadsLastArg;
         var priorPosix = _scriptPosix;
+        var priorLastpipe = _scriptLastpipe;
+        _scriptLastpipe = priorLastpipe || bash.Contains("lastpipe");
         _scriptPosix = priorPosix || bash.Contains("set -o posix");
         _scriptReadsLastArg = priorReadsLastArg || System.Text.RegularExpressions.Regex.IsMatch(bash, @"\$(_(?![A-Za-z0-9_])|\{_[^A-Za-z0-9_])");
         _scriptReadsStatus = priorReadsStatus || bash.Contains("$?") || bash.Contains("${?");
@@ -710,6 +713,7 @@ public static partial class PsEmitter
             _scriptReadsStatus = priorReadsStatus;
             _scriptReadsLastArg = priorReadsLastArg;
             _scriptPosix = priorPosix;
+            _scriptLastpipe = priorLastpipe;
             _readonlyVars = priorReadonly;
             _namerefs = priorNamerefs;
             _litAssigned = priorLitAssigned; _pendingNamerefs = priorPendingNamerefs;
@@ -8950,6 +8954,10 @@ public static partial class PsEmitter
 
     private static string EmitPipelineStages(Command.Pipeline pipeline, bool entryScope)
     {
+        // Without shopt -s lastpipe the last stage is a subshell: cho hi | read x leaves x unset.
+        if (!_scriptLastpipe && pipeline.Commands.Length > 1 && pipeline.Commands[^1] is Command.Simple { Words.Length: > 0 } lastRead
+            && GetLiteralValue(lastRead.Words[0]) is "read" or "mapfile" or "readarray")
+            pipeline = pipeline with { Commands = pipeline.Commands.SetItem(pipeline.Commands.Length - 1, new Command.Subshell(lastRead, ImmutableArray<Redirect>.Empty)) };
         if (TryEmitLazyProducerStage(pipeline, out var lazy)) return lazy;
         var sb = new StringBuilder();
         // pipefail script: each stage reports its own status (Invoke-BashPipeStage) into $__pf.
@@ -9012,7 +9020,7 @@ public static partial class PsEmitter
                 // EmitCompoundStage drains it into the shared stdin queue (a stdin scope)
                 // that `read` and the fed readers consume from. The body still runs
                 // ONCE — bash's semantics, unlike a per-line ForEach-Object envelope.
-                sb.Append(EmitCompoundStage(cmd, isFirstStage: i == 0, entryScope));
+                sb.Append(EmitCompoundStage(cmd, isFirstStage: i == 0, entryScope, lastpipeStage: _scriptLastpipe && i > 0 && i == pipeline.Commands.Length - 1));
             }
             else if (pipeline.Commands.Length > 1)
                 sb.Append(WrapPipelineStageIfStatementList(Emit(cmd)));
@@ -9188,12 +9196,12 @@ public static partial class PsEmitter
     /// <c>while read</c> loop streams <c>$input</c> itself and an arithmetic command / function
     /// definition reads nothing, so those open no scope (the body sees no shared stdin).
     /// </summary>
-    private static string EmitCompoundStage(Command cmd, bool isFirstStage, bool entryScope)
+    private static string EmitCompoundStage(Command cmd, bool isFirstStage, bool entryScope, bool lastpipeStage = false)
     {
         // bash runs every pipe stage in a subshell: `{ x=2; } | cat` must leave x alone. A Subshell stage already
         // carries its own scope; a function definition changes the function table by design here.
         // The guard, not a nested scope: the stage's own `& { }` is the scope, and it must keep its `$input`.
-        string Scoped(string inner) => cmd is Command.Subshell or Command.ShFunction ? inner : PsBuild.ShellStateGuard(inner);
+        string Scoped(string inner) => cmd is Command.Subshell or Command.ShFunction || lastpipeStage ? inner : PsBuild.ShellStateGuard(inner);
 
         if (isFirstStage)
             return $"& {{ {Scoped(Emit(cmd))} }}";
