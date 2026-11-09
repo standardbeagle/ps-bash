@@ -144,7 +144,6 @@ set -- 1 2
 echo foo=${A['foo']}
 ## stdout: foo=44
 ## status: 0
-## XFAIL ps-bash gap-oils-dparen dparen (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### (( )) result
