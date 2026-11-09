@@ -1,0 +1,21 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 107
+stdout-length: 11
+stderr-length: 0
+==== SCRIPT ====
+{ eval -z; } 2>/dev/null
+echo $?
+{ eval -- 'echo hi'; } 2>/dev/null
+echo $?
+{ eval -; } 2>/dev/null
+echo $?
+==== STDOUT ====
+2
+hi
+0
+127
+
+==== STDERR ====
+

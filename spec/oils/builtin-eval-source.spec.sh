@@ -27,7 +27,6 @@ echo $?
 2
 ## END
 ## status: 127
-## XFAIL ps-bash gap-oils-builtin-eval-source builtin-eval-source (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### eval string with 'break continue return error'

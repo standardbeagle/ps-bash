@@ -4897,6 +4897,12 @@ public static partial class PsEmitter
             ? GetLiteralValue(cmd.Words[0]) : null;
         if (dashName is null && cmd.Words.Length > 0 && StaticBracketCommandName(cmd.Words[0]) is { } bracketName)
             dashName = bracketName;
+        // A command word that is a PowerShell number literal (`127`, `0`, `1e3`) would evaluate to itself, not be looked up.
+        if (dashName is null && cmd.Words.Length > 0)
+        {
+            string? numName = GetLiteralValue(cmd.Words[0]);
+            if (numName is not null && System.Text.RegularExpressions.Regex.IsMatch(numName, @"^[0-9][0-9A-Za-z_.]*$")) dashName = numName;
+        }
         bool needsCallOperator =
             !isScriptCommand && cmd.Words.Length > 0
             && (IsExpandedCommandWord(cmd.Words[0]) || dashName is not null
@@ -10293,6 +10299,8 @@ public static partial class PsEmitter
     {
         // `eval -- body`: `--` ends eval's own options and is not part of the evaluated text.
         if (!args.IsEmpty && GetLiteralValue(args[0]) == "--") args = args.RemoveAt(0);
+        else if (!args.IsEmpty && GetLiteralValue(args[0]) is { Length: > 1 } badOpt && badOpt[0] == '-')
+            return "Write-Error " + PsBuild.SingleQuote("eval: " + badOpt + ": invalid option") + " -ErrorAction Continue; $global:LASTEXITCODE = 2";
         if (args.IsEmpty)
             return "$global:LASTEXITCODE = 0";
 

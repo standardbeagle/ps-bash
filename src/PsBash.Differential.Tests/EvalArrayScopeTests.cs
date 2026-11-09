@@ -37,4 +37,12 @@ public class EvalArrayScopeTests
     [Fact]
     public Task Source_WithoutArguments_IsStatus2() => AssertOracle.EqualAsync(
         "{ source; } 2>/dev/null\necho status=$?\n{ . ; } 2>/dev/null\necho s=$?");
+
+    [Fact]
+    public Task Eval_InvalidOption_IsStatus2() => AssertOracle.EqualAsync(
+        "{ eval -z; } 2>/dev/null\necho $?\n{ eval -- 'echo hi'; } 2>/dev/null\necho $?\n{ eval -; } 2>/dev/null\necho $?");
+
+    [Fact]
+    public Task NumericCommandWord_IsCommandNotFound() => AssertOracle.EqualAsync(
+        "{ 127; } 2>/dev/null\necho s=$?\n{ 0; } 2>/dev/null\necho s=$?");
 }
