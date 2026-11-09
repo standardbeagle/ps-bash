@@ -1108,7 +1108,7 @@ public static partial class PsEmitter
             // element. Quoted "${arr[@]}" would otherwise stringify the array into
             // one space-joined word and run once. Emit the array variable directly.
             if (list[0].Parts is [WordPart.DoubleQuoted { Parts: [WordPart.BracedVarSub { Suffix: { } opSuffix } opVar] }]
-                && (IsArrayElementOperator(opSuffix) || IsArraySliceSuffix(opSuffix)))
+                && (IsArrayElementOperator(opSuffix) || IsArraySliceSuffix(opSuffix) || (opVar.Name == "@" && IsPositionalSliceSuffix(opSuffix))))
                 return EmitBracedVar(opVar);
             if (IsArrayAllWord(list[0], out var arrName))
                 return $"$(if (${arrName} -is [System.Collections.IDictionary]) {{ ${arrName}.Values }} else {{ ${arrName} }})";
@@ -7172,9 +7172,14 @@ public static partial class PsEmitter
            && (only is WordPart.SimpleVarSub { Name: "@" }
                or WordPart.BracedVarSub { Name: "@", Suffix: null }
                or WordPart.BracedVarSub { Suffix: "[@]" or "![@]" }
-               || only is WordPart.BracedVarSub { Suffix: { } opSfx } && (IsArrayElementOperator(opSfx) || IsArraySliceSuffix(opSfx)));
+               || only is WordPart.BracedVarSub { Suffix: { } opSfx } && (IsArrayElementOperator(opSfx) || IsArraySliceSuffix(opSfx))
+               || only is WordPart.BracedVarSub { Name: "@", Suffix: { } posSlice } && IsPositionalSliceSuffix(posSlice));
 
     /// <summary>`[@]:off` / `[@]:off:len`: a slice of the array (`:-` `:=` `:+` `:?` are the default operators, not slices).</summary>
+    /// <summary>:off / :off:len on $@ (a slice; :- := :+ :? are the default operators).</summary>
+    private static bool IsPositionalSliceSuffix(string suffix)
+        => suffix.Length > 1 && suffix[0] == ':' && (char.IsAsciiDigit(suffix[1]) || suffix[1] is ' ' or '$' or '(');
+
     private static bool IsArraySliceSuffix(string suffix)
         => suffix.Length > 4 && suffix.StartsWith("[@]:", StringComparison.Ordinal) && (char.IsAsciiDigit(suffix[4]) || suffix[4] is ' ' or '$' or '(');
     /// <summary>`[@]` followed by a per-element operator (`/ # % ^ ,`): `${a[@]/o/0}`, `${a[@]%.*}`, `${a[@]^^}`.</summary>
@@ -7203,7 +7208,7 @@ public static partial class PsEmitter
     /// </summary>
     private static string EmitQuotedArrayElements(WordPart part) => part switch
     {
-        WordPart.BracedVarSub { Name: "@" } or WordPart.SimpleVarSub { Name: "@" }
+        WordPart.BracedVarSub { Name: "@", Suffix: null } or WordPart.SimpleVarSub { Name: "@" }
             => "@($(if ($global:BashPositional) { $global:BashPositional } else { $args }))",
         _ => "@(" + EmitBracedVar((WordPart.BracedVarSub)part) + ")",
     };

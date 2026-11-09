@@ -1,0 +1,23 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 215
+stdout-length: 68
+stderr-length: 0
+==== SCRIPT ====
+f() { for i in "${@:3:5}"; do echo =$i=; done; for i in "${*:3:2}"; do echo =$i=; done; printf "<%s>" "${@:2:2}"; echo; printf "<%s>" "${@:2}"; echo; }
+f ab cd ef gh ij kl
+set -- 1 2 3 4
+printf "<%s>" "${@:2}"; echo
+==== STDOUT ====
+=ef=
+=gh=
+=ij=
+=kl=
+=ef gh=
+<cd><ef>
+<cd><ef><gh><ij><kl>
+<2><3><4>
+
+==== STDERR ====
+

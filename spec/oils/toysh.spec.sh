@@ -106,7 +106,6 @@ chicken() { for i in "${*:3:5}"; do echo =$i=; done; } ; chicken ab cd ef gh ij 
 =ef gh ij kl mn=
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-toysh toysh (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### @Q
