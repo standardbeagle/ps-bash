@@ -6,7 +6,6 @@ set -- $(seq 25)
 echo ${##}
 ## stdout: 2
 ## status: 0
-## XFAIL ps-bash gap-oils-blog1 blog1 (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### ${###}
@@ -14,7 +13,6 @@ set -- $(seq 25)
 echo ${###}
 ## stdout: 25
 ## status: 0
-## XFAIL ps-bash gap-oils-blog1 blog1 (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### ${####}
@@ -22,7 +20,6 @@ set -- $(seq 25)
 echo ${####}
 ## stdout: 25
 ## status: 0
-## XFAIL ps-bash gap-oils-blog1 blog1 (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### ${##2}
@@ -30,7 +27,6 @@ set -- $(seq 25)
 echo ${##2}
 ## stdout: 5
 ## status: 0
-## XFAIL ps-bash gap-oils-blog1 blog1 (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### ${###2}
@@ -38,7 +34,6 @@ set -- $(seq 25)
 echo ${###2}
 ## stdout: 5
 ## status: 0
-## XFAIL ps-bash gap-oils-blog1 blog1 (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### ${1####}

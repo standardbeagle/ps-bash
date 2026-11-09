@@ -526,6 +526,18 @@ public sealed partial class BashParser
             parts.Add(new WordPart.BracedVarSub("#", null));
             return pos + 3;
         }
+        // ${##} is the length of $#; ${###} ${##2} ${###2} are $# with a prefix-strip operator (# or ##) -- the `#` parameter, not
+        // the length operator applied to a variable named `#`.
+        if (pos + 1 < len && raw[pos] == '#' && raw[pos + 1] == '#')
+        {
+            int hashClose = raw.IndexOf('}', pos);
+            if (hashClose > 0)
+            {
+                string rest = raw[(pos + 1)..hashClose];
+                parts.Add(new WordPart.BracedVarSub("#", rest.Length == 1 ? "#L" : rest));
+                return hashClose + 1;
+            }
+        }
         // ${#VAR} or ${#arr[@]} -> length operator
         if (pos < len && raw[pos] == '#')
         {

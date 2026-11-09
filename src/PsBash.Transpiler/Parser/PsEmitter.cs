@@ -7922,7 +7922,11 @@ public static partial class PsEmitter
 
         // Length: ${#VAR}
         if (suffix == "#L")
+        {
+            // `${##}`: $# is a number, so its length is that of its text.
+            if (varRef.Contains("BashPositional") && varRef.Contains(".Count")) varRef = $"([string]{varRef})";
             return inDoubleQuote ? $"$({varRef}.Length)" : $"{varRef}.Length";
+        }
 
         // The `:`-prefixed forms act when the variable is unset OR EMPTY.
         //
