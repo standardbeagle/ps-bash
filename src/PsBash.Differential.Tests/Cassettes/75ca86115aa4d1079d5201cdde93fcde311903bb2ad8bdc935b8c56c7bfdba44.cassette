@@ -1,0 +1,20 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 137
+stdout-length: 22
+stderr-length: 0
+==== SCRIPT ====
+array=(one two); declare -A m=([k]=v); declare -r r=1; declare -x e=1; s=x
+f() { echo "[${!1@a}]"; }
+f array; f m; f r; f e; f s; f undef
+==== STDOUT ====
+[a]
+[A]
+[r]
+[x]
+[]
+[]
+
+==== STDERR ====
+

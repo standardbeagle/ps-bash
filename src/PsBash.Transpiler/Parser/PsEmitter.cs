@@ -7846,6 +7846,11 @@ public static partial class PsEmitter
                 "Get-BashIndirectValue -Ref (" + IndirectRef(bvs.Name, false) + ") -RefName "
                 + PsBuild.SingleQuote(System.Text.RegularExpressions.Regex.IsMatch(bvs.Name, @"^[A-Za-z_]\w*$") ? bvs.Name : "")
                 + " -Pos @(" + PsBuild.BuildPositionalExpansion("@") + ")" + (nameOnly ? " -NameOnly" : "");
+            // `${!ref@a}`: the attribute letters of the variable NAMED by $ref.
+            if (op == "@a")
+                return "$(& { $__in = [string]$(" + IndLookup(true) + "); if ($__in) { $__iv = Get-Variable -Name $__in -ValueOnly -ErrorAction Ignore; "
+                    + "if ($null -eq $__iv) { $__iv = [System.Environment]::GetEnvironmentVariable($__in) }; "
+                    + "[PsBash.Cmdlets.BashQuoteText]::Attributes($__in, $__iv) } })";
             if (op.StartsWith(":=", StringComparison.Ordinal) || op.StartsWith('='))
             {
                 string assigned = EmitScalarSuffix("$__iv", op, false, bvs.ArgWord) ?? "$__iv";
