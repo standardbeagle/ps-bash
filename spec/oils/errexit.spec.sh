@@ -101,7 +101,6 @@ time false
 echo status=$?
 ## stdout:
 ## status: 1
-## XFAIL ps-bash gap-oils-errexit errexit (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### errexit with !

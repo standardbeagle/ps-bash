@@ -265,7 +265,6 @@ g=("_tmp/*.A" "_tmp/*.B")
 echo ${g[@]}
 ## stdout: _tmp/a.A _tmp/aa.A _tmp/b.B
 ## status: 0
-## XFAIL ps-bash gap-oils-glob glob (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### glob inside array

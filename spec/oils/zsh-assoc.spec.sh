@@ -14,7 +14,6 @@ a=(aa b foo bar a+1 c)
 echo ${a[aa]}
 ## stdout: b
 ## status: 0
-## XFAIL ps-bash gap-oils-zsh-assoc zsh-assoc (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### set key

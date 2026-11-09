@@ -655,6 +655,14 @@ public static class PsBuild
         + "try { " + body + " } finally { $global:__BashStdIn = $__psbash_stdin_prev }";
 
     /// <summary>
+    /// A compound command's <c>&lt; file</c> that cannot be opened fails the command: bash reports
+    /// <c>file: No such file or directory</c>, sets status 1 and never runs the body.
+    /// </summary>
+    public static string InputRedirectGuard(string target, string ok) =>
+        "& { $__psbash_ir = [string](Write-Output " + target + "); Invoke-BashTest -e $__psbash_ir; if ($global:LASTEXITCODE -eq 0) { " + ok
+        + " } else { Write-Error -Message \"${__psbash_ir}: No such file or directory\" -ErrorAction Continue; $global:LASTEXITCODE = 1 } }";
+
+    /// <summary>
     /// A function body that reads stdin: when the function is called with a pipe (<c>echo x | f</c>,
     /// <c>f &lt;&lt;&lt; x</c>) that pipe is its stdin (<see cref="StdinScope"/>); called without one it keeps the
     /// stdin of its caller (the enclosing compound's queue, or the launcher's).

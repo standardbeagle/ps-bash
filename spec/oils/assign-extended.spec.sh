@@ -715,7 +715,6 @@ echo $a ${b[@]} $c
 a=1 b[0]=2 c=3 printenv.py a b c
 ## stdout:
 ## status: 127
-## XFAIL ps-bash gap-oils-assign-extended assign-extended (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### syntax error in array assignment

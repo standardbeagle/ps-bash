@@ -1786,7 +1786,7 @@ public static partial class PsEmitter
             // /dev/null maps to $null; `Get-Content $null` errors. Its stdin is EMPTY (EOF), so feed
             // the scope nothing explicitly (it must not see an outer pipe's or queue's data).
             result = inTarget != "$null"
-                ? $"Invoke-BashCat {inTarget} -RawStdinBytes | & {{ {PsBuild.StdinScope(result)} }}"
+                ? PsBuild.InputRedirectGuard(inTarget, $"Invoke-BashCat {inTarget} -RawStdinBytes | & {{ {PsBuild.StdinScope(result)} }}")
                 : $"@() | & {{ {PsBuild.StdinScope(result)} }}";
         }
 
@@ -9298,7 +9298,7 @@ public static partial class PsEmitter
             // /dev/null maps to $null; `Get-Content $null` errors. Its stdin is EMPTY (EOF), which
             // for a stdin scope must still replace any outer pipe, so feed it nothing explicitly.
             if (inTarget != "$null")
-                result = $"Invoke-BashCat {inTarget} -RawStdinBytes | {result}";
+                result = PsBuild.InputRedirectGuard(inTarget, $"Invoke-BashCat {inTarget} -RawStdinBytes | {result}");
             else if (stdinScope)
                 result = $"@() | {result}";
         }

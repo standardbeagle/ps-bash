@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 77
+stdout-length: 4
+stderr-length: 0
+==== SCRIPT ====
+{ if true; then echo body; fi < /nonexistent/in.txt; } 2>/dev/null; echo s=$?
+==== STDOUT ====
+s=1
+
+==== STDERR ====
+

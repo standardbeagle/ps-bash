@@ -13,5 +13,9 @@ public class CommandWordStatusTests
     [Fact] public Task EmptyQuotedCommand_InIf_IsFalse() => AssertOracle.EqualAsync("if ''; then echo T; else echo F; fi 2>/dev/null");
     [Fact] public Task CommandSubOnly_True() => AssertOracle.EqualAsync("$(true); echo s=$?");
     [Fact] public Task CommandSubOnly_False() => AssertOracle.EqualAsync("$(false); echo s=$?");
+    [Fact] public Task BraceGroup_MissingInput_FailsWithoutRunningBody() => AssertOracle.EqualAsync("{ { echo body; } < /nonexistent/in.txt; } 2>/dev/null; echo s=$?");
+    [Fact] public Task Subshell_MissingInput_FailsWithoutRunningBody() => AssertOracle.EqualAsync("{ ( echo body ) < /nonexistent/in.txt; } 2>/dev/null; echo s=$?");
+    [Fact] public Task If_MissingInput_FailsWithoutRunningBody() => AssertOracle.EqualAsync("{ if true; then echo body; fi < /nonexistent/in.txt; } 2>/dev/null; echo s=$?");
+    [Fact] public Task Time_Builtin_KeepsStatus() => AssertOracle.EqualAsync("{ time false; } 2>/dev/null; echo s=$?");
     [Fact] public Task CommandSubOnly_Exit42() => AssertOracle.EqualAsync("$(exit 42); echo s=$?");
 }

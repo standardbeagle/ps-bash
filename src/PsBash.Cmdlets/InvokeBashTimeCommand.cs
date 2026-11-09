@@ -66,7 +66,7 @@ public sealed class InvokeBashTimeCommand : PSCmdlet
         // bound positionally and splatted. The body never embeds any user
         // input as PS code.
         const string invokeBody =
-            "$c = $args[0]; $rest = @(); " +
+            "$c = Resolve-BashCommand $args[0]; $rest = @(); " +
             "if ($args.Count -gt 1) { $rest = $args[1..($args.Count - 1)] }; " +
             "& $c @rest 2>&1";
 
@@ -74,8 +74,10 @@ public sealed class InvokeBashTimeCommand : PSCmdlet
         allInvokeArgs[0] = cmd;
         for (int i = 1; i < args.Length; i++) allInvokeArgs[i] = args[i];
 
+        FileSystemHelpers.SetLastExitCode(this, 0);
         var sw = Stopwatch.StartNew();
         int exitCode = 0;
+        bool faulted = false;
         var normal = new List<object?>();
         var errors = new List<ErrorRecord>();
 
@@ -96,7 +98,8 @@ public sealed class InvokeBashTimeCommand : PSCmdlet
                     normal.Add(item);
                 }
             }
-            if (errors.Count > 0) exitCode = 1;
+            if (errors.Count > 0) { exitCode = 1; faulted = true; }
+            else if (InvokeCommand.InvokeScript("[int]$global:LASTEXITCODE").FirstOrDefault()?.BaseObject is int status) exitCode = status;
             foreach (var er in errors)
             {
                 FileSystemHelpers.WriteBashError(this, er.ToString());
@@ -107,6 +110,7 @@ public sealed class InvokeBashTimeCommand : PSCmdlet
             sw.Stop();
             FileSystemHelpers.WriteBashError(this, ex.Message);
             exitCode = 1;
+            faulted = true;
         }
 
         // Build the joined output text (oracle: BashText property if
@@ -131,6 +135,8 @@ public sealed class InvokeBashTimeCommand : PSCmdlet
         pso.Properties.Add(new PSNoteProperty("Command", cmd));
         pso.Properties.Add(new PSNoteProperty("ExitCode", exitCode));
         pso.Properties.Add(new PSNoteProperty("BashText", outputText));
-        WriteObject(pso);
+        // No output means no stdout record: the empty TimeOutput would print a blank line bash does not.
+        if (outputText.Length > 0 || faulted) WriteObject(pso);
+        FileSystemHelpers.SetLastExitCode(this, exitCode);
     }
 }

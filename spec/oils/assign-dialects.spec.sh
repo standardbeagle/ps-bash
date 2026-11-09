@@ -16,7 +16,6 @@ keys = 5
 values = 42
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-assign-dialects assign-dialects (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### test -v with strings

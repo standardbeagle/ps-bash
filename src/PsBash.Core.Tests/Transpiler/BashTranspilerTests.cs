@@ -1087,7 +1087,7 @@ public class BashTranspilerTests
         var compound = BashTranspiler.Transpile("if true; then read line; echo $line; fi < input.txt");
         var subshell = BashTranspiler.Transpile("(read line; echo $line) < input.txt");
         // Both place the file's exact bytes (not Get-Content's lossy lines) on the group's pipeline.
-        Assert.StartsWith("Invoke-BashCat input.txt -RawStdinBytes | & {", compound);
-        Assert.StartsWith("Invoke-BashCat input.txt -RawStdinBytes | & {", subshell);
+        Assert.Contains("Invoke-BashCat input.txt -RawStdinBytes | & {", compound);
+        Assert.Contains("Invoke-BashCat input.txt -RawStdinBytes | & {", subshell);
     }
 }
