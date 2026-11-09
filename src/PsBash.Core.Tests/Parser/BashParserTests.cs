@@ -1403,6 +1403,14 @@ public class BashParserTests
     }
 
     [Fact]
+    public void Parse_FunctionDefinitionWithoutBody_IsSyntaxError()
+    {
+        Assert.Throws<ParseException>(() => Parse("f() { %foo=(); }"));
+        Assert.Throws<ParseException>(() => Parse("f();"));
+        Parse("f()\n{ :; }");
+    }
+
+    [Fact]
     public void Parse_BracedVarWithoutName_IsBadSubstitution()
     {
         var ps = PsBash.Core.Transpiler.BashTranspiler.Transpile("echo ${%}");

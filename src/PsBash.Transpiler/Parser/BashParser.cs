@@ -1288,7 +1288,10 @@ public sealed partial class BashParser
         string name = nameToken.Value;
         Advance(); // consume (
         Advance(); // consume )
-        SkipTerminators();
+        // Only newlines may separate `name()` from its body; `f();` and `f()` at end of input have no body.
+        while (Peek().Kind == BashTokenKind.Newline) _pos++;
+        if (Peek().Kind is BashTokenKind.Semi or BashTokenKind.Eof or BashTokenKind.RBrace)
+            throw MakeError($"syntax error near unexpected token `{(Peek().Kind == BashTokenKind.Eof ? "newline" : Peek().Value)}'", Peek().Position, "ParseParensFunction");
         var body = ParseFunctionBody();
         return new Command.ShFunction(name, body);
     }

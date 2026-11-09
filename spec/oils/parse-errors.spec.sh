@@ -182,7 +182,6 @@ f() {
 }
 ## stdout:
 ## status: 2
-## XFAIL ps-bash gap-oils-parse-errors parse-errors (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### echo =word is allowed
