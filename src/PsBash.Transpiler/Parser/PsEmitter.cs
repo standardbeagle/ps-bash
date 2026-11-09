@@ -7265,9 +7265,9 @@ public static partial class PsEmitter
     {
         for (int i = 0; i < args.Length; i++)
         {
-            // A LONE array word binds as the array itself; only beside another argument must it splat.
+            // A LONE array word binds as the array itself; only beside another argument must it splat. An UNQUOTED `${a[@]}` is the\r\n            // exception: its elements are word-split and globbed again (`a=("x y"); printf "%s\n" ${a[@]}` is two arguments).
             if (i != skipIndex && IsUnquotedSplitWord(args[i])
-                && !(args.Length == 1 && !loneArraySplats && IsArrayValuedWord(args[i])))
+                && !(args.Length == 1 && !loneArraySplats && IsArrayValuedWord(args[i]) && !IsUnquotedArrayAllWord(args[i])))
                 return true;
         }
         return false;

@@ -2065,14 +2065,14 @@ public class PsEmitterTests
         // Runtime-clamped slice (bash offset/length semantics) so an out-of-range
         // offset yields @() instead of a reversed PowerShell range. Wrapped in $(...)
         // so the scriptblock is a valid command argument.
-        Assert.Equal("Invoke-BashEcho $(& { $__psbS = $a; if ($__psbS -is [PsBash.Cmdlets.BashSparseArray]) { $__psbS.Slice(1, [Math]::Max(0, 2)) } else { $__psbA = @(if ($__psbS -is [System.Collections.IDictionary]) { $__psbS.Values } else { $__psbS }); $__psbO = 1; if ($__psbO -lt 0) { $__psbO = $__psbA.Count + $__psbO; if ($__psbO -lt 0) { $__psbO = $__psbA.Count } }; $__psbO = [Math]::Max(0, [Math]::Min($__psbO, $__psbA.Count)); $__psbN = 2; if ($__psbN -lt 0) { $__psbN = 0 }; $__psbN = [Math]::Min($__psbN, $__psbA.Count - $__psbO); if ($__psbN -le 0) { @() } else { $__psbA[$__psbO..($__psbO + $__psbN - 1)] } } })", result);
+        Assert.Contains("$(& { $__psbS = $a; if ($__psbS -is [PsBash.Cmdlets.BashSparseArray]) { $__psbS.Slice(1, [Math]::Max(0, 2)) } else { $__psbA = @(if ($__psbS -is [System.Collections.IDictionary]) { $__psbS.Values } else { $__psbS }); $__psbO = 1; if ($__psbO -lt 0) { $__psbO = $__psbA.Count + $__psbO; if ($__psbO -lt 0) { $__psbO = $__psbA.Count } }; $__psbO = [Math]::Max(0, [Math]::Min($__psbO, $__psbA.Count)); $__psbN = 2; if ($__psbN -lt 0) { $__psbN = 0 }; $__psbN = [Math]::Min($__psbN, $__psbA.Count - $__psbO); if ($__psbN -le 0) { @() } else { $__psbA[$__psbO..($__psbO + $__psbN - 1)] } } })", result);
     }
 
     [Fact]
     public void Transpile_ArraySliceOffsetOnly_EmitsRangeToEnd()
     {
         var result = PsEmitter.Transpile("echo ${a[@]:2}");
-        Assert.Equal("Invoke-BashEcho $(& { $__psbS = $a; if ($__psbS -is [PsBash.Cmdlets.BashSparseArray]) { $__psbS.Slice(2, -1) } else { $__psbA = @(if ($__psbS -is [System.Collections.IDictionary]) { $__psbS.Values } else { $__psbS }); $__psbO = 2; if ($__psbO -lt 0) { $__psbO = $__psbA.Count + $__psbO; if ($__psbO -lt 0) { $__psbO = $__psbA.Count } }; $__psbO = [Math]::Max(0, [Math]::Min($__psbO, $__psbA.Count)); $__psbN = $__psbA.Count - $__psbO; if ($__psbN -lt 0) { $__psbN = 0 }; $__psbN = [Math]::Min($__psbN, $__psbA.Count - $__psbO); if ($__psbN -le 0) { @() } else { $__psbA[$__psbO..($__psbO + $__psbN - 1)] } } })", result);
+        Assert.Contains("$(& { $__psbS = $a; if ($__psbS -is [PsBash.Cmdlets.BashSparseArray]) { $__psbS.Slice(2, -1) } else { $__psbA = @(if ($__psbS -is [System.Collections.IDictionary]) { $__psbS.Values } else { $__psbS }); $__psbO = 2; if ($__psbO -lt 0) { $__psbO = $__psbA.Count + $__psbO; if ($__psbO -lt 0) { $__psbO = $__psbA.Count } }; $__psbO = [Math]::Max(0, [Math]::Min($__psbO, $__psbA.Count)); $__psbN = $__psbA.Count - $__psbO; if ($__psbN -lt 0) { $__psbN = 0 }; $__psbN = [Math]::Min($__psbN, $__psbA.Count - $__psbO); if ($__psbN -le 0) { @() } else { $__psbA[$__psbO..($__psbO + $__psbN - 1)] } } })", result);
     }
 
     [Fact]
@@ -2080,7 +2080,7 @@ public class PsEmitterTests
     {
         // ${arr[@]: -2} -> last 2 elements, runtime-clamped (negative offset from end).
         var result = PsEmitter.Transpile("echo ${arr[@]: -2}");
-        Assert.Equal("Invoke-BashEcho $(& { $__psbS = $arr; if ($__psbS -is [PsBash.Cmdlets.BashSparseArray]) { $__psbS.Slice(-2, -1) } else { $__psbA = @(if ($__psbS -is [System.Collections.IDictionary]) { $__psbS.Values } else { $__psbS }); $__psbO = -2; if ($__psbO -lt 0) { $__psbO = $__psbA.Count + $__psbO; if ($__psbO -lt 0) { $__psbO = $__psbA.Count } }; $__psbO = [Math]::Max(0, [Math]::Min($__psbO, $__psbA.Count)); $__psbN = $__psbA.Count - $__psbO; if ($__psbN -lt 0) { $__psbN = 0 }; $__psbN = [Math]::Min($__psbN, $__psbA.Count - $__psbO); if ($__psbN -le 0) { @() } else { $__psbA[$__psbO..($__psbO + $__psbN - 1)] } } })", result);
+        Assert.Contains("$(& { $__psbS = $arr; if ($__psbS -is [PsBash.Cmdlets.BashSparseArray]) { $__psbS.Slice(-2, -1) } else { $__psbA = @(if ($__psbS -is [System.Collections.IDictionary]) { $__psbS.Values } else { $__psbS }); $__psbO = -2; if ($__psbO -lt 0) { $__psbO = $__psbA.Count + $__psbO; if ($__psbO -lt 0) { $__psbO = $__psbA.Count } }; $__psbO = [Math]::Max(0, [Math]::Min($__psbO, $__psbA.Count)); $__psbN = $__psbA.Count - $__psbO; if ($__psbN -lt 0) { $__psbN = 0 }; $__psbN = [Math]::Min($__psbN, $__psbA.Count - $__psbO); if ($__psbN -le 0) { @() } else { $__psbA[$__psbO..($__psbO + $__psbN - 1)] } } })", result);
     }
 
     [Fact]
@@ -4588,7 +4588,7 @@ public class PsEmitterTests
     public void Transpile_ArrayAllElements_EmitsPsArrayRef()
     {
         var result = PsEmitter.Transpile("echo ${arr[@]}");
-        Assert.Equal("Invoke-BashEcho $(if ($arr -is [System.Collections.IDictionary]) { $arr.Values } else { $(if ($null -ne $arr) { $arr } else { $env:arr }) })", result);
+        Assert.Contains("$(if ($arr -is [System.Collections.IDictionary]) { $arr.Values } else { $(if ($null -ne $arr) { $arr } else { $env:arr }) })", result);
     }
 
     [Fact]

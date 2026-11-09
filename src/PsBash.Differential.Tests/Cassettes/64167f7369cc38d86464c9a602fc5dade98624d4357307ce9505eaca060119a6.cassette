@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 67
+stdout-length: 12
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)"; touch p.A q.A r.B; g=('*.A' '*.B'); echo ${g[@]}
+==== STDOUT ====
+p.A q.A r.B
+
+==== STDERR ====
+

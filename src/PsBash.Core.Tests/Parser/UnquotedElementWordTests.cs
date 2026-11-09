@@ -13,3 +13,13 @@ public class UnquotedElementWordTests
     [Fact] public void Transpile_QuotedElement_IsNotSplit() => Assert.DoesNotContain("ConvertTo-BashWords", T("echo \"${a[7]}\""));
     [Fact] public void Transpile_AllElements_KeepsItsOwnPath() => Assert.DoesNotContain("ConvertTo-BashWords ${a[0]}", T("echo ${a[@]}"));
 }
+
+/// <summary>A LONE unquoted `${a[@]}` is word-split and globbed like any other unquoted expansion (only the quoted form binds as the array).</summary>
+public class LoneUnquotedArrayAllTests
+{
+    private static string T(string bash) => PsEmitter.Transpile(bash)!;
+
+    [Fact] public void Transpile_LoneUnquotedArrayAll_IsSplit() => Assert.Contains("ConvertTo-BashWords", T("printf '%s\\n' ${a[@]}"));
+    [Fact] public void Transpile_LoneUnquotedArrayAllEcho_IsSplit() => Assert.Contains("ConvertTo-BashWords", T("echo ${a[@]}"));
+    [Fact] public void Transpile_LoneQuotedArrayAll_KeepsElements() => Assert.DoesNotContain("ConvertTo-BashWords", T("printf '%s\\n' \"${a[@]}\""));
+}
