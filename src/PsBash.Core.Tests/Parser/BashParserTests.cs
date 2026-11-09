@@ -1403,6 +1403,13 @@ public class BashParserTests
     }
 
     [Fact]
+    public void Parse_BracedVarWithoutName_IsBadSubstitution()
+    {
+        var ps = PsBash.Core.Transpiler.BashTranspiler.Transpile("echo ${%}");
+        Assert.Contains("bad substitution", ps);
+    }
+
+    [Fact]
     public void Parse_UnterminatedCommandSub_IsSyntaxError()
     {
         Assert.Throws<ParseException>(() => Parse("$(x"));

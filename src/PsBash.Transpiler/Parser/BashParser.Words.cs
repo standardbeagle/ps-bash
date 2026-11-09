@@ -591,6 +591,14 @@ public sealed partial class BashParser
             while (pos < len && IsVarChar(raw[pos]))
                 pos++;
         string varName = raw[varStart..pos];
+        if (varName.Length == 0 && pos < len && raw[pos] is '%' or '/' or '}')
+        {
+            // ${%}, ${}, ${/x}: no name at all. bash reports 'bad substitution' when it runs.
+            int badClose = raw.IndexOf('}', pos);
+            int badEnd = badClose < 0 ? len : badClose + 1;
+            parts.Add(new WordPart.BracedVarSub(varName, "#BAD:" + raw[Math.Max(0, varStart - 2)..badEnd]));
+            return badEnd;
+        }
 
         // Check for array subscript: ${arr[0]}, ${arr[@]}, ${arr[key]}, and the
         // subscript-PLUS-operator forms ${arr[@]:1:2}, ${arr[0]##*/}, ${arr[i]:-x}.
