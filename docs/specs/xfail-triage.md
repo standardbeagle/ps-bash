@@ -19,8 +19,25 @@ builtin-trap-bash 16 (trap DEBUG/ERR/RETURN), builtin-type-bash 12.
 builtin-dirs 13 (pushd/popd/dirs), alias 12 (interactive expansion), ble-idioms 12 (line-editor idioms), builtin-fc 11,
 builtin-completion 11, interactive 10, history/readline/prompt files.
 
-## Method
-Strip a file's markers in a scratch edit, run `tman test-proj src/PsBash.Spec.Tests --filter "DisplayName~oils/<f>.spec"`,
+## Method (current, 2026-11-09): dump, cluster, fix by cause
+1. Dump every known gap without editing spec files:
+   `PSBASH_SPEC_DUMP_XFAIL_JSONL=<file> PSBASH_SPEC_RESULTS=<tsv> PSBASH_SPEC_BUDGET_MIN=7 tman test-proj src/PsBash.Spec.Tests --filter "DisplayName~oils/"`,
+   repeated with `PSBASH_SPEC_RESUME=1` until every file has a PASS row (a slice must fit the 10-minute tool limit).
+   One JSON object per case: script, expected, actual stdout/stderr/status.
+2. Cluster by failure signature and by the first stderr line; a cause shared by 5+ cases is a mechanism to build,
+   not a case to patch. The same full run is the regression gate: only the three known flakes may fail
+   (`serialize` `set`, `builtin-kill` and `toysh-posix` fast-path/launcher disagreement under load).
+3. Count markers with `git grep -c '^## XFAIL ps-bash' HEAD -- spec/oils` (the Bash-tool grep and ripgrep skip
+   `builtin-echo.spec.sh`).
+
+Found this way (555 -> 528): `od` did not exist (42 cases referenced it); a one-line `## stdout:` expectation lost
+its leading blank (12 expectations were wrong); bash runs the lines above a syntax error first; a failed `$(( ))`
+word abandons its command; a pipe into a function gained a newline.
+
+Open clusters (non-interactive, 2026-11-09 dump of 518 cases): emitted PowerShell does not parse (13),
+`chmod` missing (15), `shopt --set` oils options (12), timeouts (9), host process exit (2), unsupported `set` forms (5+).
+
+## Method (original, per file)Strip a file's markers in a scratch edit, run `tman test-proj src/PsBash.Spec.Tests --filter "DisplayName~oils/<f>.spec"`,
 read the `[Fail]` cases, confirm each against `wsl.exe -d Ubuntu-24.04 -e bash`, then label. Restore with `git checkout`.
 Per-case labels are added below as files are worked.
 
