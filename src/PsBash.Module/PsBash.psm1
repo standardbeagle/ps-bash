@@ -3090,6 +3090,7 @@ $script:BashHelpSpecs = @{
     'mv'       = 'Move (rename) files.'
     'rm'       = 'Remove files or directories.'
     'mkdir'    = 'Make directories.'
+    'chmod'    = 'Change file mode bits.'
     'rmdir'    = 'Remove empty directories.'
     'touch'    = 'Change file timestamps.'
     'ln'       = 'Make links between files.'
@@ -3327,6 +3328,7 @@ Set-Alias -Name 'cp'      -Value 'Invoke-BashCp'      -Force -Scope Global -Opti
 Set-Alias -Name 'mv'      -Value 'Invoke-BashMv'      -Force -Scope Global -Option AllScope
 Set-Alias -Name 'rm'      -Value 'Invoke-BashRm'      -Force -Scope Global -Option AllScope
 Set-Alias -Name 'mkdir'   -Value 'Invoke-BashMkdir'   -Force -Scope Global -Option AllScope
+Set-Alias -Name 'chmod'   -Value 'Invoke-BashChmod'   -Force -Scope Global -Option AllScope
 Set-Alias -Name 'rmdir'   -Value 'Invoke-BashRmdir'   -Force -Scope Global -Option AllScope
 Set-Alias -Name 'touch'   -Value 'Invoke-BashTouch'   -Force -Scope Global -Option AllScope
 Set-Alias -Name 'ln'      -Value 'Invoke-BashLn'      -Force -Scope Global -Option AllScope

@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 54
+stdout-length: 5
+stderr-length: 0
+==== SCRIPT ====
+mkdir -p d/e; touch d/e/f; chmod -R go-w d; echo st=$?
+==== STDOUT ====
+st=0
+
+==== STDERR ====
+

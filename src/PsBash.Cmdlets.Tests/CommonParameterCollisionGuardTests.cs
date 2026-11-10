@@ -125,6 +125,7 @@ public class CommonParameterCollisionGuardTests
             ["tar"] = new(CollidingLetters),
             ["md5sum"] = new(CollidingLetters),
             ["od"] = new(CollidingLetters),
+            ["chmod"] = new(CollidingLetters),
             ["sha1sum"] = new(CollidingLetters),
             ["sha256sum"] = new(CollidingLetters),
         };

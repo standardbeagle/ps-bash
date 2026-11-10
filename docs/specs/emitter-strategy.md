@@ -100,6 +100,7 @@ belongs here in the same commit.
 | `tac`        | `Invoke-BashTac`         |
 | `base64`     | `Invoke-BashBase64`      |
 | `od`         | `Invoke-BashOd`          |
+| `chmod`      | `Invoke-BashChmod`       |
 | `md5sum`     | `Invoke-BashMd5sum`      |
 | `sha1sum`    | `Invoke-BashSha1sum`     |
 | `sha256sum`  | `Invoke-BashSha256sum`   |

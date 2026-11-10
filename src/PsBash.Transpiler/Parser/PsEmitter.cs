@@ -9041,7 +9041,7 @@ public static partial class PsEmitter
     private static readonly HashSet<string> StdinIgnoringCommands = new(StringComparer.Ordinal)
     {
         "seq", "sleep", "pwd", "date", "basename", "dirname", "uname", "whoami", "hostname", "id", "echo",
-        "printf", "expr", "mktemp", "readlink", "realpath", "which", "ls", "ps", "stat", "du", "touch", "mkdir",
+        "printf", "expr", "mktemp", "readlink", "realpath", "which", "ls", "ps", "stat", "du", "touch", "mkdir", "chmod",
         "rmdir", "tree", "kill", "yes", "tput", "ping", "traceroute", "umask", "ulimit",
     };
 
@@ -9916,6 +9916,9 @@ public static partial class PsEmitter
             case "rm":
                 result = EmitPassthrough("Invoke-BashRm", args);
                 return true;
+            case "chmod":
+                result = EmitPassthrough("Invoke-BashChmod", args);
+                return true;
             case "mkdir":
                 result = EmitPassthrough("Invoke-BashMkdir", args);
                 return true;
@@ -10613,7 +10616,7 @@ public static partial class PsEmitter
     /// cmdlet must be prepared to receive every flag as a plain string.
     /// </summary>
     internal static readonly IReadOnlySet<string> OrderedArgCommands =
-        new HashSet<string>(StringComparer.Ordinal) { "source", "getopts", "flock", "timeout", "times", "hash", "umask", "ulimit", "compgen", "shopt", "complete", "compopt", "tee", "cp", "mv", "rm", "mkdir", "rmdir", "ln", "touch", "xargs", "time", "env", "command", "declare", "type", "bash", "sh", "awk", "head", "tail", "wc", "cat", "tac", "nl", "uniq", "fold", "expand", "unexpand", "paste", "join", "comm", "split", "strings", "base64", "stat", "file", "cut", "sort", "grep", "sed", "rg", "find", "echo", "printf", "test", "ls", "du", "tree", "column", "gzip", "tar", "md5sum", "sha1sum", "sha256sum", "diff", "jq", "od" };
+        new HashSet<string>(StringComparer.Ordinal) { "source", "getopts", "flock", "timeout", "times", "hash", "umask", "ulimit", "compgen", "shopt", "complete", "compopt", "tee", "cp", "mv", "rm", "mkdir", "chmod", "rmdir", "ln", "touch", "xargs", "time", "env", "command", "declare", "type", "bash", "sh", "awk", "head", "tail", "wc", "cat", "tac", "nl", "uniq", "fold", "expand", "unexpand", "paste", "join", "comm", "split", "strings", "base64", "stat", "file", "cut", "sort", "grep", "sed", "rg", "find", "echo", "printf", "test", "ls", "du", "tree", "column", "gzip", "tar", "md5sum", "sha1sum", "sha256sum", "diff", "jq", "od" };
 
     /// <summary><c>Invoke-BashTee</c> -&gt; is <c>tee</c> in <see cref="OrderedArgCommands"/>?</summary>
     private static bool IsOrderedArgCmdlet(string cmdlet) =>

@@ -9,5 +9,5 @@ sh
 sh
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-spec-harness-bug spec-harness-bug (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## real-launcher
 ## timeout: 10

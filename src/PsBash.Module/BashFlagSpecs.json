@@ -1638,6 +1638,12 @@
       "desc": "number all lines"
     }
   ],
+  "chmod": [
+    { "flag": "-R", "desc": "change files and directories recursively" },
+    { "flag": "-v", "desc": "report every file processed" },
+    { "flag": "-c", "desc": "report only when a change is made" },
+    { "flag": "-f", "desc": "suppress most error messages" }
+  ],
   "od": [
     { "flag": "-A", "desc": "address radix: o d x n", "arg": "RADIX" },
     { "flag": "-t", "desc": "output type: a c d o u x with size 1 2 4 8", "arg": "TYPE" },

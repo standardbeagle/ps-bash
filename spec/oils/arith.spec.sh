@@ -837,7 +837,6 @@ echo status=$?
 ## status: 1
 ## timeout: 10
 ## real-launcher
-## XFAIL ps-bash bash 5.2 -c exits 127 for an unbound variable (see BashShellState); the oils expectation is 1
 
 #### s[0] with string abc
 case $SH in dash) exit ;; esac

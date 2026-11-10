@@ -72,7 +72,7 @@ internal static class StdinReaders
     // Everything that is a bash builtin or a ps-bash command that does not read stdin as its main input.
     private static readonly HashSet<string> NeverReaders = new(StringComparer.Ordinal)
     {
-        "cd", "echo", "printf", "pwd", "ls", "find", "cp", "mv", "rm", "mkdir", "rmdir", "touch", "ln",
+        "cd", "echo", "printf", "pwd", "ls", "find", "cp", "mv", "rm", "mkdir", "chmod", "rmdir", "touch", "ln",
         "stat", "date", "seq", "expr", "du", "tree", "env", "printenv", "basename", "dirname",
         "hostname", "whoami", "sleep", "time", "which", "ping", "traceroute", "tracert", "uname",
         "readlink", "mktemp", "realpath", "install", "kill", "type", "command", "test", "[", "[[",

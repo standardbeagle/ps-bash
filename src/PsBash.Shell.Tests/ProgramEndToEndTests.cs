@@ -182,7 +182,8 @@ public class ProgramEndToEndTests
         Assert.Contains("hello", stdout);
     }
 
-    // A script that does not PARSE (here raw PowerShell with a stray `}` — the launcher's
+    // A script that does not PARSE (here raw PowerShell with a stray `)`; a stray `}` is an ordinary
+    // argument word in bash, so it parses — the launcher's
     // PowerShell fallback hands it to the host as-is, the same shape an emitter bug produces)
     // runs nothing. It must never end quietly: stderr names the parse error and the exit status
     // is 2, like a bash syntax error. Covers -c and stdin, daemon (shared host) and
@@ -194,7 +195,7 @@ public class ProgramEndToEndTests
     [InlineData(true, true)]
     public async Task UnparseableScript_ReportsParseErrorOnStderr_ExitsTwo(bool perInvocation, bool viaStdin)
     {
-        const string script = "Get-Date; Write-Output 'before' }";
+        const string script = "Get-Date; Write-Output 'before' )";
         var env = perInvocation
             ? new Dictionary<string, string?> { ["PSBASH_PER_INVOCATION"] = "1" }
             : null;
@@ -221,7 +222,8 @@ public class ProgramEndToEndTests
 
             Assert.Contains("parse error", stderr);
             Assert.Equal(2, exitCode);
-            Assert.DoesNotContain("before", stdout);
+            // Like bash, which reads a script a command at a time: the lines above the error have already run.
+            Assert.Equal("before\n", stdout.Replace("\r\n", "\n"));
         }
         finally
         {
@@ -230,13 +232,14 @@ public class ProgramEndToEndTests
     }
 
     [SkippableFact]
-    public async Task Command_ThrowError_PropagatesExitCodeAndStderr()
+    public async Task Command_PowerShellKeyword_IsAnUnknownCommandLikeInBash()
     {
+        // `throw` is a PowerShell keyword, not a bash word: bash looks it up as a command and fails with 127.
+        var (exitCode, stdout, stderr) = await RunShellAsync("-c", "throw 'deliberate failure'; echo st=$?");
 
-        var (exitCode, stdout, stderr) = await RunShellAsync("-c", "throw 'deliberate failure'");
-
-        Assert.Equal(1, exitCode);
-        Assert.Contains("deliberate failure", stdout + stderr);
+        Assert.Equal(0, exitCode);
+        Assert.Equal("st=127\n", stdout.Replace("\r\n", "\n"));
+        Assert.Contains("throw: command not found", stderr);
     }
 
     // R04 (01M37WN0F4QPXGZMBH51CVHYVE): a single output line over the IPC frame

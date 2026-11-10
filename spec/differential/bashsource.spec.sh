@@ -11,7 +11,7 @@ caller-ok
 rc=0 after n=1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-differential-bashsource bashsource (differential): differs from bash 5.2; see docs/specs/spec-gaps.md
+## real-launcher
 
 #### RunAsync row 2
 echo "n=${#BASH_SOURCE[@]}"; [ "${BASH_SOURCE[0]}" = "$0" ] && echo same || echo different
@@ -20,7 +20,7 @@ n=1
 same
 ## END
 ## status: 0
-## XFAIL ps-bash gap-differential-bashsource bashsource (differential): differs from bash 5.2; see docs/specs/spec-gaps.md
+## real-launcher
 
 #### RunAsync row 3
 [ "${BASH_SOURCE[0]:-$0}" = "$0" ] && echo ok

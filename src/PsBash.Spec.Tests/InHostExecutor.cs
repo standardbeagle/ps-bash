@@ -22,15 +22,15 @@ internal sealed class InHostExecutor : IScriptExecutor, IAsyncDisposable
     private const string WarmupScript =
         "x=1; f() { echo \"$x\"; }; f | cat; [[ a == a ]] && echo $((x+1)); for i in 1 2; do :; done; y=$(echo z); case $y in z) ;; esac; printf %s ok >&2";
 
-    // A host is reused across cases, so each case must start from the same shell state: a baseline is taken once per fresh
-    // host (bash variables, aliases, shopt/set options, dir stack, plus the function table) and restored after every case.
+    // A host is reused across cases, so each case must start from the same shell state. The host runs every request in
+    // a fresh runspace (functions, aliases and PowerShell variables go with it), but bash variables are the process
+    // environment and the readonly / shopt tables are process statics: those are saved once per fresh host and put back
+    // after every case. The snapshot is kept on the AppDomain, because a runspace variable would not outlive its request.
     private const string BaselineScript =
-        "$global:__spec_ss = [PsBash.Cmdlets.BashShellState]::Save($ExecutionContext.SessionState); " +
-        "$global:__spec_fn = @((Get-ChildItem function:).Name)";
+        "[AppDomain]::CurrentDomain.SetData('psbash.spec.baseline', [PsBash.Cmdlets.BashShellState]::Save($ExecutionContext.SessionState))";
 
     private const string RestoreScript =
-        "[void][PsBash.Cmdlets.BashShellState]::Restore($ExecutionContext.SessionState, $global:__spec_ss); " +
-        "Get-ChildItem function: | Where-Object { $_.Name -notin $global:__spec_fn } | Remove-Item -ErrorAction SilentlyContinue";
+        "[void][PsBash.Cmdlets.BashShellState]::Restore($ExecutionContext.SessionState, [AppDomain]::CurrentDomain.GetData('psbash.spec.baseline'))";
 
     public InHostExecutor(int slots)
     {
@@ -58,8 +58,12 @@ internal sealed class InHostExecutor : IScriptExecutor, IAsyncDisposable
             {
                 worker = await IpcWorker.StartAsync(_hostBinary, lifetime: Lifetime.PerInvocation, ct: cancel);
                 worker.OutputCallback = _ => { };
-                worker.ErrorCallback = _ => { };
-                await worker.ExecuteAsync(BaselineScript, cancel, CaptureEnvironment());
+                var baselineErr = new StringBuilder();
+                worker.ErrorCallback = s => baselineErr.Append(s);
+                int brc = await worker.ExecuteAsync(BaselineScript, cancel, CaptureEnvironment());
+                // Without a baseline no case can be restored, so every later case would inherit state: fail loudly.
+                if (brc != 0 || baselineErr.Length > 0)
+                    throw new InvalidOperationException($"spec baseline failed (rc={brc}): {baselineErr}");
             }
             var stdout = new StringBuilder();
             var stderr = new StringBuilder();
@@ -82,7 +86,18 @@ internal sealed class InHostExecutor : IScriptExecutor, IAsyncDisposable
             // Back to the baseline shell state; a host that cannot is replaced rather than reused dirty.
             worker.OutputCallback = _ => { };
             worker.ErrorCallback = _ => { };
-            try { await worker.ExecuteAsync(CwdPreamble(caseDir.Path) + RestoreScript, cancel, CaptureEnvironment()); }
+            var restoreErr = new StringBuilder();
+            worker.ErrorCallback = s => restoreErr.Append(s);
+            try
+            {
+                int rc = await worker.ExecuteAsync(CwdPreamble(caseDir.Path) + RestoreScript, cancel, CaptureEnvironment());
+                // A restore that reports an error left the host dirty: replace it, or the next case inherits this one's state.
+                if (rc != 0 || restoreErr.Length > 0)
+                {
+                    healthy = false;
+                    result = result with { Stderr = result.Stderr + $"runner: shell-state restore failed (rc={rc}): {restoreErr}\n" };
+                }
+            }
             catch (Exception) when (!cancel.IsCancellationRequested) { healthy = false; }
             return result;
         }

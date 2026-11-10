@@ -20,7 +20,7 @@ model in [runtime-functions.md](runtime-functions.md) "Raw bytes".
 | Area | ps-bash on Windows | Why |
 |---|---|---|
 | Permission bits (`ls -l`, `stat`, `find -perm`, `%m`/`%M`) | Synthesised: 0644 files, 0755 directories and executable extensions, read-only clears the write bits, 0777 links | NTFS has ACLs, not mode bits |
-| `mkdir -m`, `cp` mode preservation | Only the owner-write bit maps (to the read-only attribute) | Same |
+| `chmod`, `mkdir -m`, `cp` mode preservation | Only the owner-write bit maps (to the read-only attribute); `chmod +x` and every other bit succeed and change nothing; `chmod -v` reports the stand-in modes 0644 / 0755 (0444 / 0555 read-only) | Same |
 | Owner / group (`ls -l`, `find -user`, `%u`/`%g`, `ls -n`) | Owner and primary-group SID; name without domain; numeric id = the SID's last sub-authority; `-nouser` = untranslatable SID | No uid/gid |
 | Inode, link count, ctime | NTFS file index, `nNumberOfLinks` (a directory shows 1, Linux shows 2 + subdirs), NTFS ChangeTime | Closest NTFS equivalents |
 | `ls -s`, `find %k`/`%b` | Whole 4 KiB allocation units | Real figure is filesystem-specific |

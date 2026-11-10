@@ -1131,6 +1131,17 @@ public class BashTranspilerTests
     public void Transpile_KeywordCommandWord_IsCalledByQuotedName(string bash, string expected)
         => Assert.Contains(expected, BashTranspiler.Transpile(bash));
 
+    // Found by the mutation fuzz: a pipe stage with no redirect lists made the fused-lane check throw
+    // NullReferenceException (IsEmpty on a default ImmutableArray). It must transpile or be a ParseException.
+    [Theory]
+    [InlineData("[ a   = b -a c |= ddd ]")]
+    [InlineData("[ a = b | = c ]")]
+    public void Transpile_TestWithPipeInside_DoesNotCrash(string bash)
+    {
+        try { Assert.NotNull(BashTranspiler.Transpile(bash)); }
+        catch (ParseException) { }
+    }
+
     // `echo hi | cat <<< here`: the stage's own stdin replaces the pipe; the upstream is drained, the redirect kept.
     [Theory]
     [InlineData("echo hi | cat <<< here", "here")]

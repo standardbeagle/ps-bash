@@ -93,9 +93,11 @@ internal static class FusedLane
         foreach (var stage in pipeline.Commands)
         {
             if (stage is not Command.Simple s) return false;
-            if (!s.Redirects.IsEmpty || !s.HereDocs.IsEmpty || !s.EnvPairs.IsEmpty)
+            // IsDefaultOrEmpty: a stage the parser built without these lists (`[ a = b -a c |= d ]`) has default
+            // arrays, and IsEmpty on one throws.
+            if (!s.Redirects.IsDefaultOrEmpty || !s.HereDocs.IsDefaultOrEmpty || !s.EnvPairs.IsDefaultOrEmpty)
                 return false;
-            var name = s.Words.IsEmpty ? null : PsEmitter.GetLiteralValue(s.Words[0]);
+            var name = s.Words.IsDefaultOrEmpty ? null : PsEmitter.GetLiteralValue(s.Words[0]);
             if (name is null || !FusePipelineAllowlist.Contains(name))
                 return false;
             // Unbounded/streaming stage guard: the fused cmdlet cuts output frames by SIZE
