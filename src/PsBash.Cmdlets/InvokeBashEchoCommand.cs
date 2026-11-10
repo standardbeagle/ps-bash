@@ -42,9 +42,8 @@ public sealed class InvokeBashEchoCommand : PSCmdlet
         var args = Arguments ?? Array.Empty<string>();
         // An expansion to NO words (`echo ${@:5}` past the last parameter) binds as a null element: bash passes no word.
         // A FAILED expansion among the words (`echo $((1 + 2.3))`, `echo "q$((1/0))"`): bash abandons the command, status 1.
-        if (SessionState.PSVariable.GetValue("global:__BashExpansionFailed") is true)
+        if (FileSystemHelpers.TakeExpansionFailed(this))
         {
-            SessionState.PSVariable.Set("global:__BashExpansionFailed", false);
             FileSystemHelpers.SetLastExitCode(this, 1);
             return;
         }

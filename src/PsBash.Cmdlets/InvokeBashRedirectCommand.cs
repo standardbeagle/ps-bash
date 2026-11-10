@@ -93,6 +93,16 @@ public sealed class InvokeBashRedirectCommand : PSCmdlet
         _stdoutToFile = MyInvocation.BoundParameters.ContainsKey(nameof(Path));
         _stderrToFile = MyInvocation.BoundParameters.ContainsKey(nameof(ErrorPath));
 
+        // `echo hi > file$((1/0))`: the target word failed to expand, so bash abandons the command (status 1)
+        // without opening anything. Same path as a target that cannot be opened.
+        if (FileSystemHelpers.TakeExpansionFailed(this))
+        {
+            FileSystemHelpers.SetLastExitCode(this, 1);
+            _openFailed = true;
+            UpstreamStop.Throw(this);
+            return;
+        }
+
         foreach (var t in Truncate ?? [])
             if (!TryOpen(t, append: false, force: false, out var s)) return; else s?.Dispose();
         foreach (var t in Touch ?? [])

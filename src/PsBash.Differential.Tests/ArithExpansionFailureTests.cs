@@ -22,4 +22,12 @@ public class ArithExpansionFailureTests
     public Task FailedArithCommand_DoesNotAbandonTheNextCommand() => AssertOracle.EqualAsync(
         "{ (( 1[2] = 3 )); } 2>/dev/null\necho status=$?\na=9\n{ (( (a + 2) = 3 )); } 2>/dev/null\necho $a\n"
         + "{ if (( 1 / 0 )); then echo yes; else echo no; fi; } 2>/dev/null\necho end");
+    // The mark a failed word leaves must die with its own command: a later echo still runs.
+    [Fact]
+    public Task FailedArithWord_OfAnotherCommand_DoesNotAbandonALaterEcho() => AssertOracle.EqualAsync(
+        "{ true $((1/0)); } 2>/dev/null\necho after-true\n{ : $((1/0)); } 2>/dev/null\necho after-colon");
+
+    [Fact]
+    public Task FailedArithWord_InARedirectTarget_AbandonsTheCommand() => AssertOracle.EqualAsync(
+        "cd \"$(mktemp -d)\"\n{ echo hi > zz$(( 42 / 0 )) in; } 2>/dev/null\necho inside=$?\nls | wc -l");
 }

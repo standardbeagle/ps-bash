@@ -46,7 +46,9 @@ public sealed class InvokeBashArithmeticCommand : PSCmdlet
         // An empty / blank expression is 0 in bash (`$(( ))`, `[[ "" -eq 0 ]]`).
         if (string.IsNullOrWhiteSpace(expr)) expr = "0";
 
-        FileSystemHelpers.SetLastExitCode(this, 0);
+        // Set directly, not through SetLastExitCode: that would clear the mark an EARLIER word of the same
+        // command left (`echo $((1/0)) $((1+1))` is still abandoned).
+        SessionState.PSVariable.Set(new PSVariable("global:LASTEXITCODE", 0));
         try
         {
             long result = BashArith.Evaluate(SubstituteExpressionVariables(expr), ReadVar, WriteVar, ReadRawVar);
@@ -58,10 +60,10 @@ public sealed class InvokeBashArithmeticCommand : PSCmdlet
         }
         catch (BashArith.BashArithException ex)
         {
-            FileSystemHelpers.SetLastExitCode(this, 1);
-            // A failed expansion abandons the command it is a word of (see PsBuild.AbandonIfExpansionFailed, echo).
-            if (IsWordExpansion()) SessionState.PSVariable.Set("global:__BashExpansionFailed", true);
-            FileSystemHelpers.WriteBashError(this, $"{expr}: {ex.Message}");
+            // A failed WORD abandons the command it belongs to (see PsBuild.AbandonIfExpansionFailed, echo).
+            FileSystemHelpers.WriteBashError(this, $"{expr}: {ex.Message}");   // status 1
+            // Marked LAST: reporting the error goes through SetLastExitCode, which ends any mark.
+            if (IsWordExpansion()) FileSystemHelpers.MarkExpansionFailed(this);
         }
     }
 

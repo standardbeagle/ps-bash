@@ -1,0 +1,17 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 91
+stdout-length: 23
+stderr-length: 0
+==== SCRIPT ====
+{ true $((1/0)); } 2>/dev/null
+echo after-true
+{ : $((1/0)); } 2>/dev/null
+echo after-colon
+==== STDOUT ====
+after-true
+after-colon
+
+==== STDERR ====
+

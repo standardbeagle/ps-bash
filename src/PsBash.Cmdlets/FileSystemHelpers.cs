@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Collections.Generic;
 using System.IO;
 using System.Management.Automation;
@@ -323,6 +324,42 @@ internal static class FileSystemHelpers
         cmdlet.SessionState.PSVariable.Set(new PSVariable("global:LASTEXITCODE", code));
     }
 
+    /// <summary>
+    /// A WORD failed to expand (<c>$((1/0))</c>): status 1, and <c>$global:__BashExpansionFailed</c> is set to the
+    /// word's source position (<c>line:column</c>) so the command it belongs to can abandon itself -- echo through
+    /// <see cref="TakeExpansionFailed"/>, a hoisted word through the emitter's <c>PsBuild.AbandonIfExpansionFailed</c>.
+    /// </summary>
+    public static void MarkExpansionFailed(PSCmdlet cmdlet)
+    {
+        cmdlet.SessionState.PSVariable.Set(new PSVariable("global:LASTEXITCODE", 1));
+        var at = cmdlet.MyInvocation;
+        cmdlet.SessionState.PSVariable.Set("global:__BashExpansionFailed",
+            at.ScriptLineNumber.ToString(CultureInfo.InvariantCulture) + ":" + at.OffsetInLine.ToString(CultureInfo.InvariantCulture));
+    }
+
+    /// <summary>
+    /// True when a word of THIS command failed to expand: the mark's position lies inside the command's own
+    /// statement text. The mark is cleared either way, so one left by an earlier command (which did not look at
+    /// it: <c>true $((1/0))</c>) can never make a later command abandon itself.
+    /// </summary>
+    public static bool TakeExpansionFailed(PSCmdlet cmdlet)
+    {
+        object? mark = cmdlet.SessionState.PSVariable.GetValue("global:__BashExpansionFailed");
+        if (mark is null or false) return false;
+        cmdlet.SessionState.PSVariable.Set("global:__BashExpansionFailed", false);
+        if (mark is not string where) return false;
+        int colon = where.IndexOf(':');
+        if (colon < 0 || !int.TryParse(where.AsSpan(0, colon), NumberStyles.None, CultureInfo.InvariantCulture, out int line)
+            || !int.TryParse(where.AsSpan(colon + 1), NumberStyles.None, CultureInfo.InvariantCulture, out int column))
+            return false;
+        var me = cmdlet.MyInvocation;
+        string statement = me.Statement ?? "";
+        int firstLineLength = statement.IndexOf('\n') is var nlAt and >= 0 ? nlAt : statement.Length;
+        if (line == me.ScriptLineNumber) return column >= me.OffsetInLine && column < me.OffsetInLine + firstLineLength;
+        // A statement written over several lines: the word is on one of its later lines.
+        int extraLines = statement.AsSpan().Count('\n');
+        return line > me.ScriptLineNumber && line <= me.ScriptLineNumber + extraLines;
+    }
     /// <summary>
     /// Bash-style path normalization for verbose output: backslash → slash.
     /// </summary>
