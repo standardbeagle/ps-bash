@@ -138,9 +138,10 @@ $"
 
 #### $'' octal escapes with fewer than 3 chars
 echo $'\1 \11 \11 \111' | od -A n -c | sed 's/ \+/ /g'
-## stdout: 001 \t \t I \n
+## STDOUT:
+ 001 \t \t I \n
+## END
 ## status: 0
-## XFAIL ps-bash gap-oils-quote quote (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### $"" is a synonym for ""
@@ -247,9 +248,10 @@ col3
 #### $'' octal escapes don't have leading 0
 # echo -e syntax is echo -e \0377
 echo -n $'\001' $'\377' | od -A n -c | sed 's/ \+/ /g'
-## stdout: 001 377
+## STDOUT:
+ 001 377
+## END
 ## status: 0
-## XFAIL ps-bash gap-oils-quote quote (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### OSH allows invalid backslashes

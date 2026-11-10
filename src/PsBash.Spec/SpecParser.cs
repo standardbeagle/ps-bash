@@ -161,7 +161,9 @@ public static class SpecParser
             sb.Append("## ").Append(prefix).Append(small).Append("-json: ").Append(System.Text.Json.JsonSerializer.Serialize(value, JsonOpts)).Append('\n');
             return;
         }
-        if (value.Length > 1 && value.IndexOf('\n') == value.Length - 1)
+        // The one-line form drops leading blanks when read back (`## stdout:  ff` is "ff"), so only a line that
+        // starts with a non-blank may use it; anything else goes in a block, which is exact.
+        if (value.Length > 1 && value.IndexOf('\n') == value.Length - 1 && value[0] != ' ')
             sb.Append("## ").Append(prefix).Append(small).Append(": ").Append(value[..^1]).Append('\n');
         else
             sb.Append("## ").Append(prefix).Append(big).Append(":\n").Append(value.EndsWith('\n') ? value : value + "\n").Append("## END\n");

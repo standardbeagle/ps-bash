@@ -139,9 +139,10 @@ echo A
 echo status=$?
 echo B
 echo status=$?
-## stdout: [7]
+## STDOUT:
+  [7]
+## END
 ## status: 42
-## XFAIL ps-bash gap-oils-builtin-trap-bash builtin-trap-bash (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### trap DEBUG and control flow
