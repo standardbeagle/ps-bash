@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 58
+stdout-length: 34
+stderr-length: 0
+==== SCRIPT ====
+echo -n $'\c0\c9-\ca\cz\cA\cZ\cm\ck\cb\c?' | od -A n -t x1
+==== STDOUT ====
+ 10 19 2d 01 1a 01 1a 0d 0b 02 7f
+
+==== STDERR ====
+

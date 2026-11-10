@@ -896,7 +896,6 @@ printf '%b' '\0007' | show_bytes
  07
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-printf builtin-printf (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### printf %d %X support hex 0x5 and octal 055

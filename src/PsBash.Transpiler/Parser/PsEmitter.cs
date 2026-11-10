@@ -6560,7 +6560,7 @@ public static partial class PsEmitter
                     if (i + 2 < s.Length)
                     {
                         char x = s[i + 2];
-                        sb.Append((char)(char.ToUpperInvariant(x) ^ 0x40));
+                        sb.Append(x == '?' ? (char)0x7f : (char)(char.ToUpperInvariant(x) & 0x1f));   // bash TOCTRL: \c0 is 0x10, \c? is DEL
                         i += 3;
                     }
                     else { sb.Append('\\').Append('c'); i += 2; }

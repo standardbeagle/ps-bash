@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 49
+stdout-length: 13
+stderr-length: 0
+==== SCRIPT ====
+show() { od -A n -t x1; }; printf 'a\nb\n' | show
+==== STDOUT ====
+ 61 0a 62 0a
+
+==== STDERR ====
+

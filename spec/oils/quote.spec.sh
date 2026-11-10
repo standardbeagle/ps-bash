@@ -306,7 +306,6 @@ echo -n $'\c-\c+\c"' | show_bytes
   0d  0b  02
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-quote quote (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 

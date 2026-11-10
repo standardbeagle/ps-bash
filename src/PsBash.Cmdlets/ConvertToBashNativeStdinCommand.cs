@@ -16,7 +16,7 @@ namespace PsBash.Cmdlets;
 /// </para>
 /// <para>
 /// When NAME is a function, alias or cmdlet (which PowerShell would run instead) it must keep receiving what
-/// it always did — the record's TEXT — so only a resolved application gets bytes. Resolution is at run time,
+/// it always did — the record's TEXT (a transpiled bash function also keeps the unterminated mark) — so only a resolved application gets bytes. Resolution is at run time,
 /// exactly as <see cref="EnterBashNativeStdinCommand"/> does it, because the emitter cannot know what a name
 /// resolves to.
 /// </para>
@@ -34,14 +34,25 @@ public sealed class ConvertToBashNativeStdinCommand : PSCmdlet
     public object? InputObject { get; set; }
 
     private bool _native;
+    private bool _bashFunction;
 
-    protected override void BeginProcessing() => _native = EnterBashNativeStdinCommand.ResolvesToApplication(this, Name);
+    protected override void BeginProcessing()
+    {
+        _native = EnterBashNativeStdinCommand.ResolvesToApplication(this, Name);
+        // A function the transpiler emitted (it saves $global:BashPositional first) reads its input with bash
+        // commands, which understand an unterminated record; a hand-written PowerShell function gets plain strings.
+        _bashFunction = !_native
+            && InvokeCommand.GetCommand(Name, CommandTypes.Function) is FunctionInfo fn
+            && fn.Definition.Contains("$global:BashPositional", StringComparison.Ordinal);
+    }
 
     protected override void ProcessRecord()
     {
         if (!_native)
         {
-            WriteObject(BashRuntime.GetBashText(InputObject));
+            // A bash function keeps the "no final newline" mark: `printf ab | f` must not hand f's commands "ab\n".
+            string text = BashRuntime.GetBashText(InputObject);
+            WriteObject(_bashFunction ? BashRuntime.TextRecord(text, BashRuntime.IsUnterminated(InputObject)) : text);
             return;
         }
 

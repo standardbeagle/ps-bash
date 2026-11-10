@@ -232,4 +232,18 @@ public class NativeStdinBridgeTests : IClassFixture<SharedPwshFixture>
 
         Assert.Equal(new object?[] { "x" }, chunks);
     }
+    // A transpiled bash function reads its input with bash commands: the record must keep its "no final newline" mark.
+    [Fact]
+    public void ConvertTo_UnterminatedRecord_BashFunctionKeepsTheMark()
+    {
+        var pwsh = _fixture.AcquireFresh();
+        pwsh.Runspace.SessionStateProxy.SetVariable("rec", BashRuntime.TextRecord("x", unterminated: true));
+        // Not through Convert(): it unwraps to the base object, which drops the mark (a note property).
+        var chunks = pwsh.AddScript("function psbnative_bashfn { $__bp = $global:BashPositional }; $rec | ConvertTo-BashNativeStdin 'psbnative_bashfn'").Invoke();
+        pwsh.Commands.Clear();
+
+        var only = Assert.Single(chunks);
+        Assert.True(BashRuntime.IsUnterminated(only));
+        Assert.Equal("x", BashRuntime.GetBashText(only));
+    }
 }
