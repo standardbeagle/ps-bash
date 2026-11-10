@@ -145,6 +145,22 @@ private static readonly object DumpLock = new();
         if (Environment.GetEnvironmentVariable("PSBASH_SPEC_DUMP_XFAIL") is { Length: > 0 } dumpPath)
             lock (DumpLock)
                 File.AppendAllText(dumpPath, string.Concat(results.Where(r => r.Verdict == Verdict.XFail).Select(r => $"##### {name}\n{r.Diff}\n=====\n")));
+        // Clustering aid: PSBASH_SPEC_DUMP_XFAIL_JSONL=<file> appends one JSON object per known gap (script, expected, actual).
+        if (Environment.GetEnvironmentVariable("PSBASH_SPEC_DUMP_XFAIL_JSONL") is { Length: > 0 } jsonPath)
+            lock (DumpLock)
+                File.AppendAllLines(jsonPath, results.Where(r => r.Verdict == Verdict.XFail).Select(r => System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    file = name,
+                    @case = r.Case.Name,
+                    id = r.Case.Xfail?.Id,
+                    script = r.Case.Script,
+                    expStdout = r.Case.Primary.Stdout,
+                    expStatus = r.Case.Primary.Status,
+                    actStdout = r.Actual?.Stdout,
+                    actStderr = r.Actual?.Stderr,
+                    actStatus = r.Actual?.ExitCode,
+                    wallMs = r.Actual?.WallMs,
+                })));
         var bad = results.Where(r => r.Verdict is Verdict.Fail or Verdict.XPass).ToList();
         Assert.True(bad.Count == 0, SpecRunner.Summarize(file, results) + "\n\n" +
             string.Join("\n---\n", bad.Select(b => $"[{b.Verdict}] {b.Diff}")));
