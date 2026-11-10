@@ -131,7 +131,6 @@ trap 'echo FAILED' EXIT
 for
 ## stdout: FAILED
 ## status: 2
-## XFAIL ps-bash gap-oils-builtin-trap builtin-trap (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### trap EXIT with PARSE error and explicit exit
@@ -139,7 +138,6 @@ trap 'echo FAILED; exit 0' EXIT
 for
 ## stdout: FAILED
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-trap builtin-trap (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### trap EXIT with explicit exit

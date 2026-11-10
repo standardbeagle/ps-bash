@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 74
+stdout-length: 13
+stderr-length: 0
+==== SCRIPT ====
+bash -c $'echo one\nx=5; echo x=$x\n}\necho never' 2>/dev/null; echo st=$?
+==== STDOUT ====
+one
+x=5
+st=2
+
+==== STDERR ====
+

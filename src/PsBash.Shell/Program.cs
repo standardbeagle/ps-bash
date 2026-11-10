@@ -204,7 +204,12 @@ if (shellArgs.ScriptPath is not null)
     {
         // Script files are stable across runs — cache the transpile on disk (keyed by content
         // hash + build + path mode) so re-running the same script skips parse+emit.
-        pwshScriptCommand = TranspileCache.GetOrTranspileFile(scriptContent);
+        try { pwshScriptCommand = TranspileCache.GetOrTranspileFile(scriptContent); }
+        catch (ParseException prefixEx) when (BashTranspiler.RunnablePrefix(scriptContent, prefixEx) is { } recovered)
+        {
+            // A syntax error on a later line: run the complete commands above it first, as bash does.
+            pwshScriptCommand = TranspileCache.GetOrTranspileFile(recovered);
+        }
     }
     catch (ParseException ex)
     {

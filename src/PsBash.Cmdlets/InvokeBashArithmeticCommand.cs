@@ -66,14 +66,18 @@ public sealed class InvokeBashArithmeticCommand : PSCmdlet
     }
 
     /// <summary>
-    /// True for <c>$(( expr ))</c> (emitted <c>$(Invoke-BashArith ...)</c>), false for the command and condition forms
-    /// (<c>(( expr ))</c>, emitted <c>@(Invoke-BashArith ...) -ne 0</c>): only a failed WORD abandons its command.
+    /// True for <c>$(( expr ))</c>, which the emitter writes as <c>$(Invoke-BashArith ...)</c> (under nounset:
+    /// <c>$__psbash_av = Invoke-BashArith ...</c>). The command and condition forms (<c>(( expr ))</c>,
+    /// <c>[[ a -eq b ]]</c>: <c>@(Invoke-BashArith ...)</c>, <c>[long](Invoke-BashArith ...)</c>) are not words:
+    /// only a failed WORD abandons the command it belongs to.
     /// </summary>
     private bool IsWordExpansion()
     {
-        string line = MyInvocation.Line ?? "";
+        var before = (MyInvocation.Line ?? "").AsSpan();
         int at = MyInvocation.OffsetInLine - 1;
-        return !(at >= 2 && at <= line.Length && line.AsSpan(at - 2, 2).SequenceEqual("@("));
+        if (at < 0 || at > before.Length) return false;
+        before = before[..at];
+        return before.EndsWith("$(") || before.EndsWith("$__psbash_av = ");
     }
 
     /// <summary>

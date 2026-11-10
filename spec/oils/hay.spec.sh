@@ -59,7 +59,6 @@ foo
 bar
 ## END
 ## status: 2
-## XFAIL ps-bash gap-oils-hay hay (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Parsing Nested Attributes nodes (bug fix)
@@ -195,7 +194,6 @@ one
 two
 ## END
 ## status: 2
-## XFAIL ps-bash gap-oils-hay hay (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### hay eval with shopt -s ysh:all

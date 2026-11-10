@@ -1090,4 +1090,34 @@ public class BashTranspilerTests
         Assert.Contains("Invoke-BashCat input.txt -RawStdinBytes | & {", compound);
         Assert.Contains("Invoke-BashCat input.txt -RawStdinBytes | & {", subshell);
     }
+    // bash runs a script one complete command at a time: the lines above a syntax error run before it is reported.
+    [Fact]
+    public void RunnablePrefix_KeepsTheLinesAboveTheError_ThenFailsWithStatus2()
+    {
+        const string script = "echo one\nx=5\n}\necho never";
+        var ex = Assert.Throws<ParseException>(() => BashParser.ParseTopLevelWithPositions(script));
+        var recovered = BashTranspiler.RunnablePrefix(script, ex);
+        Assert.NotNull(recovered);
+        Assert.StartsWith("echo one\nx=5\n{ printf '%s\\n' 'ps-bash: parse error: ", recovered);
+        Assert.EndsWith(" >&2; exit 2; }\n", recovered);
+        Assert.DoesNotContain("never", recovered);
+    }
+
+    [Theory]
+    [InlineData("echo one; }")]          // the error is on the first line: nothing precedes it
+    [InlineData("\n\n}")]                // only blank lines precede it
+    public void RunnablePrefix_IsNull_WhenNoCommandPrecedesTheError(string script)
+    {
+        var ex = Assert.Throws<ParseException>(() => BashParser.ParseTopLevelWithPositions(script));
+        Assert.Null(BashTranspiler.RunnablePrefix(script, ex));
+    }
+
+    [Fact]
+    public void RunnablePrefix_SkipsBackOverAnUnfinishedCommand()
+    {
+        // The `for` opened on line 2 is what fails (at end of input): only line 1 is a complete command.
+        const string script = "echo one\nfor i in 1 2\necho body";
+        var ex = Assert.Throws<ParseException>(() => BashParser.ParseTopLevelWithPositions(script));
+        Assert.StartsWith("echo one\n{ printf", BashTranspiler.RunnablePrefix(script, ex));
+    }
 }

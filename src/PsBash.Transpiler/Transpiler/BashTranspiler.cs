@@ -56,7 +56,38 @@ public static class BashTranspiler
     /// <returns>The equivalent PowerShell command string.</returns>
     /// <exception cref="ParseException">Thrown when the bash input cannot be parsed.</exception>
     public static string Transpile(string bashCommand)
-        => Transpile(bashCommand, TranspileContext.Default);
+    {
+        try { return Transpile(bashCommand, TranspileContext.Default); }
+        catch (ParseException ex) when (RunnablePrefix(bashCommand, ex) is { } recovered)
+        {
+            return Transpile(recovered, TranspileContext.Default);
+        }
+    }
+
+    /// <summary>
+    /// bash reads and runs a script one complete command at a time, so a syntax error on a LATER line is only
+    /// reported after everything above it ran (<c>echo a</c>, newline, <c>}</c> prints <c>a</c>, then fails with status 2).
+    /// This returns the script rewritten to do that: the longest run of whole lines before the failing one that
+    /// parses on its own, followed by a command that prints the error and exits 2. Null when no line precedes the
+    /// error or no prefix parses, in which case the caller reports the error as before.
+    /// Only the launcher's own script goes through here; <c>eval</c> and <c>source</c> text keep failing as a whole.
+    /// </summary>
+    public static string? RunnablePrefix(string bashCommand, ParseException ex)
+    {
+        if (ex.Line < 2) return null;
+        var lines = bashCommand.Split('\n');
+        int last = Math.Min(ex.Line - 1, lines.Length - 1);
+        for (int k = last, tries = 0; k >= 1 && tries < 64; k--, tries++)
+        {
+            string prefix = string.Join('\n', lines, 0, k);
+            if (string.IsNullOrWhiteSpace(prefix)) return null;
+            try { if (BashParser.ParseTopLevelWithPositions(prefix).Count == 0) continue; }
+            catch (ParseException) { continue; }
+            string message = "ps-bash: parse error: " + ex.Message;
+            return prefix + "\n{ printf '%s\\n' '" + message.Replace("'", "'\\''") + "' >&2; exit 2; }\n";
+        }
+        return null;
+    }
 
     /// <summary>
     /// Transpile a bash command string to PowerShell using the given context.
@@ -135,7 +166,13 @@ public static class BashTranspiler
     /// <exception cref="ParseException">Thrown when the bash input cannot be parsed.</exception>
     public static string? TranspileWithLauncherStdin(string bashCommand) => Guarded(() =>
     {
-        var emitted = PsEmitter.TranspileWithLauncherStdin(bashCommand, TranspileContext.Default);
+        string? emitted;
+        try { emitted = PsEmitter.TranspileWithLauncherStdin(bashCommand, TranspileContext.Default); }
+        catch (ParseException ex) when (RunnablePrefix(bashCommand, ex) is { } recovered)
+        {
+            bashCommand = recovered;
+            emitted = PsEmitter.TranspileWithLauncherStdin(bashCommand, TranspileContext.Default);
+        }
         if (emitted is null || !ReadsSharedStdin(emitted))
             return null;
         return WrapWithTrapEpilogue(bashCommand, emitted);
