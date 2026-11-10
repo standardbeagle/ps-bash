@@ -3130,6 +3130,7 @@ $script:BashHelpSpecs = @{
     'tac'      = 'Concatenate and print files in reverse.'
     'base64'   = 'Base64 encode/decode data and print to standard output.'
     'md5sum'   = 'Compute and check MD5 message digest.'
+    'od'       = 'Dump files in octal and other formats.'
     'sha1sum'  = 'Compute and check SHA1 message digest.'
     'sha256sum' = 'Compute and check SHA256 message digest.'
     'file'     = 'Determine file type.'
@@ -3437,6 +3438,7 @@ Set-Alias -Name 'split'    -Value 'Invoke-BashSplit'    -Force -Scope Global -Op
 Set-Alias -Name 'tac'      -Value 'Invoke-BashTac'      -Force -Scope Global -Option AllScope
 Set-Alias -Name 'base64'   -Value 'Invoke-BashBase64'   -Force -Scope Global -Option AllScope
 Set-Alias -Name 'md5sum'   -Value 'Invoke-BashMd5sum'   -Force -Scope Global -Option AllScope
+Set-Alias -Name 'od'       -Value 'Invoke-BashOd'       -Force -Scope Global -Option AllScope
 Set-Alias -Name 'sha1sum'  -Value 'Invoke-BashSha1sum'  -Force -Scope Global -Option AllScope
 Set-Alias -Name 'sha256sum' -Value 'Invoke-BashSha256sum' -Force -Scope Global -Option AllScope
 Set-Alias -Name 'file'     -Value 'Invoke-BashFile'     -Force -Scope Global -Option AllScope

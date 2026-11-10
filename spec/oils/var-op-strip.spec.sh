@@ -114,7 +114,6 @@ echo ${v%%?} | show_hex
   2d  0a
 ## END
 ## status: 127
-## XFAIL ps-bash gap-oils-var-op-strip var-op-strip (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Bug fix: Test that you can remove everything with glob

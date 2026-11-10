@@ -1,0 +1,16 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 58
+stdout-length: 186
+stderr-length: 0
+==== SCRIPT ====
+printf 'hello world, this is a longer line of text\n' | od
+==== STDOUT ====
+0000000 062550 066154 020157 067567 066162 026144 072040 064550
+0000020 020163 071551 060440 066040 067157 062547 020162 064554
+0000040 062556 067440 020146 062564 072170 000012
+0000053
+
+==== STDERR ====
+

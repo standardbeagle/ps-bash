@@ -10,7 +10,6 @@ printf '\0\n' | show_hex
   00  0a
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-nul-bytes nul-bytes (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Compare \x00 byte versus \x01 byte - command sub
@@ -162,7 +161,6 @@ echo -e '\0-' | show_hex
   00  2d  0a
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-nul-bytes nul-bytes (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -206,7 +204,6 @@ printf '%s\n' "$nul" | show_hex
   0a
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-nul-bytes nul-bytes (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -223,7 +220,6 @@ echo $'\0' | show_hex
   0a
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-nul-bytes nul-bytes (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 

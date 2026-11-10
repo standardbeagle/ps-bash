@@ -1638,6 +1638,20 @@
       "desc": "number all lines"
     }
   ],
+  "od": [
+    { "flag": "-A", "desc": "address radix: o d x n", "arg": "RADIX" },
+    { "flag": "-t", "desc": "output type: a c d o u x with size 1 2 4 8", "arg": "TYPE" },
+    { "flag": "-j", "desc": "skip bytes first", "arg": "BYTES" },
+    { "flag": "-N", "desc": "dump at most this many bytes", "arg": "BYTES" },
+    { "flag": "-w", "desc": "bytes per output line" },
+    { "flag": "-v", "desc": "do not collapse repeated lines" },
+    { "flag": "-a", "desc": "named characters" },
+    { "flag": "-b", "desc": "octal bytes" },
+    { "flag": "-c", "desc": "printable characters or escapes" },
+    { "flag": "-d", "desc": "unsigned decimal 2-byte units" },
+    { "flag": "-o", "desc": "octal 2-byte units" },
+    { "flag": "-x", "desc": "hexadecimal 2-byte units" }
+  ],
   "paste": [
     {
       "flag": "-d",

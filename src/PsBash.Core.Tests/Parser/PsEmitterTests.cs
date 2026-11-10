@@ -1201,7 +1201,7 @@ public class PsEmitterTests
         // Batch 1 of the shared ordered parser. Adding a command here also means adding it to
         // CommonParameterCollisionGuardTests.EmitterForceQuoted (Cmdlets.Tests) — that map is
         // how the guard knows the emitter, not a decoy, protects the colliding letters.
-        Assert.Equal(new[] { "awk", "base64", "bash", "cat", "column", "comm", "command", "compgen", "complete", "compopt", "cp", "cut", "declare", "diff", "du", "echo", "env", "expand", "file", "find", "flock", "fold", "getopts", "grep", "gzip", "hash", "head", "join", "jq", "ln", "ls", "md5sum", "mkdir", "mv", "nl", "paste", "printf", "rg", "rm", "rmdir", "sed", "sh", "sha1sum", "sha256sum", "shopt", "sort", "source", "split", "stat", "strings", "tac", "tail", "tar", "tee", "test", "time", "timeout", "times", "touch", "tree", "type", "ulimit", "umask", "unexpand", "uniq", "wc", "xargs" }, PsEmitter.OrderedArgCommands.OrderBy(x => x).ToArray());
+        Assert.Equal(new[] { "awk", "base64", "bash", "cat", "column", "comm", "command", "compgen", "complete", "compopt", "cp", "cut", "declare", "diff", "du", "echo", "env", "expand", "file", "find", "flock", "fold", "getopts", "grep", "gzip", "hash", "head", "join", "jq", "ln", "ls", "md5sum", "mkdir", "mv", "nl", "od", "paste", "printf", "rg", "rm", "rmdir", "sed", "sh", "sha1sum", "sha256sum", "shopt", "sort", "source", "split", "stat", "strings", "tac", "tail", "tar", "tee", "test", "time", "timeout", "times", "touch", "tree", "type", "ulimit", "umask", "unexpand", "uniq", "wc", "xargs" }, PsEmitter.OrderedArgCommands.OrderBy(x => x).ToArray());
     }
 
     // `bash` is on OrderedArgCommands: the script's own args (`bash s.sh -v -e -c x`) and the
@@ -7319,16 +7319,16 @@ public class PsEmitterTests
     public void Transpile_PipeToNativeCommand_ConvertsObjectsToBashText()
     {
         // R21-2. A pipe target ps-bash does not map (a native/external program
-        // such as od) receives the pipeline through PowerShell's native binder,
+        // such as xxd) receives the pipeline through PowerShell's native binder,
         // which FORMATS each object — a BashObject rendered as its property
-        // table ("BashText NoTrai…"), so `printf 'a\n' | sed s/a/b/ | od -c`
+        // table ("BashText NoTrai…"), so `printf 'a\n' | sed s/a/b/ | xxd -c 4`
         // saw a table, not "b\n". bash pipes bytes, so every upstream object must
         // be converted to its bash text first. This is the ONE shared rule for
         // cmdlet-output → native stdin: a real program gets the exact bytes (ConvertTo-BashNativeStdin), a
         // function or alias of that name the text — either way never the formatted object.
-        var result = PsEmitter.Transpile("printf 'a\\n' | sed s/a/b/ | od -c")!;
+        var result = PsEmitter.Transpile("printf 'a\\n' | sed s/a/b/ | xxd -c 4")!;
 
-        Assert.Contains("| ConvertTo-BashNativeStdin 'od' | od -c", result);
+        Assert.Contains("| ConvertTo-BashNativeStdin 'xxd' | xxd -c 4", result);
     }
 
     [Fact]

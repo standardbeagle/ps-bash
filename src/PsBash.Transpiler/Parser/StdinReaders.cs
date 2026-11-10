@@ -34,7 +34,7 @@ internal static class StdinReaders
         ["cat"] = "", ["head"] = "nc", ["tail"] = "ncs", ["wc"] = "", ["sort"] = "ktoST",
         ["uniq"] = "fsw", ["cut"] = "bcfd", ["nl"] = "bnswvildfh", ["tac"] = "s", ["rev"] = "",
         ["fold"] = "w", ["expand"] = "t", ["unexpand"] = "t", ["paste"] = "d", ["join"] = "t12javeo",
-        ["comm"] = "", ["base64"] = "w", ["md5sum"] = "", ["sha1sum"] = "", ["sha256sum"] = "",
+        ["comm"] = "", ["base64"] = "w", ["md5sum"] = "", ["sha1sum"] = "", ["sha256sum"] = "", ["od"] = "AtjN",
         ["strings"] = "n", ["column"] = "sol", ["split"] = "labCn", ["file"] = "FfmP", ["gzip"] = "S",
         ["less"] = "", ["more"] = "", ["shuf"] = "ino",
         ["grep"] = "efmABCdD", ["sed"] = "efl", ["awk"] = "Fvf", ["rg"] = "efgmABCtTjrdMsE",

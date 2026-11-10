@@ -1,0 +1,16 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 82
+stdout-length: 98
+stderr-length: 0
+==== SCRIPT ====
+printf 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab' | od -A x -t x1
+==== STDOUT ====
+000000 61 61 61 61 61 61 61 61 61 61 61 61 61 61 61 61
+*
+000030 61 61 61 61 61 61 61 61 62
+000039
+
+==== STDERR ====
+
