@@ -140,7 +140,7 @@ function Get-BashIndirectValue {
     if ($n -notmatch '^[A-Za-z_][A-Za-z0-9_]*$') {
         # bash: `${!a}` with a='bad var name' is "invalid variable name"; the command is abandoned with status 1.
         $global:LASTEXITCODE = 1
-        $global:__BashIndirectBad = $true
+        $global:__BashExpansionFailed = $true
         Write-BashHostStderr "bash: ${n}: invalid variable name"
         return $null
     }

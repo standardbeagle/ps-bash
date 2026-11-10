@@ -3971,7 +3971,8 @@ public class PsEmitterTests
     public void Transpile_ArithSub_InAssignment()
     {
         var result = PsEmitter.Transpile("result=$((x + 1))");
-        Assert.Equal("$env:result = \"$(Invoke-BashArith 'x + 1')\"", result);
+        // The trailing clear: a failed $(( )) marks the expansion as failed; an assignment consumes the mark.
+        Assert.Equal("$env:result = \"$(Invoke-BashArith 'x + 1')\"; " + PsBuild.ClearExpansionFailed, result);
     }
 
     [Fact]

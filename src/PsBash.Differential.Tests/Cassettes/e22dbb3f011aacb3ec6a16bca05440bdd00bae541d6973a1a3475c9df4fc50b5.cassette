@@ -1,0 +1,22 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 167
+stdout-length: 18
+stderr-length: 0
+==== SCRIPT ====
+{ (( 1[2] = 3 )); } 2>/dev/null
+echo status=$?
+a=9
+{ (( (a + 2) = 3 )); } 2>/dev/null
+echo $a
+{ if (( 1 / 0 )); then echo yes; else echo no; fi; } 2>/dev/null
+echo end
+==== STDOUT ====
+status=1
+9
+no
+end
+
+==== STDERR ====
+

@@ -3243,6 +3243,8 @@ public static partial class PsEmitter
             else if (cmd.Pairs.Length > 0 && cmd.Pairs[^1].ArrayValue is not null) text += "; $global:BashLastArg = " + PsBuild.SingleQuote(cmd.Pairs[^1].Name);
         }
         if (text.Contains("circular name reference", StringComparison.Ordinal)) return text; // the refusal set status 1
+        // `x=$((1/0))`: the failed expansion keeps status 1, and its mark must not abandon a LATER command.
+        if (text.Contains("Invoke-BashArith", StringComparison.Ordinal)) return text + "; " + PsBuild.ClearExpansionFailed;
         if (!_scriptReadsStatus || ContainsCommandSub(cmd)) return text;
         if (cmd.Pairs.Any(p => _readonlyVars?.Contains(p.Name.Contains('[') ? p.Name[..p.Name.IndexOf('[')] : p.Name) == true || ResolveNameref(p.Name) != p.Name)) return text;
         // An array literal whose glob fails under failglob ends the statement with status 1; keep it.
@@ -7552,7 +7554,7 @@ public static partial class PsEmitter
                 // failglob: the expansion error ends only its own statement, so stop before the command runs.
                 // An invalid indirect reference (`${!a}`, a=/) abandons the command too.
                 if (IsGlobWord(args[i]) || IsBraceGlobWord(args[i])) prelude.Append("if (-not $?) { return }; ");
-                else if (emitted.Contains("Get-BashIndirectValue")) prelude.Append("if ($global:__BashIndirectBad) { $global:__BashIndirectBad = $false; return }; ");
+                else if (emitted.Contains("Get-BashIndirectValue")) prelude.Append(PsBuild.AbandonIfExpansionFailed);
                 call.Append('@').Append(tempVar.AsSpan(1));
             }
             else

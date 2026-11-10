@@ -59,8 +59,21 @@ public sealed class InvokeBashArithmeticCommand : PSCmdlet
         catch (BashArith.BashArithException ex)
         {
             FileSystemHelpers.SetLastExitCode(this, 1);
+            // A failed expansion abandons the command it is a word of (see PsBuild.AbandonIfExpansionFailed, echo).
+            if (IsWordExpansion()) SessionState.PSVariable.Set("global:__BashExpansionFailed", true);
             FileSystemHelpers.WriteBashError(this, $"{expr}: {ex.Message}");
         }
+    }
+
+    /// <summary>
+    /// True for <c>$(( expr ))</c> (emitted <c>$(Invoke-BashArith ...)</c>), false for the command and condition forms
+    /// (<c>(( expr ))</c>, emitted <c>@(Invoke-BashArith ...) -ne 0</c>): only a failed WORD abandons its command.
+    /// </summary>
+    private bool IsWordExpansion()
+    {
+        string line = MyInvocation.Line ?? "";
+        int at = MyInvocation.OffsetInLine - 1;
+        return !(at >= 2 && at <= line.Length && line.AsSpan(at - 2, 2).SequenceEqual("@("));
     }
 
     /// <summary>

@@ -146,6 +146,17 @@ public static class PsBuild
     /// reports it on the error stream and leaves the name in <c>$global:__BashUnbound</c>; this ends the
     /// script (a cmdlet exception would only end that one statement). The value otherwise passes through.
     /// </summary>
+    /// <summary>
+    /// Statement placed after a hoisted word expansion: when the expansion FAILED (a bad <c>${!ref}</c>, an
+    /// arithmetic error) the runtime sets <c>$global:__BashExpansionFailed</c>, and bash abandons the command
+    /// (status 1, already set by the runtime) instead of running it with an empty word.
+    /// </summary>
+    public const string AbandonIfExpansionFailed =
+        "if ($global:__BashExpansionFailed) { $global:__BashExpansionFailed = $false; return }; ";
+
+    /// <summary>An assignment consumes the mark without abandoning anything: only its own status (1) records the failure.</summary>
+    public const string ClearExpansionFailed = "$global:__BashExpansionFailed = $false";
+
     public static string ArithNounsetGuard(string invocation) =>
         "$($__psbash_av = " + invocation + "; if ($global:__BashUnbound) { $__psbash_un = $global:__BashUnbound; $global:__BashUnbound = $null; "
         + "throw [PsBash.Cmdlets.BashParamErrorException]::Reported($__psbash_un + ': ', 'unbound variable') }; $__psbash_av)";
