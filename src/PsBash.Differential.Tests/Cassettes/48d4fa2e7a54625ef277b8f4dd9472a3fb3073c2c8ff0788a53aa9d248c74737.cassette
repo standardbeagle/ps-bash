@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 73
+stdout-length: 2
+stderr-length: 0
+==== SCRIPT ====
+printf 'a\nb\n' > t.txt; x=t.txt; W=wc; S=sed; $W -l $x | $S -e 's/ .*//'
+==== STDOUT ====
+2
+
+==== STDERR ====
+

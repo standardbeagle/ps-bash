@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 53
+stdout-length: 7
+stderr-length: 0
+==== SCRIPT ====
+echo hi | while read l; do echo "L=$l"; done <<< loop
+==== STDOUT ====
+L=loop
+
+==== STDERR ====
+

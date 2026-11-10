@@ -1120,4 +1120,42 @@ public class BashTranspilerTests
         var ex = Assert.Throws<ParseException>(() => BashParser.ParseTopLevelWithPositions(script));
         Assert.StartsWith("echo one\n{ printf", BashTranspiler.RunnablePrefix(script, ex));
     }
+
+    // A PowerShell keyword as a command word would begin a PowerShell statement (`var x` is a parse error there).
+    [Theory]
+    [InlineData("var x = 1", "& 'var'")]
+    [InlineData("try x", "& 'try'")]
+    [InlineData("parallel echo", "& 'parallel'")]
+    [InlineData("FOO=bar for", "& 'for'")]
+    [InlineData("FOO=bar [[ a == a ]]", "& '[['")]
+    public void Transpile_KeywordCommandWord_IsCalledByQuotedName(string bash, string expected)
+        => Assert.Contains(expected, BashTranspiler.Transpile(bash));
+
+    // `echo hi | cat <<< here`: the stage's own stdin replaces the pipe; the upstream is drained, the redirect kept.
+    [Theory]
+    [InlineData("echo hi | cat <<< here", "here")]
+    [InlineData("echo hi | cat < f.txt", "f.txt")]
+    [InlineData("true | sed s/a/b/ <<E\nbody\nE", "body")]
+    public void Transpile_PipeStageWithOwnStdin_DrainsThePipeAndKeepsTheRedirect(string bash, string kept)
+    {
+        var result = BashTranspiler.Transpile(bash);
+        Assert.Contains("& { $null = @($input); ", result);
+        Assert.Contains(kept, result);
+        Assert.DoesNotContain("0<", result);
+    }
+
+    [Theory]
+    [InlineData("a[3|4]=8; echo done")]
+    [InlineData("a[(1+2)*3]=9; echo done")]
+    [InlineData("a[1 & 3]=x; echo done")]
+    public void Parse_SubscriptWithMetacharacters_IsOneAssignmentWord(string bash)
+        => Assert.Equal(2, BashParser.ParseTopLevelWithPositions(bash).Count);
+
+    [Fact]
+    public void Transpile_HereDocOnBareAssignment_AssignsAndPipesNothing()
+    {
+        var result = BashTranspiler.Transpile("foo=bar <<E\nbody\nE");
+        Assert.DoesNotContain("Emit-BashLine", result);
+        Assert.DoesNotContain("__saved_foo", result);
+    }
 }

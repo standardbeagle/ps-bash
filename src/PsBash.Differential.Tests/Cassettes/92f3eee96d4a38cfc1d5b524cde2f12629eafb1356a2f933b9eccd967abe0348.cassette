@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 78
+stdout-length: 4
+stderr-length: 0
+==== SCRIPT ====
+SED=sed; printf 'a\nb\n' > t.txt; $SED -n -e 2p t.txt; echo x | $SED -e s/x/y/
+==== STDOUT ====
+b
+y
+
+==== STDERR ====
+

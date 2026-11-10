@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 31
+stdout-length: 8
+stderr-length: 0
+==== SCRIPT ====
+echo hi | FOO=1 cat <<< envhere
+==== STDOUT ====
+envhere
+
+==== STDERR ====
+

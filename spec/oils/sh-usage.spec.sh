@@ -118,7 +118,6 @@ $SH --eval one.sh --eval fail.sh \
 echo status=$?
 ## stdout:
 ## status: 0
-## XFAIL ps-bash gap-oils-sh-usage sh-usage (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 

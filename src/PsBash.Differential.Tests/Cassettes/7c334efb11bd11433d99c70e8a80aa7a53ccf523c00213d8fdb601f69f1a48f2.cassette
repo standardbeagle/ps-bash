@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 59
+stdout-length: 21
+stderr-length: 0
+==== SCRIPT ====
+a[1]=x; eval 'a[5&3]=hello'; echo "status=$?, a[1]=${a[1]}"
+==== STDOUT ====
+status=0, a[1]=hello
+
+==== STDERR ====
+

@@ -94,7 +94,6 @@ FOO=bar for i in a b; do printenv.py $FOO; done
 FOO=bar for
 ## stdout:
 ## status: 127
-## XFAIL ps-bash gap-oils-assign assign (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Empty env binding
@@ -565,7 +564,6 @@ var d = {}
 declare -p d
 ## stdout:
 ## status: 1
-## XFAIL ps-bash gap-oils-assign assign (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 

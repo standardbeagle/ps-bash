@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 60
+stdout-length: 4
+stderr-length: 0
+==== SCRIPT ====
+printf 'one\ntwo\n' > f.txt; echo hi | cat < f.txt | head -1
+==== STDOUT ====
+one
+
+==== STDERR ====
+

@@ -377,7 +377,6 @@ status=0, a[2]=hello
 status=0, a[3]=hello
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-ble-idioms ble-idioms (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -404,7 +403,6 @@ declare -a a=([3]="7" [7]="8" [9]="9")
 declare -a a=([3]="55" [7]="8" [9]="9" [41]="66")
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-ble-idioms ble-idioms (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 

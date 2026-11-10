@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 56
+stdout-length: 2
+stderr-length: 0
+==== SCRIPT ====
+printf 'one\ntwo\n' > f.txt; echo hi | grep -c . < f.txt
+==== STDOUT ====
+2
+
+==== STDERR ====
+

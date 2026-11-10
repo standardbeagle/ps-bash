@@ -171,6 +171,14 @@ public static partial class PsEmitter
         finally { _inStdinScope = prior; }
     }
 
+    private static string WithPipeStageFeed(bool value, Func<string> emit)
+    {
+        var prior = _pipeStageFeedsInput;
+        _pipeStageFeedsInput = value;
+        try { return emit(); }
+        finally { _pipeStageFeedsInput = prior; }
+    }
+
     private static bool HasInputRedirect(ImmutableArray<Redirect> redirects) =>
         !redirects.IsDefaultOrEmpty && redirects.Any(r => r.Fd == 0 && r.Op is "<" or "<<" or "<<<");
 
@@ -1579,6 +1587,15 @@ public static partial class PsEmitter
         // Bare literal — wrap in single quotes so PowerShell treats it as a string.
         return $"'{SqEsc(emitted)}'";
     }
+
+    /// <summary>PowerShell keywords bash does not know: as a bare command word each would begin a PowerShell statement
+    /// (`var x` is a parse error, `switch x` a statement), so the command is called by its quoted name instead.</summary>
+    private static readonly HashSet<string> PsKeywordCommandNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "begin", "catch", "class", "clean", "configuration", "data", "define", "dynamicparam", "elseif", "end", "enum",
+        "filter", "finally", "foreach", "from", "hidden", "inlinescript", "param", "parallel", "process", "sequence",
+        "static", "switch", "throw", "try", "using", "var", "workflow",
+    };
 
     /// <summary>The non-constant aliases PowerShell 7 defines on Windows; each shadows a same-named function.</summary>
     private static readonly HashSet<string> PsDefaultAliases = new(StringComparer.OrdinalIgnoreCase)
@@ -3624,6 +3641,15 @@ public static partial class PsEmitter
             return true;
         }
 
+        // `x=v <<EOF`: with no command word the assignments are the shell's own (they persist) and nothing reads the
+        // here-document, exactly as without it.
+        if (cmd.Words.IsEmpty && !cmd.HereDocs.IsDefaultOrEmpty && cmd.HereDocs.All(h => h.Fd < 3))
+        {
+            result = EmitShAssignment(new Command.ShAssignment(
+                cmd.EnvPairs.Select(p => new Assignment(p.Name, AssignOp.Equal, p.Value)).ToImmutableArray()));
+            return true;
+        }
+
         var bare = cmd with { EnvPairs = ImmutableArray<EnvPair>.Empty };
         result = WrapEnvPairs(cmd.EnvPairs, WithEnvShadow(cmd.EnvPairs, () => EmitSimple(bare)));
         // `foo=bar $unset`: a command word that expands to NOTHING leaves no command, so the assignment persists
@@ -3678,6 +3704,13 @@ public static partial class PsEmitter
 
         // When multiple heredocs exist, use the last one for stdin (bash behavior).
         var innerCmd = new Command.Simple(cmd.Words, cmd.EnvPairs, cmd.Redirects);
+        // `x=$(cat) <<EOF`: there is no command to read the here-document (a command substitution in the value has the
+        // shell's own stdin), so the body is dropped rather than piped into nothing.
+        if (cmd.Words.IsEmpty)
+        {
+            result = EmitSimple(innerCmd);
+            return true;
+        }
         string cmdText = EmitSimple(innerCmd);
         // A real program must read the heredoc's bytes, not PowerShell's per-record `\r\n` rendering of them;
         // every other consumer keeps receiving the records as before.
@@ -4974,6 +5007,12 @@ public static partial class PsEmitter
             string? numName = GetLiteralValue(cmd.Words[0]);
             if (numName is not null && System.Text.RegularExpressions.Regex.IsMatch(numName, @"^[0-9][0-9A-Za-z_.]*$")) dashName = numName;
         }
+        // A command word that is a PowerShell keyword (`var`, `try`, `class`, `parallel`) would start a PowerShell statement.
+        // A bash reserved word or `[[` that the parser left as a command word (after an environment prefix: `FOO=bar for`) is a name too.
+        if (dashName is null && cmd.Words.Length > 0 && GetLiteralValue(cmd.Words[0]) is { Length: > 0 } kwName
+            && (PsKeywordCommandNames.Contains(kwName)
+                || kwName is "[[" or "for" or "while" or "until" or "if" or "case" or "select" or "do" or "done" or "then" or "fi" or "esac" or "elif" or "else" or "in"))
+            dashName = kwName;
         bool needsCallOperator =
             !isScriptCommand && cmd.Words.Length > 0
             && (IsExpandedCommandWord(cmd.Words[0]) || dashName is not null
@@ -5050,8 +5089,9 @@ public static partial class PsEmitter
             sb.Append(EmitCommandWithSplatArgs(
                 leading + commandWordText,
                 commandArgs,
-                argIndex => QuoteCommaLiteralWord(
-                    commandArgs[argIndex], EmitWord(commandArgs[argIndex]))));
+                argIndex => dynamicName && OrderedArgDashLiteral(commandArgs[argIndex]) is { } dynDash
+                    ? PsBuild.SingleQuote(dynDash)
+                    : QuoteCommaLiteralWord(commandArgs[argIndex], EmitWord(commandArgs[argIndex]))));
         }
         else
         {
@@ -5060,6 +5100,13 @@ public static partial class PsEmitter
                 if (i > 0)
                 {
                     sb.Append(' ');
+                    // `$GREP -e pat` / `$SH -e -c ...`: the name may resolve to a cmdlet, where a bare `-e` is an ambiguous
+                    // PowerShell parameter prefix. A quoted flag is an argument for whatever the name turns out to be.
+                    if (dynamicName && OrderedArgDashLiteral(cmd.Words[i]) is { } dynDashArg)
+                    {
+                        sb.Append(PsBuild.SingleQuote(dynDashArg));
+                        continue;
+                    }
                     var emittedArg = EmitWord(cmd.Words[i]);
                     var quotedArg = QuoteGeneralArgIfNeeded(emittedArg);
                     sb.Append(ReferenceEquals(quotedArg, emittedArg)
@@ -9033,6 +9080,13 @@ public static partial class PsEmitter
                 // Drain the input inside a block and run the command once, as bash does.
                 bool ignoresStdin = simple.Words.Length >= 1 && simple.EnvPairs.IsEmpty && GetLiteralValue(simple.Words[0]) is { } stdinName
                     && StdinIgnoringCommands.Contains(stdinName);
+                // `... | cmd < file`, `... | cmd <<< text`, `... | cmd <<EOF`: the redirect replaces the pipe as the stage's stdin, so the
+                // upstream records are drained and the command runs exactly as it would on its own.
+                bool ownStdin = HasInputRedirect(simple.Redirects)
+                    || !simple.HereDocs.IsDefaultOrEmpty && simple.HereDocs.Any(h => h.Fd < 3);
+                if (ownStdin)
+                    sb.Append("& { $null = @($input); ").Append(WithPipeStageFeed(false, () => Emit(simple))).Append(" }");
+                else {
                 if (ignoresStdin) sb.Append("& { $null = @($input); ");
                 if (simple.EnvPairs.IsEmpty)
                     sb.Append(EmitSimplePipeStage(simple, isLastStage));
@@ -9045,6 +9099,7 @@ public static partial class PsEmitter
                         simple.EnvPairs, WithEnvShadow(simple.EnvPairs, () => EmitSimplePipeStage(bare, isLastStage))));
                 }
                 if (ignoresStdin) sb.Append(" }");
+                }
             }
             else if (pipeline.Commands.Length > 1 && IsCompoundPipelineStage(cmd))
             {

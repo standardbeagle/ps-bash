@@ -610,7 +610,7 @@ public static class BashLexer
     }
 
     /// <summary>
-    /// `a[1 + 2]=x`: at the start of a word, a subscript that holds blanks belongs to the assignment word when the matching `]` is
+    /// `a[1 + 2]=x`: at the start of a word, a subscript that holds blanks (or `| &amp; &lt; &gt; ( )`) belongs to the assignment word when the matching `]` is
     /// followed by `=` or `+=`. Returns the offset just past that `]` (the scan then carries on through the value), else
     /// <paramref name="pos"/> unchanged. Subscripts without blanks already scan as one word and are left alone.
     /// </summary>
@@ -632,8 +632,10 @@ public static class BashLexer
             if (c == '$' && j + 1 < len && input[j + 1] == '{') { j = ScanDollarBrace(input, j) - 1; continue; }
             if (c == '[') depth++;
             else if (c == ']') { if (--depth == 0) break; }
-            else if (c is ' ' or '\t') blank = true;
-            else if (c is '\n' or ';' or '|' or '&' or '<' or '>' or '(' or ')' or '#') return pos;
+            // An arithmetic operator that is also a shell metacharacter (`a[3|4]=8`, `a[(1+2)*3]=9`) splits the word just as a blank does.
+            else if (c is ' ' or '\t' or '|' or '&' or '<' or '>' or '(' or ')') blank = true;
+            else if (c is '\n' or ';') return pos;
+            else if (c == '#' && input[j - 1] is ' ' or '\t') return pos;
         }
         if (!blank || j >= len) return pos;
         int k = j + 1;

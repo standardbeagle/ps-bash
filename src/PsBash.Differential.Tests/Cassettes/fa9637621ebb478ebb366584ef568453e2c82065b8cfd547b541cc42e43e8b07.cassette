@@ -1,0 +1,17 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 51
+stdout-length: 7
+stderr-length: 0
+==== SCRIPT ====
+x=$(true | sed -e 's/o/0/' <<E
+/foo
+E
+)
+echo "[$x]"
+==== STDOUT ====
+[/f0o]
+
+==== STDERR ====
+

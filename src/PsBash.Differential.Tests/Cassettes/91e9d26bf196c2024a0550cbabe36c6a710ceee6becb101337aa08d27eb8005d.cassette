@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 33
+stdout-length: 5
+stderr-length: 0
+==== SCRIPT ====
+true | sed -e 's/o/0/' <<E
+/foo
+E
+==== STDOUT ====
+/f0o
+
+==== STDERR ====
+

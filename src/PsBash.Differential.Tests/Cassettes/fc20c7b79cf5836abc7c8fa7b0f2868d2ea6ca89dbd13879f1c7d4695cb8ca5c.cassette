@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 47
+stdout-length: 8
+stderr-length: 0
+==== SCRIPT ====
+set -o pipefail; false | cat <<< pf; echo st=$?
+==== STDOUT ====
+pf
+st=1
+
+==== STDERR ====
+

@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 29
+stdout-length: 4
+stderr-length: 0
+==== SCRIPT ====
+SH=bash; $SH -e -c 'echo ok0'
+==== STDOUT ====
+ok0
+
+==== STDERR ====
+

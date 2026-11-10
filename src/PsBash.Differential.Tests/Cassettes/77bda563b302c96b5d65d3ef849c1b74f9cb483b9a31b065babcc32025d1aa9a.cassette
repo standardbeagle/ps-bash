@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 63
+stdout-length: 47
+stderr-length: 0
+==== SCRIPT ====
+a[3|4]=8; a[(1+2)*3]=9; a[2#11 + 2]=5; a[1 + 2]=7; typeset -p a
+==== STDOUT ====
+declare -a a=([3]="7" [5]="5" [7]="8" [9]="9")
+
+==== STDERR ====
+

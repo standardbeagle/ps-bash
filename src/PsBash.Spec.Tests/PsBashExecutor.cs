@@ -31,8 +31,10 @@ internal sealed class PsBashExecutor : IScriptExecutor
     {
         using var caseDir = new CaseDir(script);
         var runner = PsBashRunner.Create().WithTimeout(timeout).WithEnv(Env);
-        // Oils cases run "the shell under test" as $SH: here, the launcher this run is exercising.
-        string shell = SpecImporter.UsesShellVariable(script) && runner.TryResolveBinary() is { } bin ? $"SH='{bin}'; " : "";
+        // Oils cases run "the shell under test" as $SH. The oracle sets SH=bash, and so does this: cases guard bash-inapplicable
+        // parts with `case $SH in bash) exit ;; esac`, which a launcher PATH would never match (ps-bash then ran OSH-only
+        // tests bash itself skips). `bash` inside ps-bash is the running launcher, so `$SH -c` still exercises this build.
+        string shell = SpecImporter.UsesShellVariable(script) ? "SH=bash; " : "";
         // Same line as the case's first line, so `$LINENO` in a case counts from 1 like it does in the in-host path.
         var r = await runner.RunScriptAsync($"cd '{caseDir.Path}'; " + shell + script);
         return new ExecResult(r.ExitCode, r.Stdout, r.Stderr, r.WallMs);

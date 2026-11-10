@@ -395,7 +395,6 @@ $dbracket foo == foo ]]
 FOO=bar [[ foo == foo ]]
 ## stdout:
 ## status: 127
-## XFAIL ps-bash gap-oils-dbracket dbracket (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### [[ over multiple lines is OK

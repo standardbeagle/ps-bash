@@ -601,7 +601,6 @@ echo "[${a[@]: -3}][${a[*]: -3}]"
 echo "[${a[@]: -4}][${a[*]: -4}]"
 ## stdout:
 ## status: 0
-## XFAIL ps-bash gap-oils-array-sparse array-sparse (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -715,7 +714,6 @@ argv.py "$cur" "$prev" "$cword"
 argv.py "${words[@]}"
 ## stdout:
 ## status: 0
-## XFAIL ps-bash gap-oils-array-sparse array-sparse (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -730,7 +728,6 @@ argv.py @[a]
 argv.py @a
 ## stdout:
 ## status: 0
-## XFAIL ps-bash gap-oils-array-sparse array-sparse (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -743,7 +740,6 @@ append 'x' 'y' 'z' (a)
 = a
 ## stdout:
 ## status: 0
-## XFAIL ps-bash gap-oils-array-sparse array-sparse (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 

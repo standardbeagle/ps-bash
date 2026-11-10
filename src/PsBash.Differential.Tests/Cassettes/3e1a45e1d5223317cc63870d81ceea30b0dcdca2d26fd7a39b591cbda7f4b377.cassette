@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 26
+stdout-length: 2
+stderr-length: 0
+==== SCRIPT ====
+seq 3 | cat <<< a | tr a b
+==== STDOUT ====
+b
+
+==== STDERR ====
+
