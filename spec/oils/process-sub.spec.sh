@@ -92,7 +92,6 @@ echo done
 3
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-process-sub process-sub (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -118,7 +117,6 @@ cat <(echo a; exit 2) <(echo b; exit 3)
 echo status=$? ps @_process_sub_status
 ## stdout:
 ## status: 0
-## XFAIL ps-bash gap-oils-process-sub process-sub (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -151,6 +149,5 @@ f() {
 f
 ## stdout:
 ## status: 0
-## XFAIL ps-bash gap-oils-process-sub process-sub (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher

@@ -106,6 +106,5 @@ type source
 # type typeset
 ## stdout:
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-type builtin-type (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher

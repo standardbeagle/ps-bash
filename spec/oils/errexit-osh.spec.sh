@@ -337,7 +337,6 @@ $SH -o errexit -O strict_errexit -c 'echo a; x=$(true); echo b'
 echo status=$?
 ## stdout:
 ## status: 0
-## XFAIL ps-bash gap-oils-errexit-osh errexit-osh (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -362,7 +361,6 @@ shopt --unset errexit {
 }
 ## stdout:
 ## status: 0
-## XFAIL ps-bash gap-oils-errexit-osh errexit-osh (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -382,7 +380,6 @@ if ! test -f BAD; then  # should not exist
 fi
 ## stdout:
 ## status: 0
-## XFAIL ps-bash gap-oils-errexit-osh errexit-osh (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -581,7 +578,6 @@ shopt --unset errexit {
 }
 ## stdout:
 ## status: 0
-## XFAIL ps-bash gap-oils-errexit-osh errexit-osh (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 

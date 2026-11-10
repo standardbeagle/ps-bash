@@ -15,7 +15,6 @@ printf 'a\n' | sed s/a/b/ | od -c
 0000002
 ## END
 ## status: 0
-## XFAIL ps-bash gap-differential-sed sed (differential): differs from bash 5.2; see docs/specs/spec-gaps.md
 
 #### Sed_NextJoin_MultiCommandExpression
 printf 'a\nb\nc\n' | sed 'N;s/\n/+/'

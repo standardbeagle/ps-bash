@@ -3709,7 +3709,7 @@ public class PsEmitterTests
     [Fact]
     public void Transpile_FunctionKeywordForm_EmitsPsFunction()
     {
-        var result = PsEmitter.Transpile("function greet { Invoke-BashEcho hello }");
+        var result = PsBuildTestText.StripFunctionSource(PsEmitter.Transpile("function greet { Invoke-BashEcho hello }"));
 
         Assert.Equal($"function greet {{ {FnPre}Invoke-BashEcho hello{FnPost} }}", result);
     }
@@ -3717,7 +3717,7 @@ public class PsEmitterTests
     [Fact]
     public void Transpile_FunctionParensForm_EmitsPsFunction()
     {
-        var result = PsEmitter.Transpile("greet() { echo hello }");
+        var result = PsBuildTestText.StripFunctionSource(PsEmitter.Transpile("greet() { echo hello }"));
 
         Assert.Equal($"function greet {{ {FnPre}Invoke-BashEcho hello{FnPost} }}", result);
     }
@@ -3725,7 +3725,7 @@ public class PsEmitterTests
     [Fact]
     public void Transpile_FunctionParensWithSpace_EmitsPsFunction()
     {
-        var result = PsEmitter.Transpile("greet () { echo hello }");
+        var result = PsBuildTestText.StripFunctionSource(PsEmitter.Transpile("greet () { echo hello }"));
 
         Assert.Equal($"function greet {{ {FnPre}Invoke-BashEcho hello{FnPost} }}", result);
     }
@@ -3759,8 +3759,8 @@ public class PsEmitterTests
     [Fact]
     public void Transpile_FunctionCallingFunction_EmitsNestedCalls()
     {
-        var result = PsEmitter.Transpile(
-            "function greet { Invoke-BashEcho hello }; function main { greet }");
+        var result = PsBuildTestText.StripFunctionSource(PsEmitter.Transpile(
+            "function greet { Invoke-BashEcho hello }; function main { greet }"));
 
         Assert.Equal(
             $"function greet {{ {FnPre}Invoke-BashEcho hello{FnPost} }}; function main {{ {FnPre}greet{FnPost} }}",
@@ -3770,7 +3770,7 @@ public class PsEmitterTests
     [Fact]
     public void Transpile_FunctionWithMultilineBody_EmitsFunction()
     {
-        var result = PsEmitter.Transpile("function setup {\n  echo start\n  echo end\n}");
+        var result = PsBuildTestText.StripFunctionSource(PsEmitter.Transpile("function setup {\n  echo start\n  echo end\n}"));
 
         Assert.Equal($"function setup {{ {FnPre}Invoke-BashEcho start; Invoke-BashEcho end{FnPost} }}", result);
     }
@@ -3783,7 +3783,7 @@ public class PsEmitterTests
     [Fact]
     public void Transpile_Function_SavesAndRestoresBashPositionalAroundBody()
     {
-        var result = PsEmitter.Transpile("f() { echo $1; }");
+        var result = PsBuildTestText.StripFunctionSource(PsEmitter.Transpile("f() { echo $1; }"));
 
         var expected = $"function f {{ {FnPre}Invoke-BashEcho $(if ($global:BashPositional) {{ $global:BashPositional[0] }} else {{ $args[0] }}){FnPost} }}";
         Assert.Equal(expected, result);

@@ -315,7 +315,6 @@ bash -c 'source tmp.bash; echo "$s1 $s2"; echo -n "$s3" "$s4" | od -A n -t x1'
 echo bash=$?
 ## stdout:
 ## status: 0
-## XFAIL ps-bash gap-oils-assign-extended assign-extended (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 

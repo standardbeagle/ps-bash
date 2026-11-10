@@ -158,7 +158,6 @@ if test $? -ne 0; then
 fi
 ## stdout:
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-process builtin-process (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -208,7 +207,6 @@ diff -u short.txt long.txt
 echo status=$?
 ## stdout:
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-process builtin-process (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 

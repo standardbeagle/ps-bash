@@ -36,8 +36,20 @@ internal sealed class PsBashExecutor : IScriptExecutor
         // tests bash itself skips). `bash` inside ps-bash is the running launcher, so `$SH -c` still exercises this build.
         string shell = SpecImporter.UsesShellVariable(script) ? "SH=bash; " : "";
         // Same line as the case's first line, so `$LINENO` in a case counts from 1 like it does in the in-host path.
-        var r = await runner.RunScriptAsync($"cd '{caseDir.Path}'; " + shell + script);
-        return new ExecResult(r.ExitCode, r.Stdout, r.Stderr, r.WallMs);
+        // Run as a script FILE, like the oracle (`bash case.sh`) and the in-host path: a `-c` command ends with a
+        // different status for some errors (`${x?}` is 127 under -c, 1 in a file), so `-c` judged those cases wrongly.
+        string file = Path.Combine(Path.GetTempPath(), "ps-bash", "spec-launch", Guid.NewGuid().ToString("N") + ".sh");
+        Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+        await File.WriteAllTextAsync(file, $"cd '{caseDir.Path}'; " + shell + script, cancel);
+        try
+        {
+            var r = await runner.RunArgsAsync([file]);
+            return new ExecResult(r.ExitCode, r.Stdout, r.Stderr, r.WallMs);
+        }
+        finally
+        {
+            try { File.Delete(file); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+        }
     }
 }
 

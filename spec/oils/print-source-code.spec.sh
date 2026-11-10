@@ -47,7 +47,6 @@ outer
 inner
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-print-source-code print-source-code (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -62,6 +61,5 @@ code=$(typeset -f f)
 $SH -c "$code; f"
 ## stdout: subshell body
 ## status: 0
-## XFAIL ps-bash gap-oils-print-source-code print-source-code (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher

@@ -179,8 +179,11 @@ $ExecutionContext.InvokeCommand.CommandNotFoundAction = {
         try {
             # Candidates: the name as typed, plus the de-mangled noun when PowerShell's
             # bare-noun resolution prepended the default Get- verb (e.g. `tnc` -> `Get-tnc`).
-            $candidates = @($CommandName)
-            if ($CommandName -match '^[Gg]et-(.+)$') { $candidates += $Matches[1] }
+            # A lower-case `get-` is PowerShell's own retry (see GetVerbFallbackGuard): only the word the script wrote
+            # is a candidate there, never the Get- cmdlet (`Package x` must not import and run Get-Package).
+            $candidates = if ($CommandName -cmatch '^get-(.+)$') { @($Matches[1]) }
+                          elseif ($CommandName -match '^Get-(.+)$') { @($CommandName, $Matches[1]) }
+                          else { @($CommandName) }
 
             foreach ($cand in $candidates) {
                 $mod = Resolve-BashAutoloadModule $cand

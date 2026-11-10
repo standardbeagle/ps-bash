@@ -113,7 +113,6 @@ ok
 f(){ echo "$FUNCNAME"; }; f
 ## stdout: f
 ## status: 0
-## XFAIL ps-bash gap-differential-bashparitygap bashparitygap (differential): differs from bash 5.2; see docs/specs/spec-gaps.md
 
 #### Lineno_IsSet
 echo $LINENO

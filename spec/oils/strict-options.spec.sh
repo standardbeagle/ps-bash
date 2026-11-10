@@ -187,6 +187,5 @@ a=(1 2 3); echo /${a[@]::}/
 echo status=$?
 ## stdout:
 ## status: 0
-## XFAIL ps-bash gap-oils-strict-options strict-options (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher

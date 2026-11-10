@@ -184,6 +184,8 @@ internal sealed class SdkRunspace : IAsyncDisposable
 
         ps.AddScript(setupScriptContent).Invoke();
         ps.Commands.Clear();
+        // After the setup script: the guard hands the retry to the command-not-found handler that script installed.
+        GetVerbFallbackGuard.Install(runspace.SessionStateProxy.InvokeCommand);
         Trace("setup-script-invoked");
 
         var psm1Path = Path.Combine(Path.GetDirectoryName(modulePath)!, "PsBash.psm1");

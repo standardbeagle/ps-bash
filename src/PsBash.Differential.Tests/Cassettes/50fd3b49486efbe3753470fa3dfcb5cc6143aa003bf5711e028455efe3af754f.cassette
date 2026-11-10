@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 115
+stdout-length: 16
+stderr-length: 0
+==== SCRIPT ====
+f() { echo "[$FUNCNAME][${FUNCNAME}]" $FUNCNAME; g; }; g() { local me=$FUNCNAME; echo "[$me][${FUNCNAME[1]}]"; }; f
+==== STDOUT ====
+[f][f] f
+[g][f]
+
+==== STDERR ====
+

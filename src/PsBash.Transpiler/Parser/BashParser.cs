@@ -1232,8 +1232,25 @@ public sealed partial class BashParser
         }
 
         SkipTerminators();
+        int bodyStart = _pos;
         var body = ParseFunctionBody();
-        return new Command.ShFunction(name, body);
+        return new Command.ShFunction(name, body, SliceFunctionSource(bodyStart));
+    }
+
+    /// <summary>
+    /// The source text of the function body whose tokens are <c>[firstToken, _pos)</c>, or null when a here-document
+    /// inside it has its body AFTER the function (<c>f() { cat &lt;&lt;E; }</c> + body lines): the slice would lack it.
+    /// </summary>
+    private string? SliceFunctionSource(int firstToken)
+    {
+        if (firstToken >= _pos || firstToken >= _tokens.Count) return null;
+        int start = _tokens[firstToken].Position;
+        int end = _pos < _tokens.Count ? _tokens[_pos].Position : _input.Length;
+        if (start < 0 || end > _input.Length || end <= start) return null;
+        for (int i = firstToken; i < _pos; i++)
+            if (_tokens[i].HasHereDocBodySpan && _tokens[i].BodyEnd > end) return null;
+        // A here-document body that sits between the body's last token and the next one belongs to the function.
+        return _input[start..end].TrimEnd(' ', '\t', '\r', '\n', ';');
     }
 
     /// <summary>
@@ -1292,8 +1309,9 @@ public sealed partial class BashParser
         while (Peek().Kind == BashTokenKind.Newline) _pos++;
         if (Peek().Kind is BashTokenKind.Semi or BashTokenKind.Eof or BashTokenKind.RBrace)
             throw MakeError($"syntax error near unexpected token `{(Peek().Kind == BashTokenKind.Eof ? "newline" : Peek().Value)}'", Peek().Position, "ParseParensFunction");
+        int bodyStart = _pos;
         var body = ParseFunctionBody();
-        return new Command.ShFunction(name, body);
+        return new Command.ShFunction(name, body, SliceFunctionSource(bodyStart));
     }
 
     private bool IsDoubleLParen() =>

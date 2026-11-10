@@ -42,7 +42,6 @@ hay eval :b {
 }
 ## stdout: package 127
 ## status: 2
-## XFAIL ps-bash gap-oils-hay hay (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### hay eval can't be nested
@@ -259,5 +258,4 @@ user 127
 package 127
 ## END
 ## status: 2
-## XFAIL ps-bash gap-oils-hay hay (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10

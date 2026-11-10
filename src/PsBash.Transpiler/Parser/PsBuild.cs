@@ -654,6 +654,91 @@ public static class PsBuild
     /// <summary>The text every bash function body ends with (see <see cref="FunctionPrologue"/>).</summary>
     public const string FunctionEpilogue = " } finally { $global:BashPositional = $__bp } ";
 
+    private const string FunctionSourceOpen = "<#bash:";
+    private const string FunctionSourceClose = "#> ";
+
+    /// <summary>
+    /// The function body's bash source, carried inside the PowerShell function as a comment right after
+    /// <see cref="FunctionPrologue"/> so it travels with the definition (subshell copies, <c>export -f</c>). Base64 of the
+    /// UTF-16 text: no character of the source can end the comment or be re-encoded. Read back by
+    /// <see cref="TryReadFunctionSource"/> for <c>declare -f</c> / <c>type</c>.
+    /// </summary>
+    public static string FunctionSourceMark(string? source) =>
+        string.IsNullOrEmpty(source) ? ""
+            : FunctionSourceOpen + Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes(source)) + FunctionSourceClose;
+
+    /// <summary>The bash source a function definition carries (<see cref="FunctionSourceMark"/>), or null when it has none.</summary>
+    public static string? TryReadFunctionSource(string? definition)
+    {
+        if (definition is null || !definition.StartsWith(FunctionPrologue, StringComparison.Ordinal)) return null;
+        int at = FunctionPrologue.Length;
+        if (string.CompareOrdinal(definition, at, FunctionSourceOpen, 0, FunctionSourceOpen.Length) != 0) return null;
+        at += FunctionSourceOpen.Length;
+        int end = definition.IndexOf("#>", at, StringComparison.Ordinal);
+        if (end < 0) return null;
+        try { return System.Text.Encoding.Unicode.GetString(Convert.FromBase64String(definition[at..end])); }
+        catch (FormatException) { return null; }
+    }
+
+    /// <summary>
+    /// bash's <c>declare -f</c> layout for a body written as <paramref name="source"/>: <c>NAME () </c>, <c>{ </c>, the
+    /// body indented four spaces, <c>}</c>. A brace body is unwrapped and re-indented; any other compound body
+    /// (<c>( … )</c>, a loop) is printed inside the braces, as bash does. Lines of a body that holds a here-document
+    /// are left exactly as written (indenting would change the document and hide its terminator).
+    /// </summary>
+    public static string FormatFunctionSource(string name, string source)
+    {
+        string text = source.Replace("\r\n", "\n").Trim();
+        bool heredoc = text.Contains("<<", StringComparison.Ordinal);
+        if (text.Length >= 2 && text[0] == '{' && text[^1] == '}')
+            text = text[1..^1];
+        var lines = new List<string>(text.Split('\n'));
+        while (lines.Count > 0 && lines[0].Trim().Length == 0) lines.RemoveAt(0);
+        while (lines.Count > 0 && lines[^1].Trim().Length == 0) lines.RemoveAt(lines.Count - 1);
+        var sb = new System.Text.StringBuilder();
+        sb.Append(name).Append(" () \n{ \n");
+        if (heredoc)
+        {
+            // Command lines are indented; a here-document's body and terminator stay exactly as written, and bash
+            // prints a blank line after the terminator.
+            string? terminator = null;
+            bool stripTabs = false;
+            foreach (var line in lines)
+            {
+                if (terminator is not null)
+                {
+                    sb.Append(line).Append('\n');
+                    if ((stripTabs ? line.TrimStart('\t') : line) == terminator) { terminator = null; sb.Append('\n'); }
+                    continue;
+                }
+                sb.Append("    ").Append(line.Trim()).Append('\n');
+                var m = System.Text.RegularExpressions.Regex.Match(line, @"(?<!<)<<(?!<)(-?)\s*(['""]?)([^\s'"";|&<>()]+)\2");
+                if (m.Success) { terminator = m.Groups[3].Value.Replace("\\", ""); stripTabs = m.Groups[1].Value == "-"; }
+            }
+        }
+        else
+        {
+            int common = int.MaxValue;
+            foreach (var line in lines)
+            {
+                if (line.Trim().Length == 0) continue;
+                int indent = 0;
+                while (indent < line.Length && line[indent] is ' ' or '\t') indent++;
+                if (indent < common) common = indent;
+            }
+            if (common == int.MaxValue) common = 0;
+            for (int i = 0; i < lines.Count; i++)
+            {
+                string line = lines[i].Length >= common ? lines[i][common..].TrimEnd() : lines[i].Trim();
+                // bash prints the last command without its `;` (`{ echo hi; }` -> `echo hi`).
+                if (i == lines.Count - 1 && line.EndsWith(';') && !line.EndsWith(";;", StringComparison.Ordinal)) line = line[..^1].TrimEnd();
+                if (line.Length == 0) sb.Append('\n'); else sb.Append("    ").Append(line).Append('\n');
+            }
+        }
+        sb.Append("}\n");
+        return sb.ToString();
+    }
+
     // ───────────────────── Compound-command stdin (shared cursor) ──────────────────────
 
     /// <summary>
@@ -857,6 +942,11 @@ public static class PsBuild
                 // CALLING function/script's command name: empty at top level, the function's name in
                 // a function. Always a $(...) subexpression, so quoted and bare uses share one text.
                 return "$(if ($global:BashPositional0) { $global:BashPositional0 } else { 'bash' })";
+            case "FUNCNAME":
+                // A bare `$FUNCNAME` is element 0 of the call stack: the running function ('' outside one).
+                // Outside a function it is unset: empty, or "unbound variable" under `set -u`.
+                return "$($__psbash_fn = @(Get-BashFuncNames)[0]; if ($null -eq $__psbash_fn -and $global:__BashNounset) { "
+                    + ParamErrorThrowStatements(SingleQuote("FUNCNAME: "), "'unbound variable'") + " }; $__psbash_fn)";
             case "$":
                 return braced ? "${PID}" : "$PID";
             case "!":

@@ -1,4 +1,5 @@
 using System.Management.Automation;
+using PsBash.Core.Parser;
 
 namespace PsBash.Cmdlets;
 
@@ -116,7 +117,13 @@ public sealed class InvokeBashTypeCommand : PSCmdlet
             {
                 switch (mode)
                 {
-                    case Mode.Describe: WriteObject(BuildEntry(name, m.Kind, m.Text)); break;
+                    case Mode.Describe:
+                        WriteObject(BuildEntry(name, m.Kind, m.Text));
+                        // bash follows "NAME is a function" with the definition; printed when its bash source is known.
+                        if (m.Kind == "function" && DeclarePrinter.FindBashFunction(this, name) is { } fn
+                            && PsBuild.TryReadFunctionSource(fn.Definition) is not null)
+                            DeclarePrinter.PrintFunction(this, fn);
+                        break;
                     case Mode.Kind: WriteObject(BuildEntry(name, m.Kind, m.Kind)); break;
                     default:
                         // -p/-P print a path only for a file; a builtin/function prints nothing (status stays 0).

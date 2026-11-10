@@ -1,0 +1,19 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 33
+stdout-length: 22
+stderr-length: 0
+==== SCRIPT ====
+f() {
+    echo one
+}
+declare -f f
+==== STDOUT ====
+f ()
+{
+    echo one
+}
+
+==== STDERR ====
+

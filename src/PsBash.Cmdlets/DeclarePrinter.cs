@@ -166,13 +166,21 @@ internal static class DeclarePrinter
         fn.Definition is { } def && def.StartsWith(PsBuild.FunctionPrologue, StringComparison.Ordinal);
 
     /// <summary>
-    /// bash's <c>declare -f</c> layout (<c>NAME () </c>, <c>{ </c>, indented body, <c>}</c>). The body is the
-    /// function's emitted PowerShell — the bash source is not kept once a function is defined; see
-    /// docs/specs/intentional-differences.md.
+    /// bash's <c>declare -f</c> layout (<c>NAME () </c>, <c>{ </c>, indented body, <c>}</c>). The body is the bash
+    /// source the definition carries (<see cref="PsBuild.FunctionSourceMark"/>), as written rather than re-printed
+    /// from the syntax tree as bash does; a function without it (defined by hand-built PowerShell) prints its
+    /// emitted PowerShell. See docs/specs/intentional-differences.md.
     /// </summary>
     internal static void PrintFunction(PSCmdlet cmdlet, FunctionInfo fn)
     {
         var def = fn.Definition ?? "";
+        // The bash source the definition carries: what `eval "$(declare -f f)"` and `ssh host "$(declare -f f); f"` need.
+        if (PsBuild.TryReadFunctionSource(def) is { } source)
+        {
+            foreach (var line in BashRuntime.EmitBashLines(PsBuild.FormatFunctionSource(fn.Name, source)))
+                cmdlet.WriteObject(line);
+            return;
+        }
         var body = def.Substring(PsBuild.FunctionPrologue.Length);
         int end = body.LastIndexOf(PsBuild.FunctionEpilogue, StringComparison.Ordinal);
         if (end >= 0) body = body.Substring(0, end);

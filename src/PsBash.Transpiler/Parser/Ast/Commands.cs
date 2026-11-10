@@ -161,7 +161,15 @@ public abstract record Command : BashNode
     /// </summary>
     public sealed record ShFunction(
         string Name,
-        Command Body) : Command;
+        Command Body,
+        // The body exactly as written (`{ echo hi; }`, `( cd x && ls )`), kept so `declare -f` can print bash, not the
+        // emitted PowerShell. Null when it cannot be sliced whole (a here-document body that lies after the function).
+        string? Source = null) : Command
+    {
+        // The source text is presentation only: two definitions with the same name and body are the same definition.
+        public bool Equals(ShFunction? other) => other is not null && Name == other.Name && Body.Equals(other.Body);
+        public override int GetHashCode() => HashCode.Combine(Name, Body);
+    }
 
     /// <summary>
     /// A subshell: <c>(cmd1; cmd2)</c> runs commands in a child process.

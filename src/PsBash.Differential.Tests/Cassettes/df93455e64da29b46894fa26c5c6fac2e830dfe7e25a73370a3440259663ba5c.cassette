@@ -1,0 +1,18 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 105
+stdout-length: 5
+stderr-length: 0
+==== SCRIPT ====
+n() {
+    if [ "$1" = x ]; then
+        echo "is x"
+    fi
+}
+declare -f n > n.sh; bash -c '. ./n.sh; n x'
+==== STDOUT ====
+is x
+
+==== STDERR ====
+

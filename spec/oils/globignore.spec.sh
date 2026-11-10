@@ -236,6 +236,5 @@ GLOBIGNORE=f*.txt
 echo *  # expansion includes -foo.txt, because it doesn't match GLOBIGNORE
 ## stdout:
 ## status: 0
-## XFAIL ps-bash gap-oils-globignore globignore (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher

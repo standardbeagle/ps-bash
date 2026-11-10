@@ -998,7 +998,7 @@ public class BashTranspilerTests
     [Fact]
     public void Transpile_ReturnWithNoArg_EmitsBareReturn()
     {
-        var result = BashTranspiler.Transpile("f() { return; }");
+        var result = PsBuildTestText.StripFunctionSource(BashTranspiler.Transpile("f() { return; }"));
         // return with no arg: just return (no LASTEXITCODE assignment)
         Assert.Contains("{ return }", result);
         Assert.DoesNotContain("$global:LASTEXITCODE", result);
@@ -1157,5 +1157,43 @@ public class BashTranspilerTests
         var result = BashTranspiler.Transpile("foo=bar <<E\nbody\nE");
         Assert.DoesNotContain("Emit-BashLine", result);
         Assert.DoesNotContain("__saved_foo", result);
+    }
+
+    // The function body's bash source travels inside the PowerShell definition so `declare -f` can print bash.
+    [Theory]
+    [InlineData("f() { echo hi; }", "{ echo hi; }")]
+    [InlineData("function f { echo hi; }; echo after", "{ echo hi; }")]
+    [InlineData("f() ( cd x && ls )", "( cd x && ls )")]
+    [InlineData("f() { echo a; } >&2\necho after", "{ echo a; } >&2")]
+    [InlineData("f() {\n  cat <<E\nbody #> '\nE\n}\necho after", "{\n  cat <<E\nbody #> '\nE\n}")]
+    public void Transpile_Function_CarriesItsBashSource(string bash, string source)
+    {
+        var result = BashTranspiler.Transpile(bash);
+        int at = result.IndexOf(PsBuild.FunctionPrologue, StringComparison.Ordinal);
+        Assert.True(at >= 0, result);
+        Assert.Equal(source, PsBuild.TryReadFunctionSource(result[at..]));
+    }
+
+    [Fact]
+    public void TryReadFunctionSource_DefinitionWithoutMark_IsNull()
+        => Assert.Null(PsBuild.TryReadFunctionSource(PsBuild.FunctionPrologue + "Invoke-BashEcho hi" + PsBuild.FunctionEpilogue));
+
+    [Theory]
+    [InlineData("{ echo hi; }", "f () \n{ \n    echo hi\n}\n")]
+    [InlineData("{\n  if true; then\n    echo y\n  fi\n}", "f () \n{ \n    if true; then\n      echo y\n    fi\n}\n")]
+    [InlineData("( echo sub )", "f () \n{ \n    ( echo sub )\n}\n")]
+    [InlineData("{\n  cat <<E\n  doc\nE\n}", "f () \n{ \n    cat <<E\n  doc\nE\n\n}\n")]
+    public void FormatFunctionSource_UsesBashDeclareLayout(string source, string expected)
+        => Assert.Equal(expected, PsBuild.FormatFunctionSource("f", source));
+
+    [Theory]
+    [InlineData("echo \"$FUNCNAME\"")]
+    [InlineData("echo ${FUNCNAME}")]
+    public void Transpile_BareFuncname_IsElementZeroOfTheCallStack(string bash)
+    {
+        var result = BashTranspiler.Transpile(bash);
+        Assert.Contains("@(Get-BashFuncNames)[0]", result);
+        // Outside a function it is unset, so `set -u` must still report it.
+        Assert.Contains("unbound variable", result);
     }
 }

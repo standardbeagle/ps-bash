@@ -1697,7 +1697,7 @@ public static partial class PsEmitter
             // `outer() { inner() { :; }; }` defines `inner` for the whole shell when `outer` runs; a PowerShell
             // function declared in a function body would die with it.
             sb.Append("function ").Append(_functionDepth > 0 ? "global:" : "").Append(func.Name);
-            sb.Append(" {").Append(PsBuild.FunctionPrologue);
+            sb.Append(" {").Append(PsBuild.FunctionPrologue).Append(PsBuild.FunctionSourceMark(func.Source));
             if (dynLocals.Count > 0)
             {
                 // Each name's saved slot starts $null in THIS call (a bare read would see the caller's).

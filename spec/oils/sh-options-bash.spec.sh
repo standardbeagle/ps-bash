@@ -151,5 +151,4 @@ echo SHELLOPTS=$SHELLOPTS
 ## stdout:
 ## status: 0
 ## timeout: 10
-## XFAIL ps-bash gap-oils-sh-options-bash sh-options-bash (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## real-launcher
