@@ -87,7 +87,9 @@ public sealed class InvokeBashCompgenCommand : PSCmdlet
             case "directory":
                 return PathCandidates(prefix, kind == "directory");
             case "variable":
-                return Script("Get-Variable | ForEach-Object Name").Concat(Script("Get-ChildItem Env: | ForEach-Object { if ($_.Name -ieq 'Path') { 'PATH' } else { $_.Name } }")).Distinct(StringComparer.Ordinal);
+                // A diverted reserved-name variable (stored __psbash_cv_0_PATH) completes as its bash name, `path`.
+                return Script("Get-Variable | ForEach-Object Name").Concat(Script("Get-ChildItem Env: | ForEach-Object { if ($_.Name -ieq 'Path') { 'PATH' } else { $_.Name } }"))
+                    .Select(PsBash.Core.BashNameCase.ToBash).Distinct(StringComparer.Ordinal);
             case "function":
                 return DeclarePrinter.AllBashFunctions(this).Select(f => f.Name);
             case "export":

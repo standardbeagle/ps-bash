@@ -537,6 +537,41 @@ Tests: `RawBytesTests` (codec), `HostProtocolRawBytesTests` (frames), `RawBytesC
 counters, gzip/base64/split), `LineStreamRawBytesParityTests` (fused lane), `RawBytesEndToEndTests` (the
 built `ps-bash.exe` writes bytes; native child `findstr`), `RawBytesDifferentialTests` (41 bash-oracle cases,
 cassette-replayed).
+
+## Variable store and reserved-name case (`BashNameCase`)
+
+Bash variables are process environment variables, read and written through `PsBash.Cmdlets.BashVariableStore`
+(`Get`/`Set`/`Enumerate`/`ApplyTo`); arrays, loop variables and `local` arrays are PowerShell variables. The
+Windows environment (and PowerShell's variable table) is case-insensitive, so `path=abc` used to BE `PATH`.
+
+`PsBash.Core.BashNameCase` (Transpiler assembly) diverts a **non-upper-case spelling of a reserved name** to its
+own store name, on Windows only:
+
+- `ToStore("path")` = `__psbash_cv_0_PATH`; bit *i* of the hex mask is set when character *i* is upper-case
+  (`Path` → `__psbash_cv_1_PATH`), so `path`/`Path`/`pATH` stay three variables and `ToBash` inverts it exactly.
+  An all-upper-case name, an ordinary name (`x`, `http_proxy`), or a name that only contains a reserved one
+  (`mypath`) is never mapped. A subscript is kept: `path[0]` → `__psbash_cv_0_PATH[0]`. Idempotent.
+- Reserved list (one place, `BashNameCase.ReservedNames`): Windows system variables (`PATH PATHEXT TMP TEMP
+  COMSPEC SYSTEMROOT … OS HOMEDRIVE HOMEPATH PSMODULEPATH`) and environment-held shell/tool variables (`HOME PWD
+  OLDPWD IFS USER LOGNAME SHELL TERM LANG HOSTNAME OSTYPE UID RANDOM SECONDS LINENO OPTIND OPTARG REPLY PS1 PS2 PS4
+  BASH_VERSION EDITOR PAGER COLUMNS LINES`). Fixed, not "whatever is inherited": the emitted text must not depend
+  on the caller's environment.
+- **Static names** are mapped where they enter the AST: the records `WordPart.SimpleVarSub`, `BracedVarSub`,
+  `Assignment`, `EnvPair`, `Command.ForIn`/`Select`, and the arithmetic `Identifier`/`Assignment`/`Increment`/
+  `Parameter` normalise their name in the constructor, so the emitter only sees store names
+  (`BashNameCaseTests.EveryAstRecordWithAVariableName_IsCovered` fails on a new uncovered record).
+- **Run-time names** map at the by-name access: `BashVariableStore.Get/Set`, `FileSystemHelpers.SetShellVariable`,
+  and in `read`, `printf -v`, `unset`, `getopts`, `let`, `[[ -v ]]`, arithmetic (`InvokeBashArithmeticCommand`),
+  `declare -p`, `Get-BashIndirectValue` (`${!ref}`), dynamic `export "$n=v"`, nameref targets.
+- **Printing** demangles (`ToBash`): `declare -p`/`set`/`export -p` listings, `env`/`printenv`, `compgen -v`,
+  `${!prefix*}`, "x: unbound variable", `${x:?}`, readonly / circular-nameref messages. `Enumerate` returns STORE
+  names (subshell save/restore keys case-insensitive dictionaries by them).
+- **Child processes**: `BashVariableStore.ApplyTo` drops mangled entries from a spawned child's environment.
+  Natives that PowerShell itself launches inherit the process block, so they see the entry under its mangled
+  name only (never as `PATH`). A background ps-bash job host gets the full block, so the variable survives `cmd &`.
+
+`BashNameCase.Override(windows)` (AsyncLocal) forces the behaviour on/off for tests on any OS.
+
 ## Temp File Strategy
 
 All temp files are written under a `ps-bash/` subdirectory of the system temp path

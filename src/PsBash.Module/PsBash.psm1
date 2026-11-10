@@ -114,7 +114,8 @@ function Get-BashIndirectValue {
     if ($null -eq $Ref -and $RefName -eq 'OPTIND') { $Ref = '1' }
     $n = [string]$Ref
     if ($n -eq '') { return $null }
-    if ($NameOnly) { return ($n -replace '\[.*$', '') }
+    # The STORE name (BashNameCase): the caller reads or writes the variable by it.
+    if ($NameOnly) { return [PsBash.Core.BashNameCase, PsBash.Transpiler]::ToStore(($n -replace '\[.*$', '')) }
     if ($n -match '^[0-9]+$') {
         if ([int]$n -eq 0) { return 'bash' }
         if ([int]$n -le $Pos.Count) { return [string]$Pos[[int]$n - 1] }
@@ -126,8 +127,8 @@ function Get-BashIndirectValue {
     if ($n -eq 'FUNCNAME') { return ([string]@(Get-BashFuncNames | Where-Object { $_ -ne 'Get-BashIndirectValue' })[0]) }
     if ($n -eq 'OPTIND' -and $null -eq [System.Environment]::GetEnvironmentVariable('OPTIND') -and $null -eq (Get-Variable -Name OPTIND -ValueOnly -ErrorAction Ignore)) { return '1' }
     if ($n -match '^([A-Za-z_][A-Za-z0-9_]*)\[(.*)\]$') {
-        $v = Get-Variable -Name $Matches[1] -ValueOnly -ErrorAction Ignore
         $sub = $Matches[2].Trim('"', "'")
+        $v = Get-Variable -Name ([PsBash.Core.BashNameCase, PsBash.Transpiler]::ToStore($Matches[1])) -ValueOnly -ErrorAction Ignore
         if ($null -eq $v) { return $null }
         if ($v -is [System.Collections.IDictionary]) {
             if ($sub -eq '@' -or $sub -eq '*') { return (@($v.Values) -join ' ') }
@@ -144,6 +145,8 @@ function Get-BashIndirectValue {
         Write-BashHostStderr "bash: ${n}: invalid variable name"
         return $null
     }
+    # A reserved-name spelling (`ref=path`) names the diverted variable, not PATH (BashNameCase).
+    $n = [PsBash.Core.BashNameCase, PsBash.Transpiler]::ToStore($n)
     $e = [System.Environment]::GetEnvironmentVariable($n)
     if ($null -ne $e) { return $e }
     $pv = Get-Variable -Name $n -ValueOnly -ErrorAction Ignore

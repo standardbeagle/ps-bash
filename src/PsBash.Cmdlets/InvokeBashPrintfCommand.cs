@@ -513,6 +513,7 @@ public sealed class InvokeBashPrintfCommand : PSCmdlet
     /// </summary>
     private void AssignVariable(string target, string value)
     {
+        target = PsBash.Core.BashNameCase.ToStore(target);   // `printf -v path`: not PATH (Windows env is case-insensitive)
         int br = target.IndexOf('[');
         if (br < 0)
         {

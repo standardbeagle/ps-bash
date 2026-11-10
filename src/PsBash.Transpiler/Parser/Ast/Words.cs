@@ -29,7 +29,11 @@ public abstract record WordPart : BashNode
     public sealed record DoubleQuoted(ImmutableArray<WordPart> Parts) : WordPart;
 
     /// <summary>A simple variable substitution, e.g. <c>$foo</c> or <c>$?</c>.</summary>
-    public sealed record SimpleVarSub(string Name) : WordPart;
+    public sealed record SimpleVarSub(string Name) : WordPart
+    {
+        /// <summary>The STORE name (<see cref="PsBash.Core.BashNameCase.ToStore(string)"/>): `path` reads `__psbash_cv_0_PATH` on Windows.</summary>
+        public string Name { get; init; } = PsBash.Core.BashNameCase.ToStore(Name);
+    }
 
     /// <summary>
     /// A braced variable substitution, e.g. <c>${foo:-default}</c>. <paramref name="Suffix"/> is
@@ -41,7 +45,11 @@ public abstract record WordPart : BashNode
     /// case the emitter falls back to the raw <paramref name="Suffix"/> slice. This is the Oils
     /// <c>suffix_op.Unary(arg_word)</c> recursion boundary the original flat-string port dropped.
     /// </summary>
-    public sealed record BracedVarSub(string Name, string? Suffix, ImmutableArray<WordPart>? ArgWord = null) : WordPart;
+    public sealed record BracedVarSub(string Name, string? Suffix, ImmutableArray<WordPart>? ArgWord = null) : WordPart
+    {
+        /// <summary>The STORE name (<see cref="PsBash.Core.BashNameCase.ToStore(string)"/>), subscript kept.</summary>
+        public string Name { get; init; } = PsBash.Core.BashNameCase.ToStore(Name);
+    }
 
     /// <summary>A command substitution, e.g. <c>$(cmd)</c> or <c>`cmd`</c>.</summary>
     public sealed record CommandSub(BashNode Body) : WordPart;

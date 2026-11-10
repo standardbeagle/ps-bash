@@ -116,7 +116,10 @@ public sealed class InvokeBashEnvCommand : PSCmdlet
 
         // No args: enumerate all bash variables, sorted by name
         // (the psm1 oracle's `Sort-Object` step).
-        var all = new List<KeyValuePair<string, string>>(BashVariableStore.Enumerate());
+        // Listed under the bash name: a diverted `path` (stored __psbash_cv_0_PATH) prints as path=...
+        var all = new List<KeyValuePair<string, string>>();
+        foreach (var (k, v) in BashVariableStore.Enumerate())
+            all.Add(new KeyValuePair<string, string>(PsBash.Core.BashNameCase.ToBash(k), v));
         all.Sort(static (a, b) => StringComparer.Ordinal.Compare(a.Key, b.Key));
 
         foreach (var (key, v) in all)
@@ -246,7 +249,7 @@ public sealed class InvokeBashEnvCommand : PSCmdlet
         if (!ignoreEnv)
         {
             foreach (var (k, v) in BashVariableStore.Enumerate())
-                dict[k] = v;
+                dict[PsBash.Core.BashNameCase.ToBash(k)] = v;
         }
         foreach (var u in unset) dict.Remove(u);
         foreach (var (n, v) in assignments) dict[n] = v;

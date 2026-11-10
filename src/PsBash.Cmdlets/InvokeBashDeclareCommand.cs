@@ -121,15 +121,16 @@ public sealed class InvokeBashDeclareCommand : PSCmdlet
             };
             if (text is not null) { arrays[an] = text; keys.Add(an); }
         }
-        keys.Sort(string.CompareOrdinal);
+        keys.Sort((a, b) => string.CompareOrdinal(PsBash.Core.BashNameCase.ToBash(a), PsBash.Core.BashNameCase.ToBash(b)));
         foreach (var key in keys)
         {
-            if (arrays.TryGetValue(key, out var arrText)) { WriteLine(key + "=" + arrText); continue; }
+            string shown = PsBash.Core.BashNameCase.ToBash(key);   // a diverted `path` lists as path, not its store name
+            if (arrays.TryGetValue(key, out var arrText)) { WriteLine(shown + "=" + arrText); continue; }
             string v = (string?)env[key] ?? BashShellState.NamerefTarget(key) ?? string.Empty;
             bool plain = true;
             foreach (char c in v)
                 if (!(char.IsAsciiLetterOrDigit(c) || "_-./:+=@%,".IndexOf(c) >= 0)) { plain = false; break; }
-            WriteLine(key + "=" + (plain ? v : BashQuoteText.ForReuse(v)));
+            WriteLine(shown + "=" + (plain ? v : BashQuoteText.ForReuse(v)));
         }
     }
 
@@ -163,14 +164,14 @@ public sealed class InvokeBashDeclareCommand : PSCmdlet
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var env = Environment.GetEnvironmentVariables();
         foreach (System.Collections.DictionaryEntry e in env)
-            if (e.Key is string k && !k.StartsWith("__", StringComparison.Ordinal) && seen.Add(k)) result.Add((k, e.Value));
+            if (e.Key is string k && (!k.StartsWith("__", StringComparison.Ordinal) || PsBash.Core.BashNameCase.IsMangled(k)) && seen.Add(k)) result.Add((k, e.Value));
         try
         {
             foreach (var v in SessionState.InvokeProvider.Item.Get(new[] { @"variable:\*" }, force: false, literalPath: false))
             {
                 if (v.BaseObject is not PSVariable pv) continue;
                 string name = pv.Name;
-                if (NotBashVariables.Contains(name) || IsInternalName(name) || name.StartsWith("PS", StringComparison.Ordinal)
+                if (NotBashVariables.Contains(name) || (IsInternalName(name) && !PsBash.Core.BashNameCase.IsMangled(name)) || name.StartsWith("PS", StringComparison.Ordinal)
                     || name.StartsWith("Bash", StringComparison.Ordinal) || BashShellState.AllGlobalNames.Contains(name)) continue;
                 if (pv.Value is System.Collections.IDictionary || (pv.Value is System.Collections.IList && pv.Value is not string))
                 {
@@ -184,7 +185,7 @@ public sealed class InvokeBashDeclareCommand : PSCmdlet
         }
         foreach (var nr in BashShellState.NamerefNames())
             if (seen.Add(nr)) result.Add((nr, null));
-        result.Sort((a, b) => string.CompareOrdinal(a.Item1, b.Item1));
+        result.Sort((a, b) => string.CompareOrdinal(PsBash.Core.BashNameCase.ToBash(a.Item1), PsBash.Core.BashNameCase.ToBash(b.Item1)));
         return result;
     }
 

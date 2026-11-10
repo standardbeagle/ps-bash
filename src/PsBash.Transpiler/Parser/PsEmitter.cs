@@ -153,8 +153,9 @@ public static partial class PsEmitter
 
     private static string ResolveNameref(string name)
     {
+        // A target taken from word text (`declare -n ref=path`) is a bash name: read it under its store name.
         for (int hops = 0; hops < 8 && _namerefs is not null && _namerefs.TryGetValue(name, out var target); hops++)
-            name = target;
+            name = BashNameCase.ToStore(target);
         return name;
     }
 
@@ -3248,7 +3249,7 @@ public static partial class PsEmitter
     /// supplies the status or the target is readonly (the refusal sets 1).
     /// </summary>
     private static string NamerefMark(string name, string target) =>
-        "[PsBash.Cmdlets.BashShellState]::SetNameref(" + PsBuild.SingleQuote(name) + ", " + PsBuild.SingleQuote(target) + ")";
+        "[PsBash.Cmdlets.BashShellState]::SetNameref(" + PsBuild.SingleQuote(BashNameCase.ToStore(name)) + ", " + PsBuild.SingleQuote(BashNameCase.ToStore(target)) + ")";
 
     private static string EmitShAssignmentStatement(Command.ShAssignment cmd)
     {
@@ -3334,7 +3335,7 @@ public static partial class PsEmitter
             // Mutually recursive namerefs (`ref1 -> ref2 -> ref1`) are only detected when written through.
             if (!cmd.IsLocal && !cmd.IsExport && _namerefs is { Count: > 0 } && _namerefs.ContainsKey(pair.Name) && _namerefs.ContainsKey(ResolveNameref(pair.Name)))
             {
-                sb.Append("Write-Error ").Append(PsBuild.SingleQuote($"ps-bash: {pair.Name}: circular name reference"))
+                sb.Append("Write-Error ").Append(PsBuild.SingleQuote($"ps-bash: {BashNameCase.ToBash(pair.Name)}: circular name reference"))
                   .Append(" -ErrorAction Continue; ").Append(PsBuild.SetStatus(1));
                 continue;
             }
@@ -3343,7 +3344,7 @@ public static partial class PsEmitter
             if (!cmd.IsLocal && !cmd.IsExport && _readonlyVars?.Contains(roBase) == true)
             {
                 _readonlyViolation = true;
-                sb.Append("Write-Error ").Append(PsBuild.SingleQuote($"ps-bash: {roBase}: readonly variable"))
+                sb.Append("Write-Error ").Append(PsBuild.SingleQuote($"ps-bash: {BashNameCase.ToBash(roBase)}: readonly variable"))
                   .Append(" -ErrorAction Continue; ").Append(PsBuild.SetStatus(1));
                 continue;
             }
@@ -3537,12 +3538,12 @@ public static partial class PsEmitter
         {
             if (!IsDynamicAssignment(w) && TrySplitInitializer(w, out var staticName, out var staticValue))
             {
-                sbOut.Append("$env:").Append(staticName).Append(" = ").Append(EmitAssignmentValue(staticValue)).Append("; ");
+                sbOut.Append("$env:").Append(BashNameCase.ToStore(staticName)).Append(" = ").Append(EmitAssignmentValue(staticValue)).Append("; ");
                 continue;
             }
             string expr = "[string](" + EmitWord(w) + ")";
             sbOut.Append($"$__psbD = {expr}; $__psbI = $__psbD.IndexOf('='); ")
-                 .Append("if ($__psbI -gt 0) { Set-Item -LiteralPath ('Env:' + $__psbD.Substring(0, $__psbI)) -Value $__psbD.Substring($__psbI + 1) }; ");
+                 .Append("if ($__psbI -gt 0) { Set-Item -LiteralPath ('Env:' + [PsBash.Core.BashNameCase, PsBash.Transpiler]::ToStore($__psbD.Substring(0, $__psbI))) -Value $__psbD.Substring($__psbI + 1) }; ");
         }
         sbOut.Append(PsBuild.SetStatus(0));
         result = sbOut.ToString();
@@ -7067,7 +7068,7 @@ public static partial class PsEmitter
 
     /// <summary>A read of <paramref name="name"/> that ends the script ("unbound variable") when nounset is on and it is unset.</summary>
     private static string StrictRead(string name, string plain)
-        => $"$(if ($global:__BashNounset -and $null -eq {plain}) {{ {PsBuild.ParamErrorThrowStatements(PsBuild.SingleQuote(name + ": "), "'unbound variable'")} }} else {{ {plain} }})";
+        => $"$(if ($global:__BashNounset -and $null -eq {plain}) {{ {PsBuild.ParamErrorThrowStatements(PsBuild.SingleQuote(BashNameCase.ToBash(name) + ": "), "'unbound variable'")} }} else {{ {plain} }})";
 
     // -- RC-7: unquoted variable word-splitting -------------------------------
     //
@@ -8046,7 +8047,10 @@ public static partial class PsEmitter
 
         if (bvs.Suffix == "!names")
         {
-            string expr = $"@(@(Get-ChildItem env: | Where-Object {{ $_.Name -clike '{bvs.Name}*' }} | ForEach-Object {{ $_.Name }}) + @(Get-Variable -Name '{bvs.Name}*' -ErrorAction SilentlyContinue | Where-Object {{ $_.Name -clike '{bvs.Name}*' -and $_.Options -eq 'None' -and ($_.Value -is [array] -or $_.Value -is [System.Collections.IDictionary]) -and $_.Name -cnotin 'args','input','Error','Matches','PSBoundParameters' }} | ForEach-Object {{ $_.Name }}) | Sort-Object -Unique -CaseSensitive)";
+            // Environment names are listed under their BASH name: a diverted `path` (stored __psbash_cv_0_PATH, see
+            // BashNameCase) matches ${!pa*} and prints as path.
+            string prefix = BashNameCase.ToBash(bvs.Name);
+            string expr = $"@(@(Get-ChildItem env: | ForEach-Object {{ [PsBash.Core.BashNameCase, PsBash.Transpiler]::ToBash($_.Name) }} | Where-Object {{ $_ -clike '{prefix}*' }}) + @(Get-Variable -Name '{bvs.Name}*' -ErrorAction SilentlyContinue | Where-Object {{ $_.Name -clike '{bvs.Name}*' -and $_.Options -eq 'None' -and ($_.Value -is [array] -or $_.Value -is [System.Collections.IDictionary]) -and $_.Name -cnotin 'args','input','Error','Matches','PSBoundParameters' }} | ForEach-Object {{ $_.Name }}) | Sort-Object -Unique -CaseSensitive)";
             return inDoubleQuote ? $"$({expr})" : expr;
         }
 
@@ -8134,7 +8138,7 @@ public static partial class PsEmitter
     private static string ParamErrorThrow(string varRef, string argVal)
     {
         var name = varRef.StartsWith("$env:", StringComparison.Ordinal) ? varRef[5..].Trim('{', '}', '(', ')') : "";
-        var prefix = name.Length > 0 ? PsBuild.SingleQuote(name + ": ") : "''";
+        var prefix = name.Length > 0 ? PsBuild.SingleQuote(BashNameCase.ToBash(name) + ": ") : "''";
         return "$(" + PsBuild.ParamErrorThrowStatements(prefix, argVal) + ")";
     }
 

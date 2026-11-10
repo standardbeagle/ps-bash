@@ -307,6 +307,7 @@ internal static class FileSystemHelpers
     /// </summary>
     internal static void SetShellVariable(System.Management.Automation.SessionState state, string name, object? value)
     {
+        name = PsBash.Core.BashNameCase.ToStore(name);   // a reserved-name spelling (`path`) is its own variable
         var existing = state.PSVariable.Get(name);
         if (existing is not null && (existing.Options & (System.Management.Automation.ScopedItemOptions.ReadOnly | System.Management.Automation.ScopedItemOptions.Constant)) == 0)
             existing.Value = value;

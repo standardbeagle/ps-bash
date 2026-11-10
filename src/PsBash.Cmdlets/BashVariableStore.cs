@@ -30,17 +30,24 @@ namespace PsBash.Cmdlets;
 public static class BashVariableStore
 {
     /// <summary>Read a bash variable. Null when unset (bash's "unset" — distinct
-    /// from set-to-empty, which the <c>${VAR-word}</c> operators rely on).</summary>
-    public static string? Get(string name) => Environment.GetEnvironmentVariable(name);
+    /// from set-to-empty, which the <c>${VAR-word}</c> operators rely on).
+    ///
+    /// <para>Every by-name entry point maps the BASH name to its store name
+    /// (<see cref="PsBash.Core.BashNameCase.ToStore(string)"/>): on Windows <c>path</c> is not <c>PATH</c>.
+    /// The mapping is idempotent, so a caller holding a store name (from the emitter) may pass it too.</para></summary>
+    public static string? Get(string name) => Environment.GetEnvironmentVariable(PsBash.Core.BashNameCase.ToStore(name));
 
     /// <summary>
     /// Write a bash variable. A null <paramref name="value"/> UNSETS it (the
     /// .NET convention, and what <c>unset</c> / an env-prefix restore needs).
     /// </summary>
     public static void Set(string name, string? value)
-        => Environment.SetEnvironmentVariable(name, value);
+        => Environment.SetEnvironmentVariable(PsBash.Core.BashNameCase.ToStore(name), value);
 
-    /// <summary>Every bash variable currently set, for <c>env</c> / <c>printenv</c>.</summary>
+    /// <summary>Every bash variable currently set, for <c>env</c> / <c>printenv</c>, under its STORE name.
+    /// Anything that PRINTS the name runs it through <see cref="PsBash.Core.BashNameCase.ToBash"/> (a diverted
+    /// <c>__psbash_cv_0_PATH</c> prints as <c>path</c>). Store names, not bash names, because callers key
+    /// case-insensitive dictionaries by them (subshell save/restore) where <c>path</c> and <c>PATH</c> would collide.</summary>
     public static IEnumerable<KeyValuePair<string, string>> Enumerate()
     {
         foreach (DictionaryEntry e in Environment.GetEnvironmentVariables())
@@ -60,16 +67,26 @@ public static class BashVariableStore
     /// live — <c>export CHILDVAR=visible; pwsh -c '$env:CHILDVAR'</c> prints
     /// <c>visible</c>.</para>
     ///
-    /// <para>While the store IS the process environment this is a NO-OP: the
-    /// child inherits automatically. It exists as a called seam so that the day
+    /// <para>While the store IS the process environment the child inherits it
+    /// automatically. It exists as a called seam so that the day
     /// the store moves off the process environment, every spawn site is already
     /// wired and the change is one method body rather than an audit of every
     /// <c>ProcessStartInfo</c> in the tree.</para>
+    ///
+    /// <para>The one thing it does today: a diverted reserved-name variable (<c>path=x</c>, stored as
+    /// <c>__psbash_cv_0_PATH</c>, see <see cref="PsBash.Core.BashNameCase"/>) is LEFT OUT of the child's
+    /// environment. Windows cannot give a child both <c>PATH</c> and <c>path</c>, and handing it the mangled
+    /// name would only leak an internal spelling.</para>
     /// </summary>
     public static void ApplyTo(ProcessStartInfo startInfo)
     {
         ArgumentNullException.ThrowIfNull(startInfo);
-        // Intentionally empty — see the remarks above. Do NOT "optimize" this
-        // call away at the call sites; the call IS the deliverable.
+        // Do NOT "optimize" this call away at the call sites; the call IS the deliverable.
+        if (startInfo.UseShellExecute || !PsBash.Core.BashNameCase.Enabled) return;
+        List<string>? mangled = null;
+        foreach (DictionaryEntry e in Environment.GetEnvironmentVariables())
+            if (e.Key is string k && PsBash.Core.BashNameCase.IsMangled(k)) (mangled ??= []).Add(k);
+        if (mangled is null) return;   // common case: no copy of the environment block
+        foreach (var k in mangled) startInfo.Environment.Remove(k);
     }
 }

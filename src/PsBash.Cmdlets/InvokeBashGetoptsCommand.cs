@@ -135,6 +135,7 @@ public sealed class InvokeBashGetoptsCommand : PSCmdlet
     /// <summary>Visible to both <c>$name</c> and <c>$env:name</c> reads, like <c>read</c>.</summary>
     private void Assign(string name, string value)
     {
+        name = PsBash.Core.BashNameCase.ToStore(name);   // `getopts ab opt` into a reserved spelling stays its own variable
         SessionState.PSVariable.Set(name, value);
         try { BashVariableStore.Set(name, value); } catch { /* restricted name: non-fatal */ }
     }

@@ -162,13 +162,15 @@ public sealed class InvokeBashUnsetCommand : PSCmdlet
 
         foreach (var name in names)
         {
-            if (!functionMode && BashShellState.IsReadonly(name))
+            // A variable lives under its store name (`path` is not PATH on Windows); messages and a function keep the bash name.
+            string store = functionMode ? name : PsBash.Core.BashNameCase.ToStore(name);
+            if (!functionMode && BashShellState.IsReadonly(store))
             {
                 FileSystemHelpers.WriteStderr(this, $"unset: {name}: cannot unset: readonly variable");
                 FileSystemHelpers.SetLastExitCode(this, 1);
                 continue;
             }
-            if (!functionMode && TryUnsetElement(name)) continue;
+            if (!functionMode && TryUnsetElement(store)) continue;
             if (functionMode)
             {
                 // Function mode: remove from Function:\NAME. Use a parameter-
@@ -191,11 +193,11 @@ public sealed class InvokeBashUnsetCommand : PSCmdlet
                 // caller).
                 // Bash: with neither -f nor -v, a name that is no variable at all unsets the function of that name.
                 InvokeCommand.InvokeScript(
-                    "param($n, $explicitVar) $isVar = (Get-Variable -Name $n -Scope 1 -ErrorAction SilentlyContinue) -or (Test-Path ('Env:\\' + $n)); " +
+                    "param($n, $explicitVar, $fn) $isVar = (Get-Variable -Name $n -Scope 1 -ErrorAction SilentlyContinue) -or (Test-Path ('Env:\\' + $n)); " +
                     "Remove-Variable -Name $n -Scope 1 -ErrorAction SilentlyContinue; " +
                     "if (Test-Path ('Env:\\' + $n)) { Remove-Item -Path ('Env:\\' + $n) -Force -ErrorAction SilentlyContinue } " +
-                    "elseif (-not $isVar -and -not $explicitVar -and -not $n.Contains('[')) { Remove-Item -Path ('Function:\\' + $n) -Force -ErrorAction SilentlyContinue }",
-                    name, explicitVar);
+                    "elseif (-not $isVar -and -not $explicitVar -and -not $fn.Contains('[')) { Remove-Item -Path ('Function:\\' + $fn) -Force -ErrorAction SilentlyContinue }",
+                    store, explicitVar, name);
             }
         }
     }

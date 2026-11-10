@@ -190,6 +190,7 @@ public sealed class InvokeBashTestCommand : PSCmdlet
     /// <summary>`[[ -v name ]]`, `-v arr[i]`, `-v map[key]`: is the variable (or that element) set?</summary>
     private bool VariableIsSet(string operand)
     {
+        operand = PsBash.Core.BashNameCase.ToStore(operand);   // `-v path` asks about path, not PATH
         int open = operand.IndexOf('[');
         if (open > 0 && operand.EndsWith(']'))
         {

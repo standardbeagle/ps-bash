@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 100
+stdout-length: 18
+stderr-length: 0
+==== SCRIPT ====
+tmp=zz_rn; echo $tmp; f=$(mktemp); [ -e "$f" ] && echo made; rm -f "$f"; [ -d zz_rn ] || echo no-dir
+==== STDOUT ====
+zz_rn
+made
+no-dir
+
+==== STDERR ====
+

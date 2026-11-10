@@ -118,9 +118,10 @@ public sealed class InvokeBashArithmeticCommand : PSCmdlet
         {
             // Reported on the error stream here; the emitted wrapper (PsBuild.ArithNounsetGuard) sees the
             // global and ends the script -- a cmdlet exception would only end this statement.
-            FileSystemHelpers.WriteStderr(this, $"ps-bash: {name}: unbound variable");
+            string bashName = PsBash.Core.BashNameCase.ToBash(name);   // the message names `path`, not its store name
+            FileSystemHelpers.WriteStderr(this, $"ps-bash: {bashName}: unbound variable");
             FileSystemHelpers.SetLastExitCode(this, 1);
-            SessionState.PSVariable.Set("global:__BashUnbound", name);
+            SessionState.PSVariable.Set("global:__BashUnbound", bashName);
             throw new UnboundVariableException();
         }
         if (string.IsNullOrEmpty(raw)) return 0;
@@ -223,6 +224,8 @@ public sealed class InvokeBashArithmeticCommand : PSCmdlet
 
     private string? ReadRawVar(string name)
     {
+        // Names from the parsed expression are already store names; one scraped from `$name` text is not (idempotent).
+        name = PsBash.Core.BashNameCase.ToStore(name);
         if (TrySplitElement(name, out var elemBase, out var elemSub)) return ReadElement(elemBase, elemSub);
         // PowerShell variable first (loop variables are emitted as $name).
         try
@@ -253,6 +256,7 @@ public sealed class InvokeBashArithmeticCommand : PSCmdlet
     private void WriteVar(string name, long value)
     {
         var s = value.ToString(CultureInfo.InvariantCulture);
+        name = PsBash.Core.BashNameCase.ToStore(name);
         if (TrySplitElement(name, out var elemBase, out var elemSub)) { WriteElement(elemBase, elemSub, s); return; }
         BashVariableStore.Set(name, s);
         try

@@ -128,7 +128,7 @@ public sealed class InvokeBashLetCommand : PSCmdlet
                 // PowerShell's `Invoke-Expression "NAME=EXPR"` which assigns in
                 // the local scope of the calling function. The runspace-scope
                 // PSVariable.Set has the same observable effect from a cmdlet.
-                SessionState.PSVariable.Set(targetName, result);
+                SessionState.PSVariable.Set(PsBash.Core.BashNameCase.ToStore(targetName), result);
             }
 
             if (result == 0) anyZero = true;
@@ -278,7 +278,7 @@ public sealed class InvokeBashLetCommand : PSCmdlet
                 // Look up the variable in the caller's scope; missing or
                 // non-integer variables resolve to 0 (bash arithmetic
                 // convention).
-                var val = _cmdlet.SessionState.PSVariable.GetValue(name);
+                var val = _cmdlet.SessionState.PSVariable.GetValue(PsBash.Core.BashNameCase.ToStore(name));
                 if (val == null) return 0;
                 if (val is long lv) return lv;
                 if (val is int iv) return iv;

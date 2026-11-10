@@ -17,11 +17,13 @@ internal static class DeclarePrinter
     /// looked up as a global PowerShell variable first and then the environment. False (nothing written) when
     /// the variable does not exist.
     /// </summary>
-    internal static bool TryPrintVariable(PSCmdlet cmdlet, string name)
+    internal static bool TryPrintVariable(PSCmdlet cmdlet, string bashOrStoreName)
     {
+        string name = PsBash.Core.BashNameCase.ToStore(bashOrStoreName);   // lookups and attributes use the store name
+        string shown = PsBash.Core.BashNameCase.ToBash(name);              // bash prints `path`, never __psbash_cv_0_PATH
         if (BashShellState.NamerefTarget(name) is { } refTarget)
         {
-            foreach (var line in BashRuntime.EmitBashLines($"declare -n {name}={QuoteValue(refTarget)}\n"))
+            foreach (var line in BashRuntime.EmitBashLines($"declare -n {shown}={QuoteValue(PsBash.Core.BashNameCase.ToBash(refTarget))}\n"))
                 cmdlet.WriteObject(line);
             return true;
         }
@@ -42,20 +44,20 @@ internal static class DeclarePrinter
 
         string text;
         if (val is BashSparseArray sparse)
-            text = $"declare -a{BashShellState.AttributeLetters(name)} {name}={FormatSparse(sparse)}";
+            text = $"declare -a{BashShellState.AttributeLetters(name)} {shown}={FormatSparse(sparse)}";
         else if (val is System.Collections.IDictionary dict)
-            text = $"declare -A{BashShellState.AttributeLetters(name)} {name}={FormatAssociative(dict)}";
+            text = $"declare -A{BashShellState.AttributeLetters(name)} {shown}={FormatAssociative(dict)}";
         else if (val is System.Collections.IList { Count: 0 } && val is not string && BashShellState.IsDeclaredUnset(name))
             {
             string attrs = BashShellState.AttributeLetters(name);
-            text = BashShellState.IsDeclaredScalar(name) ? $"declare -{(attrs.Length > 0 ? attrs : "-")} {name}" : $"declare -a{attrs} {name}";
+            text = BashShellState.IsDeclaredScalar(name) ? $"declare -{(attrs.Length > 0 ? attrs : "-")} {shown}" : $"declare -a{attrs} {shown}";
         }
         else if (val is System.Collections.IList list && val is not string)
-            text = $"declare -a{BashShellState.AttributeLetters(name)} {name}={FormatIndexed(list)}";
+            text = $"declare -a{BashShellState.AttributeLetters(name)} {shown}={FormatIndexed(list)}";
         else
         {
             string letters = BashShellState.AttributeLetters(name);
-            text = $"declare -{(letters.Length == 0 ? "-" : letters)} {name}={QuoteValue(val.ToString())}";
+            text = $"declare -{(letters.Length == 0 ? "-" : letters)} {shown}={QuoteValue(val.ToString())}";
         }
 
         foreach (var line in BashRuntime.EmitBashLines(text + "\n"))
