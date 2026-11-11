@@ -331,7 +331,6 @@ alias e_=';; oops'
 e_ x
 ## stdout:
 ## status: 2
-## XFAIL ps-bash gap-oils-alias alias (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Loop split across alias and arg works

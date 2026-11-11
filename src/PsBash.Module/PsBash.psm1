@@ -3503,6 +3503,8 @@ Set-Alias -Name 'getopts' -Value 'Invoke-BashGetopts' -Force -Scope Global -Opti
 Set-Alias -Name 'flock' -Value 'Invoke-BashFlock' -Force -Scope Global -Option AllScope
 Set-Alias -Name 'timeout' -Value 'Invoke-BashTimeout' -Force -Scope Global -Option AllScope
 Set-Alias -Name 'times' -Value 'Invoke-BashTimes' -Force -Scope Global -Option AllScope
+# Replaces PowerShell's own `history` alias (Get-History): a script's history is bash's (Invoke-BashHistory).
+Set-Alias -Name 'history' -Value 'Invoke-BashHistory' -Force -Scope Global -Option AllScope
 Set-Alias -Name 'hash' -Value 'Invoke-BashHash' -Force -Scope Global -Option AllScope
 Set-Alias -Name 'umask' -Value 'Invoke-BashUmask' -Force -Scope Global -Option AllScope
 Set-Alias -Name 'ulimit' -Value 'Invoke-BashUlimit' -Force -Scope Global -Option AllScope

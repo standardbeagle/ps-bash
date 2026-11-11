@@ -162,9 +162,12 @@ unless asked.
 - serialize `set` / `declare` cases grepped `zz` over the whole environment and matched a machine-specific
   variable whose value contained `zz`; the spec now greps `^zz=` (same bash output).
 - Seen in the Bash tool (installed `0.13.0-dev`, older than v0.14.2), not yet checked on the dev build:
-  `awk '/a/,/b/' file` (a range pattern), `python3 - <<'EOF'` with an empty heredoc, and once even
-  `sed -n 128,145p file` hung (the last suggests a stuck command holding the installed host, not sed);
-  `grep -n 'grep "^zz="' file` found nothing although the line exists (`^` not first in a BRE is literal).
+  `awk '/a/,/b/' file`, `python3 - <<'EOF'` and `sed -n 128,145p file` each "hung". Not those commands:
+  every time, a long `run_in_background` Bash command (tman tests) was running, and the installed host ran
+  the foreground command only after it. Check whether the current build still serializes a session's
+  commands behind one long command (WorkerPool size / exec gate) before calling it a bug.
+  Also: `grep -n 'grep "^zz="' file` found nothing although the line exists (`^` not first in a BRE is
+  literal); confirm on the dev build.
 
 ### Progress, 2026-11-10 (second pass)
 
@@ -172,6 +175,12 @@ unless asked.
 `trap 'echo <'`, `( … ) N>&1` high-fd scoping, `local "$1"` via eval, `[[` across newlines, `{1..10}` as a
 command word, `export/readonly a[1]=x` errors, `$PPID`/`$RANDOM` spec shape checks, HostMemoryGuard reclaim
 backoff) plus the A4 root causes and the nested-stderr fix above.
+
+467 → 462: `history` is a builtin in scripts (`Invoke-BashHistory`: `-c -d -s -p -a -n -r -w`, `[n]` with
+bash's numeric / too-many / invalid-option errors; replaces PowerShell's `Get-History` alias, whose binder
+errors leaked). The interactive shell still handles a typed `history` itself. `${a[0][0]}` and `${a[0]x}`
+are a bad substitution (was element 0 plus literal text). An alias whose expansion is a syntax error
+reports it with status 2 instead of throwing out of the alias function.
 
 ## Suggested order
 

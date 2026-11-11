@@ -627,6 +627,15 @@ public sealed partial class BashParser
                 pos++; // skip ]
             string subscript = raw[subStart..pos];
 
+            if (pos < len && raw[pos] != '}' && ":-=+?@%#/^,".IndexOf(raw[pos]) < 0)
+            {
+                // ${a[0][0]}, ${a[0]x}: only an operator may follow the subscript. bash reports 'bad substitution' when it runs.
+                int badClose = raw.IndexOf('}', pos);
+                int badEnd = badClose < 0 ? len : badClose + 1;
+                parts.Add(new WordPart.BracedVarSub(varName, "#BAD:" + raw[Math.Max(0, varStart - 2)..badEnd]));
+                return badEnd;
+            }
+
             // A suffix operator may follow the subscript (slice / removal / default
             // applied to the indexed or @-expanded value). Capture everything up to
             // the matching '}' as part of the suffix so EmitBracedVar can apply it —

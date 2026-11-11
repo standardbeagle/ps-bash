@@ -58,6 +58,8 @@ public class CommonParameterCollisionGuardTests
             ["timeout"] = new(CollidingLetters),
             // times/hash/umask: argv is the script's own; every dash word is single-quoted.
             ["times"] = new(CollidingLetters),
+            // history: -c/-d/-p/-w are its own; every dash word is single-quoted. c/d/p/w decoys for direct calls.
+            ["history"] = new(CollidingLetters),
             ["hash"] = new(CollidingLetters),
             ["umask"] = new(CollidingLetters),
             ["ulimit"] = new(CollidingLetters),

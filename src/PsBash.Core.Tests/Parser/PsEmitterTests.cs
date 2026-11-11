@@ -229,6 +229,22 @@ public class PsEmitterTests
         Assert.Contains("bad substitution", ps);
     }
 
+    // `${a[0][0]}` was read as element 0 followed by a literal "[0]" suffix; bash: "${a[0][0]}: bad substitution".
+    [Theory]
+    [InlineData("echo \"${a[0][0]}\"", "${a[0][0]}")]
+    [InlineData("echo ${a[0]x}", "${a[0]x}")]
+    public void Transpile_TextAfterSubscript_IsBadSubstitution(string src, string shown)
+    {
+        var ps = PsEmitter.Transpile(src)!;
+        Assert.Contains("bad substitution", ps);
+        Assert.Contains(shown + ": ", ps);
+    }
+
+    [Theory]
+    [InlineData("echo ${a[0]:-x} ${a[@]:1:2} ${a[0]#p} ${a[0]%s} ${a[0]/x/y} ${a[0]^^} ${a[0],,} ${a[0]@Q} ${a[0]-d} ${a[0]+d} ${a[0]=d} ${a[0]?m}")]
+    public void Transpile_OperatorAfterSubscript_IsNotBadSubstitution(string src)
+        => Assert.DoesNotContain("bad substitution", PsEmitter.Transpile(src)!);
+
     [Fact]
     public void Transpile_LoneInputRedirectInCommandSub_ReadsTheFile()
     {
@@ -1201,7 +1217,7 @@ public class PsEmitterTests
         // Batch 1 of the shared ordered parser. Adding a command here also means adding it to
         // CommonParameterCollisionGuardTests.EmitterForceQuoted (Cmdlets.Tests) — that map is
         // how the guard knows the emitter, not a decoy, protects the colliding letters.
-        Assert.Equal(new[] { "awk", "base64", "bash", "cat", "chmod", "column", "comm", "command", "compgen", "complete", "compopt", "cp", "cut", "declare", "diff", "du", "echo", "env", "expand", "file", "find", "flock", "fold", "getopts", "grep", "gzip", "hash", "head", "join", "jq", "ln", "ls", "md5sum", "mkdir", "mv", "nl", "od", "paste", "printf", "rg", "rm", "rmdir", "sed", "sh", "sha1sum", "sha256sum", "shopt", "sort", "source", "split", "stat", "strings", "tac", "tail", "tar", "tee", "test", "time", "timeout", "times", "touch", "tree", "type", "ulimit", "umask", "unexpand", "uniq", "wc", "xargs" }, PsEmitter.OrderedArgCommands.OrderBy(x => x).ToArray());
+        Assert.Equal(new[] { "awk", "base64", "bash", "cat", "chmod", "column", "comm", "command", "compgen", "complete", "compopt", "cp", "cut", "declare", "diff", "du", "echo", "env", "expand", "file", "find", "flock", "fold", "getopts", "grep", "gzip", "hash", "head", "history", "join", "jq", "ln", "ls", "md5sum", "mkdir", "mv", "nl", "od", "paste", "printf", "rg", "rm", "rmdir", "sed", "sh", "sha1sum", "sha256sum", "shopt", "sort", "source", "split", "stat", "strings", "tac", "tail", "tar", "tee", "test", "time", "timeout", "times", "touch", "tree", "type", "ulimit", "umask", "unexpand", "uniq", "wc", "xargs" }, PsEmitter.OrderedArgCommands.OrderBy(x => x).ToArray());
     }
 
     // `bash` is on OrderedArgCommands: the script's own args (`bash s.sh -v -e -c x`) and the

@@ -40,6 +40,22 @@ public class InvokeBashAliasCommandTests : IClassFixture<SharedPwshFixture>
         return RunRaw(script).Select(o => o?.ToString() ?? "").ToArray();
     }
 
+    // The expanded text `;; oops x` used to throw "Exception calling Transpile" out of the alias function into the
+    // script. bash: a syntax error, status 2.
+    [Fact]
+    public void Alias_ExpandsToSyntaxError_IsStatus2_NotAnException()
+    {
+        var lines = RunLines(
+            "Invoke-BashAlias 'e_=;; oops'; $thrown = 'no'; $err = ''; " +
+            "try { $err = (e_ x 2>&1 | ForEach-Object { \"$_\" }) -join ' ' } catch { $thrown = 'yes' }; " +
+            "\"$LASTEXITCODE|$thrown|$err\"");
+        var parts = lines.Last().Split('|');
+        Assert.Equal("2", parts[0]);
+        Assert.Equal("no", parts[1]);
+        Assert.StartsWith("bash: syntax error:", parts[2]);
+        Assert.DoesNotContain("Exception calling", parts[2]);
+    }
+
     [Fact]
     public void Alias_NoArgs_EmptyDict_EmitsNothing()
     {

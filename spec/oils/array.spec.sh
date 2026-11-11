@@ -649,7 +649,6 @@ a=('123' '456')
 argv.py "${a[0]}" "${a[0][0]}"
 ## stdout:
 ## status: 1
-## XFAIL ps-bash gap-oils-array array (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Length op, index op, then transform op is not allowed
