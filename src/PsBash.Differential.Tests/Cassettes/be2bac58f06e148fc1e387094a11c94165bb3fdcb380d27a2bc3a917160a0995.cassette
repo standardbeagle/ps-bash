@@ -1,0 +1,19 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 102
+stdout-length: 19
+stderr-length: 0
+==== SCRIPT ====
+names='m n'
+readonly $names
+other=ok
+echo "other=$other"
+( m=1 n=2 ) 2>/dev/null
+echo "s=$? m=$m n=$n"
+==== STDOUT ====
+other=ok
+s=1 m= n=
+
+==== STDERR ====
+

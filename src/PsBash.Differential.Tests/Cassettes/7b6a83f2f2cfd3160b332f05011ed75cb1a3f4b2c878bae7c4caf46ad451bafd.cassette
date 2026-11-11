@@ -1,0 +1,40 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 336
+stdout-length: 90
+stderr-length: 0
+==== SCRIPT ====
+f() {
+  for w in $1; do echo "[$w]"; done
+  for w in $1 $2; do echo "<$w>"; done
+  printf '{%s}' $1; echo
+  a=($1); echo "n=${#a[@]}"
+  for w in ${11}; do echo "($w)"; done
+  printf '{%s}' $3; echo "|"
+  printf '{%s}' "$1"; echo
+  local $1; echo "x=$x y=$y"
+  echo $1
+  return $4
+}
+f 'x=1 y=2' 'c d' '' 7 5 6 7 8 9 10 'k l'
+echo "rc=$?"
+==== STDOUT ====
+[x=1]
+[y=2]
+<x=1>
+<y=2>
+<c>
+<d>
+{x=1}{y=2}
+n=2
+(k)
+(l)
+{}|
+{x=1 y=2}
+x=1 y=2
+x=1 y=2
+rc=7
+
+==== STDERR ====
+

@@ -1,0 +1,17 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 60
+stdout-length: 15
+stderr-length: 0
+==== SCRIPT ====
+h() { local -r q=1; echo "in q=$q"; }
+h
+q=5
+echo "q=$q s=$?"
+==== STDOUT ====
+in q=1
+q=5 s=0
+
+==== STDERR ====
+

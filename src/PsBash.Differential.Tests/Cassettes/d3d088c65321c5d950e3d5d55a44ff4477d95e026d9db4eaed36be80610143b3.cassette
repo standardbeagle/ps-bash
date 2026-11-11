@@ -1,0 +1,16 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 60
+stdout-length: 8
+stderr-length: 0
+==== SCRIPT ====
+f() { readonly g=1; }
+f
+( g=2 ) 2>/dev/null
+echo "s=$? g=$g"
+==== STDOUT ====
+s=1 g=1
+
+==== STDERR ====
+

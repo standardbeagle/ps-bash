@@ -1,0 +1,19 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 125
+stdout-length: 46
+stderr-length: 0
+==== SCRIPT ====
+for w in 1a=3 =x 'a b' 'b[7]=8' 'z;'; do readonly "$w" 2>/dev/null; echo "$w s=$?"; done
+readonly 1a=3 2>/dev/null; echo s=$?
+==== STDOUT ====
+1a=3 s=1
+=x s=1
+a b s=1
+b[7]=8 s=1
+z; s=1
+s=1
+
+==== STDERR ====
+

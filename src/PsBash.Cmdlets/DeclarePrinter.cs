@@ -38,7 +38,14 @@ internal static class DeclarePrinter
         }
 
         val ??= BashVariableStore.Get(name);
-        if (val is null) return false;
+        if (val is null)
+        {
+            // `readonly nv` with no value: the name exists, unset, with its attributes (bash: `declare -r nv`).
+            if (!BashShellState.IsReadonly(name)) return false;
+            foreach (var line in BashRuntime.EmitBashLines($"declare -{BashShellState.AttributeLetters(name)} {name}\n"))
+                cmdlet.WriteObject(line);
+            return true;
+        }
 
         string text;
         if (val is BashSparseArray sparse)

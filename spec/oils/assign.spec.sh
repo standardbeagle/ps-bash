@@ -222,7 +222,6 @@ status=1
 status=1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-assign assign (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### readonly a=(1 2) no_value c=(3 4) makes 'no_value' readonly
@@ -230,7 +229,6 @@ readonly a=(1 2) no_value c=(3 4)
 no_value=x
 ## stdout:
 ## status: 1
-## XFAIL ps-bash gap-oils-assign assign (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### export a=1 no_value c=2

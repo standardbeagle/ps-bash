@@ -1315,6 +1315,10 @@ public class PsEmitterTests
     [InlineData("MYPATH=a:b")]
     [InlineData("PATHS=a:b true")]
     [InlineData("echo $PATH")]
+    // A bare `export PATH` / `local PATH` assigns nothing: bash leaves the value byte-for-byte (an inherited PATH
+    // not in `;` form was rewritten, so `old=$PATH; export PATH; [ "$old" = "$PATH" ]` failed).
+    [InlineData("export PATH")]
+    [InlineData("f() { local PATH; }")]
     public void Transpile_OtherVariables_AreNotPathNormalized(string bash)
         => Assert.DoesNotContain("NormalizePathVariable", PsEmitter.Transpile(bash));
 
@@ -2030,7 +2034,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("echo $1");
 
-        Assert.Equal("Invoke-BashEcho $(if ($global:BashPositional) { $global:BashPositional[0] } else { $args[0] })", result);
+        Assert.Contains("$(if ($global:BashPositional) { $global:BashPositional[0] } else { $args[0] })", result);
     }
 
     [Fact]
@@ -2038,7 +2042,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("echo $9");
 
-        Assert.Equal("Invoke-BashEcho $(if ($global:BashPositional) { $global:BashPositional[8] } else { $args[8] })", result);
+        Assert.Contains("$(if ($global:BashPositional) { $global:BashPositional[8] } else { $args[8] })", result);
     }
 
     [Fact]
@@ -2046,7 +2050,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("echo $0");
 
-        Assert.Equal("Invoke-BashEcho $(if ($global:BashPositional0) { $global:BashPositional0 } else { 'bash' })", result);
+        Assert.Contains("$(if ($global:BashPositional0) { $global:BashPositional0 } else { 'bash' })", result);
     }
 
     [Fact]
@@ -2282,14 +2286,14 @@ public class PsEmitterTests
     {
         // ${10} is the ONLY way to write positional >= 10 — must map to index 9, not $env:10.
         var result = PsEmitter.Transpile("echo ${10}");
-        Assert.Equal("Invoke-BashEcho $(if ($global:BashPositional) { $global:BashPositional[9] } else { $args[9] })", result);
+        Assert.Contains("$(if ($global:BashPositional) { $global:BashPositional[9] } else { $args[9] })", result);
     }
 
     [Fact]
     public void Transpile_BracedPositional11_EmitsPositionalIndex10()
     {
         var result = PsEmitter.Transpile("echo ${11}");
-        Assert.Equal("Invoke-BashEcho $(if ($global:BashPositional) { $global:BashPositional[10] } else { $args[10] })", result);
+        Assert.Contains("$(if ($global:BashPositional) { $global:BashPositional[10] } else { $args[10] })", result);
     }
 
     [Fact]
@@ -3886,9 +3890,9 @@ public class PsEmitterTests
     [Fact]
     public void Transpile_Function_SavesAndRestoresBashPositionalAroundBody()
     {
-        var result = PsBuildTestText.StripFunctionSource(PsEmitter.Transpile("f() { echo $1; }"));
+        var result = PsBuildTestText.StripFunctionSource(PsEmitter.Transpile("f() { echo \"$1\"; }"));
 
-        var expected = $"function f {{ {FnPre}Invoke-BashEcho $(if ($global:BashPositional) {{ $global:BashPositional[0] }} else {{ $args[0] }}){FnPost} }}";
+        var expected = $"function f {{ {FnPre}Invoke-BashEcho \"$(if ($global:BashPositional) {{ $global:BashPositional[0] }} else {{ $args[0] }})\"{FnPost} }}";
         Assert.Equal(expected, result);
     }
 
@@ -4697,6 +4701,73 @@ public class PsEmitterTests
     public void Transpile_LocalOfSubscript_IsAccepted()
     {
         Assert.DoesNotContain("not a valid identifier", PsEmitter.Transpile("f() { local c[7]=8; declare d[7]=8; }") ?? "");
+    }
+
+    // Oracle (bash 5.2): `readonly 1a=3` / `=x` / `"a b"` / `"z;"` name the whole word; the command fails with status 1.
+    // Only `[` was checked, so the others were marked read-only under an impossible name and the status stayed 0.
+    [Theory]
+    [InlineData("readonly 1a=3", "readonly: `1a=3''")]
+    [InlineData("readonly =x", "readonly: `=x''")]
+    [InlineData("readonly \"a b\"", "readonly: `a b''")]
+    [InlineData("readonly ok=1 'z;'", "readonly: `z;''")]
+    [InlineData("readonly a\\;echo", "readonly: `a;echo''")]
+    public void Transpile_ReadonlyOfInvalidName_IsNotAValidIdentifier(string bash, string message)
+    {
+        var ps = PsEmitter.Transpile(bash) ?? "";
+        Assert.Contains(message + ": not a valid identifier", ps);
+        Assert.Contains("$global:LASTEXITCODE = 1", ps);
+    }
+
+    // The reports are the command's stderr: `readonly 1a=3 2>/dev/null` printed them anyway (the redirect was dropped).
+    [Theory]
+    [InlineData("readonly 1a=3 2>/dev/null")]
+    [InlineData("export 1x=2 ok=1 2>/dev/null")]
+    public void Transpile_InvalidIdentifierReport_KeepsTheCommandsRedirect(string bash)
+    {
+        var ps = PsEmitter.Transpile(bash) ?? "";
+        Assert.Matches(@"\. \{ Write-Error '[a-z]+: `1[ax]=[23]'': not a valid identifier' -ErrorAction Continue \} 2>\$null", ps);
+    }
+
+    // `readonly $names`: the emitter cannot know the names, and a function's static readonly set ends with it. Later plain
+    // assignments then ask the run-time set (they were never refused). Scripts without either keep the static check only.
+    [Theory]
+    [InlineData("readonly $names\nx=1", true)]
+    [InlineData("f() { readonly g=1; }\nf\nx=1", true)]
+    [InlineData("readonly a=1\nx=1", false)]
+    [InlineData("f() { local -r q=1; }\nf\nx=1", false)]
+    public void Transpile_AssignmentAfterRunTimeReadonly_AsksTheRunTimeSet(string bash, bool guarded)
+    {
+        var ps = PsEmitter.Transpile(bash) ?? "";
+        Assert.Equal(guarded, ps.Contains("::FirstReadonly('x')", StringComparison.Ordinal));
+    }
+
+    // `readonly $names` with names='a;echo pwned': each FIELD is %q-quoted before the eval (it ran `echo pwned`).
+    [Fact]
+    public void Transpile_ReadonlyOfRunTimeWord_QuotesEachFieldForTheEval()
+    {
+        var ps = PsEmitter.Transpile("readonly $names") ?? "";
+        Assert.Contains("__psbash_declw", ps);
+        Assert.Contains("Invoke-BashPrintf", ps);
+    }
+
+    // `readonly "$w" 2>/dev/null` / `local $n 2>/dev/null`: the run-time declaration keeps the redirect (it was dropped).
+    [Theory]
+    [InlineData("readonly \"$w\" 2>/dev/null")]
+    [InlineData("f() { local $n 2>/dev/null; }")]
+    public void Transpile_RunTimeDeclaration_KeepsItsRedirect(string bash)
+    {
+        var ps = PsEmitter.Transpile(bash) ?? "";
+        Assert.Contains("$__psbash_eval_src", ps);
+        Assert.Contains("} 2>$null", ps);
+    }
+
+    // `readonly x=(1 2) nv y=(3 4)`: every name of the list is read-only, not only the arrays.
+    [Fact]
+    public void Transpile_ReadonlyListWithArray_MarksEveryName()
+    {
+        var ps = PsEmitter.Transpile("readonly x=(1 2) nv y=(3 4)\nnv=x") ?? "";
+        Assert.Contains("MarkReadonly('nv')", ps);
+        Assert.Contains("nv: readonly variable", ps);
     }
 
     [Theory]
@@ -6245,11 +6316,23 @@ public class PsEmitterTests
     }
 
     [Fact]
-    public void Transpile_PositionalVarOutsideQuotes_NoSubexpression()
+    public void Transpile_PositionalVarOutsideQuotes_IsWordSplit()
     {
+        // bash splits an unquoted `$1` on IFS and globs each field, like any unquoted `$x`: `set -- 'a b'; echo $1`
+        // passes TWO args. ps-bash passed one.
         var result = PsEmitter.Transpile("echo $1");
-        Assert.Equal("Invoke-BashEcho $(if ($global:BashPositional) { $global:BashPositional[0] } else { $args[0] })", result);
+        Assert.Contains("ConvertTo-BashWords", result);
+        Assert.Contains("$(if ($global:BashPositional) { $global:BashPositional[0] } else { $args[0] })", result);
+        Assert.DoesNotContain("ConvertTo-BashWords", PsEmitter.Transpile("echo \"$1\""));
     }
+
+    [Theory]
+    [InlineData("for w in $1; do :; done")]
+    [InlineData("printf '%s\\n' $2")]
+    [InlineData("a=($1)")]
+    [InlineData("f() { local $1; }")]
+    public void Transpile_UnquotedPositionalInAWordList_IsWordSplit(string bash)
+        => Assert.Contains("ConvertTo-BashWords", PsEmitter.Transpile(bash));
 
     [Fact]
     public void Transpile_ArgCountInDoubleQuotes_EmitsSubexpression()

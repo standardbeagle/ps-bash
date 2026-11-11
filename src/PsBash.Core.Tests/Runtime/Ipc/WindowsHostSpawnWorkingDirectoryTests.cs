@@ -9,7 +9,7 @@ namespace PsBash.Core.Tests.Runtime.Ipc;
 /// failed with "being used by another process" whenever a host was spawned mid-command (CI, intermittent).
 /// bash on Linux deletes a directory regardless. Hand-written: there is no bash analogue of a spawned host.
 /// </summary>
-[Collection("EnvVar")]   // changes the process-wide current directory
+[Collection(ProcessCwdCollection.Name)]
 public class WindowsHostSpawnWorkingDirectoryTests
 {
     [SkippableFact]
@@ -38,4 +38,15 @@ public class WindowsHostSpawnWorkingDirectoryTests
             try { Directory.Delete(dir, recursive: true); } catch { }
         }
     }
+}
+
+/// <summary>
+/// The test sets the PROCESS-wide current directory: any process another test class spawns meanwhile inherits it and
+/// pins the directory, so the delete failed "being used by another process" in full-suite runs (alone it passed).
+/// It runs with nothing else in parallel.
+/// </summary>
+[CollectionDefinition(Name, DisableParallelization = true)]
+public sealed class ProcessCwdCollection
+{
+    public const string Name = "Process-wide current directory (serial)";
 }

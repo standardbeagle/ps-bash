@@ -351,6 +351,31 @@ building. The Linux side's remaining failures are the known `LsSortTimeDifferent
   builtin-trap-err (errtrace, still XFAIL) expectations re-recorded.
 - XFAIL count after this pass: 419.
 
+### Progress, 2026-11-11 (seventh pass)
+
+- Unquoted positionals (`$1`, `${11}`, `$0`) are word-split and globbed like any unquoted `$x`
+  (`IsPureUnquotedVarWord`): argument lists, `for` lists, array literals, `local $1`, `return $4`. They were passed as
+  ONE word: `for w in $1` looped once over `'x=1 y=2'`, and `local $1` made a variable named `x=1 y=2`.
+- readonly at run time. The emitter's static set cannot follow `readonly $names` (the names are data) or a
+  `readonly` inside a function (its set ended with the function). After either, a plain assignment to a name the
+  static set does not hold asks `BashShellState.FirstReadonly` first (`PsBuild.RuntimeReadonlyGuard`).
+- `readonly a=(1 2) nv c=(3 4)` marks every name. `declare -p nv` of an unset readonly name prints `declare -r nv`.
+- `readonly 1a=3` / `export 1x=2` / `readonly 'a b'` report "not a valid identifier", and the command's redirect
+  applies to the report.
+- Injection fixed: `names='a;echo pwned'; readonly $names` ran `echo pwned`. The run-time word reached the eval
+  unquoted. Each field is now `printf %q`-quoted before the eval.
+- `export PATH` (no value) no longer rewrites PATH: the `;`-normalization runs only on a write. An inherited PATH
+  that was not in `;` form changed, so `old=$PATH; export PATH; [ "$old" = "$PATH" ]` failed.
+- The xcmp scratch tool ran every case in the repo root and left `_tmp/`, `foo.txt`, `F`, `G`, `hello.c`, and others
+  there. It now uses a directory per case. The leftovers are untracked and not committed.
+- Gaps seen, not fixed:
+  - The readonly refusal prefix is `ps-bash: x:`; bash says `bash: line N: x:`.
+  - `readonly "x-y+=1"` takes the dynamic-assignment path and reports no identifier error.
+- Unmarked 4: builtin-vars "Make an existing local variable readonly", explore-parsing "readonly +", assign
+  "readonly $x where x='b c'" and "readonly a=(1 2) no_value c=(3 4) makes 'no_value' readonly". 22 spec files that
+  hold readonly, assignment and positional cases show no other change.
+- XFAIL count after this pass: 415.
+
 ## Suggested order
 
 1. Land A1 and the crash fix once the gate is green.

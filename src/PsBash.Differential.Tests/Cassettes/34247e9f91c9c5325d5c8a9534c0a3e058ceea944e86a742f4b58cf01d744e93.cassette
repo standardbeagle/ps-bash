@@ -1,0 +1,19 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 78
+stdout-length: 82
+stderr-length: 0
+==== SCRIPT ====
+readonly x=(1 2) nv y=(3 4)
+( nv=x ) 2>/dev/null
+echo "s=$?"
+declare -p x nv y
+==== STDOUT ====
+s=1
+declare -ar x=([0]="1" [1]="2")
+declare -r nv
+declare -ar y=([0]="3" [1]="4")
+
+==== STDERR ====
+

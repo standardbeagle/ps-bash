@@ -1,0 +1,17 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 117
+stdout-length: 66
+stderr-length: 0
+==== SCRIPT ====
+set -- 'a;echo pwned' '$(echo pwned2)' '`echo pwned3`'
+printf '[%s]' $1 $2 $3; echo
+for w in $1; do echo "<$w>"; done
+==== STDOUT ====
+[a;echo][pwned][$(echo][pwned2)][`echo][pwned3`]
+<a;echo>
+<pwned>
+
+==== STDERR ====
+

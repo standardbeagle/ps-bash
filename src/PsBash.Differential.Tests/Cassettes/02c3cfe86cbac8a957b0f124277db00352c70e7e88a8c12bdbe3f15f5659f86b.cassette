@@ -1,0 +1,17 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 101
+stdout-length: 25
+stderr-length: 0
+==== SCRIPT ====
+set -- 'a b' 'g*'
+cd "$(mktemp -d)" && touch g1 g2
+printf '[%s]' $1 $2; echo
+printf '[%s]' "$@"; echo
+==== STDOUT ====
+[a][b][g1][g2]
+[a b][g*]
+
+==== STDERR ====
+

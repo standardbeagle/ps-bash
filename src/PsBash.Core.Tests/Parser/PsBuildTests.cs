@@ -284,4 +284,13 @@ public class PsBuildTests
         Assert.Contains("Write-BashHostStderr -Message", ps);
         Assert.DoesNotContain("[Console]", ps);
     }
+
+    [Fact]
+    public void RuntimeReadonlyGuard_RefusesWhenANameIsReadonlyElseAssigns()
+    {
+        string ps = PsBuild.RuntimeReadonlyGuard(["m", "it's"], "$env:m = '1'");
+        Assert.StartsWith("if ($__psbRo = [PsBash.Cmdlets.BashShellState]::FirstReadonly('m', 'it''s')) { ", ps);
+        Assert.Contains("Write-Error ('ps-bash: ' + $__psbRo + ': readonly variable') -ErrorAction Continue; $global:LASTEXITCODE = 1", ps);
+        Assert.EndsWith(" } else { $env:m = '1' }", ps);
+    }
 }

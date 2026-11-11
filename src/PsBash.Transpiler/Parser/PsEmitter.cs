@@ -131,6 +131,12 @@ public static partial class PsEmitter
     [ThreadStatic] private static bool _scriptReadsLastArg;
     /// <summary>Set when an assignment to a readonly variable was emitted: bash drops the rest of that input line.</summary>
     [ThreadStatic] private static bool _readonlyViolation;
+    /// <summary>
+    /// Set once the script makes a name read-only that <see cref="_readonlyVars"/> cannot follow: from a run-time word
+    /// (`readonly $names`) or inside a function (whose static set ends with it). Later plain assignments then also ask
+    /// the run-time set (<see cref="PsBuild.RuntimeReadonlyGuard"/>).
+    /// </summary>
+    [ThreadStatic] private static bool _runtimeReadonly;
     [ThreadStatic] private static bool _scriptPosix;
     [ThreadStatic] private static bool _scriptLastpipe;
 
@@ -734,6 +740,7 @@ public static partial class PsEmitter
         _scriptReadsLastArg = priorReadsLastArg || System.Text.RegularExpressions.Regex.IsMatch(bash, @"\$(_(?![A-Za-z0-9_])|\{_[^A-Za-z0-9_])");
         _scriptReadsStatus = priorReadsStatus || bash.Contains("$?") || bash.Contains("${?");
         var priorReadonly = _readonlyVars;
+        var priorRuntimeReadonly = _runtimeReadonly;
         _readonlyVars = new HashSet<string>(StringComparer.Ordinal);
         _readonlyVars.Add("SHELLOPTS"); _readonlyVars.Add("BASHOPTS");
         var priorNamerefs = _namerefs;
@@ -806,6 +813,7 @@ public static partial class PsEmitter
             _scriptPosix = priorPosix;
             _scriptLastpipe = priorLastpipe;
             _readonlyVars = priorReadonly;
+            _runtimeReadonly = priorRuntimeReadonly;
             _namerefs = priorNamerefs;
             _litAssigned = priorLitAssigned; _pendingNamerefs = priorPendingNamerefs;
             _errexitMode = priorErrexit;
@@ -3461,6 +3469,15 @@ public static partial class PsEmitter
 
     private static string EmitShAssignmentStatement(Command.ShAssignment cmd)
     {
+        string text = EmitShAssignmentStatementCore(cmd);
+        if (!_runtimeReadonly || cmd.IsLocal || cmd.IsExport || cmd.IsDeclare) return text;
+        var unknown = cmd.Pairs.Select(p => ResolveNameref(p.Name)).Select(n => n.Contains('[') ? n[..n.IndexOf('[')] : n)
+            .Where(n => _readonlyVars?.Contains(n) != true).Distinct(StringComparer.Ordinal).ToList();
+        return unknown.Count == 0 ? text : PsBuild.RuntimeReadonlyGuard(unknown, text);
+    }
+
+    private static string EmitShAssignmentStatementCore(Command.ShAssignment cmd)
+    {
         string text = EmitShAssignment(cmd);
         // bash: a bare assignment resets $_ to empty.
         if (_scriptReadsLastArg && !cmd.IsLocal && !cmd.IsExport)
@@ -3701,8 +3718,9 @@ public static partial class PsEmitter
         // re-point it so a script that assigns HOME sees it (`HOME=/home/bob; echo ~` prints /home/bob).
         if (!cmd.IsLocal && cmd.Pairs.Any(p => p.Name == "HOME" && p.ArrayValue is null && p.Op == AssignOp.Equal))
             sb.Append("; Microsoft.PowerShell.Utility\\Set-Variable -Name HOME -Value $env:HOME -Option ReadOnly,AllScope -Scope Global -Force");
-        // A script writes PATH with `:` separators (`PATH=_tmp:$PATH`); Windows lookup needs `;`.
-        if (cmd.Pairs.Any(p => p.Name == "PATH" && p.ArrayValue is null))
+        // A script writes PATH with `:` separators (`PATH=_tmp:$PATH`); Windows lookup needs `;`. Only a WRITE:
+        // a bare `export PATH` leaves the value as it was (bash), even when the inherited PATH is not in `;` form.
+        if (cmd.Pairs.Any(p => p.Name == "PATH" && p.ArrayValue is null && p.Value is not null))
             sb.Append("; ").Append(PsBuild.NormalizePathVariable);
         // `export X=1` / `export X`: `declare -p X` shows the x attribute.
         if (cmd.IsExport && !cmd.IsLocal && _declarePrintMode)
@@ -3710,13 +3728,16 @@ public static partial class PsEmitter
                 if (pair.ArrayValue is null && !pair.Name.Contains('['))
                     sb.Append("; [PsBash.Cmdlets.BashShellState]::MarkAttribute(").Append(PsBuild.SingleQuote(pair.Name)).Append(", 'x')");
         // `declare -r a=(x y)` / `readonly a=(...)`: the array is read-only too (`${a@a}` says `ar`).
+        // Every name of the list is read-only, scalars and bare names too (`readonly a=(1 2) no_value c=3`).
         if (cmd.IsReadonly)
             foreach (var pair in cmd.Pairs)
-                if (pair.ArrayValue is not null)
-                {
-                    sb.Append("; [PsBash.Cmdlets.BashShellState]::MarkReadonly(").Append(PsBuild.SingleQuote(pair.Name)).Append(")");
-                    if (!cmd.IsLocal) _readonlyVars?.Add(pair.Name);
-                }
+            {
+                if (cmd.IsLocal && pair.ArrayValue is null) continue; // `local -r x=1` is refused statically, in its function
+                string roPair = pair.Name.Contains('[') ? pair.Name[..pair.Name.IndexOf('[')] : pair.Name;
+                sb.Append("; [PsBash.Cmdlets.BashShellState]::MarkReadonly(").Append(PsBuild.SingleQuote(roPair)).Append(")");
+                if (!cmd.IsLocal) _readonlyVars?.Add(roPair);
+                if (!cmd.IsLocal && _functionDepth > 0) _runtimeReadonly = true;
+            }
         if (badSubscript) sb.Append("; ").Append(PsBuild.SetStatus(1));
         return sb.ToString();
     }
@@ -3754,8 +3775,16 @@ public static partial class PsEmitter
             }
             if (w.Parts.All(IsExpansion))
             {
+                // The FIELDS of `$names` are names, never code: eval gets each one %q-quoted
+                // ("$(for w in $names; do printf '%q ' "$w"; done)"), so `a;echo x` stays one word.
                 anyDynamic = true;
-                evalWords.Add(w);
+                const string fieldVar = "__psbash_declw";
+                var quoteField = new Command.Simple(
+                    [new CompoundWord([new WordPart.Literal("printf")]), new CompoundWord([new WordPart.SingleQuoted("%q ")]),
+                     new CompoundWord([new WordPart.DoubleQuoted([new WordPart.SimpleVarSub(fieldVar)])])],
+                    ImmutableArray<EnvPair>.Empty, ImmutableArray<Redirect>.Empty);
+                var fields = new Command.ForIn(fieldVar, [w], quoteField, ExplicitIn: true);
+                evalWords.Add(new CompoundWord([new WordPart.DoubleQuoted([new WordPart.CommandSub(fields)])]));
                 continue;
             }
             if (w.Parts.Length == 1 && w.Parts[0] is WordPart.DoubleQuoted dq && !dq.Parts.IsDefaultOrEmpty && dq.Parts.All(IsExpansion))
@@ -3770,7 +3799,12 @@ public static partial class PsEmitter
             return false;
         }
         if (!anyDynamic) return false;
+        if (name == "readonly") _runtimeReadonly = true; // `readonly $names`: the names are known only at run time
         result = EmitEval(evalWords.ToImmutable());
+        // `readonly $names 2>/dev/null`: the redirect belongs to the declaration the eval runs.
+        var redirects = cmd.Redirects;
+        if (!redirects.IsDefaultOrEmpty)
+            result = PsBuild.WithRedirectTail(result, tail => AppendRedirectTail(tail, redirects));
         return true;
     }
 
@@ -3855,13 +3889,18 @@ public static partial class PsEmitter
             errs.Append("Write-Error ").Append(PsBuild.SingleQuote(cname + ": `" + text + "': not a valid identifier")).Append(" -ErrorAction Continue; ");
         }
         if (errs.Length == 0) return false;
+        // The reports are the command's own stderr: `readonly 1a=3 2>/dev/null` is silent.
+        var redirects = cmd.Redirects;
+        string reported = redirects.IsDefaultOrEmpty
+            ? errs.ToString()
+            : PsBuild.WithRedirectTail(errs.ToString().TrimEnd(' ', ';'), tail => AppendRedirectTail(tail, redirects)) + "; ";
         if (keep.Count == 1)
         {
-            result = errs + PsBuild.SetStatus(1);
+            result = reported + PsBuild.SetStatus(1);
             return true;
         }
         var rest = EmitSimple(cmd with { Words = [.. keep] });
-        result = errs + rest + "; " + PsBuild.SetStatus(1);
+        result = reported + rest + "; " + PsBuild.SetStatus(1);
         return true;
     }
     [ThreadStatic]
@@ -4922,6 +4961,7 @@ public static partial class PsEmitter
     /// </summary>
     private static string EmitReadonly(Command.Simple cmd)
     {
+        if (_functionDepth > 0) _runtimeReadonly = true; // the function's static readonly set ends with it
         var roSb = new StringBuilder();
         bool roBad = false;
         for (int i = 1; i < cmd.Words.Length; i++)
@@ -4930,11 +4970,13 @@ public static partial class PsEmitter
             var val = GetLiteralValue(word);
             if (val is not null && val.StartsWith('-')) continue; // flags like -p, -r
             // `readonly b[7]=8`: readonly takes no subscript. (`[7]` lexes as a glob part.)
-            string? roRaw = val ?? (word.Parts.All(p => p is WordPart.Literal or WordPart.GlobPart)
-                ? string.Concat(word.Parts.Select(p => p is WordPart.Literal l ? l.Value : ((WordPart.GlobPart)p).Pattern)) : null);
-            if (roRaw is not null && (roRaw.IndexOf('=') is var eqAt && eqAt < 0 ? roRaw : roRaw[..eqAt]) is var roNm && roNm.Contains('['))
+            string? roRaw = val ?? TryGetVarOperandName(word); // static text, quotes and escapes removed (`"a b"`, `a\;b`)
+            if (roRaw is not null && (roRaw.IndexOf('=') is var eqAt && eqAt < 0 ? roRaw : roRaw[..eqAt]) is var roNm
+                && (roNm.Contains('[') || !IsValidVarName(eqAt >= 0 && roNm.EndsWith('+') ? roNm[..^1] : roNm)))
             {
-                roSb.Append("Write-Error ").Append(PsBuild.SingleQuote("readonly: `" + roNm.TrimEnd('+') + "': not a valid identifier")).Append(" -ErrorAction Continue; ");
+                // bash names the subscripted NAME (`b[7]`), and otherwise the whole word (`1a=3`, `a;echo`, `=x`).
+                string shown = roNm.Contains('[') ? roNm.TrimEnd('+') : roRaw;
+                roSb.Append("Write-Error ").Append(PsBuild.SingleQuote("readonly: `" + shown + "': not a valid identifier")).Append(" -ErrorAction Continue; ");
                 roBad = true;
                 continue;
             }
@@ -7527,7 +7569,8 @@ public static partial class PsEmitter
     /// variable reference eligible for RC-7 word-splitting: a lone
     /// <see cref="WordPart.SimpleVarSub"/>, or a suffix-less
     /// <see cref="WordPart.BracedVarSub"/>, whose name is an ordinary variable
-    /// (not a bash special parameter).
+    /// (not a bash special parameter), or a positional parameter: <c>$1</c> / <c>${10}</c> holding <c>a b</c> is two
+    /// words to bash (as an argument, a for-list item, an array element); it reached commands as one.
     /// </summary>
     private static bool IsPureUnquotedVarWord(CompoundWord word)
     {
@@ -7541,7 +7584,7 @@ public static partial class PsEmitter
             _ => null!,
         };
 
-        return name is not null && IsOrdinaryVarName(name);
+        return name is not null && (IsOrdinaryVarName(name) || name.Length > 0 && name.All(char.IsAsciiDigit));
     }
 
     /// <summary>

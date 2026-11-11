@@ -73,6 +73,15 @@ public static class BashShellState
 
     internal static bool IsReadonly(string name) { lock (ReadonlyNames) return ReadonlyNames.Contains(name); }
 
+    /// <summary>The first of <paramref name="names"/> that is read-only, or null (the emitter's run-time assignment guard).</summary>
+    public static string? FirstReadonly(params string[] names)
+    {
+        lock (ReadonlyNames)
+            foreach (var n in names)
+                if (ReadonlyNames.Contains(n)) return n;
+        return null;
+    }
+
     /// <summary>The <c>$global:</c> variables that are shell state (see the class summary).</summary>
     private static readonly string[] GlobalNames =
     [

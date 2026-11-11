@@ -438,6 +438,16 @@ public static class PsBuild
         + "& $global:__BashTrapERR; $global:LASTEXITCODE = $__psbErr }; ";
 
     /// <summary>
+    /// A plain assignment to <paramref name="names"/> in a script that made names read-only at run time
+    /// (<c>readonly $names</c>, <c>readonly</c> in a function): when one of them is read-only now, report
+    /// <c>NAME: readonly variable</c> and set status 1 instead of assigning.
+    /// </summary>
+    public static string RuntimeReadonlyGuard(IEnumerable<string> names, string assignment) =>
+        "if ($__psbRo = [PsBash.Cmdlets.BashShellState]::FirstReadonly(" + string.Join(", ", names.Select(SingleQuote))
+        + ")) { Write-Error ('ps-bash: ' + $__psbRo + ': readonly variable') -ErrorAction Continue; $global:LASTEXITCODE = 1 } else { "
+        + assignment + " }";
+
+    /// <summary>
     /// Run the <c>trap ... DEBUG</c> action before a command. The action sees the command's line as <c>$LINENO</c>,
     /// does not itself trigger DEBUG, and leaves the status the command will be run with unchanged.
     /// <paramref name="errexitExit"/> (a script that can turn on <c>set -e</c>): an action that fails while errexit is

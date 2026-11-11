@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 43
+stdout-length: 9
+stderr-length: 0
+==== SCRIPT ====
+IFS=:
+set -- 'p:q r'
+printf '[%s]' $1; echo
+==== STDOUT ====
+[p][q r]
+
+==== STDERR ====
+
