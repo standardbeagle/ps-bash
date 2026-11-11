@@ -195,11 +195,68 @@ public class ShellArgsTests
     [Fact]
     public void Parse_UnknownFlags_ReportsError()
     {
-        var result = ShellArgs.Parse(["--verbose", "-x", "-c", "echo hi"]);
+        var result = ShellArgs.Parse(["--verbose", "-k", "-c", "echo hi"]);
 
         Assert.Equal("echo hi", result.Command);
         Assert.False(result.Interactive);
-        Assert.Equal("unsupported option '-x'", result.Error);
+        Assert.Equal("unsupported option '-k'", result.Error);
+    }
+
+    // Oracle: `bash -x -c 'echo traced'` traces; `bash -c -e 'false; echo ce'` is status 1 (options may follow -c,
+    // the first non-option word is the command; `-e` used to BE the command, status 127).
+    [Theory]
+    [InlineData(new[] { "-x", "-c", "echo hi" }, "set -x")]
+    [InlineData(new[] { "-c", "-e", "false; echo ce" }, "set -e")]
+    [InlineData(new[] { "-c", "-x", "-u", "true" }, "set -x; set -u")]
+    [InlineData(new[] { "-xe", "-c", "true" }, "set -x; set -e")]
+    public void Parse_SetOptionFlags_AnywhereBeforeTheCommand_JoinThePrelude(string[] argv, string prelude)
+    {
+        var r = ShellArgs.Parse(argv);
+        Assert.Null(r.Error);
+        Assert.Equal(prelude, r.Prelude);
+        Assert.Equal(argv[^1], r.Command);
+    }
+
+    // Oracle (bash 5.2): `-c -- 'echo two'` and `-c - 'echo one'` run the command; `+c 'echo hi'` is accepted;
+    // `-oo errexit noglob` and `-eo noglob` give each bundled `o` the next word.
+    [Theory]
+    [InlineData("-c|--|echo two", "echo two", null)]
+    [InlineData("-c|-|echo one", "echo one", null)]
+    [InlineData("+c|echo hi", "echo hi", null)]
+    [InlineData("-oo|errexit|noglob|-c|true", "true", "set -o errexit; set -o noglob")]
+    [InlineData("-eo|noglob|-c|true", "true", "set -e; set -o noglob")]
+    [InlineData("-c|-o|pipefail|true", "true", "set -o pipefail")]
+    public void Parse_DashCForms_MatchBash(string argvText, string command, string? prelude)
+    {
+        var r = ShellArgs.Parse(argvText.Split('|'));
+        Assert.Null(r.Error);
+        Assert.Equal(command, r.Command);
+        Assert.Equal(prelude, r.Prelude);
+    }
+
+    // Oracle: `bash -c -z 'echo z'` is "-z: invalid option", status 2. ps-bash ran `-z` as the command (127).
+    [Theory]
+    [InlineData("-c|-z|echo z")]
+    [InlineData("-c|---|echo three")]
+    [InlineData("-c|-z")]
+    public void Parse_UnknownOptionAfterDashC_IsAnError(string argvText)
+    {
+        var r = ShellArgs.Parse(argvText.Split('|'));
+        Assert.NotNull(r.Error);
+        Assert.Null(r.Command);
+    }
+
+    // Oracle: `bash -n -c 'echo x'` runs nothing (status 0); `bash -n s.sh` is a syntax check, valid without -c.
+    [Theory]
+    [InlineData("-n -c true")]
+    [InlineData("-c -n true")]
+    [InlineData("-n s.sh")]
+    public void Parse_NoExecFlag_SetsNoExecWithoutAPrelude(string argvText)
+    {
+        var r = ShellArgs.Parse(argvText.Split(' '));
+        Assert.Null(r.Error);
+        Assert.True(r.NoExec);
+        Assert.Null(r.Prelude);
     }
 
     [Fact]

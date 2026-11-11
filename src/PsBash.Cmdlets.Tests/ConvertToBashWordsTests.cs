@@ -38,6 +38,49 @@ public class ConvertToBashWordsTests : IClassFixture<SharedPwshFixture>
         Assert.Equal(expectedJoined, string.Join("|", words));
     }
 
+    // Unquoted $* / $@ / `=$*=` / `a$x` (bash 5.2, oracle-checked): values joined with IFS[0], affixes glued, then split.
+    // `[]` is the empty-field marker, `#` separates fields.
+    [Theory]
+    [InlineData("", "", "a b|c", null, "a#b#c")]
+    [InlineData("=", "=", "a b|c", null, "=a#b#c=")]
+    [InlineData("=", "=", "|", null, "=#=")]
+    [InlineData("", "", "|", null, "")]
+    [InlineData("", "", "|", "x", "[]")]
+    [InlineData("=", "=", "|", "x", "=#=")]
+    [InlineData("", "", "a||b", "x", "a#[]#b")]
+    [InlineData("", "", "a||b", "", "a#b")]
+    [InlineData("=", "=", "a||b", "", "=a#b=")]
+    [InlineData("=", "=", "|", "", "=#=")]
+    [InlineData("", "", "|", "", "")]
+    [InlineData("=", "=", "a b|", null, "=a#b#=")]
+    [InlineData("=", "=", null, null, "==")]
+    [InlineData("a", "", "1 2", " ", "a1#2")]
+    public void AffixFields_JoinsWithFirstIfsCharThenSplits(string prefix, string suffix, string? values, string? ifs, string expected)
+    {
+        var list = values is null ? Array.Empty<string?>() : values.Split('|');
+
+        var fields = BashWordSplitter.AffixFields(prefix, suffix, list, ifs);
+
+        Assert.Equal(expected, string.Join("#", fields.Select(f => f.Length == 0 ? "[]" : f)));
+    }
+
+    [Fact]
+    public void Cmdlet_PrefixSuffixFields_SplitsLikeBash()
+    {
+        // Default IFS (the test runspace leaves it unset; it is process-wide, so tests do not change it).
+        var r = Run("(@(ConvertTo-BashWords -Prefix '=' -Suffix '=' -Fields @('a b', '')) | ForEach-Object { '<' + $_ + '>' }) -join ''").AssertSuccess();
+
+        Assert.Equal("<=a><b><=>", r.Stdout);
+    }
+
+    [Fact]
+    public void Cmdlet_NoFields_IsTheAffixesAlone()
+    {
+        var r = Run("@(ConvertTo-BashWords -Prefix '=' -Suffix '=' -Fields @()) -join '|'").AssertSuccess();
+
+        Assert.Equal("==", r.Stdout);
+    }
+
     [Theory]
     [InlineData("*", true)]
     [InlineData("a?c", true)]

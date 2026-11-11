@@ -45,6 +45,25 @@ public class BashSourceTests
         Assert.Equal("", r.Stderr);
     }
 
+    // A bare `$BASH_SOURCE` (and `${BASH_SOURCE##*/}`) is element 0; it read an unset environment variable.
+    [SkippableFact]
+    public async Task BashSource_BareName_IsElementZero()
+    {
+        var r = await RunAsync(
+            "[ \"$BASH_SOURCE\" = \"$0\" ] && echo same || echo different; g() { [ \"${BASH_SOURCE##*/}\" = \"${0##*/}\" ] && echo in-fn; }; g");
+        Assert.Equal("same\nin-fn\n", r.Stdout.Replace("\r\n", "\n"));
+    }
+
+    // FUNCNAME ends with `main` only in a script FILE; `bash -c` has no main frame (it printed `2 f main`).
+    [SkippableTheory]
+    [InlineData(PsBashMode.M3_FileArg, "2 f main\n")]
+    [InlineData(PsBashMode.M1_CFlag, "1 f\n")]
+    public async Task FuncName_MainFrame_OnlyInAScriptFile(PsBashMode mode, string expected)
+    {
+        var r = await RunAsync("f() { echo \"${#FUNCNAME[@]} ${FUNCNAME[*]}\"; }; f", mode);
+        Assert.Equal(expected, r.Stdout.Replace("\r\n", "\n"));
+    }
+
     [SkippableFact]
     public async Task BashSource_FallbackToZero_StillGivesTheScript()
     {

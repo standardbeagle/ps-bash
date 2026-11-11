@@ -137,12 +137,12 @@ public class InvokeBashXargsCommandTests : IClassFixture<SharedPwshFixture>
     [Fact]
     public void Xargs_TraceFlag_EchoesCommandToStderr()
     {
-        // -t: command line is echoed to stderr before each invocation.
-        // We can't capture stderr cleanly via PowerShell SDK, but we can
-        // still assert the command produced expected stdout.
-        var (result, _) = Run("'hello' | Invoke-BashXargs -t echo");
-        var joined = JoinBashText(result);
-        Assert.Contains("hello", joined);
+        // -t: the command line goes to stderr before each invocation — the error stream, not
+        // Console.Error (which `2>/dev/null` / `2>&1` could not reach), and never stdout.
+        var r = CmdResult.Run(_fixture.AcquireFresh(), "'hello' | Invoke-BashXargs -t echo");
+        Assert.Equal(0, r.ExitCode);
+        Assert.Equal(new[] { "hello" }, r.Lines.Select(l => l.TrimEnd('\n')).ToArray());
+        Assert.Contains("echo hello", r.Stderr, StringComparison.Ordinal);
     }
 
     [Fact]

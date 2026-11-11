@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 41
+stdout-length: 4
+stderr-length: 0
+==== SCRIPT ====
+x=; for i in a$x $x; do echo "[$i]"; done
+==== STDOUT ====
+[a]
+
+==== STDERR ====
+

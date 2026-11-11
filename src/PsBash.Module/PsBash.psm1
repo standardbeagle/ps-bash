@@ -96,8 +96,9 @@ function Get-BashFuncNames {
         $c = $_.InvocationInfo.MyCommand
         $c -and $c.CommandType -eq 'Function' -and -not $c.Module -and $c.Name -and $c.Name -notlike 'Invoke-Bash*' -and $c.Name -ne 'prompt'
     } | ForEach-Object { $_.InvocationInfo.MyCommand.Name })
-    # Inside any function the outermost frame is the script itself, named main (empty at top level).
-    if ($names.Count -gt 0) { $names += 'main' }
+    # Inside a function run from a script FILE the outermost frame is the script itself, named main (empty at top
+    # level). `bash -c` and the interactive shell have no such frame (BASH_SOURCE is empty there): FUNCNAME is just `f`.
+    if ($names.Count -gt 0 -and @($global:BASH_SOURCE).Count -gt 0) { $names += 'main' }
     $names
 }
 
@@ -2853,7 +2854,9 @@ function Invoke-BashBackground {
     $status = [hashtable]::Synchronized(@{ Code = 0; At = 0L })
     $wrapped = @'
 param($__bgStatus, $__bgRestore)
-$__bgBefore = if ($__bgRestore) { [Environment]::GetEnvironmentVariables() } else { @{} }
+# A subshell body's state restore must not touch the process-wide variables the parent shares (BashShellState.Restore).
+$global:__psbashBgRunspace = $true
+$__bgBefore =if ($__bgRestore) { [Environment]::GetEnvironmentVariables() } else { @{} }
 $__bgOk = $false
 try {
 '@ + "`n" + $Command.ToString() + "`n" + @'

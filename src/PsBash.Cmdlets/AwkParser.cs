@@ -166,10 +166,18 @@ internal sealed class AwkParser
 
         // pattern [ action ]
         AwkExpr pattern = ParseExpr();
+        AwkExpr? endPattern = null;
+        if (Is(TokKind.Comma))
+        {
+            // Range pattern `start, end`: a newline may follow the comma.
+            Advance();
+            SkipNewlines();
+            endPattern = ParseExpr();
+        }
         BlockStmt? action = null;
         if (Is(TokKind.LBrace)) action = ParseBlock();
-        var kind = pattern is RegexLit ? RuleKind.Regex : RuleKind.Expr;
-        return new AwkRule { Kind = kind, Pattern = pattern, Action = action };
+        var kind = endPattern is not null ? RuleKind.Range : pattern is RegexLit ? RuleKind.Regex : RuleKind.Expr;
+        return new AwkRule { Kind = kind, Pattern = pattern, EndPattern = endPattern, Action = action };
     }
 
     // ── statements ───────────────────────────────────────────────────────────

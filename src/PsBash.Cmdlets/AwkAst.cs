@@ -90,12 +90,13 @@ internal sealed class AwkFunction
 
 // ── Program structure ──────────────────────────────────────────────────────
 
-internal enum RuleKind { Begin, End, Always, Expr, Regex }
+internal enum RuleKind { Begin, End, Always, Expr, Regex, Range }
 
 internal sealed class AwkRule
 {
     public RuleKind Kind;
-    public AwkExpr? Pattern;     // for Expr/Regex
+    public AwkExpr? Pattern;     // for Expr/Regex; the start pattern of a Range
+    public AwkExpr? EndPattern;  // Range only: `start, end`
     public BlockStmt? Action;    // null = default { print $0 }
 }
 

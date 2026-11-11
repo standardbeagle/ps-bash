@@ -46,6 +46,12 @@ internal sealed class AwkMachine
     /// <summary>Runs shell command lines for <c>cmd | getline</c> and <c>system()</c>.</summary>
     public AwkShell? Shell { get; set; }
 
+    /// <summary>
+    /// Where <c>"/dev/stderr"</c> and the stderr of <c>print | cmd</c>, <c>cmd | getline</c> and <c>system()</c> go.
+    /// The cmdlet sets the error stream so <c>2&gt; f</c> / <c>2&gt;&amp;1</c> see it; called on the cmdlet thread only.
+    /// </summary>
+    public Action<string> WriteStderr { get; set; } = static s => Console.Error.Write(s);
+
     public bool Exited { get; private set; }
     public int ExitCode { get; private set; }
 
@@ -98,6 +104,7 @@ internal sealed class AwkMachine
             {
                 case RuleKind.Always: match = true; break;
                 case RuleKind.Regex: match = Eval(rule.Pattern!).ToBool(); break;
+                case RuleKind.Range: match = MatchRange(rule); break;
                 default: match = Eval(rule.Pattern!).ToBool(); break;
             }
             if (!match) continue;
@@ -110,6 +117,23 @@ internal sealed class AwkMachine
             catch (NextFileSignal) { return; }
             catch (ExitSignal) { Exited = true; return; }
         }
+    }
+
+    // Open `start, end` ranges. Kept here, not on the rule, so a program reused across runs starts closed.
+    private HashSet<AwkRule>? _openRanges;
+
+    // POSIX: a range matches from a record matching start through the next record matching end, inclusive;
+    // the end pattern is tested on the start record too, so `/x/,/x/` matches single records.
+    private bool MatchRange(AwkRule rule)
+    {
+        _openRanges ??= new HashSet<AwkRule>();
+        if (!_openRanges.Contains(rule))
+        {
+            if (!Eval(rule.Pattern!).ToBool()) return false;
+            _openRanges.Add(rule);
+        }
+        if (Eval(rule.EndPattern!).ToBool()) _openRanges.Remove(rule);
+        return true;
     }
 
     public void RunEnd()
@@ -189,10 +213,10 @@ internal sealed class AwkMachine
         if (kind == RedirKind.Pipe)
         {
             FlushAllOutputs(); // gawk flushes everything before it starts a command
-            sink = new AwkPipeSink(name, Shell, _stdout);
+            sink = new AwkPipeSink(name, Shell, _stdout, WriteStderr);
         }
         else if (name is "/dev/stdout" or "-" or "/dev/fd/1") sink = new AwkStdoutSink(_stdout);
-        else if (name is "/dev/stderr" or "/dev/fd/2") sink = new AwkStderrSink();
+        else if (name is "/dev/stderr" or "/dev/fd/2") sink = new AwkStderrSink(WriteStderr);
         else if (FileSystemHelpers.IsNullDevice(name)) sink = new AwkNullSink();
         else sink = AwkFileSink.Open(name, ResolvePath(name), append: kind == RedirKind.Append);
 
@@ -894,7 +918,7 @@ internal sealed class AwkMachine
         if (_cmdStreams.TryGetValue(command, out var open)) return open;
         FlushAllOutputs(); // the command may read what this program just wrote
         var stream = Shell?.Start(command);
-        if (stream is not null) _cmdStreams[command] = stream;
+        if (stream is not null) { stream.WriteStderr = WriteStderr; _cmdStreams[command] = stream; }
         return stream;
     }
 
@@ -946,7 +970,7 @@ internal sealed class AwkMachine
             return AwkValue.Number(-1);
         }
         if (r.Stdout.Length > 0) _stdout.WriteThrough(r.Stdout.Replace("\r\n", "\n"));
-        if (r.Stderr.Length > 0) Console.Error.Write(r.Stderr);
+        if (r.Stderr.Length > 0) WriteStderr(r.Stderr.Replace("\r\n", "\n"));
         return AwkValue.Number(r.TimedOut ? 124 : r.ExitCode);
     }
 

@@ -755,7 +755,8 @@ usage rc=125
 ## END
 
 #### wait -n returns the status of the next job to finish
-(sleep 0.4; exit 3) &
+# The gap absorbs a second pooled runspace starting up under parallel load (0.3 s flipped the order).
+(sleep 1.5; exit 3) &
 (sleep 0.1; exit 5) &
 wait -n; echo "first rc=$?"
 wait -n; echo "second rc=$?"
@@ -779,6 +780,7 @@ declare rc=0
 g main 2
 g h 3
 ## END
+## real-launcher
 
 #### wait reports the exit status a background group chose with exit
 { exit 4; } & r=$!

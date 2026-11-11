@@ -341,6 +341,13 @@ public static class PsBuild
         // PowerShell inside `if cd DIR; then …`. The subexpression form survives it.
         "(& { " + VoidStatement(emittedCmd) + "; $global:LASTEXITCODE " + (negate ? "-ne" : "-eq") + " 0 })";
 
+    /// <summary>
+    /// A shell-reported error line (<c>ps-bash: : command not found</c>) on the PowerShell error stream, so
+    /// <c>2&gt;$null</c> / <c>2&gt;&amp;1</c> / <c>2&gt; f</c> see it. <c>[Console]::Error</c> bypassed every redirect.
+    /// </summary>
+    public static string StderrLine(string message) =>
+        "Write-Error -Message " + SingleQuote(message) + " -ErrorAction Continue";
+
     // ──────────────────────── Exit-code propagation (&& / || chains) ───────────────────
 
     /// <summary>
@@ -428,7 +435,9 @@ public static class PsBuild
     /// <summary>The value of <c>$-</c>: the single-letter options currently on, in bash's order.</summary>
     public const string ShellFlagsExpr =
         "$f = ''; if ($global:__BashErrexit) { $f += 'e' }; if ($global:__BashNoglob) { $f += 'f' }; $f += 'h'; "
-        + "if ($global:__BashNounset) { $f += 'u' }; $f += 'B'; if ($global:__BashNoclobber) { $f += 'C' }; $f";
+        + "if ($global:__BashNounset) { $f += 'u' }; if ($global:__BashXtrace) { $f += 'x' }; $f += 'B'; if ($global:__BashNoclobber) { $f += 'C' }; "
+        // `c` under `bash -c` (last, as in bash's `hBCc`): the launcher's PSBASH_DASH_C mark, never inherited by a nested shell.
+        + "if ($env:PSBASH_DASH_C -eq '1') { $f += 'c' }; $f";
 
     /// <summary>The value of <c>$SHELLOPTS</c>: the <c>set -o</c> options currently on, alphabetical, colon-joined.</summary>
     public const string ShellOptsExpr =
@@ -758,11 +767,13 @@ public static class PsBuild
     /// never clobbers its parent's stdin. The result is a statement list for the inside of a
     /// <c>&amp; { … }</c> block — the block is what receives the pipeline.
     /// </summary>
-    public static string StdinScope(string body) =>
-        "$__psbash_stdin_prev = Get-Variable -Name __BashStdIn -Scope Global -ValueOnly -ErrorAction SilentlyContinue; "
+    /// <param name="saveVar">The variable that holds the previous queue. A DOT-SOURCED scope shares its caller's
+    /// variables, so it needs a name of its own or a nested one overwrites the outer save.</param>
+    public static string StdinScope(string body, string saveVar = "__psbash_stdin_prev") =>
+        "$" + saveVar + " = Get-Variable -Name __BashStdIn -Scope Global -ValueOnly -ErrorAction SilentlyContinue; "
         + "$global:__BashStdIn = [System.Collections.Generic.Queue[object]]::new(); "
         + "foreach ($__psbash_stdin_line in $input) { $global:__BashStdIn.Enqueue($__psbash_stdin_line) }; "
-        + "try { " + body + " } finally { $global:__BashStdIn = $__psbash_stdin_prev }";
+        + "try { " + body + " } finally { $global:__BashStdIn = $" + saveVar + " }";
 
     /// <summary>
     /// <see cref="InputRedirectGuard"/> without its own scope, for a loop whose variables must stay in the caller's scope
@@ -947,6 +958,10 @@ public static class PsBuild
                 // Outside a function it is unset: empty, or "unbound variable" under `set -u`.
                 return "$($__psbash_fn = @(Get-BashFuncNames)[0]; if ($null -eq $__psbash_fn -and $global:__BashNounset) { "
                     + ParamErrorThrowStatements(SingleQuote("FUNCNAME: "), "'unbound variable'") + " }; $__psbash_fn)";
+            case "BASH_SOURCE":
+                // A bare `$BASH_SOURCE` / `${BASH_SOURCE##*/}` is element 0: the running script file ('' under -c).
+                // It read the (unset) environment variable of that name.
+                return "$(@($global:BASH_SOURCE)[0])";
             case "$":
                 return braced ? "${PID}" : "$PID";
             case "!":

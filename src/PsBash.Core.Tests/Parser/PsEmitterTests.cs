@@ -240,6 +240,73 @@ public class PsEmitterTests
         Assert.Contains(shown + ": ", ps);
     }
 
+    // `… | eval "$c"` emitted eval's statement list as a bare pipeline element (the whole script failed to parse);
+    // it is now a block that turns the piped records into a stdin scope.
+    [Theory]
+    [InlineData("echo a | eval \"$c\" | wc -l")]
+    [InlineData("echo a | eval 'x=1; echo $x'")]
+    public void Transpile_EvalAsPipeStage_IsAStdinScopeBlock(string src)
+    {
+        var ps = PsEmitter.Transpile(src)!;
+        Assert.Contains("| & { $__psbash_stdin_prev = ", ps);
+        Assert.DoesNotContain("| $__psbash_eval_src", ps);
+        Assert.DoesNotContain("| $env:x", ps);
+    }
+
+    // `eval "$c" <<< q` keeps the current shell (dot-sourced) with a save variable of its own (nesting shares the scope).
+    [Fact]
+    public void Transpile_EvalWithHereString_IsADotSourcedStdinScope()
+    {
+        var ps = PsEmitter.Transpile("eval \"$c\" <<< q")!;
+        Assert.Contains("| Emit-BashLine | . { $__psbash_evin_prev", ps);
+    }
+
+    // The runtime eval transpiles its text in a stdin scope whenever one is active.
+    [Fact]
+    public void Transpile_RuntimeEval_PassesTheActiveStdinScope()
+        => Assert.Contains("($null -ne (Get-Variable -Name __BashStdIn -Scope Global", PsEmitter.Transpile("eval \"$c\"")!);
+
+    // `''` as a command: the message went to [Console]::Error, which `2>/dev/null` cannot drop.
+    [Fact]
+    public void Transpile_EmptyQuotedCommand_ReportsOnTheErrorStream()
+    {
+        var ps = PsEmitter.Transpile("{ ''; } 2>/dev/null")!;
+        Assert.Contains("Write-Error -Message 'ps-bash: : command not found' -ErrorAction Continue; $global:LASTEXITCODE = 127", ps);
+        Assert.DoesNotContain("[Console]::Error", ps);
+    }
+
+    // A variable ending a "…" part, text glued after the quote: "$env:yx" read another (unset) variable.
+    [Theory]
+    [InlineData("echo \"$y\"x", "${env:y}x")]
+    [InlineData("echo \"${y}\"_z", "${env:y}_z")]
+    [InlineData("echo $y'x'", "${env:y}x")]
+    [InlineData("echo \"$y\"\"x\"", "${env:y}x")]
+    [InlineData("for i in a\"$y\"b; do :; done", "a${env:y}b")]
+    public void Transpile_QuotedVarThenTextAfterTheQuote_BracesTheVariable(string src, string expected)
+    {
+        var ps = PsEmitter.Transpile(src)!;
+        Assert.Contains(expected, ps);
+        Assert.DoesNotContain("$env:yx", ps);
+    }
+
+    // `for i in =$*=` / `for i in a$x` single-quoted the item: the loop ran once over the literal PS text.
+    [Theory]
+    [InlineData("for i in =$*=; do echo $i; done", "'=$(if")]
+    [InlineData("for i in a$x; do echo $i; done", "'a$env:x'")]
+    [InlineData("for i in a$x b; do echo $i; done", "'a$env:x'")]
+    [InlineData("for i in =$2=; do echo $i; done", "'=$(if")]
+    public void Transpile_ForListExpansionWithText_IsSplitByConvertToBashWords(string src, string leaked)
+    {
+        var ps = PsEmitter.Transpile(src)!;
+        Assert.Contains("ConvertTo-BashWords -Prefix ", ps);
+        Assert.DoesNotContain(leaked, ps);
+    }
+
+    // Bare unquoted $* / $@ is joined with IFS[0] and split again (IFS=x, `"" ""` is one empty field).
+    [Fact]
+    public void Transpile_UnquotedPositionalList_JoinsThenSplits()
+        => Assert.Contains("ConvertTo-BashWords -Prefix '' -Suffix '' -Fields @(", PsEmitter.Transpile("for i in $*; do echo $i; done")!);
+
     [Theory]
     [InlineData("echo ${a[0]:-x} ${a[@]:1:2} ${a[0]#p} ${a[0]%s} ${a[0]/x/y} ${a[0]^^} ${a[0],,} ${a[0]@Q} ${a[0]-d} ${a[0]+d} ${a[0]=d} ${a[0]?m}")]
     public void Transpile_OperatorAfterSubscript_IsNotBadSubstitution(string src)
@@ -1920,7 +1987,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("echo $@");
 
-        Assert.Contains("| ConvertTo-BashWords", result);
+        Assert.Contains("ConvertTo-BashWords -Prefix '' -Suffix '' -Fields @(", result);
     }
 
     [Fact]
@@ -2180,14 +2247,14 @@ public class PsEmitterTests
     public void Transpile_BracedParamAt_EmitsArgs()
     {
         var result = PsEmitter.Transpile("echo ${@}");
-        Assert.Contains("| ConvertTo-BashWords", result);
+        Assert.Contains("ConvertTo-BashWords -Prefix '' -Suffix '' -Fields @(", result);
     }
 
     [Fact]
     public void Transpile_BracedParamStar_EmitsArgs()
     {
         var result = PsEmitter.Transpile("echo ${*}");
-        Assert.Contains("| ConvertTo-BashWords", result);
+        Assert.Contains("ConvertTo-BashWords -Prefix '' -Suffix '' -Fields @(", result);
     }
 
     [Fact]
@@ -2263,7 +2330,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("echo $*");
 
-        Assert.Contains("| ConvertTo-BashWords", result);
+        Assert.Contains("ConvertTo-BashWords -Prefix '' -Suffix '' -Fields @(", result);
     }
 
     [Fact]
@@ -6623,11 +6690,11 @@ public class PsEmitterTests
     [Fact]
     public void Transpile_UnquotedPositionalList_SplitsEachParameterOnIfs()
     {
-        // Unquoted $@ is word-split like any expansion (IFS='' keeps each parameter whole), through
+        // Unquoted $@ is joined with IFS[0] and split again (IFS='' keeps each parameter whole), through
         // the splat so a custom IFS and globbing apply per parameter.
         var result = PsEmitter.Transpile("echo $@");
 
-        Assert.Contains("| ConvertTo-BashWords", result);
+        Assert.Contains("ConvertTo-BashWords -Prefix '' -Suffix '' -Fields @(", result);
     }
 
     [Fact]

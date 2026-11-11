@@ -714,4 +714,27 @@ public class InvokeBashSedCommandTests : IDisposable, IClassFixture<SharedPwshFi
         var lines = RunText("'a;b','c' | Invoke-BashSed '/;/s/;/Z/'");
         Assert.Equal(new[] { "aZb", "c" }, lines);
     }
+
+    // Address regexes were matched as raw .NET patterns: `/a\+/p` and `/[[:digit:]]/p` matched nothing, `/x(y/p`
+    // threw. A backslash inside a bracket is literal in POSIX (`[/\]` was "Unterminated [] set"); GNU keeps `\t`.
+    // Oracle: GNU sed 4.9 (WSL Ubuntu-24.04), e.g. `printf 'aa\nb\n1\n' | sed -n '/a\+/p'` -> aa.
+    [Theory]
+    [InlineData("aa|b|1", "-n|/a\\+/p", "aa")]
+    [InlineData("aa|b|1", "-n|/[[:digit:]]/p", "1")]
+    [InlineData("x(y|z", "-n|/x(y/p", "x(y")]
+    [InlineData("a|b+|c", "-E|-n|/b\\+/p", "b+")]
+    [InlineData("s|m|e|z", "-n|/^m\\{1\\}/,/^e/p", "m|e")]
+    [InlineData("a/b\\c", "s#.*[/\\]##", "c")]
+    [InlineData("a]b|a\\]b", "s/[\\]]/X/", "a]b|aXb")]
+    [InlineData("a\tb", "s/[\\t]/X/", "aXb")]
+    public void Sed_GnuRegexInAddressesAndBrackets(string input, string argv, string expected)
+    {
+        static string Q(string s) => "'" + s.Replace("'", "''") + "'";
+        var script = string.Join(",", input.Split('|').Select(Q)) + " | Invoke-BashSed "
+                     + string.Join(" ", argv.Split('|').Select(Q));
+
+        var r = CmdResult.Run(_fixture.AcquireFresh(), script).AssertSuccess();
+
+        Assert.Equal(expected.Split('|'), r.Lines.Select(l => l.TrimEnd('\n', '\r')).ToArray());
+    }
 }

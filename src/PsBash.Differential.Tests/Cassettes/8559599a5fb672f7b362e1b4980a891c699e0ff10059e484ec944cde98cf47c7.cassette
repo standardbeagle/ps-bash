@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 55
+stdout-length: 21
+stderr-length: 0
+==== SCRIPT ====
+y=lit; for i in "$y"x a"$y"b "$y"; do echo "[$i]"; done
+==== STDOUT ====
+[litx]
+[alitb]
+[lit]
+
+==== STDERR ====
+

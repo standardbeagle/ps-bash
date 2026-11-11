@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 59
+stdout-length: 8
+stderr-length: 0
+==== SCRIPT ====
+printf 'a\nb\n' | eval 'while read l; do echo "<$l>"; done'
+==== STDOUT ====
+<a>
+<b>
+
+==== STDERR ====
+

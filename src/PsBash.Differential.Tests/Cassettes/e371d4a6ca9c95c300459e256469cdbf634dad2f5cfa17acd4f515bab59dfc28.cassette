@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 30
+stdout-length: 6
+stderr-length: 0
+==== SCRIPT ====
+echo hi | echo "$(echo inner)"
+==== STDOUT ====
+inner
+
+==== STDERR ====
+

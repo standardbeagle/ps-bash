@@ -25,6 +25,7 @@ public class ShellStateInventoryGuardTests
         ["BashVersion"] = "constant, set at module load",
         ["BashStartTime"] = "constant, set at module load (SECONDS base)",
         ["__PsBashCwd"] = "host plumbing: the worker's working-directory request",
+        ["__psbashBgRunspace"] = "marks a background job's pooled runspace (set once there, never in a shell); BashShellState.Restore reads it",
         ["__parentPid"] = "host plumbing: the owning process id",
         ["__BashStdIn"] = "per-command stdin plumbing, rebuilt for every command",
         ["__BashUnbound"] = "one-statement hand-off from Invoke-BashArith to the emitted nounset guard, cleared at once",

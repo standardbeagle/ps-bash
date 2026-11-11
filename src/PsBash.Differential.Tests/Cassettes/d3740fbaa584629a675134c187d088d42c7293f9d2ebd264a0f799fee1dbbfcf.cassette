@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 56
+stdout-length: 6
+stderr-length: 0
+==== SCRIPT ====
+y=old; (sleep 0.4) & sleep 0.1; y=new; wait; echo "y=$y"
+==== STDOUT ====
+y=new
+
+==== STDERR ====
+

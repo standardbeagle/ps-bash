@@ -1,0 +1,17 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 108
+stdout-length: 49
+stderr-length: 0
+==== SCRIPT ====
+p(){ printf '<%s>' "$@"; echo "|$#"; }; IFS=x; set -- a '' b; p $*; p =$*=; p $@; set -- '' ''; p $*; p =$*=
+==== STDOUT ====
+<a><><b>|3
+<=a><><b=>|3
+<a><><b>|3
+<>|1
+<=><=>|2
+
+==== STDERR ====
+

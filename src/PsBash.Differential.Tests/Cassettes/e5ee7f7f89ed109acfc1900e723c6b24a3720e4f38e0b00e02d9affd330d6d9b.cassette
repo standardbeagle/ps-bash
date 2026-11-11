@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 72
+stdout-length: 16
+stderr-length: 0
+==== SCRIPT ====
+set -- k; set +; echo "[$*]"; set + a b; echo "[$*]"; set -; echo "[$*]"
+==== STDOUT ====
+[k]
+[a b]
+[a b]
+
+==== STDERR ====
+

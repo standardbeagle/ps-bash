@@ -1157,6 +1157,10 @@ public static partial class PsEmitter
             if (IsGlobWord(list[0]) || IsUnquotedDefaultAltWord(list[0]) || IsUnquotedPositionalListWord(list[0]))
                 return EmitUnquotedSplitWordArray(list[0]);
 
+            // `for i in a$x` / `=$*=`: split like bash; it used to iterate once over the literal text `a$env:x`.
+            if (UnquotedAffixExpansionIndex(list[0], ordinaryVar: true) is var affixAt and >= 0)
+                return EmitAffixWordArray(list[0], affixAt);
+
             var single = EmitWord(list[0]);
             if (WordIsGlob(list[0], single))
                 // nullglob is OFF by default in bash: an unmatched glob iterates
@@ -1171,7 +1175,7 @@ public static partial class PsEmitter
             // two-item form `for x in one two` was correctly quoted. FormatForItem
             // leaves anything EmitWord already rendered as a PS value ($x, "a", (…),
             // @(…), a number) untouched.
-            return FormatForItem(single);
+            return ForListItem(list[0], single);
         }
 
         // Multiple items. An unquoted ordinary variable or command substitution word-splits
@@ -1181,13 +1185,18 @@ public static partial class PsEmitter
         // into one flat array. A glob word in such a list expands on its own (`Resolve-BashGlob`).
         bool anySplit = false;
         foreach (var word in list)
-            anySplit |= IsUnquotedSplitWord(word);
+            anySplit |= IsUnquotedSplitWord(word) || UnquotedAffixExpansionIndex(word, ordinaryVar: true) >= 0;
 
         if (anySplit)
         {
             var flat = new List<string>();
             foreach (var word in list)
             {
+                if (UnquotedAffixExpansionIndex(word, ordinaryVar: true) is var wordAffixAt and >= 0)
+                {
+                    flat.Add(EmitAffixWordArray(word, wordAffixAt));
+                    continue;
+                }
                 if (IsUnquotedSplitWord(word))
                 {
                     flat.Add(EmitUnquotedSplitWordArray(word));
@@ -1196,7 +1205,7 @@ public static partial class PsEmitter
                 string emitted = EmitWord(word);
                 flat.Add(WordIsGlob(word, emitted)
                     ? "Resolve-BashGlob " + emitted
-                    : FormatForItem(emitted));
+                    : ForListItem(word, emitted));
             }
             return "@(" + string.Join("; ", flat) + ")";
         }
@@ -1232,12 +1241,26 @@ public static partial class PsEmitter
         // Plain items: join with commas, quoting bare literals.
         var items = new List<string>();
         foreach (var word in list)
-            items.Add(FormatForItem(EmitWord(word)));
+            items.Add(ForListItem(word, EmitWord(word)));
         return string.Join(",", items);
     }
 
     private static readonly System.Text.RegularExpressions.Regex TildeBarewordItem =
         new(@"^(\$(?:HOME|PWD|env:OLDPWD))([/\\][^$`""'()@{}]*)$");
+
+    /// <summary>
+    /// One <c>for</c>-list item. A word that glues text, quotes, variables and command substitutions together
+    /// (<c>a"$y"b</c>) is one string value: flatten it. EmitWord renders it as command-mode text (<c>a"$env:y"b</c>),
+    /// which <see cref="FormatForItem"/> single-quoted, so the loop saw the PowerShell code instead of the value.
+    /// </summary>
+    private static string ForListItem(CompoundWord word, string emitted)
+    {
+        if (word.Parts.Length > 1 && word.Parts.All(p => p is WordPart.Literal or WordPart.EscapedLiteral or WordPart.SingleQuoted
+                or WordPart.AnsiCQuoted or WordPart.DoubleQuoted or WordPart.SimpleVarSub or WordPart.BracedVarSub or WordPart.CommandSub)
+            && word.Parts.Any(p => p is not (WordPart.Literal or WordPart.EscapedLiteral or WordPart.SingleQuoted or WordPart.AnsiCQuoted)))
+            return FlattenPartsToDoubleQuotedString(word.Parts);
+        return FormatForItem(emitted);
+    }
 
     private static string FormatForItem(string item)
     {
@@ -1257,6 +1280,9 @@ public static partial class PsEmitter
         if (gluedQuote.Success)
             return "('" + gluedQuote.Groups[1].Value.Replace("'", "''") + "' + " + gluedQuote.Groups[2].Value + ")";
         if (c is '$' or '"' or '\'' or '(' or '@') return item;
+        // Bare command-mode text with an expansion (`a$(...)`, `x$env:y`): single-quoted, the code was the value.
+        if (item.IndexOf('$') >= 0 && item.IndexOfAny(['\'', '"']) < 0)
+            return "\"" + item + "\"";
         if (double.TryParse(item, System.Globalization.NumberStyles.Any,
             System.Globalization.CultureInfo.InvariantCulture, out _))
             return item;
@@ -1624,6 +1650,28 @@ public static partial class PsEmitter
     /// <summary>Names the function that runs an <c>eval</c> declared <c>local</c>: set around the run-time transpile of the eval text.</summary>
     [ThreadStatic]
     internal static HashSet<string>? EvalLocalNames;
+
+    /// <summary>Whether the code being emitted reads a stdin scope (BashTranspiler's eval entry sets it).</summary>
+    internal static bool InStdinScope { get => _inStdinScope; set => _inStdinScope = value; }
+
+    /// <summary>Numbers the save variable of each dot-sourced eval stdin scope (see <see cref="EmitEvalWithStdin"/>).</summary>
+    [ThreadStatic] private static int _evalStdinSeq;
+
+    /// <summary>
+    /// An <c>eval</c> that is handed stdin (<c>... | eval "$c"</c>, <c>eval "$c" &lt;&lt;&lt; text</c>). Its emission is a
+    /// statement list (the runtime block, or a static text transpiled inline), which is no pipeline element - the whole
+    /// script failed to parse - and the commands in the eval text must read the piped records. Emit the eval inside a
+    /// stdin scope (a static text is transpiled in it; a runtime text sees <c>$global:__BashStdIn</c> and is transpiled
+    /// in it at run time) and run it in a block that turns <c>$input</c> into that scope. A pipe stage is a subshell
+    /// (<c>&amp;</c>); a here-string keeps the current shell (dot-sourced, so <c>eval 'x=1' &lt;&lt;&lt; q</c> sets x).
+    /// </summary>
+    private static string EmitEvalWithStdin(Func<string> emitEval, bool dotSource)
+    {
+        var body = WithStdinScope(true, emitEval);
+        return dotSource
+            ? ". { " + PsBuild.StdinScope(body, "__psbash_evin_prev" + (++_evalStdinSeq)) + " }"
+            : "& { " + PsBuild.StdinScope(body) + " }";
+    }
 
     private static string ArrayWriteTarget(string name) =>
         ResolveNameref(name) is var resolved && resolved != name ? ArrayWriteTarget(resolved) :
@@ -3901,6 +3949,11 @@ public static partial class PsEmitter
             result = EmitSimple(innerCmd);
             return true;
         }
+        if (cmd.EnvPairs.IsEmpty && GetLiteralValue(cmd.Words[0]) == "eval")
+        {
+            result = $"{EmitHereDocLiteral(cmd.HereDocs[^1])} | Emit-BashLine | {EmitEvalWithStdin(() => EmitSimple(innerCmd), dotSource: true)}";
+            return true;
+        }
         string cmdText = EmitSimple(innerCmd);
         // A real program must read the heredoc's bytes, not PowerShell's per-record `\r\n` rendering of them;
         // every other consumer keeps receiving the records as before.
@@ -4930,10 +4983,46 @@ public static partial class PsEmitter
         "nounset", "onecmd", "physical", "pipefail", "posix", "privileged", "verbose", "vi", "xtrace",
     };
 
+    /// <summary>
+    /// A lone <c>+</c> or <c>-</c> among <c>set</c>'s options (bash's set builtin): <c>+</c> is an ignored flag; <c>-</c>
+    /// ends the options, turns off -x / -v, and replaces the positional parameters only when words follow it.
+    /// <c>set + -</c> keeps $@, <c>set -x - -v</c> leaves xtrace off with $1 = -v, <c>set + a b</c> is <c>set a b</c>.
+    /// Null when the option words hold neither.
+    /// </summary>
+    private static string? TryEmitSetLoneDashOrPlus(Command.Simple cmd, List<string?> literalArgs)
+    {
+        int k = 0;
+        bool sawLone = false;
+        for (; k < literalArgs.Count; k++)
+        {
+            var a = literalArgs[k];
+            if (a is null || a == "--") break;
+            if (a == "+") { sawLone = true; continue; }
+            if (a == "-") { sawLone = true; break; }
+            if (a.Length >= 2 && (a[0] == '-' || a[0] == '+')) { if (a is "-o" or "+o") k++; continue; }
+            break;
+        }
+        if (!sawLone) return null;
+        var optWords = cmd.Words.Skip(1).Take(Math.Min(k, literalArgs.Count)).Where((w, j) => literalArgs[j] != "+").ToList();
+        string? optText = optWords.Count == 0 ? null : EmitSet(cmd with { Words = optWords.Prepend(cmd.Words[0]).ToImmutableArray() });
+        string tail;
+        if (k < literalArgs.Count && literalArgs[k] == "-")
+        {
+            var rest = cmd.Words.Skip(2 + k).ToList();
+            tail = "$global:__BashXtrace = $false; Set-PSDebug -Off; " + (rest.Count == 0 ? PsBuild.SetStatus(0) : EmitSetPositionals(rest));
+        }
+        else if (k < literalArgs.Count)
+            tail = EmitSet(cmd with { Words = cmd.Words.Skip(1 + k).Prepend(cmd.Words[0]).ToImmutableArray() }) ?? PsBuild.SetStatus(0);
+        else
+            tail = PsBuild.SetStatus(0);
+        return (optText is null ? "" : optText + "; ") + tail;
+    }
+
     private static string? EmitSet(Command.Simple cmd, List<string?>? argsOverride = null)
     {
         string? specialResult = null;
         var literalArgs = argsOverride ?? cmd.Words.Skip(1).Select(TryGetStaticArgValue).ToList();
+        if (argsOverride is null && TryEmitSetLoneDashOrPlus(cmd, literalArgs) is { } lone) return lone;
         // `set -o errexit a b c` / `set -u -- x`: leading options, then positional parameters. Apply the
         // options first, then assign the rest exactly as `set -- rest...` would.
         if (argsOverride is null && TrySplitOptionsFromPositionals(literalArgs, out int optEnd, out int posStart))
@@ -4953,13 +5042,6 @@ public static partial class PsEmitter
         // `set -o` / `set +o` alone list the options (the shopt -o table, same two formats).
         if (argsOverride is null && literalArgs.Count == 1 && literalArgs[0] is "-o" or "+o")
             return literalArgs[0] == "-o" ? "Invoke-BashShopt '-o'" : "Invoke-BashShopt '-po'";
-        // `set - a b`: a lone leading `-` ends the options (and turns off -x / -v) like `--`; `set -` alone changes nothing.
-        if (argsOverride is null && literalArgs.Count > 0 && literalArgs[0] == "-")
-        {
-            var rest = cmd.Words.Skip(1).ToList();
-            if (rest.Count == 1) return PsBuild.SetStatus(0);
-            return "$global:__BashXtrace = $false; Set-PSDebug -Off; " + EmitSetPositionals(rest.Skip(1).ToList());
-        }
         if (literalArgs.Count > 0)
         {
             var stripped = StripInertSetOptions(literalArgs);
@@ -5001,10 +5083,10 @@ public static partial class PsEmitter
             (optionWords.Any(a => a is "-o" or "+o") && literalArgs.Count != 2) ||
             (optionWords.Any(a => a?.StartsWith('+') == true) && optionWords.Count > 1))
             throw new ParseException("set: combined shell option forms are not supported; use separate set commands", 1, 1, "shell-option");
-        // `set -o NOSUCH` is a run-time error in bash (status 1, the script goes on), not a refusal.
+        // `set -o NOSUCH` is a run-time error in bash (status 2, the script goes on), not a refusal.
         for (int i = 0; i + 1 < literalArgs.Count && literalArgs[i] != "--"; i++)
             if (literalArgs[i] is "-o" or "+o" && literalArgs[i + 1] is { } optName && !BashOptionNames.Contains(optName))
-                return $"Write-Error {PsBuild.SingleQuote($"set: {optName}: invalid option name")} -ErrorAction Continue; {PsBuild.SetStatus(1)}";
+                return $"Write-Error {PsBuild.SingleQuote($"set: {optName}: invalid option name")} -ErrorAction Continue; {PsBuild.SetStatus(2)}";
         // Refuse every unsupported option before any part of the script runs.
         for (int i = 0; i < literalArgs.Count && literalArgs[i] != "--"; i++)
         {
@@ -5154,7 +5236,7 @@ public static partial class PsEmitter
         var sb = new StringBuilder();
         // An empty command word ('' , "" ) names no command: bash reports ": command not found" (127).
         if (cmd.EnvPairs.IsEmpty && cmd.Words.Length > 0 && IsEmptyQuotedWord(cmd.Words[0]))
-            return "[Console]::Error.WriteLine('ps-bash: : command not found'); $global:LASTEXITCODE = 127";
+            return PsBuild.StderrLine("ps-bash: : command not found") + "; $global:LASTEXITCODE = 127";
         // A command word that is only a command substitution: the substitution runs, and when it expands to
         // nothing no command runs and the status is the substitution's (+""+"true"+""+, $(false), $(exit 42)).
         if (cmd.EnvPairs.IsEmpty && cmd.Words.Length == 1 && cmd.Words[0].Parts.Length == 1
@@ -6282,8 +6364,10 @@ public static partial class PsEmitter
         for (int i = 0; i < parts.Length; i++)
         {
             var part = parts[i];
+            // The part after the closing quote decides whether a variable that ENDS the quotes needs braces:
+            // `"$y"x` emitted "$env:yx" (another, unset variable) and printed nothing.
             if (part is WordPart.DoubleQuoted dq)
-                AppendDoubleQuotedInner(sb, dq.Parts);
+                AppendDoubleQuotedInner(sb, dq.Parts, i + 1 < parts.Length ? parts[i + 1] : null);
             else if (part is WordPart.SingleQuoted sq)
                 sb.Append(EscapeForDoubleQuoteNested(sq.Value));
             else if (part is WordPart.AnsiCQuoted aq)
@@ -7391,7 +7475,8 @@ public static partial class PsEmitter
     /// <see cref="IsPureUnquotedCommandSubWord"/>.</summary>
     private static bool IsUnquotedSplitWord(CompoundWord word)
         => IsPureUnquotedVarWord(word) || IsUnquotedPositionalListWord(word) || IsPureUnquotedCommandSubWord(word) || IsGlobWord(word)
-           || IsBraceGlobWord(word) || IsArrayValuedWord(word) || IsUnquotedDefaultAltWord(word) || IsUnquotedElementWord(word) || IsUnquotedPositionalOpWord(word);
+           || IsBraceGlobWord(word) || IsArrayValuedWord(word) || IsUnquotedDefaultAltWord(word) || IsUnquotedElementWord(word) || IsUnquotedPositionalOpWord(word)
+           || IsUnquotedPositionalAffixWord(word);
 
     /// <summary>Bare <c>${@#a}</c> / <c>${*/x/y}</c> / <c>${@%d}</c>: the operator applies to each parameter, so the result is a list of words.</summary>
     private static bool IsUnquotedPositionalOpWord(CompoundWord word)
@@ -7401,6 +7486,45 @@ public static partial class PsEmitter
     private static bool IsUnquotedPositionalListWord(CompoundWord word)
         => word.Parts is [WordPart.SimpleVarSub { Name: "@" or "*" }]
            or [WordPart.BracedVarSub { Name: "@" or "*", Suffix: null }];
+
+    /// <summary>
+    /// The index of the one unquoted expansion in a word that glues literal or quoted text to it: <c>=$*=</c>, <c>a$@</c>,
+    /// and with <paramref name="ordinaryVar"/> also <c>a$x</c> / <c>$x.bak</c>. -1 when the word is not that shape (no text,
+    /// two expansions, a glob, a substitution, an operator). bash splits such a word: see BashWordSplitter.AffixFields.
+    /// </summary>
+    private static int UnquotedAffixExpansionIndex(CompoundWord word, bool ordinaryVar)
+    {
+        if (word.Parts.Length < 2) return -1;
+        int found = -1;
+        for (int i = 0; i < word.Parts.Length; i++)
+        {
+            var p = word.Parts[i];
+            string? name = p switch { WordPart.SimpleVarSub s => s.Name, WordPart.BracedVarSub { Suffix: null } b => b.Name, _ => null };
+            if (name is not null && (name is "@" or "*" || ordinaryVar && (IsOrdinaryVarName(name) || name.Length > 0 && name.All(char.IsAsciiDigit))))
+            {
+                if (found >= 0) return -1;
+                found = i;
+                continue;
+            }
+            if (p is not (WordPart.Literal or WordPart.EscapedLiteral or WordPart.SingleQuoted or WordPart.DoubleQuoted)) return -1;
+        }
+        return found;
+    }
+
+    /// <summary><c>=$*=</c> / <c>a$@</c> unquoted: one field per parameter (each split on IFS), the text glued to the first and last.</summary>
+    private static bool IsUnquotedPositionalAffixWord(CompoundWord word) => UnquotedAffixExpansionIndex(word, ordinaryVar: false) >= 0;
+
+    /// <summary>The fields of an affixed expansion word (see <see cref="UnquotedAffixExpansionIndex"/>), as an array expression.</summary>
+    private static string EmitAffixWordArray(CompoundWord word, int idx)
+    {
+        var parts = word.Parts;
+        string pre = idx == 0 ? "''" : FlattenPartsToDoubleQuotedString(ImmutableArray.Create(parts, 0, idx));
+        string suf = idx == parts.Length - 1 ? "''" : FlattenPartsToDoubleQuotedString(ImmutableArray.Create(parts, idx + 1, parts.Length - idx - 1));
+        string values = parts[idx] is WordPart.SimpleVarSub { Name: "@" or "*" } or WordPart.BracedVarSub { Name: "@" or "*" }
+            ? "@(" + PsBuild.BuildPositionalExpansion("@") + ")"
+            : "@(" + EmitWord(new CompoundWord(ImmutableArray.Create(parts[idx]))) + ")";
+        return "@(ConvertTo-BashWords -Prefix " + pre + " -Suffix " + suf + " -Fields " + values + ")";
+    }
 
     /// <summary>
     /// Bare <c>${a[i]}</c> (one subscript, not <c>@</c>/<c>*</c>): the element is word-split like any unquoted expansion, so an
@@ -7494,7 +7618,9 @@ public static partial class PsEmitter
     };
 
     private static string EmitUnquotedSplitWordArray(CompoundWord word)
-        => IsUnquotedPositionalOpWord(word)
+        => IsUnquotedPositionalAffixWord(word)
+            ? EmitAffixWordArray(word, UnquotedAffixExpansionIndex(word, ordinaryVar: false))
+            : IsUnquotedPositionalOpWord(word)
             ? "@(" + EmitBracedVar((WordPart.BracedVarSub)word.Parts[0]) + " | ConvertTo-BashWords)"
             : IsQuotedArrayAllWord(word)
             ? EmitQuotedArrayElements(((WordPart.DoubleQuoted)word.Parts[0]).Parts[0])
@@ -7504,8 +7630,8 @@ public static partial class PsEmitter
             // ConvertTo-BashWords takes ONE string: the elements joined by a space split back apart on IFS.
             ? PsBuild.WordSplitArray("(@(" + EmitBracedVar((WordPart.BracedVarSub)word.Parts[0]) + ") -join ' ')")
             : IsUnquotedPositionalListWord(word)
-            // Each parameter is split on IFS on its own (IFS='' keeps `b c` whole) and globbed.
-            ? "@(" + PsBuild.BuildPositionalExpansion("@") + " | ConvertTo-BashWords)"
+            // Joined with IFS[0] and split again (IFS=x, `"" ""` is one empty field); IFS='' keeps each parameter whole.
+            ? "@(ConvertTo-BashWords -Prefix '' -Suffix '' -Fields @(" + PsBuild.BuildPositionalExpansion("@") + "))"
             : IsBraceGlobWord(word)
             // `*.{c,h}` / `sub/{a,b}*`: brace expansion comes FIRST, then every resulting word globs.
             ? "@(" + EmitBraceExpandedWord(word.Parts) + " | ConvertTo-BashGlob)"
@@ -8750,11 +8876,14 @@ public static partial class PsEmitter
         return $"$({sb})";
     }
 
-    private static void AppendDoubleQuotedInner(StringBuilder sb, ImmutableArray<WordPart> parts)
+    /// <param name="following">The word part after the closing quote (flattening <c>"$y"x</c> into one string): it
+    /// follows the LAST inner part, so a variable there is braced when the text would fold into its name.</param>
+    private static void AppendDoubleQuotedInner(StringBuilder sb, ImmutableArray<WordPart> parts, WordPart? following = null)
     {
         for (int i = 0; i < parts.Length; i++)
         {
             var part = parts[i];
+            WordPart? next = i + 1 < parts.Length ? parts[i + 1] : following;
             // A SUFFIX-LESS ${name} is just a variable read — EmitBracedVar returns the
             // same bare `$name` a SimpleVarSub would, so it needs the same
             // drive-reference guard. Without this `grep "^${field}:"` emitted
@@ -8762,7 +8891,7 @@ public static partial class PsEmitter
             // path ("':' was not followed by a valid variable name character"), so the
             // whole file failed to parse. The guard was on `$field:` but not `${field}:`.
             if (part is WordPart.BracedVarSub { Suffix: null } plainBvs
-                && i + 1 < parts.Length && NextPartNeedsBracing(parts[i + 1]))
+                && next is not null && NextPartNeedsBracing(next))
             {
                 sb.Append(EmitSimpleVarBraced(plainBvs.Name, strict: true));
             }
@@ -8772,7 +8901,7 @@ public static partial class PsEmitter
             {
                 // Check if next part starts with ':' — PowerShell would misparse as a drive reference.
                 // Use ${name} bracing to prevent this.
-                bool needsBracing = i + 1 < parts.Length && NextPartNeedsBracing(parts[i + 1]);
+                bool needsBracing = next is not null && NextPartNeedsBracing(next);
                 if (needsBracing)
                     sb.Append(EmitSimpleVarBraced(vs.Name, strict: true));
                 else
@@ -8876,11 +9005,17 @@ public static partial class PsEmitter
         // unset variable) and printed "" silently. A `$f` (no braces) is never followed by a name
         // char — the parser takes it into the name — but `$f?` is.
         static bool Folds(char c) => c is ':' or '.' or '_' or '?' || char.IsAsciiLetterOrDigit(c);
-        if (part is WordPart.Literal lit)
-            return lit.Value.Length > 0 && Folds(lit.Value[0]);
-        if (part is WordPart.EscapedLiteral el)
-            return el.Value.Length > 0 && Folds(el.Value[0]);
-        return false;
+        // Quoted text glued after the variable folds the same way once flattened into one string:
+        // `$y'x'`, `$y"x"`, `"$y""x"`.
+        return part switch
+        {
+            WordPart.Literal lit => lit.Value.Length > 0 && Folds(lit.Value[0]),
+            WordPart.EscapedLiteral el => el.Value.Length > 0 && Folds(el.Value[0]),
+            WordPart.SingleQuoted sq => sq.Value.Length > 0 && Folds(sq.Value[0]),
+            WordPart.AnsiCQuoted aq => ExpandAnsiCEscapes(aq.Value) is { Length: > 0 } s && Folds(s[0]),
+            WordPart.DoubleQuoted dq => dq.Parts.Length > 0 && NextPartNeedsBracing(dq.Parts[0]),
+            _ => false,
+        };
     }
 
     private static string EmitSimpleVarBraced(string name, bool strict = false)
@@ -9279,6 +9414,13 @@ public static partial class PsEmitter
             stageStart = sb.Length;
 
             var cmd = pipeline.Commands[i];
+            // `... | echo "[$(cat)]"`: echo ignores the pipe, but the command substitution inherits it as stdin.
+            // Run the stage as `{ echo ...; }`, whose stdin scope hands the pipe to the substitution.
+            if (i > 0 && cmd is Command.Simple { EnvPairs.IsEmpty: true, Words.Length: >= 1 } substStage
+                && GetLiteralValue(substStage.Words[0]) is { } substName && StdinIgnoringCommands.Contains(substName)
+                && !HasInputRedirect(substStage.Redirects) && substStage.HereDocs.IsDefaultOrEmpty
+                && substStage.Words.Any(w => ContainsCommandSub(w.Parts)))
+                cmd = new Command.BraceGroup(substStage, ImmutableArray<Redirect>.Empty);
             if (i > 0 && cmd is Command.Simple simple)
             {
                 bool isLastStage = i == pipeline.Commands.Length - 1;
@@ -9442,6 +9584,14 @@ public static partial class PsEmitter
                         : "; $global:LASTEXITCODE = 0");
                 }
                 return noop.ToString();
+            }
+
+            if (word0 == "eval" && simple.EnvPairs.IsEmpty)
+            {
+                var evalSb = new StringBuilder(EmitEvalWithStdin(
+                    () => TryEmitMappedCommand(simple, out var evalText) ? evalText : Emit(simple), dotSource: false));
+                EmitPipeTargetRedirects(simple, evalSb);
+                return evalSb.ToString();
             }
 
             if (TryEmitMappedCommand(simple, out var mapped))
@@ -10750,7 +10900,9 @@ public static partial class PsEmitter
             // assembly-qualified — given the assembly name it loads the assembly
             // on demand. A bare [PsBash.Core.Transpiler.BashTranspiler] silently
             // failed to resolve there, so eval emitted empty output.
-            "$__psbash_eval_pwsh = $null; try { $__psbash_eval_pwsh = [PsBash.Core.Transpiler.BashTranspiler, PsBash.Transpiler]::Transpile($__psbash_eval_src, [PsBash.Core.Transpiler.TranspileContext, PsBash.Transpiler]::Eval" + EvalLocalNamesArg() + ") } " +
+            "$__psbash_eval_pwsh = $null; try { $__psbash_eval_pwsh = [PsBash.Core.Transpiler.BashTranspiler, PsBash.Transpiler]::Transpile($__psbash_eval_src, [PsBash.Core.Transpiler.TranspileContext, PsBash.Transpiler]::Eval"
+            + (EvalLocalNamesArg() is { Length: > 0 } evalLocals ? evalLocals : ", $null")
+            + ", ($null -ne (Get-Variable -Name __BashStdIn -Scope Global -ValueOnly -ErrorAction SilentlyContinue))) } " +
             // A syntax error in the eval text is eval's own failure (status 2), not an exception out of the surrounding script.
             "catch { Write-Error ('ps-bash: eval: ' + $(if ($_.Exception.InnerException) { $_.Exception.InnerException.Message } else { $_.Exception.Message })) -ErrorAction Continue; $global:LASTEXITCODE = 2 }; " +
             "if ($null -ne $__psbash_eval_pwsh) { Invoke-Expression $__psbash_eval_pwsh } " +

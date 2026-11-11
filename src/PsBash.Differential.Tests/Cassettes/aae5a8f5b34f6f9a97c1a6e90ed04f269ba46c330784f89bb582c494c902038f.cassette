@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 36
+stdout-length: 8
+stderr-length: 0
+==== SCRIPT ====
+eval 'read v' <<< hello; echo "v=$v"
+==== STDOUT ====
+v=hello
+
+==== STDERR ====
+

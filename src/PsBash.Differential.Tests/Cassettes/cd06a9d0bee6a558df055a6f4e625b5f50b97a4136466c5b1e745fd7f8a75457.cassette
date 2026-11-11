@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 112
+stdout-length: 12
+stderr-length: 0
+==== SCRIPT ====
+for k in 1 2; do (sleep 0.6; exit 3) & (sleep 0.1; exit 5) & wait -n; a=$?; wait -n; b=$?; echo "$k $a $b"; done
+==== STDOUT ====
+1 5 3
+2 5 3
+
+==== STDERR ====
+

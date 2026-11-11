@@ -819,6 +819,67 @@ public static class BashRuntime
     /// dialect-specific escaping so a rewritten class is not itself escaped.
     /// </para>
     /// </summary>
+    /// <summary>A GNU sed regex (BRE, or ERE with <c>-E</c>) as a .NET pattern: brackets, POSIX classes, BRE escapes.</summary>
+    public static string SedRegexToNet(string pattern, bool extended)
+    {
+        pattern = TranslatePosixClasses(LiteralBracketBackslashes(pattern, sedEscapes: true));
+        return extended ? pattern : TranslateBre(pattern);
+    }
+
+    /// <summary>
+    /// POSIX bracket expressions: a backslash inside <c>[…]</c> is a literal character (<c>[/\]</c> is slash or
+    /// backslash; <c>[\]]</c> is <c>[\]</c> followed by <c>]</c>), where .NET reads it as an escape and reports an
+    /// unterminated set. With <paramref name="sedEscapes"/>, GNU sed's <c>\n \t \r \f \v</c> stay escapes.
+    /// A leading <c>]</c> (after <c>[</c> or <c>[^</c>) is a member. <c>[:class:]</c>, <c>[=c=]</c>, <c>[.c.]</c> pass
+    /// through for <see cref="TranslatePosixClasses"/>. Run it first: the rewrites it is followed by insert escapes.
+    /// </summary>
+    public static string LiteralBracketBackslashes(string pattern, bool sedEscapes)
+    {
+        if (string.IsNullOrEmpty(pattern) || pattern.IndexOf('[') < 0 || pattern.IndexOf('\\') < 0) return pattern;
+        var sb = new System.Text.StringBuilder(pattern.Length + 4);
+        int i = 0;
+        while (i < pattern.Length)
+        {
+            char c = pattern[i];
+            if (c == '\\' && i + 1 < pattern.Length) { sb.Append(c).Append(pattern[i + 1]); i += 2; continue; }
+            if (c != '[') { sb.Append(c); i++; continue; }
+
+            int j = i + 1;
+            var set = new System.Text.StringBuilder("[");
+            if (j < pattern.Length && pattern[j] == '^') { set.Append('^'); j++; }
+            if (j < pattern.Length && pattern[j] == ']') { set.Append("\\]"); j++; }
+            bool closed = false;
+            while (j < pattern.Length)
+            {
+                char d = pattern[j];
+                if (d == ']') { set.Append(']'); j++; closed = true; break; }
+                if (d == '[' && j + 1 < pattern.Length && pattern[j + 1] is ':' or '=' or '.')
+                {
+                    int end = pattern.IndexOf(pattern[j + 1] + "]", j + 2, System.StringComparison.Ordinal);
+                    if (end > 0) { set.Append(pattern, j, end + 2 - j); j = end + 2; continue; }
+                }
+                if (d == '\\')
+                {
+                    if (sedEscapes && j + 1 < pattern.Length && pattern[j + 1] is 'n' or 't' or 'r' or 'f' or 'v')
+                    {
+                        set.Append('\\').Append(pattern[j + 1]);
+                        j += 2;
+                        continue;
+                    }
+                    set.Append("\\\\");
+                    j++;
+                    continue;
+                }
+                set.Append(d);
+                j++;
+            }
+            if (!closed) { sb.Append(pattern, i, pattern.Length - i); break; } // unterminated: let the regex engine report it
+            sb.Append(set);
+            i = j;
+        }
+        return sb.ToString();
+    }
+
     public static string TranslatePosixClasses(string pattern)
     {
         if (string.IsNullOrEmpty(pattern)

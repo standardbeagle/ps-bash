@@ -27,7 +27,6 @@ echo 'foo-bar' | { read -d -; echo reply=$REPLY; }
 $SH +c 'echo hi'
 ## stdout: hi
 ## status: 0
-## XFAIL ps-bash gap-oils-sh-usage sh-usage (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -167,7 +166,6 @@ aa
 aa=0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-sh-usage sh-usage (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -222,7 +220,6 @@ e
 f
 ## END
 ## status: 127
-## XFAIL ps-bash gap-oils-sh-usage sh-usage (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -248,7 +245,6 @@ status=0
 status=0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-sh-usage sh-usage (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -265,6 +261,5 @@ hi
 status=127
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-sh-usage sh-usage (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher

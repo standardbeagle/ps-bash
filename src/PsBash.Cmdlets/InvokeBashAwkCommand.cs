@@ -194,7 +194,11 @@ public sealed class InvokeBashAwkCommand : PSCmdlet
             return;
         }
 
-        var machine = new AwkMachine(program, line => WriteObject(BashRuntime.NewBashObject(line + "\n")));
+        var machine = new AwkMachine(program, line => WriteObject(BashRuntime.NewBashObject(line + "\n")))
+        {
+            // The error stream, not Console.Error: inside the host that bypassed 2> f and 2>&1.
+            WriteStderr = text => FileSystemHelpers.WriteStderrBytes(this, text),
+        };
 
         if (fieldSep != null) machine.SetFieldSeparator(fieldSep);
         foreach (var assign in varAssignments)
@@ -419,7 +423,13 @@ public sealed class InvokeBashAwkCommand : PSCmdlet
     private static IEnumerable<string> SplitRecords(PSObject item)
     {
         string text = BashRuntime.GetBashText(item);
-        if (text.Length == 0) yield break;
+        // An empty record is one empty line (a native program's blank line arrives as ""); only an unterminated
+        // empty record (`printf ''`) is no input at all. Same contract as wc.
+        if (text.Length == 0)
+        {
+            if (!BashRuntime.IsUnterminated(item)) yield return "";
+            yield break;
+        }
         // Drop exactly one trailing line terminator (the object's own line break).
         if (text.EndsWith("\r\n", StringComparison.Ordinal)) text = text.Substring(0, text.Length - 2);
         else if (text[^1] == '\n' || text[^1] == '\r') text = text.Substring(0, text.Length - 1);

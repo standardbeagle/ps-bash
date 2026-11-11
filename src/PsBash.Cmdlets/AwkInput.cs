@@ -163,6 +163,9 @@ internal sealed class AwkCommandStream : IAwkLineStream
     private int _status;
     private bool _closed;
 
+    /// <summary>Where the command's stderr goes when it is closed (the machine sets awk's error stream).</summary>
+    public Action<string> WriteStderr { get; set; } = static s => Console.Error.Write(s);
+
     private AwkCommandStream(Process proc)
     {
         _proc = proc;
@@ -268,7 +271,7 @@ internal sealed class AwkCommandStream : IAwkLineStream
         _errPump.Join(TimeSpan.FromSeconds(1));
         string err;
         lock (_err) err = _err.ToString();
-        if (err.Length > 0) Console.Error.Write(err);
+        if (err.Length > 0) WriteStderr(err.Replace("\r\n", "\n"));
         try { _proc.Dispose(); } catch { /* ignore */ }
         return _status;
     }

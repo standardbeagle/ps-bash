@@ -1,0 +1,16 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 51
+stdout-length: 19
+stderr-length: 0
+==== SCRIPT ====
+x='1 2'; for i in a$x b 'q r'; do echo "[$i]"; done
+==== STDOUT ====
+[a1]
+[2]
+[b]
+[q r]
+
+==== STDERR ====
+

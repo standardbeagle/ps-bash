@@ -109,10 +109,9 @@ internal sealed class AwkStdoutSink : AwkOutSink
 }
 
 /// <summary><c>&gt; "/dev/stderr"</c>.</summary>
-internal sealed class AwkStderrSink : AwkOutSink
+internal sealed class AwkStderrSink(Action<string> write) : AwkOutSink
 {
-    public override void Write(string text) => Console.Error.Write(text);
-    public override void Flush() => Console.Error.Flush();
+    public override void Write(string text) => write(text);
     public override int Close() => 0;
 }
 
@@ -181,6 +180,7 @@ internal sealed class AwkPipeSink : AwkOutSink
 
     private readonly string _command;
     private readonly AwkStdout _stdout;
+    private readonly Action<string> _stderr;
     private readonly System.Diagnostics.Process _proc;
     private readonly StreamWriter _w;
     private readonly System.Collections.Concurrent.ConcurrentQueue<(bool Err, string Text)> _queue = new();
@@ -188,10 +188,11 @@ internal sealed class AwkPipeSink : AwkOutSink
     private readonly Thread _errPump;
     private bool _closed;
 
-    public AwkPipeSink(string command, AwkShell? shell, AwkStdout stdout)
+    public AwkPipeSink(string command, AwkShell? shell, AwkStdout stdout, Action<string> stderr)
     {
         _command = command;
         _stdout = stdout;
+        _stderr = stderr;
         if (shell is null)
             throw new AwkInterpreter.AwkRuntimeException($"fatal: cannot open pipe `{command}' (no shell available)");
         _proc = shell.StartPipe(command)
@@ -224,7 +225,7 @@ internal sealed class AwkPipeSink : AwkOutSink
     {
         while (_queue.TryDequeue(out var item))
         {
-            if (item.Err) Console.Error.Write(item.Text);
+            if (item.Err) _stderr(item.Text.Replace("\r\n", "\n"));
             else _stdout.WriteThrough(item.Text.Replace("\r\n", "\n"));
         }
     }

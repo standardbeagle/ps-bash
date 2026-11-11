@@ -461,4 +461,15 @@ public class QuotingDifferentialTests
             "echo pre\"mid\"suf",
             timeout: TimeSpan.FromSeconds(15));
     }
+
+    // A variable that ENDS a "…" part, with text glued after the quote: `"$y"x` was flattened to "$env:yx" (another,
+    // unset variable) and printed nothing; `$y'x'` / `"$y""x"` the same. In a for list `a"$y"b` leaked the PS text.
+    [SkippableTheory]
+    [InlineData("y=lit; z=Z; echo \"$y\"x \"${y}\"x \"$y\"_z \"$y\"$z \"$y\".bak \"$y\":c \"$y\"1")]
+    [InlineData("y=lit; echo $y'x' $y\"x\" \"$y\"\"x\" $y$'x' \"$y\"'_q' ${y}\"x\"")]
+    [InlineData("y=lit; a=\"$y\"x; echo \"$a\"")]
+    [InlineData("y=lit; for i in \"$y\"x a\"$y\"b \"$y\"; do echo \"[$i]\"; done")]
+    [InlineData("y=lit; echo \"a${y}\"b \"$y-x\" \"$y\"-x")]
+    public Task QuotedVarWithTextAfterTheQuote_KeepsTheVariableName(string script)
+        => AssertOracle.EqualAsync(script, timeout: TimeSpan.FromSeconds(15));
 }

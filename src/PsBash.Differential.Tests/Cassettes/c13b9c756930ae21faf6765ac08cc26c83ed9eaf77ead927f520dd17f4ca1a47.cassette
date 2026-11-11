@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 73
+stdout-length: 5
+stderr-length: 0
+==== SCRIPT ====
+{ set -x - -v; } 2>/dev/null; case $- in *x*) echo on;; esac; echo "[$*]"
+==== STDOUT ====
+[-v]
+
+==== STDERR ====
+

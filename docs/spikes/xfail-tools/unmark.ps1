@@ -2,6 +2,8 @@ param([string]$File, [string[]]$Cases)
 # Remove the `## XFAIL ps-bash` line from each named case of a spec file. Bytes outside those lines are untouched.
 $enc = [Text.Encoding]::GetEncoding('iso-8859-1')   # byte-transparent: some spec files hold raw bytes
 $t = [IO.File]::ReadAllText($File, $enc)
+# Spec files are eol=lf; a CRLF working copy (left by some tool) would make every case "NOT FOUND".
+if ($t.Contains("`r`n")) { Write-Output "CRLF working copy (spec files are eol=lf): run 'git checkout -- $File' or convert it, then retry"; exit 1 }
 $nameEnc = [Text.Encoding]::UTF8
 $done = 0
 foreach ($c in $Cases) {

@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 66
+stdout-length: 40
+stderr-length: 0
+==== SCRIPT ====
+y=lit; z=Z; echo "$y"x "${y}"x "$y"_z "$y"$z "$y".bak "$y":c "$y"1
+==== STDOUT ====
+litx litx lit_z litZ lit.bak lit:c lit1
+
+==== STDERR ====
+

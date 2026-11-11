@@ -99,6 +99,17 @@ public class InvokeBashTimeCommandTests : IClassFixture<SharedPwshFixture>
         Assert.Contains("time", joined, System.StringComparison.OrdinalIgnoreCase);
     }
 
+    // The report went to Console.Error, so `{ time false; } 2>/dev/null` still printed it.
+    [Fact]
+    public void Time_Report_IsOnTheErrorStream()
+    {
+        var r = CmdResult.Run(_fixture.AcquireFresh(), "Invoke-BashTime false");
+
+        Assert.Equal(1, r.ExitCode);
+        Assert.Matches(@"^real\s+\d+\.\d{3}s", r.Stderr);
+        Assert.DoesNotContain("real", string.Concat(r.Lines), System.StringComparison.Ordinal);
+    }
+
     // ---- injection probes (Directive 12) ----
 
     [Fact]

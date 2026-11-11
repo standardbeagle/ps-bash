@@ -16,13 +16,15 @@ public record ShellArgs(
     bool? CompactOutput = null,
     bool Verbose = false,
     string? Error = null,
-    string? Prelude = null)
+    string? Prelude = null,
+    bool NoExec = false)
 {
-    // Bash-compatible short flags ps-bash recognizes. Used to expand bundled
-    // forms like `-lc` and to let `-c` skip past intervening flags when callers
-    // (e.g. Claude Code) pass `-c -l "cmd"` instead of the canonical
-    // `-l -c "cmd"`. Unsupported flags are reported before executing anything.
-    private static readonly HashSet<char> KnownShortFlags = new() { 'l', 'i', 's', 'c', 'e', 'u' };
+    // Short flags that may be bundled (`-lc`, `-eu`, `-oo errexit noglob`). A bundle holding any other
+    // letter stays one word and is reported as an unsupported option before anything runs.
+    private static readonly System.Buffers.SearchValues<char> BundleLetters = System.Buffers.SearchValues.Create("lisceuxnoO");
+
+    // `set` options that may also come AFTER `-c` (`bash -c -e 'cmd'`): bash takes the first non-option word as the command.
+    private static bool IsSetOptionFlag(string arg) => arg is "-e" or "-u" or "-x" or "-n";
 
     // Long flags that take no value and must not be mistaken for the `-c`
     // command argument when callers pass flags after `-c`.
@@ -51,8 +53,28 @@ public record ShellArgs(
         string[] scriptArgs = [];
         string? timeout = null;
         string? error = null;
-        // `-e` / `-u` / `-o NAME` / `-O NAME` / `+O NAME`: shell options given on the command line, run as `set`/`shopt` ahead of the -c string.
+        // `-e` / `-u` / `-x` / `-o NAME` / `-O NAME` / `+O NAME`: shell options given on the command line, run as `set`/`shopt` ahead of the -c string.
         var prelude = new List<string>();
+        // `-n` (noexec): read and parse the commands, run none of them (`bash -n script.sh` is a syntax check).
+        bool noExec = false;
+        void ApplySetOption(string flag)
+        {
+            if (flag == "-n") noExec = true;
+            else prelude.Add("set " + flag);
+        }
+        void AddNamedOption(string flag, string name)
+        {
+            if (!System.Text.RegularExpressions.Regex.IsMatch(name, "^[A-Za-z0-9_]+$"))
+                error ??= $"{flag}: invalid option name '{name}'";
+            else
+                prelude.Add(flag switch
+                {
+                    "-o" => $"set -o {name}",
+                    "+o" => $"set +o {name}",
+                    "-O" => $"shopt -s {name}",
+                    _ => $"shopt -u {name}",
+                });
+        }
 
         for (int i = 0; i < expanded.Count; i++)
         {
@@ -93,15 +115,30 @@ public record ShellArgs(
             switch (expanded[i])
             {
                 case "-c":
-                    // Bash spec says "next arg becomes command". In practice,
-                    // wrappers (Claude Code on Windows) pass `-c -l "real cmd"`
-                    // expecting `-l` to still be parsed as a flag. Honor both:
-                    // skip recognized valueless flags, then take the first
-                    // non-flag arg as the command.
+                case "+c":
+                    // bash: `-c` makes the first non-option word the command, so options may still follow it.
+                    // Wrappers (Claude Code on Windows) pass `-c -l "real cmd"`; bash itself accepts
+                    // `-c -x -e 'cmd'`, `-c -- 'cmd'` and `-c - 'cmd'`. `+c` is accepted like `-c`.
                     int j = i + 1;
-                    while (j < expanded.Count && IsKnownValuelessFlag(expanded[j]))
+                    while (j < expanded.Count)
                     {
-                        ApplyValuelessFlag(expanded[j], ref interactive, ref login, ref stdin, ref noprofile, ref compactOutput, ref verbose);
+                        var opt = expanded[j];
+                        if (IsSetOptionFlag(opt)) ApplySetOption(opt);
+                        else if (IsKnownValuelessFlag(opt))
+                            ApplyValuelessFlag(opt, ref interactive, ref login, ref stdin, ref noprofile, ref compactOutput, ref verbose);
+                        else if (opt is "--" or "-") { j++; break; }
+                        else if (opt is "-o" or "+o" or "-O" or "+O" && j + 1 < expanded.Count)
+                        {
+                            AddNamedOption(opt, expanded[++j]);
+                        }
+                        else if (opt.Length > 1 && opt[0] == '-')
+                        {
+                            // An option bash does not know is a usage error (status 2), never the command string.
+                            error ??= $"{opt}: invalid option";
+                            j = expanded.Count;
+                            break;
+                        }
+                        else break;
                         j++;
                     }
                     if (j < expanded.Count)
@@ -123,10 +160,10 @@ public record ShellArgs(
                     }
                     break;
                 case "-e":
-                    prelude.Add("set -e");
-                    break;
                 case "-u":
-                    prelude.Add("set -u");
+                case "-x":
+                case "-n":
+                    ApplySetOption(expanded[i]);
                     break;
                 case "-o":
                 case "+o":
@@ -134,17 +171,8 @@ public record ShellArgs(
                 case "+O":
                     if (i + 1 < expanded.Count)
                     {
-                        string name = expanded[++i];
-                        if (!System.Text.RegularExpressions.Regex.IsMatch(name, "^[A-Za-z0-9_]+$"))
-                            error ??= $"{expanded[i - 1]}: invalid option name '{name}'";
-                        else
-                            prelude.Add(expanded[i - 1] switch
-                            {
-                                "-o" => $"set -o {name}",
-                                "+o" => $"set +o {name}",
-                                "-O" => $"shopt -s {name}",
-                                _ => $"shopt -u {name}",
-                            });
+                        AddNamedOption(expanded[i], expanded[i + 1]);
+                        i++;
                     }
                     else error ??= $"{expanded[i]}: option requires an argument";
                     break;
@@ -232,10 +260,10 @@ public record ShellArgs(
 
         // Only a -c string can carry the options; a script or stdin run would silently drop them, so refuse that.
         if (prelude.Count > 0 && command is null)
-            error ??= "-e, -u, -o and -O are only supported together with -c";
+            error ??= "-e, -u, -x, -o and -O are only supported together with -c";
 
         return new ShellArgs(command, interactive, login, stdin, noprofile, unixPaths, scriptPath, scriptArgs, rawPs, showVersion, showHelp, timeout, compactOutput, verbose, error,
-            prelude.Count > 0 ? string.Join("; ", prelude) : null);
+            prelude.Count > 0 ? string.Join("; ", prelude) : null, noExec);
     }
 
     // Expands `-lc` -> `-l`, `-c`. Single-char flags (`-c`, `-l`) and long
@@ -245,21 +273,29 @@ public record ShellArgs(
     {
         var result = new List<string>(args.Length);
         bool past = false;
-        bool valueNext = false;
-        foreach (var a in args)
+        for (int i = 0; i < args.Length; i++)
         {
+            var a = args[i];
             if (past) { result.Add(a); continue; }
             if (a == "--") { past = true; result.Add(a); continue; }
-            if (valueNext) { valueNext = false; result.Add(a); continue; }
-            if (a is "--timeout" or "--rcfile" or "--init-file" or "-o" or "+o" or "-O" or "+O") { valueNext = true; result.Add(a); continue; }
+            if (a is "--timeout" or "--rcfile" or "--init-file" or "-o" or "+o" or "-O" or "+O")
+            {
+                result.Add(a);
+                if (i + 1 < args.Length) result.Add(args[++i]);
+                continue;
+            }
             // The first non-dash word is the script path (or, after -c, the command string);
             // everything after it is positional and must not be bundle-expanded.
             if (a.Length == 0 || a[0] != '-') { past = true; result.Add(a); continue; }
 
-            if (a.Length > 2 && a[0] == '-' && a[1] != '-' && a.Skip(1).All(c => KnownShortFlags.Contains(c)))
+            if (a.Length > 2 && a[1] != '-' && a.AsSpan(1).IndexOfAnyExcept(BundleLetters) < 0)
             {
+                // bash: each `o`/`O` in a bundle takes the next word, in order (`-oo errexit noglob`, `-eo noglob`).
                 foreach (var c in a.AsSpan(1))
+                {
                     result.Add("-" + c);
+                    if (c is 'o' or 'O' && i + 1 < args.Length) result.Add(args[++i]);
+                }
             }
             else
             {

@@ -57,6 +57,21 @@ public class CompoundStdinDifferentialTests
     [InlineData("{ cat; echo mid; cat; } <<< hi")]
     public Task HereStringAndHeredocIntoCompound_FeedsEveryCommandInside(string script) => Eq(script);
 
+    // `… | eval "$c"` emitted eval's statement list as a bare pipeline element: the whole script failed to parse.
+    // The eval text's commands read the pipe / here-string, and a here-string eval keeps the current shell.
+    [SkippableTheory]
+    [InlineData("c='tr a-z A-Z'; printf 'x\\ny\\n' | eval \"$c\" | wc -l")]
+    [InlineData("c='tr a-z A-Z'; printf 'x\\n' | eval \"$c\"")]
+    [InlineData("printf 'x\\n' | eval 'sed s/x/X/'")]
+    [InlineData("printf 'a\\nb\\n' | eval 'while read l; do echo \"<$l>\"; done'")]
+    [InlineData("c='tr a-z A-Z'; printf 'p\\n' | { eval \"$c\"; }")]
+    [InlineData("c='tr a-z A-Z'; eval \"$c\" <<< q")]
+    [InlineData("eval 'read v' <<< hello; echo \"v=$v\"")]
+    [InlineData("eval 'x=set' <<< ignored; echo \"x=$x\"")]
+    [InlineData("c='tr a-z A-Z'; eval \"eval \\\"\\$c\\\" <<< inner\"")]
+    [InlineData("echo nope | eval 'echo static'")]
+    public Task EvalHandedStdin_ItsCommandsReadIt(string script) => Eq(script);
+
     [SkippableTheory]
     [InlineData("printf 'a\\nb\\n' | { echo one; echo two; }")]
     [InlineData("printf 'a\\nb\\n' | { echo one; cat; }")]
@@ -67,4 +82,14 @@ public class CompoundStdinDifferentialTests
     [InlineData("printf 'a\\nb\\n' | { cat | { sort -r; }; }")]
     [InlineData("printf 'q\\n' | { { read z; echo \"z=$z\"; } | cat; }")]
     public Task NonReadingCommandsAndNestedCompounds_DoNotStealStdin(string script) => Eq(script);
+
+    // `echo hi | echo "[$(cat)]"` printed [] : echo's stage drained the pipe, so the substitution read nothing.
+    [SkippableTheory]
+    [InlineData("echo hi | echo \"[$(cat)]\"")]
+    [InlineData("printf 'a\\nb\\n' | echo \"n=$(wc -l)\"")]
+    [InlineData("echo x | echo y $(cat) z")]
+    [InlineData("echo hi | echo \"$(echo inner)\"")]
+    [InlineData("echo hi | printf '<%s>\\n' \"$(tr a-z A-Z)\"")]
+    [InlineData("echo hi | echo \"[$(cat)]\" | tr a-z A-Z")]
+    public Task SubstitutionInAStdinIgnoringStage_ReadsThePipe(string script) => Eq(script);
 }

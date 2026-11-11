@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 90
+stdout-length: 11
+stderr-length: 0
+==== SCRIPT ====
+IFS=x; f(){ for i in $*; do echo -$i-; done; for i in =$*=; do echo -$i-; done; }; f '' ''
+==== STDOUT ====
+--
+-=-
+-=-
+
+==== STDERR ====
+

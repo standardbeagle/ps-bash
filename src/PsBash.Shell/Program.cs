@@ -68,6 +68,34 @@ if (shellArgs.Error is not null)
     return 2;
 }
 
+// `bash -n` (noexec): parse the -c string / script / stdin and run nothing. A syntax error is status 2, otherwise 0.
+// Parse only: a construct ps-bash cannot emit is not a syntax error. An interactive shell ignores -n, as in bash.
+if (shellArgs.NoExec && !shellArgs.Interactive)
+{
+    string? text = shellArgs.Command;
+    if (text is null && shellArgs.ScriptPath is not null)
+    {
+        if (!File.Exists(shellArgs.ScriptPath))
+        {
+            Console.Error.WriteLine($"ps-bash: {shellArgs.ScriptPath}: No such file or directory");
+            return 127;
+        }
+        text = await File.ReadAllTextAsync(shellArgs.ScriptPath);
+    }
+    if (text is null && Console.IsInputRedirected) text = await Console.In.ReadToEndAsync();
+    if (text is null) return 0;
+    try
+    {
+        BashParser.Parse(text);
+        return 0;
+    }
+    catch (ParseException ex)
+    {
+        Console.Error.WriteLine($"ps-bash: parse error: {ex.Message}");
+        return 2;
+    }
+}
+
 // Informational flags short-circuit before any host/IPC work. Without this,
 // `ps-bash --version` parsed to an empty ShellArgs and fell through to the
 // interactive/stdin branch, which blocks forever when no tty is attached

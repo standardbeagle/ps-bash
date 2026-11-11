@@ -134,4 +134,43 @@ public class AwkLeftoversTests : IClassFixture<SharedPwshFixture>
     public void IndirectCall_NamingTheFunctionDirectly_IsGawksStaticError() =>
         // gawk: `@f(1)` where f is a function is "function `f' called with space between name and `(', or used as a variable"
         AwkR("function f(a){ return a+1 } BEGIN{ print @f(1) }").AssertFailed(1, "used as a variable or an array");
+
+    // A native program's blank line reaches awk as one "" record; awk dropped it (`… | awk '{print NR}'` counted 2 of 3).
+    [Fact]
+    public void EmptyRecordFromPipeline_IsOneEmptyLine()
+    {
+        var r = Run("@('a', '', 'b') | Invoke-BashAwk '{ print NR \":\" $0 \":\" NF }'").AssertSuccess();
+
+        Assert.Equal(new[] { "1:a:1", "2::0", "3:b:1" }, r.Lines.Select(l => l.TrimEnd('\n')).ToArray());
+    }
+
+    // awk's own stderr (`> "/dev/stderr"`, a failing `system()`) went to Console.Error, so `2>` could not capture or drop it.
+    [Fact]
+    public void PrintToDevStderr_IsTheErrorStream_NotStdout()
+    {
+        var r = Run("Invoke-BashAwk 'BEGIN { print \"to-err\" > \"/dev/stderr\"; print \"to-out\" }'");
+
+        Assert.Equal(0, r.ExitCode);
+        Assert.Equal(new[] { "to-out" }, r.Lines.Select(l => l.TrimEnd('\n')).ToArray());
+        Assert.Contains("to-err", r.Stderr, StringComparison.Ordinal);
+    }
+
+    // ── range patterns `start, end` (a syntax error before: "unexpected token near ','") ──────────────────
+
+    // gawk: `printf 'a\nb\nc\nd\nb\ne\n' | awk '/b/,/c/'` -> b c b e (a range left open at EOF runs to the end);
+    // `/x/,/x/` closes on the start record (2 of x y x); `$1==2,0` never closes; two ranges keep separate state.
+    [Theory]
+    [InlineData("a\nb\nc\nd\nb\ne\n", "/b/,/c/", "b|c|b|e")]
+    [InlineData("a\nb\nc\n", "NR==1,NR==2 {print \"x\" $0}", "xa|xb")]
+    [InlineData("x\ny\nx\n", "/x/,/x/ {n++} END {print n}", "2")]
+    [InlineData("a\nb\nc\nd\n", "/b/,\n/zz/", "b|c|d")]
+    [InlineData("1\n2\n3\n", "$1==2,0", "2|3")]
+    [InlineData("p\nq\n", "/p/,/q/ {print}; /q/,/p/ {print \"r\" $0}", "p|q|rq")]
+    public void RangePattern_MatchesStartThroughEnd(string input, string program, string expected)
+    {
+        var r = Run(string.Join(",", input.Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(Q)) +
+                    " | Invoke-BashAwk " + Q(program)).AssertSuccess();
+
+        Assert.Equal(expected.Split('|'), r.Lines.Select(l => l.TrimEnd('\n', '\r')).ToArray());
+    }
 }

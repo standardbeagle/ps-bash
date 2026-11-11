@@ -138,6 +138,12 @@ public static class BashShellState
     /// </summary>
     public static object? Restore(SessionState session, Snapshot saved)
     {
+        // In a background job's pooled runspace the variables, readonly set and shopt table are the PARENT's
+        // (process-wide, shared): putting the snapshot back would undo what the parent wrote while the job ran
+        // (`(sleep 1) & x=1; wait` lost x). Such a job's own writes are handled by Invoke-BashBackground (-Isolated).
+        if (IsTrue(session.PSVariable.GetValue("global:" + BackgroundRunspaceMark)))
+            return RestoreRunspaceGlobals(session, saved);
+
         // Variables: drop what the body added, reset what it changed. Only differences are written.
         var current = new Dictionary<string, string>(EnvNames);
         foreach (var (name, value) in BashVariableStore.Enumerate())
@@ -153,6 +159,18 @@ public static class BashShellState
                 BashVariableStore.Set(name, value);
         }
 
+        InvokeBashShoptCommand.RestoreOptions(saved.Shopt);
+        // `readonly` made inside the body ends with it, like the variable it protects.
+        lock (ReadonlyNames) { ReadonlyNames.Clear(); ReadonlyNames.UnionWith(saved.Readonly); }
+        return RestoreRunspaceGlobals(session, saved);
+    }
+
+    /// <summary>Set to <c>$true</c> in a background job's pooled runspace by Invoke-BashBackground.</summary>
+    public const string BackgroundRunspaceMark = "__psbashBgRunspace";
+
+    // The $global: shell state lives in the runspace, so it is always the body's own to put back.
+    private static object? RestoreRunspaceGlobals(SessionState session, Snapshot saved)
+    {
         bool tracingNow = IsTrue(session.PSVariable.GetValue("global:__BashXtrace"));
         for (int i = 0; i < GlobalNames.Length; i++)
         {
@@ -160,10 +178,6 @@ public static class BashShellState
             if (exists) session.PSVariable.Set("global:" + GlobalNames[i], value);
             else session.PSVariable.Remove("global:" + GlobalNames[i]);
         }
-
-        InvokeBashShoptCommand.RestoreOptions(saved.Shopt);
-        // `readonly` made inside the body ends with it, like the variable it protects.
-        lock (ReadonlyNames) { ReadonlyNames.Clear(); ReadonlyNames.UnionWith(saved.Readonly); }
         return tracingNow == saved.Xtrace ? null : saved.Xtrace;
     }
 

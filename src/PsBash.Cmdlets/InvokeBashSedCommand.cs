@@ -1466,6 +1466,13 @@ public sealed class InvokeBashSedCommand : PSCmdlet
         }
 
         var result = Parse();
+        // Address regexes are GNU sed regexes too (`/a\+/p`, `/[[:digit:]]/p`, `/x(y/p`); they were matched as raw .NET.
+        if (result?.Address is { } parsedAddr)
+        {
+            if (parsedAddr.Pattern is { } ap) parsedAddr.Pattern = BashRuntime.SedRegexToNet(ap, extendedRegex);
+            if (parsedAddr.StartPattern is { } sp) parsedAddr.StartPattern = BashRuntime.SedRegexToNet(sp, extendedRegex);
+            if (parsedAddr.EndPattern is { } ep) parsedAddr.EndPattern = BashRuntime.SedRegexToNet(ep, extendedRegex);
+        }
         errMsg = err;
         errCode = code;
         return result;
@@ -1751,12 +1758,7 @@ public sealed class InvokeBashSedCommand : PSCmdlet
                 // regex metacharacters (\s, \w) that the BRE pass must not re-escape.
                 // .NET has no POSIX classes, so `s/[[:space:]]\+/_/g` silently matched
                 // nothing (and reported no error) before this.
-                searchPattern = BashRuntime.TranslatePosixClasses(searchPattern);
-
-                if (!extendedRegex)
-                {
-                    searchPattern = BashRuntime.TranslateBre(searchPattern);
-                }
+                searchPattern = BashRuntime.SedRegexToNet(searchPattern, extendedRegex);
 
                 Regex regex;
                 try

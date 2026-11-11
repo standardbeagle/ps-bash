@@ -887,7 +887,7 @@ public class BashTranspilerReviewRegressionTests
     // Oracle: unquoted $@ / $* split each parameter on IFS (IFS='' keeps "b c" whole) — never a bare array argument.
     [Fact]
     public void Transpile_UnquotedPositionalList_IsSplitPerParameter()
-        => Assert.Contains("| ConvertTo-BashWords", BashTranspiler.Transpile("printf '[%s]\\n' $@"));
+        => Assert.Contains("ConvertTo-BashWords -Prefix '' -Suffix '' -Fields @(", BashTranspiler.Transpile("printf '[%s]\\n' $@"));
 
     // Oracle: `echo -"$v"-` is ONE argument (-abc-); wrapping the dash-led word in more quotes split it into three.
     [Fact]
@@ -970,10 +970,57 @@ public class BashTranspilerReviewRegressionTests
         Assert.DoesNotContain("'--'", ps);
     }
 
-    // Oracle: `set -o NOSUCH` reports "invalid option name" and returns 1 at run time; it is not a transpile failure.
+    // Oracle (bash 5.2): `set -o NOSUCH` / `set +o NOSUCH` report "invalid option name" and return 2 at run time;
+    // it is not a transpile failure.
     [Fact]
     public void Transpile_SetUnknownLongOption_IsARuntimeError()
-        => Assert.Contains("set: NOSUCH: invalid option name", BashTranspiler.Transpile("set -o NOSUCH || true"));
+    {
+        var ps = BashTranspiler.Transpile("set -o NOSUCH || true");
+        Assert.Contains("set: NOSUCH: invalid option name", ps);
+        Assert.Contains("$global:LASTEXITCODE = 2", ps);
+    }
+
+    // Oracle: `set -eux; echo $-` is `ehuxB` (no -c): $- never showed x.
+    [Fact]
+    public void Transpile_DollarDash_IncludesXtrace()
+        => Assert.Contains("if ($global:__BashXtrace) { $f += 'x' }; $f += 'B'", BashTranspiler.Transpile("echo \"$-\""));
+
+    // Oracle: `bash -c 'set -C; echo $-'` is `hBCc`: `c` comes last, and only under -c (the launcher's PSBASH_DASH_C mark).
+    [Fact]
+    public void Transpile_DollarDash_EndsWithCUnderDashC()
+        => Assert.Contains("if ($global:__BashNoclobber) { $f += 'C' }; if ($env:PSBASH_DASH_C -eq '1') { $f += 'c' }; $f", BashTranspiler.Transpile("echo \"$-\""));
+
+    // Oracle: a bare `$BASH_SOURCE` / `${BASH_SOURCE##*/}` is element 0 of the array (the script file); it read $env:BASH_SOURCE.
+    [Theory]
+    [InlineData("echo \"$BASH_SOURCE\"")]
+    [InlineData("echo \"${BASH_SOURCE##*/}\"")]
+    public void Transpile_BareBashSource_IsElementZero(string bash)
+    {
+        var ps = BashTranspiler.Transpile(bash);
+        Assert.Contains("@($global:BASH_SOURCE)[0]", ps);
+        Assert.DoesNotContain("$env:BASH_SOURCE", ps);
+    }
+
+    // Oracle: `set +` alone changes nothing (status 0); `set + a b` sets $1 $2 like `set -- a b`. Both used to be refused.
+    [Theory]
+    [InlineData("set +", "$global:LASTEXITCODE = 0")]
+    [InlineData("set + a b", "$global:BashPositional = @('a', 'b')")]
+    [InlineData("set + -", "$global:__BashXtrace = $false; Set-PSDebug -Off; $global:LASTEXITCODE = 0")]
+    [InlineData("set - +", "$global:BashPositional = @('+')")]
+    [InlineData("set -x - -v", "$global:BashPositional = @('-v')")]
+    public void Transpile_SetLonePlus_IsAcceptedLikeSetDash(string bash, string expected)
+        => Assert.Contains(expected, BashTranspiler.Transpile(bash));
+
+    // Oracle: `echo hi | echo "[$(cat)]"` prints [hi]. echo ignores the pipe, but the command substitution inherits it.
+    [Theory]
+    [InlineData("echo hi | echo \"[$(cat)]\"")]
+    [InlineData("echo hi | printf '<%s>' \"$(tr a-z A-Z)\"")]
+    public void Transpile_SubstitutionInStdinIgnoringPipeStage_ReadsThePipe(string bash)
+    {
+        var ps = BashTranspiler.Transpile(bash);
+        Assert.Contains("$global:__BashStdIn.Dequeue()", ps);
+        Assert.DoesNotContain("$null = @($input)", ps);
+    }
 
     // Oracle: `a=A; echo -{$a,b}-` is `-A- -b-`; `{${a},b}` nests a braced expansion; an empty unquoted result is dropped.
     [Theory]

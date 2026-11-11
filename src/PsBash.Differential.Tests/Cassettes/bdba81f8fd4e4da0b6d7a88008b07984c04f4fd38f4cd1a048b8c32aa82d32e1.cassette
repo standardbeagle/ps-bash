@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 30
+stdout-length: 7
+stderr-length: 0
+==== SCRIPT ====
+echo nope | eval 'echo static'
+==== STDOUT ====
+static
+
+==== STDERR ====
+

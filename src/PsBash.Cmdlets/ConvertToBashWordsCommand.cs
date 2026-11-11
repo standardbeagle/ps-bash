@@ -25,9 +25,23 @@ public sealed class ConvertToBashWordsCommand : PSCmdlet
     [AllowEmptyString]
     public string? Text { get; set; }
 
+    /// <summary>With <see cref="Fields"/>: literal text glued before the expansion (<c>=$*=</c>, <c>a$x</c>).</summary>
+    [Parameter] [AllowNull] [AllowEmptyString] public string? Prefix { get; set; }
+
+    /// <summary>With <see cref="Fields"/>: literal text glued after the expansion.</summary>
+    [Parameter] [AllowNull] [AllowEmptyString] public string? Suffix { get; set; }
+
+    /// <summary>The expansion's values, one field source each (every positional parameter, or the one variable).</summary>
+    [Parameter] [AllowNull] [AllowEmptyCollection] public object?[]? Fields { get; set; }
+
     protected override void ProcessRecord()
     {
-        foreach (var word in BashWordSplitter.Split(Text, BashVariableStore.Get("IFS")))
+        var ifs = BashVariableStore.Get("IFS");
+        var words = Fields is not null || Prefix is not null || Suffix is not null
+            ? BashWordSplitter.AffixFields(Prefix ?? "", Suffix ?? "",
+                (Fields ?? Array.Empty<object?>()).Select(f => f is null ? null : (f is PSObject p ? p.BaseObject : f).ToString()).ToList(), ifs)
+            : BashWordSplitter.Split(Text, ifs);
+        foreach (var word in words)
         {
             if (!BashWordSplitter.HasGlobChars(word))
             {
@@ -120,6 +134,37 @@ internal static class BashWordSplitter
             }
         }
         return words;
+    }
+
+    /// <summary>
+    /// An unquoted <c>$*</c> / <c>$@</c> / <c>$x</c>, alone or with text glued on (<c>=$*=</c>, <c>a$x</c>). bash 5.2:
+    /// the values (every positional parameter, or the one variable) are joined with the first IFS character (space
+    /// when IFS is unset), the prefix and suffix glued on, and the result split on IFS. <c>IFS=x; set -- "" ""</c>:
+    /// <c>$*</c> is one empty field, <c>=$*=</c> is <c>=</c> <c>=</c>; <c>set -- a "" b</c>: <c>$*</c> is a, "", b.
+    /// An empty IFS splits nothing: each value is its own field (text glued to the first and last) and empty fields
+    /// are dropped. No values at all is the prefix and suffix alone (<c>=$*=</c> is <c>==</c>).
+    /// </summary>
+    public static List<string> AffixFields(string prefix, string suffix, IReadOnlyList<string?> values, string? ifs)
+    {
+        if (ifs is { Length: 0 })
+        {
+            var fields = new List<string>(values.Count);
+            foreach (var v in values) fields.Add(v ?? "");
+            if (fields.Count == 0) fields.Add("");
+            fields[0] = prefix + fields[0];
+            fields[^1] = fields[^1] + suffix;
+            fields.RemoveAll(f => f.Length == 0);
+            return fields;
+        }
+        char sep = ifs is null ? ' ' : ifs[0];
+        var sb = new System.Text.StringBuilder(prefix);
+        for (int i = 0; i < values.Count; i++)
+        {
+            if (i > 0) sb.Append(sep);
+            sb.Append(values[i]);
+        }
+        sb.Append(suffix);
+        return Split(sb.ToString(), ifs);
     }
 
     public static bool HasGlobChars(string word) => word.AsSpan().IndexOfAny('*', '?', '[') >= 0;

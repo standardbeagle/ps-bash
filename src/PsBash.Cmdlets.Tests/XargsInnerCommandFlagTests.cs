@@ -135,7 +135,8 @@ public class XargsInnerCommandFlagTests : IClassFixture<SharedPwshFixture>
 
     [Fact]
     public void Time_InnerEchoDashE_ExpandsEscapes() =>
-        Assert.Contains("a\tb", Bash("time echo -e 'a\\tb'"));
+        // `time` reports on stderr (the error stream, like bash), so drop it the way a script would.
+        Assert.Contains("a\tb", Bash("{ time echo -e 'a\\tb'; } 2>/dev/null"));
 
     [Fact]
     public void Env_InnerBasenameDashA_ReachesBasename() =>

@@ -67,7 +67,8 @@ public sealed class InvokeProcessSubSourceCommand : PSCmdlet
         catch (System.Exception ex)
         {
             // Mirror the psm1 behavior: log to stderr, set LASTEXITCODE=1, return.
-            System.Console.Error.WriteLine($"ps-bash: source <(...): transpile error: {ex.Message}");
+            // The error stream, not Console.Error, so `2>` can redirect it.
+            FileSystemHelpers.WriteStderrBytes(this, $"ps-bash: source <(...): transpile error: {ex.Message}\n");
             SessionState.PSVariable.Set("global:LASTEXITCODE", 1);
             return;
         }

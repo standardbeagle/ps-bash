@@ -20,6 +20,21 @@ public class ProgramEndToEndTests
         Assert.DoesNotContain("after", output);
     }
 
+    // Oracle: `bash -n -c 'echo x'` prints nothing, status 0; `bash -n -c 'if then'` is a syntax error, status 2;
+    // `bash -c -e 'false; echo ce'` stops at false (status 1).
+    [SkippableTheory]
+    [InlineData(new[] { "-n", "-c", "echo should-not-run" }, 0, "")]
+    [InlineData(new[] { "-n", "-c", "if then" }, 2, "")]
+    [InlineData(new[] { "-c", "-e", "false; echo ce" }, 1, "")]
+    [InlineData(new[] { "-x", "-c", "echo traced" }, 0, "traced")]
+    public async Task SetOptionFlags_NoExecAndAfterC(string[] argv, int expectedCode, string expectedOut)
+    {
+        var (code, output, error) = await RunShellAsync(argv);
+        Assert.Equal(expectedCode, code);
+        Assert.Equal(expectedOut, output.Trim());
+        if (argv[0] == "-x") Assert.Contains("+ echo traced", error);
+    }
+
     [SkippableFact]
     public async Task OptionName_O_NullglobApplies()
     {

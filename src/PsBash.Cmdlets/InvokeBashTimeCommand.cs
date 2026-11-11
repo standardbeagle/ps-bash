@@ -127,7 +127,8 @@ public sealed class InvokeBashTimeCommand : PSCmdlet
             CultureInfo.InvariantCulture,
             "real    {0:N3}s",
             realTime.TotalSeconds);
-        System.Console.Error.WriteLine(formatted);
+        // The error stream, not Console.Error: `{ time cmd; } 2>/dev/null` must drop the report.
+        FileSystemHelpers.WriteStderrBytes(this, formatted + "\n");
 
         var pso = new PSObject();
         pso.TypeNames.Insert(0, "PsBash.TimeOutput");

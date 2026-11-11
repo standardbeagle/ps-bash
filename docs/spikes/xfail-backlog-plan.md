@@ -182,6 +182,55 @@ errors leaked). The interactive shell still handles a typed `history` itself. `$
 are a bad substitution (was element 0 plus literal text). An alias whose expansion is a syntax error
 reports it with status 2 instead of throwing out of the alias function.
 
+### Progress, 2026-11-10 (third pass)
+
+Word splitting and stdin, mostly A6-style PowerShell text leaks:
+- Unquoted `$*` / `$@`, alone or with text glued on (`=$*=`, `a$1`), and `for i in a$x`: the values are
+  joined with IFS[0] (a space when IFS is unset), the affixes glued on, then split on IFS. When IFS is empty
+  it is one field per value with empty fields dropped (`ConvertTo-BashWords -Prefix -Suffix -Fields`,
+  `BashWordSplitter.AffixFields`). A for-list item `=$*=` / `a$x` was single-quoted PowerShell text.
+- A variable that ends a `"…"` part, with text glued after the quote (`"$y"x`, `$y'x'`, `"$y""x"`), is
+  braced: it emitted `"$env:yx"`, another (unset) variable. A for-list item `a"$y"b` is flattened into one
+  string instead of quoting the command-mode text.
+- `eval` reads the stdin it is given (`… | eval 'read x'`, `eval 'cat' <<< hi`, a runtime eval inside a
+  stdin scope): it runs inside a stdin scope.
+- awk keeps a native program's blank line as an empty record, and its `/dev/stderr`, `system()` and pipe
+  stderr go to the error stream.
+- `''` as a command and `time`'s report wrote to `[Console]::Error`, which `2>/dev/null` cannot drop.
+
+Deferred: `p a$1` as a command argument with a value containing spaces (needs the same splitting for
+command words; broad).
+
+### Progress, 2026-11-11 (fourth pass)
+
+Long gates now run on beagle-ab (`xfail-tools/fleet/fleet-gate.ps1`: Windows = build + `gate.ps1` +
+Differential + Cmdlets; WSL Linux = build + Core/Security/Cmdlets/Differential), leaving this machine free to keep
+building. The Linux side's remaining failures are the known `LsSortTimeDifferentialTests` ×6 and
+`Find_UnsupportedPredicate_EmitsErrorThenContinues`.
+- Every `Console.Error` site in `src/PsBash.Cmdlets` now writes to the error stream (xargs `-t`, `source <(…)`
+  transpile errors), so `2>` redirects them. (The awk defaults are overridden by the cmdlet.)
+- A7/A5 `set` forms: `set +` alone is a no-op and `set + a b` sets `$1 $2` (keeps `-x`, unlike `set -`); both were
+  refused at parse time. `set -o NOSUCH` returns 2 (bash 5.2), not 1.
+- A9: a command substitution in a stdin-ignoring pipe stage reads the pipe (`echo hi | echo "[$(cat)]"` is
+  `[hi]`): the stage runs as `{ …; }` with a stdin scope. A bare `$BASH_SOURCE` / `${BASH_SOURCE##*/}` is element 0.
+  `FUNCNAME` ends with `main` only in a script file (`bash -c`: `1 f`).
+- Open design question, not fixed: `foreach x`, `where`, `%`, `gci` run PowerShell aliases (bash: 127). ps-bash
+  deliberately lets scripts call PowerShell commands; decide whether built-in PowerShell aliases that are not bash
+  commands should be hidden from bash scripts.
+- The installed release in the Bash tool (0.13.0-dev) runs Windows' `timeout.exe` and fails
+  `sed -n '/x/,$p'`; the dev build is correct for both.
+- `set - x` / `set + x` anywhere among options (`set -x - -v`, `set -e + -- p q`) and `$-` now carries `x` and,
+  under `-c`, a trailing `c` (bash order `efhuxBCc`).
+- A8 launcher options: `-x` and `-n` (noexec: parse only, syntax error = 2), set options after `-c`
+  (`-c -x -e 'cmd'`), `-c --` / `-c -`, `+c`, bundled `o` taking the next word (`-oo errexit noglob`, `-eo noglob`);
+  an unknown option after `-c` is status 2 instead of running `-z` as the command. Still open: `-v` / `set -v`
+  (needs a verbose state wired through `set -o`, `$-`, SHELLOPTS) and `bash -o` with no name (lists options).
+- awk range patterns `start, end` (`/b/,/c/`, `NR==1,NR==2`) were a syntax error; now POSIX semantics.
+- Still open: `$((BASH_LINENO))` is 0; the `shopt` invalid-option message lacks bash's `script: line N:` prefix.
+- Spec files are eol=lf; a CRLF working copy makes `unmark.ps1` report NOT FOUND (it now refuses one). Pass several
+  case names with `& ./unmark.ps1 -Cases @(…)` in-process: through `pwsh -File` only the first name binds.
+- XFAIL count after this pass: 452.
+
 ## Suggested order
 
 1. Land A1 and the crash fix once the gate is green.

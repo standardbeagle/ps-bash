@@ -105,12 +105,24 @@ public static class BashTranspiler
     /// otherwise the shell's own, not a copy local to the eval).
     /// </summary>
     public static string Transpile(string bashCommand, TranspileContext context, string[]? evalLocalNames)
+        => Transpile(bashCommand, context, evalLocalNames, inStdinScope: false);
+
+    /// <summary>
+    /// <see cref="Transpile(string, TranspileContext, string[])"/> for an <c>eval</c> that runs while a stdin scope is
+    /// active (<c>… | eval "$c"</c>, <c>eval "$c" &lt;&lt;&lt; text</c>, a <c>while read</c> body): with
+    /// <paramref name="inStdinScope"/> the text's commands read that stdin (<c>$global:__BashStdIn</c>), as the
+    /// commands of a compound pipe stage do.
+    /// </summary>
+    public static string Transpile(string bashCommand, TranspileContext context, string[]? evalLocalNames, bool inStdinScope)
         => Guarded(() =>
         {
             var prior = PsEmitter.EvalLocalNames;
+            var priorScope = PsEmitter.InStdinScope;
             PsEmitter.EvalLocalNames = evalLocalNames is null ? null : new HashSet<string>(evalLocalNames, StringComparer.Ordinal);
+            // Set here, inside Guarded: the scope flag is per-thread and Guarded may move to a large-stack worker.
+            PsEmitter.InStdinScope = inStdinScope;
             try { return TranspileCore(bashCommand, context); }
-            finally { PsEmitter.EvalLocalNames = prior; }
+            finally { PsEmitter.EvalLocalNames = prior; PsEmitter.InStdinScope = priorScope; }
         });
 
     /// <summary>

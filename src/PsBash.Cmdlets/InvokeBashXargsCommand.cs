@@ -607,10 +607,11 @@ public sealed class InvokeBashXargsCommand : PSCmdlet
     {
         if (trace)
         {
-            System.Console.Error.WriteLine(
-                callArgs.Count == 0
+            // The error stream, not Console.Error: `xargs -t … 2>/dev/null` / `2>&1` must see the trace.
+            FileSystemHelpers.WriteStderrBytes(this,
+                (callArgs.Count == 0
                     ? _displayCmd
-                    : _displayCmd + " " + string.Join(" ", callArgs));
+                    : _displayCmd + " " + string.Join(" ", callArgs)) + "\n");
         }
 
         // Build $args: [cmd, arg1, arg2, ...]. The body splats $args[1..] to
