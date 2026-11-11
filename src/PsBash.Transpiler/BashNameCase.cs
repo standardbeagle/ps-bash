@@ -51,8 +51,15 @@ public static class BashNameCase
     private static readonly FrozenSet<string> Reserved =
         ReservedNames.ToFrozenSet(StringComparer.OrdinalIgnoreCase);
 
+#if NET9_0_OR_GREATER
     private static readonly FrozenSet<string>.AlternateLookup<ReadOnlySpan<char>> ReservedSpan =
         Reserved.GetAlternateLookup<ReadOnlySpan<char>>();
+
+    private static bool IsReserved(ReadOnlySpan<char> name) => ReservedSpan.Contains(name);
+#else
+    // net8 has no span lookup on FrozenSet; reached only after the length and first-letter rejects.
+    private static bool IsReserved(ReadOnlySpan<char> name) => Reserved.Contains(name.ToString());
+#endif
 
     private static readonly int MinLen = ReservedNames.Min(n => n.Length);
     private static readonly int MaxLen = ReservedNames.Max(n => n.Length);
@@ -110,7 +117,7 @@ public static class BashNameCase
         }
         if (!anyLower) return bashName;
         var span = bashName.AsSpan(0, nameLen);
-        if (!ReservedSpan.Contains(span)) return bashName;
+        if (!IsReserved(span)) return bashName;
 
         string mangled = Prefix + mask.ToString("x") + "_" + span.ToString().ToUpperInvariant();
         return bracket > 0 ? mangled + bashName[bracket..] : mangled;
@@ -138,7 +145,7 @@ public static class BashNameCase
             return false;
         int bracket = s.IndexOf('[', us + 1);
         var upper = bracket > 0 ? s.AsSpan(us + 1, bracket - us - 1) : s.AsSpan(us + 1);
-        if (upper.Length == 0 || !ReservedSpan.Contains(upper)) return false;
+        if (upper.Length == 0 || !IsReserved(upper)) return false;
         var chars = new char[upper.Length];
         bool anyLower = false;
         for (int i = 0; i < upper.Length; i++)
