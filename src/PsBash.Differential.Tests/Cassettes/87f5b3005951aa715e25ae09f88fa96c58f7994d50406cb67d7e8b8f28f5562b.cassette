@@ -1,0 +1,42 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 92
+stdout-length: 910
+stderr-length: 0
+==== SCRIPT ====
+{ echo "b[${!undef-dflt}]"; } 2>>err.txt
+echo st=$?
+grep -o '[^:]*: invalid [a-z ]*' err.txt
+==== STDOUT ====
+st=1
+ undef: invalid indirect expansion
+ undef: invalid indirect expansion
+ undef: invalid indirect expansion
+ undef: invalid indirect expansion
+ undef: invalid indirect expansion
+ : invalid variable name
+ : invalid variable name
+ undef: invalid indirect expansion
+ undef: invalid indirect expansion
+ undef: invalid indirect expansion
+ undef: invalid indirect expansion
+ undef: invalid indirect expansion
+ undef: invalid indirect expansion
+ undef: invalid indirect expansion
+ undef: invalid indirect expansion
+ undef: invalid indirect expansion
+ undef: invalid indirect expansion
+ undef: invalid indirect expansion
+ : invalid variable name
+ : invalid variable name
+ undef: invalid indirect expansion
+ undef: invalid indirect expansion
+ undef: invalid indirect expansion
+ undef: invalid indirect expansion
+ undef: invalid indirect expansion
+ undef: invalid indirect expansion
+ undef: invalid indirect expansion
+
+==== STDERR ====
+

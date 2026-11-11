@@ -1109,7 +1109,28 @@ internal sealed class AwkMachine
         }
         _vars["RSTART"] = AwkValue.Number(_rstart);
         _vars["RLENGTH"] = AwkValue.Number(_rlength);
+        if (args.Count >= 3 && args[2] is VarRef arrRef) FillMatchArray(GetArray(arrRef.Name), m);
         return AwkValue.Number(_rstart);
+    }
+
+    /// <summary>
+    /// gawk's <c>match(s, re, arr)</c>: arr[n] is group n's text (0 = the whole match), with arr[n,"start"] and
+    /// arr[n,"length"]; a group that took no part in the match gets no entries, and a failed match leaves arr empty.
+    /// </summary>
+    private void FillMatchArray(Dictionary<string, AwkValue> arr, System.Text.RegularExpressions.Match m)
+    {
+        arr.Clear();
+        if (!m.Success) return;
+        string sep = Subsep;
+        for (int i = 0; i < m.Groups.Count; i++)
+        {
+            var g = m.Groups[i];
+            if (!g.Success) continue;
+            string n = i.ToString(CultureInfo.InvariantCulture);
+            arr[n] = AwkValue.StrNum(g.Value);
+            arr[n + sep + "start"] = AwkValue.Number(g.Index + 1);
+            arr[n + sep + "length"] = AwkValue.Number(g.Length);
+        }
     }
 
     private AwkValue BuiltinSprintf(List<AwkExpr> args)

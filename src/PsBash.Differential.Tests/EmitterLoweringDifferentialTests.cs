@@ -80,6 +80,18 @@ public class EmitterLoweringDifferentialTests
             timeout: TimeSpan.FromSeconds(15));
     }
 
+    /// <summary>
+    /// BASH_REMATCH is an indexed array in group order. It held PowerShell's <c>$Matches</c> hashtable: a quoted
+    /// <c>"${BASH_REMATCH[0]}"</c> read the string key '0' and came back empty, <c>${BASH_REMATCH[@]}</c> listed in
+    /// hash order, a bare <c>$BASH_REMATCH</c> was empty, and a group that took no part was missing from the count.
+    /// </summary>
+    [SkippableTheory]
+    [InlineData("[[ abc =~ (b)(c) ]]; echo \"0=${BASH_REMATCH[0]} bare=$BASH_REMATCH all=${BASH_REMATCH[@]} 2=${BASH_REMATCH[2]} n=${#BASH_REMATCH[@]}\"")]
+    [InlineData("[[ a =~ (a)|(b) ]]; echo \"n=${#BASH_REMATCH[@]} [${BASH_REMATCH[2]}]\"\n[[ a =~ x ]]; echo \"st=$? n=${#BASH_REMATCH[@]} [$BASH_REMATCH]\"")]
+    [InlineData("f() { [[ xyz =~ y(z) ]]; }; f; for m in \"${BASH_REMATCH[@]}\"; do echo \"m=$m\"; done")]
+    [InlineData("str='(hi)'\n[[ \"${str}\" =~ ^([][{}\\(\\)^@])|^(~@) ]]; echo \"st=$? m=${BASH_REMATCH[0]}\"")]
+    public Task Differential_BashRematch_IsAnArrayInGroupOrder(string script) => AssertOracle.EqualAsync(script);
+
     // -----------------------------------------------------------------------
     // (4) EXIT trap
     // -----------------------------------------------------------------------

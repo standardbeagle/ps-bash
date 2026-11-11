@@ -96,12 +96,17 @@ public static class BashShellState
     public sealed class Snapshot
     {
         internal Snapshot(Dictionary<string, string> env, (bool Exists, object? Value)[] globals,
-            Dictionary<string, bool> shopt, bool xtrace, HashSet<string> readonlyNames)
+            Dictionary<string, bool> shopt, bool xtrace, HashSet<string> readonlyNames,
+            Dictionary<string, ScriptBlock?> aliasFunctions)
         {
-            Env = env; Globals = globals; Shopt = shopt; Xtrace = xtrace; Readonly = readonlyNames;
+            Env = env; Globals = globals; Shopt = shopt; Xtrace = xtrace; Readonly = readonlyNames; AliasFunctions = aliasFunctions;
         }
 
         internal HashSet<string> Readonly { get; }
+
+        /// <summary>The function behind each alias (an alias runs as a global function), so one defined or removed
+        /// inside the body is undone with the alias table.</summary>
+        internal Dictionary<string, ScriptBlock?> AliasFunctions { get; }
 
         internal Dictionary<string, string> Env { get; }
         internal (bool Exists, object? Value)[] Globals { get; }
@@ -128,7 +133,7 @@ public static class BashShellState
         HashSet<string> readonlyNow;
         lock (ReadonlyNames) readonlyNow = new HashSet<string>(ReadonlyNames, StringComparer.Ordinal);
         return new Snapshot(env, globals, InvokeBashShoptCommand.SnapshotOptions(),
-            IsTrue(session.PSVariable.GetValue("global:__BashXtrace")), readonlyNow);
+            IsTrue(session.PSVariable.GetValue("global:__BashXtrace")), readonlyNow, SaveAliasFunctions(session));
     }
 
     /// <summary>
@@ -171,6 +176,7 @@ public static class BashShellState
     // The $global: shell state lives in the runspace, so it is always the body's own to put back.
     private static object? RestoreRunspaceGlobals(SessionState session, Snapshot saved)
     {
+        RestoreAliasFunctions(session, saved.AliasFunctions);
         bool tracingNow = IsTrue(session.PSVariable.GetValue("global:__BashXtrace"));
         for (int i = 0; i < GlobalNames.Length; i++)
         {
@@ -179,6 +185,50 @@ public static class BashShellState
             else session.PSVariable.Remove("global:" + GlobalNames[i]);
         }
         return tracingNow == saved.Xtrace ? null : saved.Xtrace;
+    }
+
+    private static IEnumerable<string> AliasNames(SessionState session)
+    {
+        object? value = session.PSVariable.GetValue("global:BashUserAliases");
+        if ((value is PSObject pso ? pso.BaseObject : value) is not IDictionary aliases) yield break;
+        foreach (var key in aliases.Keys)
+            if (key is string name) yield return name;
+    }
+
+    private static ScriptBlock? AliasFunction(SessionState session, string name)
+        => (session.InvokeCommand.GetCommand(name, CommandTypes.Function) as FunctionInfo)?.ScriptBlock;
+
+    private static Dictionary<string, ScriptBlock?> SaveAliasFunctions(SessionState session)
+    {
+        var saved = new Dictionary<string, ScriptBlock?>(StringComparer.Ordinal);
+        foreach (var name in AliasNames(session)) saved[name] = AliasFunction(session, name);
+        return saved;
+    }
+
+    // `echo $(alias hi='echo hi'); hi` is command not found in bash: the alias ended with the subshell.
+    private static void RestoreAliasFunctions(SessionState session, Dictionary<string, ScriptBlock?> saved)
+    {
+        foreach (var name in AliasNames(session).ToList())
+            if (!saved.ContainsKey(name))
+                SetAliasFunction(session, name, null);
+        foreach (var (name, body) in saved)
+        {
+            if (ReferenceEquals(AliasFunction(session, name), body)) continue;
+            SetAliasFunction(session, name, body);
+        }
+    }
+
+    private static void SetAliasFunction(SessionState session, string name, ScriptBlock? body)
+    {
+        // The provider ignores a `global:` scope in a literal path, so a removal names the function plainly (the lookup
+        // walks up to the global one) and a set goes through Set-Item, which honours `Function:\global:`.
+        try
+        {
+            if (body is null) session.InvokeProvider.Item.Remove([@"Function:\" + name], recurse: false, force: true, literalPath: true);
+            else session.InvokeCommand.InvokeScript(
+                "param($n, $b) Set-Item -Path ('Function:\\global:' + [WildcardPattern]::Escape($n)) -Value $b -Force", name, body);
+        }
+        catch (ItemNotFoundException) { }
     }
 
     private static bool IsTrue(object? v) => LanguagePrimitives.IsTrue(v);

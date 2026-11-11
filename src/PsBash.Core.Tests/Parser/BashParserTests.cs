@@ -1351,6 +1351,48 @@ public class BashParserTests
         Assert.Equal(2, assign.Pairs[0].ArrayValue!.Elements.Length);
     }
 
+    // `time` is a pipeline keyword (bash): it times the whole pipeline and any compound command. `time { …; }` was a
+    // parse error, `time -p` ran a command named -p, and `time a | b` timed only a.
+    [Theory]
+    [InlineData("time a | b", PipelineTime.Default, 2)]
+    [InlineData("time { x; y; }", PipelineTime.Default, 1)]
+    [InlineData("time -p ( x )", PipelineTime.Posix, 1)]
+    [InlineData("time -- x", PipelineTime.Default, 1)]
+    [InlineData("time ! false", PipelineTime.Default, 1)]
+    public void Parse_TimeKeyword_TimesThePipeline(string input, PipelineTime mode, int stages)
+    {
+        var p = Assert.IsType<Command.Pipeline>(Parse(input));
+        Assert.Equal(mode, p.Time);
+        Assert.Equal(stages, p.Commands.Length);
+    }
+
+    [Theory]
+    [InlineData("time")]
+    [InlineData("time; echo x")]
+    [InlineData("x=1 time a")]
+    [InlineData("echo time a")]
+    public void Parse_TimeWithoutAPipelineOrNotInCommandPosition_IsAWord(string input)
+    {
+        var parsed = Parse(input);
+        Assert.False(parsed is Command.Pipeline { Time: not PipelineTime.None });
+        if (parsed is Command.CommandList list) Assert.All(list.Commands, c => Assert.False(c is Command.Pipeline { Time: not PipelineTime.None }));
+    }
+
+    [Fact]
+    public void Parse_ArrayLiteralPrefixBinding_IsAnEnvPairOnTheCommand()
+    {
+        // `B=(b "x y") cmd` was a parse error ("Unexpected token 'printenv'"). bash binds the temporary as the string
+        // "(b x y)" (oracle: printenv B), so it is a prefix pair whose value is the parenthesised, space-joined text.
+        var simple = Assert.IsType<Command.Simple>(Parse("A=a B=(b \"x y\") printenv B"));
+
+        Assert.Equal(["A", "B"], simple.EnvPairs.Select(p => p.Name));
+        var parts = simple.EnvPairs[1].Value!.Parts;
+        Assert.Equal(new WordPart.SingleQuoted("("), parts[0]);
+        Assert.Equal(new WordPart.SingleQuoted(" "), parts[2]);
+        Assert.Equal(new WordPart.SingleQuoted(")"), parts[^1]);
+        Assert.Equal("printenv", Assert.IsType<WordPart.Literal>(simple.Words[0].Parts[0]).Value);
+    }
+
     [Theory]
     [InlineData("declare -a A=(x y)")]
     [InlineData("typeset -a A=(x y)")]
@@ -2587,7 +2629,6 @@ public class BashParserTests
         => Assert.IsType<Command.ShFunction>(Parse("greet() { echo hello }"));
 
     [Theory]
-    [InlineData("echo a; time { echo hi; }; echo after")]
     [InlineData("rm -f x (keep); echo after")]
     [InlineData("coproc { echo x; }; echo after")]
     public void Parse_LeftoverTokenAfterStatement_ThrowsInsteadOfDroppingTail(string input)
@@ -2596,7 +2637,6 @@ public class BashParserTests
     }
 
     [Theory]
-    [InlineData("echo a; time { echo hi; }; echo after")]
     [InlineData("rm -f x (keep); echo after")]
     [InlineData("coproc { echo x; }; echo after")]
     public void ParseTopLevelWithPositions_LeftoverTokenAfterStatement_ThrowsInsteadOfDroppingTail(string input)
@@ -2641,7 +2681,6 @@ public class BashParserTests
     [InlineData("for x in a; do rm -f x (keep); done")]
     [InlineData("case a in a) rm -f x (keep) ;; esac")]
     [InlineData("f() { rm -f x (keep); }")]
-    [InlineData("if true; then time { echo hi; }; fi")]
     public void Parse_LeftoverTokenInNestedBody_Throws(string input)
     {
         Assert.Throws<ParseException>(() => Parse(input));
@@ -2724,5 +2763,18 @@ public class BashParserTests
         Assert.Equal(2, list.Commands.Length);
         Assert.IsType<Command.Background>(list.Commands[0]);
         Assert.Equal(["echo", "done"], GetWordValues(Assert.IsType<Command.Simple>(list.Commands[1])));
+    }
+
+    // trap DEBUG reports these commands' own line as $LINENO: the parser records where each starts.
+    [Fact]
+    public void Parse_TestArithForCase_RecordTheirStartLine()
+    {
+        var list = Assert.IsType<Command.CommandList>(Parse(":\n[[ a ]]\n(( 1 ))\nfor x in 1; do :; done\nfor ((;;)); do break; done\ncase x in x) ;; esac\n[ a ] 2>/dev/null"));
+        Assert.Equal(2, Assert.IsType<Command.BoolExpr>(list.Commands[1]).Line);
+        Assert.Equal(3, Assert.IsType<Command.ArithCommand>(list.Commands[2]).Line);
+        Assert.Equal(4, Assert.IsType<Command.ForIn>(list.Commands[3]).Line);
+        Assert.Equal(5, Assert.IsType<Command.ForArith>(list.Commands[4]).Line);
+        Assert.Equal(6, Assert.IsType<Command.Case>(list.Commands[5]).Line);
+        Assert.Equal(7, Assert.IsType<Command.BoolExpr>(Assert.IsType<Command.BraceGroup>(list.Commands[6]).Body).Line);
     }
 }

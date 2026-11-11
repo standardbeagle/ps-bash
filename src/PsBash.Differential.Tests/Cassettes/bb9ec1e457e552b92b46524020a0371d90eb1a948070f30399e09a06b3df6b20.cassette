@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 42
+stdout-length: 8
+stderr-length: 48
+==== SCRIPT ====
+x=$(echo "e[${!undef}]")
+echo "st=$? x=$x"
+==== STDOUT ====
+st=1 x=
+
+==== STDERR ====
+bash: line 1: undef: invalid indirect expansion
+

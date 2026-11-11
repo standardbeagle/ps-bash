@@ -1,0 +1,27 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 224
+stdout-length: 33
+stderr-length: 0
+==== SCRIPT ====
+[[ $ =~ "$" ]] && echo 'yes $'
+[[ $ == "$" ]] && echo eq1
+[[ "$" == $ ]] && echo eq2
+[[ a$ == "a$" ]] && echo eq3
+[ $ = $ ] && echo eq4
+[[ $ != x ]] && echo ne
+x='$'; [[ $x == $ ]] && echo eq5
+y=5; [[ $y -eq 5 ]] && echo num
+==== STDOUT ====
+yes $
+eq1
+eq2
+eq3
+eq4
+ne
+eq5
+num
+
+==== STDERR ====
+

@@ -1,0 +1,30 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 149
+stdout-length: 53
+stderr-length: 0
+==== SCRIPT ====
+dbg() { echo "  [$1]"; }
+trap 'dbg $LINENO' DEBUG
+{ echo x; echo y; } | wc -l
+date | cat | wc -l
+echo "r=$(echo sub)"
+( echo sh )
+f() { echo inf; }
+f
+==== STDOUT ====
+  [3]
+2
+  [4]
+  [4]
+  [4]
+1
+  [5]
+r=sub
+sh
+  [8]
+inf
+
+==== STDERR ====
+

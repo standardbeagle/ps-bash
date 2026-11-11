@@ -1,0 +1,20 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 82
+stdout-length: 13
+stderr-length: 96
+==== SCRIPT ====
+echo undef=${!undef-'default'}
+set -u
+echo NOUNSET
+echo undef=${!undef}
+echo st=$?
+==== STDOUT ====
+NOUNSET
+st=1
+
+==== STDERR ====
+bash: line 1: undef: invalid indirect expansion
+bash: line 4: undef: invalid indirect expansion
+

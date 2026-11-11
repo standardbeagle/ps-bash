@@ -351,6 +351,19 @@ public static class BashRuntime
     public static string MapPath(string path) => PsBash.Core.RuntimePath.Map(path);
 
     /// <summary>
+    /// Emitted after every bash write to PATH: on Windows, the <c>:</c> separators a script wrote become <c>;</c>
+    /// (<see cref="PsBash.Core.ExecutableLookup.ToWindowsPathList"/>), so command lookup sees each entry. No-op elsewhere.
+    /// </summary>
+    public static void NormalizePathVariable()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        string? value = BashVariableStore.Get("PATH");
+        if (value is null) return;
+        string fixedValue = PsBash.Core.ExecutableLookup.ToWindowsPathList(value);
+        if (!string.Equals(fixedValue, value, StringComparison.Ordinal)) BashVariableStore.Set("PATH", fixedValue);
+    }
+
+    /// <summary>
     /// bash's logical <c>cd</c> checks each directory it walks through before applying a <c>..</c>:
     /// <c>cd nonexistent/..</c> fails, whereas <c>GetFullPath</c> collapses it to the current directory. True when the
     /// path has no <c>..</c> segment or every directory component before a <c>..</c> exists.
@@ -381,6 +394,42 @@ public static class BashRuntime
             if (!Directory.Exists(current)) return false;
         }
         return true;
+    }
+
+    /// <summary>
+    /// <c>cd</c>'s CDPATH search: the directory a relative <paramref name="target"/> names through the first CDPATH entry
+    /// that holds it, or null to resolve it against the current directory as usual. bash skips CDPATH for a target that is
+    /// absolute or starts with <c>.</c> / <c>..</c>; an empty entry means the current directory and is not reported, so it
+    /// also returns null. A non-null result is what bash echoes after the cd (POSIX: a directory found through a
+    /// non-empty CDPATH entry is printed, even <c>.</c>). On Windows the entries are split as PATH is
+    /// (<see cref="PsBash.Core.ExecutableLookup.ToWindowsPathList"/>), so <c>C:\x:/tmp/y</c> is two entries.
+    /// </summary>
+    public static string? CdPathLookup(string? target, string cwd)
+    {
+        if (string.IsNullOrEmpty(target) || target[0] is '/' or '\\' || Path.IsPathRooted(target)) return null;
+        if (target == "." || target == ".." || target.StartsWith("./", StringComparison.Ordinal)
+            || target.StartsWith("../", StringComparison.Ordinal) || target.StartsWith(".\\", StringComparison.Ordinal)
+            || target.StartsWith("..\\", StringComparison.Ordinal)) return null;
+        string? cdpath = BashVariableStore.Get("CDPATH");
+        if (string.IsNullOrEmpty(cdpath)) return null;
+        var entries = OperatingSystem.IsWindows()
+            ? PsBash.Core.ExecutableLookup.ToWindowsPathList(cdpath).Split(';')
+            : cdpath.Split(':');
+        foreach (var entry in entries)
+        {
+            try
+            {
+                if (entry.Length == 0)
+                {
+                    if (Directory.Exists(Path.GetFullPath(target, cwd))) return null;
+                    continue;
+                }
+                string candidate = Path.Join(MapPath(entry), target);
+                if (Directory.Exists(Path.GetFullPath(candidate, cwd))) return candidate;
+            }
+            catch (Exception e) when (e is ArgumentException or NotSupportedException or IOException) { }
+        }
+        return null;
     }
 
     // ---- Raw (escaped-byte) text I/O for the psm1 helpers --------------------------------------

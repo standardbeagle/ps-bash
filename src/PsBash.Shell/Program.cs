@@ -228,11 +228,20 @@ if (shellArgs.ScriptPath is not null)
     }
 
     string? pwshScriptCommand;
+    bool scriptForwardsStdin = false;
     try
     {
+        // Redirected stdin is the script's stdin, as for -c (`echo x | bash s.sh`, `bash s.sh < in`): the script
+        // is emitted as one stdin scope when something in it can read stdin (null otherwise: nothing forwarded).
+        if (Console.IsInputRedirected && !EnvFlags.IsTruthy("PSBASH_NO_STDIN_FORWARD")
+            && BashTranspiler.TranspileWithLauncherStdin(scriptContent) is { } scopedScript)
+        {
+            pwshScriptCommand = scopedScript;
+            scriptForwardsStdin = true;
+        }
         // Script files are stable across runs — cache the transpile on disk (keyed by content
         // hash + build + path mode) so re-running the same script skips parse+emit.
-        try { pwshScriptCommand = TranspileCache.GetOrTranspileFile(scriptContent); }
+        else try { pwshScriptCommand = TranspileCache.GetOrTranspileFile(scriptContent); }
         catch (ParseException prefixEx) when (BashTranspiler.RunnablePrefix(scriptContent, prefixEx) is { } recovered)
         {
             // A syntax error on a later line: run the complete commands above it first, as bash does.
@@ -251,6 +260,8 @@ if (shellArgs.ScriptPath is not null)
     return await HostFailureGuard.RunAsync(async () =>
     {
         await using IWorker scriptWorker = await workerFactory();
+        if (scriptForwardsStdin && scriptWorker is IpcWorker scriptIpc)
+            scriptIpc.LauncherStdin = Console.OpenStandardInput();
         return await scriptWorker.ExecuteAsync(
             BuildInvocationCwdPreamble() + preamble + pwshScriptCommand,
             environment: CaptureLauncherEnvironment());

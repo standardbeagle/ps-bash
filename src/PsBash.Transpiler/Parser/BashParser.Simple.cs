@@ -105,11 +105,12 @@ public sealed partial class BashParser
             if (assign.ArrayValue is not null)
                 hasArrayAssignment = true;
             assignmentPairs.Add(assign);
-            envPairs.Add(new EnvPair(assign.Name, assign.Value));
+            envPairs.Add(new EnvPair(assign.Name, assign.ArrayValue is { } arr ? ArrayPrefixAsScalar(arr) : assign.Value));
         }
 
-        // If we consumed array assignments, they must be bare assignments.
-        if (hasArrayAssignment)
+        // Array assignments with no command after them are an assignment statement. Before a command word
+        // (`B=(b b) cmd`) bash binds the temporary as the STRING "(b b)": the expanded elements joined by spaces.
+        if (hasArrayAssignment && Peek().Kind != BashTokenKind.Word)
             return new Command.ShAssignment(assignmentPairs.ToImmutable());
 
         var words = ImmutableArray.CreateBuilder<CompoundWord>();
@@ -543,6 +544,23 @@ public sealed partial class BashParser
         }
 
         return new Assignment(name, op, value);
+    }
+
+    /// <summary>
+    /// The scalar a prefix binding <c>B=(b "x y") cmd</c> gives the command: bash binds the literal text
+    /// <c>(b x y)</c>, the elements expanded and joined by single spaces inside the parentheses.
+    /// </summary>
+    private static CompoundWord ArrayPrefixAsScalar(ArrayWord arr)
+    {
+        var parts = ImmutableArray.CreateBuilder<WordPart>();
+        parts.Add(new WordPart.SingleQuoted("("));
+        for (int i = 0; i < arr.Elements.Length; i++)
+        {
+            if (i > 0) parts.Add(new WordPart.SingleQuoted(" "));
+            parts.AddRange(arr.Elements[i].Parts);
+        }
+        parts.Add(new WordPart.SingleQuoted(")"));
+        return new CompoundWord(parts.ToImmutable());
     }
 
     private (string Name, CompoundWord? Value, AssignOp Op) SplitAssignmentWord(string raw)

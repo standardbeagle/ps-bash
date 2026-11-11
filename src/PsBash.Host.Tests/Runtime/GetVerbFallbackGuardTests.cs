@@ -44,13 +44,60 @@ public class GetVerbFallbackGuardTests
         finally { Directory.Delete(dir, recursive: true); }
     }
 
+    // Unix: a file with no execute bit is "Permission denied" (PowerShell would hand it to xdg-open and report 0).
+    [SkippableFact]
+    [Trait("Platform", "Unix")]
+    public void HasExecuteBit_IsFalseOnlyWhenNoExecuteBitIsSet()
+    {
+        Skip.If(OperatingSystem.IsWindows(), "Unix file modes; Windows uses PATHEXT and #! instead.");
+        if (OperatingSystem.IsWindows()) return; // tells the platform analyzer File.SetUnixFileMode is reachable only on Unix
+        string dir = Directory.CreateTempSubdirectory("psbash-xbit").FullName;
+        try
+        {
+            string doc = Path.Combine(dir, "doc"), tool = Path.Combine(dir, "tool"), group = Path.Combine(dir, "group");
+            foreach (var f in new[] { doc, tool, group }) File.WriteAllText(f, "plain\n");
+            File.SetUnixFileMode(doc, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            File.SetUnixFileMode(tool, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+            File.SetUnixFileMode(group, UnixFileMode.UserRead | UnixFileMode.GroupExecute);
+            Assert.False(GetVerbFallbackGuard.HasExecuteBit(doc));
+            Assert.True(GetVerbFallbackGuard.HasExecuteBit(tool));
+            Assert.True(GetVerbFallbackGuard.HasExecuteBit(group));
+            Assert.True(GetVerbFallbackGuard.HasExecuteBit(Path.Combine(dir, "missing")));
+        }
+        finally { Directory.Delete(dir, recursive: true); }
+    }
+
+    // A #! script on Windows runs through its interpreter instead of the shell's "open with" dialog.
     [Theory]
-    [InlineData("License", true)]
-    [InlineData("./License", false)]
-    [InlineData(@"C:\x\License", false)]
-    [InlineData("", false)]
-    public void IsBareWord_HasNoPathSeparator(string name, bool expected)
-        => Assert.Equal(expected, GetVerbFallbackGuard.IsBareWord(name));
+    [InlineData("/bin/sh", "Invoke-BashBash 'C:\\t\\it''s' @args")]
+    [InlineData("/usr/bin/env bash", "Invoke-BashBash 'C:\\t\\it''s' @args")]
+    [InlineData("/bin/bash -e", "Invoke-BashBash '-e' 'C:\\t\\it''s' @args")]
+    [InlineData("/usr/bin/env -S python3 -u", "& 'python3' '-u' 'C:\\t\\it''s' @args")]
+    [InlineData("/usr/local/bin/node", "& 'node' 'C:\\t\\it''s' @args")]
+    public void ShebangScript_RunsTheInterpreterWithTheFileThenTheArguments(string shebang, string run)
+        => Assert.Equal(
+            "$__psbash_in = @($input); if ($__psbash_in.Count -gt 0) { $__psbash_in | " + run + " } else { " + run + " }",
+            GetVerbFallbackGuard.ShebangScript(@"C:\t\it's", shebang));
+
+    [Fact]
+    public void ShebangScript_EnvWithNoProgram_IsPermissionDenied()
+        => Assert.Equal(GetVerbFallbackGuard.PermissionDeniedScript(@"C:\t\x"), GetVerbFallbackGuard.ShebangScript(@"C:\t\x", "/usr/bin/env"));
+
+    [Fact]
+    public void TryReadShebang_ReturnsTheLineWithoutCarriageReturn()
+    {
+        string dir = Directory.CreateTempSubdirectory("psbash-shebang").FullName;
+        try
+        {
+            string a = Path.Combine(dir, "a"), b = Path.Combine(dir, "b");
+            File.WriteAllText(a, "#!/usr/bin/env bash\r\necho hi\r\n"); File.WriteAllText(b, "echo no shebang\n");
+            Assert.True(GetVerbFallbackGuard.TryReadShebang(a, out var sa));
+            Assert.Equal("/usr/bin/env bash", sa);
+            Assert.True(GetVerbFallbackGuard.TryReadShebang(b, out var sb));
+            Assert.Null(sb);
+        }
+        finally { Directory.Delete(dir, recursive: true); }
+    }
 
     [Fact]
     public void PermissionDeniedScript_QuotesThePathAndSets126()

@@ -229,7 +229,127 @@ building. The Linux side's remaining failures are the known `LsSortTimeDifferent
 - Still open: `$((BASH_LINENO))` is 0; the `shopt` invalid-option message lacks bash's `script: line N:` prefix.
 - Spec files are eol=lf; a CRLF working copy makes `unmark.ps1` report NOT FOUND (it now refuses one). Pass several
   case names with `& ./unmark.ps1 -Cases @(…)` in-process: through `pwsh -File` only the first name binds.
-- XFAIL count after this pass: 452.
+- sed address regexes (`/a\+/p`, `/[[:digit:]]/p`) now get the BRE / POSIX-class translation the `s///` path had; a
+  backslash inside `[...]` is literal (GNU keeps `\n \t`).
+- An in-process background job no longer undoes the parent's writes: a subshell body inside the job's pooled
+  runspace restored the PARENT's process-wide variables at its end (`(sleep 1) & x=1; wait` lost `x`).
+- XFAIL count after this pass: 452 (commit d4c11d05).
+
+### Progress, 2026-11-11 (fifth pass)
+
+- `B=(b "x y") cmd` was a parse error; bash binds the temporary as the string `(b x y)` (2 `array` cases).
+- `${s[1]-w}`, `${s[1]:-w}`, `${s[0]+x}` on a SCALAR threw "Cannot index into a null array"; a scalar is now a
+  one-element array for the operator forms too.
+- Fleet noise, not regressions: when both sides run at once on beagle-ab, launchers can miss the host connect
+  window, so an awk `print | "cat"` child loses its output after ~60 s, and nested `$SH -c` cases (array.spec
+  `strict_array`) pass the 10 s case limit. Each passes when re-run alone; check that before chasing one.
+- A bare command name with characters no command name has (`{ls`, `a,b`, `x%y`, `@foo`) was parsed by
+  PowerShell as a script block, array or splat; it now runs through `&` and is "command not found" (127).
+- `time` is a keyword: `time [-p] [--] [!] pipeline` times the whole pipeline or compound command, keeps its
+  status and assignments, and prints bash's report (TIMEFORMAT, `-p`, empty TIMEFORMAT = no report) to stderr.
+  User/sys are the host's CPU time, so a native child's CPU is not counted.
+- `gawk` runs ps-bash's awk, and `match(s, re, arr)` fills arr (groups plus `[n,"start"]`/`[n,"length"]`).
+- Linux fleet: `LsSortTimeDifferentialTests` -g/-o/-n fail on beagle-ab in g9 and g10 alike (ps-bash creates
+  files 0664, the oracle 0644: a umask difference), not a regression. The `wait -n` job test needed a wider
+  gap: a cold Linux host took over 0.5 s to start the second background job.
+- Windows fleet: nativestdiobytes, redirect "x=1>", toysh-posix "IFS 4" and bugs "full disk" XPASS in some of
+  the 7 gate runs only; pipeline "Pipeline in eval", background "Builtin in background" and errexit row 21
+  failed 2 of 7 runs under load and pass locally.
+- Found while on `type -P` (dogfood-level, beyond the spec cases):
+  - `PATH=_tmp:$PATH` on Windows made ONE entry `_tmp:C:\…`, hiding both directories. Every bash write to PATH
+    is now followed by `BashRuntime.NormalizePathVariable` (`:` separators -> `;`, drive colons kept).
+  - `echo x | bash s.sh` / `bash s.sh < in`: the launcher forwarded stdin for `-c` only, so a script FILE read
+    nothing. File mode now uses the same launcher-stdin scope.
+  - An extensionless `#!` script (`./configure`, a helper on PATH) opened Windows' "Pick an app" dialog and
+    returned 0. The host's post-lookup hook now runs it through its interpreter (sh/bash = ps-bash), and any other
+    non-PATHEXT file is "Permission denied" (126).
+  - `type -P`/`-a` search PATH through `ExecutableLookup` (the lookup that runs commands) and print each hit as its
+    entry was written (`_tmp/mv`). Default/`-p`/`-f` keep `mv is mv` (documented: the cmdlet is what runs), so the
+    `/tmp/mv` and `/bin/pwd` cases stay XFAIL.
+- `alias` (8 of 10):
+  - A command word from an expansion (`cmd=myalias; $cmd`) is never an alias: `Resolve-BashCommand` skips the
+    alias's function (127 unless a cmdlet or file of that name exists).
+  - An alias defined in `$( )`, `( )`, `&` or a pipeline element ends with it: the subshell snapshot now restores the
+    alias functions, and the transpile-time alias scan does not enter those bodies.
+  - An alias holding part of a compound command (`alias LEFT={`, `alias e_='for i in 1 2 3; do echo '`, chained
+    trailing-blank aliases) is spliced into the script as text before parsing (`PsEmitter.SpliceAliases`), when the
+    script does not parse otherwise or such an alias is used.
+  - Still XFAIL: "here doc inside alias" (bash reads the body from the next input line) and "quote in the middle"
+    (bash: an alias leaving a quote open is a syntax error).
+  - Not covered: a function and an alias of the same name. The alias function replaces the bash function, so
+    `f() {…}; alias f=…; g=f; $g` is not found (bash runs the function).
+- `var-ref` "${!undef:-}": `${!ref}` with ref unset is "ref: invalid indirect expansion", with ref empty
+  ": invalid variable name"; both abandon the command, status 1, also under `set -u` (was "unbound variable").
+  `${!undef:=x}` reported twice and threw assigning to an empty name.
+- `var-ref` "a[key]" and "tilde in array index": through `${!ref}`, an assoc subscript's quotes are removed wherever
+  they are (`assoc["al"e]`), and an indexed subscript is arithmetic (`a[i+1]`; it was read as unset unless a
+  literal number); one that does not parse (`a[~+]`) abandons the command.
+  - Still XFAIL: LINENO through a ref (LINENO is substituted at lex time), the `check_indir` case (needs bash's
+    "expansion error abandons the whole function call"), and the code-injection case (the expected output is
+    Oils', which refuses the `$( )`; bash runs it, ps-bash refuses).
+- Found on the way:
+  - A failed word on a command with a file redirect (`echo "$((1/0))" 2>>f`) still ran the command: the redirect is
+    a later pipeline element, began first, and cleared the failure mark. A later element now leaves a mark it does
+    not own (`FileSystemHelpers.TakeExpansionFailed`).
+  - Linux: a file without an execute bit (`./doc`) went to xdg-open with status 0; now "Permission denied", 126
+    (`GetVerbFallbackGuard`, Unix branch).
+  - `toysh-posix` "IFS 4" passes now (unmarked).
+- Gaps seen, not fixed:
+  - bash does not open a redirect target when a word of the command fails to expand; ps-bash creates the file.
+  - `set -u; ref=nope; ${!ref}` (target unset) is empty; bash: "!ref: unbound variable".
+  - bash drops the rest of the input LINE after an expansion error (`echo ${!undef}; echo next` prints nothing);
+    ps-bash runs `echo next`.
+  - `builtin-kill` flakes (seen in g8w, g12): the first in-host background job takes ~650 ms to return to the
+    parent, so `sleep 0.1 &` can finish before `kill`.
+  - `fc -l 0 1 2` "passes" by accident: PowerShell's `fc` (Format-Custom) errors with status 0. Left XFAIL.
+- XFAIL count after this pass: 435.
+
+### Progress, 2026-11-11 (sixth pass)
+
+- Run-time command name (`$x`, `"$x"`; `Resolve-BashCommand`):
+  - An unquoted name splits first (`-Words`). `SUDO=; $SUDO rm f` runs `rm f`; an empty `$x` with no operands runs
+    nothing, status 0 (it leaked PowerShell's "expression after '&'" error, with or without a redirect or heredoc);
+    `x="echo a"; $x b` prints "a b" (it looked up `echo a`). A quoted empty name is `bash: : command not found`, 127.
+  - In a compound command's stdin scope the queue was piped into EVERY run-time name (since v0.14.1): `printf`/`test`
+    never ran on an empty queue and failed to bind a queued line. `-Fed` now lets the runtime feed only a command
+    that reads stdin, by the emitter's own rule (`StdinReaders.ShouldFeed`, now public), a function always.
+- `[[ ]]` operand: a literal word starting with `$` (`[[ $ =~ "$" ]]`) was emitted bare (`$: command not found`, or a
+  parse error before `&&`). regex "Quoted { and +" unmarked.
+- BASH_REMATCH is an indexed array in group order (`BashPatternMatch.Rematch`), not PowerShell's `$Matches`
+  hashtable: `"${BASH_REMATCH[0]}"` was empty (string key '0' since 217cddd3c), `${BASH_REMATCH[@]}` was in hash
+  order, bare `$BASH_REMATCH` was empty, a non-participating group was missing. regex "make a lisp example" unmarked.
+- `cd` honours CDPATH (`BashRuntime.CdPathLookup`): a relative target not starting with `.` is searched there first,
+  and echoed when a non-empty entry (even `.`) found it. On Windows the entries split like PATH (drive colons kept).
+  builtin-cd "CDPATH is respected" now differs only in path spelling: retagged platform-windows-paths.
+- Gaps seen, not fixed:
+  - Design question: `chdir`, `sl`, `gci`, `iex`, `foreach`, `Get-Date` run as PowerShell aliases/cmdlets. bash
+    has no `chdir` (127; busybox ash has it). Should an unknown-to-bash name that PowerShell resolves be 127, or keep
+    the PowerShell passthrough? builtin-cd "chdir is a synonym for cd" stays marked until that is decided.
+  - `printf 'in\n' | "$c"` (c=cat) prints an extra blank line on the terminal (the bytes into a file are right).
+    Also in the release.
+  - The installed 0.13 release's awk has no range patterns (`/a/,/b/`), fixed in dev.
+  - A nested `bash` launch costs ~3.7 s here (cold host per nested shell); a case with three of them
+    (regex "unquoted [a  b]", array strict_array) passes its 10 s budget only on an idle machine. Seen while another
+    project's test jobs ran, and on beagle-ab in g13.
+  - builtin-kill "kill -KILL kills the process with SIGKILL" fails in-host (fidelity guard: in-host Fail, launcher
+    Pass): `sleep 0.1 &` can finish before the kill when the in-host job start is slow. Timing-bound case.
+- builtin-fc "fc ignores too many args" and "... with strict_arg_parse" XPASS in g13 and locally: unmarked.
+- builtin-type-bash: 9 cases retagged. 2 are `intentional-psbash-command` (`type -p`/`-P`/`-f` on a name that is a
+  ps-bash builtin and also a file); 7 are `platform-windows-unix-bin` (they expect `/bin/…` paths).
+- `trap … DEBUG` (in a script of 3+ lines; a lone one stays the interactive prompt hook) now runs as bash does:
+  - before every simple command with its own `$LINENO`, `[[ ]]`, `(( ))`, assignments and each `&&`/`||` operand
+    included (the and/or list is lowered to status tests in DEBUG mode so the action can sit between operands);
+  - before each `for` pass, each arithmetic-for clause (init, test, step), and `case`;
+  - for every simple pipeline stage, in the parent before the pipeline; never inside `$( )`, a subshell, a compound
+    pipeline stage or a function (it ran inside `$( )` and subshells);
+  - before `trap - DEBUG` itself; under `set -e` a failing action ends the script.
+  - The parser records the start line of `[[`, `((`, `for` and `case` (`Line` on the AST nodes).
+  - builtin-trap-bash: 12 DEBUG cases unmarked. Still different: two cases that signal the shell itself (intentional:
+    no signals to the host) and "DEBUG trap with ERR trap inside actions".
+- The spec recorder put `SH=bash` on a line of its own, so every recorded `$LINENO` in a `$SH` case was one too high.
+  It now prefixes `SH=bash; ` on the script's first line, as PsBashExecutor does. 6 builtin-trap-bash and 2
+  builtin-trap-err (errtrace, still XFAIL) expectations re-recorded.
+- XFAIL count after this pass: 419.
 
 ## Suggested order
 

@@ -30,4 +30,12 @@ public class ArithExpansionFailureTests
     [Fact]
     public Task FailedArithWord_InARedirectTarget_AbandonsTheCommand() => AssertOracle.EqualAsync(
         "cd \"$(mktemp -d)\"\n{ echo hi > zz$(( 42 / 0 )) in; } 2>/dev/null\necho inside=$?\nls | wc -l");
+
+    /// <summary>
+    /// The command has a file redirect, which runs as a second pipeline element that begins first. Before, the redirect
+    /// cleared the failure mark the command's word had set, so echo printed <c>q[]</c> with status 0.
+    /// </summary>
+    [Fact]
+    public Task FailedArithWord_OfACommandWithAFileRedirect_AbandonsIt() => AssertOracle.EqualAsync(
+        "cd \"$(mktemp -d)\"\n{ echo \"q[$((1/0))]\" 2>>err.txt; } 2>/dev/null\necho st=$?\necho ok 2>>err.txt\necho st=$?");
 }

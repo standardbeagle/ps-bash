@@ -54,9 +54,9 @@ eval false; echo $?
 export PATH=/usr/bin
 eval $(printf 'export FNM_MULTISHELL_PATH="/tmp/fnm_msh"\nexport PATH="/tmp/fnm_msh":"$PATH"\n')
 echo $FNM_MULTISHELL_PATH
-echo $PATH
+echo "${PATH%%[:;]*}"  # the first entry: Windows separates PATH with ;
 ## STDOUT:
 /tmp/fnm_msh
-/tmp/fnm_msh:/usr/bin
+/tmp/fnm_msh
 ## END
 ## status: 0

@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 86
+stdout-length: 9
+stderr-length: 0
+==== SCRIPT ====
+echo zz | gawk '{ m["old"] = 1; print match($0, /q/, m), length(m), RSTART, RLENGTH }'
+==== STDOUT ====
+0 0 0 -1
+
+==== STDERR ====
+

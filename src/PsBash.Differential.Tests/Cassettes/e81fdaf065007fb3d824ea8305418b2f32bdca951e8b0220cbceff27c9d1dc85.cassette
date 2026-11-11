@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 196
+stdout-length: 28
+stderr-length: 0
+==== SCRIPT ====
+declare -A assoc=([ale]=bean [corn]=dip ['a b']=sp)
+r1='assoc["ale"]'; r2='assoc["al"e]'; r3="assoc['a b']"; r4='assoc["bad"]'; r5='assoc[corn]'
+echo "1=${!r1} 2=${!r2} 3=${!r3} 4=${!r4} 5=${!r5}"
+==== STDOUT ====
+1=bean 2=bean 3=sp 4= 5=dip
+
+==== STDERR ====
+

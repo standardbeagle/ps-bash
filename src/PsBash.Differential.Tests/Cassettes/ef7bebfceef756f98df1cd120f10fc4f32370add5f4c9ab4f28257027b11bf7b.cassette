@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 127
+stdout-length: 38
+stderr-length: 0
+==== SCRIPT ====
+s=pq; unset u; echo "[${s[0]-n}] [${s[1]-none}] [${s[1]:-e}] [${s[1]+alt}] [${s[0]+alt}] [${s[0]:-e}] [${u[0]-n}] [${u[1]:-e}]"
+==== STDOUT ====
+[pq] [none] [e] [] [alt] [pq] [n] [e]
+
+==== STDERR ====
+

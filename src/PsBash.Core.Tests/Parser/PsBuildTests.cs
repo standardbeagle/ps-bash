@@ -270,4 +270,18 @@ public class PsBuildTests
         // Run-time evaluation is covered by Differential_Redirect_SameFdTwice_Files_LastWins.
         Assert.Equal("@(& { $args } $env:d/a 'b c')", PsBuild.ArgWordArray(["$env:d/a", "'b c'"]));
     }
+
+    // ─────────────── Timed (`time` keyword) ───────────────
+
+    [Fact]
+    public void Timed_RunsThePipelineAsStatementsThenReportsInFinally()
+    {
+        var ps = PsBuild.Timed("x; y", posix: true, "$__psbash_time0");
+        // Statement scope (no script block), so `time x=1` / `time { x=1; }` keep the assignment.
+        Assert.StartsWith("$__psbash_time0 = [PsBash.Cmdlets.BashTimeKeyword]::Start(); try { x; y } finally { ", ps);
+        Assert.Contains("::Report($__psbash_time0, $true)", ps);
+        // The report goes to the redirectable error stream through the writer that leaves $? alone.
+        Assert.Contains("Write-BashHostStderr -Message", ps);
+        Assert.DoesNotContain("[Console]", ps);
+    }
 }

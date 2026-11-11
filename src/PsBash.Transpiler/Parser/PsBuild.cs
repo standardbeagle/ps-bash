@@ -157,6 +157,9 @@ public static class PsBuild
     /// <summary>An assignment consumes the mark without abandoning anything: only its own status (1) records the failure.</summary>
     public const string ClearExpansionFailed = "$global:__BashExpansionFailed = $false";
 
+    /// <summary>Follows every bash write to PATH: on Windows the <c>:</c> separators a script wrote become <c>;</c>.</summary>
+    public const string NormalizePathVariable = "[PsBash.Cmdlets.BashRuntime]::NormalizePathVariable()";
+
     public static string ArithNounsetGuard(string invocation) =>
         "$($__psbash_av = " + invocation + "; if ($global:__BashUnbound) { $__psbash_un = $global:__BashUnbound; $global:__BashUnbound = $null; "
         + "throw [PsBash.Cmdlets.BashParamErrorException]::Reported($__psbash_un + ': ', 'unbound variable') }; $__psbash_av)";
@@ -342,6 +345,17 @@ public static class PsBuild
         "(& { " + VoidStatement(emittedCmd) + "; $global:LASTEXITCODE " + (negate ? "-ne" : "-eq") + " 0 })";
 
     /// <summary>
+    /// <c>time [-p] pipeline</c>: run the pipeline's statement text, then write bash's timing report to the error
+    /// stream. Statement scope (not a script block) so assignments in the pipeline stay visible; the report writer
+    /// leaves <c>$?</c> and the exit code alone, so the status is the pipeline's. <paramref name="markVar"/> is unique
+    /// per nesting depth (<c>time { time a; }</c>).
+    /// </summary>
+    public static string Timed(string pipelineText, bool posix, string markVar) =>
+        markVar + " = [PsBash.Cmdlets.BashTimeKeyword]::Start(); try { " + pipelineText + " } finally { "
+        + "$__psbash_tr = [PsBash.Cmdlets.BashTimeKeyword]::Report(" + markVar + ", " + (posix ? "$true" : "$false") + "); "
+        + "if ($null -ne $__psbash_tr) { Write-BashHostStderr -Message $__psbash_tr } }";
+
+    /// <summary>
     /// A shell-reported error line (<c>ps-bash: : command not found</c>) on the PowerShell error stream, so
     /// <c>2&gt;$null</c> / <c>2&gt;&amp;1</c> / <c>2&gt; f</c> see it. <c>[Console]::Error</c> bypassed every redirect.
     /// </summary>
@@ -426,11 +440,15 @@ public static class PsBuild
     /// <summary>
     /// Run the <c>trap ... DEBUG</c> action before a command. The action sees the command's line as <c>$LINENO</c>,
     /// does not itself trigger DEBUG, and leaves the status the command will be run with unchanged.
+    /// <paramref name="errexitExit"/> (a script that can turn on <c>set -e</c>): an action that fails while errexit is
+    /// on ends the script with the action's status, as bash does (the action runs under the shell's options).
     /// </summary>
-    public static string DebugTrapRun(int line) =>
+    public static string DebugTrapRun(int line, string? errexitExit = null) =>
         "if ((Test-Path variable:global:__BashTrapDEBUG) -and $global:__BashTrapDEBUG -and -not $global:__BashInDebug) { "
         + "$global:__BashInDebug = $true; $__psbDbg = $global:LASTEXITCODE; $env:__psbLine = " + line + "; "
-        + "try { & $global:__BashTrapDEBUG } finally { $global:__BashInDebug = $false }; $global:LASTEXITCODE = $__psbDbg }; ";
+        + "try { & $global:__BashTrapDEBUG } finally { $global:__BashInDebug = $false }; "
+        + (errexitExit is null ? "" : "if (" + ErrexitArmed + " -and $global:LASTEXITCODE -ne 0) { " + errexitExit + " }; ")
+        + "$global:LASTEXITCODE = $__psbDbg }; ";
 
     /// <summary>The value of <c>$-</c>: the single-letter options currently on, in bash's order.</summary>
     public const string ShellFlagsExpr =

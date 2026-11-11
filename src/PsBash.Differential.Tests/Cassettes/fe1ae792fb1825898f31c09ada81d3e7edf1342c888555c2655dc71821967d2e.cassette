@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 83
+stdout-length: 32
+stderr-length: 0
+==== SCRIPT ====
+TIMEFORMAT='R=%R l=%lR u=%2U p %% x'; { time sleep 0.01; } 2>&1 | sed 's/[0-9]/N/g'
+==== STDOUT ====
+R=N.NNN l=NmN.NNNs u=N.NN p % x
+
+==== STDERR ====
+

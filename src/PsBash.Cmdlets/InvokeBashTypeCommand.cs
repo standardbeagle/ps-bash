@@ -1,4 +1,5 @@
 using System.Management.Automation;
+using PsBash.Core;
 using PsBash.Core.Parser;
 
 namespace PsBash.Cmdlets;
@@ -151,24 +152,55 @@ public sealed class InvokeBashTypeCommand : PSCmdlet
                 matches.Add(new Match("builtin", $"{name} is a shell builtin", null));
         }
 
-        if (IsPsBashCommand(name) && !Builtins.Contains(name))
+        // The runtime's own command is what runs (whatever PATH holds), so it leads; -P asks for the PATH search
+        // itself, where it is only the fallback when PATH has no such file.
+        bool psBashCommand = IsPsBashCommand(name) && !Builtins.Contains(name);
+        if (psBashCommand && !pathSearchOnly)
             matches.Add(new Match("file", $"{name} is {name}", name));
+
+        int before = matches.Count;
+        foreach (var path in PathFiles(name))
+            matches.Add(new Match("file", $"{name} is {path}", path));
 
         foreach (var cmd in ResolveCommands(name))
         {
-            switch (cmd.CommandType)
+            // Applications come from PathFiles; a bash function was handled above, and the runtime's own
+            // PowerShell functions are not shell functions.
+            if (cmd.CommandType != CommandTypes.Cmdlet || string.IsNullOrEmpty(cmd.Source)) continue;
+            matches.Add(new Match("file", $"{name} is {cmd.Source}", cmd.Source));
+        }
+
+        if (psBashCommand && pathSearchOnly && matches.Count == before)
+            matches.Add(new Match("file", $"{name} is {name}", name));
+        return matches;
+    }
+
+    /// <summary>
+    /// The PATH files NAME names, in PATH order, through the lookup that runs commands
+    /// (<see cref="ExecutableLookup"/>: execute bit on Unix, PATHEXT then the bare name on Windows). Each is printed
+    /// as its PATH entry was written (<c>_tmp/mv</c>, <c>/tmp/mv</c>), as bash does; the entry is mapped only to
+    /// find the file. A NAME with a slash is that file itself, never a directory.
+    /// </summary>
+    private static List<string> PathFiles(string name)
+    {
+        var found = new List<string>();
+        if (name.Length == 0) return found;
+        if (name.Contains('/') || name.Contains('\\'))
+        {
+            if (ExecutableLookup.IsExecutableFile(BashRuntime.MapPath(name))) found.Add(name);
+            return found;
+        }
+        foreach (var entry in ExecutableLookup.PathDirectories())
+        {
+            string dir = BashRuntime.MapPath(entry);
+            foreach (var hit in ExecutableLookup.FindAll(name, [dir]))
             {
-                case CommandTypes.Function:
-                    // A bash function was handled above; the runtime's own PowerShell functions are not shell functions.
-                    break;
-                default:
-                    var path = cmd.Source;
-                    if (string.IsNullOrEmpty(path)) break;
-                    matches.Add(new Match("file", $"{name} is {path}", path));
-                    break;
+                string file = Path.GetFileName(hit);
+                char sep = entry.Contains('\\') ? '\\' : '/';
+                found.Add(entry.EndsWith('/') || entry.EndsWith('\\') ? entry + file : entry + sep + file);
             }
         }
-        return matches;
+        return found;
     }
 
     /// <summary>True when NAME is a runtime alias to one of the ps-bash command cmdlets.</summary>
@@ -187,12 +219,12 @@ public sealed class InvokeBashTypeCommand : PSCmdlet
 
     private IEnumerable<CommandInfo> ResolveCommands(string name)
     {
-        // Applications and cmdlets (all of them, for -a). Parameter-bound: the name never becomes script text.
+        // Cmdlets (files come from PathFiles). Parameter-bound: the name never becomes script text.
         var found = new List<CommandInfo>();
         try
         {
             foreach (var r in InvokeCommand.InvokeScript(
-                         "param($n) Get-Command $n -CommandType Application,Cmdlet -All -ErrorAction SilentlyContinue", name))
+                         "param($n) Get-Command $n -CommandType Cmdlet -All -ErrorAction SilentlyContinue", name))
             {
                 if (r?.BaseObject is CommandInfo ci) found.Add(ci);
             }

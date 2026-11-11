@@ -1,0 +1,17 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 42
+script-length: 85
+stdout-length: 6
+stderr-length: 0
+==== SCRIPT ====
+set -o errexit
+d() { echo "  [$1]"; return 42; }
+trap 'd $LINENO' DEBUG
+echo A
+echo B
+==== STDOUT ====
+  [4]
+
+==== STDERR ====
+

@@ -47,7 +47,6 @@ echo undef=${!undef}
 # ## END
 ## stdout: NOUNSET
 ## status: 1
-## XFAIL ps-bash gap-oils-var-ref var-ref (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### comparison to ${!array[@]} keys (similar SYNTAX)
@@ -486,7 +485,6 @@ ref_SUB_QUOTED=bean
 ref_SUB_BAD=
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-var-ref var-ref (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### var ref TO array with arbitrary subscripts
@@ -553,7 +551,6 @@ echo ${!ref}
 # ## END
 ## stdout:
 ## status: 1
-## XFAIL ps-bash gap-oils-var-ref var-ref (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Indirect expansion TO fancy expansion features bash disallows

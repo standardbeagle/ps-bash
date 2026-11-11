@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 170
+stdout-length: 23
+stderr-length: 0
+==== SCRIPT ====
+echo ab12cd | gawk '{ n = match($0, /([a-z]+)([0-9]+)(x)?/, m); print n, length(m), m[0], m[1], m[2], m[1, "start"], m[2, "start"], m[2, "length"], ((3, "start") in m) }'
+==== STDOUT ====
+1 9 ab12 ab 12 1 3 2 0
+
+==== STDERR ====
+

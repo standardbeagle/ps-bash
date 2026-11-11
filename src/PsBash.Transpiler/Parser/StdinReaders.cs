@@ -12,7 +12,7 @@ namespace PsBash.Core.Parser;
 /// direction it consumes stdin that a command with a file operand did not want — both are rare
 /// next to the plain no-operand forms this exists for.
 /// </summary>
-internal static class StdinReaders
+public static class StdinReaders
 {
     internal enum Kind
     {
@@ -95,9 +95,10 @@ internal static class StdinReaders
 
     /// <summary>
     /// <paramref name="args"/> are the words after the command name; a null entry is a non-literal word
-    /// (variable, command substitution, glob …), which counts as a positional operand.
+    /// (variable, command substitution, glob …), which counts as a positional operand. The runtime asks the same
+    /// question of a run-time command name (<c>$c</c>, <c>"$tool"</c>) once its name and operands are known.
     /// </summary>
-    internal static bool ShouldFeed(string name, IReadOnlyList<string?> args)
+    public static bool ShouldFeed(string name, IReadOnlyList<string?> args)
     {
         switch (Classify(name))
         {

@@ -1,0 +1,16 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 82
+stdout-length: 11
+stderr-length: 0
+==== SCRIPT ====
+printf 'a\nb\n' | { p=printf; $p 'X\n'; t=test; $t -n ""; echo st=$?; c=cat; $c; }
+==== STDOUT ====
+X
+st=1
+a
+b
+
+==== STDERR ====
+

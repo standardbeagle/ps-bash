@@ -1,0 +1,16 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 61
+stdout-length: 7
+stderr-length: 0
+==== SCRIPT ====
+shopt -s expand_aliases
+alias a=
+a (( v = 2 ))
+echo "done $v"
+==== STDOUT ====
+done 2
+
+==== STDERR ====
+

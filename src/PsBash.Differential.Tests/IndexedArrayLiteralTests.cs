@@ -19,6 +19,10 @@ public class IndexedArrayLiteralTests
     [Fact] public Task Wc_MultipleFiles_UsesCommonWidth() => AssertOracle.EqualAsync("cd \"$(mktemp -d)\"; printf 'a\\nb\\n' > f1; for i in $(seq 1 30); do echo \"line number $i of the bigger file\"; done > f2; wc -l f1 f2; wc f1 f2; wc -l f1; wc -lw f1");
     // A sparse array's slice offset is a SUBSCRIPT, not a position; a negative offset counts back from one past the highest.
     [Fact] public Task Slice_SparseOffsetIsSubscript() => AssertOracle.EqualAsync("a=(v{0..9}); unset -v 'a[2]' 'a[3]' 'a[4]' 'a[7]'; for o in 0 2 3 5 9 10 -1 -2 -5 -9 -11; do echo \"[$o:${a[@]:$o}]\"; done; for l in 0 1 3 20; do echo \"[${a[@]:3:$l}]\"; done");
+    // A scalar is a one-element array: `${s[1]-w}` is w and `${s[0]+x}` is x (ps-bash threw "Cannot index into a null array").
+    [Fact] public Task ParamOps_ScalarElementIsOneElementArray() => AssertOracle.EqualAsync("s=pq; unset u; echo \"[${s[0]-n}] [${s[1]-none}] [${s[1]:-e}] [${s[1]+alt}] [${s[0]+alt}] [${s[0]:-e}] [${u[0]-n}] [${u[1]:-e}]\"");
+    // `B=(b \"x y\") cmd`: a prefix binding of an array literal is the STRING "(b x y)" (ps-bash: parse error).
+    [Fact] public Task ArrayLiteralPrefixBinding_IsTheJoinedText() => AssertOracle.EqualAsync("v=Q; A=a B=( b   \"x y\" $v ) env | grep -E '^(A|B)=' | sort; B=() printenv B; C=([k]=v) printenv C; f() { echo \"[$B] ${B[1]-none}\"; }; B=(p q) f; echo \"after [${B-unset}]\"");
     // `${a[@]:-w}`: a lone empty element is null, two are not.
     [Fact] public Task ParamDefault_ArrayAllEmptyElements() => AssertOracle.EqualAsync("a1=(); a2=(\"\"); a3=(\"\" \"\"); a4=(x); for n in 1 2 3 4; do eval \"echo \\\"[\\${a$n[@]-U}] [\\${a$n[@]:-E}] [\\${a$n[@]+P}] [\\${a$n[@]:+Q}]\\\"\"; done");
 }

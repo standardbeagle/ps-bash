@@ -22,12 +22,14 @@ public abstract record Command : BashNode
 
     /// <summary>
     /// A pipeline of commands connected by <c>|</c> or <c>|&amp;</c>.
+    /// <see cref="Time"/> is the <c>time</c> / <c>time -p</c> keyword in front of it.
     /// Modeled after oils command.Pipeline.
     /// </summary>
     public sealed record Pipeline(
         ImmutableArray<Command> Commands,
         ImmutableArray<string> Ops,
-        bool Negated) : Command;
+        bool Negated,
+        PipelineTime Time = PipelineTime.None) : Command;
 
     /// <summary>
     /// Commands joined by <c>&amp;&amp;</c> or <c>||</c>.
@@ -71,10 +73,13 @@ public abstract record Command : BashNode
     /// <summary>
     /// A test expression: <c>[ ... ]</c> or <c>[[ ... ]]</c>.
     /// The inner words are stored without the surrounding brackets.
+    /// <see cref="Line"/> (here and on <see cref="ForIn"/>, <see cref="ForArith"/>, <see cref="Case"/>,
+    /// <see cref="ArithCommand"/>) is the source line the command starts on, for <c>trap DEBUG</c>; 0 = unknown.
     /// </summary>
     public sealed record BoolExpr(
         ImmutableArray<CompoundWord> Inner,
-        bool Extended) : Command;
+        bool Extended,
+        int Line = 0) : Command;
 
     /// <summary>
     /// A for-in loop: <c>for x in a b c; do body; done</c>.
@@ -85,7 +90,8 @@ public abstract record Command : BashNode
         ImmutableArray<CompoundWord> List,
         Command Body,
         ImmutableArray<Redirect> Redirects = default,
-        bool ExplicitIn = false) : Command;
+        bool ExplicitIn = false,
+        int Line = 0) : Command;
 
     /// <summary>
     /// A <c>select</c> menu loop: <c>select x in a b c; do body; done</c> —
@@ -109,7 +115,8 @@ public abstract record Command : BashNode
         ArithmeticSyntax? Cond,
         ArithmeticSyntax? Step,
         Command Body,
-        ImmutableArray<Redirect> Redirects = default) : Command
+        ImmutableArray<Redirect> Redirects = default,
+        int Line = 0) : Command
     {
         /// <summary>
         /// Legacy source-compatible constructor; empty clauses remain explicitly absent.
@@ -140,13 +147,14 @@ public abstract record Command : BashNode
     public sealed record Case(
         CompoundWord Expr,
         ImmutableArray<CaseArm> Arms,
-        ImmutableArray<Redirect> Redirects = default) : Command;
+        ImmutableArray<Redirect> Redirects = default,
+        int Line = 0) : Command;
 
     /// <summary>
     /// A standalone arithmetic command: <c>(( expr ))</c>.
     /// Maps to PowerShell arithmetic expression or comparison.
     /// </summary>
-    public sealed record ArithCommand(ArithmeticSyntax Expr) : Command
+    public sealed record ArithCommand(ArithmeticSyntax Expr, int Line = 0) : Command
     {
         /// <summary>
         /// Legacy source-compatible constructor. Migration note: the typed <see cref="Expr"/>
@@ -221,3 +229,6 @@ public sealed record CaseArm(
     ImmutableArray<string> Patterns,
     Command Body,
     CaseTerminator Terminator = CaseTerminator.Break) : BashNode;
+
+/// <summary>The <c>time</c> keyword before a pipeline: none, <c>time</c> (TIMEFORMAT / bash's default report), or <c>time -p</c> (POSIX report).</summary>
+public enum PipelineTime { None, Default, Posix }

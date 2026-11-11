@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 66
+stdout-length: 5
+stderr-length: 0
+==== SCRIPT ====
+f() { return 3; }; { time f 2>/dev/null; } 2>/dev/null; echo st=$?
+==== STDOUT ====
+st=3
+
+==== STDERR ====
+

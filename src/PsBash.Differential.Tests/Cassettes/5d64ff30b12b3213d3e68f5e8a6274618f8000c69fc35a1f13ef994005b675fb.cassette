@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 52
+stdout-length: 7
+stderr-length: 0
+==== SCRIPT ====
+{ time { x=1; echo in; }; } 2>/dev/null; echo "x=$x"
+==== STDOUT ====
+in
+x=1
+
+==== STDERR ====
+

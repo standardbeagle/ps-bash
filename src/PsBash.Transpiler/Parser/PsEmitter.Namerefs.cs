@@ -12,28 +12,33 @@ public static partial class PsEmitter
     private static Dictionary<string, List<ImmutableArray<CompoundWord>>>? _callSites;
 
     /// <summary>Calls every command node of <paramref name="root"/> (statement structure only, not command substitutions).</summary>
-    private static void VisitCommands(Command? root, Action<Command> visit)
+    private static void VisitCommands(Command? root, Action<Command> visit) => VisitCommands(root, visit, null);
+
+    /// <summary>Visits <paramref name="root"/> and the commands inside it; a command <paramref name="descend"/> rejects is
+    /// visited but not entered.</summary>
+    private static void VisitCommands(Command? root, Action<Command> visit, Func<Command, bool>? descend)
     {
         if (root is null) return;
         visit(root);
+        if (descend is not null && !descend(root)) return;
         switch (root)
         {
-            case Command.Pipeline p: foreach (var c in p.Commands) VisitCommands(c, visit); break;
-            case Command.AndOrList a: foreach (var c in a.Commands) VisitCommands(c, visit); break;
-            case Command.CommandList l: foreach (var c in l.Commands) VisitCommands(c, visit); break;
+            case Command.Pipeline p: foreach (var c in p.Commands) VisitCommands(c, visit, descend); break;
+            case Command.AndOrList a: foreach (var c in a.Commands) VisitCommands(c, visit, descend); break;
+            case Command.CommandList l: foreach (var c in l.Commands) VisitCommands(c, visit, descend); break;
             case Command.If i:
-                foreach (var arm in i.Arms) { VisitCommands(arm.Cond, visit); VisitCommands(arm.Body, visit); }
-                VisitCommands(i.ElseBody, visit);
+                foreach (var arm in i.Arms) { VisitCommands(arm.Cond, visit, descend); VisitCommands(arm.Body, visit, descend); }
+                VisitCommands(i.ElseBody, visit, descend);
                 break;
-            case Command.While w: VisitCommands(w.Cond, visit); VisitCommands(w.Body, visit); break;
-            case Command.ForIn f: VisitCommands(f.Body, visit); break;
-            case Command.ForArith fa: VisitCommands(fa.Body, visit); break;
-            case Command.Select s: VisitCommands(s.Body, visit); break;
-            case Command.Case cs: foreach (var arm in cs.Arms) VisitCommands(arm.Body, visit); break;
-            case Command.BraceGroup bg: VisitCommands(bg.Body, visit); break;
-            case Command.Subshell sub: VisitCommands(sub.Body, visit); break;
-            case Command.ShFunction fn: VisitCommands(fn.Body, visit); break;
-            case Command.Background bk: VisitCommands(bk.Inner, visit); break;
+            case Command.While w: VisitCommands(w.Cond, visit, descend); VisitCommands(w.Body, visit, descend); break;
+            case Command.ForIn f: VisitCommands(f.Body, visit, descend); break;
+            case Command.ForArith fa: VisitCommands(fa.Body, visit, descend); break;
+            case Command.Select s: VisitCommands(s.Body, visit, descend); break;
+            case Command.Case cs: foreach (var arm in cs.Arms) VisitCommands(arm.Body, visit, descend); break;
+            case Command.BraceGroup bg: VisitCommands(bg.Body, visit, descend); break;
+            case Command.Subshell sub: VisitCommands(sub.Body, visit, descend); break;
+            case Command.ShFunction fn: VisitCommands(fn.Body, visit, descend); break;
+            case Command.Background bk: VisitCommands(bk.Inner, visit, descend); break;
         }
     }
 

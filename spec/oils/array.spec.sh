@@ -276,14 +276,12 @@ printenv.py PYTHONPATH
 A=a B=(b b) printenv.py A B
 ## stdout:
 ## status: 127
-## XFAIL ps-bash gap-oils-array array (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Associative arrays can't be used as env bindings either
 A=a B=([k]=v) printenv.py A B
 ## stdout:
 ## status: 127
-## XFAIL ps-bash gap-oils-array array (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### glob within array yields separate elements

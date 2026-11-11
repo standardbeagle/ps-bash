@@ -96,7 +96,7 @@ type -P mv tar grep
 /tmp/grep
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-type-bash builtin-type-bash (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash intentional-psbash-command a ps-bash command (mv, grep) runs ahead of a PATH file, so type -p/-f print its name, not /tmp/mv (intentional-differences.md: command -v ls / type ls)
 ## timeout: 10
 
 #### type -a -P gives multiple files
@@ -111,7 +111,7 @@ _tmp/pwd
 /bin/pwd
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-type-bash builtin-type-bash (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash platform-windows-unix-bin expects /bin/date, /bin/pwd or /usr/bin/cat, which Windows does not have (intentional-differences.md, Platform)
 ## timeout: 10
 
 #### type -p builtin -> not found
@@ -153,7 +153,6 @@ _tmp/tar
 _tmp/grep
 ## END
 ## status: 1
-## XFAIL ps-bash gap-oils-builtin-type-bash builtin-type-bash (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### type -f builtin -> not found
@@ -177,7 +176,7 @@ tar is /tmp/tar
 grep is /tmp/grep
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-type-bash builtin-type-bash (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash intentional-psbash-command a ps-bash command (mv, grep) runs ahead of a PATH file, so type -p/-f print its name, not /tmp/mv (intentional-differences.md: command -v ls / type ls)
 ## timeout: 10
 
 #### type prints function source code
@@ -254,7 +253,7 @@ date is /bin/date
 date is _tmp/date
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-type-bash builtin-type-bash (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash platform-windows-unix-bin expects /bin/date, /bin/pwd or /usr/bin/cat, which Windows does not have (intentional-differences.md, Platform)
 ## timeout: 10
 
 #### type -ap -> file; abbreviated
@@ -268,7 +267,7 @@ type -ap date
 _tmp/date
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-type-bash builtin-type-bash (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash platform-windows-unix-bin expects /bin/date, /bin/pwd or /usr/bin/cat, which Windows does not have (intentional-differences.md, Platform)
 ## timeout: 10
 
 #### type -a -> builtin and file
@@ -283,7 +282,7 @@ pwd is /bin/pwd
 pwd is _tmp/pwd
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-type-bash builtin-type-bash (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash platform-windows-unix-bin expects /bin/date, /bin/pwd or /usr/bin/cat, which Windows does not have (intentional-differences.md, Platform)
 ## timeout: 10
 
 #### type -a -> builtin and file and shell function
@@ -326,7 +325,7 @@ pwd is /bin/pwd
 pwd is _tmp/pwd
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-type-bash builtin-type-bash (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash platform-windows-unix-bin expects /bin/date, /bin/pwd or /usr/bin/cat, which Windows does not have (intentional-differences.md, Platform)
 ## timeout: 10
 
 #### type -ap -> builtin and file; doesn't print builtin or function
@@ -347,7 +346,7 @@ _tmp/pwd
 ---
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-type-bash builtin-type-bash (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash platform-windows-unix-bin expects /bin/date, /bin/pwd or /usr/bin/cat, which Windows does not have (intentional-differences.md, Platform)
 ## timeout: 10
 
 #### type -a -> executable not in PATH
@@ -374,5 +373,5 @@ status=1
 status=0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-type-bash builtin-type-bash (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash platform-windows-unix-bin expects /bin/date, /bin/pwd or /usr/bin/cat, which Windows does not have (intentional-differences.md, Platform)
 ## timeout: 10

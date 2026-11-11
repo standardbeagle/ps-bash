@@ -168,7 +168,7 @@ status=0
 /tmp/spam/foo
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-cd builtin-cd (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash platform-windows-paths Windows paths print as C:\... (drive letter, backslash); bash prints /tmp (intentional-differences.md, Platform: paths)
 ## timeout: 10
 
 #### chdir is a synonym for cd - busybox ash

@@ -223,8 +223,9 @@ public class EvalDifferentialTests
             export PATH=/usr/bin
             eval $(printf 'export FNM_MULTISHELL_PATH="/tmp/fnm_msh"\nexport PATH="/tmp/fnm_msh":"$PATH"\n')
             echo $FNM_MULTISHELL_PATH
-            echo $PATH
+            case "$PATH" in /tmp/fnm_msh?/usr/bin) echo prepended ;; *) echo "PATH=$PATH" ;; esac
             """;
+        // `?` is the separator: on Windows ps-bash stores PATH `;`-separated (docs/specs/intentional-differences.md).
         await AssertOracle.EqualAsync(script, timeout: EvalHangBudget);
     }
 

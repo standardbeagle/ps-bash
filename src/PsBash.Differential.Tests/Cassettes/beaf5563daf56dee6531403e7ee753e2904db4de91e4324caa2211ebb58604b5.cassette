@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 48
+stdout-length: 29
+stderr-length: 0
+==== SCRIPT ====
+{ time -p sleep 0.01; } 2>&1 | sed 's/[0-9]/N/g'
+==== STDOUT ====
+real N.NN
+user N.NN
+sys N.NN
+
+==== STDERR ====
+

@@ -92,7 +92,6 @@ result=0
 non-zero
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-process builtin-process (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 

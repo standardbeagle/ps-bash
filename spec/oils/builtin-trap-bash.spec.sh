@@ -90,9 +90,10 @@ echo A
 echo status=$?
 echo B
 echo status=$?
-## stdout: [10]
+## STDOUT:
+  [10]
+## END
 ## status: 42
-## XFAIL ps-bash gap-oils-builtin-trap-bash builtin-trap-bash (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### trap DEBUG with 'return'
@@ -163,7 +164,6 @@ hello
   [9]
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-trap-bash builtin-trap-bash (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### trap DEBUG not run in forked interpreter for first pipeline part
@@ -186,7 +186,6 @@ pipe2
 ok
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-trap-bash builtin-trap-bash (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### One 'echo' in first pipeline part - why does bash behave differently from case above?
@@ -216,7 +215,6 @@ pipeline
 ok
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-trap-bash builtin-trap-bash (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### trap DEBUG and pipeline (lastpipe difference)
@@ -258,7 +256,6 @@ b
 1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-trap-bash builtin-trap-bash (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### trap DEBUG function call
@@ -322,7 +319,6 @@ python
 ok
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-trap-bash builtin-trap-bash (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### trap DEBUG for each
@@ -355,7 +351,6 @@ x=2
 ok
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-trap-bash builtin-trap-bash (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### trap DEBUG for expr
@@ -384,7 +379,6 @@ i=4
 ok
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-trap-bash builtin-trap-bash (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### trap DEBUG if while
@@ -407,7 +401,6 @@ if
   [10]
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-trap-bash builtin-trap-bash (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Compare trap DEBUG vs. trap ERR
@@ -450,7 +443,6 @@ err 21
 ok
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-trap-bash builtin-trap-bash (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### trap DEBUG with non-compound commands
@@ -474,25 +466,24 @@ var=value
 
 readonly r=value
 ## STDOUT:
-  [9]
+  [8]
 a
-  [10]
+  [9]
 b
-  [10]
+  [9]
 c
-  [12]
+  [11]
 d
-  [12]
+  [11]
 e
-  [13]
+  [12]
 f
+  [14]
   [15]
-  [16]
-  [18]
-  [20]
+  [17]
+  [19]
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-trap-bash builtin-trap-bash (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -510,16 +501,15 @@ echo "result = $(echo command sub; echo two)"
 )
 echo done
 ## STDOUT:
-  [9]
+  [8]
 result = command sub
 two
 subshell
 two
-  [13]
+  [12]
 done
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-trap-bash builtin-trap-bash (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -533,11 +523,11 @@ trap 'false; echo $LINENO dbg' DEBUG
 sh -c "kill -USR1 $$"
 echo after=$?
 ## STDOUT:
-8 dbg
+7 dbg
 1 dbg
 1 dbg
 1 usr1
-9 dbg
+8 dbg
 after=0
 ## END
 ## status: 0
@@ -574,13 +564,13 @@ trap 'false; echo $LINENO debug' DEBUG
 false
 echo after=$?
 ## STDOUT:
+7 err
+7 debug
+7 debug
+7 debug
+7 err
 8 err
 8 debug
-8 debug
-8 debug
-8 err
-9 err
-9 debug
 after=1
 ## END
 ## status: 0

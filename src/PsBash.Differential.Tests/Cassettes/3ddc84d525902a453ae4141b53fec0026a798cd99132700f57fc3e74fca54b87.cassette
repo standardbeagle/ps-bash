@@ -1,0 +1,18 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 170
+stdout-length: 54
+stderr-length: 0
+==== SCRIPT ====
+v=Q; A=a B=( b   "x y" $v ) env | grep -E '^(A|B)=' | sort; B=() printenv B; C=([k]=v) printenv C; f() { echo "[$B] ${B[1]-none}"; }; B=(p q) f; echo "after [${B-unset}]"
+==== STDOUT ====
+A=a
+B=(b x y Q)
+()
+([k]=v)
+[(p q)] none
+after [unset]
+
+==== STDERR ====
+

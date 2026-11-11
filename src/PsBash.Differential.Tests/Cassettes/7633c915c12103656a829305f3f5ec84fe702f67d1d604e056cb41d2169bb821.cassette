@@ -1,0 +1,17 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 229
+stdout-length: 23
+stderr-length: 0
+==== SCRIPT ====
+export PATH=/usr/bin
+eval $(printf 'export FNM_MULTISHELL_PATH="/tmp/fnm_msh"\nexport PATH="/tmp/fnm_msh":"$PATH"\n')
+echo $FNM_MULTISHELL_PATH
+case "$PATH" in /tmp/fnm_msh?/usr/bin) echo prepended ;; *) echo "PATH=$PATH" ;; esac
+==== STDOUT ====
+/tmp/fnm_msh
+prepended
+
+==== STDERR ====
+

@@ -7,7 +7,6 @@ fc -l 0 1 2 || echo too many args!
 ## status: 0
 ## timeout: 10
 ## real-launcher
-## XFAIL ps-bash gap-fc-builtin fc is not a builtin: PowerShell's fc alias (Format-Custom) runs and fails, so the || branch runs; bash lists an empty history with status 0
 
 #### fc errors out on too many args with strict_arg_parse
 shopt -s strict_arg_parse || true
@@ -16,7 +15,6 @@ fc -l 0 1 2 || echo too many args!
 ## status: 0
 ## timeout: 10
 ## real-launcher
-## XFAIL ps-bash gap-fc-builtin fc is not a builtin: PowerShell's fc alias (Format-Custom) runs and fails, so the || branch runs; bash lists an empty history with status 0
 
 #### fc -l when no history is present
 fc -l

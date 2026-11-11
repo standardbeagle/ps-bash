@@ -16,8 +16,9 @@ public sealed class WslBashExecutor : IScriptExecutor
         string dir = Path.Combine(Path.GetTempPath(), "ps-bash", "spec-record");
         Directory.CreateDirectory(dir);
         string file = Path.Combine(dir, Guid.NewGuid().ToString("N") + ".sh");
-        // Oils cases run "the shell under test" as $SH; for the oracle that is bash itself.
-        await File.WriteAllTextAsync(file, SpecImporter.UsesShellVariable(script) ? "SH=bash\n" + script : script, cancel);
+        // Oils cases run "the shell under test" as $SH; for the oracle that is bash itself. Set on the script's first line
+        // (as PsBashExecutor does): a line of its own shifted every recorded $LINENO by one.
+        await File.WriteAllTextAsync(file, SpecImporter.UsesShellVariable(script) ? "SH=bash; " + script : script, cancel);
         try
         {
             var psi = new ProcessStartInfo("wsl.exe") { RedirectStandardOutput = true, RedirectStandardError = true, RedirectStandardInput = true, UseShellExecute = false };

@@ -108,13 +108,31 @@ function Get-BashFuncNames {
 # -NameOnly returns the plain variable name the target denotes (for ${!ref:=word}).
 function Get-BashIndirectValue {
     param([AllowNull()]$Ref, [string]$RefName, [object[]]$Pos = @(), [switch]$NameOnly)
+    $refSet = $null -ne $Ref
     if ($null -eq $Ref -and $RefName) {
         $rv = Get-Variable -Name $RefName -ValueOnly -ErrorAction Ignore
-        if ($null -ne $rv) { $Ref = if ($rv -is [System.Collections.IDictionary]) { $rv['0'] } elseif ($rv -is [array]) { $rv[0] } else { $rv } }
+        if ($null -ne $rv) { $refSet = $true; $Ref = if ($rv -is [System.Collections.IDictionary]) { $rv['0'] } elseif ($rv -is [array]) { $rv[0] } else { $rv } }
     }
     if ($null -eq $Ref -and $RefName -eq 'OPTIND') { $Ref = '1' }
     $n = [string]$Ref
-    if ($n -eq '') { return $null }
+    # A failed expansion abandons the command it is part of, status 1. The mark is this call's script position,
+    # which echo (FileSystemHelpers.TakeExpansionFailed) matches against its own statement.
+    $at = $MyInvocation
+    if ($n -eq '') {
+        # bash 5: `${!ref}` with ref unset is an error, with ref set to '' an invalid (empty) name; an empty array
+        # (`arr=(); ${!arr}`) is neither.
+        if (-not $refSet -and $RefName -and $RefName -ne 'OPTIND') {
+            $global:LASTEXITCODE = 1
+            $global:__BashExpansionFailed = "$($at.ScriptLineNumber):$($at.OffsetInLine)"
+            Write-BashHostStderr "bash: ${RefName}: invalid indirect expansion"
+        }
+        elseif ($null -ne $Ref) {
+            $global:LASTEXITCODE = 1
+            $global:__BashExpansionFailed = "$($at.ScriptLineNumber):$($at.OffsetInLine)"
+            Write-BashHostStderr "bash: : invalid variable name"
+        }
+        return $null
+    }
     if ($NameOnly) { return ($n -replace '\[.*$', '') }
     if ($n -match '^[0-9]+$') {
         if ([int]$n -eq 0) { return 'bash' }
@@ -128,20 +146,35 @@ function Get-BashIndirectValue {
     if ($n -eq 'OPTIND' -and $null -eq [System.Environment]::GetEnvironmentVariable('OPTIND') -and $null -eq (Get-Variable -Name OPTIND -ValueOnly -ErrorAction Ignore)) { return '1' }
     if ($n -match '^([A-Za-z_][A-Za-z0-9_]*)\[(.*)\]$') {
         $v = Get-Variable -Name $Matches[1] -ValueOnly -ErrorAction Ignore
-        $sub = $Matches[2].Trim('"', "'")
+        $rawSub = $Matches[2]
+        $sub = $rawSub.Trim('"', "'")
         if ($null -eq $v) { return $null }
         if ($v -is [System.Collections.IDictionary]) {
+            # An assoc key is a word: its quotes are removed wherever they are (`assoc["al"e]` is key `ale`).
+            $sub = [PsBash.Cmdlets.BashQuoteText]::RemoveQuotes($rawSub)
             if ($sub -eq '@' -or $sub -eq '*') { return (@($v.Values) -join ' ') }
             return $v[$sub]
         }
         if ($sub -eq '@' -or $sub -eq '*') { return (@($v) -join ' ') }
-        if ($sub -match '^-?[0-9]+$') { $i = [int]$sub; if ($i -lt 0) { $i += @($v).Count }; $all = @($v); if ($i -ge 0 -and $i -lt $all.Count) { return $all[$i] } }
+        # An indexed subscript is arithmetic (`ref='a[i+1]'`); one that does not parse (`a[~+]`) fails the expansion.
+        if ($sub -match '^-?[0-9]+$') { $i = [long]$sub }
+        else {
+            $global:LASTEXITCODE = 0
+            $iv = Invoke-BashArith $rawSub
+            if ($global:LASTEXITCODE -ne 0 -or $null -eq $iv) {
+                $global:LASTEXITCODE = 1
+                $global:__BashExpansionFailed = "$($at.ScriptLineNumber):$($at.OffsetInLine)"
+                return $null
+            }
+            $i = [long]$iv
+        }
+        $all = @($v); if ($i -lt 0) { $i += $all.Count }; if ($i -ge 0 -and $i -lt $all.Count) { return $all[$i] }
         return $null
     }
     if ($n -notmatch '^[A-Za-z_][A-Za-z0-9_]*$') {
         # bash: `${!a}` with a='bad var name' is "invalid variable name"; the command is abandoned with status 1.
         $global:LASTEXITCODE = 1
-        $global:__BashExpansionFailed = $true
+        $global:__BashExpansionFailed = "$($at.ScriptLineNumber):$($at.OffsetInLine)"
         Write-BashHostStderr "bash: ${n}: invalid variable name"
         return $null
     }
@@ -168,13 +201,33 @@ function Write-BashXtrace {
 # function, then a builtin / ps-bash command (`false`, `true`, `echo`, `test` are not PowerShell commands of
 # those names), then whatever PowerShell can find (a program on PATH). Returns something `&` can call.
 function Resolve-BashCommand {
-    param([string]$Name)
-    if ([string]::IsNullOrEmpty($Name) -or $Name.Contains('/') -or $Name.Contains('\')) { return $Name }
+    param([string]$Name, [object[]]$Words, [switch]$Fed)
+    if ($Fed -or $PSBoundParameters.ContainsKey('Words')) {
+        # -Words: an unquoted name (`$SUDO rm f`, `$CC -c x.c`) after word splitting. None: the next operand is the
+        # command, and with no operand nothing runs (status 0). More than one: the rest lead the operands.
+        # -Fed: the command is inside a compound command's stdin scope; it gets that stdin only if it reads stdin.
+        # The block is created unbound so it runs in the caller's scope, as the resolved command itself would.
+        $w = @(if ($PSBoundParameters.ContainsKey('Words')) { $Words } else { $Name })
+        if (-not $Fed -and $w.Count -eq 1) { return Resolve-BashCommand -Name ([string]$w[0]) }
+        $pre = foreach ($x in $w) { "'" + ([string]$x).Replace("'", "''") + "'" }
+        return [scriptblock]::Create('$__bw = @(' + ($pre -join ', ') + ') + @($args); $__bfed = ' + $(if ($Fed) { '$true' } else { '$false' }) + "`n" + $script:BashDynamicCommandBody)
+    }
+    if ($Name -eq '') {
+        # `"$empty"` / `''` as a command: bash looks up the empty name and does not find it.
+        return {
+            Write-Error -Message 'bash: : command not found' -Category ObjectNotFound -ErrorAction Continue
+            $global:LASTEXITCODE = 127
+        }
+    }
+    if ($null -eq $Name -or $Name.Contains('/') -or $Name.Contains('\')) { return $Name }
     if ($Name -eq '[') {
         # [ ... ]: the closing bracket is not an operand of test.
         return { $a = @($args); if ($a.Count -gt 0 -and $a[-1] -eq ']') { $a = @($a | Select-Object -First ($a.Count - 1)) }; Invoke-BashTest @a }
     }
-    if (Get-Command -Name ([WildcardPattern]::Escape($Name)) -CommandType Function -ErrorAction Ignore) { return $Name }
+    # A command word that came from an expansion (`$cmd`) is never alias-expanded in bash, and an alias runs here
+    # as a global function of its name: skip that function, so `cmd=myalias; $cmd` is the command, or not found.
+    $isAlias = $global:BashUserAliases -and $global:BashUserAliases.ContainsKey($Name)
+    if (-not $isAlias -and (Get-Command -Name ([WildcardPattern]::Escape($Name)) -CommandType Function -ErrorAction Ignore)) { return $Name }
     switch -CaseSensitive ($Name) {
         'true'  { return { $global:LASTEXITCODE = 0 } }
         ':'     { return { $global:LASTEXITCODE = 0 } }
@@ -182,8 +235,35 @@ function Resolve-BashCommand {
     }
     $cmd = Get-Command -Name ('Invoke-Bash' + [WildcardPattern]::Escape($Name)) -CommandType Cmdlet, Function -ErrorAction Ignore
     if ($cmd) { return $cmd.Name }
+    if ($isAlias) {
+        $app = Get-Command -Name ([WildcardPattern]::Escape($Name)) -CommandType Application -ErrorAction Ignore | Select-Object -First 1
+        if ($app) { return $app.Source }
+        return {
+            Write-Error -Message "bash: ${Name}: command not found" -Category ObjectNotFound -TargetObject $Name -ErrorAction Continue
+            $global:LASTEXITCODE = 127
+        }.GetNewClosure()
+    }
     return $Name
 }
+# The rest of Resolve-BashCommand's -Words / -Fed block, given $__bw (every word: the command, then its operands) and
+# $__bfed. A user function reads stdin like a program; a ps-bash command reads it per StdinReaders, the rule the
+# emitter applies to a literal command name. A command that does not read stdin is never piped to: a cmdlet with no
+# pipeline-input parameter fails to bind a record, and on an empty pipeline it never runs at all.
+$script:BashDynamicCommandBody = @'
+if ($__bw.Count -eq 0) { $global:LASTEXITCODE = 0; return }
+$__bn = [string]$__bw[0]
+$__bc = Resolve-BashCommand -Name $__bn
+$__bp = @($__bw | Select-Object -Skip 1)
+if ($__bfed) {
+    $__bread = ($__bc -is [string] -and $__bc -ceq $__bn -and $__bn -ne '' -and
+            (Get-Command -Name ([WildcardPattern]::Escape($__bn)) -CommandType Function -ErrorAction Ignore)) -or
+        $(if ($__bsr = 'PsBash.Core.Parser.StdinReaders' -as [type]) { $__bsr::ShouldFeed($__bn, [string[]]$__bp) } else { $true })
+    if ($__bread) {
+        & { while ($global:__BashStdIn -and $global:__BashStdIn.Count -gt 0) { $global:__BashStdIn.Dequeue() } } | & $__bc @__bp
+    } else { & $__bc @__bp }
+} elseif ($MyInvocation.ExpectingInput) { $input | & $__bc @__bp }
+else { & $__bc @__bp }
+'@
 
 # OPTIND starts at 1 (getopts reads it; scripts print it); the host setup script does the same before the first command.
 if ($null -eq $env:OPTIND) { $env:OPTIND = '1' }

@@ -1,0 +1,17 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 70
+stdout-length: 6
+stderr-length: 0
+==== SCRIPT ====
+shopt -s expand_aliases
+alias e_='for i in 1 2 3; do echo $i;'
+e_ done
+==== STDOUT ====
+1
+2
+3
+
+==== STDERR ====
+

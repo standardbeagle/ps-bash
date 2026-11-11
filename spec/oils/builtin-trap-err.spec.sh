@@ -440,9 +440,9 @@ echo ok
 
 # ash doesn't reject errtrace, but doesn't implement it
 ## STDOUT:
-line=7
+line=6
 subshell
-line=11
+line=10
 ok
 ## END
 ## status: 0
@@ -460,7 +460,7 @@ false & wait
 
 { false; echo async; } & wait
 ## STDOUT:
-line=9
+line=8
 async
 ## END
 ## status: 0

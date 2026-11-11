@@ -194,7 +194,6 @@ X
 status=127
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-alias alias (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### here doc inside alias
@@ -263,7 +262,6 @@ a (( var = 0 ))
 echo done
 ## stdout: done
 ## status: 0
-## XFAIL ps-bash gap-oils-alias alias (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### alias with word of multiple lines
@@ -343,7 +341,6 @@ e_ done
 3
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-alias alias (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Loop split across alias in another way
@@ -356,7 +353,6 @@ e_ $i; done
 3
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-alias alias (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Loop split across both iterative and recursive aliases
@@ -375,7 +371,6 @@ FOR2 eye2 IN onetwo 3; do echo $i; done
 3
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-alias alias (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Alias with a quote in the middle is a syntax error
@@ -439,7 +434,6 @@ sayhi
 
 ## END
 ## status: 127
-## XFAIL ps-bash gap-oils-alias alias (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Alias can be defined and used on a single line
@@ -494,7 +488,6 @@ one
 two
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-alias alias (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### alias for left paren
@@ -506,7 +499,6 @@ one
 two
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-alias alias (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### alias used in subshell and command sub

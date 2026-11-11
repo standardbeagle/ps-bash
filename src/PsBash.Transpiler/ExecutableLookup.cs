@@ -39,6 +39,32 @@ public static class ExecutableLookup
             yield return dir;
     }
 
+    /// <summary>
+    /// A PATH value as bash scripts write it (<c>PATH=_tmp:$PATH</c>, <c>PATH="$HOME/bin:$PATH"</c>) in Windows form:
+    /// each <c>:</c> that separates entries becomes <c>;</c>. A drive colon stays: one letter at the start of an
+    /// entry followed by <c>\</c>, <c>/</c> or the end (<c>C:\x</c>, <c>C:/x</c>, <c>C:</c>). Without this,
+    /// <c>_tmp:C:\Program Files\PowerShell\7</c> is ONE entry and hides both directories from command lookup.
+    /// </summary>
+    public static string ToWindowsPathList(string value)
+    {
+        if (value.IndexOf(':') < 0) return value;
+        var sb = new System.Text.StringBuilder(value.Length);
+        int entryStart = 0;
+        for (int i = 0; i < value.Length; i++)
+        {
+            char c = value[i];
+            if (c == ';') { sb.Append(c); entryStart = i + 1; continue; }
+            if (c == ':')
+            {
+                bool driveColon = i - entryStart == 1 && char.IsAsciiLetter(value[entryStart])
+                    && (i + 1 == value.Length || value[i + 1] is '\\' or '/' or ';' or ':');
+                if (!driveColon) { sb.Append(';'); entryStart = i + 1; continue; }
+            }
+            sb.Append(c);
+        }
+        return sb.ToString();
+    }
+
     /// <summary>First runnable <paramref name="command"/> in <paramref name="directories"/>, in order;
     /// null when none. Blank and malformed directory entries are skipped, never thrown on.</summary>
     public static string? Find(string command, IEnumerable<string> directories) =>

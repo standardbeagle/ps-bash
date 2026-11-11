@@ -34,6 +34,30 @@ public static class BashPatternMatch
             || (PsBash.Core.RuntimePath.TryUnmapTmp(text, out var bash) && rx.IsMatch(bash));
     }
 
+    /// <summary>
+    /// BASH_REMATCH after a successful <c>[[ s =~ re ]]</c>, from PowerShell's <c>$Matches</c>: an indexed array of the
+    /// whole match and then every group in order, a group that took no part being "" (bash). <c>$Matches</c> itself is a
+    /// hashtable: it enumerates in hash order (<c>${BASH_REMATCH[@]}</c> was "c b bc"), leaves non-participating groups
+    /// out, and is keyed by int where every other array reads by a string index.
+    /// </summary>
+    public static string[] Rematch(System.Collections.IDictionary matches, string pattern)
+    {
+        int count = 0;
+        foreach (var key in matches.Keys)
+            if (key is int i && i >= count) count = i + 1;
+        if (Cache.Count > MaxCached) Cache.Clear();
+        try
+        {
+            var rx = Cache.GetOrAdd((pattern, false), static k => new Regex(k.Item1, RegexOptions.CultureInvariant));
+            count = Math.Max(count, rx.GetGroupNumbers().Length);
+        }
+        catch (ArgumentException) { }
+        var result = new string[count];
+        for (int g = 0; g < count; g++)
+            result[g] = matches.Contains(g) ? Text(matches[g]) : "";
+        return result;
+    }
+
     // Bash pattern text → anchored regex, for patterns assembled at run time (one script line in a
     // loop evaluates the same pattern every iteration).
     private static readonly ConcurrentDictionary<string, string> PatternRegex = new();

@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 70
+stdout-length: 7
+stderr-length: 0
+==== SCRIPT ====
+echo 'v=1.25' | gawk 'match($0, /\.([0-9]+)/, m) { print m[1], m[0] }'
+==== STDOUT ====
+25 .25
+
+==== STDERR ====
+

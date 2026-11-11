@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 107
+stdout-length: 9
+stderr-length: 0
+==== SCRIPT ====
+if { time false; } 2>/dev/null; then echo yes; else echo no; fi; { time ! false; } 2>/dev/null; echo neg=$?
+==== STDOUT ====
+no
+neg=0
+
+==== STDERR ====
+

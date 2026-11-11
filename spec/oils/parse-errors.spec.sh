@@ -72,7 +72,6 @@ set -o errexit
 }
 ## stdout:
 ## status: 127
-## XFAIL ps-bash gap-oils-parse-errors parse-errors (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Invalid for loop variable name

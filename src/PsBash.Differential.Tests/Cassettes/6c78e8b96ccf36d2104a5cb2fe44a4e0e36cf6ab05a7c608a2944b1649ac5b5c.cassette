@@ -1,0 +1,19 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 158
+stdout-length: 8
+stderr-length: 98
+==== SCRIPT ====
+rm -f indirect-err.txt
+x=$(echo "e[${!undef}]" 2>>indirect-err.txt)
+echo "st=$? x=$x"
+grep -o '[^:]*: invalid [a-z ]*' indirect-err.txt
+rm -f indirect-err.txt
+==== STDOUT ====
+st=1 x=
+
+==== STDERR ====
+bash: line 2: undef: invalid indirect expansion
+grep: indirect-err.txt: No such file or directory
+

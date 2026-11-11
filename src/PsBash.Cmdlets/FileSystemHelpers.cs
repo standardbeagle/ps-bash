@@ -361,13 +361,22 @@ internal static class FileSystemHelpers
     {
         object? mark = cmdlet.SessionState.PSVariable.GetValue("global:__BashExpansionFailed");
         if (mark is null or false) return false;
-        cmdlet.SessionState.PSVariable.Set("global:__BashExpansionFailed", false);
+        var me = cmdlet.MyInvocation;
+        bool mine = IsMarkInStatement(mark, me);
+        // Every element of a pipeline begins before the first one ends, so `echo "$((1/0))" 2>>f` (echo | Invoke-BashRedirect)
+        // has the redirect look first. A later element leaves a mark it does not own for the earlier one to take.
+        if (mine || me.PipelinePosition <= 1)
+            cmdlet.SessionState.PSVariable.Set("global:__BashExpansionFailed", false);
+        return mine;
+    }
+
+    private static bool IsMarkInStatement(object mark, InvocationInfo me)
+    {
         if (mark is not string where) return false;
         int colon = where.IndexOf(':');
         if (colon < 0 || !int.TryParse(where.AsSpan(0, colon), NumberStyles.None, CultureInfo.InvariantCulture, out int line)
             || !int.TryParse(where.AsSpan(colon + 1), NumberStyles.None, CultureInfo.InvariantCulture, out int column))
             return false;
-        var me = cmdlet.MyInvocation;
         string statement = me.Statement ?? "";
         int firstLineLength = statement.IndexOf('\n') is var nlAt and >= 0 ? nlAt : statement.Length;
         if (line == me.ScriptLineNumber) return column >= me.OffsetInLine && column < me.OffsetInLine + firstLineLength;

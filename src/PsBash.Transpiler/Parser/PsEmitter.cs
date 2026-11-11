@@ -390,9 +390,71 @@ public static partial class PsEmitter
     {
         if (cmd is Command.Simple { Line: > 0 } lined) PsBuild.TrapLine = lined.Line;
         else if (LastSimpleLine(cmd) is > 0 and var lastLine) PsBuild.TrapLine = lastLine;
-        if (_debugTrapMode && _functionDepth == 0 && cmd is Command.Simple { Line: > 0 } dbg && !IsTrapCommand(dbg))
-            return PsBuild.DebugTrapRun(dbg.Line) + EmitStatementBody(cmd);
+        if (DebugActive)
+            return cmd is Command.AndOrList andOr ? EmitDebugAndOr(andOr) : WithDebugLead(cmd, () => EmitStatementBody(cmd));
         return EmitStatementBody(cmd);
+    }
+
+    // ── trap DEBUG ───────────────────────────────────────────────────────────────────────
+    // bash runs the DEBUG action before every simple command (assignments, `[[ ]]`, `(( ))` included), before each
+    // `for` iteration and arithmetic-for clause, and before `case`, with $LINENO = that command's line. A function
+    // (no functrace), a subshell and `$( )` do not inherit it; a pipeline runs it in the parent for each simple stage,
+    // in order, and not inside a compound stage. Everything here is gated on DebugActive: other scripts emit as before.
+
+    /// <summary>Nesting of pipeline stages being emitted while DEBUG is on: their bodies do not run the action.</summary>
+    [ThreadStatic]
+    private static int _debugSuppress;
+
+    private static bool DebugActive => _debugTrapMode && _functionDepth == 0 && _subshellDepth == 0 && _debugSuppress == 0;
+
+    /// <summary>The DEBUG run for a command on <paramref name="line"/>, or "" (no line, or DEBUG not active here).</summary>
+    private static string DebugAt(int line) =>
+        line > 0 && DebugActive ? PsBuild.DebugTrapRun(line, _errexitMode ? ErrexitExitStatement() : null) : "";
+
+    /// <summary>The DEBUG runs bash makes as <paramref name="cmd"/> starts: one per simple command it runs first.</summary>
+    private static string DebugLead(Command cmd) => cmd switch
+    {
+        Command.Simple s => DebugAt(s.Line),
+        Command.ShAssignment a => DebugAt(a.Line),
+        Command.BoolExpr b => DebugAt(b.Line),
+        Command.ArithCommand a => DebugAt(a.Line),
+        Command.Case c => DebugAt(c.Line),
+        Command.Pipeline p => string.Concat(p.Commands.Select(stage =>
+            stage is Command.Simple or Command.ShAssignment or Command.BoolExpr or Command.ArithCommand ? DebugLead(stage) : "")),
+        _ => "",
+    };
+
+    /// <summary><paramref name="emit"/> with <paramref name="cmd"/>'s DEBUG lead in front; a pipeline's stages are emitted
+    /// with the action off (each simple stage already ran it in the lead).</summary>
+    private static string WithDebugLead(Command cmd, Func<string> emit)
+    {
+        string lead = DebugLead(cmd);
+        if (cmd is not Command.Pipeline { Commands.Length: > 1 }) return lead + emit();
+        _debugSuppress++;
+        try { return lead + emit(); }
+        finally { _debugSuppress--; }
+    }
+
+    /// <summary>
+    /// <c>a &amp;&amp; b || c</c> while DEBUG is on, as statements: PowerShell's chain operands cannot hold the action's
+    /// statement, so each operand runs as a statement (with its own lead) when the status so far allows it. Left to
+    /// right, as bash groups it: <c>||</c> runs on a non-zero status, <c>&amp;&amp;</c> on zero; only the final operand is
+    /// subject to errexit.
+    /// </summary>
+    private static string EmitDebugAndOr(Command.AndOrList andOr)
+    {
+        andOr = andOr with { Commands = ResolveLastArgRefs(andOr.Commands) };
+        var sb = new StringBuilder();
+        for (int i = 0; i < andOr.Commands.Length; i++)
+        {
+            var op = andOr.Commands[i];
+            string text = i == andOr.Commands.Length - 1 ? EmitStatementCore(op) : WithErrexitExempt(() => EmitStatementCore(op));
+            // A plain assignment leaves the earlier status in LASTEXITCODE; its own status is 0.
+            if (op is Command.ShAssignment asg && !ContainsCommandSub(asg)) text += "; " + PsBuild.SetStatus(0);
+            if (i == 0) sb.Append(text);
+            else sb.Append("; if (").Append(PsBuild.LastStatusTest(negate: andOr.Ops[i - 1] == "||")).Append(") { ").Append(text).Append(" }");
+        }
+        return sb.ToString();
     }
 
     /// <summary>Line of the last simple command a list or pipeline runs (bash reports that line for <c>trap ERR</c>'s <c>$LINENO</c>); 0 when unknown.</summary>
@@ -658,7 +720,8 @@ public static partial class PsEmitter
         var priorAssocVars = _assocVars;
         _assocVars = new HashSet<string>(StringComparer.Ordinal);
         var priorArrayVars = _arrayVars;
-        _arrayVars = new HashSet<string>(StringComparer.Ordinal);
+        // BASH_REMATCH is an array `=~` fills: a bare `$BASH_REMATCH` is its element 0.
+        _arrayVars = new HashSet<string>(StringComparer.Ordinal) { "BASH_REMATCH" };
         var priorCaseVars = _caseVars;
         _caseVars = new Dictionary<string, bool>(StringComparer.Ordinal);
         _intVars = new HashSet<string>(StringComparer.Ordinal);
@@ -705,11 +768,30 @@ public static partial class PsEmitter
         _pipefailMode = priorPipefail || InheritedPipefail || bash.Contains("pipefail", StringComparison.Ordinal) || bash.Contains("PIPESTATUS", StringComparison.Ordinal);
         try
         {
-            var cmd = BashParser.Parse(bash);
+            Command? cmd;
+            bool aliasesSpliced = false;
+            // An alias holding part of a compound command (`alias LEFT={`): bash reads the alias text in its place.
+            string? spliced = SpliceAliases(bash, out bool partialAlias);
+            if (spliced is not null && partialAlias)
+            {
+                try { cmd = BashParser.Parse(spliced); aliasesSpliced = true; }
+                catch (ParseException) { cmd = BashParser.Parse(bash); }
+            }
+            else
+            {
+                try { cmd = BashParser.Parse(bash); }
+                catch (ParseException original) when (spliced is not null)
+                {
+                    try { cmd = BashParser.Parse(spliced); }
+                    catch (ParseException) { System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(original).Throw(); throw; }
+                    aliasesSpliced = true;
+                }
+            }
             if (cmd is null)
                 return null;
             CollectCallSites(cmd);
             CollectAliasDefs(cmd, bash);
+            if (aliasesSpliced) { _aliasDefs = null; _aliasStaticOnly = false; } // already expanded in the text
             return EmitBody(cmd);
         }
         finally
@@ -886,13 +968,15 @@ public static partial class PsEmitter
     /// <c>[ ]</c>/<c>[[ ]]</c>/<c>(( ))</c>/<c>true</c>/<c>false</c> test): in expression position
     /// (<see cref="PsBuild.ExitCodeTest"/>) its output must be <c>[void]</c>-ed, and bash prints it.
     /// </summary>
-    private static bool IsHoistedCondition(Command cond) => ConditionRunsCommand(cond);
+    private static bool IsHoistedCondition(Command cond) => ConditionRunsCommand(cond) || DebugActive;
 
     /// <summary>The hoisted condition statement(s), errexit-exempt (and suppressed under
     /// errexit) like <see cref="EmitGuardedCondition"/>, followed by "; ".</summary>
     private static string EmitHoistedCondition(Command cond)
     {
-        var text = WithErrexitExempt(() => Emit(cond));
+        // While DEBUG is on every condition is hoisted, so the action can run before it (each time it is tested).
+        var text = WithErrexitExempt(() => !DebugActive ? Emit(cond)
+            : cond is Command.AndOrList andOr ? EmitDebugAndOr(andOr) : WithDebugLead(cond, () => Emit(cond)));
         if (_errexitMode) text = PsBuild.ErrexitSuppressed(text);
         return PsBuild.HoistedCondition(text);
     }
@@ -1028,6 +1112,7 @@ public static partial class PsEmitter
             }
 
             sb.Append(IterGuardCheck(depth));
+            sb.Append(DebugAt(forIn.Line)); // trap DEBUG: before each iteration, with the `for` line
             // The loop variable is an ordinary shell variable: the body's functions see it and it keeps its last value after the loop.
             sb.Append($"$env:{forIn.Var} = [string]${forIn.Var}; ");
 
@@ -1311,6 +1396,8 @@ public static partial class PsEmitter
             bool added = loopVar is not null && vars.Add(loopVar);
             try
             {
+                if (forArith.Line > 0 && DebugActive)
+                    return ApplyCompoundRedirects(EmitDebugForArith(forArith, depth, label, loopVar), forArith.Redirects);
                 var sb = new StringBuilder();
                 sb.Append(IterGuardPrefix(depth));
                 sb.Append(label).Append("for (");
@@ -1335,6 +1422,33 @@ public static partial class PsEmitter
             PopLoopLabel();
             _loopDepth--;
         }
+    }
+
+    /// <summary>
+    /// <c>for ((init; cond; step))</c> while DEBUG is on: bash runs the action before each clause it evaluates (init
+    /// once; cond before every pass, the failing one included; step after every pass), and a PowerShell <c>for</c>
+    /// header cannot hold it. A <c>while</c> whose first pass skips the step; <c>continue</c> still reaches the step.
+    /// </summary>
+    private static string EmitDebugForArith(Command.ForArith forArith, int depth, string label, string? loopVar)
+    {
+        int line = forArith.Line;
+        string first = "$__psbash_af" + depth;
+        var sb = new StringBuilder();
+        string init = EmitForArithClause(forArith.Init, initializeLoopVar: loopVar);
+        if (forArith.Init is not null) sb.Append(DebugAt(line));
+        if (init.Length > 0) sb.Append(init).Append("; ");
+        sb.Append(first).Append(" = $true; ");
+        sb.Append(IterGuardPrefix(depth)).Append(label).Append("while ($true) { ");
+        sb.Append(IterGuardCheck(depth));
+        sb.Append("if (-not ").Append(first).Append(") { ");
+        if (forArith.Step is not null)
+            sb.Append(DebugAt(line)).Append(EmitForArithClause(forArith.Step, initializeLoopVar: null)).Append("; ");
+        sb.Append("}; ").Append(first).Append(" = $false; ");
+        if (forArith.Cond is not null) sb.Append(DebugAt(line));
+        sb.Append("if (-not (").Append(EmitForArithCondition(forArith.Cond)).Append(")) { break }; ");
+        sb.Append(EmitBody(forArith.Body));
+        sb.Append(" }");
+        return sb.ToString();
     }
 
     private static string EmitWhile(Command.While whileCmd)
@@ -1983,10 +2097,13 @@ public static partial class PsEmitter
     private static string EmitSimpleFed(Command.Simple simple)
     {
         var text = EmitSimple(simple);
-        // A run-time command name (`$c`, `"$tool"`) may read stdin: feed the scope's queue as a pipeline.
+        // A run-time command name (`$c`, `"$tool"`) may read stdin. Whether it does is known only once it resolves:
+        // `-Fed` has the runtime feed the scope's queue to a reader and leave it for anything else. Piped
+        // unconditionally, `printf`/`test` never ran on an empty queue and failed to bind a queued line.
+        const string dynPrefix = "& (Resolve-BashCommand ";
         if (_inStdinScope && simple.EnvPairs.IsEmpty && simple.HereDocs.IsDefaultOrEmpty && !HasInputRedirect(simple.Redirects)
-            && text.StartsWith("& (Resolve-BashCommand ", StringComparison.Ordinal) && !PsBuild.IsStatementList(text))
-            return PsBuild.StdinFeed + " | " + text;
+            && text.StartsWith(dynPrefix, StringComparison.Ordinal) && !PsBuild.IsStatementList(text))
+            return dynPrefix + "-Fed " + text.Substring(dynPrefix.Length);
         if (!_inStdinScope
             || !simple.EnvPairs.IsEmpty
             || !simple.HereDocs.IsDefaultOrEmpty
@@ -2911,7 +3028,7 @@ public static partial class PsEmitter
                 // `if ( ( … ) )` condition while the assignment is a side effect.
                 // A malformed regex is status 2 (the standalone-statement wrapper turns __BashTestBad into it).
                 return "$( try { $__psbash_m = " + matchExpr + " } catch [System.ArgumentException] { $__psbash_m = $false; $global:__BashTestBad = $true; Write-Error 'syntax error in regular expression' -ErrorAction Continue }" +
-                       "; if ($__psbash_m) { $global:BASH_REMATCH = $Matches } " +
+                       "; if ($__psbash_m) { $global:BASH_REMATCH = [PsBash.Cmdlets.BashPatternMatch]::Rematch($Matches, " + patExpr + ") } " +
                        "else { $global:BASH_REMATCH = $null }; $__psbash_m )";
             }
 
@@ -3111,7 +3228,14 @@ public static partial class PsEmitter
     /// double-quoted word and quotes it if it is a bare literal).
     /// </summary>
     private static string EmitTestOperand(CompoundWord word)
-        => QuoteIfBareLiteral(EmitTestArg(word));
+    {
+        var emitted = EmitTestArg(word);
+        // A literal word that starts with `$` (`[[ $ =~ "$" ]]`, `[[ "$" == $ ]]`) is text, not a variable reference:
+        // left bare, PowerShell read `$` as an unknown token ("$: command not found", or a parse error before `&&`).
+        return emitted.StartsWith('$') && ExtractSingleQuotedOrLiteralValue(word) is { } literal
+            ? PsBuild.SingleQuote(literal)
+            : QuoteIfBareLiteral(emitted);
+    }
 
     /// <summary>
     /// True when the word is exactly ONE parameter/command expansion and nothing else
@@ -3577,6 +3701,9 @@ public static partial class PsEmitter
         // re-point it so a script that assigns HOME sees it (`HOME=/home/bob; echo ~` prints /home/bob).
         if (!cmd.IsLocal && cmd.Pairs.Any(p => p.Name == "HOME" && p.ArrayValue is null && p.Op == AssignOp.Equal))
             sb.Append("; Microsoft.PowerShell.Utility\\Set-Variable -Name HOME -Value $env:HOME -Option ReadOnly,AllScope -Scope Global -Force");
+        // A script writes PATH with `:` separators (`PATH=_tmp:$PATH`); Windows lookup needs `;`.
+        if (cmd.Pairs.Any(p => p.Name == "PATH" && p.ArrayValue is null))
+            sb.Append("; ").Append(PsBuild.NormalizePathVariable);
         // `export X=1` / `export X`: `declare -p X` shows the x attribute.
         if (cmd.IsExport && !cmd.IsLocal && _declarePrintMode)
             foreach (var pair in cmd.Pairs)
@@ -3679,6 +3806,7 @@ public static partial class PsEmitter
             if (!IsDynamicAssignment(w) && TrySplitInitializer(w, out var staticName, out var staticValue))
             {
                 sbOut.Append("$env:").Append(staticName).Append(" = ").Append(EmitAssignmentValue(staticValue)).Append("; ");
+                if (staticName == "PATH") sbOut.Append(PsBuild.NormalizePathVariable).Append("; ");
                 continue;
             }
             string expr = "[string](" + EmitWord(w) + ")";
@@ -4269,6 +4397,7 @@ public static partial class PsEmitter
             bool intAttr = cmd.Words.Skip(1).Any(w => GetLiteralValue(w) == "-i");
             result = "$env:" + exprName + " = "
                 + (intAttr ? "[string](Invoke-BashArith ([string](" + value + ")))" : CaseAttr(exprName, value))
+                + (exprName == "PATH" ? "; " + PsBuild.NormalizePathVariable : "")
                 + "; " + PsBuild.SetStatus(0);
             return true;
         }
@@ -5260,6 +5389,8 @@ public static partial class PsEmitter
                 sb.Append(EmitAssignmentValue(envPair.Value));
                 sb.Append("; ");
             }
+            if (cmd.EnvPairs.Any(p => p.Name == "PATH"))
+                sb.Append(PsBuild.NormalizePathVariable).Append("; ");
         }
 
         // RC-7: an unquoted ordinary variable argument is word-split and
@@ -5295,6 +5426,11 @@ public static partial class PsEmitter
             && (PsKeywordCommandNames.Contains(kwName)
                 || kwName is "[[" or "for" or "while" or "until" or "if" or "case" or "select" or "do" or "done" or "then" or "fi" or "esac" or "elif" or "else" or "in"))
             dashName = kwName;
+        // Any other bare name with a character PowerShell reads as syntax (`{ls` printed itself, `a,b` built an array,
+        // `%x` ran ForEach-Object) is a name too: bash looks it up and says `{ls: command not found` (127).
+        if (dashName is null && cmd.Words.Length > 0 && cmd.Words[0].Parts is [WordPart.Literal { Value: { Length: > 0 } oddName }]
+            && !System.Text.RegularExpressions.Regex.IsMatch(oddName, @"^[\w./\\:~=+-]+$"))
+            dashName = oddName;
         bool needsCallOperator =
             !isScriptCommand && cmd.Words.Length > 0
             && (IsExpandedCommandWord(cmd.Words[0]) || dashName is not null
@@ -5347,7 +5483,11 @@ public static partial class PsEmitter
         if (dynamicName)
         {
             leading = "& (Resolve-BashCommand ";
-            commandWordText += ")";
+            // `$SUDO rm f` / `CC='gcc -O2'; $CC -c x.c`: an unquoted name splits first. No word leaves the next one the
+            // command (none at all: nothing runs, status 0); more than one makes the rest leading operands.
+            commandWordText = IsPureUnquotedVarWord(cmd.Words[0])
+                ? "-Words " + EmitUnquotedVarSplitArray(cmd.Words[0]) + ")"
+                : commandWordText + ")";
         }
 
         // A script-defined function named like a mapped command (`cd() { �; }`, `seq() { �; }`): PowerShell resolves an
@@ -5449,6 +5589,8 @@ public static partial class PsEmitter
         sb.Append("try { ");
         for (int i = 0; i < pairs.Length; i++)
             sb.Append($"$env:{pairs[i].Name} = {values[i]}; ");
+        if (pairs.Any(p => p.Name == "PATH"))
+            sb.Append(PsBuild.NormalizePathVariable).Append("; ");
         sb.Append(inner);
         sb.Append(" } finally { ");
         foreach (var p in pairs)
@@ -7342,7 +7484,9 @@ public static partial class PsEmitter
             return $"${name}";
 
         if (arrayElem0 && _arrayVars is not null && _arrayVars.Contains(name))
-            return "$(if ($null -eq $" + name + ") { $env:" + name + " } else { $" + name + "['0'] })";
+            // $Matches (BASH_REMATCH) is keyed by int; every other array reads by the string key.
+            return "$(if ($null -eq $" + name + ") { $env:" + name + " } else { $" + name
+                + (name == "BASH_REMATCH" ? "[0]" : "['0']") + " })";
 
         var special = PsBuild.TryMapSpecialVar(name, braced: false, inDoubleQuote);
         if (special is not null) return strict && _nounsetMode ? StrictPositional(name, special) : special;
@@ -8217,7 +8361,9 @@ public static partial class PsEmitter
                         : arrayVar;
                     if (subscript == "0" && !ReferenceEquals(whole, arrayVar))
                     {
-                        return $"$(if ($null -eq {arrayVar}) {{ {EmitSimpleVar(bvs.Name)} }} else {{ {arrayVar}['0'] }})";
+                        // $Matches (BASH_REMATCH) is keyed by int; every other array reads by the string key.
+                        string zero = bvs.Name == "BASH_REMATCH" ? "0" : "'0'";
+                        return $"$(if ($null -eq {arrayVar}) {{ {EmitSimpleVar(bvs.Name)} }} else {{ {arrayVar}[{zero}] }})";
                     }
                     if (subscript == "*" && inDoubleQuote)
                         return $"$(@(if ({arrayVar} -is [System.Collections.IDictionary]) {{ {arrayVar}.Values }} else {{ {whole} }}) -join {PsBuild.IfsJoinSeparator})";
@@ -8300,6 +8446,12 @@ public static partial class PsEmitter
                     : System.Text.RegularExpressions.Regex.Match(subscript, @"^\$\{?(\w+)\}?$") is { Success: true } subVar
                         ? $"{arrayVar}[{EmitVarSubscript(arrayVar, EmitSimpleVar(subVar.Groups[1].Value))}]"
                         : $"{arrayVar}[{EmitWordSubscript(arrayVar, subscript)}]";
+                // A SCALAR (`s=pq`) has no PowerShell variable, and indexing $null throws ("Cannot index into a null
+                // array"). bash treats it as a one-element array: ${s[0]-w} is pq, ${s[1]-w} is w. The assigning forms
+                // keep the plain element reference AssignDefault parses.
+                if (int.TryParse(subscript, out int scalarIdx) && arrayVar == "$" + bvs.Name && subOp.Length > 0
+                    && subOp[0] != '=' && !subOp.StartsWith(":=", StringComparison.Ordinal))
+                    elemRef = $"$(if ($null -eq {arrayVar}) {{ {(scalarIdx == 0 ? EmitSimpleVar(bvs.Name) : "$null")} }} else {{ {elemRef} }})";
                 return EmitScalarSuffix(elemRef, subOp, inDoubleQuote, bvs.ArgWord)
                     ?? (inDoubleQuote ? $"$({elemRef})" : elemRef);
             }
@@ -8358,8 +8510,10 @@ public static partial class PsEmitter
             if (op.StartsWith(":=", StringComparison.Ordinal) || op.StartsWith('='))
             {
                 string assigned = EmitScalarSuffix("$__iv", op, false, bvs.ArgWord) ?? "$__iv";
-                return "$(& { $__iv0 = $(" + IndLookup(false) + "); $__iv = $__iv0; $__ir = " + assigned + "; "
-                    + "if ($__iv -cne $__iv0) { [System.Environment]::SetEnvironmentVariable($(" + IndLookup(true) + "), [string]$__iv) }; $__ir })";
+                // The name first: an unset or empty ref reports its error once and assigns nothing.
+                return "$(& { $__ivn = [string]$(" + IndLookup(true) + "); if ($__ivn -eq '') { return }; "
+                    + "$__iv0 = $(" + IndLookup(false) + "); $__iv = $__iv0; $__ir = " + assigned + "; "
+                    + "if ($__iv -cne $__iv0) { [System.Environment]::SetEnvironmentVariable($__ivn, [string]$__iv) }; $__ir })";
             }
             string indRef = "$(" + IndLookup(false) + ")";
             // Always the `$( … )` subexpression form: it stays one word beside a literal prefix (`x=${!ref-d}`).
@@ -8368,10 +8522,13 @@ public static partial class PsEmitter
         if (bvs.Suffix == "!indirect")
         {
             // The name's value is a variable name, or a positional index (`n=2; ${!n}`, `${!#}` = the last argument).
-            string lookup = "& { $__ind = [string](" + IndirectRef(bvs.Name, true) + "); "
+            // An unset name ref is bash's "invalid indirect expansion", which Get-BashIndirectValue reports, even under
+            // set -u; only special parameters (`${!#}`) keep the strict read.
+            bool namedRef = System.Text.RegularExpressions.Regex.IsMatch(bvs.Name, @"^[A-Za-z_]\w*$");
+            string lookup = "& { $__indv = (" + IndirectRef(bvs.Name, !namedRef) + "); $__ind = [string]$__indv; "
                 + "if ($__ind -match '^[0-9]+$') { $__pp = @(" + PsBuild.BuildPositionalExpansion("@") + "); "
                 + "if ([int]$__ind -eq 0) { " + EmitSimpleVar("0", strict: true) + " } elseif ([int]$__ind -le $__pp.Count) { $__pp[[int]$__ind - 1] } } "
-                + "else { Get-BashIndirectValue -Ref $(if ($__ind) { $__ind } else { $null }) -RefName "
+                + "else { Get-BashIndirectValue -Ref $__indv -RefName "
                 + PsBuild.SingleQuote(System.Text.RegularExpressions.Regex.IsMatch(bvs.Name, @"^[A-Za-z_]\w*$") ? bvs.Name : "")
                 + " -Pos @(" + PsBuild.BuildPositionalExpansion("@") + ") } }";
             return inDoubleQuote ? $"$({lookup})" : $"$({lookup})";
@@ -9334,8 +9491,22 @@ public static partial class PsEmitter
         return $"& {{ {emitted} }}";
     }
 
+    [ThreadStatic] private static int _timeDepth;
+
     private static string EmitPipeline(Command.Pipeline pipeline)
     {
+        // `time [-p] pipeline`: emit the pipeline itself, then wrap it in the timing report.
+        if (pipeline.Time != PipelineTime.None)
+        {
+            int depth = _timeDepth++;
+            try
+            {
+                var untimed = pipeline with { Time = PipelineTime.None };
+                string text = untimed.Commands.Length == 1 && !untimed.Negated ? Emit(untimed.Commands[0]) : EmitPipeline(untimed);
+                return PsBuild.Timed(text, pipeline.Time == PipelineTime.Posix, "$__psbash_time" + depth);
+            }
+            finally { _timeDepth--; }
+        }
         var entryScope = _inStdinScope;
         // Each stage of a real pipeline is a subshell in bash: errexit inside one never ends the script.
         bool exempt = pipeline.Commands.Length > 1 || pipeline.Negated;
@@ -10036,6 +10207,13 @@ public static partial class PsEmitter
                 targetExpr = emitted;
         }
 
+        // CDPATH (`CDPATH=/srv; cd app` lands in /srv/app and echoes it) only matters for a target that may be relative
+        // and does not start with `.`: the runtime (BashRuntime.CdPathLookup) decides; a literal that cannot use it skips it.
+        bool useCdPath = !isDash && !args.IsEmpty && !targetExpr.StartsWith("$HOME", StringComparison.Ordinal)
+            && args[0].Parts is not [WordPart.TildeSub, ..]
+            && !(GetLiteralValue(args[0]) is { } cdLiteral
+                 && (cdLiteral.Length == 0 || cdLiteral[0] is '/' or '\\' or '.' or '~' || cdLiteral.Contains(':')));
+
         // The success branch captures the dir we are leaving into $OLDPWD BEFORE
         // overwriting CurrentDirectory, so the next `cd -` can return to it.
         // The target goes through the runtime path policy (BashRuntime.MapPath: /tmp → $env:TEMP,
@@ -10049,11 +10227,14 @@ public static partial class PsEmitter
             "[System.Environment]::CurrentDirectory = $__psbash_cd_resolved; " +
             "$env:PWD = $__psbash_cd_resolved; " +
             "Set-Location -LiteralPath $__psbash_cd_resolved -ErrorAction SilentlyContinue; " +
-            (isDash ? "Write-Output $__psbash_cd_resolved; " : "") +
+            (isDash ? "Write-Output $__psbash_cd_resolved; " : useCdPath ? "if ($__psbash_cd_via) { Write-Output $__psbash_cd_resolved }; " : "") +
             "$global:LASTEXITCODE = 0 " +
             "} else { Write-Error -Message (\"cd: \" + $__psbash_cd_target + \": No such file or directory\") -ErrorAction Continue; $global:LASTEXITCODE = 1 }";
 
-        var prefix = "$__psbash_cd_target = " + targetExpr + "; ";
+        var prefix = "$__psbash_cd_target = " + targetExpr + "; " + (useCdPath
+            ? "$__psbash_cd_via = [PsBash.Cmdlets.BashRuntime]::CdPathLookup([string]$__psbash_cd_target, [System.Environment]::CurrentDirectory); "
+              + "if ($__psbash_cd_via) { $__psbash_cd_target = $__psbash_cd_via }; "
+            : "");
         if (isDash)
         {
             // `cd -` with no prior directory: bash prints "cd: OLDPWD not set" and fails
@@ -10223,6 +10404,7 @@ public static partial class PsEmitter
                 result = EmitPassthrough("Invoke-BashSed", args);
                 return true;
             case "awk":
+            case "gawk":
                 result = EmitPassthrough("Invoke-BashAwk", args);
                 return true;
             case "cut":

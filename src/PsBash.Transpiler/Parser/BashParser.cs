@@ -274,6 +274,40 @@ public sealed partial class BashParser
 
     private Command ParsePipeline()
     {
+        var time = ParseTimeKeyword();
+        var pipeline = ParseUntimedPipeline();
+        if (time == PipelineTime.None) return pipeline;
+        return pipeline is Command.Pipeline p
+            ? p with { Time = time }
+            : new Command.Pipeline([pipeline], ImmutableArray<string>.Empty, Negated: false, time);
+    }
+
+    /// <summary>
+    /// <c>time [-p] [--]</c> in front of a pipeline is a keyword: it times the WHOLE pipeline (<c>time a | b</c>) and
+    /// any command (<c>time { …; }</c>, <c>time ( … )</c>). A bare <c>time</c> with no pipeline after it, and
+    /// <c>time() …</c>, stay ordinary words.
+    /// </summary>
+    private PipelineTime ParseTimeKeyword()
+    {
+        if (Peek().Kind != BashTokenKind.Word || Peek().Value != "time") return PipelineTime.None;
+        int saved = _pos;
+        Advance();
+        var mode = PipelineTime.Default;
+        if (Peek().Kind == BashTokenKind.Word && Peek().Value == "-p") { Advance(); mode = PipelineTime.Posix; }
+        if (Peek().Kind == BashTokenKind.Word && Peek().Value == "--") Advance();
+        if (Peek().Kind is BashTokenKind.Semi or BashTokenKind.Newline or BashTokenKind.Eof or BashTokenKind.Amp
+                or BashTokenKind.AndIf or BashTokenKind.OrIf or BashTokenKind.Pipe or BashTokenKind.PipeAmp
+                or BashTokenKind.RParen or BashTokenKind.RBrace
+            || (Peek().Kind == BashTokenKind.LParen && _pos + 1 < _tokens.Count && _tokens[_pos + 1].Kind == BashTokenKind.RParen))
+        {
+            _pos = saved;
+            return PipelineTime.None;
+        }
+        return mode;
+    }
+
+    private Command ParseUntimedPipeline()
+    {
         // Consume a RUN of leading `!`. bash allows `! ! cmd` (double negation =
         // identity); negation toggles per `!`, so an even count is identity and
         // an odd count negates. Reading only one `!` left the second as a stray
@@ -325,13 +359,19 @@ public sealed partial class BashParser
             return ParseIf();
 
         if (Peek().Kind == BashTokenKind.Word && Peek().Value == "for")
-            return ParseFor();
+        {
+            int line = LineHere();
+            return StampLine(ParseFor(), line);
+        }
 
         if (Peek().Kind == BashTokenKind.Word && Peek().Value is "while" or "until")
             return ParseWhile();
 
         if (Peek().Kind == BashTokenKind.Word && Peek().Value == "case")
-            return ParseCase();
+        {
+            int line = LineHere();
+            return StampLine(ParseCase(), line);
+        }
 
         if (Peek().Kind == BashTokenKind.Word && Peek().Value == "select")
             return ParseSelect();
@@ -340,7 +380,10 @@ public sealed partial class BashParser
             return ParseFunction();
 
         if (Peek().Kind == BashTokenKind.Word && Peek().Value is "[" or "[[")
-            return WithTrailingRedirects(ParseTestExpr());
+        {
+            int line = LineHere();
+            return WithTrailingRedirects(StampLine(ParseTestExpr(), line));
+        }
 
         // name() { body } form: Word followed by LParen RParen
         if (Peek().Kind == BashTokenKind.Word && IsParensFunctionDef())
@@ -348,7 +391,10 @@ public sealed partial class BashParser
 
         // Standalone arithmetic: (( expr ))
         if (Peek().Kind == BashTokenKind.LParen && IsDoubleLParen())
-            return WithTrailingRedirects(ParseArithOrNestedSubshell());
+        {
+            int line = LineHere();
+            return WithTrailingRedirects(StampLine(ParseArithOrNestedSubshell(), line));
+        }
 
         // Subshell: (cmd1; cmd2)
         if (Peek().Kind == BashTokenKind.LParen)
@@ -360,6 +406,22 @@ public sealed partial class BashParser
 
         return ParseSimpleCommand();
     }
+
+    /// <summary>
+    /// Records the <paramref name="line"/> a <c>[[ ]]</c> / <c>(( ))</c> / <c>for</c> / <c>case</c> starts on
+    /// (<c>trap DEBUG</c> reports it as <c>$LINENO</c>); the caller takes it before parsing the node.
+    /// </summary>
+    private static Command StampLine(Command parsed, int line) => parsed switch
+    {
+        Command.BoolExpr b => b with { Line = line },
+        Command.ArithCommand a => a with { Line = line },
+        Command.ForIn f => f with { Line = line },
+        Command.ForArith f => f with { Line = line },
+        Command.Case c => c with { Line = line },
+        _ => parsed,
+    };
+
+    private int LineHere() => BashLexer.LineAt(_input, Peek().Position);
 
     /// <summary>
     /// `[[ ... ]] 2>/dev/null` / `(( ... )) >f`: the test and arithmetic commands carry no redirect list of

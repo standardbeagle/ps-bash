@@ -1,0 +1,18 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 156
+stdout-length: 40
+stderr-length: 0
+==== SCRIPT ====
+rm -f indirect-err.txt
+{ echo "b[${!undef-dflt}]"; } 2>>indirect-err.txt
+echo st=$?
+grep -o '[^:]*: invalid [a-z ]*' indirect-err.txt
+rm -f indirect-err.txt
+==== STDOUT ====
+st=1
+ undef: invalid indirect expansion
+
+==== STDERR ====
+

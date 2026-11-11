@@ -528,6 +528,55 @@ public class BashTranspilerReviewRegressionTests
     [InlineData("ls -l")]
     public void Transpile_LiteralCommandName_IsNotResolvedAtRunTime(string bash)
         => Assert.DoesNotContain("Resolve-BashCommand", BashTranspiler.Transpile(bash));
+
+    // Oracle: an unquoted name splits first. `SUDO=; $SUDO rm f` runs `rm f`, `CC='gcc -O2'; $CC x.c` runs gcc with -O2,
+    // and an empty name with no operands runs nothing (status 0). Before, the unsplit value was the name: empty leaked
+    // PowerShell's "expression after '&'" error, and `x="echo a"; $x b` looked up the command `echo a`.
+    [Theory]
+    [InlineData("$x echo hi", "& (Resolve-BashCommand -Words @(ConvertTo-BashWords $env:x)) echo hi")]
+    [InlineData("${x} echo hi", "& (Resolve-BashCommand -Words @(ConvertTo-BashWords $env:x)) echo hi")]
+    public void Transpile_UnquotedRunTimeCommandName_IsSplitAtRunTime(string bash, string expected)
+        => Assert.Contains(expected, BashTranspiler.Transpile(bash));
+
+    // Oracle: `"$x" echo hi` with x empty is `bash: : command not found` (127): a quoted name stays one word.
+    [Fact]
+    public void Transpile_QuotedRunTimeCommandName_StaysOneWord()
+    {
+        var ps = BashTranspiler.Transpile("\"$x\" echo hi");
+        Assert.Contains("& (Resolve-BashCommand \"$env:x\") echo hi", ps);
+        Assert.DoesNotContain("-Words", ps);
+    }
+
+    // Oracle: `printf 'a\n' | { p=printf; $p 'X\n'; c=cat; $c; }` prints X then a. The stdin scope's queue was piped into
+    // every run-time name, so printf failed to bind the queued line (and on an empty queue never ran); the runtime
+    // now feeds only a command that reads stdin.
+    [Fact]
+    public void Transpile_RunTimeCommandNameInStdinScope_LetsTheRuntimeDecideTheFeed()
+    {
+        var ps = BashTranspiler.Transpile("printf 'a\\n' | { p=printf; $p 'X\\n'; c=cat; \"$c\"; }");
+        Assert.Contains("& (Resolve-BashCommand -Fed -Words @(ConvertTo-BashWords $env:p))", ps);
+        Assert.Contains("& (Resolve-BashCommand -Fed \"$env:c\")", ps);
+        Assert.DoesNotContain("} | & (Resolve-BashCommand", ps);
+    }
+
+    // Oracle: `CDPATH=/srv; cd app` lands in /srv/app and echoes it. A relative or run-time target asks the runtime;
+    // a target that cannot use CDPATH (absolute, `./x`, `..`, `-`, `~`, none) does not pay for the lookup.
+    [Theory]
+    [InlineData("cd foo", true)]
+    [InlineData("cd $d", true)]
+    [InlineData("cd \"$d/sub\"", true)]
+    [InlineData("cd /tmp", false)]
+    [InlineData("cd ./foo", false)]
+    [InlineData("cd ..", false)]
+    [InlineData("cd -", false)]
+    [InlineData("cd ~/x", false)]
+    [InlineData("cd", false)]
+    public void Transpile_CdTarget_UsesCdPathOnlyWhenItCanApply(string bash, bool lookup)
+    {
+        string ps = BashTranspiler.Transpile(bash);
+        Assert.Equal(lookup, ps.Contains("BashRuntime]::CdPathLookup(", StringComparison.Ordinal));
+        Assert.Equal(lookup, ps.Contains("if ($__psbash_cd_via) { Write-Output $__psbash_cd_resolved }", StringComparison.Ordinal));
+    }
     // Oracle: `seen[$w]=$(( ${seen[$w]:-0} + 1 ))` is the counting idiom. The subscript of `${m[$k]:-d}` was the
     // literal text `$k`; `${a[1]}` inside `$(( ))` was a parse error; and a bare RANDOM / SECONDS there read as 0.
 

@@ -1,0 +1,34 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 575
+stdout-length: 254
+stderr-length: 0
+==== SCRIPT ====
+__fs_snap() { find . | LC_ALL=C sort | while IFS= read -r p; do if [ -d "$p" ]; then echo "D $p"; else echo "F $p $(base64 -w0 "$p")"; fi; done; }
+d=$(mktemp -d) && cd "$d" && { :
+mkdir d; printf '#!/bin/sh\necho "args: $# [$1] [$2]"\nwhile read -r l; do echo "in: $l"; done\nexit 7\n' > d/hello; chmod +x d/hello; printf 'read -r l; echo "got $l"\n' > r.sh; printf 'plain\n' > doc; chmod -x doc
+} >/dev/null 2>&1
+echo '== stdout'
+{ :
+PATH=d:$PATH; type -P hello; type -a hello | head -1; type -t hello
+} 2>/dev/null
+echo "== exit $?"
+echo '== fs'
+__fs_snap
+cd /; rm -rf "$d"
+==== STDOUT ====
+== stdout
+d/hello
+hello is d/hello
+file
+== exit 0
+== fs
+D .
+D ./d
+F ./d/hello IyEvYmluL3NoCmVjaG8gImFyZ3M6ICQjIFskMV0gWyQyXSIKd2hpbGUgcmVhZCAtciBsOyBkbyBlY2hvICJpbjogJGwiOyBkb25lCmV4aXQgNwo=
+F ./doc cGxhaW4K
+F ./r.sh cmVhZCAtciBsOyBlY2hvICJnb3QgJGwiCg==
+
+==== STDERR ====
+

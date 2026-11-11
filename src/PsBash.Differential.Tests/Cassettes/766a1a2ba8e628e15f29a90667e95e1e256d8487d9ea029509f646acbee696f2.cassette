@@ -1,0 +1,16 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 82
+stdout-length: 14
+stderr-length: 0
+==== SCRIPT ====
+{ time -- echo dd; time echo a && echo b; } 2>/dev/null; time=5; echo "time=$time"
+==== STDOUT ====
+dd
+a
+b
+time=5
+
+==== STDERR ====
+

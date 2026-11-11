@@ -1,0 +1,19 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 81
+stdout-length: 9
+stderr-length: 0
+==== SCRIPT ====
+shopt -s expand_aliases
+alias ea='echo'
+cmd=ea
+ea X
+$cmd X 2>/dev/null
+echo st=$?
+==== STDOUT ====
+X
+st=127
+
+==== STDERR ====
+

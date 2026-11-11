@@ -102,4 +102,17 @@ public class ExecutableLookupTests : IDisposable
             Same(Path.Combine(b, Name("tool")), ExecutableLookup.Find("tool", ExecutableLookup.PathDirectories(first)));
         }
         finally { Environment.SetEnvironmentVariable("PATH", old); }
-    }}
+    }
+
+    // A script writes PATH with `:` (`PATH=_tmp:$PATH`); on Windows each separating colon becomes `;`, a drive colon stays.
+    [Theory]
+    [InlineData(@"_tmp:C:\Program Files\x;C:\y", @"_tmp;C:\Program Files\x;C:\y")]
+    [InlineData("a:b:c", "a;b;c")]
+    [InlineData(@"C:\Users\me/bin:C:/tools", @"C:\Users\me/bin;C:/tools")]
+    [InlineData("/usr/local/bin:/usr/bin", "/usr/local/bin;/usr/bin")]
+    [InlineData("x:C:", "x;C:")]
+    [InlineData(@"C:\a;D:\b", @"C:\a;D:\b")]
+    [InlineData("ab:", "ab;")]
+    public void ToWindowsPathList_SplitsBashSeparatorsAndKeepsDriveColons(string value, string expected)
+        => Assert.Equal(expected, ExecutableLookup.ToWindowsPathList(value));
+}

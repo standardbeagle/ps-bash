@@ -135,7 +135,6 @@ func2 "" ""
 -=-
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-toysh-posix toysh-posix (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Can't parse extra }

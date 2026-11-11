@@ -1294,10 +1294,29 @@ public class PsEmitterTests
     [InlineData("awk -v a=1 -v b=2 'BEGIN{print a+b}'", "Invoke-BashAwk '-v' a=1 '-v' b=2 'BEGIN{print a+b}'")]
     [InlineData("awk -F: -va=1 '{print $1}' f", "Invoke-BashAwk '-F:' '-va=1' '{print $1}' f")]
     [InlineData("awk -- '{print}' f", "Invoke-BashAwk '--' '{print}' f")]
+    [InlineData("gawk -F: '{print $1}' f", "Invoke-BashAwk '-F:' '{print $1}' f")]
     public void Transpile_AwkFlags_AreSingleQuotedSoRepeatedDashVReachesTheCmdlet(string bash, string expected)
     {
         Assert.Equal(expected, PsEmitter.Transpile(bash));
     }
+
+    // Every bash write to PATH is followed by the runtime fix-up that turns `:` separators into `;` on Windows
+    // (`PATH=_tmp:$PATH` was one entry `_tmp:C:\…`, hiding both directories from command lookup).
+    [Theory]
+    [InlineData("PATH=_tmp:$PATH")]
+    [InlineData("export PATH=\"/x/bin:$PATH\"")]
+    [InlineData("PATH+=:z")]
+    [InlineData("PATH=a:b true")]
+    [InlineData("declare PATH=q:$PATH")]
+    public void Transpile_PathAssignment_NormalizesTheSeparators(string bash)
+        => Assert.Contains(PsBuild.NormalizePathVariable, PsEmitter.Transpile(bash));
+
+    [Theory]
+    [InlineData("MYPATH=a:b")]
+    [InlineData("PATHS=a:b true")]
+    [InlineData("echo $PATH")]
+    public void Transpile_OtherVariables_AreNotPathNormalized(string bash)
+        => Assert.DoesNotContain("NormalizePathVariable", PsEmitter.Transpile(bash));
 
     // grep is on OrderedArgCommands: -e/-E/-i/-ve bundles, -A/-C/-NUM, -f FILE and `--` all reach
     // Arguments verbatim and in order (repeated -e used to need the psm1 proxy to rescue it).
@@ -1641,7 +1660,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("export PATH=\"$PATH:/new\"");
 
-        Assert.Equal("$env:PATH = \"${env:PATH}:/new\"", result);
+        Assert.Equal("$env:PATH = \"${env:PATH}:/new\"; [PsBash.Cmdlets.BashRuntime]::NormalizePathVariable()", result);
     }
 
     [Fact]
@@ -1652,7 +1671,7 @@ public class PsEmitterTests
         // another "...", producing ""prefix":"$env:PATH"" — invalid PowerShell.
         var result = PsEmitter.Transpile("export PATH=\"/a/b\":\"$PATH\"");
 
-        Assert.Equal("$env:PATH = \"/a/b:$env:PATH\"", result);
+        Assert.Equal("$env:PATH = \"/a/b:$env:PATH\"; [PsBash.Cmdlets.BashRuntime]::NormalizePathVariable()", result);
     }
 
     [Fact]
@@ -2173,7 +2192,8 @@ public class PsEmitterTests
     {
         // ${arr[0]:-x} -> the operator must apply to the indexed value, not be dropped.
         var result = PsEmitter.Transpile("echo ${arr[0]:-x}");
-        Assert.Equal("Invoke-BashEcho ($arr[0] ? $arr[0] : \"x\")", result);
+        // A scalar arr (no PowerShell variable) is element 0, so the element read is null-guarded.
+        Assert.Equal("Invoke-BashEcho ($(if ($null -eq $arr) { $env:arr } else { $arr[0] }) ? $(if ($null -eq $arr) { $env:arr } else { $arr[0] }) : \"x\")", result);
     }
 
     [Fact]
@@ -2225,7 +2245,7 @@ public class PsEmitterTests
         // Substring indices are clamped so an out-of-range slice yields "" rather
         // than throwing (bash is lenient where .NET Substring is strict).
         var result = PsEmitter.Transpile("echo ${c[1]:0:2}");
-        Assert.Contains("([string]$c[1]).Substring([Math]::Min(0, ([string]$c[1]).Length)", result);
+        Assert.Contains(".Substring([Math]::Min(0, ([string]$(if ($null -eq $c) { $null } else { $c[1] })).Length)", result);
     }
 
     [Fact]
@@ -2923,7 +2943,7 @@ public class PsEmitterTests
         // BASH_REMATCH (bash fills it on =~), so the emitted form is no longer a
         // bare `-match` boolean.
         Assert.Contains("$env:a -match '^[0-9]+$'", result);
-        Assert.Contains("$global:BASH_REMATCH = $Matches", result);
+        Assert.Contains("$global:BASH_REMATCH = [PsBash.Cmdlets.BashPatternMatch]::Rematch($Matches, '^[0-9]+$')", result);
     }
 
     // ── =~ right-hand side is a REGEX, not a shell token stream ──────────────
@@ -5328,7 +5348,6 @@ public class PsEmitterTests
     [InlineData("xargs -i echo x", "Invoke-BashXargs '-i' echo x")]
     [InlineData("xargs -d , -n 1 echo", "Invoke-BashXargs '-d' ',' '-n' 1 echo")]
     // Other wrappers that run a foreign command line: the inner argv is quoted too.
-    [InlineData("time echo -e a", "Invoke-BashTime echo '-e' a")]
     [InlineData("env FOO=1 grep -i x f", "Invoke-BashEnv FOO=1 grep '-i' x f")]
     [InlineData("env basename -a a/b", "Invoke-BashEnv basename '-a' a/b")]
     [InlineData("find . -exec grep -i x {} \\;", "Invoke-BashFind . '-exec' grep '-i' x \"{}\" `;")]
@@ -5942,6 +5961,42 @@ public class PsEmitterTests
         Assert.DoesNotContain("Invoke-BashEcho", result);
     }
 
+    [Theory]
+    [InlineData("(alias hi='echo inner')")]
+    [InlineData("alias hi='echo inner' &")]
+    [InlineData("alias hi='echo inner' | cat")]
+    public void Transpile_AliasDefinedInASubshell_DoesNotExpandTheParentsLaterLines(string definition)
+    {
+        var result = PsEmitter.Transpile("shopt -s expand_aliases\n" + definition + "\nhi")!;
+        Assert.DoesNotContain("Invoke-BashEcho", result);
+    }
+
+    [Theory]
+    [InlineData("alias LEFT='{'\nLEFT echo one; echo two; }", "Invoke-BashEcho one")]
+    [InlineData("alias LEFT='('\nLEFT echo one; echo two )", "Invoke-BashEcho two")]
+    [InlineData("alias a=\na (( v = 0 ))\necho done", "Invoke-BashEcho done")]
+    [InlineData("alias e_='for i in 1 2 3; do echo $i;'\ne_ done", "foreach")]
+    [InlineData("alias FOR1='for '\nalias FOR2='FOR1 '\nalias eye1='i '\nalias eye2='eye1 '\nalias IN='in '\nFOR2 eye2 IN 1 2; do echo $i; done", "foreach ($i in")]
+    public void Transpile_AliasHoldingPartOfACompoundCommand_IsReadAsItsText(string script, string expected)
+        => Assert.Contains(expected, PsEmitter.Transpile("shopt -s expand_aliases\n" + script));
+
+    [Fact]
+    public void Transpile_AliasHoldingPartOfACompoundCommand_WithoutExpandAliases_StaysAParseError()
+        => Assert.Throws<ParseException>(() => PsEmitter.Transpile("alias LEFT='{'\nLEFT echo one; }"));
+
+    [Fact]
+    public void Transpile_SplicedAlias_DoesNotExpandItselfAgain()
+    {
+        // `ls` inside `alias ls='ls -l'` is the command, not the alias again; the brace group forces the splice path.
+        var result = PsEmitter.Transpile("shopt -s expand_aliases\nalias ls='ls -l'\nalias L='{'\nL ls; }")!;
+        Assert.DoesNotContain("-l -l", result);
+        Assert.Contains("-l", result);
+    }
+
+    [Fact]
+    public void Transpile_AliasDefinedInABraceGroup_ExpandsLaterLines()
+        => Assert.Contains("Invoke-BashEcho", PsEmitter.Transpile("shopt -s expand_aliases\n{ alias hi='echo x'; }\nhi"));
+
     [Fact]
     public void Transpile_Alias_TrailingBlankExpandsTheNextWord()
     {
@@ -6471,6 +6526,67 @@ public class PsEmitterTests
         Assert.Contains("Invoke-BashTrap", result);
         Assert.Contains("__BashTrapDEBUG", result);
         Assert.DoesNotContain("Register-BashChpwdHook", result);
+    }
+
+    // DEBUG semantics apply to a script of 3+ lines (a lone `trap … DEBUG` is a prompt hook); the body starts on line 3.
+    private const string DebugScript = ":\ntrap 'echo T' DEBUG\n";
+    private const int DebugScriptRuns = 2; // before `:` and before the `trap` line
+
+    // Oracle (bash 5.2): DEBUG runs before every simple command with its own $LINENO, `[[ ]]`, `(( ))` and assignments
+    // included; before each `for` pass and `case`; for each simple pipeline stage in the parent; never inside `$( )`, a
+    // subshell or a function. ps-bash ran it only before a top-level plain command (and inside `$( )` / subshells).
+    [Theory]
+    [InlineData("[[ a == a ]]", 3)]
+    [InlineData("(( h = 1 ))", 3)]
+    [InlineData("v=1", 3)]
+    [InlineData("readonly r=1", 3)]
+    [InlineData("case x in x) :;; esac", 3)]
+    [InlineData("for x in 1; do\n:\ndone", 3)]
+    [InlineData("for ((i=0; i<1; i++)); do :; done", 3)]
+    [InlineData("echo d && echo e", 3)]
+    [InlineData("true | cat\n", 3)]
+    [InlineData("if true; then :; fi", 3)]
+    public void Transpile_TrapDebug_RunsBeforeEachCommandWithItsLine(string body, int line)
+    {
+        var result = PsEmitter.Transpile(DebugScript + body);
+        Assert.Contains("$env:__psbLine = " + line + ";", result);
+    }
+
+    [Fact]
+    public void Transpile_TrapDebug_AndOr_RunsEachOperandAsAStatement()
+    {
+        var result = PsEmitter.Transpile(DebugScript + "echo d && echo e || echo f");
+        // Chain operands cannot hold the action's statement: the list is lowered to status tests.
+        Assert.Contains("if ($global:LASTEXITCODE -eq 0) {", result);
+        Assert.Contains("if ($global:LASTEXITCODE -ne 0) {", result);
+        Assert.DoesNotContain(" && ", result);
+    }
+
+    [Theory]
+    [InlineData("echo \"$(echo in)\"", 1)]
+    [InlineData("( echo in\necho two )", 0)]
+    [InlineData("f() {\necho in\n}", 0)]
+    [InlineData("{ echo x; echo y; } | cat", 1)]
+    public void Transpile_TrapDebug_NotInSubshellsFunctionsOrCompoundStages(string body, int runs)
+    {
+        var result = PsEmitter.Transpile(DebugScript + body);
+        int count = System.Text.RegularExpressions.Regex.Matches(result, @"\$env:__psbLine = \d+;").Count;
+        Assert.Equal(DebugScriptRuns + runs, count);
+    }
+
+    [Fact]
+    public void Transpile_TrapDebug_UnderErrexit_AFailingActionEndsTheScript()
+    {
+        var result = PsEmitter.Transpile("set -e\ntrap 'false' DEBUG\necho a");
+        Assert.Contains("finally { $global:__BashInDebug = $false }; if ($global:__BashErrexit", result);
+    }
+
+    [Fact]
+    public void Transpile_NoDebugTrap_AndOrStaysAChain()
+    {
+        // The DEBUG lowering is gated: a script without `trap … DEBUG` emits as before.
+        Assert.Contains(" && ", PsEmitter.Transpile("echo d && echo e"));
+        Assert.DoesNotContain("__psbLine", PsEmitter.Transpile("[[ a == a ]]\nfor x in 1; do :; done"));
     }
 
     [Fact]

@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 133
+stdout-length: 32
+stderr-length: 0
+==== SCRIPT ====
+[[ abc =~ (b)(c) ]]; echo "0=${BASH_REMATCH[0]} bare=$BASH_REMATCH all=${BASH_REMATCH[@]} 2=${BASH_REMATCH[2]} n=${#BASH_REMATCH[@]}"
+==== STDOUT ====
+0=bc bare=bc all=bc b c 2=c n=3
+
+==== STDERR ====
+

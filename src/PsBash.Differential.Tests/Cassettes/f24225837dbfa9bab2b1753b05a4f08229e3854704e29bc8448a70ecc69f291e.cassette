@@ -1,0 +1,19 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 105
+stdout-length: 13
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)"
+{ echo "q[$((1/0))]" 2>>err.txt; } 2>/dev/null
+echo st=$?
+echo ok 2>>err.txt
+echo st=$?
+==== STDOUT ====
+st=1
+ok
+st=0
+
+==== STDERR ====
+

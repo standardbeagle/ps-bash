@@ -78,7 +78,7 @@ public class BashTranspilerTests
     public void Transpile_VariableInCommandPosition_UsesCallOperator()
     {
         var result = BashTranspiler.Transpile("CMD=echo; $CMD hello");
-        Assert.Contains("& (Resolve-BashCommand $env:CMD) hello", result);
+        Assert.Contains("& (Resolve-BashCommand -Words @(ConvertTo-BashWords $env:CMD)) hello", result);
     }
 
     // #2: array elements were blindly single-quoted around EmitWord, storing the
