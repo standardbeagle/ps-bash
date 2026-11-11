@@ -280,7 +280,7 @@ ft
 status=0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-errexit errexit (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-inherit-errexit shopt -s inherit_errexit is accepted but $( ) does not inherit set -e
 ## timeout: 10
 
 #### errexit with subshell

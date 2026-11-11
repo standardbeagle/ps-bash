@@ -88,7 +88,7 @@ a=(1 10)
 echo "${a[@]}"
 ## stdout: 2 10
 ## status: 0
-## XFAIL ps-bash gap-oils-array-compat array-compat (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-array-scalar-promotion (( a++ )) on a whole array increments element 0
 ## timeout: 10
 
 #### Apply vectorized operations on ${a[*]}

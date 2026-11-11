@@ -37,7 +37,7 @@ PROMPT
 ^D
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-interactive interactive (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash wontfix-interactive-prompt PROMPT_COMMAND / rc-file startup of an interactive shell (-i); ps-bash -i has no bash prompt cycle (intentional-differences.md)
 ## timeout: 10
 ## real-launcher
 
@@ -62,7 +62,7 @@ two
 ^D
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-interactive interactive (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash wontfix-interactive-prompt PROMPT_COMMAND / rc-file startup of an interactive shell (-i); ps-bash -i has no bash prompt cycle (intentional-differences.md)
 ## timeout: 10
 ## real-launcher
 
@@ -87,7 +87,7 @@ two
 ^D
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-interactive interactive (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash wontfix-interactive-prompt PROMPT_COMMAND / rc-file startup of an interactive shell (-i); ps-bash -i has no bash prompt cycle (intentional-differences.md)
 ## timeout: 10
 ## real-launcher
 
@@ -120,7 +120,7 @@ last_status=0
 ^D
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-interactive interactive (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash wontfix-interactive-prompt PROMPT_COMMAND / rc-file startup of an interactive shell (-i); ps-bash -i has no bash prompt cycle (intentional-differences.md)
 ## timeout: 10
 ## real-launcher
 
@@ -150,7 +150,7 @@ clo c l o
 ^D
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-interactive interactive (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash wontfix-interactive-prompt PROMPT_COMMAND / rc-file startup of an interactive shell (-i); ps-bash -i has no bash prompt cycle (intentional-differences.md)
 ## timeout: 10
 ## real-launcher
 
@@ -196,7 +196,7 @@ main: pid = 2694333
 2694333 2694325 2694333 2694321 2694341 bash
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-interactive interactive (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash wontfix-interactive-prompt PROMPT_COMMAND / rc-file startup of an interactive shell (-i); ps-bash -i has no bash prompt cycle (intentional-differences.md)
 ## timeout: 10
 ## real-launcher
 
@@ -219,7 +219,7 @@ hist2
 echo hist1; echo hist2
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-interactive interactive (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash wontfix-interactive-history needs an interactive shell (-i) that records its input lines in the history list / HISTFILE (intentional-differences.md, Interactive-only features)
 ## timeout: 10
 ## real-launcher
 
@@ -230,7 +230,7 @@ $SH --norc -i -c 'echo HISTFILE=$HISTFILE' | egrep -q '_history$'
 echo status=$?
 ## stdout: status=0
 ## status: 0
-## XFAIL ps-bash gap-oils-interactive interactive (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash wontfix-interactive-history needs an interactive shell (-i) that records its input lines in the history list / HISTFILE (intentional-differences.md, Interactive-only features)
 ## timeout: 10
 ## real-launcher
 
@@ -257,7 +257,7 @@ echo 2
 history
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-interactive interactive (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash wontfix-interactive-history needs an interactive shell (-i) that records its input lines in the history list / HISTFILE (intentional-differences.md, Interactive-only features)
 ## timeout: 10
 ## real-launcher
 
@@ -281,6 +281,6 @@ history -a
 echo 2
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-interactive interactive (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash wontfix-interactive-history needs an interactive shell (-i) that records its input lines in the history list / HISTFILE (intentional-differences.md, Interactive-only features)
 ## timeout: 10
 ## real-launcher

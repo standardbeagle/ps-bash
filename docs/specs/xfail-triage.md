@@ -19,6 +19,16 @@ builtin-trap-bash 16 (trap DEBUG/ERR/RETURN), builtin-type-bash 12.
 builtin-dirs 13 (pushd/popd/dirs), alias 12 (interactive expansion), ble-idioms 12 (line-editor idioms), builtin-fc 11,
 builtin-completion 11, interactive 10, history/readline/prompt files.
 
+Worked 2026-11-10: interactive-only cases now carry `wontfix-interactive-<topic>` (history, readline, prompt,
+completion, alias), one row per topic under "Interactive-only features" in intentional-differences.md. `history` and
+`fc` exist as non-interactive builtins (bash's behaviour in a script); `builtin-dirs` stays `platform-windows-paths`.
+The scripting gaps found in these files have root-cause ids: `gap-dynamic-unset-scope` (ble-unset, ble-features),
+`gap-prompt-at-p`, `gap-dynamic-declaration-command`, `gap-array-scalar-promotion`, `gap-arith-recursive-var`,
+`gap-prefix-assign-declaration`, `gap-compgen-*`. OSH-only `shopt` options already fail exactly as bash's do
+(`shopt: X: invalid shell option name`, status 1, the script goes on); the cases that use them fail for other reasons,
+now tagged (`gap-inherit-errexit`, `gap-array-scalar-promotion`, `gap-assoc-kv-list-assignment`,
+`gap-unset-assoc-cmdsub-subscript`, `gap-indirect-subscript`).
+
 ## Method (current, 2026-11-09): dump, cluster, fix by cause
 1. Dump every known gap without editing spec files:
    `PSBASH_SPEC_DUMP_XFAIL_JSONL=<file> PSBASH_SPEC_RESULTS=<tsv> PSBASH_SPEC_BUDGET_MIN=7 tman test-proj src/PsBash.Spec.Tests --filter "DisplayName~oils/"`,

@@ -21,7 +21,7 @@ v=tempenv1 f1 global,tempenv1
 [global,tempenv1,local1] v: local1 (after)
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-ble-unset ble-unset (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-dynamic-unset-scope bash dynamic scoping of unset / temp bindings: unset in a called function reveals the outer value, v=x f layers a temp scope (the case body also keeps imported expected-output lines bash parses as an error, status 2 in both)
 ## timeout: 10
 
 #### [bash_unset] local-unset / dynamic-unset for localvar on nested-context
@@ -51,7 +51,7 @@ v=tempenv1 f2 global,tempenv1
 [global,tempenv1,local1,tempenv2,(eval),local2,(unlocal)] v: local1
 ## END
 ## status: 2
-## XFAIL ps-bash gap-oils-ble-unset ble-unset (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-dynamic-unset-scope bash dynamic scoping of unset / temp bindings: unset in a called function reveals the outer value, v=x f layers a temp scope (the case body also keeps imported expected-output lines bash parses as an error, status 2 in both)
 ## timeout: 10
 
 #### [bash_unset] dynamic-unset for nested localvars
@@ -101,7 +101,7 @@ v=tempenv1 f3 global,tempenv1
 [global,tempenv1/local1,tempenv2/local2,tempenv3/local3] v: (unset) (unlocal 4)
 ## END
 ## status: 2
-## XFAIL ps-bash gap-oils-ble-unset ble-unset (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-dynamic-unset-scope bash dynamic scoping of unset / temp bindings: unset in a called function reveals the outer value, v=x f layers a temp scope (the case body also keeps imported expected-output lines bash parses as an error, status 2 in both)
 ## timeout: 10
 
 #### [bash_unset] dynamic-unset for nested tempenvs
@@ -148,7 +148,7 @@ v=tempenv1 f4_unlocal global,tempenv1
 [global,tempenv1,tempenv2,tempenv3] v: (unset) (unlocal 4)
 ## END
 ## status: 2
-## XFAIL ps-bash gap-oils-ble-unset ble-unset (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-dynamic-unset-scope bash dynamic scoping of unset / temp bindings: unset in a called function reveals the outer value, v=x f layers a temp scope (the case body also keeps imported expected-output lines bash parses as an error, status 2 in both)
 ## timeout: 10
 
 #### [bash_unset] local-unset for nested tempenvs
@@ -186,5 +186,5 @@ v=tempenv1 f4_unset global,tempenv1
 [global,tempenv1,tempenv2,tempenv3] v: (unset) (unset 4)
 ## END
 ## status: 2
-## XFAIL ps-bash gap-oils-ble-unset ble-unset (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-dynamic-unset-scope bash dynamic scoping of unset / temp bindings: unset in a called function reveals the outer value, v=x f layers a temp scope (the case body also keeps imported expected-output lines bash parses as an error, status 2 in both)
 ## timeout: 10

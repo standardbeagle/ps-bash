@@ -29,6 +29,6 @@ two
 echo two
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-history-expand history-expand (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash wontfix-interactive-history history expansion (!!) happens only in an interactive shell; needs -i reading stdin (intentional-differences.md)
 ## timeout: 10
 ## real-launcher

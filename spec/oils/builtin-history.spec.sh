@@ -13,7 +13,6 @@ status=1
 status=1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-history builtin-history (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### history -a
@@ -46,7 +45,7 @@ history -a
 ^D
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-history builtin-history (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash wontfix-interactive-history needs an interactive shell (-i) that records its input lines in the history list / HISTFILE (intentional-differences.md, Interactive-only features)
 ## timeout: 10
 ## real-launcher
 
@@ -65,7 +64,7 @@ case $SH in bash) echo '^D' ;; esac
 ^D
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-history builtin-history (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash wontfix-interactive-history needs an interactive shell (-i) that records its input lines in the history list / HISTFILE (intentional-differences.md, Interactive-only features)
 ## timeout: 10
 ## real-launcher
 
@@ -110,7 +109,7 @@ status=0
 status=1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-history builtin-history (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash wontfix-interactive-history needs an interactive shell (-i) that records its input lines in the history list / HISTFILE (intentional-differences.md, Interactive-only features)
 ## timeout: 10
 ## real-launcher
 
@@ -146,7 +145,6 @@ status=1
 ^D
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-history builtin-history (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -183,7 +181,7 @@ status=1
 ^D
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-history builtin-history (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash wontfix-interactive-history needs an interactive shell (-i) that records its input lines in the history list / HISTFILE (intentional-differences.md, Interactive-only features)
 ## timeout: 10
 ## real-launcher
 

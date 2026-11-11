@@ -101,7 +101,7 @@ two
 three
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-completion builtin-completion (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash wontfix-interactive-completion programmable-completion machinery (-F functions / COMPREPLY, -X filters) is not run by compgen; the interactive shell completes in C# (intentional-differences.md)
 ## timeout: 10
 
 #### complete -o -F (git)
@@ -160,7 +160,7 @@ PATH
 PWD
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-completion builtin-completion (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash platform-windows-env-names Windows always has PATHEXT in the environment, so compgen -v/-e P lists it
 ## timeout: 10
 
 #### compgen -e with global/local exported vars
@@ -183,7 +183,7 @@ unexported=0
 compgen -e unexported
 ## stdout:
 ## status: 1
-## XFAIL ps-bash triage differs from bash 5.2 (auto-marked; investigate)
+## XFAIL ps-bash gap-compgen-exported compgen -e lists every scalar variable, not only exported ones (ps-bash scalars all live in the environment block)
 ## timeout: 10
 
 #### compgen -e on unknown var
@@ -200,7 +200,7 @@ PATH
 PWD
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-completion builtin-completion (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash platform-windows-env-names Windows always has PATHEXT in the environment, so compgen -v/-e P lists it
 ## timeout: 10
 
 #### compgen with actions: alias, setopt
@@ -271,7 +271,7 @@ sshd
 earlyoom
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-completion builtin-completion (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash platform-windows-users compgen -A user lists /etc/passwd accounts; Windows has no such list (the expected list is the oracle machine's)
 ## timeout: 10
 
 #### compgen -A command completes external commands
@@ -283,7 +283,7 @@ xargs
 status=0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-completion builtin-completion (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-compgen-command-kind compgen -A command does not list ps-bash commands (xargs) or PATH programs by prefix
 ## timeout: 10
 
 #### compgen -A command completes functions and aliases
@@ -472,7 +472,7 @@ _comp_cmd_test() {
 compgen -F _comp_cmd_test
 ## stdout: hello
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-completion builtin-completion (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash wontfix-interactive-completion programmable-completion machinery (-F functions / COMPREPLY, -X filters) is not run by compgen; the interactive shell completes in C# (intentional-differences.md)
 ## timeout: 10
 
 #### compgen -k shows the same keywords as bash
@@ -538,7 +538,7 @@ two
 bin
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-completion builtin-completion (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash wontfix-interactive-completion programmable-completion machinery (-F functions / COMPREPLY, -X filters) is not run by compgen; the interactive shell completes in C# (intentional-differences.md)
 ## timeout: 10
 ## real-launcher
 
@@ -554,7 +554,7 @@ one
 three
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-completion builtin-completion (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash wontfix-interactive-completion programmable-completion machinery (-F functions / COMPREPLY, -X filters) is not run by compgen; the interactive shell completes in C# (intentional-differences.md)
 ## timeout: 10
 ## real-launcher
 

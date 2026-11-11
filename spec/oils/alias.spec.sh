@@ -194,7 +194,7 @@ X
 status=127
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-alias alias (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash wontfix-interactive-alias alias text spliced into the surrounding tokens (aliases are expanded while bash tokenizes; ps-bash expands whole simple commands only — intentional-differences.md, Interactive-only features)
 ## timeout: 10
 
 #### here doc inside alias
@@ -206,7 +206,7 @@ EOF
 c
 ## stdout:
 ## status: 127
-## XFAIL ps-bash gap-oils-alias alias (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash wontfix-interactive-alias alias text spliced into the surrounding tokens (aliases are expanded while bash tokenizes; ps-bash expands whole simple commands only — intentional-differences.md, Interactive-only features)
 ## timeout: 10
 
 #### Corner case: alias inside LHS array arithmetic expression
@@ -263,7 +263,7 @@ a (( var = 0 ))
 echo done
 ## stdout: done
 ## status: 0
-## XFAIL ps-bash gap-oils-alias alias (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash wontfix-interactive-alias alias text spliced into the surrounding tokens (aliases are expanded while bash tokenizes; ps-bash expands whole simple commands only — intentional-differences.md, Interactive-only features)
 ## timeout: 10
 
 #### alias with word of multiple lines
@@ -331,7 +331,6 @@ alias e_=';; oops'
 e_ x
 ## stdout:
 ## status: 2
-## XFAIL ps-bash gap-oils-alias alias (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Loop split across alias and arg works
@@ -344,7 +343,6 @@ e_ done
 3
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-alias alias (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Loop split across alias in another way
@@ -357,7 +355,7 @@ e_ $i; done
 3
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-alias alias (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash wontfix-interactive-alias alias text spliced into the surrounding tokens (aliases are expanded while bash tokenizes; ps-bash expands whole simple commands only — intentional-differences.md, Interactive-only features)
 ## timeout: 10
 
 #### Loop split across both iterative and recursive aliases
@@ -376,7 +374,7 @@ FOR2 eye2 IN onetwo 3; do echo $i; done
 3
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-alias alias (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash wontfix-interactive-alias alias text spliced into the surrounding tokens (aliases are expanded while bash tokenizes; ps-bash expands whole simple commands only — intentional-differences.md, Interactive-only features)
 ## timeout: 10
 
 #### Alias with a quote in the middle is a syntax error
@@ -386,7 +384,7 @@ var=x
 e_ '${var}"'
 ## stdout:
 ## status: 2
-## XFAIL ps-bash gap-oils-alias alias (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash wontfix-interactive-alias alias text spliced into the surrounding tokens (aliases are expanded while bash tokenizes; ps-bash expands whole simple commands only — intentional-differences.md, Interactive-only features)
 ## timeout: 10
 
 #### Alias with internal newlines
@@ -440,7 +438,7 @@ sayhi
 
 ## END
 ## status: 127
-## XFAIL ps-bash gap-oils-alias alias (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-subshell-alias-isolation an alias defined inside $( ) leaks to the parent shell: command substitution runs in-process and does not restore alias functions
 ## timeout: 10
 
 #### Alias can be defined and used on a single line
@@ -495,7 +493,7 @@ one
 two
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-alias alias (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash wontfix-interactive-alias alias text spliced into the surrounding tokens (aliases are expanded while bash tokenizes; ps-bash expands whole simple commands only — intentional-differences.md, Interactive-only features)
 ## timeout: 10
 
 #### alias for left paren
@@ -507,7 +505,7 @@ one
 two
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-alias alias (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash wontfix-interactive-alias alias text spliced into the surrounding tokens (aliases are expanded while bash tokenizes; ps-bash expands whole simple commands only — intentional-differences.md, Interactive-only features)
 ## timeout: 10
 
 #### alias used in subshell and command sub

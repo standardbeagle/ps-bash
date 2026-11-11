@@ -486,7 +486,7 @@ ref_SUB_QUOTED=bean
 ref_SUB_BAD=
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-var-ref var-ref (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-indirect-subscript ${!ref} where ref holds an array element reference with an arbitrary subscript (a[$x], A[key]) is not resolved
 ## timeout: 10
 
 #### var ref TO array with arbitrary subscripts
@@ -536,7 +536,7 @@ works: a[$(echo 1)]
 works: a[$(( 3 - 2 ))]
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-var-ref var-ref (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-indirect-subscript ${!ref} where ref holds an array element reference with an arbitrary subscript (a[$x], A[key]) is not resolved
 ## timeout: 10
 
 #### Bizarre tilde expansion in array index

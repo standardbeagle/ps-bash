@@ -33,7 +33,7 @@ one
 parent status=0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-errexit-osh errexit-osh (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-inherit-errexit shopt -s inherit_errexit (a bash option) is accepted but $( ) does not inherit set -e; command_sub_errexit is OSH-only and bash rejects it like ps-bash
 ## timeout: 10
 
 #### strict_errexit and assignment builtins (local, export, readonly ...)
@@ -204,7 +204,7 @@ one
 parent status=0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-errexit-osh errexit-osh (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-inherit-errexit shopt -s inherit_errexit (a bash option) is accepted but $( ) does not inherit set -e; command_sub_errexit is OSH-only and bash rejects it like ps-bash
 ## timeout: 10
 
 #### command sub: last command fails but keeps going and exit code is 0
@@ -291,7 +291,7 @@ status=0
 one
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-errexit-osh errexit-osh (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-inherit-errexit shopt -s inherit_errexit (a bash option) is accepted but $( ) does not inherit set -e; command_sub_errexit is OSH-only and bash rejects it like ps-bash
 ## timeout: 10
 
 #### global assignment when last status is failure

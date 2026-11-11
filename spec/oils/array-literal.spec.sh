@@ -245,7 +245,7 @@ status=0
 declare -a s2=([0]="world" [1]="1" [2]="2" [3]="3" [4]="4")
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array-literal array-literal (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-array-scalar-promotion s+=(...) / declare -A s+=(...) on a scalar must keep its value as element 0 (strict_array is OSH-only and the case never sets it under bash)
 ## timeout: 10
 ## real-launcher
 
@@ -270,7 +270,7 @@ status=0
 declare -A s2=([0]="world" [b]="y" [a]="x" )
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array-literal array-literal (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-array-scalar-promotion s+=(...) / declare -A s+=(...) on a scalar must keep its value as element 0 (strict_array is OSH-only and the case never sets it under bash)
 ## timeout: 10
 ## real-launcher
 
@@ -282,6 +282,6 @@ eval "a=(1 2 3 4)"
 declare -p a
 ## stdout: declare -A a=([3]="4" [1]="2" )
 ## status: 0
-## XFAIL ps-bash gap-oils-array-literal array-literal (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-assoc-kv-list-assignment assoc=(k v k v) on an associative array assigns key/value pairs (bash 5.1+); ps-bash turns it into an indexed array
 ## timeout: 10
 ## real-launcher

@@ -34,6 +34,9 @@ model in [runtime-functions.md](runtime-functions.md) "Raw bytes".
 | `date +%N`, `date -d @S.FFFFFFFFF` | Sub-second resolution is 100 ns: `%N`'s last two digits are always `0`, and an input fraction past 7 digits is truncated | .NET time is 100 ns ticks |
 | `mv` / `cp` onto a file in use | Replaced like Linux: a read-only or in-use destination (a running `.exe`) is renamed aside and the new file takes its name. An old program that is still running cannot be deleted, so it stays as a hidden `.NAME.psbash-replaced-XXXXXXXX` beside it until the next replace in that directory after it exits. A file a process holds open **without delete sharing** cannot be renamed or replaced at all: `Device or resource busy (open in NAME.exe, pid N)`, reported at once with nothing changed. A lock with no process to blame (antivirus, indexer) is retried for about a second (`FileTransfer`) | Windows refuses to overwrite or rename open files; Linux unlinks and keeps the old inode alive |
 | Absolute paths printed by `pwd`, `dirs`, `$PWD`, `readlink` | Windows form `C:\Users\x` (`/tmp` is `C:\tmp`; `/` is `C:\`), unless `PSBASH_UNIX_PATHS=1` | The filesystem has drive letters. Spec XFAILs caused only by this carry the id `platform-windows-paths` |
+| Environment always holding `PATHEXT` (`compgen -v P`, `compgen -e P`) | Listed like any variable | Windows sets it for every process (spec marker `platform-windows-env-names`) |
+| `compgen -A user` | Lists nothing | No `/etc/passwd` account list (spec marker `platform-windows-users`) |
+| `/bin/echo`, `/usr/bin/printf`, … spelled as a path | `command not found` | Those files do not exist; the bare name runs ps-bash's command (spec marker `platform-no-unix-bin`) |
 | Variable names differing only in case (`x=1; X=2`) | **Windows:** one variable; `$x` and `$X` read the same value (Linux/macOS: two) | Bash variables are process environment variables (`BashVariableStore`), and the Windows environment is case-insensitive and inherited by children as such. Case-sensitive names would need a store off the process environment |
 | Raw byte in a variable on **Linux/macOS** | `x=$(printf '\xe9')` loses the byte (becomes U+FFFD) | Variables live in the process environment, and .NET re-encodes it on Unix; Windows keeps it |
 
@@ -91,6 +94,21 @@ model in [runtime-functions.md](runtime-functions.md) "Raw bytes".
 | `set -e` set by a caller of `source`/`eval`d code, or turned on only inside a sourced file | The sourced/eval'd code (or the caller's remaining lines) runs without per-statement checks; a failing function call there still counts at the caller's statement | Checks are emitted only for a script that itself contains `set -e`/`-o errexit` (`PsEmitter.EnablesErrexit`), so scripts without it emit exactly what they always did |
 | Windows drive paths in a glob word | A pattern spelled `/c/Users/*` (with `PSBASH_UNIX_PATHS=1`) or `C:/Users/*` is expanded with forward slashes (`C:/Users/x`), and a drive-letter prefix keeps the form it was typed | `/` is the pattern's only separator (`\` escapes) |
 
+## Interactive-only features
+
+Features that exist for a person at a terminal. Scripts and `-c` commands, which ps-bash serves, get the
+non-interactive behaviour bash has there; the interactive shell (`ps-bash` with no arguments) has its own
+history, line editor, prompt and completion (`src/PsBash.Host/Shell`). Spec cases that need the
+interactive feature are marked `wontfix-interactive-<topic>`.
+
+| Topic (spec marker) | ps-bash | Why |
+|---|---|---|
+| History in an interactive shell (`wontfix-interactive-history`) | `history` / `fc` in a script work on the script's own list, which, as in a non-interactive bash, holds only what `history -s` / `-r` / `-n` and `fc -s` put there. A shell started with `-i` and fed commands on stdin does not record them in that list, and `HISTFILE` is not loaded at start or written at exit. `fc` without `-l` / `-s` (open an editor) is refused with status 1. `history 3 x` reports `too many arguments` with status 1 but the rest of the line still runs (bash discards it) | Command-line recording is a REPL feature; the interactive shell keeps its own history |
+| Readline (`wontfix-interactive-readline`) | `bind` does not exist (`command not found`, 127) | There are no readline key maps outside the interactive line editor |
+| Prompt and startup (`wontfix-interactive-prompt`) | A `-i` shell prints no bash prompt on stderr and has no default `PS1`; `PROMPT_COMMAND` never runs; `\!` in `${PS1@P}` has no command number to show; the rc-file / job-control start-up order of a `-i` shell is not bash's | Prompts and start-up belong to the interactive shell, which draws its own |
+| Programmable completion (`wontfix-interactive-completion`) | `compgen` produces candidates for the kinds it knows (`-W -f -d -v -c -A KIND`); completion functions (`-F`, `COMPREPLY`), `-X` filters, `-C` commands and `complete` specs are not run | The interactive shell completes in C# (`CompletionEngine`), not through bash completion functions |
+| Alias expansion inside the grammar (`wontfix-interactive-alias`) | An alias is expanded when it is a whole simple command, its text and arguments re-read together, so `alias e_='for i in 1 2; do echo $i;'` then `e_ done` works and text that does not parse is a syntax error that ends the script (status 2). An alias whose text is a fragment the parser must splice into the surrounding tokens (`alias LEFT='('`, `alias FOR1='for '` chains, an unclosed quote, a here-document) is not | Bash expands aliases while it tokenizes; ps-bash parses the whole script before any `alias` runs |
+| `set -v` | Accepted and shown in `$-`; input lines are not echoed | The script is transpiled as a whole, so there is no line-by-line read to echo |
 ## Not implemented (refused, exit 2)
 
 Real options that ps-bash rejects. Most are rarely used, need a facility .NET lacks, or need a large

@@ -61,7 +61,7 @@ loop='i<=100&&(s+=i,i++,loop)' s=0 i=0
 echo $((a=loop,s))
 ## stdout: 5050
 ## status: 0
-## XFAIL ps-bash gap-oils-ble-idioms ble-idioms (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-arith-recursive-var arithmetic does not evaluate a variable's value recursively as an expression (loop='...,loop')
 ## timeout: 10
 
 #### recursive arith: array elements
@@ -178,7 +178,6 @@ status=3
 status=3
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-ble-idioms ble-idioms (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Issue #1069 [56] BUG: declare -p unset does not print any error message
@@ -320,7 +319,7 @@ echo "v=$v"
 # Note: ash/dash does not have arrays
 ## stdout: v=1
 ## status: 0
-## XFAIL ps-bash gap-oils-ble-idioms ble-idioms (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-dynamic-declaration-command a declaration builtin reached through an expansion ("$a" v=1, "${a[@]}" with a=(typeset v=1)) is not found: typeset: command not found
 ## timeout: 10
 ## real-launcher
 
@@ -332,7 +331,7 @@ v=x
 echo "v=$v"
 ## stdout: v=1
 ## status: 0
-## XFAIL ps-bash gap-oils-ble-idioms ble-idioms (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-dynamic-declaration-command a declaration builtin reached through an expansion ("$a" v=1, "${a[@]}" with a=(typeset v=1)) is not found: typeset: command not found
 ## timeout: 10
 ## real-launcher
 
@@ -448,6 +447,6 @@ declare -a a=([0]="99" [1]="2" [2]="3")
 declare -A A=([0]="99" [k]="v" )
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-ble-idioms ble-idioms (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-array-scalar-promotion assigning a scalar to an array name (a=99) must set element 0 and keep the array; ps-bash ignores it
 ## timeout: 10
 ## real-launcher

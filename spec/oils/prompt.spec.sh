@@ -39,7 +39,7 @@ $
 \$
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-prompt prompt (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-prompt-at-p ${PS1@P} prompt expansion: no promptvars pass ($x$y, \\$ after expansion), \D{} empty format, \# command number, \j job count
 ## timeout: 10
 
 #### PS1 evaluation order
@@ -49,7 +49,7 @@ PS1='$x$y'
 echo "${PS1@P}"
 ## stdout: \h
 ## status: 0
-## XFAIL ps-bash gap-oils-prompt prompt (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-prompt-at-p ${PS1@P} prompt expansion: no promptvars pass ($x$y, \\$ after expansion), \D{} empty format, \# command number, \j job count
 ## timeout: 10
 
 #### \1004
@@ -154,7 +154,7 @@ sleep 5
 matched=0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-prompt prompt (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-prompt-at-p ${PS1@P} prompt expansion: no promptvars pass ($x$y, \\$ after expansion), \D{} empty format, \# command number, \j job count
 ## timeout: 10
 
 #### \! for history number
@@ -170,7 +170,7 @@ matched=0
 matched=0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-prompt prompt (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash wontfix-interactive-prompt \! is the history number of the next command, which only an interactive shell (or set -o history) records (intentional-differences.md)
 ## timeout: 10
 
 #### \# for command number
@@ -180,7 +180,7 @@ echo "${PS1@P}" | egrep -q "foo $((prev_cmd_num + 1)) bar"
 echo matched=$?
 ## stdout: matched=0
 ## status: 0
-## XFAIL ps-bash gap-oils-prompt prompt (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-prompt-at-p ${PS1@P} prompt expansion: no promptvars pass ($x$y, \\$ after expansion), \D{} empty format, \# command number, \j job count
 ## timeout: 10
 
 #### sh -i
@@ -192,7 +192,7 @@ fgrep -q '[prompt]' out.txt err.txt
 echo match=$?
 ## stdout: match=1
 ## status: 0
-## XFAIL ps-bash gap-oils-prompt prompt (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash wontfix-interactive-prompt prompt of an interactive shell (-i): bash prints PS1 on stderr / sets a default PS1; ps-bash -i does neither (intentional-differences.md)
 ## timeout: 10
 ## real-launcher
 
@@ -286,7 +286,7 @@ echo "${PS1@P}" | egrep -q '^foo [0-9][0-9]:[0-9][0-9]:[0-9][0-9]( ..)? bar$'
 echo matched=$?
 ## stdout: matched=0
 ## status: 0
-## XFAIL ps-bash gap-oils-prompt prompt (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-prompt-at-p ${PS1@P} prompt expansion: no promptvars pass ($x$y, \\$ after expansion), \D{} empty format, \# command number, \j job count
 ## timeout: 10
 
 #### \s for shell, \v for major.minor version, and \V for full version
@@ -335,6 +335,6 @@ flags='--rcfile /dev/null'
 $SH $flags -i -c 'echo "_${PS1}_"'
 ## stdout: _${debian_chroot:+($debian_chroot)}\u@\h:\w\$ _
 ## status: 0
-## XFAIL ps-bash gap-oils-prompt prompt (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash wontfix-interactive-prompt prompt of an interactive shell (-i): bash prints PS1 on stderr / sets a default PS1; ps-bash -i does neither (intentional-differences.md)
 ## timeout: 10
 ## real-launcher

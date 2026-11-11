@@ -37,7 +37,7 @@ y=y
 ty=ty
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-temp-binding temp-binding (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-prefix-assign-declaration a prefix assignment before a declaration builtin (tmp='' local tx=tx) runs local as a command: local: command not found
 ## timeout: 10
 
 #### FOO=bar $unset - temp binding, then empty argv from unquoted unset var (#2411)

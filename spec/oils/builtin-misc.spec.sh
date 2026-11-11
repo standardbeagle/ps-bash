@@ -20,7 +20,6 @@ status=1
 status=1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-misc builtin-misc (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### time pipeline
@@ -92,7 +91,7 @@ pf  $'a\nb\001c\'d'
 @Q  $'a\nb\001c\'d'
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-misc builtin-misc (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash platform-no-unix-bin /bin/echo does not exist on Windows (command not found)
 ## timeout: 10
 ## real-launcher
 

@@ -282,7 +282,7 @@ len=1
 len=0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array-assoc array-assoc (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-unset-assoc-cmdsub-subscript unset -v "A[$(cmd)]" on an associative array: the subscript is not expanded/matched like bash
 ## timeout: 10
 
 #### nameref and assoc array
