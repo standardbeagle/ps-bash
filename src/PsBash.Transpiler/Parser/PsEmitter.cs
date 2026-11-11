@@ -607,7 +607,7 @@ public static partial class PsEmitter
 
     // StackGuarded: every command-level recursion of the emitter passes here; the stack probe keeps a
     // deep (but depth-cap-accepted) AST from overflowing a small caller stack (NestingGuard).
-    public static string Emit(Command cmd) => StackGuarded(cmd) switch
+    public static string Emit(Command cmd) => TryEmitCompoundOutputProcessSubs(StackGuarded(cmd), out var outputProcSubs) ? outputProcSubs : cmd switch
     {
         Command.If ifCmd => EmitCompoundBody(ifCmd.Redirects, () => EmitIf(ifCmd)),
         Command.BoolExpr boolExpr => EmitBoolExpr(boolExpr),
@@ -909,6 +909,14 @@ public static partial class PsEmitter
     [ThreadStatic]
     private static List<(string Break, string Continue)>? _loopLabels;
 
+    /// <summary>
+    /// True inside a subshell's body (outside any loop or function within it): bash starts a subshell with no loop,
+    /// so `( continue )` inside a loop warns and the subshell carries on. A bare PowerShell `continue` there reached
+    /// the enclosing loop through the script block and skipped the rest of the iteration.
+    /// </summary>
+    [ThreadStatic]
+    private static bool _loopBarrier;
+
     /// <summary>How many function bodies enclose the code being emitted; a definition inside one is global (bash has no function scope).</summary>
     [ThreadStatic]
     private static int _functionDepth;
@@ -935,7 +943,7 @@ public static partial class PsEmitter
             // At the top of a script (no loop, no function body, not eval/source text that runs inside its
             // caller's loop) bash warns and carries on with status 0. A bare PowerShell `break`/`continue`
             // there ends the whole pipeline instead, which left the client waiting on a dead command.
-            if (_functionDepth == 0 && _context == TranspileContext.Default)
+            if (_loopBarrier || (_functionDepth == 0 && _context == TranspileContext.Default))
                 return $"Write-Error {PsBuild.SingleQuote(keyword + ": only meaningful in a `for', `while', or `until' loop")} -ErrorAction Continue; {PsBuild.SetStatus(0)}";
             return keyword; // no lexical loop (a function body): bash's dynamic scope, as before
         }
@@ -1653,6 +1661,8 @@ public static partial class PsEmitter
         // A function body starts with no lexical loop: its `break` stays bare (dynamic, as bash).
         var outerLabels = _loopLabels;
         _loopLabels = null;
+        var outerBarrier = _loopBarrier;
+        _loopBarrier = false;
 
         try
         {
@@ -1689,6 +1699,11 @@ public static partial class PsEmitter
             // that recursive calls each see their own positional args ($1, $2, $@, $#)
             // rather than the top-level caller's args. Without this, a recursive call
             // overwrites the global and the outer frame sees the inner frame's values.
+            // A run-time eval (`eval "local $n"`, `local "$1"`) can declare locals whose names were unknown here: restore
+            // every `$__lsd_*` slot it parked in this call. Only a body with such an eval pays for the scan.
+            if (body.Contains("$__psbash_eval_src", StringComparison.Ordinal))
+                body = "try { " + body + " } finally { foreach ($__psbLsdV in @(Get-Variable -Name '__lsd_*' -Scope 0 -ErrorAction SilentlyContinue)) "
+                     + "{ if ($null -ne $__psbLsdV.Value) { [System.Environment]::SetEnvironmentVariable($__psbLsdV.Name.Substring(6), $__psbLsdV.Value.v) } } }";
             var sb = new StringBuilder();
             // A PowerShell alias outranks a function of the same name (`r`, `h`, `diff`), so a bash function
             // that shares its name would never run; drop the alias first.
@@ -1718,6 +1733,7 @@ public static partial class PsEmitter
             _functionLocalNames = priorFunctionLocals;
             if (priorFunctionReadonly is not null) _readonlyVars = priorFunctionReadonly;
             _loopLabels = outerLabels;
+            _loopBarrier = outerBarrier;
             foreach (var v in added) vars.Remove(v);
         }
     }
@@ -1823,10 +1839,12 @@ public static partial class PsEmitter
         // depth raised so `exit N` becomes a SCOPED `$LASTEXITCODE = N; return`,
         // and give that `return` a script block to return from.
         _subshellDepth++;
+        var outerLabels = _loopLabels; var outerBarrier = _loopBarrier;
+        _loopLabels = null; _loopBarrier = true;
         string body; bool savedErrTrapSh = PsBuild.ErrTrapNeedsErrtrace; PsBuild.ErrTrapNeedsErrtrace = true;
         // `( … ) < file` gives the body its own stdin (a scope); otherwise it inherits the enclosing one.
         try { body = EmitCompoundBody(subshell.Redirects, () => EmitBody(subshell.Body)); }
-        finally { _subshellDepth--; PsBuild.ErrTrapNeedsErrtrace = savedErrTrapSh; }
+        finally { _subshellDepth--; PsBuild.ErrTrapNeedsErrtrace = savedErrTrapSh; _loopLabels = outerLabels; _loopBarrier = outerBarrier; }
 
         // One subshell scope (PsBuild.ShellStateScope): a child PS scope plus save/restore of the
         // shell state a scope does not isolate, so nothing the body changes — `set -e`, variables,
@@ -1850,9 +1868,12 @@ public static partial class PsEmitter
         // else (stdout file + `2>&1` etc.) uses the shared AppendRedirectTail.
         Redirect? inputRedirect = null;
         var tailRedirects = new List<Redirect>(subshell.Redirects.Length);
+        var highFds = new List<Redirect>();
         foreach (var redirect in subshell.Redirects)
         {
-            if (redirect.Fd == 0 && redirect.Op is "<" or "<<" or "<<<")
+            if (redirect.Fd >= 3)
+                highFds.Add(redirect);
+            else if (redirect.Fd == 0 && redirect.Op is "<" or "<<" or "<<<")
                 inputRedirect = redirect;
             else
                 tailRedirects.Add(redirect);
@@ -1877,7 +1898,23 @@ public static partial class PsEmitter
                 : $"@() | & {{ {PsBuild.StdinScope(result)} }}";
         }
 
-        return result;
+        return WithScopedHighFds(result, highFds);
+    }
+
+    /// <summary>
+    /// <c>( ... ) 7&gt;&amp;1</c>, <c>{ ...; } 3&gt;log</c>: a numbered descriptor opened for one compound command only. Left in
+    /// the redirect tail it came out raw (<c>} 7&gt;&amp;1</c>), and PowerShell read the <c>&amp;</c> as its background
+    /// operator: the command ran as a job, whose <c>$using:</c> rewrite broke every <c>$global:</c> assignment.
+    /// Opened before the command and closed after it, as <c>exec N...</c> would (an earlier <c>exec</c> of the same
+    /// descriptor is not restored).
+    /// </summary>
+    private static string WithScopedHighFds(string command, List<Redirect> highFds)
+    {
+        if (highFds.Count == 0) return command;
+        var open = string.Join("; ", highFds.Select(r => $"Invoke-BashExecFd {r.Fd} {PsBuild.SingleQuote(r.Op)} {EmitArgWord(r.Target)}"));
+        var close = string.Join("; ", highFds.Select(r => r.Fd).Distinct().Select(fd => $"Invoke-BashExecFd {fd} '>&' '-'"));
+        return "& { " + open + "; try { " + command + " } finally { $__psbash_fdRc = $global:LASTEXITCODE; " + close
+             + "; $global:LASTEXITCODE = $__psbash_fdRc } }";
     }
 
     private static string EmitBraceGroup(Command.BraceGroup braceGroup)
@@ -3277,12 +3314,22 @@ public static partial class PsEmitter
     private static string EmitShAssignmentCore(Command.ShAssignment cmd)
     {
         var sb = new StringBuilder();
+        bool badSubscript = false;
         for (int i = 0; i < cmd.Pairs.Length; i++)
         {
             if (i > 0)
                 sb.Append("; ");
 
             var pair = cmd.Pairs[i];
+
+            // `export a[7]=8` / `readonly a[7]=8`: these take no subscript (`local`/`declare` do).
+            if ((cmd.IsExport || cmd.IsReadonly) && !cmd.IsLocal && !cmd.IsDeclare && pair.Name.Contains('['))
+            {
+                sb.Append("Write-Error ").Append(PsBuild.SingleQuote((cmd.IsExport ? "export" : "readonly") + ": `" + pair.Name + "': not a valid identifier"))
+                  .Append(" -ErrorAction Continue");
+                badSubscript = true;
+                continue;
+            }
 
             // `typeset -n ref` came first: this literal assignment names its target (and is not a value write).
             if (!cmd.IsLocal && !cmd.IsExport && pair.ArrayValue is null && pair.Op == AssignOp.Equal && _pendingNamerefs is { Count: > 0 } && _pendingNamerefs.Contains(pair.Name)
@@ -3495,6 +3542,7 @@ public static partial class PsEmitter
                     sb.Append("; [PsBash.Cmdlets.BashShellState]::MarkReadonly(").Append(PsBuild.SingleQuote(pair.Name)).Append(")");
                     if (!cmd.IsLocal) _readonlyVars?.Add(pair.Name);
                 }
+        if (badSubscript) sb.Append("; ").Append(PsBuild.SetStatus(1));
         return sb.ToString();
     }
 
@@ -3508,6 +3556,49 @@ public static partial class PsEmitter
 
     // `declare $var="x"`, `export "$k=$v"`, `readonly $n=1`: the variable NAME is only known at run time, so the
     // static declaration machinery cannot see it. Assign the named scalar directly (the value is data, never re-parsed).
+    /// <summary>
+    /// `local "$1"` / `local $1` / `readonly $two $one`: the names (and any `=value`) exist only at run time, so the
+    /// declaration runs through the run-time eval, which declares a calling function's locals. A quoted word stays one
+    /// word (`printf %q`: `local "$1"` with `x=y a=b` makes x='y a=b'); an unquoted one is split by the eval, as bash
+    /// splits it. Without this the builtin fell to command lookup: "local: command not found".
+    /// </summary>
+    private static bool TryEmitRuntimeNamedDeclaration(string name, Command.Simple cmd, out string result)
+    {
+        result = "";
+        static bool IsExpansion(WordPart p) => p is WordPart.SimpleVarSub or WordPart.BracedVarSub or WordPart.CommandSub;
+        bool anyDynamic = false;
+        var evalWords = ImmutableArray.CreateBuilder<CompoundWord>();
+        evalWords.Add(new CompoundWord([new WordPart.Literal(name)]));
+        foreach (var w in cmd.Words.Skip(1))
+        {
+            if (w.Parts.IsDefaultOrEmpty) return false;
+            if (GetLiteralValue(w) is { Length: > 1 } opt && opt[0] is '-' or '+' && opt.Skip(1).All(char.IsAsciiLetter))
+            {
+                evalWords.Add(w);
+                continue;
+            }
+            if (w.Parts.All(IsExpansion))
+            {
+                anyDynamic = true;
+                evalWords.Add(w);
+                continue;
+            }
+            if (w.Parts.Length == 1 && w.Parts[0] is WordPart.DoubleQuoted dq && !dq.Parts.IsDefaultOrEmpty && dq.Parts.All(IsExpansion))
+            {
+                anyDynamic = true;
+                var printf = new Command.Simple(
+                    [new CompoundWord([new WordPart.Literal("printf")]), new CompoundWord([new WordPart.SingleQuoted("%q")]), w],
+                    ImmutableArray<EnvPair>.Empty, ImmutableArray<Redirect>.Empty);
+                evalWords.Add(new CompoundWord([new WordPart.DoubleQuoted([new WordPart.CommandSub(printf)])]));
+                continue;
+            }
+            return false;
+        }
+        if (!anyDynamic) return false;
+        result = EmitEval(evalWords.ToImmutable());
+        return true;
+    }
+
     private static bool TryEmitDynamicAssignmentBuiltin(Command.Simple cmd, out string result)
     {
         result = "";
@@ -3524,6 +3615,8 @@ public static partial class PsEmitter
                 || p is WordPart.DoubleQuoted d && HasEquals(d.Parts));
             return HasEquals(w.Parts);
         }
+        // `declare`/`typeset` with run-time words already go to Invoke-BashDeclare; `local` and `readonly` did not.
+        if (name is "local" or "readonly" && TryEmitRuntimeNamedDeclaration(name, cmd, out result)) return true;
         if (!cmd.Words.Skip(1).Any(IsDynamicAssignment)) return false;
 
         // Everything that is not a dynamic assignment keeps its normal path; each dynamic one assigns the scalar
@@ -3572,7 +3665,16 @@ public static partial class PsEmitter
             string nm = eq < 0 ? text : text[..eq];
             if (nm.EndsWith('+')) nm = nm[..^1];
             int br = nm.IndexOf('[');
-            if (br > 0 && nm.EndsWith(']')) nm = nm[..br];
+            if (br > 0 && nm.EndsWith(']'))
+            {
+                // `export a[7]=8` / `readonly a[7]=8`: these take no subscript (`local`/`declare` do).
+                if (cname is "export" or "readonly")
+                {
+                    errs.Append("Write-Error ").Append(PsBuild.SingleQuote(cname + ": `" + nm + "': not a valid identifier")).Append(" -ErrorAction Continue; ");
+                    continue;
+                }
+                nm = nm[..br];
+            }
             if (IsValidVarName(nm) || nm.IndexOfAny(['$', '`', '\'', '"']) >= 0) { keep.Add(w); continue; }
             errs.Append("Write-Error ").Append(PsBuild.SingleQuote(cname + ": `" + text + "': not a valid identifier")).Append(" -ErrorAction Continue; ");
         }
@@ -3586,9 +3688,97 @@ public static partial class PsEmitter
         result = errs + rest + "; " + PsBuild.SetStatus(1);
         return true;
     }
+    [ThreadStatic]
+    private static int _outputProcSubCounter;
+
+    /// <summary>
+    /// <c>cmd &gt; &gt;(body)</c> / <c>tee &gt;(body)</c>: bash connects a pipe to body's stdin and runs it beside cmd.
+    /// Here cmd writes a temp file (its path replaces the <c>&gt;(...)</c> word), then body reads that file as
+    /// its stdin once cmd has ended, and cmd's exit status is kept. Running body at once instead (the
+    /// <c>&lt;(...)</c> path) left it reading the shell's own stdin: <c>seq 3 &gt; &gt;(tac)</c> hung.
+    /// <c>exec &gt; &gt;(...)</c> is not covered (its writes go on after this command).
+    /// </summary>
+    private static bool TryEmitOutputProcessSubs(Command.Simple cmd, out string result)
+    {
+        result = "";
+        if (!cmd.Words.IsDefaultOrEmpty && GetLiteralValue(cmd.Words[0]) == "exec") return false;
+        var bodies = new List<(string Var, Command Body)>();
+        var words = cmd.Words.IsDefaultOrEmpty ? cmd.Words : [.. cmd.Words.Select(w => RewriteOutputProcessSubWord(w, bodies))];
+        var redirects = cmd.Redirects.IsDefaultOrEmpty ? cmd.Redirects : [.. cmd.Redirects.Select(r => r.Target is null ? r : r with { Target = RewriteOutputProcessSubWord(r.Target, bodies) })];
+        if (bodies.Count == 0) return false;
+        result = WrapOutputProcessSubs(bodies, EmitSimple(cmd with { Words = words, Redirects = redirects }));
+        return true;
+    }
+
+    /// <summary>
+    /// <c>{ ...; } &gt; &gt;(tac)</c>, <c>while ...; done &gt; &gt;(body)</c>: the same file hand-off as
+    /// <see cref="TryEmitOutputProcessSubs"/>, for a compound command's own redirects.
+    /// </summary>
+    private static bool TryEmitCompoundOutputProcessSubs(Command cmd, out string result)
+    {
+        result = "";
+        var redirects = cmd switch
+        {
+            Command.BraceGroup b => b.Redirects, Command.Subshell s => s.Redirects, Command.If i => i.Redirects,
+            Command.ForIn f => f.Redirects, Command.ForArith fa => fa.Redirects, Command.While w => w.Redirects,
+            Command.Case c => c.Redirects, _ => default,
+        };
+        if (redirects.IsDefaultOrEmpty || !redirects.Any(r => HasOutputProcessSub(r.Target))) return false;
+        var bodies = new List<(string Var, Command Body)>();
+        ImmutableArray<Redirect> rewritten = [.. redirects.Select(r => r.Target is null ? r : r with { Target = RewriteOutputProcessSubWord(r.Target, bodies) })];
+        Command inner = cmd switch
+        {
+            Command.BraceGroup b => b with { Redirects = rewritten }, Command.Subshell s => s with { Redirects = rewritten },
+            Command.If i => i with { Redirects = rewritten }, Command.ForIn f => f with { Redirects = rewritten },
+            Command.ForArith fa => fa with { Redirects = rewritten }, Command.While w => w with { Redirects = rewritten },
+            Command.Case c => c with { Redirects = rewritten }, _ => cmd,
+        };
+        result = WrapOutputProcessSubs(bodies, Emit(inner));
+        return true;
+    }
+
+    private static bool HasOutputProcessSub(CompoundWord? w)
+        => w is not null && !w.Parts.IsDefaultOrEmpty && w.Parts.Any(p => p is WordPart.ProcessSub { IsInput: false });
+
+    /// <summary>Each <c>&gt;(body)</c> part becomes <c>"$__psbash_psoN"</c> (a temp file path); its body is queued in <paramref name="bodies"/>.</summary>
+    private static CompoundWord RewriteOutputProcessSubWord(CompoundWord w, List<(string Var, Command Body)> bodies)
+    {
+        if (!HasOutputProcessSub(w)) return w;
+        var parts = new List<WordPart>(w.Parts.Length);
+        foreach (var p in w.Parts)
+        {
+            if (p is not WordPart.ProcessSub { IsInput: false } ps) { parts.Add(p); continue; }
+            var name = "__psbash_pso" + (++_outputProcSubCounter).ToString(System.Globalization.CultureInfo.InvariantCulture);
+            bodies.Add((name, (Command)ps.Body));
+            parts.Add(new WordPart.DoubleQuoted([new WordPart.SimpleVarSub(name)]));
+        }
+        return new CompoundWord([.. parts]);
+    }
+
+    /// <summary>Creates each temp file, runs <paramref name="command"/>, then feeds each file to its body; the command's status is kept.</summary>
+    private static string WrapOutputProcessSubs(List<(string Var, Command Body)> bodies, string command)
+    {
+        var rc = "$__psbash_psoRc" + _outputProcSubCounter.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var sb = new StringBuilder();
+        foreach (var (v, _) in bodies)
+            sb.Append("$env:").Append(v).Append(" = New-BashProcessSubPath; ");
+        sb.Append("try { ").Append(command).Append(" } finally { ").Append(rc).Append(" = $global:LASTEXITCODE; ");
+        foreach (var (v, body) in bodies)
+        {
+            var path = new CompoundWord([new WordPart.DoubleQuoted([new WordPart.SimpleVarSub(v)])]);
+            sb.Append(Emit(new Command.BraceGroup(body, [new Redirect("<", 0, path)]))).Append("; ")
+              .Append("Remove-Item -LiteralPath $env:").Append(v).Append(" -Force -ErrorAction SilentlyContinue; ")
+              .Append("Remove-Item Env:").Append(v).Append(" -ErrorAction SilentlyContinue; ");
+        }
+        sb.Append("$global:LASTEXITCODE = ").Append(rc).Append(" }");
+        return sb.ToString();
+    }
+
     private static string EmitSimple(Command.Simple cmd)
     {
         cmd = ExpandAliases(cmd);
+        if (TryEmitOutputProcessSubs(cmd, out var outputProcSubResult))
+            return outputProcSubResult;
         if (TryEmitEnvPairsWrap(cmd, out var envWrapResult))
             return envWrapResult;
 
@@ -4551,11 +4741,21 @@ public static partial class PsEmitter
     private static string EmitReadonly(Command.Simple cmd)
     {
         var roSb = new StringBuilder();
+        bool roBad = false;
         for (int i = 1; i < cmd.Words.Length; i++)
         {
             var word = cmd.Words[i];
             var val = GetLiteralValue(word);
             if (val is not null && val.StartsWith('-')) continue; // flags like -p, -r
+            // `readonly b[7]=8`: readonly takes no subscript. (`[7]` lexes as a glob part.)
+            string? roRaw = val ?? (word.Parts.All(p => p is WordPart.Literal or WordPart.GlobPart)
+                ? string.Concat(word.Parts.Select(p => p is WordPart.Literal l ? l.Value : ((WordPart.GlobPart)p).Pattern)) : null);
+            if (roRaw is not null && (roRaw.IndexOf('=') is var eqAt && eqAt < 0 ? roRaw : roRaw[..eqAt]) is var roNm && roNm.Contains('['))
+            {
+                roSb.Append("Write-Error ").Append(PsBuild.SingleQuote("readonly: `" + roNm.TrimEnd('+') + "': not a valid identifier")).Append(" -ErrorAction Continue; ");
+                roBad = true;
+                continue;
+            }
             if (val is not null)
             {
                 int eq = val.IndexOf('=');
@@ -4585,7 +4785,7 @@ public static partial class PsEmitter
                 roSb.Append("[PsBash.Cmdlets.BashShellState]::MarkReadonly(").Append(PsBuild.SingleQuote(name)).Append("); ");
             }
         }
-        return roSb.Append(PsBuild.SetStatus(0)).ToString();
+        return roSb.Append(PsBuild.SetStatus(roBad ? 1 : 0)).ToString();
     }
 
     // set -- a b c -> reset positional parameters
@@ -5022,6 +5222,10 @@ public static partial class PsEmitter
         // as `false` / `echo` / `test`, then PATH): Resolve-BashCommand returns what `&` can call.
         bool dynamicName = needsCallOperator && dashName is null && IsBareVariableCommandWord(cmd.Words[0]);
         bool arrayName = dynamicName && (IsQuotedArrayAllWord(cmd.Words[0]) || IsUnquotedArrayAllWord(cmd.Words[0]));
+        // `{1..10}` / `{a,b} x`: brace expansion makes several words, the first is the command (bash: `1: command not
+        // found`). Emitted bare, PowerShell printed the numbers.
+        bool braceName = !isScriptCommand && cmd.Words.Length > 0 && !cmd.Words[0].Parts.IsDefaultOrEmpty
+            && cmd.Words[0].Parts.Any(p => p is WordPart.BracedTuple or WordPart.BracedRange);
         string leading = cmd.Words.Length == 0 ? ""
             : isScriptCommand ? "bash "
             : needsCallOperator ? "& "
@@ -5040,13 +5244,13 @@ public static partial class PsEmitter
                     FlattenPartsToDoubleQuotedString(cmd.Words[0].Parts))
                 : EmitWord(cmd.Words[0]);
 
-        if (arrayName)
+        if (arrayName || braceName)
         {
             // `"$@" extra`: the first element is the command, the rest of the array and the operands its arguments.
             var extra = new StringBuilder();
             for (int i = 1; i < cmd.Words.Length; i++)
                 extra.Append(' ').Append(QuoteGeneralArgIfNeeded(EmitWord(cmd.Words[i])));
-            string wordsExpr = EmitUnquotedSplitWordArray(cmd.Words[0]);
+            string wordsExpr = braceName ? "@(" + EmitArgWord(cmd.Words[0]) + ")" : EmitUnquotedSplitWordArray(cmd.Words[0]);
             sb.Append("& { $__dyn = " + wordsExpr + "; if ($__dyn.Count -gt 0) { $__dynrest = @($__dyn | Select-Object -Skip 1); & (Resolve-BashCommand $__dyn[0]) @__dynrest" + extra + " } else { $global:LASTEXITCODE = 0 } }");
             AppendRedirectTail(sb, cmd.Redirects);
             if (!cmd.EnvPairs.IsEmpty)
@@ -5251,6 +5455,9 @@ public static partial class PsEmitter
     {
         if (IsGlobWord(word) || IsPureUnquotedVarWord(word))
             return "$(& { $__rt = @(" + EmitUnquotedSplitWordArray(word) + "); if ($__rt.Count -eq 1) { $__rt[0] } else { '' } })";
+        // `> a-{one,two}`: brace expansion gives several words, also an ambiguous redirect (the array reached -Path).
+        if (!word.Parts.IsDefaultOrEmpty && word.Parts.Any(p => p is WordPart.BracedTuple or WordPart.BracedRange))
+            return "$(& { $__rt = @(" + EmitArgWord(word) + "); if ($__rt.Count -eq 1) { $__rt[0] } else { '' } })";
         return TransformRedirectTarget(EmitArgWord(word));
     }
 
@@ -9328,7 +9535,10 @@ public static partial class PsEmitter
     private static bool IsCompoundPipelineStage(Command cmd) =>
         cmd is Command.Subshell or Command.BraceGroup or Command.ForIn or Command.ForArith
             or Command.While or Command.If or Command.Case or Command.ArithCommand
-            or Command.ShFunction;
+            or Command.ShFunction or Command.Select
+            // `[[ ]]` and a bare assignment emit an expression (`$(if ...)`), which PowerShell allows only as
+            // the FIRST pipeline element: `[[ a = b ]] | [[ a = b ]]` was a parse error.
+            or Command.BoolExpr or Command.ShAssignment;
 
     private static void EmitPipeTargetRedirects(Command.Simple cmd, StringBuilder sb)
     {
@@ -9569,11 +9779,14 @@ public static partial class PsEmitter
 
         Redirect? inputRedirect = null;
         var tailRedirects = new List<Redirect>(redirects.Length);
+        var highFds = new List<Redirect>();
         foreach (var redirect in redirects)
         {
             // `<` file and `<<<` here-string both supply the group's stdin; the last
             // one wins (bash).
-            if (redirect.Fd == 0 && redirect.Op is "<" or "<<" or "<<<")
+            if (redirect.Fd >= 3)
+                highFds.Add(redirect);
+            else if (redirect.Fd == 0 && redirect.Op is "<" or "<<" or "<<<")
                 inputRedirect = redirect;
             else
                 tailRedirects.Add(redirect);
@@ -9603,7 +9816,7 @@ public static partial class PsEmitter
                 result = $"@() | {result}";
         }
 
-        return result;
+        return WithScopedHighFds(result, highFds);
     }
 
     private static string EmitCd(ImmutableArray<CompoundWord> args)

@@ -4490,9 +4490,129 @@ public class PsEmitterTests
     [Fact]
     public void Transpile_OutputProcessSub()
     {
+        // `>(body)`: cmd writes a temp file named by the word; body reads it as stdin AFTER cmd (it used to run at once,
+        // reading the shell's stdin: `seq 3 > >(tac)` hung).
         var result = PsEmitter.Transpile("cmd >(tee log.txt)");
-        Assert.Equal("cmd (Invoke-ProcessSub { Invoke-BashTee log.txt })", result);
+        var m = System.Text.RegularExpressions.Regex.Match(result, @"^\$env:(__psbash_pso\d+) = New-BashProcessSubPath; try \{ (.*?) \} finally \{ (.*) \}$");
+        Assert.True(m.Success, result);
+        Assert.Contains("cmd ", m.Groups[2].Value);
+        Assert.Contains("$env:" + m.Groups[1].Value, m.Groups[2].Value);
+        Assert.DoesNotContain("Invoke-BashTee", m.Groups[2].Value);
+        Assert.Contains("Invoke-BashTee log.txt", m.Groups[3].Value);
+        Assert.Contains("-LiteralPath $env:" + m.Groups[1].Value, m.Groups[3].Value);
     }
+
+    [Theory]
+    [InlineData("{ echo 1; echo 2; } > >(tac)")]
+    [InlineData("( echo 1 ) > >(tac)")]
+    [InlineData("for i in 1 2; do echo $i; done > >(tac)")]
+    [InlineData("while false; do :; done > >(tac)")]
+    [InlineData("if true; then echo 1; fi > >(tac)")]
+    public void Transpile_CompoundOutputProcessSub_FeedsBodyAfterCommand(string bash)
+    {
+        // A compound command's own `> >(body)` redirect got no hand-off: `{ echo 1; ...; } > >(tac)` printed nothing.
+        var result = PsEmitter.Transpile(bash);
+        var m = System.Text.RegularExpressions.Regex.Match(result, @"^\$env:(__psbash_pso\d+) = New-BashProcessSubPath; try \{ ");
+        Assert.True(m.Success, result);
+        Assert.DoesNotContain("Invoke-ProcessSub", result);
+        // The command writes the file (its redirect names the variable), then the body reads it.
+        int write = result.IndexOf(m.Groups[1].Value, m.Length, StringComparison.Ordinal);
+        int body = result.LastIndexOf("Invoke-BashTac", StringComparison.Ordinal);
+        Assert.True(write > 0 && body > write, result);
+        Assert.EndsWith("}", result);
+    }
+
+    [Fact]
+    public void Transpile_InputProcessSub_StillRunsAtOnce()
+        => Assert.Equal("Invoke-BashCat (Invoke-ProcessSub { Invoke-BashSort f })", PsEmitter.Transpile("cat <(sort f)"));
+
+    [Theory]
+    [InlineData("[[ a = b ]] | [[ a = b ]]")]
+    [InlineData("a=$(false) | a=$(false)")]
+    [InlineData("x=1 | cat")]
+    public void Transpile_ExpressionPipelineStage_ParsesAsPowerShell(string bash)
+    {
+        // `[[ ]]` and a bare assignment emit an expression, allowed only as the FIRST PowerShell pipeline element.
+        var ps = PsEmitter.Transpile(bash);
+        Assert.DoesNotContain("| $(", ps);
+        Assert.DoesNotContain("| $global:", ps);
+    }
+
+    [Fact]
+    public void Transpile_BraceExpandedRedirectTarget_IsAmbiguous()
+        => Assert.Contains("if ($__rt.Count -eq 1)", PsEmitter.Transpile("echo hi > a-{one,two}"));
+
+    [Theory]
+    [InlineData("for i in 1 2; do ( continue; echo x ); done")]
+    [InlineData("f() { ( break ); }; for i in 1; do f; done")]
+    public void Transpile_LoopControlInSubshell_WarnsLikeBash(string bash)
+    {
+        // A subshell starts with no loop: bash warns and the subshell carries on.
+        var ps = PsEmitter.Transpile(bash);
+        Assert.Contains("only meaningful in a", ps);
+    }
+
+    [Theory]
+    [InlineData("[[ foo == foo\n&& bar == bar\n]] && echo t")]
+    [InlineData("[[\n a == a ]] && echo t")]
+    [InlineData("[[ ( a == a\n) ]] && echo t")]
+    public void Transpile_DoubleBracket_NewlineBetweenTerms_Parses(string bash)
+        => Assert.Contains("echo", PsEmitter.Transpile(bash) ?? "", StringComparison.OrdinalIgnoreCase);
+
+    [Fact]
+    public void Transpile_DoubleBracket_NewlineAfterOperator_IsASyntaxError()
+        => Assert.ThrowsAny<Exception>(() => PsEmitter.Transpile("[[ a ==\na ]] && echo t"));
+
+    [Theory]
+    [InlineData("{1..10}")]
+    [InlineData("{echo,hi} there")]
+    public void Transpile_BraceExpandedCommandWord_IsLookedUp(string bash)
+        => Assert.Contains("Resolve-BashCommand", PsEmitter.Transpile(bash));
+
+    [Fact]
+    public void Transpile_LocalWithRunTimeNames_RunsThroughEval_AndIsRestored()
+    {
+        // `local "$1"`: the name is known only at run time (it fell to command lookup: "local: command not found").
+        var ps = PsEmitter.Transpile("f() { local \"$1\"; local $1; echo \"$x\"; }") ?? "";
+        Assert.Contains("$__psbash_eval_src", ps);
+        Assert.Contains("Invoke-BashPrintf", ps);                  // the quoted word stays one word
+        Assert.Contains("Get-Variable -Name '__lsd_*'", ps);       // the function restores what the eval declared
+        Assert.DoesNotContain("Resolve-BashCommand", ps);
+    }
+
+    [Theory]
+    [InlineData("export a[7]=8", "export: `a[7]''")]     // '' = the quote escaped in a PS single-quoted string
+    [InlineData("readonly b[7]=8", "readonly: `b[7]''")]
+    public void Transpile_ExportOrReadonlyOfSubscript_IsNotAValidIdentifier(string bash, string message)
+    {
+        var ps = PsEmitter.Transpile(bash) ?? "";
+        Assert.Contains(message + ": not a valid identifier", ps);
+        Assert.Contains("$global:LASTEXITCODE = 1", ps);
+    }
+
+    [Fact]
+    public void Transpile_LocalOfSubscript_IsAccepted()
+    {
+        Assert.DoesNotContain("not a valid identifier", PsEmitter.Transpile("f() { local c[7]=8; declare d[7]=8; }") ?? "");
+    }
+
+    [Theory]
+    [InlineData("((echo in; echo $? >&7) | true) 7>&1", "7")]
+    [InlineData("{ echo a >&3; } 3>log.txt", "3")]
+    [InlineData("while read -u 3 l; do echo $l; done 3<in.txt", "3")]
+    public void Transpile_CompoundWithNumberedFdRedirect_OpensItForTheCommand(string bash, string fd)
+    {
+        // Left raw (`} 7>&1`), PowerShell took the `&` as its background operator and ran the command as a job.
+        var ps = PsEmitter.Transpile(bash) ?? "";
+        Assert.Contains("Invoke-BashExecFd " + fd + " ", ps);
+        Assert.Contains("Invoke-BashExecFd " + fd + " '>&' '-'", ps);
+        Assert.DoesNotContain("} " + fd + ">", ps);
+        Assert.DoesNotContain("} " + fd + "<", ps);
+    }
+
+    [Fact]
+    public void Transpile_LoopInsideSubshell_KeepsItsOwnLabels()
+        => Assert.DoesNotContain("only meaningful", PsEmitter.Transpile("( for i in 1 2; do continue; done )"));
 
     [Fact]
     public void Transpile_NestedProcessSub()

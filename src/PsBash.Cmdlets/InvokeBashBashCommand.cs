@@ -179,10 +179,9 @@ public sealed class InvokeBashBashCommand : PSCmdlet
         // Forward child exit code to the caller's $LASTEXITCODE — oracle parity.
         SessionState.PSVariable.Set("global:LASTEXITCODE", exitCode);
 
-        if (!string.IsNullOrEmpty(stderr))
-        {
-            Console.Error.Write(stderr);
-        }
+        // The command's error stream, not Console.Error: inside the host that was the host's own fd 2, so a nested
+        // shell's stderr vanished and `2>&1` / `2> f` could not see it.
+        FileSystemHelpers.WriteStderrBytes(this, stderr.Replace("\r\n", "\n"));
 
         if (!string.IsNullOrEmpty(stdout))
         {

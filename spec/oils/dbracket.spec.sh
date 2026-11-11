@@ -404,7 +404,6 @@ FOO=bar [[ foo == foo ]]
 ]] && echo true
 ## stdout: true
 ## status: 0
-## XFAIL ps-bash gap-oils-dbracket dbracket (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Argument that looks like a real operator

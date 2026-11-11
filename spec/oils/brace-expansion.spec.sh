@@ -301,7 +301,6 @@ echo $v
 {v,x}=X
 ## stdout:
 ## status: 127
-## XFAIL ps-bash gap-oils-brace-expansion brace-expansion (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Tilde expansion

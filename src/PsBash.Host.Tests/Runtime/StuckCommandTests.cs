@@ -156,6 +156,51 @@ public class StuckCommandTests : IDisposable
         }
     }
 
+    // A working set just over the limit with live memory just under it reclaimed on EVERY 500 ms poll: back-to-back
+    // blocking GCs slowed `yes | sort` to a crawl, so it never reached the limit and never stopped.
+    [Fact]
+    public void MemoryGuard_AfterAClearReclaim_BacksOffUntilGrowthOrTime()
+    {
+        var priorLimit = HostMemoryGuard.LimitBytes;
+        var priorRead = HostMemoryGuard.ReadUsage;
+        var priorReclaim = HostMemoryGuard.Reclaim;
+        var priorLive = HostMemoryGuard.ReadLive;
+        var priorNow = HostMemoryGuard.Now;
+        var priorBackoff = HostMemoryGuard.ReclaimBackoff;
+        try
+        {
+            HostMemoryGuard.LimitBytes = 800;
+            HostMemoryGuard.ReclaimBackoff = TimeSpan.FromSeconds(5);
+            long usage = 900, clock = 0;
+            var reclaims = 0;
+            HostMemoryGuard.ReadUsage = () => usage;
+            HostMemoryGuard.Reclaim = () => reclaims++;
+            HostMemoryGuard.ReadLive = () => 700;               // live stays under the limit
+            HostMemoryGuard.Now = () => clock;
+            using var cts = new CancellationTokenSource();
+            using var guard = HostMemoryGuard.Watch(cts);
+
+            guard.Check();
+            Assert.Equal(1, reclaims);
+            clock += 500; guard.Check();                        // next poll, no real growth: no reclaim
+            Assert.Equal(1, reclaims);
+            usage = 900 + 800 / 8; guard.Check();               // grew by an eighth of the limit: reclaim
+            Assert.Equal(2, reclaims);
+            clock += 5000; guard.Check();                       // or enough time passed: reclaim
+            Assert.Equal(3, reclaims);
+            Assert.False(guard.Breached);
+        }
+        finally
+        {
+            HostMemoryGuard.LimitBytes = priorLimit;
+            HostMemoryGuard.ReadUsage = priorRead;
+            HostMemoryGuard.Reclaim = priorReclaim;
+            HostMemoryGuard.ReadLive = priorLive;
+            HostMemoryGuard.Now = priorNow;
+            HostMemoryGuard.ReclaimBackoff = priorBackoff;
+        }
+    }
+
     [Fact]
     public void MemoryGuard_UnderLimit_DoesNotPayForAReclaim()
     {

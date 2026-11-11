@@ -267,7 +267,6 @@ echo as_val=$as_val
 {1..10}
 ## stdout:
 ## status: 127
-## XFAIL ps-bash gap-oils-bugs bugs (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### file with NUL byte

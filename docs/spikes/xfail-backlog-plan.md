@@ -44,8 +44,8 @@ Agents run non-interactive scripts and `-c` snippets. Order work by that, not by
 |---|---|---|---|---|
 | A1 | `chmod` did not exist | 15 report "command not found"; 17 scripts use it | Implemented, **uncommitted** (`InvokeBashChmodCommand.cs`, tests pass) | Land it, then unmark what passes. Some cases assert real mode bits and will become `platform-windows-*`. |
 | A2 | Lowercase variable clobbers a system variable (`path=`, `tmp=`) | 2 marked `platform-windows-env-case`, plus hidden damage in other cases | Not started | Separate brief: `docs/spikes/windows-env-case-collision-plan.md`. |
-| A3 | `argv.py` / `printenv.py`: command not found | 17 | Not analysed | These helpers work in hundreds of passing cases, so something in these 17 loses them (suspects: a nested `$SH -c`, a changed `PATH`, `set -o posix`, an `exec`). Reproduce one with `tman dev` before guessing. Cases are in assign-deferred ×3, assign-extended ×2, word-split ×2, var-ref ×2, nix-idioms ×2, and six single files. |
-| A4 | Timeout or host exit | 11 | Not analysed. **P0** | `loop`: continue in subshell with errexit; `builtin-trap` ×2; `builtin-trap-bash` ×2 (DEBUG/ERR + USR1); `process-sub` ×2 (to stdin); `background`: process doesn't affect parent; `builtin-special`: prefix binding for `exec`; `builtin-bind` ×2 (Tier 3). Also `array-assign` "More fragments like a[" (launcher did not exit). Each needs a root cause, not a longer timeout. |
+| A3 | `argv.py` / `printenv.py`: command not found | 14 still marked | **Analysed 2026-11-10: the premise was wrong** | The helpers exist NOWHERE: not in the repo, not in the WSL oracle. The expectations were recorded from bash with them missing, so every passing case simply prints nothing for them. In these 14 cases bash stops BEFORE reaching the helper (an expansion error: `${a[0][0]}` bad substitution, `${!ref}` to an unset name, a syntax error, `typeset a[3]=4` rejected), giving status 1 or 2. ps-bash misses that error, runs the helper, and gets 127. So each case is its own missing-error gap; group them by the error bash raises (`git grep` the case, run it in the oracle with `2>&1`), not by the helper. Oracle run: bash errors first in array "Multiple subscripts" (`${a[0][0]}: bad substitution`, 1), var-sub-quote (`unexpected EOF while looking for matching '`, 2), array-literal (`declare -A` on an indexed array: `cannot convert indexed to associative array`), nix-idioms "string var is fatal" (`!hookSlice: unbound variable` under `set -u`), var-ref `${!a[@]-…}` (`invalid indirect expansion`). The other 7 (array-compat, nix-idioms "undefined array", assign-extended, word-split ×2, `typeset a[3]=4`, var-ref suffix operators) get "not found" in bash too: their diff is in other lines. assign-deferred `readonly/export a[7]=8` are fixed. |
+| A4 | Timeout or host exit | 11 | **Partly done (2026-11-10, second pass)**. **P0** | Fixed: `loop` continue-in-subshell (subshell is a loop barrier; the errexit case also needed the next fix), `process-sub` ×2 (`> >(body)` on simple AND compound commands: temp-file hand-off), `trap 'echo <'`. Root causes found: (1) a bare word matching a PowerShell module export only by case (`should` → Pester's `Should`) auto-imported the module: slow, then a PowerShell error. Now exact case for dash-less words (`SdkRunspaceSetup.ps1`). (2) `sh -c "kill -USR1 $$"` hard-killed the enclosing host (a nested shell runs in another host, so `$$` is not its own pid). `kill` now never kills a `ps-bash-host`; the signal is not delivered (`gap-signal-enclosing-shell`, row in intentional-differences). **Follow-up:** a cross-host signal channel so the enclosing script's trap runs. Open: `builtin-trap-bash` ×2, `background`, `builtin-special` `exec` (not a hang standalone; real gap: `pre1=pre1 readonly x=x` makes `x` visible to a child, bash does not export it), `builtin-bind` ×2, `array-assign` "More fragments like a[". |
 | A5 | Valid bash rejected at parse time | 29 | Not analysed | Groups: alias-driven grammar (alias ×6, Tier 3 unless non-interactive `shopt -s expand_aliases` is involved); `ble-unset` / `ble-features` ×8 (same construct, likely one fix); `set` forms `set -`, `set +`, `set - +` ×5 (see A7); `$((` vs `$( (` ambiguity ×3 (`paren-ambiguity`); arrays as env bindings ×2; then singles (`[[` over lines, `{abc}<<<`, `time { … }`, `trap ERR` pipeline, `a[@]` nameref, arithmetic `?:` in a slice). Two are the opposite problem: bash rejects, ps-bash accepts (`parse-error-wrong-shape`). |
 | A6 | PowerShell error text reaches the user | 7 | Not analysed | Any `Exception calling`, `Cannot bind`, `The term …` in stderr is a bug by itself, whatever the case tests. Cases: redirect-multi, builtin-history ×2, builtin-trap, array-assign, alias, divergence. |
 | A7 | OSH-only options and `set` forms | 12 use `shopt --set/-s <oils option>`; 4 hit "set: option not supported" | Decision needed, then mechanical | bash prints `shopt: X: invalid shell option name` and carries on. Check ps-bash does the same (same message, status 1, script continues); cases that then match bash are stale, the rest are Artifact. Do not implement Oils options. |
@@ -105,7 +105,7 @@ Facts that cost time when forgotten:
   about 70 minutes).
 - The Bash tool is the **installed release**, not the checkout. Use `tman dev`.
 - Count markers with `git grep -c '^## XFAIL ps-bash' HEAD -- spec/oils` (ripgrep skips one file).
-- `PsEmitter.cs` is Latin-1 with CRLF. Edit it with a script that round-trips through ISO-8859-1 and throws
+- `PsEmitter.cs` is Latin-1 with **LF** endings (checked 2026-11-10; an anchor written with CRLF never matches). Edit it with a script that round-trips through ISO-8859-1 and throws
   if an anchor is missing. Other sources are UTF-8.
 - Differential tests compare stderr; wrap with `{ …; } 2>/dev/null` when only the message prefix differs.
   Record with `PSBASH_ORACLE_RECORD=1`, then `git checkout -- src/PsBash.Differential.Tests/Cassettes` and add
@@ -146,6 +146,32 @@ unless asked.
 - Unconfirmed: 8 `PsBash.Shell.Tests` failures on `build2` (`ProgramEndToEndTests` parse-error cases ×6,
   one PTY signal test, one worktrack logging test). Run them on Windows and on the previous commit.
 - `docs/specs/xfail-triage.md` still lists the 2026-11-09 clusters; update it as workstream A items close.
+- Fixed 2026-11-10: a nested `bash -c`'s stderr was lost by every route (console, `2> f`, `2>&1`):
+  `Invoke-BashBash` wrote it with `Console.Error`, which in the host is the host's own fd 2. It now uses
+  `FileSystemHelpers.WriteStderrBytes`. As a safety net the host points `Console.Error` at the running command's
+  stderr frames (`SdkWorker.RunCommand`), so awk `"/dev/stderr"`, `time` and xargs messages now print, but they
+  still bypass `2>` redirection. **Follow-up:** move those `Console.Error` call sites (`git grep Console.Error
+  src/PsBash.Cmdlets`) to the error stream.
+- Fixed 2026-11-10 (an A2 symptom inside the host): a script's `tmp=x.txt` IS `TMP` on Windows, and the first
+  unknown command in a cold host wrote its autoload-index cache under `Path.GetTempPath()`, creating a
+  directory `x.txt/ps-bash/` in the cwd (the `bash-NNNN.txt/` folders littering the repo root came from
+  this). Redirect case `>&word redirects stdout and stderr` then failed with "Is a directory". The host now
+  captures its temp dir at startup (`PsBash.Core.HostTempPath`, used by the setup script, psm1
+  `Get-BashHostTempPath`, `less`, and the proc-sub dir). User-visible temp (`mktemp` default, `/tmp`) still
+  follows the live `TMP`: that is A2 proper.
+- serialize `set` / `declare` cases grepped `zz` over the whole environment and matched a machine-specific
+  variable whose value contained `zz`; the spec now greps `^zz=` (same bash output).
+- Seen in the Bash tool (installed `0.13.0-dev`, older than v0.14.2), not yet checked on the dev build:
+  `awk '/a/,/b/' file` (a range pattern), `python3 - <<'EOF'` with an empty heredoc, and once even
+  `sed -n 128,145p file` hung (the last suggests a stuck command holding the installed host, not sed);
+  `grep -n 'grep "^zz="' file` found nothing although the line exists (`^` not first in a BRE is literal).
+
+### Progress, 2026-11-10 (second pass)
+
+480 → 467 markers. Landed the previous session's uncommitted batch (subshell `continue` barrier, `> >(…)`,
+`trap 'echo <'`, `( … ) N>&1` high-fd scoping, `local "$1"` via eval, `[[` across newlines, `{1..10}` as a
+command word, `export/readonly a[1]=x` errors, `$PPID`/`$RANDOM` spec shape checks, HostMemoryGuard reclaim
+backoff) plus the A4 root causes and the nested-stderr fix above.
 
 ## Suggested order
 

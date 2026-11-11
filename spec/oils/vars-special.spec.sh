@@ -129,12 +129,13 @@ echo status=$?
 ## timeout: 10
 
 #### $PPID
-echo $PPID | egrep '[0-9]+'
+# ps-bash: the recorded expectation was one run's PID; check the shape instead (deterministic).
+echo $PPID | egrep -q '^[0-9]+$'
+echo status=$?
 
 # NOTE: There is also $BASHPID
-## stdout: 2494930
+## stdout: status=0
 ## status: 0
-## XFAIL ps-bash gap-oils-vars-special vars-special (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### $PIPESTATUS
@@ -146,13 +147,14 @@ argv.py "${PIPESTATUS[@]}"
 
 #### $RANDOM
 expr $0 : '.*/osh$' && exit 99  # Disabled because of spec-runner.sh issue
-echo $RANDOM | egrep '[0-9]+'
+# ps-bash: the recorded expectation was one run's random value; check the shape instead (deterministic).
+echo $RANDOM | egrep -q '^[0-9]+$'
+echo status=$?
 ## STDOUT:
 0
-16399
+status=0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-vars-special vars-special (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### $UID and $EUID

@@ -206,4 +206,15 @@ public class InvokeBashTrapCommandTests : IClassFixture<SharedPwshFixture>
         Assert.Equal("2", raw[^2].ToString());
         Assert.Equal("0", raw[^1].ToString());
     }
+
+    // bash stores an action it cannot parse and reports the syntax error when the trap fires; `trap` itself
+    // succeeds. The raw-text fallback made [scriptblock]::Create throw at `trap` time.
+    [Fact]
+    public void Trap_UnparseableAction_IsStored_AndRegisteringSucceeds()
+    {
+        var raw = RunRaw("Invoke-BashTrap 'echo <' EXIT; $global:LASTEXITCODE; $null -ne $global:__BashTrapEXIT");
+        Assert.Equal("0", raw[^2].ToString());
+        Assert.Equal("True", raw[^1].ToString());
+        Assert.Contains("syntax error", InvokeBashTrapCommand.TranspileAction("echo <"));
+    }
 }

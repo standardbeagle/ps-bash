@@ -97,7 +97,10 @@ function Get-BashAutoloadIndexCached {
     $shared = [System.AppContext]::GetData('PsBash.AutoloadIndex')
     if ($shared -and $shared.Fingerprint -eq $fp) { return $shared.Index }
 
-    $file = Join-Path ([IO.Path]::GetTempPath()) "ps-bash/autoload-index-$fp.json"
+    # The host's temp dir, not the live TMP: a script's `tmp=x` is TMP on Windows (PsBash.Core.HostTempPath).
+    $hostTemp = [System.AppContext]::GetData('PsBash.HostTempPath')
+    if (-not $hostTemp) { $hostTemp = [IO.Path]::GetTempPath() }
+    $file = Join-Path $hostTemp "ps-bash/autoload-index-$fp.json"
     $index = $null
     try {
         if ([IO.File]::Exists($file)) {
@@ -144,6 +147,15 @@ function Resolve-BashAutoloadModule {
     }
 
     if ($script:BashAutoloadIndex.ContainsKey($Name)) {
+        # bash command names are case-sensitive. A bare word (no verb-noun dash) autoloads only an export spelled
+        # exactly that way: `tnc` still finds Test-NetConnection's alias, but `should` no longer imports Pester
+        # to run `Should` (a slow import, then a PowerShell error instead of "command not found").
+        # Only reached on a case-insensitive hit, so the key scan is rare.
+        if ($Name.IndexOf('-') -lt 0) {
+            $exact = $false
+            foreach ($k in $script:BashAutoloadIndex.Keys) { if ($k -ceq $Name) { $exact = $true; break } }
+            if (-not $exact) { return $null }
+        }
         return $script:BashAutoloadIndex[$Name]
     }
     return $null

@@ -230,6 +230,15 @@ public sealed class InvokeBashKillCommand : PSCmdlet
                 // has already exited also counts as "no such process".
                 if (proc.HasExited) throw new ArgumentException("exited");
                 if (IsZombie(procId)) throw new ArgumentException("zombie");
+                if (!existenceOnly && IsShellHost(proc))
+                {
+                    // Another ps-bash shell's $$ (`sh -c "kill -USR1 $$"` runs in a different host): that process
+                    // serves every script of its session, so Process.Kill ended all of them. There is no channel
+                    // to deliver the signal to the one script yet; say so instead of killing the host.
+                    FileSystemHelpers.WriteBashError(this,
+                        $"kill: ({procId}) - signal not delivered: a ps-bash shell host (see intentional-differences.md)");
+                    continue;
+                }
                 if (!existenceOnly)
                     proc.Kill();
             }
@@ -279,6 +288,13 @@ public sealed class InvokeBashKillCommand : PSCmdlet
             WriteObject(obj);
         FileSystemHelpers.SetLastExitCode(this, 0);
         return true;
+    }
+
+    /// <summary>A ps-bash host process (shared by a session's scripts). Background-job hosts are signalled before this.</summary>
+    private static bool IsShellHost(Process proc)
+    {
+        try { return string.Equals(proc.ProcessName, "ps-bash-host", StringComparison.OrdinalIgnoreCase); }
+        catch (InvalidOperationException) { return false; }
     }
 
     /// <summary>The number of a resolved signal name (<c>SIGKILL</c> → 9); 15 (TERM) when unknown.</summary>

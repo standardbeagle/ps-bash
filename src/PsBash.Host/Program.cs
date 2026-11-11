@@ -18,6 +18,8 @@ internal sealed class Program
         // gate forever and every later command on the host hung behind it. With a default timeout a
         // pathological match fails that command (RegexMatchTimeoutException) instead.
         HostRegexTimeout.Install();
+        // Before any script can assign `tmp=…` (on Windows that is TMP): the host's own scratch files stay put.
+        PsBash.Core.HostTempPath.Capture();
         var exitCode = await MainCoreAsync(args);
         HostLog.SetExitReason("main returned (server stopped)");
         // End the process explicitly. Returning from Main is not enough: the

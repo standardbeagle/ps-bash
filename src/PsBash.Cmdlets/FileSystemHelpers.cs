@@ -226,12 +226,27 @@ internal static class FileSystemHelpers
     public static void WriteStderr(PSCmdlet cmdlet, string message)
     {
         // Every diagnostic names an operand as typed, not its resolved full path (OperandDisplay).
-        message = OperandDisplay.Rewrite(cmdlet, message);
+        WriteStderrRecord(cmdlet, OperandDisplay.Rewrite(cmdlet, message), null);
+    }
+
+    /// <summary>
+    /// Exact bytes on the command's stderr (a child process's captured stderr): not rewritten, and no newline is
+    /// added when the text does not end in one (<see cref="PsBash.Core.StderrRecord"/>). Through the error stream,
+    /// so <c>2&gt; f</c>, <c>2&gt;&amp;1</c> and <c>$( … 2&gt;&amp;1)</c> see it — Console.Error bypasses them.
+    /// </summary>
+    public static void WriteStderrBytes(PSCmdlet cmdlet, string text)
+    {
+        if (string.IsNullOrEmpty(text)) return;
+        WriteStderrRecord(cmdlet, text, text.EndsWith('\n') ? null : PsBash.Core.StderrRecord.NoTrailingNewlineMarker);
+    }
+
+    private static void WriteStderrRecord(PSCmdlet cmdlet, string message, object? targetObject)
+    {
         var record = new ErrorRecord(
             new System.IO.IOException(message),
             "BashError",
             ErrorCategory.NotSpecified,
-            null);
+            targetObject);
 
         // Temporarily override $ErrorActionPreference to Continue so the
         // runtime treats WriteError as non-terminating regardless of what

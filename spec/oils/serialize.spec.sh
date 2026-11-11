@@ -122,7 +122,7 @@ case $SH in zsh) return ;; esac  # zsh doesn't make much sense
 
 zz=$'one\ntwo'
 
-set | grep zz
+set | grep "^zz="
 ## stdout: zz=$'one\ntwo'
 ## status: 0
 ## timeout: 10
@@ -133,7 +133,7 @@ case $SH in ash|zsh) return ;; esac  # zsh doesn't make much sense
 
 zz=$'one\ntwo'
 
-typeset | grep zz
+typeset | grep "^zz="
 typeset -p zz
 ## STDOUT:
 zz=$'one\ntwo'

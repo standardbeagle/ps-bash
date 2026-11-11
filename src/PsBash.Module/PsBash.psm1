@@ -293,7 +293,7 @@ function Invoke-ProcessSub {
         [scriptblock]$Command
     )
 
-    $subDir = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), 'ps-bash', 'proc-sub')
+    $subDir = [System.IO.Path]::Combine((Get-BashHostTempPath), 'ps-bash', 'proc-sub')
     [void][System.IO.Directory]::CreateDirectory($subDir)
 
     # The consumer reads $tmp during the same command and nothing deletes it after,
@@ -328,6 +328,24 @@ function Invoke-ProcessSub {
         Remove-Item -Path $tmp -Force -ErrorAction SilentlyContinue
         throw
     }
+}
+
+# ps-bash's own scratch directory: the host's temp dir fixed at startup, not the live TMP, which a script's
+# `tmp=x` overwrites on Windows (PsBash.Core.HostTempPath). Outside the host it is the ordinary temp dir.
+function Get-BashHostTempPath {
+    $t = [System.AppContext]::GetData('PsBash.HostTempPath')
+    if ($t) { return [string]$t }
+    return [System.IO.Path]::GetTempPath()
+}
+
+# An empty file for an output process substitution (`cmd > >(body)`): cmd writes it, body then reads it.
+# The emitted code deletes it after body ran; Invoke-ProcessSub's reaper sweeps any left behind.
+function New-BashProcessSubPath {
+    $subDir = [System.IO.Path]::Combine((Get-BashHostTempPath), 'ps-bash', 'proc-sub')
+    [void][System.IO.Directory]::CreateDirectory($subDir)
+    $tmp = [System.IO.Path]::Combine($subDir, [System.IO.Path]::GetRandomFileName())
+    [System.IO.File]::WriteAllBytes($tmp, [byte[]]@())
+    return $tmp
 }
 
 # RC-8a: Invoke-ProcessSubSource was migrated from this psm1 to a binary

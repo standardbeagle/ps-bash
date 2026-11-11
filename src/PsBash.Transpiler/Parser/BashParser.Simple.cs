@@ -85,7 +85,9 @@ public sealed partial class BashParser
             bool isReadonlyKw = Peek().Value == "readonly";
             Advance(); // consume the keyword
 
-            if (ParseDeclarationPairs() is { } declPairs)
+            // `readonly b[7]=8` is an error in bash (`declare -r b[7]=8` is not): leave it to the simple-command
+            // path, whose identifier check reports it.
+            if (ParseDeclarationPairs() is { } declPairs && !(isReadonlyKw && declPairs.Any(p => p.Name.Contains('['))))
                 return new Command.ShAssignment(declPairs, IsReadonly: isReadonlyKw || _declSawReadonly, IsAssoc: _declSawAssoc, IsDeclare: true);
 
             _pos = saved;

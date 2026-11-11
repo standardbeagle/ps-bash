@@ -91,6 +91,10 @@ public class HostRobustnessTests
     //  - `$(( $e ))` with a deep expression in $e: the runtime arithmetic parser, same.
     [SkippableTheory]
     [InlineData("kill-self", "kill -9 $$; echo after", "137", null)]
+    //  - `sh -c "kill -USR1 $$"`: the nested shell runs in ANOTHER host, so $$ was not its own pid and
+    //    `kill` hard-killed the enclosing shared host. A ps-bash host is never hard-killed by `kill`.
+    [InlineData("kill-enclosing-usr1", "sh -c \"kill -USR1 $$\"; echo after=$?", "after=0", "not delivered")]
+    [InlineData("kill-enclosing-9", "sh -c \"kill -9 $$\"; echo after=$?", "after=0", "not delivered")]
     // rc is 1, not bash's 2: every ps-bash `test` syntax error returns 1 today (a separate parity gap).
     [InlineData("test-paren", "@TESTPAREN", "rc=", "too deeply nested")]
     // 50,000 operands: emitted as a PowerShell -or chain, PowerShell's own compiler overflowed its

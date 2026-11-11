@@ -391,6 +391,50 @@ public class SdkWorkerTests : IAsyncLifetime
         }
     }
 
+    // Regression: `should fail after subshell` imported Pester and ran its `Should` (case-insensitive index hit),
+    // which stalled the script and leaked a PowerShell parameter-set error. bash names are case-sensitive, so a
+    // bare word matching an export only in a different case is "command not found", 127.
+    // Oracle note (Directive 1): ps-bash-specific runspace behavior, no bash oracle.
+    [Fact]
+    public async Task ExecuteAsync_BareWordMatchingExportOnlyByCase_Is127()
+    {
+        var token = Guid.NewGuid().ToString("N")[..8];
+        var modName = "PbCase" + token;
+        var funcName = "Pbcase" + token;            // exported capitalised; the script calls it lower-case
+        var root = Path.Combine(Path.GetTempPath(), "psbash-autoload-" + token);
+        var modDir = Path.Combine(root, modName);
+        Directory.CreateDirectory(modDir);
+        try
+        {
+            File.WriteAllText(Path.Combine(modDir, modName + ".psm1"),
+                $"function {funcName} {{ 'pbcase-ran' }}\nExport-ModuleMember -Function {funcName}\n");
+            File.WriteAllText(Path.Combine(modDir, modName + ".psd1"),
+                "@{\n" +
+                $"  RootModule = '{modName}.psm1'\n" +
+                "  ModuleVersion = '1.0.0'\n" +
+                $"  GUID = '{Guid.NewGuid()}'\n" +
+                $"  FunctionsToExport = @('{funcName}')\n" +
+                "  AliasesToExport = @()\n" +
+                "  CmdletsToExport = @()\n" +
+                "  VariablesToExport = @()\n" +
+                "}\n");
+
+            var rootEscaped = root.Replace("'", "''");
+            var script =
+                $"$env:PSModulePath = '{rootEscaped}' + [IO.Path]::PathSeparator + $env:PSModulePath; " +
+                funcName.ToLowerInvariant();
+
+            var run = await _fixture.ExecuteCapturedAsync(script);
+
+            Assert.Equal(127, run.ExitCode);
+            Assert.DoesNotContain(run.Lines, l => l.Contains("pbcase-ran", StringComparison.Ordinal));
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { /* best effort */ }
+        }
+    }
+
     // Regression guard: the discovery fallback must NOT swallow genuine unknowns —
     // a command no module exports still exits 127 (bash "command not found").
     [Fact]

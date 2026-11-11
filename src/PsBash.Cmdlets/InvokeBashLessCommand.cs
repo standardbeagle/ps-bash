@@ -173,7 +173,7 @@ public sealed class InvokeBashLessCommand : PSCmdlet
             {
                 // Temp files live under {temp}/ps-bash/ per docs/specs/temp-files.md, not loose
                 // in the system temp root.
-                var lessDir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "ps-bash", "less");
+                var lessDir = System.IO.Path.Combine(PsBash.Core.HostTempPath.Get(), "ps-bash", "less");
                 System.IO.Directory.CreateDirectory(lessDir);
                 tempFile = System.IO.Path.Combine(lessDir, $"{Guid.NewGuid():N}.txt");
                 var sb = new StringBuilder();

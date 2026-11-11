@@ -22,7 +22,6 @@ seq 3 > >(tac)
 1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-process-sub process-sub (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Process sub from shell to stdin
@@ -33,7 +32,6 @@ seq 3 > >(tac)
 1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-process-sub process-sub (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### $(<file) idiom with process sub

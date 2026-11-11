@@ -91,7 +91,7 @@ public sealed class InvokeBashMktempCommand : PSCmdlet
         // the host convention, as the other file cmdlets do.
         var subDir = !string.IsNullOrEmpty(P)
             ? FileSystemHelpers.NormalizeOperandPath(P!)
-            : Path.Combine(Path.GetTempPath(), "ps-bash", "proc-sub");
+            : Path.Combine(PsBash.Core.HostTempPath.Get(), "ps-bash", "proc-sub");
         Directory.CreateDirectory(subDir);
 
         string name = Path.GetRandomFileName();

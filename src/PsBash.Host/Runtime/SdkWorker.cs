@@ -604,6 +604,13 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
         };
         errorStream.DataAdded += onErrorAdded;
 
+        // Cmdlets that write Console.Error directly (a nested `bash -c`'s stderr, awk's "/dev/stderr", `time`'s
+        // report) reached the host's own detached fd 2 and vanished. While this command runs, Console.Error is its
+        // stderr sink. Safe for the same reason as the environment swap above: the execution lease serialises
+        // commands in this process.
+        var priorConsoleError = Console.Error;
+        if (errorOutput is not null) Console.SetError(new SinkTextWriter(deliverErrorBytes));
+
         try
         {
             try
@@ -735,6 +742,7 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
             // output sink.
             _host.HostUI.SetWriteLineForwarder(null);
             _host.HostUI.SetWriteErrorLineForwarder(null);
+            if (errorOutput is not null) Console.SetError(priorConsoleError);
 
             if (stdin is not null)
             {
@@ -911,4 +919,15 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
         }
         return ValueTask.CompletedTask;
     }
+}
+
+/// <summary>Console.Error for the duration of one framed command: every write becomes that command's stderr bytes.</summary>
+internal sealed class SinkTextWriter(Action<string> sink) : TextWriter
+{
+    public override System.Text.Encoding Encoding => System.Text.Encoding.UTF8;
+    public override string NewLine { get => "\n"; set { } }   // bash writes LF; the frame carries exact bytes
+    public override void Write(char value) => sink(value.ToString());
+    public override void Write(string? value) { if (!string.IsNullOrEmpty(value)) sink(value); }
+    public override void Write(char[] buffer, int index, int count) { if (count > 0) sink(new string(buffer, index, count)); }
+    public override void WriteLine(string? value) => sink((value ?? "") + "\n");
 }

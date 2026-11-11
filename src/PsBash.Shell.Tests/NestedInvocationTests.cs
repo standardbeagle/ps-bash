@@ -85,6 +85,24 @@ public class NestedInvocationTests
         Assert.NotEqual(pids[2], pids[3]);
     }
 
+    // A cmdlet that wrote Console.Error directly (nested `bash -c` relaying its child's stderr, awk "/dev/stderr",
+    // `time`) reached the host's own fd 2 and was lost: `bash -c 'echo e >&2'` printed nothing anywhere.
+    [SkippableFact]
+    public async Task NestedBashC_Stderr_ReachesTheCaller_InOrderWithStdout()
+    {
+        Skip.If(PsBashExe is null, "built ps-bash required");
+        var r = await RunAsync(
+            ExplicitEndpoint(
+                "bash -c 'echo nested-err >&2'; x=$(bash -c 'echo captured-err >&2' 2>&1); echo \"x=$x\"; " +
+                "awk 'BEGIN { print \"awk-err\" > \"/dev/stderr\" }'"),
+            TimeSpan.FromSeconds(90));
+        Assert.Equal(0, r.Exit);
+        Assert.Contains("nested-err", r.Err);
+        Assert.Contains("awk-err", r.Err);
+        Assert.Contains("x=captured-err", r.Out);
+        Assert.DoesNotContain("nested-err", r.Out);
+    }
+
     [SkippableFact]
     public async Task AwkGetlineFromCommand_ExplicitEndpoint_Completes()
     {

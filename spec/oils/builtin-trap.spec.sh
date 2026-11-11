@@ -103,7 +103,6 @@ trap 'echo <' EXIT
 echo status=$?
 ## stdout: status=0
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-trap builtin-trap (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### trap EXIT calling exit
@@ -223,7 +222,7 @@ USR1 trap status=0
 after=0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-trap builtin-trap (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-signal-enclosing-shell a nested shell cannot signal its enclosing script's host (it used to kill the host); see docs/specs/intentional-differences.md
 ## timeout: 10
 
 #### traps are cleared in subshell (started with &)

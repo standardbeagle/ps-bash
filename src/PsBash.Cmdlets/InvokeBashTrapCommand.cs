@@ -222,7 +222,16 @@ public sealed class InvokeBashTrapCommand : PSCmdlet
     {
         action = action.Replace("${LINENO}", "$__psbLine").Replace("$LINENO", "$__psbLine");
         try { return PsBash.Core.Transpiler.BashTranspiler.Transpile(action, PsBash.Core.Transpiler.TranspileContext.Eval) ?? action; }
-        catch (Exception) { return action; }
+        catch (Exception)
+        {
+            // Text that is neither bash nor PowerShell (`trap 'echo <' EXIT`) is still stored, as bash does: the
+            // syntax error is reported when the trap fires. Raw text here made `[scriptblock]::Create` throw at
+            // `trap` time and stopped the script.
+            System.Management.Automation.Language.Parser.ParseInput(action, out _, out var errors);
+            if (errors.Length == 0) return action;
+            var msg = "trap: syntax error in trap action: `" + action.Replace("\r", "").Replace("\n", " ") + "'";
+            return "Write-Error '" + msg.Replace("'", "''") + "' -ErrorAction Continue; $global:LASTEXITCODE = 2";
+        }
     }
 
     /// <summary>

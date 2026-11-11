@@ -49,6 +49,16 @@ internal sealed class HostMemoryGuard : IDisposable
 
     internal static TimeSpan PollInterval { get; set; } = TimeSpan.FromMilliseconds(500);
 
+    /// <summary>
+    /// After a reclaim that found the live memory under the limit, the next one waits until the working set has
+    /// grown by an eighth of the limit or this long has passed. Reclaiming on every poll kept a blocking full GC
+    /// running back to back: <c>yes | sort</c> crawled at ~0.1 MB/s just under the limit and never reached it. Test seam.
+    /// </summary>
+    internal static TimeSpan ReclaimBackoff { get; set; } = TimeSpan.FromSeconds(5);
+
+    /// <summary>Clock for <see cref="ReclaimBackoff"/>, in milliseconds. Test seam.</summary>
+    internal static Func<long> Now { get; set; } = static () => Environment.TickCount64;
+
     /// <summary>The exit status of a command stopped by the limit (128 + SIGKILL, like an OOM kill).</summary>
     public const int ExitCode = 137;
 
@@ -64,6 +74,8 @@ internal sealed class HostMemoryGuard : IDisposable
     private readonly Timer? _timer;
     private readonly CancellationTokenSource _toCancel;
     private int _breached;
+    private long _reclaimFloor;          // working set that justifies the next reclaim (0: none done yet)
+    private long _lastReclaimAt;
 
     private HostMemoryGuard(CancellationTokenSource toCancel)
     {
@@ -87,6 +99,10 @@ internal sealed class HostMemoryGuard : IDisposable
         long used;
         try { used = ReadUsage(); } catch { return; }
         if (used <= LimitBytes) return;
+        long now = Now();
+        if (_reclaimFloor != 0 && used < _reclaimFloor && now - _lastReclaimAt < (long)ReclaimBackoff.TotalMilliseconds) return;
+        _reclaimFloor = used + LimitBytes / 8;
+        _lastReclaimAt = now;
         // Over the limit: reclaim first. Only memory that survives a full collection is the command's.
         try { Reclaim(); used = ReadLive(); } catch { return; }
         if (used <= LimitBytes) return;

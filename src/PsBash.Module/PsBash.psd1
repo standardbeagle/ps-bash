@@ -130,6 +130,7 @@ FunctionsToExport = @(
     'Invoke-JqRecurse',
     'Invoke-JqSelect',
     'Invoke-ProcessSub',
+    'New-BashProcessSubPath',
     'Invoke-ProcessSubPipeline',
     'Invoke-ProcessSubString',
     'New-BashObject',

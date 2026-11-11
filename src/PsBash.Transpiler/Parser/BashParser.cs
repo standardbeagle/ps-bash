@@ -371,6 +371,18 @@ public sealed partial class BashParser
         return redirects.IsDefaultOrEmpty ? command : new Command.BraceGroup(command, redirects);
     }
 
+    private bool NewlineAllowedInDoubleBracket(ImmutableArray<CompoundWord>.Builder inner)
+    {
+        string? last = inner.Count == 0 ? "" : inner[^1].Parts.Length == 1 && inner[^1].Parts[0] is WordPart.Literal l ? l.Value : null;
+        if (last is "" or "&&" or "||" or "(" or "!") return true;
+        int p = _pos;
+        while (p < _tokens.Count && _tokens[p].Kind == BashTokenKind.Newline) p++;
+        if (p >= _tokens.Count) return false;
+        var next = _tokens[p];
+        return next.Kind is BashTokenKind.AndIf or BashTokenKind.OrIf or BashTokenKind.RParen
+            || (next.Kind == BashTokenKind.Word && next.Value == "]]");
+    }
+
     private Command ParseTestExpr()
     {
         var open = Advance(); // consume "[" or "[["
@@ -388,6 +400,14 @@ public sealed partial class BashParser
                 Advance(); // consume closing bracket
                 closed = true;
                 break;
+            }
+
+            // `[[ a == a` NEWLINE `&& b == b` NEWLINE `]]`: bash allows a newline between terms -- after `[[`, `&&`,
+            // `||`, `(`, `!`, and before `&&`, `||`, `)`, `]]` -- but not after an operator (`[[ a ==` NEWLINE is an error).
+            if (extended && Peek().Kind == BashTokenKind.Newline && NewlineAllowedInDoubleBracket(inner))
+            {
+                while (Peek().Kind == BashTokenKind.Newline) Advance();
+                continue;
             }
 
             // Inside [[ ]], && and || are logical operators, not shell operators.
@@ -462,6 +482,11 @@ public sealed partial class BashParser
                 var token = Advance();
                 var parts = DecomposeWord(token.Value);
                 inner.Add(new CompoundWord(parts));
+            }
+            else if (extended && Peek().Kind == BashTokenKind.Newline)
+            {
+                // A newline where bash allows none (`[[ a ==` NEWLINE): bash's "unexpected argument `newline'".
+                throw new ParseException("syntax error in conditional expression: unexpected newline", BashLexer.LineAt(_input, Peek().Position), 1, "[[");
             }
             else
             {
