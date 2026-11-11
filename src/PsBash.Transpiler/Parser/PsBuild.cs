@@ -428,7 +428,7 @@ public static class PsBuild
     /// <summary>The value of <c>$-</c>: the single-letter options currently on, in bash's order.</summary>
     public const string ShellFlagsExpr =
         "$f = ''; if ($global:__BashErrexit) { $f += 'e' }; if ($global:__BashNoglob) { $f += 'f' }; $f += 'h'; "
-        + "if ($global:__BashNounset) { $f += 'u' }; $f += 'B'; if ($global:__BashNoclobber) { $f += 'C' }; $f";
+        + "if ($global:__BashNounset) { $f += 'u' }; if ($global:__BashVerbose) { $f += 'v' }; if ($global:__BashXtrace) { $f += 'x' }; $f += 'B'; if ($global:__BashNoclobber) { $f += 'C' }; $f";
 
     /// <summary>The value of <c>$SHELLOPTS</c>: the <c>set -o</c> options currently on, alphabetical, colon-joined.</summary>
     public const string ShellOptsExpr =

@@ -79,7 +79,7 @@ public static class BashShellState
         "__BashErrexit", "__BashErrexitSuppress", "__BashErrexitTail", "__BashXtrace", "__BashNoglob", "__BashPipefail", "__BashNounset", "__BashNoclobber",
         "BashFlags", "BashPositional", "BashPositional0", "BASH_REMATCH", "BASH_SOURCE",
         "BashTrapHandlers", "__BashTrapERR", "__BashTrapEXIT", "__BashTrapRETURN", "BashBgLastPid",
-        "BashUserAliases", "BashLastArg", "BashDirStack",
+        "BashUserAliases", "BashLastArg", "BashDirStack", "BashHistory", "__BashVerbose",
     ];
 
     /// <summary>Every shell-state global, for the inventory guard (<see cref="BashStateSnapshot"/>).</summary>
@@ -176,6 +176,7 @@ public static class BashShellState
         var raw = value is PSObject pso ? pso.BaseObject : value;
         return raw switch
         {
+            BashHistoryList hl => hl.Clone(),
             object[] a => a.Clone(),
             Hashtable h => h.Clone(),   // shallow, keeps the table's key comparer
             IDictionary d => new Hashtable(d),

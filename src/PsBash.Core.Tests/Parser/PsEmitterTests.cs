@@ -1201,7 +1201,7 @@ public class PsEmitterTests
         // Batch 1 of the shared ordered parser. Adding a command here also means adding it to
         // CommonParameterCollisionGuardTests.EmitterForceQuoted (Cmdlets.Tests) — that map is
         // how the guard knows the emitter, not a decoy, protects the colliding letters.
-        Assert.Equal(new[] { "awk", "base64", "bash", "cat", "chmod", "column", "comm", "command", "compgen", "complete", "compopt", "cp", "cut", "declare", "diff", "du", "echo", "env", "expand", "file", "find", "flock", "fold", "getopts", "grep", "gzip", "hash", "head", "join", "jq", "ln", "ls", "md5sum", "mkdir", "mv", "nl", "od", "paste", "printf", "rg", "rm", "rmdir", "sed", "sh", "sha1sum", "sha256sum", "shopt", "sort", "source", "split", "stat", "strings", "tac", "tail", "tar", "tee", "test", "time", "timeout", "times", "touch", "tree", "type", "ulimit", "umask", "unexpand", "uniq", "wc", "xargs" }, PsEmitter.OrderedArgCommands.OrderBy(x => x).ToArray());
+        Assert.Equal(new[] { "awk", "base64", "bash", "cat", "chmod", "column", "comm", "command", "compgen", "complete", "compopt", "cp", "cut", "declare", "diff", "du", "echo", "env", "expand", "fc", "file", "find", "flock", "fold", "getopts", "grep", "gzip", "hash", "head", "history", "join", "jq", "ln", "ls", "md5sum", "mkdir", "mv", "nl", "od", "paste", "printf", "rg", "rm", "rmdir", "sed", "sh", "sha1sum", "sha256sum", "shopt", "sort", "source", "split", "stat", "strings", "tac", "tail", "tar", "tee", "test", "time", "timeout", "times", "touch", "tree", "type", "ulimit", "umask", "unexpand", "uniq", "wc", "xargs" }, PsEmitter.OrderedArgCommands.OrderBy(x => x).ToArray());
     }
 
     // `bash` is on OrderedArgCommands: the script's own args (`bash s.sh -v -e -c x`) and the
@@ -6340,6 +6340,78 @@ public class PsEmitterTests
         var r = PsEmitter.Transpile("set - a b")!;
         Assert.Contains("BashPositional", r);
         Assert.Contains("'a', 'b'", r);
+    }
+    // Oracle (bash 5.2): a lone `-` anywhere among the options ends them and turns -x and -v off; the rest are
+    // the positional parameters (`set -x - -v` leaves -x off and $1 = -v). `set -` alone changes no parameters.
+    [Theory]
+    [InlineData("set -x - -v", "'-v'")]
+    [InlineData("set - +", "'+'")]
+    public void Transpile_SetLoneDashAmongOptions_TurnsXtraceVerboseOffAndSetsParameters(string src, string positional)
+    {
+        var r = PsEmitter.Transpile(src)!;
+        Assert.Contains("$global:__BashXtrace = $false; $global:__BashVerbose = $false", r);
+        Assert.Contains("BashPositional = @(" + positional + ")", r);
+    }
+
+    [Fact]
+    public void Transpile_SetLoneDashAlone_TurnsXtraceOffWithoutParameters()
+    {
+        var r = PsEmitter.Transpile("set -")!;
+        Assert.Contains("$global:__BashXtrace = $false", r);
+        Assert.DoesNotContain("BashPositional", r);
+    }
+
+    // Oracle: a lone `+` is an ignored flag (`set +` is status 0; `set -x + -v x y` sets x, v and $@ = x y).
+    [Fact]
+    public void Transpile_SetLonePlus_IsIgnored()
+    {
+        Assert.Contains("$global:LASTEXITCODE = 0", PsEmitter.Transpile("set +")!);
+        var r = PsEmitter.Transpile("set -x + -v x y")!;
+        Assert.Contains("$global:__BashVerbose = $true", r);
+        Assert.Contains("BashPositional = @('x', 'y')", r);
+    }
+
+    // Oracle: `set -v` is accepted and shows in $- (ps-bash does not echo input lines: intentional-differences.md).
+    [Fact]
+    public void Transpile_SetVerbose_IsAFlagInDollarDash()
+    {
+        Assert.Contains("$global:__BashVerbose = $true", PsEmitter.Transpile("set -v")!);
+        Assert.Contains("$global:__BashVerbose = $false", PsEmitter.Transpile("set +o verbose")!);
+        Assert.Contains("__BashVerbose", PsEmitter.Transpile("echo $-")!);
+    }
+
+    // Oracle: `set -o NOSUCH` is status 2 (and the script goes on).
+    [Fact]
+    public void Transpile_SetUnknownLongOption_IsStatus2() =>
+        Assert.Contains("$global:LASTEXITCODE = 2", PsEmitter.Transpile("set -o nosuch_zz")!);
+
+    // history/fc are bash builtins with their own cmdlets; PowerShell's `history` alias (Get-History) must never run.
+    [Theory]
+    [InlineData("history -d 1", "Invoke-BashHistory '-d' 1")]
+    [InlineData("history -c", "Invoke-BashHistory '-c'")]
+    [InlineData("fc -e - x=y", "Invoke-BashFc '-e' '-' x=y")]
+    public void Transpile_HistoryAndFc_MapToTheirCmdlets(string src, string expected) =>
+        Assert.Contains(expected, PsEmitter.Transpile(src)!);
+
+    // Oracle: `f() { command return 3; echo no; }; f; echo $?` prints 3 — `command return` returns from the function.
+    [Fact]
+    public void Transpile_CommandReturn_IsTheReturnBuiltin()
+    {
+        var r = PsEmitter.Transpile("f() { command return 3; echo no; }")!;
+        Assert.DoesNotContain("Invoke-BashCommand", r);
+    }
+
+    // Oracle: quoting a command name only escapes alias expansion — `\builtin return 3` returns 3 from the function,
+    // `'echo' hi` runs echo. A quoted reserved word is an ordinary (here: missing) command name.
+    [Theory]
+    [InlineData("f() { \\builtin return 3; echo no; }", "builtin")]
+    [InlineData("'echo' hi", "Invoke-BashEcho")]
+    [InlineData("\"head\" -n1 f", "Invoke-BashHead")]
+    public void Transpile_QuotedCommandName_IsTheCommand(string src, string expected)
+    {
+        var r = PsEmitter.Transpile(src)!;
+        if (expected == "builtin") Assert.DoesNotContain("'builtin'", r);
+        else Assert.Contains(expected, r);
     }
 
     [Fact]

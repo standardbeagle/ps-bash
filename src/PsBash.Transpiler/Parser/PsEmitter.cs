@@ -1991,6 +1991,7 @@ public static partial class PsEmitter
         "cd", "pushd", "popd", "export", "unset", "declare", "typeset", "local", "readonly", "set", "shopt",
         "read", "source", ".", "eval", "exec", "alias", "unalias", "trap", "umask", "mapfile", "readarray",
         "getopts", "let", "shift", "enable", "hash", "builtin", "command", "ulimit", "wait", "fg", "bg",
+        "history", "fc",
     };
 
     // Function names defined so far in the unit being emitted: calling one can do anything.
@@ -3589,6 +3590,7 @@ public static partial class PsEmitter
     private static string EmitSimple(Command.Simple cmd)
     {
         cmd = ExpandAliases(cmd);
+        cmd = UnquoteCommandName(cmd);
         if (TryEmitEnvPairsWrap(cmd, out var envWrapResult))
             return envWrapResult;
 
@@ -4607,6 +4609,9 @@ public static partial class PsEmitter
     /// </summary>
     private const string SetXtraceOn = "Set-PSDebug -Trace 1; $global:__BashXtrace = $true";
 
+    /// <summary>What a lone <c>-</c> among <c>set</c>'s options does besides ending them: -x and -v go off.</summary>
+    private const string SetXtraceVerboseOff = "Set-PSDebug -Off; $global:__BashXtrace = $false; $global:__BashVerbose = $false";
+
     /// <summary>
     /// Pulls the options ps-bash tracks at runtime (<c>pipefail</c>, <c>nounset</c>/<c>-u</c>) out of a
     /// <c>set</c> argument list, in any bundling (<c>-eu</c>, <c>-euo pipefail</c>, <c>-o nounset</c>);
@@ -4636,6 +4641,8 @@ public static partial class PsEmitter
                 char c = a[k];
                 if (c == 'u') { effects.Add(("__BashNounset", on)); continue; }
                 if (c == 'C') { effects.Add(("__BashNoclobber", on)); continue; }
+                // verbose: only $- reports it (ps-bash does not echo input lines; intentional-differences.md).
+                if (c == 'v') { effects.Add(("__BashVerbose", on)); continue; }
                 if (c == 'o' && k == a.Length - 1 && i + 1 < args.Count && args[i + 1] is "pipefail" or "nounset" or "noclobber")
                 {
                     effects.Add((args[i + 1] switch { "pipefail" => "__BashPipefail", "noclobber" => "__BashNoclobber", _ => "__BashNounset" }, on));
@@ -4734,7 +4741,36 @@ public static partial class PsEmitter
     {
         string? specialResult = null;
         var literalArgs = argsOverride ?? cmd.Words.Skip(1).Select(TryGetStaticArgValue).ToList();
-        // `set -o errexit a b c` / `set -u -- x`: leading options, then positional parameters. Apply the
+        // Among the leading option words a lone `+` is ignored, and a lone `-` ends the options and turns off -x and
+        // -v; words after it become the positional parameters (`set -x + -v a b`, `set -x - -v`, `set - +`).
+        if (argsOverride is null)
+        {
+            var plusAt = new List<int>();
+            int dashAt = -1;
+            for (int k = 0; k < literalArgs.Count; k++)
+            {
+                var o = literalArgs[k];
+                if (o is null || o == "--" || o.Length == 0 || (o[0] != '-' && o[0] != '+')) break;
+                if (o == "+") { plusAt.Add(k); continue; }
+                if (o == "-") { dashAt = k; break; }
+                if (o is "-o" or "+o") k++;
+            }
+            if (dashAt >= 0)
+            {
+                var before = cmd.Words.Skip(1).Take(dashAt).Where((_, k) => !plusAt.Contains(k)).ToList();
+                var after = cmd.Words.Skip(2 + dashAt).ToList();
+                var optText = before.Count == 0 ? null : EmitSet(cmd with { Words = cmd.Words.Take(1).Concat(before).ToImmutableArray() });
+                return (optText is null ? "" : optText + "; ") + SetXtraceVerboseOff + "; "
+                    + (after.Count == 0 ? PsBuild.SetStatus(0) : EmitSetPositionals(after));
+            }
+            if (plusAt.Count > 0)
+            {
+                var kept = cmd.Words.Skip(1).Where((_, k) => !plusAt.Contains(k)).ToList();
+                if (kept.Count == 0) return PsBuild.SetStatus(0);
+                return EmitSet(cmd with { Words = cmd.Words.Take(1).Concat(kept).ToImmutableArray() });
+            }
+        }
+
         // options first, then assign the rest exactly as `set -- rest...` would.
         if (argsOverride is null && TrySplitOptionsFromPositionals(literalArgs, out int optEnd, out int posStart))
         {
@@ -4745,7 +4781,8 @@ public static partial class PsEmitter
         // `set -o vi` / `set +o emacs`: option names ps-bash only remembers (for `shopt -po`) go to the shopt table.
         if (argsOverride is null && literalArgs.Count == 2 && literalArgs[0] is "-o" or "+o" && literalArgs[1] is { } remembered
             && BashOptionNames.Contains(remembered) && remembered is not ("errexit" or "xtrace" or "pipefail" or "noglob" or "nounset" or "noclobber" or "noexec" or "onecmd"))
-            return "Invoke-BashShopt '-o' " + (literalArgs[0] == "-o" ? "'-s'" : "'-u'") + " " + PsBuild.SingleQuote(remembered);
+            return (remembered == "verbose" ? "$global:__BashVerbose = " + (literalArgs[0] == "-o" ? "$true" : "$false") + "; " : "")
+                + "Invoke-BashShopt '-o' " + (literalArgs[0] == "-o" ? "'-s'" : "'-u'") + " " + PsBuild.SingleQuote(remembered);
         // errtrace (`set -E` / `set -o errtrace`): the ERR trap also fires inside functions and subshells.
         if (argsOverride is null && (literalArgs.Count == 1 && literalArgs[0] is "-E" or "+E"
             || literalArgs.Count == 2 && literalArgs[0] is "-o" or "+o" && literalArgs[1] == "errtrace"))
@@ -4753,13 +4790,6 @@ public static partial class PsEmitter
         // `set -o` / `set +o` alone list the options (the shopt -o table, same two formats).
         if (argsOverride is null && literalArgs.Count == 1 && literalArgs[0] is "-o" or "+o")
             return literalArgs[0] == "-o" ? "Invoke-BashShopt '-o'" : "Invoke-BashShopt '-po'";
-        // `set - a b`: a lone leading `-` ends the options (and turns off -x / -v) like `--`; `set -` alone changes nothing.
-        if (argsOverride is null && literalArgs.Count > 0 && literalArgs[0] == "-")
-        {
-            var rest = cmd.Words.Skip(1).ToList();
-            if (rest.Count == 1) return PsBuild.SetStatus(0);
-            return "$global:__BashXtrace = $false; Set-PSDebug -Off; " + EmitSetPositionals(rest.Skip(1).ToList());
-        }
         if (literalArgs.Count > 0)
         {
             var stripped = StripInertSetOptions(literalArgs);
@@ -4801,10 +4831,10 @@ public static partial class PsEmitter
             (optionWords.Any(a => a is "-o" or "+o") && literalArgs.Count != 2) ||
             (optionWords.Any(a => a?.StartsWith('+') == true) && optionWords.Count > 1))
             throw new ParseException("set: combined shell option forms are not supported; use separate set commands", 1, 1, "shell-option");
-        // `set -o NOSUCH` is a run-time error in bash (status 1, the script goes on), not a refusal.
+        // `set -o NOSUCH` is a run-time error in bash (status 2, the script goes on), not a refusal.
         for (int i = 0; i + 1 < literalArgs.Count && literalArgs[i] != "--"; i++)
             if (literalArgs[i] is "-o" or "+o" && literalArgs[i + 1] is { } optName && !BashOptionNames.Contains(optName))
-                return $"Write-Error {PsBuild.SingleQuote($"set: {optName}: invalid option name")} -ErrorAction Continue; {PsBuild.SetStatus(1)}";
+                return $"Write-Error {PsBuild.SingleQuote($"set: {optName}: invalid option name")} -ErrorAction Continue; {PsBuild.SetStatus(2)}";
         // Refuse every unsupported option before any part of the script runs.
         for (int i = 0; i < literalArgs.Count && literalArgs[i] != "--"; i++)
         {
@@ -6704,7 +6734,7 @@ public static partial class PsEmitter
         "set", "shopt", "trap", "alias", "unalias", "export", "unset", "declare", "typeset", "local",
         "readonly", "cd", "pushd", "popd", "source", ".", "eval", "shift", "getopts", "read", "mapfile",
         "readarray", "let", "exec", "umask", "hash", "builtin", "command", "enable", "exit",
-        "return", "wait",
+        "return", "wait", "history", "fc",
     };
 
     /// <summary>
@@ -10134,6 +10164,12 @@ public static partial class PsEmitter
             case "ulimit":
                 result = EmitPassthrough("Invoke-BashUlimit", args);
                 return true;
+            case "history":
+                result = EmitPassthrough("Invoke-BashHistory", args);
+                return true;
+            case "fc":
+                result = EmitPassthrough("Invoke-BashFc", args);
+                return true;
             case "compgen":
                 result = EmitPassthrough("Invoke-BashCompgen", args);
                 return true;
@@ -10147,6 +10183,13 @@ public static partial class PsEmitter
                 result = EmitPassthrough("Invoke-BashRealpath", args);
                 return true;
             case "command":
+                // `command return 3`: a builtin that acts on its CALLER cannot run inside the Invoke-BashCommand cmdlet;
+                // with no option before it, `command` runs exactly that builtin (functions are never named so).
+                if (!args.IsEmpty && GetLiteralValue(args[0]) is "return" or "exit" or "break" or "continue")
+                {
+                    result = EmitSimple(cmd with { Words = args });
+                    return true;
+                }
                 result = EmitPassthrough("Invoke-BashCommand", args);
                 return true;
             case "declare":
@@ -10216,6 +10259,38 @@ public static partial class PsEmitter
             default:
                 return false;
         }
+    }
+
+    /// <summary>
+    /// A quoted command name (<c>\builtin</c>, <c>'cd'</c>, <c>"echo"</c>) only escapes alias expansion in bash; the
+    /// builtin, function or command of that name still runs. Alias expansion has already happened (it looks at bare
+    /// words only), so the name is made a plain word for everything after it. Reserved words stay quoted (a quoted
+    /// <c>\if</c> is an ordinary command name), as do names with characters other than a plain identifier's.
+    /// </summary>
+    private static Command.Simple UnquoteCommandName(Command.Simple cmd)
+    {
+        if (cmd.Words.IsDefaultOrEmpty || GetLiteralValue(cmd.Words[0]) is not null) return cmd;
+        var sb = new StringBuilder();
+        foreach (var part in cmd.Words[0].Parts)
+        {
+            switch (part)
+            {
+                case WordPart.Literal l: sb.Append(l.Value); break;
+                case WordPart.EscapedLiteral e: sb.Append(e.Value.Length == 2 && e.Value[0] == '\\' ? e.Value[1..] : e.Value); break;
+                case WordPart.SingleQuoted s: sb.Append(s.Value); break;
+                case WordPart.DoubleQuoted d when d.Parts.All(p => p is WordPart.Literal):
+                    foreach (var p in d.Parts) sb.Append(((WordPart.Literal)p).Value);
+                    break;
+                default: return cmd;
+            }
+        }
+        var name = sb.ToString();
+        if (name.Length == 0 || !(char.IsAsciiLetter(name[0]) || name[0] == '_')
+            || !name.All(c => char.IsAsciiLetterOrDigit(c) || c is '_' or '-' or '.')
+            || name is "if" or "then" or "else" or "elif" or "fi" or "case" or "esac" or "for" or "select" or "while"
+                or "until" or "do" or "done" or "in" or "function" or "time" or "coproc")
+            return cmd;
+        return cmd with { Words = cmd.Words.SetItem(0, new CompoundWord([new WordPart.Literal(name)])) };
     }
 
     public static string? GetLiteralValue(CompoundWord word)
@@ -10616,7 +10691,7 @@ public static partial class PsEmitter
     /// cmdlet must be prepared to receive every flag as a plain string.
     /// </summary>
     internal static readonly IReadOnlySet<string> OrderedArgCommands =
-        new HashSet<string>(StringComparer.Ordinal) { "source", "getopts", "flock", "timeout", "times", "hash", "umask", "ulimit", "compgen", "shopt", "complete", "compopt", "tee", "cp", "mv", "rm", "mkdir", "chmod", "rmdir", "ln", "touch", "xargs", "time", "env", "command", "declare", "type", "bash", "sh", "awk", "head", "tail", "wc", "cat", "tac", "nl", "uniq", "fold", "expand", "unexpand", "paste", "join", "comm", "split", "strings", "base64", "stat", "file", "cut", "sort", "grep", "sed", "rg", "find", "echo", "printf", "test", "ls", "du", "tree", "column", "gzip", "tar", "md5sum", "sha1sum", "sha256sum", "diff", "jq", "od" };
+        new HashSet<string>(StringComparer.Ordinal) { "source", "getopts", "flock", "timeout", "times", "hash", "umask", "ulimit", "history", "fc", "compgen", "shopt", "complete", "compopt", "tee", "cp", "mv", "rm", "mkdir", "chmod", "rmdir", "ln", "touch", "xargs", "time", "env", "command", "declare", "type", "bash", "sh", "awk", "head", "tail", "wc", "cat", "tac", "nl", "uniq", "fold", "expand", "unexpand", "paste", "join", "comm", "split", "strings", "base64", "stat", "file", "cut", "sort", "grep", "sed", "rg", "find", "echo", "printf", "test", "ls", "du", "tree", "column", "gzip", "tar", "md5sum", "sha1sum", "sha256sum", "diff", "jq", "od" };
 
     /// <summary><c>Invoke-BashTee</c> -&gt; is <c>tee</c> in <see cref="OrderedArgCommands"/>?</summary>
     private static bool IsOrderedArgCmdlet(string cmdlet) =>

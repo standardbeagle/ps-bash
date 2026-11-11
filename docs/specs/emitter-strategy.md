@@ -101,6 +101,8 @@ belongs here in the same commit.
 | `base64`     | `Invoke-BashBase64`      |
 | `od`         | `Invoke-BashOd`          |
 | `chmod`      | `Invoke-BashChmod`       |
+| `history`    | `Invoke-BashHistory`     |
+| `fc`         | `Invoke-BashFc`          |
 | `md5sum`     | `Invoke-BashMd5sum`      |
 | `sha1sum`    | `Invoke-BashSha1sum`     |
 | `sha256sum`  | `Invoke-BashSha256sum`   |

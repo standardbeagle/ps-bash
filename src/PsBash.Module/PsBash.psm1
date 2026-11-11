@@ -3488,6 +3488,8 @@ Set-Alias -Name 'times' -Value 'Invoke-BashTimes' -Force -Scope Global -Option A
 Set-Alias -Name 'hash' -Value 'Invoke-BashHash' -Force -Scope Global -Option AllScope
 Set-Alias -Name 'umask' -Value 'Invoke-BashUmask' -Force -Scope Global -Option AllScope
 Set-Alias -Name 'ulimit' -Value 'Invoke-BashUlimit' -Force -Scope Global -Option AllScope
+Set-Alias -Name 'history' -Value 'Invoke-BashHistory' -Force -Scope Global -Option AllScope
+Set-Alias -Name 'fc' -Value 'Invoke-BashFc' -Force -Scope Global -Option AllScope
 Set-Alias -Name 'compgen' -Value 'Invoke-BashCompgen' -Force -Scope Global -Option AllScope
 Set-Alias -Name 'realpath' -Value 'Invoke-BashRealpath' -Force -Scope Global -Option AllScope
 Set-Alias -Name 'mapfile'  -Value 'Invoke-BashMapfile'  -Force -Scope Global -Option AllScope

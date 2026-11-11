@@ -61,6 +61,9 @@ public class CommonParameterCollisionGuardTests
             ["hash"] = new(CollidingLetters),
             ["umask"] = new(CollidingLetters),
             ["ulimit"] = new(CollidingLetters),
+            // history/fc: argv is the script's own; every dash word is single-quoted. A/C/D/P/W (history) and E (fc) are decoys for direct calls.
+            ["history"] = new(CollidingLetters),
+            ["fc"] = new(CollidingLetters),
             ["compgen"] = new(CollidingLetters),
             ["time"] = new(CollidingLetters),
             ["env"] = new(CollidingLetters),

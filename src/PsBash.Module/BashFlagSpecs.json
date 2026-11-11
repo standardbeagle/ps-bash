@@ -1125,6 +1125,23 @@
       "desc": "best compression"
     }
   ],
+  "history": [
+    { "flag": "-c", "desc": "clear the history list" },
+    { "flag": "-d", "desc": "delete the entry at OFFSET (negative counts from the end; START-END range)", "arg": "OFFSET" },
+    { "flag": "-a", "desc": "append new entries to the history file" },
+    { "flag": "-n", "desc": "read entries not yet read from the history file" },
+    { "flag": "-r", "desc": "read the history file and append its lines" },
+    { "flag": "-w", "desc": "write the history list to the history file" },
+    { "flag": "-p", "desc": "history-expand each ARG and print it" },
+    { "flag": "-s", "desc": "append the ARGs as one entry" }
+  ],
+  "fc": [
+    { "flag": "-e", "desc": "editor (only - is supported: re-run like -s)", "arg": "ENAME" },
+    { "flag": "-l", "desc": "list entries" },
+    { "flag": "-n", "desc": "list without numbers" },
+    { "flag": "-r", "desc": "list in reverse order" },
+    { "flag": "-s", "desc": "re-run an entry after pat=rep substitution" }
+  ],
   "head": [
     {
       "flag": "-n",

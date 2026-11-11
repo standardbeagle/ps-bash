@@ -970,7 +970,7 @@ public class BashTranspilerReviewRegressionTests
         Assert.DoesNotContain("'--'", ps);
     }
 
-    // Oracle: `set -o NOSUCH` reports "invalid option name" and returns 1 at run time; it is not a transpile failure.
+    // Oracle: `set -o NOSUCH` reports "invalid option name" and returns 2 at run time; it is not a transpile failure.
     [Fact]
     public void Transpile_SetUnknownLongOption_IsARuntimeError()
         => Assert.Contains("set: NOSUCH: invalid option name", BashTranspiler.Transpile("set -o NOSUCH || true"));

@@ -202,15 +202,27 @@ public sealed class InvokeBashAliasCommand : PSCmdlet
                 // the test's session — not buried in the cmdlet's own
                 // session state where the caller can't see it.
                 // The alias text is BASH (`$x`, quotes, keywords, `&&`), so the call runs it through eval with the
-                // arguments appended single-quoted; PowerShell never sees it as code.
+                // arguments appended single-quoted; PowerShell never sees it as code. A reserved word stays bare: bash
+                // reads the alias text and the rest of the line as ONE command, so `alias e_='for i in 1 2; do echo $i;'`
+                // then `e_ done` closes the loop (as an argument of a plain command a bare reserved word is a word anyway).
+                // Text that does not parse is bash's syntax error (the shell exits 2), never a PowerShell exception.
                 if (NoFunction.IsPresent) continue;
                 InvokeCommand.InvokeScript(
                     """
                     param($n, $v)
                     $body = {
-                        $words = foreach ($a in $args) { "'" + ([string]$a).Replace("'", "'\''") + "'" }
+                        $reserved = 'if', 'then', 'else', 'elif', 'fi', 'case', 'esac', 'for', 'select', 'while', 'until', 'do', 'done', 'in', 'function', 'time'
+                        $words = foreach ($a in $args) { $s = [string]$a; if ($reserved -ccontains $s) { $s } else { "'" + $s.Replace("'", "'\''") + "'" } }
                         $src = (@($v) + @($words)) -join ' '
-                        Invoke-Expression ([PsBash.Core.Transpiler.BashTranspiler, PsBash.Transpiler]::Transpile($src, [PsBash.Core.Transpiler.TranspileContext, PsBash.Transpiler]::Eval))
+                        $pwsh = $null
+                        try { $pwsh = [PsBash.Core.Transpiler.BashTranspiler, PsBash.Transpiler]::Transpile($src, [PsBash.Core.Transpiler.TranspileContext, PsBash.Transpiler]::Eval) }
+                        catch {
+                            Write-Error ('ps-bash: alias ' + $n + ': syntax error: ' + $(if ($_.Exception.InnerException) { $_.Exception.InnerException.Message } else { $_.Exception.Message })) -ErrorAction Continue
+                            # bash parses the expanded text as part of the script: a syntax error ends the shell, status 2.
+                            Invoke-Expression ([PsBash.Core.Transpiler.BashTranspiler, PsBash.Transpiler]::Transpile('exit 2', [PsBash.Core.Transpiler.TranspileContext, PsBash.Transpiler]::Eval))
+                            return
+                        }
+                        Invoke-Expression $pwsh
                     }.GetNewClosure()
                     Set-Item -Path ('Function:\global:' + $n) -Value $body -Force
                     """,
