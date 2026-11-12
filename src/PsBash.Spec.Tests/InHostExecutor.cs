@@ -75,7 +75,7 @@ internal sealed class InHostExecutor : IScriptExecutor, IAsyncDisposable
             int code;
             try
             {
-                code = await worker.ExecuteAsync(CwdPreamble(caseDir.Path) + ps, cts.Token, CaptureEnvironment());
+                code = await worker.ExecuteAsync(CwdPreamble(caseDir.Path) + ps, cts.Token, CaseEnvironment(caseDir.Path));
                 healthy = true;
             }
             catch (OperationCanceledException) when (!cancel.IsCancellationRequested)
@@ -117,6 +117,20 @@ internal sealed class InHostExecutor : IScriptExecutor, IAsyncDisposable
         var cwd = dir.Replace("'", "''");
         return "$__psbash_invocation_cwd = '" + cwd + "'; [System.Environment]::CurrentDirectory = $__psbash_invocation_cwd; "
              + "$env:PWD = $__psbash_invocation_cwd; Set-Location -LiteralPath $__psbash_invocation_cwd -ErrorAction SilentlyContinue; ";
+    }
+
+    /// <summary>
+    /// The runner's environment for one case, with OLDPWD set to the case directory. The test process inherited OLDPWD
+    /// or not depending on how it was started (set from an interactive shell, absent under ssh or CI), so builtin-cd
+    /// "cd - without OLDPWD" passed or failed by machine. The oils expectation (status 0) is a shell started from one
+    /// that had changed directory.
+    /// </summary>
+    internal static List<KeyValuePair<string, string>> CaseEnvironment(string caseDir)
+    {
+        var entries = CaptureEnvironment();
+        entries.RemoveAll(e => string.Equals(e.Key, "OLDPWD", StringComparison.OrdinalIgnoreCase));
+        entries.Add(new("OLDPWD", caseDir));
+        return entries;
     }
 
     private static List<KeyValuePair<string, string>> CaptureEnvironment()
