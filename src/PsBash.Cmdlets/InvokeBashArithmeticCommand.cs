@@ -254,6 +254,19 @@ public sealed class InvokeBashArithmeticCommand : PSCmdlet
     {
         var s = value.ToString(CultureInfo.InvariantCulture);
         if (TrySplitElement(name, out var elemBase, out var elemSub)) { WriteElement(elemBase, elemSub, s); return; }
+        try
+        {
+            // `a=(1 10); (( a++ ))` / `let m=7` on an array or associative array writes element 0 (key "0"), leaving
+            // the other elements; it replaced the whole array with the number.
+            object? held = GetVariableValue(name);
+            if (held is PSObject w) held = w.BaseObject;
+            if (held is System.Collections.IDictionary || (held is System.Collections.IList && held is not string))
+            {
+                WriteElement(name, "0", s);
+                return;
+            }
+        }
+        catch { /* not a readable PS variable in scope */ }
         BashVariableStore.Set(name, s);
         try
         {

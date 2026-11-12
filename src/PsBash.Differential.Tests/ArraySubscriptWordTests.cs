@@ -31,6 +31,16 @@ public class ArraySubscriptWordTests
         + "a=(x y); a+=q; echo \"${a[@]}\"\n"
         + "declare -A m; m[1]=1; echo \"[${m}]\"; m[0]=zero; echo \"$m\"; m=string; echo \"${m[1]} $m\"");
 
+    // `a=(1 10); (( a++ ))` / `let b=7`: arithmetic on an array's bare name writes element 0 (it replaced the whole
+    // array with the number).
+    [Fact]
+    public Task ArithmeticOnArrayName_WritesElementZero() => AssertOracle.EqualAsync(
+        "a=(1 10); (( a++ )); echo \"${a[@]}\"; (( a+=5 )); echo \"${a[@]}\"; b=(3 4); let b=7; echo \"${b[@]}\"\n"
+        + "declare -A m=([x]=1); (( m=4 )); declare -p m; echo $(( m + 1 ))\n"
+        + "f() { local -a c=(5 6); (( c *= 2 )); echo \"${c[@]}\"; }; f\n"
+        + "for i in 1 2; do (( i += 10 )); echo $i; done\n"
+        + "s=3; (( s++ )); echo $s; e[2]=9; (( e = 1 )); declare -p e");
+
     // `ref='A[$key]'; ${!ref}`: the variables in an indirect subscript expand (single quotes keep them literal).
     [Fact]
     public Task IndirectSubscript_ExpandsVariables() => AssertOracle.EqualAsync(
