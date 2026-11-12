@@ -10752,6 +10752,15 @@ public static partial class PsEmitter
                 var rest = args;
                 if (!rest.IsEmpty && GetLiteralValue(rest[0]) == "--") rest = rest.RemoveAt(0);
                 if (rest.IsEmpty) { result = PsBuild.SetStatus(0); return true; }
+                // `builtin ls`: only a bash builtin can be named (bash: "not a shell builtin", status 1), never a file.
+                if (TryGetStaticArgValue(rest[0]) is { } named && !BashBuiltins.Names.Contains(named))
+                {
+                    // One `. { }` group: the redirect EmitMappedStandalone appends (`2>/dev/null`) covers the report too.
+                    result = PsBuild.WithRedirectTail(
+                        PsBuild.StderrLine("bash: builtin: " + named + ": not a shell builtin") + "; " + PsBuild.SetStatus(1),
+                        static _ => { });
+                    return true;
+                }
                 var priorFns = _definedFunctions;
                 if (priorFns is not null && GetLiteralValue(rest[0]) is { } bn && priorFns.Contains(bn))
                 {

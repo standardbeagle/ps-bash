@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 120
+stdout-length: 8
+stderr-length: 0
+==== SCRIPT ====
+command -v 'a;echo pwned' '$(echo pwned2)' '`echo pwned3`'; echo "s=$?"
+builtin 'x;echo pwned4' 2>/dev/null; echo "s=$?"
+==== STDOUT ====
+s=1
+s=1
+
+==== STDERR ====
+

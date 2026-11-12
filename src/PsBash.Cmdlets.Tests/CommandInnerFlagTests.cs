@@ -91,15 +91,16 @@ public class CommandInnerFlagTests : IClassFixture<SharedPwshFixture>, IDisposab
     }
 
     [Theory]
-    [InlineData("command -v ls")]
-    [InlineData("command -V ls")]
-    [InlineData("command -pv ls")]
-    public void Transpile_CommandLookupForms_ReportTheAlias(string bash)
+    [InlineData("command -v ls", "ls")]
+    [InlineData("command -V ls", "ls is ls")]
+    [InlineData("command -pv ls", "ls")]
+    public void Transpile_CommandLookupForms_ReportTheAlias(string bash, string expected)
     {
-        // -v and -V (bundles too) print the BASH name of the runtime's own ls — runnable, unlike the cmdlet name.
+        // -v (bundles too) prints the BASH name of the runtime's own ls — runnable, unlike the cmdlet name.
+        // -V prints `type`'s sentence for it, with that name as the path.
         var (lines, exit, err) = Run(bash);
         Assert.True(exit == 0, err);
-        Assert.Equal(new[] { "ls" }, lines);
+        Assert.Equal(new[] { expected }, lines);
     }
 
     [Fact]

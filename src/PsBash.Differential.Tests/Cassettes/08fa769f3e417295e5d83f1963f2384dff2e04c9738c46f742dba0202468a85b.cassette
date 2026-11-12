@@ -1,0 +1,24 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 182
+stdout-length: 120
+stderr-length: 0
+==== SCRIPT ====
+myfunc() { echo x; }
+command -V true; command -V myfunc; command -V for
+command -V nonexistent 2>/dev/null; echo "s=$?"
+command -V nonexistent 2>&1 | grep -o 'nonexistent: not found'
+==== STDOUT ====
+true is a shell builtin
+myfunc is a function
+myfunc ()
+{
+    echo x
+}
+for is a shell keyword
+s=1
+nonexistent: not found
+
+==== STDERR ====
+

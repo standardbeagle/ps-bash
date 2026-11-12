@@ -1,0 +1,23 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 136
+stdout-length: 45
+stderr-length: 0
+==== SCRIPT ====
+myfunc() { echo x; }
+command -v true eval echo myfunc for ZZZ; echo "s=$?"
+command -v ''; echo "empty=$?"
+command -v ZZZ; echo "miss=$?"
+==== STDOUT ====
+true
+eval
+echo
+myfunc
+for
+s=0
+empty=1
+miss=1
+
+==== STDERR ====
+

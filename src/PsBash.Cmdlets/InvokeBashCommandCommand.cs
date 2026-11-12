@@ -1,5 +1,6 @@
 using System.Management.Automation;
 using System.Management.Automation.Runspaces;
+using PsBash.Core.Parser;
 
 namespace PsBash.Cmdlets;
 
@@ -15,10 +16,10 @@ namespace PsBash.Cmdlets;
 /// usage line (exit 2). <c>--help</c>/<c>--version</c> are honoured only as leading options.
 /// </para>
 /// <list type="bullet">
-/// <item><c>-v</c>/<c>-V</c> (also in a bundle: <c>-pv</c>) select the lookup form: for each operand
-/// run <c>Get-Command NAME</c> and print its bash name (a ps-bash command or function) or source (an
-/// application's path); a miss prints nothing and the status is 1 only when nothing resolved (-v and -V
-/// are identical).</item>
+/// <item><c>-v</c>/<c>-V</c> (also in a bundle: <c>-pv</c>) select the lookup form: for each operand,
+/// bash's lookup order as <c>type</c> resolves it. <c>-v</c> prints the name (or a file's path), <c>-V</c>
+/// <c>type</c>'s sentence. A miss prints nothing under <c>-v</c> and <c>command: NAME: not found</c> under
+/// <c>-V</c>; the status is 1 only when nothing resolved.</item>
 /// <item>Without them NAME is RUN with the remaining args, bypassing shell FUNCTIONS (bash: functions
 /// are skipped; <c>f() { …; }; command f</c> is "command not found", exit 127). Resolution is
 /// alias, then cmdlet, then external application/script, so <c>command ls</c> reaches the runtime's
@@ -137,31 +138,51 @@ public sealed class InvokeBashCommandCommand : PSCmdlet
         foreach (var name in operands)
         {
             var output = Describe(name);
-            if (output is null) continue;
+            if (output is null)
+            {
+                // bash: `command -V nosuch` reports the miss on stderr; `command -v nosuch` is silent.
+                if (_verboseText) FileSystemHelpers.WriteBashError(this, $"bash: command: {name}: not found");
+                continue;
+            }
             anyFound = true;
             foreach (var line in BashRuntime.EmitBashLines(output + "\n"))
                 WriteObject(line);
+            // `command -V f` follows "f is a function" with the definition, as `type f` does.
+            if (_verboseText && output == $"{name} is a function" && DeclarePrinter.FindBashFunction(this, name) is { } fn
+                && PsBuild.TryReadFunctionSource(fn.Definition) is not null)
+                DeclarePrinter.PrintFunction(this, fn);
         }
         if (!anyFound && operands.Length > 0) FileSystemHelpers.SetLastExitCode(this, 1);
     }
 
     /// <summary>
-    /// What <c>command -v NAME</c> prints: a function's or builtin's name, an application's path. A ps-bash
-    /// command (a runtime alias to an <c>Invoke-Bash*</c> cmdlet) prints its BASH name — it is the shell's own
-    /// implementation of that command, with no file to point at, and the cmdlet name is an internal detail
-    /// (`$(command -v ls)` must still run ls). Other aliases print their definition.
+    /// What <c>command -v NAME</c> / <c>-V NAME</c> prints, by bash's lookup order (alias, keyword, function,
+    /// builtin, file; <see cref="InvokeBashTypeCommand.Resolve"/>, the lookup <c>type</c> uses). <c>-V</c> is
+    /// <c>type</c>'s sentence. <c>-v</c> prints an alias as <c>alias NAME='VALUE'</c>, a keyword, function or builtin
+    /// as its name, and a file as its PATH entry was written (a NAME with a slash is printed as given). A ps-bash
+    /// command (a runtime alias to an <c>Invoke-Bash*</c> cmdlet) prints its BASH name: `$(command -v ls)` must
+    /// still run ls. A builtin the emitter implements (<c>true</c>, <c>eval</c>) has no PowerShell command behind
+    /// it, so the lookup by <c>Get-Command</c> alone missed it.
     /// </summary>
     private string? Describe(string name)
     {
         if (name.Length == 0) return null;
-        if (_verboseText)
+        var match = InvokeBashTypeCommand.Resolve(this, name, pathSearchOnly: false, skipFunctions: false).FirstOrDefault();
+        if (match is not null)
         {
-            if (SessionState.PSVariable.GetValue("BashUserAliases") is System.Collections.IDictionary al && al.Contains(name))
-                return $"{name} is aliased to `{al[name]}'";
-            if (InvokeBashTypeCommand.Keywords.Contains(name)) return $"{name} is a shell keyword";
-            if (InvokeBashTypeCommand.Builtins.Contains(name)) return $"{name} is a shell builtin";
+            if (_verboseText) return match.Text;
+            return match.Kind switch
+            {
+                "alias" => SessionState.PSVariable.GetValue("BashUserAliases") is System.Collections.IDictionary al
+                    ? $"alias {name}='{al[name]?.ToString()?.Replace("'", "'\\''")}'"
+                    : name,
+                "file" => match.Path ?? name,
+                _ => name,
+            };
         }
-        else if (InvokeBashTypeCommand.Keywords.Contains(name)) return name;
+        // A file named with a slash was answered above (or is not executable). Otherwise, under -v, what
+        // PowerShell itself can run: the runtime's functions and cmdlets.
+        if (_verboseText || name.Contains('/') || name.Contains('\\')) return null;
         var cmd = ResolveCommand(name);
         if (cmd is null) return null;
         switch (cmd.CommandType)

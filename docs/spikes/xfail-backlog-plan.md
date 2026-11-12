@@ -376,6 +376,28 @@ building. The Linux side's remaining failures are the known `LsSortTimeDifferent
   hold readonly, assignment and positional cases show no other change.
 - XFAIL count after this pass: 415.
 
+### Progress, 2026-11-11 (eighth pass)
+
+- `command -v`/`-V` resolve names in bash's order (alias, keyword, function, builtin, file) through `type`'s own
+  `InvokeBashTypeCommand.Resolve`:
+  - `command -v true` / `eval` printed nothing, status 1. They have no PowerShell command behind them, and the
+    lookup used `Get-Command` alone, which is now only the `-v` fallback.
+  - `-v` prints an alias as `alias ll='ls -l'`.
+  - `-V` is `type`'s sentence. It follows "f is a function" with the body, and reports a miss on stderr
+    (`command: NAME: not found`).
+  - `command -V ls` is now `ls is ls`, as `type ls` prints.
+- `builtin NAME` refuses a name that is not a bash builtin ("builtin: ls: not a shell builtin", status 1); it ran
+  the file. The emitter and the runtime share one list, `BashBuiltins` (Transpiler).
+- builtin-meta: 4 cases retagged.
+  - "command -v executable, builtin" is `intentional-psbash-command`: grep and ls are ps-bash's own commands.
+  - "doesn't find executable dir" is `platform-windows-unix-bin`: it expects /usr/bin/cat.
+  - "builtin" is `platform-windows-paths`.
+  - "doesn't find non-executable file" is the new `platform-windows-exec-bit`: chmod +x leaves no mark on Windows.
+- Unmarked 3: builtin-meta "command -V", "command -V nonexistent", "builtin ls not found".
+- builtin-kill: either "kill -s TERM" or "kill -KILL" fails in-host on a given run (`sleep 0.1 &` ends before the
+  kill). This is the timing case from the sixth pass, not a regression.
+- XFAIL count after this pass: 412.
+
 ## Suggested order
 
 1. Land A1 and the crash fix once the gate is green.

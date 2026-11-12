@@ -48,7 +48,7 @@ true
 eval
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-meta builtin-meta (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash intentional-psbash-command a ps-bash command (grep, ls) runs ahead of a PATH file, so command -v prints its name, not /usr/bin/grep (intentional-differences.md: command -v ls / type ls)
 ## timeout: 10
 
 #### command -v with multiple names
@@ -88,7 +88,7 @@ _tmp/executable
 status=0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-meta builtin-meta (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash platform-windows-exec-bit Windows has no execute bit: chmod +x leaves no mark, so the two files cannot be told apart (intentional-differences.md, type -P/-a (Windows))
 ## timeout: 10
 
 #### command -v doesn't find executable dir
@@ -107,7 +107,7 @@ status=1
 status=0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-meta builtin-meta (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash platform-windows-unix-bin expects /bin/date, /bin/pwd or /usr/bin/cat, which Windows does not have (intentional-differences.md, Platform)
 ## timeout: 10
 
 #### command -V
@@ -148,7 +148,6 @@ for is a shell keyword
 status=0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-meta builtin-meta (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### command -V nonexistent
@@ -160,7 +159,6 @@ status=1
 nonexistent: not found
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-meta builtin-meta (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### command skips function lookup
@@ -234,14 +232,13 @@ hi
 /
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-meta builtin-meta (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash platform-windows-paths Windows paths print as C:\... (drive letter, backslash); bash prints /tmp (intentional-differences.md, Platform: paths)
 ## timeout: 10
 
 #### builtin ls not found
 builtin ls
 ## stdout:
 ## status: 1
-## XFAIL ps-bash gap-oils-builtin-meta builtin-meta (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### builtin usage

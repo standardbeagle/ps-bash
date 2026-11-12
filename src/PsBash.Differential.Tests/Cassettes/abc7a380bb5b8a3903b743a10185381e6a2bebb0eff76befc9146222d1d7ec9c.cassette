@@ -1,0 +1,19 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 85
+stdout-length: 60
+stderr-length: 0
+==== SCRIPT ====
+shopt -s expand_aliases
+alias ll='ls -l'
+alias q="it's"
+command -v ll q
+command -V ll
+==== STDOUT ====
+alias ll='ls -l'
+alias q='it'\''s'
+ll is aliased to `ls -l'
+
+==== STDERR ====
+

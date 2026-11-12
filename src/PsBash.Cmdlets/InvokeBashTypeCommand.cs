@@ -29,22 +29,9 @@ namespace PsBash.Cmdlets;
 [OutputType(typeof(PSObject))]
 public sealed class InvokeBashTypeCommand : PSCmdlet
 {
-    // bash 5.2's `enable -a` list (the names `type` calls "a shell builtin").
-    internal static readonly HashSet<string> Builtins = new(StringComparer.Ordinal)
-    {
-        ".", ":", "[", "alias", "bg", "bind", "break", "builtin", "caller", "cd", "command", "compgen", "complete",
-        "compopt", "continue", "declare", "dirs", "disown", "echo", "enable", "eval", "exec", "exit", "export",
-        "false", "fc", "fg", "getopts", "hash", "help", "history", "jobs", "kill", "let", "local", "logout",
-        "mapfile", "popd", "printf", "pushd", "pwd", "read", "readarray", "readonly", "return", "set", "shift",
-        "shopt", "source", "suspend", "test", "times", "trap", "true", "type", "typeset", "ulimit", "umask",
-        "unalias", "unset", "wait",
-    };
+    internal static IReadOnlySet<string> Builtins => BashBuiltins.Names;
 
-    internal static readonly HashSet<string> Keywords = new(StringComparer.Ordinal)
-    {
-        "!", "[[", "]]", "{", "}", "case", "coproc", "do", "done", "elif", "else", "esac", "fi", "for", "function",
-        "if", "in", "select", "then", "time", "until", "while",
-    };
+    internal static IReadOnlySet<string> Keywords => BashBuiltins.Keywords;
 
     [Parameter] public SwitchParameter A { get; set; }
 
@@ -56,7 +43,7 @@ public sealed class InvokeBashTypeCommand : PSCmdlet
     private enum Mode { Describe, Kind, Path, PathSearch }
 
     /// <summary>One way NAME could run: its kind, the default-mode sentence, and its path (files only).</summary>
-    private sealed record Match(string Kind, string Text, string? Path);
+    internal sealed record Match(string Kind, string Text, string? Path);
 
     protected override void ProcessRecord()
     {
@@ -106,7 +93,7 @@ public sealed class InvokeBashTypeCommand : PSCmdlet
 
         foreach (var name in operands)
         {
-            var matches = Resolve(name, mode == Mode.PathSearch, skipFunctions);
+            var matches = Resolve(this, name, mode == Mode.PathSearch, skipFunctions);
             if (matches.Count == 0)
             {
                 if (mode == Mode.Describe) FileSystemHelpers.WriteBashError(this, $"bash: type: {name}: not found");
@@ -136,17 +123,17 @@ public sealed class InvokeBashTypeCommand : PSCmdlet
     }
 
     /// <summary>Every way NAME could run, in bash's lookup order (function, builtin, then files).</summary>
-    private List<Match> Resolve(string name, bool pathSearchOnly, bool skipFunctions)
+    internal static List<Match> Resolve(PSCmdlet cmdlet, string name, bool pathSearchOnly, bool skipFunctions)
     {
         var matches = new List<Match>();
         if (!pathSearchOnly)
         {
-            if (SessionState.PSVariable.GetValue("BashUserAliases") is System.Collections.IDictionary aliases
+            if (cmdlet.SessionState.PSVariable.GetValue("BashUserAliases") is System.Collections.IDictionary aliases
                 && aliases.Contains(name))
                 matches.Add(new Match("alias", $"{name} is aliased to `{aliases[name]}'", null));
             if (Keywords.Contains(name))
                 matches.Add(new Match("keyword", $"{name} is a shell keyword", null));
-            if (!skipFunctions && DeclarePrinter.FindBashFunction(this, name) is not null)
+            if (!skipFunctions && DeclarePrinter.FindBashFunction(cmdlet, name) is not null)
                 matches.Add(new Match("function", $"{name} is a function", null));
             if (Builtins.Contains(name))
                 matches.Add(new Match("builtin", $"{name} is a shell builtin", null));
@@ -154,7 +141,7 @@ public sealed class InvokeBashTypeCommand : PSCmdlet
 
         // The runtime's own command is what runs (whatever PATH holds), so it leads; -P asks for the PATH search
         // itself, where it is only the fallback when PATH has no such file.
-        bool psBashCommand = IsPsBashCommand(name) && !Builtins.Contains(name);
+        bool psBashCommand = IsPsBashCommand(cmdlet, name) && !Builtins.Contains(name);
         if (psBashCommand && !pathSearchOnly)
             matches.Add(new Match("file", $"{name} is {name}", name));
 
@@ -162,7 +149,7 @@ public sealed class InvokeBashTypeCommand : PSCmdlet
         foreach (var path in PathFiles(name))
             matches.Add(new Match("file", $"{name} is {path}", path));
 
-        foreach (var cmd in ResolveCommands(name))
+        foreach (var cmd in ResolveCommands(cmdlet, name))
         {
             // Applications come from PathFiles; a bash function was handled above, and the runtime's own
             // PowerShell functions are not shell functions.
@@ -204,11 +191,11 @@ public sealed class InvokeBashTypeCommand : PSCmdlet
     }
 
     /// <summary>True when NAME is a runtime alias to one of the ps-bash command cmdlets.</summary>
-    private bool IsPsBashCommand(string name)
+    private static bool IsPsBashCommand(PSCmdlet cmdlet, string name)
     {
         try
         {
-            return InvokeCommand.GetCommand(name, CommandTypes.Alias) is AliasInfo alias
+            return cmdlet.InvokeCommand.GetCommand(name, CommandTypes.Alias) is AliasInfo alias
                 && (alias.Definition ?? "").StartsWith("Invoke-Bash", StringComparison.Ordinal);
         }
         catch
@@ -217,13 +204,13 @@ public sealed class InvokeBashTypeCommand : PSCmdlet
         }
     }
 
-    private IEnumerable<CommandInfo> ResolveCommands(string name)
+    private static IEnumerable<CommandInfo> ResolveCommands(PSCmdlet cmdlet, string name)
     {
         // Cmdlets (files come from PathFiles). Parameter-bound: the name never becomes script text.
         var found = new List<CommandInfo>();
         try
         {
-            foreach (var r in InvokeCommand.InvokeScript(
+            foreach (var r in cmdlet.InvokeCommand.InvokeScript(
                          "param($n) Get-Command $n -CommandType Cmdlet -All -ErrorAction SilentlyContinue", name))
             {
                 if (r?.BaseObject is CommandInfo ci) found.Add(ci);

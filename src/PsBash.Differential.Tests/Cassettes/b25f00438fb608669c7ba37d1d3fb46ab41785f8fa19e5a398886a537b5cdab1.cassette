@@ -1,0 +1,20 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 176
+stdout-length: 45
+stderr-length: 0
+==== SCRIPT ====
+builtin ls 2>/dev/null; echo "s=$?"
+builtin ls 2>&1 | grep -o 'ls: not a shell builtin'
+builtin echo ok; echo "s=$?"
+f() { builtin nosuch 2>/dev/null || echo "refused $?"; }; f
+==== STDOUT ====
+s=1
+ls: not a shell builtin
+ok
+s=0
+refused 1
+
+==== STDERR ====
+

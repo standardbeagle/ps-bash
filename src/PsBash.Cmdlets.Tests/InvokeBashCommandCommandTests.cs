@@ -128,11 +128,34 @@ public class InvokeBashCommandCommandTests : IClassFixture<SharedPwshFixture>
     [Fact]
     public void Command_BigV_PsBashCommand_EmitsItsBashName()
     {
-        // -V is treated identically to -v (both set verbose). The case-insensitive cmdlet binder
-        // collapses them onto the same V switch.
+        // A DIRECT call: the case-insensitive binder collapses -V onto the V switch and the invocation-text
+        // probe sees `-V`, so this is the -V form: `type`'s sentence, with the bash NAME as the "path".
         var lines = RunLines("Invoke-BashCommand -V ls");
         Assert.Single(lines);
-        Assert.Equal("ls", lines[0]);
+        Assert.Equal("ls is ls", lines[0]);
+    }
+
+    [Theory]
+    [InlineData("true")]
+    [InlineData("eval")]
+    [InlineData("export")]
+    public void Command_DashV_BuiltinTheEmitterImplements_PrintsItsName(string name)
+    {
+        // `true`/`eval` have no PowerShell command behind them (the emitter writes them inline), so a lookup by
+        // Get-Command alone printed nothing, status 1. bash: `command -v true` prints `true`.
+        var (lines, exit) = RunAndCaptureExit("Invoke-BashCommand -v " + name);
+        Assert.Equal(new[] { name }, lines);
+        Assert.Equal(0, exit);
+    }
+
+    [Fact]
+    public void Command_DashCapitalV_MissingName_ReportsNotFoundOnStderr()
+    {
+        // bash: `command -V nosuch` writes "command: nosuch: not found" to stderr, status 1 (-v stays silent).
+        var pwsh = _fixture.AcquireFresh();
+        var results = pwsh.AddScript("Invoke-BashCommand -V missing_xyzzy_q").Invoke();
+        Assert.Empty(results);
+        Assert.Contains(pwsh.Streams.Error, e => e.ToString().Contains("command: missing_xyzzy_q: not found"));
     }
 
     [Fact]

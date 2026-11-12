@@ -6334,6 +6334,28 @@ public class PsEmitterTests
     public void Transpile_UnquotedPositionalInAWordList_IsWordSplit(string bash)
         => Assert.Contains("ConvertTo-BashWords", PsEmitter.Transpile(bash));
 
+    [Theory]
+    [InlineData("builtin ls", false)]
+    [InlineData("builtin 'x;echo pwned'", false)]
+    [InlineData("builtin echo hi", true)]
+    [InlineData("builtin cd /", true)]
+    public void Transpile_BuiltinOfANonBuiltin_IsRefused(string bash, bool runs)
+    {
+        // bash: `builtin ls` is "builtin: ls: not a shell builtin", status 1. It ran the ls file. The name reaches
+        // the report as a quoted literal, never as code.
+        var ps = PsEmitter.Transpile(bash);
+        Assert.Equal(!runs, ps.Contains(": not a shell builtin"));
+        if (!runs)
+        {
+            Assert.DoesNotContain("Invoke-BashLs", ps);
+            Assert.Contains("$global:LASTEXITCODE = 1", ps);
+        }
+    }
+
+    [Fact]
+    public void Transpile_BuiltinRefusal_KeepsTheCommandsRedirect()
+        => Assert.Matches(@"^\. \{ Write-Error .*not a shell builtin.* \}.*2>\$null", PsEmitter.Transpile("builtin ls 2>/dev/null"));
+
     [Fact]
     public void Transpile_ArgCountInDoubleQuotes_EmitsSubexpression()
     {
