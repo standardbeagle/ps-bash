@@ -33,6 +33,29 @@ public class InvokeBashRedirectCommandTests : IClassFixture<SharedPwshFixture>, 
 
     private string File_(string name) => Path.Combine(_tmpDir, name);
 
+    [Fact]
+    public void Redirect_UnopenableTarget_SetsTheFailureFlag()
+    {
+        // The emitter runs the ERR trap / errexit after a redirected compound only on this flag.
+        var bad = Path.Combine(_tmpDir, "nodir", "f");
+        var r = Run($"$global:__BashRedirectFailed = $false; & {{ Invoke-BashEcho x }} | Invoke-BashRedirect -Path '{Q(bad)}'; "
+                    + "[string]$global:__BashRedirectFailed");
+        r.AssertFailed(1, "No such file or directory");
+        Assert.Equal("True", r.Lines[^1]);
+    }
+
+    [Fact]
+    public void Redirect_OpenedTarget_ClearsAFlagANestedFailureSet()
+    {
+        // `{ echo x > /nodir/x; } > log`: the inner failure is not the group's; the group's redirect opened.
+        var bad = Path.Combine(_tmpDir, "nodir", "x");
+        var good = File_("g.txt");
+        var r = Run($"$global:__BashRedirectFailed = $false; & {{ Invoke-BashEcho x | Invoke-BashRedirect -Path '{Q(bad)}'; Invoke-BashEcho in }} "
+                    + $"| Invoke-BashRedirect -Path '{Q(good)}'; [string]$global:__BashRedirectFailed");
+        Assert.Equal("False", r.Lines[^1]);
+        Assert.Equal("in\n", File.ReadAllText(good));
+        Assert.Contains("No such file or directory", r.Stderr);
+    }
     [Theory]
     [InlineData("x", "x")]
     [InlineData("a\\nb", "a\nb")]

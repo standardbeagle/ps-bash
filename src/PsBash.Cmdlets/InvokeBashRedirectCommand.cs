@@ -97,8 +97,7 @@ public sealed class InvokeBashRedirectCommand : PSCmdlet
         // without opening anything. Same path as a target that cannot be opened.
         if (FileSystemHelpers.TakeExpansionFailed(this))
         {
-            FileSystemHelpers.SetLastExitCode(this, 1);
-            _openFailed = true;
+            MarkOpenFailed();
             UpstreamStop.Throw(this);
             return;
         }
@@ -155,15 +154,17 @@ public sealed class InvokeBashRedirectCommand : PSCmdlet
                 : ex is UnauthorizedAccessException ? "Permission denied"
                 : FileSystemHelpers.ReadErrorMessage(ex);
             string message = $"bash: {raw}: {reason}";
-            if (SessionState.PSVariable.GetValue("__BashErrexit") is true)
+            // With an ERR trap the emitted statement check runs it first and then exits (the trap makes the
+            // script errexit-checked), so the failure stays a status here.
+            if (SessionState.PSVariable.GetValue("__BashErrexit") is true
+                && SessionState.PSVariable.GetValue("__BashTrapERR") is null)
             {
                 FileSystemHelpers.SetLastExitCode(this, 1);
                 ThrowTerminatingError(new ErrorRecord(
                     new IOException(message), "BashRedirectError", ErrorCategory.WriteError, raw));
             }
             FileSystemHelpers.WriteBashError(this, message);
-            FileSystemHelpers.SetLastExitCode(this, 1);
-            _openFailed = true;
+            MarkOpenFailed();
             Close();
             UpstreamStop.Throw(this);
             return false; // UpstreamStop unavailable: the cmdlet then just drops its input
@@ -171,6 +172,18 @@ public sealed class InvokeBashRedirectCommand : PSCmdlet
     }
 
     private bool _openFailed;
+
+    /// <summary>Name of the global a failed open sets. A compound command's status is its body's, so the emitter
+    /// cannot tell a failed redirect from it; after a redirected compound it runs the ERR trap / errexit on this
+    /// (<c>{ ...; } &gt; /nodir/f</c> fires the trap once, a failing body inside a good redirect does not).</summary>
+    public const string RedirectFailedVariable = "__BashRedirectFailed";
+
+    private void MarkOpenFailed()
+    {
+        FileSystemHelpers.SetLastExitCode(this, 1);
+        _openFailed = true;
+        SessionState.PSVariable.Set(new PSVariable("global:" + RedirectFailedVariable, true));
+    }
 
     protected override void ProcessRecord()
     {
@@ -218,6 +231,10 @@ public sealed class InvokeBashRedirectCommand : PSCmdlet
         // A failed open stopped upstream, but a stage that already finished may have reset the
         // status; the failed redirect is the pipeline's status, so `$?` and `set -e` see 1.
         if (_openFailed) FileSystemHelpers.SetLastExitCode(this, 1);
+        // This redirect opened and its command ran: a nested redirect that failed inside the body
+        // (`{ echo > /nodir/x; } > log`) already ran its own trap and is not this command's failure.
+        else if (SessionState.PSVariable.GetValue(RedirectFailedVariable) is true)
+            SessionState.PSVariable.Set(new PSVariable("global:" + RedirectFailedVariable, false));
     }
 
     protected override void StopProcessing() => Close();

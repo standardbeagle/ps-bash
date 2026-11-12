@@ -467,6 +467,21 @@ building. The Linux side's remaining failures are the known `LsSortTimeDifferent
   warm spares, ~2.5 s cold start each); Linux GrepStreamingTests hung once (the 1-minute family).
 - XFAIL count after this pass: 398.
 
+### Progress, 2026-11-11 (twelfth pass)
+
+- A compound command (`{ }`, `if`, loops, `case`) whose stdout file cannot be opened fails with status 1 and its body
+  never runs. bash then runs the ERR trap (and errexit), with `$LINENO` left at the command before it. ps-bash
+  never checked a compound's status. `Invoke-BashRedirect` now sets `$global:__BashRedirectFailed` on a failed
+  open and clears it when an opened redirect finishes, so a nested failure inside a body that ran doesn't count.
+  Under an ERR trap or errexit, a compound redirected to a real file (not `/dev/null`, which emits `>$null`)
+  is followed by `PsBuild.RedirectFailureChecked`. With an ERR trap set, the cmdlet no longer throws under
+  `set -e`; the statement check runs the trap and then exits.
+- A plain command's `PIPESTATUS` (recorded when the script reads it) came after the ERR trap check, so the trap saw
+  the previous pipeline's. It is now recorded first.
+- Not fixed: a redirect's open error ignores an earlier `2>/dev/null` on the same command
+  (`{ :; } 2>/dev/null > /nodir/f` prints it; bash doesn't).
+- Unmarked 2: trap-err "trap ERR with redirect", "trap ERR and pipelines - PIPESTATUS difference".
+- XFAIL count after this pass: 396.
 ## Suggested order
 
 1. Land A1 and the crash fix once the gate is green.

@@ -5669,6 +5669,43 @@ public class PsEmitterTests
     }
 
     [Fact]
+    public void Transpile_PlainCommandUnderErrTrap_RecordsPipestatusBeforeTheTrapRuns()
+    {
+        // bash: `trap 'echo ${PIPESTATUS[@]}' ERR; false` prints 1. The record came after the check: the trap saw the old value.
+        var ps = PsEmitter.Transpile("trap 'echo ${PIPESTATUS[@]}' ERR\nfalse");
+        int record = ps.LastIndexOf("$global:PIPESTATUS = @([int]$global:LASTEXITCODE)", StringComparison.Ordinal);
+        int trap = ps.LastIndexOf("& $global:__BashTrapERR", StringComparison.Ordinal);
+        Assert.True(record >= 0 && record < trap, ps);
+    }
+
+    [Theory]
+    [InlineData("{ false\n  true\n} > /nodir/f")]
+    [InlineData("for i in 1; do echo y; done >> log")]
+    [InlineData("if true; then false; fi &> log")]
+    [InlineData("while false; do :; done >| log")]
+    public void Transpile_RedirectedCompoundUnderErrTrap_ChecksAFailedOpen(string compound)
+    {
+        var ps = PsEmitter.Transpile("trap 'echo $LINENO' ERR\n" + compound);
+        Assert.Contains("if ($global:__BashRedirectFailed)", ps);
+    }
+
+    [Theory]
+    [InlineData("trap 'echo $LINENO' ERR\n{ false; } > /dev/null")]
+    [InlineData("trap 'echo $LINENO' ERR\n{ false; } 2> log")]
+    [InlineData("trap 'echo $LINENO' ERR\n{ false; }")]
+    [InlineData("{ false; } > log")]
+    public void Transpile_CompoundWithoutAnOpenedStdoutFile_HasNoRedirectCheck(string script)
+        => Assert.DoesNotContain("__BashRedirectFailed", PsEmitter.Transpile(script));
+
+    [Fact]
+    public void Transpile_RedirectedCompoundTrapLine_IsTheCommandBeforeIt()
+    {
+        // bash leaves $LINENO at the last command run: the body never ran.
+        var ps = PsEmitter.Transpile("trap 'echo $LINENO' ERR\nfalse\n\n{ false\n  true\n} > /zz");
+        var tail = ps[ps.IndexOf("if ($global:__BashRedirectFailed)", StringComparison.Ordinal)..];
+        Assert.Contains("$env:__psbLine = 2;", tail);
+    }
+    [Fact]
     public void Transpile_ForceClobberRedirect_PassesForce()
     {
         Assert.Contains("-Force", PsEmitter.Transpile("echo a >| f"));

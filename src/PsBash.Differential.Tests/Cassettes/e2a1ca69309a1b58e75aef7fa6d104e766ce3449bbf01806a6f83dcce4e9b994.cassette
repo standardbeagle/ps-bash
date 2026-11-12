@@ -1,0 +1,20 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 1
+script-length: 90
+stdout-length: 8
+stderr-length: 0
+==== SCRIPT ====
+trap 'echo "err $LINENO"' ERR
+{
+echo a
+set -e
+{ echo z; } > /nodir/f
+echo no
+} 2>/dev/null
+==== STDOUT ====
+a
+err 4
+
+==== STDERR ====
+

@@ -432,6 +432,15 @@ public static class PsBuild
     /// (a condition, a non-final <c>&amp;&amp;</c>/<c>||</c> operand, a negated pipeline). The action sees
     /// the failing status in <c>$?</c>/<c>$LASTEXITCODE</c>, which it leaves unchanged.
     /// </summary>
+    /// <summary>
+    /// A redirected compound command at statement position under an ERR trap / errexit: its status is the body's
+    /// (whose own statements were checked), so only a redirect that could not be opened (the body never ran) runs
+    /// <paramref name="check"/> — Invoke-BashRedirect sets <c>$global:__BashRedirectFailed</c>.
+    /// </summary>
+    public static string RedirectFailureChecked(string compound, string check) =>
+        "$global:__BashRedirectFailed = $false; " + compound
+        + "; if ($global:__BashRedirectFailed) { $global:__BashRedirectFailed = $false; $global:LASTEXITCODE = 1; " + check + " }";
+
     public static string ErrTrapCheck(string status = "$global:LASTEXITCODE") =>
         "if (" + status + " -ne 0 -and -not " + ErrexitSuppressVar + (ErrTrapNeedsErrtrace ? " -and $global:__BashErrtrace" : "") + " -and (Test-Path variable:global:__BashTrapERR) -and $global:__BashTrapERR) { "
         + "$__psbErr = " + status + "; " + (TrapLine > 0 ? "$env:__psbLine = " + TrapLine + "; " : "")

@@ -26,6 +26,14 @@ public class PsBuildTests
             "[PsBash.Cmdlets.BashRuntime]::MapPath([string]($x))",
             PsBuild.RuntimeMapPath("$x"));
 
+    // ─────────────── RedirectFailureChecked ───────────────
+
+    [Fact]
+    public void RedirectFailureChecked_ResetsTheFlagFirstAndRunsTheCheckOnlyOnAFailedOpen()
+        => Assert.Equal(
+            "$global:__BashRedirectFailed = $false; & { x } | Invoke-BashRedirect -Path f; "
+            + "if ($global:__BashRedirectFailed) { $global:__BashRedirectFailed = $false; $global:LASTEXITCODE = 1; CHECK }",
+            PsBuild.RedirectFailureChecked("& { x } | Invoke-BashRedirect -Path f", "CHECK"));
     // ─────────────── SingleQuote ───────────────
 
     [Fact]

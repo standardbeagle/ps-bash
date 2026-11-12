@@ -362,7 +362,17 @@ public static partial class PsEmitter
         string text = EmitStatementCore(cmd);
         if (_xtraceMode && TryEmitXtrace(cmd) is { } trace)
             text = trace + "; " + text;
-        // A plain command is a one-stage pipeline: `false; echo ${PIPESTATUS[*]}` is `1`, not the last real pipeline's.
+        return text;
+    }
+
+    /// <summary>
+    /// <paramref name="cmd"/> emitted at statement position. A plain command is a one-stage pipeline:
+    /// `false; echo ${PIPESTATUS[*]}` is `1`, not the last real pipeline's. The status is recorded before
+    /// the ERR trap / errexit check that follows, so the trap sees it.
+    /// </summary>
+    private static string EmitRecordingStatus(Command cmd)
+    {
+        string text = Emit(cmd);
         return _pipeStatusMode && cmd is Command.Simple { Words.Length: > 0 }
             ? text + "; $global:PIPESTATUS = @([int]$global:LASTEXITCODE)"
             : text;
@@ -410,8 +420,13 @@ public static partial class PsEmitter
         return emitted.Length > 0 && (emitted[0] == (char)34 || emitted[0] == (char)36) ? "([string](" + emitted + "))" : null;
     }
 
+    /// <summary>The ERR trap line of the statement before the one being emitted (the last command it ran).</summary>
+    [ThreadStatic]
+    private static int _priorTrapLine;
+
     private static string EmitStatementCore(Command cmd)
     {
+        _priorTrapLine = PsBuild.TrapLine;
         if (cmd is Command.Simple { Line: > 0 } lined) PsBuild.TrapLine = _lineBase + lined.Line;
         else if (LastSimpleLine(cmd) is > 0 and var lastLine) PsBuild.TrapLine = _lineBase + lastLine;
         if (DebugActive)
@@ -499,7 +514,7 @@ public static partial class PsEmitter
     private static string EmitStatementBody(Command cmd)
     {
         if (!_errexitMode || _errexitExemptDepth > 0)
-            return Emit(cmd);
+            return EmitRecordingStatus(cmd);
 
         switch (cmd)
         {
@@ -516,17 +531,51 @@ public static partial class PsEmitter
             }
             // The job is a subshell: set -e and (under errtrace) the ERR trap apply inside it (EmitBackground); its own status is 0.
             case Command.Background:
-                return Emit(cmd);
+                return EmitRecordingStatus(cmd);
             case Command.Simple simple when IsErrexitCheckedSimple(simple):
             // `x=$(false)` fails with the substitution; `local`/`export x=$(false)` has the builtin's status (0).
             case Command.ShAssignment assign when !assign.IsLocal && !assign.IsExport && ContainsCommandSub(assign):
             case Command.BoolExpr:
             case Command.ArithCommand:
             case Command.Subshell:
-                return Emit(cmd) + "; " + PsBuild.ErrexitCheck(ErrexitExitStatement());
+                return EmitRecordingStatus(cmd) + "; " + PsBuild.ErrexitCheck(ErrexitExitStatement());
+            case Command.BraceGroup g when OpensOutputFile(g.Redirects):
+            case Command.If i when OpensOutputFile(i.Redirects):
+            case Command.While w when OpensOutputFile(w.Redirects):
+            case Command.ForIn f when OpensOutputFile(f.Redirects):
+            case Command.ForArith a when OpensOutputFile(a.Redirects):
+            case Command.Case c when OpensOutputFile(c.Redirects):
+                return EmitRedirectedCompound(cmd);
             default:
-                return Emit(cmd);
+                return EmitRecordingStatus(cmd);
         }
+    }
+
+    /// <summary>
+    /// A compound command with redirects, under an ERR trap / errexit: a redirect that cannot be opened fails it
+    /// (status 1, the body never runs) and runs the trap and errexit; the body's own status does not. bash leaves
+    /// $LINENO at the command before it, which is the last one that ran.
+    /// </summary>
+    /// <summary>A stdout file redirect (<c>&gt; f</c>, <c>&gt;&gt; f</c>, <c>&gt;| f</c>, <c>&amp;&gt; f</c>) that
+    /// Invoke-BashRedirect opens; <c>/dev/null</c> is emitted without it.</summary>
+    private static bool OpensOutputFile(ImmutableArray<Redirect> redirects)
+    {
+        if (redirects.IsDefaultOrEmpty) return false;
+        foreach (var r in redirects)
+        {
+            if (r.Here is not null || r.FdVar is not null) continue;
+            bool stdout = r.Op is "&>" or "&>>" || (r.Op is ">" or ">>" or ">|" && r.Fd == 1);
+            if (stdout && GetLiteralValue(r.Target) != "/dev/null") return true;
+        }
+        return false;
+    }
+
+    private static string EmitRedirectedCompound(Command cmd)
+    {
+        int prior = _priorTrapLine;
+        string text = Emit(cmd);
+        PsBuild.TrapLine = prior;
+        return PsBuild.RedirectFailureChecked(text, PsBuild.ErrexitCheck(ErrexitExitStatement()));
     }
 
     private static bool IsErrexitCheckedSimple(Command.Simple simple) =>
