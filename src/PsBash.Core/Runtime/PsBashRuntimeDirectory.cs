@@ -25,7 +25,15 @@ public static class PsBashRuntimeDirectory
     // images do) resolves the REAL per-user directory, and tests that chmod or
     // fill the "synthetic" root corrupt it for every later test and process.
     // Only affects the returned string; never selects the POSIX native path.
-    internal static Func<string>? TempPathOverride { get; set; }
+    // Per async flow (AsyncLocal), not process-wide: tests that set it ran beside tests that only read the
+    // directory (ModuleExtractorTests), which then saw a foreign, deliberately world-writable root and threw.
+    internal static Func<string>? TempPathOverride
+    {
+        get => s_tempPathOverride.Value;
+        set => s_tempPathOverride.Value = value;
+    }
+
+    private static readonly System.Threading.AsyncLocal<Func<string>?> s_tempPathOverride = new();
 
     /// <summary>
     /// Pure path resolution. POSIX: <c>{xdg}/ps-bash</c> when

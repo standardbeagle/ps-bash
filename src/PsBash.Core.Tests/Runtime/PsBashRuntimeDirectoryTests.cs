@@ -19,6 +19,23 @@ public class PsBashRuntimeDirectoryTests : IDisposable
 
     public void Dispose() => PsBashRuntimeDirectory.TempPathOverride = null;
 
+    // Linux fleet: ModuleExtractorTests (another collection) ran while a test here had the override on a 0777 root,
+    // and its extraction threw InsecureRuntimeDirectoryException. A test that never set the override must not see one.
+    [Fact]
+    public void TempPathOverride_SetInOneTest_IsNotSeenByAnUnrelatedThread()
+    {
+        PsBashRuntimeDirectory.TempPathOverride = () => "/psb-override-of-another-test";
+        Func<string>? seen = () => "not read";
+        using (ExecutionContext.SuppressFlow())
+        {
+            var other = new Thread(() => seen = PsBashRuntimeDirectory.TempPathOverride);
+            other.Start();
+            other.Join();
+        }
+        Assert.Null(seen);
+        Assert.NotNull(PsBashRuntimeDirectory.TempPathOverride);
+    }
+
     [Fact]
     public void ResolvePath_XdgAbsolute_UsesPsBashSubdirUnderXdg()
         => Assert.Equal(
