@@ -1,0 +1,23 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 421
+stdout-length: 113
+stderr-length: 0
+==== SCRIPT ====
+f() { local x=x; tq='' local tx=tx; tq='' eval 'local ty=ty'; x='X' unset x; tx='TX' unset tx; ty='TY' unset ty; echo "x=$x tx=$tx ty=$ty tq=[${tq-unset}]"; }; f; echo "tx after=[${tx-unset}]"
+g() { v=t local v; echo "local-same: [${v-unset}]"; x=1 local y=$x; echo "y=$y"; }; v=g; x=0; g; echo "v after: $v"
+v=g; v=t export v; echo "export-same: $v"; bash -c 'echo "child: $v"'
+a=1 export b=2; echo "a=[${a-unset}] b=$b"
+==== STDOUT ====
+x=x tx=tx ty=ty tq=[unset]
+tx after=[unset]
+local-same: [t]
+y=0
+v after: g
+export-same: t
+child: t
+a=[unset] b=2
+
+==== STDERR ====
+

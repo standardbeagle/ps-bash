@@ -1738,6 +1738,37 @@ public class BashParserTests
         Assert.Equal("x", assign.Pairs[0].Name);
     }
 
+    // `tmp='' local tx=tx` was a plain command named `local` ("local: command not found"): the temp binding ends with
+    // the builtin and binds nothing it reads, so it parses as the bare declaration.
+    [Theory]
+    [InlineData("tmp='' local tx=tx", true, "tx", "tx")]
+    [InlineData("a=1 b=2 export c=3", false, "c", "3")]
+    // A value-less local / export of the bound name keeps the binding's value (bash: `v=t local v` -> v=t).
+    [InlineData("v=t local v", true, "v", "t")]
+    [InlineData("v=t export v", false, "v", "t")]
+    [InlineData("v= local v", true, "v", "")]
+    public void Parse_TempBindingBeforeLocalOrExport_IsTheDeclaration(string bash, bool local, string name, string value)
+    {
+        var assign = Assert.IsType<Command.ShAssignment>(Parse(bash));
+        Assert.Equal(local, assign.IsLocal);
+        Assert.Equal(!local, assign.IsExport);
+        var pair = Assert.Single(assign.Pairs);
+        Assert.Equal(name, pair.Name);
+        Assert.Equal(value, string.Concat(pair.Value!.Parts.Select(p => p switch
+        {
+            WordPart.Literal l => l.Value,
+            WordPart.SingleQuoted s => s.Value,
+            _ => "?",
+        })));
+    }
+
+    // A prefix whose expansion does something (runs a command, assigns) is not dropped.
+    [Theory]
+    [InlineData("n=$(date) local q=1")]
+    [InlineData("n=$((i++)) local q=1")]
+    public void Parse_EffectfulTempBindingBeforeLocal_StaysASimpleCommand(string bash)
+        => Assert.IsType<Command.Simple>(Parse(bash));
+
     [Fact]
     public void Parse_SimpleSubshell_ReturnsSubshellNode()
     {

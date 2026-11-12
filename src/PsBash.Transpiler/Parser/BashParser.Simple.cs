@@ -46,6 +46,39 @@ public sealed partial class BashParser
         }
     }
 
+    /// <summary>`export` / `local` NAME=VAL … (see ParseDeclarationPairs for the shape); null leaves the cursor where it was.</summary>
+    private Command.ShAssignment? TryParseLocalOrExport()
+    {
+        if (!(Peek().Kind == BashTokenKind.Word && (Peek().Value is "export" or "local" || IsFunctionScopedDeclare())))
+            return null;
+        // Inside a function a plain `declare NAME=VAL` is function-local, exactly like `local`.
+        bool isLocal = Peek().Value is "local" or "declare" or "typeset";
+        int saved = _pos;
+        Advance(); // consume the keyword
+
+        // `local -p [NAME…]` is a listing, not a declaration: leave it to the emitter.
+        if (!(Peek().Kind == BashTokenKind.Word && Peek().Value == "-p" && _tokens[saved].Value == "local")
+            && ParseDeclarationPairs() is { } pairs)
+            return new Command.ShAssignment(pairs, IsLocal: isLocal, IsExport: !isLocal, IsReadonly: isLocal && _declSawReadonly, IsNameref: isLocal && _declSawNameref);
+
+        // No assignment or name followed — rewind and parse as a normal command
+        // so forms like `export -p` still reach the general path.
+        _pos = saved;
+        return null;
+    }
+
+    /// <summary>Text, quotes and plain <c>$name</c>: expanding it runs nothing and assigns nothing.</summary>
+    private static bool IsInertWord(ImmutableArray<WordPart> parts)
+    {
+        foreach (var part in parts)
+        {
+            if (part is WordPart.Literal or WordPart.EscapedLiteral or WordPart.SingleQuoted or WordPart.SimpleVarSub) continue;
+            if (part is WordPart.DoubleQuoted dq && IsInertWord(dq.Parts)) continue;
+            return false;
+        }
+        return true;
+    }
+
     private Command ParseSimpleCommand()
     {
         int startLine = BashLexer.LineAt(_input, Peek().Position);
@@ -56,23 +89,8 @@ public sealed partial class BashParser
     private Command ParseSimpleCommandCore()
     {
         SkipDeclarationWrappers();
-        // `export` / `local` NAME=VAL … — see ParseDeclarationPairs for the shape.
-        if (Peek().Kind == BashTokenKind.Word && (Peek().Value is "export" or "local" || IsFunctionScopedDeclare()))
-        {
-            // Inside a function a plain `declare NAME=VAL` is function-local, exactly like `local`.
-            bool isLocal = Peek().Value is "local" or "declare" or "typeset";
-            int saved = _pos;
-            Advance(); // consume the keyword
-
-            // `local -p [NAME…]` is a listing, not a declaration: leave it to the emitter.
-            if (!(Peek().Kind == BashTokenKind.Word && Peek().Value == "-p" && _tokens[saved].Value == "local")
-                && ParseDeclarationPairs() is { } pairs)
-                return new Command.ShAssignment(pairs, IsLocal: isLocal, IsExport: !isLocal, IsReadonly: isLocal && _declSawReadonly, IsNameref: isLocal && _declSawNameref);
-
-            // No assignment or name followed — rewind and parse as a normal command
-            // so forms like `export -p` still reach the general path.
-            _pos = saved;
-        }
+        if (TryParseLocalOrExport() is { } declaration)
+            return declaration;
 
         // `declare -a A=(x y)` / `readonly C=(m n)` — an ARRAY initializer only.
         // Everything else about declare/typeset (the -i, -A, -p attribute handling)
@@ -111,6 +129,22 @@ public sealed partial class BashParser
                 hasArrayAssignment = true;
             assignmentPairs.Add(assign);
             envPairs.Add(new EnvPair(assign.Name, assign.ArrayValue is { } arr ? ArrayPrefixAsScalar(arr) : assign.Value));
+        }
+
+        // `tmp='' local tx=tx`: a temp binding in front of `local`/`export` is gone when the builtin ends, and the
+        // declaration's words were expanded before it was made, so it is the bare declaration (the runtime looked
+        // `local` up as a command: "local: command not found"). One effect stays: a value-less `v=t local v` /
+        // `v=t export v` keeps the binding's value (bash 5.2). A prefix whose value could do something (`$(cmd)`,
+        // `$((i++))`) keeps the old path.
+        if (assignmentPairs.Count > 0 && !hasArrayAssignment
+            && assignmentPairs.All(a => a.Op == AssignOp.Equal && (a.Value is null || IsInertWord(a.Value.Parts)))
+            && TryParseLocalOrExport() is { } prefixed)
+        {
+            var folded = prefixed.Pairs.Select(p => p.Value is null && p.ArrayValue is null && p.Op == AssignOp.Equal
+                && assignmentPairs.LastOrDefault(a => a.Name == p.Name) is { } temp
+                    ? p with { Value = temp.Value ?? new CompoundWord(ImmutableArray<WordPart>.Empty) }
+                    : p).ToImmutableArray();
+            return prefixed with { Pairs = folded };
         }
 
         // Array assignments with no command after them are an assignment statement. Before a command word

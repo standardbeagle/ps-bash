@@ -43,4 +43,17 @@ public class VariableContextDifferentialTests
         + "v=g; v=t eval 'v=new'; echo \"temp-eval-kept: $v\"\n"
         // A subshell's unset pops the frame for the subshell only.
         + "v=g; s1() { local v=l; ( unlocal v; echo \"in-subshell: $v\" ); echo \"s1: $v\"; }; s1; echo \"subshell-pop: $v\"");
+
+    /// <summary>
+    /// A temp binding in front of <c>local</c> / <c>export</c> (<c>tmp='' local tx=tx</c>, the oils "Temp bindings
+    /// with local" case): ps-bash ran a command named <c>local</c> ("command not found"). The binding is gone afterwards,
+    /// the declaration's words are expanded before it, and a value-less <c>v=t local v</c> / <c>v=t export v</c> keeps t.
+    /// </summary>
+    [Fact]
+    public Task TempBindingBeforeLocalOrExport_IsTheDeclaration() => AssertOracle.EqualAsync(
+        "f() { local x=x; tq='' local tx=tx; tq='' eval 'local ty=ty'; x='X' unset x; tx='TX' unset tx; ty='TY' unset ty;"
+        + " echo \"x=$x tx=$tx ty=$ty tq=[${tq-unset}]\"; }; f; echo \"tx after=[${tx-unset}]\"\n"
+        + "g() { v=t local v; echo \"local-same: [${v-unset}]\"; x=1 local y=$x; echo \"y=$y\"; }; v=g; x=0; g; echo \"v after: $v\"\n"
+        + "v=g; v=t export v; echo \"export-same: $v\"; bash -c 'echo \"child: $v\"'\n"
+        + "a=1 export b=2; echo \"a=[${a-unset}] b=$b\"");
 }
