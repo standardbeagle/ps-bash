@@ -32,7 +32,6 @@ f1 'global'
 [global,local,(unlocal)] v: global
 ## END
 ## status: 2
-## XFAIL ps-bash gap-oils-ble-features ble-features (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### [bash_unset] local-unset / dynamic-unset for localvar (mutated from tempenv)
@@ -70,7 +69,6 @@ v=tempenv f1 'global,tempenv'
 [global,tempenv,local,(unlocal)] v: global
 ## END
 ## status: 2
-## XFAIL ps-bash gap-oils-ble-features ble-features (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### [bash_unset] local-unset / dynamic-unset for tempenv
@@ -94,7 +92,6 @@ v=tempenv f1 'global,tempenv'
 [global,tempenv,(unlocal)] v: global
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-ble-features ble-features (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### [bash_unset] function call with tempenv vs tempenv-eval
@@ -185,7 +182,6 @@ v=tempenv eval 'f5 "global,tempenv,(eval)"'
 [global,tempenv,(eval),local+unlocal] v: tempenv
 ## END
 ## status: 2
-## XFAIL ps-bash gap-oils-ble-features ble-features (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### [bash_unset] localvar-inherit from tempenv
@@ -250,7 +246,6 @@ f3 'global'
 [global,local,(func),(local)] v: (unset)
 ## END
 ## status: 2
-## XFAIL ps-bash gap-oils-ble-features ble-features (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### [compat_array] ${arr} is ${arr[0]}

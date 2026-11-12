@@ -106,10 +106,14 @@ public static class BashShellState
     {
         internal Snapshot(Dictionary<string, string> env, (bool Exists, object? Value)[] globals,
             Dictionary<string, bool> shopt, bool xtrace, HashSet<string> readonlyNames,
-            Dictionary<string, ScriptBlock?> aliasFunctions)
+            Dictionary<string, ScriptBlock?> aliasFunctions, VarFrameStack.Saved varFrames)
         {
             Env = env; Globals = globals; Shopt = shopt; Xtrace = xtrace; Readonly = readonlyNames; AliasFunctions = aliasFunctions;
+            VarFrames = varFrames;
         }
+
+        /// <summary>The local/temp-binding frames: an <c>unset</c> in the body pops them for the body only.</summary>
+        internal VarFrameStack.Saved VarFrames { get; }
 
         internal HashSet<string> Readonly { get; }
 
@@ -142,7 +146,8 @@ public static class BashShellState
         HashSet<string> readonlyNow;
         lock (ReadonlyNames) readonlyNow = new HashSet<string>(ReadonlyNames, StringComparer.Ordinal);
         return new Snapshot(env, globals, InvokeBashShoptCommand.SnapshotOptions(),
-            IsTrue(session.PSVariable.GetValue("global:__BashXtrace")), readonlyNow, SaveAliasFunctions(session));
+            IsTrue(session.PSVariable.GetValue("global:__BashXtrace")), readonlyNow, SaveAliasFunctions(session),
+            VarFrameStack.Current.Save());
     }
 
     /// <summary>
@@ -186,6 +191,7 @@ public static class BashShellState
     private static object? RestoreRunspaceGlobals(SessionState session, Snapshot saved)
     {
         RestoreAliasFunctions(session, saved.AliasFunctions);
+        VarFrameStack.Current.Restore(saved.VarFrames);
         bool tracingNow = IsTrue(session.PSVariable.GetValue("global:__BashXtrace"));
         for (int i = 0; i < GlobalNames.Length; i++)
         {

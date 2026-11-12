@@ -1963,7 +1963,8 @@ public static partial class PsEmitter
             // every `$__lsd_*` slot it parked in this call. Only a body with such an eval pays for the scan.
             if (body.Contains("$__psbash_eval_src", StringComparison.Ordinal))
                 body = "try { " + body + " } finally { foreach ($__psbLsdV in @(Get-Variable -Name '__lsd_*' -Scope 0 -ErrorAction SilentlyContinue)) "
-                     + "{ if ($null -ne $__psbLsdV.Value) { [System.Environment]::SetEnvironmentVariable($__psbLsdV.Name.Substring(6), $__psbLsdV.Value.v) } } }";
+                     + "{ if ($null -ne $__psbLsdV.Value) { $__psbLsdN = $__psbLsdV.Name.Substring(6); [System.Environment]::SetEnvironmentVariable($__psbLsdN, "
+                     + "[PsBash.Cmdlets.VarFrameStack]::LeaveLocal($__psbLsdN, $__psbLsdV.Value.v, [System.Environment]::GetEnvironmentVariable($__psbLsdN))) } } }";
             var sb = new StringBuilder();
             // A PowerShell alias outranks a function of the same name (`r`, `h`, `diff`), so a bash function
             // that shares its name would never run; drop the alias first.
@@ -1979,7 +1980,7 @@ public static partial class PsEmitter
                 foreach (var v in dynLocals) sb.Append($"$__lsd_{v} = $null; ");
                 sb.Append("try { ").Append(body).Append(" } finally { ");
                 foreach (var v in dynLocals)
-                    sb.Append($"if ($null -ne $__lsd_{v}) {{ $env:{v} = $__lsd_{v}.v }}; ");
+                    sb.Append($"if ($null -ne $__lsd_{v}) {{ ").Append(PsBuild.RestoreLocal(v)).Append(" }; ");
                 sb.Append('}');
             }
             else
@@ -3721,10 +3722,14 @@ public static partial class PsEmitter
                 // `local s+=x`: the first declaration in this call starts from empty (not the caller's s); later ones append.
                 if (pair.Op == AssignOp.PlusEqual && pair.Value is not null)
                     sb.Append($"$__psbashLocBase = if ($null -eq $__lsd_{pair.Name}) {{ '' }} else {{ $env:{pair.Name} }}; ");
-                sb.Append($"if ($null -eq $__lsd_{pair.Name}) {{ $__lsd_{pair.Name} = @{{ v = $env:{pair.Name} }} }}; $env:{pair.Name} = ");
-                if (pair.Value is null) sb.Append("$null");
+                sb.Append($"if ($null -eq $__lsd_{pair.Name}) {{ $__lsd_{pair.Name} = @{{ v = $env:{pair.Name} }} }}; ");
+                // bash's frame rules (VarFrameStack): `local v` over a temp binding (`v=t f`) keeps its value, a second
+                // `local v` in the same call keeps the local's, anything else leaves v unset; `unset` consults the frames.
+                string declareLocal = PsBuild.DeclareLocal(pair.Name);
+                if (pair.Value is null) sb.Append($"$env:{pair.Name} = ").Append(declareLocal);
                 else
                 {
+                    sb.Append("[void]").Append(declareLocal).Append($"; $env:{pair.Name} = ");
                     string localAssigned = EmitAssignmentValue(pair.Value);
                     // `local s+=x` appends to the value already there (the caller's, or this function's earlier one).
                     sb.Append(pair.Op == AssignOp.Equal && _intVars?.Contains(pair.Name) == true
@@ -4351,7 +4356,7 @@ public static partial class PsEmitter
         }
 
         var bare = cmd with { EnvPairs = ImmutableArray<EnvPair>.Empty };
-        result = WrapEnvPairs(cmd.EnvPairs, WithEnvShadow(cmd.EnvPairs, () => EmitSimple(bare)));
+        result = WrapEnvPairs(cmd.EnvPairs, WithEnvShadow(cmd.EnvPairs, () => EmitSimple(bare)), TempFrameKind(cmd));
         // `foo=bar $unset`: a command word that expands to NOTHING leaves no command, so the assignment persists
         // (only a command that actually runs gets the temporary binding).
         if (cmd.Words.Length > 0 && IsPureUnquotedVarWord(cmd.Words[0]))
@@ -5947,13 +5952,32 @@ public static partial class PsEmitter
     /// and is then restored (no leak), regardless of which emission path produced
     /// <paramref name="inner"/>.
     /// </summary>
-    private static string WrapEnvPairs(ImmutableArray<EnvPair> pairs, string inner)
+    /// <summary>
+    /// <c>v=t f</c> with f a function of this unit: the binding is f's context; <c>v=t eval ...</c> / <c>source</c> /
+    /// <c>.</c>: the current one's. Other commands cannot reach <c>local</c>/<c>unset</c> under the binding, so no
+    /// frame (a function only a run-time <c>source</c> defines is not known here: no frame either).
+    /// </summary>
+    private static bool? TempFrameKind(Command.Simple cmd)
+    {
+        if (cmd.Words.IsEmpty || TryGetStaticArgValue(cmd.Words[0]) is not { } name) return null;
+        if (name is "eval" or "source" or ".") return false;
+        return _unitFunctions?.Contains(name) == true ? true : null;
+    }
+
+    /// <param name="functionCall">
+    /// The temp bindings' variable-context frames (VarFrameStack): true for a call of a shell function (the binding
+    /// belongs to the called function), false for eval/source/. (it belongs to the current one), null for none.
+    /// </param>
+    private static string WrapEnvPairs(ImmutableArray<EnvPair> pairs, string inner, bool? functionCall = null)
     {
         // Every value is evaluated against the PRE-assignment environment (`a=1 b=$a cmd` gives b the old a).
         var values = WithEnvShadow(pairs, () => pairs.Select(p => EmitAssignmentValue(p.Value)).ToArray());
         var sb = new StringBuilder();
+        // eval/source/. run in this PowerShell scope, where a binding inside them (`v=1 eval 'v=2 eval ...'`) would
+        // overwrite `$__saved_v`: their saved values live on the runtime's binding stack instead.
+        bool sameScope = functionCall == false;
         foreach (var p in pairs)
-            sb.Append($"$__saved_{p.Name} = $env:{p.Name}; ");
+            sb.Append(sameScope ? PsBuild.BindSameScope(p.Name) : $"$__saved_{p.Name} = $env:{p.Name}").Append("; ");
         // A word that read a prefixed name (emitted as the shadow) needs the old value parked first.
         var parked = new List<string>();
         foreach (var p in pairs)
@@ -5970,10 +5994,16 @@ public static partial class PsEmitter
             sb.Append($"$env:{pairs[i].Name} = {values[i]}; ");
         if (pairs.Any(p => p.Name == "PATH"))
             sb.Append(PsBuild.NormalizePathVariable).Append("; ");
+        if (functionCall == true)
+            foreach (var p in pairs)
+                sb.Append(PsBuild.PushTempFrame(p.Name)).Append("; ");
         sb.Append(inner);
         sb.Append(" } finally { ");
+        // A binding whose frame `unset` took is not put back (bash: later writes went to the outer variable).
         foreach (var p in pairs)
-            sb.Append($"$env:{p.Name} = $__saved_{p.Name}; ");
+            sb.Append(sameScope ? PsBuild.UnbindSameScope(p.Name)
+                : functionCall == true ? PsBuild.RestoreTempBinding(p.Name)
+                : $"$env:{p.Name} = $__saved_{p.Name}").Append("; ");
         foreach (var shadow in parked)
             sb.Append($"$env:{shadow} = $null; ");
         sb.Append('}');
@@ -11588,7 +11618,13 @@ public static partial class PsEmitter
             var joined = string.Join(' ', staticParts);
             try
             {
-                var inner = Transpile(joined, TranspileContext.Eval);
+                // The body runs once a prefix binding is in force (`v=t eval 'echo $v'` prints t): only eval's own words
+                // expand before it, so the body's reads are not the pre-assignment shadow.
+                var shadow = _envPrefixShadow;
+                _envPrefixShadow = null;
+                string? inner;
+                try { inner = Transpile(joined, TranspileContext.Eval); }
+                finally { _envPrefixShadow = shadow; }
                 if (inner is not null)
                     return inner;
             }

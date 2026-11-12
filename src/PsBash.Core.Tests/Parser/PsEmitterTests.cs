@@ -3809,8 +3809,9 @@ public class PsEmitterTests
 
     // Helper constant for the save/restore preamble and epilogue added around every
     // function body so that recursive calls each see their own positional args.
-    private const string FnPre = "$__bp = $global:BashPositional; $global:BashPositional = @() + $args; try { ";
-    private const string FnPost = " } finally { $global:BashPositional = $__bp }";
+    // The wrapper every function gets (positional save/restore, variable-context depth), as PsBuild builds it.
+    private static readonly string FnPre = PsBuild.FunctionPrologue.TrimStart();
+    private static readonly string FnPost = PsBuild.FunctionEpilogue.TrimEnd();
 
     [Fact]
     public void Transpile_FunctionKeywordForm_EmitsPsFunction()
@@ -3843,16 +3844,18 @@ public class PsEmitterTests
 
         // A scalar local is dynamically scoped: it lives in the shell variable, parked on the first `local`
         // and put back when the function ends, so a function it calls reads the local value.
-        Assert.Contains("if ($null -eq $__lsd_result) { $__lsd_result = @{ v = $env:result } }; $env:result = \"42\"", result);
-        Assert.Contains("finally { if ($null -ne $__lsd_result) { $env:result = $__lsd_result.v }", result);
+        Assert.Contains("if ($null -eq $__lsd_result) { $__lsd_result = @{ v = $env:result } }; [void]"
+            + PsBuild.DeclareLocal("result") + "; $env:result = \"42\"", result);
+        Assert.Contains("finally { if ($null -ne $__lsd_result) { " + PsBuild.RestoreLocal("result") + " }", result);
         Assert.DoesNotContain("$result = ", result);
     }
 
     [Fact]
     public void Transpile_UnsetLocal_LeavesTheVariableUnset()
     {
+        // Unset unless a temp binding (`y=t f`) is in force; the frame stack decides at run time (VarFrameStackTests).
         var result = PsEmitter.Transpile("f() { local y; echo done; }");
-        Assert.Contains("$env:y = $null", result);
+        Assert.Contains("$env:y = " + PsBuild.DeclareLocal("y"), result);
     }
 
     [Fact]
@@ -4907,7 +4910,7 @@ public class PsEmitterTests
         var result = PsEmitter.Transpile("declare -A map");
         // A scalar map becomes element 0; an indexed map is refused (ArrayKindGuard).
         Assert.Equal(PsBuild.ArrayKindGuard("map", toAssoc: true,
-            "if ($global:map -isnot [System.Collections.IDictionary]) { $global:map = [PsBash.Cmdlets.BashAssoc]::new(); if ($null -ne $env:map) { $global:map['0'] = $env:map } }; $global:LASTEXITCODE = 0"), result);
+            "if ($global:map -isnot [System.Collections.IDictionary]) { $global:map = [PsBash.Cmdlets.BashAssoc]::Unset(); if ($null -ne $env:map) { $global:map['0'] = $env:map } }; $global:LASTEXITCODE = 0"), result);
     }
 
     [Fact]

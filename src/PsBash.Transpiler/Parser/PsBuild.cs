@@ -765,10 +765,53 @@ public static class PsBuild
     /// <c>}</c>): save/restore of <c>$global:BashPositional</c> so a recursive call sees its own <c>$1 $@ $#</c>. Also
     /// the signature <c>declare -f</c>/<c>-F</c> use to tell a bash-defined function from the runtime's own.
     /// </summary>
-    public const string FunctionPrologue = " $__bp = $global:BashPositional; $global:BashPositional = @() + $args; try { ";
+    public const string FunctionPrologue = " $__bp = $global:BashPositional; $global:BashPositional = @() + $args; [PsBash.Cmdlets.VarFrameStack]::EnterFunction(); try { ";
 
     /// <summary>The text every bash function body ends with (see <see cref="FunctionPrologue"/>).</summary>
-    public const string FunctionEpilogue = " } finally { $global:BashPositional = $__bp } ";
+    public const string FunctionEpilogue = " } finally { [PsBash.Cmdlets.VarFrameStack]::ExitFunction(); $global:BashPositional = $__bp } ";
+
+    // ─────────────────── bash variable contexts (PsBash.Cmdlets.VarFrameStack) ───────────────────
+
+    /// <summary>
+    /// <c>local name</c>: records the local's frame and yields the value a <c>local</c> without an initializer leaves
+    /// ($null = unset). Called with the name's current value, so it must run before any assignment.
+    /// </summary>
+    public static string DeclareLocal(string name)
+        => "[PsBash.Cmdlets.VarFrameStack]::DeclareLocal(" + SingleQuote(name) + ", $env:" + name + ")";
+
+    /// <summary>
+    /// A function call's temp binding frame (<c>name=v f</c>, owned by the called function), pushed once the binding is
+    /// in force; the value it hides is the <c>$__saved_name</c> the binding restores.
+    /// </summary>
+    public static string PushTempFrame(string name)
+        => "$__ptf_" + name + " = [PsBash.Cmdlets.VarFrameStack]::Temp(" + SingleQuote(name) + ", $__saved_" + name + ", $true)";
+
+    /// <summary>
+    /// <c>name=v eval ...</c> / <c>source</c> / <c>.</c>: saves name's value on the runtime's binding stack (these run in
+    /// this PowerShell scope, where a nested binding would overwrite a <c>$__saved_name</c>) and pushes its frame.
+    /// </summary>
+    public static string BindSameScope(string name)
+        => "[PsBash.Cmdlets.VarFrameStack]::BindSameScope(" + SingleQuote(name) + ", $env:" + name + ")";
+
+    /// <summary>Ends <see cref="BindSameScope"/>: restores name's saved value, unless <c>unset</c> took the binding's frame.</summary>
+    public static string UnbindSameScope(string name)
+        => "$env:" + name + " = [PsBash.Cmdlets.VarFrameStack]::UnbindSameScope(" + SingleQuote(name) + ", $env:" + name + ")";
+
+    /// <summary>
+    /// Ends <see cref="PushTempFrame"/>: restores <c>$__saved_name</c>, unless <c>unset</c> took the frame (then later
+    /// writes went to the outer variable and stay: <c>v=t f</c>, f: <c>unset v; v=new</c> leaves new).
+    /// </summary>
+    public static string RestoreTempBinding(string name)
+        => "$env:" + name + " = [PsBash.Cmdlets.VarFrameStack]::EndTemp(" + SingleQuote(name) + ", $__ptf_" + name
+           + ", $__saved_" + name + ", $env:" + name + ")";
+
+    /// <summary>
+    /// A function's local <c>name</c> ends (its <c>$__lsd_name</c> holds the caller's value): restored unless a helper
+    /// unset the local (<c>unlocal v; v=new</c> leaves new).
+    /// </summary>
+    public static string RestoreLocal(string name)
+        => "$env:" + name + " = [PsBash.Cmdlets.VarFrameStack]::LeaveLocal(" + SingleQuote(name) + ", $__lsd_" + name + ".v, $env:" + name + ")";
+
 
     private const string FunctionSourceOpen = "<#bash:";
     private const string FunctionSourceClose = "#> ";

@@ -1,3 +1,4 @@
+using PsBash.Core.Parser;
 using PsBash.Core.Runtime.Ipc;
 using PsBash.Core.Transpiler;
 using Xunit;
@@ -61,7 +62,7 @@ public class LauncherStdinTests
     {
         // `echo x | f` must feed f from the pipe: a function is a filter. Called without a pipe it keeps the shell's stdin.
         var ps = BashTranspiler.TranspileWithLauncherStdin("f() { cat; }; echo x | f; sort")!;
-        var fnEnd = ps.IndexOf("} finally { $global:BashPositional = $__bp }", StringComparison.Ordinal);
+        var fnEnd = ps.IndexOf(PsBuild.FunctionEpilogue.Trim(), StringComparison.Ordinal);
 
         Assert.True(fnEnd > 0);
         Assert.Contains("$MyInvocation.ExpectingInput", ps[..fnEnd]);

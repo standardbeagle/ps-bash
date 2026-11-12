@@ -1,0 +1,60 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 1189
+stdout-length: 481
+stderr-length: 0
+==== SCRIPT ====
+unlocal() { unset -v "$1"; }
+show() { echo "$1: [${v-(unset)}]"; }
+v=global
+f1() { local v=local; unset v; show local-unset; }; f1
+f2() { local v=local; unlocal v; show dyn-unset; }; f2
+f3() { local v=local; unset v; show tempenv-local-unset; }; v=tempenv f3
+f4() { unset v; show tempenv-unset; }; v=tempenv f4
+f5() { unlocal v; show tempenv-unlocal; }; v=tempenv f5
+f6() { local v; show local-novalue; }; f6; v=tempenv f6
+f7() { local v; unlocal v; show local-unlocal; }; v=tempenv f7; v=tempenv eval f7
+f8() { local v=a; local v; show relocal; }; f8
+show after
+v=t0 eval 'v=t1 eval "unset v; show peel1; unset v; show peel2"'
+show end
+v=t eval 'echo "eval-body: $v"'
+v=t eval "echo eval-arg: $v"
+g() { local v=l; v=t eval 'echo "fn-eval-body: $v"'; echo "fn-after: $v"; }; g
+v=g; p1() { local v=l; unlocal v; v=new; }; p1; echo "local-popped: $v"
+v=g; p2() { unset v; v=new; }; v=t p2; echo "temp-fn-popped: $v"
+v=g; v=t eval 'unset v; v=new'; echo "temp-eval-popped: $v"
+v=g; p3() { local v=l; v=new; }; p3; echo "local-kept: $v"
+v=g; v=t eval 'v=new'; echo "temp-eval-kept: $v"
+v=g; s1() { local v=l; ( unlocal v; echo "in-subshell: $v" ); echo "s1: $v"; }; s1; echo "subshell-pop: $v"
+==== STDOUT ====
+local-unset: [(unset)]
+dyn-unset: [global]
+tempenv-local-unset: [(unset)]
+tempenv-unset: [global]
+tempenv-unlocal: [global]
+local-novalue: [(unset)]
+local-novalue: [tempenv]
+local-unlocal: [global]
+local-unlocal: [tempenv]
+relocal: [a]
+after: [global]
+peel1: [t0]
+peel2: [global]
+end: [global]
+eval-body: t
+eval-arg: global
+fn-eval-body: t
+fn-after: l
+local-popped: new
+temp-fn-popped: new
+temp-eval-popped: new
+local-kept: g
+temp-eval-kept: g
+in-subshell: g
+s1: l
+subshell-pop: g
+
+==== STDERR ====
+

@@ -586,8 +586,22 @@ visible to `unset`, so `unset` always just clears. bash 5.2 behaviour, checked a
   already revealed, and later writes go to the outer variable).
 - Subshells `( )` keep the depth: `( unset v )` inside f is a local-unset.
 
-Implementation sketch: a runtime frame stack in BashShellState (push/pop/convert/unset), a run-time function depth
-counted by the function wrapper, `unset` routed through it (only when frames exist, to keep the plain path cheap).
+Done (11 of 12; temp-binding "Temp bindings with local" still XFAIL): `PsBash.Cmdlets.VarFrameStack`, one per
+runspace, reset by the host per command (`SdkWorker.ResetVarFrames`).
+- The function wrapper counts the depth (`PsBuild.FunctionPrologue/Epilogue`).
+- `local` registers its frame (`PsBuild.DeclareLocal`; a value-less local takes the value the stack gives it).
+- A temp binding on a known function (`_unitFunctions`) or on eval/source/. pushes a frame (`TempFrameKind`).
+- `Invoke-BashUnset` pops a frame and reveals what it hid.
+- A function's local, and a binding, are restored on exit only while their frame is there
+  (`RestoreLocal`/`RestoreTempBinding`/`UnbindSameScope`).
+- eval/source/. bindings keep their saved value on the stack's LIFO, not in `$__saved_v`: nested evals share one
+  PowerShell scope, and `v=t0 eval 'v=t1 eval ...'` left t0 behind.
+- Also fixed: an inlined literal eval body read the pre-binding shadow (`v=t eval 'echo $v'` printed the old v,
+  since 82c715f3).
+
+Known gaps:
+- A function that only a run-time `source` defines gets no frame for `v=t f`.
+- Locals that stay lexical (IFS, loop variables, PS-builtin names) have no frames.
 
 ## Suggested order
 

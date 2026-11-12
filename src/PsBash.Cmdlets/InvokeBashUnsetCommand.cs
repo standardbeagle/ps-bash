@@ -169,6 +169,13 @@ public sealed class InvokeBashUnsetCommand : PSCmdlet
                 continue;
             }
             if (!functionMode && TryUnsetElement(name)) continue;
+            // A temp binding (`v=t f`) or a caller's local (`unlocal() { unset -v "$1"; }`): the frame goes and the value
+            // it hid comes back, as in bash. A local of the current function falls through: unset, still local.
+            if (!functionMode && VarFrameStack.Current.Unset(name, out var revealed))
+            {
+                BashVariableStore.Set(name, revealed);
+                continue;
+            }
             if (functionMode)
             {
                 // Function mode: remove from Function:\NAME. Use a parameter-

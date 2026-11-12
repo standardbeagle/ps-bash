@@ -368,7 +368,6 @@ x=global
 x=global
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-assign assign (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Using ${x-default} after unsetting local shadowing a global

@@ -229,6 +229,26 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
         catch (Exception) { /* best effort: a stale readonly name only makes a later `unset` refuse */ }
     }
 
+    /// <summary>
+    /// A command starts at function depth 0 with no local/temp-binding frames (VarFrameStack), whatever an interrupted
+    /// earlier command left. Same reflection route as <see cref="ClearReadonlyNames"/>; the runspace is passed because
+    /// this thread is not the one the pipeline runs on.
+    /// </summary>
+    [System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage(
+        "Trimming", "IL2075",
+        Justification = "Best-effort lookup of a type in an assembly that is loaded into the runspace at run time; if it is trimmed away the call is a no-op.")]
+    private static void ResetVarFrames(System.Management.Automation.Runspaces.Runspace runspace)
+    {
+        try
+        {
+            AppDomain.CurrentDomain.GetAssemblies()
+                .FirstOrDefault(a => a.GetName().Name == "PsBash.Cmdlets")
+                ?.GetType("PsBash.Cmdlets.VarFrameStack")
+                ?.GetMethod("ResetFor")?.Invoke(null, new object[] { runspace });
+        }
+        catch (Exception) { /* best effort: a stale frame only changes what a later `unset` reveals */ }
+    }
+
     /// <param name="batchOutput">
     /// Coalesce stdout into large chunks (S1). Only the IPC path passes true. The
     /// <see cref="OutputCallback"/> path must NOT batch: its documented convention is
@@ -261,6 +281,7 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
             else { ResetEnvironment(environment); ClearReadonlyNames(); }
             SyncHomeToEnvironment();
         }
+        ResetVarFrames(_ps.Runspace);
 
         _host.Reset();
         _ps.Commands.Clear();
