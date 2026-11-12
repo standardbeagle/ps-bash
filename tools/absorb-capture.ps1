@@ -4,7 +4,7 @@ param([Parameter(Mandatory)][string]$Capture, [string]$Root = (Resolve-Path "$PS
 $out = Join-Path $Root 'spec/differential'
 New-Item -ItemType Directory -Force $out | Out-Null
 $rows = Get-Content $Capture -Encoding utf8 | Where-Object { $_ } | ForEach-Object { $_ | ConvertFrom-Json }
-$added = 0; $dups = 0
+$added = 0; $dups = 0; $hostBound = 0
 foreach ($g in $rows | Group-Object class) {
     $cls = ($g.Name -replace 'DifferentialTests$|Tests$', '').ToLower()
     $file = Join-Path $out "$cls.spec.sh"
@@ -12,6 +12,10 @@ foreach ($g in $rows | Group-Object class) {
     $seen = @{}; $new = [System.Text.StringBuilder]::new(); $n = @{}
     foreach ($r in $g.Group) {
         $script = $r.script.TrimEnd("`n")
+        # A Windows drive path is a file the TEST wrote before running the script (NativeStdioBytesTests' helper under
+        # %TEMP%\psb_nsb_<pid>): a spec case cannot recreate it, bash under WSL cannot run it, and the path names one
+        # process on one machine. Such a case recorded pwsh's usage text as "bash's" output and XPASSed elsewhere.
+        if ($script -cmatch '(?<![\w/])[A-Z]:[\\/]') { $hostBound++; continue }
         if ($seen.ContainsKey($script) -or $script -match '(?m)^#### |^## ' -or $existing.Contains("`n$script`n") -or $existing.Contains("`n$script`r`n")) { $dups++; continue }
         $seen[$script] = 1
         $n[$r.method] = 1 + [int]$n[$r.method]
@@ -20,4 +24,4 @@ foreach ($g in $rows | Group-Object class) {
     }
     if ($new.Length -gt 0) { [IO.File]::WriteAllText($file, $existing + $new.ToString(), [Text.UTF8Encoding]::new($false)) }
 }
-"captured: $($rows.Count), added: $added, already present/dup: $dups"
+"captured: $($rows.Count), added: $added, already present/dup: $dups, skipped (host path): $hostBound"

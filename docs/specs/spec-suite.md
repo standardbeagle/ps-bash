@@ -198,6 +198,8 @@ Memory: 4 slots = 4 hosts (~0.4-0.8 GB each at peak); `PSBASH_SPEC_PAR` lowers i
   seconds and yields the exact script of every test, including ones built by `Tree()`/`WithArchive()`. `tools/absorb-capture.ps1 -Capture <file>`
   merges them into `spec/differential/<class>.spec.sh` (existing recorded cases kept). `FsStateOracle` scripts already print the file-system
   snapshot to stdout, so state checks are part of the case. `tools/absorb-differential.ps1` is the older text-scanning route (literals only).
+  A script naming a Windows drive path (a helper file the test wrote under `%TEMP%`) is skipped: the case cannot recreate it and bash under
+  WSL cannot run it. `nativestdiobytes.spec.sh` was such a file (expectations were pwsh's usage text) and was removed; `NativeStdioBytesTests` covers it.
 - Not part of the spec suite by nature: cmdlet tests (`CmdResult`, in `Cmdlets.Tests`), the host-memory budget and process-lifecycle tests.
 - **Isolation**: each case gets its own scratch directory (`_tmp` only when the script mentions one). The in-host executor snapshots shell state
   once per host (`BashShellState.Save` plus the function table) and restores it after every case; `readonly` names are reset per invocation.
