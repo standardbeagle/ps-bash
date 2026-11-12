@@ -555,6 +555,16 @@ building. The Linux side's remaining failures are the known `LsSortTimeDifferent
   succeeds.
 - Fleet g20 (b423e1ce): Linux all green (Differential 2484/0); Windows green but that one case.
 - XFAIL count after this pass: 366.
+- Fleet g21 (80c30a61) caught a regression on both platforms: `n='a;echo pwn'; builtin declare k=$n` left k empty.
+  The cause was older: the declare emitter took any operand containing the letter `n` for a flag (meant for
+  `typeset +n`), so `declare k=ab pwn` never split its operands and `pwn` replaced the declaration. Fixed (leading
+  `-`/`+` only). A declaration that assigns a name known to be read-only (`declare r=2`, `typeset +r r=2`) now
+  reports `declare: r: readonly variable`, status 1, value kept, and the line goes on; it assigned. ble-idioms
+  "Issue #1069 [40]" (two cases) pass since the run-time declaration change.
+- g21 Windows Cmdlets: five time/streaming tests failed that passed in g19/g20 with no change to that code
+  (LsTimeSortTests x3 atime/ctime order, FindPredicateTests.NewerXY, GrepStreamingTests 60 s timeout): suspect the
+  runner. builtin-read "read -u 3 -d b -N 6" passes 3 of 5 Windows runs (flaky XPass).
+- Not fixed: `typeset -n ref=x; typeset +n ref; echo $ref` prints nothing (bash: x).
 
 ## Suggested order
 

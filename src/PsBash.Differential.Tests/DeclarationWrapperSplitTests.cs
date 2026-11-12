@@ -23,4 +23,12 @@ public class DeclarationWrapperSplitTests
         "y='p=1 q=2'; declare $y; echo \"d [$p] [$q]\"\ny='p2=1 q2=2'; export $y; echo \"e [$p2] [$q2]\"; printenv q2\n"
         + "y='p4=1 q4=2'; typeset $y; echo \"t [$p4] [$q4]\"\ny='u=1'; declare -x w $y; echo \"[$u]\"; printenv u\n"
         + "x='a b'; declare z=$x; echo \"z [$z]\"");
+
+    // `declare k=ab pwn`: a name holding the letter n was taken for a flag, so `pwn` overwrote the declaration and k
+    // stayed empty. Declaring a read-only name fails (status 1, value kept) and, unlike `r=2`, the line goes on.
+    [Fact]
+    public Task DeclareNameWithN_AndReadonlyName() => AssertOracle.EqualAsync(
+        "declare k=ab pwn; echo \"k [$k] st:$?\"; typeset nn=5 zz; echo \"nn [$nn]\"\n"
+        + "readonly r=r1\ntypeset +r r=r2 2>/dev/null; echo \"t st:$? [$r]\"\n"
+        + "declare r=r3 2>/dev/null; echo \"d st:$? [$r]\"; echo same-line");
 }

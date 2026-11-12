@@ -1,0 +1,20 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 196
+stdout-length: 53
+stderr-length: 0
+==== SCRIPT ====
+declare k=ab pwn; echo "k [$k] st:$?"; typeset nn=5 zz; echo "nn [$nn]"
+readonly r=r1
+typeset +r r=r2 2>/dev/null; echo "t st:$? [$r]"
+declare r=r3 2>/dev/null; echo "d st:$? [$r]"; echo same-line
+==== STDOUT ====
+k [ab] st:0
+nn [5]
+t st:1 [r1]
+d st:1 [r1]
+same-line
+
+==== STDERR ====
+

@@ -77,6 +77,32 @@ public class AffixWordSplitTests
     public void Transpile_DeclareFedAQuotedArray_RunsThroughEval()
         => Assert.Contains("$__psbash_eval_src", T("typeset -\"${a[@]}\""));
 
+    // `declare k=1 pwn`: a name holding the letter n was taken for a flag, so the two operands were never split and
+    // `pwn` overwrote the declaration (k stayed empty). Reached `builtin declare k=$n` with n='a;echo pwn' via eval.
+    [Theory]
+    [InlineData("declare k=1 pwn", "$env:k = '1'")]
+    [InlineData("declare k=1 pwn", "MarkAttribute('pwn'")]
+    [InlineData("typeset nn=2 zz", "$env:nn = '2'")]
+    public void Transpile_DeclareNameContainingN_IsANameNotAFlag(string bash, string expected)
+        => Assert.Contains(expected, T(bash));
+
+    // `readonly r=1; declare r=2`: refused with the builtin's name, value kept; the rest of the line still runs.
+    [Theory]
+    [InlineData("readonly r=1; declare r=2; echo after", "declare: r: readonly variable")]
+    [InlineData("readonly r=1; typeset +r r=2; echo after", "typeset: r: readonly variable")]
+    public void Transpile_DeclareOfReadonlyName_IsRefusedAndTheLineGoesOn(string bash, string error)
+    {
+        var ps = T(bash);
+        Assert.Contains(error, ps);
+        Assert.DoesNotContain("$env:r = 'r2'", ps);
+        Assert.DoesNotContain("$env:r = '2'", ps);
+        Assert.Contains("Invoke-BashEcho after", ps);
+    }
+
+    [Fact]
+    public void Transpile_DeclarePlusN_StillDropsTheNameref()
+        => Assert.Contains("ClearNameref('r')", T("r=x; typeset -n r; typeset +n r"));
+
     [Fact]
     public void Transpile_QuotedDeclarePrintFlag_StillPrints()
         => Assert.Contains("Invoke-BashDeclare", T("declare '-p' b"));

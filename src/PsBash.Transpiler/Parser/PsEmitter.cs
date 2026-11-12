@@ -4641,7 +4641,8 @@ public static partial class PsEmitter
             foreach (var w in cmd.Words.Skip(1))
             {
                 var lit = GetLiteralValue(w);
-                (lit is { Length: > 1 } && (lit[0] == '-' || lit.Contains('n')) ? flagWords : nameWords).Add(w);
+                // `typeset +n ref`: a + word is an attribute flag too (a name merely containing n, `k=1 pwn`, is not).
+                (lit is { Length: > 1 } && lit[0] is '-' or '+' ? flagWords : nameWords).Add(w);
             }
             bool printForm = flagWords.Any(w => GetLiteralValue(w) is { } f && f[0] == '-' && f.AsSpan(1).IndexOfAnyExcept("pfF") < 0);
             if (nameWords.Count > 1 && !printForm)
@@ -4681,6 +4682,15 @@ public static partial class PsEmitter
             else if (val is { Length: > 1 } && val[0] == '+' && val.AsSpan(1).IndexOfAnyExcept("aAilnrtux") < 0) { /* `declare +a x`: drops an attribute; nothing to record */ }
             else if (val is not null && !val.StartsWith('-')) varName = val;
             else if (val is null && TrySplitInitializer(word, out var n, out var v)) { exprName = n; exprValue = v; }
+        }
+        // `readonly r=1; typeset +r r=2` / `declare r=2`: assigning a read-only name is refused, the value kept (the direct
+        // `$env:r = ...` below overwrote it). Same report as a plain `r=2` (EmitAssignment), with the builtin's name.
+        if (!isPrint && _readonlyVars is not null && (exprName ?? (varName is { } rv && rv.IndexOf('=') is > 0 and var req ? rv[..req] : null)) is { } assigned
+            && _readonlyVars.Contains(assigned))
+        {
+            // A builtin's failure: unlike `r=2`, the rest of the line still runs (no _readonlyViolation).
+            result = "Write-Error " + PsBuild.SingleQuote($"ps-bash: {name}: {assigned}: readonly variable") + " -ErrorAction Continue; " + PsBuild.SetStatus(1);
+            return true;
         }
         // `declare -p ref` for a nameref prints the attribute line; the reference itself is resolved at transpile time, so the
         // runtime has no variable to show.
