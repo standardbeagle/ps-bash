@@ -270,5 +270,6 @@ echo $((myvar-starting_fd))
 0
 ## END
 ## status: 0
+## XFAIL ps-bash gap-oils-redirect redirect (oils): the expectation needs stdout to be a regular file (each >/dev/stdout reopens it with O_TRUNC, dropping earlier output); ps-bash stdout is a stream, so every echo is kept, as in bash writing to a pipe; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher

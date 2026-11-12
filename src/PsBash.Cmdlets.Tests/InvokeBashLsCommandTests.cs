@@ -424,4 +424,20 @@ public class InvokeBashLsCommandTests : IDisposable, IClassFixture<SharedPwshFix
             $"Set-Location '{Q(_tmpDir)}'; Invoke-BashLs '*.log'");
         Assert.Equal(new[] { "keep1.log", "keep2.log" }, names);
     }
+
+    /// <summary>
+    /// REGRESSION (fleet g13-g17 "Pipeline in eval"): Windows has no /dev/null file, so <c>ls /dev/null</c> said
+    /// "cannot access", except on a machine with a stray C:\dev\null file, where it listed that. It is the
+    /// character device everywhere.
+    /// </summary>
+    [Fact]
+    public void Ls_NullDevice_IsListedAsTheCharacterDevice()
+    {
+        var r = CmdResult.Run(_fixture.AcquireFresh(), "Invoke-BashLs /dev/null | ForEach-Object { $_.BashText.TrimEnd() }").AssertSuccess();
+        Assert.Equal(new[] { "/dev/null" }, r.Lines);
+        var l = CmdResult.Run(_fixture.AcquireFresh(), "Invoke-BashLs -l /dev/null | ForEach-Object { $_.BashText.TrimEnd() }").AssertSuccess();
+        Assert.Single(l.Lines);
+        Assert.StartsWith("crw-rw-rw-", l.Lines[0]);
+        Assert.EndsWith(" /dev/null", l.Lines[0]);
+    }
 }

@@ -492,6 +492,25 @@ building. The Linux side's remaining failures are the known `LsSortTimeDifferent
 - builtin-kill "kill -s TERM specifies the signal name" failed once in a spec run and passed 4 of 4 alone: the
   known `sleep 0.1 &` timing flake.
 - XFAIL count after this pass: 394.
+
+### Progress, 2026-11-11 (thirteenth pass: fleet g17 follow-up)
+
+- Machine-dependent results traced to this box having a `C:\dev` folder with stray files `null`, `stdout`, `stderr`
+  and `full`. Redirects to `/dev/stdout`, `/dev/stderr`, `/dev/fd/1|2` and `/dev/full` were opened as files under
+  `C:\dev`: elsewhere "No such file" (status 1), here the output silently went into a file. `ls /dev/null` worked
+  only where `C:\dev\null` existed. `Invoke-BashRedirect` now routes the stream devices to the command's
+  stdout/stderr on every platform (on Linux, opening them reached the host process's descriptors). `/dev/full`
+  fails the first write with ENOSPC and status 1. `ls` lists the null device on Windows as `crw-rw-rw- root`
+  (bash's `-l` size column is `1, 3`; ours prints 0).
+- Unmarked bugs "'echo' and printf fail on writing to full disk" and "other builtins fail on writing to full
+  disk". Marked redirect "Parsing of x={myvar}": its expectation needs stdout to be a regular file, where each
+  `>/dev/stdout` reopens with O_TRUNC; through a pipe bash prints every echo, as ps-bash now does.
+- Test harness: on Windows `~`/`$HOME` follow USERPROFILE, so the interactive harness sets it as well as HOME.
+  `Interactive_CdHomeRelativeThenPwd` passed only where the real `~/work/beagle-term` existed. A GrepStreamingTests
+  timeout now stops the pipeline instead of failing the rest of the class (fleet g16/g17, under load only).
+- `dirs`/`pushd`/`popd` print `/` separators on Windows like `pwd`.
+- XFAIL count after this pass: 393.
+
 ## Suggested order
 
 1. Land A1 and the crash fix once the gate is green.

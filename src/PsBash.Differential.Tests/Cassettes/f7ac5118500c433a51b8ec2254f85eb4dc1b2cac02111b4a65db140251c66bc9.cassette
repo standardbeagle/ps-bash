@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 120
+stdout-length: 75
+stderr-length: 0
+==== SCRIPT ====
+{ { echo e; ls /nonexist-zz; } &>/dev/stdout | sed 's/^/ALL:/'; x=$(echo cap >/dev/stderr); echo "x=[$x]"; } 2>/dev/null
+==== STDOUT ====
+ALL:e
+ALL:ls: cannot access '/nonexist-zz': No such file or directory
+x=[]
+
+==== STDERR ====
+

@@ -123,4 +123,61 @@ public class InvokeBashRedirectCommandTests : IClassFixture<SharedPwshFixture>, 
         Run($"@() | Invoke-BashRedirect -Path '{Q(existing)}'").AssertSuccess();
         Assert.Equal("", File.ReadAllText(existing));
     }
+
+    /// <summary>
+    /// REGRESSION: <c>/dev/stdout</c>, <c>/dev/stderr</c>, <c>/dev/fd/1|2</c> and <c>/dev/full</c> were opened as files
+    /// (<c>C:\dev\stdout</c>): "No such file or directory", or where <c>C:\dev</c> existed the output vanished into
+    /// a file there. They are the command's own streams / a device on every platform.
+    /// </summary>
+    [Theory]
+    [InlineData("/dev/stdout", "Stdout")]
+    [InlineData("/dev/fd/1", "Stdout")]
+    [InlineData("/dev/stderr", "Stderr")]
+    [InlineData("/dev/fd/2", "Stderr")]
+    [InlineData("/dev/full", "Full")]
+    [InlineData("/dev/null", "None")]        // the null device has its own path (ResolveTarget)
+    [InlineData("/dev/fd/3", "None")]
+    [InlineData("dev/stdout", "None")]       // relative: a real file
+    [InlineData("/tmp/stdout", "None")]
+    public void Device_NamesTheShellStreamsAndFull(string raw, string expected)
+        => Assert.Equal(expected, InvokeBashRedirectCommand.Device(raw).ToString());
+
+    [Fact]
+    public void Redirect_ToDevStdout_PassesTheRecordsOn()
+    {
+        var r = Run("Invoke-BashEcho a | Invoke-BashRedirect -Path /dev/stdout").AssertSuccess();
+        Assert.Equal(new[] { "a" }, r.Lines.Select(l => l.Trim()).ToArray());
+    }
+
+    [Fact]
+    public void Redirect_ToDevStderr_WritesStderrNotStdout()
+    {
+        var r = Run("Invoke-BashEcho b | Invoke-BashRedirect -Path /dev/stderr");
+        Assert.Equal(0, r.ExitCode);
+        Assert.Empty(r.Lines);
+        Assert.Contains("b", r.Stderr, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Redirect_ErrorsToDevStderr_StayStderr_AndToDevStdout_BecomeText()
+    {
+        // `ls nosuch 2>/dev/stderr | sed`: sed must not read the error as a line; `2>/dev/stdout` makes it stdout text.
+        var gone = File_("nosuch");
+        var toErr = Run($"Invoke-BashLs '{Q(gone)}' 2>&1 | Invoke-BashRedirect -ErrorPath /dev/stderr | ForEach-Object {{ 'OUT:' + $_ }}");
+        Assert.Empty(toErr.Lines);
+        Assert.Contains("No such file or directory", toErr.Stderr, StringComparison.Ordinal);
+
+        var toOut = Run($"Invoke-BashLs '{Q(gone)}' 2>&1 | Invoke-BashRedirect -ErrorPath /dev/stdout | ForEach-Object {{ 'OUT:' + $_ }}");
+        Assert.Single(toOut.Lines);
+        Assert.StartsWith("OUT:ls: cannot access", toOut.Lines[0]);
+    }
+
+    [Fact]
+    public void Redirect_ToDevFull_FailsAWrite_ButNotAnEmptyCommand()
+    {
+        // bash: `echo hi > /dev/full` is status 1 (ENOSPC on the write) even though echo sets 0 after its last record;
+        // `true > /dev/full` writes nothing and stays 0.
+        Run("Invoke-BashEcho hi | Invoke-BashRedirect -Path /dev/full").AssertFailed(1, "No space left on device");
+        Run("& { } | Invoke-BashRedirect -Path /dev/full").AssertSuccess();
+    }
 }

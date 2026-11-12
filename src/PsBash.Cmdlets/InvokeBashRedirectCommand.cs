@@ -82,6 +82,26 @@ public sealed class InvokeBashRedirectCommand : PSCmdlet
     private FileStream? _errorStream;
     private bool _stdoutToFile;
     private bool _stderrToFile;
+    private RedirectDevice _outDevice;
+    private RedirectDevice _errDevice;
+    private bool _fullReported;
+
+    /// <summary>A redirect target that is one of the shell's own streams or a device, not a file to open.</summary>
+    internal enum RedirectDevice { None, Stdout, Stderr, Full }
+
+    /// <summary>
+    /// <c>/dev/stdout</c>, <c>/dev/stderr</c>, <c>/dev/fd/1|2</c> and <c>/dev/full</c>. On every platform: on Windows they
+    /// were opened as files under <c>C:\dev</c> (a "No such file" error, or where that directory existed, output
+    /// silently written into a file), and on Linux opening them reaches the HOST process's descriptors, not the
+    /// command's stdout/stderr that the pipeline captures.
+    /// </summary>
+    internal static RedirectDevice Device(string? raw) => raw?.Replace('\\', '/') switch
+    {
+        "/dev/stdout" or "/dev/fd/1" => RedirectDevice.Stdout,
+        "/dev/stderr" or "/dev/fd/2" => RedirectDevice.Stderr,
+        "/dev/full" => RedirectDevice.Full,
+        _ => RedirectDevice.None,
+    };
 
     // STREAMING (memory bound): the target is opened up front and every record is written as it
     // arrives through a 64 KB-buffered FileStream, so `big | cmd > f` holds O(buffer), not the
@@ -90,8 +110,14 @@ public sealed class InvokeBashRedirectCommand : PSCmdlet
     // even when the command prints nothing.
     protected override void BeginProcessing()
     {
-        _stdoutToFile = MyInvocation.BoundParameters.ContainsKey(nameof(Path));
-        _stderrToFile = MyInvocation.BoundParameters.ContainsKey(nameof(ErrorPath));
+        _outDevice = Device(Path);
+        _errDevice = Device(ErrorPath);
+        // A stream device is not a file: `> /dev/stdout` leaves the records where they were going, `> /dev/stderr`
+        // sends them to stderr (ProcessRecord). /dev/full counts as a file target whose every write fails.
+        _stdoutToFile = MyInvocation.BoundParameters.ContainsKey(nameof(Path))
+                        && _outDevice is RedirectDevice.None or RedirectDevice.Full;
+        _stderrToFile = MyInvocation.BoundParameters.ContainsKey(nameof(ErrorPath))
+                        && _errDevice is RedirectDevice.None or RedirectDevice.Full;
 
         // `echo hi > file$((1/0))`: the target word failed to expand, so bash abandons the command (status 1)
         // without opening anything. Same path as a target that cannot be opened.
@@ -128,6 +154,8 @@ public sealed class InvokeBashRedirectCommand : PSCmdlet
     private bool TryOpen(string raw, bool append, bool force, out FileStream? stream)
     {
         stream = null;
+        // Opening a stream device or /dev/full always succeeds and creates nothing (null stream: written elsewhere).
+        if (Device(raw) != RedirectDevice.None) return true;
         string? target = ResolveTarget(raw);
         if (target is null) return true;
         try
@@ -190,7 +218,17 @@ public sealed class InvokeBashRedirectCommand : PSCmdlet
         if (InputObject is null || _openFailed) return;
         if (InputObject.BaseObject is ErrorRecord er)
         {
-            if (_stderrToFile) { Write(_errorStream, ErrorPayload(er)); return; }
+            if (_stderrToFile) { WriteTarget(_errorStream, _errDevice, ErrorPayload(er)); return; }
+            // `2> /dev/stderr`: stays stderr (as stderr, not an ErrorRecord object a downstream stage would read as a
+            // line). `2> /dev/stdout`: stdout, i.e. like `2>&1` at that point.
+            if (_errDevice == RedirectDevice.Stderr) { FileSystemHelpers.WriteStderrBytes(this, ErrorPayload(er)); return; }
+            if (_errDevice == RedirectDevice.Stdout)
+            {
+                if (_stdoutToFile) { WriteTarget(_stream, _outDevice, ErrorPayload(er)); return; }
+                if (_outDevice == RedirectDevice.Stderr) { FileSystemHelpers.WriteStderrBytes(this, ErrorPayload(er)); return; }
+                foreach (var line in BashRuntime.EmitBashLines(ErrorPayload(er))) WriteObject(line);
+                return;
+            }
             // Now stdout data (`2>&1 >f`, a bare `2>&1`): a text record, no longer an ErrorRecord.
             if (PassErrors || MergeErrors)
             {
@@ -198,14 +236,38 @@ public sealed class InvokeBashRedirectCommand : PSCmdlet
                 return;
             }
             // Merged into stdout (`&> f`, `>f 2>&1`): written with the stdout records below.
-            if (_stdoutToFile) { Write(_stream, ErrorPayload(er)); return; }
+            if (_stdoutToFile) { WriteTarget(_stream, _outDevice, ErrorPayload(er)); return; }
+            // `&> /dev/stdout`: the merged stderr is stdout text now.
+            if (_outDevice == RedirectDevice.Stdout)
+            {
+                foreach (var line in BashRuntime.EmitBashLines(ErrorPayload(er))) WriteObject(line);
+                return;
+            }
             WriteObject(InputObject);
             return;
         }
+        // `echo msg > /dev/stderr`: the exact bytes on the command's stderr.
+        if (_outDevice == RedirectDevice.Stderr) { FileSystemHelpers.WriteStderrBytes(this, BashRuntime.RecordFilePayload(InputObject)); return; }
         if (!_stdoutToFile) { WriteObject(InputObject); return; }
         // Same per-record rule as tee: record boundary "\n" unless the record is marked
         // NoTrailingNewline (printf x / echo -n x), so `printf x > f` writes exactly "x".
-        Write(_stream, BashRuntime.RecordFilePayload(InputObject));
+        WriteTarget(_stream, _outDevice, BashRuntime.RecordFilePayload(InputObject));
+    }
+
+    /// <summary>
+    /// A write to a file target, or to <c>/dev/full</c>, where every non-empty write fails with ENOSPC: bash reports
+    /// <c>write error: No space left on device</c> once and the command's status is 1 (<c>true &gt; /dev/full</c>
+    /// writes nothing and keeps 0).
+    /// </summary>
+    private void WriteTarget(FileStream? stream, RedirectDevice device, string payload)
+    {
+        if (device != RedirectDevice.Full) { Write(stream, payload); return; }
+        if (payload.Length == 0) return;
+        if (!_fullReported)
+        {
+            _fullReported = true;
+            FileSystemHelpers.WriteStderr(this, "bash: write error: No space left on device");
+        }
     }
 
     /// <summary>One stderr record as bash writes it: the message only, LF-terminated unless the writer
@@ -230,7 +292,8 @@ public sealed class InvokeBashRedirectCommand : PSCmdlet
         Close();
         // A failed open stopped upstream, but a stage that already finished may have reset the
         // status; the failed redirect is the pipeline's status, so `$?` and `set -e` see 1.
-        if (_openFailed) FileSystemHelpers.SetLastExitCode(this, 1);
+        // Same for a write to /dev/full: the upstream command sets its own status after its last record.
+        if (_openFailed || _fullReported) FileSystemHelpers.SetLastExitCode(this, 1);
         // This redirect opened and its command ran: a nested redirect that failed inside the body
         // (`{ echo > /nodir/x; } > log`) already ran its own trap and is not this command's failure.
         else if (SessionState.PSVariable.GetValue(RedirectFailedVariable) is true)

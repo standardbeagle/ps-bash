@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 117
+stdout-length: 12
+stderr-length: 0
+==== SCRIPT ====
+{ echo hi > /dev/full; echo s=$?; printf '%s\n' hi > /dev/full; echo s=$?; true > /dev/full; echo s=$?; } 2>/dev/null
+==== STDOUT ====
+s=1
+s=1
+s=0
+
+==== STDERR ====
+

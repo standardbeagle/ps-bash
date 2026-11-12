@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 113
+stdout-length: 64
+stderr-length: 0
+==== SCRIPT ====
+{ ls /nonexist-zz 2>/dev/stdout | sed 's/^/OUT:/'; ls /nonexist-zz 2>/dev/stderr | sed 's/^/OUT:/'; } 2>/dev/null
+==== STDOUT ====
+OUT:ls: cannot access '/nonexist-zz': No such file or directory
+
+==== STDERR ====
+

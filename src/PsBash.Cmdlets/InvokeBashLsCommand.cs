@@ -531,6 +531,14 @@ public sealed class InvokeBashLsCommand : PSCmdlet
                 // shim (Tier 1 / Tier 3).
             }
 
+            // The null device: Windows has no /dev/null file, so `ls /dev/null` said "cannot access" — or listed a
+            // stray C:\dev\null file where one existed (which made spec results depend on the machine).
+            if (OperatingSystem.IsWindows() && FileSystemHelpers.IsNullDevice(target))
+            {
+                fileBlock.Add(WithOperandDisplayName(NullDeviceEntry(), typedOperand ?? target));
+                continue;
+            }
+
             // Tier 2: real filesystem — System.IO streaming.
             if (resolvedPath != null && Directory.Exists(resolvedPath))
             {
@@ -1120,6 +1128,28 @@ public sealed class InvokeBashLsCommand : PSCmdlet
             obj.Properties.Add(new PSNoteProperty("Uid", uid));
             obj.Properties.Add(new PSNoteProperty("Gid", gid));
         }
+        obj.Properties.Add(new PSNoteProperty("BashText", string.Empty));
+        return obj;
+    }
+
+    /// <summary>The null device as bash lists it (character device, rw for all, owned by root, size 0).</summary>
+    internal static PSObject NullDeviceEntry()
+    {
+        var now = DateTime.Now;
+        var obj = new PSObject();
+        obj.TypeNames.Insert(0, "PsBash.LsEntry");
+        obj.Properties.Add(new PSNoteProperty("Name", "null"));
+        obj.Properties.Add(new PSNoteProperty("FullPath", "/dev/null"));
+        obj.Properties.Add(new PSNoteProperty("IsDirectory", false));
+        obj.Properties.Add(new PSNoteProperty("IsSymlink", false));
+        obj.Properties.Add(new PSNoteProperty("SizeBytes", 0L));
+        obj.Properties.Add(new PSNoteProperty("Permissions", "crw-rw-rw-"));
+        obj.Properties.Add(new PSNoteProperty("LinkCount", 1));
+        obj.Properties.Add(new PSNoteProperty("Owner", "root"));
+        obj.Properties.Add(new PSNoteProperty("Group", "root"));
+        obj.Properties.Add(new PSNoteProperty("LastModified", now));
+        obj.Properties.Add(new PSNoteProperty("AccessTime", now));
+        obj.Properties.Add(new PSNoteProperty("BirthTime", now));
         obj.Properties.Add(new PSNoteProperty("BashText", string.Empty));
         return obj;
     }
