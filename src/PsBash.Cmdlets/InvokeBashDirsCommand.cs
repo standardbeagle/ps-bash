@@ -124,13 +124,25 @@ public sealed class InvokeBashDirsCommand : PSCmdlet
             if (item?.BaseObject is string s) entries.Add(s);
         }
 
-        // bash abbreviates a leading $HOME to ~ unless -l (long form) is given.
-        if (!longForm)
-        {
-            var home = BashRuntime.MapPath(BashVariableStore.Get("HOME") ?? "");
-            for (int i = 0; i < entries.Count; i++) entries[i] = TildeAbbreviate(entries[i], home);
-        }
+        string? home = longForm ? null : BashRuntime.MapPath(BashVariableStore.Get("HOME") ?? "");
+        Present(entries, home, OperatingSystem.IsWindows());
         return entries;
+    }
+
+    /// <summary>
+    /// Stack entries as printed. On Windows they are written like `pwd` and $PWD (`C:/Users/x`): a stack of
+    /// `C:\Users\x` entries did not match them, and `~\dir` mixed separators (a backslash is part of a directory
+    /// name elsewhere, so only Windows). A leading <paramref name="home"/> becomes `~`; null = long form (`-l`).
+    /// </summary>
+    internal static void Present(List<string> entries, string? home, bool windows)
+    {
+        if (windows)
+        {
+            for (int i = 0; i < entries.Count; i++) entries[i] = entries[i].Replace('\\', '/');
+            home = home?.Replace('\\', '/');
+        }
+        if (home is null) return;
+        for (int i = 0; i < entries.Count; i++) entries[i] = TildeAbbreviate(entries[i], home);
     }
 
     /// <summary>pushd / popd print the new stack on one line after a successful change, as bash does.</summary>

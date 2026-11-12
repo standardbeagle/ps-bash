@@ -28,6 +28,9 @@ public class InvokeBashDirsCommandTests : IClassFixture<SharedPwshFixture>
         return RunRaw(pwsh, script).Select(o => o?.ToString() ?? "").ToArray();
     }
 
+    /// <summary>A directory as dirs/pushd/popd print it: like `pwd`, with `/` separators on Windows.</summary>
+    private static string Shown(string dir) => OperatingSystem.IsWindows() ? dir.Replace('\\', '/') : dir;
+
     private System.Management.Automation.PowerShell NewPwsh()
     {
         return _fixture.AcquireFresh();
@@ -55,7 +58,7 @@ public class InvokeBashDirsCommandTests : IClassFixture<SharedPwshFixture>
         RunLines(pwsh, $"Set-Location '{tmp}'");
         var lines = RunLines(pwsh, "Invoke-BashDirs");
         Assert.Single(lines);
-        Assert.Equal(tmp, lines[0]);
+        Assert.Equal(Shown(tmp), lines[0]);
     }
 
     [Fact]
@@ -73,7 +76,7 @@ public class InvokeBashDirsCommandTests : IClassFixture<SharedPwshFixture>
             var lines = RunLines(pwsh, "Invoke-BashDirs");
             Assert.Single(lines);
             // Current is subdir; stack has tmp. Default emits "subdir tmp".
-            Assert.Equal($"{subdir} {tmp}", lines[0]);
+            Assert.Equal($"{Shown(subdir)} {Shown(tmp)}", lines[0]);
         }
         finally
         {
@@ -104,9 +107,9 @@ public class InvokeBashDirsCommandTests : IClassFixture<SharedPwshFixture>
             Assert.StartsWith(" 0  ", lines[0]);
             Assert.StartsWith(" 1  ", lines[1]);
             Assert.StartsWith(" 2  ", lines[2]);
-            Assert.EndsWith(d2, lines[0]);
-            Assert.EndsWith(d1, lines[1]);
-            Assert.EndsWith(tmp, lines[2]);
+            Assert.EndsWith(Shown(d2), lines[0]);
+            Assert.EndsWith(Shown(d1), lines[1]);
+            Assert.EndsWith(Shown(tmp), lines[2]);
         }
         finally
         {
@@ -131,8 +134,8 @@ public class InvokeBashDirsCommandTests : IClassFixture<SharedPwshFixture>
             var lines = RunLines(pwsh, "Invoke-BashDirs -p");
             // bash lists the current directory first, then the stack.
             Assert.Equal(2, lines.Length);
-            Assert.Equal(d1, lines[0]);
-            Assert.Equal(tmp, lines[1]);
+            Assert.Equal(Shown(d1), lines[0]);
+            Assert.Equal(Shown(tmp), lines[1]);
         }
         finally
         {
@@ -184,7 +187,7 @@ public class InvokeBashDirsCommandTests : IClassFixture<SharedPwshFixture>
             RunLines(pwsh, $"Invoke-BashPushd '{d1}'");
             RunLines(pwsh, "Invoke-BashDirs -c");
             var lines = RunLines(pwsh, "Invoke-BashDirs -p");
-            Assert.Equal(new[] { d1 }, lines);
+            Assert.Equal(new[] { Shown(d1) }, lines);
         }
         finally
         {
@@ -210,7 +213,39 @@ public class InvokeBashDirsCommandTests : IClassFixture<SharedPwshFixture>
         RunLines(pwsh, $"Set-Location '{tmp}'");
         var lines = RunLines(pwsh, "dirs");
         Assert.Single(lines);
-        Assert.Equal(tmp, lines[0]);
+        Assert.Equal(Shown(tmp), lines[0]);
+    }
+
+    /// <summary>
+    /// REGRESSION: the stack printed `C:\Users\x` while `pwd` and $PWD print `C:/Users/x`, and a stack entry under
+    /// $HOME printed `~\dir` (mixed separators; see InvokeBashDirsTildeTests). Every entry uses `/` like `pwd`.
+    /// </summary>
+    [SkippableFact]
+    [Trait("Platform", "Windows")]
+    public void Dirs_StackEntries_UseForwardSlashesLikePwd()
+    {
+        Skip.IfNot(OperatingSystem.IsWindows(), "backslash is a directory separator only on Windows");
+        var pwsh = NewPwsh();
+        var tmp = Path.GetTempPath().TrimEnd(Path.DirectorySeparatorChar);
+        var d1 = Path.Combine(tmp, "psbash-dirs-sep-" + Guid.NewGuid().ToString("N").Substring(0, 8));
+        var sub = Path.Combine(d1, "sub");
+        Directory.CreateDirectory(sub);
+        try
+        {
+            RunLines(pwsh, $"Set-Location '{tmp}'");
+            RunLines(pwsh, $"Invoke-BashPushd '{sub}'");
+            var lines = RunLines(pwsh, "Invoke-BashDirs -p");
+            Assert.Equal(2, lines.Length);
+            Assert.All(lines, l => Assert.DoesNotContain('\\', l));
+            var pwd = RunLines(pwsh, "Invoke-BashPwd | ForEach-Object { Get-BashText -InputObject $_ }");
+            Assert.Equal(pwd[^1], lines[0]);
+        }
+        finally
+        {
+            LeaveTestDirs(pwsh, tmp);
+            Directory.Delete(sub);
+            Directory.Delete(d1);
+        }
     }
 
     [Fact]
