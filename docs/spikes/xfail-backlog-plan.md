@@ -511,6 +511,32 @@ building. The Linux side's remaining failures are the known `LsSortTimeDifferent
 - `dirs`/`pushd`/`popd` print `/` separators on Windows like `pwd`.
 - XFAIL count after this pass: 393.
 
+### Progress, 2026-11-12 (fourteenth pass: arrays)
+
+- `${!ref}` naming a computed variable (LINENO, RANDOM, SECONDS, BASHPID, UID, ...) expands to its value.
+- An element of an unset array is empty: `${u[1]}` aborted the whole command line with "Cannot index into a null
+  array". `${!a[@]-d}` is indirection through the joined elements. A failing indirect expansion abandons any
+  command with status 1.
+- A subscript that assigns (`a[a[0]=1]=X`, `b[i++]=p`) keeps its write.
+- Element initializers (`declare b[2]=y`, `typeset a[3]=4`, `declare -A m[k]+=v`) declare the array and assign the
+  element. A redirected compound (`{ ...; } 2>/dev/null`, `if ... fi >f`) runs dot-sourced, so array assignments in
+  it survive.
+- A subscript is a word: quotes, nested `${...}` and nested `[...]` stay inside it, and its expansions expand
+  before the lookup (`${a[$i+1]}`, `${m["$k b"]}`, `ref='A[$key]'; ${!ref}`). A `$( )` in an indirect subscript is
+  still never run (policy). A scalar and element 0 are one variable (`a=z` on an array writes `a[0]`;
+  `c=s; c[1]=t` keeps `s` as `c[0]`). Arithmetic on an array's bare name (`(( a++ ))`, `let b=7`) writes element 0.
+- `declare -A` on an indexed array and `declare -a` on an associative one are refused (status 1). array-literal
+  "BashArray cannot be changed to BashAssoc" stays XFAIL: it uses `a` and `A`, one variable in ps-bash
+  (intentional-differences.md). A plain `declare` now honors its own redirects.
+- The emitter's `_arrayVars` lacked `[ThreadStatic]`: concurrent transpiles (the Core test host) saw each other's
+  names, which made the new ArraySubscriptWordTests flaky.
+- Not fixed: `declare` inside a function writes the global array (bash makes a local); `declare -a q=3` makes a
+  scalar; `declare -ai w; w[0]=1+2` is not arithmetic; keys like `["]"]`; array-literal "[k1]=v1 looking like brace
+  expansions"; array-sparse `$0` and `compgen -F` cases. builtin-cd / builtin-dirs XFAILs are Windows path forms.
+- Fleet g19 (de8efbcf): Linux Core and Cmdlets green; Security had two 15 s spawn timeouts under load (pass
+  locally). Windows real-launcher spec cases in array / var-op-slice timed out under load (pass locally).
+- XFAIL count after this pass: 377.
+
 ## Suggested order
 
 1. Land A1 and the crash fix once the gate is green.
