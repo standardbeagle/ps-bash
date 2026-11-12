@@ -341,7 +341,6 @@ ref val
 ref val
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array-assoc array-assoc (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### printf -v and assoc array
@@ -565,7 +564,6 @@ bar
 b
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array-assoc array-assoc (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### lookup by unquoted string doesn't work in OSH because it's a variable
@@ -636,7 +634,6 @@ foo
 42
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array-assoc array-assoc (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Append to associative array value A['x']+='suffix'
@@ -684,7 +681,6 @@ echo ${assoc[1]} ${assoc[2]} ${assoc}
 1 2 string
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array-assoc array-assoc (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Associative array expressions inside (( )) with keys that look like numbers

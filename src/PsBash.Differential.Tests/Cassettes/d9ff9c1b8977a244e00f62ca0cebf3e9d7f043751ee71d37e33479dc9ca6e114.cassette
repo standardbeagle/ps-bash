@@ -1,0 +1,30 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 334
+stdout-length: 56
+stderr-length: 0
+==== SCRIPT ====
+b[0]=x; echo "$b" ${b}; b=y; echo "$b ${b[0]}"; unset b; echo "[$b]"
+c=s; c[1]=t; echo "$c ${c[1]}"; c=u; echo "$c ${c[@]}"
+f() { local d; d[0]=in; echo "$d"; }; f; echo "[$d]"
+e[3]=z; echo "[$e]"; e=w; echo "${e[@]}"
+a=(x y); a+=q; echo "${a[@]}"
+declare -A m; m[1]=1; echo "[${m}]"; m[0]=zero; echo "$m"; m=string; echo "${m[1]} $m"
+==== STDOUT ====
+x x
+y y
+[]
+s t
+u u t
+in
+[]
+[]
+w z
+xq y
+[]
+zero
+1 string
+
+==== STDERR ====
+

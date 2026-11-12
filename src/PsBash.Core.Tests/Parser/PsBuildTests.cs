@@ -104,6 +104,17 @@ public class PsBuildTests
         => Assert.Equal("$(if ($null -ne $a) { $a['1'] })", PsBuild.NullSafeElement("$a", "'1'"));
 
     [Fact]
+    public void SeedArrayFromScalar_MakesTheScalarElementZero()
+        => Assert.Equal("if ($null -eq $c -and $null -ne $env:c) { $c = @($env:c) }", PsBuild.SeedArrayFromScalar("$c", "$env:c"));
+
+    [Fact]
+    public void WriteElementZeroOrScalar_WritesElementZeroOfAnArray()
+    {
+        Assert.Equal("if ($a -is [array] -or $a -is [System.Collections.IDictionary]) { $a = Set-BashElement $a '0' (\"z\") } else { $env:a = \"z\" }",
+            PsBuild.WriteElementZeroOrScalar("$a", "\"z\"", append: false, "$env:a = \"z\""));
+        Assert.Contains("'0' (\"z\") -Append", PsBuild.WriteElementZeroOrScalar("$a", "\"z\"", append: true, "$env:a += \"z\""));
+    }
+    [Fact]
     public void VoidStatement_SingleStatement_UsesGrouping()
         => Assert.Equal("[void]($env:x = 1)", PsBuild.VoidStatement("$env:x = 1"));
 

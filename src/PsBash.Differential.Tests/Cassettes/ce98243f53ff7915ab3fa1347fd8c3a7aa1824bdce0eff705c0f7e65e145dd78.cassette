@@ -1,0 +1,24 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 279
+stdout-length: 33
+stderr-length: 0
+==== SCRIPT ====
+declare -A A=(['K']=val ['a b']=sp ['$key']=lit)
+key=K; ref='A[$key]'; echo "1 ${!ref}"
+ref='A["$key"]'; echo "2 ${!ref}"
+ref='A[${key}]'; echo "3 ${!ref}"
+ref="A['\$key']"; echo "4 ${!ref}"
+k2='a b'; ref='A[$k2]'; echo "5 ${!ref}"
+a=(p q r); i=1; ref='a[$i+1]'; echo "7 ${!ref}"
+==== STDOUT ====
+1 val
+2 val
+3 val
+4 lit
+5 sp
+7 r
+
+==== STDERR ====
+

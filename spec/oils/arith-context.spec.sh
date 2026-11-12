@@ -7,7 +7,6 @@ a=(1 2 3)
 echo ${a[a[0]]} ${a[a[a[0]]]}
 ## stdout: 2 3
 ## status: 0
-## XFAIL ps-bash gap-oils-arith-context arith-context (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Slicing of string with constants
@@ -41,7 +40,6 @@ a[a[1]]=X
 echo ${a[@]}
 ## stdout: 1 2 X
 ## status: 0
-## XFAIL ps-bash gap-oils-arith-context arith-context (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Slicing of string with expressions

@@ -189,6 +189,21 @@ public static class PsBuild
         => "$(if ($null -ne " + arrayVar + ") { " + arrayVar + "[" + index + "] })";
 
     /// <summary>
+    /// `c=s; c[1]=t`: before an element write, a variable that so far holds only a scalar becomes an array whose
+    /// element 0 is that scalar (bash: `declare -a c=([0]="s" [1]="t")`).
+    /// </summary>
+    public static string SeedArrayFromScalar(string arrayVar, string scalarVar)
+        => "if ($null -eq " + arrayVar + " -and $null -ne " + scalarVar + ") { " + arrayVar + " = @(" + scalarVar + ") }";
+
+    /// <summary>
+    /// `a=z` / `a+=z` where a may be an array: an array (or associative array) takes the value as element 0 (key "0");
+    /// otherwise <paramref name="scalarWrite"/>, the ordinary scalar assignment, runs.
+    /// </summary>
+    public static string WriteElementZeroOrScalar(string arrayVar, string value, bool append, string scalarWrite)
+        => "if (" + arrayVar + " -is [array] -or " + arrayVar + " -is [System.Collections.IDictionary]) { " + arrayVar
+           + " = Set-BashElement " + arrayVar + " '0' (" + value + ")" + (append ? " -Append" : "") + " } else { " + scalarWrite + " }";
+
+    /// <summary>
     /// The value of one emitted COMMAND-MODE argument, as an expression: <c>&amp; { $args[0] } arg</c>. An argument
     /// is command-mode text (<c>x=$(…)</c>, <c>-o$(…)</c>): assigned directly (<c>$v = x=$(…)</c>) it parses as a
     /// command; a param-less script block takes it, dash-led words included, exactly as the command would.

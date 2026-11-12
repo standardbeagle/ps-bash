@@ -3785,6 +3785,14 @@ public static partial class PsEmitter
                 // array, then evaluated as arithmetic at run time; Set-BashElement pads/keys and returns the container.
                 // A leading `~` is not a tilde prefix in a subscript (`m[~]=v` keys `~`, not $HOME).
                 string target = ArrayWriteTarget(ResolveNameref(baseName));
+                if (IsValidVarName(baseName))
+                {
+                    _arrayVars?.Add(baseName); // a bare `$a` now reads `${a[0]}`
+                    // `c=s; c[1]=t`: a scalar becomes element 0 of the array.
+                    if (target.StartsWith('$') && _assocVars?.Contains(baseName) != true && EnvShadowName(baseName) is null
+                        && PsBuild.TryMapSpecialVar(baseName, braced: false, false) is null)
+                        sb.Append(PsBuild.SeedArrayFromScalar(target, "$env:" + baseName)).Append("; ");
+                }
                 string key = FlattenPartsToDoubleQuotedString(BashParser.DecomposeWord(subscript.StartsWith('~') ? "\\" + subscript : subscript));
                 // `a[a[0]=1]=X`: a subscript that assigns runs first, here, so the array read below already has its
                 // write (Set-BashElement evaluated it on a copy of the array and returned that, losing a[0]=1).
@@ -3800,6 +3808,10 @@ public static partial class PsEmitter
                 continue;
             }
 
+            // `a=(x y); a=z` / `a+=z`: a scalar write to an array writes element 0 (`${a[@]}` = z y).
+            int scalarStart = sb.Length;
+            bool toArray0 = !cmd.IsLocal && !cmd.IsExport && pair.Value is not null && _arrayVars?.Contains(pair.Name) == true
+                            && _intVars?.Contains(pair.Name) != true && IsValidVarName(pair.Name) && ResolveNameref(pair.Name) == pair.Name;
             sb.Append(varPrefix);
             sb.Append(ResolveNameref(pair.Name));
             if (pair.Value is null)
@@ -3820,6 +3832,13 @@ public static partial class PsEmitter
                     : pair.Op == AssignOp.Equal && _intVars?.Contains(pair.Name) == true
                         ? "[string](Invoke-BashArith ([string](" + assigned + ")))"
                         : pair.Op == AssignOp.Equal ? CaseAttr(pair.Name, assigned) : assigned);
+                if (toArray0)
+                {
+                    string scalarWrite = sb.ToString(scalarStart, sb.Length - scalarStart);
+                    sb.Length = scalarStart;
+                    string arr = ArrayWriteTarget(pair.Name);
+                    sb.Append(PsBuild.WriteElementZeroOrScalar(arr, pair.Op == AssignOp.Equal ? CaseAttr(pair.Name, assigned) : assigned, pair.Op == AssignOp.PlusEqual, scalarWrite));
+                }
             }
         }
         // `local`/`export x=$(false)`: the status is the BUILTIN's (0), not the substitution's —
@@ -4600,7 +4619,8 @@ public static partial class PsEmitter
         if (isAssoc && !isPrint && _assocVars is not null)
         {
             string? assocName = exprName ?? (varName is null ? null : varName.Split('=')[0]);
-            if (assocName is not null && IsValidVarName(assocName)) _assocVars.Add(assocName);
+            // `declare -A m; m[0]=x; echo $m`: a bare `$m` reads the element keyed 0.
+            if (assocName is not null && IsValidVarName(assocName)) { _assocVars.Add(assocName); _arrayVars?.Add(assocName); }
         }
         if (!isPrint && !isAssoc && _intVars is not null && cmd.Words.Skip(1).Any(w => GetLiteralValue(w) == "-i"))
         {
@@ -6298,21 +6318,35 @@ public static partial class PsEmitter
         var indexedEntries = new List<string>(array.Elements.Length);
         foreach (var elem in array.Elements)
         {
-            // The lexer reads the subscript `[k1]` as a glob part, then `=v1` as a literal.
-            string? first = elem.Parts.IsDefaultOrEmpty ? null : elem.Parts[0] switch
+            // The lexer reads the subscript `[k1]` as a glob part, then `=v1` as a literal; a single-quoted key
+            // (`['$k']=v`) arrives as `[`, the quoted part, then `]=v`: join the run up to the `]=`.
+            var firstText = new StringBuilder();
+            int used = 0;
+            while (used < elem.Parts.Length)
             {
-                WordPart.Literal l => l.Value,
-                WordPart.GlobPart g => g.Pattern,
-                _ => null,
-            };
-            if (first is not { Length: > 2 } || first[0] != '[') return false;
+                string? piece = elem.Parts[used] switch
+                {
+                    WordPart.Literal l => l.Value,
+                    WordPart.GlobPart g => g.Pattern,
+                    WordPart.SingleQuoted sq when used > 0 => "'" + sq.Value + "'",
+                    _ => null,
+                };
+                if (piece is null) break;
+                firstText.Append(piece);
+                used++;
+                if (piece.Contains("]=", StringComparison.Ordinal)
+                    || (piece.EndsWith(']') && used < elem.Parts.Length && elem.Parts[used] is WordPart.Literal { Value: var nx } && nx.StartsWith('=')))
+                    break;
+            }
+            string first = firstText.ToString();
+            if (used == 0 || first.Length <= 2 || first[0] != '[') return false;
             string key, head;
             ImmutableArray<WordPart> parts;
-            if (first[^1] == ']' && elem.Parts.Length > 1 && elem.Parts[1] is WordPart.Literal { Value: var eqTail } && eqTail.StartsWith('='))
+            if (first[^1] == ']' && elem.Parts.Length > used && elem.Parts[used] is WordPart.Literal { Value: var eqTail } && eqTail.StartsWith('='))
             {
                 key = first[1..^1];
                 head = eqTail[1..];
-                parts = elem.Parts.RemoveRange(0, 2);
+                parts = elem.Parts.RemoveRange(0, used + 1);
             }
             else
             {
@@ -6320,7 +6354,7 @@ public static partial class PsEmitter
                 if (close < 2) return false;
                 key = first[1..close];
                 head = first[(close + 2)..];
-                parts = elem.Parts.RemoveAt(0);
+                parts = elem.Parts.RemoveRange(0, used);
             }
             // `['a+1']=c` / `["q r"]=2`: the quotes delimit the key, they are not part of it.
             if (key.Length == 0 || (!numericKeysAllowed && key.All(char.IsDigit))) return false;
@@ -7976,7 +8010,7 @@ public static partial class PsEmitter
     /// </summary>
     private static bool IsUnquotedElementWord(CompoundWord word)
         => word.Parts is [WordPart.BracedVarSub { Name: var n, Suffix: { Length: > 2 } s }]
-           && IsOrdinaryVarName(n) && s[0] == '[' && s[^1] == ']' && s.IndexOf(']') == s.Length - 1
+           && IsOrdinaryVarName(n) && s[0] == '[' && s[^1] == ']' && BashParser.FindSubscriptClose(s, 0) == s.Length - 1
            && s is not ("[@]" or "[*]") && s[1] != '@' && s[1] != '*';
     /// <summary>The suffix of <c>${#v}</c> / <c>${#a[@]}</c> / <c>${#a[0]}</c>: a number, never split.</summary>
     private static bool IsLengthSuffix(string s)
@@ -8670,7 +8704,7 @@ public static partial class PsEmitter
         // the subscript-PLUS-operator forms ${arr[@]:1:2}, ${arr[0]##*/}, ${arr[i]:-x}.
         if (bvs.Suffix.StartsWith('['))
         {
-            int close = bvs.Suffix.IndexOf(']');
+            int close = BashParser.FindSubscriptClose(bvs.Suffix, 0);
             if (close > 0)
             {
                 string subscript = bvs.Suffix[1..close];
@@ -8808,7 +8842,7 @@ public static partial class PsEmitter
             }
             // ${#a[N]}: the length of ONE element (a string), not of the array.
             // (`${s#[0-9]}` is a strip pattern that merely starts with `[`: the subscript must be arithmetic text.)
-            if (System.Text.RegularExpressions.Regex.IsMatch(subscript, @"^[\w+\-*/% ]+$"))
+            if (System.Text.RegularExpressions.Regex.IsMatch(subscript, @"^[\w+\-*/% ]+$") || BashParser.FindSubscriptClose(bvs.Suffix, 2) == bvs.Suffix.Length - 1)
             {
                 string elemLen = EmitBracedVar(bvs with { Suffix = "[" + subscript + "]" });
                 return $"$(([string]({elemLen})).Length)";
@@ -9292,14 +9326,15 @@ public static partial class PsEmitter
         if (subscript.Length >= 2 && subscript[0] is '"' or '\'' && subscript[^1] == subscript[0]
             && subscript.AsSpan(1, subscript.Length - 2).IndexOfAny("$`\\\"'") < 0)
             subscript = subscript[1..^1];
-        // `${a[$(cmd) + 1]}`: a command substitution in the subscript is expanded first, then the result evaluated.
-        if (subscript.Contains("$(") || subscript.Contains('`'))
+        // `${a[$(cmd) + 1]}` / `${a[$i+1]}` / `${m["$k b"]}` / `${m[${k}x]}`: expansions and quotes in the subscript are
+        // expanded (quotes removed) first; an indexed array then evaluates the result as arithmetic.
+        if (subscript.IndexOfAny(['$', '`', '"', '\'', '\\']) >= 0)
         {
             string dyn = FlattenPartsToDoubleQuotedString(BashParser.DecomposeWord(subscript));
             return $"$(if ({arrayVar} -is [System.Collections.IDictionary]) {{ {dyn} }} else {{ [long](Invoke-BashArith {dyn}) }})";
         }
         string key = PsBuild.SingleQuote(subscript);
-        if (!System.Text.RegularExpressions.Regex.IsMatch(subscript, @"^[\w+\-*/% ()]+$"))
+        if (!System.Text.RegularExpressions.Regex.IsMatch(subscript, @"^[\w+\-*/% ()\[\]]+$"))
             return key;
         return $"$(if ({arrayVar} -is [System.Collections.IDictionary]) {{ {key} }} else {{ [long](Invoke-BashArith {key}) }})";
     }

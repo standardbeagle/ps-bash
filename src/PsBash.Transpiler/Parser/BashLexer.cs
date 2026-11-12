@@ -1013,13 +1013,26 @@ public static class BashLexer
                 i++;
 
             // Allow optional [subscript] after the name.
+            // The subscript nests brackets and may hold quoted text (`m["${a[@]}"]=v`, `a[a[0]=1]=X`): a `]` inside
+            // quotes or a nested `[` does not close it.
             if (i < value.Length && value[i] == '[')
             {
-                i++; // skip [
-                while (i < value.Length && value[i] != ']')
+                int depth = 0;
+                while (i < value.Length)
+                {
+                    char c = value[i];
+                    if (c == '\\') { i += 2; continue; }
+                    if (c is '\'' or '"')
+                    {
+                        int j = i + 1;
+                        while (j < value.Length && value[j] != c) j += c == '"' && value[j] == '\\' ? 2 : 1;
+                        i = j + 1;
+                        continue;
+                    }
+                    if (c == '[') depth++;
+                    else if (c == ']' && --depth == 0) { i++; break; }
                     i++;
-                if (i < value.Length)
-                    i++; // skip ]
+                }
             }
 
             // Support += as well as plain =

@@ -106,6 +106,30 @@ function Get-BashFuncNames {
 # name (an array `ref` reads as its element 0); $Pos the positional parameters. The target is a variable name, a
 # positional index, a special parameter (@ * # ?), or an array reference (`a[0]`, `a[@]`, `m[key]`).
 # -NameOnly returns the plain variable name the target denotes (for ${!ref:=word}).
+# The text of an indirect subscript (`ref='A["$k x"]'`) as a word: quotes removed, `$name` / `${name}` expanded outside
+# single quotes, `\c` escaped. Only plain variable references expand; `$(...)` stays literal text (never executed).
+function Expand-BashSubscriptWord([string]$Text) {
+    $sb = [System.Text.StringBuilder]::new()
+    $q = [char]0
+    for ($i = 0; $i -lt $Text.Length; $i++) {
+        $c = $Text[$i]
+        if ($q -eq [char]"'") { if ($c -eq [char]"'") { $q = [char]0 } else { [void]$sb.Append($c) }; continue }
+        if ($c -eq [char]"'" -and $q -eq [char]0) { $q = $c; continue }
+        if ($c -eq [char]'"') { $q = if ($q -eq [char]'"') { [char]0 } else { $c }; continue }
+        if ($c -eq [char]'\' -and $i + 1 -lt $Text.Length) { $i++; [void]$sb.Append($Text[$i]); continue }
+        if ($c -eq [char]'$' -and $Text.Substring($i) -match '^\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))') {
+            $vn = if ($Matches[1]) { $Matches[1] } else { $Matches[2] }
+            $i += $Matches[0].Length - 1
+            $ev = [System.Environment]::GetEnvironmentVariable($vn)
+            if ($null -eq $ev) { $pv = Get-Variable -Name $vn -ValueOnly -Scope Global -ErrorAction Ignore; $ev = if ($pv -is [array]) { $pv[0] } elseif ($pv -is [System.Collections.IDictionary]) { $pv['0'] } else { $pv } }
+            [void]$sb.Append([string]$ev)
+            continue
+        }
+        [void]$sb.Append($c)
+    }
+    $sb.ToString()
+}
+
 function Get-BashIndirectValue {
     param([AllowNull()]$Ref, [string]$RefName, [object[]]$Pos = @(), [switch]$NameOnly, [int]$Line = 0)
     $refSet = $null -ne $Ref
@@ -156,8 +180,9 @@ function Get-BashIndirectValue {
         $sub = $rawSub.Trim('"', "'")
         if ($null -eq $v) { return $null }
         if ($v -is [System.Collections.IDictionary]) {
-            # An assoc key is a word: its quotes are removed wherever they are (`assoc["al"e]` is key `ale`).
-            $sub = [PsBash.Cmdlets.BashQuoteText]::RemoveQuotes($rawSub)
+            # An assoc key is a word: its quotes are removed wherever they are (`assoc["al"e]` is key `ale`), and a
+            # variable in it expands (`ref='A[$key]'`), except inside single quotes. A command substitution is not run.
+            $sub = if ($rawSub.Contains('$')) { Expand-BashSubscriptWord $rawSub } else { [PsBash.Cmdlets.BashQuoteText]::RemoveQuotes($rawSub) }
             if ($sub -eq '@' -or $sub -eq '*') { return (@($v.Values) -join ' ') }
             return $v[$sub]
         }

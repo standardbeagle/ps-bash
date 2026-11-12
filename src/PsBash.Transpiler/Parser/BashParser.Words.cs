@@ -416,6 +416,42 @@ public sealed partial class BashParser
         return lead + sb.ToString();
     }
 
+    /// <summary>
+    /// The index of the `]` closing the subscript whose `[` is at <paramref name="open"/>, or -1. A quoted span, a nested
+    /// `${…}` / `$(…)` and a nested `[…]` do not close it (`["${a[@]}"]`, `[a[1]]`, `["]"]`).
+    /// </summary>
+    internal static int FindSubscriptClose(string s, int open)
+    {
+        int depth = 0;
+        for (int i = open; i < s.Length; i++)
+        {
+            char c = s[i];
+            if (c == '\\') { i++; continue; }
+            if (c is '"' or '\'')
+            {
+                int j = i + 1;
+                while (j < s.Length && s[j] != c) j += c == '"' && s[j] == '\\' ? 2 : 1;
+                i = j;
+                continue;
+            }
+            if (c == '$' && i + 1 < s.Length && s[i + 1] is '{' or '(')
+            {
+                char o = s[i + 1], cl = o == '{' ? '}' : ')';
+                int d = 0, j = i + 1;
+                for (; j < s.Length; j++)
+                {
+                    if (s[j] == o) d++;
+                    else if (s[j] == cl && --d == 0) break;
+                }
+                i = j;
+                continue;
+            }
+            if (c == '[') depth++;
+            else if (c == ']' && --depth == 0) return i;
+        }
+        return -1;
+    }
+
     private static int ParseBracedVar(string raw, int pos, ImmutableArray<WordPart>.Builder parts, bool inDoubleQuote = false)
     {
         // ${x:-${x:-…}} recurses through the argument word: bounded (NestingGuard).
@@ -560,9 +596,14 @@ public sealed partial class BashParser
             if (pos < len && raw[pos] == '[')
             {
                 int subStart = pos;
-                pos++; // skip [
-                while (pos < len && raw[pos] != ']')
-                    pos++;
+                if (FindSubscriptClose(raw, pos) is var subClose and > 0)
+                    pos = subClose;
+                else
+                {
+                    pos++; // skip [
+                    while (pos < len && raw[pos] != ']')
+                        pos++;
+                }
                 if (pos < len)
                     pos++; // skip ]
                 lengthSuffix = "#L" + raw[subStart..pos]; // "#L[" = length of an element/array; "#[" is a strip pattern
@@ -613,7 +654,12 @@ public sealed partial class BashParser
         if (pos < len && raw[pos] == '[')
         {
             int subStart = pos;
-            pos++; // skip [
+            // `${m["${a[@]}"]}` / `${a[a[1]]}`: a quoted span, a nested `${…}` and a nested `[…]` do not end the
+            // subscript at their `]`.
+            if (FindSubscriptClose(raw, pos) is var subClose and > 0 && subClose < len)
+                pos = subClose;
+            else
+                pos++; // skip [
             while (pos < len && raw[pos] != ']')
             {
                 // POSIX bracket expressions contain a nested terminator, e.g.

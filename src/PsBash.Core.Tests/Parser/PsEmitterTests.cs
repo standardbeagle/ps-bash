@@ -4914,7 +4914,7 @@ public class PsEmitterTests
     public void Transpile_AssociativeArrayAssignment_EmitsHashtableEntry()
     {
         var result = PsEmitter.Transpile("map[key]=val");
-        Assert.Equal("$map = Set-BashElement $map \"key\" \"val\"", result);
+        Assert.Equal("if ($null -eq $map -and $null -ne $env:map) { $map = @($env:map) }; $map = Set-BashElement $map \"key\" \"val\"", result);
     }
 
     // Oracle: bash `c[$i]=v` assigns element $i (the subscript was the literal text '$i') and `a[2]=x` on a

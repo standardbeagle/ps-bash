@@ -1,0 +1,27 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 550
+stdout-length: 62
+stderr-length: 0
+==== SCRIPT ====
+a=(x y z); i=1; echo ${a[$i+1]} ${a["1"]} "${a[$i]}" ${a[${i}]} "${a["$i"]}"
+declare -A m; m[ab]=1; m["a b"]=2; m['$k']=lit; k=a; echo ${m[${k}b]} "${m["$k b"]}" "${m['a b']}" "${m['$k']}" "${m[\$k]}"
+echo "${m["$k"b]:-none}" "${m[$k$k]-unset}"
+i='1;echo pwn'; echo "${m["$i"]-safe}"
+declare -A assoc; array=(1 2 3); assoc["${array[@]}"]=foo; assoc[42]=43
+echo "${assoc["${array[@]}"]}" ${assoc["${array[@]}"]:-d} "${#assoc["${array[@]}"]}"
+for e in "${!assoc[@]}"; do echo "$e"; done | sort
+n=(5 0 9); echo "${n[n[1]]}" "${n[n[1]+1]}" "${n[ n[1] ]}"
+==== STDOUT ====
+z y y y y
+1 2 2 lit lit
+1 unset
+safe
+foo foo 3
+1 2 3
+42
+5 0 5
+
+==== STDERR ====
+
