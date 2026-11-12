@@ -181,6 +181,21 @@ public static class PsBuild
     public static string Subexpr(string expr) => "$(" + expr + ")";
 
     /// <summary>
+    /// One element of an array that may be unset: <c>$(if ($null -ne $a) { $a[index] })</c>. Indexing <c>$null</c>
+    /// throws "Cannot index into a null array" (it aborted the whole command line); bash reads an element of an
+    /// unset array as empty.
+    /// </summary>
+    public static string NullSafeElement(string arrayVar, string index)
+        => "$(if ($null -ne " + arrayVar + ") { " + arrayVar + "[" + index + "] })";
+
+    /// <summary>
+    /// The value of one emitted COMMAND-MODE argument, as an expression: <c>&amp; { $args[0] } arg</c>. An argument
+    /// is command-mode text (<c>x=$(…)</c>, <c>-o$(…)</c>): assigned directly (<c>$v = x=$(…)</c>) it parses as a
+    /// command; a param-less script block takes it, dash-led words included, exactly as the command would.
+    /// </summary>
+    public static string ArgValue(string commandModeArg) => "& { $args[0] } " + commandModeArg;
+
+    /// <summary>
     /// Suppress an emitted statement's output, choosing the form that survives a
     /// statement LIST. <c>(...)</c> (grouping) cannot hold <c>stmt1; stmt2</c>
     /// ("Missing closing ')'"), only the subexpression <c>$(...)</c> can — so a value

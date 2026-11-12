@@ -1,0 +1,23 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 264
+stdout-length: 49
+stderr-length: 0
+==== SCRIPT ====
+echo "[${u[1]}]" "[${u[i]}]" "[${u[$k]}]" "[${u[1]:-d}]" "[${u[i]-e}]"
+x=${zz[3]}; echo "[$x]"
+s=pq; echo "[${s[1]}]" "[${s[0]}]" "[${s[1]-w}]"
+declare -A m; echo "[${m[key]:+yes}]" "[${q[key]:+yes}]"
+a=(x y z); echo "${a[1]}" "${a[$((1+1))]}" "${a[-1]}"
+echo done
+==== STDOUT ====
+[] [] [] [d] [e]
+[]
+[] [pq] [w]
+[] []
+y z z
+done
+
+==== STDERR ====
+

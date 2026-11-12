@@ -5654,7 +5654,7 @@ public static partial class PsEmitter
             || GetLiteralValue(cmd.Words[0]) is not string cw
             || !PsStatementKeywordCommands.Contains(cw);
 
-        if (splatSafeCommand && HasUnquotedVarSplatArg(commandArgs, loneArraySplats: true))
+        if (splatSafeCommand && (HasUnquotedVarSplatArg(commandArgs, loneArraySplats: true) || commandArgs.Any(HasIndirectExpansion)))
         {
             // Hoist each unquoted-variable operand to a temp var and splat it.
             // The command word keeps its existing emission (incl. the `& `
@@ -8268,12 +8268,35 @@ public static partial class PsEmitter
             }
             else
             {
-                call.Append(emitPlainArg(i));
+                string plain = emitPlainArg(i);
+                // A quoted word with a failing indirect reference (`"${!a[@]-d}"`, a=(x y)) abandons the command as
+                // well: evaluate it first, so the command never runs (it ran with the word empty).
+                if (plain.Contains("Get-BashIndirectValue", StringComparison.Ordinal))
+                {
+                    string v = $"$__bashsplat{splatCounter++}";
+                    prelude.Append(v).Append(" = ").Append(PsBuild.ArgValue(plain)).Append("; ").Append(PsBuild.AbandonIfExpansionFailed);
+                    call.Append(v);
+                }
+                else call.Append(plain);
             }
         }
         call.Append(trailingTokens);
 
         return $"& {{ {prelude}{call} }}";
+    }
+
+    /// <summary>True when the word holds an indirect expansion (`${!ref}`, `"${!a[@]-d}"`): one that fails abandons its
+    /// command, so the command goes through <see cref="EmitCommandWithSplatArgs"/>, which evaluates it first.</summary>
+    private static bool HasIndirectExpansion(CompoundWord word) => HasIndirectPart(word.Parts);
+
+    private static bool HasIndirectPart(ImmutableArray<WordPart> parts)
+    {
+        foreach (var part in parts)
+        {
+            if (part is WordPart.BracedVarSub { Suffix: { } s } && s.StartsWith("!indirect", StringComparison.Ordinal)) return true;
+            if (part is WordPart.DoubleQuoted dq && HasIndirectPart(dq.Parts)) return true;
+        }
+        return false;
     }
 
     /// <summary>True when expanding the word assigns a shell variable: `$((n+=2))`, `$((i++))`, `${w=q}`, `${w:=q}`.</summary>
@@ -8474,10 +8497,18 @@ public static partial class PsEmitter
     private static string IndirectRef(string name, bool strict)
     {
         var m = System.Text.RegularExpressions.Regex.Match(name, @"^([A-Za-z_]\w*)\[(.+)\]$");
-        return m.Success
-            ? EmitBracedVar(new WordPart.BracedVarSub(m.Groups[1].Value, "[" + m.Groups[2].Value + "]"))
-            : EmitSimpleVar(name, strict: strict);
+        if (!m.Success) return EmitSimpleVar(name, strict: strict);
+        string elem = EmitBracedVar(new WordPart.BracedVarSub(m.Groups[1].Value, "[" + m.Groups[2].Value + "]"));
+        // `${!a[@]-d}`: the name is the elements joined (`*` by IFS); no elements (an unset array reads as one $null) is an unset name, not ''.
+        if (m.Groups[2].Value is "@" or "*")
+            return "$(& { $__iel = @(@(" + elem + ") -ne $null); if ($__iel.Count) { $__iel -join "
+                + (m.Groups[2].Value == "*" ? PsBuild.IfsJoinSeparator : "' '") + " } })";
+        return elem;
     }
+
+    /// <summary>The -RefName Get-BashIndirectValue reports (and looks up when plain): `ref` or `a[1]`; '' otherwise.</summary>
+    private static string IndirectRefName(string name) =>
+        PsBuild.SingleQuote(System.Text.RegularExpressions.Regex.IsMatch(name, @"^[A-Za-z_]\w*(\[[^\]']+\])?$") ? name : "");
     private static string EmitBracedVar(WordPart.BracedVarSub bvs, bool inDoubleQuote = false)
     {
         NestingGuard.EnsureStack(); // ${x:-${x:-…}} recurses here without passing Emit(Command)
@@ -8557,17 +8588,16 @@ public static partial class PsEmitter
                     // ${m[$k]} / ${a[$i]}: the subscript is a variable's value.
                     if (System.Text.RegularExpressions.Regex.Match(subscript, @"^\$\{?(\w+)\}?$") is { Success: true } sv)
                     {
-                        string subRef = $"{arrayVar}[{EmitVarSubscript(arrayVar, EmitSimpleVar(sv.Groups[1].Value))}]";
-                        return inDoubleQuote ? $"$({subRef})" : subRef;
+                        return PsBuild.NullSafeElement(arrayVar, EmitVarSubscript(arrayVar, EmitSimpleVar(sv.Groups[1].Value)));
                     }
+                    // An element of an unset array is empty (indexing $null threw "Cannot index into a null array").
                     if (int.TryParse(subscript, out _))
                     {
                         // $Matches (BASH_REMATCH) is keyed by int; every other array reads by the string key.
                         string key = bvs.Name == "BASH_REMATCH" ? subscript : $"'{subscript}'";
-                        return inDoubleQuote ? $"$({arrayVar}[{key}])" : $"{arrayVar}[{key}]";
+                        return PsBuild.NullSafeElement(arrayVar, key);
                     }
-                    string keyRef = $"{arrayVar}[{EmitWordSubscript(arrayVar, subscript)}]";
-                    return inDoubleQuote ? $"$({keyRef})" : keyRef;
+                    return PsBuild.NullSafeElement(arrayVar, EmitWordSubscript(arrayVar, subscript));
                 }
 
                 // Whole-array operator: only slicing (${arr[@]:off:len}) maps cleanly to
@@ -8634,9 +8664,11 @@ public static partial class PsEmitter
                 // A SCALAR (`s=pq`) has no PowerShell variable, and indexing $null throws ("Cannot index into a null
                 // array"). bash treats it as a one-element array: ${s[0]-w} is pq, ${s[1]-w} is w. The assigning forms
                 // keep the plain element reference AssignDefault parses.
-                if (int.TryParse(subscript, out int scalarIdx) && arrayVar == "$" + bvs.Name && subOp.Length > 0
-                    && subOp[0] != '=' && !subOp.StartsWith(":=", StringComparison.Ordinal))
-                    elemRef = $"$(if ($null -eq {arrayVar}) {{ {(scalarIdx == 0 ? EmitSimpleVar(bvs.Name) : "$null")} }} else {{ {elemRef} }})";
+                if (arrayVar == "$" + bvs.Name && subOp.Length > 0 && subOp[0] != '=' && !subOp.StartsWith(":=", StringComparison.Ordinal))
+                    elemRef = int.TryParse(subscript, out int scalarIdx)
+                        ? $"$(if ($null -eq {arrayVar}) {{ {(scalarIdx == 0 ? EmitSimpleVar(bvs.Name) : "$null")} }} else {{ {elemRef} }})"
+                        // `${u[i]:-d}` / `${u[$k]-d}` of an unset array: unset, not an indexing error.
+                        : $"$(if ($null -eq {arrayVar}) {{ $null }} else {{ {elemRef} }})";
                 return EmitScalarSuffix(elemRef, subOp, inDoubleQuote, bvs.ArgWord)
                     ?? (inDoubleQuote ? $"$({elemRef})" : elemRef);
             }
@@ -8684,8 +8716,7 @@ public static partial class PsEmitter
             // ${!ref OP word}: the operator applies to the value of the variable NAMED by $ref.
             string op = indSfx["!indirect".Length..];
             string IndLookup(bool nameOnly) =>
-                "Get-BashIndirectValue -Ref (" + IndirectRef(bvs.Name, false) + ") -RefName "
-                + PsBuild.SingleQuote(System.Text.RegularExpressions.Regex.IsMatch(bvs.Name, @"^[A-Za-z_]\w*$") ? bvs.Name : "")
+                "Get-BashIndirectValue -Ref (" + IndirectRef(bvs.Name, false) + ") -RefName " + IndirectRefName(bvs.Name)
                 + " -Pos @(" + PsBuild.BuildPositionalExpansion("@") + ")" + IndirectLineArg() + (nameOnly ? " -NameOnly" : "");
             // `${!ref@a}`: the attribute letters of the variable NAMED by $ref.
             if (op == "@a")
@@ -8713,8 +8744,7 @@ public static partial class PsEmitter
             string lookup = "& { $__indv = (" + IndirectRef(bvs.Name, !namedRef) + "); $__ind = [string]$__indv; "
                 + "if ($__ind -match '^[0-9]+$') { $__pp = @(" + PsBuild.BuildPositionalExpansion("@") + "); "
                 + "if ([int]$__ind -eq 0) { " + EmitSimpleVar("0", strict: true) + " } elseif ([int]$__ind -le $__pp.Count) { $__pp[[int]$__ind - 1] } } "
-                + "else { Get-BashIndirectValue -Ref $__indv -RefName "
-                + PsBuild.SingleQuote(System.Text.RegularExpressions.Regex.IsMatch(bvs.Name, @"^[A-Za-z_]\w*$") ? bvs.Name : "")
+                + "else { Get-BashIndirectValue -Ref $__indv -RefName " + IndirectRefName(bvs.Name)
                 + " -Pos @(" + PsBuild.BuildPositionalExpansion("@") + ")" + IndirectLineArg() + " } }";
             return inDoubleQuote ? $"$({lookup})" : $"$({lookup})";
         }
@@ -11469,7 +11499,7 @@ public static partial class PsEmitter
         // to a temp variable and PowerShell-splat it so word-splitting and
         // empty-word elision match bash. The pipeline process-sub operand is
         // never a pure variable word, so it is unaffected.
-        if (HasUnquotedVarSplatArg(args, pipelineProcessSubIndex))
+        if (HasUnquotedVarSplatArg(args, pipelineProcessSubIndex) || args.Any(HasIndirectExpansion))
             return EmitCommandWithSplatArgs(cmdlet + cmdletSwitch, args, EmitPlainArg);
 
         var sb = new StringBuilder(cmdlet).Append(cmdletSwitch);

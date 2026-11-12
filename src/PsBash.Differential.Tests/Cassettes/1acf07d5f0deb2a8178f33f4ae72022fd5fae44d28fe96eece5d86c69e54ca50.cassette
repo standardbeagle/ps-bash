@@ -1,0 +1,18 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 125
+stdout-length: 17
+stderr-length: 0
+==== SCRIPT ====
+(echo "${!u[1]-d}") 2>/dev/null; echo s=$?
+u=(); (echo "${!u[1]-d}"); echo s=$?
+k=(p q); p=7; echo "${!k[0]}" "${!k[1]-none}"
+==== STDOUT ====
+s=1
+d
+s=0
+7 none
+
+==== STDERR ====
+

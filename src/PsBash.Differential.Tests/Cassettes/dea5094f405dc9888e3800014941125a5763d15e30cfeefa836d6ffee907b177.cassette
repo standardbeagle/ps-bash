@@ -1,0 +1,31 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 432
+stdout-length: 69
+stderr-length: 0
+==== SCRIPT ====
+(echo "${!a[@]-default}") 2>/dev/null; echo status=$?
+a=(x); (echo "${!a[@]-default}"); echo status=$?
+a=(x y z); (echo "${!a[@]-default}") 2>/dev/null; echo status=$?
+a=(); (echo "${!a[@]-d}"); echo s=$?
+a=(""); (echo "${!a[@]-d}") 2>/dev/null; echo s=$?
+a=(b); b=; echo "[${!a[*]:-d}]" "[${!a[@]+set}]"
+b=1; echo "${!a[@]#1}x"
+IFS=:; a=(b c); (echo "${!a[*]-d}") 2>/dev/null; echo s=$?; IFS=' '
+a=(x y); echo "${!a[@]}" "${!a[*]}"
+==== STDOUT ====
+status=1
+default
+status=0
+status=1
+d
+s=0
+s=1
+[d] [set]
+x
+s=1
+0 1 0 1
+
+==== STDERR ====
+

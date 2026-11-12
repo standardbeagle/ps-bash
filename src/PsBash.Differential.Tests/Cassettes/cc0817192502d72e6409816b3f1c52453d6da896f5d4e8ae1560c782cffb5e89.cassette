@@ -1,0 +1,24 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 259
+stdout-length: 37
+stderr-length: 0
+==== SCRIPT ====
+f() { echo called "$@"; }
+a=(x y)
+(f "${!a[@]-d}") 2>/dev/null; echo s=$?
+(cat "${!a[@]-d}") 2>/dev/null; echo s=$?
+(nosuchcmd "${!u[@]-d}") 2>/dev/null; echo s=$?
+r=x; x=ok; f "${!r}" "pre-${!r:-d}"; echo s=$?
+b='bad name'; (f "${!b}") 2>/dev/null; echo s=$?
+==== STDOUT ====
+s=1
+s=1
+s=1
+called ok pre-ok
+s=0
+s=1
+
+==== STDERR ====
+

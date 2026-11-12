@@ -96,6 +96,14 @@ public class PsBuildTests
         => Assert.Equal("$(expr)", PsBuild.Subexpr("expr"));
 
     [Fact]
+    public void ArgValue_EvaluatesTheArgumentInCommandMode()
+        => Assert.Equal("& { $args[0] } x=$(y)", PsBuild.ArgValue("x=$(y)"));
+
+    [Fact]
+    public void NullSafeElement_IndexesOnlyASetArray()
+        => Assert.Equal("$(if ($null -ne $a) { $a['1'] })", PsBuild.NullSafeElement("$a", "'1'"));
+
+    [Fact]
     public void VoidStatement_SingleStatement_UsesGrouping()
         => Assert.Equal("[void]($env:x = 1)", PsBuild.VoidStatement("$env:x = 1"));
 

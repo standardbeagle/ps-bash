@@ -462,6 +462,14 @@ public sealed partial class BashParser
                     name = raw[nameStart..(close + 1)];
                     pos = close + 1;
                 }
+                // ${!a[@]-d} / ${!a[*]:-d}: with an operator after it, `[@]` is no longer the keys form but indirection
+                // through the joined elements (bash 5: "x y: invalid variable name" for a=(x y)).
+                else if (close == pos + 2 && close + 1 < len && raw[pos + 1] is '@' or '*'
+                    && raw[close + 1] is ':' or '-' or '=' or '+' or '?' or '%' or '#' or '/' or '^' or ',' or '@')
+                {
+                    name = raw[nameStart..(close + 1)];
+                    pos = close + 1;
+                }
             }
 
             // ${!prefix*} / ${!prefix@} — names of variables whose name starts

@@ -2256,7 +2256,8 @@ public class PsEmitterTests
     public void Transpile_AssocElementAlternative_AppliesScalarOpToKey()
     {
         var result = PsEmitter.Transpile("echo ${m[key]:+yes}");
-        Assert.Equal("Invoke-BashEcho ($m[$(if ($m -is [System.Collections.IDictionary]) { 'key' } else { [long](Invoke-BashArith 'key') })] ? \"yes\" : \"\")", result);
+        // The element read is guarded: an unset `m` is unset, not "Cannot index into a null array".
+        Assert.Equal("Invoke-BashEcho ($(if ($null -eq $m) { $null } else { $m[$(if ($m -is [System.Collections.IDictionary]) { 'key' } else { [long](Invoke-BashArith 'key') })] }) ? \"yes\" : \"\")", result);
     }
 
     [Fact]

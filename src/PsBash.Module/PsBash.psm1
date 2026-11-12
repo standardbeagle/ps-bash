@@ -109,7 +109,13 @@ function Get-BashFuncNames {
 function Get-BashIndirectValue {
     param([AllowNull()]$Ref, [string]$RefName, [object[]]$Pos = @(), [switch]$NameOnly, [int]$Line = 0)
     $refSet = $null -ne $Ref
-    if ($null -eq $Ref -and $RefName) {
+    if ($null -eq $Ref -and $RefName -match '^([A-Za-z_][A-Za-z0-9_]*)\[') {
+        # `${!a[1]}` / `${!a[@]-d}`: a missing element (or no elements) is an unset name, quietly; only an unset ARRAY
+        # is "a[1]: invalid indirect expansion".
+        $refSet = $null -ne (Get-Variable -Name $Matches[1] -ErrorAction Ignore) -or $null -ne [System.Environment]::GetEnvironmentVariable($Matches[1])
+        if ($refSet) { return $null }
+    }
+    elseif ($null -eq $Ref -and $RefName) {
         $rv = Get-Variable -Name $RefName -ValueOnly -ErrorAction Ignore
         if ($null -ne $rv) { $refSet = $true; $Ref = if ($rv -is [System.Collections.IDictionary]) { $rv['0'] } elseif ($rv -is [array]) { $rv[0] } else { $rv } }
     }

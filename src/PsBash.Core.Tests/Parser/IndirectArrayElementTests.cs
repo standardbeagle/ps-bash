@@ -32,6 +32,28 @@ public class IndirectArrayElementTests
     public void Transpile_IndirectElementWithOperator_AppliesTheOperator(string bash, string leaked)
         => Assert.DoesNotContain(leaked, T(bash), StringComparison.Ordinal);
 
+    // `${!a[@]-d}`: an operator after `[@]` makes it indirection through the joined elements, not the keys form
+    // followed by the literal text `-d}`.
+    [Theory]
+    [InlineData("echo \"${!a[@]-default}\"")]
+    [InlineData("echo \"${!a[*]:-d}\"")]
+    [InlineData("echo \"${!a[@]+set}\"")]
+    public void Transpile_IndirectThroughAllElementsWithOperator_IsIndirection(string bash)
+    {
+        var ps = T(bash);
+        Assert.Contains("Get-BashIndirectValue", ps);
+        Assert.Contains("-RefName 'a[", ps);
+        Assert.DoesNotContain(".Keys", ps);
+    }
+
+    // A quoted indirect word is evaluated before the command, which a failure abandons, for any command kind.
+    [Theory]
+    [InlineData("f \"${!r}\"")]
+    [InlineData("cat \"x${!a[@]-d}\"")]
+    [InlineData("git log \"${!r:-d}\"")]
+    public void Transpile_QuotedIndirectArg_AbandonsTheCommandOnFailure(string bash)
+        => Assert.Contains(PsBuild.AbandonIfExpansionFailed, T(bash));
+
     // `${!ref}` with ref=LINENO: the runtime cannot know the bash line, so the emitter passes the statement's.
     [Fact] public void Transpile_IndirectRef_PassesTheStatementLine()
     {

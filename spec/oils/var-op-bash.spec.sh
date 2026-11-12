@@ -281,7 +281,6 @@ x=
 invalid=
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-var-op-bash var-op-bash (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### undef vs. empty string in var ops
@@ -449,7 +448,6 @@ if test $? -ne 0; then echo fail; fi
 
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-var-op-bash var-op-bash (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 

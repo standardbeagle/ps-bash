@@ -105,7 +105,6 @@ status=1
 status=1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-var-ref var-ref (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### var ref to $@ with @
@@ -333,7 +332,6 @@ v2=assign
 ==== a3[@] ====
 ## END
 ## status: 127
-## XFAIL ps-bash gap-oils-var-ref var-ref (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Array indirect expansion with replacements
