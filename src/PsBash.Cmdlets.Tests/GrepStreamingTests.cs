@@ -17,7 +17,15 @@ public class GrepStreamingTests : IClassFixture<SharedPwshFixture>
     {
         var pwsh = _fixture.AcquireFresh();
         var task = Task.Run(() => pwsh.AddScript(script).Invoke());
-        Assert.True(task.Wait(TimeSpan.FromSeconds(60)), "grep did not terminate (upstream not stopped?)");
+        if (!task.Wait(TimeSpan.FromSeconds(60)))
+        {
+            // Stop the pipeline before failing: left running it kept the shared runspace busy and every later test in
+            // the class failed in < 1 ms with it (fleet g16/g17), hiding which test actually hung.
+            pwsh.Stop();
+            task.Wait(TimeSpan.FromSeconds(10));
+            pwsh.Commands.Clear();
+            Assert.Fail("grep did not terminate within 60 s (upstream not stopped?)");
+        }
         pwsh.Commands.Clear();
         return task.Result.Select(o => o?.ToString() ?? "").ToArray();
     }

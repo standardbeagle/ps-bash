@@ -195,6 +195,11 @@ internal sealed class InteractiveShellHarness : IAsyncDisposable
         psi.Environment["PS1"] = Ps1Value;
         psi.Environment["PS2"] = "> ";
         psi.Environment["HOME"] = tempHome;
+        // On Windows bash `~` / $HOME follow USERPROFILE (SdkWorker.SyncHomeToEnvironment, PowerShell's own source),
+        // not HOME: with HOME alone `cd ~/work/x` went to the developer's real profile, so a test passed only on a
+        // machine where that directory happened to exist (fleet g13-g17: Interactive_CdHomeRelativeThenPwd).
+        if (OperatingSystem.IsWindows())
+            psi.Environment["USERPROFILE"] = tempHome;
         // PSBASH_HOME tells InteractiveShell.SourceRcFileAsync to look for
         // .psbashrc in the isolated temp directory rather than the real user
         // profile.  This keeps profile-loading tests hermetic.

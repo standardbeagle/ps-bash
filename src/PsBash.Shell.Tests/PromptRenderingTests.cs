@@ -369,17 +369,20 @@ public class PromptRenderingIntegrationTests
 
         await using var harness = await StartAsync();
 
-        var targetDir = Path.Combine(harness.TempHome, "work", "beagle-term");
+        // A name no real profile has: `~` must be the harness home, not wherever the developer's work tree lives
+        // (this passed only on machines with a real ~/work/beagle-term).
+        var leaf = "cd-home-" + Guid.NewGuid().ToString("N")[..8];
+        var targetDir = Path.Combine(harness.TempHome, "work", leaf);
         Directory.CreateDirectory(targetDir);
 
-        await harness.SendLineAsync("cd ~/work/beagle-term");
+        await harness.SendLineAsync($"cd ~/work/{leaf}");
         await harness.WaitForPromptAsync(TimeSpan.FromSeconds(8));
 
         await harness.SendLineAsync("pwd");
         await harness.WaitForPromptAsync(TimeSpan.FromSeconds(8));
 
         var output = Normalize(harness.ReadSinceLastPrompt());
-        Assert.Contains("work/beagle-term", output.Replace('\\', '/'));
+        Assert.Contains($"work/{leaf}", output.Replace('\\', '/'));
     }
 
     [SkippableFact]
