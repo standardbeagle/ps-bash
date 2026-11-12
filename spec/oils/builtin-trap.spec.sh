@@ -257,7 +257,6 @@ end child
 wait status 0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-trap builtin-trap (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### trap '' sets handler to empty string (SIG_IGN)

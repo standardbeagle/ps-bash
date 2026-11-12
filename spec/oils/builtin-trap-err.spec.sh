@@ -145,7 +145,6 @@ group
 ok
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-trap-err builtin-trap-err (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Pipeline group quirk

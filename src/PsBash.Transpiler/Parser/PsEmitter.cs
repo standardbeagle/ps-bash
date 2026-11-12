@@ -527,7 +527,11 @@ public static partial class PsEmitter
                 // Every stage is a subshell in bash: a failure INSIDE a stage never ends the
                 // script; only the last stage's status counts.
                 var text = PsBuild.ErrexitSuppressed(WithErrexitExempt(() => Emit(cmd)));
-                return text + "; " + PsBuild.ErrexitCheck(ErrexitExitStatement());
+                // bash runs the ERR trap twice for a failed pipeline that ends in a subshell (`true | (false)`,
+                // also `(false) | (true)` under pipefail); a group or plain last stage runs it once.
+                string twice = pipeline.Commands.Length > 1 && pipeline.Commands[^1] is Command.Subshell
+                    ? PsBuild.ErrTrapCheck() : "";
+                return text + "; " + twice + PsBuild.ErrexitCheck(ErrexitExitStatement());
             }
             // The job is a subshell: set -e and (under errtrace) the ERR trap apply inside it (EmitBackground); its own status is 0.
             case Command.Background:

@@ -65,6 +65,7 @@ public sealed class InvokeBashKillCommand : PSCmdlet
     private static string ResolveSignal(string token)
         => token.StartsWith("SIG", StringComparison.Ordinal) ? token
            : Signals.TryGetValue(token, out var name) ? name
+           : int.TryParse(token, out var n) && n > 0 && n < LinuxSignalNames.Length ? "SIG" + LinuxSignalNames[n]
            : "SIG" + token;
 
     protected override void EndProcessing()
@@ -192,12 +193,14 @@ public sealed class InvokeBashKillCommand : PSCmdlet
         bool signalSelf = false;
         int sigNum = SignalNumber(signalName ?? "SIGTERM");
         if (existenceOnly) sigNum = 0;
+        // A job, another process or the shell without a trap for it ignores the signal: only check the target exists.
+        bool probeOnly = existenceOnly || IgnoredByDefault(sigNum);
         // A background job of the in-process table (`$!` is a synthetic id, `%N` a jobspec), as `wait` resolves them.
         bool StopBgJob(string spec)
         {
             try
             {
-                var r = InvokeCommand.InvokeScript("param($s,$n,$p) Stop-BashBgJob $s $n $p", spec, sigNum, existenceOnly);
+                var r = InvokeCommand.InvokeScript("param($s,$n,$p) Stop-BashBgJob $s $n $p", spec, sigNum, probeOnly);
                 return r.Count > 0 && r[0]?.BaseObject is true;
             }
             catch (CommandNotFoundException) { return false; }   // PsBash module not loaded: no job table
@@ -221,7 +224,7 @@ public sealed class InvokeBashKillCommand : PSCmdlet
             }
             if (StopBgJob(procId.ToString(System.Globalization.CultureInfo.InvariantCulture))) continue;
             // A background job runs in its own host process: stop its whole tree and let `wait` report the signal.
-            if (!existenceOnly && PsBash.Core.BackgroundJobTable.TrySignal(procId, SignalNumber(signalName ?? "SIGTERM")))
+            if (!probeOnly && PsBash.Core.BackgroundJobTable.TrySignal(procId, SignalNumber(signalName ?? "SIGTERM")))
                 continue;
             try
             {
@@ -230,7 +233,7 @@ public sealed class InvokeBashKillCommand : PSCmdlet
                 // has already exited also counts as "no such process".
                 if (proc.HasExited) throw new ArgumentException("exited");
                 if (IsZombie(procId)) throw new ArgumentException("zombie");
-                if (!existenceOnly && IsShellHost(proc))
+                if (!probeOnly && IsShellHost(proc))
                 {
                     // Another ps-bash shell's $$ (`sh -c "kill -USR1 $$"` runs in a different host): that process
                     // serves every script of its session, so Process.Kill ended all of them. There is no channel
@@ -239,7 +242,7 @@ public sealed class InvokeBashKillCommand : PSCmdlet
                         $"kill: ({procId}) - signal not delivered: a ps-bash shell host (see intentional-differences.md)");
                     continue;
                 }
-                if (!existenceOnly)
+                if (!probeOnly)
                     proc.Kill();
             }
             catch (Exception ex)
@@ -254,6 +257,8 @@ public sealed class InvokeBashKillCommand : PSCmdlet
 
         if (signalSelf && RunSelfSignalTrap(signalName ?? "SIGTERM"))
             signalSelf = false;   // a trap handled it: bash runs the handler and the script carries on
+        if (signalSelf && IgnoredByDefault(sigNum))
+            signalSelf = false;   // no trap: SIGCHLD/SIGURG/SIGWINCH are ignored
 
         if (signalSelf)
         {
@@ -297,11 +302,17 @@ public sealed class InvokeBashKillCommand : PSCmdlet
         catch (InvalidOperationException) { return false; }
     }
 
-    /// <summary>The number of a resolved signal name (<c>SIGKILL</c> → 9); 15 (TERM) when unknown.</summary>
-    private static int SignalNumber(string signalName)
+    /// <summary>The number of a resolved signal name (<c>SIGKILL</c> → 9, <c>SIGURG</c> → 23); 15 (TERM) when unknown.</summary>
+    internal static int SignalNumber(string signalName)
     {
         foreach (var (key, value) in Signals)
             if (value == signalName && int.TryParse(key, out var n)) return n;
-        return 15;
+        string bare = signalName.StartsWith("SIG", StringComparison.Ordinal) ? signalName[3..] : signalName;
+        int idx = Array.FindIndex(LinuxSignalNames, x => x != null && x.Equals(bare, StringComparison.OrdinalIgnoreCase));
+        return idx > 0 ? idx : 15;
     }
+
+    /// <summary>SIGCHLD (17), SIGURG (23), SIGWINCH (28): the default action is to ignore them, so a process without a
+    /// handler keeps running. Everything else ps-bash delivers terminates (Windows has no signals).</summary>
+    internal static bool IgnoredByDefault(int sig) => sig is 17 or 23 or 28;
 }

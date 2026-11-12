@@ -151,6 +151,28 @@ public class InvokeBashKillCommandTests : IClassFixture<SharedPwshFixture>
         proc.Kill(); // cleanup
     }
 
+    [Theory]
+    [InlineData("-URG")]
+    [InlineData("-WINCH")]
+    [InlineData("-s CHLD")]
+    [InlineData("-23")]
+    public void Kill_DefaultIgnoredSignal_DoesNotTerminate(string signal)
+    {
+        using var proc = StartLongLivedProcess();
+        Skip.If(proc is null, "no spawnable process host available");
+        // REGRESSION: an unlisted name resolved to TERM, so `kill -URG $!` killed the job. bash: ignored by default.
+        Run($"Invoke-BashKill {signal} {proc!.Id}");
+        Assert.False(proc.HasExited, $"kill {signal} <pid> must NOT terminate the process");
+        proc.Kill();
+    }
+
+    [Theory]
+    [InlineData("SIGURG", 23)]
+    [InlineData("SIGILL", 4)]
+    [InlineData("SIGKILL", 9)]
+    [InlineData("SIGNOPE", 15)]
+    public void SignalNumber_ResolvesEveryLinuxName(string name, int number)
+        => Assert.Equal(number, InvokeBashKillCommand.SignalNumber(name));
     [Fact]
     public void Kill_Signal0_NonexistentPid_EmitsNoSuchProcess()
     {

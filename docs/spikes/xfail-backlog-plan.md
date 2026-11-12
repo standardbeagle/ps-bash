@@ -480,8 +480,18 @@ building. The Linux side's remaining failures are the known `LsSortTimeDifferent
   the previous pipeline's. It is now recorded first.
 - Not fixed: a redirect's open error ignores an earlier `2>/dev/null` on the same command
   (`{ :; } 2>/dev/null > /nodir/f` prints it; bash doesn't).
-- Unmarked 2: trap-err "trap ERR with redirect", "trap ERR and pipelines - PIPESTATUS difference".
-- XFAIL count after this pass: 396.
+- bash runs the ERR trap twice for a failed multi-stage pipeline whose last stage is a `( )` subshell (also under
+  pipefail when an earlier stage failed). A `{ }` or plain last stage runs it once. The statement check now
+  repeats the trap check in that case.
+- `kill` resolved only its 13 listed names, so `kill -URG $!` / `kill -23` sent TERM and killed the job, and
+  `kill -URG $$` with no trap ended the script with 143. Every Linux name and number now resolves.
+  SIGCHLD/SIGURG/SIGWINCH are ignored by default: for a job or another process they only check that the target
+  exists, and for the shell they do nothing unless a trap is set.
+- Unmarked 4: trap-err "trap ERR with redirect", "trap ERR and pipelines - PIPESTATUS difference", "trap ERR
+  pipelines without simple commands"; trap "traps are cleared in subshell (started with &)".
+- builtin-kill "kill -s TERM specifies the signal name" failed once in a spec run and passed 4 of 4 alone: the
+  known `sleep 0.1 &` timing flake.
+- XFAIL count after this pass: 394.
 ## Suggested order
 
 1. Land A1 and the crash fix once the gate is green.

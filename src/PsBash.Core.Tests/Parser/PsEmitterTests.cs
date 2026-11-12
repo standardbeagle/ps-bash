@@ -5697,6 +5697,17 @@ public class PsEmitterTests
     public void Transpile_CompoundWithoutAnOpenedStdoutFile_HasNoRedirectCheck(string script)
         => Assert.DoesNotContain("__BashRedirectFailed", PsEmitter.Transpile(script));
 
+    [Theory]
+    [InlineData("true | (false)", 3)]
+    [InlineData("(false) | (false) | (false; false)", 3)]
+    [InlineData("true | { false; }", 2)]
+    [InlineData("(false) | true", 2)]
+    public void Transpile_PipelineEndingInASubshell_RunsTheErrTrapTwice(string pipeline, int checks)
+    {
+        // One check after `trap` itself, then the pipeline's: bash runs the trap twice when the last stage is `( )`.
+        var ps = PsEmitter.Transpile("trap 'echo x' ERR\n" + pipeline);
+        Assert.Equal(checks, System.Text.RegularExpressions.Regex.Matches(ps, @"& \$global:__BashTrapERR;").Count);
+    }
     [Fact]
     public void Transpile_RedirectedCompoundTrapLine_IsTheCommandBeforeIt()
     {

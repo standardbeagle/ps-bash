@@ -1,0 +1,34 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 200
+stdout-length: 66
+stderr-length: 0
+==== SCRIPT ====
+trap 'echo "err $LINENO"' ERR
+true | (false)
+(false) | true
+(false)
+true | (exit 3) | cat
+true | { false; }
+f() { true | (false); }; f
+echo ---
+set -o pipefail
+(false) | (true)
+true | (false)
+echo end
+==== STDOUT ====
+err 2
+err 2
+err 4
+err 6
+err 7
+---
+err 10
+err 10
+err 11
+err 11
+end
+
+==== STDERR ====
+
