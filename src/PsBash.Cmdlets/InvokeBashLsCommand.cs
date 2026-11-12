@@ -1014,6 +1014,23 @@ public sealed class InvokeBashLsCommand : PSCmdlet
         return d.Length > 0 ? d : GetString(entry, "Name");
     }
 
+    /// <summary>The <c>ls -l</c> type letter of a raw st_mode (<paramref name="radix"/> 16 = GNU stat <c>%f</c>, 8 = BSD
+    /// <c>%p</c>): c/b/p/s for a character device, block device, fifo or socket; else <paramref name="fallback"/>.</summary>
+    internal static char UnixTypeChar(string rawMode, int radix, char fallback)
+    {
+        int mode;
+        try { mode = Convert.ToInt32(rawMode, radix); }
+        catch (Exception e) when (e is FormatException or OverflowException or ArgumentException) { return fallback; }
+        return (mode & 0xF000) switch
+        {
+            0x2000 => 'c',
+            0x6000 => 'b',
+            0x1000 => 'p',
+            0xC000 => 's',
+            _ => fallback,
+        };
+    }
+
     /// <summary>
     /// Reimplements the psm1 <c>Get-LsEntryFromFsi</c>: builds a
     /// <c>PsBash.LsEntry</c> PSObject from a real
@@ -1056,10 +1073,11 @@ public sealed class InvokeBashLsCommand : PSCmdlet
             try
             {
                 bool isMac = OperatingSystem.IsMacOS();
-                // "LINKS UID GID OWNER GROUP" (the numeric ids serve `ls -n`).
+                // "LINKS UID GID RAWMODE OWNER GROUP" (the numeric ids serve `ls -n`; the raw mode's file-type bits
+                // name a device, fifo or socket, which FileSystemInfo cannot tell from a regular file).
                 var statArgs = isMac
-                    ? new[] { "-f", "%l %u %g %Su %Sg", item.FullName }
-                    : new[] { "-c", "%h %u %g %U %G", item.FullName };
+                    ? new[] { "-f", "%l %u %g %p %Su %Sg", item.FullName }
+                    : new[] { "-c", "%h %u %g %f %U %G", item.FullName };
                 var psi = new System.Diagnostics.ProcessStartInfo("/usr/bin/stat")
                 {
                     RedirectStandardOutput = true,
@@ -1075,15 +1093,16 @@ public sealed class InvokeBashLsCommand : PSCmdlet
                 string statOut = BashRuntime.RunChildProcess(psi).Stdout.Trim();
                 if (statOut.Length > 0)
                 {
-                    // "LINKS UID GID OWNER GROUP": the group takes the remainder (it may contain spaces).
-                    var parts = statOut.Split(new[] { ' ' }, 5);
-                    if (parts.Length == 5 && int.TryParse(parts[0], out int links))
+                    // "LINKS UID GID RAWMODE OWNER GROUP": the group takes the remainder (it may contain spaces).
+                    var parts = statOut.Split(new[] { ' ' }, 6);
+                    if (parts.Length == 6 && int.TryParse(parts[0], out int links))
                     {
                         linkCount = links;
                         uid = parts[1];
                         gid = parts[2];
-                        owner = parts[3];
-                        group = parts[4];
+                        if (!isDir && !isLink) perm = UnixTypeChar(parts[3], isMac ? 8 : 16, typeChar) + perm[1..];
+                        owner = parts[4];
+                        group = parts[5];
                     }
                 }
             }

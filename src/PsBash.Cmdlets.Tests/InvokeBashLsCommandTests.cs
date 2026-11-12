@@ -440,4 +440,18 @@ public class InvokeBashLsCommandTests : IDisposable, IClassFixture<SharedPwshFix
         Assert.StartsWith("crw-rw-rw-", l.Lines[0]);
         Assert.EndsWith(" /dev/null", l.Lines[0]);
     }
+
+    /// <summary>On Linux/macOS a device, fifo or socket is a FileInfo like a regular file; its type letter comes from
+    /// the raw mode stat reports (GNU `%f` hex, BSD `%p` octal). `ls -l /dev/null` printed `-rw-rw-rw-`.</summary>
+    [Theory]
+    [InlineData("21b6", 16, 'c')]   // /dev/null on Linux: 020666
+    [InlineData("61b0", 16, 'b')]   // block device 060660
+    [InlineData("11a4", 16, 'p')]   // fifo
+    [InlineData("c1ed", 16, 's')]   // socket
+    [InlineData("81a4", 16, '-')]   // regular 0100644
+    [InlineData("20666", 8, 'c')]   // /dev/null on macOS
+    [InlineData("100644", 8, '-')]
+    [InlineData("zz", 16, '-')]     // unparsable: keep the fallback
+    public void UnixTypeChar_ReadsTheFileTypeBits(string raw, int radix, char expected)
+        => Assert.Equal(expected, InvokeBashLsCommand.UnixTypeChar(raw, radix, '-'));
 }

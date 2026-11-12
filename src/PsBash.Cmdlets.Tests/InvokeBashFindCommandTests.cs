@@ -881,17 +881,15 @@ public class InvokeBashFindCommandTests : IDisposable, IClassFixture<SharedPwshF
     // ===================== Negative cases =====================
 
     [Fact]
-    public void Find_UnsupportedPredicate_EmitsErrorThenContinues()
+    public void Find_UnsupportedPredicate_ReportsItAndStops()
     {
+        // -used (value-bearing) is not implemented: find names it and stops, status 1, rather than guessing a match.
+        // (This used -perm 644 and expected the trailing -name to still match; -perm is implemented now, and under a
+        // 002 umask the file is 0664, rightly unmatched.)
         Mk("a.txt");
-        var results = RunAllowError(
-            $"Invoke-BashFind '{Esc(_tmpDir)}' -perm 644 -name 'a.txt' 2>&1");
-        // -perm is unsupported (value-bearing); the cmdlet writes an error
-        // and continues parsing. The trailing -name should still match.
-        bool matchedAfterError = results.Any(o =>
-            (string?)o.Properties["Name"]?.Value == "a.txt");
-        Assert.True(matchedAfterError,
-            "predicate parser should continue after an unsupported-predicate error");
+        var r = CmdResult.Run(_fixture.AcquireFresh(), $"Invoke-BashFind '{Esc(_tmpDir)}' -used 3 -name 'a.txt'")
+            .AssertFailed(1, "unsupported predicate '-used'");
+        Assert.Empty(r.Lines);
     }
 
     [Fact]
