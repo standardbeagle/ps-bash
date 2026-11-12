@@ -34,6 +34,19 @@ public sealed class BashAssoc : Hashtable, IEnumerable
         return (int)(h & (Buckets - 1));
     }
 
+    /// <summary>True when <paramref name="value"/> is an INDEXED array (a list or a sparse array): <c>declare -A</c> refuses it.</summary>
+    public static bool IsIndexedValue(object? value)
+    {
+        if (value is System.Management.Automation.PSObject w) value = w.BaseObject;
+        return value is BashSparseArray || (value is IList && value is not string);
+    }
+
+    /// <summary>True when <paramref name="value"/> is an associative array: <c>declare -a</c> refuses it.</summary>
+    public static bool IsAssocValue(object? value)
+    {
+        if (value is System.Management.Automation.PSObject w) value = w.BaseObject;
+        return value is BashAssoc;
+    }
     /// <summary>Builds a table from key/value pairs in the order given (a state snapshot replays them oldest first).</summary>
     public static BashAssoc FromPairs(params object?[] keyValuePairs)
     {

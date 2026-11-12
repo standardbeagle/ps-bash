@@ -498,6 +498,16 @@ public static class PsBuild
     public static string AssocOrIndexed(string arrayTarget, string assocExpr, string indexedExpr) =>
         "$(if (" + arrayTarget + " -is [PsBash.Cmdlets.BashAssoc]) { " + assocExpr + " } else { ,(" + indexedExpr + ") })";
 
+    /// <summary>
+    /// <c>declare -A a</c> when <c>a</c> is an indexed array (<c>declare -a</c> when it is associative): bash reports
+    /// <c>a: cannot convert indexed to associative array</c>, sets status 1 and leaves <c>a</c> as it was; otherwise
+    /// <paramref name="declaration"/> runs.
+    /// </summary>
+    public static string ArrayKindGuard(string name, bool toAssoc, string declaration) =>
+        "if ([PsBash.Cmdlets.BashAssoc]::" + (toAssoc ? "IsIndexedValue" : "IsAssocValue") + "((Get-Variable -Name " + SingleQuote(name)
+        + " -ValueOnly -ErrorAction Ignore))) { Write-Error "
+        + SingleQuote("ps-bash: " + name + ": cannot convert " + (toAssoc ? "indexed to associative" : "associative to indexed") + " array")
+        + " -ErrorAction Continue; $global:LASTEXITCODE = 1 } else { " + declaration + " }";
     public static string RuntimeReadonlyGuard(IEnumerable<string> names, string assignment) =>
         "if ($__psbRo = [PsBash.Cmdlets.BashShellState]::FirstReadonly(" + string.Join(", ", names.Select(SingleQuote))
         + ")) { Write-Error ('ps-bash: ' + $__psbRo + ': readonly variable') -ErrorAction Continue; $global:LASTEXITCODE = 1 } else { "

@@ -4907,7 +4907,9 @@ public class PsEmitterTests
     public void Transpile_DeclareAssociativeArray_EmitsHashtable()
     {
         var result = PsEmitter.Transpile("declare -A map");
-        Assert.Equal("if ($global:map -isnot [System.Collections.IDictionary]) { $global:map = [PsBash.Cmdlets.BashAssoc]::new() }", result);
+        // A scalar map becomes element 0; an indexed map is refused (ArrayKindGuard).
+        Assert.Equal(PsBuild.ArrayKindGuard("map", toAssoc: true,
+            "if ($global:map -isnot [System.Collections.IDictionary]) { $global:map = [PsBash.Cmdlets.BashAssoc]::new(); if ($null -ne $env:map) { $global:map['0'] = $env:map } }; $global:LASTEXITCODE = 0"), result);
     }
 
     [Fact]

@@ -112,6 +112,8 @@ public static partial class PsEmitter
     [ThreadStatic]
     private static HashSet<string>? _assocVars;
     // Names assigned an array/assoc literal earlier in this unit: a bare `$a` / `${a}` then reads element 0, as in bash.
+    // Per thread like the rest of the emitter state: concurrent transpiles (the test host) saw each other's names.
+    [ThreadStatic]
     private static HashSet<string>? _arrayVars;
 
     /// <summary>Names declared <c>declare -l</c> (false) / <c>declare -u</c> (true): later assignments are case-converted.</summary>
@@ -3563,6 +3565,9 @@ public static partial class PsEmitter
     private static string EmitShAssignmentStatement(Command.ShAssignment cmd)
     {
         string text = EmitShAssignmentStatementCore(cmd);
+        // `declare -A m=(...) 2>/dev/null`: the builtin's own redirects. A value's `$( )` runs before them (its stderr is
+        // not redirected), so such a declaration keeps the old behavior of not applying them.
+        if (!cmd.Redirects.IsDefaultOrEmpty && !ContainsCommandSub(cmd)) text = ApplyCompoundRedirects(text, cmd.Redirects);
         if (!_runtimeReadonly || cmd.IsLocal || cmd.IsExport || cmd.IsDeclare) return text;
         var unknown = cmd.Pairs.Select(p => ResolveNameref(p.Name)).Select(n => n.Contains('[') ? n[..n.IndexOf('[')] : n)
             .Where(n => _readonlyVars?.Contains(n) != true).Distinct(StringComparer.Ordinal).ToList();
@@ -3579,6 +3584,7 @@ public static partial class PsEmitter
             else if (cmd.Pairs.Length > 0 && cmd.Pairs[^1].ArrayValue is not null) text += "; $global:BashLastArg = " + PsBuild.SingleQuote(cmd.Pairs[^1].Name);
         }
         if (text.Contains("circular name reference", StringComparison.Ordinal)) return text; // the refusal set status 1
+        if (NeedsArrayKindGuard(cmd)) return text; // each declaration sets its own status (1 when the kind change is refused)
         // `x=$((1/0))`: the failed expansion keeps status 1, and its mark must not abandon a LATER command.
         if (text.Contains("Invoke-BashArith", StringComparison.Ordinal)) return text + "; " + PsBuild.ClearExpansionFailed;
         if (!_scriptReadsStatus || ContainsCommandSub(cmd)) return text;
@@ -3588,9 +3594,34 @@ public static partial class PsEmitter
         return text + "; $global:LASTEXITCODE = 0";
     }
 
+    [ThreadStatic] private static bool _inArrayKindGuard;
+
+    /// <summary>
+    /// `declare -A a=(...)` / `declare -a a=(...)` refuses to change the kind of an existing array (run-time check). Not
+    /// in a function: there `declare` makes a new local.
+    /// </summary>
+    private static bool NeedsArrayKindGuard(Command.ShAssignment cmd) =>
+        !_inArrayKindGuard && cmd.IsDeclare && !cmd.IsLocal && (cmd.IsAssoc || cmd.IsIndexed) && _functionDepth == 0;
+
     private static string EmitShAssignment(Command.ShAssignment cmd)
     {
-        return EmitShAssignmentCore(cmd);
+        if (!NeedsArrayKindGuard(cmd)) return EmitShAssignmentCore(cmd);
+        _inArrayKindGuard = true;
+        try
+        {
+            // The status is 1 when any name was refused (`declare -A a b=(1 2)` still declares b).
+            var sb = new StringBuilder(PsBuild.SetStatus(0));
+            foreach (var pair in cmd.Pairs)
+            {
+                sb.Append("; ");
+                string one = EmitShAssignmentCore(cmd with { Pairs = [pair] });
+                sb.Append(IsValidVarName(pair.Name) && ResolveNameref(pair.Name) == pair.Name
+                    ? PsBuild.ArrayKindGuard(pair.Name, cmd.IsAssoc, one)
+                    : one);
+            }
+            return sb.ToString();
+        }
+        finally { _inArrayKindGuard = false; }
     }
 
     private static string EmitShAssignmentCore(Command.ShAssignment cmd)
@@ -4504,6 +4535,17 @@ public static partial class PsEmitter
     // declare/typeset -a arr -> $arr = @() (indexed array declaration)
     private static bool TryEmitDeclare(Command.Simple cmd, out string result)
     {
+        if (cmd.Redirects.IsEmpty) return TryEmitDeclareUnredirected(cmd, out result);
+        // `declare -A q 2>/dev/null`: a declaration can report an error (a refused kind change), which goes to its
+        // redirects. The print forms (`declare -p x >f`) attach their own.
+        if (!TryEmitDeclareUnredirected(cmd with { Redirects = [] }, out result)) return false;
+        if (result.StartsWith("Invoke-BashDeclare", StringComparison.Ordinal)) return TryEmitDeclareUnredirected(cmd, out result);
+        result = ApplyCompoundRedirects(result, cmd.Redirects);
+        return true;
+    }
+
+    private static bool TryEmitDeclareUnredirected(Command.Simple cmd, out string result)
+    {
         result = "";
         if (cmd.Words.Length < 2 || GetLiteralValue(cmd.Words[0]) is not ("declare" or "typeset"))
             return TryEmitDeclareCore(cmd, out result);
@@ -4721,15 +4763,21 @@ public static partial class PsEmitter
             result = "$env:" + declName + " = " + CaseAttr(declName, PsBuild.SingleQuote(rawVal));
             return true;
         }
+        bool indexedFlag = cmd.Words.Skip(1).Any(w => GetLiteralValue(w) is { Length: > 1 } fl && fl[0] == '-' && fl.Contains('a'));
         if (isAssoc)
         {
             // Re-declaring an existing associative array keeps its entries (bash: `declare -A d` twice).
-            result = "if ($global:" + varName + " -isnot [System.Collections.IDictionary]) { $global:" + varName + " = [PsBash.Cmdlets.BashAssoc]::new() }";
+            // `x=1; declare -A x`: the scalar becomes the element keyed 0.
+            result = "if ($global:" + varName + " -isnot [System.Collections.IDictionary]) { $global:" + varName + " = [PsBash.Cmdlets.BashAssoc]::new()"
+                + "; if ($null -ne $env:" + varName + ") { $global:" + varName + "['0'] = $env:" + varName + " } }";
+            if (_functionDepth == 0) result = PsBuild.ArrayKindGuard(varName, toAssoc: true, result + "; " + PsBuild.SetStatus(0));
             return true;
         }
         result = isInt ? "$env:" + varName + " = '0'"
             // `declare x` on an existing scalar leaves its value alone; only a name with nothing yet becomes the empty array.
-            : "if ($null -eq $env:" + varName + " -and $null -eq (Get-Variable -Name " + PsBuild.SingleQuote(varName) + " -Scope Global -ValueOnly -ErrorAction Ignore)) { $global:" + varName + " = @()" + "; [PsBash.Cmdlets.BashShellState]::MarkAttribute(" + PsBuild.SingleQuote(varName) + ", '" + (cmd.Words.Skip(1).Any(w => GetLiteralValue(w) is { Length: > 1 } fl && fl[0] == '-' && fl.Contains('a')) ? "~" : "-") + "')" + " }";
+            : "if ($null -eq $env:" + varName + " -and $null -eq (Get-Variable -Name " + PsBuild.SingleQuote(varName) + " -Scope Global -ValueOnly -ErrorAction Ignore)) { $global:" + varName + " = @()" + "; [PsBash.Cmdlets.BashShellState]::MarkAttribute(" + PsBuild.SingleQuote(varName) + ", '" + (indexedFlag ? "~" : "-") + "')" + " }";
+        // `declare -a m` on an associative m is refused.
+        if (indexedFlag && !isInt && _functionDepth == 0) result = PsBuild.ArrayKindGuard(varName, toAssoc: false, result + "; " + PsBuild.SetStatus(0));
         return true;
     }
 

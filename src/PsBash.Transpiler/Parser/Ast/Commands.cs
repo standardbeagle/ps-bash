@@ -59,7 +59,11 @@ public abstract record Command : BashNode
         bool IsNameref = false,
         bool IsAssoc = false,
         bool IsDeclare = false,
-        int Line = 0) : Command;
+        int Line = 0,
+        // `declare -a`: an INDEXED array is declared (refused on an associative one).
+        bool IsIndexed = false,
+        // `declare -A m=(…) 2>/dev/null`: the builtin's own redirects (its error goes there).
+        ImmutableArray<Redirect> Redirects = default) : Command;
 
     /// <summary>
     /// An if/elif/else statement.

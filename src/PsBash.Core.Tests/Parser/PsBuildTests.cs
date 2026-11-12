@@ -331,4 +331,13 @@ public class PsBuildTests
         string ps = PsBuild.AssocOrIndexed("$a", "ASSOC", "INDEXED");
         Assert.Equal("$(if ($a -is [PsBash.Cmdlets.BashAssoc]) { ASSOC } else { ,(INDEXED) })", ps);
     }
-}
+
+    // `declare -A a` on an indexed a (and `declare -a` on an associative one) is refused at run time.
+    [Fact]
+    public void ArrayKindGuard_RefusesTheOtherKindElseDeclares()
+    {
+        Assert.Equal("if ([PsBash.Cmdlets.BashAssoc]::IsIndexedValue((Get-Variable -Name 'a' -ValueOnly -ErrorAction Ignore))) { Write-Error 'ps-bash: a: cannot convert indexed to associative array' -ErrorAction Continue; $global:LASTEXITCODE = 1 } else { DECL }",
+            PsBuild.ArrayKindGuard("a", toAssoc: true, "DECL"));
+        Assert.Contains("IsAssocValue", PsBuild.ArrayKindGuard("a", toAssoc: false, "DECL"));
+        Assert.Contains("cannot convert associative to indexed array", PsBuild.ArrayKindGuard("a", toAssoc: false, "DECL"));
+    }}

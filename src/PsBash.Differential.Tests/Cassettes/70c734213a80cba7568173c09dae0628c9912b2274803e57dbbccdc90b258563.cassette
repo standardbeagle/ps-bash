@@ -1,0 +1,34 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 547
+stdout-length: 205
+stderr-length: 0
+==== SCRIPT ====
+ix=(1 2 3); eval 'declare -A ix=([a]=x)' 2>/dev/null; echo st:$?; declare -p ix
+declare -A as=([a]=x); eval 'declare -a as=(1 2)' 2>/dev/null; echo st:$?; declare -p as
+q=(1); declare -A q 2>/dev/null; echo st:$?; declare -A r; declare -a r 2>/dev/null; echo st:$?
+sp=([3]=x); declare -A sp 2>/dev/null; echo st:$?
+x=1; declare -A x; echo st:$?; declare -p x
+y=(1 2); declare -a y=(3); echo st:$?; declare -p y
+declare -A z=([k]=v); declare -A z=([j]=w); echo st:$?; declare -p z
+w=(1 2); declare -A w v=(1 2) 2>/dev/null; echo st:$?; declare -p v
+==== STDOUT ====
+st:1
+declare -a ix=([0]="1" [1]="2" [2]="3")
+st:1
+declare -A as=([a]="x" )
+st:1
+st:1
+st:1
+st:0
+declare -A x=([0]="1" )
+st:0
+declare -a y=([0]="3")
+st:0
+declare -A z=([j]="w" )
+st:1
+declare -A v=([1]="2" )
+
+==== STDERR ====
+

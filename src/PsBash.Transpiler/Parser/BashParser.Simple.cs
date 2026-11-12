@@ -88,7 +88,8 @@ public sealed partial class BashParser
             // `readonly b[7]=8` is an error in bash (`declare -r b[7]=8` is not): leave it to the simple-command
             // path, whose identifier check reports it.
             if (ParseDeclarationPairs() is { } declPairs && !(isReadonlyKw && declPairs.Any(p => p.Name.Contains('['))))
-                return new Command.ShAssignment(declPairs, IsReadonly: isReadonlyKw || _declSawReadonly, IsAssoc: _declSawAssoc, IsDeclare: true);
+                return new Command.ShAssignment(declPairs, IsReadonly: isReadonlyKw || _declSawReadonly, IsAssoc: _declSawAssoc, IsDeclare: true, IsIndexed: _declSawIndexed && !_declSawAssoc,
+                    Redirects: _declRedirects.Count == 0 ? default : [.. _declRedirects]);
 
             _pos = saved;
         }
@@ -369,12 +370,18 @@ public sealed partial class BashParser
     private bool _declSawNameref;
     /// <summary>Set by <see cref="ParseDeclarationPairs"/> when an attribute flag of the declaration carried `A` (an associative array).</summary>
     private bool _declSawAssoc;
+    /// <summary>Set by <see cref="ParseDeclarationPairs"/> when an attribute flag of the declaration carried `a` (an indexed array).</summary>
+    private bool _declSawIndexed;
+    /// <summary>The redirects <see cref="ParseDeclarationPairs"/> consumed (the builtin's own).</summary>
+    private readonly List<Redirect> _declRedirects = [];
 
     private ImmutableArray<Assignment>? ParseDeclarationPairs()
     {
         _declSawReadonly = false;
         _declSawNameref = false;
         _declSawAssoc = false;
+        _declSawIndexed = false;
+        _declRedirects.Clear();
         var pairs = ImmutableArray.CreateBuilder<Assignment>();
 
         while (Peek().Kind is BashTokenKind.AssignmentWord or BashTokenKind.Word
@@ -387,9 +394,10 @@ public sealed partial class BashParser
             // declaration writes nothing. Consuming it here keeps the assignment;
             // leaving it unconsumed made the statement end early. Known gap: bash
             // still creates/truncates a `> file` target, which this does not.
+            // `declare` keeps them (_declRedirects): a refused kind change reports there.
             if (Peek().Kind == BashTokenKind.IoNumber || IsCompoundRedirectOp(Peek().Kind))
             {
-                ParseRedirect();
+                _declRedirects.Add(ParseRedirect());
                 continue;
             }
 
@@ -408,6 +416,7 @@ public sealed partial class BashParser
                 if (value[1] != '-' && value.Contains('r')) _declSawReadonly = true;
                 if (value[1] != '-' && value.Contains('n')) _declSawNameref = true;
                 if (value[1] != '-' && value.Contains('A')) _declSawAssoc = true;
+                if (value[1] != '-' && value.Contains('a')) _declSawIndexed = true;
                 Advance();
                 continue;
             }
