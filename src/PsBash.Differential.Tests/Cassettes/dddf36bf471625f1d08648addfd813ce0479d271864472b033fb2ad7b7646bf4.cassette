@@ -1,0 +1,27 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 347
+stdout-length: 179
+stderr-length: 0
+==== SCRIPT ====
+tv1=111; readonly tv2=222; export tv3=333
+f1() { local tv5=555; echo '[readonly]'; readonly -p tv{0..5}; echo "st:$?"; echo '[export]'; export -p tv{0..5}; echo "st:$?"; echo '[local]'; local -p tv{0..5} 2>/dev/null; echo "st:$?"; local -p tv5 tv1 2>/dev/null; echo "st:$?"; }
+f1; bash -c 'echo "child tv1=$tv1 tv5=[$tv5]"'; declare -p tv1 tv2 tv3
+==== STDOUT ====
+[readonly]
+st:0
+[export]
+st:0
+[local]
+declare -rx tv5="555"
+st:1
+declare -rx tv5="555"
+st:1
+child tv1=111 tv5=[]
+declare -rx tv1="111"
+declare -rx tv2="222"
+declare -rx tv3="333"
+
+==== STDERR ====
+

@@ -586,7 +586,7 @@ visible to `unset`, so `unset` always just clears. bash 5.2 behaviour, checked a
   already revealed, and later writes go to the outer variable).
 - Subshells `( )` keep the depth: `( unset v )` inside f is a local-unset.
 
-Done (11 of 12; temp-binding "Temp bindings with local" still XFAIL): `PsBash.Cmdlets.VarFrameStack`, one per
+Done (12 of 12): `PsBash.Cmdlets.VarFrameStack`, one per
 runspace, reset by the host per command (`SdkWorker.ResetVarFrames`).
 - The function wrapper counts the depth (`PsBuild.FunctionPrologue/Epilogue`).
 - `local` registers its frame (`PsBuild.DeclareLocal`; a value-less local takes the value the stack gives it).
@@ -598,6 +598,15 @@ runspace, reset by the host per command (`SdkWorker.ResetVarFrames`).
   PowerShell scope, and `v=t0 eval 'v=t1 eval ...'` left t0 behind.
 - Also fixed: an inlined literal eval body read the pre-binding shadow (`v=t eval 'echo $v'` printed the old v,
   since 82c715f3).
+- temp-binding "Temp bindings with local" (52f2a916): `tmp='' local tx=tx` ran a command named `local`. A temp binding
+  in front of `local`/`export` is now parsed as the bare declaration; a value-less `v=t local v` / `v=t export v` keeps
+  t. A prefix whose expansion does something (`$(cmd)`, `$((i++))`) still takes the old path.
+- Fleet g23 (657e343c): Linux Core had two ModuleExtractorTests failures from a test race: a static
+  `PsBashRuntimeDirectory.TempPathOverride` set by another class to a 0777 root. The override is now AsyncLocal (ab517d01).
+- assign-extended c18 "declare -p var": declaration operands that are brace words of plain text (`export -p
+  tv{0..5}`, `readonly -p`, `local -p`, `declare -p`) are expanded in the emitter, one name per item. `export`/`local`
+  had run as commands ("not found") and `readonly` dropped them. `local -p NAMES` lists only the function's locals;
+  any other name is "local: NAME: not found", status 1, and the listing's redirects cover those lines.
 
 Known gaps:
 - A function that only a run-time `source` defines gets no frame for `v=t f`.

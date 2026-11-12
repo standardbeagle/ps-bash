@@ -3912,6 +3912,27 @@ public static partial class PsEmitter
         return sb.ToString();
     }
 
+    /// <summary>
+    /// <c>local -p [NAME...]</c> in a function: its locals as <c>declare</c> lines. A named variable that is not one of
+    /// the function's locals is "local: NAME: not found", status 1 (it printed the global, as <c>declare -p</c> does).
+    /// </summary>
+    private static string EmitLocalListing(Command.Simple cmd, HashSet<string> fnLocals)
+    {
+        static CompoundWord Lit(string s) => new(ImmutableArray.Create<WordPart>(new WordPart.Literal(s)));
+        var named = cmd.Words.Skip(1).Select(GetLiteralValue).Where(s => s != "-p").Select(s => s!).ToList();
+        var listed = named.Count == 0 ? fnLocals.ToList() : named.Where(fnLocals.Contains).ToList();
+        var missing = named.Where(n => !fnLocals.Contains(n)).ToList();
+        var parts = new List<string>();
+        if (listed.Count > 0)
+            parts.Add(EmitPassthrough("Invoke-BashDeclare", ImmutableArray.Create(Lit("-p")).AddRange(listed.Select(Lit))));
+        foreach (var n in missing)
+            parts.Add(PsBuild.StderrLine("bash: local: " + n + ": not found"));
+        if (missing.Count > 0)
+            parts.Add(PsBuild.SetStatus(1));
+        // The redirects (`local -p a b 2>/dev/null`) apply to the "not found" lines too, so they wrap the whole list.
+        return EmitMappedStandalone(cmd, parts.Count == 1 ? parts[0] : "& { " + string.Join("; ", parts) + " }");
+    }
+
     // `local`, `local -p`, `local -p a b`: a listing (no assignments, no other flags).
     private static bool IsLocalListing(Command.Simple cmd)
     {
@@ -4289,6 +4310,11 @@ public static partial class PsEmitter
     private static string EmitSimple(Command.Simple cmd)
     {
         cmd = ExpandAliases(cmd);
+        var braced = ExpandDeclarationBraceWords(cmd);
+        // `export -p a{0..1}` is `export -p a0 a1`, which the parser makes a declaration; do the same here.
+        if (!ReferenceEquals(braced, cmd) && AsPlainExport(braced) is { } export)
+            return EmitShAssignment(export);
+        cmd = braced;
         if (TryEmitOutputProcessSubs(cmd, out var outputProcSubResult))
             return outputProcSubResult;
         if (TryEmitEnvPairsWrap(cmd, out var envWrapResult))
@@ -5234,11 +5260,7 @@ public static partial class PsEmitter
 
         // `local` / `local -p [NAME...]` inside a function: list the function's locals as `declare -- n="v"` lines.
         else if (cmd0 == "local" && _functionDepth > 0 && _functionLocalNames is { Count: > 0 } fnLocals && IsLocalListing(cmd))
-            specialResult = EmitMappedStandalone(cmd, EmitPassthrough("Invoke-BashDeclare",
-                ImmutableArray.Create(new CompoundWord(ImmutableArray.Create<WordPart>(new WordPart.Literal("-p")))).AddRange(
-                    (cmd.Words.Length > 1 && cmd.Words.Skip(1).Any(w => GetLiteralValue(w) is { } s && s != "-p")
-                        ? cmd.Words.Skip(1).Where(w => GetLiteralValue(w) != "-p")
-                        : fnLocals.Select(n => new CompoundWord(ImmutableArray.Create<WordPart>(new WordPart.Literal(n))))))));
+            specialResult = EmitLocalListing(cmd, fnLocals);
 
         // Bare `set` / `declare` / `typeset`: list the variables as `name=value` lines.
         else if (cmd0 is "set" or "declare" or "typeset" && cmd.Words.Length == 1)
@@ -8212,6 +8234,83 @@ public static partial class PsEmitter
         => suffix.Length > 3 && suffix.StartsWith("[@]", StringComparison.Ordinal) && suffix[3] is '/' or '#' or '%' or '^' or ',';
 
     /// <summary>A brace expansion (<c>{1..5}</c>, <c>x{a,b}</c>) with no glob part: an array of words at run time.</summary>
+    /// <summary>
+    /// <c>export -p test_var{0..5}</c>, <c>readonly -p</c>, <c>local -p</c>, <c>declare</c>: a brace word of plain
+    /// text is expanded here, one operand per item, so the declaration paths see names. Left as a brace word,
+    /// <c>export</c>/<c>local</c> fell to the general command path ("export: command not found") and <c>readonly</c>
+    /// dropped it. A word with an <c>=</c>, an expansion, a quote or a glob character keeps its old form.
+    /// </summary>
+    private static Command.Simple ExpandDeclarationBraceWords(Command.Simple cmd)
+    {
+        if (cmd.Words.Length < 2 || GetLiteralValue(cmd.Words[0]) is not ("export" or "readonly" or "local" or "declare" or "typeset"))
+            return cmd;
+        ImmutableArray<CompoundWord>.Builder? expanded = null;
+        for (int i = 1; i < cmd.Words.Length; i++)
+        {
+            var items = StaticBraceItems(cmd.Words[i]);
+            if (items is null) { expanded?.Add(cmd.Words[i]); continue; }
+            if (expanded is null)
+            {
+                expanded = ImmutableArray.CreateBuilder<CompoundWord>();
+                for (int k = 0; k < i; k++) expanded.Add(cmd.Words[k]);
+            }
+            foreach (var item in items)
+                expanded.Add(new CompoundWord(ImmutableArray.Create<WordPart>(new WordPart.Literal(item))));
+        }
+        return expanded is null ? cmd : cmd with { Words = expanded.ToImmutable() };
+    }
+
+    /// <summary><c>export [-p] NAME...</c> with plain names and nothing else, as the parser's declaration node.</summary>
+    private static Command.ShAssignment? AsPlainExport(Command.Simple cmd)
+    {
+        if (GetLiteralValue(cmd.Words[0]) != "export" || !cmd.EnvPairs.IsEmpty || !cmd.Redirects.IsDefaultOrEmpty
+            || !cmd.HereDocs.IsDefaultOrEmpty)
+            return null;
+        var pairs = ImmutableArray.CreateBuilder<Assignment>();
+        foreach (var w in cmd.Words.Skip(1))
+        {
+            if (GetLiteralValue(w) is not { } s) return null;
+            if (s == "-p") continue;
+            if (!System.Text.RegularExpressions.Regex.IsMatch(s, "^[A-Za-z_][A-Za-z0-9_]*$")) return null;
+            pairs.Add(new Assignment(s, AssignOp.Equal, null));
+        }
+        return pairs.Count == 0 ? null : new Command.ShAssignment(pairs.ToImmutable(), IsExport: true);
+    }
+
+    /// <summary>The words a brace word of plain text expands to (cross-multiplied), or null when it is not one.</summary>
+    private static List<string>? StaticBraceItems(CompoundWord word)
+    {
+        if (!HasBraceExpansion(word.Parts)) return null;
+        var combos = new List<string> { "" };
+        foreach (var part in word.Parts)
+        {
+            List<string> alts;
+            switch (part)
+            {
+                case WordPart.Literal { Value: var v } when IsPlainNameText(v):
+                    alts = [v]; break;
+                case WordPart.BracedTuple t when t.Items.All(IsPlainNameText):
+                case WordPart.BracedRange:
+                    alts = ExpandBrace(part); break;
+                default:
+                    return null;
+            }
+            CheckBraceWords((long)combos.Count * alts.Count);
+            var next = new List<string>(combos.Count * alts.Count);
+            foreach (var c in combos) foreach (var a in alts) next.Add(c + a);
+            combos = next;
+        }
+        return combos;
+    }
+
+    /// <summary>Letters, digits, <c>_</c> and <c>-</c>: text that means the same as a literal word anywhere.</summary>
+    private static bool IsPlainNameText(string s)
+    {
+        foreach (char c in s)
+            if (!(char.IsAsciiLetterOrDigit(c) || c is '_' or '-')) return false;
+        return true;
+    }
+
     private static bool IsPlainBraceWord(CompoundWord word)
     {
         foreach (var part in word.Parts)
@@ -8655,7 +8754,7 @@ public static partial class PsEmitter
         return false;
     }
 
-    /// <summary>Arithmetic text that assigns: `=` (not `==` `!=` `<=` `>=`), an op-assign, `++` or `--`.</summary>
+    /// <summary>Arithmetic text that assigns: `=` (not `==` `!=` `&lt;=` `>=`), an op-assign, `++` or `--`.</summary>
     private static readonly System.Text.RegularExpressions.Regex ArithAssignRx =
         new(@"\+\+|--|(?<![=!<>])=(?!=)|[-+*/%&|^]=|<<=|>>=", System.Text.RegularExpressions.RegexOptions.Compiled);
 

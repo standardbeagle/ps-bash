@@ -7959,6 +7959,44 @@ public class PsEmitterTests
         Assert.Contains(selector, result);
     }
 
+    // assign-extended "declare -p var": `export -p test_var{0..5}` ran a command named export, `local -p v{0..5}` one
+    // named local, and `readonly -p v{0..1}` was dropped. A brace word of plain text is the names it expands to.
+    [Theory]
+    [InlineData("export -p a{0..1}", "export -p a0 a1")]
+    [InlineData("export a{x,y}", "export ax ay")]
+    [InlineData("readonly -p a{0..1}", "readonly -p a0 a1")]
+    [InlineData("f() { local x=1 a0=2; local -p {x,a0}; }", "f() { local x=1 a0=2; local -p x a0; }")]
+    [InlineData("f() { declare -p v{1,2}; }", "f() { declare -p v1 v2; }")]
+    public void Transpile_DeclarationWithBraceNames_IsTheSpelledOutDeclaration(string braced, string spelled)
+    {
+        // A function carries its bash source as a <#bash:...#> comment, which differs; the code must not.
+        static string Code(string bash) => System.Text.RegularExpressions.Regex.Replace(PsEmitter.Transpile(bash)!, "<#bash:[^#]*#>", "");
+        Assert.Equal(Code(spelled), Code(braced));
+    }
+
+    [Fact]
+    public void Transpile_DeclarationBraceWordWithAnExpansion_IsNotExpandedStatically()
+        // `{$a,b}` holds an expansion: the item is text to expand at run time, not a name.
+        => Assert.NotEqual(PsEmitter.Transpile("export -p '$a' b"), PsEmitter.Transpile("export -p {$a,b}"));
+
+    [Fact]
+    public void Transpile_LocalListingOfANonLocal_IsNotFound()
+    {
+        // bash: `local -p x y` in f prints f's local x; y (not a local of f) is "local: y: not found", status 1.
+        var result = PsEmitter.Transpile("f() { local x=1; local -p x y; }")!;
+        Assert.Contains("Invoke-BashDeclare '-p' x;", result);
+        Assert.Contains("bash: local: y: not found", result);
+        Assert.Contains(PsBuild.SetStatus(1), result);
+    }
+
+    [Fact]
+    public void Transpile_LocalListingWithRedirect_RedirectsTheNotFoundLinesToo()
+    {
+        // `local -p x y 2>/dev/null`: the redirect covered only the declare call, and "y: not found" still printed.
+        var result = PsEmitter.Transpile("f() { local x=1; local -p x y 2>/dev/null; }")!;
+        Assert.Matches(@"& \{ Invoke-BashDeclare '-p' x; [^}]*not found[^}]*\} 2>\$null", result);
+    }
+
     [Fact]
     public void Transpile_DeclarePrintWithSelectors_StaysAPrintForm()
     {

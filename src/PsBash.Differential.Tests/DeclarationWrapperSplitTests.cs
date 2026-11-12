@@ -31,4 +31,14 @@ public class DeclarationWrapperSplitTests
         "declare k=ab pwn; echo \"k [$k] st:$?\"; typeset nn=5 zz; echo \"nn [$nn]\"\n"
         + "readonly r=r1\ntypeset +r r=r2 2>/dev/null; echo \"t st:$? [$r]\"\n"
         + "declare r=r3 2>/dev/null; echo \"d st:$? [$r]\"; echo same-line");
+
+    // assign-extended "declare -p var": brace-expanded names reached `export`/`local` as a command ("not found") and
+    // `readonly -p` dropped them. `readonly -p NAMES` / `export -p NAMES` set the attribute and print nothing;
+    // `local -p NAMES` prints only the function's locals and reports the rest as not found, status 1.
+    [Fact]
+    public Task PrintFlagWithBraceNames_SetsAttributes_LocalListsOnlyLocals() => AssertOracle.EqualAsync(
+        "tv1=111; readonly tv2=222; export tv3=333\n"
+        + "f1() { local tv5=555; echo '[readonly]'; readonly -p tv{0..5}; echo \"st:$?\"; echo '[export]'; export -p tv{0..5};"
+        + " echo \"st:$?\"; echo '[local]'; local -p tv{0..5} 2>/dev/null; echo \"st:$?\"; local -p tv5 tv1 2>/dev/null; echo \"st:$?\"; }\n"
+        + "f1; bash -c 'echo \"child tv1=$tv1 tv5=[$tv5]\"'; declare -p tv1 tv2 tv3");
 }
