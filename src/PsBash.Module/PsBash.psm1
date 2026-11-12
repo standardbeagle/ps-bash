@@ -2715,6 +2715,10 @@ $script:BashBgModulePath = $(Get-Variable -Name PsBashModulePsm1Path -ValueOnly 
 function Get-BashBgRunspacePool {
     if ($null -eq $script:BashBgPool) {
         $iss = [System.Management.Automation.Runspaces.InitialSessionState]::CreateDefault()
+        # Like the shell's own runspace (SdkRunspace): without it the pool takes the machine policy and, where that
+        # resolves to Restricted, Open() cannot load this psm1 ("running scripts is disabled") and every `cmd &` fails.
+        # Windows only: elsewhere setting it throws PlatformNotSupportedException at Open().
+        if ($IsWindows) { $iss.ExecutionPolicy = [Microsoft.PowerShell.ExecutionPolicy]::Bypass }
         if ($script:BashBgModulePath -and (Test-Path $script:BashBgModulePath)) {
             $iss.ImportPSModule(@($script:BashBgModulePath))
         }
