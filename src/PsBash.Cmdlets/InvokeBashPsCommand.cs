@@ -130,6 +130,9 @@ public sealed class InvokeBashPsCommand : PSCmdlet
     /// (the entry loop runs for every PID) cost ~3s for ~400 processes. Caching it
     /// makes that comparison ~30ms total.
     /// </summary>
+    /// <summary>Windows' Idle (PID 0) and System (PID 4): owned by no user, whatever session the shell is in.</summary>
+    internal static bool IsKernelPseudoProcess(int pid) => pid is 0 or 4;
+
     private static int CurrentSessionId()
     {
         if (s_currentSessionId < 0)
@@ -926,7 +929,9 @@ public sealed class InvokeBashPsCommand : PSCmdlet
             {
                 try
                 {
-                    if (p.SessionId == CurrentSessionId())
+                    // Idle (0) and System (4) are kernel pseudo-processes in session 0, never a user's. Where the
+                    // shell itself runs in session 0 (ssh, a service) default `ps` listed Idle first, as PID 0.
+                    if (p.SessionId == CurrentSessionId() && !IsKernelPseudoProcess(pid))
                         userName = Environment.UserName;
                 }
                 catch { }

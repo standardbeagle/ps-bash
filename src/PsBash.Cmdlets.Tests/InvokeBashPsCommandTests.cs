@@ -278,4 +278,27 @@ public class InvokeBashPsCommandTests : IClassFixture<SharedPwshFixture>
         Assert.StartsWith("?", bt);
         Assert.DoesNotContain("pwn", bt);
     }
+
+    /// <summary>
+    /// REGRESSION (fleet, Pester "ps -o pid,comm shows only requested columns"): with no owner lookup, a process in
+    /// the shell's own session counted as the user's, and where the shell runs in session 0 (ssh, a service) that
+    /// included Idle and System, so default <c>ps</c> listed PID 0 first.
+    /// </summary>
+    [Theory]
+    [InlineData(0, true)]
+    [InlineData(4, true)]
+    [InlineData(8, false)]
+    [InlineData(1234, false)]
+    public void IsKernelPseudoProcess_IsIdleAndSystemOnly(int pid, bool expected)
+        => Assert.Equal(expected, InvokeBashPsCommand.IsKernelPseudoProcess(pid));
+
+    [SkippableFact]
+    [Trait("Platform", "Windows")]
+    public void Ps_Default_NeverListsIdleOrSystem()
+    {
+        Skip.IfNot(OperatingSystem.IsWindows(), "Idle/System are Windows processes");
+        var r = CmdResult.Run(_fixture.AcquireFresh(), "Invoke-BashPs -o 'pid,comm' | ForEach-Object { $_.PID }").AssertSuccess();
+        Assert.NotEmpty(r.Lines);
+        Assert.DoesNotContain(r.Lines, l => l.Trim() is "0" or "4");
+    }
 }
