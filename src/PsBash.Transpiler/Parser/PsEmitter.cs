@@ -7510,6 +7510,11 @@ public static partial class PsEmitter
         return true;
     }
 
+    /// <summary>`-Line N` for Get-BashIndirectValue: the bash line of the statement being emitted, which `${!ref}` with
+    /// ref=LINENO expands to (a direct `$LINENO` is substituted by the lexer); empty when the line is unknown.</summary>
+    private static string IndirectLineArg() =>
+        PsBuild.TrapLine > 0 ? " -Line " + PsBuild.TrapLine.ToString(System.Globalization.CultureInfo.InvariantCulture) : "";
+
     /// <summary>Index of the `}` closing the `{` at <paramref name="open"/>, counting nested braces; -1 when unclosed.</summary>
     private static int FindBraceEnd(string s, int open)
     {
@@ -8681,7 +8686,7 @@ public static partial class PsEmitter
             string IndLookup(bool nameOnly) =>
                 "Get-BashIndirectValue -Ref (" + IndirectRef(bvs.Name, false) + ") -RefName "
                 + PsBuild.SingleQuote(System.Text.RegularExpressions.Regex.IsMatch(bvs.Name, @"^[A-Za-z_]\w*$") ? bvs.Name : "")
-                + " -Pos @(" + PsBuild.BuildPositionalExpansion("@") + ")" + (nameOnly ? " -NameOnly" : "");
+                + " -Pos @(" + PsBuild.BuildPositionalExpansion("@") + ")" + IndirectLineArg() + (nameOnly ? " -NameOnly" : "");
             // `${!ref@a}`: the attribute letters of the variable NAMED by $ref.
             if (op == "@a")
                 return "$(& { $__in = [string]$(" + IndLookup(true) + "); if ($__in) { $__iv = Get-Variable -Name $__in -ValueOnly -ErrorAction Ignore; "
@@ -8710,7 +8715,7 @@ public static partial class PsEmitter
                 + "if ([int]$__ind -eq 0) { " + EmitSimpleVar("0", strict: true) + " } elseif ([int]$__ind -le $__pp.Count) { $__pp[[int]$__ind - 1] } } "
                 + "else { Get-BashIndirectValue -Ref $__indv -RefName "
                 + PsBuild.SingleQuote(System.Text.RegularExpressions.Regex.IsMatch(bvs.Name, @"^[A-Za-z_]\w*$") ? bvs.Name : "")
-                + " -Pos @(" + PsBuild.BuildPositionalExpansion("@") + ") } }";
+                + " -Pos @(" + PsBuild.BuildPositionalExpansion("@") + ")" + IndirectLineArg() + " } }";
             return inDoubleQuote ? $"$({lookup})" : $"$({lookup})";
         }
 

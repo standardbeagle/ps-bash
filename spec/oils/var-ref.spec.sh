@@ -143,7 +143,6 @@ ref='LINENO'
 echo lineno=${!ref}
 ## stdout: lineno=2
 ## status: 0
-## XFAIL ps-bash gap-oils-var-ref var-ref (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### var ref to $? with '?'

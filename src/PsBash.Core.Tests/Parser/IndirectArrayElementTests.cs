@@ -31,4 +31,11 @@ public class IndirectArrayElementTests
     [InlineData("echo \"${!a[1]#x}\"", "#x}")]
     public void Transpile_IndirectElementWithOperator_AppliesTheOperator(string bash, string leaked)
         => Assert.DoesNotContain(leaked, T(bash), StringComparison.Ordinal);
+
+    // `${!ref}` with ref=LINENO: the runtime cannot know the bash line, so the emitter passes the statement's.
+    [Fact] public void Transpile_IndirectRef_PassesTheStatementLine()
+    {
+        Assert.Contains("-Line 2", T("ref=LINENO\necho ${!ref}"));
+        Assert.Contains("-Line 3", T("ref=LINENO\n\necho ${!ref:-x}"));
+    }
 }

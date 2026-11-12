@@ -1,0 +1,22 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 171
+stdout-length: 80
+stderr-length: 0
+==== SCRIPT ====
+for n in RANDOM SECONDS EPOCHSECONDS EPOCHREALTIME BASHPID UID EUID; do
+  v=${!n}
+  case $v in '') echo "$n empty";; *[!0-9.]*) echo "$n bad";; *) echo "$n ok";; esac
+done
+==== STDOUT ====
+RANDOM ok
+SECONDS ok
+EPOCHSECONDS ok
+EPOCHREALTIME ok
+BASHPID ok
+UID ok
+EUID ok
+
+==== STDERR ====
+

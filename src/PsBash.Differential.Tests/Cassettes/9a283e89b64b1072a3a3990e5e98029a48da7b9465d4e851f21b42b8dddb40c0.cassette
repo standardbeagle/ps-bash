@@ -1,0 +1,20 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 84
+stdout-length: 16
+stderr-length: 0
+==== SCRIPT ====
+ref='LINENO'
+echo lineno=${!ref}
+f() {
+  local r=LINENO
+  echo in=${!r} ${!r:-x}
+}
+f
+==== STDOUT ====
+lineno=2
+in=5 5
+
+==== STDERR ====
+

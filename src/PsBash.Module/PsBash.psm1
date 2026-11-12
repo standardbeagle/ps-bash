@@ -107,7 +107,7 @@ function Get-BashFuncNames {
 # positional index, a special parameter (@ * # ?), or an array reference (`a[0]`, `a[@]`, `m[key]`).
 # -NameOnly returns the plain variable name the target denotes (for ${!ref:=word}).
 function Get-BashIndirectValue {
-    param([AllowNull()]$Ref, [string]$RefName, [object[]]$Pos = @(), [switch]$NameOnly)
+    param([AllowNull()]$Ref, [string]$RefName, [object[]]$Pos = @(), [switch]$NameOnly, [int]$Line = 0)
     $refSet = $null -ne $Ref
     if ($null -eq $Ref -and $RefName) {
         $rv = Get-Variable -Name $RefName -ValueOnly -ErrorAction Ignore
@@ -177,6 +177,18 @@ function Get-BashIndirectValue {
         $global:__BashExpansionFailed = "$($at.ScriptLineNumber):$($at.OffsetInLine)"
         Write-BashHostStderr "bash: ${n}: invalid variable name"
         return $null
+    }
+    # Variables bash computes on each read (the emitter inlines a direct `$RANDOM` etc. the same way); $Line is the
+    # bash line of the statement doing the expansion, for LINENO.
+    switch -CaseSensitive ($n) {
+        'LINENO' { if ($Line -gt 0) { return [string]$Line } }
+        'RANDOM' { return [string](Get-Random -Maximum 32768) }
+        'SECONDS' { return [string][math]::Floor(([DateTime]::UtcNow - $global:BashStartTime).TotalSeconds) }
+        'EPOCHSECONDS' { return [string][DateTimeOffset]::UtcNow.ToUnixTimeSeconds() }
+        'EPOCHREALTIME' { $us = [long](([DateTimeOffset]::UtcNow - [DateTimeOffset]::UnixEpoch).Ticks / 10); return ('{0}.{1:D6}' -f [long][math]::Floor($us / 1000000), ($us % 1000000)) }
+        'BASHPID' { return [string]$PID }
+        'PPID' { return [string](Get-Process -Id $PID -ErrorAction SilentlyContinue).Parent.Id }
+        { $_ -eq 'UID' -or $_ -eq 'EUID' } { return [string]$(if ($IsWindows) { [long][System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value.Split('-')[-1] } else { [long](id -u) }) }
     }
     $e = [System.Environment]::GetEnvironmentVariable($n)
     if ($null -ne $e) { return $e }
