@@ -5598,6 +5598,76 @@ public class PsEmitterTests
     public void Transpile_SetNoclobber_TogglesTheRuntimeFlag(string bash, string expected)
         => Assert.Contains(expected, PsEmitter.Transpile(bash));
 
+    /// <summary>
+    /// <c>set -o errtrace</c> went only to the shopt table and <c>set -eE</c> dropped the <c>E</c> as inert, so the ERR trap
+    /// never ran inside functions, subshells or jobs. Each spelling sets the flag the trap checks.
+    /// </summary>
+    [Theory]
+    [InlineData("set -E", "__BashErrtrace = $true")]
+    [InlineData("set +E", "__BashErrtrace = $false")]
+    [InlineData("set -eE", "__BashErrtrace = $true")]
+    [InlineData("set -Eeuo pipefail", "__BashErrtrace = $true")]
+    [InlineData("set -eo errtrace", "__BashErrtrace = $true")]
+    public void Transpile_SetErrtrace_TogglesTheRuntimeFlag(string bash, string expected)
+        => Assert.Contains(expected, PsEmitter.Transpile(bash));
+
+    /// <summary><c>set -o errtrace</c> alone goes through the shopt table, which owns the flag (as for errexit).</summary>
+    [Fact]
+    public void Transpile_SetOErrtrace_GoesThroughTheShoptTable()
+        => Assert.Contains("Invoke-BashShopt '-o' '-s' 'errtrace'", PsEmitter.Transpile("set -o errtrace"));
+
+    /// <summary><c>[[ -o opt ]]</c> is the option-on test the test cmdlet owns; it was refused as an unsupported operator.</summary>
+    [Theory]
+    [InlineData("[[ -o pipefail ]]")]
+    [InlineData("[[ ! -o errtrace ]]")]
+    public void Transpile_DoubleBracketOptionTest_RunsTheTestCmdlet(string bash)
+    {
+        var ps = PsEmitter.Transpile(bash);
+        Assert.Contains("Invoke-BashTest", ps);
+        Assert.DoesNotContain("unsupported test operator", ps);
+    }
+
+    /// <summary>
+    /// A background job is a subshell: under <c>set -e</c> its body leaves the JOB on a failure (<c>return</c>, never the
+    /// script's <c>exit</c>), and its ERR trap is gated on errtrace. The body ran with no check at all.
+    /// </summary>
+    [Fact]
+    public void Transpile_BackgroundGroup_ChecksErrexitInsideTheJob()
+    {
+        var ps = PsEmitter.Transpile("set -e\n{ false; echo x; } &\nwait");
+        int job = ps.IndexOf("Invoke-BashBackground", StringComparison.Ordinal);
+        Assert.True(job >= 0, ps);
+        string body = ps[job..ps.IndexOf("Invoke-BashWait", StringComparison.Ordinal)];
+        Assert.Contains("-ne 0) { return }", body);
+        Assert.DoesNotContain("exit $global:LASTEXITCODE", body);
+        Assert.Contains("$global:__BashErrtrace -and", body);
+    }
+
+    /// <summary>
+    /// The ERR trap's <c>$LINENO</c>: an assignment, <c>[[ ]]</c> and <c>(( ))</c> report their own line (they kept the last
+    /// simple command's), and inside <c>$( )</c> under errtrace a statement is checked with its line in the SCRIPT (the body
+    /// is parsed from its own text, so its line 1 is the line it starts on).
+    /// </summary>
+    [Fact]
+    public void Transpile_ErrTrapLine_IsTheScriptLineOfAssignmentsTestsAndSubstitutionBodies()
+    {
+        var ps = PsEmitter.Transpile("trap 'echo $LINENO' ERR\nset -E\n\nx=$(false)\n\n[[ a == b ]]\n(( 0 ))");
+        Assert.Equal(2, System.Text.RegularExpressions.Regex.Matches(ps, @"__psbLine = 4;").Count); // inside $( ) and after the assignment
+        Assert.Contains("__psbLine = 6;", ps);
+        Assert.Contains("__psbLine = 7;", ps);
+        Assert.Contains("$global:__BashErrexit = $false; ", ps);                                    // set -e is not inherited by $( )
+    }
+
+    /// <summary>Without errtrace a substitution body keeps the cheap unchecked form.</summary>
+    [Fact]
+    public void Transpile_SubstitutionWithoutErrtrace_HasNoChecksInside()
+    {
+        var ps = PsEmitter.Transpile("trap 'echo $LINENO' ERR\nx=$(false; true)");
+        Assert.DoesNotContain("$global:__BashErrexit = $false", ps);
+        // One check after `trap`, one after the assignment; none between `false` and `true`.
+        Assert.Equal(2, System.Text.RegularExpressions.Regex.Matches(ps, @"& \$global:__BashTrapERR;").Count);
+    }
+
     [Fact]
     public void Transpile_ForceClobberRedirect_PassesForce()
     {

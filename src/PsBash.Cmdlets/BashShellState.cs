@@ -85,7 +85,7 @@ public static class BashShellState
     /// <summary>The <c>$global:</c> variables that are shell state (see the class summary).</summary>
     private static readonly string[] GlobalNames =
     [
-        "__BashErrexit", "__BashErrexitSuppress", "__BashErrexitTail", "__BashXtrace", "__BashNoglob", "__BashPipefail", "__BashNounset", "__BashNoclobber",
+        "__BashErrexit", "__BashErrexitSuppress", "__BashErrexitTail", "__BashXtrace", "__BashNoglob", "__BashPipefail", "__BashNounset", "__BashNoclobber", "__BashErrtrace",
         "BashFlags", "BashPositional", "BashPositional0", "BASH_REMATCH", "BASH_SOURCE",
         "BashTrapHandlers", "__BashTrapERR", "__BashTrapEXIT", "__BashTrapRETURN", "BashBgLastPid",
         "BashUserAliases", "BashLastArg", "BashDirStack",

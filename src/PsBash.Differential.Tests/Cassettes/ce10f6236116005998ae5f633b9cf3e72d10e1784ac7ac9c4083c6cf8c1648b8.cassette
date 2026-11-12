@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 106
+stdout-length: 34
+stderr-length: 0
+==== SCRIPT ====
+set -o errtrace; shopt -po errtrace; set +o errtrace; shopt -po errtrace; o=pipefail; [[ -o $o ]]; echo $?
+==== STDOUT ====
+set -o errtrace
+set +o errtrace
+1
+
+==== STDERR ====
+

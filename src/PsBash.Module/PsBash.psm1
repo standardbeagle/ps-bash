@@ -2939,8 +2939,15 @@ $global:__psbashBgRunspace = $true
 $__bgBefore =if ($__bgRestore) { [Environment]::GetEnvironmentVariables() } else { @{} }
 $__bgOk = $false
 try {
-'@ + "`n" + $Command.ToString() + "`n" + @'
+'@ + "`n" + [PsBash.Cmdlets.BashStateSnapshot]::BuildJobOptions($ExecutionContext.SessionState) + $Command.ToString() + "`n" + @'
     $__bgOk = $true
+} catch {
+    # A failure that ends the job (set -u, ${x:?}) was already reported on its error stream, where the job's own
+    # redirects apply; thrown on, it surfaced from EndInvoke in `wait` and the job's output was lost. Status 1, as bash's.
+    $__bgReported = $false
+    for ($__bgE = $_.Exception; $__bgE; $__bgE = $__bgE.InnerException) { if ($__bgE.Data['psbash.reported']) { $__bgReported = $true } }
+    if (-not $__bgReported) { Write-Error -ErrorRecord $_ -ErrorAction Continue }
+    $global:LASTEXITCODE = 1
 } finally {
     # A body that ended early (`exit N` stops the pipeline) leaves its status in LASTEXITCODE; an error with none is 1.
     $x = $global:LASTEXITCODE

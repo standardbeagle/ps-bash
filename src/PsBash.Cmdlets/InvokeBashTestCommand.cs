@@ -243,7 +243,7 @@ public sealed class InvokeBashTestCommand : PSCmdlet
         string? flag = name switch
         {
             "nounset" => "__BashNounset", "pipefail" => "__BashPipefail", "noclobber" => "__BashNoclobber",
-            "errexit" => "__BashErrexit", "xtrace" => "__BashXtrace", "noglob" => "__BashNoglob", _ => null,
+            "errexit" => "__BashErrexit", "xtrace" => "__BashXtrace", "noglob" => "__BashNoglob", "errtrace" => "__BashErrtrace", _ => null,
         };
         if (flag is null) return false;
         object? v = SessionState.PSVariable.GetValue(flag);

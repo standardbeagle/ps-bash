@@ -1,0 +1,16 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 102
+stdout-length: 71
+stderr-length: 0
+==== SCRIPT ====
+set -eE; echo $-; echo $SHELLOPTS; [[ -o errtrace ]] && echo on; set +E; [[ -o errtrace ]] || echo off
+==== STDOUT ====
+ehBEc
+braceexpand:errexit:errtrace:hashall:interactive-comments
+on
+off
+
+==== STDERR ====
+

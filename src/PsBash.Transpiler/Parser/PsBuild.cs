@@ -480,13 +480,13 @@ public static class PsBuild
     /// <summary>The value of <c>$-</c>: the single-letter options currently on, in bash's order.</summary>
     public const string ShellFlagsExpr =
         "$f = ''; if ($global:__BashErrexit) { $f += 'e' }; if ($global:__BashNoglob) { $f += 'f' }; $f += 'h'; "
-        + "if ($global:__BashNounset) { $f += 'u' }; if ($global:__BashXtrace) { $f += 'x' }; $f += 'B'; if ($global:__BashNoclobber) { $f += 'C' }; "
+        + "if ($global:__BashNounset) { $f += 'u' }; if ($global:__BashXtrace) { $f += 'x' }; $f += 'B'; if ($global:__BashNoclobber) { $f += 'C' }; if ($global:__BashErrtrace) { $f += 'E' }; "
         // `c` under `bash -c` (last, as in bash's `hBCc`): the launcher's PSBASH_DASH_C mark, never inherited by a nested shell.
         + "if ($env:PSBASH_DASH_C -eq '1') { $f += 'c' }; $f";
 
     /// <summary>The value of <c>$SHELLOPTS</c>: the <c>set -o</c> options currently on, alphabetical, colon-joined.</summary>
     public const string ShellOptsExpr =
-        "$o = @('braceexpand'); if ($global:__BashErrexit) { $o += 'errexit' }; $o += 'hashall'; $o += 'interactive-comments'; "
+        "$o = @('braceexpand'); if ($global:__BashErrexit) { $o += 'errexit' }; if ($global:__BashErrtrace) { $o += 'errtrace' }; $o += 'hashall'; $o += 'interactive-comments'; "
         + "if ($global:__BashNoclobber) { $o += 'noclobber' }; if ($global:__BashNoglob) { $o += 'noglob' }; "
         + "if ($global:__BashNounset) { $o += 'nounset' }; if ($global:__BashPipefail) { $o += 'pipefail' }; "
         + "if ($global:__BashXtrace) { $o += 'xtrace' }; $o -join ':'";

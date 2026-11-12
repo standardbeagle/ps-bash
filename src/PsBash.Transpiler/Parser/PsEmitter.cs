@@ -288,6 +288,24 @@ public static partial class PsEmitter
     [ThreadStatic]
     private static int _errexitExemptDepth;
 
+    /// <summary>The script sets an ERR trap and errtrace: the trap runs inside `` too (EmitCapturedCore).</summary>
+    [ThreadStatic]
+    private static bool _errtraceMode;
+
+    /// <summary>
+    /// What a node's line is relative to: a `` body is parsed from its own text (line 1 = the line it starts on), so
+    /// inside one this is that line minus 1. The ERR trap's `` is `_lineBase + Line`.
+    /// </summary>
+    [ThreadStatic]
+    private static int _lineBase;
+
+    internal static bool EnablesErrtrace(string bash) =>
+        bash.Contains("trap", StringComparison.Ordinal) && bash.Contains("ERR", StringComparison.Ordinal)
+        && (bash.Contains("errtrace", StringComparison.Ordinal) || ErrtraceFlagPattern.IsMatch(bash));
+
+    private static readonly System.Text.RegularExpressions.Regex ErrtraceFlagPattern = new(@"(?<![\w-])[-]\w*E",
+        System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
     private static readonly System.Text.RegularExpressions.Regex SetErrexitPattern = new(
         // `set`, then any words of the SAME command (no ; & | ( ) newline), then -…e… or -o errexit.
         @"\bset[ \t]+(?:[^\s;&|()]+[ \t]+)*?(?:-[A-Za-z]*e[A-Za-z]*\b|-o[ \t]+errexit\b)",
@@ -394,8 +412,8 @@ public static partial class PsEmitter
 
     private static string EmitStatementCore(Command cmd)
     {
-        if (cmd is Command.Simple { Line: > 0 } lined) PsBuild.TrapLine = lined.Line;
-        else if (LastSimpleLine(cmd) is > 0 and var lastLine) PsBuild.TrapLine = lastLine;
+        if (cmd is Command.Simple { Line: > 0 } lined) PsBuild.TrapLine = _lineBase + lined.Line;
+        else if (LastSimpleLine(cmd) is > 0 and var lastLine) PsBuild.TrapLine = _lineBase + lastLine;
         if (DebugActive)
             return cmd is Command.AndOrList andOr ? EmitDebugAndOr(andOr) : WithDebugLead(cmd, () => EmitStatementBody(cmd));
         return EmitStatementBody(cmd);
@@ -467,6 +485,9 @@ public static partial class PsEmitter
     private static int LastSimpleLine(Command cmd) => cmd switch
     {
         Command.Simple s => s.Line,
+        Command.ShAssignment s => s.Line,
+        Command.BoolExpr b => b.Line,
+        Command.ArithCommand c => c.Line,
         Command.AndOrList a when a.Commands.Length > 0 => LastSimpleLine(a.Commands[^1]),
         Command.Pipeline p when p.Commands.Length > 0 => LastSimpleLine(p.Commands[^1]),
         _ => 0,
@@ -493,8 +514,9 @@ public static partial class PsEmitter
                 var text = PsBuild.ErrexitSuppressed(WithErrexitExempt(() => Emit(cmd)));
                 return text + "; " + PsBuild.ErrexitCheck(ErrexitExitStatement());
             }
+            // The job is a subshell: set -e and (under errtrace) the ERR trap apply inside it (EmitBackground); its own status is 0.
             case Command.Background:
-                return WithErrexitExempt(() => Emit(cmd));
+                return Emit(cmd);
             case Command.Simple simple when IsErrexitCheckedSimple(simple):
             // `x=$(false)` fails with the substitution; `local`/`export x=$(false)` has the builtin's status (0).
             case Command.ShAssignment assign when !assign.IsLocal && !assign.IsExport && ContainsCommandSub(assign):
@@ -600,15 +622,16 @@ public static partial class PsEmitter
     /// <summary>The body of the innermost <c>$( )</c> being emitted; a bare <c>&lt; file</c> prints the file only when it IS that body.</summary>
     [ThreadStatic] private static Command? _captureBody;
 
-    private static string EmitCaptured(Command body)
+    private static string EmitCaptured(Command body, bool scoped = false)
     {
         var savedCaptureBody = _captureBody;
         _captureBody = body;
-        try { return EmitCapturedCore(body); }
+        try { return EmitCapturedCore(body, scoped); }
         finally { _captureBody = savedCaptureBody; }
     }
 
-    private static string EmitCapturedCore(Command body)
+    /// <param name="scoped">The text runs through <see cref="PipelineHead"/>, whose subshell scope puts set -e back after.</param>
+    private static string EmitCapturedCore(Command body, bool scoped)
     {
         _captureDepth++;
         // A substitution body is its own pipeline: the enclosing stage's `$input` is not its stdin.
@@ -622,7 +645,12 @@ public static partial class PsEmitter
         bool ownErrexit = BodySetsErrexit(body);
         bool savedMode = _errexitMode;
         int savedExempt = _errexitExemptDepth;
-        if (ownErrexit) { _errexitMode = true; _errexitExemptDepth = 0; }
+        // Otherwise set -e is not inherited, but under errtrace the ERR trap runs inside (`x=$( false; echo y )` traps):
+        // a scoped body turns errexit off and keeps its statements' checks, so only the trap half can fire.
+        bool trapInside = !ownErrexit && _errtraceMode && scoped;
+        int savedLineBase = _lineBase;
+        if (PsBuild.TrapLine > 0) _lineBase = PsBuild.TrapLine - 1;
+        if (ownErrexit || trapInside) { _errexitMode = true; _errexitExemptDepth = 0; }
         else _errexitExemptDepth++;
         // A substitution body is a SUBSHELL: `exit N` inside `$( … )` / `<( … )` leaves only it
         // (`v=$(exit 3); echo $?` prints 3). Raise the depth so `exit` emits the scoped `return`;
@@ -631,15 +659,18 @@ public static partial class PsEmitter
         bool savedErrTrapSub = PsBuild.ErrTrapNeedsErrtrace; PsBuild.ErrTrapNeedsErrtrace = true;
         try
         {
-            var text = Emit(body);
+            // A lone command is at statement position too: `x=$(false)` runs the trap inside.
+            var text = trapInside ? EmitBody(body) : Emit(body);
             if (ownErrexit)
                 return "$global:__BashErrexit = $false; " + PsBuild.ErrexitSuppressVar + " = 0; " + text;
+            if (trapInside)
+                return "$global:__BashErrexit = $false; " + text;
             return _errexitMode && ConditionRunsCommand(body) ? PsBuild.ErrexitSuppressed(text) : text;
         }
         finally
         {
             _captureDepth--; _pipeStageFeedsInput = savedFeed; _subshellDepth--; PsBuild.ErrTrapNeedsErrtrace = savedErrTrapSub;
-            _errexitMode = savedMode; _errexitExemptDepth = savedExempt;
+            _errexitMode = savedMode; _errexitExemptDepth = savedExempt; _lineBase = savedLineBase;
         }
     }
 
@@ -720,7 +751,7 @@ public static partial class PsEmitter
     public static string? Transpile(string bash, TranspileContext context)
     {
         var prior = _context;
-        var priorErrexit = _errexitMode;
+        var priorErrexit = _errexitMode; var priorErrtrace = _errtraceMode;
         var priorExempt = _errexitExemptDepth;
         var priorIntVars = _intVars;
         var priorAssocVars = _assocVars;
@@ -751,6 +782,7 @@ public static partial class PsEmitter
         // Only a script that itself turns errexit on gets the checks (a sourced file running under
         // its caller's `set -e` does not — see intentional-differences.md).
         _errexitMode = EnablesErrexit(bash);
+        _errtraceMode = _errexitMode && EnablesErrtrace(bash);
         _errexitExemptDepth = 0;
         // Only a script that mentions pipefail pays for per-stage status capture (it also leaves the fused lane).
         var priorDefined = _definedFunctions;
@@ -816,7 +848,7 @@ public static partial class PsEmitter
             _runtimeReadonly = priorRuntimeReadonly;
             _namerefs = priorNamerefs;
             _litAssigned = priorLitAssigned; _pendingNamerefs = priorPendingNamerefs;
-            _errexitMode = priorErrexit;
+            _errexitMode = priorErrexit; _errtraceMode = priorErrtrace;
             _errexitExemptDepth = priorExempt;
             _pipefailMode = priorPipefail;
             _nounsetMode = priorNounset;
@@ -2178,7 +2210,15 @@ public static partial class PsEmitter
     }
     private static string EmitBackground(Command.Background bg)
     {
-        string inner = Emit(bg.Inner);
+        // The job is a subshell (as EmitSubshell): `exit` and an errexit failure leave only the job, and the ERR trap
+        // fires in it only under errtrace. `{ false; echo x; } &` under set -e printed x and the job's status was 0.
+        _subshellDepth++;
+        var outerLabels = _loopLabels; var outerBarrier = _loopBarrier;
+        _loopLabels = null; _loopBarrier = true;
+        bool savedErrTrap = PsBuild.ErrTrapNeedsErrtrace; PsBuild.ErrTrapNeedsErrtrace = true;
+        string inner;
+        try { inner = Emit(bg.Inner); }
+        finally { _subshellDepth--; PsBuild.ErrTrapNeedsErrtrace = savedErrTrap; _loopLabels = outerLabels; _loopBarrier = outerBarrier; }
         // A job that can change shell state (variables, cwd, options, functions) must not share this
         // process's environment and cwd: it runs in a host of its own (-Isolated). A job that only runs
         // programs keeps the cheap in-process path, whose text is unchanged.
@@ -3141,11 +3181,11 @@ public static partial class PsEmitter
         // `[ ]` (not `[[ ]]`) runs bash's own argument-count grammar in the `test` cmdlet, which
         // knows `( )`, `-o NAME`, `-v`, `-R`, usage errors (exit 2) and every shape above
         // verbatim. `[[ ]]` keeps the diagnostic: the cmdlet has no `[[` grammar.
-        // `[[ -v name ]]` / `[[ -R name ]]` (is-set / is-nameref) are the same unary operators; the cmdlet owns them.
+        // `[[ -v name ]]` / `[[ -R name ]]` / `[[ -o opt ]]` (is-set / is-nameref / option-on) are the same unary operators; the cmdlet owns them.
         // The operand of -v is a variable NAME (`cfg[host]`, `a[1]`), never a glob: pass it as a literal.
         if (words.Length == 2 && GetLiteralValue(words[0]) == "-v" && TryGetVarOperandName(words[1]) is { } varOperand)
             return PsBuild.ExitCodeTest($"Invoke-BashTest '-v' {PsBuild.SingleQuote(varOperand)}", negate: false);
-        if (!extended || (words.Length == 2 && GetLiteralValue(words[0]) is "-v" or "-R"))
+        if (!extended || (words.Length == 2 && GetLiteralValue(words[0]) is "-v" or "-R" or "-o"))
             return PsBuild.ExitCodeTestFlaggingBad(EmitPassthrough("Invoke-BashTest", QuoteBareTestParens(words)));
 
         var opName = GetLiteralValue(words[0]) ?? "";
@@ -5071,9 +5111,10 @@ public static partial class PsEmitter
                 char c = a[k];
                 if (c == 'u') { effects.Add(("__BashNounset", on)); continue; }
                 if (c == 'C') { effects.Add(("__BashNoclobber", on)); continue; }
-                if (c == 'o' && k == a.Length - 1 && i + 1 < args.Count && args[i + 1] is "pipefail" or "nounset" or "noclobber")
+                if (c == 'E') { effects.Add(("__BashErrtrace", on)); continue; }
+                if (c == 'o' && k == a.Length - 1 && i + 1 < args.Count && args[i + 1] is "pipefail" or "nounset" or "noclobber" or "errtrace")
                 {
-                    effects.Add((args[i + 1] switch { "pipefail" => "__BashPipefail", "noclobber" => "__BashNoclobber", _ => "__BashNounset" }, on));
+                    effects.Add((args[i + 1] switch { "pipefail" => "__BashPipefail", "noclobber" => "__BashNoclobber", "errtrace" => "__BashErrtrace", _ => "__BashNounset" }, on));
                     i++;
                     continue;
                 }
@@ -5084,7 +5125,7 @@ public static partial class PsEmitter
         return effects.Count > 0;
     }
     /// <summary>
-    /// Options that change nothing ps-bash models (errtrace, functrace, histexpand, braceexpand, hashall, monitor, allexport -- every\n    /// variable already lives in the exported environment, so set -a; . .env; set +a just works):
+    /// Options that change nothing ps-bash models (functrace, histexpand, braceexpand, hashall, monitor, allexport -- every\n    /// variable already lives in the exported environment, so set -a; . .env; set +a just works):
     /// `set -eEuo pipefail` is the standard script preamble, so they are accepted and dropped rather than refused.
     /// </summary>
     private static List<string?> StripInertSetOptions(List<string?> args)
@@ -5094,11 +5135,11 @@ public static partial class PsEmitter
         {
             var a = args[i];
             if (a is null || a == "--") { for (; i < args.Count; i++) kept.Add(args[i]); break; }
-            if (a is "-o" or "+o" && i + 1 < args.Count && args[i + 1] is "errtrace" or "functrace" or "histexpand" or "braceexpand" or "hashall" or "monitor" or "allexport")
+            if (a is "-o" or "+o" && i + 1 < args.Count && args[i + 1] is "functrace" or "histexpand" or "braceexpand" or "hashall" or "monitor" or "allexport")
             { i++; continue; }
             if (a.Length >= 2 && (a[0] == '-' || a[0] == '+') && a[1] != '-' && a.Skip(1).All(char.IsAsciiLetter))
             {
-                var letters = new string(a.Skip(1).Where(c => c is not ('E' or 'T' or 'H' or 'B' or 'h' or 'm' or 'a')).ToArray());
+                var letters = new string(a.Skip(1).Where(c => c is not ('T' or 'H' or 'B' or 'h' or 'm' or 'a')).ToArray());
                 if (letters.Length == 0) continue;
                 kept.Add(a[0] + letters);
                 continue;
@@ -7250,7 +7291,7 @@ public static partial class PsEmitter
     private static string EmitCommandSub(WordPart.CommandSub cs)
     {
         var body = (Command)cs.Body;
-        string inner = EmitCaptured(body);
+        string inner = EmitCaptured(body, scoped: true);
         return $"$({PipelineHead(body, inner)} | ConvertTo-BashCapture)";
     }
 
@@ -7272,7 +7313,7 @@ public static partial class PsEmitter
         // same value used as a bare argument expression (no enclosing string).
         if (nested) _dqNestDepth++;
         string inner;
-        try { inner = EmitCaptured(body); }
+        try { inner = EmitCaptured(body, scoped: true); }
         finally { if (nested) _dqNestDepth--; }
         // The newline join uses [char]10, NOT a "`n" literal — the SAME reason
         // EmitArithCommandSubValue does. This fragment can land inside an
@@ -7482,7 +7523,7 @@ public static partial class PsEmitter
         // An empty substitution (`$(( $() + 1 ))`) expands to nothing, which bash then
         // evaluates as the empty operand of a unary `+` — i.e. zero.
         if (body is null) return "'0'";
-        string inner = EmitCaptured(body);
+        string inner = EmitCaptured(body, scoped: true);
         return $"$((@({PipelineHead(body, inner)} | ConvertTo-BashCapture) -join [string][char]10).Trim())";
     }
 

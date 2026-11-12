@@ -279,7 +279,6 @@ err
 ok
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-trap-err builtin-trap-err (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### set -o errtrace - trap ERR runs in shell functions (LINENO)
@@ -315,7 +314,6 @@ line=21
 ok
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-trap-err builtin-trap-err (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### trap ERR with "atoms": assignment (( [[
@@ -335,7 +333,6 @@ line=8
 ok
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-trap-err builtin-trap-err (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### trap ERR with for,  case, { }
@@ -446,7 +443,6 @@ line=10
 ok
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-trap-err builtin-trap-err (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -464,7 +460,6 @@ line=8
 async
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-trap-err builtin-trap-err (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 

@@ -76,8 +76,41 @@ public static class BashStateSnapshot
             if (raw is not (object[] or IDictionary)) continue;
             sb.Append("$global:").Append(pv.Name).Append(" = ").Append(Literal(raw, 0)).Append('\n');
         }
+        sb.Append(ErrTrapStatement(session));
         return sb.ToString();
     }
+
+    /// <summary>The <c>set</c> options a job runs under. Each is written on or off: an in-process job's runspace is pooled and keeps the last job's.</summary>
+    internal static readonly string[] JobOptionGlobals =
+        ["__BashErrexit", "__BashErrtrace", "__BashNounset", "__BashPipefail", "__BashNoclobber", "__BashNoglob"];
+
+    /// <summary>
+    /// What an in-process job (pooled runspace, no <see cref="BuildPrelude"/>) runs before its body: the parent's
+    /// <c>set</c> options and, under errtrace, its ERR trap. Without them <c>set -e; { false; echo x; } &amp;</c> printed x
+    /// and the job's status was 0.
+    /// </summary>
+    public static string BuildJobOptions(SessionState session)
+    {
+        var sb = new StringBuilder();
+        foreach (var name in JobOptionGlobals)
+            sb.Append("$global:").Append(name).Append(" = ").Append(Unwrap(session.PSVariable.GetValue("global:" + name)) is true ? "$true" : "$false").Append('\n');
+        sb.Append("$global:__BashErrexitSuppress = 0\n");
+        sb.Append(ErrTrapStatement(session));
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// A job is a subshell: its ERR trap is the parent's only under errtrace (<c>set -E</c>), else none. Rebuilt from its
+    /// text, as a script block runs in the runspace that made it.
+    /// </summary>
+    internal static string ErrTrapStatement(SessionState session)
+    {
+        string? text = Unwrap(session.PSVariable.GetValue("global:__BashErrtrace")) is true
+            && Unwrap(session.PSVariable.GetValue("global:__BashTrapERR")) is ScriptBlock trap ? trap.ToString() : null;
+        return "$global:__BashTrapERR = " + (text is null ? "$null" : "[scriptblock]::Create(" + PsBuild.SingleQuote(text) + ")") + "\n";
+    }
+
+    private static object? Unwrap(object? v) => v is PSObject p ? p.BaseObject : v;
 
     private static readonly HashSet<string> RunspaceVariables = new(StringComparer.OrdinalIgnoreCase)
     {

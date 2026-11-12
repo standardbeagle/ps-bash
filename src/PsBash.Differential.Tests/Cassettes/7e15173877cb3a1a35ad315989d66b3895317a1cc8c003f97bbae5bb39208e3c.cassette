@@ -1,0 +1,16 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 62
+stdout-length: 11
+stderr-length: 0
+==== SCRIPT ====
+set -e
+{ false; echo x; } & wait $! || echo "st $?"
+echo after
+==== STDOUT ====
+st 1
+after
+
+==== STDERR ====
+

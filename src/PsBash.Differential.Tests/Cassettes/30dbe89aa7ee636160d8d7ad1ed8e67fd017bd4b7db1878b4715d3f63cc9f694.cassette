@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 73
+stdout-length: 5
+stderr-length: 0
+==== SCRIPT ====
+set -u
+{ echo "${nope}"; echo no; } 2>/dev/null & wait $! || echo "st $?"
+==== STDOUT ====
+st 1
+
+==== STDERR ====
+

@@ -1037,7 +1037,7 @@ public class BashTranspilerReviewRegressionTests
     // Oracle: `bash -c 'set -C; echo $-'` is `hBCc`: `c` comes last, and only under -c (the launcher's PSBASH_DASH_C mark).
     [Fact]
     public void Transpile_DollarDash_EndsWithCUnderDashC()
-        => Assert.Contains("if ($global:__BashNoclobber) { $f += 'C' }; if ($env:PSBASH_DASH_C -eq '1') { $f += 'c' }; $f", BashTranspiler.Transpile("echo \"$-\""));
+        => Assert.Contains("if ($global:__BashNoclobber) { $f += 'C' }; if ($global:__BashErrtrace) { $f += 'E' }; if ($env:PSBASH_DASH_C -eq '1') { $f += 'c' }; $f", BashTranspiler.Transpile("echo \"$-\""));
 
     // Oracle: a bare `$BASH_SOURCE` / `${BASH_SOURCE##*/}` is element 0 of the array (the script file); it read $env:BASH_SOURCE.
     [Theory]

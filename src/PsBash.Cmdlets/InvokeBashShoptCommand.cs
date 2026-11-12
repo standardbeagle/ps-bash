@@ -66,7 +66,7 @@ public sealed class InvokeBashShoptCommand : PSCmdlet
 
     private static readonly Dictionary<string, string> SetoptGlobals = new(StringComparer.Ordinal)
     {
-        ["errexit"] = "__BashErrexit", ["noclobber"] = "__BashNoclobber", ["noglob"] = "__BashNoglob",
+        ["errexit"] = "__BashErrexit", ["errtrace"] = "__BashErrtrace", ["noclobber"] = "__BashNoclobber", ["noglob"] = "__BashNoglob",
         ["nounset"] = "__BashNounset", ["pipefail"] = "__BashPipefail", ["xtrace"] = "__BashXtrace",
     };
 

@@ -443,6 +443,30 @@ building. The Linux side's remaining failures are the known `LsSortTimeDifferent
   the literal backslash as a name character. A literal backslash is now a separator on Windows (no file name can
   hold one), a drive root `C:\` is a root, and the matches keep the separators as typed. Not a spec case.
 
+### Progress, 2026-11-11 (eleventh pass)
+
+- errtrace:
+  - `set -o errtrace` reached only the shopt table and `set -eE` dropped the `E` as inert, so the ERR trap never
+    ran inside functions, subshells or jobs. Every spelling now sets `__BashErrtrace`, which `$-` (E), `$SHELLOPTS`,
+    `shopt -po`, `[[ -o errtrace ]]`, subshell state and job state all see.
+  - `[[ -o NAME ]]` was refused as an unsupported operator; the test cmdlet owns it, as for `-v`/`-R`.
+  - Inside `$( )` (scripts with an ERR trap and errtrace only), the body turns errexit off in its own scope and keeps
+    per-statement checks, so the trap fires there; other scripts keep the unchecked form.
+- The ERR trap's `$LINENO` is the line of an assignment, `[[ ]]` and `(( ))` (they kept the previous simple
+  command's), and inside `$( )` lines count from where the body starts (`_lineBase`; the body is parsed alone).
+  bash reports a multi-line `x=$(\n…\n)` at its last line; ps-bash uses the first.
+- A background job is a subshell. Its body had no errexit check (`{ false; echo x; } &` under `set -e` printed x,
+  status 0), and the in-process job's pooled runspace had none of the parent's options. The emitter now raises the
+  subshell depth for the body (exit/errexit leave the job only). Both job paths get the options from
+  `BashStateSnapshot.BuildJobOptions`, written on or off because pooled runspaces are reused, plus the ERR trap
+  under errtrace. A `set -u` failure in a job was reported, then rethrown out of EndInvoke at `wait` ("Exception
+  calling EndInvoke") and the job's output was lost; the job wrapper now catches it, with status 1.
+- Unmarked 6: trap-err c13/c14/c15/c19/c20, errexit "background processes respect errexit".
+- Left in trap-err: c7 (subshell pipeline doubling), c17 (redirect failure runs the trap), c21 (PIPESTATUS in the
+  trap). fleet g16: Windows background-job spec timed out at 30 s (10 process-mode jobs take ~15 s here: at most 2
+  warm spares, ~2.5 s cold start each); Linux GrepStreamingTests hung once (the 1-minute family).
+- XFAIL count after this pass: 398.
+
 ## Suggested order
 
 1. Land A1 and the crash fix once the gate is green.
