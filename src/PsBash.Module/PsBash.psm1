@@ -278,6 +278,8 @@ function Resolve-BashCommand {
         # `b=builtin; $b declare f=$x`: Invoke-BashCommand peels the wrapper and runs the rest past functions
         # (a declaration through the run-time eval, its operands already split).
         'builtin' { return { if ($args.Count -eq 0) { $global:LASTEXITCODE = 0 } else { Invoke-BashCommand 'builtin' @args } } }
+        # `myvar=typeset; $myvar x=$x`: a declaration named at run time; its operands are ordinary (already split) words.
+        { $_ -cin 'declare', 'typeset', 'local', 'export', 'readonly' } { return [scriptblock]::Create("Invoke-BashCommand '$Name' @args") }
     }
     $cmd = Get-Command -Name ('Invoke-Bash' + [WildcardPattern]::Escape($Name)) -CommandType Cmdlet, Function -ErrorAction Ignore
     if ($cmd) { return $cmd.Name }

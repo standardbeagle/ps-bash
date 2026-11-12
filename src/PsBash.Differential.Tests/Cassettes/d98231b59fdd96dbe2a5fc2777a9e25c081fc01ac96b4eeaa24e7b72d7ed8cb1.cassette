@@ -1,0 +1,25 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 400
+stdout-length: 127
+stderr-length: 0
+==== SCRIPT ====
+a=(x 'foo=F' 'b c'); printf '<%s>' -"${a[@]}"; echo; printf '<%s>' "p${a[@]}q"; echo
+set -- u 'v w'; printf '<%s>' "<$@>"; echo; printf '<%s>' k"$@"; echo
+b=(); printf '<%s>' -"${b[@]}"; echo; printf '<%s>' "${b[@]}"''; echo
+for w in -"${a[@]}"; do printf '<%s>' "$w"; done; echo; for w in 1 "z${a[@]}" 2; do printf '<%s>' "$w"; done; echo
+c=('a b' '*' '$(echo pwn)'); printf '<%s>' "-I${c[@]}"; echo
+==== STDOUT ====
+<-x><foo=F><b c>
+<px><foo=F><b cq>
+<<u><v w>>
+<ku><v w>
+<->
+<>
+<-x><foo=F><b c>
+<1><zx><foo=F><b c><2>
+<-Ia b><*><$(echo pwn)>
+
+==== STDERR ====
+

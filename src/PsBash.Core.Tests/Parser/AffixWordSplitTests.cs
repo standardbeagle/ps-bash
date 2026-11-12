@@ -53,6 +53,30 @@ public class AffixWordSplitTests
     public void Transpile_QuotedDeclareName_DeclaresWithoutPrinting(string bash)
         => Assert.DoesNotContain("Invoke-BashDeclare", T(bash));
 
+    // `-"${a[@]}"`, `"p$@q"`: the text goes on the first and last element, each element whole.
+    [Theory]
+    [InlineData("printf '<%s>' -\"${a[@]}\"", "Affix(\"-\", ''")]
+    [InlineData("printf '<%s>' \"p${a[@]}q\"", "Affix(\"p\", \"q\"")]
+    [InlineData("printf '<%s>' k\"$@\"", "Affix(\"k\", ''")]
+    [InlineData("for w in -\"${a[@]}\"; do :; done", "Affix(\"-\", ''")]
+    public void Transpile_QuotedArrayWithText_DistributesOverTheElements(string bash, string affix)
+        => Assert.Contains("[PsBash.Cmdlets.BashQuotedWords]::" + affix, T(bash));
+
+    [Theory]
+    [InlineData("printf '<%s>' \"${a[@]}\"")]
+    [InlineData("printf '<%s>' \"${a[@]}${b[@]}\"")]
+    [InlineData("printf '<%s>' x$y\"${a[@]}\"")]
+    public void Transpile_QuotedArrayAloneOrBesideAnotherList_KeepsItsForm(string bash)
+        => Assert.DoesNotContain("BashQuotedWords", T(bash));
+
+    [Fact]
+    public void Transpile_QuotedVarBesideQuotedArray_IsAffixText()
+        => Assert.Contains("Affix(\"$env:x\", ''", T("printf '<%s>' \"$x${a[@]}\""));
+
+    [Fact]
+    public void Transpile_DeclareFedAQuotedArray_RunsThroughEval()
+        => Assert.Contains("$__psbash_eval_src", T("typeset -\"${a[@]}\""));
+
     [Fact]
     public void Transpile_QuotedDeclarePrintFlag_StillPrints()
         => Assert.Contains("Invoke-BashDeclare", T("declare '-p' b"));

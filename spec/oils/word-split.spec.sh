@@ -598,7 +598,6 @@ echo -n ' "$@" ';  for i in "$@"; do echo -n ' '; echo -n -$i-; done; echo
  "$@"  -a b- -c- --
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-word-split word-split (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -626,7 +625,6 @@ argv.py ' "$@" ' "$@"
  "$@"  -one- -- -two-
 ## END
 ## status: 127
-## XFAIL ps-bash gap-oils-word-split an unquoted word MIXING literal text and a variable (-$i-) is not split on IFS; only a whole-word expansion is
 ## timeout: 10
 ## real-launcher
 

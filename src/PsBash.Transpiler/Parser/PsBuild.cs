@@ -637,6 +637,14 @@ public static class PsBuild
         "@(ConvertTo-BashWords " + varRef + ")";
 
     /// <summary>
+    /// <c>-"${a[@]}"</c> / <c>"p$@q"</c>: the elements of a quoted all-elements expansion, each whole (never split or globbed),
+    /// <paramref name="prefix"/> glued to the first and <paramref name="suffix"/> to the last; no elements is the one field
+    /// prefix+suffix. The arguments are PowerShell expressions.
+    /// </summary>
+    public static string QuotedAffixArray(string prefix, string suffix, string elements) =>
+        "@([PsBash.Cmdlets.BashQuotedWords]::Affix(" + prefix + ", " + suffix + ", " + elements + "))";
+
+    /// <summary>
     /// The array an unquoted GLOB word (<c>*.txt</c>, <c>src/*</c>, <c>$d/[ab]*</c>) pathname-expands into:
     /// <c>@(ConvertTo-BashGlob &lt;pattern&gt; [-ForCmdlet])</c>. <paramref name="patternExpr"/> is a PowerShell
     /// expression for the pattern text in bash's dialect (quoted glob characters already backslash-escaped, see

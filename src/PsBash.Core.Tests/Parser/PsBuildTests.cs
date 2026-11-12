@@ -210,6 +210,10 @@ public class PsBuildTests
         Assert.Equal("@(ConvertTo-BashWords $env:x)", result);
     }
 
+    [Fact]
+    public void QuotedAffixArray_GluesTextToTheElementsWithoutSplitting()
+        => Assert.Equal("@([PsBash.Cmdlets.BashQuotedWords]::Affix(\"-\", '', @($a)))", PsBuild.QuotedAffixArray("\"-\"", "''", "@($a)"));
+
     // ─────────────── NullSafeBashText ───────────────
 
     [Fact]

@@ -1,0 +1,20 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 233
+stdout-length: 75
+stderr-length: 0
+==== SCRIPT ====
+myvar=typeset; x='a b'; $myvar y=$x; echo "y[$y]"
+a=(x 'foo=F' 'bar=B'); typeset -"${a[@]}"; echo "foo=$foo bar=$bar"; printenv foo
+n=(foo bar); declare -p "${n[@]}"; q=('k1=a b' 'k2=;echo pwn'); declare "${q[@]}"; echo "[$k1] [$k2]"
+==== STDOUT ====
+y[a]
+foo=F bar=B
+F
+declare -x foo="F"
+declare -x bar="B"
+[a b] [;echo pwn]
+
+==== STDERR ====
+

@@ -1340,6 +1340,9 @@ public static partial class PsEmitter
             // `for i in a$x` / `=$*=`: split like bash; it used to iterate once over the literal text `a$env:x`.
             if (UnquotedAffixExpansionIndex(list[0], ordinaryVar: true) is var affixAt and >= 0)
                 return EmitAffixWordArray(list[0], affixAt);
+            // `for w in -"${a[@]}"`: one item per element, the text glued to the first and last.
+            if (IsQuotedArrayAffixWord(list[0]))
+                return EmitUnquotedSplitWordArray(list[0]);
 
             var single = EmitWord(list[0]);
             if (WordIsGlob(list[0], single))
@@ -3942,8 +3945,9 @@ public static partial class PsEmitter
                     ? w : new CompoundWord([new WordPart.SingleQuoted(PsBuild.BashSingleQuote(lit))]));
                 continue;
             }
-            // Behind `builtin`/`command` every operand expands like a command argument (split, globbed).
-            if (w.Parts.All(IsExpansion) || operandsAreOrdinaryWords)
+            // Behind `builtin`/`command` every operand expands like a command argument (split, globbed). A quoted array
+            // (`typeset -"${a[@]}"`, a=(x foo=F)) is one operand per element: `typeset -x foo=F`.
+            if (w.Parts.All(IsExpansion) || operandsAreOrdinaryWords || IsQuotedArrayAllWord(w) || IsQuotedArrayAffixWord(w))
             {
                 // The FIELDS of `$names` are names, never code: eval gets each one %q-quoted
                 // ("$(for w in $names; do printf '%q ' "$w"; done)"), so `a;echo x` stays one word.
@@ -8037,7 +8041,7 @@ public static partial class PsEmitter
     private static bool IsUnquotedSplitWord(CompoundWord word)
         => IsPureUnquotedVarWord(word) || IsUnquotedPositionalListWord(word) || IsPureUnquotedCommandSubWord(word) || IsGlobWord(word)
            || IsBraceGlobWord(word) || IsArrayValuedWord(word) || IsUnquotedDefaultAltWord(word) || IsUnquotedElementWord(word) || IsUnquotedPositionalOpWord(word)
-           || IsUnquotedPositionalAffixWord(word) || IsUnquotedVarAffixWord(word);
+           || IsUnquotedPositionalAffixWord(word) || IsUnquotedVarAffixWord(word) || IsQuotedArrayAffixWord(word);
 
     /// <summary>Bare <c>${@#a}</c> / <c>${*/x/y}</c> / <c>${@%d}</c>: the operator applies to each parameter, so the result is a list of words.</summary>
     private static bool IsUnquotedPositionalOpWord(CompoundWord word)
@@ -8194,8 +8198,59 @@ public static partial class PsEmitter
         _ => "@(" + EmitBracedVar((WordPart.BracedVarSub)part) + ")",
     };
 
+    /// <summary>
+    /// The one quoted all-elements expansion (<c>"${a[@]}"</c>, <c>"$@"</c>) of a word that glues text to it: <c>-"${a[@]}"</c>,
+    /// <c>"p${a[@]}q"</c>, <c>k"$@"</c>. <paramref name="outer"/> is its double-quoted part, <paramref name="inner"/> its place
+    /// inside. Every other part is literal or quoted text (an unquoted expansion or a glob keeps the old form).
+    /// </summary>
+    private static bool TryQuotedArrayAffix(CompoundWord word, out int outer, out int inner)
+    {
+        outer = inner = -1;
+        if (word.Parts.IsDefaultOrEmpty || IsQuotedArrayAllWord(word)) return false;
+        for (int i = 0; i < word.Parts.Length; i++)
+        {
+            switch (word.Parts[i])
+            {
+                case WordPart.Literal or WordPart.EscapedLiteral or WordPart.SingleQuoted:
+                    break;
+                case WordPart.DoubleQuoted dq:
+                    for (int j = 0; j < dq.Parts.Length; j++)
+                    {
+                        if (!IsQuotedArrayAllWord(new CompoundWord([new WordPart.DoubleQuoted([dq.Parts[j]])]))) continue;
+                        if (outer >= 0) return false;
+                        outer = i;
+                        inner = j;
+                    }
+                    break;
+                default:
+                    return false;
+            }
+        }
+        return outer >= 0 && !IsGlobWord(word);
+    }
+
+    private static bool IsQuotedArrayAffixWord(CompoundWord word) => TryQuotedArrayAffix(word, out _, out _);
+
+    /// <summary>The fields of a <see cref="TryQuotedArrayAffix"/> word: each element whole, the text glued to the first and last.</summary>
+    private static string EmitQuotedArrayAffixArray(CompoundWord word, int outer, int inner)
+    {
+        var dq = (WordPart.DoubleQuoted)word.Parts[outer];
+        var pre = new List<WordPart>();
+        for (int i = 0; i < outer; i++) pre.Add(word.Parts[i]);
+        if (inner > 0) pre.Add(new WordPart.DoubleQuoted(ImmutableArray.Create(dq.Parts, 0, inner)));
+        var suf = new List<WordPart>();
+        if (inner < dq.Parts.Length - 1) suf.Add(new WordPart.DoubleQuoted(ImmutableArray.Create(dq.Parts, inner + 1, dq.Parts.Length - inner - 1)));
+        for (int i = outer + 1; i < word.Parts.Length; i++) suf.Add(word.Parts[i]);
+        return PsBuild.QuotedAffixArray(
+            pre.Count == 0 ? "''" : AffixPrefixExpr([.. pre]),
+            suf.Count == 0 ? "''" : FlattenPartsToDoubleQuotedString([.. suf]),
+            EmitQuotedArrayElements(dq.Parts[inner]));
+    }
+
     private static string EmitUnquotedSplitWordArray(CompoundWord word)
-        => IsUnquotedPositionalAffixWord(word) || IsUnquotedVarAffixWord(word)
+        => TryQuotedArrayAffix(word, out var qaOuter, out var qaInner)
+            ? EmitQuotedArrayAffixArray(word, qaOuter, qaInner)
+            : IsUnquotedPositionalAffixWord(word) || IsUnquotedVarAffixWord(word)
             ? EmitAffixWordArray(word, UnquotedAffixExpansionIndex(word, ordinaryVar: true))
             : IsUnquotedPositionalOpWord(word)
             ? "@(" + EmitBracedVar((WordPart.BracedVarSub)word.Parts[0]) + " | ConvertTo-BashWords)"

@@ -537,6 +537,25 @@ building. The Linux side's remaining failures are the known `LsSortTimeDifferent
   locally). Windows real-launcher spec cases in array / var-op-slice timed out under load (pass locally).
 - XFAIL count after this pass: 377.
 
+### Progress, 2026-11-12 (fifteenth pass: word expansion)
+
+- Behind `builtin`/`command` a declaration's operands are ordinary words (`builtin export z=$x` exports `z=a` and
+  `b`); `declare $y` / `export $y` declare each field.
+- An unquoted variable glued to text is field-split in command arguments (`a$x`, `$x.c`, `"q"$x`, `f=$x`); only
+  for-lists split it before. `/tmp/a$x` and `/c/...$x` keep their path mapping. A glob word keeps its old form.
+- Text glued to a quoted `"${a[@]}"` / `"$@"` goes on the first and last element (`-"${a[@]}"`, `"p${a[@]}q"`,
+  `k"$@"`); ps-bash joined the elements into one field. Also in for-lists and declarations (`typeset -"${a[@]}"`).
+- A command name set at run time to `builtin` or a declaration (`$b declare f=$x`, `${b}uiltin ...`,
+  `myvar=typeset; $myvar x=$x`) runs it; `declare 'b'` declares (it printed the variable).
+- ls tests that print the mode column `chmod 644` first (beagle-ab's umask 002 failed G_NoOwnerColumn).
+- Not fixed: an arithmetic syntax error (`b[0+]=y`, `$(( 1+ ))`, `(( 1+ ))`) should abandon the rest of the input
+  line, status 1 (bash discards the current command list); ps-bash reports it and carries on (assign-extended c36).
+  `readonly -p NAMES` / `export -p NAMES` set the attribute and `local -p NAMES` prints locals (c18).
+  builtin-trap-err "trap ERR with redirect" fails on an elevated Windows runner, where `> /zz` (the drive root)
+  succeeds.
+- Fleet g20 (b423e1ce): Linux all green (Differential 2484/0); Windows green but that one case.
+- XFAIL count after this pass: 366.
+
 ## Suggested order
 
 1. Land A1 and the crash fix once the gate is green.
