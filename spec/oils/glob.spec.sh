@@ -62,7 +62,6 @@ g='_tmp/*.yy'
 echo $g ${g}y
 ## stdout: _tmp/*.yy _tmp/bar.yyy _tmp/foo.yyy
 ## status: 0
-## XFAIL ps-bash gap-oils-glob glob (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Glob flags on file system

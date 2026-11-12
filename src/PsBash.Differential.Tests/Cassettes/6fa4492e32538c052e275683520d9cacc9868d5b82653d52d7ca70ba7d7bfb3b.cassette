@@ -1,0 +1,24 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 321
+stdout-length: 98
+stderr-length: 0
+==== SCRIPT ====
+x='a b'; printf '[%s]' a$x; echo; f() { printf '[%s]' "$@"; echo; }; f a$x $x.c "q"$x $x'z'
+p=printf; $p '[%s]' f=$x; echo; e=ech; ${e}o hi
+y='1  2'; echo z$y; IFS=:; w='u:v'; printf '[%s]' k$w; echo; IFS=' '; x=''; printf '[%s]' a$x; echo
+n='a;echo pwn'; printf '[%s]' q$n; echo; m='$(echo pwn)'; printf '[%s]' q$m; echo
+==== STDOUT ====
+[aa][b]
+[aa][b][a][b.c][qa][b][a][bz]
+[f=a][b]
+hi
+z1 2
+[ku][v]
+[a]
+[qa;echo][pwn]
+[q$(echo][pwn)]
+
+==== STDERR ====
+

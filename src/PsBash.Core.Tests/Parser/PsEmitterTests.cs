@@ -279,7 +279,6 @@ public class PsEmitterTests
     [Theory]
     [InlineData("echo \"$y\"x", "${env:y}x")]
     [InlineData("echo \"${y}\"_z", "${env:y}_z")]
-    [InlineData("echo $y'x'", "${env:y}x")]
     [InlineData("echo \"$y\"\"x\"", "${env:y}x")]
     [InlineData("for i in a\"$y\"b; do :; done", "a${env:y}b")]
     public void Transpile_QuotedVarThenTextAfterTheQuote_BracesTheVariable(string src, string expected)
@@ -2458,7 +2457,6 @@ public class PsEmitterTests
     [InlineData("cat \"/tmp/a b\"", "Invoke-BashCat \"" + TmpDir + "/a b\"")]
     [InlineData("cat '/tmp/a b'", "Invoke-BashCat \"" + TmpDir + "/a b\"")]
     [InlineData("cat \"/tmp/\"x", "Invoke-BashCat \"" + TmpDir + "/x\"")]
-    [InlineData("cat /tmp/a$x", "Invoke-BashCat \"" + TmpDir + "/a$env:x\"")]
     [InlineData("cat /tmp/psb_\\$z", "Invoke-BashCat \"" + TmpDir + "/psb_`$z\"")]
     [InlineData("cat /tmp/it\\'s", "Invoke-BashCat \"" + TmpDir + "/it's\"")]
     [InlineData("cat /tmp/'a$b'", "Invoke-BashCat \"" + TmpDir + "/a`$b\"")]
@@ -7305,8 +7303,9 @@ public class PsEmitterTests
         // `[$x]` was swallowed whole into a GlobPart, so the emitted pattern text
         // `[$x]` made PowerShell read `$x` as ITS OWN (undefined) variable and
         // `x="a b"; echo [$x]` printed `[]` — total, silent data loss.
-        Assert.Equal("Invoke-BashEcho \"[$env:x]\"", PsEmitter.Transpile("echo [$x]"));
-        Assert.Equal("Invoke-BashEcho \"x[$env:y]z\"", PsEmitter.Transpile("echo x[$y]z"));
+        // Unquoted, the value is split too: the text is glued to the first and last field.
+        Assert.Contains("ConvertTo-BashWords -Prefix \"[\" -Suffix \"]\" -Fields @($env:x)", PsEmitter.Transpile("echo [$x]"));
+        Assert.Contains("ConvertTo-BashWords -Prefix \"x[\" -Suffix \"]z\" -Fields @($env:y)", PsEmitter.Transpile("echo x[$y]z"));
     }
 
     [Fact]
@@ -7452,7 +7451,8 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("cmd $x,y a,\"b\"");
         Assert.DoesNotContain(" $env:x,y", result);
-        Assert.Contains("\"$env:x,y\"", result);
+        // `$x,y` unquoted splits $x; the comma stays inside the quoted suffix.
+        Assert.Contains("-Suffix \",y\" -Fields @($env:x)", result);
         Assert.Contains("\"a,b\"", result);
     }
 

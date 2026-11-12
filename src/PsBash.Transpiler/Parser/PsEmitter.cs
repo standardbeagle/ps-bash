@@ -4664,6 +4664,12 @@ public static partial class PsEmitter
         foreach (var word in cmd.Words.Skip(1))
         {
             var val = GetLiteralValue(word);
+            // `declare 'b'` / `declare "-x" b`: quote removal comes first, so a quoted static name or flag is that text (it
+            // went to the print cmdlet, which listed `declare -- b=...`; bash prints nothing without -p).
+            if (val is null && TryGetStaticArgValue(word) is { Length: > 0 } quotedVal
+                && (quotedVal[0] is '-' or '+' ? quotedVal.Length > 1 && quotedVal.AsSpan(1).IndexOfAnyExcept("aAfFgilnprtux") < 0
+                    : IsValidVarName(quotedVal.Split('=')[0])))
+                val = quotedVal;
             if (val == "-A") isAssoc = true;
             else if (val == "-n") isNameref = true;
             else if (val == "-i") { /* integer — handled below */ }
@@ -5791,6 +5797,11 @@ public static partial class PsEmitter
         // A run-time command name (`"$@"`, `$cmd`, `"$tool"`) is looked up as bash does (function, then builtin such
         // as `false` / `echo` / `test`, then PATH): Resolve-BashCommand returns what `&` can call.
         bool dynamicName = needsCallOperator && dashName is null && IsBareVariableCommandWord(cmd.Words[0]);
+        // `${b}uiltin declare x`, `${z}ommand readonly y`: a name glued to text is split and looked up the same way. A word
+        // with a path separator (`$dir/bin/tool`) keeps its path emission.
+        bool affixName = needsCallOperator && dashName is null && !dynamicName && IsUnquotedVarAffixWord(cmd.Words[0])
+            && cmd.Words[0].Parts.All(p => p is not WordPart.Literal { Value: var lv } || lv.IndexOfAny(['/', '\\']) < 0);
+        dynamicName |= affixName;
         bool arrayName = dynamicName && (IsQuotedArrayAllWord(cmd.Words[0]) || IsUnquotedArrayAllWord(cmd.Words[0]));
         // `{1..10}` / `{a,b} x`: brace expansion makes several words, the first is the command (bash: `1: command not
         // found`). Emitted bare, PowerShell printed the numbers.
@@ -5837,7 +5848,9 @@ public static partial class PsEmitter
             leading = "& (Resolve-BashCommand ";
             // `$SUDO rm f` / `CC='gcc -O2'; $CC -c x.c`: an unquoted name splits first. No word leaves the next one the
             // command (none at all: nothing runs, status 0); more than one makes the rest leading operands.
-            commandWordText = IsPureUnquotedVarWord(cmd.Words[0])
+            commandWordText = affixName
+                ? "-Words " + EmitUnquotedSplitWordArray(cmd.Words[0]) + ")"
+                : IsPureUnquotedVarWord(cmd.Words[0])
                 ? "-Words " + EmitUnquotedVarSplitArray(cmd.Words[0]) + ")"
                 : commandWordText + ")";
         }
@@ -8024,7 +8037,7 @@ public static partial class PsEmitter
     private static bool IsUnquotedSplitWord(CompoundWord word)
         => IsPureUnquotedVarWord(word) || IsUnquotedPositionalListWord(word) || IsPureUnquotedCommandSubWord(word) || IsGlobWord(word)
            || IsBraceGlobWord(word) || IsArrayValuedWord(word) || IsUnquotedDefaultAltWord(word) || IsUnquotedElementWord(word) || IsUnquotedPositionalOpWord(word)
-           || IsUnquotedPositionalAffixWord(word);
+           || IsUnquotedPositionalAffixWord(word) || IsUnquotedVarAffixWord(word);
 
     /// <summary>Bare <c>${@#a}</c> / <c>${*/x/y}</c> / <c>${@%d}</c>: the operator applies to each parameter, so the result is a list of words.</summary>
     private static bool IsUnquotedPositionalOpWord(CompoundWord word)
@@ -8059,14 +8072,30 @@ public static partial class PsEmitter
         return found;
     }
 
+    /// <summary>The text before an affixed expansion, mapped like a path word's start: <c>/tmp/a$x</c> names the temp directory
+    /// and <c>/c/Users/$x</c> the drive, as <see cref="TransformWordPath"/> does for the unsplit word.</summary>
+    private static string AffixPrefixExpr(ImmutableArray<WordPart> prefix)
+    {
+        if (!_operandsAreText && TryStripTmpPrefix(prefix, out var rest))
+            return "(" + PsBuild.TempDirExpr + " + '/'" + (rest.IsDefaultOrEmpty ? "" : " + " + FlattenPartsToDoubleQuotedString(rest)) + ")";
+        if (!_operandsAreText && prefix[0] is WordPart.Literal { Value: var first } && TryTranslateMsysDrivePath(first, out var drive))
+            return FlattenPartsToDoubleQuotedString(prefix.SetItem(0, new WordPart.Literal(drive)));
+        return FlattenPartsToDoubleQuotedString(prefix);
+    }
+
     /// <summary><c>=$*=</c> / <c>a$@</c> unquoted: one field per parameter (each split on IFS), the text glued to the first and last.</summary>
     private static bool IsUnquotedPositionalAffixWord(CompoundWord word) => UnquotedAffixExpansionIndex(word, ordinaryVar: false) >= 0;
+
+    /// <summary><c>a$x</c> / <c>$x.c</c> / <c>"q"$x</c> / <c>f=$x</c> unquoted: the variable's value is split on IFS, the text glued to the
+    /// first and last field (x='a b': <c>a$x</c> is <c>aa</c> <c>b</c>). A word with a glob keeps its glob form.</summary>
+    private static bool IsUnquotedVarAffixWord(CompoundWord word)
+        => UnquotedAffixExpansionIndex(word, ordinaryVar: true) >= 0 && !IsGlobWord(word) && !IsBraceGlobWord(word);
 
     /// <summary>The fields of an affixed expansion word (see <see cref="UnquotedAffixExpansionIndex"/>), as an array expression.</summary>
     private static string EmitAffixWordArray(CompoundWord word, int idx)
     {
         var parts = word.Parts;
-        string pre = idx == 0 ? "''" : FlattenPartsToDoubleQuotedString(ImmutableArray.Create(parts, 0, idx));
+        string pre = idx == 0 ? "''" : AffixPrefixExpr(ImmutableArray.Create(parts, 0, idx));
         string suf = idx == parts.Length - 1 ? "''" : FlattenPartsToDoubleQuotedString(ImmutableArray.Create(parts, idx + 1, parts.Length - idx - 1));
         string values = parts[idx] is WordPart.SimpleVarSub { Name: "@" or "*" } or WordPart.BracedVarSub { Name: "@" or "*" }
             ? "@(" + PsBuild.BuildPositionalExpansion("@") + ")"
@@ -8166,8 +8195,8 @@ public static partial class PsEmitter
     };
 
     private static string EmitUnquotedSplitWordArray(CompoundWord word)
-        => IsUnquotedPositionalAffixWord(word)
-            ? EmitAffixWordArray(word, UnquotedAffixExpansionIndex(word, ordinaryVar: false))
+        => IsUnquotedPositionalAffixWord(word) || IsUnquotedVarAffixWord(word)
+            ? EmitAffixWordArray(word, UnquotedAffixExpansionIndex(word, ordinaryVar: true))
             : IsUnquotedPositionalOpWord(word)
             ? "@(" + EmitBracedVar((WordPart.BracedVarSub)word.Parts[0]) + " | ConvertTo-BashWords)"
             : IsQuotedArrayAllWord(word)
