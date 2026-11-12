@@ -5493,7 +5493,30 @@ public class PsEmitterTests
     public void Transpile_ArrayAppend_EmitsPlusEquals()
     {
         var result = PsEmitter.Transpile("Fruits+=('Watermelon')");
-        Assert.Contains("$Fruits = Add-BashArray $Fruits @('Watermelon')", result);
+        Assert.Contains("$Fruits = Add-BashArray ($Fruits ?? ${env:Fruits}) @('Watermelon')", result);
+    }
+
+    [Theory]
+    // No `declare -A` in sight: indexed with arithmetic subscripts, unless associative at run time (a sourced declare).
+    [InlineData("a=([k1]=v1 [k2]=v2)", true)]
+    [InlineData("b=([n]=x [0]=z)", true)]
+    // Known associative: the keys are strings, no run-time choice.
+    [InlineData("declare -A m=([k]=v)", false)]
+    [InlineData("declare -A m; m=([k]=v)", false)]
+    public void Transpile_KeyedArrayLiteral_PicksTheKindAtRunTimeUnlessKnownAssociative(string bash, bool runTimeChoice)
+    {
+        var ps = PsEmitter.Transpile(bash);
+        Assert.Equal(runTimeChoice, ps.Contains("-is [PsBash.Cmdlets.BashAssoc]"));
+        Assert.Contains("[PsBash.Cmdlets.BashAssoc]::FromPairs(", ps);
+        if (runTimeChoice) Assert.Contains("[PsBash.Cmdlets.BashSparseArray]::FromEntries([string](Invoke-BashArith ", ps);
+    }
+
+    [Fact]
+    public void Transpile_AllNumericSubscripts_StayTheSparseLiteral()
+    {
+        var ps = PsEmitter.Transpile("d=([1]=one [4]=four)");
+        Assert.Contains("[PsBash.Cmdlets.BashSparseArray]::FromEntries('1', ", ps);
+        Assert.DoesNotContain("BashAssoc", ps);
     }
 
     // while read -r VAR (with flag) takes the same labelled read-loop path as plain `read VAR`

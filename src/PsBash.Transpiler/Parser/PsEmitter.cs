@@ -3617,13 +3617,18 @@ public static partial class PsEmitter
             {
                 if (cmd.IsAssoc) _assocVars?.Add(pair.Name);
                 if (IsValidVarName(pair.Name)) _arrayVars?.Add(pair.Name);
-                if (pair.Op is AssignOp.Equal or AssignOp.PlusEqual && TryEmitAssocLiteral(pair.ArrayValue, out var assoc, cmd.IsAssoc || _assocVars?.Contains(pair.Name) == true))
+                bool knownAssoc = cmd.IsAssoc || _assocVars?.Contains(pair.Name) == true;
+                // A mixed `b=([n]=x [0]=z)` has a numeric key too: it takes this path (all-numeric ones the sparse literal below).
+                bool keyedNumericOk = knownAssoc || pair.Op == AssignOp.Equal && HasNonNumericSubscript(pair.ArrayValue);
+                if (pair.Op is AssignOp.Equal or AssignOp.PlusEqual && TryEmitAssocLiteral(pair.ArrayValue, out var assoc, out var assocAsIndexed, keyedNumericOk))
                 {
                     // `a+=([k]=v)` merges into the existing table (a changed value keeps its place, a new key joins).
                     sb.Append(ArrayWriteTarget(pair.Name)).Append(" = ");
                     sb.Append(pair.Op == AssignOp.PlusEqual
-                        ? "[PsBash.Cmdlets.BashAssoc]::Merge(" + ArrayWriteTarget(pair.Name) + ", " + assoc + ")"
-                        : assoc);
+                        ? "[PsBash.Cmdlets.BashAssoc]::Merge(" + PsBuild.ArrayAppendBase(ArrayWriteTarget(pair.Name), ResolveNameref(pair.Name)) + ", " + assoc + ")"
+                        // `a=([k1]=v1)` with no `declare -A a` in sight: indexed (arithmetic subscripts) unless a is
+                        // associative at run time.
+                        : knownAssoc ? assoc : PsBuild.AssocOrIndexed(ArrayWriteTarget(pair.Name), assoc, assocAsIndexed));
                     continue;
                 }
                 // `a=([2]=p [5]=q)`: explicit numeric subscripts; the gaps stay UNSET (a sparse array), as in bash.
@@ -3640,10 +3645,16 @@ public static partial class PsEmitter
                 }
                 // `declare -A a; a=(k v k2 v2)` (bash 5.1+): bare words are key/value pairs, a lone last key gets "".
                 bool wordsArePairs = pair.Op == AssignOp.Equal && _assocVars?.Contains(pair.Name) == true;
+                // eval'd text cannot see the caller's `declare -A a`: the run time picks pairs or list by a's kind.
+                bool kindAtRunTime = pair.Op == AssignOp.Equal && !wordsArePairs && !cmd.IsAssoc && !cmd.IsDeclare
+                    && _context == TranspileContext.Eval;
                 sb.Append(ArrayWriteTarget(pair.Name));
                 // `a+=(x)` goes through Add-BashArray: a sparse array appends after its highest subscript,
                 // which PowerShell's own `+=` cannot do on a dictionary.
-                sb.Append(pair.Op == AssignOp.PlusEqual ? " = Add-BashArray " + ArrayWriteTarget(pair.Name) + " @(" : wordsArePairs ? " = [PsBash.Cmdlets.BashAssoc]::FromWords(@(" : " = @(");
+                sb.Append(pair.Op == AssignOp.PlusEqual ? " = Add-BashArray " + PsBuild.ArrayAppendBase(ArrayWriteTarget(pair.Name), ResolveNameref(pair.Name)) + " @("
+                    : wordsArePairs ? " = [PsBash.Cmdlets.BashAssoc]::FromWords(@("
+                    : kindAtRunTime ? " = [PsBash.Cmdlets.BashAssoc]::ListOrPairs(" + ArrayWriteTarget(pair.Name) + ", @("
+                    : " = @(");
                 // A glob element (`arr=(*.txt)`) expands to ZERO or more elements, which the comma
                 // form cannot splice (`'a',@('b','c')` is two elements). Such a list is emitted as
                 // `@( item; item; ... )`, whose statements each enumerate into one flat array. An unquoted `$x` /
@@ -3664,7 +3675,7 @@ public static partial class PsEmitter
                     // for a "$x" element and produced unbalanced quotes for $'a\'b' elements.
                     sb.Append(EmitAssignmentValue(elem));
                 }
-                sb.Append(wordsArePairs ? "))" : ")");
+                sb.Append(wordsArePairs || kindAtRunTime ? "))" : ")");
                 continue;
             }
 
@@ -6043,10 +6054,39 @@ public static partial class PsEmitter
     /// <c>declare -A m; m[k]=v</c> already builds). Numeric keys stay on the indexed-array path.
     /// </summary>
     private static bool TryEmitAssocLiteral(ArrayWord array, out string literal, bool numericKeysAllowed = false)
+        => TryEmitAssocLiteral(array, out literal, out _, numericKeysAllowed);
+
+    /// <summary>True when some element is <c>[KEY]=…</c> with a KEY that is not all digits (<c>[n]=x</c>, <c>[k1]=v</c>).</summary>
+    private static bool HasNonNumericSubscript(ArrayWord array)
+    {
+        foreach (var elem in array.Elements)
+        {
+            string? first = elem.Parts.IsDefaultOrEmpty ? null : elem.Parts[0] switch
+            {
+                WordPart.Literal l => l.Value,
+                WordPart.GlobPart g => g.Pattern,
+                _ => null,
+            };
+            if (first is not { Length: > 2 } || first[0] != '[') continue;
+            int close = first.IndexOf(']');
+            if (close > 1 && !first.AsSpan(1, close - 1).ContainsAnyExceptInRange('0', '9')) continue;
+            if (close > 1) return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// <paramref name="indexedLiteral"/>: the same pairs as an INDEXED array, each subscript evaluated as arithmetic
+    /// (bash: <c>a=([k1]=v1 [k2]=v2)</c> on a variable that is not associative stores both at <c>a[0]</c>, k1 and k2
+    /// being unset).
+    /// </summary>
+    private static bool TryEmitAssocLiteral(ArrayWord array, out string literal, out string indexedLiteral, bool numericKeysAllowed = false)
     {
         literal = "";
+        indexedLiteral = "";
         if (array.Elements.IsDefaultOrEmpty) return false;
         var entries = new List<string>(array.Elements.Length);
+        var indexedEntries = new List<string>(array.Elements.Length);
         foreach (var elem in array.Elements)
         {
             // The lexer reads the subscript `[k1]` as a glob part, then `=v1` as a literal.
@@ -6080,9 +6120,12 @@ public static partial class PsEmitter
             // bash 5.2 leaves a tilde on the right of an associative `[key]=value` literal (an indexed one expands it).
             if (parts.Any(p => p is WordPart.TildeSub))
                 parts = parts.Select(p => p is WordPart.TildeSub ts ? (WordPart)new WordPart.Literal("~" + ts.User + (ts.SlashConsumed ? "/" : "")) : p).ToImmutableArray();
-            entries.Add(PsBuild.SingleQuote(key) + ", (" + EmitAssignmentValue(new CompoundWord(parts)) + ")");
+            string valueExpr = "(" + EmitAssignmentValue(new CompoundWord(parts)) + ")";
+            entries.Add(PsBuild.SingleQuote(key) + ", " + valueExpr);
+            indexedEntries.Add("[string](Invoke-BashArith " + PsBuild.SingleQuote(key) + "), " + valueExpr);
         }
         literal = "[PsBash.Cmdlets.BashAssoc]::FromPairs(" + string.Join(", ", entries) + ")";   // bash's key order and case-sensitive keys, not a @{} literal
+        indexedLiteral = "[PsBash.Cmdlets.BashSparseArray]::FromEntries(" + string.Join(", ", indexedEntries) + ")";
         return true;
     }
 

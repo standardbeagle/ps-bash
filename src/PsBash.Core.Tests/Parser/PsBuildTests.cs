@@ -293,4 +293,15 @@ public class PsBuildTests
         Assert.Contains("Write-Error ('ps-bash: ' + $__psbRo + ': readonly variable') -ErrorAction Continue; $global:LASTEXITCODE = 1", ps);
         Assert.EndsWith(" } else { $env:m = '1' }", ps);
     }
+
+    [Fact]
+    public void ArrayAppendBase_FallsBackToTheScalarInTheEnvironment()
+        => Assert.Equal("($global:s ?? ${env:s})", PsBuild.ArrayAppendBase("$global:s", "s"));
+
+    [Fact]
+    public void AssocOrIndexed_RunsOnlyTheBranchForTheRunTimeKind()
+    {
+        string ps = PsBuild.AssocOrIndexed("$a", "ASSOC", "INDEXED");
+        Assert.Equal("$(if ($a -is [PsBash.Cmdlets.BashAssoc]) { ASSOC } else { ,(INDEXED) })", ps);
+    }
 }

@@ -398,6 +398,26 @@ building. The Linux side's remaining failures are the known `LsSortTimeDifferent
   kill). This is the timing case from the sixth pass, not a regression.
 - XFAIL count after this pass: 412.
 
+### Progress, 2026-11-11 (ninth pass)
+
+- An array assignment now takes the kind bash gives it where the emitter cannot see a declaration:
+  - `s=world; s+=(x)` keeps the string as element 0, and `declare -A s+=([a]=x)` keeps it as key "0". The append
+    started from an empty array because the scalar lives in `$env:s`. `PsBuild.ArrayAppendBase` reads
+    `($s ?? ${env:s})`, and `BashAssoc.Merge` promotes a string.
+  - `a=([k1]=v1 [k2]=v2)` with no `declare -A` is an indexed array with arithmetic subscripts (`[0]=v2`); it was an
+    associative table. A variable that is associative at run time (declared in a sourced file) still takes string
+    keys: `PsBuild.AssocOrIndexed` picks the branch at run time, so a subscript's side effect (`[i++]`) runs once.
+  - Mixed subscripts `b=([n]=x [0]=z)` stored the text `[n]=x` (`HasNonNumericSubscript`).
+  - `declare -A a; eval 'a=(1 2 3 4)'` takes the words as key/value pairs; eval'd text cannot see the declare
+    (`BashAssoc.ListOrPairs`).
+- Gap, by design: `ArrayAppendBase` reads `${env:NAME}`, so on Windows `path+=(x)` starts from PATH. This is the
+  scalar-read env-case collision in `windows-env-case-collision-plan.md`, not a new one.
+- Not done: brace expansion inside a keyed value (`[k]=-{a,b}-`), the indexed↔assoc conversion errors, and
+  `a+=([k]=v)` with a non-numeric key on an indexed array.
+- Unmarked 4 in array-literal: "[k1]=v1 (BashArray)", "(strict_array) s+=()", "(strict_array) declare -A s+=()",
+  "(strict_array) assoc=(key value ...) is not allowed". The other array/assign spec files show no new failures.
+- XFAIL count after this pass: 408.
+
 ## Suggested order
 
 1. Land A1 and the crash fix once the gate is green.

@@ -175,7 +175,6 @@ v2
 v2
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array-literal array-literal (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### [k1]=v1 (BashAssoc)
@@ -245,7 +244,6 @@ status=0
 declare -a s2=([0]="world" [1]="1" [2]="2" [3]="3" [4]="4")
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array-literal array-literal (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -270,7 +268,6 @@ status=0
 declare -A s2=([0]="world" [b]="y" [a]="x" )
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array-literal array-literal (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -282,6 +279,5 @@ eval "a=(1 2 3 4)"
 declare -p a
 ## stdout: declare -A a=([3]="4" [1]="2" )
 ## status: 0
-## XFAIL ps-bash gap-oils-array-literal array-literal (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher

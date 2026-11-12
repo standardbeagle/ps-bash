@@ -1,0 +1,23 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 210
+stdout-length: 142
+stderr-length: 0
+==== SCRIPT ====
+a=([k1]=v1 [k2]=v2)
+echo ${a["k1"]} ${a["k2"]} ${#a[@]}
+n=3; b=([n]=x [n+1]=y [0]=z); declare -p b
+f=([2]=two [k]=kk); declare -p f
+i=0; c=([i++]=p [i++]=q); declare -p c; echo "i=$i"
+e=([x]=only); declare -p e
+==== STDOUT ====
+v2 v2 1
+declare -a b=([0]="z" [3]="x" [4]="y")
+declare -a f=([0]="kk" [2]="two")
+declare -a c=([0]="p" [1]="q")
+i=2
+declare -a e=([0]="only")
+
+==== STDERR ====
+

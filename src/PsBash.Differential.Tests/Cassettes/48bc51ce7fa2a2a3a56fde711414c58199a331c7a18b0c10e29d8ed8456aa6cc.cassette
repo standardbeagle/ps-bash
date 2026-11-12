@@ -1,0 +1,25 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 240
+stdout-length: 147
+stderr-length: 0
+==== SCRIPT ====
+declare -A a=([a]=b)
+eval "a=(1 2 3 4)"
+declare -p a
+eval 'a=()'; declare -p a
+b=(x); eval 'b=(1 2)'; declare -p b
+eval 'c=(p q)'; declare -p c
+f() { declare -A m; eval 'm=(k v j)'; declare -p m; }; f
+eval 'd=(one)'; echo "${#d[@]} ${d[0]}"
+==== STDOUT ====
+declare -A a=([3]="4" [1]="2" )
+declare -A a=()
+declare -a b=([0]="1" [1]="2")
+declare -a c=([0]="p" [1]="q")
+declare -A m=([k]="v" [j]="" )
+1 one
+
+==== STDERR ====
+

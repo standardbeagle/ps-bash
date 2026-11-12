@@ -50,10 +50,27 @@ public sealed class BashAssoc : Hashtable, IEnumerable
         return t;
     }
 
+    /// <summary>
+    /// <c>a=(w1 w2 …)</c> where the emitter cannot know <c>a</c>'s kind (eval'd text: <c>declare -A a; eval 'a=(1 2)'</c>):
+    /// an associative <c>a</c> takes the words as key/value pairs (<see cref="FromWords"/>), anything else the list.
+    /// </summary>
+    public static object ListOrPairs(object? existing, object?[] words)
+    {
+        var raw = existing is System.Management.Automation.PSObject pso ? pso.BaseObject : existing;
+        return raw is BashAssoc ? FromWords(words) : words;
+    }
+
     /// <summary><c>a+=([k]=v ...)</c>: the added pairs go into the existing table; with no table yet, they are the table.</summary>
     public static BashAssoc Merge(object? existing, BashAssoc added)
     {
         var raw = existing is System.Management.Automation.PSObject pso ? pso.BaseObject : existing;
+        // `s=world; declare -A s+=([a]=x)`: the string becomes element "0" (bash: `([0]="world" [a]="x")`).
+        if (raw is string scalar)
+        {
+            var promoted = new BashAssoc();
+            promoted["0"] = scalar;
+            raw = promoted;
+        }
         if (raw is not BashAssoc target) return added;
         foreach (var kv in added.ReplayOrder()) target[kv.Key] = kv.Value;
         return target;

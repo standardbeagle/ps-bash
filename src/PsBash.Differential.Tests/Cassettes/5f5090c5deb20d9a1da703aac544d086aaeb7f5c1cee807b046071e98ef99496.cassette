@@ -1,0 +1,18 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 136
+stdout-length: 56
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)"
+printf 'declare -A M\n' > decl.sh
+source ./decl.sh
+M=([k]=v [j]=w); declare -p M
+declare -A N; N=([n]=x); declare -p N
+==== STDOUT ====
+declare -A M=([k]="v" [j]="w" )
+declare -A N=([n]="x" )
+
+==== STDERR ====
+

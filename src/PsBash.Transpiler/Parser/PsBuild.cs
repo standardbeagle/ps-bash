@@ -442,6 +442,23 @@ public static class PsBuild
     /// (<c>readonly $names</c>, <c>readonly</c> in a function): when one of them is read-only now, report
     /// <c>NAME: readonly variable</c> and set status 1 instead of assigning.
     /// </summary>
+    /// <summary>
+    /// The current value an array append (<c>s+=(x)</c>, <c>declare -A s+=([k]=v)</c>) builds on: the array, else the
+    /// variable's SCALAR value, which lives in the environment. bash keeps it as element 0
+    /// (<c>s=world; s+=(x)</c> is <c>([0]="world" [1]="x")</c>); the append started from nothing and lost it.
+    /// </summary>
+    public static string ArrayAppendBase(string arrayTarget, string name) =>
+        "(" + arrayTarget + " ?? ${env:" + name + "})";
+
+    /// <summary>
+    /// <c>a=([k]=v …)</c> on a variable the emitter does not know to be associative: an associative <c>a</c> (declared
+    /// in a sourced file, a caller) takes the keys as strings, anything else is an INDEXED array whose subscripts are
+    /// arithmetic. Only the chosen branch runs, so a subscript's side effects (<c>[i++]</c>) happen only for the indexed
+    /// form. The <c>,</c> keeps a one-element array an array through <c>$( )</c>.
+    /// </summary>
+    public static string AssocOrIndexed(string arrayTarget, string assocExpr, string indexedExpr) =>
+        "$(if (" + arrayTarget + " -is [PsBash.Cmdlets.BashAssoc]) { " + assocExpr + " } else { ,(" + indexedExpr + ") })";
+
     public static string RuntimeReadonlyGuard(IEnumerable<string> names, string assignment) =>
         "if ($__psbRo = [PsBash.Cmdlets.BashShellState]::FirstReadonly(" + string.Join(", ", names.Select(SingleQuote))
         + ")) { Write-Error ('ps-bash: ' + $__psbRo + ': readonly variable') -ErrorAction Continue; $global:LASTEXITCODE = 1 } else { "

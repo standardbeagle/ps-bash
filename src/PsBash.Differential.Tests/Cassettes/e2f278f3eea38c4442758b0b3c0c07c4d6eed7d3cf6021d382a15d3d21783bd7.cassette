@@ -1,0 +1,24 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 233
+stdout-length: 246
+stderr-length: 0
+==== SCRIPT ====
+s1=hello; s2=world
+s1=(1 2 3 4); declare -p s1
+s2+=(1 2 3 4); declare -p s2
+t=world; declare -A t+=([a]=x [b]=y); declare -p t
+f() { local q=lv; q+=(z); declare -p q; }; f
+u=one; eval 'u+=(two)'; declare -p u
+w+=(fresh); declare -p w
+==== STDOUT ====
+declare -a s1=([0]="1" [1]="2" [2]="3" [3]="4")
+declare -a s2=([0]="world" [1]="1" [2]="2" [3]="3" [4]="4")
+declare -A t=([0]="world" [b]="y" [a]="x" )
+declare -a q=([0]="lv" [1]="z")
+declare -a u=([0]="one" [1]="two")
+declare -a w=([0]="fresh")
+
+==== STDERR ====
+

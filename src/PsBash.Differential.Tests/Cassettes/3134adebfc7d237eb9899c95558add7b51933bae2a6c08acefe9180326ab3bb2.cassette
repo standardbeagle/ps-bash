@@ -1,0 +1,17 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 126
+stdout-length: 55
+stderr-length: 0
+==== SCRIPT ====
+declare -A m
+m=(['a;echo pwned']='$(echo pwned2)')
+declare -p m
+k='x;echo pwned3'; eval 'm+=("$k" v)' 2>/dev/null; echo "s=$?"
+==== STDOUT ====
+declare -A m=(["a;echo pwned"]="\$(echo pwned2)" )
+s=0
+
+==== STDERR ====
+

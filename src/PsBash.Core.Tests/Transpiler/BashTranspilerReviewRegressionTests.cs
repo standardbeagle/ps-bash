@@ -421,15 +421,15 @@ public class BashTranspilerReviewRegressionTests
 
     // Oracle: an array a function writes without declaring it `local` is the shell's own - push() { st+=("$1"); } must reach the caller.
     [Theory]
-    [InlineData("push() { st+=(\"$1\"); }; push a", "$global:st = Add-BashArray $global:st @(")]
+    [InlineData("push() { st+=(\"$1\"); }; push a", "$global:st = Add-BashArray ($global:st ?? ${env:st}) @(")]
     [InlineData("f() { a=(x y); }; f", "$global:a = @(")]
     [InlineData("f() { a[2]=z; }; f", "$global:a = Set-BashElement $global:a")]
     public void Transpile_ArrayWrittenInFunction_TargetsTheGlobal(string bash, string expected)
         => Assert.Contains(expected, BashTranspiler.Transpile(bash + "\ndeclare -p"));
 
     [Theory]
-    [InlineData("f() { local st=(a); st+=(b); }; f", "$st = Add-BashArray $st @(")]
-    [InlineData("f() { ( st+=(b) ); }; f", "$st = Add-BashArray $st @(")]
+    [InlineData("f() { local st=(a); st+=(b); }; f", "$st = Add-BashArray ($st ?? ${env:st}) @(")]
+    [InlineData("f() { ( st+=(b) ); }; f", "$st = Add-BashArray ($st ?? ${env:st}) @(")]
     public void Transpile_LocalOrSubshellArrayWrite_StaysLocal(string bash, string expected)
     {
         var ps = BashTranspiler.Transpile(bash);
@@ -878,7 +878,7 @@ public class BashTranspilerReviewRegressionTests
     public void Transpile_LocalNamerefToAnArray_AppendsToTheCallersArray()
     {
         var ps = BashTranspiler.Transpile("addto() { local -n a=$1; a+=(\"$2\"); }\nl=(a)\naddto l c");
-        Assert.Contains("$global:l = Add-BashArray $global:l @(", ps);
+        Assert.Contains("$global:l = Add-BashArray ($global:l ?? ${env:l}) @(", ps);
     }
 
     [Fact]
