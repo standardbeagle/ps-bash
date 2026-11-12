@@ -1,0 +1,23 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 238
+stdout-length: 46
+stderr-length: 0
+==== SCRIPT ====
+y='p=1 q=2'; declare $y; echo "d [$p] [$q]"
+y='p2=1 q2=2'; export $y; echo "e [$p2] [$q2]"; printenv q2
+y='p4=1 q4=2'; typeset $y; echo "t [$p4] [$q4]"
+y='u=1'; declare -x w $y; echo "[$u]"; printenv u
+x='a b'; declare z=$x; echo "z [$z]"
+==== STDOUT ====
+d [1] [2]
+e [1] [2]
+2
+t [1] [2]
+[1]
+1
+z [a b]
+
+==== STDERR ====
+

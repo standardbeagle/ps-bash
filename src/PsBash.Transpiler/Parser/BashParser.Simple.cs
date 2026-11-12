@@ -35,6 +35,10 @@ public sealed partial class BashParser
         if (k == 0) return;
         if (_tokens[_pos + k] is { Kind: BashTokenKind.Word } d && Bare(d.Value) is "export" or "local" or "declare" or "typeset" or "readonly")
         {
+            // `builtin export z=$x`: behind a wrapper the operands are ordinary words (split, globbed), not assignments.
+            // An operand with an expansion keeps the wrapper; the emitter runs it through the run-time declaration.
+            for (int j = _pos + k + 1; j < _tokens.Count && _tokens[j].Kind is BashTokenKind.Word or BashTokenKind.AssignmentWord; j++)
+                if (_tokens[j].Value.AsSpan().IndexOfAny('$', '`') >= 0) return;
             // `builtin declare a=(x y)` is a syntax error in bash (an array literal needs the bare declaration builtin).
             int saved = _pos;
             _pos += k;

@@ -1,0 +1,28 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 381
+stdout-length: 57
+stderr-length: 0
+==== SCRIPT ====
+x='a b'
+builtin export z=$x; echo "[$z]"
+command export c=$x; echo "[$c]"
+builtin declare d=$x e=1; echo "[$d] [$e]"
+builtin declare g="$x"; echo "[$g]"
+y='p=1 q=2'; builtin declare $y; echo "[$p] [$q]"
+f() { builtin local s=$x; echo "[$s]"; command local t="$x"; echo "[$t]"; }; f
+builtin declare h=*.zzz; echo "[$h]"; n='a;echo pwn'; builtin declare k=$n 2>/dev/null; echo "[$k]"
+==== STDOUT ====
+[a]
+[a]
+[a] [1]
+[a b]
+[1] [2]
+[a]
+[a b]
+[*.zzz]
+[a;echo]
+
+==== STDERR ====
+

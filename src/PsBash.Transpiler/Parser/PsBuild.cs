@@ -499,6 +499,11 @@ public static class PsBuild
         "$(if (" + arrayTarget + " -is [PsBash.Cmdlets.BashAssoc]) { " + assocExpr + " } else { ,(" + indexedExpr + ") })";
 
     /// <summary>
+    /// <paramref name="text"/> as one BASH word in single quotes (<c>it's</c> is <c>'it'\''s'</c>): text handed to a
+    /// run-time <c>eval</c> that must stay literal.
+    /// </summary>
+    public static string BashSingleQuote(string text) => "'" + text.Replace("'", "'\\''") + "'";
+    /// <summary>
     /// <c>declare -A a</c> when <c>a</c> is an indexed array (<c>declare -a</c> when it is associative): bash reports
     /// <c>a: cannot convert indexed to associative array</c>, sets status 1 and leaves <c>a</c> as it was; otherwise
     /// <paramref name="declaration"/> runs.

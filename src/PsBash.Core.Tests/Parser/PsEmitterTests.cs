@@ -6854,9 +6854,10 @@ public class PsEmitterTests
     }
 
     [Fact]
-    public void Transpile_TypesetWithQuotedDynamicArg_MapsToInvokeBashDeclare()
+    public void Transpile_TypesetWithQuotedDynamicArg_DeclaresAtRunTime()
     {
-        Assert.Contains("Invoke-BashDeclare", PsEmitter.Transpile("typeset -a \"$code\""));
+        // The operand is known only at run time: the declaration runs through the run-time eval (status 0, as bash).
+        Assert.Contains("$__psbash_eval_src", PsEmitter.Transpile("typeset -a \"$code\""));
     }
 
     [Fact]

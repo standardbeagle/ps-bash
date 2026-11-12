@@ -191,7 +191,6 @@ argv.py "$x"
 # bash allows it
 ## stdout: status=0
 ## status: 127
-## XFAIL ps-bash gap-oils-assign-extended assign-extended (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### dynamic flag in array in assign builtin

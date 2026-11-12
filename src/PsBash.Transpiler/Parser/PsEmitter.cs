@@ -3920,7 +3920,7 @@ public static partial class PsEmitter
     /// word (`printf %q`: `local "$1"` with `x=y a=b` makes x='y a=b'); an unquoted one is split by the eval, as bash
     /// splits it. Without this the builtin fell to command lookup: "local: command not found".
     /// </summary>
-    private static bool TryEmitRuntimeNamedDeclaration(string name, Command.Simple cmd, out string result)
+    private static bool TryEmitRuntimeNamedDeclaration(string name, Command.Simple cmd, out string result, bool operandsAreOrdinaryWords = false)
     {
         result = "";
         static bool IsExpansion(WordPart p) => p is WordPart.SimpleVarSub or WordPart.BracedVarSub or WordPart.CommandSub;
@@ -3935,7 +3935,15 @@ public static partial class PsEmitter
                 evalWords.Add(w);
                 continue;
             }
-            if (w.Parts.All(IsExpansion))
+            // A literal operand (`x`, `k=~/x`, `-a`) is passed on as written; one with other characters is quoted.
+            if (w.Parts.All(p => p is WordPart.Literal) && GetLiteralValue(w) is { Length: > 0 } lit)
+            {
+                evalWords.Add(lit.All(c => char.IsAsciiLetterOrDigit(c) || "_=+-./:,@%~".Contains(c))
+                    ? w : new CompoundWord([new WordPart.SingleQuoted(PsBuild.BashSingleQuote(lit))]));
+                continue;
+            }
+            // Behind `builtin`/`command` every operand expands like a command argument (split, globbed).
+            if (w.Parts.All(IsExpansion) || operandsAreOrdinaryWords)
             {
                 // The FIELDS of `$names` are names, never code: eval gets each one %q-quoted
                 // ("$(for w in $names; do printf '%q ' "$w"; done)"), so `a;echo x` stays one word.
@@ -4077,6 +4085,18 @@ public static partial class PsEmitter
     private static bool TryEmitDynamicAssignmentBuiltin(Command.Simple cmd, out string result)
     {
         result = "";
+        // `builtin export z=$x`, `command readonly c=$x`, `\builtin declare d=$x`: behind a wrapper the operands are
+        // ORDINARY words (bash 5.2): with x='a b', `z=$x` splits into `z=a` and `b`. The parser leaves such a
+        // declaration a plain command when an operand has an expansion; it runs through the run-time eval.
+        int wrap = 0;
+        while (wrap < cmd.Words.Length - 1 && TryGetStaticArgValue(cmd.Words[wrap]) is "builtin" or "command") wrap++;
+        if (wrap > 0 && TryGetStaticArgValue(cmd.Words[wrap]) is { } wrapped && wrapped is "declare" or "typeset" or "local" or "export" or "readonly")
+        {
+            var inner = cmd with { Words = [new CompoundWord([new WordPart.Literal(wrapped)]), .. cmd.Words.Skip(wrap + 1)] };
+            if (!TryEmitRuntimeNamedDeclaration(wrapped, inner, out result, operandsAreOrdinaryWords: true))
+                result = EmitSimple(inner);
+            return true;
+        }
         var name = cmd.Words.Length < 2 ? null : GetLiteralValue(cmd.Words[0]);
         if (name is not ("declare" or "typeset" or "local" or "export" or "readonly"))
             return false;
@@ -4090,8 +4110,10 @@ public static partial class PsEmitter
                 || p is WordPart.DoubleQuoted d && HasEquals(d.Parts));
             return HasEquals(w.Parts);
         }
-        // `declare`/`typeset` with run-time words already go to Invoke-BashDeclare; `local` and `readonly` did not.
-        if (name is "local" or "readonly" && TryEmitRuntimeNamedDeclaration(name, cmd, out result)) return true;
+        // `declare $y`, `export $y`, `local $y` (y='p=1 q=2'): the run-time eval declares each field. Known gap:
+        // `typeset -a "$code"` with code='x=(1 2 3)' makes the scalar "(1 2 3)" (bash parses the array; ps-bash never
+        // re-parses a variable's value as code).
+        if (TryEmitRuntimeNamedDeclaration(name, cmd, out result)) return true;
         if (!cmd.Words.Skip(1).Any(IsDynamicAssignment)) return false;
 
         // Everything that is not a dynamic assignment keeps its normal path; each dynamic one assigns the scalar
