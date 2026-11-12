@@ -4810,7 +4810,7 @@ public static partial class PsEmitter
         {
             // Re-declaring an existing associative array keeps its entries (bash: `declare -A d` twice).
             // `x=1; declare -A x`: the scalar becomes the element keyed 0.
-            result = "if ($global:" + varName + " -isnot [System.Collections.IDictionary]) { $global:" + varName + " = [PsBash.Cmdlets.BashAssoc]::new()"
+            result = "if ($global:" + varName + " -isnot [System.Collections.IDictionary]) { $global:" + varName + " = [PsBash.Cmdlets.BashAssoc]::Unset()"
                 + "; if ($null -ne $env:" + varName + ") { $global:" + varName + "['0'] = $env:" + varName + " } }";
             if (_functionDepth == 0) result = PsBuild.ArrayKindGuard(varName, toAssoc: true, result + "; " + PsBuild.SetStatus(0));
             return true;

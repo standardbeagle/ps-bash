@@ -1,0 +1,25 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 252
+stdout-length: 111
+stderr-length: 0
+==== SCRIPT ====
+declare -A f; declare -p f
+declare -A g; g=(); declare -p g
+declare -A d; d[k]=1; unset 'd[k]'; declare -p d
+declare -A e=(); declare -p e
+declare -A h; declare -A h; declare -p h
+x=1; declare -A x; declare -p x
+fn() { declare -A l; declare -p l; }; fn
+==== STDOUT ====
+declare -A f
+declare -A g=()
+declare -A d=()
+declare -A e=()
+declare -A h
+declare -A x=([0]="1" )
+declare -A l
+
+==== STDERR ====
+

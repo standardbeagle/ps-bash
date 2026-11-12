@@ -565,6 +565,29 @@ building. The Linux side's remaining failures are the known `LsSortTimeDifferent
   (LsTimeSortTests x3 atime/ctime order, FindPredicateTests.NewerXY, GrepStreamingTests 60 s timeout): suspect the
   runner. builtin-read "read -u 3 -d b -N 6" passes 3 of 5 Windows runs (flaky XPass).
 - Not fixed: `typeset -n ref=x; typeset +n ref; echo $ref` prints nothing (bash: x).
+- `declare -A d; declare -p d` prints `declare -A d` (it printed `=()`): a table built by `BashAssoc.Unset()` is
+  declared-unset until its first write. assign "declare -a arr ... creates an empty array".
+
+### Next workstream: bash's variable-context stack (`[bash_unset]`, about 12 cases)
+
+assign "Test above without 'local'", temp-binding "Temp bindings with local", ble-features x5, ble-unset x5. ps-bash
+parks a local's caller value in `$__lsd_NAME` (function scope) and a temp binding's in `$__saved_NAME`; neither is
+visible to `unset`, so `unset` always just clears. bash 5.2 behaviour, checked against all 12 cases:
+
+- Each name has a stack of frames: LOCAL or TEMPENV, each with the function depth that owns it and the value it hides.
+- A function call's temp binding (`v=t f`) is a TEMPENV frame owned by the CALLED function (depth+1); an eval's or a
+  builtin's (`v=t eval ...`) is owned by the current depth.
+- `local v` at depth d: top frame LOCAL at d -> nothing new. Top frame TEMPENV at d -> it becomes LOCAL (value kept).
+  Top frame TEMPENV below d -> push LOCAL, value inherited. Otherwise push LOCAL, value unset (or the given value).
+- `unset v` at depth d: top LOCAL at d -> value unset, frame kept (local-unset). Top LOCAL below d (`unlocal`, a
+  helper that unsets its caller's local) or top TEMPENV -> pop the frame and reveal the value it hid. No frame ->
+  plain unset.
+- Leaving a function or a temp binding restores a frame only if it is still on the stack (a popped frame's value is
+  already revealed, and later writes go to the outer variable).
+- Subshells `( )` keep the depth: `( unset v )` inside f is a local-unset.
+
+Implementation sketch: a runtime frame stack in BashShellState (push/pop/convert/unset), a run-time function depth
+counted by the function wrapper, `unset` routed through it (only when frames exist, to keep the plain path cheap).
 
 ## Suggested order
 

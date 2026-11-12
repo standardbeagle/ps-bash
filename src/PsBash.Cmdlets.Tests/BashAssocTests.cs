@@ -77,6 +77,21 @@ public class BashAssocTests
         Assert.Equal("g", t["apple"]);
     }
 
+    // `declare -A d; declare -p d` prints no `=()`; once written, even if emptied again, it does (bash 5.2).
+    [Fact] public void Unset_IsDeclaredUnsetUntilTheFirstWrite_AndCloneKeepsIt()
+    {
+        var d = BashAssoc.Unset();
+        Assert.True(d.IsDeclaredUnset);
+        Assert.True(((BashAssoc)d.Clone()).IsDeclaredUnset);
+        d["k"] = "1";
+        d.Remove("k");
+        Assert.False(d.IsDeclaredUnset);
+        var e = BashAssoc.Unset();
+        e.Add("k", "v");
+        Assert.False(e.IsDeclaredUnset);
+        Assert.False(new BashAssoc().IsDeclaredUnset);
+    }
+
     [Fact] public void FromWords_PairsWordsAndGivesALoneLastKeyAnEmptyValue()
     {
         var t = BashAssoc.FromWords(new object?[] { "1", "2", "3" });

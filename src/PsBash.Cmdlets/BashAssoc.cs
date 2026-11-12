@@ -22,6 +22,16 @@ public sealed class BashAssoc : Hashtable, IEnumerable
 
     public BashAssoc() : base(StringComparer.Ordinal) { }
 
+    /// <summary>
+    /// <c>declare -A d</c> with no value: declared but unset, so <c>declare -p d</c> prints <c>declare -A d</c> (no
+    /// <c>=()</c>). The first write clears it for good: <c>d[k]=1; unset 'd[k]'</c> prints <c>declare -A d=()</c>, as does
+    /// <c>declare -A d=()</c>, which is built with <see cref="BashAssoc()"/>.
+    /// </summary>
+    public bool IsDeclaredUnset { get; private set; }
+
+    /// <summary>The table <c>declare -A NAME</c> (no value) creates: see <see cref="IsDeclaredUnset"/>.</summary>
+    public static BashAssoc Unset() => new() { IsDeclaredUnset = true };
+
     /// <summary>The bucket index bash 5.2 files <paramref name="key"/> under.</summary>
     public static int BucketOf(string key)
     {
@@ -122,6 +132,7 @@ public sealed class BashAssoc : Hashtable, IEnumerable
             var k = K(key);
             if (!base.ContainsKey(k)) _seq[k] = _next++;
             base[k] = value;
+            IsDeclaredUnset = false;
         }
     }
 
@@ -130,6 +141,7 @@ public sealed class BashAssoc : Hashtable, IEnumerable
         var k = K(key);
         base.Add(k, value);
         _seq[k] = _next++;
+        IsDeclaredUnset = false;
     }
 
     public override void Remove(object key)
@@ -169,6 +181,7 @@ public sealed class BashAssoc : Hashtable, IEnumerable
     {
         var copy = new BashAssoc();
         foreach (var kv in ReplayOrder()) copy[kv.Key] = kv.Value;
+        copy.IsDeclaredUnset = IsDeclaredUnset;
         return copy;
     }
 

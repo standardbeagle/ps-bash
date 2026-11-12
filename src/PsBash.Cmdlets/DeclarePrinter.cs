@@ -50,6 +50,8 @@ internal static class DeclarePrinter
         string text;
         if (val is BashSparseArray sparse)
             text = $"declare -a{BashShellState.AttributeLetters(name)} {name}={FormatSparse(sparse)}";
+        else if (val is BashAssoc { IsDeclaredUnset: true })
+            text = $"declare -A{BashShellState.AttributeLetters(name)} {name}";
         else if (val is System.Collections.IDictionary dict)
             text = $"declare -A{BashShellState.AttributeLetters(name)} {name}={FormatAssociative(dict)}";
         else if (val is System.Collections.IList { Count: 0 } && val is not string && BashShellState.IsDeclaredUnset(name))

@@ -26,4 +26,12 @@ public class ArrayKindDifferentialTests
     // Keys and values are data: `;` and `$( )` inside them never run.
     [InlineData("declare -A m\nm=(['a;echo pwned']='$(echo pwned2)')\ndeclare -p m\nk='x;echo pwned3'; eval 'm+=(\"$k\" v)' 2>/dev/null; echo \"s=$?\"")]
     public Task Array_TakesBashsKind(string script) => AssertOracle.EqualAsync(script);
+
+    // `declare -A f; declare -p f` is `declare -A f`: declared, no value. It printed `=()`, which bash keeps for a table
+    // that was assigned (`=()`) or written and emptied.
+    [Fact]
+    public Task DeclaredAssocWithNoValue_PrintsNoParens() => AssertOracle.EqualAsync(
+        "declare -A f; declare -p f\ndeclare -A g; g=(); declare -p g\ndeclare -A d; d[k]=1; unset 'd[k]'; declare -p d\n"
+        + "declare -A e=(); declare -p e\ndeclare -A h; declare -A h; declare -p h\nx=1; declare -A x; declare -p x\n"
+        + "fn() { declare -A l; declare -p l; }; fn");
 }
