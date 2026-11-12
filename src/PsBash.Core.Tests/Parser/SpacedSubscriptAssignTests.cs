@@ -25,3 +25,28 @@ public class ElementPrefixAssignTests
         Assert.Contains("nosuchcmd", ps);
     }
 }
+
+/// <summary>`a[a[0]=1]=X` / `b[i++]=p`: a subscript that assigns runs before the array is read, so its write survives.
+/// Oracle (bash 5.2): `a[a[0]=1]=X` leaves a=([0]="1" [1]="X"); ps-bash lost a[0]=1.</summary>
+public class AssigningSubscriptTests
+{
+    private static string T(string bash) => PsEmitter.Transpile(bash)!;
+
+    [Theory]
+    [InlineData("a[a[0]=1]=X")]
+    [InlineData("b[i++]=p")]
+    [InlineData("a[ a[0]+=1 ]+=X")]
+    public void Transpile_AssigningSubscript_IsEvaluatedBeforeTheArrayIsRead(string bash)
+    {
+        var ps = T(bash);
+        int eval = ps.IndexOf("Invoke-BashArith $__psbK", StringComparison.Ordinal);
+        Assert.True(eval >= 0, ps);
+        Assert.True(eval < ps.IndexOf("Set-BashElement", StringComparison.Ordinal), ps);
+    }
+
+    [Theory]
+    [InlineData("a[1]=X")]
+    [InlineData("a[i+1]=X")]
+    [InlineData("a[i==1]=X")]
+    public void Transpile_PlainSubscript_KeepsTheSingleCall(string bash) => Assert.DoesNotContain("$__psbK", T(bash));
+}

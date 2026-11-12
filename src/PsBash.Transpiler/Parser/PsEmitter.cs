@@ -3785,8 +3785,16 @@ public static partial class PsEmitter
                 // array, then evaluated as arithmetic at run time; Set-BashElement pads/keys and returns the container.
                 // A leading `~` is not a tilde prefix in a subscript (`m[~]=v` keys `~`, not $HOME).
                 string target = ArrayWriteTarget(ResolveNameref(baseName));
-                sb.Append(target).Append(" = Set-BashElement ").Append(target).Append(' ')
-                  .Append(FlattenPartsToDoubleQuotedString(BashParser.DecomposeWord(subscript.StartsWith('~') ? "\\" + subscript : subscript))).Append(' ')
+                string key = FlattenPartsToDoubleQuotedString(BashParser.DecomposeWord(subscript.StartsWith('~') ? "\\" + subscript : subscript));
+                // `a[a[0]=1]=X`: a subscript that assigns runs first, here, so the array read below already has its
+                // write (Set-BashElement evaluated it on a copy of the array and returned that, losing a[0]=1).
+                if (ArithAssignRx.IsMatch(subscript))
+                {
+                    sb.Append("$__psbK = ").Append(key).Append("; if (-not (").Append(target).Append(" -is [System.Collections.IDictionary] -and ")
+                      .Append(target).Append(" -isnot [PsBash.Cmdlets.BashSparseArray])) { $__psbK = [string](Invoke-BashArith $__psbK) }; ");
+                    key = "$__psbK";
+                }
+                sb.Append(target).Append(" = Set-BashElement ").Append(target).Append(' ').Append(key).Append(' ')
                   .Append(EmitAssignmentValue(pair.Value));
                 if (pair.Op == AssignOp.PlusEqual) sb.Append(" -Append");
                 continue;
@@ -8306,11 +8314,15 @@ public static partial class PsEmitter
         {
             if (part is WordPart.BracedVarSub { Suffix: { } s } && (s.StartsWith("=") || s.StartsWith(":=")))
                 return true;
-            if (part is WordPart.ArithSub a && System.Text.RegularExpressions.Regex.IsMatch(a.Expr.Source, @"\+\+|--|(?<![=!<>])=(?!=)|[-+*/%&|^]=|<<=|>>="))
+            if (part is WordPart.ArithSub a && ArithAssignRx.IsMatch(a.Expr.Source))
                 return true;
         }
         return false;
     }
+
+    /// <summary>Arithmetic text that assigns: `=` (not `==` `!=` `<=` `>=`), an op-assign, `++` or `--`.</summary>
+    private static readonly System.Text.RegularExpressions.Regex ArithAssignRx =
+        new(@"\+\+|--|(?<![=!<>])=(?!=)|[-+*/%&|^]=|<<=|>>=", System.Text.RegularExpressions.RegexOptions.Compiled);
 
 
     /// <summary>

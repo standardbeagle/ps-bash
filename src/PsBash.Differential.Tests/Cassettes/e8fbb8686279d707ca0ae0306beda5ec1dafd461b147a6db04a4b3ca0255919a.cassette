@@ -1,0 +1,30 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 279
+stdout-length: 245
+stderr-length: 0
+==== SCRIPT ====
+a[a[0]=1]=X
+declare -p a
+a[ a[2]=3 ]=Y
+declare -p a
+a[ a[0]+=1 ]+=X
+declare -p a
+i=0; b[i++]=p; b[i++]=q && echo i=$i; declare -p b
+declare -A m; k=x; m[k=1]=v; declare -p m; echo k=$k
+f() { local -a c; c[c[0]=5]=Z; declare -p c; }; f
+true && d[d[1]=1]=w || echo no; declare -p d
+==== STDOUT ====
+declare -a a=([0]="1" [1]="X")
+declare -a a=([0]="1" [1]="X" [2]="3" [3]="Y")
+declare -a a=([0]="2" [1]="X" [2]="3X" [3]="Y")
+i=2
+declare -a b=([0]="p" [1]="q")
+declare -A m=([k=1]="v" )
+k=x
+declare -a c=([0]="5" [5]="Z")
+declare -a d=([1]="w")
+
+==== STDERR ====
+

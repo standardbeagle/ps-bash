@@ -245,7 +245,6 @@ declare -a a=([0]="1" [1]="X" [2]="3" [3]="Y")
 declare -a a=([0]="2" [1]="X" [2]="3X" [3]="Y")
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array-assign array-assign (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
