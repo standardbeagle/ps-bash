@@ -438,6 +438,10 @@ building. The Linux side's remaining failures are the known `LsSortTimeDifferent
   subscript side effects (`a[a[0]=1]=X` drops `a[0]`) and `declare a[i]=v`, trap-err errtrace in functions and
   LINENO for `x=$(false)`/`[[`/`((` in an ERR trap.
 - XFAIL count after this pass: 404.
+- Dogfood: on Windows, a glob behind a quoted backslash path (`ls 'C:\dir\'*.txt`) never expanded, so `ls` got
+  the literal and listed bare names. `C:\dir\` is escaped into the pattern as `C:\\dir\\`, and BashGlob matched
+  the literal backslash as a name character. A literal backslash is now a separator on Windows (no file name can
+  hold one), a drive root `C:\` is a root, and the matches keep the separators as typed. Not a spec case.
 
 ## Suggested order
 

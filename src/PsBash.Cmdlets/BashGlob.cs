@@ -139,20 +139,40 @@ internal static class BashGlob
         return sb.ToString();
     }
 
-    /// <summary>Splits on unescaped <c>/</c>.</summary>
-    private static List<string> SplitComponents(string rest)
+    /// <summary>
+    /// A directory separator at <c>s[i]</c>: an unescaped <c>/</c>, or on Windows a LITERAL backslash (the escaped pair
+    /// <c>\\</c>, from a quoted or escaped one: <c>'C:\dir\'*.txt</c>). No Windows file name can hold a backslash, so
+    /// it can only mean a separator; it used to be matched as a name character and the pattern never expanded.
+    /// </summary>
+    private static bool IsSeparatorAt(string s, int i, out int width)
     {
-        var parts = new List<string>();
+        if (s[i] == '/') { width = 1; return true; }
+        if (OperatingSystem.IsWindows() && s[i] == '\\' && i + 1 < s.Length && s[i + 1] == '\\') { width = 2; return true; }
+        width = 0;
+        return false;
+    }
+
+    /// <summary>Splits on separators (<see cref="IsSeparatorAt"/>); each part keeps the separator that followed it, so a match prints as typed.</summary>
+    private static List<(string Comp, char Sep)> SplitComponents(string rest)
+    {
+        var parts = new List<(string, char)>();
         var cur = new StringBuilder();
         for (int i = 0; i < rest.Length; i++)
         {
+            if (IsSeparatorAt(rest, i, out int w)) { parts.Add((cur.ToString(), rest[i])); cur.Clear(); i += w - 1; continue; }
             char c = rest[i];
             if (c == '\\' && i + 1 < rest.Length) { cur.Append(c).Append(rest[++i]); continue; }
-            if (c == '/') { parts.Add(cur.ToString()); cur.Clear(); continue; }
             cur.Append(c);
         }
-        parts.Add(cur.ToString());
+        parts.Add((cur.ToString(), '/'));
         return parts;
+    }
+
+    /// <summary>The index just past the run of separators starting at <paramref name="i"/>.</summary>
+    private static int SkipSeparators(string s, int i)
+    {
+        while (i < s.Length && IsSeparatorAt(s, i, out int w)) i += w;
+        return i;
     }
 
     /// <summary>Matches of <paramref name="pattern"/>, resolved against <paramref name="cwd"/>; empty when nothing matches.</summary>
@@ -189,39 +209,41 @@ internal static class BashGlob
         string dir = cwd;
         string rest = pattern;
 
-        if (pattern.StartsWith('/'))
+        if (pattern.Length > 0 && IsSeparatorAt(pattern, 0, out _))
         {
-            int n = 0;
-            while (n < pattern.Length && pattern[n] == '/') n++;
-            prefix = "/";
+            prefix = pattern[0] == '/' ? "/" : "\\";
             dir = Path.GetPathRoot(cwd) is { Length: > 0 } root ? root : "/";
-            rest = pattern[n..];
+            rest = pattern[SkipSeparators(pattern, 0)..];
         }
         else if (OperatingSystem.IsWindows() && pattern.Length >= 3 && char.IsAsciiLetter(pattern[0])
-                 && pattern[1] == ':' && pattern[2] == '/')
+                 && pattern[1] == ':' && IsSeparatorAt(pattern, 2, out _))
         {
-            int n = 2;
-            while (n < pattern.Length && pattern[n] == '/') n++;
-            prefix = pattern[..3];
+            prefix = pattern[..2] + (pattern[2] == '/' ? "/" : "\\");
             dir = pattern[..2] + "\\";
-            rest = pattern[n..];
+            rest = pattern[SkipSeparators(pattern, 2)..];
         }
 
-        var comps = SplitComponents(rest);
+        var split = SplitComponents(rest);
         bool dirOnly = false;
-        if (comps.Count > 1 && comps[^1].Length == 0)
+        char trailingSep = '/';
+        if (split.Count > 1 && split[^1].Comp.Length == 0)
         {
             dirOnly = true;
-            comps.RemoveAt(comps.Count - 1);
+            split.RemoveAt(split.Count - 1);
+            trailingSep = split[^1].Sep;
         }
-        comps.RemoveAll(c => c.Length == 0);
-        if (comps.Count == 0) return new List<string>();
+        // `a//b`: the empty part goes, with the separator after it (the one before it stays).
+        split.RemoveAll(p => p.Comp.Length == 0);
+        if (split.Count == 0) return new List<string>();
+        var comps = new List<string>(split.Count);
+        foreach (var p in split) comps.Add(p.Comp);
 
         var frontier = new List<(string Pfx, string Fs)> { (prefix, dir) };
         for (int i = 0; i < comps.Count && frontier.Count > 0; i++)
         {
             bool last = i == comps.Count - 1;
             string comp = comps[i];
+            string sep = last ? "" : split[i].Sep == '/' ? "/" : "\\";
             var next = new List<(string, string)>();
             foreach (var (pfx, fsDir) in frontier)
             {
@@ -241,7 +263,7 @@ internal static class BashGlob
                     string full = Path.Combine(fsDir, name);
                     bool isDir = SafeDirectoryExists(full);
                     if (!isDir && (!last || dirOnly || !File.Exists(full))) continue;
-                    next.Add((pfx + name + (last ? "" : "/"), full));
+                    next.Add((pfx + name + sep, full));
                     continue;
                 }
 
@@ -253,14 +275,14 @@ internal static class BashGlob
                     {
                         if (!SafeDirectoryExists(full)) continue;
                     }
-                    next.Add((pfx + name + (last ? "" : "/"), full));
+                    next.Add((pfx + name + sep, full));
                 }
             }
             frontier = next;
         }
 
         var results = new List<string>(frontier.Count);
-        foreach (var (pfx, _) in frontier) results.Add(dirOnly ? pfx + "/" : pfx);
+        foreach (var (pfx, _) in frontier) results.Add(dirOnly ? pfx + trailingSep : pfx);
         if (globStar)
         {
             results.Sort(StringComparer.Ordinal);

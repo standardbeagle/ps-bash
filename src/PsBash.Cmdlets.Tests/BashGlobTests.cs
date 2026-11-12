@@ -84,6 +84,28 @@ public class BashGlobTests : IClassFixture<SharedPwshFixture>, IDisposable
         Assert.Equal(root + "/sub/a1|" + root + "/sub/a[1]|" + root + "/sub/b1", Glob(root + "/sub/*"));
     }
 
+    /// <summary>
+    /// A literal backslash (quoted: <c>'C:\dir\'*.txt</c>, so <c>\\</c> in the pattern) is a separator on Windows: no
+    /// file name can hold one. It was matched as a name character, so the word never expanded (and <c>ls</c> then
+    /// listed bare names). The matches keep the separators as typed.
+    /// </summary>
+    [SkippableFact]
+    [Trait("Platform", "Windows")]
+    public void Expand_LiteralBackslashIsASeparatorOnWindows()
+    {
+        Skip.IfNot(OperatingSystem.IsWindows(), "a backslash is a file name character elsewhere");
+        string root = BashGlobText.Escape(_dir);   // C:\\Users\\…  (each backslash literal)
+
+        Assert.Equal(_dir + @"\y.txt", Glob(root + @"\\*.txt"));
+        Assert.Equal(@"sub\a1|sub\b1", Glob(@"sub\\?1"));
+        Assert.Equal(@"sub\", Glob(@"s*\\"));                       // trailing: directories only, separator kept
+        Assert.Equal(@"sub/a1|sub/b1", Glob(@"sub/?1"));            // `/` stays `/`
+        Assert.Equal(@"sub\a1|sub\b1", Glob(@"sub\\\\?1"));         // a doubled separator collapses like `//`
+        // The drive alone: `C:\` + pattern resolves from the root.
+        string drive = _dir[..2];
+        Assert.Contains(drive + @"\" + _dir[3..].Split('\\')[0], Glob(drive + @"\\*").Split('|'));
+    }
+
     [Fact]
     public void Expand_EscapedGlobCharactersMatchThemselves()
     {
@@ -171,6 +193,19 @@ public class BashGlobTests : IClassFixture<SharedPwshFixture>, IDisposable
         var r = Run(InDir("ConvertTo-BashGlob 'sub/a*'")).AssertSuccess();
 
         Assert.Equal(new[] { "sub/a1", "sub/a[1]" }, r.Lines);
+    }
+
+    /// <summary>What the transpiler emits for <c>ls 'C:\dir\'*.txt</c>: the quoted prefix escaped, each backslash doubled.</summary>
+    [SkippableFact]
+    [Trait("Platform", "Windows")]
+    public void Cmdlet_QuotedWindowsDirectoryPrefixExpands()
+    {
+        Skip.IfNot(OperatingSystem.IsWindows(), "a backslash is a file name character elsewhere");
+        string pattern = BashGlobText.Escape(_dir + @"\") + "*.txt";
+
+        var r = Run(InDir($"ConvertTo-BashGlob '{pattern}'; ConvertTo-BashGlob '{BashGlobText.Escape(_dir + @"\")}*.zz'")).AssertSuccess();
+
+        Assert.Equal(new[] { _dir + @"\y.txt", _dir + @"\*.zz" }, r.Lines);
     }
 
     [Fact]
