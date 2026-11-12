@@ -50,3 +50,46 @@ public class AssigningSubscriptTests
     [InlineData("a[i==1]=X")]
     public void Transpile_PlainSubscript_KeepsTheSingleCall(string bash) => Assert.DoesNotContain("$__psbK", T(bash));
 }
+
+/// <summary>`declare b[2]=y` declares b and assigns the element (the word was globbed and handed to declare: "not found").</summary>
+public class ElementDeclarationTests
+{
+    private static string T(string bash) => PsEmitter.Transpile(bash)!;
+
+    [Theory]
+    [InlineData("declare b[2]=y")]
+    [InlineData("typeset -a t[i+1]=$v")]
+    [InlineData("declare -A m[k]+=v")]
+    [InlineData("declare a[a[0]=1]=X")]
+    public void Transpile_DeclareElementInitializer_AssignsTheElement(string bash)
+    {
+        var ps = T(bash);
+        Assert.Contains("Set-BashElement", ps);
+        Assert.DoesNotContain("ConvertTo-BashGlob", ps);
+    }
+
+    // A declare operand is split at blanks before it is read as an assignment: `a[` and `]=Y` are invalid identifiers.
+    [Fact] public void Transpile_DeclareSpacedSubscript_IsSplitAtBlanks()
+    {
+        var ps = T("declare a[ a[2]=3 ]=Y");
+        Assert.Contains("`a['", ps);
+        Assert.Contains("`]=Y'", ps);
+    }
+
+    [Fact] public void Transpile_DeclareReadonlyElement_RefusesWithoutDroppingTheLine()
+    {
+        var ps = T("declare -r ro[0]=1; echo next");
+        Assert.Contains("ro: readonly variable", ps);
+        Assert.Contains("Invoke-BashEcho", ps);
+    }
+}
+
+/// <summary>A redirected compound runs in the current scope (dot-sourced): an array element assigned inside survives.</summary>
+public class RedirectedCompoundScopeTests
+{
+    [Theory]
+    [InlineData("{ b[1]=y; } 2>/dev/null")]
+    [InlineData("if true; then a[1]=x; fi >out.txt")]
+    public void Transpile_RedirectedCompound_IsDotSourced(string bash)
+        => Assert.StartsWith(". {", PsEmitter.Transpile(bash)!);
+}

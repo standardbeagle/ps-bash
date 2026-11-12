@@ -3920,6 +3920,110 @@ public static partial class PsEmitter
         return true;
     }
 
+    /// <summary>
+    /// `declare b[2]=y`, `local -a c[i+1]=$v`, `declare a[a[0]=1]=X`: an element initializer declares NAME (with the
+    /// command's flags) and then assigns the element like `b[2]=y`. The word was globbed and handed to declare, which
+    /// reported "b[2]=y: not found".
+    /// </summary>
+    private static bool TryEmitElementDeclaration(Command.Simple cmd, out string result)
+    {
+        result = "";
+        if (cmd.Words.Length < 2 || GetLiteralValue(cmd.Words[0]) is not ("declare" or "typeset" or "local")) return false;
+        // `declare a[ a[2]=3 ]=Y`: unlike an assignment statement, a declare operand is split at the blanks first
+        // (`a[` and `]=Y` are then invalid identifiers).
+        if (cmd.Words.Skip(1).Any(w => TrySplitElementInitializer(w, out var n, out _, out _) && n.Any(char.IsWhiteSpace)))
+        {
+            var resplit = new List<CompoundWord> { cmd.Words[0] };
+            foreach (var w in cmd.Words.Skip(1))
+            {
+                if (!TrySplitElementInitializer(w, out var n, out _, out _) || !n.Any(char.IsWhiteSpace)) { resplit.Add(w); continue; }
+                int run = 0;
+                var lead = new StringBuilder();
+                while (run < w.Parts.Length && w.Parts[run] is WordPart.Literal or WordPart.GlobPart)
+                    lead.Append(w.Parts[run++] switch { WordPart.Literal l => l.Value, WordPart.GlobPart g => g.Pattern, _ => "" });
+                var fields = lead.ToString().Split([' ', '\t', '\n'], StringSplitOptions.RemoveEmptyEntries);
+                for (int k = 0; k < fields.Length; k++)
+                    resplit.Add(new CompoundWord(k < fields.Length - 1
+                        ? [new WordPart.Literal(fields[k])]
+                        : [new WordPart.Literal(fields[k]), .. w.Parts.Skip(run)]));
+            }
+            result = EmitSimple(cmd with { Words = [.. resplit] });
+            return true;
+        }
+        // `declare -r ro[0]=1` makes ro a readonly (empty) array and then refuses the element: an error (status 0), and
+        // unlike an assignment statement the rest of the line still runs.
+        bool readonlyFlag = cmd.Words.Skip(1).Any(w => GetLiteralValue(w) is { Length: > 1 } f && f[0] == '-' && f.Contains('r'));
+        bool hasArrayFlag = cmd.Words.Skip(1).Any(w => GetLiteralValue(w) is { Length: > 1 } f && f[0] == '-' && (f.Contains('a') || f.Contains('A')));
+        var flags = new List<CompoundWord>();
+        var elements = new List<(string Name, AssignOp Op, CompoundWord Value)>();
+        var others = new List<CompoundWord>();
+        foreach (var w in cmd.Words.Skip(1))
+        {
+            if (TrySplitElementInitializer(w, out var elemName, out var op, out var value)) elements.Add((elemName, op, value));
+            else if (GetLiteralValue(w) is { Length: > 1 } f && f[0] is '-' or '+') flags.Add(w);
+            else others.Add(w);
+        }
+        if (elements.Count == 0) return false;
+        var sbOut = new StringBuilder();
+        if (others.Count > 0)
+            sbOut.Append(EmitSimple(cmd with { Words = [cmd.Words[0], .. flags, .. others], Redirects = [] })).Append("; ");
+        foreach (var (elemName, op, value) in elements)
+        {
+            string baseName = elemName[..elemName.IndexOf('[')];
+            CompoundWord[] declFlags = readonlyFlag && !hasArrayFlag ? [new CompoundWord([new WordPart.Literal("-a")]), .. flags] : [.. flags];
+            sbOut.Append(EmitSimple(cmd with { Words = [cmd.Words[0], .. declFlags, new CompoundWord([new WordPart.Literal(baseName)])], Redirects = [] }))
+                 .Append("; ");
+            if (readonlyFlag)
+                sbOut.Append("Write-Error ").Append(PsBuild.SingleQuote($"ps-bash: {baseName}: readonly variable")).Append(" -ErrorAction Continue; ");
+            else
+                sbOut.Append(EmitStatement(new Command.ShAssignment([new Assignment(elemName, op, value)]))).Append("; ");
+        }
+        sbOut.Append(PsBuild.SetStatus(0));
+        result = ApplyCompoundRedirects(sbOut.ToString(), cmd.Redirects);
+        return true;
+    }
+
+    /// <summary>`NAME[subscript]=value` / `NAME[subscript]+=value` as one word (the subscript may nest brackets):
+    /// the element name `NAME[subscript]`, the operator, and the value word.</summary>
+    private static bool TrySplitElementInitializer(CompoundWord word, out string elemName, out AssignOp op, out CompoundWord value)
+    {
+        elemName = ""; op = AssignOp.Equal; value = word;
+        if (word.Parts.IsDefaultOrEmpty) return false;
+        // The parser splits `b[2]=y` into literal and glob parts: join the leading unquoted run, remembering where
+        // each part ends, so the value keeps the parts after the `=`.
+        var text = new StringBuilder();
+        var partEnds = new List<int>();
+        foreach (var part in word.Parts)
+        {
+            if (part is WordPart.Literal lit) text.Append(lit.Value);
+            else if (part is WordPart.GlobPart glob) text.Append(glob.Pattern);
+            else break;
+            partEnds.Add(text.Length);
+        }
+        string s = text.ToString();
+        int i = 0;
+        while (i < s.Length && (char.IsAsciiLetterOrDigit(s[i]) || s[i] == '_')) i++;
+        if (i == 0 || char.IsAsciiDigit(s[0]) || i >= s.Length || s[i] != '[') return false;
+        int depth = 0, close = -1;
+        for (int j = i; j < s.Length; j++)
+        {
+            if (s[j] == '[') depth++;
+            else if (s[j] == ']' && --depth == 0) { close = j; break; }
+        }
+        if (close < 0 || close == i + 1) return false;
+        int eq = close + 1;
+        if (eq + 1 < s.Length && s[eq] == '+' && s[eq + 1] == '=') { op = AssignOp.PlusEqual; eq += 2; }
+        else if (eq < s.Length && s[eq] == '=') eq += 1;
+        else return false;
+        elemName = s[..(close + 1)];
+        int consumed = 0;
+        while (partEnds[consumed] < eq) consumed++;
+        var parts = word.Parts.RemoveRange(0, consumed + 1);
+        if (eq < partEnds[consumed]) parts = parts.Insert(0, new WordPart.Literal(s[eq..partEnds[consumed]]));
+        value = new CompoundWord(parts);
+        return true;
+    }
+
     private static bool TryEmitDynamicAssignmentBuiltin(Command.Simple cmd, out string result)
     {
         result = "";
@@ -4123,6 +4227,9 @@ public static partial class PsEmitter
 
         if (TryEmitInvalidIdentifiers(ref cmd, out var invalidIdResult))
             return invalidIdResult;
+
+        if (TryEmitElementDeclaration(cmd, out var elementDeclResult))
+            return elementDeclResult;
 
         if (TryEmitDynamicAssignmentBuiltin(cmd, out var dynamicAssignResult))
             return dynamicAssignResult;
@@ -10343,7 +10450,9 @@ public static partial class PsEmitter
         // With an input redirect the body is a stdin scope: the redirected data is drained into the
         // shared queue the body's stdin-reading commands consume (the body was emitted with
         // _inStdinScope set — see EmitCompoundBody). A `while read` loop streams `$input` itself.
-        var sb = new StringBuilder("& { ");
+        // Dot-sourced: the body runs in the caller's scope, so an array element it assigns (`{ a[1]=x; } 2>/dev/null`,
+        // a PowerShell variable, unlike scalars in $env:) outlives the group.
+        var sb = new StringBuilder(". { ");
         sb.Append(inputRedirect is not null && stdinScope ? PsBuild.StdinScope(body) : body);
         sb.Append(" }");
         AppendRedirectTail(sb, tailRedirects);

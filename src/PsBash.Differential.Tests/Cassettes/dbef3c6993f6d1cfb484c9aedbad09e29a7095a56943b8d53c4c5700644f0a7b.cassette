@@ -1,0 +1,23 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 315
+stdout-length: 147
+stderr-length: 0
+==== SCRIPT ====
+if true; then a[1]=x; fi 2>/dev/null; declare -p a
+{ b[1]=y; b+=(z); } >/dev/null; declare -p b
+for i in 1 2; do c[i]=$i; done 2>&1; declare -p c
+f() { { q[2]=w; } 2>/dev/null; declare -p q; }; f
+(d[1]=sub) 2>/dev/null; declare -p d 2>/dev/null || echo d-unset
+case k in k) e=(1 2) ;; esac 2>/dev/null; declare -p e
+==== STDOUT ====
+declare -a a=([1]="x")
+declare -a b=([1]="y" [2]="z")
+declare -a c=([1]="1" [2]="2")
+declare -a q=([2]="w")
+d-unset
+declare -a e=([0]="1" [1]="2")
+
+==== STDERR ====
+

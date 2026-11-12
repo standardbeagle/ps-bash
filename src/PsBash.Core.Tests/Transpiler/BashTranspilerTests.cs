@@ -1026,7 +1026,7 @@ public class BashTranspilerTests
         var result = BashTranspiler.Transpile("for x in 1 2; do echo $x; done > out.txt");
         Assert.Contains("| Invoke-BashRedirect -Path out.txt", result);
         // The loop must be grouped so the redirect covers the whole construct.
-        Assert.StartsWith("& {", result);
+        Assert.StartsWith(". {", result);
     }
 
     [Fact]
@@ -1034,7 +1034,7 @@ public class BashTranspilerTests
     {
         var result = BashTranspiler.Transpile("if true; then echo hi; fi > log.txt");
         Assert.Contains("| Invoke-BashRedirect -Path log.txt", result);
-        Assert.StartsWith("& {", result);
+        Assert.StartsWith(". {", result);
     }
 
     [Fact]
@@ -1087,7 +1087,7 @@ public class BashTranspilerTests
         var compound = BashTranspiler.Transpile("if true; then read line; echo $line; fi < input.txt");
         var subshell = BashTranspiler.Transpile("(read line; echo $line) < input.txt");
         // Both place the file's exact bytes (not Get-Content's lossy lines) on the group's pipeline.
-        Assert.Contains("Invoke-BashCat input.txt -RawStdinBytes | & {", compound);
+        Assert.Contains("Invoke-BashCat input.txt -RawStdinBytes | . {", compound);
         Assert.Contains("Invoke-BashCat input.txt -RawStdinBytes | & {", subshell);
     }
     // bash runs a script one complete command at a time: the lines above a syntax error run before it is reported.

@@ -1,0 +1,36 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 471
+stdout-length: 295
+stderr-length: 0
+==== SCRIPT ====
+declare b[2]=y; declare -p b
+declare a[a[0]=1]=X; declare -p a
+declare a[ a[2]=3 ]=Y 2>/dev/null; echo "st:$?"; declare -p a
+declare 1x e[1]=2 2>/dev/null; echo "st:$?"; declare -p e
+declare -a n[1]+=p r; declare -p n r
+typeset t[1]=*; declare -p t
+v='w x'; declare g[0]="$v"; declare -p g
+declare -A m; declare m[k]=v m[j]+=w; declare -p m
+declare -r ro[0]=1 2>/dev/null; echo "st:$?"
+f() { local c[1]=z; declare d[0]=q; declare -p c d; }; f; declare -p c d 2>&1 | wc -l
+==== STDOUT ====
+declare -a b=([2]="y")
+declare -a a=([0]="1" [1]="X")
+st:1
+declare -a a=([0]="1" [1]="X" [2]="3")
+st:1
+declare -a e=([1]="2")
+declare -a n=([1]="p")
+declare -a r
+declare -a t=([1]="*")
+declare -a g=([0]="w x")
+declare -A m=([k]="v" [j]="w" )
+st:0
+declare -a c=([1]="z")
+declare -a d=([0]="q")
+2
+
+==== STDERR ====
+

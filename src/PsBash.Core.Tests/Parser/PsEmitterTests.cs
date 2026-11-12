@@ -5334,7 +5334,7 @@ public class PsEmitterTests
     [InlineData("echo x 2>f >&2", "Invoke-BashEcho x 2>&1 | Invoke-BashRedirect -Path f")]
     [InlineData("echo x >&2 2>f", "Invoke-BashEcho x 2>&1 | Invoke-BashRedirect -ErrorPath f | Write-BashHostStderr")]
     [InlineData("echo x >&2 >f", "Invoke-BashEcho x | Invoke-BashRedirect -Path f")]
-    [InlineData("{ echo e >&2; } 2>/dev/null", "& { Invoke-BashEcho e | Write-BashHostStderr } 2>$null")]
+    [InlineData("{ echo e >&2; } 2>/dev/null", ". { Invoke-BashEcho e | Write-BashHostStderr } 2>$null")]
     public void Transpile_StdoutDupToStderr_AppliedInRedirectOrder(string bash, string expected)
         => Assert.Equal(expected, PsEmitter.Transpile(bash));
 

@@ -7,7 +7,6 @@ echo status=$?
 argv.py "${!a[@]}" "${a[@]}"
 ## stdout: status=0
 ## status: 127
-## XFAIL ps-bash gap-oils-assign-deferred assign-deferred (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### typeset -a a[1]=a a[3]=c
