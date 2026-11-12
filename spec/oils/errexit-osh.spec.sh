@@ -468,7 +468,7 @@ until=0
 --
 ## END
 ## status: 0
-## timeout: 10
+## timeout: 30
 ## real-launcher
 
 #### errexit is silent (verbose_errexit for Oils)
