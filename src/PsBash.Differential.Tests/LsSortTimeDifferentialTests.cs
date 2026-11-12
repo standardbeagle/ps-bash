@@ -19,6 +19,10 @@ public class LsSortTimeDifferentialTests
         "touch -a -d '2022-01-01 10:00:00' aaaa.c; touch -a -d '2021-01-01 10:00:00' bbbb.h; touch -a -d '2020-01-01 10:00:00' cccc; " +
         "touch -a -d '2023-06-01 10:00:00' dddd.a.c; touch -a -d '2019-01-01 10:00:00' ee.tar.gz; touch -a -d '2024-05-05 05:05:05' ff";
 
+    // Tests that print the mode column fix it: a file's mode follows the host's umask (022 where the cassettes were
+    // recorded, 002 on some fleet hosts), and ps-bash's own `umask` does not change the process umask.
+    private const string ModeSetup = Setup + "; chmod 644 aaaa.c bbbb.h cccc dddd.a.c ee.tar.gz ff";
+
     // "date time name" of a long listing whose owner and group are present (perms links owner group size DATE TIME NAME)
     private const string DateName = "awk 'NF >= 8 { print $6, $7, $8 }'";
 
@@ -75,13 +79,13 @@ public class LsSortTimeDifferentialTests
     [SkippableFact] public Task TimeStyle_AmbiguousAbbreviation() => EqualAsync(Setup, "ls -l --time-style=l; echo rc=$?");
 
     // ---- owner columns ----
-    [SkippableFact] public Task G_NoOwnerColumn() => EqualAsync(Setup, "ls -g --time-style=long-iso | awk '{ $3=\"\"; print }'");
-    [SkippableFact] public Task O_NoGroupColumn() => EqualAsync(Setup, "ls -o --time-style=long-iso | awk '{ $3=\"\"; print }'");
-    [SkippableFact] public Task GO_NeitherColumn() => EqualAsync(Setup, "ls -go --time-style=long-iso; ls -og --time-style=long-iso; ls -lgo --time-style=long-iso");
-    [SkippableFact] public Task G_NoGroup_Long() => EqualAsync(Setup, "ls -lG --time-style=long-iso | awk '{ $3=\"\"; print }'; ls -l --no-group --time-style=long-iso | awk '{ $3=\"\"; print }'");
+    [SkippableFact] public Task G_NoOwnerColumn() => EqualAsync(ModeSetup, "ls -g --time-style=long-iso | awk '{ $3=\"\"; print }'");
+    [SkippableFact] public Task O_NoGroupColumn() => EqualAsync(ModeSetup, "ls -o --time-style=long-iso | awk '{ $3=\"\"; print }'");
+    [SkippableFact] public Task GO_NeitherColumn() => EqualAsync(ModeSetup, "ls -go --time-style=long-iso; ls -og --time-style=long-iso; ls -lgo --time-style=long-iso");
+    [SkippableFact] public Task G_NoGroup_Long() => EqualAsync(ModeSetup, "ls -lG --time-style=long-iso | awk '{ $3=\"\"; print }'; ls -l --no-group --time-style=long-iso | awk '{ $3=\"\"; print }'");
     [SkippableFact] public Task G_Alone_IsNotLong() => EqualAsync(Setup, "ls -G");
-    [SkippableFact] public Task N_NumericIdsImplyLong() => EqualAsync(Setup, "ls -n --time-style=long-iso | awk '{ print NF, $1, $2, $5, $6, $7, $8 }'; ls --numeric-uid-gid | wc -l");
+    [SkippableFact] public Task N_NumericIdsImplyLong() => EqualAsync(ModeSetup, "ls -n --time-style=long-iso | awk '{ print NF, $1, $2, $5, $6, $7, $8 }'; ls --numeric-uid-gid | wc -l");
     [SkippableFact] public Task N_ColumnsAreNumbers() =>
         EqualAsync(Setup, "ls -n | awk 'NF >= 8 { print ($3 ~ /^[0-9]+$/) ? \"num\" : \"name\", ($4 ~ /^[0-9]+$/) ? \"num\" : \"name\" }' | sort -u");
-    [SkippableFact] public Task GO_WithHumanAndBlocks() => EqualAsync(Setup, "ls -gohs --time-style=long-iso");
+    [SkippableFact] public Task GO_WithHumanAndBlocks() => EqualAsync(ModeSetup, "ls -gohs --time-style=long-iso");
 }
