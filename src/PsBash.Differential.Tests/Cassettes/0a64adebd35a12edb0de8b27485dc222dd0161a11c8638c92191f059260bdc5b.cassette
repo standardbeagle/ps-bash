@@ -1,0 +1,16 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 99
+stdout-length: 32
+stderr-length: 0
+==== SCRIPT ====
+{ printf '%d\n' 12abc; echo "s=$?"; printf '%u\n' 99999999999999999999x; echo "s=$?"; } 2>/dev/null
+==== STDOUT ====
+12
+s=1
+18446744073709551615
+s=1
+
+==== STDERR ====
+

@@ -48,6 +48,17 @@ public sealed class InvokeBashCommCommand : PSCmdlet
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
+    /// <summary>The pipeline, read for a <c>-</c> operand (<c>sort a | comm - b</c>).</summary>
+    [Parameter(ValueFromPipeline = true)]
+    public PSObject? InputObject { get; set; }
+
+    private readonly List<object> _stdin = new();
+
+    protected override void ProcessRecord()
+    {
+        if (InputObject is not null) _stdin.Add(InputObject);
+    }
+
     /// <summary>
     /// Valid GNU comm options ps-bash does not implement, refused loudly (exit 2). (A string[] on
     /// purpose: CommonParameterCollisionGuardTests enumerates static string sets.)
@@ -144,13 +155,19 @@ public sealed class InvokeBashCommCommand : PSCmdlet
         // the wider migrated set (the oracle used GetUnresolvedProviderPathFromPSPath
         // directly; ResolveOperandPaths falls through to that for non-glob
         // literals, so behavior is byte-identical for literal operands).
-        string? path1 = ResolveSingleOperand(operands[0]);
+        // `-` is the pipeline. GNU opens stdin once: a second `-` fails ("Bad file descriptor", reads as empty) and
+        // the run still goes on, ending with status 1.
+        bool stdinTwice = operands[0] == "-" && operands[1] == "-";
+        string? path1 = operands[0] == "-" ? "-" : ResolveSingleOperand(operands[0]);
         if (path1 == null) return;
-        string? path2 = ResolveSingleOperand(operands[1]);
+        string? path2 = operands[1] == "-" ? "-" : ResolveSingleOperand(operands[1]);
         if (path2 == null) return;
+        if (stdinTwice) FileSystemHelpers.WriteStderr(this, "comm: -: Bad file descriptor");
 
         object Out(string text) => zero ? NulRecords.Record(text) : BashRuntime.NewBashObject(text);
-        IEnumerable<string> Read(string path) => zero ? NulRecords.ReadFile(path) : BashFileSystem.ReadLines(path);
+        IEnumerable<string> Read(string path) => path != "-"
+            ? zero ? NulRecords.ReadFile(path) : BashFileSystem.ReadLines(path)
+            : zero ? NulRecords.FromPipeline(_stdin) : _stdin.SelectMany(o => BashRuntime.RecordLines(o).Select(r => r.Text));
 
         IEnumerator<string>? file1 = null;
         IEnumerator<string>? file2 = null;
@@ -159,7 +176,7 @@ public sealed class InvokeBashCommCommand : PSCmdlet
         try
         {
             file1 = Read(path1).GetEnumerator();
-            file2 = Read(path2).GetEnumerator();
+            file2 = (stdinTwice ? Enumerable.Empty<string>() : Read(path2)).GetEnumerator();
 
             var prev = new string?[2];
             var issued = new bool[2];
@@ -235,6 +252,7 @@ public sealed class InvokeBashCommCommand : PSCmdlet
 
             if (issued[0] || issued[1])
                 FileSystemHelpers.WriteBashError(this, "comm: input is not in sorted order");
+            if (stdinTwice) FileSystemHelpers.SetLastExitCode(this, 1);
         }
         catch (Exception ex)
         {

@@ -1,0 +1,16 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 148
+stdout-length: 50
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)"; printf 'a\nc\n' > f; printf 'a\0b\0' | comm -z - f | od -An -c; printf 'b\na\n' | comm --check-order - f 2>/dev/null; echo "s=$?"
+==== STDOUT ====
+   a  \0  \t   a  \n   c  \n  \0   b  \0
+	a
+b
+s=1
+
+==== STDERR ====
+

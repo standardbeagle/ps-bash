@@ -381,6 +381,9 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
         {
             return;
         }
+        // head is done and succeeded; the upstream stage it stops may already have set a failure (`printf %d x |
+        // head -1`), and EndProcessing is not the last word once the pipeline is stopped from here.
+        FileSystemHelpers.SetLastExitCode(this, 0);
         throw ex;
     }
 
@@ -389,6 +392,8 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
         // If ProcessRecord streamed the line-mode pipeline already, we're done.
         if (_flagsParsed && (_streamingLineMode || _streamingByteMode))
         {
+            // head's own status: an upstream stage that failed while head streamed (`printf %d x 2>&1 | head`) must not leak through.
+            FileSystemHelpers.SetLastExitCode(this, 0);
             return;
         }
         _stdinHeaderDone = true;

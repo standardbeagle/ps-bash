@@ -1,0 +1,19 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 150
+stdout-length: 84
+stderr-length: 0
+==== SCRIPT ====
+for c in 'sed s/a/b/' 'head -1' 'head -c 3' 'grep -c .' 'cat' 'tail -1' 'sort'; do printf '%d' x 2>&1 >/dev/null | $c >/dev/null; echo "$c s=$?"; done
+==== STDOUT ====
+sed s/a/b/ s=0
+head -1 s=0
+head -c 3 s=0
+grep -c . s=0
+cat s=0
+tail -1 s=0
+sort s=0
+
+==== STDERR ====
+

@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 115
+stdout-length: 99
+stderr-length: 0
+==== SCRIPT ====
+for v in 18446744073709551616 99999999999999999999x; do printf '%u' $v 2>&1 >/dev/null | sed 's/.*printf: //'; done
+==== STDOUT ====
+warning: 18446744073709551616: Numerical result out of range
+99999999999999999999x: invalid number
+
+==== STDERR ====
+

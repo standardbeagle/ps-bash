@@ -606,7 +606,9 @@ public sealed class InvokeBashSedCommand : PSCmdlet
         if (_pFinished) return;
         _pFinished = true;
         FinishPipelineCore();
-        if (_rt is { ExitCode: not 0 }) FileSystemHelpers.SetLastExitCode(this, _rt.ExitCode);
+        // The pipeline's status is sed's own. The 0 set in BeginProcessing ran before any upstream stage did, so a
+        // stage that failed afterwards (`printf %d x 2>&1 | sed …`) would otherwise leak its status through.
+        FileSystemHelpers.SetLastExitCode(this, _rt?.ExitCode ?? 0);
     }
 
     private void FinishPipelineCore()

@@ -167,12 +167,16 @@ public sealed class InvokeBashPrintfCommand : PSCmdlet
         string? badFormat = null, badSpec = "";
         bool numErr = false;
 
-        // Integer conversions read the argument like strtoimax: 0x hex, 0 octal, a leading blank and a sign are fine,
-        // trailing text is "invalid number" (the numeric prefix still prints and the status becomes 1).
-        long IntArg(int idx)
+        // Integer conversions read the argument like strtoimax (%d %i) or strtoumax (%u %o %x %X): 0x hex, 0 octal, a
+        // leading blank and a sign are fine, trailing text is "invalid number" (the numeric prefix still prints and the
+        // status becomes 1). Out of range clamps with a WARNING and status 0: %d to the int64 bounds, %u to 2^64-1.
+        // strtoumax negates in 64 bits, so `%u -18446744073709551615` is 1.
+        long IntArg(int idx) => unchecked((long)ParseIntArg(idx, unsigned: false));
+        ulong UIntArg(int idx) => ParseIntArg(idx, unsigned: true);
+        ulong ParseIntArg(int idx, bool unsigned)
         {
             string a = argList[idx];
-            if (a.Length >= 2 && (a[0] == '\'' || a[0] == '"')) return ToLong(converted[idx]);
+            if (a.Length >= 2 && (a[0] == '\'' || a[0] == '"')) return unchecked((ulong)ToLong(converted[idx]));
             if (a is "'" or "\"") return 0; // no character after the quote: code point 0, no complaint
             int p = 0;
             while (p < a.Length && char.IsWhiteSpace(a[p])) p++;
@@ -191,14 +195,22 @@ public sealed class InvokeBashPrintfCommand : PSCmdlet
                 if (acc > (ulong.MaxValue - (ulong)dv) / (ulong)radix) over = true; else acc = acc * (ulong)radix + (ulong)dv;
                 p++;
             }
-            if (a.Length > 0 && (p < a.Length || (p == start && radix != 8)))
+            bool invalid = a.Length > 0 && (p < a.Length || (p == start && radix != 8));
+            if (invalid)
             {
                 FileSystemHelpers.WriteBashError(this, $"printf: {a}: invalid number");
                 numErr = true;
             }
-            if (over) { FileSystemHelpers.WriteBashError(this, $"printf: {a}: Numerical result out of range"); numErr = true; return neg ? long.MinValue : long.MaxValue; }
-            if (neg) return acc > (ulong)long.MaxValue + 1 ? long.MinValue : unchecked(-(long)acc);
-            return acc > long.MaxValue ? long.MaxValue : (long)acc;
+            const ulong Int64Max = long.MaxValue;
+            bool range = unsigned ? over : over || acc > (neg ? Int64Max + 1 : Int64Max);
+            if (range)
+            {
+                // The value still clamps; the warning is only for a number that was otherwise valid.
+                if (!invalid) FileSystemHelpers.WriteStderr(this, $"printf: warning: {a}: Numerical result out of range");
+                if (unsigned) return ulong.MaxValue;
+                return neg ? Int64Max + 1 : Int64Max;   // the bits of long.MinValue / long.MaxValue
+            }
+            return neg ? unchecked(0UL - acc) : acc;
         }
         // bash reuses (recycles) the format string until the argument list is
         // exhausted: `printf '%s\n' a b c` prints three lines. We repeat the
@@ -269,7 +281,12 @@ public sealed class InvokeBashPrintfCommand : PSCmdlet
                         string raw = argIdx < argList.Length ? argList[argIdx] : "-1";
                         long secs = long.TryParse(raw, out var parsed) ? parsed : -1;
                         var when = secs < 0 ? DateTimeOffset.Now : DateTimeOffset.FromUnixTimeSeconds(secs).ToLocalTime();
-                        sb.Append(InvokeBashDateCommand.ConvertDateFormat(when, fmt));
+                        // The date text is then a %s: `%10.5(%Y-%m-%d)T` is `     2019-`.
+                        string text = InvokeBashDateCommand.ConvertDateFormat(when, fmt);
+                        if (hasPrecision) text = text.Substring(0, Math.Min(precStr.Length > 0 ? ParseFieldWidth(precStr) : 0, text.Length));
+                        if (widthStr.Length > 0)
+                            text = flagStr.Contains('-') ? text.PadRight(ParseFieldWidth(widthStr)) : text.PadLeft(ParseFieldWidth(widthStr));
+                        sb.Append(text);
                         argIdx++;
                         i = close + 2;
                         continue;
@@ -341,7 +358,7 @@ public sealed class InvokeBashPrintfCommand : PSCmdlet
                     case 'u': // unsigned decimal
                         if (argIdx < converted.Count)
                         {
-                            ulong uval = unchecked((ulong)IntArg(argIdx));
+                            ulong uval = UIntArg(argIdx);
                             string str = uval.ToString(CultureInfo.InvariantCulture);
                             if (widthStr.Length > 0)
                             {
@@ -412,7 +429,7 @@ public sealed class InvokeBashPrintfCommand : PSCmdlet
                     case 'x':
                         if (argIdx < converted.Count)
                         {
-                            long val = IntArg(argIdx);
+                            long val = unchecked((long)UIntArg(argIdx));
                             string str = FormatRadix(val.ToString("x", CultureInfo.InvariantCulture), val != 0 && flagStr.Contains('#') ? "0x" : "", widthStr, precStr, hasPrecision, flagStr);
                             sb.Append(str);
                         }
@@ -422,7 +439,7 @@ public sealed class InvokeBashPrintfCommand : PSCmdlet
                     case 'X':
                         if (argIdx < converted.Count)
                         {
-                            long val = IntArg(argIdx);
+                            long val = unchecked((long)UIntArg(argIdx));
                             string str = FormatRadix(val.ToString("X", CultureInfo.InvariantCulture), val != 0 && flagStr.Contains('#') ? "0X" : "", widthStr, precStr, hasPrecision, flagStr);
                             sb.Append(str);
                         }
@@ -432,7 +449,7 @@ public sealed class InvokeBashPrintfCommand : PSCmdlet
                     case 'o':
                         if (argIdx < converted.Count)
                         {
-                            long val = IntArg(argIdx);
+                            long val = unchecked((long)UIntArg(argIdx));
                             string str = FormatRadix(Convert.ToString(val, 8), "", widthStr, precStr, hasPrecision, flagStr, octalAlt: flagStr.Contains('#'));
                             sb.Append(str);
                         }
@@ -440,13 +457,16 @@ public sealed class InvokeBashPrintfCommand : PSCmdlet
                         i = j + 1;
                         break;
                     case 'c':
-                        if (argIdx < converted.Count)
                         {
-                            // bash %c prints the FIRST CHARACTER of the argument's
-                            // string form (`printf '%c' 65` -> '6'), NOT the ASCII
-                            // code of a numeric value (which would give 'A').
-                            string s = argList[argIdx];
-                            if (s.Length > 0) sb.Append(s[0]);
+                            // bash %c writes the FIRST BYTE of the argument's text: `printf '%c' 65` is '6' (not the
+                            // code 'A'), `%c` of "μ" is the lone byte CE. An empty or missing argument is a NUL byte,
+                            // and a width pads that one byte.
+                            char first = FirstByteChar(argIdx < converted.Count ? argList[argIdx] : "");
+                            int pad = widthStr.Length > 0 ? ParseFieldWidth(widthStr) - 1 : 0;
+                            bool left = flagStr.Contains('-');
+                            if (pad > 0 && !left) sb.Append(' ', pad);
+                            sb.Append(first);
+                            if (pad > 0 && left) sb.Append(' ', pad);
                         }
                         argIdx++;
                         i = j + 1;
@@ -612,6 +632,20 @@ public sealed class InvokeBashPrintfCommand : PSCmdlet
 
     private static int ParseFieldWidth(string digits)
         => int.TryParse(digits, out int v) ? Math.Min(v, MaxPrintfField) : MaxPrintfField;
+
+    /// <summary>
+    /// The first byte of <paramref name="s"/>'s raw encoding, as text: an ASCII char as itself, a byte of a multibyte
+    /// character as its escaped-byte marker (written out as that single byte), and NUL for "".
+    /// </summary>
+    internal static char FirstByteChar(string s)
+    {
+        if (s.Length == 0) return '\0';
+        char c = s[0];
+        if (c < 0x80 || PsBash.Core.RawBytes.IsMarkerAt(s, 0)) return c;
+        Span<byte> buf = stackalloc byte[4];
+        int n = PsBash.Core.RawBytes.GetBytes(s.AsSpan(0, char.IsHighSurrogate(c) && s.Length > 1 ? 2 : 1), buf);
+        return n > 0 && buf[0] >= 0x80 ? PsBash.Core.RawBytes.ToMarker(buf[0]) : c;
+    }
 
     private static string PadNumeric(string s, int width, bool zeroPad, bool leftAlign)
     {

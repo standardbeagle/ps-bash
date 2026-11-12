@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 76
+stdout-length: 10
+stderr-length: 0
+==== SCRIPT ====
+echo a | sed 'q5'; echo "s=$?"; echo a | head -c -x 2>/dev/null; echo "s=$?"
+==== STDOUT ====
+a
+s=5
+s=1
+
+==== STDERR ====
+

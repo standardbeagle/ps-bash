@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 71
+stdout-length: 31
+stderr-length: 0
+==== SCRIPT ====
+printf '[%10.5(%Y-%m-%d)T][%-12(%Y)T][%.2(%Y)T]\n' 302400 302400 302400
+==== STDOUT ====
+[     1970-][1970        ][19]
+
+==== STDERR ====
+

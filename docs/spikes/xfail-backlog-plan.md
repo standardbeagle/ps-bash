@@ -418,6 +418,27 @@ building. The Linux side's remaining failures are the known `LsSortTimeDifferent
   "(strict_array) assoc=(key value ...) is not allowed". The other array/assign spec files show no new failures.
 - XFAIL count after this pass: 408.
 
+### Progress, 2026-11-11 (tenth pass)
+
+- printf:
+  - `%c` writes the first BYTE of its argument (`%c` of "μ" is CE), a NUL for an empty or missing argument, and
+    honours the width.
+  - `%u %o %x %X` read unsigned 64-bit (strtoumax: `%u -18446744073709551615` is 1) and `%d %i` signed. Out of
+    range clamps with `printf: warning: …` and status 0; it was an error with status 1, and `%u` stopped at 2^63-1.
+    An invalid number is still the only message, with status 1.
+  - `%(fmt)T` honours width and precision.
+- A pipeline's status is its last stage's. sed (pipeline mode) and streaming head set their 0 only in
+  BeginProcessing, which runs before any upstream stage, so `printf %d x 2>&1 | sed …` was 1. head also stops its
+  upstream by throwing, after which its EndProcessing is not the last word, so it sets 0 before the throw. A sweep
+  of 30 filters found no other leak. (`fmt` is not implemented: 127.)
+- comm reads the pipeline for a `-` operand; it refused pipeline input. `comm - -` follows GNU (second `-` is
+  "Bad file descriptor", reads as empty, status 1).
+- Unmarked 4 in builtin-printf: "%10.5(strftime format)T", the two integer-overflow cases, "%c unicode".
+- Left: `%(fmt)T` and TZ (bash reads TZ once per process: both lines of c43 print the 16th), array-assign
+  subscript side effects (`a[a[0]=1]=X` drops `a[0]`) and `declare a[i]=v`, trap-err errtrace in functions and
+  LINENO for `x=$(false)`/`[[`/`((` in an ERR trap.
+- XFAIL count after this pass: 404.
+
 ## Suggested order
 
 1. Land A1 and the crash fix once the gate is green.

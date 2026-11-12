@@ -1,0 +1,16 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 125
+stdout-length: 82
+stderr-length: 0
+==== SCRIPT ====
+{ printf '%x %X %o\n' 18446744073709551615 -1 -1; echo "s=$?"; printf '%x\n' 18446744073709551616; echo "s=$?"; } 2>/dev/null
+==== STDOUT ====
+ffffffffffffffff FFFFFFFFFFFFFFFF 1777777777777777777777
+s=0
+ffffffffffffffff
+s=0
+
+==== STDERR ====
+

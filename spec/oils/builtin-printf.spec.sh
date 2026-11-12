@@ -721,7 +721,6 @@ echo status=$?
 status=0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-printf builtin-printf (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Regression for 'printf x y'
@@ -759,7 +758,6 @@ status=0
 
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-printf builtin-printf (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### printf negative integer overflow
@@ -787,7 +785,6 @@ status=0
 
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-printf builtin-printf (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### printf %b does backslash escaping
@@ -1014,7 +1011,6 @@ printf '%c' "$twomu" | show_bytes
  ce
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-printf builtin-printf (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 

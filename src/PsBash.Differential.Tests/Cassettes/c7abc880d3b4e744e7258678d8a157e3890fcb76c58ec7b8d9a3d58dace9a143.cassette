@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 38
+stdout-length: 28
+stderr-length: 0
+==== SCRIPT ====
+printf '[%2c][%-3c]' μ é | od -An -tx1
+==== STDOUT ====
+ 5b 20 ce 5d 5b c3 20 20 5d
+
+==== STDERR ====
+

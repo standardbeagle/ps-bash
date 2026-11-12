@@ -1,0 +1,22 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 149
+stdout-length: 106
+stderr-length: 0
+==== SCRIPT ====
+for v in 18446744073709551615 18446744073709551616 -18446744073709551615 -18446744073709551616 -1; do printf '%u\n' $v; echo "s=$?"; done 2>/dev/null
+==== STDOUT ====
+18446744073709551615
+s=0
+18446744073709551615
+s=0
+1
+s=0
+18446744073709551615
+s=0
+18446744073709551615
+s=0
+
+==== STDERR ====
+
