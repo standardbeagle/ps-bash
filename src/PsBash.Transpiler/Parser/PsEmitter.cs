@@ -3017,8 +3017,8 @@ public static partial class PsEmitter
     /// none) before `test` sees them, and the expression's shape is only known at run time. With `a` empty,
     /// `[ -n $a ]` is `[ -n ]` (true) and `[ $e = '' ]` is `[ = '' ]` (status 2); both were compared as one
     /// operand. `$#`, `$?`, `$$` and `$!` never split. A glob word keeps the static path.
-    /// A quoted `<` / `>` (ASCII string order) also goes to the runtime: the static path dropped it
-    /// (`[ a '<' b ]` emitted `('a'  'b')`), and `[ -z '>' -- ]` is a binary `>`, not `-z`.
+    /// A quoted `&lt;` / `&gt;` (ASCII string order) also goes to the runtime: the static path dropped it
+    /// (`[ a '&lt;' b ]` emitted `('a'  'b')`), and `[ -z '&gt;' -- ]` is a binary `&gt;`, not `-z`.
     /// </summary>
     private static bool HasRunTimeTestWords(ImmutableArray<CompoundWord> words)
     {

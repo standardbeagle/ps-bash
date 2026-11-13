@@ -34,12 +34,13 @@ public class ProcessSubStreamingTests : IClassFixture<SharedPwshFixture>
             SnapshotFn +
             "$before = Get-SubNames; $global:mid = -1; " +
             "$p = Invoke-ProcessSub { 1..120000 | ForEach-Object { " +
+            // The directory is shared: a test running beside this one can add its own (empty) file, so the
+            // first new name is not necessarily this producer's. Take the largest new file on each poll.
             "  if ($_ -eq 110000) { " +
-            "    $new = @(Get-SubNames | Where-Object { $before -notcontains $_ }); " +
-            "    $dir = Join-Path ([System.IO.Path]::GetTempPath()) 'ps-bash/proc-sub'; " +
-            "    $f = Join-Path $dir $new[0]; $sw = [Diagnostics.Stopwatch]::StartNew(); " +
-            "    while ((Get-Item $f).Length -le 0 -and $sw.ElapsedMilliseconds -lt 5000) { [Threading.Thread]::Yield() | Out-Null } " +
-            "    $global:mid = (Get-Item $f).Length } " +
+            "    $dir = Join-Path ([System.IO.Path]::GetTempPath()) 'ps-bash/proc-sub'; $sw = [Diagnostics.Stopwatch]::StartNew(); " +
+            "    do { $global:mid = [long](@(Get-SubNames | Where-Object { $before -notcontains $_ } | " +
+            "      ForEach-Object { [long](Get-Item (Join-Path $dir $_) -ErrorAction Ignore).Length }) + 0 | Measure-Object -Maximum).Maximum " +
+            "    } while ($global:mid -le 0 -and $sw.ElapsedMilliseconds -lt 5000) } " +
             "  \"row $_ of the stream, padded out a little\" } }; " +
             "$final = (Get-Item $p).Length; Remove-Item $p; \"$($global:mid -gt 0) $($global:mid -lt $final) $final\"");
         Assert.StartsWith("True True ", got[0]);
