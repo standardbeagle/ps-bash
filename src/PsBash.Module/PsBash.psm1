@@ -347,7 +347,7 @@ function Write-BashStderrRecord {
     $ErrorActionPreference = 'Continue'
     # `printf x >&2` / `echo -n x >&2` write no newline: mark the record so every consumer (host STDERR
     # frame, `2> f`, `2>&1`) writes exactly the text — the rule is [PsBash.Core.StderrRecord]::Payload.
-    $target = if ($NoNewline) { [PsBash.Core.StderrRecord]::NoTrailingNewlineMarker } else { $null }
+    $target = if ($NoNewline) { [PsBash.Cmdlets.BashRuntime]::StderrNoTrailingNewlineMarker } else { $null }
     $PSCmdlet.WriteError([System.Management.Automation.ErrorRecord]::new(
         [System.IO.IOException]::new($Text), 'BashError', 'NotSpecified', $target))
 }

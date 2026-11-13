@@ -212,7 +212,7 @@ public sealed class InvokeBashAliasCommand : PSCmdlet
                         $src = (@($v) + @($words)) -join ' '
                         # A syntax error in the expanded text is bash's status 2, not a PowerShell exception (as in eval).
                         $ps = $null
-                        try { $ps = [PsBash.Core.Transpiler.BashTranspiler, PsBash.Transpiler]::Transpile($src, [PsBash.Core.Transpiler.TranspileContext, PsBash.Transpiler]::Eval) }
+                        try { $ps = [PsBash.Cmdlets.BashRuntime]::TranspileEval($src) }
                         catch {
                             $m = if ($_.Exception.InnerException) { $_.Exception.InnerException.Message } else { $_.Exception.Message }
                             Write-Error ('bash: syntax error: ' + $m) -ErrorAction Continue

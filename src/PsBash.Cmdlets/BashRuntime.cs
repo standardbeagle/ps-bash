@@ -343,6 +343,21 @@ public static class BashRuntime
     public static string NormalizeWindowsPath(string path) => MapPath(path);
 
     /// <summary>
+    /// <c>BashTranspiler.Transpile(bash, TranspileContext.Eval)</c> for script text that the cmdlets build (an
+    /// <c>alias</c> function's body, <c>compgen -C</c>), for the load-order reason in
+    /// <see cref="NormalizeWindowsPath"/>. Even the assembly-qualified literal
+    /// <c>[PsBash.Core.Transpiler.BashTranspiler, PsBash.Transpiler]</c> resolves only inside the host. In plain
+    /// PowerShell with <c>Import-Module PsBash</c>, the module directory is not probed, so every alias failed with
+    /// "Unable to find type".
+    /// </summary>
+    public static string? TranspileEval(string bash) =>
+        PsBash.Core.Transpiler.BashTranspiler.Transpile(bash, PsBash.Core.Transpiler.TranspileContext.Eval);
+
+    /// <summary><see cref="PsBash.Core.StderrRecord.NoTrailingNewlineMarker"/> for the psm1, for the same load-order reason
+    /// (a const, so reading it loads nothing).</summary>
+    public const string StderrNoTrailingNewlineMarker = PsBash.Core.StderrRecord.NoTrailingNewlineMarker;
+
+    /// <summary>
     /// The runtime path policy (<see cref="PsBash.Core.RuntimePath.Map"/>: <c>/tmp</c> →
     /// <c>$env:TEMP</c>, unix drive paths; no-op off Windows) for psm1 helpers AND emitted code
     /// (<c>cd</c>, <c>[ -e ]</c>). Emitted text calls this Cmdlets static rather than the Transpiler

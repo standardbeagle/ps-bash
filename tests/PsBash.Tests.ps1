@@ -49,6 +49,30 @@ Describe 'Module Loading' {
     }
 }
 
+# Plain PowerShell with Import-Module PsBash (a profile's `alias cdsp='claude ...'`): PsBash.Transpiler.dll is loaded
+# only when the Cmdlets assembly calls into it, because the module directory is never probed for a type literal.
+# Every alias call failed with "Unable to find type [PsBash.Core.Transpiler.BashTranspiler,PsBash.Transpiler]".
+# The test runs in a fresh process, since in this session other tests have already loaded the assembly.
+Describe 'Module in a fresh PowerShell session' {
+    It 'runs an alias and writes no-newline stderr before anything has loaded the transpiler' {
+        $pwshExe = (Get-Process -Id $PID).Path
+        $manifest = Join-Path (Get-Module PsBash | Select-Object -First 1).ModuleBase 'PsBash.psd1'
+        $got = & $pwshExe -NoProfile -NonInteractive -Command {
+            param($m)
+            Import-Module $m -DisableNameChecking
+            $loaded = { [bool]([AppDomain]::CurrentDomain.GetAssemblies() | Where-Object { $_.GetName().Name -eq 'PsBash.Transpiler' }) }
+            "before=$(& $loaded)"
+            $rec = Invoke-BashPrintf 'x' | Write-BashHostStderr 2>&1
+            "stderr=$($rec.TargetObject)"
+            alias psbtalias='echo hi'
+            psbtalias there
+        } -args $manifest 2>&1 | ForEach-Object { [string]$_ }
+        $got[0] | Should -Be 'before=False'
+        $got[1] | Should -Be 'stderr=PsBash.Stderr.NoTrailingNewline'
+        $got[2] | Should -Be 'hi there'
+    }
+}
+
 Describe 'Get-BashPlatform' {
     It 'returns a known platform string' {
         $platform = Get-BashPlatform

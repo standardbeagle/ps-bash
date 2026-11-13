@@ -136,11 +136,14 @@ public sealed class InvokeBashCompgenCommand : PSCmdlet
     /// <summary>Run bash text through the transpiler and return its output lines; null when it fails.</summary>
     private List<string>? RunBashLines(string src)
     {
+        string ps;
+        try { ps = BashRuntime.TranspileEval(src) ?? ""; }
+        catch (Exception ex) when (ex is not PipelineStoppedException) { return null; } // a syntax error fails the word list
         try
         {
             var results = InvokeCommand.InvokeScript(
-                "param($s) $ErrorActionPreference = 'Stop'; $global:LASTEXITCODE = 0; $out = @(Invoke-Expression ([PsBash.Core.Transpiler.BashTranspiler, PsBash.Transpiler]::Transpile($s, [PsBash.Core.Transpiler.TranspileContext, PsBash.Transpiler]::Eval)) -ErrorVariable ev -ErrorAction SilentlyContinue | ForEach-Object { [string]$_ }); if ($global:LASTEXITCODE -ne 0 -or $ev.Count -gt 0) { throw 'failed' }; $out",
-                src);
+                "param($p) $ErrorActionPreference = 'Stop'; $global:LASTEXITCODE = 0; $out = @(Invoke-Expression $p -ErrorVariable ev -ErrorAction SilentlyContinue | ForEach-Object { [string]$_ }); if ($global:LASTEXITCODE -ne 0 -or $ev.Count -gt 0) { throw 'failed' }; $out",
+                ps);
             var lines = new List<string>();
             foreach (var r in results)
                 foreach (var l in (r?.BaseObject?.ToString() ?? "").Split('\n')) if (l.Length > 0) lines.Add(l.TrimEnd('\r'));
