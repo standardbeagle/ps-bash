@@ -26,6 +26,28 @@ public static partial class PsEmitter
         return s.Redirects;
     }
 
+    /// <summary>
+    /// The redirections of a simple command on a numbered descriptor (3+) that <see cref="WithScopedHighFds"/> opens around
+    /// it, as it does for a compound command: <c>9&gt;f</c>, <c>9&gt;&gt;f</c>, <c>7&lt;f</c>, <c>9&gt;&amp;1</c>, <c>9&gt;&amp;-</c>. Not
+    /// <c>exec</c> (its descriptors stay open), <c>{fd}</c>, here-docs, or a dup of stdin (<c>3&lt;&amp;0</c>: the table has no
+    /// stdin to name). Empty when there are none.
+    /// </summary>
+    private static List<Redirect> ScopedHighFdRedirects(Command.Simple cmd)
+    {
+        var high = new List<Redirect>();
+        if (cmd.Redirects.IsDefaultOrEmpty || !cmd.HereDocs.IsDefaultOrEmpty
+            || (cmd.Words.Length > 0 && GetLiteralValue(cmd.Words[0]) == "exec"))
+            return high;
+        foreach (var r in cmd.Redirects)
+        {
+            if (r.Fd < 3 || r.FdVar is not null || r.Here is not null) continue;
+            if (r.Op is ">" or ">>" or "<"
+                || (r.Op is ">&" or "<&" && GetLiteralValue(r.Target) is { } t && (t == "-" || (IsAllDigits(t) && t != "0"))))
+                high.Add(r);
+        }
+        return high;
+    }
+
     /// <summary>The statements after a standard-descriptor <c>exec</c>, as one brace group under its redirections.</summary>
     private static Command RestUnderExecRedirects(ImmutableArray<Command> rest, ImmutableArray<Redirect> redirects)
         => new Command.BraceGroup(rest.Length == 1 ? rest[0] : new Command.CommandList(rest), redirects);

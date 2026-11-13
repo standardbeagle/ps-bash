@@ -1,0 +1,31 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 333
+stdout-length: 59
+stderr-length: 15
+==== SCRIPT ====
+cd "$(mktemp -d)"
+echo one 1>&2; echo two 1<&2; echo two2 2<&1
+echo hi 9>&1; echo hi 99>&1
+echo hi 9>f.txt; test -f f.txt && echo "created [$(cat f.txt)]"
+echo hi 9>&-
+w9() { echo "via9 $1" >&9; }
+w9 a 9>&1; w9 b 9>g.txt; echo "g=[$(cat g.txt)]"; w9 c 9>&2
+printf 'L1\nL2\n' > in.txt; read -u 7 line 7<in.txt; echo "line=$line st=$?"
+==== STDOUT ====
+two2
+hi
+hi
+hi
+created []
+hi
+via9 a
+g=[via9 b]
+line=L1 st=0
+
+==== STDERR ====
+one
+two
+via9 c
+

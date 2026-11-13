@@ -1786,6 +1786,21 @@ public class BashParserTests
         Assert.Single(asg.Redirects);
     }
 
+    // `echo two 1<&2`: a dup onto stdout/stderr is the same dup2 either way, so it is `1>&2` (raw `1<&2` ended in
+    // PowerShell's background `&`). Stdin (`0<&3`) and numbered descriptors keep `<&`.
+    [Theory]
+    [InlineData("echo two 1<&2", 1, ">&")]
+    [InlineData("echo two 2<&1", 2, ">&")]
+    [InlineData("cat 0<&3", 0, "<&")]
+    [InlineData("cat <&3", 0, "<&")]
+    [InlineData("cmd 3<&4", 3, "<&")]
+    public void Parse_DupOntoStdoutOrStderr_IsAnOutputDup(string bash, int fd, string op)
+    {
+        var redirect = Assert.Single(Assert.IsType<Command.Simple>(Parse(bash)).Redirects);
+        Assert.Equal(fd, redirect.Fd);
+        Assert.Equal(op, redirect.Op);
+    }
+
     [Fact]
     public void Parse_TempBindingBeforeARedirectedCommand_StaysASimpleCommand()
         => Assert.IsType<Command.Simple>(Parse("y=1 >f.txt cmd"));

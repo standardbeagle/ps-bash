@@ -1184,7 +1184,6 @@ public class PsEmitterTests
     {
         // `n>&1` (n != 1) IS valid PowerShell and must keep the real merge.
         Assert.Equal("cmd 2>&1 | Invoke-BashRedirect -MergeErrors", PsEmitter.Transpile("cmd 2>&1"));
-        Assert.Equal("cmd 3>&1", PsEmitter.Transpile("cmd 3>&1"));
     }
 
     [Fact]
@@ -1889,11 +1888,11 @@ public class PsEmitterTests
     }
 
     [Fact]
-    public void Transpile_IoNumber3_EmitsFdPrefix()
+    public void Transpile_IoNumber3_OpensTheDescriptor()
     {
         var result = PsEmitter.Transpile("cmd 3> file");
 
-        Assert.Equal("cmd 3>file", result);
+        Assert.StartsWith("& { Invoke-BashExecFd 3 '>' file; try { cmd }", result);
     }
 
     [Fact]
@@ -5333,11 +5332,27 @@ public class PsEmitterTests
         => Assert.Equal(expected, PsEmitter.Transpile(bash));
 
     [Fact]
-    public void Transpile_RedirectFdModel_UserFd_KeepsLegacyEmission()
+    public void Transpile_RedirectFdModel_UserFd_IsOpenedAroundTheCommand()
     {
-        // fd 3 is outside the model: the tail falls back to the pre-model emission unchanged.
-        Assert.Equal("cmd 3>f", PsEmitter.Transpile("cmd 3>f"));
+        // fd 3 is outside the model: the descriptor is opened for the command and closed after it (it was PowerShell's
+        // warning stream, `cmd 3>f`).
+        Assert.StartsWith("& { Invoke-BashExecFd 3 '>' f; try { cmd } finally {", PsEmitter.Transpile("cmd 3>f"));
     }
+
+    // `echo hi 9>&1` / `9>f.txt` / `9>&-`: fd 7+ is no PowerShell stream. `9>f.txt` was a literal argument ("hi 9>f.txt"),
+    // `9>&1` ended in PowerShell's background `&` (the command ran as a job). Opened around the command instead.
+    [Theory]
+    [InlineData("echo hi 9>&1", "& { Invoke-BashExecFd 9 '>&' 1; try { Invoke-BashEcho hi } finally {")]
+    [InlineData("echo hi 9>f.txt", "& { Invoke-BashExecFd 9 '>' f.txt; try { Invoke-BashEcho hi } finally {")]
+    [InlineData("echo hi 9>&-", "& { Invoke-BashExecFd 9 '>&' -; try { Invoke-BashEcho hi } finally {")]
+    [InlineData("read -u 7 l 7<in.txt", "& { Invoke-BashExecFd 7 '<' in.txt; try {")]
+    public void Transpile_HighDescriptorOnASimpleCommand_IsOpenedAroundIt(string bash, string prefix)
+        => Assert.StartsWith(prefix, PsEmitter.Transpile(bash));
+
+    // `cmd 3<&0`: the descriptor table has no stdin to name; ignored rather than a "Bad file descriptor" on every run.
+    [Fact]
+    public void Transpile_HighDescriptorDupOfStdin_IsIgnored()
+        => Assert.Equal("cmd <# ps-bash: fd 3 <& redirect ignored #>", PsEmitter.Transpile("cmd 3<&0"));
 
     // `cmd >&2` pipes into Write-BashHostStderr, which writes each record to PowerShell's
     // ERROR STREAM (not $Host.UI.WriteErrorLine, which no redirection can see), so an

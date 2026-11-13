@@ -8,7 +8,6 @@ echo one 1>&2
 echo two 1<&2
 ## stdout:
 ## status: 0
-## XFAIL ps-bash gap-oils-redirect redirect (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### 2>&1 with no command
@@ -132,7 +131,6 @@ hi
 hi
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-redirect redirect (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### : >/dev/null 2> / (OSH regression: fail to pop fd frame)

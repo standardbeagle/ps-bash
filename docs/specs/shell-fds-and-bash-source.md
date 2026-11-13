@@ -41,6 +41,10 @@ raw slice, so `${BASH_SOURCE[0]:-$0}` printed a literal `$0`. (`BashParser.Words
 Failure to open (`exec 3<missing`) writes `exec: missing: No such file or directory`, status 1, and the script goes on
 (bash does the same for a non-interactive shell without `set -e`).
 
+A numbered descriptor on one command (`cmd 9>&1`, `cmd 9>f`, `read -u 7 l 7<f`, `( … ) 3>log`) is opened before the command
+and closed after it, as `exec` would (`PsEmitter.ScopedHighFdRedirects` / `WithScopedHighFds`); an earlier `exec` of the same
+descriptor is not restored. `cmd 3<&0` is ignored (the table has no stdin to name). `1<&2` / `2<&1` are `1>&2` / `2>&1`.
+
 ### Using a descriptor
 - `read -u N [names]` reads one line from N (`InvokeBashReadCommand`); status 1 at end of file or on a closed N.
 - `cmd >&N` pipes the command's output to N (`Write-BashFd N`); `cmd <&N` feeds the rest of N as stdin (`Read-BashFd N`).

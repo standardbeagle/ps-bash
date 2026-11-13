@@ -699,6 +699,11 @@ public sealed partial class BashParser
         var targetParts = DecomposeWord(targetToken.Value);
         var target = new CompoundWord(targetParts);
 
+        // `echo two 1<&2` / `2<&1`: duplicating onto stdout or stderr is the same dup2 in either direction, so it is
+        // `1>&2` / `2>&1`. Kept as `<&` it was emitted raw, and PowerShell took the trailing `&` for its background op.
+        if (op == "<&" && fd is 1 or 2 && fdVar is null)
+            op = ">&";
+
         return new Redirect(op, fd, target, fdVar, Force: opToken.Value == ">|");
     }
 

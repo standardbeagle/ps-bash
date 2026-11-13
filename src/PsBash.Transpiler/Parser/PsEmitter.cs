@@ -4325,6 +4325,9 @@ public static partial class PsEmitter
             && cmd.HereDocs.IsDefaultOrEmpty && _definedFunctions?.Contains("exec") != true
             && TryEmitExec(cmd with { EnvPairs = [] }, out var execResult))
             return execResult;
+        // `w9 9>&1`, `echo hi 9>f.txt`, `read -u 7 l 7<f`: a numbered descriptor opened for this command only.
+        if (ScopedHighFdRedirects(cmd) is { Count: > 0 } highFds)
+            return WithScopedHighFds(EmitSimple(cmd with { Redirects = [.. cmd.Redirects.Where(r => !highFds.Contains(r))] }), highFds);
         if (TryEmitOutputProcessSubs(cmd, out var outputProcSubResult))
             return outputProcSubResult;
         if (TryEmitEnvPairsWrap(cmd, out var envWrapResult))
@@ -6057,6 +6060,10 @@ public static partial class PsEmitter
 
         return r.Op switch
         {
+            // Not a PowerShell stream: `9>f.txt` / `9>$null` were literal ARGUMENTS ("hi 9>f.txt"), and `9>&1` ended in
+            // PowerShell's background `&`. (A simple command opens it around itself: ScopedHighFdRedirects.)
+            _ when r.Fd > 6 => $"<# ps-bash: fd {r.Fd} {r.Op} redirect ignored #>",
+            ">&" or "<&" when r.Fd > 2 && target == "0" => $"<# ps-bash: fd {r.Fd} {r.Op} redirect ignored #>",
             ">" => r.Fd == 1 ? $">{target}" : $"{r.Fd}>{target}",
             ">>" => r.Fd == 1 ? $">>{target}" : $"{r.Fd}>>{target}",
             // `n>&-` (close output fd) — PowerShell has no fd-close; the practical

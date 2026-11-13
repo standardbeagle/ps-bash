@@ -22,4 +22,19 @@ public class ExecStandardFdTests
         + "printf 'l1\\nl2\\n' > in.txt; ( exec <in.txt; read a; read b; echo \"read: $a $b\" )\n"
         + "( FOO=bar exec >&2; echo \"FOO=[$FOO]\" ) 2>&1\n"
         + "echo \"end s=$?\"");
+
+    /// <summary>
+    /// A numbered descriptor on a simple command is opened for that command only: <c>echo hi 9&gt;&amp;1</c> ran as a
+    /// PowerShell job (the trailing <c>&amp;</c>), <c>echo hi 9&gt;f.txt</c> printed "hi 9&gt;f.txt", and a function writing
+    /// <c>&gt;&amp;9</c> had no fd 9. <c>1&lt;&amp;2</c> is <c>1&gt;&amp;2</c>.
+    /// </summary>
+    [Fact]
+    public Task HighDescriptorOnASimpleCommand_IsOpenedForIt() => AssertOracle.EqualAsync(
+        "cd \"$(mktemp -d)\"\n"
+        + "echo one 1>&2; echo two 1<&2; echo two2 2<&1\n"
+        + "echo hi 9>&1; echo hi 99>&1\n"
+        + "echo hi 9>f.txt; test -f f.txt && echo \"created [$(cat f.txt)]\"\n"
+        + "echo hi 9>&-\n"
+        + "w9() { echo \"via9 $1\" >&9; }\nw9 a 9>&1; w9 b 9>g.txt; echo \"g=[$(cat g.txt)]\"; w9 c 9>&2\n"
+        + "printf 'L1\\nL2\\n' > in.txt; read -u 7 line 7<in.txt; echo \"line=$line st=$?\"");
 }
