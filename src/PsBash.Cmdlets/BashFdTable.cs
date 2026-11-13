@@ -104,6 +104,18 @@ internal static class BashFdTable
         lock (Gate) return Fds.ContainsKey(fd);
     }
 
+    /// <summary>The lowest descriptor at or above <paramref name="min"/> that is not open (bash gives <c>{var}</c> redirections
+    /// the lowest free one from 10 up).</summary>
+    public static int LowestFree(int min)
+    {
+        lock (Gate)
+        {
+            int fd = min;
+            while (Fds.ContainsKey(fd)) fd++;
+            return fd;
+        }
+    }
+
     /// <summary>The next line of a descriptor opened for reading: null at end of file, throws when it is not open for reading.</summary>
     public static string? ReadLine(int fd)
     {

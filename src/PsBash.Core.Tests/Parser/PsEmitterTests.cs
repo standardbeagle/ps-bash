@@ -1081,6 +1081,28 @@ public class PsEmitterTests
         Assert.DoesNotContain("{fd}", result);
     }
 
+    // bash: exec {fd}>f allocates a descriptor from 10 up and stores it in fd. It used to emit `Invoke-BashExecFd 1 '>' f`,
+    // which sent the rest of the script's stdout to f.
+    [Theory]
+    [InlineData("exec {fd}>out1", "Invoke-BashExecFd -Variable 'fd' -Operator '>' -Target out1")]
+    [InlineData("exec {fd}>&-", "Invoke-BashExecFd -Variable 'fd' -Operator '>&' -Target -")]
+    public void Transpile_ExecNamedFd_AllocatesIntoTheVariable(string bash, string expected)
+        => Assert.Equal(expected, PsEmitter.Transpile(bash));
+
+    // `>&$fd` / `<&$fd`: a number is a descriptor, decided when the word expands. Before, `>&$fd` wrote a FILE named
+    // after the number and `<&$fd` emitted `0<&$(…)`, a PowerShell parse error.
+    [Theory]
+    [InlineData("echo hi >&$fd", "Write-BashFd ([int]$__psbFd)")]
+    [InlineData("echo hi >&\"$fd\"", "Write-BashFd ([int]$__psbFd)")]
+    [InlineData("read -r line <&$fd", "Read-BashFd ([int]$__psbFd) | ")]
+    public void Transpile_RedirectToVariableFd_ChoosesTheDescriptorAtRunTime(string bash, string expected)
+    {
+        var ps = PsEmitter.Transpile(bash)!;
+        Assert.Contains(expected, ps);
+        Assert.DoesNotContain("<&$", ps);
+        Assert.DoesNotContain("Invoke-BashRedirect -Path $(", ps.Substring(0, ps.IndexOf("} else {", StringComparison.Ordinal)));
+    }
+
     [Fact]
     public void Transpile_BraceGroup_StillWorks_NotNamedFd()
     {

@@ -49,6 +49,10 @@ descriptor is not restored. `cmd 3<&0` is ignored (the table has no stdin to nam
 - `read -u N [names]` reads one line from N (`InvokeBashReadCommand`); status 1 at end of file or on a closed N.
 - `cmd >&N` pipes the command's output to N (`Write-BashFd N`); `cmd <&N` feeds the rest of N as stdin (`Read-BashFd N`).
   Only N ≥ 3 is routed here; `>&1`, `>&2`, `2>&1` keep their existing handling.
+- `cmd >&$fd` / `cmd <&$fd` (a plain variable reference) is decided when the word expands (`PsEmitter.EmitRunTimeFdRedirect`):
+  a number is that descriptor (`Write-BashFd` / `Read-BashFd`; 1 and 2 are the shell's own stdout/stderr, an unopened
+  one is `N: Bad file descriptor`, status 1, nothing written); for output any other word is a file for both streams
+  (`>&word` = `&>word`), for input `-` closes stdin.
 - `cmd 7<file` (fd ≠ 0) no longer replaces the command's stdin (it used to be treated as `cmd <file`); the redirect is
   ignored for the command.
 
@@ -58,4 +62,7 @@ descriptor is not restored. `cmd 3<&0` is ignored (the table has no stdin to nam
   daemon accumulates none.
 - Subshells do not isolate descriptors: `( exec 7<f )` leaves 7 open in the parent (bash closes it with the subshell).
   A background job in its own process (`PSBASH_BG_MODE=process`) starts with none open.
-- Not provided: `flock N`, `/dev/fd/N` paths, `{var}<file` allocation, descriptors inherited by native children.
+- `exec {var}>file` (any op) takes the lowest free descriptor from 10 up and stores its number in `var`
+  (`Invoke-BashExecFd -Variable`); `exec {var}>&-` closes the descriptor `var` holds. On a command other than `exec`
+  the `{var}` form is not provided (the redirect applies to the command's stdout).
+- Not provided: `flock N`, `/dev/fd/N` paths, descriptors inherited by native children.

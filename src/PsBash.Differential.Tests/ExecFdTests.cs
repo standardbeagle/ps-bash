@@ -29,6 +29,30 @@ public class ExecFdTests
         Assert.Equal(0, r.ExitCode);
     }
 
+    // bash 5.2: exec {fd}>f allocates 10 (the lowest free from 10), >&$fd writes through it, {fd}>&- closes it and a
+    // later >&$fd is "10: Bad file descriptor", status 1. ps-bash sent the rest of the script's stdout to f.
+    [SkippableFact]
+    public async Task ExecNamedFd_AllocatesFrom10_WritesThroughTheVariable_ThenCloses()
+    {
+        var r = await RunAsync(Work +
+            "exec {fd}>file1; echo fd=$fd; echo foo55 >&$fd; exec {fd}>&-; echo bar >&$fd 2>/dev/null; echo st=$?; cat file1; " +
+            "exec {a}>x1 {b}>x2; echo a=$a b=$b; exec {a}>&- {b}>&-; cd /; rm -rf \"$W\"");
+        Assert.Equal("fd=10\nst=1\nfoo55\na=10 b=11\n", r.Stdout.Replace("\r\n", "\n"));
+        Assert.Equal(0, r.ExitCode);
+    }
+
+    // `>&$n` / `<&$n` with a number are descriptors, not files: bash writes no file named 100 and fails with status 1;
+    // read <&$rfd reads the named descriptor; a value that is not a number is a file for both streams.
+    [SkippableFact]
+    public async Task RedirectToVariableFd_NumberIsADescriptor_WordIsAFile()
+    {
+        var r = await RunAsync(Work +
+            "n=100; echo foo53 >&$n 2>/dev/null; echo st=$?; test -e 100 && echo file-100 || echo no-file-100; " +
+            "printf 'l1\\nl2\\n' > in; exec {rfd}<in; read -r line <&$rfd; echo got=$line; exec {rfd}<&-; " +
+            "nm=out2; echo into >&$nm; cat out2; cd /; rm -rf \"$W\"");
+        Assert.Equal("st=1\nno-file-100\ngot=l1\ninto\n", r.Stdout.Replace("\r\n", "\n"));
+    }
+
     [SkippableFact]
     public async Task ExecRead_AtEndOfFile_ReadFailsWithStatus1()
     {

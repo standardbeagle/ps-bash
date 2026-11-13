@@ -151,7 +151,6 @@ fd=100
 echo foo53 >&$fd
 ## stdout:
 ## status: 1
-## XFAIL ps-bash gap-oils-redirect redirect (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### noclobber can still write to non-regular files like /dev/null
@@ -234,7 +233,6 @@ echo bar >&$fd
 cat file1
 ## stdout: foo55
 ## status: 0
-## XFAIL ps-bash gap-oils-redirect redirect (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 

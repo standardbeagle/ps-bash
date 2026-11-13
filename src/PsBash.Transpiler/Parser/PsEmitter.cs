@@ -5144,6 +5144,16 @@ public static partial class PsEmitter
         if (cmd.Redirects.IsDefaultOrEmpty || cmd.Words.Length < 1 || !cmd.HereDocs.IsDefaultOrEmpty)
             return false;
 
+        foreach (var r in cmd.Redirects)
+        {
+            if (r.FdVar is null && GetLiteralValue(r.Target) is null && IsPlainVarRefWord(r.Target)
+                && (r.Op == ">&" && r.Fd == 1 || r.Op == "<&" && r.Fd == 0))
+            {
+                result = EmitRunTimeFdRedirect(cmd, r);
+                return true;
+            }
+        }
+
         int? outFd = null, inFd = null;
         var rest = ImmutableArray.CreateBuilder<Redirect>();
         foreach (var r in cmd.Redirects)
@@ -5166,6 +5176,36 @@ public static partial class PsEmitter
             body = $"Read-BashFd {i} | " + body;
         result = body;
         return true;
+    }
+
+    /// <summary>
+    /// <c>cmd &gt;&amp;$fd</c> / <c>cmd &lt;&amp;$fd</c>: what the word means is known only when it expands
+    /// (<c>exec {fd}&gt;f; echo hi &gt;&amp;$fd</c>). A number duplicates that descriptor (<c>Write-BashFd</c> /
+    /// <c>Read-BashFd</c>, which also fail an unopened one); for output anything else is a file for both streams
+    /// (<c>&gt;&amp;word</c> is <c>&amp;&gt;word</c>), for input <c>-</c> closes stdin. The word is a plain variable
+    /// reference, so evaluating it again in the chosen branch has no side effect.
+    /// </summary>
+    private static string EmitRunTimeFdRedirect(Command.Simple cmd, Redirect dyn)
+    {
+        string plain = EmitSimple(cmd with { Redirects = cmd.Redirects.Remove(dyn) });
+        string value = "$__psbFd = [string](" + EmitWord(dyn.Target) + "); ";
+        if (dyn.Op == ">&")
+        {
+            string file = EmitSimple(cmd with { Redirects = cmd.Redirects.Replace(dyn, dyn with { Op = "&>" }) });
+            string sink = PsBuild.IsStatementList(plain) ? "& { " + plain + " }" : plain;
+            return value + "if ($__psbFd -match '^[0-9]+$') { " + sink + " | Write-BashFd ([int]$__psbFd) } else { " + file + " }";
+        }
+        var dash = new CompoundWord(ImmutableArray.Create<WordPart>(new WordPart.Literal("-")));
+        string closed = EmitSimple(cmd with { Redirects = cmd.Redirects.Replace(dyn, dyn with { Target = dash }) });
+        return value + "if ($__psbFd -eq '0') { " + plain + " } elseif ($__psbFd -match '^[0-9]+$') { Read-BashFd ([int]$__psbFd) | "
+            + plain + " } else { " + closed + " }";
+    }
+
+    /// <summary>A word that is only variable references (<c>$fd</c>, <c>"${fd}"</c>): no operator, nothing to run.</summary>
+    private static bool IsPlainVarRefWord(CompoundWord w)
+    {
+        static bool Ref(WordPart p) => p is WordPart.SimpleVarSub || p is WordPart.BracedVarSub { Suffix: null or "", ArgWord: null };
+        return !w.Parts.IsDefaultOrEmpty && w.Parts.All(p => Ref(p) || p is WordPart.DoubleQuoted dq && dq.Parts.Length > 0 && dq.Parts.All(Ref));
     }
 
     /// <summary>
@@ -5195,7 +5235,10 @@ public static partial class PsEmitter
         foreach (var r in cmd.Redirects)
         {
             // `exec N<&-` / `exec N>&-` close; `exec N>&M` duplicates; the rest open a file.
-            steps.Add($"Invoke-BashExecFd {r.Fd} {PsBuild.SingleQuote(r.Op)} {EmitArgWord(r.Target)}");
+            // `exec {fd}>f`: the runtime picks the descriptor (10 up) and stores it in fd; `exec {fd}>&-` closes $fd.
+            steps.Add(r.FdVar is { } fdVar
+                ? $"Invoke-BashExecFd -Variable {PsBuild.SingleQuote(fdVar)} -Operator {PsBuild.SingleQuote(r.Op)} -Target {EmitArgWord(r.Target)}"
+                : $"Invoke-BashExecFd {r.Fd} {PsBuild.SingleQuote(r.Op)} {EmitArgWord(r.Target)}");
         }
         result = string.Join("; ", steps);
         return true;
