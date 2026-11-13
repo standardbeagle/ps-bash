@@ -14,7 +14,10 @@ public class LocalListingTests
     public Task Declare_Nameref_IsListed() => AssertOracle.EqualAsync(
         "v1=x; declare -n n1=v1; declare -p n1; declare -pn");
 
+    // `__ll_`, not a bare `^__`: macOS puts __CF_USER_TEXT_ENCODING in every process's environment, so the
+    // listing matched an OS variable bash's sanitized oracle environment does not have. Still a `__` name,
+    // which is the case this pins (user names starting `__` are listed, not filtered as ps-bash internals).
     [Fact]
     public Task Set_Listing_ShowsIndexedArraysAndQuotesAssocKeys() => AssertOracle.EqualAsync(
-        "declare -a __arr; __arr=(1 2 '3 4'); declare -A __as; __as['k e y']=v; set | grep '^__'");
+        "declare -a __ll_arr; __ll_arr=(1 2 '3 4'); declare -A __ll_as; __ll_as['k e y']=v; set | grep '^__ll_'");
 }
