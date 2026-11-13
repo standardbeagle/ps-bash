@@ -127,8 +127,12 @@ public sealed class InvokeBashBashCommand : PSCmdlet
         // Resolve the ps-bash executable, matching the oracle's three-tier
         // preference: 1) the parent process binary (via $__parentPid global
         // set by the host); 2) Get-Command ps-bash; 3) sibling of the
-        // current PowerShell process's MainModule path.
-        string? psBashExe = ResolvePsBashExecutable(this);
+        // current PowerShell process's MainModule path. An embedding that ships
+        // the module without the launcher (a session server deployed to a Linux
+        // host) has none of them: there the host's own bash runs the script, as
+        // awk's pipes and sed's `e` already fall back to /bin/sh. Without it every
+        // `bash -c` / `bash script.sh` in such a session failed outright.
+        string? psBashExe = ResolvePsBashExecutable(this) ?? ResolveHostShell();
         if (string.IsNullOrEmpty(psBashExe))
         {
             FileSystemHelpers.WriteBashError(this, "bash: ps-bash executable not found");
@@ -150,6 +154,15 @@ public sealed class InvokeBashBashCommand : PSCmdlet
         {
             psi.ArgumentList.Add(a);
         }
+        // The session's location, not the process cwd: an embedding runs several sessions in
+        // one process, so `bash -c ls` listed wherever the process happened to stand (awk's
+        // pipes already do this).
+        try
+        {
+            var loc = SessionState.Path.CurrentFileSystemLocation.ProviderPath;
+            if (!string.IsNullOrEmpty(loc) && System.IO.Directory.Exists(loc)) psi.WorkingDirectory = loc;
+        }
+        catch { /* not a filesystem location: inherit */ }
 
         int exitCode;
         string stdout;
@@ -253,6 +266,27 @@ public sealed class InvokeBashBashCommand : PSCmdlet
     /// escape hatch for embeddings whose host does not sit beside its launcher.</summary>
     internal const string NestedExeEnvVar = "PSBASH_NESTED_EXE";
 
+    /// <summary>
+    /// The host's own shell, for when no ps-bash launcher can be found: the first of
+    /// <see cref="HostShellCandidates"/> that exists. Never on Windows, where <c>bash.exe</c> on
+    /// PATH is as likely to be WSL's launcher (a different machine's filesystem) as Git Bash.
+    /// </summary>
+    internal static string? ResolveHostShell()
+    {
+        if (OperatingSystem.IsWindows()) return null;
+        foreach (var candidate in HostShellCandidates)
+        {
+            if (System.IO.File.Exists(candidate)) return candidate;
+        }
+        return null;
+    }
+
+    /// <summary>Absolute paths only: a PATH search could find a ps-bash installed AS <c>bash</c>,
+    /// which is the launcher the tiers above already looked for. <c>/bin/sh</c> last, for a host
+    /// with no bash at all (Alpine).</summary>
+    internal static readonly string[] HostShellCandidates =
+        ["/bin/bash", "/usr/bin/bash", "/usr/local/bin/bash", "/bin/sh"];
+
     internal static string? ResolvePsBashExecutable(PSCmdlet cmdlet)
     {
         var explicitExe = Environment.GetEnvironmentVariable("PSBASH_NESTED_EXE") /* = NestedExeEnvVar; host config, literal for the guard */;
@@ -311,7 +345,10 @@ public sealed class InvokeBashBashCommand : PSCmdlet
         try
         {
             var probe = cmdlet.InvokeCommand.InvokeScript(
-                "Get-Command ps-bash -ErrorAction SilentlyContinue | Select-Object -First 1");
+                // Ignore, not SilentlyContinue: SilentlyContinue still records the miss in the
+                // user's $Error, so every host-shell `bash -c` left a "'ps-bash' is not
+                // recognized" behind for the next `$Error[0]` to report.
+                "Get-Command ps-bash -ErrorAction Ignore | Select-Object -First 1");
             if (probe.Count > 0 && probe[0] != null)
             {
                 var src = probe[0].Properties["Source"]?.Value as string;

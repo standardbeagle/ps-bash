@@ -248,6 +248,65 @@ public class InvokeBashBashCommandTests : IClassFixture<SharedPwshFixture>
         Assert.Equal(expected, InvokeBashBashCommand.OptionZoneHas(args, flag));
     }
 
+    // ---- No ps-bash launcher: the host's own shell runs it ----
+    // A session server deployed to a Linux host embeds the module without the ps-bash launcher,
+    // and every `bash -c` there failed with "bash: ps-bash executable not found" (BeagleTerm on
+    // WSL/SSH). awk's pipes and sed's `e` already fell back to /bin/sh; bash now does likewise.
+
+    [Fact]
+    public void ResolveHostShell_IsAnAbsoluteExistingShell_AndNeverOnWindows()
+    {
+        var shell = InvokeBashBashCommand.ResolveHostShell();
+        if (OperatingSystem.IsWindows())
+        {
+            Assert.Null(shell);
+            return;
+        }
+        Assert.NotNull(shell);
+        Assert.True(Path.IsPathRooted(shell), shell);
+        Assert.True(File.Exists(shell), shell);
+        Assert.Contains(shell, InvokeBashBashCommand.HostShellCandidates);
+    }
+
+    [SkippableFact]
+    public void Bash_WithNoLauncher_RunsTheHostShell_AndForwardsItsExit()
+    {
+        Skip.If(OperatingSystem.IsWindows(), "the host-shell fallback is Unix-only");
+        Skip.If(LocatePsBash() != null, "a ps-bash launcher is on PATH, so the fallback is not reached");
+
+        var (lines, err, exit) = Run("Invoke-BashBash -c 'echo from-host-shell; exit 7'");
+        Assert.DoesNotContain("ps-bash executable not found", err ?? "");
+        Assert.Contains(lines, l => l.Contains("from-host-shell"));
+        Assert.Equal(7, exit);
+    }
+
+    /// <summary>
+    /// The child starts in the session's location. An embedding runs several sessions in one
+    /// process, so the process cwd is nobody's in particular.
+    /// </summary>
+    [SkippableFact]
+    public void Bash_RunsInTheSessionsLocation_NotTheProcessCwd()
+    {
+        Skip.If(OperatingSystem.IsWindows() && LocatePsBash() == null,
+            "no ps-bash launcher on PATH, and Windows has no host-shell fallback");
+
+        var dir = Directory.CreateTempSubdirectory("psb-bash-cwd").FullName;
+        try
+        {
+            Assert.NotEqual(Path.GetFullPath(dir), Path.GetFullPath(Environment.CurrentDirectory));
+            // The directory holds only this marker, so ls proves where the child stood.
+            File.WriteAllText(Path.Combine(dir, "cwd-marker.txt"), "");
+            var (lines, err, _) = Run(
+                "Set-Location -LiteralPath '" + dir.Replace("'", "''") + "'; Invoke-BashBash -c 'echo \"cwd=$(ls)\"'");
+            Assert.True(string.IsNullOrEmpty(err), $"unexpected error: {err}");
+            Assert.Contains(lines, l => l.Contains("cwd=cwd-marker.txt"));
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
     // ---- End-to-end tests (skip when no ps-bash binary is available) ----
 
     [SkippableFact]
