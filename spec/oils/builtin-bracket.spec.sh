@@ -497,7 +497,6 @@ empty=''
 [ $empty = '' ] && echo true
 ## stdout:
 ## status: 2
-## XFAIL ps-bash gap-oils-builtin-bracket builtin-bracket (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### [ compare with literal -f

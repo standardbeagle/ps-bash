@@ -39,7 +39,6 @@ touch eg2/_ eg2/_One eg2/_OneOne eg2/_TwoTwo eg2/_OneTwo
 echo eg2/_+(One|$(echo Two))
 ## stdout: eg2/_One eg2/_OneOne eg2/_OneTwo eg2/_TwoTwo
 ## status: 0
-## XFAIL ps-bash gap-oils-extglob-files extglob-files (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### !(*.h|*.cc) to match everything except C++

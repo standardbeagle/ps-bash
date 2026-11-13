@@ -51,6 +51,21 @@ public class ExtGlobDifferentialTests
             + "echo \"${v#!(a)}|${v##!(z)}|${v%!(z)}|${v%%!(z)}\"; "
             + "echo \"${v/+(a)/X}|${v//@(a|z)/Y}|${v/!(a)/N}\"; w=foo.log.txt; echo \"${w%.!(txt)}|${w%%.!(log)}\"");
 
+    /// <summary>
+    /// An extglob arm holding an expansion is a pattern built at run time (`--@($c1|$c2)` matched the text "$c1"),
+    /// and `[[ ]]` does no brace expansion (`[[ --X{a,b}X == ... ]]` compared the words --XaX --XbX).
+    /// </summary>
+    [SkippableFact]
+    public Task ExtGlob_ArmsWithExpansions_AndNoBraceExpansionInDoubleBracket()
+        => Eq("shopt -s extglob\nc1=help; c2='verb*'; pfx=no\n"
+            + "[[ --verbose == --@($c1|$c2) ]] && echo 1T; [[ --oops == --@($c1|$c2) ]] || echo 2F\n"
+            + "[[ --no-long-option == --@(help|$pfx-@(long|short)-'option') ]] && echo 3T\n"
+            + "[[ --X{a,b}X == --@(help|X{a,b}X) ]] && echo 4T; [[ --oops == --@(help|X{a,b}X) ]] || echo 4F\n"
+            + "emp=''; sx=x; [[ $emp == !($sx) ]] && echo 5T; [[ $sx == !($sx) ]] || echo 6F\n"
+            + "case --verbose in --@($c1|\"$c2\")) echo 7bad;; --@($c1|$c2)) echo 7ok;; esac\n"
+            + "[[ 'a|b' == @(\"a|b\"|z) ]] && echo 8T; [[ xy == x@($(echo y)|q) ]] && echo 9T; [[ x{1,2} == x{1,2} ]] && echo 10T\n"
+            + "[[ x\\{1,2} == 'x{1,2}' ]] && echo 11T; [ x\\{1,2} = 'x{1,2}' ] && echo 12T");
+
     [SkippableFact]
     public Task ExtGlob_BangAtCommandPositionIsStillNegation()
         => Eq("!(false); echo \"rc=$?\"; if !(false); then echo neg; fi; x=1; [[ $x == !(2) ]] && echo pat");

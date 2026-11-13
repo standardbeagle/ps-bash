@@ -140,7 +140,6 @@ x hi
 x hi
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-command-sub command-sub (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Quoting " within ``
@@ -207,7 +206,6 @@ echo "[3 `echo \\\\ `]"
 [3 \]
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-command-sub command-sub (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Quoting ( within ``
@@ -232,7 +230,6 @@ echo "3 `echo \\ \\(`"
 3  (
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-command-sub command-sub (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Quoting non-special characters within ``

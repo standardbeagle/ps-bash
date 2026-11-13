@@ -542,7 +542,7 @@ public sealed partial class BashParser
             if (Peek().Kind is BashTokenKind.Word or BashTokenKind.AssignmentWord or BashTokenKind.LBrace or BashTokenKind.RBrace)
             {
                 var token = Advance();
-                var parts = DecomposeWord(token.Value);
+                var parts = DecomposeWord(token.Value, braceExpansion: !extended);
                 inner.Add(new CompoundWord(parts));
             }
             else if (extended && Peek().Kind == BashTokenKind.Newline)

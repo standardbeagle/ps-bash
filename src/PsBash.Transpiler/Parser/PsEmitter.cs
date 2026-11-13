@@ -1694,7 +1694,10 @@ public static partial class PsEmitter
         {
             switch (part)
             {
-                case WordPart.GlobPart g: sb.Append(g.Pattern); break;
+                case WordPart.GlobPart g:
+                    if (IsDynamicExtglob(g.Pattern)) return false;
+                    sb.Append(g.Pattern);
+                    break;
                 case WordPart.Literal or WordPart.EscapedLiteral or WordPart.SingleQuoted
                     or WordPart.AnsiCQuoted or WordPart.DoubleQuoted:
                     if (!TryGetPureLiteralText(ImmutableArray.Create(part), out var lit)) return false;
@@ -1709,6 +1712,86 @@ public static partial class PsEmitter
         }
         raw = sb.ToString();
         return true;
+    }
+
+    /// <summary>An extglob (<c>@(a|$b)</c>) whose arms hold an expansion or a backtick substitution.</summary>
+    private static bool IsDynamicExtglob(string pattern) =>
+        pattern.Length > 1 && pattern[1] == '(' && pattern.AsSpan().IndexOfAny('$', '`') >= 0;
+
+    /// <summary>
+    /// An extglob's text cut into its operators (<c>@(</c>, <c>|</c>, <c>)</c>, nested <c>!(</c> ...) and the
+    /// arm text between them. Quotes, backslash escapes, <c>$( )</c>, <c>${ }</c>, backticks and bracket
+    /// expressions are kept whole inside an arm.
+    /// </summary>
+    internal static List<(string Text, bool IsOperator)> SplitExtglob(string pattern)
+    {
+        var result = new List<(string, bool)>();
+        var arm = new StringBuilder();
+        int depth = 0;
+        void FlushArm()
+        {
+            if (arm.Length == 0) return;
+            result.Add((arm.ToString(), false));
+            arm.Clear();
+        }
+        for (int i = 0; i < pattern.Length; i++)
+        {
+            char c = pattern[i];
+            if (c is '?' or '*' or '+' or '@' or '!' && i + 1 < pattern.Length && pattern[i + 1] == '(')
+            {
+                FlushArm();
+                result.Add((pattern.Substring(i, 2), true));
+                depth++;
+                i++;
+                continue;
+            }
+            if (depth > 0 && c is '|' or ')')
+            {
+                FlushArm();
+                result.Add((c.ToString(), true));
+                if (c == ')') depth--;
+                continue;
+            }
+            int end = i;
+            switch (c)
+            {
+                case '\\':
+                    end = Math.Min(i + 1, pattern.Length - 1);
+                    break;
+                case '\'':
+                    end = pattern.IndexOf('\'', i + 1);
+                    break;
+                case '`':
+                    end = pattern.IndexOf('`', i + 1);
+                    break;
+                case '"':
+                    for (end = i + 1; end < pattern.Length && pattern[end] != '"'; end++)
+                        if (pattern[end] == '\\') end++;
+                    break;
+                case '$' when i + 1 < pattern.Length && pattern[i + 1] is '(' or '{':
+                {
+                    char open = pattern[i + 1], close = open == '(' ? ')' : '}';
+                    int nest = 0;
+                    for (end = i + 1; end < pattern.Length; end++)
+                    {
+                        if (pattern[end] == open) nest++;
+                        else if (pattern[end] == close && --nest == 0) break;
+                    }
+                    break;
+                }
+                case '[':
+                {
+                    int close = pattern.IndexOf(']', i + 2 < pattern.Length ? i + 2 : i + 1);
+                    end = close > 0 ? close : i;
+                    break;
+                }
+            }
+            if (end < i || end >= pattern.Length) end = pattern.Length - 1;
+            arm.Append(pattern, i, end - i + 1);
+            i = end;
+        }
+        FlushArm();
+        return result;
     }
 
     private static void AppendLiteralWildcardChar(StringBuilder sb, char c)
@@ -2922,7 +3005,39 @@ public static partial class PsEmitter
     {
         if (expr.Extended)
             return EmitExtendedTest(expr.Inner);
+        if (HasRunTimeTestWords(expr.Inner))
+            return EmitRunTimeTest(expr.Inner);
         return TranslateTestCondition(expr.Inner, extended: false);
+    }
+
+    /// <summary>
+    /// `[ -n $a ]`, `[ $e = '' ]`: `[` is a command, so an unquoted expansion is split into words (an empty one is
+    /// none) before `test` sees them, and the expression's shape is only known at run time. With `a` empty,
+    /// `[ -n $a ]` is `[ -n ]` (true) and `[ $e = '' ]` is `[ = '' ]` (status 2); both were compared as one
+    /// operand. `$#`, `$?`, `$$` and `$!` never split. A glob word keeps the static path.
+    /// </summary>
+    private static bool HasRunTimeTestWords(ImmutableArray<CompoundWord> words)
+    {
+        bool any = false;
+        foreach (var w in words)
+        {
+            if (w.Parts.Any(p => p is WordPart.GlobPart)) return false;
+            if (w.Parts is [WordPart.SimpleVarSub { Name: "#" or "?" or "$" or "!" }]
+                or [WordPart.BracedVarSub { Name: "#" or "?" or "$" or "!", Suffix: null }])
+                continue;
+            if (IsUnquotedSplitWord(w)) any = true;
+        }
+        return any;
+    }
+
+    /// <summary>The `[ ]` word list, IFS-split at run time, evaluated by the runtime `test` (status 2 flags a bad expression).</summary>
+    private static string EmitRunTimeTest(ImmutableArray<CompoundWord> words)
+    {
+        var items = new List<string>(words.Length);
+        foreach (var w in QuoteBareTestParens(WithLiteralParens(words)))
+            items.Add(IsUnquotedSplitWord(w) ? EmitUnquotedSplitWordArray(w) : EmitTestOperand(w));
+        return "$(& { $__psbT = @(" + string.Join("; ", items) + "); Invoke-BashTest @__psbT; "
+            + "if ($global:LASTEXITCODE -eq 2) { $global:__BashTestBad = $true }; $global:LASTEXITCODE -eq 0 })";
     }
 
     // The full GNU set of unary file-test operators. Any of these in a `[ -X file ]` /
@@ -3337,6 +3452,10 @@ public static partial class PsEmitter
     private static string EmitTestOperand(CompoundWord word)
     {
         var emitted = EmitTestArg(word);
+        // `x\{1,2}`, `[[ x{1,2} == ... ]]`: a literal whose argument form backtick-escapes a brace was then
+        // single-quoted backtick and all ('x`{1,2`}'), so it never equalled x{1,2}. Quote the literal text itself.
+        if (emitted.Contains('`') && TryGetPureLiteralText(word.Parts, out var braceLiteral))
+            return PsBuild.SingleQuote(braceLiteral);
         // A literal word that starts with `$` (`[[ $ =~ "$" ]]`, `[[ "$" == $ ]]`) is text, not a variable reference:
         // left bare, PowerShell read `$` as an unknown token ("$: command not found", or a parse error before `&&`).
         return emitted.StartsWith('$') && ExtractSingleQuotedOrLiteralValue(word) is { } literal
@@ -6720,6 +6839,11 @@ public static partial class PsEmitter
         if (word.Parts is [WordPart.TildeSub { User: null or "+" or "-", SlashConsumed: true }])
             return TransformWordPath(FlattenPartsToDoubleQuotedString(word.Parts));
 
+        // `\ x`, `\ `: PowerShell drops a backtick-escaped space or tab at the start of an argument (`echo \ ` printed
+        // an empty line, `echo \ x` printed "x"), so such a word is one string.
+        if (word.Parts is [WordPart.EscapedLiteral { Value: " " or "\t" }, ..])
+            return FlattenPartsToDoubleQuotedString(word.Parts);
+
         if (word.Parts.Length == 1)
             return EscapeLeadingSplatSigil(
                 word, TransformWordPath(EmitBarewordPart(word.Parts[0], wholeWord: true)));
@@ -8163,7 +8287,10 @@ public static partial class PsEmitter
         {
             var p = word.Parts[i];
             string? name = p switch { WordPart.SimpleVarSub s => s.Name, WordPart.BracedVarSub { Suffix: null } b => b.Name, _ => null };
-            if (name is not null && (name is "@" or "*" || ordinaryVar && (IsOrdinaryVarName(name) || name.Length > 0 && name.All(char.IsAsciiDigit))))
+            // `[$(echo " ")]`, `x$(cmd)y`: an unquoted command substitution glued to text splits the same way (it was
+            // one argument, so `$(echo " ")]` kept the space).
+            if ((name is not null && (name is "@" or "*" || ordinaryVar && (IsOrdinaryVarName(name) || name.Length > 0 && name.All(char.IsAsciiDigit))))
+                || (ordinaryVar && p is WordPart.CommandSub))
             {
                 if (found >= 0) return -1;
                 found = i;
@@ -8582,6 +8709,15 @@ public static partial class PsEmitter
                     break;
                 case WordPart.AnsiCQuoted aq:
                     lit.Append(EscapeGlobLiteral(ExpandAnsiCEscapes(aq.Value)));
+                    break;
+                case WordPart.GlobPart gp when IsDynamicExtglob(gp.Pattern):
+                    // `@($a|$b)`, `!($str)`: the extglob operators stay pattern syntax, each arm is a word of
+                    // its own (expansions spliced, quoted text escaped). Its `$a` matched the text "$a".
+                    foreach (var (text, isOperator) in SplitExtglob(gp.Pattern))
+                    {
+                        if (isOperator) lit.Append(text);
+                        else Dynamic(EmitGlobPatternExpr(new CompoundWord(BashParser.DecomposeWord(text)), mapPaths: false));
+                    }
                     break;
                 case WordPart.GlobPart gp:
                     lit.Append(gp.Pattern);

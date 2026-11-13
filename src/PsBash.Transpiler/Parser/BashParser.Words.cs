@@ -17,7 +17,10 @@ public sealed partial class BashParser
     /// Handles single quotes, double quotes, backslash escapes, $VAR references,
     /// and bare literal text.
     /// </summary>
-    internal static ImmutableArray<WordPart> DecomposeWord(string raw)
+    /// <param name="raw">The word's source text.</param>
+    /// <param name="braceExpansion">False inside <c>[[ ]]</c>, where bash does no brace expansion
+    /// (<c>[[ --X{a,b}X == ... ]]</c> compares the text <c>--X{a,b}X</c>).</param>
+    internal static ImmutableArray<WordPart> DecomposeWord(string raw, bool braceExpansion = true)
     {
         var parts = ImmutableArray.CreateBuilder<WordPart>();
         int pos = 0;
@@ -108,7 +111,15 @@ public sealed partial class BashParser
             }
             else if (IsBraceExpansionStart(raw, pos))
             {
-                pos = ParseBraceExpansion(raw, pos, parts);
+                if (braceExpansion)
+                {
+                    pos = ParseBraceExpansion(raw, pos, parts);
+                }
+                else
+                {
+                    parts.Add(new WordPart.Literal("{"));
+                    pos++;
+                }
             }
             else
             {
@@ -324,7 +335,7 @@ public sealed partial class BashParser
             }
             else if (c == '`')
             {
-                pos = ParseBacktickCommandSub(raw, pos, innerParts);
+                pos = ParseBacktickCommandSub(raw, pos, innerParts, inDoubleQuote: true);
             }
             else
             {
@@ -880,7 +891,7 @@ public sealed partial class BashParser
         return end;
     }
 
-    private static int ParseBacktickCommandSub(string raw, int pos, ImmutableArray<WordPart>.Builder parts)
+    private static int ParseBacktickCommandSub(string raw, int pos, ImmutableArray<WordPart>.Builder parts, bool inDoubleQuote = false)
     {
         pos++; // skip opening `
         int start = pos;
@@ -899,7 +910,8 @@ public sealed partial class BashParser
         // inside backtick command substitution, before re-parsing the body.
         // Without this, `` `echo \`date\`` `` re-parsed the literal backslashes
         // and mis-parsed the nested substitution.
-        inner = UnescapeBacktickInner(inner);
+        // Inside double quotes \" loses its backslash too: "x `echo \"hi\"`" runs echo "hi".
+        inner = UnescapeBacktickInner(inner, inDoubleQuote);
         var body = Parse(inner);
         parts.Add(new WordPart.CommandSub(body ?? new Command.Simple(
             ImmutableArray<CompoundWord>.Empty,
@@ -914,7 +926,7 @@ public sealed partial class BashParser
     /// backslashes are preserved (bash leaves them for the inner parse). Mirrors
     /// the bash rule applied before the backtick body is re-parsed.
     /// </summary>
-    private static string UnescapeBacktickInner(string s)
+    private static string UnescapeBacktickInner(string s, bool inDoubleQuote = false)
     {
         if (s.IndexOf('\\') < 0)
             return s;
@@ -922,7 +934,7 @@ public sealed partial class BashParser
         for (int i = 0; i < s.Length; i++)
         {
             if (s[i] == '\\' && i + 1 < s.Length
-                && (s[i + 1] == '\\' || s[i + 1] == '`' || s[i + 1] == '$'))
+                && (s[i + 1] == '\\' || s[i + 1] == '`' || s[i + 1] == '$' || (inDoubleQuote && s[i + 1] == '"')))
             {
                 sb.Append(s[i + 1]);
                 i++;

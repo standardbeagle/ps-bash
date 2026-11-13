@@ -1,0 +1,36 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 404
+stdout-length: 47
+stderr-length: 0
+==== SCRIPT ====
+emp=''; two='a b'; one=x; dsh='-e'
+[ -n $emp ] && echo 1T
+[ -z $emp ] && echo 2T
+[ $emp = '' ] 2>/dev/null; echo "3 st:$?"
+[ $two = 'a b' ] 2>/dev/null; echo "4 st:$?"
+[ $one = x ] && echo 5T
+[ -e $emp ] && echo 6T
+[ $dsh = -e ] && echo 7T
+[ ! $emp ] && echo 8T || echo 8F
+[ \( $one = x \) -a -n "$emp$one" ] && echo 9T
+if [ -n $emp ]; then echo 10T; fi
+[ x$emp = x ] && echo 11T
+[ $# -eq 0 ] && echo 12T
+==== STDOUT ====
+1T
+2T
+3 st:2
+4 st:2
+5T
+6T
+7T
+8T
+9T
+10T
+11T
+12T
+
+==== STDERR ====
+

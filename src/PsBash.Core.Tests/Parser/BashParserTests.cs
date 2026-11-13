@@ -930,6 +930,30 @@ public class BashParserTests
         Assert.Equal("date", Assert.IsType<WordPart.Literal>(Assert.Single(inner.Words[0].Parts)).Value);
     }
 
+    /// <summary>In double quotes a backtick body also loses the backslash of \": `echo \"hi\"` runs echo "hi" (a quoted
+    /// word); outside double quotes it stays an escaped quote.</summary>
+    [Theory]
+    [InlineData("echo \"x `echo \\\"hi\\\"`\"", true)]
+    [InlineData("echo `echo \\\"hi\\\"`", false)]
+    public void Parse_BacktickInDoubleQuotes_UnescapesQuote(string bash, bool innerQuoted)
+    {
+        var simple = Assert.IsType<Command.Simple>(Parse(bash));
+        var cs = simple.Words[1].Parts.SelectMany(p => p is WordPart.DoubleQuoted dq ? dq.Parts : [p]).OfType<WordPart.CommandSub>().Single();
+        var inner = Assert.IsType<Command.Simple>(cs.Body);
+        Assert.Equal(innerQuoted, inner.Words[1].Parts is [WordPart.DoubleQuoted]);
+    }
+
+    [Fact]
+    public void Parse_DoubleBracketWord_HasNoBraceExpansion()
+    {
+        // `[[ ]]` does no brace expansion; `[ ]` is a command and does.
+        var dbl = Assert.IsType<Command.BoolExpr>(Parse("[[ x{a,b} == y ]]"));
+        Assert.DoesNotContain(dbl.Inner[0].Parts, p => p is WordPart.BracedTuple);
+        Assert.Equal("x{a,b}", string.Concat(dbl.Inner[0].Parts.Cast<WordPart.Literal>().Select(l => l.Value)));
+        var sgl = Assert.IsType<Command.BoolExpr>(Parse("[ x{a,b} = y ]"));
+        Assert.Contains(sgl.Inner[0].Parts, p => p is WordPart.BracedTuple);
+    }
+
     [Fact]
     public void Parse_AssignmentWithCommandSub_ParsesCorrectly()
     {

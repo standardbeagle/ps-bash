@@ -1,0 +1,33 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 638
+stdout-length: 43
+stderr-length: 0
+==== SCRIPT ====
+shopt -s extglob
+c1=help; c2='verb*'; pfx=no
+[[ --verbose == --@($c1|$c2) ]] && echo 1T; [[ --oops == --@($c1|$c2) ]] || echo 2F
+[[ --no-long-option == --@(help|$pfx-@(long|short)-'option') ]] && echo 3T
+[[ --X{a,b}X == --@(help|X{a,b}X) ]] && echo 4T; [[ --oops == --@(help|X{a,b}X) ]] || echo 4F
+emp=''; sx=x; [[ $emp == !($sx) ]] && echo 5T; [[ $sx == !($sx) ]] || echo 6F
+case --verbose in --@($c1|"$c2")) echo 7bad;; --@($c1|$c2)) echo 7ok;; esac
+[[ 'a|b' == @("a|b"|z) ]] && echo 8T; [[ xy == x@($(echo y)|q) ]] && echo 9T; [[ x{1,2} == x{1,2} ]] && echo 10T
+[[ x\{1,2} == 'x{1,2}' ]] && echo 11T; [ x\{1,2} = 'x{1,2}' ] && echo 12T
+==== STDOUT ====
+1T
+2F
+3T
+4T
+4F
+5T
+6F
+7ok
+8T
+9T
+10T
+11T
+12T
+
+==== STDERR ====
+

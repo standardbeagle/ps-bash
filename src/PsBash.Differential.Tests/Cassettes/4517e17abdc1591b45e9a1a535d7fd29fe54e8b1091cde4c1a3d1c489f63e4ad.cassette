@@ -1,0 +1,28 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 381
+stdout-length: 89
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)"; mkdir d2; touch d2/a.txt d2/b.txt
+echo [1 $(echo " ")] [2 x$(echo " a b ")y]
+for w in pre$(printf 'a\nb')post; do echo "w=$w"; done
+ls d2/$(echo '*.txt'); cat $(echo d2)/a.txt; echo "st:$?"
+x=pre$(echo " a b ")post; echo "[$x]"; arr=(a$(echo "1 2")b); echo "${#arr[@]}"
+cnt() { echo "n=$#"; }; cnt x$(echo)y; cnt $(echo "a b")/c; echo "q$(echo " a ")q" [$(echo)]
+==== STDOUT ====
+[1 ] [2 x a b y]
+w=prea
+w=bpost
+d2/a.txt
+d2/b.txt
+st:0
+[pre a b post]
+2
+n=1
+n=2
+q a q []
+
+==== STDERR ====
+

@@ -2389,9 +2389,8 @@ public class PsEmitterTests
         // RC-8d: command-substitution emit wraps inner output in
         // `| ForEach-Object { Get-BashText $_ }` so the captured value is the
         // bash-text payload, never a typed BashObject's default ToString(). Glued to `x`, the
-        // whole word is one join expression (a bareword `x$( … )` has PowerShell's naive
-        // paren scan — see TryEmitJoinedWord).
-        Assert.Equal("Invoke-BashEcho (-join @('x', (@(Invoke-BashWhoami | ConvertTo-BashCapture) -join ' ')))", result);
+        // unquoted substitution is word-split with the text glued to its first and last field.
+        Assert.Equal("& { $__bashsplat0 = @(ConvertTo-BashWords -Prefix \"x\" -Suffix '' -Fields @($(Invoke-BashWhoami | ConvertTo-BashCapture))); Invoke-BashEcho @__bashsplat0 }", result);
     }
 
     [Fact]
@@ -2399,7 +2398,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("echo x$(ls | grep foo)");
 
-        Assert.Equal("Invoke-BashEcho (-join @('x', (@(Invoke-BashLs | Invoke-BashGrep foo | ConvertTo-BashCapture) -join ' ')))", result);
+        Assert.Contains("-Fields @($(Invoke-BashLs | Invoke-BashGrep foo | ConvertTo-BashCapture))", result);
     }
 
     [Fact]
@@ -2407,7 +2406,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("echo x`date`");
 
-        Assert.Equal("Invoke-BashEcho (-join @('x', (@(Invoke-BashDate | ConvertTo-BashCapture) -join ' ')))", result);
+        Assert.Contains("-Fields @($(Invoke-BashDate | ConvertTo-BashCapture))", result);
     }
 
     [Fact]
@@ -2426,7 +2425,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("echo x$(echo y$(whoami))");
 
-        Assert.Equal("Invoke-BashEcho (-join @('x', (@(Invoke-BashEcho (-join @('y', (@(Invoke-BashWhoami | ConvertTo-BashCapture) -join ' '))) | ConvertTo-BashCapture) -join ' ')))", result);
+        Assert.Equal("& { $__bashsplat0 = @(ConvertTo-BashWords -Prefix \"x\" -Suffix '' -Fields @($(& { $__bashsplat0 = @(ConvertTo-BashWords -Prefix \"y\" -Suffix '' -Fields @($(Invoke-BashWhoami | ConvertTo-BashCapture))); Invoke-BashEcho @__bashsplat0 } | ConvertTo-BashCapture))); Invoke-BashEcho @__bashsplat0 }", result);
     }
 
     /// <summary>
@@ -2486,9 +2485,9 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("cat /tmp/$(echo hi).txt");
 
-        Assert.StartsWith("Invoke-BashCat \"" + TmpDir + "/$(", result);
-        Assert.Contains("Invoke-BashEcho hi", result);
-        Assert.EndsWith(".txt\"", result);
+        // The temp directory is the split word's prefix; the substitution's fields keep the suffix.
+        Assert.Contains("-Prefix ($($env:OS -eq 'Windows_NT' ? $env:TEMP : '/tmp') + '/')", result);
+        Assert.Contains("-Suffix \".txt\" -Fields @($(Invoke-BashEcho hi | ConvertTo-BashCapture))", result);
     }
 
     [Fact]
@@ -3378,7 +3377,7 @@ public class PsEmitterTests
         // `[ = ]` is plain case-sensitive equality (-ceq/-cne), never a pattern.
         Assert.Contains("'abc' -ceq 'abc'", PsEmitter.Transpile("[ abc = abc ]"));
         Assert.Contains("'abc' -cne 'xyz'", PsEmitter.Transpile("[ abc != xyz ]"));
-        Assert.Contains("$env:x -ceq 'abc'", PsEmitter.Transpile("x=1; [ $x = abc ]"));
+        Assert.Contains("$env:x -ceq 'abc'", PsEmitter.Transpile("x=1; [ \"$x\" = abc ]"));
         Assert.Contains("(Invoke-BashTestInt (5)) -eq (Invoke-BashTestInt -Second (5))", PsEmitter.Transpile("[ 5 -eq 5 ]"));   // strict decimal operands
     }
 
@@ -3723,6 +3722,50 @@ public class PsEmitterTests
     [InlineData("[[ $x == 'v'@(1|2) ]]", "IsMatch($env:x, '(?s)^(?:v(?:1|2))\\z')")]
     public void Transpile_DoubleBracketExtGlobRhs_EmitsAnchoredRegexMatch(string bash, string fragment)
         => Assert.Contains(fragment, PsEmitter.Transpile(bash));
+
+    [Fact]
+    public void Transpile_ExtGlobArmWithExpansion_IsARunTimePattern()
+    {
+        // `$c1` inside @( ) is the variable's value, not the text "$c1": the operators stay pattern text, each arm
+        // is spliced in at run time.
+        var result = PsEmitter.Transpile("[[ $x == --@($c1|$c2) ]]");
+        Assert.Contains("[PsBash.Cmdlets.BashPatternMatch]::MatchesPattern($env:x, ('' + '--@(' + (($env:c1)) + '|' + (($env:c2)) + ')'))", result);
+        Assert.DoesNotContain("\\$c1", result);
+    }
+
+    [Theory]
+    [InlineData("[ -n $a ]")]
+    [InlineData("[ $e = '' ]")]
+    [InlineData("[ x$v = y ]")]
+    [InlineData("[ \\( $a \\) ]")]
+    public void Transpile_BracketWithUnquotedExpansion_SplitsWordsAtRunTime(string bash)
+    {
+        // `[` is a command: an unquoted expansion splits (an empty one is no word) before test sees it, so with a
+        // empty `[ -n $a ]` is `[ -n ]` (true). The word list goes to the runtime test evaluator.
+        var result = PsEmitter.Transpile(bash);
+        Assert.Contains("$__psbT = @(", result);
+        Assert.Contains("Invoke-BashTest @__psbT", result);
+    }
+
+    [Theory]
+    [InlineData("[ $# -eq 0 ]")]
+    [InlineData("[ \"$a\" = b ]")]
+    [InlineData("[[ -n $a ]]")]
+    public void Transpile_BracketWithoutSplittingWords_StaysStatic(string bash)
+        => Assert.DoesNotContain("Invoke-BashTest @__psbT", PsEmitter.Transpile(bash));
+
+    [Theory]
+    [InlineData("[[ x{1,2} == y ]]")]
+    [InlineData("[[ x\\{1,2} == y ]]")]
+    public void Transpile_TestOperandWithBraces_IsSingleQuotedText(string bash)
+        => Assert.Contains("IsMatch('x{1,2}',", PsEmitter.Transpile(bash));
+
+    [Theory]
+    [InlineData("@($a|b)", new[] { "@(", "$a", "|", "b", ")" })]
+    [InlineData("!(x-@(l|s)-'o|p')", new[] { "!(", "x-", "@(", "l", "|", "s", ")", "-'o|p'", ")" })]
+    [InlineData("@($(echo a|b)|\"c)\"|[|)])", new[] { "@(", "$(echo a|b)", "|", "\"c)\"", "|", "[|)]", ")" })]
+    public void SplitExtglob_KeepsQuotesSubstitutionsAndBracketsInsideAnArm(string pattern, string[] expected)
+        => Assert.Equal(expected, PsEmitter.SplitExtglob(pattern).Select(p => p.Text).ToArray());
 
     [Fact]
     public void Transpile_DoubleBracketPlainGlobRhs_IsCaseSensitivePatternMatchNotLike()
@@ -6950,6 +6993,14 @@ public class PsEmitterTests
         Assert.Contains(expected, PsEmitter.Transpile(bash)!);
     }
 
+    [Theory]
+    [InlineData("echo \\ ", "Invoke-BashEcho \" \"")]
+    [InlineData("echo \\ x", "Invoke-BashEcho \" x\"")]
+    public void Transpile_WordStartingWithAnEscapedSpace_IsOneString(string bash, string expected)
+    {
+        Assert.Equal(expected, PsEmitter.Transpile(bash));
+    }
+
     [Fact]
     public void Transpile_CommandSubCommandWordWithOperands_IsResolvedFirstAtRunTime()
     {
@@ -7685,7 +7736,7 @@ public class PsEmitterTests
         // "An empty pipe element is not allowed" (Go's make.bash).
         var result = PsEmitter.Transpile("echo x$(LC_TIME=C date)");
 
-        Assert.Contains("@(& { $__psbash_ss = ", result);
+        Assert.Contains("@($(& { $__psbash_ss = ", result);
         Assert.Contains("try { $__saved_LC_TIME", result);
         Assert.Contains("} | ConvertTo-BashCapture)", result);
     }
@@ -7698,7 +7749,7 @@ public class PsEmitterTests
         var result = PsEmitter.Transpile("echo x$(cd /tmp)");
 
         // Wrapped in the subshell scope (cd changes shell state), whose body is the cd list.
-        Assert.Contains("@(& { $__psbash_ss = ", result);
+        Assert.Contains("@($(& { $__psbash_ss = ", result);
         Assert.Contains("try { $__psbash_cd_target", result);
     }
 
@@ -7718,7 +7769,9 @@ public class PsEmitterTests
         // operand is not a statement separator.
         var result = PsEmitter.Transpile("echo x$(echo \"a;b\")");
 
-        Assert.DoesNotContain("& {", result);
+        // The only block is the split word's own; the substitution body is not wrapped as a statement list.
+        Assert.DoesNotContain("$__psbash_ss", result);
+        Assert.Contains("@($(Invoke-BashEcho \"a;b\" | ConvertTo-BashCapture))", result);
     }
 
     [Fact]
