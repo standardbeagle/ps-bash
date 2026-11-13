@@ -4020,7 +4020,11 @@ public static partial class PsEmitter
         // `~` and `$HOME` read PowerShell's own read-only $HOME (the launcher's home), which `HOME=/x` never touched;
         // re-point it so a script that assigns HOME sees it (`HOME=/home/bob; echo ~` prints /home/bob).
         if (!cmd.IsLocal && cmd.Pairs.Any(p => p.Name == "HOME" && p.ArrayValue is null && p.Op == AssignOp.Equal))
-            sb.Append("; Microsoft.PowerShell.Utility\\Set-Variable -Name HOME -Value $env:HOME -Option ReadOnly,AllScope -Scope Global -Force");
+            // By the cmdlet's TYPE, not `Microsoft.PowerShell.Utility\Set-Variable`: a module-qualified name makes the
+            // engine import the module when the session did not load it as one, and under load that import failed
+            // ("The module 'Microsoft.PowerShell.Utility' could not be loaded", macOS CI) or stalled (Windows CI), leaving
+            // $HOME unchanged. A bare `Set-Variable` would be found, but a script's own `Set-Variable` function would win.
+            sb.Append("; & $ExecutionContext.InvokeCommand.GetCmdletByTypeName('Microsoft.PowerShell.Commands.SetVariableCommand') -Name HOME -Value $env:HOME -Option ReadOnly,AllScope -Scope Global -Force");
         // A script writes PATH with `:` separators (`PATH=_tmp:$PATH`); Windows lookup needs `;`. Only a WRITE:
         // a bare `export PATH` leaves the value as it was (bash), even when the inherited PATH is not in `;` form.
         if (cmd.Pairs.Any(p => p.Name == "PATH" && p.ArrayValue is null && p.Value is not null))

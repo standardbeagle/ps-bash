@@ -145,7 +145,8 @@ public class BashTranspilerTests
     public void Transpile_HomeAssignment_RepointsPowerShellHome()
     {
         var result = BashTranspiler.Transpile("HOME=/home/bob");
-        Assert.Contains("Set-Variable -Name HOME -Value $env:HOME", result);
+        Assert.Contains("SetVariableCommand') -Name HOME -Value $env:HOME", result);
+        Assert.DoesNotContain("Microsoft.PowerShell.Utility\\", result); // a module-qualified call imports the module
     }
 
     // The `/` after `~` is restored only when the parser consumed one: `x=~:foo` is not `HOME/:foo`.

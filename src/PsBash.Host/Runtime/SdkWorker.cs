@@ -892,7 +892,9 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
 
         proxy.Provider.GetOne("FileSystem").Home = home;
         // $HOME is ReadOnly+AllScope: only -Force can replace it.
-        _ps.AddCommand("Microsoft.PowerShell.Utility\\Set-Variable")
+        // By type, not by the module-qualified name, which makes the engine import Microsoft.PowerShell.Utility
+        // when the session did not load it as a module; under load that import can fail (see PsEmitter, HOME=).
+        _ps.AddCommand(new System.Management.Automation.CmdletInfo("Set-Variable", typeof(Microsoft.PowerShell.Commands.SetVariableCommand)))
             .AddParameter("Name", "HOME").AddParameter("Value", home)
             .AddParameter("Option", System.Management.Automation.ScopedItemOptions.ReadOnly
                                     | System.Management.Automation.ScopedItemOptions.AllScope)
