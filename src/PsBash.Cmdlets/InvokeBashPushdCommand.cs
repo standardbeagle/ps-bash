@@ -86,6 +86,7 @@ public sealed class InvokeBashPushdCommand : PSCmdlet
             // Replicate the oracle slice byte-for-byte: get stack, pick Nth,
             // pop (N+1) entries, push the target. The delegation script reads
             // its arg via $args[0] so user input cannot reach the script body.
+            var before = LogicalLocation(this);
             InvokeCommand.InvokeScript(
                 @"param($n)
                 $stack = @(Get-Location -Stack)
@@ -95,7 +96,7 @@ public sealed class InvokeBashPushdCommand : PSCmdlet
                     Push-Location -Path $target.Path
                 }",
                 n);
-            SyncProcessWorkingDirectory(this);
+            SyncProcessWorkingDirectory(this, before);
             InvokeBashDirsCommand.PrintStack(this);
             return;
         }
@@ -114,10 +115,11 @@ public sealed class InvokeBashPushdCommand : PSCmdlet
         }
         try
         {
+            var before = LogicalLocation(this);
             InvokeCommand.InvokeScript(
                 "param($p) Push-Location -Path $p",
                 target);
-            SyncProcessWorkingDirectory(this);
+            SyncProcessWorkingDirectory(this, before);
             InvokeBashDirsCommand.PrintStack(this);
         }
         catch (System.Management.Automation.RuntimeException ex)
@@ -165,14 +167,18 @@ public sealed class InvokeBashPushdCommand : PSCmdlet
     /// already succeeded, and neither can be reported on the bash side, so both leave the
     /// previous value in place.</para>
     /// </summary>
-    internal static void SyncProcessWorkingDirectory(PSCmdlet cmdlet)
+    /// <param name="cmdlet">The cmdlet that moved the location.</param>
+    /// <param name="previousLocation">The location before the move, from <see cref="LogicalLocation"/>: <c>$OLDPWD</c>
+    /// is the directory as <c>pwd</c> showed it. The process working directory is physical, so on macOS it read
+    /// <c>/var/folders/...</c> back as <c>/private/var/folders/...</c> (a resolved symlink) where bash keeps the logical path.</param>
+    internal static void SyncProcessWorkingDirectory(PSCmdlet cmdlet, string? previousLocation)
     {
         try
         {
             var path = cmdlet.SessionState.Path.CurrentFileSystemLocation?.Path;
             if (!string.IsNullOrEmpty(path) && Directory.Exists(path))
             {
-                var previous = Environment.CurrentDirectory;
+                var previous = string.IsNullOrEmpty(previousLocation) ? Environment.CurrentDirectory : previousLocation;
                 Environment.CurrentDirectory = path;
                 // The same three writes the emitter's `cd` makes: `pwd` reads __PsBashCwd, `$PWD`/`$OLDPWD` read the env store.
                 cmdlet.SessionState.PSVariable.Set("global:__PsBashCwd", path);
@@ -187,5 +193,12 @@ public sealed class InvokeBashPushdCommand : PSCmdlet
         {
             // Non-filesystem provider or a vanished directory — keep the old value.
         }
+    }
+
+    /// <summary>The session's current filesystem location as PowerShell holds it (logical, symlinks unresolved), or null on a non-filesystem provider.</summary>
+    internal static string? LogicalLocation(PSCmdlet cmdlet)
+    {
+        try { return cmdlet.SessionState.Path.CurrentFileSystemLocation?.Path; }
+        catch { return null; }
     }
 }

@@ -82,11 +82,12 @@ public sealed class InvokeBashPopdCommand : PSCmdlet
             var m = System.Text.RegularExpressions.Regex.Match(args[0], @"^\+(\d+)$");
             var n = BashRuntime.ParseCountClamped(m.Groups[1].Value);
 
+            var before = InvokeBashPushdCommand.LogicalLocation(this);
             InvokeCommand.InvokeScript(
                 @"param($n)
                 for ($i = 0; $i -le $n; $i++) { Pop-Location -Stack -ErrorAction SilentlyContinue }",
                 n);
-            SyncProcessWorkingDirectory();
+            SyncProcessWorkingDirectory(before);
             InvokeBashDirsCommand.PrintStack(this);
             return;
         }
@@ -94,8 +95,9 @@ public sealed class InvokeBashPopdCommand : PSCmdlet
         // Default: pop the top of the stack and chdir there.
         try
         {
+            var before = InvokeBashPushdCommand.LogicalLocation(this);
             InvokeCommand.InvokeScript("Pop-Location");
-            SyncProcessWorkingDirectory();
+            SyncProcessWorkingDirectory(before);
             InvokeBashDirsCommand.PrintStack(this);
         }
         catch (System.Management.Automation.RuntimeException ex)
@@ -105,6 +107,6 @@ public sealed class InvokeBashPopdCommand : PSCmdlet
         }
     }
 
-    private void SyncProcessWorkingDirectory()
-        => InvokeBashPushdCommand.SyncProcessWorkingDirectory(this);
+    private void SyncProcessWorkingDirectory(string? previousLocation)
+        => InvokeBashPushdCommand.SyncProcessWorkingDirectory(this, previousLocation);
 }

@@ -28,8 +28,17 @@ public class InvokeBashDirsCommandTests : IClassFixture<SharedPwshFixture>
         return RunRaw(pwsh, script).Select(o => o?.ToString() ?? "").ToArray();
     }
 
-    /// <summary>A directory as dirs/pushd/popd print it: like `pwd`, with `/` separators on Windows.</summary>
-    private static string Shown(string dir) => OperatingSystem.IsWindows() ? dir.Replace('\\', '/') : dir;
+    /// <summary>
+    /// A directory as dirs/pushd/popd print it: like `pwd`, with `/` separators on Windows, and a leading $HOME as `~`
+    /// as bash does. The temp directory is under $HOME on a Windows CI runner (C:/Users/runneradmin/AppData/Local/Temp),
+    /// and comparing to the bare path failed every test there while passing on a machine with no HOME set.
+    /// </summary>
+    private static string Shown(string dir)
+    {
+        var windows = OperatingSystem.IsWindows();
+        var home = BashRuntime.MapPath(Environment.GetEnvironmentVariable("HOME") ?? "");
+        return InvokeBashDirsCommand.TildeAbbreviate(windows ? dir.Replace('\\', '/') : dir, windows ? home.Replace('\\', '/') : home);
+    }
 
     private System.Management.Automation.PowerShell NewPwsh()
     {
@@ -238,7 +247,7 @@ public class InvokeBashDirsCommandTests : IClassFixture<SharedPwshFixture>
             Assert.Equal(2, lines.Length);
             Assert.All(lines, l => Assert.DoesNotContain('\\', l));
             var pwd = RunLines(pwsh, "Invoke-BashPwd | ForEach-Object { Get-BashText -InputObject $_ }");
-            Assert.Equal(pwd[^1], lines[0]);
+            Assert.Equal(Shown(pwd[^1]), lines[0]); // pwd never abbreviates $HOME; dirs does
         }
         finally
         {

@@ -43,9 +43,10 @@ public sealed class InvokeBashCdCommand : PSCmdlet
 
         // Splatted as a BOUND parameter, never concatenated into the script text, so a path
         // containing ; / $() / scriptblock characters stays a literal path (Directive 12).
+        var before = InvokeBashPushdCommand.LogicalLocation(this);
         InvokeCommand.InvokeScript("param($a) Set-Location @a", new object[] { args });
 
         // Only reached when the move succeeded — a throwing Set-Location propagates above.
-        InvokeBashPushdCommand.SyncProcessWorkingDirectory(this);
+        InvokeBashPushdCommand.SyncProcessWorkingDirectory(this, before);
     }
 }

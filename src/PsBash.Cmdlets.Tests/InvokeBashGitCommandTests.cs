@@ -236,7 +236,7 @@ public class InvokeBashGitCommandTests : IClassFixture<SharedPwshFixture>
 
     private static void Git(string repo, params string[] args)
     {
-        var psi = new ProcessStartInfo("git")
+        var psi = new ProcessStartInfo(GitExe)
         {
             WorkingDirectory = repo,
             UseShellExecute = false,
@@ -255,11 +255,28 @@ public class InvokeBashGitCommandTests : IClassFixture<SharedPwshFixture>
         p.WaitForExit(15000);
     }
 
+    /// <summary>
+    /// git by full path. A bare name makes Process.Start search the working directory first, which calls getcwd(), and
+    /// that throws FileNotFoundException when another test has left the process in a directory it then deleted
+    /// (seen on macOS CI: NewRepo failed before git ever ran).
+    /// </summary>
+    private static readonly string GitExe = FindOnPath(OperatingSystem.IsWindows() ? "git.exe" : "git") ?? "git";
+
+    private static string? FindOnPath(string name)
+    {
+        foreach (var dir in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
+        {
+            var candidate = Path.Combine(dir, name);
+            if (Path.IsPathRooted(candidate) && File.Exists(candidate)) return candidate;
+        }
+        return null;
+    }
+
     private static bool GitAvailable()
     {
         try
         {
-            var psi = new ProcessStartInfo("git", "--version")
+            var psi = new ProcessStartInfo(GitExe, "--version")
             {
                 UseShellExecute = false,
                 RedirectStandardOutput = true,
