@@ -3602,7 +3602,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("while true; do echo hi; done");
 
-        Assert.Equal("$__psbash_iter = 0; :__psbash_l0 while ($true) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; Invoke-BashEcho hi }", result);
+        Assert.Equal("$__psbash_iter = 0; :__psbash_l0 while ($true) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; Invoke-BashEcho hi }; if ($__psbash_iter -eq 0) { $global:LASTEXITCODE = 0 }", result);
     }
 
     [Fact]
@@ -3670,7 +3670,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("while [ -f file ]; do echo yes; done");
 
-        Assert.Equal("$__psbash_iter = 0; :__psbash_l0 while ((Test-Path \"file\" -PathType Leaf)) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; Invoke-BashEcho yes }", result);
+        Assert.Equal("$__psbash_iter = 0; :__psbash_l0 while ((Test-Path \"file\" -PathType Leaf)) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; Invoke-BashEcho yes }; if ($__psbash_iter -eq 0) { $global:LASTEXITCODE = 0 }", result);
     }
 
     [Fact]
@@ -3678,7 +3678,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("until [ -f file ]; do sleep 1; done");
 
-        Assert.Equal("$__psbash_iter = 0; :__psbash_l0 while (-not ((Test-Path \"file\" -PathType Leaf))) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; Invoke-BashSleep 1 }", result);
+        Assert.Equal("$__psbash_iter = 0; :__psbash_l0 while (-not ((Test-Path \"file\" -PathType Leaf))) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; Invoke-BashSleep 1 }; if ($__psbash_iter -eq 0) { $global:LASTEXITCODE = 0 }", result);
     }
 
     [Fact]
@@ -3686,7 +3686,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("while true; do echo a; echo b; done");
 
-        Assert.Equal("$__psbash_iter = 0; :__psbash_l0 while ($true) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; Invoke-BashEcho a; Invoke-BashEcho b }", result);
+        Assert.Equal("$__psbash_iter = 0; :__psbash_l0 while ($true) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; Invoke-BashEcho a; Invoke-BashEcho b }; if ($__psbash_iter -eq 0) { $global:LASTEXITCODE = 0 }", result);
     }
 
     [Fact]

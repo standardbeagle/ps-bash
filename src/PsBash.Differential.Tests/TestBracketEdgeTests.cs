@@ -59,6 +59,13 @@ public class TestBracketEdgeTests
         + "{ command test 1 -eq; } 2>/dev/null; echo \"d st:$?\"\nx=$(command ls /nonexist_zq 2>&1); echo \"f [$x]\"\n"
         + "command ls /nonexist_zq 2>&1 | wc -l");
 
+    /// <summary>A loop or if whose run-time `[ ]` condition ends false keeps bash's status (the body's, or 0): the
+    /// runtime test's 1 leaked out of the condition.</summary>
+    [Fact]
+    public Task RunTimeBracketCondition_LeavesTheStatusAlone() => AssertOracle.EqualAsync(
+        "n=0; while [ $n -lt 2 ]; do n=$((n+1)); done; echo \"a st:$?\"\nxe=; if [ $xe ]; then :; fi; echo \"b st:$?\"\n"
+        + "o='-lt'; i=0; while [ $i $o 2 ]; do i=$((i+1)); done; echo \"d st:$?\"\nfalse; until [ $n = 2 ]; do :; done; echo \"e st:$?\"");
+
     [Fact]
     public Task LocalExportDeclare_ResetStatusToZero() => AssertOracle.EqualAsync(
         "f() { false; local q=1; echo s1=$?; false; local r; echo s2=$?; false; export Z=1; echo s3=$?; false; declare d=1; echo s4=$?; }\nf\nfalse; export Y=1; echo s5=$?");

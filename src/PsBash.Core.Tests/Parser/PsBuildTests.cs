@@ -344,4 +344,15 @@ public class PsBuildTests
             PsBuild.ArrayKindGuard("a", toAssoc: true, "DECL"));
         Assert.Contains("IsAssocValue", PsBuild.ArrayKindGuard("a", toAssoc: false, "DECL"));
         Assert.Contains("cannot convert associative to indexed array", PsBuild.ArrayKindGuard("a", toAssoc: false, "DECL"));
-    }}
+    }
+
+    [Fact]
+    public void RunTimeTest_RestoresTheStatusAndFlagsABadExpression()
+    {
+        // A test used as a condition leaves $? alone (`while [ $n -lt 4 ]` ended with 1): the runtime test's status
+        // is read, then LASTEXITCODE is put back.
+        Assert.Equal("$(& { $__psbT = @(A; B); $__psbS = $global:LASTEXITCODE; Invoke-BashTest @__psbT; "
+            + "$__psbR = $global:LASTEXITCODE; $global:LASTEXITCODE = $__psbS; "
+            + "if ($__psbR -eq 2) { $global:__BashTestBad = $true }; $__psbR -eq 0 })", PsBuild.RunTimeTest("A; B"));
+    }
+}

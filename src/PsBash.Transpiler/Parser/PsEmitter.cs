@@ -213,11 +213,9 @@ public static partial class PsEmitter
 
     private const int DefaultMaxIterations = 100_000;
 
-    private static string IterGuardPrefix(int depth)
-    {
-        var varName = depth == 0 ? "$__psbash_iter" : $"$__psbash_iter{depth}";
-        return $"{varName} = 0; ";
-    }
+    private static string IterVar(int depth) => depth == 0 ? "$__psbash_iter" : $"$__psbash_iter{depth}";
+
+    private static string IterGuardPrefix(int depth) => IterVar(depth) + " = 0; ";
 
     private static string IterGuardCheck(int depth)
     {
@@ -1631,6 +1629,10 @@ public static partial class PsEmitter
             // of a function ending in `while [ $i -lt 3 ]; do …; done`.
             if (_errexitMode && whileCmd.Redirects.IsDefaultOrEmpty)
                 sb.Append("; $global:LASTEXITCODE = 0");
+            // A body that never ran makes the status 0 (`false; until [ x ]; do :; done` is 0): the status before the
+            // loop was left. The pass counter is per loop depth, so it is 0 only for this loop's empty run.
+            else
+                sb.Append("; if (").Append(IterVar(depth)).Append(" -eq 0) { $global:LASTEXITCODE = 0 }");
             return ApplyCompoundRedirects(sb.ToString(), whileCmd.Redirects);
         }
         finally
@@ -3039,8 +3041,7 @@ public static partial class PsEmitter
         var items = new List<string>(words.Length);
         foreach (var w in QuoteBareTestParens(WithLiteralParens(words)))
             items.Add(IsUnquotedSplitWord(w) ? EmitUnquotedSplitWordArray(w) : EmitTestOperand(w));
-        return "$(& { $__psbT = @(" + string.Join("; ", items) + "); Invoke-BashTest @__psbT; "
-            + "if ($global:LASTEXITCODE -eq 2) { $global:__BashTestBad = $true }; $global:LASTEXITCODE -eq 0 })";
+        return PsBuild.RunTimeTest(string.Join("; ", items));
     }
 
     // The full GNU set of unary file-test operators. Any of these in a `[ -X file ]` /
@@ -3141,7 +3142,7 @@ public static partial class PsEmitter
         {
             string a0 = IsUnquotedSplitWord(words[0]) ? EmitUnquotedSplitWordArray(words[0]) : EmitTestOperand(words[0]);
             string a2 = IsUnquotedSplitWord(words[2]) ? EmitUnquotedSplitWordArray(words[2]) : EmitTestOperand(words[2]);
-            return $"$(& {{ $__psbT = @({a0}; {EmitUnquotedSplitWordArray(words[1])}; {a2}); Invoke-BashTest @__psbT; if ($global:LASTEXITCODE -eq 2) {{ $global:__BashTestBad = $true }}; $global:LASTEXITCODE -eq 0 }})";
+            return PsBuild.RunTimeTest(a0 + "; " + EmitUnquotedSplitWordArray(words[1]) + "; " + a2);
         }
 
         // `[ A op B ]`: bash picks the arity-3 shape from the OPERATOR in the middle, before it

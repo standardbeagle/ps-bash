@@ -755,6 +755,17 @@ public static class PsBuild
     public static string DynamicPatternTest(string valueExpr, string patternExpr) =>
         "[PsBash.Cmdlets.BashPatternMatch]::MatchesPattern(" + valueExpr + ", " + patternExpr + ")";
 
+    /// <summary>
+    /// A <c>[ ]</c> expression whose words are only known at run time, evaluated by the runtime <c>test</c> as a
+    /// boolean: <paramref name="wordItems"/> are the <c>;</c>-separated items of the word array. Status 2 flags a
+    /// bad expression (<c>$global:__BashTestBad</c>). LASTEXITCODE is left as it was, as an inline test leaves it:
+    /// <c>while [ $n -lt 4 ]</c> ended with the false test's 1 where bash's loop status is its body's.
+    /// </summary>
+    public static string RunTimeTest(string wordItems) =>
+        "$(& { $__psbT = @(" + wordItems + "); $__psbS = $global:LASTEXITCODE; Invoke-BashTest @__psbT; "
+        + "$__psbR = $global:LASTEXITCODE; $global:LASTEXITCODE = $__psbS; "
+        + "if ($__psbR -eq 2) { $global:__BashTestBad = $true }; $__psbR -eq 0 })";
+
     // ─────────────────────── Null-safe pipeline text extraction ────────────────────────
 
     /// <summary>

@@ -1,0 +1,19 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 225
+stdout-length: 28
+stderr-length: 0
+==== SCRIPT ====
+n=0; while [ $n -lt 2 ]; do n=$((n+1)); done; echo "a st:$?"
+xe=; if [ $xe ]; then :; fi; echo "b st:$?"
+o='-lt'; i=0; while [ $i $o 2 ]; do i=$((i+1)); done; echo "d st:$?"
+false; until [ $n = 2 ]; do :; done; echo "e st:$?"
+==== STDOUT ====
+a st:0
+b st:0
+d st:0
+e st:0
+
+==== STDERR ====
+
