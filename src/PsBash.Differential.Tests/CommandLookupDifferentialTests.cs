@@ -24,4 +24,16 @@ public class CommandLookupDifferentialTests
     // A name is data: `;`, `$( )` and backticks in it are never run.
     [InlineData("command -v 'a;echo pwned' '$(echo pwned2)' '`echo pwned3`'; echo \"s=$?\"\nbuiltin 'x;echo pwned4' 2>/dev/null; echo \"s=$?\"")]
     public Task Command_LookupFollowsBashOrder(string script) => AssertOracle.EqualAsync(script);
+
+    /// <summary>
+    /// <c>builtin</c> and <c>command</c> are not special builtins: a function of that name wins (both ran the builtin).
+    /// Before the definition and after <c>unset -f</c> they are the builtins again.
+    /// </summary>
+    [Fact]
+    public Task BuiltinAndCommand_CanBeRedefinedAsFunctions() => AssertOracle.EqualAsync(
+        "builtin echo b; command echo c\n"
+        + "builtin() { echo builtin-redef \"$@\"; }\ncommand() { echo command-redef \"$@\"; }\n"
+        + "builtin echo b; command echo c\n"
+        + "unset -f builtin command\nbuiltin echo b2; command printf '%s\\n' c2\n"
+        + "g() { builtin echo inner \"$@\"; }\nbuiltin() { echo wrap \"$@\"; }\ng z; echo \"s=$?\"");
 }

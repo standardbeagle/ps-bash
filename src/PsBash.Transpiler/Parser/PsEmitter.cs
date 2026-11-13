@@ -5071,7 +5071,7 @@ public static partial class PsEmitter
 
         var cmd0 = GetLiteralValue(cmd.Words[0]);
         // A script-defined function of the same name wins over the special-cased builtin (`cd() { …; }`).
-        if (cmd0 is not null && _definedFunctions is { Count: > 0 } && _definedFunctions.Contains(cmd0) && cmd0 is not ("command" or "builtin"))
+        if (cmd0 is not null && _definedFunctions is { Count: > 0 } && _definedFunctions.Contains(cmd0))
             return false;
 
         if (cmd0 == "exec" && cmd.HereDocs.IsDefaultOrEmpty && cmd.EnvPairs.IsEmpty)
@@ -5906,7 +5906,10 @@ public static partial class PsEmitter
             && _definedFunctions is { Count: > 0 } && _definedFunctions.Contains(fnName) && IsMappedCommandName(fnName))
         {
             var q = PsBuild.SingleQuote(fnName);
-            leading = "& ((Get-Command -Name " + q + " -CommandType Function -ErrorAction SilentlyContinue) ?? " + q + ") ";
+            // `builtin` has no alias to fall back to (before the definition runs, or after `unset -f builtin`): the
+            // run-time command peels it and runs the rest past functions.
+            var fallback = fnName == "builtin" ? "{ Invoke-BashCommand 'builtin' @args }" : q;
+            leading = "& ((Get-Command -Name " + q + " -CommandType Function -ErrorAction SilentlyContinue) ?? " + fallback + ") ";
             commandWordText = "";
         }
 
@@ -11036,8 +11039,9 @@ public static partial class PsEmitter
         if (name is null)
             return false;
 
-        // A function the script defines under a mapped command's name wins over it (bash: functions precede builtins and PATH).
-        if (_definedFunctions is { Count: > 0 } && _definedFunctions.Contains(name) && name is not ("command" or "builtin"))
+        // A function the script defines under a mapped command's name wins over it (bash: functions precede builtins and PATH),
+        // `builtin` and `command` included: they are not special builtins.
+        if (_definedFunctions is { Count: > 0 } && _definedFunctions.Contains(name))
             return false;
 
         var args = cmd.Words.RemoveAt(0);

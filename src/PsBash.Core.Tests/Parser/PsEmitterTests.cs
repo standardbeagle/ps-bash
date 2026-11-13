@@ -6883,6 +6883,19 @@ public class PsEmitterTests
         Assert.Contains("__psbash_cd_target", r.Substring(r.IndexOf("}; ", StringComparison.Ordinal)));
     }
 
+    // `builtin() { …; }` / `command() { …; }`: neither is a special builtin, so a function of that name wins (it ran the
+    // builtin). Before the definition runs, or after `unset -f`, `builtin` falls back to the run-time wrapper (it has no alias).
+    [Theory]
+    [InlineData("builtin() { echo r; }\nbuiltin echo b", "& ((Get-Command -Name 'builtin' -CommandType Function -ErrorAction SilentlyContinue) ?? { Invoke-BashCommand 'builtin' @args })")]
+    [InlineData("command() { echo r; }\ncommand echo c", "& ((Get-Command -Name 'command' -CommandType Function -ErrorAction SilentlyContinue) ?? 'command')")]
+    public void Transpile_FunctionNamedBuiltinOrCommand_CallsTheFunction(string bash, string call)
+    {
+        var r = PsEmitter.Transpile(bash)!;
+        Assert.Contains(call, r);
+        Assert.DoesNotContain("Invoke-BashEcho b", r);
+        Assert.DoesNotContain("Invoke-BashCommand echo", r);
+    }
+
     [Fact]
     public void Transpile_BuiltinWithNoCommand_Succeeds()
     {

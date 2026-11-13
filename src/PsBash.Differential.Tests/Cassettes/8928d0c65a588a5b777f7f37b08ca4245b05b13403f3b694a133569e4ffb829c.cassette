@@ -1,0 +1,28 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 286
+stdout-length: 74
+stderr-length: 0
+==== SCRIPT ====
+builtin echo b; command echo c
+builtin() { echo builtin-redef "$@"; }
+command() { echo command-redef "$@"; }
+builtin echo b; command echo c
+unset -f builtin command
+builtin echo b2; command printf '%s\n' c2
+g() { builtin echo inner "$@"; }
+builtin() { echo wrap "$@"; }
+g z; echo "s=$?"
+==== STDOUT ====
+b
+c
+builtin-redef echo b
+command-redef echo c
+b2
+c2
+wrap echo inner z
+s=0
+
+==== STDERR ====
+
