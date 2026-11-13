@@ -44,6 +44,21 @@ public class TestBracketEdgeTests
         "[ -z ] && echo 1T\n[ -z '>' ] || echo 2F\n[ -z '>' -- ] && echo 3T\n[ a '<' b ] && echo 4T\n[ b '<' a ] || echo 5F\n"
         + "[ B '>' a ] || echo 6F\nx=abc; [ \"$x\" \\> abb ] && echo 7T\n[ a \\< b -a c \\> b ] && echo 8T\nif [ \"$x\" '<' z ]; then echo 9T; fi");
 
+    /// <summary>`command [ ... ]` runs the `[` builtin: it was "[: command not found" (Get-Command took `[` as a wildcard),
+    /// then plain `test` with the `]` as an operand.</summary>
+    [Fact]
+    public Task CommandBracket_RunsTheBracketBuiltin() => AssertOracle.EqualAsync(
+        "command [ -z '' -a '(' ! -z x ')' ] && echo 1T\ncommand [ a = b ] || echo 2F\n{ command [ -n x; } 2>/dev/null; echo \"3 st:$?\"\n"
+        + "command test -n x && echo 4T\ntype -t [ test\ncommand -v [");
+
+    /// <summary>The stderr of `command NAME` follows NAME's redirects: the inner command's error stream was not the
+    /// `command` cmdlet's, so `command ls /x 2&gt;/dev/null` printed the error anyway.</summary>
+    [Fact]
+    public Task Command_InnerStderr_FollowsRedirects() => AssertOracle.EqualAsync(
+        "command ls /nonexist_zq 2>/dev/null; echo \"a st:$?\"\n{ command ls /nonexist_zq; } 2>/dev/null; echo \"b st:$?\"\n"
+        + "{ command test 1 -eq; } 2>/dev/null; echo \"d st:$?\"\nx=$(command ls /nonexist_zq 2>&1); echo \"f [$x]\"\n"
+        + "command ls /nonexist_zq 2>&1 | wc -l");
+
     [Fact]
     public Task LocalExportDeclare_ResetStatusToZero() => AssertOracle.EqualAsync(
         "f() { false; local q=1; echo s1=$?; false; local r; echo s2=$?; false; export Z=1; echo s3=$?; false; declare d=1; echo s4=$?; }\nf\nfalse; export Y=1; echo s5=$?");

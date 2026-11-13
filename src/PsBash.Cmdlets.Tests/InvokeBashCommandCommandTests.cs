@@ -67,6 +67,19 @@ public class InvokeBashCommandCommandTests : IClassFixture<SharedPwshFixture>
         return (lines, exit);
     }
 
+    [Theory]
+    [InlineData("Invoke-BashCommand '[' '-n' 'x' ']'", 0)]
+    [InlineData("Invoke-BashCommand '[' 'a' '=' 'b' ']'", 1)]
+    [InlineData("Invoke-BashCommand '[' '-z' '' '-a' '(' '!' '-z' 'x' ')' ']'", 0)]
+    [InlineData("Invoke-BashCommand '[' '-n' 'x'", 2)]
+    public void Command_Bracket_RunsTheBracketFormOfTest(string script, int expected)
+    {
+        // `[` is a wildcard character to Get-Command ("[: command not found"), and reached through the resolved
+        // CommandInfo it ran as plain `test`, where the closing `]` is an operand ("too many arguments").
+        var (_, exit) = RunAndCaptureExit(script);
+        Assert.Equal(expected, exit);
+    }
+
     [Fact]
     public void Command_DashV_KnownCmdlet_EmitsSource()
     {

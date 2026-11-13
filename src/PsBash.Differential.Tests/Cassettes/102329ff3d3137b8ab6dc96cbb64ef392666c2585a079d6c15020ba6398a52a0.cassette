@@ -1,0 +1,24 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 180
+stdout-length: 34
+stderr-length: 0
+==== SCRIPT ====
+command [ -z '' -a '(' ! -z x ')' ] && echo 1T
+command [ a = b ] || echo 2F
+{ command [ -n x; } 2>/dev/null; echo "3 st:$?"
+command test -n x && echo 4T
+type -t [ test
+command -v [
+==== STDOUT ====
+1T
+2F
+3 st:2
+4T
+builtin
+builtin
+[
+
+==== STDERR ====
+

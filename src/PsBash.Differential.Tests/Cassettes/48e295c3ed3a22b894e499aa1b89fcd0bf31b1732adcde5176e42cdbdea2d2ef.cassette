@@ -1,0 +1,21 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 246
+stdout-length: 87
+stderr-length: 0
+==== SCRIPT ====
+command ls /nonexist_zq 2>/dev/null; echo "a st:$?"
+{ command ls /nonexist_zq; } 2>/dev/null; echo "b st:$?"
+{ command test 1 -eq; } 2>/dev/null; echo "d st:$?"
+x=$(command ls /nonexist_zq 2>&1); echo "f [$x]"
+command ls /nonexist_zq 2>&1 | wc -l
+==== STDOUT ====
+a st:2
+b st:2
+d st:2
+f [ls: cannot access '/nonexist_zq': No such file or directory]
+1
+
+==== STDERR ====
+

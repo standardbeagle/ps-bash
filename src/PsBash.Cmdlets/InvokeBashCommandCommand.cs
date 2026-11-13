@@ -223,7 +223,7 @@ public sealed class InvokeBashCommandCommand : PSCmdlet
         try
         {
             var found = InvokeCommand.InvokeScript(
-                "param($n) Get-Command $n -CommandType Alias,Cmdlet,Application,ExternalScript " +
+                "param($n) Get-Command ([WildcardPattern]::Escape($n)) -CommandType Alias,Cmdlet,Application,ExternalScript " +
                 "-ErrorAction SilentlyContinue | Select-Object -First 1", name);
             foreach (var r in found)
             {
@@ -249,7 +249,12 @@ public sealed class InvokeBashCommandCommand : PSCmdlet
             "if ($args.Count -gt 1) { $rest = $args[1..($args.Count - 1)] }; ";
         // With upstream input the inner command must be fed it explicitly (`$input` is the list
         // handed to InvokeScript); without, it inherits the caller's stdin untouched.
-        var invokeBody = _stdin.Count > 0 ? prologue + "$input | & $c @rest" : prologue + "& $c @rest";
+        // `[` is called by that name, spelled in the call: Invoke-BashTest knows its bracket form (the closing `]`)
+        // from the text it was invoked by, and `& $c` reached it as plain `test` ("too many arguments").
+        // 2>&1: the nested script's error stream is not this cmdlet's, so `command ls /x 2>/dev/null` printed the error
+        // anyway; merged here, each ErrorRecord is re-written on this command's error stream below.
+        string call = (name == "[" ? "& '[' @rest" : "& $c @rest") + " 2>&1";
+        var invokeBody = _stdin.Count > 0 ? prologue + "$input | " + call : prologue + call;
         var invokeArgs = new object[argv.Length];
         invokeArgs[0] = target;
         for (int k = 1; k < argv.Length; k++) invokeArgs[k] = argv[k];
@@ -259,7 +264,11 @@ public sealed class InvokeBashCommandCommand : PSCmdlet
             var output = _stdin.Count > 0
                 ? InvokeCommand.InvokeScript(invokeBody, false, PipelineResultTypes.None, _stdin, invokeArgs)
                 : InvokeCommand.InvokeScript(invokeBody, invokeArgs);
-            foreach (var item in output) WriteObject(item);
+            foreach (var item in output)
+            {
+                if (item?.BaseObject is ErrorRecord er) WriteError(er);
+                else WriteObject(item);
+            }
         }
         catch (Exception ex)
         {
@@ -277,8 +286,10 @@ public sealed class InvokeBashCommandCommand : PSCmdlet
     {
         try
         {
+            // The name is a literal command name, not a wildcard pattern: `command [ -n x ]` failed with
+            // "[: command not found" (Get-Command rejects the pattern `[`).
             var results = InvokeCommand.InvokeScript(
-                "param($n) Get-Command $n -ErrorAction SilentlyContinue", name);
+                "param($n) Get-Command ([WildcardPattern]::Escape($n)) -ErrorAction SilentlyContinue", name);
             foreach (var r in results)
             {
                 if (r?.BaseObject is CommandInfo ci) return ci;
