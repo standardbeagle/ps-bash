@@ -101,7 +101,12 @@ public class AffixWordSplitTests
 
     [Fact]
     public void Transpile_DeclarePlusN_StillDropsTheNameref()
-        => Assert.Contains("ClearNameref('r')", T("r=x; typeset -n r; typeset +n r"));
+        => Assert.Contains(PsBuild.ClearNameref("r"), T("r=x; typeset -n r; typeset +n r"));
+
+    // `local +n lr` in a function ran a command named local (which printed a declare line): it is `typeset +n`.
+    [Fact]
+    public void Transpile_LocalPlusN_InAFunction_ClearsTheNameref()
+        => Assert.Contains(PsBuild.ClearNameref("lr"), T("f() { local -n lr=x; local +n lr; }"));
 
     [Fact]
     public void Transpile_QuotedDeclarePrintFlag_StillPrints()

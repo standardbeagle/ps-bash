@@ -607,6 +607,15 @@ runspace, reset by the host per command (`SdkWorker.ResetVarFrames`).
   tv{0..5}`, `readonly -p`, `local -p`, `declare -p`) are expanded in the emitter, one name per item. `export`/`local`
   had run as commands ("not found") and `readonly` dropped them. `local -p NAMES` lists only the function's locals;
   any other name is "local: NAME: not found", status 1, and the listing's redirects cover those lines.
+- `typeset +n ref` leaves ref holding the target name (`typeset -n ref=x; typeset +n ref` -> ref=x; it was unset,
+  and `declare -p` said "not found"). `local +n` in a function is `typeset +n` (it ran as a command).
+- Not fixed (parked): assign-extended c36. bash abandons the rest of the top-level input line on an arithmetic syntax
+  error, even one raised inside a function (`f; echo after` prints neither), with status 1, then runs the next line.
+  ps-bash reports the error and carries on. Matching it needs a line-level abort in the emitted script (a terminating
+  error caught per top-level line), not a local fix.
+- g23 Windows Cmdlets: the access-time family again (LsTimeSortTests x2, Touch_QuotedMOnly_LeavesAccessTimeAlone) plus
+  two 60 s streaming timeouts (GrepStreaming, ProcessSubStreaming). They pass here; beagle-ab has the same NTFS
+  last-access setting, so the likely cause is something on beagle-ab reading the files (AV scan) and bumping atime.
 
 Known gaps:
 - A function that only a run-time `source` defines gets no frame for `v=t f`.

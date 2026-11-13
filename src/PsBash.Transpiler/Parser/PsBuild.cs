@@ -812,6 +812,10 @@ public static class PsBuild
     public static string RestoreLocal(string name)
         => "$env:" + name + " = [PsBash.Cmdlets.VarFrameStack]::LeaveLocal(" + SingleQuote(name) + ", $__lsd_" + name + ".v, $env:" + name + ")";
 
+    /// <summary><c>typeset +n name</c>: no longer a nameref; the variable takes the reference's target name as its value.</summary>
+    public static string ClearNameref(string name)
+        => "$env:" + name + " = [PsBash.Cmdlets.BashShellState]::ClearNameref(" + SingleQuote(name) + ", $env:" + name + ")";
+
 
     private const string FunctionSourceOpen = "<#bash:";
     private const string FunctionSourceClose = "#> ";

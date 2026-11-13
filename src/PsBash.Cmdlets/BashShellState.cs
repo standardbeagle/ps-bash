@@ -36,8 +36,15 @@ public static class BashShellState
     /// <summary>Records <c>declare -n NAME=TARGET</c> so <c>declare -p</c> can list it (the emitter resolves the reference itself).</summary>
     public static void SetNameref(string name, string target) { lock (Namerefs) Namerefs[name] = target; }
 
-    /// <summary><c>declare +n NAME</c>: the name is a plain variable again.</summary>
-    public static void ClearNameref(string name) { lock (Namerefs) Namerefs.Remove(name); }
+    /// <summary>
+    /// <c>declare +n NAME</c>: the name is a plain variable again, whose value is the reference's own: the target name
+    /// (<c>typeset -n ref=x; typeset +n ref</c> leaves ref=x; it was left unset). Not a nameref: <paramref name="current"/>.
+    /// </summary>
+    public static string? ClearNameref(string name, object? current)
+    {
+        lock (Namerefs)
+            return Namerefs.Remove(name, out var target) ? target : current?.ToString();
+    }
 
     internal static string? NamerefTarget(string name) { lock (Namerefs) return Namerefs.TryGetValue(name, out var t) ? t : null; }
 

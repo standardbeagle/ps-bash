@@ -1,0 +1,24 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 288
+stdout-length: 66
+stderr-length: 0
+==== SCRIPT ====
+x=foo
+typeset -n ref=x; typeset +n ref; echo "a: [$ref]"
+declare -n r2=x; declare +n r2; declare -p r2
+declare -n r3=x; r3=new; echo "x=$x"; declare +n r3; echo "r3=$r3"
+f() { local -n lr=x; local +n lr; echo "lr=$lr"; }; f; echo "x=$x lr=[${lr-unset}]"
+p=plain; typeset +n p; echo "p=$p"
+==== STDOUT ====
+a: [x]
+declare -- r2="x"
+x=new
+r3=x
+lr=x
+x=new lr=[unset]
+p=plain
+
+==== STDERR ====
+

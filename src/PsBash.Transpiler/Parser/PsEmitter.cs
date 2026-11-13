@@ -4310,6 +4310,10 @@ public static partial class PsEmitter
     private static string EmitSimple(Command.Simple cmd)
     {
         cmd = ExpandAliases(cmd);
+        // `local +n ref`: inside a function `local` is `typeset`, whose path reads a `+` flag (the parser takes only `-`).
+        if (_functionDepth > 0 && cmd.Words.Length > 1 && GetLiteralValue(cmd.Words[0]) == "local"
+            && cmd.Words.Skip(1).Any(w => GetLiteralValue(w) is ['+', _, ..]))
+            cmd = cmd with { Words = cmd.Words.SetItem(0, new CompoundWord(ImmutableArray.Create<WordPart>(new WordPart.Literal("typeset")))) };
         var braced = ExpandDeclarationBraceWords(cmd);
         // `export -p a{0..1}` is `export -p a0 a1`, which the parser makes a declaration; do the same here.
         if (!ReferenceEquals(braced, cmd) && AsPlainExport(braced) is { } export)
@@ -4749,12 +4753,12 @@ public static partial class PsEmitter
             if (caseName is not null && IsValidVarName(caseName))
                 _caseVars[caseName] = cmd.Words.Skip(1).Any(w => GetLiteralValue(w) == "-u") && !cmd.Words.Skip(1).Any(w => GetLiteralValue(w) == "-l");
         }
-        // `typeset +n ref` drops the nameref attribute: `ref` is the plain string again.
+        // `typeset +n ref` drops the nameref attribute: `ref` is a plain variable again, holding the target name.
         if (!isPrint && varName is not null && IsValidVarName(varName) && _namerefs is not null
             && cmd.Words.Skip(1).Any(w => GetLiteralValue(w) is { Length: > 1 } f && f[0] == '+' && f.Contains('n')))
         {
             _namerefs.Remove(varName); _pendingNamerefs?.Remove(varName);
-            result = "[PsBash.Cmdlets.BashShellState]::ClearNameref(" + PsBuild.SingleQuote(varName) + "); " + PsBuild.SetStatus(0);
+            result = PsBuild.ClearNameref(varName) + "; " + PsBuild.SetStatus(0);
             return true;
         }
         // `typeset -n ref` with no target: a string assigned earlier (`ref=x`) becomes the target; otherwise the next literal assignment names it.
