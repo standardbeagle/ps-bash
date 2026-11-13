@@ -509,6 +509,11 @@ void Stamp(string phase)
         Console.Error.WriteLine($"[ps-bash-timing] {phase}: {(DateTime.Now - System.Diagnostics.Process.GetCurrentProcess().StartTime).TotalMilliseconds:F0} ms");
 }
 Stamp("transpiled");
+// `bash -i -c 'cmd'` is an interactive shell: it has a history file (`${HISTFILE:+yes}` is yes); `bash -c` has none.
+if (ShellArgs.DefaultHistFile(shellArgs.Interactive && shellArgs.Command is not null,
+        Environment.GetEnvironmentVariable("HISTFILE"),
+        Environment.GetEnvironmentVariable("HOME") ?? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)) is { } histFile)
+    Environment.SetEnvironmentVariable("HISTFILE", histFile);
 int exitCode = await HostFailureGuard.RunAsync(async () =>
 {
     await using IWorker worker = await workerFactory();

@@ -23,6 +23,16 @@ public record ShellArgs(
     // letter stays one word and is reported as an unsupported option before anything runs.
     private static readonly System.Buffers.SearchValues<char> BundleLetters = System.Buffers.SearchValues.Create("lisceuxnoO");
 
+    /// <summary>
+    /// <c>HISTFILE</c> for an interactive shell that runs a command (<c>bash -i -c 'cmd'</c>): bash sets it to
+    /// <c>~/.bash_history</c> unless it is already set; a non-interactive shell leaves it unset. Null when nothing is to
+    /// be set.
+    /// </summary>
+    public static string? DefaultHistFile(bool interactive, string? current, string? home)
+        => interactive && current is null && !string.IsNullOrEmpty(home)
+            ? home.TrimEnd('/', '\\') + "/.bash_history"
+            : null;
+
     // `set` options that may also come AFTER `-c` (`bash -c -e 'cmd'`): bash takes the first non-option word as the command.
     private static bool IsSetOptionFlag(string arg) => arg is "-e" or "-u" or "-x" or "-n";
 

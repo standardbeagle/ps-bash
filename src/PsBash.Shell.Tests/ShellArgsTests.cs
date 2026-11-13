@@ -14,6 +14,16 @@ public class ShellArgsTests
         Assert.True(result.CompactOutput);
         Assert.Equal("git status", result.Command);
     }
+    // bash: `bash -i -c 'echo ${HISTFILE:+yes}'` prints yes, `bash -c '…'` prints nothing; a HISTFILE already set is kept.
+    [Theory]
+    [InlineData(true, null, "/home/u", "/home/u/.bash_history")]
+    [InlineData(true, null, "C:\\Users\\u\\", "C:\\Users\\u/.bash_history")]
+    [InlineData(false, null, "/home/u", null)]
+    [InlineData(true, "/tmp/h", "/home/u", null)]
+    [InlineData(true, null, null, null)]
+    public void DefaultHistFile_SetOnlyForAnInteractiveShellWithoutOne(bool interactive, string? current, string? home, string? expected)
+        => Assert.Equal(expected, ShellArgs.DefaultHistFile(interactive, current, home));
+
     [Fact]
     public void Parse_EmptyArgs_ReturnsDefaults()
     {
