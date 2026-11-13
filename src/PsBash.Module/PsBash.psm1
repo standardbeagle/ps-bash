@@ -4307,9 +4307,14 @@ Set-Alias -Name 'more'     -Value 'Invoke-BashMore'     -Force -Scope Global -Op
 # --- Type-level ToString for BashObject types ---
 # Update-TypeData defines ToString() once per type name instead of per-object,
 # eliminating the per-object Add-Member ScriptMethod overhead (~6x faster).
+# A CodeMethod, never a ScriptMethod: a script block here is bound to this runspace's
+# session state, and PowerShell's process-wide binder caches keep the type table that
+# holds it, so a host that discards a runspace per command kept every one of them
+# alive (BashRuntime.BashTextToString).
 # Wrapped in & { } so the loop variable is block-scoped and never leaks into the
 # runspace (see the conflicting-alias loop above; guarded by FindabilityGuardTests).
 & {
+    $toString = [PsBash.Cmdlets.BashRuntime].GetMethod('BashTextToString')
     foreach ($typeName in @(
             'PsBash.TextOutput', 'PsBash.LsEntry', 'PsBash.CatLine', 'PsBash.GrepMatch',
             'PsBash.WcResult', 'PsBash.FindEntry', 'PsBash.StatEntry', 'PsBash.PsEntry',
@@ -4318,7 +4323,7 @@ Set-Alias -Name 'more'     -Value 'Invoke-BashMore'     -Force -Scope Global -Op
             'PsBash.TarListOutput', 'PsBash.TimeOutput', 'PsBash.WhichOutput', 'PsBash.AliasOutput',
             'PsBash.TrapOutput', 'PsBash.ReadlinkOutput', 'PsBash.MktempOutput', 'PsBash.TypeOutput'
         )) {
-        Update-TypeData -TypeName $typeName -MemberName ToString -MemberType ScriptMethod -Value { $this.BashText } -Force
+        Update-TypeData -TypeName $typeName -MemberName ToString -MemberType CodeMethod -Value $toString -Force
     }
 }
 

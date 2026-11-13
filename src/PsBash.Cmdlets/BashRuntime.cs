@@ -505,6 +505,21 @@ public static class BashRuntime
     }
 
     /// <summary>
+    /// <c>ToString()</c> of every <c>PsBash.*</c> output type: its <c>BashText</c>. The psm1 registers this
+    /// as a type-level <c>CodeMethod</c> (Update-TypeData), once in every runspace it is imported into.
+    /// It was a <c>ScriptMethod</c>, <c>{ $this.BashText }</c>, and that leaked whole runspaces: the script
+    /// block literal is bound to the importing runspace's session state, the type table holds the script
+    /// block, and PowerShell's process-wide call-site rule caches (<c>PSGetMemberBinder</c> /
+    /// <c>PSInvokeMemberBinder</c>) capture the type table of the runspace a rule was built in. A host
+    /// discards a runspace per command, so each discarded one stayed reachable with its every function,
+    /// alias and variable — a warm host grew past 1.5 GB of live heap over a differential run (94 runspaces
+    /// alive) and its memory guard then stopped every command. A static method holds no session state.
+    /// Reads the property directly: <see cref="GetBashText"/> falls back to <c>ToString()</c>.
+    /// </summary>
+    public static string BashTextToString(PSObject instance)
+        => instance?.Properties["BashText"]?.Value?.ToString() ?? string.Empty;
+
+    /// <summary>
     /// Splits <paramref name="text"/> on <c>\n</c> and returns one BashObject
     /// per line, matching the psm1 <c>Emit-BashLine</c> contract: bash stdout is
     /// a byte stream and <c>\n</c> is a record boundary. The final line is
