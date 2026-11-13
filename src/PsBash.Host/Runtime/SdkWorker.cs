@@ -946,7 +946,7 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
 internal sealed class SinkTextWriter(Action<string> sink) : TextWriter
 {
     public override System.Text.Encoding Encoding => System.Text.Encoding.UTF8;
-    public override string NewLine { get => "\n"; set { } }   // bash writes LF; the frame carries exact bytes
+    [System.Diagnostics.CodeAnalysis.AllowNull] public override string NewLine { get => "\n"; set { } }   // bash writes LF; the frame carries exact bytes
     public override void Write(char value) => sink(value.ToString());
     public override void Write(string? value) { if (!string.IsNullOrEmpty(value)) sink(value); }
     public override void Write(char[] buffer, int index, int count) { if (count > 0) sink(new string(buffer, index, count)); }

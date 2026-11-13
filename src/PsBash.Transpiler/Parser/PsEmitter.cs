@@ -683,6 +683,7 @@ public static partial class PsEmitter
         finally { _captureBody = savedCaptureBody; }
     }
 
+    /// <param name="body">The command substitution\'s body.</param>
     /// <param name="scoped">The text runs through <see cref="PipelineHead"/>, whose subshell scope puts set -e back after.</param>
     private static string EmitCapturedCore(Command body, bool scoped)
     {
@@ -6135,12 +6136,6 @@ public static partial class PsEmitter
     }
 
     /// <summary>
-    /// Wrap an already-emitted command in the <c>VAR=val cmd</c> env-prefix
-    /// save/set/restore so the assignment applies for the duration of the command
-    /// and is then restored (no leak), regardless of which emission path produced
-    /// <paramref name="inner"/>.
-    /// </summary>
-    /// <summary>
     /// <c>v=t f</c> with f a function of this unit: the binding is f's context; <c>v=t eval ...</c> / <c>source</c> /
     /// <c>.</c>: the current one's. Other commands cannot reach <c>local</c>/<c>unset</c> under the binding, so no
     /// frame (a function only a run-time <c>source</c> defines is not known here: no frame either).
@@ -6152,6 +6147,14 @@ public static partial class PsEmitter
         return _unitFunctions?.Contains(name) == true ? true : null;
     }
 
+    /// <summary>
+    /// Wrap an already-emitted command in the <c>VAR=val cmd</c> env-prefix
+    /// save/set/restore so the assignment applies for the duration of the command
+    /// and is then restored (no leak), regardless of which emission path produced
+    /// <paramref name="inner"/>.
+    /// </summary>
+    /// <param name="pairs">The <c>VAR=val</c> bindings in front of the command.</param>
+    /// <param name="inner">The command, already emitted.</param>
     /// <param name="functionCall">
     /// The temp bindings' variable-context frames (VarFrameStack): true for a call of a shell function (the binding
     /// belongs to the called function), false for eval/source/. (it belongs to the current one), null for none.
@@ -9881,6 +9884,8 @@ public static partial class PsEmitter
         return $"$({sb})";
     }
 
+    /// <param name="sb">Receives the emitted text.</param>
+    /// <param name="parts">The parts inside the double quotes.</param>
     /// <param name="following">The word part after the closing quote (flattening <c>"$y"x</c> into one string): it
     /// follows the LAST inner part, so a variable there is braced when the text would fold into its name.</param>
     private static void AppendDoubleQuotedInner(StringBuilder sb, ImmutableArray<WordPart> parts, WordPart? following = null)
