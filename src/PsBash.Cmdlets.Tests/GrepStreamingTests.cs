@@ -149,7 +149,9 @@ public class GrepStreamingTests : IClassFixture<SharedPwshFixture>
     [Fact]
     public void Context_Before_ManyRecords_OnlyTheWindow()
     {
-        var r = Run("1..60000 | ForEach-Object { \"r$_\" } | Invoke-BashGrep -B 2 'r60000$' | ForEach-Object { $_.ToString().Trim() }");
+        // The producer is a foreach statement, not ForEach-Object: the same stream, several times faster, so a loaded
+        // fleet runner does not hit the 60 s bound (g27 Windows, g28 Linux) on the PRODUCER's speed.
+        var r = Run("& { foreach ($n in 1..60000) { \"r$n\" } } | Invoke-BashGrep -B 2 'r60000$' | ForEach-Object { $_.ToString().Trim() }");
         Assert.Equal(new[] { "r59998", "r59999", "r60000" }, r);
     }
 
