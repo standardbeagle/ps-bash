@@ -355,4 +355,13 @@ public class PsBuildTests
             + "$__psbR = $global:LASTEXITCODE; $global:LASTEXITCODE = $__psbS; "
             + "if ($__psbR -eq 2) { $global:__BashTestBad = $true }; $__psbR -eq 0 })", PsBuild.RunTimeTest("A; B"));
     }
+
+    [Fact]
+    public void EvalReturnCheck_SpendsTheFlagOnlyInAFunction()
+    {
+        // In a function the eval site is where the eval text's return ends; in eval text it passes on outward.
+        Assert.Equal("if ($global:__BashEvalReturn) { $global:__BashEvalReturn = $false; return }", PsBuild.EvalReturnCheck(inFunction: true));
+        Assert.Equal("if ($global:__BashEvalReturn) { return }", PsBuild.EvalReturnCheck(inFunction: false));
+        Assert.Equal("$global:__BashEvalReturn = $true; ", PsBuild.EvalReturnSignal);
+    }
 }

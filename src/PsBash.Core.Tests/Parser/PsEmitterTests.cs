@@ -6988,6 +6988,20 @@ public class PsEmitterTests
         Assert.Contains("-ne 0) { return }", PsEmitter.Transpile("f() { cmd || return; }")!);
     }
 
+    [Fact]
+    public void Transpile_ReturnInEvalText_FlagsTheEvalSite()
+    {
+        // eval text's return leaves only the Invoke-Expression: it flags the eval site, which returns from the function.
+        Assert.Contains("$global:LASTEXITCODE = 3; $global:__BashEvalReturn = $true; return",
+            PsEmitter.Transpile("return 3", PsBash.Core.Transpiler.TranspileContext.Eval)!);
+        Assert.DoesNotContain("__BashEvalReturn", PsEmitter.Transpile("g() { return 3; }", PsBash.Core.Transpiler.TranspileContext.Eval)!);
+        Assert.DoesNotContain("__BashEvalReturn = $true", PsEmitter.Transpile("f() { return 3; }")!);
+        Assert.Contains("if ($global:__BashEvalReturn) { $global:__BashEvalReturn = $false; return }",
+            PsEmitter.Transpile("f() { eval \"$1\"; echo end; }")!);
+        // At the top of a script the eval site has nothing to return from.
+        Assert.DoesNotContain("if ($global:__BashEvalReturn)", PsEmitter.Transpile("eval \"$1\"")!);
+    }
+
     [Theory]
     [InlineData("exit 257", "$global:LASTEXITCODE = 1; exit")]
     [InlineData("( exit -2 )", "$global:LASTEXITCODE = 254; return")]

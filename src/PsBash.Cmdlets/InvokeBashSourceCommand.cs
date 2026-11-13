@@ -51,7 +51,7 @@ public sealed class InvokeBashSourceCommand : PSCmdlet
         if (string.IsNullOrEmpty(Path))
             return null;
 
-        string resolvedPath = ResolveSourcePath(Path);
+        string resolvedPath = FindOnPath(Path) ?? ResolveSourcePath(Path);
 
         if (!System.IO.File.Exists(resolvedPath))
         {
@@ -121,15 +121,40 @@ public sealed class InvokeBashSourceCommand : PSCmdlet
         }
         // BASH_SOURCE[0] is the sourced file, as typed (`source "$DIR/lib.sh"` -> "$DIR/lib.sh"), for as long
         // as it runs; the caller's file is BASH_SOURCE[1]. Scripts find their own directory from it.
+        // A `return` in the file ends the source, not the function that sourced it: the eval-return flag its text
+        // set (the file is transpiled as eval text) is spent here.
         string quotedPath = "'" + Path.Replace("'", "''") + "'";
         result = "$global:BASH_SOURCE = @(" + quotedPath + ") + @($global:BASH_SOURCE); try {\n" + result
-            + "\n} finally { $global:BASH_SOURCE = @($global:BASH_SOURCE | Select-Object -Skip 1) }";
+            + "\n} finally { $global:BASH_SOURCE = @($global:BASH_SOURCE | Select-Object -Skip 1); " + PsBash.Core.Parser.PsBuild.EvalReturnVar + " = $false }";
         return ScriptBlock.Create(result);
     }
     // The shared runtime path policy (ProviderPath → RuntimePath.Map). This used to carry its own
     // copy — /tmp → GetTempPath (not $env:TEMP) and /c/ — only under PSBASH_UNIX_PATHS=1, so
     // `. $d/f` (d=/tmp) and `cat $d/f` could name different files.
     private string ResolveSourcePath(string rawPath) => FileSystemHelpers.ProviderPath(this, rawPath);
+
+    /// <summary>
+    /// bash's <c>sourcepath</c> (on by default): a name with no slash is looked up in PATH first, as a regular file
+    /// (a directory of that name is skipped), and only then in the working directory. <c>PATH=dir:$PATH; . cmd</c>
+    /// read ./cmd and failed. A relative entry is relative to the shell's directory. Null when not found.
+    /// </summary>
+    private string? FindOnPath(string name)
+    {
+        if (name.IndexOfAny(['/', '\\']) >= 0 || !InvokeBashShoptCommand.IsEnabled("sourcepath")) return null;
+        string pathValue = Environment.GetEnvironmentVariable("PATH") ?? "";
+        // A prefix binding (`PATH=dir:$PATH . f`) may still hold bash's ':' separators.
+        if (OperatingSystem.IsWindows()) pathValue = PsBash.Core.ExecutableLookup.ToWindowsPathList(pathValue);
+        foreach (var dir in pathValue.Split(System.IO.Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            try
+            {
+                string candidate = ResolveSourcePath(dir.TrimEnd('/', '\\') + "/" + name);
+                if (System.IO.File.Exists(candidate)) return candidate;
+            }
+            catch (Exception ex) when (ex is ArgumentException or NotSupportedException or IOException or PSInvalidOperationException) { }
+        }
+        return null;
+    }
 
     private bool TryCreateOptionalSnapshot(string resolvedPath, string rawPath)
     {

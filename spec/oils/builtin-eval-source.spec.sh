@@ -61,7 +61,6 @@ end func
 1
 ## END
 ## status: 1
-## XFAIL ps-bash gap-oils-builtin-eval-source builtin-eval-source (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### exit within eval (regression)
@@ -143,7 +142,6 @@ PATH="dir:$PATH"
 rm dir/cmd
 ## stdout: hi
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-eval-source builtin-eval-source (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### source works for files in subdirectory
@@ -178,6 +176,5 @@ hi
 status=0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-eval-source builtin-eval-source (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher

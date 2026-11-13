@@ -766,6 +766,25 @@ public static class PsBuild
         + "$__psbR = $global:LASTEXITCODE; $global:LASTEXITCODE = $__psbS; "
         + "if ($__psbR -eq 2) { $global:__BashTestBad = $true }; $__psbR -eq 0 })";
 
+    // ─────────────────────── return out of eval text ────────────────────────
+
+    /// <summary>The global that carries a <c>return</c> in run-time eval text out to the function that ran the eval.</summary>
+    public const string EvalReturnVar = "$global:__BashEvalReturn";
+
+    /// <summary>
+    /// Emitted before the PowerShell <c>return</c> of a bash <c>return</c> in eval or source text (outside any function
+    /// in that text): the <c>return</c> only leaves the <c>Invoke-Expression</c>, so the flag tells the eval site to
+    /// leave its function too. bash's <c>f() { eval return; echo x; }</c> never prints x.
+    /// </summary>
+    public const string EvalReturnSignal = EvalReturnVar + " = $true; ";
+
+    /// <summary>
+    /// After a run-time eval: return when its text returned. Inside a function the flag is spent here
+    /// (<paramref name="inFunction"/>); in eval text the flag stays set, so the next eval site out returns as well.
+    /// </summary>
+    public static string EvalReturnCheck(bool inFunction) =>
+        "if (" + EvalReturnVar + ") { " + (inFunction ? EvalReturnVar + " = $false; " : "") + "return }";
+
     // ─────────────────────── Null-safe pipeline text extraction ────────────────────────
 
     /// <summary>

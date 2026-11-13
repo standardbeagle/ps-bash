@@ -5289,13 +5289,15 @@ public static partial class PsEmitter
         // return N -> capture exit code for $?
         else if (cmd0 == "return")
         {
+            string evalSignal = _context == TranspileContext.Eval && _functionDepth == 0 && _subshellDepth == 0
+                ? PsBuild.EvalReturnSignal : "";
             if (cmd.Words.Length >= 2)
             {
                 if (TryGetPureLiteralText(cmd.Words[1].Parts, out var retLiteral)
                     && long.TryParse(retLiteral, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var retNum))
                 {
                     // The status is the low 8 bits: `return 256` is 0, `return 257` is 1.
-                    specialResult = $"$global:LASTEXITCODE = {retNum % 256}; return";
+                    specialResult = $"$global:LASTEXITCODE = {retNum % 256}; " + evalSignal + "return";
                 }
                 else
                 {
@@ -5308,12 +5310,12 @@ public static partial class PsEmitter
                             ? "$__psb_r = " + PsBuild.SingleQuote(retText)
                             : "$__psb_r = [string](" + EmitWord(cmd.Words[1]) + ")";
                     specialResult = retValue + "; if ($null -ne $__psb_r) { if ($__psb_r -match '^-?[0-9]+$') { $global:LASTEXITCODE = (([long]$__psb_r % 256) + 256) % 256 } "
-                        + "else { Write-Error ('return: ' + $__psb_r + ': numeric argument required') -ErrorAction Continue; $global:LASTEXITCODE = 2 } }; return";
+                        + "else { Write-Error ('return: ' + $__psb_r + ': numeric argument required') -ErrorAction Continue; $global:LASTEXITCODE = 2 } }; " + evalSignal + "return";
                 }
             }
             else
             {
-                specialResult = "return";
+                specialResult = evalSignal + "return";
             }
         }
         // true -> no-op success; false -> silent failure (sets $? = $false for && / ||)
@@ -11957,8 +11959,12 @@ public static partial class PsEmitter
             + ", ($null -ne (Get-Variable -Name __BashStdIn -Scope Global -ValueOnly -ErrorAction SilentlyContinue))) } " +
             // A syntax error in the eval text is eval's own failure (status 2), not an exception out of the surrounding script.
             "catch { Write-Error ('ps-bash: eval: ' + $(if ($_.Exception.InnerException) { $_.Exception.InnerException.Message } else { $_.Exception.Message })) -ErrorAction Continue; $global:LASTEXITCODE = 2 }; " +
-            "if ($null -ne $__psbash_eval_pwsh) { Invoke-Expression $__psbash_eval_pwsh } " +
+            "if ($null -ne $__psbash_eval_pwsh) { " + PsBuild.EvalReturnVar + " = $false; Invoke-Expression $__psbash_eval_pwsh } " +
             "} finally { $global:__BashEvalDepth = $__psbash_eval_depth } " +
+            // A `return` in the text left only the Invoke-Expression: in a function (or in eval text, passing it on)
+            // it leaves here too. At the top of a script there is nothing to return from.
+            (_functionDepth > 0 && _subshellDepth == 0 ? PsBuild.EvalReturnCheck(inFunction: true) + " "
+                : _context == TranspileContext.Eval && _subshellDepth == 0 ? PsBuild.EvalReturnCheck(inFunction: false) + " " : "") +
             "}";
     }
 

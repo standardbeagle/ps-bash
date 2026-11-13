@@ -1,0 +1,29 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 413
+stdout-length: 77
+stderr-length: 0
+==== SCRIPT ====
+f() { eval "$1"; echo "end $1"; }
+f return; echo "a st:$?"
+f 'return 3'; echo "b st:$?"
+printf 'echo in-lib; return 5; echo no\n' > evretlib.sh
+h() { eval "$1"; echo "after-source $?"; }; h '. ./evretlib.sh'; echo "d st:$?"
+k() { eval 'eval "$1"'; echo k-no; }; k 'return 6'; echo "k st:$?"
+n() { for i in 1 2; do eval "$1"; echo "n$i"; done; echo n-end; }; n 'return 8'; echo "n st:$?"
+f 'echo x'; echo "e st:$?"
+==== STDOUT ====
+a st:0
+b st:3
+in-lib
+after-source 5
+d st:0
+k st:6
+n st:8
+x
+end echo x
+e st:0
+
+==== STDERR ====
+

@@ -1,0 +1,26 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 350
+stdout-length: 69
+stderr-length: 0
+==== SCRIPT ====
+mkdir -p srcpd/sh srcpd/dir/hi.sh srcpd/loc
+echo 'echo from-path' > srcpd/sh/hi.sh
+echo 'echo from-cwd' > srcpd/loc/hi.sh
+PATH="srcpd/sh:$PATH" . hi.sh; echo "a st:$?"
+PATH="srcpd/dir:srcpd/sh:$PATH" . hi.sh; echo "b st:$?"
+cd srcpd/loc; . hi.sh; PATH="../sh:$PATH"; . hi.sh; shopt -u sourcepath; . hi.sh
+{ . nope_zq.sh; } 2>/dev/null; echo "c st:$?"
+==== STDOUT ====
+from-path
+a st:0
+from-path
+b st:0
+from-cwd
+from-path
+from-cwd
+c st:1
+
+==== STDERR ====
+

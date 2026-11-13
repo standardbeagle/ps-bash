@@ -38,6 +38,23 @@ public class EvalArrayScopeTests
     public Task Source_WithoutArguments_IsStatus2() => AssertOracle.EqualAsync(
         "{ source; } 2>/dev/null\necho status=$?\n{ . ; } 2>/dev/null\necho s=$?");
 
+    /// <summary>`source` of a name without a slash looks in PATH first (a directory of that name is skipped), then
+    /// in the working directory: `PATH=dir:$PATH; . cmd` read ./cmd and failed.</summary>
+    [Fact]
+    public Task Source_NameWithoutSlash_IsLookedUpInPath() => AssertOracle.EqualAsync(
+        "mkdir -p srcpd/sh srcpd/dir/hi.sh srcpd/loc\necho 'echo from-path' > srcpd/sh/hi.sh\necho 'echo from-cwd' > srcpd/loc/hi.sh\n"
+        + "PATH=\"srcpd/sh:$PATH\" . hi.sh; echo \"a st:$?\"\nPATH=\"srcpd/dir:srcpd/sh:$PATH\" . hi.sh; echo \"b st:$?\"\n"
+        + "cd srcpd/loc; . hi.sh; PATH=\"../sh:$PATH\"; . hi.sh; shopt -u sourcepath; . hi.sh\n{ . nope_zq.sh; } 2>/dev/null; echo \"c st:$?\"");
+
+    /// <summary>`return` in run-time eval text returns from the function that ran the eval (it only left the eval:
+    /// `f() { eval "$1"; echo end; }; f return` printed end). A sourced file's return still ends only the source.</summary>
+    [Fact]
+    public Task Eval_ReturnInText_ReturnsFromTheFunction() => AssertOracle.EqualAsync(
+        "f() { eval \"$1\"; echo \"end $1\"; }\nf return; echo \"a st:$?\"\nf 'return 3'; echo \"b st:$?\"\n"
+        + "printf 'echo in-lib; return 5; echo no\\n' > evretlib.sh\nh() { eval \"$1\"; echo \"after-source $?\"; }; h '. ./evretlib.sh'; echo \"d st:$?\"\n"
+        + "k() { eval 'eval \"$1\"'; echo k-no; }; k 'return 6'; echo \"k st:$?\"\n"
+        + "n() { for i in 1 2; do eval \"$1\"; echo \"n$i\"; done; echo n-end; }; n 'return 8'; echo \"n st:$?\"\nf 'echo x'; echo \"e st:$?\"");
+
     [Fact]
     public Task Eval_InvalidOption_IsStatus2() => AssertOracle.EqualAsync(
         "{ eval -z; } 2>/dev/null\necho $?\n{ eval -- 'echo hi'; } 2>/dev/null\necho $?\n{ eval -; } 2>/dev/null\necho $?");
