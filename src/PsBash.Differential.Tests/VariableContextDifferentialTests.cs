@@ -56,4 +56,22 @@ public class VariableContextDifferentialTests
         + "g() { v=t local v; echo \"local-same: [${v-unset}]\"; x=1 local y=$x; echo \"y=$y\"; }; v=g; x=0; g; echo \"v after: $v\"\n"
         + "v=g; v=t export v; echo \"export-same: $v\"; bash -c 'echo \"child: $v\"'\n"
         + "a=1 export b=2; echo \"a=[${a-unset}] b=$b\"");
+
+    /// <summary>
+    /// An assignment with only redirects (<c>x=$(cmd) 2&gt;/dev/null</c>, <c>y=1 &gt;f</c>) is the shell's own assignment:
+    /// ps-bash bound it as a temporary for an empty command, so the value was lost. <c>arr=(p q) &gt;f</c> was a parse
+    /// error, and <c>local</c> / <c>export</c> with <c>&gt;f</c> never created f. A value's <c>$( )</c> is expanded before
+    /// the redirects, so its stderr is not redirected.
+    /// </summary>
+    [Fact]
+    public Task AssignmentWithOnlyRedirects_KeepsTheValue() => AssertOracle.EqualAsync(
+        "cd \"$(mktemp -d)\"\n"
+        + "sx=$(echo hi) 2>/dev/null; echo \"1 sx=[$sx]\"\n"
+        + "sy=$(echo err >&2; echo val) 2>/dev/null; echo \"2 sy=[$sy]\"\n"
+        + "sz=lit >out.txt; echo \"3 sz=[$sz] $(test -f out.txt && echo created)\"\n"
+        + "sa=$(false) 2>/dev/null; echo \"4 st=$?\"\n"
+        + "sb=1 sc=2 2>/dev/null; echo \"5 sb=$sb sc=$sc\"\n"
+        + "sarr=(p q) >o2.txt; echo \"6 ${sarr[1]} $(test -f o2.txt && echo created)\"\n"
+        + "fl() { local le=env >r.txt; local ll=$(echo L) 2>/dev/null; echo \"7 le=$le ll=$ll\"; }; fl; test -f r.txt && echo R1\n"
+        + "export sxe=v >r2.txt; test -f r2.txt && echo \"R2 sxe=$sxe\"");
 }

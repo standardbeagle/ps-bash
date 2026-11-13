@@ -1769,6 +1769,27 @@ public class BashParserTests
     public void Parse_EffectfulTempBindingBeforeLocal_StaysASimpleCommand(string bash)
         => Assert.IsType<Command.Simple>(Parse(bash));
 
+    // `x=$(cmd) 2>/dev/null` / `y=1 >f`: no command word, so the assignment is the shell's own and the redirect is the
+    // statement's. It was a temp binding for an empty command (the value was lost); `arr=(p q) >f` was a parse error;
+    // `local E=env >f` / `export X=v >f` dropped the redirect (the file was never created).
+    [Theory]
+    [InlineData("x=$(echo hi) 2>/dev/null", 1)]
+    [InlineData("y=1 >f.txt", 1)]
+    [InlineData("b=1 c=2 2>/dev/null", 2)]
+    [InlineData("arr=(p q) >f.txt", 1)]
+    [InlineData("local le=env >f.txt", 1)]
+    [InlineData("export ex=v >f.txt", 1)]
+    public void Parse_AssignmentWithOnlyRedirects_IsAnAssignmentKeepingThem(string bash, int pairs)
+    {
+        var asg = Assert.IsType<Command.ShAssignment>(Parse(bash));
+        Assert.Equal(pairs, asg.Pairs.Length);
+        Assert.Single(asg.Redirects);
+    }
+
+    [Fact]
+    public void Parse_TempBindingBeforeARedirectedCommand_StaysASimpleCommand()
+        => Assert.IsType<Command.Simple>(Parse("y=1 >f.txt cmd"));
+
     [Fact]
     public void Parse_SimpleSubshell_ReturnsSubshellNode()
     {

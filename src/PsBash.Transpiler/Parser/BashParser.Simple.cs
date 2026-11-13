@@ -59,7 +59,8 @@ public sealed partial class BashParser
         // `local -p [NAME…]` is a listing, not a declaration: leave it to the emitter.
         if (!(Peek().Kind == BashTokenKind.Word && Peek().Value == "-p" && _tokens[saved].Value == "local")
             && ParseDeclarationPairs() is { } pairs)
-            return new Command.ShAssignment(pairs, IsLocal: isLocal, IsExport: !isLocal, IsReadonly: isLocal && _declSawReadonly, IsNameref: isLocal && _declSawNameref);
+            return new Command.ShAssignment(pairs, IsLocal: isLocal, IsExport: !isLocal, IsReadonly: isLocal && _declSawReadonly, IsNameref: isLocal && _declSawNameref,
+                Redirects: _declRedirects.Count == 0 ? default : [.. _declRedirects]);
 
         // No assignment or name followed — rewind and parse as a normal command
         // so forms like `export -p` still reach the general path.
@@ -149,7 +150,8 @@ public sealed partial class BashParser
 
         // Array assignments with no command after them are an assignment statement. Before a command word
         // (`B=(b b) cmd`) bash binds the temporary as the STRING "(b b)": the expanded elements joined by spaces.
-        if (hasArrayAssignment && Peek().Kind != BashTokenKind.Word)
+        // `arr=(p q) >f` goes on to collect the redirects (the redirect token was left unparsed: a parse error).
+        if (hasArrayAssignment && Peek().Kind != BashTokenKind.Word && Peek().Kind != BashTokenKind.IoNumber && !IsCompoundRedirectOp(Peek().Kind))
             return new Command.ShAssignment(assignmentPairs.ToImmutable());
 
         var words = ImmutableArray.CreateBuilder<CompoundWord>();
@@ -294,9 +296,11 @@ public sealed partial class BashParser
         }
 
         // If only assignments and no command words, it's a bare assignment.
-        if (assignmentPairs.Count > 0 && words.Count == 0 && redirects.Count == 0
+        // `x=$(cmd) 2>/dev/null` / `y=1 >f` too: with no command word the assignments are the shell's own, and the
+        // redirects are the statement's (a value's `$( )` is expanded before them). As a temp binding the value was lost.
+        if (assignmentPairs.Count > 0 && words.Count == 0
             && pendingHeredocs.Count == 0 && hereDocs.Count == 0)
-            return new Command.ShAssignment(assignmentPairs.ToImmutable());
+            return new Command.ShAssignment(assignmentPairs.ToImmutable(), Redirects: redirects.Count == 0 ? default : redirects.ToImmutable());
 
         // Collect heredoc bodies in order for all pending heredoc redirects.
         if (pendingHeredocs.Count > 0)
@@ -430,9 +434,9 @@ public sealed partial class BashParser
             // output — a value's command substitution is expanded BEFORE redirections,
             // so its stderr is not redirected (oracle-checked) — and a successful
             // declaration writes nothing. Consuming it here keeps the assignment;
-            // leaving it unconsumed made the statement end early. Known gap: bash
-            // still creates/truncates a `> file` target, which this does not.
-            // `declare` keeps them (_declRedirects): a refused kind change reports there.
+            // leaving it unconsumed made the statement end early. The declaration keeps
+            // them (_declRedirects): a `> file` target is created, a refused kind change
+            // reports there. Gap: not applied when a value has a `$( )`.
             if (Peek().Kind == BashTokenKind.IoNumber || IsCompoundRedirectOp(Peek().Kind))
             {
                 _declRedirects.Add(ParseRedirect());

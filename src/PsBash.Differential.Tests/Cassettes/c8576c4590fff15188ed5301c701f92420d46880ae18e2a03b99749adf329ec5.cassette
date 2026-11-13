@@ -1,0 +1,30 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 527
+stdout-length: 97
+stderr-length: 4
+==== SCRIPT ====
+cd "$(mktemp -d)"
+sx=$(echo hi) 2>/dev/null; echo "1 sx=[$sx]"
+sy=$(echo err >&2; echo val) 2>/dev/null; echo "2 sy=[$sy]"
+sz=lit >out.txt; echo "3 sz=[$sz] $(test -f out.txt && echo created)"
+sa=$(false) 2>/dev/null; echo "4 st=$?"
+sb=1 sc=2 2>/dev/null; echo "5 sb=$sb sc=$sc"
+sarr=(p q) >o2.txt; echo "6 ${sarr[1]} $(test -f o2.txt && echo created)"
+fl() { local le=env >r.txt; local ll=$(echo L) 2>/dev/null; echo "7 le=$le ll=$ll"; }; fl; test -f r.txt && echo R1
+export sxe=v >r2.txt; test -f r2.txt && echo "R2 sxe=$sxe"
+==== STDOUT ====
+1 sx=[hi]
+2 sy=[val]
+3 sz=[lit] created
+4 st=1
+5 sb=1 sc=2
+6 q created
+7 le=env ll=L
+R1
+R2 sxe=v
+
+==== STDERR ====
+err
+
