@@ -154,6 +154,10 @@ public static class AssertOracle
     /// stdout; recording that would overwrite a tracked golden with an empty
     /// file and hide the crash.
     /// </summary>
+    /// <summary>The launcher gave up waiting on its host (exit 124 with its idle-timeout message), as opposed to the script itself failing.</summary>
+    internal static bool HitHostIdleTimeout(OracleResult result)
+        => result.ExitCode == 124 && result.Stderr.Contains("(idle timeout)", StringComparison.Ordinal);
+
     internal static string? RecordableSpawnFailure(OracleResult result)
     {
         if (result.ExitCode != 0)
@@ -226,8 +230,17 @@ public static class AssertOracle
             if (loadStatus == CassetteLoadStatus.Corrupt)
                 throw new XunitException(OracleCassette.CorruptMessage(script));
 
+            var oracle = cassette!.ToOracleResult();
             var psReplay = await Fixture.RunPsBashAsync(script, timeout);
-            AssertMatches(script, cassette!.ToOracleResult(), psReplay);
+            if (HitHostIdleTimeout(psReplay) && oracle.ExitCode != 124)
+            {
+                // One retry, for this cause only: a loaded CI runner (macOS/Windows test jobs run ~50 min) starves
+                // the warm host past the launcher's fixed 15 s idle window, and a DIFFERENT script timed out on each
+                // v0.14.3 publish run. A real hang times out twice and still fails; the retry is logged, not silent.
+                Console.Error.WriteLine($"oracle: ps-bash hit the host idle timeout; retrying once: {script.Split('\n')[0]}");
+                psReplay = await Fixture.RunPsBashAsync(script, timeout);
+            }
+            AssertMatches(script, oracle, psReplay);
             return;
         }
 

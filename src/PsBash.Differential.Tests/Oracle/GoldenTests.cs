@@ -204,4 +204,17 @@ public class GoldenTests
     {
         try { File.Delete(AssertOracle.GoldenFilePath(testName)); } catch { /* best-effort */ }
     }
+
+    /// <summary>
+    /// Replay retries ps-bash once only when the LAUNCHER gave up on its host (exit 124 with its idle-timeout
+    /// message) -- a starved CI runner -- never for a script that failed or exited 124 on its own.
+    /// </summary>
+    [Fact]
+    public void HitHostIdleTimeout_OnlyTheLaunchersOwnTimeout()
+    {
+        Assert.True(AssertOracle.HitHostIdleTimeout(new OracleResult("", "ps-bash: no output from host for 15s (idle timeout). Raise it with --timeout <seconds>\n", 124, 15000)));
+        Assert.False(AssertOracle.HitHostIdleTimeout(new OracleResult("", "", 124, 10)));
+        Assert.False(AssertOracle.HitHostIdleTimeout(new OracleResult("", "ps-bash: no output from host for 15s (idle timeout).\n", 1, 10)));
+        Assert.False(AssertOracle.HitHostIdleTimeout(new OracleResult("ok\n", "", 0, 10)));
+    }
 }
