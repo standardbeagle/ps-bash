@@ -1,0 +1,20 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 174
+stdout-length: 22
+stderr-length: 0
+==== SCRIPT ====
+if `true` X; then echo T; else echo F; fi 2>/dev/null
+$(exit 42) $(exit 43); echo a=$?
+false; $nothing $(exit 3); echo b=$?
+$(true) echo moved; $(echo printf '%s-') x y; echo
+==== STDOUT ====
+F
+a=43
+b=3
+moved
+x-y-
+
+==== STDERR ====
+

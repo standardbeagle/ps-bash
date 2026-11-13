@@ -6929,6 +6929,38 @@ public class PsEmitterTests
     }
 
     [Fact]
+    public void Transpile_TopLevelReturn_IsRefusedWithStatus2()
+    {
+        var top = PsEmitter.Transpile("return 7; echo after")!;
+        Assert.Contains("can only `return'' from a function or sourced script", top);
+        Assert.Contains("$global:LASTEXITCODE = 2", top);
+        Assert.DoesNotContain("; return", top);
+        // In a function it returns, also as the keyword ending an && / || chain.
+        Assert.Contains("$global:LASTEXITCODE = 7; return", PsEmitter.Transpile("f() { return 7; }")!);
+        Assert.Contains("-ne 0) { return }", PsEmitter.Transpile("f() { cmd || return; }")!);
+    }
+
+    [Theory]
+    [InlineData("exit 257", "$global:LASTEXITCODE = 1; exit")]
+    [InlineData("( exit -2 )", "$global:LASTEXITCODE = 254; return")]
+    [InlineData("exit $v", "% 256")]
+    [InlineData("exit $((n+1))", "% 256")]
+    public void Transpile_ExitStatus_KeepsTheLowEightBits(string bash, string expected)
+    {
+        Assert.Contains(expected, PsEmitter.Transpile(bash)!);
+    }
+
+    [Fact]
+    public void Transpile_CommandSubCommandWordWithOperands_IsResolvedFirstAtRunTime()
+    {
+        var r = PsEmitter.Transpile("$(exit 42) $(exit 43)")!;
+        Assert.Contains("$__bashhead = (Resolve-BashCommand -Words @(ConvertTo-BashWords", r);
+        Assert.Contains("-KeepStatus)", r);
+        Assert.True(r.IndexOf("$__bashhead =", StringComparison.Ordinal) < r.IndexOf("$__bashsplat0 =", StringComparison.Ordinal));
+        Assert.StartsWith("& (Resolve-BashCommand -Words", PsEmitter.Transpile("`true` X")!);
+    }
+
+    [Fact]
     public void Transpile_BuiltinWithNoCommand_Succeeds()
     {
         Assert.Contains("LASTEXITCODE = 0", PsEmitter.Transpile("builtin")!);
@@ -7176,7 +7208,6 @@ public class PsEmitterTests
     // not recognized" and the loop ran on, and `|| exit 1` simply DID NOT EXIT —
     // the script sailed past the guard it was written to enforce.
     [InlineData("cmd || exit 1", "-ne 0) { $global:LASTEXITCODE = 1; exit $global:LASTEXITCODE }")]
-    [InlineData("cmd || return", "-ne 0) { return }")]
     public void Transpile_ChainEndingInStatementKeyword_RewritesToIf(
         string bash, string expectedTail)
     {

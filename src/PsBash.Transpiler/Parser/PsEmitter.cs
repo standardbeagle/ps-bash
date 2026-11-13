@@ -5148,6 +5148,12 @@ public static partial class PsEmitter
         if (cmd0 is "break" or "continue")
             specialResult = EmitLoopControl(cmd0, cmd);
 
+        // At the top of a script or -c string (not a function, not eval/source text), bash refuses `return` with
+        // status 2 and goes on; a PowerShell `return` there ended the whole script. A subshell is no different.
+        else if (cmd0 == "return" && _functionDepth == 0 && _context == TranspileContext.Default)
+            specialResult = "$(" + EmitNoOpArgPrelude(cmd) + "Write-Error " + PsBuild.SingleQuote("return: can only `return' from a function or sourced script")
+                + " -ErrorAction Continue; " + PsBuild.SetStatus(2) + ")";
+
         // return N -> capture exit code for $?
         else if (cmd0 == "return")
         {
@@ -5856,6 +5862,11 @@ public static partial class PsEmitter
         bool affixName = needsCallOperator && dashName is null && !dynamicName && IsUnquotedVarAffixWord(cmd.Words[0])
             && cmd.Words[0].Parts.All(p => p is not WordPart.Literal { Value: var lv } || lv.IndexOfAny(['/', '\\']) < 0);
         dynamicName |= affixName;
+        // `$(cmd) args`, `` `true` X ``: the substitution's words split, the first is the command; none leaves the next
+        // operand the command, and with none at all the status is the last substitution's ($(exit 42) $(exit 43) is 43).
+        bool cmdSubName = needsCallOperator && dashName is null && !dynamicName && cmd.Words.Length > 1
+            && cmd.Words[0].Parts is [WordPart.CommandSub] && IsUnquotedSplitWord(cmd.Words[0]);
+        dynamicName |= cmdSubName;
         bool arrayName = dynamicName && (IsQuotedArrayAllWord(cmd.Words[0]) || IsUnquotedArrayAllWord(cmd.Words[0]));
         // `{1..10}` / `{a,b} x`: brace expansion makes several words, the first is the command (bash: `1: command not
         // found`). Emitted bare, PowerShell printed the numbers.
@@ -5902,7 +5913,9 @@ public static partial class PsEmitter
             leading = "& (Resolve-BashCommand ";
             // `$SUDO rm f` / `CC='gcc -O2'; $CC -c x.c`: an unquoted name splits first. No word leaves the next one the
             // command (none at all: nothing runs, status 0); more than one makes the rest leading operands.
-            commandWordText = affixName
+            commandWordText = cmdSubName
+                ? "-Words " + EmitUnquotedSplitWordArray(cmd.Words[0]) + " -KeepStatus)"
+                : affixName
                 ? "-Words " + EmitUnquotedSplitWordArray(cmd.Words[0]) + ")"
                 : IsPureUnquotedVarWord(cmd.Words[0])
                 ? "-Words " + EmitUnquotedVarSplitArray(cmd.Words[0]) + ")"
@@ -5934,12 +5947,15 @@ public static partial class PsEmitter
             // Hoist each unquoted-variable operand to a temp var and splat it.
             // The command word keeps its existing emission (incl. the `& `
             // call-operator prefix for a quoted command word, or the `bash ` prefix for a script).
+            // A run-time command name is resolved first, as bash expands words left to right: `$(exit 42) $(exit 43)`
+            // leaves 43, and `$empty $(exit 3)` leaves 3 (the hoisted operands ran before the name).
             sb.Append(EmitCommandWithSplatArgs(
-                leading + commandWordText,
+                dynamicName ? "& $__bashhead" : leading + commandWordText,
                 commandArgs,
                 argIndex => dynamicName && OrderedArgDashLiteral(commandArgs[argIndex]) is { } dynDash
                     ? PsBuild.SingleQuote(dynDash)
-                    : QuoteCommaLiteralWord(commandArgs[argIndex], EmitWord(commandArgs[argIndex]))));
+                    : QuoteCommaLiteralWord(commandArgs[argIndex], EmitWord(commandArgs[argIndex])),
+                headPrelude: dynamicName ? "$__bashhead = " + leading[2..] + commandWordText + "; " : ""));
         }
         else
         {
@@ -8632,21 +8648,19 @@ public static partial class PsEmitter
     /// </summary>
     private static string EmitExitCodeValue(CompoundWord word)
     {
+        // The low 8 bits, as bash keeps them: a literal is folded here (`exit 257` is 1, `exit -2` is 254).
+        if (GetLiteralValue(word) is { } exitLiteral
+            && long.TryParse(exitLiteral, System.Globalization.NumberStyles.AllowLeadingSign, System.Globalization.CultureInfo.InvariantCulture, out var exitNumber))
+            return (((exitNumber % 256) + 256) % 256).ToString(System.Globalization.CultureInfo.InvariantCulture);
         if (!IsPureUnquotedVarWord(word))
-            return EmitWord(word);
+            return PsBuild.StatusByte(EmitWord(word));
 
-        return "$(& { $__bashexit = " + EmitUnquotedVarSplitArray(word) +
+        return PsBuild.StatusByte("$(& { $__bashexit = " + EmitUnquotedVarSplitArray(word) +
                "; if ($__bashexit.Count) { $__bashexit[0] } " +
-               "else { $global:LASTEXITCODE } })";
+               "else { $global:LASTEXITCODE } })");
     }
 
-    private static string EmitExitWithUnquotedVar(CompoundWord word)
-    {
-        string split = EmitUnquotedVarSplitArray(word);
-        return "exit $(& { $__bashexit = " + split +
-               "; if ($__bashexit.Count) { $__bashexit[0] } " +
-               "else { $global:LASTEXITCODE } })";
-    }
+    private static string EmitExitWithUnquotedVar(CompoundWord word) => "exit " + EmitExitCodeValue(word);
 
     /// <summary>
     /// True when any operand in <paramref name="args"/> (optionally skipping the
@@ -8690,9 +8704,10 @@ public static partial class PsEmitter
         ImmutableArray<CompoundWord> args,
         Func<int, string> emitPlainArg,
         string leadingTokens = "",
-        string trailingTokens = "")
+        string trailingTokens = "",
+        string headPrelude = "")
     {
-        var prelude = new StringBuilder();
+        var prelude = new StringBuilder(headPrelude);
         var call = new StringBuilder();
         // The block below is a script block: the stage's pipeline input reaches its `$input`, not the
         // command inside. Forward it (see _pipeStageFeedsInput). Read before the args are emitted, which

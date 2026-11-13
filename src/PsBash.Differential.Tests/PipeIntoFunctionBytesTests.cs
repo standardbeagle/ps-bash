@@ -16,6 +16,13 @@ public class PipeIntoFunctionBytesTests
     [InlineData("f() { tr a-z A-Z; }; printf 'ab' | f | od -A n -c")]
     public Task PipeIntoFunction_KeepsBytes(string script) => AssertOracle.EqualAsync(script);
 
+    /// <summary>`egrep` / `fgrep` in a function read the pipe it is called with; on Windows they read nothing.</summary>
+    [Fact]
+    public Task EgrepAndFgrepInAFunction_ReadThePipe() => AssertOracle.EqualAsync(
+        "only() { egrep -o 'b+|can only'; return 0; }; printf 'abbc\\nreturn: can only x\\n' | only; echo s=$?\n"
+        + "count() { fgrep -c 'a.'; }; printf 'a.\\nab\\na.\\n' | count\n"
+        + "only < /dev/null; echo n=$?");
+
     // $'\cX' is X masked to a control character (bash TOCTRL), and \c? is DEL.
     [Fact]
     public Task AnsiCQuote_ControlEscapes() => AssertOracle.EqualAsync(

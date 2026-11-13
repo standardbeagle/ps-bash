@@ -37,14 +37,14 @@ public static class StdinReaders
         ["comm"] = "", ["base64"] = "w", ["md5sum"] = "", ["sha1sum"] = "", ["sha256sum"] = "", ["od"] = "AtjN",
         ["strings"] = "n", ["column"] = "sol", ["split"] = "labCn", ["file"] = "FfmP", ["gzip"] = "S",
         ["less"] = "", ["more"] = "", ["shuf"] = "ino",
-        ["grep"] = "efmABCdD", ["sed"] = "efl", ["awk"] = "Fvf", ["rg"] = "efgmABCtTjrdMsE",
+        ["grep"] = "efmABCdD", ["egrep"] = "efmABCdD", ["fgrep"] = "efmABCdD", ["sed"] = "efl", ["awk"] = "Fvf", ["rg"] = "efgmABCtTjrdMsE",
         ["jq"] = "fL", ["yq"] = "",
     };
 
     // flag letters that SUPPLY the pattern/program (so no positional is consumed as one).
     private static readonly Dictionary<string, string> PatternLetters = new(StringComparer.Ordinal)
     {
-        ["grep"] = "ef", ["sed"] = "ef", ["awk"] = "f", ["rg"] = "ef", ["jq"] = "f", ["yq"] = "",
+        ["grep"] = "ef", ["egrep"] = "ef", ["fgrep"] = "ef", ["sed"] = "ef", ["awk"] = "f", ["rg"] = "ef", ["jq"] = "f", ["yq"] = "",
     };
 
     private static readonly HashSet<string> AlwaysReaders = new(StringComparer.Ordinal)
@@ -54,7 +54,7 @@ public static class StdinReaders
 
     private static readonly HashSet<string> PatternCommands = new(StringComparer.Ordinal)
     {
-        "grep", "sed", "awk", "rg", "jq", "yq",
+        "grep", "egrep", "fgrep", "sed", "awk", "rg", "jq", "yq",
     };
 
     // Long options that take a separate value word (`--lines 5`); `--opt=value` is one word anyway.

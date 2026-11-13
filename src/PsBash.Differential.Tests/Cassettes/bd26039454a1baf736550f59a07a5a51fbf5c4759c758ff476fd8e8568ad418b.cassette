@@ -1,0 +1,19 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 133
+stdout-length: 23
+stderr-length: 0
+==== SCRIPT ====
+( exit 257 ); echo a=$?; ( exit -2 ); echo b=$?
+v=258; ( exit $v ); echo c=$?; x=$(exit 300); echo e=$?
+bash -c 'exit 256'; echo d=$?
+==== STDOUT ====
+a=1
+b=254
+c=2
+e=44
+d=0
+
+==== STDERR ====
+

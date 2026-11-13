@@ -1,0 +1,19 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 185
+stdout-length: 22
+stderr-length: 0
+==== SCRIPT ====
+only() { egrep -o 'b+|can only'; return 0; }; printf 'abbc\nreturn: can only x\n' | only; echo s=$?
+count() { fgrep -c 'a.'; }; printf 'a.\nab\na.\n' | count
+only < /dev/null; echo n=$?
+==== STDOUT ====
+bb
+can only
+s=0
+2
+n=0
+
+==== STDERR ====
+

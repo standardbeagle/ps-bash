@@ -264,6 +264,19 @@ public class CompoundStdinEmitterTests
         Assert.Equal(expected, StdinReaders.ShouldFeed(name, args));
     }
 
+    /// <summary>
+    /// `egrep` / `fgrep` are grep (`grep -E` / `grep -F`). Unknown to the table they were native programs, fed only
+    /// when one resolves on PATH, so `f() { egrep -o x; }; … | f` read nothing on Windows.
+    /// </summary>
+    [Theory]
+    [InlineData("egrep", new[] { "-o", "pat" }, true)]
+    [InlineData("fgrep", new[] { "pat", "f" }, false)]
+    public void ShouldFeed_EgrepAndFgrepAreGrep(string name, string[] args, bool expected)
+    {
+        Assert.Equal(expected, StdinReaders.ShouldFeed(name, args));
+        Assert.Contains("__BashStdIn", PsEmitter.Transpile("f() { " + name + " -o pat; }")!);
+    }
+
     [Fact]
     public void ShouldFeed_NonLiteralOperandCountsAsAFile()
     {

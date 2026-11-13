@@ -244,13 +244,16 @@ function Write-BashXtrace {
 # function, then a builtin / ps-bash command (`false`, `true`, `echo`, `test` are not PowerShell commands of
 # those names), then whatever PowerShell can find (a program on PATH). Returns something `&` can call.
 function Resolve-BashCommand {
-    param([string]$Name, [object[]]$Words, [switch]$Fed)
+    param([string]$Name, [object[]]$Words, [switch]$Fed, [switch]$KeepStatus)
     if ($Fed -or $PSBoundParameters.ContainsKey('Words')) {
         # -Words: an unquoted name (`$SUDO rm f`, `$CC -c x.c`) after word splitting. None: the next operand is the
-        # command, and with no operand nothing runs (status 0). More than one: the rest lead the operands.
+        # command, and with no operand nothing runs. More than one: the rest lead the operands.
         # -Fed: the command is inside a compound command's stdin scope; it gets that stdin only if it reads stdin.
         # The block is created unbound so it runs in the caller's scope, as the resolved command itself would.
         $w = @(if ($PSBoundParameters.ContainsKey('Words')) { $Words } else { $Name })
+        # When nothing runs, the status is the last command substitution's, else 0. This runs before the operands
+        # expand (their substitutions set it after); -KeepStatus: the words came from a substitution that already did.
+        if ($w.Count -eq 0 -and -not $KeepStatus) { $global:LASTEXITCODE = 0 }
         if (-not $Fed -and $w.Count -eq 1) { return Resolve-BashCommand -Name ([string]$w[0]) }
         $pre = foreach ($x in $w) { "'" + ([string]$x).Replace("'", "''") + "'" }
         return [scriptblock]::Create('$__bw = @(' + ($pre -join ', ') + ') + @($args); $__bfed = ' + $(if ($Fed) { '$true' } else { '$false' }) + "`n" + $script:BashDynamicCommandBody)
@@ -298,7 +301,7 @@ function Resolve-BashCommand {
 # emitter applies to a literal command name. A command that does not read stdin is never piped to: a cmdlet with no
 # pipeline-input parameter fails to bind a record, and on an empty pipeline it never runs at all.
 $script:BashDynamicCommandBody = @'
-if ($__bw.Count -eq 0) { $global:LASTEXITCODE = 0; return }
+if ($__bw.Count -eq 0) { return }
 $__bn = [string]$__bw[0]
 $__bc = Resolve-BashCommand -Name $__bn
 $__bp = @($__bw | Select-Object -Skip 1)

@@ -18,4 +18,30 @@ public class CommandWordStatusTests
     [Fact] public Task If_MissingInput_FailsWithoutRunningBody() => AssertOracle.EqualAsync("{ if true; then echo body; fi < /nonexistent/in.txt; } 2>/dev/null; echo s=$?");
     [Fact] public Task Time_Builtin_KeepsStatus() => AssertOracle.EqualAsync("{ time false; } 2>/dev/null; echo s=$?");
     [Fact] public Task CommandSubOnly_Exit42() => AssertOracle.EqualAsync("$(exit 42); echo s=$?");
+
+    /// <summary>`return` outside a function is refused with status 2 and the script goes on; it ended the script.</summary>
+    [Fact]
+    public Task TopLevelReturn_IsRefused_AndTheScriptGoesOn() => AssertOracle.EqualAsync(
+        "{ return 7; } 2>/dev/null; echo top=$?\n"
+        + "( return 5; echo in=$? ) 2>/dev/null; echo sub=$?\n"
+        + "f() { ( return 4 ); echo f=$?; }; f");
+
+    /// <summary>`exit N` keeps the low 8 bits of N: a Windows process status is 32 bits, so 257 stayed 257.</summary>
+    [Fact]
+    public Task Exit_OutOfRange_KeepsTheLowEightBits() => AssertOracle.EqualAsync(
+        "( exit 257 ); echo a=$?; ( exit -2 ); echo b=$?\n"
+        + "v=258; ( exit $v ); echo c=$?; x=$(exit 300); echo e=$?\n"
+        + "bash -c 'exit 256'; echo d=$?");
+
+    /// <summary>
+    /// A command substitution as the command word, with operands: its words split, an empty one leaves the next operand
+    /// the command, and with nothing left the status is the last substitution's (`$(exit 42) $(exit 43)` is 43).
+    /// PowerShell failed ("The expression after '&amp;' ... was not valid") on an empty one.
+    /// </summary>
+    [Fact]
+    public Task CommandSubCommandWord_WithOperands() => AssertOracle.EqualAsync(
+        "if `true` X; then echo T; else echo F; fi 2>/dev/null\n"
+        + "$(exit 42) $(exit 43); echo a=$?\n"
+        + "false; $nothing $(exit 3); echo b=$?\n"
+        + "$(true) echo moved; $(echo printf '%s-') x y; echo");
 }

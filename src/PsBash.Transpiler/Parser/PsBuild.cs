@@ -339,6 +339,15 @@ public static class PsBuild
     public static string SetStatus(int status) => "$global:LASTEXITCODE = " + status;
 
     /// <summary>
+    /// The status <c>exit N</c> leaves with: the low 8 bits of N, as bash keeps them (<c>exit 256</c> is 0, <c>exit 257</c>
+    /// is 1, <c>exit -2</c> is 254). A Windows process status is 32 bits, so <c>exit 256</c> reached the caller as 256.
+    /// A value that is not a number is passed on unchanged.
+    /// </summary>
+    public static string StatusByte(string valueExpr) =>
+        "$(& { $__psb_es = [string](" + valueExpr + "); if ($__psb_es -match '^\\s*[+-]?[0-9]{1,27}\\s*$') "
+        + "{ [int]((([decimal]$__psb_es.Trim() % 256) + 256) % 256) } else { $__psb_es } })";
+
+    /// <summary>
     /// An <c>if</c>/<c>while</c> condition that runs a command, hoisted to statement position:
     /// <c>condStatements; </c> — the caller then tests <see cref="LastStatusTest"/>. Unlike
     /// <see cref="ExitCodeTest"/>, whose expression position forces <c>[void]</c>, the command's
