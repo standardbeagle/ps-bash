@@ -10050,29 +10050,80 @@ public static partial class PsEmitter
     /// previous simple command is known when emitting (<c>mkdir -p a/b &amp;&amp; cd $_</c>), so a whole-word <c>$_</c> /
     /// <c>"$_"</c> is replaced by that command's last word when it is a plain literal (no expansion to run twice).
     /// Anything else keeps reading <c>$global:BashLastArg</c>.
+    /// <para>Every element of a pipeline starts from the shell's <c>$_</c> (bash forks them from it), and after
+    /// the pipeline <c>$_</c> is unchanged, unless the last element ran in this shell (lastpipe, or a lone
+    /// <c>! cmd</c>): then it is that command's last word.</para>
     /// </summary>
     private static ImmutableArray<Command> ResolveLastArgRefs(ImmutableArray<Command> cmds)
     {
         CompoundWord? prevLast = null;
         ImmutableArray<Command>.Builder? rewritten = null;
+        // A `shopt -s/-u lastpipe` in this list decides from where it stands (off before it); without one, the
+        // whole-script guess stands.
+        bool? lastpipe = null;
+        foreach (var c in cmds)
+            if (c is Command.Simple sc && LastpipeShoptValue(sc) is not null) { lastpipe = false; break; }
         for (int i = 0; i < cmds.Length; i++)
         {
             var cmd = cmds[i];
             if (cmd is Command.Simple y && y.Words.Length > 0)
             {
-                if (prevLast is not null && y.Words.Skip(1).Any(HasLastArgRef))
-                {
-                    var words = y.Words.Select((w, k) => k > 0 && HasLastArgRef(w) ? ReplaceLastArgRef(w, prevLast) : w).ToImmutableArray();
-                    cmd = y with { Words = words };
-                    rewritten ??= cmds.ToBuilder();
-                    rewritten[i] = cmd;
-                }
-                var last = ((Command.Simple)cmd).Words[^1];
+                var resolved = SubstituteLastArg(y, prevLast);
+                if (!ReferenceEquals(resolved, y)) { rewritten ??= cmds.ToBuilder(); rewritten[i] = resolved; }
+                var last = resolved.Words[^1];
                 prevLast = PlainLastArgValue(last) is not null ? last : null;
+                if (LastpipeShoptValue(y) is bool on) lastpipe = on;
+            }
+            else if (cmd is Command.Pipeline pipe && pipe.Commands.Length > 0)
+            {
+                var elems = pipe.Commands;
+                ImmutableArray<Command>.Builder? newElems = null;
+                for (int k = 0; k < elems.Length; k++)
+                {
+                    if (elems[k] is not Command.Simple s || s.Words.Length == 0) continue;
+                    var r = SubstituteLastArg(s, prevLast);
+                    if (ReferenceEquals(r, s)) continue;
+                    newElems ??= elems.ToBuilder();
+                    newElems[k] = r;
+                }
+                if (newElems is not null)
+                {
+                    elems = newElems.ToImmutable();
+                    rewritten ??= cmds.ToBuilder();
+                    rewritten[i] = pipe with { Commands = elems };
+                }
+                if ((lastpipe ?? _scriptLastpipe) || elems.Length == 1)
+                    prevLast = elems[^1] is Command.Simple ls && ls.Words.Length > 0 && PlainLastArgValue(ls.Words[^1]) is not null
+                        ? ls.Words[^1] : null;
             }
             else prevLast = null;
         }
         return rewritten?.ToImmutable() ?? cmds;
+    }
+
+    /// <summary>True for a literal <c>shopt -s ... lastpipe</c>, false for <c>shopt -u ... lastpipe</c>, else null.</summary>
+    private static bool? LastpipeShoptValue(Command.Simple c)
+    {
+        if (c.Words.Length < 3 || GetLiteralValue(c.Words[0]) != "shopt") return null;
+        bool? set = null, named = false;
+        for (int k = 1; k < c.Words.Length; k++)
+        {
+            switch (GetLiteralValue(c.Words[k]))
+            {
+                case "-s": set = true; break;
+                case "-u": set = false; break;
+                case "lastpipe": named = true; break;
+            }
+        }
+        return named == true ? set : null;
+    }
+
+    /// <summary><paramref name="y"/> with each whole-word <c>$_</c> argument replaced by <paramref name="prevLast"/>
+    /// (see <see cref="ReplaceLastArgRef"/>); <paramref name="y"/> itself when there is nothing to replace.</summary>
+    private static Command.Simple SubstituteLastArg(Command.Simple y, CompoundWord? prevLast)
+    {
+        if (prevLast is null || !y.Words.Skip(1).Any(HasLastArgRef)) return y;
+        return y with { Words = y.Words.Select((w, k) => k > 0 && HasLastArgRef(w) ? ReplaceLastArgRef(w, prevLast) : w).ToImmutableArray() };
     }
 
     private static bool IsLastArgPart(WordPart p)
