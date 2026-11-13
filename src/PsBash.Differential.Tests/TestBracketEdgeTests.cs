@@ -37,6 +37,13 @@ public class TestBracketEdgeTests
         + "[ -e $emp ] && echo 6T\n[ $dsh = -e ] && echo 7T\n[ ! $emp ] && echo 8T || echo 8F\n"
         + "[ \\( $one = x \\) -a -n \"$emp$one\" ] && echo 9T\nif [ -n $emp ]; then echo 10T; fi\n[ x$emp = x ] && echo 11T\n[ $# -eq 0 ] && echo 12T");
 
+    /// <summary>A quoted `&lt;` / `&gt;` in `[ ]` is an ASCII string comparison: `[ a '&lt;' b ]` emitted invalid PowerShell
+    /// (the operator was dropped), and `[ -z '&gt;' -- ]` is a binary `&gt;` (true), not `-z`.</summary>
+    [Fact]
+    public Task Bracket_QuotedAngleOperators_CompareStrings() => AssertOracle.EqualAsync(
+        "[ -z ] && echo 1T\n[ -z '>' ] || echo 2F\n[ -z '>' -- ] && echo 3T\n[ a '<' b ] && echo 4T\n[ b '<' a ] || echo 5F\n"
+        + "[ B '>' a ] || echo 6F\nx=abc; [ \"$x\" \\> abb ] && echo 7T\n[ a \\< b -a c \\> b ] && echo 8T\nif [ \"$x\" '<' z ]; then echo 9T; fi");
+
     [Fact]
     public Task LocalExportDeclare_ResetStatusToZero() => AssertOracle.EqualAsync(
         "f() { false; local q=1; echo s1=$?; false; local r; echo s2=$?; false; export Z=1; echo s3=$?; false; declare d=1; echo s4=$?; }\nf\nfalse; export Y=1; echo s5=$?");

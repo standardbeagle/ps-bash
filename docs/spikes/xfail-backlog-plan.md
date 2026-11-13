@@ -630,6 +630,22 @@ runspace, reset by the host per command (`SdkWorker.ResetVarFrames`).
   `echo hi 9>f.txt` printed "hi 9>f.txt". Opened around the command with Invoke-BashExecFd (as compounds were).
 - Not fixed: builtin-special "Prefix binding for exec" (x=x readonly is visible to a child: all variables are
   environment variables, the c5 design gap); redirect c14/c19 need stdout to be a regular file (O_TRUNC per reopen).
+- d944185c / 0f1bdaa6: top-level `return` is refused (status 2, script goes on); `exit N` keeps N & 255; a cmdsub
+  command word with operands is resolved at run time; egrep/fgrep in a function read its pipe. core.spec's hand-written
+  "local -r" expectation was wrong (bash ends the function at the refused write).
+- g25 (74910e50): Linux all green. Windows spec: core.spec (fixed in 0f1bdaa6), builtin-kill (timing flake), and
+  builtin-trap-err "trap ERR with redirect" — ENVIRONMENTAL: the beagle-ab runner can write C:\ root, so `> /zz`
+  (mapped to C:\zz) succeeds and the ERR line goes into C:\zz. A non-root bash cannot write /zz. Expect it every gate there.
+- 25f7e12d (XFAIL 336 -> 327): unquoted `pre$(cmd)post` word-splits; backtick `\"` in double quotes; a leading `\ `
+  is kept; `[ ]` with an unquoted expansion goes to the runtime `test` on its IFS-split words (`[ -n $e ]` with e empty
+  is true); extglob arms with `$x`/`$(cmd)` build the pattern at run time (`PsEmitter.SplitExtglob`); `[[ ]]` does no
+  brace expansion (`DecomposeWord(braceExpansion: false)`).
+- Local broad spec runs exceed tman's 45 min cap: run the affected spec files only, and leave the sweep to the fleet.
+- Not fixed: extglob-match "Turning extglob on changes the meaning of [[ !(str) ]]" (needs parse-time shopt state);
+  builtin-bracket `command [` with ( ) ! -a -o (`[` is no command name ps-bash can resolve: "[: command not found");
+  test -c /dev/zero and -k are platform.
+- Next commit (XFAIL 327 -> 326): a quoted `<` / `>` in `[ ]` goes to the runtime test too (`[ a '<' b ]` emitted
+  invalid PowerShell; `[ -z '>' -- ]` is a binary `>`).
 
 Known gaps:
 - A function that only a run-time `source` defines gets no frame for `v=t f`.

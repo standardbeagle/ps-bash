@@ -1,0 +1,29 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 235
+stdout-length: 27
+stderr-length: 0
+==== SCRIPT ====
+[ -z ] && echo 1T
+[ -z '>' ] || echo 2F
+[ -z '>' -- ] && echo 3T
+[ a '<' b ] && echo 4T
+[ b '<' a ] || echo 5F
+[ B '>' a ] || echo 6F
+x=abc; [ "$x" \> abb ] && echo 7T
+[ a \< b -a c \> b ] && echo 8T
+if [ "$x" '<' z ]; then echo 9T; fi
+==== STDOUT ====
+1T
+2F
+3T
+4T
+5F
+6F
+7T
+8T
+9T
+
+==== STDERR ====
+

@@ -3015,19 +3015,22 @@ public static partial class PsEmitter
     /// none) before `test` sees them, and the expression's shape is only known at run time. With `a` empty,
     /// `[ -n $a ]` is `[ -n ]` (true) and `[ $e = '' ]` is `[ = '' ]` (status 2); both were compared as one
     /// operand. `$#`, `$?`, `$$` and `$!` never split. A glob word keeps the static path.
+    /// A quoted `<` / `>` (ASCII string order) also goes to the runtime: the static path dropped it
+    /// (`[ a '<' b ]` emitted `('a'  'b')`), and `[ -z '>' -- ]` is a binary `>`, not `-z`.
     /// </summary>
     private static bool HasRunTimeTestWords(ImmutableArray<CompoundWord> words)
     {
-        bool any = false;
+        bool split = false, glob = false;
         foreach (var w in words)
         {
-            if (w.Parts.Any(p => p is WordPart.GlobPart)) return false;
+            if (TryGetPureLiteralText(w.Parts, out var lit) && lit is "<" or ">") return true;
+            if (w.Parts.Any(p => p is WordPart.GlobPart)) { glob = true; continue; }
             if (w.Parts is [WordPart.SimpleVarSub { Name: "#" or "?" or "$" or "!" }]
                 or [WordPart.BracedVarSub { Name: "#" or "?" or "$" or "!", Suffix: null }])
                 continue;
-            if (IsUnquotedSplitWord(w)) any = true;
+            if (IsUnquotedSplitWord(w)) split = true;
         }
-        return any;
+        return split && !glob;
     }
 
     /// <summary>The `[ ]` word list, IFS-split at run time, evaluated by the runtime `test` (status 2 flags a bad expression).</summary>

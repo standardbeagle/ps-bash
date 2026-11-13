@@ -3738,6 +3738,8 @@ public class PsEmitterTests
     [InlineData("[ $e = '' ]")]
     [InlineData("[ x$v = y ]")]
     [InlineData("[ \\( $a \\) ]")]
+    [InlineData("[ a '<' b ]")]
+    [InlineData("[ -z '>' -- ]")]
     public void Transpile_BracketWithUnquotedExpansion_SplitsWordsAtRunTime(string bash)
     {
         // `[` is a command: an unquoted expansion splits (an empty one is no word) before test sees it, so with a
