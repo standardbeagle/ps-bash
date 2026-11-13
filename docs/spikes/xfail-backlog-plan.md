@@ -616,6 +616,20 @@ runspace, reset by the host per command (`SdkWorker.ResetVarFrames`).
 - g23 Windows Cmdlets: the access-time family again (LsTimeSortTests x2, Touch_QuotedMOnly_LeavesAccessTimeAlone) plus
   two 60 s streaming timeouts (GrepStreaming, ProcessSubStreaming). They pass here; beagle-ab has the same NTFS
   last-access setting, so the likely cause is something on beagle-ab reading the files (AV scan) and bumping atime.
+- g24 (a787fbfc): Linux all green. Windows: Core/Shell/Host/Differential green; spec XPASS command-parsing "Prefix env
+  on assignment" (the temp-binding fix; unmarked); Cmdlets the access-time family again (LsTimeSortTests x2,
+  FindPredicateTests.NewerXY_AllReferenceKinds). Needs a runner-side decision (AV exclusion for the test temp dir).
+- builtin-special c12 (9c32a109): a function named `builtin`/`command` wins (both were excluded from shadowing); before
+  its definition runs or after `unset -f builtin`, `builtin` falls back to `Invoke-BashCommand 'builtin'`.
+- `exec >&2; rest` / `exec >log` / `exec <in` / `exec 2>&1` (3845ac7d): the rest of the statement list runs as
+  `{ rest; } REDIRECTS` (`PsEmitter.ExecRedirect.cs`). Gap: inside a function it ends with the body.
+- `x=$(cmd) 2>/dev/null` / `y=1 >f` (be77c319): a bare assignment with redirects was a temp binding for an empty
+  command, so the VALUE WAS LOST (the release has it). Now an ShAssignment carrying the redirects; `arr=(p q) >f` was
+  a parse error; `local`/`export` with `>f` now create f.
+- High descriptors on a simple command (251f17df): `echo hi 9>&1` / `1<&2` ran as a PowerShell job (raw trailing `&`),
+  `echo hi 9>f.txt` printed "hi 9>f.txt". Opened around the command with Invoke-BashExecFd (as compounds were).
+- Not fixed: builtin-special "Prefix binding for exec" (x=x readonly is visible to a child: all variables are
+  environment variables, the c5 design gap); redirect c14/c19 need stdout to be a regular file (O_TRUNC per reopen).
 
 Known gaps:
 - A function that only a run-time `source` defines gets no frame for `v=t f`.
