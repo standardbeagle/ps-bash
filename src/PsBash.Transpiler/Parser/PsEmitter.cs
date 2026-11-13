@@ -3497,7 +3497,16 @@ public static partial class PsEmitter
                     return false;
             }
         }
-        if (!needsBuilder) return false;
+        if (!needsBuilder)
+        {
+            // An unquoted literal regex is its source text. Its emitted argument form is not: a leading @ (PowerShell's
+            // splat sigil) is backtick-escaped there, so [[ @fx =~ @f(x) ]] matched the regex "`@f(x)".
+            var text = new StringBuilder();
+            foreach (var part in word.Parts)
+                text.Append(part is WordPart.Literal l ? l.Value : ((WordPart.GlobPart)part).Pattern);
+            patExpr = PsBuild.SingleQuote(text.ToString());
+            return true;
+        }
 
         var pieces = new List<string>(word.Parts.Length);
         foreach (var part in word.Parts)

@@ -2986,6 +2986,9 @@ public class PsEmitterTests
     [InlineData("[[ $a =~ [[:space:]] ]]", @"[\s]")]
     // An unknown class name is left alone rather than guessed at.
     [InlineData("[[ $a =~ [[:zzz:]] ]]", "[[:zzz:]]")]
+    // A leading @ is regex text, not PowerShell's splat sigil: the argument form's backtick escape ("`@f(x)")
+    // reached the regex, so [[ @fx =~ @f(x) ]] did not match.
+    [InlineData("[[ $a =~ @f(x) ]]", "@f(x)")]
     public void Transpile_ExtendedRegexRhs_PreservesPatternVerbatim(
         string bash, string expectedPattern)
     {
