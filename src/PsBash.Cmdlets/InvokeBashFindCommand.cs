@@ -496,11 +496,16 @@ public sealed class InvokeBashFindCommand : PSCmdlet
                 case "-inum":
                 {
                     if (!TryArg(arg, out var text)) return;
-                    if (!NumCmp(arg, text, out var op, out var n)) return;
+                    if (!NumCmp(arg, text, out var op, out _)) return;
+                    // decimal, not double: an NTFS file index fills all 64 bits (sequence number on top), past a
+                    // double's 53-bit mantissa, so two files with nearby indexes rounded to one value and `-inum N`
+                    // matched both (Windows CI, intermittently). Every stat field here converts to decimal exactly.
+                    if (!decimal.TryParse(text.TrimStart('+', '-'), NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out var n))
+                        n = decimal.MaxValue;
                     string which = arg;
                     Add(c =>
                     {
-                        double v = which switch
+                        decimal v = which switch
                         {
                             "-uid" => c.Stat.Uid, "-gid" => c.Stat.Gid, "-links" => c.Stat.Nlink, _ => c.Stat.Inode,
                         };
