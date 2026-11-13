@@ -4319,6 +4319,12 @@ public static partial class PsEmitter
         if (!ReferenceEquals(braced, cmd) && AsPlainExport(braced) is { } export)
             return EmitShAssignment(export);
         cmd = braced;
+        // `exec >&2` / `FOO=bar exec 1>&3`: the redirections ARE the command, so the generic redirect handlers must not
+        // strip them (they piped a `$global:LASTEXITCODE = 0` into the target, a stray "0"). A binding is dropped (bash).
+        if (cmd.Words.Length == 1 && GetLiteralValue(cmd.Words[0]) == "exec" && !cmd.Redirects.IsDefaultOrEmpty
+            && cmd.HereDocs.IsDefaultOrEmpty && _definedFunctions?.Contains("exec") != true
+            && TryEmitExec(cmd with { EnvPairs = [] }, out var execResult))
+            return execResult;
         if (TryEmitOutputProcessSubs(cmd, out var outputProcSubResult))
             return outputProcSubResult;
         if (TryEmitEnvPairsWrap(cmd, out var envWrapResult))
@@ -9942,6 +9948,12 @@ public static partial class PsEmitter
             if (i > 0)
                 sb.Append("; ");
             _readonlyViolation = false;
+            // `exec >&2; rest`: the rest of the list runs under the shell-wide redirection.
+            if (i + 1 < list.Commands.Length && StdExecRedirects(list.Commands[i]) is { } execRedirects)
+            {
+                sb.Append(EmitStatement(RestUnderExecRedirects(list.Commands.RemoveRange(0, i + 1), execRedirects)));
+                break;
+            }
             sb.Append(EmitStatement(list.Commands[i]));
             if (_readonlyViolation)
             {

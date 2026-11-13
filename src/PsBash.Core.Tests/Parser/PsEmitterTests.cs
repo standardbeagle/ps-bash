@@ -1148,6 +1148,23 @@ public class PsEmitterTests
         Assert.Equal("Invoke-BashExecFd 3 '>&' -", PsEmitter.Transpile("exec 3>&-"));
     }
 
+    // `exec >&2; echo x`: the shell's own stdout moves for every later command. It emitted
+    // `$global:LASTEXITCODE = 0 | Write-BashHostStderr` (a stray "0" on stderr) and echo still wrote to stdout.
+    [Theory]
+    [InlineData("exec >&2; echo x", ". { Invoke-BashEcho x } | Write-BashHostStderr")]
+    [InlineData("FOO=bar exec 1>&2; echo x", ". { Invoke-BashEcho x } | Write-BashHostStderr")]
+    [InlineData("exec >o.txt; echo x; echo y", ". { Invoke-BashEcho x; Invoke-BashEcho y } | Invoke-BashRedirect -Path o.txt")]
+    public void Transpile_ExecOfAStandardDescriptor_RedirectsTheRestOfTheList(string bash, string expected)
+        => Assert.Equal(expected, PsEmitter.Transpile(bash));
+
+    // Nothing after it (an interactive line), a numbered descriptor, or a close: the descriptor path as before.
+    [Theory]
+    [InlineData("exec >&2", "Invoke-BashExecFd 1 '>&' 2")]
+    [InlineData("exec 3>&1 1>/dev/null; echo x", "Invoke-BashExecFd 3 '>&' 1; Invoke-BashExecFd 1 '>' /dev/null; Invoke-BashEcho x")]
+    [InlineData("exec >&-; echo x", "Invoke-BashExecFd 1 '>&' -; Invoke-BashEcho x")]
+    public void Transpile_ExecNotFollowedOrNotStandard_KeepsTheDescriptorPath(string bash, string expected)
+        => Assert.Equal(expected, PsEmitter.Transpile(bash));
+
     [Fact]
     public void Transpile_ExecWithCommand_RunsItThenExits()
     {

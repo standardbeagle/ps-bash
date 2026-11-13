@@ -33,7 +33,8 @@ raw slice, so `${BASH_SOURCE[0]:-$0}` printed a literal `$0`. (`BashParser.Words
 | `exec N<file`, `N>file`, `N>>file` (N ≥ 3) | opens descriptor N (`Invoke-BashExecFd`); an open N is closed first |
 | `exec N>&M`, `N<&M` | N becomes another name for open descriptor M |
 | `exec N>&-`, `N<&-` | closes N |
-| `exec 0/1/2…` | **not supported**: message `exec: N: redirecting the shell's own stdin/stdout/stderr with exec is not supported`, status 1 |
+| `exec 0/1/2…; rest` | the rest of the statement list runs under the redirections, as `{ rest; } >&2` (emitter, `PsEmitter.ExecRedirect.cs`). Gap: in a function body it ends with the function (bash keeps it for the caller). |
+| `exec 0/1/2…` with nothing after it (an interactive line), or `exec 1>&-` | **not supported**: message `exec: N: redirecting the shell's own stdin/stdout/stderr with exec is not supported`, status 1 |
 | `exec N>&1`, `exec N>&2` | N becomes a name for the shell's stdout / stderr (`exec 3>&1` + `cmd >&3`, as dotnet-install.sh does) |
 | `exec N<>file` | not supported (`<>` is not tokenized) |
 

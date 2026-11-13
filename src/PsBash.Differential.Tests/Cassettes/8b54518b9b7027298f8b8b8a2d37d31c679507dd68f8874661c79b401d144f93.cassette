@@ -1,0 +1,28 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 412
+stdout-length: 65
+stderr-length: 10
+==== SCRIPT ====
+cd "$(mktemp -d)"
+( exec >o.txt; echo to-file; printf 'pf\n' ); echo "file: $(tr '\n' ' ' < o.txt)"
+( exec 1>/dev/null; echo hidden ); echo visible
+( exec >&2; echo to-err ) 2>/dev/null; echo after-err
+( exec 1>&2; echo on-stderr )
+( exec 2>&1; echo e1 >&2 ) 2>/dev/null
+printf 'l1\nl2\n' > in.txt; ( exec <in.txt; read a; read b; echo "read: $a $b" )
+( FOO=bar exec >&2; echo "FOO=[$FOO]" ) 2>&1
+echo "end s=$?"
+==== STDOUT ====
+file: to-file pf
+visible
+after-err
+e1
+read: l1 l2
+FOO=[]
+end s=0
+
+==== STDERR ====
+on-stderr
+
