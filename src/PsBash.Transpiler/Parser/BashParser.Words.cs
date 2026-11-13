@@ -1066,33 +1066,8 @@ public sealed partial class BashParser
             }
 
             int start = pos;
-            pos++; // skip [
-            // Allow leading ] or ! as part of the class
-            if (pos < len && raw[pos] is '!' or '^')
-                pos++;
-            if (pos < len && raw[pos] == ']')
-                pos++;
-            while (pos < len)
-            {
-                // POSIX bracket expressions nest a named class/collating symbol/
-                // equivalence class inside the outer glob class.  The inner "]"
-                // is not the terminator for the outer expression.
-                if (raw[pos] == '[' && pos + 1 < len && raw[pos + 1] is ':' or '.' or '=')
-                {
-                    char marker = raw[pos + 1];
-                    int nestedClose = raw.IndexOf($"{marker}]", pos + 2, StringComparison.Ordinal);
-                    if (nestedClose >= 0)
-                    {
-                        pos = nestedClose + 2;
-                        continue;
-                    }
-                }
-                if (raw[pos] == ']')
-                    break;
-                pos++;
-            }
-            if (pos < len)
-                pos++; // skip closing ]
+            int close = FindClassClose(raw, pos);
+            pos = close < 0 ? len : close + 1;
             parts.Add(new WordPart.GlobPart(raw[start..pos]));
             return pos;
         }
@@ -1110,14 +1085,9 @@ public sealed partial class BashParser
     /// </summary>
     private static bool ClassBodyHasExpansion(string raw, int pos)
     {
-        for (int i = pos + 1; i < raw.Length; i++)
-        {
-            if (raw[i] == ']')
-                return false;              // closed with no expansion: a real class
-            if (raw[i] is '$' or '`')
-                return true;
-        }
-        return false;                      // unterminated
+        int close = FindClassClose(raw, pos);
+        if (close < 0) return false;       // unterminated
+        return raw.AsSpan(pos + 1, close - pos - 1).IndexOfAny('$', '`') >= 0;
     }
 
     private static int ParseExtGlob(string raw, int pos, ImmutableArray<WordPart>.Builder parts)
@@ -1132,19 +1102,68 @@ public sealed partial class BashParser
     /// Returns true if position <paramref name="pos"/> starts a bracket glob class
     /// (i.e. <c>[</c> followed eventually by <c>]</c>).
     /// </summary>
-    private static bool ContainsBracketGlob(string raw, int pos)
+    private static bool ContainsBracketGlob(string raw, int pos) => FindClassClose(raw, pos) >= 0;
+
+    /// <summary>
+    /// A bracket expression with its quotes removed and each quoted character backslash-escaped, the pattern
+    /// dialect's own literal form: <c>[a"]"b]</c> is the class {a, ], b} and becomes <c>[a\]b]</c>; <c>['a-z']</c>
+    /// matches a, - or z and becomes <c>[\a\-\z]</c>. A class without quotes is returned unchanged. The GlobPart
+    /// itself keeps the source text (an array literal's <c>['k']=v</c> key is read from it); a pathname pattern
+    /// goes through this.
+    /// </summary>
+    internal static string UnquoteClass(string cls)
+    {
+        if (cls.AsSpan().IndexOfAny('\'', '"') < 0) return cls;
+        var sb = new System.Text.StringBuilder(cls.Length + 4);
+        for (int i = 0; i < cls.Length; i++)
+        {
+            char c = cls[i];
+            if (c == '\\' && i + 1 < cls.Length) { sb.Append(c).Append(cls[++i]); continue; }
+            if (c == '\'')
+            {
+                int end = BashLexer.ScanSingleQuoted(cls, i);
+                int bodyEnd = end > i + 1 && end <= cls.Length && cls[end - 1] == '\'' ? end - 1 : end;
+                for (int k = i + 1; k < bodyEnd; k++) sb.Append('\\').Append(cls[k]);
+                i = end - 1;
+                continue;
+            }
+            if (c == '"')
+            {
+                int end = BashLexer.ScanDoubleQuoted(cls, i);
+                int bodyEnd = end > i + 1 && end <= cls.Length && cls[end - 1] == '"' ? end - 1 : end;
+                for (int k = i + 1; k < bodyEnd; k++)
+                {
+                    char q = cls[k];
+                    // Inside double quotes a backslash escapes only $ ` " \ and newline.
+                    if (q == '\\' && k + 1 < bodyEnd && cls[k + 1] is '$' or '`' or '"' or '\\') q = cls[++k];
+                    sb.Append('\\').Append(q);
+                }
+                i = end - 1;
+                continue;
+            }
+            sb.Append(c);
+        }
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// The index of the <c>]</c> that closes the bracket expression opened at <paramref name="pos"/>, or -1 when it is
+    /// unterminated. Only an UNQUOTED, unescaped <c>]</c> closes it: bash's <c>[hello"]"</c> is the literal word
+    /// <c>[hello]</c>, not the class [hello]. Quoted text and <c>\x</c> are skipped whole; a leading <c>]</c> (after an
+    /// optional <c>!</c>/<c>^</c>) is a member, and a nested <c>[:name:]</c> / <c>[.x.]</c> / <c>[=x=]</c> is one unit.
+    /// </summary>
+    private static int FindClassClose(string raw, int pos)
     {
         int i = pos + 1;
         int len = raw.Length;
-        // Allow leading ! or ^ for negation
         if (i < len && raw[i] is '!' or '^')
             i++;
-        // Allow leading ] as literal member
         if (i < len && raw[i] == ']')
             i++;
         while (i < len)
         {
-            if (raw[i] == '[' && i + 1 < len && raw[i + 1] is ':' or '.' or '=')
+            char c = raw[i];
+            if (c == '[' && i + 1 < len && raw[i + 1] is ':' or '.' or '=')
             {
                 char marker = raw[i + 1];
                 int nestedClose = raw.IndexOf($"{marker}]", i + 2, StringComparison.Ordinal);
@@ -1154,11 +1173,14 @@ public sealed partial class BashParser
                     continue;
                 }
             }
-            if (raw[i] == ']')
-                return true;
+            if (c == '\\') { i += 2; continue; }
+            if (c == '\'') { i = BashLexer.ScanSingleQuoted(raw, i); continue; }
+            if (c == '"') { i = BashLexer.ScanDoubleQuoted(raw, i); continue; }
+            if (c == ']')
+                return i;
             i++;
         }
-        return false;
+        return -1;
     }
 
     private static bool IsGlobStart(string raw, int pos)

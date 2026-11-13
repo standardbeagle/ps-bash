@@ -48,6 +48,14 @@ public class BashPatternTests
     [InlineData("7", "@([[:digit:]])", true)]
     [InlineData("a*b", "@(a\"*\"b)", true)]    // quoted * is literal
     [InlineData("axb", "@(a\"*\"b)", false)]
+    [InlineData("]", "[a\"]\"b]", true)]       // a quoted ] is a member: the class is {a, ], b}
+    [InlineData("b", "[a\"]\"b]", true)]
+    [InlineData("\"", "[a\"]\"b]", false)]     // ...and the quotes drop
+    [InlineData("-", "['a-z']", true)]         // a quoted - is a member, not a range
+    [InlineData("m", "['a-z']", false)]
+    [InlineData("-", "[a\\-z]", true)]         // so is an escaped one
+    [InlineData("m", "[a\\-z]", false)]
+    [InlineData("m", "[a-z]", true)]
     public void ToAnchoredRegex_MatchesLikeBash(string subject, string pattern, bool expected)
         => Assert.Equal(expected, Regex.IsMatch(subject, BashPattern.ToAnchoredRegex(pattern)));
 

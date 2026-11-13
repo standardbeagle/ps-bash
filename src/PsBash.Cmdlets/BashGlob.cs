@@ -9,18 +9,19 @@ namespace PsBash.Cmdlets;
 public static class BashGlobText
 {
     /// <summary>
-    /// Makes <paramref name="literal"/> inert inside a glob pattern: a quoted or escaped <c>* ? [ \</c> must
-    /// match itself (<c>"*"</c>, <c>\*</c>, <c>"$x"</c> where x holds a star). The pattern dialect is bash's own:
+    /// Makes <paramref name="literal"/> inert inside a glob pattern: a quoted or escaped <c>* ? [ ] \</c> must
+    /// match itself (<c>"*"</c>, <c>\*</c>, <c>"$x"</c> where x holds a star), and a quoted <c>]</c> cannot close a
+    /// bracket (<c>[a"$x"</c> with x=<c>]</c> stays literal). The pattern dialect is bash's own:
     /// <c>\</c> escapes the next character and <c>/</c> separates components.
     /// </summary>
     public static string Escape(string? literal)
     {
         if (string.IsNullOrEmpty(literal)) return literal ?? string.Empty;
-        if (literal.AsSpan().IndexOfAny("*?[\\") < 0) return literal;
+        if (literal.AsSpan().IndexOfAny("*?[]\\") < 0) return literal;
         var sb = new StringBuilder(literal.Length + 4);
         foreach (char c in literal)
         {
-            if (c is '*' or '?' or '[' or '\\') sb.Append('\\');
+            if (c is '*' or '?' or '[' or ']' or '\\') sb.Append('\\');
             sb.Append(c);
         }
         return sb.ToString();
@@ -120,8 +121,20 @@ internal static class BashGlob
             if (c == '\\') { i++; continue; }
             if (c is '*' or '?') return true;
             if (c is '+' or '@' or '!' && i + 1 < pattern.Length && pattern[i + 1] == '(') return true;
-            if (c == '[' && i + 2 <= pattern.Length && pattern.IndexOf(']', i + 2) >= 0)
+            if (c == '[' && HasClosingBracket(pattern, i + 2))
                 return true;
+        }
+        return false;
+    }
+
+    /// <summary>An unescaped <c>]</c> at or after <paramref name="from"/>: an escaped (quoted) <c>\]</c> cannot close a
+    /// bracket, so <c>[hello\]</c> is a literal word, not a class.</summary>
+    private static bool HasClosingBracket(string pattern, int from)
+    {
+        for (int j = from; j < pattern.Length; j++)
+        {
+            if (pattern[j] == '\\') { j++; continue; }
+            if (pattern[j] == ']') return true;
         }
         return false;
     }

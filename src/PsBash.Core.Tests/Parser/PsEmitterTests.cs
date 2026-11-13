@@ -4368,6 +4368,27 @@ public class PsEmitterTests
     }
 
     [Fact]
+    public void Transpile_GlobBracketWithQuotedClose_IsALiteralWord()
+    {
+        // bash: `[hello"]"` is the literal word [hello] (a quoted ] cannot close the class), not the class [hello].
+        var result = PsEmitter.Transpile("echo [hello\"]\"");
+        Assert.DoesNotContain("ConvertTo-BashGlob", result);
+        Assert.Contains("[hello", result);
+        // An escaped ] cannot close it either; a later unquoted one still does.
+        Assert.DoesNotContain("ConvertTo-BashGlob", PsEmitter.Transpile("echo [a\\]"));
+        // Quoted members drop their quotes and are escaped: [a"]"b] is the class {a, ], b}.
+        Assert.Equal(GlobSplat("[a\\]b]"), PsEmitter.Transpile("echo [a\"]\"b]"));
+        Assert.Equal(GlobSplat("[\\a\\b]*"), PsEmitter.Transpile("echo [\"ab\"]*"));
+    }
+
+    [Fact]
+    public void Transpile_GlobWordWithQuotedClose_EscapesTheQuotedBracket()
+    {
+        // `x*"]"`: the star globs, the quoted ] must match itself.
+        Assert.Equal(GlobSplat("x*\\]"), PsEmitter.Transpile("echo x*\"]\""));
+    }
+
+    [Fact]
     public void Transpile_GlobWordWithVariable_QuotedValueIsEscapedUnquotedValueIsActive()
     {
         // bash: an unquoted $d keeps its glob characters live; "$d" never globs.

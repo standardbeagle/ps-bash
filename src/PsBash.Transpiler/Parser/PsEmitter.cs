@@ -8680,14 +8680,15 @@ public static partial class PsEmitter
         return glob;
     }
 
-    /// <summary>Backslash-escapes <c>* ? [ \</c> so quoted / escaped text matches itself in a glob pattern.</summary>
+    /// <summary>Backslash-escapes <c>* ? [ ] \</c> so quoted / escaped text matches itself in a glob pattern. A quoted
+    /// <c>]</c> cannot close a bracket: <c>[hello"]"</c> is the literal word <c>[hello]</c> in bash, not the class [hello].</summary>
     private static string EscapeGlobLiteral(string text)
     {
-        if (text.AsSpan().IndexOfAny("*?[\\") < 0) return text;
+        if (text.AsSpan().IndexOfAny("*?[]\\") < 0) return text;
         var sb = new StringBuilder(text.Length + 4);
         foreach (char c in text)
         {
-            if (c is '*' or '?' or '[' or '\\') sb.Append('\\');
+            if (c is '*' or '?' or '[' or ']' or '\\') sb.Append('\\');
             sb.Append(c);
         }
         return sb.ToString();
@@ -8785,7 +8786,8 @@ public static partial class PsEmitter
                     }
                     break;
                 case WordPart.GlobPart gp:
-                    lit.Append(gp.Pattern);
+                    // A class's quoted members are literal and its quotes drop: [a"]"b] is {a, ], b}.
+                    lit.Append(gp.Pattern.StartsWith('[') ? BashParser.UnquoteClass(gp.Pattern) : gp.Pattern);
                     break;
                 case WordPart.DoubleQuoted dq:
                     if (dq.Parts.All(p => p is WordPart.Literal or WordPart.EscapedLiteral)

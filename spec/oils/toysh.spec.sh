@@ -54,7 +54,6 @@ b
 [+(])
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-toysh toysh (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### patsub of $* - http://landley.net/notes.html#23-04-2020

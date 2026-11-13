@@ -182,10 +182,34 @@ public static class BashPattern
                     }
                 }
                 if (c == '\\' && p + 1 < raw.Length) { sb.Append(EscapeInClass(raw[p + 1])); p += 2; continue; }
+                // Quoted members are literal and the quotes drop: [a"]"b] is {a, ], b}, ['a-z'] is {a, -, z}.
+                if (honorQuotes && c is '\'' or '"' && QuotedClassMembers(p, sb) is int after) { p = after; continue; }
                 sb.Append(c == '-' ? "-" : EscapeInClass(c));
                 p++;
             }
             return false;
+        }
+
+        // The quoted run at p inside a bracket, each character appended as a literal member; the offset past its
+        // closing quote, or null when it is unclosed (the quote is then an ordinary member).
+        private int? QuotedClassMembers(int p, StringBuilder sb)
+        {
+            char q = raw[p];
+            int close = raw.IndexOf(q, p + 1);
+            if (q == '"')
+            {
+                close = p + 1;
+                while (close < raw.Length && raw[close] != '"')
+                    close += raw[close] == '\\' && close + 1 < raw.Length ? 2 : 1;
+            }
+            if (close < 0 || close >= raw.Length) return null;
+            for (int k = p + 1; k < close; k++)
+            {
+                char m = raw[k];
+                if (q == '"' && m == '\\' && k + 1 < close && raw[k + 1] is '$' or '`' or '"' or '\\') m = raw[++k];
+                sb.Append(EscapeInClass(m));
+            }
+            return close + 1;
         }
 
         // "…" in a pattern: literal text; `\` escapes only $ ` " \ (bash's double-quote rule).
@@ -206,7 +230,8 @@ public static class BashPattern
             return true;
         }
 
-        private static string EscapeInClass(char c) => c is '\\' or ']' or '[' or '^' ? "\\" + c : c.ToString();
+        // A literal member: an escaped or quoted `-` is a member, never a range (`[a\-z]` is {a, -, z}).
+        private static string EscapeInClass(char c) => c is '\\' or ']' or '[' or '^' or '-' ? "\\" + c : c.ToString();
     }
 
     /// <summary>The .NET class body for a POSIX bracket class name (<c>digit</c> → <c>0-9</c>), or

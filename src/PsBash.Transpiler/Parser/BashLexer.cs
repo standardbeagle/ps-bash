@@ -779,7 +779,7 @@ public static class BashLexer
     // ─────────────────────────────────────────────────────────────────────────
 
     /// <summary>Advance past a single-quoted string. No escapes inside (bash).</summary>
-    private static int ScanSingleQuoted(string input, int pos)
+    internal static int ScanSingleQuoted(string input, int pos)
     {
         int len = input.Length;
         pos++; // opening '
@@ -794,7 +794,7 @@ public static class BashLexer
     /// Advance past a double-quoted string, recursing through embedded $(...),
     /// ${...} and `...` (whose own quotes/parens must not end the string).
     /// </summary>
-    private static int ScanDoubleQuoted(string input, int pos)
+    internal static int ScanDoubleQuoted(string input, int pos)
     {
         int len = input.Length;
         pos++; // opening "

@@ -125,13 +125,16 @@ public class BashGlobTests : IClassFixture<SharedPwshFixture>, IDisposable
     [InlineData(@"\*", false)]
     [InlineData(@"\\*", true)]
     [InlineData("plain", false)]
+    [InlineData(@"[hello\]", false)]                          // a quoted ] cannot close the class: [hello"]"
+    [InlineData(@"[a\]b]", true)]                             // ...but a later unescaped one does
     public void HasPattern_DetectsUnescapedGlobCharacters(string pattern, bool expected) =>
         Assert.Equal(expected, BashGlob.HasPattern(pattern));
 
     [Theory]
     [InlineData("plain", "plain")]
     [InlineData("a*b", @"a\*b")]
-    [InlineData("a?b[c]", @"a\?b\[c]")]
+    [InlineData("a?b[c]", @"a\?b\[c\]")]
+    [InlineData("]", @"\]")]
     [InlineData(@"a\b", @"a\\b")]
     [InlineData("", "")]
     public void Escape_MakesQuotedTextMatchItself(string text, string expected)
