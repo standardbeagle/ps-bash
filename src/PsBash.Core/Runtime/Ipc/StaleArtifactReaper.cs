@@ -39,7 +39,13 @@ public static class StaleArtifactReaper
     public static void Reap() => Reap(PsBashRuntimeDirectory.GetPath());
 
     /// <summary>Reap stale artifacts under <paramref name="dir"/> (test seam).</summary>
-    public static int Reap(string dir)
+    public static int Reap(string dir) => Reap(dir, OrphanSocketMinAge);
+
+    // A host binds its socket and writes the sidecar right after, so a socket with no sidecar is
+    // normal for that moment. Ten minutes is far past it.
+    private static readonly TimeSpan OrphanSocketMinAge = TimeSpan.FromMinutes(10);
+
+    internal static int Reap(string dir, TimeSpan orphanSocketMinAge)
     {
         int removed = 0;
         try
@@ -49,8 +55,64 @@ public static class StaleArtifactReaper
         catch { return 0; }
 
         removed += ReapDeadSidecars(dir);
+        removed += ReapOrphanSockets(dir, orphanSocketMinAge);
         removed += ReapReleasedLocks(dir);
         return removed;
+    }
+
+    /// <summary>
+    /// A socket file with no sidecar: its host removed the sidecar on the way out but was killed
+    /// before it unlinked the socket (or the unlink failed while the dying process still held it).
+    /// ReapDeadSidecars never sees these, and per-invocation sockets have unique names, so nothing
+    /// rebinds them either: about 60 of them collected in a week on one dev machine. One is deleted
+    /// only when it is older than <paramref name="minAge"/> and nothing listens on it (connect is
+    /// refused). A live host always accepts, so its socket is never touched.
+    /// </summary>
+    private static int ReapOrphanSockets(string dir, TimeSpan minAge)
+    {
+        int removed = 0;
+        string[] files;
+        try { files = Directory.GetFiles(dir, "host-*.sock*"); }
+        catch { return 0; }
+
+        var cutoff = DateTime.UtcNow - minAge;
+        foreach (var path in files)
+        {
+            try
+            {
+                if (path.EndsWith(".host.json", StringComparison.Ordinal)) continue;
+                if (File.Exists(path + ".host.json")) continue; // ReapDeadSidecars decides these
+                if (File.GetLastWriteTimeUtc(path) > cutoff) continue;
+                if (!NothingListens(path)) continue;
+                TryDelete(path);
+                if (!File.Exists(path)) removed++;
+            }
+            catch { /* best effort per file */ }
+        }
+        return removed;
+    }
+
+    // True only when a connect is refused: the file is a socket nobody listens on, or not a socket.
+    // A timeout or any other error leaves the file alone.
+    private static bool NothingListens(string path)
+    {
+        using var sock = new System.Net.Sockets.Socket(
+            System.Net.Sockets.AddressFamily.Unix, System.Net.Sockets.SocketType.Stream, System.Net.Sockets.ProtocolType.Unspecified);
+        try
+        {
+            var connect = sock.ConnectAsync(new System.Net.Sockets.UnixDomainSocketEndPoint(path));
+            if (!connect.Wait(TimeSpan.FromMilliseconds(500))) return false;
+            return false; // connected: a host is listening
+        }
+        catch (AggregateException ae) when (ae.InnerException is System.Net.Sockets.SocketException se)
+        {
+            return se.SocketErrorCode == System.Net.Sockets.SocketError.ConnectionRefused;
+        }
+        catch (System.Net.Sockets.SocketException se)
+        {
+            return se.SocketErrorCode == System.Net.Sockets.SocketError.ConnectionRefused;
+        }
+        catch { return false; }
     }
 
     private static int ReapDeadSidecars(string dir)

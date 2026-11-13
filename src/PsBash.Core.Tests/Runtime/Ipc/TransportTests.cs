@@ -10,10 +10,16 @@ namespace PsBash.Core.Tests.Runtime.Ipc;
 /// T03 acceptance tests: 1 KB round-trip on each transport, atomic lock-file
 /// read/write/stale-detect, Unix mode 0600.
 /// </summary>
-public class TransportTests
+public class TransportTests : IDisposable
 {
-    private static string TempPath() =>
+    // One per test; removed after it (it was left behind: hundreds of empty ps-bash/test-* dirs).
+    private readonly string _dir =
         Path.Combine(Path.GetTempPath(), "ps-bash", "test-" + Guid.NewGuid().ToString("N").Substring(0, 8));
+
+    public void Dispose()
+    {
+        try { Directory.Delete(_dir, recursive: true); } catch { /* best effort */ }
+    }
 
     private static byte[] OneKb()
     {
@@ -28,7 +34,7 @@ public class TransportTests
         Skip.If(RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && Environment.OSVersion.Version.Build < 17063,
             "AF_UNIX requires Windows 10 1803+");
 
-        var dir = TempPath();
+        var dir = _dir;
         Directory.CreateDirectory(dir);
         var sockPath = Path.Combine(dir, "t.sock");
         await using var transport = new UnixSocketTransport(sockPath);
@@ -79,9 +85,9 @@ public class TransportTests
     }
 
     [UnsupportedOSPlatform("windows")]
-    private static async Task VerifyUnixModeAsync()
+    private async Task VerifyUnixModeAsync()
     {
-        var dir = TempPath();
+        var dir = _dir;
         Directory.CreateDirectory(dir);
         var sockPath = Path.Combine(dir, "t.sock");
         await using var transport = new UnixSocketTransport(sockPath);

@@ -19,7 +19,6 @@ internal static class JobHostSpares
     private static readonly object Gate = new();
     private static readonly List<Task<IpcWorker>> Spares = [];
     private static int _target = 1;
-    private static int _starting;
     private static Timer? _expiry;
 
     /// <summary>A started host, from the spare list when one is ready, else spawned now. Never returns null.</summary>
@@ -60,18 +59,23 @@ internal static class JobHostSpares
     {
         lock (Gate)
         {
-            int missing = _target - Spares.Count - _starting;
+            int missing = PruneAndCountMissing(Spares, _target);
             for (int i = 0; i < missing; i++)
-            {
-                _starting++;
-                var task = Task.Run(async () =>
-                {
-                    try { return await StartWarmAsync(hostPath).ConfigureAwait(false); }
-                    finally { lock (Gate) _starting--; }
-                });
-                Spares.Add(task);
-            }
+                Spares.Add(Task.Run(() => StartWarmAsync(hostPath)));
         }
+    }
+
+    /// <summary>
+    /// Drops the spares whose start failed and returns how many to start to reach <paramref name="target"/>.
+    /// The list holds started and still-starting spares alike, so its count is the whole supply. A failed one
+    /// is not supply: kept, it held its slot until the idle expiry and no replacement was started. A separate
+    /// starting counter was subtracted on top of the list count, so a spare that was starting counted twice
+    /// and a burst of jobs got no second spare.
+    /// </summary>
+    internal static int PruneAndCountMissing(List<Task<IpcWorker>> spares, int target)
+    {
+        spares.RemoveAll(static t => t.IsFaulted || t.IsCanceled);
+        return Math.Max(0, target - spares.Count);
     }
 
     /// <summary>A started host whose runspace is already created: a no-op command pays that cost before a job needs the host.</summary>

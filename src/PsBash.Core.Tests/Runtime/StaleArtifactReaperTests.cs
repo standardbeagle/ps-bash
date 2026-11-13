@@ -19,12 +19,14 @@ public class StaleArtifactReaperTests : IDisposable
 
     public StaleArtifactReaperTests()
     {
-        _dir = Path.Combine(Path.GetTempPath(), "ps-bash-reaper-test-" + Guid.NewGuid().ToString("N"));
+        // Short: a unix socket path is capped near 108 characters, and the socket tests bind real ones here.
+        _dir = Path.Combine(Path.GetTempPath(), "psb-reap-" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(_dir);
     }
 
     public void Dispose()
     {
+        foreach (var s in _bound) s.Dispose();
         try { Directory.Delete(_dir, recursive: true); } catch { }
     }
 
@@ -96,6 +98,60 @@ public class StaleArtifactReaperTests : IDisposable
 
         Assert.False(File.Exists(released), "a lock no live owner holds should be reaped");
         Assert.True(File.Exists(held), "a lock still held exclusively by a live owner must be kept");
+    }
+
+    private readonly List<System.Net.Sockets.Socket> _bound = [];
+
+    // A socket file nobody listens on, as a killed host leaves it. Bound and never listening: disposing a
+    // bound socket unlinks its file (.NET), which a killed host never gets to do, so it stays open until
+    // the test ends.
+    private string StaleSocket(string name)
+    {
+        var path = Path.Combine(_dir, name);
+        var s = new System.Net.Sockets.Socket(
+            System.Net.Sockets.AddressFamily.Unix, System.Net.Sockets.SocketType.Stream, System.Net.Sockets.ProtocolType.Unspecified);
+        _bound.Add(s);
+        s.Bind(new System.Net.Sockets.UnixDomainSocketEndPoint(path));
+        return path;
+    }
+
+    [Fact]
+    public void Reap_SocketWithNoSidecarAndNoListener_IsRemoved()
+    {
+        var plain = StaleSocket("host-pi-1-dead.sock");
+        var overflow = StaleSocket("host-andy-s1-2.sock-x1");
+        Assert.True(File.Exists(plain) && File.Exists(overflow));
+
+        var removed = StaleArtifactReaper.Reap(_dir, TimeSpan.Zero);
+
+        Assert.False(File.Exists(plain), "a socket nobody listens on, with no sidecar, should be reaped");
+        Assert.False(File.Exists(overflow), "an overflow endpoint (-xN) is reaped the same way");
+        Assert.Equal(2, removed);
+    }
+
+    [Fact]
+    public void Reap_SocketWithNoSidecarButAListener_IsKept()
+    {
+        var path = Path.Combine(_dir, "host-pi-2-live.sock");
+        using var live = new System.Net.Sockets.Socket(
+            System.Net.Sockets.AddressFamily.Unix, System.Net.Sockets.SocketType.Stream, System.Net.Sockets.ProtocolType.Unspecified);
+        live.Bind(new System.Net.Sockets.UnixDomainSocketEndPoint(path));
+        live.Listen(4);
+
+        StaleArtifactReaper.Reap(_dir, TimeSpan.Zero);
+
+        Assert.True(File.Exists(path), "a host still listening must keep its socket even before its sidecar is written");
+    }
+
+    [Fact]
+    public void Reap_RecentSocketWithNoSidecar_IsKept()
+    {
+        // Just bound: its host may not have written the sidecar yet.
+        var path = StaleSocket("host-pi-3-new.sock");
+
+        StaleArtifactReaper.Reap(_dir);
+
+        Assert.True(File.Exists(path), "a socket younger than the minimum age must be left");
     }
 
     [Fact]
