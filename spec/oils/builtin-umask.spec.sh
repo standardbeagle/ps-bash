@@ -75,7 +75,6 @@ error
 124
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-umask builtin-umask (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### symbolic syntax error: empty clause u-r,,u-r
@@ -186,7 +185,6 @@ umask 0022
 status=0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-umask builtin-umask (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### set umask with symbolic mode: u-rw  ...  u=,g+,o-  ...

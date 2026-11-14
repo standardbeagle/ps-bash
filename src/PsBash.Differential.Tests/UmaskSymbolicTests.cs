@@ -12,4 +12,7 @@ public class UmaskSymbolicTests
     [Fact] public Task Copy_IsRejected() => AssertOracle.EqualAsync("umask 0124; umask a=u 2>/dev/null; echo s=$?; umask");
     [Fact] public Task TwoOperators_AreRejected() => AssertOracle.EqualAsync("umask 0124; umask u+r+w 2>/dev/null; echo s=$?; umask");
     [Fact] public Task EmptyClause_IsRejected() => AssertOracle.EqualAsync("umask 0124; umask 'u+r,,u-r' 2>/dev/null; echo s=$?; umask");
+    // oils builtin-umask: an unknown option letter is not a symbolic mode (status 2, mask unchanged).
+    [Fact] public Task InvalidOption_LeavesMask() => AssertOracle.EqualAsync("umask 0124; umask -rwx 2>/dev/null; echo s=$?; umask");
+    [Fact] public Task PrintReusable() => AssertOracle.EqualAsync("umask 0027; umask -p; umask -p -S; umask -S 0077; umask -pS");
 }

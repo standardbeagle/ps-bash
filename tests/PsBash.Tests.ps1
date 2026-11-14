@@ -200,6 +200,18 @@ Describe 'Invoke-BashPrintf' {
     }
 }
 
+Describe 'Invoke-BashUmask' {
+    # -p is an ambiguous common-parameter prefix: a direct call needs the cmdlet's decoy.
+    It '-p prints a reusable umask command' {
+        $saved = Invoke-BashUmask
+        try {
+            Invoke-BashUmask '0027'
+            Invoke-BashUmask -p | Should -Be 'umask 0027'
+            Invoke-BashUmask -p -S | Should -Be 'umask -S u=rwx,g=rx,o='
+        } finally { Invoke-BashUmask $saved }
+    }
+}
+
 Describe 'Invoke-BashBrowse' {
     It 'lists pipeline objects with original object references' {
         $inputObjects = @(

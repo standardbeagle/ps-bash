@@ -9,7 +9,26 @@ namespace PsBash.Cmdlets;
 [Cmdlet(VerbsLifecycle.Invoke, "BashUmask")]
 public sealed class InvokeBashUmaskCommand : PSCmdlet
 {
-    private static int _mask = 0x12; // 0022
+    // The mask belongs to the shell session (the runspace), like the shopt table: a pooled host serves many
+    // commands, and `umask 077` in one must not change what the next one reports.
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<
+        System.Management.Automation.Runspaces.Runspace, System.Runtime.CompilerServices.StrongBox<int>> PerRunspace = new();
+    private static readonly System.Runtime.CompilerServices.StrongBox<int> Fallback = new(0x12);
+
+    private static System.Runtime.CompilerServices.StrongBox<int> Box =>
+        System.Management.Automation.Runspaces.Runspace.DefaultRunspace is { } rs
+            ? PerRunspace.GetValue(rs, _ => new System.Runtime.CompilerServices.StrongBox<int>(0x12)) // 0022
+            : Fallback;
+
+    private static int Mask
+    {
+        get => Box.Value;
+        set => Box.Value = value;
+    }
+
+    // Decoy for a direct `Invoke-BashUmask -p` (an ambiguous common-parameter prefix otherwise). The emitter
+    // single-quotes umask's dash words, so transpiled calls always reach Arguments.
+    [Parameter] public SwitchParameter p { get; set; }
 
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
@@ -17,18 +36,47 @@ public sealed class InvokeBashUmaskCommand : PSCmdlet
     protected override void EndProcessing()
     {
         var args = Arguments ?? Array.Empty<string>();
+        if (p.IsPresent) args = [.. new[] { "-p" }, .. args];
         FileSystemHelpers.SetLastExitCode(this, 0);
         if (FileSystemHelpers.TryHandleVersion(this, "umask", args)) return;
-        bool symbolic = args.Contains("-S");
-        var operand = args.FirstOrDefault(a => !a.StartsWith('-'));
+        // Options as bash's getopt reads them: -p and -S (bundled or not), `--` ends them, any other letter is
+        // "invalid option" (status 2, mask unchanged: `umask -rwx` is not a symbolic mode). A lone `-` is a no-op.
+        bool symbolic = false, reusable = false;
+        int at = 0;
+        for (; at < args.Length; at++)
+        {
+            var a = args[at];
+            if (a == "--") { at++; break; }
+            if (a == "-") return;
+            if (a.Length < 2 || a[0] != '-') break;
+            foreach (var c in a.AsSpan(1))
+            {
+                if (c == 'p') reusable = true;
+                else if (c == 'S') symbolic = true;
+                else
+                {
+                    FileSystemHelpers.WriteStderr(this, $"umask: -{c}: invalid option");
+                    FileSystemHelpers.WriteStderr(this, "umask: usage: umask [-p] [-S] [mode]");
+                    FileSystemHelpers.SetLastExitCode(this, 2);
+                    return;
+                }
+            }
+        }
+        var operand = at < args.Length ? args[at] : null;
         if (operand is null)
         {
-            WriteObject(symbolic ? Symbolic(_mask) : Convert.ToString(_mask, 8).PadLeft(4, '0'));
+            // -p: a form that can be read back in (`umask 0022`, `umask -S u=rwx,g=rx,o=rx`).
+            var shown = symbolic ? Symbolic(Mask) : Convert.ToString(Mask, 8).PadLeft(4, '0');
+            WriteObject(reusable ? "umask " + (symbolic ? "-S " : "") + shown : shown);
             return;
         }
         if (operand.Length > 0 && !char.IsDigit(operand[0]))
         {
-            if (UmaskSymbolic.TryApply(_mask, operand, out var applied)) _mask = applied;
+            if (UmaskSymbolic.TryApply(Mask, operand, out var applied))
+            {
+                Mask = applied;
+                if (symbolic) WriteObject(Symbolic(Mask));
+            }
             else
             {
                 FileSystemHelpers.WriteStderr(this, $"umask: {operand}: invalid symbolic mode operator");
@@ -40,7 +88,8 @@ public sealed class InvokeBashUmaskCommand : PSCmdlet
         {
             int v = Convert.ToInt32(operand, 8);
             if (v is < 0 or > 0x1FF) throw new FormatException();
-            _mask = v;
+            Mask = v;
+            if (symbolic) WriteObject(Symbolic(Mask));
         }
         catch (Exception e) when (e is FormatException or OverflowException or ArgumentException)
         {
