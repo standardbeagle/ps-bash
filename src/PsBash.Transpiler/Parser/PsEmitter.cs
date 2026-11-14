@@ -1148,10 +1148,10 @@ public static partial class PsEmitter
             }
         }
         // `break 1 2 3`: bash reports "too many arguments", sets status 1 and leaves the innermost loop
-        // (a `continue` with too many arguments breaks too).
+        // (a `continue` with too many arguments breaks too). Under `bash -c` the error discards the rest of the string.
         if (cmd.Words.Length > 2)
         {
-            check = $"Write-Error {PsBuild.SingleQuote($"{keyword}: too many arguments")} -ErrorAction Continue; {PsBuild.SetStatus(1)}; ";
+            check = $"Write-Error {PsBuild.SingleQuote($"{keyword}: too many arguments")} -ErrorAction Continue; {PsBuild.SetStatus(1)}; {PsBuild.DashCInputDiscard}; ";
             keyword = "break";
         }
         var target = labels[Math.Max(0, labels.Count - n)];
@@ -5640,9 +5640,11 @@ public static partial class PsEmitter
                 if (c == 'u') { effects.Add(("__BashNounset", on)); continue; }
                 if (c == 'C') { effects.Add(("__BashNoclobber", on)); continue; }
                 if (c == 'E') { effects.Add(("__BashErrtrace", on)); continue; }
-                if (c == 'o' && k == a.Length - 1 && i + 1 < args.Count && args[i + 1] is "pipefail" or "nounset" or "noclobber" or "errtrace")
+                // verbose: tracked for $- / $SHELLOPTS / test -o; the input lines are not echoed (intentional-differences.md).
+                if (c == 'v') { effects.Add(("__BashVerbose", on)); continue; }
+                if (c == 'o' && k == a.Length - 1 && i + 1 < args.Count && args[i + 1] is "pipefail" or "nounset" or "noclobber" or "errtrace" or "verbose")
                 {
-                    effects.Add((args[i + 1] switch { "pipefail" => "__BashPipefail", "noclobber" => "__BashNoclobber", "errtrace" => "__BashErrtrace", _ => "__BashNounset" }, on));
+                    effects.Add((args[i + 1] switch { "pipefail" => "__BashPipefail", "noclobber" => "__BashNoclobber", "errtrace" => "__BashErrtrace", "verbose" => "__BashVerbose", _ => "__BashNounset" }, on));
                     i++;
                     continue;
                 }
@@ -5760,7 +5762,7 @@ public static partial class PsEmitter
         if (k < literalArgs.Count && literalArgs[k] == "-")
         {
             var rest = cmd.Words.Skip(2 + k).ToList();
-            tail = "$global:__BashXtrace = $false; Set-PSDebug -Off; " + (rest.Count == 0 ? PsBuild.SetStatus(0) : EmitSetPositionals(rest));
+            tail = "$global:__BashXtrace = $false; $global:__BashVerbose = $false; Set-PSDebug -Off; " + (rest.Count == 0 ? PsBuild.SetStatus(0) : EmitSetPositionals(rest));
         }
         else if (k < literalArgs.Count)
             tail = EmitSet(cmd with { Words = cmd.Words.Skip(1 + k).Prepend(cmd.Words[0]).ToImmutableArray() }) ?? PsBuild.SetStatus(0);
@@ -5774,6 +5776,9 @@ public static partial class PsEmitter
         string? specialResult = null;
         var literalArgs = argsOverride ?? cmd.Words.Skip(1).Select(TryGetStaticArgValue).ToList();
         if (argsOverride is null && TryEmitSetLoneDashOrPlus(cmd, literalArgs) is { } lone) return lone;
+        // noexec: nothing after `set -n` runs (and `set +n` can never be reached by a non-interactive shell).
+        if (argsOverride is null && literalArgs is ["-n"] or ["-o", "noexec"]) return PsBuild.NoExecStop;
+        if (argsOverride is null && literalArgs is ["+n"] or ["+o", "noexec"]) return PsBuild.SetStatus(0);
         // `set -o errexit a b c` / `set -u -- x`: leading options, then positional parameters. Apply the
         // options first, then assign the rest exactly as `set -- rest...` would.
         if (argsOverride is null && TrySplitOptionsFromPositionals(literalArgs, out int optEnd, out int posStart))
@@ -5784,7 +5789,7 @@ public static partial class PsEmitter
         }
         // `set -o vi` / `set +o emacs`: option names ps-bash only remembers (for `shopt -po`) go to the shopt table.
         if (argsOverride is null && literalArgs.Count == 2 && literalArgs[0] is "-o" or "+o" && literalArgs[1] is { } remembered
-            && BashOptionNames.Contains(remembered) && remembered is not ("errexit" or "xtrace" or "pipefail" or "noglob" or "nounset" or "noclobber" or "noexec" or "onecmd"))
+            && BashOptionNames.Contains(remembered) && remembered is not ("errexit" or "xtrace" or "pipefail" or "noglob" or "nounset" or "noclobber" or "noexec" or "onecmd" or "verbose"))
             return "Invoke-BashShopt '-o' " + (literalArgs[0] == "-o" ? "'-s'" : "'-u'") + " " + PsBuild.SingleQuote(remembered);
         // errtrace (`set -E` / `set -o errtrace`): the ERR trap also fires inside functions and subshells.
         if (argsOverride is null && (literalArgs.Count == 1 && literalArgs[0] is "-E" or "+E"
@@ -10856,16 +10861,28 @@ public static partial class PsEmitter
         // The guard, not a nested scope: the stage's own `& { }` is the scope, and it must keep its `$input`.
         string Scoped(string inner) => cmd is Command.Subshell or Command.ShFunction || lastpipeStage ? inner : PsBuild.ShellStateGuard(inner);
 
+        // `{ exit 9; } | cat`: `exit` leaves only the stage (a subshell), as in `( exit 9 )`; the stage's `& { }` is
+        // what its scoped `return` returns from. A lastpipe stage runs in the shell itself, and a function body is
+        // not part of the stage.
+        bool ownsExit = !lastpipeStage && cmd is not Command.ShFunction;
+        string Body()
+        {
+            if (!ownsExit) return Emit(cmd);
+            _subshellDepth++;
+            try { return Emit(cmd); }
+            finally { _subshellDepth--; }
+        }
+
         if (isFirstStage)
-            return $"& {{ {Scoped(Emit(cmd))} }}";
+            return $"& {{ {Scoped(Body())} }}";
 
         bool opensScope = cmd is Command.Subshell or Command.BraceGroup or Command.ForIn
                 or Command.ForArith or Command.If or Command.Case
             || (cmd is Command.While loop && !IsWhileRead(loop.Cond, out _, out _));
         if (!opensScope)
-            return $"& {{ {Scoped(Emit(cmd))} }}";
+            return $"& {{ {Scoped(Body())} }}";
 
-        return $"& {{ {PsBuild.StdinScope(WithStdinScope(true, () => Scoped(Emit(cmd))))} }}";
+        return $"& {{ {PsBuild.StdinScope(WithStdinScope(true, () => Scoped(Body())))} }}";
     }
 
     /// <summary>

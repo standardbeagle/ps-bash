@@ -90,7 +90,6 @@ echo 3
 # osh doesn't work because it only checks -n in bin/oil.py?
 ## stdout: 1
 ## status: 0
-## XFAIL ps-bash gap-oils-sh-options sh-options (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### pipefail
@@ -106,7 +105,6 @@ echo $?
 2
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-sh-options sh-options (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### shopt -p prints 'shopt' options
@@ -333,7 +331,6 @@ FALSE
 TRUE
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-sh-options sh-options (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -382,7 +379,6 @@ interactive
 1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-sh-options sh-options (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 

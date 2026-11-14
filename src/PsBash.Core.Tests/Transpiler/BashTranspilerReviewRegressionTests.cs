@@ -1034,10 +1034,59 @@ public class BashTranspilerReviewRegressionTests
     public void Transpile_DollarDash_IncludesXtrace()
         => Assert.Contains("if ($global:__BashXtrace) { $f += 'x' }; $f += 'B'", BashTranspiler.Transpile("echo \"$-\""));
 
+    // Oracle: `set -v; echo $-` is `hvB`, and $SHELLOPTS lists verbose; `set -v` used to be refused as unsupported.
+    [Fact]
+    public void Transpile_SetVerbose_IsTrackedInDollarDashAndShellopts()
+    {
+        Assert.Contains("$global:__BashVerbose = $true", BashTranspiler.Transpile("set -v"));
+        Assert.Contains("$global:__BashVerbose = $false", BashTranspiler.Transpile("set +o verbose"));
+        var dash = BashTranspiler.Transpile("echo \"$-\"");
+        Assert.Contains("if ($global:__BashVerbose) { $f += 'v' }; if ($global:__BashXtrace) { $f += 'x' }", dash);
+        Assert.Contains("if ($global:__BashVerbose) { $o += 'verbose' }", BashTranspiler.Transpile("echo \"$SHELLOPTS\""));
+    }
+
+    // Oracle: `set -n; echo hi` prints nothing, status 0, and no EXIT trap runs; `set +n` is a no-op.
+    [Theory]
+    [InlineData("set -n")]
+    [InlineData("set -o noexec")]
+    public void Transpile_SetNoexec_StopsTheShell(string bash)
+        => Assert.Contains("$global:__BashTrapEXIT = $null; $global:LASTEXITCODE = 0; exit 0", BashTranspiler.Transpile(bash + "; echo hi"));
+
+    // Oracle: `bash -c 'for i in a; do continue 1 x; done; echo st=$?'` prints nothing, status 1 (the error discards
+    // the rest of the -c string); in a script file the next command runs. It used to go on under -c too.
+    [Theory]
+    [InlineData("for i in a; do continue 1 x; done; echo st=$?")]
+    [InlineData("for i in a; do break 1 2; done")]
+    public void Transpile_LoopControlTooManyArgs_EndsADashCShell(string bash)
+        => Assert.Contains("too many arguments' -ErrorAction Continue; $global:LASTEXITCODE = 1; if ($env:PSBASH_DASH_C -eq '1') { $global:LASTEXITCODE = 1; exit 1 }", BashTranspiler.Transpile(bash));
+
+    // Oracle: `echo ${BASHOPTS:+set}` prints set: BASHOPTS lists the shopt options that are on.
+    [Fact]
+    public void Transpile_Bashopts_ReadsTheShoptTable()
+        => Assert.Contains("[PsBash.Cmdlets.InvokeBashShoptCommand]::BashOpts()", BashTranspiler.Transpile("echo \"$BASHOPTS\""));
+
+    // Oracle: `{ exit 9; } | { exit 2; } | { true; }; echo $?` prints 0, and with set -o pipefail 2: each stage is a
+    // subshell, so its exit ends only that stage (it exited the whole shell with 9).
+    [Fact]
+    public void Transpile_ExitInBraceGroupPipeStage_EndsOnlyTheStage()
+    {
+        var ps = BashTranspiler.Transpile("{ exit 9; } | { exit 2; } | { true; }; echo $?");
+        Assert.Contains("$global:LASTEXITCODE = 9; return", ps);
+        Assert.DoesNotContain("exit 9", ps);
+    }
+
     // Oracle: `bash -c 'set -C; echo $-'` is `hBCc`: `c` comes last, and only under -c (the launcher's PSBASH_DASH_C mark).
     [Fact]
     public void Transpile_DollarDash_EndsWithCUnderDashC()
-        => Assert.Contains("if ($global:__BashNoclobber) { $f += 'C' }; if ($global:__BashErrtrace) { $f += 'E' }; if ($env:PSBASH_DASH_C -eq '1') { $f += 'c' }; $f", BashTranspiler.Transpile("echo \"$-\""));
+        => Assert.Contains("if ($global:__BashNoclobber) { $f += 'C' }; if ($global:__BashErrtrace) { $f += 'E' }; if ([PsBash.Cmdlets.InvokeBashShoptCommand]::SetOptionOn('histexpand')) { $f += 'H' }; if ($env:PSBASH_DASH_C -eq '1') { $f += 'c' }; $f", BashTranspiler.Transpile("echo \"$-\""));
+
+    // Oracle: `bash -i -c 'echo $-'` is `himBHc`; `bash -c` has no i/m/H. Interactive = the launcher's PSBASH_DASH_I mark.
+    [Fact]
+    public void Transpile_DollarDash_InteractiveFlags()
+    {
+        var ps = BashTranspiler.Transpile("echo \"$-\"");
+        Assert.Contains("$f += 'h'; if ([PsBash.Cmdlets.InvokeBashShoptCommand]::InteractiveShell) { $f += 'i' }; if ([PsBash.Cmdlets.InvokeBashShoptCommand]::SetOptionOn('monitor')) { $f += 'm' }", ps);
+    }
 
     // Oracle: a bare `$BASH_SOURCE` / `${BASH_SOURCE##*/}` is element 0 of the array (the script file); it read $env:BASH_SOURCE.
     [Theory]
@@ -1054,7 +1103,7 @@ public class BashTranspilerReviewRegressionTests
     [Theory]
     [InlineData("set +", "$global:LASTEXITCODE = 0")]
     [InlineData("set + a b", "$global:BashPositional = @('a', 'b')")]
-    [InlineData("set + -", "$global:__BashXtrace = $false; Set-PSDebug -Off; $global:LASTEXITCODE = 0")]
+    [InlineData("set + -", "$global:__BashXtrace = $false; $global:__BashVerbose = $false; Set-PSDebug -Off; $global:LASTEXITCODE = 0")]
     [InlineData("set - +", "$global:BashPositional = @('+')")]
     [InlineData("set -x - -v", "$global:BashPositional = @('-v')")]
     public void Transpile_SetLonePlus_IsAcceptedLikeSetDash(string bash, string expected)

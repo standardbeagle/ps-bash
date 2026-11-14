@@ -219,6 +219,9 @@ public class ShellArgsTests
     [InlineData(new[] { "-c", "-e", "false; echo ce" }, "set -e")]
     [InlineData(new[] { "-c", "-x", "-u", "true" }, "set -x; set -u")]
     [InlineData(new[] { "-xe", "-c", "true" }, "set -x; set -e")]
+    // Oracle: `bash -v -c 'echo $-'` prints hvBc (-v was "unsupported option").
+    [InlineData(new[] { "-v", "-c", "true" }, "set -v")]
+    [InlineData(new[] { "-xv", "-c", "true" }, "set -x; set -v")]
     public void Parse_SetOptionFlags_AnywhereBeforeTheCommand_JoinThePrelude(string[] argv, string prelude)
     {
         var r = ShellArgs.Parse(argv);
@@ -322,6 +325,16 @@ public class ShellArgsTests
 
         Assert.True(result.Interactive);
         Assert.Equal("echo hi", result.Command);
+    }
+
+    // Oracle: `bash -i -c 'echo $-'` is himBHc and `test -o emacs` is true; `bash -c` has neither. The prelude marks
+    // this shell interactive (first, so a later `-o vi` still wins over the emacs default).
+    [Fact]
+    public void Parse_InteractiveCommand_PreludeMarksTheShellInteractive()
+    {
+        Assert.Equal("shopt -s psbash_interactive; set -x", ShellArgs.Parse(["-i", "-x", "-c", "echo hi"]).Prelude);
+        Assert.Null(ShellArgs.Parse(["-c", "echo hi"]).Prelude);
+        Assert.Null(ShellArgs.Parse(["-i"]).Prelude);
     }
 
     // Regression: Claude Code also invokes ps-bash as `-c -l "cmd"`.

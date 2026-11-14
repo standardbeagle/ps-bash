@@ -82,7 +82,7 @@ public static class BashStateSnapshot
 
     /// <summary>The <c>set</c> options a job runs under. Each is written on or off: an in-process job's runspace is pooled and keeps the last job's.</summary>
     internal static readonly string[] JobOptionGlobals =
-        ["__BashErrexit", "__BashErrtrace", "__BashNounset", "__BashPipefail", "__BashNoclobber", "__BashNoglob"];
+        ["__BashErrexit", "__BashErrtrace", "__BashNounset", "__BashPipefail", "__BashNoclobber", "__BashNoglob", "__BashVerbose"];
 
     /// <summary>
     /// What an in-process job (pooled runspace, no <see cref="BuildPrelude"/>) runs before its body: the parent's

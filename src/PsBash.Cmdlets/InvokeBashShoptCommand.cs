@@ -67,15 +67,35 @@ public sealed class InvokeBashShoptCommand : PSCmdlet
     private static readonly Dictionary<string, string> SetoptGlobals = new(StringComparer.Ordinal)
     {
         ["errexit"] = "__BashErrexit", ["errtrace"] = "__BashErrtrace", ["noclobber"] = "__BashNoclobber", ["noglob"] = "__BashNoglob",
-        ["nounset"] = "__BashNounset", ["pipefail"] = "__BashPipefail", ["xtrace"] = "__BashXtrace",
+        ["nounset"] = "__BashNounset", ["pipefail"] = "__BashPipefail", ["verbose"] = "__BashVerbose", ["xtrace"] = "__BashXtrace",
     };
 
     private static Dictionary<string, bool> NewDefaults()
     {
         var d = new Dictionary<string, bool>(StringComparer.Ordinal);
         foreach (var (name, on) in ShoptTable) d[name] = on;
-        foreach (var (name, on) in SetoptTable) if (!SetoptGlobals.ContainsKey(name)) d["set:" + name] = on;
+        foreach (var (name, on) in SetoptTable)
+            if (!SetoptGlobals.ContainsKey(name) && !InteractiveDefaults.Contains(name)) d["set:" + name] = on;
         return d;
+    }
+
+    // On in an interactive shell (`bash -i -c`) until set otherwise; off in a script. Read when asked.
+    private static readonly HashSet<string> InteractiveDefaults = new(StringComparer.Ordinal) { "emacs", "histexpand", "history", "monitor" };
+
+    /// <summary>
+    /// The launcher's mark for <c>bash -i -c</c>: its prelude runs <c>shopt -s psbash_interactive</c>. The name is not
+    /// in the shopt table (never listed), and the table belongs to this shell, so a child shell starts without it.
+    /// </summary>
+    internal const string InteractiveMark = "psbash_interactive";
+
+    /// <summary>True in an interactive shell (<c>bash -i -c</c>).</summary>
+    public static bool InteractiveShell => Options.TryGetValue("psbash:interactive", out var on) && on;
+
+    /// <summary>A remembered <c>set -o</c> option (not one of the runtime-flag globals): <c>$SHELLOPTS</c>, <c>$-</c>, <c>test -o</c>.</summary>
+    public static bool SetOptionOn(string name)
+    {
+        if (Options.TryGetValue("set:" + name, out var on)) return on;
+        return InteractiveDefaults.Contains(name) && InteractiveShell && !(name == "emacs" && Options.TryGetValue("set:vi", out var vi) && vi);
     }
 
     // Option state belongs to the SHELL SESSION, i.e. the runspace: the host process outlives a `-c`
@@ -90,6 +110,17 @@ public sealed class InvokeBashShoptCommand : PSCmdlet
             : Fallback;
 
     private static readonly Dictionary<string, bool> Fallback = NewDefaults();
+
+    /// <summary>The value of <c>$BASHOPTS</c>: the shopt options currently on, in table (alphabetical) order, colon-joined.</summary>
+    public static string BashOpts()
+    {
+        var options = Options;
+        var on = new List<string>();
+        foreach (var (name, _) in ShoptTable)
+            if (options.TryGetValue(name, out var v) && v) on.Add(name);
+        on.Sort(StringComparer.Ordinal);
+        return string.Join(':', on);
+    }
 
     /// <summary>Current value of a shell option in the calling runspace (false for an unknown name).</summary>
     internal static bool IsEnabled(string name) => Options.TryGetValue(name, out var on) && on;
@@ -181,6 +212,7 @@ public sealed class InvokeBashShoptCommand : PSCmdlet
 
         foreach (var opt in operands)
         {
+            if (opt == InteractiveMark && setMode && !setoptMode) { Options["psbash:interactive"] = true; continue; }
             if (Array.FindIndex(table, t => t.Name == opt) < 0)
             {
                 FileSystemHelpers.WriteBashError(this, $"shopt: {opt}: invalid {(setoptMode ? "option" : "shell option")} name");
@@ -207,7 +239,7 @@ public sealed class InvokeBashShoptCommand : PSCmdlet
     {
         if (!setopt) return Options.TryGetValue(name, out var v) && v;
         if (SetoptGlobals.TryGetValue(name, out var global)) return SessionState.PSVariable.GetValue(global) is true;
-        return Options.TryGetValue("set:" + name, out var w) ? w : false;
+        return SetOptionOn(name);
     }
 
     private void Set(string name, bool on, bool setopt)

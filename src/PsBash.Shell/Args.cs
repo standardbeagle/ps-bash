@@ -21,7 +21,7 @@ public record ShellArgs(
 {
     // Short flags that may be bundled (`-lc`, `-eu`, `-oo errexit noglob`). A bundle holding any other
     // letter stays one word and is reported as an unsupported option before anything runs.
-    private static readonly System.Buffers.SearchValues<char> BundleLetters = System.Buffers.SearchValues.Create("lisceuxnoO");
+    private static readonly System.Buffers.SearchValues<char> BundleLetters = System.Buffers.SearchValues.Create("lisceuxvnoO");
 
     /// <summary>
     /// <c>HISTFILE</c> for an interactive shell that runs a command (<c>bash -i -c 'cmd'</c>): bash sets it to
@@ -33,8 +33,11 @@ public record ShellArgs(
             ? home.TrimEnd('/', '\\') + "/.bash_history"
             : null;
 
+    /// <summary>Hidden shopt name the prelude sets for <c>-i -c</c> (InvokeBashShoptCommand.InteractiveMark).</summary>
+    public const string InteractiveMark = "psbash_interactive";
+
     // `set` options that may also come AFTER `-c` (`bash -c -e 'cmd'`): bash takes the first non-option word as the command.
-    private static bool IsSetOptionFlag(string arg) => arg is "-e" or "-u" or "-x" or "-n";
+    private static bool IsSetOptionFlag(string arg) => arg is "-e" or "-u" or "-x" or "-v" or "-n";
 
     // Long flags that take no value and must not be mistaken for the `-c`
     // command argument when callers pass flags after `-c`.
@@ -172,6 +175,7 @@ public record ShellArgs(
                 case "-e":
                 case "-u":
                 case "-x":
+                case "-v":
                 case "-n":
                     ApplySetOption(expanded[i]);
                     break;
@@ -270,7 +274,11 @@ public record ShellArgs(
 
         // Only a -c string can carry the options; a script or stdin run would silently drop them, so refuse that.
         if (prelude.Count > 0 && command is null)
-            error ??= "-e, -u, -x, -o and -O are only supported together with -c";
+            error ??= "-e, -u, -x, -v, -o and -O are only supported together with -c";
+        // `bash -i -c`: an interactive shell ($- has i, emacs/monitor/history are on). The mark lives in this shell's
+        // option table (never listed by shopt), so a child shell does not inherit it.
+        if (interactive && command is not null)
+            prelude.Insert(0, "shopt -s " + InteractiveMark);
 
         return new ShellArgs(command, interactive, login, stdin, noprofile, unixPaths, scriptPath, scriptArgs, rawPs, showVersion, showHelp, timeout, compactOutput, verbose, error,
             prelude.Count > 0 ? string.Join("; ", prelude) : null, noExec);

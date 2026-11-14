@@ -231,6 +231,8 @@ public sealed class InvokeBashTestCommand : PSCmdlet
             return BashVariableStore.Get(name) is not null && sub is "0" or "@" or "*";
         }
         if (BashVariableStore.Get(operand) is not null) return true;
+        // Shell variables computed on read (PsBuild.TryMapSpecialVar), never stored: always set in bash.
+        if (operand is "SHELLOPTS" or "BASHOPTS") return true;
         // An array or associative array is set when it has elements (`a=(x); [[ -v a ]]`).
         object? whole = SessionState.PSVariable.GetValue(operand);
         if (whole is PSObject w2) whole = w2.BaseObject;
@@ -243,9 +245,9 @@ public sealed class InvokeBashTestCommand : PSCmdlet
         string? flag = name switch
         {
             "nounset" => "__BashNounset", "pipefail" => "__BashPipefail", "noclobber" => "__BashNoclobber",
-            "errexit" => "__BashErrexit", "xtrace" => "__BashXtrace", "noglob" => "__BashNoglob", "errtrace" => "__BashErrtrace", _ => null,
+            "errexit" => "__BashErrexit", "xtrace" => "__BashXtrace", "noglob" => "__BashNoglob", "errtrace" => "__BashErrtrace", "verbose" => "__BashVerbose", _ => null,
         };
-        if (flag is null) return false;
+        if (flag is null) return InvokeBashShoptCommand.SetOptionOn(name); // braceexpand, emacs, vi, ...
         object? v = SessionState.PSVariable.GetValue(flag);
         if (v is PSObject wrapped) v = wrapped.BaseObject;
         return v is bool b && b;

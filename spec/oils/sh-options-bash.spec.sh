@@ -30,7 +30,6 @@ shellopts is set
 bashopts is set
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-sh-options-bash sh-options-bash (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### shopt -s progcomp hostcomplete are stubs (bash-completion)
@@ -88,7 +87,7 @@ $SH -c "echo 2"
 bash: line 5: -c: command not found
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-sh-options-bash sh-options-bash (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-shellopts-export-not-propagated an exported SHELLOPTS is not read by a child shell at startup, so it does not turn on xtrace there
 ## timeout: 10
 ## real-launcher
 
@@ -110,7 +109,7 @@ sh -c 'echo 2'
 2
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-sh-options-bash sh-options-bash (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-shellopts-export-not-propagated an exported SHELLOPTS is not read by a child shell at startup, so it does not turn on xtrace there
 ## timeout: 10
 ## real-launcher
 

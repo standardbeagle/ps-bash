@@ -37,6 +37,5 @@ status=1
 fail
 ## stdout:
 ## status: 127
-## XFAIL ps-bash gap-oils-arg-parse arg-parse (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher

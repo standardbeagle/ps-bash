@@ -1,0 +1,19 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 214
+stdout-length: 246
+stderr-length: 0
+==== SCRIPT ====
+set -o vi; echo $SHELLOPTS; test -o vi && echo vi; test -o emacs || echo noemacs; test -o braceexpand && echo brace; set -v; echo "[$-]"; set +v; echo $BASHOPTS; shopt -s nullglob; echo $BASHOPTS | grep -c nullglob
+==== STDOUT ====
+braceexpand:hashall:interactive-comments:vi
+vi
+noemacs
+brace
+[hvBc]
+checkwinsize:cmdhist:complete_fullquote:extquote:force_fignore:globasciiranges:globskipdots:hostcomplete:interactive_comments:patsub_replacement:progcomp:promptvars:sourcepath
+1
+
+==== STDERR ====
+

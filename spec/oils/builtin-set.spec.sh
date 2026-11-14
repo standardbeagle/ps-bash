@@ -138,7 +138,6 @@ a b c
 x - y z
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-set builtin-set (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### set - + and + -
@@ -232,7 +231,7 @@ before
 line2
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-set builtin-set (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-interactive-nounset-aborts-line an unbound variable under set -u ends a -i -c shell; bash aborts only the current line and runs the next
 ## timeout: 10
 ## real-launcher
 
@@ -308,7 +307,6 @@ xtrace-on
 plus x y
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-set builtin-set (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 

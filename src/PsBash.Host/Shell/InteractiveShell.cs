@@ -38,6 +38,12 @@ public static class InteractiveShell
     private static readonly List<string> _sessionHistory = new();
 
     /// <summary>
+    /// Run once in the REPL's runspace at startup: the same mark the launcher's <c>bash -i -c</c> prelude sets
+    /// (<c>shopt -s psbash_interactive</c>, see <c>InvokeBashShoptCommand.InteractiveShell</c>).
+    /// </summary>
+    internal const string MarkInteractiveCommand = "[void](Invoke-BashShopt '-s' 'psbash_interactive')";
+
+    /// <summary>
     /// Run the interactive REPL against an externally-provided worker (the
     /// SdkWorker owned by ps-bash-host). The caller owns the worker lifetime;
     /// this method will not dispose or respawn it. Ctrl+C cancels the in-flight
@@ -151,6 +157,10 @@ public static class InteractiveShell
         var ready = Task.Run(async () =>
         {
             var w = await workerTask.ConfigureAwait(false);
+            // Mark this runspace as an interactive shell ($- has i, set -n is ignored) before the rc
+            // runs, so an rc's `case $- in *i*)` guard sees it. A child shell has its own runspace.
+            try { await w.ExecuteAsync(MarkInteractiveCommand, readinessCts.Token).ConfigureAwait(false); }
+            catch (OperationCanceledException) { /* Ctrl-C during startup */ }
             if (!noProfile)
             {
                 try { await SourceRcFileAsync(w, readinessCts); }

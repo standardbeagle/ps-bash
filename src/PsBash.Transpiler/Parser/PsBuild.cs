@@ -339,6 +339,20 @@ public static class PsBuild
     public static string SetStatus(int status) => "$global:LASTEXITCODE = " + status;
 
     /// <summary>
+    /// A builtin usage error that discards the rest of the shell's input (<c>break 1 2</c> "too many arguments"): under
+    /// <c>bash -c</c> that is the whole command string, so the shell ends with status 1; a script goes on with its next
+    /// command.
+    /// </summary>
+    public const string DashCInputDiscard = "if ($env:PSBASH_DASH_C -eq '1') { $global:LASTEXITCODE = 1; exit 1 }";
+
+    /// <summary>
+    /// <c>set -n</c> / <c>set -o noexec</c>: a non-interactive shell reads on but runs nothing more, so the (sub)shell
+    /// ends here with status 0 and its EXIT trap does not fire. An interactive shell ignores the option.
+    /// </summary>
+    public const string NoExecStop =
+        "if (-not [PsBash.Cmdlets.InvokeBashShoptCommand]::InteractiveShell) { $global:__BashTrapEXIT = $null; $global:LASTEXITCODE = 0; exit 0 } else { $global:LASTEXITCODE = 0 }";
+
+    /// <summary>
     /// The status <c>exit N</c> leaves with: the low 8 bits of N, as bash keeps them (<c>exit 256</c> is 0, <c>exit 257</c>
     /// is 1, <c>exit -2</c> is 254). A Windows process status is 32 bits, so <c>exit 256</c> reached the caller as 256.
     /// A value that is not a number is passed on unchanged.
@@ -543,15 +557,22 @@ public static class PsBuild
     /// <summary>The value of <c>$-</c>: the single-letter options currently on, in bash's order.</summary>
     public const string ShellFlagsExpr =
         "$f = ''; if ($global:__BashErrexit) { $f += 'e' }; if ($global:__BashNoglob) { $f += 'f' }; $f += 'h'; "
-        + "if ($global:__BashNounset) { $f += 'u' }; if ($global:__BashXtrace) { $f += 'x' }; $f += 'B'; if ($global:__BashNoclobber) { $f += 'C' }; if ($global:__BashErrtrace) { $f += 'E' }; "
+        // `bash -i -c 'echo $-'` is `himBHc`: interactive, with monitor and histexpand on by default.
+        + "if ([PsBash.Cmdlets.InvokeBashShoptCommand]::InteractiveShell) { $f += 'i' }; if ([PsBash.Cmdlets.InvokeBashShoptCommand]::SetOptionOn('monitor')) { $f += 'm' }; "
+        + "if ($global:__BashNounset) { $f += 'u' }; if ($global:__BashVerbose) { $f += 'v' }; if ($global:__BashXtrace) { $f += 'x' }; $f += 'B'; if ($global:__BashNoclobber) { $f += 'C' }; if ($global:__BashErrtrace) { $f += 'E' }; "
+        + "if ([PsBash.Cmdlets.InvokeBashShoptCommand]::SetOptionOn('histexpand')) { $f += 'H' }; "
         // `c` under `bash -c` (last, as in bash's `hBCc`): the launcher's PSBASH_DASH_C mark, never inherited by a nested shell.
         + "if ($env:PSBASH_DASH_C -eq '1') { $f += 'c' }; $f";
 
     /// <summary>The value of <c>$SHELLOPTS</c>: the <c>set -o</c> options currently on, alphabetical, colon-joined.</summary>
     public const string ShellOptsExpr =
-        "$o = @('braceexpand'); if ($global:__BashErrexit) { $o += 'errexit' }; if ($global:__BashErrtrace) { $o += 'errtrace' }; $o += 'hashall'; $o += 'interactive-comments'; "
+        "$o = @('braceexpand'); if ([PsBash.Cmdlets.InvokeBashShoptCommand]::SetOptionOn('emacs')) { $o += 'emacs' }; "
+        + "if ($global:__BashErrexit) { $o += 'errexit' }; if ($global:__BashErrtrace) { $o += 'errtrace' }; $o += 'hashall'; "
+        + "foreach ($__psbOpt in 'histexpand', 'history') { if ([PsBash.Cmdlets.InvokeBashShoptCommand]::SetOptionOn($__psbOpt)) { $o += $__psbOpt } }; $o += 'interactive-comments'; "
+        + "if ([PsBash.Cmdlets.InvokeBashShoptCommand]::SetOptionOn('monitor')) { $o += 'monitor' }; "
         + "if ($global:__BashNoclobber) { $o += 'noclobber' }; if ($global:__BashNoglob) { $o += 'noglob' }; "
-        + "if ($global:__BashNounset) { $o += 'nounset' }; if ($global:__BashPipefail) { $o += 'pipefail' }; "
+        + "if ($global:__BashNounset) { $o += 'nounset' }; if ($global:__BashPipefail) { $o += 'pipefail' }; if ($global:__BashVerbose) { $o += 'verbose' }; "
+        + "if ([PsBash.Cmdlets.InvokeBashShoptCommand]::SetOptionOn('vi')) { $o += 'vi' }; "
         + "if ($global:__BashXtrace) { $o += 'xtrace' }; $o -join ':'";
 
     /// <summary>Source line of the statement being emitted; the ERR trap reads it as <c>$LINENO</c>.</summary>
@@ -1204,6 +1225,8 @@ public static class PsBuild
                 return "$PID";
             case "SHELLOPTS":
                 return "$(" + ShellOptsExpr + ")";
+            case "BASHOPTS":
+                return "$([PsBash.Cmdlets.InvokeBashShoptCommand]::BashOpts())";
             case "EPOCHSECONDS":
                 return "$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())";
             case "EPOCHREALTIME":
