@@ -26,7 +26,7 @@ readonly "$binding"
 echo $const
 ## stdout: ~/src
 ## status: 0
-## XFAIL ps-bash gap-oils-tilde tilde (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-dynamic-assignment-tilde readonly "$binding" re-parses const=~/src through eval, so the ~ expands
 ## timeout: 10
 
 #### No tilde expansion in word that looks like assignment but isn't
@@ -77,7 +77,7 @@ echo ${x//~/~root}
 [/root]
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-tilde tilde (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash platform-windows-tilde-user ~root stays literal on Windows: no passwd database to find another user's home (intentional-differences.md, Platform: ~user)
 ## timeout: 10
 
 #### x=foo:~ has tilde expansion
@@ -128,7 +128,7 @@ echo $x
 # it's easier to agree with yash.  bash disagrees in a different way
 ## stdout: /home/bar:/home/bar:/home/bar
 ## status: 0
-## XFAIL ps-bash gap-oils-tilde tilde (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-tilde-colon-in-operator-word in an assignment, a ~ after : inside ${undef-...} is not expanded
 ## timeout: 10
 
 #### strict tilde
@@ -159,7 +159,7 @@ xx=/home/bar
 xx=/root:/home/bar:/home/bar
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-tilde tilde (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash platform-windows-tilde-user ~root stays literal on Windows: no passwd database to find another user's home (intentional-differences.md, Platform: ~user)
 ## timeout: 10
 
 #### a[x]=foo:~ has tilde expansion

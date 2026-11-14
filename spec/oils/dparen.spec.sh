@@ -58,7 +58,6 @@ keys = K
 values = 42
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-dparen dparen (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### BUG: (( V = A[K] )) doesn't retrieve the right value
@@ -105,7 +104,6 @@ A['x']=42
 echo $x ${A['y']}
 ## stdout: 42
 ## status: 0
-## XFAIL ps-bash gap-oils-dparen dparen (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Assigning whole raray (( b = a ))
@@ -129,7 +127,6 @@ declare -A A=(['foo']=bar ['spam']=42)
 echo $x
 ## stdout: 42
 ## status: 0
-## XFAIL ps-bash gap-oils-dparen dparen (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Example of incrementing associative array entry with var key (ble.sh)

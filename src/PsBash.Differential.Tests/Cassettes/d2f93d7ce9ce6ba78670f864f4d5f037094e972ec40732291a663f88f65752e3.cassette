@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 144
+stdout-length: 8
+stderr-length: 0
+==== SCRIPT ====
+declare -A A=(['foo']=bar ['spam']=42 ['a b']=7); k=spam
+(( x = A['spam'] )); (( y = A["$k"] + A['a b'] )); (( A['n'] = 3 )); echo $x $y ${A[n]}
+==== STDOUT ====
+42 49 3
+
+==== STDERR ====
+

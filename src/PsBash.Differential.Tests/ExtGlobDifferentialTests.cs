@@ -66,6 +66,17 @@ public class ExtGlobDifferentialTests
             + "[[ 'a|b' == @(\"a|b\"|z) ]] && echo 8T; [[ xy == x@($(echo y)|q) ]] && echo 9T; [[ x{1,2} == x{1,2} ]] && echo 10T\n"
             + "[[ x\\{1,2} == 'x{1,2}' ]] && echo 11T; [ x\\{1,2} = 'x{1,2}' ] && echo 12T");
 
+    /// <summary>
+    /// Pathname extglobs: a quoted arm is literal text whose quotes are removed, so an unmatched or noglob word prints
+    /// `@(x|*||)` (it kept the quote characters), and an extglob in an unquoted expansion's value globs.
+    /// </summary>
+    [SkippableFact]
+    public Task ExtGlob_QuotedArmsInFileNames_AndInAnExpansionValue()
+        => Eq("shopt -s extglob\nd=$(mktemp -d); cd \"$d\"; touch foo.py bar.py spam.py\n"
+            + "echo ${undef:-@(foo|bar).py}; echo ${undef:-*.py}; echo @(foo|'spam').py\n"
+            + "echo @(__nope__*|'*'|'?'|'|'|\"[x]\"|\\*); set -o noglob; echo @(*|'*'); set +o noglob\n"
+            + "cd /; rm -rf \"$d\"");
+
     [SkippableFact]
     public Task ExtGlob_BangAtCommandPositionIsStillNegation()
         => Eq("!(false); echo \"rc=$?\"; if !(false); then echo neg; fi; x=1; [[ $x == !(2) ]] && echo pat");

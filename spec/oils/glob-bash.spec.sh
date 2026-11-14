@@ -81,5 +81,5 @@ echo *.ZZ
 echo status=$? # bash executes this
 ## stdout: status=1
 ## status: 0
-## XFAIL ps-bash gap-oils-glob-bash glob-bash (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-failglob-aborts-line a failglob error does not drop the rest of the input line as bash does
 ## timeout: 10

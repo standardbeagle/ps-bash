@@ -142,15 +142,23 @@ public sealed class InvokeBashArithmeticCommand : PSCmdlet
         // An empty or blank value is 0 (x=' '; $((x)) is 0 in bash).
         var trimmed = raw?.Trim();
         if (string.IsNullOrEmpty(trimmed)) return 0;
-        if (long.TryParse(trimmed, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var direct))
+        // A leading 0 is octal (x=010 is 8, x=08 is an error), so only a plain decimal is read directly.
+        if (!HasLeadingZero(trimmed)
+            && long.TryParse(trimmed, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var direct))
             return direct;
 
-        // Non-numeric: evaluate the value itself as an arithmetic expression. A value that is not one (x='a b',
+        // Otherwise evaluate the value itself as an arithmetic expression. A value that is not one (x='a b',
         // x='a[<(echo)]=1') fails the whole expansion, as in bash ("syntax error in expression", status 1); it read as 0.
         return BashArith.Evaluate(trimmed,
             n => ReadVar(n, depth + 1),
             WriteVar,
             ReadRawVar);
+    }
+
+    private static bool HasLeadingZero(string s)
+    {
+        int i = s.Length > 0 && s[0] is '-' or '+' ? 1 : 0;
+        return s.Length > i + 1 && s[i] == '0';
     }
 
     /// <summary>`name[subscript]` as the evaluator passes an array element.</summary>
@@ -168,8 +176,14 @@ public sealed class InvokeBashArithmeticCommand : PSCmdlet
     }
 
     // An associative array's key: the subscript text with `$k` / `${k}` replaced by the variable's value.
-    private string ExpandKey(string subscript) =>
-        System.Text.RegularExpressions.Regex.Replace(subscript.Trim(), @"\$\{?(\w+)\}?", m => ReadRawVar(m.Groups[1].Value) ?? "");
+    // A quoted key drops its quotes (`(( x = A['spam'] ))` reads key spam); a single-quoted one is not expanded.
+    private string ExpandKey(string subscript)
+    {
+        string key = subscript.Trim();
+        if (key.Length >= 2 && key[0] == '\'' && key[^1] == '\'' && key.IndexOf('\'', 1) == key.Length - 1) return key[1..^1];
+        if (key.Length >= 2 && key[0] == '"' && key[^1] == '"' && key.IndexOf('"', 1) == key.Length - 1) key = key[1..^1];
+        return System.Text.RegularExpressions.Regex.Replace(key, @"\$\{?(\w+)\}?", m => ReadRawVar(m.Groups[1].Value) ?? "");
+    }
 
     // An indexed array's subscript is itself an arithmetic expression; negative counts from the end.
     private long ElementIndex(string subscript, int count)

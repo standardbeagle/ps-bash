@@ -24,6 +24,10 @@ internal static class DoubleBracketGrammar
 
     private static bool Structural(string? t) => t is "&&" or "||" or ")";
 
+    /// <summary>An unquoted <c>&lt;</c>, <c>&gt;</c> or <c>(</c> is an operator token, never an operand: <c>[[ -f &lt; ]]</c>
+    /// and <c>[[ &lt; ]]</c> are syntax errors (bash 5.2), while <c>[[ -n '&lt;' ]]</c> tests the text.</summary>
+    private static bool OperatorToken(string? t) => t is "<" or ">" or "(";
+
     private static bool Or(IReadOnlyList<string?> t, ref int i)
     {
         if (!And(t, ref i)) return false;
@@ -56,7 +60,7 @@ internal static class DoubleBracketGrammar
             i++;
             return true;
         }
-        if (cur is not null && Unary.Contains(cur) && i + 1 < t.Count && !Structural(t[i + 1]))
+        if (cur is not null && Unary.Contains(cur) && i + 1 < t.Count && !Structural(t[i + 1]) && !OperatorToken(t[i + 1]))
         {
             i += 2;
             return true;
@@ -66,7 +70,7 @@ internal static class DoubleBracketGrammar
         // &&, ||, ) and a symbolic binary operator cannot start an operand.
         // A lone operator word with nothing after it (`[[ = ]]`, `[[ == ]]`) is a one-word string test (true).
         bool loneWord = i + 1 >= t.Count || Structural(t[i + 1]);
-        if (Structural(cur) || (!loneWord && cur is "==" or "!=" or "=~" or "<" or ">")) return false;
+        if (Structural(cur) || OperatorToken(cur) || (!loneWord && cur is "==" or "!=" or "=~")) return false;
         i++; // operand word
         if (i < t.Count && t[i] is { } op && Binary.Contains(op))
         {

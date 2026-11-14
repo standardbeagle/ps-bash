@@ -1,0 +1,31 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 339
+stdout-length: 35
+stderr-length: 0
+==== SCRIPT ====
+x='1 3'
+{ echo $((x)); } 2>/dev/null
+echo st=$?
+{ (( x )); } 2>/dev/null; echo st=$?
+s='12 34'
+{ echo $(( s[0] )); } 2>/dev/null
+echo st=$?
+a=('1 3' 5); b=('1 3' 5)
+{ (( a == b )); } 2>/dev/null; echo st=$?
+o=010; echo $((o + 1)); e=08
+{ echo $((e)); } 2>/dev/null
+echo st=$?; n=' -7 '; echo $((n * 2)); z=''; w=' '; echo $((z)) $((w + 1))
+==== STDOUT ====
+st=1
+st=1
+st=1
+st=1
+9
+st=1
+-14
+0 1
+
+==== STDERR ====
+

@@ -18,7 +18,6 @@ GLOBIGNORE=*.txt
 echo *.* foo/*.*
 ## stdout: one.md foo/two.md foo/two.txt
 ## status: 0
-## XFAIL ps-bash gap-oils-globignore globignore (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Ignore ?.txt
@@ -85,7 +84,7 @@ D a b c d
 a b
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-globignore globignore (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash platform-windows-filenames Windows file names cannot hold " * ? | < > :, lose a trailing dot, and are case-insensitive (intentional-differences.md, Platform: file names)
 ## timeout: 10
 
 #### Ignore globs with char classes like [[:alnum:]]
@@ -106,7 +105,6 @@ echo *.*
 has space.docx pyproject.toml
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-globignore globignore (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Ignore *
@@ -153,7 +151,6 @@ echo .* | sort
 . .. .env
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-globignore globignore (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Quoting GLOBIGNORE

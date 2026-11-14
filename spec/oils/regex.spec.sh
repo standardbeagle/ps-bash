@@ -152,7 +152,6 @@ true
 echo status=$?
 ## stdout: status=2
 ## status: 0
-## XFAIL ps-bash gap-oils-regex regex (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Fatal error inside [[ =~ ]]
@@ -219,7 +218,6 @@ status=0
 [[ '$PA' =~ ^(\$\{?)([A-Za-z0-9_]*)$ ]] && argv.py "${BASH_REMATCH[@]}"
 ## stdout:
 ## status: 127
-## XFAIL ps-bash gap-oils-regex regex (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Escaped { stored in variable first
@@ -489,7 +487,6 @@ angle=2
 newline=2
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-regex regex (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -525,7 +522,6 @@ dollar-dq
 dollar-dq=0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-regex regex (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 

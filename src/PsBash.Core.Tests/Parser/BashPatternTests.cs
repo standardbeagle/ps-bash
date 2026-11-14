@@ -78,6 +78,22 @@ public class BashPatternTests
         Assert.Throws<ParseException>(() => BashPattern.ToAnchoredRegex(pattern));
     }
 
+    /// <summary>A GLOBIGNORE pattern matches with FNM_PATHNAME: <c>*</c>, <c>?</c> and a bracket stop at <c>/</c>,
+    /// but a <c>*</c> that ends the pattern takes the rest (bash 5.2: GLOBIGNORE=*.txt keeps foo/two.txt, f* drops it).</summary>
+    [Theory]
+    [InlineData("foo/two.txt", "*.txt", false)]
+    [InlineData("one.txt", "*.txt", true)]
+    [InlineData("foo/two.md", "f*", true)]
+    [InlineData("foo/two.md", "*o*", true)]
+    [InlineData("foo/two.md", "*d", false)]
+    [InlineData("foo/two.md", "*/*.md", true)]
+    [InlineData("foo/two.md", "?oo/*", true)]
+    [InlineData("foo/two.md", "foo?two.md", false)]
+    [InlineData("foo/two.md", "foo[/]two.md", false)]
+    [InlineData("foo/two.md", "*[d]", false)]
+    public void ToAnchoredRegex_Pathname_SlashIsOnlyCrossedByATrailingStar(string text, string pattern, bool expected)
+        => Assert.Equal(expected, Regex.IsMatch(text, BashPattern.ToAnchoredRegex(pattern, honorQuotes: false, pathname: true)));
+
     [Fact]
     public void ToRegex_UnterminatedList_IsLiteral()
         => Assert.Matches(new Regex(BashPattern.ToAnchoredRegex("@(a")), "@(a");

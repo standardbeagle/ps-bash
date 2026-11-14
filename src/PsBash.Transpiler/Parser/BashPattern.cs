@@ -45,9 +45,11 @@ public static class BashPattern
     }
 
     /// <summary><c>(?s)^(?:body)\z</c>: a whole-string match, <c>.</c> spanning newlines as bash's
-    /// <c>*</c> / <c>?</c> do.</summary>
-    public static string ToAnchoredRegex(string raw, bool honorQuotes = true)
-        => "(?s)^(?:" + ToRegex(raw, lazy: false, honorQuotes) + ")\\z";
+    /// <c>*</c> / <c>?</c> do. <paramref name="pathname"/> is bash's FNM_PATHNAME (a <c>GLOBIGNORE</c> pattern):
+    /// <c>?</c>, a bracket and a <c>*</c> do not match <c>/</c>, except a <c>*</c> that ends the pattern, which
+    /// matches the rest (oracle: <c>*.txt</c> keeps <c>foo/two.txt</c>, <c>f*</c> drops it).</summary>
+    public static string ToAnchoredRegex(string raw, bool honorQuotes = true, bool pathname = false)
+        => "(?s)^(?:" + new Converter(raw, false, honorQuotes, pathname).Whole() + ")\\z";
 
     /// <summary>The unanchored regex body for <paramref name="raw"/>. <paramref name="lazy"/> makes
     /// <c>*</c> shortest-first (the <c>${v#pat}</c> / <c>${v%pat}</c> shortest-match forms).</summary>
@@ -59,9 +61,15 @@ public static class BashPattern
         return body;
     }
 
-    private sealed class Converter(string raw, bool lazy, bool honorQuotes)
+    private sealed class Converter(string raw, bool lazy, bool honorQuotes, bool pathname = false)
     {
         private int _groups;
+
+        public string Whole()
+        {
+            int pos = 0;
+            return Sequence(ref pos, inList: false);
+        }
 
         // A pattern sequence up to end of input, or — inside an extglob list — up to the `|` or
         // `)` that ends this item (left unconsumed for the caller).
@@ -78,9 +86,14 @@ public static class BashPattern
                     sb.Append(eg);
                     continue;
                 }
-                if (c == '*') { sb.Append(lazy ? ".*?" : ".*"); pos++; continue; }
-                if (c == '?') { sb.Append('.'); pos++; continue; }
-                if (c == '[' && TryBracket(ref pos, out var cls)) { sb.Append(cls); continue; }
+                if (c == '*')
+                {
+                    sb.Append(pathname && pos + 1 < raw.Length ? "[^/]*" : lazy ? ".*?" : ".*");
+                    pos++;
+                    continue;
+                }
+                if (c == '?') { sb.Append(pathname ? "[^/]" : "."); pos++; continue; }
+                if (c == '[' && TryBracket(ref pos, out var cls)) { sb.Append(pathname ? "(?!/)" + cls : cls); continue; }
                 if (c == '\\')
                 {
                     if (pos + 1 < raw.Length) { sb.Append(Regex.Escape(raw[pos + 1].ToString())); pos += 2; }

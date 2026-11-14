@@ -240,7 +240,6 @@ echo -{\$,\[,\]}-
 echo {{a,b}
 ## stdout: {a {b
 ## status: 0
-## XFAIL ps-bash gap-oils-brace-expansion brace-expansion (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### quoted { in expansion
@@ -378,7 +377,7 @@ done
 == /root
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-brace-expansion brace-expansion (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-tilde-before-brace-expansion ~{/src,root} takes { as part of the tilde prefix instead of brace-expanding first (~root would also need platform-windows-tilde-user)
 ## timeout: 10
 
 #### Tilde expansion come before var expansion
@@ -471,7 +470,7 @@ echo -{z..A..2}-
 # This is exposed a weird bash bug!!!
 ## stdout:
 ## status: 1
-## XFAIL ps-bash gap-oils-brace-expansion brace-expansion (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-brace-char-range-backtick bash expands {z..A} (it contains a backtick) and fails at run time with status 1; ps-bash rejects it at parse time with status 2
 ## timeout: 10
 ## real-launcher
 

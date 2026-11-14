@@ -66,6 +66,31 @@ public class BashGlobTests : IClassFixture<SharedPwshFixture>, IDisposable
     public void Expand_DotGlobIncludesHiddenNamesButNeverDotOrDotDot() =>
         Assert.Equal(".hid|Zed|apple|sub|x|y.txt", Glob("*", dotGlob: true));
 
+    /// <summary><c>shopt -u globskipdots</c>: a component that starts with a literal dot also matches <c>.</c> and
+    /// <c>..</c>, sorted first (bash 5.2: <c>echo .*</c> prints <c>. .. .hid</c>); <c>*</c> still never does.</summary>
+    [Fact]
+    public void Expand_GlobSkipDotsOff_DotPatternMatchesDotAndDotDot()
+    {
+        string G(string p, bool dot = false) => string.Join("|", BashGlob.Expand(p, _dir, dot, skipDots: false));
+        Assert.Equal(".|..|.hid", G(".*"));
+        Assert.Equal("..", G(".?"));
+        Assert.Equal("sub/.|sub/..|sub/.dot", G("sub/.*"));
+        Assert.Equal(".hid|Zed|apple|sub|x|y.txt", G("*", dot: true));
+        Assert.Equal(".hid", Glob(".*"));                     // on (the default): never
+    }
+
+    /// <summary>GLOBIGNORE splits at <c>:</c> but not inside a bracket expression (<c>[[:alnum:]]*</c> is one pattern).</summary>
+    [Theory]
+    [InlineData("[[:alnum:]]*", 0, 10)]
+    [InlineData("[![:alnum:]]*:x", 0, 11)]
+    [InlineData("[]:]x", 0, 3)]
+    [InlineData("[!]a]", 0, 4)]
+    [InlineData("[a\\]]", 0, 4)]
+    [InlineData("[abc", 0, -1)]
+    [InlineData("a:[b]", 2, 4)]
+    public void BracketEnd_SkipsClassNamesAndALeadingBracket(string text, int open, int expected) =>
+        Assert.Equal(expected, BashGlob.BracketEnd(text, open));
+
     [Fact]
     public void Expand_HiddenNameNeedsALiteralLeadingDotInThePattern()
     {

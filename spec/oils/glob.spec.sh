@@ -27,7 +27,7 @@ touch _tmp/\"quoted.py\"
 echo _tmp/\"*.py\"
 ## stdout: _tmp/"quoted.py"
 ## status: 0
-## XFAIL ps-bash gap-oils-glob glob (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash platform-windows-filenames Windows file names cannot hold " * ? | < > :, lose a trailing dot, and are case-insensitive (intentional-differences.md, Platform: file names)
 ## timeout: 10
 
 #### glob escaped
@@ -45,7 +45,7 @@ touch _tmp/foo.-
 echo _tmp/*.[[:punct:]] _tmp/*.[[:punct\:]]
 ## stdout: _tmp/foo.- _tmp/foo.-
 ## status: 0
-## XFAIL ps-bash gap-oils-glob glob (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-glob-escaped-class-name a \: inside a bracket class name ([[:punct\:]]) is not read as the class [:punct:]
 ## timeout: 10
 
 #### Glob after var manipulation
@@ -289,6 +289,5 @@ shopt -u globskipdots
 echo hi .*
 ## stdout: hi . ..
 ## status: 0
-## XFAIL ps-bash gap-oils-glob glob (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher

@@ -31,7 +31,7 @@ touch c/subdir/leaf.md
 echo {**/*.*,} | sort | sed 's/[[:space:]]*$//'
 ## stdout: c/subdir/leaf.md
 ## status: 0
-## XFAIL ps-bash gap-oils-globstar globstar (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-globstar-in-brace-expansion a glob inside a brace expansion ({**/*.*,}) is not pathname-expanded
 ## timeout: 10
 
 #### ** behaves like * if adjacent to anything other than /

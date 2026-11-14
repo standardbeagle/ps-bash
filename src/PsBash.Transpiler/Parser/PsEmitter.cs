@@ -1226,7 +1226,13 @@ public static partial class PsEmitter
             }
 
             sb.Append(" }");
-            string loop = ApplyCompoundRedirects(sb.ToString() + "; " + PsBuild.ZeroIterationStatus(IterVar(depth)), forIn.Redirects);
+            string body = sb.ToString();
+            // A list that globs can fail (failglob): then the loop's status is 1, not the zero-iteration 0.
+            bool globs = body.Contains("ConvertTo-BashGlob", StringComparison.Ordinal) || body.Contains("ConvertTo-BashWords", StringComparison.Ordinal);
+            string loop = ApplyCompoundRedirects(
+                (globs ? PsBuild.FailGlobReset : "") + body + "; "
+                + (globs ? PsBuild.ZeroIterationStatusAfterGlob(IterVar(depth)) : PsBuild.ZeroIterationStatus(IterVar(depth))),
+                forIn.Redirects);
             // The PowerShell loop variable outlives the loop with its last value, and arithmetic reads a PowerShell
             // variable before the shell variable: `for i in 1 2 3; do :; done; i=0; ...$((i+1))` then counted from 3.
             // The shell variable (`$env:`) already holds the last value, so drop the lexical one. A name the
@@ -3258,6 +3264,8 @@ public static partial class PsEmitter
                     : TryBuildRegexPattern(words[2], out var builtPattern)
                         ? builtPattern
                         : $"'{SqEsc(StripQuotes(EmitWord(words[2])))}'";
+                // POSIX ERE -> .NET: `{,n}`, classes in a run-time value, and a stray `{` (a regcomp error, status 2).
+                patExpr = PsBuild.EreRegex(patExpr);
                 // =~ is case-sensitive (PowerShell's -match is not) unless `shopt -s nocasematch`.
                 string matchExpr = $"$(if ([PsBash.Cmdlets.BashPatternMatch]::NoCase) {{ {lhs} -match {patExpr} }} else {{ {lhs} -cmatch {patExpr} }})";
                 // Bash's `=~` also fills BASH_REMATCH with the whole match and each
@@ -3502,8 +3510,8 @@ public static partial class PsEmitter
             {
                 case WordPart.Literal or WordPart.GlobPart:
                     break;
-                case WordPart.SingleQuoted or WordPart.EscapedLiteral or WordPart.DoubleQuoted
-                    or WordPart.SimpleVarSub or WordPart.BracedVarSub:
+                case WordPart.SingleQuoted or WordPart.EscapedLiteral or WordPart.DoubleQuoted or WordPart.AnsiCQuoted
+                    or WordPart.SimpleVarSub or WordPart.BracedVarSub or WordPart.TildeSub:
                     needsBuilder = true;
                     break;
                 default:
@@ -3538,9 +3546,19 @@ public static partial class PsEmitter
                 case WordPart.EscapedLiteral el:
                     pieces.Add(PsBuild.SingleQuote(System.Text.RegularExpressions.Regex.Escape(el.Value)));
                     break;
+                case WordPart.AnsiCQuoted aq: // `$'|'` matches a literal |
+                    pieces.Add(PsBuild.SingleQuote(System.Text.RegularExpressions.Regex.Escape(ExpandAnsiCEscapes(aq.Value))));
+                    break;
                 case WordPart.DoubleQuoted dq:
                     if (dq.Parts.IsDefaultOrEmpty) break;
                     pieces.Add("[regex]::Escape([string](" + EmitWord(new CompoundWord(ImmutableArray.Create<WordPart>(dq))) + "))");
+                    break;
+                case WordPart.TildeSub ts:
+                    // `[[ $HOME =~ ~ ]]`: the tilde expands to the home directory, matched as text (HOME='^a$' matches itself).
+                    pieces.Add(ts.User is null or "+" or "-"
+                        ? "[regex]::Escape([string]" + EmitWordPart(ts) + ")"
+                        : PsBuild.SingleQuote(System.Text.RegularExpressions.Regex.Escape("~" + ts.User)));
+                    if (ts.SlashConsumed) pieces.Add("'/'");
                     break;
                 default: // an unquoted expansion: its VALUE is regex text
                     pieces.Add("[string](" + EmitWord(new CompoundWord(ImmutableArray.Create(part))) + ")");
@@ -3738,6 +3756,7 @@ public static partial class PsEmitter
             else if (cmd.Pairs.Length > 0 && cmd.Pairs[^1].ArrayValue is not null) text += "; $global:BashLastArg = " + PsBuild.SingleQuote(cmd.Pairs[^1].Name);
         }
         if (text.Contains("circular name reference", StringComparison.Ordinal)) return text; // the refusal set status 1
+        if (text.Contains(": bad array subscript'", StringComparison.Ordinal)) return text;   // so did this one
         if (NeedsArrayKindGuard(cmd)) return text; // each declaration sets its own status (1 when the kind change is refused)
         // `x=$((1/0))`: the failed expansion keeps status 1, and its mark must not abandon a LATER command.
         if (text.Contains("Invoke-BashArith", StringComparison.Ordinal)) return text + "; " + PsBuild.ClearExpansionFailed;
@@ -3849,6 +3868,15 @@ public static partial class PsEmitter
             if (!cmd.IsLocal && !cmd.IsExport && _namerefs is { Count: > 0 } && _namerefs.ContainsKey(pair.Name) && _namerefs.ContainsKey(ResolveNameref(pair.Name)))
             {
                 sb.Append("Write-Error ").Append(PsBuild.SingleQuote($"ps-bash: {pair.Name}: circular name reference"))
+                  .Append(" -ErrorAction Continue; ").Append(PsBuild.SetStatus(1));
+                continue;
+            }
+            // `a[]=42`: an empty subscript is bash's 'bad array subscript' (status 1, and like a readonly write the
+            // rest of the input line is dropped); it wrote element 0.
+            if (pair.Name.EndsWith("[]", StringComparison.Ordinal) && pair.Name.IndexOf('[') == pair.Name.Length - 2)
+            {
+                _readonlyViolation = true;
+                sb.Append("Write-Error ").Append(PsBuild.SingleQuote($"ps-bash: {pair.Name}: bad array subscript"))
                   .Append(" -ErrorAction Continue; ").Append(PsBuild.SetStatus(1));
                 continue;
             }
@@ -8408,8 +8436,11 @@ public static partial class PsEmitter
             string? name = p switch { WordPart.SimpleVarSub s => s.Name, WordPart.BracedVarSub { Suffix: null } b => b.Name, _ => null };
             // `[$(echo " ")]`, `x$(cmd)y`: an unquoted command substitution glued to text splits the same way (it was
             // one argument, so `$(echo " ")]` kept the space).
+            // `${v:-AxBxC}x`, `${f%.c}.o`: an operator result glued to text is split like the bare `${v:-.}` word.
             if ((name is not null && (name is "@" or "*" || ordinaryVar && (IsOrdinaryVarName(name) || name.Length > 0 && name.All(char.IsAsciiDigit))))
-                || (ordinaryVar && p is WordPart.CommandSub))
+                || (ordinaryVar && p is WordPart.CommandSub)
+                || (ordinaryVar && p is WordPart.BracedVarSub { Suffix: not null, Name: var opName } && opName is not ("@" or "*")
+                    && IsUnquotedDefaultAltWord(new CompoundWord(ImmutableArray.Create(p)))))
             {
                 if (found >= 0) return -1;
                 found = i;
@@ -8747,6 +8778,40 @@ public static partial class PsEmitter
 
     /// <summary>Backslash-escapes <c>* ? [ ] \</c> so quoted / escaped text matches itself in a glob pattern. A quoted
     /// <c>]</c> cannot close a bracket: <c>[hello"]"</c> is the literal word <c>[hello]</c> in bash, not the class [hello].</summary>
+    /// <summary>
+    /// The pattern text of one static extglob arm: quoted and escaped text is literal (backslash-escaped, with the
+    /// extglob operators <c>| ( )</c> too), unquoted text and glob parts stay pattern syntax. An arm holding
+    /// anything else keeps its source spelling.
+    /// </summary>
+    private static string StaticExtglobArm(string arm)
+    {
+        var sb = new StringBuilder(arm.Length + 4);
+        void Quoted(string text)
+        {
+            foreach (char c in text)
+            {
+                if (c is '*' or '?' or '[' or ']' or '\\' or '|' or '(' or ')') sb.Append('\\');
+                sb.Append(c);
+            }
+        }
+        foreach (var part in BashParser.DecomposeWord(arm))
+        {
+            switch (part)
+            {
+                case WordPart.Literal l: sb.Append(l.Value); break;
+                case WordPart.GlobPart g: sb.Append(g.Pattern); break;
+                case WordPart.EscapedLiteral e: Quoted(e.Value); break;
+                case WordPart.SingleQuoted q: Quoted(q.Value); break;
+                case WordPart.AnsiCQuoted a: Quoted(ExpandAnsiCEscapes(a.Value)); break;
+                case WordPart.DoubleQuoted dq when TryGetStaticArgValue(new CompoundWord(ImmutableArray.Create<WordPart>(dq))) is { } t:
+                    Quoted(t);
+                    break;
+                default: return arm;
+            }
+        }
+        return sb.ToString();
+    }
+
     private static string EscapeGlobLiteral(string text)
     {
         if (text.AsSpan().IndexOfAny("*?[]\\") < 0) return text;
@@ -8849,6 +8914,12 @@ public static partial class PsEmitter
                         if (isOperator) lit.Append(text);
                         else Dynamic(EmitGlobPatternExpr(new CompoundWord(BashParser.DecomposeWord(text)), mapPaths: false));
                     }
+                    break;
+                case WordPart.GlobPart gp when gp.Pattern.Length > 1 && gp.Pattern[1] == '(' && gp.Pattern.AsSpan().IndexOfAny('\'', '"') >= 0:
+                    // `@(x|'*'|'|')`: a quoted arm is literal text with its quotes removed, so an unmatched word
+                    // prints `@(x|*||)` (it kept the quote characters).
+                    foreach (var (text, isOperator) in SplitExtglob(gp.Pattern))
+                        lit.Append(isOperator ? text : StaticExtglobArm(text));
                     break;
                 case WordPart.GlobPart gp:
                     // A class's quoted members are literal and its quotes drop: [a"]"b] is {a, ], b}.
@@ -9808,7 +9879,7 @@ public static partial class PsEmitter
                 || (sliceBody[0] == '-' && sliceBody.Length > 1 && char.IsDigit(sliceBody[1])));
             if (looksNumeric)
             {
-                var sliceParts = sliceBody.Split(':', 2);
+                var sliceParts = SplitSlice(sliceBody);
                 if (int.TryParse(sliceParts[0].Trim(), out int offset))
                 {
                     string sv = "([string]" + varRef + ")";   // an unset variable slices as the empty string
@@ -9833,7 +9904,7 @@ public static partial class PsEmitter
             // runtime. Without this, ${x:$i} failed the digit test above and silently
             // fell through to the bare variable — dropping the slice entirely.
             {
-                var sliceParts = sliceBody.Split(':', 2);
+                var sliceParts = SplitSlice(sliceBody);
                 string offArith = $"[int](Invoke-BashArith {PsBuild.SingleQuote(sliceParts[0].Trim())})";
                 var sb = new StringBuilder("& { $__psbS = [string](");
                 sb.Append(varRef);
@@ -9940,6 +10011,29 @@ public static partial class PsEmitter
         return $"$(if ({arrayVar} -is [System.Collections.IDictionary]) {{ {key} }} else {{ [long](Invoke-BashArith {key}) }})";
     }
 
+    /// <summary>
+    /// The offset and (when present) length of a <c>${v:offset:length}</c> body. The colon that separates them is the
+    /// first one outside parentheses that does not close a <c>?</c> of the offset expression, so
+    /// <c>${s: 0 &lt; 1 ? 2 : 0 : 1}</c> is offset <c>0 &lt; 1 ? 2 : 0</c>, length <c>1</c> (bash).
+    /// </summary>
+    private static string[] SplitSlice(string body)
+    {
+        int depth = 0, pending = 0;
+        for (int i = 0; i < body.Length; i++)
+        {
+            char c = body[i];
+            if (c == '(') depth++;
+            else if (c == ')') { if (depth > 0) depth--; }
+            else if (depth == 0 && c == '?') pending++;
+            else if (depth == 0 && c == ':')
+            {
+                if (pending > 0) { pending--; continue; }
+                return new[] { body[..i], body[(i + 1)..] };
+            }
+        }
+        return new[] { body };
+    }
+
     // Emit a bash array slice ${arr[@]:offset[:length]} as a PowerShell range index.
     // Returns null when `op` is not a `:`-prefixed numeric slice (caller degrades to the
     // whole array). bash element indices map directly: offset..(offset+length-1), and
@@ -9949,11 +10043,13 @@ public static partial class PsEmitter
         if (!op.StartsWith(":"))
             return null;
         var body = op[1..].Trim();
-        var parts = body.Split(':', 2);
+        var parts = SplitSlice(body);
         // A bound is an integer or a variable (`${a[@]:$i}`, `${@:$#}`, `${a[@]:$i:$n}`): its value is read at run time.
+        // An empty one is an empty arithmetic expression, 0 (`${a[@]: : }` is the empty slice).
         static string? Bound(string text)
         {
             text = text.Trim();
+            if (text.Length == 0) return "0";
             if (int.TryParse(text, out int n)) return n.ToString(System.Globalization.CultureInfo.InvariantCulture);
             var m = System.Text.RegularExpressions.Regex.Match(text, @"^\$(?:\{(\w+|#)\}|(\w+|#))$");
             return m.Success ? "[int](" + ZeroDefault(EmitSimpleVar(m.Groups[1].Success ? m.Groups[1].Value : m.Groups[2].Value, strict: true)) + ")" : null;

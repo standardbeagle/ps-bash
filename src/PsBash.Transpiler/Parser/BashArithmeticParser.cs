@@ -408,7 +408,8 @@ public sealed class BashArithmeticParser
         int hash = token.IndexOf('#');
         if (hash > 0)
         {
-            if (!int.TryParse(token[..hash], NumberStyles.None, CultureInfo.InvariantCulture, out int radix) || radix is < 2 or > 64)
+            // A base with a leading 0 (`02#0110`) is not a decimal base in bash: "invalid number".
+            if (token[0] == '0' || !int.TryParse(token[..hash], NumberStyles.None, CultureInfo.InvariantCulture, out int radix) || radix is < 2 or > 64)
                 throw new BashArithmeticParseException($"invalid arithmetic base in '{token}'");
             return ParseDigits(token[(hash + 1)..], radix, token, true);
         }

@@ -87,6 +87,37 @@ public static class PsBuild
         => value.IndexOf('\'') < 0 ? "'" + value + "'" : "'" + value.Replace("'", "''") + "'";
 
     /// <summary>
+    /// The .NET regex of <c>[[ s =~ re ]]</c> from <paramref name="patExpr"/> (a PowerShell expression for the ERE text).
+    /// A single-quoted literal is converted now (<see cref="BashEre"/>); one bash's regcomp rejects, or a pattern built at
+    /// run time, goes through <c>BashPatternMatch.Ere</c>, which converts it then (and throws for an invalid one).
+    /// </summary>
+    public static string EreRegex(string patExpr)
+    {
+        if (TryUnquoteSingle(patExpr, out var literal))
+        {
+            try { return SingleQuote(BashEre.ToDotNet(literal)); }
+            catch (ArgumentException) { /* report it when the test runs, as bash does */ }
+        }
+        return "[PsBash.Cmdlets.BashPatternMatch]::Ere(" + patExpr + ")";
+    }
+
+    // 'text' (with '' for a quote) -> text; false for any other expression.
+    private static bool TryUnquoteSingle(string expr, out string text)
+    {
+        text = "";
+        if (expr.Length < 2 || expr[0] != '\'' || expr[^1] != '\'') return false;
+        string inner = expr[1..^1];
+        for (int i = 0; i < inner.Length; i++)
+        {
+            if (inner[i] != '\'') continue;
+            if (i + 1 < inner.Length && inner[i + 1] == '\'') { i++; continue; }
+            return false;
+        }
+        text = inner.Replace("''", "'");
+        return true;
+    }
+
+    /// <summary>
     /// Escape <paramref name="value"/> for placement INSIDE a PowerShell double-quoted
     /// string (returns the inner text, no surrounding quotes). Order is load-bearing:
     /// backtick first (it is PowerShell's escape char, introduced by the next two
@@ -1011,6 +1042,17 @@ public static class PsBuild
     /// </summary>
     public static string ZeroIterationStatus(string iterVar) =>
         "if (" + iterVar + " -eq 0) { $global:LASTEXITCODE = 0 }";
+
+    /// <summary>
+    /// <see cref="ZeroIterationStatus"/> for a list that globs: a <c>failglob</c> error in the list ends the <c>for</c> with
+    /// status 1 (<c>shopt -s failglob; for x in *.ZZ; do :; done</c>), so the reset to 0 is skipped when the glob cmdlet
+    /// flagged it. <see cref="FailGlobReset"/> clears the flag before the list is expanded.
+    /// </summary>
+    public static string ZeroIterationStatusAfterGlob(string iterVar) =>
+        "if (-not $global:__BashFailGlob) { " + ZeroIterationStatus(iterVar) + " }";
+
+    /// <summary>Clears the <c>failglob</c> flag before a <c>for</c> list that globs (see <see cref="ZeroIterationStatusAfterGlob"/>).</summary>
+    public const string FailGlobReset = "$global:__BashFailGlob = $false; ";
 
     /// <summary>
     /// A simple command's <c>&lt; file</c> that cannot be opened: bash reports it, sets status 1 and never runs the

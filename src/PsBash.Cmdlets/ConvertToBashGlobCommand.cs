@@ -44,16 +44,11 @@ public sealed class ConvertToBashGlobCommand : PSCmdlet
 
         string cwd = SessionState.Path.CurrentFileSystemLocation.ProviderPath;
         var matches = BashGlob.Expand(pattern, cwd, InvokeBashShoptCommand.IsEnabled("dotglob"),
-            InvokeBashShoptCommand.IsEnabled("globstar"), InvokeBashShoptCommand.IsEnabled("nocaseglob"));
+            InvokeBashShoptCommand.IsEnabled("globstar"), InvokeBashShoptCommand.IsEnabled("nocaseglob"),
+            skipDots: InvokeBashShoptCommand.IsEnabled("globskipdots"));
         if (matches.Count == 0)
         {
-            if (InvokeBashShoptCommand.IsEnabled("failglob"))
-            {
-                FileSystemHelpers.SetLastExitCode(this, 1);
-                ThrowTerminatingError(new ErrorRecord(
-                    new InvalidOperationException("bash: no match: " + BashGlob.Unescape(pattern)),
-                    "NoGlobMatch", ErrorCategory.ObjectNotFound, pattern));
-            }
+            if (InvokeBashShoptCommand.IsEnabled("failglob")) FailGlob(this, BashGlob.Unescape(pattern));
             if (!InvokeBashShoptCommand.IsEnabled("nullglob"))
                 WriteObject(BashGlob.Unescape(pattern));
             return;
@@ -61,5 +56,16 @@ public sealed class ConvertToBashGlobCommand : PSCmdlet
 
         foreach (var m in matches)
             WriteObject(m);
+    }
+
+    /// <summary>The <c>failglob</c> error: status 1, the command ends, and <c>$global:__BashFailGlob</c> is set so a
+    /// <c>for</c> list that failed keeps status 1 though its body never ran (PsBuild.ZeroIterationStatus).</summary>
+    internal static void FailGlob(PSCmdlet cmdlet, string word)
+    {
+        FileSystemHelpers.SetLastExitCode(cmdlet, 1);
+        cmdlet.SessionState.PSVariable.Set("global:__BashFailGlob", true);
+        cmdlet.ThrowTerminatingError(new ErrorRecord(
+            new InvalidOperationException("bash: no match: " + word),
+            "NoGlobMatch", ErrorCategory.ObjectNotFound, word));
     }
 }

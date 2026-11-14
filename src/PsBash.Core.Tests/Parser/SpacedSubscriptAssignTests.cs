@@ -82,6 +82,17 @@ public class ElementDeclarationTests
         Assert.Contains("ro: readonly variable", ps);
         Assert.Contains("Invoke-BashEcho", ps);
     }
+
+    // `a[]=42` is bash's "bad array subscript" (status 1, the rest of the line dropped); it wrote element 0.
+    [Fact] public void Transpile_EmptySubscriptAssignment_IsBadArraySubscript()
+    {
+        var ps = T("a[]=42; echo same\necho next $?");
+        Assert.Contains("a[]: bad array subscript' -ErrorAction Continue; $global:LASTEXITCODE = 1", ps);
+        Assert.DoesNotContain("Set-BashElement", ps);
+        Assert.DoesNotContain("same", ps);
+        Assert.Contains("next", ps);
+        Assert.DoesNotContain("LASTEXITCODE = 1; $global:LASTEXITCODE = 0", ps);
+    }
 }
 
 /// <summary>A redirected compound runs in the current scope (dot-sourced): an array element assigned inside survives.</summary>

@@ -736,7 +736,6 @@ for i in ""$A""; do echo =$i=; done
 ==
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-word-split word-split (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Regression: "${!v*}"x should not be split
@@ -763,7 +762,7 @@ echo "${#v}"
 5
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-word-split word-split (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-length-result-not-split an unquoted ${#v} is not IFS-split (IFS=5 keeps 5)
 ## timeout: 10
 
 #### Regression: "${v:-AxBxC}"x should not be split
@@ -788,5 +787,4 @@ AxBxC
 AxBxCx
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-word-split word-split (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10

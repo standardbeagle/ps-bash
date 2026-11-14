@@ -64,6 +64,29 @@ public class ConvertToBashWordsTests : IClassFixture<SharedPwshFixture>
         Assert.Equal(expected, string.Join("#", fields.Select(f => f.Length == 0 ? "[]" : f)));
     }
 
+    // The prefix and suffix are text glued on, never split (`"a b"$x`, `"$d"/$x` with d='My Files'); a quoted affix starts a
+    // field even when empty (`""$A""` with A='  abc  def  ' is "", abc, def, ""). Oracle-checked against bash 5.2.
+    [Theory]
+    [InlineData("a b", "", "c", null, false, false, "a bc")]
+    [InlineData("My Files", "/c", "", null, false, false, "My Files/c")]
+    [InlineData("", "My Files", "c", null, false, false, "cMy Files")]
+    [InlineData("x:y", "", "1:2", ":", false, false, "x:y1#2")]
+    [InlineData("", "", "  abc  def  ", null, true, true, "[]#abc#def#[]")]
+    [InlineData("", "", "abc", null, true, true, "abc")]
+    [InlineData("", "", "", null, true, false, "[]")]
+    [InlineData("", "", "", null, false, false, "")]
+    [InlineData("", "", " ", null, true, false, "[]")]
+    [InlineData("", "", ",a", " ,", true, false, "[]#a")]
+    [InlineData("", "", "", "", true, false, "[]")]
+    [InlineData("", "", "", "", false, false, "")]
+    public void AffixFields_AffixesAreNotSplitAndQuotedOnesAnchor(string prefix, string suffix, string value, string? ifs,
+        bool anchorPrefix, bool anchorSuffix, string expected)
+    {
+        var fields = BashWordSplitter.AffixFields(prefix, suffix, new[] { value }, ifs, anchorPrefix, anchorSuffix);
+
+        Assert.Equal(expected, string.Join("#", fields.Select(f => f.Length == 0 ? "[]" : f)));
+    }
+
     [Fact]
     public void Cmdlet_PrefixSuffixFields_SplitsLikeBash()
     {
@@ -88,6 +111,16 @@ public class ConvertToBashWordsTests : IClassFixture<SharedPwshFixture>
     [InlineData("plain", false)]
     public void HasGlobChars_DetectsPatternCharacters(string word, bool expected) =>
         Assert.Equal(expected, BashWordSplitter.HasGlobChars(word));
+
+    // An extglob group in an expansion's value globs only under `shopt -s extglob` (bash: `${undef:-@(foo|bar).py}`).
+    [Theory]
+    [InlineData("@(foo|bar).py", true, true)]
+    [InlineData("+(a)", true, true)]
+    [InlineData("!(x)", true, true)]
+    [InlineData("@(foo|bar).py", false, false)]
+    [InlineData("a@b(c", true, false)]
+    public void HasGlobChars_ExtglobGroup_OnlyWithExtglob(string word, bool extglob, bool expected) =>
+        Assert.Equal(expected, BashWordSplitter.HasGlobChars(word, extglob));
 
     [Theory]
     [InlineData("*", @"C:\work\x", @"C:\work", "x")]

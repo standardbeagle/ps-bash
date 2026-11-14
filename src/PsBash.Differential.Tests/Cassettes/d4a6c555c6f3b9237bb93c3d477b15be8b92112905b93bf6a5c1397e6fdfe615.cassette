@@ -1,0 +1,19 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 157
+stdout-length: 59
+stderr-length: 0
+==== SCRIPT ====
+p() { printf '[%s]' "$@"; echo; }; IFS=x; v=; p ${v:-AxBxC}x; p ${v:-"AxBxC"}x; p "${v:-AxBxC}"x
+IFS=' '; f='a b.c'; p ${f%.c}.o; p q${f/b/c d}; p ${f:+x y}z
+==== STDOUT ====
+[A][B][Cx]
+[AxBxCx]
+[AxBxCx]
+[a][b.o]
+[qa][c][d.c]
+[x][yz]
+
+==== STDERR ====
+

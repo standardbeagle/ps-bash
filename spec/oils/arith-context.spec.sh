@@ -61,7 +61,6 @@ echo ${s: 0 < 1 ? 2 : 0 : 1}  # 2:1 -- TRICKY THREE COLONS
 c
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-arith-context arith-context (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Triple parens should be disambiguated
@@ -117,7 +116,6 @@ slice
 status=0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-arith-context arith-context (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Empty expression a[]
@@ -149,5 +147,5 @@ status=1
 status=1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-arith-context arith-context (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-bad-substitution-ends-script a bad substitution (${a[]}) ends the script; bash drops only the rest of that input line (a[]=42 itself is fixed)
 ## timeout: 10

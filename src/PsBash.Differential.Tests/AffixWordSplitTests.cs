@@ -17,6 +17,13 @@ public class AffixWordSplitTests
         + "y='1  2'; echo z$y; IFS=:; w='u:v'; printf '[%s]' k$w; echo; IFS=' '; x=''; printf '[%s]' a$x; echo\n"
         + "n='a;echo pwn'; printf '[%s]' q$n; echo; m='$(echo pwn)'; printf '[%s]' q$m; echo");
 
+    // The glued text is never split (`"$d"/$x` with d='My Files' is one word) and a quoted empty affix anchors a field
+    // (`""$A""` with A='  abc  def  ' is "", abc, def, "").
+    [Fact]
+    public Task GluedTextIsNotSplit_AndQuotedEmptyTextAnchorsAField() => AssertOracle.EqualAsync(
+        "p() { printf '[%s]' \"$@\"; echo; }; x=c; d='My Files'; p \"a b\"$x; p \"$d\"/$x; p $x\"$d\"; p \\ $x\n"
+        + "A='  abc  def  '; p \"\"$A\"\"; p ''$A; p $A''; e=; p \"\"$e; p x $e; (IFS=' ,'; v=',a'; p \"\"$v); (IFS=; p \"\"$e)");
+
     [Fact]
     public Task DynamicBuiltinAndCommandNames_RunTheDeclaration() => AssertOracle.EqualAsync(
         "x='a b'\nb=builtin; $b declare f=$x; echo \"f[$f]\"\nb=b; ${b}uiltin declare g=$x; echo \"g[$g]\"\n"

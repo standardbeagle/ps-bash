@@ -189,12 +189,14 @@ internal static class BashGlob
     }
 
     /// <summary>Matches of <paramref name="pattern"/>, resolved against <paramref name="cwd"/>; empty when nothing matches.</summary>
-    public static List<string> Expand(string pattern, string cwd, bool dotGlob, bool globStar = false, bool noCase = false)
+    /// <param name="skipDots"><c>globskipdots</c> (on by default): when off, a component that starts with a literal
+    /// <c>.</c> also matches the entries <c>.</c> and <c>..</c> (<c>.*</c> lists <c>. ..</c> first).</param>
+    public static List<string> Expand(string pattern, string cwd, bool dotGlob, bool globStar = false, bool noCase = false, bool skipDots = true)
     {
         var ignore = GlobIgnorePatterns();
-        if (ignore is null) return ExpandCore(pattern, cwd, dotGlob, globStar, noCase);
+        if (ignore is null) return ExpandCore(pattern, cwd, dotGlob, globStar, noCase, skipDots);
         // GLOBIGNORE set (non-empty): dotfiles become matchable, `.` / `..` never are, and matches equal to an ignore pattern drop out.
-        var all = ExpandCore(pattern, cwd, dotGlob: true, globStar, noCase);
+        var all = ExpandCore(pattern, cwd, dotGlob: true, globStar, noCase, skipDots);
         all.RemoveAll(m => { var b = m.TrimEnd('/'); b = b[(b.LastIndexOf('/') + 1)..]; return b is "." or ".." || ignore.Exists(re => re.IsMatch(m)); });
         return all;
     }
@@ -205,10 +207,13 @@ internal static class BashGlob
         if (string.IsNullOrEmpty(v)) return null;
         var list = new List<System.Text.RegularExpressions.Regex>();
         var cur = new System.Text.StringBuilder();
-        void Flush() { if (cur.Length > 0) list.Add(new System.Text.RegularExpressions.Regex(PsBash.Core.Parser.BashPattern.ToAnchoredRegex(cur.ToString(), honorQuotes: false), System.Text.RegularExpressions.RegexOptions.Singleline)); cur.Clear(); }
+        // bash matches an ignore pattern against the whole result with FNM_PATHNAME: `*.txt` keeps `foo/two.txt`.
+        void Flush() { if (cur.Length > 0) list.Add(new System.Text.RegularExpressions.Regex(PsBash.Core.Parser.BashPattern.ToAnchoredRegex(cur.ToString(), honorQuotes: false, pathname: true), System.Text.RegularExpressions.RegexOptions.Singleline)); cur.Clear(); }
         for (int i = 0; i < v.Length; i++)
         {
             if (v[i] == '\\' && i + 1 < v.Length) { cur.Append(v[i]).Append(v[++i]); continue; }
+            // A `:` inside a bracket expression (`[[:alnum:]]*`) is part of the pattern, not a separator.
+            if (v[i] == '[' && BracketEnd(v, i) is var end and > 0) { cur.Append(v, i, end - i + 1); i = end; continue; }
             if (v[i] == ':') { Flush(); continue; }
             cur.Append(v[i]);
         }
@@ -216,7 +221,26 @@ internal static class BashGlob
         return list;
     }
 
-    private static List<string> ExpandCore(string pattern, string cwd, bool dotGlob, bool globStar, bool noCase)
+    /// <summary>Index of the <c>]</c> closing the bracket expression opened at <paramref name="open"/>; -1 when unclosed.</summary>
+    internal static int BracketEnd(string text, int open)
+    {
+        int i = open + 1;
+        if (i < text.Length && text[i] is '!' or '^') i++;
+        if (i < text.Length && text[i] == ']') i++; // a leading ] is a member
+        for (; i < text.Length; i++)
+        {
+            if (text[i] == '\\' && i + 1 < text.Length) { i++; continue; }
+            if (text[i] == '[' && i + 1 < text.Length && text[i + 1] is ':' or '.' or '=')
+            {
+                int close = text.IndexOf(text[i + 1] + "]", i + 2, StringComparison.Ordinal);
+                if (close > 0) { i = close + 1; continue; }
+            }
+            if (text[i] == ']') return i;
+        }
+        return -1;
+    }
+
+    private static List<string> ExpandCore(string pattern, string cwd, bool dotGlob, bool globStar, bool noCase, bool skipDots)
     {
         string prefix = "";
         string dir = cwd;
@@ -280,7 +304,7 @@ internal static class BashGlob
                     continue;
                 }
 
-                foreach (var name in ListNames(fsDir))
+                foreach (var name in ListNames(fsDir, withDots: !skipDots && comp.StartsWith('.')))
                 {
                     if (!MatchComponent(noCase ? comp.ToLowerInvariant() : comp, noCase ? name.ToLowerInvariant() : name, dotGlob)) continue;
                     string full = Path.Combine(fsDir, name);
@@ -339,9 +363,10 @@ internal static class BashGlob
     }
 
     /// <summary>Entry names of a directory in ordinal order; empty when it cannot be read.</summary>
-    private static List<string> ListNames(string dir)
+    private static List<string> ListNames(string dir, bool withDots = false)
     {
         var names = new List<string>();
+        if (withDots) { names.Add("."); names.Add(".."); }
         try
         {
             foreach (var entry in Directory.EnumerateFileSystemEntries(dir))

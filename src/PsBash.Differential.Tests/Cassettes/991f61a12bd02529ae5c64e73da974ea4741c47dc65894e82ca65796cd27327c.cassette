@@ -1,0 +1,21 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 244
+stdout-length: 83
+stderr-length: 0
+==== SCRIPT ====
+shopt -s extglob
+d=$(mktemp -d); cd "$d"; touch foo.py bar.py spam.py
+echo ${undef:-@(foo|bar).py}; echo ${undef:-*.py}; echo @(foo|'spam').py
+echo @(__nope__*|'*'|'?'|'|'|"[x]"|\*); set -o noglob; echo @(*|'*'); set +o noglob
+cd /; rm -rf "$d"
+==== STDOUT ====
+bar.py foo.py
+bar.py foo.py spam.py
+foo.py spam.py
+@(__nope__*|*|?|||[x]|*)
+@(*|*)
+
+==== STDERR ====
+

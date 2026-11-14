@@ -228,6 +228,18 @@ public class BashParserTests
         Assert.Equal("HOME", vs.Name);
     }
 
+    // `$\<newline>?` is `$?` (bash removes the continuation first); it was a literal `$` and `?`.
+    [Theory]
+    [InlineData("echo $\\\n?", "?")]
+    [InlineData("echo $\\\r\nx", "x")]
+    [InlineData("echo $\\\n\\\nx", "x")]
+    public void Parse_LineContinuationAfterDollar_IsRemoved(string input, string name)
+    {
+        var simple = Assert.IsType<Command.Simple>(Parse(input));
+
+        Assert.Equal(name, Assert.IsType<WordPart.SimpleVarSub>(Assert.Single(simple.Words[1].Parts)).Name);
+    }
+
     [Fact]
     public void Parse_SimplePipeline_ReturnsPipelineNode()
     {

@@ -20,7 +20,7 @@ ext=cc
 echo foo.?($ext|h)
 ## stdout: foo. foo.cc foo.h
 ## status: 0
-## XFAIL ps-bash gap-oils-extglob-files extglob-files (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash platform-windows-filenames Windows file names cannot hold " * ? | < > :, lose a trailing dot, and are case-insensitive (intentional-differences.md, Platform: file names)
 ## timeout: 10
 
 #### *() matches 0 or more
@@ -117,7 +117,7 @@ argv.py @(__aa|'__<>'|__{}|__#|__&&|)
 # mksh sorts them differently
 ## stdout:
 ## status: 127
-## XFAIL ps-bash gap-oils-extglob-files extglob-files (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-extglob-lexer-punct {} # && inside @( ) are lexed as shell syntax (parse error) instead of pattern text
 ## timeout: 10
 
 #### More glob escaping
@@ -167,7 +167,6 @@ bar.py foo.py spam.py
 bar.py foo.py
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-extglob-files extglob-files (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Extended glob in assignment builtin
@@ -271,7 +270,6 @@ echo @(__nope__*|__nope__?|'*'|'?'|'[:alpha:]'|'|')
 @(__nope__*|__nope__?|*|?|[:alpha:]||)
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-extglob-files extglob-files (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### failglob
@@ -314,6 +312,5 @@ echo ,(osh|style)
 @(__nope__*|__nope__?|*|?|[:alpha:]||)
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-extglob-files extglob-files (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher

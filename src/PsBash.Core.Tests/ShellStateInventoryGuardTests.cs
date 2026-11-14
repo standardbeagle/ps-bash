@@ -18,6 +18,7 @@ public class ShellStateInventoryGuardTests
     {
         ["COMPREPLY"] = "completion-function hand-off, reset before and read back by each compgen -F call",
         ["__BashExpansionFailed"] = "one-command hand-off: set by a failed expansion (bad ${!ref}, arithmetic error), read and cleared before the command runs",
+        ["__BashFailGlob"] = "one-loop hand-off: cleared before a for list that globs, set by a failglob error in it, read after the loop",
         ["LASTEXITCODE"] ="PowerShell's own; the status is carried by the command result, not copied",
         ["PsBashVersion"] = "constant, set at module load",
         ["BashVersionInfo"] = "constant, set at module load",

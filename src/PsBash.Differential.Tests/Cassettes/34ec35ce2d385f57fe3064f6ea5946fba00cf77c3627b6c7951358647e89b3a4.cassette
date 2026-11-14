@@ -1,0 +1,24 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 199
+stdout-length: 94
+stderr-length: 0
+==== SCRIPT ====
+p() { printf '[%s]' "$@"; echo; }; x=c; d='My Files'; p "a b"$x; p "$d"/$x; p $x"$d"; p \ $x
+A='  abc  def  '; p ""$A""; p ''$A; p $A''; e=; p ""$e; p x $e; (IFS=' ,'; v=',a'; p ""$v); (IFS=; p ""$e)
+==== STDOUT ====
+[a bc]
+[My Files/c]
+[cMy Files]
+[ c]
+[][abc][def][]
+[][abc][def]
+[abc][def][]
+[]
+[x]
+[][a]
+[]
+
+==== STDERR ====
+

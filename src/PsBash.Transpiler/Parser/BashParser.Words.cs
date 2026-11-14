@@ -12,6 +12,11 @@ namespace PsBash.Core.Parser;
 /// </summary>
 public sealed partial class BashParser
 {
+    /// <summary>The length of a <c>\&lt;newline&gt;</c> (or <c>\&lt;CR&gt;&lt;LF&gt;</c>) line continuation at <paramref name="i"/>, else 0.</summary>
+    private static int LineContinuationLength(string raw, int i)
+        => i + 1 < raw.Length && raw[i] == '\\'
+            ? raw[i + 1] == '\n' ? 2 : raw[i + 1] == '\r' && i + 2 < raw.Length && raw[i + 2] == '\n' ? 3 : 0
+            : 0;
     /// <summary>
     /// Sub-parse a WORD token's raw text into typed WordPart children.
     /// Handles single quotes, double quotes, backslash escapes, $VAR references,
@@ -20,6 +25,7 @@ public sealed partial class BashParser
     /// <param name="raw">The word's source text.</param>
     /// <param name="braceExpansion">False inside <c>[[ ]]</c>, where bash does no brace expansion
     /// (<c>[[ --X{a,b}X == ... ]]</c> compares the text <c>--X{a,b}X</c>).</param>
+
     internal static ImmutableArray<WordPart> DecomposeWord(string raw, bool braceExpansion = true)
     {
         var parts = ImmutableArray.CreateBuilder<WordPart>();
@@ -68,6 +74,12 @@ public sealed partial class BashParser
                     parts.Add(new WordPart.Literal("\\"));
                     pos++;
                 }
+            }
+            else if (c == '$' && LineContinuationLength(raw, pos + 1) is var cont and > 0)
+            {
+                // `$\<newline>?` is `$?`: bash removes the continuation before it reads the expansion.
+                raw = raw[..(pos + 1)] + raw[(pos + 1 + cont)..];
+                len = raw.Length;
             }
             else if (c == '$' && pos + 2 < len && raw[pos + 1] == '(' && raw[pos + 2] == '(' && BashLexer.IsArithSub(raw, pos))
             {
@@ -692,7 +704,8 @@ public sealed partial class BashParser
                 pos++; // skip ]
             string subscript = raw[subStart..pos];
 
-            if (pos < len && raw[pos] != '}' && ":-=+?@%#/^,".IndexOf(raw[pos]) < 0)
+            // ${a[]}: an empty subscript is bash's 'bad substitution' (it read element 0).
+            if (subscript == "[]" || (pos < len && raw[pos] != '}' && ":-=+?@%#/^,".IndexOf(raw[pos]) < 0))
             {
                 // ${a[0][0]}, ${a[0]x}: only an operator may follow the subscript. bash reports 'bad substitution' when it runs.
                 int badClose = raw.IndexOf('}', pos);
@@ -867,6 +880,9 @@ public sealed partial class BashParser
         int end = BashLexer.ScanArith(raw, pos);
         int innerEnd = end >= start + 2 && raw[end - 1] == ')' && raw[end - 2] == ')' ? end - 2 : end;
         string expr = raw[start..innerEnd];
+        // `$((1 + \<newline>2))`: a line continuation is removed before the expression is read.
+        if (expr.Contains("\\\n", StringComparison.Ordinal))
+            expr = expr.Replace("\\\r\n", "", StringComparison.Ordinal).Replace("\\\n", "", StringComparison.Ordinal);
 
         parts.Add(new WordPart.ArithSub(BashArithmeticParser.ParseOrDefer(expr)));
         return end;
@@ -1210,11 +1226,14 @@ public sealed partial class BashParser
         bool hasComma = false;
         bool hasDotDot = false;
 
-        int depth = 0; // `{${a},b}`: the braces of an inner `${a}` do not close the outer pair
+        // `{${a},b}`: the braces of an inner `${a}` do not close the outer pair. Nor do those of a nested `{a,b}`: in
+        // `{{a,b}` the first `{` has no closing brace of its own, so it is literal (bash: `{a {b`), and `{{a,b}}` has no
+        // comma at its own level (`{a} {b}`).
+        int depth = 0;
         while (i < len)
         {
             char c = raw[i];
-            if (c == '{' && i > 0 && raw[i - 1] == '$') depth++;
+            if (c == '{') depth++;
             else if (c == '}' && depth > 0) depth--;
             else if (c == '}')
                 return hasComma || hasDotDot;

@@ -48,9 +48,10 @@ public sealed class ConvertToBashWordsCommand : PSCmdlet
                 (Fields ?? Array.Empty<object?>()).Select(f => f is null ? null : (f is PSObject p ? p.BaseObject : f).ToString()).ToList(), ifs,
                 PrefixQuoted.IsPresent, SuffixQuoted.IsPresent)
             : BashWordSplitter.Split(Text, ifs);
+        bool extglob = InvokeBashShoptCommand.IsEnabled("extglob");
         foreach (var word in words)
         {
-            if (!BashWordSplitter.HasGlobChars(word))
+            if (!BashWordSplitter.HasGlobChars(word, extglob))
             {
                 WriteObject(word);
                 continue;
@@ -77,16 +78,11 @@ public sealed class ConvertToBashWordsCommand : PSCmdlet
 
         string cwd = SessionState.Path.CurrentFileSystemLocation.ProviderPath;
         var matches = BashGlob.Expand(pattern, cwd, InvokeBashShoptCommand.IsEnabled("dotglob"),
-            InvokeBashShoptCommand.IsEnabled("globstar"), InvokeBashShoptCommand.IsEnabled("nocaseglob"));
+            InvokeBashShoptCommand.IsEnabled("globstar"), InvokeBashShoptCommand.IsEnabled("nocaseglob"),
+            skipDots: InvokeBashShoptCommand.IsEnabled("globskipdots"));
         if (matches.Count > 0) return matches;
 
-        if (InvokeBashShoptCommand.IsEnabled("failglob"))
-        {
-            FileSystemHelpers.SetLastExitCode(this, 1);
-            ThrowTerminatingError(new ErrorRecord(
-                new InvalidOperationException("bash: no match: " + word),
-                "NoGlobMatch", ErrorCategory.ObjectNotFound, word));
-        }
+        if (InvokeBashShoptCommand.IsEnabled("failglob")) ConvertToBashGlobCommand.FailGlob(this, word);
         return InvokeBashShoptCommand.IsEnabled("nullglob") ? Array.Empty<string>() : new[] { word };
     }
 }
@@ -227,7 +223,15 @@ internal static class BashWordSplitter
         return words;
     }
 
-    public static bool HasGlobChars(string word) => word.AsSpan().IndexOfAny('*', '?', '[') >= 0;
+    /// <summary>A pattern character, or with <paramref name="extglob"/> an extglob group (<c>${undef:-@(foo|bar).py}</c> globs).</summary>
+    public static bool HasGlobChars(string word, bool extglob = false)
+    {
+        if (word.AsSpan().IndexOfAny('*', '?', '[') >= 0) return true;
+        if (!extglob) return false;
+        for (int i = 0; i + 1 < word.Length; i++)
+            if (word[i] is '@' or '+' or '!' && word[i + 1] == '(') return true;
+        return false;
+    }
 
     /// <summary>
     /// A match as bash prints it: for a relative pattern, the path relative to the working directory

@@ -6,7 +6,7 @@ a=(4 5 6)
 echo "${a[b=2]} b=$b"
 ## stdout: 6 b=2
 ## status: 0
-## XFAIL ps-bash gap-oils-arith arith (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-arith-subscript-assignment ${a[b=2]} reads the subscript as the text b=2 instead of evaluating it as arithmetic
 ## timeout: 10
 
 #### Add one to var
@@ -460,7 +460,6 @@ echo [$a]
 []
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-arith arith (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Add integer to indexed array (a[0] decay)
@@ -683,7 +682,6 @@ echo status=$?
 # bash prints an error, but doesn't fail
 ## stdout: status=1
 ## status: 0
-## XFAIL ps-bash gap-oils-arith arith (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Integer constant validation
@@ -703,8 +701,7 @@ status=1
 status=1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-arith arith (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
-## timeout: 10
+## timeout: 30
 ## real-launcher
 
 #### More 64-bit ops

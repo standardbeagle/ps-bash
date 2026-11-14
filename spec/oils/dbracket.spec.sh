@@ -410,7 +410,6 @@ FOO=bar [[ foo == foo ]]
 [[ -f < ]] && echo 'should be parse error'
 ## stdout:
 ## status: 2
-## XFAIL ps-bash gap-oils-dbracket dbracket (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### User array compared to "$@" (broken unless shopt -s strict_array)
@@ -460,7 +459,6 @@ status=1
 status=1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-dbracket dbracket (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Quotes don't matter in comparison
@@ -519,6 +517,5 @@ regex=1
 regex=0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-dbracket dbracket (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher

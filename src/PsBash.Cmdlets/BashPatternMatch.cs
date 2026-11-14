@@ -58,6 +58,21 @@ public static class BashPatternMatch
         return result;
     }
 
+    private static readonly ConcurrentDictionary<string, string> EreCache = new();
+
+    /// <summary>The run-time regex of <c>[[ s =~ $re ]]</c> in .NET syntax (<see cref="PsBash.Core.Parser.BashEre"/>);
+    /// throws <see cref="ArgumentException"/> for a regex bash's regcomp rejects (status 2).</summary>
+    public static string Ere(object? pattern)
+    {
+        string p = Text(pattern);
+        if (p.IndexOf('{') < 0 && !p.Contains("[:", StringComparison.Ordinal)) return p;
+        if (EreCache.TryGetValue(p, out var hit)) return hit;
+        string result = PsBash.Core.Parser.BashEre.ToDotNet(p);
+        if (EreCache.Count > MaxCached) EreCache.Clear();
+        EreCache[p] = result;
+        return result;
+    }
+
     // Bash pattern text → anchored regex, for patterns assembled at run time (one script line in a
     // loop evaluates the same pattern every iteration).
     private static readonly ConcurrentDictionary<string, string> PatternRegex = new();

@@ -3032,6 +3032,32 @@ public class PsEmitterTests
         Assert.Contains("hit", result);
     }
 
+    // `[[ $HOME =~ ~ ]]`: a leading tilde in the regex expands, and the home directory is matched as text.
+    [Theory]
+    [InlineData("[[ $a =~ ~ ]]")]
+    [InlineData("[[ $a =~ ~/x ]]")]
+    public void Transpile_RegexRhsLeadingTilde_IsExpandedAndEscaped(string bash)
+    {
+        var result = PsEmitter.Transpile(bash);
+        Assert.Contains("[regex]::Escape([string]", result);
+        Assert.DoesNotContain("-match '~", result);
+    }
+
+    // `[[ '|' =~ $'|' ]]`: ANSI-C quoted text in a regex matches itself, like '|' does.
+    [Fact]
+    public void Transpile_RegexRhsAnsiCQuoted_IsEscaped()
+        => Assert.Contains("('\\|')", PsEmitter.Transpile("[[ $a =~ $'|' ]]"));
+
+    // `shopt -s failglob; for x in *.ZZ`: the failed list leaves status 1, so the zero-iteration reset to 0 checks the flag.
+    [Fact]
+    public void Transpile_ForListThatGlobs_KeepsFailGlobStatus()
+    {
+        var ps = PsEmitter.Transpile("for x in *.ZZ; do :; done")!;
+        Assert.StartsWith(PsBuild.FailGlobReset, ps);
+        Assert.Contains("if (-not $global:__BashFailGlob) { if ($__psbash_iter -eq 0) { $global:LASTEXITCODE = 0 } }", ps);
+        Assert.DoesNotContain("__BashFailGlob", PsEmitter.Transpile("for x in a b; do :; done"));
+    }
+
     [Theory]
     [InlineData("[[ $a =~ $re ]]", "$env:re")]
     [InlineData("[[ $a =~ ${re} ]]", "$env:re")]
@@ -3040,10 +3066,10 @@ public class PsEmitterTests
     {
         // `re='^a.b$'; [[ $x =~ $re ]]` is the idiomatic bash regex form.
         // Single-quoting the emitted variable would match the literal text
-        // "$env:re" instead of the pattern the variable holds.
+        // "$env:re" instead of the pattern the variable holds; the value is converted from ERE at run time.
         var result = PsEmitter.Transpile(bash);
 
-        Assert.Contains($"-match {expected}", result);
+        Assert.Contains($"-match [PsBash.Cmdlets.BashPatternMatch]::Ere({expected})", result);
         Assert.DoesNotContain($"-match '{expected}'", result);
     }
 
@@ -3500,7 +3526,7 @@ public class PsEmitterTests
         // ConvertTo-BashGlob: the shell's pathname expansion (relative names, no hidden files,
         // sorted); an unmatched glob falls back to the literal word so the loop still runs
         // once — bash nullglob is OFF by default.
-        Assert.Equal("$__psbash_iter = 0; :__psbash_l0 foreach ($f in @(ConvertTo-BashGlob '*.txt')) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; $env:f = [string]$f; Invoke-BashCat $f }; if ($__psbash_iter -eq 0) { $global:LASTEXITCODE = 0 }; Remove-Variable -Name f -ErrorAction SilentlyContinue", result);
+        Assert.Equal("$global:__BashFailGlob = $false; $__psbash_iter = 0; :__psbash_l0 foreach ($f in @(ConvertTo-BashGlob '*.txt')) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; $env:f = [string]$f; Invoke-BashCat $f }; if (-not $global:__BashFailGlob) { if ($__psbash_iter -eq 0) { $global:LASTEXITCODE = 0 } }; Remove-Variable -Name f -ErrorAction SilentlyContinue", result);
     }
 
     [Fact]
@@ -4543,7 +4569,7 @@ public class PsEmitterTests
     public void Transpile_ForInGlobCharClass_EmitsConvertToBashGlob()
     {
         var result = PsEmitter.Transpile("for f in [abc]*.txt; do cat $f; done");
-        Assert.Equal("$__psbash_iter = 0; :__psbash_l0 foreach ($f in @(ConvertTo-BashGlob '[abc]*.txt')) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; $env:f = [string]$f; Invoke-BashCat $f }; if ($__psbash_iter -eq 0) { $global:LASTEXITCODE = 0 }; Remove-Variable -Name f -ErrorAction SilentlyContinue", result);
+        Assert.Equal("$global:__BashFailGlob = $false; $__psbash_iter = 0; :__psbash_l0 foreach ($f in @(ConvertTo-BashGlob '[abc]*.txt')) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; $env:f = [string]$f; Invoke-BashCat $f }; if (-not $global:__BashFailGlob) { if ($__psbash_iter -eq 0) { $global:LASTEXITCODE = 0 } }; Remove-Variable -Name f -ErrorAction SilentlyContinue", result);
     }
 
     [Fact]
@@ -4552,6 +4578,15 @@ public class PsEmitterTests
         var result = PsEmitter.Transpile("echo {a,b,c}");
         Assert.Equal("Invoke-BashEcho @('a','b','c')", result);
     }
+
+    /// <summary>A `{` whose closing brace belongs to a nested pair is literal, and a comma inside the nested pair
+    /// does not make the outer one a list (bash 5.2: `{{a,b}` -> `{a {b`, `{{a,b}}` -> `{a} {b}`, `{a,{b}` stays).</summary>
+    [Theory]
+    [InlineData("echo {{a,b}", "Invoke-BashEcho @('{a','{b')")]
+    [InlineData("echo {{a,b}}", "Invoke-BashEcho @('{a}','{b}')")]
+    [InlineData("echo {{a,b},c}", "Invoke-BashEcho @('a','b','c')")]
+    public void Transpile_BraceWithoutItsOwnClose_IsLiteral(string bash, string expected)
+        => Assert.Equal(expected, PsEmitter.Transpile(bash));
 
     [Fact]
     public void Transpile_BracedRange_EmitsPsRange()

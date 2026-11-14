@@ -612,6 +612,12 @@ public sealed partial class BashParser
             }
             // Whitespace inside `( )` belongs to the regex (`(a  b)`); only top-level whitespace ends the operand.
             if (parenDepth == 0 && c is ' ' or '\t' or '\n' or '\r') break;
+            // An unquoted `;` or `&` outside a group is still a shell operator (`[[ x =~ ; ]]` is a syntax error).
+            if (parenDepth == 0 && c is ';' or '&')
+            {
+                if (i == start) throw new ParseException($"syntax error in conditional expression: unexpected token `{c}'", BashLexer.LineAt(_input, start), 1, "[[");
+                break;
+            }
             // Regex parens nest; an UNBALANCED `)` closes the enclosing test group (`[[ ! ( a =~ b ) ]]`).
             if (c == '(') parenDepth++;
             else if (c == ')' && parenDepth-- == 0) break;
@@ -654,7 +660,21 @@ public sealed partial class BashParser
             literal.Clear();
         }
 
-        for (int i = 0; i < raw.Length;)
+        // A leading `~` / `~/` (or ~+, ~-, ~CURRENTUSER) is tilde-expanded like any word: `[[ $HOME =~ ~ ]]` matches.
+        int first = 0;
+        if (raw.StartsWith('~'))
+        {
+            int slashAt = raw.IndexOf('/');
+            string user = slashAt < 0 ? raw[1..] : raw[1..slashAt];
+            bool current = user.Length > 0 && string.Equals(user, Environment.UserName, StringComparison.OrdinalIgnoreCase);
+            if (user.Length == 0 || user is "+" or "-" || current)
+            {
+                parts.Add(new WordPart.TildeSub(user.Length == 0 || current ? null : user, slashAt >= 0));
+                first = slashAt < 0 ? raw.Length : slashAt + 1;
+            }
+        }
+
+        for (int i = first; i < raw.Length;)
         {
             // A backslash pair is regex syntax (`\.`): keep both characters verbatim.
             if (raw[i] == '\\' && i + 1 < raw.Length)
@@ -676,6 +696,21 @@ public sealed partial class BashParser
                     FlushLiteral();
                     if (q == '\'') parts.Add(new WordPart.SingleQuoted(raw[(i + 1)..j]));
                     else parts.AddRange(DecomposeWord(raw[i..(j + 1)]));
+                    i = j + 1;
+                    continue;
+                }
+            }
+            // `$'|'` / `$"|"` are quoted too: their (decoded) text matches itself.
+            if (raw[i] == '$' && i + 1 < raw.Length && raw[i + 1] is '\'' or '"')
+            {
+                char q = raw[i + 1];
+                int j = i + 2;
+                while (j < raw.Length && raw[j] != q)
+                    j += raw[j] == '\\' && j + 1 < raw.Length ? 2 : 1;
+                if (j < raw.Length)
+                {
+                    FlushLiteral();
+                    parts.AddRange(DecomposeWord(raw[i..(j + 1)]));
                     i = j + 1;
                     continue;
                 }

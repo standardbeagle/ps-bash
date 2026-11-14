@@ -76,6 +76,13 @@ public class BashArithTests
     public void Evaluate_Operator_MatchesBashOracle(string expr, long expected)
         => Assert.Equal(expected, Eval(expr));
 
+    // bash: `$(( 02#0110 ))` / `010#11` is "invalid number" -- a base never has a leading 0.
+    [Theory]
+    [InlineData("02#0110")]
+    [InlineData("010#11")]
+    public void Evaluate_BaseWithLeadingZero_IsAnError(string expr)
+        => Assert.ThrowsAny<Exception>(() => Eval(expr));
+
     [Fact]
     public void Evaluate_HexBeyond64Bits_WrapsInsteadOfThrowing()
     {

@@ -177,7 +177,6 @@ echo $\
 # TODO: Also test unterminated quotes inside ${} and $()
 ## stdout: 0
 ## status: 0
-## XFAIL ps-bash gap-oils-quote quote (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Unterminated single quote
@@ -325,6 +324,6 @@ show_bytes() {
 echo -n $'\c'' | show_bytes
 ## stdout:
 ## status: 2
-## XFAIL ps-bash gap-oils-quote quote (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-unterminated-quote an unterminated quote is not a syntax error (bash: status 2)
 ## timeout: 10
 ## real-launcher

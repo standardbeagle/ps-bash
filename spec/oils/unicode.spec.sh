@@ -62,7 +62,7 @@ $SH not-unicode.sh | od -A n -t x1
  bc 20 bc 20 bc 20 bc 0a
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-unicode unicode (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-sed-byte-escape sed \xce does not match one byte of a UTF-8 character: sed works on decoded text
 ## timeout: 10
 ## real-launcher
 
