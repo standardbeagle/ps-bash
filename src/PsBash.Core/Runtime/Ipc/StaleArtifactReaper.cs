@@ -157,6 +157,35 @@ public static class StaleArtifactReaper
         return removed;
     }
 
+    /// <summary>
+    /// Empty directories in <paramref name="dir"/> not written for <paramref name="minAge"/>. mktemp -d
+    /// creates its directories in ps-bash/proc-sub, and a script that removes the contents but not the
+    /// directory (or never cleans up) leaves one: 4,686 had collected on one machine. Linux's /tmp
+    /// cleaner removes such entries after 10 days; nothing does that for this directory. Only EMPTY
+    /// directories are touched, so no file a script could still read is ever removed.
+    /// </summary>
+    public static int ReapOldEmptyDirectories(string dir, TimeSpan minAge)
+    {
+        int removed = 0;
+        string[] dirs;
+        try { dirs = Directory.GetDirectories(dir); }
+        catch { return 0; }
+
+        var cutoff = DateTime.UtcNow - minAge;
+        foreach (var d in dirs)
+        {
+            try
+            {
+                if (Directory.GetLastWriteTimeUtc(d) > cutoff) continue;
+                if (Directory.EnumerateFileSystemEntries(d).Any()) continue;
+                Directory.Delete(d); // not recursive: fails if anything appeared since the check
+                removed++;
+            }
+            catch { /* best effort per directory */ }
+        }
+        return removed;
+    }
+
     private static int ReapReleasedLocks(string dir)
     {
         int removed = 0;

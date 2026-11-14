@@ -155,6 +155,32 @@ public class StaleArtifactReaperTests : IDisposable
     }
 
     [Fact]
+    public void ReapOldEmptyDirectories_RemovesOnlyOldEmptyOnes()
+    {
+        var empty = Directory.CreateDirectory(Path.Combine(_dir, "e1")).FullName;
+        var full = Directory.CreateDirectory(Path.Combine(_dir, "f1")).FullName;
+        File.WriteAllText(Path.Combine(full, "data"), "x");
+        var nested = Directory.CreateDirectory(Path.Combine(_dir, "n1", "inner")).Parent!.FullName;
+
+        int removed = StaleArtifactReaper.ReapOldEmptyDirectories(_dir, TimeSpan.Zero);
+
+        Assert.False(Directory.Exists(empty), "an old empty directory is removed");
+        Assert.True(File.Exists(Path.Combine(full, "data")), "a directory with a file is never touched");
+        Assert.True(Directory.Exists(nested), "a directory holding a directory is not empty");
+        Assert.Equal(1, removed);
+    }
+
+    [Fact]
+    public void ReapOldEmptyDirectories_RecentEmptyDirectory_IsKept()
+    {
+        var empty = Directory.CreateDirectory(Path.Combine(_dir, "e2")).FullName;
+
+        StaleArtifactReaper.ReapOldEmptyDirectories(_dir, TimeSpan.FromDays(10));
+
+        Assert.True(Directory.Exists(empty), "a script may still be about to use a new mktemp -d directory");
+    }
+
+    [Fact]
     public void Reap_MissingDirectory_ReturnsZero()
         => Assert.Equal(0, StaleArtifactReaper.Reap(Path.Combine(_dir, "does-not-exist")));
 

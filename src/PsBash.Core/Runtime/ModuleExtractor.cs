@@ -167,6 +167,9 @@ public static class ModuleExtractor
         // another user — or one they can still write — must refuse, not load.
         PsBashRuntimeDirectory.EnsureDirectory();
         var dir = ExtractionDir();
+        // Before the marker is read: a pruner that already holds the directory makes this wait, and the
+        // extraction below then lays it down again.
+        HoldInUse(dir);
         var marker = Path.Combine(dir, ".extracted");
         var psd1Path = Path.Combine(dir, "PsBash.psd1");
 
@@ -263,6 +266,149 @@ public static class ModuleExtractor
         }
 
         return psd1Path;
+    }
+
+    // ---- Old extraction directories ------------------------------------------------------------------
+    // Every build (each dev build, each release) extracts into its own module-{version}-{hash} directory,
+    // about 5 MB, and nothing removed the old ones: one dev machine held 11 from a single day. A host
+    // re-imports the psd1 from its directory for every runspace, so a directory may be removed only when
+    // no process uses it. Each process holds {dir}/.inuse open SHARED for its life; the pruner must open
+    // it EXCLUSIVELY (on Unix .NET maps these to flock LOCK_SH / LOCK_EX), and while it holds it a new
+    // user's open fails, so that user waits, then re-extracts.
+
+    private const string InUseFileName = ".inuse";
+    private static FileStream? _inUse;
+    private static int _pruneStarted;
+
+    // A directory this old with no .inuse (a release from before the lock) is taken as unused. On
+    // Windows a DLL still loaded from it is also checked; elsewhere the age is the only signal.
+    internal static readonly TimeSpan LegacyMinAge = TimeSpan.FromDays(7);
+
+    // module-{version}-{hash}: the shape ExtractionDir() makes (version digits and dots, 12 hex digits).
+    internal static bool IsExtractionDirName(string name)
+    {
+        const string head = "module-";
+        int dash = name.LastIndexOf('-');
+        if (!name.StartsWith(head, StringComparison.Ordinal) || dash <= head.Length || name.Length - dash - 1 != 12) return false;
+        for (int i = head.Length; i < dash; i++)
+            if (!char.IsAsciiDigit(name[i]) && name[i] != '.') return false;
+        for (int i = dash + 1; i < name.Length; i++)
+            if (!char.IsAsciiHexDigitLower(name[i])) return false;
+        return true;
+    }
+
+    private static void HoldInUse(string dir)
+    {
+        if (_inUse != null) return;
+        lock (_dirLock)
+        {
+            if (_inUse != null) return;
+            _inUse = OpenInUse(dir, TimeSpan.FromSeconds(10));
+        }
+        if (_inUse != null && Interlocked.Exchange(ref _pruneStarted, 1) == 0)
+        {
+            var runtimeDir = Path.GetDirectoryName(dir)!;
+            ThreadPool.QueueUserWorkItem(_ =>
+            {
+                try { PruneStaleExtractions(runtimeDir, dir, LegacyMinAge); } catch { /* best effort */ }
+            });
+        }
+    }
+
+    /// <summary>Opens <paramref name="dir"/>/.inuse shared, retrying while a pruner holds it. Null if it never could.</summary>
+    internal static FileStream? OpenInUse(string dir, TimeSpan wait)
+    {
+        var deadline = DateTime.UtcNow + wait;
+        while (true)
+        {
+            try
+            {
+                Directory.CreateDirectory(dir);
+                return new FileStream(Path.Combine(dir, InUseFileName), FileMode.OpenOrCreate,
+                    FileAccess.Read, FileShare.ReadWrite);
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                if (DateTime.UtcNow >= deadline) return null; // extraction still works; this process is just unprotected
+                Thread.Sleep(50);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Removes the extraction directories under <paramref name="runtimeDir"/> other than
+    /// <paramref name="keepDir"/> that no process uses. Returns how many were removed.
+    /// </summary>
+    internal static int PruneStaleExtractions(string runtimeDir, string keepDir, TimeSpan legacyMinAge)
+    {
+        int removed = 0;
+        string[] dirs;
+        try { dirs = Directory.GetDirectories(runtimeDir, "module-*"); }
+        catch { return 0; }
+
+        foreach (var d in dirs)
+        {
+            try
+            {
+                if (string.Equals(Path.GetFullPath(d), Path.GetFullPath(keepDir), StringComparison.OrdinalIgnoreCase)) continue;
+                if (!IsExtractionDirName(Path.GetFileName(d))) continue;
+                if (TryRemoveExtraction(d, legacyMinAge)) removed++;
+            }
+            catch { /* best effort per directory */ }
+        }
+        return removed;
+    }
+
+    private static bool TryRemoveExtraction(string dir, TimeSpan legacyMinAge)
+    {
+        var inUsePath = Path.Combine(dir, InUseFileName);
+        if (!File.Exists(inUsePath))
+        {
+            if (DateTime.UtcNow - Directory.GetLastWriteTimeUtc(dir) < legacyMinAge) return false;
+            if (OperatingSystem.IsWindows() && AnyDllLoaded(dir)) return false;
+            DeleteContents(dir, except: null);
+            Directory.Delete(dir, recursive: true);
+            return true;
+        }
+
+        FileStream exclusive;
+        try
+        {
+            // DeleteOnClose: .inuse is unlinked while this handle still excludes everyone (on Unix .NET
+            // unlinks before it closes), so no user can open it between "proved unused" and the unlink.
+            exclusive = new FileStream(inUsePath, FileMode.Open, FileAccess.ReadWrite, FileShare.None,
+                bufferSize: 1, FileOptions.DeleteOnClose);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return false; // a process holds it
+        }
+        using (exclusive)
+            DeleteContents(dir, except: inUsePath);
+        // Not recursive: a user that arrived after the close has created a new .inuse here and is
+        // extracting, and this then fails and leaves its directory alone.
+        Directory.Delete(dir);
+        return true;
+    }
+
+    // The marker first: if a later delete fails, the next user of the directory re-extracts instead of
+    // importing a half-removed module.
+    private static void DeleteContents(string dir, string? except)
+    {
+        File.Delete(Path.Combine(dir, ".extracted"));
+        foreach (var f in Directory.GetFiles(dir))
+            if (!string.Equals(f, except, StringComparison.OrdinalIgnoreCase)) File.Delete(f);
+    }
+
+    // A DLL mapped as an image cannot be opened for writing (Windows).
+    private static bool AnyDllLoaded(string dir)
+    {
+        foreach (var dll in Directory.GetFiles(dir, "*.dll"))
+        {
+            try { using var _ = new FileStream(dll, FileMode.Open, FileAccess.ReadWrite, FileShare.None); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return true; }
+        }
+        return false;
     }
 
     private static string ReadExtractionMarker(string marker)

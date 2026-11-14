@@ -6790,6 +6790,23 @@ Describe 'Invoke-ProcessSub — Runtime Helper' {
         $results[1].BashText | Should -Be "b`t2"
         Remove-Item $path1, $path2 -Force
     }
+
+    # mktemp's default directory is the process-sub one. The reaper deleted any file there older than
+    # 5 minutes, so a script's mktemp file vanished when any shell ran a <(...).
+    It 'reaps an old substitution file but never a mktemp file' {
+        $mine = (Invoke-BashMktemp).Path
+        $oldSub = Invoke-ProcessSub { echo old }
+        [System.IO.File]::SetLastWriteTimeUtc($mine, [DateTime]::UtcNow.AddMinutes(-10))
+        [System.IO.File]::SetLastWriteTimeUtc($oldSub, [DateTime]::UtcNow.AddMinutes(-10))
+        $path = Invoke-ProcessSub { echo new }
+        try {
+            Test-Path $mine | Should -Be $true
+            Test-Path $oldSub | Should -Be $false
+            Split-Path $path -Leaf | Should -BeLike 'psub-*'
+        } finally {
+            Remove-Item $mine, $path -Force -ErrorAction SilentlyContinue
+        }
+    }
 }
 
 Describe 'Invoke-BashPwd — Physical Flag' {

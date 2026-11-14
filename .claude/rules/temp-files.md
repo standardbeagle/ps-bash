@@ -9,9 +9,9 @@ paths:
 
 ## ALL temp under `ps-bash/`
 Never `Path.GetTempPath()` directly, never `Path.GetTempFileName()`. Always under `ps-bash/`:
-- module extraction → `ps-bash/module-{version}/` (marker + timestamp invalidation)
-- worker script → `ps-bash/module-{version}/ps-bash-worker.ps1` (timestamp invalidation)
-- process substitution → `ps-bash/proc-sub/{random}` (ephemeral, cleaned on error)
+- module extraction → `ps-bash/module-{version}-{hash}/` (marker = hash; `.inuse` held shared, old dirs pruned)
+- worker script → `ps-bash/module-{version}-{hash}/ps-bash-worker.ps1`
+- process substitution → `ps-bash/proc-sub/psub-{random}` (reaper deletes only `psub-*`: mktemp shares the dir)
 
 ## INVALIDATION
 Re-extract when assembly `LastWriteTimeUtc` > extracted file's. (Extractor compares; missing file = extract.)

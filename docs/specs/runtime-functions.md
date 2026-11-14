@@ -544,14 +544,18 @@ All temp files are written under a `ps-bash/` subdirectory of the system temp pa
 
 ### ModuleExtractor
 
-Path: `ps-bash/module-{version}/`
+Path: `ps-bash/module-{version}-{hash}/` (hash = first 12 hex of the embedded content's SHA-256)
 
 Extracts the embedded module files (`PsBash.psd1`, `PsBash.psm1`,
-`PsBash.Format.ps1xml`) from the assembly's manifest resources into a version-stamped
-directory. A `.extracted` marker file signals that extraction completed successfully.
+`PsBash.Format.ps1xml`, the cmdlet DLLs) from the assembly's manifest resources into a
+content-stamped directory. A `.extracted` marker file (holding the hash) signals that
+extraction completed successfully; a marker with a different hash is deleted and the files
+are re-extracted.
 
-Cache invalidation: if the assembly file's `LastWriteTimeUtc` is newer than the
-marker's timestamp, the marker is deleted and files are re-extracted on next access.
+Old directories: every process holds `{dir}/.inuse` open shared for its life. Once per process,
+`PruneStaleExtractions` removes each other extraction whose `.inuse` it can open exclusively
+(flock on Unix); a directory without `.inuse` (an older release) only after 7 days and, on
+Windows, only when none of its DLLs is loaded.
 
 ### Host Worker
 
@@ -562,12 +566,14 @@ loads the extracted module into its runspace before executing transpiled scripts
 
 ### Invoke-ProcessSub
 
-Path: `ps-bash/proc-sub/{random-filename}`
+Path: `ps-bash/proc-sub/psub-{random-filename}`
 
 Used for process substitution (`<(command)`). Creates a temp file with a random name,
 streams the scriptblock's output into it as it is produced (`ProcessSubFileWriter`), and
 returns the path. On error, the temp file is cleaned up. On success, the caller is
-responsible for cleanup (files older than 5 minutes are reaped on the next call).
+responsible for cleanup (`psub-*` files older than 5 minutes are reaped on the next call).
+The directory is also `mktemp`'s default; its files are never reaped (they are the script's),
+and the host removes only its empty subdirectories older than 10 days.
 
 ## Adding a New Command
 

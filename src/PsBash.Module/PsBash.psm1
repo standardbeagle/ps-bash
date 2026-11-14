@@ -432,9 +432,11 @@ function Invoke-ProcessSub {
     # so in a long-lived daemon host these files accumulate unbounded. Best-effort
     # reap any older than a few minutes — well past the lifetime of the command that
     # created them, so an in-flight substitution is never swept out from under a reader.
+    # Only psub-* files: mktemp's default directory is this one too, and a script's
+    # mktemp file is its own to delete (an older one was reaped mid-script).
     try {
         $cutoff = [DateTime]::UtcNow.AddMinutes(-5)
-        foreach ($old in [System.IO.Directory]::EnumerateFiles($subDir)) {
+        foreach ($old in [System.IO.Directory]::EnumerateFiles($subDir, 'psub-*')) {
             try {
                 if ([System.IO.File]::GetLastWriteTimeUtc($old) -lt $cutoff) {
                     [System.IO.File]::Delete($old)
@@ -443,7 +445,7 @@ function Invoke-ProcessSub {
         }
     } catch { }
 
-    $tmp = [System.IO.Path]::Combine($subDir, [System.IO.Path]::GetRandomFileName())
+    $tmp = [System.IO.Path]::Combine($subDir, 'psub-' + [System.IO.Path]::GetRandomFileName())
     $writer = $null
     try {
         # STREAM the producer into the file: each record is encoded (exact bytes, \n boundary unless the
@@ -475,7 +477,7 @@ function Get-BashHostTempPath {
 function New-BashProcessSubPath {
     $subDir = [System.IO.Path]::Combine((Get-BashHostTempPath), 'ps-bash', 'proc-sub')
     [void][System.IO.Directory]::CreateDirectory($subDir)
-    $tmp = [System.IO.Path]::Combine($subDir, [System.IO.Path]::GetRandomFileName())
+    $tmp = [System.IO.Path]::Combine($subDir, 'psub-' + [System.IO.Path]::GetRandomFileName())
     [System.IO.File]::WriteAllBytes($tmp, [byte[]]@())
     return $tmp
 }

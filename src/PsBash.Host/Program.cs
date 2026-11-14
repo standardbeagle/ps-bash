@@ -168,6 +168,12 @@ internal sealed class Program
         // can never disturb a live daemon. One cheap flat-dir scan per launch,
         // off the hot path; best-effort (never throws).
         try { StaleArtifactReaper.Reap(); } catch { /* never block startup on cleanup */ }
+        try
+        {
+            StaleArtifactReaper.ReapOldEmptyDirectories(
+                Path.Combine(PsBash.Core.HostTempPath.Get(), "ps-bash", "proc-sub"), TimeSpan.FromDays(10));
+        }
+        catch { /* never block startup on cleanup */ }
 
         var (transport, scheme, endpoint) = CreateTransport(args);
         HostLog.SetEndpoint(scheme, endpoint);
