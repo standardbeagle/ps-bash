@@ -85,18 +85,42 @@ public class InvokeBashMapfileCommandTests
         Assert.Equal(new[] { "one", "two" }, arr);
     }
 
-    [Fact]
-    public void Mapfile_Origin_PrefixesEmptyStrings()
+    /// <summary>The array as "index=value" entries (sparse arrays keep their own subscripts).</summary>
+    private static string[] RunAndReadEntries(string script, string varName)
     {
-        // -O 5 means destination indices 0..4 are empty strings and the
-        // pipeline lines start at index 5.
-        var arr = RunAndReadArray(
-            "'x','y' | Invoke-BashMapfile -t -O 5",
-            "MAPFILE");
-        Assert.Equal(7, arr.Length);
-        for (int i = 0; i < 5; i++) Assert.Equal("", arr[i]);
-        Assert.Equal("x", arr[5]);
-        Assert.Equal("y", arr[6]);
+        using var pwsh = PwshTestFixture.Create();
+        pwsh.AddScript(script).Invoke();
+        pwsh.Commands.Clear();
+        var result = pwsh.AddScript(
+            $"$v = Get-Variable -Name '{varName}' -ValueOnly -ErrorAction SilentlyContinue; " +
+            "if ($v -is [System.Collections.IDictionary]) { foreach ($k in $v.Keys) { \"$k=$($v[$k])\" } } " +
+            "else { $arr = @($v); for ($k=0; $k -lt $arr.Count; $k++) { \"$k=$($arr[$k])\" } }").Invoke();
+        return result.Select(o => o?.ToString() ?? "").ToArray();
+    }
+
+    [Fact]
+    public void Mapfile_Origin_StoresFromThatIndexOnly()
+    {
+        // bash: mapfile -t -O 5 a <<< $'x\ny' -> declare -a a=([5]="x" [6]="y") (no empty prefix).
+        var arr = RunAndReadEntries("'x','y' | Invoke-BashMapfile -t -O 5", "MAPFILE");
+        Assert.Equal(new[] { "5=x", "6=y" }, arr);
+    }
+
+    [Fact]
+    public void Mapfile_Origin_KeepsExistingElements()
+    {
+        // bash: a=(a b c d e); mapfile -t -O 2 a <<< $'X\nY' -> a b X Y e (oils builtin-bash "mapfile -O start").
+        var arr = RunAndReadEntries(
+            "$global:arr1 = @('a','b','c','d','e'); 'X','Y' | Invoke-BashMapfile -t -O 2 arr1", "arr1");
+        Assert.Equal(new[] { "0=a", "1=b", "2=X", "3=Y", "4=e" }, arr);
+    }
+
+    [Fact]
+    public void Mapfile_NoOrigin_ReplacesExistingElements()
+    {
+        var arr = RunAndReadEntries(
+            "$global:arr2 = @('a','b','c','d','e'); 'X' | Invoke-BashMapfile -t arr2", "arr2");
+        Assert.Equal(new[] { "0=X" }, arr);
     }
 
     [Fact]

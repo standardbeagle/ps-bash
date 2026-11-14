@@ -813,8 +813,8 @@ public sealed partial class BashParser
                 raw = home + (slash < 0 ? "" : raw[slash..]);
         }
 
-        if (!raw.EndsWith('\n'))
-            raw += "\n";
+        // Always, even when the word already ends in a newline: `mapfile -t a <<< $'hello\n'` reads two lines.
+        raw += "\n";
 
         return new HereDoc(raw, expand, StripTabs: false);
     }

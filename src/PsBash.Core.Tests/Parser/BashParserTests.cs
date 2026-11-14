@@ -2228,6 +2228,8 @@ public class BashParserTests
     [Theory]
     [InlineData("cat <<< $'k1:v1\\nk2:v2'", "k1:v1\nk2:v2\n")]
     [InlineData("cat <<< $'tab\\there'", "tab\there\n")]
+    // Oracle: `mapfile -t a <<< $'hello\n'` reads two lines (hello, ""): the here-string always gains a newline.
+    [InlineData("cat <<< $'hello\\n'", "hello\n\n")]
     public void Parse_HereStringAnsiCWord_IsDecodedAndNotReExpanded(string bash, string body)
     {
         var simple = Assert.IsType<Command.Simple>(Parse(bash));

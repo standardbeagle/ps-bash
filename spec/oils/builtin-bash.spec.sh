@@ -93,7 +93,7 @@ help: help [-dms] [pattern ...]
     Returns success unless PATTERN is not found or an invalid option is given.
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-bash builtin-bash (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-help-builtin-text help prints its own command summary, not bash's builtin list and help text
 ## timeout: 10
 
 #### mapfile
@@ -235,7 +235,6 @@ len=2
 len=2
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-bash builtin-bash (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### mapfile (store position): -O start
@@ -255,7 +254,6 @@ n=5
 [a2]
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-bash builtin-bash (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### mapfile (input range): -s start -n count

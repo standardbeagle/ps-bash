@@ -115,6 +115,7 @@ public sealed class InvokeBashMapfileCommand : PSCmdlet
         // Defaults match the psm1 oracle.
         int? count = null;
         int origin = O ?? 0;
+        bool originGiven = O is not null;
         int skip = 0;
         bool stripTrailing = false;
         char delim = '\n';
@@ -142,11 +143,13 @@ public sealed class InvokeBashMapfileCommand : PSCmdlet
             if (a == "-O" && i + 1 < args.Length)
             {
                 if (int.TryParse(args[i + 1], out var oVal)) origin = oVal;
+                originGiven = true;
                 i += 2; continue;
             }
             if (a.StartsWith("-O") && a.Length > 2)
             {
                 if (int.TryParse(a.Substring(2), out var oVal)) origin = oVal;
+                originGiven = true;
                 i++; continue;
             }
             if (a == "-s" && i + 1 < args.Length)
@@ -211,14 +214,23 @@ public sealed class InvokeBashMapfileCommand : PSCmdlet
             lines = lines.GetRange(0, count.Value);
         }
 
-        // Build result array. With origin > 0, prefix with that many empty
-        // strings (oracle's `@(1..$origin | ForEach-Object { '' })` slice).
-        string[] result;
-        if (origin > 0)
+        // Without -O bash clears the array first. With -O it keeps the elements already there and assigns the
+        // lines from index ORIGIN on (`arr=(x y z); mapfile -O 2` keeps x y and overwrites z); indices below
+        // ORIGIN that were never set stay unset, so the result is sparse unless it runs 0..n-1 without a gap.
+        object result;
+        if (originGiven)
         {
-            result = new string[origin + lines.Count];
-            for (int j = 0; j < origin; j++) result[j] = "";
-            for (int j = 0; j < lines.Count; j++) result[origin + j] = lines[j];
+            var entries = new List<object?>();
+            object? existing = SessionState.PSVariable.GetValue(varName);
+            if (existing is PSObject pso) existing = pso.BaseObject;
+            if (existing is BashSparseArray sparse)
+                foreach (System.Collections.DictionaryEntry kv in sparse) { entries.Add(kv.Key); entries.Add(kv.Value); }
+            else if (existing is System.Collections.IList list)
+                for (int j = 0; j < list.Count; j++) { entries.Add((long)j); entries.Add(list[j]); }
+            else if (existing is string scalar)
+            { entries.Add(0L); entries.Add(scalar); }
+            for (int j = 0; j < lines.Count; j++) { entries.Add((long)(origin + j)); entries.Add(lines[j]); }
+            result = BashSparseArray.FromEntries(entries.ToArray());
         }
         else
         {
