@@ -660,7 +660,7 @@ touch a\\b\\c\\d  # -r is necessary!
 find . -type f -a -print0 | { read -r -d ''; echo "[$REPLY]"; }
 ## stdout: [./a\b\c\d]
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-read builtin-read (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash platform-windows-paths a file name with backslashes (a\b\c\d) is a path on Windows, so touch cannot create it (intentional-differences.md, Platform: paths)
 ## timeout: 10
 ## real-launcher
 

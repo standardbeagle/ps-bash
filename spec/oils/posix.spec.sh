@@ -112,7 +112,7 @@ esac
 echo ${x:-$(ls -d /bin)}
 ## stdout: /bin
 ## status: 0
-## XFAIL ps-bash gap-oils-posix posix (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash platform-windows-unix-bin expects /bin, which Windows does not have (intentional-differences.md, Platform)
 ## timeout: 10
 
 #### Arithmetic expansion
@@ -150,19 +150,8 @@ do
   [ $x -eq 0 ] && break
 done
 # Not testing anything but the status since output is complicated
-## STDOUT:
-Sun Oct 25 11:59:44 CDT 2026
-/bin
-/bin
-Sun Oct 25 11:59:44 CDT 2026
-/bin
-/bin
-Sun Oct 25 11:59:44 CDT 2026
-/bin
-/bin
-## END
+# (ps-bash: the recorded stdout held the recording's date; only the status is compared)
 ## status: 0
-## XFAIL ps-bash gap-oils-posix posix (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Multiple here docs on one line

@@ -41,7 +41,7 @@ ll is an alias for ls -l
 date is _tmp/date
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-type builtin-type (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash intentional-psbash-command a ps-bash command (date) runs ahead of a PATH file, so type prints its name, not _tmp/date (intentional-differences.md, command lookup)
 ## timeout: 10
 
 #### type of relative path
@@ -56,7 +56,7 @@ type _tmp/file _tmp/ex
 # mksh
 ## stdout: _tmp/ex is _tmp/ex
 ## status: 1
-## XFAIL ps-bash gap-oils-builtin-type builtin-type (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash platform-windows-exec-bit Windows has no execute bit: chmod +x leaves no mark, so type finds _tmp/file as well as _tmp/ex (intentional-differences.md, Platform)
 ## timeout: 10
 
 #### type -> not found

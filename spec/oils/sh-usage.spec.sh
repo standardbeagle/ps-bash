@@ -64,7 +64,7 @@ foo
 foo
 ## END
 ## status: 127
-## XFAIL ps-bash gap-oils-sh-usage sh-usage (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-launcher-script-set-options the launcher accepts -x/-v only with -c, not with a script file, and does not read a lone - as the end of options
 ## timeout: 10
 ## real-launcher
 
@@ -88,7 +88,7 @@ beagle@beagle-ab2:/tmp/tmp.yKLKrlwxiE$ exit
 ==> non-interactive.txt <==
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-sh-usage sh-usage (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-interactive-stdin-not-a-tty ps-bash -i with stdin not a terminal (</dev/null) waits instead of reading commands and exiting at EOF; the recorded prompt also holds the recording host's user, host name and temp dir
 ## timeout: 10
 ## real-launcher
 

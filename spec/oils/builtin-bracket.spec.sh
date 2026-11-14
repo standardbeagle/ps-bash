@@ -293,7 +293,7 @@ test -c /dev/zero
 echo status=$?
 ## stdout: status=0
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-bracket builtin-bracket (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash platform-windows-no-dev-zero Windows has no /dev/zero character device, so test -c /dev/zero is false (intentional-differences.md, Platform)
 ## timeout: 10
 
 #### test -S
@@ -561,7 +561,7 @@ status=0
 status=1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-bracket builtin-bracket (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash platform-windows-no-sticky-bit Windows has no sticky bit, so test -k /tmp is false (intentional-differences.md, Platform)
 ## timeout: 10
 
 #### More negative numbers

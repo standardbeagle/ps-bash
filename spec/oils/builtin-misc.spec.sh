@@ -91,7 +91,7 @@ pf  $'a\nb\001c\'d'
 @Q  $'a\nb\001c\'d'
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-misc builtin-misc (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash platform-windows-unix-bin expects /bin/echo, which Windows does not have, so foo is empty (intentional-differences.md, Platform)
 ## timeout: 10
 ## real-launcher
 
@@ -118,6 +118,6 @@ pf  spam
 @Q  'spam'
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-misc builtin-misc (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash platform-windows-env-vars Windows sets the lowercase variable windir, which set lists right after foo, so grep -A1 foo prints it too (intentional-differences.md, Platform)
 ## timeout: 10
 ## real-launcher

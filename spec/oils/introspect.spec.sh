@@ -53,7 +53,7 @@ check() {
 check
 ## stdout: 4
 ## status: 0
-## XFAIL ps-bash gap-oils-introspect introspect (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-bash-lineno-unimplemented BASH_LINENO is not tracked: $((BASH_LINENO)) in a function is 0, not the caller's line
 ## timeout: 10
 
 #### ${BASH_LINENO[@]} is a stack of line numbers for function calls

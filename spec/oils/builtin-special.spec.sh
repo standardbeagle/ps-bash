@@ -54,7 +54,7 @@ foo=bar
 z=
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-special builtin-special (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-posix-mode-special-builtins set -o posix is not implemented: a prefix assignment before a special builtin does not persist, and a special builtin can still be redefined as a function
 ## timeout: 10
 ## real-launcher
 
@@ -76,7 +76,7 @@ foo=bar
 spam=eggs
 ## END
 ## status: 127
-## XFAIL ps-bash gap-oils-builtin-special builtin-special (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-posix-mode-special-builtins set -o posix is not implemented: a prefix assignment before a special builtin does not persist, and a special builtin can still be redefined as a function
 ## timeout: 10
 ## real-launcher
 
@@ -86,7 +86,7 @@ pre1=pre1 readonly x=x
 pre2=pre2 exec sh -c 'echo pre1=$pre1 x=$x pre2=$pre2'
 ## stdout: pre1= x= pre2=pre2
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-special builtin-special (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-vars-always-exported every ps-bash variable lives in the process environment, so a child (exec sh -c) sees unexported pre1 and x
 ## timeout: 10
 
 #### exec without args is a special case of the special case in some shells
@@ -127,7 +127,7 @@ eval() {
 eval 'echo hi'
 ## stdout: hi
 ## status: 2
-## XFAIL ps-bash gap-oils-builtin-special builtin-special (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-posix-mode-special-builtins set -o posix is not implemented: a prefix assignment before a special builtin does not persist, and a special builtin can still be redefined as a function
 ## timeout: 10
 ## real-launcher
 
@@ -220,7 +220,7 @@ after posix
 function
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-special builtin-special (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-posix-mode-special-builtins set -o posix is not implemented: a prefix assignment before a special builtin does not persist, and a special builtin can still be redefined as a function
 ## timeout: 10
 ## real-launcher
 
