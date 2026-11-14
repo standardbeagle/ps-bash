@@ -191,6 +191,8 @@ internal sealed class InteractiveShellHarness : IAsyncDisposable
         psi.Environment["LANG"] = "C.UTF-8";
         psi.Environment["COLUMNS"] = "120";
         psi.Environment["LINES"] = "40";
+        // Drive the REPL (line editor) through the pipe: piped `-i` otherwise runs as PipedInteractive.
+        psi.Environment["PSBASH_INTERACTIVE_REPL"] = "1";
         psi.Environment["PROMPT_COMMAND"] = "";
         psi.Environment["PS1"] = Ps1Value;
         psi.Environment["PS2"] = "> ";

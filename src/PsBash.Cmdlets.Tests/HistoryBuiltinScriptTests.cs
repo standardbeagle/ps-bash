@@ -81,4 +81,52 @@ public class HistoryBuiltinScriptTests
         Assert.Equal("h.txt", file);
         Assert.Equal(["x"], written);
     }
+
+    // bash -i: `history -c; HISTFILE=tmp; echo 1; history -a` appends the three lines after the clear; a second
+    // -a appends only what came after the first; -r reads the file and leaves nothing new to append.
+    [Fact]
+    public void Append_WritesOnlyLinesSinceTheLastSave()
+    {
+        var list = new List<string> { "old 1", "old 2" };
+        var mark = new InvokeBashHistoryCommand.HistoryMark();
+        var appended = new List<List<string>>();
+        InvokeBashHistoryCommand.Result Hist(params string[] args) => InvokeBashHistoryCommand.Run(args, list, "tmp",
+            _ => ["from file"], (_, lines, append) => { Assert.True(append || args[0] == "-w"); appended.Add(lines.ToList()); }, mark);
+
+        list.Clear(); Hist("-c");
+        list.AddRange(["HISTFILE=tmp", "echo 1", "history -a"]);
+        Assert.Equal(0, Hist("-a").Status);
+        list.AddRange(["echo 2", "history -a"]);
+        Hist("-a");
+        list.Add("history -r");
+        Hist("-r");
+        Hist("-a");
+        Assert.Equal([["HISTFILE=tmp", "echo 1", "history -a"], ["echo 2", "history -a"], []], appended);
+        Assert.Equal("from file", list[^1]);
+    }
+
+    // bash 5.2 with HISTFILE and HOME unset: -w is a silent no-op, -a (with lines to append), -r and -n fail silently.
+    [Theory]
+    [InlineData("-w", 0)]
+    [InlineData("-a", 1)]
+    [InlineData("-r", 1)]
+    [InlineData("-n", 1)]
+    public void NoHistoryFile_StatusLikeBash(string op, int status)
+    {
+        var r = InvokeBashHistoryCommand.Run([op], ["unset HISTFILE", op], null, _ => throw new InvalidOperationException(),
+            (_, _, _) => throw new InvalidOperationException());
+        Assert.Equal(status, r.Status);
+        Assert.Empty(r.Err);
+    }
+
+    [Fact]
+    public void NoHistFile_UsesTheDefaultFile_AndAWriteErrorIsStatusOne()
+    {
+        string? file = null;
+        var r = InvokeBashHistoryCommand.Run(["-a"], ["x"], null, _ => null,
+            (f, _, _) => { file = f; throw new DirectoryNotFoundException(); }, defaultFile: "/nonexistent/.history");
+        Assert.Equal("/nonexistent/.history", file);
+        Assert.Equal(1, r.Status);
+        Assert.Equal(["history: /nonexistent/.history: cannot create: No such file or directory"], r.Err);
+    }
 }

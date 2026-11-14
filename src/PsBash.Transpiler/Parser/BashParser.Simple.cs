@@ -251,9 +251,9 @@ public sealed partial class BashParser
                 // fell to the `else break`, ending the command and leaving
                 // `! -name x` to be mis-parsed as a separate negated pipeline.
                 var token = Advance();
-                // `!=` / `!x` is ONE word when the text is adjacent (`test a != b`, `echo a !=b`).
+                // `!=` / `!x` / `!!` is ONE word when the text is adjacent (`test a != b`, `echo a !=b`, `echo !!`).
                 string bangText = token.Value;
-                while (Peek().Kind == BashTokenKind.Word && Peek().Position == token.Position + bangText.Length)
+                while (Peek().Kind is BashTokenKind.Word or BashTokenKind.Bang && Peek().Position == token.Position + bangText.Length)
                     bangText += Advance().Value;
                 words.Add(new CompoundWord(DecomposeWord(bangText)));
             }

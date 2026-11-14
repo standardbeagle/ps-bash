@@ -45,7 +45,6 @@ history -a
 ^D
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-history builtin-history (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -64,7 +63,6 @@ case $SH in bash) echo '^D' ;; esac
 ^D
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-history builtin-history (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -109,7 +107,7 @@ status=0
 status=1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-history builtin-history (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash arch-vars-in-environment SH=bash is not exported in bash, so the child's case $SH in bash*) echo '^D' does not match; here every variable is exported (intentional-differences.md, Platform)
 ## timeout: 10
 ## real-launcher
 
@@ -173,7 +171,9 @@ echo '
 unset HISTFILE
 history -a
 echo status=$?
-' | $SH -i
+' | HOME=/nonexistent $SH -i
+# ps-bash guard: HOME=/nonexistent. With HISTFILE unset the file is ~/.history; the recorded status=1 is a
+# HOME bash could not write (with a writable HOME it is 0).
 
 case $SH in bash) echo '^D' ;; esac
 ## STDOUT:
@@ -181,7 +181,6 @@ status=1
 ^D
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-history builtin-history (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 

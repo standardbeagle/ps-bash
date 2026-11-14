@@ -14,7 +14,7 @@ bind -P | grep vi-subst
 vi-subst is not bound to any keys
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-bind builtin-bind (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash wontfix-interactive-bind bind lists and edits GNU readline's keymaps; ps-bash's line editor is not readline (intentional-differences.md, Interactive shell)
 ## timeout: 10
 
 #### bind -s -S accepted
@@ -25,7 +25,7 @@ bind -s
 bind -S
 ## stdout:
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-bind builtin-bind (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash wontfix-interactive-bind bind lists and edits GNU readline's keymaps; ps-bash's line editor is not readline (intentional-differences.md, Interactive shell)
 ## timeout: 10
 
 #### bind -v -V accepted
@@ -41,7 +41,7 @@ set blink-matching-paren off
 blink-matching-paren is set to 'off'
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-bind builtin-bind (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash wontfix-interactive-bind bind lists and edits GNU readline's keymaps; ps-bash's line editor is not readline (intentional-differences.md, Interactive shell)
 ## timeout: 10
 
 #### bind -q
@@ -64,7 +64,7 @@ yank can be invoked via "\C-y".
 status=0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-bind builtin-bind (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash wontfix-interactive-bind bind lists and edits GNU readline's keymaps; ps-bash's line editor is not readline (intentional-differences.md, Interactive shell)
 ## timeout: 10
 
 #### bind -X
@@ -82,7 +82,7 @@ echo foo
 status=0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-bind builtin-bind (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash wontfix-interactive-bind bind lists and edits GNU readline's keymaps; ps-bash's line editor is not readline (intentional-differences.md, Interactive shell)
 ## timeout: 10
 
 #### bind -m with bind -x/-X
@@ -104,7 +104,7 @@ vi
 status=0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-bind builtin-bind (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash wontfix-interactive-bind bind lists and edits GNU readline's keymaps; ps-bash's line editor is not readline (intentional-differences.md, Interactive shell)
 ## timeout: 10
 
 #### bind -r
@@ -125,7 +125,7 @@ status=0
 status=1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-bind builtin-bind (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash wontfix-interactive-bind bind lists and edits GNU readline's keymaps; ps-bash's line editor is not readline (intentional-differences.md, Interactive shell)
 ## timeout: 10
 
 #### bind -r of bind -x commands
@@ -146,5 +146,5 @@ status=0
 status=1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-bind builtin-bind (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash wontfix-interactive-bind bind lists and edits GNU readline's keymaps; ps-bash's line editor is not readline (intentional-differences.md, Interactive shell)
 ## timeout: 10

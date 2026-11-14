@@ -23,6 +23,9 @@ public record ShellArgs(
     // letter stays one word and is reported as an unsupported option before anything runs.
     private static readonly System.Buffers.SearchValues<char> BundleLetters = System.Buffers.SearchValues.Create("lisceuxvnoO");
 
+    /// <summary>bash's PS1 for an interactive shell that inherits none (<c>bash --norc -i -c 'echo "$PS1"'</c>).</summary>
+    public const string DefaultPs1 = @"\s-\v\$ ";
+
     /// <summary>
     /// <c>HISTFILE</c> for an interactive shell that runs a command (<c>bash -i -c 'cmd'</c>): bash sets it to
     /// <c>~/.bash_history</c> unless it is already set; a non-interactive shell leaves it unset. Null when nothing is to

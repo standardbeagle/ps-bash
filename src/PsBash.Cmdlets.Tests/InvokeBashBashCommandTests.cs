@@ -248,6 +248,42 @@ public class InvokeBashBashCommandTests : IClassFixture<SharedPwshFixture>
         Assert.Equal(expected, InvokeBashBashCommand.OptionZoneHas(args, flag));
     }
 
+    // `echo cmds | bash --norc -i` is an interactive session on the pipe (prompts on stderr, history, PROMPT_COMMAND);
+    // the piped text must stay the child's stdin, not become its -c program.
+    [Theory]
+    [InlineData(new[] { "--norc", "-i" }, true)]
+    [InlineData(new[] { "-il" }, true)]
+    [InlineData(new[] { "-o", "vi", "-i" }, true)]
+    [InlineData(new[] { "--norc" }, false)]
+    [InlineData(new[] { "--init-file" }, false)]
+    [InlineData(new[] { "-x", "s.sh", "-i" }, false)]
+    [InlineData(new[] { "--", "-i" }, false)]
+    public void AsksInteractive_OnlyAnOptionZoneI(string[] args, bool expected)
+        => Assert.Equal(expected, InvokeBashBashCommand.AsksInteractive(args));
+
+    // `f() { bash --norc "$@"; }; f -i -c 'echo one'`: the emitter splats "$@", and PowerShell binds a splatted
+    // "-i" / "-e" / "-v" as a parameter name ("Missing an argument for parameter 'InputObject'", "parameter name
+    // 'e' is ambiguous"). Direct and splatted calls must bind, and the options go back into bash's argv.
+    [Fact]
+    public void SplattedDashOptions_Bind()
+    {
+        var (lines, err, _) = Run("$a = @('-i', '-e', '-v', '--help'); Invoke-BashBash @a");
+        Assert.True(string.IsNullOrEmpty(err), $"unexpected error: {err}");
+        Assert.Contains(lines, l => l.Contains("bash", StringComparison.OrdinalIgnoreCase));
+        (lines, err, _) = Run("Invoke-BashBash -e -o pipefail --help");
+        Assert.True(string.IsNullOrEmpty(err), $"unexpected error: {err}");
+        Assert.Contains(lines, l => l.Contains("bash", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Theory]
+    [InlineData(null, new[] { "--norc", "s.sh" }, false, false, null, new[] { "--norc", "s.sh" })]
+    [InlineData(null, new[] { "--norc" }, true, true, "pipefail", new[] { "-i", "-e", "-o", "pipefail", "--norc" })]
+    [InlineData("echo $0", new[] { "--norc", "-x", "a" }, false, false, null, new[] { "--norc", "-x", "-c", "echo $0", "a" })]
+    [InlineData("echo $0", new[] { "--rcfile", "/dev/null", "a" }, false, false, null, new[] { "--rcfile", "/dev/null", "-c", "echo $0", "a" })]
+    [InlineData("echo $0", new[] { "a" }, true, false, null, new[] { "-i", "-c", "echo $0", "a" })]
+    public void BuildArgv_PutsBoundOptionsInTheOptionZone(string? c, string[] args, bool i, bool e, string? o, string[] expected)
+        => Assert.Equal(expected, InvokeBashBashCommand.BuildArgv(c, args, i, e, false, o));
+
     // ---- No ps-bash launcher: the host's own shell runs it ----
     // A session server deployed to a Linux host embeds the module without the ps-bash launcher,
     // and every `bash -c` there failed with "bash: ps-bash executable not found" (BeagleTerm on

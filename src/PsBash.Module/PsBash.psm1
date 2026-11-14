@@ -3463,7 +3463,7 @@ if ($__psbashRegisterCompleters) {
 # --- Aliases ---
 
 # Remove built-in PowerShell aliases that conflict with our bash commands
-$script:conflictingAliases = @('echo','ls','cat','cp','mv','rm','mkdir','pwd','sort','diff','sleep','test','kill','time','pushd','popd','type')
+$script:conflictingAliases = @('echo','ls','cat','cp','mv','rm','mkdir','pwd','sort','diff','sleep','test','kill','time','pushd','popd','type','chdir')
 # IMPORTANT: this loop runs at module (script) scope, which the host imports into
 # the runspace — so a bare top-level loop variable LEAKS and shadows any
 # transpiled bash variable of the same name (a leaked `$a` = 'type' once made
@@ -3652,6 +3652,8 @@ Set-Alias -Name 'timeout' -Value 'Invoke-BashTimeout' -Force -Scope Global -Opti
 Set-Alias -Name 'times' -Value 'Invoke-BashTimes' -Force -Scope Global -Option AllScope
 # Replaces PowerShell's own `history` alias (Get-History): a script's history is bash's (Invoke-BashHistory).
 Set-Alias -Name 'history' -Value 'Invoke-BashHistory' -Force -Scope Global -Option AllScope
+# Replaces PowerShell's own `fc` alias (Format-Custom, read-only, hence -Force): bash's fc lists the same history.
+Set-Alias -Name 'fc' -Value 'Invoke-BashFc' -Force -Scope Global -Option AllScope
 Set-Alias -Name 'hash' -Value 'Invoke-BashHash' -Force -Scope Global -Option AllScope
 Set-Alias -Name 'umask' -Value 'Invoke-BashUmask' -Force -Scope Global -Option AllScope
 Set-Alias -Name 'ulimit' -Value 'Invoke-BashUlimit' -Force -Scope Global -Option AllScope

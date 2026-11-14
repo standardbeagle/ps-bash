@@ -259,6 +259,11 @@ public class CompoundStdinEmitterTests
     [InlineData("ls", new string[0], false)]
     [InlineData("read", new[] { "x" }, false)]
     [InlineData("mytool", new[] { "--flag" }, true)]
+    // bash: no script operand = the program is stdin (`f() { $SH --rcfile /dev/null "$@"; }; echo cmds | f -i`).
+    [InlineData("bash", new[] { "--rcfile", "/dev/null", "-i" }, true)]
+    [InlineData("bash", new[] { "-o", "pipefail" }, true)]
+    [InlineData("bash", new[] { "-c", "echo hi" }, false)]
+    [InlineData("bash", new[] { "s.sh" }, false)]
     public void ShouldFeed_EstimatesWhetherTheCommandReadsStdin(string name, string[] args, bool expected)
     {
         Assert.Equal(expected, StdinReaders.ShouldFeed(name, args));
@@ -275,6 +280,20 @@ public class CompoundStdinEmitterTests
     {
         Assert.Equal(expected, StdinReaders.ShouldFeed(name, args));
         Assert.Contains("__BashStdIn", PsEmitter.Transpile("f() { " + name + " -o pat; }")!);
+    }
+
+    /// <summary>
+    /// `i-shell() { $SH --rcfile /dev/null "$@"; }; echo cmds | i-shell -i` (oils history-expand): a run-time command
+    /// name with a splatted operand is resolved inside `& { ... }`. It was never fed, and its function took no stdin
+    /// scope, so the nested shell read nothing.
+    /// </summary>
+    [Fact]
+    public void DynamicCommandWithSplat_InAFunction_IsFed()
+    {
+        var ps = PsEmitter.Transpile("f() { $SH --rcfile /dev/null \"$@\"; }")!;
+        Assert.Contains("Resolve-BashCommand -Fed -Words", ps);
+        Assert.Contains("$MyInvocation.ExpectingInput", ps);
+        Assert.DoesNotContain("-Fed", PsEmitter.Transpile("$SH --rcfile /dev/null \"$@\"")!);
     }
 
     [Fact]

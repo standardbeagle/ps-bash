@@ -54,6 +54,15 @@ public sealed class InvokeBashBashCommand : PSCmdlet
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
+    // Decoys for bash's -i, -e, -v and -o NAME when they come from a splat (`f() { bash "$@"; }; f -i`): PowerShell
+    // binds a splatted "-i" as a parameter name, a prefix of InputObject / InformationAction (and -e / -o / -v
+    // of ErrorAction, OutVariable, Verbose), which failed the call. The emitter single-quotes literal dash
+    // words, so those always reach Arguments. BuildArgv puts them back in bash's option zone.
+    [Parameter] public SwitchParameter i { get; set; }
+    [Parameter] public SwitchParameter e { get; set; }
+    [Parameter] public SwitchParameter v { get; set; }
+    [Parameter] public string? o { get; set; }
+
     /// <summary>The script text of `echo cmd | bash`, `bash <<< cmd`, `curl … | sh`: bash reads its program from stdin.</summary>
     [Parameter(ValueFromPipeline = true)]
     [AllowNull]
@@ -76,19 +85,13 @@ public sealed class InvokeBashBashCommand : PSCmdlet
         // binder may have consumed the bare token "-c <value>" into the C
         // property; if so, splice the equivalent ["-c", value] tokens back
         // into the forwarded args at the front (oracle parity).
-        var forwarded = new List<string>();
-        if (!string.IsNullOrEmpty(C))
-        {
-            forwarded.Add("-c");
-            forwarded.Add(C);
-        }
-        if (Arguments != null)
-        {
-            forwarded.AddRange(Arguments);
-        }
+        var forwarded = BuildArgv(C, Arguments, i, e, v, o);
         bool stdinWasScript = false;
         // No -c and no script operand: the program is on stdin. A nested ps-bash given it as -c runs the same text.
-        if (_stdinScript is { Length: > 0 } && !forwarded.Contains("-c") && forwarded.All(a => a.StartsWith('-') && a.Length > 1 || a == "-s"))
+        // Not for -i: `echo cmds | bash -i` is an interactive session reading the pipe (prompts, history), which the
+        // child runs from its stdin.
+        if (_stdinScript is { Length: > 0 } && !forwarded.Contains("-c") && forwarded.All(a => a.StartsWith('-') && a.Length > 1 || a == "-s")
+            && !AsksInteractive(forwarded))
         {
             forwarded.RemoveAll(a => a is "-s" or "-");
             forwarded.Add("-c");
@@ -226,6 +229,46 @@ public sealed class InvokeBashBashCommand : PSCmdlet
                 return true;
             if (a is "-o" or "+o")
                 i++;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// The argument vector the child bash gets. Options the binder took (the decoys, and <c>-c</c> into
+    /// <paramref name="c"/>) only come from a splat or a direct call; they go back first, and <c>-c STRING</c>
+    /// after the options at the head of <paramref name="args"/>, so a following word is still <c>$0</c>
+    /// (<c>bash --norc "$@"</c> with <c>-c 'echo $0' a</c>). Their places among later operands are lost.
+    /// </summary>
+    internal static List<string> BuildArgv(string? c, IReadOnlyList<string>? args, bool i, bool e, bool v, string? o)
+    {
+        var argv = new List<string>();
+        if (i) argv.Add("-i");
+        if (e) argv.Add("-e");
+        if (v) argv.Add("-v");
+        if (o is not null) { argv.Add("-o"); argv.Add(o); }
+        int k = 0;
+        if (args is not null && !string.IsNullOrEmpty(c))
+        {
+            while (k < args.Count && args[k].Length > 1 && args[k][0] is '-' or '+' && args[k] != "--")
+            {
+                if (args[k] is "-o" or "+o" or "-O" or "+O" or "--rcfile" or "--init-file" && k + 1 < args.Count) argv.Add(args[k++]);
+                argv.Add(args[k++]);
+            }
+        }
+        if (!string.IsNullOrEmpty(c)) { argv.Add("-c"); argv.Add(c); }
+        if (args is not null) for (; k < args.Count; k++) argv.Add(args[k]);
+        return argv;
+    }
+
+    /// <summary>True when bash's option zone holds <c>-i</c>, alone or in a bundle (<c>-il</c>).</summary>
+    internal static bool AsksInteractive(IReadOnlyList<string> args)
+    {
+        for (int i = 0; i < args.Count; i++)
+        {
+            var a = args[i];
+            if (a == "--" || a.Length < 2 || (a[0] != '-' && a[0] != '+')) return false;
+            if (a is "-o" or "+o") { i++; continue; }
+            if (a[0] == '-' && a[1] != '-' && a.AsSpan(1).Contains('i')) return true;
         }
         return false;
     }

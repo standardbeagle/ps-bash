@@ -39,6 +39,9 @@ public static class StdinReaders
         ["less"] = "", ["more"] = "", ["shuf"] = "ino",
         ["grep"] = "efmABCdD", ["egrep"] = "efmABCdD", ["fgrep"] = "efmABCdD", ["sed"] = "efl", ["awk"] = "Fvf", ["rg"] = "efgmABCtTjrdMsE",
         ["jq"] = "fL", ["yq"] = "",
+        // bash / sh with no script operand read their program from stdin (`f() { bash --norc "$@"; }; echo cmd | f`,
+        // `{ bash -i; } < cmds`); the -c string counts as an operand, so `bash -c cmd` is not fed.
+        ["bash"] = "oO", ["sh"] = "oO",
     };
 
     // flag letters that SUPPLY the pattern/program (so no positional is consumed as one).
@@ -66,7 +69,7 @@ public static class StdinReaders
         "--characters", "--output-delimiter", "--number-format", "--number-separator", "--number-width",
         "--body-numbering", "--starting-line-number", "--line-increment", "--skip-fields",
         "--skip-chars", "--check-chars", "--sleep-interval", "--include", "--exclude", "--exclude-dir",
-        "--glob", "--type", "--threads",
+        "--glob", "--type", "--threads", "--rcfile", "--init-file",
     };
 
     // Everything that is a bash builtin or a ps-bash command that does not read stdin as its main input.
@@ -79,7 +82,7 @@ public static class StdinReaders
         "let", "eval", "trap", "unset", "shift", "shopt", "tput", "yes", "pushd", "popd", "dirs",
         "source", ".", "export", "local", "declare", "typeset", "readonly", "set", "alias", "unalias",
         "exit", "return", "break", "continue", "true", "false", ":", "read", "wait", "jobs", "fg", "bg",
-        "bash", "sh", "id", "ps", "diff", "tar", "xan", "browse", "cmp", "hash", "umask", "ulimit",
+        "id", "ps", "diff", "tar", "xan", "browse", "cmp", "hash", "umask", "ulimit",
         "history", "exec", "getopts", "compgen", "complete", "builtin", "enable", "help", "logout",
         "psgit", "gtui", "psav", "psffmpeg", "avtui", "balias", "unset", "wait",
     };

@@ -317,6 +317,33 @@ if (shellArgs.ReadFromStdin || (!shellArgs.Interactive && shellArgs.Command is n
         shellArgs = shellArgs with { Command = stdinCommand };
 }
 
+// `echo cmds | bash -i`: an interactive shell reading its commands from the pipe (PipedInteractive). The REPL is
+// for a terminal; PSBASH_INTERACTIVE_REPL=1 keeps it for piped input too (test harnesses drive it line by line).
+if (shellArgs.Interactive && shellArgs.Command is null && shellArgs.ScriptPath is null && Console.IsInputRedirected
+    && !EnvFlags.IsTruthy("PSBASH_INTERACTIVE_REPL"))
+{
+    string piped;
+    try
+    {
+        var reader = new StreamReader(Console.OpenStandardInput(), PsBash.Core.RawBytes.Encoding, detectEncodingFromByteOrderMarks: false);
+        piped = (await ReadTextBoundedAsync(reader, MaxCommandInputChars,
+            "stdin command input exceeds the maximum supported size.").ConfigureAwait(false)).TrimStart('﻿');
+    }
+    catch (IOException ex)
+    {
+        Console.Error.WriteLine($"ps-bash: {ex.Message}");
+        return 2;
+    }
+    var inheritedHistFile = Environment.GetEnvironmentVariable("HISTFILE");
+    var defaultHistFile = ShellArgs.DefaultHistFile(true, null,
+        Environment.GetEnvironmentVariable("HOME") ?? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
+    shellArgs = shellArgs with
+    {
+        Command = PipedInteractive.BuildScript(piped, loadHistory: !string.IsNullOrEmpty(inheritedHistFile),
+            noSaveFile: string.IsNullOrEmpty(inheritedHistFile) ? defaultHistFile : null),
+    };
+}
+
 // `bash -i -c 'cmd'` runs cmd and exits; -i alone (no -c string) opens the prompt.
 if (shellArgs.Command is null)
 {
@@ -529,6 +556,12 @@ if (ShellArgs.DefaultHistFile(shellArgs.Interactive && shellArgs.Command is not 
         Environment.GetEnvironmentVariable("HISTFILE"),
         Environment.GetEnvironmentVariable("HOME") ?? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)) is { } histFile)
     Environment.SetEnvironmentVariable("HISTFILE", histFile);
+// An interactive shell also has its default prompts (bash: PS1='\s-\v\$ ', PS2='> ') unless they are inherited.
+if (shellArgs.Interactive && shellArgs.Command is not null)
+{
+    if (Environment.GetEnvironmentVariable("PS1") is null) Environment.SetEnvironmentVariable("PS1", ShellArgs.DefaultPs1);
+    if (Environment.GetEnvironmentVariable("PS2") is null) Environment.SetEnvironmentVariable("PS2", "> ");
+}
 int exitCode = await HostFailureGuard.RunAsync(async () =>
 {
     await using IWorker worker = await workerFactory();

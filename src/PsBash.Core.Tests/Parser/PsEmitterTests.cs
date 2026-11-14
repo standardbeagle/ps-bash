@@ -838,6 +838,15 @@ public class PsEmitterTests
         Assert.Equal("Invoke-BashFind . ! '-name' x", result);
     }
 
+    // bash: `echo !!` (no history expansion: -c, or a script) prints `!!`; the lexer gives two adjacent `!`
+    // tokens, which were two words (`! !`).
+    [Theory]
+    [InlineData("echo !!", "Invoke-BashEcho !!")]
+    [InlineData("echo x !!y", "Invoke-BashEcho x !!y")]
+    [InlineData("echo ! !", "Invoke-BashEcho ! !")]
+    public void Transpile_AdjacentBangs_AreOneWord(string bash, string expected)
+        => Assert.Equal(expected, PsEmitter.Transpile(bash));
+
     [Fact]
     public void Transpile_LeadingBang_StillNegatesPipeline()
     {
@@ -7187,6 +7196,8 @@ public class PsEmitterTests
         var result = PsEmitter.Transpile("PROMPT_COMMAND='do_something'");
 
         Assert.NotNull(result);
+        // The variable is set too: $PROMPT_COMMAND reads it and the REPL / piped bash -i run it (bash: echo $PROMPT_COMMAND).
+        Assert.Contains("$env:PROMPT_COMMAND = 'do_something'; Register-BashPromptHook", result);
         Assert.Contains("Register-BashPromptHook -Name 'prompt-command'", result);
         Assert.Contains("ScriptBlock", result);
         Assert.Contains("Invoke-Expression", result);
@@ -7209,7 +7220,7 @@ public class PsEmitterTests
         // unset PROMPT_COMMAND
         var result = PsEmitter.Transpile("unset PROMPT_COMMAND");
 
-        Assert.Equal("Unregister-BashPromptHook -Name 'prompt-command'", result);
+        Assert.Equal("Unregister-BashPromptHook -Name 'prompt-command'; $env:PROMPT_COMMAND = $null", result);
     }
 
     [Fact]

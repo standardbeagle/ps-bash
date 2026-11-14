@@ -187,14 +187,14 @@ pwd
 #echo status=$?
 ## stdout: fail
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-cd builtin-cd (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### arguments to pwd
-pwd /
-## stdout: /tmp/tmp.rnPGBNmmgT
+# ps-bash guard: compare with plain pwd (the recorded mktemp path, and C:\ on Windows, are not portable).
+test "$(pwd /)" = "$(pwd)"
+echo status=$?
+## stdout: status=0
 ## status: 0
-## XFAIL ps-bash platform-windows-paths Windows paths print as C:\... (drive letter, backslash); bash prints /tmp (intentional-differences.md, Platform: paths)
 ## timeout: 10
 
 #### pwd errors out on args with strict_arg_parse
@@ -210,10 +210,10 @@ mkdir -p $dir
 cd $dir
 
 # ensure clean shell process state
-$SH -c 'unset PWD; pwd'
-## stdout: /tmp/oil-spec-test/pwd-2
+# ps-bash guard: compare with the parent's pwd (Windows prints C:\...).
+test "$($SH -c 'unset PWD; pwd')" = "$(pwd)" && echo same
+## stdout: same
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-cd builtin-cd (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -223,10 +223,10 @@ mkdir -p $dir
 cd $dir
 
 # ensure clean shell process state
-$SH -c 'PWD=foo; pwd'
-## stdout: /tmp/oil-spec-test/pwd-3
+# ps-bash guard: compare with the parent's pwd (Windows prints C:\...).
+test "$($SH -c 'PWD=foo; pwd')" = "$(pwd)" && echo same
+## stdout: same
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-cd builtin-cd (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 

@@ -29,21 +29,44 @@ public sealed class InvokeBashHistoryCommand : PSCmdlet
     public string[]? Arguments { get; set; }
 
     internal const string StateVariable = "__BashHistoryList";
+    /// <summary>Global holding the <see cref="HistoryMark"/>: which entries <c>history -a</c> has not written yet.</summary>
+    internal const string MarkVariable = "__BashHistoryMark";
     internal const string Usage =
         "history: usage: history [-c] [-d offset] [n] or history -anrw [filename] or history -ps arg [arg...]";
 
     /// <summary>One run's result: lines for stdout, lines for stderr, the exit status.</summary>
     internal sealed record Result(List<string> Out, List<string> Err, int Status);
 
+    /// <summary>Index of the first entry not yet in the history file: <c>history -a</c> appends from it, and
+    /// <c>-a</c> / <c>-w</c> / <c>-r</c> move it to the end. <c>-c</c> resets it, so lines entered after a clear
+    /// are new (bash: <c>history -c; echo 1; history -a</c> appends <c>echo 1</c> and the <c>history -a</c>).</summary>
+    internal sealed class HistoryMark { public int Saved; }
+
     /// <summary>Pure: applies <paramref name="args"/> to <paramref name="list"/> (mutated in place). File options go
-    /// through <paramref name="readFile"/> / <paramref name="writeFile"/> (append flag) so tests need no disk.</summary>
+    /// through <paramref name="readFile"/> / <paramref name="writeFile"/> (append flag) so tests need no disk; an
+    /// IO exception from <paramref name="writeFile"/> is status 1. With no operand and no <paramref name="histFile"/>
+    /// the file is <paramref name="defaultFile"/> (bash: <c>~/.history</c>).</summary>
     internal static Result Run(
         IReadOnlyList<string> args, List<string> list, string? histFile,
-        Func<string, string[]?> readFile, Action<string, IEnumerable<string>, bool> writeFile)
+        Func<string, string[]?> readFile, Action<string, IEnumerable<string>, bool> writeFile,
+        HistoryMark? mark = null, string? defaultFile = null)
     {
+        mark ??= new HistoryMark();
+        if (mark.Saved > list.Count) mark.Saved = list.Count;
         var o = new List<string>(); var e = new List<string>();
         Result Done(int s) => new(o, e, s);
         Result Fail(int s, string msg) { e.Add("history: " + msg); return Done(s); }
+        Result Write(string file, IEnumerable<string> lines, bool append)
+        {
+            try { writeFile(file, lines, append); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                return Fail(1, $"{file}: cannot create: " +
+                    (ex is UnauthorizedAccessException ? "Permission denied" : ex is DirectoryNotFoundException or FileNotFoundException ? "No such file or directory" : ex.Message));
+            }
+            mark.Saved = list.Count;
+            return Done(0);
+        }
 
         char? fileOp = null; bool clear = false, print = false, store = false; string? delete = null;
         int i = 0;
@@ -78,30 +101,35 @@ public sealed class InvokeBashHistoryCommand : PSCmdlet
         }
         var operands = args.Skip(i).ToList();
 
-        if (clear) { list.Clear(); if (delete is null && fileOp is null && !print && !store) return Done(0); }
+        if (clear) { list.Clear(); mark.Saved = 0; if (delete is null && fileOp is null && !print && !store) return Done(0); }
         if (delete is not null)
         {
             if (!long.TryParse(delete, out var off)) return Fail(1, $"{delete}: history position out of range");
             long idx = off < 0 ? list.Count + off : off - 1;
             if (idx < 0 || idx >= list.Count) return Fail(1, $"{delete}: history position out of range");
             list.RemoveAt((int)idx);
+            if (idx < mark.Saved) mark.Saved--;
             return Done(0);
         }
         if (print) { o.AddRange(operands); return Done(0); }
         if (store) { if (operands.Count > 0) list.Add(string.Join(' ', operands)); return Done(0); }
         if (fileOp is char op)
         {
-            var file = operands.Count > 0 ? operands[0] : histFile;
-            if (string.IsNullOrEmpty(file)) return Done(0);
+            var file = operands.Count > 0 ? operands[0] : string.IsNullOrEmpty(histFile) ? defaultFile : histFile;
+            // No file at all (HISTFILE and HOME unset), bash 5.2: -w does nothing (status 0); -a fails when
+            // there are lines to append; -r and -n fail. No message.
+            if (string.IsNullOrEmpty(file))
+                return Done(op == 'w' || (op == 'a' && mark.Saved >= list.Count) ? 0 : 1);
             switch (op)
             {
-                case 'w': writeFile(file, list, false); return Done(0);
-                case 'a': writeFile(file, list, true); return Done(0);
+                case 'w': return Write(file, list, false);
+                case 'a': return Write(file, list.Skip(mark.Saved).ToList(), true);
                 case 'n': return Done(0);
                 default:
                     var lines = readFile(file);
                     if (lines is null) return Fail(1, $"{file}: cannot read history file");
                     list.AddRange(lines.Where(l => l.Length > 0));
+                    mark.Saved = list.Count;
                     return Done(0);
             }
         }
@@ -119,6 +147,15 @@ public sealed class InvokeBashHistoryCommand : PSCmdlet
         return Done(0);
     }
 
+    /// <summary>The session's history list (global, so <c>history -s</c> in a function outlives it); shared with <c>fc</c>.</summary>
+    internal static List<string> Entries(SessionState state)
+    {
+        if (state.PSVariable.GetValue("global:" + StateVariable) is List<string> list) return list;
+        list = new List<string>();
+        state.PSVariable.Set("global:" + StateVariable, list);
+        return list;
+    }
+
     protected override void EndProcessing()
     {
         var args = new List<string>();
@@ -131,9 +168,12 @@ public sealed class InvokeBashHistoryCommand : PSCmdlet
         if (FileSystemHelpers.TryHandleVersion(this, "history", args.ToArray())) return;
 
         // Global: `history -s` inside a function must outlive the function's scope.
-        var list = SessionState.PSVariable.GetValue("global:" + StateVariable) as List<string>;
-        if (list is null) { list = new List<string>(); SessionState.PSVariable.Set("global:" + StateVariable, list); }
+        var list = Entries(SessionState);
+        var mark = SessionState.PSVariable.GetValue("global:" + MarkVariable) as HistoryMark;
+        if (mark is null) { mark = new HistoryMark(); SessionState.PSVariable.Set("global:" + MarkVariable, mark); }
         var histFile = BashVariableStore.Get("HISTFILE");
+        var home = BashVariableStore.Get("HOME");
+        var defaultFile = string.IsNullOrEmpty(home) ? null : home.TrimEnd('/', '\\') + "/.history";
 
         string Resolve(string f) =>
             FileSystemHelpers.ResolveOperands(this, f, expandWildcards: false).Select(op => op.Path).FirstOrDefault() ?? f;
@@ -148,7 +188,7 @@ public sealed class InvokeBashHistoryCommand : PSCmdlet
                 var path = Resolve(f);
                 using var sw = new StreamWriter(path, append, PsBash.Core.RawBytes.Encoding);
                 foreach (var l in lines) sw.Write(l + "\n");
-            });
+            }, mark, defaultFile);
 
         foreach (var line in r.Out) WriteObject(line);
         foreach (var line in r.Err) FileSystemHelpers.WriteStderr(this, line);

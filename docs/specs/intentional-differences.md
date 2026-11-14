@@ -37,6 +37,8 @@ model in [runtime-functions.md](runtime-functions.md) "Raw bytes".
 | Variable names differing only in case (`x=1; X=2`) | **Windows:** one variable; `$x` and `$X` read the same value (Linux/macOS: two) | Bash variables are process environment variables (`BashVariableStore`), and the Windows environment is case-insensitive and inherited by children as such. Case-sensitive names would need a store off the process environment |
 | File names | **Windows:** a name cannot contain `" * ? \| < > :` (`touch '"q"'` fails), a trailing dot or space is stripped (`touch foo.` makes `foo`), and names are case-insensitive (`touch a A` makes one file; `[!ab]*` against `A` / `a`) | NTFS / Win32 naming rules. Spec XFAILs caused only by this carry the id `platform-windows-filenames` |
 | `~user` | **Windows:** `~root` (any user other than the current one) stays literal | No passwd database to look a home directory up in. Spec XFAILs caused only by this carry the id `platform-windows-tilde-user` |
+| Export attribute (`x=1; compgen -e x`, `env`) | Every variable is exported: a child process and `compgen -e` see `x` without `export` | Same cause (variables are process environment variables). Spec id `arch-vars-in-environment` |
+| `PATHEXT` and other Windows variables | Present in the environment, so a prefix listing (`compgen -v P`, `compgen -e P`) includes them | Windows defines them |
 | Raw byte in a variable on **Linux/macOS** | `x=$(printf '\xe9')` loses the byte (becomes U+FFFD) | Variables live in the process environment, and .NET re-encodes it on Unix; Windows keeps it |
 
 ## Architecture
@@ -96,6 +98,17 @@ model in [runtime-functions.md](runtime-functions.md) "Raw bytes".
 | `set -e` set by a caller of `source`/`eval`d code, or turned on only inside a sourced file | The sourced/eval'd code (or the caller's remaining lines) runs without per-statement checks; a failing function call there still counts at the caller's statement | Checks are emitted only for a script that itself contains `set -e`/`-o errexit` (`PsEmitter.EnablesErrexit`), so scripts without it emit exactly what they always did |
 | `set -v` / `set -o verbose` | The option is tracked (`$-` has `v`, `$SHELLOPTS` lists `verbose`, `test -o verbose`), but input lines are not echoed to stderr | The whole script is transpiled before it runs; there is no line-at-a-time reader to echo |
 | Windows drive paths in a glob word | A pattern spelled `/c/Users/*` (with `PSBASH_UNIX_PATHS=1`) or `C:/Users/*` is expanded with forward slashes (`C:/Users/x`), and a drive-letter prefix keeps the form it was typed | `/` is the pattern's only separator (`\` escapes) |
+
+## Interactive shell
+
+Spec XFAILs caused only by one of these carry the id `wontfix-interactive-<topic>` shown in the first column.
+
+| Area | ps-bash | Why |
+|---|---|---|
+| Piped `bash -i` (`echo cmds \| bash -i`) | Replays the input one command per prompt: `PROMPT_COMMAND`, the `PS1`/`PS2` prompt and the echoed line on stderr, history and `!!` expansion, `${PS1}exit` at end of input. `$HISTFILE` is read and written only when the caller set it (never the launcher's default `~/.bash_history`), and an explicit `exit` ends the session without saving it | A piped session must not read or rewrite the user's own history file unless asked; the line editor (REPL) still serves a terminal, or `PSBASH_INTERACTIVE_REPL=1` |
+| `bind` (`wontfix-interactive-bind`) | Not a command: no `-p -P -v -V -q -s -S -x -X -r -m` | The line editor is ps-bash's own, not GNU readline: there are no readline functions, keymaps or variables to list or rebind |
+| Prompt `\j`, `\!`, `\#` (`wontfix-interactive-prompt`) | `\j` is always `0`; `\!` and `\#` are always `1` | `\!` and `\#` need every executed command counted (and stored in history under `set -o history`); `\j` needs job control (`set -m`, `fg`) |
+| Process groups, sessions (`wontfix-interactive-job-control`) | No `set -m` job control; `ps -o pgid,sid,tpgid` has no Windows equivalent | Windows has Job Objects, not POSIX process groups or controlling terminals |
 
 ## Not implemented (refused, exit 2)
 

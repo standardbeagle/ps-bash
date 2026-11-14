@@ -2030,7 +2030,7 @@ public static partial class PsEmitter
             string ComputeBody()
             {
                 string text = WithStdinScope(true, () => EmitBody(func.Body));
-                if (text.Contains("__BashStdIn", StringComparison.Ordinal) || text.Contains("Invoke-BashRead", StringComparison.Ordinal)
+                if (text.Contains("__BashStdIn", StringComparison.Ordinal) || text.Contains("Resolve-BashCommand -Fed", StringComparison.Ordinal) || text.Contains("Invoke-BashRead", StringComparison.Ordinal)
                     || text.Contains("Invoke-BashMapfile", StringComparison.Ordinal))
                     return PsBuild.FunctionStdinScope(text);
                 return _launcherStdin ? WithStdinScope(false, () => EmitBody(func.Body)) : EmitBody(func.Body);
@@ -2296,6 +2296,11 @@ public static partial class PsEmitter
         if (_inStdinScope && simple.EnvPairs.IsEmpty && simple.HereDocs.IsDefaultOrEmpty && !HasInputRedirect(simple.Redirects)
             && text.StartsWith(dynPrefix, StringComparison.Ordinal) && !PsBuild.IsStatementList(text))
             return dynPrefix + "-Fed " + text.Substring(dynPrefix.Length);
+        // The same with a splatted operand (`f() { $SH --norc "$@"; }`): the head is resolved first inside `& { ... }`.
+        const string dynHoist = "& { $__bashhead = (Resolve-BashCommand -Words ";
+        if (_inStdinScope && simple.EnvPairs.IsEmpty && simple.HereDocs.IsDefaultOrEmpty && !HasInputRedirect(simple.Redirects)
+            && text.StartsWith(dynHoist, StringComparison.Ordinal))
+            return "& { $__bashhead = (Resolve-BashCommand -Fed -Words " + text.Substring(dynHoist.Length);
         if (!_inStdinScope
             || !simple.EnvPairs.IsEmpty
             || !simple.HereDocs.IsDefaultOrEmpty
@@ -3844,6 +3849,8 @@ public static partial class PsEmitter
                 {
                     var transpiledCmd = Transpile(rawCmd) ?? rawCmd;
                     var scriptBody = transpiledCmd.Replace("'", "''");
+                    // The variable too: $PROMPT_COMMAND reads it, and ps-bash's own prompt loops (REPL, piped -i) run it.
+                    sb.Append("$env:PROMPT_COMMAND = ").Append(PsBuild.SingleQuote(rawCmd)).Append("; ");
                     sb.Append($"Register-BashPromptHook -Name 'prompt-command' -ScriptBlock {{ Invoke-Expression '{scriptBody}' }}");
                 }
                 else
@@ -5337,7 +5344,7 @@ public static partial class PsEmitter
         if (cmd0 == "unset" && cmd.Words.Length >= 2
             && GetLiteralValue(cmd.Words[1]) == "PROMPT_COMMAND")
         {
-            result = "Unregister-BashPromptHook -Name 'prompt-command'";
+            result = "Unregister-BashPromptHook -Name 'prompt-command'; $env:PROMPT_COMMAND = $null";
             return true;
         }
 
@@ -11812,6 +11819,9 @@ public static partial class PsEmitter
                 return true;
             case "history":
                 result = EmitPassthrough("Invoke-BashHistory", args);
+                return true;
+            case "fc":
+                result = EmitPassthrough("Invoke-BashFc", args);
                 return true;
             case "hash":
                 result = EmitPassthrough("Invoke-BashHash", args);

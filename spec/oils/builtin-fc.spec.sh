@@ -44,7 +44,6 @@ case $SH in bash) echo '^D' ;; esac
 ^D
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-fc builtin-fc (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -69,7 +68,6 @@ case $SH in bash) echo '^D' ;; esac
 ^D
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-fc builtin-fc (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -94,7 +92,6 @@ case $SH in bash) echo '^D' ;; esac
 ^D
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-fc builtin-fc (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -119,7 +116,6 @@ case $SH in bash) echo '^D' ;; esac
 ^D
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-fc builtin-fc (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -156,7 +152,6 @@ case $SH in bash) echo '^D' ;; esac
 ^D
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-fc builtin-fc (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -180,7 +175,6 @@ case $SH in bash) echo '^D' ;; esac
 ^D
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-fc builtin-fc (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -204,7 +198,6 @@ case $SH in bash) echo '^D' ;; esac
 ^D
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-fc builtin-fc (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -227,7 +220,6 @@ case $SH in bash) echo '^D' ;; esac
 ^D
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-fc builtin-fc (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -250,7 +242,6 @@ case $SH in bash) echo '^D' ;; esac
 ^D
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-fc builtin-fc (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -273,7 +264,6 @@ case $SH in bash) echo '^D' ;; esac
 ^D
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-fc builtin-fc (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -296,6 +286,5 @@ case $SH in bash) echo '^D' ;; esac
 ^D
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-fc builtin-fc (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
