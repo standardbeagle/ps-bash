@@ -188,13 +188,13 @@ echo matched=$?
 # - This test seems to fail on the system bash, but succeeds with spec-bin/bash
 # ps-bash guard: --norc. With --rcfile /dev/null Debian's bash still reads /etc/bash.bashrc, which resets PS1
 # (the recorded match=1).
+# ps-bash: the only real-launcher case in this file, so it also pays the shared host's cold start (about 8 s).
 echo 'echo foo' | PS1='[prompt] ' $SH --norc -i >out.txt 2>err.txt
 grep -qF '[prompt]' out.txt err.txt
 echo match=$?
 ## stdout: match=0
 ## status: 0
-## XFAIL ps-bash gap-oils-prompt prompt (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
-## timeout: 10
+## timeout: 20
 ## real-launcher
 
 #### username
