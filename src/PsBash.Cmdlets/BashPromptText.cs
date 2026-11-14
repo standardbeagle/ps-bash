@@ -5,15 +5,38 @@ namespace PsBash.Cmdlets;
 /// <summary>bash <c>${v@P}</c> (prompt escapes) and <c>${v@E}</c> (<c>$'...'</c> escapes). Emitted PowerShell reaches it as <c>[PsBash.Cmdlets.BashPromptText]::Expand(...)</c>.</summary>
 public static class BashPromptText
 {
-    public static string Expand(string? prompt)
+    /// <summary>
+    /// Decodes the prompt escapes, then applies the double-quote backslash removal of bash's <c>promptvars</c> pass
+    /// to the result: <c>\$</c> decodes to <c>\$</c>, so <c>PS1='\\$'</c> prints <c>$</c> and <c>PS1='\\\$'</c>
+    /// prints <c>\$</c>. Text an escape inserts (<c>\w</c>, <c>\u</c>, a date) is quoted first, as bash quotes it,
+    /// so a backslash in a Windows path survives. Parameter expansion of the prompt string (<c>PS1='$x'</c>) is not
+    /// performed.
+    /// </summary>
+    public static string Expand(string? prompt) => RemoveQuotingBackslashes(Decode(prompt));
+
+    /// <summary>The double-quote quote removal: a backslash before <c>$ ` " \</c> or a newline is dropped.</summary>
+    private static string RemoveQuotingBackslashes(string text)
+    {
+        if (text.IndexOf('\\') < 0) return text;
+        var sb = new StringBuilder(text.Length);
+        for (int i = 0; i < text.Length; i++)
+        {
+            char c = text[i];
+            if (c == '\\' && i + 1 < text.Length && text[i + 1] is '$' or '`' or '"' or '\\' or '\n') { sb.Append(text[++i]); continue; }
+            sb.Append(c);
+        }
+        return sb.ToString();
+    }
+
+    private static string Decode(string? prompt)
     {
         if (string.IsNullOrEmpty(prompt)) return string.Empty;
-        var sb = new StringBuilder();
+        var sb = new Quoting();
         var now = DateTimeOffset.Now;
         for (int i = 0; i < prompt.Length; i++)
         {
             char c = prompt[i];
-            if (c != '\\' || i + 1 >= prompt.Length) { sb.Append(c); continue; }
+            if (c != '\\' || i + 1 >= prompt.Length) { sb.AppendRaw(c); continue; }
             char n = prompt[++i];
             switch (n)
             {
@@ -21,8 +44,8 @@ public static class BashPromptText
                 case 'e': sb.Append('\x1b'); break;
                 case 'n': sb.Append('\n'); break;
                 case 'r': sb.Append('\r'); break;
-                case '\\': sb.Append('\\'); break;
-                case '$': sb.Append('$'); break;
+                case '\\': sb.AppendRaw('\\'); break;
+                case '$': sb.AppendRaw("\\$"); break;
                 case '[': case ']': break;
                 case 'u': sb.Append(BashVariableStore.Get("USER") ?? Environment.UserName); break;
                 case 'h': { var h = Environment.MachineName.ToLowerInvariant(); int dot = h.IndexOf('.'); sb.Append(dot > 0 ? h[..dot] : h); break; }
@@ -53,7 +76,7 @@ public static class BashPromptText
                     int close = prompt.IndexOf('}', i + 2);
                     if (close < 0) { sb.Append("\\D"); break; }
                     var fmt = prompt[(i + 2)..close];
-                    sb.Append(InvokeBashDateCommand.ConvertDateFormat(now, fmt.Length == 0 ? "%X" : fmt));
+                    sb.Append(InvokeBashDateCommand.ConvertDateFormat(now, fmt.Length == 0 ? "%H:%M:%S" : fmt));
                     i = close;
                     break;
                 }
@@ -64,10 +87,34 @@ public static class BashPromptText
                     sb.Append((char)(v & 0xFF));
                     break;
                 }
-                default: sb.Append('\\').Append(n); break;
+                default: sb.AppendRaw('\\').AppendRaw(n); break;
             }
         }
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// The decoded prompt: <c>AppendRaw</c> keeps prompt text as written (quote removal applies to it);
+    /// <c>Append</c> is text an escape inserted, backslash-quoted so quote removal leaves it unchanged.
+    /// </summary>
+    private sealed class Quoting
+    {
+        private readonly StringBuilder _sb = new();
+        public Quoting AppendRaw(char c) { _sb.Append(c); return this; }
+        public Quoting AppendRaw(string s) { _sb.Append(s); return this; }
+        public Quoting Append(char c)
+        {
+            if (c is '$' or '`' or '"' or '\\' or '\n') _sb.Append('\\');
+            _sb.Append(c);
+            return this;
+        }
+        public Quoting Append(string? s)
+        {
+            if (s is null) return this;
+            foreach (var c in s) Append(c);
+            return this;
+        }
+        public override string ToString() => _sb.ToString();
     }
 
     /// <summary><c>${v@E}</c>: expands backslash escapes the way <c>$'...'</c> does.</summary>

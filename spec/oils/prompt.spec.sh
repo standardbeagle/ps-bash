@@ -39,7 +39,6 @@ $
 \$
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-prompt prompt (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### PS1 evaluation order
@@ -49,7 +48,7 @@ PS1='$x$y'
 echo "${PS1@P}"
 ## stdout: \h
 ## status: 0
-## XFAIL ps-bash gap-oils-prompt prompt (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-prompt-promptvars the prompt is decoded but not then parameter-expanded (bash promptvars: PS1='$x$y' with x=\ y=h gives \h)
 ## timeout: 10
 
 #### \1004
@@ -154,7 +153,7 @@ sleep 5
 matched=0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-prompt prompt (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash wontfix-interactive-prompt \j needs job control, \! and \# a count of every executed command (intentional-differences.md, Interactive shell)
 ## timeout: 10
 
 #### \! for history number
@@ -170,7 +169,7 @@ matched=0
 matched=0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-prompt prompt (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash wontfix-interactive-prompt \j needs job control, \! and \# a count of every executed command (intentional-differences.md, Interactive shell)
 ## timeout: 10
 
 #### \# for command number
@@ -180,17 +179,19 @@ echo "${PS1@P}" | egrep -q "foo $((prev_cmd_num + 1)) bar"
 echo matched=$?
 ## stdout: matched=0
 ## status: 0
-## XFAIL ps-bash gap-oils-prompt prompt (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash wontfix-interactive-prompt \j needs job control, \! and \# a count of every executed command (intentional-differences.md, Interactive shell)
 ## timeout: 10
 
 #### sh -i
 # Notes:
 # - OSH prompt goes to stdout and bash goes to stderr
 # - This test seems to fail on the system bash, but succeeds with spec-bin/bash
-echo 'echo foo' | PS1='[prompt] ' $SH --rcfile /dev/null -i >out.txt 2>err.txt
-fgrep -q '[prompt]' out.txt err.txt
+# ps-bash guard: --norc. With --rcfile /dev/null Debian's bash still reads /etc/bash.bashrc, which resets PS1
+# (the recorded match=1).
+echo 'echo foo' | PS1='[prompt] ' $SH --norc -i >out.txt 2>err.txt
+grep -qF '[prompt]' out.txt err.txt
 echo match=$?
-## stdout: match=1
+## stdout: match=0
 ## status: 0
 ## XFAIL ps-bash gap-oils-prompt prompt (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
@@ -286,7 +287,6 @@ echo "${PS1@P}" | egrep -q '^foo [0-9][0-9]:[0-9][0-9]:[0-9][0-9]( ..)? bar$'
 echo matched=$?
 ## stdout: matched=0
 ## status: 0
-## XFAIL ps-bash gap-oils-prompt prompt (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### \s for shell, \v for major.minor version, and \V for full version
@@ -329,12 +329,11 @@ status=0
 ## real-launcher
 
 #### default PS1
-#flags='--norc --noprofile'
-flags='--rcfile /dev/null'
+# ps-bash guard: --norc. With --rcfile /dev/null Debian's bash reads /etc/bash.bashrc, whose PS1 was recorded.
+flags='--norc --noprofile'
 
 $SH $flags -i -c 'echo "_${PS1}_"'
-## stdout: _${debian_chroot:+($debian_chroot)}\u@\h:\w\$ _
+## stdout: _\s-\v\$ _
 ## status: 0
-## XFAIL ps-bash gap-oils-prompt prompt (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
