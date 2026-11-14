@@ -271,7 +271,6 @@ echo -e 'echo one \0 echo two' > tmp.sh
 $SH tmp.sh
 ## stdout:
 ## status: 126
-## XFAIL ps-bash gap-launcher-binary-script bash refuses a script whose first line holds a NUL ("cannot execute binary file", 126); ps-bash runs it
 ## timeout: 10
 ## real-launcher
 

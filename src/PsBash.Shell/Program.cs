@@ -236,6 +236,12 @@ if (shellArgs.ScriptPath is not null)
         return 2;
     }
 
+    if (ScriptFile.LooksBinary(scriptContent))
+    {
+        Console.Error.WriteLine($"ps-bash: {shellArgs.ScriptPath}: cannot execute binary file");
+        return 126;
+    }
+
     string? pwshScriptCommand;
     bool scriptForwardsStdin = false;
     try
