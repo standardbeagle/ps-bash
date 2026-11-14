@@ -101,7 +101,6 @@ two
 three
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-completion builtin-completion (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### complete -o -F (git)
@@ -154,13 +153,13 @@ compgen -v __nonexistent__
 
 #### compgen -v P
 cd > /dev/null  # for some reason in bash, this makes PIPESTATUS appear!
-compgen -v P | grep -E '^PATH|PWD' | sort
+# ps-bash guard: whole names (Windows also defines PATHEXT).
+compgen -v P | grep -E '^(PATH|PWD)$' | sort
 ## STDOUT:
 PATH
 PWD
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-completion builtin-completion (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### compgen -e with global/local exported vars
@@ -183,7 +182,7 @@ unexported=0
 compgen -e unexported
 ## stdout:
 ## status: 1
-## XFAIL ps-bash triage differs from bash 5.2 (auto-marked; investigate)
+## XFAIL ps-bash arch-vars-in-environment variables are process environment variables, so every variable is exported (intentional-differences.md, Platform)
 ## timeout: 10
 
 #### compgen -e on unknown var
@@ -194,13 +193,13 @@ compgen -e __nonexistent__
 
 #### compgen -e P
 cd > /dev/null  # for some reason in bash, this makes PIPESTATUS appear!
-compgen -e P | grep -E '^PATH|PWD' | sort
+# ps-bash guard: whole names (Windows also defines PATHEXT).
+compgen -e P | grep -E '^(PATH|PWD)$' | sort
 ## STDOUT:
 PATH
 PWD
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-completion builtin-completion (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### compgen with actions: alias, setopt
@@ -231,47 +230,11 @@ compgen -A helptopic -S ___ fal
 
 #### compgen -A user
 # no assertion because this isn't hermetic
-compgen -A user
-## STDOUT:
-root
-daemon
-bin
-sys
-sync
-games
-man
-lp
-mail
-news
-uucp
-proxy
-www-data
-backup
-list
-irc
-_apt
-nobody
-systemd-network
-systemd-timesync
-dhcpcd
-messagebus
-syslog
-systemd-resolve
-uuidd
-landscape
-polkitd
-beagle
-redis
-postgres
-ansible
-pipeline
-_galera
-mysql
-sshd
-earlyoom
-## END
+# ps-bash guard: the recorded list is the recording machine's accounts; check the current user is listed.
+compgen -A user | grep -qxF "$(whoami)"
+echo found=$?
+## stdout: found=0
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-completion builtin-completion (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### compgen -A command completes external commands
@@ -283,7 +246,6 @@ xargs
 status=0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-completion builtin-completion (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### compgen -A command completes functions and aliases
@@ -472,7 +434,6 @@ _comp_cmd_test() {
 compgen -F _comp_cmd_test
 ## stdout: hello
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-completion builtin-completion (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### compgen -k shows the same keywords as bash
@@ -538,7 +499,6 @@ two
 bin
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-completion builtin-completion (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -554,7 +514,6 @@ one
 three
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-completion builtin-completion (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 

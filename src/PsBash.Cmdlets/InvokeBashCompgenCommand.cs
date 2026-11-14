@@ -20,7 +20,7 @@ public sealed class InvokeBashCompgenCommand : PSCmdlet
         if (FileSystemHelpers.TryHandleVersion(this, "compgen", args)) return;
 
         var kinds = new List<string>();
-        string? wordList = null, funcName = null, command = null, pre = "", suf = "";
+        string? wordList = null, funcName = null, command = null, filter = null, pre = "", suf = "";
         string prefix = "";
         for (int i = 0; i < args.Length; i++)
         {
@@ -31,7 +31,8 @@ public sealed class InvokeBashCompgenCommand : PSCmdlet
             if (a == "-C" && i + 1 < args.Length) { command = args[++i]; continue; }
             if (a == "-P" && i + 1 < args.Length) { pre = args[++i]; continue; }
             if (a == "-S" && i + 1 < args.Length) { suf = args[++i]; continue; }
-            if (a is "-o" or "-X" or "-G" && i + 1 < args.Length) { i++; continue; } // post-processing / filters: no effect on the set
+            if (a == "-X" && i + 1 < args.Length) { filter = args[++i]; continue; }
+            if (a is "-o" or "-G" && i + 1 < args.Length) { i++; continue; } // post-processing / filters: no effect on the set
             if (a == "-A" && i + 1 < args.Length)
             {
                 var kind = args[++i];
@@ -71,11 +72,14 @@ public sealed class InvokeBashCompgenCommand : PSCmdlet
         foreach (var k in kinds) found.AddRange(Candidates(k, prefix));
 
         var matches = found.Where(w => w.StartsWith(prefix, StringComparison.Ordinal)).Concat(generated).ToList();
+        if (filter is not null) matches = ApplyFilter(matches, filter, prefix);
         if (matches.Count == 0)
         {
             FileSystemHelpers.SetLastExitCode(this, 1);
             return;
         }
+        // The -F function's last command (a command not found: 127) leaves its own status; compgen's is 0.
+        FileSystemHelpers.SetLastExitCode(this, 0);
         foreach (var m in matches) WriteObject(pre + m + suf);
     }
 
@@ -91,13 +95,16 @@ public sealed class InvokeBashCompgenCommand : PSCmdlet
             case "function":
                 return DeclarePrinter.AllBashFunctions(this).Select(f => f.Name);
             case "export":
-                return Script("Get-ChildItem Env: | ForEach-Object Name");
+                return Script("Get-ChildItem Env: | ForEach-Object { if ($_.Name -ieq 'Path') { 'PATH' } else { $_.Name } }");
             case "setopt":
                 return SetOptions;
             case "alias":
                 return UserAliases();
             case "command":
-                return Script("Get-Command -ErrorAction SilentlyContinue | ForEach-Object Name")
+                // The Alias: and Function: drives, not a bare Get-Command: that lists neither the runtime's
+                // global AllScope aliases (xargs, grep, ...) nor quickly (it walks every module on PSModulePath).
+                return Script("Get-ChildItem Alias:, Function: -ErrorAction SilentlyContinue | ForEach-Object Name; " +
+                              "Get-Command -CommandType Cmdlet -ListImported -ErrorAction SilentlyContinue | ForEach-Object Name")
                     .Concat(InvokeBashTypeCommand.Builtins).Concat(InvokeBashTypeCommand.Keywords).Distinct(StringComparer.Ordinal);
             case "builtin":
                 return InvokeBashTypeCommand.Builtins.OrderBy(x => x, StringComparer.Ordinal);
@@ -107,9 +114,47 @@ public sealed class InvokeBashCompgenCommand : PSCmdlet
                 return InvokeBashTypeCommand.Builtins.Concat(InvokeBashTypeCommand.Keywords).Where(x => x.Length > 0 && char.IsLetter(x[0])).OrderBy(x => x, StringComparer.Ordinal);
             case "shopt":
                 return InvokeBashShoptCommand.SnapshotOptions().Keys.Where(k => !k.StartsWith("set:", StringComparison.Ordinal)).OrderBy(x => x, StringComparer.Ordinal);
+            case "user":
+                return UserNames(OperatingSystem.IsWindows() ? null : "/etc/passwd");
             default:
                 return Array.Empty<string>();
         }
+    }
+
+    /// <summary><c>-X filterpat</c>: removes the candidates that match the pattern (all of them, the <c>-F</c> /
+    /// <c>-C</c> results too). A leading <c>!</c> negates it (removes those that do not match); an unescaped <c>&amp;</c>
+    /// stands for the word being completed.</summary>
+    internal static List<string> ApplyFilter(List<string> candidates, string filter, string word)
+    {
+        bool negate = filter.StartsWith('!');
+        if (negate) filter = filter[1..];
+        var pat = new System.Text.StringBuilder();
+        for (int i = 0; i < filter.Length; i++)
+        {
+            if (filter[i] == '\\' && i + 1 < filter.Length && filter[i + 1] == '&') { pat.Append('&'); i++; continue; }
+            if (filter[i] == '&')
+            {
+                foreach (var ch in word) { if (ch is '*' or '?' or '[' or ']' or '\\' or '(' or ')' or '|' or '@' or '!' or '+') pat.Append('\\'); pat.Append(ch); }
+                continue;
+            }
+            pat.Append(filter[i]);
+        }
+        var p = pat.ToString();
+        return candidates.Where(c => BashPatternMatch.MatchesPattern(c, p) == negate).ToList();
+    }
+
+    /// <summary><c>-A user</c> / <c>-u</c>: the account names of <paramref name="passwd"/> in file order (bash reads
+    /// them with getpwent). Windows has no passwd database: the current user only.</summary>
+    internal static IEnumerable<string> UserNames(string? passwd)
+    {
+        if (passwd is null || !File.Exists(passwd)) return [Environment.UserName];
+        var names = new List<string>();
+        foreach (var line in BashFileSystem.ReadLines(passwd))
+        {
+            int colon = line.IndexOf(':');
+            if (colon > 0 && line[0] != '#') names.Add(line[..colon]);
+        }
+        return names;
     }
 
     private static readonly string[] SetOptions =
@@ -189,7 +234,11 @@ public sealed class InvokeBashCompgenCommand : PSCmdlet
         try
         {
             results = InvokeCommand.InvokeScript(
-            "param($f, $c) $global:COMPREPLY = @(); $env:COMPREPLY = $null; $Error.Clear(); $global:LASTEXITCODE = 0; & $f 'compgen' $c '' 2>$null >$null; if ($Error.Count -gt 0) { throw 'failed' }; " +
+            "param($f, $c) $global:COMPREPLY = @(); $env:COMPREPLY = $null; $Error.Clear(); $global:LASTEXITCODE = 0; & $f 'compgen' $c '' 2>$null >$null; " +
+            // A runtime error in the function fails compgen. A lookup that found nothing does not (bash): a command
+            // it runs that is not found, or `unset -v COMPREPLY` of a name with no variable (a silenced
+            // ObjectNotFound that $Error still records).
+            "if (@($Error | Where-Object { [string]$_.CategoryInfo.Category -ne 'ObjectNotFound' }).Count -gt 0) { throw 'failed' }; " +
             "if ($null -ne $env:COMPREPLY -and $env:COMPREPLY -ne '') { $env:COMPREPLY } else { @($global:COMPREPLY) }",
             func, cur);
         }
