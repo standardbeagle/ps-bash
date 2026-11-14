@@ -664,7 +664,7 @@ echo status=$?
 status=0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-printf builtin-printf (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash platform-oracle-tz-legacy-names the recording host has no legacy zone names (US/Eastern, tzdata-legacy), so bash fell back to UTC; ps-bash on Windows resolves US/Eastern
 ## timeout: 10
 
 #### %(strftime format)T doesn't respect TZ if not exported
@@ -686,7 +686,7 @@ if ! test "$localtime" = "$tz"; then
 fi
 ## stdout: not equal
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-printf builtin-printf (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-vars-always-exported every ps-bash variable lives in the process environment, so an unexported TZ still changes %(...)T
 ## timeout: 10
 
 #### %(strftime format)T TZ in environ but not in shell's memory

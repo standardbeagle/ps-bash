@@ -280,7 +280,7 @@ public sealed class InvokeBashPrintfCommand : PSCmdlet
                         string fmt = format.Substring(j + 1, close - j - 1);
                         string raw = argIdx < argList.Length ? argList[argIdx] : "-1";
                         long secs = long.TryParse(raw, out var parsed) ? parsed : -1;
-                        var when = secs < 0 ? DateTimeOffset.Now : DateTimeOffset.FromUnixTimeSeconds(secs).ToLocalTime();
+                        var when = BashTimeZone.At(secs);
                         // The date text is then a %s: `%10.5(%Y-%m-%d)T` is `     2019-`.
                         string text = InvokeBashDateCommand.ConvertDateFormat(when, fmt);
                         if (hasPrecision) text = text.Substring(0, Math.Min(precStr.Length > 0 ? ParseFieldWidth(precStr) : 0, text.Length));

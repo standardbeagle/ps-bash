@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 131
+stdout-length: 26
+stderr-length: 0
+==== SCRIPT ====
+export TZ=Asia/Tokyo; printf '%(%Y-%m-%d %H:%M)T\n' 0; TZ=UTC; printf '%(%H:%M)T\n' 3600; TZ=:America/New_York; printf '%(%H)T\n' 0
+==== STDOUT ====
+1970-01-01 09:00
+01:00
+19
+
+==== STDERR ====
+
