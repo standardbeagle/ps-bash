@@ -88,6 +88,6 @@ else
 fi
 ## stdout: git branch -D foo baz
 ## status: 0
-## XFAIL ps-bash gap-oils-blog1 blog1 (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-lastpipe shopt -s lastpipe: an assignment in the last stage of a pipeline (... | while read; do x+=...) does not reach the shell
 ## timeout: 10
 ## real-launcher

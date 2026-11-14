@@ -27,7 +27,6 @@ echo 3
 ) )
 ## stdout: 1 2 3
 ## status: 0
-## XFAIL ps-bash gap-oils-paren-ambiguity paren-ambiguity (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### (((grep example - 4+ instances in regtest/aports - #2337
@@ -64,7 +63,6 @@ gzip_status=$(
 echo bye
 ## stdout: bye
 ## status: 0
-## XFAIL ps-bash gap-oils-paren-ambiguity paren-ambiguity (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### ((pkg-config example - postfix package - #2337
@@ -95,7 +93,6 @@ echo /opt/gnome/bin/gtk-update-icon-cache)2>/dev/null)"
 echo bye
 ## stdout: bye
 ## status: 0
-## XFAIL ps-bash gap-oils-paren-ambiguity paren-ambiguity (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### (( closed with )) after multiple lines is parse error - #2337

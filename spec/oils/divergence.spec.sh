@@ -91,7 +91,7 @@ hey
 status=0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-divergence divergence (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-path-shebang-script an extensionless #!/usr/bin/env sh script found on PATH does not run (the case times out)
 ## timeout: 10
 
 #### builtin cat crashes a subshell (#2530)
@@ -104,5 +104,5 @@ status=0
 141
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-divergence divergence (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash wontfix-sigpipe no SIGPIPE: cat /dev/zero | head never gets 141 (also cat /dev/zero operand and /usr/bin/cat are not found on Windows)
 ## timeout: 10

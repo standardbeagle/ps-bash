@@ -1436,6 +1436,9 @@ public sealed partial class BashParser
 
             if (Peek().Kind == BashTokenKind.LParen) nestedDepth++;
             else if (Peek().Kind == BashTokenKind.RParen && nestedDepth > 0) nestedDepth--;
+            // Like bash (parse_arith_cmd): the second `(` is closed by its matching `)`, and only an adjacent `)`
+            // makes it arithmetic. `((gzip -cd f) 3>&- | cmp) 5<&0` closes after `f`: two nested subshells.
+            else if (Peek().Kind == BashTokenKind.RParen) return null;
             Advance();
         }
 

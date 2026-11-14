@@ -37,6 +37,5 @@ echo -e 'echo\rTEST' > myscript
 $SH myscript
 ## stdout:
 ## status: 127
-## XFAIL ps-bash gap-oils-explore-parsing explore-parsing (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher

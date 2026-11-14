@@ -183,7 +183,7 @@ fi
 42
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-bugs bugs (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-subscript-cmdsub-eval bash runs a $(...) in an array subscript read from a variable value or an unset operand; ps-bash never runs code from a value
 ## timeout: 10
 
 #### process sub <(echo 42 | tee PWNED) not allowed
@@ -228,7 +228,7 @@ PWNED
 0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-bugs bugs (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-subscript-cmdsub-eval bash runs a $(...) in an array subscript read from a variable value or an unset operand; ps-bash never runs code from a value
 ## timeout: 10
 
 #### printf integer size bug
@@ -271,7 +271,7 @@ echo -e 'echo one \0 echo two' > tmp.sh
 $SH tmp.sh
 ## stdout:
 ## status: 126
-## XFAIL ps-bash gap-oils-bugs bugs (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-launcher-binary-script bash refuses a script whose first line holds a NUL ("cannot execute binary file", 126); ps-bash runs it
 ## timeout: 10
 ## real-launcher
 
@@ -392,6 +392,6 @@ $SH -c 'cat tmp.txt | cat | head -c 5 | tr \\0 0; echo'
 00000
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-bugs bugs (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-cat-dev-zero-operand cat /dev/zero as an operand maps to C:/dev/zero (not found); only the < /dev/zero redirect form reads zeros
 ## timeout: 10
 ## real-launcher

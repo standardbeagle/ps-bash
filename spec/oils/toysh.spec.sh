@@ -19,7 +19,7 @@ ab+( ?d)
 abc)d
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-toysh toysh (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-extglob-ifs-split an unquoted $var inside an extglob group is not IFS-split before the pattern is formed (bash: ab+( ?d) with IFS=c)
 ## timeout: 10
 
 #### extglob $IFS 2
@@ -32,7 +32,7 @@ IFS=x; ABC=cxd; for i in +($ABC); do echo =$i=; done
 =d)=
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-toysh toysh (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-extglob-ifs-split an unquoted $var inside an extglob group is not IFS-split before the pattern is formed (bash: =+(c= =d)= with IFS=x)
 ## timeout: 10
 
 #### char class / extglob
@@ -76,7 +76,7 @@ echo ""{~,~root}/pwd
 ~/pwd ~root/pwd
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-toysh toysh (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-tilde-user ~root (tilde with a user name) is not expanded to that user's home directory
 ## timeout: 10
 
 #### {abc}<<< - http://landley.net/notes-2019.html#09-12-2019
@@ -87,7 +87,7 @@ cat <&$abc
 walrus
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-toysh toysh (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-named-fd-on-compound a {name}<<< named-fd redirect after a compound command ({ ...; } {abc}<<< w) is a parse error
 ## timeout: 10
 
 #### slice of @ and @ - http://landley.net/notes.html#23-04-2020

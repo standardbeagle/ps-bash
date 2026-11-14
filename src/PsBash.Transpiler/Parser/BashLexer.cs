@@ -55,7 +55,8 @@ public static class BashLexer
 
             // `(( i = 1 << 3 ))` / `for ((i = 1 << 3; …))`: arithmetic, so its `<<` is a shift. The parser slices these
             // headers from the raw text; only the heredoc detection below needs to know where they end.
-            if (c == '(' && pos + 1 < len && input[pos + 1] == '(' && pos >= arithEnd && AtArithHeaderPosition(tokens))
+            if (c == '(' && pos + 1 < len && input[pos + 1] == '(' && pos >= arithEnd && AtArithHeaderPosition(tokens)
+                && ArithBodyClosesDoubled(input, pos + 2))
             {
                 int end = ScanArithBody(input, pos + 2);
                 if (end >= pos + 4 && input[end - 1] == ')' && input[end - 2] == ')') arithEnd = end;
@@ -83,8 +84,9 @@ public static class BashLexer
                 continue;
             }
 
-            // Carriage return (normalize \r\n to single newline token).
-            if (c == '\r')
+            // Carriage return (normalize \r\n to single newline token). A lone CR inside a line is an ordinary word
+            // character in bash (`echo\rTEST` is one command name, not found); only CRLF / a final CR ends the line.
+            if (c == '\r' && IsLineEndCr(input, pos))
             {
                 int start = pos;
                 pos++;
@@ -580,6 +582,9 @@ public static class BashLexer
         return true;
     }
 
+    /// <summary>A CR that ends a line: CRLF (Windows scripts) or the last character of the input.</summary>
+    private static bool IsLineEndCr(string input, int pos) => pos + 1 >= input.Length || input[pos + 1] == '\n';
+
     private static bool IsBlankOrOperatorChar(char c)
         => c is ' ' or '\t' or '\n' or '\r' or '|' or '&' or ';' or '(' or ')' or '<' or '>';
 
@@ -675,8 +680,9 @@ public static class BashLexer
             // tokenize loop only reaches a '#' at a word boundary (after
             // whitespace / operator / newline), so the comment rule there fires
             // exactly when bash's does — without this scan swallowing it.
-            if (c is ' ' or '\t' or '\n' or '\r' or '|' or '&' or ';'
-                or '(' or ')' or '<' or '>')
+            if (c is ' ' or '\t' or '\n' or '|' or '&' or ';'
+                or '(' or ')' or '<' or '>'
+                || (c == '\r' && IsLineEndCr(input, pos)))
                 break;
 
             // Backslash escape: consume the backslash and the next character.
@@ -859,7 +865,7 @@ public static class BashLexer
     private static int ScanDollarParen(string input, int pos)
     {
         int len = input.Length;
-        if (pos + 2 < len && input[pos + 2] == '(')
+        if (pos + 2 < len && input[pos + 2] == '(' && IsArithSub(input, pos))
             return ScanArith(input, pos);
         return ScanBalancedParens(input, pos + 2, 1); // skip $(
     }
@@ -877,6 +883,35 @@ public static class BashLexer
 
     /// <summary>Advance past $(( ... )). input[pos]=='$', [pos+1]=='(', [pos+2]=='('.</summary>
     internal static int ScanArith(string input, int pos) => ScanArithBody(input, pos + 3);
+
+    /// <summary>True when the <c>$((</c> at <paramref name="pos"/> is an arithmetic expansion. Like bash
+    /// (parse_arith_cmd), the inner <c>(</c> is matched to its <c>)</c> and the next character must be <c>)</c>;
+    /// otherwise (<c>$(( echo 1 ) )</c>, <c>$((which x || y)2&gt;/dev/null)</c>) it is a command substitution
+    /// whose body starts with a subshell.</summary>
+    internal static bool IsArithSub(string input, int pos) => ArithBodyClosesDoubled(input, pos + 3);
+
+    /// <summary><paramref name="pos"/> is just inside a <c>((</c>: true unless its first unmatched <c>)</c> is
+    /// followed by something other than <c>)</c>. An unterminated body keeps the arithmetic reading.</summary>
+    private static bool ArithBodyClosesDoubled(string input, int pos)
+    {
+        int len = input.Length;
+        int open = 0;
+        for (; pos < len; pos++)
+        {
+            char c = input[pos];
+            // Quoted text and escapes hold no parens (`$(( $(grep -c "a)b" f) + 1 ))` is arithmetic).
+            if (c == '\\') { pos++; continue; }
+            if (c == '\'') { pos = ScanSingleQuoted(input, pos) - 1; continue; }
+            if (c == '"') { pos = ScanDoubleQuoted(input, pos) - 1; continue; }
+            if (c == '(') open++;
+            else if (c == ')')
+            {
+                if (open > 0) open--;
+                else return pos + 1 >= len || input[pos + 1] == ')';
+            }
+        }
+        return true;
+    }
 
     /// <summary>Advance past an arithmetic body to one past its closing <c>))</c>.
     /// <paramref name="pos"/> is just inside the opening <c>((</c>.</summary>
@@ -948,7 +983,7 @@ public static class BashLexer
             // `echo "$(echo \))"` prints `)` in bash.
             if (c == '\\' && pos + 1 < len) { pos += 2; continue; }
             // `(( … ))` is arithmetic: its `<<` is a shift, never a heredoc.
-            if (c == '(' && pos + 1 < len && input[pos + 1] == '(') { pos = ScanArithBody(input, pos + 2); continue; }
+            if (c == '(' && pos + 1 < len && input[pos + 1] == '(' && ArithBodyClosesDoubled(input, pos + 2)) { pos = ScanArithBody(input, pos + 2); continue; }
             if (c == '\'') { pos = ScanSingleQuoted(input, pos); continue; }
             if (c == '"') { pos = ScanDoubleQuoted(input, pos); continue; }
             if (c == '`') { pos = ScanBacktick(input, pos); continue; }

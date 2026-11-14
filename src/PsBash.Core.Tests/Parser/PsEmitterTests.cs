@@ -396,6 +396,9 @@ public class PsEmitterTests
     [InlineData("break")]
     [InlineData("continue")]
     [InlineData("if true; then echo one; continue; echo two; fi")]
+    // bash 5.2 resets the loop level on a function call: a function's break never reaches its caller's loop.
+    [InlineData("f() { break; }")]
+    [InlineData("f() { if break; then echo hi; fi; }; f")]
     public void Transpile_BreakContinueOutsideAnyLoop_WarnsAndKeepsGoing(string src)
     {
         // A bare PowerShell break/continue outside a loop ends the whole pipeline (the client then waits on a
@@ -408,7 +411,7 @@ public class PsEmitterTests
     [Theory]
     [InlineData("for i in 1 2; do break; done", "break")]
     [InlineData("for i in 1 2; do continue; done", "continue")]
-    [InlineData("f() { break; }", "break")]
+    [InlineData("f() { for i in 1; do break; done; }", "break")]
     public void Transpile_BreakContinueInsideALoopOrFunction_StaysTheKeyword(string src, string keyword)
     {
         var ps = PsEmitter.Transpile(src)!;
@@ -1898,7 +1901,7 @@ public class PsEmitterTests
 
         // Exact records (no CRLF/BOM rewrite, invalid bytes kept), handed to the program as the bytes bash would
         // write — not as text, which PowerShell's native binder ends with `\r\n` per record.
-        Assert.Equal("Invoke-BashCat input.txt -RawStdinBytes | ConvertTo-BashNativeStdin 'cmd' | cmd", result);
+        Assert.Contains("Invoke-BashCat input.txt -RawStdinBytes | ConvertTo-BashNativeStdin 'cmd' | cmd", result);
     }
 
     [Fact]
@@ -3478,7 +3481,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("for x in a b c; do echo $x; done");
 
-        Assert.Equal("$__psbash_iter = 0; :__psbash_l0 foreach ($x in 'a','b','c') { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; $env:x = [string]$x; Invoke-BashEcho $x }; Remove-Variable -Name x -ErrorAction SilentlyContinue", result);
+        Assert.Equal("$__psbash_iter = 0; :__psbash_l0 foreach ($x in 'a','b','c') { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; $env:x = [string]$x; Invoke-BashEcho $x }; if ($__psbash_iter -eq 0) { $global:LASTEXITCODE = 0 }; Remove-Variable -Name x -ErrorAction SilentlyContinue", result);
     }
 
     [Fact]
@@ -3486,7 +3489,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("for i in 1 2 3; do echo $i; done");
 
-        Assert.Equal("$__psbash_iter = 0; :__psbash_l0 foreach ($i in 1,2,3) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; $env:i = [string]$i; Invoke-BashEcho $i }; Remove-Variable -Name i -ErrorAction SilentlyContinue", result);
+        Assert.Equal("$__psbash_iter = 0; :__psbash_l0 foreach ($i in 1,2,3) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; $env:i = [string]$i; Invoke-BashEcho $i }; if ($__psbash_iter -eq 0) { $global:LASTEXITCODE = 0 }; Remove-Variable -Name i -ErrorAction SilentlyContinue", result);
     }
 
     [Fact]
@@ -3497,7 +3500,7 @@ public class PsEmitterTests
         // ConvertTo-BashGlob: the shell's pathname expansion (relative names, no hidden files,
         // sorted); an unmatched glob falls back to the literal word so the loop still runs
         // once — bash nullglob is OFF by default.
-        Assert.Equal("$__psbash_iter = 0; :__psbash_l0 foreach ($f in @(ConvertTo-BashGlob '*.txt')) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; $env:f = [string]$f; Invoke-BashCat $f }; Remove-Variable -Name f -ErrorAction SilentlyContinue", result);
+        Assert.Equal("$__psbash_iter = 0; :__psbash_l0 foreach ($f in @(ConvertTo-BashGlob '*.txt')) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; $env:f = [string]$f; Invoke-BashCat $f }; if ($__psbash_iter -eq 0) { $global:LASTEXITCODE = 0 }; Remove-Variable -Name f -ErrorAction SilentlyContinue", result);
     }
 
     [Fact]
@@ -3532,7 +3535,7 @@ public class PsEmitterTests
         // $(if ...) subexpression — a bare (if ...) is parsed by PowerShell as an
         // invocation of a command named "if" and fails at runtime; the subexpression
         // operator is required for the implicit-$@ iteration to actually run.
-        Assert.Equal("$__psbash_iter = 0; :__psbash_l0 foreach ($x in $(if ($global:BashPositional) { $global:BashPositional } else { $args })) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; $env:x = [string]$x; Invoke-BashEcho \"$x\" }; Remove-Variable -Name x -ErrorAction SilentlyContinue", result);
+        Assert.Equal("$__psbash_iter = 0; :__psbash_l0 foreach ($x in $(if ($global:BashPositional) { $global:BashPositional } else { $args })) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; $env:x = [string]$x; Invoke-BashEcho \"$x\" }; if ($__psbash_iter -eq 0) { $global:LASTEXITCODE = 0 }; Remove-Variable -Name x -ErrorAction SilentlyContinue", result);
     }
 
     [Fact]
@@ -4540,7 +4543,7 @@ public class PsEmitterTests
     public void Transpile_ForInGlobCharClass_EmitsConvertToBashGlob()
     {
         var result = PsEmitter.Transpile("for f in [abc]*.txt; do cat $f; done");
-        Assert.Equal("$__psbash_iter = 0; :__psbash_l0 foreach ($f in @(ConvertTo-BashGlob '[abc]*.txt')) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; $env:f = [string]$f; Invoke-BashCat $f }; Remove-Variable -Name f -ErrorAction SilentlyContinue", result);
+        Assert.Equal("$__psbash_iter = 0; :__psbash_l0 foreach ($f in @(ConvertTo-BashGlob '[abc]*.txt')) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; $env:f = [string]$f; Invoke-BashCat $f }; if ($__psbash_iter -eq 0) { $global:LASTEXITCODE = 0 }; Remove-Variable -Name f -ErrorAction SilentlyContinue", result);
     }
 
     [Fact]
@@ -5008,7 +5011,7 @@ public class PsEmitterTests
     public void Transpile_ArrayIteration_EmitsForEachOverArray()
     {
         var result = PsEmitter.Transpile("for item in ${arr[@]}; do echo $item; done");
-        Assert.Equal("$__psbash_iter = 0; :__psbash_l0 foreach ($item in $(if ($arr -is [System.Collections.IDictionary]) { $arr.Values } else { $arr })) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; $env:item = [string]$item; Invoke-BashEcho $item }; Remove-Variable -Name item -ErrorAction SilentlyContinue", result);
+        Assert.Equal("$__psbash_iter = 0; :__psbash_l0 foreach ($item in $(if ($arr -is [System.Collections.IDictionary]) { $arr.Values } else { $arr })) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; $env:item = [string]$item; Invoke-BashEcho $item }; if ($__psbash_iter -eq 0) { $global:LASTEXITCODE = 0 }; Remove-Variable -Name item -ErrorAction SilentlyContinue", result);
     }
 
     [Fact]

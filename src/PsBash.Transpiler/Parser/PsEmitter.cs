@@ -1118,12 +1118,13 @@ public static partial class PsEmitter
     {
         if (_loopLabels is not { Count: > 0 } labels)
         {
-            // At the top of a script (no loop, no function body, not eval/source text that runs inside its
-            // caller's loop) bash warns and carries on with status 0. A bare PowerShell `break`/`continue`
-            // there ends the whole pipeline instead, which left the client waiting on a dead command.
-            if (_loopBarrier || (_functionDepth == 0 && _context == TranspileContext.Default))
+            // At the top of a script or in a function body with no loop of its own (bash 5.2 resets the loop level
+            // on a function call, so a caller's loop is not reached) bash warns and carries on with status 0. A bare
+            // PowerShell `break`/`continue` there ends the whole pipeline instead, or left the caller's loop.
+            // Eval/source text at its top runs inside its caller's loop: it keeps the bare keyword.
+            if (_loopBarrier || _functionDepth > 0 || _context == TranspileContext.Default)
                 return $"Write-Error {PsBuild.SingleQuote(keyword + ": only meaningful in a `for', `while', or `until' loop")} -ErrorAction Continue; {PsBuild.SetStatus(0)}";
-            return keyword; // no lexical loop (a function body): bash's dynamic scope, as before
+            return keyword; // eval/source text: the loop is its caller's
         }
         int n = 1;
         string? check = null;
@@ -1225,7 +1226,7 @@ public static partial class PsEmitter
             }
 
             sb.Append(" }");
-            string loop = ApplyCompoundRedirects(sb.ToString(), forIn.Redirects);
+            string loop = ApplyCompoundRedirects(sb.ToString() + "; " + PsBuild.ZeroIterationStatus(IterVar(depth)), forIn.Redirects);
             // The PowerShell loop variable outlives the loop with its last value, and arithmetic reads a PowerShell
             // variable before the shell variable: `for i in 1 2 3; do :; done; i=0; ...$((i+1))` then counted from 3.
             // The shell variable (`$env:`) already holds the last value, so drop the lexical one. A name the
@@ -1333,7 +1334,7 @@ public static partial class PsEmitter
 
             // `for f in *.txt`: pathname expansion by the shell (relative names, no hidden files, sorted;
             // an unmatched pattern is the one literal item, nullglob off) -- see EmitGlobPatternExpr.
-            if (IsGlobWord(list[0]) || IsUnquotedDefaultAltWord(list[0]) || IsUnquotedPositionalListWord(list[0]))
+            if (IsGlobWord(list[0]) || IsUnquotedDefaultAltWord(list[0]) || IsUnquotedPositionalListWord(list[0]) || IsUnquotedQuotedAltWord(list[0]))
                 return EmitUnquotedSplitWordArray(list[0]);
 
             // `for i in a$x` / `=$*=`: split like bash; it used to iterate once over the literal text `a$env:x`.
@@ -3008,9 +3009,20 @@ public static partial class PsEmitter
     {
         if (expr.Extended)
             return EmitExtendedTest(expr.Inner);
-        if (HasRunTimeTestWords(expr.Inner))
+        if (HasRunTimeTestWords(expr.Inner) || HasOperatorShapedConnectorOperand(expr.Inner))
             return EmitRunTimeTest(expr.Inner);
         return TranslateTestCondition(expr.Inner, extended: false);
+    }
+
+    /// <summary>`[ -a -a -a -a -a -a ]`: two adjacent `-a` / `-o` words make one of them an operand or a dangling
+    /// connector, a shape only bash's own grammar resolves (here `argument expected`, status 2); the static translation
+    /// read every `-a` as a connector. The runtime `test` evaluates it.</summary>
+    private static bool HasOperatorShapedConnectorOperand(ImmutableArray<CompoundWord> words)
+    {
+        for (int i = 1; i < words.Length; i++)
+            if (GetLiteralValue(words[i - 1]) is "-a" or "-o" && GetLiteralValue(words[i]) is "-a" or "-o")
+                return true;
+        return false;
     }
 
     /// <summary>
@@ -3704,7 +3716,12 @@ public static partial class PsEmitter
         string text = EmitShAssignmentStatementCore(cmd);
         // `declare -A m=(...) 2>/dev/null`: the builtin's own redirects. A value's `$( )` runs before them (its stderr is
         // not redirected), so such a declaration keeps the old behavior of not applying them.
-        if (!cmd.Redirects.IsDefaultOrEmpty && !ContainsCommandSub(cmd)) text = ApplyCompoundRedirects(text, cmd.Redirects);
+        // A bare `x=v > f` is no builtin: the assignment is made, then the redirect is opened (bash: a missing directory
+        // reports the error and the status is 1, but x is still set).
+        bool bare = !cmd.IsLocal && !cmd.IsExport && !cmd.IsDeclare && !cmd.IsReadonly;
+        if (bare && !cmd.Redirects.IsDefaultOrEmpty && !ContainsCommandSub(cmd) && cmd.Redirects.All(r => r.Op is ">" or ">>"))
+            text = text + "; " + PsBuild.SetStatus(0) + "; " + EmitNoOpRedirectTouches(new Command.Simple([], [], cmd.Redirects));
+        else if (!cmd.Redirects.IsDefaultOrEmpty && !ContainsCommandSub(cmd)) text = ApplyCompoundRedirects(text, cmd.Redirects);
         if (!_runtimeReadonly || cmd.IsLocal || cmd.IsExport || cmd.IsDeclare) return text;
         var unknown = cmd.Pairs.Select(p => ResolveNameref(p.Name)).Select(n => n.Contains('[') ? n[..n.IndexOf('[')] : n)
             .Where(n => _readonlyVars?.Contains(n) != true).Distinct(StringComparer.Ordinal).ToList();
@@ -4735,6 +4752,10 @@ public static partial class PsEmitter
         result = mappedConsumer
             ? $"Invoke-BashCat {target} -RawStdinBytes | {inner}"
             : $"Invoke-BashCat {target} -RawStdinBytes | {NativeStdinFeedStage(innerCmd)}{inner}";
+        // A target that cannot be opened fails the command before it runs (bash: status 1, the command never starts).
+        // Device paths (`/dev/stdin`, `/dev/zero`) are the runtime's own and always open.
+        if (!(TryGetPureLiteralText(inputRedirect.Target.Parts, out var literalTarget) && literalTarget.StartsWith("/dev/", StringComparison.Ordinal)))
+            result = PsBuild.SimpleInputRedirectGuard(target, result);
         return true;
     }
 
@@ -5325,8 +5346,9 @@ public static partial class PsEmitter
         string? specialResult = null;
 
         // break [N] / continue [N] -> the labelled keyword for the N-th enclosing loop.
+        // A redirect on it still opens its target (`break > f` creates f).
         if (cmd0 is "break" or "continue")
-            specialResult = EmitLoopControl(cmd0, cmd);
+            specialResult = (cmd.Redirects.IsDefaultOrEmpty ? "" : EmitNoOpRedirectTouches(cmd)) + EmitLoopControl(cmd0, cmd);
 
         // At the top of a script or -c string (not a function, not eval/source text), bash refuses `return` with
         // status 2 and goes on; a PowerShell `return` there ended the whole script. A subshell is no different.
@@ -8328,7 +8350,34 @@ public static partial class PsEmitter
     private static bool IsUnquotedSplitWord(CompoundWord word)
         => IsPureUnquotedVarWord(word) || IsUnquotedPositionalListWord(word) || IsPureUnquotedCommandSubWord(word) || IsGlobWord(word)
            || IsBraceGlobWord(word) || IsArrayValuedWord(word) || IsUnquotedDefaultAltWord(word) || IsUnquotedElementWord(word) || IsUnquotedPositionalOpWord(word)
-           || IsUnquotedPositionalAffixWord(word) || IsUnquotedVarAffixWord(word) || IsQuotedArrayAffixWord(word);
+           || IsUnquotedPositionalAffixWord(word) || IsUnquotedVarAffixWord(word) || IsQuotedArrayAffixWord(word) || IsUnquotedQuotedAltWord(word);
+
+    /// <summary>
+    /// Bare <c>${x+"$x"}</c> / <c>${x:+"--opt=$x"}</c> / <c>${a[@]+"${a[@]}"}</c>: the quoted alternative is its words when it is
+    /// chosen and NO word when it is not (x unset: <c>for e in ${x+"$x"}</c> runs zero times). It was one empty argument.
+    /// </summary>
+    private static bool IsUnquotedQuotedAltWord(CompoundWord word)
+        => word.Parts is [WordPart.BracedVarSub { Suffix: { } s, Name: var n, ArgWord: { } aw }]
+           && aw is [WordPart.DoubleQuoted] && n is not ("@" or "*") && QuotedAltOp(s) is not null;
+
+    /// <summary>`:+` / `+` for an alternative suffix, read past the `!indirect` mark of <c>${!r+word}</c>; null otherwise.</summary>
+    private static string? QuotedAltOp(string suffix)
+    {
+        string s = suffix.StartsWith("!indirect", StringComparison.Ordinal) ? suffix["!indirect".Length..] : suffix;
+        return s.StartsWith(":+", StringComparison.Ordinal) ? ":+" : s.StartsWith('+') ? "+" : null;
+    }
+
+    /// <summary>The words of an <see cref="IsUnquotedQuotedAltWord"/> word: the same expansion with the alternative <c>x</c>
+    /// tells whether the alternative is chosen (every name form goes through the one operator path), then the quoted word.</summary>
+    private static string EmitQuotedAltWordArray(CompoundWord word)
+    {
+        var bvs = (WordPart.BracedVarSub)word.Parts[0];
+        string op = (bvs.Suffix!.StartsWith("!indirect", StringComparison.Ordinal) ? "!indirect" : "") + QuotedAltOp(bvs.Suffix)!;
+        string probe = EmitBracedVar(new WordPart.BracedVarSub(bvs.Name, op + "x", ImmutableArray.Create<WordPart>(new WordPart.Literal("x"))));
+        var alt = new CompoundWord(bvs.ArgWord!.Value);
+        string words = IsUnquotedSplitWord(alt) ? EmitUnquotedSplitWordArray(alt) : EmitArgWord(alt);
+        return "@(if ([string](" + probe + ") -ceq 'x') { " + words + " })";
+    }
 
     /// <summary>Bare <c>${@#a}</c> / <c>${*/x/y}</c> / <c>${@%d}</c>: the operator applies to each parameter, so the result is a list of words.</summary>
     private static bool IsUnquotedPositionalOpWord(CompoundWord word)
@@ -8394,7 +8443,16 @@ public static partial class PsEmitter
         string values = parts[idx] is WordPart.SimpleVarSub { Name: "@" or "*" } or WordPart.BracedVarSub { Name: "@" or "*" }
             ? "@(" + PsBuild.BuildPositionalExpansion("@") + ")"
             : "@(" + EmitWord(new CompoundWord(ImmutableArray.Create(parts[idx]))) + ")";
-        return "@(ConvertTo-BashWords -Prefix " + pre + " -Suffix " + suf + " -Fields " + values + ")";
+        // `""$A` / `$A""`: a quoted affix is a field of its own when the value starts / ends with IFS whitespace, even empty.
+        string quoted = (HasQuotedPart(parts, 0, idx) ? " -PrefixQuoted" : "") + (HasQuotedPart(parts, idx + 1, parts.Length) ? " -SuffixQuoted" : "");
+        return "@(ConvertTo-BashWords -Prefix " + pre + " -Suffix " + suf + " -Fields " + values + quoted + ")";
+    }
+
+    private static bool HasQuotedPart(ImmutableArray<WordPart> parts, int from, int to)
+    {
+        for (int i = from; i < to; i++)
+            if (parts[i] is WordPart.SingleQuoted or WordPart.DoubleQuoted) return true;
+        return false;
     }
 
     /// <summary>
@@ -8615,7 +8673,9 @@ public static partial class PsEmitter
     }
 
     private static string EmitUnquotedSplitWordArray(CompoundWord word)
-        => TryQuotedArrayAffix(word, out var qaOuter, out var qaInner)
+        => IsUnquotedQuotedAltWord(word)
+            ? EmitQuotedAltWordArray(word)
+            : TryQuotedArrayAffix(word, out var qaOuter, out var qaInner)
             ? EmitQuotedArrayAffixArray(word, qaOuter, qaInner)
             : IsUnquotedPositionalAffixWord(word) || IsUnquotedVarAffixWord(word)
             ? EmitAffixWordArray(word, UnquotedAffixExpansionIndex(word, ordinaryVar: true))
@@ -9430,7 +9490,12 @@ public static partial class PsEmitter
                 + "if ([int]$__ind -eq 0) { " + EmitSimpleVar("0", strict: true) + " } elseif ([int]$__ind -le $__pp.Count) { $__pp[[int]$__ind - 1] } } "
                 + "else { Get-BashIndirectValue -Ref $__indv -RefName " + IndirectRefName(bvs.Name)
                 + " -Pos @(" + PsBuild.BuildPositionalExpansion("@") + ")" + IndirectLineArg() + " } }";
-            return inDoubleQuote ? $"$({lookup})" : $"$({lookup})";
+            // Under set -u a ref that names an unset variable ends the script like a direct read
+            // (`r=nope; set -u; echo ${!r}` is "!r: unbound variable", status 1); a failed lookup already reported.
+            if (_nounsetMode && namedRef)
+                return "$($__psbash_iv = " + lookup + "; if ($global:__BashNounset -and $null -eq $__psbash_iv -and -not $global:__BashExpansionFailed) { "
+                    + PsBuild.ParamErrorThrowStatements(PsBuild.SingleQuote("!" + bvs.Name + ": "), "'unbound variable'") + " } else { $__psbash_iv })";
+            return $"$({lookup})";
         }
 
         if (bvs.Suffix == "!names")

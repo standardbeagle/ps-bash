@@ -19,6 +19,17 @@ public class AffixWordSplitTests
     public void Transpile_UnquotedVarGluedToText_SplitsTheValue(string bash, string fields)
         => Assert.Contains("ConvertTo-BashWords " + fields, T(bash));
 
+    // `""$A` / `$A""`: a quoted affix anchors a field of its own (bash's quoted null), so the runtime is told which side is quoted.
+    [Theory]
+    [InlineData("for i in \"\"$A; do :; done", " -PrefixQuoted)")]
+    [InlineData("for i in $A\"\"; do :; done", " -SuffixQuoted)")]
+    [InlineData("for i in \"\"x\"\"$A\"\"; do :; done", " -PrefixQuoted -SuffixQuoted)")]
+    public void Transpile_QuotedAffix_MarksTheQuotedSide(string bash, string marks)
+        => Assert.Contains("-Fields @($env:A)" + marks, T(bash));
+
+    [Fact]
+    public void Transpile_UnquotedAffix_HasNoQuotedMark()
+        => Assert.DoesNotContain("Quoted", T("printf '[%s]' a$x"));
     [Fact]
     public void Transpile_TmpPathGluedToVar_MapsTheTempDirectory()
     {

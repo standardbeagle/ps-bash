@@ -34,12 +34,19 @@ public sealed class ConvertToBashWordsCommand : PSCmdlet
     /// <summary>The expansion's values, one field source each (every positional parameter, or the one variable).</summary>
     [Parameter] [AllowNull] [AllowEmptyCollection] public object?[]? Fields { get; set; }
 
+    /// <summary>The prefix has quoted text, so it anchors a field even when empty (<c>""$x</c>).</summary>
+    [Parameter] public SwitchParameter PrefixQuoted { get; set; }
+
+    /// <summary>The suffix has quoted text (<c>$x""</c>).</summary>
+    [Parameter] public SwitchParameter SuffixQuoted { get; set; }
+
     protected override void ProcessRecord()
     {
         var ifs = BashVariableStore.Get("IFS");
         var words = Fields is not null || Prefix is not null || Suffix is not null
             ? BashWordSplitter.AffixFields(Prefix ?? "", Suffix ?? "",
-                (Fields ?? Array.Empty<object?>()).Select(f => f is null ? null : (f is PSObject p ? p.BaseObject : f).ToString()).ToList(), ifs)
+                (Fields ?? Array.Empty<object?>()).Select(f => f is null ? null : (f is PSObject p ? p.BaseObject : f).ToString()).ToList(), ifs,
+                PrefixQuoted.IsPresent, SuffixQuoted.IsPresent)
             : BashWordSplitter.Split(Text, ifs);
         foreach (var word in words)
         {
@@ -144,7 +151,11 @@ internal static class BashWordSplitter
     /// An empty IFS splits nothing: each value is its own field (text glued to the first and last) and empty fields
     /// are dropped. No values at all is the prefix and suffix alone (<c>=$*=</c> is <c>==</c>).
     /// </summary>
-    public static List<string> AffixFields(string prefix, string suffix, IReadOnlyList<string?> values, string? ifs)
+    /// <para>The prefix and suffix are literal text: they are never split (<c>IFS=:; x=c; a:b$x</c> is <c>a:bc</c>). A
+    /// quoted affix (<paramref name="prefixQuoted"/> / <paramref name="suffixQuoted"/>) anchors a field even when it is
+    /// empty, as bash's quoted null does: A='  abc  ', <c>""$A</c> is <c>""</c> <c>abc</c> and <c>$A""</c> is <c>abc</c> <c>""</c>.</para>
+    public static List<string> AffixFields(string prefix, string suffix, IReadOnlyList<string?> values, string? ifs,
+        bool prefixQuoted = false, bool suffixQuoted = false)
     {
         if (ifs is { Length: 0 })
         {
@@ -153,18 +164,67 @@ internal static class BashWordSplitter
             if (fields.Count == 0) fields.Add("");
             fields[0] = prefix + fields[0];
             fields[^1] = fields[^1] + suffix;
-            fields.RemoveAll(f => f.Length == 0);
+            bool keepFirst = prefixQuoted || (fields.Count == 1 && suffixQuoted), keepLast = suffixQuoted;
+            for (int i = fields.Count - 1; i >= 0; i--)
+                if (fields[i].Length == 0 && !(i == 0 && keepFirst) && !(i == fields.Count - 1 && keepLast)) fields.RemoveAt(i);
             return fields;
         }
         char sep = ifs is null ? ' ' : ifs[0];
-        var sb = new System.Text.StringBuilder(prefix);
+        // Each character is tagged: 0 = expansion text (split on IFS), 1 = literal affix text, 2 = a quoted-null anchor
+        // (kept in no field, but it makes the field it sits in exist).
+        var sb = new System.Text.StringBuilder(prefix.Length + suffix.Length + 16);
+        var kind = new List<byte>(prefix.Length + suffix.Length + 16);
+        void Add(string text, byte k) { sb.Append(text); for (int j = 0; j < text.Length; j++) kind.Add(k); }
+        Add(prefix, 1);
+        if (prefixQuoted) { sb.Append('\0'); kind.Add(2); }
         for (int i = 0; i < values.Count; i++)
         {
-            if (i > 0) sb.Append(sep);
-            sb.Append(values[i]);
+            if (i > 0) Add(sep.ToString(), 0);
+            Add(values[i] ?? "", 0);
         }
-        sb.Append(suffix);
-        return Split(sb.ToString(), ifs);
+        if (suffixQuoted) { sb.Append('\0'); kind.Add(2); }
+        Add(suffix, 1);
+        return SplitTagged(sb.ToString(), kind, ifs ?? " \t\n");
+    }
+
+    /// <summary><see cref="Split"/> where only characters tagged 0 can delimit and characters tagged 2 are dropped from
+    /// the fields they anchor (see <see cref="AffixFields"/>).</summary>
+    private static List<string> SplitTagged(string text, List<byte> kind, string ifs)
+    {
+        var words = new List<string>();
+        bool IsWs(int k) => kind[k] == 0 && ifs.IndexOf(text[k]) >= 0 && IsIfsWhitespace(text[k]);
+        bool IsNonWs(int k) => kind[k] == 0 && ifs.IndexOf(text[k]) >= 0 && !IsIfsWhitespace(text[k]);
+        bool IsIfs(int k) => kind[k] == 0 && ifs.IndexOf(text[k]) >= 0;
+        var field = new System.Text.StringBuilder();
+        int i = 0, n = text.Length;
+        while (i < n && IsWs(i)) i++;
+        while (i < n)
+        {
+            field.Clear();
+            while (i < n && !IsIfs(i))
+            {
+                if (kind[i] != 2) field.Append(text[i]);
+                i++;
+            }
+            words.Add(field.ToString());
+            if (i >= n) break;
+
+            if (IsWs(i))
+            {
+                while (i < n && IsWs(i)) i++;
+                if (i < n && IsNonWs(i))
+                {
+                    i++;
+                    while (i < n && IsWs(i)) i++;
+                }
+            }
+            else
+            {
+                i++;
+                while (i < n && IsWs(i)) i++;
+            }
+        }
+        return words;
     }
 
     public static bool HasGlobChars(string word) => word.AsSpan().IndexOfAny('*', '?', '[') >= 0;

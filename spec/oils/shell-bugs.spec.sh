@@ -22,5 +22,5 @@ supports -f
 env
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-shell-bugs shell-bugs (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash platform-windows-unix-bin expects GNU time (command time -f / env time -f), which Windows does not have
 ## timeout: 10

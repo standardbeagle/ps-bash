@@ -1113,6 +1113,34 @@ public class BashTranspilerTests
         Assert.Null(BashTranspiler.RunnablePrefix(script, ex));
     }
 
+    // `a=( inside=() )`: bash reports the `(`, discards that line (status 1) and goes on with the next, even on line 1 of -c.
+    [Fact]
+    public void Transpile_NestedParenInArrayLiteral_DiscardsTheLineAndContinues()
+    {
+        const string script = "a=( inside=() ); echo never\necho len=${#a[@]}";
+        var ex = Assert.Throws<ParseException>(() => BashParser.ParseTopLevelWithPositions(script));
+        Assert.Equal(BashParser.ArrayLiteralNestedParenRule, ex.Rule);
+        var recovered = BashTranspiler.RunnablePrefix(script, ex);
+        Assert.NotNull(recovered);
+        Assert.StartsWith("printf '%s\\n' 'ps-bash: parse error: ", recovered);
+        Assert.EndsWith("' >&2; false\necho len=${#a[@]}", recovered);
+        Assert.DoesNotContain("never", recovered);
+    }
+
+    // `if true; then` + `c=( (q) )`: the whole unfinished `if` is discarded; the next lines run, and the stray `fi` is then a
+    // fatal error (bash: inif printed, exit 2).
+    [Fact]
+    public void Transpile_NestedParenInArrayLiteralInsideIf_DiscardsTheUnfinishedCommand()
+    {
+        const string script = "echo before\nif true; then\n  c=( (q) )\n  echo inif\nfi\necho end";
+        var ex = Assert.Throws<ParseException>(() => BashParser.ParseTopLevelWithPositions(script));
+        var recovered = BashTranspiler.RunnablePrefix(script, ex)!;
+        Assert.StartsWith("echo before\nprintf '%s\\n' 'ps-bash: parse error: ", recovered);
+        Assert.Contains("\n\n  echo inif\n{ printf", recovered);
+        Assert.EndsWith(" >&2; exit 2; }\n", recovered);
+        Assert.DoesNotContain("end", recovered.Split("exit 2")[1]);
+    }
+
     [Fact]
     public void RunnablePrefix_SkipsBackOverAnUnfinishedCommand()
     {

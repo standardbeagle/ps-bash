@@ -607,6 +607,17 @@ public class BashLexerTests
             (BashTokenKind.Word, "b"));
     }
 
+    // bash: a CR that does not end a line is a word character (`echo\rTEST` is one command name, status 127).
+    [Fact]
+    public void Tokenize_LoneCarriageReturn_IsPartOfTheWord()
+    {
+        var tokens = Tokenize("echo\rTEST\n");
+
+        AssertTokens(tokens,
+            (BashTokenKind.Word, "echo\rTEST"),
+            (BashTokenKind.Newline, "\n"));
+    }
+
     // --- Comments ---
 
     [Fact]

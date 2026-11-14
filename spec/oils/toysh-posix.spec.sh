@@ -24,7 +24,6 @@ status=0
 hello
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-toysh-posix toysh-posix (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Failed redirect in assignment, vs. export
@@ -39,7 +38,6 @@ abc=def
 abc=def
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-toysh-posix toysh-posix (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### IFS 5
@@ -98,7 +96,6 @@ A="   abc   def   "; for i in ""x""$A""; do echo =$i=; done
 ==
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-toysh-posix toysh-posix (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### IFS 3

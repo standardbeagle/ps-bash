@@ -69,7 +69,7 @@ public sealed partial class BashParser
                     pos++;
                 }
             }
-            else if (c == '$' && pos + 2 < len && raw[pos + 1] == '(' && raw[pos + 2] == '(')
+            else if (c == '$' && pos + 2 < len && raw[pos + 1] == '(' && raw[pos + 2] == '(' && BashLexer.IsArithSub(raw, pos))
             {
                 pos = ParseArithSub(raw, pos, parts);
             }
@@ -317,7 +317,7 @@ public sealed partial class BashParser
                     pos++;
                 }
             }
-            else if (c == '$' && pos + 2 < len && raw[pos + 1] == '(' && raw[pos + 2] == '(')
+            else if (c == '$' && pos + 2 < len && raw[pos + 1] == '(' && raw[pos + 2] == '(' && BashLexer.IsArithSub(raw, pos))
             {
                 pos = ParseArithSub(raw, pos, innerParts);
             }

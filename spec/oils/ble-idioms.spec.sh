@@ -177,7 +177,6 @@ status=3
 status=3
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-ble-idioms ble-idioms (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Issue #1069 [56] BUG: declare -p unset does not print any error message
@@ -445,6 +444,6 @@ declare -a a=([0]="99" [1]="2" [2]="3")
 declare -A A=([0]="99" [k]="v" )
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-ble-idioms ble-idioms (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash platform-windows-env-case variables a and A collide (PowerShell variable names are case-insensitive): "A: cannot convert indexed to associative array"
 ## timeout: 10
 ## real-launcher

@@ -94,7 +94,6 @@ for element in ${!hookSlice+"${!hookSlice}"}; do
 done
 ## stdout:
 ## status: 0
-## XFAIL ps-bash gap-oils-nix-idioms nix-idioms (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### ${!ref} to undefined string var is fatal, INCONSISTENT with array
@@ -109,7 +108,6 @@ argv.py ${!hookSlice}
 echo end
 ## stdout:
 ## status: 1
-## XFAIL ps-bash gap-oils-nix-idioms nix-idioms (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### export with dynamic var name +=
@@ -145,7 +143,7 @@ declare -x NIX_LDFLAGS_foo=" -Lone/lib64"
 declare -x NIX_LDFLAGS_foo=" -Lone/lib64"
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-nix-idioms nix-idioms (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-export-dynamic-name export NAME${x}+=v is "export: command not found" and export "$name" does not export the variable
 ## timeout: 10
 
 #### let idiom can be written in POSIX shell - eval ": \$(( ))"
@@ -187,5 +185,5 @@ NIX_ENFORCE_NO_NATIVE_x86_64_unknown_linux_gnu=3
 
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-nix-idioms nix-idioms (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-let-own-parser let has its own small expression parser without |= (expression error); $(( )) handles it
 ## timeout: 10

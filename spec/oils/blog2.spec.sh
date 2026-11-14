@@ -41,7 +41,6 @@ echo status=$?
 echo status=$?
 ## stdout: status=2
 ## status: 0
-## XFAIL ps-bash gap-oils-blog2 blog2 (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### -a -a -a -a -a -a -a

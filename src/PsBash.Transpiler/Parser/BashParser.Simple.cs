@@ -310,12 +310,39 @@ public sealed partial class BashParser
         if (words.Count > 0 && EscapedControlBuiltin(words[0]) is { } controlName)
             words[0] = new CompoundWord(ImmutableArray.Create<WordPart>(new WordPart.Literal(controlName)));
 
+        // `builtin return 3`, `command continue`, `\builtin command exit 5`: the wrappers only bypass functions and
+        // aliases, so the control builtin behind them is the bare one (otherwise `command` ran `continue` as a
+        // command and the loop never saw it).
+        StripControlBuiltinWrappers(words);
+
         return new Command.Simple(
             words.ToImmutable(),
             envPairs.ToImmutable(),
             redirects.ToImmutable(),
             hereDocs.ToImmutable(),
             simpleLine);
+    }
+
+    private static void StripControlBuiltinWrappers(ImmutableArray<CompoundWord>.Builder words)
+    {
+        int k = 0;
+        while (k < words.Count - 1 && WordText(words[k]) is "builtin" or "command") k++;
+        if (k == 0 || WordText(words[k]) is not ({ } name and ("break" or "continue" or "return" or "exit"))) return;
+        for (int i = 0; i <= k; i++) words.RemoveAt(0);
+        words.Insert(0,new CompoundWord(ImmutableArray.Create<WordPart>(new WordPart.Literal(name))));
+    }
+
+    /// <summary>The text of a word made only of literal and backslash-escaped characters (`\builtin`), else null.</summary>
+    private static string? WordText(CompoundWord word)
+    {
+        var sb = new System.Text.StringBuilder();
+        foreach (var p in word.Parts)
+        {
+            if (p is WordPart.Literal l) sb.Append(l.Value);
+            else if (p is WordPart.EscapedLiteral e) sb.Append(e.Value);
+            else return null;
+        }
+        return sb.ToString();
     }
 
     private static string? EscapedControlBuiltin(CompoundWord word)
@@ -521,6 +548,9 @@ public sealed partial class BashParser
         return null;
     }
 
+    /// <summary>Rule of the syntax error for a <c>(</c> inside an array literal: bash skips the rest of that line and continues.</summary>
+    internal const string ArrayLiteralNestedParenRule = "ArrayLiteralNestedParen";
+
     private Assignment ParseAssignmentWord()
     {
         var token = Advance();
@@ -585,6 +615,10 @@ public sealed partial class BashParser
             // Anything but `)` here (`arr=(a ; b)`, or end of input) is a bash syntax
             // error. Returning the partial array used to leave the tail as leftover
             // tokens that silently re-parsed as commands.
+            // `a=( inside=() )`, `b=( x (y) )`: a `(` in the literal. bash discards the line and keeps reading at the next
+            // one (status 1), so this error is recoverable (BashTranspiler.RunnablePrefix).
+            if (Peek().Kind == BashTokenKind.LParen)
+                throw MakeError("syntax error near unexpected token `('", Peek().Position, ArrayLiteralNestedParenRule);
             if (Peek().Kind != BashTokenKind.RParen)
                 throw MakeError(
                     $"Expected ')' to close array literal but got '{Peek().Value}' ({Peek().Kind})",

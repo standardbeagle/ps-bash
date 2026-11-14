@@ -74,6 +74,16 @@ public static class BashTranspiler
     /// </summary>
     public static string? RunnablePrefix(string bashCommand, ParseException ex)
     {
+        // A recoverable error (a `(` in an array literal) ends only the command being read: the lines before it run, the
+        // command is discarded through the end of the error line (status 1), and reading resumes on the next line. That
+        // rest may hold another error, recovered the same way or reported as below.
+        for (int round = 0; ex.Rule == BashParser.ArrayLiteralNestedParenRule && round < 64; round++)
+        {
+            if (DiscardThroughErrorLine(bashCommand, ex) is not { } resumed) return null;
+            try { BashParser.ParseTopLevelWithPositions(resumed); return resumed; }
+            catch (ParseException next) { bashCommand = resumed; ex = next; }
+        }
+        if (ex.Rule == BashParser.ArrayLiteralNestedParenRule) return null;
         if (ex.Line < 2) return null;
         var lines = bashCommand.Split('\n');
         int last = Math.Min(ex.Line - 1, lines.Length - 1);
@@ -87,6 +97,31 @@ public static class BashTranspiler
             return prefix + "\n{ printf '%s\\n' '" + message.Replace("'", "'\\''") + "' >&2; exit 2; }\n";
         }
         return null;
+    }
+
+    /// <summary>
+    /// <paramref name="bashCommand"/> with the command that holds a recoverable error replaced by a report (status 1):
+    /// the longest run of whole lines before the error line that parses is kept, the lines after it through the error
+    /// line become the report and blank lines (so later line numbers are unchanged), and the rest follows as it was.
+    /// </summary>
+    private static string? DiscardThroughErrorLine(string bashCommand, ParseException ex)
+    {
+        var lines = bashCommand.Split('\n');
+        int errorLine = Math.Min(ex.Line, lines.Length); // 1-based
+        int keep = 0;
+        for (int k = errorLine - 1, tries = 0; k >= 1 && tries < 64; k--, tries++)
+        {
+            string prefix = string.Join('\n', lines, 0, k);
+            if (string.IsNullOrWhiteSpace(prefix)) break;
+            try { BashParser.ParseTopLevelWithPositions(prefix); keep = k; break; }
+            catch (ParseException) { }
+        }
+        string message = "ps-bash: parse error: " + ex.Message;
+        var rewritten = new string[lines.Length];
+        for (int i = 0; i < lines.Length; i++)
+            rewritten[i] = i < keep || i >= errorLine ? lines[i] : "";
+        rewritten[keep] = "printf '%s\\n' '" + message.Replace("'", "'\\''") + "' >&2; false";
+        return string.Join('\n', rewritten);
     }
 
     /// <summary>

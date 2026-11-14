@@ -985,6 +985,23 @@ public static class PsBuild
         + " } else { Write-Error -Message \"${__psbash_ir}: No such file or directory\" -ErrorAction Continue; $global:LASTEXITCODE = 1" + (onFail is null ? "" : "; " + onFail) + " } }";
 
     /// <summary>
+    /// After a <c>for</c> loop: a loop whose body never ran has status 0 (<c>false; for x in $(true); do :; done</c> leaves 0),
+    /// whatever its word list's expansions left. <paramref name="iterVar"/> counts the iterations that started.
+    /// </summary>
+    public static string ZeroIterationStatus(string iterVar) =>
+        "if (" + iterVar + " -eq 0) { $global:LASTEXITCODE = 0 }";
+
+    /// <summary>
+    /// A simple command's <c>&lt; file</c> that cannot be opened: bash reports it, sets status 1 and never runs the
+    /// command (<c>echo potato &lt; /missing || echo hello</c> prints only hello). Dot-sourced, so what the command
+    /// assigns (<c>read x &lt; f</c> in a function, whose locals are PowerShell variables) stays in the caller's scope,
+    /// and still one pipeline element for a following <c>| …</c> or <c>|| …</c>.
+    /// </summary>
+    public static string SimpleInputRedirectGuard(string target, string ok) =>
+        ". { $__psbash_ir = [string](Write-Output " + target + "); Invoke-BashTest -e $__psbash_ir; if ($global:LASTEXITCODE -eq 0) { " + ok
+        + " } else { Write-Error -Message \"${__psbash_ir}: No such file or directory\" -ErrorAction Continue; $global:LASTEXITCODE = 1 } }";
+
+    /// <summary>
     /// A function body that reads stdin: when the function is called with a pipe (<c>echo x | f</c>,
     /// <c>f &lt;&lt;&lt; x</c>) that pipe is its stdin (<see cref="StdinScope"/>); called without one it keeps the
     /// stdin of its caller (the enclosing compound's queue, or the launcher's).
