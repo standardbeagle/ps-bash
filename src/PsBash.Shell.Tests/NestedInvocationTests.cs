@@ -142,6 +142,49 @@ public class NestedInvocationTests
         }
     }
 
+    // A nested ps-bash under the default per-session endpoint anchored a new session on the host running its parent
+    // and started one more full daemon there (with its own slots), one per host: 19-21 hosts, 3.5 GB in one session.
+    // It now joins the enclosing host's session: every host is the session base or one of its -x slots.
+    [SkippableFact]
+    public async Task NestedBashC_DefaultSessionEndpoint_JoinsTheSessionSlots_NoSecondDaemon()
+    {
+        Skip.If(PsBashExe is null, "built ps-bash required");
+        var tempRoot = Path.Combine(Path.GetTempPath(), "psb-nest-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(tempRoot);
+        try
+        {
+            var psi = PsBashTestProcess.Create(new[] { "-c", "a=$(bash -c 'echo $$'); echo \"$a $$\"" }, isolatedIpc: false);
+            psi.Environment["TEMP"] = tempRoot;
+            psi.Environment["TMP"] = tempRoot;
+            psi.Environment["TMPDIR"] = tempRoot;
+            psi.Environment["XDG_RUNTIME_DIR"] = null;
+            psi.Environment[IpcTransportFactory.EndpointEnvVar] = null;
+            psi.Environment["PSBASH_SESSION"] = null;
+            psi.Environment["PSBASH_PER_INVOCATION"] = "0";
+            psi.Environment["PSBASH_HOST_IDLE_SECS"] = "30";
+            var r = await RunAsync(psi, TimeSpan.FromSeconds(120));
+            Assert.Equal(0, r.Exit);
+            var pids = r.Out.Trim().Split(' ');
+            Assert.Equal(2, pids.Length);
+            Assert.NotEqual(pids[0], pids[1]);   // the nested call ran on another host (the outer one is busy)
+
+            var endpoints = Directory.GetDirectories(tempRoot, "ps-bash*")
+                .SelectMany(d => Directory.GetFiles(d, "*.host.json"))
+                .Select(f => HostMetadata.TryRead("unix", f[..^".host.json".Length])?.Endpoint)
+                .OfType<string>()
+                .ToList();
+            Assert.Equal(2, endpoints.Count);
+            var bases = endpoints.Select(IpcTransportFactory.BaseOfSlotEndpoint).Distinct().ToList();
+            Assert.Single(bases);
+            Assert.Contains(bases[0] + "-x1", endpoints);
+        }
+        finally
+        {
+            foreach (var d in Directory.GetDirectories(tempRoot, "ps-bash*")) KillHostsUnder(d);
+            try { Directory.Delete(tempRoot, recursive: true); } catch { }
+        }
+    }
+
     private static void KillHostsUnder(string runtimeDir)
     {
         try

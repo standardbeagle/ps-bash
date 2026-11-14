@@ -108,6 +108,44 @@ internal static partial class ProcessAncestry
         return anchor;
     }
 
+    private const string HostProcessName = "ps-bash-host";
+
+    /// <summary>Shells a host command may put between the host and a nested launcher (awk <c>system()</c>, a <c>.cmd</c>
+    /// wrapper). Agent runtimes (node, claude, python) are not climbed: an agent started by a command owns its own session.</summary>
+    private static readonly HashSet<string> PlainShellNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "bash", "sh", "dash", "zsh", "ksh", "cmd", "pwsh", "powershell",
+    };
+
+    private const int MaxShellsToHost = 3;
+
+    /// <summary>
+    /// The <c>ps-bash-host</c> whose command started this launcher: the immediate parent, or the first ancestor above
+    /// at most <see cref="MaxShellsToHost"/> plain shells. Null otherwise.
+    /// </summary>
+    public static ProcessIdentity? FindEnclosingHost()
+        => SelectEnclosingHost(Environment.ProcessId, GetParentProcessIdByPid, TryGetProcessInfo);
+
+    /// <summary>Pure walk behind <see cref="FindEnclosingHost"/> (test seam: synthetic ancestry chains).</summary>
+    internal static ProcessIdentity? SelectEnclosingHost(
+        int launcherPid,
+        Func<int, int?> parentOfPid,
+        Func<int, (string? Name, long StartTicks)?> infoOfPid)
+    {
+        int pid = launcherPid;
+        for (int shells = 0; shells <= MaxShellsToHost; shells++)
+        {
+            if (parentOfPid(pid) is not { } parent || parent <= 0) return null;
+            if (infoOfPid(parent) is not { } info) return null;
+            var name = StripExe(info.Name ?? "");
+            if (name.Equals(HostProcessName, StringComparison.OrdinalIgnoreCase))
+                return new ProcessIdentity(parent, info.StartTicks);
+            if (!PlainShellNames.Contains(name)) return null;
+            pid = parent;
+        }
+        return null;
+    }
+
     private static ProcessIdentity? IdentityOf(
         int pid, Func<int, (string? Name, long StartTicks)?> infoOfPid)
     {

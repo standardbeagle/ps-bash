@@ -26,6 +26,7 @@ public class IpcTransportFactoryTests : IDisposable
         // tests are deterministic regardless of the test runner's real parent
         // ancestry; per-session tests set this seam (or PSBASH_SESSION) explicitly.
         IpcTransportFactory.SessionAnchorOverride = () => null;
+        IpcTransportFactory.EnclosingHostOverride = () => null;
     }
 
     public void Dispose()
@@ -33,6 +34,17 @@ public class IpcTransportFactoryTests : IDisposable
         Environment.SetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar, _priorEnv);
         Environment.SetEnvironmentVariable(IpcTransportFactory.SessionEnvVar, _priorSession);
         IpcTransportFactory.SessionAnchorOverride = null;
+        IpcTransportFactory.EnclosingHostOverride = null;
+    }
+
+    [Fact]
+    public void ResolveEndpoint_EnclosedByAnUnregisteredHost_FallsBackToTheSessionAnchor()
+    {
+        // A host with no sidecar here (an interactive terminal's host) keeps the anchored session.
+        IpcTransportFactory.EnclosingHostOverride = () => Anchor(int.MaxValue - 7, 1);
+        IpcTransportFactory.SessionAnchorOverride = () => Anchor(12345, 987654321);
+        IpcTransportFactory.ResolveEndpoint(null, out var anchor);
+        Assert.Equal(Anchor(12345, 987654321), anchor);
     }
 
     private static ProcessIdentity Anchor(int pid, long startTicks)

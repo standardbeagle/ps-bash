@@ -153,6 +153,10 @@ public static class IpcTransportFactory
         var envValue = Environment.GetEnvironmentVariable(EndpointEnvVar);
         if (TryParseEndpointSpec(envValue, EndpointEnvVar, out var env)) return env;
 
+        if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(SessionEnvVar))
+            && TryResolveEnclosingHostEndpoint(out var hosted, out sessionAnchor))
+            return hosted;
+
         var user = SanitizeUser(Environment.UserName);
         // Per-session suffix: one daemon per (user, session) so independent shells /
         // agents don't contend on a single shared host (the contention that
@@ -172,6 +176,55 @@ public static class IpcTransportFactory
         if (candidate.Length > UnixSocketPathBudget())
             candidate = Path.Combine(sockDir, $"host-{ShortHash(user, 8)}{suffix}.sock");
         return ("unix", RequireFits(candidate));
+    }
+
+    /// <summary>Test seam for <see cref="ProcessAncestry.FindEnclosingHost"/>. Null = the real ancestry walk.</summary>
+    internal static Func<ProcessIdentity?>? EnclosingHostOverride { get; set; }
+
+    /// <summary>
+    /// A launcher started by a command that a registered host is running (nested <c>bash -c</c>, awk getline) joins
+    /// that host's session: it resolves the host's base endpoint, so it reuses an idle session host or spills to the
+    /// session's executor slots (docs/specs/executor-slots.md), instead of anchoring a new session on the host and
+    /// starting another full daemon there. A host spawned from here is anchored on the enclosing host, which is alive
+    /// for as long as the command that started this launcher. False when no registered host encloses this launcher.
+    /// </summary>
+    private static bool TryResolveEnclosingHostEndpoint(out (string Scheme, string Endpoint) endpoint, out ProcessIdentity? anchor)
+    {
+        endpoint = default;
+        anchor = null;
+        var host = EnclosingHostOverride is { } seam ? seam() : ProcessAncestry.FindEnclosingHost();
+        if (host is not { } id) return false;
+        if (EnclosingHostBase(id, HostMetadata.ReadAll(SocketDirectory())) is not { } baseEndpoint) return false;
+        endpoint = ("unix", baseEndpoint);
+        anchor = id;
+        return true;
+    }
+
+    /// <summary>
+    /// The base endpoint of <paramref name="host"/>'s sidecar, or null when none is its own: the sidecar must name the
+    /// host's PID and have been written after that process started (a stale sidecar of an earlier host whose PID was
+    /// reused is not it). The host writes its sidecar after it binds, so its start time always precedes the record.
+    /// </summary>
+    internal static string? EnclosingHostBase(ProcessIdentity host, IEnumerable<HostMetadata> sidecars)
+    {
+        foreach (var meta in sidecars)
+        {
+            if (meta.Pid != host.Pid || meta.TransportScheme != "unix") continue;
+            if (meta.StartedAt.UtcTicks < host.StartTimeUtcTicks - TimeSpan.TicksPerSecond) continue;
+            return BaseOfSlotEndpoint(meta.Endpoint);
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// The base endpoint of a slot endpoint (<c>…-x3</c> → <c>…</c>); any other endpoint is its own base. A slot name
+    /// hashed for length cannot be mapped back and is returned unchanged (its spills chain from it instead).
+    /// </summary>
+    public static string BaseOfSlotEndpoint(string endpoint)
+    {
+        if (!IsSlotEndpoint(endpoint)) return endpoint;
+        int cut = endpoint.LastIndexOf(SlotMarker, StringComparison.Ordinal);
+        return Path.GetFileName(endpoint).StartsWith("psbash-slot-", StringComparison.Ordinal) ? endpoint : endpoint[..cut];
     }
 
     /// <summary>

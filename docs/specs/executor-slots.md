@@ -31,6 +31,13 @@ path would overflow). Slots are separate daemons started on demand and kept warm
 - **Stateful** hosts (named sessions with one pinned runspace) never receive spill from unrelated launchers; a nested
   launcher still spills, because it cannot wait on its own parent.
 - The slot choice is sticky for the life of the launcher process.
+- **Joining the enclosing session.** A launcher whose parent (or the first ancestor above at most 3 plain shells) is a
+  registered `ps-bash-host` resolves that host's base endpoint (`ProcessAncestry.FindEnclosingHost`,
+  `IpcTransportFactory.EnclosingHostBase`: sidecar with that PID, written after the process started; a `-x<k>` slot maps
+  back to its base) and so reuses an idle session host or spills to the session's slots. Without it the default
+  session anchor was the host itself, and every host started one more full daemon (one per host). Agent runtimes
+  (node, claude, python) are not climbed; an explicit `PSBASH_IPC_ENDPOINT`/`PSBASH_SESSION` wins; an unregistered host
+  (an interactive terminal's) keeps the anchored session.
 
 The sequential warm path is unchanged: slot 0, lease free, no extra round trip.
 
