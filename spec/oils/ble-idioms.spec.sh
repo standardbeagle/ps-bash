@@ -61,7 +61,6 @@ loop='i<=100&&(s+=i,i++,loop)' s=0 i=0
 echo $((a=loop,s))
 ## stdout: 5050
 ## status: 0
-## XFAIL ps-bash gap-oils-ble-idioms ble-idioms (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### recursive arith: array elements

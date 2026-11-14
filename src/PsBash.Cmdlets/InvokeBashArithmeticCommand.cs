@@ -58,6 +58,11 @@ public sealed class InvokeBashArithmeticCommand : PSCmdlet
         {
             // already reported; no value
         }
+        catch (ArithRecursionException ex)
+        {
+            FileSystemHelpers.WriteBashError(this, $"{ex.Token}: expression recursion level exceeded (error token is \"{ex.Token}\")");
+            if (IsWordExpansion()) FileSystemHelpers.MarkExpansionFailed(this);
+        }
         catch (BashArith.BashArithException ex)
         {
             // A failed WORD abandons the command it belongs to (see PsBuild.AbandonIfExpansionFailed, echo).
@@ -106,11 +111,22 @@ public sealed class InvokeBashArithmeticCommand : PSCmdlet
         });
     }
 
-    private long ReadVar(string name) => ReadVar(name, new HashSet<string>(StringComparer.Ordinal));
+    /// <summary>bash's MAX_EXPR_RECURSION_LEVEL: a value that is an expression naming itself (<c>loop='i<=100&&(s+=i,i++,loop)'</c>)
+    /// recurses until this depth, then the expansion fails (<c>a=b b=a; $((a))</c>: "expression recursion level exceeded").</summary>
+    private const int MaxRecursionDepth = 1024;
 
-    private long ReadVar(string name, HashSet<string> visiting)
+    /// <summary>A variable's value nested past <see cref="MaxRecursionDepth"/> (or past what the stack holds).</summary>
+    private sealed class ArithRecursionException(string token) : Exception(token)
     {
-        if (!visiting.Add(name)) return 0; // cycle: bash also stops at 0
+        public string Token { get; } = token;
+    }
+
+    private long ReadVar(string name) => ReadVar(name, 0);
+
+    private long ReadVar(string name, int depth)
+    {
+        if (depth >= MaxRecursionDepth || !System.Runtime.CompilerServices.RuntimeHelpers.TryEnsureSufficientExecutionStack())
+            throw new ArithRecursionException(name);
 
         string? raw = ReadRawVar(name);
         // `set -u`: an unset name in an arithmetic expression ends the script like any other unbound read.
@@ -123,24 +139,18 @@ public sealed class InvokeBashArithmeticCommand : PSCmdlet
             SessionState.PSVariable.Set("global:__BashUnbound", name);
             throw new UnboundVariableException();
         }
-        if (string.IsNullOrEmpty(raw)) return 0;
-
-        var trimmed = raw.Trim();
+        // An empty or blank value is 0 (x=' '; $((x)) is 0 in bash).
+        var trimmed = raw?.Trim();
+        if (string.IsNullOrEmpty(trimmed)) return 0;
         if (long.TryParse(trimmed, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var direct))
             return direct;
 
-        // Non-numeric: evaluate the value itself as an arithmetic expression.
-        try
-        {
-            return BashArith.Evaluate(trimmed,
-                n => ReadVar(n, visiting),
-                WriteVar,
-                ReadRawVar);
-        }
-        catch (BashArith.BashArithException)
-        {
-            return 0; // unparseable value reads as 0, matching bash's leniency
-        }
+        // Non-numeric: evaluate the value itself as an arithmetic expression. A value that is not one (x='a b',
+        // x='a[<(echo)]=1') fails the whole expansion, as in bash ("syntax error in expression", status 1); it read as 0.
+        return BashArith.Evaluate(trimmed,
+            n => ReadVar(n, depth + 1),
+            WriteVar,
+            ReadRawVar);
     }
 
     /// <summary>`name[subscript]` as the evaluator passes an array element.</summary>
