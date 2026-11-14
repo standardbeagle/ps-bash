@@ -26,6 +26,7 @@ internal static class HostCommands
             "shutdown" => await ShutdownAsync(ParseDeadline(args.AsSpan(2)), waitForExit: true, ct).ConfigureAwait(false),
             "restart" => await RestartAsync(ParseDeadline(args.AsSpan(2)), ct).ConfigureAwait(false),
             "gc" => GcOrphans(ParseGcFlags(args.AsSpan(2))),
+            "list" or "ls" => ListHosts(),
             "-h" or "--help" or "help" => Help(),
             _ => Unknown(args[1]),
         };
@@ -133,18 +134,74 @@ internal static class HostCommands
     /// the launcher the host's direct parent, so the OS PPID is authoritative
     /// and avoids per-platform command-line parsing.
     /// </remarks>
+    /// <summary>A host younger than this may not have written its sidecar yet (it writes it once it listens).</summary>
+    internal static readonly TimeSpan GcMinAge = TimeSpan.FromMinutes(2);
+
+    /// <summary>
+    /// Whether <c>host gc</c> stops a ps-bash-host. A shared daemon has no live parent by design (it outlives the
+    /// launcher that started it), so a dead parent alone is not an orphan: a host is one only when no sidecar names
+    /// it, nothing that started it is alive (an interactive host has no sidecar but a live launcher), and it is past
+    /// start-up. <c>--force</c> stops every host.
+    /// </summary>
+    internal static bool ShouldGc(bool force, bool registered, bool parentAlive, TimeSpan age)
+        => force || (!registered && !parentAlive && age >= GcMinAge);
+
+    // ps-bash host list: every ps-bash-host on the machine, with what it serves and its memory.
+    internal static int ListHosts()
+    {
+        var byPid = RegisteredHosts();
+        long totalBytes = 0;
+        int count = 0;
+        var rows = new List<(DateTime Start, string Line)>();
+        foreach (var p in Process.GetProcessesByName("ps-bash-host"))
+        {
+            try
+            {
+                var start = p.StartTime;
+                long ws = p.WorkingSet64;
+                totalBytes += ws;
+                count++;
+                string role = byPid.TryGetValue(p.Id, out var meta)
+                    ? (meta.Stateful ? "session" : IpcTransportFactory.IsSlotEndpoint(meta.Endpoint) ? "slot" : "main")
+                    : "unregistered";
+                string endpoint = meta is null ? "-" : Path.GetFileName(meta.Endpoint);
+                rows.Add((start, $"{p.Id,7}  {role,-12} {ws / (1024 * 1024),6} MB  {FormatAge(DateTime.Now - start),8}  {endpoint}"));
+            }
+            catch (Exception) { /* exited during enumeration */ }
+            finally { p.Dispose(); }
+        }
+        Console.WriteLine("    PID  ROLE           MEMORY       AGE  ENDPOINT");
+        foreach (var row in rows.OrderBy(static r => r.Start)) Console.WriteLine(row.Line);
+        Console.WriteLine($"{count} host(s), {totalBytes / (1024 * 1024)} MB working set");
+        return 0;
+    }
+
+    internal static string FormatAge(TimeSpan age)
+        => age.TotalHours >= 1 ? $"{(int)age.TotalHours}h{age.Minutes:00}m"
+            : age.TotalMinutes >= 1 ? $"{(int)age.TotalMinutes}m{age.Seconds:00}s"
+            : $"{Math.Max(0, (int)age.TotalSeconds)}s";
+
+    private static Dictionary<int, HostMetadata> RegisteredHosts()
+    {
+        var byPid = new Dictionary<int, HostMetadata>();
+        foreach (var meta in HostMetadata.ReadAll(PsBashRuntimeDirectory.GetPath()))
+            byPid[meta.Pid] = meta;
+        return byPid;
+    }
+
     internal static int GcOrphans(GcFlags flags)
     {
         int killed = 0;
         int kept = 0;
         int errors = 0;
+        var registered = RegisteredHosts();
         foreach (var p in Process.GetProcessesByName("ps-bash-host"))
         {
             try
             {
                 int ppid = JobObjectWatchdog.GetParentProcessIdByPid(p.Id);
                 bool parentAlive = ppid > 0 && ProcessExists(ppid);
-                bool shouldKill = flags.Force || !parentAlive;
+                bool shouldKill = ShouldGc(flags.Force, registered.ContainsKey(p.Id), parentAlive, DateTime.Now - p.StartTime);
 
                 if (flags.DryRun)
                 {
@@ -368,6 +425,7 @@ internal static class HostCommands
         Console.Error.WriteLine("       ps-bash host start            # warm-load the daemon (alias: warm)");
         Console.Error.WriteLine("       ps-bash host shutdown [--deadline-ms N]");
         Console.Error.WriteLine("       ps-bash host restart [--deadline-ms N]");
+        Console.Error.WriteLine("       ps-bash host list             # every host on this machine (alias: ls)");
         Console.Error.WriteLine("       ps-bash host gc [--force] [--dry-run]");
     }
 

@@ -10,6 +10,15 @@ using PsBash.Shell.Pty;
 
 const long MaxCommandInputChars = 16 * 1024 * 1024;
 
+// Host-spawn trampoline (Windows): start the host and exit, so a tree-kill of the launcher that asked for it
+// cannot reach the shared host (WindowsHostSpawn.DetachTrampoline). Before anything else: no job, no console setup.
+if (OperatingSystem.IsWindows())
+{
+    if (args.Length > 0 && args[0] == PsBash.Core.Runtime.Ipc.WindowsHostSpawn.TrampolineFlag)
+        return PsBash.Core.Runtime.Ipc.WindowsHostSpawn.RunTrampoline(args.AsSpan(1));
+    PsBash.Core.Runtime.Ipc.WindowsHostSpawn.DetachTrampoline = Environment.ProcessPath;
+}
+
 // Reliability watchdog: on Windows, attach the current process to a Job Object
 // with KILL_ON_JOB_CLOSE so the SDK host (and any other descendants) die
 // atomically with ps-bash itself. This is a no-op on Linux/macOS where the

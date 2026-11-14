@@ -90,6 +90,18 @@ the server drained. Before this, every daemon that had run a background job
 lingered indefinitely. Regression-pinned by
 `ProcessLifecycleTests.IdleDaemon_AfterBackgroundJob_ExitsInsteadOfLingering`.
 
+## A daemon is never in a live launcher's process tree (Windows)
+
+The launcher sets `WindowsHostSpawn.DetachTrampoline` to its own exe; a host is then started through
+`ps-bash.exe --psbash-spawn-detached <host> <args>`, which spawns the host (same NUL-only handle list) and exits with
+its pid. An agent harness stops a timed-out or cancelled command with `taskkill /T /F`, which finds descendants by
+parent pid: a host that was the launcher's child died with it, and every other session command running on that shared
+daemon failed with `host process exited with code 1` (no host-log exit line: the kill gives no chance to log). The
+trampoline has exited before the command runs, so the walk does not reach the host. If the trampoline cannot run the
+launcher starts the host directly. Pinned by `ProcessLifecycleTests.LauncherTreeKilledMidCommand_SharedHostItStartedSurvives`.
+`ps-bash host gc` therefore never treats "parent gone" alone as orphaned (`HostCommands.ShouldGc`): it stops a host
+only when no sidecar names it, its parent is gone, and it is past start-up.
+
 ## Session anchor lifetime: a daemon ends with its session
 
 A `Daemon` host outlives the launcher that spawned it (that is the point: the next `-c` in the

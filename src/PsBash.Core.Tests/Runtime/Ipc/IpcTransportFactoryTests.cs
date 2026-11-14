@@ -57,6 +57,29 @@ public class IpcTransportFactoryTests : IDisposable
         Assert.Equal("/tmp/psb-slot-x.sock-x2", e2);
     }
 
+    [Theory]
+    [InlineData("/tmp/psb-slot-x.sock", false)]
+    [InlineData("/tmp/psb-slot-x.sock-x1", true)]
+    [InlineData("/tmp/psb-slot-x.sock-x6", true)]
+    [InlineData(@"C:\t\ps-bash\host-andyb-s21576-639301987569778510.sock", false)]
+    [InlineData(@"C:\t\ps-bash\psbash-slot-0123456789ABCDEF-x3", true)]
+    [InlineData("/tmp/a.sock-x", false)]
+    [InlineData("/tmp/a.sock-x123", false)]
+    [InlineData("/tmp/a.sock-y1", false)]
+    public void IsSlotEndpoint_MatchesOnlyResolveSlotEndpointNames(string endpoint, bool expected)
+        => Assert.Equal(expected, IpcTransportFactory.IsSlotEndpoint(endpoint));
+
+    [Fact]
+    public void IsSlotEndpoint_EveryResolvedSlotParsesBack()
+    {
+        var longBase = "/tmp/" + new string('a', 400) + ".sock";
+        for (int slot = 1; slot <= IpcTransportFactory.MaxExecSlots; slot++)
+        {
+            Assert.True(IpcTransportFactory.IsSlotEndpoint(IpcTransportFactory.ResolveSlotEndpoint("unix", "/tmp/b.sock", slot).Endpoint));
+            Assert.True(IpcTransportFactory.IsSlotEndpoint(IpcTransportFactory.ResolveSlotEndpoint("unix", longBase, slot).Endpoint));
+        }
+    }
+
     [Fact]
     public void ResolveSlotEndpoint_OverlongBase_FallsBackToShortHashedName()
     {
@@ -78,7 +101,7 @@ public class IpcTransportFactoryTests : IDisposable
     [Fact]
     public void ResolveEndpoint_CliOverridePipe_IsRejectedWithRemovalHint()
     {
-        var ex = Assert.Throws<ArgumentException>(() => IpcTransportFactory.ResolveEndpoint("pipe:psbash-test-xyz"));
+        var ex = Assert.Throws<InvalidEndpointException>(() => IpcTransportFactory.ResolveEndpoint("pipe:psbash-test-xyz"));
         Assert.Contains("named-pipe transport was removed", ex.Message);
         Assert.Contains("unix:", ex.Message);
     }
@@ -250,7 +273,7 @@ public class IpcTransportFactoryTests : IDisposable
     [InlineData("unix:")]
     public void ResolveEndpoint_MalformedCli_Throws(string spec)
     {
-        var ex = Assert.Throws<ArgumentException>(() => IpcTransportFactory.ResolveEndpoint(spec));
+        var ex = Assert.Throws<InvalidEndpointException>(() => IpcTransportFactory.ResolveEndpoint(spec));
         Assert.Contains("--ipc-endpoint", ex.Message);
         Assert.Contains(spec, ex.Message);
     }
@@ -258,7 +281,7 @@ public class IpcTransportFactoryTests : IDisposable
     [Fact]
     public void ResolveEndpoint_UnknownScheme_Throws()
     {
-        var ex = Assert.Throws<ArgumentException>(
+        var ex = Assert.Throws<InvalidEndpointException>(
             () => IpcTransportFactory.ResolveEndpoint("tcp:127.0.0.1:9000"));
         Assert.Contains("tcp", ex.Message);
         Assert.Contains("Expected unix", ex.Message);
@@ -268,7 +291,7 @@ public class IpcTransportFactoryTests : IDisposable
     public void ResolveEndpoint_MalformedEnvVar_ThrowsWithEnvVarName()
     {
         SetEnv("garbage-no-colon");
-        var ex = Assert.Throws<ArgumentException>(() => IpcTransportFactory.ResolveEndpoint());
+        var ex = Assert.Throws<InvalidEndpointException>(() => IpcTransportFactory.ResolveEndpoint());
         Assert.Contains(IpcTransportFactory.EndpointEnvVar, ex.Message);
     }
 

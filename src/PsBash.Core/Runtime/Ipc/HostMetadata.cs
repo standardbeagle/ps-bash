@@ -94,9 +94,24 @@ public sealed record HostMetadata(
     /// policy (treat endpoint as stale-or-orphaned). Returning null instead
     /// of throwing keeps the launcher's startup path simple.
     /// </summary>
-    public static HostMetadata? TryRead(string scheme, string endpoint)
+    public static HostMetadata? TryRead(string scheme, string endpoint) => TryReadPath(PathFor(scheme, endpoint));
+
+    /// <summary>Every readable sidecar in <paramref name="dir"/> (the runtime directory holds the hosts' endpoints).</summary>
+    public static List<HostMetadata> ReadAll(string dir)
     {
-        var path = PathFor(scheme, endpoint);
+        var all = new List<HostMetadata>();
+        try
+        {
+            foreach (var path in Directory.EnumerateFiles(dir, "*.host.json"))
+                if (TryReadPath(path) is { } meta) all.Add(meta);
+        }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
+        return all;
+    }
+
+    private static HostMetadata? TryReadPath(string path)
+    {
         if (!File.Exists(path)) return null;
         try
         {

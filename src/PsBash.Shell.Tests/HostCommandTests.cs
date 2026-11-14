@@ -5,6 +5,42 @@ namespace PsBash.Shell.Tests;
 
 public sealed class HostCommandTests
 {
+    // host gc: a shared daemon's parent is always gone (it outlives its launcher); it used to be killed for that.
+    [Theory]
+    [InlineData(false, true, false, 600, false)]   // registered daemon, dead parent: in use, kept
+    [InlineData(false, false, true, 600, false)]   // interactive host: no sidecar, live launcher
+    [InlineData(false, false, false, 5, false)]    // just started, sidecar not written yet
+    [InlineData(false, false, false, 600, true)]   // no sidecar, no parent, old: orphan
+    [InlineData(true, true, true, 5, true)]        // --force stops everything
+    public void ShouldGc_OnlyUnregisteredParentlessOldHosts(bool force, bool registered, bool parentAlive, int ageSeconds, bool expected)
+        => Assert.Equal(expected, HostCommands.ShouldGc(force, registered, parentAlive, TimeSpan.FromSeconds(ageSeconds)));
+
+    [Theory]
+    [InlineData(42, "42s")]
+    [InlineData(185, "3m05s")]
+    [InlineData(7380, "2h03m")]
+    public void FormatAge_Compact(int seconds, string expected)
+        => Assert.Equal(expected, HostCommands.FormatAge(TimeSpan.FromSeconds(seconds)));
+
+    [Fact]
+    public void ReadAll_ReturnsEverySidecarInTheDirectory()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "psb-inv-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(dir);
+        try
+        {
+            foreach (var (pid, name) in new[] { (11, "a.sock"), (22, "a.sock-x1") })
+                new HostMetadata(pid, "h.exe", 1, "b", "unix", Path.Combine(dir, name), DateTimeOffset.UtcNow, "u")
+                    .Write("unix", Path.Combine(dir, name));
+            File.WriteAllText(Path.Combine(dir, "broken.sock.host.json"), "{not json");
+
+            var pids = HostMetadata.ReadAll(dir).Select(static m => m.Pid).Order().ToArray();
+
+            Assert.Equal([11, 22], pids);
+        }
+        finally { Directory.Delete(dir, recursive: true); }
+    }
+
     [Fact]
     public void BuildStatusLines_WhenCompactOutputEnabled_CollapsesMetadata()
     {

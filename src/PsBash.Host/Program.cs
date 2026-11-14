@@ -160,7 +160,11 @@ internal sealed class Program
         var stateful = Environment.GetEnvironmentVariable(IpcTransportFactory.StatefulEnvVar) == "1";
         Environment.SetEnvironmentVariable(IpcTransportFactory.StatefulEnvVar, null);
         SdkWorker.StatefulSession = stateful;
-        await using var pool = WorkerPool.FromEnvironment(warmOverride: stateful ? 0 : null);
+        // A spill slot (endpoint -x{k}) serves bursts of parallel or nested commands and runs one at a time: one warm
+        // runspace, not two (its launcher already lowers its idle timeout to 60 s, IpcWorker.NestedIdleSecs).
+        bool slotHost = IsSlotHost(args);
+        await using var pool = WorkerPool.FromEnvironment(warmOverride: stateful ? 0 : null,
+            defaultWarm: slotHost ? WorkerPool.SlotHostWarm : 2);
 
         // Janitor: reap endpoint sockets / sidecars / spawn locks left behind by
         // hosts and launchers that were killed before they could clean up. Only
@@ -253,6 +257,14 @@ internal sealed class Program
         var ipcEndpoint = GetArg(args, "--ipc-endpoint");
         var (scheme, endpoint) = IpcTransportFactory.ResolveEndpoint(ipcEndpoint);
         return (IpcTransportFactory.CreateDefault(ipcEndpoint), scheme, endpoint);
+    }
+
+    internal static bool IsSlotHost(string[] args)
+    {
+        var endpoint = GetArg(args, "--socket") ?? GetArg(args, "--ipc-endpoint");
+        try { endpoint ??= IpcTransportFactory.ResolveEndpoint(null).Endpoint; }
+        catch (Exception) { return false; }
+        return IpcTransportFactory.IsSlotEndpoint(endpoint);
     }
 
     // Accepts both `--name value` (two-token) and `--name=value` (single-token,

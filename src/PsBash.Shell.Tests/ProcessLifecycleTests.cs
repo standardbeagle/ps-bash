@@ -60,6 +60,53 @@ public class ProcessLifecycleTests
     }
 
     [SkippableFact]
+    public async Task LauncherTreeKilledMidCommand_SharedHostItStartedSurvives()
+    {
+        Skip.IfNot(CanRun, "Windows + built ps-bash.exe required");
+
+        // An agent harness stops a timed-out command with a process-tree kill (taskkill /T /F). The host that
+        // launcher started is a shared daemon other commands run on; it used to be the launcher's child, died
+        // with it, and every other command on it failed with "host process exited with code 1".
+        var spec = PsBashTestProcess.CreateEndpoint();
+        var endpoint = spec["unix:".Length..];
+        var psi = new ProcessStartInfo
+        {
+            FileName = PsBashExe,
+            Arguments = "-c \"sleep 30\"",
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        psi.Environment[IpcTransportFactory.EndpointEnvVar] = spec;
+        psi.Environment["PSBASH_HOST_IDLE_SECS"] = "5";
+        PsBashTestProcess.ClearInheritedNesting(psi);
+        using var launcher = Process.Start(psi)!;
+        Process? host = null;
+        try
+        {
+            // The host writes its sidecar once it is listening; the command is running by the time it is read back.
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
+            HostMetadata? meta;
+            while ((meta = HostMetadata.TryRead("unix", endpoint)) is null && DateTime.UtcNow < deadline)
+                await Task.Delay(100);
+            Assert.NotNull(meta);
+            host = Process.GetProcessById(meta!.Pid);
+
+            launcher.Kill(entireProcessTree: true);
+            await launcher.WaitForExitAsync();
+
+            Assert.False(host.WaitForExit(1000), "the shared host died with the launcher's process tree");
+        }
+        finally
+        {
+            try { launcher.Kill(entireProcessTree: true); } catch { }
+            try { host?.Kill(); } catch { }
+            host?.Dispose();
+        }
+    }
+
+    [SkippableFact]
     public async Task ShortCommand_ExitsPromptly_WithNoLingeringWorker()
     {
         Skip.IfNot(CanRun, "Windows + built ps-bash.exe required");

@@ -30,6 +30,11 @@ internal static class HostFailureGuard
             stderr.WriteLine($"ps-bash: {ex.Message}");
             return 125;
         }
+        catch (PsBash.Core.Runtime.Ipc.InvalidEndpointException ex)
+        {
+            stderr.WriteLine($"ps-bash: {ex.Message}");
+            return 2;
+        }
         catch (Exception ex) when (ex is IOException
                                       or System.Net.Sockets.SocketException
                                       or OperationCanceledException)

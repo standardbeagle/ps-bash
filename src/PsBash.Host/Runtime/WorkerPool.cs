@@ -321,13 +321,22 @@ public static class WorkerPool
     /// (default 2); <c>PSBASH_POOL_MAX</c> the concurrency cap (default: CPU count
     /// clamped to [2, 8]). Invalid values fall back to the default.
     /// </summary>
-    public static WorkerPool<SdkWorker> FromEnvironment(Func<SdkWorker>? factory = null, int? warmOverride = null)
+    /// <param name="defaultWarm">Warm spares when <c>PSBASH_POOL_WARM</c> is unset: 2 for the session's main host,
+    /// whose back-to-back commands each discard their runspace; 1 for a spill slot (<see cref="SlotHostWarm"/>).</param>
+    public static WorkerPool<SdkWorker> FromEnvironment(Func<SdkWorker>? factory = null, int? warmOverride = null,
+        int defaultWarm = 2)
     {
-        int warm = warmOverride ?? ReadIntEnv("PSBASH_POOL_WARM", 2, min: 0, max: 64);
+        int warm = warmOverride ?? ReadIntEnv("PSBASH_POOL_WARM", defaultWarm, min: 0, max: 64);
         int defaultMax = Math.Clamp(Environment.ProcessorCount, 2, 8);
         int max = ReadIntEnv("PSBASH_POOL_MAX", defaultMax, min: 1, max: 64);
         return new WorkerPool<SdkWorker>(warm, max, factory ?? SdkWorker.Create);
     }
+
+    /// <summary>
+    /// Warm spares of an executor-slot host (slot &gt;= 1). A slot exists for a burst of parallel or nested commands
+    /// and runs one command at a time; each warm runspace costs about 60-80 MB, and a session can have six slots.
+    /// </summary>
+    public const int SlotHostWarm = 1;
 
     private static int ReadIntEnv(string name, int fallback, int min, int max)
     {

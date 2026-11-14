@@ -36,6 +36,91 @@ internal static unsafe partial class WindowsHostSpawn
     /// </summary>
     public static Process Start(string exe, IReadOnlyList<string> args)
     {
+        var trampoline = DetachTrampoline;
+        if (trampoline is not null && TryStartDetached(trampoline, exe, args) is { } detached)
+            return detached;
+        return StartDirect(exe, args);
+    }
+
+    /// <summary>The argument that makes the launcher act as the spawn trampoline (<see cref="RunTrampoline"/>).</summary>
+    public const string TrampolineFlag = "--psbash-spawn-detached";
+
+    /// <summary>
+    /// When set (the launcher sets it to its own executable), a host is started through a short-lived copy of that
+    /// executable, so the host is never a descendant of a live launcher.
+    /// </summary>
+    /// <remarks>
+    /// A host is a shared daemon: other launchers' commands run on it. While the launcher that started it is alive,
+    /// the host is that launcher's child, and a process-tree kill of the launcher (<c>taskkill /T /F</c>, which is
+    /// how an agent harness stops a command that timed out or was cancelled) killed the host with it, failing every
+    /// other command on it with "host process exited with code 1". <c>taskkill /T</c> finds descendants by parent
+    /// PID; the host's parent is the trampoline, which has already exited, so the walk does not reach it.
+    /// </remarks>
+    public static string? DetachTrampoline { get; set; }
+
+    private static readonly TimeSpan TrampolineTimeout = TimeSpan.FromSeconds(15);
+
+    /// <summary>
+    /// The trampoline process: starts <c>args[0]</c> with the remaining arguments and exits with the new
+    /// process's id (a negative code when the spawn failed).
+    /// </summary>
+    public static int RunTrampoline(ReadOnlySpan<string> args)
+    {
+        if (args.Length == 0) return -2;
+        try
+        {
+            using var host = StartDirect(args[0], args[1..].ToArray());
+            return host.Id;
+        }
+        catch (Exception)
+        {
+            return -1;
+        }
+    }
+
+    // Null when the trampoline itself could not run or spawn (the caller then starts the host directly). A host that
+    // the trampoline started but that is already gone is reported like a direct start that exited early.
+    private static Process? TryStartDetached(string trampoline, string exe, IReadOnlyList<string> args)
+    {
+        var trampolineArgs = new List<string>(args.Count + 2) { TrampolineFlag, exe };
+        trampolineArgs.AddRange(args);
+        int pid;
+        try
+        {
+            using var t = StartDirect(trampoline, trampolineArgs);
+            if (!t.WaitForExit(TrampolineTimeout))
+            {
+                try { t.Kill(); } catch (Exception) { }
+                return null;
+            }
+            pid = t.ExitCode;
+        }
+        catch (HostUnavailableException)
+        {
+            return null;
+        }
+        if (pid <= 0) return null;
+
+        try
+        {
+            var host = Process.GetProcessById(pid);
+            _ = host.Handle;
+            // The id came back after the trampoline exited; make sure it still names the host we asked for.
+            if (!string.Equals(host.ProcessName, Path.GetFileNameWithoutExtension(exe), StringComparison.OrdinalIgnoreCase))
+            {
+                host.Dispose();
+                throw new HostUnavailableException("ps-bash-host exited prematurely.");
+            }
+            return host;
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            throw new HostUnavailableException("ps-bash-host exited prematurely.");
+        }
+    }
+
+    private static Process StartDirect(string exe, IReadOnlyList<string> args)
+    {
         var commandLine = BuildCommandLine(exe, args);
 
         var nulName = Marshal.StringToHGlobalUni("NUL");

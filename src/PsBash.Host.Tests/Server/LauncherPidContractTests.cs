@@ -10,6 +10,14 @@ namespace PsBash.Host.Tests.Server;
 [Collection("SdkHost")]
 public sealed class LauncherPidContractTests
 {
+    [Theory]
+    [InlineData(new[] { "--ipc-endpoint", "unix:/tmp/psb-h.sock-x2" }, true)]
+    [InlineData(new[] { "--ipc-endpoint=unix:/tmp/psb-h.sock-x2" }, true)]
+    [InlineData(new[] { "--socket", "/tmp/psb-h.sock-x1" }, true)]
+    [InlineData(new[] { "--ipc-endpoint", "unix:/tmp/psb-h.sock" }, false)]
+    public void IsSlotHost_FromTheEndpointArgument(string[] args, bool expected)
+        => Assert.Equal(expected, Program.IsSlotHost(args));
+
     [Fact]
     public void NonInteractiveLauncherPid_UsesEnvironmentFallback()
     {

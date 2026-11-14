@@ -65,6 +65,16 @@ public static class IpcTransportFactory
         }
         return (scheme, RequireFits(endpoint));
     }
+    /// <summary>True when <paramref name="endpoint"/> names an executor slot &gt;= 1 (the <c>-x{k}</c> suffix of <see cref="ResolveSlotEndpoint"/>).</summary>
+    public static bool IsSlotEndpoint(string endpoint)
+    {
+        int digits = endpoint.Length;
+        while (digits > 0 && char.IsAsciiDigit(endpoint[digits - 1])) digits--;
+        int count = endpoint.Length - digits;
+        return count is >= 1 and <= 2
+            && endpoint.AsSpan(0, digits).EndsWith(SlotMarker, StringComparison.Ordinal);
+    }
+
     private static string ShortHash(string s, int chars = 16)
         => Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(s)))[..chars];
 
@@ -268,18 +278,16 @@ public static class IpcTransportFactory
 
         var idx = spec.IndexOf(':');
         if (idx <= 0 || idx == spec.Length - 1)
-            throw new ArgumentException(
-                $"{sourceName} value '{spec}' must be 'scheme:endpoint' (scheme = unix|pipe).",
-                nameof(spec));
+            throw new InvalidEndpointException(
+                $"{sourceName} value '{spec}' must be 'scheme:endpoint' (scheme = unix).");
 
         var scheme = spec[..idx];
         var endpoint = spec[(idx + 1)..];
         if (scheme != "unix")
-            throw new ArgumentException(
+            throw new InvalidEndpointException(
                 scheme == "pipe"
                     ? $"{sourceName} value '{spec}': the named-pipe transport was removed; use 'unix:<socket path>'."
-                    : $"{sourceName} value '{spec}' has unknown scheme '{scheme}'. Expected unix.",
-                nameof(spec));
+                    : $"{sourceName} value '{spec}' has unknown scheme '{scheme}'. Expected unix.");
 
         result = (scheme, endpoint);
         return true;
