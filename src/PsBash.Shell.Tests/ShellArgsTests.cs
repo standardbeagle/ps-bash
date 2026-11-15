@@ -179,7 +179,6 @@ public class ShellArgsTests
         Assert.Equal("true", r.Command);
     }
 
-    [Fact] public void Parse_OptionFlagsWithoutC_AreAnError() => Assert.NotNull(ShellArgs.Parse(["-e", "s.sh"]).Error);
     [Fact] public void Parse_OptionNameWithMetacharacters_IsRefused() => Assert.NotNull(ShellArgs.Parse(["-o", "x;rm", "-c", "true"]).Error);
 
     [Fact]
@@ -229,6 +228,34 @@ public class ShellArgsTests
         Assert.Equal(prelude, r.Prelude);
         Assert.Equal(argv[^1], r.Command);
     }
+
+    // Oracle (bash 5.2): `bash -x -v -- foo.sh` and `bash -x -v - foo.sh` run foo.sh traced (a lone `-` ends the
+    // options as `--` does; it was "unsupported option '-'"); options with a script used to be refused.
+    [Theory]
+    [InlineData("--")]
+    [InlineData("-")]
+    public void Parse_SetOptionFlags_WithAScriptFile_JoinThePrelude(string endOfOptions)
+    {
+        var r = ShellArgs.Parse(["-x", "-v", endOfOptions, "foo.sh", "a"]);
+        Assert.Null(r.Error);
+        Assert.Equal("foo.sh", r.ScriptPath);
+        Assert.Equal(["a"], r.ScriptArgs);
+        Assert.Equal("set -x; set -v", r.Prelude);
+    }
+
+    [Fact]
+    public void Parse_SetOptionFlags_WithNothingToRun_AreRefused()
+    {
+        var r = ShellArgs.Parse(["-e"]);
+        Assert.Equal("-e, -u, -x, -v, -o and -O are only supported together with -c, -s or a script file", r.Error);
+    }
+
+    // The options go on the script's first line, so $LINENO is unchanged; a #! line after the `;` is a comment.
+    [Theory]
+    [InlineData(null, "echo $LINENO\n", "echo $LINENO\n")]
+    [InlineData("set -x; set -v", "#!/bin/sh\necho $LINENO\n", "set -x; set -v; #!/bin/sh\necho $LINENO\n")]
+    public void WithPrelude_PutsTheOptionsOnTheFirstLine(string? prelude, string script, string expected) =>
+        Assert.Equal(expected, ShellArgs.WithPrelude(prelude, script));
 
     // Oracle (bash 5.2): `-c -- 'echo two'` and `-c - 'echo one'` run the command; `+c 'echo hi'` is accepted;
     // `-oo errexit noglob` and `-eo noglob` give each bundled `o` the next word.

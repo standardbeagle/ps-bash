@@ -44,11 +44,31 @@ public class ProgramEndToEndTests
     }
 
     [SkippableFact]
-    public async Task ShellOptionFlags_WithoutC_AreRefused()
+    public async Task ShellOptionFlags_WithNothingToRun_AreRefused()
     {
-        var (code, _, error) = await RunShellAsync("-e", "script.sh");
+        var (code, _, error) = await RunShellAsync("-e");
         Assert.Equal(2, code);
-        Assert.Contains("only supported together with -c", error);
+        Assert.Contains("only supported together with -c, -s or a script file", error);
+    }
+
+    // Oracle: `bash -e s.sh` (s.sh: false; echo after) stops at false, status 1; `bash -x s.sh` traces to stderr.
+    [SkippableFact]
+    public async Task ShellOptionFlags_ApplyToAScriptFile()
+    {
+        var dir = Directory.CreateTempSubdirectory("psbash-opt-");
+        try
+        {
+            var script = Path.Combine(dir.FullName, "s.sh");
+            await File.WriteAllTextAsync(script, "echo first\nfalse\necho after\n");
+            var (code, output, _) = await RunShellAsync("-e", script);
+            Assert.Equal(1, code);
+            Assert.Equal("first", output.Trim());
+            var (xcode, xout, xerr) = await RunShellAsync("-x", "-", script);
+            Assert.Equal(0, xcode);
+            Assert.Contains("+ echo first", xerr);
+            Assert.Contains("after", xout);
+        }
+        finally { dir.Delete(recursive: true); }
     }
 
     [SkippableTheory]

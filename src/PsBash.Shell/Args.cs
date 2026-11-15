@@ -36,6 +36,13 @@ public record ShellArgs(
             ? home.TrimEnd('/', '\\') + "/.bash_history"
             : null;
 
+    /// <summary>
+    /// The script text with the command-line options (<see cref="Prelude"/>) run first. They go on the script's first
+    /// line, so <c>$LINENO</c> is unchanged; a first line that is a <c>#!</c> line is a comment after the <c>;</c>.
+    /// </summary>
+    public static string WithPrelude(string? prelude, string script)
+        => string.IsNullOrEmpty(prelude) ? script : prelude + "; " + script;
+
     /// <summary>Hidden shopt name the prelude sets for <c>-i -c</c> (InvokeBashShoptCommand.InteractiveMark).</summary>
     public const string InteractiveMark = "psbash_interactive";
 
@@ -248,7 +255,9 @@ public record ShellArgs(
                 case "--help":
                     showHelp = true;
                     break;
+                // bash: a lone `-` ends the options as `--` does (`bash -x -v - script.sh`).
                 case "--":
+                case "-":
                     endOfOptions = true;
                     break;
                 default:
@@ -275,9 +284,10 @@ public record ShellArgs(
             }
         }
 
-        // Only a -c string can carry the options; a script or stdin run would silently drop them, so refuse that.
-        if (prelude.Count > 0 && command is null)
-            error ??= "-e, -u, -x, -v, -o and -O are only supported together with -c";
+        // A -c string, a script file (`bash -x s.sh`) and `-s` stdin carry the options (WithPrelude runs them first). The
+        // interactive REPL would silently drop them, so refuse that.
+        if (prelude.Count > 0 && command is null && scriptPath is null && !stdin)
+            error ??= "-e, -u, -x, -v, -o and -O are only supported together with -c, -s or a script file";
         // `bash -i -c`: an interactive shell ($- has i, emacs/monitor/history are on). The mark lives in this shell's
         // option table (never listed by shopt), so a child shell does not inherit it.
         if (interactive && command is not null)

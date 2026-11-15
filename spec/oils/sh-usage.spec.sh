@@ -64,7 +64,6 @@ foo
 foo
 ## END
 ## status: 127
-## XFAIL ps-bash gap-launcher-script-set-options the launcher accepts -x/-v only with -c, not with a script file, and does not read a lone - as the end of options
 ## timeout: 10
 ## real-launcher
 

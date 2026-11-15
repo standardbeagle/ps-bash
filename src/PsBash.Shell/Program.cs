@@ -242,6 +242,9 @@ if (shellArgs.ScriptPath is not null)
         return 126;
     }
 
+    // `bash -x -v s.sh` / `bash -e s.sh`: the command-line options apply to the script.
+    scriptContent = ShellArgs.WithPrelude(shellArgs.Prelude, scriptContent);
+
     string? pwshScriptCommand;
     bool scriptForwardsStdin = false;
     try
