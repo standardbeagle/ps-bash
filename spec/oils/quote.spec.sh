@@ -324,6 +324,5 @@ show_bytes() {
 echo -n $'\c'' | show_bytes
 ## stdout:
 ## status: 2
-## XFAIL ps-bash gap-unterminated-quote an unterminated quote is not a syntax error (bash: status 2)
 ## timeout: 10
 ## real-launcher

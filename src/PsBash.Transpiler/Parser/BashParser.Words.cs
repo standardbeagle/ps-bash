@@ -26,16 +26,31 @@ public sealed partial class BashParser
     /// <param name="braceExpansion">False inside <c>[[ ]]</c>, where bash does no brace expansion
     /// (<c>[[ --X{a,b}X == ... ]]</c> compares the text <c>--X{a,b}X</c>).</param>
 
-    internal static ImmutableArray<WordPart> DecomposeWord(string raw, bool braceExpansion = true)
+    /// <param name="assignmentValue">True for a segment of an assignment value: the word of a <c>${v-w}</c> /
+    /// <c>${v:-w}</c> / <c>${v+w}</c> / <c>${v:+w}</c> in it is itself read as an assignment value (a tilde after an
+    /// unquoted <c>:</c> expands: <c>x=${undef-~:~}</c> is <c>$HOME:$HOME</c>).</param>
+    /// <summary>Set when a word holds a bad substitution (<c>${a[]}</c>, <c>${(m)x}</c>); the emitter clears it before a
+    /// parse and reads it after, to add the guards that let the error abandon only its input line.</summary>
+    [ThreadStatic] internal static bool SawBadSubstitution;
+
+    internal static ImmutableArray<WordPart> DecomposeWord(string raw, bool braceExpansion = true, bool assignmentValue = false)
     {
         var parts = ImmutableArray.CreateBuilder<WordPart>();
         int pos = 0;
         int len = raw.Length;
 
-        // Detect tilde at the start of a word.
+        // Detect tilde at the start of a word. Brace expansion comes before tilde expansion, so a brace in the
+        // tilde prefix (`~{/src,root}` is `~/src ~root`) leaves the ~ as text; the brace emitter expands each
+        // resulting word's tilde (PsEmitter.EmitBraceExpandedWord).
         if (len > 0 && raw[0] == '~')
         {
-            pos = ParseTilde(raw, parts);
+            if (braceExpansion && TildePrefixHasBrace(raw))
+            {
+                parts.Add(new WordPart.Literal("~"));
+                pos = 1;
+            }
+            else
+                pos = ParseTilde(raw, parts);
         }
 
         while (pos < len)
@@ -103,7 +118,7 @@ public sealed partial class BashParser
             }
             else if (c == '$' && pos + 1 < len && raw[pos + 1] == '{')
             {
-                pos = ParseBracedVar(raw, pos, parts);
+                pos = ParseBracedVar(raw, pos, parts, assignmentValue: assignmentValue);
             }
             else if (c == '$' && pos + 1 < len && IsVarStart(raw[pos + 1]))
             {
@@ -156,14 +171,14 @@ public sealed partial class BashParser
     {
         var segments = SplitOnUnquotedColon(raw);
         if (segments.Count <= 1)
-            return DecomposeWord(raw);
+            return DecomposeWord(raw, assignmentValue: true);
 
         var parts = ImmutableArray.CreateBuilder<WordPart>();
         for (int i = 0; i < segments.Count; i++)
         {
             if (i > 0)
                 parts.Add(new WordPart.Literal(":"));
-            parts.AddRange(DecomposeWord(segments[i]));
+            parts.AddRange(DecomposeWord(segments[i], assignmentValue: true));
         }
         return parts.ToImmutable();
     }
@@ -475,7 +490,7 @@ public sealed partial class BashParser
         return -1;
     }
 
-    private static int ParseBracedVar(string raw, int pos, ImmutableArray<WordPart>.Builder parts, bool inDoubleQuote = false)
+    private static int ParseBracedVar(string raw, int pos, ImmutableArray<WordPart>.Builder parts, bool inDoubleQuote = false, bool assignmentValue = false)
     {
         // ${x:-${x:-…}} recurses through the argument word: bounded (NestingGuard).
         using var nesting = NestingGuard.Enter();
@@ -637,7 +652,7 @@ public sealed partial class BashParser
                 // ${#x-default}: no operator may follow the length operator. bash reports 'bad substitution' when it runs.
                 int close = raw.IndexOf('}', pos);
                 int end = close < 0 ? len : close + 1;
-                parts.Add(new WordPart.BracedVarSub(name, "#BAD:" + raw[Math.Max(0, nameStart - 3)..end]));
+                SawBadSubstitution = true; parts.Add(new WordPart.BracedVarSub(name, "#BAD:" + raw[Math.Max(0, nameStart - 3)..end]));
                 return end;
             }
 
@@ -669,7 +684,7 @@ public sealed partial class BashParser
             // command substitutions `${ cmd;}` and `${|cmd;}`, which bash 5.2 does not have.
             int badClose = raw.IndexOf('}', pos);
             int badEnd = badClose < 0 ? len : badClose + 1;
-            parts.Add(new WordPart.BracedVarSub(varName, "#BAD:" + raw[Math.Max(0, varStart - 2)..badEnd]));
+            SawBadSubstitution = true; parts.Add(new WordPart.BracedVarSub(varName, "#BAD:" + raw[Math.Max(0, varStart - 2)..badEnd]));
             return badEnd;
         }
 
@@ -711,7 +726,7 @@ public sealed partial class BashParser
                 // ${a[0][0]}, ${a[0]x}: only an operator may follow the subscript. bash reports 'bad substitution' when it runs.
                 int badClose = raw.IndexOf('}', pos);
                 int badEnd = badClose < 0 ? len : badClose + 1;
-                parts.Add(new WordPart.BracedVarSub(varName, "#BAD:" + raw[Math.Max(0, varStart - 2)..badEnd]));
+                SawBadSubstitution = true; parts.Add(new WordPart.BracedVarSub(varName, "#BAD:" + raw[Math.Max(0, varStart - 2)..badEnd]));
                 return badEnd;
             }
 
@@ -806,7 +821,7 @@ public sealed partial class BashParser
                 // ${a&}: no operator can start here. bash reports 'bad substitution' when it runs.
                 int close = raw.IndexOf('}', pos);
                 int end = close < 0 ? len : close + 1;
-                parts.Add(new WordPart.BracedVarSub(varName, "#BAD:" + raw[Math.Max(0, varStart - 2)..end]));
+                SawBadSubstitution = true; parts.Add(new WordPart.BracedVarSub(varName, "#BAD:" + raw[Math.Max(0, varStart - 2)..end]));
                 return end;
             }
 
@@ -850,8 +865,12 @@ public sealed partial class BashParser
             // literal slice — the ${1+"$@"} family bug. Pattern-removal / slice / case
             // / @-transform operators take no expandable word argument: leave ArgWord
             // null so the emitter keeps the raw-slice path.
+            // In an assignment value the word of a default / alternative operator is an assignment value too: a tilde
+            // after an unquoted `:` expands (`x=${undef-~:~}`). The assign operators (`${v=~:~}`) keep the plain reading (bash).
             if (IsWordBearingBracedOp(op))
-                argWord = DecomposeWord(inDoubleQuote ? KeepNonSpecialBackslashes(val) : val);
+                argWord = inDoubleQuote ? DecomposeWord(KeepNonSpecialBackslashes(val))
+                    : assignmentValue && op is "-" or ":-" or "+" or ":+" ? DecomposeAssignmentValue(val)
+                    : DecomposeWord(val);
         }
 
         if (pos < len && raw[pos] == '}')
@@ -982,6 +1001,18 @@ public sealed partial class BashParser
             ImmutableArray<EnvPair>.Empty,
             ImmutableArray<Redirect>.Empty), isInput));
         return end;
+    }
+
+    /// <summary>True when the tilde prefix of <paramref name="raw"/> (the text after <c>~</c> up to the first <c>/</c>)
+    /// holds a brace expansion: <c>~{/src,root}</c>, <c>~{a,b}x</c>.</summary>
+    internal static bool TildePrefixHasBrace(string raw)
+    {
+        for (int i = 1; i < raw.Length && raw[i] != '/'; i++)
+        {
+            if (raw[i] is '\'' or '"' or '\\' or '$' or '`') return false;
+            if (IsBraceExpansionStart(raw, i)) return true;
+        }
+        return false;
     }
 
     private static int ParseTilde(string raw, ImmutableArray<WordPart>.Builder parts)
@@ -1130,11 +1161,21 @@ public sealed partial class BashParser
     /// </summary>
     internal static string UnquoteClass(string cls)
     {
-        if (cls.AsSpan().IndexOfAny('\'', '"') < 0) return cls;
+        if (cls.AsSpan().IndexOfAny('\'', '"', '\\') < 0) return cls;
         var sb = new System.Text.StringBuilder(cls.Length + 4);
         for (int i = 0; i < cls.Length; i++)
         {
             char c = cls[i];
+            // A class name's quotes and backslashes drop: `[[:punct\:]]` and `[[:"punct":]]` are the class [:punct:].
+            if (c == '[' && i > 0 && i + 1 < cls.Length && cls[i + 1] == ':' && cls.IndexOf(":]", i + 2, StringComparison.Ordinal) is var nameEnd and >= 0)
+            {
+                sb.Append("[:");
+                for (int k = i + 2; k < nameEnd; k++)
+                    if (cls[k] is not ('\\' or '\'' or '"')) sb.Append(cls[k]);
+                sb.Append(":]");
+                i = nameEnd + 1;
+                continue;
+            }
             if (c == '\\' && i + 1 < cls.Length) { sb.Append(c).Append(cls[++i]); continue; }
             if (c == '\'')
             {
@@ -1234,6 +1275,8 @@ public sealed partial class BashParser
         while (i < len)
         {
             char c = raw[i];
+            // A quoted or escaped `}` / `,` is item text (`{a,'}'}` is `a }`).
+            if (c is '\'' or '"' or '\\') { i = SkipBraceItemQuote(raw, i); continue; }
             if (c == '{') depth++;
             else if (c == '}' && depth > 0) depth--;
             else if (c == '}')
@@ -1257,6 +1300,7 @@ public sealed partial class BashParser
         int braceDepth = 0;
         while (closePos < len)
         {
+            if (raw[closePos] is '\'' or '"' or '\\') { closePos = SkipBraceItemQuote(raw, closePos); continue; }
             if (raw[closePos] == '{') braceDepth++;
             else if (raw[closePos] == '}')
             {
@@ -1314,6 +1358,14 @@ public sealed partial class BashParser
                 var letterItems = ImmutableArray.CreateBuilder<string>();
                 for (int v = vStart; step > 0 ? v <= vEnd : v >= vEnd; v += step)
                     letterItems.Add(((char)v).ToString());
+                // {z..A} runs through `[\]^_` and a backtick: bash expands it, then reads the backtick as an unclosed
+                // command substitution, a bad substitution when the command runs (status 1).
+                if (letterItems.Contains("`"))
+                {
+                    SawBadSubstitution = true;
+                    parts.Add(new WordPart.BracedVarSub("", "#BAD:{" + inner + "}"));
+                    return closePos;
+                }
                 parts.Add(new WordPart.BracedTuple(letterItems.ToImmutable()));
                 return closePos;
             }
@@ -1379,13 +1431,23 @@ public sealed partial class BashParser
     private static bool HasTopLevelComma(string s)
     {
         int depth = 0;
-        foreach (char c in s)
+        for (int i = 0; i < s.Length; i++)
         {
+            char c = s[i];
+            if (c is '\'' or '"' or '\\') { i = SkipBraceItemQuote(s, i) - 1; continue; }
             if (c == '{') depth++;
             else if (c == '}') depth--;
             else if (c == ',' && depth == 0) return true;
         }
         return false;
+    }
+
+    /// <summary>The index just past the quoted span or <c>\x</c> escape at <paramref name="i"/> in brace text.</summary>
+    private static int SkipBraceItemQuote(string s, int i)
+    {
+        if (s[i] == '\\') return Math.Min(s.Length, i + 2);
+        int close = s.IndexOf(s[i], i + 1);
+        return close < 0 ? s.Length : close + 1;
     }
 
     /// <summary>
@@ -1398,6 +1460,7 @@ public sealed partial class BashParser
         int depth = 0, start = 0;
         for (int i = 0; i < s.Length; i++)
         {
+            if (s[i] is '\'' or '"' or '\\') { i = SkipBraceItemQuote(s, i) - 1; continue; }
             if (s[i] == '{') depth++;
             else if (s[i] == '}') depth--;
             else if (s[i] == ',' && depth == 0)

@@ -389,4 +389,22 @@ public class PsBuildTests
         Assert.Equal("if ($global:__BashEvalReturn) { return }", PsBuild.EvalReturnCheck(inFunction: false));
         Assert.Equal("$global:__BashEvalReturn = $true; ", PsBuild.EvalReturnSignal);
     }
+
+    [Fact]
+    public void UnlessGlobFailed_RunsTheStatementOnlyWithoutAFailedGlob()
+        => Assert.Equal("if (-not $global:__BashFailGlob) { echo x }", PsBuild.UnlessGlobFailed("echo x"));
+
+    [Fact]
+    public void ChainOperandUnlessGlobFailed_IsAPipelineThatRunsOnlyWithoutAFailure()
+        => Assert.Equal("$(if (-not $global:__BashFailGlob) { echo alt })", PsBuild.ChainOperandUnlessGlobFailed("echo alt"));
+
+    [Fact]
+    public void EndOfEvalText_ClearsTheLineMarkOnlyForTextThatCanSetIt()
+    {
+        // eval 'echo *.ZZ'; echo $?: the failure abandons the eval's own line; the line that ran the eval goes on.
+        Assert.Equal("B\n$global:__BashFailGlob = $false", PsBuild.EndOfEvalText("B"));
+        Assert.True(PsBuild.CanAbandonLine("@(ConvertTo-BashGlob '*.ZZ')"));
+        Assert.True(PsBuild.CanAbandonLine(PsBuild.ExpansionError("'x: '", "'bad substitution'")));
+        Assert.False(PsBuild.CanAbandonLine("Invoke-BashEcho x"));
+    }
 }

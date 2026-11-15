@@ -38,6 +38,10 @@ public static partial class PsEmitter
     // The script being emitted mentions `pipefail`: every multi-stage pipeline records per-stage status.
     [ThreadStatic]
     private static bool _pipefailMode;
+    /// <summary>The script mentions <c>failglob</c> or holds a bad substitution: either error abandons the rest of its
+    /// input line (<c>echo *.ZZ; echo x</c> prints nothing), so commands that share a line are guarded (see EmitCommandList).</summary>
+    [ThreadStatic]
+    private static bool _lineAbandonMode;
     /// <summary>The script reads PIPESTATUS, so a plain command records its own status there.</summary>
     [ThreadStatic]
     private static bool _pipeStatusMode;
@@ -520,6 +524,14 @@ public static partial class PsEmitter
         _ => 0,
     };
 
+    /// <summary>Line of the first simple command <paramref name="cmd"/> runs; 0 when unknown.</summary>
+    private static int FirstSimpleLine(Command cmd) => cmd switch
+    {
+        Command.AndOrList a when a.Commands.Length > 0 => FirstSimpleLine(a.Commands[0]),
+        Command.Pipeline p when p.Commands.Length > 0 => FirstSimpleLine(p.Commands[0]),
+        _ => LastSimpleLine(cmd),
+    };
+
     private static bool IsTrapCommand(Command.Simple simple)
         => simple.Words.Length > 0 && TryGetStaticArgValue(simple.Words[0]) == "trap";
 
@@ -857,6 +869,8 @@ public static partial class PsEmitter
         var priorUnitFunctions = _unitFunctions;
         _unitFunctions = null;
         var priorPipefail = _pipefailMode;
+        var priorFailglob = _lineAbandonMode;
+        _lineAbandonMode = priorFailglob || bash.Contains("failglob", StringComparison.Ordinal);
         var priorNounset = _nounsetMode;
         _nounsetMode = priorNounset || InheritedNounset || bash.Contains("nounset", StringComparison.Ordinal)
             || System.Text.RegularExpressions.Regex.IsMatch(bash, @"\bset\s+(?:-[a-zA-Z]+\s+)*-[a-zA-Z]*u");
@@ -876,6 +890,7 @@ public static partial class PsEmitter
         {
             Command? cmd;
             bool aliasesSpliced = false;
+            BashParser.SawBadSubstitution = false;
             // An alias holding part of a compound command (`alias LEFT={`): bash reads the alias text in its place.
             string? spliced = SpliceAliases(bash, out bool partialAlias);
             if (spliced is not null && partialAlias)
@@ -901,7 +916,11 @@ public static partial class PsEmitter
             CollectArrayAssignments(cmd);
             CollectAliasDefs(cmd, bash);
             if (aliasesSpliced) { _aliasDefs = null; _aliasStaticOnly = false; } // already expanded in the text
-            return EmitBody(cmd);
+            if (BashParser.SawBadSubstitution) _lineAbandonMode = true;
+            string body = EmitBody(cmd);
+            // eval text (also source, trap, an interactive line): a failed glob or a bad substitution in it abandons the
+            // rest of ITS line only; the line that ran the eval goes on (`eval 'echo *.ZZ'; echo $?` prints 1).
+            return _context == TranspileContext.Eval && PsBuild.CanAbandonLine(body) ? PsBuild.EndOfEvalText(body) : body;
         }
         finally
         {
@@ -922,6 +941,7 @@ public static partial class PsEmitter
             _errexitMode = priorErrexit; _errtraceMode = priorErrtrace;
             _errexitExemptDepth = priorExempt;
             _pipefailMode = priorPipefail;
+            _lineAbandonMode = priorFailglob;
             _nounsetMode = priorNounset;
             _unitFunctions = priorUnitFunctions;
             _definedFunctions = priorDefined;
@@ -4308,25 +4328,16 @@ public static partial class PsEmitter
             // (`typeset -"${a[@]}"`, a=(x foo=F)) is one operand per element: `typeset -x foo=F`.
             if (w.Parts.All(IsExpansion) || operandsAreOrdinaryWords || IsQuotedArrayAllWord(w) || IsQuotedArrayAffixWord(w))
             {
-                // The FIELDS of `$names` are names, never code: eval gets each one %q-quoted
-                // ("$(for w in $names; do printf '%q ' "$w"; done)"), so `a;echo x` stays one word.
+                // The FIELDS of `$names` are names, never code: eval gets each one single-quoted
+                // ("$(for w in $names; do printf '%s ' "${w@Q}"; done)"), so `a;echo x` stays one word.
                 anyDynamic = true;
-                const string fieldVar = "__psbash_declw";
-                var quoteField = new Command.Simple(
-                    [new CompoundWord([new WordPart.Literal("printf")]), new CompoundWord([new WordPart.SingleQuoted("%q ")]),
-                     new CompoundWord([new WordPart.DoubleQuoted([new WordPart.SimpleVarSub(fieldVar)])])],
-                    ImmutableArray<EnvPair>.Empty, ImmutableArray<Redirect>.Empty);
-                var fields = new Command.ForIn(fieldVar, [w], quoteField, ExplicitIn: true);
-                evalWords.Add(new CompoundWord([new WordPart.DoubleQuoted([new WordPart.CommandSub(fields)])]));
+                evalWords.Add(QuotedFieldsForEval(w, "%s "));
                 continue;
             }
             if (w.Parts.Length == 1 && w.Parts[0] is WordPart.DoubleQuoted dq && !dq.Parts.IsDefaultOrEmpty && dq.Parts.All(IsExpansion))
             {
                 anyDynamic = true;
-                var printf = new Command.Simple(
-                    [new CompoundWord([new WordPart.Literal("printf")]), new CompoundWord([new WordPart.SingleQuoted("%q")]), w],
-                    ImmutableArray<EnvPair>.Empty, ImmutableArray<Redirect>.Empty);
-                evalWords.Add(new CompoundWord([new WordPart.DoubleQuoted([new WordPart.CommandSub(printf)])]));
+                evalWords.Add(QuotedFieldsForEval(w, "%s"));
                 continue;
             }
             return false;
@@ -4339,6 +4350,22 @@ public static partial class PsEmitter
         if (!redirects.IsDefaultOrEmpty)
             result = PsBuild.WithRedirectTail(result, tail => AppendRedirectTail(tail, redirects));
         return true;
+    }
+
+    /// <summary>
+    /// "$(for __psbash_declw in WORD; do printf FORMAT "${__psbash_declw@Q}"; done)": each field of WORD single-quoted for
+    /// the eval. `%q` would leave a `~` after `=` bare, and the eval then tilde-expands the assignment (bash keeps
+    /// `const=~/src` from `readonly "$binding"` as written).
+    /// </summary>
+    private static CompoundWord QuotedFieldsForEval(CompoundWord w, string format)
+    {
+        const string fieldVar = "__psbash_declw";
+        var quoteField = new Command.Simple(
+            [new CompoundWord([new WordPart.Literal("printf")]), new CompoundWord([new WordPart.SingleQuoted(format)]),
+             new CompoundWord(BashParser.DecomposeWord("\"${" + fieldVar + "@Q}\""))],
+            ImmutableArray<EnvPair>.Empty, ImmutableArray<Redirect>.Empty);
+        var fields = new Command.ForIn(fieldVar, [w], quoteField, ExplicitIn: true);
+        return new CompoundWord([new WordPart.DoubleQuoted([new WordPart.CommandSub(fields)])]);
     }
 
     /// <summary>
@@ -7647,6 +7674,10 @@ public static partial class PsEmitter
             else if (p is not (WordPart.Literal or WordPart.EscapedLiteral or WordPart.SingleQuoted or WordPart.GlobPart))
                 dynamicPart = true;
         }
+        // `~{/src,root}`: the parser left the leading ~ as text (brace expansion comes first); each resulting word's
+        // tilde prefix is expanded afterwards (`~/src ~root`).
+        bool leadingTilde = parts.Length > 1 && parts[0] is WordPart.Literal { Value: "~" } && parts[1] is WordPart.BracedTuple or WordPart.BracedRange;
+        if (leadingTilde) dynamicPart = true;
         // `{a,b}$x`, `{1..3}"$y"`, `{a,b}$(cmd)`: a non-literal part cannot be spliced into a single-quoted
         // item (it emitted `a$env:x`). Build each combination as a part list and emit it as one expansion-aware word.
         if (dynamicPart)
@@ -7664,6 +7695,7 @@ public static partial class PsEmitter
                         next.Add(AppendBraceParts(head, alt));
                 combos = next;
             }
+            if (leadingTilde) combos = combos.ConvertAll(RetildeBraceWord);
             var combined = $"@({string.Join(',', combos.ConvertAll(FlattenPartsToDoubleQuotedString))})";
             // An unquoted expansion that comes out empty is dropped from the word list (`{$a,b}_c` with `$a_c` unset).
             return dynamicItems ? $"@({combined} | Where-Object {{ $_ -ne '' }})" : combined;
@@ -7729,6 +7761,22 @@ public static partial class PsEmitter
             items.Add(PsBuild.SingleQuote(pre + item + suf));
 
         return $"@({string.Join(',', items)})";
+    }
+
+    /// <summary>One word of a brace-expanded <c>~{...}</c>: its leading literal text re-read up to the first <c>/</c> so the
+    /// tilde prefix expands (<c>~/src</c> is the home directory's src, <c>~root</c> another user's home).</summary>
+    private static ImmutableArray<WordPart> RetildeBraceWord(ImmutableArray<WordPart> word)
+    {
+        int n = 0;
+        var text = new StringBuilder();
+        while (n < word.Length && word[n] is WordPart.Literal l) { text.Append(l.Value); n++; }
+        string s = text.ToString();
+        int slash = s.IndexOf('/');
+        string prefix = slash < 0 ? s : s[..(slash + 1)];
+        var head = BashParser.DecomposeWord(prefix, braceExpansion: false);
+        if (head.IsDefaultOrEmpty || head[0] is not WordPart.TildeSub) return word;
+        if (slash >= 0 && slash + 1 < s.Length) head = head.Add(new WordPart.Literal(s[(slash + 1)..]));
+        return head.AddRange(word.RemoveRange(0, n));
     }
 
     private static List<string> ExpandBrace(WordPart part)
@@ -8729,9 +8777,6 @@ public static partial class PsEmitter
         => word.Parts is [WordPart.BracedVarSub { Name: var n, Suffix: { Length: > 2 } s }]
            && IsOrdinaryVarName(n) && s[0] == '[' && s[^1] == ']' && BashParser.FindSubscriptClose(s, 0) == s.Length - 1
            && s is not ("[@]" or "[*]") && s[1] != '@' && s[1] != '*';
-    /// <summary>The suffix of <c>${#v}</c> / <c>${#a[@]}</c> / <c>${#a[0]}</c>: a number, never split.</summary>
-    private static bool IsLengthSuffix(string s)
-        => s == "#L" || (s.Length > 3 && s[0] == '#' && s[1] == 'L' && s[2] == '[' && s[^1] == ']' && s.IndexOf(']') == s.Length - 1);
 
     /// <summary>
     /// Bare <c>${v:-x}</c> / <c>${v+x}</c> / <c>${v#p}</c> / <c>${v/a/b}</c> / <c>${v:1}</c> / <c>${v^^}</c>: the result is word-split like any unquoted
@@ -8746,7 +8791,8 @@ public static partial class PsEmitter
            && (s.StartsWith(":-") || s.StartsWith(":+") || (s.Length > 0 && s[0] is '-' or '+')
                // Trim / replace / slice / case-change results are split like any other unquoted expansion:
                // `${s#*o}` of "Hello World" is the two words " World" -> World, not one argument with its space.
-               || (s.Length > 0 && s[0] is '#' or '%' or '/' or '^' or ',' && !IsLengthSuffix(s))
+               // A length `${#v}` is split too: with IFS=5, the 5 of a five-character value is no word at all.
+               || (s.Length > 0 && s[0] is '#' or '%' or '/' or '^' or ',')
                // `echo ${A@P} - x` of an assoc A with no key 0: the empty result is no argument (it printed ` - x`).
                || (s.Length == 2 && s[0] == '@' && s[1] is 'Q' or 'K' or 'k' or 'A' or 'a' or 'P' or 'E')
                || (s.Length > 1 && s[0] == ':' && s[1] is not ('-' or '+' or '=' or '?')));
@@ -8939,8 +8985,64 @@ public static partial class PsEmitter
             EmitQuotedArrayElements(dq.Parts[inner]));
     }
 
+    /// <summary>
+    /// <c>ab+($ABC)</c> / <c>+($v)</c>: an extglob whose one expansion is a bare unquoted variable arm is split like
+    /// <c>ab$ABC</c>, because bash expands and IFS-splits the word before it is a pattern (IFS=c ABC='c?d' gives the
+    /// fields <c>ab+(</c> and <c>?d)</c>, each then globbed). <paramref name="flat"/> is the word with the extglob's
+    /// operators and static arms as literal text around the variable. False for any other shape (quotes, escapes,
+    /// a second expansion), which keeps the run-time pattern form.
+    /// </summary>
+    private static bool TryFlattenSplitExtglob(CompoundWord word, out CompoundWord flat)
+    {
+        flat = word;
+        var parts = ImmutableArray.CreateBuilder<WordPart>();
+        var text = new StringBuilder();
+        bool found = false, sawExtglob = false;
+        foreach (var p in word.Parts)
+        {
+            switch (p)
+            {
+                case WordPart.Literal l:
+                    text.Append(l.Value);
+                    break;
+                case WordPart.GlobPart g when !IsDynamicExtglob(g.Pattern):
+                    if (g.Pattern.AsSpan().IndexOfAny('\'', '"', '\\') >= 0) return false;
+                    text.Append(g.Pattern);
+                    break;
+                case WordPart.GlobPart g:
+                    if (sawExtglob) return false;
+                    sawExtglob = true;
+                    foreach (var (t, isOperator) in SplitExtglob(g.Pattern))
+                    {
+                        if (isOperator) { text.Append(t); continue; }
+                        var arm = BashParser.DecomposeWord(t);
+                        bool bareVar = arm is [WordPart.SimpleVarSub { Name: var n }] && IsOrdinaryVarName(n)
+                            || arm is [WordPart.BracedVarSub { Suffix: null, Name: var bn }] && IsOrdinaryVarName(bn);
+                        if (bareVar && !found)
+                        {
+                            found = true;
+                            if (text.Length > 0) parts.Add(new WordPart.Literal(text.ToString()));
+                            text.Clear();
+                            parts.Add(arm[0]);
+                        }
+                        else if (t.AsSpan().IndexOfAny("$`'\"\\") >= 0) return false;
+                        else text.Append(t);
+                    }
+                    break;
+                default:
+                    return false;
+            }
+        }
+        if (!found) return false;
+        if (text.Length > 0) parts.Add(new WordPart.Literal(text.ToString()));
+        flat = new CompoundWord(parts.ToImmutable());
+        return true;
+    }
+
     private static string EmitUnquotedSplitWordArray(CompoundWord word)
-        => IsUnquotedQuotedAltWord(word)
+        => TryFlattenSplitExtglob(word, out var flatExtglob)
+            ? EmitAffixWordArray(flatExtglob, UnquotedAffixExpansionIndex(flatExtglob, ordinaryVar: true))
+            : IsUnquotedQuotedAltWord(word)
             ? EmitQuotedAltWordArray(word)
             : TryQuotedArrayAffix(word, out var qaOuter, out var qaInner)
             ? EmitQuotedArrayAffixArray(word, qaOuter, qaInner)
@@ -9068,7 +9170,13 @@ public static partial class PsEmitter
         {
             switch (part)
             {
-                case WordPart.BracedTuple or WordPart.BracedRange:
+                case WordPart.BracedTuple bt:
+                    brace = true;
+                    // `{**/*.*,}`: a glob inside an item is pathname-expanded once the braces are gone.
+                    foreach (var item in bt.Items)
+                        if (item.AsSpan().IndexOfAny('*', '?', '[') >= 0 && item.AsSpan().IndexOfAny("'\"\\$`") < 0) glob = true;
+                    break;
+                case WordPart.BracedRange:
                     brace = true;
                     break;
                 case WordPart.GlobPart gp:
@@ -10644,7 +10752,16 @@ public static partial class PsEmitter
                 sb.Append(EmitStatement(RestUnderExecRedirects(list.Commands.RemoveRange(0, i + 1), execRedirects)));
                 break;
             }
-            sb.Append(EmitStatement(list.Commands[i]));
+            // failglob / bad substitution: bash abandons the rest of the input line, so a command that shares its line
+            // with the one before runs only if nothing failed since the line began (the mark: $global:__BashFailGlob).
+            int lineOfPrior = i > 0 && _lineAbandonMode ? LastSimpleLine(list.Commands[i - 1]) : 0;
+            int lineOfThis = _lineAbandonMode ? FirstSimpleLine(list.Commands[i]) : 0;
+            bool sameLine = lineOfPrior > 0 && lineOfPrior == lineOfThis;
+            bool lineStarts = _lineAbandonMode && !sameLine && i + 1 < list.Commands.Length
+                && lineOfThis > 0 && FirstSimpleLine(list.Commands[i + 1]) == LastSimpleLine(list.Commands[i]);
+            if (lineStarts) sb.Append(PsBuild.FailGlobReset);
+            string statement = EmitStatement(list.Commands[i]);
+            sb.Append(sameLine ? PsBuild.UnlessGlobFailed(statement) : statement);
             if (_readonlyViolation)
             {
                 if (_scriptPosix && _functionDepth == 0) break;
@@ -10828,6 +10945,16 @@ public static partial class PsEmitter
                 var operand = sb.ToString(textStart, sb.Length - textStart);
                 sb.Length = textStart;
                 sb.Append(PsBuild.ErrexitFinalOperand(operand));
+            }
+
+            // failglob / bad substitution abandons the whole list: `echo *.ZZ || echo alt` must not fall back.
+            if (i > 0 && _lineAbandonMode)
+            {
+                int guardStart = operandStart + andOr.Ops[i - 1].Length + 2;
+                var guarded = sb.ToString(guardStart, sb.Length - guardStart);
+                sb.Length = guardStart;
+                sb.Append(PsBuild.ChainOperandUnlessGlobFailed(guarded));
+                if (!isFinal) sb.Append("; " + PsBuild.SignalFailIfFailed());
             }
         }
 

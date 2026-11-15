@@ -377,7 +377,7 @@ done
 == /root
 ## END
 ## status: 0
-## XFAIL ps-bash gap-tilde-before-brace-expansion ~{/src,root} takes { as part of the tilde prefix instead of brace-expanding first (~root would also need platform-windows-tilde-user)
+## XFAIL ps-bash platform-windows-tilde-user ~root stays literal on Windows: no passwd database to find another user's home (intentional-differences.md, Platform: ~user)
 ## timeout: 10
 
 #### Tilde expansion come before var expansion
@@ -470,7 +470,6 @@ echo -{z..A..2}-
 # This is exposed a weird bash bug!!!
 ## stdout:
 ## status: 1
-## XFAIL ps-bash gap-brace-char-range-backtick bash expands {z..A} (it contains a backtick) and fails at run time with status 1; ps-bash rejects it at parse time with status 2
 ## timeout: 10
 ## real-launcher
 

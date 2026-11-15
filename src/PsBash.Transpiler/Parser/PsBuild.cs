@@ -1103,6 +1103,28 @@ public static class PsBuild
     /// <summary>Clears the <c>failglob</c> flag before a <c>for</c> list that globs (see <see cref="ZeroIterationStatusAfterGlob"/>).</summary>
     public const string FailGlobReset = "$global:__BashFailGlob = $false; ";
 
+    /// <summary><paramref name="statement"/> run only when no <c>failglob</c> error happened since <see cref="FailGlobReset"/>:
+    /// bash abandons the rest of the input line after one (<c>echo *.ZZ; echo x</c>).</summary>
+    public static string UnlessGlobFailed(string statement) => "if (-not $global:__BashFailGlob) { " + statement + " }";
+
+    /// <summary><see cref="UnlessGlobFailed"/> for an operand after <c>&amp;&amp;</c> / <c>||</c>: a failed glob (or a bad
+    /// substitution) abandons the whole list, so <c>echo *.ZZ || echo alt</c> must not fall back. The operand stays a
+    /// pipeline (<c>$( … )</c>) for the chain operator; when skipped, the status stays the error's 1.</summary>
+    public static string ChainOperandUnlessGlobFailed(string operand) =>
+        "$(if (-not $global:__BashFailGlob) { " + operand + " })";
+
+    /// <summary>True when emitted text can abandon the rest of its line: a glob (failglob) or a bad substitution.</summary>
+    public static bool CanAbandonLine(string emitted) =>
+        emitted.Contains("ConvertTo-BashGlob", StringComparison.Ordinal)
+        || emitted.Contains(ExpansionErrorFunction, StringComparison.Ordinal);
+
+    /// <summary>
+    /// eval / source / trap text that <see cref="CanAbandonLine"/>: a failure in it abandons the rest of ITS line only,
+    /// so the mark is cleared when the text ends and the line that ran it goes on (`eval 'echo *.ZZ'; echo $?` prints 1).
+    /// The status the failure set is kept.
+    /// </summary>
+    public static string EndOfEvalText(string body) => body + "\n$global:__BashFailGlob = $false";
+
     /// <summary>
     /// A simple command's <c>&lt; file</c> that cannot be opened: bash reports it, sets status 1 and never runs the
     /// command (<c>echo potato &lt; /missing || echo hello</c> prints only hello). Dot-sourced, so what the command

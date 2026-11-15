@@ -205,7 +205,6 @@ EOF
 c
 ## stdout:
 ## status: 127
-## XFAIL ps-bash gap-alias-heredoc-body-from-source a here-doc body inside an alias value is read from the alias text, so the alias runs (prints hi) where bash finds no body and the command is not found
 ## timeout: 10
 
 #### Corner case: alias inside LHS array arithmetic expression
@@ -380,7 +379,6 @@ var=x
 e_ '${var}"'
 ## stdout:
 ## status: 2
-## XFAIL ps-bash gap-alias-text-lexed-alone an alias value is lexed on its own, so its unmatched quote is closed by the text that follows instead of being a syntax error
 ## timeout: 10
 
 #### Alias with internal newlines

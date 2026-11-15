@@ -1,0 +1,19 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 164
+stdout-length: 42
+stderr-length: 0
+==== SCRIPT ====
+HOME=/home/bob
+binding='const=~/src'; readonly "$binding"; echo "$const"
+f() { local "$1"; echo "x=[$x]"; }; f 'x=y a=b'
+names='p q'; declare $names; declare -p p q
+==== STDOUT ====
+~/src
+x=[y a=b]
+declare -- p
+declare -- q
+
+==== STDERR ====
+

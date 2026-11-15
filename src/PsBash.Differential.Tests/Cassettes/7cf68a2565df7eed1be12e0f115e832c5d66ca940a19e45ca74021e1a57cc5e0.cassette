@@ -1,0 +1,22 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 154
+stdout-length: 113
+stderr-length: 0
+==== SCRIPT ====
+HOME=/home/bob
+echo ~{/src,/lib} ~{a,b}x
+for x in ~{/src,/lib}; do echo "-- $x"; done
+x=~{/a,/b}; echo "asg $x"
+HOME=/home/bar
+x=~:${undef-~:~}; echo "$x"
+==== STDOUT ====
+/home/bob/src /home/bob/lib ~ax ~bx
+-- /home/bob/src
+-- /home/bob/lib
+asg ~{/a,/b}
+/home/bar:/home/bar:/home/bar
+
+==== STDERR ====
+

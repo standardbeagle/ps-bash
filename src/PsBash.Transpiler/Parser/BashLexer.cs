@@ -262,8 +262,11 @@ public static class BashLexer
             // `!(` is the extglob NEGATION in argument / pattern position (`[[ x == !(*.log) ]]`,
             // `case $f in !(*.o))`), but at command position `!(false)` is `!` + a subshell
             // (oracle). Skip the Bang operator there so the word scan takes the extglob whole.
+            // Right after `[[`, `!(x)` is a pattern word only once extglob is on: bash parses each line after the one
+            // before it ran, so without an earlier `shopt -s extglob` it is the test `! ( x )` ([[ !($empty) ]] is true).
             bool extGlobBang = c == '!' && pos + 1 < len && input[pos + 1] == '('
-                && IsArgumentOrPatternPosition(tokens);
+                && IsArgumentOrPatternPosition(tokens)
+                && !(tokens[^1] is { Kind: BashTokenKind.Word, Value: "[[" } && input.AsSpan(0, pos).IndexOf("extglob", StringComparison.Ordinal) < 0);
 
             // Single-character operators. Interned literal token text avoids the
             // per-token c.ToString() allocation.
@@ -295,6 +298,17 @@ public static class BashLexer
             // Word (including quoted strings as part of a word).
             int wordStart = pos;
             pos = ScanWord(input, pos);
+            // `a[5 + 1]=x` at command position: bash reads NAME[ to its matching ] as one word, blanks and all
+            // (`a[5 + 3]` alone is then a command name, status 127; an unclosed `a[` is a syntax error).
+            while ((pos >= len || input[pos] is ' ' or '\t' or '\n' or '\r') && IsCommandWordPosition(tokens, tokens.Count) && OpenSubscriptEnd(input, wordStart, pos) is var close && close != 0)
+            {
+                if (close < 0)
+                {
+                    var (eofLine, eofCol) = ParseException.ComputeLineCol(input, wordStart);
+                    throw new ParseException("unexpected EOF while looking for matching `]'", eofLine, eofCol, "subscript");
+                }
+                pos = close < len && !IsBlankOrOperatorChar(input[close]) ? ScanWord(input, close) : close;
+            }
             string value = input[wordStart..pos];
 
             // Defensive: never emit a zero-length Word. ScanWord can consume a
@@ -696,14 +710,11 @@ public static class BashLexer
         {
             char c = input[pos];
 
-            // Brace expansion: {items,here} or {1..10} — consume through closing brace.
+            // Brace expansion: {items,here} or {1..10}. Its items are ordinary word text, scanned by the rules below:
+            // a quoted item (`{a,'{}','&&'}`) is taken whole, so its `}` / `&` neither closes the braces nor ends the word.
             if (c == '{' && IsBraceExpansion(input, pos))
             {
                 pos++; // skip {
-                while (pos < len && input[pos] != '}')
-                    pos++;
-                if (pos < len)
-                    pos++; // skip }
                 continue;
             }
 
@@ -743,10 +754,12 @@ public static class BashLexer
                 continue;
             }
 
-            // Single-quoted string: consume through closing quote.
+            // Single-quoted string: consume through closing quote. A quote the input never closes is a syntax error.
             if (c == '\'')
             {
-                pos = ScanSingleQuoted(input, pos);
+                int open = pos;
+                pos = ScanSingleQuoted(input, pos, out bool sqClosed);
+                if (!sqClosed) throw UnterminatedQuote(input, open, '\'');
                 continue;
             }
 
@@ -755,7 +768,9 @@ public static class BashLexer
             // not prematurely terminate the string.
             if (c == '"')
             {
-                pos = ScanDoubleQuoted(input, pos);
+                int open = pos;
+                pos = ScanDoubleQuoted(input, pos, out bool dqClosed);
+                if (!dqClosed) throw UnterminatedQuote(input, open, '"');
                 continue;
             }
 
@@ -786,6 +801,7 @@ public static class BashLexer
             // \' inside is not mistaken for the terminator by the bare single-quote scan.
             if (c == '$' && pos + 1 < len && input[pos + 1] == '\'')
             {
+                int open = pos + 1;
                 pos += 2; // skip $'
                 while (pos < len && input[pos] != '\'')
                 {
@@ -793,8 +809,8 @@ public static class BashLexer
                         pos++; // skip the escaped character
                     pos++;
                 }
-                if (pos < len)
-                    pos++; // skip closing '
+                if (pos >= len) throw UnterminatedQuote(input, open, '\'');
+                pos++; // skip closing '
                 continue;
             }
 
@@ -825,13 +841,17 @@ public static class BashLexer
     // ─────────────────────────────────────────────────────────────────────────
 
     /// <summary>Advance past a single-quoted string. No escapes inside (bash).</summary>
-    internal static int ScanSingleQuoted(string input, int pos)
+    internal static int ScanSingleQuoted(string input, int pos) => ScanSingleQuoted(input, pos, out _);
+
+    /// <summary>Advance past a single-quoted string; <paramref name="closed"/> is false when the input ends first.</summary>
+    internal static int ScanSingleQuoted(string input, int pos, out bool closed)
     {
         int len = input.Length;
         pos++; // opening '
         while (pos < len && input[pos] != '\'')
             pos++;
-        if (pos < len)
+        closed = pos < len;
+        if (closed)
             pos++; // closing '
         return pos;
     }
@@ -840,7 +860,11 @@ public static class BashLexer
     /// Advance past a double-quoted string, recursing through embedded $(...),
     /// ${...} and `...` (whose own quotes/parens must not end the string).
     /// </summary>
-    internal static int ScanDoubleQuoted(string input, int pos)
+    internal static int ScanDoubleQuoted(string input, int pos) => ScanDoubleQuoted(input, pos, out _);
+
+    /// <summary>As <see cref="ScanDoubleQuoted(string, int)"/>; <paramref name="closed"/> is false when the input ends
+    /// before the closing quote, also when an embedded construct ran to the end (<c>"${v%'}"</c>: the <c>'</c> opens a quote).</summary>
+    internal static int ScanDoubleQuoted(string input, int pos, out bool closed)
     {
         int len = input.Length;
         pos++; // opening "
@@ -853,9 +877,68 @@ public static class BashLexer
             if (c == '`') { pos = ScanBacktick(input, pos); continue; }
             pos++;
         }
-        if (pos < len)
+        closed = pos < len;
+        if (closed)
             pos++; // closing "
         return pos;
+    }
+
+    /// <summary>bash's syntax error for a quote the input never closes (status 2).</summary>
+    /// <summary>
+    /// For a word <c>input[start..end)</c> that is <c>NAME[</c> plus a subscript still open at <paramref name="end"/>
+    /// (<c>a[5</c> of <c>a[5 + 1]=</c>): the index just past the <c>]</c> that closes it (quotes and escapes taken whole,
+    /// nested brackets counted), or -1 when the input ends first. 0 when the word is no such open subscript.
+    /// </summary>
+    internal static int OpenSubscriptEnd(string input, int start, int end)
+    {
+        int i = start;
+        if (i >= end || !(char.IsAsciiLetter(input[i]) || input[i] == '_')) return 0;
+        while (i < end && (char.IsAsciiLetterOrDigit(input[i]) || input[i] == '_')) i++;
+        if (i >= end || input[i] != '[') return 0;
+        int depth = 0;
+        for (int j = i; j < input.Length; j++)
+        {
+            char c = input[j];
+            if (j >= end && depth == 0) return 0;
+            switch (c)
+            {
+                case '\\': j++; break;
+                case '\'' or '"':
+                    int q = input.IndexOf(c, j + 1);
+                    if (q < 0) return -1;
+                    j = q;
+                    break;
+                case '[': depth++; break;
+                case ']':
+                    if (--depth == 0) return j < end ? 0 : j + 1;
+                    break;
+            }
+        }
+        return -1;
+    }
+
+    /// <summary>The next word starts a simple command (where an assignment may stand): at the start, after a
+    /// command separator or opening keyword, or after an earlier assignment word.</summary>
+    private static bool IsCommandWordPosition(List<BashToken> tokens, int count)
+    {
+        if (count == 0) return true;
+        var last = tokens[count - 1];
+        if (last.Kind is BashTokenKind.Newline or BashTokenKind.AndIf or BashTokenKind.OrIf or BashTokenKind.Pipe
+            or BashTokenKind.PipeAmp or BashTokenKind.LParen or BashTokenKind.LBrace or BashTokenKind.Bang)
+            return true;
+        if (last.Kind is BashTokenKind.Semi or BashTokenKind.Amp)
+            return !(count > 1 && tokens[count - 2].Kind == BashTokenKind.Semi); // `;;` / `;&`: a case pattern follows
+        if (last.Kind != BashTokenKind.Word) return false;
+        if (last.Value is "then" or "do" or "else" or "elif" or "if" or "while" or "until") return true;
+        int eq = last.Value.IndexOf('=');
+        return eq > 0 && OpenSubscriptEnd(last.Value, 0, last.Value.Length) == 0
+            && (char.IsAsciiLetter(last.Value[0]) || last.Value[0] == '_') && IsCommandWordPosition(tokens, count - 1);
+    }
+
+    private static ParseException UnterminatedQuote(string input, int open, char quote)
+    {
+        var (line, col) = ParseException.ComputeLineCol(input, open);
+        return new ParseException("unexpected EOF while looking for matching `" + quote + "'", line, col, "quote");
     }
 
     /// <summary>Advance past a `...` backtick command substitution (no nesting; escapes honored).</summary>

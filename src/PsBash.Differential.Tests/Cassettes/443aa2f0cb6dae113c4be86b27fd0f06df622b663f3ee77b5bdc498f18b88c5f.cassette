@@ -1,0 +1,21 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 136
+stdout-length: 12
+stderr-length: 0
+==== SCRIPT ====
+empty=''; str=x
+[[ !($empty) ]] && echo T1
+[[ !($str) ]] || echo F2
+shopt -s extglob
+[[ !($empty) ]] && echo T3
+[[ !($str) ]] && echo T4
+==== STDOUT ====
+T1
+F2
+T3
+T4
+
+==== STDERR ====
+

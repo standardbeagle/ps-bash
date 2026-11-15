@@ -2049,9 +2049,12 @@ public class PsEmitterTests
     [Fact]
     public void Transpile_BracedVarLength_EmitsLength()
     {
+        // Unquoted, the length is word-split like any expansion (IFS=5 makes 5 a separator).
         var result = PsEmitter.Transpile("echo ${#VAR}");
 
-        Assert.Equal("Invoke-BashEcho $([PsBash.Cmdlets.BashLocale]::Length($env:VAR))", result);
+        Assert.Contains("ConvertTo-BashWords", result);
+        Assert.Contains("[PsBash.Cmdlets.BashLocale]::Length($env:VAR)", result);
+        Assert.DoesNotContain("ConvertTo-BashWords", PsEmitter.Transpile("echo \"${#VAR}\""));
     }
 
     [Fact]
@@ -5050,7 +5053,8 @@ public class PsEmitterTests
     public void Transpile_ArrayLength_EmitsPsCount()
     {
         var result = PsEmitter.Transpile("echo ${#arr[@]}");
-        Assert.Equal("Invoke-BashEcho $(if ($arr -is [System.Collections.IDictionary]) { $arr.Count } elseif ($null -ne $arr) { @($arr).Count } elseif ($null -ne $env:arr) { 1 } else { 0 })", result);
+        Assert.Contains("ConvertTo-BashWords", result);
+        Assert.Contains("$(if ($arr -is [System.Collections.IDictionary]) { $arr.Count } elseif ($null -ne $arr) { @($arr).Count } elseif ($null -ne $env:arr) { 1 } else { 0 })", result);
     }
 
     [Fact]

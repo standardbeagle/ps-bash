@@ -241,6 +241,9 @@ function Write-BashExpansionError([string]$Prefix, [string]$Message) {
     $at = $MyInvocation
     $global:LASTEXITCODE = 1
     $global:__BashExpansionFailed = "$($at.ScriptLineNumber):$($at.OffsetInLine)"
+    # bash also drops the rest of the input line: the commands after this one on its line are guarded by this mark
+    # (PsBuild.UnlessGlobFailed, which a failglob error sets too); the next line clears it.
+    $global:__BashFailGlob = $true
     Write-BashHostStderr "bash: ${Prefix}${Message}"
     return $null
 }

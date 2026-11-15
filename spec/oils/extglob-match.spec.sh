@@ -305,7 +305,6 @@ TRUE
 TRUE
 ## END
 ## status: 0
-## XFAIL ps-bash gap-extglob-parse-time the script is parsed before shopt -s extglob runs, so [[ !($str) ]] is read as an extglob on lines that precede it
 ## timeout: 10
 
 #### With extglob on, !($str) on the left or right of == has different meanings

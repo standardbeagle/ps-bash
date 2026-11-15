@@ -1,0 +1,24 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 255
+stdout-length: 23
+stderr-length: 0
+==== SCRIPT ====
+d=$(mktemp -d); cd "$d"; cat > s.sh <<'PSBASH_EOF'
+shopt -s failglob
+echo *.ZZ; echo same=$?
+echo next=$?
+echo *.ZZ || echo alt && echo more
+echo ok
+eval 'echo *.ZZ; echo in'; echo after=$?
+PSBASH_EOF
+bash s.sh 2>/dev/null; echo "rc=$?"; cd /; rm -rf "$d"
+==== STDOUT ====
+next=1
+ok
+after=1
+rc=0
+
+==== STDERR ====
+

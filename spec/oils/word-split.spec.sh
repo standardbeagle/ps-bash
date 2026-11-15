@@ -762,7 +762,6 @@ echo "${#v}"
 5
 ## END
 ## status: 0
-## XFAIL ps-bash gap-length-result-not-split an unquoted ${#v} is not IFS-split (IFS=5 keeps 5)
 ## timeout: 10
 
 #### Regression: "${v:-AxBxC}"x should not be split

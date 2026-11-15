@@ -923,4 +923,51 @@ public class BashLexerTests
             (BashTokenKind.Word, "echo"),
             (BashTokenKind.Word, "done"));
     }
+
+    // bash reads NAME[ at command position to its matching ], blanks and all (oracle: a[5 + 1]= assigns a[6]).
+    [Theory]
+    [InlineData("a[5 + 1]=", "a[5 + 1]=")]
+    [InlineData("a[5 + 3] x", "a[5 + 3]")]
+    [InlineData("x=1 b[1 + 1]=z", "x=1")]
+    [InlineData("if true; then c[2 * 2]=q; fi", "if")]
+    public void Tokenize_OpenSubscriptAtCommandPosition_IsOneWord(string input, string first)
+    {
+        var words = Tokenize(input).Where(t => t.Kind is BashTokenKind.Word or BashTokenKind.AssignmentWord).Select(t => t.Value).ToList();
+        Assert.Equal(first, words[0]);
+        Assert.Contains(words, w => w.Contains(" + ", StringComparison.Ordinal) || w.Contains(" * ", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Tokenize_OpenSubscriptAsArgument_EndsAtTheBlank()
+        => AssertTokens(Tokenize("echo a[1 2]"),
+            (BashTokenKind.Word, "echo"), (BashTokenKind.Word, "a[1"), (BashTokenKind.Word, "2]"));
+
+    [Theory]
+    [InlineData("a[", "`]'")]
+    [InlineData("a[5 +", "`]'")]
+    [InlineData("echo 'abc", "`''")]
+    [InlineData("echo \"abc", "`\"'")]
+    [InlineData("echo $'abc", "`''")]
+    public void Tokenize_UnclosedSubscriptOrQuote_IsASyntaxError(string input, string what)
+    {
+        var ex = Assert.Throws<ParseException>(() => Tokenize(input));
+        Assert.Contains("unexpected EOF while looking for matching " + what, ex.Message);
+    }
+
+    // Without an earlier `shopt -s extglob`, [[ !(x) ]] is the negation of ( x ); once it is on, one pattern word.
+    [Fact]
+    public void Tokenize_BangParenAfterDoubleBracket_IsNegationUntilExtglobIsOn()
+    {
+        var before = Tokenize("[[ !($x) ]]");
+        Assert.Equal(BashTokenKind.Bang, before[1].Kind);
+        var after = Tokenize("shopt -s extglob\n[[ !($x) ]]");
+        Assert.Contains(after, t => t.Kind == BashTokenKind.Word && t.Value == "!($x)");
+        Assert.Contains(Tokenize("[[ $y == !($x) ]]"), t => t.Kind == BashTokenKind.Word && t.Value == "!($x)");
+    }
+
+    // A quoted item of a brace expansion may hold `}`, `#` or `&&`: the word runs to the brace that closes it.
+    [Fact]
+    public void Tokenize_BraceExpansionWithQuotedPunctuation_IsOneWord()
+        => AssertTokens(Tokenize("touch __{aa,'<>','{}','#','&&'}"),
+            (BashTokenKind.Word, "touch"), (BashTokenKind.Word, "__{aa,'<>','{}','#','&&'}"));
 }

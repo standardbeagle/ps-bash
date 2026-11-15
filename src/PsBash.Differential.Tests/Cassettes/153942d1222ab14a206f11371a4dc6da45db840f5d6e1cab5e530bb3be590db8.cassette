@@ -1,0 +1,18 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 156
+stdout-length: 36
+stderr-length: 0
+==== SCRIPT ====
+shopt -s globstar
+d=$(mktemp -d); cd "$d"; mkdir -p c/sub; touch c/sub/leaf.md
+echo {**/*.*,} | sed 's/ *$//'
+echo {foo,bar}.c {*.md,nope}
+cd /; rm -rf "$d"
+==== STDOUT ====
+c/sub/leaf.md
+foo.c bar.c *.md nope
+
+==== STDERR ====
+

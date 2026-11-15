@@ -252,8 +252,20 @@ public static partial class PsEmitter
         var sb = new System.Text.StringBuilder();
         int copied = 0;
         bool redirectTarget = false;
+        // Text to put into the source at a position later than the alias use (see HereDocAliasSplit).
+        var deferred = new List<(int Pos, string Text)>();
+        void FlushDeferred(int upTo)
+        {
+            while (deferred.Count > 0 && deferred[0].Pos <= upTo)
+            {
+                sb.Append(text, copied, deferred[0].Pos - copied).Append(deferred[0].Text);
+                copied = deferred[0].Pos;
+                deferred.RemoveAt(0);
+            }
+        }
         foreach (var t in tokens)
         {
+            FlushDeferred(t.Position);
             if (t.Kind == BashTokenKind.Eof) break;
             if (redirectTarget) { redirectTarget = false; if (t.Kind == BashTokenKind.Word) continue; }
             if (IsRedirectOperator(t.Kind)) { redirectTarget = true; state.AfterBlankAlias = false; continue; }
@@ -271,6 +283,14 @@ public static partial class PsEmitter
                     throw new ParseException("alias " + t.Value + ": " + ex.Message, line, 0, "alias");
                 }
                 state.AfterBlankAlias = true; // the first word of the alias text is checked for an alias too
+                if (depth == 0 && HereDocAliasSplit(value, inner) is var (firstLine, delimiter, stripTabs, rest))
+                {
+                    deferred.Add(HereDocAliasRest(text, t.Position, delimiter, stripTabs, rest));
+                    deferred.Sort((a, b) => a.Pos.CompareTo(b.Pos));
+                    value = firstLine;
+                    inner = BashLexer.Tokenize(value);
+                    partial = true;
+                }
                 if (!partial) { try { BashParser.Parse(value); } catch (ParseException) { partial = true; } }
                 string expanded = SpliceText(value, inner, _ => line, table, [.. expanding, t.Value], ref state, depth + 1, ref changed, ref partial);
                 sb.Append(text, copied, t.Position - copied).Append(expanded);
@@ -281,7 +301,46 @@ public static partial class PsEmitter
             }
             StepAliasReadState(t, ref state);
         }
+        FlushDeferred(text.Length);
         sb.Append(text, copied, text.Length - copied);
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// An alias whose first line opens a here-document (<c>alias c='cat &lt;&lt;EOF\n$(echo hi)\nEOF\n'</c>): bash reads the
+    /// body from the INPUT after the line that used the alias, not from the alias text; the alias's later lines are then
+    /// ordinary commands. Null for any other alias.
+    /// </summary>
+    private static (string FirstLine, string Delimiter, bool StripTabs, string Remainder)? HereDocAliasSplit(string value, List<BashToken> tokens)
+    {
+        int nl = value.IndexOf('\n');
+        if (nl < 0) return null;
+        for (int i = 0; i + 1 < tokens.Count && tokens[i].Position < nl; i++)
+        {
+            if (tokens[i].Kind is not (BashTokenKind.DLess or BashTokenKind.DLessDash) || tokens[i + 1].Kind != BashTokenKind.Word) continue;
+            var (delimiter, _) = BashLexer.ParseHeredocDelimiter(tokens[i + 1].Value);
+            return (value[..nl], delimiter, tokens[i].Kind == BashTokenKind.DLessDash, value[(nl + 1)..]);
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Where the alias's remaining lines go in <paramref name="text"/>: after the here-document body that follows the line
+    /// of the alias use at <paramref name="usePos"/> (past its delimiter line), or at the end with the delimiter added when
+    /// the input ends first (bash: "here-document delimited by end-of-file").
+    /// </summary>
+    private static (int Pos, string Text) HereDocAliasRest(string text, int usePos, string delimiter, bool stripTabs, string rest)
+    {
+        int lineEnd = text.IndexOf('\n', usePos);
+        int pos = lineEnd < 0 ? text.Length : lineEnd + 1;
+        while (pos < text.Length)
+        {
+            int end = text.IndexOf('\n', pos);
+            string line = text[pos..(end < 0 ? text.Length : end)].TrimEnd('\r');
+            if ((stripTabs ? line.TrimStart('\t') : line) == delimiter)
+                return (end < 0 ? text.Length : end + 1, (end < 0 ? "\n" : "") + rest);
+            pos = end < 0 ? text.Length : end + 1;
+        }
+        return (text.Length, (lineEnd < 0 || text.Length > 0 && text[^1] != '\n' ? "\n" : "") + delimiter + "\n" + rest);
     }
 }

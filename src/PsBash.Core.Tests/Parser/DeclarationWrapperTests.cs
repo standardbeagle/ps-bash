@@ -36,7 +36,7 @@ public class DeclarationWrapperTests
     {
         var ps = T("builtin export z=$x");
         Assert.Contains("$__psbash_eval_src", ps);
-        Assert.Contains("%q ", ps);
+        Assert.Contains("__psbash_declw", ps); // each field single-quoted with ${w@Q}
         Assert.DoesNotContain("$env:z =", ps);
     }
 

@@ -45,7 +45,6 @@ touch _tmp/foo.-
 echo _tmp/*.[[:punct:]] _tmp/*.[[:punct\:]]
 ## stdout: _tmp/foo.- _tmp/foo.-
 ## status: 0
-## XFAIL ps-bash gap-glob-escaped-class-name a \: inside a bracket class name ([[:punct\:]]) is not read as the class [:punct:]
 ## timeout: 10
 
 #### Glob after var manipulation

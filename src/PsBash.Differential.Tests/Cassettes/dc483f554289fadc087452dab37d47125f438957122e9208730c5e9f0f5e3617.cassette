@@ -1,0 +1,21 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 205
+stdout-length: 32
+stderr-length: 0
+==== SCRIPT ====
+shopt -s extglob
+d=$(mktemp -d); cd "$d"; touch 'abc)d' foo.c foo.h
+IFS=c ABC='c?d'; echo ab+($ABC)
+IFS=x; ABC=cxd; for i in +($ABC); do echo =$i=; done
+IFS=' '; ext=c; echo foo.?($ext|h)
+cd /; rm -rf "$d"
+==== STDOUT ====
+ab+( ?d)
+=+(c=
+=d)=
+foo.c foo.h
+
+==== STDERR ====
+

@@ -117,7 +117,6 @@ argv.py @(__aa|'__<>'|__{}|__#|__&&|)
 # mksh sorts them differently
 ## stdout:
 ## status: 127
-## XFAIL ps-bash gap-extglob-lexer-punct {} # && inside @( ) are lexed as shell syntax (parse error) instead of pattern text
 ## timeout: 10
 
 #### More glob escaping
