@@ -376,7 +376,17 @@ public static partial class PsEmitter
         _errexitMode && _errexitExemptDepth == 0 ? PsBuild.ErrexitCheck(ErrexitExitStatement()) : null;
 
     private static string ErrexitExitStatement() =>
-        _subshellDepth > 0 ? "return" : "exit $global:LASTEXITCODE";
+        _subshellDepth > 0 ? "return" : ShellExit("$global:LASTEXITCODE");
+
+    /// <summary>
+    /// Code that may run inside a subshell the emitter cannot see: a function body is emitted once and called from
+    /// anywhere, including <c>f | cat</c>, <c>(f)</c> and <c>$(f)</c>, where bash's <c>exit</c> ends only that subshell.
+    /// </summary>
+    private static bool ExitDecidedAtRunTime => _subshellDepth == 0 && _functionDepth > 0;
+
+    /// <summary>The statement that ends the shell with <paramref name="status"/> (<see cref="PsBuild.DynamicExit"/> in a function body).</summary>
+    private static string ShellExit(string status) =>
+        ExitDecidedAtRunTime ? PsBuild.DynamicExit(status) : "exit " + status;
 
     /// <summary>`readonly r=1; r=2`: the assignment is refused with status 1, which errexit acts on.</summary>
     private static bool WritesReadonly(Command.ShAssignment assign)
@@ -1248,7 +1258,7 @@ public static partial class PsEmitter
     private static void PopLoopLabel() => _loopLabels!.RemoveAt(_loopLabels.Count - 1);
 
     /// <summary>A non-numeric loop-control count ends the script with status 128, as in bash.</summary>
-    private static string NumericArgExit => _subshellDepth > 0 ? "$global:LASTEXITCODE = 128; return" : "exit 128";
+    private static string NumericArgExit => _subshellDepth > 0 ? "$global:LASTEXITCODE = 128; return" : ShellExit("128");
 
     /// <summary><c>break [N]</c> / <c>continue [N]</c> → the labelled PowerShell keyword.</summary>
     private static string EmitLoopControl(string keyword, Command.Simple cmd)
@@ -5915,10 +5925,10 @@ public static partial class PsEmitter
         // `exit word` with a literal non-numeric word: "numeric argument required", and the shell leaves with 2.
         else if (cmd0 == "exit" && cmd.Words.Length == 2 && GetLiteralValue(cmd.Words[1]) is { } exitLit
                  && !System.Text.RegularExpressions.Regex.IsMatch(exitLit, @"^[+-]?[0-9]+$"))
-            specialResult = $"Write-Error {PsBuild.SingleQuote("exit: " + exitLit + ": numeric argument required")} -ErrorAction Continue; $global:LASTEXITCODE = 2; exit 2";
+            specialResult = $"Write-Error {PsBuild.SingleQuote("exit: " + exitLit + ": numeric argument required")} -ErrorAction Continue; $global:LASTEXITCODE = 2; " + ShellExit("2");
 
         else if (cmd0 == "exit" && cmd.Words.Length == 1)
-            specialResult = "exit $(if ($null -ne $global:__BashPreTrapStatus) { $global:__BashPreTrapStatus } else { $global:LASTEXITCODE })";
+            specialResult = ShellExit("$(if ($null -ne $global:__BashPreTrapStatus) { $global:__BashPreTrapStatus } else { $global:LASTEXITCODE })");
 
         else if (cmd0 == "exit" && cmd.Words.Length == 2
                  && IsPureUnquotedVarWord(cmd.Words[1]))
@@ -5927,7 +5937,7 @@ public static partial class PsEmitter
         // `exit N` also records N as the status, so an EXIT trap (`trap 'echo rc=$?' EXIT`) sees it: PowerShell's
         // `exit` leaves $global:LASTEXITCODE as it was.
         else if (cmd0 == "exit" && cmd.Words.Length == 2 && _context != TranspileContext.Eval)
-            specialResult = $"$global:LASTEXITCODE = {EmitExitCodeValue(cmd.Words[1])}; exit $global:LASTEXITCODE";
+            specialResult = $"$global:LASTEXITCODE = {EmitExitCodeValue(cmd.Words[1])}; " + ShellExit("$global:LASTEXITCODE");
 
         else if (cmd0 == "cd")
             specialResult = EmitCd(cmd.Words.RemoveAt(0));
@@ -9582,7 +9592,7 @@ public static partial class PsEmitter
                "else { $global:LASTEXITCODE } })");
     }
 
-    private static string EmitExitWithUnquotedVar(CompoundWord word) => "exit " + EmitExitCodeValue(word);
+    private static string EmitExitWithUnquotedVar(CompoundWord word) => ShellExit(EmitExitCodeValue(word));
 
     /// <summary>
     /// True when any operand in <paramref name="args"/> (optionally skipping the
@@ -11483,7 +11493,14 @@ public static partial class PsEmitter
                 // stays there (bash: cmd is unset afterwards). A lastpipe stage runs in the shell itself.
                 bool assigningStage = cmd is Command.Simple { Words.IsDefaultOrEmpty: false } ws && ws.Words.Any(MutatesShellState)
                     && !(_scriptLastpipe && i > 0 && i == pipeline.Commands.Length - 1);
-                if (assigningStage || rawStage.Contains("BashParamErrorException]::Reported", StringComparison.Ordinal)
+                // `f | cat` with f a function of this script: the call runs in that subshell too, so its assignments stay
+                // there and its `exit` ends only the stage (PIPESTATUS 3 0) - the scope is what catches the body's
+                // run-time decided exit (PsBuild.DynamicExit). As a bare stage, `exit` in f ended the whole script.
+                bool functionStage = cmd is Command.Simple { Words.IsDefaultOrEmpty: false } fs
+                    && GetLiteralValue(fs.Words[0]) is { } stageName
+                    && (_definedFunctions?.Contains(stageName) == true || _unitFunctions?.Contains(stageName) == true)
+                    && !(_scriptLastpipe && i > 0 && i == pipeline.Commands.Length - 1);
+                if (assigningStage || functionStage || rawStage.Contains("BashParamErrorException]::Reported", StringComparison.Ordinal)
                     && !rawStage.Contains("catch [PsBash.Cmdlets.BashParamErrorException]", StringComparison.Ordinal))
                 {
                     sb.Length = stageStart;

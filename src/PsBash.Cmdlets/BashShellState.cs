@@ -316,6 +316,20 @@ public sealed class BashParamErrorException : Exception
 }
 
 /// <summary>
+/// <c>exit N</c> run by a function (or eval / sourced text) while a SUBSHELL scope is open somewhere up the call chain:
+/// <c>f | cat</c>, <c>(f)</c>, <c>$(f)</c>. bash ends only that subshell; a PowerShell <c>exit</c> would end the whole
+/// script, and a <c>return</c> only the function. The subshell scope (<c>PsBuild.ShellStateGuard</c>) catches it and
+/// takes <see cref="Status"/> as its own.
+/// </summary>
+public sealed class BashSubshellExitException : Exception
+{
+    public BashSubshellExitException(int status) : base("exit " + status) => Status = status;
+
+    /// <summary>The exit status, already reduced to 0..255.</summary>
+    public int Status { get; }
+}
+
+/// <summary>
 /// The scope around each top-level command of a script, <c>-c</c> string, eval or sourced text whose expansions can
 /// discard the line (<c>PsBuild.DiscardLineScope</c>). While one is open (<see cref="Armed"/>) the runtime throws
 /// <see cref="BashParamErrorException.Discard"/> for such an error; outside any (a function defined by text that had

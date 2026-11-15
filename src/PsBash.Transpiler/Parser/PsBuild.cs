@@ -256,10 +256,23 @@ public static class PsBuild
     public static string ShellStateGuard(string body, string? finallyTail = null) =>
         "$__psbash_ss = [PsBash.Cmdlets.BashShellState]::Save($ExecutionContext.SessionState); try { "
         + body
-        + " } catch [PsBash.Cmdlets.BashParamErrorException] { if (-not $_.Exception.Data['psbash.reported']) { Write-Error ('ps-bash: ' + $_.Exception.Message) -ErrorAction Continue }; $global:LASTEXITCODE = 1 } finally { $__psbash_xt =[PsBash.Cmdlets.BashShellState]::Restore($ExecutionContext.SessionState, $__psbash_ss); "
+        + " } catch [PsBash.Cmdlets.BashParamErrorException] { if (-not $_.Exception.Data['psbash.reported']) { Write-Error ('ps-bash: ' + $_.Exception.Message) -ErrorAction Continue }; $global:LASTEXITCODE = 1 } "
+        + "catch [PsBash.Cmdlets.BashSubshellExitException] { $global:LASTEXITCODE = $_.Exception.Status } finally { $__psbash_xt =[PsBash.Cmdlets.BashShellState]::Restore($ExecutionContext.SessionState, $__psbash_ss); "
         + "if ($null -ne $__psbash_xt) { if ($__psbash_xt) { Set-PSDebug -Trace 1 } else { Set-PSDebug -Off } }"
         + (finallyTail is null ? "" : "; " + finallyTail)
         + " }";
+
+    /// <summary>
+    /// The PowerShell statement that ends the shell with <paramref name="status"/>, for code that runs where the
+    /// emitter cannot know whether a subshell encloses it: a function body, which may be called from
+    /// <c>f | cat</c>, <c>(f)</c>, <c>$(f)</c>. bash's <c>exit</c> there ends only that subshell. When a subshell scope
+    /// (<see cref="ShellStateGuard"/>, whose <c>$__psbash_ss</c> a callee sees through PowerShell's dynamic scoping) is
+    /// open, the status is thrown as <c>BashSubshellExitException</c> for that scope to catch; otherwise it is the plain
+    /// <c>exit</c>. <paramref name="status"/> is evaluated once.
+    /// </summary>
+    public static string DynamicExit(string status) =>
+        "$__psbash_xc = " + status + "; if ($ExecutionContext.SessionState.PSVariable.Get('__psbash_ss')) { $global:LASTEXITCODE = $__psbash_xc; "
+        + "throw [PsBash.Cmdlets.BashSubshellExitException]::new([int]$__psbash_xc) }; exit $__psbash_xc";
 
     /// <summary>Wrap in a subexpression: <c>$(expr)</c>.</summary>
     public static string Subexpr(string expr) => "$(" + expr + ")";

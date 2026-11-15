@@ -1134,6 +1134,27 @@ public class BashTranspilerReviewRegressionTests
         Assert.DoesNotContain("exit 55", ps);
     }
 
+    // Oracle: `f() { echo x; exit 3; }; f | cat; echo "after ${PIPESTATUS[*]}"` prints x, then `after 3 0`: a function
+    // called as a pipe stage runs in that subshell, so exit in its body ends only the stage (it ended the whole script
+    // with 3). The body is emitted once, so its exit decides at run time; the stage is the subshell scope that catches it.
+    [Fact]
+    public void Transpile_ExitInFunctionPipeStage_EndsOnlyTheStage()
+    {
+        var ps = BashTranspiler.Transpile("f() { echo x; exit 3; }; f | cat; echo \"after ${PIPESTATUS[*]}\"");
+        Assert.Contains(PsBuild.DynamicExit("$global:LASTEXITCODE"), ps);
+        Assert.Contains(PsBuild.ShellStateScope("f"), ps);
+    }
+
+    // Oracle: `exit 3` ends the script with 3. Only a function body's exit is decided at run time; a top-level exit
+    // stays the plain PowerShell exit (a called function's exit falls back to it when no subshell scope is open).
+    [Fact]
+    public void Transpile_ExitOutsideAFunction_StaysAPlainExit()
+    {
+        var ps = BashTranspiler.Transpile("exit 3");
+        Assert.Contains("exit $global:LASTEXITCODE", ps);
+        Assert.DoesNotContain("BashSubshellExitException", ps);
+    }
+
     // Oracle: `for pid in 1 2; do echo $pid; done` prints 1 and 2. `foreach ($pid in …)` threw "Cannot overwrite variable
     // PID" and the loop never ran (oils background "wait for N parallel jobs"); a PowerShell automatic name is iterated
     // through a private variable and read back as the shell variable.
