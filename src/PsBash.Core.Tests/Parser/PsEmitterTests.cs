@@ -7522,6 +7522,16 @@ public class PsEmitterTests
     }
 
     [Theory]
+    [InlineData("echo hi | sh -c 'cat; exit 33' | cat; echo ${PIPESTATUS[1]}", "-Index 1 -Script { Invoke-BashBash '-c' 'cat; exit 33' }")]
+    [InlineData("echo hi | grep \"a; b\" | cat; echo ${PIPESTATUS[1]}", "-Index 1 -Script { Invoke-BashGrep \"a; b\" }")]
+    public void Transpile_PipeStageWithSemicolonInAQuotedArg_KeepsItsPipedInput(string bash, string stage)
+    {
+        // `& { }` does not pass $input on, so a stage wrapped for the `;` inside its quoted operand ran with no stdin:
+        // `echo hi | sh -c 'cat; exit 33' | wc -l` printed 0 whenever the script read PIPESTATUS (bash prints 1).
+        Assert.Contains(stage, PsEmitter.Transpile(bash)!);
+    }
+
+    [Theory]
     [InlineData("r() { echo x; }", true)]
     [InlineData("h() { echo x; }", true)]
     [InlineData("greet() { echo x; }", false)]

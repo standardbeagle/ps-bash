@@ -330,24 +330,8 @@ public static class PsBuild
             switch (c)
             {
                 case '\'':
-                    // Single-quoted: literal to the next ' ('' is an escaped quote,
-                    // which this loop handles naturally as close-then-reopen).
-                    i++;
-                    while (i < psText.Length && psText[i] != '\'') i++;
-                    break;
-
                 case '"':
-                    // Double-quoted: backtick escapes, and `$( … )` subexpressions
-                    // that may themselves contain quotes and semicolons.
-                    i++;
-                    for (int depth = 0; i < psText.Length; i++)
-                    {
-                        if (psText[i] == '`') { i++; continue; }
-                        if (psText[i] == '$' && i + 1 < psText.Length && psText[i + 1] == '(')
-                        { depth++; i++; continue; }
-                        if (psText[i] == ')' && depth > 0) { depth--; continue; }
-                        if (psText[i] == '"' && depth == 0) break;
-                    }
+                    i = SkipQuotedSpan(psText, i);
                     break;
 
                 case '`': i++; break;               // escape: skip the escaped char
@@ -365,6 +349,52 @@ public static class PsBuild
             }
         }
         return false;
+    }
+
+    /// <summary>
+    /// True when <paramref name="psText"/> has a <c>"; "</c> separator outside every quoted span, at any nesting
+    /// depth (so <c>if (…) { a; b }</c>, which cannot be a pipe element either, still counts). A <c>;</c> inside a
+    /// string operand does not: <c>Invoke-BashBash '-c' 'cat; exit 33'</c> is one command, and wrapping it in
+    /// <c>&amp; { }</c> as a pipe stage cut it off from its piped input.
+    /// </summary>
+    public static bool HasUnquotedStatementSeparator(string psText)
+    {
+        for (int i = 0; i < psText.Length; i++)
+        {
+            switch (psText[i])
+            {
+                case '\'':
+                case '"':
+                    i = SkipQuotedSpan(psText, i);
+                    break;
+                case '`': i++; break;
+                case ';':
+                    if (i + 1 < psText.Length && psText[i + 1] == ' ') return true;
+                    break;
+            }
+        }
+        return false;
+    }
+
+    /// <summary>The index of the quote closing the span opened at <paramref name="open"/> (or the end of the text).
+    /// Single-quoted text is literal ('' reads as close-then-reopen); double-quoted text honours backtick escapes and
+    /// <c>$( … )</c> subexpressions, which may hold quotes and semicolons of their own.</summary>
+    private static int SkipQuotedSpan(string psText, int open)
+    {
+        int i = open + 1;
+        if (psText[open] == '\'')
+        {
+            while (i < psText.Length && psText[i] != '\'') i++;
+            return i;
+        }
+        for (int depth = 0; i < psText.Length; i++)
+        {
+            if (psText[i] == '`') { i++; continue; }
+            if (psText[i] == '$' && i + 1 < psText.Length && psText[i + 1] == '(') { depth++; i++; continue; }
+            if (psText[i] == ')' && depth > 0) { depth--; continue; }
+            if (psText[i] == '"' && depth == 0) break;
+        }
+        return i;
     }
 
     /// <summary>

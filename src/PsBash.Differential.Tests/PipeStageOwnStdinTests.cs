@@ -22,6 +22,12 @@ public class PipeStageOwnStdinTests
     [InlineData("echo hi | while read l; do echo \"L=$l\"; done <<< loop")]
     public Task StageRedirect_ReplacesThePipe(string script) => AssertOracle.EqualAsync(script);
 
+    // A `;` inside a quoted operand wrapped the stage in `& { }` once the script read PIPESTATUS, and the stage lost the pipe.
+    [Theory]
+    [InlineData("echo hi | bash -c 'cat; exit 33' | wc -l; echo \"ps=${PIPESTATUS[*]}\"")]
+    [InlineData("printf 'a; b\\nc\\n' | grep 'a; b' | cat; echo \"ps=${PIPESTATUS[*]}\"")]
+    public Task StageWithSemicolonInQuotedOperand_ReadsThePipe(string script) => AssertOracle.EqualAsync(script);
+
     // A here-document on a command-less assignment has no reader: the assignment still happens.
     [Theory]
     [InlineData("foo=`echo v`<<EOM\nhello world\nEOM\necho \"[$foo]\"")]

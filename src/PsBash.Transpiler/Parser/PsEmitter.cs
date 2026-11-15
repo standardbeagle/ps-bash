@@ -11264,7 +11264,7 @@ public static partial class PsEmitter
     {
         if (emitted.StartsWith("& {", StringComparison.Ordinal)
             || emitted.StartsWith("$(", StringComparison.Ordinal)
-            || !emitted.Contains("; ", StringComparison.Ordinal))
+            || !PsBuild.HasUnquotedStatementSeparator(emitted))
             return emitted;
 
         return $"& {{ {emitted} }}";

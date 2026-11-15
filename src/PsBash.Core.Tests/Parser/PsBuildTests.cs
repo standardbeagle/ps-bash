@@ -320,6 +320,24 @@ public class PsBuildTests
         Assert.False(PsBuild.IsStatementList("Invoke-BashEcho \"a`\"b;c\""));
     }
 
+    // The separator a SIMPLE command's statement-list emission (env prefix, cd, eval) carries. Quoted text is an operand.
+    [Theory]
+    [InlineData("Invoke-BashBash '-c' 'cat; exit 33'")]
+    [InlineData("Invoke-BashEcho \"a; b\"")]
+    [InlineData("Invoke-BashEcho \"$(a; b)\"")]
+    [InlineData("Invoke-BashEcho 'it''s; x'")]
+    [InlineData("Invoke-BashEcho a`; b")]
+    [InlineData("Invoke-BashCat f")]
+    public void HasUnquotedStatementSeparator_OnlyQuotedOrEscaped_False(string text)
+        => Assert.False(PsBuild.HasUnquotedStatementSeparator(text));
+
+    [Theory]
+    [InlineData("$env:X = \"1\"; Invoke-BashCat")]
+    [InlineData("Invoke-BashEcho 'a; b'; Invoke-BashCat")]
+    [InlineData("if ($x) { a; b }")]
+    public void HasUnquotedStatementSeparator_SeparatorOutsideQuotes_True(string text)
+        => Assert.True(PsBuild.HasUnquotedStatementSeparator(text));
+
     [Fact]
     public void RedirectStage_StdoutOnly_IsThePathForm()
         => Assert.Equal(" | Invoke-BashRedirect -Path f -Append",
