@@ -341,6 +341,19 @@ public sealed class IpcWorker : IWorker
         // Re-derive health under the lock. A compatible host that appeared while we
         // waited for the lock means there is nothing to spawn.
         var state = await CheckHealthAsync(TimeSpan.FromMilliseconds(750), ct).ConfigureAwait(false);
+        if (state == HostHealthState.Starting)
+        {
+            // A host answering Starting has bound and is warming its runspace: wait for it. Falling
+            // through re-probed it as Starting (not Unhealthy), proved ownership from its sidecar, and
+            // killed it to spawn a replacement, every time a launcher was cancelled mid-start.
+            state = await WaitForHealthyAsync(ct).ConfigureAwait(false)
+                ? HostHealthState.Healthy
+                : await CheckHealthAsync(TimeSpan.FromMilliseconds(250), ct).ConfigureAwait(false);
+        }
+        else if (state == HostHealthState.Unhealthy && await WaitForPendingSpawnAsync(ct).ConfigureAwait(false))
+        {
+            return; // a host a killed launcher started came up; nothing to spawn
+        }
         if (state == HostHealthState.Healthy)
         {
             if (CurrentHostMatchesLauncher()) return;
@@ -489,6 +502,41 @@ public sealed class IpcWorker : IWorker
     private static TimeSpan GetShutdownDeadline()
         => TimeSpan.FromMilliseconds(HostProtocol.DefaultShutdownDeadlineMs);
 
+    /// <summary>
+    /// Under the spawn lock, with no host answering: wait for a host an earlier lock holder started
+    /// but did not live to see come up (<see cref="PendingHostSpawn"/>). True when it answers healthy
+    /// and is our build. A recorded host still not up after the startup window is killed so it cannot
+    /// bind later and orphan the replacement this launcher is about to start.
+    /// </summary>
+    private async Task<bool> WaitForPendingSpawnAsync(CancellationToken ct)
+    {
+        if (_lifetime == Lifetime.PerInvocation || _scheme != "unix") return false;
+        var pending = PendingHostSpawn.TryRead(_endpoint);
+        while (true)
+        {
+            ct.ThrowIfCancellationRequested();
+            switch (PendingHostSpawn.Judge(pending, DateTime.UtcNow, _startupTimeout, static id => id.IsRunning()))
+            {
+                case PendingHostSpawn.Verdict.None:
+                    return false;
+                case PendingHostSpawn.Verdict.Abandon:
+                    PendingHostSpawn.TryKill(pending!.Value);
+                    return false;
+            }
+
+            var state = await CheckHealthAsync(TimeSpan.FromMilliseconds(750), ct).ConfigureAwait(false);
+            if (state == HostHealthState.Starting)
+                return await WaitForHealthyAsync(ct).ConfigureAwait(false) && CurrentHostMatchesLauncher();
+            if (state == HostHealthState.Healthy)
+                return CurrentHostMatchesLauncher();
+            if (state == HostHealthState.Obsolete)
+                return false;
+
+            try { await Task.Delay(_startupPollInterval, ct).ConfigureAwait(false); }
+            catch (OperationCanceledException) { throw; }
+        }
+    }
+
     private async Task<bool> WaitForHealthyAsync(CancellationToken ct)
     {
         var deadline = DateTime.UtcNow + _startupTimeout;
@@ -571,6 +619,7 @@ public sealed class IpcWorker : IWorker
 
         Process? proc = null;
         bool spawnSucceeded = false;
+        bool recordPending = false;
         try
         {
             // The host must never hold a handle to any of the launcher's pipes: a
@@ -596,6 +645,10 @@ public sealed class IpcWorker : IWorker
             {
                 if (lowerIdle) Environment.SetEnvironmentVariable(NestedIdleEnvVar, savedIdle);
             }
+            // A shared host outlives this launcher, which may be killed before the host binds: record
+            // it so the next spawn-lock holder waits for it rather than starting a second one.
+            recordPending = _lifetime != Lifetime.PerInvocation && _scheme == "unix";
+            if (recordPending) PendingHostSpawn.Record(_endpoint, proc);
 
             // Test seam: record that this launcher actually spawned a host on this
             // endpoint. Single-flight (EnsureHostReachableAsync) must keep this at
@@ -642,6 +695,8 @@ public sealed class IpcWorker : IWorker
         }
         finally
         {
+            // Up (the sidecar now names it) or killed below: either way no longer pending.
+            if (recordPending) PendingHostSpawn.Clear(_endpoint);
             if (!spawnSucceeded && proc is not null)
             {
                 try { if (!proc.HasExited) proc.Kill(entireProcessTree: true); }

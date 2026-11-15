@@ -81,8 +81,10 @@ public static class StaleArtifactReaper
             try
             {
                 if (path.EndsWith(".host.json", StringComparison.Ordinal)) continue;
-                if (File.Exists(path + ".host.json")) continue; // ReapDeadSidecars decides these
                 if (File.GetLastWriteTimeUtc(path) > cutoff) continue;
+                // A pending-spawn record (PendingHostSpawn) whose launcher died: long past any startup window.
+                if (path.EndsWith(PendingHostSpawn.Suffix, StringComparison.Ordinal)) { TryDelete(path); removed++; continue; }
+                if (File.Exists(path + ".host.json")) continue; // ReapDeadSidecars decides these
                 if (!NothingListens(path)) continue;
                 TryDelete(path);
                 if (!File.Exists(path)) removed++;

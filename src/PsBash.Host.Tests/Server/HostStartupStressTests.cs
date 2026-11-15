@@ -119,6 +119,67 @@ public sealed class HostStartupStressTests
         }
     }
 
+    /// <summary>
+    /// A launcher killed between starting the shared host and seeing it bind (Claude Code cancels a
+    /// status-line command still waiting on a cold host) leaves only its pending-spawn record. The
+    /// next launcher must wait for THAT host, not start a second: before, it saw no socket, spawned
+    /// its own, and whichever bound last unlinked the other's socket, leaving a ~150 MB host idle for
+    /// ten minutes per cancelled status-line refresh.
+    /// </summary>
+    [SkippableFact]
+    public async Task LauncherKilledMidSpawn_NextLauncher_WaitsForThatHost_SpawnsNone()
+    {
+        var hostBinary = TryLocateHostBinary();
+        Skip.If(hostBinary is null, "ps-bash-host binary not found — build src/PsBash.Host first");
+
+        var (spec, scheme, endpoint) = NewIsolatedEndpoint("killed");
+        var prior = Environment.GetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar);
+        Environment.SetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar, spec);
+        var spawnKey = $"{scheme}:{endpoint}";
+        IpcWorker.SpawnCounts.TryRemove(spawnKey, out _);
+
+        Process? orphan = null;
+        IpcWorker? worker = null;
+        try
+        {
+            // What the killed launcher left behind: a host process starting on the endpoint, recorded
+            // as pending, with no socket or sidecar yet and no lock held.
+            var psi = new ProcessStartInfo(hostBinary!, $"--ipc-endpoint={spec}")
+            {
+                UseShellExecute = false,
+                RedirectStandardInput = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true,
+            };
+            orphan = Process.Start(psi)!;
+            PendingHostSpawn.Record(endpoint, orphan);
+
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(40));
+            worker = await IpcWorker.StartAsync(hostBinary!, startupTimeout: TimeSpan.FromSeconds(20),
+                lifetime: Lifetime.Daemon, ct: cts.Token);
+
+            var served = (await worker.QueryAsync("$PID", cts.Token)).Trim();
+            Assert.Equal(orphan.Id.ToString(), served);
+            IpcWorker.SpawnCounts.TryGetValue(spawnKey, out var spawnCount);
+            Assert.True(spawnCount == 0,
+                $"the next launcher must reuse the killed launcher's host, not spawn another; SpawnCounts={spawnCount}");
+        }
+        finally
+        {
+            if (worker is not null) try { await worker.DisposeAsync(); } catch { }
+            if (orphan is not null)
+            {
+                try { if (!orphan.HasExited) orphan.Kill(entireProcessTree: true); } catch { }
+                orphan.Dispose();
+            }
+            PendingHostSpawn.Clear(endpoint);
+            IpcWorker.SpawnCounts.TryRemove(spawnKey, out _);
+            Environment.SetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar, prior);
+            CleanupEndpoint(scheme, endpoint);
+        }
+    }
+
     // ─── Helpers (kept local so the stress suite is self-contained) ─────────────
 
     private static (string Spec, string Scheme, string Endpoint) NewIsolatedEndpoint(string label)

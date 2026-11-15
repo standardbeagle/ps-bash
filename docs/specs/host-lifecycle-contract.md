@@ -426,6 +426,17 @@ Steps 1-6 are implemented by `IpcWorker.EnsureHostReachableAsync` (the
 - The lock holder runs `SpawnOrReplaceHostAsync` (classify → graceful-retire
   obsolete → kill wedged owned host → retire artifacts → spawn); losers poll health
   and reuse the winner's host the moment it answers.
+- **A lock holder can die mid-spawn** (Claude Code cancels a status-line command still
+  waiting on a cold host, which takes 2-8 s). The lock goes with it while its host is
+  still starting and not yet bound, so it is invisible. The spawner therefore records
+  the host as `<endpoint>.spawning` (`PendingHostSpawn`, `pid:startTicks`) the moment it
+  starts, and clears the record once the host is up or killed. The next holder sees no
+  host answering, finds the record, and waits for that process. The wait is measured
+  from the host's own start time and is bounded by the startup timeout, after which
+  the host is killed so it cannot bind late and orphan its replacement. The holder
+  also waits for a host answering **Starting** instead of killing it as wedged.
+  Without this, each cancelled refresh left another ~150 MB host idling for 10 min.
+  Regression coverage: `HostStartupStressTests.LauncherKilledMidSpawn_NextLauncher_WaitsForThatHost_SpawnsNone`.
 
 Without this, concurrent cold-start launchers each reached the spawn path and left
 N-1 orphan runspaces — `UnixSocketTransport.ListenAsync` unlinks-before-bind (each

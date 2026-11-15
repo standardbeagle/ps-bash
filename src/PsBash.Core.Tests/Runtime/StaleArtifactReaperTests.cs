@@ -155,6 +155,21 @@ public class StaleArtifactReaperTests : IDisposable
     }
 
     [Fact]
+    public void Reap_PendingSpawnRecord_RemovedOnlyWhenOld()
+    {
+        // A launcher killed mid-spawn leaves <endpoint>.spawning (PendingHostSpawn); it matches the
+        // host-*.sock* scan but is a plain file, so the no-listener probe must not be what decides.
+        var pending = Path.Combine(_dir, "host-andy-s1-2.sock" + PendingHostSpawn.Suffix);
+        File.WriteAllText(pending, "4242:1");
+
+        StaleArtifactReaper.Reap(_dir);
+        Assert.True(File.Exists(pending), "a fresh pending-spawn record belongs to a host that may still be starting");
+
+        StaleArtifactReaper.Reap(_dir, TimeSpan.Zero);
+        Assert.False(File.Exists(pending), "a pending-spawn record past the minimum age is reaped");
+    }
+
+    [Fact]
     public void ReapOldEmptyDirectories_RemovesOnlyOldEmptyOnes()
     {
         var empty = Directory.CreateDirectory(Path.Combine(_dir, "e1")).FullName;
