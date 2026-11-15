@@ -27,6 +27,6 @@ SHELL is set
 SHELL is set
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-vars-bash vars-bash (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-shell-var-default SHELL is not set at startup when the environment lacks it (bash sets it from the passwd entry)
 ## timeout: 10
 ## real-launcher

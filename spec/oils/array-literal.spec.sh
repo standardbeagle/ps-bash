@@ -219,7 +219,7 @@ status=1
 status=1
 ## END
 ## status: 127
-## XFAIL ps-bash gap-oils-array-literal array-literal (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash platform-windows-env-case variables a and A collide (PowerShell variable names are case-insensitive): "A: cannot convert indexed to associative array"
 ## timeout: 10
 
 #### (strict_array) s+=()

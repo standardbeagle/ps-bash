@@ -282,7 +282,7 @@ len=1
 len=0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array-assoc array-assoc (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-subscript-cmdsub-eval bash runs a $(...) in an array subscript read from a variable value or an unset operand; ps-bash never runs code from a value
 ## timeout: 10
 
 #### nameref and assoc array

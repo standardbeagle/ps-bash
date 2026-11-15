@@ -445,7 +445,7 @@ F1=F1
 F1=x
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-nameref nameref (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-nameref-dynamic-scope local -n ref=$1 is resolved at transpile time from literal call sites (f3 F1); a name passed on through another function's "$@" is not followed
 ## timeout: 10
 
 #### change reference itself

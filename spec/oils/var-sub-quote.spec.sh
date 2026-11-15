@@ -144,7 +144,7 @@ foo="'a b c d'"
 argv.py "${foo%d'}"
 ## stdout:
 ## status: 2
-## XFAIL ps-bash gap-oils-var-sub-quote var-sub-quote (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-unterminated-quote an unterminated quote is not a syntax error (bash: status 2)
 ## timeout: 10
 
 #### $'' allowed within VarSub arguments

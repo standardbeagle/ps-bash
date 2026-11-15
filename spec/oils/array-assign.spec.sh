@@ -130,7 +130,7 @@ set zzz
 declare -a b=([0]="3" [1]="4" [2]="zzz")
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array-assign array-assign (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-subscript-cmdsub-eval bash runs a $(...) in an array subscript read from a variable value or an unset operand; ps-bash never runs code from a value
 ## timeout: 10
 ## real-launcher
 
@@ -154,7 +154,7 @@ echo len=${#a[@]}
 a[5 # 1]=
 ## stdout: len=2
 ## status: 1
-## XFAIL ps-bash gap-oils-array-assign array-assign (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-lexer-open-subscript-word bash reads an unquoted a[ to its matching ] as one word (spaces and all); ps-bash ends the word at the space, so a[ / a[5 + 3] run as commands
 ## timeout: 10
 ## real-launcher
 
@@ -215,7 +215,7 @@ a[5 + 3]+ status=127
 a[5 + 3]+= status=0
 ## END
 ## status: 2
-## XFAIL ps-bash gap-oils-array-assign array-assign (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-lexer-open-subscript-word bash reads an unquoted a[ to its matching ] as one word (spaces and all); ps-bash ends the word at the space, so a[ / a[5 + 3] run as commands
 ## timeout: 10
 ## real-launcher
 

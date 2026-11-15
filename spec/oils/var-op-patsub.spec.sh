@@ -55,7 +55,7 @@ foo and _y_
 _x_ and foo
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-var-op-patsub var-op-patsub (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-lc-all-c-bytes LC_ALL=C does not make strings bytes: ${#s} and ? count characters (strings are UTF-16 text)
 ## timeout: 10
 
 #### ${x/^} regression

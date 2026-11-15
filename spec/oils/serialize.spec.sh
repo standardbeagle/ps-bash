@@ -67,7 +67,7 @@ printf '%q\n' "$unprintable"
 # bash and zsh agree
 ## stdout: $'\377'
 ## status: 0
-## XFAIL ps-bash gap-oils-serialize serialize (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-printf-q-raw-bytes printf %q sees decoded text, not the raw bytes: an invalid UTF-8 byte is not quoted as $'\xNN'
 ## timeout: 10
 ## real-launcher
 
@@ -113,7 +113,7 @@ $'\316a'
 $'a\316'
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-serialize serialize (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-printf-q-raw-bytes printf %q sees decoded text, not the raw bytes: an invalid UTF-8 byte is not quoted as $'\xNN'
 ## timeout: 10
 ## real-launcher
 

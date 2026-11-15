@@ -531,7 +531,7 @@ works: a[$(echo 1)]
 works: a[$(( 3 - 2 ))]
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-var-ref var-ref (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-subscript-cmdsub-eval bash runs a $(...) in an array subscript read from a variable value or an unset operand; ps-bash never runs code from a value
 ## timeout: 10
 
 #### Bizarre tilde expansion in array index
@@ -584,7 +584,7 @@ check_indir "x@Q"     y
 echo done
 ## stdout: done
 ## status: 0
-## XFAIL ps-bash gap-oils-var-ref var-ref (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-indirect-invalid-name-not-fatal ${!1} of an invalid name (!x, x:-foo, a[0) is reported and the function goes on; bash abandons the whole command (a -c shell exits)
 ## timeout: 10
 
 #### Bad var ref
@@ -657,5 +657,5 @@ PWNED
 0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-var-ref var-ref (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-subscript-cmdsub-eval bash runs a $(...) in an array subscript read from a variable value or an unset operand; ps-bash never runs code from a value
 ## timeout: 10

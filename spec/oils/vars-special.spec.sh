@@ -115,7 +115,7 @@ subshell OK
 command sub OK
 ## END
 ## status: 3
-## XFAIL ps-bash gap-oils-vars-special vars-special (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-bashpid-in-process-subshell a ( ) subshell and $( ) run in the same host process, so $BASHPID does not change
 ## timeout: 10
 
 #### Background PID $! looks like a PID
