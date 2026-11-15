@@ -2178,11 +2178,14 @@ public static partial class PsEmitter
             // rather than the top-level caller's args. Without this, a recursive call
             // overwrites the global and the outer frame sees the inner frame's values.
             // A run-time eval (`eval "local $n"`, `local "$1"`) can declare locals whose names were unknown here: restore
-            // every `$__lsd_*` slot it parked in this call. Only a body with such an eval pays for the scan.
-            if (body.Contains("$__psbash_eval_src", StringComparison.Ordinal))
+            // every `$__lsd_*` slot it parked in this call. Only a body with such an eval pays for the scan. A sourced file
+            // runs dot-sourced in this scope too: `main() { . ./lib.sh; }` with `local L=x` in lib.sh (it outlived main).
+            if (body.Contains("$__psbash_eval_src", StringComparison.Ordinal) || body.Contains("Invoke-BashSource", StringComparison.Ordinal))
                 body = "try { " + body + " } finally { foreach ($__psbLsdV in @(Get-Variable -Name '__lsd_*' -Scope 0 -ErrorAction SilentlyContinue)) "
-                     + "{ if ($null -ne $__psbLsdV.Value) { $__psbLsdN = $__psbLsdV.Name.Substring(6); [System.Environment]::SetEnvironmentVariable($__psbLsdN, "
-                     + "[PsBash.Cmdlets.VarFrameStack]::LeaveLocal($__psbLsdN, $__psbLsdV.Value.v, [System.Environment]::GetEnvironmentVariable($__psbLsdN))) } } }";
+                     // An unset caller value is removed (a $null handed to SetEnvironmentVariable arrived as "": set, empty).
+                     + "{ if ($null -ne $__psbLsdV.Value) { $__psbLsdN = $__psbLsdV.Name.Substring(6); "
+                     + "$__psbLsdR = [PsBash.Cmdlets.VarFrameStack]::LeaveLocal($__psbLsdN, $__psbLsdV.Value.v, [System.Environment]::GetEnvironmentVariable($__psbLsdN)); "
+                     + "if ($null -eq $__psbLsdR) { Remove-Item -LiteralPath ('Env:' + $__psbLsdN) -ErrorAction SilentlyContinue } else { [System.Environment]::SetEnvironmentVariable($__psbLsdN, $__psbLsdR) } } } }";
             var sb = new StringBuilder();
             // A PowerShell alias outranks a function of the same name (`r`, `h`, `diff`), so a bash function
             // that shares its name would never run; drop the alias first.
@@ -4579,12 +4582,15 @@ public static partial class PsEmitter
             }
             string expr = "[string](" + EmitWord(w) + ")";
             // `readonly "$n=1"`: the name is known only at run time, so it is marked there.
-            string markReadonly = name == "readonly" ? "; [PsBash.Cmdlets.BashShellState]::MarkReadonly($__psbD.Substring(0, $__psbI))" : "";
+            string markReadonly = name == "readonly" ? "; [PsBash.Cmdlets.BashShellState]::MarkReadonly($__psbN)" : "";
             if (name == "readonly") _runtimeReadonly = true;
+            // `export 'NAME+=VALUE'` (the run-time eval of `export NAME${x}+=v` quotes each field) appends.
             sbOut.Append($"$__psbD = {expr}; $__psbI = $__psbD.IndexOf('='); ")
-                 .Append("if ($__psbI -gt 0) { Set-Item -LiteralPath ('Env:' + $__psbD.Substring(0, $__psbI)) -Value $__psbD.Substring($__psbI + 1)" + markReadonly)
+                 .Append("if ($__psbI -gt 0) { $__psbN = $__psbD.Substring(0, $__psbI); $__psbV = $__psbD.Substring($__psbI + 1); ")
+                 .Append("if ($__psbN.EndsWith('+')) { $__psbN = $__psbN.Substring(0, $__psbN.Length - 1); $__psbV = [string][Environment]::GetEnvironmentVariable($__psbN) + $__psbV }; ")
+                 .Append("Set-Item -LiteralPath ('Env:' + $__psbN) -Value $__psbV" + markReadonly)
                  // `export "$k=$v"`: `declare -p` shows the x attribute, as for a literal `export X=1`.
-                 .Append(name == "export" && _declarePrintMode ? "; [PsBash.Cmdlets.BashShellState]::MarkAttribute($__psbD.Substring(0, $__psbI), 'x')" : "")
+                 .Append(name == "export" && _declarePrintMode ? "; [PsBash.Cmdlets.BashShellState]::MarkAttribute($__psbN, 'x')" : "")
                  .Append(" }; ");
         }
         sbOut.Append(PsBuild.SetStatus(0));
@@ -4743,7 +4749,7 @@ public static partial class PsEmitter
         if (_functionDepth > 0 && cmd.Words.Length > 1 && GetLiteralValue(cmd.Words[0]) == "local"
             && cmd.Words.Skip(1).Any(w => GetLiteralValue(w) is ['+', _, ..]))
             cmd = cmd with { Words = cmd.Words.SetItem(0, new CompoundWord(ImmutableArray.Create<WordPart>(new WordPart.Literal("typeset")))) };
-        var braced = ExpandDeclarationBraceWords(cmd);
+        var braced = ExpandDeclarationBraceWords(UnquotePlainDeclarationOperands(cmd));
         // `export -p a{0..1}` is `export -p a0 a1`, which the parser makes a declaration; do the same here.
         if (!ReferenceEquals(braced, cmd) && AsPlainExport(braced) is { } export)
             return EmitShAssignment(export);
@@ -8964,6 +8970,30 @@ public static partial class PsEmitter
                 expanded.Add(new CompoundWord(ImmutableArray.Create<WordPart>(new WordPart.Literal(item))));
         }
         return expanded is null ? cmd : cmd with { Words = expanded.ToImmutable() };
+    }
+
+    /// <summary>
+    /// <c>readonly 'b' 'c'</c>, <c>export 'NAME'</c>: a quoted operand that is a plain name (or a flag) is that word
+    /// unquoted. The run-time eval of <c>readonly $names</c> / <c>export "$v"</c> quotes each field (<c>${w@Q}</c>), so
+    /// its text always has this shape; it ran nothing (readonly) or was "export: command not found".
+    /// </summary>
+    private static Command.Simple UnquotePlainDeclarationOperands(Command.Simple cmd)
+    {
+        if (cmd.Words.Length < 2 || GetLiteralValue(cmd.Words[0]) is not ("export" or "readonly" or "local" or "declare" or "typeset"))
+            return cmd;
+        ImmutableArray<CompoundWord>.Builder? words = null;
+        for (int i = 1; i < cmd.Words.Length; i++)
+        {
+            var w = cmd.Words[i];
+            if (GetLiteralValue(w) is null && TryGetStaticArgValue(w) is { } s
+                && System.Text.RegularExpressions.Regex.IsMatch(s, "^(?:[A-Za-z_][A-Za-z0-9_]*|[-+][A-Za-z]+)$"))
+            {
+                if (words is null) { words = ImmutableArray.CreateBuilder<CompoundWord>(); words.AddRange(cmd.Words.Take(i)); }
+                words.Add(new CompoundWord(ImmutableArray.Create<WordPart>(new WordPart.Literal(s))));
+            }
+            else words?.Add(w);
+        }
+        return words is null ? cmd : cmd with { Words = words.ToImmutable() };
     }
 
     /// <summary><c>export [-p] NAME...</c> with plain names and nothing else, as the parser's declaration node.</summary>

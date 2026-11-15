@@ -39,13 +39,24 @@ public class ShellSemanticsRegressionTests
         Assert.StartsWith("function f ", BashTranspiler.Transpile("f() { :; }"));
     }
 
+    // Oracle: `main() { . ./tmp.sh; }; main; echo "${L-unset}"` with `local L=local` in tmp.sh prints unset: the
+    // file's local belongs to main, and main's return puts the caller's value back (L outlived main).
+    [Fact]
+    public void Transpile_FunctionThatSources_RestoresTheLocalsTheFileDeclared()
+    {
+        const string restore = "Get-Variable -Name '__lsd_*' -Scope 0";
+        Assert.Contains(restore, BashTranspiler.Transpile("main() { . ./tmp.sh; }"));
+        Assert.Contains(restore, BashTranspiler.Transpile("main() { source ./tmp.sh; }"));
+        Assert.DoesNotContain(restore, BashTranspiler.Transpile("main() { echo hi; }"));
+    }
+
     // Oracle: `f(){ x=1; v=x; export "$v"; }; f; declare -p x` prints `declare -x x="1"`. The declare -p is in the
     // caller, so eval text always records the x attribute.
     [Fact]
     public void Transpile_ExportInEvalText_RecordsTheExportAttribute()
     {
         Assert.Contains("[PsBash.Cmdlets.BashShellState]::MarkAttribute('XX', 'x')", BashTranspiler.Transpile("export XX", TranspileContext.Eval));
-        Assert.Contains("[PsBash.Cmdlets.BashShellState]::MarkAttribute($__psbD.Substring(0, $__psbI), 'x')",
+        Assert.Contains("[PsBash.Cmdlets.BashShellState]::MarkAttribute($__psbN, 'x')",
             BashTranspiler.Transpile("export \"$k=$v\"", TranspileContext.Eval));
     }
 
@@ -58,6 +69,23 @@ public class ShellSemanticsRegressionTests
         Assert.Contains("$__psbash_eval_src = @('export', ", ps);
         Assert.Contains("Invoke-BashPrintf '%s ' \"$(if ($null -eq $__psbash_declw) { '' } else { [PsBash.Cmdlets.BashQuoteText]::ForReuse($__psbash_declw) })\"", ps);
         Assert.DoesNotContain("Invoke-BashExport", ps);
+    }
+
+    // Oracle: `v=QQ; export "$v"; declare -p QQ` and `export NIX${pfx}+=" -L"` (twice) give declare -x. The run-time
+    // eval quotes each field, so the eval text is `export 'QQ'` / `export 'NIX_foo+= -L'`: a quoted plain name is a
+    // declaration (it was "export: command not found") and a quoted NAME+=VALUE appends (it set a variable "NIX_foo+").
+    [Fact]
+    public void Transpile_QuotedDeclarationOperandInEvalText_IsAPlainNameAndCanAppend()
+    {
+        var name = BashTranspiler.Transpile("export 'QQ'", TranspileContext.Eval);
+        Assert.Contains("[PsBash.Cmdlets.BashShellState]::MarkAttribute('QQ', 'x')", name);
+        Assert.DoesNotContain("export 'QQ'", name);
+        var append = BashTranspiler.Transpile("export 'QQ+= -L'", TranspileContext.Eval);
+        Assert.Contains("if ($__psbN.EndsWith('+')) { $__psbN = $__psbN.Substring(0, $__psbN.Length - 1); $__psbV = [string][Environment]::GetEnvironmentVariable($__psbN) + $__psbV }", append);
+        // Oracle: `two='b c'; readonly $two; b=new` is status 1; the eval text `readonly 'b' 'c'` marked nothing.
+        Assert.Contains("[PsBash.Cmdlets.BashShellState]::MarkReadonly('c')", BashTranspiler.Transpile("readonly 'b' 'c'", TranspileContext.Eval));
+        // A quoted operand that is not a plain name keeps its old path (no declaration is made of it).
+        Assert.DoesNotContain("MarkAttribute('a-b'", BashTranspiler.Transpile("export 'a-b'", TranspileContext.Eval));
     }
 
     // Oracle: `shopt -s inherit_errexit; set -e; x=$(false; echo no)` leaves x empty and exits 1. The substitution
