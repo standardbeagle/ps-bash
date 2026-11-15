@@ -1,3 +1,4 @@
+using System.Management.Automation;
 using System.Management.Automation.Runspaces;
 using System.Runtime.CompilerServices;
 
@@ -35,7 +36,17 @@ public sealed class VarFrameStack
     /// <summary>The shell-function call depth (0 at top level).</summary>
     public int Depth { get; private set; }
 
-    public void Enter() => Depth++;
+    /// <summary>The source line of the statement running now (set by the emitted code of a script that reads BASH_LINENO).</summary>
+    public int Line { get; set; }
+
+    /// <summary>The line each active function was called from, outermost first (BASH_LINENO, reversed).</summary>
+    private readonly List<int> _callLines = new();
+
+    public void Enter()
+    {
+        _callLines.Add(Line);
+        Depth++;
+    }
 
     /// <summary>The function at the current depth returns: its frames go (their values are restored by the caller's code).</summary>
     public void Exit()
@@ -43,6 +54,21 @@ public sealed class VarFrameStack
         if (Depth == 0) return;
         foreach (var list in _frames.Values) list.RemoveAll(f => f.Depth >= Depth);
         Depth--;
+        // The caller goes on at its call: a call inside the same statement (`f $(g)`) is still made from that line.
+        if (_callLines.Count > 0) { Line = _callLines[^1]; _callLines.RemoveAt(_callLines.Count - 1); }
+    }
+
+    /// <summary>
+    /// BASH_LINENO: the line each active function was called from, innermost first, then 0 for the script itself
+    /// (<paramref name="inScriptFile"/>; <c>bash -c</c> and the interactive shell have no such frame, as FUNCNAME's main).
+    /// </summary>
+    public string[] CallLines(bool inScriptFile)
+    {
+        var result = new string[_callLines.Count + (inScriptFile ? 1 : 0)];
+        for (int i = 0; i < _callLines.Count; i++)
+            result[i] = _callLines[_callLines.Count - 1 - i].ToString(System.Globalization.CultureInfo.InvariantCulture);
+        if (inScriptFile) result[^1] = "0";
+        return result;
     }
 
     /// <summary>A temp binding <c>name=value cmd</c> starts; <paramref name="hidden"/> is the value it hides.</summary>
@@ -138,7 +164,7 @@ public sealed class VarFrameStack
         return current;
     }
 
-    public void Clear() { _frames.Clear(); _bindings.Clear(); _unsetTemps.Clear(); Depth = 0; }
+    public void Clear() { _frames.Clear(); _bindings.Clear(); _unsetTemps.Clear(); _callLines.Clear(); Line = 0; Depth = 0; }
 
     /// <summary>A copy of the frames, for a subshell to put back when it ends (BashShellState.Save/Restore).</summary>
     public sealed class Saved
@@ -153,7 +179,7 @@ public sealed class VarFrameStack
     /// </summary>
     public Saved Save()
     {
-        var copy = new VarFrameStack { Depth = Depth };
+        var copy = new VarFrameStack { Depth = Depth, Line = Line };
         CopyInto(this, copy);
         return new Saved(copy);
     }
@@ -161,6 +187,7 @@ public sealed class VarFrameStack
     public void Restore(Saved saved)
     {
         Depth = saved.Copy.Depth;
+        Line = saved.Copy.Line;
         CopyInto(saved.Copy, this);
     }
 
@@ -178,6 +205,8 @@ public sealed class VarFrameStack
         to._bindings.AddRange(from._bindings);
         to._unsetTemps.Clear();
         to._unsetTemps.UnionWith(from._unsetTemps);
+        to._callLines.Clear();
+        to._callLines.AddRange(from._callLines);
         // Ids stay unique across the restore: a frame pushed after it never reuses one a saved frame holds.
         to._nextId = Math.Max(to._nextId, from._nextId);
     }
@@ -205,6 +234,19 @@ public sealed class VarFrameStack
     // turns a $null passed to a string parameter into "", and an unset name must stay null.
     public static void EnterFunction() => Current.Enter();
     public static void ExitFunction() => Current.Exit();
+    /// <summary>The statement on <paramref name="line"/> starts (only a script that reads BASH_LINENO records it).</summary>
+    public static void SetLine(int line) => Current.Line = line;
+    /// <summary>The value of <c>${BASH_LINENO[@]}</c>; <paramref name="bashSource"/> is <c>$global:BASH_SOURCE</c> (non-empty in a script file).</summary>
+    public static string[] BashLineNo(object? bashSource) => Current.CallLines(InScriptFile(bashSource));
+
+    internal static bool InScriptFile(object? bashSource)
+    {
+        if (bashSource is PSObject w) bashSource = w.BaseObject;
+        if (bashSource is null) return false;
+        if (bashSource is string s) return s.Length > 0;
+        if (bashSource is System.Collections.ICollection c) return c.Count > 0;
+        return true;
+    }
     public static long Temp(string name, object? hidden, bool functionCall) => Current.PushTemp(name, hidden?.ToString(), functionCall);
     /// <summary>A function call's temp binding ends: the value the name is left with (<paramref name="saved"/>, or <paramref name="current"/> after <c>unset</c> took the frame).</summary>
     public static string? EndTemp(string name, long id, object? saved, object? current)

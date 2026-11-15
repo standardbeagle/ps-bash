@@ -268,4 +268,24 @@ public class VarFrameStackTests
         s.Exit();
         Assert.Equal(0, s.Depth);
     }
+    /// <summary>
+    /// BASH_LINENO: each Enter records the line of the statement that called; Exit puts the caller back on that line,
+    /// so a second call in the same statement (<c>f $(g)</c>) still reports it. A script file adds 0 for main.
+    /// </summary>
+    [Fact]
+    public void CallLines_AreTheCallSites_InnermostFirst()
+    {
+        var s = new VarFrameStack();
+        Assert.Equal(new[] { "0" }, s.CallLines(inScriptFile: true));
+        Assert.Empty(s.CallLines(inScriptFile: false));
+        s.Line = 9; s.Enter();           // h called on line 9
+        s.Line = 4; s.Enter();           // g called on line 4 inside h
+        Assert.Equal(new[] { "4", "9", "0" }, s.CallLines(inScriptFile: true));
+        s.Line = 1; s.Exit();            // g ran its own line 1, then returned
+        Assert.Equal(4, s.Line);
+        Assert.Equal(new[] { "9" }, s.CallLines(inScriptFile: false));
+        s.Exit();
+        Assert.Equal(9, s.Line);
+        Assert.Empty(s.CallLines(inScriptFile: false));
+    }
 }

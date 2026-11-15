@@ -161,6 +161,19 @@ public static class BashTranspiler
         });
 
     /// <summary>
+    /// The text of a <c>trap ACTION SIGNAL</c> action (eval context): for ERR and DEBUG it is emitted with the
+    /// statement checks and DEBUG leads bash applies inside a trap action (<see cref="PsEmitter.TrapActionSignal"/>).
+    /// </summary>
+    public static string TranspileTrapAction(string action, string signal)
+        => Guarded(() =>
+        {
+            // Set here, inside Guarded: the flag is per-thread and Guarded may move to a large-stack worker.
+            PsEmitter.TrapActionSignal = signal is "ERR" or "DEBUG" ? signal : null;
+            try { return TranspileCore(action, TranspileContext.Eval); }
+            finally { PsEmitter.TrapActionSignal = null; }
+        });
+
+    /// <summary>
     /// Every public entry runs here. The lexer/parser/emitter recursion is bounded by
     /// <see cref="NestingGuard"/>, so no input can overflow the stack (the transpiler runs inside the
     /// shared host for eval/source, where an overflow killed the daemon). Inline on the caller's thread;

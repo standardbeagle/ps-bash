@@ -78,6 +78,15 @@ public static partial class PsEmitter
     public static bool InheritedPipefail;
     [ThreadStatic]
     public static bool InheritedNounset;
+
+    /// <summary>
+    /// Set by <c>trap</c> while it transpiles an action for this signal (ERR, DEBUG). bash runs the action's commands
+    /// like any others: a failing one runs the ERR trap and errexit (except inside the ERR action itself), and the DEBUG
+    /// trap runs before each of them (except inside the DEBUG action). So the action text gets the statement checks and,
+    /// for a signal other than DEBUG, the DEBUG leads, whether or not it mentions <c>set -e</c> or <c>trap</c>.
+    /// </summary>
+    [ThreadStatic]
+    public static string? TrapActionSignal;
     [ThreadStatic]
     private static HashSet<string>? _collectScalarLocals;
 
@@ -304,6 +313,14 @@ public static partial class PsEmitter
     [ThreadStatic]
     private static int _errexitExemptDepth;
 
+    /// <summary>Nesting of negated statements being emitted: names each one's run-time suppression mark.</summary>
+    [ThreadStatic]
+    private static int _negatedDepth;
+
+    /// <summary>Set while a negated statement emits its pipeline: that pipeline is suppressed at run time, not here.</summary>
+    [ThreadStatic]
+    private static bool _negationGuardedAtRuntime;
+
     /// <summary>The script sets an ERR trap and errtrace: the trap runs inside `` too (EmitCapturedCore).</summary>
     [ThreadStatic]
     private static bool _errtraceMode;
@@ -459,6 +476,18 @@ public static partial class PsEmitter
 
     private static string EmitStatementCore(Command cmd)
     {
+        // A script that reads BASH_LINENO records each statement's line: a function it calls reports it.
+        if (_bashLinenoMode && (cmd is Command.Simple { Line: > 0 } ls ? ls.Line : FirstSimpleLine(cmd)) is > 0 and var callLine)
+            return PsBuild.SetCallLine(_lineBase + callLine) + EmitStatementCoreBody(cmd);
+        return EmitStatementCoreBody(cmd);
+    }
+
+    /// <summary>The script reads BASH_LINENO: statements record their line for the functions they call.</summary>
+    [ThreadStatic]
+    private static bool _bashLinenoMode;
+
+    private static string EmitStatementCoreBody(Command cmd)
+    {
         _priorTrapLine = PsBuild.TrapLine;
         if (cmd is Command.Simple { Line: > 0 } lined) PsBuild.TrapLine = _lineBase + lined.Line;
         else if (LastSimpleLine(cmd) is > 0 and var lastLine) PsBuild.TrapLine = _lineBase + lastLine;
@@ -481,7 +510,7 @@ public static partial class PsEmitter
 
     /// <summary>The DEBUG run for a command on <paramref name="line"/>, or "" (no line, or DEBUG not active here).</summary>
     private static string DebugAt(int line) =>
-        line > 0 && DebugActive ? PsBuild.DebugTrapRun(line, _errexitMode ? ErrexitExitStatement() : null) : "";
+        (line > 0 || PsBuild.InTrapAction) && DebugActive ? PsBuild.DebugTrapRun(line, _errexitMode ? ErrexitExitStatement() : null) : "";
 
     /// <summary>The DEBUG runs bash makes as <paramref name="cmd"/> starts: one per simple command it runs first.</summary>
     private static string DebugLead(Command cmd) => cmd switch
@@ -562,7 +591,16 @@ public static partial class PsEmitter
             case Command.AndOrList andOr:
                 return EmitAndOrStatement(andOr);
             case Command.Pipeline { Negated: true }:
-                return PsBuild.ErrexitSuppressed(WithErrexitExempt(() => Emit(cmd)));
+            {
+                // bash ignores errexit under `!` only when it is on as the pipeline starts: a `set -e` run inside a
+                // function or group under `!` (`f() { set -e; false; echo x; }; ! f`) takes effect at once. So the
+                // body keeps its checks and the suppression is decided at run time.
+                int depth = _negatedDepth++;
+                bool priorGuard = _negationGuardedAtRuntime;
+                _negationGuardedAtRuntime = true;
+                try { return PsBuild.ErrexitSuppressedIfOn(Emit(cmd), "$__psbNeg" + depth); }
+                finally { _negatedDepth--; _negationGuardedAtRuntime = priorGuard; }
+            }
             case Command.Pipeline pipeline:
             {
                 // Every stage is a subshell in bash: a failure INSIDE a stage never ends the
@@ -914,6 +952,17 @@ public static partial class PsEmitter
         _trapMode = System.Text.RegularExpressions.Regex.IsMatch(bash, @"\btrap\b");
         _xtraceMode = System.Text.RegularExpressions.Regex.IsMatch(bash, @"\bset\s+(?:-[a-zA-Z]+\s+)*(?:-[a-zA-Z]*x|-o\s+xtrace)");
         _pipefailMode = priorPipefail || InheritedPipefail || bash.Contains("pipefail", StringComparison.Ordinal) || bash.Contains("PIPESTATUS", StringComparison.Ordinal);
+        var priorBashLineno = _bashLinenoMode;
+        _bashLinenoMode = priorBashLineno || bash.Contains("BASH_LINENO", StringComparison.Ordinal);
+        var trapSignal = TrapActionSignal;
+        TrapActionSignal = null;
+        var priorInTrapAction = PsBuild.InTrapAction;
+        PsBuild.InTrapAction = trapSignal is not null;
+        if (trapSignal is not null)
+        {
+            _errexitMode = true;
+            if (trapSignal != "DEBUG") _debugTrapMode = true;
+        }
         try
         {
             Command? cmd;
@@ -985,6 +1034,8 @@ public static partial class PsEmitter
             _trapMode = priorTrap;
             _debugTrapMode = priorDebugTrap;
             _declarePrintMode = priorDeclarePrint;
+            PsBuild.InTrapAction = priorInTrapAction;
+            _bashLinenoMode = priorBashLineno;
         }
     }
 
@@ -9893,6 +9944,7 @@ public static partial class PsEmitter
                     "BASH_VERSINFO" => "$global:BashVersionInfo",
                     "BASH_SOURCE" => "$global:BASH_SOURCE",
                     "FUNCNAME" => "@(Get-BashFuncNames)",
+                    "BASH_LINENO" => "@(" + PsBuild.BashLineNoArray + ")",
                     var n => $"${n}"
                 };
 
@@ -9903,7 +9955,7 @@ public static partial class PsEmitter
                     // A SCALAR (`s=abc`) lives in the environment, not in a PowerShell variable: `${s[@]}` / `${s[0]}` are
                     // the scalar itself (bash treats it as a one-element array).
                     string whole = bvs.Name.All(c => char.IsAsciiLetterOrDigit(c) || c == '_') && !char.IsAsciiDigit(bvs.Name[0])
-                        && bvs.Name is not ("BASH_VERSINFO" or "BASH_SOURCE" or "FUNCNAME")
+                        && bvs.Name is not ("BASH_VERSINFO" or "BASH_SOURCE" or "FUNCNAME" or "BASH_LINENO")
                         ? $"$(if ($null -ne {arrayVar}) {{ {arrayVar} }} else {{ {EmitSimpleVar(bvs.Name)} }})"
                         : arrayVar;
                     if (subscript == "0" && !ReferenceEquals(whole, arrayVar))
@@ -10016,7 +10068,7 @@ public static partial class PsEmitter
             string subscript = bvs.Suffix[3..^1]; // strip #L[ and ]
             if (subscript is "@" or "*")
             {
-                string lenArr = bvs.Name switch { "FUNCNAME" => "@(Get-BashFuncNames)", "BASH_VERSINFO" => "$global:BashVersionInfo", _ => $"${bvs.Name}" };
+                string lenArr = bvs.Name switch { "FUNCNAME" => "@(Get-BashFuncNames)", "BASH_LINENO" => "@(" + PsBuild.BashLineNoArray + ")", "BASH_VERSINFO" => "$global:BashVersionInfo", _ => $"${bvs.Name}" };
                 // Always a subexpression: bare `$a.Count` glued to a literal (`len=${#a[@]}`) expands only `$a`.
                 // A scalar (`s=abc`, an env var) is a one-element array: `${#s[@]}` is 1.
                 if (lenArr.AsSpan(1).IndexOfAnyExcept(VarNameChars) < 0 && bvs.Name.Length > 0)
@@ -11219,8 +11271,11 @@ public static partial class PsEmitter
             finally { _timeDepth--; }
         }
         var entryScope = _inStdinScope;
-        // Each stage of a real pipeline is a subshell in bash: errexit inside one never ends the script.
-        bool exempt = pipeline.Commands.Length > 1 || pipeline.Negated;
+        // Each stage of a real pipeline is a subshell in bash: errexit inside one never ends the script. A negated
+        // statement decides its suppression at run time (EmitStatementBody); its body keeps the checks.
+        bool runtimeNegation = _negationGuardedAtRuntime;
+        _negationGuardedAtRuntime = false;
+        bool exempt = pipeline.Commands.Length > 1 || (pipeline.Negated && !runtimeNegation);
         if (exempt) _errexitExemptDepth++;
         try { return EmitPipelineStages(pipeline, entryScope); }
         finally

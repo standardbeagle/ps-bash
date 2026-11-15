@@ -428,4 +428,39 @@ public class PsBuildTests
         Assert.True(PsBuild.CanAbandonLine(PsBuild.ExpansionError("'x: '", "'bad substitution'")));
         Assert.False(PsBuild.CanAbandonLine("Invoke-BashEcho x"));
     }
+    [Fact]
+    public void ErrexitSuppressedIfOn_SuppressesOnlyWhenErrexitIsOnAsItStarts()
+    {
+        // `f() { set -e; false; }; ! f` exits: bash ignores errexit under `!` only when -e was on before the pipeline.
+        Assert.Equal("$m = [bool]$global:__BashErrexit; if ($m) { $global:__BashErrexitSuppress++ }; try { f } finally { if ($m) { $global:__BashErrexitSuppress-- } }",
+            PsBuild.ErrexitSuppressedIfOn("f", "$m"));
+    }
+
+    [Fact]
+    public void SetCallLine_RecordsTheStatementLineForBashLineno()
+        => Assert.Equal("[PsBash.Cmdlets.VarFrameStack]::SetLine(7); ", PsBuild.SetCallLine(7));
+
+    [Fact]
+    public void ErrTrapCheck_DoesNotRunTheActionInsideItself()
+    {
+        string check = PsBuild.ErrTrapCheck();
+        Assert.Contains("-and -not $global:__BashInErr", check);
+        Assert.Contains("$global:__BashInErr = $true; try { & $global:__BashTrapERR } finally { $global:__BashInErr = $false }", check);
+    }
+
+    [Fact]
+    public void TrapRuns_InsideTrapActionText_KeepTheFiringCommandsLine()
+    {
+        int priorLine = PsBuild.TrapLine;
+        PsBuild.TrapLine = 9;
+        try
+        {
+            Assert.Contains("$env:__psbLine = 9;", PsBuild.ErrTrapCheck());
+            Assert.Contains("$env:__psbLine = 9;", PsBuild.DebugTrapRun(9));
+            PsBuild.InTrapAction = true;
+            Assert.DoesNotContain("__psbLine", PsBuild.ErrTrapCheck());
+            Assert.DoesNotContain("__psbLine", PsBuild.DebugTrapRun(9));
+        }
+        finally { PsBuild.InTrapAction = false; PsBuild.TrapLine = priorLine; }
+    }
 }

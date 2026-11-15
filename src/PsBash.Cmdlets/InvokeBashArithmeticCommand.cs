@@ -247,6 +247,12 @@ public sealed class InvokeBashArithmeticCommand : PSCmdlet
 
     private string? ReadRawVar(string name)
     {
+        // BASH_LINENO is the runtime's call-line stack, not a stored variable (`$((BASH_LINENO))` is element 0).
+        if (name == "BASH_LINENO")
+        {
+            var lines = VarFrameStack.BashLineNo(SessionState.PSVariable.GetValue("global:BASH_SOURCE"));
+            return lines.Length > 0 ? lines[0] : null;
+        }
         if (TrySplitElement(name, out var elemBase, out var elemSub)) return ReadElement(elemBase, elemSub);
         // PowerShell variable first (loop variables are emitted as $name).
         try

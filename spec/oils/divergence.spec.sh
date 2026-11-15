@@ -91,7 +91,7 @@ hey
 status=0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-path-shebang-script an extensionless #!/usr/bin/env sh script found on PATH does not run (the case times out)
+## XFAIL ps-bash gap-path-shebang-script the PATH #! scripts run and print the right output, but each one starts a nested ps-bash process (~3s on a per-invocation host), so six runs exceed the 10s timeout
 ## timeout: 10
 
 #### builtin cat crashes a subshell (#2530)

@@ -27,6 +27,8 @@ internal sealed class Connection
         "$global:BashPositional = $null; " +
         "$global:BashPositional0 = $null; " +
         "$global:BASH_SOURCE = @(); " +
+        // `unset SHELL` hides the startup SHELL for the rest of that shell only.
+        "$global:__BashShellUnset = $false; " +
         // Descriptors opened by `exec N<file` belong to one invocation.
         "try { Clear-BashFd } catch { } ";
 

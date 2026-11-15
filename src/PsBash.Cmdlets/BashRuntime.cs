@@ -22,6 +22,43 @@ namespace PsBash.Cmdlets;
 /// </summary>
 public static class BashRuntime
 {
+    private static string? _defaultShell;
+
+    /// <summary>
+    /// <c>$SHELL</c> when the environment has none: bash sets it at startup (not exported) to the login shell of the
+    /// user's passwd entry. On Unix that entry's shell (<c>/bin/sh</c> when it cannot be read); on Windows, which has no
+    /// passwd, this shell itself: the <c>ps-bash</c> launcher beside the running process.
+    /// </summary>
+    public static string DefaultShell() => _defaultShell ??= ComputeDefaultShell();
+
+    private static string ComputeDefaultShell()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            try
+            {
+                string user = Environment.UserName;
+                foreach (var line in System.IO.File.ReadLines("/etc/passwd"))
+                {
+                    var fields = line.Split(':');
+                    if (fields.Length >= 7 && fields[0] == user && fields[6].Length > 0) return fields[6];
+                }
+            }
+            catch (System.IO.IOException) { }
+            catch (UnauthorizedAccessException) { }
+            return "/bin/sh";
+        }
+        string? self = Environment.ProcessPath;
+        if (string.IsNullOrEmpty(self)) return "ps-bash";
+        string? dir = System.IO.Path.GetDirectoryName(self);
+        if (dir is not null)
+        {
+            string launcher = System.IO.Path.Combine(dir, "ps-bash.exe");
+            if (System.IO.File.Exists(launcher)) return launcher;
+        }
+        return self;
+    }
+
     /// <summary>
     /// Parse a numeric count/width flag value without the <see cref="int.Parse(string)"/>
     /// overflow-crash trap. Joined flag forms (e.g. <c>head -n99999999999</c>, <c>grep -A9…9</c>)

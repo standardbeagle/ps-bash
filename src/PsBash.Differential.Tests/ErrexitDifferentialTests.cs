@@ -153,4 +153,23 @@ public class ErrexitDifferentialTests
         => Eq("cd \"$(mktemp -d)\"; set -o noclobber; echo a > f; { echo b > f; } 2>/dev/null; echo s=$?; cat f");
     [SkippableFact]
     public Task Errexit_BackgroundJob_IsExempt() => Eq($"set -e; {F} & wait; echo after");
+
+    // `!` ignores errexit only when it is on as the negated pipeline starts (bash sets CMD_IGNORE_RETURN then).
+    // Turned on inside, by a function or a group under `!`, it takes effect at once; ps-bash kept it suppressed.
+    [SkippableFact]
+    public Task Errexit_SetInsideFunctionUnderBang_TakesEffect()
+        => Eq("f() { set -e; false; echo never; }\n! f\necho never2");
+
+    [SkippableFact]
+    public Task Errexit_SetInsideGroupUnderBang_TakesEffect()
+        => Eq("! { set -e; false; echo never; }\necho never2");
+
+    [SkippableFact]
+    public Task Errexit_OnBeforeBang_StaysIgnoredInside()
+        => Eq("set -e; g() { false; echo g-continues; }; ! g; echo \"after $?\"; ! { false; echo grp; }; echo \"after $?\"");
+
+    // With errexit off the commands of a negated group are not exempt from the ERR trap (bash runs it for the false).
+    [SkippableFact]
+    public Task ErrTrap_InsideNegatedGroup_RunsWhenErrexitOff()
+        => Eq("trap 'echo ERR' ERR; ! { false; echo x; }; echo \"after $?\"; set -e; ! { false; echo y; }; echo \"after $?\"");
 }

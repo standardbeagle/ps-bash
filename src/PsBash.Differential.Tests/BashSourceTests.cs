@@ -54,6 +54,17 @@ public class BashSourceTests
         Assert.Equal("same\nin-fn\n", r.Stdout.Replace("\r\n", "\n"));
     }
 
+    // BASH_LINENO: the line each active function was CALLED from, innermost first, then 0 for the script itself (a
+    // script FILE only, as FUNCNAME's main); a call inside $( ) reports its own line. ps-bash had none (0 / empty).
+    [SkippableTheory]
+    [InlineData(PsBashMode.M3_FileArg, "top 1 0\nH 9 0 9 9 9\nG 4 9 0 3\nG 5 9 0 3\n")]
+    [InlineData(PsBashMode.M1_CFlag, "top 0\nH 9 9 9 9\nG 4 9 2\nG 5 9 2\n")]
+    public async Task BashLineno_IsTheCallLineStack(PsBashMode mode, string expected)
+    {
+        var r = await RunAsync("g() { echo G ${BASH_LINENO[@]} ${#BASH_LINENO[@]}; }\nh() {\n  echo H ${BASH_LINENO[@]} $BASH_LINENO $((BASH_LINENO)) ${BASH_LINENO[0]}\n  g\n  x=$(g)\n  echo $x\n}\necho top ${#BASH_LINENO[@]} ${BASH_LINENO[@]}\nh\n", mode);
+        Assert.Equal(expected, r.Stdout.Replace("\r\n", "\n"));
+    }
+
     // FUNCNAME ends with `main` only in a script FILE; `bash -c` has no main frame (it printed `2 f main`).
     [SkippableTheory]
     [InlineData(PsBashMode.M3_FileArg, "2 f main\n")]

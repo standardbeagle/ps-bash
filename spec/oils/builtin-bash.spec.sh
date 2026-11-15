@@ -93,7 +93,7 @@ help: help [-dms] [pattern ...]
     Returns success unless PATTERN is not found or an invalid option is given.
 ## END
 ## status: 0
-## XFAIL ps-bash gap-help-builtin-text help prints its own command summary, not bash's builtin list and help text
+## XFAIL ps-bash gap-help-builtin-text help prints its own command summary, not bash's builtin list and help text (that text is bash's GPL-3 builtins/*.def documentation, not embeddable in MIT ps-bash; the first line also names the recording bash, 5.2.21 on x86_64-pc-linux-gnu, where ps-bash reports 5.2.37)
 ## timeout: 10
 
 #### mapfile

@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 1
+script-length: 108
+stdout-length: 15
+stderr-length: 0
+==== SCRIPT ====
+unset SHELL; echo "[$SHELL] ${SHELL-unset}"; bash -c 'test -n "$SHELL" && echo set; env | grep -c "^SHELL="'
+==== STDOUT ====
+[] unset
+set
+0
+
+==== STDERR ====
+

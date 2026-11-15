@@ -5845,7 +5845,7 @@ public class PsEmitterTests
         var ps = PsEmitter.Transpile("trap 'echo $LINENO' ERR\nx=$(false; true)")!;
         Assert.DoesNotContain("$global:__BashErrexit = $false", ps);
         // One check after `trap`, one after the assignment; none between `false` and `true`.
-        Assert.Equal(2, System.Text.RegularExpressions.Regex.Matches(ps, @"& \$global:__BashTrapERR;").Count);
+        Assert.Equal(2, System.Text.RegularExpressions.Regex.Matches(ps, @"& \$global:__BashTrapERR\b").Count);
     }
 
     [Fact]
@@ -5886,7 +5886,35 @@ public class PsEmitterTests
     {
         // One check after `trap` itself, then the pipeline's: bash runs the trap twice when the last stage is `( )`.
         var ps = PsEmitter.Transpile("trap 'echo x' ERR\n" + pipeline)!;
-        Assert.Equal(checks, System.Text.RegularExpressions.Regex.Matches(ps, @"& \$global:__BashTrapERR;").Count);
+        Assert.Equal(checks, System.Text.RegularExpressions.Regex.Matches(ps, @"& \$global:__BashTrapERR\b").Count);
+    }
+    [Fact]
+    public void Transpile_NegatedPipeline_SuppressesErrexitOnlyWhenOnAsItStarts()
+    {
+        // `f() { set -e; false; echo never; }; ! f` exits in bash: -e turned on inside a `!` takes effect at once.
+        var ps = PsEmitter.Transpile("f() { set -e; false; echo never; }\n! f\necho after")!;
+        Assert.Contains("$__psbNeg0 = [bool]$global:__BashErrexit; if ($__psbNeg0) { $global:__BashErrexitSuppress++ }", ps);
+        // A nested `!` remembers its own decision.
+        Assert.Contains("$__psbNeg1 = [bool]$global:__BashErrexit", PsEmitter.Transpile("set -e\n! { ! false; }"));
+    }
+
+    [Fact]
+    public void Transpile_ScriptReadingBashLineno_RecordsEachStatementsLine()
+    {
+        var ps = PsEmitter.Transpile("f() { echo ${BASH_LINENO[0]}; }\n\nf");
+        Assert.Contains("[PsBash.Cmdlets.VarFrameStack]::SetLine(3); ", ps);
+        Assert.DoesNotContain("SetLine(", PsEmitter.Transpile("f() { echo hi; }\nf"));
+    }
+
+    [Fact]
+    public void TranspileTrapAction_ErrAction_ChecksItsOwnFailures()
+    {
+        // `trap 'false; echo x' ERR` under DEBUG/ERR: the action's commands run the other trap; ERR does not re-enter itself.
+        var ps = PsBash.Core.Transpiler.BashTranspiler.TranspileTrapAction("false; echo x", "ERR");
+        Assert.Contains("& $global:__BashTrapDEBUG", ps);
+        Assert.Contains("& $global:__BashTrapERR", ps);
+        Assert.DoesNotContain("__psbLine =", ps);
+        Assert.DoesNotContain("__BashTrapERR", PsBash.Core.Transpiler.BashTranspiler.TranspileTrapAction("false; echo x", "EXIT"));
     }
     [Fact]
     public void Transpile_RedirectedCompoundTrapLine_IsTheCommandBeforeIt()

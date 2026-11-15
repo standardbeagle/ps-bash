@@ -28,4 +28,18 @@ public class DebugTrapDifferentialTests
     [Fact]
     public Task DebugTrap_FailingActionUnderErrexit_EndsTheScript() => AssertOracle.EqualAsync(
         "set -o errexit\nd() { echo \"  [$1]\"; return 42; }\ntrap 'd $LINENO' DEBUG\necho A\necho B");
+
+    /// <summary>
+    /// A trap action's commands are ordinary commands: a failure in the DEBUG action runs the ERR trap, the DEBUG trap
+    /// runs before each command of the ERR action, and neither action re-runs itself. Both report the line of the
+    /// command the trap fired for. ps-bash ran neither trap inside the other's action.
+    /// </summary>
+    [Fact]
+    public Task DebugAndErrTraps_RunInsideEachOthersActions() => AssertOracle.EqualAsync(
+        "trap 'false; echo $LINENO err' ERR\ntrap 'false; echo $LINENO debug' DEBUG\n\nfalse\necho after=$?");
+
+    /// <summary>Under <c>set -e</c> a failing command inside the ERR action ends the script there (bash: no <c>x</c>, status 1).</summary>
+    [Fact]
+    public Task ErrAction_FailingCommandUnderErrexit_EndsTheScript() => AssertOracle.EqualAsync(
+        "set -e\ntrap 'false; echo x' ERR\nfalse\necho after");
 }

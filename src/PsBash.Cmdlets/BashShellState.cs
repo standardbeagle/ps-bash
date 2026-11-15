@@ -95,7 +95,7 @@ public static class BashShellState
         "__BashErrexit", "__BashErrexitSuppress", "__BashErrexitTail", "__BashXtrace", "__BashVerbose", "__BashNoglob", "__BashPipefail", "__BashNounset", "__BashNoclobber", "__BashErrtrace",
         "BashFlags", "BashPositional", "BashPositional0", "BASH_REMATCH", "BASH_SOURCE",
         "BashTrapHandlers", "__BashTrapERR", "__BashTrapEXIT", "__BashTrapRETURN", "BashBgLastPid",
-        "BashUserAliases", "BashLastArg", "BashDirStack",
+        "BashUserAliases", "BashLastArg", "BashDirStack", "__BashShellUnset",
     ];
 
     /// <summary>Every shell-state global, for the inventory guard (<see cref="BashStateSnapshot"/>).</summary>

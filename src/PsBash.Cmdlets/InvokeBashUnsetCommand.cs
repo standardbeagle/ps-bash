@@ -203,6 +203,9 @@ public sealed class InvokeBashUnsetCommand : PSCmdlet
                     "if (Test-Path ('Env:\\' + $n)) { Remove-Item -Path ('Env:\\' + $n) -Force -ErrorAction SilentlyContinue } " +
                     "elseif (-not $isVar -and -not $explicitVar -and -not $n.Contains('[')) { Remove-Item -Path ('Function:\\' + $n) -Force -ErrorAction SilentlyContinue }",
                     name, explicitVar);
+                // SHELL has a startup value even when the environment lacks it (PsBuild maps a read of it to
+                // BashRuntime.DefaultShell); once unset it reads as unset, as in bash.
+                if (name == "SHELL") SessionState.PSVariable.Set("global:__BashShellUnset", true);
             }
         }
     }

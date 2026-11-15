@@ -206,7 +206,7 @@ public sealed class InvokeBashTrapCommand : PSCmdlet
                 var slotName = "__BashTrap" + signal;
                 InvokeCommand.InvokeScript(
                     "param($name, $a) Set-Variable -Name $name -Value ([scriptblock]::Create($a)) -Scope Global -Force",
-                    slotName, TranspileAction(action!));
+                    slotName, TranspileAction(action!, signal));
             }
         }
     }
@@ -218,10 +218,10 @@ public sealed class InvokeBashTrapCommand : PSCmdlet
     }
 
     /// <summary>The action is bash text (<c>$?</c>, <c>$((..))</c>, ...), so it runs transpiled; text that does not parse runs as written.</summary>
-    internal static string TranspileAction(string action)
+    internal static string TranspileAction(string action, string? signal = null)
     {
         action = action.Replace("${LINENO}", "$__psbLine").Replace("$LINENO", "$__psbLine");
-        try { return PsBash.Core.Transpiler.BashTranspiler.Transpile(action, PsBash.Core.Transpiler.TranspileContext.Eval) ?? action; }
+        try { return PsBash.Core.Transpiler.BashTranspiler.TranspileTrapAction(action, signal ?? "") ?? action; }
         catch (Exception)
         {
             // Text that is neither bash nor PowerShell (`trap 'echo <' EXIT`) is still stored, as bash does: the

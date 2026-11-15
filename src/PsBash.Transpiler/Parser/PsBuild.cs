@@ -597,9 +597,11 @@ public static class PsBuild
         + "; if ($global:__BashRedirectFailed) { $global:__BashRedirectFailed = $false; $global:LASTEXITCODE = 1; " + check + " }";
 
     public static string ErrTrapCheck(string status = "$global:LASTEXITCODE") =>
-        "if (" + status + " -ne 0 -and -not " + ErrexitSuppressVar + (ErrTrapNeedsErrtrace ? " -and $global:__BashErrtrace" : "") + " -and (Test-Path variable:global:__BashTrapERR) -and $global:__BashTrapERR) { "
-        + "$__psbErr = " + status + "; " + (TrapLine > 0 ? "$env:__psbLine = " + TrapLine + "; " : "")
-        + "& $global:__BashTrapERR; $global:LASTEXITCODE = $__psbErr }; ";
+        "if (" + status + " -ne 0 -and -not " + ErrexitSuppressVar + (ErrTrapNeedsErrtrace ? " -and $global:__BashErrtrace" : "") + " -and -not $global:__BashInErr -and (Test-Path variable:global:__BashTrapERR) -and $global:__BashTrapERR) { "
+        + "$__psbErr = " + status + "; " + (TrapLine > 0 && !InTrapAction ? "$env:__psbLine = " + TrapLine + "; " : "")
+        // The action does not run itself again (a failing command in it is not an ERR), and a DEBUG action that fails
+        // runs it (InTrapAction text carries the checks).
+        + "$global:__BashInErr = $true; try { & $global:__BashTrapERR } finally { $global:__BashInErr = $false }; $global:LASTEXITCODE = $__psbErr }; ";
 
     /// <summary>
     /// The current value an array append (<c>s+=(x)</c>, <c>declare -A s+=([k]=v)</c>) builds on: the array, else the
@@ -662,7 +664,7 @@ public static class PsBuild
     /// </summary>
     public static string DebugTrapRun(int line, string? errexitExit = null) =>
         "if ((Test-Path variable:global:__BashTrapDEBUG) -and $global:__BashTrapDEBUG -and -not $global:__BashInDebug) { "
-        + "$global:__BashInDebug = $true; $__psbDbg = $global:LASTEXITCODE; $env:__psbLine = " + line + "; "
+        + "$global:__BashInDebug = $true; $__psbDbg = $global:LASTEXITCODE; " + (line > 0 && !InTrapAction ? "$env:__psbLine = " + line + "; " : "")
         + "try { & $global:__BashTrapDEBUG } finally { $global:__BashInDebug = $false }; "
         + (errexitExit is null ? "" : "if (" + ErrexitArmed + " -and $global:LASTEXITCODE -ne 0) { " + errexitExit + " }; ")
         + "$global:LASTEXITCODE = $__psbDbg }; ";
@@ -688,6 +690,19 @@ public static class PsBuild
         + "if ([PsBash.Cmdlets.InvokeBashShoptCommand]::SetOptionOn('vi')) { $o += 'vi' }; "
         + "if ($global:__BashXtrace) { $o += 'xtrace' }; $o -join ':'";
 
+    /// <summary>
+    /// Emitting the text of a trap action (<see cref="PsEmitter.TrapActionSignal"/>): the ERR / DEBUG runs inside it keep
+    /// the <c>$LINENO</c> of the command the trap fired for (bash: the action's commands report that line), so they do
+    /// not set it from the action's own line numbers.
+    /// </summary>
+    [ThreadStatic] public static bool InTrapAction;
+
+    /// <summary><c>${BASH_LINENO[@]}</c>: the line each active function was called from, innermost first (then 0 in a script file).</summary>
+    public const string BashLineNoArray = "[PsBash.Cmdlets.VarFrameStack]::BashLineNo($global:BASH_SOURCE)";
+
+    /// <summary>A statement on <paramref name="line"/> starts: a function it calls reports that line in BASH_LINENO.</summary>
+    public static string SetCallLine(int line) => "[PsBash.Cmdlets.VarFrameStack]::SetLine(" + line + "); ";
+
     /// <summary>Source line of the statement being emitted; the ERR trap reads it as <c>$LINENO</c>.</summary>
     [ThreadStatic] public static int TrapLine;
 
@@ -700,6 +715,15 @@ public static class PsBuild
     /// </summary>
     public static string ErrexitSuppressed(string statements) =>
         ErrexitSuppressVar + "++; try { " + statements + " } finally { " + ErrexitSuppressVar + "-- }";
+
+    /// <summary>
+    /// A negated pipeline (<c>! cmd</c>) at statement position: bash ignores errexit inside it only when <c>set -e</c> is
+    /// on as it starts. Turned on inside (<c>f() { set -e; false; }; ! f</c>) it takes effect at once.
+    /// <paramref name="mark"/> is a variable unique to this nesting level that remembers whether it suppressed.
+    /// </summary>
+    public static string ErrexitSuppressedIfOn(string statements, string mark) =>
+        mark + " = [bool]$global:__BashErrexit; if (" + mark + ") { " + ErrexitSuppressVar + "++ }; try { " + statements
+        + " } finally { if (" + mark + ") { " + ErrexitSuppressVar + "-- } }";
 
     /// <summary>
     /// A command substitution's body under <c>set -e</c> in a script that mentions <c>inherit_errexit</c>: its statements
@@ -1349,6 +1373,9 @@ public static class PsBuild
                 // Outside a function it is unset: empty, or "unbound variable" under `set -u`.
                 return "$($__psbash_fn = @(Get-BashFuncNames)[0]; if ($null -eq $__psbash_fn -and $global:__BashNounset) { "
                     + ParamErrorThrowStatements(SingleQuote("FUNCNAME: "), "'unbound variable'") + " }; $__psbash_fn)";
+            case "BASH_LINENO":
+                // Element 0 of the call-line stack: the line the running function was called from.
+                return "$(@(" + BashLineNoArray + ")[0])";
             case "BASH_SOURCE":
                 // A bare `$BASH_SOURCE` / `${BASH_SOURCE##*/}` is element 0: the running script file ('' under -c).
                 // It read the (unset) environment variable of that name.
@@ -1378,6 +1405,10 @@ public static class PsBuild
                 return "$(($(if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq 'Arm64') { 'aarch64' } else { 'x86_64' })) + $(if ($IsWindows) { '-pc-msys' } elseif ($IsMacOS) { '-apple-darwin' } else { '-pc-linux-gnu' }))";
             case "HOSTNAME":
                 return "$(if ($null -ne $env:HOSTNAME) { $env:HOSTNAME } else { [System.Environment]::MachineName.ToLowerInvariant() })";
+            case "SHELL":
+                // bash sets SHELL at startup, unexported, when the environment lacks it (BashRuntime.DefaultShell); `unset SHELL`
+                // (Invoke-BashUnset) hides that value.
+                return "$(if ($null -ne $env:SHELL) { $env:SHELL } elseif (-not $global:__BashShellUnset) { [PsBash.Cmdlets.BashRuntime]::DefaultShell() })";
             case "PS4":
                 return "$(if ($null -ne $env:PS4) { $env:PS4 } else { '+ ' })";
             case "BASHPID":

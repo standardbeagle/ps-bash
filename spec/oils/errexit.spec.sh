@@ -249,7 +249,6 @@ foo() {
 echo "should be executed"
 ## stdout:
 ## status: 1
-## XFAIL ps-bash gap-errexit-invert-reenable set -e run inside a function called under ! takes effect at once in bash, so the next false exits with 1; ps-bash keeps errexit suppressed there
 ## timeout: 10
 
 #### Command sub exit code is lost
