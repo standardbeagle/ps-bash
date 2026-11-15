@@ -213,6 +213,24 @@ public static class PsBuild
         return "(" + expr.Replace("(", "' + [char]40 + '").Replace(")", "' + [char]41 + '") + ")";
     }
 
+    /// <summary>
+    /// One top-level command of a script, <c>-c</c> string, eval or sourced text whose expansions can discard the
+    /// input line: while it runs the runtime throws a discard error (<c>BashParamErrorException.Discard</c>) for a bad
+    /// substitution or an invalid indirect name instead of abandoning only one command. The catch ends the command
+    /// with status 1 and sets the line mark, so the commands after it on its line (<see cref="UnlessGlobFailed"/>) are
+    /// dropped too; the next line runs. A parameter error that is not a discard (unbound variable) passes on and ends
+    /// the shell, except in an interactive one (<c>BashLineDiscard.Discards</c>).
+    /// </summary>
+    public static string DiscardLineScope(string statement) =>
+        "try { [PsBash.Cmdlets.BashLineDiscard]::Enter(); " + statement
+        + " } catch [PsBash.Cmdlets.BashParamErrorException] { if (-not [PsBash.Cmdlets.BashLineDiscard]::Discards($_.Exception)) { throw }; "
+        + "$global:LASTEXITCODE = 1; $global:__BashFailGlob = $true } finally { [PsBash.Cmdlets.BashLineDiscard]::Leave() }";
+
+    /// <summary>Emitted text that can raise a line discard (<see cref="DiscardLineScope"/>).</summary>
+    public static bool CanDiscardLine(string emitted) =>
+        emitted.Contains("Get-BashIndirectValue", StringComparison.Ordinal)
+        || emitted.Contains(ExpansionErrorFunction, StringComparison.Ordinal);
+
     /// <summary>An assignment consumes the mark without abandoning anything: only its own status (1) records the failure.</summary>
     public const string ClearExpansionFailed = "$global:__BashExpansionFailed = $false";
 

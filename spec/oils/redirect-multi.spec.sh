@@ -83,7 +83,7 @@ status=0
 hi
 ## END
 ## status: 1
-## XFAIL ps-bash gap-head-reglobs-operand the redirect writes two-bar now, but head globs its operands again, so the escaped two-\* (the literal two-*) is read as two-bar instead of failing with "cannot open"
+## XFAIL ps-bash gap-head-reglobs-operand the redirect writes two-bar now, but head globs its operands again (cmdlets keep their own globbing for direct PowerShell calls, intentional-differences.md "Pathname expansion of a name that contains * ? ["), so the escaped two-\* (the literal two-*) is read as two-bar instead of failing with "cannot open"
 ## timeout: 10
 
 #### File redirect that globs to more than one file (bash and zsh only)

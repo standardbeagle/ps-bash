@@ -231,7 +231,6 @@ before
 line2
 ## END
 ## status: 0
-## XFAIL ps-bash gap-interactive-nounset-aborts-line an unbound variable under set -u ends a -i -c shell; bash aborts only the current line and runs the next
 ## timeout: 10
 ## real-launcher
 

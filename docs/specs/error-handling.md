@@ -200,6 +200,18 @@ The emitter translates `set` flags to PowerShell equivalents:
 Combined flags are decomposed: `set -euo pipefail` extracts `-e`, `-u`, and
 ignores `pipefail` (not implemented). The emitter handles this in `EmitSimple`.
 
+### 2.5 Errors that discard the input line
+
+A bad substitution (`${x!y}`) or an invalid indirect name (`${!r}` with `r` unset, `r='a b'`, `r='x:-foo'`) is
+bash's DISCARD: the rest of the current input line is dropped, even from inside a function or loop that line called,
+status 1, and the shell reads the next line (a `-c` string, a script file, eval and sourced text alike; a `$( )` ends
+only itself). In an interactive shell (`bash -i -c`) an unbound variable or `${x:?}` under `set -u` does the same.
+When the text can raise one (its emission holds `Get-BashIndirectValue` / `Write-BashExpansionError`, or it is
+interactive under nounset), every top-level command runs in `PsBuild.DiscardLineScope`: the runtime throws
+`BashParamErrorException.Discard` while `BashLineDiscard.Armed`, the scope catches it, and the line mark
+(`$global:__BashFailGlob`) drops the commands after it on its line. Outside any scope (a function defined by text
+that had none) the runtime keeps the older per-command abandon mark.
+
 ---
 
 ## 3. File I/O Error Helpers

@@ -87,15 +87,15 @@ public class WordShapeAndLineAbandonTests
         Assert.DoesNotContain("__BashFailGlob", T("echo a; echo b"));
     }
 
-    // A bad substitution abandons its command and the rest of the line (Write-BashExpansionError sets the line mark);
-    // the script goes on.
+    // A bad substitution abandons its command and the rest of the line (the line scope catches the discard and sets
+    // the line mark); the script goes on.
     [Fact]
     public void Transpile_BadSubstitution_GuardsTheRestOfItsLine()
     {
         string ps = T("echo ${a[]}; echo same\necho next");
         Assert.StartsWith(PsBuild.FailGlobReset, ps.TrimStart());
         Assert.Contains(PsBuild.ExpansionErrorFunction, ps);
-        Assert.Contains("if (-not $global:__BashFailGlob) { Invoke-BashEcho same", ps);
+        Assert.Contains("if (-not $global:__BashFailGlob) { try { [PsBash.Cmdlets.BashLineDiscard]::Enter(); Invoke-BashEcho same", ps);
         Assert.DoesNotContain("__BashFailGlob) { Invoke-BashEcho next", ps);
         Assert.DoesNotContain("__BashFailGlob", T("echo ${a[0]}; echo b"));
     }
