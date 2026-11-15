@@ -21,4 +21,11 @@ public class RedirectTargetExpansionTests
     [Fact]
     public Task VariableWithSpaces_IsAmbiguous() => AssertOracle.EqualAsync(
         "cd \"$(mktemp -d)\"; g='a b'; { echo w > $g; } 2>/dev/null; echo status=$?; ls | wc -l; f=out.txt; echo v > $f; cat out.txt");
+
+    // `"$@"` is one word per parameter: two of them is ambiguous for `>&` and `>` alike (ps-bash joined them into a file
+    // named `2 3 c d`); exactly one is the file.
+    [Fact]
+    public Task QuotedAtWithSeveralParameters_IsAmbiguous() => AssertOracle.EqualAsync(
+        "cd \"$(mktemp -d)\"; set -- '2 3' 'c d'; { echo hi 1>& \"$@\"; } 2>/dev/null; echo status=$?; { echo hi > \"$@\"; } 2>/dev/null; echo status=$?; ls | wc -l\n"
+        + "set -- 'o n e'; echo one >& \"$@\"; echo status=$?; cat 'o n e'; a=(x); echo two > \"${a[@]}\"; cat x");
 }

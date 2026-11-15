@@ -37,7 +37,6 @@ a= (1 '2 3')
 echo $a
 ## stdout:
 ## status: 2
-## XFAIL ps-bash gap-oils-array array (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### array over multiple lines

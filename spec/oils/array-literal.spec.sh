@@ -202,7 +202,6 @@ a=([k2]=-{a,b}-)
 echo ${a["k2"]}
 ## stdout: [k2]=-a-
 ## status: 0
-## XFAIL ps-bash gap-oils-array-literal array-literal (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### BashArray cannot be changed to BashAssoc and vice versa

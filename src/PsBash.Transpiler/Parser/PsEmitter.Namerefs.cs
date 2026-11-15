@@ -62,6 +62,22 @@ public static partial class PsEmitter
         _callSites = sites;
     }
 
+    /// <summary>
+    /// Names the unit assigns an array literal to (<c>a=(…)</c>, outside <c>local</c>), wherever that happens: a function
+    /// defined ABOVE the assignment reads <c>$a</c> / <c>${a-d}</c> as element 0 too (<c>f() { echo "${a-x}"; }; a=(""); f</c>
+    /// prints an empty line, not x).
+    /// </summary>
+    private static void CollectArrayAssignments(Command root)
+    {
+        if (_arrayVars is null) return;
+        VisitCommands(root, c =>
+        {
+            if (c is Command.ShAssignment { IsLocal: false } a)
+                foreach (var pair in a.Pairs)
+                    if (pair.ArrayValue is not null && IsValidVarName(pair.Name)) _arrayVars.Add(pair.Name);
+        });
+    }
+
     /// <summary>The first <c>local -n NAME=$N</c> of a function body: the nameref and the positional it takes its target from.</summary>
     private static (string Name, int Index)? FindDynamicNameref(Command body)
     {

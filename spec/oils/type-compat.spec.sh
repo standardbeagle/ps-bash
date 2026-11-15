@@ -82,7 +82,6 @@ declare -i j
 echo "$s|$i|$j"
 ## stdout: ||
 ## status: 0
-## XFAIL ps-bash gap-oils-type-compat type-compat (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### declare array vs. string: mixing -a +a and () ''

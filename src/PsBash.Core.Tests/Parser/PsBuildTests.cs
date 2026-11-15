@@ -346,6 +346,14 @@ public class PsBuildTests
         Assert.Contains("cannot convert associative to indexed array", PsBuild.ArrayKindGuard("a", toAssoc: false, "DECL"));
     }
 
+    // `a['2']=3`: the subscript is only a key; on anything but an associative array it is an arithmetic syntax error.
+    [Fact]
+    public void KeyOnlySubscriptGuard_AssignsOnAssocElseRefusesWithStatus1()
+    {
+        Assert.Equal("if ([PsBash.Cmdlets.BashAssoc]::IsAssocValue((Get-Variable -Name 'a' -ValueOnly -ErrorAction Ignore))) { SET; $global:LASTEXITCODE = 0 } else { Write-Error 'ps-bash: a[''2'']: arithmetic syntax error in array subscript' -ErrorAction Continue; $global:LASTEXITCODE = 1 }",
+            PsBuild.KeyOnlySubscriptGuard("a", "a['2']", "SET"));
+    }
+
     [Fact]
     public void RunTimeTest_RestoresTheStatusAndFlagsABadExpression()
     {

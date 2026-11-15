@@ -325,7 +325,6 @@ stat: 1
 stat: 1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-var-op-bash var-op-bash (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### ${a[0]@a} and ${a@a}
@@ -397,7 +396,6 @@ status=0
 status=0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-var-op-bash var-op-bash (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -422,7 +420,6 @@ A - A
 status=0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-var-op-bash var-op-bash (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 

@@ -40,8 +40,8 @@ internal static class DeclarePrinter
         val ??= BashVariableStore.Get(name);
         if (val is null)
         {
-            // `readonly nv` with no value: the name exists, unset, with its attributes (bash: `declare -r nv`).
-            if (!BashShellState.IsReadonly(name)) return false;
+            // `readonly nv` / `declare -i nv` with no value: the name exists, unset, with its attributes (bash: `declare -r nv`).
+            if (!BashShellState.IsReadonly(name) && !BashShellState.AttributeLetters(name).Contains('i')) return false;
             foreach (var line in BashRuntime.EmitBashLines($"declare -{BashShellState.AttributeLetters(name)} {name}\n"))
                 cmdlet.WriteObject(line);
             return true;
@@ -72,9 +72,15 @@ internal static class DeclarePrinter
         return true;
     }
 
-    /// <summary>bash <c>declare -p</c> value text: double-quoted, with <c>"</c>, <c>\</c>, <c>$</c> and backtick escaped.</summary>
+    /// <summary>
+    /// bash <c>declare -p</c> value text: double-quoted, with <c>"</c>, <c>\</c>, <c>$</c> and backtick escaped. A value
+    /// holding a control character is printed as <c>$'...'</c> instead (<c>zz=$'one\ntwo'</c>), so the line reads back
+    /// as one line.
+    /// </summary>
     internal static string QuoteValue(string? value)
     {
+        foreach (char c in value ?? "")
+            if (c < ' ' || c == '\u007f') return InvokeBashPrintfCommand.ShellQuote(value!);
         var sb = new System.Text.StringBuilder("\"");
         foreach (char c in value ?? "")
         {

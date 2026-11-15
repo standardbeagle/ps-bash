@@ -43,7 +43,6 @@ status=0 len=2
 status=1 len=2
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array-assign array-assign (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Indexed LHS with spaces

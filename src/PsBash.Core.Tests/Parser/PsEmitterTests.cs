@@ -6073,12 +6073,15 @@ public class PsEmitterTests
         Assert.Contains("file.txt", result);
     }
 
-    // declare -i -> $env:var = '0' (a scalar lives where bash reads look: $env:NAME)
     [Fact]
-    public void Transpile_DeclareInt_EmitsTypedVar()
+    public void Transpile_DeclareInt_RecordsTheAttributeOnly()
     {
-        var result = PsEmitter.Transpile("declare -i count");
-        Assert.Equal("$env:count = '0'", result);
+        // bash: `declare -i count` leaves count unset (`${count-u}` is u); it was set to 0.
+        Assert.DoesNotContain("$env:count =", PsEmitter.Transpile("declare -i count")!);
+        // With a declare -p in the script the attribute is recorded so the unset name still prints.
+        var printed = PsEmitter.Transpile("declare -i count; declare -p count")!;
+        Assert.Contains("MarkAttribute('count', 'i')", printed);
+        Assert.DoesNotContain("$env:count =", printed);
     }
 
     // ${str/foo/bar} -> replace first
@@ -8241,5 +8244,30 @@ public class PsEmitterTests
         // `declare -pr` selects read-only variables; it must not be read as `declare -r` of nothing.
         var result = PsEmitter.Transpile("declare -pa");
         Assert.Contains("Invoke-BashDeclare", result);
+    }
+
+    [Fact]
+    public void Transpile_NonArithmeticSubscript_IsGuardedUnlessKnownAssoc()
+    {
+        // `a['2']=3` / `b[0+]=y`: only an associative array takes that subscript (as a key); the guard decides at run time,
+        // and the assignments after it on the statement sit inside it (bash makes none of them on the error).
+        var quoted = PsEmitter.Transpile("a['2']=3")!;
+        Assert.Contains(PsBuild.BadArithSubscriptMessage, quoted);
+        var chain = PsEmitter.Transpile("x=x b[0+]=y c=z")!;
+        int guard = chain.IndexOf("IsAssocValue", StringComparison.Ordinal);
+        Assert.True(guard > chain.IndexOf("$env:x", StringComparison.Ordinal));
+        Assert.True(chain.IndexOf("$env:c", StringComparison.Ordinal) > guard);
+        Assert.DoesNotContain(PsBuild.BadArithSubscriptMessage, PsEmitter.Transpile("a[1+2]=3; a[\"1\"]=2; a[$k]=1"));
+        Assert.DoesNotContain(PsBuild.BadArithSubscriptMessage, PsEmitter.Transpile("declare -A m; m['k']=v"));
+        Assert.DoesNotContain(PsBuild.BadArithSubscriptMessage, PsEmitter.Transpile("f() { declare -gA g; }; f; g['q']=1"));
+    }
+
+    [Fact]
+    public void Transpile_SubscriptOnNamerefToElement_IsEmpty()
+    {
+        // `typeset -n r='a[@]'; ${r[0]}` emitted `$a[@]`, no PowerShell; bash reads nothing (and ${#r[@]} is 0).
+        var ps = PsEmitter.Transpile("a=(X Y); typeset -n r='a[@]'; echo \"${r[0]}\" ${#r[@]}")!;
+        Assert.DoesNotContain("$a[@]", ps);
+        Assert.Contains("'0'", ps);
     }
 }

@@ -245,7 +245,16 @@ public sealed class InvokeBashCompgenCommand : PSCmdlet
         catch (RuntimeException) { FileSystemHelpers.SetLastExitCode(this, 1); return Array.Empty<string>(); }
         var list = new List<string>();
         foreach (var r in results)
+        {
+            // `unset -v 'COMPREPLY[2]'` leaves a sparse array: its values, in index order (it printed the type name).
+            if (r?.BaseObject is BashSparseArray sparse)
+            {
+                foreach (var v in sparse.Values)
+                    if (v?.ToString() is { Length: > 0 } sv) list.Add(sv);
+                continue;
+            }
             if (r?.BaseObject is { } o && o.ToString() is { } s && s.Length > 0) list.Add(s);
+        }
         return list;
     }
 

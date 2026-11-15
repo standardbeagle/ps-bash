@@ -1489,6 +1489,17 @@ public class BashParserTests
     }
 
     [Fact]
+    public void Parse_SpaceBetweenEqualsAndParen_IsSyntaxError()
+    {
+        // bash: `a= (1 2)` is "syntax error near unexpected token `('" -- only a ( glued to the = opens an array literal.
+        var ex = Assert.Throws<ParseException>(() => Parse("a= (1 '2 3')"));
+        Assert.Contains("unexpected token `('", ex.Message);
+        Assert.Throws<ParseException>(() => Parse("a+= (x)"));
+        Parse("a=(1 '2 3')");
+        Parse("a+=(x) b=(y)");
+    }
+
+    [Fact]
     public void Parse_BracedVarWithoutName_IsBadSubstitution()
     {
         var ps = PsBash.Core.Transpiler.BashTranspiler.Transpile("echo ${%}");

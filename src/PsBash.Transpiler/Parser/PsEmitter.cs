@@ -336,6 +336,18 @@ public static partial class PsEmitter
     private static string ErrexitExitStatement() =>
         _subshellDepth > 0 ? "return" : "exit $global:LASTEXITCODE";
 
+    /// <summary>`readonly r=1; r=2`: the assignment is refused with status 1, which errexit acts on.</summary>
+    private static bool WritesReadonly(Command.ShAssignment assign)
+    {
+        if (assign.IsReadonly || assign.IsDeclare || _readonlyVars is null) return false;
+        foreach (var p in assign.Pairs)
+        {
+            string n = ResolveNameref(p.Name);
+            if (_readonlyVars.Contains(n.Contains('[') ? n[..n.IndexOf('[')] : n)) return true;
+        }
+        return false;
+    }
+
     /// <summary>Builtins whose status is not an errexit failure (bash ignores <c>export x=$(false)</c>) or that leave themselves.</summary>
     private static readonly HashSet<string> ErrexitNeutralBuiltins = new(StringComparer.Ordinal)
     {
@@ -538,7 +550,7 @@ public static partial class PsEmitter
                 return EmitRecordingStatus(cmd);
             case Command.Simple simple when IsErrexitCheckedSimple(simple):
             // `x=$(false)` fails with the substitution; `local`/`export x=$(false)` has the builtin's status (0).
-            case Command.ShAssignment assign when !assign.IsLocal && !assign.IsExport && ContainsCommandSub(assign):
+            case Command.ShAssignment assign when !assign.IsLocal && !assign.IsExport && (ContainsCommandSub(assign) || WritesReadonly(assign)):
             case Command.BoolExpr:
             case Command.ArithCommand:
             case Command.Subshell:
@@ -883,6 +895,7 @@ public static partial class PsEmitter
             if (cmd is null)
                 return null;
             CollectCallSites(cmd);
+            CollectArrayAssignments(cmd);
             CollectAliasDefs(cmd, bash);
             if (aliasesSpliced) { _aliasDefs = null; _aliasStaticOnly = false; } // already expanded in the text
             return EmitBody(cmd);
@@ -2029,11 +2042,19 @@ public static partial class PsEmitter
             // (PsBuild.FunctionStdinScope) and otherwise the stdin of whatever called it.
             string ComputeBody()
             {
-                string text = WithStdinScope(true, () => EmitBody(func.Body));
+                string text = WithStdinScope(true, EmitFunctionBodyOnce);
                 if (text.Contains("__BashStdIn", StringComparison.Ordinal) || text.Contains("Resolve-BashCommand -Fed", StringComparison.Ordinal) || text.Contains("Invoke-BashRead", StringComparison.Ordinal)
                     || text.Contains("Invoke-BashMapfile", StringComparison.Ordinal))
                     return PsBuild.FunctionStdinScope(text);
-                return _launcherStdin ? WithStdinScope(false, () => EmitBody(func.Body)) : EmitBody(func.Body);
+                return _launcherStdin ? WithStdinScope(false, EmitFunctionBodyOnce) : EmitFunctionBodyOnce();
+            }
+            // The body is emitted more than once (stdin scope probe, nameref variants): each emission starts from the
+            // read-only set the function was entered with. A `readonly x` later in the body is not yet in force at an
+            // earlier `local x` / `x=1` (`f() { local x=1; readonly -p x; }` refused the local on the second emission).
+            string EmitFunctionBodyOnce()
+            {
+                if (priorFunctionReadonly is not null) _readonlyVars = new HashSet<string>(priorFunctionReadonly, StringComparer.Ordinal);
+                return EmitBody(func.Body);
             }
             try
             {
@@ -3762,6 +3783,8 @@ public static partial class PsEmitter
         }
         if (text.Contains("circular name reference", StringComparison.Ordinal)) return text; // the refusal set status 1
         if (text.Contains(": bad array subscript'", StringComparison.Ordinal)) return text;   // so did this one
+        if (text.Contains(": not a valid identifier'", StringComparison.Ordinal)) return text; // and a write through `ref -> a[0]`
+        if (text.Contains(PsBuild.BadArithSubscriptMessage + "'", StringComparison.Ordinal)) return text; // the guard sets it either way
         if (NeedsArrayKindGuard(cmd)) return text; // each declaration sets its own status (1 when the kind change is refused)
         // `x=$((1/0))`: the failed expansion keeps status 1, and its mark must not abandon a LATER command.
         if (text.Contains("Invoke-BashArith", StringComparison.Ordinal)) return text + "; " + PsBuild.ClearExpansionFailed;
@@ -3802,10 +3825,31 @@ public static partial class PsEmitter
         finally { _inArrayKindGuard = false; }
     }
 
+    [ThreadStatic] private static Assignment? _keyOnlyGuardedPair;
+
+    /// <summary>
+    /// The array name of <c>NAME[SUB]</c> when SUB is static text (no <c>$</c> or backtick) that does not parse as an
+    /// arithmetic expression (<c>'2'</c>, <c>0+</c>); otherwise null.
+    /// </summary>
+    private static string? IsNonArithmeticSubscript(string name)
+    {
+        int open = name.IndexOf('[');
+        if (open <= 0 || name[^1] != ']' || !IsValidVarName(name[..open])) return null;
+        string sub = name[(open + 1)..^1];
+        if (sub.Length == 0 || sub is "@" or "*" || sub.AsSpan().IndexOfAny('$', '`') >= 0) return null;
+        try { BashArithmeticParser.Parse(sub); return null; }
+        catch (BashArithmeticParseException ex) when (!ex.Message.Contains(NestingGuard.TooDeepMessage, StringComparison.Ordinal)
+                                                      && !ex.Message.Contains(NestingGuard.TooLongMessage, StringComparison.Ordinal))
+        {
+            return name[..open];
+        }
+    }
+
     private static string EmitShAssignmentCore(Command.ShAssignment cmd)
     {
         var sb = new StringBuilder();
         bool badSubscript = false;
+        bool localRefused = false;
         for (int i = 0; i < cmd.Pairs.Length; i++)
         {
             if (i > 0)
@@ -3820,6 +3864,22 @@ public static partial class PsEmitter
                   .Append(" -ErrorAction Continue");
                 badSubscript = true;
                 continue;
+            }
+
+            // `a['2']=3`, `a=x b[0+]=y c=z`: a subscript that is no arithmetic expression only works as an associative
+            // key. On an indexed (or new) array it is an arithmetic syntax error, status 1: that write and the rest of
+            // the assignments after it are not made. Decided when it runs (an array declared -A elsewhere takes the key).
+            if (!ReferenceEquals(_keyOnlyGuardedPair, pair) && !cmd.IsLocal && !cmd.IsAssoc && !cmd.IsDeclare && !cmd.IsExport && !cmd.IsReadonly
+                && pair.ArrayValue is null && IsNonArithmeticSubscript(pair.Name) is { } guardBase
+                && ResolveNameref(guardBase) == guardBase && _assocVars?.Contains(guardBase) != true)
+            {
+                var priorGuarded = _keyOnlyGuardedPair;
+                _keyOnlyGuardedPair = pair;
+                string rest;
+                try { rest = EmitShAssignmentCore(cmd with { Pairs = cmd.Pairs[i..] }); }
+                finally { _keyOnlyGuardedPair = priorGuarded; }
+                sb.Append(PsBuild.KeyOnlySubscriptGuard(guardBase, pair.Name, rest));
+                break;
             }
 
             // `typeset -n ref` came first: this literal assignment names its target (and is not a value write).
@@ -3869,6 +3929,14 @@ public static partial class PsEmitter
                 sb.Append(PsBuild.SetStatus(0));
                 continue;
             }
+            // `readonly y; f() { local x=1 y=2; }`: bash refuses the local (`local: y: readonly variable`, status 1).
+            if (cmd.IsLocal && !cmd.IsNameref && pair.ArrayValue is null && !pair.Name.Contains('[') && _readonlyVars?.Contains(pair.Name) == true)
+            {
+                sb.Append("Write-Error ").Append(PsBuild.SingleQuote($"ps-bash: local: {pair.Name}: readonly variable"))
+                  .Append(" -ErrorAction Continue; ").Append(PsBuild.SetStatus(1));
+                localRefused = true;
+                continue;
+            }
             // `local -r x=1`: later writes to x in this function are refused (the set is restored when the function ends).
             if (cmd.IsLocal && cmd.IsReadonly) _readonlyVars?.Add(pair.Name);
             // Mutually recursive namerefs (`ref1 -> ref2 -> ref1`) are only detected when written through.
@@ -3884,6 +3952,17 @@ public static partial class PsEmitter
             {
                 _readonlyViolation = true;
                 sb.Append("Write-Error ").Append(PsBuild.SingleQuote($"ps-bash: {pair.Name}: bad array subscript"))
+                  .Append(" -ErrorAction Continue; ").Append(PsBuild.SetStatus(1));
+                continue;
+            }
+            // `typeset -n ref='a[0]'` (or 'a[@]'): `ref[1]=x` / `ref=(x y)` would make the ELEMENT an array; bash refuses
+            // (`a[0]': not a valid identifier, status 1) and, like any failed assignment, abandons the rest of the line.
+            if (!cmd.IsLocal && (pair.ArrayValue is not null || pair.Name.Contains('['))
+                && (pair.Name.Contains('[') ? pair.Name[..pair.Name.IndexOf('[')] : pair.Name) is var nrWriteBase
+                && ResolveNameref(nrWriteBase) is var nrWriteTarget && nrWriteTarget != nrWriteBase && nrWriteTarget.Contains('['))
+            {
+                _readonlyViolation = true;
+                sb.Append("Write-Error ").Append(PsBuild.SingleQuote($"ps-bash: `{nrWriteTarget}': not a valid identifier"))
                   .Append(" -ErrorAction Continue; ").Append(PsBuild.SetStatus(1));
                 continue;
             }
@@ -3935,6 +4014,10 @@ public static partial class PsEmitter
                 if (cmd.IsAssoc) _assocVars?.Add(pair.Name);
                 if (IsValidVarName(pair.Name)) _arrayVars?.Add(pair.Name);
                 bool knownAssoc = cmd.IsAssoc || _assocVars?.Contains(pair.Name) == true;
+                // `a=([k]=-{a,b}-)` on an array that is not associative: bash brace-expands the element first, and the
+                // words it makes (`[k]=-a-` `[k]=-b-`) are plain values, not subscripted ones.
+                if (!knownAssoc && BraceExpandedKeyedElements(pair.ArrayValue) is { } plainElements)
+                    pair = pair with { ArrayValue = plainElements };
                 // A mixed `b=([n]=x [0]=z)` has a numeric key too: it takes this path (all-numeric ones the sparse literal below).
                 bool keyedNumericOk = knownAssoc || pair.Op == AssignOp.Equal && HasNonNumericSubscript(pair.ArrayValue);
                 if (pair.Op is AssignOp.Equal or AssignOp.PlusEqual && TryEmitAssocLiteral(pair.ArrayValue, out var assoc, out var assocAsIndexed, keyedNumericOk))
@@ -4068,7 +4151,9 @@ public static partial class PsEmitter
         // `local`/`export x=$(false)`: the status is the BUILTIN's (0), not the substitution's —
         // the substitution left its own code in LASTEXITCODE. (A plain `x=$(false)` keeps it.)
         if ((cmd.IsLocal || cmd.IsExport) && ContainsCommandSub(cmd))
-            sb.Append("; " + PsBuild.SetStatus(0));
+            sb.Append("; " + PsBuild.SetStatus(localRefused ? 1 : 0));
+        else if (localRefused && cmd.Pairs.Length > 1)
+            sb.Append("; " + PsBuild.SetStatus(1));
         // `~` and `$HOME` read PowerShell's own read-only $HOME (the launcher's home), which `HOME=/x` never touched;
         // re-point it so a script that assigns HOME sees it (`HOME=/home/bob; echo ~` prints /home/bob).
         if (!cmd.IsLocal && cmd.Pairs.Any(p => p.Name == "HOME" && p.ArrayValue is null && p.Op == AssignOp.Equal))
@@ -4912,7 +4997,9 @@ public static partial class PsEmitter
                 && (quotedVal[0] is '-' or '+' ? quotedVal.Length > 1 && quotedVal.AsSpan(1).IndexOfAnyExcept("aAfFgilnprtux") < 0
                     : IsValidVarName(quotedVal.Split('=')[0])))
                 val = quotedVal;
-            if (val == "-A") isAssoc = true;
+            // `declare -gA m` (a function declaring a global associative array): the -g changes nothing here, every array
+            // is global. It was a plain `declare m`, so `m[k]=v` wrote an indexed element.
+            if (val == "-A" || val is { Length: > 2 } && val[0] == '-' && val.Contains('A') && val.AsSpan(1).IndexOfAnyExcept("gA") < 0) isAssoc = true;
             else if (val == "-n") isNameref = true;
             else if (val == "-i") { /* integer — handled below */ }
             else if (val is { Length: > 1 } && val[0] == '-' && (val.AsSpan(1).IndexOfAnyExcept("pfF") < 0 || (val[1] != '-' && val.Contains('p')))) isPrint = true;
@@ -4927,6 +5014,15 @@ public static partial class PsEmitter
         {
             // A builtin's failure: unlike `r=2`, the rest of the line still runs (no _readonlyViolation).
             result = "Write-Error " + PsBuild.SingleQuote($"ps-bash: {name}: {assigned}: readonly variable") + " -ErrorAction Continue; " + PsBuild.SetStatus(1);
+            return true;
+        }
+        // `typeset -n ref='@'` / `declare -n r=1`: the target is no variable name; bash refuses it (status 1) and declares nothing.
+        if (isNameref && !isPrint
+            && (exprName is not null && exprValue is not null ? (IsValidVarName(exprName) ? ExtractSingleQuotedOrLiteralValue(exprValue) : null)
+                : varName is not null && varName.IndexOf('=') is var nrEq and > 0 && IsValidVarName(varName[..nrEq]) ? varName[(nrEq + 1)..] : null) is { } nrTarget
+            && !IsValidVarName(nrTarget) && !IsNamerefElementTarget(nrTarget))
+        {
+            result = "Write-Error " + PsBuild.SingleQuote($"ps-bash: {name}: `{nrTarget}': invalid variable name for name reference") + " -ErrorAction Continue; " + PsBuild.SetStatus(1);
             return true;
         }
         // `declare -p ref` for a nameref prints the attribute line; the reference itself is resolved at transpile time, so the
@@ -5052,7 +5148,9 @@ public static partial class PsEmitter
             if (_functionDepth == 0) result = PsBuild.ArrayKindGuard(varName, toAssoc: true, result + "; " + PsBuild.SetStatus(0));
             return true;
         }
-        result = isInt ? "$env:" + varName + " = '0'"
+        // `declare -i x`: the attribute only (recorded above); x stays unset (it was set to 0) or keeps its value. An empty
+        // array would shadow the scalar a later `x=3+4` writes (`${x[@]}`, `declare -p x`).
+        result = isInt ? PsBuild.SetStatus(0)
             // `declare x` on an existing scalar leaves its value alone; only a name with nothing yet becomes the empty array.
             : "if ($null -eq $env:" + varName + " -and $null -eq (Get-Variable -Name " + PsBuild.SingleQuote(varName) + " -Scope Global -ValueOnly -ErrorAction Ignore)) { $global:" + varName + " = @()" + "; [PsBash.Cmdlets.BashShellState]::MarkAttribute(" + PsBuild.SingleQuote(varName) + ", '" + (indexedFlag ? "~" : "-") + "')" + " }";
         // `declare -a m` on an associative m is refused.
@@ -5243,8 +5341,22 @@ public static partial class PsEmitter
     /// </summary>
     private static string EmitRunTimeFdRedirect(Command.Simple cmd, Redirect dyn)
     {
+        // `>& "$@"`: each element is its own word; anything but exactly one is "ambiguous redirect" (status 1, the
+        // command does not run). Joined into one string it named a file `2 3 c d`.
+        if (IsQuotedArrayAllWord(dyn.Target))
+        {
+            string one = EmitRunTimeFdRedirectCore(cmd, dyn, "$__psbFd = [string]$__psbFdW[0]; ");
+            var only = ((WordPart.DoubleQuoted)dyn.Target.Parts[0]).Parts[0];
+            string shown = only is WordPart.BracedVarSub b ? "\"${" + b.Name + b.Suffix + "}\"" : "\"$@\"";
+            return "$__psbFdW = @(" + EmitUnquotedSplitWordArray(dyn.Target) + "); if ($__psbFdW.Count -ne 1) { "
+                + PsBuild.StderrLine("ps-bash: " + shown + ": ambiguous redirect") + "; " + PsBuild.SetStatus(1) + " } else { " + one + " }";
+        }
+        return EmitRunTimeFdRedirectCore(cmd, dyn, "$__psbFd = [string](" + EmitWord(dyn.Target) + "); ");
+    }
+
+    private static string EmitRunTimeFdRedirectCore(Command.Simple cmd, Redirect dyn, string value)
+    {
         string plain = EmitSimple(cmd with { Redirects = cmd.Redirects.Remove(dyn) });
-        string value = "$__psbFd = [string](" + EmitWord(dyn.Target) + "); ";
         if (dyn.Op == ">&")
         {
             string file = EmitSimple(cmd with { Redirects = cmd.Redirects.Replace(dyn, dyn with { Op = "&>" }) });
@@ -6390,7 +6502,8 @@ public static partial class PsEmitter
     /// </summary>
     private static string EmitFileRedirectTarget(CompoundWord word)
     {
-        if (IsGlobWord(word) || IsPureUnquotedVarWord(word))
+        // `> "$@"`, `> "${a[@]}"`: one word per element, so anything but exactly one is ambiguous too.
+        if (IsGlobWord(word) || IsPureUnquotedVarWord(word) || IsQuotedArrayAllWord(word))
             return "$(& { $__rt = @(" + EmitUnquotedSplitWordArray(word) + "); if ($__rt.Count -eq 1) { $__rt[0] } else { '' } })";
         // `> a-{one,two}`: brace expansion gives several words, also an ambiguous redirect (the array reached -Path).
         if (!word.Parts.IsDefaultOrEmpty && word.Parts.Any(p => p is WordPart.BracedTuple or WordPart.BracedRange))
@@ -6715,6 +6828,34 @@ public static partial class PsEmitter
     /// </summary>
     private static bool TryEmitAssocLiteral(ArrayWord array, out string literal, bool numericKeysAllowed = false)
         => TryEmitAssocLiteral(array, out literal, out _, numericKeysAllowed);
+
+    /// <summary>
+    /// <c>a=([k]=v{1,2})</c>: each <c>[KEY]=</c> element holding an unquoted brace expansion, its subscript text quoted so
+    /// the element is a plain word (brace expansion still applies). Null unless there is such an element and no other
+    /// <c>[KEY]=</c> element (a mixed list keeps the subscripted path).
+    /// </summary>
+    private static ArrayWord? BraceExpandedKeyedElements(ArrayWord array)
+    {
+        bool any = false;
+        var elems = ImmutableArray.CreateBuilder<CompoundWord>(array.Elements.Length);
+        foreach (var elem in array.Elements)
+        {
+            string? first = elem.Parts.IsDefaultOrEmpty ? null : elem.Parts[0] switch
+            {
+                WordPart.Literal l => l.Value,
+                WordPart.GlobPart g => g.Pattern,
+                _ => null,
+            };
+            bool keyed = first is { Length: > 2 } && first[0] == '['
+                && (first.Contains("]=", StringComparison.Ordinal)
+                    || first[^1] == ']' && elem.Parts.Length > 1 && elem.Parts[1] is WordPart.Literal { Value: var eq } && eq.StartsWith('='));
+            if (!keyed) { elems.Add(elem); continue; }
+            if (!elem.Parts.Any(p => p is WordPart.BracedTuple or WordPart.BracedRange)) return null;
+            any = true;
+            elems.Add(new CompoundWord(elem.Parts.SetItem(0, new WordPart.SingleQuoted(first!))));
+        }
+        return any ? new ArrayWord(elems.MoveToImmutable()) : null;
+    }
 
     /// <summary>True when some element is <c>[KEY]=…</c> with a KEY that is not all digits (<c>[n]=x</c>, <c>[k1]=v</c>).</summary>
     private static bool HasNonNumericSubscript(ArrayWord array)
@@ -8421,7 +8562,8 @@ public static partial class PsEmitter
 
     /// <summary>Bare <c>${@#a}</c> / <c>${*/x/y}</c> / <c>${@%d}</c>: the operator applies to each parameter, so the result is a list of words.</summary>
     private static bool IsUnquotedPositionalOpWord(CompoundWord word)
-        => word.Parts is [WordPart.BracedVarSub { Name: "@" or "*", Suffix: { Length: > 0 } s }] && (s[0] is '^' or ',' || s.Length > 1 && s[0] is '/' or '%' or '#');
+        => word.Parts is [WordPart.BracedVarSub { Name: "@" or "*", Suffix: { Length: > 0 } s }] && (s[0] is '^' or ',' || s.Length > 1 && s[0] is '/' or '%' or '#'
+           || s == "@a"); // bare `${@@a}`: every result is empty, so no word at all (it printed one space per parameter)
 
     /// <summary>Bare <c>$@</c> / <c>$*</c> (also <c>${@}</c>): every parameter, each split again on IFS and globbed.</summary>
     private static bool IsUnquotedPositionalListWord(CompoundWord word)
@@ -8524,7 +8666,8 @@ public static partial class PsEmitter
                // Trim / replace / slice / case-change results are split like any other unquoted expansion:
                // `${s#*o}` of "Hello World" is the two words " World" -> World, not one argument with its space.
                || (s.Length > 0 && s[0] is '#' or '%' or '/' or '^' or ',' && !IsLengthSuffix(s))
-               || (s.Length == 2 && s[0] == '@' && s[1] is 'Q' or 'K' or 'k' or 'A' or 'a')
+               // `echo ${A@P} - x` of an assoc A with no key 0: the empty result is no argument (it printed ` - x`).
+               || (s.Length == 2 && s[0] == '@' && s[1] is 'Q' or 'K' or 'k' or 'A' or 'a' or 'P' or 'E')
                || (s.Length > 1 && s[0] == ':' && s[1] is not ('-' or '+' or '=' or '?')));
 
     /// <summary>`${@-w}` `${*:+w}`: the default / alternative operators on the positional LIST (see <see cref="EmitPositionalWordOp"/>).</summary>
@@ -9343,7 +9486,15 @@ public static partial class PsEmitter
         if (bvs.Suffix == "!indirect" && _namerefs is { Count: > 0 } && _namerefs.TryGetValue(bvs.Name, out var namerefTargetName))
             return inDoubleQuote ? "$(" + PsBuild.SingleQuote(namerefTargetName) + ")" : PsBuild.SingleQuote(namerefTargetName);
         if (_namerefs is { Count: > 0 } && _namerefs.ContainsKey(bvs.Name))
+        {
             bvs = bvs with { Name = ResolveNameref(bvs.Name) };
+            // `typeset -n r='a[@]'; ${r[@]}` / `${r[0]}`: a subscript on a nameref to an ELEMENT reads nothing (bash). It
+            // emitted `$a[@]`, which is no PowerShell.
+            if (bvs.Name.Contains('[') && bvs.Suffix is ['[', ..])
+                return inDoubleQuote ? "$('')" : "''";
+            if (bvs.Name.Contains('[') && bvs.Suffix is ['#', 'L', '[', ..]) // ${#r[@]}: no elements
+                return inDoubleQuote ? "$('0')" : "'0'";
+        }
         if (bvs.Suffix is null)
             return EmitSimpleVar(bvs.Name, strict: true);
 
@@ -9372,6 +9523,9 @@ public static partial class PsEmitter
             && System.Text.RegularExpressions.Regex.IsMatch(bvs.Suffix, @"^(\[[^@*\]]*\])?@a$"))
         {
             string attrs = $"[PsBash.Cmdlets.BashQuoteText]::Attributes({PsBuild.SingleQuote(bvs.Name)}, (Get-Variable -Name {PsBuild.SingleQuote(bvs.Name)} -ValueOnly -ErrorAction Ignore))";
+            // `set -u; ${undef@a}`: an unset name is unbound here too (bash ends the shell or subshell, status 1).
+            if (_nounsetMode && bvs.Suffix == "@a")
+                return $"$(if ($global:__BashNounset -and $null -eq {EmitSimpleVar(bvs.Name)}) {{ {PsBuild.ParamErrorThrowStatements(PsBuild.SingleQuote(bvs.Name + ": "), "'unbound variable'")} }} else {{ {attrs} }})";
             return "$(" + attrs + ")";
         }
         // Array subscript access: ${arr[0]}, ${arr[@]}, ${arr[*]}, ${arr[key]}, plus
@@ -9432,13 +9586,18 @@ public static partial class PsEmitter
                 if (subscript is "@" or "*")
                 {
                     if (EmitArraySlice(arrayVar, subOp, inDoubleQuote) is { } slice) return slice;
-                    // `${a[@]@Q}` / `${a[@]@a}`: quote-for-reuse and the attribute letters apply to EACH element.
-                    if (subOp is "@Q" or "@a")
+                    // `${a[@]@Q}` / `${a[@]@a}` / `${A[@]@P}` / `${a[@]@E}`: the transform applies to EACH element (the values
+                    // of an associative array).
+                    if (subOp is "@Q" or "@a" or "@P" or "@E")
                     {
                         string srcv = $"$(if ({arrayVar} -is [System.Collections.IDictionary]) {{ {arrayVar}.Values }} else {{ {arrayVar} }})";
-                        string each = subOp == "@Q"
-                            ? "[PsBash.Cmdlets.BashQuoteText]::ForReuse([string]$_)"
-                            : $"$(if ({arrayVar} -is [System.Collections.IDictionary]) {{ 'A' }} else {{ 'a' }})";
+                        string each = subOp switch
+                        {
+                            "@Q" => "[PsBash.Cmdlets.BashQuoteText]::ForReuse([string]$_)",
+                            "@P" => "[PsBash.Cmdlets.BashPromptText]::Expand([string]$_)",
+                            "@E" => "[PsBash.Cmdlets.BashPromptText]::Unescape([string]$_)",
+                            _ => $"$(if ({arrayVar} -is [System.Collections.IDictionary]) {{ 'A' }} else {{ 'a' }})",
+                        };
                         string mappedQ = $"@({srcv}) | ForEach-Object {{ {each} }}";
                         return subscript == "*" && inDoubleQuote
                             ? $"$(@({mappedQ}) -join {PsBuild.IfsJoinSeparator})"
@@ -9524,14 +9683,17 @@ public static partial class PsEmitter
         }
 
         // `${@@Q}` / `${*@Q}`: quote-for-reuse applies to EACH positional parameter.
-        if (bvs.Name is "@" or "*" && bvs.Suffix == "@Q")
+        // `${@@a}` / `${*@a}`: a positional parameter has no attributes, so each one becomes the empty string.
+        if (bvs.Name is "@" or "*" && bvs.Suffix is "@Q" or "@a")
         {
-            string posQ = $"@({PsBuild.BuildPositionalExpansion("@")}) | ForEach-Object {{ [PsBash.Cmdlets.BashQuoteText]::ForReuse([string]$_) }}";
+            string posQ = $"@({PsBuild.BuildPositionalExpansion("@")}) | ForEach-Object {{ "
+                + (bvs.Suffix == "@a" ? "''" : "[PsBash.Cmdlets.BashQuoteText]::ForReuse([string]$_)") + " }";
             return bvs.Name == "*" && inDoubleQuote
                 ? $"$(@({posQ}) -join {PsBuild.IfsJoinSeparator})"
                 : $"$({posQ})";
         }
-        string varRef = EmitSimpleVar(bvs.Name, strict: bvs.Suffix.StartsWith("/", StringComparison.Ordinal) || bvs.Suffix == "#L" || IsSliceSuffix(bvs.Suffix));
+        string varRef = EmitSimpleVar(bvs.Name, strict: bvs.Suffix.StartsWith("/", StringComparison.Ordinal) || bvs.Suffix == "#L" || IsSliceSuffix(bvs.Suffix)
+            || bvs.Suffix is ['@', _]); // `${undef@Q}` / `${undef@P}` under set -u are unbound
 
         // Name-prefix expansion: ${!prefix*} / ${!prefix@} -> the NAMES of
         // variables starting with `prefix`. ps-bash models bash variables as

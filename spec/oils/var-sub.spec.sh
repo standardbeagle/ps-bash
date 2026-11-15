@@ -9,10 +9,11 @@ echo ${a&}
 
 #### Braced block inside ${}
 # NOTE: This bug was in bash 4.3 but fixed in bash 4.4.
-echo ${foo:-$({ ls /bin/ls; })}
-## stdout: /bin/ls
+# (guarded: a file of the case's own instead of /bin/ls, which Windows lacks)
+touch lsme
+echo ${foo:-$({ ls lsme; })}
+## stdout: lsme
 ## status: 0
-## XFAIL ps-bash gap-oils-var-sub var-sub (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Nested ${}
@@ -45,7 +46,6 @@ set -- '2 3' 'c d'
 echo hi 1>& "$@"
 ## stdout:
 ## status: 1
-## XFAIL ps-bash gap-oils-var-sub var-sub (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Here doc with bad "$@" delimiter

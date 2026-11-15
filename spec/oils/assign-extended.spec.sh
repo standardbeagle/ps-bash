@@ -713,7 +713,6 @@ a=x b[0+]=y c=z
 echo $a $b $c
 ## stdout: x
 ## status: 0
-## XFAIL ps-bash gap-oils-assign-extended assign-extended (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### declare -g (bash-specific; bash-completion uses it)

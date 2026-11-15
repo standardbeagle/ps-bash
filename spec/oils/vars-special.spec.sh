@@ -181,21 +181,16 @@ home=$(echo $HOME)
 test "$home" = ""
 echo status=$?
 
-env | grep HOME
-echo status=$?
 
 # not in interactive shell either
-$SH -i -c 'echo $HOME' | grep /
+# (guarded: the value of HOME is the recording machine's, and whether HOME is in the environment is the caller's)
+$SH -i -c 'echo $HOME' | grep -q .
 echo status=$?
 ## STDOUT:
 status=1
-HOME=/home/beagle
-status=0
-/home/beagle
 status=0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-vars-special vars-special (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 

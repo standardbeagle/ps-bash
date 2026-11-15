@@ -46,7 +46,6 @@ argv.py "${!a[@]}" "${a[@]}"
 printenv.py a
 ## stdout: status=1
 ## status: 127
-## XFAIL ps-bash gap-oils-assign-deferred assign-deferred (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### 'builtin' prefix is allowed on assignments

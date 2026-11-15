@@ -536,10 +536,11 @@ set -- v{1..9}
   echo "[${*: -9:4}][${*: -9:4}]"
   echo "[${*: -10:4}][${*: -10:4}]"
   echo "[${*: -11:4}][${*: -11:4}]"
-} | sed "s:$SH:\$SH:g;s:${SH##*/}:\$SH:g"
+} | sed "s:\[[^] ]* v1:[\$0 v1:g"
+# (guarded: $0 is the path of the case's script file, which differs per run and machine)
 ## STDOUT:
 ==== ${@:offset:length} ====
-[/mnt/c/Users/andyb/AppData/Local/Temp/ps-$SH/spec-record/538bb986cbf847d0bfa71a0b8f312ead.sh v1 v2][/mnt/c/Users/andyb/AppData/Local/Temp/ps-$SH/spec-record/538bb986cbf847d0bfa71a0b8f312ead.sh v1 v2]
+[$0 v1 v2][$0 v1 v2]
 [v1 v2 v3][v1 v2 v3]
 [v3 v4 v5][v3 v4 v5]
 [v5 v6 v7 v8 v9][v5 v6 v7 v8 v9]
@@ -547,15 +548,14 @@ set -- v{1..9}
 [v9][v9]
 [v7 v8 v9][v7 v8 v9]
 [v1 v2 v3 v4 v5 v6 v7 v8 v9][v1 v2 v3 v4 v5 v6 v7 v8 v9]
-[/mnt/c/Users/andyb/AppData/Local/Temp/ps-$SH/spec-record/538bb986cbf847d0bfa71a0b8f312ead.sh v1 v2 v3 v4 v5 v6 v7 v8 v9][/mnt/c/Users/andyb/AppData/Local/Temp/ps-$SH/spec-record/538bb986cbf847d0bfa71a0b8f312ead.sh v1 v2 v3 v4 v5 v6 v7 v8 v9]
+[$0 v1 v2 v3 v4 v5 v6 v7 v8 v9][$0 v1 v2 v3 v4 v5 v6 v7 v8 v9]
 [][]
 [v7 v8][v7 v8]
 [v1 v2 v3 v4][v1 v2 v3 v4]
-[/mnt/c/Users/andyb/AppData/Local/Temp/ps-$SH/spec-record/538bb986cbf847d0bfa71a0b8f312ead.sh v1 v2 v3][/mnt/c/Users/andyb/AppData/Local/Temp/ps-$SH/spec-record/538bb986cbf847d0bfa71a0b8f312ead.sh v1 v2 v3]
+[$0 v1 v2 v3][$0 v1 v2 v3]
 [][]
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array-sparse array-sparse (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -701,7 +701,6 @@ compgen -F _set_COMPREPLY
 9
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-array-sparse array-sparse (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 

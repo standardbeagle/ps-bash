@@ -571,6 +571,9 @@ public sealed partial class BashParser
         // assignment (`x=`) is different: it assigns an explicit empty string.
         if (value is not null && value.Parts.IsEmpty && Peek().Kind == BashTokenKind.LParen)
         {
+            // `a= (1 2)`: the ( is not glued to the =, so it is no array literal but a stray ( (bash: syntax error).
+            if (Peek().Position != token.Position + token.Value.Length)
+                throw MakeError("syntax error near unexpected token `('", Peek().Position, "ArrayLiteral");
             Advance(); // consume (
             var elements = ImmutableArray.CreateBuilder<CompoundWord>();
             while (Peek().Kind != BashTokenKind.RParen && Peek().Kind != BashTokenKind.Eof)

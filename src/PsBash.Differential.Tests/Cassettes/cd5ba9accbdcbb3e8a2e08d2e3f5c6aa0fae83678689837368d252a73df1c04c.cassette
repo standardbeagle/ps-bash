@@ -1,0 +1,19 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 247
+stdout-length: 37
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)"; set -- '2 3' 'c d'; { echo hi 1>& "$@"; } 2>/dev/null; echo status=$?; { echo hi > "$@"; } 2>/dev/null; echo status=$?; ls | wc -l
+set -- 'o n e'; echo one >& "$@"; echo status=$?; cat 'o n e'; a=(x); echo two > "${a[@]}"; cat x
+==== STDOUT ====
+status=1
+status=1
+0
+status=0
+one
+two
+
+==== STDERR ====
+

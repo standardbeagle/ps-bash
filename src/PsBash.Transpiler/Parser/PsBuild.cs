@@ -562,6 +562,17 @@ public static class PsBuild
         + " -ValueOnly -ErrorAction Ignore))) { Write-Error "
         + SingleQuote("ps-bash: " + name + ": cannot convert " + (toAssoc ? "indexed to associative" : "associative to indexed") + " array")
         + " -ErrorAction Continue; $global:LASTEXITCODE = 1 } else { " + declaration + " }";
+    /// <summary>The end of the message <see cref="KeyOnlySubscriptGuard"/> reports (callers recognise a refused write by it).</summary>
+    public const string BadArithSubscriptMessage = ": arithmetic syntax error in array subscript";
+    /// <summary>
+    /// <c>a['2']=3</c> / <c>b[0+]=y</c>: a subscript that is no arithmetic expression is a KEY for an associative
+    /// <paramref name="name"/> (<paramref name="assignment"/> runs, status 0), and for anything else an arithmetic syntax
+    /// error: status 1 and nothing assigned. Which one it is is known only when it runs.
+    /// </summary>
+    public static string KeyOnlySubscriptGuard(string name, string written, string assignment) =>
+        "if ([PsBash.Cmdlets.BashAssoc]::IsAssocValue((Get-Variable -Name " + SingleQuote(name) + " -ValueOnly -ErrorAction Ignore))) { "
+        + assignment + "; " + SetStatus(0) + " } else { Write-Error " + SingleQuote("ps-bash: " + written + BadArithSubscriptMessage)
+        + " -ErrorAction Continue; " + SetStatus(1) + " }";
     /// <summary>
     /// A plain assignment to <paramref name="names"/> in a script that made names read-only at run time
     /// (<c>readonly $names</c>, <c>readonly</c> in a function): when one of them is read-only now, report
