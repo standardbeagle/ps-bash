@@ -792,7 +792,7 @@ public class BashTranspilerReviewRegressionTests
     {
         var ps = BashTranspiler.Transpile("f() { local -r x=1; x=2; }; f; x=9");
         Assert.Contains("x: readonly variable", ps);
-        Assert.Equal(1, System.Text.RegularExpressions.Regex.Matches(ps, "readonly variable").Count);
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(ps, "readonly variable"));
         Assert.Contains("$env:x = \"9\"", ps);
     }
 

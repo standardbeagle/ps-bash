@@ -50,6 +50,7 @@ public class MkdirModeTests : IDisposable, IClassFixture<SharedPwshFixture>
     [InlineData("-m a=rx", "d", 0x16D)]                // 0555
     [InlineData("-m 'u+w,g-r'", "d", 0x1DF)]             // 0737 from base 0777
     [InlineData("-m 0", "d", 0)]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")] // Skip.If below; the analyzer cannot see it
     public void Unix_AppliesTheRequestedMode(string flags, string name, int expected)
     {
         Skip.If(OperatingSystem.IsWindows(), "Unix mode bits only exist on Unix");

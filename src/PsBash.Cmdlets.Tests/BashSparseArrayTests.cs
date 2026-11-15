@@ -28,6 +28,6 @@ public class BashSparseArrayTests
         var a = new BashSparseArray();
         a[5L] = "x";
         Assert.False(a.Contains("Count"));
-        Assert.Equal(1, a.Count);
+        Assert.Single(a);
     }
 }

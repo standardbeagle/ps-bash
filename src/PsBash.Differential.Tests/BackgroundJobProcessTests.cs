@@ -142,7 +142,7 @@ public class BackgroundJobProcessTests
 
         var deadline = DateTime.UtcNow.AddSeconds(20);
         while (pids.Any(IsAlive) && DateTime.UtcNow < deadline) await Task.Yield();
-        Assert.Empty(pids.Where(IsAlive));
+        Assert.DoesNotContain(pids, IsAlive);
     }
 
     /// <summary>
@@ -167,7 +167,7 @@ public class BackgroundJobProcessTests
 
         var deadline = DateTime.UtcNow.AddSeconds(30);
         while (pids.Any(IsAlive) && DateTime.UtcNow < deadline) await Task.Yield();
-        Assert.Empty(pids.Where(IsAlive));
+        Assert.DoesNotContain(pids, IsAlive);
     }
 
     [SkippableFact]

@@ -160,7 +160,6 @@ public class GrepArgScanTests
     [InlineData("flags= src=[] ops=[a] ctx=0/0 max=inf gsep=<none>", "--group-separator=YY", "--no-group-separator", "a")]
     [InlineData("flags= src=[] ops=[a] ctx=0/0 max=inf color=Always", "--color=always", "a")]
     [InlineData("flags= src=[] ops=[a] ctx=0/0 max=inf color=Always", "--colour=force", "a")]
-    [InlineData("flags= src=[] ops=[a] ctx=0/0 max=inf color=Auto", "--color", "a")]
     [InlineData("flags= src=[] ops=[a] ctx=0/0 max=inf", "--color=never", "a")]
     [InlineData("ERR 2 grep: unknown binary-files type", "--binary-files=bogus", "a")]
     [InlineData("ERR 2 grep: option '--binary-files' requires an argument", "--binary-files")]

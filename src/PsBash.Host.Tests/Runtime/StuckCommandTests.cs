@@ -35,7 +35,7 @@ public class StuckCommandTests : IDisposable
         StuckCommandWatchdog.Terminate = r => poisoned.TrySetResult(r);
 
         var never = new TaskCompletionSource<int>().Task;
-        StuckCommandWatchdog.OnCancelled(never, "command");
+        _ = StuckCommandWatchdog.OnCancelled(never, "command"); // never completes: the watchdog is what is under test
 
         var reason = await poisoned.Task.WaitAsync(TimeSpan.FromSeconds(10));
         Assert.Contains("did not stop within", reason);

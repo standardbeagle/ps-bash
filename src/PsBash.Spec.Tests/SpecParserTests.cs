@@ -174,7 +174,7 @@ public class SpecImporterShellVariableTests
         var existing = SpecParser.Parse("p", "#### plain\necho x\n## stdout: recorded\n");
         var merged = SpecImporter.Merge(existing, SpecImporter.Import("p", Oils, "t.test.sh"));
         Assert.Equal(["plain", "runs the shell under test"], merged.Cases.Select(c => c.Name));
-        Assert.Equal("recorded", merged.Cases[0].Primary.Stdout.Trim());
+        Assert.Equal("recorded", merged.Cases[0].Primary.Stdout?.Trim());
     }
 
     [Fact]

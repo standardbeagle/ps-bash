@@ -39,7 +39,7 @@ public class SplitSuffixGrowthTests : IDisposable, IClassFixture<SharedPwshFixtu
             File.WriteAllText(input, string.Concat(Enumerable.Range(1, lines).Select(i => i + "\n")));
         var r = CmdResult.Run(_fixture.AcquireFresh(),
             $"Set-Location -LiteralPath '{work.Replace("'", "''")}'; Invoke-BashSplit {args} '{input.Replace("'", "''")}'");
-        var names = Directory.GetFiles(work).Select(Path.GetFileName).OrderBy(n => n, StringComparer.Ordinal).ToArray()!;
+        var names = Directory.GetFiles(work).Select(f => Path.GetFileName(f)).OrderBy(n => n, StringComparer.Ordinal).ToArray();
         return (r.ExitCode, r.Stderr + string.Join("\n", r.Errors), names);
     }
 

@@ -2203,7 +2203,7 @@ public class PsEmitterTests
     [InlineData("set -e -f")]
     [InlineData("set -efuC")]
     public void Transpile_BundledShortSetOptions_AreAccepted(string bash)
-        => Assert.NotEmpty(PsEmitter.Transpile(bash + "; echo ok"));
+        => Assert.NotEmpty(PsEmitter.Transpile(bash + "; echo ok")!);
 
     [Fact]
     public void Transpile_SetOptionTheShellOnlyRemembers_GoesToShopt()
@@ -3945,7 +3945,7 @@ public class PsEmitterTests
     [Fact]
     public void Transpile_FunctionKeywordForm_EmitsPsFunction()
     {
-        var result = PsBuildTestText.StripFunctionSource(PsEmitter.Transpile("function greet { Invoke-BashEcho hello }"));
+        var result = PsBuildTestText.StripFunctionSource(PsEmitter.Transpile("function greet { Invoke-BashEcho hello }")!);
 
         Assert.Equal($"function greet {{ {FnPre}Invoke-BashEcho hello{FnPost} }}", result);
     }
@@ -3953,7 +3953,7 @@ public class PsEmitterTests
     [Fact]
     public void Transpile_FunctionParensForm_EmitsPsFunction()
     {
-        var result = PsBuildTestText.StripFunctionSource(PsEmitter.Transpile("greet() { echo hello }"));
+        var result = PsBuildTestText.StripFunctionSource(PsEmitter.Transpile("greet() { echo hello }")!);
 
         Assert.Equal($"function greet {{ {FnPre}Invoke-BashEcho hello{FnPost} }}", result);
     }
@@ -3961,7 +3961,7 @@ public class PsEmitterTests
     [Fact]
     public void Transpile_FunctionParensWithSpace_EmitsPsFunction()
     {
-        var result = PsBuildTestText.StripFunctionSource(PsEmitter.Transpile("greet () { echo hello }"));
+        var result = PsBuildTestText.StripFunctionSource(PsEmitter.Transpile("greet () { echo hello }")!);
 
         Assert.Equal($"function greet {{ {FnPre}Invoke-BashEcho hello{FnPost} }}", result);
     }
@@ -3998,7 +3998,7 @@ public class PsEmitterTests
     public void Transpile_FunctionCallingFunction_EmitsNestedCalls()
     {
         var result = PsBuildTestText.StripFunctionSource(PsEmitter.Transpile(
-            "function greet { Invoke-BashEcho hello }; function main { greet }"));
+            "function greet { Invoke-BashEcho hello }; function main { greet }")!);
 
         Assert.Equal(
             $"function greet {{ {FnPre}Invoke-BashEcho hello{FnPost} }}; function main {{ {FnPre}greet{FnPost} }}",
@@ -4008,7 +4008,7 @@ public class PsEmitterTests
     [Fact]
     public void Transpile_FunctionWithMultilineBody_EmitsFunction()
     {
-        var result = PsBuildTestText.StripFunctionSource(PsEmitter.Transpile("function setup {\n  echo start\n  echo end\n}"));
+        var result = PsBuildTestText.StripFunctionSource(PsEmitter.Transpile("function setup {\n  echo start\n  echo end\n}")!);
 
         Assert.Equal($"function setup {{ {FnPre}Invoke-BashEcho start; Invoke-BashEcho end{FnPost} }}", result);
     }
@@ -4021,7 +4021,7 @@ public class PsEmitterTests
     [Fact]
     public void Transpile_Function_SavesAndRestoresBashPositionalAroundBody()
     {
-        var result = PsBuildTestText.StripFunctionSource(PsEmitter.Transpile("f() { echo \"$1\"; }"));
+        var result = PsBuildTestText.StripFunctionSource(PsEmitter.Transpile("f() { echo \"$1\"; }")!);
 
         var expected = $"function f {{ {FnPre}Invoke-BashEcho \"$(if ($global:BashPositional) {{ $global:BashPositional[0] }} else {{ $args[0] }})\"{FnPost} }}";
         Assert.Equal(expected, result);
@@ -4760,7 +4760,7 @@ public class PsEmitterTests
     {
         // `>(body)`: cmd writes a temp file named by the word; body reads it as stdin AFTER cmd (it used to run at once,
         // reading the shell's stdin: `seq 3 > >(tac)` hung).
-        var result = PsEmitter.Transpile("cmd >(tee log.txt)");
+        var result = PsEmitter.Transpile("cmd >(tee log.txt)")!;
         var m = System.Text.RegularExpressions.Regex.Match(result, @"^\$env:(__psbash_pso\d+) = New-BashProcessSubPath; try \{ (.*?) \} finally \{ (.*) \}$");
         Assert.True(m.Success, result);
         Assert.Contains("cmd ", m.Groups[2].Value);
@@ -4779,7 +4779,7 @@ public class PsEmitterTests
     public void Transpile_CompoundOutputProcessSub_FeedsBodyAfterCommand(string bash)
     {
         // A compound command's own `> >(body)` redirect got no hand-off: `{ echo 1; ...; } > >(tac)` printed nothing.
-        var result = PsEmitter.Transpile(bash);
+        var result = PsEmitter.Transpile(bash)!;
         var m = System.Text.RegularExpressions.Regex.Match(result, @"^\$env:(__psbash_pso\d+) = New-BashProcessSubPath; try \{ ");
         Assert.True(m.Success, result);
         Assert.DoesNotContain("Invoke-ProcessSub", result);
@@ -5685,7 +5685,7 @@ public class PsEmitterTests
     [InlineData("declare -A m; m=([k]=v)", false)]
     public void Transpile_KeyedArrayLiteral_PicksTheKindAtRunTimeUnlessKnownAssociative(string bash, bool runTimeChoice)
     {
-        var ps = PsEmitter.Transpile(bash);
+        var ps = PsEmitter.Transpile(bash)!;
         Assert.Equal(runTimeChoice, ps.Contains("-is [PsBash.Cmdlets.BashAssoc]"));
         Assert.Contains("[PsBash.Cmdlets.BashAssoc]::FromPairs(", ps);
         if (runTimeChoice) Assert.Contains("[PsBash.Cmdlets.BashSparseArray]::FromEntries([string](Invoke-BashArith ", ps);
@@ -5737,16 +5737,16 @@ public class PsEmitterTests
     [Fact]
     public void Transpile_Nounset_PlainReadsCheckTheFlagButDefaultsDoNot()
     {
-        var result = PsEmitter.Transpile("set -u; echo \"$a\" \"${b:-d}\" \"${c-d}\"");
+        var result = PsEmitter.Transpile("set -u; echo \"$a\" \"${b:-d}\" \"${c-d}\"")!;
         Assert.Contains("unbound variable", result);
-        Assert.Equal(1, System.Text.RegularExpressions.Regex.Matches(result, "unbound variable").Count);
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(result, "unbound variable"));
     }
 
     [Fact]
     public void Transpile_Nounset_PositionalReadsCheckTheParameterCount()
     {
-        var result = PsEmitter.Transpile("set -u; echo $1 $@ $# $0");
-        Assert.Equal(1, System.Text.RegularExpressions.Regex.Matches(result, "unbound variable").Count);
+        var result = PsEmitter.Transpile("set -u; echo $1 $@ $# $0")!;
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(result, "unbound variable"));
         Assert.Contains("Count -lt 1)", result);
     }
 
@@ -5814,7 +5814,7 @@ public class PsEmitterTests
     [Fact]
     public void Transpile_BackgroundGroup_ChecksErrexitInsideTheJob()
     {
-        var ps = PsEmitter.Transpile("set -e\n{ false; echo x; } &\nwait");
+        var ps = PsEmitter.Transpile("set -e\n{ false; echo x; } &\nwait")!;
         int job = ps.IndexOf("Invoke-BashBackground", StringComparison.Ordinal);
         Assert.True(job >= 0, ps);
         string body = ps[job..ps.IndexOf("Invoke-BashWait", StringComparison.Ordinal)];
@@ -5831,7 +5831,7 @@ public class PsEmitterTests
     [Fact]
     public void Transpile_ErrTrapLine_IsTheScriptLineOfAssignmentsTestsAndSubstitutionBodies()
     {
-        var ps = PsEmitter.Transpile("trap 'echo $LINENO' ERR\nset -E\n\nx=$(false)\n\n[[ a == b ]]\n(( 0 ))");
+        var ps = PsEmitter.Transpile("trap 'echo $LINENO' ERR\nset -E\n\nx=$(false)\n\n[[ a == b ]]\n(( 0 ))")!;
         Assert.Equal(2, System.Text.RegularExpressions.Regex.Matches(ps, @"__psbLine = 4;").Count); // inside $( ) and after the assignment
         Assert.Contains("__psbLine = 6;", ps);
         Assert.Contains("__psbLine = 7;", ps);
@@ -5842,7 +5842,7 @@ public class PsEmitterTests
     [Fact]
     public void Transpile_SubstitutionWithoutErrtrace_HasNoChecksInside()
     {
-        var ps = PsEmitter.Transpile("trap 'echo $LINENO' ERR\nx=$(false; true)");
+        var ps = PsEmitter.Transpile("trap 'echo $LINENO' ERR\nx=$(false; true)")!;
         Assert.DoesNotContain("$global:__BashErrexit = $false", ps);
         // One check after `trap`, one after the assignment; none between `false` and `true`.
         Assert.Equal(2, System.Text.RegularExpressions.Regex.Matches(ps, @"& \$global:__BashTrapERR;").Count);
@@ -5852,7 +5852,7 @@ public class PsEmitterTests
     public void Transpile_PlainCommandUnderErrTrap_RecordsPipestatusBeforeTheTrapRuns()
     {
         // bash: `trap 'echo ${PIPESTATUS[@]}' ERR; false` prints 1. The record came after the check: the trap saw the old value.
-        var ps = PsEmitter.Transpile("trap 'echo ${PIPESTATUS[@]}' ERR\nfalse");
+        var ps = PsEmitter.Transpile("trap 'echo ${PIPESTATUS[@]}' ERR\nfalse")!;
         int record = ps.LastIndexOf("$global:PIPESTATUS = @([int]$global:LASTEXITCODE)", StringComparison.Ordinal);
         int trap = ps.LastIndexOf("& $global:__BashTrapERR", StringComparison.Ordinal);
         Assert.True(record >= 0 && record < trap, ps);
@@ -5885,14 +5885,14 @@ public class PsEmitterTests
     public void Transpile_PipelineEndingInASubshell_RunsTheErrTrapTwice(string pipeline, int checks)
     {
         // One check after `trap` itself, then the pipeline's: bash runs the trap twice when the last stage is `( )`.
-        var ps = PsEmitter.Transpile("trap 'echo x' ERR\n" + pipeline);
+        var ps = PsEmitter.Transpile("trap 'echo x' ERR\n" + pipeline)!;
         Assert.Equal(checks, System.Text.RegularExpressions.Regex.Matches(ps, @"& \$global:__BashTrapERR;").Count);
     }
     [Fact]
     public void Transpile_RedirectedCompoundTrapLine_IsTheCommandBeforeIt()
     {
         // bash leaves $LINENO at the last command run: the body never ran.
-        var ps = PsEmitter.Transpile("trap 'echo $LINENO' ERR\nfalse\n\n{ false\n  true\n} > /zz");
+        var ps = PsEmitter.Transpile("trap 'echo $LINENO' ERR\nfalse\n\n{ false\n  true\n} > /zz")!;
         var tail = ps[ps.IndexOf("if ($global:__BashRedirectFailed)", StringComparison.Ordinal)..];
         Assert.Contains("$env:__psbLine = 2;", tail);
     }
@@ -6679,7 +6679,7 @@ public class PsEmitterTests
     {
         // bash: `builtin ls` is "builtin: ls: not a shell builtin", status 1. It ran the ls file. The name reaches
         // the report as a quoted literal, never as code.
-        var ps = PsEmitter.Transpile(bash);
+        var ps = PsEmitter.Transpile(bash)!;
         Assert.Equal(!runs, ps.Contains(": not a shell builtin"));
         if (!runs)
         {
@@ -7010,7 +7010,7 @@ public class PsEmitterTests
     [InlineData("{ echo x; echo y; } | cat", 1)]
     public void Transpile_TrapDebug_NotInSubshellsFunctionsOrCompoundStages(string body, int runs)
     {
-        var result = PsEmitter.Transpile(DebugScript + body);
+        var result = PsEmitter.Transpile(DebugScript + body)!;
         int count = System.Text.RegularExpressions.Regex.Matches(result, @"\$env:__psbLine = \d+;").Count;
         Assert.Equal(DebugScriptRuns + runs, count);
     }
@@ -7503,7 +7503,7 @@ public class PsEmitterTests
     [InlineData("greet() { echo x; }", false)]
     [InlineData("cd() { echo x; }", false)] // a bash command: the emitter maps it, never the alias
     public void Transpile_FunctionNamedLikeAPsAlias_DropsTheAliasFirst(string bash, bool dropsAlias)
-        => Assert.Equal(dropsAlias, PsEmitter.Transpile(bash).Contains("Remove-Item -LiteralPath 'Alias:", StringComparison.Ordinal));
+        => Assert.Equal(dropsAlias, PsEmitter.Transpile(bash)!.Contains("Remove-Item -LiteralPath 'Alias:", StringComparison.Ordinal));
 
     [Fact]
     public void Transpile_PipelineWithoutPipefail_IsUnchanged()
@@ -7535,7 +7535,7 @@ public class PsEmitterTests
     [InlineData("f() { :; }; f &", true)]
     [InlineData("for i in 1 2; do echo $i; done &", true)]
     public void Transpile_Background_IsolatedOnlyWhenItCanChangeShellState(string bash, bool isolated)
-        => Assert.Equal(isolated, PsEmitter.Transpile(bash).Contains("Invoke-BashBackground -Isolated"));
+        => Assert.Equal(isolated, PsEmitter.Transpile(bash)!.Contains("Invoke-BashBackground -Isolated"));
 
     [Fact]
     public void Transpile_SetPlusOXtrace_TurnsTracingOffAndClearsTheFlag()

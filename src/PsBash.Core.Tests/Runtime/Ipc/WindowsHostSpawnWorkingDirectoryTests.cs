@@ -13,6 +13,7 @@ namespace PsBash.Core.Tests.Runtime.Ipc;
 public class WindowsHostSpawnWorkingDirectoryTests
 {
     [SkippableFact]
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")] // Skip.IfNot below; the analyzer cannot see it
     public void Start_ChildSpawnedInsideADirectory_DoesNotPinThatDirectory()
     {
         Skip.IfNot(OperatingSystem.IsWindows(), "Windows-only: Linux can remove a directory that is another process's cwd");
