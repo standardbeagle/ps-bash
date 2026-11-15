@@ -26,7 +26,7 @@ public class InvokeBashLetCommandTests : IClassFixture<SharedPwshFixture>
         pwsh.AddScript(script).Invoke();
         pwsh.Commands.Clear();
         var result = pwsh.AddScript(
-            $"$v = Get-Variable -Name '{varName}' -ValueOnly -ErrorAction SilentlyContinue; " +
+            $"$v = [PsBash.Cmdlets.BashVariableStore]::Get('{varName}'); [PsBash.Cmdlets.BashVariableStore]::Set('{varName}', $null); " +
             "if ($null -eq $v) { return } else { [int64]$v }").Invoke();
         var first = result.FirstOrDefault();
         if (first == null) return null;
@@ -133,6 +133,26 @@ public class InvokeBashLetCommandTests : IClassFixture<SharedPwshFixture>
         Assert.Null(v);
     }
 
+    // Oracle: o=4; v=o; let "$v |= 3"; echo $o $?  ->  7 0. The full arithmetic grammar (assignment operators included)
+    // applies to a run-time operand; the old parser of its own had no |= ("expression error").
+    [Fact]
+    public void Let_CompoundBitwiseAssign_WritesTheShellVariable()
+    {
+        var v = RunAndReadIntVar("[PsBash.Cmdlets.BashVariableStore]::Set('letOr', '4'); Invoke-BashLet 'letOr |= 3'", "letOr");
+        Assert.Equal(7L, v);
+    }
+
+    // Oracle: let a=0 b=1; echo $?  ->  0 and let a=1 b=0; echo $?  ->  1: only the LAST operand decides.
+    [Theory]
+    [InlineData("Invoke-BashLet 'letA=0' 'letB=1'", 0)]
+    [InlineData("Invoke-BashLet 'letC=1' 'letD=0'", 1)]
+    public void Let_Status_FollowsTheLastOperand(string script, int expected)
+        => Assert.Equal(expected, RunAndReadLastExitCode(script));
+
+    // Oracle: let; echo $?  ->  "let: expression expected", 1.
+    [Fact]
+    public void Let_NoOperand_IsAnError()
+        => Assert.Equal(1, RunAndReadLastExitCode("Invoke-BashLet -ErrorAction SilentlyContinue"));
     [Fact]
     public void Let_AliasLet_ResolvesToCmdlet()
     {

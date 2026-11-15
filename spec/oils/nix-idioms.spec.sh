@@ -184,5 +184,4 @@ NIX_ENFORCE_NO_NATIVE_x86_64_unknown_linux_gnu=3
 
 ## END
 ## status: 0
-## XFAIL ps-bash gap-let-own-parser let has its own small expression parser without |= (expression error); $(( )) handles it
 ## timeout: 10
