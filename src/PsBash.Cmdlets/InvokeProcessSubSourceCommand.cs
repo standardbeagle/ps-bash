@@ -29,9 +29,11 @@ public sealed class InvokeProcessSubSourceCommand : PSCmdlet
 
     // Promote any "function NAME" definition to "function global:NAME" so
     // bash function defs survive past the eval pipeline. Variable assignments
-    // emit as $env:VAR (process-global already) so they need no rewrite.
+    // emit as $env:VAR (process-global already) so they need no rewrite. A definition the Eval-context
+    // transpile already scoped (`function global:greet`) is left alone: rewriting it made
+    // `function global:global:greet`, and the function was never defined.
     private static readonly Regex GlobalFunctionRewrite =
-        new(@"\bfunction\s+(\w+)\b", RegexOptions.Compiled);
+        new(@"\bfunction\s+(?!(?:global|script|local|private):)(\w+)\b", RegexOptions.Compiled);
 
     protected override void ProcessRecord()
     {
