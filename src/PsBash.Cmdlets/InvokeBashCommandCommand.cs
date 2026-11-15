@@ -284,6 +284,8 @@ public sealed class InvokeBashCommandCommand : PSCmdlet
     /// </summary>
     private CommandInfo? ResolveCommand(string name)
     {
+        // `command -v`/`-V` describe NAME without running it, so nothing is hashed (as in bash).
+        using var probe = PsBash.Core.CommandHashTable.Probe();
         try
         {
             // The name is a literal command name, not a wildcard pattern: `command [ -n x ]` failed with

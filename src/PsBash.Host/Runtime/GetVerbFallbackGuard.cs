@@ -42,6 +42,7 @@ internal static class GetVerbFallbackGuard
         {
             invoke.PostCommandLookupAction = (sender, e) =>
             {
+                RecordHashed(e);
                 if (e.Command is not ApplicationInfo app || HasRunnableExtension(app.Path)) return;
                 if (!TryReadShebang(app.Path, out string? shebang)) return;
                 e.CommandScriptBlock = ScriptBlock.Create(shebang is null
@@ -55,11 +56,29 @@ internal static class GetVerbFallbackGuard
             // reports success; bash says "Permission denied", 126.
             invoke.PostCommandLookupAction = (sender, e) =>
             {
+                RecordHashed(e);
                 if (e.Command is not ApplicationInfo app || HasExecuteBit(app.Path)) return;
                 e.CommandScriptBlock = ScriptBlock.Create(PermissionDeniedScript(Shown(e.CommandName, app.Path)));
             };
         }
     }
+
+    /// <summary>
+    /// bash's hash table (<c>hash</c>): a command word without a slash that resolved to a program file through PATH is
+    /// remembered with one more hit. Builtins, functions and the runtime's own commands resolve to something else and
+    /// are not hashed, as bash hashes no builtin.
+    /// </summary>
+    private static void RecordHashed(CommandLookupEventArgs e)
+    {
+        if (e.Command is not ApplicationInfo app || !IsHashableName(e.CommandName)) return;
+        if (PsBash.Core.CommandHashTable.InProbe) return;
+        if (System.Management.Automation.Runspaces.Runspace.DefaultRunspace is not { } runspace) return;
+        PsBash.Core.CommandHashTable.For(runspace).RecordUse(e.CommandName, app.Path, Environment.GetEnvironmentVariable("PATH"));
+    }
+
+    /// <summary>A bare command word: one with a slash (<c>./x</c>, <c>/bin/ls</c>) is run as given, never looked up or hashed.</summary>
+    internal static bool IsHashableName(string? name)
+        => !string.IsNullOrEmpty(name) && name.IndexOfAny(['/', '\\']) < 0;
 
     /// <summary>bash names the word as typed (<c>./README.md</c>), or for a PATH hit the file it found.</summary>
     private static string Shown(string? commandName, string path)

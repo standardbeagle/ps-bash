@@ -78,9 +78,11 @@ public sealed class InvokeBashWhichCommand : PSCmdlet
             // Resolve via Get-Command. The script body is fixed; $name and
             // $all bind positionally so the operand cannot escape into PS
             // syntax.
-            var cmds = InvokeCommand.InvokeScript(
-                "param($n, $all) @(Get-Command -Name $n -All:$all -ErrorAction SilentlyContinue)",
-                name, showAll);
+            System.Collections.ObjectModel.Collection<PSObject> cmds;
+            using (PsBash.Core.CommandHashTable.Probe()) // a search, not a run: the shell's hash table is not touched
+                cmds = InvokeCommand.InvokeScript(
+                    "param($n, $all) @(Get-Command -Name $n -All:$all -ErrorAction SilentlyContinue)",
+                    name, showAll);
 
             if (cmds.Count == 0 || cmds[0] == null)
             {

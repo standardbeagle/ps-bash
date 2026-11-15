@@ -157,6 +157,10 @@ public sealed class InvokeBashBashCommand : PSCmdlet
         {
             psi.ArgumentList.Add(a);
         }
+        // An exported SHELLOPTS (`export SHELLOPTS; set -x; bash -c ...`) is the options on NOW: bash keeps the exported
+        // value current as `set` changes them, and the child shell turns each one on at startup.
+        if (psi.Environment.ContainsKey("SHELLOPTS"))
+            psi.Environment["SHELLOPTS"] = CurrentShellOpts();
         // The session's location, not the process cwd: an embedding runs several sessions in
         // one process, so `bash -c ls` listed wherever the process happened to stand (awk's
         // pipes already do this).
@@ -209,6 +213,32 @@ public sealed class InvokeBashBashCommand : PSCmdlet
                 WriteObject(obj);
             }
         }
+    }
+
+    /// <summary>
+    /// The value of <c>$SHELLOPTS</c> in this shell: the <c>set -o</c> options on, alphabetical, colon-joined. The same
+    /// list as <c>PsBuild.ShellOptsExpr</c>, read here without running script (which <c>set -x</c> would trace).
+    /// </summary>
+    private string CurrentShellOpts()
+    {
+        bool On(string global) => LanguagePrimitives.IsTrue(SessionState.PSVariable.GetValue("global:" + global));
+        var o = new List<string> { "braceexpand" };
+        if (InvokeBashShoptCommand.SetOptionOn("emacs")) o.Add("emacs");
+        if (On("__BashErrexit")) o.Add("errexit");
+        if (On("__BashErrtrace")) o.Add("errtrace");
+        o.Add("hashall");
+        if (InvokeBashShoptCommand.SetOptionOn("histexpand")) o.Add("histexpand");
+        if (InvokeBashShoptCommand.SetOptionOn("history")) o.Add("history");
+        o.Add("interactive-comments");
+        if (InvokeBashShoptCommand.SetOptionOn("monitor")) o.Add("monitor");
+        if (On("__BashNoclobber")) o.Add("noclobber");
+        if (On("__BashNoglob")) o.Add("noglob");
+        if (On("__BashNounset")) o.Add("nounset");
+        if (On("__BashPipefail")) o.Add("pipefail");
+        if (On("__BashVerbose")) o.Add("verbose");
+        if (InvokeBashShoptCommand.SetOptionOn("vi")) o.Add("vi");
+        if (On("__BashXtrace")) o.Add("xtrace");
+        return string.Join(':', o);
     }
 
     /// <summary>

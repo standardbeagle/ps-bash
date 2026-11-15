@@ -257,6 +257,19 @@ public class ShellArgsTests
     public void WithPrelude_PutsTheOptionsOnTheFirstLine(string? prelude, string script, string expected) =>
         Assert.Equal(expected, ShellArgs.WithPrelude(prelude, script));
 
+    // Oracle (bash 5.2): `export SHELLOPTS; set -x; bash -c 'echo 2'` traces `+ echo 2` in the child; a SHELLOPTS in
+    // the environment at startup turns on each option it lists. Always-on and interactive-only names change nothing,
+    // unknown names are ignored, and xtrace goes last so no other startup command is traced.
+    [Theory]
+    [InlineData("-c|true", null, null)]
+    [InlineData("-c|true", "", null)]
+    [InlineData("-c|true", "braceexpand:hashall:interactive-comments:monitor:emacs", null)]
+    [InlineData("-c|true", "braceexpand:hashall:interactive-comments:xtrace", "set -o xtrace")]
+    [InlineData("-c|true", "xtrace:errexit:pipefail:bogus;rm", "set -o errexit; set -o pipefail; set -o xtrace")]
+    [InlineData("-u|-c|true", "xtrace:nounset", "set -o nounset; set -u; set -o xtrace")]
+    public void WithInheritedShellOpts_TurnsOnTheListedOptions(string argv, string? shellopts, string? expectedPrelude) =>
+        Assert.Equal(expectedPrelude, ShellArgs.Parse(argv.Split('|')).WithInheritedShellOpts(shellopts).Prelude);
+
     // Oracle (bash 5.2): `-c -- 'echo two'` and `-c - 'echo one'` run the command; `+c 'echo hi'` is accepted;
     // `-oo errexit noglob` and `-eo noglob` give each bundled `o` the next word.
     [Theory]

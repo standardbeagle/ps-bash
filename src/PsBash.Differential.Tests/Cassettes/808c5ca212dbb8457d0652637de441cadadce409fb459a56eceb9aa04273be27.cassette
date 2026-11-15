@@ -1,0 +1,46 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 585
+stdout-length: 171
+stderr-length: 0
+==== SCRIPT ====
+mkdir -p hb && printf '#!/bin/sh\necho hi\n' > hb/hashtool && chmod +x hb/hashtool
+PATH="$PWD/hb:$PATH"
+hash
+type -P hashtool >/dev/null; command -v hashtool >/dev/null; hash
+hashtool; hashtool
+hash | cut -f1
+hash -t hashtool >/dev/null; eval hashtool
+hash | cut -f1
+hash -t hashtool | grep -c 'hb.hashtool$'
+hash -t hashtool nosuch 2>/dev/null | cut -f1; hash -t hashtool nosuch >/dev/null 2>&1; echo "t=$?"
+hash -d hashtool; hash; hash -d hashtool 2>/dev/null; echo "d=$?"
+hash hashtool; echo "add=$?"; hash | cut -f1
+hash -r; hash; echo "r=$?"
+hash -p some/where fake; hash -t fake
+
+==== STDOUT ====
+hash: hash table empty
+hash: hash table empty
+hi
+hi
+hits
+   2
+hi
+hits
+   4
+1
+hashtool
+t=1
+hash: hash table empty
+d=1
+add=0
+hits
+   0
+hash: hash table empty
+r=0
+some/where
+
+==== STDERR ====
+

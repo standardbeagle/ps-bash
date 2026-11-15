@@ -39,6 +39,7 @@ public sealed class ConvertToBashNativeStdinCommand : PSCmdlet
     protected override void BeginProcessing()
     {
         _native = EnterBashNativeStdinCommand.ResolvesToApplication(this, Name);
+        using var probe = PsBash.Core.CommandHashTable.Probe();
         // A function the transpiler emitted (it saves $global:BashPositional first) reads its input with bash
         // commands, which understand an unterminated record; a hand-written PowerShell function gets plain strings.
         _bashFunction = !_native

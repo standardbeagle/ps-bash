@@ -221,7 +221,10 @@ public static class BashShellState
     }
 
     private static ScriptBlock? AliasFunction(SessionState session, string name)
-        => (session.InvokeCommand.GetCommand(name, CommandTypes.Function) as FunctionInfo)?.ScriptBlock;
+    {
+        using var probe = PsBash.Core.CommandHashTable.Probe();
+        return (session.InvokeCommand.GetCommand(name, CommandTypes.Function) as FunctionInfo)?.ScriptBlock;
+    }
 
     private static Dictionary<string, ScriptBlock?> SaveAliasFunctions(SessionState session)
     {

@@ -76,6 +76,8 @@ if (shellArgs.Error is not null)
     Console.Error.WriteLine($"ps-bash: {shellArgs.Error}");
     return 2;
 }
+// An exported SHELLOPTS (`export SHELLOPTS; set -x; bash -c ...`) turns its options on in this shell, as in bash.
+shellArgs = shellArgs.WithInheritedShellOpts(Environment.GetEnvironmentVariable("SHELLOPTS"));
 
 // `bash -n` (noexec): parse the -c string / script / stdin and run nothing. A syntax error is status 2, otherwise 0.
 // Parse only: a construct ps-bash cannot emit is not a syntax error. An interactive shell ignores -n, as in bash.

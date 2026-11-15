@@ -59,7 +59,7 @@ hits	command
 status=0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-hash-table-unimplemented hash keeps no table of looked-up commands, so it prints "hash table empty" and hash -t has nothing to print
+## XFAIL ps-bash platform-windows-unix-bin expects /usr/bin/whoami: on Windows whoami is ps-bash's own command, which hash treats like a builtin (never hashed), and the PATH program is C:\Windows\System32\whoami.exe (intentional-differences.md, Platform)
 ## timeout: 10
 
 #### hash with args
@@ -76,7 +76,7 @@ status=0
 status=1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-hash-table-unimplemented hash keeps no table of looked-up commands, so it prints "hash table empty" and hash -t has nothing to print
+## XFAIL ps-bash platform-windows-unix-bin expects /usr/bin/whoami: on Windows whoami is ps-bash's own command, which hash treats like a builtin (never hashed), and the PATH program is C:\Windows\System32\whoami.exe (intentional-differences.md, Platform)
 ## timeout: 10
 
 #### hash -r doesn't allow additional args

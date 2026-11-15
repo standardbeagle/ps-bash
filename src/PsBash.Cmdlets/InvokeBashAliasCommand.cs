@@ -242,8 +242,9 @@ public sealed class InvokeBashAliasCommand : PSCmdlet
                 }
                 if (val == null)
                 {
-                    var psAlias = SessionState.InvokeCommand.GetCommand(
-                        arg, CommandTypes.Alias) as AliasInfo;
+                    AliasInfo? psAlias;
+                    using (PsBash.Core.CommandHashTable.Probe())
+                        psAlias = SessionState.InvokeCommand.GetCommand(arg, CommandTypes.Alias) as AliasInfo;
                     if (psAlias != null)
                     {
                         val = psAlias.Definition;

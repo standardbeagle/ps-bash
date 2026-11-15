@@ -4312,8 +4312,15 @@ public static partial class PsEmitter
             {
                 // Bare export/local VAR with no value: ensure variable exists
                 sb.Append(" = ");
-                sb.Append(varPrefix);
-                sb.Append(pair.Name);
+                // `export SHELLOPTS`: the variable is computed (the options now on), so the environment gets that value. A child
+                // shell turns each listed option on at startup; `bash -c` refreshes it at each spawn (InvokeBashBashCommand).
+                if (cmd.IsExport && !cmd.IsLocal && pair.Name == "SHELLOPTS")
+                    sb.Append(PsBuild.TryMapSpecialVar("SHELLOPTS", braced: false, inDoubleQuote: false));
+                else
+                {
+                    sb.Append(varPrefix);
+                    sb.Append(pair.Name);
+                }
             }
             else
             {

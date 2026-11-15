@@ -1,0 +1,27 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 296
+stdout-length: 66
+stderr-length: 0
+==== SCRIPT ====
+hash -r
+hash cd; echo "cd=$?"; myfn() { :; }; hash myfn; echo "fn=$?"; hash
+hash nosuch_cmd_x 2>/dev/null; echo "miss=$?"
+hash -t cd 2>/dev/null; echo "tcd=$?"
+hash -t 2>/dev/null; echo "tnone=$?"
+hash -z 2>/dev/null; echo "bad=$?"
+hash 'a;echo pwned' '$(echo pwned2)' 2>/dev/null; echo "inj=$?"
+
+==== STDOUT ====
+cd=0
+fn=0
+hash: hash table empty
+miss=1
+tcd=1
+tnone=1
+bad=2
+inj=1
+
+==== STDERR ====
+

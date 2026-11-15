@@ -1082,6 +1082,18 @@ public class BashTranspilerReviewRegressionTests
         Assert.Contains("if ($global:__BashVerbose) { $o += 'verbose' }", BashTranspiler.Transpile("echo \"$SHELLOPTS\""));
     }
 
+    // Oracle: `export SHELLOPTS; set -x; bash -c 'echo 2'` traces `+ echo 2` in the child. `export SHELLOPTS` wrote
+    // `$env:SHELLOPTS = $env:SHELLOPTS` (still nothing), so no child shell ever saw the options.
+    [Fact]
+    public void Transpile_ExportShellopts_PutsTheOptionsInTheEnvironment()
+    {
+        var ps = BashTranspiler.Transpile("export SHELLOPTS");
+        Assert.Contains("$env:SHELLOPTS = $($o = @('braceexpand');", ps);
+        Assert.DoesNotContain("$env:SHELLOPTS = $env:SHELLOPTS", ps);
+        // Any other bare export keeps its own value.
+        Assert.Contains("$env:FOO = $env:FOO", BashTranspiler.Transpile("export FOO"));
+    }
+
     // Oracle: `set -n; echo hi` prints nothing, status 0, and no EXIT trap runs; `set +n` is a no-op.
     [Theory]
     [InlineData("set -n")]

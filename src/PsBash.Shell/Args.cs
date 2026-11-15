@@ -43,6 +43,27 @@ public record ShellArgs(
     public static string WithPrelude(string? prelude, string script)
         => string.IsNullOrEmpty(prelude) ? script : prelude + "; " + script;
 
+    /// <summary>The <c>set -o</c> options a <c>SHELLOPTS</c> inherited from the environment can turn on in this shell.
+    /// The others it lists (braceexpand, hashall, interactive-comments, emacs, monitor, ...) are always on, or belong
+    /// to an interactive shell, so they change nothing here.</summary>
+    private static readonly string[] InheritableSetOptions =
+        ["errexit", "errtrace", "noclobber", "noglob", "nounset", "pipefail", "verbose", "xtrace"];
+
+    /// <summary>
+    /// bash: when <c>SHELLOPTS</c> is in the environment at startup, each option it lists is turned on (an exported
+    /// <c>SHELLOPTS</c> carries <c>set -x</c> into a child shell). They run ahead of the command-line options, except
+    /// <c>xtrace</c>, which goes last so no other startup command is traced. Names this shell does not know are ignored.
+    /// </summary>
+    public ShellArgs WithInheritedShellOpts(string? shellopts)
+    {
+        if (string.IsNullOrEmpty(shellopts)) return this;
+        var listed = shellopts.Split(':');
+        var on = InheritableSetOptions.Where(o => o != "xtrace" && listed.Contains(o)).Select(o => "set -o " + o).ToList();
+        if (Prelude is { Length: > 0 } own) on.Add(own);
+        if (listed.Contains("xtrace")) on.Add("set -o xtrace");
+        return on.Count == 0 ? this : this with { Prelude = string.Join("; ", on) };
+    }
+
     /// <summary>Hidden shopt name the prelude sets for <c>-i -c</c> (InvokeBashShoptCommand.InteractiveMark).</summary>
     public const string InteractiveMark = "psbash_interactive";
 

@@ -193,6 +193,8 @@ public sealed class InvokeBashTypeCommand : PSCmdlet
     /// <summary>True when NAME is a runtime alias to one of the ps-bash command cmdlets.</summary>
     private static bool IsPsBashCommand(PSCmdlet cmdlet, string name)
     {
+        // `type` asks what NAME is; it does not run it, so nothing is hashed (bash's `type -P` adds no entry either).
+        using var probe = PsBash.Core.CommandHashTable.Probe();
         try
         {
             return cmdlet.InvokeCommand.GetCommand(name, CommandTypes.Alias) is AliasInfo alias
@@ -208,6 +210,7 @@ public sealed class InvokeBashTypeCommand : PSCmdlet
     {
         // Cmdlets (files come from PathFiles). Parameter-bound: the name never becomes script text.
         var found = new List<CommandInfo>();
+        using var probe = PsBash.Core.CommandHashTable.Probe();
         try
         {
             foreach (var r in cmdlet.InvokeCommand.InvokeScript(
