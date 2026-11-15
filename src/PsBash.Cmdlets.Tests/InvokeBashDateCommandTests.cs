@@ -161,4 +161,30 @@ public class InvokeBashDateCommandTests : IClassFixture<SharedPwshFixture>
         Assert.Single(lines);
         Assert.Equal("$(throw 'pwn')2025", lines[0]);
     }
+
+    // ---- operands without '+' (oracle: GNU date, LC_ALL=C) ----
+
+    // `date %x` -> "date: invalid date '%x'", status 1, no output. It printed the current date with status 0.
+    [Fact]
+    public void Date_OperandWithoutPlus_IsAnInvalidDate()
+    {
+        var r = CmdResult.Run(_fixture.AcquireFresh(), "Invoke-BashDate '%x'").AssertFailed(1, "date: invalid date '%x'");
+        Assert.Empty(r.Lines);
+    }
+
+    // `date +%Y extra` -> "date: extra operand 'extra'" + the --help hint, status 1, no output.
+    [Fact]
+    public void Date_SecondOperand_IsAnExtraOperand()
+    {
+        var r = CmdResult.Run(_fixture.AcquireFresh(), "Invoke-BashDate '+%Y' extra").AssertFailed(1, "date: extra operand 'extra'");
+        Assert.Empty(r.Lines);
+    }
+
+    // `date 01010101` (MMDDhhmm) -> "date: cannot set date: Operation not permitted", status 1, and the time is printed.
+    [Fact]
+    public void Date_SetOperand_IsRefusedButPrintsTheTime()
+    {
+        var r = CmdResult.Run(_fixture.AcquireFresh(), "Invoke-BashDate 01010101").AssertFailed(1, "cannot set date: Operation not permitted");
+        Assert.NotEmpty(r.Lines);
+    }
 }

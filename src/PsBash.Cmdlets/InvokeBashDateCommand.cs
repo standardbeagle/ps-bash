@@ -79,6 +79,7 @@ public sealed class InvokeBashDateCommand : PSCmdlet
         string? format = null;
         bool utc = false;
         string? refFile = null;
+        string? setOperand = null;
 
         int i = 0;
         while (i < args.Length)
@@ -122,14 +123,38 @@ public sealed class InvokeBashDateCommand : PSCmdlet
                 continue;
             }
 
-            if (arg.Length > 0 && arg[0] == '+')
+            if (arg.Length > 0 && arg[0] == '+' && format == null)
             {
                 format = arg.Substring(1);
                 i++;
                 continue;
             }
 
+            // GNU date: any other word is an operand. A second one is an extra operand; a lone word without the '+'
+            // is a date to SET (MMDDhhmm[[CC]YY][.ss]), which an unprivileged run cannot do, and anything else an
+            // invalid date. `date %x` printed the current date with status 0 (oils errexit "Command sub exit code").
+            if (arg.Length > 0 && arg[0] != '-')
+            {
+                if (format != null || setOperand != null)
+                {
+                    WriteBashError($"date: extra operand '{arg}'");
+                    FileSystemHelpers.WriteStderr(this, "Try 'date --help' for more information.");
+                    return;
+                }
+                if (!SetDateOperand.IsMatch(arg))
+                {
+                    WriteBashError($"date: invalid date '{arg}'");
+                    return;
+                }
+                setOperand = arg;
+            }
+
             i++;
+        }
+        if (setOperand != null)
+        {
+            // Never sets the clock: report as an unprivileged GNU date does, then print the current time.
+            WriteBashError("date: cannot set date: Operation not permitted");
         }
 
         // Determine the source datetime (psm1 oracle semantics).
@@ -304,6 +329,10 @@ public sealed class InvokeBashDateCommand : PSCmdlet
         }
         return sb.ToString();
     }
+
+    /// <summary>GNU date's set-the-clock operand: MMDDhhmm[[CC]YY][.ss].</summary>
+    private static readonly System.Text.RegularExpressions.Regex SetDateOperand =
+        new(@"^\d{8}(\d{2}){0,2}(\.\d{2})?$", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
 
     private void WriteBashError(string message)
     {
