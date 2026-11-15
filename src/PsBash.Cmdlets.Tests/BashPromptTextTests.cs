@@ -26,6 +26,22 @@ public class BashPromptTextTests
     public void Expand_DollarAndBackslash_QuoteRemovalLikeBash(string input, string expected) =>
         Assert.Equal(expected, BashPromptText.Expand(input));
 
+    // bash 5.2 (oracle): x='\'; y=h; PS1='$x$y' prints \h (the value is not decoded or quote-removed);
+    // z='a$y'; PS1='<${z}>\\$y' prints <a$y>$y; an unset name is empty. $(...) is left as written: ps-bash
+    // never runs code from a variable's value (bash would print the command's output).
+    [Theory]
+    [InlineData("$x$y", "\\h")]
+    [InlineData("<${z}>\\$y", "<a$y>$y")]
+    [InlineData("$nope-", "-")]
+    [InlineData("${x", "${x")]
+    [InlineData("$(echo hi)", "$(echo hi)")]
+    [InlineData("$1 $", "$1 $")]
+    public void ExpandParameters_ExpandsNamesOnly(string decoded, string expected)
+    {
+        var values = new Dictionary<string, string> { ["x"] = "\\", ["y"] = "h", ["z"] = "a$y" };
+        Assert.Equal(expected, BashPromptText.ExpandParametersAndRemoveQuoting(decoded, n => values.GetValueOrDefault(n)));
+    }
+
     [Fact]
     public void Expand_InsertedWorkingDir_KeepsBackslashes()
     {

@@ -9,20 +9,40 @@ public static class BashPromptText
     /// Decodes the prompt escapes, then applies the double-quote backslash removal of bash's <c>promptvars</c> pass
     /// to the result: <c>\$</c> decodes to <c>\$</c>, so <c>PS1='\\$'</c> prints <c>$</c> and <c>PS1='\\\$'</c>
     /// prints <c>\$</c>. Text an escape inserts (<c>\w</c>, <c>\u</c>, a date) is quoted first, as bash quotes it,
-    /// so a backslash in a Windows path survives. Parameter expansion of the prompt string (<c>PS1='$x'</c>) is not
-    /// performed.
+    /// so a backslash in a Windows path survives. The same pass expands <c>$name</c> and <c>${name}</c>
+    /// (<c>PS1='$x$y'</c>); the value is inserted as is, neither decoded nor quote-removed, as in bash.
     /// </summary>
-    public static string Expand(string? prompt) => RemoveQuotingBackslashes(Decode(prompt));
+    /// <remarks>Security: command substitution (<c>$(cmd)</c>, backquotes) and arithmetic in the prompt are left as
+    /// written. bash runs them; ps-bash never runs code that comes from a variable's value.</remarks>
+    public static string Expand(string? prompt) => ExpandParametersAndRemoveQuoting(Decode(prompt), BashVariableStore.Get);
 
-    /// <summary>The double-quote quote removal: a backslash before <c>$ ` " \</c> or a newline is dropped.</summary>
-    private static string RemoveQuotingBackslashes(string text)
+    /// <summary>
+    /// The double-quote pass over the decoded prompt: a backslash before <c>$ ` " \</c> or a newline is dropped,
+    /// and an unescaped <c>$name</c> / <c>${name}</c> is replaced by <paramref name="lookup"/>'s value (unset is empty).
+    /// </summary>
+    internal static string ExpandParametersAndRemoveQuoting(string text, Func<string, string?> lookup)
     {
-        if (text.IndexOf('\\') < 0) return text;
+        if (text.IndexOf('\\') < 0 && text.IndexOf('$') < 0) return text;
         var sb = new StringBuilder(text.Length);
         for (int i = 0; i < text.Length; i++)
         {
             char c = text[i];
             if (c == '\\' && i + 1 < text.Length && text[i + 1] is '$' or '`' or '"' or '\\' or '\n') { sb.Append(text[++i]); continue; }
+            if (c == '$' && i + 1 < text.Length)
+            {
+                int start = i + 1;
+                bool braced = text[start] == '{';
+                int nameStart = braced ? start + 1 : start;
+                int end = nameStart;
+                if (end < text.Length && (char.IsAsciiLetter(text[end]) || text[end] == '_'))
+                    while (end < text.Length && (char.IsAsciiLetterOrDigit(text[end]) || text[end] == '_')) end++;
+                if (end > nameStart && (!braced || (end < text.Length && text[end] == '}')))
+                {
+                    sb.Append(lookup(text[nameStart..end]) ?? "");
+                    i = braced ? end : end - 1;
+                    continue;
+                }
+            }
             sb.Append(c);
         }
         return sb.ToString();

@@ -48,7 +48,6 @@ PS1='$x$y'
 echo "${PS1@P}"
 ## stdout: \h
 ## status: 0
-## XFAIL ps-bash gap-prompt-promptvars the prompt is decoded but not then parameter-expanded (bash promptvars: PS1='$x$y' with x=\ y=h gives \h)
 ## timeout: 10
 
 #### \1004
