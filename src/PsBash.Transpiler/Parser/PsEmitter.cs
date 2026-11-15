@@ -4369,10 +4369,13 @@ public static partial class PsEmitter
     private static CompoundWord QuotedFieldsForEval(CompoundWord w, string format)
     {
         const string fieldVar = "__psbash_declw";
-        var quoteField = new Command.Simple(
-            [new CompoundWord([new WordPart.Literal("printf")]), new CompoundWord([new WordPart.SingleQuoted(format)]),
-             new CompoundWord(BashParser.DecomposeWord("\"${" + fieldVar + "@Q}\""))],
-            ImmutableArray<EnvPair>.Empty, ImmutableArray<Redirect>.Empty);
+        // Only a field that needs it is quoted: the declaration builtins read a plain name or flag (`m`, `-x`, `k=v`) as
+        // text, and `'-x'` / `'1a=3'` would reach them as quoted words. Empty, blank, `~`, `;`, `$`, quote and glob
+        // characters are quoted, so the eval sees them as data.
+        var quoteField = BashParser.Parse(
+            "case $" + fieldVar + " in ''|*[!A-Za-z0-9_=+./:,@%-]*) printf '" + format + "' \"${" + fieldVar + "@Q}\";; "
+            + "*) printf '" + format + "' \"$" + fieldVar + "\";; esac")
+            ?? throw new InvalidOperationException("QuotedFieldsForEval: the field quoting snippet did not parse");
         var fields = new Command.ForIn(fieldVar, [w], quoteField, ExplicitIn: true);
         return new CompoundWord([new WordPart.DoubleQuoted([new WordPart.CommandSub(fields)])]);
     }
@@ -4513,26 +4516,33 @@ public static partial class PsEmitter
         // `typeset -a "$code"` with code='x=(1 2 3)' makes the scalar "(1 2 3)" (bash parses the array; ps-bash never
         // re-parses a variable's value as code).
         if (TryEmitRuntimeNamedDeclaration(name, cmd, out result)) return true;
-        if (!cmd.Words.Skip(1).Any(IsDynamicAssignment)) return false;
+        // `readonly 'c=$(echo'`: a quoted operand with no expansion is static text, which EmitReadonly checks as an
+        // identifier like the bare word (`readonly '1a=3'` is status 1).
+        bool readonlyKw = name == "readonly";
+        bool IsRuntimeAssignment(CompoundWord w) => IsDynamicAssignment(w) && !(readonlyKw && TryGetStaticArgValue(w) is not null);
+        if (!cmd.Words.Skip(1).Any(IsRuntimeAssignment)) return false;
 
         // Everything that is not a dynamic assignment keeps its normal path; each dynamic one assigns the scalar
         // named at run time (all scalars live in the environment store).
-        static bool IsAssignment(CompoundWord w) => IsDynamicAssignment(w) || TrySplitInitializer(w, out _, out _);
+        bool IsAssignment(CompoundWord w) => IsRuntimeAssignment(w) || TrySplitInitializer(w, out _, out _);
         var plain = cmd.Words.Where((w, i) => i == 0 || !IsAssignment(w)).ToImmutableArray();
         var sbOut = new StringBuilder();
         if (plain.Skip(1).Any(w => !(GetLiteralValue(w) is { Length: > 1 } f && f[0] is '-' or '+')))
             sbOut.Append(EmitSimple(cmd with { Words = plain })).Append("; ");
         foreach (var w in cmd.Words.Skip(1).Where(IsAssignment))
         {
-            if (!IsDynamicAssignment(w) && TrySplitInitializer(w, out var staticName, out var staticValue))
+            if (!IsRuntimeAssignment(w) && TrySplitInitializer(w, out var staticName, out var staticValue))
             {
                 sbOut.Append("$env:").Append(staticName).Append(" = ").Append(EmitAssignmentValue(staticValue)).Append("; ");
                 if (staticName == "PATH") sbOut.Append(PsBuild.NormalizePathVariable).Append("; ");
                 continue;
             }
             string expr = "[string](" + EmitWord(w) + ")";
+            // `readonly "$n=1"`: the name is known only at run time, so it is marked there.
+            string markReadonly = name == "readonly" ? "; [PsBash.Cmdlets.BashShellState]::MarkReadonly($__psbD.Substring(0, $__psbI))" : "";
+            if (name == "readonly") _runtimeReadonly = true;
             sbOut.Append($"$__psbD = {expr}; $__psbI = $__psbD.IndexOf('='); ")
-                 .Append("if ($__psbI -gt 0) { Set-Item -LiteralPath ('Env:' + $__psbD.Substring(0, $__psbI)) -Value $__psbD.Substring($__psbI + 1) }; ");
+                 .Append("if ($__psbI -gt 0) { Set-Item -LiteralPath ('Env:' + $__psbD.Substring(0, $__psbI)) -Value $__psbD.Substring($__psbI + 1)" + markReadonly + " }; ");
         }
         sbOut.Append(PsBuild.SetStatus(0));
         result = sbOut.ToString();
@@ -5813,7 +5823,9 @@ public static partial class PsEmitter
         for (int i = 1; i < cmd.Words.Length; i++)
         {
             var word = cmd.Words[i];
-            var val = GetLiteralValue(word);
+            // `readonly 'q'` / `readonly "q=1"`: quote removal comes first (the run-time eval of `readonly $names` hands
+            // every field over single-quoted).
+            var val = GetLiteralValue(word) ?? TryGetStaticArgValue(word);
             if (val is not null && val.StartsWith('-')) continue; // flags like -p, -r
             // `readonly b[7]=8`: readonly takes no subscript. (`[7]` lexes as a glob part.)
             string? roRaw = val ?? TryGetVarOperandName(word); // static text, quotes and escapes removed (`"a b"`, `a\;b`)

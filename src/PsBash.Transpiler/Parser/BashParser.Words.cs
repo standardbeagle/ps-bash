@@ -17,6 +17,10 @@ public sealed partial class BashParser
         => i + 1 < raw.Length && raw[i] == '\\'
             ? raw[i + 1] == '\n' ? 2 : raw[i + 1] == '\r' && i + 2 < raw.Length && raw[i + 2] == '\n' ? 3 : 0
             : 0;
+    /// <summary>Set when a word holds a bad substitution (<c>${a[]}</c>, <c>${(m)x}</c>); the emitter clears it before a
+    /// parse and reads it after, to add the guards that let the error abandon only its input line.</summary>
+    [ThreadStatic] internal static bool SawBadSubstitution;
+
     /// <summary>
     /// Sub-parse a WORD token's raw text into typed WordPart children.
     /// Handles single quotes, double quotes, backslash escapes, $VAR references,
@@ -25,13 +29,9 @@ public sealed partial class BashParser
     /// <param name="raw">The word's source text.</param>
     /// <param name="braceExpansion">False inside <c>[[ ]]</c>, where bash does no brace expansion
     /// (<c>[[ --X{a,b}X == ... ]]</c> compares the text <c>--X{a,b}X</c>).</param>
-
     /// <param name="assignmentValue">True for a segment of an assignment value: the word of a <c>${v-w}</c> /
     /// <c>${v:-w}</c> / <c>${v+w}</c> / <c>${v:+w}</c> in it is itself read as an assignment value (a tilde after an
     /// unquoted <c>:</c> expands: <c>x=${undef-~:~}</c> is <c>$HOME:$HOME</c>).</param>
-    /// <summary>Set when a word holds a bad substitution (<c>${a[]}</c>, <c>${(m)x}</c>); the emitter clears it before a
-    /// parse and reads it after, to add the guards that let the error abandon only its input line.</summary>
-    [ThreadStatic] internal static bool SawBadSubstitution;
 
     internal static ImmutableArray<WordPart> DecomposeWord(string raw, bool braceExpansion = true, bool assignmentValue = false)
     {

@@ -444,6 +444,27 @@ public sealed partial class BashParser
     /// <summary>The redirects <see cref="ParseDeclarationPairs"/> consumed (the builtin's own).</summary>
     private readonly List<Redirect> _declRedirects = [];
 
+    /// <summary>The text of a word with only literal and quoted parts, quotes removed (<c>'q'</c>, <c>"q"r</c>); null when
+    /// any part expands.</summary>
+    private static string? StaticWordText(string raw)
+    {
+        var sb = new System.Text.StringBuilder();
+        foreach (var part in DecomposeWord(raw))
+        {
+            switch (part)
+            {
+                case WordPart.Literal l: sb.Append(l.Value); break;
+                case WordPart.EscapedLiteral e: sb.Append(e.Value); break;
+                case WordPart.SingleQuoted s: sb.Append(s.Value); break;
+                case WordPart.DoubleQuoted d when d.Parts.All(p => p is WordPart.Literal or WordPart.EscapedLiteral):
+                    foreach (var p in d.Parts) sb.Append(p is WordPart.Literal dl ? dl.Value : ((WordPart.EscapedLiteral)p).Value);
+                    break;
+                default: return null;
+            }
+        }
+        return sb.ToString();
+    }
+
     private ImmutableArray<Assignment>? ParseDeclarationPairs()
     {
         _declSawReadonly = false;
@@ -498,7 +519,17 @@ public sealed partial class BashParser
             // rewind to the general command path, where it fails loudly at runtime
             // rather than silently poisoning the transpile.
             if (!IsValidVariableName(value))
+            {
+                // `export 'z'` / `local "q"`: quote removal comes first, so a quoted static name is the name
+                // (the run-time eval of `readonly $names` hands every field over single-quoted).
+                if (StaticWordText(value) is { } unquoted && IsValidVariableName(unquoted))
+                {
+                    Advance();
+                    pairs.Add(new Assignment(unquoted, AssignOp.Equal, null));
+                    continue;
+                }
                 return null;
+            }
 
             Advance();
             pairs.Add(new Assignment(value, AssignOp.Equal, null));

@@ -74,7 +74,9 @@ public class InvokeBashCompgenCommandTests : IClassFixture<SharedPwshFixture>
         try
         {
             File.WriteAllText(passwd, "root:x:0:0:root:/root:/bin/bash\n#comment\ndaemon:x:1:1::/:/usr/sbin/nologin\n\n");
-            Assert.Equal(["root", "daemon"], InvokeBashCompgenCommand.UserNames(passwd));
+            Assert.Equal(["root", "daemon"], InvokeBashCompgenCommand.UserNames(passwd, "root"));
+            // An account outside the file (macOS Directory Services) is still listed, after the file's names.
+            Assert.Equal(["root", "daemon", "runner"], InvokeBashCompgenCommand.UserNames(passwd, "runner"));
         }
         finally { File.Delete(passwd); }
         Assert.Equal([Environment.UserName], InvokeBashCompgenCommand.UserNames(null));

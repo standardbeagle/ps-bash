@@ -4,11 +4,11 @@ This is the single source for the release process (CLAUDE.md only points here).
 
 ## The gate (know it before you tag)
 
-`publish.yml` runs on the GitHub *release*. Its `publish` job `needs:` exactly TWO
-blocking suites — the **Pester** suite (`tests/PsBash.Tests.ps1`) and **PsBash.Core.Tests**
-(xunit). Everything else — Cmdlets.Tests, Shell.Tests, Differential.Tests, and every
-`Skip report` step — is `continue-on-error: true` (non-fatal; a red skip-report does NOT
-fail the gate and "errors" even on green releases). If the gate fails, the `publish` job
+`publish.yml` runs on the tag push. `release`/`publish` need `test` (×3 OS) and
+`build-binaries` (×3). BLOCKING steps in `test`: **Pester** (`tests/PsBash.Tests.ps1`),
+**Core.Tests**, **Cmdlets.Tests**, **Host.Tests**, **Differential.Tests** (cassette replay).
+Only **Shell.Tests** and the `Skip report` steps are `continue-on-error: true`. Check
+`.github/workflows/publish.yml` if unsure — this list drifts. If the gate fails, `publish`
 shows **skipped** and nothing reaches the feeds.
 
 CRITICAL: a green local `dotnet test` is NOT enough. The Pester gate exercises paths the
@@ -39,7 +39,11 @@ invariants** (`ReleaseNotes_UnderPsGalleryLimit`, cap 10600 chars). Run Pester l
    - Core.Tests (the ReleaseNotes/manifest guards): `dotnet test src/PsBash.Core.Tests`.
    - (scripts/test.sh is the canonical xunit runner but is often blocked in this env — see the
      running-tests memory; the commands above are the gate-equivalent subset.)
-   Abort if either gate has a failure.
+   - Differential.Tests: `tman test-proj src/PsBash.Differential.Tests` (~10 min; cassette replay, blocking).
+   - Release-config compile: Transpiler/Core emit XML docs and build-binaries uses `/warnaserror`, so a
+     stray `<param>` (or a member wedged between a doc comment and its method) fails all three binaries.
+     `tman build` must show 0 warnings for non-test projects.
+   Abort if any gate has a failure.
 
 3. **Pick the version.** `gh release list --repo standardbeagle/ps-bash --limit 1`. Use the
    user's version if given, else bump the patch. Confirm no stale draft release for that tag.

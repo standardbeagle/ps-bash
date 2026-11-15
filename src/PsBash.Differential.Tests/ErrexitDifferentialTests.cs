@@ -136,7 +136,8 @@ public class ErrexitDifferentialTests
         => Eq("[[ 1 -eq 1 ]] 2>/dev/null; echo a; (( 1 )) >/dev/null; echo b; [[ x == y ]] 2>/dev/null || echo no; (( 0 )) 2>/dev/null || echo zero; f=$(mktemp); [[ -n $f ]] > \"$f\"; wc -c < \"$f\"; rm -f \"$f\"");
 
     [SkippableFact]
-    public Task Nounset_DefaultForms_AreNotChecked() => Eq("set -u; echo [${u1:-d}] [${u2-d}] [${u3+x}]; echo after");
+    // In an empty directory: `[d]` is a glob, so a file named d in the working directory would match it.
+    public Task Nounset_DefaultForms_AreNotChecked() => Eq("cd \"$(mktemp -d)\"; set -u; echo [${u1:-d}] [${u2-d}] [${u3+x}]; echo after");
 
     [SkippableFact]
     public Task Nounset_PlusU_TurnsItOff() => Eq("set -u; set +u; echo [$undefined_var_x]; echo after");

@@ -6339,6 +6339,20 @@ public class PsEmitterTests
     public void Transpile_ReadonlyArray_MarksTheNameReadonly()
         => Assert.Contains("MarkReadonly('arr')", PsEmitter.Transpile("readonly arr=(a b)"));
 
+    // Quote removal comes before the builtin reads its operands: `readonly 'q'` is `readonly q`. The quoted name was
+    // dropped (readonly 'q' emitted nothing) and `export 'z'` ran as an external command "export".
+    [Theory]
+    [InlineData("readonly 'q'", "MarkReadonly('q')")]
+    [InlineData("readonly \"q\" 'r'", "MarkReadonly('r')")]
+    [InlineData("readonly 'q=1'", "MarkReadonly('q')")]
+    [InlineData("export 'z'", "$env:z = $env:z")]
+    public void Transpile_QuotedDeclarationOperand_IsTheName(string bash, string expected)
+        => Assert.Contains(expected, PsEmitter.Transpile(bash));
+
+    [Fact]
+    public void Transpile_QuotedInvalidReadonlyName_IsRefused()
+        => Assert.Contains("not a valid identifier", PsEmitter.Transpile("readonly '1a=3'"));
+
     [Fact]
     public void Transpile_Alias_ExpandedAtTranspileTimeOnLaterLines()
     {

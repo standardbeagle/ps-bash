@@ -144,16 +144,20 @@ public sealed class InvokeBashCompgenCommand : PSCmdlet
     }
 
     /// <summary><c>-A user</c> / <c>-u</c>: the account names of <paramref name="passwd"/> in file order (bash reads
-    /// them with getpwent). Windows has no passwd database: the current user only.</summary>
-    internal static IEnumerable<string> UserNames(string? passwd)
+    /// them with getpwent). Windows has no passwd database: the current user only. getpwent also returns accounts
+    /// that are not in the file (macOS keeps real users in Directory Services, Linux may use NSS/LDAP), so the current
+    /// user is added when the file lacks it.</summary>
+    internal static IEnumerable<string> UserNames(string? passwd, string? currentUser = null)
     {
-        if (passwd is null || !File.Exists(passwd)) return [Environment.UserName];
+        currentUser ??= Environment.UserName;
+        if (passwd is null || !File.Exists(passwd)) return [currentUser];
         var names = new List<string>();
         foreach (var line in BashFileSystem.ReadLines(passwd))
         {
             int colon = line.IndexOf(':');
             if (colon > 0 && line[0] != '#') names.Add(line[..colon]);
         }
+        if (!names.Contains(currentUser)) names.Add(currentUser);
         return names;
     }
 

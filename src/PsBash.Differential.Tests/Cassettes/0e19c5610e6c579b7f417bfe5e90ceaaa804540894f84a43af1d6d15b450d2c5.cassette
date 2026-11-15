@@ -1,11 +1,11 @@
 PSBASH-ORACLE-CASSETTE v1
 bash-version: 5.2.21(1)-release
 exit-code: 0
-script-length: 55
+script-length: 74
 stdout-length: 17
 stderr-length: 0
 ==== SCRIPT ====
-set -u; echo [${u1:-d}] [${u2-d}] [${u3+x}]; echo after
+cd "$(mktemp -d)"; set -u; echo [${u1:-d}] [${u2-d}] [${u3+x}]; echo after
 ==== STDOUT ====
 [d] [d] []
 after
