@@ -95,7 +95,7 @@ public sealed class InvokeBashRedirectCommand : PSCmdlet, IDisposable
     /// silently written into a file), and on Linux opening them reaches the HOST process's descriptors, not the
     /// command's stdout/stderr that the pipeline captures.
     /// </summary>
-    internal static RedirectDevice Device(string? raw) => raw?.Replace('\\', '/') switch
+    internal static RedirectDevice Device(string? raw) => BashPath.ToShell(raw) switch
     {
         "/dev/stdout" or "/dev/fd/1" => RedirectDevice.Stdout,
         "/dev/stderr" or "/dev/fd/2" => RedirectDevice.Stderr,

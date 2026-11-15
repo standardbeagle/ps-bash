@@ -1,5 +1,6 @@
 using System.Management.Automation;
 using PsBash.Cmdlets.Args;
+using PsBash.Core;
 
 namespace PsBash.Cmdlets;
 
@@ -356,7 +357,7 @@ public sealed class InvokeBashCpCommand : PSCmdlet
                 return false;
             }
             if (plan.Verbose || plan.Debug)
-                WriteObject(BashRuntime.NewBashObject($"{srcPrefix} -> {FileSystemHelpers.ToBashPath(targetDisplay)}\n"));
+                WriteObject(BashRuntime.NewBashObject($"{srcPrefix} -> {BashPath.ToShell(targetDisplay)}\n"));
         }
         return parts.Length > 0;
     }

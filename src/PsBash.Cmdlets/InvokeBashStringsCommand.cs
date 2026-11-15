@@ -1,6 +1,7 @@
 using System.Management.Automation;
 using PsBash.Cmdlets.Args;
 using System.Text;
+using PsBash.Core;
 
 namespace PsBash.Cmdlets;
 
@@ -302,7 +303,7 @@ public sealed class InvokeBashStringsCommand : PSCmdlet
         // binutils: strings: 'x': No such file  (no "or directory")
         string msg = FileSystemHelpers.ReadErrorMessage(ex);
         if (msg == "No such file or directory") msg = "No such file";
-        FileSystemHelpers.WriteBashError(this, $"{command}: '{path.Replace('\\', '/')}': {msg}");
+        FileSystemHelpers.WriteBashError(this, $"{command}: '{BashPath.ToShell(path)}': {msg}");
     }
 
     /// <summary>

@@ -2,6 +2,7 @@ using System.Management.Automation;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.RegularExpressions;
+using PsBash.Core;
 
 namespace PsBash.Cmdlets;
 
@@ -32,7 +33,7 @@ internal static class OperandDisplay
     // Per cmdlet INSTANCE: a fresh invocation starts clean, and the table dies with the cmdlet.
     private static readonly ConditionalWeakTable<PSCmdlet, Names> Table = new();
 
-    private static string Key(string path) => path.Replace('\\', '/').TrimEnd('/');
+    private static string Key(string path) => BashPath.ToShell(path).TrimEnd('/');
 
     /// <summary>Record that <paramref name="resolved"/> is what the user typed as <paramref name="typed"/>.</summary>
     public static void Remember(PSCmdlet cmdlet, string resolved, string typed)
@@ -65,7 +66,7 @@ internal static class OperandDisplay
             // Already the operand as typed (an absolute operand inside the working directory).
             if (names.Typed.Contains(key)) return full;
         }
-        return rest.Length == 0 ? "." : rest.Replace('\\', '/');
+        return rest.Length == 0 ? "." : BashPath.ToShell(rest);
     }
 
     // cwd (either slash style, case-insensitive on Windows) then an optional separator + remainder

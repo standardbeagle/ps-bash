@@ -750,7 +750,7 @@ public sealed class InvokeBashSedCommand : PSCmdlet
             catch (Exception ex)
             {
                 if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-                EmitError($"sed: can't read {(path ?? "-").Replace('\\', '/')}: {FileSystemHelpers.ReadErrorMessage(ex)}");
+                EmitError($"sed: can't read {BashPath.ToShell(path ?? "-")}: {FileSystemHelpers.ReadErrorMessage(ex)}");
                 readError = true;
             }
             return trailing;
@@ -794,7 +794,7 @@ public sealed class InvokeBashSedCommand : PSCmdlet
                 {
                     if (FileSystemHelpers.IsPipelineStop(ex)) throw;
                     // GNU: sed: can't read x: No such file or directory
-                    EmitError($"sed: can't read {(path ?? "-").Replace('\\', '/')}: {FileSystemHelpers.ReadErrorMessage(ex)}");
+                    EmitError($"sed: can't read {BashPath.ToShell(path ?? "-")}: {FileSystemHelpers.ReadErrorMessage(ex)}");
                     readError = true;
                     continue;
                 }
@@ -880,7 +880,7 @@ public sealed class InvokeBashSedCommand : PSCmdlet
                 catch (Exception ex)
                 {
                     if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-                    EmitError($"sed: can't read {path.Replace('\\', '/')}: {FileSystemHelpers.ReadErrorMessage(ex)}");
+                    EmitError($"sed: can't read {BashPath.ToShell(path)}: {FileSystemHelpers.ReadErrorMessage(ex)}");
                     readError = true;
                     writer.Dispose();
                     File.Delete(tmp);
@@ -898,7 +898,7 @@ public sealed class InvokeBashSedCommand : PSCmdlet
         {
             if (FileSystemHelpers.IsPipelineStop(ex)) { TryDelete(tmp); throw; }
             TryDelete(tmp);
-            EmitError($"sed: {target.Replace('\\', '/')}: {ex.Message}");
+            EmitError($"sed: {BashPath.ToShell(target)}: {ex.Message}");
             return false;
         }
     }
@@ -940,7 +940,7 @@ public sealed class InvokeBashSedCommand : PSCmdlet
         catch (Exception ex)
         {
             if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-            EmitError($"sed: cannot rename {path.Replace('\\', '/')}: {ex.Message}");
+            EmitError($"sed: cannot rename {BashPath.ToShell(path)}: {ex.Message}");
             return false;
         }
     }

@@ -404,7 +404,7 @@ public sealed class InvokeBashWcCommand : PSCmdlet
             catch (Exception ex)
             {
                 if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-                string normalized = filePath.Replace('\\', '/');
+                string normalized = BashPath.ToShell(filePath);
                 WriteBashError($"wc: {normalized}: {FileSystemHelpers.ReadErrorMessage(ex)}");
                 continue;
             }

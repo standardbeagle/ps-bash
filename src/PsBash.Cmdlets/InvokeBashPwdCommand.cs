@@ -1,4 +1,5 @@
 using System.Management.Automation;
+using PsBash.Core;
 
 namespace PsBash.Cmdlets;
 
@@ -113,7 +114,7 @@ public sealed class InvokeBashPwdCommand : PSCmdlet
             location = SessionState.Path.CurrentLocation.Path;
         }
 
-        location = location.Replace('\\', '/');
+        location = BashPath.ToShell(location);
 
         WriteObject(BashRuntime.NewBashObject(
             location, "PsBash.PwdLine", noTrailingNewline: false, command: "pwd"));

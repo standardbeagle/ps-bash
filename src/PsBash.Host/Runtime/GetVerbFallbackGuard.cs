@@ -1,4 +1,5 @@
 using System.Management.Automation;
+using PsBash.Core;
 
 namespace PsBash.Host.Runtime;
 
@@ -157,7 +158,7 @@ internal static class GetVerbFallbackGuard
 
     /// <summary>The stand-in command: bash's message on stderr (never terminating) and status 126.</summary>
     internal static string PermissionDeniedScript(string path)
-        => "Write-Error -Message 'bash: " + path.Replace('\\', '/').Replace("'", "''")
+        => "Write-Error -Message 'bash: " + BashPath.ToShell(path).Replace("'", "''")
            + ": Permission denied' -Category PermissionDenied -ErrorAction Continue; $global:LASTEXITCODE = 126";
     /// <summary>A PATHEXT extension, a <c>#!</c> script (run by <see cref="ShebangScript"/>), or a file it cannot read.</summary>
     internal static bool IsRunnable(string path)

@@ -205,7 +205,7 @@ internal static class ChecksumEngine
 
     /// <summary>The name to print. On Windows a backslash is a path separator, not a filename character, so it is shown as `/`
     /// (otherwise every Windows path would come out with GNU's `\` escaping); on POSIX the name is kept verbatim.</summary>
-    private static string Shown(string display) => OperatingSystem.IsWindows() ? FileSystemHelpers.ToBashPath(display) : display;
+    private static string Shown(string display) => BashPath.ToShell(display);
 
     /// <summary>The output line for one input (pure; <c>-z</c> never escapes, like GNU).</summary>
     internal static string FormatLine(string hex, string name, string algorithmLabel, bool binary, bool tag, bool zero)

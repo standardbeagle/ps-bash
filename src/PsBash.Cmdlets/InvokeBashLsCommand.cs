@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Management.Automation;
 using System.Text;
 using PsBash.Cmdlets.Args;
+using PsBash.Core;
 
 namespace PsBash.Cmdlets;
 
@@ -964,7 +965,7 @@ public sealed class InvokeBashLsCommand : PSCmdlet
         {
             var rel = Path.GetRelativePath(Environment.CurrentDirectory, fullPath);
             if (!rel.StartsWith("..", StringComparison.Ordinal) && !Path.IsPathRooted(rel))
-                return rel.Replace('\\', '/');
+                return BashPath.ToShell(rel);
         }
         catch { /* fall through */ }
         return fullPath;

@@ -649,7 +649,7 @@ function Read-BashFileBytes {
     try {
         $rawText = [PsBash.Cmdlets.BashRuntime]::ReadRawText($Path)
     } catch {
-        $normalized = $Path -replace '\\', '/'
+        $normalized = [PsBash.Cmdlets.BashRuntime]::ToShellPath($Path)
         $ex = $_.Exception
         $inner = $ex.InnerException
         $isNotFound = ($ex -is [System.IO.FileNotFoundException]) -or
@@ -691,7 +691,7 @@ function Open-BashFileReader {
             [System.IO.FileOptions]::SequentialScan
         )
     } catch {
-        $normalized = $Path -replace '\\', '/'
+        $normalized = [PsBash.Cmdlets.BashRuntime]::ToShellPath($Path)
         $ex = $_.Exception
         $inner = $ex.InnerException
         $isNotFound = ($ex -is [System.IO.FileNotFoundException]) -or
@@ -808,7 +808,7 @@ function Write-BashFileText {
         [PsBash.Cmdlets.BashRuntime]::WriteRawText($Path, $Text, [bool]$Append)
         return $true
     } catch {
-        $normalized = $Path -replace '\\', '/'
+        $normalized = [PsBash.Cmdlets.BashRuntime]::ToShellPath($Path)
         Write-BashError -Message "${Command}: ${normalized}: $($_.Exception.Message)"
         return $false
     }
@@ -838,7 +838,7 @@ function Get-BashItem {
         # so `find $d` (d=/tmp) walks the directory `cat $d/f` reads. Errors keep the typed $Path.
         Get-Item -LiteralPath ([PsBash.Cmdlets.BashRuntime]::MapPath($Path)) -Force -ErrorAction Stop
     } catch {
-        $normalized = $Path -replace '\\', '/'
+        $normalized = [PsBash.Cmdlets.BashRuntime]::ToShellPath($Path)
         $ex = $_.Exception
         $inner = $ex.InnerException
         $isNotFound = ($ex -is [System.IO.FileNotFoundException]) -or
@@ -871,7 +871,7 @@ function Read-BashFileRaw {
     try {
         [System.IO.File]::ReadAllBytes($Path)
     } catch {
-        $normalized = $Path -replace '\\', '/'
+        $normalized = [PsBash.Cmdlets.BashRuntime]::ToShellPath($Path)
         Write-BashError -Message "${Command}: ${normalized}: $($_.Exception.Message)"
         return $null
     }
@@ -899,7 +899,7 @@ function Write-BashFileRaw {
         [System.IO.File]::WriteAllBytes($Path, $Data)
         return $true
     } catch {
-        $normalized = $Path -replace '\\', '/'
+        $normalized = [PsBash.Cmdlets.BashRuntime]::ToShellPath($Path)
         Write-BashError -Message "${Command}: ${normalized}: $($_.Exception.Message)"
         return $false
     }

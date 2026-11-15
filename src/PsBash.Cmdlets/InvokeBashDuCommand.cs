@@ -1,5 +1,6 @@
 using System.Management.Automation;
 using PsBash.Cmdlets.Args;
+using PsBash.Core;
 
 namespace PsBash.Cmdlets;
 
@@ -270,7 +271,7 @@ public sealed class InvokeBashDuCommand : PSCmdlet
                 }
                 else
                 {
-                    string norm = target.Replace('\\', '/');
+                    string norm = BashPath.ToShell(target);
                     FileSystemHelpers.WriteBashError(
                         this,
                         $"du: cannot access '{norm}': No such file or directory");
@@ -280,7 +281,7 @@ public sealed class InvokeBashDuCommand : PSCmdlet
             catch (Exception ex)
             {
                 if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-                string norm = target.Replace('\\', '/');
+                string norm = BashPath.ToShell(target);
                 FileSystemHelpers.WriteBashError(
                     this, $"du: cannot access '{norm}': {ex.Message}");
                 continue;
@@ -292,7 +293,7 @@ public sealed class InvokeBashDuCommand : PSCmdlet
             {
                 long sizeBytes = fi.Length;
                 grandTotal += sizeBytes;
-                WriteObject(NewEntry(sizeBytes, target.Replace('\\', '/'), 0, false, mode));
+                WriteObject(NewEntry(sizeBytes, BashPath.ToShell(target), 0, false, mode));
 
                 continue;
             }
@@ -485,7 +486,7 @@ public sealed class InvokeBashDuCommand : PSCmdlet
     /// </summary>
     private static string BuildDisplayPath(string target, string resolvedRoot, string entryFullName)
     {
-        string normalizedTarget = target.Replace('\\', '/');
+        string normalizedTarget = BashPath.ToShell(target);
         if (string.Equals(entryFullName, resolvedRoot, StringComparison.Ordinal))
         {
             return normalizedTarget;
@@ -501,7 +502,7 @@ public sealed class InvokeBashDuCommand : PSCmdlet
         {
             rel = entryFullName;
         }
-        rel = rel.Replace('\\', '/');
+        rel = BashPath.ToShell(rel);
         if (rel.StartsWith("/", StringComparison.Ordinal))
         {
             rel = rel.Substring(1);

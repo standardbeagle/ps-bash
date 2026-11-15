@@ -1,3 +1,4 @@
+using PsBash.Core;
 namespace PsBash.Cmdlets;
 
 /// <summary>
@@ -115,7 +116,7 @@ internal sealed class CpEngine
 
     private void Skipped(string destDisplay)
     {
-        if (_plan.Debug) _say($"skipped '{FileSystemHelpers.ToBashPath(destDisplay)}'\n");
+        if (_plan.Debug) _say($"skipped '{BashPath.ToShell(destDisplay)}'\n");
     }
 
     // ───────────── regular files ─────────────
@@ -141,7 +142,7 @@ internal sealed class CpEngine
             if (_plan.BackupEnabled)
             {
                 var suffix = BackupControl.MakeBackup(dest, _plan.Backup, _plan.BackupSuffix, src);
-                if (suffix is not null) backupNote = $" (backup: '{FileSystemHelpers.ToBashPath(destDisplay)}{suffix}')";
+                if (suffix is not null) backupNote = $" (backup: '{BashPath.ToShell(destDisplay)}{suffix}')";
             }
             // Still there after a backup (or none was asked): --remove-destination unlinks it first, and so
             // does -f for -l/-s (without -f the link primitive reports "File exists", as GNU does).
@@ -150,7 +151,7 @@ internal sealed class CpEngine
                 FileSystemHelpers.DeleteFileForce(dest);
         }
 
-        string Line() => $"'{FileSystemHelpers.ToBashPath(srcDisplay)}' -> '{FileSystemHelpers.ToBashPath(destDisplay)}'{backupNote}\n";
+        string Line() => $"'{BashPath.ToShell(srcDisplay)}' -> '{BashPath.ToShell(destDisplay)}'{backupNote}\n";
         bool say = _plan.Verbose || _plan.Debug;
 
         if (_plan.Link != CpLink.None)
@@ -241,7 +242,7 @@ internal sealed class CpEngine
             if (_plan.BackupEnabled)
             {
                 var suffix = BackupControl.MakeBackup(dest, _plan.Backup, _plan.BackupSuffix, src);
-                if (suffix is not null) backupNote = $" (backup: '{FileSystemHelpers.ToBashPath(destDisplay)}{suffix}')";
+                if (suffix is not null) backupNote = $" (backup: '{BashPath.ToShell(destDisplay)}{suffix}')";
             }
             if (File.Exists(dest) || FileSystemHelpers.IsReparsePoint(dest))
             {
@@ -270,7 +271,7 @@ internal sealed class CpEngine
             return false;
         }
         if (_plan.Verbose || _plan.Debug)
-            _say($"'{FileSystemHelpers.ToBashPath(srcDisplay)}' -> '{FileSystemHelpers.ToBashPath(destDisplay)}'{backupNote}\n");
+            _say($"'{BashPath.ToShell(srcDisplay)}' -> '{BashPath.ToShell(destDisplay)}'{backupNote}\n");
         return true;
     }
 
@@ -285,7 +286,7 @@ internal sealed class CpEngine
         {
             Directory.CreateDirectory(dest);
             if (_plan.Verbose || _plan.Debug)
-                _say($"'{FileSystemHelpers.ToBashPath(srcDisplay)}' -> '{FileSystemHelpers.ToBashPath(destDisplay)}'\n");
+                _say($"'{BashPath.ToShell(srcDisplay)}' -> '{BashPath.ToShell(destDisplay)}'\n");
         }
 
         foreach (var entry in Directory.EnumerateFileSystemEntries(src))

@@ -155,7 +155,7 @@ internal static class FileSystemHelpers
             {
                 try { display = System.IO.Path.GetRelativePath(cwd, p); } catch { display = p; }
             }
-            yield return new OperandPath(p, ToBashPath(display));
+            yield return new OperandPath(p, BashPath.ToShell(display));
         }
     }
 
@@ -174,7 +174,7 @@ internal static class FileSystemHelpers
     public static string AppendDisplay(string dirDisplay, string relative)
     {
         var dir = dirDisplay.Length > 1 ? dirDisplay.TrimEnd('/', '\\') : dirDisplay;
-        relative = relative.Replace('\\', '/');
+        relative = BashPath.ToShell(relative);
         return dir.EndsWith('/') ? dir + relative : dir + "/" + relative;
     }
 
@@ -417,10 +417,6 @@ internal static class FileSystemHelpers
         int extraLines = statement.AsSpan().Count('\n');
         return line > me.ScriptLineNumber && line <= me.ScriptLineNumber + extraLines;
     }
-    /// <summary>
-    /// Bash-style path normalization for verbose output: backslash → slash.
-    /// </summary>
-    public static string ToBashPath(string winPath) => winPath.Replace('\\', '/');
 
     /// <summary>
     /// Map a raw file operand to a native Windows path before it reaches the
@@ -735,7 +731,7 @@ internal static class FileSystemHelpers
     public static bool IsNullDevice(string? path)
     {
         if (string.IsNullOrEmpty(path)) return false;
-        string slashed = path.Replace('\\', '/');
+        string slashed = BashPath.ToShell(path);
         if (slashed.Equals("/dev/null", StringComparison.OrdinalIgnoreCase)
             || slashed.EndsWith("/dev/null", StringComparison.OrdinalIgnoreCase))
             return true;
@@ -754,7 +750,7 @@ internal static class FileSystemHelpers
     public static bool IsZeroDevice(string? path)
     {
         if (string.IsNullOrEmpty(path)) return false;
-        string slashed = path.Replace('\\', '/');
+        string slashed = BashPath.ToShell(path);
         if (slashed == "/dev/zero") return true;
         return OperatingSystem.IsWindows()
             && slashed.Length == 11 && char.IsAsciiLetter(slashed[0]) && slashed[1] == ':'

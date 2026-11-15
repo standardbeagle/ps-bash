@@ -4,6 +4,7 @@ using System.Management.Automation;
 using System.Text;
 using System.Text.RegularExpressions;
 using PsBash.Cmdlets.Args;
+using PsBash.Core;
 
 namespace PsBash.Cmdlets;
 
@@ -760,7 +761,7 @@ public sealed class InvokeBashRgCommand : PSCmdlet
     {
         IEnumerable<(string Abs, string Display, bool Explicit)> sorted = key switch
         {
-            "path" => inputs.OrderBy(i => i.Display.Replace('\\', '/'), StringComparer.Ordinal),
+            "path" => inputs.OrderBy(i => BashPath.ToShell(i.Display), StringComparer.Ordinal),
             "modified" => inputs.OrderBy(i => SafeTime(() => File.GetLastWriteTimeUtc(i.Abs))),
             "accessed" => inputs.OrderBy(i => SafeTime(() => File.GetLastAccessTimeUtc(i.Abs))),
             "created" => inputs.OrderBy(i => SafeTime(() => File.GetCreationTimeUtc(i.Abs))),

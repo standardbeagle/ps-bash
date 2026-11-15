@@ -1,4 +1,5 @@
 using System.Management.Automation;
+using PsBash.Core;
 
 namespace PsBash.Cmdlets;
 
@@ -44,7 +45,7 @@ public sealed class InvokeBashDirnameCommand : PSCmdlet
 
         foreach (var path in args)
         {
-            var normalized = path.Replace('\\', '/').TrimEnd('/');
+            var normalized = BashPath.ToShell(path).TrimEnd('/');
 
             string dir;
             if (normalized.Length == 0)

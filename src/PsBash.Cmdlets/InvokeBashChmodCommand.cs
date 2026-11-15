@@ -1,4 +1,5 @@
 using System.Management.Automation;
+using PsBash.Core;
 
 namespace PsBash.Cmdlets;
 
@@ -189,7 +190,7 @@ public sealed class InvokeBashChmodCommand : PSCmdlet
             {
                 // What is really on disk afterwards (on Windows only the owner-write bit can differ).
                 int after = OperatingSystem.IsWindows() ? CurrentMode(path, isDir) : wanted;
-                string shown = FileSystemHelpers.ToBashPath(display);
+                string shown = BashPath.ToShell(display);
                 if (after != current)
                     WriteObject(BashRuntime.NewBashObject($"mode of '{shown}' changed from {Describe(current)} to {Describe(after)}"));
                 else if (plan.Verbose)

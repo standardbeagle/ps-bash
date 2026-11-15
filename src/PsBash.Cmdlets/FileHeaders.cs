@@ -1,3 +1,4 @@
+using PsBash.Core;
 namespace PsBash.Cmdlets;
 
 /// <summary>
@@ -24,7 +25,7 @@ internal static class FileHeaders
 
     /// <summary>The operand as the user typed it (resolved paths are mapped back by <see cref="OperandDisplay"/>).</summary>
     internal static string Display(System.Management.Automation.PSCmdlet cmdlet, string resolvedPath)
-        => OperandDisplay.Rewrite(cmdlet, resolvedPath).Replace('\\', '/');
+        => BashPath.ToShell(OperandDisplay.Rewrite(cmdlet, resolvedPath));
 
     /// <summary>The record carrying the header (and the blank separator when it is not the first).</summary>
     internal static object Record(string name, bool first)

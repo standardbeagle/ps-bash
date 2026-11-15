@@ -1,4 +1,5 @@
 using System.Management.Automation;
+using PsBash.Core;
 
 namespace PsBash.Cmdlets;
 
@@ -72,7 +73,7 @@ public sealed class ConvertToBashWordsCommand : PSCmdlet
     {
         string pattern = OperatingSystem.IsWindows() && word.Length >= 3 && char.IsAsciiLetter(word[0])
             && word[1] == ':' && word[2] == '\\'
-            ? word.Replace('\\', '/')
+            ? BashPath.ToShell(word)
             : word;
         if (ConvertToBashGlobCommand.IsNoGlob(SessionState) || !BashGlob.HasPattern(pattern)) return new[] { word };
 
@@ -245,7 +246,7 @@ internal static class BashWordSplitter
 
         string prefix = cwd.TrimEnd('\\', '/') + Path.DirectorySeparatorChar;
         return match.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
-            ? match.Substring(prefix.Length).Replace('\\', '/')
+            ? BashPath.ToShell(match.Substring(prefix.Length))
             : match;
     }
 }

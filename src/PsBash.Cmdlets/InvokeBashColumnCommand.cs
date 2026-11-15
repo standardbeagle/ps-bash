@@ -1,6 +1,7 @@
 using System.Management.Automation;
 using System.Text;
 using PsBash.Cmdlets.Args;
+using PsBash.Core;
 
 namespace PsBash.Cmdlets;
 
@@ -442,7 +443,7 @@ public sealed class InvokeBashColumnCommand : PSCmdlet
     private void WriteReadError(string path, Exception ex)
     {
         string msg = FileSystemHelpers.ReadErrorMessage(ex);
-        string normalized = path.Replace('\\', '/');
+        string normalized = BashPath.ToShell(path);
         FileSystemHelpers.WriteBashError(this, $"column: {normalized}: {msg}");
     }
 }

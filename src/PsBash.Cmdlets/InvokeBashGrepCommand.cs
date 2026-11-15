@@ -2,6 +2,7 @@ using System.Linq;
 using System.Management.Automation;
 using System.Text.RegularExpressions;
 using PsBash.Cmdlets.Args;
+using PsBash.Core;
 
 namespace PsBash.Cmdlets;
 
@@ -659,7 +660,7 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
         catch (Exception ex)
         {
             if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-            FileSystemHelpers.WriteBashError(this, $"grep: {rawPath.Replace('\\', '/')}: No such file or directory");
+            FileSystemHelpers.WriteBashError(this, $"grep: {BashPath.ToShell(rawPath)}: No such file or directory");
             return false;
         }
     }
@@ -772,7 +773,7 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
                     else if (plan.Directories == GrepDirectories.Read)
                     {
                         if (!plan.NoMessages)
-                            FileSystemHelpers.WriteBashError(this, $"grep: {raw.Replace('\\', '/')}: Is a directory");
+                            FileSystemHelpers.WriteBashError(this, $"grep: {BashPath.ToShell(raw)}: Is a directory");
                         _operandReadError = true;
                     }
                     continue;
@@ -788,7 +789,7 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
             {
                 // -s / --no-messages suppresses the diagnostic but still sets the failure code.
                 if (!plan.NoMessages)
-                    FileSystemHelpers.WriteBashError(this, $"grep: {raw.Replace('\\', '/')}: No such file or directory");
+                    FileSystemHelpers.WriteBashError(this, $"grep: {BashPath.ToShell(raw)}: No such file or directory");
                 _operandReadError = true;
             }
         }
@@ -804,7 +805,7 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
     /// </summary>
     internal static string WalkDisplayName(string shownRoot, bool implicitRoot, string rootFull, string file)
     {
-        string rel = Path.GetRelativePath(rootFull, file).Replace('\\', '/');
+        string rel = BashPath.ToShell(Path.GetRelativePath(rootFull, file));
         if (implicitRoot) return rel;
         if (shownRoot.EndsWith('/') || shownRoot.EndsWith('\\')) return shownRoot + rel;
         return shownRoot + "/" + rel;
@@ -956,7 +957,7 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
     private void EmitGrepReadError(string path, Exception ex)
     {
         string msg = FileSystemHelpers.ReadErrorMessage(ex);
-        string normalized = path.Replace('\\', '/');
+        string normalized = BashPath.ToShell(path);
         FileSystemHelpers.WriteBashError(this, $"grep: {normalized}: {msg}");
         _operandReadError = true;
         FileSystemHelpers.SetLastExitCode(this, 2);

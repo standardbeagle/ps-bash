@@ -689,7 +689,7 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
     private void WriteReadError(string path, Exception ex)
     {
         string msg = FileSystemHelpers.ReadErrorMessage(ex);
-        string normalized = path.Replace('\\', '/');
+        string normalized = BashPath.ToShell(path);
         FileSystemHelpers.WriteBashError(this, $"uniq: {normalized}: {msg}");
     }
 }

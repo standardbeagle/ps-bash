@@ -348,12 +348,12 @@ public sealed class InvokeBashGzipCommand : PSCmdlet
                         catch (Exception ex)
                         {
                             if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-                            FileSystemHelpers.WriteBashError(this, $"gzip: {resolved.Replace('\\', '/')}: {ex.Message}");
+                            FileSystemHelpers.WriteBashError(this, $"gzip: {BashPath.ToShell(resolved)}: {ex.Message}");
                         }
                     }
                     else if (!quiet)
                     {
-                        FileSystemHelpers.WriteBashError(this, $"gzip: {resolved.Replace('\\', '/')} is a directory -- ignored");
+                        FileSystemHelpers.WriteBashError(this, $"gzip: {BashPath.ToShell(resolved)} is a directory -- ignored");
                     }
                 }
                 else
@@ -361,7 +361,7 @@ public sealed class InvokeBashGzipCommand : PSCmdlet
                     // GNU gzip -d retries NAME as NAME<suffix> and reports the name it tried last.
                     string tried = decompress && !resolved.EndsWith(suffix, StringComparison.Ordinal)
                         ? resolved + suffix : resolved;
-                    FileSystemHelpers.WriteBashError(this, $"gzip: {tried.Replace('\\', '/')}: No such file or directory");
+                    FileSystemHelpers.WriteBashError(this, $"gzip: {BashPath.ToShell(tried)}: No such file or directory");
                 }
             }
         }
@@ -371,7 +371,7 @@ public sealed class InvokeBashGzipCommand : PSCmdlet
             {
                 if (!File.Exists(filePath) && !Directory.Exists(filePath))
                 {
-                    string normalized = filePath.Replace('\\', '/');
+                    string normalized = BashPath.ToShell(filePath);
                     FileSystemHelpers.WriteBashError(this, $"gzip: {normalized}: No such file or directory");
                     continue;
                 }
@@ -384,7 +384,7 @@ public sealed class InvokeBashGzipCommand : PSCmdlet
                 catch (Exception ex)
                 {
                     if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-                    string normalized = filePath.Replace('\\', '/');
+                    string normalized = BashPath.ToShell(filePath);
                     FileSystemHelpers.WriteBashError(this, $"gzip: {normalized}: {ex.Message}");
                     continue;
                 }
@@ -393,7 +393,7 @@ public sealed class InvokeBashGzipCommand : PSCmdlet
                 // on success (exit 0); a corrupt stream errors and sets exit 1.
                 if (inputSize == 0 && (decompress || test || list))
                 {
-                    FileSystemHelpers.WriteBashError(this, $"gzip: {filePath.Replace('\\', '/')}: unexpected end of file");
+                    FileSystemHelpers.WriteBashError(this, $"gzip: {BashPath.ToShell(filePath)}: unexpected end of file");
                     continue;
                 }
                 if (test)
@@ -409,7 +409,7 @@ public sealed class InvokeBashGzipCommand : PSCmdlet
                     catch (Exception ex)
                     {
                         if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-                        FileSystemHelpers.WriteBashError(this, $"gzip: {filePath.Replace('\\', '/')}: not in gzip format");
+                        FileSystemHelpers.WriteBashError(this, $"gzip: {BashPath.ToShell(filePath)}: not in gzip format");
                         FileSystemHelpers.SetLastExitCode(this, 1);
                     }
                     continue;
@@ -434,7 +434,7 @@ public sealed class InvokeBashGzipCommand : PSCmdlet
                     catch (Exception ex)
                     {
                         if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-                        string normalized = filePath.Replace('\\', '/');
+                        string normalized = BashPath.ToShell(filePath);
                         FileSystemHelpers.WriteBashError(this, $"gzip: {normalized}: {ex.Message}");
                         continue;
                     }
@@ -477,7 +477,7 @@ public sealed class InvokeBashGzipCommand : PSCmdlet
                         catch (Exception ex)
                         {
                             if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-                            string normalized = filePath.Replace('\\', '/');
+                            string normalized = BashPath.ToShell(filePath);
                             FileSystemHelpers.WriteBashError(this, $"gzip: {normalized}: {ex.Message}");
                             continue;
                         }
@@ -492,7 +492,7 @@ public sealed class InvokeBashGzipCommand : PSCmdlet
                             if (!quiet)
                             {
                                 FileSystemHelpers.WriteBashError(this,
-                                    $"gzip: {filePath.Replace('\\', '/')}: unknown suffix -- ignored");
+                                    $"gzip: {BashPath.ToShell(filePath)}: unknown suffix -- ignored");
                             }
                             continue;
                         }
@@ -511,7 +511,7 @@ public sealed class InvokeBashGzipCommand : PSCmdlet
                         catch (Exception ex)
                         {
                             if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-                            string normalized = filePath.Replace('\\', '/');
+                            string normalized = BashPath.ToShell(filePath);
                             FileSystemHelpers.WriteBashError(this, $"gzip: {normalized}: {ex.Message}");
                             continue;
                         }
@@ -544,7 +544,7 @@ public sealed class InvokeBashGzipCommand : PSCmdlet
                         if (!quiet)
                         {
                             FileSystemHelpers.WriteBashError(this,
-                                $"gzip: {filePath.Replace('\\', '/')} already has {suffix} suffix -- unchanged");
+                                $"gzip: {BashPath.ToShell(filePath)} already has {suffix} suffix -- unchanged");
                         }
                         continue;
                     }
@@ -575,7 +575,7 @@ public sealed class InvokeBashGzipCommand : PSCmdlet
                         catch (Exception ex)
                         {
                             if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-                            string normalized = filePath.Replace('\\', '/');
+                            string normalized = BashPath.ToShell(filePath);
                             FileSystemHelpers.WriteBashError(this, $"gzip: {normalized}: {ex.Message}");
                             continue;
                         }
@@ -593,7 +593,7 @@ public sealed class InvokeBashGzipCommand : PSCmdlet
                         catch (Exception ex)
                         {
                             if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-                            string normalized = filePath.Replace('\\', '/');
+                            string normalized = BashPath.ToShell(filePath);
                             FileSystemHelpers.WriteBashError(this, $"gzip: {normalized}: {ex.Message}");
                             continue;
                         }
@@ -676,7 +676,7 @@ public sealed class InvokeBashGzipCommand : PSCmdlet
     private bool RefuseExistingOutput(string path, bool force)
     {
         if (force || !File.Exists(path)) return false;
-        FileSystemHelpers.WriteBashError(this, $"gzip: {path.Replace('\\', '/')} already exists; not overwritten");
+        FileSystemHelpers.WriteBashError(this, $"gzip: {BashPath.ToShell(path)} already exists; not overwritten");
         FileSystemHelpers.SetLastExitCode(this, 2);
         return true;
     }

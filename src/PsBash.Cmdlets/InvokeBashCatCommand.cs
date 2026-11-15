@@ -447,7 +447,7 @@ public sealed class InvokeBashCatCommand : PSCmdlet
     private void EmitReadError(string path, string command, Exception ex)
     {
         FileSystemHelpers.WriteBashError(this,
-            $"{command}: {path.Replace('\\', '/')}: {FileSystemHelpers.ReadErrorMessage(ex, path)}");
+            $"{command}: {BashPath.ToShell(path)}: {FileSystemHelpers.ReadErrorMessage(ex, path)}");
     }
 
     /// <summary>

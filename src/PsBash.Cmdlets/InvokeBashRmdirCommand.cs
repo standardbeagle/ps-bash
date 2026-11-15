@@ -1,6 +1,7 @@
 using System.Linq;
 using System.Management.Automation;
 using PsBash.Cmdlets.Args;
+using PsBash.Core;
 
 namespace PsBash.Cmdlets;
 
@@ -149,7 +150,7 @@ public sealed class InvokeBashRmdirCommand : PSCmdlet
             if (verbose)
             {
                 WriteObject(BashRuntime.NewBashObject(
-                    $"rmdir: removing directory, '{FileSystemHelpers.ToBashPath(dir)}'\n"));
+                    $"rmdir: removing directory, '{BashPath.ToShell(dir)}'\n"));
             }
 
             if (removeParents)
@@ -162,7 +163,7 @@ public sealed class InvokeBashRmdirCommand : PSCmdlet
                     if (verbose)
                     {
                         WriteObject(BashRuntime.NewBashObject(
-                            $"rmdir: removing directory, '{FileSystemHelpers.ToBashPath(parent)}'\n"));
+                            $"rmdir: removing directory, '{BashPath.ToShell(parent)}'\n"));
                     }
                     try { FileSystemHelpers.ClearReadOnly(parent); Directory.Delete(parent); }
                     catch { break; }

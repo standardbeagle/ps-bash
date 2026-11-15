@@ -132,7 +132,7 @@ public sealed class InvokeBashTeeCommand : PSCmdlet
             foreach (var filePath in FileSystemHelpers.ResolveOperandPaths(this, rawPath))
             {
                 if (FileSystemHelpers.IsNullDevice(filePath)) continue;
-                string normalized = FileSystemHelpers.ToBashPath(filePath);
+                string normalized = BashPath.ToShell(filePath);
                 string? parentDir;
                 try { parentDir = Path.GetDirectoryName(filePath); }
                 catch { parentDir = null; }

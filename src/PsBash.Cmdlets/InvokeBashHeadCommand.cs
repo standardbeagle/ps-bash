@@ -465,7 +465,7 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
                 {
                     if (FileSystemHelpers.IsPipelineStop(ex)) throw;
                     FileSystemHelpers.WriteBashError(this,
-                        $"head: cannot open '{filePath.Replace('\\', '/')}' for reading: {FileSystemHelpers.ReadErrorMessage(ex)}");
+                        $"head: cannot open '{BashPath.ToShell(filePath)}' for reading: {FileSystemHelpers.ReadErrorMessage(ex)}");
                 }
                 continue;
             }
@@ -634,7 +634,7 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
                 // GNU: head: cannot open 'x' for reading: No such file or directory (path shown as
                 // typed by OperandDisplay at the stderr sink).
                 FileSystemHelpers.WriteBashError(this,
-                    $"head: cannot open '{filePath.Replace('\\', '/')}' for reading: {FileSystemHelpers.ReadErrorMessage(ex)}");
+                    $"head: cannot open '{BashPath.ToShell(filePath)}' for reading: {FileSystemHelpers.ReadErrorMessage(ex)}");
             }
         }
     }
@@ -702,7 +702,7 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
             // GNU: head: cannot open 'x' for reading: No such file or directory (path shown as typed
             // by OperandDisplay at the stderr sink).
             FileSystemHelpers.WriteBashError(this,
-                $"{command}: cannot open '{path.Replace('\\', '/')}' for reading: {FileSystemHelpers.ReadErrorMessage(ex)}");
+                $"{command}: cannot open '{BashPath.ToShell(path)}' for reading: {FileSystemHelpers.ReadErrorMessage(ex)}");
             return null;
         }
 

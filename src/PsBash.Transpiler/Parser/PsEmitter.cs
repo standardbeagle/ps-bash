@@ -9485,11 +9485,11 @@ public static partial class PsEmitter
                     string text = l.Value;
                     if (mapPaths && i == 0 && text.StartsWith("/tmp/", StringComparison.Ordinal))
                     {
-                        Dynamic(PsBuild.TempDirExpr + ".Replace('\\','/')");
+                        Dynamic(PsBuild.RuntimeToShellPath(PsBuild.TempDirExpr));
                         text = text[4..];
                     }
                     else if (mapPaths && i == 0 && TryTranslateMsysDrivePath(text, out var drive))
-                        text = drive.Replace('\\', '/');
+                        text = BashPath.ToShell(drive, windows: true);
                     lit.Append(EscapeGlobLiteral(text));
                     break;
                 }
@@ -9530,7 +9530,7 @@ public static partial class PsEmitter
                     break;
                 // The parser consumes the `/` after a tilde; EmitWord re-adds it when parts follow.
                 case WordPart.TildeSub { User: null or "+" or "-" } ts:
-                    Dynamic(Escape + "([string]" + EmitWordPart(ts) + ").Replace('\\','/'))");
+                    Dynamic(Escape + PsBuild.RuntimeToShellPath(EmitWordPart(ts)) + ")");
                     if (ts.SlashConsumed) lit.Append('/');
                     break;
                 case WordPart.TildeSub ts:

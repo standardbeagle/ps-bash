@@ -431,7 +431,7 @@ public sealed class InvokeBashSplitCommand : PSCmdlet
         catch (Exception ex)
         {
             if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-            FileSystemHelpers.WriteBashError(this, $"split: {_lastPiecePath.Replace('\\', '/')}: {ex.Message}");
+            FileSystemHelpers.WriteBashError(this, $"split: {BashPath.ToShell(_lastPiecePath)}: {ex.Message}");
         }
     }
 
@@ -455,7 +455,7 @@ public sealed class InvokeBashSplitCommand : PSCmdlet
         catch (Exception ex)
         {
             if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-            string name = fileReadPath?.Replace('\\', '/') ?? "-";
+            string name = fileReadPath is null ? "-" : BashPath.ToShell(fileReadPath);
             FileSystemHelpers.WriteBashError(this,
                 $"split: cannot open '{name}' for reading: {FileSystemHelpers.ReadErrorMessage(ex)}");
             return;
@@ -483,7 +483,7 @@ public sealed class InvokeBashSplitCommand : PSCmdlet
             catch (Exception ex)
             {
                 if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-                FileSystemHelpers.WriteBashError(this, $"split: {outPath.Replace('\\', '/')}: {ex.Message}");
+                FileSystemHelpers.WriteBashError(this, $"split: {BashPath.ToShell(outPath)}: {ex.Message}");
                 return;
             }
         }
@@ -523,7 +523,7 @@ public sealed class InvokeBashSplitCommand : PSCmdlet
             catch (Exception ex)
             {
                 if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-                FileSystemHelpers.WriteBashError(this, $"split: {outPath.Replace('\\', '/')}: {ex.Message}");
+                FileSystemHelpers.WriteBashError(this, $"split: {BashPath.ToShell(outPath)}: {ex.Message}");
                 return;
             }
             chunkIndex++;
@@ -568,7 +568,7 @@ public sealed class InvokeBashSplitCommand : PSCmdlet
         {
             // GNU: split: cannot open 'x' for reading: No such file or directory
             FileSystemHelpers.WriteBashError(this,
-                $"split: cannot open '{fileReadPath.Replace('\\', '/')}' for reading: {FileSystemHelpers.ReadErrorMessage(ex)}");
+                $"split: cannot open '{BashPath.ToShell(fileReadPath)}' for reading: {FileSystemHelpers.ReadErrorMessage(ex)}");
         }
     }
 
@@ -599,7 +599,7 @@ public sealed class InvokeBashSplitCommand : PSCmdlet
         catch (Exception ex)
         {
             if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-            string normalized = outPath.Replace('\\', '/');
+            string normalized = BashPath.ToShell(outPath);
             FileSystemHelpers.WriteBashError(
                 this, $"split: {normalized}: {ex.Message}");
             return false;

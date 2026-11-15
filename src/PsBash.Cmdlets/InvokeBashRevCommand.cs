@@ -1,4 +1,5 @@
 using System.Management.Automation;
+using PsBash.Core;
 
 namespace PsBash.Cmdlets;
 
@@ -127,6 +128,6 @@ public sealed class InvokeBashRevCommand : PSCmdlet
     {
         // util-linux: rev: cannot open x: No such file or directory
         FileSystemHelpers.WriteBashError(this,
-            $"rev: cannot open {path.Replace('\\', '/')}: {FileSystemHelpers.ReadErrorMessage(ex)}");
+            $"rev: cannot open {BashPath.ToShell(path)}: {FileSystemHelpers.ReadErrorMessage(ex)}");
     }
 }

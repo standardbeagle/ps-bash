@@ -62,6 +62,15 @@ public static class PsBuild
         => "[PsBash.Cmdlets.BashRuntime]::MapPath([string](" + valueExpr + "))";
 
     /// <summary>
+    /// The OUTBOUND twin of <see cref="RuntimeMapPath"/>: <paramref name="valueExpr"/> (a filesystem path)
+    /// as a bash script sees it, <c>[PsBash.Cmdlets.BashRuntime]::ToShellPath([string](expr))</c> —
+    /// <c>C:\x</c> → <c>C:/x</c> on Windows, unchanged elsewhere (PsBash.Core.BashPath). For values only
+    /// known at run time: <c>$PWD</c> / <c>$OLDPWD</c> after a move, the temp directory in a glob pattern.
+    /// </summary>
+    public static string RuntimeToShellPath(string valueExpr)
+        => "[PsBash.Cmdlets.BashRuntime]::ToShellPath([string](" + valueExpr + "))";
+
+    /// <summary>
     /// A path word whose value is only known at run time (<c>2&gt; $dir/f</c>), mapped through the
     /// runtime path policy (<see cref="RuntimeMapPath"/>) when it is evaluated — the run-time twin of
     /// the emitter's literal <c>/c/…</c> and <c>/tmp/</c> rewrites. <paramref name="argWord"/> is

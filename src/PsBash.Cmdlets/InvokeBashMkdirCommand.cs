@@ -1,6 +1,7 @@
 using System.Linq;
 using System.Management.Automation;
 using PsBash.Cmdlets.Args;
+using PsBash.Core;
 
 namespace PsBash.Cmdlets;
 
@@ -175,7 +176,7 @@ public sealed class InvokeBashMkdirCommand : PSCmdlet
             if (verbose)
             {
                 WriteObject(BashRuntime.NewBashObject(
-                    $"mkdir: created directory '{FileSystemHelpers.ToBashPath(dir)}'\n"));
+                    $"mkdir: created directory '{BashPath.ToShell(dir)}'\n"));
             }
         }
 

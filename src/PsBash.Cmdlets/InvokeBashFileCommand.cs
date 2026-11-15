@@ -364,7 +364,7 @@ public sealed class InvokeBashFileCommand : PSCmdlet
         try
         {
             var rel = Path.GetRelativePath(SessionState.Path.CurrentLocation.Path, resolved);
-            return rel.StartsWith("..", StringComparison.Ordinal) || Path.IsPathRooted(rel) ? resolved : rel.Replace('\\', '/');
+            return rel.StartsWith("..", StringComparison.Ordinal) || Path.IsPathRooted(rel) ? resolved : BashPath.ToShell(rel);
         }
         catch { return resolved; }
     }

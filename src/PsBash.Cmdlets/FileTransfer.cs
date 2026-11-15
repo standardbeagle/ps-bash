@@ -3,6 +3,7 @@ using System.Runtime.ExceptionServices;
 using System.Runtime.InteropServices;
 using System.Text;
 using Microsoft.Win32.SafeHandles;
+using PsBash.Core;
 
 namespace PsBash.Cmdlets;
 
@@ -205,10 +206,10 @@ public static class FileTransfer
             // Name the held file unless it IS the operand the message is about: a file inside a directory
             // operand as typed, any other (the destination) by its path.
             if (root is not null && rootDisplay is not null && IsUnder(Path, root))
-                sb.Append('\'').Append(FileSystemHelpers.ToBashPath(rootDisplay.TrimEnd('/', '\\') + "/"
+                sb.Append('\'').Append(BashPath.ToShell(rootDisplay.TrimEnd('/', '\\') + "/"
                     + System.IO.Path.GetRelativePath(root, Path))).Append("' ");
             else if (root is not null && !TransferValidation.IsSamePath(Path, root))
-                sb.Append('\'').Append(FileSystemHelpers.ToBashPath(Path)).Append("' ");
+                sb.Append('\'').Append(BashPath.ToShell(Path)).Append("' ");
             sb.Append("open in ");
             if (Holders.Count == 0) sb.Append("another process");
             for (int i = 0; i < Holders.Count; i++)

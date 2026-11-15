@@ -1,6 +1,7 @@
 using System.Management.Automation;
 using PsBash.Cmdlets.Args;
 using System.Text;
+using PsBash.Core;
 
 namespace PsBash.Cmdlets;
 
@@ -262,7 +263,7 @@ public sealed class InvokeBashExpandCommand : PSCmdlet
     private void WriteReadError(string path, Exception ex)
     {
         string msg = FileSystemHelpers.ReadErrorMessage(ex);
-        string normalized = path.Replace('\\', '/');
+        string normalized = BashPath.ToShell(path);
         FileSystemHelpers.WriteBashError(this, $"expand: {normalized}: {msg}");
     }
 }

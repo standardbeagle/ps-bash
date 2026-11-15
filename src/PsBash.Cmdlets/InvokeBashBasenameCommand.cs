@@ -1,4 +1,5 @@
 using System.Management.Automation;
+using PsBash.Core;
 
 namespace PsBash.Cmdlets;
 
@@ -139,7 +140,7 @@ public sealed class InvokeBashBasenameCommand : PSCmdlet
 
         foreach (var path in operands)
         {
-            var normalized = path.Replace('\\', '/').TrimEnd('/');
+            var normalized = BashPath.ToShell(path).TrimEnd('/');
             if (normalized.Length == 0) normalized = "/";
 
             int slashIdx = normalized.LastIndexOf('/');

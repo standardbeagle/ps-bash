@@ -1,4 +1,5 @@
 using System.Management.Automation;
+using PsBash.Core;
 
 namespace PsBash.Cmdlets;
 
@@ -136,11 +137,8 @@ public sealed class InvokeBashDirsCommand : PSCmdlet
     /// </summary>
     internal static void Present(List<string> entries, string? home, bool windows)
     {
-        if (windows)
-        {
-            for (int i = 0; i < entries.Count; i++) entries[i] = entries[i].Replace('\\', '/');
-            home = home?.Replace('\\', '/');
-        }
+        for (int i = 0; i < entries.Count; i++) entries[i] = BashPath.ToShell(entries[i], windows);
+        if (home is not null) home = BashPath.ToShell(home, windows);
         if (home is null) return;
         for (int i = 0; i < entries.Count; i++) entries[i] = TildeAbbreviate(entries[i], home);
     }

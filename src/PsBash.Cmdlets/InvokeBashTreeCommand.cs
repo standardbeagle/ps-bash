@@ -1,5 +1,6 @@
 using System.Management.Automation;
 using PsBash.Cmdlets.Args;
+using PsBash.Core;
 
 namespace PsBash.Cmdlets;
 
@@ -243,7 +244,7 @@ public sealed class InvokeBashTreeCommand : PSCmdlet
 
     private void WriteRoot(string target)
     {
-        _normTarget = target.Replace('\\', '/').TrimEnd('/');
+        _normTarget = BashPath.ToShell(target).TrimEnd('/');
         if (_normTarget.Length == 0) _normTarget = "/";
 
         string resolved;
@@ -263,7 +264,7 @@ public sealed class InvokeBashTreeCommand : PSCmdlet
             }
             else
             {
-                string normalized = target.Replace('\\', '/');
+                string normalized = BashPath.ToShell(target);
                 FileSystemHelpers.WriteBashError(
                     this,
                     $"tree: cannot access '{normalized}': No such file or directory");
@@ -273,7 +274,7 @@ public sealed class InvokeBashTreeCommand : PSCmdlet
         catch (Exception ex)
         {
             if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-            string normalized = target.Replace('\\', '/');
+            string normalized = BashPath.ToShell(target);
             FileSystemHelpers.WriteBashError(
                 this,
                 $"tree: cannot access '{normalized}': {ex.Message}");
@@ -286,7 +287,7 @@ public sealed class InvokeBashTreeCommand : PSCmdlet
         var rootObj = new PSObject();
         rootObj.TypeNames.Insert(0, "PsBash.TreeEntry");
         rootObj.Properties.Add(new PSNoteProperty("Name", rootName));
-        rootObj.Properties.Add(new PSNoteProperty("Path", target.Replace('\\', '/')));
+        rootObj.Properties.Add(new PSNoteProperty("Path", BashPath.ToShell(target)));
         rootObj.Properties.Add(new PSNoteProperty("Depth", 0));
         rootObj.Properties.Add(new PSNoteProperty("IsDirectory", true));
         rootObj.Properties.Add(new PSNoteProperty("TreePrefix", ""));
@@ -376,7 +377,7 @@ public sealed class InvokeBashTreeCommand : PSCmdlet
             if (fullName.Length >= _resolvedRoot.Length &&
                 fullName.StartsWith(_resolvedRoot, StringComparison.Ordinal))
             {
-                relativePath = fullName.Substring(_resolvedRoot.Length).Replace('\\', '/');
+                relativePath = BashPath.ToShell(fullName.Substring(_resolvedRoot.Length));
             }
             else
             {

@@ -868,7 +868,7 @@ public sealed class InvokeBashTailCommand : PSCmdlet
     {
         // GNU: tail: cannot open 'x' for reading: No such file or directory
         FileSystemHelpers.WriteBashError(this,
-            $"{command}: cannot open '{path.Replace('\\', '/')}' for reading: {FileSystemHelpers.ReadErrorMessage(ex)}");
+            $"{command}: cannot open '{BashPath.ToShell(path)}' for reading: {FileSystemHelpers.ReadErrorMessage(ex)}");
     }
 
     private static PSObject MakeCatLine(int lineNumber, string content, string fileName, bool unterminated = false)

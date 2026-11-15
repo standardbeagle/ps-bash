@@ -1,5 +1,6 @@
 using System.Management.Automation;
 using PsBash.Cmdlets.Args;
+using PsBash.Core;
 
 namespace PsBash.Cmdlets;
 
@@ -361,7 +362,7 @@ public sealed class InvokeBashMvCommand : PSCmdlet
                     if (suffix is not null)
                     {
                         backupPath = targetPath + suffix;
-                        note = $" (backup: '{FileSystemHelpers.ToBashPath(targetDisplay)}{suffix}')";
+                        note = $" (backup: '{BashPath.ToShell(targetDisplay)}{suffix}')";
                     }
                 }
 
@@ -386,7 +387,7 @@ public sealed class InvokeBashMvCommand : PSCmdlet
                 if (plan.Verbose)
                 {
                     WriteObject(BashRuntime.NewBashObject(
-                        $"renamed '{FileSystemHelpers.ToBashPath(srcDisplay)}' -> '{FileSystemHelpers.ToBashPath(targetDisplay)}'{note}\n"));
+                        $"renamed '{BashPath.ToShell(srcDisplay)}' -> '{BashPath.ToShell(targetDisplay)}'{note}\n"));
                 }
             }
             catch (Exception ex)

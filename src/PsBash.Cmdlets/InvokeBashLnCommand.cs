@@ -1,6 +1,7 @@
 using System.Linq;
 using System.Management.Automation;
 using PsBash.Cmdlets.Args;
+using PsBash.Core;
 
 namespace PsBash.Cmdlets;
 
@@ -375,7 +376,7 @@ public sealed class InvokeBashLnCommand : PSCmdlet
                     ? BackupControl.MakeBackup(linkAbsolute, plan.Backup, plan.BackupSuffix, targetPath)
                     : null;
                 if (suffix is not null)
-                    backupNote = $"'{FileSystemHelpers.ToBashPath(linkName)}{suffix}' ~ ";
+                    backupNote = $"'{BashPath.ToShell(linkName)}{suffix}' ~ ";
                 else
                     RemoveLinkOrFile(linkAbsolute);
             }
@@ -442,8 +443,8 @@ public sealed class InvokeBashLnCommand : PSCmdlet
 
         if (verbose)
         {
-            var bashLink = FileSystemHelpers.ToBashPath(linkName);
-            var bashTarget = FileSystemHelpers.ToBashPath(linkText);
+            var bashLink = BashPath.ToShell(linkName);
+            var bashTarget = BashPath.ToShell(linkText);
             WriteObject(BashRuntime.NewBashObject(
                 symbolic ? $"{backupNote}'{bashLink}' -> '{bashTarget}'\n"
                          : $"{backupNote}'{bashLink}' => '{bashTarget}'\n"));

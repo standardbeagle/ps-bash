@@ -3,6 +3,7 @@ using System.IO.Compression;
 using System.Management.Automation;
 using System.Text;
 using PsBash.Cmdlets.Args;
+using PsBash.Core;
 
 namespace PsBash.Cmdlets;
 
@@ -658,7 +659,7 @@ public sealed class InvokeBashTarCommand : PSCmdlet
                 // GNU stores a RELATIVE operand under the name as typed (`d/a.txt` stays `d/a.txt`, a trailing slash is dropped).
                 // An absolute operand keeps ps-bash's historical basename (GNU would store the whole path minus the leading
                 // slash; on Windows that is a drive-letter path nobody wants in an archive).
-                string typed = Path.IsPathRooted(src) ? "" : src.Replace('\\', '/').TrimEnd('/');
+                string typed = Path.IsPathRooted(src) ? "" : BashPath.ToShell(src).TrimEnd('/');
                 string leaf = typed.Length > 0 ? typed : Path.GetFileName(resolved);
 
                 if (Directory.Exists(resolved))
@@ -674,7 +675,7 @@ public sealed class InvokeBashTarCommand : PSCmdlet
                     {
                         string child = childInfo.FullName;
                         if (IsArchiveItself(child, archiveFull)) { SkipArchive(child); continue; }
-                        string relPath = root + "/" + child.Substring(resolved.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).Length + 1).Replace('\\', '/');
+                        string relPath = root + "/" + BashPath.ToShell(child.Substring(resolved.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).Length + 1));
                         if (excludes.IsExcluded(relPath)) { continue; }
                         Say(childInfo is DirectoryInfo ? relPath + "/" : relPath);
                         writer.WriteEntry(child, relPath);

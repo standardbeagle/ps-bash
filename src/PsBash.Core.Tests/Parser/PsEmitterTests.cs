@@ -4443,7 +4443,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("echo ~/x*");
 
-        Assert.Contains("([string]$HOME).Replace('\\','/')", result);
+        Assert.Contains("[PsBash.Cmdlets.BashRuntime]::ToShellPath([string]($HOME))", result);
         Assert.Contains("+ '/x*')", result);
     }
 

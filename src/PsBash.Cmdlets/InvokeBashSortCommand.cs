@@ -519,7 +519,7 @@ public sealed class InvokeBashSortCommand : PSCmdlet
                     try
                     {
                         int fileLine = 0;
-                        string label = filePath.Replace('\\', '/');
+                        string label = BashPath.ToShell(filePath);
                         foreach (var line in plan.Plan.Zero ? NulRecords.ReadFile(filePath) : BashFileSystem.ReadLines(filePath))
                         {
                             items.Add(plan.Plan.Zero ? line : BashRuntime.NewBashObject(line));
@@ -578,7 +578,7 @@ public sealed class InvokeBashSortCommand : PSCmdlet
             {
                 if (FileSystemHelpers.IsPipelineStop(ex)) throw;
                 string reason = FileSystemHelpers.ReadErrorMessage(ex);
-                FileSystemHelpers.WriteBashError(this, $"sort: open failed: {plan.Output.Replace('\\', '/')}: {reason}");
+                FileSystemHelpers.WriteBashError(this, $"sort: open failed: {BashPath.ToShell(plan.Output)}: {reason}");
                 FileSystemHelpers.SetLastExitCode(this, 2);
             }
             return;
@@ -634,7 +634,7 @@ public sealed class InvokeBashSortCommand : PSCmdlet
         {
             if (FileSystemHelpers.IsPipelineStop(ex)) throw;
             string reason = FileSystemHelpers.ReadErrorMessage(ex);
-            FileSystemHelpers.WriteBashError(this, $"sort: open failed: {source.Replace('\\', '/')}: {reason}");
+            FileSystemHelpers.WriteBashError(this, $"sort: open failed: {BashPath.ToShell(source)}: {reason}");
             FileSystemHelpers.SetLastExitCode(this, 2);
             return false;
         }
@@ -687,7 +687,7 @@ public sealed class InvokeBashSortCommand : PSCmdlet
         {
             if (FileSystemHelpers.IsPipelineStop(ex)) throw;
             string reason = FileSystemHelpers.ReadErrorMessage(ex);
-            FileSystemHelpers.WriteBashError(this, $"sort: open failed: {source.Replace('\\', '/')}: {reason}");
+            FileSystemHelpers.WriteBashError(this, $"sort: open failed: {BashPath.ToShell(source)}: {reason}");
             FileSystemHelpers.SetLastExitCode(this, 2);
             return false;
         }
@@ -696,7 +696,7 @@ public sealed class InvokeBashSortCommand : PSCmdlet
     private void WriteReadError(string path, Exception ex)
     {
         string msg = FileSystemHelpers.ReadErrorMessage(ex);
-        string normalized = path.Replace('\\', '/');
+        string normalized = BashPath.ToShell(path);
         FileSystemHelpers.WriteBashError(this, $"sort: cannot read: {normalized}: {msg}");
     }
 }

@@ -792,7 +792,7 @@ public static class InteractiveShell
                 // stale after every cd.
                 var path = pwd.Trim();
                 if (OperatingSystem.IsWindows())
-                    path = path.Replace('/', '\\');
+                    path = PsBash.Core.WindowsPath.Normalize(path);
                 if (Directory.Exists(path))
                 {
                     // Record the visit in the frecency DB only when the directory

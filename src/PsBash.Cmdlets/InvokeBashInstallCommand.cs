@@ -1,5 +1,6 @@
 using System.Management.Automation;
 using System.Runtime.InteropServices;
+using PsBash.Core;
 
 namespace PsBash.Cmdlets;
 
@@ -229,7 +230,7 @@ public sealed class InvokeBashInstallCommand : PSCmdlet
                     if (verbose)
                     {
                         WriteObject(BashRuntime.NewBashObject(
-                            $"install: creating directory '{FileSystemHelpers.ToBashPath(dir)}'\n"));
+                            $"install: creating directory '{BashPath.ToShell(dir)}'\n"));
                     }
                 }
             }
@@ -283,7 +284,7 @@ public sealed class InvokeBashInstallCommand : PSCmdlet
                     if (verbose)
                     {
                         WriteObject(BashRuntime.NewBashObject(
-                            $"install: creating directory '{FileSystemHelpers.ToBashPath(destParent)}'\n"));
+                            $"install: creating directory '{BashPath.ToShell(destParent)}'\n"));
                     }
                 }
                 catch (Exception ex)
@@ -350,7 +351,7 @@ public sealed class InvokeBashInstallCommand : PSCmdlet
                     if (verbose)
                     {
                         WriteObject(BashRuntime.NewBashObject(
-                            $"install: swapped '{FileSystemHelpers.ToBashPath(targetPath)}' -> '{FileSystemHelpers.ToBashPath(oldPath)}'\n"));
+                            $"install: swapped '{BashPath.ToShell(targetPath)}' -> '{BashPath.ToShell(oldPath)}'\n"));
                     }
                 }
                 catch
@@ -412,21 +413,21 @@ public sealed class InvokeBashInstallCommand : PSCmdlet
                         if (verbose)
                         {
                             WriteObject(BashRuntime.NewBashObject(
-                                $"install: note: '{FileSystemHelpers.ToBashPath(oldPath)}' will be deleted when unlocked\n"));
+                                $"install: note: '{BashPath.ToShell(oldPath)}' will be deleted when unlocked\n"));
                         }
                     }
                 }
                 else if (verbose)
                 {
                     WriteObject(BashRuntime.NewBashObject(
-                        $"install: scheduled deletion of '{FileSystemHelpers.ToBashPath(oldPath)}' on reboot\n"));
+                        $"install: scheduled deletion of '{BashPath.ToShell(oldPath)}' on reboot\n"));
                 }
             }
 
             if (verbose)
             {
                 WriteObject(BashRuntime.NewBashObject(
-                    $"'{FileSystemHelpers.ToBashPath(src)}' -> '{FileSystemHelpers.ToBashPath(targetPath)}'\n"));
+                    $"'{BashPath.ToShell(src)}' -> '{BashPath.ToShell(targetPath)}'\n"));
             }
         }
 

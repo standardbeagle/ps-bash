@@ -385,7 +385,7 @@ public sealed class InvokeBashFindCommand : PSCmdlet
                         if (!c.LinkLeaf && !(c.Resolved)) { if (!FindStat.IsLinkEntry(c.Item)) return false; }
                         string? t;
                         try { t = c.Item.LinkTarget; } catch { return false; }
-                        return t is not null && PathGlobMatch(t.Replace('\\', '/'), p, ci);
+                        return t is not null && PathGlobMatch(BashPath.ToShell(t), p, ci);
                     });
                     i++;
                     continue;
@@ -664,7 +664,7 @@ public sealed class InvokeBashFindCommand : PSCmdlet
                 _exit = 1;
                 continue;
             }
-            string display = rootSearchPath.Replace('\\', '/');
+            string display = BashPath.ToShell(rootSearchPath);
             _ancestors.Clear();
             WalkItem(rootItem, display, display, 0);
         }
@@ -820,7 +820,7 @@ public sealed class InvokeBashFindCommand : PSCmdlet
           .Append(s.User.PadRight(8)).Append(' ').Append(s.Group.PadRight(8)).Append(' ')
           .Append(s.Size.ToString(CultureInfo.InvariantCulture).PadLeft(8)).Append(' ')
           .Append(date).Append(' ').Append(c.Display);
-        if (s.IsLink && s.LinkTarget is not null) sb.Append(" -> ").Append(s.LinkTarget.Replace('\\', '/'));
+        if (s.IsLink && s.LinkTarget is not null) sb.Append(" -> ").Append(BashPath.ToShell(s.LinkTarget));
         return sb.ToString();
     }
 

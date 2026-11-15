@@ -435,6 +435,14 @@ public static class BashRuntime
     public static string MapPath(string path) => PsBash.Core.RuntimePath.Map(path);
 
     /// <summary>
+    /// The bash-visible spelling of a filesystem path (<c>C:\x</c> → <c>C:/x</c> on Windows):
+    /// <see cref="PsBash.Core.BashPath.ToShell(string?)"/>, the one outbound mapping. Emitted text
+    /// (<c>$PWD</c> / <c>$OLDPWD</c> after <c>cd</c>, a subshell's restore) calls this Cmdlets static
+    /// for the load-order reason in <see cref="NormalizeWindowsPath"/>.
+    /// </summary>
+    public static string ToShellPath(string? path) => PsBash.Core.BashPath.ToShell(path);
+
+    /// <summary>
     /// Emitted after every bash write to PATH: on Windows, the <c>:</c> separators a script wrote become <c>;</c>
     /// (<see cref="PsBash.Core.ExecutableLookup.ToWindowsPathList"/>), so command lookup sees each entry. No-op elsewhere.
     /// </summary>

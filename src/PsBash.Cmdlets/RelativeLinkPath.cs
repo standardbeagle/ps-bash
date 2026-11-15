@@ -1,3 +1,4 @@
+using PsBash.Core;
 namespace PsBash.Cmdlets;
 
 /// <summary>
@@ -19,7 +20,7 @@ internal static class RelativeLinkPath
         var absTarget = Canonicalize(target, readLink);
         var absDir = Canonicalize(linkDirectory, readLink);
         var rel = Path.GetRelativePath(absDir, absTarget);
-        return rel.Replace('\\', '/');
+        return BashPath.ToShell(rel);
     }
 
     /// <summary>

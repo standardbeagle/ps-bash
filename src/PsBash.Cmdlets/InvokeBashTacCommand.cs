@@ -1,5 +1,6 @@
 using System.Management.Automation;
 using PsBash.Cmdlets.Args;
+using PsBash.Core;
 
 namespace PsBash.Cmdlets;
 
@@ -247,6 +248,6 @@ public sealed class InvokeBashTacCommand : PSCmdlet
     {
         // GNU: tac: failed to open 'x' for reading: No such file or directory
         FileSystemHelpers.WriteBashError(this,
-            $"tac: failed to open '{path.Replace('\\', '/')}' for reading: {FileSystemHelpers.ReadErrorMessage(ex)}");
+            $"tac: failed to open '{BashPath.ToShell(path)}' for reading: {FileSystemHelpers.ReadErrorMessage(ex)}");
     }
 }

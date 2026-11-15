@@ -475,7 +475,7 @@ public sealed class InvokeBashBase64Command : PSCmdlet
         // (the encode path used to leak the .NET "Could not find file 'C:\...'" message).
         _ = normalizeNotFound;
         FileSystemHelpers.WriteBashError(this,
-            $"base64: {path.Replace('\\', '/')}: {FileSystemHelpers.ReadErrorMessage(ex)}");
+            $"base64: {BashPath.ToShell(path)}: {FileSystemHelpers.ReadErrorMessage(ex)}");
     }
 
     private sealed class Base64OutputBuilder
