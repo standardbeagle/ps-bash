@@ -123,7 +123,6 @@ status=2
 status=1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-background background (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Wait for job and PIPESTATUS
@@ -147,7 +146,6 @@ back status=0 pipestatus=0
 wait status=1 pipestatus=1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-background background (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Wait for job and PIPESTATUS - cat
@@ -179,7 +177,6 @@ wait status=88 pipestatus=88
 wait status=77 pipestatus=77
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-background background (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Brace group in background, wait all

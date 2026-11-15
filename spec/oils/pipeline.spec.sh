@@ -62,7 +62,6 @@ return3() {
 echo ${PIPESTATUS[@]}
 ## stdout: 1 2 3
 ## status: 0
-## XFAIL ps-bash gap-oils-pipeline pipeline (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### PIPESTATUS with shopt -s lastpipe
@@ -74,14 +73,18 @@ return3() {
 echo ${PIPESTATUS[@]}
 ## stdout: 1 2 3
 ## status: 0
-## XFAIL ps-bash gap-oils-pipeline pipeline (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### |&
+# The Oils helper stdout_stderr.py does not exist here (the recording printed bash's "command not found" with the
+# recorder's temp path); this function does what it does.
+stdout_stderr.py() { echo STDOUT; echo STDERR >&2; }
 stdout_stderr.py |& cat
-## stdout: /mnt/c/Users/andyb/AppData/Local/Temp/ps-bash/spec-record/b0820adfb1c84d0198db939c5309a11e.sh: line 1: stdout_stderr.py: command not found
+## STDOUT:
+STDOUT
+STDERR
+## END
 ## status: 0
-## XFAIL ps-bash gap-oils-pipeline pipeline (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### ! in if
@@ -224,7 +227,6 @@ pipestatus 55 44
 pipestatus 0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-pipeline pipeline (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 

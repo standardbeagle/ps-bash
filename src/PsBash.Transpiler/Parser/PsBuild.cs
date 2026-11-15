@@ -185,8 +185,43 @@ public static class PsBuild
     public const string AbandonIfExpansionFailed =
         "if ($global:__BashExpansionFailed) { $global:__BashExpansionFailed = $false; return }; ";
 
+    /// <summary>The runtime function behind <see cref="ExpansionError"/> (the emitter looks for it to abandon the command).</summary>
+    public const string ExpansionErrorFunction = "Write-BashExpansionError";
+
+    /// <summary>
+    /// A word whose expansion fails without ending a script (a bad substitution): the runtime reports
+    /// <c>prefix + message</c>, sets status 1 and the <c>$global:__BashExpansionFailed</c> mark that abandons the
+    /// command (<see cref="AbandonIfExpansionFailed"/>), and yields nothing. Under <c>bash -c</c> it ends the shell
+    /// as a parameter error does, since bash discards the rest of the command string.
+    /// </summary>
+    public static string ExpansionError(string prefixLiteral, string messageExpr) =>
+        ExpansionErrorFunction + " " + ParenSafeLiteral(prefixLiteral) + " " + messageExpr;
+
+    /// <summary>
+    /// A single-quoted literal that may sit inside a <c>"$( … )"</c> string. PowerShell finds the end of that
+    /// subexpression by counting parens WITHOUT honouring the quotes inside, so a literal holding an unbalanced
+    /// <c>(</c> or <c>)</c> (`${ case x in x) …;}`) ended it early ("Missing closing ')'"). Such a literal becomes a
+    /// parenthesised join with <c>[char]40</c>/<c>[char]41</c>; any other expression is returned unchanged.
+    /// </summary>
+    public static string ParenSafeLiteral(string expr)
+    {
+        if (expr.Length < 2 || expr[0] != '\'' || expr[^1] != '\'' || (expr.IndexOf('(') < 0 && expr.IndexOf(')') < 0))
+            return expr;
+        for (int i = 1; i < expr.Length - 1; i++)
+            if (expr[i] == '\'' && expr[i + 1] != '\'') return expr;
+            else if (expr[i] == '\'') i++;
+        return "(" + expr.Replace("(", "' + [char]40 + '").Replace(")", "' + [char]41 + '") + ")";
+    }
+
     /// <summary>An assignment consumes the mark without abandoning anything: only its own status (1) records the failure.</summary>
     public const string ClearExpansionFailed = "$global:__BashExpansionFailed = $false";
+
+    /// <summary>
+    /// Runs <paramref name="statements"/> only when no word expanded before it failed; otherwise consumes the mark and
+    /// runs nothing, keeping the status (1) the failure set. A compound command (`case $((1/0)) in`) is abandoned whole.
+    /// </summary>
+    public static string UnlessExpansionFailed(string statements) =>
+        "if ($global:__BashExpansionFailed) { " + ClearExpansionFailed + " } else { " + statements + " }";
 
     /// <summary>Follows every bash write to PATH: on Windows the <c>:</c> separators a script wrote become <c>;</c>.</summary>
     public const string NormalizePathVariable = "[PsBash.Cmdlets.BashRuntime]::NormalizePathVariable()";

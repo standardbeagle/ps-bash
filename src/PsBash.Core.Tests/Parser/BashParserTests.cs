@@ -2205,6 +2205,21 @@ public class BashParserTests
         Assert.False(hereDoc.Expand);
     }
 
+    // bash quote-removes the whole delimiter word: concatenated quoted pieces form one terminator.
+    [Theory]
+    [InlineData("cat <<'EOF'\"2\"\none\nEOF\nEOF2", "one\nEOF\n")]
+    [InlineData("cat <<E\"O\"F\none\nEOF", "one\n")]
+    [InlineData("cat <<E\\\\OF\none\nEOF\nE\\OF", "one\nEOF\n")]
+    [InlineData("cat <<\\EOF\none $x\nEOF", "one $x\n")]
+    public void Parse_ConcatenatedQuotedDelimiter_EndsAtQuoteRemovedWord(string src, string body)
+    {
+        var simple = Assert.IsType<Command.Simple>(Parse(src));
+
+        var hereDoc = Assert.Single(simple.HereDocs);
+        Assert.Equal(body, hereDoc.Body);
+        Assert.False(hereDoc.Expand);
+    }
+
     [Fact]
     public void Parse_DLessDash_SetsStripTabsTrue()
     {

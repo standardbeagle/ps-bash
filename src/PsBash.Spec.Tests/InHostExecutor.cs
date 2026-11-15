@@ -133,11 +133,17 @@ internal sealed class InHostExecutor : IScriptExecutor, IAsyncDisposable
         return entries;
     }
 
-    private static List<KeyValuePair<string, string>> CaptureEnvironment()
+    /// <summary>
+    /// The test process's environment, less PSBASH_DASH_C: that is a launcher's own mark ("this is a -c command") and,
+    /// as the launcher does (CaptureLauncherEnvironment), never inherited. A run started from a ps-bash `-c` shell (an
+    /// agent's Bash tool) carried it into every case, which then behaved as under `bash -c` ($- had c, a bad
+    /// substitution ended the script) while the launcher run of the same case did not.
+    /// </summary>
+    internal static List<KeyValuePair<string, string>> CaptureEnvironment()
     {
         var entries = new List<KeyValuePair<string, string>>();
         foreach (DictionaryEntry e in Environment.GetEnvironmentVariables())
-            if (e.Key is string name) entries.Add(new(name, e.Value as string ?? ""));
+            if (e.Key is string name && name != "PSBASH_DASH_C") entries.Add(new(name, e.Value as string ?? ""));
         return entries;
     }
 

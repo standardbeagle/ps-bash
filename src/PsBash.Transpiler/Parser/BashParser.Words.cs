@@ -663,9 +663,10 @@ public sealed partial class BashParser
             while (pos < len && IsVarChar(raw[pos]))
                 pos++;
         string varName = raw[varStart..pos];
-        if (varName.Length == 0 && pos < len && raw[pos] is '%' or '/' or '}')
+        if (varName.Length == 0 && pos < len && raw[pos] is '%' or '/' or '}' or ' ' or '\t' or '\n' or '|')
         {
-            // ${%}, ${}, ${/x}: no name at all. bash reports 'bad substitution' when it runs.
+            // ${%}, ${}, ${/x}: no name at all. bash reports 'bad substitution' when it runs. So do the bash 5.3
+            // command substitutions `${ cmd;}` and `${|cmd;}`, which bash 5.2 does not have.
             int badClose = raw.IndexOf('}', pos);
             int badEnd = badClose < 0 ? len : badClose + 1;
             parts.Add(new WordPart.BracedVarSub(varName, "#BAD:" + raw[Math.Max(0, varStart - 2)..badEnd]));

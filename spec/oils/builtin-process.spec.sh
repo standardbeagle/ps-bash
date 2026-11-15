@@ -31,7 +31,6 @@ echo stdout 1>&3
 exec -a FOOPROC sh -c 'echo $0'
 ## stdout: FOOPROC
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-process builtin-process (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Exit out of function

@@ -540,13 +540,53 @@ public static class BashLexer
     /// </summary>
     public static (string Delimiter, bool Expand) ParseHeredocDelimiter(string rawDelim)
     {
-        if ((rawDelim.StartsWith('\'') && rawDelim.EndsWith('\''))
-            || (rawDelim.StartsWith('"') && rawDelim.EndsWith('"')))
-            return (rawDelim.Length >= 2 ? rawDelim[1..^1] : string.Empty, false);
-        if (rawDelim.Contains('\\'))
-            return (rawDelim.Replace("\\", ""), false);
-        return (rawDelim, true);
+        if (rawDelim.IndexOfAny(DelimiterQuoteChars) < 0)
+            return (rawDelim, true);
+        // bash quote-removes the whole word: quoted pieces may be concatenated (`'EOF'"2"` ends at EOF2).
+        var sb = new System.Text.StringBuilder(rawDelim.Length);
+        int i = 0;
+        while (i < rawDelim.Length)
+        {
+            char c = rawDelim[i];
+            if (c == '\'')
+            {
+                int close = rawDelim.IndexOf('\'', i + 1);
+                if (close < 0) close = rawDelim.Length;
+                sb.Append(rawDelim, i + 1, close - i - 1);
+                i = close + 1;
+            }
+            else if (c == '"')
+            {
+                i++;
+                while (i < rawDelim.Length && rawDelim[i] != '"')
+                {
+                    // Inside double quotes a backslash escapes only $ ` " \ (and a newline).
+                    if (rawDelim[i] == '\\' && i + 1 < rawDelim.Length && rawDelim[i + 1] is '$' or '`' or '"' or '\\' or '\n')
+                        i++;
+                    sb.Append(rawDelim[i]);
+                    i++;
+                }
+                i++;
+            }
+            else if (c == '\\' && i + 1 < rawDelim.Length)
+            {
+                sb.Append(rawDelim[i + 1]);
+                i += 2;
+            }
+            else if (c == '\\')
+            {
+                i++;
+            }
+            else
+            {
+                sb.Append(c);
+                i++;
+            }
+        }
+        return (sb.ToString(), false);
     }
+
+    private static readonly char[] DelimiterQuoteChars = { '\'', '"', '\\' };
 
     /// <summary>
     /// Returns true if the given word is a bash reserved word.

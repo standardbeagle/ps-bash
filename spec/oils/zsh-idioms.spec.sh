@@ -41,5 +41,4 @@ status=1
 status=1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-bad-subst-ends-script a bad substitution ends the whole script; bash abandons only the current top-level command (status 1) and continues
 ## timeout: 10

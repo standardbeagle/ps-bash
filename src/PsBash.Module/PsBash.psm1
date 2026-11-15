@@ -229,13 +229,51 @@ function Get-BashIndirectValue {
     $pv
 }
 
+# A failed word expansion that does not end a script (a bad substitution): report it, status 1, and mark the command
+# abandoned (the mark is this call's script position, as Get-BashIndirectValue sets it). Under bash -c the rest of the
+# command string is discarded, so the shell ends as for a parameter error.
+function Write-BashExpansionError([string]$Prefix, [string]$Message) {
+    if ($env:PSBASH_DASH_C -eq '1') {
+        $pe = [PsBash.Cmdlets.BashParamErrorException]::Reported($Prefix, $Message)
+        Write-Error ('ps-bash: ' + $pe.Message) -ErrorAction Continue
+        throw $pe
+    }
+    $at = $MyInvocation
+    $global:LASTEXITCODE = 1
+    $global:__BashExpansionFailed = "$($at.ScriptLineNumber):$($at.OffsetInLine)"
+    Write-BashHostStderr "bash: ${Prefix}${Message}"
+    return $null
+}
+
+# A word with a control character as bash's xtrace shows it: $'...' with \a \b \t \n \v \f \r \E escapes and \ooo for
+# the other control characters (bash ansic_quote).
+function ConvertTo-BashAnsiCQuoted([string]$s) {
+    $sb = [System.Text.StringBuilder]::new("`$'")
+    foreach ($c in $s.ToCharArray()) {
+        $code = [int]$c
+        switch ($code) {
+            7 { [void]$sb.Append('\a') } 8 { [void]$sb.Append('\b') } 9 { [void]$sb.Append('\t') } 10 { [void]$sb.Append('\n') }
+            11 { [void]$sb.Append('\v') } 12 { [void]$sb.Append('\f') } 13 { [void]$sb.Append('\r') } 27 { [void]$sb.Append('\E') }
+            39 { [void]$sb.Append("\'") } 92 { [void]$sb.Append('\\') }
+            default {
+                if ($code -lt 32 -or $code -eq 127) { [void]$sb.Append('\' + [Convert]::ToString($code, 8).PadLeft(3, '0')) }
+                else { [void]$sb.Append($c) }
+            }
+        }
+    }
+    [void]$sb.Append("'")
+    $sb.ToString()
+}
+
 # set -x: the "+ cmd args" line bash prints on stderr before a command. Words print as bash does: bare when made of
 # safe characters, otherwise single-quoted. The emitter calls this only in scripts that mention set -x.
 function Write-BashXtrace {
     if (-not $global:__BashXtrace) { return }
     $words = foreach ($w in $args) {
         $s = [string]$w
-        if ($s -match '^[A-Za-z0-9_./:+@%=,^~-]+$') { $s } else { "'" + $s.Replace("'", "'\''") + "'" }
+        if ($s -match '^[A-Za-z0-9_./:+@%=,^~-]+$') { $s }
+        elseif ($s -match '[\x01-\x1f\x7f]') { ConvertTo-BashAnsiCQuoted $s }
+        else { "'" + $s.Replace("'", "'\''") + "'" }
     }
     Write-BashHostStderr ('+ ' + ($words -join ' '))
 }

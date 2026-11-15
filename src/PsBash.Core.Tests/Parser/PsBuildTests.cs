@@ -34,6 +34,23 @@ public class PsBuildTests
             "$global:__BashRedirectFailed = $false; & { x } | Invoke-BashRedirect -Path f; "
             + "if ($global:__BashRedirectFailed) { $global:__BashRedirectFailed = $false; $global:LASTEXITCODE = 1; CHECK }",
             PsBuild.RedirectFailureChecked("& { x } | Invoke-BashRedirect -Path f", "CHECK"));
+
+    // ─────────────── ParenSafeLiteral / UnlessExpansionFailed ───────────────
+
+    [Theory]
+    [InlineData("'a)b'", "('a' + [char]41 + 'b')")]
+    [InlineData("'(x'", "('' + [char]40 + 'x')")]
+    [InlineData("'plain'", "'plain'")]          // no paren: unchanged
+    [InlineData("$x", "$x")]                    // not a literal: unchanged
+    [InlineData("'it''s (x'", "('it''s ' + [char]40 + 'x')")]
+    public void ParenSafeLiteral_HidesParensFromTheQuoteBlindSubexpressionScan(string expr, string expected)
+        => Assert.Equal(expected, PsBuild.ParenSafeLiteral(expr));
+
+    [Fact]
+    public void UnlessExpansionFailed_ConsumesTheMarkOrRunsTheStatements()
+        => Assert.Equal(
+            "if ($global:__BashExpansionFailed) { $global:__BashExpansionFailed = $false } else { S }",
+            PsBuild.UnlessExpansionFailed("S"));
     // ─────────────── SingleQuote ───────────────
 
     [Fact]

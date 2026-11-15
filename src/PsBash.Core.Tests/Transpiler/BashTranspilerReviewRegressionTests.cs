@@ -547,6 +547,17 @@ public class BashTranspilerReviewRegressionTests
         Assert.DoesNotContain("-Words", ps);
     }
 
+    // Oracle: `if "$(true)"; then echo y; else echo n; fi` prints n (`bash: : command not found`, 127): a quoted command
+    // substitution is one word, never elided. It was `& "$(...)"`, a PowerShell error that counted as success
+    // (oils strict-options "empty argv WITHOUT strict_argv").
+    [Fact]
+    public void Transpile_QuotedCommandSubCommandName_IsLookedUpAsOneWord()
+    {
+        var ps = BashTranspiler.Transpile("\"$(echo foo >/dev/null)\"");
+        Assert.Contains("& (Resolve-BashCommand $((@(Invoke-BashEcho", ps);
+        Assert.DoesNotContain("-Words", ps);
+    }
+
     // Oracle: `printf 'a\n' | { p=printf; $p 'X\n'; c=cat; $c; }` prints X then a. The stdin scope's queue was piped into
     // every run-time name, so printf failed to bind the queued line (and on an empty queue never ran); the runtime
     // now feeds only a command that reads stdin.
@@ -1073,6 +1084,103 @@ public class BashTranspilerReviewRegressionTests
         var ps = BashTranspiler.Transpile("{ exit 9; } | { exit 2; } | { true; }; echo $?");
         Assert.Contains("$global:LASTEXITCODE = 9; return", ps);
         Assert.DoesNotContain("exit 9", ps);
+    }
+
+    // Oracle: `exit 55 | (exit 44); echo ${PIPESTATUS[@]}` prints `55 44`: a simple `exit` pipe stage is a subshell too
+    // (it exited the whole script with 55; oils pipeline "PIPESTATUS is set on simple commands").
+    [Fact]
+    public void Transpile_ExitSimplePipeStage_EndsOnlyTheStage()
+    {
+        var ps = BashTranspiler.Transpile("exit 55 | (exit 44); echo $?");
+        Assert.Contains("$global:LASTEXITCODE = 55; return", ps);
+        Assert.DoesNotContain("exit 55", ps);
+    }
+
+    // Oracle: `for pid in 1 2; do echo $pid; done` prints 1 and 2. `foreach ($pid in …)` threw "Cannot overwrite variable
+    // PID" and the loop never ran (oils background "wait for N parallel jobs"); a PowerShell automatic name is iterated
+    // through a private variable and read back as the shell variable.
+    [Theory]
+    [InlineData("pid")]
+    [InlineData("HOME")]
+    [InlineData("input")]
+    public void Transpile_ForLoopOverPowerShellAutomaticName_IteratesAPrivateVariable(string name)
+    {
+        var ps = BashTranspiler.Transpile($"for {name} in 1 2; do echo ${name}; done");
+        Assert.Contains($"foreach ($__psbash_lv_{name} in", ps);
+        Assert.Contains($"$env:{name} = [string]$__psbash_lv_{name}", ps);
+        Assert.DoesNotContain($"foreach (${name} ", ps);
+    }
+
+    // Oracle: a script with `x=${ echo hi;}` then `echo "[$x] $?"` prints `[] 1`, and `echo ${ echo hi;} b` prints nothing:
+    // a bad substitution (bash 5.3's `${ cmd;}` in 5.2) fails its command with status 1 and the script goes on. It threw
+    // the parameter error that ends the script (oils command-sub-ksh).
+    [Fact]
+    public void Transpile_BadSubstitution_AbandonsOnlyItsCommand()
+    {
+        var ps = BashTranspiler.Transpile("x=${ echo hi;}\necho ${ echo hi;} b");
+        Assert.Contains("Write-BashExpansionError '${ echo hi;}: ' 'bad substitution'", ps);
+        Assert.Contains("$global:__BashExpansionFailed = $false; return", ps);
+        Assert.DoesNotContain("BashParamErrorException]::Reported('${", ps);
+        // The quoted text sits inside "$( )", whose end PowerShell finds by a quote-blind paren count: an unbalanced
+        // `)` (`${ case foo in foo) ...;}`) ended it early, a parse error for the whole script (oils command-sub-ksh).
+        var withParen = BashTranspiler.Transpile("x2=${ case foo in foo) echo sh-case ;; esac; }");
+        Assert.Contains("Write-BashExpansionError ('${ case foo in foo' + [char]41 + ' echo sh-case ;; esac; }: ') 'bad substitution'", withParen);
+    }
+
+    // Oracle: `bash -c 'nosuchcmd; len=0'; echo $?` is 0. A bare assignment reset the status only in a script that reads
+    // `$?`, so a script ending in one exited with the previous command's 127 (oils nul-bytes "read -n").
+    [Fact]
+    public void Transpile_ScriptEndingInAssignment_EndsWithStatusZero()
+    {
+        Assert.EndsWith("$env:len = \"0\"; $global:LASTEXITCODE = 0", BashTranspiler.Transpile("nosuchcmd\nlen=0"));
+        // Only the last statement pays for it, and a lone assignment (status 0 already) does not.
+        Assert.DoesNotContain("$env:a = \"1\"; $global:LASTEXITCODE = 0", BashTranspiler.Transpile("a=1\nnosuchcmd"));
+        Assert.Equal("$env:a = \"1\"", BashTranspiler.Transpile("a=1"));
+    }
+
+    // Oracle: `a=(); a[-1]=1` exits 1 ("bad array subscript"). Set-BashElement leaves status 1, which a status of 0
+    // set after the element assignment hid; the reset comes first instead.
+    [Fact]
+    public void Transpile_ScriptEndingInElementAssignment_KeepsABadSubscriptStatus()
+    {
+        var ps = BashTranspiler.Transpile("a=()\na[-1]=1");
+        Assert.False(ps.EndsWith("$global:LASTEXITCODE = 0", StringComparison.Ordinal), ps);
+        Assert.Contains("$global:LASTEXITCODE = 0; if ($null -eq $a", ps);
+    }
+
+    // Oracle: `for k in "${(@k)a}"; do echo in; done; echo $?` prints the bad substitution and 1, with no iteration.
+    // The loop ran once over the empty word the failed expansion left.
+    [Fact]
+    public void Transpile_ForListThatFailsToExpand_RunsNoIteration()
+    {
+        var ps = BashTranspiler.Transpile("for k in \"${(@k)a}\"; do echo in; done");
+        Assert.Contains("$global:__BashExpansionFailed = $false; $__psbash_fl = ", ps);
+        Assert.Contains("if ($global:__BashExpansionFailed) { $global:__BashExpansionFailed = $false } else { ", ps);
+        Assert.Contains("foreach ($k in $__psbash_fl)", ps);
+        // A list that cannot fail keeps the plain loop.
+        Assert.DoesNotContain("__psbash_fl", BashTranspiler.Transpile("for k in a b; do echo in; done"));
+    }
+
+    // Oracle: `cd / && set -- a b; echo $#` prints 2. The set operand was a bare `$global:BashPositional = @(...)` after
+    // `&&`, "Unexpected token '='": a parse error for the whole script (seen running the spec helper in the Bash tool).
+    [Fact]
+    public void Transpile_SetDashDashAfterAndAnd_IsAChainOperand()
+    {
+        var ps = BashTranspiler.Transpile("cd / && set -- a b");
+        Assert.Contains("&& $($global:BashPositional = @('a', 'b'))", ps);
+        Assert.Contains("|| $($global:BashPositional = @())", BashTranspiler.Transpile("false || set --"));
+    }
+
+    // Oracle: `case $(( 42 / 0 )) in (*) echo hi ;; esac; echo inside=$?` prints the error and `inside=1`, never "hi":
+    // the failed subject abandons the case. The switch ran its `*)` arm over the empty word (oils fatal-errors).
+    [Fact]
+    public void Transpile_CaseSubjectThatFailsToExpand_RunsNoArm()
+    {
+        var ps = BashTranspiler.Transpile("case $(( 42 / 0 )) in (*) echo hi ;; esac");
+        Assert.Contains("$global:__BashExpansionFailed = $false; $__psbash_cx = ", ps);
+        Assert.Contains("if ($global:__BashExpansionFailed) { $global:__BashExpansionFailed = $false } else { switch ($__psbash_cx)", ps);
+        // A subject that cannot fail keeps the plain switch.
+        Assert.DoesNotContain("__psbash_cx", BashTranspiler.Transpile("case $x in (*) echo hi ;; esac"));
     }
 
     // Oracle: `bash -c 'set -C; echo $-'` is `hBCc`: `c` comes last, and only under -c (the launcher's PSBASH_DASH_C mark).

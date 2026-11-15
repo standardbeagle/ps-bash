@@ -829,6 +829,7 @@ public static partial class PsEmitter
         _caseVars = new Dictionary<string, bool>(StringComparer.Ordinal);
         _intVars = new HashSet<string>(StringComparer.Ordinal);
         var priorReadsStatus = _scriptReadsStatus;
+        var priorFinalAssignment = _finalAssignment;
         var priorReadsLastArg = _scriptReadsLastArg;
         var priorPosix = _scriptPosix;
         var priorLastpipe = _scriptLastpipe;
@@ -894,6 +895,8 @@ public static partial class PsEmitter
             }
             if (cmd is null)
                 return null;
+            // A lone statement starts from status 0 anyway.
+            _finalAssignment = (cmd is Command.CommandList { Commands.Length: > 1 } top ? top.Commands[^1] : null) as Command.ShAssignment;
             CollectCallSites(cmd);
             CollectArrayAssignments(cmd);
             CollectAliasDefs(cmd, bash);
@@ -908,6 +911,7 @@ public static partial class PsEmitter
             _arrayVars = priorArrayVars;
             _caseVars = priorCaseVars;
             _scriptReadsStatus = priorReadsStatus;
+            _finalAssignment = priorFinalAssignment;
             _scriptReadsLastArg = priorReadsLastArg;
             _scriptPosix = priorPosix;
             _scriptLastpipe = priorLastpipe;
@@ -1193,6 +1197,22 @@ public static partial class PsEmitter
         return list.Any(w => w.Parts.Any(PartRisky));
     }
 
+    /// <summary>
+    /// PowerShell automatic variables a <c>foreach</c> cannot use as its iteration variable: a read-only or constant
+    /// one throws on assignment (<c>for pid in ...</c> ran no iteration: "Cannot overwrite variable PID"), and the
+    /// others are rebound by PowerShell itself. A bash loop over such a name iterates a private PowerShell variable;
+    /// the body reads the shell variable (<c>$env:</c>), which each iteration sets.
+    /// </summary>
+    private static readonly HashSet<string> _psReservedLoopNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "PID", "HOME", "Host", "true", "false", "null", "ShellId", "PSHOME", "ExecutionContext", "PSCulture",
+        "PSUICulture", "PSVersionTable", "PSEdition", "IsWindows", "IsLinux", "IsMacOS", "IsCoreCLR", "Error",
+        "input", "args", "this", "Matches", "foreach", "switch", "PSItem", "LASTEXITCODE", "MyInvocation",
+        "PSScriptRoot", "PSCommandPath", "PSBoundParameters", "PSCmdlet", "StackTrace", "NestedPromptLevel",
+        "ConsoleFileName", "PSDebugContext", "EnabledExperimentalFeatures", "Event", "EventArgs", "EventSubscriber",
+        "Sender",
+    };
+
     private static string EmitForIn(Command.ForIn forIn)
     {
         int depth = _loopDepth++;
@@ -1203,31 +1223,46 @@ public static partial class PsEmitter
             sb.Append(IterGuardPrefix(depth));
             sb.Append(label);
 
+            bool reservedName = _psReservedLoopNames.Contains(forIn.Var);
+            string psVar = reservedName ? "__psbash_lv_" + forIn.Var : forIn.Var;
+            string listPrelude = "";
+
             // `for i; do` (no `in`) iterates $@; `for i in ; do` has an explicit, empty list and runs zero times.
             if (forIn.List.IsEmpty && forIn.ExplicitIn)
             {
-                sb.Append($"foreach (${forIn.Var} in @()) {{ ");
+                sb.Append($"foreach (${psVar} in @()) {{ ");
             }
             else if (forIn.List.IsEmpty)
             {
-                sb.Append($"foreach (${forIn.Var} in {PsBuild.BuildPositionalExpansion("@")}) {{ ");
+                sb.Append($"foreach (${psVar} in {PsBuild.BuildPositionalExpansion("@")}) {{ ");
             }
             else
             {
-                sb.Append($"foreach (${forIn.Var} in ");
-                sb.Append(FormatForInList(forIn.List));
+                string list = FormatForInList(forIn.List);
+                // `for k in "${(@k)a}"`: a word that fails to expand abandons the whole loop (status 1, no
+                // iteration); the loop ran once over the empty word. Expand the list first, then test the mark.
+                if (list.Contains(PsBuild.ExpansionErrorFunction, StringComparison.Ordinal)
+                    || list.Contains("Invoke-BashArith", StringComparison.Ordinal)
+                    || list.Contains("Get-BashIndirectValue", StringComparison.Ordinal))
+                {
+                    // Emptied first: a failglob error ends the assignment and would leave an earlier loop's list.
+                    listPrelude = "$__psbash_fl = $null; " + PsBuild.ClearExpansionFailed + "; $__psbash_fl = " + list + "; ";
+                    list = "$__psbash_fl";
+                }
+                sb.Append($"foreach (${psVar} in ");
+                sb.Append(list);
                 sb.Append(") { ");
             }
 
             sb.Append(IterGuardCheck(depth));
             sb.Append(DebugAt(forIn.Line)); // trap DEBUG: before each iteration, with the `for` line
             // The loop variable is an ordinary shell variable: the body's functions see it and it keeps its last value after the loop.
-            sb.Append($"$env:{forIn.Var} = [string]${forIn.Var}; ");
+            sb.Append($"$env:{forIn.Var} = [string]${psVar}; ");
 
             var vars = _loopVars ??= new HashSet<string>();
-            bool added = vars.Add(forIn.Var);
+            bool added = !reservedName && vars.Add(forIn.Var);
             // `for i; do` (no list) iterates "$@": arbitrary strings.
-            bool addedSplit = (forIn.List.IsEmpty || ForListMaySplit(forIn.List)) && (_splitLoopVars ??= new HashSet<string>()).Add(forIn.Var);
+            bool addedSplit = !reservedName && (forIn.List.IsEmpty || ForListMaySplit(forIn.List)) && (_splitLoopVars ??= new HashSet<string>()).Add(forIn.Var);
             try
             {
                 sb.Append(EmitBody(forIn.Body));
@@ -1241,15 +1276,16 @@ public static partial class PsEmitter
             sb.Append(" }");
             string body = sb.ToString();
             // A list that globs can fail (failglob): then the loop's status is 1, not the zero-iteration 0.
-            bool globs = body.Contains("ConvertTo-BashGlob", StringComparison.Ordinal) || body.Contains("ConvertTo-BashWords", StringComparison.Ordinal);
-            string loop = ApplyCompoundRedirects(
-                (globs ? PsBuild.FailGlobReset : "") + body + "; "
-                + (globs ? PsBuild.ZeroIterationStatusAfterGlob(IterVar(depth)) : PsBuild.ZeroIterationStatus(IterVar(depth))),
-                forIn.Redirects);
+            bool globs = (listPrelude + body).Contains("ConvertTo-BashGlob", StringComparison.Ordinal) || (listPrelude + body).Contains("ConvertTo-BashWords", StringComparison.Ordinal);
+            body = body + "; " + (globs ? PsBuild.ZeroIterationStatusAfterGlob(IterVar(depth)) : PsBuild.ZeroIterationStatus(IterVar(depth)));
+            // A list expanded ahead of the loop (it can fail) runs the loop only when it did not.
+            if (listPrelude.Length > 0) body = listPrelude + PsBuild.UnlessExpansionFailed(body);
+            string loop = ApplyCompoundRedirects((globs ? PsBuild.FailGlobReset : "") + body, forIn.Redirects);
             // The PowerShell loop variable outlives the loop with its last value, and arithmetic reads a PowerShell
             // variable before the shell variable: `for i in 1 2 3; do :; done; i=0; ...$((i+1))` then counted from 3.
             // The shell variable (`$env:`) already holds the last value, so drop the lexical one. A name the
             // enclosing function declared `local` (already a lexical variable) is left alone.
+            if (reservedName) return loop + "; Remove-Variable -Name " + psVar + " -ErrorAction SilentlyContinue";
             return added ? loop + "; Remove-Variable -Name " + forIn.Var + " -ErrorAction SilentlyContinue" : loop;
         }
         finally
@@ -1853,8 +1889,20 @@ public static partial class PsEmitter
         // `case x in esac` is valid and does nothing (status 0); a `switch` with no clause is a PowerShell error.
         if (caseCmd.Arms.IsDefaultOrEmpty)
             return $"[void]({EmitCaseExpr(caseCmd.Expr)}); {PsBuild.SetStatus(0)}";
+        var subject = EmitCaseExpr(caseCmd.Expr);
+        // `case $((42/0)) in`: a subject that fails to expand abandons the whole case (status 1, no arm runs); the
+        // switch ran its `*)` arm over the empty word. Expand it first, then test the mark the runtime left.
+        bool subjectCanFail = subject.Contains("Invoke-BashArith", StringComparison.Ordinal)
+            || subject.Contains(PsBuild.ExpansionErrorFunction, StringComparison.Ordinal)
+            || subject.Contains("Get-BashIndirectValue", StringComparison.Ordinal);
+        string subjectPrelude = "";
+        if (subjectCanFail)
+        {
+            subjectPrelude = PsBuild.ClearExpansionFailed + "; $__psbash_cx = " + subject + "; ";
+            subject = "$__psbash_cx";
+        }
         var sb = new StringBuilder("switch (");
-        sb.Append(EmitCaseExpr(caseCmd.Expr));
+        sb.Append(subject);
         sb.Append(") { ");
 
         for (int i = 0; i < caseCmd.Arms.Length; i++)
@@ -1873,7 +1921,8 @@ public static partial class PsEmitter
         }
 
         sb.Append(" }");
-        return ApplyCompoundRedirects(sb.ToString(), caseCmd.Redirects);
+        var caseText = subjectCanFail ? subjectPrelude + PsBuild.UnlessExpansionFailed(sb.ToString()) : sb.ToString();
+        return ApplyCompoundRedirects(caseText, caseCmd.Redirects);
     }
 
     /// <summary>
@@ -3787,15 +3836,25 @@ public static partial class PsEmitter
         if (text.Contains(PsBuild.BadArithSubscriptMessage + "'", StringComparison.Ordinal)) return text; // the guard sets it either way
         if (NeedsArrayKindGuard(cmd)) return text; // each declaration sets its own status (1 when the kind change is refused)
         // `x=$((1/0))`: the failed expansion keeps status 1, and its mark must not abandon a LATER command.
-        if (text.Contains("Invoke-BashArith", StringComparison.Ordinal)) return text + "; " + PsBuild.ClearExpansionFailed;
-        if (!_scriptReadsStatus || ContainsCommandSub(cmd)) return text;
+        if (text.Contains("Invoke-BashArith", StringComparison.Ordinal) || text.Contains(PsBuild.ExpansionErrorFunction, StringComparison.Ordinal))
+            return text + "; " + PsBuild.ClearExpansionFailed;
+        // The script's last statement sets its exit status, which is read even when no `$?` is
+        // (`nosuchcmd; len=0` exits 0, not 127).
+        if ((!_scriptReadsStatus && !ReferenceEquals(cmd, _finalAssignment)) || ContainsCommandSub(cmd)) return text;
         if (cmd.Pairs.Any(p => _readonlyVars?.Contains(p.Name.Contains('[') ? p.Name[..p.Name.IndexOf('[')] : p.Name) == true || ResolveNameref(p.Name) != p.Name)) return text;
+        // `a=(); a[-1]=1`: Set-BashElement reports a bad subscript with status 1, which a status set after it would
+        // hide; start from 0 instead (unless the statement reads `$?` itself).
+        if (cmd.Pairs.Any(p => p.Name.Contains('[')))
+            return text.Contains("LASTEXITCODE", StringComparison.Ordinal) ? text : PsBuild.SetStatus(0) + "; " + text;
         // An array literal whose glob fails under failglob ends the statement with status 1; keep it.
         if (cmd.Pairs.Any(p => p.ArrayValue is not null)) return text + "; if ($?) { $global:LASTEXITCODE = 0 }";
         return text + "; $global:LASTEXITCODE = 0";
     }
 
     [ThreadStatic] private static bool _inArrayKindGuard;
+
+    /// <summary>The script's last top-level statement when it is an assignment (its status is the script's).</summary>
+    [ThreadStatic] private static Command.ShAssignment? _finalAssignment;
 
     /// <summary>
     /// `declare -A a=(...)` / `declare -a a=(...)` refuses to change the kind of an existing array (run-time check). Not
@@ -5386,6 +5445,25 @@ public static partial class PsEmitter
         // `exec -- cmd` : the `--` ends option parsing, it is not the command.
         if (cmd.Words.Length > 1 && GetLiteralValue(cmd.Words[1]) == "--")
             cmd = new Command.Simple(cmd.Words.RemoveAt(1), cmd.EnvPairs, cmd.Redirects);
+        // `exec -a NAME cmd`: NAME is the command's argv[0]; `-c` (empty environment) and `-l` (login) are dropped.
+        // Only a nested shell shows argv[0] (`exec -a NAME sh -c 'echo $0'`): it becomes the -c script's $0.
+        CompoundWord? argv0 = null;
+        while (cmd.Words.Length > 1 && GetLiteralValue(cmd.Words[1]) is "-a" or "-c" or "-l" or "-cl" or "-lc" or "--")
+        {
+            string opt = GetLiteralValue(cmd.Words[1])!;
+            if (opt == "--") { cmd = new Command.Simple(cmd.Words.RemoveAt(1), cmd.EnvPairs, cmd.Redirects); break; }
+            if (opt == "-a")
+            {
+                if (cmd.Words.Length < 3) break;
+                argv0 = cmd.Words[2];
+                cmd = new Command.Simple(cmd.Words.RemoveRange(1, 2), cmd.EnvPairs, cmd.Redirects);
+                continue;
+            }
+            cmd = new Command.Simple(cmd.Words.RemoveAt(1), cmd.EnvPairs, cmd.Redirects);
+        }
+        if (argv0 is not null && cmd.Words.Length == 4 && GetLiteralValue(cmd.Words[1]) is "sh" or "bash"
+            && GetLiteralValue(cmd.Words[2]) == "-c")
+            cmd = new Command.Simple(cmd.Words.Add(argv0), cmd.EnvPairs, cmd.Redirects);
         if (cmd.Words.Length > 1)
         {
             var inner = new Command.Simple(cmd.Words.RemoveAt(0), cmd.EnvPairs, cmd.Redirects);
@@ -6212,7 +6290,10 @@ public static partial class PsEmitter
                 || GetLiteralValue(cmd.Words[0]) is { } tmpCmd && tmpCmd.StartsWith("/tmp/", StringComparison.Ordinal));
         // A run-time command name (`"$@"`, `$cmd`, `"$tool"`) is looked up as bash does (function, then builtin such
         // as `false` / `echo` / `test`, then PATH): Resolve-BashCommand returns what `&` can call.
-        bool dynamicName = needsCallOperator && dashName is null && IsBareVariableCommandWord(cmd.Words[0]);
+        // A quoted command substitution (`"$(cmd)"`) is one word, never elided, like `"$x"`: an empty one names no
+        // command (": command not found", 127). Emitted as `& "$(...)"`, an empty name was a PowerShell error.
+        bool dynamicName = needsCallOperator && dashName is null
+            && (IsBareVariableCommandWord(cmd.Words[0]) || cmd.Words[0].Parts is [WordPart.DoubleQuoted { Parts: [WordPart.CommandSub] }]);
         // `${b}uiltin declare x`, `${z}ommand readonly y`: a name glued to text is split and looked up the same way. A word
         // with a path separator (`$dir/bin/tool`) keeps its path emission.
         bool affixName = needsCallOperator && dashName is null && !dynamicName && IsUnquotedVarAffixWord(cmd.Words[0])
@@ -9229,7 +9310,7 @@ public static partial class PsEmitter
                 // failglob: the expansion error ends only its own statement, so stop before the command runs.
                 // An invalid indirect reference (`${!a}`, a=/) abandons the command too.
                 if (IsGlobWord(args[i]) || IsBraceGlobWord(args[i])) prelude.Append("if (-not $?) { return }; ");
-                else if (emitted.Contains("Get-BashIndirectValue")) prelude.Append(PsBuild.AbandonIfExpansionFailed);
+                else if (emitted.Contains("Get-BashIndirectValue") || emitted.Contains(PsBuild.ExpansionErrorFunction)) prelude.Append(PsBuild.AbandonIfExpansionFailed);
                 call.Append('@').Append(tempVar.AsSpan(1));
             }
             else
@@ -9237,7 +9318,7 @@ public static partial class PsEmitter
                 string plain = emitPlainArg(i);
                 // A quoted word with a failing indirect reference (`"${!a[@]-d}"`, a=(x y)) abandons the command as
                 // well: evaluate it first, so the command never runs (it ran with the word empty).
-                if (plain.Contains("Get-BashIndirectValue", StringComparison.Ordinal))
+                if (plain.Contains("Get-BashIndirectValue", StringComparison.Ordinal) || plain.Contains(PsBuild.ExpansionErrorFunction, StringComparison.Ordinal))
                 {
                     string v = $"$__bashsplat{splatCounter++}";
                     prelude.Append(v).Append(" = ").Append(PsBuild.ArgValue(plain)).Append("; ").Append(PsBuild.AbandonIfExpansionFailed);
@@ -9259,7 +9340,7 @@ public static partial class PsEmitter
     {
         foreach (var part in parts)
         {
-            if (part is WordPart.BracedVarSub { Suffix: { } s } && s.StartsWith("!indirect", StringComparison.Ordinal)) return true;
+            if (part is WordPart.BracedVarSub { Suffix: { } s } && (s.StartsWith("!indirect", StringComparison.Ordinal) || s.StartsWith("#BAD:", StringComparison.Ordinal))) return true;
             if (part is WordPart.DoubleQuoted dq && HasIndirectPart(dq.Parts)) return true;
         }
         return false;
@@ -9498,8 +9579,10 @@ public static partial class PsEmitter
         if (bvs.Suffix is null)
             return EmitSimpleVar(bvs.Name, strict: true);
 
+        // A bad substitution fails the expansion: the command is abandoned with status 1 and a script goes on
+        // (`x=${ echo hi;}` is bash 5.3 syntax); under `bash -c` the rest of the command string is discarded.
         if (bvs.Suffix.StartsWith("#BAD:", StringComparison.Ordinal))
-            return "$(" + PsBuild.ParamErrorThrowStatements(PsBuild.SingleQuote(bvs.Suffix[5..] + ": "), "'bad substitution'") + ")";
+            return "$(" + PsBuild.ExpansionError(PsBuild.SingleQuote(bvs.Suffix[5..] + ": "), "'bad substitution'") + ")";
 
         // Positional-parameter SLICE: ${@:offset[:length]} / ${*:…}. Unhandled, this
         // fell through to the ordinary-variable path and emitted the bare `$env:`
@@ -9874,15 +9957,7 @@ public static partial class PsEmitter
 
         // PowerShell finds the end of "$( … )" by counting parens WITHOUT honouring the quotes inside, so a
         // literal operand holding an unbalanced ( or ) (`"${u-\(}"`) must not carry a raw paren there.
-        static string ParenSafeLiteral(string expr)
-        {
-            if (expr.Length < 2 || expr[0] != '\'' || expr[^1] != '\'' || (expr.IndexOf('(') < 0 && expr.IndexOf(')') < 0))
-                return expr;
-            for (int i = 1; i < expr.Length - 1; i++)
-                if (expr[i] == '\'' && expr[i + 1] != '\'' ) return expr;
-                else if (expr[i] == '\'') i++;
-            return "(" + expr.Replace("(", "' + [char]40 + '").Replace(")", "' + [char]41 + '") + ")";
-        }
+        static string ParenSafeLiteral(string expr) => PsBuild.ParenSafeLiteral(expr);
 
         string ArgValRaw(string rawSlice) =>
             !argWord.HasValue
@@ -10762,8 +10837,13 @@ public static partial class PsEmitter
         if (emitted.StartsWith("$(", StringComparison.Ordinal))
             return false;
 
-        return emitted.Contains(';') || emitted.StartsWith("if ", StringComparison.Ordinal);
+        // A lone assignment statement (`set -- a b` is `$global:BashPositional = @('a', 'b')`) is no pipeline either:
+        // `cd x && set -- a b` was "Unexpected token '='", a parse error for the whole script.
+        return emitted.Contains(';') || emitted.StartsWith("if ", StringComparison.Ordinal)
+            || ChainOperandAssignment.IsMatch(emitted);
     }
+
+    private static readonly System.Text.RegularExpressions.Regex ChainOperandAssignment = new(@"^\$[A-Za-z_][\w:]*\s*=(?!=)", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
 
     /// <summary>
     /// A SIMPLE command can still emit a PowerShell statement LIST — the runtime-`eval`
@@ -10886,6 +10966,12 @@ public static partial class PsEmitter
                 && !HasInputRedirect(substStage.Redirects) && substStage.HereDocs.IsDefaultOrEmpty
                 && substStage.Words.Any(w => ContainsCommandSub(w.Parts)))
                 cmd = new Command.BraceGroup(substStage, ImmutableArray<Redirect>.Empty);
+            // `exit 55 | (exit 44)`: every pipe stage is a subshell, so `exit` there ends only that stage, with its
+            // status (PIPESTATUS 55 44). As a bare stage it ended the whole script. A lastpipe stage runs in the shell.
+            if (pipeline.Commands.Length > 1 && cmd is Command.Simple { EnvPairs.IsEmpty: true, Words.Length: >= 1 } exitStage
+                && GetLiteralValue(exitStage.Words[0]) == "exit"
+                && !(_scriptLastpipe && i > 0 && i == pipeline.Commands.Length - 1))
+                cmd = new Command.Subshell(exitStage, ImmutableArray<Redirect>.Empty);
             if (i > 0 && cmd is Command.Simple simple)
             {
                 bool isLastStage = i == pipeline.Commands.Length - 1;

@@ -147,5 +147,4 @@ status=1
 status=1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-bad-substitution-ends-script a bad substitution (${a[]}) ends the script; bash drops only the rest of that input line (a[]=42 itself is fixed)
 ## timeout: 10
