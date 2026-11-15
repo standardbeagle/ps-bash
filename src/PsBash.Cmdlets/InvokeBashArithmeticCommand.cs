@@ -192,13 +192,27 @@ public sealed class InvokeBashArithmeticCommand : PSCmdlet
         return index < 0 ? index + count : index;
     }
 
+    /// <summary>
+    /// A subscript read from a VALUE (<c>x='a[$(cmd)]'; $(( x ))</c>) with a command substitution in it: bash expands it
+    /// as a word first, so the command runs (<see cref="BashSubscriptExpansion"/>). A literal <c>$(( a[$(cmd)] ))</c> in
+    /// the script never gets here with one; the emitter substitutes it before the expression reaches this cmdlet.
+    /// </summary>
+    private bool TryExpandSubscript(ref string subscript)
+    {
+        if (!BashSubscriptExpansion.NeedsWordExpansion(subscript)) return false;
+        subscript = BashSubscriptExpansion.Expand(InvokeCommand, subscript)
+            ?? throw new BashArith.BashArithException($"{subscript}: bad substitution");
+        return true;
+    }
+
     private string? ReadElement(string baseName, string subscript)
     {
+        bool expanded = TryExpandSubscript(ref subscript);
         object? holder = SessionState.PSVariable.GetValue(baseName);
         if (holder is PSObject wrapped) holder = wrapped.BaseObject;
         if (holder is System.Collections.IDictionary dict)
         {
-            string key = ExpandKey(subscript);
+            string key = expanded ? subscript : ExpandKey(subscript);
             return dict.Contains(key) ? dict[key]?.ToString() ?? "" : null;
         }
         if (holder is System.Collections.IList list)
@@ -213,6 +227,7 @@ public sealed class InvokeBashArithmeticCommand : PSCmdlet
 
     private void WriteElement(string baseName, string subscript, string value)
     {
+        bool expanded = TryExpandSubscript(ref subscript);
         object? holder = SessionState.PSVariable.GetValue(baseName);
         if (holder is PSObject wrapped) holder = wrapped.BaseObject;
         if (holder is BashSparseArray sparse)
@@ -223,7 +238,7 @@ public sealed class InvokeBashArithmeticCommand : PSCmdlet
         }
         if (holder is System.Collections.IDictionary dict)
         {
-            dict[ExpandKey(subscript)] = value;
+            dict[expanded ? subscript : ExpandKey(subscript)] = value;
             return;
         }
         var items = new List<object?>();

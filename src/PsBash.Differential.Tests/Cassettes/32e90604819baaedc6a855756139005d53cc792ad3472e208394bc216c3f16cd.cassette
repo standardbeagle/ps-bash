@@ -1,0 +1,22 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 234
+stdout-length: 16
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)"
+a=(10 20 30)
+v='$(echo 5 > ran)'; ( echo $((v)) ) 2>/dev/null; echo s=$?; test -f ran && echo RAN
+w='a[1"]'; ( echo "${!w}" ) 2>/dev/null; echo s=$?
+p='a[<(echo x)]'; ( echo "${!p}" ) 2>/dev/null; echo s=$?
+echo end
+
+==== STDOUT ====
+s=1
+s=1
+s=1
+end
+
+==== STDERR ====
+

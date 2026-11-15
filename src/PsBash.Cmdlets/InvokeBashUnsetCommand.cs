@@ -58,6 +58,21 @@ public sealed class InvokeBashUnsetCommand : PSCmdlet
         if (key is "@" or "*") return false;
         // `unset -v 'assoc["K"]'` / `unset 'assoc[K]'`: the quotes delimit the key, they are not part of it.
         if (key.Length >= 2 && key[0] is '"' or '\'' && key[^1] == key[0]) key = key[1..^1];
+        // `unset -v 'a[$(cmd)]'`: bash expands the operand's subscript as a word, so the command runs and its output is
+        // the index or key (BashSubscriptExpansion). That text is then used as is, not expanded again.
+        bool expanded = false;
+        if (BashSubscriptExpansion.NeedsWordExpansion(key))
+        {
+            string? word = BashSubscriptExpansion.Expand(InvokeCommand, key);
+            if (word is null)
+            {
+                FileSystemHelpers.WriteStderr(this, $"unset: {name}: bad substitution");
+                FileSystemHelpers.SetLastExitCode(this, 1);
+                return true;
+            }
+            key = word;
+            expanded = true;
+        }
 
         var value = SessionState.PSVariable.GetValue(baseName);
         long ReadNumber(string n)
@@ -79,7 +94,7 @@ public sealed class InvokeBashUnsetCommand : PSCmdlet
         if (value is System.Collections.IDictionary dict)
         {
             // `unset "m[$k]"` arrives already expanded; a quoted `$k` is expanded here.
-            dict.Remove(System.Text.RegularExpressions.Regex.Replace(key, @"\$\{?(\w+)\}?",
+            dict.Remove(expanded ? key : System.Text.RegularExpressions.Regex.Replace(key, @"\$\{?(\w+)\}?",
                 m => SessionState.PSVariable.GetValue(m.Groups[1].Value)?.ToString() ?? BashVariableStore.Get(m.Groups[1].Value) ?? ""));
             return true;
         }

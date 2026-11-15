@@ -282,7 +282,6 @@ len=1
 len=0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-subscript-cmdsub-eval bash runs a $(...) in an array subscript read from a variable value or an unset operand; ps-bash never runs code from a value
 ## timeout: 10
 
 #### nameref and assoc array

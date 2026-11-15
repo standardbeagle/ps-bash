@@ -183,7 +183,6 @@ fi
 42
 ## END
 ## status: 0
-## XFAIL ps-bash gap-subscript-cmdsub-eval bash runs a $(...) in an array subscript read from a variable value or an unset operand; ps-bash never runs code from a value
 ## timeout: 10
 
 #### process sub <(echo 42 | tee PWNED) not allowed
@@ -228,7 +227,6 @@ PWNED
 0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-subscript-cmdsub-eval bash runs a $(...) in an array subscript read from a variable value or an unset operand; ps-bash never runs code from a value
 ## timeout: 10
 
 #### printf integer size bug

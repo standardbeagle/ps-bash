@@ -1,0 +1,31 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 368
+stdout-length: 27
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)"
+a=(10 20 30)
+x='a[$(echo 1 | tee log)]'; echo "${!x}"; cat log
+q='a[${c:-2}]'; echo "${!q}"; q2='a[$(( 3 - 2 ))]'; echo "${!q2}"
+y='a[$(echo 2)]+5'; echo $((y))
+z='b[$(echo 3)]=7'; echo $((z)) "${b[3]}"
+declare -A m=([k]=v [j]=w)
+r='m[$(echo k)]'; echo "${!r}"
+unset -v 'm[$(echo j)]'; echo "${#m[@]}"
+unset 'a[$(echo 0)]'; echo "${#a[@]}" "${a[1]}"
+
+==== STDOUT ====
+20
+1
+30
+20
+35
+7 7
+v
+1
+2 20
+
+==== STDERR ====
+

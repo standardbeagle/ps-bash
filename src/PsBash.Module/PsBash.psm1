@@ -176,11 +176,26 @@ function Get-BashIndirectValue {
     if ($n -eq '?') { return [string]$global:LASTEXITCODE }
     if ($n -eq 'FUNCNAME') { return ([string]@(Get-BashFuncNames | Where-Object { $_ -ne 'Get-BashIndirectValue' })[0]) }
     if ($n -eq 'OPTIND' -and $null -eq [System.Environment]::GetEnvironmentVariable('OPTIND') -and $null -eq (Get-Variable -Name OPTIND -ValueOnly -ErrorAction Ignore)) { return '1' }
-    if ($n -match '^([A-Za-z_][A-Za-z0-9_]*)\[(.*)\]$') {
+    # A subscript that leaves a quote open (`a[1"]`) is no array reference: "invalid variable name" below.
+    if ($n -match '^([A-Za-z_][A-Za-z0-9_]*)\[(.*)\]$' -and [PsBash.Cmdlets.BashSubscriptExpansion]::QuotesBalanced($Matches[2])) {
         $v = Get-Variable -Name $Matches[1] -ValueOnly -ErrorAction Ignore
         $rawSub = $Matches[2]
         $sub = $rawSub.Trim('"', "'")
         if ($null -eq $v) { return $null }
+        # `ref='a[$(cmd)]'`, `ref='a[${c:-1}]'`: bash expands the subscript as a word before using it, so the command
+        # runs (bash's array subscript code execution); its output is the key, or the arithmetic index.
+        if ([PsBash.Cmdlets.BashSubscriptExpansion]::NeedsWordExpansion($rawSub, $true)) {
+            $word = [PsBash.Cmdlets.BashSubscriptExpansion]::Expand($ExecutionContext.InvokeCommand, $rawSub)
+            if ($null -eq $word) {
+                $global:LASTEXITCODE = 1
+                $global:__BashExpansionFailed = "$($at.ScriptLineNumber):$($at.OffsetInLine)"
+                Write-BashHostStderr "bash: ${n}: bad substitution"
+                if ([PsBash.Cmdlets.BashLineDiscard]::Armed) { throw [PsBash.Cmdlets.BashParamErrorException]::Discard("${n}: ", 'bad substitution') }
+                return $null
+            }
+            if ($v -is [System.Collections.IDictionary]) { return $v[$word] }
+            $rawSub = $sub = $word
+        }
         if ($v -is [System.Collections.IDictionary]) {
             # An assoc key is a word: its quotes are removed wherever they are (`assoc["al"e]` is key `ale`), and a
             # variable in it expands (`ref='A[$key]'`), except inside single quotes. A command substitution is not run.
