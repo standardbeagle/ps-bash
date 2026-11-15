@@ -19,9 +19,11 @@ NEVER re-derive the read-only fallback in a cmdlet. A new destructive op → use
 ## CHILD PROCESSES — `BashRuntime.RunChildProcess` (timeout + kill-tree)
 Buffered shell-out (id, checksum external, etc.) → `BashRuntime.RunChildProcess(psi[, timeout])`:
 bounded wait, concurrent stdout/stderr drain, `Kill(entireProcessTree:true)` on timeout. A hung
-child can never wedge the single-threaded host runspace. Raw `Process.Start` is allowed ONLY for
-streaming/interactive consumers (traceroute hop-by-hop, less paging) that handle `Stopping`
-+ kill-tree themselves. Never raw-spawn a buffered command.
+child can never wedge the single-threaded host runspace. Streaming child (output while it runs, piped
+stdin fed live, no budget; nested `bash`) → `BashRuntime.StartChildProcessStreaming` →
+`StreamingChildProcess` (pump/WriteStdin/Complete on the pipeline thread, `Kill` from `StopProcessing`).
+Raw `Process.Start` is allowed ONLY for interactive consumers (traceroute hop-by-hop, less paging)
+that handle `Stopping` + kill-tree themselves. Never raw-spawn a buffered command.
 
 ## PATHS / IDENTITY (already centralized — reuse, don't re-add)
 - operand path normalization → `FileSystemHelpers.NormalizeOperandPath` → `WindowsPath` (unix→drive).

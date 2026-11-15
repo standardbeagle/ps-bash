@@ -1202,6 +1202,48 @@ public static class BashRuntime
     {
         ArgumentNullException.ThrowIfNull(startInfo);
 
+        var budget = timeout ?? GetChildProcessTimeout();
+
+        using var proc = SpawnRedirected(startInfo);
+
+        // Hand the child an EOF-closed stdin so it never hangs waiting for input; `stdinText` (a piped-in
+        // program or data for a nested `bash -c`) is written first. Written on a worker so a child that
+        // never reads cannot block us on a full pipe.
+        if (!string.IsNullOrEmpty(stdinText))
+        {
+            var writer = proc.StandardInput;
+            _ = Task.Run(() =>
+            {
+                try { writer.Write(stdinText); writer.Flush(); } catch { /* child closed its stdin early */ }
+                try { writer.Close(); } catch { }
+            });
+        }
+        else
+            try { proc.StandardInput.Close(); } catch { /* child may not have opened it */ }
+
+        return WaitBuffered(proc, budget);
+    }
+
+    /// <summary>
+    /// A STREAMING child: its stdout/stderr arrive while it runs (the caller's pipeline thread pumps them, see
+    /// <see cref="StreamingChildProcess"/>), its stdin stays open for the caller to feed when
+    /// <paramref name="keepStdinOpen"/>, and there is NO time budget — the caller kills the tree on
+    /// <c>StopProcessing</c>. For a nested shell (<c>bash script.sh</c>, <c>sh -c make</c>) that must show progress and
+    /// may run for hours, which <see cref="RunChildProcess(ProcessStartInfo, System.TimeSpan?, string?)"/> (collect,
+    /// then return at exit or kill at the budget) cannot do.
+    /// </summary>
+    public static StreamingChildProcess StartChildProcessStreaming(ProcessStartInfo startInfo, bool keepStdinOpen)
+    {
+        ArgumentNullException.ThrowIfNull(startInfo);
+        return new StreamingChildProcess(SpawnRedirected(startInfo), keepStdinOpen);
+    }
+
+    /// <summary>
+    /// The spawn both child helpers share: exported variables applied, a live cwd, stdin/stdout/stderr redirected
+    /// (output decoded byte-faithfully), no shell, and one retry when the process cwd vanished under us.
+    /// </summary>
+    private static Process SpawnRedirected(ProcessStartInfo startInfo)
+    {
         // Bash variables the script exported must reach the child — `export
         // PATH=…` / `export NODE_ENV=…` are the whole point of export. While the
         // store IS the process environment this is a no-op (the child inherits);
@@ -1224,8 +1266,6 @@ public static class BashRuntime
         // (e.g. ps-bash's no-args REPL, or `sort`/`cat` with no file operand).
         startInfo.RedirectStandardInput = true;
 
-        var budget = timeout ?? GetChildProcessTimeout();
-
         Process? started = null;
         for (int spawnTry = 0; ; spawnTry++)
         {
@@ -1237,24 +1277,12 @@ public static class BashRuntime
                 EnsureLiveCurrentDirectory(startInfo);
             }
         }
-        using var proc = started
+        return started
             ?? throw new InvalidOperationException($"Failed to start process '{startInfo.FileName}'.");
+    }
 
-        // Hand the child an EOF-closed stdin so it never hangs waiting for input; `stdinText` (a piped-in
-        // program or data for a nested `bash -c`) is written first. Written on a worker so a child that
-        // never reads cannot block us on a full pipe.
-        if (!string.IsNullOrEmpty(stdinText))
-        {
-            var writer = proc.StandardInput;
-            _ = Task.Run(() =>
-            {
-                try { writer.Write(stdinText); writer.Flush(); } catch { /* child closed its stdin early */ }
-                try { writer.Close(); } catch { }
-            });
-        }
-        else
-            try { proc.StandardInput.Close(); } catch { /* child may not have opened it */ }
-
+    private static ChildProcessResult WaitBuffered(Process proc, System.TimeSpan budget)
+    {
         // Drain BOTH streams concurrently. Each drain keeps reading after the
         // capture cap and discards excess text, so a noisy child cannot exhaust
         // memory or block on a full pipe.

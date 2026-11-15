@@ -357,6 +357,25 @@ public class InvokeBashBashCommandTests : IClassFixture<SharedPwshFixture>
         Assert.Equal(0, exit ?? 0);
     }
 
+    /// <summary>
+    /// bash puts no time limit on a child shell. The nested shell ran under the buffered spawn's budget
+    /// (PSBASH_TIMEOUT, else 120 s) and was killed with 124 and no message; inheriting PSBASH_TIMEOUT also gave the
+    /// child launcher an idle bound its quiet `sleep` tripped. Oracle: `bash -c 'sleep 4; echo done'` prints done, 0.
+    /// </summary>
+    [SkippableFact]
+    public void Bash_ChildOutlivesPsBashTimeout_IsNotKilled()
+    {
+        Skip.If(LocatePsBash() == null, "ps-bash binary not on PATH or next to test runtime");
+
+        var (lines, err, exit) = Run(
+            "$__prior = $env:PSBASH_TIMEOUT; $env:PSBASH_TIMEOUT = '2'; " +
+            "try { Invoke-BashBash -c 'sleep 4; echo done-after-timeout' } " +
+            "finally { if ($null -eq $__prior) { Remove-Item Env:PSBASH_TIMEOUT -ErrorAction Ignore } else { $env:PSBASH_TIMEOUT = $__prior } }");
+        Assert.True(string.IsNullOrEmpty(err), $"unexpected error: {err}");
+        Assert.Equal(new[] { "done-after-timeout" }, lines);
+        Assert.Equal(0, exit);
+    }
+
     [SkippableFact]
     public void Bash_DashCExit5_PropagatesExitCode()
     {

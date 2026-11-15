@@ -279,7 +279,9 @@ public static class AssertOracle
         OracleResult psBashResult)
     {
         var bashStdout = Canonicalizer.Canonicalize(bashResult.Stdout);
-        var psBashStdout = Canonicalizer.Canonicalize(psBashResult.Stdout);
+        // A nested shell (`bash -c … 2>&1`) is another ps-bash that inherits this harness's PSBASH_DEBUG=1, so its
+        // debug trace can reach stdout through the merge; it is harness noise there exactly as it is on stderr.
+        var psBashStdout = Canonicalizer.Canonicalize(StripDebugLines(psBashResult.Stdout));
         var bashStderr = Canonicalizer.Canonicalize(bashResult.Stderr);
 
         // Extract transpiled PS text from ps-bash debug stderr lines
@@ -474,7 +476,7 @@ public static class AssertOracle
     }
 
     /// <summary>
-    /// Removes [ps-bash] debug lines from stderr so they do not pollute the stderr diff.
+    /// Removes [ps-bash] debug lines (PSBASH_DEBUG=1) so they do not pollute the diff.
     /// </summary>
     private static string StripDebugLines(string stderr)
     {

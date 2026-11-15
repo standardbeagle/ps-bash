@@ -1,0 +1,17 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 110
+stdout-length: 25
+stderr-length: 0
+==== SCRIPT ====
+bash -c 'echo out1; sleep 0.3; echo err1 >&2; sleep 0.3; echo out2; sleep 0.3; echo err2 >&2' 2>&1; echo rc=$?
+==== STDOUT ====
+out1
+err1
+out2
+err2
+rc=0
+
+==== STDERR ====
+

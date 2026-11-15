@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 55
+stdout-length: 9
+stderr-length: 0
+==== SCRIPT ====
+bash -c 'while :; do echo y; done' | head -2; echo done
+==== STDOUT ====
+y
+y
+done
+
+==== STDERR ====
+

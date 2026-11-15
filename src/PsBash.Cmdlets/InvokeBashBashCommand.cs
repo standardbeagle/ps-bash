@@ -40,7 +40,7 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashBash")]
 [OutputType(typeof(PSObject))]
-public sealed class InvokeBashBashCommand : PSCmdlet
+public sealed class InvokeBashBashCommand : PSCmdlet, IDisposable
 {
     /// <summary>
     /// Bash's <c>-c SCRIPT</c> one-shot flag. Declared as a literal
@@ -63,42 +63,92 @@ public sealed class InvokeBashBashCommand : PSCmdlet
     [Parameter] public SwitchParameter v { get; set; }
     [Parameter] public string? o { get; set; }
 
-    /// <summary>The script text of `echo cmd | bash`, `bash <<< cmd`, `curl … | sh`: bash reads its program from stdin.</summary>
+    /// <summary>
+    /// Pipeline input. Usually the child's stdin, streamed into it record by record as it arrives
+    /// (<c>producer | bash -c 'while read l; ...'</c>). When the argv names no program (<see cref="ProgramOnStdin"/>:
+    /// <c>echo cmd | bash</c>, <c>bash &lt;&lt;&lt; cmd</c>, <c>curl … | sh</c>) it IS the program, collected and run as <c>-c</c>.
+    /// </summary>
     [Parameter(ValueFromPipeline = true)]
     [AllowNull]
     public PSObject? InputObject { get; set; }
 
+    private List<string> _argv = new();
+    private bool _programOnStdin;
     private System.Text.StringBuilder? _stdinScript;
+    private StreamingChildProcess? _child;
+    private bool _finished;
 
-    protected override void ProcessRecord()
-    {
-        if (InputObject is null) return;
-        _stdinScript ??= new System.Text.StringBuilder();
-        var text = BashRuntime.GetBashText(InputObject);
-        _stdinScript.Append(text);
-        if (!text.EndsWith('\n')) _stdinScript.Append('\n');
-    }
-
-    protected override void EndProcessing()
+    protected override void BeginProcessing()
     {
         // Reconstruct the argument vector exactly as the oracle saw it. The
         // binder may have consumed the bare token "-c <value>" into the C
         // property; if so, splice the equivalent ["-c", value] tokens back
         // into the forwarded args at the front (oracle parity).
-        var forwarded = BuildArgv(C, Arguments, i, e, v, o);
-        bool stdinWasScript = false;
-        // No -c and no script operand: the program is on stdin. A nested ps-bash given it as -c runs the same text.
-        // Not for -i: `echo cmds | bash -i` is an interactive session reading the pipe (prompts, history), which the
-        // child runs from its stdin.
-        if (_stdinScript is { Length: > 0 } && !forwarded.Contains("-c") && forwarded.All(a => a.StartsWith('-') && a.Length > 1 || a == "-s")
-            && !AsksInteractive(forwarded))
-        {
-            forwarded.RemoveAll(a => a is "-s" or "-");
-            forwarded.Add("-c");
-            forwarded.Add(_stdinScript.ToString());
-            stdinWasScript = true;
-        }
+        _argv = BuildArgv(C, Arguments, i, e, v, o);
+        // The program arrives on stdin: wait for all of it, then run it (EndProcessing).
+        _programOnStdin = MyInvocation.ExpectingInput && ProgramOnStdin(_argv);
+        if (_programOnStdin) return;
+        // Otherwise the child starts NOW, as bash starts a pipeline's commands together: `slow | bash -c 'echo hi'`
+        // prints hi at once, and piped input reaches the child as it is produced.
+        Start(keepStdinOpen: MyInvocation.ExpectingInput);
+    }
 
+    protected override void ProcessRecord()
+    {
+        if (InputObject is null) return;
+        if (_programOnStdin)
+        {
+            _stdinScript ??= new System.Text.StringBuilder();
+            var text = BashRuntime.GetBashText(InputObject);
+            _stdinScript.Append(text);
+            if (!text.EndsWith('\n')) _stdinScript.Append('\n');
+            return;
+        }
+        if (_child is not { StdinOpen: true }) return;
+        if (!_child.WriteStdin(this, NativeStdinBridge.RecordBytes(InputObject)))
+        {
+            // The child stopped reading (`yes | bash -c 'head -1'`): bash's producer dies of SIGPIPE. Finish first,
+            // so the child's output and status are complete whether or not EndProcessing runs after the stop.
+            Finish();
+            UpstreamStop.Throw(this);
+            return;
+        }
+        _child.PumpAvailable(this);
+    }
+
+    protected override void EndProcessing()
+    {
+        if (_programOnStdin)
+        {
+            // A nested ps-bash given the program as -c runs the same text.
+            if (_stdinScript is { Length: > 0 })
+            {
+                _argv.RemoveAll(a => a is "-s" or "-");
+                _argv.Add("-c");
+                _argv.Add(_stdinScript.ToString());
+            }
+            Start(keepStdinOpen: false);
+        }
+        Finish();
+    }
+
+    /// <summary>Ctrl-C, or the pipeline stopping: the child's whole tree goes with it.</summary>
+    protected override void StopProcessing() => _child?.Kill();
+
+    public void Dispose() => _child?.Dispose();
+
+    /// <summary>
+    /// True when the argv names no program — no <c>-c</c> and no script operand, only options (<c>-s</c> included) —
+    /// so piped input is the program. Not for <c>-i</c>: <c>echo cmds | bash -i</c> is an interactive session
+    /// reading the pipe (prompts, history), which the child runs from its stdin.
+    /// </summary>
+    internal static bool ProgramOnStdin(IReadOnlyList<string> argv)
+        => !argv.Contains("-c") && argv.All(a => a.StartsWith('-') && a.Length > 1 || a == "-s") && !AsksInteractive(argv);
+
+    /// <summary>--help / --version, or spawn the child. Sets <see cref="_child"/> only when one started.</summary>
+    private void Start(bool keepStdinOpen)
+    {
+        var forwarded = _argv;
         // Only flags in bash's OPTION zone (before the script path / -c string) are bash's own;
         // `bash s.sh --version` hands --version to the script.
         if (OptionZoneHas(forwarded, "--help"))
@@ -170,49 +220,35 @@ public sealed class InvokeBashBashCommand : PSCmdlet
             if (!string.IsNullOrEmpty(loc) && System.IO.Directory.Exists(loc)) psi.WorkingDirectory = loc;
         }
         catch { /* not a filesystem location: inherit */ }
+        // bash puts no time limit on a child shell. PSBASH_TIMEOUT is the launcher's idle bound for the OUTER call,
+        // which already covers this child's silence (the child's output is the outer call's output); inherited, it
+        // killed a quiet nested `bash script.sh` (a `sleep`, a long compile step) with 124 and no message.
+        psi.Environment.Remove("PSBASH_TIMEOUT");
 
-        int exitCode;
-        string stdout;
-        string stderr;
         try
         {
-            // Bounded spawn + concurrent stdout/stderr drain + kill-tree on
-            // timeout, with stdin closed to EOF (RunChildProcess). A no-args /
-            // REPL-mode child sees EOF and exits instead of hanging on a read,
-            // and a nested ps-bash that itself wedges can no longer block the
-            // parent host runspace forever (the #3 wedge, recursively).
-            // Piped text that was not itself the program (`echo hi | bash -c cat`) is the child's stdin.
-            string? childStdin = _stdinScript is { Length: > 0 } && !stdinWasScript ? _stdinScript.ToString() : null;
-            var spawn = BashRuntime.RunChildProcess(psi, null, childStdin);
-            stdout = spawn.Stdout;
-            stderr = spawn.Stderr;
-            exitCode = spawn.ExitCode;
+            // Streaming spawn: output is emitted while the child runs (progress shows, `2>&1` keeps its order), no
+            // time budget, kill-tree on StopProcessing. Without piped input the child's stdin is closed at once, so a
+            // no-args / REPL-mode child sees EOF and exits instead of hanging on a read.
+            _child = BashRuntime.StartChildProcessStreaming(psi, keepStdinOpen);
         }
         catch (Exception ex)
         {
             if (FileSystemHelpers.IsPipelineStop(ex)) throw;
             FileSystemHelpers.WriteBashError(this, "bash: " + ex.Message);
             SessionState.PSVariable.Set("global:LASTEXITCODE", 1);
-            return;
         }
+    }
 
+    /// <summary>Run the child to its exit, emitting its output; forward its status. Once.</summary>
+    private void Finish()
+    {
+        if (_child is null || _finished) return;
+        _finished = true;
+        int exitCode = _child.Complete(this);
+        if (Stopping) return;
         // Forward child exit code to the caller's $LASTEXITCODE — oracle parity.
         SessionState.PSVariable.Set("global:LASTEXITCODE", exitCode);
-
-        // The command's error stream, not Console.Error: inside the host that was the host's own fd 2, so a nested
-        // shell's stderr vanished and `2>&1` / `2> f` could not see it.
-        FileSystemHelpers.WriteStderrBytes(this, stderr.Replace("\r\n", "\n"));
-
-        if (!string.IsNullOrEmpty(stdout))
-        {
-            // EmitBashLines drops one trailing newline itself and flags only a genuinely unterminated last line;
-            // stripping it here made `bash -c 'echo hi'; echo next` print `hinext`.
-            var normalized = stdout.Replace("\r\n", "\n");
-            foreach (var obj in BashRuntime.EmitBashLines(normalized))
-            {
-                WriteObject(obj);
-            }
-        }
     }
 
     /// <summary>
