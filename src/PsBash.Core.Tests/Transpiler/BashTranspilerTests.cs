@@ -354,7 +354,11 @@ public class BashTranspilerTests
         {
             var result = BashTranspiler.Transpile(bash);
             Assert.Contains("| Invoke-BashRedirect", result);
-            Assert.Contains(param + "$env:d/e", result.Replace("\"", ""));
+            // Unquoted, `$d/e` is split and pathname-expanded first (one field is the path), so the value reaches
+            // -Path through that expansion; quoted, it is the string itself.
+            string flat = result.Replace("\"", "");
+            Assert.Contains(param, flat);
+            Assert.Contains(bash.Contains('"') ? param + "$env:d/e" : "$env:d", flat);
             Assert.DoesNotContain(nativeForm, result);
         }
         finally { Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", prior); }

@@ -19,7 +19,6 @@ echo word word
 echo word word &
 ## stdout: word word
 ## status: 0
-## XFAIL ps-bash gap-bg-output-at-exit output of a background job (cmd &) is lost when the script ends before the job is harvested
 ## timeout: 10
 
 #### a & b
@@ -29,7 +28,6 @@ word_b
 word_a
 ## END
 ## status: 0
-## XFAIL ps-bash gap-bg-output-at-exit output of a background job (cmd &) is lost when the script ends before the job is harvested
 ## timeout: 10
 
 #### a & b &
@@ -39,7 +37,6 @@ word_a
 word_b
 ## END
 ## status: 0
-## XFAIL ps-bash gap-bg-output-at-exit output of a background job (cmd &) is lost when the script ends before the job is harvested
 ## timeout: 10
 
 #### a && b

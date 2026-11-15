@@ -625,6 +625,39 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
         };
         errorStream.DataAdded += onErrorAdded;
 
+        // `echo a &` as a script's last command: the job's buffered output goes to this command's sinks
+        // (Complete-BashBgJobsAtExit). Its own PowerShell instance, so the script's HadErrors, error records and
+        // $LASTEXITCODE that decide the exit status below are left as the script left them.
+        void EmitBackgroundJobsAtExit()
+        {
+            try
+            {
+                if (_ps.Runspace.SessionStateProxy.GetVariable("BashBgLastPid") is null) return; // never used `&`
+                using var harvest = PowerShell.Create();
+                harvest.Runspace = _ps.Runspace;
+                harvest.AddScript("$__psbash_hx = $global:LASTEXITCODE; try { if (Get-Command Complete-BashBgJobsAtExit -ErrorAction Ignore) { Complete-BashBgJobsAtExit } } finally { $global:LASTEXITCODE = $__psbash_hx }");
+                var jobErrors = harvest.Streams.Error;
+                EventHandler<System.Management.Automation.DataAddedEventArgs> onJobError = (_, _) =>
+                {
+                    lock (outputLock)
+                    {
+                        foreach (var record in jobErrors.ReadAll())
+                        {
+                            FlushFormatBufferCore();
+                            deliverErrorBytes(PsBash.Core.StderrRecord.Payload(record.ToString(), record.TargetObject));
+                        }
+                    }
+                };
+                jobErrors.DataAdded += onJobError;
+                try { harvest.Invoke(null, outputCollection); }
+                finally { jobErrors.DataAdded -= onJobError; }
+            }
+            catch
+            {
+                // Advisory: the script's own result stands.
+            }
+        }
+
         // Cmdlets that write Console.Error directly (a nested `bash -c`'s stderr, awk's "/dev/stderr", `time`'s
         // report) reached the host's own detached fd 2 and vanished. While this command runs, Console.Error is its
         // stderr sink. Safe for the same reason as the environment swap above: the execution lease serialises
@@ -637,6 +670,10 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
             try
             {
                 _ps.Invoke(null, outputCollection);
+                // A launcher request (not a stateful session) runs in a runspace discarded after it, which stops its
+                // background jobs: their output is emitted first, as a bash job's reaches the shell's stdout.
+                if (framedLauncherRequest && !StatefulSession && _ps.InvocationStateInfo.State != System.Management.Automation.PSInvocationState.Stopped)
+                    EmitBackgroundJobsAtExit();
             }
             catch (System.Management.Automation.PipelineStoppedException)
             {

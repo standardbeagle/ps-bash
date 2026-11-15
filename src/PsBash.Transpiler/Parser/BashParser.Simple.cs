@@ -836,7 +836,11 @@ public sealed partial class BashParser
             if (IsNamedCompoundRedirect())
             {
                 var fdVar = Advance().Value[1..^1];
-                redirects.Add(ParseRedirect(fdVar));
+                // `{ ...; } {abc}<<< walrus`: a here-string on a descriptor of its own, its number stored in abc.
+                if (Peek().Kind == BashTokenKind.TLess)
+                    redirects.Add(new Redirect("<<<", 0, new CompoundWord(ImmutableArray<WordPart>.Empty), FdVar: fdVar, Here: ParseHereString()));
+                else
+                    redirects.Add(ParseRedirect(fdVar));
             }
             else if (Peek().Kind == BashTokenKind.TLess)
             {
@@ -882,7 +886,7 @@ public sealed partial class BashParser
         Peek().Kind == BashTokenKind.Word
         && IsNamedFdToken(Peek().Value)
         && _pos + 1 < _tokens.Count
-        && IsCompoundRedirectOp(_tokens[_pos + 1].Kind);
+        && (IsCompoundRedirectOp(_tokens[_pos + 1].Kind) || _tokens[_pos + 1].Kind == BashTokenKind.TLess);
 
     private static bool IsCompoundRedirectOp(BashTokenKind kind) =>
         IsRedirectOp(kind)

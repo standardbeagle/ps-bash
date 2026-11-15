@@ -83,7 +83,7 @@ status=0
 hi
 ## END
 ## status: 1
-## XFAIL ps-bash gap-redirect-target-var-not-globbed a redirect target from an unquoted $var is not pathname-expanded, so >$var with two-* opens no file
+## XFAIL ps-bash gap-head-reglobs-operand the redirect writes two-bar now, but head globs its operands again, so the escaped two-\* (the literal two-*) is read as two-bar instead of failing with "cannot open"
 ## timeout: 10
 
 #### File redirect that globs to more than one file (bash and zsh only)
@@ -137,7 +137,6 @@ should-not-be-on-stdout
 stdout
 ## END
 ## status: 0
-## XFAIL ps-bash gap-redirect-dup-target-not-globbed the word after >& is not pathname-expanded, so >& 1* does not become >& 10 (fd 10, a dup of stdout)
 ## timeout: 10
 
 #### Redirect with brace expansion isn't allowed

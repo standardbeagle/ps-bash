@@ -57,6 +57,8 @@ public sealed class InvokeBashExecFdCommand : PSCmdlet
 
     private string? Run(int fd)
     {
+        // `{ ...; } {name}<<< word`: Target is the here-string's text.
+        if (Operator == "<<<") return BashFdTable.OpenText(fd, Target ?? "");
         if (Operator is ">&" or "<&")
         {
             if (Target == "-")

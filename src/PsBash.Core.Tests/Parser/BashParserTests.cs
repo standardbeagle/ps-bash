@@ -463,6 +463,30 @@ public class BashParserTests
         Assert.Equal(stripTabs, hereDoc.StripTabs);
     }
 
+    // toysh "{abc}<<< walrus": a named-fd here-string after a compound command opens a descriptor of its own; it was a
+    // parse error (the {abc} word was taken for a command after the group).
+    [Fact]
+    public void Parse_NamedFdHereStringOnBraceGroup_IsARedirectOfTheGroup()
+    {
+        var group = Assert.IsType<Command.BraceGroup>(Parse("{ cat <&$abc; } {abc}<<< walrus"));
+
+        var redir = Assert.Single(group.Redirects);
+        Assert.Equal("<<<", redir.Op);
+        Assert.Equal("abc", redir.FdVar);
+        Assert.NotNull(redir.Here);
+    }
+
+    // bash: `( )` is "syntax error near unexpected token `)'" (status 2); it was accepted as an empty subshell.
+    [Theory]
+    [InlineData("( )")]
+    [InlineData("()")]
+    [InlineData("echo a; (\n)")]
+    public void Parse_EmptySubshell_IsASyntaxError(string src)
+    {
+        var ex = Assert.Throws<ParseException>(() => Parse(src));
+        Assert.Contains("unexpected token `)'", ex.Message);
+    }
+
     [Theory]
     [InlineData("read -u 3 3<<EOF\nhi\nEOF", 3, 3)]
     [InlineData("read -u 7 7<<-EOF\n\thi\nEOF", 7, 3)]

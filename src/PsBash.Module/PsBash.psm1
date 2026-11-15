@@ -2905,9 +2905,37 @@ function Stop-BashBgJob {
     # SIGCONT / SIGWINCH do not end a job; a finished job is a zombie that kill still finds.
     if ($Probe -or $Signal -in 18, 28 -or $job.Done -or $job.AsyncResult.IsCompleted) { return $true }
     $job.ExitCode = 128 + $Signal
+    # wait reports a job a signal ended (Write-BashBgSignalReport).
+    $job | Add-Member -NotePropertyName Signal -NotePropertyValue $Signal -Force
     try { $job.PowerShell.Stop() } catch { }
     $job.Done = $true
     return $true
+}
+
+# strsignal(3) text bash prints when `wait` collects a job a signal ended (glibc's, which bash's messages use).
+$script:BashSignalDescriptions = @{
+    1 = 'Hangup'; 2 = 'Interrupt'; 3 = 'Quit'; 4 = 'Illegal instruction'; 5 = 'Trace/breakpoint trap'; 6 = 'Aborted'
+    7 = 'Bus error'; 8 = 'Floating point exception'; 9 = 'Killed'; 10 = 'User defined signal 1'; 11 = 'Segmentation fault'
+    12 = 'User defined signal 2'; 13 = 'Broken pipe'; 14 = 'Alarm clock'; 15 = 'Terminated'; 16 = 'Stack fault'
+    17 = 'Child exited'; 18 = 'Continued'; 19 = 'Stopped (signal)'; 20 = 'Stopped'; 21 = 'Stopped (tty input)'
+    22 = 'Stopped (tty output)'; 23 = 'Urgent I/O condition'; 24 = 'CPU time limit exceeded'; 25 = 'File size limit exceeded'
+    26 = 'Virtual timer expired'; 27 = 'Profiling timer expired'; 28 = 'Window changed'; 29 = 'I/O possible'
+    30 = 'Power failure'; 31 = 'Bad system call'
+}
+
+function Write-BashBgSignalReport {
+    <#
+    .SYNOPSIS
+        bash reports a background job that a signal ended when it collects it (`kill -HUP $!; wait` prints
+        "PID Hangup"), on stderr. A non-interactive shell says nothing for SIGPIPE and SIGTERM, and its jobs ignore SIGINT and SIGQUIT. The
+        script line and the job's command text that bash adds are not known here.
+    #>
+    param([Parameter(Mandatory)]$Job)
+    $sig = $Job.PSObject.Properties['Signal']?.Value
+    if ($null -eq $sig -or $sig -in 2, 3, 13, 15) { return }
+    $desc = $script:BashSignalDescriptions[[int]$sig]
+    if (-not $desc) { $desc = "Unknown signal $sig" }
+    Write-BashHostStderr "bash: $($Job.Id) $desc"
 }
 
 function Remove-BashBgFinished {
@@ -2921,6 +2949,32 @@ function Remove-BashBgFinished {
             Complete-BashBgJob -Job $job
             [void]$script:BashBgJobs.Remove($job)
         }
+    }
+}
+
+function Complete-BashBgJobsAtExit {
+    <#
+    .SYNOPSIS
+        A non-interactive shell is ending (-c, a script): emit the output of its background jobs. bash's job writes
+        to the shell's stdout itself, so `echo a &` as the last command still prints a; here a job's output is
+        buffered until it is collected, and the runspace's teardown dropped it. Jobs still running get up to
+        GraceMs to finish (the teardown then stops the rest, as before); finished ones are emitted in the order
+        they finished.
+    #>
+    param([int]$GraceMs = 1000)
+    $jobs = @($script:BashBgJobs | Where-Object { -not $_.Done })
+    if ($jobs.Count -eq 0) { return }
+    $deadline = [Environment]::TickCount64 + $GraceMs
+    foreach ($job in $jobs) {
+        $left = $deadline - [Environment]::TickCount64
+        if ($left -le 0) { break }
+        if (-not $job.AsyncResult.IsCompleted) { [void]$job.AsyncResult.AsyncWaitHandle.WaitOne([int]$left) }
+    }
+    $finished = @($jobs | Where-Object { $_.AsyncResult.IsCompleted } |
+        Sort-Object -Stable { if ($_.Status -is [System.Collections.IDictionary] -and $_.Status.At) { $_.Status.At } else { 0 } })
+    foreach ($job in $finished) {
+        Complete-BashBgJob -Job $job
+        [void]$script:BashBgJobs.Remove($job)
     }
 }
 
@@ -3140,6 +3194,7 @@ function Invoke-BashWait {
             $done = $pool[[System.Threading.WaitHandle]::WaitAny($handles)]
         }
         Complete-BashBgJob -Job $done
+        Write-BashBgSignalReport -Job $done
         $code = if ($null -eq $done.ExitCode) { 0 } else { [int]$done.ExitCode }
         [void]$script:BashBgJobs.Remove($done)
         $global:LASTEXITCODE = $code
@@ -3161,6 +3216,7 @@ function Invoke-BashWait {
             if ($job) {
                 [void]$job.AsyncResult.AsyncWaitHandle.WaitOne()
                 Complete-BashBgJob -Job $job
+                Write-BashBgSignalReport -Job $job
                 $code = if ($null -eq $job.ExitCode) { 0 } else { [int]$job.ExitCode }
                 [void]$script:BashBgJobs.Remove($job)
                 $global:LASTEXITCODE = $code
@@ -3177,6 +3233,7 @@ function Invoke-BashWait {
         foreach ($job in @($script:BashBgJobs)) {
             [void]$job.AsyncResult.AsyncWaitHandle.WaitOne()
             Complete-BashBgJob -Job $job
+            Write-BashBgSignalReport -Job $job
         }
         $script:BashBgJobs.Clear()
         $global:LASTEXITCODE = 0

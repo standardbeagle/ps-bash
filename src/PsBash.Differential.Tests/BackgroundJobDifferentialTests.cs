@@ -51,6 +51,43 @@ public class BackgroundJobDifferentialTests
     }
 
     /// <summary>
+    /// A background job's output reaches stdout even when the script ends before anything waits for it: bash's job
+    /// writes it itself. ps-bash buffers a job's output until it is collected, and the runspace's teardown dropped
+    /// it (oils shell-grammar "Command with trailer", "a &amp; b", "a &amp; b &amp;").
+    /// </summary>
+    [SkippableTheory]
+    [InlineData("echo word word &")]
+    [InlineData("{ echo x; echo y; } &")]
+    public async Task Differential_Background_OutputOfAnUnwaitedJob_IsEmittedAtExit(string script)
+    {
+        await AssertOracle.EqualAsync(script, timeout: TimeSpan.FromSeconds(60), liveOnly: true);
+    }
+
+    /// <summary>
+    /// The words of `cmd &amp;` are expanded in the job, not the shell: `${bar=2} &amp;` and `$((n=5)) &amp;` assign
+    /// nothing in the shell (oils background "Background process doesn't affect parent").
+    /// </summary>
+    [SkippableFact]
+    public async Task Differential_Background_AssigningWordOfAJob_DoesNotAssignInTheShell()
+    {
+        await AssertOracle.EqualAsync("echo ${bar=2} > /dev/null & : $((n=5)) & wait; echo \"bar=${bar-unset} n=${n-unset}\"",
+            timeout: TimeSpan.FromSeconds(60), liveOnly: true);
+    }
+
+    /// <summary>
+    /// `wait` for a job a signal killed reports the signal's description (Hangup, status 129) on stderr, as bash does;
+    /// it printed nothing (oils background "Signal message for killed background job"). TERM, INT, PIPE and QUIT are
+    /// not reported, as in bash.
+    /// </summary>
+    [SkippableTheory]
+    [InlineData("cd \"$(mktemp -d)\"; sleep 30 & kill -HUP $!; wait $! 2>err.txt; echo status=$?; grep -o Hangup err.txt; cd /")]
+    [InlineData("cd \"$(mktemp -d)\"; sleep 30 & kill -TERM $!; wait $! 2>err.txt; echo status=$?; wc -c < err.txt; cd /")]
+    public async Task Differential_Background_WaitForASignaledJob_ReportsTheSignal(string script)
+    {
+        await AssertOracle.EqualAsync(script, timeout: TimeSpan.FromSeconds(60), liveOnly: true);
+    }
+
+    /// <summary>
     /// `jobs -p` prints one process id per job (a pipeline job too); it printed the whole `jobs` listing, four words a
     /// line (oils background "jobs -p prints one line per job").
     /// </summary>

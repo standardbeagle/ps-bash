@@ -1507,6 +1507,9 @@ public sealed partial class BashParser
             throw MakeError(
                 $"Expected ')' to close subshell but got '{Peek().Value}' ({Peek().Kind})",
                 Peek().Position, "ParseSubshell");
+        // `( )`: a subshell needs a command (bash: syntax error near unexpected token `)', status 2).
+        if (commands.Count == 0)
+            throw MakeError("syntax error near unexpected token `)'", Peek().Position, "ParseSubshell");
         Advance(); // consume )
 
         Command body = commands.Count == 1

@@ -2067,7 +2067,14 @@ public static partial class PsEmitter
             ? (EvalLocalNames?.Contains(name) == true ? "$" + name : "$global:" + name) :
         _functionDepth > 0 && _subshellDepth == 0 && _functionLocalNames is { } locals && !locals.Contains(name)
             ? "$global:" + name
+        // A lastpipe stage runs in the shell, but inside the stage's `& { }`: `... | while read l; do a+=("$l"); done`
+        // must append to the shell's array, not to one local to that block.
+        : _lastpipeStageDepth > 0 && _functionDepth == 0 && _subshellDepth == 0
+            ? "$global:" + name
             : "$" + name;
+
+    /// <summary>Above 0 while the last stage of a pipeline is emitted under <c>shopt -s lastpipe</c>.</summary>
+    [ThreadStatic] private static int _lastpipeStageDepth;
 
     private static string EmitFunction(Command.ShFunction func)
     {
@@ -2500,7 +2507,9 @@ public static partial class PsEmitter
             || s.Words.IsDefaultOrEmpty
             || GetLiteralValue(s.Words[0]) is not { } name
             || _stateBuiltins.Contains(name)
-            || (_unitFunctions?.Contains(name) ?? false),
+            || (_unitFunctions?.Contains(name) ?? false)
+            // `echo ${bar=2} &`: expanding a word assigns (the job's copy only, in bash).
+            || s.Words.Any(MutatesShellState),
         Command.Pipeline p => p.Commands.Any(MayMutateShellState),
         Command.AndOrList a => a.Commands.Any(MayMutateShellState),
         Command.CommandList l => l.Commands.Any(MayMutateShellState),
@@ -5386,8 +5395,9 @@ public static partial class PsEmitter
 
         foreach (var r in cmd.Redirects)
         {
-            if (r.FdVar is null && GetLiteralValue(r.Target) is null && IsPlainVarRefWord(r.Target)
-                && (r.Op == ">&" && r.Fd == 1 || r.Op == "<&" && r.Fd == 0))
+            if (r.FdVar is null && GetLiteralValue(r.Target) is null
+                && (IsPlainVarRefWord(r.Target) && (r.Op == ">&" && r.Fd == 1 || r.Op == "<&" && r.Fd == 0)
+                    || IsGlobWord(r.Target) && r.Op == ">&" && r.Fd == 1))
             {
                 result = EmitRunTimeFdRedirect(cmd, r);
                 return true;
@@ -5437,6 +5447,11 @@ public static partial class PsEmitter
             return "$__psbFdW = @(" + EmitUnquotedSplitWordArray(dyn.Target) + "); if ($__psbFdW.Count -ne 1) { "
                 + PsBuild.StderrLine("ps-bash: " + shown + ": ambiguous redirect") + "; " + PsBuild.SetStatus(1) + " } else { " + one + " }";
         }
+        // `>& 1*`: the word is pathname-expanded first; one match (a file named 10) is the descriptor 10. No match keeps the
+        // pattern (a file); several leave '' so the file branch reports the ambiguous redirect.
+        if (IsGlobWord(dyn.Target))
+            return EmitRunTimeFdRedirectCore(cmd, dyn, "$__psbFdW = @(" + EmitUnquotedSplitWordArray(dyn.Target)
+                + "); $__psbFd = if ($__psbFdW.Count -eq 1) { [string]$__psbFdW[0] } else { '' }; ");
         return EmitRunTimeFdRedirectCore(cmd, dyn, "$__psbFd = [string](" + EmitWord(dyn.Target) + "); ");
     }
 
@@ -6611,7 +6626,8 @@ public static partial class PsEmitter
     private static string EmitFileRedirectTarget(CompoundWord word)
     {
         // `> "$@"`, `> "${a[@]}"`: one word per element, so anything but exactly one is ambiguous too.
-        if (IsGlobWord(word) || IsPureUnquotedVarWord(word) || IsQuotedArrayAllWord(word))
+        // `> two-$star`: a variable glued to text is split and pathname-expanded too (star='*' writes two-bar).
+        if (IsGlobWord(word) || IsPureUnquotedVarWord(word) || IsQuotedArrayAllWord(word) || IsUnquotedVarAffixWord(word))
             return "$(& { $__rt = @(" + EmitUnquotedSplitWordArray(word) + "); if ($__rt.Count -eq 1) { $__rt[0] } else { '' } })";
         // `> a-{one,two}`: brace expansion gives several words, also an ambiguous redirect (the array reached -Path).
         if (!word.Parts.IsDefaultOrEmpty && word.Parts.Any(p => p is WordPart.BracedTuple or WordPart.BracedRange))
@@ -9455,13 +9471,18 @@ public static partial class PsEmitter
     }
 
     /// <summary>True when expanding the word assigns a shell variable: `$((n+=2))`, `$((i++))`, `${w=q}`, `${w:=q}`.</summary>
-    private static bool MutatesShellState(CompoundWord word)
+    private static bool MutatesShellState(CompoundWord word) => PartsMutateShellState(word.Parts);
+
+    // A double-quoted "${w=q}" / "$((i++))" assigns as well.
+    private static bool PartsMutateShellState(ImmutableArray<WordPart> parts)
     {
-        foreach (var part in word.Parts)
+        foreach (var part in parts)
         {
             if (part is WordPart.BracedVarSub { Suffix: { } s } && (s.StartsWith("=") || s.StartsWith(":=")))
                 return true;
             if (part is WordPart.ArithSub a && ArithAssignRx.IsMatch(a.Expr.Source))
+                return true;
+            if (part is WordPart.DoubleQuoted dq && PartsMutateShellState(dq.Parts))
                 return true;
         }
         return false;
@@ -11161,7 +11182,11 @@ public static partial class PsEmitter
             if (pipeline.Commands.Length > 1)
             {
                 var rawStage = sb.ToString(stageStart, sb.Length - stageStart);
-                if (rawStage.Contains("BashParamErrorException]::Reported", StringComparison.Ordinal)
+                // `${cmd=echo} hi | wc -l`: the stage's words are expanded in that subshell, so an assignment they make
+                // stays there (bash: cmd is unset afterwards). A lastpipe stage runs in the shell itself.
+                bool assigningStage = cmd is Command.Simple { Words.IsDefaultOrEmpty: false } ws && ws.Words.Any(MutatesShellState)
+                    && !(_scriptLastpipe && i > 0 && i == pipeline.Commands.Length - 1);
+                if (assigningStage || rawStage.Contains("BashParamErrorException]::Reported", StringComparison.Ordinal)
                     && !rawStage.Contains("catch [PsBash.Cmdlets.BashParamErrorException]", StringComparison.Ordinal))
                 {
                     sb.Length = stageStart;
@@ -11347,6 +11372,12 @@ public static partial class PsEmitter
         bool ownsExit = !lastpipeStage && cmd is not Command.ShFunction;
         string Body()
         {
+            if (lastpipeStage)
+            {
+                _lastpipeStageDepth++;
+                try { return Emit(cmd); }
+                finally { _lastpipeStageDepth--; }
+            }
             if (!ownsExit) return Emit(cmd);
             _subshellDepth++;
             try { return Emit(cmd); }
@@ -11622,8 +11653,17 @@ public static partial class PsEmitter
         Redirect? inputRedirect = null;
         var tailRedirects = new List<Redirect>(redirects.Length);
         var highFds = new List<Redirect>();
+        var namedFds = new List<string>();
         foreach (var redirect in redirects)
         {
+            // `{ ...; } {abc}<<< w` / `{abc}>f`: bash opens a descriptor of its own (10 up), stores its number in abc and
+            // leaves it open after the command; the body's stdin/stdout are not touched.
+            if (redirect.FdVar is { } fdVar)
+            {
+                string target = redirect.Here is { } fdHere ? "(" + EmitHereDocLiteral(fdHere) + ")" : EmitArgWord(redirect.Target);
+                namedFds.Add($"Invoke-BashExecFd -Variable {PsBuild.SingleQuote(fdVar)} -Operator {PsBuild.SingleQuote(redirect.Op)} -Target {target}");
+                continue;
+            }
             // `<` file and `<<<` here-string both supply the group's stdin; the last
             // one wins (bash).
             if (redirect.Fd >= 3)
@@ -11660,7 +11700,9 @@ public static partial class PsEmitter
                 result = $"@() | {result}";
         }
 
-        return WithScopedHighFds(result, highFds);
+        result = WithScopedHighFds(result, highFds);
+        // One dot-sourced block, so the whole thing is still a single pipeline element.
+        return namedFds.Count == 0 ? result : ". { " + string.Join("; ", namedFds) + "; " + result + " }";
     }
 
     private static string EmitCd(ImmutableArray<CompoundWord> args)

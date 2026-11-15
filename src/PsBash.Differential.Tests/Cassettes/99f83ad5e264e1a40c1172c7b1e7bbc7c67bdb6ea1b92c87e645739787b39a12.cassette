@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 111
+stdout-length: 15
+stderr-length: 0
+==== SCRIPT ====
+W="$(mktemp -d)"; cd "$W"; touch 10; exec 10>&1; echo via-fd-10 >& 1*; echo done; exec 10>&-; cd /; rm -rf "$W"
+==== STDOUT ====
+via-fd-10
+done
+
+==== STDERR ====
+

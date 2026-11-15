@@ -85,7 +85,6 @@ cat <&$abc
 walrus
 ## END
 ## status: 0
-## XFAIL ps-bash gap-named-fd-on-compound a {name}<<< named-fd redirect after a compound command ({ ...; } {abc}<<< w) is a parse error
 ## timeout: 10
 
 #### slice of @ and @ - http://landley.net/notes.html#23-04-2020

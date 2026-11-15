@@ -144,7 +144,6 @@ echo "cmd=$cmd"
 cmd=
 ## END
 ## status: 0
-## XFAIL ps-bash gap-pipeline-stage-expanded-in-parent the words of an in-process pipe stage are expanded in the parent shell, so ${cmd=echo} hi | wc -l assigns cmd there
 ## timeout: 10
 
 #### bash/dash/mksh run the last command is run in its own process

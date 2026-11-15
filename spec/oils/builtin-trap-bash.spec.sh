@@ -574,6 +574,6 @@ echo after=$?
 after=1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-debug-trap-per-simple-command the DEBUG trap runs once per statement, not before every simple command of a && list, and after the ERR trap rather than before
+## XFAIL ps-bash gap-traps-not-run-inside-trap-actions a failing command inside the DEBUG action does not run the ERR trap, and the DEBUG trap does not run before the commands of the ERR action (bash: 6 err, 6 debug three times, 6 err, 7 err, 7 debug; ps-bash: 6 debug, 6 err, 7 debug)
 ## timeout: 10
 ## real-launcher

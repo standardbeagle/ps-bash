@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 130
+stdout-length: 28
+stderr-length: 0
+==== SCRIPT ====
+echo ${cmd=echo} hi | wc -l; : $((n=5)) | cat; echo x | echo ${m:=3} >/dev/null; echo "cmd=${cmd-unset} n=${n-unset} m=${m-unset}"
+==== STDOUT ====
+1
+cmd=unset n=unset m=unset
+
+==== STDERR ====
+

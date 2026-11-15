@@ -14,7 +14,7 @@ internal static class BashFdTable
     private sealed class Handle
     {
         /// <summary>Null for a duplicate of the shell's own stdout (<see cref="Std"/> 1) or stderr (2).</summary>
-        public FileStream? Stream { get; init; }
+        public Stream? Stream { get; init; }
         public int Std { get; init; }
         public StreamReader? Reader { get; set; }
         public StreamWriter? Writer { get; set; }
@@ -56,6 +56,20 @@ internal static class BashFdTable
         else
             handle.Writer = new StreamWriter(fs, PsBash.Core.RawBytes.Encoding, 4096, leaveOpen: true) { AutoFlush = true };
 
+        lock (Gate)
+        {
+            CloseLocked(fd);
+            Fds[fd] = handle;
+        }
+        return null;
+    }
+
+    /// <summary><c>{name}&lt;&lt;&lt; word</c>: <paramref name="fd"/> reads <paramref name="text"/> (the here-string, its newline included).</summary>
+    public static string? OpenText(int fd, string text)
+    {
+        if (fd < 3) return $"{fd}: redirecting the shell's own stdin/stdout/stderr with exec is not supported";
+        var stream = new MemoryStream(PsBash.Core.RawBytes.GetBytes(text), writable: false);
+        var handle = new Handle { Stream = stream, Reader = new StreamReader(stream, PsBash.Core.RawBytes.Encoding, false, 4096, leaveOpen: true) };
         lock (Gate)
         {
             CloseLocked(fd);

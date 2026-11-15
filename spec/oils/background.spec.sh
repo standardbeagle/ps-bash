@@ -73,7 +73,7 @@ status=2
 status=1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-bg-output-at-wait a background job's output appears when wait collects that job, so it interleaves with the status lines instead of preceding them
+## XFAIL ps-bash arch-bg-output-buffered-until-collected a runspace-pool job's output is held until wait collects that job (it has no live stdout), and pool jobs start 45-370 ms apart, so the first-launched job (sleep 0.03) is the first done and each line comes out with its own status line instead of all three first
 ## timeout: 10
 
 #### Builtin in background
@@ -244,7 +244,6 @@ echo $bar  # bar is NOT SET in the parent process
 
 ## END
 ## status: 0
-## XFAIL ps-bash gap-bg-word-expanded-in-parent the words of cmd & are expanded in the parent shell, so ${bar=2} & assigns bar there
 ## timeout: 10
 
 #### Background process and then a singleton pipeline
@@ -362,7 +361,7 @@ status=3
 status=9
 ## END
 ## status: 0
-## XFAIL ps-bash gap-wait-n-completion-order runspace-pool jobs start about 140 ms apart, so wait -n sees them complete in a different order than the 60 ms the case allows
+## XFAIL ps-bash arch-bg-job-start-latency a runspace-pool job starts 45-370 ms after cmd & (measured: 376 ms for the second job, about 45 ms after that), more than the 60 ms between the two sleeps, so wait -n sees the first-launched job (exit 9) finish first
 ## timeout: 10
 ## real-launcher
 
@@ -415,6 +414,5 @@ status=129
 Hangup
 ## END
 ## status: 0
-## XFAIL ps-bash gap-bg-signal-message wait does not print the signal name (Hangup) of a job killed by a signal
 ## timeout: 10
 ## real-launcher

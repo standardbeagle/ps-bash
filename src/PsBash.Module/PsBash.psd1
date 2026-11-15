@@ -73,6 +73,7 @@ FormatsToProcess = 'PsBash.Format.ps1xml'
 FunctionsToExport = @(
     'Compare-Version',
     'Complete-BashBgJob',
+    'Complete-BashBgJobsAtExit',
     'ConvertFrom-BashArgs',
     'ConvertFrom-HumanNumeric',
     'ConvertFrom-MonthName',
@@ -163,6 +164,7 @@ FunctionsToExport = @(
     'Split-JqPipe',
     'Test-BashHelpFlag',
     'Test-BrowseCommandRequiresConfirmation',
+    'Write-BashBgSignalReport',
     'Write-BashError',
     'Write-BashFileRaw',
     'Write-BashFileText',
