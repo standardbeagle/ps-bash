@@ -7,7 +7,7 @@ echo $PWD | grep -q /
 echo status=$?
 ## stdout: status=0
 ## status: 0
-## XFAIL ps-bash platform-windows-paths Windows paths print as C:\... (drive letter, backslash); bash prints /tmp (intentional-differences.md, Platform: paths)
+## XFAIL ps-bash platform-windows-paths $PWD is a Windows path (C:\...) with backslashes, so grep / finds no slash in it (intentional-differences.md, Platform: paths)
 ## timeout: 10
 
 #### $PWD is not only set, but exported

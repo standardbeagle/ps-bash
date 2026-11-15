@@ -266,7 +266,7 @@ public sealed class InvokeBashCommandCommand : PSCmdlet
                 : InvokeCommand.InvokeScript(invokeBody, invokeArgs);
             foreach (var item in output)
             {
-                if (item?.BaseObject is ErrorRecord er) WriteError(er);
+                if (item?.BaseObject is ErrorRecord er) FileSystemHelpers.WriteErrorRecord(this, er);
                 else WriteObject(item);
             }
         }

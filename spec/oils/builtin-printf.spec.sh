@@ -653,18 +653,18 @@ status=1
 
 #### %(strftime format)T
 # The result depends on timezone
+# America/New_York, not the legacy alias US/Eastern: the recording host has no tzdata-legacy, so bash fell back to UTC.
 export TZ=Asia/Tokyo
 printf '%(%Y-%m-%d)T\n' 1557978599
-export TZ=US/Eastern
+export TZ=America/New_York
 printf '%(%Y-%m-%d)T\n' 1557978599
 echo status=$?
 ## STDOUT:
 2019-05-16
-2019-05-16
+2019-05-15
 status=0
 ## END
 ## status: 0
-## XFAIL ps-bash platform-oracle-tz-legacy-names the recording host has no legacy zone names (US/Eastern, tzdata-legacy), so bash fell back to UTC; ps-bash on Windows resolves US/Eastern
 ## timeout: 10
 
 #### %(strftime format)T doesn't respect TZ if not exported

@@ -54,4 +54,14 @@ public class StageExpansionAndRedirectGlobTests
     [SkippableFact]
     public Task NamedFdHereString_OnABraceGroup_OpensADescriptor()
         => Same("{ cat <&$abc; } {abc}<<< walrus; echo \"abc ${abc:+set}\"; exec {abc}<&-");
+
+    /// <summary>
+    /// <c>echo a {v}&gt;f</c> on a simple command: a descriptor of its own (10 up) goes in v and stays open after the
+    /// command, and echo still writes to stdout. It was a stdout redirect: "a" went to f and v stayed unset (oils
+    /// redirect "Parsing of x={myvar} and related cases").
+    /// </summary>
+    [SkippableFact]
+    public Task NamedFdRedirect_OnASimpleCommand_OpensADescriptorAndLeavesStdout()
+        => Same(Work + "echo a {v}>f; echo b {w}>>g; echo \"next=$((w - v))\"; echo via-v >&$v; echo via-w >&$w; "
+              + "exec {v}>&-; exec {w}>&-; cat f g" + Done);
 }

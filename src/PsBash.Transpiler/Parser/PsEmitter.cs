@@ -4826,6 +4826,22 @@ public static partial class PsEmitter
             && cmd.HereDocs.IsDefaultOrEmpty && _definedFunctions?.Contains("exec") != true
             && TryEmitExec(cmd with { EnvPairs = [] }, out var execResult))
             return execResult;
+        // `echo hi {fd}>f`, `cmd {v}<<< w`: bash opens a descriptor of its own (10 up), stores its number in the variable
+        // and leaves it open after the command; the command's own stdin and stdout are not touched (as for a group, see
+        // ApplyCompoundRedirects). It was taken as a stdout redirect: the output went to f and the variable stayed unset.
+        if (cmd.Words.Length > 0 && !cmd.Redirects.IsDefaultOrEmpty && cmd.Redirects.Any(r => r.FdVar is not null)
+            && GetLiteralValue(cmd.Words[0]) != "exec")
+        {
+            var opens = new List<string>();
+            foreach (var r in cmd.Redirects)
+            {
+                if (r.FdVar is not { } fdVar) continue;
+                string target = r.Here is { } fdHere ? "(" + EmitHereDocLiteral(fdHere) + ")" : EmitArgWord(r.Target);
+                opens.Add($"Invoke-BashExecFd -Variable {PsBuild.SingleQuote(fdVar)} -Operator {PsBuild.SingleQuote(r.Op)} -Target {target}");
+            }
+            var rest = cmd with { Redirects = [.. cmd.Redirects.Where(r => r.FdVar is null)] };
+            return ". { " + string.Join("; ", opens) + "; " + EmitSimple(rest) + " }";
+        }
         // `w9 9>&1`, `echo hi 9>f.txt`, `read -u 7 l 7<f`: a numbered descriptor opened for this command only.
         if (ScopedHighFdRedirects(cmd) is { Count: > 0 } highFds)
             return WithScopedHighFds(EmitSimple(cmd with { Redirects = [.. cmd.Redirects.Where(r => !highFds.Contains(r))] }), highFds);

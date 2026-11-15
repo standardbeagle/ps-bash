@@ -236,8 +236,10 @@ cat file1
 ## real-launcher
 
 #### Parsing of x={myvar} and related cases
+# stdout is a pipe: the recording host's stdout could not be reopened through /dev/stdout (every echo failed).
 case $SH in dash) exit ;; esac
 
+{
 echo {myvar}>/dev/stdout
 # Bash chooses fds starting with 10 here, osh with 100, and there can already
 # be some open fds, so compare further fds against this one
@@ -256,15 +258,22 @@ echo +{myvar} >/dev/stdout
 echo $((myvar-starting_fd))
 echo + {myvar}>/dev/stdout
 echo $((myvar-starting_fd))
+} | cat
 ## STDOUT:
+
+x={myvar}
 0
+x={myvar}
 0
-0
-0
-0
-0
+x=
+1
++{myvar}
+1
++{myvar}
+1
++
+2
 ## END
 ## status: 0
-## XFAIL ps-bash platform-stdout-is-a-stream the expectation needs stdout to be a regular file (each >/dev/stdout reopens it with O_TRUNC, dropping earlier output); ps-bash stdout is a stream, so every echo is kept, as in bash writing to a pipe
 ## timeout: 10
 ## real-launcher

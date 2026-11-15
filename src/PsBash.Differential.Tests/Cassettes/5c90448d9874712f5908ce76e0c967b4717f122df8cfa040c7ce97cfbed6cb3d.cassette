@@ -1,0 +1,17 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 420
+stdout-length: 65
+stderr-length: 0
+==== SCRIPT ====
+W="$(mktemp -d)"; cd "$W"; mkdir d; long=$(printf '%0300d' 0); ./nosuch 2>e; echo "missing $? $(grep -c 'No such file or directory' e)"; ./d 2>e; echo "dir $? $(grep -c 'Is a directory' e)"; ./$long 2>e; echo "long $? $(grep -c 'File name too long' e)"; ./x/$long/y 2>e; echo "past-missing $? $(grep -c 'No such file or directory' e)"; nosuch_cmd_q 2>e; echo "bare $? $(grep -c 'command not found' e)"; cd /; rm -rf "$W"
+==== STDOUT ====
+missing 127 1
+dir 126 1
+long 126 1
+past-missing 127 1
+bare 127 1
+
+==== STDERR ====
+

@@ -22,5 +22,4 @@ supports -f
 env
 ## END
 ## status: 0
-## XFAIL ps-bash platform-windows-unix-bin expects GNU time (command time -f / env time -f), which Windows does not have
 ## timeout: 10

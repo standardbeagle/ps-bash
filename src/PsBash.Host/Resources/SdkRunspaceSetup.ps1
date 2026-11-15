@@ -234,12 +234,20 @@ $ExecutionContext.InvokeCommand.CommandNotFoundAction = {
     # form is vanishingly rare, and parity for real bash commands is the priority.
     $name = if ($CommandName -match '^[Gg]et-(.+)$') { $Matches[1] } else { $CommandName }
     $wslHint = Get-BashWslPathHint
+    # A word with a slash names a file: bash reports the exec error (No such file or directory 127, Is a directory
+    # 126, File name too long 126), not "command not found".
+    $msg = "bash: ${name}: command not found"; $notFoundStatus = 127
+    if ($name.IndexOfAny([char[]]'/\') -ge 0) {
+        try {
+            $report = [PsBash.Cmdlets.CommandNotFoundReport]::DescribeIn($name, $ExecutionContext.SessionState.Path.CurrentFileSystemLocation.ProviderPath)
+            $msg = [string]$report[0]; $notFoundStatus = [int]$report[1]
+        } catch { }   # the cmdlets assembly not loaded yet: keep "command not found"
+    }
     $EventArgs.CommandScriptBlock = {
-        $msg = "bash: ${name}: command not found"
         # Non-terminating whatever $ErrorActionPreference is (errexit sets Stop): `missing || fallback` must still run.
         Write-Error -Message $msg -Category ObjectNotFound -TargetObject $name -ErrorAction Continue
         if ($wslHint) { Write-Error -Message $wslHint -Category ResourceUnavailable -ErrorAction Continue }
-        $global:LASTEXITCODE = 127
+        $global:LASTEXITCODE = $notFoundStatus
     }.GetNewClosure()
     $EventArgs.StopSearch = $true
 }.GetNewClosure()

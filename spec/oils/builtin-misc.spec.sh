@@ -91,7 +91,7 @@ pf  $'a\nb\001c\'d'
 @Q  $'a\nb\001c\'d'
 ## END
 ## status: 0
-## XFAIL ps-bash platform-windows-unix-bin expects /bin/echo, which Windows does not have, so foo is empty (intentional-differences.md, Platform)
+## XFAIL ps-bash platform-windows-unix-bin expects /bin/echo, which Windows does not have, so foo is empty; and even with foo set, Windows' lowercase windir variable follows foo in set, so grep -A1 foo prints it too (intentional-differences.md, Platform)
 ## timeout: 10
 ## real-launcher
 

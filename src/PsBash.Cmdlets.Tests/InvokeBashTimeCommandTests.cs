@@ -110,6 +110,45 @@ public class InvokeBashTimeCommandTests : IClassFixture<SharedPwshFixture>
         Assert.DoesNotContain("real", string.Concat(r.Lines), System.StringComparison.Ordinal);
     }
 
+    // GNU time's -f took "-f" for the command ("-f: command not found"); `command time -f '%e %M' true` is the
+    // ./configure idiom (oils shell-bugs). /usr/bin/time -f '%x' false prints the exit line, then 1; status 1.
+    [Fact]
+    public void Time_FormatOption_ReportsInTheGnuFormat()
+    {
+        var r = CmdResult.Run(_fixture.AcquireFresh(), "Invoke-BashTime '-f' 'x=%x' false");
+
+        Assert.Equal(1, r.ExitCode);
+        Assert.Matches(@"Command exited with non-zero status 1\n+x=1", r.Stderr.Replace("\r\n", "\n"));
+    }
+
+    // Direct invocation: -p is a prefix of -PipelineVariable/-ProgressAction, so it needs its decoy parameter.
+    [Fact]
+    public void Time_PortableOption_DirectInvocation_PrintsThePosixReport()
+    {
+        var r = CmdResult.Run(_fixture.AcquireFresh(), "Invoke-BashTime -p true");
+
+        Assert.Equal(0, r.ExitCode);
+        Assert.Matches(@"^real \d+\.\d\d\n+user \d+\.\d\d\n+sys \d+\.\d\d\s*$", r.Stderr.Replace("\r\n", "\n"));
+    }
+
+    [Fact]
+    public void Time_OutputOption_IsRefusedWithStatus2()
+    {
+        var r = CmdResult.Run(_fixture.AcquireFresh(), "Invoke-BashTime '-o' f true");
+
+        Assert.Equal(2, r.ExitCode);
+        Assert.Contains("time: option '-o' is recognized but not supported by ps-bash", r.Stderr);
+    }
+
+    [Fact]
+    public void Time_FormatWithoutArgument_IsUsageError125()
+    {
+        var r = CmdResult.Run(_fixture.AcquireFresh(), "Invoke-BashTime '-f'");
+
+        Assert.Equal(125, r.ExitCode);
+        Assert.Contains("time: option requires an argument -- 'f'", r.Stderr);
+    }
+
     // ---- injection probes (Directive 12) ----
 
     [Fact]

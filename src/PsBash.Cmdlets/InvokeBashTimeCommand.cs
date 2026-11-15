@@ -33,6 +33,15 @@ namespace PsBash.Cmdlets;
 [OutputType(typeof(PSObject))]
 public sealed class InvokeBashTimeCommand : PSCmdlet
 {
+    /// <summary>
+    /// Decoys for GNU time's <c>-p</c>, <c>-v</c> and <c>-o</c>: called directly (<c>Invoke-BashTime -p true</c>) the
+    /// binder would take them as prefixes of the common parameters (-PipelineVariable/-ProgressAction, -Verbose,
+    /// -OutVariable/-OutBuffer). The emitter quotes every operand, so a transpiled script reaches <see cref="Arguments"/>.
+    /// </summary>
+    [Parameter] public SwitchParameter P { get; set; }
+    [Parameter] public SwitchParameter V { get; set; }
+    [Parameter] public string? O { get; set; }
+
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
@@ -51,6 +60,25 @@ public sealed class InvokeBashTimeCommand : PSCmdlet
             }
             return;
         }
+
+        // GNU time's own options come first (`command time -f '%e %M' cmd`, `env time -p cmd`).
+        var opts = GnuTimeFormat.Parse(args);
+        if (opts.Error is not null)
+        {
+            FileSystemHelpers.WriteBashError(this, opts.Error);
+            FileSystemHelpers.WriteBashError(this, "Try 'time --help' for more information.");
+            FileSystemHelpers.SetLastExitCode(this, 125);
+            return;
+        }
+        string? unsupported = opts.Unsupported ?? (V.IsPresent ? "-v" : O is not null ? "-o" : null);
+        if (unsupported is not null)
+        {
+            FileSystemHelpers.WriteBashError(this, $"time: option '{unsupported}' is recognized but not supported by ps-bash");
+            FileSystemHelpers.SetLastExitCode(this, 2);
+            return;
+        }
+        string? gnuFormat = opts.Format ?? (P.IsPresent ? GnuTimeFormat.Portable : null);
+        if (opts.CommandIndex > 0) args = args[opts.CommandIndex..];
 
         if (args.Length == 0)
         {
@@ -75,6 +103,8 @@ public sealed class InvokeBashTimeCommand : PSCmdlet
         for (int i = 1; i < args.Length; i++) allInvokeArgs[i] = args[i];
 
         FileSystemHelpers.SetLastExitCode(this, 0);
+        using var self = Process.GetCurrentProcess();
+        TimeSpan user0 = self.UserProcessorTime, sys0 = self.PrivilegedProcessorTime;
         var sw = Stopwatch.StartNew();
         int exitCode = 0;
         bool faulted = false;
@@ -123,12 +153,24 @@ public sealed class InvokeBashTimeCommand : PSCmdlet
         var outputText = string.Join("\n", parts);
 
         var realTime = sw.Elapsed;
-        var formatted = string.Format(
-            CultureInfo.InvariantCulture,
-            "real    {0:N3}s",
-            realTime.TotalSeconds);
         // The error stream, not Console.Error: `{ time cmd; } 2>/dev/null` must drop the report.
-        FileSystemHelpers.WriteStderrBytes(this, formatted + "\n");
+        if (gnuFormat is not null)
+        {
+            // CPU and peak memory are this host process's (the command runs in it, or as its child): the closest
+            // figures there are to GNU time's wait4() rusage of a separate child.
+            self.Refresh();
+            var stats = new GnuTimeStats(realTime, self.UserProcessorTime - user0, self.PrivilegedProcessorTime - sys0,
+                self.PeakWorkingSet64 / 1024, exitCode, string.Join(" ", args));
+            FileSystemHelpers.WriteStderrBytes(this, GnuTimeFormat.Render(gnuFormat, stats, opts.Quiet));
+        }
+        else
+        {
+            var formatted = string.Format(
+                CultureInfo.InvariantCulture,
+                "real    {0:N3}s",
+                realTime.TotalSeconds);
+            FileSystemHelpers.WriteStderrBytes(this, formatted + "\n");
+        }
 
         var pso = new PSObject();
         pso.TypeNames.Insert(0, "PsBash.TimeOutput");

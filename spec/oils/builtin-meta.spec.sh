@@ -232,7 +232,7 @@ hi
 /
 ## END
 ## status: 0
-## XFAIL ps-bash platform-windows-paths Windows paths print as C:\... (drive letter, backslash); bash prints /tmp (intentional-differences.md, Platform: paths)
+## XFAIL ps-bash platform-windows-paths Windows paths: / is C:\ and /tmp the Windows temp directory, printed as C:/... by pwd and dirs and as C:\... in $PWD (intentional-differences.md, Platform: paths)
 ## timeout: 10
 
 #### builtin ls not found

@@ -247,7 +247,17 @@ internal static class FileSystemHelpers
             "BashError",
             ErrorCategory.NotSpecified,
             targetObject);
+        WriteErrorRecord(cmdlet, record);
+    }
 
+    /// <summary>
+    /// <paramref name="record"/> on the cmdlet's error stream, never terminating: bash stderr does not stop a command,
+    /// and <c>set -e</c> is modelled by the transpiler, not by <c>$ErrorActionPreference</c>. Also for a record
+    /// forwarded from a nested invocation (<c>command time true</c> under <c>set -o errexit</c> stopped on the
+    /// report <c>time</c> wrote).
+    /// </summary>
+    public static void WriteErrorRecord(PSCmdlet cmdlet, ErrorRecord record)
+    {
         // Temporarily override $ErrorActionPreference to Continue so the
         // runtime treats WriteError as non-terminating regardless of what
         // the caller (Pester sets Stop inside It blocks) had configured.

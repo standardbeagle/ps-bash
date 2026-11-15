@@ -259,6 +259,20 @@ public class InvokeBashCommandCommandTests : IClassFixture<SharedPwshFixture>
         Assert.Equal(0, exit);
     }
 
+    // `set -o errexit; command time -f '%e %M' true` (oils shell-bugs "./configure idiom") stopped on time's report:
+    // the stderr record re-written from the nested call went out under the caller's Stop preference.
+    [Fact]
+    public void Command_InnerStderr_UnderStopPreference_DoesNotTerminate()
+    {
+        var r = CmdResult.Run(_fixture.AcquireFresh(),
+            // In a child scope: a Stop preference left in the shared runspace breaks the fixture's reset.
+            "& { $ErrorActionPreference = 'Stop'; Invoke-BashCommand time '-f' 'fmt=%x' true; 'after' }");
+
+        Assert.Equal(0, r.ExitCode);
+        Assert.Contains("fmt=0", r.Stderr);
+        Assert.Contains("after", r.Lines);
+    }
+
     // ---- injection probe (Directive 12) ----
 
     [Fact]

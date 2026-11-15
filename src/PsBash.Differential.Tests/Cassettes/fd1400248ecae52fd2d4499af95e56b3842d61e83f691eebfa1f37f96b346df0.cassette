@@ -1,0 +1,17 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 166
+stdout-length: 23
+stderr-length: 0
+==== SCRIPT ====
+W="$(mktemp -d)"; cd "$W"; echo a {v}>f; echo b {w}>>g; echo "next=$((w - v))"; echo via-v >&$v; echo via-w >&$w; exec {v}>&-; exec {w}>&-; cat f g; cd /; rm -rf "$W"
+==== STDOUT ====
+a
+b
+next=1
+via-v
+via-w
+
+==== STDERR ====
+

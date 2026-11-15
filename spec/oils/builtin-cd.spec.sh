@@ -6,7 +6,7 @@ cd /
 echo $PWD
 ## stdout: /
 ## status: 0
-## XFAIL ps-bash platform-windows-paths Windows paths print as C:\... (drive letter, backslash); bash prints /tmp (intentional-differences.md, Platform: paths)
+## XFAIL ps-bash platform-windows-paths Windows paths: / is C:\ and /tmp the Windows temp directory, printed as C:/... by pwd and dirs and as C:\... in $PWD (intentional-differences.md, Platform: paths)
 ## timeout: 10
 
 #### cd BAD/..
@@ -68,7 +68,7 @@ cd /
 pwd
 ## stdout: /
 ## status: 0
-## XFAIL ps-bash platform-windows-paths Windows paths print as C:\... (drive letter, backslash); bash prints /tmp (intentional-differences.md, Platform: paths)
+## XFAIL ps-bash platform-windows-paths Windows paths: / is C:\ and /tmp the Windows temp directory, printed as C:/... by pwd and dirs and as C:\... in $PWD (intentional-differences.md, Platform: paths)
 ## timeout: 10
 
 #### setting $PWD doesn't affect the value of 'pwd' builtin
@@ -86,7 +86,7 @@ before foo
 after foo
 ## END
 ## status: 0
-## XFAIL ps-bash platform-windows-paths Windows paths print as C:\... (drive letter, backslash); bash prints /tmp (intentional-differences.md, Platform: paths)
+## XFAIL ps-bash platform-windows-paths Windows paths: pwd prints C:/... (intentional-differences.md, Platform: paths); also a ps-bash bug: PWD=foo does not change $PWD, which reads the PowerShell location
 ## timeout: 10
 
 #### unset PWD; then pwd
@@ -104,7 +104,7 @@ PWD=
 PWD=
 ## END
 ## status: 0
-## XFAIL ps-bash platform-windows-paths Windows paths print as C:\... (drive letter, backslash); bash prints /tmp (intentional-differences.md, Platform: paths)
+## XFAIL ps-bash platform-windows-paths Windows paths: / is C:\ and /tmp the Windows temp directory, printed as C:/... by pwd and dirs and as C:\... in $PWD (intentional-differences.md, Platform: paths)
 ## timeout: 10
 
 #### remove pwd dir
@@ -138,7 +138,7 @@ cd -- /
 echo $PWD
 ## stdout: /
 ## status: 0
-## XFAIL ps-bash platform-windows-paths Windows paths print as C:\... (drive letter, backslash); bash prints /tmp (intentional-differences.md, Platform: paths)
+## XFAIL ps-bash platform-windows-paths Windows paths: / is C:\ and /tmp the Windows temp directory, printed as C:/... by pwd and dirs and as C:\... in $PWD (intentional-differences.md, Platform: paths)
 ## timeout: 10
 
 #### unset PWD; cd /tmp is allowed (regression)
@@ -147,7 +147,7 @@ unset PWD; cd /tmp
 pwd
 ## stdout: /tmp
 ## status: 0
-## XFAIL ps-bash platform-windows-paths Windows paths print as C:\... (drive letter, backslash); bash prints /tmp (intentional-differences.md, Platform: paths)
+## XFAIL ps-bash platform-windows-paths Windows paths: / is C:\ and /tmp the Windows temp directory, printed as C:/... by pwd and dirs and as C:\... in $PWD (intentional-differences.md, Platform: paths)
 ## timeout: 10
 
 #### CDPATH is respected
@@ -168,7 +168,7 @@ status=0
 /tmp/spam/foo
 ## END
 ## status: 0
-## XFAIL ps-bash platform-windows-paths Windows paths print as C:\... (drive letter, backslash); bash prints /tmp (intentional-differences.md, Platform: paths)
+## XFAIL ps-bash platform-windows-paths Windows paths: / is C:\ and /tmp the Windows temp directory, printed as C:/... by pwd and dirs and as C:\... in $PWD (intentional-differences.md, Platform: paths)
 ## timeout: 10
 
 #### chdir is a synonym for cd - busybox ash

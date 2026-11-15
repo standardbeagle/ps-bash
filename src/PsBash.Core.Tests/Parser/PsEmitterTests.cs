@@ -1080,18 +1080,14 @@ public class PsEmitterTests
         Assert.DoesNotContain("Get-ChildItem", result);
     }
 
-    [Fact]
-    public void Transpile_NamedFdRedirect_DoesNotCrash_DropsPrefix()
-    {
-        // {fd}>file used to crash (mis-parsed as a brace group). Now it parses;
-        // the named-fd capture has no PowerShell equivalent so it degrades to a
-        // plain redirect (the {fd} prefix is dropped, not left as an operand).
-        var result = PsEmitter.Transpile("cmd {fd}>out.txt");
-        // ps-bash emits stdout-to-file via Invoke-BashRedirect; the point is it
-        // parses (no crash) and the {fd} prefix is gone.
-        Assert.Equal("cmd | Invoke-BashRedirect -Path out.txt", result);
-        Assert.DoesNotContain("{fd}", result);
-    }
+    // bash: `cmd {fd}>file` opens a descriptor of its own (10 up), stores its number in fd and leaves it open after
+    // the command; cmd's stdout is not redirected. It degraded to a plain `>file` (oils redirect "Parsing of
+    // x={myvar} and related cases": `echo + {myvar}>/dev/stdout` left myvar unchanged).
+    [Theory]
+    [InlineData("cmd {fd}>out.txt", ". { Invoke-BashExecFd -Variable 'fd' -Operator '>' -Target out.txt; cmd }")]
+    [InlineData("cmd a {v}<in.txt >o", ". { Invoke-BashExecFd -Variable 'v' -Operator '<' -Target in.txt; cmd a | Invoke-BashRedirect -Path o }")]
+    public void Transpile_NamedFdRedirect_OnASimpleCommand_OpensADescriptor(string bash, string expected)
+        => Assert.Equal(expected, PsEmitter.Transpile(bash));
 
     // bash: exec {fd}>f allocates a descriptor from 10 up and stores it in fd. It used to emit `Invoke-BashExecFd 1 '>' f`,
     // which sent the rest of the script's stdout to f.
