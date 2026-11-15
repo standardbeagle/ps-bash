@@ -756,6 +756,14 @@ public static class PsBuild
         + " } finally { if (" + mark + ") { " + ErrexitSuppressVar + "-- } }";
 
     /// <summary>
+    /// A compound pipe stage of a pipeline at an armed <c>set -e</c> statement: the stage is a subshell that inherits
+    /// <c>-e</c>, so its statements' errexit checks may fire although the pipeline as a whole runs under
+    /// <see cref="ErrexitSuppressed"/>. Lifts that one level for the stage, and puts it back however the stage ends.
+    /// </summary>
+    public static string ErrexitLifted(string statements) =>
+        ErrexitSuppressVar + "--; try { " + statements + " } finally { " + ErrexitSuppressVar + "++ }";
+
+    /// <summary>
     /// A command substitution's body under <c>set -e</c> in a script that mentions <c>inherit_errexit</c>: its statements
     /// carry errexit checks, and whether they may fire is decided at run time. With <c>shopt -s inherit_errexit</c> the
     /// substitution inherits <c>-e</c> (<c>$(echo one; false; echo two)</c> is <c>one</c>); without it the body runs

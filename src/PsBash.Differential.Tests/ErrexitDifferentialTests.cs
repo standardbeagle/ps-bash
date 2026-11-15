@@ -84,6 +84,19 @@ public class ErrexitDifferentialTests
     public Task Errexit_NegatedAndNonFinalPipelineStage_AreExempt()
         => Eq($"set -e; ! {F}; {F} | cat; false | true; echo after");
 
+    // A compound stage is a subshell that inherits -e: a failure ends THAT stage (one, not two), the pipeline goes on,
+    // and a failing last stage then ends the script ([a] printed, [b] and never not).
+    [SkippableFact]
+    public Task Errexit_CompoundPipeStage_EndsOnlyThatStage()
+        => Eq($"set -e; {{ echo one; {F}; echo two; }} | cat; (false; echo in-sub) | cat; echo a | if true; then false; echo in-if; fi | cat; "
+              + "printf 'a\\nb\\n' | while read l; do echo \"[$l]\"; false; done; echo never");
+
+    // In a condition, a non-final &&/|| operand or a negated pipeline, bash ignores -e inside the stages too.
+    [SkippableFact]
+    public Task Errexit_CompoundPipeStageWhereErrexitIsIgnored_RunsToTheEnd()
+        => Eq($"set -e; if {{ {F}; echo c; }} | cat; then echo ok; fi; ! {{ {F}; echo n; }} | cat; {{ false; echo a; }} | cat && echo and; "
+              + "echo x | { read v; false; echo \"v=$v\"; } || echo or; echo after");
+
     [SkippableFact]
     public Task Errexit_CommandSubstitutionBody_DoesNotInherit()
         => Eq($"set -e; x=$({F}; echo in); echo \"[$x]\"; export Y=$(false); echo after");

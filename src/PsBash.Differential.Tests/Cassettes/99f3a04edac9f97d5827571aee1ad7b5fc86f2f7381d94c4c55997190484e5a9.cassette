@@ -1,0 +1,19 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 220
+stdout-length: 23
+stderr-length: 0
+==== SCRIPT ====
+set -e; if { cat /nofile 2>/dev/null; echo c; } | cat; then echo ok; fi; ! { cat /nofile 2>/dev/null; echo n; } | cat; { false; echo a; } | cat && echo and; echo x | { read v; false; echo "v=$v"; } || echo or; echo after
+==== STDOUT ====
+c
+ok
+n
+a
+and
+v=x
+after
+
+==== STDERR ====
+

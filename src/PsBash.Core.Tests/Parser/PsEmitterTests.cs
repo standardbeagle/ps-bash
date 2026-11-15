@@ -6047,6 +6047,37 @@ public class PsEmitterTests
         Assert.Contains("& { $__psbash_ss = ", result);
     }
 
+    // A compound pipe stage is a subshell that inherits -e: `{ echo one; false; echo two; } | cat` ends the
+    // STAGE at false (two never prints), the pipeline still runs, and only its last stage's status counts.
+    [Theory]
+    [InlineData("set -e; { echo one; false; echo two; } | cat")]
+    [InlineData("set -e; echo a | while read l; do echo \"[$l]\"; false; done")]
+    [InlineData("set -e; echo a | if true; then false; echo in; fi | cat")]
+    public void Transpile_SetECompoundPipeStage_ChecksErrexitInsideTheStage(string bash)
+    {
+        var result = PsEmitter.Transpile(bash)!;
+        Assert.Contains("$global:__BashErrexitSuppress--; try { ", result);
+        Assert.Contains(ErrexitCheckInsideScope("return"), result);
+    }
+
+    // bash ignores -e in a stage of a pipeline that is a condition, a non-final && / || operand or negated,
+    // and without set -e (an ERR trap alone included) no stage gets checks. (The final && / || operand lifts the
+    // list's suppression with the same text as a stage, so the stage's scoped `return` check is what tells them apart.)
+    [Theory]
+    [InlineData("set -e; if { false; echo c; } | cat; then echo ok; fi")]
+    [InlineData("set -e; ! { false; echo n; } | cat")]
+    [InlineData("set -e; { false; echo a; } | cat && echo and")]
+    [InlineData("set -e; echo x | { read v; false; echo \"$v\"; } || echo or")]
+    [InlineData("{ echo one; false; echo two; } | cat")]
+    [InlineData("trap 'echo x' ERR\n{ echo one; false; echo two; } | cat")]
+    public void Transpile_CompoundPipeStageWhereErrexitIsIgnored_HasNoStageChecks(string bash)
+        => Assert.DoesNotContain(ErrexitCheckInsideScope("return"), PsEmitter.Transpile(bash)!);
+
+    [Fact]
+    public void Transpile_ErrexitLifted_LiftsOneSuppressionLevelForTheStage()
+        => Assert.Equal("$global:__BashErrexitSuppress--; try { x } finally { $global:__BashErrexitSuppress++ }",
+            PsBuild.ErrexitLifted("x"));
+
     [Fact]
     public void Transpile_SetPlusE_TurnsErrexitOff()
         => Assert.Equal("$ErrorActionPreference = 'Continue'; $global:__BashErrexit = $false",

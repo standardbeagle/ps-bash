@@ -305,6 +305,11 @@ public static partial class PsEmitter
     [ThreadStatic]
     private static bool _errexitMode;
 
+    /// <summary>The script being transpiled has a <c>set -e</c> word (<see cref="SetsErrexit"/>): with only an ERR trap,
+    /// <see cref="_errexitMode"/> is on but a pipe stage never inherits an errexit to end it.</summary>
+    [ThreadStatic]
+    private static bool _errexitSetMode;
+
     /// <summary>
     /// Non-zero while emitting text that is errexit-EXEMPT in bash: a condition, a non-final
     /// <c>&amp;&amp;</c>/<c>||</c> operand, a negated or multi-stage pipeline, a command or process
@@ -346,13 +351,17 @@ public static partial class PsEmitter
 
     /// <summary>True when <paramref name="bash"/> can turn errexit on (a <c>set -e</c>-style word).</summary>
     internal static bool EnablesErrexit(string bash) =>
+        SetsErrexit(bash)
+        // `trap ... ERR` needs the same statement-position checks (and exempt contexts) to know when a command failed.
+        || (bash.Contains("trap", StringComparison.Ordinal) && bash.Contains("ERR", StringComparison.Ordinal));
+
+    /// <summary>True when <paramref name="bash"/> has a <c>set -e</c>-style word (an ERR trap alone does not count).</summary>
+    private static bool SetsErrexit(string bash) =>
         // This is a conservative emission prefilter, not a parser. Quote/escape
         // spelling must not hide static flags such as set '-e' or set -o 'errexit'.
         // Extra checks are inert until the parsed set command enables the runtime flag.
-        (bash.Contains("set", StringComparison.Ordinal) &&
-        SetErrexitPattern.IsMatch(bash.Replace("'", "").Replace("\"", "").Replace("\\", "")))
-        // `trap ... ERR` needs the same statement-position checks (and exempt contexts) to know when a command failed.
-        || (bash.Contains("trap", StringComparison.Ordinal) && bash.Contains("ERR", StringComparison.Ordinal));
+        bash.Contains("set", StringComparison.Ordinal) &&
+        SetErrexitPattern.IsMatch(bash.Replace("'", "").Replace("\"", "").Replace("\\", ""));
 
     private static T WithErrexitExempt<T>(Func<T> emit)
     {
@@ -604,8 +613,12 @@ public static partial class PsEmitter
             case Command.Pipeline pipeline:
             {
                 // Every stage is a subshell in bash: a failure INSIDE a stage never ends the
-                // script; only the last stage's status counts.
-                var text = PsBuild.ErrexitSuppressed(WithErrexitExempt(() => Emit(cmd)));
+                // script; only the last stage's status counts. The stage itself inherits -e, so a compound
+                // stage ends at its failing command (EmitCompoundStage).
+                _pipelineAtArmedStatement = true;
+                string text;
+                try { text = PsBuild.ErrexitSuppressed(WithErrexitExempt(() => Emit(cmd))); }
+                finally { _pipelineAtArmedStatement = false; }
                 // bash runs the ERR trap twice for a failed pipeline that ends in a subshell (`true | (false)`,
                 // also `(false) | (true)` under pipefail); a group or plain last stage runs it once.
                 string twice = pipeline.Commands.Length > 1 && pipeline.Commands[^1] is Command.Subshell
@@ -889,7 +902,7 @@ public static partial class PsEmitter
     public static string? Transpile(string bash, TranspileContext context)
     {
         var prior = _context;
-        var priorErrexit = _errexitMode; var priorErrtrace = _errtraceMode;
+        var priorErrexit = _errexitMode; var priorErrtrace = _errtraceMode; var priorErrexitSet = _errexitSetMode;
         var priorExempt = _errexitExemptDepth;
         var priorIntVars = _intVars;
         var priorAssocVars = _assocVars;
@@ -923,6 +936,7 @@ public static partial class PsEmitter
         // Only a script that itself turns errexit on gets the checks (a sourced file running under
         // its caller's `set -e` does not — see intentional-differences.md).
         _errexitMode = EnablesErrexit(bash);
+        _errexitSetMode = _errexitMode && SetsErrexit(bash);
         _errtraceMode = _errexitMode && EnablesErrtrace(bash);
         _errexitExemptDepth = 0;
         // Only a script that mentions pipefail pays for per-stage status capture (it also leaves the fused lane).
@@ -1021,7 +1035,7 @@ public static partial class PsEmitter
             _runtimeReadonly = priorRuntimeReadonly;
             _namerefs = priorNamerefs;
             _litAssigned = priorLitAssigned; _pendingNamerefs = priorPendingNamerefs;
-            _errexitMode = priorErrexit; _errtraceMode = priorErrtrace;
+            _errexitMode = priorErrexit; _errtraceMode = priorErrtrace; _errexitSetMode = priorErrexitSet;
             _errexitExemptDepth = priorExempt;
             _pipefailMode = priorPipefail;
             _lineAbandonMode = priorFailglob;
@@ -11281,6 +11295,18 @@ public static partial class PsEmitter
 
     [ThreadStatic] private static int _timeDepth;
 
+    /// <summary>
+    /// Set by <see cref="EmitStatementBody"/> for a pipeline at a statement position where <c>set -e</c> is armed
+    /// (not a condition, an <c>&amp;&amp;</c>/<c>||</c> operand or a negation); <see cref="EmitPipeline"/> takes it.
+    /// </summary>
+    [ThreadStatic] private static bool _pipelineAtArmedStatement;
+
+    /// <summary>
+    /// The compound stages being emitted belong to such a pipeline: bash runs each in a subshell that inherits
+    /// <c>-e</c>, so a failure in it ends that stage (<see cref="EmitCompoundStage"/>).
+    /// </summary>
+    [ThreadStatic] private static bool _armedStages;
+
     private static string EmitPipeline(Command.Pipeline pipeline)
     {
         // `time [-p] pipeline`: emit the pipeline itself, then wrap it in the timing report.
@@ -11301,11 +11327,15 @@ public static partial class PsEmitter
         bool runtimeNegation = _negationGuardedAtRuntime;
         _negationGuardedAtRuntime = false;
         bool exempt = pipeline.Commands.Length > 1 || (pipeline.Negated && !runtimeNegation);
+        bool savedArmedStages = _armedStages;
+        _armedStages = _pipelineAtArmedStatement && _errexitSetMode && pipeline.Commands.Length > 1 && !pipeline.Negated;
+        _pipelineAtArmedStatement = false;
         if (exempt) _errexitExemptDepth++;
         try { return EmitPipelineStages(pipeline, entryScope); }
         finally
         {
             _inStdinScope = entryScope;
+            _armedStages = savedArmedStages;
             if (exempt) _errexitExemptDepth--;
         }
     }
@@ -11647,8 +11677,27 @@ public static partial class PsEmitter
             }
             if (!ownsExit) return Emit(cmd);
             _subshellDepth++;
-            try { return Emit(cmd); }
-            finally { _subshellDepth--; }
+            // `{ echo one; false; echo two; } | cat` under set -e: the stage is a subshell that inherits -e, so it ends
+            // at `false` (its status 1); the pipeline's status is still the last stage's. The stage's statements get
+            // their errexit checks, which leave the stage's `& { }` (the scoped `return`), and the pipeline's suppression
+            // is lifted for them. As in a subshell, the ERR trap runs inside only under errtrace.
+            bool armed = _armedStages;
+            int savedExempt = _errexitExemptDepth;
+            bool savedErrTrap = PsBuild.ErrTrapNeedsErrtrace;
+            if (armed) { _errexitExemptDepth = 0; PsBuild.ErrTrapNeedsErrtrace = true; }
+            _armedStages = false;
+            try
+            {
+                string text = Emit(cmd);
+                return armed ? PsBuild.ErrexitLifted(text) : text;
+            }
+            finally
+            {
+                _subshellDepth--;
+                _armedStages = armed;
+                _errexitExemptDepth = savedExempt;
+                PsBuild.ErrTrapNeedsErrtrace = savedErrTrap;
+            }
         }
 
         if (isFirstStage)

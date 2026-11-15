@@ -427,7 +427,6 @@ one
 [three]
 ## END
 ## status: 1
-## XFAIL ps-bash gap-errexit-in-pipe-stage set -e is not applied inside a pipe stage (a { } group or a while loop), so the stage runs on after false
 ## timeout: 10
 
 #### simple command that's an alias - redir failure checked
