@@ -52,6 +52,19 @@ public class RedirectStreamingTests : IClassFixture<SharedPwshFixture>, IDisposa
     }
 
     [Fact]
+    public void Redirect_RecordIsInTheFileBeforeTheProducerGoesOn()
+    {
+        // `{ echo a; cat f; } > f`: bash has written `a` before cat runs. The producer reads the file with a plain
+        // .NET read (no ps-bash flush) right after emitting its record; a 64 KB buffer held it back until the end.
+        var f = P("w.txt");
+        var (output, errors) = Run(
+            $"& {{ 'a'; $r = [System.IO.StreamReader]::new([System.IO.FileStream]::new('{f}', 'Open', 'Read', 'ReadWrite')); "
+            + $"$global:psbSeen = $r.ReadToEnd(); $r.Dispose() }} | Invoke-BashRedirect -Path '{f}'; $global:psbSeen");
+        Assert.Empty(errors);
+        Assert.Equal(new[] { "a\n" }, output);
+    }
+
+    [Fact]
     public void Redirect_EmptyOutput_StillCreatesTruncatedFile()
     {
         var f = P("e.txt");

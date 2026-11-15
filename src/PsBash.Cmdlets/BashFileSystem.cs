@@ -46,6 +46,9 @@ public static class BashFileSystem
         // resolved path (e.g. C:\dev\null on Windows). Both devices read as zero bytes.
         if (FileSystemHelpers.IsNullDevice(path))
             path = OperatingSystem.IsWindows() ? "NUL" : "/dev/null";
+        // A `> f` redirect still running may hold f's latest output in its buffer: bash would already have written it
+        // (`{ echo a; echo b; cat f; } > f`). One volatile read when nothing is buffered.
+        RedirectFileWriter.FlushPending();
         return new(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, BinaryProbeBytes,
             FileOptions.SequentialScan);
     }

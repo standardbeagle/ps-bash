@@ -78,8 +78,8 @@ public sealed class InvokeBashRedirectCommand : PSCmdlet, IDisposable
     [Parameter(ValueFromPipeline = true)]
     public PSObject? InputObject { get; set; }
 
-    private FileStream? _stream;
-    private FileStream? _errorStream;
+    private RedirectFileWriter? _stream;
+    private RedirectFileWriter? _errorStream;
     private bool _stdoutToFile;
     private bool _stderrToFile;
     private RedirectDevice _outDevice;
@@ -105,8 +105,10 @@ public sealed class InvokeBashRedirectCommand : PSCmdlet, IDisposable
 
     // STREAMING (memory bound): the target is opened up front and every record is written as it
     // arrives through a 64 KB-buffered FileStream, so `big | cmd > f` holds O(buffer), not the
-    // whole output. Opening in BeginProcessing also gives bash's ordering: the redirect truncates
-    // the target BEFORE the command runs (`cat f > f` leaves f empty, as in bash) and creates it
+    // whole output. The buffer never holds output back for long: RedirectFileWriter writes a slow
+    // producer's records at once and a burst's tail on an idle timer, and flushes before any ps-bash
+    // file read (`{ echo a; cat f; } > f` sees `a`, as in bash). Opening in BeginProcessing also
+    // gives bash's ordering: the redirect truncates the target BEFORE the command runs (`cat f > f` leaves f empty, as in bash) and creates it
     // even when the command prints nothing.
     protected override void BeginProcessing()
     {
@@ -132,8 +134,16 @@ public sealed class InvokeBashRedirectCommand : PSCmdlet, IDisposable
             if (!TryOpen(t, append: false, force: false, out var s)) return; else s?.Dispose();
         foreach (var t in Touch ?? [])
             if (!TryOpen(t, append: true, force: false, out var s)) return; else s?.Dispose();
-        if (Path is not null && !TryOpen(Path, Append, Force, out _stream)) return;
-        if (ErrorPath is not null && !TryOpen(ErrorPath, ErrorAppend, ErrorForce, out _errorStream)) return;
+        if (Path is not null)
+        {
+            if (!TryOpen(Path, Append, Force, out var s)) return;
+            if (s is not null) _stream = new RedirectFileWriter(s);
+        }
+        if (ErrorPath is not null)
+        {
+            if (!TryOpen(ErrorPath, ErrorAppend, ErrorForce, out var s)) return;
+            if (s is not null) _errorStream = new RedirectFileWriter(s);
+        }
     }
 
     /// <summary>
@@ -259,7 +269,7 @@ public sealed class InvokeBashRedirectCommand : PSCmdlet, IDisposable
     /// <c>write error: No space left on device</c> once and the command's status is 1 (<c>true &gt; /dev/full</c>
     /// writes nothing and keeps 0).
     /// </summary>
-    private void WriteTarget(FileStream? stream, RedirectDevice device, string payload)
+    private void WriteTarget(RedirectFileWriter? stream, RedirectDevice device, string payload)
     {
         if (device != RedirectDevice.Full) { Write(stream, payload); return; }
         if (payload.Length == 0) return;
@@ -278,13 +288,12 @@ public sealed class InvokeBashRedirectCommand : PSCmdlet, IDisposable
         return PsBash.Core.StderrRecord.Payload(text, er.TargetObject);
     }
 
-    private static void Write(FileStream? stream, string payload)
+    private static void Write(RedirectFileWriter? stream, string payload)
     {
         if (stream is null || payload.Length == 0) return;
         // The exact bytes: escaped-byte markers (invalid UTF-8, see RawBytes) are written back as the
         // single original byte, everything else as UTF-8 — `printf '\xe9' > f` is ONE byte.
-        var bytes = RawBytes.GetBytes(payload);
-        stream.Write(bytes, 0, bytes.Length);
+        stream.Write(RawBytes.GetBytes(payload));
     }
 
     protected override void EndProcessing()

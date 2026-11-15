@@ -1,0 +1,18 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 124
+stdout-length: 10
+stderr-length: 4
+==== SCRIPT ====
+cd "$(mktemp -d)" && ( exec > ex.txt; echo a; cat ex.txt >&2; echo b; echo c; grep -c . ex.txt >&2 ); echo "---"; cat ex.txt
+==== STDOUT ====
+---
+a
+b
+c
+
+==== STDERR ====
+a
+3
+
