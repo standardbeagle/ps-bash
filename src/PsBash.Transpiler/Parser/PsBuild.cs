@@ -1353,6 +1353,12 @@ public static class PsBuild
 
     // ───────────────────────────── Special-variable mapping ────────────────────────────
 
+    /// <summary>A bare <c>$PWD</c>: the shell variable, else PowerShell's location.</summary>
+    public const string PwdRead = "$(if ($null -ne $env:PWD) { $env:PWD } else { $PWD })";
+
+    /// <summary><c>$BASHPID</c>. A <c>$( )</c> whose text reads it must take the subshell scope that sets it.</summary>
+    public const string BashPidRead = "$([PsBash.Cmdlets.BashRuntime]::BashPid($ExecutionContext.SessionState))";
+
     /// <summary>
     /// The single source of truth for how a bash special variable (<c>$?</c>, <c>$$</c>,
     /// <c>$RANDOM</c>, positional params, …) maps to PowerShell. Returns <c>null</c> when
@@ -1377,11 +1383,6 @@ public static class PsBuild
     /// <c>$MyInvocation.MyCommand.Name</c> literally.
     /// </para>
     /// </summary>
-    /// <summary>A bare <c>$PWD</c>: the shell variable, else PowerShell's location.</summary>
-    public const string PwdRead = "$(if ($null -ne $env:PWD) { $env:PWD } else { $PWD })";
-
-    /// <summary><c>$BASHPID</c>. A <c>$( )</c> whose text reads it must take the subshell scope that sets it.</summary>
-    public const string BashPidRead = "$([PsBash.Cmdlets.BashRuntime]::BashPid($ExecutionContext.SessionState))";
 
     public static string? TryMapSpecialVar(string name, bool braced, bool inDoubleQuote)
     {
