@@ -55,4 +55,15 @@ public class ConvertToBashCaptureJoinTests : IClassFixture<SharedPwshFixture>
         // printf a; printf b  ->  "ab" (NoTrailingNewline records concatenate)
         Assert.Equal("ab", Run("& { Invoke-BashPrintf a; Invoke-BashPrintf b } | ConvertTo-BashCapture -Join"));
     }
+
+    // Oracle: `s=$(printf '.\000.'); echo ${#s}` is 2 and `$(printf '\000x')` is `x` (bash drops every NUL with a warning).
+    // A kept NUL ended the value at the first one once it was stored (oils nul-bytes).
+    [Theory]
+    [InlineData("'.\\000.'", "..")]
+    [InlineData("'\\000x'", "x")]
+    [InlineData("'\\000'", "")]
+    public void Join_DropsNulBytes(string printfArg, string expected)
+    {
+        Assert.Equal(expected, Run($"Invoke-BashPrintf {printfArg} | ConvertTo-BashCapture -Join"));
+    }
 }

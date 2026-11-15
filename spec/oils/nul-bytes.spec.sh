@@ -40,7 +40,6 @@ len=2
 len=0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-nul-bytes nul-bytes (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Compare \x00 byte versus \x01 byte - read builtin
@@ -66,7 +65,6 @@ len=2
 len=0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-nul-bytes nul-bytes (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Strip ops # ## % %% with NUL bytes
@@ -106,7 +104,6 @@ len=0
 len=0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-nul-bytes nul-bytes (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### Issue 2269 Reduction
@@ -145,7 +142,6 @@ len=1
  78
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-nul-bytes nul-bytes (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### NUL bytes with echo -e
@@ -326,7 +322,6 @@ len=2
 len=0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-nul-bytes nul-bytes (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -353,6 +348,5 @@ len=2
  2e
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-nul-bytes nul-bytes (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher

@@ -86,6 +86,13 @@ public sealed class InvokeBashMapfileCommand : PSCmdlet
     private readonly System.Text.StringBuilder _stream = new();
     private bool _lastNeedsNewline;
 
+    /// <summary>bash stores each line as a C string, so a NUL ends it: `.\0.\n` is stored as `.` (its newline too is lost).</summary>
+    internal static string UpToNul(string line)
+    {
+        int nul = line.IndexOf('\0');
+        return nul < 0 ? line : line[..nul];
+    }
+
     protected override void ProcessRecord()
     {
         if (InputObject == null) return;
@@ -197,9 +204,9 @@ public sealed class InvokeBashMapfileCommand : PSCmdlet
         while (startAt < stream.Length)
         {
             int cut = stream.IndexOf(delim, startAt);
-            if (cut < 0) { lines.Add(stream[startAt..]); break; }
+            if (cut < 0) { lines.Add(UpToNul(stream[startAt..])); break; }
             // A NUL delimiter can never be stored in a variable, so it is always dropped.
-            lines.Add(stripTrailing || delim == '\0' ? stream[startAt..cut] : stream[startAt..(cut + 1)]);
+            lines.Add(UpToNul(stripTrailing || delim == '\0' ? stream[startAt..cut] : stream[startAt..(cut + 1)]));
             startAt = cut + 1;
         }
 

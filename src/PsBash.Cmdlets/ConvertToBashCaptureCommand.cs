@@ -40,6 +40,7 @@ public sealed class ConvertToBashCaptureCommand : PSCmdlet
     private readonly StringBuilder _pending = new();
     private StringBuilder? _joined;
     private bool _hasPending;
+    private bool _warnedNul;
 
     private void Emit(string line)
     {
@@ -52,6 +53,17 @@ public sealed class ConvertToBashCaptureCommand : PSCmdlet
         if (InputObject is null) return;
 
         var text = BashRuntime.GetBashText(InputObject);
+        // bash drops every NUL byte of a substitution's output, with one warning: `$(printf '.\000.')` is `..`. Kept, a
+        // NUL ended the value at the first one (an environment variable is a C string).
+        if (text.Contains('\0'))
+        {
+            text = text.Replace("\0", "");
+            if (!_warnedNul)
+            {
+                _warnedNul = true;
+                FileSystemHelpers.WriteStderr(this, "bash: warning: command substitution: ignored null byte in input");
+            }
+        }
         _hasPending = true;
         if (BashRuntime.IsUnterminated(InputObject))
         {

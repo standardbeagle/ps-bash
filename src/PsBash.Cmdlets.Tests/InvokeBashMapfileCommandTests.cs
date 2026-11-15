@@ -116,6 +116,15 @@ public class InvokeBashMapfileCommandTests
     }
 
     [Fact]
+    public void Mapfile_NulEndsTheStoredLine()
+    {
+        // bash: printf '.\000.\nab\n' | { mapfile a; } stores "." and "ab\n": an element is a C string, cut at its first
+        // NUL (the newline after it is lost too). The NUL and the rest of the line were stored (oils nul-bytes).
+        var arr = RunAndReadArray("\".`0.\", 'ab' | Invoke-BashMapfile nulArr", "nulArr");
+        Assert.Equal(new[] { ".", "ab\n" }, arr);
+    }
+
+    [Fact]
     public void Mapfile_NoOrigin_ReplacesExistingElements()
     {
         var arr = RunAndReadEntries(

@@ -264,6 +264,15 @@ public class InvokeBashReadCommandTests : IClassFixture<SharedPwshFixture>
         Assert.Equal("a b  \\", ReadVariable("@('a b  \\','line2') | Invoke-BashRead -r v", "v"));
     }
 
+    // Oracle: `printf '.\000.' | { read s; echo ${#s}; }` is 2 and `read -n 3` reads `..`: read skips NUL bytes. A kept NUL
+    // ended the stored value at the first one (oils nul-bytes "read builtin" / "read -n").
+    [Fact]
+    public void Read_SkipsNulBytes()
+    {
+        Assert.Equal("..", ReadVariable("\".`0.\" | Invoke-BashRead -r v", "v"));
+        Assert.Equal("..", ReadVariable("\".`0.\" | Invoke-BashRead -r -n 3 v", "v"));
+    }
+
     [Fact]
     public void Read_SmooshedValueFlag_ReadsOneCharacter()
     {

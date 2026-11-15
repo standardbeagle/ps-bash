@@ -401,6 +401,9 @@ public sealed class InvokeBashReadCommand : PSCmdlet
             return;
         }
 
+        // bash's read skips NUL bytes (`printf '.\000.' | read s` is `..`); kept, a NUL ended the value at the first one.
+        if (inputLine.Contains('\0')) inputLine = inputLine.Replace("\0", "");
+
         // -n N: at most N characters; what was read past them stays in the input for the next read.
         if (maxChars.HasValue && exactChars is null && inputLine.Length >= maxChars.Value && fromFd is null)
         {
