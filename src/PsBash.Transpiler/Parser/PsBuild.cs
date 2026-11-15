@@ -853,13 +853,14 @@ public static class PsBuild
     /// <c>set -e</c>, and <c>Directory.Exists</c> guards a non-filesystem provider whose
     /// <c>ProviderPath</c> is not a process working directory.</para>
     /// </summary>
-    public const string PopLocationRestoringProcessCwd =
+    public static readonly string PopLocationRestoringProcessCwd =
         "$__psbash_subshell_pop = Pop-Location -PassThru -ErrorAction SilentlyContinue; "
         + "if ($__psbash_subshell_pop -and "
         + "[System.IO.Directory]::Exists($__psbash_subshell_pop.ProviderPath)) { "
         + "[System.Environment]::CurrentDirectory = $__psbash_subshell_pop.ProviderPath; "
         + "$global:__PsBashCwd = $__psbash_subshell_pop.ProviderPath; "
-        + "$env:PWD = $__psbash_subshell_pop.ProviderPath }";
+        // $PWD is the script-visible shell form (C:/x, docs/specs/paths.md), like every cd writes it.
+        + "$env:PWD = " + RuntimeToShellPath("$__psbash_subshell_pop.ProviderPath") + " }";
 
     // ─────────────────────────── RC-7 unquoted word-split splat ────────────────────────
 
@@ -1376,7 +1377,7 @@ public static class PsBuild
     // ───────────────────────────── Special-variable mapping ────────────────────────────
 
     /// <summary>A bare <c>$PWD</c>: the shell variable, else PowerShell's location.</summary>
-    public const string PwdRead = "$(if ($null -ne $env:PWD) { $env:PWD } else { $PWD })";
+    public const string PwdRead = "$(if ($null -ne $env:PWD) { $env:PWD } else { [PsBash.Cmdlets.BashRuntime]::ToShellPath([string]($ExecutionContext.SessionState.Path.CurrentFileSystemLocation.ProviderPath)) })";
 
     /// <summary><c>$BASHPID</c>. A <c>$( )</c> whose text reads it must take the subshell scope that sets it.</summary>
     public const string BashPidRead = "$([PsBash.Cmdlets.BashRuntime]::BashPid($ExecutionContext.SessionState))";
@@ -1392,7 +1393,7 @@ public static class PsBuild
     /// a bare <c>$name</c> word) and the brace-quoted <c>${name}</c> emission (used inside
     /// double quotes when the following character would otherwise be misparsed, e.g.
     /// <c>"$x:suffix"</c>). The two forms are NOT symmetric today — several special names
-    /// (<c>PWD</c>, <c>RANDOM</c>, <c>SECONDS</c>, <c>PPID</c>, <c>BASH_VERSION</c>,
+    /// (<c>RANDOM</c>, <c>SECONDS</c>, <c>PPID</c>, <c>BASH_VERSION</c>,
     /// <c>BASH_VERSINFO</c>, and multi-digit positionals) only have a plain mapping; a
     /// braced reference to one of them falls through to <c>${env:name}</c>. This mirrors
     /// the pre-existing (and pre-existing-buggy) behavior of the two call sites this
@@ -1417,9 +1418,9 @@ public static class PsBuild
             case "LASTEXITCODE":
                 return braced ? "${" + name + "}" : "$" + name;
             case "PWD":
-                // The shell variable (`cd` and each invocation write $env:PWD; `PWD=foo` assigns it and does not move
-                // the shell: bash prints foo, `pwd` still prints the directory). PowerShell's own $PWD is the location,
-                // so it read the directory back. It is only the fallback when no PWD was ever set.
+                // The shell variable (`cd` and each invocation write $env:PWD in the shell form C:/x; `PWD=foo` assigns
+                // it and does not move the shell: bash prints foo, `pwd` still prints the directory). The current
+                // location, in the same shell form, is only the fallback when no PWD was ever set.
                 return braced ? null : PwdRead;
             case "?":
                 return braced ? "${global:LASTEXITCODE}" : "$global:LASTEXITCODE";

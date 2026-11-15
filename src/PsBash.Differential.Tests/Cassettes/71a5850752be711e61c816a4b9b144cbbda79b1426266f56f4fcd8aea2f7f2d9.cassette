@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 139
+stdout-length: 6
+stderr-length: 0
+==== SCRIPT ====
+b="$(mktemp -d)"; mkdir -p "$b/one/two" "$b/sp ace"; cd "$b/one"
+basename "$PWD"; d=$(dirname "$PWD"); echo "${d##*/}" | grep -c "${b##*/}"
+==== STDOUT ====
+one
+1
+
+==== STDERR ====
+

@@ -252,5 +252,15 @@ $ExecutionContext.InvokeCommand.CommandNotFoundAction = {
     $EventArgs.StopSearch = $true
 }.GetNewClosure()
 
+# bash `$HOME` / `~` read this runspace's $HOME: the script-visible shell form, C:/Users/x (docs/specs/paths.md).
+# The FileSystem provider's Home (PowerShell's own `~`) stays native. A per-request launcher home is applied again
+# by SdkWorker.SyncHomeToEnvironment. By the cmdlet's type, not a module-qualified name (see PsEmitter, HOME=).
+if ($IsWindows -and $HOME -and $HOME.Contains('\')) {
+    try {
+        & $ExecutionContext.InvokeCommand.GetCmdletByTypeName('Microsoft.PowerShell.Commands.SetVariableCommand') -Name HOME `
+            -Value ([PsBash.Cmdlets.BashRuntime]::ToShellPath($HOME)) -Option ReadOnly,AllScope -Scope Global -Force
+    } catch { }   # the cmdlets assembly not loaded: keep the native home
+}
+
 # OPTIND starts at 1 (getopts reads it; scripts print it).
 if ($null -eq $env:OPTIND) { $env:OPTIND = '1' }

@@ -105,7 +105,7 @@ public sealed class InvokeBashWhichCommand : PSCmdlet
                 var path = definition is not null && definition.StartsWith("Invoke-Bash", StringComparison.Ordinal)
                     ? name
                     : !string.IsNullOrEmpty(source)
-                        ? source
+                        ? PsBash.Core.BashPath.ToShell(source)
                         : (!string.IsNullOrEmpty(definition) ? definition : name);
                 var type = typeValue?.ToString()?.ToLowerInvariant() ?? "unknown";
 

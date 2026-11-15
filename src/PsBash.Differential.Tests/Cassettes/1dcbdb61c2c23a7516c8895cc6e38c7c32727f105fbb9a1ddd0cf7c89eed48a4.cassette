@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 123
+stdout-length: 8
+stderr-length: 0
+==== SCRIPT ====
+b="$(mktemp -d)"; mkdir -p "$b/one/two" "$b/sp ace"; cd "$b/one"
+case $PWD in */one) echo case-ok;; *) echo case-bad;; esac
+==== STDOUT ====
+case-ok
+
+==== STDERR ====
+

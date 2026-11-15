@@ -193,8 +193,8 @@ public sealed class InvokeBashCommandCommand : PSCmdlet
             case CommandTypes.Function:
                 return cmd.Name;
             default:
-                // Application: its path. Cmdlet: its module (the psm1 oracle's $cmd.Source).
-                return cmd.Source;
+                // Application: its path. Cmdlet: its module (the psm1 oracle's $cmd.Source). Shell spelling (C:/x).
+                return PsBash.Core.BashPath.ToShell(cmd.Source);
         }
     }
 

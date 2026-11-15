@@ -7,13 +7,6 @@ namespace PsBash.Core.Tests.Parser;
 
 public class PsEmitterTests
 {
-    /// <summary>
-    /// The subshell wrapper's <c>finally</c>. Referenced through <see cref="PsBuild"/>
-    /// rather than re-typed so a change to the restore fragment cannot leave five
-    /// assertions asserting a stale copy of it.
-    /// </summary>
-    private const string SubshellPop = "finally { " + PsBuild.PopLocationRestoringProcessCwd + " }";
-
     /// <summary>The emitted `( BODY )`: the subshell scope (state save/restore) around the cwd push/pop.</summary>
     private static string Sub(string body) =>
         PsBuild.ShellStateScope("Push-Location; " + body, PsBuild.PopLocationRestoringProcessCwd);
@@ -1016,11 +1009,35 @@ public class PsEmitterTests
     [Fact]
     public void Transpile_TildePlus_MapsToPwd()
     {
-        // ~+ -> $PWD (was emitted as the literal ~+).
+        // ~+ -> $PWD (was emitted as the literal ~+): the env value, the shell form C:/x (docs/specs/paths.md).
         var result = PsEmitter.Transpile("echo ~+");
-        Assert.Contains("$PWD", result);
+        Assert.Contains("$env:PWD", result);
         Assert.DoesNotContain("~+", result);
     }
+
+    [Fact]
+    public void Transpile_PwdVar_ReadsTheEnvValue()
+    {
+        // bash $PWD is the value cd and the launcher write, in the shell form C:/x (docs/specs/paths.md) — not
+        // PowerShell's automatic $PWD, a native PathInfo (`${PWD##*/}` found no '/' and returned the whole path).
+        Assert.Contains("$env:PWD", PsEmitter.Transpile("echo $PWD"));
+        Assert.DoesNotContain("$PWD", PsEmitter.Transpile("echo \"$PWD/x\""));
+        Assert.DoesNotContain("$PWD", PsEmitter.Transpile("[[ $PWD == */x ]]"));
+    }
+
+    [Fact]
+    public void Transpile_CdTildeSlash_JoinsTheHomeWithForwardSlash()
+    {
+        // $HOME holds C:/Users/x: `cd ~/src` must not build the mixed C:/Users/x\src.
+        var result = PsEmitter.Transpile("cd ~/src")!;
+        Assert.Contains("$HOME/src", result);
+        Assert.DoesNotContain("\\src", result);
+    }
+
+    [Fact]
+    public void Transpile_SubshellCdRestore_WritesTheShellFormPwd()
+        => Assert.Contains("$env:PWD = [PsBash.Cmdlets.BashRuntime]::ToShellPath([string]($__psbash_subshell_pop.ProviderPath))",
+            PsEmitter.Transpile("(cd sub)"));
 
     [Fact]
     public void Transpile_TildeMinus_MapsToOldPwd()
@@ -1036,7 +1053,7 @@ public class PsEmitterTests
         // Regression guard: plain ~/path is unchanged ($HOME ...).
         var result = PsEmitter.Transpile("echo ~/bin");
         Assert.Contains("$HOME", result);
-        Assert.DoesNotContain("$PWD", result);
+        Assert.DoesNotContain("PWD", result);
     }
 
     [Fact]
@@ -1941,7 +1958,7 @@ public class PsEmitterTests
         Assert.StartsWith("Invoke-BashMkdir dir; $(if (-not $? -or $global:LASTEXITCODE -ne 0) { Write-Error '' -ErrorAction SilentlyContinue }) && $($__psbash_cd_target = 'dir'", result);
         Assert.Contains("$global:__PsBashCwd = $__psbash_cd_resolved", result);
         Assert.Contains("[System.Environment]::CurrentDirectory = $__psbash_cd_resolved", result);
-        Assert.Contains("$env:PWD = $__psbash_cd_resolved", result);
+        Assert.Contains("$env:PWD = [PsBash.Cmdlets.BashRuntime]::ToShellPath([string]($__psbash_cd_resolved))", result);
     }
 
     [Fact]
@@ -2641,7 +2658,7 @@ public class PsEmitterTests
         // Every successful cd must stash the dir it leaves into $OLDPWD so `cd -` can return.
         var result = PsEmitter.Transpile("cd /tmp");
 
-        Assert.Contains("$env:OLDPWD = [System.Environment]::CurrentDirectory", result);
+        Assert.Contains("$env:OLDPWD = [PsBash.Cmdlets.BashRuntime]::ToShellPath([string]([System.Environment]::CurrentDirectory))", result);
     }
 
     [Fact]
@@ -2650,8 +2667,8 @@ public class PsEmitterTests
         var result = PsEmitter.Transpile("cd -");
 
         Assert.StartsWith("$__psbash_cd_target = $env:OLDPWD", result);
-        // bash echoes the directory it lands in for `cd -`.
-        Assert.Contains("Write-Output $__psbash_cd_resolved", result);
+        // bash echoes the directory it lands in for `cd -`: $PWD, the shell form just written.
+        Assert.Contains("Write-Output $env:PWD", result);
         // Unset OLDPWD must fail with bash's message, not try to resolve an empty path.
         Assert.Contains("cd: OLDPWD not set", result);
         Assert.Contains("[string]::IsNullOrEmpty([string]$__psbash_cd_target)", result);
@@ -2663,7 +2680,7 @@ public class PsEmitterTests
         // Only `cd -` echoes; a normal cd stays silent.
         var result = PsEmitter.Transpile("cd /tmp");
 
-        Assert.DoesNotContain("Write-Output $__psbash_cd_resolved", result);
+        Assert.DoesNotContain("Write-Output", result);
         Assert.DoesNotContain("cd: OLDPWD not set", result);
     }
 

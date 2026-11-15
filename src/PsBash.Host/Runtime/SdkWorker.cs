@@ -949,15 +949,18 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
     {
         var home = Environment.GetEnvironmentVariable(OperatingSystem.IsWindows() ? "USERPROFILE" : "HOME");
         if (string.IsNullOrEmpty(home)) return;
+        // $HOME (bash `$HOME`, `~`) holds the script-visible shell form, C:/Users/x (docs/specs/paths.md);
+        // the provider's Home (PowerShell's own `~`) stays native.
+        var shellHome = PsBash.Core.BashPath.ToShell(home);
         var proxy = _sdkRunspace.Runspace.SessionStateProxy;
-        if (string.Equals(proxy.GetVariable("HOME") as string, home, StringComparison.Ordinal)) return;
+        if (string.Equals(proxy.GetVariable("HOME") as string, shellHome, StringComparison.Ordinal)) return;
 
         proxy.Provider.GetOne("FileSystem").Home = home;
         // $HOME is ReadOnly+AllScope: only -Force can replace it.
         // By type, not by the module-qualified name, which makes the engine import Microsoft.PowerShell.Utility
         // when the session did not load it as a module; under load that import can fail (see PsEmitter, HOME=).
         _ps.AddCommand(new System.Management.Automation.CmdletInfo("Set-Variable", typeof(Microsoft.PowerShell.Commands.SetVariableCommand)))
-            .AddParameter("Name", "HOME").AddParameter("Value", home)
+            .AddParameter("Name", "HOME").AddParameter("Value", shellHome)
             .AddParameter("Option", System.Management.Automation.ScopedItemOptions.ReadOnly
                                     | System.Management.Automation.ScopedItemOptions.AllScope)
             .AddParameter("Scope", "Global").AddParameter("Force", true);

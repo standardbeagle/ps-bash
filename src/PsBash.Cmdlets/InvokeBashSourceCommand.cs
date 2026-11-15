@@ -123,7 +123,7 @@ public sealed class InvokeBashSourceCommand : PSCmdlet
         // as it runs; the caller's file is BASH_SOURCE[1]. Scripts find their own directory from it.
         // A `return` in the file ends the source, not the function that sourced it: the eval-return flag its text
         // set (the file is transpiled as eval text) is spent here.
-        string quotedPath = "'" + Path.Replace("'", "''") + "'";
+        string quotedPath = "'" + PsBash.Core.BashPath.ToShell(Path).Replace("'", "''") + "'";
         result = "$global:BASH_SOURCE = @(" + quotedPath + ") + @($global:BASH_SOURCE); try {\n" + result
             + "\n} finally { $global:BASH_SOURCE = @($global:BASH_SOURCE | Select-Object -Skip 1); " + PsBash.Core.Parser.PsBuild.EvalReturnVar + " = $false }";
         return ScriptBlock.Create(result);

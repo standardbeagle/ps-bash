@@ -29,7 +29,7 @@ public static class BashRuntime
     /// user's passwd entry. On Unix that entry's shell (<c>/bin/sh</c> when it cannot be read); on Windows, which has no
     /// passwd, this shell itself: the <c>ps-bash</c> launcher beside the running process.
     /// </summary>
-    public static string DefaultShell() => _defaultShell ??= ComputeDefaultShell();
+    public static string DefaultShell() => _defaultShell ??= PsBash.Core.BashPath.ToShell(ComputeDefaultShell());
 
     private static string ComputeDefaultShell()
     {

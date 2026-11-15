@@ -78,8 +78,9 @@ public static class BashPromptText
                 case '!': case '#': sb.Append('1'); break;
                 case 'w': case 'W':
                 {
-                    var pwd = BashVariableStore.Get("PWD") ?? Environment.CurrentDirectory;
-                    var home = BashVariableStore.Get("HOME");
+                    // $PWD already holds the shell form (C:/x, docs/specs/paths.md); the fallback and HOME may be native.
+                    var pwd = BashVariableStore.Get("PWD") ?? PsBash.Core.BashPath.ToShell(Environment.CurrentDirectory);
+                    var home = BashVariableStore.Get("HOME") is { } rawHome ? PsBash.Core.BashPath.ToShell(rawHome) : null;
                     if (n == 'W') { var t = pwd.TrimEnd('/', '\\'); int s = Math.Max(t.LastIndexOf('/'), t.LastIndexOf('\\')); sb.Append(pwd == home ? "~" : t.Length == 0 ? "/" : t[(s + 1)..]); break; }
                     if (!string.IsNullOrEmpty(home) && pwd == home) sb.Append('~');
                     else if (!string.IsNullOrEmpty(home) && pwd.StartsWith(home + "/", StringComparison.Ordinal)) sb.Append('~').Append(pwd[home.Length..]);

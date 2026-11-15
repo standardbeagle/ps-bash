@@ -20,6 +20,9 @@ internal sealed class Program
         HostRegexTimeout.Install();
         // Before any script can assign `tmp=…` (on Windows that is TMP): the host's own scratch files stay put.
         PsBash.Core.HostTempPath.Capture();
+        // $PWD for the interactive shell and a stateful session (which skip the launcher's per-call cwd preamble):
+        // the script-visible shell form, C:/x (docs/specs/paths.md), not whatever the parent left in PWD.
+        Environment.SetEnvironmentVariable("PWD", PsBash.Core.BashPath.ToShell(Environment.CurrentDirectory));
         var exitCode = await MainCoreAsync(args);
         HostLog.SetExitReason("main returned (server stopped)");
         // End the process explicitly. Returning from Main is not enough: the

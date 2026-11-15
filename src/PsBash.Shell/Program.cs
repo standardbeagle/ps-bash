@@ -603,8 +603,9 @@ static string BuildPositionalPreamble(string script0, string[] scriptArgs, bool 
     static string QuotePs(string s) =>
         "'" + s.Replace("'", "''") + "'";
 
-    // $0 is the script path / `-c` NAME exactly as given (bash: `bash sub/s.sh` -> $0 = sub/s.sh).
-    var scriptName = QuotePs(script0);
+    // $0 is the script path / `-c` NAME as given (bash: `bash sub/s.sh` -> $0 = sub/s.sh); a script path in the
+    // shell spelling (`sub\s.sh` -> sub/s.sh, docs/specs/paths.md), a `-c` NAME untouched.
+    var scriptName = QuotePs(isFile ? PsBash.Core.BashPath.ToShell(script0) : script0);
     var argList = string.Join(", ", scriptArgs.Select(QuotePs));
     var arrayLiteral = scriptArgs.Length == 0 ? "@()" : $"@({argList})";
 
@@ -705,10 +706,12 @@ static string BuildInvocationCwdPreamble()
     // would undo every `cd` the session made.
     if (SessionCommands.IsStatefulSessionActive()) return string.Empty;
     var cwd = Environment.CurrentDirectory.Replace("'", "''");
+    // $PWD is the script-visible shell form (C:/x, docs/specs/paths.md); the process cwd stays native.
+    var shellCwd = PsBash.Core.BashPath.ToShell(Environment.CurrentDirectory).Replace("'", "''");
     return
         "$__psbash_invocation_cwd = '" + cwd + "'; " +
         "[System.Environment]::CurrentDirectory = $__psbash_invocation_cwd; " +
-        "$env:PWD = $__psbash_invocation_cwd; " +
+        "$env:PWD = '" + shellCwd + "'; " +
         "Set-Location -LiteralPath $__psbash_invocation_cwd -ErrorAction SilentlyContinue; ";
 }
 

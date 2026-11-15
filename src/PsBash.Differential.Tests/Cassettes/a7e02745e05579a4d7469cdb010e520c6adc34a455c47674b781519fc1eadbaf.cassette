@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 1
+script-length: 141
+stdout-length: 2
+stderr-length: 0
+==== SCRIPT ====
+b="$(mktemp -d)"; mkdir -p "$b/one/two" "$b/sp ace"; cd "$b/one"
+printf '%s\n' "$PWD" "$OLDPWD" ~ "$HOME" "$(pwd)" "$(mktemp)" | grep -c '\\'
+==== STDOUT ====
+0
+
+==== STDERR ====
+

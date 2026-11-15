@@ -167,7 +167,7 @@ public sealed class InvokeBashReadlinkCommand : PSCmdlet
             var output = new PSObject();
             output.TypeNames.Insert(0, "PsBash.ReadlinkOutput");
             output.Properties.Add(new PSNoteProperty("Path", text));
-            output.Properties.Add(new PSNoteProperty("BashText", text));
+            output.Properties.Add(new PSNoteProperty("BashText", PsBash.Core.BashPath.ToShell(text)));
             WriteObject(output);
         }
     }

@@ -219,9 +219,10 @@ public class InvokeBashPushdCommandTests : IClassFixture<SharedPwshFixture>
             var lines = RunLines(pwsh,
                 $"Invoke-BashPushd '{sub}' | Out-Null; (Invoke-BashPwd).BashText; $env:PWD; Invoke-BashPopd | Out-Null; (Invoke-BashPwd).BashText; $env:OLDPWD");
             Assert.Equal(sub.Replace('\\', '/'), lines[0].Replace('\\', '/'));
-            Assert.Equal(sub.Replace('\\', '/'), lines[1].Replace('\\', '/'));
+            // $PWD / $OLDPWD hold the shell form exactly (C:/x, docs/specs/paths.md), not a native path.
+            Assert.Equal(PsBash.Core.BashPath.ToShell(sub), lines[1]);
             Assert.Equal(tmp.Replace('\\', '/'), lines[2].Replace('\\', '/'));
-            Assert.Equal(sub.Replace('\\', '/'), lines[3].Replace('\\', '/'));
+            Assert.Equal(PsBash.Core.BashPath.ToShell(sub), lines[3]);
         }
         finally { Directory.Delete(sub); }
     }

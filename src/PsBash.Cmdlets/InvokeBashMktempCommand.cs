@@ -146,7 +146,8 @@ public sealed class InvokeBashMktempCommand : PSCmdlet
         var obj = new PSObject();
         obj.TypeNames.Insert(0, "PsBash.MktempOutput");
         obj.Properties.Add(new PSNoteProperty("Path", fullPath));
-        obj.Properties.Add(new PSNoteProperty("BashText", fullPath));
+        // The script sees the shell form (C:/x, docs/specs/paths.md); Path stays native for PowerShell callers.
+        obj.Properties.Add(new PSNoteProperty("BashText", PsBash.Core.BashPath.ToShell(fullPath)));
         WriteObject(obj);
     }
 }

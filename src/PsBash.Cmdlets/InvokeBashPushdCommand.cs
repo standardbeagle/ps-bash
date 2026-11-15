@@ -180,13 +180,14 @@ public sealed class InvokeBashPushdCommand : PSCmdlet
             {
                 var previous = string.IsNullOrEmpty(previousLocation) ? Environment.CurrentDirectory : previousLocation;
                 Environment.CurrentDirectory = path;
-                // The same three writes the emitter's `cd` makes: `pwd` reads __PsBashCwd, `$PWD`/`$OLDPWD` read the env store.
+                // The same three writes the emitter's `cd` makes: `pwd` reads __PsBashCwd, `$PWD`/`$OLDPWD` read the env store
+                // and hold the script-visible shell form (C:/x, docs/specs/paths.md).
                 cmdlet.SessionState.PSVariable.Set("global:__PsBashCwd", path);
                 if (!string.Equals(previous, path, StringComparison.Ordinal))
                 {
-                    BashVariableStore.Set("OLDPWD", previous);
+                    BashVariableStore.Set("OLDPWD", PsBash.Core.BashPath.ToShell(previous));
                 }
-                BashVariableStore.Set("PWD", path);
+                BashVariableStore.Set("PWD", PsBash.Core.BashPath.ToShell(path));
             }
         }
         catch

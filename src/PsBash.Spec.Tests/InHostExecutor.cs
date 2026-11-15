@@ -116,7 +116,7 @@ internal sealed class InHostExecutor : IScriptExecutor, IAsyncDisposable
     {
         var cwd = dir.Replace("'", "''");
         return "$__psbash_invocation_cwd = '" + cwd + "'; [System.Environment]::CurrentDirectory = $__psbash_invocation_cwd; "
-             + "$env:PWD = $__psbash_invocation_cwd; Set-Location -LiteralPath $__psbash_invocation_cwd -ErrorAction SilentlyContinue; ";
+             + "$env:PWD = '" + PsBash.Core.BashPath.ToShell(dir).Replace("'", "''") + "'; Set-Location -LiteralPath $__psbash_invocation_cwd -ErrorAction SilentlyContinue; ";
     }
 
     /// <summary>

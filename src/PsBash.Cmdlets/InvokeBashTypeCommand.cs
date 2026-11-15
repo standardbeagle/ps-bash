@@ -154,7 +154,8 @@ public sealed class InvokeBashTypeCommand : PSCmdlet
             // Applications come from PathFiles; a bash function was handled above, and the runtime's own
             // PowerShell functions are not shell functions.
             if (cmd.CommandType != CommandTypes.Cmdlet || string.IsNullOrEmpty(cmd.Source)) continue;
-            matches.Add(new Match("file", $"{name} is {cmd.Source}", cmd.Source));
+            var source = PsBash.Core.BashPath.ToShell(cmd.Source);
+            matches.Add(new Match("file", $"{name} is {source}", source));
         }
 
         if (psBashCommand && pathSearchOnly && matches.Count == before)
@@ -165,8 +166,9 @@ public sealed class InvokeBashTypeCommand : PSCmdlet
     /// <summary>
     /// The PATH files NAME names, in PATH order, through the lookup that runs commands
     /// (<see cref="ExecutableLookup"/>: execute bit on Unix, PATHEXT then the bare name on Windows). Each is printed
-    /// as its PATH entry was written (<c>_tmp/mv</c>, <c>/tmp/mv</c>), as bash does; the entry is mapped only to
-    /// find the file. A NAME with a slash is that file itself, never a directory.
+    /// as its PATH entry was written (<c>_tmp/mv</c>, <c>/tmp/mv</c>), as bash does, in the shell spelling
+    /// (<c>C:\Windows</c> → <c>C:/Windows/x.exe</c>, docs/specs/paths.md); the entry is mapped only to find the file.
+    /// A NAME with a slash is that file itself, never a directory.
     /// </summary>
     private static List<string> PathFiles(string name)
     {
@@ -183,8 +185,8 @@ public sealed class InvokeBashTypeCommand : PSCmdlet
             foreach (var hit in ExecutableLookup.FindAll(name, [dir]))
             {
                 string file = Path.GetFileName(hit);
-                char sep = entry.Contains('\\') ? '\\' : '/';
-                found.Add(entry.EndsWith('/') || entry.EndsWith('\\') ? entry + file : entry + sep + file);
+                string shown = PsBash.Core.BashPath.ToShell(entry);
+                found.Add(shown.EndsWith('/') || shown.EndsWith('\\') ? shown + file : shown + "/" + file);
             }
         }
         return found;

@@ -1615,7 +1615,7 @@ public static partial class PsEmitter
     }
 
     private static readonly System.Text.RegularExpressions.Regex TildeBarewordItem =
-        new(@"^(\$(?:HOME|PWD|env:OLDPWD))([/\\][^$`""'()@{}]*)$");
+        new(@"^(\$(?:HOME|env:PWD|env:OLDPWD))([/\\][^$`""'()@{}]*)$");
 
     /// <summary>
     /// One <c>for</c>-list item. A word that glues text, quotes, variables and command substitutions together
@@ -8150,7 +8150,7 @@ public static partial class PsEmitter
         WordPart.TildeSub ts => ts.User switch
         {
             null => "$HOME",
-            "+" => "$PWD",          // ~+  -> $PWD
+            "+" => "$env:PWD",      // ~+  -> $PWD (the shell form, docs/specs/paths.md)
             "-" => "$env:OLDPWD",   // ~-  -> $OLDPWD
             // ~user / ~N (dirstack) have no faithful PowerShell equivalent; keep
             // the literal `~user` (degrade) rather than emitting a bogus var.
@@ -12078,7 +12078,7 @@ public static partial class PsEmitter
             else if (literal == "~")
                 targetExpr = "$HOME";
             else if (literal.StartsWith("~/") || literal.StartsWith("~\\"))
-                targetExpr = "$HOME + " + QuotePsString("\\" + literal[2..]);
+                targetExpr = "$HOME + " + QuotePsString("/" + literal[2..]);
             else if (TryTranslateMsysDrivePath(literal, out var winPath, allowBareDriveRoot: true))
                 targetExpr = QuotePsString(winPath);
             else
@@ -12127,12 +12127,14 @@ public static partial class PsEmitter
         var resolveAndAct =
             "$__psbash_cd_resolved = [System.IO.Path]::GetFullPath(" + PsBuild.RuntimeMapPath("[string]$__psbash_cd_target") + ", [System.Environment]::CurrentDirectory); " +
             "if ([System.IO.Directory]::Exists($__psbash_cd_resolved) -and [PsBash.Cmdlets.BashRuntime]::CdPathWalkExists(" + PsBuild.RuntimeMapPath("[string]$__psbash_cd_target") + ", [System.Environment]::CurrentDirectory)) { " +
-            "$env:OLDPWD = [System.Environment]::CurrentDirectory; " +
+            // $PWD / $OLDPWD and the echoed directory are the script-visible shell form (C:/x, docs/specs/paths.md);
+            // the process cwd and the PowerShell location stay native.
+            "$env:OLDPWD = " + PsBuild.RuntimeToShellPath("[System.Environment]::CurrentDirectory") + "; " +
             "$global:__PsBashCwd = $__psbash_cd_resolved; " +
             "[System.Environment]::CurrentDirectory = $__psbash_cd_resolved; " +
-            "$env:PWD = $__psbash_cd_resolved; " +
+            "$env:PWD = " + PsBuild.RuntimeToShellPath("$__psbash_cd_resolved") + "; " +
             "Set-Location -LiteralPath $__psbash_cd_resolved -ErrorAction SilentlyContinue; " +
-            (isDash ? "Write-Output $__psbash_cd_resolved; " : useCdPath ? "if ($__psbash_cd_via) { Write-Output $__psbash_cd_resolved }; " : "") +
+            (isDash ? "Write-Output $env:PWD; " : useCdPath ? "if ($__psbash_cd_via) { Write-Output $env:PWD }; " : "") +
             "$global:LASTEXITCODE = 0 " +
             "} else { Write-Error -Message (\"cd: \" + $__psbash_cd_target + \": No such file or directory\") -ErrorAction Continue; $global:LASTEXITCODE = 1 }";
 

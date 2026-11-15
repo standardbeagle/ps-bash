@@ -586,7 +586,7 @@ public class BashTranspilerReviewRegressionTests
     {
         string ps = BashTranspiler.Transpile(bash);
         Assert.Equal(lookup, ps.Contains("BashRuntime]::CdPathLookup(", StringComparison.Ordinal));
-        Assert.Equal(lookup, ps.Contains("if ($__psbash_cd_via) { Write-Output $__psbash_cd_resolved }", StringComparison.Ordinal));
+        Assert.Equal(lookup, ps.Contains("if ($__psbash_cd_via) { Write-Output $env:PWD }", StringComparison.Ordinal));
     }
     // Oracle: `seen[$w]=$(( ${seen[$w]:-0} + 1 ))` is the counting idiom. The subscript of `${m[$k]:-d}` was the
     // literal text `$k`; `${a[1]}` inside `$(( ))` was a parse error; and a bare RANDOM / SECONDS there read as 0.
@@ -920,7 +920,7 @@ public class BashTranspilerReviewRegressionTests
     // Oracle (bash): `PWD=foo; echo $PWD` prints foo — $PWD is the shell variable cd maintains, not the location.
     [Fact]
     public void Transpile_PlainPwdRead_IsTheShellVariable()
-        => Assert.Contains("$(if ($null -ne $env:PWD) { $env:PWD } else { $PWD })", BashTranspiler.Transpile("echo $PWD"));
+        => Assert.Contains(PsBuild.PwdRead, BashTranspiler.Transpile("echo $PWD"));
     [Fact]
     public void Transpile_PatsubOfAnUnsetVarUnderNounset_ReadsItStrictly()
         => Assert.Contains("unbound variable", BashTranspiler.Transpile("set -o nounset\necho -${v/x/y}-"));

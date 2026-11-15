@@ -924,7 +924,7 @@ public sealed partial class BashParser
         {
             int slash = raw.IndexOf('/');
             string prefix = slash < 0 ? raw[1..] : raw[1..slash];
-            string? home = prefix switch { "" => "${HOME}", "+" => "${PWD}", "-" => "${env:OLDPWD}", _ => null };
+            string? home = prefix switch { "" => "${HOME}", "+" => "${env:PWD}","-" => "${env:OLDPWD}", _ => null };
             if (home is not null)
                 raw = home + (slash < 0 ? "" : raw[slash..]);
         }

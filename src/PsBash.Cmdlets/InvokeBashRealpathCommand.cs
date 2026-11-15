@@ -105,7 +105,7 @@ public sealed class InvokeBashRealpathCommand : PSCmdlet
                 continue;
             }
 
-            WriteObject(BashRuntime.NewBashObject(full));
+            WriteObject(BashRuntime.NewBashObject(PsBash.Core.BashPath.ToShell(full)));
         }
     }
 }
