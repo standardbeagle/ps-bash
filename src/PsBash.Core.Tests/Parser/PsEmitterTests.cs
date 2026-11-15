@@ -6073,6 +6073,27 @@ public class PsEmitterTests
     public void Transpile_CompoundPipeStageWhereErrexitIsIgnored_HasNoStageChecks(string bash)
         => Assert.DoesNotContain(ErrexitCheckInsideScope("return"), PsEmitter.Transpile(bash)!);
 
+    // Oracle: `set -e; g() { false; echo in-g; }; g | cat; echo end` prints only `end`: a function stage inherits -e too,
+    // so g ends at false. The stage lifts the pipeline's suppression around the call, and the body's errexit check
+    // leaves through the run-time exit, which a subshell scope (the stage) catches. ps-bash printed in-g.
+    [Fact]
+    public void Transpile_SetEFunctionPipeStage_LiftsSuppressionAroundTheCall()
+    {
+        var result = PsEmitter.Transpile("set -e; g() { false; echo in-g; }; g | cat; echo end")!;
+        Assert.Contains(PsBuild.ErrexitLifted("g"), result);
+        Assert.Contains(ErrexitCheckInsideScope(PsBuild.DynamicExit("$global:LASTEXITCODE")), result);
+    }
+
+    // bash ignores -e in a function stage of a pipeline that is a condition or a non-final && operand, and a stage
+    // never inherits an errexit that only an ERR trap (no set -e word) asked for.
+    [Theory]
+    [InlineData("set -e; g() { false; echo in-g; }; if g | cat; then echo ok; fi")]
+    [InlineData("set -e; g() { false; echo in-g; }; g | cat && echo and")]
+    [InlineData("set -e; g() { false; echo in-g; }; ! g | cat")]
+    [InlineData("trap 'echo x' ERR\ng() { false; echo in-g; }; g | cat")]
+    public void Transpile_SetEFunctionPipeStageWhereErrexitIsIgnored_IsNotLifted(string bash)
+        => Assert.DoesNotContain(PsBuild.ErrexitLifted("g"), PsEmitter.Transpile(bash)!);
+
     [Fact]
     public void Transpile_ErrexitLifted_LiftsOneSuppressionLevelForTheStage()
         => Assert.Equal("$global:__BashErrexitSuppress--; try { x } finally { $global:__BashErrexitSuppress++ }",

@@ -57,6 +57,20 @@ public class FunctionPipeStageExitTests
     public async Task Differential_ExitInFunctionCalledPlainly_StillEndsTheScript()
         => await AssertOracle.EqualAsync("f() { echo x; exit 3; }; f | cat; f; echo never", timeout: Timeout);
 
+    // set -e: the function stage inherits -e, so its body ends at the failing command and only the stage ends.
+    [SkippableFact]
+    public async Task Differential_SetEFunctionFirstStage_EndsAtItsFailingCommand()
+        => await AssertOracle.EqualAsync("set -e; g() { false; echo in-g; }; g | cat; echo end", timeout: Timeout);
+
+    [SkippableFact]
+    public async Task Differential_SetEFunctionLastStage_EndsTheStageAndThenTheScript()
+        => await AssertOracle.EqualAsync("set -e; g() { cat; false; echo in-g; }; echo a | g; echo never", timeout: Timeout);
+
+    // Where bash ignores -e (a condition, an && operand) the function stage runs on past its failure.
+    [SkippableFact]
+    public async Task Differential_SetEFunctionStageInConditionOrAndList_RunsOn()
+        => await AssertOracle.EqualAsync("set -e; g() { false; echo in-g; }; if g | cat; then echo ok; fi; g | cat && echo and", timeout: Timeout);
+
     [SkippableFact]
     public async Task Differential_ReturnInFunctionStage_IsTheStageStatus()
         => await AssertOracle.EqualAsync("r() { echo r; return 5; }; r | cat; echo \"after ${PIPESTATUS[*]}\"", timeout: Timeout);

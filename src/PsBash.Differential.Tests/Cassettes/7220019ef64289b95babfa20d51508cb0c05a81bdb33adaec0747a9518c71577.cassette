@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 71
+stdout-length: 18
+stderr-length: 0
+==== SCRIPT ====
+f() { echo x; exit 3; }; (f); echo "paren $?"; v=$(f); echo "sub $? $v"
+==== STDOUT ====
+x
+paren 3
+sub 3 x
+
+==== STDERR ====
+

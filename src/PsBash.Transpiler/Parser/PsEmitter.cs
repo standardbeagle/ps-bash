@@ -11504,7 +11504,11 @@ public static partial class PsEmitter
                     && !rawStage.Contains("catch [PsBash.Cmdlets.BashParamErrorException]", StringComparison.Ordinal))
                 {
                     sb.Length = stageStart;
-                    sb.Append(i == 0 ? PsBuild.ShellStateScope(rawStage) : "& { " + PsBuild.ShellStateGuard("$input | " + rawStage) + " }");
+                    // `set -e; g() { false; echo in-g; }; g | cat`: the stage inherits -e, so g ends at false. The body's
+                    // errexit checks fire once the pipeline's suppression is lifted for the stage, and their run-time
+                    // exit (PsBuild.DynamicExit) ends only the stage, as in a compound stage (EmitCompoundStage).
+                    string Lifted(string stage) => functionStage && _armedStages ? PsBuild.ErrexitLifted(stage) : stage;
+                    sb.Append(i == 0 ? PsBuild.ShellStateScope(Lifted(rawStage)) : "& { " + PsBuild.ShellStateGuard(Lifted("$input | " + rawStage)) + " }");
                 }
             }
 
