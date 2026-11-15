@@ -7,14 +7,14 @@ PATH=/bin
 { which ls; }
 ## stdout: /bin/ls
 ## status: 0
-## XFAIL ps-bash gap-oils-command_ command_ (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash platform-windows-unix-bin expects /bin/ls, which Windows does not have (intentional-differences.md, Platform)
 ## timeout: 10
 
 #### Name too long
 ./0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789
 ## stdout:
 ## status: 126
-## XFAIL ps-bash gap-oils-command_ command_ (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash platform-windows-name-too-long an over-long command path is "not found" (127) on Windows, where bash on Linux gets ENAMETOOLONG (126)
 ## timeout: 10
 
 #### External programs don't have _OVM in environment
@@ -45,7 +45,7 @@ two
 status=0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-command_ command_ (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash platform-windows-exec-bit Windows has no execute bit: a file without chmod +x earlier on PATH is still taken as the command (intentional-differences.md, Platform)
 ## timeout: 10
 
 #### hash without args prints the cache
@@ -60,7 +60,7 @@ hits	command
 status=0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-command_ command_ (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-hash-table-unimplemented hash keeps no table of looked-up commands, so it prints "hash table empty" and hash -t has nothing to print
 ## timeout: 10
 
 #### hash with args
@@ -77,7 +77,7 @@ status=0
 status=1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-command_ command_ (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-hash-table-unimplemented hash keeps no table of looked-up commands, so it prints "hash table empty" and hash -t has nothing to print
 ## timeout: 10
 
 #### hash -r doesn't allow additional args

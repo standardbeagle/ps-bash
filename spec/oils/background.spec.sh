@@ -73,7 +73,7 @@ status=2
 status=1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-background background (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-bg-output-at-wait a background job's output appears when wait collects that job, so it interleaves with the status lines instead of preceding them
 ## timeout: 10
 
 #### Builtin in background
@@ -244,7 +244,7 @@ echo $bar  # bar is NOT SET in the parent process
 
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-background background (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-bg-word-expanded-in-parent the words of cmd & are expanded in the parent shell, so ${bar=2} & assigns bar there
 ## timeout: 10
 
 #### Background process and then a singleton pipeline
@@ -362,7 +362,7 @@ status=3
 status=9
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-background background (oils): runspace-pool jobs start ~140 ms apart, so completion order differs from the 60 ms the case allows; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-wait-n-completion-order runspace-pool jobs start about 140 ms apart, so wait -n sees them complete in a different order than the 60 ms the case allows
 ## timeout: 10
 ## real-launcher
 
@@ -415,6 +415,6 @@ status=129
 Hangup
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-background background (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-bg-signal-message wait does not print the signal name (Hangup) of a job killed by a signal
 ## timeout: 10
 ## real-launcher

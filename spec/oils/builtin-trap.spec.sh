@@ -37,7 +37,7 @@ trap -- 'echo bye' EXIT
 bye
 ## END
 ## status: 2
-## XFAIL ps-bash gap-oils-builtin-trap builtin-trap (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-empty-subshell-not-syntax-error ( ) is accepted instead of being a syntax error that ends the script with status 2, so the pasted output lines after it run as commands
 ## timeout: 10
 
 #### trap accepts/ignores --

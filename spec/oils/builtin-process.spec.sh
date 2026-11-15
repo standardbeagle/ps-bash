@@ -388,6 +388,6 @@ status=0
 status=1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-process builtin-process (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash platform-windows-no-fd-limit Windows has no per-process descriptor limit, so ulimit -n 0 does not make the next open fail
 ## timeout: 10
 ## real-launcher

@@ -531,7 +531,7 @@ echo after=$?
 after=0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-trap-bash builtin-trap-bash (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash intentional-no-signal-to-shell-host kill -USR1 $$ is not delivered to a ps-bash shell host, so the USR1 trap never runs (intentional-differences.md)
 ## timeout: 10
 ## real-launcher
 
@@ -550,7 +550,7 @@ echo after=$?
 after=0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-trap-bash builtin-trap-bash (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash intentional-no-signal-to-shell-host kill -USR1 $$ is not delivered to a ps-bash shell host, so the USR1 trap never runs (intentional-differences.md)
 ## timeout: 10
 ## real-launcher
 
@@ -574,6 +574,6 @@ echo after=$?
 after=1
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-trap-bash builtin-trap-bash (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-debug-trap-per-simple-command the DEBUG trap runs once per statement, not before every simple command of a && list, and after the ERR trap rather than before
 ## timeout: 10
 ## real-launcher

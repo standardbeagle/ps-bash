@@ -144,7 +144,7 @@ echo "cmd=$cmd"
 cmd=
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-pipeline pipeline (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-pipeline-stage-expanded-in-parent the words of an in-process pipe stage are expanded in the parent shell, so ${cmd=echo} hi | wc -l assigns cmd there
 ## timeout: 10
 
 #### bash/dash/mksh run the last command is run in its own process
@@ -180,7 +180,7 @@ echo ${PIPESTATUS[@]}
 # hm bash gives '1 0' which seems wrong
 ## stdout: 141 0
 ## status: 0
-## XFAIL ps-bash gap-oils-pipeline pipeline (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash wontfix-sigpipe no SIGPIPE: the writer is not killed with 141 when the reader exits (and /dev/urandom does not exist on Windows)
 ## timeout: 10
 
 #### Nested pipelines

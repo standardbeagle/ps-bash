@@ -1,8 +1,11 @@
 ## Imported from the Oils spec tests (builtin-kill.test.sh, Apache-2.0, https://github.com/oils-for-unix/oils).
 ## Names and scripts only; expectations are recorded from bash 5.2, not taken from Oils.
 ## Cases using the Oils harness ($SH, $REPO_ROOT, ...) are omitted.
+# ps-bash: a job that a case kills and then waits for sleeps 1 (or 2) s, not 0.1 (or 0.2): under a loaded run the
+# job had already finished when kill came, so wait gave 0, as bash reports for a job that exits first. It is killed
+# at once either way, and bash prints the same.
 #### kill -KILL kills the process with SIGKILL
-sleep 0.1 & 
+sleep 1 &
 pid=$!
 kill -KILL $pid 
 echo kill=$?
@@ -17,7 +20,7 @@ wait=137
 ## timeout: 10
 
 #### kill -s TERM specifies the signal name
-sleep 0.1 &
+sleep 1 &
 pid=$!
 kill -s TERM $pid
 echo kill=$?
@@ -107,7 +110,7 @@ wait=0
 #### kill -15 kills the process with SIGTERM
 case $SH in mksh) exit ;; esac  # mksh is flaky
 
-sleep 0.1 &
+sleep 1 &
 pid=$!
 kill -15 $pid
 echo kill=$?
@@ -125,7 +128,7 @@ wait=143
 #### kill -n 9 specifies the signal number
 #case $SH in mksh|dash) exit ;; esac
 
-sleep 0.1 &
+sleep 1 &
 pid=$!
 kill -n 9 $pid
 echo kill=$?
@@ -143,14 +146,14 @@ wait=137
 #### kill -terM -SigterM isn't case sensitive
 case $SH in mksh|dash|zsh) exit ;; esac
 
-sleep 0.1 &
+sleep 1 &
 pid=$!
 kill -SigterM $pid
 echo kill=$?
 wait $pid
 echo wait=$?
 
-sleep 0.1 &
+sleep 1 &
 pid=$!
 kill -terM $pid
 echo kill=$?
@@ -302,8 +305,8 @@ wait=127
 #### kill -15 %- kills previous job
 #case $SH in mksh|dash) exit ;; esac
 
-sleep 0.1 &  # previous job
-sleep 0.2 &  # current job
+sleep 1 &  # previous job
+sleep 2 &  # current job
 
 kill -15 %-
 echo kill=$?

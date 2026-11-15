@@ -306,7 +306,7 @@ status=0
 status=0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-command-sub command-sub (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-backtick-backslash-removal backslash removal inside backquotes differs, so the inner echo \\" runs and prints a backslash where bash gets a syntax error and an empty substitution
 ## timeout: 10
 ## real-launcher
 

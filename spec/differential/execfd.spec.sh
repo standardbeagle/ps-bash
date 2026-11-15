@@ -66,4 +66,3 @@ exec printf 'bye\n'; echo notreached
 echo lost >&5; echo "rc=$?"
 ## stdout: rc=1
 ## status: 0
-## XFAIL ps-bash gap-differential-execfd execfd (differential): differs from bash 5.2; see docs/specs/spec-gaps.md

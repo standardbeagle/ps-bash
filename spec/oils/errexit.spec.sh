@@ -249,7 +249,7 @@ foo() {
 echo "should be executed"
 ## stdout:
 ## status: 1
-## XFAIL ps-bash gap-oils-errexit errexit (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-errexit-invert-reenable set -e run inside a function called under ! takes effect at once in bash, so the next false exits with 1; ps-bash keeps errexit suppressed there
 ## timeout: 10
 
 #### Command sub exit code is lost
@@ -428,7 +428,7 @@ one
 [three]
 ## END
 ## status: 1
-## XFAIL ps-bash gap-oils-errexit errexit (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-errexit-in-pipe-stage set -e is not applied inside a pipe stage (a { } group or a while loop), so the stage runs on after false
 ## timeout: 10
 
 #### simple command that's an alias - redir failure checked

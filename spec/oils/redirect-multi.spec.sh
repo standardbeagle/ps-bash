@@ -17,7 +17,7 @@ hi
 escaped
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-redirect-multi redirect-multi (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash platform-windows-glob-char-in-filename the case creates a file whose name holds * (one-*, zz-*-xx), which Windows does not allow
 ## timeout: 10
 
 #### File redirect without matching any file
@@ -31,7 +31,7 @@ status=0
 zz-*-xx
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-redirect-multi redirect-multi (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash platform-windows-glob-char-in-filename the case creates a file whose name holds * (one-*, zz-*-xx), which Windows does not allow
 ## timeout: 10
 
 #### File redirect without matching any file, with failglob
@@ -83,7 +83,7 @@ status=0
 hi
 ## END
 ## status: 1
-## XFAIL ps-bash gap-oils-redirect-multi redirect-multi (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-redirect-target-var-not-globbed a redirect target from an unquoted $var is not pathname-expanded, so >$var with two-* opens no file
 ## timeout: 10
 
 #### File redirect that globs to more than one file (bash and zsh only)
@@ -137,7 +137,7 @@ should-not-be-on-stdout
 stdout
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-redirect-multi redirect-multi (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash gap-redirect-dup-target-not-globbed the word after >& is not pathname-expanded, so >& 1* does not become >& 10 (fd 10, a dup of stdout)
 ## timeout: 10
 
 #### Redirect with brace expansion isn't allowed

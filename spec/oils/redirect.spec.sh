@@ -95,7 +95,7 @@ OPENED:
 7
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-redirect redirect (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash artifact-recording-host-fd7-open the expectation depends on the recording shell inheriting an open fd 7 (bash -s under wsl.exe has it too); it also lists /proc/$$/fd, which Windows does not have
 ## timeout: 10
 
 #### Open descriptor with exec
@@ -168,7 +168,8 @@ echo a  >| /dev/null  # ignore noclobber, trunc, write stdout
 ## timeout: 10
 
 #### Parsing of x=1> and related cases
-
+# stdout is a pipe: the recording host's stdout could not be reopened through /dev/stdout (every echo failed, status 1).
+{
 echo x=1>/dev/stdout
 echo x=1 >/dev/stdout
 echo x= 1>/dev/stdout
@@ -178,9 +179,17 @@ echo +1 >/dev/stdout
 echo + 1>/dev/stdout
 
 echo a1>/dev/stdout
-## stdout:
-## status: 1
-## XFAIL ps-bash gap-oils-redirect redirect (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
+} | cat
+## STDOUT:
+x=1
+x=1
+x=
++1
++1
++
+a1
+## END
+## status: 0
 ## timeout: 10
 
 #### xtrace not affected by redirects
@@ -266,6 +275,6 @@ echo $((myvar-starting_fd))
 0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-redirect redirect (oils): the expectation needs stdout to be a regular file (each >/dev/stdout reopens it with O_TRUNC, dropping earlier output); ps-bash stdout is a stream, so every echo is kept, as in bash writing to a pipe; see docs/specs/spec-gaps.md
+## XFAIL ps-bash platform-stdout-is-a-stream the expectation needs stdout to be a regular file (each >/dev/stdout reopens it with O_TRUNC, dropping earlier output); ps-bash stdout is a stream, so every echo is kept, as in bash writing to a pipe
 ## timeout: 10
 ## real-launcher
