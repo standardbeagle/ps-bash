@@ -43,8 +43,17 @@ public class IpcTransportFactoryTests : IDisposable
         // A host with no sidecar here (an interactive terminal's host) keeps the anchored session.
         IpcTransportFactory.EnclosingHostOverride = () => Anchor(int.MaxValue - 7, 1);
         IpcTransportFactory.SessionAnchorOverride = () => Anchor(12345, 987654321);
-        IpcTransportFactory.ResolveEndpoint(null, out var anchor);
+        IpcTransportFactory.ResolveEndpoint(null, out var anchor, out var enclosing);
         Assert.Equal(Anchor(12345, 987654321), anchor);
+        Assert.Null(enclosing);  // not inside a registered host: busy slots keep the contended back-off
+    }
+
+    [Fact]
+    public void ResolveEndpoint_ExplicitEndpoint_ReportsNoEnclosingHost()
+    {
+        IpcTransportFactory.EnclosingHostOverride = () => Anchor(12345, 1);
+        IpcTransportFactory.ResolveEndpoint("unix:/custom.sock", out _, out var enclosing);
+        Assert.Null(enclosing);
     }
 
     private static ProcessIdentity Anchor(int pid, long startTicks)

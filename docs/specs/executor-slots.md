@@ -38,6 +38,13 @@ path would overflow). Slots are separate daemons started on demand and kept warm
   session anchor was the host itself, and every host started one more full daemon (one per host). Agent runtimes
   (node, claude, python) are not climbed; an explicit `PSBASH_IPC_ENDPOINT`/`PSBASH_SESSION` wins; an unregistered host
   (an interactive terminal's) keeps the anchored session.
+- **Inside the enclosing session.** Such a launcher starts at the slot AFTER the enclosing host's own slot
+  (`IpcWorker.FirstSlotPastEnclosingHost`; past `MaxExecSlots` = a private host): the enclosing host is running the
+  command that started it, and the slots below were busy when that host's own launcher spilled past them. Every BUSY it
+  still meets counts as nested (spill at once, never the contended back-off). The ancestry walk alone cannot see this:
+  slot hosts are spawned detached (Windows trampoline), so a launcher started by slot k's command never descends from
+  the host waiting on slot k. Before this, each nested `bash -c` at depth 2 (or under a per-invocation host) paid the full
+  spill delay, about 300 ms, plus one BUSY round trip per lower slot.
 
 The sequential warm path is unchanged: slot 0, lease free, no extra round trip.
 
@@ -55,8 +62,9 @@ The sequential warm path is unchanged: slot 0, lease free, no extra round trip.
 
 Host: a second concurrent framed command is answered with exit 76 and no output while the first runs; the lease is
 released when the first finishes (also on error and on cancellation). Launcher: slot endpoints derive and parse back;
-a nested launcher spills at once; a contended launcher spills only after the delay; a stateful host does not spill
-unrelated launchers. Behavioural: `NestedBashC_RepeatedCalls_ReuseOneWarmNestedHost` still holds (the nested slot is warm).
+a nested launcher spills at once; a launcher inside the enclosing session spills at once even when it does not descend
+from the busy host, and starts past the enclosing host's slot; a contended launcher spills only after the delay; a
+stateful host does not spill unrelated launchers. Behavioural: `NestedBashC_RepeatedCalls_ReuseOneWarmNestedHost` still holds (the nested slot is warm).
 
 ## 5. Measured trade-off
 

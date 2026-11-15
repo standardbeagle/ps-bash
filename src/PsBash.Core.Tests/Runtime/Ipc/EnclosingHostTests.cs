@@ -90,6 +90,23 @@ public class EnclosingHostTests
     public void EnclosingHostBase_UnregisteredHost_IsNull()
         => Assert.Null(IpcTransportFactory.EnclosingHostBase(Host, [Sidecar(9, "/r/other.sock", HostStart)]));
 
+    [Fact]
+    public void EnclosingHostOwnEndpoint_SlotHost_IsTheSlotItServes()
+        => Assert.Equal("/r/host-u-s1-2.sock-x3",
+            IpcTransportFactory.EnclosingHostOwnEndpoint(Host, [Sidecar(9, "/r/other.sock", HostStart), Sidecar(10, "/r/host-u-s1-2.sock-x3", HostStart.AddSeconds(2))]));
+
+    [Fact]
+    public void EnclosingHostOwnEndpoint_StaleSidecar_IsNull()
+        => Assert.Null(IpcTransportFactory.EnclosingHostOwnEndpoint(Host, [Sidecar(10, "/r/old.sock-x1", HostStart.AddMinutes(-5))]));
+
+    [Theory]
+    [InlineData("/r/host.sock", 0)]
+    [InlineData("/r/host.sock-x1", 1)]
+    [InlineData("/r/host.sock-x6", 6)]
+    [InlineData("/r/psbash-slot-0123456789ABCDEF-x2", 0)]  // hashed: its own base
+    public void SlotIndexOf(string endpoint, int expected)
+        => Assert.Equal(expected, IpcTransportFactory.SlotIndexOf(endpoint));
+
     [Theory]
     [InlineData("/r/host.sock", "/r/host.sock")]
     [InlineData("/r/host.sock-x1", "/r/host.sock")]

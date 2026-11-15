@@ -544,3 +544,26 @@ Measured so far:
   start to transpiled 90 to 115 ms, executed minus connected 75 to 90 ms.
 - The warm-daemon split between connect and execute has NOT been measured: the installed release predates the flag and a
   dev build cannot be run against a shared daemon without `tman dev` forcing a per-invocation host. Measure it after the next release.
+
+### Nested launcher (`bash -c` inside a command), by phase
+
+Debug JIT dev build, Windows 11, heavily loaded machine (other agents' builds), 2026-11-15. Per-phase marks in the launcher
+and host; medians of 9 warm calls per topology. A = explicit `PSBASH_IPC_ENDPOINT` (middle shell on slot 0); B = default
+nested path (joins the enclosing host's session; middle shell on slot 1, inner launchers depth 2).
+
+| Phase (warm) | ms |
+|---|---|
+| `Invoke-BashBash` spawn to launcher process start | 2 to 10 |
+| process start to `Main` (runtime start, Debug JIT) | 100 to 360 |
+| `Main` to transpiled (Debug JIT parse + emit) | 120 to 450 |
+| endpoint resolve + warm-host check (`StartAsync`) | 50 to 170 |
+| one BUSY refusal round trip (connect, env-block request, exit 76) | 50 to 160 |
+| host: request read to worker acquired | 1 to 30; 200 to 700 when the slot's one warm runspace is still being replaced |
+| host: env reset + `echo x` + exit frame | 70 to 250 |
+
+Removed (`executor-slots.md` "Inside the enclosing session"): in B every inner launcher met slot 0 BUSY about 8 times and
+backed off for the 250 ms spill delay before spilling (slot hosts are spawned detached, so the ancestry walk never saw it
+was nested), then met its own enclosing slot BUSY once more: first connect to host request went from about 360 ms to
+about 120 ms, 8 refusals to 0. The launcher now also resolves and reaches the host while it transpiles. A whole warm nested
+call still costs about 0.8 to 1.2 s on this machine (A and B alike): what is left is launcher process start, JIT and
+transpile, plus per-command host setup. `timeout 0.5 $SH -c` cannot fit that without running `bash -c` in-process.

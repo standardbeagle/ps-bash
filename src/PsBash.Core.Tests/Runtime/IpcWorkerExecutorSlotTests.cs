@@ -138,4 +138,37 @@ public sealed class IpcWorkerExecutorSlotTests
         Assert.Equal(0, worker.SlotForTest);
         Assert.True(busy.Commands >= 2, $"expected repeated attempts on slot 0, saw {busy.Commands}");
     }
+
+    // A launcher started by a slot host's command is not a process descendant of slot 0 (slot hosts are spawned
+    // detached), yet slot 0 is waiting on it. Before the fix it backed off for the whole spill delay (~300 ms per
+    // nested `bash -c`); with the delay at 10 minutes this test would hang until its safety net fired.
+    [Fact]
+    public async Task BusyHost_LauncherInsideTheEnclosingSession_SpillsAtOnceDespiteTheSpillDelay()
+    {
+        var baseEndpoint = NewBase();
+        await using var busy = new SlotHost(baseEndpoint, busy: true);
+        await using var free = new SlotHost(IpcTransportFactory.ResolveSlotEndpoint("unix", baseEndpoint, 1).Endpoint, busy: false);
+        await busy.StartAsync();
+        await free.StartAsync();
+        await using var worker = IpcWorker.ConnectForTest("unix", baseEndpoint, Path.Combine(Path.GetTempPath(), "ps-bash-host-fake"));
+        worker.AssumeSlotHostsReachableForTest = true;
+        worker.InsideEnclosingHostForTest = true;
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+
+        var output = await WithSpillDelay("600000", () => worker.QueryAsync("echo x", cts.Token));
+
+        Assert.Contains("ran-on-" + Path.GetFileName(free.Endpoint), output);
+        Assert.Equal(1, busy.Commands);  // one refusal, no back-off retries on the slot that waits on us
+        Assert.Equal(1, free.Commands);
+        Assert.Equal(1, worker.SlotForTest);
+    }
+
+    [Theory]
+    [InlineData("/r/host.sock", 1)]                                  // inside the base host: slot 1 first
+    [InlineData("/r/host.sock-x1", 2)]
+    [InlineData("/r/host.sock-x5", 6)]
+    [InlineData("/r/host.sock-x6", 7)]                               // past MaxExecSlots: a private host
+    [InlineData("/r/psbash-slot-0123456789ABCDEF-x2", 1)]            // hashed slot is its own base: its first slot
+    public void FirstSlotPastEnclosingHost_SkipsTheHostRunningOurParent(string enclosingHostEndpoint, int expected)
+        => Assert.Equal(expected, IpcWorker.FirstSlotPastEnclosingHost(enclosingHostEndpoint));
 }

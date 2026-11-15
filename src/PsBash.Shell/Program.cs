@@ -247,6 +247,8 @@ if (shellArgs.ScriptPath is not null)
     // `bash -x -v s.sh` / `bash -e s.sh`: the command-line options apply to the script.
     scriptContent = ShellArgs.WithPrelude(shellArgs.Prelude, scriptContent);
 
+    // Reach the host while the script transpiles (see the -c path below).
+    var scriptWorkerTask = Task.Run(workerFactory);
     string? pwshScriptCommand;
     bool scriptForwardsStdin = false;
     try
@@ -279,7 +281,7 @@ if (shellArgs.ScriptPath is not null)
     var preamble = BuildPositionalPreamble(shellArgs.ScriptPath, shellArgs.ScriptArgs);
     return await HostFailureGuard.RunAsync(async () =>
     {
-        await using IWorker scriptWorker = await workerFactory();
+        await using IWorker scriptWorker = await scriptWorkerTask;
         if (scriptForwardsStdin && scriptWorker is IpcWorker scriptIpc)
             scriptIpc.LauncherStdin = Console.OpenStandardInput();
         return await scriptWorker.ExecuteAsync(
@@ -465,6 +467,23 @@ if (compactOutput && !shellArgs.RawPowerShell)
         Console.Error.WriteLine($"[ps-bash] compact filter override skipped: {overrideSkipReason}");
 }
 
+// `bash -i -c 'cmd'` is an interactive shell: it has a history file (`${HISTFILE:+yes}` is yes); `bash -c` has none.
+if (ShellArgs.DefaultHistFile(shellArgs.Interactive && shellArgs.Command is not null,
+        Environment.GetEnvironmentVariable("HISTFILE"),
+        Environment.GetEnvironmentVariable("HOME") ?? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)) is { } histFile)
+    Environment.SetEnvironmentVariable("HISTFILE", histFile);
+// An interactive shell also has its default prompts (bash: PS1='\s-\v\$ ', PS2='> ') unless they are inherited.
+if (shellArgs.Interactive && shellArgs.Command is not null)
+{
+    if (Environment.GetEnvironmentVariable("PS1") is null) Environment.SetEnvironmentVariable("PS1", ShellArgs.DefaultPs1);
+    if (Environment.GetEnvironmentVariable("PS2") is null) Environment.SetEnvironmentVariable("PS2", "> ");
+}
+
+// Reach the host while the command transpiles: endpoint resolution, the warm-host check and a cold spawn do not
+// depend on the transpiled text (a nested `bash -c` paid them one after the other). Awaited inside HostFailureGuard
+// below, so a host failure still surfaces there; a parse error exits without waiting for it.
+var commandWorker = Task.Run(workerFactory);
+
 string? pwshCommand;
 bool forwardStdin = false;
 if (shellArgs.RawPowerShell)
@@ -556,20 +575,9 @@ void Stamp(string phase)
         Console.Error.WriteLine($"[ps-bash-timing] {phase}: {(DateTime.Now - System.Diagnostics.Process.GetCurrentProcess().StartTime).TotalMilliseconds:F0} ms");
 }
 Stamp("transpiled");
-// `bash -i -c 'cmd'` is an interactive shell: it has a history file (`${HISTFILE:+yes}` is yes); `bash -c` has none.
-if (ShellArgs.DefaultHistFile(shellArgs.Interactive && shellArgs.Command is not null,
-        Environment.GetEnvironmentVariable("HISTFILE"),
-        Environment.GetEnvironmentVariable("HOME") ?? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)) is { } histFile)
-    Environment.SetEnvironmentVariable("HISTFILE", histFile);
-// An interactive shell also has its default prompts (bash: PS1='\s-\v\$ ', PS2='> ') unless they are inherited.
-if (shellArgs.Interactive && shellArgs.Command is not null)
-{
-    if (Environment.GetEnvironmentVariable("PS1") is null) Environment.SetEnvironmentVariable("PS1", ShellArgs.DefaultPs1);
-    if (Environment.GetEnvironmentVariable("PS2") is null) Environment.SetEnvironmentVariable("PS2", "> ");
-}
 int exitCode = await HostFailureGuard.RunAsync(async () =>
 {
-    await using IWorker worker = await workerFactory();
+    await using IWorker worker = await commandWorker;
     Stamp("host connected");
     if (forwardStdin && worker is IpcWorker ipcWorker)
         ipcWorker.LauncherStdin = Console.OpenStandardInput();

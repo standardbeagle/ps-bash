@@ -173,20 +173,55 @@ public sealed class IpcWorker : IWorker
         ArgumentNullException.ThrowIfNull(hostBinaryPath);
 
         ProcessIdentity? sessionAnchor = null;
+        string? enclosingHostEndpoint = null;
         var (scheme, endpoint) = lifetime == Lifetime.PerInvocation
             ? IpcTransportFactory.ResolvePerInvocationEndpoint()
-            : IpcTransportFactory.ResolveEndpoint(null, out sessionAnchor);
+            : IpcTransportFactory.ResolveEndpoint(null, out sessionAnchor, out enclosingHostEndpoint);
         var timeout = startupTimeout ?? GetStartupTimeout();
         var poll = startupPollInterval ?? TimeSpan.FromMilliseconds(50);
         var worker = new IpcWorker(scheme, endpoint, hostBinaryPath, timeout, poll, lifetime)
         {
             _sessionAnchor = sessionAnchor,
+            _insideEnclosingHost = enclosingHostEndpoint is not null,
         };
         if (lifetime == Lifetime.PerInvocation)
             await worker.SpawnPrivateHostAsync(ct).ConfigureAwait(false);
+        else if (enclosingHostEndpoint is { } inside)
+            await worker.StartPastEnclosingHostAsync(inside, ct).ConfigureAwait(false);
         else
             await worker.EnsureHostReachableAsync(ct).ConfigureAwait(false);
         return worker;
+    }
+
+    /// <summary>
+    /// A launcher started by a host's command (docs/specs/executor-slots.md, joining the enclosing session). That host
+    /// is running the command that started us, and the slots below it were busy when its own launcher spilled past
+    /// them, so asking any of them first only buys BUSY round trips: start at the slot after the enclosing host, or
+    /// on a private host when that is past the last slot.
+    /// </summary>
+    private async Task StartPastEnclosingHostAsync(string enclosingHostEndpoint, CancellationToken ct)
+    {
+        int first = FirstSlotPastEnclosingHost(enclosingHostEndpoint);
+        if (first > IpcTransportFactory.MaxExecSlots)
+        {
+            await MoveToPrivateHostAsync(ct).ConfigureAwait(false);
+            return;
+        }
+        _slot = first;
+        (_scheme, _endpoint) = IpcTransportFactory.ResolveSlotEndpoint(_scheme, _baseEndpoint, first);
+        await EnsureHostReachableAsync(ct).ConfigureAwait(false);
+    }
+
+    /// <summary>The first executor slot a launcher inside the host serving <paramref name="enclosingHostEndpoint"/> tries.</summary>
+    internal static int FirstSlotPastEnclosingHost(string enclosingHostEndpoint)
+        => IpcTransportFactory.SlotIndexOf(enclosingHostEndpoint) + 1;
+
+    /// <summary>Every slot is held by our own ancestor chain: run on a private per-invocation host instead.</summary>
+    private async Task MoveToPrivateHostAsync(CancellationToken ct)
+    {
+        _lifetime = Lifetime.PerInvocation;
+        (_scheme, _endpoint) = IpcTransportFactory.ResolvePerInvocationEndpoint();
+        await SpawnPrivateHostAsync(ct).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -803,6 +838,11 @@ public sealed class IpcWorker : IWorker
 
     /// <summary>Test seam: slot endpoints are served by scripted hosts already listening, so skip discovery/spawn.</summary>
     internal bool AssumeSlotHostsReachableForTest { get; set; }
+
+    // Set when the endpoint came from the enclosing host (IpcTransportFactory.ResolveEndpoint): this launcher runs inside
+    // a command of that host's session, so a BUSY slot is (or may be) one of its ancestors and must never be waited on.
+    private bool _insideEnclosingHost;
+    internal bool InsideEnclosingHostForTest { set => _insideEnclosingHost = value; }
     internal int SlotForTest => _slot;
 
     /// <summary>
@@ -814,9 +854,12 @@ public sealed class IpcWorker : IWorker
     /// </summary>
     private async Task YieldToAnotherSlotAsync(System.Diagnostics.Stopwatch busyFor, CancellationToken ct)
     {
-        var meta = HostMetadata.TryRead(_scheme, _endpoint);
+        // Inside an enclosing host's command, every busy slot of the session counts as nested: slot hosts are spawned
+        // detached, so the ancestor chain of a launcher started by slot k's command stops at slot k and never reaches
+        // the host that is waiting on slot k (measured: ~300 ms of contended back-off per nested `bash -c`).
+        var meta = _insideEnclosingHost ? null : HostMetadata.TryRead(_scheme, _endpoint);
         int busyPid = meta?.Pid ?? _cachedHostPid;
-        bool nested = busyPid > 0 && ProcessAncestry.IsDescendantOf(busyPid);
+        bool nested = _insideEnclosingHost || (busyPid > 0 && ProcessAncestry.IsDescendantOf(busyPid));
         bool pinned = meta?.Stateful == true;
 
         if (!nested && (pinned || busyFor.ElapsedMilliseconds < SpillDelayMs()))
@@ -833,9 +876,7 @@ public sealed class IpcWorker : IWorker
             if (nested)
             {
                 // Every slot is occupied by an ancestor chain: a private host is the only safe place left.
-                _lifetime = Lifetime.PerInvocation;
-                (_scheme, _endpoint) = IpcTransportFactory.ResolvePerInvocationEndpoint();
-                await SpawnPrivateHostAsync(ct).ConfigureAwait(false);
+                await MoveToPrivateHostAsync(ct).ConfigureAwait(false);
                 return;
             }
             next = 0; // contended, not nested: go round again; the other launchers will finish

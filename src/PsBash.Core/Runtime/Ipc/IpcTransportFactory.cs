@@ -146,15 +146,24 @@ public static class IpcTransportFactory
     /// fallback — no process then owns the session, so the daemon keeps only its idle timeout.
     /// </summary>
     internal static (string Scheme, string Endpoint) ResolveEndpoint(string? cliOverride, out ProcessIdentity? sessionAnchor)
+        => ResolveEndpoint(cliOverride, out sessionAnchor, out _);
+
+    /// <summary>
+    /// <see cref="ResolveEndpoint(string, out ProcessIdentity?)"/>, also reporting the endpoint of the enclosing host
+    /// (its own sidecar endpoint, a slot or the base) when the launcher joined that host's session. Null otherwise.
+    /// </summary>
+    internal static (string Scheme, string Endpoint) ResolveEndpoint(
+        string? cliOverride, out ProcessIdentity? sessionAnchor, out string? enclosingHostEndpoint)
     {
         sessionAnchor = null;
+        enclosingHostEndpoint = null;
         if (TryParseEndpointSpec(cliOverride, "--ipc-endpoint", out var cli)) return cli;
 
         var envValue = Environment.GetEnvironmentVariable(EndpointEnvVar);
         if (TryParseEndpointSpec(envValue, EndpointEnvVar, out var env)) return env;
 
         if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(SessionEnvVar))
-            && TryResolveEnclosingHostEndpoint(out var hosted, out sessionAnchor))
+            && TryResolveEnclosingHostEndpoint(out var hosted, out sessionAnchor, out enclosingHostEndpoint))
             return hosted;
 
         var user = SanitizeUser(Environment.UserName);
@@ -188,15 +197,18 @@ public static class IpcTransportFactory
     /// starting another full daemon there. A host spawned from here is anchored on the enclosing host, which is alive
     /// for as long as the command that started this launcher. False when no registered host encloses this launcher.
     /// </summary>
-    private static bool TryResolveEnclosingHostEndpoint(out (string Scheme, string Endpoint) endpoint, out ProcessIdentity? anchor)
+    private static bool TryResolveEnclosingHostEndpoint(
+        out (string Scheme, string Endpoint) endpoint, out ProcessIdentity? anchor, out string? hostEndpoint)
     {
         endpoint = default;
         anchor = null;
+        hostEndpoint = null;
         var host = EnclosingHostOverride is { } seam ? seam() : ProcessAncestry.FindEnclosingHost();
         if (host is not { } id) return false;
-        if (EnclosingHostBase(id, HostMetadata.ReadAll(SocketDirectory())) is not { } baseEndpoint) return false;
-        endpoint = ("unix", baseEndpoint);
+        if (EnclosingHostOwnEndpoint(id, HostMetadata.ReadAll(SocketDirectory())) is not { } own) return false;
+        endpoint = ("unix", BaseOfSlotEndpoint(own));
         anchor = id;
+        hostEndpoint = own;
         return true;
     }
 
@@ -206,14 +218,29 @@ public static class IpcTransportFactory
     /// reused is not it). The host writes its sidecar after it binds, so its start time always precedes the record.
     /// </summary>
     internal static string? EnclosingHostBase(ProcessIdentity host, IEnumerable<HostMetadata> sidecars)
+        => EnclosingHostOwnEndpoint(host, sidecars) is { } own ? BaseOfSlotEndpoint(own) : null;
+
+    /// <summary>The endpoint <paramref name="host"/> itself serves (slot or base), per <see cref="EnclosingHostBase"/>'s sidecar rules.</summary>
+    internal static string? EnclosingHostOwnEndpoint(ProcessIdentity host, IEnumerable<HostMetadata> sidecars)
     {
         foreach (var meta in sidecars)
         {
             if (meta.Pid != host.Pid || meta.TransportScheme != "unix") continue;
             if (meta.StartedAt.UtcTicks < host.StartTimeUtcTicks - TimeSpan.TicksPerSecond) continue;
-            return BaseOfSlotEndpoint(meta.Endpoint);
+            return meta.Endpoint;
         }
         return null;
+    }
+
+    /// <summary>
+    /// The executor slot <paramref name="endpoint"/> serves relative to <see cref="BaseOfSlotEndpoint"/>: k for
+    /// <c>…-x{k}</c>, 0 for a base. A hashed slot name is its own base (spills chain from it), so it is slot 0 of that chain.
+    /// </summary>
+    public static int SlotIndexOf(string endpoint)
+    {
+        if (BaseOfSlotEndpoint(endpoint) == endpoint) return 0;
+        int cut = endpoint.LastIndexOf(SlotMarker, StringComparison.Ordinal);
+        return int.Parse(endpoint.AsSpan(cut + SlotMarker.Length), System.Globalization.CultureInfo.InvariantCulture);
     }
 
     /// <summary>
