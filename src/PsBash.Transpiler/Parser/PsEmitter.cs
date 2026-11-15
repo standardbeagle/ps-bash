@@ -12606,7 +12606,9 @@ public static partial class PsEmitter
         // to a temp variable and PowerShell-splat it so word-splitting and
         // empty-word elision match bash. The pipeline process-sub operand is
         // never a pure variable word, so it is unaffected.
-        if (HasUnquotedVarSplatArg(args, pipelineProcessSubIndex) || args.Any(HasIndirectExpansion))
+        // A lone "$@" / "${a[@]}" splats as well: left as one word it was emitted as a double-quoted string, so `cat "$@"`
+        // with two files read one file named "a b", and `f() { grep "$@"; }; f -i x` gave grep the single argument "-i x".
+        if (HasUnquotedVarSplatArg(args, pipelineProcessSubIndex) || args is [var loneArg] && IsQuotedArrayAllWord(loneArg) || args.Any(HasIndirectExpansion))
             return EmitCommandWithSplatArgs(cmdlet + cmdletSwitch, args, EmitPlainArg);
 
         var sb = new StringBuilder(cmdlet).Append(cmdletSwitch);

@@ -1,0 +1,20 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 208
+stdout-length: 33
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" && printf 'Foo\nbar\n' > g; f() { grep "$@"; }; f -i foo g; echo "st=$?"; f -v -e Foo g; echo "st=$?"; f -o -w bar g; echo "st=$?"; h() { head "$@"; }; h -n 1 g; k() { grep -c "$@"; }; k o g
+==== STDOUT ====
+Foo
+st=0
+bar
+st=0
+bar
+st=0
+Foo
+1
+
+==== STDERR ====
+

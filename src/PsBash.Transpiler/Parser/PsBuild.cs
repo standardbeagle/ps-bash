@@ -866,8 +866,11 @@ public static class PsBuild
     /// The text every bash function body starts with (<c>function f {</c> + this + body + <see cref="FunctionEpilogue"/>
     /// <c>}</c>): save/restore of <c>$global:BashPositional</c> so a recursive call sees its own <c>$1 $@ $#</c>. Also
     /// the signature <c>declare -f</c>/<c>-F</c> use to tell a bash-defined function from the runtime's own.
+    /// A call <c>f -i x</c> is emitted bare, so PowerShell marks the <c>-i</c> in <c>$args</c> as a parameter name, and
+    /// a later splat (<c>grep "$@"</c>) bound it as one ("-i" is ambiguous / a prefix of InputObject). Each string is
+    /// re-read as a plain <c>[string]</c>, which drops that mark; other values (a FileInfo, an int) are kept as they are.
     /// </summary>
-    public const string FunctionPrologue = " $__bp = $global:BashPositional; $global:BashPositional = @() + $args; [PsBash.Cmdlets.VarFrameStack]::EnterFunction(); try { ";
+    public const string FunctionPrologue = " $__bp = $global:BashPositional; $global:BashPositional = @(foreach ($__psba in $args) { if ($__psba -is [string]) { [string]$__psba } else { $__psba } }); [PsBash.Cmdlets.VarFrameStack]::EnterFunction(); try { ";
 
     /// <summary>The text every bash function body ends with (see <see cref="FunctionPrologue"/>).</summary>
     public const string FunctionEpilogue = " } finally { [PsBash.Cmdlets.VarFrameStack]::ExitFunction(); $global:BashPositional = $__bp } ";

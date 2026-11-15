@@ -2279,8 +2279,10 @@ public class PsEmitterTests
         // Inside a double-quoted string the expansion is interpolated into the
         // string (no null-arg hazard), so the array subexpression must be the
         // string-embeddable `$(...)` form, not `@(...)`.
+        // "${!arr[@]}" is one argument per key, alone or beside another word: the key list is splatted.
         var result = PsEmitter.Transpile("echo \"${!arr[@]}\"");
-        Assert.Contains("$(if ($arr -is [System.Collections.IDictionary])", result);
+        Assert.Contains("$__bashsplat0 = @(@(if ($arr -is [System.Collections.IDictionary])", result);
+        Assert.Contains("Invoke-BashEcho @__bashsplat0", result);
     }
 
     [Fact]
@@ -7765,9 +7767,9 @@ public class PsEmitterTests
     [Fact]
     public void Transpile_BarePositionalAll_UnaffectedBySliceParsing()
     {
-        // The suffix-less ${@} must keep its dedicated expansion.
+        // The suffix-less ${@} must keep its dedicated expansion; alone it splats, one argument per parameter.
         Assert.Equal(
-            "Invoke-BashEcho \"$(if ($global:BashPositional) { $global:BashPositional } else { $args })\"",
+            "& { $__bashsplat0 = @($(if ($global:BashPositional) { $global:BashPositional } else { $args })); Invoke-BashEcho @__bashsplat0 }",
             PsEmitter.Transpile("echo \"${@}\""));
     }
 
