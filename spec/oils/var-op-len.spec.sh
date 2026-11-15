@@ -53,7 +53,9 @@ case $SH in dash) exit ;; esac
 unset LC_ALL 
 
 # note: this may depend on the CI machine config
-LANG=en_US.UTF-8
+# ps-bash: C.UTF-8 instead of en_US.UTF-8, which the recording host did not have (setlocale failed, so the
+# second LC_ALL= kept the C locale of the first iteration's LC_ALL=C and U+10000 counted 4 bytes).
+LANG=C.UTF-8
 
 #LC_ALL=en_US.UTF-8
 
@@ -70,11 +72,10 @@ done
 len=1
 len=2
 
-len=4
+len=1
 len=4
 
 ## END
 ## status: 0
-## XFAIL ps-bash gap-lc-all-c-bytes LC_ALL=C does not make strings bytes: ${#s} and ? count characters (strings are UTF-16 text)
 ## timeout: 10
 ## real-launcher

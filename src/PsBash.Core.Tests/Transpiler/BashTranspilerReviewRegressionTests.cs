@@ -981,7 +981,7 @@ public class BashTranspilerReviewRegressionTests
     [Fact]
     public void Transpile_ElementLengthAndScalarCount_UseTheElement()
     {
-        Assert.Contains(".Length", BashTranspiler.Transpile("echo ${#a[0]}"));
+        Assert.Contains("BashLocale]::Length(", BashTranspiler.Transpile("echo ${#a[0]}"));
         Assert.Contains("elseif ($null -ne $env:c) { 1 }", BashTranspiler.Transpile("echo ${#c[@]}"));
     }
 

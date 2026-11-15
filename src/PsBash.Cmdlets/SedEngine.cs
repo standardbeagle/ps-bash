@@ -290,7 +290,9 @@ internal sealed class SedEngine
                     bool subbed = false;
                     Match? first = null;
                     if (Dbg) _psBeforeSubst = _ps;
-                    _ps = cmd.Regex!.Replace(_ps, m =>
+                    // A byte regex (`s/\xce//`) matches the pattern space one char per byte, then it is text again.
+                    string subject = cmd.Bytes ? PsBash.Core.RawBytes.ToByteChars(_ps) : _ps;
+                    _ps = cmd.Regex!.Replace(subject, m =>
                     {
                         count++;
                         first ??= m;
@@ -298,6 +300,7 @@ internal sealed class SedEngine
                         if (hit) subbed = true;
                         return hit ? m.Result(cmd.Replacement!) : m.Value;
                     });
+                    if (cmd.Bytes) _ps = PsBash.Core.RawBytes.FromByteChars(_ps);
                     if (Dbg && first != null) DbgRegisters(first);
                     if (subbed)
                     {

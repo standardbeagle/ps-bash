@@ -991,7 +991,45 @@ public sealed class InvokeBashSedCommand : PSCmdlet
         public string? SrcRegex;       // s: the regex as typed (--debug prints it)
         public string? SrcReplacement; // s: the replacement as typed (--debug prints it)
         public bool IgnoreCase, Multiline, Eval; // s flags I/i, M/m, e
+        public bool Bytes;             // s: the regex names a lone byte (\xce), so it matches the pattern space's bytes
         public int EndPos;             // where this command ended in its expression (diagnostics)
+    }
+
+    /// <summary>
+    /// A sed regex <c>\xHH</c> of 0x80 or more is ONE BYTE (GNU: <c>s/\xce//g</c> removes the first byte of each
+    /// <c>μ</c>, CE BC). When a regex has one, it is rewritten for byte matching and true is returned: each such escape
+    /// becomes its escaped-byte marker and every other non-ASCII character its bytes' markers
+    /// (<see cref="RawBytes.ToByteChars"/>), and the command then runs on the pattern space's bytes. An escaped
+    /// backslash (<c>\\xce</c>) is not an escape.
+    /// </summary>
+    internal static bool TryRewriteByteEscapes(ref string pattern)
+    {
+        if (pattern.IndexOf("\\x", StringComparison.Ordinal) < 0) return false;
+        var sb = new StringBuilder(pattern.Length);
+        bool any = false;
+        for (int i = 0; i < pattern.Length; i++)
+        {
+            char c = pattern[i];
+            if (c == '\\' && i + 1 < pattern.Length)
+            {
+                if (pattern[i + 1] == 'x' && i + 3 < pattern.Length
+                    && byte.TryParse(pattern.AsSpan(i + 2, 2), System.Globalization.NumberStyles.AllowHexSpecifier, null, out byte b)
+                    && b >= 0x80)
+                {
+                    sb.Append(RawBytes.ToMarker(b));
+                    any = true;
+                    i += 3;
+                    continue;
+                }
+                sb.Append(c).Append(pattern[i + 1]);
+                i++;
+                continue;
+            }
+            sb.Append(c);
+        }
+        if (!any) return false;
+        pattern = RawBytes.ToByteChars(sb.ToString());
+        return true;
     }
 
     /// <summary>
@@ -1745,6 +1783,8 @@ public sealed class InvokeBashSedCommand : PSCmdlet
                 // → real control chars, \& and \\ → literal & and \, and a literal
                 // $ → $$ (else .NET would read it as a group reference).
                 replacement = BuildReplacement(replacement);
+                bool byteMatch = TryRewriteByteEscapes(ref searchPattern);
+                if (byteMatch) replacement = RawBytes.ToByteChars(replacement);
 
                 var regexOpts = RegexOptions.None;
                 // Flag letters only count before a `w FILE` tail (the file name may contain an `i`).
@@ -1788,6 +1828,7 @@ public sealed class InvokeBashSedCommand : PSCmdlet
                     Multiline = multiline,
                     Eval = evalFlag,
                     FileName = wFile,
+                    Bytes = byteMatch,
                 };
             }
             case 'd':

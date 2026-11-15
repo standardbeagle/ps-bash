@@ -9761,7 +9761,7 @@ public static partial class PsEmitter
             if (System.Text.RegularExpressions.Regex.IsMatch(subscript, @"^[\w+\-*/% ]+$") || BashParser.FindSubscriptClose(bvs.Suffix, 2) == bvs.Suffix.Length - 1)
             {
                 string elemLen = EmitBracedVar(bvs with { Suffix = "[" + subscript + "]" });
-                return $"$(([string]({elemLen})).Length)";
+                return $"$([PsBash.Cmdlets.BashLocale]::Length([string]({elemLen})))";
             }
         }
 
@@ -9971,7 +9971,8 @@ public static partial class PsEmitter
         {
             // `${##}`: $# is a number, so its length is that of its text.
             if (varRef.Contains("BashPositional") && varRef.Contains(".Count")) varRef = $"([string]{varRef})";
-            return inDoubleQuote ? $"$({varRef}.Length)" : $"{varRef}.Length";
+            // Characters, or bytes in the C locale (BashLocale); a subexpression in both contexts.
+            return $"$([PsBash.Cmdlets.BashLocale]::Length({varRef}))";
         }
 
         // The `:`-prefixed forms act when the variable is unset OR EMPTY.
@@ -10077,20 +10078,21 @@ public static partial class PsEmitter
         // replacement is doubled because .NET reads `$1` / `$&` there.
         static string SubstituteExpr(string open, string varRef, string find, string replace, bool first)
         {
-            string tail = first ? ", 1" : "";
+            // BashLocale.Replace: the match is on characters, or on bytes in the C locale (`?` is one byte).
+            string tail = first ? ", 1" : ", -1";
             // A quoted glob (`[^'><+-.,[]']`): quotes come off, the quoted characters stay literal.
             if (UnquoteGlobPattern(find) is { } unquotedFind) find = unquotedFind;
             string? findExpr = TryEmitSubstitutionOperand(find, backslashEscapes: true);
             string? repExpr = TryEmitSubstitutionOperand(replace, backslashEscapes: true);
             if (findExpr is null && repExpr is null)
-                return $"{open}([regex]{ReplaceFindRegex(find)}).Replace({varRef}, '{SqEsc(replace)}'{tail}))";
+                return $"{open}[PsBash.Cmdlets.BashLocale]::Replace({ReplaceFindRegex(find)}, {varRef}, '{SqEsc(replace)}'{tail}))";
             // An unquoted `$g` is a PATTERN (`g='*'; ${v//$g/-}` replaces the whole value); "$g" is the literal text.
             string regex = findExpr is null ? ReplaceFindRegex(find)
                 : System.Text.RegularExpressions.Regex.IsMatch(find, @"^\$(\w+|\{\w+\})$")
                     ? $"$(if ({findExpr}) {{ '(?:(?=[\\s\\S])|\\A)(?:' + [PsBash.Core.Parser.BashPattern]::ToRegex([string]({findExpr}), $false, $false) + ')' }} else {{ '(?!)' }})"
                     : $"$(if ({findExpr}) {{ [regex]::Escape({findExpr}) }} else {{ '(?!)' }})";
             string rep = repExpr is null ? $"'{SqEsc(replace)}'" : $"({repExpr}).Replace('$', '$$')";
-            return $"{open}([regex]{regex}).Replace({varRef}, {rep}{tail}))";
+            return $"{open}[PsBash.Cmdlets.BashLocale]::Replace({regex}, {varRef}, {rep}{tail}))";
         }
         // The `find` of ${VAR/find/rep}: an extglob pattern is matched as one (`${v//@(a|z)/Y}`);
         // anything else stays the historical LITERAL match (plain-glob find is not modelled).

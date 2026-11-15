@@ -114,6 +114,9 @@ public static class BashFileSystem
     /// </summary>
     public static IEnumerable<TextLine> ReadTextLines(string path, bool skipBinary = false, bool exact = false, bool exactIfBinary = false)
     {
+        // /dev/zero never ends and has no newline, so it is served as unterminated NUL records (the consumer stops it,
+        // `cat /dev/zero | head -c 5`); Windows has no such device, and a line reader would buffer it forever.
+        if (FileSystemHelpers.IsZeroDevice(path)) return skipBinary ? [] : ZeroDeviceLines();
         var fs = OpenRead(path);
         return ReadTextLinesIterator(fs, skipBinary, exact, exactIfBinary);
     }
@@ -127,6 +130,12 @@ public static class BashFileSystem
     /// </summary>
     public static StreamReader OpenRawReader(Stream stream, bool leaveOpen = false)
         => new(stream, RawBytes.Encoding, detectEncodingFromByteOrderMarks: false, bufferSize: 16384, leaveOpen: leaveOpen);
+
+    private static IEnumerable<TextLine> ZeroDeviceLines()
+    {
+        string block = new('\0', 16384);
+        while (true) yield return new TextLine(block, HasTrailingNewline: false);
+    }
 
     private static IEnumerable<TextLine> ReadTextLinesIterator(FileStream fs, bool skipBinary, bool exact, bool exactIfBinary)
     {

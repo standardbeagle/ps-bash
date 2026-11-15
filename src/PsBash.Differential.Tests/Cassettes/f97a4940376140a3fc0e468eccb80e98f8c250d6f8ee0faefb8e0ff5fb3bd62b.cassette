@@ -1,0 +1,16 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 54
+stdout-length: 31
+stderr-length: 0
+==== SCRIPT ====
+printf '%q\n' $'\xff' $'a\tb\xce' $'\xce\xbc' $'\xcea'
+==== STDOUT ====
+$'\377'
+$'a\tb\316'
+μ
+$'\316a'
+
+==== STDERR ====
+

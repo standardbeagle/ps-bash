@@ -84,7 +84,7 @@ public class PsEmitterTests
     {
         var ps = PsEmitter.Transpile("echo \"${var#}}\"")!;
         Assert.DoesNotContain(".Length", ps);
-        Assert.Contains(".Length", PsEmitter.Transpile("echo \"${#var}\""));
+        Assert.Contains("BashLocale]::Length(", PsEmitter.Transpile("echo \"${#var}\""));
     }
 
     [Theory]
@@ -2051,7 +2051,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("echo ${#VAR}");
 
-        Assert.Equal("Invoke-BashEcho $env:VAR.Length", result);
+        Assert.Equal("Invoke-BashEcho $([PsBash.Cmdlets.BashLocale]::Length($env:VAR))", result);
     }
 
     [Fact]
@@ -6102,7 +6102,7 @@ public class PsEmitterTests
     public void Transpile_ParamReplaceAll_EmitsEscapedLiteralReplace()
     {
         var result = PsEmitter.Transpile("echo ${str//foo/bar}");
-        Assert.Contains("([regex][regex]::Escape('foo')).Replace($env:str, 'bar')", result);
+        Assert.Contains("([PsBash.Cmdlets.BashLocale]::Replace([regex]::Escape('foo'), $env:str, 'bar', -1))", result);
     }
 
     // ${p//./_} -> the dot must be a LITERAL, not a regex "any char". Regression for
@@ -6111,7 +6111,7 @@ public class PsEmitterTests
     public void Transpile_ParamReplaceAllRegexMetachar_EscapesFind()
     {
         var result = PsEmitter.Transpile("echo ${p//./_}");
-        Assert.Contains("([regex][regex]::Escape('.')).Replace($env:p, '_')", result);
+        Assert.Contains("([PsBash.Cmdlets.BashLocale]::Replace([regex]::Escape('.'), $env:p, '_', -1))", result);
     }
 
     // ${name:0:2} -> substring
@@ -6276,7 +6276,7 @@ public class PsEmitterTests
     public void Transpile_BracedVarLengthInsideDoubleQuotes_EmitsSubexpression()
     {
         var result = PsEmitter.Transpile("echo \"${#VAR}\"");
-        Assert.Equal("Invoke-BashEcho \"$($env:VAR.Length)\"", result);
+        Assert.Equal("Invoke-BashEcho \"$([PsBash.Cmdlets.BashLocale]::Length($env:VAR))\"", result);
     }
 
     [Fact]

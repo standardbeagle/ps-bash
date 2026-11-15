@@ -195,4 +195,29 @@ public class RawBytesTests
         // is not binary data and gets the standard U+FFFD replacement.
         Assert.Equal(new byte[] { 0xEF, 0xBF, 0xBD }, RawBytes.GetBytes("\uD800"));
     }
+
+    // Byte-char form (C-locale matching): one char per byte, so `?` in a regex matches one byte of μ.
+    [Fact]
+    public void ToByteChars_IsOneCharPerByte_AndFromByteCharsDecodesBack()
+    {
+        string s = "aμ\uDCFFb";
+        string chars = RawBytes.ToByteChars(s);
+        Assert.Equal("a\uDCCE\uDCBC\uDCFFb", chars);
+        Assert.Equal(s, RawBytes.FromByteChars(chars));
+    }
+
+    [Fact]
+    public void ByteChars_AsciiIsUnchanged()
+    {
+        Assert.Equal("abc", RawBytes.ToByteChars("abc"));
+        Assert.Equal("abc", RawBytes.FromByteChars("abc"));
+    }
+
+    [Fact]
+    public void FromByteChars_SplitCharacter_LeavesTheLoneByteAsAMarker()
+    {
+        // sed 's/\xce//' on μ leaves the lone byte BC.
+        Assert.Equal("\uDCBCa", RawBytes.FromByteChars("\uDCBCa"));
+        Assert.Equal(new byte[] { 0xBC, 0x61 }, RawBytes.GetBytes(RawBytes.FromByteChars("\uDCBCa")));
+    }
 }

@@ -714,6 +714,22 @@ internal static class FileSystemHelpers
     }
 
     /// <summary>
+    /// True when <paramref name="path"/> is bash's <c>/dev/zero</c>: the path itself, or on Windows the drive-rooted
+    /// form an operand is normalized to (<c>C:/dev/zero</c>) when no such file exists. As an operand or a redirect
+    /// source it is an endless run of NUL bytes (<see cref="BashFileSystem.ReadTextLines"/>).
+    /// </summary>
+    public static bool IsZeroDevice(string? path)
+    {
+        if (string.IsNullOrEmpty(path)) return false;
+        string slashed = path.Replace('\\', '/');
+        if (slashed == "/dev/zero") return true;
+        return OperatingSystem.IsWindows()
+            && slashed.Length == 11 && char.IsAsciiLetter(slashed[0]) && slashed[1] == ':'
+            && slashed.EndsWith("/dev/zero", StringComparison.OrdinalIgnoreCase)
+            && !File.Exists(path);
+    }
+
+    /// <summary>
     /// Applies a compiled chmod mode (<see cref="FileModeSpec"/>) to a directory. Unix sets the exact
     /// permission bits (<see cref="File.SetUnixFileMode(string, UnixFileMode)"/>, which also carries
     /// setuid/setgid/sticky). Windows has no mode bits and no faithful ACL mapping, so only the

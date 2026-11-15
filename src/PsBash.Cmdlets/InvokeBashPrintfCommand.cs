@@ -574,19 +574,28 @@ public sealed class InvokeBashPrintfCommand : PSCmdlet
     private const int MaxPrintfField = 1_000_000;
     /// <summary>
     /// bash <c>%q</c>: the argument quoted so the shell reads it back as the same word. Backslash-escapes
-    /// metacharacters; a control character switches to the <c>$'...'</c> form; the empty string is <c>''</c>.
+    /// metacharacters; a control character or a byte that is not part of a valid UTF-8 character (an escaped-byte
+    /// marker, <see cref="PsBash.Core.RawBytes"/>) switches to the <c>$'...'</c> form, where such a byte is written
+    /// <c>\ooo</c> (<c>$'\xce'</c> is <c>$'\316'</c>); the empty string is <c>''</c>.
     /// </summary>
     internal static string ShellQuote(string s)
     {
         if (s.Length == 0) return "''";
         bool control = false;
-        foreach (char c in s) if (c < ' ' || c == '\u007f') { control = true; break; }
+        for (int k = 0; k < s.Length; k++)
+            if (s[k] < ' ' || s[k] == '\u007f' || PsBash.Core.RawBytes.IsMarkerAt(s, k)) { control = true; break; }
         var sb = new StringBuilder();
         if (control)
         {
             sb.Append("$'");
-            foreach (char c in s)
+            for (int k = 0; k < s.Length; k++)
             {
+                char c = s[k];
+                if (PsBash.Core.RawBytes.IsMarkerAt(s, k))
+                {
+                    sb.Append('\\').Append(Convert.ToString(PsBash.Core.RawBytes.FromMarker(c), 8));
+                    continue;
+                }
                 switch (c)
                 {
                     case '\n': sb.Append("\\n"); break;

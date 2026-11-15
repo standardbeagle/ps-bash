@@ -391,6 +391,6 @@ $SH -c 'cat tmp.txt | cat | head -c 5 | tr \\0 0; echo'
 00000
 ## END
 ## status: 0
-## XFAIL ps-bash gap-cat-dev-zero-operand cat /dev/zero as an operand maps to C:/dev/zero (not found); only the < /dev/zero redirect form reads zeros
+## XFAIL ps-bash gap-nested-shell-startup-slow the first line runs $SH -c under timeout 0.5, and starting a nested ps-bash takes over 0.5 s (about 1.4 s with a warm host), so it is killed and prints nothing; the other three lines, cat /dev/zero as an operand included, match
 ## timeout: 10
 ## real-launcher

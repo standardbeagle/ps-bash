@@ -200,6 +200,28 @@ public static class RawBytes
         return countOnly ? Utf8Enc.GetByteCount(seg) : Utf8Enc.GetBytes(seg, dest.Slice(at));
     }
 
+    // -- Byte-chars: one char per byte --------------------------------------------------------
+
+    /// <summary>
+    /// <paramref name="s"/> with ONE char per byte of its encoding: an ASCII byte as itself, every byte
+    /// &gt;= 0x80 (each byte of a multibyte character too) as its marker. Matching on this form is byte
+    /// matching (<c>?</c> / <c>.</c> is one byte, as in the C locale or sed's <c>\xce</c>);
+    /// <see cref="FromByteChars"/> turns the result back into text.
+    /// </summary>
+    public static string ToByteChars(string s)
+        => System.Text.Ascii.IsValid(s) ? s : BytesToChars(GetBytes(s));
+
+    /// <summary>The text of a byte-chars string: its bytes decoded again (valid UTF-8 as characters,
+    /// any other byte &gt;= 0x80 as its marker).</summary>
+    public static string FromByteChars(string s)
+        => System.Text.Ascii.IsValid(s) ? s : GetString(GetBytes(s));
+
+    private static string BytesToChars(byte[] bytes)
+        => string.Create(bytes.Length, bytes, static (dst, src) =>
+        {
+            for (int i = 0; i < src.Length; i++) dst[i] = src[i] < 0x80 ? (char)src[i] : (char)(0xDC00 + src[i]);
+        });
+
     // -- The Encoding / Encoder / Decoder -----------------------------------------------------
 
     /// <summary>UTF-8 with escaped-byte markers, as a normal <see cref="System.Text.Encoding"/>.</summary>
