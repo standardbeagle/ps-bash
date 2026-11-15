@@ -1,0 +1,22 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 245
+stdout-length: 26
+stderr-length: 0
+==== SCRIPT ====
+d=$(mktemp -d); cd "$d"; cat > s.sh <<'PSBASH_EOF'
+set -u; echo before; echo $x; echo after
+echo line2=$?
+f() { echo ${q:?boom}; echo inf; }; f; echo s2
+echo end=$?
+PSBASH_EOF
+bash -i -c "$(cat s.sh)" 2>/dev/null; echo "rc=$?"; cd /; rm -rf "$d"
+==== STDOUT ====
+before
+line2=1
+end=1
+rc=0
+
+==== STDERR ====
+

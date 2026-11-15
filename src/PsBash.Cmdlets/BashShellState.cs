@@ -294,4 +294,42 @@ public sealed class BashParamErrorException : Exception
         ex.Data["psbash.exitcode"] = message == "bad substitution" ? 1 : 127;
         return ex;
     }
+
+    /// <summary>
+    /// An expansion error that discards the rest of the shell's current input line (bash jump_to_top_level(DISCARD)):
+    /// a bad substitution, an invalid indirect name. The line's <see cref="BashLineDiscard"/> scope catches it (status 1)
+    /// and the shell reads the next line; a subshell scope ends its subshell.
+    /// </summary>
+    public static BashParamErrorException Discard(string name, string? message)
+    {
+        var ex = Reported(name, message);
+        ex.Data["psbash.exitcode"] = 1;
+        ex.Data["psbash.discard"] = true;
+        return ex;
+    }
+}
+
+/// <summary>
+/// The scope around each top-level command of a script, <c>-c</c> string, eval or sourced text whose expansions can
+/// discard the line (<c>PsBuild.DiscardLineScope</c>). While one is open (<see cref="Armed"/>) the runtime throws
+/// <see cref="BashParamErrorException.Discard"/> for such an error; outside any (a function defined by text that had
+/// none) it keeps the older per-command abandon mark.
+/// </summary>
+public static class BashLineDiscard
+{
+    [ThreadStatic] private static int t_depth;
+
+    public static bool Armed => t_depth > 0;
+
+    public static void Enter() => t_depth++;
+
+    public static void Leave() { if (t_depth > 0) t_depth--; }
+
+    /// <summary>
+    /// Whether the line scope ends <paramref name="ex"/> (and the shell goes on): a discard error always; in an
+    /// interactive shell (<c>bash -i -c</c>) also a parameter error (<c>x: unbound variable</c>, <c>${x:?}</c>), which
+    /// ends a non-interactive one.
+    /// </summary>
+    public static bool Discards(Exception? ex) =>
+        ex?.Data["psbash.discard"] is true || InvokeBashShoptCommand.InteractiveShell;
 }

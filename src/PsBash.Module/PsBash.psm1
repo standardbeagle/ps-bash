@@ -153,13 +153,15 @@ function Get-BashIndirectValue {
         # (`arr=(); ${!arr}`) is neither.
         if (-not $refSet -and $RefName -and $RefName -ne 'OPTIND') {
             $global:LASTEXITCODE = 1
-            $global:__BashExpansionFailed = "$($at.ScriptLineNumber):$($at.OffsetInLine)"
             Write-BashHostStderr "bash: ${RefName}: invalid indirect expansion"
+            if ([PsBash.Cmdlets.BashLineDiscard]::Armed) { throw [PsBash.Cmdlets.BashParamErrorException]::Discard("${RefName}: ", 'invalid indirect expansion') }
+            $global:__BashExpansionFailed = "$($at.ScriptLineNumber):$($at.OffsetInLine)"
         }
         elseif ($null -ne $Ref) {
             $global:LASTEXITCODE = 1
-            $global:__BashExpansionFailed = "$($at.ScriptLineNumber):$($at.OffsetInLine)"
             Write-BashHostStderr "bash: : invalid variable name"
+            if ([PsBash.Cmdlets.BashLineDiscard]::Armed) { throw [PsBash.Cmdlets.BashParamErrorException]::Discard(': ', 'invalid variable name') }
+            $global:__BashExpansionFailed = "$($at.ScriptLineNumber):$($at.OffsetInLine)"
         }
         return $null
     }
@@ -205,8 +207,9 @@ function Get-BashIndirectValue {
     if ($n -notmatch '^[A-Za-z_][A-Za-z0-9_]*$') {
         # bash: `${!a}` with a='bad var name' is "invalid variable name"; the command is abandoned with status 1.
         $global:LASTEXITCODE = 1
-        $global:__BashExpansionFailed = "$($at.ScriptLineNumber):$($at.OffsetInLine)"
         Write-BashHostStderr "bash: ${n}: invalid variable name"
+        if ([PsBash.Cmdlets.BashLineDiscard]::Armed) { throw [PsBash.Cmdlets.BashParamErrorException]::Discard("${n}: ", 'invalid variable name') }
+        $global:__BashExpansionFailed = "$($at.ScriptLineNumber):$($at.OffsetInLine)"
         return $null
     }
     # Variables bash computes on each read (the emitter inlines a direct `$RANDOM` etc. the same way); $Line is the
@@ -233,6 +236,12 @@ function Get-BashIndirectValue {
 # abandoned (the mark is this call's script position, as Get-BashIndirectValue sets it). Under bash -c the rest of the
 # command string is discarded, so the shell ends as for a parameter error.
 function Write-BashExpansionError([string]$Prefix, [string]$Message) {
+    # Inside a line scope (PsBuild.DiscardLineScope) bash's DISCARD: the rest of this input line is dropped, status 1,
+    # and the shell reads the next line (a -c string too).
+    if ([PsBash.Cmdlets.BashLineDiscard]::Armed) {
+        Write-BashHostStderr "bash: ${Prefix}${Message}"
+        throw [PsBash.Cmdlets.BashParamErrorException]::Discard($Prefix, $Message)
+    }
     if ($env:PSBASH_DASH_C -eq '1') {
         $pe = [PsBash.Cmdlets.BashParamErrorException]::Reported($Prefix, $Message)
         Write-Error ('ps-bash: ' + $pe.Message) -ErrorAction Continue

@@ -42,6 +42,14 @@ public static partial class PsEmitter
     /// input line (<c>echo *.ZZ; echo x</c> prints nothing), so commands that share a line are guarded (see EmitCommandList).</summary>
     [ThreadStatic]
     private static bool _lineAbandonMode;
+    /// <summary>The root command of the text being transpiled: its top-level commands are the input lines bash reads,
+    /// which a discarding expansion error ends one at a time (PsBuild.DiscardLineScope, EmitCommandList).</summary>
+    [ThreadStatic]
+    private static Command? _rootCommand;
+    /// <summary><c>bash -i -c</c> (the launcher's psbash_interactive prelude) under <c>set -u</c>: an unbound variable
+    /// discards its input line instead of ending the shell, so every top-level command gets the line scope.</summary>
+    [ThreadStatic]
+    private static bool _discardInteractive;
     /// <summary>The script reads PIPESTATUS, so a plain command records its own status there.</summary>
     [ThreadStatic]
     private static bool _pipeStatusMode;
@@ -886,6 +894,7 @@ public static partial class PsEmitter
         _unitFunctions = null;
         var priorPipefail = _pipefailMode;
         var priorFailglob = _lineAbandonMode;
+        var priorRoot = _rootCommand; var priorDiscardInteractive = _discardInteractive;
         _lineAbandonMode = priorFailglob || bash.Contains("failglob", StringComparison.Ordinal);
         var priorNounset = _nounsetMode;
         _nounsetMode = priorNounset || InheritedNounset || bash.Contains("nounset", StringComparison.Ordinal)
@@ -936,7 +945,12 @@ public static partial class PsEmitter
             CollectAliasDefs(cmd, bash);
             if (aliasesSpliced) { _aliasDefs = null; _aliasStaticOnly = false; } // already expanded in the text
             if (BashParser.SawBadSubstitution) _lineAbandonMode = true;
+            _rootCommand = cmd;
+            _discardInteractive = _nounsetMode && bash.Contains("shopt -s psbash_interactive", StringComparison.Ordinal);
             string body = EmitBody(cmd);
+            // A lone top-level command is its own input line (a list gets the scope per command in EmitCommandList).
+            if (cmd is not Command.CommandList && (_discardInteractive || PsBuild.CanDiscardLine(body)))
+                body = PsBuild.DiscardLineScope(body);
             // eval text (also source, trap, an interactive line): a failed glob or a bad substitution in it abandons the
             // rest of ITS line only; the line that ran the eval goes on (`eval 'echo *.ZZ'; echo $?` prints 1).
             return _context == TranspileContext.Eval && PsBuild.CanAbandonLine(body) ? PsBuild.EndOfEvalText(body) : body;
@@ -962,6 +976,7 @@ public static partial class PsEmitter
             _errexitExemptDepth = priorExempt;
             _pipefailMode = priorPipefail;
             _lineAbandonMode = priorFailglob;
+            _rootCommand = priorRoot; _discardInteractive = priorDiscardInteractive;
             _nounsetMode = priorNounset;
             _unitFunctions = priorUnitFunctions;
             _definedFunctions = priorDefined;
@@ -8273,8 +8288,10 @@ public static partial class PsEmitter
     {
         bool pipeable = body is Command.Simple or Command.Pipeline
                         && !PsBuild.IsStatementList(inner);
-        // `${x:?}` inside ends only the substitution (bash: a subshell), so it needs the scope that catches it.
+        // `${x:?}` inside ends only the substitution (bash: a subshell), so it needs the scope that catches it; so does
+        // an expansion that can discard the line (`$(echo ${!r})` ends only the substitution).
         return pipeable && CannotChangeShellState(body) && !inner.Contains("BashParamErrorException", StringComparison.Ordinal)
+            && !PsBuild.CanDiscardLine(inner)
             ? inner : PsBuild.ShellStateScope(WithSubshellExitTrap(inner));
     }
 
@@ -10883,6 +10900,10 @@ public static partial class PsEmitter
 
     private static string EmitCommandList(Command.CommandList list)
     {
+        // The top-level commands of the text: each may need the line scope of a discarding expansion error, which is
+        // known only once they are emitted (a function defined on one line and called on another), so they are kept.
+        var rootPieces = ReferenceEquals(list, _rootCommand) ? new List<(string Text, bool SameLine, bool LineStarts)>() : null;
+        bool[]? parsedLineStarts = rootPieces is not null ? BashParser.LineStartsOf(list) : null;
         list = list with { Commands = ResolveLastArgRefs(list.Commands) };
         var sb = new StringBuilder();
         for (int i = 0; i < list.Commands.Length; i++)
@@ -10893,8 +10914,30 @@ public static partial class PsEmitter
             // `exec >&2; rest`: the rest of the list runs under the shell-wide redirection.
             if (i + 1 < list.Commands.Length && StdExecRedirects(list.Commands[i]) is { } execRedirects)
             {
-                sb.Append(EmitStatement(RestUnderExecRedirects(list.Commands.RemoveRange(0, i + 1), execRedirects)));
+                string underExec = EmitStatement(RestUnderExecRedirects(list.Commands.RemoveRange(0, i + 1), execRedirects));
+                sb.Append(underExec);
+                rootPieces?.Add((underExec, false, false));
                 break;
+            }
+            if (rootPieces is not null)
+            {
+                // The parser's record of which commands begin a line; else the lines of their simple commands (none
+                // known for a compound command).
+                bool onPriorLine, nextOnThisLine;
+                if (parsedLineStarts is not null)
+                {
+                    onPriorLine = i > 0 && !parsedLineStarts[i];
+                    nextOnThisLine = i + 1 < list.Commands.Length && !parsedLineStarts[i + 1];
+                }
+                else
+                {
+                    int priorLine = i > 0 ? LastSimpleLine(list.Commands[i - 1]) : 0;
+                    int thisLine = FirstSimpleLine(list.Commands[i]);
+                    onPriorLine = priorLine > 0 && priorLine == thisLine;
+                    nextOnThisLine = i + 1 < list.Commands.Length && thisLine > 0
+                        && FirstSimpleLine(list.Commands[i + 1]) == LastSimpleLine(list.Commands[i]);
+                }
+                rootPieces.Add(("", onPriorLine, !onPriorLine && nextOnThisLine));
             }
             // failglob / bad substitution: bash abandons the rest of the input line, so a command that shares its line
             // with the one before runs only if nothing failed since the line began (the mark: $global:__BashFailGlob).
@@ -10906,12 +10949,33 @@ public static partial class PsEmitter
             if (lineStarts) sb.Append(PsBuild.FailGlobReset);
             string statement = EmitStatement(list.Commands[i]);
             sb.Append(sameLine ? PsBuild.UnlessGlobFailed(statement) : statement);
+            if (rootPieces is not null) rootPieces[^1] = rootPieces[^1] with { Text = statement };
             if (_readonlyViolation)
             {
                 if (_scriptPosix && _functionDepth == 0) break;
                 int failedLine = SourceLine(list.Commands[i]);
                 while (failedLine > 0 && i + 1 < list.Commands.Length && SourceLine(list.Commands[i + 1]) == failedLine) i++;
             }
+        }
+        if (rootPieces is not null && (_discardInteractive || rootPieces.Exists(p => PsBuild.CanDiscardLine(p.Text))))
+            return DiscardLineScopes(rootPieces);
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// The top-level commands, each in its line scope (PsBuild.DiscardLineScope): a bad substitution or an invalid
+    /// indirect name ends its command and, through the line mark, the commands after it on its input line; the next
+    /// line runs (bash: <c>echo ${x!y}; echo same</c> newline <c>echo next</c> prints only next, a <c>-c</c> string too).
+    /// </summary>
+    private static string DiscardLineScopes(List<(string Text, bool SameLine, bool LineStarts)> pieces)
+    {
+        var sb = new StringBuilder();
+        foreach (var (text, sameLine, lineStarts) in pieces)
+        {
+            if (sb.Length > 0) sb.Append("; ");
+            if (lineStarts) sb.Append(PsBuild.FailGlobReset);
+            string scoped = PsBuild.DiscardLineScope(text);
+            sb.Append(sameLine ? PsBuild.UnlessGlobFailed(scoped) : scoped);
         }
         return sb.ToString();
     }

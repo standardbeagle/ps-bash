@@ -213,21 +213,38 @@ public sealed partial class BashParser
         // command.
         var commands = ImmutableArray.CreateBuilder<Command>();
         commands.Add(ParseListStatement(AtEndOfInputOnly, "ParseList"));
+        var startsLine = new List<bool> { true };
 
         while (true)
         {
+            int before = _pos;
             SkipTopLevelTerminators();
             if (Peek().Kind == BashTokenKind.Eof)
                 break;
 
+            bool newline = false;
+            for (int t = before; t < _pos; t++)
+                newline |= _tokens[t].Kind == BashTokenKind.Newline;
+            startsLine.Add(newline);
             commands.Add(ParseListStatement(AtEndOfInputOnly, "ParseList"));
         }
 
         if (commands.Count == 1)
             return commands[0];
 
-        return new Command.CommandList(commands.ToImmutable());
+        var list = new Command.CommandList(commands.ToImmutable());
+        s_lineStarts.AddOrUpdate(list, startsLine.ToArray());
+        return list;
     }
+
+    // For each top-level command of a parsed text: whether it begins an input line (a newline, not `;` or `&`, comes
+    // before it). Kept beside the AST, which has no end line for a compound command (`for ...; done; echo x`).
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Command.CommandList, bool[]> s_lineStarts = new();
+
+    /// <summary>Whether each command of the top-level <paramref name="list"/> begins an input line; null when the list
+    /// was not made by the parser's top level.</summary>
+    internal static bool[]? LineStartsOf(Command.CommandList list)
+        => s_lineStarts.TryGetValue(list, out var starts) && starts.Length == list.Commands.Length ? starts : null;
 
     // Parse a unit that MUST consume at least one token, else the operand is missing
     // (a dangling `&&`/`||`/`|`, a leading binary operator, or EOF) — reject cleanly

@@ -1,0 +1,21 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 229
+stdout-length: 55
+stderr-length: 0
+==== SCRIPT ====
+f() { local "lv=inner" 'lq=$x'; echo "in=$lv $lq"; }
+lv=outer; lq=keep; f; echo "out=$lv $lq"
+g() { local "lw=a b" "n"=1; echo "$lw $n"; }
+unset lw n; g; echo "lw=${lw-unset} n=${n-unset}"
+h() { export "ex=v"; }; h; echo "ex=$ex"
+==== STDOUT ====
+in=inner $x
+out=outer keep
+a b 1
+lw=unset n=unset
+ex=v
+
+==== STDERR ====
+

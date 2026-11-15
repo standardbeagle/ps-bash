@@ -465,6 +465,80 @@ public sealed partial class BashParser
         return sb.ToString();
     }
 
+    /// <summary>
+    /// A declaration operand whose quoted text holds the <c>=</c> (<c>"x=v"</c>, <c>'x=$y'</c>, <c>"x"=v</c>,
+    /// <c>"x=$y"</c>) as the assignment it is after quote removal: the parts before the <c>=</c> must be static text
+    /// forming NAME or NAME+, and the value must be quoted or plain text, so expanding it as an assignment value
+    /// (no splitting, no globbing, no tilde) gives what bash's ordinary word expansion gives. Null otherwise.
+    /// </summary>
+    internal static Assignment? QuotedDeclarationAssignment(string raw)
+    {
+        var parts = DecomposeWord(raw, braceExpansion: false);
+        var name = new System.Text.StringBuilder();
+        for (int i = 0; i < parts.Length; i++)
+        {
+            string? text = parts[i] switch
+            {
+                WordPart.Literal l => l.Value,
+                WordPart.EscapedLiteral e => e.Value,
+                WordPart.SingleQuoted s => s.Value,
+                _ => null,
+            };
+            WordPart? rest = null;
+            int eq;
+            if (text is not null)
+            {
+                eq = text.IndexOf('=');
+                if (eq < 0) { name.Append(text); continue; }
+                name.Append(text, 0, eq);
+                string after = text[(eq + 1)..];
+                rest = parts[i] switch
+                {
+                    WordPart.SingleQuoted => new WordPart.SingleQuoted(after),
+                    WordPart.EscapedLiteral => new WordPart.EscapedLiteral(after),
+                    _ => new WordPart.Literal(after),
+                };
+            }
+            else if (parts[i] is WordPart.DoubleQuoted dq)
+            {
+                int k = 0;
+                eq = -1;
+                for (; k < dq.Parts.Length; k++)
+                {
+                    string? inner = dq.Parts[k] switch { WordPart.Literal l => l.Value, WordPart.EscapedLiteral e => e.Value, _ => null };
+                    if (inner is null) return null;
+                    eq = inner.IndexOf('=');
+                    if (eq >= 0) { name.Append(inner, 0, eq); break; }
+                    name.Append(inner);
+                }
+                if (eq < 0) continue;
+                var tail = ImmutableArray.CreateBuilder<WordPart>();
+                string afterEq = ((dq.Parts[k] as WordPart.Literal)?.Value ?? ((WordPart.EscapedLiteral)dq.Parts[k]).Value)[(eq + 1)..];
+                if (afterEq.Length > 0) tail.Add(new WordPart.Literal(afterEq));
+                tail.AddRange(dq.Parts.Skip(k + 1));
+                rest = new WordPart.DoubleQuoted(tail.ToImmutable());
+            }
+            else return null;
+
+            string n = name.ToString();
+            var op = AssignOp.Equal;
+            if (n.EndsWith('+')) { op = AssignOp.PlusEqual; n = n[..^1]; }
+            if (!IsValidVariableName(n) || i == 0 && parts[i] is WordPart.Literal) return null;
+            var value = ImmutableArray.CreateBuilder<WordPart>();
+            if (rest is not WordPart.Literal { Value.Length: 0 }) value.Add(rest!);
+            foreach (var p in parts.Skip(i + 1))
+            {
+                if (p is WordPart.SingleQuoted or WordPart.DoubleQuoted or WordPart.EscapedLiteral
+                    || p is WordPart.Literal pl && pl.Value.IndexOf('~') < 0)
+                    value.Add(p);
+                else return null;
+            }
+            if (rest is WordPart.Literal rl && rl.Value.IndexOf('~') >= 0) return null;
+            return new Assignment(n, op, new CompoundWord(value.ToImmutable()));
+        }
+        return null;
+    }
+
     private ImmutableArray<Assignment>? ParseDeclarationPairs()
     {
         _declSawReadonly = false;
@@ -526,6 +600,14 @@ public sealed partial class BashParser
                 {
                     Advance();
                     pairs.Add(new Assignment(unquoted, AssignOp.Equal, null));
+                    continue;
+                }
+                // `local "x=v"` / `local 'x=$y'` / `export "p"=q`: after quote removal the operand is NAME=VALUE, which
+                // the builtin assigns (and `local` makes local); it was run as a plain command that set a global.
+                if (QuotedDeclarationAssignment(value) is { } quotedPair)
+                {
+                    Advance();
+                    pairs.Add(quotedPair);
                     continue;
                 }
                 return null;

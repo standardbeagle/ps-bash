@@ -948,12 +948,30 @@ public sealed partial class BashParser
         // and mis-parsed the nested substitution.
         // Inside double quotes \" loses its backslash too: "x `echo \"hi\"`" runs echo "hi".
         inner = UnescapeBacktickInner(inner, inDoubleQuote);
-        var body = Parse(inner);
+        // bash parses a backtick body only when the substitution runs: a syntax error in it (`echo \\"`, the
+        // unescaped `echo \\\\"`) is reported then, the substitution is empty with status 2, and the command
+        // holding it goes on. A $( ) body is parsed with the script, so its syntax error stays fatal.
+        Command? body;
+        try { body = Parse(inner); }
+        catch (ParseException ex) when (ex.Rule is not ("nesting" or "breadth"))
+        {
+            body = BacktickSyntaxErrorBody(ex);
+        }
         parts.Add(new WordPart.CommandSub(body ?? new Command.Simple(
             ImmutableArray<CompoundWord>.Empty,
             ImmutableArray<EnvPair>.Empty,
             ImmutableArray<Redirect>.Empty)));
         return pos;
+    }
+
+    /// <summary>
+    /// The run-time stand-in for a backtick body that does not parse: bash's report on stderr
+    /// (<c>bash: command substitution: line N: MSG</c>) and status 2, from the substitution's own shell.
+    /// </summary>
+    internal static Command? BacktickSyntaxErrorBody(ParseException ex)
+    {
+        string report = "bash: command substitution: line " + Math.Max(1, ex.Line) + ": " + ex.Message;
+        return Parse("printf '%s\\n' '" + report.Replace("'", "'\\''") + "' >&2; (exit 2)");
     }
 
     /// <summary>

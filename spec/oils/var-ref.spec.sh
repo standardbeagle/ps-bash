@@ -584,7 +584,6 @@ check_indir "x@Q"     y
 echo done
 ## stdout: done
 ## status: 0
-## XFAIL ps-bash gap-indirect-invalid-name-not-fatal ${!1} of an invalid name (!x, x:-foo, a[0) is reported and the function goes on; bash abandons the whole command (a -c shell exits)
 ## timeout: 10
 
 #### Bad var ref
