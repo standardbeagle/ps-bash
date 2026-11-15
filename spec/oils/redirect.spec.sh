@@ -74,28 +74,18 @@ echo DONE
 #   - You actually have to set the file descriptor to something.  What do
 #   configure and debootstrap too?
 
-opened=$(ls /proc/$$/fd)
-if echo "$opened" | egrep '^7$'; then
+# - ps-bash: the upstream probe listed /proc/$$/fd, the OS process's descriptors. For ps-bash that process is the
+#   .NET host (Linux: the runtime's own descriptors, 7 among them; Windows: no /proc), not the shell's descriptor
+#   table, so the probe asks the shell instead. The expectation was once recorded with wsl.exe's fds 7 and 10
+#   inherited; the recorder now closes everything above 2 first (WslBashExecutor.HermeticFds).
+
+if { true >&7; } 2>/dev/null; then
   echo "FD 7 shouldn't be open"
-  echo "OPENED:"
-  echo "$opened"
 fi
 
 echo hi 1>&7
-## STDOUT:
-7
-FD 7 shouldn't be open
-OPENED:
-0
-1
-10
-2
-255
-3
-7
-## END
-## status: 0
-## XFAIL ps-bash artifact-recording-host-fd7-open the expectation depends on the recording shell inheriting an open fd 7 (bash -s under wsl.exe has it too); it also lists /proc/$$/fd, which Windows does not have
+## stdout:
+## status: 1
 ## timeout: 10
 
 #### Open descriptor with exec
