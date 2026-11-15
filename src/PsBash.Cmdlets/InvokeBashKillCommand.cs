@@ -81,13 +81,14 @@ public sealed class InvokeBashKillCommand : PSCmdlet
         string? signalName = null;
         var pids = new List<int>();
         var jobSpecs = new List<string>();   // %N / %% / %+ : routed to the in-process background job table
+        bool badArg = false;
 
         int i = 0;
         while (i < args.Length)
         {
             var a = args[i];
 
-            if ((a == "-l" || a == "--list") && i + 1 < args.Length)
+            if ((a == "-l" || a == "-L" || a == "--list") && i + 1 < args.Length)
             {
                 // kill -l SIGSPEC...: a number (or 128+number) prints its name, a name prints its number.
                 int bad = 0;
@@ -121,7 +122,7 @@ public sealed class InvokeBashKillCommand : PSCmdlet
                 FileSystemHelpers.SetLastExitCode(this, bad);
                 return;
             }
-            if (a == "-l" || a == "--list")
+            if (a == "-l" || a == "-L" || a == "--list")
             {
                 // Signal names ordered by signal number (psm1 parity).
                 var names = Signals
@@ -132,7 +133,7 @@ public sealed class InvokeBashKillCommand : PSCmdlet
                     WriteObject(obj);
                 return;
             }
-            if (a == "-s" || a == "--signal")
+            if (a == "-s" || a == "-n" || a == "--signal")
             {
                 i++;
                 if (i < args.Length)
@@ -177,9 +178,20 @@ public sealed class InvokeBashKillCommand : PSCmdlet
             if (mPid.Success) { pids.Add(BashRuntime.ParseCountClamped(mPid.Groups[1].Value)); i++; continue; }
 
             if (int.TryParse(a, out var pidVal)) pids.Add(pidVal);
+            else if (a != "--")
+            {
+                // bash: a word that is neither a number nor a jobspec is reported and skipped (status 1).
+                FileSystemHelpers.WriteBashError(this, $"kill: {a}: arguments must be process or job IDs");
+                badArg = true;
+            }
             i++;
         }
 
+        if (pids.Count == 0 && jobSpecs.Count == 0 && badArg)
+        {
+            FileSystemHelpers.SetLastExitCode(this, 1);
+            return;
+        }
         if (pids.Count == 0 && jobSpecs.Count == 0)
         {
             FileSystemHelpers.WriteBashError(this,
@@ -189,7 +201,7 @@ public sealed class InvokeBashKillCommand : PSCmdlet
         }
 
         bool existenceOnly = signalName == "SIG0";
-        bool hadError = false;
+        bool hadError = badArg;
         bool signalSelf = false;
         int sigNum = SignalNumber(signalName ?? "SIGTERM");
         if (existenceOnly) sigNum = 0;

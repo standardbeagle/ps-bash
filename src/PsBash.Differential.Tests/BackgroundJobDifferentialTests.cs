@@ -34,6 +34,33 @@ public class BackgroundJobDifferentialTests
         await AssertOracle.EqualAsync(script, timeout: TimeSpan.FromSeconds(60), liveOnly: true);
     }
 
+    /// <summary>
+    /// Jobspecs `%%` (current) and `%-` (previous) name a job for `kill` and `wait`; a waited job is gone (127);
+    /// `kill -n N` takes a signal number; `wait zzz` (status 1) and `kill HUP` (status 1, "arguments must be process
+    /// or job IDs") reject a word that is neither a pid nor a jobspec; `kill -L` is `kill -l`. `%-` was "no such
+    /// job", `wait %%` waited for nothing, `-n` and `-L` were ignored (oils builtin-kill, background).
+    /// </summary>
+    [SkippableTheory]
+    [InlineData("{ sleep 30 & kill -15 %%; echo kill=$?; wait %%; echo wait=$?; wait %%; echo wait=$?; } 2>/dev/null")]
+    [InlineData("sleep 30 & sleep 30 & kill -15 %-; echo kill=$?; wait %-; echo wait=$?; kill %%; wait")]
+    [InlineData("{ sleep 30 & p=$!; sleep 30 & kill -n 9 $p; echo kill=$?; wait $p; echo wait=$?; kill %%; wait; } 2>/dev/null")]
+    [InlineData("{ wait zzz; echo w=$?; kill HUP; echo k=$?; kill -L 10 BAD 12; echo l=$?; kill -L | grep -c HUP; } 2>/dev/null")]
+    public async Task Differential_Background_JobspecsAndBadOperands(string script)
+    {
+        await AssertOracle.EqualAsync(script, timeout: TimeSpan.FromSeconds(60), liveOnly: true);
+    }
+
+    /// <summary>
+    /// `jobs -p` prints one process id per job (a pipeline job too); it printed the whole `jobs` listing, four words a
+    /// line (oils background "jobs -p prints one line per job").
+    /// </summary>
+    [SkippableFact]
+    public async Task Differential_Background_JobsDashPPrintsOnePidPerJob()
+    {
+        await AssertOracle.EqualAsync("sleep 30 & a=$!; sleep 30 | cat & jobs -p > jp.txt; wc -l < jp.txt; wc -w < jp.txt; head -n 1 jp.txt | grep -c \"^$a\\$\"; rm -f jp.txt; kill %1 %2; wait",
+            timeout: TimeSpan.FromSeconds(60), liveOnly: true);
+    }
+
     // -----------------------------------------------------------------------
     // cmd &  — backgrounding operator
     // -----------------------------------------------------------------------

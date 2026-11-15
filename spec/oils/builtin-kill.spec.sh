@@ -137,7 +137,6 @@ kill=0
 wait=137
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-kill builtin-kill (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -174,7 +173,6 @@ builtin kill HUP $pid
 echo $?
 ## stdout: 1
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-kill builtin-kill (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -198,7 +196,6 @@ builtin kill -L | grep HUP > /dev/null
 echo $?
 ## stdout: 0
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-kill builtin-kill (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -259,7 +256,6 @@ status=1
 
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-kill builtin-kill (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -300,7 +296,6 @@ wait=143
 wait=127
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-kill builtin-kill (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher
 
@@ -324,6 +319,5 @@ kill=0
 wait=143
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-builtin-kill builtin-kill (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 ## real-launcher

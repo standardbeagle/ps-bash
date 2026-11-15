@@ -2824,6 +2824,33 @@ function Complete-BashBgJob {
 # buffered output forever. Past this many entries Invoke-BashBackground reaps finished jobs first.
 $script:BashBgMaxJobs = 256
 
+function Find-BashBgJob {
+    <#
+    .SYNOPSIS
+        The in-process background job a `kill` / `wait` operand names, or $null: a synthetic `$!` id, or a jobspec
+        %N (the job number shown by `jobs`), %% / %+ / % (the current job: the newest), %- (the previous job).
+    #>
+    param([string]$Spec)
+    $jobs = @($script:BashBgJobs)
+    if ($Spec.StartsWith('%')) {
+        $num = $Spec.Substring(1)
+        if ($num -in @('', '%', '+')) {
+            if ($jobs.Count -gt 0) { return $jobs[$jobs.Count - 1] }
+        } elseif ($num -eq '-') {
+            # bash: the previous job; with a single job it is that job.
+            if ($jobs.Count -gt 1) { return $jobs[$jobs.Count - 2] }
+            if ($jobs.Count -eq 1) { return $jobs[0] }
+        } elseif ($num -match '^\d+$') {
+            $idx = [int]$num - 1
+            if ($idx -ge 0 -and $idx -lt $jobs.Count) { return $jobs[$idx] }
+        }
+    } elseif ($Spec -match '^\d+$') {
+        $wantId = [int]$Spec
+        return $jobs | Where-Object { $_.Id -eq $wantId } | Select-Object -First 1
+    }
+    return $null
+}
+
 function Stop-BashBgJob {
     <#
     .SYNOPSIS
@@ -2832,19 +2859,7 @@ function Stop-BashBgJob {
         A terminating signal stops the job and records 128+signal so `wait` reports it (143 for TERM).
     #>
     param([string]$Spec, [int]$Signal = 15, [bool]$Probe = $false)
-    $job = $null
-    if ($Spec.StartsWith('%')) {
-        $num = $Spec.Substring(1)
-        if ($num -in @('', '%', '+')) {
-            if ($script:BashBgJobs.Count -gt 0) { $job = $script:BashBgJobs[$script:BashBgJobs.Count - 1] }
-        } elseif ($num -match '^\d+$') {
-            $idx = [int]$num - 1
-            if ($idx -ge 0 -and $idx -lt $script:BashBgJobs.Count) { $job = $script:BashBgJobs[$idx] }
-        }
-    } elseif ($Spec -match '^\d+$') {
-        $wantId = [int]$Spec
-        $job = $script:BashBgJobs | Where-Object { $_.Id -eq $wantId } | Select-Object -First 1
-    }
+    $job = Find-BashBgJob $Spec
     if ($null -eq $job) { return $false }
     # SIGCONT / SIGWINCH do not end a job; a finished job is a zombie that kill still finds.
     if ($Probe -or $Signal -in 18, 28 -or $job.Done -or $job.AsyncResult.IsCompleted) { return $true }
@@ -3094,25 +3109,23 @@ function Invoke-BashWait {
         # bash job number (positional, 1-based) shown by `jobs` — NOT the id.
         # The status is that of the LAST operand; an unknown job is 127.
         foreach ($pidArg in $Arguments) {
-            $job = $null
-            if ($pidArg -like '%*') {
-                $wantNum = $pidArg -replace '^%', ''
-                if ([int]::TryParse($wantNum, [ref]$null)) {
-                    $idx = [int]$wantNum - 1
-                    if ($idx -ge 0 -and $idx -lt $script:BashBgJobs.Count) {
-                        $job = @($script:BashBgJobs)[$idx]
-                    }
-                }
-            } elseif ([int]::TryParse($pidArg, [ref]$null)) {
-                $wantId = [int]$pidArg
-                $job = $script:BashBgJobs | Where-Object { $_.Id -eq $wantId } | Select-Object -First 1
+            if ($pidArg -in '-f', '--') { continue }
+            if ($pidArg -notlike '%*' -and $pidArg -notmatch '^\d+$') {
+                # bash: an operand that is neither a pid nor a jobspec is reported; status 1 unless a later operand sets it.
+                Write-BashHostStderr "bash: wait: ``${pidArg}': not a pid or valid job spec"
+                $global:LASTEXITCODE = 1
+                continue
             }
+            $job = Find-BashBgJob $pidArg
             if ($job) {
                 [void]$job.AsyncResult.AsyncWaitHandle.WaitOne()
                 Complete-BashBgJob -Job $job
                 $code = if ($null -eq $job.ExitCode) { 0 } else { [int]$job.ExitCode }
                 [void]$script:BashBgJobs.Remove($job)
                 $global:LASTEXITCODE = $code
+            } elseif ($pidArg -like '%*') {
+                Write-BashHostStderr "bash: wait: ${pidArg}: no such job"
+                $global:LASTEXITCODE = 127
             } else {
                 Write-BashHostStderr "bash: wait: pid $pidArg is not a child of this shell"
                 $global:LASTEXITCODE = 127
@@ -3142,8 +3155,11 @@ function Invoke-BashJobs {
         return
     }
 
+    # -p: only each job's process id (its $! value), one line per job.
+    $pidsOnly = @($Arguments | Where-Object { $_ -match '^-[lnprs]*p[lnprs]*$' }).Count -gt 0
     $i = 1
     foreach ($job in $script:BashBgJobs) {
+        if ($pidsOnly) { New-BashObject -BashText "$($job.Id)`n"; $i++; continue }
         $status = if ($job.AsyncResult.IsCompleted) { 'Done' } else { 'Running' }
         New-BashObject -BashText "[$i]`t$status`t$($job.Id)`tbash-bg`n"
         $i++

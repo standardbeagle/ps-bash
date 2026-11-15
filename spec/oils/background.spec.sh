@@ -31,7 +31,6 @@ wait zzz
 # mksh confuses a syntax error with 'command not found'!
 ## stdout:
 ## status: 1
-## XFAIL ps-bash gap-oils-background background (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### wait for N parallel jobs
@@ -293,7 +292,6 @@ cat tmp.txt | wc -w  # each line is a single "word"
 2
 ## END
 ## status: 0
-## XFAIL ps-bash gap-oils-background background (oils): differs from bash 5.2; see docs/specs/spec-gaps.md
 ## timeout: 10
 
 #### No stderr spew when shell is not interactive
