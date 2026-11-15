@@ -286,6 +286,9 @@ function Write-BashXtrace {
 # those names), then whatever PowerShell can find (a program on PATH). Returns something `&` can call.
 function Resolve-BashCommand {
     param([string]$Name, [object[]]$Words, [switch]$Fed, [switch]$KeepStatus)
+    # A stale eval-return flag (an `eval return` at the top level leaves it) must not make the command about to run
+    # look like a `return` to the check after it (PsEmitter.EmitStatement).
+    $global:__BashEvalReturn = $false
     if ($Fed -or $PSBoundParameters.ContainsKey('Words')) {
         # -Words: an unquoted name (`$SUDO rm f`, `$CC -c x.c`) after word splitting. None: the next operand is the
         # command, and with no operand nothing runs. More than one: the rest lead the operands.
@@ -324,6 +327,39 @@ function Resolve-BashCommand {
         'builtin' { return { if ($args.Count -eq 0) { $global:LASTEXITCODE = 0 } else { Invoke-BashCommand 'builtin' @args } } }
         # `myvar=typeset; $myvar x=$x`: a declaration named at run time; its operands are ordinary (already split) words.
         { $_ -cin 'declare', 'typeset', 'local', 'export', 'readonly' } { return [scriptblock]::Create("Invoke-BashCommand '$Name' @args") }
+        # `b=break; $b`, `c=continue; $c`: a PowerShell break / continue leaves the nearest loop on the CALL stack, so
+        # run from this block it leaves the loop the command sits in (bash's loop keywords are dynamic too).
+        'break'    { return { break } }
+        'continue' { return { continue } }
+        # `r=return; $r 99`: the status, then the eval-return flag; the emitter checks it after a run-time command in
+        # a function (PsEmitter.EmitStatement) and returns from there. At the top level there is nothing to return from.
+        'return' {
+            return {
+                $st = if ($args.Count -gt 0) { [string]$args[0] } else { $null }
+                if ($null -ne $st -and $st -notmatch '^-?[0-9]+$') {
+                    Write-Error ('return: ' + $st + ': numeric argument required') -ErrorAction Continue
+                    $global:LASTEXITCODE = 2
+                } elseif ($null -ne $st) { $global:LASTEXITCODE = (([long]$st % 256) + 256) % 256 }
+                if ([PsBash.Cmdlets.VarFrameStack]::Current.Depth -eq 0) {
+                    Write-Error "return: can only ``return' from a function or sourced script" -ErrorAction Continue
+                    $global:LASTEXITCODE = 2
+                    return
+                }
+                $global:__BashEvalReturn = $true
+            }
+        }
+        # `e=exit; $e 5`: as the literal exit (a word that is not a number is status 2).
+        'exit' {
+            return {
+                $st = if ($args.Count -gt 0) { [string]$args[0] } else { [string]$global:LASTEXITCODE }
+                if ($st -notmatch '^-?[0-9]+$') {
+                    Write-Error ('exit: ' + $st + ': numeric argument required') -ErrorAction Continue
+                    $st = '2'
+                }
+                $global:LASTEXITCODE = [int]((([long]$st % 256) + 256) % 256)
+                exit $global:LASTEXITCODE
+            }
+        }
     }
     $cmd = Get-Command -Name ('Invoke-Bash' + [WildcardPattern]::Escape($Name)) -CommandType Cmdlet, Function -ErrorAction Ignore
     if ($cmd) { return $cmd.Name }

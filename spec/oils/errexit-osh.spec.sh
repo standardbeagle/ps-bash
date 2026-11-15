@@ -33,7 +33,6 @@ one
 parent status=0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-inherit-errexit-unimplemented shopt -s inherit_errexit does not make set -e apply inside $( ), so the substitution keeps running after a failure
 ## timeout: 10
 
 #### strict_errexit and assignment builtins (local, export, readonly ...)
@@ -204,7 +203,6 @@ one
 parent status=0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-inherit-errexit-unimplemented shopt -s inherit_errexit does not make set -e apply inside $( ), so the substitution keeps running after a failure
 ## timeout: 10
 
 #### command sub: last command fails but keeps going and exit code is 0
@@ -291,7 +289,6 @@ status=0
 one
 ## END
 ## status: 0
-## XFAIL ps-bash gap-inherit-errexit-unimplemented shopt -s inherit_errexit does not make set -e apply inside $( ), so the substitution keeps running after a failure
 ## timeout: 10
 
 #### global assignment when last status is failure

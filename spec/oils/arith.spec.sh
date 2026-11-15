@@ -6,7 +6,6 @@ a=(4 5 6)
 echo "${a[b=2]} b=$b"
 ## stdout: 6 b=2
 ## status: 0
-## XFAIL ps-bash gap-arith-subscript-assignment ${a[b=2]} reads the subscript as the text b=2 instead of evaluating it as arithmetic
 ## timeout: 10
 
 #### Add one to var

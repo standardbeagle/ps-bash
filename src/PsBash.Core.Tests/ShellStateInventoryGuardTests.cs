@@ -33,6 +33,7 @@ public class ShellStateInventoryGuardTests
         ["__BashTestBad"] = "one-statement hand-off from Invoke-BashTestInt/[[ =~ ]] to the emitted status-2 wrapper, reset before each test",
         ["BashHookErrors"] ="diagnostic buffer, per runspace",
         ["__BashEvalDepth"] = "eval recursion counter; a job process starts at 0",
+        ["__BashEvalReturn"] = "one-command hand-off: set by a return that eval text or a run-time command name ran, read and cleared by the check right after it",
         ["__BashBaselineFunctions"] = "names of the functions every host defines at startup; read by BashStateSnapshot",
     };
 

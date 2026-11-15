@@ -27,6 +27,6 @@ SHELL is set
 SHELL is set
 ## END
 ## status: 0
-## XFAIL ps-bash gap-shell-var-default SHELL is not set at startup when the environment lacks it (bash sets it from the passwd entry)
+## XFAIL ps-bash gap-shell-var-default SHELL is not set at startup when the environment lacks it (bash sets it from the passwd entry without exporting it; every ps-bash variable lives in the environment, gap-vars-always-exported, so setting it would hand it to every child)
 ## timeout: 10
 ## real-launcher

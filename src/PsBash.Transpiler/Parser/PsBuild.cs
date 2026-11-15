@@ -481,6 +481,24 @@ public static class PsBuild
     public static string StderrLine(string message) =>
         "Write-Error -Message " + SingleQuote(message) + " -ErrorAction Continue";
 
+    /// <summary>True while <c>set -o posix</c> is on (a remembered option of InvokeBashShoptCommand).</summary>
+    public const string PosixOn = "[PsBash.Cmdlets.InvokeBashShoptCommand]::SetOptionOn('posix')";
+
+    /// <summary>
+    /// <paramref name="posixForm"/> while <c>set -o posix</c> is on, else <paramref name="normalForm"/>: a special builtin
+    /// behaves differently in POSIX mode (a prefix assignment persists, it wins over a function of its name), and the
+    /// option is only known at run time.
+    /// </summary>
+    public static string PosixElse(string posixForm, string normalForm) =>
+        "if (" + PosixOn + ") { " + posixForm + " } else { " + normalForm + " }";
+
+    /// <summary>
+    /// <c>name() { ...; }</c> where name is a special builtin, in POSIX mode: bash reports
+    /// <c>`name': is a special builtin</c> and a non-interactive shell ends with status 2.
+    /// </summary>
+    public static string SpecialBuiltinRedefined(string name) =>
+        StderrLine("bash: `" + name + "': is a special builtin") + "; " + SetStatus(2) + "; exit 2";
+
     // ──────────────────────── Exit-code propagation (&& / || chains) ───────────────────
 
     /// <summary>
@@ -664,6 +682,16 @@ public static class PsBuild
     /// </summary>
     public static string ErrexitSuppressed(string statements) =>
         ErrexitSuppressVar + "++; try { " + statements + " } finally { " + ErrexitSuppressVar + "-- }";
+
+    /// <summary>
+    /// A command substitution's body under <c>set -e</c> in a script that mentions <c>inherit_errexit</c>: its statements
+    /// carry errexit checks, and whether they may fire is decided at run time. With <c>shopt -s inherit_errexit</c> the
+    /// substitution inherits <c>-e</c> (<c>$(echo one; false; echo two)</c> is <c>one</c>); without it the body runs
+    /// suppressed, exactly as <see cref="ErrexitSuppressed"/> (bash turns <c>-e</c> off in a substitution).
+    /// </summary>
+    public static string InheritErrexitCapture(string statements) =>
+        "$__psbash_ie = [PsBash.Cmdlets.InvokeBashShoptCommand]::ShoptOn('inherit_errexit'); if (-not $__psbash_ie) { "
+        + ErrexitSuppressVar + "++ }; try { " + statements + " } finally { if (-not $__psbash_ie) { " + ErrexitSuppressVar + "-- } }";
 
     /// <summary>
     /// <see cref="ErrexitSuppressed"/> for a boolean CONDITION expression (<c>if</c>/<c>while</c>):

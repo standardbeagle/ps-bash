@@ -181,5 +181,4 @@ main
 test_func
 ## stdout: g = global
 ## status: 1
-## XFAIL ps-bash gap-source-in-function-defs-not-global a function defined by a file sourced inside a function is not visible after that function returns (test_func: command not found)
 ## timeout: 10

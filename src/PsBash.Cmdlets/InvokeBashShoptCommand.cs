@@ -125,6 +125,9 @@ public sealed class InvokeBashShoptCommand : PSCmdlet
     /// <summary>Current value of a shell option in the calling runspace (false for an unknown name).</summary>
     internal static bool IsEnabled(string name) => Options.TryGetValue(name, out var on) && on;
 
+    /// <summary><see cref="IsEnabled"/> for emitted code (<c>inherit_errexit</c>: PsBuild.InheritErrexitCapture).</summary>
+    public static bool ShoptOn(string name) => IsEnabled(name);
+
     /// <summary>A copy of the calling runspace's option table (<see cref="BashShellState"/>: subshell scope).</summary>
     internal static Dictionary<string, bool> SnapshotOptions() => new(Options, StringComparer.Ordinal);
 

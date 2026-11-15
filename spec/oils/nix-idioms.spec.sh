@@ -143,7 +143,6 @@ declare -x NIX_LDFLAGS_foo=" -Lone/lib64"
 declare -x NIX_LDFLAGS_foo=" -Lone/lib64"
 ## END
 ## status: 0
-## XFAIL ps-bash gap-export-dynamic-name export NAME${x}+=v is "export: command not found" and export "$name" does not export the variable
 ## timeout: 10
 
 #### let idiom can be written in POSIX shell - eval ": \$(( ))"

@@ -144,6 +144,10 @@ public static partial class PsEmitter
     /// </summary>
     [ThreadStatic] private static bool _runtimeReadonly;
     [ThreadStatic] private static bool _scriptPosix;
+    // The command or function definition EmitPosixSpecialBuiltin / EmitFunction is emitting both forms of (no re-split).
+    [ThreadStatic] private static object? _posixSplitNode;
+    /// <summary>The script mentions <c>inherit_errexit</c>: command substitutions under errexit get checks (EmitCapturedCore).</summary>
+    [ThreadStatic] private static bool _inheritErrexitMode;
     [ThreadStatic] private static bool _scriptLastpipe;
 
     /// <summary><c>declare -n ref=target</c> in the script being emitted: <c>ref</c> reads and writes <c>target</c>.
@@ -378,6 +382,11 @@ public static partial class PsEmitter
         string text = EmitStatementCore(cmd);
         if (_xtraceMode && TryEmitXtrace(cmd) is { } trace)
             text = trace + "; " + text;
+        // `r=return; $r 99`: a command named at run time may turn out to be `return` (Resolve-BashCommand), which can
+        // only raise the eval-return flag; the function (or eval text) it ran in returns here, as after an eval.
+        if (cmd is Command.Simple && _subshellDepth == 0 && (_functionDepth > 0 || _context == TranspileContext.Eval)
+            && text.Contains("Resolve-BashCommand", StringComparison.Ordinal))
+            text += "; " + PsBuild.EvalReturnCheck(inFunction: _functionDepth > 0);
         return text;
     }
 
@@ -726,9 +735,12 @@ public static partial class PsEmitter
         // Otherwise set -e is not inherited, but under errtrace the ERR trap runs inside (`x=$( false; echo y )` traps):
         // a scoped body turns errexit off and keeps its statements' checks, so only the trap half can fire.
         bool trapInside = !ownErrexit && _errtraceMode && scoped;
+        // `shopt -s inherit_errexit`: the substitution keeps -e. The body gets its checks; at run time they may fire only
+        // while the option is on (PsBuild.InheritErrexitCapture). A scoped body returns from its own scope when one does.
+        bool inheritErrexit = !ownErrexit && !trapInside && scoped && _errexitMode && _inheritErrexitMode;
         int savedLineBase = _lineBase;
         if (PsBuild.TrapLine > 0) _lineBase = PsBuild.TrapLine - 1;
-        if (ownErrexit || trapInside) { _errexitMode = true; _errexitExemptDepth = 0; }
+        if (ownErrexit || trapInside || inheritErrexit) { _errexitMode = true; _errexitExemptDepth = 0; }
         else _errexitExemptDepth++;
         // A substitution body is a SUBSHELL: `exit N` inside `$( … )` / `<( … )` leaves only it
         // (`v=$(exit 3); echo $?` prints 3). Raise the depth so `exit` emits the scoped `return`;
@@ -743,6 +755,8 @@ public static partial class PsEmitter
                 return "$global:__BashErrexit = $false; " + PsBuild.ErrexitSuppressVar + " = 0; " + text;
             if (trapInside)
                 return "$global:__BashErrexit = $false; " + text;
+            if (inheritErrexit)
+                return PsBuild.InheritErrexitCapture(text);
             return _errexitMode && ConditionRunsCommand(body) ? PsBuild.ErrexitSuppressed(text) : text;
         }
         finally
@@ -847,6 +861,8 @@ public static partial class PsEmitter
         var priorLastpipe = _scriptLastpipe;
         _scriptLastpipe = priorLastpipe || bash.Contains("lastpipe");
         _scriptPosix = priorPosix || bash.Contains("set -o posix");
+        var priorInheritErrexit = _inheritErrexitMode;
+        _inheritErrexitMode = priorInheritErrexit || bash.Contains("inherit_errexit", StringComparison.Ordinal);
         _scriptReadsLastArg = priorReadsLastArg || System.Text.RegularExpressions.Regex.IsMatch(bash, @"\$(_(?![A-Za-z0-9_])|\{_[^A-Za-z0-9_])");
         _scriptReadsStatus = priorReadsStatus || bash.Contains("$?") || bash.Contains("${?");
         var priorReadonly = _readonlyVars;
@@ -881,7 +897,10 @@ public static partial class PsEmitter
         _debugTrapMode = System.Text.RegularExpressions.Regex.IsMatch(bash, @"\btrap\s+(?:'[^'\n]*'|\x22[^\x22\n]*\x22)\s+DEBUG\b")
             && bash.Split('\n').Count(l => l.Trim() is { Length: > 0 } t && t[0] != '#') >= 3;
         var priorDeclarePrint = _declarePrintMode;
-        _declarePrintMode = System.Text.RegularExpressions.Regex.IsMatch(bash, @"\b(?:declare|typeset)\s+(?:-[a-zA-Z]+\s+)*-[a-zA-Z]*p")
+        // Eval and sourced text cannot see the `declare -p` that will print what they declare (it is in the caller), so
+        // they always record the attributes.
+        _declarePrintMode = _context == TranspileContext.Eval
+            || System.Text.RegularExpressions.Regex.IsMatch(bash, @"\b(?:declare|typeset)\s+(?:-[a-zA-Z]+\s+)*-[a-zA-Z]*p")
             || System.Text.RegularExpressions.Regex.IsMatch(bash, @"\bexport\s*(?:-p\s*)?(?:[|;&)}]|\r?\n|$)");
         _trapMode = System.Text.RegularExpressions.Regex.IsMatch(bash, @"\btrap\b");
         _xtraceMode = System.Text.RegularExpressions.Regex.IsMatch(bash, @"\bset\s+(?:-[a-zA-Z]+\s+)*(?:-[a-zA-Z]*x|-o\s+xtrace)");
@@ -933,6 +952,7 @@ public static partial class PsEmitter
             _finalAssignment = priorFinalAssignment;
             _scriptReadsLastArg = priorReadsLastArg;
             _scriptPosix = priorPosix;
+            _inheritErrexitMode = priorInheritErrexit;
             _scriptLastpipe = priorLastpipe;
             _readonlyVars = priorReadonly;
             _runtimeReadonly = priorRuntimeReadonly;
@@ -2078,6 +2098,14 @@ public static partial class PsEmitter
 
     private static string EmitFunction(Command.ShFunction func)
     {
+        // `set -o posix`: a function may not take a special builtin's name (bash ends the shell, status 2).
+        if (_scriptPosix && !ReferenceEquals(_posixSplitNode, func) && s_posixSpecialBuiltins.Contains(func.Name))
+        {
+            var priorNode = _posixSplitNode;
+            _posixSplitNode = func;
+            try { return PsBuild.PosixElse(PsBuild.SpecialBuiltinRedefined(func.Name), EmitFunction(func)); }
+            finally { _posixSplitNode = priorNode; }
+        }
         // `$foo-bar() { :; }` / `foo-$(x)() { :; }`: the name is not expanded, so it is not a valid identifier (status 1).
         if (func.Name.AsSpan().IndexOfAny('$', '`') >= 0)
             return $"Write-Error {PsBuild.SingleQuote("`" + func.Name + "': not a valid identifier")} -ErrorAction Continue; {PsBuild.SetStatus(1)}";
@@ -2162,7 +2190,9 @@ public static partial class PsEmitter
                 sb.Append("Remove-Item -LiteralPath ").Append(PsBuild.SingleQuote("Alias:" + func.Name)).Append(" -Force -ErrorAction SilentlyContinue; ");
             // `outer() { inner() { :; }; }` defines `inner` for the whole shell when `outer` runs; a PowerShell
             // function declared in a function body would die with it.
-            sb.Append("function ").Append(_functionDepth > 0 ? "global:" : "").Append(func.Name);
+            // Eval and sourced text run in the scope of whatever ran them, often a function: `main() { . ./lib.sh; }`
+            // defines lib.sh's functions for the whole shell too.
+            sb.Append("function ").Append(_functionDepth > 0 || _context == TranspileContext.Eval ? "global:" : "").Append(func.Name);
             sb.Append(" {").Append(PsBuild.FunctionPrologue).Append(PsBuild.FunctionSourceMark(func.Source));
             if (dynLocals.Count > 0)
             {
@@ -4349,6 +4379,16 @@ public static partial class PsEmitter
                 evalWords.Add(QuotedFieldsForEval(w, "%s"));
                 continue;
             }
+            // `export NIX_LDFLAGS${role_post}+=" -L$1/lib64"`: a name glued to an expansion is not an assignment word, so
+            // bash expands it like an ordinary operand (split, globbed) and the builtin reads NAME+=VALUE from the result.
+            // Each field reaches the eval quoted (${w@Q}), as above. It fell to command lookup: "export: command not found".
+            // Not `local`: a quoted NAME=VALUE operand of local is assigned without a local frame (it outlives the function).
+            if (name == "export" && w.Parts.Any(IsExpansion) && w.Parts.Any(p => p is WordPart.Literal { Value: var l } && l.Contains('=')))
+            {
+                anyDynamic = true;
+                evalWords.Add(QuotedFieldsForEval(w, "%s "));
+                continue;
+            }
             return false;
         }
         if (!anyDynamic) return false;
@@ -4542,7 +4582,10 @@ public static partial class PsEmitter
             string markReadonly = name == "readonly" ? "; [PsBash.Cmdlets.BashShellState]::MarkReadonly($__psbD.Substring(0, $__psbI))" : "";
             if (name == "readonly") _runtimeReadonly = true;
             sbOut.Append($"$__psbD = {expr}; $__psbI = $__psbD.IndexOf('='); ")
-                 .Append("if ($__psbI -gt 0) { Set-Item -LiteralPath ('Env:' + $__psbD.Substring(0, $__psbI)) -Value $__psbD.Substring($__psbI + 1)" + markReadonly + " }; ");
+                 .Append("if ($__psbI -gt 0) { Set-Item -LiteralPath ('Env:' + $__psbD.Substring(0, $__psbI)) -Value $__psbD.Substring($__psbI + 1)" + markReadonly)
+                 // `export "$k=$v"`: `declare -p` shows the x attribute, as for a literal `export X=1`.
+                 .Append(name == "export" && _declarePrintMode ? "; [PsBash.Cmdlets.BashShellState]::MarkAttribute($__psbD.Substring(0, $__psbI), 'x')" : "")
+                 .Append(" }; ");
         }
         sbOut.Append(PsBuild.SetStatus(0));
         result = sbOut.ToString();
@@ -4689,6 +4732,13 @@ public static partial class PsEmitter
     private static string EmitSimple(Command.Simple cmd)
     {
         cmd = ExpandAliases(cmd);
+        // `set -o posix` (bash): a prefix assignment before a special builtin stays set after it (`foo=bar :`), and the
+        // builtin wins over a function of its name. The option is known only at run time, so a script that names it
+        // gets both forms.
+        if (_scriptPosix && !ReferenceEquals(_posixSplitNode, cmd) && cmd.Words.Length > 0
+            && GetLiteralValue(cmd.Words[0]) is { } posixName && s_posixSpecialBuiltins.Contains(posixName)
+            && (!cmd.EnvPairs.IsEmpty || _definedFunctions?.Contains(posixName) == true))
+            return EmitPosixSpecialBuiltin(cmd, posixName);
         // `local +n ref`: inside a function `local` is `typeset`, whose path reads a `+` flag (the parser takes only `-`).
         if (_functionDepth > 0 && cmd.Words.Length > 1 && GetLiteralValue(cmd.Words[0]) == "local"
             && cmd.Words.Skip(1).Any(w => GetLiteralValue(w) is ['+', _, ..]))
@@ -5540,6 +5590,35 @@ public static partial class PsEmitter
         }
         result = string.Join("; ", steps);
         return true;
+    }
+
+    // POSIX special builtins (exec and exit aside: a prefix before them is never seen again).
+    private static readonly HashSet<string> s_posixSpecialBuiltins = new(StringComparer.Ordinal)
+        { ":", ".", "break", "continue", "eval", "export", "readonly", "return", "set", "shift", "times", "trap", "unset" };
+
+    /// <summary>
+    /// A special builtin under a run-time <c>set -o posix</c> check: in POSIX mode its prefix assignments are plain
+    /// assignments made first (they persist), and a function of the same name is passed over; otherwise the usual form.
+    /// </summary>
+    private static string EmitPosixSpecialBuiltin(Command.Simple cmd, string name)
+    {
+        var priorNode = _posixSplitNode;
+        var priorFns = _definedFunctions;
+        try
+        {
+            var bare = cmd with { EnvPairs = [] };
+            if (priorFns is not null && priorFns.Contains(name))
+                _definedFunctions = new HashSet<string>(priorFns.Where(n => n != name), priorFns.Comparer);
+            _posixSplitNode = bare;
+            string posix = cmd.EnvPairs.IsEmpty
+                ? EmitSimple(bare)
+                : EmitShAssignment(new Command.ShAssignment([.. cmd.EnvPairs.Select(p => new Assignment(p.Name, AssignOp.Equal, p.Value))]))
+                  + "; " + EmitSimple(bare);
+            _definedFunctions = priorFns;
+            _posixSplitNode = cmd;
+            return PsBuild.PosixElse(posix, EmitSimple(cmd));
+        }
+        finally { _definedFunctions = priorFns; _posixSplitNode = priorNode; }
     }
 
     private static bool TryEmitSpecialBuiltins(Command.Simple cmd, out string result)
@@ -10393,7 +10472,9 @@ public static partial class PsEmitter
             return $"$(if ({arrayVar} -is [System.Collections.IDictionary]) {{ {dyn} }} else {{ [long](Invoke-BashArith {dyn}) }})";
         }
         string key = PsBuild.SingleQuote(subscript);
-        if (!System.Text.RegularExpressions.Regex.IsMatch(subscript, @"^[\w+\-*/% ()\[\]]+$"))
+        // `${a[b=2]}` / `${a[i<2?0:1]}` / `${a[i++]}`: every arithmetic operator (assignments too, whose side effect
+        // persists) is evaluated on an indexed array; an associative array still takes the text as its key.
+        if (!System.Text.RegularExpressions.Regex.IsMatch(subscript, @"^[\w+\-*/% ()\[\]=<>!&|^~?:,]+$"))
             return key;
         return $"$(if ({arrayVar} -is [System.Collections.IDictionary]) {{ {key} }} else {{ [long](Invoke-BashArith {key}) }})";
     }

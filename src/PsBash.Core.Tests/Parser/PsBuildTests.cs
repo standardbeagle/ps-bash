@@ -35,6 +35,27 @@ public class PsBuildTests
             + "if ($global:__BashRedirectFailed) { $global:__BashRedirectFailed = $false; $global:LASTEXITCODE = 1; CHECK }",
             PsBuild.RedirectFailureChecked("& { x } | Invoke-BashRedirect -Path f", "CHECK"));
 
+    // ─────────────── InheritErrexitCapture / PosixElse / SpecialBuiltinRedefined ───────────────
+
+    // `shopt -s inherit_errexit`: a substitution keeps set -e only while the option is on; otherwise it runs suppressed,
+    // and the counter is put back however the body ends.
+    [Fact]
+    public void InheritErrexitCapture_SuppressesErrexitUnlessTheOptionIsOn() =>
+        Assert.Equal(
+            "$__psbash_ie = [PsBash.Cmdlets.InvokeBashShoptCommand]::ShoptOn('inherit_errexit'); if (-not $__psbash_ie) { "
+            + PsBuild.ErrexitSuppressVar + "++ }; try { BODY } finally { if (-not $__psbash_ie) { " + PsBuild.ErrexitSuppressVar + "-- } }",
+            PsBuild.InheritErrexitCapture("BODY"));
+
+    [Fact]
+    public void PosixElse_TestsTheRunTimeOption() =>
+        Assert.Equal("if ([PsBash.Cmdlets.InvokeBashShoptCommand]::SetOptionOn('posix')) { P } else { N }", PsBuild.PosixElse("P", "N"));
+
+    // Oracle: `set -o posix; eval() { :; }` prints "`eval': is a special builtin" and the shell ends with status 2.
+    [Fact]
+    public void SpecialBuiltinRedefined_ReportsAndEndsWithStatusTwo() =>
+        Assert.Equal("Write-Error -Message 'bash: `eval'': is a special builtin' -ErrorAction Continue; $global:LASTEXITCODE = 2; exit 2",
+            PsBuild.SpecialBuiltinRedefined("eval"));
+
     // ─────────────── ParenSafeLiteral / UnlessExpansionFailed ───────────────
 
     [Theory]

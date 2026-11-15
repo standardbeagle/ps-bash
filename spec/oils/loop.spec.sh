@@ -257,7 +257,6 @@ status=99
 - exit
 ## END
 ## status: 5
-## XFAIL ps-bash GAP-2 a builtin keyword reached through a variable ($b where b=break) is "command not found"
 ## timeout: 10
 
 #### \break \continue \return \exit

@@ -54,7 +54,6 @@ foo=bar
 z=
 ## END
 ## status: 0
-## XFAIL ps-bash gap-posix-mode-special-builtins set -o posix is not implemented: a prefix assignment before a special builtin does not persist, and a special builtin can still be redefined as a function
 ## timeout: 10
 ## real-launcher
 
@@ -76,7 +75,6 @@ foo=bar
 spam=eggs
 ## END
 ## status: 127
-## XFAIL ps-bash gap-posix-mode-special-builtins set -o posix is not implemented: a prefix assignment before a special builtin does not persist, and a special builtin can still be redefined as a function
 ## timeout: 10
 ## real-launcher
 
@@ -127,7 +125,6 @@ eval() {
 eval 'echo hi'
 ## stdout: hi
 ## status: 2
-## XFAIL ps-bash gap-posix-mode-special-builtins set -o posix is not implemented: a prefix assignment before a special builtin does not persist, and a special builtin can still be redefined as a function
 ## timeout: 10
 ## real-launcher
 
@@ -220,7 +217,6 @@ after posix
 function
 ## END
 ## status: 0
-## XFAIL ps-bash gap-posix-mode-special-builtins set -o posix is not implemented: a prefix assignment before a special builtin does not persist, and a special builtin can still be redefined as a function
 ## timeout: 10
 ## real-launcher
 
