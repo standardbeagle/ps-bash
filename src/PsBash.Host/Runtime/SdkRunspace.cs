@@ -178,6 +178,9 @@ internal sealed class SdkRunspace : IAsyncDisposable
         // behaviour for SDK callers who skipped ISS pre-reg.
         runspace.SessionStateProxy.SetVariable(
             "PsBashCmdletsAlreadyLoaded", issPreRegistered);
+        // This runspace runs transpiled bash: the shell has already globbed every unquoted operand, so a cmdlet must
+        // take what it receives literally (`head 'two-*'` names the file two-*). FileSystemHelpers.OperandsShellExpanded.
+        runspace.SessionStateProxy.SetVariable("__BashOperandsExpanded", true);
 
         using var ps = PowerShell.Create();
         ps.Runspace = runspace;

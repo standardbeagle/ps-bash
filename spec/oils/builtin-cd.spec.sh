@@ -86,7 +86,7 @@ before foo
 after foo
 ## END
 ## status: 0
-## XFAIL ps-bash platform-windows-paths Windows paths: pwd prints C:/... (intentional-differences.md, Platform: paths); also a ps-bash bug: PWD=foo does not change $PWD, which reads the PowerShell location
+## XFAIL ps-bash platform-windows-paths Windows paths: pwd prints C:/... (intentional-differences.md, Platform: paths); PWD=foo itself now matches (before foo / after foo)
 ## timeout: 10
 
 #### unset PWD; then pwd

@@ -1,0 +1,28 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 217
+stdout-length: 33
+stderr-length: 195
+==== SCRIPT ====
+cd "$(mktemp -d)"; echo hi > two-bar
+head 'two-*'; echo st=$?
+tail two-\*; echo st=$?
+cat "two-*" 2>/dev/null; echo st=$?
+wc -l 'two-?ar' 2>/dev/null; echo st=$?
+p='two-*'; head "$p"; echo st=$?
+head two-*; echo st=$?
+==== STDOUT ====
+st=1
+st=1
+st=1
+st=1
+st=1
+hi
+st=0
+
+==== STDERR ====
+head: cannot open 'two-*' for reading: No such file or directory
+tail: cannot open 'two-*' for reading: No such file or directory
+head: cannot open 'two-*' for reading: No such file or directory
+

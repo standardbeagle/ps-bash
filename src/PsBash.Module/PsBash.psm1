@@ -3148,6 +3148,8 @@ function Invoke-BashBackground {
 param($__bgStatus, $__bgRestore)
 # A subshell body's state restore must not touch the process-wide variables the parent shares (BashShellState.Restore).
 $global:__psbashBgRunspace = $true
+# The job body is transpiled bash, whose operands the shell already globbed (FileSystemHelpers.OperandsShellExpanded).
+$global:__BashOperandsExpanded = $true
 $__bgBefore =if ($__bgRestore) { [Environment]::GetEnvironmentVariables() } else { @{} }
 $__bgOk = $false
 try {

@@ -48,10 +48,32 @@ internal static class FileSystemHelpers
         catch (System.Management.Automation.DriveNotFoundException) { return psPath; }
     }
 
+    /// <summary>
+    /// True when the cmdlet runs in a runspace that executes TRANSPILED bash (the ps-bash host sets
+    /// <c>$global:__BashOperandsExpanded</c>, as does a background job's runspace). There the shell has already
+    /// expanded every unquoted pattern, so an operand that still holds <c>*</c> / <c>?</c> / <c>[</c> was quoted or
+    /// escaped and names a file literally: <c>head 'two-*'</c> is "cannot open 'two-*'", never <c>two-bar</c>.
+    /// A direct PowerShell call (<c>Invoke-BashHead *.txt</c>) has no shell in front of it, so the cmdlet keeps
+    /// globbing its operands there.
+    /// </summary>
+    public static bool OperandsShellExpanded(PSCmdlet cmdlet)
+    {
+        try { return LanguagePrimitives.IsTrue(cmdlet.SessionState.PSVariable.GetValue("global:__BashOperandsExpanded")); }
+        catch (InvalidOperationException) { return false; }   // not running in a session (unit-constructed cmdlet)
+    }
+
+    /// <summary>
+    /// Whether a file operand is a pattern the CMDLET must expand: it holds <c>*</c> or <c>?</c> and no shell
+    /// expanded it first (<see cref="OperandsShellExpanded"/>). The per-cmdlet glob slices route through this.
+    /// </summary>
+    public static bool IsCmdletGlobOperand(PSCmdlet cmdlet, string path) =>
+        (path.IndexOf('*') >= 0 || path.IndexOf('?') >= 0) && !OperandsShellExpanded(cmdlet);
+
     public static IEnumerable<string> ResolveOperandPaths(PSCmdlet cmdlet, string raw, bool expandWildcards = true)
     {
         string typed = raw;
         raw = NormalizeOperandPath(raw);
+        expandWildcards = expandWildcards && !OperandsShellExpanded(cmdlet);
         // *, ?, or a [..] character class → wildcard. A lone unmatched '[' matches
         // nothing and falls through to literal passthrough (bash-literal semantics).
         if (!expandWildcards || (raw.IndexOf('*') < 0 && raw.IndexOf('?') < 0 && raw.IndexOf('[') < 0))
@@ -112,6 +134,7 @@ internal static class FileSystemHelpers
     /// </summary>
     public static IEnumerable<OperandPath> ResolveOperands(PSCmdlet cmdlet, string raw, bool expandWildcards = true)
     {
+        expandWildcards = expandWildcards && !OperandsShellExpanded(cmdlet);
         bool wildcard = expandWildcards && (raw.IndexOf('*') >= 0 || raw.IndexOf('?') >= 0 || raw.IndexOf('[') >= 0);
         var paths = new List<string>(ResolveOperandPaths(cmdlet, raw, expandWildcards));
         string? cwd = null;

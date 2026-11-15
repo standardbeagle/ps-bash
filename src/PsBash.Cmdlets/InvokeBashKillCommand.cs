@@ -234,6 +234,15 @@ public sealed class InvokeBashKillCommand : PSCmdlet
                 signalSelf = true;
                 continue;
             }
+            // A subshell's synthetic $BASHPID (BashRuntime.SubshellPidVariable) is no process: the running subshell's
+            // own id is the shell signalling itself, any other one (a subshell that has ended) names nothing.
+            if (BashRuntime.IsSubshellPid(procId))
+            {
+                if (procId == BashRuntime.BashPid(SessionState)) { if (!existenceOnly) signalSelf = true; continue; }
+                FileSystemHelpers.WriteBashError(this, $"kill: ({procId}) - No such process");
+                hadError = true;
+                continue;
+            }
             if (StopBgJob(procId.ToString(System.Globalization.CultureInfo.InvariantCulture))) continue;
             // A background job runs in its own host process: stop its whole tree and let `wait` report the signal.
             if (!probeOnly && PsBash.Core.BackgroundJobTable.TrySignal(procId, SignalNumber(signalName ?? "SIGTERM")))

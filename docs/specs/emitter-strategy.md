@@ -375,10 +375,11 @@ process, so `shopt -s nullglob` in one `-c` command cannot leak into the next on
 so two expansions with two dialects lived side by side and the two sets (`cat` globs only `*`/`?`, `ls`
 also `[`) drifted. Expanding once, in the shell, and handing every command plain names makes the result
 identical for all of them and the decision invisible to the cmdlet. They keep their own globbing for
-DIRECT PowerShell calls (`Invoke-BashCat *.txt`). Because that second expansion still runs on names that
-contain glob characters, `FileSystemHelpers.ResolveOperandPaths` now prefers a name that literally exists
-(`cp sub/*` copies a file called `a[1]` instead of re-globbing it into `a1`). `cat`/`wc` (own `*?`-only
-resolver) can still re-glob a name with `*`/`?` (only possible on Unix) — listed in intentional-differences.md.
+DIRECT PowerShell calls (`Invoke-BashCat *.txt`) only: a runspace that runs transpiled bash carries
+`$global:__BashOperandsExpanded` (set by the host, `SdkRunspace`, and the background-job wrapper), and
+there `FileSystemHelpers.ResolveOperandPaths` / `ResolveOperands` / `IsCmdletGlobOperand` take every operand
+literally — `head 'two-*'` is "cannot open 'two-*'", never `two-bar`. On a direct call
+`ResolveOperandPaths` still prefers a name that literally exists (`a[1]` next to `a1`).
 
 Words that are NOT expanded here: assignment values (`x=*`), `case` patterns, `[[ ]]` operands, redirect
 targets, here-strings. An unquoted `$x` / `$(cmd)` result is split and expanded by

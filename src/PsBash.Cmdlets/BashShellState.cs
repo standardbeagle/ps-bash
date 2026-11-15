@@ -137,6 +137,9 @@ public static class BashShellState
     /// <summary>Capture the state a subshell body may change. Call at the top of the subshell.</summary>
     public static Snapshot Save(SessionState session)
     {
+        // The subshell's own $BASHPID, in the subshell's scope (it ends with it): bash's subshell is a new process.
+        session.PSVariable.Set(BashRuntime.SubshellPidVariable, BashRuntime.NextSubshellPid());
+
         // Through the variable-store seam (BashVariableStoreGuardTests): the store is where bash
         // variables live, so a future per-invocation store keeps subshell scoping correct for free.
         var env = new Dictionary<string, string>(EnvNames);

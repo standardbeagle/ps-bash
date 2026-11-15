@@ -1,0 +1,22 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 116
+stdout-length: 28
+stderr-length: 0
+==== SCRIPT ====
+g() { local -n r=$1; echo "read=$r"; r=new; }
+h() { g "$2"; }
+v=old; w=W
+h ignored v
+echo v=$v
+h ignored w
+echo w=$w
+==== STDOUT ====
+read=old
+v=new
+read=W
+w=new
+
+==== STDERR ====
+

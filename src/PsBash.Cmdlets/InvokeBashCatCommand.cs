@@ -462,7 +462,7 @@ public sealed class InvokeBashCatCommand : PSCmdlet
         foreach (var rawP in paths)
         {
             var p = FileSystemHelpers.NormalizeOperandPath(rawP);
-            if (p.IndexOf('*') >= 0 || p.IndexOf('?') >= 0)
+            if (FileSystemHelpers.IsCmdletGlobOperand(this, p))
             {
                 var matched = new List<string>();
                 try

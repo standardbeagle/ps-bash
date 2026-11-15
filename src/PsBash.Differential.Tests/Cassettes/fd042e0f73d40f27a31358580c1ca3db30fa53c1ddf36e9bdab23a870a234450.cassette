@@ -1,0 +1,19 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 187
+stdout-length: 33
+stderr-length: 0
+==== SCRIPT ====
+d=$(mktemp -d); mkdir "$d/sub"; cd "$d/sub"
+PWD=foo
+echo "$PWD" $PWD ${PWD}
+case "$(pwd)" in */sub) echo pwd-is-dir;; esac
+cd ..; case "$PWD" in foo) echo stale;; *) echo cd-resets;; esac
+==== STDOUT ====
+foo foo foo
+pwd-is-dir
+cd-resets
+
+==== STDERR ====
+

@@ -8,8 +8,10 @@ public static partial class PsEmitter
     // `local -n ref=$1` names its target only at run time, but the script usually calls the function with
     // literal names (`setv foo`). The function body is emitted once per such name, with `ref` resolved to it
     // statically (the same machinery as `declare -n ref=foo`), and the variant is picked by the argument.
+    // A target passed on through another function (`f2() { f3 "$@"; }; f2 F1`) is followed back to that function's
+    // own call sites, so each call site records the function it sits in (null at top level).
     [ThreadStatic]
-    private static Dictionary<string, List<ImmutableArray<CompoundWord>>>? _callSites;
+    private static Dictionary<string, List<(ImmutableArray<CompoundWord> Args, string? Caller)>>? _callSites;
 
     /// <summary>Calls every command node of <paramref name="root"/> (statement structure only, not command substitutions).</summary>
     private static void VisitCommands(Command? root, Action<Command> visit) => VisitCommands(root, visit, null);
@@ -47,15 +49,17 @@ public static partial class PsEmitter
 
     private static void CollectCallSites(Command root)
     {
-        var sites = new Dictionary<string, List<ImmutableArray<CompoundWord>>>(StringComparer.Ordinal);
-        VisitCommands(root, c =>
+        var sites = new Dictionary<string, List<(ImmutableArray<CompoundWord>, string?)>>(StringComparer.Ordinal);
+        void Walk(Command? node, string? caller) => VisitCommands(node, c =>
         {
             if (c is Command.Simple { Words.Length: > 0 } s && GetLiteralValue(s.Words[0]) is { } name)
             {
                 if (!sites.TryGetValue(name, out var list)) sites[name] = list = new();
-                list.Add(s.Words.RemoveAt(0));
+                list.Add((s.Words.RemoveAt(0), caller));
             }
-        });
+            else if (c is Command.ShFunction f) Walk(f.Body, f.Name);
+        }, c => c is not Command.ShFunction);
+        Walk(root, null);
         var fns = new HashSet<string>(StringComparer.Ordinal);
         VisitCommands(root, c => { if (c is Command.ShFunction f) fns.Add(f.Name); });
         _definedFunctions = fns;
@@ -98,14 +102,51 @@ public static partial class PsEmitter
     }
 
     /// <summary>The distinct literal variable names the script passes as argument <paramref name="index"/> (1-based) of <paramref name="function"/>.</summary>
+    /// <para>
+    /// A call site that passes its OWN positionals on (<c>f3 "$@"</c>, <c>f3 "$1"</c>) inside function <c>f2</c> is
+    /// followed to <c>f2</c>'s call sites at the matching index, transitively, so <c>f1 → f2 F1 → f3 "$@"</c> still
+    /// yields <c>F1</c> (bash resolves the name at run time, by dynamic scope).
+    /// </para>
     private static List<string> NamerefCandidates(string function, int index)
     {
         var result = new List<string>();
-        if (_callSites is not null && _callSites.TryGetValue(function, out var calls))
-            foreach (var args in calls)
-                if (args.Length >= index && GetLiteralValue(args[index - 1]) is { } t && IsValidVarName(t) && !result.Contains(t))
-                    result.Add(t);
+        CollectNamerefCandidates(function, index, result, new HashSet<(string, int)>());
         return result;
+    }
+
+    private static void CollectNamerefCandidates(string function, int index, List<string> result, HashSet<(string, int)> seen)
+    {
+        if (_callSites is null || !seen.Add((function, index)) || !_callSites.TryGetValue(function, out var calls)) return;
+        foreach (var (args, caller) in calls)
+        {
+            // Walk the words up to the target position; a "$@" splat stands for the caller's positionals from there on.
+            for (int j = 0; j < args.Length && j < index; j++)
+            {
+                if (ForwardedPositional(args[j]) is { } fwd)
+                {
+                    if (caller is null) break;
+                    if (fwd == 0) { CollectNamerefCandidates(caller, index - j, result, seen); break; }   // "$@"
+                    if (j == index - 1) CollectNamerefCandidates(caller, fwd, result, seen);              // "$N"
+                    continue;
+                }
+                if (j == index - 1 && GetLiteralValue(args[j]) is { } t && IsValidVarName(t) && !result.Contains(t))
+                    result.Add(t);
+            }
+        }
+    }
+
+    /// <summary>A word that is just the caller's positional: <c>$N</c> / <c>"$N"</c> / <c>${N}</c> → N, <c>"$@"</c> / <c>$@</c> → 0.</summary>
+    private static int? ForwardedPositional(CompoundWord word)
+    {
+        var part = word.Parts is [WordPart.DoubleQuoted { Parts: [var inner] }] ? inner : word.Parts.Length == 1 ? word.Parts[0] : null;
+        string? name = part switch
+        {
+            WordPart.SimpleVarSub v => v.Name,
+            WordPart.BracedVarSub { Suffix: null } b => b.Name,
+            _ => null,
+        };
+        if (name == "@") return 0;
+        return name is { Length: > 0 } && name.All(char.IsAsciiDigit) && name != "0" ? int.Parse(name) : null;
     }
 
     /// <summary>The function body once per candidate target, selected by the run-time value of the positional.</summary>

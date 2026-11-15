@@ -1,0 +1,25 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 410
+stdout-length: 52
+stderr-length: 0
+==== SCRIPT ====
+parent=$BASHPID
+( child=$BASHPID; [ "$parent" != "$child" ] && echo sub; [ "$child" = "$BASHPID" ] && echo stable; ( [ "$BASHPID" != "$child" ] && echo nested ); [ "$$" = "$parent" ] && echo dollar )
+c=$(echo $BASHPID); [ "$c" != "$parent" ] && echo cmdsub
+[ "$parent" = "$BASHPID" ] && [ "$$" = "$BASHPID" ] && echo top
+( kill -0 $BASHPID && echo alive; trap 'echo got' USR1; kill -USR1 $BASHPID; echo after )
+==== STDOUT ====
+sub
+stable
+nested
+dollar
+cmdsub
+top
+alive
+got
+after
+
+==== STDERR ====
+

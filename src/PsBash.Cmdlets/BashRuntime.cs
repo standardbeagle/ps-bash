@@ -60,6 +60,38 @@ public static class BashRuntime
     }
 
     /// <summary>
+    /// The scope variable holding a subshell's <c>$BASHPID</c>. bash forks for <c>( )</c>, <c>$( )</c> and a compound
+    /// pipe stage, so each has its own BASHPID while <c>$$</c> stays the shell's; ps-bash runs them in the same
+    /// process, so <see cref="BashShellState.Save"/> (the top of every subshell scope) gives the subshell's PowerShell
+    /// scope a synthetic id here. Child scopes (nested commands, called functions) see it through PowerShell's
+    /// dynamic scoping; it ends with the scope.
+    /// </summary>
+    public const string SubshellPidVariable = "__psbash_bashpid";
+
+    // First synthetic id: above every pid_max (Linux caps it at 2^22, macOS at 99999) and odd, which no Windows
+    // pid ever is (they are multiples of 4), so a synthetic BASHPID can never name a real process.
+    private const int FirstSubshellPid = (1 << 22) + 1;
+    private static int _subshellPids;
+
+    /// <summary>A fresh synthetic subshell id (see <see cref="SubshellPidVariable"/>).</summary>
+    public static int NextSubshellPid()
+    {
+        int n = Interlocked.Increment(ref _subshellPids) & 0x3FFFFFF;   // keeps the result inside int
+        return FirstSubshellPid + 2 * n;
+    }
+
+    /// <summary>Whether <paramref name="pid"/> is a synthetic subshell id, not a process.</summary>
+    public static bool IsSubshellPid(long pid) => pid > FirstSubshellPid - 1 && pid % 2 == 1 && pid <= FirstSubshellPid + 2L * 0x3FFFFFF;
+
+    /// <summary><c>$BASHPID</c>: the innermost subshell's synthetic id, else the shell process's id.</summary>
+    public static int BashPid(SessionState session)
+    {
+        object? v = null;
+        try { v = session.PSVariable.GetValue(SubshellPidVariable); } catch (InvalidOperationException) { }
+        return (v is PSObject pso ? pso.BaseObject : v) is int id ? id : Environment.ProcessId;
+    }
+
+    /// <summary>
     /// Parse a numeric count/width flag value without the <see cref="int.Parse(string)"/>
     /// overflow-crash trap. Joined flag forms (e.g. <c>head -n99999999999</c>, <c>grep -A9…9</c>)
     /// reach a bare <c>int.Parse</c> on a digit string the regex/substring admitted but that

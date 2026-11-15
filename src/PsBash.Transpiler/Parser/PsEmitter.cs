@@ -8359,6 +8359,8 @@ public static partial class PsEmitter
         // an expansion that can discard the line (`$(echo ${!r})` ends only the substitution).
         return pipeable && CannotChangeShellState(body) && !inner.Contains("BashParamErrorException", StringComparison.Ordinal)
             && !PsBuild.CanDiscardLine(inner)
+            // `$(echo $BASHPID)` reads the id the subshell scope sets (PsBuild.BashPidRead), so it needs that scope.
+            && !inner.Contains(PsBuild.BashPidRead, StringComparison.Ordinal)
             ? inner : PsBuild.ShellStateScope(WithSubshellExitTrap(inner));
     }
 

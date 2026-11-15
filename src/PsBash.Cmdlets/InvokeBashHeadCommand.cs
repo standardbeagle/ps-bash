@@ -727,7 +727,7 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
         {
             if (rawP == "-") { yield return "-"; continue; }
             var p = FileSystemHelpers.NormalizeOperandPath(rawP);
-            if (p.IndexOf('*') >= 0 || p.IndexOf('?') >= 0)
+            if (FileSystemHelpers.IsCmdletGlobOperand(this, p))
             {
                 var matched = new List<string>();
                 try

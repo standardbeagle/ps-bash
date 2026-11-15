@@ -1,0 +1,17 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 108
+stdout-length: 11
+stderr-length: 0
+==== SCRIPT ====
+f3() { local -n ref=$1; ref=x; }
+f2() { f3 "$@"; }
+f1() { local F1=F1; echo F1=$F1; f2 F1; echo F1=$F1; }
+f1
+==== STDOUT ====
+F1=F1
+F1=x
+
+==== STDERR ====
+

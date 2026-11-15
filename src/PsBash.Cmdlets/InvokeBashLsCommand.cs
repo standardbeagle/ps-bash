@@ -1344,7 +1344,7 @@ public sealed class InvokeBashLsCommand : PSCmdlet
         var result = new List<(string, string?)>();
         foreach (var p in paths)
         {
-            if (p.IndexOf('*') >= 0 || p.IndexOf('?') >= 0)
+            if (FileSystemHelpers.IsCmdletGlobOperand(this, p))
             {
                 var matched = new List<string>();
                 try

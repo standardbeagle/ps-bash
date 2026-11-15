@@ -1369,6 +1369,12 @@ public static class PsBuild
     /// <c>$MyInvocation.MyCommand.Name</c> literally.
     /// </para>
     /// </summary>
+    /// <summary>A bare <c>$PWD</c>: the shell variable, else PowerShell's location.</summary>
+    public const string PwdRead = "$(if ($null -ne $env:PWD) { $env:PWD } else { $PWD })";
+
+    /// <summary><c>$BASHPID</c>. A <c>$( )</c> whose text reads it must take the subshell scope that sets it.</summary>
+    public const string BashPidRead = "$([PsBash.Cmdlets.BashRuntime]::BashPid($ExecutionContext.SessionState))";
+
     public static string? TryMapSpecialVar(string name, bool braced, bool inDoubleQuote)
     {
         switch (name)
@@ -1380,7 +1386,10 @@ public static class PsBuild
             case "LASTEXITCODE":
                 return braced ? "${" + name + "}" : "$" + name;
             case "PWD":
-                return braced ? null : "$" + name;
+                // The shell variable (`cd` and each invocation write $env:PWD; `PWD=foo` assigns it and does not move
+                // the shell: bash prints foo, `pwd` still prints the directory). PowerShell's own $PWD is the location,
+                // so it read the directory back. It is only the fallback when no PWD was ever set.
+                return braced ? null : PwdRead;
             case "?":
                 return braced ? "${global:LASTEXITCODE}" : "$global:LASTEXITCODE";
             case "RANDOM":
@@ -1442,7 +1451,8 @@ public static class PsBuild
             case "PS4":
                 return "$(if ($null -ne $env:PS4) { $env:PS4 } else { '+ ' })";
             case "BASHPID":
-                return "$PID";
+                // A subshell's own id (BashRuntime.SubshellPidVariable, set by the subshell scope); $PID outside one.
+                return BashPidRead;
             case "SHELLOPTS":
                 return "$(" + ShellOptsExpr + ")";
             case "BASHOPTS":

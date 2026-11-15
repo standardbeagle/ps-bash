@@ -895,6 +895,32 @@ public class BashTranspilerReviewRegressionTests
     [Fact]
     public void Transpile_LocalNamerefNeverCalledWithALiteral_KeepsTheOrdinaryLocal()
         => Assert.DoesNotContain("__nrt", BashTranspiler.Transpile("setv() { local -n r=$1; r=x; }\nsetv \"$name\""));
+
+    // Oracle (bash): `f2() { f3 "$@"; }; f2 F1` makes f3's `local -n ref=$1` name F1 — the target is followed back
+    // through the forwarding function to its literal callers ("$@" splat and "$N" alike), and a recursion ends.
+    [Theory]
+    [InlineData("f3() { local -n ref=$1; ref=x; }\nf2() { f3 \"$@\"; }\nf1() { local F1=F1; f2 F1; }\nf1", "F1")]
+    [InlineData("f3() { local -n ref=$2; ref=x; }\nf2() { f3 a \"$@\"; }\nf2 V", "V")]
+    [InlineData("f3() { local -n ref=$1; ref=x; }\nf2() { f3 \"$2\"; }\nf2 ignored W", "W")]
+    [InlineData("f3() { local -n ref=$1; ref=x; f3 \"$1\"; }\nf3 R", "R")]
+    public void Transpile_LocalNamerefTargetForwardedByAnotherFunction_EmitsTheCallersName(string script, string target)
+        => Assert.Contains("($__nrt -ceq '" + target + "')", BashTranspiler.Transpile(script));
+
+    // Oracle (bash): $BASHPID differs in ( ) and $( ) while $$ does not; the read goes through the subshell's id and a
+    // $( ) that reads it takes the subshell scope that sets it (BashShellState.Save), even around a plain mapped echo.
+    [Fact]
+    public void Transpile_BashpidInCommandSub_ReadsTheSubshellIdInsideAScope()
+    {
+        var ps = BashTranspiler.Transpile("x=$(echo $BASHPID)");
+        Assert.Contains("[PsBash.Cmdlets.BashRuntime]::BashPid($ExecutionContext.SessionState)", ps);
+        Assert.Contains("[PsBash.Cmdlets.BashShellState]::Save(", ps);
+        Assert.DoesNotContain("BashShellState]::Save(", BashTranspiler.Transpile("x=$(echo $$)"));
+    }
+
+    // Oracle (bash): `PWD=foo; echo $PWD` prints foo — $PWD is the shell variable cd maintains, not the location.
+    [Fact]
+    public void Transpile_PlainPwdRead_IsTheShellVariable()
+        => Assert.Contains("$(if ($null -ne $env:PWD) { $env:PWD } else { $PWD })", BashTranspiler.Transpile("echo $PWD"));
     [Fact]
     public void Transpile_PatsubOfAnUnsetVarUnderNounset_ReadsItStrictly()
         => Assert.Contains("unbound variable", BashTranspiler.Transpile("set -o nounset\necho -${v/x/y}-"));
