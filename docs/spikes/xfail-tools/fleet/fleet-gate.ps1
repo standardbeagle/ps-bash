@@ -17,11 +17,16 @@ param(
     [ValidateSet('both', 'win', 'linux')] [string]$Side = 'both',
     [string]$Tag = (Get-Date -Format 'MMdd-HHmm'),
     [switch]$Status,
-    [switch]$Fetch
+    [switch]$Fetch,
+    # Linux side only: which test projects to run (Core,Security,Cmdlets,Differential,Host,Shell) and an optional
+    # dotnet test --filter, for smaller runs on the lighter hosts (build2, tablet-gir6mu2t).
+    [string[]]$Projects = @('Core', 'Security', 'Cmdlets', 'Differential'),
+    [string]$Filter = ''
 )
 $ErrorActionPreference = 'Stop'
 $ssh = @('-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15')
-$winDir = "/mnt/c/Users/andyb/fleet/$Tag"          # the same folder seen from WSL
+# A Linux-only run stages under ~/fleet, so it also works on a native Linux host with no /mnt/c (build2).
+$winDir = if ($Side -eq 'linux') { "~/fleet/$Tag" } else { "/mnt/c/Users/andyb/fleet/$Tag" }   # Windows folder seen from WSL
 $winDirW = "C:\Users\andyb\fleet\$Tag"            # ... and from Windows
 $pwshW = '"/mnt/c/Program Files/PowerShell/7/pwsh.exe"'
 
@@ -61,9 +66,11 @@ Write-Output "snapshot $($commit.Substring(0, 10)) on $(git log --oneline -1 HEA
 
 # 2. Bundle: only what the remote checkouts lack. ONE bundle feeds every side, so its base must be a commit
 #    every receiving checkout has: the common ancestor of HEAD and all their HEADs. Unknown HEAD -> full bundle.
+#    --verify: a fresh `git init` checkout has no HEAD commit, and plain rev-parse would print the word "HEAD",
+#    which resolves HERE and yields a bundle the remote cannot apply.
 $heads = @()
-if ($Side -ne 'linux') { $heads += (ssh @ssh $HostName 'git -C /mnt/c/Users/andyb/work/core/ps-bash rev-parse HEAD' 2>$null) }
-if ($Side -ne 'win') { $heads += (ssh @ssh $HostName 'git -C ~/work/core/ps-bash rev-parse HEAD' 2>$null) }
+if ($Side -ne 'linux') { $heads += (ssh @ssh $HostName 'git -C /mnt/c/Users/andyb/work/core/ps-bash rev-parse --verify -q HEAD' 2>$null) }
+if ($Side -ne 'win') { $heads += (ssh @ssh $HostName 'git -C ~/work/core/ps-bash rev-parse --verify -q HEAD' 2>$null) }
 $base = $null
 $known = $heads.Count -gt 0
 foreach ($h in $heads) {
@@ -94,7 +101,9 @@ Start-Process pwsh -WindowStyle Hidden -ArgumentList @('-NoProfile', '-File', '$
     Write-Output "windows runner started -> $winDirW\win"
 }
 if ($Side -ne 'win') {
-    Remote "mkdir -p ~/fleet/$Tag/linux && tr -d '\r' < $winDir/fleet-run-linux.sh > ~/fleet/$Tag/run.sh && setsid -f bash ~/fleet/$Tag/run.sh $winDir/snapshot.bundle $Tag ~/fleet/$Tag/linux > /dev/null 2>&1 < /dev/null"
+    $projArg = ($Projects -join ',')
+    $filterArg = "'" + ($Filter -replace "'", "'\''") + "'"
+    Remote "mkdir -p ~/fleet/$Tag/linux && tr -d '\r' < $winDir/fleet-run-linux.sh > ~/fleet/$Tag/run.sh && setsid -f bash ~/fleet/$Tag/run.sh $winDir/snapshot.bundle $Tag ~/fleet/$Tag/linux $projArg $filterArg > /dev/null 2>&1 < /dev/null"
     Write-Output "linux runner started -> ~/fleet/$Tag/linux"
 }
 Write-Output "poll: fleet-gate.ps1 -HostName $HostName -Tag $Tag -Status"

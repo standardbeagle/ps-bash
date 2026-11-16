@@ -3,7 +3,9 @@
 # Cmdlets and Differential, one project at a time like CI's build.yml. A dedicated fleet checkout, so plain
 # `dotnet test` (no tman on Linux), with node reuse off so nothing outlives the run.
 # summary.txt gets one line per step and ends with FINISHED.
-BUNDLE=$1 TAG=$2 OUT=$3
+# Optional: PROJECTS (comma list of Core,Security,Cmdlets,Differential,Host,Shell; default the CI four) and
+# FILTER (a dotnet test --filter applied to every project) — for smaller runs on the lighter fleet hosts.
+BUNDLE=$1 TAG=$2 OUT=$3 PROJECTS=${4:-Core,Security,Cmdlets,Differential} FILTER=${5:-}
 mkdir -p "$OUT"; SUM="$OUT/summary.txt"
 s() { echo "$(date +%H:%M:%S) $*" >> "$SUM"; }
 s "start tag=$TAG"
@@ -27,9 +29,12 @@ run() { # name project [dotnet test args...]
     s "$name: $(grep -E 'Passed!|Failed!' "$OUT/$name.log" | sed 's/^ *//' | tr '\n' ' ')"
     grep -E '^\s+Failed ' "$OUT/$name.log" | sed 's/^ */    /' >> "$SUM"
 }
-run Core PsBash.Core.Tests
-run Security PsBash.Escalation.Tests --filter Category=Security
-run Cmdlets PsBash.Cmdlets.Tests
-run Differential PsBash.Differential.Tests
+F=(); [ -n "$FILTER" ] && F=(--filter "$FILTER")
+for p in ${PROJECTS//,/ }; do
+    case $p in
+        Security) run Security PsBash.Escalation.Tests --filter "Category=Security${FILTER:+&($FILTER)}" ;;
+        *) run "$p" "PsBash.$p.Tests" "${F[@]}" ;;
+    esac
+done
 dotnet build-server shutdown > /dev/null 2>&1
 s FINISHED
