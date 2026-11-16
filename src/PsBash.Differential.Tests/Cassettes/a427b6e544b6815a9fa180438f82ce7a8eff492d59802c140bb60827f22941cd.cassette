@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 127
+stdout-length: 9
+stderr-length: 0
+==== SCRIPT ====
+f() { while read a; do read b; [ "$a" = 3 ] && return 4; echo "$a-$b"; done; echo no; }
+printf '1\n2\n3\n4\n' | f; echo "rc=$?"
+==== STDOUT ====
+1-2
+rc=4
+
+==== STDERR ====
+

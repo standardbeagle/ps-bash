@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 72
+stdout-length: 8
+stderr-length: 0
+==== SCRIPT ====
+while read a; do read b; echo "$a-$b"; done <<< "$(printf '1\n2\n3\n4')"
+==== STDOUT ====
+1-2
+3-4
+
+==== STDERR ====
+

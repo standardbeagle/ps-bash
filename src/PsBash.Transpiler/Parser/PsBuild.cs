@@ -1215,6 +1215,31 @@ public static class PsBuild
     }
 
     // ───────────────────── Compound-command stdin (shared cursor) ──────────────────────
+    // Stage stdin model (docs/specs/emitter-strategy.md "Stage stdin"). A pipe stage's input is `$input` of the
+    // stage's OWN script block only: any block nested inside it (a redirect's `. { }`, a guard, a loop, a function, a
+    // `$( )`) sees an empty one. So the stage's block hands it on at once, in exactly one of three ways, all built here:
+    //   * StdinScope / StdinScopeLazy: a compound stage turns it into the shared stdin cursor every reader consumes;
+    //   * ForwardStageInput: a simple stage's wrapper pipes it into the one command it wraps;
+    //   * DrainStageInput: a stage whose stdin is something else (its own `< f`, a command that never reads) drops it.
+    // PsBuild is the only place the emitted text names `$input` (PsBuildStageStdinGuardTests).
+
+    /// <summary>The records piped into a pipe stage's own script block. Only the primitives below use it.</summary>
+    public const string StageInput = "$input";
+
+    /// <summary>The prefix that pipes a stage block's input into the one command it wraps (see <see cref="ForwardStageInput"/>).</summary>
+    public const string ForwardedStageInput = StageInput + " | ";
+
+    /// <summary>
+    /// A simple command inside its pipe stage's script block (an env prefix's save/restore, a splat prelude, a subshell
+    /// guard): the block's input is piped into the command, which PowerShell would otherwise never hand it.
+    /// </summary>
+    public static string ForwardStageInput(string command) => ForwardedStageInput + command;
+
+    /// <summary>
+    /// A pipe stage whose stdin is not the pipe (<c>… | cmd &lt; f</c>, <c>… | seq 3</c>): the block drains the upstream
+    /// records (so the producer is not refused) and runs <paramref name="body"/> once, as bash does.
+    /// </summary>
+    public static string DrainStageInput(string body) => "& { $null = @(" + StageInput + "); " + body + " }";
 
     /// <summary>
     /// A pipeline source that yields what is LEFT of the compound command's shared stdin
@@ -1236,11 +1261,31 @@ public static class PsBuild
     /// <param name="body">The statements that read the pipeline as their stdin.</param>
     /// <param name="saveVar">The variable that holds the previous queue. A DOT-SOURCED scope shares its caller's
     /// variables, so it needs a name of its own or a nested one overwrites the outer save.</param>
-    public static string StdinScope(string body, string saveVar = "__psbash_stdin_prev") =>
+    /// <param name="source">The records that become the stdin: the incoming pipeline, or an array expression (a read loop's
+    /// own <c>&lt; file</c> run inline, so a <c>return</c> in it still leaves the function).</param>
+    public static string StdinScope(string body, string saveVar = "__psbash_stdin_prev", string source = StageInput) =>
         "$" + saveVar + " = Get-Variable -Name __BashStdIn -Scope Global -ValueOnly -ErrorAction SilentlyContinue; "
         + "$global:__BashStdIn = [System.Collections.Generic.Queue[object]]::new(); "
-        + "foreach ($__psbash_stdin_line in $input) { $global:__BashStdIn.Enqueue($__psbash_stdin_line) }; "
+        + "foreach ($__psbash_stdin_line in " + source + ") { $global:__BashStdIn.Enqueue($__psbash_stdin_line) }; "
         + "try { " + body + " } finally { $global:__BashStdIn = $" + saveVar + " }";
+
+    /// <summary>
+    /// A <c>while read</c> loop's condition over the shared stdin: the next LINE (null at end of input), taken through the
+    /// same cursor every other reader in the loop advances (<c>SharedStdinLine.Next</c>).
+    /// </summary>
+    public const string SharedStdinNextLine = "[PsBash.Cmdlets.SharedStdinLine]::Next($global:__BashStdIn)";
+
+    private static readonly System.Text.RegularExpressions.Regex SharedStdinReaderPattern = new(
+        @"__BashStdIn|\bInvoke-Bash(?:Read|Mapfile)\b(?!-)|\bResolve-BashCommand -Fed\b",
+        System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// True when text emitted INSIDE a stdin scope reads that stdin: a fed reader (<see cref="StdinFeed"/>), a
+    /// <c>read</c> / <c>mapfile</c>, a read loop over it, or a run-time command name that may turn out to read it. As for a
+    /// function body (EmitFunction), a native program alone does not count: it is given the scope only when something
+    /// else in the text reads it too, and otherwise runs as it would with no scope.
+    /// </summary>
+    public static bool ReadsSharedStdin(string emitted) => SharedStdinReaderPattern.IsMatch(emitted);
 
     /// <summary>
     /// <see cref="InputRedirectGuard"/> without its own scope, for a loop whose variables must stay in the caller's scope
@@ -1316,7 +1361,7 @@ public static class PsBuild
         "$__psbash_fin = $MyInvocation.ExpectingInput; "
         + "if ($__psbash_fin) { $__psbash_fprev = Get-Variable -Name __BashStdIn -Scope Global -ValueOnly -ErrorAction SilentlyContinue; "
         + "$global:__BashStdIn = [System.Collections.Generic.Queue[object]]::new(); "
-        + "foreach ($__psbash_fl in $input) { $global:__BashStdIn.Enqueue($__psbash_fl) } }; "
+        + "foreach ($__psbash_fl in " + StageInput + ") { $global:__BashStdIn.Enqueue($__psbash_fl) } }; "
         + "try { " + body + " } finally { if ($__psbash_fin) { $global:__BashStdIn = $__psbash_fprev } }";
 
     /// <summary>

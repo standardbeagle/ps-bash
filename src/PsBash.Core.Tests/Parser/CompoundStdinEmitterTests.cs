@@ -109,8 +109,8 @@ public class CompoundStdinEmitterTests
     {
         var ps = T("{ while read l; do echo $l; done; } < f");
 
-        // Each record is dequeued from the shared stdin queue, not read from $input.
-        Assert.Contains("$__psbash_rec0 = $global:__BashStdIn.Dequeue()", ps);
+        // Each LINE is taken from the shared stdin cursor (the one `read` in a body would advance too), not from $input.
+        Assert.Contains("while ($null -ne ($__psbash_rec0 = " + PsBuild.SharedStdinNextLine + "))", ps);
         Assert.DoesNotContain("$__psbash_rec0 in $input", ps);
     }
 

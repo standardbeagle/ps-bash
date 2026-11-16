@@ -1737,32 +1737,38 @@ public static partial class PsEmitter
 
     private static string EmitWhile(Command.While whileCmd)
     {
-        // Special case: while read VAR -> ForEach-Object pipeline (no infinite loop risk).
-        // The classic `while read line; do ...; done < input.txt` idiom attaches its input
-        // redirect here; ApplyCompoundRedirects feeds it in via Get-Content | & { $input | ... }.
-        // The loop streams its input itself (`$input |`, or the shared stdin queue when it
-        // inherits a compound's stdin), so it never opens a stdin scope of its own: with its OWN
-        // `< file` the body runs outside any scope and the redirect feeds `$input`.
+        // Special case: while read VAR -> a labelled PowerShell loop over the lines (EmitWhileRead). It reads the shared
+        // stdin cursor line by line (emitter-strategy.md "Stage stdin"), the same cursor `read`, `cat` and the other
+        // readers in its body consume; only its own `< file` with a body that reads nothing iterates the records directly.
         if (IsWhileRead(whileCmd.Cond, out var readVar, out var readIfs))
         {
             // Its ONLY redirect is its own input (`done < f`, `<<< "$s"`, a heredoc): read the source
             // straight into the loop header. bash runs this loop in the CURRENT shell (only a pipe makes
             // a subshell), but the general `Get-Content f | & { … }` form put it in a script block, so a
             // `return` in a function's read loop left only that block (`echo never` still ran).
+            // With its own input, a body that reads stdin too (`while read a; do read b; ...; done < f`, a `cat` or a nested
+            // read loop in the body) takes from the SAME input as the loop, line by line: the input becomes a stdin scope
+            // and the loop reads its lines through the shared cursor. A body that reads nothing keeps iterating the records.
             if (!whileCmd.Redirects.IsDefaultOrEmpty
                 && whileCmd.Redirects is [{ Fd: 0, Op: "<" or "<<" or "<<<" } only])
             {
-                string readLoop = WithStdinScope(false, () => EmitWhileRead(readVar, readIfs, whileCmd.Body, ReadLoopSource(only)));
+                string source = ReadLoopSource(only);
+                bool bodyReads = false;
+                string readLoop = EmitWhileRead(readVar, readIfs,
+                    () => { var b = EmitReadLoopBody(whileCmd.Body); bodyReads = b.Reads; return b.Text; },
+                    () => bodyReads ? ReadLoopFeed.Shared : new ReadLoopFeed(ReadLoopFeedKind.Records, source));
+                // Inline (not a script block), so a `return` in a function's read loop still leaves the function.
+                if (bodyReads)
+                    readLoop = PsBuild.StdinScope(readLoop, "__psbash_rlin_prev" + _loopDepth, source);
                 // `done < missing`: the redirect fails the loop (status 1, body never runs, and under set -e the script ends).
                 if (only is { Op: "<" } && EmitInputRedirectTarget(only.Target) is var readTarget && readTarget != "$null")
                     readLoop = PsBuild.InputRedirectGuardInline(readTarget, readLoop, RedirectFailExit());
                 return readLoop;
             }
 
-            bool readsQueue = _inStdinScope && !HasInputRedirect(whileCmd.Redirects);
-            return ApplyCompoundRedirects(
-                WithStdinScope(readsQueue, () => EmitWhileRead(readVar, readIfs, whileCmd.Body)),
-                whileCmd.Redirects, stdinScope: false);
+            // Otherwise as any compound: its own input (`done < in > out`) becomes the stdin scope its lines come from.
+            return ApplyCompoundRedirects(EmitCompoundBody(whileCmd.Redirects, () => EmitWhileRead(readVar, readIfs, whileCmd.Body)),
+                whileCmd.Redirects);
         }
 
         return EmitCompoundBody(whileCmd.Redirects, () => EmitWhileLoop(whileCmd));
@@ -2834,10 +2840,46 @@ public static partial class PsEmitter
     /// <param name="ifs">The loop's <c>IFS=</c> prefix value, or null for the default field split.</param>
     /// <param name="body">The loop body.</param>
     /// <param name="sourceExpr">The records to iterate when the loop has its own input redirect
-    /// (<see cref="ReadLoopSource"/>); null = the pipeline (<c>$input</c>) or the shared stdin queue.</param>
+    /// (<see cref="ReadLoopSource"/>); null = the shared stdin cursor.</param>
     /// <param name="recordTail">With <paramref name="sourceExpr"/>: a statement run after each record's lines are all done
     /// (skipped by a <c>break</c> or <c>return</c> out of the record).</param>
-    private static string EmitWhileRead(List<string> varNames, string? ifs, Command body, string? sourceExpr = null, string? recordTail = null)
+    private static string EmitWhileRead(List<string> varNames, string? ifs, Command body, string? sourceExpr = null, string? recordTail = null) =>
+        EmitWhileRead(varNames, ifs, () => Emit(body),
+            () => sourceExpr is not null ? new ReadLoopFeed(ReadLoopFeedKind.Records, sourceExpr, recordTail) : ReadLoopFeed.Shared);
+
+    /// <summary>Where a read loop takes its input from.</summary>
+    private enum ReadLoopFeedKind
+    {
+        /// <summary>The shared stdin (<c>$global:__BashStdIn</c>), one line per pass (<see cref="PsBuild.SharedStdinNextLine"/>).</summary>
+        Shared,
+        /// <summary>An array expression of records (<see cref="ReadLoopSource"/>, or the one record of a streamed stage).</summary>
+        Records,
+    }
+
+    /// <summary>A read loop's input; <paramref name="RecordTail"/> runs after each record of <see cref="ReadLoopFeedKind.Records"/>.</summary>
+    private readonly record struct ReadLoopFeed(ReadLoopFeedKind Kind, string? Records = null, string? RecordTail = null)
+    {
+        public static ReadLoopFeed Shared => new(ReadLoopFeedKind.Shared);
+    }
+
+    /// <summary>
+    /// A read loop's body, emitted as inside a stdin scope first (as a function body is): when it reads that stdin -- a
+    /// <c>read</c>, a fed <c>cat</c>/<c>head</c>, a nested read loop (<see cref="PsBuild.ReadsSharedStdin"/>) -- it keeps that
+    /// text and the loop must read the same stdin, line by line. Otherwise it is emitted again outside any scope, so a body
+    /// that reads nothing comes out as it always did.
+    /// </summary>
+    private static (string Text, bool Reads) EmitReadLoopBody(Command body)
+    {
+        string scoped = WithStdinScope(true, () => Emit(body));
+        if (PsBuild.ReadsSharedStdin(scoped)) return (scoped, true);
+        return (WithStdinScope(false, () => Emit(body)), false);
+    }
+
+    /// <param name="varNames">The <c>read</c> variables, bound per line as loop variables.</param>
+    /// <param name="ifs">The loop's <c>IFS=</c> prefix value, or null for the default field split.</param>
+    /// <param name="emitBody">Emits the loop body (run inside the loop's labels and bindings).</param>
+    /// <param name="feedFor">The loop's input, decided once the body has been emitted.</param>
+    private static string EmitWhileRead(List<string> varNames, string? ifs, Func<string> emitBody, Func<ReadLoopFeed> feedFor)
     {
         // The `read` variables are the loop bindings for this construct: register
         // them as loop vars so the body emits them bare ($line, not $env:line) and
@@ -2862,7 +2904,7 @@ public static partial class PsEmitter
         string bodyText;
         try
         {
-            bodyText = Emit(body);
+            bodyText = emitBody();
         }
         finally
         {
@@ -2878,11 +2920,6 @@ public static partial class PsEmitter
         // old approach text-rewrote every `$VAR` in the emitted body to `$_`, which
         // clobbered occurrences of the name inside single-quoted PS literals (e.g. a
         // bash `'has $line literal'` that must stay literal), corrupting output.
-        // `$input |` is required: when this `while read` is a pipe target it is wrapped in `& { ... }`,
-        // and a scriptblock's piped input does NOT auto-feed a leading `ForEach-Object` — it must be
-        // drained explicitly via `$input`. Without it the chain got zero input and the leading
-        // ForEach-Object ran once with a null `$_`, hitting "Cannot index into a null array" on the
-        // property probe. The `$null -ne $_` guard makes that probe null-safe regardless.
         // A lone variable still has the IFS whitespace (space, tab) trimmed from both ends; `IFS= read` keeps the line.
         var trimChars = new List<string>();
         if (ifs is null || ifs.Contains(' ')) trimChars.Add("32");
@@ -2900,17 +2937,16 @@ public static partial class PsEmitter
         // Each pass starts after `read` succeeded: the body's `$?` is 0 (not the previous pass's last status).
         string inner = $":{lineLabel} foreach ($_ in {lines}) {{ {PsBuild.SetStatus(0)}; {bind}{bodyText} }}";
 
-        // Inheriting a compound's stdin, the lines come from the shared queue (a `read` or `cat`
-        // before the loop already advanced it), not from `$input` — dequeued one record per pass,
-        // so a `read` in the body still takes the NEXT record (a `foreach` over the feed would
-        // drain the queue up front). `$input` is an enumerator: `foreach` over it streams.
-        if (sourceExpr is not null)
-            return recordTail is null
-                ? $":{recLabel} foreach ({rec} in {sourceExpr}) {{ {inner} }}"
-                : $":{recLabel} foreach ({rec} in {sourceExpr}) {{ {inner}; {recordTail} }}";
-        return _inStdinScope
-            ? $":{recLabel} while ($global:__BashStdIn -and $global:__BashStdIn.Count -gt 0) {{ {rec} = $global:__BashStdIn.Dequeue(); {inner} }}"
-            : $":{recLabel} foreach ({rec} in $input) {{ {inner} }}";
+        var feed = feedFor();
+        // Reading a shared stdin (a `read` or `cat` before the loop may already have advanced it), each pass takes ONE
+        // line through the cursor every reader in the body advances too, so `read a` in the condition and `read b` in the
+        // body pair the lines as in bash. A pass that took a whole record (one can carry several lines) left a body
+        // reader only the records after it. The cursor is pulled per line: nothing is drained up front.
+        if (feed.Kind == ReadLoopFeedKind.Shared)
+            return $":{recLabel} while ($null -ne ({rec} = {PsBuild.SharedStdinNextLine})) {{ :{lineLabel} foreach ($_ in @({rec})) {{ {PsBuild.SetStatus(0)}; {bind}{bodyText} }} }}";
+        return feed.RecordTail is null
+            ? $":{recLabel} foreach ({rec} in {feed.Records}) {{ {inner} }}"
+            : $":{recLabel} foreach ({rec} in {feed.Records}) {{ {inner}; {feed.RecordTail} }}";
     }
 
     /// <summary>
@@ -9653,7 +9689,7 @@ public static partial class PsEmitter
         // The block below is a script block: the stage's pipeline input reaches its `$input`, not the
         // command inside. Forward it (see _pipeStageFeedsInput). Read before the args are emitted, which
         // may recurse (a nested substitution clears the flag for its own body).
-        if (_pipeStageFeedsInput) call.Append("$input | ");
+        if (_pipeStageFeedsInput) call.Append(PsBuild.ForwardedStageInput);
         call.Append(leadingTokens);
         call.Append(commandName);
 
@@ -11364,30 +11400,20 @@ public static partial class PsEmitter
     /// compound that opens a stdin scope. The scope reads the producer lazily from a background runspace
     /// (<see cref="PsBuild.StdinScopeLazy"/>) so a reader that stops early (<c>head -n1</c>, a lone <c>read</c>)
     /// ends the producer — a script block after a pipe would only start once the producer finished (never).
-    /// Other producers keep the eager scope (<see cref="PsBuild.StdinScope"/>).
+    /// Other producers keep the eager scope (<see cref="PsBuild.StdinScope"/>). Returns the emitted producer of such a
+    /// two-stage pipeline (used by <c>EmitCompoundStage</c>'s stage stdin), or null for any other pipeline.
     /// </summary>
-    private static bool TryEmitLazyProducerStage(Command.Pipeline pipeline, out string emitted)
+    private static string? LazyProducerText(Command.Pipeline pipeline)
     {
-        emitted = "";
         if (pipeline.Commands.Length != 2 || pipeline.Negated || pipeline.Ops[0] != "|"
             || pipeline.Commands[0] is not Command.Simple producer
             || !producer.EnvPairs.IsEmpty || !producer.HereDocs.IsDefaultOrEmpty
             || !producer.Redirects.IsDefaultOrEmpty || producer.Words.IsDefaultOrEmpty
             || GetLiteralValue(producer.Words[0]) is not ("yes" or "seq"))
-            return false;
+            return null;
         foreach (var w in producer.Words)
-            if (GetLiteralValue(w) is null) return false;
-
-        var cmd = pipeline.Commands[1];
-        bool opensScope = cmd is Command.Subshell or Command.BraceGroup or Command.ForIn
-                or Command.ForArith or Command.If or Command.Case
-            || (cmd is Command.While loop && !IsWhileRead(loop.Cond, out _, out _));
-        if (!opensScope || !TryEmitMappedCommand(producer, out var producerText))
-            return false;
-
-        var body = WithStdinScope(true, () => Emit(cmd));
-        emitted = $"& {{ {PsBuild.StdinScopeLazy(producerText, body)} }}";
-        return true;
+            if (GetLiteralValue(w) is null) return null;
+        return TryEmitMappedCommand(producer, out var producerText) ? producerText : null;
     }
 
     // Mapped commands whose cmdlet has no pipeline-input parameter (bash ignores stdin for them too).
@@ -11404,7 +11430,6 @@ public static partial class PsEmitter
         if (!_scriptLastpipe && pipeline.Commands.Length > 1 && pipeline.Commands[^1] is Command.Simple { Words.Length: > 0 } lastRead
             && GetLiteralValue(lastRead.Words[0]) is "read" or "mapfile" or "readarray")
             pipeline = pipeline with { Commands = pipeline.Commands.SetItem(pipeline.Commands.Length - 1, new Command.Subshell(lastRead, ImmutableArray<Redirect>.Empty)) };
-        if (TryEmitLazyProducerStage(pipeline, out var lazy)) return lazy;
         var sb = new StringBuilder();
         // pipefail script: each stage reports its own status (Invoke-BashPipeStage) into $__pf.
         bool perStage = _pipefailMode && pipeline.Commands.Length > 1;
@@ -11451,20 +11476,21 @@ public static partial class PsEmitter
                 bool ownStdin = HasInputRedirect(simple.Redirects)
                     || !simple.HereDocs.IsDefaultOrEmpty && simple.HereDocs.Any(h => h.Fd < 3);
                 if (ownStdin)
-                    sb.Append("& { $null = @($input); ").Append(WithPipeStageFeed(false, () => Emit(simple))).Append(" }");
-                else {
-                if (ignoresStdin) sb.Append("& { $null = @($input); ");
-                if (simple.EnvPairs.IsEmpty)
-                    sb.Append(EmitSimplePipeStage(simple, isLastStage));
+                    sb.Append(PsBuild.DrainStageInput(WithPipeStageFeed(false, () => Emit(simple))));
                 else
                 {
-                    // `… | VAR=v cmd`: the prefix applies to THAT stage only. Emit the bare stage, then
-                    // wrap it in the save/set/restore block (which has to forward the stage's input).
-                    var bare = simple with { EnvPairs = ImmutableArray<EnvPair>.Empty };
-                    sb.Append(WrapEnvPairsForPipeStage(
-                        simple.EnvPairs, WithEnvShadow(simple.EnvPairs, () => EmitSimplePipeStage(bare, isLastStage))));
-                }
-                if (ignoresStdin) sb.Append(" }");
+                    string stage;
+                    if (simple.EnvPairs.IsEmpty)
+                        stage = EmitSimplePipeStage(simple, isLastStage);
+                    else
+                    {
+                        // `… | VAR=v cmd`: the prefix applies to THAT stage only. Emit the bare stage, then
+                        // wrap it in the save/set/restore block (which has to forward the stage's input).
+                        var bare = simple with { EnvPairs = ImmutableArray<EnvPair>.Empty };
+                        stage = WrapEnvPairsForPipeStage(
+                            simple.EnvPairs, WithEnvShadow(simple.EnvPairs, () => EmitSimplePipeStage(bare, isLastStage)));
+                    }
+                    sb.Append(ignoresStdin ? PsBuild.DrainStageInput(stage) : stage);
                 }
             }
             else if (pipeline.Commands.Length > 1 && IsCompoundPipelineStage(cmd))
@@ -11488,14 +11514,18 @@ public static partial class PsEmitter
                 // that `read` and the fed readers consume from. The body still runs
                 // ONCE — bash's semantics, unlike a per-line ForEach-Object envelope.
                 bool lastpipeStage = _scriptLastpipe && i > 0 && i == pipeline.Commands.Length - 1;
+                string stage = EmitCompoundStage(cmd, isFirstStage: i == 0, entryScope, lastpipeStage,
+                    i == 1 ? pipeline : null, out bool gated, out bool wholePipeline);
+                // A read loop that pulls its lines from a lazily read producer runs the producer itself.
+                if (wholePipeline) return stage;
                 // A streamed read loop gets the gate that stops its producer as a pipeline element of its own, in front of
                 // the stage (and outside a pipefail stage wrapper, so the stop reaches this pipeline).
-                if (i > 0 && IsStreamedReadLoopStage(cmd, lastpipeStage, out _, out _, out _))
+                if (gated)
                 {
                     sb.Append(PsBuild.PipeGate).Append(" | ");
                     stageStart = sb.Length;
                 }
-                sb.Append(EmitCompoundStage(cmd, isFirstStage: i == 0, entryScope, lastpipeStage));
+                sb.Append(stage);
             }
             else if (pipeline.Commands.Length > 1)
                 sb.Append(WrapPipelineStageIfStatementList(Emit(cmd)));
@@ -11525,7 +11555,7 @@ public static partial class PsEmitter
                     // errexit checks fire once the pipeline's suppression is lifted for the stage, and their run-time
                     // exit (PsBuild.DynamicExit) ends only the stage, as in a compound stage (EmitCompoundStage).
                     string Lifted(string stage) => functionStage && _armedStages ? PsBuild.ErrexitLifted(stage) : stage;
-                    sb.Append(i == 0 ? PsBuild.ShellStateScope(Lifted(rawStage)) : "& { " + PsBuild.ShellStateGuard(Lifted("$input | " + rawStage)) + " }");
+                    sb.Append(i == 0 ? PsBuild.ShellStateScope(Lifted(rawStage)) : "& { " + PsBuild.ShellStateGuard(Lifted(PsBuild.ForwardStageInput(rawStage))) + " }");
                 }
             }
 
@@ -11542,7 +11572,7 @@ public static partial class PsEmitter
                 // NullReferenceException on Begin): run it in a script block that feeds `$input` to the stage.
                 if (i > 0 && !stageText.StartsWith("& {", StringComparison.Ordinal)
                     && System.Text.RegularExpressions.Regex.IsMatch(stageText, @"\s\d?>{1,2}[&\s]?\S"))
-                    stageText = $"& {{ $input | {stageText} }}";
+                    stageText = $"& {{ {PsBuild.ForwardStageInput(stageText)} }}";
                 sb.Length = stageStart;
                 sb.Append($"Invoke-BashPipeStage -Slot $__pf -Index {i} -Script {{ {stageText} }}");
             }
@@ -11684,18 +11714,29 @@ public static partial class PsEmitter
     /// assignment is visible to that stage only and restored afterwards (no leak).
     /// </summary>
     private static string WrapEnvPairsForPipeStage(ImmutableArray<EnvPair> pairs, string stage)
-        => "& { " + WrapEnvPairs(pairs, "$input | " + stage) + " }";
+        => "& { " + WrapEnvPairs(pairs, PsBuild.ForwardStageInput(stage)) + " }";
 
     /// <summary>
     /// A compound command as a stage of a multi-stage pipeline: <c>&amp; { … }</c>. A stage AFTER the
     /// first receives the pipe as its stdin, so it opens a stdin scope (<see cref="PsBuild.StdinScope"/>):
     /// every stdin-reading command inside — <c>sort</c>, <c>cat</c>, <c>read</c>, a native — consumes the
-    /// same queue, in order. The FIRST stage keeps whatever stdin its surroundings have. A
-    /// <c>while read</c> loop streams <c>$input</c> itself and an arithmetic command / function
-    /// definition reads nothing, so those open no scope (the body sees no shared stdin).
+    /// same queue, in order. The FIRST stage keeps whatever stdin its surroundings have. The one other form is
+    /// a <c>while read</c> loop whose body reads nothing: it runs per record as the records arrive
+    /// (<see cref="PsBuild.StreamingReadLoopStage"/>). See emitter-strategy.md "Stage stdin".
     /// </summary>
-    private static string EmitCompoundStage(Command cmd, bool isFirstStage, bool entryScope, bool lastpipeStage = false)
+    /// <param name="cmd">The compound command.</param>
+    /// <param name="isFirstStage">True for the pipeline's first stage, which keeps its surroundings' stdin.</param>
+    /// <param name="entryScope">Whether the pipeline itself runs inside a stdin scope.</param>
+    /// <param name="lastpipeStage">The last stage under <c>shopt -s lastpipe</c>: it runs in the shell itself.</param>
+    /// <param name="pipeline">The two-stage pipeline this is the second stage of, whose producer may be read lazily
+    /// (<see cref="LazyProducerText"/>); null otherwise.</param>
+    /// <param name="gated">Set when the stage is a streamed read loop, which needs <see cref="PsBuild.PipeGate"/> in front.</param>
+    /// <param name="wholePipeline">Set when the returned text runs the producer of <paramref name="pipeline"/> too: it is the whole pipeline.</param>
+    private static string EmitCompoundStage(Command cmd, bool isFirstStage, bool entryScope, bool lastpipeStage, Command.Pipeline? pipeline,
+        out bool gated, out bool wholePipeline)
     {
+        gated = false;
+        wholePipeline = false;
         // bash runs every pipe stage in a subshell: `{ x=2; } | cat` must leave x alone. A Subshell stage already
         // carries its own scope; a function definition changes the function table by design here.
         // The guard, not a nested scope: the stage's own `& { }` is the scope, and it must keep its `$input`.
@@ -11748,39 +11789,63 @@ public static partial class PsEmitter
         if (isFirstStage)
             return $"& {{ {Scoped(Body())} }}";
 
-        // `producer | while read l; do ...; done`: the loop handles each record as it arrives (a process block), not the
-        // collected input after the producer has finished. Its EmitPipelineStages caller puts the gate in front.
-        if (IsStreamedReadLoopStage(cmd, lastpipeStage, out var readLoop, out var readVars, out var readIfs))
+        // `producer | while read l; do ...; done` (no input redirect of its own, which would replace the pipe).
+        if (cmd is Command.While { IsUntil: false } readStage && !HasInputRedirect(readStage.Redirects)
+            && IsWhileRead(readStage.Cond, out var readVars, out var readIfs))
         {
+            // A body that reads nothing: the loop handles each record as it arrives (a process block), not the collected
+            // input after the producer has finished, behind the gate that stops the producer once the loop is done
+            // (EmitPipelineStages puts it in front). Its output redirects (`done > f`, `done 2>&1`) apply to that stage.
+            // A body that reads the stage's stdin too (`read b`, `cat`, `head -1`, a nested read loop) must take from the
+            // same cursor as the loop, in order: a process block sees one record and cannot wait for the next, so the
+            // loop reads the stage's stdin scope line by line -- the pipe's records (or a lazily read endless producer).
             int depth = _loopDepth;
             string gate = "$__psbash_wg" + depth;
-            string perRecord = Body(() => EmitWhileRead(readVars, readIfs, readLoop.Body, "@($_)", gate + ".Done = $false"));
-            return PsBuild.StreamingReadLoopStage(gate, "$__psbash_ws" + depth, perRecord);
+            bool canStream = !lastpipeStage && readStage.Redirects.All(r =>
+                r.FdVar is null && r.Here is null && r.Fd is 1 or 2 && !r.Op.StartsWith('<'));
+            bool stream = false;
+            string loop = Body(() =>
+            {
+                string text = EmitWhileRead(readVars, readIfs,
+                    () =>
+                    {
+                        if (!canStream) return WithStdinScope(true, () => Emit(readStage.Body));
+                        var b = EmitReadLoopBody(readStage.Body);
+                        stream = !b.Reads;
+                        return b.Text;
+                    },
+                    () => stream ? new ReadLoopFeed(ReadLoopFeedKind.Records, "@($_)", gate + ".Done = $false") : ReadLoopFeed.Shared);
+                // Pulled from the scope, the loop's own redirects wrap it inside the stage: the dot-sourced block they put
+                // around it does not hide its input, which is the shared stdin, not `$input`.
+                return stream ? text : ApplyCompoundRedirects(text, readStage.Redirects, stdinScope: false);
+            });
+            if (stream)
+            {
+                gated = true;
+                var streamed = new StringBuilder(PsBuild.StreamingReadLoopStage(gate, "$__psbash_ws" + depth, loop));
+                AppendRedirectTail(streamed, readStage.Redirects);
+                return streamed.ToString();
+            }
+            return StageStdin(Scoped(loop), out wholePipeline);
         }
 
-        bool opensScope = cmd is Command.Subshell or Command.BraceGroup or Command.ForIn
-                or Command.ForArith or Command.If or Command.Case
-            || (cmd is Command.While loop && !IsWhileRead(loop.Cond, out _, out _));
-        if (!opensScope)
-            return $"& {{ {Scoped(Body())} }}";
+        // Every other compound stage -- whatever its form -- reads the pipe through the same stdin scope: a `$( )` in an
+        // arithmetic command or `[[ ]]`, a `select` prompt, a function definition's neighbours all inherit it in bash.
+        return StageStdin(WithStdinScope(true, () => Scoped(Body())), out wholePipeline);
 
-        return $"& {{ {PsBuild.StdinScope(WithStdinScope(true, () => Scoped(Body())))} }}";
-    }
-
-    /// <summary>
-    /// A pipe stage that is a plain <c>while read VAR...; do ...; done</c> loop (no redirect of its own, not a <c>lastpipe</c>
-    /// stage): it runs per record as the records arrive (<see cref="PsBuild.StreamingReadLoopStage"/>).
-    /// </summary>
-    private static bool IsStreamedReadLoopStage(Command cmd, bool lastpipeStage, out Command.While loop, out List<string> varNames, out string? ifs)
-    {
-        loop = null!;
-        varNames = null!;
-        ifs = null;
-        if (lastpipeStage || cmd is not Command.While { IsUntil: false } w || !w.Redirects.IsDefaultOrEmpty
-            || !IsWhileRead(w.Cond, out varNames, out ifs))
-            return false;
-        loop = w;
-        return true;
+        // THE way a compound stage after the first gets the pipe as its stdin (emitter-strategy.md "Stage stdin"): the
+        // stage's own block turns its pipeline input into the shared stdin cursor BEFORE any wrapper inside it (a
+        // redirect's dot-sourced block, the subshell guard, a loop, a function, a `$( )`) could hide `$input`, and every
+        // reader inside consumes that cursor. An unbounded literal producer (`yes`, `seq`) is read lazily instead, so a
+        // stage that stops reading ends it; that text runs the producer too, so it is the whole pipeline.
+        string StageStdin(string body, out bool whole)
+        {
+            string? lazy = pipeline is null ? null : LazyProducerText(pipeline);
+            whole = lazy is not null;
+            return lazy is not null
+                ? $"& {{ {PsBuild.StdinScopeLazy(lazy, body)} }}"
+                : $"& {{ {PsBuild.StdinScope(body)} }}";
+        }
     }
 
     /// <summary>

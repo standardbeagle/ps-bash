@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 119
+stdout-length: 12
+stderr-length: 0
+==== SCRIPT ====
+{ printf '1\n2\n'; exit 3; } | while read a; do read b; echo "$a-$b"; done > /dev/null
+echo "rc=$? ps=${PIPESTATUS[*]}"
+==== STDOUT ====
+rc=0 ps=3 0
+
+==== STDERR ====
+

@@ -432,7 +432,7 @@ passes its pipeline to `$input` only, so the emitter builds the sharing itself
   the previous queue in `finally`, so a nested compound stage never clobbers its parent's stdin.
   `< /dev/null` is a scope fed nothing. The queue is filled eagerly (a PowerShell script block
   starts only after its upstream finished), so a general infinite producer does not terminate. The
-  exception is a literal `yes ...` / `seq ...` piped into a compound (`TryEmitLazyProducerStage`): the scope
+  exception is a literal `yes ...` / `seq ...` piped into a compound (`LazyProducerText`): the scope
   (`PsBuild.StdinScopeLazy`) runs the producer on a background runspace behind a `StdinCursor` (lazy pull +
   pushback for `read`) via `New-BashLazyStdin`, and its `finally` closes the cursor, which stops the producer —
   `yes | { head -n1; }` and `yes | { read a; read b; }` terminate. The launcher's own stdin uses the same
@@ -463,9 +463,49 @@ passes its pipeline to `$input` only, so the emitter builds the sharing itself
 - **Pipelines inside a scope.** Only the FIRST stage reads the scope; later stages read the pipe
   (`{ grep a | sort; }`). A fused-lane pipeline is not formed inside a scope (the compiled cores
   know no feed).
-- **`while read`.** The loop streams its own input: as a pipe stage it keeps `$input`; inside a
-  scope with no redirect of its own it reads the feed instead; with its own `<` it reads the
-  redirect. It opens no scope of its own (a `read`/`cat` in its body does not see the stream).
+- **`while read`.** The loop reads the shared stdin ONE LINE per pass
+  (`PsBuild.SharedStdinNextLine` = `SharedStdinLine.Next`, the cursor `read` advances too), so
+  `while read a; do read b; …; done`, a `cat` / `head -1` / nested read loop in the body take the
+  lines after the loop's, as in bash. An unterminated record is joined with the next one
+  (`{ printf a; echo b; }` reads `ab`). Two forms keep iterating records instead, because nothing
+  else reads them: a pipe stage whose body reads nothing streams per record (next section), and a
+  loop whose only redirect is its own `< f` / `<<<` / heredoc with a body that reads nothing
+  iterates that source inline. Whether the body reads is decided by emitting it inside a scope and
+  checking `PsBuild.ReadsSharedStdin` (the function-body precedent; a native alone does not count).
+
+### Stage stdin (one model for every pipe stage)
+
+bash connects a pipe to the WHOLE next stage's fd 0. In PowerShell the records reach only `$input`
+of the stage's OWN script block: any block nested inside it — a redirect's dot-sourced `. { }`,
+`ShellStateGuard`, a loop, a function call, a `$( )` — sees an empty `$input`. Every bug of this
+family came from a wrapper sitting between the stage block and the reader: (a) a `;` in a quoted
+argument made a stage a statement list wrapped in `& { }` that dropped the input (43cf8c88);
+(b) a here-doc / here-string on a stage was dropped; (c) a `while read` stage collected all its
+input before running (cdacbec1); (d) `| while read …; done > f` put the loop inside the redirect's
+`. { }`, so it saw an empty `$input`; (e) a `read` in a read-loop body saw no stdin because the
+loop iterated `$input` itself and opened no scope.
+
+The rule: **the stage's own block hands its input on immediately, through one of three `PsBuild`
+primitives, and every reader consumes the shared cursor — no reader names `$input`.**
+
+1. `StdinScope` / `StdinScopeLazy` — a compound stage after the first (`EmitCompoundStage` →
+   `StageStdin`, for EVERY compound form: `{ }`, `( )`, loops, `if`, `case`, `select`, `[[ ]]`,
+   `(( ))`, a function definition) turns the input into `$global:__BashStdIn` first; wrappers
+   (redirect tail, subshell guard, pipefail `Invoke-BashPipeStage`) go inside or outside it, never
+   between. The one exception is a `while read` stage whose body reads nothing: it runs per record
+   behind `PipeGate` (`StreamingReadLoopStage`, output redirects applied to that stage).
+2. `ForwardStageInput` — a simple stage that must sit in a script block (env prefix, splat prelude,
+   subshell guard for `${x=…}` / a parameter error, pipefail with a redirect tail) pipes the
+   block's input into its one command.
+3. `DrainStageInput` — a stage whose stdin is not the pipe (its own `< f` / heredoc, a command
+   that never reads stdin) drops the records and runs once.
+
+`PsBuild` is the only file whose emitted text names `$input` (`PsBuildStageStdinGuardTests` scans
+the transpiler). The matrix compound form × wrapper context is pinned in `StageStdinMatrixTests`
+(Core) and `StageStdinMatrixDifferentialTests` (oracle). Known limit: a stage whose body reads
+stdin and whose producer is not a literal `yes`/`seq` is still filled eagerly (PowerShell starts
+a script block's end block only after its upstream ends), so an endless general producer into a
+reading body does not terminate.
 
 Known divergences (oracle bash 5.2 / GNU coreutils 9.4): `{ head -n1; cat; } < file` prints `1 2 3`
 in bash (GNU head seeks a regular file back) but `1` here — the same as bash when the data comes

@@ -82,6 +82,51 @@ public class InvokeBashReadCommandTests : IClassFixture<SharedPwshFixture>
     }
 
     [Fact]
+    public void SharedStdinLine_TakesOneLinePerCallAndLeavesTheRestForTheOtherReaders()
+    {
+        // A `while read` loop over a shared stdin (PsBuild.SharedStdinNextLine) takes ONE line per pass, the cursor a
+        // `read` in its body advances too: `while read a; do read b; …` pairs 1-2, 3-4. It took a whole record per pass,
+        // so a multi-line record left the body reader nothing (bash oracle: `printf '1\n2\n3\n4\n' | while read a; do read
+        // b; echo "$a-$b"; done` prints 1-2 and 3-4).
+        var lines = RunLines(
+            "$global:__BashStdIn = [System.Collections.Generic.Queue[object]]::new(); " +
+            "$global:__BashStdIn.Enqueue(\"1`n2`n3`n4`n\"); " +
+            "while ($null -ne ($a = [PsBash.Cmdlets.SharedStdinLine]::Next($global:__BashStdIn))) { Invoke-BashRead b; \"$a-$b\" }");
+
+        Assert.Equal(new[] { "1-2", "3-4" }, lines);
+    }
+
+    [Fact]
+    public void SharedStdinLine_JoinsAnUnterminatedRecordWithTheNext_AndSkipsAnUnterminatedEnd()
+    {
+        // `{ printf a; echo b; printf c; } | while read l; …`: bash reads the byte stream, so the first line is `ab`, and
+        // the unterminated `c` at the end fails `read` (the body never sees it).
+        var lines = RunLines(
+            "$global:__BashStdIn = [System.Collections.Generic.Queue[object]]::new(); " +
+            "$global:__BashStdIn.Enqueue([PsBash.Cmdlets.BashRuntime]::TextRecord('a', $true)); " +
+            "$global:__BashStdIn.Enqueue(\"b`n\"); " +
+            "$global:__BashStdIn.Enqueue([PsBash.Cmdlets.BashRuntime]::TextRecord('c', $true)); " +
+            "while ($null -ne ($l = [PsBash.Cmdlets.SharedStdinLine]::Next($global:__BashStdIn))) { \"[$l]\" }; " +
+            "[PsBash.Cmdlets.SharedStdinLine]::Next($null) -eq $null");
+
+        Assert.Equal(new[] { "[ab]", "True" }, lines);
+    }
+
+    [Fact]
+    public void Read_AtTheEndOfTheSharedStdin_EmptiesItsVariablesAndFails()
+    {
+        // bash oracle: `printf '1\n' | { read b; read b; echo "[$b] $?"; }` prints `[] 1`. The read at the end of the
+        // input left b at `1`, so `while read a; do read b; …` repeated the previous line for an odd line count.
+        var lines = RunLines(
+            "$global:__BashStdIn = [System.Collections.Generic.Queue[object]]::new(); " +
+            "$global:__BashStdIn.Enqueue(\"1`n\"); " +
+            "Invoke-BashRead b; Invoke-BashRead b; \"[$b] $global:LASTEXITCODE\"; " +
+            "$y = 'old'; $z = 'old'; Invoke-BashRead y z; \"[$y][$z]\"");
+
+        Assert.Equal(new[] { "[] 1", "[][]" }, lines);
+    }
+
+    [Fact]
     public void Read_BasicStdin_PopulatesREPLY()
     {
         // No destination name given: oracle parity (bash default) is REPLY.

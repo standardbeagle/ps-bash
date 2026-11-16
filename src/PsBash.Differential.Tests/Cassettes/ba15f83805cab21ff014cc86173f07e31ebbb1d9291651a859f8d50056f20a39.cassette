@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 146
+stdout-length: 8
+stderr-length: 0
+==== SCRIPT ====
+g() { read r; echo "r=$r"; head -1; cat; }
+printf '1\n2\n3\n4\n5\n' | while true; do read r; echo "r=$r"; head -1; cat; break; done | sed 's/^/>/'
+==== STDOUT ====
+>r=1
+>2
+
+==== STDERR ====
+

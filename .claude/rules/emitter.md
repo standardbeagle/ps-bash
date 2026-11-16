@@ -18,6 +18,9 @@ NEVER in the emitter:
 - assume which flags a command supports.
 - map to native PS cmdlets (`Select-Object`/`Measure-Object`/`Sort-Object`).
 
+## STAGE STDIN (emitter-strategy.md "Stage stdin")
+A stage's pipe is `$input` of its OWN block only: hand it on via `PsBuild.StdinScope`/`ForwardStageInput`/`DrainStageInput`, readers use the shared cursor; never write `$input` outside PsBuild (guard test).
+
 ## PIPE-TARGET MAPPING
 - all pipe targets in `TryEmitMappedCommand` use `EmitPassthrough`.
 - add a command: case in `TryEmitMappedCommand` → `EmitPassthrough("Invoke-BashFoo", args)`. No custom `EmitFoo` unless quoting needs it.

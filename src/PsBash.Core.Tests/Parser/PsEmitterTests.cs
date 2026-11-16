@@ -3707,12 +3707,12 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("while read line; do echo $line; done");
 
-        // A real two-level labelled loop (records from $input, then the lines of each record), not a
-        // ForEach-Object pipeline: a PS `break` inside ForEach-Object unwound the WHOLE script. The
-        // `$null -ne` guard makes the BashText probe null-safe. The read var is bound with a real
-        // `${line} = $_` assignment (not a text rewrite of $line -> $_, which clobbered literals).
+        // A real two-level labelled loop (one line per pass from the shared stdin cursor, the one a `read` in the body
+        // advances too), not a ForEach-Object pipeline: a PS `break` inside ForEach-Object unwound the WHOLE script.
+        // The read var is bound with a real `${line} = $_` assignment (not a text rewrite of $line -> $_, which
+        // clobbered literals).
         Assert.Equal(
-            ":__psbash_l0 foreach ($__psbash_rec0 in $input) { :__psbash_lc0 foreach ($_ in @(($(if ($null -ne $__psbash_rec0 -and $__psbash_rec0.PSObject.Properties['BashText']) { $__psbash_rec0.BashText } else { \"$__psbash_rec0\" }) -replace \"`n\\z\",\"\") -split \"`n\")) { $global:LASTEXITCODE = 0; ${line} = $_.Trim([char[]]@(32,9)); Invoke-BashEcho $line } }",
+            ":__psbash_l0 while ($null -ne ($__psbash_rec0 = [PsBash.Cmdlets.SharedStdinLine]::Next($global:__BashStdIn))) { :__psbash_lc0 foreach ($_ in @($__psbash_rec0)) { $global:LASTEXITCODE = 0; ${line} = $_.Trim([char[]]@(32,9)); Invoke-BashEcho $line } }",
             result);
     }
 
@@ -5717,7 +5717,7 @@ public class PsEmitterTests
     public void Transpile_WhileReadDashR_EmitsLabelledReadLoop()
     {
         var result = PsEmitter.Transpile("while read -r line; do echo $line; done");
-        Assert.Contains(":__psbash_l0 foreach ($__psbash_rec0 in $input)", result);
+        Assert.Contains(":__psbash_l0 while ($null -ne ($__psbash_rec0 = " + PsBuild.SharedStdinNextLine + "))", result);
         Assert.Contains("${line} = $_", result);
     }
 
@@ -6716,7 +6716,8 @@ public class PsEmitterTests
     [Fact]
     public void Transpile_WhileRead_StripsTrailingNewlineBeforeSplit()
     {
-        var result = PsEmitter.Transpile("while read x; do echo $x; done");
+        // A loop over its own input's records (a body that reads nothing) splits each record into lines.
+        var result = PsEmitter.Transpile("while read x; do echo $x; done < f");
         // `\z`: .NET's `$` also matches before a final newline, so a record ending in a blank line lost it.
         Assert.Contains(@"-replace ""`n\z"","""") -split ""`n""", result);
     }

@@ -330,6 +330,11 @@ public sealed class InvokeBashReadCommand : PSCmdlet
             // bash's `read` takes a single line from the group's fd 0.
             inputLine = queuedLine;
         }
+        else if (fromFd is null or 0 && SharedStdin.Get(SessionState) is not null)
+        {
+            // A shared stdin that has nothing left is the end of the input, not a reason to read the console.
+            inputLine = null;
+        }
         else
         {
             recordTerminated = true;
@@ -394,18 +399,21 @@ public sealed class InvokeBashReadCommand : PSCmdlet
             }
         }
 
+        bool atEof = false;
         if (inputLine == null)
         {
-            // EOF.
-            FileSystemHelpers.SetLastExitCode(this, 1);
-            return;
+            atEof = true;
+            // EOF: status 1, and the variables are still assigned -- empty (bash: `x=5; read x < /dev/null` leaves x
+            // empty). Kept, a read loop's body `read b` at the end of the input left b at the previous line's value.
+            inputLine = "";
+            recordTerminated = false;
         }
 
         // bash's read skips NUL bytes (`printf '.\000.' | read s` is `..`); kept, a NUL ended the value at the first one.
         if (inputLine.Contains('\0')) inputLine = inputLine.Replace("\0", "");
 
         // -n N: at most N characters; what was read past them stays in the input for the next read.
-        if (maxChars.HasValue && exactChars is null && inputLine.Length >= maxChars.Value && fromFd is null)
+        if (!atEof && maxChars.HasValue && exactChars is null && inputLine.Length >= maxChars.Value && fromFd is null)
         {
             string tail = inputLine.Substring(maxChars.Value) + (recordTerminated ? (recordDelim ?? '\n').ToString() : "");
             inputLine = inputLine.Substring(0, maxChars.Value);

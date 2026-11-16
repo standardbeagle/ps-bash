@@ -1,0 +1,16 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 95
+stdout-length: 8
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)"
+yes | while read l; do read m; echo $l$m; break; done > f
+echo "rc=$?"; cat f
+==== STDOUT ====
+rc=0
+yy
+
+==== STDERR ====
+

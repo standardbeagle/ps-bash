@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 132
+stdout-length: 13
+stderr-length: 0
+==== SCRIPT ====
+x=5; read x < /dev/null; echo "[$x] $?"; REPLY=r; read < /dev/null; echo "[$REPLY]"; y=7; z=8; read y z < /dev/null; echo "[$y][$z]"
+==== STDOUT ====
+[] 1
+[]
+[][]
+
+==== STDERR ====
+

@@ -1,0 +1,18 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 173
+stdout-length: 18
+stderr-length: 0
+==== SCRIPT ====
+g() { read r; echo "r=$r"; head -1; cat; }
+set -o pipefail
+printf '1\n2\n3\n4\n5\n' | for i in 1; do read r; echo "r=$r"; head -1; cat; done
+echo "rc=$? ps=${PIPESTATUS[*]}"
+==== STDOUT ====
+r=1
+2
+rc=0 ps=0 0
+
+==== STDERR ====
+

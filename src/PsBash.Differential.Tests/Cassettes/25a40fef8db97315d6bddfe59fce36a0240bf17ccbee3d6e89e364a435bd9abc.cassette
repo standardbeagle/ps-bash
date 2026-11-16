@@ -1,0 +1,20 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 187
+stdout-length: 14
+stderr-length: 0
+==== SCRIPT ====
+g() { read r; echo "r=$r"; head -1; cat; }
+cd "$(mktemp -d)"
+echo old > out
+printf '1\n2\n3\n4\n5\n' | while read l; do echo "l=$l"; read r; echo "r=$r"; head -1; cat; done >> out
+cat out
+==== STDOUT ====
+old
+l=1
+r=2
+3
+
+==== STDERR ====
+
