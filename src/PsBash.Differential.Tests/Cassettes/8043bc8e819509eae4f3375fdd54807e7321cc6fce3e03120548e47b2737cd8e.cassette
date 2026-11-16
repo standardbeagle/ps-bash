@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 87
+stdout-length: 11
+stderr-length: 0
+==== SCRIPT ====
+yes | while read l; do n=$((n+1)); [ $n -ge 3 ] && break; echo "$n$l"; done; echo rc=$?
+==== STDOUT ====
+1y
+2y
+rc=0
+
+==== STDERR ====
+

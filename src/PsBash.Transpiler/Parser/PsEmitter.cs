@@ -2835,7 +2835,9 @@ public static partial class PsEmitter
     /// <param name="body">The loop body.</param>
     /// <param name="sourceExpr">The records to iterate when the loop has its own input redirect
     /// (<see cref="ReadLoopSource"/>); null = the pipeline (<c>$input</c>) or the shared stdin queue.</param>
-    private static string EmitWhileRead(List<string> varNames, string? ifs, Command body, string? sourceExpr = null)
+    /// <param name="recordTail">With <paramref name="sourceExpr"/>: a statement run after each record's lines are all done
+    /// (skipped by a <c>break</c> or <c>return</c> out of the record).</param>
+    private static string EmitWhileRead(List<string> varNames, string? ifs, Command body, string? sourceExpr = null, string? recordTail = null)
     {
         // The `read` variables are the loop bindings for this construct: register
         // them as loop vars so the body emits them bare ($line, not $env:line) and
@@ -2893,15 +2895,19 @@ public static partial class PsEmitter
 
         // The lines of one record: its BashText (null-safe), the trailing newline dropped, split.
         string rec = "$__psbash_rec" + depth;
-        string lines = $"@(($(if ($null -ne {rec} -and {rec}.PSObject.Properties['BashText']) {{ {rec}.BashText }} else {{ \"{rec}\" }}) -replace \"`n$\",\"\") -split \"`n\")";
-        string inner = $":{lineLabel} foreach ($_ in {lines}) {{ {bind}{bodyText} }}";
+        // `\z`, not `$`: .NET's `$` also matches before a final newline, so `a\n\n` lost its empty last line.
+        string lines = $"@(($(if ($null -ne {rec} -and {rec}.PSObject.Properties['BashText']) {{ {rec}.BashText }} else {{ \"{rec}\" }}) -replace \"`n\\z\",\"\") -split \"`n\")";
+        // Each pass starts after `read` succeeded: the body's `$?` is 0 (not the previous pass's last status).
+        string inner = $":{lineLabel} foreach ($_ in {lines}) {{ {PsBuild.SetStatus(0)}; {bind}{bodyText} }}";
 
         // Inheriting a compound's stdin, the lines come from the shared queue (a `read` or `cat`
         // before the loop already advanced it), not from `$input` — dequeued one record per pass,
         // so a `read` in the body still takes the NEXT record (a `foreach` over the feed would
         // drain the queue up front). `$input` is an enumerator: `foreach` over it streams.
         if (sourceExpr is not null)
-            return $":{recLabel} foreach ({rec} in {sourceExpr}) {{ {inner} }}";
+            return recordTail is null
+                ? $":{recLabel} foreach ({rec} in {sourceExpr}) {{ {inner} }}"
+                : $":{recLabel} foreach ({rec} in {sourceExpr}) {{ {inner}; {recordTail} }}";
         return _inStdinScope
             ? $":{recLabel} while ($global:__BashStdIn -and $global:__BashStdIn.Count -gt 0) {{ {rec} = $global:__BashStdIn.Dequeue(); {inner} }}"
             : $":{recLabel} foreach ({rec} in $input) {{ {inner} }}";
@@ -11481,7 +11487,15 @@ public static partial class PsEmitter
                 // EmitCompoundStage drains it into the shared stdin queue (a stdin scope)
                 // that `read` and the fed readers consume from. The body still runs
                 // ONCE — bash's semantics, unlike a per-line ForEach-Object envelope.
-                sb.Append(EmitCompoundStage(cmd, isFirstStage: i == 0, entryScope, lastpipeStage: _scriptLastpipe && i > 0 && i == pipeline.Commands.Length - 1));
+                bool lastpipeStage = _scriptLastpipe && i > 0 && i == pipeline.Commands.Length - 1;
+                // A streamed read loop gets the gate that stops its producer as a pipeline element of its own, in front of
+                // the stage (and outside a pipefail stage wrapper, so the stop reaches this pipeline).
+                if (i > 0 && IsStreamedReadLoopStage(cmd, lastpipeStage, out _, out _, out _))
+                {
+                    sb.Append(PsBuild.PipeGate).Append(" | ");
+                    stageStart = sb.Length;
+                }
+                sb.Append(EmitCompoundStage(cmd, isFirstStage: i == 0, entryScope, lastpipeStage));
             }
             else if (pipeline.Commands.Length > 1)
                 sb.Append(WrapPipelineStageIfStatementList(Emit(cmd)));
@@ -11691,15 +11705,16 @@ public static partial class PsEmitter
         // what its scoped `return` returns from. A lastpipe stage runs in the shell itself, and a function body is
         // not part of the stage.
         bool ownsExit = !lastpipeStage && cmd is not Command.ShFunction;
-        string Body()
+        string Body(Func<string>? emit = null)
         {
+            emit ??= () => Emit(cmd);
             if (lastpipeStage)
             {
                 _lastpipeStageDepth++;
-                try { return Emit(cmd); }
+                try { return emit(); }
                 finally { _lastpipeStageDepth--; }
             }
-            if (!ownsExit) return Emit(cmd);
+            if (!ownsExit) return emit();
             _subshellDepth++;
             // `{ echo one; false; echo two; } | cat` under set -e: the stage is a subshell that inherits -e, so it ends
             // at `false` (its status 1); the pipeline's status is still the last stage's. The stage's statements get
@@ -11710,9 +11725,14 @@ public static partial class PsEmitter
             bool savedErrTrap = PsBuild.ErrTrapNeedsErrtrace;
             if (armed) { _errexitExemptDepth = 0; PsBuild.ErrTrapNeedsErrtrace = true; }
             _armedStages = false;
+            // A subshell starts with no loop (as EmitSubshell): `for i in 1 2; do echo x | { break; }; done` warns and
+            // carries on in bash, and a `break 2` in a stage's own loop leaves that loop only. A labelled break here
+            // unwound the stage's pipeline into the enclosing loop and ended it.
+            var outerLabels = _loopLabels; var outerBarrier = _loopBarrier;
+            _loopLabels = null; _loopBarrier = true;
             try
             {
-                string text = Emit(cmd);
+                string text = emit();
                 return armed ? PsBuild.ErrexitLifted(text) : text;
             }
             finally
@@ -11721,11 +11741,22 @@ public static partial class PsEmitter
                 _armedStages = armed;
                 _errexitExemptDepth = savedExempt;
                 PsBuild.ErrTrapNeedsErrtrace = savedErrTrap;
+                _loopLabels = outerLabels; _loopBarrier = outerBarrier;
             }
         }
 
         if (isFirstStage)
             return $"& {{ {Scoped(Body())} }}";
+
+        // `producer | while read l; do ...; done`: the loop handles each record as it arrives (a process block), not the
+        // collected input after the producer has finished. Its EmitPipelineStages caller puts the gate in front.
+        if (IsStreamedReadLoopStage(cmd, lastpipeStage, out var readLoop, out var readVars, out var readIfs))
+        {
+            int depth = _loopDepth;
+            string gate = "$__psbash_wg" + depth;
+            string perRecord = Body(() => EmitWhileRead(readVars, readIfs, readLoop.Body, "@($_)", gate + ".Done = $false"));
+            return PsBuild.StreamingReadLoopStage(gate, "$__psbash_ws" + depth, perRecord);
+        }
 
         bool opensScope = cmd is Command.Subshell or Command.BraceGroup or Command.ForIn
                 or Command.ForArith or Command.If or Command.Case
@@ -11734,6 +11765,22 @@ public static partial class PsEmitter
             return $"& {{ {Scoped(Body())} }}";
 
         return $"& {{ {PsBuild.StdinScope(WithStdinScope(true, () => Scoped(Body())))} }}";
+    }
+
+    /// <summary>
+    /// A pipe stage that is a plain <c>while read VAR...; do ...; done</c> loop (no redirect of its own, not a <c>lastpipe</c>
+    /// stage): it runs per record as the records arrive (<see cref="PsBuild.StreamingReadLoopStage"/>).
+    /// </summary>
+    private static bool IsStreamedReadLoopStage(Command cmd, bool lastpipeStage, out Command.While loop, out List<string> varNames, out string? ifs)
+    {
+        loop = null!;
+        varNames = null!;
+        ifs = null;
+        if (lastpipeStage || cmd is not Command.While { IsUntil: false } w || !w.Redirects.IsDefaultOrEmpty
+            || !IsWhileRead(w.Cond, out varNames, out ifs))
+            return false;
+        loop = w;
+        return true;
     }
 
     /// <summary>

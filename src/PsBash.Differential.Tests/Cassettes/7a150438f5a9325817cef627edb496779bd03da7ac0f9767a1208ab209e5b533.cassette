@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 67
+stdout-length: 7
+stderr-length: 0
+==== SCRIPT ====
+{ echo a; echo "in=$?"; } | while read l; do false; echo "$l"; done
+==== STDOUT ====
+a
+in=0
+
+==== STDERR ====
+

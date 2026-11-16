@@ -263,13 +263,28 @@ public static class PsBuild
     /// compound pipeline stage), which a nested <c>&amp; { }</c> would hide.
     /// </summary>
     public static string ShellStateGuard(string body, string? finallyTail = null) =>
-        "$__psbash_ss = [PsBash.Cmdlets.BashShellState]::Save($ExecutionContext.SessionState); try { "
+        ShellStateSave + "; try { "
         + body
-        + " } catch [PsBash.Cmdlets.BashParamErrorException] { if (-not $_.Exception.Data['psbash.reported']) { Write-Error ('ps-bash: ' + $_.Exception.Message) -ErrorAction Continue }; $global:LASTEXITCODE = 1 } "
-        + "catch [PsBash.Cmdlets.BashSubshellExitException] { $global:LASTEXITCODE = $_.Exception.Status } finally { $__psbash_xt =[PsBash.Cmdlets.BashShellState]::Restore($ExecutionContext.SessionState, $__psbash_ss); "
-        + "if ($null -ne $__psbash_xt) { if ($__psbash_xt) { Set-PSDebug -Trace 1 } else { Set-PSDebug -Off } }"
+        + " }" + ParamErrorCatch + SubshellExitCatch + " finally { " + ShellStateRestore
         + (finallyTail is null ? "" : "; " + finallyTail)
         + " }";
+
+    /// <summary>The save half of <see cref="ShellStateGuard"/> (into <c>$__psbash_ss</c>).</summary>
+    private const string ShellStateSave = "$__psbash_ss = [PsBash.Cmdlets.BashShellState]::Save($ExecutionContext.SessionState)";
+
+    /// <summary>The restore half of <see cref="ShellStateGuard"/> (from <c>$__psbash_ss</c>), with the <c>set -x</c> it reports.</summary>
+    private const string ShellStateRestore =
+        "$__psbash_xt =[PsBash.Cmdlets.BashShellState]::Restore($ExecutionContext.SessionState, $__psbash_ss); "
+        + "if ($null -ne $__psbash_xt) { if ($__psbash_xt) { Set-PSDebug -Trace 1 } else { Set-PSDebug -Off } }";
+
+    /// <summary>A parameter error ends the subshell it happens in (reported once, status 1), not the script.</summary>
+    private const string ParamErrorCatch =
+        " catch [PsBash.Cmdlets.BashParamErrorException] { if (-not $_.Exception.Data['psbash.reported']) { Write-Error ('ps-bash: ' + $_.Exception.Message) -ErrorAction Continue }; $global:LASTEXITCODE = 1 }";
+    /// <summary>
+    /// An <c>exit</c> that <see cref="DynamicExit"/> threw from a callee ends the enclosing subshell scope with its status.
+    /// </summary>
+    private const string SubshellExitCatch =
+        " catch [PsBash.Cmdlets.BashSubshellExitException] { $global:LASTEXITCODE = $_.Exception.Status }";
 
     /// <summary>
     /// The PowerShell statement that ends the shell with <paramref name="status"/>, for code that runs where the
@@ -282,6 +297,32 @@ public static class PsBuild
     public static string DynamicExit(string status) =>
         "$__psbash_xc = " + status + "; if ($ExecutionContext.SessionState.PSVariable.Get('__psbash_ss')) { $global:LASTEXITCODE = $__psbash_xc; "
         + "throw [PsBash.Cmdlets.BashSubshellExitException]::new([int]$__psbash_xc) }; exit $__psbash_xc";
+
+    /// <summary>The pipeline element in front of a <see cref="StreamingReadLoopStage"/>: it stops the upstream once the loop has ended.</summary>
+    public const string PipeGate = "Invoke-BashPipeGate";
+
+    /// <summary>
+    /// A <c>while read</c> loop as a pipe stage (<c>producer | while read l; do …; done</c>), run ONE RECORD AT A TIME as the
+    /// records arrive. A script block's statements only start once its upstream has finished (they are its <c>end</c>
+    /// block, and <c>$input</c> there is the collected input), so a body after a slow or endless producer saw nothing until
+    /// the producer ended; a <c>process</c> block runs for each record as it is written. The stage is a subshell
+    /// (<see cref="ShellStateGuard"/>: saved in <c>begin</c>, restored in <c>end</c>, or in <c>clean</c> when a later stage
+    /// stopped the pipeline). Between records the UPSTREAM runs, so each record's pass keeps the loop's status to itself
+    /// (<paramref name="statusVar"/>; the shell's <c>$?</c> is put back for the producer) and the loop's status is the last
+    /// body command's, or 0. A pass that does not finish its record (<c>break</c>, <c>exit</c>, a parameter error) leaves
+    /// <paramref name="gateVar"/><c>.Done</c> set: later records are dropped and <see cref="PipeGate"/> stops the producer.
+    /// <paramref name="perRecord"/> handles <c>$_</c> and clears <c>Done</c> when it has handled the whole record.
+    /// </summary>
+    public static string StreamingReadLoopStage(string gateVar, string statusVar, string perRecord)
+    {
+        string entryVar = statusVar + "in";
+        return "& { begin { " + gateVar + " = [PsBash.Cmdlets.BashPipeGate]::Claim(); " + statusVar + " = 0; " + ShellStateSave + " } "
+            + "process { if (" + gateVar + ".Done) { return }; " + entryVar + " = $global:LASTEXITCODE; $global:LASTEXITCODE = 0; "
+            + gateVar + ".Done = $true; try { " + perRecord + " }" + ParamErrorCatch + SubshellExitCatch
+            + " finally { " + statusVar + " = $global:LASTEXITCODE; $global:LASTEXITCODE = " + entryVar + " } } "
+            + "end { $global:LASTEXITCODE = " + statusVar + "; " + ShellStateRestore + "; $__psbash_ss = $null } "
+            + "clean { if ($null -ne $__psbash_ss) { " + ShellStateRestore + " } } }";
+    }
 
     /// <summary>Wrap in a subexpression: <c>$(expr)</c>.</summary>
     public static string Subexpr(string expr) => "$(" + expr + ")";

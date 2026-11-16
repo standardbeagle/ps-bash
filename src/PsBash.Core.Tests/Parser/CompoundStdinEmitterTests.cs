@@ -115,12 +115,71 @@ public class CompoundStdinEmitterTests
     }
 
     [Fact]
-    public void Transpile_WhileReadAsPipeStage_StillStreamsInput()
+    public void Transpile_WhileReadAsPipeStage_RunsPerRecordAsTheRecordsArrive()
     {
         var ps = T("printf 'a\\n' | while read l; do echo $l; done");
 
-        Assert.Contains(":__psbash_l0 foreach ($__psbash_rec0 in $input)", ps);
+        // REGRESSION: the loop ran in the stage's end block over `$input` (the producer's COLLECTED output), so it
+        // started only after the producer ended and `yes | while read …; break; done` never ended. Now each record
+        // runs in a process block, behind the gate that stops the producer once the loop is done.
+        Assert.Contains("| " + PsBuild.PipeGate + " | & { begin { $__psbash_wg0 = [PsBash.Cmdlets.BashPipeGate]::Claim()", ps);
+        Assert.Contains("process { if ($__psbash_wg0.Done) { return }", ps);
+        Assert.Contains(":__psbash_l0 foreach ($__psbash_rec0 in @($_))", ps);
+        Assert.DoesNotContain("in $input", ps);
         Assert.DoesNotContain("__BashStdIn", ps);
+    }
+
+    [Fact]
+    public void Transpile_WhileReadAsPipeStage_ARecordThatFinishesReopensTheGate()
+    {
+        var ps = T("printf 'a\\n' | while read l; do echo $l; done");
+
+        // The gate closes per record and reopens only when the record's lines all ran: a `break`/`exit` skips the
+        // reopen, so the producer is stopped.
+        Assert.Contains("; $__psbash_wg0.Done = $false }", ps);
+    }
+
+    [Theory]
+    [InlineData("while read l; do echo $l; done < f")]                 // not a pipe stage
+    [InlineData("printf 'a\\n' | while read l; do echo $l; done < f")] // its own redirect replaces the pipe
+    [InlineData("while read l; do echo $l; done | cat")]               // the first stage reads the shell's stdin
+    [InlineData("printf 'a\\n' | until read l; do echo $l; done")]     // not a read loop
+    [InlineData("printf 'a\\n' | while true; do cat; break; done")]
+    [InlineData("printf 'a\\n' | { while read l; do echo $l; done; }")]
+    public void Transpile_NotAPlainReadLoopStage_GetsNoGate(string bash)
+    {
+        Assert.DoesNotContain(PsBuild.PipeGate, T(bash));
+    }
+
+    [Fact]
+    public void Transpile_WhileReadAsPipeStage_UnderPipefail_GateStaysOutsideTheStageWrapper()
+    {
+        var ps = T("set -o pipefail\nprintf 'a\\n' | while read l; do echo $l; done");
+
+        // The gate stops ITS pipeline's upstream: inside the per-stage steppable pipeline it would stop nothing.
+        Assert.Contains(PsBuild.PipeGate + " | Invoke-BashPipeStage", ps);
+    }
+
+    [Theory]
+    [InlineData("for i in 1 2; do echo x | { cat; break; }; done")]
+    [InlineData("for i in 1 2; do printf 'a\\n' | while read l; do break 2; done; done")]
+    [InlineData("while true; do printf 'a\\n' | while read l; do continue 2; done; done")]
+    public void Transpile_LoopControlInAPipeStage_NeverReachesALoopOutsideTheStage(string bash)
+    {
+        // REGRESSION: a pipe stage is a subshell, which starts with no loop. The stage's `break` named the enclosing
+        // loop's label, unwound the stage's pipeline and ended that loop (bash: a warning, or only the stage's own loop).
+        var ps = T(bash);
+        Assert.DoesNotContain("break __psbash_l0", ps);
+        Assert.DoesNotContain("continue __psbash_l0", ps);
+        Assert.DoesNotContain("continue __psbash_lc0", ps);
+    }
+
+    [Fact]
+    public void Transpile_WhileReadAsPipeStage_UnderLastpipe_KeepsTheCollectedLoop()
+    {
+        var ps = T("shopt -s lastpipe\nprintf 'a\\n' | while read l; do x=$l; done");
+
+        Assert.DoesNotContain(PsBuild.PipeGate, ps);
     }
 
     [Fact]

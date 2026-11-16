@@ -1,0 +1,16 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 91
+stdout-length: 16
+stderr-length: 0
+==== SCRIPT ====
+{ printf 'a'; printf 'b\nc'; echo d; printf '\n\ne'; } | while read l; do echo "[$l]"; done
+==== STDOUT ====
+[ab]
+[cd]
+[]
+[]
+
+==== STDERR ====
+

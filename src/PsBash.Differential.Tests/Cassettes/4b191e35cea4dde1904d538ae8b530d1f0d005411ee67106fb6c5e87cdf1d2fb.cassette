@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 98
+stdout-length: 6
+stderr-length: 0
+==== SCRIPT ====
+for i in 1 2; do printf 'x\ny\n' | while read l; do [ "$l" = y ] && break; echo "$i$l"; done; done
+==== STDOUT ====
+1x
+2x
+
+==== STDERR ====
+

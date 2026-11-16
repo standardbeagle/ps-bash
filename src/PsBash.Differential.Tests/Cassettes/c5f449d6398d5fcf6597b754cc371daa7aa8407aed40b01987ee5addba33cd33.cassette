@@ -1,0 +1,17 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 251
+stdout-length: 35
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)"
+{ echo a; i=0; while [ ! -f seen ] && [ $i -lt 100 ]; do sleep 0.1; i=$((i+1)); done; if [ -f seen ]; then echo b-after-loop-read-a; else echo b-loop-never-saw-a; fi; } | while read -r l; do echo "got $l"; touch seen; done
+echo rc=$?
+==== STDOUT ====
+got a
+got b-after-loop-read-a
+rc=0
+
+==== STDERR ====
+

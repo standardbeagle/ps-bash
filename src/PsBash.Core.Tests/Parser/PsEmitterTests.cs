@@ -3712,7 +3712,7 @@ public class PsEmitterTests
         // `$null -ne` guard makes the BashText probe null-safe. The read var is bound with a real
         // `${line} = $_` assignment (not a text rewrite of $line -> $_, which clobbered literals).
         Assert.Equal(
-            ":__psbash_l0 foreach ($__psbash_rec0 in $input) { :__psbash_lc0 foreach ($_ in @(($(if ($null -ne $__psbash_rec0 -and $__psbash_rec0.PSObject.Properties['BashText']) { $__psbash_rec0.BashText } else { \"$__psbash_rec0\" }) -replace \"`n$\",\"\") -split \"`n\")) { ${line} = $_.Trim([char[]]@(32,9)); Invoke-BashEcho $line } }",
+            ":__psbash_l0 foreach ($__psbash_rec0 in $input) { :__psbash_lc0 foreach ($_ in @(($(if ($null -ne $__psbash_rec0 -and $__psbash_rec0.PSObject.Properties['BashText']) { $__psbash_rec0.BashText } else { \"$__psbash_rec0\" }) -replace \"`n\\z\",\"\") -split \"`n\")) { $global:LASTEXITCODE = 0; ${line} = $_.Trim([char[]]@(32,9)); Invoke-BashEcho $line } }",
             result);
     }
 
@@ -6717,7 +6717,8 @@ public class PsEmitterTests
     public void Transpile_WhileRead_StripsTrailingNewlineBeforeSplit()
     {
         var result = PsEmitter.Transpile("while read x; do echo $x; done");
-        Assert.Contains(@"-replace ""`n$"","""") -split ""`n""", result);
+        // `\z`: .NET's `$` also matches before a final newline, so a record ending in a blank line lost it.
+        Assert.Contains(@"-replace ""`n\z"","""") -split ""`n""", result);
     }
 
     [Fact]

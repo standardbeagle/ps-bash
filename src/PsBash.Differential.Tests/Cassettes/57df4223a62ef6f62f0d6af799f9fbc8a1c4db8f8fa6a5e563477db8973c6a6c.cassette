@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 81
+stdout-length: 8
+stderr-length: 0
+==== SCRIPT ====
+seq 1 1000000 | while read n; do [ $n -eq 2 ] && break; echo $n; done; echo after
+==== STDOUT ====
+1
+after
+
+==== STDERR ====
+

@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 76
+stdout-length: 28
+stderr-length: 0
+==== SCRIPT ====
+printf 'x;y $(echo inj) `echo bt`\n' | while read -r l; do echo "[$l]"; done
+==== STDOUT ====
+[x;y $(echo inj) `echo bt`]
+
+==== STDERR ====
+

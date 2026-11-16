@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 111
+stdout-length: 10
+stderr-length: 0
+==== SCRIPT ====
+( set -u; printf 'a\nb\n' | while read l; do echo "$l"; echo "$nope_unset"; done; echo "after=$?" ) 2>/dev/null
+==== STDOUT ====
+a
+after=1
+
+==== STDERR ====
+
