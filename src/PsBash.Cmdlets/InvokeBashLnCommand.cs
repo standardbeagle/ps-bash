@@ -199,7 +199,7 @@ public sealed class InvokeBashLnCommand : PSCmdlet
         var parsed = ScanArgs(args);
         if (FileSystemHelpers.TryWriteParseError(this, "ln", parsed)) return;
         if (FileSystemHelpers.TryHandleInfoOptions(this, "ln", parsed)) return;
-        if (!TryPlan(parsed, BashVariableStore.Get, out var plan, out var planError))
+        if (!TryPlan(parsed, BashVariableStore.GetExported, out var plan, out var planError))
         {
             FileSystemHelpers.WriteBashError(this, planError!);
             return;

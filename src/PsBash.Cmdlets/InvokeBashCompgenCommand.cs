@@ -95,7 +95,9 @@ public sealed class InvokeBashCompgenCommand : PSCmdlet
             case "function":
                 return DeclarePrinter.AllBashFunctions(this).Select(f => f.Name);
             case "export":
-                return Script("Get-ChildItem Env: | ForEach-Object { if ($_.Name -ieq 'Path') { 'PATH' } else { $_.Name } }");
+                // -e: the exported variables (a variable that is merely set is -v only).
+                return BashVariableStore.EnumerateExported().Select(kv => string.Equals(kv.Key, "Path", StringComparison.OrdinalIgnoreCase) ? "PATH" : kv.Key)
+                    .OrderBy(n => n, StringComparer.Ordinal);
             case "setopt":
                 return SetOptions;
             case "alias":

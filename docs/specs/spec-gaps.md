@@ -36,4 +36,4 @@ Found on the way, not tilde: an unquoted `${v%pat}` / `${v#pat}` that expands to
 bash drops it from the word list (`t a ${HOME%$HOME} b` passes two arguments, ps-bash passes three).
 ## set -a (allexport)
 
-set -a / set -o allexport (and the + forms) are accepted and change nothing: every shell variable already lives in the exported environment, so the set -a; . .env; set +a idiom works. Gap: variables are exported even when set -a is off (`declare -p` shows no `x` flag for them).
+set -a / set -o allexport (and the + forms) turn the allexport switch of the export table on and off (`environment-model.md` §3): a variable assigned while it is on is exported. Gap: re-assigning an unexported variable the value it already has, under set -a, does not export it.

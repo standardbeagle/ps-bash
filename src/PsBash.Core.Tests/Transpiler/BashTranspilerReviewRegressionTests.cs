@@ -866,8 +866,8 @@ public class BashTranspilerReviewRegressionTests
     [Theory]
     [InlineData("declare -i n=5", "MarkAttribute('n', 'i')")]
     [InlineData("declare -ix n=5", "MarkAttribute('n', 'i')")]
-    [InlineData("export E=1", "MarkAttribute('E', 'x')")]
-    [InlineData("export A=1 B=2", "MarkAttribute('B', 'x')")]
+    [InlineData("export E=1", "BashVariableStore]::Export('E')")]
+    [InlineData("export A=1 B=2", "BashVariableStore]::Export('A', 'B')")]
     public void Transpile_IntegerAndExportDeclarations_RecordTheirAttribute(string bash, string expected)
         => Assert.Contains(expected, BashTranspiler.Transpile(bash + "\ndeclare -p"));
 

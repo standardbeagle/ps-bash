@@ -23,6 +23,9 @@ internal sealed class Program
         // $PWD for the interactive shell and a stateful session (which skip the launcher's per-call cwd preamble):
         // the script-visible shell form, C:/x (docs/specs/paths.md), not whatever the parent left in PWD.
         Environment.SetEnvironmentVariable("PWD", PsBash.Core.BashPath.ToShell(Environment.CurrentDirectory));
+        // The shell starts: everything in the environment was inherited, so it is exported (ShellExports). A framed
+        // launcher request resets this again with the launcher's own environment (SdkWorker.RunCommand).
+        PsBash.Core.ShellExports.Reset();
         var exitCode = await MainCoreAsync(args);
         HostLog.SetExitReason("main returned (server stopped)");
         // End the process explicitly. Returning from Main is not enough: the

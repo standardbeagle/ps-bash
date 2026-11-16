@@ -76,6 +76,13 @@ public static class BashStateSnapshot
             if (raw is not (object[] or IDictionary)) continue;
             sb.Append("$global:").Append(pv.Name).Append(" = ").Append(Literal(raw, 0)).Append('\n');
         }
+        // The job's request environment carries every variable (a job is a forked subshell: it keeps the unexported
+        // ones), and its host starts with all of them exported; the ones that are not exported here are marked so.
+        var unexported = PsBash.Core.ShellExports.UnexportedNames();
+        if (unexported.Count > 0)
+            sb.Append(PsBuild.MarkUnexported(unexported)).Append('\n');
+        if (PsBash.Core.ShellExports.AllExport)
+            sb.Append(PsBuild.SetAllExport(true)).Append('\n');
         sb.Append(ErrTrapStatement(session));
         return sb.ToString();
     }

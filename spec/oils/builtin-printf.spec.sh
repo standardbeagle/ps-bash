@@ -686,7 +686,6 @@ if ! test "$localtime" = "$tz"; then
 fi
 ## stdout: not equal
 ## status: 0
-## XFAIL ps-bash gap-vars-always-exported every ps-bash variable lives in the process environment, so an unexported TZ still changes %(...)T
 ## timeout: 10
 
 #### %(strftime format)T TZ in environ but not in shell's memory

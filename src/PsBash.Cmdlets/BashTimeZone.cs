@@ -7,7 +7,8 @@ namespace PsBash.Cmdlets;
 /// </summary>
 public static class BashTimeZone
 {
-    public static TimeZoneInfo Current() => Resolve(BashVariableStore.Get("TZ"));
+    /// <remarks>bash applies <c>TZ</c> only when it is exported (<c>TZ=x; printf '%(%H)T'</c> still prints machine time).</remarks>
+    public static TimeZoneInfo Current() => Resolve(BashVariableStore.GetExported("TZ"));
 
     public static TimeZoneInfo Resolve(string? tz)
     {

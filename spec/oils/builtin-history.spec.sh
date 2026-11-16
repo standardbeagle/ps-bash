@@ -107,7 +107,6 @@ status=0
 status=1
 ## END
 ## status: 0
-## XFAIL ps-bash arch-vars-in-environment SH=bash is not exported in bash, so the child's case $SH in bash*) echo '^D' does not match; here every variable is exported (intentional-differences.md, Platform)
 ## timeout: 10
 ## real-launcher
 

@@ -1,0 +1,47 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 739
+stdout-length: 177
+stderr-length: 0
+==== SCRIPT ====
+d=$(mktemp -d)
+cd "$d"
+cat > "$d/o.sh" <<'PSB_EOF'
+echo "self: ${PSB_M-unset}"
+echo "sh: $(sh -c 'echo "${PSB_M-unset}"')"
+echo "bash: $(bash -c 'echo "${PSB_M-unset}"')"
+echo "env-grep: $(env | grep -c '^PSB_M=')"
+printenv PSB_M; echo "printenv: $?"
+echo "env-run: $(env sh -c 'echo "${PSB_M-unset}"')"
+echo "exec: $( (exec sh -c 'echo "${PSB_M-unset}"') )"
+echo "xargs: $(echo a | xargs sh -c 'echo "${PSB_M-unset}"' _)"
+echo "find: $(find . -maxdepth 0 -exec sh -c 'echo "${PSB_M-unset}"' \;)"
+sh -c 'echo "background: ${PSB_M-unset}"' & wait
+sh -c 'echo "pipe-stage: ${PSB_M-unset}"' | cat
+echo x | sh -c 'echo "pipe-target: ${PSB_M-unset}"'
+echo "compgen-e: $(compgen -e PSB_M)"
+PSB_EOF
+PSB_M=v
+. "$d/o.sh"
+echo rc=$?
+cd /
+rm -rf "$d"
+==== STDOUT ====
+self: v
+sh: unset
+bash: unset
+env-grep: 0
+printenv: 1
+env-run: unset
+exec: unset
+xargs: unset
+find: unset
+background: unset
+pipe-stage: unset
+pipe-target: unset
+compgen-e:
+rc=0
+
+==== STDERR ====
+

@@ -44,7 +44,7 @@ public static class DetachedProcess
         foreach (var a in args) psi.ArgumentList.Add(a);
         psi.Environment["OUT"] = outPath;
         if (!string.IsNullOrEmpty(errPath)) psi.Environment["ERR"] = errPath;
-        BashVariableStore.ApplyTo(psi); // exports reach the child (Windows inherits the process environment directly)
+        BashVariableStore.ApplyTo(psi); // the exported variables only
         using var p = Process.Start(psi) ?? throw new InvalidOperationException("could not start " + exe);
         return p.Id;
     }
@@ -54,7 +54,7 @@ public static class DetachedProcess
     private const uint GenericRead = 0x80000000, GenericWrite = 0x40000000, FileAppendData = 0x4;
     private const uint ShareRW = 0x3, OpenExisting = 3, OpenAlways = 4, CreateAlways = 2;
     private const int StartfUseStdHandles = 0x100;
-    private const uint DetachedProcessFlag = 0x8, NewProcessGroup = 0x200, BreakawayFromJob = 0x01000000, ExtendedStartupInfoPresent = 0x80000;
+    private const uint DetachedProcessFlag = 0x8, NewProcessGroup = 0x200, BreakawayFromJob = 0x01000000, ExtendedStartupInfoPresent = 0x80000, UnicodeEnvironment = 0x400;
     private static readonly IntPtr ProcThreadAttributeHandleList = new(0x00020002);
 
     [StructLayout(LayoutKind.Sequential)]
@@ -101,9 +101,14 @@ public static class DetachedProcess
         foreach (var a in args) { cmd.Append(' '); AppendQuoted(cmd, a); }
 
         IntPtr nul = InvalidHandle, outH = InvalidHandle, errH = InvalidHandle, attrList = IntPtr.Zero, handleArray = IntPtr.Zero;
+        IntPtr envBlock = IntPtr.Zero;
         ProcessInformation pi = default;
         try
         {
+            // The exported variables only (the one child-environment primitive), not the process environment.
+            char[] env = PsBash.Core.ShellExports.WindowsEnvironmentBlock();
+            envBlock = Marshal.AllocHGlobal(env.Length * sizeof(char));
+            Marshal.Copy(env, 0, envBlock, env.Length);
             var sa = new SecurityAttributes { nLength = Marshal.SizeOf<SecurityAttributes>(), bInheritHandle = 1 };
             nul = CreateFileW("NUL", GenericRead | GenericWrite, ShareRW, ref sa, OpenExisting, 0, IntPtr.Zero);
             if (nul == InvalidHandle) throw Failure("open NUL");
@@ -133,10 +138,10 @@ public static class DetachedProcess
             si.StartupInfo.dwFlags = StartfUseStdHandles;
             si.StartupInfo.hStdInput = nul; si.StartupInfo.hStdOutput = outH; si.StartupInfo.hStdError = stderrH;
 
-            uint baseFlags = DetachedProcessFlag | NewProcessGroup | ExtendedStartupInfoPresent;
+            uint baseFlags = DetachedProcessFlag | NewProcessGroup | ExtendedStartupInfoPresent | UnicodeEnvironment;
             // Breakaway fails with ACCESS_DENIED when the host's job forbids it: run inside the job rather than not at all.
-            if (!CreateProcessW(null, new StringBuilder(cmd.ToString()), IntPtr.Zero, IntPtr.Zero, true, baseFlags | BreakawayFromJob, IntPtr.Zero, cwd, ref si, out pi)
-                && !CreateProcessW(null, new StringBuilder(cmd.ToString()), IntPtr.Zero, IntPtr.Zero, true, baseFlags, IntPtr.Zero, cwd, ref si, out pi))
+            if (!CreateProcessW(null, new StringBuilder(cmd.ToString()), IntPtr.Zero, IntPtr.Zero, true, baseFlags | BreakawayFromJob, envBlock, cwd, ref si, out pi)
+                && !CreateProcessW(null, new StringBuilder(cmd.ToString()), IntPtr.Zero, IntPtr.Zero, true, baseFlags, envBlock, cwd, ref si, out pi))
                 throw Failure($"CreateProcess '{exe}'");
             return pi.dwProcessId;
         }
@@ -146,6 +151,7 @@ public static class DetachedProcess
             if (pi.hProcess != IntPtr.Zero) CloseHandle(pi.hProcess);
             if (attrList != IntPtr.Zero) { DeleteProcThreadAttributeList(attrList); Marshal.FreeHGlobal(attrList); }
             if (handleArray != IntPtr.Zero) Marshal.FreeHGlobal(handleArray);
+            if (envBlock != IntPtr.Zero) Marshal.FreeHGlobal(envBlock);
             if (nul != InvalidHandle) CloseHandle(nul);
             if (outH != InvalidHandle) CloseHandle(outH);
             if (errH != InvalidHandle) CloseHandle(errH);

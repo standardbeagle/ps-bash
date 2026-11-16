@@ -75,7 +75,7 @@ internal static class TextWidth
     /// </summary>
     public static int DefaultTerminalColumns()
     {
-        string? env = BashVariableStore.Get("COLUMNS");
+        string? env = BashVariableStore.GetExported("COLUMNS");
         return int.TryParse(env, NumberStyles.None, CultureInfo.InvariantCulture, out int c) && c > 0 ? c : 80;
     }
 }

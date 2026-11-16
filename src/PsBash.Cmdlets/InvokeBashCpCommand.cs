@@ -155,7 +155,7 @@ public sealed class InvokeBashCpCommand : PSCmdlet
         if (FileSystemHelpers.TryWriteParseError(this, "cp", parsed)) return;
         if (FileSystemHelpers.TryHandleInfoOptions(this, "cp", parsed)) return;
 
-        if (!CpPlan.TryBuild(parsed, BashVariableStore.Get, out var plan, out var planError))
+        if (!CpPlan.TryBuild(parsed, BashVariableStore.GetExported, out var plan, out var planError))
         {
             FileSystemHelpers.WriteBashError(this, planError!);
             return;

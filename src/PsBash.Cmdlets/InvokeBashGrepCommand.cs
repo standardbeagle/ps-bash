@@ -596,7 +596,7 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
             return;
         }
 
-        var style = GrepStyle.Create(plan.Color, BashVariableStore.Get,
+        var style = GrepStyle.Create(plan.Color, BashVariableStore.GetExported,
             msg => FileSystemHelpers.WriteStderr(this, msg));
         var opts = new GrepOptions
         {

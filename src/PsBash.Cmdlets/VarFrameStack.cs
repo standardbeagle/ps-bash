@@ -28,6 +28,8 @@ public sealed class VarFrameStack
         public int Depth;
         public string? Hidden;
         public long Id;
+        /// <summary>A local's frame: whether the name it hides was exported (put back when the function returns).</summary>
+        public bool WasExported;
     }
 
     private readonly Dictionary<string, List<Frame>> _frames = new(StringComparer.Ordinal);
@@ -95,7 +97,9 @@ public sealed class VarFrameStack
         var top = list.Count > 0 ? list[^1] : null;
         if (top is { Local: true } && top.Depth == Depth) return current;
         if (top is { Local: false } && top.Depth == Depth) { top.Local = true; return current; }
-        list.Add(new Frame { Local = true, Depth = Depth, Hidden = current, Id = ++_nextId });
+        // The local keeps the attribute of the variable it hides (bash: `export v; f() { local v=2; }` exports 2); an
+        // `export`/`declare +x` in the function changes it for the local only (LocalWasExported, at the return).
+        list.Add(new Frame { Local = true, Depth = Depth, Hidden = current, Id = ++_nextId, WasExported = PsBash.Core.ShellExports.IsExported(name) });
         return top is { Local: false } ? current : null;
     }
 
@@ -137,6 +141,29 @@ public sealed class VarFrameStack
     /// </summary>
     public bool OwnsLocal(string name)
         => _frames.TryGetValue(name, out var list) && list.Exists(f => f.Local && f.Depth == Depth);
+
+    /// <summary>The export attribute the current function's local <paramref name="name"/> hid; null when it owns no such local.</summary>
+    public bool? LocalWasExported(string name)
+    {
+        if (!_frames.TryGetValue(name, out var list)) return null;
+        for (int i = list.Count - 1; i >= 0; i--)
+            if (list[i].Local && list[i].Depth == Depth) return list[i].WasExported;
+        return null;
+    }
+
+    private readonly List<(string[] Names, bool[] Was)> _tempExports = new();
+
+    /// <summary><c>NAME=v cmd</c> starts (BashVariableStore.TempExport): what its end needs to put the attributes back.</summary>
+    public void PushTempExport(string[] names, bool[] was) => _tempExports.Add((names, was));
+
+    /// <summary>The innermost <see cref="PushTempExport"/>, removed; null when there is none.</summary>
+    public (string[] Names, bool[] Was)? PopTempExport()
+    {
+        if (_tempExports.Count == 0) return null;
+        var top = _tempExports[^1];
+        _tempExports.RemoveAt(_tempExports.Count - 1);
+        return top;
+    }
 
     private readonly List<(string Name, string? Saved, long FrameId)> _bindings = new();
 
@@ -183,7 +210,7 @@ public sealed class VarFrameStack
         }
     }
 
-    public void Clear() { _frames.Clear(); _bindings.Clear(); _unsetTemps.Clear(); _callLines.Clear(); Line = 0; Depth = 0; }
+    public void Clear() { _frames.Clear(); _bindings.Clear(); _tempExports.Clear(); _unsetTemps.Clear(); _callLines.Clear(); Line = 0; Depth = 0; }
 
     /// <summary>A copy of the frames, for a subshell to put back when it ends (BashShellState.Save/Restore).</summary>
     public sealed class Saved
@@ -217,11 +244,13 @@ public sealed class VarFrameStack
         {
             if (list.Count == 0) continue;
             var frames = new List<Frame>(list.Count);
-            foreach (var f in list) frames.Add(new Frame { Local = f.Local, Depth = f.Depth, Hidden = f.Hidden, Id = f.Id });
+            foreach (var f in list) frames.Add(new Frame { Local = f.Local, Depth = f.Depth, Hidden = f.Hidden, Id = f.Id, WasExported = f.WasExported });
             to._frames[name] = frames;
         }
         to._bindings.Clear();
         to._bindings.AddRange(from._bindings);
+        to._tempExports.Clear();
+        to._tempExports.AddRange(from._tempExports);
         to._unsetTemps.Clear();
         to._unsetTemps.UnionWith(from._unsetTemps);
         to._callLines.Clear();
@@ -273,7 +302,13 @@ public sealed class VarFrameStack
     public static string? DeclareLocal(string name, object? current) => Current.Local(name, current?.ToString());
     /// <summary>The function returns: the value its local leaves behind (the caller's, or <paramref name="current"/> after <c>unlocal</c>).</summary>
     public static string? LeaveLocal(string name, object? saved, object? current)
-        => Current.OwnsLocal(name) ? saved?.ToString() : current?.ToString();
+    {
+        var stack = Current;
+        if (!stack.OwnsLocal(name)) return current?.ToString();
+        // The caller's variable comes back with its own export attribute (`f() { local v=1; export v; }` exports nothing).
+        if (stack.LocalWasExported(name) is { } was) PsBash.Core.ShellExports.SetExported(name, was);
+        return saved?.ToString();
+    }
     public static void BindSameScope(string name, object? saved) => Current.Bind(name, saved?.ToString());
     public static string? UnbindSameScope(string name, object? current) => Current.Unbind(name, current?.ToString());
     public static void PersistSameScope(string name) => Current.Persist(name);

@@ -526,7 +526,7 @@ public class PsEmitterTests
 
         var result = PsEmitter.Emit(cmd);
 
-        Assert.Equal("$__saved_FOO = $env:FOO; try { $env:FOO = \"bar\"; cmd } finally { $env:FOO = $__saved_FOO; }", result);
+        Assert.Equal("$__saved_FOO = $env:FOO; [PsBash.Cmdlets.BashVariableStore]::TempExport('FOO'); try { $env:FOO = \"bar\"; cmd } finally { [PsBash.Cmdlets.BashVariableStore]::EndTempExport(); $env:FOO = $__saved_FOO; }", result);
     }
 
     [Fact]
@@ -539,7 +539,7 @@ public class PsEmitterTests
 
         var result = PsEmitter.Emit(cmd);
 
-        Assert.Equal("$__saved_FOO = $env:FOO; try { $env:FOO = \"\"; cmd } finally { $env:FOO = $__saved_FOO; }", result);
+        Assert.Equal("$__saved_FOO = $env:FOO; [PsBash.Cmdlets.BashVariableStore]::TempExport('FOO'); try { $env:FOO = \"\"; cmd } finally { [PsBash.Cmdlets.BashVariableStore]::EndTempExport(); $env:FOO = $__saved_FOO; }", result);
     }
 
     [Fact]
@@ -1670,7 +1670,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("export FOO=bar");
 
-        Assert.Equal("$env:FOO = \"bar\"", result);
+        Assert.Equal("$env:FOO = \"bar\"; [PsBash.Cmdlets.BashVariableStore]::Export('FOO')", result);
     }
 
     [Fact]
@@ -1678,7 +1678,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("export FOO=\"hello world\"");
 
-        Assert.Equal("$env:FOO = \"hello world\"", result);
+        Assert.Equal("$env:FOO = \"hello world\"; [PsBash.Cmdlets.BashVariableStore]::Export('FOO')", result);
     }
 
     [Fact]
@@ -1702,7 +1702,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("FOO=bar baz");
 
-        Assert.Equal("$__saved_FOO = $env:FOO; try { $env:FOO = \"bar\"; baz } finally { $env:FOO = $__saved_FOO; }", result);
+        Assert.Equal("$__saved_FOO = $env:FOO; [PsBash.Cmdlets.BashVariableStore]::TempExport('FOO'); try { $env:FOO = \"bar\"; baz } finally { [PsBash.Cmdlets.BashVariableStore]::EndTempExport(); $env:FOO = $__saved_FOO; }", result);
     }
 
     [Fact]
@@ -1710,7 +1710,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("FOO= baz");
 
-        Assert.Equal("$__saved_FOO = $env:FOO; try { $env:FOO = \"\"; baz } finally { $env:FOO = $__saved_FOO; }", result);
+        Assert.Equal("$__saved_FOO = $env:FOO; [PsBash.Cmdlets.BashVariableStore]::TempExport('FOO'); try { $env:FOO = \"\"; baz } finally { [PsBash.Cmdlets.BashVariableStore]::EndTempExport(); $env:FOO = $__saved_FOO; }", result);
     }
 
     [Fact]
@@ -1718,7 +1718,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("FOO=1 BAR=2 cmd");
 
-        Assert.Equal("$__saved_FOO = $env:FOO; $__saved_BAR = $env:BAR; try { $env:FOO = \"1\"; $env:BAR = \"2\"; cmd } finally { $env:FOO = $__saved_FOO; $env:BAR = $__saved_BAR; }", result);
+        Assert.Equal("$__saved_FOO = $env:FOO; $__saved_BAR = $env:BAR; [PsBash.Cmdlets.BashVariableStore]::TempExport('FOO', 'BAR'); try { $env:FOO = \"1\"; $env:BAR = \"2\"; cmd } finally { [PsBash.Cmdlets.BashVariableStore]::EndTempExport(); $env:FOO = $__saved_FOO; $env:BAR = $__saved_BAR; }", result);
     }
 
     [Fact]
@@ -1726,7 +1726,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("export PATH=\"$PATH:/new\"");
 
-        Assert.Equal("$env:PATH = \"${env:PATH}:/new\"; [PsBash.Cmdlets.BashRuntime]::NormalizePathVariable()", result);
+        Assert.Equal("$env:PATH = \"${env:PATH}:/new\"; [PsBash.Cmdlets.BashRuntime]::NormalizePathVariable(); [PsBash.Cmdlets.BashVariableStore]::Export('PATH')", result);
     }
 
     [Fact]
@@ -1737,7 +1737,7 @@ public class PsEmitterTests
         // another "...", producing ""prefix":"$env:PATH"" — invalid PowerShell.
         var result = PsEmitter.Transpile("export PATH=\"/a/b\":\"$PATH\"");
 
-        Assert.Equal("$env:PATH = \"/a/b:$env:PATH\"; [PsBash.Cmdlets.BashRuntime]::NormalizePathVariable()", result);
+        Assert.Equal("$env:PATH = \"/a/b:$env:PATH\"; [PsBash.Cmdlets.BashRuntime]::NormalizePathVariable(); [PsBash.Cmdlets.BashVariableStore]::Export('PATH')", result);
     }
 
     [Fact]
@@ -1808,7 +1808,7 @@ public class PsEmitterTests
 
         var result = PsEmitter.Emit(cmd);
 
-        Assert.Equal("$__saved_FOO = $env:FOO; $__saved_BAZ = $env:BAZ; try { $env:FOO = \"bar\"; $env:BAZ = \"qux\"; cmd } finally { $env:FOO = $__saved_FOO; $env:BAZ = $__saved_BAZ; }", result);
+        Assert.Equal("$__saved_FOO = $env:FOO; $__saved_BAZ = $env:BAZ; [PsBash.Cmdlets.BashVariableStore]::TempExport('FOO', 'BAZ'); try { $env:FOO = \"bar\"; $env:BAZ = \"qux\"; cmd } finally { [PsBash.Cmdlets.BashVariableStore]::EndTempExport(); $env:FOO = $__saved_FOO; $env:BAZ = $__saved_BAZ; }", result);
     }
 
     [Fact]
@@ -3339,7 +3339,7 @@ public class PsEmitterTests
         var result = PsEmitter.Transpile("seq 1 40 | COLUMNS=60 column");
 
         Assert.Equal(
-            "Invoke-BashSeq 1 40 | & { $__saved_COLUMNS = $env:COLUMNS; try { $env:COLUMNS = \"60\"; $input | Invoke-BashColumn } finally { $env:COLUMNS = $__saved_COLUMNS; } }",
+            "Invoke-BashSeq 1 40 | & { $__saved_COLUMNS = $env:COLUMNS; [PsBash.Cmdlets.BashVariableStore]::TempExport('COLUMNS'); try { $env:COLUMNS = \"60\"; $input | Invoke-BashColumn } finally { [PsBash.Cmdlets.BashVariableStore]::EndTempExport(); $env:COLUMNS = $__saved_COLUMNS; } }",
             result);
     }
 
@@ -3349,7 +3349,7 @@ public class PsEmitterTests
         var result = PsEmitter.Transpile("echo x | FOO=1 env | grep FOO");
 
         Assert.Equal(
-            "Invoke-BashEcho x | & { $__saved_FOO = $env:FOO; try { $env:FOO = \"1\"; $input | Invoke-BashEnv } finally { $env:FOO = $__saved_FOO; } } | Invoke-BashGrep FOO",
+            "Invoke-BashEcho x | & { $__saved_FOO = $env:FOO; [PsBash.Cmdlets.BashVariableStore]::TempExport('FOO'); try { $env:FOO = \"1\"; $input | Invoke-BashEnv } finally { [PsBash.Cmdlets.BashVariableStore]::EndTempExport(); $env:FOO = $__saved_FOO; } } | Invoke-BashGrep FOO",
             result);
     }
 
@@ -3368,7 +3368,7 @@ public class PsEmitterTests
         var result = PsEmitter.Transpile("FOO=1 env | grep FOO");
 
         Assert.DoesNotContain("$input", result);
-        Assert.Contains("$__saved_FOO = $env:FOO; try {", result);
+        Assert.Contains("$__saved_FOO = $env:FOO; [PsBash.Cmdlets.BashVariableStore]::TempExport('FOO'); try {", result);
     }
 
     [Fact]
@@ -5399,7 +5399,7 @@ public class PsEmitterTests
         // single and-or-list element.
         var result = PsEmitter.Transpile("export FOO=bar && echo $FOO");
         Assert.Equal(
-            "[void]($env:FOO = \"bar\") && $(& { $__bashsplat0 = " +
+            "[void]$($env:FOO = \"bar\"; [PsBash.Cmdlets.BashVariableStore]::Export('FOO')) && $(& { $__bashsplat0 = " +
             "@(ConvertTo-BashWords $env:FOO); " +
             "Invoke-BashEcho @__bashsplat0 })",
             result);

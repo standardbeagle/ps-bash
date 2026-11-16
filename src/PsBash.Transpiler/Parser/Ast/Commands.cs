@@ -65,7 +65,10 @@ public abstract record Command : BashNode
         // `declare -A m=(…) 2>/dev/null`: the builtin's own redirects (its error goes there).
         ImmutableArray<Redirect> Redirects = default,
         // `v=t export w=1`: the prefix the parser folded away (gone when export ends, except under `set -o posix`).
-        ImmutableArray<Assignment> TempPrefix = default) : Command;
+        ImmutableArray<Assignment> TempPrefix = default,
+        // The export attribute the declaration sets on its names: +1 (`declare -x`, `local -x`), -1 (`export -n`,
+        // `declare +x`), 0 none. `export NAME` itself is IsExport.
+        int ExportAttr = 0) : Command;
 
     /// <summary>
     /// An if/elif/else statement.

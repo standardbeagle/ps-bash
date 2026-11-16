@@ -84,7 +84,6 @@ pre1=pre1 readonly x=x
 pre2=pre2 exec sh -c 'echo pre1=$pre1 x=$x pre2=$pre2'
 ## stdout: pre1= x= pre2=pre2
 ## status: 0
-## XFAIL ps-bash gap-vars-always-exported every ps-bash variable lives in the process environment, so a child (exec sh -c) sees unexported pre1 and x
 ## timeout: 10
 
 #### exec without args is a special case of the special case in some shells

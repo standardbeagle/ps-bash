@@ -705,7 +705,11 @@ successful `cd` first records the directory it is leaving into `$env:OLDPWD` (ca
 If a command has leading environment variable assignments
 (`NAME=value cmd args`), they are emitted as `$env:NAME = "value"; cmd args`
 (a save / set / `try { cmd } finally { restore }` block, `WrapEnvPairs`), so the value is visible to that
-command only and never leaks.
+command only and never leaks. The block also exports the names for the command
+(`PsBuild.TempExportBegin` before the `try`, `PsBuild.TempExportEnd` first in the `finally`): a prefix
+binding is in the command's environment even when the variable is otherwise unexported
+(`environment-model.md` §3). `export` / `declare -x` / `declare +x` / `export -n` append
+`PsBuild.MarkExported` / `MarkUnexported`, and `set -a` / `set +a` prepend `PsBuild.SetAllExport`.
 
 **On a pipe-target stage** (`seq 1 40 | COLUMNS=60 column`, `echo x | FOO=1 env | grep FOO`) the
 prefix used to be DROPPED: `EmitPipelineStages` sent a stage straight to `TryEmitMappedCommand`, which

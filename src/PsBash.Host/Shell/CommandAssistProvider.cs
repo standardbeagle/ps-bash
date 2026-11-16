@@ -173,6 +173,8 @@ internal sealed class CommandAssistProviderRunner(CommandAssistConfig config)
 
         foreach (var arg in provider.Args)
             psi.ArgumentList.Add(arg == "{{prompt}}" ? prompt : RenderTemplate(arg, request, cwd));
+        // A provider is a child of the shell like any other: exported variables only (ShellExports).
+        PsBash.Core.ShellExports.RemoveUnexported(psi.Environment);
         foreach (var (key, value) in provider.Environment)
         {
             if (value is null) psi.Environment.Remove(key);

@@ -4560,11 +4560,16 @@ public static partial class PsEmitter
         // a bare `export PATH` leaves the value as it was (bash), even when the inherited PATH is not in `;` form.
         if (cmd.Pairs.Any(p => p.Name == "PATH" && p.ArrayValue is null && p.Value is not null))
             sb.Append("; ").Append(PsBuild.NormalizePathVariable);
-        // `export X=1` / `export X`: `declare -p X` shows the x attribute.
-        if (cmd.IsExport && !cmd.IsLocal && _declarePrintMode)
-            foreach (var pair in cmd.Pairs)
-                if (pair.ArrayValue is null && !pair.Name.Contains('['))
-                    sb.Append("; [PsBash.Cmdlets.BashShellState]::MarkAttribute(").Append(PsBuild.SingleQuote(pair.Name)).Append(", 'x')");
+        // `export X=1` / `export X` / `local -x X`: the names get the export attribute (a child process sees exported
+        // variables only); `export -n X` / `typeset +x X` take it away. After the assignment, and after a local's frame.
+        int exportAttr = cmd.ExportAttr != 0 ? cmd.ExportAttr : cmd.IsExport && !cmd.IsLocal ? 1 : 0;
+        if (exportAttr != 0)
+        {
+            var exportNames = cmd.Pairs.Where(p => p.ArrayValue is null && !p.Name.Contains('[') && IsValidVarName(p.Name))
+                .Select(p => ResolveNameref(p.Name)).Distinct().ToList();
+            if (exportNames.Count > 0)
+                sb.Append("; ").Append(exportAttr > 0 ? PsBuild.MarkExported(exportNames) : PsBuild.MarkUnexported(exportNames));
+        }
         // `declare -r a=(x y)` / `readonly a=(...)`: the array is read-only too (`${a@a}` says `ar`).
         // Every name of the list is read-only, scalars and bare names too (`readonly a=(1 2) no_value c=3`).
         if (cmd.IsReadonly)
@@ -4863,7 +4868,7 @@ public static partial class PsEmitter
                  .Append("if ($__psbN.EndsWith('+')) { $__psbN = $__psbN.Substring(0, $__psbN.Length - 1); $__psbV = [string][Environment]::GetEnvironmentVariable($__psbN) + $__psbV }; ")
                  .Append("Set-Item -LiteralPath ('Env:' + $__psbN) -Value $__psbV" + markReadonly)
                  // `export "$k=$v"`: `declare -p` shows the x attribute, as for a literal `export X=1`.
-                 .Append(name == "export" && _declarePrintMode ? "; [PsBash.Cmdlets.BashShellState]::MarkAttribute($__psbN, 'x')" : "")
+                 .Append(name == "export" ? "; " + PsBuild.MarkExportedAtRunTime("$__psbN") : "")
                  .Append(" }; ");
         }
         sbOut.Append(PsBuild.SetStatus(0));
@@ -5370,12 +5375,15 @@ public static partial class PsEmitter
 
         // `declare -r X=1` is `readonly X=1`: emit the declaration without the r attribute, then mark each name.
         bool hasR = false;
+        bool plusX = false;
         var attrs = new HashSet<char>();
         var kept = new List<CompoundWord> { cmd.Words[0] };
         var names = new List<string>();
         foreach (var w in cmd.Words.Skip(1))
         {
             var lit = GetLiteralValue(w);
+            // `declare +x NAME`: the export attribute is taken away (the variable stays).
+            if (lit is { Length: > 1 } && lit[0] == '+' && lit.AsSpan(1).IndexOf('x') >= 0) plusX = true;
             if (lit is { Length: > 1 } && lit[0] == '-' && lit.AsSpan(1).IndexOfAnyExcept("pfF") >= 0)
             {
                 if (lit.Contains('x')) attrs.Add('x');
@@ -5390,11 +5398,11 @@ public static partial class PsEmitter
             }
             kept.Add(w);
             if (lit is null) { if (TrySplitInitializer(w, out var n0, out _)) names.Add(n0); }
-            else if (!lit.StartsWith('-')) names.Add(lit.Split('=')[0]);
+            else if (!lit.StartsWith('-') && !lit.StartsWith('+')) names.Add(lit.Split('=')[0]);
         }
         // bash ignores -r on a nameref (`typeset -n -r ref=x` still lets `ref=v` assign through).
         bool isNameref = cmd.Words.Skip(1).Any(w => GetLiteralValue(w) is { Length: > 1 } f && f[0] == '-' && f.AsSpan(1).IndexOfAnyExcept("pfF") >= 0 && f.Contains('n'));
-        if (!(hasR || attrs.Count > 0) || isNameref || names.Count == 0)
+        if (!(hasR || plusX || attrs.Count > 0) || isNameref || names.Count == 0)
             return TryEmitDeclareCore(cmd, out result);
         if (!TryEmitDeclareCore(cmd with { Words = [.. kept] }, out var core))
             return false;
@@ -5407,6 +5415,7 @@ public static partial class PsEmitter
             mark.Append("; [PsBash.Cmdlets.BashShellState]::MarkReadonly(").Append(PsBuild.SingleQuote(n)).Append(")");
             _readonlyVars?.Add(n);
         }
+        if (plusX) mark.Append("; ").Append(PsBuild.MarkUnexported(names.Where(IsValidVarName)));
         result = core + mark;
         return true;
     }
@@ -6177,7 +6186,7 @@ public static partial class PsEmitter
                 ImmutableArray.Create(new CompoundWord(ImmutableArray.Create<WordPart>(new WordPart.Literal("--bare-list"))))));
 
         else if (cmd0 == "set" && cmd.Words.Length >= 2)
-            specialResult = EmitSet(cmd);
+            specialResult = WithAllExport(cmd, EmitSet(cmd));
 
         else if ((cmd0 == "source" || cmd0 == ".") && cmd.Words.Length == 1)
             specialResult = "Write-Error '" + cmd0 + ": filename argument required' -ErrorAction Continue; $global:LASTEXITCODE = 2";
@@ -6343,7 +6352,8 @@ public static partial class PsEmitter
         return effects.Count > 0;
     }
     /// <summary>
-    /// Options that change nothing ps-bash models (functrace, histexpand, braceexpand, hashall, monitor, allexport -- every\n    /// variable already lives in the exported environment, so set -a; . .env; set +a just works):
+    /// Options that change nothing ps-bash models (functrace, histexpand, braceexpand, hashall, monitor; allexport is
+    /// dropped here too, after WithAllExport has emitted its switch):
     /// `set -eEuo pipefail` is the standard script preamble, so they are accepted and dropped rather than refused.
     /// </summary>
     private static List<string?> StripInertSetOptions(List<string?> args)
@@ -6457,6 +6467,29 @@ public static partial class PsEmitter
         else
             tail = PsBuild.SetStatus(0);
         return (optText is null ? "" : optText + "; ") + tail;
+    }
+
+    /// <summary>
+    /// <c>set -a</c> / <c>set +a</c> / <c>set -o allexport</c> (alone or among other options): the allexport switch goes in
+    /// front of whatever the rest of the command emits (the option parsing below drops the letter).
+    /// </summary>
+    private static string? WithAllExport(Command.Simple cmd, string? emitted)
+    {
+        bool? on = null;
+        for (int i = 1; i < cmd.Words.Length; i++)
+        {
+            var a = TryGetStaticArgValue(cmd.Words[i]);
+            if (a is null || a.Length < 2 || a == "--" || a[0] is not ('-' or '+')) break;
+            if (a is "-o" or "+o")
+            {
+                if (i + 1 < cmd.Words.Length && TryGetStaticArgValue(cmd.Words[i + 1]) == "allexport") on = a[0] == '-';
+                i++;
+                continue;
+            }
+            if (a[1] != '-' && a.AsSpan(1).IndexOf('a') >= 0 && a.Skip(1).All(char.IsAsciiLetter)) on = a[0] == '-';
+        }
+        if (on is null) return emitted;
+        return PsBuild.SetAllExport(on.Value) + "; " + (emitted ?? PsBuild.SetStatus(0));
     }
 
     private static string? EmitSet(Command.Simple cmd, List<string?>? argsOverride = null)
@@ -6695,6 +6728,7 @@ public static partial class PsEmitter
             // Save original values, then open a try block.
             foreach (var envPair in cmd.EnvPairs)
                 sb.Append($"$__saved_{envPair.Name} = $env:{envPair.Name}; ");
+            sb.Append(PsBuild.TempExportBegin(cmd.EnvPairs.Select(p => p.Name))).Append("; ");
             sb.Append("try { ");
             // Set each env var inside the try block.
             foreach (var envPair in cmd.EnvPairs)
@@ -6803,6 +6837,7 @@ public static partial class PsEmitter
             if (!cmd.EnvPairs.IsEmpty)
             {
                 sb.Append(" } finally { ");
+                sb.Append(PsBuild.TempExportEnd).Append("; ");
                 foreach (var envPair in cmd.EnvPairs)
                     sb.Append($"$env:{envPair.Name} = $__saved_{envPair.Name}; ");
                 sb.Append('}');
@@ -6900,6 +6935,7 @@ public static partial class PsEmitter
         if (!cmd.EnvPairs.IsEmpty)
         {
             sb.Append(" } finally { ");
+            sb.Append(PsBuild.TempExportEnd).Append("; ");
             foreach (var envPair in cmd.EnvPairs)
                 sb.Append($"$env:{envPair.Name} = $__saved_{envPair.Name}; ");
             sb.Append('}');
@@ -6953,6 +6989,8 @@ public static partial class PsEmitter
             sb.Append($"$env:{shadow} = $env:{p.Name}; ");
             parked.Add(shadow);
         }
+        // The binding is exported for the command, whatever the name's attribute was.
+        sb.Append(PsBuild.TempExportBegin(pairs.Select(p => p.Name))).Append("; ");
         sb.Append("try { ");
         for (int i = 0; i < pairs.Length; i++)
             sb.Append($"$env:{pairs[i].Name} = {values[i]}; ");
@@ -6963,6 +7001,7 @@ public static partial class PsEmitter
                 sb.Append(PsBuild.PushTempFrame(p.Name)).Append("; ");
         sb.Append(inner);
         sb.Append(" } finally { ");
+        sb.Append(PsBuild.TempExportEnd).Append("; ");
         // A binding whose frame `unset` took is not put back (bash: later writes went to the outer variable).
         foreach (var p in pairs)
             sb.Append(sameScope ? PsBuild.UnbindSameScope(p.Name)

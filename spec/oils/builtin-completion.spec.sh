@@ -182,7 +182,6 @@ unexported=0
 compgen -e unexported
 ## stdout:
 ## status: 1
-## XFAIL ps-bash arch-vars-in-environment variables are process environment variables, so every variable is exported (intentional-differences.md, Platform)
 ## timeout: 10
 
 #### compgen -e on unknown var

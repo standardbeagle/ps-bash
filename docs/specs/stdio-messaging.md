@@ -183,7 +183,8 @@ grandchild whose parent already exited (`(sleep 30 &); sleep 30`, `cmd /c start 
 and keeps the stdout/stderr pipes open, and a wait that reads to EOF then lasts until the orphan exits.
 
 **The one primitive.** `Transpiler/Processes/JobProcess*.cs` (the same class background-job hosts use,
-`background-jobs.md` §6). `ChildStdio.Start` starts every child through it:
+`background-jobs.md` §6). `ChildStdio.Start` starts every child through it (and gives it the exported variables
+only, `environment-model.md` §4):
 
 | | Windows | POSIX |
 |---|---|---|

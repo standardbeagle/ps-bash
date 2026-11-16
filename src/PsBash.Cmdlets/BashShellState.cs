@@ -52,9 +52,13 @@ public static class BashShellState
 
     private static readonly Dictionary<string, string> Attributes = new(StringComparer.Ordinal);
 
-    /// <summary>Records a <c>declare</c> attribute letter (<c>i</c> integer, <c>x</c> exported) for <c>declare -p</c>.</summary>
+    /// <summary>
+    /// Records a <c>declare</c> attribute letter (<c>i</c> integer) for <c>declare -p</c>. <c>x</c> is not kept here: the
+    /// export attribute has one home, <see cref="PsBash.Core.ShellExports"/>, so <c>declare -x NAME</c> exports.
+    /// </summary>
     public static void MarkAttribute(string name, string letter)
     {
+        if (letter == "x") { PsBash.Core.ShellExports.Export(name); return; }
         lock (Attributes)
             if (!(Attributes.TryGetValue(name, out var cur) && cur.Contains(letter)))
                 Attributes[name] = (cur ?? "") + letter;
@@ -74,7 +78,7 @@ public static class BashShellState
         var sb = new System.Text.StringBuilder();
         if (set.Contains('i')) sb.Append('i');
         if (IsReadonly(name)) sb.Append('r');
-        if (set.Contains('x')) sb.Append('x');
+        if (PsBash.Core.ShellExports.IsExported(name)) sb.Append('x');
         return sb.ToString();
     }
 
@@ -113,8 +117,9 @@ public static class BashShellState
     {
         internal Snapshot(Dictionary<string, string> env, (bool Exists, object? Value)[] globals,
             Dictionary<string, bool> shopt, bool xtrace, HashSet<string> readonlyNames,
-            Dictionary<string, ScriptBlock?> aliasFunctions, VarFrameStack.Saved varFrames)
+            Dictionary<string, ScriptBlock?> aliasFunctions, VarFrameStack.Saved varFrames, PsBash.Core.ShellExports.Saved exports)
         {
+            Exports = exports;
             Env = env; Globals = globals; Shopt = shopt; Xtrace = xtrace; Readonly = readonlyNames; AliasFunctions = aliasFunctions;
             VarFrames = varFrames;
         }
@@ -123,6 +128,9 @@ public static class BashShellState
         internal VarFrameStack.Saved VarFrames { get; }
 
         internal HashSet<string> Readonly { get; }
+
+        /// <summary>The export table: an <c>export</c> made in the body ends with it.</summary>
+        internal PsBash.Core.ShellExports.Saved Exports { get; }
 
         /// <summary>The function behind each alias (an alias runs as a global function), so one defined or removed
         /// inside the body is undone with the alias table.</summary>
@@ -157,7 +165,7 @@ public static class BashShellState
         lock (ReadonlyNames) readonlyNow = new HashSet<string>(ReadonlyNames, StringComparer.Ordinal);
         return new Snapshot(env, globals, InvokeBashShoptCommand.SnapshotOptions(),
             IsTrue(session.PSVariable.GetValue("global:__BashXtrace")), readonlyNow, SaveAliasFunctions(session),
-            VarFrameStack.Current.Save());
+            VarFrameStack.Current.Save(), PsBash.Core.ShellExports.Save());
     }
 
     /// <summary>
@@ -188,6 +196,7 @@ public static class BashShellState
                 BashVariableStore.Set(name, value);
         }
 
+        PsBash.Core.ShellExports.Restore(saved.Exports);
         InvokeBashShoptCommand.RestoreOptions(saved.Shopt);
         // `readonly` made inside the body ends with it, like the variable it protects.
         lock (ReadonlyNames) { ReadonlyNames.Clear(); ReadonlyNames.UnionWith(saved.Readonly); }

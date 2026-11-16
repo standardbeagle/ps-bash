@@ -1,0 +1,28 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 305
+stdout-length: 16
+stderr-length: 0
+==== SCRIPT ====
+d=$(mktemp -d)
+cd "$d"
+cat > "$d/o.sh" <<'PSB_EOF'
+perl -e 'print(($ENV{PSB_M} // "unset"), "\n")' 2>&1
+x=$(perl -e 'print(($ENV{PSB_M} // "unset"), "\n")' 2>&1); echo "sub: $x"
+perl -e 'print(($ENV{PSB_M} // "unset"), "\n")' 2>&1 | cat
+PSB_EOF
+export PSB_M
+PSB_M=v
+. "$d/o.sh"
+echo rc=$?
+cd /
+rm -rf "$d"
+==== STDOUT ====
+v
+sub: v
+v
+rc=0
+
+==== STDERR ====
+

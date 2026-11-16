@@ -1,0 +1,26 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 564
+stdout-length: 28
+stderr-length: 0
+==== SCRIPT ====
+d=$(mktemp -d)
+cd "$d"
+cat > "$d/o.sh" <<'PSB_EOF'
+pwsh -NoProfile -NonInteractive -Command '[Console]::Out.Write($(if ($null -eq $env:PSB_M) { "unset" } else { $env:PSB_M }) + "`n")' 2>&1
+x=$(pwsh -NoProfile -NonInteractive -Command '[Console]::Out.Write($(if ($null -eq $env:PSB_M) { "unset" } else { $env:PSB_M }) + "`n")' 2>&1); echo "sub: $x"
+pwsh -NoProfile -NonInteractive -Command '[Console]::Out.Write($(if ($null -eq $env:PSB_M) { "unset" } else { $env:PSB_M }) + "`n")' 2>&1 | cat
+PSB_EOF
+for PSB_M in v; do . "$d/o.sh"; done
+echo rc=$?
+cd /
+rm -rf "$d"
+==== STDOUT ====
+unset
+sub: unset
+unset
+rc=0
+
+==== STDERR ====
+

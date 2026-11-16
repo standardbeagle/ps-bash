@@ -367,9 +367,11 @@ inside that lease and no other runspace is executing during the swap — the
 Two further divergences share this root cause (bash variables modeled as
 environment variables):
 
-- **Non-exported variables are visible to `env`.** `Q=1; env | grep '^Q='` prints
-  `Q=1` here and nothing in bash, which lists only EXPORTED variables. ps-bash
-  has no export bit — every assignment lands in the same store.
+- **Non-exported variables reach a program PowerShell starts.** Every assignment lands
+  in the process environment; the export attribute is kept beside it
+  (`ShellExports`, `environment-model.md`), so `env`, `printenv`, nested shells and
+  every child ps-bash starts itself see exported variables only. A plain `prog args`
+  started by PowerShell still inherits all of them.
 - **Windows environment names are case-insensitive**, so `$x` and `$X` are the
   same variable where bash treats them as distinct.
 

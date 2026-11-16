@@ -189,6 +189,7 @@ public sealed class InvokeBashUnsetCommand : PSCmdlet
             if (!functionMode && VarFrameStack.Current.Unset(name, out var revealed))
             {
                 BashVariableStore.Set(name, revealed);
+                if (revealed is null) PsBash.Core.ShellExports.Forget(name);
                 continue;
             }
             if (functionMode)
@@ -221,6 +222,8 @@ public sealed class InvokeBashUnsetCommand : PSCmdlet
                 // SHELL has a startup value even when the environment lacks it (PsBuild maps a read of it to
                 // BashRuntime.DefaultShell); once unset it reads as unset, as in bash.
                 if (name == "SHELL") SessionState.PSVariable.Set("global:__BashShellUnset", true);
+                // The attributes go with the variable: a later `NAME=v` is a new, unexported one.
+                PsBash.Core.ShellExports.Forget(name);
             }
         }
     }

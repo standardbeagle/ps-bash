@@ -287,7 +287,13 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
             // control variables in (compact output, path mode, ...), never wipes `export`s made by an
             // earlier call or replaces PATH.
             if (StatefulSession) ApplyControlEnvironment(environment);
-            else { ResetEnvironment(environment); ClearReadonlyNames(); }
+            else
+            {
+                ResetEnvironment(environment);
+                ClearReadonlyNames();
+                // A new shell: what the launcher handed over is what it inherited, so all of it is exported.
+                PsBash.Core.ShellExports.Reset();
+            }
             SyncHomeToEnvironment();
         }
         ResetVarFrames(_ps.Runspace);

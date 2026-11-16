@@ -289,7 +289,7 @@ public sealed class InvokeBashLsCommand : PSCmdlet
     /// </summary>
     private long EnvLineWidth()
     {
-        string? raw = BashVariableStore.Get("COLUMNS");
+        string? raw = BashVariableStore.GetExported("COLUMNS");
         if (string.IsNullOrEmpty(raw)) return 80;
         if (TryParseCount(raw, out long v)) return v;
         FileSystemHelpers.WriteBashError(this,
@@ -300,7 +300,7 @@ public sealed class InvokeBashLsCommand : PSCmdlet
     /// <summary>The tab size when no <c>-T</c>: <c>$TABSIZE</c> when numeric, else 8.</summary>
     private int EnvTabSize()
     {
-        string? raw = BashVariableStore.Get("TABSIZE");
+        string? raw = BashVariableStore.GetExported("TABSIZE");
         if (string.IsNullOrEmpty(raw)) return 8;
         if (TryParseCount(raw, out long v)) return (int)Math.Min(v, int.MaxValue);
         FileSystemHelpers.WriteBashError(this,
@@ -463,7 +463,7 @@ public sealed class InvokeBashLsCommand : PSCmdlet
         if (longMode)
         {
             // Only a long listing reads the style: a bogus --time-style is no error without -l (oracle).
-            string? styleArg = timeStyleArg ?? BashVariableStore.Get("TIME_STYLE");
+            string? styleArg = timeStyleArg ?? BashVariableStore.GetExported("TIME_STYLE");
             if (!string.IsNullOrEmpty(styleArg) && !TryResolveTimeStyle(styleArg, out timeStyle, out var styleErr, out int styleExit))
             {
                 FileSystemHelpers.WriteBashError(this, styleErr!);

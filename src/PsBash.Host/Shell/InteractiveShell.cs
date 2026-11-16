@@ -529,6 +529,9 @@ public static class InteractiveShell
                 return false;
 
             var psi = BuildDirectProcessStartInfo(resolvedCmd, args, workDir);
+            // The child gets the exported variables only (ShellExports: the one child-environment primitive); the
+            // command's own NAME=v prefixes are added after, so they always reach it.
+            PsBash.Core.ShellExports.RemoveUnexported(psi.Environment);
 
             foreach (var envPair in simple.EnvPairs)
             {

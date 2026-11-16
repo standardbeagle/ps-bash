@@ -20,6 +20,10 @@ namespace PsBash.Cmdlets;
 /// sites; today it is a faithful pass-through to <see cref="Environment"/>, so
 /// behavior is unchanged.</para>
 ///
+/// <para><b>Exported or not.</b> Being in the process environment does not make a variable exported: the export
+/// attribute is a separate table (<see cref="PsBash.Core.ShellExports"/>), and a child process gets the exported
+/// variables only (<see cref="ApplyTo"/>). See <c>docs/specs/environment-model.md</c>.</para>
+///
 /// <para><b>What does NOT belong here.</b> ps-bash's own configuration knobs —
 /// <c>PSBASH_*</c>, <c>NO_COLOR</c>, <c>USERNAME</c>, <c>PATH</c> for tool
 /// lookup — are host process state, not script state. They must keep reading
@@ -52,24 +56,57 @@ public static class BashVariableStore
     }
 
     /// <summary>
-    /// Make the bash variables visible to a CHILD PROCESS about to be spawned.
+    /// THE child-environment primitive: <paramref name="startInfo"/>'s environment becomes what a child of the shell
+    /// gets - the EXPORTED variables only (<see cref="PsBash.Core.ShellExports"/>), plus whatever the caller set on
+    /// it for the child.
     ///
-    /// <para>This is the constraint that rules out most designs for a
-    /// per-invocation store: <c>export</c> has to actually reach the child, or
-    /// <c>export PATH=…</c> / <c>export NODE_ENV=…</c> stop working. Verified
-    /// live — <c>export CHILDVAR=visible; pwsh -c '$env:CHILDVAR'</c> prints
-    /// <c>visible</c>.</para>
-    ///
-    /// <para>While the store IS the process environment this is a NO-OP: the
-    /// child inherits automatically. It exists as a called seam so that the day
-    /// the store moves off the process environment, every spawn site is already
-    /// wired and the change is one method body rather than an audit of every
-    /// <c>ProcessStartInfo</c> in the tree.</para>
+    /// <para>Every scalar bash variable lives in the process environment, so without this a child would see the
+    /// variables a script never exported (<c>x=1; sh -c 'echo $x'</c> printed 1). <see cref="ChildStdio.Start"/>
+    /// calls it for every child ps-bash starts; the few spawns outside <see cref="ChildStdio"/> call it themselves
+    /// (guards: <c>BashVariableStoreGuardTests</c>, <c>ChildEnvironmentGuardTests</c>). Idempotent.</para>
     /// </summary>
     public static void ApplyTo(ProcessStartInfo startInfo)
     {
         ArgumentNullException.ThrowIfNull(startInfo);
-        // Intentionally empty — see the remarks above. Do NOT "optimize" this
-        // call away at the call sites; the call IS the deliverable.
+        PsBash.Core.ShellExports.RemoveUnexported(startInfo.Environment);
+    }
+
+    // ---------------------------------------------------------------- the export attribute
+
+    /// <summary>
+    /// A variable as a CHILD PROCESS sees it: null when unset or not exported. What a cmdlet that stands in for an
+    /// external program reads its configuration with (<c>ls</c>: <c>COLUMNS</c>, <c>grep</c>: <c>GREP_COLORS</c>,
+    /// <c>printenv</c>), and what <c>TZ</c> is for <c>printf %(...)T</c> (bash applies TZ only when exported).
+    /// The shell's own view (expansions, builtins) is <see cref="Get"/>.
+    /// </summary>
+    public static string? GetExported(string name) => PsBash.Core.ShellExports.Get(name);
+
+    /// <summary>The exported variables that are set: a child's environment, for <c>env</c> / <c>printenv</c> / <c>compgen -e</c>.</summary>
+    public static IEnumerable<KeyValuePair<string, string>> EnumerateExported() => PsBash.Core.ShellExports.Enumerate();
+
+    /// <summary>Whether <paramref name="name"/> has the export attribute.</summary>
+    public static bool IsExported(string name) => PsBash.Core.ShellExports.IsExported(name);
+
+    /// <summary><c>export NAME...</c> / <c>declare -x NAME...</c> (emitted: <c>PsBuild.MarkExported</c>).</summary>
+    public static void Export(params string[] names) => PsBash.Core.ShellExports.Export(names);
+
+    /// <summary><c>export -n NAME...</c> / <c>declare +x NAME...</c> (emitted: <c>PsBuild.MarkUnexported</c>).</summary>
+    public static void Unexport(params string[] names) => PsBash.Core.ShellExports.Unexport(names);
+
+    /// <summary><c>set -a</c> / <c>set +a</c> (emitted: <c>PsBuild.SetAllExport</c>).</summary>
+    public static void SetAllExport(bool on) => PsBash.Core.ShellExports.AllExport = on;
+
+    /// <summary>
+    /// <c>NAME=v cmd</c> starts: the names are exported for the command (emitted: <c>PsBuild.TempExport</c>). Paired
+    /// with <see cref="EndTempExport"/> in the binding's <c>finally</c>; the pairs nest per runspace.
+    /// </summary>
+    public static void TempExport(params string[] names)
+        => VarFrameStack.Current.PushTempExport(names, PsBash.Core.ShellExports.BeginTemp(names));
+
+    /// <summary>The command of the innermost <see cref="TempExport"/> ended: its names have their attribute back.</summary>
+    public static void EndTempExport()
+    {
+        if (VarFrameStack.Current.PopTempExport() is { } frame)
+            PsBash.Core.ShellExports.EndTemp(frame.Names, frame.Was);
     }
 }

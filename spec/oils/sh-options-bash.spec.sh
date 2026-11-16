@@ -87,7 +87,7 @@ $SH -c "echo 2"
 bash: line 5: -c: command not found
 ## END
 ## status: 0
-## XFAIL ps-bash arch-vars-in-environment SH=bash is not exported in bash, so the child's $SH is empty and runs '-c' (not found); here every variable is exported, so the child runs the grandchild shell (intentional-differences.md, Platform). The output order under 2>&1 now matches bash
+## XFAIL ps-bash gap-xtrace-empty-command-word the child's $SH is empty as in bash (SH is not exported) and '-c' is not found, but the trace line shows the removed empty word (+ '' -c 'echo 2', bash: + -c 'echo 2') and the not-found message has no 'line 5:' prefix
 ## timeout: 10
 ## real-launcher
 

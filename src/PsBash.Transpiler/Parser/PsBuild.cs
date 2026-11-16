@@ -253,6 +253,38 @@ public static class PsBuild
     /// <summary>Follows every bash write to PATH: on Windows the <c>:</c> separators a script wrote become <c>;</c>.</summary>
     public const string NormalizePathVariable = "[PsBash.Cmdlets.BashRuntime]::NormalizePathVariable()";
 
+    // ─────────────────── the export attribute (PsBash.Core.ShellExports, via BashVariableStore) ───────────────────
+    // Every scalar variable is `$env:NAME`, exported or not; these calls are what makes one exported. The only
+    // text the emitter writes for the attribute (guard: ChildEnvironmentGuardTests).
+
+    private static string NameList(IEnumerable<string> names) => string.Join(", ", names.Select(SingleQuote));
+
+    /// <summary><c>export NAME...</c> / <c>declare -x NAME...</c>: the names get the export attribute.</summary>
+    public static string MarkExported(IEnumerable<string> names)
+        => "[PsBash.Cmdlets.BashVariableStore]::Export(" + NameList(names) + ")";
+
+    /// <summary><see cref="MarkExported"/> for a name known only at run time (<paramref name="nameExpression"/> is PowerShell).</summary>
+    public static string MarkExportedAtRunTime(string nameExpression)
+        => "[PsBash.Cmdlets.BashVariableStore]::Export(" + nameExpression + ")";
+
+    /// <summary><c>export -n NAME...</c> / <c>declare +x NAME...</c>: the names lose the export attribute.</summary>
+    public static string MarkUnexported(IEnumerable<string> names)
+        => "[PsBash.Cmdlets.BashVariableStore]::Unexport(" + NameList(names) + ")";
+
+    /// <summary><c>set -a</c> / <c>set +a</c>.</summary>
+    public static string SetAllExport(bool on)
+        => "[PsBash.Cmdlets.BashVariableStore]::SetAllExport(" + (on ? "$true" : "$false") + ")";
+
+    /// <summary>
+    /// <c>NAME=v cmd</c>: the names are exported for the command. Goes BEFORE the binding's <c>try</c>; its
+    /// <c>finally</c> starts with <see cref="TempExportEnd"/>.
+    /// </summary>
+    public static string TempExportBegin(IEnumerable<string> names)
+        => "[PsBash.Cmdlets.BashVariableStore]::TempExport(" + NameList(names) + ")";
+
+    /// <summary>Ends <see cref="TempExportBegin"/>: each name has the attribute it had before the command.</summary>
+    public const string TempExportEnd = "[PsBash.Cmdlets.BashVariableStore]::EndTempExport()";
+
     public static string ArithNounsetGuard(string invocation) =>
         "$($__psbash_av = " + invocation + "; if ($global:__BashUnbound) { $__psbash_un = $global:__BashUnbound; $global:__BashUnbound = $null; "
         + "throw [PsBash.Cmdlets.BashParamErrorException]::Reported($__psbash_un + ': ', 'unbound variable') }; $__psbash_av)";

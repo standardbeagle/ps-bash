@@ -95,8 +95,10 @@ public sealed class InvokeBashEnvCommand : PSCmdlet
                 // contributes no line (bash exits 1 silently, no "env:" error).
                 foreach (var name in args)
                 {
-                    var v = BashVariableStore.Get(name);
+                    // printenv is a child of the shell: it sees the exported variables only.
+                    var v = BashVariableStore.GetExported(name);
                     if (v != null) WriteObject(BuildEntry(name, v, valueOnly: true));
+                    else FileSystemHelpers.SetLastExitCode(this, 1); // not in the environment: status 1, no message
                 }
                 return;
             }
@@ -104,7 +106,7 @@ public sealed class InvokeBashEnvCommand : PSCmdlet
             // `env NAME` for a set variable keeps the legacy NAME=VALUE print; anything else is
             // `env COMMAND [ARG]...` and runs the command (GNU).
             var varName = args[0];
-            var val = args.Length == 1 ? BashVariableStore.Get(varName) : null;
+            var val = args.Length == 1 ? BashVariableStore.GetExported(varName) : null;
             if (val == null)
             {
                 HandleEnvModForm(args, false);
@@ -116,7 +118,7 @@ public sealed class InvokeBashEnvCommand : PSCmdlet
 
         // No args: enumerate all bash variables, sorted by name
         // (the psm1 oracle's `Sort-Object` step).
-        var all = new List<KeyValuePair<string, string>>(BashVariableStore.Enumerate());
+        var all = new List<KeyValuePair<string, string>>(BashVariableStore.EnumerateExported());
         all.Sort(static (a, b) => StringComparer.Ordinal.Compare(a.Key, b.Key));
 
         foreach (var (key, v) in all)
@@ -194,6 +196,9 @@ public sealed class InvokeBashEnvCommand : PSCmdlet
         string cmdName, string[] cmdArgs)
     {
         var saved = new List<(string Name, string? Old)>();
+        // The assignments are the command's environment: exported for it, whatever the names' attributes are.
+        var assigned = assignments.Select(a => a.Name).ToArray();
+        var wasExported = PsBash.Core.ShellExports.BeginTemp(assigned);
         try
         {
             if (ignoreEnv)
@@ -244,6 +249,7 @@ public sealed class InvokeBashEnvCommand : PSCmdlet
             {
                 BashVariableStore.Set(saved[k].Name, saved[k].Old);
             }
+            PsBash.Core.ShellExports.EndTemp(assigned, wasExported);
         }
     }
 
@@ -253,7 +259,7 @@ public sealed class InvokeBashEnvCommand : PSCmdlet
         var dict = new Dictionary<string, string>(StringComparer.Ordinal);
         if (!ignoreEnv)
         {
-            foreach (var (k, v) in BashVariableStore.Enumerate())
+            foreach (var (k, v) in BashVariableStore.EnumerateExported())
                 dict[k] = v;
         }
         foreach (var u in unset) dict.Remove(u);

@@ -219,7 +219,7 @@ internal static class FfmpegPlan
         {
             // DISPLAY is a bash variable the script may have exported, so it comes from the
             // variable store, not the process environment (BashVariableStoreGuardTests).
-            screen = BashVariableStore.Get("DISPLAY");
+            screen = BashVariableStore.GetExported("DISPLAY");
         }
 
         if (string.IsNullOrEmpty(screen))

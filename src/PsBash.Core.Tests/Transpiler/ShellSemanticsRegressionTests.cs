@@ -55,8 +55,8 @@ public class ShellSemanticsRegressionTests
     [Fact]
     public void Transpile_ExportInEvalText_RecordsTheExportAttribute()
     {
-        Assert.Contains("[PsBash.Cmdlets.BashShellState]::MarkAttribute('XX', 'x')", BashTranspiler.Transpile("export XX", TranspileContext.Eval));
-        Assert.Contains("[PsBash.Cmdlets.BashShellState]::MarkAttribute($__psbN, 'x')",
+        Assert.Contains("[PsBash.Cmdlets.BashVariableStore]::Export('XX')", BashTranspiler.Transpile("export XX", TranspileContext.Eval));
+        Assert.Contains("[PsBash.Cmdlets.BashVariableStore]::Export($__psbN)",
             BashTranspiler.Transpile("export \"$k=$v\"", TranspileContext.Eval));
     }
 
@@ -78,7 +78,7 @@ public class ShellSemanticsRegressionTests
     public void Transpile_QuotedDeclarationOperandInEvalText_IsAPlainNameAndCanAppend()
     {
         var name = BashTranspiler.Transpile("export 'QQ'", TranspileContext.Eval);
-        Assert.Contains("[PsBash.Cmdlets.BashShellState]::MarkAttribute('QQ', 'x')", name);
+        Assert.Contains("[PsBash.Cmdlets.BashVariableStore]::Export('QQ')", name);
         Assert.DoesNotContain("export 'QQ'", name);
         var append = BashTranspiler.Transpile("export 'QQ+= -L'", TranspileContext.Eval);
         // After quote removal it is the assignment NAME+=VALUE (BashParser.QuotedDeclarationAssignment).
@@ -88,7 +88,7 @@ public class ShellSemanticsRegressionTests
         // Oracle: `two='b c'; readonly $two; b=new` is status 1; the eval text `readonly 'b' 'c'` marked nothing.
         Assert.Contains("[PsBash.Cmdlets.BashShellState]::MarkReadonly('c')", BashTranspiler.Transpile("readonly 'b' 'c'", TranspileContext.Eval));
         // A quoted operand that is not a plain name keeps its old path (no declaration is made of it).
-        Assert.DoesNotContain("MarkAttribute('a-b'", BashTranspiler.Transpile("export 'a-b'", TranspileContext.Eval));
+        Assert.DoesNotContain("Export('a-b'", BashTranspiler.Transpile("export 'a-b'", TranspileContext.Eval));
     }
 
     // Oracle: `shopt -s inherit_errexit; set -e; x=$(false; echo no)` leaves x empty and exits 1. The substitution

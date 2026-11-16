@@ -649,7 +649,7 @@ public class BashTranspilerTests
     public void ExportAndEchoVar_TransformsBoth()
     {
         var result = BashTranspiler.Transpile("export FOO=bar");
-        Assert.Equal("$env:FOO = \"bar\"", result);
+        Assert.Equal("$env:FOO = \"bar\"; [PsBash.Cmdlets.BashVariableStore]::Export('FOO')", result);
     }
 
     [Fact]
@@ -690,7 +690,7 @@ public class BashTranspilerTests
     public void ExportQuotedValue_TransformsCorrectly()
     {
         var result = BashTranspiler.Transpile("export NODE_ENV=\"production\"");
-        Assert.Equal("$env:NODE_ENV = \"production\"", result);
+        Assert.Equal("$env:NODE_ENV = \"production\"; [PsBash.Cmdlets.BashVariableStore]::Export('NODE_ENV')", result);
     }
 
     [Fact]
@@ -751,7 +751,7 @@ public class BashTranspilerTests
         // as a single and-or-list element after the [void] export assignment.
         var result = BashTranspiler.Transpile("export FOO=\"bar\" && echo $FOO");
         Assert.Equal(
-            "[void]($env:FOO = \"bar\") && $(& { $__bashsplat0 = " +
+            "[void]$($env:FOO = \"bar\"; [PsBash.Cmdlets.BashVariableStore]::Export('FOO')) && $(& { $__bashsplat0 = " +
             "@(ConvertTo-BashWords $env:FOO); " +
             "Invoke-BashEcho @__bashsplat0 })",
             result);

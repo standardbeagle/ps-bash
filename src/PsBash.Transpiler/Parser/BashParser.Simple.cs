@@ -60,7 +60,9 @@ public sealed partial class BashParser
         if (!(Peek().Kind == BashTokenKind.Word && Peek().Value == "-p" && _tokens[saved].Value == "local")
             && ParseDeclarationPairs() is { } pairs)
             return new Command.ShAssignment(pairs, IsLocal: isLocal, IsExport: !isLocal, IsReadonly: isLocal && _declSawReadonly, IsNameref: isLocal && _declSawNameref,
-                Redirects: _declRedirects.Count == 0 ? default : [.. _declRedirects]);
+                Redirects: _declRedirects.Count == 0 ? default : [.. _declRedirects],
+                // `export -n NAME` takes the attribute away (-n is no nameref there); `local -x` / `typeset +x` set / clear it.
+                ExportAttr: isLocal ? _declExport : _declSawNameref ? -1 : 0);
 
         // No assignment or name followed — rewind and parse as a normal command
         // so forms like `export -p` still reach the general path.
@@ -441,6 +443,8 @@ public sealed partial class BashParser
     private bool _declSawAssoc;
     /// <summary>Set by <see cref="ParseDeclarationPairs"/> when an attribute flag of the declaration carried `a` (an indexed array).</summary>
     private bool _declSawIndexed;
+    /// <summary>Set by <see cref="ParseDeclarationPairs"/>: +1 after a flag with <c>x</c> (<c>-x</c>), -1 after <c>+x</c>, else 0.</summary>
+    private int _declExport;
     /// <summary>The redirects <see cref="ParseDeclarationPairs"/> consumed (the builtin's own).</summary>
     private readonly List<Redirect> _declRedirects = [];
 
@@ -545,6 +549,7 @@ public sealed partial class BashParser
         _declSawNameref = false;
         _declSawAssoc = false;
         _declSawIndexed = false;
+        _declExport = 0;
         _declRedirects.Clear();
         var pairs = ImmutableArray.CreateBuilder<Assignment>();
 
@@ -581,6 +586,14 @@ public sealed partial class BashParser
                 if (value[1] != '-' && value.Contains('n')) _declSawNameref = true;
                 if (value[1] != '-' && value.Contains('A')) _declSawAssoc = true;
                 if (value[1] != '-' && value.Contains('a')) _declSawIndexed = true;
+                if (value[1] != '-' && value.Contains('x')) _declExport = 1;
+                Advance();
+                continue;
+            }
+            // `local +x v` / `typeset +x v`: the export attribute is taken away.
+            if (value == "+x")
+            {
+                _declExport = -1;
                 Advance();
                 continue;
             }

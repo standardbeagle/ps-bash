@@ -1,0 +1,41 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 1576
+stdout-length: 70
+stderr-length: 0
+==== SCRIPT ====
+d=$(mktemp -d)
+cd "$d"
+cat > "$d/o.sh" <<'PSB_EOF'
+pwsh -NoProfile -NonInteractive -Command '[Console]::Out.Write($(if ($null -eq $env:PSB_M) { "unset" } else { $env:PSB_M }) + "`n")'
+x=$(pwsh -NoProfile -NonInteractive -Command '[Console]::Out.Write($(if ($null -eq $env:PSB_M) { "unset" } else { $env:PSB_M }) + "`n")'); echo "sub: $x"
+pwsh -NoProfile -NonInteractive -Command '[Console]::Out.Write($(if ($null -eq $env:PSB_M) { "unset" } else { $env:PSB_M }) + "`n")' & wait
+pwsh -NoProfile -NonInteractive -Command '[Console]::Out.Write($(if ($null -eq $env:PSB_M) { "unset" } else { $env:PSB_M }) + "`n")' | cat
+true | pwsh -NoProfile -NonInteractive -Command '[Console]::Out.Write($(if ($null -eq $env:PSB_M) { "unset" } else { $env:PSB_M }) + "`n")'
+(exec pwsh -NoProfile -NonInteractive -Command '[Console]::Out.Write($(if ($null -eq $env:PSB_M) { "unset" } else { $env:PSB_M }) + "`n")')
+find . -maxdepth 0 -exec pwsh -NoProfile -NonInteractive -Command '[Console]::Out.Write($(if ($null -eq $env:PSB_M) { "unset" } else { $env:PSB_M }) + "`n")' \;
+env pwsh -NoProfile -NonInteractive -Command '[Console]::Out.Write($(if ($null -eq $env:PSB_M) { "unset" } else { $env:PSB_M }) + "`n")'
+command pwsh -NoProfile -NonInteractive -Command '[Console]::Out.Write($(if ($null -eq $env:PSB_M) { "unset" } else { $env:PSB_M }) + "`n")'
+timeout 60 pwsh -NoProfile -NonInteractive -Command '[Console]::Out.Write($(if ($null -eq $env:PSB_M) { "unset" } else { $env:PSB_M }) + "`n")'
+PSB_EOF
+export PSB_M=v
+bash -c 'export -n PSB_M; . "$1"' _ "$d/o.sh"
+echo rc=$?
+cd /
+rm -rf "$d"
+==== STDOUT ====
+unset
+sub: unset
+unset
+unset
+unset
+unset
+unset
+unset
+unset
+unset
+rc=0
+
+==== STDERR ====
+
