@@ -39,7 +39,7 @@ public class JobProcessTests
                 var other = job.TreePids().Where(p => p != job.Pid).ToList();
                 if (other.Count > 0) return other[0];
             }
-            else if (File.Exists(pidFile) && int.TryParse(File.ReadAllText(pidFile).Trim(), out var pid))
+            else if (PsBash.Testing.PublishedFile.TryRead(pidFile) is { } text && int.TryParse(text.Trim(), out var pid))
                 return pid;
             await Task.Delay(50);
         }

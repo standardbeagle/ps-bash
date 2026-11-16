@@ -175,7 +175,8 @@ public class KnownBadRegressionTests
         {
             if (File.Exists(pidFile))
             {
-                if (int.TryParse(File.ReadAllText(pidFile).Trim(), out var grandchildPid))
+                if (PsBash.Testing.PublishedFile.TryRead(pidFile) is { } recorded
+                    && int.TryParse(recorded.Trim(), out var grandchildPid))
                 {
                     try { Process.GetProcessById(grandchildPid).Kill(entireProcessTree: true); }
                     catch { /* already gone */ }

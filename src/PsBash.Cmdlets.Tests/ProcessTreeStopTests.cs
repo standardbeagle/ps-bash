@@ -92,9 +92,10 @@ public class ProcessTreeStopTests : IClassFixture<SharedPwshFixture>
         /// <summary>Block until the grandchild's pid is on disk (it is running and holds the pipes), and return it.</summary>
         public int WaitForGrandchild()
         {
-            Assert.True(SpinWait.SpinUntil(() => File.Exists(PidFile), StartLimit),
+            string? text = PsBash.Testing.PublishedFile.ReadWhenReady(PidFile, StartLimit);
+            Assert.True(text is not null,
                 $"the test parent never recorded its grandchild within {StartLimit.TotalSeconds:0}s");
-            return int.Parse(File.ReadAllText(PidFile).Trim());
+            return int.Parse(text!.Trim());
         }
 
         public void Dispose()
@@ -184,9 +185,10 @@ public class ProcessTreeStopTests : IClassFixture<SharedPwshFixture>
         var result = BashRuntime.RunChildProcess(s.StartInfo, budget);
         sw.Stop();
 
-        Assert.True(File.Exists(s.PidFile), "the grandchild did not start inside the budget; nothing was tested");
+        string? recorded = PsBash.Testing.PublishedFile.ReadWhenReady(s.PidFile, ReturnLimit);
+        Assert.True(recorded is not null, "the grandchild did not start inside the budget; nothing was tested");
         Assert.Equal(124, result.ExitCode);
-        AssertGone(int.Parse(File.ReadAllText(s.PidFile).Trim()), "the orphaned grandchild");
+        AssertGone(int.Parse(recorded!.Trim()), "the orphaned grandchild");
         Assert.True(sw.Elapsed < budget + ReturnLimit, $"the budget must end the wait; it took {sw.ElapsedMilliseconds}ms");
     }
 
@@ -309,9 +311,10 @@ public class ProcessTreeStopTests : IClassFixture<SharedPwshFixture>
         finally { Environment.SetEnvironmentVariable("PIDFILE", previous is null ? null : previous); }
         sw.Stop();
 
-        Assert.True(File.Exists(s.PidFile), "the grandchild did not start inside the budget; nothing was tested");
+        string? recorded = PsBash.Testing.PublishedFile.ReadWhenReady(s.PidFile, ReturnLimit);
+        Assert.True(recorded is not null, "the grandchild did not start inside the budget; nothing was tested");
         result.AssertFailed(124, "");
-        AssertGone(int.Parse(File.ReadAllText(s.PidFile).Trim()), "the orphaned grandchild of a timed-out command");
+        AssertGone(int.Parse(recorded!.Trim()), "the orphaned grandchild of a timed-out command");
         Assert.True(sw.Elapsed < TimeSpan.FromSeconds(budget) + ReturnLimit, $"timeout must return at its budget; took {sw.ElapsedMilliseconds}ms");
     }
 }
