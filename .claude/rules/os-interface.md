@@ -27,6 +27,7 @@ that handle `Stopping` + kill-tree themselves. Never raw-spawn a buffered comman
 
 ## PATHS / IDENTITY (already centralized — reuse, don't re-add)
 - operand path normalization → `FileSystemHelpers.NormalizeOperandPath` → `WindowsPath` (unix→drive).
+- a path the script will SEE (output, `BashText`, a variable) → `BashPath.ToShell` (`C:/x`, `//srv/share`) — NEVER `.Replace('\\', '/')` (guard: `PathMappingGuardTests`; spec `docs/specs/paths.md`).
 - `--version` → `FileSystemHelpers.TryHandleVersion`; exit code → `FileSystemHelpers.SetLastExitCode`.
 - file reads → `BashFileSystem` (streaming, BOM/CRLF, binary policy) — NEVER raw `File.ReadAllText`.
 - data text↔bytes → `PsBash.Core.RawBytes` (escaped-byte markers; `RawBytes.Encoding` for readers/writers/children) — NEVER `Encoding.UTF8.GetBytes/GetString` or `File.*AllText` on data (guard: `RawBytesGuardTests`).

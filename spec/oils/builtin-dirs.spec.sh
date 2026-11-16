@@ -15,7 +15,7 @@ pwd=/tmp
 pwd=/
 ## END
 ## status: 0
-## XFAIL ps-bash platform-windows-paths Windows paths: / is C:\ and /tmp the Windows temp directory, printed as C:/... by pwd and dirs and as C:\... in $PWD (intentional-differences.md, Platform: paths)
+## XFAIL ps-bash platform-windows-paths Windows paths: / is C:/ and /tmp is a Windows directory, so pwd, $PWD and dirs print C:/... where bash prints /... (intentional-differences.md, Platform: paths)
 ## timeout: 10
 
 #### pushd usage
@@ -94,7 +94,7 @@ popd=0
 popd=1
 ## END
 ## status: 0
-## XFAIL ps-bash platform-windows-paths Windows paths: / is C:\ and /tmp the Windows temp directory, printed as C:/... by pwd and dirs and as C:\... in $PWD (intentional-differences.md, Platform: paths)
+## XFAIL ps-bash platform-windows-paths Windows paths: / is C:/ and /tmp is a Windows directory, so pwd, $PWD and dirs print C:/... where bash prints /... (intentional-differences.md, Platform: paths)
 ## timeout: 10
 
 #### dirs builtin
@@ -102,7 +102,7 @@ cd /
 dirs
 ## stdout: /
 ## status: 0
-## XFAIL ps-bash platform-windows-paths Windows paths: / is C:\ and /tmp the Windows temp directory, printed as C:/... by pwd and dirs and as C:\... in $PWD (intentional-differences.md, Platform: paths)
+## XFAIL ps-bash platform-windows-paths Windows paths: / is C:/ and /tmp is a Windows directory, so pwd, $PWD and dirs print C:/... where bash prints /... (intentional-differences.md, Platform: paths)
 ## timeout: 10
 
 #### dirs -c to clear the stack
@@ -121,7 +121,7 @@ dirs
 /tmp
 ## END
 ## status: 0
-## XFAIL ps-bash platform-windows-paths Windows paths: / is C:\ and /tmp the Windows temp directory, printed as C:/... by pwd and dirs and as C:\... in $PWD (intentional-differences.md, Platform: paths)
+## XFAIL ps-bash platform-windows-paths Windows paths: / is C:/ and /tmp is a Windows directory, so pwd, $PWD and dirs print C:/... where bash prints /... (intentional-differences.md, Platform: paths)
 ## timeout: 10
 
 #### dirs -v to print numbered stack, one entry per line
@@ -145,7 +145,7 @@ dirs -v
  2  /
 ## END
 ## status: 0
-## XFAIL ps-bash platform-windows-paths Windows paths: / is C:\ and /tmp the Windows temp directory, printed as C:/... by pwd and dirs and as C:\... in $PWD (intentional-differences.md, Platform: paths)
+## XFAIL ps-bash platform-windows-paths Windows paths: / is C:/ and /tmp is a Windows directory, so pwd, $PWD and dirs print C:/... where bash prints /... (intentional-differences.md, Platform: paths)
 ## timeout: 10
 
 #### dirs -p to print one entry per line
@@ -167,7 +167,7 @@ dirs -p
 /
 ## END
 ## status: 0
-## XFAIL ps-bash platform-windows-paths Windows paths: / is C:\ and /tmp the Windows temp directory, printed as C:/... by pwd and dirs and as C:\... in $PWD (intentional-differences.md, Platform: paths)
+## XFAIL ps-bash platform-windows-paths Windows paths: / is C:/ and /tmp is a Windows directory, so pwd, $PWD and dirs print C:/... where bash prints /... (intentional-differences.md, Platform: paths)
 ## timeout: 10
 
 #### dirs -l to print in long format, no tilde prefix
@@ -184,7 +184,7 @@ dirs -l
 /tmp/oil_test /
 ## END
 ## status: 0
-## XFAIL ps-bash platform-windows-paths Windows paths: / is C:\ and /tmp the Windows temp directory, printed as C:/... by pwd and dirs and as C:\... in $PWD (intentional-differences.md, Platform: paths)
+## XFAIL ps-bash platform-windows-paths Windows paths: / is C:/ and /tmp is a Windows directory, so pwd, $PWD and dirs print C:/... where bash prints /... (intentional-differences.md, Platform: paths)
 ## timeout: 10
 
 #### dirs to print using tilde-prefix format
@@ -195,7 +195,7 @@ pushd $HOME/oil_test >/dev/null
 dirs
 ## stdout: ~/oil_test /
 ## status: 0
-## XFAIL ps-bash platform-windows-paths Windows paths: / is C:\ and /tmp the Windows temp directory, printed as C:/... by pwd and dirs and as C:\... in $PWD (intentional-differences.md, Platform: paths)
+## XFAIL ps-bash platform-windows-paths Windows paths: / is C:/ and /tmp is a Windows directory, so pwd, $PWD and dirs print C:/... where bash prints /... (intentional-differences.md, Platform: paths)
 ## timeout: 10
 
 #### dirs test converting true home directory to tilde
@@ -206,7 +206,7 @@ pushd $HOME/oil_test/$HOME >/dev/null
 dirs
 ## stdout: ~/oil_test/tmp /
 ## status: 0
-## XFAIL ps-bash platform-windows-paths Windows paths: / is C:\ and /tmp the Windows temp directory, printed as C:/... by pwd and dirs and as C:\... in $PWD (intentional-differences.md, Platform: paths)
+## XFAIL ps-bash platform-windows-paths Windows paths: / is C:/ and /tmp is a Windows directory, so pwd, $PWD and dirs print C:/... where bash prints /... (intentional-differences.md, Platform: paths)
 ## timeout: 10
 
 #### dirs don't convert to tilde when $HOME is substring
@@ -221,7 +221,7 @@ dirs
 /tmp/oil_tests /
 ## END
 ## status: 0
-## XFAIL ps-bash platform-windows-paths Windows paths: / is C:\ and /tmp the Windows temp directory, printed as C:/... by pwd and dirs and as C:\... in $PWD (intentional-differences.md, Platform: paths)
+## XFAIL ps-bash platform-windows-paths Windows paths: / is C:/ and /tmp is a Windows directory, so pwd, $PWD and dirs print C:/... where bash prints /... (intentional-differences.md, Platform: paths)
 ## timeout: 10
 
 #### dirs tilde test when $HOME is exactly $PWD
@@ -236,7 +236,7 @@ dirs
 ~ /
 ## END
 ## status: 0
-## XFAIL ps-bash platform-windows-paths Windows paths: / is C:\ and /tmp the Windows temp directory, printed as C:/... by pwd and dirs and as C:\... in $PWD (intentional-differences.md, Platform: paths)
+## XFAIL ps-bash platform-windows-paths Windows paths: / is C:/ and /tmp is a Windows directory, so pwd, $PWD and dirs print C:/... where bash prints /... (intentional-differences.md, Platform: paths)
 ## timeout: 10
 
 #### dirs test of path alias `..`
@@ -245,7 +245,7 @@ pushd .. >/dev/null
 dirs
 ## stdout: / /tmp
 ## status: 0
-## XFAIL ps-bash platform-windows-paths Windows paths: / is C:\ and /tmp the Windows temp directory, printed as C:/... by pwd and dirs and as C:\... in $PWD (intentional-differences.md, Platform: paths)
+## XFAIL ps-bash platform-windows-paths Windows paths: / is C:/ and /tmp is a Windows directory, so pwd, $PWD and dirs print C:/... where bash prints /... (intentional-differences.md, Platform: paths)
 ## timeout: 10
 
 #### dirs test of path alias `.`
@@ -254,7 +254,7 @@ pushd . >/dev/null
 dirs
 ## stdout: /tmp /tmp
 ## status: 0
-## XFAIL ps-bash platform-windows-paths Windows paths: / is C:\ and /tmp the Windows temp directory, printed as C:/... by pwd and dirs and as C:\... in $PWD (intentional-differences.md, Platform: paths)
+## XFAIL ps-bash platform-windows-paths Windows paths: / is C:/ and /tmp is a Windows directory, so pwd, $PWD and dirs print C:/... where bash prints /... (intentional-differences.md, Platform: paths)
 ## timeout: 10
 
 #### pushd does not take more than one argument

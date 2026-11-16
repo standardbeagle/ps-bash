@@ -35,6 +35,7 @@ Nav starts at /CODE_MAP.md. Keep this index complete — a guard test fails on a
 - [lineeditor-vt100-design.md](lineeditor-vt100-design.md) — LineEditor VT100 Design
 - [on-cd-hooks.md](on-cd-hooks.md) — On-CD Hook Cmdlet API Specification
 - [parser-grammar.md](parser-grammar.md) — Parser Grammar Specification (v2 AST)
+- [paths.md](paths.md) — Paths: forward-slash `C:/x` out (`BashPath.ToShell`), one inbound mapper (`RuntimePath`/`WindowsPath`); producer inventory, PATH policy
 - [plugin-architecture.md](plugin-architecture.md) — Plugin Architecture Specification
 - [pty.md](pty.md) — PTY Architecture Specification
 - [runtime-command-reference.md](runtime-command-reference.md) — Command Reference
