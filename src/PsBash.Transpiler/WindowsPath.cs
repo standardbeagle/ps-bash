@@ -130,10 +130,28 @@ public static class WindowsPath
         result = value ?? string.Empty;
         var root = (tempDir ?? string.Empty).TrimEnd('/', '\\');
         if (string.IsNullOrEmpty(value) || root.Length == 0
-            || !value.StartsWith(root, System.StringComparison.OrdinalIgnoreCase)
+            || !StartsWithPath(value, root)
             || (value.Length > root.Length && value[root.Length] is not ('/' or '\\')))
             return false;
         result = "/tmp" + value.Substring(root.Length).Replace('\\', '/');
+        return true;
+    }
+
+    /// <summary>
+    /// <paramref name="value"/> begins with <paramref name="prefix"/>, ignoring case and
+    /// treating <c>/</c> and <c>\</c> as the same character: <c>C:/T/x</c> (the shell form
+    /// of <c>$PWD</c>) starts with <c>C:\T</c>.
+    /// </summary>
+    private static bool StartsWithPath(string value, string prefix)
+    {
+        if (value.Length < prefix.Length) return false;
+        for (var i = 0; i < prefix.Length; i++)
+        {
+            char a = value[i], b = prefix[i];
+            if (a == b) continue;
+            if (a is ('/' or '\\') && b is ('/' or '\\')) continue;
+            if (char.ToUpperInvariant(a) != char.ToUpperInvariant(b)) return false;
+        }
         return true;
     }
 

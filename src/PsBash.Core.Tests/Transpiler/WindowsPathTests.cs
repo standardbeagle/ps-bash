@@ -32,6 +32,8 @@ public class WindowsPathTests
     [InlineData("C:\\T\\", "/tmp/")]
     [InlineData("c:\\t\\a\\b.txt", "/tmp/a/b.txt")]
     [InlineData("C:\\T/x", "/tmp/x")]          // the emitter's literal /tmp/x rewrite
+    [InlineData("C:/T", "/tmp")]               // $PWD in its forward-slash shell form
+    [InlineData("c:/t/a/b", "/tmp/a/b")]
     public void TryUnmapTmpRoot_SpellsTempDirAsTmp(string input, string expected)
     {
         Assert.True(WindowsPath.TryUnmapTmpRoot(input, "C:\\T\\", out var result));
@@ -40,6 +42,7 @@ public class WindowsPathTests
 
     [Theory]
     [InlineData("C:\\Tx\\a")]     // a sibling that shares the prefix
+    [InlineData("C:/Tx/a")]
     [InlineData("C:\\a\\T")]
     [InlineData("/tmp/x")]
     [InlineData("")]

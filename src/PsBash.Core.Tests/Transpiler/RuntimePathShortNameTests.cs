@@ -33,6 +33,8 @@ public class RuntimePathShortNameTests
             Assert.Equal("/tmp", bash);
             Assert.True(RuntimePath.TryUnmapTmp(Path.Combine(root, "sub", "f"), out var under));
             Assert.Equal("/tmp/sub/f", under);
+            Assert.True(RuntimePath.TryUnmapTmp(BashPath.ToShell(root) + "/sub", out var shell), "$PWD's forward-slash form");
+            Assert.Equal("/tmp/sub", shell);
             Assert.False(RuntimePath.TryUnmapTmp(root + "x", out _), "a sibling sharing the prefix is not /tmp");
         }
         finally
