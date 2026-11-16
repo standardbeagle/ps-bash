@@ -15,7 +15,7 @@ public class PwdPathIdiomTests
     private const string Setup =
         "b=\"$(mktemp -d)\"; mkdir -p \"$b/one/two\" \"$b/sp ace\"; cd \"$b/one\"\n";
 
-    [Theory]
+    [SkippableTheory]
     [InlineData("echo \"${PWD##*/}\"")]
     [InlineData("p=${PWD%/*}; [ \"${p##*/}\" = \"${b##*/}\" ] && echo parent-ok")]
     [InlineData("[[ $PWD == */one ]] && echo match; [[ $PWD == */two ]] || echo no-match")]

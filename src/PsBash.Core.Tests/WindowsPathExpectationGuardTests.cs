@@ -31,7 +31,7 @@ public class WindowsPathExpectationGuardTests
     private static readonly Regex DrivesRuntime = new(@"Invoke-Bash|BashPath\.ToShell|ToShellPath", RegexOptions.Compiled);
 
     private static readonly Regex OsCondition = new(
-        @"OperatingSystem\.Is|IsWindows|Skip\.If|DirectorySeparatorChar|bool windows|Trait\(""Platform""", RegexOptions.Compiled);
+        @"OperatingSystem\.Is|IsWindows|Skip\.If|DirectorySeparatorChar|bool windows|\bwindows:\s*(true|false)\b|Trait\(""Platform""", RegexOptions.Compiled);
 
     /// <summary>True when <paramref name="methodText"/> asserts Windows-only <c>\</c>→<c>/</c> normalisation without an OS condition.</summary>
     internal static bool AssertsWindowsSeparatorUnconditionally(string methodText) =>
@@ -95,6 +95,8 @@ public class WindowsPathExpectationGuardTests
     [InlineData("[Fact]\npublic void D() {\n  var lines = RunLines(@\"Invoke-BashDirname 'C:\\Users\\me\\file.txt'\");\n  Assert.Equal(new[] { OperatingSystem.IsWindows() ? \"C:/Users/me\" : \".\" }, lines);\n}", false)]
     // A pure Windows-named function: same result on every OS.
     [InlineData("[Theory]\n[InlineData(@\"C:\\Users\\me/bin:C:/tools\", @\"C:\\Users\\me/bin;C:/tools\")]\npublic void L(string v, string e) => Assert.Equal(e, ExecutableLookup.ToWindowsPathList(v));", false)]
+    // The platform passed explicitly (BashPathTests): the same answer on every host.
+    [InlineData("[Theory]\n[InlineData(@\"C:\\Users\\x\", \"C:/Users/x\")]\npublic void W(string n, string e) => Assert.Equal(e, BashPath.ToShell(n, windows: true));", false)]
     // Backslash kept verbatim: no separator claim.
     [InlineData("[Fact]\npublic void T() => Run(\"Invoke-BashTest -f 'Z:\\\\nothere.txt'\");", false)]
     public void Guard_FlagsOnlyUnconditionalSeparatorExpectations(string methodText, bool flagged)
