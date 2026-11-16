@@ -30,7 +30,6 @@ x=1; X=2; echo "$x $X"
 big=$(head -c 40000 /dev/zero | tr '\0' a); echo ${#big}
 ## stdout: 40000
 ## status: 0
-## XFAIL ps-bash gap-differential-bashparitygap bashparitygap (differential): differs from bash 5.2; see docs/specs/spec-gaps.md
 
 #### DeclareInteger_EvaluatesArithmetic
 declare -i n=3; n+=2; echo $n
@@ -51,7 +50,6 @@ f(){ local IFS=,; echo "$*"; }; f a b c
 x=1; env | grep -c '^x='
 ## stdout: 0
 ## status: 1
-## XFAIL ps-bash gap-differential-bashparitygap bashparitygap (differential): differs from bash 5.2; see docs/specs/spec-gaps.md
 
 #### ArithPostIncrement_ThenPlainExpansion
 x=5; echo $((x++)) $x
