@@ -11554,8 +11554,11 @@ public static partial class PsEmitter
             // block (a lastpipe stage runs in the shell itself). A compound stage starts with no loop (bash warns); a simple
             // FIRST stage keeps the loop level, so `eval break | cat` ends that stage (a later one warns: it has no scope).
             bool lastpipeHere = _scriptLastpipe && i > 0 && i == pipeline.Commands.Length - 1;
+            string? wholePipelineText = null;
             WithLoopBarrier(pipeline.Commands.Length > 1 && !lastpipeHere,
                 i == 0 && cmd is Command.Simple ? LoopBarrierKind.EndsSubshell : LoopBarrierKind.Warn, () => { EmitStage(); return 0; });
+            // A read loop that ran its lazily read producer itself is the whole pipeline (set inside EmitStage).
+            if (wholePipelineText is not null) return wholePipelineText;
             void EmitStage()
             {
             if (i > 0 && cmd is Command.Simple simple)
@@ -11612,7 +11615,7 @@ public static partial class PsEmitter
                 string stage = EmitCompoundStage(cmd, isFirstStage: i == 0, entryScope, lastpipeStage,
                     i == 1 ? pipeline : null, out bool gated, out bool wholePipeline);
                 // A read loop that pulls its lines from a lazily read producer runs the producer itself.
-                if (wholePipeline) return stage;
+                if (wholePipeline) { wholePipelineText = stage; return; }
                 // A streamed read loop gets the gate that stops its producer as a pipeline element of its own, in front of
                 // the stage (and outside a pipefail stage wrapper, so the stop reaches this pipeline).
                 if (gated)
@@ -11879,7 +11882,7 @@ public static partial class PsEmitter
             // carries on in bash, and a `break 2` in a stage's own loop leaves that loop only. A labelled break here
             // unwound the stage's pipeline into the enclosing loop and ended it.
             var outerLabels = _loopLabels; var outerBarrier = _loopBarrier;
-            _loopLabels = null; _loopBarrier = true;
+            _loopLabels = null; _loopBarrier = LoopBarrierKind.Warn;
             try
             {
                 string text = emit();
