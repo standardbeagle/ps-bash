@@ -43,7 +43,6 @@ printf '1\n2\n3\n' | { read x; read y; echo "$x$y"; cat; }
 3
 ## END
 ## status: 0
-## XFAIL ps-bash gap-differential-compoundstdin compoundstdin (differential): differs from bash 5.2; see docs/specs/spec-gaps.md
 
 #### BraceGroupAndSubshellAsPipeStage_ShareStdin row 7
 printf 'a\nb\n' | { cat; cat; echo end; }
