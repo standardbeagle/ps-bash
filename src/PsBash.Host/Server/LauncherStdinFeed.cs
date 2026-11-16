@@ -37,7 +37,7 @@ internal sealed class LauncherStdinFeed : IDisposable
     internal LauncherStdinFeed(CancellationToken ct) => _ct = ct;
 
     /// <summary>The cursor the command reads (<c>$global:__BashStdIn</c>).</summary>
-    internal StdinCursor CreateCursor() => new(new RecordSource(this));
+    internal StdinCursor CreateCursor() => new(new RecordSource(this)) { IsShellStdin = true };
 
     /// <summary>
     /// Read stdin frames from <paramref name="stream"/> until the end-of-input marker or the stream closes.

@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 69
+stdout-length: 12
+stderr-length: 0
+==== SCRIPT ====
+seq 3 | while read a; do command -v ls > /dev/null; echo "a=$a"; done
+==== STDOUT ====
+a=1
+a=2
+a=3
+
+==== STDERR ====
+

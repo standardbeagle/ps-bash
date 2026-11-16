@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 69
+stdout-length: 5
+stderr-length: 0
+==== SCRIPT ====
+inner() { read b; echo "b=$b"; }; outer() { inner; }; echo hi | outer
+==== STDOUT ====
+b=hi
+
+==== STDERR ====
+

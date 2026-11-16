@@ -127,6 +127,56 @@ public class InvokeBashReadCommandTests : IClassFixture<SharedPwshFixture>
     }
 
     [Fact]
+    public void Read_NCharsOfAnUnterminatedInput_PutsTheRestBackUnterminated()
+    {
+        // bash oracle: `printf 'abc' | { read -n 2 x; echo "x=$x"; cat; echo; } | od -c` ends `c \n` -- one newline, the
+        // echo's. The rest went back as a plain string, which every reader takes for a whole LINE, so cat printed `c\n`.
+        var lines = RunLines(
+            "$global:__BashStdIn = [System.Collections.Generic.Queue[object]]::new(); " +
+            "$global:__BashStdIn.Enqueue([PsBash.Cmdlets.BashRuntime]::TextRecord('abc', $true)); " +
+            "Invoke-BashRead -n 2 x; \"x=$x\"; " +
+            "$rest = $global:__BashStdIn.Dequeue(); " +
+            "\"rest=$([PsBash.Cmdlets.BashRuntime]::GetBashText($rest)) unterminated=$([PsBash.Cmdlets.BashRuntime]::IsUnterminated($rest))\"");
+
+        Assert.Equal(new[] { "x=ab", "rest=c unterminated=True" }, lines);
+    }
+
+    [Fact]
+    public void Read_NCharsOfATerminatedLine_PutsTheRestBackAsALine()
+    {
+        // bash oracle: `printf 'abc\ndef\n' | { read -n 2 x; cat; }` prints `c` and `def`, each with its newline.
+        var lines = RunLines(
+            "$global:__BashStdIn = [System.Collections.Generic.Queue[object]]::new(); " +
+            "$global:__BashStdIn.Enqueue(\"abc`n\"); $global:__BashStdIn.Enqueue(\"def`n\"); " +
+            "Invoke-BashRead -n 2 x; Invoke-BashRead y; Invoke-BashRead z; \"x=$x y=$y z=$z\"");
+
+        Assert.Equal(new[] { "x=ab y=c z=def" }, lines);
+    }
+
+    [Fact]
+    public void BackgroundJobStdin_SharesTheCompoundStdin_ButNotTheShellsOwn()
+    {
+        // ps-bash-specific surface (the job's runspace is handed a cursor): bash gives `cmd &` the stdin of the compound
+        // command it is started in (`echo hi | { cat & wait; }` prints hi) and, with job control off, /dev/null at the top
+        // of a script. A queue is replaced by a locked cursor that both runspaces read; the shell's own stdin is withheld.
+        var lines = RunLines(
+            "$global:__BashStdIn = [System.Collections.Generic.Queue[object]]::new(); " +
+            "$global:__BashStdIn.Enqueue('a'); $global:__BashStdIn.Enqueue('b'); " +
+            "$job = [PsBash.Cmdlets.BackgroundJobStdin]::Inherit($ExecutionContext.SessionState); " +
+            "\"same=$([object]::ReferenceEquals($job, $global:__BashStdIn)) type=$($job.GetType().Name)\"; " +
+            "\"job=$($job.Dequeue())\"; Invoke-BashRead x; \"shell=$x left=$($job.Count)\"; " +
+            "$global:__BashStdIn = [PsBash.Core.StdinCursor]::new([object[]]@('s')); " +
+            "\"cursor-shared=$([object]::ReferenceEquals([PsBash.Cmdlets.BackgroundJobStdin]::Inherit($ExecutionContext.SessionState), $global:__BashStdIn))\"; " +
+            "$global:__BashStdIn = [PsBash.Core.StdinCursor]@{ IsShellStdin = $true }; $global:__BashStdIn.Enqueue('own'); " +
+            "$top = [PsBash.Cmdlets.BackgroundJobStdin]::Inherit($ExecutionContext.SessionState); " +
+            "\"shell-own-shared=$([object]::ReferenceEquals($top, $global:__BashStdIn)) job-sees=$($top.Count)\"; " +
+            "$global:__BashStdIn = $null; " +
+            "\"none=$([PsBash.Cmdlets.BackgroundJobStdin]::Inherit($ExecutionContext.SessionState).Count)\"");
+
+        Assert.Equal(new[] { "same=True type=StdinCursor", "job=a", "shell=b left=0", "cursor-shared=True", "shell-own-shared=False job-sees=0", "none=0" }, lines);
+    }
+
+    [Fact]
     public void Read_BasicStdin_PopulatesREPLY()
     {
         // No destination name given: oracle parity (bash default) is REPLY.

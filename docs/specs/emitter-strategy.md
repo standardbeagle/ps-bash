@@ -468,10 +468,13 @@ passes its pipeline to `$input` only, so the emitter builds the sharing itself
   `while read a; do read b; …; done`, a `cat` / `head -1` / nested read loop in the body take the
   lines after the loop's, as in bash. An unterminated record is joined with the next one
   (`{ printf a; echo b; }` reads `ab`). Two forms keep iterating records instead, because nothing
-  else reads them: a pipe stage whose body reads nothing streams per record (next section), and a
-  loop whose only redirect is its own `< f` / `<<<` / heredoc with a body that reads nothing
-  iterates that source inline. Whether the body reads is decided by emitting it inside a scope and
-  checking `PsBuild.ReadsSharedStdin` (the function-body precedent; a native alone does not count).
+  else reads them: a pipe stage whose body is PROVEN to read nothing streams per record (next
+  section), and a loop whose only redirect is its own `< f` / `<<<` / heredoc with such a body
+  iterates that source inline. The proof is the stdin probe (next section, rule 4). Only the plain
+  line loop is this form: a `read` flag that takes a value (`-u FD`, `-n N`, `-N N`, `-t SECS`,
+  `-d DELIM`, `-a ARR`, `-p`, `-i`) makes it a generic `while` whose condition runs `Invoke-BashRead`
+  (`IsWhileRead`; the flag's value used to be taken for a variable name, so `while read -u 3 a; …;
+  done 3< f` read stdin into `$3`).
 
 ### Stage stdin (one model for every pipe stage)
 
@@ -492,7 +495,7 @@ primitives, and every reader consumes the shared cursor — no reader names `$in
    `StageStdin`, for EVERY compound form: `{ }`, `( )`, loops, `if`, `case`, `select`, `[[ ]]`,
    `(( ))`, a function definition) turns the input into `$global:__BashStdIn` first; wrappers
    (redirect tail, subshell guard, pipefail `Invoke-BashPipeStage`) go inside or outside it, never
-   between. The one exception is a `while read` stage whose body reads nothing: it runs per record
+   between. The one exception is a `while read` stage whose body is proven to read nothing (rule 4): it runs per record
    behind `PipeGate` (`StreamingReadLoopStage`, output redirects applied to that stage).
 2. `ForwardStageInput` — a simple stage that must sit in a script block (env prefix, splat prelude,
    subshell guard for `${x=…}` / a parameter error, pipefail with a redirect tail) pipes the
@@ -500,17 +503,65 @@ primitives, and every reader consumes the shared cursor — no reader names `$in
 3. `DrainStageInput` — a stage whose stdin is not the pipe (its own `< f` / heredoc, a command
    that never reads stdin) drops the records and runs once.
 
-`PsBuild` is the only file whose emitted text names `$input` (`PsBuildStageStdinGuardTests` scans
-the transpiler). The matrix compound form × wrapper context is pinned in `StageStdinMatrixTests`
-(Core) and `StageStdinMatrixDifferentialTests` (oracle). Known limit: a stage whose body reads
-stdin and whose producer is not a literal `yes`/`seq` is still filled eagerly (PowerShell starts
-a script block's end block only after its upstream ends), so an endless general producer into a
-reading body does not terminate.
+4. **The stdin probe** — whether code reads the stdin it inherits is asked in ONE place,
+   `PsEmitter.ProbeStdinScope` (`Parser/PsEmitter.StdinProbe.cs`), and the question is "is this code
+   PROVEN to read nothing?", never "can I see a reader?". Three constructs ask it: a read loop
+   (stream per record / iterate its file inline, or read the shared cursor), a function body (plain,
+   or `FunctionStdinScope` so `echo x | f` hands the pipe on), and the whole script
+   (`TranspileProbingLauncherStdin`: forward the launcher's stdin or not). They used to look for a
+   reader in the emitted text, each with its own marker list, so a reader the text does not show
+   read nothing: `r() { read b; }; … | while read a; do r; done` streamed past r's read,
+   `f() { g; }` dropped the pipe g reads, a script that only sources a file got no stdin. The probe
+   emits the code inside a scope and answers "reads" when the text shows a reader
+   (`PsBuild.ReadsSharedStdin`) OR any simple command in it is not proven clean
+   (`NoteStdinUse` → `StdinReaders.MayReadStdin`). Proven clean: an assignment; a command with a
+   stdin of its own (`< f`, a here-doc, `< /dev/null` — the `ssh … < /dev/null` idiom keeps the loop
+   streaming); a builtin or ps-bash command that does not read (`echo`, `cat FILE`, `command -v x`);
+   a function this unit defines exactly once, before the call, whose body was itself proven clean
+   (`IsStdinFreeFunction`). Everything else is a reader: a program, a function of another unit (a
+   sourced file, an earlier command line) or defined twice / later / recursively, `eval`,
+   `source` / `.`, `exec`, `bash` / `sh`, `env` / `time` / `timeout` wrappers, `command prog`, a
+   run-time command name, `read` / `mapfile`, and so any `$( )`, background job, condition or
+   pipeline first stage that holds one. At run time nothing is detected at all: a function, eval
+   text and a sourced file read `$global:__BashStdIn` when one is installed (eval and
+   `Invoke-BashSource` transpile their text inside a scope then), so once the enclosing construct
+   has opened the cursor every reader behind any indirection shares it.
+
+`… | source f` / `… | . f` is a stage like `… | eval`: `EmitEvalWithStdin` opens the scope the
+file's commands read.
+
+**Background jobs inherit the stdin of the compound command that starts them**
+(`echo hi | { cat & wait; }` prints `hi`; `cat &` in a read loop's body takes the lines the loop
+has not read): `Invoke-BashBackground` hands the job's runspace the SAME cursor
+(`BackgroundJobStdin.Inherit`; a plain queue is first replaced by a `StdinCursor`, whose buffer is
+locked, because two runspaces now read it). The shell's own stdin is not inherited
+(`StdinCursor.IsShellStdin`, set for the launcher's cursor): with job control off bash gives a job
+at the top of a script `/dev/null`, so it gets an empty cursor. A job run in a host process of its
+own (`-Isolated`, `PSBASH_BG_MODE=process`) cannot share the cursor and reads end of input.
+
+`PsBuild` is the only file whose emitted text names `$input`, and the probe file the only one that
+asks whether emitted text reads stdin (`PsBuildStageStdinGuardTests` scans the transpiler for
+both). The matrix compound form × wrapper context × reader kind (visible readers, and the kinds the
+emitter cannot see into: function, nested function, function of another unit, `source`, `eval`,
+background job, program, `read -u N`, `read -n N`, run-time name, `$( )`, env prefix) is pinned in
+`StageStdinMatrixTests` (Core) and `StageStdinMatrixDifferentialTests` (oracle).
+
+Known limits. (1) A stage that reads the shared cursor and whose producer is not a literal
+`yes`/`seq` is filled eagerly (PowerShell starts a script block's end block only after its upstream
+ends). Since rule 4 that is every read-loop stage whose body is not proven clean — one that runs a
+program or a function of another unit included — so such a loop sees its lines only once the
+producer has finished, and an endless general producer into it does not terminate. Streaming those
+needs the producer on another thread with the shell's state; a body that must stream can give its
+commands a stdin of their own (`cmd < /dev/null`). (2) The proof trusts a unit's single definition
+of a function: text run through `eval` / `source` that REDEFINES it as a reader after the unit was
+transpiled is not seen.
 
 Known divergences (oracle bash 5.2 / GNU coreutils 9.4): `{ head -n1; cat; } < file` prints `1 2 3`
 in bash (GNU head seeks a regular file back) but `1` here — the same as bash when the data comes
 from a PIPE, which is what ps-bash models (`printf '1\n2\n3\n' | { head -n1; cat; }` matches);
-commands emitted as a statement list (env prefix, `& { …splat… }`) never read the scope.
+commands emitted as a statement list (env prefix, `& { …splat… }`) are never FED the scope (a
+function or eval text behind one still reads the cursor at run time); `bash -c 'read z'` in a
+scope is not fed (only `bash` with no script operand is), so the nested shell reads nothing.
 
 ### `[[ … =~ … ]]` and `BASH_REMATCH`
 
@@ -595,6 +646,17 @@ own failures: if/elif/while/until conditions, non-final `&&`/`||` operands, `!`,
 and process substitutions. An `&&`/`||` list leaves only if its final command ran and failed
 (`$global:__BashErrexitTail`). An untaken `if` and a finished `while`/`until` set status 0, so a function
 ending in one does not leak the failed condition's code to its caller's check.
+
+**A stage inherits `-e`.** A compound or function stage of a pipeline at an armed statement is a subshell that
+inherits `-e`: its statements carry checks, and the stage lifts the pipeline's suppression around them
+(`PsBuild.ErrexitLifted`). The lift is ABSOLUTE — the pipeline records the counter before raising it
+(`PsBuild.ErrexitSuppressedFrom`, `$__psbash_eb<n>`) and a stage sets the counter back to that value, restoring
+what it found when it ends. Never a decrement: stages of one pipeline run interleaved (a streamed read loop
+handles a record while a compound producer is still inside its own lift), two decrements gave -1, and a
+non-zero counter reads as "suppressed" — `{ echo three; echo four; } | while read l; do echo "[$l]"; false; done`
+ran on to `[four]`. This holds for every read-loop form (streamed, shared cursor, redirected, in a group, in a
+function); a `lastpipe` last stage lifts the same way and, being the shell itself, its failure ends the script.
+Guard: the errexit rows of `StageStdinMatrixTests` / `StageStdinMatrixDifferentialTests`.
 
 **Conditions and chain status** (`PsEmitter.EmitIfFromArm`, `EmitWhileLoop`, `EmitAndOrList`). An
 if/elif/while/until condition is a `compound_list` (`while a; b; do` — status of the last command). A

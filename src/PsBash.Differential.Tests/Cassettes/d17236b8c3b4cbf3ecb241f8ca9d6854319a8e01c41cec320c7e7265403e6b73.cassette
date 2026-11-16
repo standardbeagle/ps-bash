@@ -1,0 +1,17 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 111
+stdout-length: 17
+stderr-length: 0
+==== SCRIPT ====
+set -e
+{ echo 1; { echo x; false; echo y; } | cat; echo 2; } | while read a; do echo "[$a]"; done; echo "rc=$?"
+==== STDOUT ====
+[1]
+[x]
+[2]
+rc=0
+
+==== STDERR ====
+

@@ -59,6 +59,48 @@ public class PsBuildStageStdinGuardTests
             "anywhere else a wrapper may already hide it. Offenders:\n  " + string.Join("\n  ", offenders));
     }
 
+    /// <summary>
+    /// "Does this code read stdin?" is asked in ONE place, the emitter's stdin probe (PsEmitter.StdinProbe.cs): it answers
+    /// "no" only for code PROVEN to read nothing. Three sites used to answer it by looking for a reader in emitted text,
+    /// each with its own marker list (a read loop's body, a function body, the launcher's forwarding), so a reader the text
+    /// does not show -- behind a function call, a sourced file, a background job, a program -- read nothing. A new site
+    /// that scans emitted text for a reader fails here.
+    /// </summary>
+    [Fact]
+    public void Transpiler_AsksWhetherCodeReadsStdinOnlyThroughTheProbe()
+    {
+        string[] markers =
+        {
+            "ReadsSharedStdin(",
+            "Contains(\"__BashStdIn\"", "Contains(LauncherStdinVariable",
+            "Contains(\"Invoke-BashRead\"", "Contains(\"Invoke-BashMapfile\"",
+            "Contains(\"Enter-BashNativeStdin\"", "Contains(\"Resolve-BashCommand -Fed\"",
+        };
+        var offenders = new List<string>();
+        var dir = Path.Combine(RepoRoot(), "src", "PsBash.Transpiler");
+        foreach (var file in Directory.EnumerateFiles(dir, "*.cs", SearchOption.AllDirectories))
+        {
+            if (file.Contains(Path.DirectorySeparatorChar + "obj" + Path.DirectorySeparatorChar)
+                || file.Contains(Path.DirectorySeparatorChar + "bin" + Path.DirectorySeparatorChar)) continue;
+            var name = Path.GetFileName(file);
+            if (name is "PsBuild.cs" or "PsEmitter.StdinProbe.cs") continue;
+
+            var lines = File.ReadAllLines(file, Encoding.Latin1);
+            for (int i = 0; i < lines.Length; i++)
+            {
+                var t = lines[i].TrimStart();
+                if (t.StartsWith("//", StringComparison.Ordinal) || t.StartsWith("*", StringComparison.Ordinal)) continue;
+                foreach (var marker in markers)
+                    if (t.Contains(marker, StringComparison.Ordinal))
+                        offenders.Add($"{name}:{i + 1}: {t}");
+            }
+        }
+
+        Assert.True(offenders.Count == 0,
+            "Whether emitted code reads stdin must be asked through PsEmitter.ProbeStdinScope (a text scan cannot see a " +
+            "reader behind a function, a sourced file, a job or a program). Offenders:\n  " + string.Join("\n  ", offenders));
+    }
+
     [Fact]
     public void PsBuild_NamesThePipeStageInputThroughOneConstant()
     {

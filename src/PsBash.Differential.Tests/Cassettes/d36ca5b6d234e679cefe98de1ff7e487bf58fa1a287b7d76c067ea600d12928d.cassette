@@ -1,0 +1,19 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 196
+stdout-length: 14
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)"
+printf '1\n2\n3\n4\n' > in
+( set -e
+printf '1\n2\n3\n4\n' | while read a; do read b; echo "[$a$b]"; false; echo no; done
+echo after ); echo "rc=$?"; cat out 2>/dev/null; echo end
+==== STDOUT ====
+[12]
+rc=1
+end
+
+==== STDERR ====
+

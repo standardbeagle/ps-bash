@@ -3958,7 +3958,7 @@ public class PsEmitterTests
     [Fact]
     public void Transpile_FunctionKeywordForm_EmitsPsFunction()
     {
-        var result = PsBuildTestText.StripFunctionSource(PsEmitter.Transpile("function greet { Invoke-BashEcho hello }")!);
+        var result = PsBuildTestText.StripFunctionSource(PsEmitter.Transpile("function greet { echo hello; }")!);
 
         Assert.Equal($"function greet {{ {FnPre}Invoke-BashEcho hello{FnPost} }}", result);
     }
@@ -4011,7 +4011,7 @@ public class PsEmitterTests
     public void Transpile_FunctionCallingFunction_EmitsNestedCalls()
     {
         var result = PsBuildTestText.StripFunctionSource(PsEmitter.Transpile(
-            "function greet { Invoke-BashEcho hello }; function main { greet }")!);
+            "function greet { echo hello; }; function main { greet; }")!);
 
         Assert.Equal(
             $"function greet {{ {FnPre}Invoke-BashEcho hello{FnPost} }}; function main {{ {FnPre}greet{FnPost} }}",
@@ -6073,7 +6073,7 @@ public class PsEmitterTests
     public void Transpile_SetECompoundPipeStage_ChecksErrexitInsideTheStage(string bash)
     {
         var result = PsEmitter.Transpile(bash)!;
-        Assert.Contains("$global:__BashErrexitSuppress--; try { ", result);
+        Assert.Contains(PsBuild.ErrexitLifted("\u0001", "$__psbash_eb0").Split('\u0001')[0], result);
         Assert.Contains(ErrexitCheckInsideScope("return"), result);
     }
 
@@ -6097,7 +6097,7 @@ public class PsEmitterTests
     public void Transpile_SetEFunctionPipeStage_LiftsSuppressionAroundTheCall()
     {
         var result = PsEmitter.Transpile("set -e; g() { false; echo in-g; }; g | cat; echo end")!;
-        Assert.Contains(PsBuild.ErrexitLifted("g"), result);
+        Assert.Contains(PsBuild.ErrexitLifted("g", "$__psbash_eb0"), result);
         Assert.Contains(ErrexitCheckInsideScope(PsBuild.DynamicExit("$global:LASTEXITCODE")), result);
     }
 
@@ -6109,12 +6109,12 @@ public class PsEmitterTests
     [InlineData("set -e; g() { false; echo in-g; }; ! g | cat")]
     [InlineData("trap 'echo x' ERR\ng() { false; echo in-g; }; g | cat")]
     public void Transpile_SetEFunctionPipeStageWhereErrexitIsIgnored_IsNotLifted(string bash)
-        => Assert.DoesNotContain(PsBuild.ErrexitLifted("g"), PsEmitter.Transpile(bash)!);
+        => Assert.DoesNotContain(PsBuild.ErrexitLifted("g", "$__psbash_eb0"), PsEmitter.Transpile(bash)!);
 
     [Fact]
-    public void Transpile_ErrexitLifted_LiftsOneSuppressionLevelForTheStage()
-        => Assert.Equal("$global:__BashErrexitSuppress--; try { x } finally { $global:__BashErrexitSuppress++ }",
-            PsBuild.ErrexitLifted("x"));
+    public void Transpile_ErrexitLifted_SetsTheSuppressionBackToItsValueBeforeThePipeline()
+        => Assert.Equal("$ml = $global:__BashErrexitSuppress; $global:__BashErrexitSuppress = $m; try { x } finally { $global:__BashErrexitSuppress = $ml }",
+            PsBuild.ErrexitLifted("x", "$m"));
 
     [Fact]
     public void Transpile_SetPlusE_TurnsErrexitOff()

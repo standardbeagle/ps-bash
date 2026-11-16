@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 62
+stdout-length: 15
+stderr-length: 0
+==== SCRIPT ====
+fr() { echo "fr $1"; }; seq 3 | while read a; do fr "$a"; done
+==== STDOUT ====
+fr 1
+fr 2
+fr 3
+
+==== STDERR ====
+

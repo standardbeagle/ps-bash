@@ -100,7 +100,8 @@ public sealed class InvokeBashSourceCommand : PSCmdlet
 
         string result;
         using (RuntimeOptionHints.Apply(SessionState))
-            result = BashTranspiler.Transpile(content, TranspileContext.Eval);
+            // With a stdin scope active (`... | source f`, a read loop's body, a redirected group) the file's commands read it, as eval text does.
+            result = BashTranspiler.Transpile(content, TranspileContext.Eval, null, SharedStdin.Get(SessionState) is not null);
         if (string.IsNullOrEmpty(result))
         {
             SessionState.PSVariable.Set("global:LASTEXITCODE", 0);

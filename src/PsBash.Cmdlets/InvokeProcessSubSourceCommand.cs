@@ -64,7 +64,7 @@ public sealed class InvokeProcessSubSourceCommand : PSCmdlet
         string psCode;
         try
         {
-            psCode = BashTranspiler.Transpile(bashContent, TranspileContext.Eval);
+            psCode = BashTranspiler.Transpile(bashContent, TranspileContext.Eval, null, SharedStdin.Get(SessionState) is not null);
         }
         catch (System.Exception ex)
         {

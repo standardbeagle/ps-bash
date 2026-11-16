@@ -406,10 +406,13 @@ if ($__bw.Count -eq 0) { return }
 $__bn = [string]$__bw[0]
 $__bc = Resolve-BashCommand -Name $__bn
 $__bp = @($__bw | Select-Object -Skip 1)
-if ($__bfed) {
-    $__bread = ($__bc -is [string] -and $__bc -ceq $__bn -and $__bn -ne '' -and
-            (Get-Command -Name ([WildcardPattern]::Escape($__bn)) -CommandType Function -ErrorAction Ignore)) -or
-        $(if ($__bsr = 'PsBash.Core.Parser.StdinReaders' -as [type]) { $__bsr::ShouldFeed($__bn, [string[]]$__bp) } else { $true })
+if ($__bfed -and $__bc -is [string] -and $__bc -ceq $__bn -and $__bn -ne '' -and
+        (Get-Command -Name ([WildcardPattern]::Escape($__bn)) -CommandType Function -ErrorAction Ignore)) {
+    # A function is not piped to: its readers take from the scope's cursor themselves, a line at a time, as when it is
+    # called by name. Piped, it was handed EVERYTHING left (`c=f; { $c; $c; } < in` gave the second call nothing).
+    & $__bc @__bp
+} elseif ($__bfed) {
+    $__bread = $(if ($__bsr = 'PsBash.Core.Parser.StdinReaders' -as [type]) { $__bsr::ShouldFeed($__bn, [string[]]$__bp) } else { $true })
     if ($__bread) {
         & { while ($global:__BashStdIn -and $global:__BashStdIn.Count -gt 0) { $global:__BashStdIn.Dequeue() } } | & $__bc @__bp
     } else { & $__bc @__bp }
@@ -3168,9 +3171,11 @@ function Invoke-BashBackground {
     # changes nothing undid the parent's assignments. It also reports the body's exit status for `wait`.
     $status = [hashtable]::Synchronized(@{ Code = 0; At = 0L })
     $wrapped = @'
-param($__bgStatus, $__bgRestore)
+param($__bgStatus, $__bgRestore, $__bgStdin)
 # A subshell body's state restore must not touch the process-wide variables the parent shares (BashShellState.Restore).
 $global:__psbashBgRunspace = $true
+# The job's stdin is the stdin of the compound command that started it, shared with the shell (BackgroundJobStdin).
+$global:__BashStdIn = $__bgStdin
 # The job body is transpiled bash, whose operands the shell already globbed (FileSystemHelpers.OperandsShellExpanded).
 $global:__BashOperandsExpanded = $true
 $__bgBefore =if ($__bgRestore) { [Environment]::GetEnvironmentVariables() } else { @{} }
@@ -3198,11 +3203,13 @@ try {
             [Environment]::SetEnvironmentVariable($__bgKey, $__bgOld)
         }
     }
+    # A pooled runspace must not keep the cursor for the next job.
+    $global:__BashStdIn = $null
     $__bgStatus.Code = $__bgCode
     $__bgStatus.At = [System.Diagnostics.Stopwatch]::GetTimestamp()
 }
 '@
-    [void]$ps.AddScript($wrapped).AddArgument($status).AddArgument([bool]$Isolated)
+    [void]$ps.AddScript($wrapped).AddArgument($status).AddArgument([bool]$Isolated).AddArgument([PsBash.Cmdlets.BackgroundJobStdin]::Inherit($ExecutionContext.SessionState))
 
     $synthId = $script:BashBgNextId
     $script:BashBgNextId++

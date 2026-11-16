@@ -96,6 +96,70 @@ public static class StdinReaders
         return Kind.Native;
     }
 
+    // Commands that run OTHER code with the stdin they were given: what that code reads cannot be told from the name.
+    private static readonly HashSet<string> CodeRunners = new(StringComparer.Ordinal)
+    {
+        "eval", "source", ".", "exec", "builtin", "env", "time", "timeout", "flock", "nohup", "bash", "sh", "fg",
+    };
+
+    /// <summary>
+    /// The conservative twin of <see cref="ShouldFeed"/>, for the question "is this command PROVEN not to consume the stdin
+    /// it inherits?" (PsEmitter.ProbeStdinScope): true unless the name and operands rule a read out. <see cref="ShouldFeed"/>
+    /// answers "feed it?" and so says no to everything that is not fed through the pipeline -- <c>read</c>, <c>eval</c>,
+    /// <c>source</c>, <c>bash -c</c>, <c>command prog</c> -- although each of them reads, or runs code that may read, the
+    /// stdin of the compound command around it. A name that is no ps-bash command and no builtin (a function, a program)
+    /// is a reader.
+    /// </summary>
+    public static bool MayReadStdin(string name, IReadOnlyList<string?> args)
+    {
+        if (name is "read" or "mapfile" or "readarray") return true;
+        if (name == "command")
+        {
+            // `command -v x` / `command -V x` only look a name up; `command prog` runs prog.
+            if (IsCommandLookup(args)) return false;
+            return CommandTarget(args) is not { } target || MayReadStdin(target.Name, target.Args);
+        }
+        if (CodeRunners.Contains(name)) return args.Count > 0;
+        switch (Classify(name))
+        {
+            case Kind.Native:
+            case Kind.Always: return true;
+            // `tar xf -`, `diff - f`: an explicit stdin operand (`cd -` and `echo -` are not one).
+            case Kind.Never: return name is "tar" or "diff" or "cmp" or "xan" && args.Contains("-");
+            default: return ShouldFeed(name, args);
+        }
+    }
+
+    /// <summary>True for <c>command -v NAME</c> / <c>command -V NAME</c> (also bundled, <c>-pv</c>): a lookup that runs nothing.</summary>
+    private static bool IsCommandLookup(IReadOnlyList<string?> args)
+    {
+        foreach (var a in args)
+        {
+            if (a is null || a.Length < 2 || a[0] != '-' || a == "--") return false;
+            if (a.AsSpan(1).IndexOfAny('v', 'V') >= 0) return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// The command <c>command [-p] [--] NAME ARG…</c> runs, from the words after <c>command</c>; null for the lookup forms
+    /// (<c>-v</c> / <c>-V</c>), for no command at all, and for a NAME that is not a literal.
+    /// </summary>
+    internal static (string Name, IReadOnlyList<string?> Args)? CommandTarget(IReadOnlyList<string?> args)
+    {
+        if (IsCommandLookup(args)) return null;
+        int i = 0;
+        while (i < args.Count && args[i] is { Length: >= 2 } a && a[0] == '-')
+        {
+            i++;
+            if (a == "--") break;
+        }
+        if (i >= args.Count || args[i] is not { } name) return null;
+        var rest = new List<string?>(args.Count - i - 1);
+        for (int k = i + 1; k < args.Count; k++) rest.Add(args[k]);
+        return (name, rest);
+    }
+
     /// <summary>
     /// <paramref name="args"/> are the words after the command name; a null entry is a non-literal word
     /// (variable, command substitution, glob …), which counts as a positional operand. The runtime asks the same

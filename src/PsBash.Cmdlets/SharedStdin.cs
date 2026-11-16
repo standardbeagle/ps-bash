@@ -159,18 +159,53 @@ internal static class SharedStdin
         return true;
     }
 
-    /// <summary>Put <paramref name="text"/> back at the FRONT of the shared stdin (nothing when it is empty).</summary>
+    /// <summary>
+    /// Put <paramref name="text"/> back at the FRONT of the shared stdin (nothing when it is empty). Text that does not end
+    /// in a newline is the unterminated tail of the input and goes back as such: a plain string is a whole LINE to every
+    /// reader, so <c>printf abc | { read -n 2 x; cat; }</c> printed <c>c</c> with a newline bash never saw.
+    /// </summary>
     internal static void PushFront(SessionState state, string text)
     {
         if (text.Length == 0) return;
+        object record = text.EndsWith('\n') ? text : BashRuntime.TextRecord(text, unterminated: true);
         switch (Get(state))
         {
-            case StdinCursor c: c.PushFront(new object[] { text }); break;
+            case StdinCursor c: c.PushFront(new object[] { record }); break;
             case Queue<object> q:
-                var rest = new List<object> { text };
+                var rest = new List<object> { record };
                 while (q.Count > 0) rest.Add(q.Dequeue());
                 foreach (var item in rest) q.Enqueue(item);
                 break;
+        }
+    }
+}
+
+/// <summary>
+/// The stdin a background job (<c>cmd &amp;</c>) starts with. bash hands the job the stdin of the compound command it
+/// was started in -- <c>echo hi | { cat &amp; wait; }</c> prints <c>hi</c>, and a <c>cat &amp;</c> in a read loop's body
+/// takes the lines the loop has not read -- but not the shell's own: with job control off a job at the top of a script
+/// reads <c>/dev/null</c>.
+/// </summary>
+public static class BackgroundJobStdin
+{
+    /// <summary>
+    /// The cursor a job started now shares with the shell: the active compound stdin, or an empty one (end of input)
+    /// when there is none or it is the shell's own (<see cref="StdinCursor.IsShellStdin"/>). The job's runspace reads it
+    /// concurrently, so a plain queue is first replaced by a <see cref="StdinCursor"/>, whose buffer is locked.
+    /// </summary>
+    public static StdinCursor Inherit(SessionState state)
+    {
+        switch (SharedStdin.Get(state))
+        {
+            case StdinCursor cursor when !cursor.IsShellStdin:
+                return cursor;
+            case Queue<object> queue:
+                var promoted = new StdinCursor();
+                while (queue.Count > 0) promoted.Enqueue(queue.Dequeue());
+                state.PSVariable.Set(SharedStdin.VariableName, promoted);
+                return promoted;
+            default:
+                return new StdinCursor();
         }
     }
 }

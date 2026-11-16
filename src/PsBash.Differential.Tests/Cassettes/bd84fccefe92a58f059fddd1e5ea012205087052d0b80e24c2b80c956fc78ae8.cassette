@@ -1,0 +1,33 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 429
+stdout-length: 49
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)"
+printf 'read b; echo "b=$b"\n' > r.sh
+printf 'libfn() { read b; echo "lib=$b"; }\n' > lib.sh
+printf '1\n2\n3\n4\n5\n' > in
+. ./lib.sh
+rd() { read b; echo "b=$b"; }
+outer() { rd; }
+c='read b; echo "b=$b"'
+cmd=rd
+g() { read -n 1 ch; echo "ch=$ch"; read rest; echo "rest=$rest"; }
+printf '1\n2\n3\n4\n5\n' | while read a; do read -n 1 ch; echo "ch=$ch"; read rest; echo "rest=$rest"; echo "a=$a"; done
+echo "rc=$?"
+==== STDOUT ====
+ch=2
+rest=
+a=1
+ch=4
+rest=
+a=3
+ch=
+rest=
+a=5
+rc=0
+
+==== STDERR ====
+

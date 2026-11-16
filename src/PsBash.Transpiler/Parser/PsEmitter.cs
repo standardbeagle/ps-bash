@@ -639,8 +639,16 @@ public static partial class PsEmitter
                 // stage ends at its failing command (EmitCompoundStage).
                 _pipelineAtArmedStatement = true;
                 string text;
-                try { text = PsBuild.ErrexitSuppressed(WithErrexitExempt(() => Emit(cmd))); }
-                finally { _pipelineAtArmedStatement = false; }
+                // A stage that lifts the suppression (EmitCompoundStage) sets it back to its value before this pipeline.
+                string? outerBase = _armedBase; bool outerBaseUsed = _armedBaseUsed;
+                string mark = "$__psbash_eb" + _armedBaseDepth++;
+                _armedBase = mark; _armedBaseUsed = false;
+                try
+                {
+                    text = WithErrexitExempt(() => Emit(cmd));
+                    text = _armedBaseUsed ? PsBuild.ErrexitSuppressedFrom(mark, text) : PsBuild.ErrexitSuppressed(text);
+                }
+                finally { _pipelineAtArmedStatement = false; _armedBaseDepth--; _armedBase = outerBase; _armedBaseUsed = outerBaseUsed; }
                 // bash runs the ERR trap twice for a failed pipeline that ends in a subshell (`true | (false)`,
                 // also `(false) | (true)` under pipefail); a group or plain last stage runs it once.
                 string twice = pipeline.Commands.Length > 1 && pipeline.Commands[^1] is Command.Subshell
@@ -2336,15 +2344,16 @@ public static partial class PsEmitter
             _functionDepth++;
             bool savedErrTrap = PsBuild.ErrTrapNeedsErrtrace; PsBuild.ErrTrapNeedsErrtrace = true;
             string body;
-            // The body is emitted as inside a stdin scope; one that reads no stdin comes out unchanged. One that does
-            // (`indent() { sed 's/^/  /'; }`, `f() { read -r x; }`) takes the pipe it is called with as its stdin
+            // The body is emitted as inside a stdin scope; one PROVEN to read no stdin (ProbeStdinScope) comes out
+            // unchanged. Any other (`indent() { sed 's/^/  /'; }`, `f() { read -r x; }`, but also `f() { g; }` or
+            // `f() { python3 x.py; }`, whose callee may read) takes the pipe it is called with as its stdin
             // (PsBuild.FunctionStdinScope) and otherwise the stdin of whatever called it.
             string ComputeBody()
             {
-                string text = WithStdinScope(true, EmitFunctionBodyOnce);
-                if (text.Contains("__BashStdIn", StringComparison.Ordinal) || text.Contains("Resolve-BashCommand -Fed", StringComparison.Ordinal) || text.Contains("Invoke-BashRead", StringComparison.Ordinal)
-                    || text.Contains("Invoke-BashMapfile", StringComparison.Ordinal))
-                    return PsBuild.FunctionStdinScope(text);
+                var probe = ProbeStdinScope(EmitFunctionBodyOnce);
+                NoteFunctionStdin(func.Name, probe.Reads);
+                if (probe.Reads)
+                    return PsBuild.FunctionStdinScope(probe.Text);
                 return _launcherStdin ? WithStdinScope(false, EmitFunctionBodyOnce) : EmitFunctionBodyOnce();
             }
             // The body is emitted more than once (stdin scope probe, nameref variants): each emission starts from the
@@ -2618,6 +2627,7 @@ public static partial class PsEmitter
     private static string EmitSimpleFed(Command.Simple simple)
     {
         var text = EmitSimple(simple);
+        if (_inStdinScope) NoteStdinUse(simple);
         // A run-time command name (`$c`, `"$tool"`) may read stdin. Whether it does is known only once it resolves:
         // `-Fed` has the runtime feed the scope's queue to a reader and leave it for anything else. Piped
         // unconditionally, `printf`/`test` never ran on an empty queue and failed to bind a queued line.
@@ -2644,6 +2654,11 @@ public static partial class PsEmitter
         var args = new List<string?>(simple.Words.Length - 1);
         for (int i = 1; i < simple.Words.Length; i++)
             args.Add(GetLiteralValue(simple.Words[i]));
+        // `command cat` / `command -p sort`: the command it runs is the reader, and Invoke-BashCommand hands it the pipeline.
+        if (name == "command")
+            return StdinReaders.CommandTarget(args) is { } target && StdinReaders.ShouldFeed(target.Name, target.Args)
+                ? PsBuild.StdinFeed + " | " + text
+                : text;
         if (!StdinReaders.ShouldFeed(name, args))
             return text;
 
@@ -2910,8 +2925,11 @@ public static partial class PsEmitter
         for (int i = 1; i < simple.Words.Length; i++)
         {
             var val = GetLiteralValue(simple.Words[i]);
-            // `read -d DELIM` reads records, not lines: the generic loop (Invoke-BashRead) handles it.
-            if (val is not null && val.Length > 1 && val[0] == '-' && val[1] != '-' && val.Contains('d'))
+            // `read -d DELIM` reads records, not lines, and every other flag that takes a value (`-u FD`, `-n N`, `-N N`,
+            // `-t SECS`, `-p PROMPT`, `-a ARR`, `-i TEXT`) changes where or what is read: the generic loop
+            // (Invoke-BashRead) handles them. Taken for a plain line loop, the flag's VALUE became a variable name
+            // (`while read -u 3 a` read stdin into `$3`).
+            if (val is not null && val.Length > 1 && val[0] == '-' && val[1] != '-' && val.AsSpan(1).IndexOfAny("adinNptu") >= 0)
                 return false;
             if (val is not null && !val.StartsWith('-'))
                 varNames.Add(val);
@@ -2965,15 +2983,16 @@ public static partial class PsEmitter
     }
 
     /// <summary>
-    /// A read loop's body, emitted as inside a stdin scope first (as a function body is): when it reads that stdin -- a
-    /// <c>read</c>, a fed <c>cat</c>/<c>head</c>, a nested read loop (<see cref="PsBuild.ReadsSharedStdin"/>) -- it keeps that
-    /// text and the loop must read the same stdin, line by line. Otherwise it is emitted again outside any scope, so a body
-    /// that reads nothing comes out as it always did.
+    /// A read loop's body, emitted as inside a stdin scope first (as a function body is): unless it is PROVEN to read
+    /// nothing (<see cref="ProbeStdinScope"/>: a <c>read</c>, a fed <c>cat</c>/<c>head</c>, a nested read loop, but also
+    /// anything the emitter cannot see into -- a function, a program, eval / source text, a background job) it keeps that
+    /// text and the loop must read the same stdin, line by line. A body proven to read nothing is emitted again outside
+    /// any scope, as it always was (inside a scope no fused pipeline is formed, so the scoped text is not reused).
     /// </summary>
     private static (string Text, bool Reads) EmitReadLoopBody(Command body)
     {
-        string scoped = WithStdinScope(true, () => Emit(body));
-        if (PsBuild.ReadsSharedStdin(scoped)) return (scoped, true);
+        var probe = ProbeStdinScope(() => Emit(body));
+        if (probe.Reads) return probe;
         return (WithStdinScope(false, () => Emit(body)), false);
     }
 
@@ -5266,7 +5285,9 @@ public static partial class PsEmitter
             // Inside the empty scope every reader is fed as in any stdin scope — natives get an OS pipe at
             // EOF — so the result is end of input, whatever surrounds the command.
             _emptyStdinDepth++;
-            try { result = PsBuild.EmptyStdinScope(WithStdinScope(true, () => EmitSimpleFed(innerCmd)), _emptyStdinDepth); }
+            // Its readers read the EMPTY scope, never the surrounding one (SealedFromStdinProbe): `ssh h cmd < /dev/null`
+            // in a read loop's body leaves the loop its lines, and the loop may still stream.
+            try { result = SealedFromStdinProbe(() => PsBuild.EmptyStdinScope(WithStdinScope(true, () => EmitSimpleFed(innerCmd)), _emptyStdinDepth)); }
             finally { _emptyStdinDepth--; }
             return true;
         }
@@ -11476,6 +11497,18 @@ public static partial class PsEmitter
     /// </summary>
     [ThreadStatic] private static bool _armedStages;
 
+    /// <summary>The variable holding the errexit suppression as it was before the armed pipeline being emitted.</summary>
+    [ThreadStatic] private static string? _armedBase;
+    [ThreadStatic] private static bool _armedBaseUsed;
+    [ThreadStatic] private static int _armedBaseDepth;
+
+    /// <summary>A stage's text with its armed pipeline's suppression lifted (<see cref="PsBuild.ErrexitLifted"/>).</summary>
+    private static string LiftArmedStage(string stage)
+    {
+        _armedBaseUsed = true;
+        return PsBuild.ErrexitLifted(stage, _armedBase!);
+    }
+
     private static string EmitPipeline(Command.Pipeline pipeline)
     {
         // `time [-p] pipeline`: emit the pipeline itself, then wrap it in the timing report.
@@ -11695,7 +11728,7 @@ public static partial class PsEmitter
                     // `set -e; g() { false; echo in-g; }; g | cat`: the stage inherits -e, so g ends at false. The body's
                     // errexit checks fire once the pipeline's suppression is lifted for the stage, and their run-time
                     // exit (PsBuild.DynamicExit) ends only the stage, as in a compound stage (EmitCompoundStage).
-                    string Lifted(string stage) => functionStage && _armedStages ? PsBuild.ErrexitLifted(stage) : stage;
+                    string Lifted(string stage) => functionStage && _armedStages ? LiftArmedStage(stage) : stage;
                     sb.Append(i == 0 ? PsBuild.ShellStateScope(Lifted(rawStage)) : "& { " + PsBuild.ShellStateGuard(Lifted(PsBuild.ForwardStageInput(rawStage))) + " }");
                 }
             }
@@ -11797,7 +11830,8 @@ public static partial class PsEmitter
                 return noop.ToString();
             }
 
-            if (word0 == "eval" && simple.EnvPairs.IsEmpty)
+            // `... | source f` / `... | . f`: the file's commands read the pipe, as eval text does.
+            if (word0 is "eval" or "source" or "." && simple.EnvPairs.IsEmpty)
             {
                 var evalSb = new StringBuilder(EmitEvalWithStdin(
                     () => TryEmitMappedCommand(simple, out var evalText) ? evalText : Emit(simple), dotSource: false));
@@ -11892,9 +11926,18 @@ public static partial class PsEmitter
             emit ??= () => Emit(cmd);
             if (lastpipeStage)
             {
+                // It inherits -e like any stage, and being the shell itself its failing command ends the script.
+                bool lastArmed = _armedStages;
+                int lastExempt = _errexitExemptDepth;
+                if (lastArmed) _errexitExemptDepth = 0;
+                _armedStages = false;
                 _lastpipeStageDepth++;
-                try { return emit(); }
-                finally { _lastpipeStageDepth--; }
+                try
+                {
+                    string text = emit();
+                    return lastArmed ? LiftArmedStage(text) : text;
+                }
+                finally { _lastpipeStageDepth--; _armedStages = lastArmed; _errexitExemptDepth = lastExempt; }
             }
             if (!ownsExit) return emit();
             _subshellDepth++;
@@ -11903,6 +11946,7 @@ public static partial class PsEmitter
             // their errexit checks, which leave the stage's `& { }` (the scoped `return`), and the pipeline's suppression
             // is lifted for them. As in a subshell, the ERR trap runs inside only under errtrace.
             bool armed = _armedStages;
+            string? armedBase = _armedBase;
             int savedExempt = _errexitExemptDepth;
             bool savedErrTrap = PsBuild.ErrTrapNeedsErrtrace;
             if (armed) { _errexitExemptDepth = 0; PsBuild.ErrTrapNeedsErrtrace = true; }
@@ -11918,7 +11962,9 @@ public static partial class PsEmitter
             try
             {
                 string text = emit();
-                return armed ? PsBuild.ErrexitLifted(text) : text;
+                if (!armed) return text;
+                _armedBase = armedBase;
+                return LiftArmedStage(text);
             }
             finally
             {

@@ -1,0 +1,17 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 127
+script-length: 159
+stdout-length: 4
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)"
+printf '1\n2\n3\n4\n' > in
+set -e
+printf '1\n2\n3\n4\n' | while read a; do echo "[$a]"; no_such_cmd_psb 2>/dev/null; echo no; done
+echo after
+==== STDOUT ====
+[1]
+
+==== STDERR ====
+

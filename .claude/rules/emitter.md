@@ -20,6 +20,7 @@ NEVER in the emitter:
 
 ## STAGE STDIN (emitter-strategy.md "Stage stdin")
 A stage's pipe is `$input` of its OWN block only: hand it on via `PsBuild.StdinScope`/`ForwardStageInput`/`DrainStageInput`, readers use the shared cursor; never write `$input` outside PsBuild (guard test).
+"Does this code read stdin?" → ONLY `PsEmitter.ProbeStdinScope` (proves "reads nothing"; a function/program/eval/source/job is a reader). Never scan emitted text for a reader (guard test).
 
 ## PIPE-TARGET MAPPING
 - all pipe targets in `TryEmitMappedCommand` use `EmitPassthrough`.

@@ -850,10 +850,22 @@ public static class PsBuild
     /// <summary>
     /// A compound pipe stage of a pipeline at an armed <c>set -e</c> statement: the stage is a subshell that inherits
     /// <c>-e</c>, so its statements' errexit checks may fire although the pipeline as a whole runs under
-    /// <see cref="ErrexitSuppressed"/>. Lifts that one level for the stage, and puts it back however the stage ends.
+    /// <see cref="ErrexitSuppressed"/>. Sets the suppression back to what it was before that pipeline
+    /// (<paramref name="mark"/>, <see cref="ErrexitSuppressedFrom"/>) for the stage, and restores it however the stage
+    /// ends. Absolute, never a decrement: stages of one pipeline run interleaved (a streamed read loop handles a record
+    /// while its producer stage is still inside its own lift), so two decrements took the counter below zero, which
+    /// reads as "suppressed" and let the loop run on past a failing command.
     /// </summary>
-    public static string ErrexitLifted(string statements) =>
-        ErrexitSuppressVar + "--; try { " + statements + " } finally { " + ErrexitSuppressVar + "++ }";
+    public static string ErrexitLifted(string statements, string mark) =>
+        mark + "l = " + ErrexitSuppressVar + "; " + ErrexitSuppressVar + " = " + mark + "; try { " + statements
+        + " } finally { " + ErrexitSuppressVar + " = " + mark + "l }";
+
+    /// <summary>
+    /// <see cref="ErrexitSuppressed"/> for a pipeline with a stage that lifts it (<see cref="ErrexitLifted"/>):
+    /// <paramref name="mark"/>, a variable unique to this nesting level, remembers the suppression before the pipeline.
+    /// </summary>
+    public static string ErrexitSuppressedFrom(string mark, string statements) =>
+        mark + " = " + ErrexitSuppressVar + "; " + ErrexitSuppressed(statements);
 
     /// <summary>
     /// A command substitution's body under <c>set -e</c> in a script that mentions <c>inherit_errexit</c>: its statements
@@ -1309,10 +1321,12 @@ public static class PsBuild
         System.Text.RegularExpressions.RegexOptions.CultureInvariant);
 
     /// <summary>
-    /// True when text emitted INSIDE a stdin scope reads that stdin: a fed reader (<see cref="StdinFeed"/>), a
-    /// <c>read</c> / <c>mapfile</c>, a read loop over it, or a run-time command name that may turn out to read it. As for a
-    /// function body (EmitFunction), a native program alone does not count: it is given the scope only when something
-    /// else in the text reads it too, and otherwise runs as it would with no scope.
+    /// True when text emitted INSIDE a stdin scope shows a reader of that stdin: a fed reader (<see cref="StdinFeed"/>), a
+    /// <c>read</c> / <c>mapfile</c>, a read loop over it, or a run-time command name that may turn out to read it. This is
+    /// the TEXT half of the emitter's stdin probe and must only be asked through it (PsEmitter.ProbeStdinScope, guarded by
+    /// PsBuildStageStdinGuardTests): a command whose text shows no reader may still read -- a function, a program, eval /
+    /// source text -- and only the probe knows about those. Asked alone, this said "reads nothing" for
+    /// <c>while read a; do f; done</c> with <c>f() { read b; }</c>, and the loop streamed past f's read.
     /// </summary>
     public static bool ReadsSharedStdin(string emitted) => SharedStdinReaderPattern.IsMatch(emitted);
 

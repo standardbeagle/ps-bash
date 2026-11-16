@@ -22,7 +22,20 @@ public sealed class StdinCursor
     private readonly IEnumerator<object>? _source;
     private readonly IStdinRecordSource? _waitable;
     private readonly LinkedList<object> _buffer = new();
-    private bool _sourceDone;
+    // A background job (`cmd &`) inherits the stdin of the compound command that started it, so the job's runspace
+    // and the shell's may read one cursor at once (bash: two processes on one pipe). _gate guards the buffer; _fillGate
+    // serialises pulls from the source, and is never held while the buffer is changed by a thread that is not pulling,
+    // so a put-back or an enqueue cannot wait behind a reader blocked on a silent source.
+    private readonly object _gate = new();
+    private readonly object _fillGate = new();
+    private volatile bool _sourceDone;
+
+    /// <summary>
+    /// True for the SHELL's own stdin (the launcher's forwarded stdin), false for the stdin of a compound command
+    /// (a pipe, <c>&lt; file</c>, a here-doc). bash gives a background job the latter but not the former: with job
+    /// control off, <c>cmd &amp;</c> at the top of a script reads <c>/dev/null</c>.
+    /// </summary>
+    public bool IsShellStdin { get; init; }
 
     /// <summary>An empty cursor, filled by <see cref="Enqueue"/> (the eager compound-scope form).</summary>
     public StdinCursor()
@@ -65,15 +78,18 @@ public sealed class StdinCursor
     public bool TryDequeue(CancellationToken ct, out object? record)
     {
         record = null;
-        if (_buffer.First is null)
+        if (IsBufferEmpty())
         {
             ct.ThrowIfCancellationRequested();
             FillOne(ct);
-            if (_buffer.First is null) return false;
         }
-        record = _buffer.First.Value;
-        _buffer.RemoveFirst();
-        return true;
+        lock (_gate)
+        {
+            if (_buffer.First is null) return false;
+            record = _buffer.First.Value;
+            _buffer.RemoveFirst();
+            return true;
+        }
     }
 
     /// <summary>Number of records that can be read right now: 0 only at end of input, else the buffered count (at least 1).</summary>
@@ -82,29 +98,43 @@ public sealed class StdinCursor
         get
         {
             FillOne();
-            return _buffer.Count;
+            lock (_gate) return _buffer.Count;
         }
+    }
+
+    private bool IsBufferEmpty()
+    {
+        lock (_gate) return _buffer.First is null;
     }
 
     /// <summary>Take the next record. Throws <see cref="InvalidOperationException"/> at end of input (as <see cref="Queue{T}"/> does).</summary>
     public object Dequeue()
     {
         FillOne();
-        if (_buffer.First is null) throw new InvalidOperationException("The stdin cursor is empty.");
-        var item = _buffer.First.Value;
-        _buffer.RemoveFirst();
-        return item;
+        lock (_gate)
+        {
+            if (_buffer.First is null) throw new InvalidOperationException("The stdin cursor is empty.");
+            var item = _buffer.First.Value;
+            _buffer.RemoveFirst();
+            return item;
+        }
     }
 
     /// <summary>Append a record after everything buffered (eager fill; a lazy source still follows).</summary>
-    public void Enqueue(object item) => _buffer.AddLast(item);
+    public void Enqueue(object item)
+    {
+        lock (_gate) _buffer.AddLast(item);
+    }
 
     /// <summary>Put records back at the FRONT (the unread rest of a record <c>read</c> took one line from), in order.</summary>
     public void PushFront(IEnumerable<object> items)
     {
         var list = items as IList<object> ?? items.ToList();
-        for (int i = list.Count - 1; i >= 0; i--)
-            _buffer.AddFirst(list[i]);
+        lock (_gate)
+        {
+            for (int i = list.Count - 1; i >= 0; i--)
+                _buffer.AddFirst(list[i]);
+        }
     }
 
     /// <summary>Run when the owning scope ends (<see cref="Close"/>): stops a background producer feeding the source.</summary>
@@ -114,7 +144,7 @@ public sealed class StdinCursor
     public void Close()
     {
         _sourceDone = true;
-        _buffer.Clear();
+        lock (_gate) _buffer.Clear();
         var close = OnClose;
         OnClose = null;
         try { close?.Invoke(); } catch { /* best effort */ }
@@ -124,27 +154,31 @@ public sealed class StdinCursor
 
     private void FillOne(CancellationToken ct = default)
     {
-        if (_buffer.Count > 0 || _sourceDone) return;
-        if (_waitable is not null)
+        if (_sourceDone || !IsBufferEmpty()) return;
+        lock (_fillGate)
         {
-            // Cancellation propagates out before anything is taken.
-            if (_waitable.TryReadNext(ct, out var record))
+            if (_sourceDone || !IsBufferEmpty()) return;
+            if (_waitable is not null)
             {
-                _buffer.AddLast(record ?? "");
+                // Cancellation propagates out before anything is taken.
+                if (_waitable.TryReadNext(ct, out var record))
+                {
+                    Enqueue(record ?? "");
+                    return;
+                }
+                _sourceDone = true;
+                _waitable.Dispose();
+                return;
+            }
+            if (_source is null) return;
+            if (_source.MoveNext())
+            {
+                Enqueue(_source.Current);
                 return;
             }
             _sourceDone = true;
-            _waitable.Dispose();
-            return;
+            _source.Dispose();
         }
-        if (_source is null) return;
-        if (_source.MoveNext())
-        {
-            _buffer.AddLast(_source.Current);
-            return;
-        }
-        _sourceDone = true;
-        _source.Dispose();
     }
 }
 

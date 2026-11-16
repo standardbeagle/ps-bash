@@ -226,28 +226,20 @@ public static class BashTranspiler
     /// <exception cref="ParseException">Thrown when the bash input cannot be parsed.</exception>
     public static string? TranspileWithLauncherStdin(string bashCommand) => Guarded(() =>
     {
+        // Whether anything in the script may read stdin is the emitter's one stdin probe (PsEmitter.ProbeStdinScope):
+        // a fed command, `read`, a program, a function of another unit, eval / source text.
         string? emitted;
-        try { emitted = PsEmitter.TranspileWithLauncherStdin(bashCommand, TranspileContext.Default); }
+        bool reads;
+        try { emitted = PsEmitter.TranspileProbingLauncherStdin(bashCommand, TranspileContext.Default, out reads); }
         catch (ParseException ex) when (RunnablePrefix(bashCommand, ex) is { } recovered)
         {
             bashCommand = recovered;
-            emitted = PsEmitter.TranspileWithLauncherStdin(bashCommand, TranspileContext.Default);
+            emitted = PsEmitter.TranspileProbingLauncherStdin(bashCommand, TranspileContext.Default, out reads);
         }
-        if (emitted is null || !ReadsSharedStdin(emitted))
+        if (emitted is null || !reads)
             return null;
         return WrapWithTrapEpilogue(bashCommand, emitted);
     });
-
-    /// <summary>
-    /// True when emitted PowerShell can read the shared stdin: a command was fed from the cursor variable, or a
-    /// builtin that takes its lines from it at RUN time (<c>read</c>, <c>mapfile</c>), or a native program given
-    /// it as its process stdin (<c>Enter-BashNativeStdin</c>) is present.
-    /// </summary>
-    private static bool ReadsSharedStdin(string emitted) =>
-        emitted.Contains(LauncherStdinVariable, StringComparison.Ordinal)
-        || emitted.Contains("Invoke-BashRead", StringComparison.Ordinal)
-        || emitted.Contains("Invoke-BashMapfile", StringComparison.Ordinal)
-        || emitted.Contains("Enter-BashNativeStdin", StringComparison.Ordinal);
 
     /// <summary>
     /// Transpile a bash command string to PowerShell, also producing a line

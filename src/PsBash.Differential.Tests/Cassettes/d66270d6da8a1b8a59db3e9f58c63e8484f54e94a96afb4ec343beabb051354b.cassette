@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 93
+stdout-length: 8
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)"
+printf 'p\nq\n' > in.txt; while read -u 3 a; do echo "a=$a"; done 3< in.txt
+==== STDOUT ====
+a=p
+a=q
+
+==== STDERR ====
+
