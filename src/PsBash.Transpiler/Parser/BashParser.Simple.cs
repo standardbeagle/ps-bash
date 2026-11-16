@@ -145,7 +145,7 @@ public sealed partial class BashParser
                 && assignmentPairs.LastOrDefault(a => a.Name == p.Name) is { } temp
                     ? p with { Value = temp.Value ?? new CompoundWord(ImmutableArray<WordPart>.Empty) }
                     : p).ToImmutableArray();
-            return prefixed with { Pairs = folded };
+            return prefixed with { Pairs = folded, TempPrefix = prefixed.IsExport ? assignmentPairs.ToImmutable() : default };
         }
 
         // Array assignments with no command after them are an assignment statement. Before a command word

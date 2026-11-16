@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 69
+stdout-length: 21
+stderr-length: 0
+==== SCRIPT ====
+e=42; e=tmp export e; echo "export ${e-unset}"; sh -c 'echo child=$e'
+==== STDOUT ====
+export tmp
+child=tmp
+
+==== STDERR ====
+

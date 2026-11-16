@@ -1,0 +1,151 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 1921
+stdout-length: 1115
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit 9
+echo 'echo src=$x' > _src.sh
+echo 'unset x' > _srcunset.sh
+g() { echo g=$x; }
+gu() { unset x; echo gu=${x-unset}; }
+body() {
+  x=42; x=tmp unset x; echo "unset ${x-unset}"
+  x=42; x=tmp eval 'unset x'; echo "eval-unset ${x-unset}"
+  x=42; x=tmp eval 'unset x; echo in=${x-unset}'; echo "eval-unset-in ${x-unset}"
+  x=42; x=tmp eval 'unset x; unset x'; echo "eval-unset2 ${x-unset}"
+  x=42; x=tmp eval 'unset x; x=new'; echo "eval-unset-assign ${x-unset}"
+  x=42; x=tmp eval 'x=new'; echo "eval-assign ${x-unset}"
+  x=42; x=tmp eval 'echo in=$x'; echo "eval ${x-unset}"
+  x=42; x=tmp unset y; echo "unset-other ${x-unset}"
+  x=42; x=tmp y=t2 unset x; echo "unset-two ${x-unset} ${y-unset}"
+  unset y
+  x=42; x=tmp :; echo "colon ${x-unset}"
+  x=42; x=tmp export x; echo "export ${x-unset}"
+  x=42; x=tmp export y=1; echo "export-other ${x-unset}"
+  x=42; x=tmp declare z=1; echo "declare ${x-unset}"
+  x=42; x=tmp g; echo "fn ${x-unset}"
+  x=42; x=tmp gu; echo "fn-unset ${x-unset}"
+  x=42; x=tmp . ./_src.sh; echo "dot ${x-unset}"
+  x=42; x=tmp source ./_src.sh; echo "source ${x-unset}"
+  x=42; x=tmp . ./_srcunset.sh; echo "dot-unset ${x-unset}"
+  unset x; x=tmp unset x; echo "noprior-unset ${x-unset}"
+  unset x; x=tmp :; echo "noprior-colon ${x-unset}"
+  unset x; x=tmp eval 'unset x'; echo "noprior-eval-unset ${x-unset}"
+  x=42; x=tmp true; echo "true ${x-unset}"
+  x=42; x=tmp set -- a; echo "set ${x-unset}"
+  x=42; x=tmp shift; echo "shift ${x-unset}"
+  x=42; x=tmp trap - USR1; echo "trap ${x-unset}"
+}
+fbody() { body; }
+lbody() {
+  local x=L
+  x=tmp unset x; echo "local-unset ${x-unset}"
+  local x=L
+  x=tmp eval 'unset x'; echo "local-eval-unset ${x-unset}"
+  local x=L
+  x=tmp :; echo "local-colon ${x-unset}"
+  local x=L
+  x=tmp local w=1; echo "local-local ${x-unset}"
+  x=L
+  x=tmp local x; echo "local-local-same ${x-unset}"
+}
+fbody; set -o posix; fbody; set +o posix; fbody
+==== STDOUT ====
+unset 42
+eval-unset 42
+in=42
+eval-unset-in 42
+eval-unset2 unset
+eval-unset-assign new
+eval-assign 42
+in=tmp
+eval 42
+unset-other 42
+unset-two 42 unset
+colon 42
+export tmp
+export-other 42
+declare 42
+g=tmp
+fn 42
+gu=42
+fn-unset 42
+src=tmp
+dot 42
+src=tmp
+source 42
+dot-unset 42
+noprior-unset unset
+noprior-colon unset
+noprior-eval-unset unset
+true 42
+set 42
+shift 42
+trap 42
+unset 42
+eval-unset 42
+in=42
+eval-unset-in 42
+eval-unset2 unset
+eval-unset-assign new
+eval-assign new
+in=tmp
+eval tmp
+unset-other tmp
+unset-two 42 t2
+colon tmp
+export tmp
+export-other tmp
+declare 42
+g=tmp
+fn 42
+gu=42
+fn-unset 42
+src=tmp
+dot tmp
+src=tmp
+source tmp
+dot-unset 42
+noprior-unset unset
+noprior-colon tmp
+noprior-eval-unset unset
+true 42
+set tmp
+shift tmp
+trap tmp
+unset 42
+eval-unset 42
+in=42
+eval-unset-in 42
+eval-unset2 unset
+eval-unset-assign new
+eval-assign 42
+in=tmp
+eval 42
+unset-other 42
+unset-two 42 unset
+colon 42
+export tmp
+export-other 42
+declare 42
+g=tmp
+fn 42
+gu=42
+fn-unset 42
+src=tmp
+dot 42
+src=tmp
+source 42
+dot-unset 42
+noprior-unset unset
+noprior-colon unset
+noprior-eval-unset unset
+true 42
+set 42
+shift 42
+trap 42
+
+==== STDERR ====
+

@@ -164,6 +164,25 @@ public sealed class VarFrameStack
         return current;
     }
 
+    /// <summary>
+    /// The innermost <see cref="Bind"/> of <paramref name="name"/> ends with the name keeping whatever value it has now:
+    /// the POSIX-mode end of a prefix assignment before a special builtin (<c>set -o posix; v=t :</c> leaves v=t). The
+    /// binding was still a frame while the builtin ran, so <c>v=t unset v</c> took the frame and revealed the value
+    /// under it, exactly as outside POSIX mode. A frame <c>local</c> adopted stays: it is the function's local now.
+    /// </summary>
+    public void Persist(string name)
+    {
+        for (int i = _bindings.Count - 1; i >= 0; i--)
+        {
+            if (_bindings[i].Name != name) continue;
+            long id = _bindings[i].FrameId;
+            _bindings.RemoveAt(i);
+            if (_unsetTemps.Remove(id)) return;
+            if (_frames.TryGetValue(name, out var list)) list.RemoveAll(f => f.Id == id && !f.Local);
+            return;
+        }
+    }
+
     public void Clear() { _frames.Clear(); _bindings.Clear(); _unsetTemps.Clear(); _callLines.Clear(); Line = 0; Depth = 0; }
 
     /// <summary>A copy of the frames, for a subshell to put back when it ends (BashShellState.Save/Restore).</summary>
@@ -257,4 +276,5 @@ public sealed class VarFrameStack
         => Current.OwnsLocal(name) ? saved?.ToString() : current?.ToString();
     public static void BindSameScope(string name, object? saved) => Current.Bind(name, saved?.ToString());
     public static string? UnbindSameScope(string name, object? current) => Current.Unbind(name, current?.ToString());
+    public static void PersistSameScope(string name) => Current.Persist(name);
 }

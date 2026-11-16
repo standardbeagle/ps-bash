@@ -1151,6 +1151,13 @@ public static class PsBuild
         => "$env:" + name + " = [PsBash.Cmdlets.VarFrameStack]::UnbindSameScope(" + SingleQuote(name) + ", $env:" + name + ")";
 
     /// <summary>
+    /// Ends <see cref="BindSameScope"/> in POSIX mode, before a special builtin: the name keeps the value it has now
+    /// (<c>set -o posix; v=t :</c> leaves v=t), unless <c>unset</c> took the binding's frame during the builtin.
+    /// </summary>
+    public static string PersistSameScope(string name)
+        => "[PsBash.Cmdlets.VarFrameStack]::PersistSameScope(" + SingleQuote(name) + ")";
+
+    /// <summary>
     /// Ends <see cref="PushTempFrame"/>: restores <c>$__saved_name</c>, unless <c>unset</c> took the frame (then later
     /// writes went to the outer variable and stay: <c>v=t f</c>, f: <c>unset v; v=new</c> leaves new).
     /// </summary>

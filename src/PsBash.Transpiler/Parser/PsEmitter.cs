@@ -4183,6 +4183,13 @@ public static partial class PsEmitter
 
     private static string EmitShAssignment(Command.ShAssignment cmd)
     {
+        // `set -o posix; v=t export w=1`: export is a special builtin, so the prefix the parser folded away persists.
+        if (_scriptPosix && cmd.IsExport && !cmd.TempPrefix.IsDefaultOrEmpty)
+        {
+            var plain = cmd with { TempPrefix = default };
+            var prefix = cmd.TempPrefix.Select(a => new EnvPair(a.Name, a.Value)).ToImmutableArray();
+            return PsBuild.PosixElse(EmitPersistentPrefix(prefix, () => EmitShAssignment(plain)), EmitShAssignment(plain));
+        }
         if (!NeedsArrayKindGuard(cmd)) return EmitShAssignmentCore(cmd);
         _inArrayKindGuard = true;
         try
@@ -5108,6 +5115,20 @@ public static partial class PsEmitter
             return true;
         }
 
+        // `v=t readonly v` / `v=t export v`: a declaration that names its own prefix keeps the binding's value (bash 5.2).
+        if (cmd.Words.Length > 1 && GetLiteralValue(cmd.Words[0]) is "readonly" or "export")
+        {
+            var named = cmd.EnvPairs.Where(p => cmd.Words.Skip(1).Any(w => GetLiteralValue(w) == p.Name)).ToImmutableArray();
+            if (!named.IsEmpty)
+            {
+                // Written as the binding itself would be (no readonly check: the declaration that follows may already
+                // be recorded, when the POSIX form of this command was emitted first).
+                result = string.Concat(named.Select(p => $"$env:{p.Name} = {EmitAssignmentValue(p.Value)}; "))
+                    + EmitSimple(cmd with { EnvPairs = cmd.EnvPairs.RemoveAll(p => named.Contains(p)) });
+                return true;
+            }
+        }
+
         var bare = cmd with { EnvPairs = ImmutableArray<EnvPair>.Empty };
         result = WrapEnvPairs(cmd.EnvPairs, WithEnvShadow(cmd.EnvPairs, () => EmitSimple(bare)), TempFrameKind(cmd));
         // `foo=bar $unset`: a command word that expands to NOTHING leaves no command, so the assignment persists
@@ -5881,7 +5902,7 @@ public static partial class PsEmitter
 
     // POSIX special builtins (exec and exit aside: a prefix before them is never seen again).
     private static readonly HashSet<string> s_posixSpecialBuiltins = new(StringComparer.Ordinal)
-        { ":", ".", "break", "continue", "eval", "export", "readonly", "return", "set", "shift", "times", "trap", "unset" };
+        { ":", ".", "source", "break", "continue", "eval", "export", "readonly", "return", "set", "shift", "times", "trap", "unset" };
 
     /// <summary>
     /// A special builtin under a run-time <c>set -o posix</c> check: in POSIX mode its prefix assignments are plain
@@ -5899,13 +5920,32 @@ public static partial class PsEmitter
             _posixSplitNode = bare;
             string posix = cmd.EnvPairs.IsEmpty
                 ? EmitSimple(bare)
-                : EmitShAssignment(new Command.ShAssignment([.. cmd.EnvPairs.Select(p => new Assignment(p.Name, AssignOp.Equal, p.Value))]))
-                  + "; " + EmitSimple(bare);
+                : EmitPersistentPrefix(cmd.EnvPairs, () => EmitSimple(bare));
             _definedFunctions = priorFns;
             _posixSplitNode = cmd;
             return PsBuild.PosixElse(posix, EmitSimple(cmd));
         }
         finally { _definedFunctions = priorFns; _posixSplitNode = priorNode; }
+    }
+
+    /// <summary>
+    /// The POSIX-mode prefix assignment (<c>set -o posix; v=t :</c>): the assignments are made first and stay, but while
+    /// <paramref name="inner"/> runs each is still a temp binding frame (VarFrameStack), so <c>v=t unset v</c> and
+    /// <c>v=t eval 'unset v'</c> take the frame and reveal the value under it, as in bash. Every prefix assignment that
+    /// persists goes through here; a plain assignment in its place loses the hidden value.
+    /// </summary>
+    private static string EmitPersistentPrefix(ImmutableArray<EnvPair> pairs, Func<string> inner)
+    {
+        var sb = new StringBuilder();
+        foreach (var p in pairs)
+            if (!p.Name.Contains('[')) sb.Append(PsBuild.BindSameScope(p.Name)).Append("; ");
+        sb.Append(EmitShAssignment(new Command.ShAssignment([.. pairs.Select(p => new Assignment(p.Name, AssignOp.Equal, p.Value))])));
+        // The assignment is emitted before the command: `v=t readonly v` marks v readonly, and an assignment emitted
+        // after it would be reported as a write to a readonly variable.
+        sb.Append("; try { ").Append(inner()).Append(" } finally { ");
+        foreach (var p in pairs)
+            if (!p.Name.Contains('[')) sb.Append(PsBuild.PersistSameScope(p.Name)).Append("; ");
+        return sb.Append('}').ToString();
     }
 
     private static bool TryEmitSpecialBuiltins(Command.Simple cmd, out string result)

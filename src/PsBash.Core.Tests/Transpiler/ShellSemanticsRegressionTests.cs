@@ -108,7 +108,9 @@ public class ShellSemanticsRegressionTests
     public void Transpile_PrefixBeforeSpecialBuiltin_PersistsInPosixMode()
     {
         var ps = BashTranspiler.Transpile("set -o posix; foo=bar :");
-        Assert.Contains("if ([PsBash.Cmdlets.InvokeBashShoptCommand]::SetOptionOn('posix')) { $env:foo = \"bar\"; ", ps);
+        // The persisting assignment is still a binding frame while the builtin runs (`foo=bar unset foo` takes it).
+        Assert.Contains("if ([PsBash.Cmdlets.InvokeBashShoptCommand]::SetOptionOn('posix')) { [PsBash.Cmdlets.VarFrameStack]::BindSameScope('foo', $env:foo); $env:foo = \"bar\"; ", ps);
+        Assert.Contains("finally { [PsBash.Cmdlets.VarFrameStack]::PersistSameScope('foo'); }", ps);
         Assert.Contains("} else { $__saved_foo = $env:foo; ", ps);
         // `builtin` is not a special builtin; a script that never names the option gets the usual form only.
         Assert.DoesNotContain("SetOptionOn('posix')", BashTranspiler.Transpile("set -o posix; z=Z builtin :"));

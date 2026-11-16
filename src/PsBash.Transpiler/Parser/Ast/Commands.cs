@@ -63,7 +63,9 @@ public abstract record Command : BashNode
         // `declare -a`: an INDEXED array is declared (refused on an associative one).
         bool IsIndexed = false,
         // `declare -A m=(…) 2>/dev/null`: the builtin's own redirects (its error goes there).
-        ImmutableArray<Redirect> Redirects = default) : Command;
+        ImmutableArray<Redirect> Redirects = default,
+        // `v=t export w=1`: the prefix the parser folded away (gone when export ends, except under `set -o posix`).
+        ImmutableArray<Assignment> TempPrefix = default) : Command;
 
     /// <summary>
     /// An if/elif/else statement.

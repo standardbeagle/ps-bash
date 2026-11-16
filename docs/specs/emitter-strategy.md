@@ -1142,6 +1142,26 @@ This allows sed expressions to work correctly with PowerShell's `[regex]::Replac
 
 ---
 
+## 7.9 Prefix assignments are temp binding frames
+
+`v=t cmd` binds `v` for the command only. The binding is a FRAME over the variable, not a second assignment:
+`x=42; x=tmp unset x` takes the frame and leaves 42, and so does `x=tmp eval 'unset x'`. Three ends exist, all in
+`PsEmitter` and all through `PsBuild`:
+
+| Form | Emitted by | End |
+|---|---|---|
+| `v=t cmd` (builtin, external, mapped) | `WrapEnvPairs` | `$__saved_v` put back |
+| `v=t f` / `v=t eval` / `source` / `.` | `WrapEnvPairs` with a frame (`PushTempFrame`, `BindSameScope`) | put back unless `unset` took the frame |
+| `set -o posix; v=t special-builtin` | `EmitPersistentPrefix` (`BindSameScope` ... `PersistSameScope`) | the value stays, unless `unset` took the frame |
+
+Invariant: a prefix assignment is never emitted as a plain assignment followed by the command. The POSIX form
+was (`$env:x = "tmp"; Invoke-BashUnset x`), so `x=tmp unset x` after `set -o posix` left `x` unset (oils
+temp-binding "Temp bindings with unset"). The one exception is a declaration naming its own prefix
+(`v=t readonly v`, `v=t export v`), which bash itself turns into the variable's value. Guards:
+`Core.Tests/PersistentPrefixGuardTests` (every name of `s_posixSpecialBuiltins` emits the persisting frame, and
+`PsBuild.PersistSameScope` has one caller) and `Differential.Tests/TempBindingDifferentialTests` (each form, at
+top level, in a function called twice, over a `local`, with and without POSIX mode).
+
 ## 7a. PowerShell statement keywords are not commands
 
 `exit`, `return`, `break`, `continue`, `throw` are PowerShell **statements**, not
