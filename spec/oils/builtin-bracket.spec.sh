@@ -293,7 +293,6 @@ test -c /dev/zero
 echo status=$?
 ## stdout: status=0
 ## status: 0
-## XFAIL ps-bash platform-windows-no-dev-zero Windows has no /dev/zero character device, so test -c /dev/zero is false (intentional-differences.md, Platform)
 ## timeout: 10
 
 #### test -S

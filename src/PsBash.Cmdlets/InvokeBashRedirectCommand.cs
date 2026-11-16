@@ -87,8 +87,13 @@ public sealed class InvokeBashRedirectCommand : PSCmdlet, IDisposable
     // output silently written into a file), and on Linux opening them reaches the HOST process's descriptors, not the
     // command's stdout/stderr that the pipeline captures. /dev/full fails every write; any other device is opened by
     // RedirectFileWriter.OpenFile, never as a file.
-    private DeviceKind _outDevice;
-    private DeviceKind _errDevice;
+    // Held in a private class, not as fields of this exported type: a value-type field from
+    // PsBash.Transpiler would load that assembly when PowerShell lists the module's types at import
+    // (guard: ExportedTypeLoadGuardTests).
+    private sealed class DeviceTargets { internal DeviceKind Out; internal DeviceKind Err; }
+    private readonly DeviceTargets _devices = new();
+    private DeviceKind _outDevice { get => _devices.Out; set => _devices.Out = value; }
+    private DeviceKind _errDevice { get => _devices.Err; set => _devices.Err = value; }
     private bool _fullReported;
 
     /// <summary>
