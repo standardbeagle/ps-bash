@@ -27,10 +27,23 @@ internal sealed class PsBashExecutor : IScriptExecutor
             ["PSBASH_EXEC_SPILL_MS"] = Environment.GetEnvironmentVariable("PSBASH_SPEC_SPILL_MS") ?? "250",
         };
 
+    /// <summary>
+    /// The launcher process for one case. It STARTS in the case directory (and has it as OLDPWD, like the in-host path):
+    /// a case's files land there whatever its script does first, never in the directory the test run started in. A
+    /// `cd` written in front of the script only held once that command had run.
+    /// </summary>
+    internal static System.Diagnostics.ProcessStartInfo StartInfo(CaseDir caseDir, string scriptFile)
+    {
+        var psi = ProcessSpawn.BuildPsi(PsBashLocator.ResolveRequired(BuildConfig.Auto), scriptFile);
+        psi.WorkingDirectory = caseDir.Path;
+        psi.Environment["OLDPWD"] = caseDir.Path;
+        psi.Environment.Remove("PWD"); // the runner's own; the shell derives it from the directory it starts in
+        return psi;
+    }
+
     public async Task<ExecResult> RunAsync(string script, TimeSpan timeout, CancellationToken cancel)
     {
         using var caseDir = new CaseDir(script);
-        var runner = PsBashRunner.Create().WithTimeout(timeout).WithEnv(Env);
         // Oils cases run "the shell under test" as $SH. The oracle sets SH=bash, and so does this: cases guard bash-inapplicable
         // parts with `case $SH in bash) exit ;; esac`, which a launcher PATH would never match (ps-bash then ran OSH-only
         // tests bash itself skips). `bash` inside ps-bash is the running launcher, so `$SH -c` still exercises this build.
@@ -40,10 +53,10 @@ internal sealed class PsBashExecutor : IScriptExecutor
         // different status for some errors (`${x?}` is 127 under -c, 1 in a file), so `-c` judged those cases wrongly.
         string file = Path.Combine(Path.GetTempPath(), "ps-bash", "spec-launch", Guid.NewGuid().ToString("N") + ".sh");
         Directory.CreateDirectory(Path.GetDirectoryName(file)!);
-        await File.WriteAllTextAsync(file, $"cd '{caseDir.Path}'; " + shell + script, cancel);
+        await File.WriteAllTextAsync(file, shell + script, cancel);
         try
         {
-            var r = await runner.RunArgsAsync([file]);
+            var r = await ProcessSpawn.RunAsync(StartInfo(caseDir, file), timeout, stdinContent: null, env: Env);
             return new ExecResult(r.ExitCode, r.Stdout, r.Stderr, r.WallMs);
         }
         finally
@@ -62,4 +75,7 @@ internal static class Executors
         => int.TryParse(Environment.GetEnvironmentVariable("PSBASH_SPEC_PAR"), out var n) && n > 0 ? n : 4;
 
     public static IScriptExecutor Get() => PsBashExecutor.Mode == "inhost" ? Shared.Value : new PsBashExecutor();
+
+    /// <summary>The shared in-host executor, whatever the run's mode (the isolation self-test drives both paths).</summary>
+    public static IScriptExecutor InHost => Shared.Value;
 }

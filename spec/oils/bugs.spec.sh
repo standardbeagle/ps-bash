@@ -368,7 +368,8 @@ foo
 
 #### #2640 Hanging when reading from character devices
 # Relies on timeout from GNU coreutils
-timeout 0.5 $SH -c 'cat /dev/zero | cat | head -c 5 | tr \\0 0; echo'
+# (oils: timeout 0.5. The bug is a hang; 0.5 s also measured how fast a nested shell starts, about 0.4-1.4 s here.)
+timeout 5 $SH -c 'cat /dev/zero | cat | head -c 5 | tr \\0 0; echo'
 
 # The exact cause of the issue is:
 #
@@ -389,6 +390,5 @@ $SH -c 'cat tmp.txt | cat | head -c 5 | tr \\0 0; echo'
 00000
 ## END
 ## status: 0
-## XFAIL ps-bash gap-nested-shell-startup-slow the first line runs $SH -c under timeout 0.5, and starting a nested ps-bash takes over 0.5 s (about 1.4 s with a warm host), so it is killed and prints nothing; the other three lines, cat /dev/zero as an operand included, match
 ## timeout: 10
 ## real-launcher

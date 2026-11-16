@@ -26,6 +26,9 @@ Mutating commands (cp/mv/rm/tee…): `FsStateOracle.EqualAsync(setup, command)` 
 - Cmdlet tests: `CmdResult.Run(pwsh, script)` then `.AssertSuccess()` / `.AssertFailed(exit, "stderr")` — never output-only.
 - Binary cmdlet with a common-param-colliding short flag (`-e -i -o -p -w -c -d -v`) needs a DIRECT-invocation test (`Invoke-BashFoo -e …`): Pester (release gate) calls cmdlets directly; xunit force-quotes and hides the break.
 
+## SPEC CASE ISOLATION
+A spec case must not observe or affect another case or the checkout (`docs/specs/spec-suite.md` 3.4). Own per case: cwd (`CaseDir`; the launcher process STARTS there), shell state (in-host `BashShellState` restore; launcher = new process). Shared, so such a case runs alone: `/tmp`, `~`, `$HOME`, interactive history (`CaseIsolation.UsesSharedLocation`). New per-case state goes into those primitives, never a `cd`/`export` glued in front of the script. No absolute writes elsewhere (`> /zz` works elevated on Windows), no timing races against nested-shell start (`timeout 0.5 $SH`). Guards: `Spec.Tests/CaseIsolationTests`, `SharedLocationGateTests`. Junk in a checkout root (`a[`, `F`, `foo.txt`) = a snippet run WITHOUT a case dir (`tman dev -c` in the repo root): `cd "$(mktemp -d)"` first.
+
 ## RELEASE GATE
 Pester (`tests/PsBash.Tests.ps1`) + Core.Tests block publish; Cmdlets.Tests is continue-on-error. Run `/pester` before tagging.
 

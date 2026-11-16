@@ -98,6 +98,27 @@ first of each file, plus every case tagged `## real-launcher`) re-runs through `
 fails the run if the two ever disagree. Cases that need a real process boundary (signals to the launcher, exit codes of the
 launcher itself, `-c` vs file vs stdin modes, terminal behaviour) are tagged `## real-launcher` and run only that way.
 
+### 3.4 Case isolation
+
+A case must not be able to observe or affect another case, nor the checkout the run started in.
+
+| State | How a case gets its own |
+|---|---|
+| Working directory, relative files | `CaseDir`: a new empty directory per case. The in-host path sets it in the request preamble; the launcher PROCESS starts in it (`PsBashExecutor.StartInfo`), so nothing depends on the script's first command. A nested `$SH -c` inherits it. |
+| Options, variables, readonly, aliases, functions, traps, umask, IFS, directory stack | In-host: a fresh runspace per request plus `BashShellState.Save/Restore` around every case; a host that cannot be restored is replaced. Launcher: a new shell process per case. |
+| `OLDPWD`, `PSBASH_DASH_C`, `PWD` | Set or removed per case (`InHostExecutor.CaseEnvironment`, `PsBashExecutor.StartInfo`). |
+| `/tmp`, `~`, `$HOME`, the history file of an interactive shell | Cannot be per case (`/tmp` is the machine's on Linux and `%TEMP%` on Windows, where the hosts keep their sockets and the extracted module). A case that names one (`CaseIsolation.UsesSharedLocation`) runs with no other case beside it. |
+
+A case must not write an absolute path outside those (`> /zz` succeeds at the drive root in an elevated Windows
+session: use a path under a directory that does not exist when the point is a failing redirect), and must not
+depend on how long a nested shell takes to start (`timeout 0.5 $SH -c ...`). A case's limit ends a hang; it is
+not a stopwatch: a real-launcher case gets `SpecRunner.NestedShellAllowance` on top of its `## timeout` for every
+`$SH` it starts (seven nested shells ran 8 s against a fixed 10 s, and over it on a loaded host).
+
+Guards: `Spec.Tests/CaseIsolationTests` (a polluting case next to probes on both executors, in sequence and
+concurrently; the probe must print what it printed before; the checkout root and the runner's directory keep
+their entries) and `Spec.Tests/SharedLocationGateTests`.
+
 ## 4. Absorbing the existing tests
 
 Inventory today (xunit attributes counted): Cmdlets.Tests 3,746; Core.Tests 1,550; Differential.Tests 1,394;

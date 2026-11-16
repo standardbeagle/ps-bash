@@ -369,7 +369,7 @@ false
 
 { false 
   true
-} > /zz  # error
+} > /no-such-dir-zz/zz  # error (oils: /zz, which an elevated Windows session CAN create, at the drive root)
 echo ok
 
 
