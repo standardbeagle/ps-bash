@@ -231,7 +231,7 @@ public sealed class InvokeBashFileCommand : PSCmdlet
         var targets = new List<Target>();
         foreach (var raw in plan.Operands)
         {
-            if (raw == "-") { targets.Add(new Target(null, raw, "/dev/stdin", false)); continue; }
+            if (raw == "-") { targets.Add(new Target(null, raw, PsBash.Core.DevicePath.Stdin, false)); continue; }
             bool glob = raw.IndexOfAny(new[] { '*', '?', '[' }) >= 0;
             foreach (var filePath in FileSystemHelpers.ResolveOperandPaths(this, raw))
             {
@@ -250,7 +250,7 @@ public sealed class InvokeBashFileCommand : PSCmdlet
     /// <c>-</c> is stdin.</summary>
     private Target NameTarget(string name)
     {
-        if (name == "-") return new Target(null, name, "/dev/stdin", false);
+        if (name == "-") return new Target(null, name, PsBash.Core.DevicePath.Stdin, false);
         string shown = EscapeName(name);
         if (name.Length == 0) return new Target("", name, shown, true);
         return new Target(FileSystemHelpers.ProviderPath(this, name), name, shown, false);
@@ -332,7 +332,7 @@ public sealed class InvokeBashFileCommand : PSCmdlet
             var obj = new PSObject();
             obj.TypeNames.Insert(0, "PsBash.TextOutput");
             obj.Properties.Add(new PSNoteProperty("BashText", bashText));
-            obj.Properties.Add(new PSNoteProperty("FileName", t.Path ?? "/dev/stdin"));
+            obj.Properties.Add(new PSNoteProperty("FileName", t.Path ?? PsBash.Core.DevicePath.Stdin));
             obj.Properties.Add(new PSNoteProperty("FileType", missing ? display : fileType));
             obj.Properties.Add(new PSNoteProperty("MimeType", mimeType));
             obj.Properties.Add(new PSNoteProperty("MimeEncoding", encoding));

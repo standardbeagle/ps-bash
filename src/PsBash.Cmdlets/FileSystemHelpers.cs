@@ -40,6 +40,9 @@ internal static class FileSystemHelpers
         // fails "No such file or directory" like any missing operand. Checked BEFORE the mapping below
         // so no path policy can ever turn "" into a real path.
         if (string.IsNullOrEmpty(psPath)) return string.Empty;
+        // A device name is not a path (DevicePath): it is returned as written, never resolved against the current
+        // drive - `/dev/stdout` became `C:\dev\stdout`, or `<root>\dev\stdout` on a PSDrive, a file to create.
+        if (DevicePath.IsDevice(psPath)) return psPath;
         // The runtime path policy (RuntimePath.Map: /tmp → $env:TEMP, unix drive paths) — this is
         // the chokepoint most cmdlets resolve operands through, so an expanded `$d/f` (d=/tmp) reaches
         // the same file the emitter's literal /tmp rewrite does. Idempotent on an already-mapped path.
@@ -728,34 +731,25 @@ internal static class FileSystemHelpers
     /// serves it from the OS-native device, and the existence pre-checks in grep/wc treat it as
     /// present rather than emitting "No such file or directory".
     /// </summary>
-    public static bool IsNullDevice(string? path)
-    {
-        if (string.IsNullOrEmpty(path)) return false;
-        string slashed = BashPath.ToShell(path);
-        if (slashed.Equals("/dev/null", StringComparison.OrdinalIgnoreCase)
-            || slashed.EndsWith("/dev/null", StringComparison.OrdinalIgnoreCase))
-            return true;
-        if (OperatingSystem.IsWindows()
-            && (path.Equals("NUL", StringComparison.OrdinalIgnoreCase)
-                || slashed.EndsWith("/NUL", StringComparison.OrdinalIgnoreCase)))
-            return true;
-        return false;
-    }
+    public static bool IsNullDevice(string? path) => DevicePath.IsNull(path);
 
     /// <summary>
-    /// True when <paramref name="path"/> is bash's <c>/dev/zero</c>: the path itself, or on Windows the drive-rooted
-    /// form an operand is normalized to (<c>C:/dev/zero</c>) when no such file exists. As an operand or a redirect
-    /// source it is an endless run of NUL bytes (<see cref="BashFileSystem.ReadTextLines"/>).
+    /// True when <paramref name="operand"/> names the command's own standard input: <c>-</c>, or the device names
+    /// <c>/dev/stdin</c> / <c>/dev/fd/0</c> (<see cref="DevicePath"/>). A cmdlet's stdin is its pipeline input, so it
+    /// is read by the cmdlet, never opened: <see cref="BashFileSystem.OpenRead"/> refuses the device name.
     /// </summary>
-    public static bool IsZeroDevice(string? path)
+    public static bool IsStdinOperand(string? operand) =>
+        operand == "-" || DevicePath.Classify(operand) == DeviceKind.Stdin;
+
+    /// <summary>
+    /// True when <paramref name="path"/> is a device a command can read from or stat without a file behind it
+    /// (<see cref="DevicePath"/>; everything but an unopened <c>/dev/fd/N</c>): the existence pre-checks treat it as
+    /// present instead of reporting "No such file or directory" for <c>C:\dev\zero</c>.
+    /// </summary>
+    public static bool IsDevicePresent(string? path)
     {
-        if (string.IsNullOrEmpty(path)) return false;
-        string slashed = BashPath.ToShell(path);
-        if (slashed == "/dev/zero") return true;
-        return OperatingSystem.IsWindows()
-            && slashed.Length == 11 && char.IsAsciiLetter(slashed[0]) && slashed[1] == ':'
-            && slashed.EndsWith("/dev/zero", StringComparison.OrdinalIgnoreCase)
-            && !File.Exists(path);
+        var kind = DevicePath.Classify(path, out int fd);
+        return kind == DeviceKind.Fd ? BashFdTable.IsOpen(fd) : kind != DeviceKind.None;
     }
 
     /// <summary>

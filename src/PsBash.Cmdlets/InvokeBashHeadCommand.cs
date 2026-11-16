@@ -691,7 +691,7 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
     /// </summary>
     private StreamReader? OpenReader(string path, string command)
     {
-        FileStream fs;
+        Stream fs;
         try
         {
             fs = BashFileSystem.OpenRead(path);

@@ -150,7 +150,7 @@ public sealed class InvokeBashSedCommand : PSCmdlet
         };
         rt.WriteFile = (name, line) =>
         {
-            if (name == "/dev/stderr") { FileSystemHelpers.WriteStderr(this, line); return; }
+            if (DevicePath.Classify(name) == DeviceKind.Stderr) { FileSystemHelpers.WriteStderr(this, line); return; }
             if (_outFiles.TryGetValue(name, out var w)) { w.Write(line); w.Write('\n'); }
         };
         rt.RunCommand = RunShell;
@@ -163,11 +163,11 @@ public sealed class InvokeBashSedCommand : PSCmdlet
 
     private void OpenOutFile(string name)
     {
-        if (name is "/dev/stdout" or "/dev/stderr" or "/dev/null" || _outFiles.ContainsKey(name)) return;
+        if (DevicePath.Classify(name) is DeviceKind.Stdout or DeviceKind.Stderr or DeviceKind.Null || _outFiles.ContainsKey(name)) return;
         try
         {
             string path = FileSystemHelpers.ProviderPath(this, FileSystemHelpers.NormalizeOperandPath(name));
-            _outFiles[name] = RedirectFileWriter.OpenText(path, append: false);
+            _outFiles[name] = RedirectFileWriter.OpenText(path, append: false, this);
         }
         catch (Exception ex) when (!FileSystemHelpers.IsPipelineStop(ex))
         {
@@ -672,7 +672,7 @@ public sealed class InvokeBashSedCommand : PSCmdlet
         return NulRecords(BashFileSystem.OpenRead(path));
     }
 
-    private static IEnumerable<BashFileSystem.TextLine> NulRecords(FileStream fs)
+    private static IEnumerable<BashFileSystem.TextLine> NulRecords(Stream fs)
     {
         using (fs)
         using (var reader = BashFileSystem.OpenDocumentReader(fs))

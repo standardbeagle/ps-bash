@@ -270,8 +270,19 @@ public sealed class InvokeBashTestCommand : PSCmdlet
             };
         }
 
-        if (FileSystemHelpers.IsNullDevice(operand))
-            return c is 'a' or 'e' or 'c' or 'r' or 'w';
+        // A device name is never looked up in the filesystem (DevicePath): the null/zero/full/random/tty devices are
+        // character devices that exist; a stream name exists while that descriptor is open (0-2 always are).
+        var device = PsBash.Core.DevicePath.Classify(operand, out int deviceFd);
+        if (device != PsBash.Core.DeviceKind.None)
+        {
+            bool open = device != PsBash.Core.DeviceKind.Fd || BashFdTable.IsOpen(deviceFd);
+            return c switch
+            {
+                'a' or 'e' or 'r' or 'w' => open,
+                'c' => !PsBash.Core.DevicePath.IsStream(device),
+                _ => false,
+            };
+        }
 
         string p = Resolve(operand);
         switch (c)

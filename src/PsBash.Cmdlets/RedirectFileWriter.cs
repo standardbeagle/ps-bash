@@ -42,13 +42,16 @@ internal sealed class RedirectFileWriter : IDisposable
     private static int s_dirtyWriters;
 
     private readonly object _gate = new();
-    private FileStream? _stream;
+    private Stream? _stream;
     private Timer? _timer;
     private bool _timerArmed;
     private bool _dirty;
     private long _lastWrite = long.MinValue;
 
-    internal RedirectFileWriter(FileStream stream)
+    /// <summary>The file this writer holds open, or null for a device (DevicePath) - which is never a file.</summary>
+    internal string? FilePath => (_stream as FileStream)?.Name;
+
+    internal RedirectFileWriter(Stream stream)
     {
         _stream = stream;
         lock (RegistryGate) Open.Add(this);
@@ -60,18 +63,30 @@ internal sealed class RedirectFileWriter : IDisposable
     /// gets the same policy (written as produced, bursts buffered at most <see cref="IdleFlushDelay"/>, flushed before
     /// any ps-bash read). A private 64 KB buffer held a slow producer's output back until the command ended
     /// (StreamingFileWriterGuardTests keeps new writers on this path). Throws what the <see cref="FileStream"/> constructor throws.
+    /// <para>
+    /// A DEVICE NAME IS NEVER OPENED AS A FILE (<see cref="PsBash.Core.DevicePath"/>, docs/specs/paths.md "Device names"):
+    /// <c>/dev/null</c>, <c>/dev/zero</c>, <c>/dev/urandom</c> discard, <c>/dev/full</c> fails every write, <c>/dev/tty</c>
+    /// is the console, <c>/dev/fd/N</c> is descriptor N of the fd table, and <c>/dev/stdout</c> / <c>/dev/stderr</c> are
+    /// <paramref name="owner"/>'s own output and error streams. Without an owner those two throw
+    /// <see cref="DeviceStreamException"/> (an <see cref="IOException"/>: a failed open, nothing created) - so no caller,
+    /// present or future, can turn a device name into <c>C:\dev\stdout</c> (DevicePathGuardTests).
+    /// </para>
     /// </summary>
-    internal static RedirectFileWriter OpenFile(string path, bool append) =>
-        new(new FileStream(path, append ? FileMode.Append : FileMode.Create, FileAccess.Write,
+    internal static RedirectFileWriter OpenFile(string path, bool append, System.Management.Automation.PSCmdlet? owner = null)
+    {
+        var kind = PsBash.Core.DevicePath.Classify(path, out int fd);
+        if (kind != PsBash.Core.DeviceKind.None) return new(DeviceStreams.OpenWrite(kind, fd, path, owner));
+        return new(new FileStream(path, append ? FileMode.Append : FileMode.Create, FileAccess.Write,
             FileShare.ReadWrite | FileShare.Delete, 64 * 1024));
+    }
 
     /// <summary>
     /// <see cref="OpenFile"/> as a text writer for a command that writes strings: every write reaches the policy at once
     /// (AutoFlush), and the writer's own <see cref="StreamWriter.Flush()"/> is a no-op for the file - an explicit flush
     /// (awk's <c>fflush</c>, sed before <c>e</c>) is <see cref="FlushText"/>. Disposing the writer closes the file.
     /// </summary>
-    internal static StreamWriter OpenText(string path, bool append) =>
-        new(new PolicyStream(OpenFile(path, append)), PsBash.Core.RawBytes.Encoding, 4096) { AutoFlush = true };
+    internal static StreamWriter OpenText(string path, bool append, System.Management.Automation.PSCmdlet? owner = null) =>
+        new(new PolicyStream(OpenFile(path, append, owner)), PsBash.Core.RawBytes.Encoding, 4096) { AutoFlush = true };
 
     /// <summary>Write everything <paramref name="writer"/> holds through to its file now.</summary>
     internal static void FlushText(StreamWriter writer)

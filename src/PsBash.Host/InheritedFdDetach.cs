@@ -192,7 +192,7 @@ internal static class InheritedFdDetach
         if (Environment.GetEnvironmentVariable("PSBASH_HOST_DETACH") != "1") return;
         try
         {
-            var nullFd = open("/dev/null", O_RDWR);
+            var nullFd = open(PsBash.Core.DevicePath.Null, O_RDWR);
             if (nullFd < 0) return;
             dup2(nullFd, 0);
             dup2(nullFd, 1);

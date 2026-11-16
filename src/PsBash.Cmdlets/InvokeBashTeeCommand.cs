@@ -127,7 +127,14 @@ public sealed class InvokeBashTeeCommand : PSCmdlet
             // /dev/null (or NUL) as a tee target: discard the write (bash sends it to the
             // null device) but still pass stdin through to stdout. Without this the
             // resolved path (e.g. C:\dev\null on Windows) has no parent dir.
-            if (FileSystemHelpers.IsNullDevice(rawPath)) continue;
+            // The same for every device name (DevicePath): `tee /dev/stderr` and `tee /dev/stdout` write tee's own
+            // streams, `tee /dev/fd/3` descriptor 3. RedirectFileWriter resolves the device; no file is involved.
+            if (DevicePath.IsDevice(rawPath))
+            {
+                try { _sinks.Add((rawPath, RedirectFileWriter.OpenFile(rawPath, append, this))); }
+                catch (IOException ex) { FileSystemHelpers.WriteBashError(this, $"tee: {rawPath}: {ex.Message}"); }
+                continue;
+            }
 
             foreach (var filePath in FileSystemHelpers.ResolveOperandPaths(this, rawPath))
             {

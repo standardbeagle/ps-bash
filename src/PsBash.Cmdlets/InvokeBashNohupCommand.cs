@@ -83,7 +83,7 @@ public sealed class InvokeBashNohupCommand : PSCmdlet
 
     private static string ResolveTarget(string raw, string cwd)
     {
-        if (raw == "/dev/null") return OperatingSystem.IsWindows() ? "NUL" : raw;
+        if (PsBash.Core.DevicePath.IsNull(raw)) return PsBash.Core.DevicePath.NativeDevice(PsBash.Core.DeviceKind.Null)!;
         var p = FileSystemHelpers.NormalizeOperandPath(raw);
         return Path.IsPathRooted(p) ? p : Path.Combine(cwd, p);
     }

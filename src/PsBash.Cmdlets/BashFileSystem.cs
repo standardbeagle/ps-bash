@@ -37,19 +37,23 @@ public static class BashFileSystem
     /// Open a file for shared reading. <see cref="FileShare.ReadWrite"/> so a
     /// concurrent writer (or another ps-bash process) is never locked out — the
     /// temp-files rule. The caller owns disposal.
+    /// <para>
+    /// A DEVICE NAME IS NEVER OPENED AS A FILE (<see cref="DevicePath"/>, docs/specs/paths.md "Device names"): every
+    /// read method routes through here, so <c>/dev/null</c> reads empty, <c>/dev/zero</c> and <c>/dev/full</c> are
+    /// endless NUL bytes, <c>/dev/urandom</c> endless random bytes, <c>/dev/tty</c> the console and <c>/dev/fd/N</c>
+    /// what is left of descriptor N - in whatever spelling the path mappers left it (<c>C:\dev\null</c>).
+    /// <c>/dev/stdin</c> throws <see cref="DeviceStreamException"/>: a cmdlet's stdin is its pipeline input, which the
+    /// cmdlet reads itself (<see cref="FileSystemHelpers.IsStdinOperand"/>).
+    /// </para>
     /// </summary>
-    public static FileStream OpenRead(string path)
+    public static Stream OpenRead(string path)
     {
-        // A /dev/null (or Windows NUL) OPERAND is an empty file. Serve it from the OS-native
-        // null device so every read method — ReadLines / ReadAllText / ReadAllBytes / IsBinary
-        // all route through here — sees empty content, instead of throwing on the non-existent
-        // resolved path (e.g. C:\dev\null on Windows). Both devices read as zero bytes.
-        if (FileSystemHelpers.IsNullDevice(path))
-            path = OperatingSystem.IsWindows() ? "NUL" : "/dev/null";
+        var device = DevicePath.Classify(path, out int deviceFd);
+        if (device != DeviceKind.None) return DeviceStreams.OpenRead(device, deviceFd, path);
         // A `> f` redirect still running may hold f's latest output in its buffer: bash would already have written it
         // (`{ echo a; echo b; cat f; } > f`). One volatile read when nothing is buffered.
         RedirectFileWriter.FlushPending();
-        return new(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, BinaryProbeBytes,
+        return new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, BinaryProbeBytes,
             FileOptions.SequentialScan);
     }
 
@@ -119,7 +123,12 @@ public static class BashFileSystem
     {
         // /dev/zero never ends and has no newline, so it is served as unterminated NUL records (the consumer stops it,
         // `cat /dev/zero | head -c 5`); Windows has no such device, and a line reader would buffer it forever.
-        if (FileSystemHelpers.IsZeroDevice(path)) return skipBinary ? [] : ZeroDeviceLines();
+        // The same for /dev/full (reads as NUL bytes) and, as raw records, /dev/urandom.
+        switch (DevicePath.Classify(path))
+        {
+            case DeviceKind.Zero or DeviceKind.Full: return skipBinary ? [] : ZeroDeviceLines();
+            case DeviceKind.Random: return skipBinary ? [] : RandomDeviceLines();
+        }
         var fs = OpenRead(path);
         return ReadTextLinesIterator(fs, skipBinary, exact, exactIfBinary);
     }
@@ -140,7 +149,17 @@ public static class BashFileSystem
         while (true) yield return new TextLine(block, HasTrailingNewline: false);
     }
 
-    private static IEnumerable<TextLine> ReadTextLinesIterator(FileStream fs, bool skipBinary, bool exact, bool exactIfBinary)
+    private static IEnumerable<TextLine> RandomDeviceLines()
+    {
+        var block = new byte[4096];
+        while (true)
+        {
+            System.Security.Cryptography.RandomNumberGenerator.Fill(block);
+            yield return new TextLine(RawBytes.GetString(block), HasTrailingNewline: false);
+        }
+    }
+
+    private static IEnumerable<TextLine> ReadTextLinesIterator(Stream fs, bool skipBinary, bool exact, bool exactIfBinary)
     {
         using (fs)
         {

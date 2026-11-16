@@ -36,21 +36,4 @@ public class ByteDataHelperTests
         Assert.False(InvokeBashSedCommand.TryRewriteByteEscapes(ref p));
         Assert.Equal(pattern, p);
     }
-
-    [Fact]
-    public void IsZeroDevice_DevZero_IsTheDevice()
-    {
-        Assert.True(FileSystemHelpers.IsZeroDevice("/dev/zero"));
-        Assert.False(FileSystemHelpers.IsZeroDevice("/dev/zeros"));
-        Assert.False(FileSystemHelpers.IsZeroDevice("/dev/null"));
-        Assert.False(FileSystemHelpers.IsZeroDevice(null));
-    }
-
-    [SkippableFact]
-    public void IsZeroDevice_DriveForm_IsTheDeviceOnlyOnWindows()
-    {
-        Skip.IfNot(OperatingSystem.IsWindows(), "the X:/dev/zero operand form exists only on Windows");
-        Assert.True(FileSystemHelpers.IsZeroDevice(@"C:\dev\zero"));
-        Assert.False(FileSystemHelpers.IsZeroDevice(@"C:\x\dev\zero"));
-    }
 }

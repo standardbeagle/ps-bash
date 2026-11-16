@@ -40,15 +40,27 @@ internal static class BashFdTable
             default: return $"{op}: unsupported redirection";
         }
 
-        FileStream? fs = null;
+        // A stream device is one of the shell's own descriptors, so opening it is a dup of that descriptor at this
+        // point: `exec 3>/dev/stdout` is `exec 3>&1`, `{v}>/dev/fd/7` is `{v}>&7` (DevicePath: never a file).
+        var kind = PsBash.Core.DevicePath.Classify(path, out int deviceFd);
+        if (PsBash.Core.DevicePath.IsStream(kind))
+        {
+            if (kind == PsBash.Core.DeviceKind.Stdin || (access == FileAccess.Read && deviceFd < 3))
+                return $"{PsBash.Core.BashPath.ToShell(path)}: the shell's own stdin cannot be opened as a numbered descriptor";
+            return Dup(fd, deviceFd);
+        }
+
+        Stream? fs = null;
         StreamWriter? writer = null;
         try
         {
             // A descriptor open for writing streams through the shared policy (RedirectFileWriter), as `> f` does.
-            if (access == FileAccess.Read)
-                fs = new FileStream(path, mode, access, FileShare.ReadWrite | FileShare.Delete);
-            else
+            if (access != FileAccess.Read)
                 writer = RedirectFileWriter.OpenText(path, append: mode == FileMode.Append);
+            else if (kind != PsBash.Core.DeviceKind.None)
+                fs = DeviceStreams.OpenRead(kind, deviceFd, path);
+            else
+                fs = new FileStream(path, mode, access, FileShare.ReadWrite | FileShare.Delete);
         }
         catch (FileNotFoundException) { return $"{path}: No such file or directory"; }
         catch (DirectoryNotFoundException) { return $"{path}: No such file or directory"; }
@@ -145,6 +157,18 @@ internal static class BashFdTable
             reader = h.Reader ?? throw new InvalidOperationException($"{fd}: Bad file descriptor");
         }
         return reader.ReadLine();
+    }
+
+    /// <summary>Everything left on a descriptor opened for reading (<c>cat /dev/fd/N</c>); throws when it is not open for reading.</summary>
+    public static string ReadToEnd(int fd)
+    {
+        StreamReader reader;
+        lock (Gate)
+        {
+            if (!Fds.TryGetValue(fd, out var h)) throw new IOException("No such file or directory");
+            reader = h.Reader ?? throw new IOException("Bad file descriptor");
+        }
+        return reader.ReadToEnd();
     }
 
     /// <summary>

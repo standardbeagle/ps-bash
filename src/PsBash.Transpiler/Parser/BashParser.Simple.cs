@@ -186,7 +186,7 @@ public sealed partial class BashParser
                     }
                     else
                     {
-                        redirects.Add(ParseRedirect(fdVar));
+                        AddRedirect(redirects, ParseRedirect(fdVar));
                     }
                     continue;
                 }
@@ -289,7 +289,7 @@ public sealed partial class BashParser
             }
             else if (kind == BashTokenKind.IoNumber || IsRedirectOp(kind))
             {
-                redirects.Add(ParseRedirect());
+                AddRedirect(redirects, ParseRedirect());
             }
             else
             {
@@ -566,7 +566,7 @@ public sealed partial class BashParser
             // reports there. Gap: not applied when a value has a `$( )`.
             if (Peek().Kind == BashTokenKind.IoNumber || IsCompoundRedirectOp(Peek().Kind))
             {
-                _declRedirects.Add(ParseRedirect());
+                AddRedirect(_declRedirects, ParseRedirect());
                 continue;
             }
 
@@ -817,6 +817,18 @@ public sealed partial class BashParser
         return raw.IndexOf('=');
     }
 
+    /// <summary>
+    /// Add a parsed redirect, except <c>&lt; /dev/stdin</c> (or <c>&lt; /dev/fd/0</c>) on fd 0: it reopens the stdin the
+    /// command already has (<see cref="DevicePath"/>), so there is nothing to open and the command keeps its pipe.
+    /// </summary>
+    private static void AddRedirect(ICollection<Redirect> redirects, Redirect redirect)
+    {
+        if (redirect is { Op: "<", Fd: 0, FdVar: null, Target.Parts: [WordPart.Literal { Value: var target }] }
+            && DevicePath.Classify(target, windows: false, out _) == DeviceKind.Stdin)
+            return;
+        redirects.Add(redirect);
+    }
+
     private Redirect ParseRedirect(string? fdVar = null)
     {
         int fd = -1;
@@ -966,7 +978,7 @@ public sealed partial class BashParser
                 if (Peek().Kind == BashTokenKind.TLess)
                     redirects.Add(new Redirect("<<<", 0, new CompoundWord(ImmutableArray<WordPart>.Empty), FdVar: fdVar, Here: ParseHereString()));
                 else
-                    redirects.Add(ParseRedirect(fdVar));
+                    AddRedirect(redirects, ParseRedirect(fdVar));
             }
             else if (Peek().Kind == BashTokenKind.TLess)
             {
@@ -998,7 +1010,7 @@ public sealed partial class BashParser
             }
             else if (Peek().Kind == BashTokenKind.IoNumber || IsCompoundRedirectOp(Peek().Kind))
             {
-                redirects.Add(ParseRedirect());
+                AddRedirect(redirects, ParseRedirect());
             }
             else
             {

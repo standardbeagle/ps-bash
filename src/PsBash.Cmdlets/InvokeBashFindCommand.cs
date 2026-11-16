@@ -174,14 +174,15 @@ public sealed class InvokeBashFindCommand : PSCmdlet
         {
             if (_sinks.TryGetValue(path, out var existing)) return existing;
             FindSink? sink = null;
-            if (path == "/dev/stdout") sink = new StdoutSink(this);
-            else if (path == "/dev/stderr") sink = new StderrSink(this);
+            var device = DevicePath.Classify(path);
+            if (device == DeviceKind.Stdout) sink = new StdoutSink(this);
+            else if (device == DeviceKind.Stderr) sink = new StderrSink(this);
             else
             {
                 try
                 {
                     var full = FileSystemHelpers.ProviderPath(this, FileSystemHelpers.NormalizeOperandPath(path));
-                    sink = new FileSink(RedirectFileWriter.OpenText(full, append: false));
+                    sink = new FileSink(RedirectFileWriter.OpenText(full, append: false, this));
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
                 {

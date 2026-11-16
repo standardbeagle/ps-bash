@@ -694,7 +694,7 @@ public static partial class PsEmitter
         {
             if (r.Here is not null || r.FdVar is not null) continue;
             bool stdout = r.Op is "&>" or "&>>" || (r.Op is ">" or ">>" or ">|" && r.Fd == 1);
-            if (stdout && GetLiteralValue(r.Target) != "/dev/null") return true;
+            if (stdout && GetLiteralValue(r.Target) != DevicePath.Null) return true;
         }
         return false;
     }
@@ -3618,6 +3618,10 @@ public static partial class PsEmitter
                 // every operand, so `[ -f "$file" ]` (extremely common) became `""$env:file""`,
                 // unparseable PowerShell (grammar-fuzz find). Passing the quoted form through also
                 // keeps the variable expanding, which single-quoting would have suppressed.
+                // A device name (`[ -e /dev/stdout ]`, `[ -c /dev/null ]`) is not a path to look up: the runtime answers
+                // from the device (DevicePath), where Test-Path would stat C:\dev\stdout.
+                if (TryGetPureLiteralText(words[1].Parts, out var deviceOperand) && DevicePath.Classify(deviceOperand, windows: false, out _) != DeviceKind.None)
+                    return PsBuild.ExitCodeTest($"Invoke-BashTest {PsBuild.SingleQuote(flag)} {PsBuild.SingleQuote(deviceOperand)}", negate: false);
                 var operand = EmitWord(words[1]);
                 var path = operand.Length > 0 && operand[0] is '"' or '\'' or '$' or '('
                     ? operand
@@ -5345,7 +5349,7 @@ public static partial class PsEmitter
             : $"Invoke-BashCat {target} -RawStdinBytes | {NativeStdinFeedStage(innerCmd)}{inner}";
         // A target that cannot be opened fails the command before it runs (bash: status 1, the command never starts).
         // Device paths (`/dev/stdin`, `/dev/zero`) are the runtime's own and always open.
-        if (!(TryGetPureLiteralText(inputRedirect.Target.Parts, out var literalTarget) && literalTarget.StartsWith("/dev/", StringComparison.Ordinal)))
+        if (!(TryGetPureLiteralText(inputRedirect.Target.Parts, out var literalTarget) && DevicePath.Classify(literalTarget, windows: false, out _) != DeviceKind.None))
             result = PsBuild.SimpleInputRedirectGuard(target, result);
         return true;
     }
@@ -7105,7 +7109,7 @@ public static partial class PsEmitter
 
     private static string TransformRedirectTarget(string target)
     {
-        if (target == "/dev/null")
+        if (target == DevicePath.Null)
             return "$null";
         if (target.StartsWith("/tmp/"))
             return PsBuild.TempPath(target[5..]);
@@ -12682,7 +12686,7 @@ public static partial class PsEmitter
         foreach (var r in redirects)
         {
             var target = GetLiteralValue(r.Target);
-            int file = target == "/dev/null" ? 0 : next++;
+            int file = target == DevicePath.Null ? 0 : next++;
             switch (r.Op)
             {
                 case "&>" or "&>>":

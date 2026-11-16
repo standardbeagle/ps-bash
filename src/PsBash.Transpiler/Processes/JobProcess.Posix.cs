@@ -43,7 +43,7 @@ public sealed partial class JobProcess
         int fd = -1;
         try
         {
-            fd = Posix.open("/dev/tty", 2 /* O_RDWR */);
+            fd = Posix.open(PsBash.Core.DevicePath.Tty, 2 /* O_RDWR */);
             if (fd < 0) return false; // no controlling terminal
             int foreground = Posix.tcgetpgrp(fd);
             return foreground > 0 && foreground == Posix.getpgrp();
@@ -81,7 +81,7 @@ public sealed partial class JobProcess
         envp.Add(IntPtr.Zero);
 
         var path = Utf8(program);
-        var nullPath = Utf8("/dev/null");
+        var nullPath = Utf8(PsBash.Core.DevicePath.Null);
         var cwdPath = chdir && !chdirBySh ? Utf8(spec.WorkingDirectory!) : IntPtr.Zero;
         var argvBlock = PointerArray(argv);
         var envpBlock = PointerArray(envp);

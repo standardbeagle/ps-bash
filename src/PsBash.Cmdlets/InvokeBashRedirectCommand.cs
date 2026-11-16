@@ -82,26 +82,14 @@ public sealed class InvokeBashRedirectCommand : PSCmdlet, IDisposable
     private RedirectFileWriter? _errorStream;
     private bool _stdoutToFile;
     private bool _stderrToFile;
-    private RedirectDevice _outDevice;
-    private RedirectDevice _errDevice;
+    // The device a target names (DevicePath: the one list). Stdout / Stderr are this command's own streams on every
+    // platform - on Windows they were opened as files under C:\dev ("No such file", or where that directory existed,
+    // output silently written into a file), and on Linux opening them reaches the HOST process's descriptors, not the
+    // command's stdout/stderr that the pipeline captures. /dev/full fails every write; any other device is opened by
+    // RedirectFileWriter.OpenFile, never as a file.
+    private DeviceKind _outDevice;
+    private DeviceKind _errDevice;
     private bool _fullReported;
-
-    /// <summary>A redirect target that is one of the shell's own streams or a device, not a file to open.</summary>
-    internal enum RedirectDevice { None, Stdout, Stderr, Full }
-
-    /// <summary>
-    /// <c>/dev/stdout</c>, <c>/dev/stderr</c>, <c>/dev/fd/1|2</c> and <c>/dev/full</c>. On every platform: on Windows they
-    /// were opened as files under <c>C:\dev</c> (a "No such file" error, or where that directory existed, output
-    /// silently written into a file), and on Linux opening them reaches the HOST process's descriptors, not the
-    /// command's stdout/stderr that the pipeline captures.
-    /// </summary>
-    internal static RedirectDevice Device(string? raw) => BashPath.ToShell(raw) switch
-    {
-        "/dev/stdout" or "/dev/fd/1" => RedirectDevice.Stdout,
-        "/dev/stderr" or "/dev/fd/2" => RedirectDevice.Stderr,
-        "/dev/full" => RedirectDevice.Full,
-        _ => RedirectDevice.None,
-    };
 
     /// <summary>
     /// True when this stage keeps the error records it receives through PowerShell's <c>2&gt;&amp;1</c> in the same
@@ -113,7 +101,7 @@ public sealed class InvokeBashRedirectCommand : PSCmdlet, IDisposable
     internal bool KeepsStderrWithStdout()
     {
         if (MergeErrors) return true;
-        if (MyInvocation.BoundParameters.ContainsKey(nameof(ErrorPath))) return Device(ErrorPath) == RedirectDevice.Stdout;
+        if (MyInvocation.BoundParameters.ContainsKey(nameof(ErrorPath))) return DevicePath.Classify(ErrorPath) == DeviceKind.Stdout;
         if (PassErrors) return !MyInvocation.BoundParameters.ContainsKey(nameof(Path));
         return true;
     }
@@ -127,14 +115,14 @@ public sealed class InvokeBashRedirectCommand : PSCmdlet, IDisposable
     // even when the command prints nothing.
     protected override void BeginProcessing()
     {
-        _outDevice = Device(Path);
-        _errDevice = Device(ErrorPath);
+        _outDevice = DevicePath.Classify(Path);
+        _errDevice = DevicePath.Classify(ErrorPath);
         // A stream device is not a file: `> /dev/stdout` leaves the records where they were going, `> /dev/stderr`
         // sends them to stderr (ProcessRecord). /dev/full counts as a file target whose every write fails.
         _stdoutToFile = MyInvocation.BoundParameters.ContainsKey(nameof(Path))
-                        && _outDevice is RedirectDevice.None or RedirectDevice.Full;
+                        && _outDevice is not (DeviceKind.Stdout or DeviceKind.Stderr);
         _stderrToFile = MyInvocation.BoundParameters.ContainsKey(nameof(ErrorPath))
-                        && _errDevice is RedirectDevice.None or RedirectDevice.Full;
+                        && _errDevice is not (DeviceKind.Stdout or DeviceKind.Stderr);
 
         // `echo hi > file$((1/0))`: the target word failed to expand, so bash abandons the command (status 1)
         // without opening anything. Same path as a target that cannot be opened.
@@ -152,12 +140,12 @@ public sealed class InvokeBashRedirectCommand : PSCmdlet, IDisposable
         if (Path is not null)
         {
             if (!TryOpen(Path, Append, Force, out var s)) return;
-            if (s is not null) _stream = new RedirectFileWriter(s);
+            _stream = s;
         }
         if (ErrorPath is not null)
         {
             if (!TryOpen(ErrorPath, ErrorAppend, ErrorForce, out var s)) return;
-            if (s is not null) _errorStream = new RedirectFileWriter(s);
+            _errorStream = s;
         }
     }
 
@@ -176,21 +164,29 @@ public sealed class InvokeBashRedirectCommand : PSCmdlet, IDisposable
     /// Open one target; false (after reporting and stopping upstream) when it cannot be opened.
     /// <paramref name="stream"/> is null for the null device (writes are discarded).
     /// </summary>
-    private bool TryOpen(string raw, bool append, bool force, out FileStream? stream)
+    private bool TryOpen(string raw, bool append, bool force, out RedirectFileWriter? stream)
     {
         stream = null;
-        // Opening a stream device or /dev/full always succeeds and creates nothing (null stream: written elsewhere).
-        if (Device(raw) != RedirectDevice.None) return true;
+        // Opening a stream device, /dev/null or /dev/full always succeeds and creates nothing (null stream: written
+        // elsewhere, or discarded).
+        var device = DevicePath.Classify(raw);
+        if (device is DeviceKind.Stdout or DeviceKind.Stderr or DeviceKind.Full or DeviceKind.Null) return true;
         string? target = ResolveTarget(raw);
         if (target is null) return true;
         try
         {
+            // Any other device (`> /dev/fd/3`, `> /dev/zero`, `> /dev/tty`): the shared writer resolves it, never a file.
+            if (device != DeviceKind.None)
+            {
+                stream = RedirectFileWriter.OpenFile(raw, append, this);
+                return true;
+            }
             // `set -C`: a truncating `>` never overwrites an existing regular file (`>|` and `>>` do).
             if (!append && !force && File.Exists(target)
                 && SessionState.PSVariable.GetValue("__BashNoclobber") is true)
                 throw new IOException("cannot overwrite existing file");
-            stream = new FileStream(target, append ? FileMode.Append : FileMode.Create,
-                FileAccess.Write, FileShare.ReadWrite, bufferSize: 64 * 1024);
+            stream = new RedirectFileWriter(new FileStream(target, append ? FileMode.Append : FileMode.Create,
+                FileAccess.Write, FileShare.ReadWrite, bufferSize: 64 * 1024));
             return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
@@ -246,11 +242,11 @@ public sealed class InvokeBashRedirectCommand : PSCmdlet, IDisposable
             if (_stderrToFile) { WriteTarget(_errorStream, _errDevice, ErrorPayload(er)); return; }
             // `2> /dev/stderr`: stays stderr (as stderr, not an ErrorRecord object a downstream stage would read as a
             // line). `2> /dev/stdout`: stdout, i.e. like `2>&1` at that point.
-            if (_errDevice == RedirectDevice.Stderr) { FileSystemHelpers.WriteStderrBytes(this, ErrorPayload(er)); return; }
-            if (_errDevice == RedirectDevice.Stdout)
+            if (_errDevice == DeviceKind.Stderr) { FileSystemHelpers.WriteStderrBytes(this, ErrorPayload(er)); return; }
+            if (_errDevice == DeviceKind.Stdout)
             {
                 if (_stdoutToFile) { WriteTarget(_stream, _outDevice, ErrorPayload(er)); return; }
-                if (_outDevice == RedirectDevice.Stderr) { FileSystemHelpers.WriteStderrBytes(this, ErrorPayload(er)); return; }
+                if (_outDevice == DeviceKind.Stderr) { FileSystemHelpers.WriteStderrBytes(this, ErrorPayload(er)); return; }
                 foreach (var line in BashRuntime.EmitBashLines(ErrorPayload(er))) WriteObject(line);
                 return;
             }
@@ -263,7 +259,7 @@ public sealed class InvokeBashRedirectCommand : PSCmdlet, IDisposable
             // Merged into stdout (`&> f`, `>f 2>&1`): written with the stdout records below.
             if (_stdoutToFile) { WriteTarget(_stream, _outDevice, ErrorPayload(er)); return; }
             // `&> /dev/stdout`: the merged stderr is stdout text now.
-            if (_outDevice == RedirectDevice.Stdout)
+            if (_outDevice == DeviceKind.Stdout)
             {
                 foreach (var line in BashRuntime.EmitBashLines(ErrorPayload(er))) WriteObject(line);
                 return;
@@ -272,7 +268,7 @@ public sealed class InvokeBashRedirectCommand : PSCmdlet, IDisposable
             return;
         }
         // `echo msg > /dev/stderr`: the exact bytes on the command's stderr.
-        if (_outDevice == RedirectDevice.Stderr) { FileSystemHelpers.WriteStderrBytes(this, BashRuntime.RecordFilePayload(InputObject)); return; }
+        if (_outDevice == DeviceKind.Stderr) { FileSystemHelpers.WriteStderrBytes(this, BashRuntime.RecordFilePayload(InputObject)); return; }
         if (!_stdoutToFile) { WriteObject(InputObject); return; }
         // Same per-record rule as tee: record boundary "\n" unless the record is marked
         // NoTrailingNewline (printf x / echo -n x), so `printf x > f` writes exactly "x".
@@ -284,9 +280,9 @@ public sealed class InvokeBashRedirectCommand : PSCmdlet, IDisposable
     /// <c>write error: No space left on device</c> once and the command's status is 1 (<c>true &gt; /dev/full</c>
     /// writes nothing and keeps 0).
     /// </summary>
-    private void WriteTarget(RedirectFileWriter? stream, RedirectDevice device, string payload)
+    private void WriteTarget(RedirectFileWriter? stream, DeviceKind device, string payload)
     {
-        if (device != RedirectDevice.Full) { Write(stream, payload); return; }
+        if (device != DeviceKind.Full) { Write(stream, payload); return; }
         if (payload.Length == 0) return;
         if (!_fullReported)
         {

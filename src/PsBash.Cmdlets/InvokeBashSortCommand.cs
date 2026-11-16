@@ -572,7 +572,13 @@ public sealed class InvokeBashSortCommand : PSCmdlet
             try
             {
                 var outPath = FileSystemHelpers.ProviderPath(this, plan.Output);
-                File.WriteAllBytes(outPath, RawBytes.GetBytes(sb.ToString()));
+                // A device (`-o /dev/stdout`, `-o /dev/null`) is never a file: the shared writer resolves it (DevicePath).
+                if (DevicePath.IsDevice(outPath))
+                {
+                    using var device = RedirectFileWriter.OpenFile(outPath, append: false, this);
+                    device.Write(RawBytes.GetBytes(sb.ToString()));
+                }
+                else File.WriteAllBytes(outPath, RawBytes.GetBytes(sb.ToString()));
             }
             catch (Exception ex)
             {

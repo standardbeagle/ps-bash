@@ -563,7 +563,7 @@ internal sealed class SedEngine
     /// <summary><c>w FILE</c> (and <c>s///w</c>): <c>/dev/stdout</c> is the output stream itself, other names go to the runtime.</summary>
     private void WriteTo(string name, string text)
     {
-        if (name == "/dev/stdout") { _emit(text); return; }
+        if (DevicePath.Classify(name) == DeviceKind.Stdout) { _emit(text); return; }
         _rt?.WriteFile?.Invoke(name, text);
     }
 

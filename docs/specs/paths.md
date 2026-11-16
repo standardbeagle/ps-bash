@@ -78,6 +78,62 @@ interactive shell's cwd sync.
 One comparison-only inverse exists: `RuntimePath.TryUnmapTmp` lets `[[ $PWD == /tmp* ]]` and `case` match a
 temp-directory value against the `/tmp` spelling (`BashPatternMatch`). It never produces output.
 
+## Device names
+
+**A `/dev/*` device name is not a path and never reaches the filesystem.** Windows has no `/dev`: a name
+handed to a file API becomes `C:\dev\stdout`, which is "No such file or directory" on most machines and,
+on a machine that happens to have a `C:\dev` directory, a junk file with the command's output silently
+missing. On Linux the stream names exist but name the *host* process's descriptors, not the command's.
+
+One primitive: `PsBash.Core.DevicePath.Classify(path[, out fd])` (`src/PsBash.Transpiler/DevicePath.cs`)
+returns a `DeviceKind`. No other product code holds a device-name literal (`DevicePathGuardTests`,
+Core.Tests; its allow-list names the shell-script texts that are not device tests).
+
+| Name | Kind | Read | Write |
+|---|---|---|---|
+| `/dev/null` (Windows: also `NUL`) | `Null` | empty | discarded |
+| `/dev/stdin`, `/dev/fd/0` | `Stdin` | the command's stdin | "Permission denied" |
+| `/dev/stdout`, `/dev/fd/1` | `Stdout` | — | the command's stdout, as `>&1` |
+| `/dev/stderr`, `/dev/fd/2` | `Stderr` | — | the command's stderr, as `>&2` |
+| `/dev/fd/N` (N ≥ 3) | `Fd` | the rest of descriptor N | descriptor N of `BashFdTable` |
+| `/dev/full` | `Full` | NUL bytes | every write fails "No space left on device" |
+| `/dev/zero` | `Zero` | endless NUL bytes | discarded |
+| `/dev/random`, `/dev/urandom` | `Random` | endless random bytes | discarded |
+| `/dev/tty` | `Tty` | the console (`CONIN$`) | the console (`CONOUT$`); "No such device or address" without one |
+
+Rules:
+
+- **Spellings.** The bash name, and on Windows what a path mapper turns it into before a site sees it:
+  drive-rooted (`C:\dev\stdout`, `C:/dev/stdout`: `GetUnresolvedProviderPathFromPSPath`, `Path.GetFullPath`),
+  UNC-rooted (`\\server\share\dev\stdout`), any letter case. A relative `dev/stdout` or `C:\work\dev\zero`
+  is an ordinary file. A device name wins over a real file of that name directly under a drive's `dev`
+  directory (after mapping the two cannot be told apart).
+- **Inbound mapper.** `FileSystemHelpers.ProviderPath` returns a device name as written; it is never
+  resolved against the current drive or PSDrive.
+- **Choke points classify for themselves**, so a site that forgets cannot create a file:
+  `RedirectFileWriter.OpenFile` / `OpenText` (every streaming write: redirect, `tee`, awk `print > f`,
+  find `-fprint`, sed `w`, `sort -o`, uniq OUTPUT, `exec N> f`) and `BashFileSystem.OpenRead` (every read)
+  open `DeviceStreams`, not a `FileStream`. `/dev/stdout` and `/dev/stderr` need the running cmdlet
+  (the `owner` argument); without one the open throws `DeviceStreamException` (an `IOException`: the site
+  reports a failed open, nothing is created). Guard: `DeviceChokePointTests` (Cmdlets.Tests) runs the
+  cmdlets on a PSDrive rooted in a temp directory, with and without a `dev` folder holding files named
+  like the devices, and asserts nothing in it is created, read or changed.
+- **Stream names are dups.** `exec 3>/dev/stdout`, `{v}>/dev/stderr`, `exec 3>/dev/fd/7` are
+  `exec 3>&1`, `{v}>&2`, `exec 3>&7` (`BashFdTable.Open`): a later `>&3` writes the stdout of the command
+  that writes, so an enclosing pipe or redirect applies.
+- **stdin is the cmdlet's pipeline input**, read by the cmdlet, not opened: a cmdlet treats the operand
+  through `FileSystemHelpers.IsStdinOperand` (`-`, `/dev/stdin`, `/dev/fd/0`); the emitter drops a literal
+  `cmd < /dev/stdin` and feeds a command with such an operand (`StdinReaders.ShouldFeed`).
+- **Off Windows** the real `/dev/null|zero|full|urandom|tty` are opened (`DevicePath.NativeDevice`), as
+  bash opens them; the stream kinds are virtual on every OS.
+- **Tests / stat.** `[ -e /dev/stdout ]`, `[ -c /dev/null ]`, `-r`, `-w` answer from the kind
+  (`InvokeBashTestCommand`), with no filesystem lookup; `/dev/fd/N` exists while N is open.
+
+Differences that remain (see also `intentional-differences.md`): commands other than `cat` and `awk` do not
+yet take `/dev/stdin` as an operand (they report it cannot be opened; use `-` or a pipe); `cp`, `touch`,
+`stat`, `source` and `split` do not accept a device operand; `ls -l /dev/null` shows fixed mode bits;
+`/dev/tcp`, `/dev/udp` and `/dev/pts/*` are not devices here. Oracle: `DeviceNameDifferentialTests`.
+
 ## PATH
 
 `PATH` keeps the Windows form (`;` separators, native entries) and is not rewritten for display:

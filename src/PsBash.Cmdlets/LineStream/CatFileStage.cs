@@ -118,6 +118,8 @@ internal sealed class CatFileStage : ILineStreamStage
             var raw = argv[i];
             // Any dash-led token: a flag, `--`, or the `-` stdin marker. All declined.
             if (raw.Length == 0 || raw[0] == '-') return null;
+            // A device name (/dev/stdin, /dev/zero, ...) is not a file: the cmdlet serves it (DevicePath).
+            if (PsBash.Core.DevicePath.IsDevice(raw)) return null;
             // Glob expansion belongs to the PowerShell provider, which a stage cannot reach.
             if (raw.IndexOf('*') >= 0 || raw.IndexOf('?') >= 0 || raw.IndexOf('[') >= 0) return null;
 

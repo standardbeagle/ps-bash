@@ -253,7 +253,7 @@ public sealed class InvokeBashCatCommand : PSCmdlet
         _showNonprinting = plan.ShowNonprinting;
         _hasFlags = plan.HasFlags;
         _operands = plan.Operands;
-        _readStdin = _operands.Count == 0 || _operands.Contains("-");
+        _readStdin = _operands.Count == 0 || _operands.Any(IsStdin);
 
         // Help / version / a scan error all make EndProcessing emit something other than the
         // catenation and return early; the oracle ignored stdin in those cases. A file-only
@@ -262,6 +262,13 @@ public sealed class InvokeBashCatCommand : PSCmdlet
             || Array.IndexOf(args, "--version") >= 0;
         _suppressStdin = !_readStdin || helpOrVersion || plan.Declined;
     }
+
+    /// <summary><c>-</c>, <c>/dev/stdin</c> or <c>/dev/fd/0</c>: this cat's own pipeline input. Not when cat stands in
+    /// for a <c>&lt; file</c> redirect (<see cref="RawStdinBytes"/>): there the operand is the file to open, and the
+    /// device name fails the open instead of reading a pipe the redirect replaced.</summary>
+    private bool IsStdin(string operand) =>
+        operand == "-" || (!RawStdinBytes && FileSystemHelpers.IsStdinOperand(operand));
+
     protected override void ProcessRecord()
     {
         if (InputObject == null) return;
@@ -331,7 +338,7 @@ public sealed class InvokeBashCatCommand : PSCmdlet
             if (FileSystemHelpers.TryHandleInfoOptions(this, "cat", plan.Parsed)) return;
         }
         // Stdin was already streamed from ProcessRecord; only files remain.
-        var fileOperands = _operands.Where(o => o != "-").ToList();
+        var fileOperands = _operands.Where(o => !IsStdin(o)).ToList();
 
         if (!_hasFlags)
         {

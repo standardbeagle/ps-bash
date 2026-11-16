@@ -186,7 +186,8 @@ public static class StdinReaders
             var word = args[i];
             if (word is null || endOfOptions || word.Length < 2 || word[0] != '-')
             {
-                if (word == "-") explicitStdin = true;
+                // `-`, or the same stdin by its device name (`cat /dev/stdin`, `cat /dev/fd/0`).
+                if (word == "-" || DevicePath.Classify(word, windows: false, out _) == DeviceKind.Stdin) explicitStdin = true;
                 else if (word is null || endOfOptions || !IsObsoleteCount(word)) positionals++;
                 continue;
             }

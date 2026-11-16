@@ -135,12 +135,12 @@ public class InvokeBashRedirectCommandTests : IClassFixture<SharedPwshFixture>, 
     [InlineData("/dev/stderr", "Stderr")]
     [InlineData("/dev/fd/2", "Stderr")]
     [InlineData("/dev/full", "Full")]
-    [InlineData("/dev/null", "None")]        // the null device has its own path (ResolveTarget)
-    [InlineData("/dev/fd/3", "None")]
+    [InlineData("/dev/null", "Null")]
+    [InlineData("/dev/fd/3", "Fd")]
     [InlineData("dev/stdout", "None")]       // relative: a real file
     [InlineData("/tmp/stdout", "None")]
     public void Device_NamesTheShellStreamsAndFull(string raw, string expected)
-        => Assert.Equal(expected, InvokeBashRedirectCommand.Device(raw).ToString());
+        => Assert.Equal(expected, PsBash.Core.DevicePath.Classify(raw).ToString());
 
     [Fact]
     public void Redirect_ToDevStdout_PassesTheRecordsOn()

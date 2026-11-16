@@ -1,4 +1,5 @@
 using System.Globalization;
+using PsBash.Core;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -197,8 +198,9 @@ internal sealed class AwkMachine
     /// <summary>
     /// The open output stream called <paramref name="name"/>, opening it on first use: <c>&gt;</c> truncates
     /// and <c>&gt;&gt;</c> appends, but only when the name is opened — a name that is already open keeps
-    /// its stream whichever operator names it, until close(). Special names: <c>/dev/stdout</c>,
-    /// <c>-</c>, <c>/dev/fd/1</c> (awk's stdout), <c>/dev/stderr</c>, <c>/dev/fd/2</c>, <c>/dev/null</c>.
+    /// its stream whichever operator names it, until close(). Special names: <c>-</c> and the device names
+    /// (<see cref="DevicePath"/>): stdout and stderr are awk's own, the null device discards, and any other device
+    /// is resolved by <see cref="RedirectFileWriter"/> (never a file).
     /// </summary>
     private AwkOutSink GetOutput(string name, RedirKind kind)
     {
@@ -215,9 +217,9 @@ internal sealed class AwkMachine
             FlushAllOutputs(); // gawk flushes everything before it starts a command
             sink = new AwkPipeSink(name, Shell, _stdout, WriteStderr);
         }
-        else if (name is "/dev/stdout" or "-" or "/dev/fd/1") sink = new AwkStdoutSink(_stdout);
-        else if (name is "/dev/stderr" or "/dev/fd/2") sink = new AwkStderrSink(WriteStderr);
-        else if (FileSystemHelpers.IsNullDevice(name)) sink = new AwkNullSink();
+        else if (name == "-" || DevicePath.Classify(name) == DeviceKind.Stdout) sink = new AwkStdoutSink(_stdout);
+        else if (DevicePath.Classify(name) == DeviceKind.Stderr) sink = new AwkStderrSink(WriteStderr);
+        else if (DevicePath.IsNull(name)) sink = new AwkNullSink();
         else sink = AwkFileSink.Open(name, ResolvePath(name), append: kind == RedirKind.Append);
 
         _outputs[name] = sink;
@@ -904,7 +906,7 @@ internal sealed class AwkMachine
         if (_fileStreams.TryGetValue(name, out var open)) return open;
 
         IAwkLineStream? stream;
-        if (name is "-" or "/dev/stdin")
+        if (FileSystemHelpers.IsStdinOperand(name))
             stream = StdinInput is null ? null : new AwkSourceStream(StdinInput);
         else
             stream = AwkFileStream.Open(ResolvePath(name));

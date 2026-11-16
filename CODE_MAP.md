@@ -45,6 +45,7 @@ Tests: `*.Tests`, `Differential.Tests` (bash oracle), `Canary.Tests`, `Escalatio
 - **Daemon / IPC / pool / nesting / spawn lock**: `IpcWorker.cs`, `Ipc/*` (`WindowsHostSpawn.cs` = no handle inheritance, `HostSpawnLock.cs`), `WorkerPool.cs`; daemon ends with its session = `Host/Server/SessionAnchorWatcher.cs`. Spec: `host-lifecycle-contract.md`.
 - **Export attribute / a child's environment**: `Transpiler/ShellExports.cs` (the table + `RemoveUnexported`), `Cmdlets/BashVariableStore.cs` (`ApplyTo`, `GetExported`), emitted via `PsBuild.MarkExported`/`TempExportBegin`. Spec: `environment-model.md`.
 - **Paths**: out to the script `Transpiler/BashPath.cs` (`ToShell` → `C:/x`; PS `BashRuntime.ToShellPath`), in `RuntimePath`/`WindowsPath` (`NormalizeOperandPath`, `BashRuntime.MapPath`) — never a separator `Replace` (guard `PathMappingGuardTests`). Spec `paths.md`.
+- **Device names** (`/dev/stdout`, `/dev/null`, `/dev/fd/N`, …): `Transpiler/DevicePath.cs` `Classify` is the only list; choke points `RedirectFileWriter.OpenFile` / `BashFileSystem.OpenRead` → `Cmdlets/DeviceStreams.cs`, never a file (guards `DevicePathGuardTests`, `DeviceChokePointTests`). Spec `paths.md` §Device names.
 - **Bytes vs text**: `Transpiler/RawBytes.cs` at every text↔bytes boundary — never `Encoding.UTF8` on data; streams `Cmdlets/ByteRecordStreams.cs`.
 - **Embedded DLL extraction**: `ModuleExtractor.cs` (list = `EmbedCmdletsDll` in `PsBash.Core.csproj`).
 - **Strata**: `src/Strata.props`.

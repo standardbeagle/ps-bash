@@ -65,7 +65,22 @@ public sealed class InvokeBashOdCommand : PSCmdlet
                     hadError = true;
                     continue;
                 }
-                if (!File.Exists(op.Path))
+                // An endless device (/dev/zero, /dev/urandom, /dev/full: DevicePath) is read only as far as -N asks.
+                if (PsBash.Core.DevicePath.Classify(op.Path) is PsBash.Core.DeviceKind.Zero or PsBash.Core.DeviceKind.Random or PsBash.Core.DeviceKind.Full)
+                {
+                    if (plan.Limit < 0)
+                    {
+                        FileSystemHelpers.WriteBashError(this, $"od: {op.Display}: endless device: give -N BYTES");
+                        hadError = true;
+                        continue;
+                    }
+                    var want = new byte[checked((int)Math.Min(plan.Skip + plan.Limit - Math.Min(all.Length, plan.Skip + plan.Limit), 64L * 1024 * 1024))];
+                    using var device = BashFileSystem.OpenRead(op.Path);
+                    device.ReadExactly(want);
+                    all.Write(want);
+                    continue;
+                }
+                if (!File.Exists(op.Path) && !PsBash.Core.DevicePath.IsNull(op.Path))
                 {
                     FileSystemHelpers.WriteBashError(this, $"od: {op.Display}: No such file or directory");
                     hadError = true;

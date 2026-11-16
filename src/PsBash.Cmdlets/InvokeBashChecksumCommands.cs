@@ -173,7 +173,7 @@ internal static class ChecksumEngine
                     hadError = true;
                     continue;
                 }
-                if (!File.Exists(filePath))
+                if (!File.Exists(filePath) && !DevicePath.IsNull(filePath))
                 {
                     FileSystemHelpers.WriteBashError(cmdlet, $"{commandName}: {op.Display}: No such file or directory");
                     hadError = true;
@@ -325,7 +325,7 @@ internal static class ChecksumEngine
             FileSystemHelpers.WriteBashError(cmdlet, $"{commandName}: {op.Display}: Is a directory");
             return null;
         }
-        if (!File.Exists(op.Path))
+        if (!File.Exists(op.Path) && !DevicePath.IsNull(op.Path))
         {
             FileSystemHelpers.WriteBashError(cmdlet, $"{commandName}: {op.Display}: No such file or directory");
             return null;

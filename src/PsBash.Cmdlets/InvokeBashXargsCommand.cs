@@ -431,7 +431,7 @@ public sealed class InvokeBashXargsCommand : PSCmdlet
 
         if (interactive && inputLines.Count > 0)
         {
-            FileSystemHelpers.WriteBashError(this, "xargs: failed to open /dev/tty for reading: No such device or address");
+            FileSystemHelpers.WriteBashError(this, $"xargs: failed to open {PsBash.Core.DevicePath.Tty} for reading: No such device or address");
             FileSystemHelpers.SetLastExitCode(this, 1);
             return;
         }

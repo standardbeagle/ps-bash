@@ -1159,7 +1159,7 @@ public sealed class InvokeBashLsCommand : PSCmdlet
         var obj = new PSObject();
         obj.TypeNames.Insert(0, "PsBash.LsEntry");
         obj.Properties.Add(new PSNoteProperty("Name", "null"));
-        obj.Properties.Add(new PSNoteProperty("FullPath", "/dev/null"));
+        obj.Properties.Add(new PSNoteProperty("FullPath", PsBash.Core.DevicePath.Null));
         obj.Properties.Add(new PSNoteProperty("IsDirectory", false));
         obj.Properties.Add(new PSNoteProperty("IsSymlink", false));
         obj.Properties.Add(new PSNoteProperty("SizeBytes", 0L));
