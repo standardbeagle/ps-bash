@@ -10,7 +10,7 @@ namespace PsBash.Differential.Tests;
 /// </summary>
 public class ArrayKindConversionTests
 {
-    [Fact]
+    [SkippableFact]
     public Task DeclareRefusesToChangeAnArraysKind() => AssertOracle.EqualAsync(
         "ix=(1 2 3); eval 'declare -A ix=([a]=x)' 2>/dev/null; echo st:$?; declare -p ix\n"
         + "declare -A as=([a]=x); eval 'declare -a as=(1 2)' 2>/dev/null; echo st:$?; declare -p as\n"

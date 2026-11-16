@@ -9,7 +9,7 @@ namespace PsBash.Differential.Tests;
 /// </summary>
 public class LetIndirectEvalTests
 {
-    [Theory]
+    [SkippableTheory]
     [InlineData("let \"a = 3 * 4\"; echo $a")]
     [InlineData("let a=3*4 b=2; echo $a $b")]
     [InlineData("let a=5; let a++; echo $a")]
@@ -30,5 +30,5 @@ public class LetIndirectEvalTests
     [InlineData("eval echo a\\ b")]
     public Task Matches_Bash(string script) => AssertOracle.EqualAsync(script);
 
-    [Fact] public Task Indirect_ToFuncnameAndOptind() => AssertOracle.EqualAsync("f() { local r=$1; echo ${!r}; }; f FUNCNAME; set -- a b c; echo ${!OPTIND}; g() { local OPTIND=2; echo ${!OPTIND}; }; g x y z");
+    [SkippableFact] public Task Indirect_ToFuncnameAndOptind() => AssertOracle.EqualAsync("f() { local r=$1; echo ${!r}; }; f FUNCNAME; set -- a b c; echo ${!OPTIND}; g() { local OPTIND=2; echo ${!OPTIND}; }; g x y z");
 }

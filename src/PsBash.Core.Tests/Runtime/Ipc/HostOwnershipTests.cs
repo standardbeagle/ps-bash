@@ -59,7 +59,7 @@ public class HostOwnershipTests
         Assert.Equal(HostOwnership.CleanupDecision.SafeArtifactCleanup, d);
     }
 
-    [Fact]
+    [SkippableFact]
     public void Classify_AlivePidWithMatchingExe_SafeProcessShutdown()
     {
         // Use the test process itself as the "live host". Its own MainModule
@@ -74,7 +74,7 @@ public class HostOwnershipTests
         Assert.Equal(HostOwnership.CleanupDecision.SafeProcessShutdown, d);
     }
 
-    [Fact]
+    [SkippableFact]
     public void Classify_AlivePidWithMismatchedExe_UnsafeToTouch()
     {
         // Same live PID (us) but recorded as a totally different executable —
@@ -151,7 +151,7 @@ public class HostOwnershipTests
         Assert.True(HostOwnership.MetadataMatchesLauncher(meta, currentHost, HostProtocol.BuildIdentity));
     }
 
-    [Fact]
+    [SkippableFact]
     public void Classify_LivePidForeignOwner_UnsafeToTouch()
     {
         // R03: a sidecar planted with owner=<victim> and a PID belonging to
@@ -173,7 +173,7 @@ public class HostOwnershipTests
         Assert.Contains("1001", reason);
     }
 
-    [Fact]
+    [SkippableFact]
     public void Classify_LivePidSameOwner_SafeProcessShutdown()
     {
         var ownPid = Environment.ProcessId;
@@ -190,7 +190,7 @@ public class HostOwnershipTests
         Assert.Equal(HostOwnership.CleanupDecision.SafeProcessShutdown, d);
     }
 
-    [Fact]
+    [SkippableFact]
     public void Classify_LivePidOwnerProbeUnavailable_DoesNotRefuse()
     {
         // No POSIX process-uid probe (Windows/macOS): the gate has no opinion and

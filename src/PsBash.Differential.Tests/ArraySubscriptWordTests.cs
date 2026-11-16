@@ -10,7 +10,7 @@ namespace PsBash.Differential.Tests;
 /// </summary>
 public class ArraySubscriptWordTests
 {
-    [Fact]
+    [SkippableFact]
     public Task SubscriptWords_AreExpanded() => AssertOracle.EqualAsync(
         "a=(x y z); i=1; echo ${a[$i+1]} ${a[\"1\"]} \"${a[$i]}\" ${a[${i}]} \"${a[\"$i\"]}\"\n"
         + "declare -A m; m[ab]=1; m[\"a b\"]=2; m['$k']=lit; k=a; echo ${m[${k}b]} \"${m[\"$k b\"]}\" \"${m['a b']}\" \"${m['$k']}\" \"${m[\\$k]}\"\n"
@@ -22,7 +22,7 @@ public class ArraySubscriptWordTests
         + "n=(5 0 9); echo \"${n[n[1]]}\" \"${n[n[1]+1]}\" \"${n[ n[1] ]}\"");
 
     // A scalar and element 0 are the same storage: `a=z` on an array writes a[0]; `c[1]=t` on a scalar keeps it as c[0].
-    [Fact]
+    [SkippableFact]
     public Task ScalarAndElementZero_AreOneVariable() => AssertOracle.EqualAsync(
         "b[0]=x; echo \"$b\" ${b}; b=y; echo \"$b ${b[0]}\"; unset b; echo \"[$b]\"\n"
         + "c=s; c[1]=t; echo \"$c ${c[1]}\"; c=u; echo \"$c ${c[@]}\"\n"
@@ -33,7 +33,7 @@ public class ArraySubscriptWordTests
 
     // `a=(1 10); (( a++ ))` / `let b=7`: arithmetic on an array's bare name writes element 0 (it replaced the whole
     // array with the number).
-    [Fact]
+    [SkippableFact]
     public Task ArithmeticOnArrayName_WritesElementZero() => AssertOracle.EqualAsync(
         "a=(1 10); (( a++ )); echo \"${a[@]}\"; (( a+=5 )); echo \"${a[@]}\"; b=(3 4); let b=7; echo \"${b[@]}\"\n"
         + "declare -A m=([x]=1); (( m=4 )); declare -p m; echo $(( m + 1 ))\n"
@@ -42,7 +42,7 @@ public class ArraySubscriptWordTests
         + "s=3; (( s++ )); echo $s; e[2]=9; (( e = 1 )); declare -p e");
 
     // `ref='A[$key]'; ${!ref}`: the variables in an indirect subscript expand (single quotes keep them literal).
-    [Fact]
+    [SkippableFact]
     public Task IndirectSubscript_ExpandsVariables() => AssertOracle.EqualAsync(
         "declare -A A=(['K']=val ['a b']=sp ['$key']=lit)\n"
         + "key=K; ref='A[$key]'; echo \"1 ${!ref}\"\nref='A[\"$key\"]'; echo \"2 ${!ref}\"\nref='A[${key}]'; echo \"3 ${!ref}\"\n"

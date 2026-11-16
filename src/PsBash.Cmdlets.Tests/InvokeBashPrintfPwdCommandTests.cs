@@ -411,7 +411,9 @@ public class InvokeBashPrintfPwdCommandTests : IClassFixture<SharedPwshFixture>
     {
         var lines = RunBashText(
             @"$global:__PsBashCwd = 'C:\Users\me'; Invoke-BashPwd");
-        Assert.Equal(new[] { "C:/Users/me" }, lines);
+        // `\` -> `/` is a Windows-only step (BashPath.ToShell, docs/specs/paths.md); elsewhere `\` is a
+        // filename character, so the logical directory prints unchanged.
+        Assert.Equal(new[] { OperatingSystem.IsWindows() ? "C:/Users/me" : @"C:\Users\me" }, lines);
     }
 
     [Fact]

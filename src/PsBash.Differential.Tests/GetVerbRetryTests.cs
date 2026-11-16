@@ -9,7 +9,7 @@ namespace PsBash.Differential.Tests;
 /// </summary>
 public class GetVerbRetryTests
 {
-    [Theory]
+    [SkippableTheory]
     [InlineData("{ Package glibc; } 2>/dev/null; echo st=$?")]
     [InlineData("{ process x; } 2>/dev/null; echo st=$?")]
     [InlineData("{ module x; } 2>/dev/null; echo st=$?")]
@@ -22,7 +22,7 @@ public class GetVerbRetryTests
 
     // A bare name holding PowerShell syntax is looked up too: `{ls` printed itself, `a,b` was an array (a parse error for
     // the whole script), `%x` ran ForEach-Object (bash reads a leading % as a job spec, so x%y here). bash: command not found (127).
-    [Theory]
+    [SkippableTheory]
     [InlineData("{ {ls; } 2>/dev/null; echo st=$?")]
     [InlineData("{ a,b; } 2>/dev/null; echo st=$?")]
     [InlineData("{ x%y; } 2>/dev/null; echo st=$?")]

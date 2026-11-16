@@ -7,11 +7,11 @@ namespace PsBash.Differential.Tests;
 /// value, as the direct <c>$NAME</c> does; it was empty.</summary>
 public class IndirectDynamicVarTests
 {
-    [Fact]
+    [SkippableFact]
     public Task IndirectLineno_IsTheStatementLine() => AssertOracle.EqualAsync(
         "ref='LINENO'\necho lineno=${!ref}\nf() {\n  local r=LINENO\n  echo in=${!r} ${!r:-x}\n}\nf");
 
-    [Fact]
+    [SkippableFact]
     public Task IndirectComputedVars_AreNumbers() => AssertOracle.EqualAsync(
         "for n in RANDOM SECONDS EPOCHSECONDS EPOCHREALTIME BASHPID UID EUID; do\n  v=${!n}\n"
         + "  case $v in '') echo \"$n empty\";; *[!0-9.]*) echo \"$n bad\";; *) echo \"$n ok\";; esac\ndone");

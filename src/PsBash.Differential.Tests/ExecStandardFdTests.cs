@@ -11,7 +11,7 @@ namespace PsBash.Differential.Tests;
 /// </summary>
 public class ExecStandardFdTests
 {
-    [Fact]
+    [SkippableFact]
     public Task ExecOfAStandardDescriptor_AppliesToTheRestOfTheList() => AssertOracle.EqualAsync(
         "cd \"$(mktemp -d)\"\n"
         + "( exec >o.txt; echo to-file; printf 'pf\\n' ); echo \"file: $(tr '\\n' ' ' < o.txt)\"\n"
@@ -28,7 +28,7 @@ public class ExecStandardFdTests
     /// PowerShell job (the trailing <c>&amp;</c>), <c>echo hi 9&gt;f.txt</c> printed "hi 9&gt;f.txt", and a function writing
     /// <c>&gt;&amp;9</c> had no fd 9. <c>1&lt;&amp;2</c> is <c>1&gt;&amp;2</c>.
     /// </summary>
-    [Fact]
+    [SkippableFact]
     public Task HighDescriptorOnASimpleCommand_IsOpenedForIt() => AssertOracle.EqualAsync(
         "cd \"$(mktemp -d)\"\n"
         + "echo one 1>&2; echo two 1<&2; echo two2 2<&1\n"

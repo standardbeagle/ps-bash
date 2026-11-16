@@ -21,7 +21,7 @@ namespace PsBash.Differential.Tests;
 /// </summary>
 public class VariableContextDifferentialTests
 {
-    [Fact]
+    [SkippableFact]
     public Task UnsetAndLocal_FollowBashsFrames() => AssertOracle.EqualAsync(
         "unlocal() { unset -v \"$1\"; }\nshow() { echo \"$1: [${v-(unset)}]\"; }\nv=global\n"
         + "f1() { local v=local; unset v; show local-unset; }; f1\n"
@@ -49,7 +49,7 @@ public class VariableContextDifferentialTests
     /// with local" case): ps-bash ran a command named <c>local</c> ("command not found"). The binding is gone afterwards,
     /// the declaration's words are expanded before it, and a value-less <c>v=t local v</c> / <c>v=t export v</c> keeps t.
     /// </summary>
-    [Fact]
+    [SkippableFact]
     public Task TempBindingBeforeLocalOrExport_IsTheDeclaration() => AssertOracle.EqualAsync(
         "f() { local x=x; tq='' local tx=tx; tq='' eval 'local ty=ty'; x='X' unset x; tx='TX' unset tx; ty='TY' unset ty;"
         + " echo \"x=$x tx=$tx ty=$ty tq=[${tq-unset}]\"; }; f; echo \"tx after=[${tx-unset}]\"\n"
@@ -63,7 +63,7 @@ public class VariableContextDifferentialTests
     /// error, and <c>local</c> / <c>export</c> with <c>&gt;f</c> never created f. A value's <c>$( )</c> is expanded before
     /// the redirects, so its stderr is not redirected.
     /// </summary>
-    [Fact]
+    [SkippableFact]
     public Task AssignmentWithOnlyRedirects_KeepsTheValue() => AssertOracle.EqualAsync(
         "cd \"$(mktemp -d)\"\n"
         + "sx=$(echo hi) 2>/dev/null; echo \"1 sx=[$sx]\"\n"

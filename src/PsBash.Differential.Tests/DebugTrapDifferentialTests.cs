@@ -14,7 +14,7 @@ public class DebugTrapDifferentialTests
 {
     private const string Log = "dbg() { echo \"  [$1]\"; }\ntrap 'dbg $LINENO' DEBUG\n";
 
-    [Theory]
+    [SkippableTheory]
     [InlineData("echo a\necho b; echo c\necho d && echo e\necho f || echo g\n(( h = 42 ))\n[[ j == j ]]\nv=1\nreadonly r=2")]
     [InlineData("for x in 1 2; do\n  echo x=$x\ndone\nfor (( i = 0; i < 2; i++ )); do\n  echo i=$i\ndone")]
     [InlineData("n=foo.py\ncase $n in\n  *.py) echo py ;;\nesac\nif test x = x; then echo if; fi\nwhile false; do :; done")]
@@ -25,7 +25,7 @@ public class DebugTrapDifferentialTests
     public Task DebugTrap_RunsBeforeEachSimpleCommand(string script) => AssertOracle.EqualAsync(Log + script);
 
     /// <summary>Under <c>set -e</c> a DEBUG action that fails ends the script with its status (bash: 42 after one run).</summary>
-    [Fact]
+    [SkippableFact]
     public Task DebugTrap_FailingActionUnderErrexit_EndsTheScript() => AssertOracle.EqualAsync(
         "set -o errexit\nd() { echo \"  [$1]\"; return 42; }\ntrap 'd $LINENO' DEBUG\necho A\necho B");
 
@@ -34,12 +34,12 @@ public class DebugTrapDifferentialTests
     /// runs before each command of the ERR action, and neither action re-runs itself. Both report the line of the
     /// command the trap fired for. ps-bash ran neither trap inside the other's action.
     /// </summary>
-    [Fact]
+    [SkippableFact]
     public Task DebugAndErrTraps_RunInsideEachOthersActions() => AssertOracle.EqualAsync(
         "trap 'false; echo $LINENO err' ERR\ntrap 'false; echo $LINENO debug' DEBUG\n\nfalse\necho after=$?");
 
     /// <summary>Under <c>set -e</c> a failing command inside the ERR action ends the script there (bash: no <c>x</c>, status 1).</summary>
-    [Fact]
+    [SkippableFact]
     public Task ErrAction_FailingCommandUnderErrexit_EndsTheScript() => AssertOracle.EqualAsync(
         "set -e\ntrap 'false; echo x' ERR\nfalse\necho after");
 }

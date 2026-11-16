@@ -10,7 +10,7 @@ namespace PsBash.Differential.Tests;
 /// </summary>
 public class IndirectThroughArrayTests
 {
-    [Fact]
+    [SkippableFact]
     public Task IndirectAllElements_WithOperator() => AssertOracle.EqualAsync(
         "(echo \"${!a[@]-default}\") 2>/dev/null; echo status=$?\n"
         + "a=(x); (echo \"${!a[@]-default}\"); echo status=$?\n"
@@ -23,13 +23,13 @@ public class IndirectThroughArrayTests
         + "a=(x y); echo \"${!a[@]}\" \"${!a[*]}\"");
 
     // A failing indirect word abandons ANY command (status 1), not only echo: a function or program ran with it empty.
-    [Fact]
+    [SkippableFact]
     public Task FailedIndirect_AbandonsFunctionsAndPrograms() => AssertOracle.EqualAsync(
         "f() { echo called \"$@\"; }\na=(x y)\n(f \"${!a[@]-d}\") 2>/dev/null; echo s=$?\n(cat \"${!a[@]-d}\") 2>/dev/null; echo s=$?\n"
         + "(nosuchcmd \"${!u[@]-d}\") 2>/dev/null; echo s=$?\nr=x; x=ok; f \"${!r}\" \"pre-${!r:-d}\"; echo s=$?\n"
         + "b='bad name'; (f \"${!b}\") 2>/dev/null; echo s=$?");
 
-    [Fact]
+    [SkippableFact]
     public Task IndirectElementOfUnsetArray() => AssertOracle.EqualAsync(
         "(echo \"${!u[1]-d}\") 2>/dev/null; echo s=$?\nu=(); (echo \"${!u[1]-d}\"); echo s=$?\nk=(p q); p=7; echo \"${!k[0]}\" \"${!k[1]-none}\"");
 }

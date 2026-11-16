@@ -11,7 +11,7 @@ namespace PsBash.Differential.Tests;
 /// </summary>
 public class ArrayLengthScalarTests
 {
-    [Theory]
+    [SkippableTheory]
     [InlineData("a=(0 1 2 3); echo len=${#a[@]}")]
     [InlineData("a=(0 1 2 3); unset a[-1]; echo len=${#a[@]}; unset a[-1]; echo len=${#a[@]}")]
     [InlineData("b=(x yy zzz); echo ${#b[0]} ${#b[1]} ${#b[2]}")]
@@ -23,6 +23,6 @@ public class ArrayLengthScalarTests
     public Task Matches_Bash(string script) => AssertOracle.EqualAsync(script);
 
     // An arithmetic element write past the end leaves the gap UNSET (a sparse array), it does not pad with empty strings.
-    [Fact] public Task Arith_IndexAssignPastEnd_IsSparse() => AssertOracle.EqualAsync("declare -a a; (( a[99]=1 )); echo \"${#a[@]} ${!a[@]}\"; b=(x); (( b[5]=2 )); (( b[5]+=3 )); echo \"${#b[@]} ${!b[@]} ${b[5]}\"");
-    [Fact] public Task Slice_SparseArrayTail() => AssertOracle.EqualAsync("a=(x); a[9]=y; echo \"${a[@]: -1};${a[@]:0:1}\"");
+    [SkippableFact] public Task Arith_IndexAssignPastEnd_IsSparse() => AssertOracle.EqualAsync("declare -a a; (( a[99]=1 )); echo \"${#a[@]} ${!a[@]}\"; b=(x); (( b[5]=2 )); (( b[5]+=3 )); echo \"${#b[@]} ${!b[@]} ${b[5]}\"");
+    [SkippableFact] public Task Slice_SparseArrayTail() => AssertOracle.EqualAsync("a=(x); a[9]=y; echo \"${a[@]: -1};${a[@]:0:1}\"");
 }

@@ -9,7 +9,7 @@ namespace PsBash.Differential.Tests;
 /// </summary>
 public class CasePatternExpansionTests
 {
-    [Theory]
+    [SkippableTheory]
     [InlineData("i=a; case a in $i) echo y;; *) echo n;; esac")]
     [InlineData("i=a; case a in \"$i\") echo y;; *) echo n;; esac")]
     [InlineData("i=a; case ' a ' in *\" $i \"*) echo y;; *) echo n;; esac")]

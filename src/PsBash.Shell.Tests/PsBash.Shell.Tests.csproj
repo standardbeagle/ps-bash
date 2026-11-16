@@ -25,9 +25,8 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- Shared contention-aware wait; this suite does not reference PsBash.Testing. -->
-    <Compile Include="..\PsBash.Testing\ContentionProbe.cs" Link="ContentionProbe.cs" />
     <ProjectReference Include="..\PsBash.Shell\PsBash.Shell.csproj" />
+    <ProjectReference Include="..\PsBash.Testing\PsBash.Testing.csproj" />
     <ProjectReference Include="..\PsBash.Host\PsBash.Host.csproj" />
   </ItemGroup>
 

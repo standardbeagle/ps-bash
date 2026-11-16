@@ -15,7 +15,7 @@ namespace PsBash.Differential.Tests;
 /// </summary>
 public class ReadonlyRuntimeDifferentialTests
 {
-    [Theory]
+    [SkippableTheory]
     [InlineData("names='m n'\nreadonly $names\nother=ok\necho \"other=$other\"\n( m=1 n=2 ) 2>/dev/null\necho \"s=$? m=$m n=$n\"")]
     [InlineData("f() { readonly g=1; }\nf\n( g=2 ) 2>/dev/null\necho \"s=$? g=$g\"")]
     [InlineData("h() { local -r q=1; echo \"in q=$q\"; }\nh\nq=5\necho \"q=$q s=$?\"")]

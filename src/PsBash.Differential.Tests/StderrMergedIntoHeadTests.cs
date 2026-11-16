@@ -9,7 +9,7 @@ namespace PsBash.Differential.Tests;
 /// </summary>
 public class StderrMergedIntoHeadTests
 {
-    [Theory]
+    [SkippableTheory]
     [InlineData("ls /nonexist_zz 2>&1 | head -1; echo after")]
     [InlineData("ls /nonexist_zz 2>&1 | head -2; echo after")]
     public Task StderrFirstLine_HeadStops_ScriptContinues(string script)

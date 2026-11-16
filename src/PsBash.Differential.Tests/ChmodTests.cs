@@ -10,7 +10,7 @@ namespace PsBash.Differential.Tests;
 /// </summary>
 public class ChmodTests
 {
-    [Theory]
+    [SkippableTheory]
     [InlineData("touch f; chmod +x f; echo st=$?")]
     [InlineData("touch a b; chmod u+x,g-w a b; echo st=$?")]
     [InlineData("touch f; chmod 755 f; echo st=$?")]
@@ -23,7 +23,7 @@ public class ChmodTests
     [InlineData("touch f; chmod a-w f; rm -f f; [ -e f ] || echo gone")]
     public Task Chmod_ChangesMode(string script) => AssertOracle.EqualAsync(script);
 
-    [Theory]
+    [SkippableTheory]
     [InlineData("chmod 2>/dev/null; echo st=$?")]
     [InlineData("chmod 644 2>/dev/null; echo st=$?")]
     [InlineData("touch f; chmod zzz f 2>/dev/null; echo st=$?")]

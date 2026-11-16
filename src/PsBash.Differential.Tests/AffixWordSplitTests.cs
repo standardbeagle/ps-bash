@@ -10,7 +10,7 @@ namespace PsBash.Differential.Tests;
 /// </summary>
 public class AffixWordSplitTests
 {
-    [Fact]
+    [SkippableFact]
     public Task UnquotedVarGluedToText_IsSplit() => AssertOracle.EqualAsync(
         "x='a b'; printf '[%s]' a$x; echo; f() { printf '[%s]' \"$@\"; echo; }; f a$x $x.c \"q\"$x $x'z'\n"
         + "p=printf; $p '[%s]' f=$x; echo; e=ech; ${e}o hi\n"
@@ -19,19 +19,19 @@ public class AffixWordSplitTests
 
     // The glued text is never split (`"$d"/$x` with d='My Files' is one word) and a quoted empty affix anchors a field
     // (`""$A""` with A='  abc  def  ' is "", abc, def, "").
-    [Fact]
+    [SkippableFact]
     public Task GluedTextIsNotSplit_AndQuotedEmptyTextAnchorsAField() => AssertOracle.EqualAsync(
         "p() { printf '[%s]' \"$@\"; echo; }; x=c; d='My Files'; p \"a b\"$x; p \"$d\"/$x; p $x\"$d\"; p \\ $x\n"
         + "A='  abc  def  '; p \"\"$A\"\"; p ''$A; p $A''; e=; p \"\"$e; p x $e; (IFS=' ,'; v=',a'; p \"\"$v); (IFS=; p \"\"$e)");
 
-    [Fact]
+    [SkippableFact]
     public Task DynamicBuiltinAndCommandNames_RunTheDeclaration() => AssertOracle.EqualAsync(
         "x='a b'\nb=builtin; $b declare f=$x; echo \"f[$f]\"\nb=b; ${b}uiltin declare g=$x; echo \"g[$g]\"\n"
         + "z=command; $z readonly c=$x; echo \"c[$c]\"\nz=c; ${z}ommand readonly d=$x; echo \"d[$d]\"\n"
         + "q=builtin; $q echo hi; $q; echo \"st:$?\"\nk=1; declare 'k'; declare \"k\"; echo \"st:$? [$k]\"");
 
     // Text glued to a quoted "${a[@]}" / "$@" goes on the first and last element; each element stays whole.
-    [Fact]
+    [SkippableFact]
     public Task QuotedArrayWithText_DistributesOverTheElements() => AssertOracle.EqualAsync(
         "a=(x 'foo=F' 'b c'); printf '<%s>' -\"${a[@]}\"; echo; printf '<%s>' \"p${a[@]}q\"; echo\n"
         + "set -- u 'v w'; printf '<%s>' \"<$@>\"; echo; printf '<%s>' k\"$@\"; echo\n"
@@ -39,7 +39,7 @@ public class AffixWordSplitTests
         + "for w in -\"${a[@]}\"; do printf '<%s>' \"$w\"; done; echo; for w in 1 \"z${a[@]}\" 2; do printf '<%s>' \"$w\"; done; echo\n"
         + "c=('a b' '*' '$(echo pwn)'); printf '<%s>' \"-I${c[@]}\"; echo");
 
-    [Fact]
+    [SkippableFact]
     public Task DeclarationNamedAtRunTimeOrFedAnArray_Declares() => AssertOracle.EqualAsync(
         "myvar=typeset; x='a b'; $myvar y=$x; echo \"y[$y]\"\n"
         + "a=(x 'foo=F' 'bar=B'); typeset -\"${a[@]}\"; echo \"foo=$foo bar=$bar\"; printenv foo\n"

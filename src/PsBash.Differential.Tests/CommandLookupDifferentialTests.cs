@@ -16,7 +16,7 @@ namespace PsBash.Differential.Tests;
 /// </summary>
 public class CommandLookupDifferentialTests
 {
-    [Theory]
+    [SkippableTheory]
     [InlineData("myfunc() { echo x; }\ncommand -v true eval echo myfunc for ZZZ; echo \"s=$?\"\ncommand -v ''; echo \"empty=$?\"\ncommand -v ZZZ; echo \"miss=$?\"")]
     [InlineData("shopt -s expand_aliases\nalias ll='ls -l'\nalias q=\"it's\"\ncommand -v ll q\ncommand -V ll")]
     [InlineData("myfunc() { echo x; }\ncommand -V true; command -V myfunc; command -V for\ncommand -V nonexistent 2>/dev/null; echo \"s=$?\"\ncommand -V nonexistent 2>&1 | grep -o 'nonexistent: not found'")]
@@ -29,7 +29,7 @@ public class CommandLookupDifferentialTests
     /// <c>builtin</c> and <c>command</c> are not special builtins: a function of that name wins (both ran the builtin).
     /// Before the definition and after <c>unset -f</c> they are the builtins again.
     /// </summary>
-    [Fact]
+    [SkippableFact]
     public Task BuiltinAndCommand_CanBeRedefinedAsFunctions() => AssertOracle.EqualAsync(
         "builtin echo b; command echo c\n"
         + "builtin() { echo builtin-redef \"$@\"; }\ncommand() { echo command-redef \"$@\"; }\n"

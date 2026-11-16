@@ -10,7 +10,7 @@ namespace PsBash.Differential.Tests;
 /// </summary>
 public class DeclarationWrapperSplitTests
 {
-    [Fact]
+    [SkippableFact]
     public Task WrappedDeclarationOperands_AreOrdinaryWords() => AssertOracle.EqualAsync(
         "x='a b'\nbuiltin export z=$x; echo \"[$z]\"\ncommand export c=$x; echo \"[$c]\"\n"
         + "builtin declare d=$x e=1; echo \"[$d] [$e]\"\nbuiltin declare g=\"$x\"; echo \"[$g]\"\n"
@@ -18,7 +18,7 @@ public class DeclarationWrapperSplitTests
         + "f() { builtin local s=$x; echo \"[$s]\"; command local t=\"$x\"; echo \"[$t]\"; }; f\n"
         + "builtin declare h=*.zzz; echo \"[$h]\"; n='a;echo pwn'; builtin declare k=$n 2>/dev/null; echo \"[$k]\"");
 
-    [Fact]
+    [SkippableFact]
     public Task DeclarationOfRuntimeWords_DeclaresEachField() => AssertOracle.EqualAsync(
         "y='p=1 q=2'; declare $y; echo \"d [$p] [$q]\"\ny='p2=1 q2=2'; export $y; echo \"e [$p2] [$q2]\"; printenv q2\n"
         + "y='p4=1 q4=2'; typeset $y; echo \"t [$p4] [$q4]\"\ny='u=1'; declare -x w $y; echo \"[$u]\"; printenv u\n"
@@ -26,7 +26,7 @@ public class DeclarationWrapperSplitTests
 
     // `declare k=ab pwn`: a name holding the letter n was taken for a flag, so `pwn` overwrote the declaration and k
     // stayed empty. Declaring a read-only name fails (status 1, value kept) and, unlike `r=2`, the line goes on.
-    [Fact]
+    [SkippableFact]
     public Task DeclareNameWithN_AndReadonlyName() => AssertOracle.EqualAsync(
         "declare k=ab pwn; echo \"k [$k] st:$?\"; typeset nn=5 zz; echo \"nn [$nn]\"\n"
         + "readonly r=r1\ntypeset +r r=r2 2>/dev/null; echo \"t st:$? [$r]\"\n"
@@ -35,7 +35,7 @@ public class DeclarationWrapperSplitTests
     // assign-extended "declare -p var": brace-expanded names reached `export`/`local` as a command ("not found") and
     // `readonly -p` dropped them. `readonly -p NAMES` / `export -p NAMES` set the attribute and print nothing;
     // `local -p NAMES` prints only the function's locals and reports the rest as not found, status 1.
-    [Fact]
+    [SkippableFact]
     public Task PrintFlagWithBraceNames_SetsAttributes_LocalListsOnlyLocals() => AssertOracle.EqualAsync(
         "tv1=111; readonly tv2=222; export tv3=333\n"
         + "f1() { local tv5=555; echo '[readonly]'; readonly -p tv{0..5}; echo \"st:$?\"; echo '[export]'; export -p tv{0..5};"

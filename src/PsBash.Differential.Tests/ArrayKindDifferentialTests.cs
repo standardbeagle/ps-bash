@@ -18,7 +18,7 @@ namespace PsBash.Differential.Tests;
 /// </summary>
 public class ArrayKindDifferentialTests
 {
-    [Theory]
+    [SkippableTheory]
     [InlineData("s1=hello; s2=world\ns1=(1 2 3 4); declare -p s1\ns2+=(1 2 3 4); declare -p s2\nt=world; declare -A t+=([a]=x [b]=y); declare -p t\nf() { local q=lv; q+=(z); declare -p q; }; f\nu=one; eval 'u+=(two)'; declare -p u\nw+=(fresh); declare -p w")]
     [InlineData("a=([k1]=v1 [k2]=v2)\necho ${a[\"k1\"]} ${a[\"k2\"]} ${#a[@]}\nn=3; b=([n]=x [n+1]=y [0]=z); declare -p b\nf=([2]=two [k]=kk); declare -p f\ni=0; c=([i++]=p [i++]=q); declare -p c; echo \"i=$i\"\ne=([x]=only); declare -p e")]
     [InlineData("cd \"$(mktemp -d)\"\nprintf 'declare -A M\\n' > decl.sh\nsource ./decl.sh\nM=([k]=v [j]=w); declare -p M\ndeclare -A N; N=([n]=x); declare -p N")]
@@ -29,7 +29,7 @@ public class ArrayKindDifferentialTests
 
     // `declare -A f; declare -p f` is `declare -A f`: declared, no value. It printed `=()`, which bash keeps for a table
     // that was assigned (`=()`) or written and emptied.
-    [Fact]
+    [SkippableFact]
     public Task DeclaredAssocWithNoValue_PrintsNoParens() => AssertOracle.EqualAsync(
         "declare -A f; declare -p f\ndeclare -A g; g=(); declare -p g\ndeclare -A d; d[k]=1; unset 'd[k]'; declare -p d\n"
         + "declare -A e=(); declare -p e\ndeclare -A h; declare -A h; declare -p h\nx=1; declare -A x; declare -p x\n"

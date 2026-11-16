@@ -13,7 +13,7 @@ public class CdPathDifferentialTests
     private const string Setup =
         "b=\"$(mktemp -d)\"; mkdir -p \"$b/a/foo\" \"$b/b/foo\" \"$b/foo\"; touch \"$b/a/foo/A\" \"$b/b/foo/B\" \"$b/foo/C\"\n";
 
-    [Theory]
+    [SkippableTheory]
     // `.` entry first: ./foo wins, and is echoed.
     [InlineData("cd \"$b\"; CDPATH=\".:$b/a\"; [ -n \"$(cd foo)\" ] && echo printed; cd \"$b\"; cd foo >/dev/null; echo \"st=$? $(ls)\"")]
     // Empty entry first: ./foo wins, nothing echoed.

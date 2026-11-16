@@ -11,7 +11,7 @@ namespace PsBash.Differential.Tests;
 /// </summary>
 public class DevStreamRedirectDifferentialTests
 {
-    [Theory]
+    [SkippableTheory]
     [InlineData("{ echo a >/dev/stdout; echo b >/dev/stderr; echo c 1>/dev/fd/2; echo st=$?; } 2>/dev/null | cat")]
     [InlineData("{ ls /nonexist-zz 2>/dev/stdout | sed 's/^/OUT:/'; ls /nonexist-zz 2>/dev/stderr | sed 's/^/OUT:/'; } 2>/dev/null")]
     [InlineData("{ { echo e; ls /nonexist-zz; } &>/dev/stdout | sed 's/^/ALL:/'; x=$(echo cap >/dev/stderr); echo \"x=[$x]\"; } 2>/dev/null")]

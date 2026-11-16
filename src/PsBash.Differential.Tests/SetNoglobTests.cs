@@ -9,9 +9,9 @@ public class SetNoglobTests
     private const string Setup = "d=$(mktemp -d); cd $d; touch a.txt b.txt; ";
     private const string Teardown = "; cd /; rm -rf $d";
 
-    [Fact] public Task SetF_KeepsPatternLiteral() => AssertOracle.EqualAsync(Setup + "set -f; echo *.txt" + Teardown);
-    [Fact] public Task SetPlusF_RestoresGlobbing() => AssertOracle.EqualAsync(Setup + "set -f; set +f; echo *.txt" + Teardown);
-    [Fact] public Task LongOption_Noglob() => AssertOracle.EqualAsync(Setup + "set -o noglob; echo *.txt; set +o noglob; echo *.txt" + Teardown);
-    [Fact] public Task ExpansionResult_IsNotGlobbed() => AssertOracle.EqualAsync(Setup + "set -f; x='*.txt'; echo $x; for f in *.txt; do echo \"f=$f\"; done" + Teardown);
-    [Fact] public Task Subshell_DoesNotLeak() => AssertOracle.EqualAsync(Setup + "( set -f; echo *.txt ); echo *.txt" + Teardown);
+    [SkippableFact] public Task SetF_KeepsPatternLiteral() => AssertOracle.EqualAsync(Setup + "set -f; echo *.txt" + Teardown);
+    [SkippableFact] public Task SetPlusF_RestoresGlobbing() => AssertOracle.EqualAsync(Setup + "set -f; set +f; echo *.txt" + Teardown);
+    [SkippableFact] public Task LongOption_Noglob() => AssertOracle.EqualAsync(Setup + "set -o noglob; echo *.txt; set +o noglob; echo *.txt" + Teardown);
+    [SkippableFact] public Task ExpansionResult_IsNotGlobbed() => AssertOracle.EqualAsync(Setup + "set -f; x='*.txt'; echo $x; for f in *.txt; do echo \"f=$f\"; done" + Teardown);
+    [SkippableFact] public Task Subshell_DoesNotLeak() => AssertOracle.EqualAsync(Setup + "( set -f; echo *.txt ); echo *.txt" + Teardown);
 }

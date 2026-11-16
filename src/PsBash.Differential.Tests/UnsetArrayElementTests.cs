@@ -9,7 +9,7 @@ namespace PsBash.Differential.Tests;
 /// </summary>
 public class UnsetArrayElementTests
 {
-    [Fact]
+    [SkippableFact]
     public Task UnsetArray_ElementReads_AreEmpty() => AssertOracle.EqualAsync(
         "echo \"[${u[1]}]\" \"[${u[i]}]\" \"[${u[$k]}]\" \"[${u[1]:-d}]\" \"[${u[i]-e}]\"\n"
         + "x=${zz[3]}; echo \"[$x]\"\n"

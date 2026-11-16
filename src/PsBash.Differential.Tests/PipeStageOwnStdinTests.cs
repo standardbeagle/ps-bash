@@ -9,7 +9,7 @@ namespace PsBash.Differential.Tests;
 /// </summary>
 public class PipeStageOwnStdinTests
 {
-    [Theory]
+    [SkippableTheory]
     [InlineData("echo hi | cat <<< here")]
     [InlineData("echo hi | FOO=1 cat <<< envhere")]
     [InlineData("seq 3 | cat <<< a | tr a b")]
@@ -23,19 +23,19 @@ public class PipeStageOwnStdinTests
     public Task StageRedirect_ReplacesThePipe(string script) => AssertOracle.EqualAsync(script);
 
     // A `;` inside a quoted operand wrapped the stage in `& { }` once the script read PIPESTATUS, and the stage lost the pipe.
-    [Theory]
+    [SkippableTheory]
     [InlineData("echo hi | bash -c 'cat; exit 33' | wc -l; echo \"ps=${PIPESTATUS[*]}\"")]
     [InlineData("printf 'a; b\\nc\\n' | grep 'a; b' | cat; echo \"ps=${PIPESTATUS[*]}\"")]
     public Task StageWithSemicolonInQuotedOperand_ReadsThePipe(string script) => AssertOracle.EqualAsync(script);
 
     // A here-document on a command-less assignment has no reader: the assignment still happens.
-    [Theory]
+    [SkippableTheory]
     [InlineData("foo=`echo v`<<EOM\nhello world\nEOM\necho \"[$foo]\"")]
     [InlineData("foo=bar <<EOM\nbody\nEOM\necho \"[$foo]\"")]
     public Task HereDocOnBareAssignment_IsDropped(string script) => AssertOracle.EqualAsync(script);
 
     // A PowerShell keyword, or a bash reserved word after an environment prefix, is an ordinary command name.
-    [Theory]
+    [SkippableTheory]
     [InlineData("{ var x = 1; } 2>/dev/null; echo st=$?")]
     [InlineData("{ try x; } 2>/dev/null; echo st=$?")]
     [InlineData("{ class x; } 2>/dev/null; echo st=$?")]
@@ -48,7 +48,7 @@ public class PipeStageOwnStdinTests
     public Task KeywordCommandName_IsLookedUp(string script) => AssertOracle.EqualAsync(script);
 
     // An arithmetic subscript may hold shell metacharacters.
-    [Theory]
+    [SkippableTheory]
     [InlineData("a[3|4]=8; a[(1+2)*3]=9; a[2#11 + 2]=5; a[1 + 2]=7; typeset -p a")]
     [InlineData("a[1]=x; eval 'a[5&3]=hello'; echo \"status=$?, a[1]=${a[1]}\"")]
     [InlineData("a[6>>1]=s; a[1<2]=t; typeset -p a")]
@@ -57,7 +57,7 @@ public class PipeStageOwnStdinTests
 
     // A run-time command name (`$GREP`, `$SED`, `$SH`) takes its flags as arguments whatever it resolves to: a bare `-e`
     // reached a cmdlet as an ambiguous PowerShell parameter prefix.
-    [Theory]
+    [SkippableTheory]
     [InlineData("SH=bash; $SH -e -c 'echo ok0'")]
     [InlineData("GREP=grep; printf 'a\\nb\\n' > t.txt; $GREP -e a t.txt; $GREP -c -v a t.txt; \"$GREP\" -n -i B t.txt")]
     [InlineData("SED=sed; printf 'a\\nb\\n' > t.txt; $SED -n -e 2p t.txt; echo x | $SED -e s/x/y/")]

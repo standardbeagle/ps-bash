@@ -96,7 +96,7 @@ public class InvokeBashKillCommandTests : IClassFixture<SharedPwshFixture>
         Assert.Equal(new[] { "after" }, lines);
     }
 
-    [Fact]
+    [SkippableFact]
     public void Kill_RealProcess_ActuallyTerminatesIt()
     {
         using var proc = StartLongLivedProcess();
@@ -110,7 +110,7 @@ public class InvokeBashKillCommandTests : IClassFixture<SharedPwshFixture>
             "Invoke-BashKill <pid> must terminate the process (regression: $PID loop-var crash)");
     }
 
-    [Fact]
+    [SkippableFact]
     public void Kill_NamedSignalKILL_TerminatesProcess()
     {
         using var proc = StartLongLivedProcess();
@@ -124,7 +124,7 @@ public class InvokeBashKillCommandTests : IClassFixture<SharedPwshFixture>
         Assert.True(proc.WaitForExit(10_000), "kill -KILL <pid> must terminate the process");
     }
 
-    [Fact]
+    [SkippableFact]
     public void Kill_NumericSignal9_TerminatesProcess()
     {
         using var proc = StartLongLivedProcess();
@@ -136,7 +136,7 @@ public class InvokeBashKillCommandTests : IClassFixture<SharedPwshFixture>
         Assert.True(proc.WaitForExit(10_000), "kill -9 <pid> must terminate the process");
     }
 
-    [Fact]
+    [SkippableFact]
     public void Kill_Signal0_DoesNotTerminate_ExistenceProbeOnly()
     {
         using var proc = StartLongLivedProcess();
@@ -151,7 +151,7 @@ public class InvokeBashKillCommandTests : IClassFixture<SharedPwshFixture>
         proc.Kill(); // cleanup
     }
 
-    [Theory]
+    [SkippableTheory]
     [InlineData("-URG")]
     [InlineData("-WINCH")]
     [InlineData("-s CHLD")]

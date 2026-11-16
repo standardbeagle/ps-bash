@@ -403,18 +403,57 @@ public class FindPredicateTests : IClassFixture<SharedPwshFixture>, IDisposable
     [Fact]
     public void Printf_Sizes_Blocks_Sparseness_Links()
     {
-        Assert.Equal(new[] { "2|4|8|1|2048" }, Find("a.txt '-printf' '%s|%k|%b|%n|%S\\n'").AssertSuccess().Lines);
+        Assert.Equal(new[] { FsFact("a.txt", "%s|%k|%b|%n|%S", windows: "2|4|8|1|2048") ?? "2|4|8|1|2048" },
+            Find("a.txt '-printf' '%s|%k|%b|%n|%S\\n'").AssertSuccess().Lines);
         var dirLine = Find("sub '-maxdepth' 0 '-printf' '%s|%k|%b|%S\\n'").AssertSuccess().Lines.Single();
-        if (OperatingSystem.IsMacOS())
-            Assert.Matches(@"^\d+\|0\|0\|0$", dirLine);   // APFS: a directory occupies no allocation blocks
+        if (FsFact("sub", "%s|%k|%b|%S", windows: "4096|4|8|1") is { } expected)
+            Assert.Equal(expected, dirLine);
         else
-            Assert.Equal("4096|4|8|1", dirLine);           // ext4 / synthesised 4 KiB on Windows
+            Assert.Matches(@"^\d+\|0\|0\|0$", dirLine);   // macOS without gfind: APFS directories occupy no blocks
+    }
+
+    /// <summary>
+    /// The expected <c>-printf <paramref name="format"/></c> output for <paramref name="path"/> when it is a
+    /// FILESYSTEM fact (directory size, block counts, sparseness): ext4 says a directory is 4096 bytes in 8
+    /// blocks, APFS and some overlay/tmpfs mounts say 0 blocks, so a test must not hard-code it off Windows.
+    /// Windows: <paramref name="windows"/> (ps-bash synthesises 4 KiB directories). Elsewhere: the host's own
+    /// GNU find (<c>find</c>, else <c>gfind</c>) on the same path. Null when the host has no GNU findutils
+    /// (stock macOS) — the caller falls back to a looser match.
+    /// </summary>
+    private string? FsFact(string path, string format, string windows)
+    {
+        if (OperatingSystem.IsWindows()) return windows;
+        foreach (var exe in new[] { "find", "gfind" })
+        {
+            var version = RunHost(exe, "--version");
+            if (version is not null && version.Contains("GNU findutils", StringComparison.Ordinal))
+                return RunHost(exe, path, "-maxdepth", "0", "-printf", format)?.TrimEnd('\n');
+        }
+        return null;
+    }
+
+    /// <summary>The fixture file a.txt's 1K-block count (<c>%k</c>): 4 on Windows/ext4/APFS, read from the host otherwise.</summary>
+    private string FileBlocksK() => FsFact("a.txt", "%k", windows: "4") ?? "4";
+
+    private string? RunHost(string exe, params string[] args)
+    {
+        var psi = new ProcessStartInfo(exe) { WorkingDirectory = _dir, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
+        foreach (var a in args) psi.ArgumentList.Add(a);
+        try
+        {
+            using var p = Process.Start(psi)!;
+            var stdout = p.StandardOutput.ReadToEndAsync();
+            _ = p.StandardError.ReadToEndAsync();
+            if (!p.WaitForExit(30_000)) { p.Kill(entireProcessTree: true); return null; }
+            return p.ExitCode == 0 ? stdout.Result : null;
+        }
+        catch (System.ComponentModel.Win32Exception) { return null; }   // not installed
     }
 
     [Fact]
     public void Printf_WidthsFlagsPrecision_FollowGnu()   // oracle: [%10p][%-10p][%.3p][%10.3f][%5s][%-5s][%05d][%05m][%+d][% d][%#m][%05k]
     {
-        Assert.Equal(new[] { "[     a.txt][a.txt     ][a.t][       a.t][    2][2    ][00000][00644][+0][ 0][0644][    4]" },
+        Assert.Equal(new[] { $"[     a.txt][a.txt     ][a.t][       a.t][    2][2    ][00000][00644][+0][ 0][0644][{FileBlocksK(),5}]" },
             Find("a.txt '-printf' '[%10p][%-10p][%.3p][%10.3f][%5s][%-5s][%05d][%05m][%+d][% d][%#m][%05k]\\n'").AssertSuccess().Lines);
         Assert.Equal(new[] { "[   a.]" }, Find("a.txt '-printf' '[%5.2p]\\n'").AssertSuccess().Lines);
     }
@@ -471,12 +510,13 @@ public class FindPredicateTests : IClassFixture<SharedPwshFixture>, IDisposable
     {
         File.SetLastWriteTime(P("a.txt"), new DateTime(2020, 3, 5, 14, 7, 9, DateTimeKind.Local));
         var line = Find("a.txt '-ls'").AssertSuccess().Lines.Single();
-        Assert.Matches(@"^\s*\d+ +4 -rw-r--r-- +\d+ \S+ +\S+ +2 Mar  5  2020 a\.txt$", line);
+        Assert.Matches($@"^\s*\d+ +{FileBlocksK()} -rw-r--r-- +\d+ \S+ +\S+ +2 Mar  5  2020 a\.txt$", line);
         Directory.SetLastWriteTime(P("sub"), DateTime.Now.AddDays(-1));
         var dir = Find("sub '-maxdepth' 0 '-ls'").AssertSuccess().Lines.Single();
-        Assert.Matches(OperatingSystem.IsMacOS()   // APFS directories: 0 blocks and a size that is not 4096
-            ? @"^\s*\d+ +0 drwxr-xr-x +\d+ \S+ +\S+ +\d+ [A-Z][a-z]{2} [ 0-3]\d \d\d:\d\d sub$"
-            : @"^\s*\d+ +4 drwxr-xr-x +\d+ \S+ +\S+ +4096 [A-Z][a-z]{2} [ 0-3]\d \d\d:\d\d sub$", dir);
+        // The directory's 1K-block count and size are filesystem facts (see FsFact); a macOS host
+        // without GNU find accepts any value.
+        var facts = FsFact("sub", "%k %s", windows: "4 4096")?.Split(' ') ?? [@"\d+", @"\d+"];
+        Assert.Matches($@"^\s*\d+ +{facts[0]} drwxr-xr-x +\d+ \S+ +\S+ +{facts[1]} [A-Z][a-z]{{2}} [ 0-3]\d \d\d:\d\d sub$", dir);
     }
 
     [Fact]
@@ -497,7 +537,7 @@ public class FindPredicateTests : IClassFixture<SharedPwshFixture>, IDisposable
         Assert.EndsWith("\0", nul);
         Assert.Equal(new[] { "./a.txt", "./sub/b.txt" }, nul.Split('\0', StringSplitOptions.RemoveEmptyEntries).OrderBy(x => x, StringComparer.Ordinal).ToArray());
         Find($". '-name' a.txt '-fls' {Q(o)}").AssertSuccess();
-        Assert.Matches(@"^\s*\d+ +4 -rw-r--r-- .* \./a\.txt\r?\n$", File.ReadAllText(o));
+        Assert.Matches($@"^\s*\d+ +{FileBlocksK()} -rw-r--r-- .* \./a\.txt\r?\n$", File.ReadAllText(o));
         var withPrint = Find($". '-name' a.txt '-fprint' {Q(o)} '-print'").AssertSuccess();
         Assert.Equal(new[] { "./a.txt" }, withPrint.Lines);
         Assert.Equal("./a.txt\n", File.ReadAllText(o).Replace("\r\n", "\n"));

@@ -16,7 +16,7 @@ public class CommandHashDifferentialTests
         "mkdir -p hb && printf '#!/bin/sh\\necho hi\\n' > hb/hashtool && chmod +x hb/hashtool\n"
         + "PATH=\"$PWD/hb:$PATH\"\n";
 
-    [Fact]
+    [SkippableFact]
     public Task Hash_RemembersPathLookupsWithHits() => AssertOracle.EqualAsync(Setup
         // Asking what an unhashed name is (type -P, command -v) adds nothing; hash -t and eval'd runs are hits.
         + "hash\ntype -P hashtool >/dev/null; command -v hashtool >/dev/null; hash\n"
@@ -31,7 +31,7 @@ public class CommandHashDifferentialTests
         // hashtool is a #!/bin/sh script, run three times: on Windows each run starts an sh.
         timeout: TimeSpan.FromSeconds(60));
 
-    [Fact]
+    [SkippableFact]
     public Task Hash_BuiltinsFunctionsAndMisses() => AssertOracle.EqualAsync(
         "hash -r\nhash cd; echo \"cd=$?\"; myfn() { :; }; hash myfn; echo \"fn=$?\"; hash\n"
         + "hash nosuch_cmd_x 2>/dev/null; echo \"miss=$?\"\n"

@@ -12,7 +12,7 @@ namespace PsBash.Differential.Tests;
 /// </summary>
 public class RunTimeCommandNameTests
 {
-    [Theory]
+    [SkippableTheory]
     [InlineData("x=\n$x; echo st1=$?\n$x echo hi; echo st2=$?\nfalse; $x; echo st3=$?")]
     [InlineData("x=\n$x <<EOT\nbody\nEOT\necho st=$?\n$x < /dev/null; echo st=$?\n$x > /dev/null; echo st=$?")]
     [InlineData("x=\n\"$x\" echo hi 2>/dev/null; echo st=$?")]
@@ -24,7 +24,7 @@ public class RunTimeCommandNameTests
     [InlineData("x='echo $(echo no);x'; $x\nx='echo `echo no`'; $x\nx='echo \"q\" {a,b}'; $x")]
     public Task UnquotedName_IsSplitAtRunTime(string script) => AssertOracle.EqualAsync(script);
 
-    [Theory]
+    [SkippableTheory]
     [InlineData("printf 'a\\nb\\n' | { p=printf; $p 'X\\n'; t=test; $t -n \"\"; echo st=$?; c=cat; $c; }")]
     [InlineData("echo q | { p=printf; $p 'Y\\n'; \"$p\" 'Z\\n'; g=\"grep -c\"; $g q; }")]
     [InlineData("echo r | { e=; $e cat; }\necho s | { e=; $e printf 'P\\n'; cat; }")]

@@ -203,7 +203,9 @@ internal sealed class FindStat
             // octal, %l links, %Su/%Sg names, %c ctime epoch, %b in fixed 512-byte blocks (so %B becomes 512).
             bool bsd = OperatingSystem.IsMacOS();
             psi.ArgumentList.Add(bsd ? "-f" : "-c");
-            psi.ArgumentList.Add(bsd ? "%p|%u|%g|%Su|%Sg|%i|%l|%b|512|%c|%d" : "%f|%u|%g|%U|%G|%i|%h|%b|%B|%Z|%d");
+            // The last field is st_size: a directory's size is a filesystem fact (ext4 4096, tmpfs/btrfs/APFS
+            // something else), so the synthesised 4096 from Read() is only the Windows answer.
+            psi.ArgumentList.Add(bsd ? "%p|%u|%g|%Su|%Sg|%i|%l|%b|512|%c|%d|%z" : "%f|%u|%g|%U|%G|%i|%h|%b|%B|%Z|%d|%s");
             if (following) psi.ArgumentList.Add("-L");
             psi.ArgumentList.Add("--");
             psi.ArgumentList.Add(eff.FullName);
@@ -227,6 +229,8 @@ internal sealed class FindStat
                 s.BlocksK = blocks * bsz / 1024;
                 s.Ctime = DateTimeOffset.FromUnixTimeSeconds(long.Parse(f[9], CultureInfo.InvariantCulture)).LocalDateTime;
                 s.Device = ulong.Parse(f[10], CultureInfo.InvariantCulture);
+                if (f.Length >= 12 && long.TryParse(f[11], NumberStyles.None, CultureInfo.InvariantCulture, out var size))
+                    s.Size = size;
             }
         }
         catch { /* leave the .NET-derived defaults */ }

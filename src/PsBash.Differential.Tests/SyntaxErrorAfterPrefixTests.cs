@@ -9,19 +9,19 @@ namespace PsBash.Differential.Tests;
 /// </summary>
 public class SyntaxErrorAfterPrefixTests
 {
-    [Fact]
+    [SkippableFact]
     public Task CommandsAboveASyntaxError_RunFirst() => AssertOracle.EqualAsync(
         "bash -c $'echo one\\nx=5; echo x=$x\\n}\\necho never' 2>/dev/null; echo st=$?");
 
-    [Fact]
+    [SkippableFact]
     public Task ExitTrap_RunsAfterTheSyntaxError() => AssertOracle.EqualAsync(
         "bash -c $'trap \"echo bye\" EXIT\\necho one\\nfor i in 1 2\\necho never' 2>/dev/null; echo st=$?");
 
-    [Fact]
+    [SkippableFact]
     public Task TheWholeFailingLine_IsNotRun() => AssertOracle.EqualAsync(
         "bash -c $'echo one\\necho two; }\\necho never' 2>/dev/null; echo st=$?");
 
-    [Fact]
+    [SkippableFact]
     public Task AnEarlierExit_HidesTheSyntaxError() => AssertOracle.EqualAsync(
         "bash -c $'echo one\\nexit 7\\n}\\n' 2>/dev/null; echo st=$?");
 }

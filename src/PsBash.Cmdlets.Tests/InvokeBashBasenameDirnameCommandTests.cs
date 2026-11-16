@@ -156,9 +156,11 @@ public class InvokeBashBasenameDirnameCommandTests : IClassFixture<SharedPwshFix
     [Fact]
     public void Dirname_BackslashPathNormalized()
     {
-        // psm1 oracle normalizes backslash -> slash before splitting.
+        // `\` is a separator only on Windows (BashPath.ToShell, docs/specs/paths.md): there the result is
+        // C:/Users/me. Elsewhere it is a filename character, so the operand has no slash and bash prints `.`
+        // (oracle: wsl bash -c 'dirname "C:\Users\me\file.txt"' -> .).
         var lines = RunLines(@"Invoke-BashDirname 'C:\Users\me\file.txt'");
-        Assert.Equal(new[] { "C:/Users/me" }, lines);
+        Assert.Equal(new[] { OperatingSystem.IsWindows() ? "C:/Users/me" : "." }, lines);
     }
 
     [Fact]

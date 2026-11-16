@@ -28,7 +28,7 @@ public class TransportTests : IDisposable
         return buf;
     }
 
-    [Fact]
+    [SkippableFact]
     public async Task UnixSocket_RoundTrips_1KB()
     {
         Skip.If(RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && Environment.OSVersion.Version.Build < 17063,

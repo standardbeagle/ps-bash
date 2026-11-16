@@ -7,7 +7,7 @@ namespace PsBash.Differential.Tests;
 /// was lost (the array was copied before the subscript ran).</summary>
 public class AssigningSubscriptTests
 {
-    [Fact]
+    [SkippableFact]
     public Task AssigningSubscript_KeepsItsWrite() => AssertOracle.EqualAsync(
         "a[a[0]=1]=X\ndeclare -p a\na[ a[2]=3 ]=Y\ndeclare -p a\na[ a[0]+=1 ]+=X\ndeclare -p a\n"
         + "i=0; b[i++]=p; b[i++]=q && echo i=$i; declare -p b\n"

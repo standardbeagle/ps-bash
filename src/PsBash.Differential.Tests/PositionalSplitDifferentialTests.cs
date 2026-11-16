@@ -11,7 +11,7 @@ namespace PsBash.Differential.Tests;
 /// </summary>
 public class PositionalSplitDifferentialTests
 {
-    [Theory]
+    [SkippableTheory]
     [InlineData("f() {\n  for w in $1; do echo \"[$w]\"; done\n  for w in $1 $2; do echo \"<$w>\"; done\n  printf '{%s}' $1; echo\n  a=($1); echo \"n=${#a[@]}\"\n  for w in ${11}; do echo \"($w)\"; done\n  printf '{%s}' $3; echo \"|\"\n  printf '{%s}' \"$1\"; echo\n  local $1; echo \"x=$x y=$y\"\n  echo $1\n  return $4\n}\nf 'x=1 y=2' 'c d' '' 7 5 6 7 8 9 10 'k l'\necho \"rc=$?\"")]
     [InlineData("set -- 'a b' 'g*'\ncd \"$(mktemp -d)\" && touch g1 g2\nprintf '[%s]' $1 $2; echo\nprintf '[%s]' \"$@\"; echo")]
     [InlineData("set -- 'a;echo pwned' '$(echo pwned2)' '`echo pwned3`'\nprintf '[%s]' $1 $2 $3; echo\nfor w in $1; do echo \"<$w>\"; done")]

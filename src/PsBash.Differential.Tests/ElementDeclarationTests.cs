@@ -7,7 +7,7 @@ namespace PsBash.Differential.Tests;
 /// element. The word was globbed and handed to declare, which reported "b[2]=y: not found".</summary>
 public class ElementDeclarationTests
 {
-    [Fact]
+    [SkippableFact]
     public Task DeclareElementInitializers() => AssertOracle.EqualAsync(
         "declare b[2]=y; declare -p b\ndeclare a[a[0]=1]=X; declare -p a\n"
         + "declare a[ a[2]=3 ]=Y 2>/dev/null; echo \"st:$?\"; declare -p a\n"

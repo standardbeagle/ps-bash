@@ -11,7 +11,7 @@ public class PrintfCharDifferentialTests
     /// for an empty or missing argument where bash writes NUL, and ignored the width. The output goes through
     /// <c>od</c> so the bytes are compared, not the terminal's rendering of them.
     /// </summary>
-    [Theory]
+    [SkippableTheory]
     [InlineData("printf '[%c]' μ | od -An -tx1")]
     [InlineData("printf '[%2c][%-3c]' μ é | od -An -tx1")]
     [InlineData("printf '%c|' 65 '' x | od -An -c")]
@@ -27,7 +27,7 @@ public class PrintfCharDifferentialTests
     /// carry a <c>bash: line N:</c> prefix ps-bash does not write (a known gap), so the rows drop stderr and the last
     /// compares the message from <c>printf:</c> on.
     /// </summary>
-    [Theory]
+    [SkippableTheory]
     [InlineData("for v in 18446744073709551615 18446744073709551616 -18446744073709551615 -18446744073709551616 -1; do printf '%u\\n' $v; echo \"s=$?\"; done 2>/dev/null")]
     [InlineData("for v in 9223372036854775808 18446744073709551616 -9223372036854775809 -9223372036854775808; do printf '%d\\n' $v; echo \"s=$?\"; done 2>/dev/null")]
     [InlineData("{ printf '%x %X %o\\n' 18446744073709551615 -1 -1; echo \"s=$?\"; printf '%x\\n' 18446744073709551616; echo \"s=$?\"; } 2>/dev/null")]
@@ -37,7 +37,7 @@ public class PrintfCharDifferentialTests
     public Task Integer_OutOfRangeClampsWithAWarning(string script) => AssertOracle.EqualAsync(script);
 
     /// <summary><c>%(fmt)T</c> ignored its width and precision; the date text is formatted as a %s.</summary>
-    [Fact]
+    [SkippableFact]
     public Task Time_HonoursWidthAndPrecision() =>
         AssertOracle.EqualAsync("printf '[%10.5(%Y-%m-%d)T][%-12(%Y)T][%.2(%Y)T]\\n' 302400 302400 302400");
 }

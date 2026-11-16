@@ -236,7 +236,7 @@ public class OracleTests
         return captured!;
     }
 
-    [Fact]
+    [SkippableFact]
     public async Task RunOneAsync_PsBashLauncher_DefaultsPerInvocation()
     {
         var psBashPath = PsBashLocator.Resolve();
@@ -249,7 +249,7 @@ public class OracleTests
         Assert.Equal("1", env.TryGetValue("PSBASH_PER_INVOCATION", out var v) ? v : null);
     }
 
-    [Fact]
+    [SkippableFact]
     public async Task RunOneAsync_PsBashLauncher_CallerCanOverridePerInvocation()
     {
         var psBashPath = PsBashLocator.Resolve();
@@ -285,7 +285,7 @@ public class OracleTests
     // PSBASH_PER_INVOCATION=0 and a per-fixture endpoint so the first spawn warms
     // the daemon and every later spawn reuses it. This guard asserts the fixture's
     // spawn env keeps the warm-host choice; before the fix it spawned with =1.
-    [Fact]
+    [SkippableFact]
     public async Task RunPsBashAsync_PsBashLauncher_UsesWarmSharedHost()
     {
         var fixture = new BashOracleFixture();
@@ -314,7 +314,7 @@ public class OracleTests
     // the daemon's frozen env (canonical whitelist) can never be warmed by a
     // non-canonical EqualAsync spawn and leak the runner's $USER into a golden.
     // Pre-fix this observed PSBASH_PER_INVOCATION="1" and no endpoint.
-    [Fact]
+    [SkippableFact]
     public async Task GoldenAsync_PsBashSpawn_UsesCanonicalWarmHost()
     {
         Skip.If(new BashOracleFixture().PsBashPath is null, "ps-bash binary not built");

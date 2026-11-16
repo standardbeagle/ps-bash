@@ -243,7 +243,7 @@ public class QuotingDifferentialTests
     /// (café -> cafΘ on a non-UTF-8 CI console); fixed by pinning the launcher to
     /// UTF-8 output (ConsoleEncoding.EnsureUtf8Output, Dart z0GXccJmhX2H).
     /// </summary>
-    [Fact]
+    [SkippableFact]
     public async Task Differential_AnsiCQuote_Unicode()
     {
         await AssertOracle.EqualAsync(
@@ -372,7 +372,7 @@ public class QuotingDifferentialTests
     /// confirms the env-prefix does NOT leak. Live oracle diff (was a frozen
     /// GoldenAsync gap before the printenv shape was fixed 2026-06-03).
     /// </summary>
-    [Fact]
+    [SkippableFact]
     public async Task Differential_Printenv_OneNameForm_PrintsValueOnly()
     {
         await AssertOracle.EqualAsync(

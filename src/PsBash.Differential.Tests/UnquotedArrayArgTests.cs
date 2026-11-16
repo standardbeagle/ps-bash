@@ -9,7 +9,7 @@ namespace PsBash.Differential.Tests;
 /// </summary>
 public class UnquotedArrayArgTests
 {
-    [Theory]
+    [SkippableTheory]
     [InlineData("a=(x y z); echo ${a[@]} x")]
     [InlineData("a=(x y z); echo x ${a[*]}")]
     [InlineData("a=(x y z); echo ${a[@]} ${#a[@]} ${!a[@]}")]

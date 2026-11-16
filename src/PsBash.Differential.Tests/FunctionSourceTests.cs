@@ -11,7 +11,7 @@ namespace PsBash.Differential.Tests;
 /// </summary>
 public class FunctionSourceTests
 {
-    [Theory]
+    [SkippableTheory]
     [InlineData("f() ( echo 'subshell body' ); code=$(typeset -f f); bash -c \"$code; f\"")]
     [InlineData("outer() {\n  echo outer\n  : prefix; inner() {\n    echo inner\n  }\n}\ncode=$(typeset -f outer)\nbash -c \"$code; outer; inner\"")]
     [InlineData("g() { echo \"a b\" | while read x y; do echo \"$y-$x\"; done; }; eval \"$(declare -f g | sed 's/^g /h /')\"; h")]
@@ -23,7 +23,7 @@ public class FunctionSourceTests
     public Task DeclareF_TextRunsAgain(string script) => AssertOracle.EqualAsync(script);
 
     // Bodies bash prints exactly as written: one command per line, four-space indent.
-    [Theory]
+    [SkippableTheory]
     [InlineData("f() {\n    echo one\n}\ndeclare -f f")]
     [InlineData("f () \n{ \n    echo one;\n    echo two\n}\ntypeset -f f")]
     [InlineData("f() {\n    echo one\n}\ntype f")]
@@ -33,7 +33,7 @@ public class FunctionSourceTests
     public Task DeclareF_PrintsBashLayout(string script) => AssertOracle.EqualAsync(script);
 
     // A bare $FUNCNAME is the running function (element 0), empty outside one.
-    [Theory]
+    [SkippableTheory]
     [InlineData("f() { echo \"[$FUNCNAME][${FUNCNAME}]\" $FUNCNAME; g; }; g() { local me=$FUNCNAME; echo \"[$me][${FUNCNAME[1]}]\"; }; f")]
     [InlineData("g() { [[ $FUNCNAME == g ]] && echo yes; echo \"${FUNCNAME:-none} ${FUNCNAME:0:1}\"; }; g; echo \"[$FUNCNAME][${FUNCNAME:-none}]\"")]
     [InlineData("log() { echo \"$FUNCNAME: $*\"; }; log a b")]

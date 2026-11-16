@@ -21,6 +21,7 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\PsBash.Host\PsBash.Host.csproj" />
+    <ProjectReference Include="..\PsBash.Testing\PsBash.Testing.csproj" />
   </ItemGroup>
   <ItemGroup>
     <!-- Bring the PS SDK runtime DLLs into the test bin output so SdkWorker

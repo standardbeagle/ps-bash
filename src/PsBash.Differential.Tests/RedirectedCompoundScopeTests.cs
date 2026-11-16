@@ -8,7 +8,7 @@ namespace PsBash.Differential.Tests;
 /// scalars (in <c>$env:</c>) but dropped arrays.</summary>
 public class RedirectedCompoundScopeTests
 {
-    [Fact]
+    [SkippableFact]
     public Task RedirectedCompound_KeepsArrayAssignments() => AssertOracle.EqualAsync(
         "if true; then a[1]=x; fi 2>/dev/null; declare -p a\n{ b[1]=y; b+=(z); } >/dev/null; declare -p b\n"
         + "for i in 1 2; do c[i]=$i; done 2>&1; declare -p c\n"
