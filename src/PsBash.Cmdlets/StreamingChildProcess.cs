@@ -10,10 +10,16 @@ namespace PsBash.Cmdlets;
 /// (<c>bash build.sh | tee log</c>, <c>sh -c make</c>) must show progress and may run for hours. Start it with
 /// <see cref="BashRuntime.StartChildProcessStreaming"/>.
 /// <para>
-/// <b>Threads.</b> Two reader threads move stdout / stderr text into ONE queue in arrival order; everything that
+/// <b>Threads.</b> Reader threads move stdout / stderr text into ONE queue in arrival order; everything that
 /// touches the pipeline (<c>WriteObject</c>, the stderr writer) runs on the cmdlet's pipeline thread in
 /// <see cref="PumpAvailable"/>, <see cref="WriteStdin"/> and <see cref="Complete"/>. <see cref="Kill"/> is the
 /// one member safe from another thread (<c>StopProcessing</c>).
+/// </para>
+/// <para>
+/// <b>Merged stderr.</b> Two pipes have no order between them: lines the child wrote to fd 1 and fd 2 in turn arrive
+/// in whatever order the two reader threads happen to run. When the caller's stderr is merged into its stdout the
+/// child is spawned with ONE pipe for both (<see cref="ChildStdioMode.MergeStderr"/>) and there is one reader: what it
+/// reads is stdout, in the order written.
 /// </para>
 /// <para>
 /// <b>Records.</b> stdout is emitted line by line exactly as <see cref="BashRuntime.EmitBashLines"/> would split the
@@ -26,31 +32,34 @@ public sealed class StreamingChildProcess : IDisposable
     /// <summary>After the child exits, how long its pipes may stay open (a backgrounded grandchild holding them).</summary>
     private static readonly TimeSpan ExitDrainGrace = TimeSpan.FromSeconds(5);
 
+    private readonly SpawnedChild _child;
     private readonly Process _proc;
     private readonly ConcurrentQueue<(bool IsStderr, string Text)> _chunks = new();
     private readonly AutoResetEvent _signal = new(false);
     private readonly ChildOutputAssembler _assembler = new();
     private readonly List<string> _lines = new();
     private Stream? _stdin;
-    private int _openStreams = 2;
+    private int _openStreams;
     private int _killed;
     private bool _completed;
 
-    internal StreamingChildProcess(Process proc, bool keepStdinOpen)
+    internal StreamingChildProcess(SpawnedChild child, bool keepStdinOpen)
     {
-        _proc = proc;
-        if (keepStdinOpen)
-            _stdin = proc.StandardInput.BaseStream;
+        _child = child;
+        _proc = child.Process;
+        if (keepStdinOpen && child.StandardInput is { } stdin)
+            _stdin = stdin.BaseStream;
         else
-            try { proc.StandardInput.Close(); } catch { /* the child may not have opened it */ }
+            try { child.StandardInput?.Close(); } catch { /* the child may not have opened it */ }
         try
         {
-            proc.EnableRaisingEvents = true;
-            proc.Exited += (_, _) => Signal();
+            _proc.EnableRaisingEvents = true;
+            _proc.Exited += (_, _) => Signal();
         }
         catch { /* already gone: the wait loops poll HasExited too */ }
-        StartReader(proc.StandardOutput, isStderr: false);
-        StartReader(proc.StandardError, isStderr: true);
+        _openStreams = child.StandardError is null ? 1 : 2;
+        StartReader(child.StandardOutput, isStderr: false);
+        if (child.StandardError is { } stderr) StartReader(stderr, isStderr: true);
     }
 
     /// <summary>True while the child's stdin is open for <see cref="WriteStdin"/>.</summary>
@@ -85,7 +94,7 @@ public sealed class StreamingChildProcess : IDisposable
     {
         if (Interlocked.Exchange(ref _stdin, null) is null) return;
         // Through the writer that owns the stream, so Process.Dispose does not flush a closed one.
-        try { _proc.StandardInput.Close(); } catch { /* broken pipe on the final flush; the handle still closes */ }
+        try { _child.StandardInput?.Close(); } catch { /* broken pipe on the final flush; the handle still closes */ }
     }
 
     /// <summary>Emit whatever output has arrived, without waiting. Pipeline thread only.</summary>
@@ -134,7 +143,7 @@ public sealed class StreamingChildProcess : IDisposable
     {
         if (!HasExited()) Kill();
         CloseStdin();
-        try { _proc.Dispose(); } catch { }
+        try { _child.Dispose(); } catch { }
         _signal.Dispose();
     }
 

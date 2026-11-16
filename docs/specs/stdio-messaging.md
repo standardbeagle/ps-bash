@@ -112,3 +112,62 @@ one-time warning.
    returns, while the session is alive.
 2. Nested shells: a nested `bash -c` opens a channel instead of borrowing the foreground's writers.
 3. The foreground command becomes channel 0 with explicit credit. `STDOUT` and `STDERR:` stay as its aliases.
+
+## 4. Child-process stdio merge invariant (implemented)
+
+**Rule.** When a script merges a child process's stderr into its stdout (`2>&1`, `&>f`, `>f 2>&1`, `|&`, a merging
+group/subshell/loop `{ ...; } 2>&1`, `exec 2>&1`), the child gets ONE pipe or file handle for fd 1 and fd 2, so the
+order of its writes is kept by construction, as in bash (one open file description, `dup2`). Two pipes read by two
+threads and merged afterwards have no order to keep: `printf 'echo one\necho two >&2' | sh 2>&1` printed `two` first.
+A post-hoc merge of two separately read streams must never decide the order.
+
+**The one primitive.** `Cmdlets/ChildStdio.cs`: `ChildStdio.Start(psi, ChildStdioMode)` → `SpawnedChild`
+(`StandardError` is null when merged). Merged:
+
+- Windows: `CreateProcessW` with `hStdOutput == hStdError` (one inheritable pipe end), a
+  `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` naming only the child's handles, started suspended and resumed once the
+  `Process` object holds it.
+- Unix: `/bin/sh -c 'exec 2>&1; exec "$@"' sh PROG ARGS` (`dup2(1,2)`, then the program replaces the shell: same pid,
+  same exit status, kill-tree unchanged).
+
+`BashRuntime.RunChildProcess(..., mode)` (buffered) and `BashRuntime.StartChildProcessStreaming(..., mode)` (streaming,
+`StreamingChildProcess` reads one stream when merged) are built on it.
+
+**Knowing that a merge is in force.** `Cmdlets/StderrMerge.JoinsStdout(cmdlet)`: the command runtime's
+`ErrorMergeTo == Output` (its own `2>&1`) or an error pipe that IS its output pipe (an enclosing block's `2>&1`), and
+the stage that pipe feeds does not split stderr off again: `2>f` and `2>&1 >/dev/null` are emitted as a PowerShell
+`2>&1` into `Invoke-BashRedirect -ErrorPath f` / `-Path $null -PassErrors`, which
+`InvokeBashRedirectCommand.KeepsStderrWithStdout` answers. The SMA internals are read by reflection; unreadable means
+"not merged" (the old behavior) and `ChildStdioTests.StderrMerge_CanReadThePipelinesMergeState` fails.
+`StderrMerge.Redirected(cmdlet)` is the first half alone: the cmdlet's stderr goes down the pipeline at all (merged, or
+split off to a file or `/dev/null`). The emitter treats a merge whose one target is `/dev/null` (`>/dev/null 2>&1`,
+`&>/dev/null`) as no merge: output nobody reads has no order to keep.
+
+**Programs run directly.** PowerShell runs a native command with two pipes. The emitter
+(`PsEmitter.NativeMergeRunner`) prefixes a literal program name with `Invoke-BashNative -- ` when bash merges its
+stderr: its own redirects (`RedirectsMergeStderr`, a dup-tracking walk), a pipe stage before `|&`, or an enclosing
+compound command with a merging redirect (`_stderrMergeDepth`). `Invoke-BashNative` resolves NAME; a program under
+`JoinsStdout` runs through `ChildStdio` (piped input fed, else the inherited stdin), anything else (function, cmdlet,
+alias, a split-again stage, a Windows `.cmd`/`.bat`) runs unchanged as a steppable pipeline of `& NAME ARGS`.
+
+**Sites** (every way ps-bash starts a child whose output reaches the script):
+
+| Site | Merged path |
+|---|---|
+| nested `bash`/`sh` (`-c`, script, program on stdin) | `InvokeBashBashCommand` → `StartChildProcessStreaming(mode)` |
+| program run directly, incl. in `$( )`, groups, subshells, loops, `|&` stages | `Invoke-BashNative` |
+| `env`, `command`, `xargs`, `find -exec/-ok`, `time`, `flock` | `InvokeBashNativeCommand.MergedProgramPath` + `RunMerged` (under `Redirected`: one pipe when `JoinsStdout`, else stderr through the cmdlet's error stream so `2>f` reaches the file; PowerShell's nested `& $c` wrote it straight to the host's stderr) |
+| `timeout` | runs the command line with `2>&1` appended, so its program goes through `Invoke-BashNative`; under `2>f` the nested pipeline's errors are merged back (`MergeMyResults`) and re-written on the cmdlet's error stream |
+| awk `system()`, `print \| "cmd"` | `AwkShell` passes `ChildStdioMode` from awk's own merge state |
+| `nohup` | `DetachedProcess`: fd 1 and fd 2 are already one file handle |
+
+Not merge sites (the child's output is data, not passed through): awk `cmd | getline`, sed `e`, the psgit / psav
+wrappers, `stat`/`id`/`ps` probes. Interactive `less` / `traceroute` own the console.
+
+**Known gap.** A function called with a merge (`f 2>&1`, `{ f; } 2>&1` where `f` is a function) whose body runs a
+program: the body is emitted once, before any call site, so its programs are not routed through `Invoke-BashNative`
+and keep PowerShell's two pipes.
+
+**Guards.** `Core.Tests/ChildStdioGuardTests` (no raw `Process.Start` outside `ChildStdio` and named exemptions; every
+streaming spawn states its mode; every run-by-name cmdlet consults the merge), `Cmdlets.Tests/ChildStdioTests` (the
+primitive keeps write order), `Differential.Tests/StderrMergeOrderDifferentialTests` (child × merge form against bash).

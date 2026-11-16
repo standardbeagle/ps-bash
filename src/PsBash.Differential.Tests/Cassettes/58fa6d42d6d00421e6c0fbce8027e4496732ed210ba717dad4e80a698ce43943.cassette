@@ -1,0 +1,38 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 285
+stdout-length: 76
+stderr-length: 0
+==== SCRIPT ====
+ps1='foreach($i in 1..20){[Console]::Out.Write("o$i`n");[Console]::Error.Write("e$i`n")}'
+pl='$|=1; for $i (1..20){print "o$i\n"; print STDERR "e$i\n"}'
+d=$(mktemp -d)
+find "$d" -maxdepth 0 -exec pwsh -NoProfile -NonInteractive -Command "$ps1" \; 2>&1 >/dev/null
+echo rc=$?
+rm -rf "$d"
+==== STDOUT ====
+e1
+e2
+e3
+e4
+e5
+e6
+e7
+e8
+e9
+e10
+e11
+e12
+e13
+e14
+e15
+e16
+e17
+e18
+e19
+e20
+rc=0
+
+==== STDERR ====
+

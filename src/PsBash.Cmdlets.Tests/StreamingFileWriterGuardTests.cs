@@ -41,6 +41,7 @@ public class StreamingFileWriterGuardTests
         ["RedirectFileWriter.cs"] = "the shared writer itself (OpenFile)",
         ["InvokeBashRedirectCommand.cs"] = "opens a `>`/`>>` target and hands the stream straight to RedirectFileWriter",
         ["AwkOutput.cs"] = "`print | \"cmd\"`: a text writer over a child process's stdin pipe, not a file",
+        ["ChildStdio.cs"] = "a merged child's stdin: a text writer over the pipe to the child process, not a file",
         ["ProcessSubFileWriter.cs"] = "the `>( )`/`<( )` backing file: its own spill writer, read back by the consumer",
         ["BashRuntime.cs"] = "WriteRawText: a whole-content append in one call, closed at once",
         ["InvokeBashHistoryCommand.cs"] = "history -w/-a: the whole list written in one call, closed at once",

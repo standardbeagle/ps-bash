@@ -125,6 +125,15 @@ public static partial class PsEmitter
     [ThreadStatic]
     private static bool _inStdinScope;
 
+    /// <summary>
+    /// Nonzero while emitting the body of a compound command whose stderr bash merges into its stdout
+    /// (<c>{ ...; } 2&gt;&amp;1</c>, <c>( ... ) &amp;&gt;f</c>, a compound stage before <c>|&amp;</c>): a program inside runs through
+    /// <c>Invoke-BashNative</c> (<see cref="NativeMergeRunner"/>), which gives it one pipe for stdout and stderr when the
+    /// merge holds at run time.
+    /// </summary>
+    [ThreadStatic]
+    private static int _stderrMergeDepth;
+
     /// <summary>Names declared <c>declare -i</c> in the script being emitted: later plain assignments evaluate arithmetically.</summary>
     [ThreadStatic]
     private static HashSet<string>? _intVars;
@@ -898,7 +907,15 @@ public static partial class PsEmitter
 
     // StackGuarded: every command-level recursion of the emitter passes here; the stack probe keeps a
     // deep (but depth-cap-accepted) AST from overflowing a small caller stack (NestingGuard).
-    public static string Emit(Command cmd) => TryEmitCompoundOutputProcessSubs(StackGuarded(cmd), out var outputProcSubs) ? outputProcSubs : cmd switch
+    public static string Emit(Command cmd)
+    {
+        if (cmd is Command.Simple || !RedirectsMergeStderr(CompoundRedirects(cmd))) return EmitCommand(cmd);
+        _stderrMergeDepth++;
+        try { return EmitCommand(cmd); }
+        finally { _stderrMergeDepth--; }
+    }
+
+    private static string EmitCommand(Command cmd) => TryEmitCompoundOutputProcessSubs(StackGuarded(cmd), out var outputProcSubs) ? outputProcSubs : cmd switch
     {
         Command.If ifCmd => EmitCompoundBody(ifCmd.Redirects, () => EmitIf(ifCmd)),
         Command.BoolExpr boolExpr => EmitBoolExpr(boolExpr),
@@ -985,6 +1002,8 @@ public static partial class PsEmitter
         var priorAliasDefs = _aliasDefs; var priorAliasLine = _expandAliasesLine; var priorAliasStatic = _aliasStaticOnly; _aliasDefs = null; _aliasStaticOnly = false;
         var priorUnitFunctions = _unitFunctions;
         _unitFunctions = null;
+        var priorStderrMergeDepth = _stderrMergeDepth;
+        _stderrMergeDepth = 0;
         var priorPipefail = _pipefailMode;
         var priorFailglob = _lineAbandonMode;
         var priorRoot = _rootCommand; var priorDiscardInteractive = _discardInteractive; var priorLiveJobs = _liveJobs;
@@ -1086,6 +1105,7 @@ public static partial class PsEmitter
             _rootCommand = priorRoot; _discardInteractive = priorDiscardInteractive; _liveJobs = priorLiveJobs;
             _nounsetMode = priorNounset;
             _unitFunctions = priorUnitFunctions;
+            _stderrMergeDepth = priorStderrMergeDepth;
             _definedFunctions = priorDefined;
             _runsDynamicCode = priorDynamicCode;
             _aliasDefs = priorAliasDefs; _expandAliasesLine = priorAliasLine; _aliasStaticOnly = priorAliasStatic;
@@ -6759,6 +6779,13 @@ public static partial class PsEmitter
             || GetLiteralValue(cmd.Words[0]) is not string cw
             || !PsStatementKeywordCommands.Contains(cw);
 
+        // `git x 2>&1`, `make &>log`, `{ cc a.c; } 2>&1`: a program whose stderr bash merges into its stdout runs
+        // through Invoke-BashNative, which starts it with ONE pipe for both (PowerShell reads two and interleaves them
+        // in whatever order its readers ran). Its dash operands are quoted: `-foo:bar` is one argument.
+        bool mergeRunner = !dynamicName && !needsCallOperator && !isScriptCommand && leading.Length == 0 && cmd.Words.Length > 0
+            && NativeMergeRunner(cmd);
+        if (mergeRunner) leading = "Invoke-BashNative -- ";
+
         if (splatSafeCommand && (HasUnquotedVarSplatArg(commandArgs, loneArraySplats: true) || commandArgs.Any(HasIndirectExpansion)))
         {
             // Hoist each unquoted-variable operand to a temp var and splat it.
@@ -6769,7 +6796,7 @@ public static partial class PsEmitter
             sb.Append(EmitCommandWithSplatArgs(
                 dynamicName ? "& $__bashhead" : leading + commandWordText,
                 commandArgs,
-                argIndex => dynamicName && OrderedArgDashLiteral(commandArgs[argIndex]) is { } dynDash
+                argIndex => (dynamicName || mergeRunner) && OrderedArgDashLiteral(commandArgs[argIndex]) is { } dynDash
                     ? PsBuild.SingleQuote(dynDash)
                     : QuoteCommaLiteralWord(commandArgs[argIndex], EmitWord(commandArgs[argIndex])),
                 headPrelude: dynamicName ? "$__bashhead = " + leading[2..] + commandWordText + "; " : ""));
@@ -6783,7 +6810,7 @@ public static partial class PsEmitter
                     sb.Append(' ');
                     // `$GREP -e pat` / `$SH -e -c ...`: the name may resolve to a cmdlet, where a bare `-e` is an ambiguous
                     // PowerShell parameter prefix. A quoted flag is an argument for whatever the name turns out to be.
-                    if (dynamicName && OrderedArgDashLiteral(cmd.Words[i]) is { } dynDashArg)
+                    if ((dynamicName || mergeRunner) && OrderedArgDashLiteral(cmd.Words[i]) is { } dynDashArg)
                     {
                         sb.Append(PsBuild.SingleQuote(dynDashArg));
                         continue;
@@ -11535,6 +11562,10 @@ public static partial class PsEmitter
                     sb.Append(" | ");
             }
             stageStart = sb.Length;
+            // `git a |& less`, `{ git a; git b; } |& less`: the stage's stderr goes down the pipe with its stdout, so a
+            // program in it runs through Invoke-BashNative (NativeMergeRunner). Transpile resets the depth after a throw.
+            bool mergeStage = i < pipeline.Ops.Length && pipeline.Ops[i] == "|&";
+            if (mergeStage) _stderrMergeDepth++;
 
             var cmd = pipeline.Commands[i];
             // `... | echo "[$(cat)]"`: echo ignores the pipe, but the command substitution inherits it as stdin.
@@ -11557,6 +11588,7 @@ public static partial class PsEmitter
             string? wholePipelineText = null;
             WithLoopBarrier(pipeline.Commands.Length > 1 && !lastpipeHere,
                 i == 0 && cmd is Command.Simple ? LoopBarrierKind.EndsSubshell : LoopBarrierKind.Warn, () => { EmitStage(); return 0; });
+            if (mergeStage) _stderrMergeDepth--;
             // A read loop that ran its lazily read producer itself is the whole pipeline (set inside EmitStage).
             if (wholePipelineText is not null) return wholePipelineText;
             void EmitStage()
@@ -12478,6 +12510,76 @@ public static partial class PsEmitter
     {
         "type", "ls", "cat", "cp", "mv", "rm", "pwd", "echo", "sleep", "sort", "kill", "ps", "diff", "man", "mount", "rmdir", "clear", "history", "tee", "write", "where", "sc", "gc", "gm", "gl", "gi", "sl", "md",
     };
+
+    /// <summary>
+    /// True when <paramref name="cmd"/> is a literal program name (not a ps-bash command, builtin or function of this
+    /// script) whose stderr bash merges into its stdout: by its own redirects (<c>2&gt;&amp;1</c>, <c>&amp;&gt;f</c>,
+    /// <c>&gt;f 2&gt;&amp;1</c>, <c>|&amp;</c>, which the parser gives as <c>2&gt;&amp;1</c>) or an enclosing compound's
+    /// (<see cref="_stderrMergeDepth"/>). Such a command runs through <c>Invoke-BashNative</c>; whether it is merged at
+    /// run time (and a program at all) is decided there. See <c>docs/specs/stdio-messaging.md</c> §4.
+    /// </summary>
+    private static bool NativeMergeRunner(Command.Simple cmd)
+    {
+        if (GetLiteralValue(cmd.Words[0]) is not { Length: > 0 } name) return false;
+        if (_stderrMergeDepth == 0 && !RedirectsMergeStderr(cmd.Redirects)) return false;
+        return StdinReaders.Classify(name) == StdinReaders.Kind.Native
+            && !IsMappedCommandName(name)
+            && _definedFunctions?.Contains(name) != true && _unitFunctions?.Contains(name) != true
+            && !PsStatementKeywordCommands.Contains(name) && !PsKeywordCommandNames.Contains(name);
+    }
+
+    /// <summary>A compound command's own redirects (none for a simple command, a list, a pipeline...).</summary>
+    private static ImmutableArray<Redirect> CompoundRedirects(Command cmd) => cmd switch
+    {
+        Command.If c => c.Redirects,
+        Command.ForIn c => c.Redirects,
+        Command.ForArith c => c.Redirects,
+        Command.While c => c.Redirects,
+        Command.Case c => c.Redirects,
+        Command.Subshell c => c.Redirects,
+        Command.BraceGroup c => c.Redirects,
+        _ => default,
+    };
+
+    /// <summary>
+    /// True when, after <paramref name="redirects"/> are applied left to right as bash does, fd 2 is the SAME open
+    /// description as fd 1 (a dup or <c>&amp;&gt;</c>), not two opens of anything: <c>2&gt;&amp;1</c>, <c>&gt;f 2&gt;&amp;1</c>,
+    /// <c>&amp;&gt;f</c>, <c>&gt;&amp;f</c>. Not <c>2&gt;&amp;1 &gt;f</c> (stderr to the old stdout) nor <c>2&gt;f</c>.
+    /// </summary>
+    internal static bool RedirectsMergeStderr(ImmutableArray<Redirect> redirects)
+    {
+        if (redirects.IsDefaultOrEmpty) return false;
+        // 0 = discarded (/dev/null): output nobody reads has no order to keep.
+        int fd1 = 1, fd2 = 2, next = 3;
+        foreach (var r in redirects)
+        {
+            var target = GetLiteralValue(r.Target);
+            int file = target == "/dev/null" ? 0 : next++;
+            switch (r.Op)
+            {
+                case "&>" or "&>>":
+                    fd1 = fd2 = file;
+                    break;
+                case ">" or ">>" or ">|" when r.Fd is 1 or 2:
+                    if (r.Fd == 1) fd1 = file; else fd2 = file;
+                    break;
+                case ">&" when r.Fd == 2 && target == "1":
+                    fd2 = fd1;
+                    break;
+                case ">&" when r.Fd == 1 && target == "2":
+                    fd1 = fd2;
+                    break;
+                case ">&" when r.Fd == 1 && target is { Length: > 0 } && target != "-" && !IsAllDigits(target):
+                    fd1 = fd2 = next++;
+                    break;
+                case ">&" when r.Fd is 1 or 2:
+                    if (r.Fd == 1) fd1 = next++; else fd2 = next++;
+                    break;
+            }
+        }
+        // Both on the original stderr (`>&2`) is stdout redirected, not a merge PowerShell's 2>&1 carries.
+        return fd1 == fd2 && fd1 != 2 && fd1 != 0;
+    }
 
     /// <summary>True when <paramref name="name"/> is a command the emitter maps to an <c>Invoke-Bash*</c> cmdlet (ignoring script-defined functions).</summary>
     private static bool IsMappedCommandName(string name)

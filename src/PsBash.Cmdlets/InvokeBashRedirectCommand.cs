@@ -103,6 +103,21 @@ public sealed class InvokeBashRedirectCommand : PSCmdlet, IDisposable
         _ => RedirectDevice.None,
     };
 
+    /// <summary>
+    /// True when this stage keeps the error records it receives through PowerShell's <c>2&gt;&amp;1</c> in the same
+    /// stream as the output records — a bash merge (<c>2&gt;&amp;1</c>, <c>&amp;&gt;f</c>, <c>&gt;f 2&gt;&amp;1</c>, <c>2&gt;/dev/stdout</c>) —
+    /// and false when it splits them (<c>2&gt;f</c> → <c>-ErrorPath</c>; <c>2&gt;&amp;1 &gt;f</c> → <c>-Path f -PassErrors</c>).
+    /// <see cref="StderrMerge.JoinsStdout"/> asks the stage downstream of a spawning cmdlet. Valid once parameters are
+    /// bound, which PowerShell does for the whole pipeline before any command begins.
+    /// </summary>
+    internal bool KeepsStderrWithStdout()
+    {
+        if (MergeErrors) return true;
+        if (MyInvocation.BoundParameters.ContainsKey(nameof(ErrorPath))) return Device(ErrorPath) == RedirectDevice.Stdout;
+        if (PassErrors) return !MyInvocation.BoundParameters.ContainsKey(nameof(Path));
+        return true;
+    }
+
     // STREAMING (memory bound): the target is opened up front and every record is written as it
     // arrives through a 64 KB-buffered FileStream, so `big | cmd > f` holds O(buffer), not the
     // whole output. The buffer never holds output back for long: RedirectFileWriter writes a slow

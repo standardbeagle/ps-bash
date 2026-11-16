@@ -160,6 +160,8 @@ CmdletsToExport = @(
     # background pump fills; the unread rest is put back). Emitted by the transpiler around natives.
     'Enter-BashNativeStdin',
     'Exit-BashNativeStdin',
+    # A native program whose stderr is merged into stdout (2>&1, &>, |&): started with ONE pipe for both.
+    'Invoke-BashNative',
     # A pipe / `< file` / heredoc feeding a native program: each record as the exact bytes bash would write
     # (PowerShell's native pipe appends \r\n per record). Emitted by the transpiler.
     'ConvertTo-BashNativeStdin'

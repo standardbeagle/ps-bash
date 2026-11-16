@@ -242,6 +242,22 @@ public sealed class InvokeBashCommandCommand : PSCmdlet
             return;
         }
 
+        // `command prog 2>&1`: a program gets ONE pipe for stdout and stderr (docs/specs/stdio-messaging.md §4).
+        if (target is ApplicationInfo app && !InvokeBashNativeCommand.IsBatchFile(app.Path) && StderrMerge.JoinsStdout(this))
+        {
+            try
+            {
+                FileSystemHelpers.SetLastExitCode(this, InvokeBashNativeCommand.RunMerged(this, app.Path, argv.Skip(1),
+                    inheritStdin: true, input: _stdin.Count > 0 ? _stdin : null));
+            }
+            catch (Exception ex)
+            {
+                if (FileSystemHelpers.IsPipelineStop(ex)) throw;
+                FileSystemHelpers.WriteBashError(this, $"command: {name}: {ex.Message}");
+            }
+            return;
+        }
+
         // Fixed body: $args[0] is the resolved command, the rest is splatted. No user text is ever
         // part of the script.
         const string prologue =

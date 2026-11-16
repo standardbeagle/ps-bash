@@ -9,7 +9,7 @@ namespace PsBash.Cmdlets;
 /// the command's own status with <c>--preserve-status</c>). Windows has its own <c>timeout.exe</c> (a keypress wait that
 /// fails under redirected input), so the name must not fall through to it. The command runs in a nested ps-bash, as
 /// <c>bash -c</c> does: a builtin (<c>sleep</c>), an external program and a nested <c>bash -c</c> all behave, and the
-/// whole process tree is killed when the budget ends (<see cref="BashRuntime.RunChildProcess(ProcessStartInfo, TimeSpan?, string?)"/>).
+/// whole process tree is killed when the budget ends (<see cref="BashRuntime.RunChildProcess(ProcessStartInfo, TimeSpan?, string?, ChildStdioMode)"/>).
 /// <c>-s SIGNAL</c>, <c>-k DURATION</c> and <c>--foreground</c> are accepted; Windows has one way to stop a process.
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashTimeout")]
@@ -54,9 +54,16 @@ public sealed class InvokeBashTimeoutCommand : PSCmdlet
         // ps-bash adds seconds of startup to every call and eats short budgets). A timer stops that pipeline:
         // cooperative cmdlets (sleep, the readers) see Stopping, and an external program is killed by the stop.
         string script;
+        // `timeout 5 prog 2>&1`: the merge is the command's own, so a program gets ONE pipe for stdout and stderr
+        // (Invoke-BashNative; docs/specs/stdio-messaging.md §4) instead of two read back in a racing order.
+        bool joined = StderrMerge.JoinsStdout(this);
+        // `timeout 5 prog 2>f`: the nested pipeline's stderr comes back as error records and leaves through this
+        // cmdlet's error stream, where the redirect downstream sees it (a nested program wrote to the host's stderr).
+        bool splitStderr = !joined && StderrMerge.Redirected(this);
         try
         {
             string line = string.Join(" ", o.Command.Select(ShellQuote));
+            if (joined) line += " 2>&1";
             // Piped-in text becomes the command's stdin as a here-string (which adds the final newline itself).
             if (_stdin is { Length: > 0 })
                 line += " <<< " + ShellQuote(_stdin.ToString().EndsWith('\n') ? _stdin.ToString(0, _stdin.Length - 1) : _stdin.ToString());
@@ -73,13 +80,18 @@ public sealed class InvokeBashTimeoutCommand : PSCmdlet
         bool timedOut = false;
         using var ps = PowerShell.Create(RunspaceMode.CurrentRunspace);
         ps.AddScript(script, useLocalScope: true);
+        if (splitStderr) ps.Commands.Commands[0].MergeMyResults(System.Management.Automation.Runspaces.PipelineResultTypes.Error, System.Management.Automation.Runspaces.PipelineResultTypes.Output);
         System.Threading.Timer? timer = null;
         if (o.Duration > TimeSpan.Zero)
             timer = new System.Threading.Timer(_ => { timedOut = true; try { ps.Stop(); } catch { /* already finished */ } },
                 null, o.Duration, System.Threading.Timeout.InfiniteTimeSpan);
         try
         {
-            foreach (var r in ps.Invoke()) WriteObject(r);
+            foreach (var r in ps.Invoke())
+            {
+                if (splitStderr && r?.BaseObject is ErrorRecord err) FileSystemHelpers.WriteErrorRecord(this, err);
+                else WriteObject(r);
+            }
         }
         catch (PipelineStoppedException) when (timedOut)
         {

@@ -706,7 +706,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("cmd |& other");
 
-        Assert.Equal("cmd 2>&1 | ConvertTo-BashNativeStdin 'other' | other", result);
+        Assert.Equal("Invoke-BashNative -- cmd 2>&1 | ConvertTo-BashNativeStdin 'other' | other", result);
     }
 
     [Fact]
@@ -716,7 +716,7 @@ public class PsEmitterTests
         // Previously `&` lexed as background, dropping the stderr redirect.
         var result = PsEmitter.Transpile("cmd &> out.log");
 
-        Assert.Equal("cmd 2>&1 | Invoke-BashRedirect -Path out.log", result);
+        Assert.Equal("Invoke-BashNative -- cmd 2>&1 | Invoke-BashRedirect -Path out.log", result);
     }
 
     [Fact]
@@ -724,7 +724,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("cmd &>> out.log");
 
-        Assert.Equal("cmd 2>&1 | Invoke-BashRedirect -Path out.log -Append", result);
+        Assert.Equal("Invoke-BashNative -- cmd 2>&1 | Invoke-BashRedirect -Path out.log -Append", result);
     }
 
     [Fact]
@@ -1158,7 +1158,7 @@ public class PsEmitterTests
         // Regression guard: the normal merge form `2>&1` (target "1", not "-")
         // must NOT be treated as a close.
         var result = PsEmitter.Transpile("cmd 2>&1");
-        Assert.Equal("cmd 2>&1 | Invoke-BashRedirect -MergeErrors", result);
+        Assert.Equal("Invoke-BashNative -- cmd 2>&1 | Invoke-BashRedirect -MergeErrors", result);
     }
 
     [Fact]
@@ -1167,7 +1167,7 @@ public class PsEmitterTests
         // `cmd >&file` is a bash synonym for `&>file`: stdout AND stderr to the FILE.
         // `1>&file` is invalid PowerShell (>& takes a stream number), so emit `&>` form.
         var result = PsEmitter.Transpile("cmd >&out.txt");
-        Assert.Equal("cmd 2>&1 | Invoke-BashRedirect -Path out.txt", result);
+        Assert.Equal("Invoke-BashNative -- cmd 2>&1 | Invoke-BashRedirect -Path out.txt", result);
     }
 
     [Fact]
@@ -1230,7 +1230,7 @@ public class PsEmitterTests
     public void Transpile_SupportedFdMergeIntoStdout_Kept()
     {
         // `n>&1` (n != 1) IS valid PowerShell and must keep the real merge.
-        Assert.Equal("cmd 2>&1 | Invoke-BashRedirect -MergeErrors", PsEmitter.Transpile("cmd 2>&1"));
+        Assert.Equal("Invoke-BashNative -- cmd 2>&1 | Invoke-BashRedirect -MergeErrors", PsEmitter.Transpile("cmd 2>&1"));
     }
 
     [Fact]
@@ -1931,7 +1931,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("cmd 2>&1");
 
-        Assert.Equal("cmd 2>&1 | Invoke-BashRedirect -MergeErrors", result);
+        Assert.Equal("Invoke-BashNative -- cmd 2>&1 | Invoke-BashRedirect -MergeErrors", result);
     }
 
     [Fact]
@@ -5448,7 +5448,7 @@ public class PsEmitterTests
     public void Transpile_StderrToStdout_2And1Passthrough()
     {
         var result = PsEmitter.Transpile("cmd 2>&1");
-        Assert.Equal("cmd 2>&1 | Invoke-BashRedirect -MergeErrors", result);
+        Assert.Equal("Invoke-BashNative -- cmd 2>&1 | Invoke-BashRedirect -MergeErrors", result);
     }
 
     [Fact]
@@ -5484,7 +5484,7 @@ public class PsEmitterTests
     [InlineData("cmd >/dev/null 2>e", "cmd 2>&1 | Invoke-BashRedirect -Path $null -ErrorPath e")]
     // `2>&1 >o`: stderr dup'd to the ORIGINAL stdout before stdout moves — it flows on, not into o.
     [InlineData("cmd 2>&1 >o", "cmd 2>&1 | Invoke-BashRedirect -Path o -PassErrors")]
-    [InlineData("cmd >o 2>&1", "cmd 2>&1 | Invoke-BashRedirect -Path o")]
+    [InlineData("cmd >o 2>&1", "Invoke-BashNative -- cmd 2>&1 | Invoke-BashRedirect -Path o")]
     public void Transpile_RedirectFdModel_LastWinsPerFd(string bash, string expected)
         => Assert.Equal(expected, PsEmitter.Transpile(bash));
 

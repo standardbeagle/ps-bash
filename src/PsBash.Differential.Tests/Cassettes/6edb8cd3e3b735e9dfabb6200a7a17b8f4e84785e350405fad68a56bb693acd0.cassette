@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 48
+stdout-length: 25
+stderr-length: 0
+==== SCRIPT ====
+x=$(no_such_cmd_zz 2>&1); echo "rc=$? ${x##*: }"
+==== STDOUT ====
+rc=127 command not found
+
+==== STDERR ====
+

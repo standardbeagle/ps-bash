@@ -113,8 +113,14 @@ public sealed class InvokeBashTimeCommand : PSCmdlet
 
         try
         {
-            var output = InvokeCommand.InvokeScript(invokeBody, allInvokeArgs);
+            // `time prog 2>&1`: a program gets ONE pipe for stdout and stderr (docs/specs/stdio-messaging.md §4); its
+            // output streams through as it runs and the timing record carries no text of its own.
+            var merged = InvokeBashNativeCommand.MergedProgramPath(this, cmd) is { } program
+                ? InvokeBashNativeCommand.RunMerged(this, program, args[1..], inheritStdin: true)
+                : (int?)null;
+            var output = merged is null ? InvokeCommand.InvokeScript(invokeBody, allInvokeArgs) : [];
             sw.Stop();
+            if (merged is { } mergedExit) exitCode = mergedExit;
             foreach (var item in output)
             {
                 if (item == null) { normal.Add(null); continue; }
@@ -129,7 +135,7 @@ public sealed class InvokeBashTimeCommand : PSCmdlet
                 }
             }
             if (errors.Count > 0) { exitCode = 1; faulted = true; }
-            else if (InvokeCommand.InvokeScript("[int]$global:LASTEXITCODE").FirstOrDefault()?.BaseObject is int status) exitCode = status;
+            else if (merged is null && InvokeCommand.InvokeScript("[int]$global:LASTEXITCODE").FirstOrDefault()?.BaseObject is int status) exitCode = status;
             foreach (var er in errors)
             {
                 FileSystemHelpers.WriteBashError(this, er.ToString());

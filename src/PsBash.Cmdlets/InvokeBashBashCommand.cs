@@ -229,8 +229,10 @@ public sealed class InvokeBashBashCommand : PSCmdlet, IDisposable
         {
             // Streaming spawn: output is emitted while the child runs (progress shows, `2>&1` keeps its order), no
             // time budget, kill-tree on StopProcessing. Without piped input the child's stdin is closed at once, so a
-            // no-args / REPL-mode child sees EOF and exits instead of hanging on a read.
-            _child = BashRuntime.StartChildProcessStreaming(psi, keepStdinOpen);
+            // no-args / REPL-mode child sees EOF and exits instead of hanging on a read. Under `2>&1` (or any merge) the
+            // child's stdout and stderr are ONE pipe, so its lines keep the order it wrote them in.
+            _child = BashRuntime.StartChildProcessStreaming(psi, keepStdinOpen,
+                new ChildStdioMode(MergeStderr: StderrMerge.JoinsStdout(this)));
         }
         catch (Exception ex)
         {

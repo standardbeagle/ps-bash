@@ -633,23 +633,32 @@ public sealed class InvokeBashXargsCommand : PSCmdlet
 
         try
         {
-            var output = InvokeCommand.InvokeScript(invokeBody, allInvokeArgs);
-
-            // The body emits the child's stdout objects, then the child's
-            // exit code as the FINAL object. Write everything but that last
-            // object; read the last one as the exit status.
             int childExit = 0;
-            int lastIndex = output.Count - 1;
-            if (lastIndex >= 0)
+            // `xargs prog 2>&1`: a program gets ONE pipe for stdout and stderr (docs/specs/stdio-messaging.md §4);
+            // its stdin is empty, as GNU xargs gives it /dev/null.
+            if (InvokeBashNativeCommand.MergedProgramPath(this, cmd) is { } program)
             {
-                var baseObj = output[lastIndex] is PSObject pso
-                    ? pso.BaseObject
-                    : output[lastIndex];
-                if (baseObj is int code) childExit = code;
+                childExit = InvokeBashNativeCommand.RunMerged(this, program, callArgs, inheritStdin: false);
             }
-            for (int j = 0; j < lastIndex; j++)
+            else
             {
-                WriteObject(output[j]);
+                var output = InvokeCommand.InvokeScript(invokeBody, allInvokeArgs);
+
+                // The body emits the child's stdout objects, then the child's
+                // exit code as the FINAL object. Write everything but that last
+                // object; read the last one as the exit status.
+                int lastIndex = output.Count - 1;
+                if (lastIndex >= 0)
+                {
+                    var baseObj = output[lastIndex] is PSObject pso
+                        ? pso.BaseObject
+                        : output[lastIndex];
+                    if (baseObj is int code) childExit = code;
+                }
+                for (int j = 0; j < lastIndex; j++)
+                {
+                    WriteObject(output[j]);
+                }
             }
             if (childExit == -127)
             {

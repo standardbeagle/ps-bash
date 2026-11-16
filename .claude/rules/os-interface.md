@@ -22,6 +22,9 @@ bounded wait, concurrent stdout/stderr drain, `Kill(entireProcessTree:true)` on 
 child can never wedge the single-threaded host runspace. Streaming child (output while it runs, piped
 stdin fed live, no budget; nested `bash`) → `BashRuntime.StartChildProcessStreaming` →
 `StreamingChildProcess` (pump/WriteStdin/Complete on the pipeline thread, `Kill` from `StopProcessing`).
+Both take a `ChildStdioMode`: when `StderrMerge.JoinsStdout(this)` the child gets ONE pipe for fd 1+2
+(`ChildStdio`, spec `stdio-messaging.md` §4) — never merge two separately read streams. Run-by-name
+(`& $c`) → `InvokeBashNativeCommand.MergedProgramPath`/`RunMerged` (guard `ChildStdioGuardTests`).
 Raw `Process.Start` is allowed ONLY for interactive consumers (traceroute hop-by-hop, less paging)
 that handle `Stopping` + kill-tree themselves. Never raw-spawn a buffered command.
 

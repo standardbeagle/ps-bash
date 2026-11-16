@@ -87,7 +87,7 @@ $SH -c "echo 2"
 bash: line 5: -c: command not found
 ## END
 ## status: 0
-## XFAIL ps-bash gap-nested-shell-output-order a child shell's output is buffered, so under 2>&1 all of its stderr comes before all of its stdout (the xtrace lines print before the 1); xtrace also shows the empty unquoted $SH as '' (+ '' -c 'echo 2'), and the not-found message has no "line 5:"
+## XFAIL ps-bash arch-vars-in-environment SH=bash is not exported in bash, so the child's $SH is empty and runs '-c' (not found); here every variable is exported, so the child runs the grandchild shell (intentional-differences.md, Platform). The output order under 2>&1 now matches bash
 ## timeout: 10
 ## real-launcher
 
@@ -109,7 +109,6 @@ sh -c 'echo 2'
 2
 ## END
 ## status: 0
-## XFAIL ps-bash gap-nested-shell-output-order a child shell's output is buffered, so under 2>&1 all of its stderr comes before all of its stdout: the exported SHELLOPTS now turns xtrace on in the grandchild (+ echo 2 is printed), but the lines come out as + echo 1, sh -c 'echo 2', + echo 2, 1, 2
 ## timeout: 10
 ## real-launcher
 

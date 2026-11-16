@@ -929,6 +929,13 @@ public sealed class InvokeBashFindCommand : PSCmdlet
                 Environment.CurrentDirectory = target;
             }
             SessionState.PSVariable.Set("global:LASTEXITCODE", 0);
+            // `find -exec prog {} \; 2>&1`: a program gets ONE pipe for stdout and stderr (docs/specs/stdio-messaging.md §4).
+            if (InvokeBashNativeCommand.MergedProgramPath(this, argv[0]) is { } program)
+            {
+                int exit = InvokeBashNativeCommand.RunMerged(this, program, argv.Skip(1), inheritStdin: true);
+                SessionState.PSVariable.Set("global:LASTEXITCODE", exit);
+                return exit == 0;
+            }
             foreach (var o in InvokeCommand.InvokeScript(body, boxed)) WriteObject(o);
             var code = SessionState.PSVariable.GetValue("LASTEXITCODE");
             return code is null || (code is int ci && ci == 0) || (code is long cl && cl == 0);

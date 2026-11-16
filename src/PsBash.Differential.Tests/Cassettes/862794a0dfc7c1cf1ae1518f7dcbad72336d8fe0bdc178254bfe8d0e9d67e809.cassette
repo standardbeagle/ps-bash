@@ -1,0 +1,18 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 130
+stdout-length: 219
+stderr-length: 0
+==== SCRIPT ====
+pwsh -NoProfile -NonInteractive -Command '[Console]::Out.Write(($args -join "|") + "`n")' -foo:bar --x=1 '' 'a b' 2>&1; echo rc=$?
+==== STDOUT ====
+ParserError:
+Line |
+   1 |  [Console]::Out.Write(($args -join "|") + "`n") -foo:bar --x=1  a b
+     |                                                 ~~~~
+     | Unexpected token '-foo' in expression or statement.
+rc=1
+
+==== STDERR ====
+

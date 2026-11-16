@@ -215,6 +215,14 @@ public sealed class InvokeBashEnvCommand : PSCmdlet
                 BashVariableStore.Set(n, v);
             }
 
+            // `env X=1 prog 2>&1`: a program gets ONE pipe for stdout and stderr (docs/specs/stdio-messaging.md §4).
+            if (InvokeBashNativeCommand.MergedProgramPath(this, cmdName) is { } program)
+            {
+                FileSystemHelpers.SetLastExitCode(this,
+                    InvokeBashNativeCommand.RunMerged(this, program, cmdArgs, inheritStdin: true));
+                return;
+            }
+
             try
             {
                 foreach (var r in InvokeCommand.InvokeScript("param($c,$a) & $c @a", cmdName, cmdArgs))

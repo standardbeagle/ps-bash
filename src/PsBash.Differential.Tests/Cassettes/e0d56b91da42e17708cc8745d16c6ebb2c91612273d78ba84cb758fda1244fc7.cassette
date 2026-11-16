@@ -1,0 +1,58 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 293
+stdout-length: 147
+stderr-length: 0
+==== SCRIPT ====
+ps1='foreach($i in 1..20){[Console]::Out.Write("o$i`n");[Console]::Error.Write("e$i`n")}'
+pl='$|=1; for $i (1..20){print "o$i\n"; print STDERR "e$i\n"}'
+d=$(mktemp -d)
+awk 'BEGIN { system("for i in $(seq 20); do echo o$i; echo e$i >&2; done") }' >"$d/f" 2>&1; cat "$d/f"
+echo rc=$?
+rm -rf "$d"
+==== STDOUT ====
+o1
+e1
+o2
+e2
+o3
+e3
+o4
+e4
+o5
+e5
+o6
+e6
+o7
+e7
+o8
+e8
+o9
+e9
+o10
+e10
+o11
+e11
+o12
+e12
+o13
+e13
+o14
+e14
+o15
+e15
+o16
+e16
+o17
+e17
+o18
+e18
+o19
+e19
+o20
+e20
+rc=0
+
+==== STDERR ====
+

@@ -305,7 +305,15 @@ internal sealed class AwkShell
 
     /// <summary>Run <paramref name="command"/> to completion (<c>system()</c>), capturing its output.</summary>
     public BashRuntime.ChildProcessResult Run(string command) =>
-        BashRuntime.RunChildProcess(BuildStartInfo(command), BashRuntime.NoTimeLimit, null, _stop.Token);
+        BashRuntime.RunChildProcess(BuildStartInfo(command), BashRuntime.NoTimeLimit, null, _stop.Token, OutputMode());
+
+    /// <summary>
+    /// A command whose output goes where awk's does (<c>system()</c>, <c>print | "cmd"</c>) writes its stderr to awk's
+    /// fd 2. When awk's stderr is merged into its stdout (<c>awk '...' 2&gt;&amp;1</c>) the command gets ONE pipe for
+    /// both, so their order is the order it wrote them (docs/specs/stdio-messaging.md §4). <c>cmd | getline</c> reads
+    /// only its stdout, so it never merges.
+    /// </summary>
+    private ChildStdioMode OutputMode() => new(MergeStderr: StderrMerge.JoinsStdout(_cmdlet));
 
     /// <summary>
     /// Run <paramref name="command"/> to completion with the contents of <paramref name="inputPath"/> as
@@ -313,7 +321,7 @@ internal sealed class AwkShell
     /// a <c>-c</c> command, so the input is attached as a file redirection of the whole command line.
     /// </summary>
     public BashRuntime.ChildProcessResult RunWithInput(string command, string inputPath) =>
-        BashRuntime.RunChildProcess(BuildStartInfo(command, inputPath), BashRuntime.NoTimeLimit, null, _stop.Token);
+        BashRuntime.RunChildProcess(BuildStartInfo(command, inputPath), BashRuntime.NoTimeLimit, null, _stop.Token, OutputMode());
 
     /// <summary>
     /// Start <paramref name="command"/> for WRITING (<c>print | "cmd"</c>): stdin, stdout and stderr are all
@@ -321,12 +329,11 @@ internal sealed class AwkShell
     /// run as-is by a child ps-bash, which forwards its redirected stdin to the first stdin reader
     /// (compound lists like <c>a; b</c> share it, as in a real shell). Null when it cannot start.
     /// </summary>
-    public Process? StartPipe(string command)
+    public SpawnedChild? StartPipe(string command)
     {
         var psi = BuildStartInfo(command);
-        AwkCommandStream.Prepare(psi);
-        BashVariableStore.ApplyTo(psi); // Prepare already applies it; explicit so the spawn-site guard sees it
-        try { return Process.Start(psi); }
+        psi.CreateNoWindow = true;
+        try { return ChildStdio.Start(psi, OutputMode()); }
         catch (Exception ex) when (!FileSystemHelpers.IsPipelineStop(ex)) { return null; }
     }
 

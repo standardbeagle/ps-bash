@@ -1249,20 +1249,26 @@ public static class BashRuntime
     /// status 130 - when <paramref name="stop"/> is cancelled (the cmdlet's <c>StopProcessing</c>). Pass
     /// <see cref="NoTimeLimit"/> for user work.
     /// </summary>
-    public static ChildProcessResult RunChildProcess(ProcessStartInfo startInfo, System.TimeSpan? timeout, string? stdinText, CancellationToken stop)
+    /// <param name="mode">
+    /// <see cref="ChildStdioMode.Merged"/> when the caller's stderr is merged into its stdout (<see cref="StderrMerge.JoinsStdout"/>):
+    /// the child gets one pipe for both, and the result's <see cref="ChildProcessResult.Stdout"/> holds both in write order.
+    /// </param>
+    public static ChildProcessResult RunChildProcess(ProcessStartInfo startInfo, System.TimeSpan? timeout, string? stdinText, CancellationToken stop,
+        ChildStdioMode mode = default)
     {
         ArgumentNullException.ThrowIfNull(startInfo);
 
         var budget = timeout ?? GetChildProcessTimeout();
 
-        using var proc = SpawnRedirected(startInfo);
+        // A buffered capture never inherits a live stdin a child could block reading.
+        using var proc = SpawnRedirected(startInfo, mode with { InheritStdin = false });
 
         // Hand the child an EOF-closed stdin so it never hangs waiting for input; `stdinText` (a piped-in
         // program or data for a nested `bash -c`) is written first. Written on a worker so a child that
         // never reads cannot block us on a full pipe.
         if (!string.IsNullOrEmpty(stdinText))
         {
-            var writer = proc.StandardInput;
+            var writer = proc.StandardInput!;
             _ = Task.Run(() =>
             {
                 try { writer.Write(stdinText); writer.Flush(); } catch { /* child closed its stdin early */ }
@@ -1270,7 +1276,7 @@ public static class BashRuntime
             });
         }
         else
-            try { proc.StandardInput.Close(); } catch { /* child may not have opened it */ }
+            try { proc.StandardInput?.Close(); } catch { /* child may not have opened it */ }
 
         return WaitBuffered(proc, budget, stop);
     }
@@ -1293,20 +1299,29 @@ public static class BashRuntime
     /// <see cref="StreamingChildProcess"/>), its stdin stays open for the caller to feed when
     /// <paramref name="keepStdinOpen"/>, and there is NO time budget — the caller kills the tree on
     /// <c>StopProcessing</c>. For a nested shell (<c>bash script.sh</c>, <c>sh -c make</c>) that must show progress and
-    /// may run for hours, which <see cref="RunChildProcess(ProcessStartInfo, System.TimeSpan?, string?)"/> (collect,
+    /// may run for hours, which <see cref="RunChildProcess(ProcessStartInfo, System.TimeSpan?, string?, ChildStdioMode)"/> (collect,
     /// then return at exit or kill at the budget) cannot do.
     /// </summary>
-    public static StreamingChildProcess StartChildProcessStreaming(ProcessStartInfo startInfo, bool keepStdinOpen)
+    /// <param name="startInfo">The program, its arguments, environment and directory.</param>
+    /// <param name="keepStdinOpen">Leave the stdin pipe open for <see cref="StreamingChildProcess.WriteStdin"/>.</param>
+    /// <param name="mode">
+    /// <see cref="ChildStdioMode.MergeStderr"/>: one pipe for the child's stdout and stderr (the caller's stderr is merged
+    /// into its stdout, <see cref="StderrMerge.JoinsStdout"/>). <see cref="ChildStdioMode.InheritStdin"/>: the child reads
+    /// the process stdin, as a native program run by PowerShell does.
+    /// </param>
+    public static StreamingChildProcess StartChildProcessStreaming(ProcessStartInfo startInfo, bool keepStdinOpen, ChildStdioMode mode = default)
     {
         ArgumentNullException.ThrowIfNull(startInfo);
-        return new StreamingChildProcess(SpawnRedirected(startInfo), keepStdinOpen);
+        return new StreamingChildProcess(SpawnRedirected(startInfo, mode), keepStdinOpen);
     }
 
     /// <summary>
-    /// The spawn both child helpers share: exported variables applied, a live cwd, stdin/stdout/stderr redirected
-    /// (output decoded byte-faithfully), no shell, and one retry when the process cwd vanished under us.
+    /// The spawn both child helpers share: exported variables applied, a live cwd, stdout/stderr redirected (output
+    /// decoded byte-faithfully) — through ONE pipe when <paramref name="mode"/> merges them — stdin a pipe unless
+    /// inherited, no shell, and one retry when the process cwd vanished under us. <see cref="ChildStdio.Start"/> does
+    /// the spawn.
     /// </summary>
-    private static Process SpawnRedirected(ProcessStartInfo startInfo)
+    private static SpawnedChild SpawnRedirected(ProcessStartInfo startInfo, ChildStdioMode mode)
     {
         // Bash variables the script exported must reach the child — `export
         // PATH=…` / `export NODE_ENV=…` are the whole point of export. While the
@@ -1318,22 +1333,14 @@ public static class BashRuntime
 
         EnsureLiveCurrentDirectory(startInfo);
 
-        startInfo.UseShellExecute = false;
-        startInfo.RedirectStandardOutput = true;
-        startInfo.RedirectStandardError = true;
         // Decode the child's output byte-faithfully: valid UTF-8 normally, every invalid byte as an
         // escaped-byte marker (RawBytes), so a native tool's binary output survives the string pipeline.
-        startInfo.StandardOutputEncoding ??= PsBash.Core.RawBytes.Encoding;
-        startInfo.StandardErrorEncoding ??= PsBash.Core.RawBytes.Encoding;
-        // Redirect stdin so we can close it immediately (below): a non-interactive
-        // capture must never inherit a live stdin that a child could block reading
-        // (e.g. ps-bash's no-args REPL, or `sort`/`cat` with no file operand).
-        startInfo.RedirectStandardInput = true;
-
-        Process? started = null;
+        // Stdin is a pipe (closed at once by the buffered helper) unless the mode inherits it: a non-interactive
+        // capture must never inherit a live stdin that a child could block reading (e.g. ps-bash's no-args REPL,
+        // or `sort`/`cat` with no file operand).
         for (int spawnTry = 0; ; spawnTry++)
         {
-            try { started = Process.Start(startInfo); break; }
+            try { return ChildStdio.Start(startInfo, mode); }
             catch (System.IO.FileNotFoundException) when (spawnTry == 0 && CwdVanished())
             {
                 // Another thread removed the process-wide cwd between EnsureLiveCurrentDirectory and the
@@ -1341,20 +1348,18 @@ public static class BashRuntime
                 EnsureLiveCurrentDirectory(startInfo);
             }
         }
-        return started
-            ?? throw new InvalidOperationException($"Failed to start process '{startInfo.FileName}'.");
     }
 
-    private static ChildProcessResult WaitBuffered(Process proc, System.TimeSpan budget, CancellationToken stop)
+    private static ChildProcessResult WaitBuffered(SpawnedChild child, System.TimeSpan budget, CancellationToken stop)
     {
-        // Drain BOTH streams concurrently. Each drain keeps reading after the
-        // capture cap and discards excess text, so a noisy child cannot exhaust
-        // memory or block on a full pipe.
+        // Drain BOTH streams concurrently (one, when stderr is merged into stdout). Each drain keeps reading after
+        // the capture cap and discards excess text, so a noisy child cannot exhaust memory or block on a full pipe.
+        var proc = child.Process;
         var captureLimit = GetChildCaptureLimitChars();
         var stdoutCapture = new BoundedTextCapture(captureLimit);
         var stderrCapture = new BoundedTextCapture(captureLimit);
-        using var stdoutDrain = StreamDrain.Start(proc.StandardOutput, stdoutCapture);
-        using var stderrDrain = StreamDrain.Start(proc.StandardError, stderrCapture);
+        using var stdoutDrain = StreamDrain.Start(child.StandardOutput, stdoutCapture);
+        using var stderrDrain = child.StandardError is { } err ? StreamDrain.Start(err, stderrCapture) : null;
 
         int waitMs = budget <= System.TimeSpan.Zero
             ? System.Threading.Timeout.Infinite
@@ -1370,7 +1375,7 @@ public static class BashRuntime
             try { proc.Kill(entireProcessTree: true); } catch { /* already gone / race */ }
             try { proc.WaitForExit(2_000); } catch { /* best effort */ }
             stdoutDrain.Join(System.TimeSpan.FromSeconds(5));
-            stderrDrain.Join(System.TimeSpan.FromSeconds(5));
+            stderrDrain?.Join(System.TimeSpan.FromSeconds(5));
             return new ChildProcessResult(
                 stop.IsCancellationRequested ? 130 : 124,
                 stdoutCapture.Text,
@@ -1384,7 +1389,7 @@ public static class BashRuntime
         // EOF; the parameterless overload does. Call it before joining them.
         try { proc.WaitForExit(); } catch { /* already reaped */ }
         stdoutDrain.Join(System.TimeSpan.FromSeconds(5));
-        stderrDrain.Join(System.TimeSpan.FromSeconds(5));
+        stderrDrain?.Join(System.TimeSpan.FromSeconds(5));
         return new ChildProcessResult(
             proc.ExitCode,
             stdoutCapture.Text,

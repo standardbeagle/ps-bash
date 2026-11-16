@@ -54,6 +54,10 @@ public sealed class InvokeBashFlockCommand : PSCmdlet
         {
             if (o.CommandString is not null)
                 Run("param($s) & ([scriptblock]::Create($s))", Transpile(o.CommandString));
+            // `flock f prog 2>&1`: a program gets ONE pipe for stdout and stderr (docs/specs/stdio-messaging.md §4).
+            else if (o.Command.Length > 0 && InvokeBashNativeCommand.MergedProgramPath(this, o.Command[0]) is { } program)
+                FileSystemHelpers.SetLastExitCode(this,
+                    InvokeBashNativeCommand.RunMerged(this, program, o.Command[1..], inheritStdin: true));
             else if (o.Command.Length > 0)
                 Run("param($c,$a) & $c @a", o.Command[0], o.Command[1..]);
             else

@@ -178,11 +178,12 @@ internal sealed class AwkPipeSink : AwkOutSink
     private readonly string _command;
     private readonly AwkStdout _stdout;
     private readonly Action<string> _stderr;
+    private readonly SpawnedChild _child;
     private readonly System.Diagnostics.Process _proc;
     private readonly StreamWriter _w;
     private readonly System.Collections.Concurrent.ConcurrentQueue<(bool Err, string Text)> _queue = new();
     private readonly Thread _outPump;
-    private readonly Thread _errPump;
+    private readonly Thread? _errPump; // none when the command's stderr shares its stdout pipe (awk ... 2>&1)
     private bool _closed;
     // close() is waiting for the command: Abort (StopProcessing, another thread) must still kill it.
     private volatile bool _waiting;
@@ -194,11 +195,12 @@ internal sealed class AwkPipeSink : AwkOutSink
         _stderr = stderr;
         if (shell is null)
             throw new AwkInterpreter.AwkRuntimeException($"fatal: cannot open pipe `{command}' (no shell available)");
-        _proc = shell.StartPipe(command)
+        _child = shell.StartPipe(command)
             ?? throw new AwkInterpreter.AwkRuntimeException($"fatal: cannot open pipe `{command}' (cannot start the command)");
-        _w = new StreamWriter(_proc.StandardInput.BaseStream, RawBytes.Encoding, 1 << 16);
-        _outPump = Pump(_proc.StandardOutput, err: false);
-        _errPump = Pump(_proc.StandardError, err: true);
+        _proc = _child.Process;
+        _w = new StreamWriter(_child.StandardInput!.BaseStream, RawBytes.Encoding, 1 << 16);
+        _outPump = Pump(_child.StandardOutput, err: false);
+        _errPump = _child.StandardError is { } err ? Pump(err, err: true) : null;
         stdout.Holders++;
     }
 
@@ -273,11 +275,11 @@ internal sealed class AwkPipeSink : AwkOutSink
             _proc.WaitForExit();
             _waiting = false;
             _outPump.Join(TimeSpan.FromSeconds(5));
-            _errPump.Join(TimeSpan.FromSeconds(5));
+            _errPump?.Join(TimeSpan.FromSeconds(5));
             Drain();
             return _proc.ExitCode;
         }
-        finally { try { _proc.Dispose(); } catch { /* ignore */ } }
+        finally { try { _child.Dispose(); } catch { /* ignore */ } }
     }
 
     public override void Abort()
@@ -291,6 +293,6 @@ internal sealed class AwkPipeSink : AwkOutSink
         _stdout.Holders--;
         try { _proc.Kill(entireProcessTree: true); } catch { /* gone */ }
         try { _w.Dispose(); } catch { /* best effort */ }
-        try { _proc.Dispose(); } catch { /* ignore */ }
+        try { _child.Dispose(); } catch { /* ignore */ }
     }
 }
