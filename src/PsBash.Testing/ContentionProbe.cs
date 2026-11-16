@@ -26,7 +26,10 @@ public static class ContentionProbe
     public const double StarvedRatio = 1.5;
 
     /// <summary>Never extend past this many multiples of the base deadline (hang backstop).</summary>
-    private const int MaxExtensions = 20;
+    public const int MaxExtensions = 20;
+
+    /// <summary>True when the machine is measurably contended right now (<see cref="StarvedRatio"/>).</summary>
+    public static async Task<bool> IsStarvedAsync() => await MeasureAsync() >= StarvedRatio;
 
     /// <summary>
     /// How many times slower than its fastest run a fixed CPU spin is right now
@@ -65,19 +68,74 @@ public static class ContentionProbe
     {
         // Sample before waiting so the baseline is taken as early (and as quiet) as possible.
         await MeasureAsync();
-        for (var round = 0; round <= (extendWhenStarved ? MaxExtensions : 0); round++)
+        var deadline = new CheckpointDeadline(checkpoint, extendWhenStarved ? null : static () => Task.FromResult(false));
+        var exited = process.WaitForExitAsync();
+        while (true)
         {
-            using var cts = new CancellationTokenSource(checkpoint);
-            try
+            using (var delayCts = new CancellationTokenSource())
             {
-                await process.WaitForExitAsync(cts.Token);
-                return true;
+                var winner = await Task.WhenAny(exited, Task.Delay(deadline.Remaining, delayCts.Token));
+                delayCts.Cancel();
+                if (winner == exited) return true;
             }
-            catch (OperationCanceledException)
-            {
-                if (!extendWhenStarved || await MeasureAsync() < StarvedRatio) return false;
-            }
+            if (!await deadline.ContinueAsync()) return exited.IsCompleted;
         }
-        return false;
+    }
+}
+
+/// <summary>
+/// The ONE clock of a contention-aware wait. Its expiry is a checkpoint: <see cref="ContinueAsync"/> moves
+/// the deadline out by a full window while the machine is starved (at most
+/// <see cref="ContentionProbe.MaxExtensions"/> times) and says stop on a quiet machine.
+/// <para>
+/// A wait must not keep a second deadline beside this one. The interactive harness did: its pending read was
+/// extended while starved, but a per-char <c>UtcNow &gt; deadline</c> check against the ORIGINAL deadline then
+/// failed the wait on the first char of a prompt that arrived inside the extension
+/// ("stdout received (1 chars) --- P"). ContentionAwareWaitGuardTests keeps every probe use behind this type.
+/// </para>
+/// </summary>
+public sealed class CheckpointDeadline
+{
+    private readonly TimeSpan _window;
+    private readonly Func<Task<bool>> _isStarved;
+    private DateTime _deadline;
+
+    /// <param name="window">How long a healthy run takes on an idle machine.</param>
+    /// <param name="isStarved">Contention test; <see cref="ContentionProbe.IsStarvedAsync"/> when null.
+    /// Pass <c>() =&gt; Task.FromResult(false)</c> for a strict, never-extended deadline.</param>
+    public CheckpointDeadline(TimeSpan window, Func<Task<bool>>? isStarved = null)
+    {
+        _window = window;
+        _isStarved = isStarved ?? ContentionProbe.IsStarvedAsync;
+        _deadline = DateTime.UtcNow + window;
+    }
+
+    /// <summary>The base window (for messages).</summary>
+    public TimeSpan Window => _window;
+
+    /// <summary>How many times the deadline was moved out.</summary>
+    public int Extensions { get; private set; }
+
+    /// <summary>Time left before the next checkpoint (zero once it has passed).</summary>
+    public TimeSpan Remaining
+    {
+        get
+        {
+            var left = _deadline - DateTime.UtcNow;
+            return left > TimeSpan.Zero ? left : TimeSpan.Zero;
+        }
+    }
+
+    /// <summary>
+    /// True while the wait should go on: before the deadline, or past it on a starved machine (the deadline
+    /// then moves out one window). False once the deadline has passed on a quiet machine or the cap is reached.
+    /// </summary>
+    public async Task<bool> ContinueAsync()
+    {
+        if (DateTime.UtcNow < _deadline) return true;
+        if (Extensions >= ContentionProbe.MaxExtensions || !await _isStarved()) return false;
+        Extensions++;
+        _deadline = DateTime.UtcNow + _window;
+        return true;
     }
 }

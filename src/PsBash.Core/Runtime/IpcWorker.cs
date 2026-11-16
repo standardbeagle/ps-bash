@@ -283,7 +283,7 @@ public sealed class IpcWorker : IWorker
         // Windows pipe allows 16 instances — N-1 become orphan runspaces (the
         // concurrent-cold-start thundering herd). The lock is endpoint-scoped, so
         // an isolated test endpoint never serializes against the real daemon.
-        var deadline = DateTime.UtcNow + _startupTimeout;
+        var deadline = new HostStartupDeadline(_startupTimeout);
         while (true)
         {
             ct.ThrowIfCancellationRequested();
@@ -313,9 +313,10 @@ public sealed class IpcWorker : IWorker
             if (state == HostHealthState.Healthy && CurrentHostMatchesLauncher())
                 return;
 
-            if (DateTime.UtcNow >= deadline)
+            // The lock holder's host is the one starting: wait on while it is (PendingHostSpawn names it).
+            if (!deadline.Continue(() => HostStartupDeadline.CpuOf(PendingHostSpawn.TryRead(_endpoint))))
                 throw new HostUnavailableException(
-                    $"ps-bash-host did not become reachable within {_startupTimeout.TotalSeconds:0.##}s " +
+                    $"ps-bash-host did not become reachable within {deadline.Describe()} " +
                     "(a concurrent launcher held the spawn lock but no healthy host appeared).");
 
             try { await Task.Delay(_startupPollInterval, ct).ConfigureAwait(false); }
@@ -574,8 +575,9 @@ public sealed class IpcWorker : IWorker
 
     private async Task<bool> WaitForHealthyAsync(CancellationToken ct)
     {
-        var deadline = DateTime.UtcNow + _startupTimeout;
-        while (DateTime.UtcNow < deadline)
+        // The host answered "starting": it is bound and its sidecar names it, so its CPU shows whether it still is.
+        var deadline = new HostStartupDeadline(_startupTimeout);
+        while (deadline.Continue(() => HostStartupDeadline.CpuOfPid(HostMetadata.TryRead(_scheme, _endpoint)?.Pid ?? 0)))
         {
             ct.ThrowIfCancellationRequested();
             var state = await CheckHealthAsync(TimeSpan.FromMilliseconds(750), ct).ConfigureAwait(false);
@@ -690,8 +692,9 @@ public sealed class IpcWorker : IWorker
             // exactly one per shared endpoint under a concurrent cold-start race.
             SpawnCounts.AddOrUpdate($"{_scheme}:{_endpoint}", 1, static (_, n) => n + 1);
 
-            var deadline = DateTime.UtcNow + _startupTimeout;
-            while (DateTime.UtcNow < deadline)
+            // One clock (HostStartupDeadline): past it, a host still burning CPU is starting, not stuck.
+            var deadline = new HostStartupDeadline(_startupTimeout);
+            while (deadline.Continue(() => HostStartupDeadline.CpuOf(proc)))
             {
                 ct.ThrowIfCancellationRequested();
 
@@ -726,7 +729,7 @@ public sealed class IpcWorker : IWorker
             }
 
             throw new HostUnavailableException(
-                $"ps-bash-host did not accept connections within {_startupTimeout.TotalSeconds:0.##}s.");
+                $"ps-bash-host did not accept connections within {deadline.Describe()}.");
         }
         finally
         {

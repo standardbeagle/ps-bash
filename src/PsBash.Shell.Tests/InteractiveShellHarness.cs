@@ -330,78 +330,12 @@ internal sealed class InteractiveShellHarness : IAsyncDisposable
     public async Task WaitForPromptAsync(TimeSpan? timeout = null)
     {
         var effectiveTimeout = timeout ?? DefaultPromptTimeout;
-        var deadline = DateTime.UtcNow + effectiveTimeout;
-
-        var localBuf = new StringBuilder();
-
-        // Read one character at a time so we can detect the prompt as soon as
-        // it appears without any Sleep().
-        var charBuf = new char[1];
-        using var cts = new CancellationTokenSource(effectiveTimeout);
-
-        while (true)
-        {
-            int n;
-            try
-            {
-                // ReadAsync with cancellation so we get a clean timeout path.
-                var readTask = _process.StandardOutput.ReadAsync(charBuf, 0, 1);
-                var completed = await Task.WhenAny(readTask, Task.Delay(effectiveTimeout, cts.Token));
-
-                // The timeout is a checkpoint: keep waiting on the same read while the
-                // machine is starved; only a quiet machine makes silence a failure.
-                while (completed != readTask)
-                {
-                    if (await PsBash.Testing.ContentionProbe.MeasureAsync() < PsBash.Testing.ContentionProbe.StarvedRatio)
-                    {
-                        ThrowTimeout(effectiveTimeout, localBuf.ToString());
-                        return; // unreachable
-                    }
-                    completed = await Task.WhenAny(readTask, Task.Delay(effectiveTimeout));
-                }
-
-                n = await readTask;
-            }
-            catch (OperationCanceledException)
-            {
-                ThrowTimeout(effectiveTimeout, localBuf.ToString());
-                return;
-            }
-
-            if (n == 0)
-            {
-                // EOF — process exited.
-                ThrowTimeout(effectiveTimeout, localBuf.ToString(),
-                    "stdout EOF (process may have exited)");
-                return;
-            }
-
-            localBuf.Append(charBuf, 0, n);
-
-            // Check if the accumulated buffer ends with the prompt string.
-            if (localBuf.Length >= PromptString.Length)
-            {
-                var tail = localBuf.ToString(localBuf.Length - PromptString.Length, PromptString.Length);
-                if (tail == PromptString)
-                {
-                    // Consume the output before the prompt into the since-last-prompt buffer.
-                    var content = localBuf.ToString(0, localBuf.Length - PromptString.Length);
-                    lock (_sinceLastPrompt)
-                    {
-                        _sinceLastPrompt.Clear();
-                        _sinceLastPrompt.Append(content);
-                    }
-                    return;
-                }
-            }
-
-            // Refresh deadline check — if total wall-clock exceeds timeout, abort.
-            if (DateTime.UtcNow > deadline)
-            {
-                ThrowTimeout(effectiveTimeout, localBuf.ToString());
-                return;
-            }
-        }
+        var (outcome, buf) = await ReadUntilAsync(
+            _process.StandardOutput, EndsWithPs1, effectiveTimeout);
+        if (outcome != WaitOutcome.Matched)
+            ThrowTimeout(effectiveTimeout, buf.ToString(),
+                outcome == WaitOutcome.Eof ? "stdout EOF (process may have exited)" : null);
+        SetSinceLastPrompt(buf, PromptString.Length);
     }
 
     /// <summary>
@@ -421,78 +355,88 @@ internal sealed class InteractiveShellHarness : IAsyncDisposable
     public async Task<bool> WaitForAnyPromptAsync(TimeSpan? timeout = null)
     {
         var effectiveTimeout = timeout ?? DefaultPromptTimeout;
-        var deadline = DateTime.UtcNow + effectiveTimeout;
+        var (outcome, buf) = await ReadUntilAsync(
+            _process.StandardOutput, b => EndsWithPs1(b) || EndsWith(b, Ps2Value),
+            effectiveTimeout);
+        if (outcome != WaitOutcome.Matched)
+            ThrowTimeout(effectiveTimeout, buf.ToString(),
+                outcome == WaitOutcome.Eof ? "stdout EOF (process may have exited)" : null);
 
-        var localBuf = new StringBuilder();
+        // PS1 first: it is the longer, more specific marker.
+        if (EndsWithPs1(buf))
+        {
+            SetSinceLastPrompt(buf, PromptString.Length);
+            return false; // PS1 seen
+        }
+        SetSinceLastPrompt(buf, Ps2Value.Length);
+        return true; // PS2 seen
+    }
+
+    internal enum WaitOutcome { Matched, TimedOut, Eof }
+
+    /// <summary>
+    /// Reads <paramref name="reader"/> one char at a time until <paramref name="isMatch"/>
+    /// accepts the accumulated text, the reader hits EOF, or the deadline passes.
+    ///
+    /// The wait has ONE clock, a <see cref="PsBash.Testing.CheckpointDeadline"/>: when it passes,
+    /// <paramref name="isStarved"/> decides whether it moves out another full window. The check is
+    /// the same whether the deadline passes while a read is pending or between two chars, so a
+    /// prompt that starts arriving inside an extension window is read to the end instead of
+    /// failing on its first char (the "stdout received (1 chars) --- P" bug).
+    /// </summary>
+    internal static async Task<(WaitOutcome Outcome, StringBuilder Buffer)> ReadUntilAsync(
+        TextReader reader,
+        Func<StringBuilder, bool> isMatch,
+        TimeSpan timeout,
+        Func<Task<bool>>? isStarved = null)
+    {
+        var buf = new StringBuilder();
         var charBuf = new char[1];
-        using var cts = new CancellationTokenSource(effectiveTimeout);
+        var deadline = new PsBash.Testing.CheckpointDeadline(timeout, isStarved);
+        Task<int>? pending = null;
 
         while (true)
         {
-            int n;
-            try
+            if (!await deadline.ContinueAsync())
+                return (WaitOutcome.TimedOut, buf);
+
+            // A read abandoned at a checkpoint stays pending and is awaited next round:
+            // a reader must never have two reads in flight.
+            pending ??= reader.ReadAsync(charBuf, 0, 1);
+            if (!pending.IsCompleted)
             {
-                var readTask = _process.StandardOutput.ReadAsync(charBuf, 0, 1);
-                var completed = await Task.WhenAny(readTask, Task.Delay(effectiveTimeout, cts.Token));
-                if (completed != readTask)
-                {
-                    ThrowTimeout(effectiveTimeout, localBuf.ToString());
-                    return false;
-                }
-                n = await readTask;
-            }
-            catch (OperationCanceledException)
-            {
-                ThrowTimeout(effectiveTimeout, localBuf.ToString());
-                return false;
+                using var delayCts = new CancellationTokenSource();
+                var winner = await Task.WhenAny(pending, Task.Delay(deadline.Remaining, delayCts.Token));
+                delayCts.Cancel();
+                if (winner != pending)
+                    continue; // deadline checkpoint
             }
 
+            var n = await pending;
+            pending = null;
             if (n == 0)
-            {
-                ThrowTimeout(effectiveTimeout, localBuf.ToString(), "stdout EOF (process may have exited)");
-                return false;
-            }
+                return (WaitOutcome.Eof, buf);
 
-            localBuf.Append(charBuf, 0, n);
+            buf.Append(charBuf, 0, n);
+            if (isMatch(buf))
+                return (WaitOutcome.Matched, buf);
+        }
+    }
 
-            // Check for PS1 prompt first (longer, more specific).
-            if (localBuf.Length >= PromptString.Length)
-            {
-                var tail = localBuf.ToString(localBuf.Length - PromptString.Length, PromptString.Length);
-                if (tail == PromptString)
-                {
-                    var content = localBuf.ToString(0, localBuf.Length - PromptString.Length);
-                    lock (_sinceLastPrompt)
-                    {
-                        _sinceLastPrompt.Clear();
-                        _sinceLastPrompt.Append(content);
-                    }
-                    return false; // PS1 seen
-                }
-            }
+    private static bool EndsWithPs1(StringBuilder buf) => EndsWith(buf, PromptString);
 
-            // Check for PS2 prompt ("> ").
-            if (localBuf.Length >= Ps2Value.Length)
-            {
-                var tail = localBuf.ToString(localBuf.Length - Ps2Value.Length, Ps2Value.Length);
-                if (tail == Ps2Value)
-                {
-                    // Store content before PS2 marker.
-                    var content = localBuf.ToString(0, localBuf.Length - Ps2Value.Length);
-                    lock (_sinceLastPrompt)
-                    {
-                        _sinceLastPrompt.Clear();
-                        _sinceLastPrompt.Append(content);
-                    }
-                    return true; // PS2 seen
-                }
-            }
+    private static bool EndsWith(StringBuilder buf, string marker) =>
+        buf.Length >= marker.Length
+        && buf.ToString(buf.Length - marker.Length, marker.Length) == marker;
 
-            if (DateTime.UtcNow > deadline)
-            {
-                ThrowTimeout(effectiveTimeout, localBuf.ToString());
-                return false;
-            }
+    // Stores the output before the prompt marker for ReadSinceLastPrompt.
+    private void SetSinceLastPrompt(StringBuilder buf, int markerLength)
+    {
+        var content = buf.ToString(0, buf.Length - markerLength);
+        lock (_sinceLastPrompt)
+        {
+            _sinceLastPrompt.Clear();
+            _sinceLastPrompt.Append(content);
         }
     }
 

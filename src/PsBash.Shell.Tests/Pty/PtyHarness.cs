@@ -276,7 +276,7 @@ internal sealed partial class PtyHarness : IAsyncDisposable
         ArgumentException.ThrowIfNullOrEmpty(pattern);
         var effective = timeout ?? DefaultTimeout;
         var regex = new Regex(pattern, RegexOptions.Compiled);
-        var cts = new CancellationTokenSource(effective);
+        var deadline = new PsBash.Testing.CheckpointDeadline(effective);
 
         while (true)
         {
@@ -297,15 +297,13 @@ internal sealed partial class PtyHarness : IAsyncDisposable
 
             try
             {
-                await dataSignal.Task.WaitAsync(cts.Token).ConfigureAwait(false);
+                await dataSignal.Task.WaitAsync(deadline.Remaining).ConfigureAwait(false);
             }
-            catch (OperationCanceledException)
+            catch (TimeoutException)
             {
                 // The deadline is a checkpoint: a starved machine gets another window.
-                if (await PsBash.Testing.ContentionProbe.MeasureAsync() < PsBash.Testing.ContentionProbe.StarvedRatio)
+                if (!await deadline.ContinueAsync().ConfigureAwait(false))
                     ThrowTimeout(pattern, effective);
-                cts.Dispose();
-                cts = new CancellationTokenSource(effective);
             }
         }
     }

@@ -282,6 +282,19 @@ The **startup timeout** is `PSBASH_STARTUP_TIMEOUT` seconds, else a positive
 until runspace init was observed to exceed that on a slow machine (OneDrive-synced
 `PSModulePath`; GitHub #6). A host that exits during startup still fails immediately.
 
+**The startup timeout is a checkpoint, not a verdict** (`Ipc/HostStartupDeadline`). Every
+launcher wait on a starting host keeps its ONE clock there: the spawner waiting on its own host,
+a launcher waiting on the spawn-lock holder's host (named by `PendingHostSpawn`), and the wait on
+a host that answered `starting`. When the timeout passes, a host that is alive and has used CPU
+since the last checkpoint is still starting and gets another full window, at most
+`HostStartupDeadline.MaxExtensions` (3) times. A host that is idle at a checkpoint is stuck and
+fails there. Rationale: a cold start on a loaded machine is correct but slow. With
+`PSBASH_TIMEOUT=15` (inherited as the startup timeout) a differential run failed with "did not
+accept connections within 15s", exit 125. `ContentionAwareWaitGuardTests` forbids a bare
+`UtcNow + _startupTimeout` in Core. `PendingHostSpawn.Judge` deliberately stays time-only. It
+anchors on the pending host's own start time, so every later launcher agrees when a host whose
+launcher died has had long enough.
+
 This gives single-host-per-**session** behavior: one daemon per `(user, session)`,
 where the session token is an explicit `PSBASH_SESSION` or, when unset, the
 launcher's **stable session anchor** — the nearest shell/agent ancestor of the
