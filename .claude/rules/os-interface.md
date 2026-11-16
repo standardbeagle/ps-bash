@@ -18,15 +18,18 @@ NEVER re-derive the read-only fallback in a cmdlet. A new destructive op → use
 
 ## CHILD PROCESSES — `BashRuntime.RunChildProcess` (timeout + kill-tree)
 Buffered shell-out (id, checksum external, etc.) → `BashRuntime.RunChildProcess(psi[, timeout])`:
-bounded wait, concurrent stdout/stderr drain, `Kill(entireProcessTree:true)` on timeout. A hung
+bounded wait, concurrent stdout/stderr drain, `SpawnedChild.KillTree()` on timeout/stop. A hung
 child can never wedge the single-threaded host runspace. Streaming child (output while it runs, piped
 stdin fed live, no budget; nested `bash`) → `BashRuntime.StartChildProcessStreaming` →
 `StreamingChildProcess` (pump/WriteStdin/Complete on the pipeline thread, `Kill` from `StopProcessing`).
 Both take a `ChildStdioMode`: when `StderrMerge.JoinsStdout(this)` the child gets ONE pipe for fd 1+2
 (`ChildStdio`, spec `stdio-messaging.md` §4) — never merge two separately read streams. Run-by-name
 (`& $c`) → `InvokeBashNativeCommand.MergedProgramPath`/`RunMerged` (guard `ChildStdioGuardTests`).
-Raw `Process.Start` is allowed ONLY for interactive consumers (traceroute hop-by-hop, less paging)
-that handle `Stopping` + kill-tree themselves. Never raw-spawn a buffered command.
+Raw `Process.Start` is allowed ONLY for the interactive pager (less). Never raw-spawn a buffered command.
+STOP = WHOLE TREE: every child starts via `ChildStdio.Start` inside a Job Object / process group (`JobProcess`,
+spec `stdio-messaging.md` §4.6); stop it with `SpawnedChild.KillTree()` / `StreamingChildProcess.Kill()`. NEVER
+`Process.Kill` / `Kill(entireProcessTree:true)` (misses orphans, which then hold the pipes) and never wait for
+pipe EOF after a stop (guard `ProcessTreeKillGuardTests`).
 
 ## PATHS / IDENTITY (already centralized — reuse, don't re-add)
 - operand path normalization → `FileSystemHelpers.NormalizeOperandPath` → `WindowsPath` (unix→drive).

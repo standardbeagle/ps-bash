@@ -1281,19 +1281,6 @@ public static class BashRuntime
         return WaitBuffered(proc, budget, stop);
     }
 
-    /// <summary>Wait for <paramref name="proc"/> up to <paramref name="waitMs"/> (Infinite allowed); false when the time ran out or <paramref name="stop"/> was cancelled.</summary>
-    private static bool WaitForExitOrStop(Process proc, int waitMs, CancellationToken stop)
-    {
-        if (!stop.CanBeCanceled) return proc.WaitForExit(waitMs);
-        using var exited = new ManualResetEventSlim(false);
-        proc.EnableRaisingEvents = true;
-        proc.Exited += (_, _) => exited.Set();
-        if (proc.HasExited) exited.Set();
-        try { exited.Wait(waitMs, stop); }
-        catch (OperationCanceledException) { return proc.HasExited; }
-        return exited.IsSet || proc.HasExited;
-    }
-
     /// <summary>
     /// A STREAMING child: its stdout/stderr arrive while it runs (the caller's pipeline thread pumps them, see
     /// <see cref="StreamingChildProcess"/>), its stdin stays open for the caller to feed when
@@ -1350,32 +1337,35 @@ public static class BashRuntime
         }
     }
 
+    /// <summary>After a tree kill every writer is dead, so the pipes reach EOF at once; this only covers the readers' last chunk.</summary>
+    private static readonly System.TimeSpan DrainAfterKill = System.TimeSpan.FromSeconds(2);
+
+    /// <summary>After a normal exit, how long the pipes may stay open (a backgrounded grandchild holding them) before the capture is returned without them.</summary>
+    private static readonly System.TimeSpan DrainAfterExit = System.TimeSpan.FromSeconds(5);
+
     private static ChildProcessResult WaitBuffered(SpawnedChild child, System.TimeSpan budget, CancellationToken stop)
     {
         // Drain BOTH streams concurrently (one, when stderr is merged into stdout). Each drain keeps reading after
         // the capture cap and discards excess text, so a noisy child cannot exhaust memory or block on a full pipe.
-        var proc = child.Process;
         var captureLimit = GetChildCaptureLimitChars();
         var stdoutCapture = new BoundedTextCapture(captureLimit);
         var stderrCapture = new BoundedTextCapture(captureLimit);
-        using var stdoutDrain = StreamDrain.Start(child.StandardOutput, stdoutCapture);
-        using var stderrDrain = child.StandardError is { } err ? StreamDrain.Start(err, stderrCapture) : null;
+        var stdoutDrain = StreamDrain.Start(child.StandardOutput, stdoutCapture);
+        var stderrDrain = child.StandardError is { } err ? StreamDrain.Start(err, stderrCapture) : null;
 
         int waitMs = budget <= System.TimeSpan.Zero
             ? System.Threading.Timeout.Infinite
             : (int)System.Math.Min(budget.TotalMilliseconds, int.MaxValue);
 
-        if (!WaitForExitOrStop(proc, waitMs, stop))
+        // The wait is on the process alone (never on a pipe), on this thread, woken by the exit or by `stop`.
+        if (!child.WaitForExit(waitMs, stop))
         {
-            // Budget elapsed — kill the process and the descendants still attached to
-            // it via OS parent-pid links. NOTE: this is best-effort, not a guarantee —
-            // a double-forked grandchild reparented to PID 1 (or a Windows-detached
-            // process) has no live parent link back to `proc` and so survives. A real
-            // guarantee would need a Windows Job Object / POSIX process group (setsid).
-            try { proc.Kill(entireProcessTree: true); } catch { /* already gone / race */ }
-            try { proc.WaitForExit(2_000); } catch { /* best effort */ }
-            stdoutDrain.Join(System.TimeSpan.FromSeconds(5));
-            stderrDrain?.Join(System.TimeSpan.FromSeconds(5));
+            // Budget elapsed or stop requested: end the WHOLE tree (Job Object / process group - a grandchild whose
+            // parent already exited is in it too), then take what the readers still deliver. The drains are bounded
+            // and then abandoned: nothing here waits for a pipe to close.
+            child.KillTree();
+            child.WaitForExit(2_000);
+            StreamDrain.JoinAll(DrainAfterKill, stdoutDrain, stderrDrain);
             return new ChildProcessResult(
                 stop.IsCancellationRequested ? 130 : 124,
                 stdoutCapture.Text,
@@ -1385,13 +1375,11 @@ public static class BashRuntime
                 StderrTruncated: stderrCapture.Truncated);
         }
 
-        // WaitForExit(int) does NOT guarantee the stdout/stderr drainers have hit
-        // EOF; the parameterless overload does. Call it before joining them.
-        try { proc.WaitForExit(); } catch { /* already reaped */ }
-        stdoutDrain.Join(System.TimeSpan.FromSeconds(5));
-        stderrDrain?.Join(System.TimeSpan.FromSeconds(5));
+        // The child exited on its own. Its pipes close with it unless something it left running still holds them;
+        // that gets a bounded grace, shared by both streams.
+        StreamDrain.JoinAll(DrainAfterExit, stdoutDrain, stderrDrain);
         return new ChildProcessResult(
-            proc.ExitCode,
+            child.ExitCode,
             stdoutCapture.Text,
             stderrCapture.Text,
             TimedOut: false,
@@ -1467,7 +1455,11 @@ public static class BashRuntime
         }
     }
 
-    private sealed class StreamDrain : IDisposable
+    /// <summary>
+    /// A background reader of one child stream. It is only ever JOINED WITH A BOUND and then left behind: a reader
+    /// blocked on a pipe that some surviving process still holds ends when that process does, on its own thread.
+    /// </summary>
+    private sealed class StreamDrain
     {
         private readonly Thread _thread;
 
@@ -1503,13 +1495,15 @@ public static class BashRuntime
             return new StreamDrain(thread);
         }
 
-        public bool Join(System.TimeSpan timeout) => _thread.Join(timeout);
-
-        public void Dispose()
+        /// <summary>Wait for the readers to reach EOF, <paramref name="total"/> at most for all of them together.</summary>
+        public static void JoinAll(System.TimeSpan total, params StreamDrain?[] drains)
         {
-            if (_thread.IsAlive)
+            var deadline = System.Diagnostics.Stopwatch.StartNew();
+            foreach (var drain in drains)
             {
-                _thread.Join(System.TimeSpan.FromMilliseconds(100));
+                if (drain is null) continue;
+                var left = total - deadline.Elapsed;
+                if (left <= System.TimeSpan.Zero || !drain._thread.Join(left)) return;
             }
         }
     }

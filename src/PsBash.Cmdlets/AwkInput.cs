@@ -156,7 +156,7 @@ internal sealed class AwkCommandStream : IAwkLineStream
 {
     private static readonly TimeSpan PendingGrace = TimeSpan.FromSeconds(3);
 
-    private readonly Process _proc;
+    private readonly SpawnedChild _proc;
     private readonly StreamReader _out;
     private readonly StringBuilder _err = new();
     private readonly Thread _errPump;
@@ -166,17 +166,18 @@ internal sealed class AwkCommandStream : IAwkLineStream
     /// <summary>Where the command's stderr goes when it is closed (the machine sets awk's error stream).</summary>
     public Action<string> WriteStderr { get; set; } = static s => Console.Error.Write(s);
 
-    private AwkCommandStream(Process proc)
+    private AwkCommandStream(SpawnedChild proc)
     {
         _proc = proc;
         _out = proc.StandardOutput;
+        var stderr = proc.StandardError!; // Separate mode: stderr is awk's, never merged into the data
         _errPump = new Thread(() =>
         {
             try
             {
                 var buf = new char[4096];
                 int n;
-                while ((n = proc.StandardError.Read(buf, 0, buf.Length)) > 0)
+                while ((n = stderr.Read(buf, 0, buf.Length)) > 0)
                     lock (_err) _err.Append(buf, 0, n);
             }
             catch { /* killed mid-read */ }
@@ -188,12 +189,12 @@ internal sealed class AwkCommandStream : IAwkLineStream
     public static AwkCommandStream? Start(ProcessStartInfo psi)
     {
         Prepare(psi);
-        Process? proc = null;
+        SpawnedChild? proc = null;
         try
         {
-            proc = Process.Start(psi);
-            if (proc is null) return null;
-            try { proc.StandardInput.Close(); } catch { /* child never opened it */ }
+            // `cmd | getline` reads the command's stdout only: two pipes, whatever awk's own merge state is.
+            proc = ChildStdio.Start(psi, ChildStdioMode.Separate);
+            try { proc.StandardInput?.Close(); } catch { /* child never opened it */ }
             return new AwkCommandStream(proc);
         }
         catch (Exception ex) when (!FileSystemHelpers.IsPipelineStop(ex))
@@ -244,7 +245,7 @@ internal sealed class AwkCommandStream : IAwkLineStream
     /// <summary>Kill the process tree now (host StopProcessing); a blocked <see cref="ReadLine"/> then returns null.</summary>
     public void Kill()
     {
-        try { _proc.Kill(entireProcessTree: true); } catch { /* already gone */ }
+        try { _proc.KillTree(); } catch { /* already gone */ }
     }
 
     public int Close()

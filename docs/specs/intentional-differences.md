@@ -77,6 +77,7 @@ model in [runtime-functions.md](runtime-functions.md) "Raw bytes".
 | `jq repeat(f)` | Matches the jq 1.7 binary (`1\|[limit(3;repeat(.*2))]` = `[2,2,2]`), not the manual | Oracle wins |
 | `jq` `stderr` / `debug` | Line ends with a newline | The host terminates each record |
 | awk recursion | Capped near depth 1000 with a clean exit-2 error | Protects the host's stack |
+| Ctrl+C on a program whose script left `x &` running (`sh -c 'x & wait'`) | `x` is killed with the rest of the program's process tree; bash leaves it (an async child of a non-interactive shell ignores SIGINT). A `setsid` child (Windows: `CREATE_BREAKAWAY_FROM_JOB`) survives in both, and `timeout` kills `x` in both | A stop ends the whole tree by construction (Job Object / process group, `stdio-messaging.md` §4.6); Windows has no per-process signal disposition to copy |
 | awk `close()` of a command with unread output | Waits up to 3 s, then reports gawk's 141 | Avoids hanging on a child that never exits |
 | awk warnings | No `cmd. line:N:` prefix | Location tracking not kept |
 | `rg -P`, `grep -P` | Translated to .NET regex; constructs it cannot express (`\K`, `\X`, recursion, `(?\|`, verbs) are an error, never a silent mismatch | No PCRE2 engine |

@@ -201,11 +201,13 @@ hang). Rules below are requirements, each with a test (§9).
 | Identity (PID reuse) | `ProcessIdentity` (pid + creation time) checked before every signal/kill and on registry reload | pid + `/proc/<pid>/stat` starttime | pid + `proc_pidinfo` start time |
 | Window flashes | `CREATE_NO_WINDOW` (see memory: codex-window-flashes) | n/a | n/a |
 
-Everything above is wrapped in one `JobProcess` abstraction in `PsBash.Core/Runtime` with
-`Spawn / Signal(sig) / Kill(tree) / Suspend / Resume / WaitAsync / Identity`, one implementation per OS
-behind a shared contract test-suite. `BashRuntime.RunChildProcess` (buffered, timeout, `Kill(entireProcessTree)`)
-stays for buffered tools; its own comment already notes the tree-kill guarantee needs Job Object/pgrp —
-`JobProcess` is that guarantee and `RunChildProcess` should adopt it afterwards.
+Everything above is wrapped in one `JobProcess` abstraction (`PsBash.Transpiler/Processes/JobProcess*.cs`,
+namespace `PsBash.Core.Runtime.Processes`; it lives in the leaf assembly so `PsBash.Cmdlets` can use it) with
+`Spawn / Signal(sig) / Kill(tree) / Suspend / Resume / WaitForExit / Identity`, one implementation per OS
+behind a shared contract test-suite. It is THE process-tree primitive: every child a cmdlet starts
+(`ChildStdio.Start`, so `BashRuntime.RunChildProcess` and `StartChildProcessStreaming`) goes through it too, with
+pipes as its stdio, `BREAKAWAY` allowed and no new console process group. The foreground-child invariant - a stop
+ends the whole tree and no wait depends on a pipe - is `stdio-messaging.md` §4.6.
 
 ### 6.2 Lifecycle table — every way a job can end, and what happens
 

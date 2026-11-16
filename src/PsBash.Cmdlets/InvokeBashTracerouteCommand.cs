@@ -91,32 +91,29 @@ public sealed class InvokeBashTracerouteCommand : PSCmdlet
         psi.ArgumentList.Add(hopFlag);
         psi.ArgumentList.Add(maxHops.ToString(System.Globalization.CultureInfo.InvariantCulture));
         psi.ArgumentList.Add(host);
-        // Raw Process.Start (streaming hop-by-hop — exempt from RunChildProcess),
-        // so the bash-variable materialization seam must be applied here too.
-        BashVariableStore.ApplyTo(psi);
-
         try
         {
-            using var proc = Process.Start(psi);
-            if (proc is null)
-            {
-                return false;
-            }
+            // Hop-by-hop streaming, so not RunChildProcess; still the spawn primitive (one tree, one kill).
+            using var proc = ChildStdio.Start(psi, ChildStdioMode.Separate);
+            try { proc.StandardInput?.Close(); } catch { /* the child never opened it */ }
 
-            // Drain stderr concurrently. It is redirected but we only read stdout
-            // synchronously below; once the child writes more than the ~4KB stderr
-            // pipe buffer it blocks on the write, which stops it producing stdout,
-            // which wedges our ReadLine forever (and the unbounded WaitForExit after
-            // it). An async drain empties the buffer so the child keeps flowing.
-            proc.ErrorDataReceived += static (_, _) => { /* discard: stderr is noise here */ };
-            proc.BeginErrorReadLine();
+            // Drain stderr concurrently. We only read stdout synchronously below; once the child writes more
+            // than the ~4KB stderr pipe buffer it blocks on the write, which stops it producing stdout, which
+            // wedges our ReadLine forever. A reader thread empties the buffer so the child keeps flowing.
+            var stderr = proc.StandardError!;
+            new Thread(() =>
+            {
+                var buf = new char[4096];
+                try { while (stderr.Read(buf, 0, buf.Length) > 0) { /* discard: stderr is noise here */ } }
+                catch { /* killed mid-read */ }
+            }) { IsBackground = true, Name = "ps-bash traceroute stderr" }.Start();
 
             string? line;
             while ((line = proc.StandardOutput.ReadLine()) is not null)
             {
                 if (Stopping)
                 {
-                    try { proc.Kill(entireProcessTree: true); } catch { /* ignore */ }
+                    proc.KillTree();
                     break;
                 }
 
@@ -134,7 +131,7 @@ public sealed class InvokeBashTracerouteCommand : PSCmdlet
             // without exiting cannot hang the host runspace. Kill on timeout.
             if (!proc.WaitForExit(10_000))
             {
-                try { proc.Kill(entireProcessTree: true); } catch { /* ignore */ }
+                proc.KillTree();
             }
             return true;
         }

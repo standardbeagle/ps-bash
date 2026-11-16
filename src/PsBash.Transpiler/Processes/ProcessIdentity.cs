@@ -7,7 +7,7 @@ namespace PsBash.Core.Runtime.Ipc;
 /// A process's pid paired with its start time (UTC ticks). The start time makes the
 /// identity unique over time: two different processes that reuse one PID still get
 /// distinct identities. Used as the automatic session anchor
-/// (<see cref="ProcessAncestry.FindSessionAnchor"/>) and handed to the daemon it keys
+/// (<c>ProcessAncestry.FindSessionAnchor</c>) and handed to the daemon it keys
 /// as <c>--session-anchor=&lt;pid&gt;:&lt;startTicks&gt;</c>, so the daemon can exit once its
 /// session is gone (see <c>docs/specs/host-lifecycle-contract.md</c> §Session anchor lifetime).
 /// </summary>
@@ -17,7 +17,7 @@ public readonly record struct ProcessIdentity(int Pid, long StartTimeUtcTicks)
     public const string SessionAnchorArg = "--session-anchor";
 
     /// <summary>Start time of <paramref name="process"/> in UTC ticks — the one formula every identity uses.</summary>
-    internal static long StartTicksOf(Process process) => process.StartTime.ToUniversalTime().Ticks;
+    public static long StartTicksOf(Process process) => process.StartTime.ToUniversalTime().Ticks;
 
     /// <summary><c>&lt;pid&gt;:&lt;startTicks&gt;</c>, the <see cref="SessionAnchorArg"/> value.</summary>
     public string ToArgumentValue()

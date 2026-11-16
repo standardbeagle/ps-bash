@@ -519,14 +519,26 @@ public class BashRuntimeTests
         var psi = OperatingSystem.IsWindows()
             ? new System.Diagnostics.ProcessStartInfo("cmd.exe") { ArgumentList = { "/c", "ping -n 30 127.0.0.1 > NUL" } }
             : new System.Diagnostics.ProcessStartInfo("/bin/sh") { ArgumentList = { "-c", "sleep 30" } };
-        using var stop = new CancellationTokenSource(TimeSpan.FromMilliseconds(500));
+        // Cancelled from a dedicated thread, as StopProcessing does. A CancellationTokenSource(delay) fires on the
+        // thread pool, so a busy pool delayed the stop itself (a 27 s "stop" on a fleet host) and the test measured
+        // the pool. The time is taken from the cancel, which is what the invariant bounds; the grandchild-pid
+        // assertions are in ProcessTreeStopTests.
+        using var stop = new CancellationTokenSource();
+        var sinceStop = new System.Diagnostics.Stopwatch();
+        var canceller = new Thread(() =>
+        {
+            stop.Token.WaitHandle.WaitOne(500);
+            sinceStop.Start();
+            stop.Cancel();
+        }) { IsBackground = true };
+        canceller.Start();
 
-        var sw = System.Diagnostics.Stopwatch.StartNew();
         var result = BashRuntime.RunChildProcess(psi, BashRuntime.NoTimeLimit, null, stop.Token);
-        sw.Stop();
+        var took = sinceStop.Elapsed;
+        canceller.Join();
 
         Assert.Equal(130, result.ExitCode);
-        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(8), $"stop must end the wait; took {sw.ElapsedMilliseconds}ms");
+        Assert.True(took < TimeSpan.FromSeconds(8), $"stop must end the wait; took {took.TotalMilliseconds:0}ms after the cancel");
     }
 
     [Fact]

@@ -45,12 +45,12 @@ public class ChildStdioTests
         using var child = ChildStdio.Start(Alternating(), ChildStdioMode.Merged);
         child.StandardInput?.Close();
         string all = child.StandardOutput.ReadToEnd();
-        child.Process.WaitForExit();
+        child.WaitForExit();
 
         Assert.Null(child.StandardError);
         Assert.True(child.StderrMerged);
         Assert.Equal(Expected(), all.Replace("\r\n", "\n").Replace(" \n", "\n"));
-        Assert.Equal(0, child.Process.ExitCode);
+        Assert.Equal(0, child.ExitCode);
     }
 
     [Fact]
@@ -60,7 +60,7 @@ public class ChildStdioTests
         child.StandardInput?.Close();
         var err = Task.Run(() => child.StandardError!.ReadToEnd());
         string output = child.StandardOutput.ReadToEnd();
-        child.Process.WaitForExit();
+        child.WaitForExit();
 
         Assert.NotNull(child.StandardError);
         Assert.DoesNotContain("e1", output, StringComparison.Ordinal);
@@ -89,9 +89,9 @@ public class ChildStdioTests
         using var child = ChildStdio.Start(psi, ChildStdioMode.Merged);
         child.StandardInput?.Close();
         string all = child.StandardOutput.ReadToEnd().Replace("\r\n", "\n");
-        child.Process.WaitForExit();
+        child.WaitForExit();
 
-        Assert.Equal(7, child.Process.ExitCode);
+        Assert.Equal(7, child.ExitCode);
         Assert.EndsWith("err\n", all.Replace(" \n", "\n"), StringComparison.Ordinal);
         if (!OperatingSystem.IsWindows()) Assert.StartsWith("a b||-e|\n", all, StringComparison.Ordinal);
     }
@@ -115,7 +115,7 @@ public class ChildStdioTests
         child.StandardInput!.Write("ax\nb\ncx\n");
         child.StandardInput.Close();
         string all = child.StandardOutput.ReadToEnd().Replace("\r\n", "\n");
-        child.Process.WaitForExit();
+        child.WaitForExit();
 
         Assert.Equal("ax\ncx\ndone\n", all.Replace(" \n", "\n"));
     }

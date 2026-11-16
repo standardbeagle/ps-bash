@@ -18,17 +18,47 @@ public sealed unsafe partial class JobProcess
     [SupportedOSPlatform("windows")]
     private static JobProcess StartWindows(JobProcessStart spec)
     {
-        var cmdLine = Marshal.StringToHGlobalUni(WindowsHostSpawn.BuildCommandLine(spec.FileName, spec.Arguments));
-        var envBlock = BuildEnvironmentBlock(spec.Environment);
+        string commandLine = spec.RawArguments is { Length: > 0 } raw
+            ? WindowsCommandLine.Build(spec.FileName, []) + " " + raw
+            : WindowsCommandLine.Build(spec.FileName, spec.Arguments);
+        var cmdLine = Marshal.StringToHGlobalUni(commandLine);
+        var envBlock = BuildEnvironmentBlock(spec.Environment, spec.EnvironmentIsComplete);
         var nulName = Marshal.StringToHGlobalUni("NUL");
-        IntPtr nul = InvalidHandle, attrList = IntPtr.Zero, handleArray = IntPtr.Zero, job = IntPtr.Zero;
+        var cwd = string.IsNullOrEmpty(spec.WorkingDirectory) ? IntPtr.Zero : Marshal.StringToHGlobalUni(spec.WorkingDirectory);
+        IntPtr nul = InvalidHandle, stdinDup = IntPtr.Zero, attrList = IntPtr.Zero, handleArray = IntPtr.Zero, job = IntPtr.Zero;
         var pi = default(ProcessInformation);
         bool started = false;
         try
         {
-            var sa = new SecurityAttributes { nLength = sizeof(SecurityAttributes), bInheritHandle = 1 };
-            nul = CreateFileW(nulName, GenericRead | GenericWrite, FileShareRead | FileShareWrite, &sa, OpenExisting, 0, IntPtr.Zero);
-            if (nul == InvalidHandle) throw Failure("CreateFileW(NUL)");
+            var stdio = spec.Stdio ?? default;
+            IntPtr NullDevice()
+            {
+                if (nul != InvalidHandle) return nul;
+                var sa = new SecurityAttributes { nLength = sizeof(SecurityAttributes), bInheritHandle = 1 };
+                nul = CreateFileW(nulName, GenericRead | GenericWrite, FileShareRead | FileShareWrite, &sa, OpenExisting, 0, IntPtr.Zero);
+                if (nul == InvalidHandle) throw Failure("CreateFileW(NUL)");
+                return nul;
+            }
+
+            IntPtr childIn;
+            if (stdio.Stdin is { } givenIn) childIn = givenIn;
+            else if (stdio.InheritStdin)
+            {
+                // An inheritable duplicate of this process's stdin; the null device when it has none.
+                var current = GetCurrentProcess();
+                IntPtr std = GetStdHandle(StdInputHandle);
+                if (std != IntPtr.Zero && std != InvalidHandle
+                    && DuplicateHandle(current, std, current, out stdinDup, 0, 1, DuplicateSameAccess) != 0)
+                    childIn = stdinDup;
+                else
+                {
+                    stdinDup = IntPtr.Zero;
+                    childIn = NullDevice();
+                }
+            }
+            else childIn = NullDevice();
+            IntPtr childOut = stdio.Stdout ?? NullDevice();
+            IntPtr childErr = stdio.Stderr ?? NullDevice();
 
             nuint size = 0;
             InitializeProcThreadAttributeList(IntPtr.Zero, 1, 0, &size); // sizing call; fails by design
@@ -39,28 +69,37 @@ public sealed unsafe partial class JobProcess
                 attrList = IntPtr.Zero;
                 throw Failure("InitializeProcThreadAttributeList");
             }
-            handleArray = Marshal.AllocHGlobal(IntPtr.Size);
-            Marshal.WriteIntPtr(handleArray, nul);
-            if (UpdateProcThreadAttribute(attrList, 0, ProcThreadAttributeHandleList, handleArray, (nuint)IntPtr.Size, IntPtr.Zero, IntPtr.Zero) == 0)
+            // The handle list names each handle once (stdout and stderr may be one handle: 2>&1).
+            handleArray = Marshal.AllocHGlobal(IntPtr.Size * 3);
+            int handleCount = 0;
+            Marshal.WriteIntPtr(handleArray, IntPtr.Size * handleCount++, childIn);
+            if (childOut != childIn) Marshal.WriteIntPtr(handleArray, IntPtr.Size * handleCount++, childOut);
+            if (childErr != childIn && childErr != childOut) Marshal.WriteIntPtr(handleArray, IntPtr.Size * handleCount++, childErr);
+            if (UpdateProcThreadAttribute(attrList, 0, ProcThreadAttributeHandleList, handleArray, (nuint)(IntPtr.Size * handleCount), IntPtr.Zero, IntPtr.Zero) == 0)
                 throw Failure("UpdateProcThreadAttribute(HANDLE_LIST)");
 
             var si = new StartupInfoEx { lpAttributeList = attrList };
             si.StartupInfo.cb = sizeof(StartupInfoEx);
             si.StartupInfo.dwFlags = StartfUseStdHandles;
-            si.StartupInfo.hStdInput = si.StartupInfo.hStdOutput = si.StartupInfo.hStdError = nul;
+            si.StartupInfo.hStdInput = childIn;
+            si.StartupInfo.hStdOutput = childOut;
+            si.StartupInfo.hStdError = childErr;
 
             // Job first, so a failure to contain the process never leaves one running.
             job = CreateJobObjectW(IntPtr.Zero, IntPtr.Zero);
             if (job == IntPtr.Zero) throw Failure("CreateJobObjectW");
             var limits = default(JobObjectExtendedLimitInformation);
-            limits.BasicLimitInformation.LimitFlags = JobObjectLimitKillOnJobClose; // no breakaway: nothing escapes
+            // Nothing escapes, except - when allowed - a process that explicitly asks to (CREATE_BREAKAWAY_FROM_JOB).
+            limits.BasicLimitInformation.LimitFlags = JobObjectLimitKillOnJobClose | (spec.AllowBreakaway ? JobObjectLimitBreakawayOk : 0);
             if (SetInformationJobObject(job, JobObjectExtendedLimitInformationClass, &limits, (uint)sizeof(JobObjectExtendedLimitInformation)) == 0)
                 throw Failure("SetInformationJobObject");
 
-            uint flags = CreateNoWindow | ExtendedStartupInfoPresent | CreateSuspended | CreateNewProcessGroup | CreateUnicodeEnvironment;
+            uint flags = ExtendedStartupInfoPresent | CreateSuspended | CreateUnicodeEnvironment
+                | (spec.CreateNoWindow ? CreateNoWindow : 0)
+                | (spec.NewConsoleProcessGroup ? CreateNewProcessGroup : 0);
             fixed (char* env = envBlock)
             {
-                if (CreateProcessW(IntPtr.Zero, cmdLine, IntPtr.Zero, IntPtr.Zero, 1, flags, (IntPtr)env, IntPtr.Zero, &si, &pi) == 0)
+                if (CreateProcessW(IntPtr.Zero, cmdLine, IntPtr.Zero, IntPtr.Zero, 1, flags, (IntPtr)env, cwd, &si, &pi) == 0)
                     throw Failure($"CreateProcessW('{spec.FileName}')");
             }
             started = true;
@@ -80,18 +119,21 @@ public sealed unsafe partial class JobProcess
             }
 
             // Identity from the pinned handle: pi.hProcess keeps the pid from being recycled.
-            using var probe = Process.GetProcessById(pi.dwProcessId);
-            var identity = new ProcessIdentity(pi.dwProcessId, ProcessIdentity.StartTicksOf(probe));
+            ProcessIdentity identity;
+            try
+            {
+                using var probe = Process.GetProcessById(pi.dwProcessId);
+                identity = new ProcessIdentity(pi.dwProcessId, ProcessIdentity.StartTicksOf(probe));
+            }
+            catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception)
+            {
+                identity = new ProcessIdentity(pi.dwProcessId, 0); // already gone, or not readable: the handle still reports its status
+            }
 
             var result = new JobProcess(pi.dwProcessId, identity) { _hProcess = pi.hProcess, _hJob = job };
             result._exitEvent = new ManualResetEvent(false) { SafeWaitHandle = new SafeWaitHandle(pi.hProcess, ownsHandle: false) };
-            result._exitWait = ThreadPool.RegisterWaitForSingleObject(result._exitEvent, static (state, _) =>
-            {
-                var self = (JobProcess)state!;
-                uint code = 0;
-                GetExitCodeProcess(self._hProcess, &code);
-                self._exited.TrySetResult(unchecked((int)code));
-            }, result, Timeout.Infinite, executeOnlyOnce: true);
+            result._exitWait = ThreadPool.RegisterWaitForSingleObject(result._exitEvent,
+                static (state, _) => ((JobProcess)state!).PollExit(), result, Timeout.Infinite, executeOnlyOnce: true);
 
             pi.hProcess = IntPtr.Zero; // ownership moved to the JobProcess
             job = IntPtr.Zero;
@@ -111,9 +153,23 @@ public sealed unsafe partial class JobProcess
             if (attrList != IntPtr.Zero) { DeleteProcThreadAttributeList(attrList); Marshal.FreeHGlobal(attrList); }
             if (handleArray != IntPtr.Zero) Marshal.FreeHGlobal(handleArray);
             if (nul != InvalidHandle) CloseHandle(nul);
+            if (stdinDup != IntPtr.Zero) CloseHandle(stdinDup);
+            if (cwd != IntPtr.Zero) Marshal.FreeHGlobal(cwd);
             Marshal.FreeHGlobal(cmdLine);
             Marshal.FreeHGlobal(nulName);
         }
+    }
+
+    /// <summary>The leader's exit status, once its handle is signalled. Caller holds <c>_gate</c>.</summary>
+    [SupportedOSPlatform("windows")]
+    private bool TryReadExitCodeWindows(out int code)
+    {
+        code = 0;
+        if (_hProcess == IntPtr.Zero || WaitForSingleObject(_hProcess, 0) != 0) return false;
+        uint raw = 0;
+        GetExitCodeProcess(_hProcess, &raw);
+        code = unchecked((int)raw);
+        return true;
     }
 
     [SupportedOSPlatform("windows")]
@@ -129,7 +185,7 @@ public sealed unsafe partial class JobProcess
     {
         if (_hJob == IntPtr.Zero) return false;
         bool any = false;
-        foreach (var pid in TreePids())
+        foreach (var pid in TreePidsWindows())
         {
             var h = OpenProcess(ProcessSuspendResume, 0, (uint)pid);
             if (h == IntPtr.Zero) continue;
@@ -150,40 +206,40 @@ public sealed unsafe partial class JobProcess
     [SupportedOSPlatform("windows")]
     private void DisposeWindows()
     {
+        // Keep the status readable after the handles are gone.
+        if (!_hasExitCode && TryReadExitCodeWindows(out int code)) PublishExit(code);
         _exitWait?.Unregister(null);
         _exitEvent?.Dispose();
         if (_hJob != IntPtr.Zero) { CloseHandle(_hJob); _hJob = IntPtr.Zero; }
         if (_hProcess != IntPtr.Zero) { CloseHandle(_hProcess); _hProcess = IntPtr.Zero; }
     }
 
-    /// <summary>Pids currently in the job (leader and live descendants). Diagnostics, tests, <see cref="Suspend"/>.</summary>
+    /// <summary>Pids currently in the job (leader and live descendants). Caller holds <c>_gate</c>.</summary>
     [SupportedOSPlatform("windows")]
-    internal IReadOnlyList<int> TreePids()
+    private IReadOnlyList<int> TreePidsWindows()
     {
-        lock (_gate)
+        if (_hJob == IntPtr.Zero) return [];
+        const int capacity = 1024;
+        int bytes = 8 + capacity * IntPtr.Size;
+        var buffer = Marshal.AllocHGlobal(bytes);
+        try
         {
-            if (_hJob == IntPtr.Zero) return [];
-            const int capacity = 1024;
-            int bytes = 8 + capacity * IntPtr.Size;
-            var buffer = Marshal.AllocHGlobal(bytes);
-            try
-            {
-                if (QueryInformationJobObject(_hJob, JobObjectBasicProcessIdList, (void*)buffer, (uint)bytes, null) == 0) return [];
-                int count = Marshal.ReadInt32(buffer, 4);
-                var pids = new List<int>(count);
-                for (int i = 0; i < count; i++) pids.Add((int)Marshal.ReadIntPtr(buffer, 8 + i * IntPtr.Size));
-                return pids;
-            }
-            finally { Marshal.FreeHGlobal(buffer); }
+            if (QueryInformationJobObject(_hJob, JobObjectBasicProcessIdList, (void*)buffer, (uint)bytes, null) == 0) return [];
+            int count = Marshal.ReadInt32(buffer, 4);
+            var pids = new List<int>(count);
+            for (int i = 0; i < count; i++) pids.Add((int)Marshal.ReadIntPtr(buffer, 8 + i * IntPtr.Size));
+            return pids;
         }
+        finally { Marshal.FreeHGlobal(buffer); }
     }
 
     /// <summary>Sorted case-insensitively, double-NUL terminated, as CreateProcess documents for CREATE_UNICODE_ENVIRONMENT.</summary>
-    private static char[] BuildEnvironmentBlock(IReadOnlyDictionary<string, string?>? overrides)
+    private static char[] BuildEnvironmentBlock(IReadOnlyDictionary<string, string?>? overrides, bool complete)
     {
         var merged = new SortedDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        foreach (System.Collections.DictionaryEntry e in System.Environment.GetEnvironmentVariables())
-            if (e.Key is string k && e.Value is string v) merged[k] = v;
+        if (!complete)
+            foreach (System.Collections.DictionaryEntry e in System.Environment.GetEnvironmentVariables())
+                if (e.Key is string k && e.Value is string v) merged[k] = v;
         if (overrides is not null)
             foreach (var (k, v) in overrides)
             {
@@ -196,15 +252,16 @@ public sealed unsafe partial class JobProcess
         return sb.ToString().ToCharArray();
     }
 
-    private static HostUnavailableException Failure(string call)
-        => new($"{call} failed: Win32 error {Marshal.GetLastPInvokeError()}.");
+    private static HostUnavailableException Failure(string call) => Failure(call, Marshal.GetLastPInvokeError());
 
     private static readonly IntPtr InvalidHandle = new(-1);
     private const uint GenericRead = 0x80000000, GenericWrite = 0x40000000, FileShareRead = 1, FileShareWrite = 2, OpenExisting = 3;
     private const int StartfUseStdHandles = 0x100;
     private const uint CreateNoWindow = 0x08000000, ExtendedStartupInfoPresent = 0x00080000, CreateSuspended = 0x4,
         CreateNewProcessGroup = 0x200, CreateUnicodeEnvironment = 0x400;
-    private const uint JobObjectLimitKillOnJobClose = 0x2000;
+    private const uint JobObjectLimitKillOnJobClose = 0x2000, JobObjectLimitBreakawayOk = 0x800;
+    private const int StdInputHandle = -10;
+    private const uint DuplicateSameAccess = 0x2;
     private const int JobObjectBasicProcessIdList = 3, JobObjectExtendedLimitInformationClass = 9;
     private const uint ProcessSuspendResume = 0x0800;
     private static readonly IntPtr ProcThreadAttributeHandleList = new(0x20002);
@@ -280,6 +337,14 @@ public sealed unsafe partial class JobProcess
     private static extern IntPtr OpenProcess(uint access, int inherit, uint pid);
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern int CloseHandle(IntPtr handle);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern uint WaitForSingleObject(IntPtr handle, uint milliseconds);
+    [DllImport("kernel32.dll")]
+    private static extern IntPtr GetCurrentProcess();
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr GetStdHandle(int which);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern int DuplicateHandle(IntPtr sourceProcess, IntPtr source, IntPtr targetProcess, out IntPtr target, uint access, int inherit, uint options);
     [DllImport("ntdll.dll")]
     private static extern int NtSuspendProcess(IntPtr process);
     [DllImport("ntdll.dll")]
@@ -291,7 +356,7 @@ public sealed unsafe partial class JobProcess
 /// closing it, or this process dying, ends the whole tree. For hosts that cannot be started through
 /// <see cref="JobProcess"/> yet (the IPC worker's private hosts).
 /// </summary>
-internal sealed unsafe class WindowsProcessTree : IDisposable
+public sealed unsafe class WindowsProcessTree : IDisposable
 {
     private IntPtr _job;
 

@@ -179,7 +179,6 @@ internal sealed class AwkPipeSink : AwkOutSink
     private readonly AwkStdout _stdout;
     private readonly Action<string> _stderr;
     private readonly SpawnedChild _child;
-    private readonly System.Diagnostics.Process _proc;
     private readonly StreamWriter _w;
     private readonly System.Collections.Concurrent.ConcurrentQueue<(bool Err, string Text)> _queue = new();
     private readonly Thread _outPump;
@@ -197,7 +196,6 @@ internal sealed class AwkPipeSink : AwkOutSink
             throw new AwkInterpreter.AwkRuntimeException($"fatal: cannot open pipe `{command}' (no shell available)");
         _child = shell.StartPipe(command)
             ?? throw new AwkInterpreter.AwkRuntimeException($"fatal: cannot open pipe `{command}' (cannot start the command)");
-        _proc = _child.Process;
         _w = new StreamWriter(_child.StandardInput!.BaseStream, RawBytes.Encoding, 1 << 16);
         _outPump = Pump(_child.StandardOutput, err: false);
         _errPump = _child.StandardError is { } err ? Pump(err, err: true) : null;
@@ -272,12 +270,12 @@ internal sealed class AwkPipeSink : AwkOutSink
 
             // No time limit (gawk waits as long as the command runs); Ctrl+C reaches it through Abort.
             _waiting = true;
-            _proc.WaitForExit();
+            _child.WaitForExit();
             _waiting = false;
             _outPump.Join(TimeSpan.FromSeconds(5));
             _errPump?.Join(TimeSpan.FromSeconds(5));
             Drain();
-            return _proc.ExitCode;
+            return _child.HasExited ? _child.ExitCode : 130; // not exited: Abort disposed it under the wait
         }
         finally { try { _child.Dispose(); } catch { /* ignore */ } }
     }
@@ -286,12 +284,12 @@ internal sealed class AwkPipeSink : AwkOutSink
     {
         if (_closed)
         {
-            if (_waiting) try { _proc.Kill(entireProcessTree: true); } catch { /* gone */ }
+            if (_waiting) try { _child.KillTree(); } catch { /* gone */ }
             return;
         }
         _closed = true;
         _stdout.Holders--;
-        try { _proc.Kill(entireProcessTree: true); } catch { /* gone */ }
+        try { _child.KillTree(); } catch { /* gone */ }
         try { _w.Dispose(); } catch { /* best effort */ }
         try { _child.Dispose(); } catch { /* ignore */ }
     }

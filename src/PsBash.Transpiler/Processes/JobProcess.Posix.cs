@@ -13,16 +13,63 @@ public sealed partial class JobProcess
     private bool _reaped;
     private long _reapedAtTicks;
     private static readonly TimeSpan PostExitGroupKillWindow = TimeSpan.FromSeconds(30);
+    // False when the child stayed in this process's group (JobProcessStart.OwnProcessGroup): signals then go to the
+    // leader, and a kill also takes what is still linked to it by parent pid.
+    private bool _ownGroup = true;
+
+    /// <summary>The shell wrapper used where libc has no <c>posix_spawn_file_actions_addchdir_np</c>.</summary>
+    internal const string ChdirExecScript = "cd -- \"$1\" || exit 126; shift; exec \"$@\"";
+
+    private static readonly bool HasAddChdir = ProbeAddChdir();
+
+    private static bool ProbeAddChdir()
+    {
+        try
+        {
+            return NativeLibrary.TryLoad("libc", typeof(JobProcess).Assembly, null, out var libc)
+                && NativeLibrary.TryGetExport(libc, "posix_spawn_file_actions_addchdir_np", out _);
+        }
+        catch (Exception) { return false; }
+    }
+
+    /// <summary>
+    /// True when this process is the foreground job of its controlling terminal. A child put in its own process
+    /// group there would be a BACKGROUND job of that terminal: reading it stops the child (SIGTTIN). Such a child
+    /// must stay in this group, where the terminal's own Ctrl+C already reaches the whole tree.
+    /// </summary>
+    public static bool IsTerminalForegroundJob()
+    {
+        if (OperatingSystem.IsWindows()) return false;
+        int fd = -1;
+        try
+        {
+            fd = Posix.open("/dev/tty", 2 /* O_RDWR */);
+            if (fd < 0) return false; // no controlling terminal
+            int foreground = Posix.tcgetpgrp(fd);
+            return foreground > 0 && foreground == Posix.getpgrp();
+        }
+        catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException) { return false; }
+        finally { if (fd >= 0) Posix.close(fd); }
+    }
 
     private static JobProcess StartPosix(JobProcessStart spec)
     {
-        var argv = new List<IntPtr> { Utf8(spec.FileName) };
+        bool chdir = !string.IsNullOrEmpty(spec.WorkingDirectory);
+        bool chdirBySh = chdir && !HasAddChdir;
+        string program = chdirBySh ? "/bin/sh" : spec.FileName;
+        var argv = new List<IntPtr> { Utf8(program) };
+        if (chdirBySh)
+        {
+            argv.Add(Utf8("-c")); argv.Add(Utf8(ChdirExecScript)); argv.Add(Utf8("sh"));
+            argv.Add(Utf8(spec.WorkingDirectory!)); argv.Add(Utf8(spec.FileName));
+        }
         foreach (var a in spec.Arguments) argv.Add(Utf8(a));
         argv.Add(IntPtr.Zero);
 
         var merged = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (System.Collections.DictionaryEntry e in System.Environment.GetEnvironmentVariables())
-            if (e.Key is string k && e.Value is string v) merged[k] = v;
+        if (!spec.EnvironmentIsComplete)
+            foreach (System.Collections.DictionaryEntry e in System.Environment.GetEnvironmentVariables())
+                if (e.Key is string k && e.Value is string v) merged[k] = v;
         if (spec.Environment is not null)
             foreach (var (k, v) in spec.Environment)
             {
@@ -33,8 +80,9 @@ public sealed partial class JobProcess
         foreach (var (k, v) in merged) envp.Add(Utf8(k + "=" + v));
         envp.Add(IntPtr.Zero);
 
-        var path = Utf8(spec.FileName);
+        var path = Utf8(program);
         var nullPath = Utf8("/dev/null");
+        var cwdPath = chdir && !chdirBySh ? Utf8(spec.WorkingDirectory!) : IntPtr.Zero;
         var argvBlock = PointerArray(argv);
         var envpBlock = PointerArray(envp);
         var actions = Marshal.AllocHGlobal(Posix.SpawnStructSize);
@@ -45,9 +93,19 @@ public sealed partial class JobProcess
         try
         {
             Check("posix_spawn_file_actions_init", Posix.posix_spawn_file_actions_init(actions)); actionsInit = true;
-            // stdin/stdout/stderr -> /dev/null (O_RDWR); every other descriptor is CLOEXEC in .NET.
+            // fd 0/1/2 are the caller's handles (dup2: the copies are not close-on-exec) or /dev/null (O_RDWR);
+            // every other descriptor is CLOEXEC in .NET. An inherited stdin gets no action at all.
+            var stdio = spec.Stdio ?? default;
+            IntPtr?[] given = [stdio.Stdin, stdio.Stdout, stdio.Stderr];
             for (int fd = 0; fd <= 2; fd++)
-                Check("addopen", Posix.posix_spawn_file_actions_addopen(actions, fd, nullPath, 2 /* O_RDWR */, 0));
+            {
+                if (given[fd] is { } handle)
+                    Check("adddup2", Posix.posix_spawn_file_actions_adddup2(actions, (int)handle, fd));
+                else if (fd != 0 || !stdio.InheritStdin)
+                    Check("addopen", Posix.posix_spawn_file_actions_addopen(actions, fd, nullPath, 2 /* O_RDWR */, 0));
+            }
+            if (cwdPath != IntPtr.Zero)
+                Check("addchdir", Posix.posix_spawn_file_actions_addchdir_np(actions, cwdPath));
 
             Check("posix_spawnattr_init", Posix.posix_spawnattr_init(attr)); attrInit = true;
             // Own process group (pgid = pid) so signals reach the whole tree; default dispositions (the runtime
@@ -56,12 +114,12 @@ public sealed partial class JobProcess
             Check("setsigdefault", Posix.posix_spawnattr_setsigdefault(attr, sigDefault));
             Check("sigemptyset", Posix.sigemptyset(sigMask));
             Check("setsigmask", Posix.posix_spawnattr_setsigmask(attr, sigMask));
-            Check("setpgroup", Posix.posix_spawnattr_setpgroup(attr, 0));
-            Check("setflags", Posix.posix_spawnattr_setflags(attr, (short)(Posix.SetPGroup | Posix.SetSigDef | Posix.SetSigMask)));
+            if (spec.OwnProcessGroup) Check("setpgroup", Posix.posix_spawnattr_setpgroup(attr, 0));
+            Check("setflags", Posix.posix_spawnattr_setflags(attr,
+                (short)((spec.OwnProcessGroup ? Posix.SetPGroup : 0) | Posix.SetSigDef | Posix.SetSigMask)));
 
             int rc = Posix.posix_spawnp(out int pid, path, actions, attr, argvBlock, envpBlock);
-            if (rc != 0)
-                throw new HostUnavailableException($"posix_spawnp('{spec.FileName}') failed (rc={rc}): {Marshal.GetPInvokeErrorMessage(rc)}");
+            if (rc != 0) throw Failure($"posix_spawnp('{spec.FileName}')", rc);
 
             ProcessIdentity identity;
             try
@@ -74,7 +132,7 @@ public sealed partial class JobProcess
                 identity = new ProcessIdentity(pid, 0); // exited before we could look; the waiter still reaps it
             }
 
-            var job = new JobProcess(pid, identity);
+            var job = new JobProcess(pid, identity) { _ownGroup = spec.OwnProcessGroup };
             var waiter = new Thread(() => job.ReapLoop()) { IsBackground = true, Name = $"job-wait-{pid}" };
             waiter.Start();
             return job;
@@ -87,6 +145,7 @@ public sealed partial class JobProcess
             Marshal.FreeHGlobal(sigDefault); Marshal.FreeHGlobal(sigMask);
             Marshal.FreeHGlobal(argvBlock); Marshal.FreeHGlobal(envpBlock);
             Marshal.FreeHGlobal(path); Marshal.FreeHGlobal(nullPath);
+            if (cwdPath != IntPtr.Zero) Marshal.FreeHGlobal(cwdPath);
             foreach (var p in argv) if (p != IntPtr.Zero) Marshal.FreeHGlobal(p);
             foreach (var p in envp) if (p != IntPtr.Zero) Marshal.FreeHGlobal(p);
         }
@@ -112,7 +171,7 @@ public sealed partial class JobProcess
         }
         // WIFEXITED -> WEXITSTATUS; WIFSIGNALED -> 128 + signal (the shell convention).
         int code = (status & 0x7f) == 0 ? (status >> 8) & 0xff : 128 + (status & 0x7f);
-        _exited.TrySetResult(code);
+        PublishExit(code);
     }
 
     private bool SignalPosix(JobSignal signal)
@@ -126,6 +185,23 @@ public sealed partial class JobProcess
     // Caller holds _gate.
     private bool SendToGroup(int sig)
     {
+        if (!_ownGroup)
+        {
+            if (_reaped) return false; // the pid may be someone else's now, and there is no group to find the rest by
+            if (sig != Posix.SIGKILL) return Posix.kill(Pid, sig) == 0;
+            try
+            {
+                // No group of its own (this process is its terminal's foreground job): the leader and whatever is
+                // still linked to it by parent pid. The terminal's Ctrl+C is what reaches the whole group there.
+                using var leader = Process.GetProcessById(Pid);
+                leader.Kill(entireProcessTree: true);
+                return true;
+            }
+            catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception or AggregateException)
+            {
+                return Posix.kill(Pid, sig) == 0;
+            }
+        }
         if (_reaped)
         {
             // The leader is gone and its pid may have been recycled. The group (its descendants) can still exist;
@@ -134,6 +210,34 @@ public sealed partial class JobProcess
             if (Posix.kill(-Pid, 0) != 0) return false;
         }
         return Posix.kill(-Pid, sig) == 0;
+    }
+
+    /// <summary>Live members of the process group, from /proc (Linux). Caller holds <c>_gate</c>.</summary>
+    private IReadOnlyList<int> TreePidsPosix()
+    {
+        var pids = new List<int>();
+        if (!_ownGroup)
+        {
+            if (!_reaped) pids.Add(Pid);
+            return pids;
+        }
+        if (!Directory.Exists("/proc")) return pids;
+        foreach (var dir in Directory.EnumerateDirectories("/proc"))
+        {
+            if (!int.TryParse(Path.GetFileName(dir), out int pid)) continue;
+            try
+            {
+                // "pid (comm) state ppid pgrp ..." - comm may hold spaces and parentheses, so cut after the LAST ')'.
+                var stat = File.ReadAllText(Path.Combine(dir, "stat"));
+                int close = stat.LastIndexOf(')');
+                if (close < 0) continue;
+                var fields = stat[(close + 1)..].Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                if (fields.Length < 3 || fields[0] == "Z") continue; // a zombie is not running
+                if (int.TryParse(fields[2], out int pgrp) && pgrp == Pid) pids.Add(pid);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* exited while we looked */ }
+        }
+        return pids;
     }
 
     private static IntPtr Utf8(string s)
@@ -154,7 +258,7 @@ public sealed partial class JobProcess
 
     private static void Check(string call, int rc)
     {
-        if (rc != 0) throw new HostUnavailableException($"{call} failed (rc={rc}): {Marshal.GetPInvokeErrorMessage(rc)}");
+        if (rc != 0) throw Failure(call, rc);
     }
 
     private static class Posix
@@ -174,6 +278,12 @@ public sealed partial class JobProcess
         [DllImport("libc")] public static extern int posix_spawn_file_actions_init(IntPtr a);
         [DllImport("libc")] public static extern int posix_spawn_file_actions_destroy(IntPtr a);
         [DllImport("libc")] public static extern int posix_spawn_file_actions_addopen(IntPtr a, int fd, IntPtr path, int oflag, int mode);
+        [DllImport("libc")] public static extern int posix_spawn_file_actions_adddup2(IntPtr a, int fd, int newfd);
+        [DllImport("libc")] public static extern int posix_spawn_file_actions_addchdir_np(IntPtr a, IntPtr path);
+        [DllImport("libc", SetLastError = true)] public static extern int open([MarshalAs(UnmanagedType.LPStr)] string path, int flags);
+        [DllImport("libc", SetLastError = true)] public static extern int close(int fd);
+        [DllImport("libc", SetLastError = true)] public static extern int tcgetpgrp(int fd);
+        [DllImport("libc")] public static extern int getpgrp();
         [DllImport("libc")] public static extern int posix_spawnattr_init(IntPtr a);
         [DllImport("libc")] public static extern int posix_spawnattr_destroy(IntPtr a);
         [DllImport("libc")] public static extern int posix_spawnattr_setflags(IntPtr a, short flags);

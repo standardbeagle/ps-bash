@@ -124,11 +124,11 @@ A post-hoc merge of two separately read streams must never decide the order.
 **The one primitive.** `Cmdlets/ChildStdio.cs`: `ChildStdio.Start(psi, ChildStdioMode)` → `SpawnedChild`
 (`StandardError` is null when merged). Merged:
 
-- Windows: `CreateProcessW` with `hStdOutput == hStdError` (one inheritable pipe end), a
-  `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` naming only the child's handles, started suspended and resumed once the
-  `Process` object holds it.
-- Unix: `/bin/sh -c 'exec 2>&1; exec "$@"' sh PROG ARGS` (`dup2(1,2)`, then the program replaces the shell: same pid,
-  same exit status, kill-tree unchanged).
+- Windows: `CreateProcessW` with `hStdOutput == hStdError` (one inheritable pipe end) and a
+  `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` naming only the child's handles.
+- Unix: `posix_spawn` with `dup2(pipe, 1)` and `dup2(pipe, 2)` as file actions.
+
+Both go through `JobProcess` (§4.6), merged or not: there is one spawn path.
 
 `BashRuntime.RunChildProcess(..., mode)` (buffered) and `BashRuntime.StartChildProcessStreaming(..., mode)` (streaming,
 `StreamingChildProcess` reads one stream when merged) are built on it.
@@ -162,7 +162,8 @@ alias, a split-again stage, a Windows `.cmd`/`.bat`) runs unchanged as a steppab
 | `nohup` | `DetachedProcess`: fd 1 and fd 2 are already one file handle |
 
 Not merge sites (the child's output is data, not passed through): awk `cmd | getline`, sed `e`, the psgit / psav
-wrappers, `stat`/`id`/`ps` probes. Interactive `less` / `traceroute` own the console.
+wrappers, `traceroute`, `stat`/`id`/`ps` probes. They still start through `ChildStdio` (§4.6). Interactive `less`
+owns the console and is the one raw `Process.Start`.
 
 **Known gap.** A function called with a merge (`f 2>&1`, `{ f; } 2>&1` where `f` is a function) whose body runs a
 program: the body is emitted once, before any call site, so its programs are not routed through `Invoke-BashNative`
@@ -171,3 +172,67 @@ and keep PowerShell's two pipes.
 **Guards.** `Core.Tests/ChildStdioGuardTests` (no raw `Process.Start` outside `ChildStdio` and named exemptions; every
 streaming spawn states its mode; every run-by-name cmdlet consults the merge), `Cmdlets.Tests/ChildStdioTests` (the
 primitive keeps write order), `Differential.Tests/StderrMergeOrderDifferentialTests` (child × merge form against bash).
+
+### 4.6 Child lifetime: a stop ends the whole tree, and no wait depends on a pipe (implemented)
+
+**Rule.** Stopping a child (Ctrl+C / pipeline stop / `timeout` / a budget) ends its whole process tree by
+construction, and the wait after it never depends on an orphan closing a pipe.
+
+`Process.Kill(entireProcessTree: true)` does not give that: it finds descendants by parent pid at kill time, so a
+grandchild whose parent already exited (`(sleep 30 &); sleep 30`, `cmd /c start /b x`) is not found. It keeps running
+and keeps the stdout/stderr pipes open, and a wait that reads to EOF then lasts until the orphan exits.
+
+**The one primitive.** `Transpiler/Processes/JobProcess*.cs` (the same class background-job hosts use,
+`background-jobs.md` §6). `ChildStdio.Start` starts every child through it:
+
+| | Windows | POSIX |
+|---|---|---|
+| Containment | `CreateProcessW` suspended → `AssignProcessToJobObject` (kill-on-close job) → `ResumeThread`: no descendant can exist outside the job | `posix_spawn` with `POSIX_SPAWN_SETPGROUP`: the child leads its own process group |
+| Stop (`SpawnedChild.KillTree`) | `TerminateJobObject` | `kill(-pgid, SIGKILL)` |
+| Inherited handles | exactly fd 0/1/2 (handle list) | exactly fd 0/1/2 (`dup2` of close-on-exec pipe ends) |
+| Exit status / wait | the process handle, on the calling thread | a `waitpid` thread sets an event; the caller waits on it |
+
+`SpawnedChild.WaitForExit(ms, stop)` waits on the process and the stop token only. No thread-pool callback sits between
+a cancel and the return, and no pipe is part of the wait.
+
+**After a stop** (`BashRuntime.WaitBuffered`, `StreamingChildProcess.Kill`): `KillTree`, a 2 s bound for the leader's
+exit status, a 2 s bound shared by both drains (every writer is dead, so EOF is immediate), then the drains are
+abandoned. **After a normal exit**: the drains get one 5 s grace in total (something the child left running may still
+hold the pipes), then the capture is returned without them. `SpawnedChild.Dispose` never joins a reader.
+
+**What survives, as in bash** (oracle: bash 5.2 + coreutils `timeout` on Ubuntu 24.04):
+
+| Case | bash | ps-bash |
+|---|---|---|
+| child exits normally, left `x &` running | `x` lives | `x` lives: `Dispose` after a normal exit releases the tree (`JobProcess.Release`) |
+| `timeout N cmd`, cmd has `x &` or an orphan `(x &)` | killed (SIGTERM to the process group) | killed |
+| stop, cmd started `setsid x` | `x` lives (left the group) | POSIX: lives (left the group). Windows: a process created with `CREATE_BREAKAWAY_FROM_JOB` lives (the job allows breakaway) |
+| `nohup x &` / `x &` typed at ps-bash itself | `x` lives | lives: `DetachedProcess` / a background job is never inside a foreground child's tree |
+| Ctrl+C, cmd is a non-interactive shell with `x &` | `x` lives (an async child ignores SIGINT) | **killed**: a stop is one thing here, the tree (`intentional-differences.md`) |
+| child still running when its `SpawnedChild` is disposed | n/a | killed |
+
+**POSIX terminal case.** When the host is its terminal's foreground job (`JobProcess.IsTerminalForegroundJob`: an
+interactive ps-bash), a child stays in the host's process group: in a group of its own it would be a background job
+of that terminal and be stopped (SIGTTIN) on its first read. The terminal's Ctrl+C reaches that whole group itself;
+a programmatic stop there ends the leader and what is still linked to it by parent pid.
+
+**Sites.**
+
+| Site | Stop path |
+|---|---|
+| `RunChildProcess` (probes, `git`, `rg`, sed `e`, awk `system()`, psav) | `WaitBuffered` → `SpawnedChild.KillTree` |
+| `StartChildProcessStreaming` (nested `bash`/`sh`, `Invoke-BashNative`, `env`/`command`/`xargs`/`find -exec`/`time`/`flock` under a redirected stderr) | `StopProcessing` → `StreamingChildProcess.Kill` → `KillTree` |
+| awk `cmd \| getline`, `print \| "cmd"` | `AwkCommandStream.Kill` / `AwkPipeSink.Abort` → `KillTree` |
+| `traceroute` | `KillTree` on `Stopping` |
+| `timeout` | stops its nested pipeline; a program under it is one of the rows above |
+| background job host (`PSBASH_BG_MODE=process`) | `JobProcess` directly (`background-jobs.md` §6) |
+
+**Known gap.** A program PowerShell itself starts (a plain `prog args` with no stderr merge, and `& $c` inside
+`env`/`xargs`/... with no redirected stderr) is not started by `ChildStdio`: PowerShell's native-command processor
+kills only that process on a stop. Routing every program through `Invoke-BashNative` closes it.
+
+**Guards.** `Core.Tests/ProcessTreeKillGuardTests` (every `.Kill(` in product code is inventoried with its reason;
+`Kill(entireProcessTree` is forbidden in `PsBash.Cmdlets`; `WaitBuffered` kills through the primitive and never joins a
+drain unbounded), `Cmdlets.Tests/ProcessTreeStopTests` (a parent with a grandchild holding the pipes, live-parent and
+orphan shapes, for the buffered path, the streaming path and `timeout`: the grandchild's pid is gone after a stop and
+alive after a normal exit), `Core.Tests/Runtime/JobProcessTests` (the primitive).

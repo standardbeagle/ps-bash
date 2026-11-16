@@ -1,8 +1,8 @@
 using System.Diagnostics;
 using System.IO.Pipes;
-using System.Runtime.InteropServices;
-using System.Runtime.Versioning;
 using System.Text;
+using PsBash.Core.Runtime;
+using PsBash.Core.Runtime.Processes;
 
 namespace PsBash.Cmdlets;
 
@@ -30,20 +30,63 @@ public readonly record struct ChildStdioMode(bool MergeStderr = false, bool Inhe
 }
 
 /// <summary>
-/// A started child and the caller's ends of its stdio: <see cref="StandardInput"/> (null when it inherited the process
-/// stdin), <see cref="StandardOutput"/>, and <see cref="StandardError"/> (null when stderr is merged into stdout).
+/// A started child, its whole process tree, and the caller's ends of its stdio: <see cref="StandardInput"/> (null
+/// when it inherited the process stdin), <see cref="StandardOutput"/>, and <see cref="StandardError"/> (null when
+/// stderr is merged into stdout).
+/// <para>
+/// <b>Lifetime.</b> The child and everything it starts are one unit (<see cref="JobProcess"/>: a Job Object on
+/// Windows, a process group on POSIX). <see cref="KillTree"/> ends all of it in one call - a grandchild cannot be
+/// missed because its parent already exited. <see cref="Dispose"/> after a normal exit lets what the child left
+/// running in the background live on, as bash does (<c>sh -c 'server &amp;'</c>); <see cref="Dispose"/> of a child
+/// that is still running, or was killed, ends the tree. See <c>docs/specs/stdio-messaging.md</c> §4.
+/// </para>
 /// </summary>
 public sealed class SpawnedChild : IDisposable
 {
-    internal SpawnedChild(Process process, StreamWriter? stdin, StreamReader stdout, StreamReader? stderr)
+    private readonly JobProcess _job;
+    private int _killed;
+    private int _disposed;
+
+    internal SpawnedChild(JobProcess job, StreamWriter? stdin, StreamReader stdout, StreamReader? stderr)
     {
-        Process = process;
+        _job = job;
         StandardInput = stdin;
         StandardOutput = stdout;
         StandardError = stderr;
     }
 
-    public Process Process { get; }
+    /// <summary>OS process id of the child.</summary>
+    public int Id => _job.Pid;
+
+    /// <summary>The child has exited (what it started may still run).</summary>
+    public bool HasExited => _job.HasExited;
+
+    /// <summary>The child's exit status; only after <see cref="HasExited"/>.</summary>
+    public int ExitCode => _job.ExitCode;
+
+    /// <summary><see cref="KillTree"/> was called.</summary>
+    public bool Killed => Volatile.Read(ref _killed) != 0;
+
+    /// <summary>
+    /// Wait for the child to exit: up to <paramref name="milliseconds"/> (<see cref="Timeout.Infinite"/> allowed), or
+    /// until <paramref name="stop"/> is cancelled. True when it has exited. The pipes are NOT part of the wait.
+    /// </summary>
+    public bool WaitForExit(int milliseconds = Timeout.Infinite, CancellationToken stop = default)
+        => _job.WaitForExit(milliseconds, stop);
+
+    /// <summary>
+    /// End the child and every process it started, now. Safe from any thread; idempotent. THE way a child is
+    /// stopped (Ctrl+C, a pipeline stop, <c>timeout</c>, a budget): never <c>Process.Kill</c>
+    /// (guard: <c>ProcessTreeKillGuardTests</c>).
+    /// </summary>
+    public void KillTree()
+    {
+        Interlocked.Exchange(ref _killed, 1);
+        _job.KillTree();
+    }
+
+    /// <summary>Pids of the tree alive now (Windows: the Job Object's; Linux: the process group's). Diagnostics and tests.</summary>
+    public IReadOnlyList<int> TreePids() => _job.TreePids();
 
     /// <summary>The child's stdin pipe (write end); null when the child inherited the process stdin.</summary>
     public StreamWriter? StandardInput { get; }
@@ -56,303 +99,152 @@ public sealed class SpawnedChild : IDisposable
 
     public bool StderrMerged => StandardError is null;
 
+    /// <summary>
+    /// Closes our ends of the pipes without waiting for anyone (a reader blocked on a pipe some surviving process
+    /// still holds is abandoned, never joined), then ends the tree unless the child exited on its own.
+    /// </summary>
     public void Dispose()
     {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+        // Exited on its own and nobody asked for a stop: what it left running is its business (bash does not hunt
+        // down `cmd &` either). Otherwise the tree goes with the child.
+        if (!Killed && _job.HasExited) _job.Release();
+        _job.Dispose();
         try { StandardInput?.Dispose(); } catch { /* broken pipe on the final flush */ }
         try { StandardOutput.Dispose(); } catch { }
         try { StandardError?.Dispose(); } catch { }
-        try { Process.Dispose(); } catch { }
     }
 }
 
 /// <summary>
-/// THE child-process spawn primitive. Under <see cref="ChildStdioMode.MergeStderr"/> the child's fd 1 and fd 2 are the
-/// SAME OS pipe, so the merge happens in the kernel as the child writes and the order is preserved by construction:
+/// THE child-process spawn primitive: stdio shape and process-tree containment, both by construction.
 /// <list type="bullet">
-/// <item>Windows: <c>CreateProcessW</c> with <c>hStdOutput == hStdError</c> (the pipe's write end) and a
-/// <c>PROC_THREAD_ATTRIBUTE_HANDLE_LIST</c> naming exactly the child's handles (.NET's <c>Process.Start</c>
-/// cannot pass one handle for both).</item>
-/// <item>Unix: <c>/bin/sh -c 'exec 2&gt;&amp;1; exec "$@"'</c> — <c>dup2(1, 2)</c> in the child, then the program
-/// replaces the shell (same pid, so kill-tree and the exit status are the program's).</item>
+/// <item><b>Stdio.</b> Under <see cref="ChildStdioMode.MergeStderr"/> the child's fd 1 and fd 2 are the SAME OS pipe,
+/// so the merge happens in the kernel as the child writes and the order is preserved. The child inherits exactly its
+/// three standard handles and nothing else.</item>
+/// <item><b>Tree.</b> The child is started through <see cref="JobProcess"/>: on Windows suspended, assigned to a
+/// kill-on-close Job Object, then resumed (no descendant can exist outside the job); on POSIX as the leader of its
+/// own process group. <see cref="SpawnedChild.KillTree"/> ends every process of it.</item>
 /// </list>
-/// Without the merge it is .NET's <c>Process.Start</c> with the requested redirections.
+/// A process that deliberately detaches survives a stop, as under bash: POSIX <c>setsid</c> leaves the group, and on
+/// Windows <c>CREATE_BREAKAWAY_FROM_JOB</c> (what <c>nohup</c>'s <see cref="DetachedProcess"/> uses) leaves the job.
 /// See <c>docs/specs/stdio-messaging.md</c> §4.
 /// </summary>
 public static class ChildStdio
 {
     /// <summary>
+    /// Test seam: overrides "this process is its terminal's foreground job" (<see cref="JobProcess.IsTerminalForegroundJob"/>),
+    /// which decides on POSIX whether a child may lead its own process group.
+    /// </summary>
+    internal static Func<bool>? TerminalForegroundOverride;
+
+    /// <summary>
     /// Start <paramref name="startInfo"/> (FileName + ArgumentList/Arguments, Environment, WorkingDirectory,
-    /// CreateNoWindow are honored; its Redirect* flags are set here from <paramref name="mode"/>). Output is decoded
-    /// byte-faithfully (<see cref="PsBash.Core.RawBytes.Encoding"/>) unless the caller chose an encoding.
+    /// CreateNoWindow are honored; its Redirect* flags are ignored: the wiring comes from <paramref name="mode"/>).
+    /// Output is decoded byte-faithfully (<see cref="PsBash.Core.RawBytes.Encoding"/>) unless the caller chose an
+    /// encoding. Throws <see cref="System.ComponentModel.Win32Exception"/> when the program cannot be started.
     /// </summary>
     public static SpawnedChild Start(ProcessStartInfo startInfo, ChildStdioMode mode)
     {
         ArgumentNullException.ThrowIfNull(startInfo);
         BashVariableStore.ApplyTo(startInfo);
-        startInfo.UseShellExecute = false;
         var outEncoding = startInfo.StandardOutputEncoding ?? PsBash.Core.RawBytes.Encoding;
-        if (mode.MergeStderr)
+        var errEncoding = startInfo.StandardErrorEncoding ?? PsBash.Core.RawBytes.Encoding;
+
+        IReadOnlyList<string> arguments;
+        string? rawArguments = null;
+        if (startInfo.ArgumentList.Count > 0) arguments = [.. startInfo.ArgumentList];
+        else if (string.IsNullOrEmpty(startInfo.Arguments)) arguments = [];
+        else if (OperatingSystem.IsWindows()) { arguments = []; rawArguments = startInfo.Arguments; }
+        else arguments = WindowsCommandLine.Split(startInfo.Arguments);
+
+        var environment = new Dictionary<string, string?>(startInfo.Environment.Count,
+            OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
+        foreach (var kv in startInfo.Environment) environment[kv.Key] = kv.Value;
+
+        // Our ends are never inherited. The child's ends: on Windows inheritable, and the handle list names exactly
+        // them; on POSIX close-on-exec, dup2'ed onto fd 0/1/2 by the spawn (so no other child picks them up).
+        var childEnd = OperatingSystem.IsWindows() ? HandleInheritability.Inheritable : HandleInheritability.None;
+        AnonymousPipeServerStream? output = null, error = null, input = null;
+        bool ok = false;
+        try
         {
-            return OperatingSystem.IsWindows()
-                ? WindowsMerged.Start(startInfo, mode.InheritStdin, outEncoding)
-                : StartUnixMerged(startInfo, mode.InheritStdin, outEncoding);
-        }
+            output = new AnonymousPipeServerStream(PipeDirection.In, childEnd);
+            if (!mode.MergeStderr) error = new AnonymousPipeServerStream(PipeDirection.In, childEnd);
+            if (!mode.InheritStdin) input = new AnonymousPipeServerStream(PipeDirection.Out, childEnd);
 
-        startInfo.RedirectStandardOutput = true;
-        startInfo.RedirectStandardError = true;
-        startInfo.RedirectStandardInput = !mode.InheritStdin;
-        startInfo.StandardOutputEncoding = outEncoding;
-        startInfo.StandardErrorEncoding ??= PsBash.Core.RawBytes.Encoding;
-        var proc = Process.Start(startInfo)
-            ?? throw new InvalidOperationException($"Failed to start process '{startInfo.FileName}'.");
-        return new SpawnedChild(proc, mode.InheritStdin ? null : proc.StandardInput, proc.StandardOutput, proc.StandardError);
-    }
+            IntPtr childOut = output.ClientSafePipeHandle.DangerousGetHandle();
+            var spec = new JobProcessStart(startInfo.FileName, arguments, environment)
+            {
+                EnvironmentIsComplete = true,
+                RawArguments = rawArguments,
+                WorkingDirectory = string.IsNullOrEmpty(startInfo.WorkingDirectory) ? null : startInfo.WorkingDirectory,
+                CreateNoWindow = startInfo.CreateNoWindow,
+                NewConsoleProcessGroup = false,
+                AllowBreakaway = true,
+                OwnProcessGroup = !(TerminalForegroundOverride?.Invoke() ?? JobProcess.IsTerminalForegroundJob()),
+                Stdio = new JobStdio(
+                    input?.ClientSafePipeHandle.DangerousGetHandle(),
+                    childOut,
+                    // THE merge: one handle for fd 1 and fd 2.
+                    error is null ? childOut : error.ClientSafePipeHandle.DangerousGetHandle(),
+                    InheritStdin: mode.InheritStdin),
+            };
 
-    /// <summary>The Unix merged form's shell program: fd 2 becomes fd 1, then the program replaces the shell.</summary>
-    internal const string UnixMergeScript = "exec 2>&1; exec \"$@\"";
+            JobProcess job;
+            try { job = JobProcess.Start(spec); }
+            catch (HostUnavailableException ex) when (ex.InnerException is System.ComponentModel.Win32Exception os)
+            {
+                // What Process.Start threw, so callers keep telling "no such program" from other failures.
+                throw new System.ComponentModel.Win32Exception(os.NativeErrorCode,
+                    $"An error occurred trying to start process '{startInfo.FileName}' with working directory '{startInfo.WorkingDirectory}'. {os.Message}");
+            }
 
-    private static SpawnedChild StartUnixMerged(ProcessStartInfo psi, bool inheritStdin, Encoding outEncoding)
-    {
-        var sh = new ProcessStartInfo("/bin/sh")
-        {
-            UseShellExecute = false,
-            WorkingDirectory = psi.WorkingDirectory,
-            CreateNoWindow = psi.CreateNoWindow,
-            RedirectStandardOutput = true,
-            // The shell's own fd 2 is replaced by `exec 2>&1` before the program runs; nothing is ever written to it.
-            RedirectStandardError = false,
-            RedirectStandardInput = !inheritStdin,
-            StandardOutputEncoding = outEncoding,
-        };
-        sh.ArgumentList.Add("-c");
-        sh.ArgumentList.Add(UnixMergeScript);
-        sh.ArgumentList.Add("sh");
-        sh.ArgumentList.Add(psi.FileName);
-        if (psi.ArgumentList.Count > 0)
-            foreach (var a in psi.ArgumentList) sh.ArgumentList.Add(a);
-        else if (!string.IsNullOrEmpty(psi.Arguments))
-            throw new ArgumentException("A merged-stderr child takes its arguments as ArgumentList.", nameof(psi));
-        BashVariableStore.ApplyTo(sh); // the materialization seam (BashVariableStoreGuardTests), before psi's env is copied
-        sh.Environment.Clear();
-        foreach (var kv in psi.Environment) sh.Environment[kv.Key] = kv.Value;
-        var proc = Process.Start(sh)
-            ?? throw new InvalidOperationException($"Failed to start process '{psi.FileName}'.");
-        return new SpawnedChild(proc, inheritStdin ? null : proc.StandardInput, proc.StandardOutput, null);
-    }
-
-    [SupportedOSPlatform("windows")]
-    private static class WindowsMerged
-    {
-        public static SpawnedChild Start(ProcessStartInfo psi, bool inheritStdin, Encoding outEncoding)
-        {
-            var cmdLine = new StringBuilder();
-            AppendQuoted(cmdLine, psi.FileName);
-            if (psi.ArgumentList.Count > 0)
-                foreach (var a in psi.ArgumentList) { cmdLine.Append(' '); AppendQuoted(cmdLine, a); }
-            else if (!string.IsNullOrEmpty(psi.Arguments))
-                cmdLine.Append(' ').Append(psi.Arguments);
-
-            // Our ends are never inheritable (AnonymousPipeServerStream duplicates the server handle non-inheritable);
-            // the child's ends are, and the handle list names exactly them.
-            var output = new AnonymousPipeServerStream(PipeDirection.In, HandleInheritability.Inheritable);
-            AnonymousPipeServerStream? input = null;
-            IntPtr stdinDup = IntPtr.Zero;
-            IntPtr attrList = IntPtr.Zero, handleArray = IntPtr.Zero;
-            var pi = default(ProcessInformation);
-            bool ok = false;
+            // The child holds its ends now; drop ours so EOF arrives when it (and its descendants) close them.
+            output.DisposeLocalCopyOfClientHandle();
+            error?.DisposeLocalCopyOfClientHandle();
+            input?.DisposeLocalCopyOfClientHandle();
             try
             {
-                IntPtr childStdin;
-                if (inheritStdin)
-                {
-                    stdinDup = InheritableStdin();
-                    childStdin = stdinDup;
-                }
-                else
-                {
-                    input = new AnonymousPipeServerStream(PipeDirection.Out, HandleInheritability.Inheritable);
-                    childStdin = input.ClientSafePipeHandle.DangerousGetHandle();
-                }
-                IntPtr childOut = output.ClientSafePipeHandle.DangerousGetHandle();
-
-                IntPtr size = IntPtr.Zero;
-                InitializeProcThreadAttributeList(IntPtr.Zero, 1, 0, ref size); // sizing call; fails by design
-                attrList = Marshal.AllocHGlobal(size);
-                if (!InitializeProcThreadAttributeList(attrList, 1, 0, ref size))
-                {
-                    Marshal.FreeHGlobal(attrList);
-                    attrList = IntPtr.Zero;
-                    throw Failure("InitializeProcThreadAttributeList");
-                }
-                handleArray = Marshal.AllocHGlobal(IntPtr.Size * 2);
-                Marshal.WriteIntPtr(handleArray, 0, childStdin);
-                Marshal.WriteIntPtr(handleArray, IntPtr.Size, childOut);
-                if (!UpdateProcThreadAttribute(attrList, 0, ProcThreadAttributeHandleList, handleArray,
-                        new IntPtr(IntPtr.Size * 2), IntPtr.Zero, IntPtr.Zero))
-                    throw Failure("UpdateProcThreadAttribute");
-
-                var si = new StartupInfoEx { lpAttributeList = attrList };
-                si.StartupInfo.cb = Marshal.SizeOf<StartupInfoEx>();
-                si.StartupInfo.dwFlags = StartfUseStdHandles;
-                si.StartupInfo.hStdInput = childStdin;
-                // THE merge: one handle for fd 1 and fd 2.
-                si.StartupInfo.hStdOutput = childOut;
-                si.StartupInfo.hStdError = childOut;
-
-                uint flags = CreateSuspended | ExtendedStartupInfoPresent | CreateUnicodeEnvironment
-                             | (psi.CreateNoWindow ? CreateNoWindowFlag : 0);
-                string? cwd = string.IsNullOrEmpty(psi.WorkingDirectory) ? null : psi.WorkingDirectory;
-                // Suspended until we hold a Process for it: a child that exits at once must still be observable.
-                if (!CreateProcessW(null, cmdLine, IntPtr.Zero, IntPtr.Zero, true, flags,
-                        EnvironmentBlock(psi), cwd, ref si, out pi))
-                    throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(),
-                        $"An error occurred trying to start process '{psi.FileName}'");
-
-                Process proc;
-                try
-                {
-                    proc = Process.GetProcessById(pi.dwProcessId);
-                    _ = proc.Handle; // our own handle, opened while pi.hProcess pins the process object
-                }
-                catch
-                {
-                    TerminateProcess(pi.hProcess, 1);
-                    throw;
-                }
-                ResumeThread(pi.hThread);
-
-                // The child holds its ends now; drop ours so EOF arrives when it (and its descendants) close them.
-                output.DisposeLocalCopyOfClientHandle();
-                input?.DisposeLocalCopyOfClientHandle();
-                var stdinWriter = input is null ? null : new StreamWriter(input, PsBash.Core.RawBytes.Encoding) { AutoFlush = true };
-                var reader = new StreamReader(output, outEncoding, detectEncodingFromByteOrderMarks: false, bufferSize: 4096);
+                var stdinWriter = input is null ? null : new StreamWriter(AdoptOurEnd(input, FileAccess.Write), PsBash.Core.RawBytes.Encoding) { AutoFlush = true };
+                var stdoutReader = new StreamReader(AdoptOurEnd(output, FileAccess.Read), outEncoding, detectEncodingFromByteOrderMarks: false, bufferSize: 4096);
+                var stderrReader = error is null ? null : new StreamReader(AdoptOurEnd(error, FileAccess.Read), errEncoding, detectEncodingFromByteOrderMarks: false, bufferSize: 4096);
                 ok = true;
-                return new SpawnedChild(proc, stdinWriter, reader, null);
+                return new SpawnedChild(job, stdinWriter, stdoutReader, stderrReader);
             }
-            finally
+            catch
             {
-                if (pi.hThread != IntPtr.Zero) CloseHandle(pi.hThread);
-                if (pi.hProcess != IntPtr.Zero) CloseHandle(pi.hProcess);
-                if (attrList != IntPtr.Zero) { DeleteProcThreadAttributeList(attrList); Marshal.FreeHGlobal(attrList); }
-                if (handleArray != IntPtr.Zero) Marshal.FreeHGlobal(handleArray);
-                if (stdinDup != IntPtr.Zero) CloseHandle(stdinDup);
-                if (!ok)
-                {
-                    output.Dispose();
-                    input?.Dispose();
-                }
+                job.Dispose(); // started but not handed out: end it
+                throw;
             }
         }
-
-        /// <summary>An inheritable duplicate of the process stdin (NUL when there is none), for the child to inherit.</summary>
-        private static IntPtr InheritableStdin()
+        finally
         {
-            var current = GetCurrentProcess();
-            IntPtr std = GetStdHandle(StdInputHandle);
-            if (std != IntPtr.Zero && std != InvalidHandle
-                && DuplicateHandle(current, std, current, out var dup, 0, true, DuplicateSameAccess))
-                return dup;
-            var sa = new SecurityAttributes { nLength = Marshal.SizeOf<SecurityAttributes>(), bInheritHandle = 1 };
-            var nul = CreateFileW("NUL", GenericRead, 0x3, ref sa, OpenExisting, 0, IntPtr.Zero);
-            if (nul == InvalidHandle) throw Failure("open NUL");
-            return nul;
-        }
-
-        /// <summary>The Unicode environment block CreateProcessW takes: sorted name=value pairs, NUL-separated.</summary>
-        private static StringBuilder EnvironmentBlock(ProcessStartInfo psi)
-        {
-            var keys = new List<string>(psi.Environment.Keys);
-            keys.Sort(StringComparer.OrdinalIgnoreCase);
-            var sb = new StringBuilder();
-            foreach (var k in keys)
+            if (!ok)
             {
-                var v = psi.Environment[k];
-                if (v is null) continue;
-                sb.Append(k).Append('=').Append(v).Append('\0');
+                output?.Dispose();
+                error?.Dispose();
+                input?.Dispose();
             }
-            sb.Append('\0');
-            return sb;
         }
+    }
 
-        private static System.ComponentModel.Win32Exception Failure(string what)
-            => new(Marshal.GetLastWin32Error(), what + " failed");
-
-        private static readonly IntPtr InvalidHandle = new(-1);
-        private const int StdInputHandle = -10;
-        private const uint GenericRead = 0x80000000, OpenExisting = 3, DuplicateSameAccess = 0x2;
-        private const int StartfUseStdHandles = 0x100;
-        private const uint CreateSuspended = 0x4, CreateUnicodeEnvironment = 0x400, CreateNoWindowFlag = 0x08000000,
-            ExtendedStartupInfoPresent = 0x80000;
-        private static readonly IntPtr ProcThreadAttributeHandleList = new(0x00020002);
-
-        [StructLayout(LayoutKind.Sequential)]
-        private struct SecurityAttributes { public int nLength; public IntPtr lpSecurityDescriptor; public int bInheritHandle; }
-
-        [StructLayout(LayoutKind.Sequential)]
-        private struct StartupInfo
-        {
-            public int cb; public IntPtr lpReserved, lpDesktop, lpTitle;
-            public int dwX, dwY, dwXSize, dwYSize, dwXCountChars, dwYCountChars, dwFillAttribute, dwFlags;
-            public short wShowWindow, cbReserved2;
-            public IntPtr lpReserved2, hStdInput, hStdOutput, hStdError;
-        }
-
-        [StructLayout(LayoutKind.Sequential)]
-        private struct StartupInfoEx { public StartupInfo StartupInfo; public IntPtr lpAttributeList; }
-
-        [StructLayout(LayoutKind.Sequential)]
-        private struct ProcessInformation { public IntPtr hProcess, hThread; public int dwProcessId, dwThreadId; }
-
-        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-        private static extern IntPtr CreateFileW(string name, uint access, uint share, ref SecurityAttributes sa, uint disposition, uint flags, IntPtr template);
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern bool InitializeProcThreadAttributeList(IntPtr list, int count, int flags, ref IntPtr size);
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern bool UpdateProcThreadAttribute(IntPtr list, uint flags, IntPtr attribute, IntPtr value, IntPtr size, IntPtr previous, IntPtr returnSize);
-
-        [DllImport("kernel32.dll")]
-        private static extern void DeleteProcThreadAttributeList(IntPtr list);
-
-        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-        private static extern bool CreateProcessW(string? app, StringBuilder commandLine, IntPtr pa, IntPtr ta, bool inherit, uint flags,
-            StringBuilder env, string? cwd, ref StartupInfoEx si, out ProcessInformation pi);
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern uint ResumeThread(IntPtr thread);
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern bool TerminateProcess(IntPtr process, uint exitCode);
-
-        [DllImport("kernel32.dll")]
-        private static extern IntPtr GetCurrentProcess();
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern IntPtr GetStdHandle(int which);
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern bool DuplicateHandle(IntPtr sourceProcess, IntPtr source, IntPtr targetProcess, out IntPtr target,
-            uint access, bool inherit, uint options);
-
-        [DllImport("kernel32.dll")]
-        private static extern bool CloseHandle(IntPtr h);
+    /// <summary>
+    /// Our end of a pipe as a plain <see cref="FileStream"/> that owns the handle. Closing a FileStream while another
+    /// thread is blocked reading it returns at once (the handle is released when that read ends). A pipe stream's
+    /// Dispose on Unix WAITS for the blocked read - i.e. for whoever still holds the write end - which is exactly the
+    /// wait the lifetime invariant forbids (docs/specs/stdio-messaging.md §4.6).
+    /// </summary>
+    private static FileStream AdoptOurEnd(AnonymousPipeServerStream pipe, FileAccess access)
+    {
+        var stream = new FileStream(
+            new Microsoft.Win32.SafeHandles.SafeFileHandle(pipe.SafePipeHandle.DangerousGetHandle(), ownsHandle: true),
+            access, bufferSize: 0, isAsync: false);
+        pipe.SafePipeHandle.SetHandleAsInvalid(); // ownership moved: the pipe object must not close it
+        pipe.Dispose();
+        return stream;
     }
 
     /// <summary>CommandLineToArgvW-compatible quoting (the rules ProcessStartInfo.ArgumentList applies).</summary>
-    internal static void AppendQuoted(StringBuilder sb, string arg)
-    {
-        if (arg.Length != 0 && arg.AsSpan().IndexOfAny(" \t\"") < 0) { sb.Append(arg); return; }
-        sb.Append('"');
-        int backslashes = 0;
-        foreach (var c in arg)
-        {
-            if (c == '\\') { backslashes++; continue; }
-            sb.Append('\\', c == '"' ? backslashes * 2 + 1 : backslashes);
-            backslashes = 0;
-            sb.Append(c);
-        }
-        sb.Append('\\', backslashes * 2);
-        sb.Append('"');
-    }
+    internal static void AppendQuoted(StringBuilder sb, string arg) => WindowsCommandLine.AppendQuoted(sb, arg);
 }

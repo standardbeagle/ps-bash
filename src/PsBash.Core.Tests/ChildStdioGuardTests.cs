@@ -45,8 +45,6 @@ public class ChildStdioGuardTests
         ["ChildStdio.cs"] = "the primitive itself",
         ["DetachedProcess.cs"] = "nohup: the child's fd 1 and fd 2 are one file handle already, and it outlives the host",
         ["InvokeBashLessCommand.cs"] = "interactive pager on the console",
-        ["InvokeBashTracerouteCommand.cs"] = "interactive hop-by-hop reader",
-        ["AwkInput.cs"] = "`cmd | getline` reads the command's stdout only; its stderr is awk's, never merged into the data",
     };
 
     [Fact]

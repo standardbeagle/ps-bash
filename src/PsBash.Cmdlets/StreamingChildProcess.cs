@@ -33,7 +33,7 @@ public sealed class StreamingChildProcess : IDisposable
     private static readonly TimeSpan ExitDrainGrace = TimeSpan.FromSeconds(5);
 
     private readonly SpawnedChild _child;
-    private readonly Process _proc;
+    private readonly Thread _exitWatcher;
     private readonly ConcurrentQueue<(bool IsStderr, string Text)> _chunks = new();
     private readonly AutoResetEvent _signal = new(false);
     private readonly ChildOutputAssembler _assembler = new();
@@ -46,17 +46,17 @@ public sealed class StreamingChildProcess : IDisposable
     internal StreamingChildProcess(SpawnedChild child, bool keepStdinOpen)
     {
         _child = child;
-        _proc = child.Process;
         if (keepStdinOpen && child.StandardInput is { } stdin)
             _stdin = stdin.BaseStream;
         else
             try { child.StandardInput?.Close(); } catch { /* the child may not have opened it */ }
-        try
+        // Wakes the pump loops at exit (they poll HasExited as well, so a late wake only costs one poll interval).
+        _exitWatcher = new Thread(() => { try { child.WaitForExit(); } catch { /* disposed */ } Signal(); })
         {
-            _proc.EnableRaisingEvents = true;
-            _proc.Exited += (_, _) => Signal();
-        }
-        catch { /* already gone: the wait loops poll HasExited too */ }
+            IsBackground = true,
+            Name = "ps-bash streaming child exit",
+        };
+        _exitWatcher.Start();
         _openStreams = child.StandardError is null ? 1 : 2;
         StartReader(child.StandardOutput, isStderr: false);
         if (child.StandardError is { } stderr) StartReader(stderr, isStderr: true);
@@ -127,17 +127,20 @@ public sealed class StreamingChildProcess : IDisposable
         return SafeExitCode();
     }
 
-    /// <summary>Kill the child's whole process tree. Safe from any thread; idempotent.</summary>
+    /// <summary>
+    /// Kill the child's whole process tree (<see cref="SpawnedChild.KillTree"/>: the Job Object / process group, so a
+    /// grandchild whose parent already exited goes too). Safe from any thread; idempotent.
+    /// </summary>
     public void Kill()
     {
         if (Interlocked.Exchange(ref _killed, 1) != 0) return;
-        try
-        {
-            if (!_proc.HasExited) _proc.Kill(entireProcessTree: true);
-        }
+        try { _child.KillTree(); }
         catch { /* already gone / race */ }
         Signal();
     }
+
+    /// <summary>Pids of the child's tree alive now. Diagnostics and tests.</summary>
+    internal IReadOnlyList<int> TreePids() => _child.TreePids();
 
     public void Dispose()
     {
@@ -149,15 +152,16 @@ public sealed class StreamingChildProcess : IDisposable
 
     private bool HasExited()
     {
-        try { return _proc.HasExited; } catch { return true; }
+        try { return _child.HasExited; } catch { return true; }
     }
 
     private int SafeExitCode()
     {
         try
         {
-            if (!_proc.WaitForExit(2_000)) return 124;
-            return _proc.ExitCode;
+            // Bounded: only reached after the pipes closed or a kill, when the exit is at most a moment away.
+            if (!_child.WaitForExit(2_000)) return 124;
+            return _child.ExitCode;
         }
         catch { return 1; }
     }
