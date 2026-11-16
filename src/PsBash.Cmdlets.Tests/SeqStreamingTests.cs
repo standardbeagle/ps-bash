@@ -8,6 +8,7 @@ namespace PsBash.Cmdlets.Tests;
 /// at once (and in tiny memory) on both the fused lane and the unfused PowerShell pipeline.
 /// Streaming is asserted by a wall-clock bound that a 100M-element List (~minutes, GBs) cannot meet.
 /// </summary>
+[Collection(WallClockBoundCollection.Name)]
 public class SeqStreamingTests : IClassFixture<SharedPwshFixture>
 {
     private readonly SharedPwshFixture _fixture;
@@ -17,11 +18,10 @@ public class SeqStreamingTests : IClassFixture<SharedPwshFixture>
     {
         var pwsh = _fixture.AcquireFresh();
         var sw = Stopwatch.StartNew();
-        var task = Task.Run(() => pwsh.AddScript(script).Invoke());
-        Assert.True(task.Wait(TimeSpan.FromSeconds(30)), "pipeline did not terminate: seq is not streaming");
+        var result = BoundedPipeline.Invoke(pwsh, script, TimeSpan.FromSeconds(30),
+            "pipeline did not terminate: seq is not streaming");
         sw.Stop();
-        pwsh.Commands.Clear();
-        return (task.Result.Select(o => o?.ToString() ?? "").ToArray(), sw.Elapsed);
+        return (result.Select(o => o?.ToString() ?? "").ToArray(), sw.Elapsed);
     }
 
     [Fact]

@@ -8,6 +8,7 @@ namespace PsBash.Cmdlets.Tests;
 /// bounded ring/countdown. Goes through <c>Invoke-BashGrep</c> as the module exposes it (the psm1 proxy in
 /// front of the cmdlet), so both layers must stream.
 /// </summary>
+[Collection(WallClockBoundCollection.Name)]
 public class GrepStreamingTests : IClassFixture<SharedPwshFixture>
 {
     private readonly SharedPwshFixture _fixture;
@@ -15,19 +16,9 @@ public class GrepStreamingTests : IClassFixture<SharedPwshFixture>
 
     private string[] Run(string script)
     {
-        var pwsh = _fixture.AcquireFresh();
-        var task = Task.Run(() => pwsh.AddScript(script).Invoke());
-        if (!task.Wait(TimeSpan.FromSeconds(60)))
-        {
-            // Stop the pipeline before failing: left running it kept the shared runspace busy and every later test in
-            // the class failed in < 1 ms with it (fleet g16/g17), hiding which test actually hung.
-            pwsh.Stop();
-            task.Wait(TimeSpan.FromSeconds(10));
-            pwsh.Commands.Clear();
-            Assert.Fail("grep did not terminate within 60 s (upstream not stopped?)");
-        }
-        pwsh.Commands.Clear();
-        return task.Result.Select(o => o?.ToString() ?? "").ToArray();
+        var result = BoundedPipeline.Invoke(_fixture.AcquireFresh(), script, TimeSpan.FromSeconds(60),
+            "grep did not terminate (upstream not stopped?)");
+        return result.Select(o => o?.ToString() ?? "").ToArray();
     }
 
     [Fact]
@@ -149,8 +140,9 @@ public class GrepStreamingTests : IClassFixture<SharedPwshFixture>
     [Fact]
     public void Context_Before_ManyRecords_OnlyTheWindow()
     {
-        // The producer is a foreach statement, not ForEach-Object: the same stream, several times faster, so a loaded
-        // fleet runner does not hit the 60 s bound (g27 Windows, g28 Linux) on the PRODUCER's speed.
+        // 60000 records through the psm1 proxy = 60000 script-to-.NET calls ($steppable.Process), each of which takes
+        // the process-wide AMSI lock on Windows; the class therefore runs in WallClockBoundCollection (about 1 s
+        // alone, past the 60 s bound beside the parallel classes).
         var r = Run("& { foreach ($n in 1..60000) { \"r$n\" } } | Invoke-BashGrep -B 2 'r60000$' | ForEach-Object { $_.ToString().Trim() }");
         Assert.Equal(new[] { "r59998", "r59999", "r60000" }, r);
     }

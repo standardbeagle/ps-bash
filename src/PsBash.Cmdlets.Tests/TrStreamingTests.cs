@@ -11,6 +11,7 @@ namespace PsBash.Cmdlets.Tests;
 /// state carries over record boundaries, and command-substitution capture
 /// (<see cref="ConvertToBashCaptureCommand"/>) glues exact-bytes records, so the bytes are the same.
 /// </summary>
+[Collection(WallClockBoundCollection.Name)]
 public class TrStreamingTests : IClassFixture<SharedPwshFixture>
 {
     private readonly SharedPwshFixture _fixture;
@@ -20,17 +21,8 @@ public class TrStreamingTests : IClassFixture<SharedPwshFixture>
     /// <summary>Runs a script that must finish; a hang is stopped and reported instead of wedging the suite.</summary>
     private string RunBounded(string script, int seconds = 45)
     {
-        var pwsh = _fixture.AcquireFresh();
-        pwsh.AddScript(script);
-        var async = pwsh.BeginInvoke();
-        if (!async.AsyncWaitHandle.WaitOne(TimeSpan.FromSeconds(seconds)))
-        {
-            pwsh.Stop();
-            pwsh.Commands.Clear();
-            Assert.Fail($"pipeline did not finish within {seconds}s: {script}");
-        }
-        var result = pwsh.EndInvoke(async);
-        pwsh.Commands.Clear();
+        var result = BoundedPipeline.Invoke(_fixture.AcquireFresh(), script, TimeSpan.FromSeconds(seconds),
+            "tr did not stream");
         return string.Join("\n", result.Select(o => o?.Properties["BashText"]?.Value?.ToString() ?? o?.ToString() ?? ""));
     }
 

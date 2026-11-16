@@ -12,6 +12,7 @@ namespace PsBash.Cmdlets.Tests;
 /// Regression: the old `feed | prog` form probed the stdin before starting the program, which blocked forever on
 /// an open, silent stdin (an agent shell tool's), so every native command hung.
 /// </summary>
+[Collection(WallClockBoundCollection.Name)]
 public class NativeStdinBridgeTests : IClassFixture<SharedPwshFixture>
 {
     private static readonly TimeSpan Limit = TimeSpan.FromSeconds(30);
@@ -50,10 +51,8 @@ public class NativeStdinBridgeTests : IClassFixture<SharedPwshFixture>
 
     private static string[] Invoke(PowerShell pwsh, string script)
     {
-        var run = Task.Run(() => pwsh.AddScript(script).Invoke());
-        Assert.True(run.Wait(Limit), $"did not finish within {Limit.TotalSeconds:0}s (hung on stdin?): {script}");
-        pwsh.Commands.Clear();
-        return run.Result.Select(o => o?.ToString()?.Trim() ?? "").Where(s => s.Length > 0).ToArray();
+        var result = BoundedPipeline.Invoke(pwsh, script, Limit, "hung on stdin?");
+        return result.Select(o => o?.ToString()?.Trim() ?? "").Where(s => s.Length > 0).ToArray();
     }
 
     [Fact]
@@ -161,10 +160,8 @@ public class NativeStdinBridgeTests : IClassFixture<SharedPwshFixture>
 
     private static object?[] Convert(PowerShell pwsh, string script)
     {
-        var run = Task.Run(() => pwsh.AddScript(script).Invoke());
-        Assert.True(run.Wait(Limit), $"did not finish within {Limit.TotalSeconds:0}s: {script}");
-        pwsh.Commands.Clear();
-        return run.Result.Select(o => o?.BaseObject).ToArray();
+        var result = BoundedPipeline.Invoke(pwsh, script, Limit, "ConvertTo-BashNativeStdin did not finish");
+        return result.Select(o => o?.BaseObject).ToArray();
     }
 
     [Fact]

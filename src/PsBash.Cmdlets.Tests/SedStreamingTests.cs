@@ -8,6 +8,7 @@ namespace PsBash.Cmdlets.Tests;
 /// temp file that replaces the original. Goes through <c>Invoke-BashSed</c> as the module exposes it (the psm1 proxy
 /// in front of the cmdlet).
 /// </summary>
+[Collection(WallClockBoundCollection.Name)]
 public class SedStreamingTests : IClassFixture<SharedPwshFixture>
 {
     private readonly SharedPwshFixture _fixture;
@@ -15,11 +16,9 @@ public class SedStreamingTests : IClassFixture<SharedPwshFixture>
 
     private string[] Run(string script)
     {
-        var pwsh = _fixture.AcquireFresh();
-        var task = Task.Run(() => pwsh.AddScript(script).Invoke());
-        Assert.True(task.Wait(TimeSpan.FromSeconds(120)), "sed did not terminate");
-        pwsh.Commands.Clear();
-        return task.Result.Select(o => o?.ToString() ?? "").ToArray();
+        var result = BoundedPipeline.Invoke(_fixture.AcquireFresh(), script, TimeSpan.FromSeconds(120),
+            "sed did not terminate");
+        return result.Select(o => o?.ToString() ?? "").ToArray();
     }
 
     private static string TempFile(string name) =>

@@ -8,6 +8,7 @@ namespace PsBash.Cmdlets.Tests;
 /// directory under <c>-prune</c> is not descended, and <c>-depth</c> / <c>-delete</c> yield a directory after its
 /// contents (true post-order).
 /// </summary>
+[Collection(WallClockBoundCollection.Name)]
 public class FindStreamingTests : IClassFixture<SharedPwshFixture>
 {
     private readonly SharedPwshFixture _fixture;
@@ -15,11 +16,9 @@ public class FindStreamingTests : IClassFixture<SharedPwshFixture>
 
     private string[] Run(string script)
     {
-        var pwsh = _fixture.AcquireFresh();
-        var task = Task.Run(() => pwsh.AddScript(script).Invoke());
-        Assert.True(task.Wait(TimeSpan.FromSeconds(60)), "find did not terminate");
-        pwsh.Commands.Clear();
-        return task.Result.Select(o => o?.ToString() ?? "").ToArray();
+        var result = BoundedPipeline.Invoke(_fixture.AcquireFresh(), script, TimeSpan.FromSeconds(60),
+            "find did not terminate");
+        return result.Select(o => o?.ToString() ?? "").ToArray();
     }
 
     private static string NewTree(Action<string> build)
