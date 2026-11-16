@@ -89,9 +89,12 @@ public class SdkWorkerEnvironmentTests : IAsyncLifetime
             // Output is coalesced into multi-line frames: compare whole lines.
             static string[] Lines(List<string> frames)
                 => string.Concat(frames).Replace("\r", "").Split('\n', StringSplitOptions.RemoveEmptyEntries);
+            // The runspace $HOME holds the script-visible shell form C:/x (docs/specs/paths.md); the provider's
+            // `~` stays native.
+            static string Shell(string p) => OperatingSystem.IsWindows() ? p.Replace('\\', '/') : p;
             Assert.Equal(0, asLauncher.ExitCode);
-            Assert.Equal(new[] { $"var={launcherHome}", $"tilde={launcherHome}" }, Lines(asLauncher.Lines));
-            Assert.Equal(new[] { $"var={daemonHome}", $"tilde={daemonHome}" }, Lines(asDaemon.Lines));
+            Assert.Equal(new[] { $"var={Shell(launcherHome)}", $"tilde={launcherHome}" }, Lines(asLauncher.Lines));
+            Assert.Equal(new[] { $"var={Shell(daemonHome)}", $"tilde={daemonHome}" }, Lines(asDaemon.Lines));
         }
         finally
         {
