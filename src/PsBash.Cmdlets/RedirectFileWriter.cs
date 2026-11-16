@@ -54,13 +54,51 @@ internal sealed class RedirectFileWriter : IDisposable
         lock (RegistryGate) Open.Add(this);
     }
 
+    /// <summary>
+    /// THE way a command opens a file it writes output into WHILE it runs - a redirect, <c>tee</c>, awk's
+    /// <c>print &gt; f</c>, find's <c>-fprint</c>, sed's <c>w</c>, uniq's OUTPUT, <c>exec 3&gt; f</c> - so every such file
+    /// gets the same policy (written as produced, bursts buffered at most <see cref="IdleFlushDelay"/>, flushed before
+    /// any ps-bash read). A private 64 KB buffer held a slow producer's output back until the command ended
+    /// (StreamingFileWriterGuardTests keeps new writers on this path). Throws what the <see cref="FileStream"/> constructor throws.
+    /// </summary>
+    internal static RedirectFileWriter OpenFile(string path, bool append) =>
+        new(new FileStream(path, append ? FileMode.Append : FileMode.Create, FileAccess.Write,
+            FileShare.ReadWrite | FileShare.Delete, 64 * 1024));
+
+    /// <summary>
+    /// <see cref="OpenFile"/> as a text writer for a command that writes strings: every write reaches the policy at once
+    /// (AutoFlush), and the writer's own <see cref="StreamWriter.Flush()"/> is a no-op for the file - an explicit flush
+    /// (awk's <c>fflush</c>, sed before <c>e</c>) is <see cref="FlushText"/>. Disposing the writer closes the file.
+    /// </summary>
+    internal static StreamWriter OpenText(string path, bool append) =>
+        new(new PolicyStream(OpenFile(path, append)), PsBash.Core.RawBytes.Encoding, 4096) { AutoFlush = true };
+
+    /// <summary>Write everything <paramref name="writer"/> holds through to its file now.</summary>
+    internal static void FlushText(StreamWriter writer)
+    {
+        writer.Flush();
+        if (writer.BaseStream is PolicyStream p) p.Owner.Flush();
+    }
+
+    /// <summary>Write what is buffered to the file now.</summary>
+    internal void Flush()
+    {
+        lock (_gate)
+        {
+            if (_stream is not null) FlushLocked();
+        }
+    }
+
     /// <summary>Write one record's bytes: through to the file when the producer is slow, else into the buffer.</summary>
-    internal void Write(byte[] bytes)
+    internal void Write(byte[] bytes) => Write(bytes.AsSpan());
+
+    /// <summary>Write one record's bytes: through to the file when the producer is slow, else into the buffer.</summary>
+    internal void Write(ReadOnlySpan<byte> bytes)
     {
         lock (_gate)
         {
             if (_stream is null) return;
-            _stream.Write(bytes, 0, bytes.Length);
+            _stream.Write(bytes);
             long now = Stopwatch.GetTimestamp();
             bool trickle = _lastWrite == long.MinValue || now - _lastWrite >= SyncFlushGap;
             _lastWrite = now;
@@ -116,6 +154,29 @@ internal sealed class RedirectFileWriter : IDisposable
             if (_stream is null) return;
             // A timer thread must never throw (it would end the host); a full disk surfaces on the next write or close.
             try { FlushLocked(); } catch (Exception ex) when (ex is IOException or ObjectDisposedException) { }
+        }
+    }
+
+    /// <summary>The <see cref="Stream"/> face of a writer, for <see cref="OpenText"/>: writes go through the policy; <c>Flush</c> leaves it to the policy.</summary>
+    private sealed class PolicyStream(RedirectFileWriter owner) : Stream
+    {
+        internal RedirectFileWriter Owner { get; } = owner;
+        public override bool CanRead => false;
+        public override bool CanSeek => false;
+        public override bool CanWrite => true;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        // StreamWriter.AutoFlush calls this after every write: when the bytes reach the disk is the writer's policy.
+        public override void Flush() { }
+        public override void Write(byte[] buffer, int offset, int count) => Owner.Write(buffer.AsSpan(offset, count));
+        public override void Write(ReadOnlySpan<byte> buffer) => Owner.Write(buffer);
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) Owner.Dispose();
+            base.Dispose(disposing);
         }
     }
 

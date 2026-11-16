@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 111
+stdout-length: 7
+stderr-length: 0
+==== SCRIPT ====
+printf 'ab\nb\nxab\n' | grep '^ab$'; printf 'b\nab\n' | sed -n '/\(^b$\)/p'; printf 'ab\nb\n' | grep -c 'x\|^b'
+==== STDOUT ====
+ab
+b
+1
+
+==== STDERR ====
+

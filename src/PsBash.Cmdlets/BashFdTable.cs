@@ -40,10 +40,15 @@ internal static class BashFdTable
             default: return $"{op}: unsupported redirection";
         }
 
-        FileStream fs;
+        FileStream? fs = null;
+        StreamWriter? writer = null;
         try
         {
-            fs = new FileStream(path, mode, access, FileShare.ReadWrite | FileShare.Delete);
+            // A descriptor open for writing streams through the shared policy (RedirectFileWriter), as `> f` does.
+            if (access == FileAccess.Read)
+                fs = new FileStream(path, mode, access, FileShare.ReadWrite | FileShare.Delete);
+            else
+                writer = RedirectFileWriter.OpenText(path, append: mode == FileMode.Append);
         }
         catch (FileNotFoundException) { return $"{path}: No such file or directory"; }
         catch (DirectoryNotFoundException) { return $"{path}: No such file or directory"; }
@@ -51,10 +56,10 @@ internal static class BashFdTable
         catch (IOException ex) { return $"{path}: {ex.Message}"; }
 
         var handle = new Handle { Stream = fs };
-        if (access == FileAccess.Read)
+        if (fs is not null)
             handle.Reader = new StreamReader(fs, PsBash.Core.RawBytes.Encoding, false, 4096, leaveOpen: true);
         else
-            handle.Writer = new StreamWriter(fs, PsBash.Core.RawBytes.Encoding, 4096, leaveOpen: true) { AutoFlush = true };
+            handle.Writer = writer;
 
         lock (Gate)
         {

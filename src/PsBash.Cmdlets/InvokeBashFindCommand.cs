@@ -181,7 +181,7 @@ public sealed class InvokeBashFindCommand : PSCmdlet
                 try
                 {
                     var full = FileSystemHelpers.ProviderPath(this, FileSystemHelpers.NormalizeOperandPath(path));
-                    sink = new FileSink(new StreamWriter(new FileStream(full, FileMode.Create, FileAccess.Write, FileShare.ReadWrite), RawBytes.Encoding, 65536));
+                    sink = new FileSink(RedirectFileWriter.OpenText(full, append: false));
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
                 {

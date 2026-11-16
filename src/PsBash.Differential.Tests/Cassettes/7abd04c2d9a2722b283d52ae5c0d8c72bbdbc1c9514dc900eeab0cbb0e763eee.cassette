@@ -1,0 +1,16 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 135
+stdout-length: 17
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit 99
+printf '%s\n' 'exit 3; echo in' > s.sh; v=$( source ./s.sh; echo in2 ); echo "after $? [$v]"
+echo "end $?"
+==== STDOUT ====
+after 3 []
+end 0
+
+==== STDERR ====
+

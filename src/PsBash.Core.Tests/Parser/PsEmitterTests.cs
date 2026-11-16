@@ -5034,7 +5034,7 @@ public class PsEmitterTests
         // the string-capture path — it goes through Invoke-BashSource as a
         // normal file argument. This guards against the classifier overreaching.
         var result = PsEmitter.Transpile("source script.sh");
-        Assert.Equal(". $(Invoke-BashSource -AsScriptBlock script.sh)", result);
+        Assert.Equal(". $($__psbash_lm = 1; Invoke-BashSource -AsScriptBlock script.sh)", result);
     }
 
     // --- Array and associative array tests ---
@@ -6133,7 +6133,7 @@ public class PsEmitterTests
     [Fact]
     public void Transpile_SourceFileNamedLikeTheCmdlet_KeepsTheSwitchOnTheCmdlet()
     {
-        Assert.Equal(". $(Invoke-BashSource -AsScriptBlock Invoke-BashSource.sh)",
+        Assert.Equal(". $($__psbash_lm = 1; Invoke-BashSource -AsScriptBlock Invoke-BashSource.sh)",
             PsEmitter.Transpile("source Invoke-BashSource.sh"));
         var split = PsEmitter.Transpile("source $f Invoke-BashSource.sh");
         Assert.Contains("Invoke-BashSource -AsScriptBlock @__bashsplat0 Invoke-BashSource.sh", split);
@@ -6144,23 +6144,23 @@ public class PsEmitterTests
     public void Transpile_SourceShFile_EmitsInvokeBashSource()
     {
         var result = PsEmitter.Transpile("source ./lib.sh");
-        Assert.Equal(". $(Invoke-BashSource -AsScriptBlock ./lib.sh)", result);
+        Assert.Equal(". $($__psbash_lm = 1; Invoke-BashSource -AsScriptBlock ./lib.sh)", result);
     }
 
     [Fact]
     public void Transpile_DotSourceShFile_EmitsInvokeBashSource()
     {
         var result = PsEmitter.Transpile(". ./lib.sh");
-        Assert.Equal(". $(Invoke-BashSource -AsScriptBlock ./lib.sh)", result);
+        Assert.Equal(". $($__psbash_lm = 1; Invoke-BashSource -AsScriptBlock ./lib.sh)", result);
     }
 
     [Fact]
     public void Transpile_SourceShFileWithArgs_EmitsInvokeBashSourceWithArgs()
     {
         var result = PsEmitter.Transpile("source ./setup.sh arg1 arg2");
-        Assert.Equal(". $(Invoke-BashSource -AsScriptBlock ./setup.sh arg1 arg2)", result);
+        Assert.Equal(". $($__psbash_lm = 1; Invoke-BashSource -AsScriptBlock ./setup.sh arg1 arg2)", result);
         // A dash argument is $1.. for the file — single-quoted, so it never binds a cmdlet parameter.
-        Assert.Equal(". $(Invoke-BashSource -AsScriptBlock ./setup.sh '-x' '-AsScriptBlock')", PsEmitter.Transpile("source ./setup.sh -x -AsScriptBlock"));
+        Assert.Equal(". $($__psbash_lm = 1; Invoke-BashSource -AsScriptBlock ./setup.sh '-x' '-AsScriptBlock')", PsEmitter.Transpile("source ./setup.sh -x -AsScriptBlock"));
     }
 
     // -e file exists test
@@ -6626,7 +6626,8 @@ public class PsEmitterTests
     public void Transpile_ProcessSubWithSemicolon()
     {
         var result = PsEmitter.Transpile("diff <(cmd1; cmd2) file");
-        Assert.Equal("Invoke-BashDiff (Invoke-ProcessSub { cmd1; cmd2 }) file", result);
+        // A multi-command <( ) is a subshell: its own scope, so `exit`/`cd` there stay in it.
+        Assert.Equal("Invoke-BashDiff (Invoke-ProcessSub { " + PsBuild.ShellStateScope("cmd1; cmd2") + " }) file", result);
     }
 
     [Fact]
@@ -6634,7 +6635,8 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("paste <(echo a; echo c) <(echo b; echo d)");
         Assert.Equal(
-            "Invoke-BashPaste (Invoke-ProcessSub { Invoke-BashEcho a; Invoke-BashEcho c }) (Invoke-ProcessSub { Invoke-BashEcho b; Invoke-BashEcho d })",
+            "Invoke-BashPaste (Invoke-ProcessSub { " + PsBuild.ShellStateScope("Invoke-BashEcho a; Invoke-BashEcho c") + " }) (Invoke-ProcessSub { "
+            + PsBuild.ShellStateScope("Invoke-BashEcho b; Invoke-BashEcho d") + " })",
             result);
     }
 

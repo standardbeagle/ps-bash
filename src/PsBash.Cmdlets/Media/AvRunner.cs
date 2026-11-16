@@ -26,7 +26,7 @@ internal static class AvRunner
     /// <see cref="System.ComponentModel.Win32Exception"/> when the tool is not on PATH — callers turn
     /// that into the install hint.
     /// </summary>
-    public static BashRuntime.ChildProcessResult RunPlan(AvPlan plan, string? workingDir)
+    public static BashRuntime.ChildProcessResult RunPlan(AvPlan plan, string? workingDir, CancellationToken stop = default)
     {
         var psi = new ProcessStartInfo(plan.Tool);
         foreach (var arg in plan.Arguments)
@@ -39,7 +39,9 @@ internal static class AvRunner
             psi.WorkingDirectory = workingDir;
         }
 
-        return BashRuntime.RunChildProcess(psi, plan.Timeout);
+        // A stoppable run (the cmdlet) without its own budget is user work - a transcode may take hours: no time limit.
+        // Probes (no stop token) keep the default budget.
+        return BashRuntime.RunChildProcess(psi, plan.Timeout ?? (stop.CanBeCanceled ? BashRuntime.NoTimeLimit : null), null, stop);
     }
 
     /// <summary>Probe one file, or null when ffprobe is absent, errors, or does not recognise it.</summary>

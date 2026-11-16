@@ -36,6 +36,11 @@ namespace PsBash.Cmdlets;
 [OutputType(typeof(string))]
 public sealed class InvokeBashRgCommand : PSCmdlet
 {
+    // StopProcessing ends a native rg run, which has no time limit (a search of a large tree is user work).
+    private readonly CancellationTokenSource _stop = new();
+
+    protected override void StopProcessing() => _stop.Cancel();
+
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
@@ -965,7 +970,7 @@ public sealed class InvokeBashRgCommand : PSCmdlet
             // Bounded spawn + concurrent stdout/stderr drain + kill-tree on timeout
             // (BashRuntime.RunChildProcess). Native rg here never reads stdin (only reached when
             // _pipeline.Count == 0), so the helper's closed stdin is safe.
-            var spawn = BashRuntime.RunChildProcess(psi);
+            var spawn = BashRuntime.RunChildProcess(psi, BashRuntime.NoTimeLimit, null, _stop.Token);
 
             // Emit one object per stdout line — ReadLine semantics: split on \n with
             // no spurious trailing empty line.

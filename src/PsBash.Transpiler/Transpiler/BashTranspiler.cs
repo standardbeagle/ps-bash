@@ -353,7 +353,7 @@ public static class BashTranspiler
     // emitted bare `exit`), and put it back when the handler finishes.
     private const string TrapEpilogueClose =
         "} finally { " +
-        "$__psbash_xs = $global:LASTEXITCODE; $global:__BashPreTrapStatus = $__psbash_xs; " +
+        "$__psbash_xs = $global:LASTEXITCODE; $global:__BashPreTrapStatus = $__psbash_xs; $__psbash_lm = 1; " +
         "try { if ((Test-Path Variable:Global:__BashTrapEXIT) -and $global:__BashTrapEXIT) { & $global:__BashTrapEXIT } } catch { }; " +
         "$global:__BashPreTrapStatus = $null; $global:LASTEXITCODE = $__psbash_xs " +
         "}";

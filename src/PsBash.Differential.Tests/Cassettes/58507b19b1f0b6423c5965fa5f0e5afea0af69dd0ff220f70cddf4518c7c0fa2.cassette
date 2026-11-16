@@ -1,0 +1,26 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 211
+stdout-length: 170
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit 99
+{ for i in 1 2; do printf '%s\n' 'break; echo in' > s.sh; ( source ./s.sh; echo in2 ); echo "after $?"; echo "loop $i"; done
+echo "end $?"
+} 2>e.txt; sed 's/^.*line [0-9]*: //' e.txt
+==== STDOUT ====
+in
+in2
+after 0
+loop 1
+in
+in2
+after 0
+loop 2
+end 0
+break: only meaningful in a `for', `while', or `until' loop
+break: only meaningful in a `for', `while', or `until' loop
+
+==== STDERR ====
+

@@ -138,10 +138,9 @@ internal sealed class AwkFileSink : AwkOutSink
     {
         try
         {
-            var fs = new FileStream(
-                path, append ? FileMode.Append : FileMode.Create, FileAccess.Write,
-                FileShare.ReadWrite | FileShare.Delete);
-            return new AwkFileSink(new StreamWriter(fs, RawBytes.Encoding, 1 << 16));
+            // The shared streaming policy (RedirectFileWriter): a 64 KB private buffer held a slow awk's file output
+            // back until the program ended; gawk's stdio is no better, but a `tail -f` of the file should see it.
+            return new AwkFileSink(RedirectFileWriter.OpenText(path, append));
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException
                                        or ArgumentException or System.Security.SecurityException)
@@ -154,7 +153,7 @@ internal sealed class AwkFileSink : AwkOutSink
     }
 
     public override void Write(string text) => _w.Write(text);
-    public override void Flush() => _w.Flush();
+    public override void Flush() => RedirectFileWriter.FlushText(_w);
 
     public override int Close()
     {
@@ -176,8 +175,6 @@ internal sealed class AwkFileSink : AwkOutSink
 /// </summary>
 internal sealed class AwkPipeSink : AwkOutSink
 {
-    private static readonly TimeSpan RunLimit = TimeSpan.FromSeconds(120);
-
     private readonly string _command;
     private readonly AwkStdout _stdout;
     private readonly Action<string> _stderr;
@@ -187,6 +184,8 @@ internal sealed class AwkPipeSink : AwkOutSink
     private readonly Thread _outPump;
     private readonly Thread _errPump;
     private bool _closed;
+    // close() is waiting for the command: Abort (StopProcessing, another thread) must still kill it.
+    private volatile bool _waiting;
 
     public AwkPipeSink(string command, AwkShell? shell, AwkStdout stdout, Action<string> stderr)
     {
@@ -269,23 +268,25 @@ internal sealed class AwkPipeSink : AwkOutSink
             if (flushStdoutFirst) _stdout.FlushHeld();
             _stdout.Holders--;
 
-            bool timedOut = !_proc.WaitForExit((int)RunLimit.TotalMilliseconds);
-            if (timedOut)
-            {
-                try { _proc.Kill(entireProcessTree: true); } catch { /* gone */ }
-                _proc.WaitForExit(2_000);
-            }
+            // No time limit (gawk waits as long as the command runs); Ctrl+C reaches it through Abort.
+            _waiting = true;
+            _proc.WaitForExit();
+            _waiting = false;
             _outPump.Join(TimeSpan.FromSeconds(5));
             _errPump.Join(TimeSpan.FromSeconds(5));
             Drain();
-            return timedOut ? 124 : _proc.ExitCode;
+            return _proc.ExitCode;
         }
         finally { try { _proc.Dispose(); } catch { /* ignore */ } }
     }
 
     public override void Abort()
     {
-        if (_closed) return;
+        if (_closed)
+        {
+            if (_waiting) try { _proc.Kill(entireProcessTree: true); } catch { /* gone */ }
+            return;
+        }
         _closed = true;
         _stdout.Holders--;
         try { _proc.Kill(entireProcessTree: true); } catch { /* gone */ }

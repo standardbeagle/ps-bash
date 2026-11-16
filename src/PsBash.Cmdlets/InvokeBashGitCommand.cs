@@ -17,6 +17,11 @@ namespace PsBash.Cmdlets;
 [OutputType(typeof(PSObject))]
 public sealed class InvokeBashGitCommand : PSCmdlet
 {
+    // StopProcessing ends the git child: psgit passes any git command through (clone, fetch, gc), so no time limit.
+    private readonly CancellationTokenSource _stop = new();
+
+    protected override void StopProcessing() => _stop.Cancel();
+
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
@@ -450,7 +455,7 @@ public sealed class InvokeBashGitCommand : PSCmdlet
 
         try
         {
-            result = RunGitCapture(cwd, args);
+            result = RunGitCapture(cwd, args, _stop.Token);
             return true;
         }
         catch (System.ComponentModel.Win32Exception)
@@ -470,7 +475,7 @@ public sealed class InvokeBashGitCommand : PSCmdlet
     /// helpers) is unaffected and reuses your configured git auth. Throws Win32Exception if git is
     /// not on PATH.
     /// </summary>
-    internal static BashRuntime.ChildProcessResult RunGitCapture(string? workingDir, IReadOnlyList<string> args)
+    internal static BashRuntime.ChildProcessResult RunGitCapture(string? workingDir, IReadOnlyList<string> args, CancellationToken stop = default)
     {
         var psi = new ProcessStartInfo("git")
         {
@@ -488,7 +493,8 @@ public sealed class InvokeBashGitCommand : PSCmdlet
             try { psi.WorkingDirectory = workingDir; } catch { /* inherit process cwd */ }
         }
         psi.Environment["GIT_TERMINAL_PROMPT"] = "0";
-        return BashRuntime.RunChildProcess(psi);
+        // A cmdlet run (stoppable) has no time limit; the interactive TUI's status probes keep the default budget.
+        return BashRuntime.RunChildProcess(psi, stop.CanBeCanceled ? BashRuntime.NoTimeLimit : null, null, stop);
     }
 
     // ── interactive TUI building blocks (used by StyledInteractiveSession.RunGitStatus) ──────────

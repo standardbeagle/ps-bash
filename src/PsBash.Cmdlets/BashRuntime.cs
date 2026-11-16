@@ -1076,13 +1076,40 @@ public static class BashRuntime
     /// <c>\\(</c> (escaped backslash, then a literal paren) is not mistaken for a group.
     /// Run it AFTER <see cref="TranslatePosixClasses"/>: a <c>\p{…}</c> / <c>\P{…}</c> escape
     /// (only that rewrite produces one) is copied through whole, braces included.
+    /// POSIX anchors are positional in BRE: <c>^</c> anchors only at the start (or after <c>\(</c> / <c>\|</c>),
+    /// <c>$</c> only at the end (or before <c>\)</c> / <c>\|</c>), and <c>*</c> there is a literal; elsewhere they are
+    /// ordinary characters (<c>sed 's/a$(b/X/'</c> matched nothing). A bracket expression is copied as it is.
     /// </summary>
     public static string TranslateBre(string bre)
     {
         var sb = new System.Text.StringBuilder(bre.Length + 8);
+        // At a point where an anchor `^` may stand and a `*` is literal: the start, after `\(` or `\|` (and after that `^`).
+        bool atExprStart = true;
         for (int i = 0; i < bre.Length; i++)
         {
             char c = bre[i];
+            bool startHere = atExprStart;
+            atExprStart = false;
+            if (c == '[')
+            {
+                int j = i + 1;
+                if (j < bre.Length && bre[j] == '^') j++;
+                if (j < bre.Length && bre[j] == ']') j++;
+                while (j < bre.Length && bre[j] != ']') j += bre[j] == '\\' && j + 1 < bre.Length ? 2 : 1;
+                int end = j < bre.Length ? j : bre.Length - 1;
+                sb.Append(bre, i, end - i + 1);
+                i = end;
+                continue;
+            }
+            if (c == '^' && !startHere) { sb.Append(@"\^"); continue; }
+            if (c == '^') { sb.Append('^'); atExprStart = true; continue; }
+            if (c == '*' && startHere) { sb.Append(@"\*"); continue; }
+            if (c == '$' && i + 1 < bre.Length
+                && !(bre[i + 1] == '\\' && i + 2 < bre.Length && bre[i + 2] is ')' or '|'))
+            {
+                sb.Append(@"\$");
+                continue;
+            }
             if (c == '\\' && i + 1 < bre.Length)
             {
                 char n = bre[i + 1];
@@ -1101,6 +1128,7 @@ public static class BashRuntime
                     // BRE escaped metachar → .NET metachar (drop the backslash).
                     case '(': case ')': case '{': case '}': case '|': case '+': case '?':
                         sb.Append(n);
+                        atExprStart = n is '(' or '|';
                         break;
                     // Everything else (\\, \., \1 backref, \n, \w, \< …) passes through
                     // verbatim — including \\, which consumes both backslashes here so a
@@ -1207,6 +1235,21 @@ public static class BashRuntime
     /// spawn contract requires are forced on regardless of how the caller built it.
     /// </summary>
     public static ChildProcessResult RunChildProcess(ProcessStartInfo startInfo, System.TimeSpan? timeout = null, string? stdinText = null)
+        => RunChildProcess(startInfo, timeout, stdinText, CancellationToken.None);
+
+    /// <summary>
+    /// No time budget: the wait for USER work (awk <c>system()</c>, sed <c>e</c>, rg, psgit, psav) - a build, a clone or a
+    /// transcode may run for hours, and bash never kills a command for taking long. Such a call passes the cmdlet's
+    /// <c>StopProcessing</c> token, which is what ends it (Ctrl+C kills the tree). A metadata probe keeps the default budget.
+    /// </summary>
+    public static readonly System.TimeSpan NoTimeLimit = System.Threading.Timeout.InfiniteTimeSpan;
+
+    /// <summary>
+    /// <see cref="RunChildProcess(ProcessStartInfo, System.TimeSpan?, string?)"/> that also ends - the tree killed, exit
+    /// status 130 - when <paramref name="stop"/> is cancelled (the cmdlet's <c>StopProcessing</c>). Pass
+    /// <see cref="NoTimeLimit"/> for user work.
+    /// </summary>
+    public static ChildProcessResult RunChildProcess(ProcessStartInfo startInfo, System.TimeSpan? timeout, string? stdinText, CancellationToken stop)
     {
         ArgumentNullException.ThrowIfNull(startInfo);
 
@@ -1229,7 +1272,20 @@ public static class BashRuntime
         else
             try { proc.StandardInput.Close(); } catch { /* child may not have opened it */ }
 
-        return WaitBuffered(proc, budget);
+        return WaitBuffered(proc, budget, stop);
+    }
+
+    /// <summary>Wait for <paramref name="proc"/> up to <paramref name="waitMs"/> (Infinite allowed); false when the time ran out or <paramref name="stop"/> was cancelled.</summary>
+    private static bool WaitForExitOrStop(Process proc, int waitMs, CancellationToken stop)
+    {
+        if (!stop.CanBeCanceled) return proc.WaitForExit(waitMs);
+        using var exited = new ManualResetEventSlim(false);
+        proc.EnableRaisingEvents = true;
+        proc.Exited += (_, _) => exited.Set();
+        if (proc.HasExited) exited.Set();
+        try { exited.Wait(waitMs, stop); }
+        catch (OperationCanceledException) { return proc.HasExited; }
+        return exited.IsSet || proc.HasExited;
     }
 
     /// <summary>
@@ -1289,7 +1345,7 @@ public static class BashRuntime
             ?? throw new InvalidOperationException($"Failed to start process '{startInfo.FileName}'.");
     }
 
-    private static ChildProcessResult WaitBuffered(Process proc, System.TimeSpan budget)
+    private static ChildProcessResult WaitBuffered(Process proc, System.TimeSpan budget, CancellationToken stop)
     {
         // Drain BOTH streams concurrently. Each drain keeps reading after the
         // capture cap and discards excess text, so a noisy child cannot exhaust
@@ -1304,7 +1360,7 @@ public static class BashRuntime
             ? System.Threading.Timeout.Infinite
             : (int)System.Math.Min(budget.TotalMilliseconds, int.MaxValue);
 
-        if (!proc.WaitForExit(waitMs))
+        if (!WaitForExitOrStop(proc, waitMs, stop))
         {
             // Budget elapsed — kill the process and the descendants still attached to
             // it via OS parent-pid links. NOTE: this is best-effort, not a guarantee —
@@ -1316,7 +1372,7 @@ public static class BashRuntime
             stdoutDrain.Join(System.TimeSpan.FromSeconds(5));
             stderrDrain.Join(System.TimeSpan.FromSeconds(5));
             return new ChildProcessResult(
-                124,
+                stop.IsCancellationRequested ? 130 : 124,
                 stdoutCapture.Text,
                 stderrCapture.Text,
                 TimedOut: true,

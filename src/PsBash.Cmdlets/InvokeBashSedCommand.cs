@@ -167,8 +167,7 @@ public sealed class InvokeBashSedCommand : PSCmdlet
         try
         {
             string path = FileSystemHelpers.ProviderPath(this, FileSystemHelpers.NormalizeOperandPath(name));
-            _outFiles[name] = new StreamWriter(
-                new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.ReadWrite), RawBytes.Encoding, 65536);
+            _outFiles[name] = RedirectFileWriter.OpenText(path, append: false);
         }
         catch (Exception ex) when (!FileSystemHelpers.IsPipelineStop(ex))
         {
@@ -186,7 +185,14 @@ public sealed class InvokeBashSedCommand : PSCmdlet
         _readFiles.Clear();
     }
 
-    protected override void StopProcessing() => CloseFiles();
+    // Ctrl+C also ends a running `e` command, which has no time limit.
+    private readonly CancellationTokenSource _stop = new();
+
+    protected override void StopProcessing()
+    {
+        _stop.Cancel();
+        CloseFiles();
+    }
 
     /// <summary>
     /// <c>e</c>: the command line runs through ps-bash itself (<c>ps-bash -c</c>, the same resolution awk's
@@ -196,7 +202,7 @@ public sealed class InvokeBashSedCommand : PSCmdlet
     private string RunShell(string command)
     {
         // Everything sed itself wrote to a w file must be on disk for the command to see it.
-        foreach (var w in _outFiles.Values) w.Flush();
+        foreach (var w in _outFiles.Values) RedirectFileWriter.FlushText(w);
 
         var psi = new System.Diagnostics.ProcessStartInfo();
         string? exe = InvokeBashBashCommand.ResolvePsBashExecutable(this);
@@ -229,7 +235,7 @@ public sealed class InvokeBashSedCommand : PSCmdlet
         }
         catch { /* inherit */ }
 
-        var res = BashRuntime.RunChildProcess(psi);
+        var res = BashRuntime.RunChildProcess(psi, BashRuntime.NoTimeLimit, null, _stop.Token);
         if (!string.IsNullOrEmpty(res.Stderr)) FileSystemHelpers.WriteStderr(this, res.Stderr.TrimEnd('\n', '\r'));
         return res.Stdout.Replace("\r\n", "\n");
     }

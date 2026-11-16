@@ -129,4 +129,9 @@ public class AwkRedirectDifferentialTests
 
     [SkippableFact] public Task Pipe_AndStdoutAlias_ExitOrder() =>
         Eq("awk 'BEGIN{ print \"to-sort\" | \"sort\"; print \"X\" > \"/dev/stdout\" }'");
+
+    // A file awk is still writing is complete for a command it runs: gawk flushes before system(); the file's
+    // writer (the shared RedirectFileWriter policy, which replaced a private 64 KB buffer) is flushed with it.
+    [SkippableFact] public Task Redirect_FileIsCompleteForASystemCommand() =>
+        EqualAsync("", "printf 'a\\nb\\nc\\n' | awk '{ print > \"o\"; system(\"cat o\") }'");
 }

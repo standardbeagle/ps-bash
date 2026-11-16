@@ -372,7 +372,7 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
         try
         {
             var path = FileSystemHelpers.ProviderPath(this, _outputFile);
-            _outWriter = new StreamWriter(path, false, RawBytes.Encoding);
+            _outWriter = RedirectFileWriter.OpenText(path, append: false);
         }
         catch (Exception ex)
         {

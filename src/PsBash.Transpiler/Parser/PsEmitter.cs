@@ -381,8 +381,11 @@ public static partial class PsEmitter
     /// <summary>
     /// Code that may run inside a subshell the emitter cannot see: a function body is emitted once and called from
     /// anywhere, including <c>f | cat</c>, <c>(f)</c> and <c>$(f)</c>, where bash's <c>exit</c> ends only that subshell.
+    /// So is eval/source/trap text (<see cref="TranspileContext.Eval"/>): <c>( source ./s.sh )</c>,
+    /// <c>eval 'exit 3' | cat</c> and <c>( trap 'exit 3' EXIT; ... )</c> end only their subshell, where a plain
+    /// <c>exit</c> in the text ended the whole script.
     /// </summary>
-    private static bool ExitDecidedAtRunTime => _subshellDepth == 0 && _functionDepth > 0;
+    private static bool ExitDecidedAtRunTime => _subshellDepth == 0 && (_functionDepth > 0 || _context == TranspileContext.Eval);
 
     /// <summary>The statement that ends the shell with <paramref name="status"/> (<see cref="PsBuild.DynamicExit"/> in a function body).</summary>
     private static string ShellExit(string status) =>
@@ -738,6 +741,24 @@ public static partial class PsEmitter
         Command.While w => BodySetsErrexit(w.Cond) || BodySetsErrexit(w.Body),
         Command.Case c => c.Arms.Any(arm => BodySetsErrexit(arm.Body)),
         Command.BraceGroup b => BodySetsErrexit(b.Body),
+        // `$( ( set -e; false; echo in ); echo "inner $?" )`: the nested subshell's own -e applies inside it.
+        Command.Subshell s => BodySetsErrexit(s.Body),
+        _ => false,
+    };
+
+    /// <summary>A command in <paramref name="command"/> runs a function of this script or eval/source text.</summary>
+    private static bool BodyMayRunSetE(BashNode? command) => command switch
+    {
+        Command.Simple { Words.Length: > 0 } s => GetLiteralValue(s.Words[0]) is { } n
+            && (n is "eval" or "source" or "." || _definedFunctions?.Contains(n) == true || _unitFunctions?.Contains(n) == true),
+        Command.Pipeline p => p.Commands.Any(BodyMayRunSetE),
+        Command.AndOrList a => a.Commands.Any(BodyMayRunSetE),
+        Command.CommandList l => l.Commands.Any(BodyMayRunSetE),
+        Command.BraceGroup b => BodyMayRunSetE(b.Body),
+        Command.Subshell s => BodyMayRunSetE(s.Body),
+        Command.If i => i.Arms.Any(arm => BodyMayRunSetE(arm.Cond) || BodyMayRunSetE(arm.Body)) || BodyMayRunSetE(i.ElseBody),
+        Command.ForIn f => BodyMayRunSetE(f.Body),
+        Command.While w => BodyMayRunSetE(w.Cond) || BodyMayRunSetE(w.Body),
         _ => false,
     };
 
@@ -798,7 +819,11 @@ public static partial class PsEmitter
         // But a `set -e` INSIDE the body does apply there: `v=$(set -e; false; echo x)` leaves v empty
         // and $? = 1. Such a body starts with errexit OFF (not inherited) and gets its own checks; the
         // subshell scope (PipelineHead → PsBuild.ShellStateScope) restores the parent's flags after.
-        bool ownErrexit = BodySetsErrexit(body);
+        // A body that runs code which may turn -e on where this text cannot see it (a function of this script, eval or
+        // source text) is treated the same: `v=$(f)` with `f() { set -e; false; echo x; }` leaves v empty, status 1.
+        // (Not under inherit_errexit / errtrace, which keep their own handling below.)
+        bool ownErrexit = BodySetsErrexit(body)
+            || (_errexitMode && !_inheritErrexitMode && !_errtraceMode && BodyMayRunSetE(body));
         bool savedMode = _errexitMode;
         int savedExempt = _errexitExemptDepth;
         // Otherwise set -e is not inherited, but under errtrace the ERR trap runs inside (`x=$( false; echo y )` traps):
@@ -816,6 +841,11 @@ public static partial class PsEmitter
         // PipelineHead / Invoke-ProcessSub supply the script block it returns from.
         _subshellDepth++;
         bool savedErrTrapSub = PsBuild.ErrTrapNeedsErrtrace; PsBuild.ErrTrapNeedsErrtrace = true;
+        // No lexical loop reaches into the substitution: with one around it a `break` ends the substitution, without one
+        // it warns as it would here (LoopBarrierKind).
+        var capOuterLabels = _loopLabels; var capOuterBarrier = _loopBarrier;
+        _loopBarrier = LoopControlWarnsHere ? LoopBarrierKind.Warn : LoopBarrierKind.EndsSubshell;
+        _loopLabels = null;
         try
         {
             // A lone command is at statement position too: `x=$(false)` runs the trap inside.
@@ -832,6 +862,7 @@ public static partial class PsEmitter
         {
             _captureDepth--; _pipeStageFeedsInput = savedFeed; _subshellDepth--; PsBuild.ErrTrapNeedsErrtrace = savedErrTrapSub;
             _errexitMode = savedMode; _errexitExemptDepth = savedExempt; _lineBase = savedLineBase;
+            _loopLabels = capOuterLabels; _loopBarrier = capOuterBarrier;
         }
     }
 
@@ -962,6 +993,8 @@ public static partial class PsEmitter
         _nounsetMode = priorNounset || InheritedNounset || bash.Contains("nounset", StringComparison.Ordinal)
             || System.Text.RegularExpressions.Regex.IsMatch(bash, @"\bset\s+(?:-[a-zA-Z]+\s+)*-[a-zA-Z]*u");
         _pipeStatusMode = bash.Contains("PIPESTATUS", StringComparison.Ordinal);
+        var priorDynamicCode = _runsDynamicCode;
+        _runsDynamicCode = priorDynamicCode || System.Text.RegularExpressions.Regex.IsMatch(bash, @"\b(?:eval|source)\b|(?:^|[\s;&|(])\.\s+\S");
         var priorXtrace = _xtraceMode;
         var priorTrap = _trapMode;
         var priorDebugTrap = _debugTrapMode;
@@ -1054,6 +1087,7 @@ public static partial class PsEmitter
             _nounsetMode = priorNounset;
             _unitFunctions = priorUnitFunctions;
             _definedFunctions = priorDefined;
+            _runsDynamicCode = priorDynamicCode;
             _aliasDefs = priorAliasDefs; _expandAliasesLine = priorAliasLine; _aliasStaticOnly = priorAliasStatic;
             _xtraceMode = priorXtrace;
             _trapMode = priorTrap;
@@ -1236,12 +1270,50 @@ public static partial class PsEmitter
     private static List<(string Break, string Continue)>? _loopLabels;
 
     /// <summary>
-    /// True inside a subshell's body (outside any loop or function within it): bash starts a subshell with no loop,
-    /// so `( continue )` inside a loop warns and the subshell carries on. A bare PowerShell `continue` there reached
-    /// the enclosing loop through the script block and skipped the rest of the iteration.
+    /// Set inside a subshell's body (outside any loop or function within it). A PowerShell `break`/`continue` is
+    /// dynamically scoped, so without it the keyword reached the enclosing loop through the subshell's script block.
+    /// <see cref="LoopBarrierKind.Warn"/>: bash starts `( ... )`, a background job and a compound pipe stage with no loop,
+    /// so `( continue )` inside a loop warns and the subshell carries on. <see cref="LoopBarrierKind.EndsSubshell"/>:
+    /// `$( ... )`, `&lt;( ... )` and a simple first pipe stage keep the loop level, so `v=$( break )` ends the substitution
+    /// (status 0) and the loop goes on.
     /// </summary>
     [ThreadStatic]
-    private static bool _loopBarrier;
+    private static LoopBarrierKind _loopBarrier;
+
+    private enum LoopBarrierKind : byte { None, Warn, EndsSubshell }
+
+    /// <summary>Emitting the text of an `eval` at the top of a script (outside any function): its `return` is refused.</summary>
+    [ThreadStatic]
+    private static bool _evalAtScriptTop;
+
+    /// <summary>The script runs eval or source text, which can define functions the emitter never sees.</summary>
+    [ThreadStatic]
+    private static bool _runsDynamicCode;
+
+    /// <summary>Emit with no lexical loop in scope and <paramref name="kind"/> as the barrier (when <paramref name="apply"/>).</summary>
+    private static T WithLoopBarrier<T>(bool apply, LoopBarrierKind kind, Func<T> emit)
+    {
+        if (!apply) return emit();
+        var outerLabels = _loopLabels; var outerBarrier = _loopBarrier;
+        _loopLabels = null; _loopBarrier = kind;
+        try { return emit(); }
+        finally { _loopLabels = outerLabels; _loopBarrier = outerBarrier; }
+    }
+
+    /// <summary>True when a `break` emitted here, with no loop of its own, would warn (bash: "only meaningful in a loop").</summary>
+    private static bool LoopControlWarnsHere =>
+        _loopLabels is not { Count: > 0 } && _loopBarrier != LoopBarrierKind.EndsSubshell
+        && (_loopBarrier == LoopBarrierKind.Warn || _functionDepth > 0 || _context == TranspileContext.Default);
+
+    /// <summary>
+    /// The <see cref="PsBuild.LoopModeVar"/> assignment for a call site that runs eval/source text: what a `break` at the
+    /// top of that text does here. Empty at the top of eval/source text itself, which passes its caller's mode on.
+    /// </summary>
+    private static string LoopModeForCallSite() =>
+        _loopLabels is { Count: > 0 } ? PsBuild.LoopModeSet(0)
+        : _loopBarrier == LoopBarrierKind.EndsSubshell ? PsBuild.LoopModeSet(2)
+        : LoopControlWarnsHere ? PsBuild.LoopModeSet(1)
+        : "";
 
     /// <summary>How many function bodies enclose the code being emitted; a definition inside one is global (bash has no function scope).</summary>
     [ThreadStatic]
@@ -1269,10 +1341,16 @@ public static partial class PsEmitter
             // At the top of a script or in a function body with no loop of its own (bash 5.2 resets the loop level
             // on a function call, so a caller's loop is not reached) bash warns and carries on with status 0. A bare
             // PowerShell `break`/`continue` there ends the whole pipeline instead, or left the caller's loop.
-            // Eval/source text at its top runs inside its caller's loop: it keeps the bare keyword.
-            if (_loopBarrier || _functionDepth > 0 || _context == TranspileContext.Default)
-                return $"Write-Error {PsBuild.SingleQuote(keyword + ": only meaningful in a `for', `while', or `until' loop")} -ErrorAction Continue; {PsBuild.SetStatus(0)}";
-            return keyword; // eval/source text: the loop is its caller's
+            // `$( break )` / `<( break )` / a simple pipe stage inside a loop: bash's subshell keeps the loop level, so the
+            // keyword ends that subshell with status 0 (the caught throw: the text need not be lexically in its block).
+            string warning = $"Write-Error {PsBuild.SingleQuote(keyword + ": only meaningful in a `for', `while', or `until' loop")} -ErrorAction Continue; {PsBuild.SetStatus(0)}";
+            if (_loopBarrier == LoopBarrierKind.EndsSubshell)
+                return PsBuild.SubshellExitThrow("0");
+            if (LoopControlWarnsHere)
+                return warning;
+            // Eval/source/trap text at its top: the loop is its caller's, and whether there is one in reach is known
+            // only at the call site, which sets the mode (LoopModeForCallSite).
+            return PsBuild.RunTimeLoopControl(keyword, warning);
         }
         int n = 1;
         string? check = null;
@@ -2229,7 +2307,7 @@ public static partial class PsEmitter
         var outerLabels = _loopLabels;
         _loopLabels = null;
         var outerBarrier = _loopBarrier;
-        _loopBarrier = false;
+        _loopBarrier = LoopBarrierKind.None;
 
         try
         {
@@ -2408,7 +2486,11 @@ public static partial class PsEmitter
     private static string WithSubshellExitTrap(string body) =>
         _trapMode || body.Contains("Invoke-BashTrap", StringComparison.Ordinal)
             ? "$global:__BashTrapEXIT = $null; try { " + body + " } finally { "
-              + "$__psbash_xs = $global:LASTEXITCODE; try { if ($global:__BashTrapEXIT) { & $global:__BashTrapEXIT } } catch { }; $global:LASTEXITCODE = $__psbash_xs }"
+              // An `exit` (or errexit) in the handler sets the subshell's status; a bare `exit` there uses the status from
+              // before the handler; a `break` at its top warns (the handler is not in a loop).
+              + "$__psbash_xs = $global:LASTEXITCODE; $global:__BashPreTrapStatus = $__psbash_xs; " + PsBuild.LoopModeSet(1)
+              + "try { if ($global:__BashTrapEXIT) { & $global:__BashTrapEXIT } } catch [PsBash.Cmdlets.BashSubshellExitException] { $__psbash_xs = $_.Exception.Status } catch { }; "
+              + "$global:__BashPreTrapStatus = $null; $global:LASTEXITCODE = $__psbash_xs }"
             : body;
 
     private static string EmitSubshell(Command.Subshell subshell)
@@ -2421,7 +2503,7 @@ public static partial class PsEmitter
         // and give that `return` a script block to return from.
         _subshellDepth++;
         var outerLabels = _loopLabels; var outerBarrier = _loopBarrier;
-        _loopLabels = null; _loopBarrier = true;
+        _loopLabels = null; _loopBarrier = LoopBarrierKind.Warn;
         string body; bool savedErrTrapSh = PsBuild.ErrTrapNeedsErrtrace; PsBuild.ErrTrapNeedsErrtrace = true;
         // `( … ) < file` gives the body its own stdin (a scope); otherwise it inherits the enclosing one.
         try { body = EmitCompoundBody(subshell.Redirects, () => EmitBody(subshell.Body)); }
@@ -2598,7 +2680,7 @@ public static partial class PsEmitter
         // fires in it only under errtrace. `{ false; echo x; } &` under set -e printed x and the job's status was 0.
         _subshellDepth++;
         var outerLabels = _loopLabels; var outerBarrier = _loopBarrier;
-        _loopLabels = null; _loopBarrier = true;
+        _loopLabels = null; _loopBarrier = LoopBarrierKind.Warn;
         bool savedErrTrap = PsBuild.ErrTrapNeedsErrtrace; PsBuild.ErrTrapNeedsErrtrace = true;
         string inner;
         try { inner = Emit(bg.Inner); }
@@ -5872,7 +5954,7 @@ public static partial class PsEmitter
 
         // At the top of a script or -c string (not a function, not eval/source text), bash refuses `return` with
         // status 2 and goes on; a PowerShell `return` there ended the whole script. A subshell is no different.
-        else if (cmd0 == "return" && _functionDepth == 0 && _context == TranspileContext.Default)
+        else if (cmd0 == "return" && _functionDepth == 0 && (_context == TranspileContext.Default || _evalAtScriptTop))
             specialResult = "$(" + EmitNoOpArgPrelude(cmd) + "Write-Error " + PsBuild.SingleQuote("return: can only `return' from a function or sourced script")
                 + " -ErrorAction Continue; " + PsBuild.SetStatus(2) + ")";
 
@@ -5980,8 +6062,8 @@ public static partial class PsEmitter
             specialResult = EmitExitWithUnquotedVar(cmd.Words[1]);
 
         // `exit N` also records N as the status, so an EXIT trap (`trap 'echo rc=$?' EXIT`) sees it: PowerShell's
-        // `exit` leaves $global:LASTEXITCODE as it was.
-        else if (cmd0 == "exit" && cmd.Words.Length == 2 && _context != TranspileContext.Eval)
+        // `exit` leaves $global:LASTEXITCODE as it was. In eval/source text the exit is decided at run time (ShellExit).
+        else if (cmd0 == "exit" && cmd.Words.Length == 2 && (_context != TranspileContext.Eval || ExitDecidedAtRunTime))
             specialResult = $"$global:LASTEXITCODE = {EmitExitCodeValue(cmd.Words[1])}; " + ShellExit("$global:LASTEXITCODE");
 
         else if (cmd0 == "cd")
@@ -6453,7 +6535,8 @@ public static partial class PsEmitter
         // an argument of the script block. The operands are ordered-arg quoted, so none binds to it.
         const string Cmdlet = "Invoke-BashSource";
         // (Spliced by EmitPassthrough, not searched for in the text: a file named Invoke-BashSource.sh.)
-        return ". $(" + EmitPassthrough(Cmdlet, cmd.Words.RemoveAt(0), cmdletSwitch: " -AsScriptBlock") + ")";
+        // The file's top-level `break` learns from the call site whether a loop is in reach (PsBuild.LoopModeVar).
+        return ". $(" + LoopModeForCallSite() + EmitPassthrough(Cmdlet, cmd.Words.RemoveAt(0), cmdletSwitch: " -AsScriptBlock") + ")";
     }
 
     private static string EmitMappedStandalone(Command.Simple cmd, string mapped)
@@ -8446,7 +8529,7 @@ public static partial class PsEmitter
         "set", "shopt", "trap", "alias", "unalias", "export", "unset", "declare", "typeset", "local",
         "readonly", "cd", "pushd", "popd", "source", ".", "eval", "shift", "getopts", "read", "mapfile",
         "readarray", "let", "exec", "umask", "hash", "builtin", "command", "enable", "exit",
-        "return", "wait",
+        "return", "wait", "break", "continue",
     };
 
     /// <summary>
@@ -8507,16 +8590,20 @@ public static partial class PsEmitter
         return $"{CommandSubStringPrefix}{PipelineHead(body, inner)} | ConvertTo-BashCapture -Join)))";
     }
 
+    // `<( ... )` is a subshell as `$( ... )` is: the same scope (PipelineHead), so `cat <(f)` with f calling exit, or
+    // turning -e on and failing, ends only the substitution. Without it the run-time exit ended the whole script.
     private static string EmitProcessSub(WordPart.ProcessSub ps)
     {
-        string inner = EmitCaptured((Command)ps.Body);
-        return $"(Invoke-ProcessSub {{ {inner} }})";
+        var body = (Command)ps.Body;
+        string inner = EmitCaptured(body, scoped: true);
+        return $"(Invoke-ProcessSub {{ {PipelineHead(body, inner)} }})";
     }
 
     private static string EmitProcessSubPipeline(WordPart.ProcessSub ps)
     {
-        string inner = EmitCaptured((Command)ps.Body);
-        return $"(Invoke-ProcessSubPipeline {{ {inner} }})";
+        var body = (Command)ps.Body;
+        string inner = EmitCaptured(body, scoped: true);
+        return $"(Invoke-ProcessSubPipeline {{ {PipelineHead(body, inner)} }})";
     }
 
     private static string EmitArithSub(WordPart.ArithSub arith)
@@ -11463,6 +11550,14 @@ public static partial class PsEmitter
                 && GetLiteralValue(exitStage.Words[0]) == "exit"
                 && !(_scriptLastpipe && i > 0 && i == pipeline.Commands.Length - 1))
                 cmd = new Command.Subshell(exitStage, ImmutableArray<Redirect>.Empty);
+            // Every pipe stage is a subshell: a lexical `break` must not reach the enclosing loop through the stage's script
+            // block (a lastpipe stage runs in the shell itself). A compound stage starts with no loop (bash warns); a simple
+            // FIRST stage keeps the loop level, so `eval break | cat` ends that stage (a later one warns: it has no scope).
+            bool lastpipeHere = _scriptLastpipe && i > 0 && i == pipeline.Commands.Length - 1;
+            WithLoopBarrier(pipeline.Commands.Length > 1 && !lastpipeHere,
+                i == 0 && cmd is Command.Simple ? LoopBarrierKind.EndsSubshell : LoopBarrierKind.Warn, () => { EmitStage(); return 0; });
+            void EmitStage()
+            {
             if (i > 0 && cmd is Command.Simple simple)
             {
                 bool isLastStage = i == pipeline.Commands.Length - 1;
@@ -11531,6 +11626,7 @@ public static partial class PsEmitter
                 sb.Append(WrapPipelineStageIfStatementList(Emit(cmd)));
             else
                 sb.Append(Emit(cmd));
+            }
 
             // `echo "${x:?}" | head`: each stage is a subshell, so the parameter error ends only that stage.
             if (pipeline.Commands.Length > 1)
@@ -11547,7 +11643,17 @@ public static partial class PsEmitter
                     && GetLiteralValue(fs.Words[0]) is { } stageName
                     && (_definedFunctions?.Contains(stageName) == true || _unitFunctions?.Contains(stageName) == true)
                     && !(_scriptLastpipe && i > 0 && i == pipeline.Commands.Length - 1);
-                if (assigningStage || functionStage || rawStage.Contains("BashParamErrorException]::Reported", StringComparison.Ordinal)
+                // The FIRST stage also takes the scope when its text can end the stage at run time: eval/source text
+                // (`eval 'exit 3' | cat`, `source ./s.sh | cat` - exit, errexit and break there end only the stage), a
+                // `break` that ends it, or, in a script that runs eval/source text, a command that may be a function defined
+                // there (`f | cat`), which the emitter cannot tell from a program. Without the scope the run-time exit
+                // (PsBuild.DynamicExit) ended the whole script.
+                bool runTimeExitStage = i == 0 && cmd is Command.Simple { Words.IsDefaultOrEmpty: false } rs
+                    && (GetLiteralValue(rs.Words[0]) is "eval" or "source" or "."
+                        || _runsDynamicCode && GetLiteralValue(rs.Words[0]) is { } rsName && !IsMappedCommandName(rsName) && !StateChangingBuiltins.Contains(rsName)
+                        || rawStage.Contains("throw [PsBash.Cmdlets.BashSubshellExitException]", StringComparison.Ordinal)
+                           && !rawStage.Contains("catch [PsBash.Cmdlets.BashSubshellExitException]", StringComparison.Ordinal));
+                if (assigningStage || functionStage || runTimeExitStage || rawStage.Contains("BashParamErrorException]::Reported", StringComparison.Ordinal)
                     && !rawStage.Contains("catch [PsBash.Cmdlets.BashParamErrorException]", StringComparison.Ordinal))
                 {
                     sb.Length = stageStart;
@@ -11765,6 +11871,9 @@ public static partial class PsEmitter
             int savedExempt = _errexitExemptDepth;
             bool savedErrTrap = PsBuild.ErrTrapNeedsErrtrace;
             if (armed) { _errexitExemptDepth = 0; PsBuild.ErrTrapNeedsErrtrace = true; }
+            // A stage that turns -e on itself (`! { set -e; false; echo x; } | cat`) gets its checks even where the
+            // pipeline is exempt: the subshell's own -e applies inside it.
+            else if (_errexitMode && BodySetsErrexit(cmd)) _errexitExemptDepth = 0;
             _armedStages = false;
             // A subshell starts with no loop (as EmitSubshell): `for i in 1 2; do echo x | { break; }; done` warns and
             // carries on in bash, and a `break 2` in a stage's own loop leaves that loop only. A labelled break here
@@ -13080,9 +13189,15 @@ public static partial class PsEmitter
                 // expand before it, so the body's reads are not the pre-assignment shadow.
                 var shadow = _envPrefixShadow;
                 _envPrefixShadow = null;
+                // The text is emitted in place, so it keeps this site's loops and subshell barrier. At the top of a script
+                // (no function, no loop) its `break` warns and its `return` is refused, as they would be here.
+                bool scriptTop = _context == TranspileContext.Default && _functionDepth == 0;
+                var priorBarrier = _loopBarrier; bool priorTop = _evalAtScriptTop;
+                if (scriptTop && _loopLabels is not { Count: > 0 } && _loopBarrier == LoopBarrierKind.None) _loopBarrier = LoopBarrierKind.Warn;
+                _evalAtScriptTop = priorTop || scriptTop;
                 string? inner;
                 try { inner = Transpile(joined, TranspileContext.Eval); }
-                finally { _envPrefixShadow = shadow; }
+                finally { _envPrefixShadow = shadow; _loopBarrier = priorBarrier; _evalAtScriptTop = priorTop; }
                 if (inner is not null)
                     return inner;
             }
@@ -13110,7 +13225,7 @@ public static partial class PsEmitter
             "$__psbash_eval_depth = [int](Get-Variable -Name '__BashEvalDepth' -Scope Global -ValueOnly -ErrorAction SilentlyContinue); " +
             "if ($__psbash_eval_depth -ge 5) { throw 'eval: nesting depth limit (5) exceeded; possible infinite recursion' }; " +
             "$global:__BashEvalDepth = $__psbash_eval_depth + 1; " +
-            "try { " +
+            "try { " + LoopModeForCallSite() +
             // Assembly-qualified type names: BashTranspiler/TranspileContext live
             // in PsBash.Transpiler.dll (assembly name differs from the namespace
             // since REFACTOR-5a's project split, commit 1f23039). This runtime

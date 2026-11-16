@@ -1,0 +1,16 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 156
+stdout-length: 16
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit 99
+printf '%s\n' 'exit 3; echo in' > s.sh; f() { source ./s.sh; echo in-f; }; f | cat; echo "after ${PIPESTATUS[*]}"
+echo "end $?"
+==== STDOUT ====
+after 3 0
+end 0
+
+==== STDERR ====
+

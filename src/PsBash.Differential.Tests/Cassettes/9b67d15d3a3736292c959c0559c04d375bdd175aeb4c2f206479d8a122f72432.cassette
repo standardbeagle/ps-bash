@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 86
+stdout-length: 24
+stderr-length: 0
+==== SCRIPT ====
+v=$( ( set -e; false; echo in ); echo "inner $?" ); echo "after $? [$v]"
+echo "end $?"
+==== STDOUT ====
+after 0 [inner 1]
+end 0
+
+==== STDERR ====
+

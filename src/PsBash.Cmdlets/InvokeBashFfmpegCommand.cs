@@ -29,6 +29,11 @@ namespace PsBash.Cmdlets;
 [OutputType(typeof(PSObject))]
 public sealed class InvokeBashFfmpegCommand : PSCmdlet
 {
+    // StopProcessing ends the ffmpeg child, which has no time limit unless the plan sets one (recording).
+    private readonly CancellationTokenSource _stop = new();
+
+    protected override void StopProcessing() => _stop.Cancel();
+
     /// <summary>The subcommand and its long-form options; everything after <c>--</c> is passthrough.</summary>
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
@@ -407,7 +412,7 @@ public sealed class InvokeBashFfmpegCommand : PSCmdlet
         toolMissing = false;
         try
         {
-            return AvRunner.RunPlan(plan, CurrentDirectory());
+            return AvRunner.RunPlan(plan, CurrentDirectory(), _stop.Token);
         }
         catch (System.ComponentModel.Win32Exception)
         {

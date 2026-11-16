@@ -91,7 +91,7 @@ public sealed class InvokeBashTeeCommand : PSCmdlet
     /// <summary>Pure argv scan (unit-test seam): options, operands and the first error.</summary>
     internal static ParsedArgs ScanArgs(string[] args) => ArgParser.Parse(args, TeeSpec);
 
-    private readonly List<(string Display, FileStream Stream)> _sinks = new();
+    private readonly List<(string Display, RedirectFileWriter Stream)> _sinks = new();
     private bool _done;
 
     protected override void BeginProcessing()
@@ -146,12 +146,8 @@ public sealed class InvokeBashTeeCommand : PSCmdlet
 
                 try
                 {
-                    var fs = new FileStream(
-                        filePath,
-                        append ? FileMode.Append : FileMode.Create,
-                        FileAccess.Write,
-                        FileShare.ReadWrite);
-                    _sinks.Add((normalized, fs));
+                    // The shared streaming policy (RedirectFileWriter): written as tee receives it, bursts buffered.
+                    _sinks.Add((normalized, RedirectFileWriter.OpenFile(filePath, append)));
                 }
                 catch (Exception ex)
                 {
@@ -177,8 +173,7 @@ public sealed class InvokeBashTeeCommand : PSCmdlet
                 var (display, stream) = _sinks[i];
                 try
                 {
-                    stream.Write(bytes, 0, bytes.Length);
-                    stream.Flush();
+                    stream.Write(bytes);
                 }
                 catch (Exception ex)
                 {

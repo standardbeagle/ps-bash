@@ -149,6 +149,15 @@ public class BashRuntimeTests
     [InlineData(@"x\.y\w", @"x\.y\w")]                   // other escapes pass through
     [InlineData("plain", "plain")]
     [InlineData("", "")]
+    // POSIX: ^ $ * are positional in BRE (GNU sed/grep agree): anchors only at the ends, literals inside.
+    [InlineData("a$(b", @"a\$\(b")]
+    [InlineData("a$b$", @"a\$b$")]
+    [InlineData("^a^b", @"^a\^b")]
+    [InlineData(@"\(^a$\)\|^b", @"(^a$)|^b")]
+    [InlineData("*a", @"\*a")]
+    [InlineData("^*a", @"^\*a")]
+    [InlineData("a*", "a*")]
+    [InlineData("[^$]x[a^]", "[^$]x[a^]")]                // bracket expressions are copied as they are
     public void TranslateBre_InvertsEscapedMetachars(string input, string expected)
         => Assert.Equal(expected, BashRuntime.TranslateBre(input));
 
@@ -500,6 +509,60 @@ public class BashRuntimeTests
         // child's full 30s — the wait was bounded and the tree was killed.
         Assert.True(sw.Elapsed < TimeSpan.FromSeconds(8),
             $"per-child wait must be bounded; took {sw.ElapsedMilliseconds}ms");
+    }
+
+    // User work (awk system(), sed e, rg, psgit, psav) runs with NoTimeLimit: bash never kills a command for taking
+    // long, so the only way it ends early is the cmdlet's StopProcessing (Ctrl+C) - which must kill the tree.
+    [Fact]
+    public void RunChildProcess_NoTimeLimit_StopTokenKillsTheTreeAndReports130()
+    {
+        var psi = OperatingSystem.IsWindows()
+            ? new System.Diagnostics.ProcessStartInfo("cmd.exe") { ArgumentList = { "/c", "ping -n 30 127.0.0.1 > NUL" } }
+            : new System.Diagnostics.ProcessStartInfo("/bin/sh") { ArgumentList = { "-c", "sleep 30" } };
+        using var stop = new CancellationTokenSource(TimeSpan.FromMilliseconds(500));
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var result = BashRuntime.RunChildProcess(psi, BashRuntime.NoTimeLimit, null, stop.Token);
+        sw.Stop();
+
+        Assert.Equal(130, result.ExitCode);
+        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(8), $"stop must end the wait; took {sw.ElapsedMilliseconds}ms");
+    }
+
+    [Fact]
+    public void RunChildProcess_NoTimeLimit_NeverStopped_WaitsForTheExitStatus()
+    {
+        var (file, args) = OperatingSystem.IsWindows()
+            ? ("cmd.exe", new[] { "/c", "exit 7" })
+            : ("/bin/sh", new[] { "-c", "exit 7" });
+        var psi = new System.Diagnostics.ProcessStartInfo(file);
+        foreach (var a in args) psi.ArgumentList.Add(a);
+        using var stop = new CancellationTokenSource();
+
+        var result = BashRuntime.RunChildProcess(psi, BashRuntime.NoTimeLimit, null, stop.Token);
+
+        Assert.False(result.TimedOut);
+        Assert.Equal(7, result.ExitCode);
+    }
+
+    // Guard: the user-work spawn sites stay unbounded (a 120 s default killed `awk 'BEGIN{system("make")}'`,
+    // `psgit clone`, a long `psav` transcode and `sed 'e ...'`). Metadata probes keep the default budget.
+    [Theory]
+    [InlineData("AwkInput.cs", "BashRuntime.NoTimeLimit, null, _stop.Token", 2)]
+    [InlineData("InvokeBashSedCommand.cs", "BashRuntime.NoTimeLimit, null, _stop.Token", 1)]
+    [InlineData("InvokeBashRgCommand.cs", "BashRuntime.NoTimeLimit, null, _stop.Token", 1)]
+    [InlineData("InvokeBashGitCommand.cs", "RunGitCapture(cwd, args, _stop.Token)", 1)]
+    [InlineData("InvokeBashFfmpegCommand.cs", "AvRunner.RunPlan(plan, CurrentDirectory(), _stop.Token)", 1)]
+    public void UserWorkSpawnSites_HaveNoTimeLimit(string file, string call, int count)
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "CLAUDE.md"))) dir = dir.Parent;
+        Assert.NotNull(dir);
+        var text = File.ReadAllText(Path.Combine(dir!.FullName, "src", "PsBash.Cmdlets", file));
+        int n = 0;
+        for (int i = text.IndexOf(call, StringComparison.Ordinal); i >= 0; i = text.IndexOf(call, i + 1, StringComparison.Ordinal)) n++;
+        Assert.Equal(count, n);
+        Assert.DoesNotContain("RunLimit", File.ReadAllText(Path.Combine(dir.FullName, "src", "PsBash.Cmdlets", "AwkOutput.cs")));
     }
 
     [Fact]

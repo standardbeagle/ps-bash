@@ -288,6 +288,8 @@ internal sealed class AwkShell
 {
     private readonly PSCmdlet _cmdlet;
     private readonly ConcurrentBag<AwkCommandStream> _streams = new();
+    // Cancelled by KillAll (the cmdlet's StopProcessing): ends a system() / piped command, which has no time limit.
+    private readonly CancellationTokenSource _stop = new();
     private string? _exe;
     private bool _exeResolved;
 
@@ -303,7 +305,7 @@ internal sealed class AwkShell
 
     /// <summary>Run <paramref name="command"/> to completion (<c>system()</c>), capturing its output.</summary>
     public BashRuntime.ChildProcessResult Run(string command) =>
-        BashRuntime.RunChildProcess(BuildStartInfo(command));
+        BashRuntime.RunChildProcess(BuildStartInfo(command), BashRuntime.NoTimeLimit, null, _stop.Token);
 
     /// <summary>
     /// Run <paramref name="command"/> to completion with the contents of <paramref name="inputPath"/> as
@@ -311,7 +313,7 @@ internal sealed class AwkShell
     /// a <c>-c</c> command, so the input is attached as a file redirection of the whole command line.
     /// </summary>
     public BashRuntime.ChildProcessResult RunWithInput(string command, string inputPath) =>
-        BashRuntime.RunChildProcess(BuildStartInfo(command, inputPath));
+        BashRuntime.RunChildProcess(BuildStartInfo(command, inputPath), BashRuntime.NoTimeLimit, null, _stop.Token);
 
     /// <summary>
     /// Start <paramref name="command"/> for WRITING (<c>print | "cmd"</c>): stdin, stdout and stderr are all
@@ -330,6 +332,7 @@ internal sealed class AwkShell
 
     public void KillAll()
     {
+        _stop.Cancel();
         foreach (var s in _streams) s.Kill();
     }
 

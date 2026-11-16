@@ -83,4 +83,56 @@ public class RedirectFileWriterTests : IDisposable
         Assert.Equal("a\nb\n", File.ReadAllText(f));
         File.Delete(f);
     }
+
+    // OpenText is the writer awk `print > f`, find -fprint, sed `w`, uniq OUTPUT and `exec 3> f` use: same policy.
+    [Fact]
+    public void OpenText_FirstWriteIsInTheFileAtOnce()
+    {
+        var f = Path.Combine(_dir, "text.txt");
+        using var w = RedirectFileWriter.OpenText(f, append: false);
+        w.Write("a\n");
+        Assert.Equal("a\n", Peek(f));
+    }
+
+    [Fact]
+    public void OpenText_FlushTextWritesABurstNow_AndDisposeClosesTheFile()
+    {
+        var f = Path.Combine(_dir, "textburst.txt");
+        var w = RedirectFileWriter.OpenText(f, append: false);
+        for (int i = 0; i < 50; i++) w.Write(i + "\n");
+        RedirectFileWriter.FlushText(w);
+        var expected = string.Concat(Enumerable.Range(0, 50).Select(i => i + "\n"));
+        Assert.Equal(expected, Peek(f));
+        w.Dispose();
+        File.Delete(f); // closed: nothing holds the file
+        Assert.False(File.Exists(f));
+    }
+
+    [Fact]
+    public void OpenText_AppendKeepsWhatIsThere()
+    {
+        var f = Path.Combine(_dir, "append.txt");
+        File.WriteAllText(f, "old\n");
+        using (var w = RedirectFileWriter.OpenText(f, append: true)) w.Write("new\n");
+        Assert.Equal("old\nnew\n", File.ReadAllText(f));
+    }
+
+    // Regression: awk's `print > "f"` held its output in a private 64 KB StreamWriter until the program ended.
+    [Fact]
+    public void AwkFileSink_PrintIsInTheFileWhileAwkRuns()
+    {
+        var f = Path.Combine(_dir, "awk.txt");
+        var sink = AwkFileSink.Open("awk.txt", f, append: false);
+        sink.Write("a\n");
+        Assert.Equal("a\n", Peek(f));
+        Assert.Equal(0, sink.Close());
+    }
+
+    [Fact]
+    public void AwkFileSink_MissingDirectory_IsGawksCantRedirect()
+    {
+        var f = Path.Combine(_dir, "nodir", "x.txt");
+        var ex = Assert.Throws<AwkInterpreter.AwkRuntimeException>(() => AwkFileSink.Open("nodir/x.txt", f, append: false));
+        Assert.Contains("can't redirect to `nodir/x.txt'", ex.Message);
+    }
 }

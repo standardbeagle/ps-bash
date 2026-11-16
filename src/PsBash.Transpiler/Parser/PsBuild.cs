@@ -324,6 +324,35 @@ public static class PsBuild
             + "clean { if ($null -ne $__psbash_ss) { " + ShellStateRestore + " } } }";
     }
 
+    /// <summary>
+    /// Ends the enclosing subshell scope (<see cref="ShellStateGuard"/>) with <paramref name="status"/>: the guard catches
+    /// the exception and sets the status. For code that is inside such a scope but not lexically inside its script block
+    /// (eval/source text, a simple pipe stage), where a PowerShell <c>return</c> would leave only the nearest block.
+    /// </summary>
+    public static string SubshellExitThrow(string status) =>
+        "$global:LASTEXITCODE = " + status + "; throw [PsBash.Cmdlets.BashSubshellExitException]::new([int]$global:LASTEXITCODE)";
+
+    /// <summary>
+    /// The variable through which a call site tells the eval/source/trap text it runs what a <c>break</c>/<c>continue</c>
+    /// with no loop of its own does there: 0 = the caller's loop (bare keyword), 1 = bash's "only meaningful in a loop"
+    /// warning (a function, a subshell, the top of the script), 2 = end the enclosing subshell (a command substitution,
+    /// a simple pipe stage). PowerShell's dynamic scoping hands it to the text, and a script block or function that sets
+    /// its own value hides the caller's.
+    /// </summary>
+    public const string LoopModeVar = "__psbash_lm";
+
+    /// <summary>The call-site assignment of <see cref="LoopModeVar"/> (a statement that outputs nothing).</summary>
+    public static string LoopModeSet(int mode) => "$" + LoopModeVar + " = " + mode + "; ";
+
+    /// <summary>
+    /// A <c>break</c>/<c>continue</c> at the top of eval/source/trap text, decided by the mode its call site set
+    /// (<see cref="LoopModeVar"/>). A bare PowerShell keyword there is dynamically scoped: it left the loop of whatever
+    /// called the subshell or function the text ran in (and ended the whole script when there was none).
+    /// </summary>
+    public static string RunTimeLoopControl(string keyword, string warning) =>
+        "$__psbash_lmv = $ExecutionContext.SessionState.PSVariable.GetValue('" + LoopModeVar + "'); "
+        + "if ($__psbash_lmv -eq 1) { " + warning + " } elseif ($__psbash_lmv -eq 2) { " + SubshellExitThrow("0") + " } else { " + keyword + " }";
+
     /// <summary>Wrap in a subexpression: <c>$(expr)</c>.</summary>
     public static string Subexpr(string expr) => "$(" + expr + ")";
 
