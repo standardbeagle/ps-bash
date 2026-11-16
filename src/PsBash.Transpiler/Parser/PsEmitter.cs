@@ -454,6 +454,9 @@ public static partial class PsEmitter
     private static string EmitRecordingStatus(Command cmd)
     {
         string text = Emit(cmd);
+        // An assignment statement is a command too: `x=1; echo ${PIPESTATUS[*]}` is `0` (and `x=$(false)` is 1).
+        if (_pipeStatusMode && cmd is Command.ShAssignment { IsLocal: false, IsExport: false, IsDeclare: false } assign)
+            return text + (ContainsCommandSub(assign) ? "; $global:PIPESTATUS = @([int]$global:LASTEXITCODE)" : "; $global:PIPESTATUS = @(0)");
         return _pipeStatusMode && cmd is Command.Simple { Words.Length: > 0 }
             ? text + "; $global:PIPESTATUS = @([int]$global:LASTEXITCODE)"
             : text;

@@ -84,6 +84,19 @@ public class TempBindingDifferentialTests
     public Task PrefixAssignment_SameFunctionBeforeAndAfterPosixMode_IsTheSame()
         => AssertOracle.EqualAsync(Setup + "fbody; set -o posix; fbody; set +o posix; fbody", timeout: Limit);
 
+    /// <summary>
+    /// A new shell's PIPESTATUS is empty, and an assignment statement is a command that sets it to (0). ps-bash did not
+    /// record assignments; oils pipeline "Initial value of PIPESTATUS" (recorded behind the harness's <c>SH=bash;</c>)
+    /// only passed because the spec launcher used to put a <c>cd</c> in front of every script.
+    /// </summary>
+    [SkippableTheory]
+    [InlineData("echo \"pipestatus ${PIPESTATUS[@]}\"")]
+    [InlineData("x=1; echo \"pipestatus ${PIPESTATUS[@]} ${#PIPESTATUS[@]}\"")]
+    [InlineData("echo \"n=${#PIPESTATUS[@]}\"; false | true; echo \"after ${PIPESTATUS[@]}\"")]
+    [InlineData("false | true; x=1; echo \"after-assign ${PIPESTATUS[@]}\"; x=$(false); echo \"after-sub ${PIPESTATUS[@]}\"")]
+    public Task PipeStatus_AtShellStartAndAfterAnAssignment_IsWhatBashHas(string script)
+        => AssertOracle.EqualAsync(script, timeout: Limit);
+
     [SkippableTheory]
     [InlineData("a=42; a=tmp readonly a; echo \"readonly ${a-unset}\"")]
     [InlineData("b=42; b=tmp readonly y=1; echo \"readonly-other ${b-unset}\"")]
