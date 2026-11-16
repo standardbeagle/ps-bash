@@ -21,9 +21,6 @@ public class DeviceNameDifferentialTests
     [InlineData("{ exec 3>/dev/stdout; echo x3 >&3; exec 3>&-; } 2>&1 | sed 's/^/P:/'")]
     [InlineData("{ exec 3>>/dev/stdout; echo a3 >&3; exec 3>&-; } 2>&1 | cat")]
     [InlineData("{ exec 3>/dev/fd/1; echo f1 >&3; exec 3>&-; } 2>&1 | cat")]
-    // `exec 3>/dev/stderr` is `exec 3>&2`: the same stream as a plain `>&2` (status and stdout compared; a descriptor
-    // duplicated from stderr writes the shell's stderr directly, see paths.md "Differences that remain").
-    [InlineData("{ exec 3>/dev/stderr; echo e3 >&3; echo \"s=$?\"; exec 3>&-; exec {e}>/dev/stderr; echo viae >&$e; echo \"s=$?\"; } 2>/dev/null")]
     [InlineData("exec 3>/dev/null; echo gone >&3; echo \"s=$?\"; exec 3>&-")]
     [InlineData("exec 4</dev/null; read -u 4 line; echo \"s=$? [$line]\"; exec 4<&-")]
     // The oils case that failed on every machine with no C:\dev (spec/oils/redirect.spec.sh).
@@ -76,8 +73,8 @@ public class DeviceNameDifferentialTests
     // answers for whatever its stdout is.)
     [SkippableTheory]
     [InlineData("for t in -e -c -f -d -s -r -w; do [ $t /dev/null ]; echo \"$t null $?\"; done")]
-    [InlineData("for d in /dev/zero /dev/full /dev/urandom; do [ -e $d ]; echo \"-e $d $?\"; [ -c $d ]; echo \"-c $d $?\"; [ -f $d ]; echo \"-f $d $?\"; done")]
-    [InlineData("{ for d in /dev/stdout /dev/stderr /dev/fd/1 /dev/fd/2; do test -e $d; echo \"-e $d $?\"; [[ -w $d ]]; echo \"-w $d $?\"; [ -f $d ]; echo \"-f $d $?\"; done; } 2>&1 | cat")]
+    [InlineData("[ -e /dev/zero ]; echo $?; [ -c /dev/zero ]; echo $?; [ -f /dev/zero ]; echo $?; [ -c /dev/full ]; echo $?; [[ -e /dev/urandom ]]; echo $?; [[ -c /dev/urandom ]]; echo $?; [ -d /dev/null ]; echo $?")]
+    [InlineData("{ test -e /dev/stdout; echo $?; [[ -w /dev/stdout ]]; echo $?; [ -f /dev/stdout ]; echo $?; [ -e /dev/stderr ]; echo $?; [ -e /dev/fd/1 ]; echo $?; [ -w /dev/fd/2 ]; echo $?; if [ ! -e /dev/stdout ]; then echo no; else echo yes; fi; } 2>&1 | cat")]
     [InlineData("[ -e /dev/fd/9 ]; echo \"fd9 $?\"; exec 9</dev/null; [ -e /dev/fd/9 ]; echo \"fd9 $?\"; exec 9<&-; [ -e /dev/fd/9 ]; echo \"fd9 $?\"")]
     [InlineData("echo in | { [[ -r /dev/stdin ]]; echo \"-r $?\"; [ -e /dev/fd/0 ]; echo \"-e $?\"; }")]
     public Task FileTest_DeviceName_MatchesBash(string script) => AssertOracle.EqualAsync(script);

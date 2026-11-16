@@ -1,0 +1,19 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 197
+stdout-length: 14
+stderr-length: 0
+==== SCRIPT ====
+[ -e /dev/zero ]; echo $?; [ -c /dev/zero ]; echo $?; [ -f /dev/zero ]; echo $?; [ -c /dev/full ]; echo $?; [[ -e /dev/urandom ]]; echo $?; [[ -c /dev/urandom ]]; echo $?; [ -d /dev/null ]; echo $?
+==== STDOUT ====
+0
+0
+1
+0
+0
+0
+1
+
+==== STDERR ====
+

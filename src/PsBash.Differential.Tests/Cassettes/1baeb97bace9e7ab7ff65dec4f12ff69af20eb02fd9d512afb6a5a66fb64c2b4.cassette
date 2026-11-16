@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 77
+stdout-length: 9
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)"; exec 3>out3; echo to3 > /dev/fd/3; exec 3>&-; cat out3; ls
+==== STDOUT ====
+to3
+out3
+
+==== STDERR ====
+

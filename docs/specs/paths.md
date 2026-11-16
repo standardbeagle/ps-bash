@@ -122,17 +122,30 @@ Rules:
   `exec 3>&1`, `{v}>&2`, `exec 3>&7` (`BashFdTable.Open`): a later `>&3` writes the stdout of the command
   that writes, so an enclosing pipe or redirect applies.
 - **stdin is the cmdlet's pipeline input**, read by the cmdlet, not opened: a cmdlet treats the operand
-  through `FileSystemHelpers.IsStdinOperand` (`-`, `/dev/stdin`, `/dev/fd/0`); the emitter drops a literal
-  `cmd < /dev/stdin` and feeds a command with such an operand (`StdinReaders.ShouldFeed`).
+  through `FileSystemHelpers.IsStdinOperand` (`-`, `/dev/stdin`, `/dev/fd/0`); the parser drops a literal
+  `cmd < /dev/stdin` (`BashParser.AddRedirect`: the command keeps its pipe) and the emitter feeds a command
+  with such an operand (`StdinReaders.ShouldFeed`). `BashFileSystem.OpenRead` refuses the name.
 - **Off Windows** the real `/dev/null|zero|full|urandom|tty` are opened (`DevicePath.NativeDevice`), as
   bash opens them; the stream kinds are virtual on every OS.
 - **Tests / stat.** `[ -e /dev/stdout ]`, `[ -c /dev/null ]`, `-r`, `-w` answer from the kind
   (`InvokeBashTestCommand`), with no filesystem lookup; `/dev/fd/N` exists while N is open.
 
-Differences that remain (see also `intentional-differences.md`): commands other than `cat` and `awk` do not
-yet take `/dev/stdin` as an operand (they report it cannot be opened; use `-` or a pipe); `cp`, `touch`,
-`stat`, `source` and `split` do not accept a device operand; `ls -l /dev/null` shows fixed mode bits;
-`/dev/tcp`, `/dev/udp` and `/dev/pts/*` are not devices here. Oracle: `DeviceNameDifferentialTests`.
+Differences that remain (none of them touches the filesystem under a device name through a choke point;
+oracle: `DeviceNameDifferentialTests`):
+
+- `/dev/stdin` / `/dev/fd/0` as a file OPERAND is read only by `cat` and awk's `getline < "/dev/stdin"`.
+  `head`, `tail`, `sort`, `uniq`, `grep`, `sed`, `cut`, `wc`, `tac`, `nl`, `paste`, `rev`, `base64`,
+  `md5sum`, `cp`, `source` and awk's file operand report that it cannot be opened (use `-` or a pipe).
+  `cmd < "$f"` with `f=/dev/stdin` (not a literal) fails the same way; the literal form keeps the pipe.
+- `cp`, `touch`, `stat` and `source` do not accept a device operand (`cp f /dev/null`, `source /dev/null`);
+  they stat the name as a path and report "No such file or directory". `dd` is not a ps-bash command.
+- A file test whose operand is not a literal (`d=/dev/null; [ -e "$d" ]`) is lowered to `Test-Path` and is
+  false; `test -e "$d"` and the literal `[ -e /dev/null ]` are answered from the device.
+- A descriptor duplicated from stderr (`exec 3>/dev/stderr`, as `exec 3>&2`) writes the shell's stderr
+  directly: an enclosing `2>&1 |` or `2> f` on a compound command does not capture `>&3`.
+- An endless device read by a whole-input command (`sort /dev/zero`) never ends, as in bash; `od` asks
+  for `-N`.
+- `ls -l /dev/null` shows fixed mode bits; `/dev/tcp`, `/dev/udp` and `/dev/pts/*` are not devices here.
 
 ## PATH
 

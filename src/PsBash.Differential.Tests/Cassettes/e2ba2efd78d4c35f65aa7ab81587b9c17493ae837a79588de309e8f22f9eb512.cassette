@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 64
+stdout-length: 7
+stderr-length: 0
+==== SCRIPT ====
+exec 4</dev/null; read -u 4 line; echo "s=$? [$line]"; exec 4<&-
+==== STDOUT ====
+s=1 []
+
+==== STDERR ====
+

@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 63
+stdout-length: 7
+stderr-length: 0
+==== SCRIPT ====
+echo in | awk 'BEGIN{getline l < "/dev/stdin"; print "got " l}'
+==== STDOUT ====
+got in
+
+==== STDERR ====
+

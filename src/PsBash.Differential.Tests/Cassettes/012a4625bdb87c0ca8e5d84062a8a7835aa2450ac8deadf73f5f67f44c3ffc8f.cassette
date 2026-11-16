@@ -1,0 +1,19 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 245
+stdout-length: 16
+stderr-length: 0
+==== SCRIPT ====
+{ test -e /dev/stdout; echo $?; [[ -w /dev/stdout ]]; echo $?; [ -f /dev/stdout ]; echo $?; [ -e /dev/stderr ]; echo $?; [ -e /dev/fd/1 ]; echo $?; [ -w /dev/fd/2 ]; echo $?; if [ ! -e /dev/stdout ]; then echo no; else echo yes; fi; } 2>&1 | cat
+==== STDOUT ====
+0
+0
+1
+0
+0
+0
+yes
+
+==== STDERR ====
+

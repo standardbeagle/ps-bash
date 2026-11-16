@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 56
+stdout-length: 3
+stderr-length: 0
+==== SCRIPT ====
+{ exec 3>/dev/fd/1; echo f1 >&3; exec 3>&-; } 2>&1 | cat
+==== STDOUT ====
+f1
+
+==== STDERR ====
+

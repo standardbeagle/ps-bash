@@ -1,0 +1,19 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 75
+stdout-length: 70
+stderr-length: 0
+==== SCRIPT ====
+for t in -e -c -f -d -s -r -w; do [ $t /dev/null ]; echo "$t null $?"; done
+==== STDOUT ====
+-e null 0
+-c null 0
+-f null 1
+-d null 1
+-s null 1
+-r null 0
+-w null 0
+
+==== STDERR ====
+

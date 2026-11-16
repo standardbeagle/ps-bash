@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 145
+stdout-length: 12
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)"; mkdir d; touch d/a; find d -name a -fprint /dev/stdout | cat; { find d -name a -fprint /dev/stderr; } 2>&1 | sed 's/^/E:/'; ls
+==== STDOUT ====
+d/a
+E:d/a
+d
+
+==== STDERR ====
+

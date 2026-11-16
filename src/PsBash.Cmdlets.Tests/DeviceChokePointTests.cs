@@ -58,6 +58,13 @@ public class DeviceChokePointTests : IClassFixture<SharedPwshFixture>, IDisposab
             $"{Path.GetFileName(e)}:{File.GetLastWriteTimeUtc(e).Ticks}:{(File.Exists(e) ? new FileInfo(e).Length : -1)}"));
     }
 
+    /// <summary>The kinds served by a device of the OS itself: <c>NUL</c> / the real <c>/dev/*</c>, and the console for <c>/dev/tty</c>.</summary>
+    private static bool IsOsDevice(string path)
+    {
+        var kind = DevicePath.Classify(path);
+        return kind == DeviceKind.Tty || DevicePath.NativeDevice(kind) is not null;
+    }
+
     [Theory]
     [MemberData(nameof(Spellings))]
     public void WriteChokePoint_NeverOpensADeviceNameAsAFile(string path)
@@ -69,9 +76,9 @@ public class DeviceChokePointTests : IClassFixture<SharedPwshFixture>, IDisposab
             try
             {
                 using var writer = RedirectFileWriter.OpenFile(path, append);
-                // Only the OS's own device may be a FileStream (Linux /dev/full, /dev/tty; never a path under a drive).
+                // Only the OS's own device may be a FileStream (NUL, Linux /dev/full, the console; never a path under a drive).
                 if (writer.FilePath is { } file)
-                    Assert.True(DevicePath.NativeDevice(DevicePath.Classify(path)) is not null, $"{path} was opened as the file {file}");
+                    Assert.True(IsOsDevice(path), $"{path} was opened as the file {file}");
             }
             catch (IOException)
             {
@@ -91,8 +98,7 @@ public class DeviceChokePointTests : IClassFixture<SharedPwshFixture>, IDisposab
         {
             using var stream = BashFileSystem.OpenRead(path);
             if (stream is FileStream fs)
-                Assert.True(DevicePath.NativeDevice(DevicePath.Classify(path)) is not null,
-                    $"{path} was opened as the file {fs.Name}");
+                Assert.True(IsOsDevice(path), $"{path} was opened as the file {fs.Name}");
         }
         catch (IOException)
         {

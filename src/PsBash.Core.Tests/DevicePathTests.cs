@@ -154,7 +154,6 @@ public class DevicePathGuardTests
         ["DevicePath.cs"] = "the primitive itself",
         ["DetachedProcess.cs"] = "text of a /bin/sh script run by the real sh on Linux/macOS (nohup)",
         ["PipedInteractive.cs"] = "bash source text fed to the shell (`history -r 2>/dev/null`)",
-        ["PosixPtySpawner.cs"] = "an error message quoting an example pty name (/dev/pts/3), no device test",
     };
 
     private static readonly string[] ProductDirs =
