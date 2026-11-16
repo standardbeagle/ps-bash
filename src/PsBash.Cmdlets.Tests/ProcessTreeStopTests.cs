@@ -14,11 +14,24 @@ namespace PsBash.Cmdlets.Tests;
 /// process group including <c>&amp;</c> children and orphans, a <c>setsid</c> child survives, and a background child
 /// survives its parent's normal exit.
 /// </para>
+/// <para>
+/// Every elapsed-time bound here detects a HANG: a wait that lasts as long as a held child (<see cref="HoldSeconds"/>).
+/// The hold is therefore far longer than any bound, so a slow, loaded machine stays well inside the bound while the
+/// bug still lands far outside it. A bound a few seconds short of the hold failed on correct code at load average 58
+/// (fleet g45: <c>timeout 12</c> returned after 26.4 s against a 22 s bound, the child held 30 s). Guard:
+/// <see cref="Bounds_AreFarShortOfTheHangTheyDetect"/>.
+/// </para>
 /// </summary>
 public class ProcessTreeStopTests : IClassFixture<SharedPwshFixture>
 {
     private static readonly TimeSpan StartLimit = TimeSpan.FromSeconds(60);
-    private static readonly TimeSpan ReturnLimit = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan ReturnLimit = TimeSpan.FromSeconds(40);
+
+    /// <summary>How long every held child (the grandchild, the waiting parent, a survivor) lives unless stopped.</summary>
+    private const int HoldSeconds = 120;
+
+    /// <summary>The <c>timeout</c> budget: on Windows it must cover two powershell.exe starts on a loaded machine.</summary>
+    private static int BudgetSeconds => OperatingSystem.IsWindows() ? 20 : 4;
 
     private readonly SharedPwshFixture _fixture;
 
@@ -47,7 +60,7 @@ public class ProcessTreeStopTests : IClassFixture<SharedPwshFixture>
         public string PidFile { get; }
         public ProcessStartInfo StartInfo { get; }
 
-        /// <summary>A parent that starts a 30 s grandchild sharing its stdout/stderr, writes the grandchild's pid to <see cref="PidFile"/>, and waits 30 s.</summary>
+        /// <summary>A parent that starts a <see cref="HoldSeconds"/> grandchild sharing its stdout/stderr, writes the grandchild's pid to <see cref="PidFile"/>, and waits as long.</summary>
         public Scenario(Shape shape, bool parentExitsAtOnce = false, bool grandchildDetaches = false)
         {
             Dir = Path.Combine(Path.GetTempPath(), "ps-bash", "tree-test-" + Guid.NewGuid().ToString("N"));
@@ -58,13 +71,13 @@ public class ProcessTreeStopTests : IClassFixture<SharedPwshFixture>
             {
                 // powershell.exe (always present) can report the pid of what it starts; -NoNewWindow shares the std handles.
                 string start = parentExitsAtOnce
-                    ? "$p = Start-Process ping -ArgumentList '-n','30','127.0.0.1' -WindowStyle Hidden -PassThru"
-                    : "$p = Start-Process ping -ArgumentList '-n','30','127.0.0.1' -NoNewWindow -PassThru";
+                    ? $"$p = Start-Process ping -ArgumentList '-n','{HoldSeconds}','127.0.0.1' -WindowStyle Hidden -PassThru"
+                    : $"$p = Start-Process ping -ArgumentList '-n','{HoldSeconds}','127.0.0.1' -NoNewWindow -PassThru";
                 string record = "[IO.File]::WriteAllText('" + PidFile + ".tmp', [string]$p.Id); Move-Item -LiteralPath '" + PidFile + ".tmp' -Destination '" + PidFile + "'";
                 string inner = Path.Combine(Dir, "inner.ps1");
                 File.WriteAllText(inner, start + "\n" + record + "\n");
                 string outer = Path.Combine(Dir, "outer.ps1");
-                string wait = parentExitsAtOnce ? "" : "Start-Sleep -Seconds 30\n";
+                string wait = parentExitsAtOnce ? "" : $"Start-Sleep -Seconds {HoldSeconds}\n";
                 File.WriteAllText(outer, shape == Shape.Orphan
                     ? "& powershell.exe -NoProfile -ExecutionPolicy Bypass -File '" + inner + "'\n" + wait
                     : start + "\n" + record + "\n" + wait);
@@ -75,12 +88,13 @@ public class ProcessTreeStopTests : IClassFixture<SharedPwshFixture>
             {
                 // `echo` is redirected; the sleep keeps the parent's stdout and stderr (the pipes we read).
                 string record = "echo $! > \"$PIDFILE.tmp\"; mv \"$PIDFILE.tmp\" \"$PIDFILE\"";
+                string hold = "sleep " + HoldSeconds;
                 string sleeper = grandchildDetaches
-                    ? "setsid sh -c 'echo $$ > \"$PIDFILE.tmp\"; mv \"$PIDFILE.tmp\" \"$PIDFILE\"; exec sleep 30' >/dev/null 2>&1 &"
-                    : parentExitsAtOnce ? "sleep 30 >/dev/null 2>&1 & " + record : "sleep 30 & " + record;
+                    ? "setsid sh -c 'echo $$ > \"$PIDFILE.tmp\"; mv \"$PIDFILE.tmp\" \"$PIDFILE\"; exec " + hold + "' >/dev/null 2>&1 &"
+                    : parentExitsAtOnce ? hold + " >/dev/null 2>&1 & " + record : hold + " & " + record;
                 string script = parentExitsAtOnce ? sleeper
-                    : grandchildDetaches ? sleeper + " sleep 30"
-                    : shape == Shape.Orphan ? "(" + sleeper + "); sleep 30"
+                    : grandchildDetaches ? sleeper + " " + hold
+                    : shape == Shape.Orphan ? "(" + sleeper + "); " + hold
                     : sleeper + "; wait";
                 StartInfo.FileName = "/bin/sh";
                 StartInfo.ArgumentList.Add("-c");
@@ -115,13 +129,13 @@ public class ProcessTreeStopTests : IClassFixture<SharedPwshFixture>
         catch (InvalidOperationException) { return false; }
     }
 
-    /// <summary>The process must be gone within a few seconds (the kill is asynchronous on every OS).</summary>
+    /// <summary>The process must be gone well before its hold ends (the kill is asynchronous on every OS).</summary>
     private static void AssertGone(int pid, string what)
     {
         try
         {
             using var p = Process.GetProcessById(pid);
-            Assert.True(p.WaitForExit(5_000), $"{what} (pid {pid}) is still running after the stop");
+            Assert.True(p.WaitForExit(ReturnLimit), $"{what} (pid {pid}) is still running after the stop");
         }
         catch (ArgumentException) { /* not running */ }
         catch (InvalidOperationException) { /* exited between the lookup and the wait */ }
@@ -179,7 +193,7 @@ public class ProcessTreeStopTests : IClassFixture<SharedPwshFixture>
     public void RunChildProcess_Budget_EndsAnOrphanedGrandchildToo()
     {
         using var s = new Scenario(Shape.Orphan);
-        var budget = TimeSpan.FromSeconds(OperatingSystem.IsWindows() ? 12 : 4); // two powershell.exe starts on Windows
+        var budget = TimeSpan.FromSeconds(BudgetSeconds);
 
         var sw = Stopwatch.StartNew();
         var result = BashRuntime.RunChildProcess(s.StartInfo, budget);
@@ -226,7 +240,7 @@ public class ProcessTreeStopTests : IClassFixture<SharedPwshFixture>
 
         child.KillTree();
 
-        Assert.True(child.WaitForExit(5_000), "the leader did not exit after KillTree");
+        Assert.True(child.WaitForExit((int)ReturnLimit.TotalMilliseconds), "the leader did not exit after KillTree");
         AssertGone(grandchild, "the orphaned grandchild");
         foreach (var pid in before) AssertGone(pid, "a tree member");
     }
@@ -264,15 +278,15 @@ public class ProcessTreeStopTests : IClassFixture<SharedPwshFixture>
     public void RunChildProcess_ExitedParent_SurvivorHoldingThePipes_DoesNotHoldTheCall()
     {
         var psi = OperatingSystem.IsWindows()
-            ? new ProcessStartInfo("cmd.exe") { ArgumentList = { "/c", "start /b ping -n 25 127.0.0.1" }, CreateNoWindow = true }
-            : new ProcessStartInfo("/bin/sh") { ArgumentList = { "-c", "sleep 25 &" } };
+            ? new ProcessStartInfo("cmd.exe") { ArgumentList = { "/c", $"start /b ping -n {HoldSeconds} 127.0.0.1" }, CreateNoWindow = true }
+            : new ProcessStartInfo("/bin/sh") { ArgumentList = { "-c", $"sleep {HoldSeconds} &" } };
 
         var sw = Stopwatch.StartNew();
         var result = BashRuntime.RunChildProcess(psi, BashRuntime.NoTimeLimit, null, CancellationToken.None);
         sw.Stop();
 
         Assert.Equal(0, result.ExitCode);
-        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(15), $"the survivor's pipe must not hold the call; took {sw.ElapsedMilliseconds}ms");
+        Assert.True(sw.Elapsed < ReturnLimit, $"the survivor's pipe must not hold the call; took {sw.ElapsedMilliseconds}ms");
     }
 
     // bash: a setsid child left the process group, so neither Ctrl+C nor `timeout` reaches it.
@@ -301,7 +315,7 @@ public class ProcessTreeStopTests : IClassFixture<SharedPwshFixture>
         string Quote(string a) => "'" + a.Replace("'", "''") + "'";
         var words = new List<string> { Quote(s.StartInfo.FileName) };
         foreach (var a in s.StartInfo.ArgumentList) words.Add(Quote(a));
-        int budget = OperatingSystem.IsWindows() ? 12 : 4;
+        int budget = BudgetSeconds;
         var pwsh = _fixture.AcquireFresh();
         var previous = Environment.GetEnvironmentVariable("PIDFILE");
         Environment.SetEnvironmentVariable("PIDFILE", s.PidFile);
@@ -316,5 +330,16 @@ public class ProcessTreeStopTests : IClassFixture<SharedPwshFixture>
         result.AssertFailed(124, "");
         AssertGone(int.Parse(recorded!.Trim()), "the orphaned grandchild of a timed-out command");
         Assert.True(sw.Elapsed < TimeSpan.FromSeconds(budget) + ReturnLimit, $"timeout must return at its budget; took {sw.ElapsedMilliseconds}ms");
+    }
+
+    // A bound that detects a hang must sit far short of the hang: the bug waits a whole hold, a loaded machine only
+    // stretches the correct path. Twice the longest bound leaves room for both.
+    [Fact]
+    public void Bounds_AreFarShortOfTheHangTheyDetect()
+    {
+        var longestBound = TimeSpan.FromSeconds(BudgetSeconds) + ReturnLimit;
+        Assert.True(TimeSpan.FromSeconds(HoldSeconds) >= 2 * longestBound,
+            $"a held child ({HoldSeconds}s) must outlast twice the longest bound ({longestBound.TotalSeconds:0}s), or a slow machine reads as the hang");
+        Assert.True(StartLimit < TimeSpan.FromSeconds(HoldSeconds), "the grandchild must still be running when its start is awaited");
     }
 }
