@@ -21,7 +21,7 @@ supposed to have a private copy of is shared or missing:
 | Job calls a shell function | works | **fails**: "f is not recognized" (pool runspace never saw it) |
 | `{ x=1; } \| cat` | `x` unchanged | **changed** (same mechanism, pipeline stages) |
 | `$!`, `kill %1`, `kill $!` | real pid, real signal | synthetic id 1000+, `PowerShell.Stop()` |
-| Job output | live, interleaved | **buffered until `wait`** |
+| Job output | live, interleaved | live and interleaved for a job whose output is the shell's own (§12); **buffered until `wait`** for a job under a redirect, pipe, capture, function, or eval |
 | `wait`/`$?` | job's status | job's status (patched) |
 | `cmd &` then script/`-c` ends | job keeps running | **killed** (`Remove-BashBgState` at runspace discard) |
 
@@ -385,7 +385,8 @@ Known gaps / not done:
 
 - A cold (missed) job start is ~2.5 s on a loaded machine; the numbers above are Debug-build and load bound, so re-run
   `scripts/bench-warm.ps1` A/B on a quiet machine with a release build before deciding the flip.
-- Job output is buffered until `wait`/completion; jobs are killed at command end (Q1 detach not implemented).
+- Job output is live (§12) for a terminal-bound job; other jobs stay buffered until `wait`/completion. Jobs are still
+  killed at command end in `-c` mode (Q1 detach not implemented).
 - `PSBASH_JOBS_MAX` (default 32) is enforced in `BashJobProcess.Start`. No POSIX hard-kill containment (Q3), no native fast path.
 - `JobHostSpares.Prewarm(n)` sizes the spare pool from the number of `Invoke-BashBackground` call sites in the command
   (bounded by `MaxSpares`), so a command with several `&` starts its spares before the first one is reached. Effect on the
@@ -403,3 +404,76 @@ Known gaps / not done:
   before STARTED, launcher spill to `-x<k>` slot endpoints (`IpcWorker.YieldToAnotherSlotAsync`), nested
   launchers detected by `ProcessAncestry.IsDescendantOf`. `_globalExecGate` and the nested-host machinery
   are removed. NOT done: the hub/ACQUIRE broker, executor scrubbing/leasing, and the POSIX hard-kill test.
+
+## 12. Live job output (default, no extra process)
+
+A job's stdout and stderr reach the shell's own streams while it runs. They are interleaved with the foreground
+command's output in production order, memory is bounded, and nothing is printed twice. This works in both job
+modes (runspace pool and job host process) and adds no process.
+
+The general layer it is built on (channels, fds, open/close, credit) is described in
+[stdio-messaging.md](stdio-messaging.md). This section covers the job-specific rules.
+
+### 12.1 Path
+
+1. **Emitter.** `PsEmitter.CollectLiveJobs` (`PsEmitter.LiveJobs.cs`) marks the jobs of a unit whose output is the
+   shell's own, and those jobs are emitted as `Invoke-BashBackground -Live`.
+   - A job is marked when it is reached from the root through lists, `&&`/`||`, single-command pipelines, and
+     `if`, loops, `case`, `{ }` or `( )` that have no output redirect.
+   - A job is not marked inside:
+     - a function body;
+     - a multi-stage pipeline;
+     - a command or process substitution;
+     - `select`;
+     - a compound command that has an output redirect;
+     - anything after a command-less `exec >file`;
+     - eval, source or trap text (`TranspileContext.Eval`).
+
+   A live write would bypass the redirect or capture that encloses such a job, so these jobs keep the old
+   collected-at-`wait` path. Correct output is chosen over live output.
+2. **Module.** Under `-Live`, and only when `$global:__BashJobOutput` exists (set by the host's `SdkWorker`; plain
+   module use keeps the old behaviour), `Invoke-BashBackground` opens a channel:
+   - runspace jobs go through `PsBash.Cmdlets.BashJobOutput.BeginLive`, where DataAdded on the output collection
+     and on the error stream writes to fd 1 and fd 2;
+   - process jobs go through `BashJobProcess.Start(..., OutputMux)`, which routes the job host's stdout and stderr
+     callbacks.
+
+   The job record gets `Live = $true`. `Complete-BashBgJob` still calls EndInvoke for the status but prints
+   nothing, so `wait` and `fg` do not replay output.
+3. **Host.** For the length of each command, `SdkWorker.RunCommand` attaches the mux to that command's own
+   delivery path: the stdout batcher and the stderr bytes path, under the same `outputLock` the foreground records
+   take. Output a job queued between commands is flushed first. A job's text therefore never lands inside a
+   foreground record, and IPC frames are only ever written by the connection's single `IpcOutputQueue`.
+
+### 12.2 Cases
+
+| Case | Behaviour |
+|---|---|
+| Job writes while a command of the session runs | Live, in production order. |
+| Job writes between commands, stateful session (`--session`) | Queued, up to the per-channel window, then the job blocks. Flushed first by the next command. |
+| Interactive prompt | `InteractiveShell` prints queued output before the prompt. While jobs are alive, `LineEditor.ReadKeyOrJobOutput` polls the mux every 20 ms between keystrokes and prints new output above the prompt (erase region, print, re-render prompt and line). It never writes from the job's thread, because the console allows only one writer. |
+| `-c` after the script's last command | The job prints live during the existing 1 s exit grace. When the runspace is discarded, the job is stopped (Q1 unchanged). Output produced after that is queued until the stop, then dropped, like a job whose pipe reader went away. Detach is still Q1. |
+| `cmd > f &`, `cmd &> log &` | The redirect is inside the job body. Nothing reaches the session. |
+| `cmd \| tee f &` | Live: tee's stdout is the job's stdout. |
+| Job stderr | Live on fd 2 (`STDERR:` frames). |
+| `$!`, `wait`, `wait $!` status, `jobs`, `fg`, `kill` | Unchanged. |
+| Job in a function, redirected group, `$( )`, eval | Not live: collected and printed at `wait` or exit, as before. |
+
+### 12.3 Bounds and failure
+
+- **Memory.** While detached, each channel holds at most `OutputMux.WindowChars` (64 Ki chars) of queued text;
+  after that the job blocks. While attached, the job is held back by the IPC queue (4096 frames) exactly as the
+  foreground is.
+- **Teardown.** A job blocked on output gives up within 50 ms once it is stopped:
+  - a runspace job when its `PowerShell` leaves Running or NotStarted;
+  - a process job when its cancel token fires.
+
+  `Stop()` and `Remove-BashBgState` therefore cannot deadlock against it.
+- **Broken launcher.** Sink exceptions are swallowed in the mux. The foreground's own sink failure handling
+  (`BeginStop`) is unchanged.
+- **Tests.**
+  - `OutputMuxTests` (Core.Tests): ordering, credit, abandon, close.
+  - `LiveJobEmitterTests`: which jobs are live.
+  - `BackgroundJobLiveOutputTests` (Host.Tests): ordering through the batcher, stderr routing, record integrity,
+    no replay at `wait`, queue between commands, flood bound and teardown.
+  - `BackgroundJobDifferentialTests` `*_LiveOutput_*`: against the bash oracle.

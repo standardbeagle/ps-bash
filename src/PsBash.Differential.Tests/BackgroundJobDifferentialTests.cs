@@ -7,11 +7,9 @@ namespace PsBash.Differential.Tests;
 /// Differential oracle tests for background job control: cmd &amp;, wait, wait $!, jobs, kill.
 /// (Dart XjjfjLBg5EMa)
 ///
-/// Background jobs in ps-bash use Invoke-BashBackground which spawns a child pwsh process
-/// with stdout/stderr redirected via async reads. Because child output is swallowed by
-/// BeginOutputReadLine/BeginErrorReadLine and never forwarded to the parent's stdout, tests
-/// that check background-job output content must use GoldenAsync (known behavior frozen).
-/// Tests that only check exit codes or side-effects on the foreground shell can use EqualAsync.
+/// Background jobs in ps-bash run on a runspace pool (or, for a job that may change shell state, a job host
+/// process); a job whose output is the shell's own streams it live (docs/specs/background-jobs.md section 12), so
+/// job output is oracle-checked with EqualAsync.
 ///
 /// Failure-surface axes targeted per test (Directive 3):
 ///   - Axis 8:  exit-code propagation (wait exit code, $! non-empty)
@@ -61,6 +59,59 @@ public class BackgroundJobDifferentialTests
     public async Task Differential_Background_OutputOfAnUnwaitedJob_IsEmittedAtExit(string script)
     {
         await AssertOracle.EqualAsync(script, timeout: TimeSpan.FromSeconds(60), liveOnly: true);
+    }
+
+    /// <summary>
+    /// A background job's output reaches the shell's stdout WHILE the job runs, in production order with the
+    /// foreground's, and `wait` does not print it again. ps-bash collected a job's output and printed it all at
+    /// `wait` (bg1, bg2, fg became fg, bg1, bg2). Timings are generous: a job's start costs ps-bash up to a few hundred
+    /// milliseconds (a pooled runspace imports the module), which this asserts nothing about.
+    /// </summary>
+    [SkippableTheory]
+    [InlineData("{ echo bg1; sleep 2; echo bg2; } & sleep 1; echo fg; wait")]
+    [InlineData("{ echo a1; sleep 3; echo a2; } & { sleep 1; echo b1; sleep 1; echo b2; } & sleep 2.5; echo fg; wait; echo end")]
+    [InlineData("for i in 1 2; do { sleep $i; echo job$i; } & done; echo started; wait; echo end")]
+    public async Task Differential_Background_LiveOutput_InterleavesInProductionOrder(string script)
+    {
+        await AssertOracle.EqualAsync(script, timeout: TimeSpan.FromSeconds(60));
+    }
+
+    /// <summary>
+    /// A job's stderr reaches the shell's stderr live; its stdout and stderr stay on their own streams.
+    /// </summary>
+    [SkippableTheory]
+    [InlineData("{ echo out1; echo err1 >&2; sleep 2; echo out2; } & sleep 1; echo fg; wait")]
+    [InlineData("{ ls /no/such/path; echo after; } & wait; echo rc=$?")]
+    public async Task Differential_Background_LiveOutput_StderrStreams(string script)
+    {
+        await AssertOracle.EqualAsync(script, timeout: TimeSpan.FromSeconds(60));
+    }
+
+    /// <summary>
+    /// A job's own redirects take its output away from the shell: `cmd &gt; f &amp;` and `cmd &amp;&gt; log &amp;` print
+    /// nothing live, `cmd | tee f &amp;` prints live AND writes the file; a job inside a redirected group writes to the
+    /// group's file (that job is not live, it keeps the collected path).
+    /// </summary>
+    [SkippableTheory]
+    [InlineData("cd \"$(mktemp -d)\"; { echo a; sleep 2; echo b; } > f & sleep 1; echo fg; wait; cat f; cd /")]
+    [InlineData("cd \"$(mktemp -d)\"; { echo o; echo e >&2; } &> log & wait; echo fg; sort log; cd /")]
+    [InlineData("cd \"$(mktemp -d)\"; { echo t1; sleep 2; echo t2; } | tee f & sleep 1; echo fg; wait; cat f; cd /")]
+    [InlineData("cd \"$(mktemp -d)\"; { { echo in; } & wait; } > g; echo fg; cat g; cd /")]
+    public async Task Differential_Background_LiveOutput_RespectsRedirects(string script)
+    {
+        await AssertOracle.EqualAsync(script, timeout: TimeSpan.FromSeconds(60));
+    }
+
+    /// <summary>
+    /// `wait` statuses, `$!` and `jobs` are unchanged for a job whose output streams live.
+    /// </summary>
+    [SkippableTheory]
+    [InlineData("{ sleep 1; echo a; exit 3; } & a=$!; { echo b; exit 4; } & b=$!; wait $a; echo a=$?; wait $b; echo b=$?")]
+    [InlineData("{ sleep 1; echo j; } & jobs | wc -l; wait; echo w=$?")]
+    [InlineData("f() { echo in-func; }; f & wait; echo end")]
+    public async Task Differential_Background_LiveOutput_WaitJobsAndStatus(string script)
+    {
+        await AssertOracle.EqualAsync(script, timeout: TimeSpan.FromSeconds(60));
     }
 
     /// <summary>

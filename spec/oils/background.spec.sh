@@ -73,7 +73,7 @@ status=2
 status=1
 ## END
 ## status: 0
-## XFAIL ps-bash arch-bg-output-buffered-until-collected a runspace-pool job's output is held until wait collects that job (it has no live stdout), and pool jobs start 45-370 ms apart, so the first-launched job (sleep 0.03) is the first done and each line comes out with its own status line instead of all three first
+## XFAIL ps-bash arch-bg-job-start-latency job output is live, so all three lines come before the statuses as in bash, but jobs start tens to hundreds of ms apart (more than the 10 ms between the sleeps), so the first-launched job (sleep 0.03) finishes first and the lines come out 3 2 1
 ## timeout: 10
 
 #### Builtin in background

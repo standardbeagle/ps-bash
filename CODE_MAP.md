@@ -41,6 +41,7 @@ Tests: `*.Tests`, `Differential.Tests` (bash oracle), `Canary.Tests`, `Escalatio
 - **Host must survive input** (recursion bound, host log, stuck-command poison): `Parser/NestingGuard.cs` (every recursive descent enters it), `Host/Server/HostLog.cs`, `Host/Runtime/StuckCommandWatchdog.cs`. Spec: `host-lifecycle-contract.md` §No input may take the host down.
 - **Child process + tree (spawn/kill/suspend/identity, Job Object / pgroup)**: `Core/Runtime/Processes/JobProcess*.cs`. Spec: `background-jobs.md` §6.
 - **Background job (`cmd &`) in its own host process** (opt-in `PSBASH_BG_MODE=process`): `Host/Runtime/BashJobProcess.cs` + `JobHostSpares.cs`, state copy `Cmdlets/BashStateSnapshot.cs`, `kill` routing `Transpiler/BackgroundJobTable.cs`. Spec: `background-jobs.md` §11.
+- **Live job output / output channels + credit**: `Transpiler/Stdio/OutputMux.cs` (attached in `SdkWorker.RunCommand`), live-job marking `Parser/PsEmitter.LiveJobs.cs`, `Cmdlets/BashJobOutput.cs`. Spec: `stdio-messaging.md`, `background-jobs.md` §12.
 - **Daemon / IPC / pool / nesting / spawn lock**: `IpcWorker.cs`, `Ipc/*` (`WindowsHostSpawn.cs` = no handle inheritance, `HostSpawnLock.cs`), `WorkerPool.cs`; daemon ends with its session = `Host/Server/SessionAnchorWatcher.cs`. Spec: `host-lifecycle-contract.md`.
 - **Bytes vs text**: `Transpiler/RawBytes.cs` at every text↔bytes boundary — never `Encoding.UTF8` on data; streams `Cmdlets/ByteRecordStreams.cs`.
 - **Embedded DLL extraction**: `ModuleExtractor.cs` (list = `EmbedCmdletsDll` in `PsBash.Core.csproj`).

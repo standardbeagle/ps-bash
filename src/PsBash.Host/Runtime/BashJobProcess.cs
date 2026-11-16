@@ -1,5 +1,6 @@
 using PsBash.Core;
 using PsBash.Core.Runtime;
+using PsBash.Core.Stdio;
 
 namespace PsBash.Host.Runtime;
 
@@ -44,6 +45,14 @@ public sealed class BashJobProcess : IDisposable
 
     /// <summary>Start the job: spawn a private host and run <paramref name="body"/> in it, after <paramref name="prelude"/>.</summary>
     public static BashJobProcess Start(string prelude, string body, KeyValuePair<string, string>[] environment)
+        => Start(prelude, body, environment, null);
+
+    /// <summary>
+    /// As <see cref="Start(string, string, KeyValuePair{string, string}[])"/>; with a non-null <paramref name="liveOutput"/>
+    /// the job's STDOUT/STDERR frames go to a channel of that mux as they arrive (live, back-pressured: the IPC reader
+    /// blocks, so the job host blocks on its socket) instead of being held until the job is collected.
+    /// </summary>
+    public static BashJobProcess Start(string prelude, string body, KeyValuePair<string, string>[] environment, OutputMux? liveOutput)
     {
         int max = int.TryParse(Environment.GetEnvironmentVariable("PSBASH_JOBS_MAX"), out var m) && m > 0 ? m : 32;
         if (BackgroundJobTable.Count >= max)
@@ -52,12 +61,25 @@ public sealed class BashJobProcess : IDisposable
             ?? throw new HostUnavailableException("cannot locate ps-bash-host to run a background job");
         var worker = JobHostSpares.Take(hostPath);
         var job = new BashJobProcess(worker);
-        worker.OutputCallback = line => { lock (job._stdout) job._stdout.Add(line); };
-        worker.ErrorCallback = line => { lock (job._stderr) job._stderr.Add(line); };
+        if (liveOutput is not null)
+        {
+            var channel = liveOutput.Open("job " + job.Pid);
+            job._channel = channel;
+            Func<bool> abandoned = () => job._cancel.IsCancellationRequested;
+            worker.OutputCallback = text => channel.Write(1, text, abandoned);
+            worker.ErrorCallback = text => channel.Write(2, text, abandoned);
+        }
+        else
+        {
+            worker.OutputCallback = line => { lock (job._stdout) job._stdout.Add(line); };
+            worker.ErrorCallback = line => { lock (job._stderr) job._stderr.Add(line); };
+        }
         BackgroundJobTable.Register(job.Pid, job.Stop);
         _ = job.RunAsync(prelude + "\n" + body, environment);
         return job;
     }
+
+    private OutputChannel? _channel;
 
     private async Task RunAsync(string command, KeyValuePair<string, string>[] environment)
     {
@@ -66,10 +88,16 @@ public sealed class BashJobProcess : IDisposable
         catch (Exception) when (_signal != 0) { Code = 128 + _signal; }
         catch (Exception ex)
         {
-            lock (_stderr) _stderr.Add("bash: background job failed: " + ex.Message + "\n");
+            var message = "bash: background job failed: " + ex.Message + "\n";
+            if (_channel is not null) _channel.Write(2, message, () => _cancel.IsCancellationRequested);
+            else lock (_stderr) _stderr.Add(message);
             Code = 1;
         }
-        finally { _handle.Complete(); }
+        finally
+        {
+            _channel?.Close();
+            _handle.Complete();
+        }
     }
 
     /// <summary>The job's stdout, in order. Call after the job completed.</summary>

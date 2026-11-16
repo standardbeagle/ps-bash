@@ -4110,7 +4110,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("sleep 0.1 & echo hello");
 
-        Assert.Equal("Invoke-BashBackground { Invoke-BashSleep 0.1 }; Invoke-BashEcho hello", result);
+        Assert.Equal("Invoke-BashBackground -Live { Invoke-BashSleep 0.1 }; Invoke-BashEcho hello", result);
     }
 
     // $(( )) value context now routes to the runtime bash-arithmetic evaluator
@@ -6939,7 +6939,7 @@ public class PsEmitterTests
     public void Transpile_Background_ThenWait()
     {
         var result = PsEmitter.Transpile("sleep 1 & wait");
-        Assert.Equal("Invoke-BashBackground { Invoke-BashSleep 1 }; Invoke-BashWait", result);
+        Assert.Equal("Invoke-BashBackground -Live { Invoke-BashSleep 1 }; Invoke-BashWait", result);
     }
 
     // -----------------------------------------------------------------------

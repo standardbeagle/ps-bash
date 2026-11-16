@@ -956,7 +956,7 @@ public static partial class PsEmitter
         _unitFunctions = null;
         var priorPipefail = _pipefailMode;
         var priorFailglob = _lineAbandonMode;
-        var priorRoot = _rootCommand; var priorDiscardInteractive = _discardInteractive;
+        var priorRoot = _rootCommand; var priorDiscardInteractive = _discardInteractive; var priorLiveJobs = _liveJobs;
         _lineAbandonMode = priorFailglob || bash.Contains("failglob", StringComparison.Ordinal);
         var priorNounset = _nounsetMode;
         _nounsetMode = priorNounset || InheritedNounset || bash.Contains("nounset", StringComparison.Ordinal)
@@ -1019,6 +1019,7 @@ public static partial class PsEmitter
             if (aliasesSpliced) { _aliasDefs = null; _aliasStaticOnly = false; } // already expanded in the text
             if (BashParser.SawBadSubstitution) _lineAbandonMode = true;
             _rootCommand = cmd;
+            _liveJobs = _context == TranspileContext.Eval ? null : CollectLiveJobs(cmd);
             _discardInteractive = _nounsetMode && bash.Contains("shopt -s psbash_interactive", StringComparison.Ordinal);
             string body = EmitBody(cmd);
             // A lone top-level command is its own input line (a list gets the scope per command in EmitCommandList).
@@ -1049,7 +1050,7 @@ public static partial class PsEmitter
             _errexitExemptDepth = priorExempt;
             _pipefailMode = priorPipefail;
             _lineAbandonMode = priorFailglob;
-            _rootCommand = priorRoot; _discardInteractive = priorDiscardInteractive;
+            _rootCommand = priorRoot; _discardInteractive = priorDiscardInteractive; _liveJobs = priorLiveJobs;
             _nounsetMode = priorNounset;
             _unitFunctions = priorUnitFunctions;
             _definedFunctions = priorDefined;
@@ -2608,9 +2609,11 @@ public static partial class PsEmitter
             if (used.Count > 0)
                 vars = " -Vars @{ " + string.Join("; ", used.Select(v => $"{PsBuild.SingleQuote(v)} = ${v}")) + " }";
         }
+        // A job whose stdout/stderr are the shell's own writes them live (CollectLiveJobs).
+        string live = _liveJobs is not null && _liveJobs.Contains(bg) ? " -Live" : "";
         return MayMutateShellState(bg.Inner)
-            ? $"Invoke-BashBackground -Isolated{vars} {{ {inner} }}"
-            : $"Invoke-BashBackground{vars} {{ {inner} }}";
+            ? $"Invoke-BashBackground -Isolated{live}{vars} {{ {inner} }}"
+            : $"Invoke-BashBackground{live}{vars} {{ {inner} }}";
     }
 
     private static readonly HashSet<string> _stateBuiltins = new(StringComparer.Ordinal)

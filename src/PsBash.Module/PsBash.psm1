@@ -2897,6 +2897,8 @@ function Complete-BashBgJob {
     try {
         $out = $ps.EndInvoke($Job.AsyncResult)
         $Job.ExitCode = [int]$Job.Status.Code
+        # A live job's output already went to the shell's stdout/stderr as it was produced: nothing to replay.
+        if ($Job.PSObject.Properties['Live'] -and $Job.Live) { return }
         foreach ($item in $out) {
             # A record the job produced already is a line (its terminator is its own flag): pass it
             # through. Re-emitting its BashText as raw text dropped the newline, so the next command's
@@ -3112,8 +3114,14 @@ function Invoke-BashBackground {
         # must not share this process's environment and cwd, so it gets a host of its own.
         [switch]$Isolated,
         # For-loop variables the body reads, as of the launch (the loop moves on before the job runs).
-        [hashtable]$Vars
+        [hashtable]$Vars,
+        # The emitter found the job's stdout/stderr to be the shell's own (no enclosing redirect, pipe, command
+        # substitution or function): where the host provides the session's output mux, the job writes there live
+        # instead of holding its output until `wait` (docs/specs/background-jobs.md section 12).
+        [switch]$Live
     )
+
+    $__bgMux = if ($Live) { Get-Variable -Name __BashJobOutput -Scope Global -ValueOnly -ErrorAction Ignore } else { $null }
 
     if ($Vars -and $Vars.Count) {
         $__bgPrefix = ($Vars.GetEnumerator() | ForEach-Object { '$' + $_.Key + " = '" + ("$($_.Value)" -replace "'", "''") + "'" }) -join '; '
@@ -3128,10 +3136,10 @@ function Invoke-BashBackground {
     if (($env:PSBASH_BG_MODE -eq 'process' -or ($Isolated -and $env:PSBASH_BG_MODE -ne 'inproc')) -and ('PsBash.Host.Runtime.BashJobProcess' -as [type])) {
         if ($script:BashBgJobs.Count -ge $script:BashBgMaxJobs) { Remove-BashBgFinished }
         $prelude = [PsBash.Cmdlets.BashStateSnapshot]::BuildPrelude($ExecutionContext.SessionState)
-        $bjp = [PsBash.Host.Runtime.BashJobProcess]::Start($prelude, $Command.ToString(), [PsBash.Cmdlets.BashStateSnapshot]::EnvironmentBlock())
+        $bjp = [PsBash.Host.Runtime.BashJobProcess]::Start($prelude, $Command.ToString(), [PsBash.Cmdlets.BashStateSnapshot]::EnvironmentBlock(), $__bgMux)
         $job = [pscustomobject]@{
             Id = $bjp.Pid; PowerShell = $bjp; AsyncResult = $bjp.AsyncResult; Done = $false
-            Status = $bjp; ExitCode = $null; Raw = $true
+            Status = $bjp; ExitCode = $null; Raw = $true; Live = $null -ne $__bgMux
         }
         $job | Add-Member -MemberType ScriptProperty -Name 'HasExited' -Value {
             if ($this.Done) { return $true }
@@ -3196,10 +3204,11 @@ try {
 '@
     [void]$ps.AddScript($wrapped).AddArgument($status).AddArgument([bool]$Isolated)
 
-    $async = $ps.BeginInvoke()
-
     $synthId = $script:BashBgNextId
     $script:BashBgNextId++
+
+    # Live: the job's records go to the session's output mux as they are produced (nothing is kept for `wait`).
+    $async = if ($null -ne $__bgMux) { [PsBash.Cmdlets.BashJobOutput]::BeginLive($ps, $__bgMux, "job $synthId") } else { $ps.BeginInvoke() }
 
     $job = [pscustomobject]@{
         Id          = $synthId
@@ -3208,6 +3217,7 @@ try {
         Done        = $false
         Status      = $status
         ExitCode    = $null
+        Live        = $null -ne $__bgMux
     }
     # HasExited / Kill() shape so tests asserting against $script:BashBgPids
     # (the alias for $script:BashBgJobs) see Process-like surface. HasExited

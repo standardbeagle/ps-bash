@@ -27,7 +27,8 @@ Nav starts at /CODE_MAP.md. Keep this index complete — a guard test fails on a
 - [bash-feature-coverage.md](bash-feature-coverage.md) — measured bash-feature coverage (344-snippet probe vs bash 5.2): what matches, what is fixed, what is open
 - [executor-slots.md](executor-slots.md) — one command per host + launcher-side executor slots (replaces the global exec gate and nested hosts)
 - [shell-fds-and-bash-source.md](shell-fds-and-bash-source.md) — `BASH_SOURCE`, `exec N<file` / `read -u` / `>&N` descriptors, `exec cmd`
-- [background-jobs.md](background-jobs.md) — process-isolated `&` design (DESIGN; fork semantics, cross-platform process management)
+- [background-jobs.md](background-jobs.md) — process-isolated `&` design (DESIGN; fork semantics, cross-platform process management); §12 live job output
+- [stdio-messaging.md](stdio-messaging.md) — output channels, fds and per-channel credit (in-host mux implemented; wire channels designed)
 - [interactive-completion.md](interactive-completion.md) — Interactive Completion Specification
 - [intentional-differences.md](intentional-differences.md) — Intentional Differences from bash / GNU (platform, architecture, deliberate choices, refused options)
 - [keybindings.md](keybindings.md) — Interactive Shell Keybindings

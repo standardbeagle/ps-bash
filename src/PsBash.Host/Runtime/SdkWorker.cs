@@ -34,12 +34,21 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
 
     private readonly ExitTrackingHost _host;
 
+    /// <summary>
+    /// This shell's output path for background jobs (docs/specs/background-jobs.md §12): <c>Invoke-BashBackground -Live</c>
+    /// finds it as <c>$global:__BashJobOutput</c> and writes the job's output to a channel of it. While a command runs
+    /// it is attached to that command's stdout/stderr sinks; between commands it queues (bounded per job).
+    /// </summary>
+    internal PsBash.Core.Stdio.OutputMux JobOutput { get; } = new();
+
     private SdkWorker(SdkRunspace runspace)
     {
         _sdkRunspace = runspace;
         _host = runspace.Host;
         _ps = PowerShell.Create();
         _ps.Runspace = runspace.Runspace;
+        try { runspace.Runspace.SessionStateProxy.SetVariable("__BashJobOutput", JobOutput); }
+        catch (Exception) { /* no live job output: jobs keep their output until collected */ }
     }
 
     public static SdkWorker Create()
@@ -665,6 +674,19 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
         var priorConsoleError = Console.Error;
         if (errorOutput is not null) Console.SetError(new SinkTextWriter(deliverErrorBytes));
 
+        // Background jobs of this shell write to this command's stdout/stderr while it runs, live and in arrival order
+        // with its own output: through the same batcher (stdout) and stderr path, under the same lock the foreground's
+        // records take, so a job's text never lands inside a foreground record and IPC frames are only ever written
+        // by the connection's single output queue. Output a job queued between commands is delivered first.
+        JobOutput.Attach((fd, text) =>
+        {
+            lock (outputLock)
+            {
+                if (fd == 1) deliver(text);
+                else deliverErrorBytes(text);
+            }
+        }, eol);
+
         try
         {
             try
@@ -783,6 +805,9 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
         }
         finally
         {
+            // Jobs still running queue from here on (bounded per job; see OutputMux): this command's sinks go away.
+            JobOutput.Detach();
+
             // S1: flush before anything else. RunCommand has many exit paths (130,
             // ExitException, parse error, command-not-found 127, $LASTEXITCODE), and
             // the caller writes the EXIT sentinel as soon as we return — buffered

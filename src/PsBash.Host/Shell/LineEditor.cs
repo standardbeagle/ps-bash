@@ -249,7 +249,7 @@ internal sealed class LineEditor
             ConsoleKeyInfo key;
             try
             {
-                key = Console.ReadKey(intercept: true);
+                key = ReadKeyOrJobOutput();
             }
             catch (InvalidOperationException)
             {
@@ -1325,6 +1325,58 @@ internal sealed class LineEditor
         Console.Write(sb.ToString());
         _renderCursorRow = 0;
         _renderRows = 1;
+    }
+
+    /// <summary>
+    /// The session's background-job output (set by the interactive shell). While a job can still write, the key wait
+    /// polls it and prints what arrives ABOVE the prompt (<see cref="PrintJobOutputAbovePrompt"/>), on this same key-loop
+    /// flow — never from the job's thread, because the console tolerates no concurrent writer while the editor owns it.
+    /// </summary>
+    internal PsBash.Core.Stdio.OutputMux? BackgroundOutput { get; set; }
+
+    /// <summary>Key wait slice while background jobs are alive: the most a keystroke waits behind the job-output poll.</summary>
+    private const int JobOutputPollMs = 20;
+
+    /// <summary>
+    /// <see cref="Console.ReadKey(bool)"/>, except that while a background job is alive (or left output queued) the wait
+    /// is sliced so job output is printed above the prompt as it arrives. With no jobs it is a plain blocking read.
+    /// </summary>
+    private ConsoleKeyInfo ReadKeyOrJobOutput()
+    {
+        var mux = BackgroundOutput;
+        while (mux is not null && (mux.OpenChannels > 0 || mux.PendingChars > 0))
+        {
+            if (mux.PendingChars > 0) PrintJobOutputAbovePrompt(mux);
+            bool keyReady;
+            try { keyReady = Console.KeyAvailable; }
+            catch (InvalidOperationException) { break; }
+            catch (IOException) { break; }
+            if (keyReady) break;
+            mux.WaitForPending(JobOutputPollMs);
+        }
+        return Console.ReadKey(intercept: true);
+    }
+
+    /// <summary>
+    /// Print queued background-job output on the rows the editor occupies, then re-render the prompt and the line being
+    /// edited below it (as bash's readline does on <c>rl_forced_update_display</c>), so the edit is neither lost nor mixed
+    /// into the output.
+    /// </summary>
+    private void PrintJobOutputAbovePrompt(PsBash.Core.Stdio.OutputMux mux)
+    {
+        var chunks = mux.TakePending();
+        if (chunks.Count == 0) return;
+        EraseRegion();
+        bool endsWithNewline = true;
+        foreach (var chunk in chunks)
+        {
+            (chunk.Key == 2 ? Console.Error : Console.Out).Write(chunk.Value);
+            endsWithNewline = chunk.Value.EndsWith('\n');
+        }
+        if (!endsWithNewline) Console.Write(Environment.NewLine);
+        Console.Write(_prompt);
+        ResetRenderStateForPrompt();
+        Redraw();
     }
 
     /// <summary>

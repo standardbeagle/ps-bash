@@ -1263,6 +1263,15 @@ public static class InteractiveShell
 
     private static async Task<string?> ReadInputAsync(IWorker? worker)
     {
+        // Background-job output that arrived after the last command ended is printed before the prompt; output that
+        // arrives while the prompt is up is printed above it by the line editor.
+        var jobOutput = (worker as PsBash.Host.Runtime.SdkWorker)?.JobOutput;
+        if (jobOutput is not null)
+        {
+            foreach (var chunk in jobOutput.TakePending())
+                (chunk.Key == 2 ? Console.Error : Console.Out).Write(chunk.Value);
+        }
+        if (_lineEditor is not null) _lineEditor.BackgroundOutput = jobOutput;
         var prompt = await BuildPromptAsync(worker);
         var line = _lineEditor is not null
             ? await _lineEditor.ReadLineAsync(prompt)

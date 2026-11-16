@@ -1,0 +1,17 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 95
+stdout-length: 15
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)"; { echo t1; sleep 2; echo t2; } | tee f & sleep 1; echo fg; wait; cat f; cd /
+==== STDOUT ====
+t1
+fg
+t2
+t1
+t2
+
+==== STDERR ====
+

@@ -203,7 +203,7 @@ public class BashTranspilerReviewRegressionTests
 
     [Fact]
     public void Transpile_BackgroundJobNotUsingTheLoopVariable_KeepsTheBareEmission()
-        => Assert.Contains("Invoke-BashBackground {", BashTranspiler.Transpile("for i in 1 2; do sleep 1 & done"));
+        => Assert.Contains("Invoke-BashBackground -Live {", BashTranspiler.Transpile("for i in 1 2; do sleep 1 & done"));
 
     // Oracle: `exec 4<<<"fdline"; read -r -u 4 v` reads fdline - the fd number used to become a command word and emit a parse error that failed the whole script.
     [Fact]

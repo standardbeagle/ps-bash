@@ -151,4 +151,14 @@ subshell it ends only the subshell (status 1), as bash does.
 
 A background job (`cmd &`) runs in-process unless it can change shell state (assignments, `cd`, state builtins, functions, loops). Those get `Invoke-BashBackground -Isolated`, which uses a private host process so the job cannot alter the parent's variables or cwd. `PSBASH_BG_MODE=inproc|process` overrides the choice.
 
+A job's output streams live when the job's stdout is the shell's own. In these cases it is still collected and printed at `wait` (or at exit), in one piece:
+
+- a job started inside a function body;
+- a job inside a compound command with an output redirect (`{ cmd & wait; } > f`);
+- a job in a multi-stage pipeline, `$( )` or `<( )`;
+- a job started by `eval`, `source` or a trap;
+- a job started after `exec > file`.
+
+The emitter cannot know where such a job's output goes at run time, and a live write would bypass that redirect. In `-c` mode a job that is still running when the script ends prints live for a 1 s grace and is then stopped, as before. Later output is dropped (background-jobs.md §12).
+
 `sed -i` replaces a symlink with a regular file unless `--follow-symlinks` is given, as GNU does. `rm`/`cp`/`mv` operands are literal: only the shell expands wildcards, so a quoted `'*.txt'` names a file called `*.txt`.
