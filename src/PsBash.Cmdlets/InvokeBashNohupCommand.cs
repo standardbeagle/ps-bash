@@ -51,7 +51,24 @@ public sealed class InvokeBashNohupCommand : PSCmdlet
         string? errPath = errFile is null || errToOut ? null : ResolveTarget(errFile, cwd);
         string exe; var exeArgs = new List<string>();
         var resolved = Resolve(rest[0], cwd);
-        if (resolved is not null) { exe = resolved; exeArgs.AddRange(rest.Skip(1)); }
+        if (resolved is not null && ProgramFile.Plan(resolved) is { } launch)
+        {
+            // A file the OS cannot start as it is (a #! script on Windows, a file with no execute bit): its interpreter
+            // runs it, a shell's through the ps-bash launcher, as the kernel would; anything else is GNU's 126.
+            var (program, interpreterArgs) = launch.CommandLine(InvokeBashBashCommand.ResolvePsBashExecutable(this),
+                ExecutableLookup.PathDirectories(cwd));
+            if (program is null)
+            {
+                bool missing = launch.Runnable;
+                Fail($"nohup: failed to run command '{rest[0]}': " + (missing ? "No such file or directory" : "Permission denied"),
+                    missing ? 127 : 126, defaultLog ? null : outPath, append, errToOut, errPath);
+                return;
+            }
+            exe = program;
+            exeArgs.AddRange(interpreterArgs);
+            exeArgs.AddRange(rest.Skip(1));
+        }
+        else if (resolved is not null) { exe = resolved; exeArgs.AddRange(rest.Skip(1)); }
         else if (IsShellCommand(rest[0]) && ExecutableLookup.Find(OperatingSystem.IsWindows() ? "ps-bash.exe" : "ps-bash", ExecutableLookup.PathDirectories()) is { } shell)
         {
             // A ps-bash builtin or mapped command (sleep, seq, ...) has no executable of its own: run it in a fresh shell.
@@ -61,8 +78,8 @@ public sealed class InvokeBashNohupCommand : PSCmdlet
         }
         else
         {
-            FileSystemHelpers.WriteStderr(this, $"nohup: failed to run command '{rest[0]}': No such file or directory");
-            FileSystemHelpers.SetLastExitCode(this, 127);
+            Fail($"nohup: failed to run command '{rest[0]}': No such file or directory", 127,
+                defaultLog ? null : outPath, append, errToOut, errPath);
             return;
         }
 
@@ -76,9 +93,34 @@ public sealed class InvokeBashNohupCommand : PSCmdlet
         catch (Exception ex)
         {
             if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-            FileSystemHelpers.WriteStderr(this, $"nohup: failed to run command '{rest[0]}': {ex.Message}");
-            FileSystemHelpers.SetLastExitCode(this, 126);
+            Fail($"nohup: failed to run command '{rest[0]}': {ex.Message}", 126,
+                defaultLog ? null : outPath, append: true, errToOut, errPath);
         }
+    }
+
+    /// <summary>
+    /// nohup's own failure, after the caller's redirects: in bash the shell opened them before nohup ran, so the files
+    /// exist and the message lands in the stderr target. The emitter moved those redirects into flags for the child
+    /// (<c>--psbash-out</c> / <c>--psbash-err</c>), so they are opened here; without one the message goes to stderr.
+    /// </summary>
+    private void Fail(string message, int code, string? outPath, bool append, bool errToOut, string? errPath)
+    {
+        FileSystemHelpers.SetLastExitCode(this, code);
+        try
+        {
+            if (outPath is not null)
+                using (var o = RedirectFileWriter.OpenFile(outPath, append, this))
+                    if (errToOut) o.Write(RawBytes.GetBytes(message + "\n"));
+            if (errToOut && outPath is not null) return;
+            if (errPath is not null)
+            {
+                using var e = RedirectFileWriter.OpenFile(errPath, append: false, this);
+                e.Write(RawBytes.GetBytes(message + "\n"));
+                return;
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* the target cannot be opened: say it on stderr */ }
+        FileSystemHelpers.WriteStderr(this, message);
     }
 
     private static string ResolveTarget(string raw, string cwd)
@@ -88,13 +130,15 @@ public sealed class InvokeBashNohupCommand : PSCmdlet
         return Path.IsPathRooted(p) ? p : Path.Combine(cwd, p);
     }
 
+    /// <summary>The program file NAME runs: a path as given (any file: ProgramFile judges whether it can run), else the
+    /// first runnable PATH hit.</summary>
     private static string? Resolve(string name, string cwd)
     {
         if (name.Contains('/') || name.Contains('\\'))
         {
             var p = FileSystemHelpers.NormalizeOperandPath(name);
             if (!Path.IsPathRooted(p)) p = Path.Combine(cwd, p);
-            return ExecutableLookup.IsExecutableFile(p) ? p : null;
+            return File.Exists(p) ? p : null;
         }
         return ExecutableLookup.Find(name, ExecutableLookup.PathDirectories(cwd));
     }

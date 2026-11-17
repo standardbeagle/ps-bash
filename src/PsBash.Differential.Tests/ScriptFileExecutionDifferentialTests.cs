@@ -26,4 +26,28 @@ public class ScriptFileExecutionDifferentialTests
     [InlineData("PATH=d:$PATH; type -P hello; type -a hello | head -1; type -t hello")]
     [InlineData("./doc; echo st=$?")]
     public Task ScriptFile_RunsLikeBash(string command) => Eq(command);
+
+    // `command FILE` and `nohup FILE` resolved the file themselves and handed it straight to the OS (or to PowerShell
+    // as a resolved command), skipping the #! dispatch only a NAME lookup applied: on Windows `command ./d/hello 2>&1`
+    // opened the "Open with" dialog and hung, `nohup ./d/hello` failed ("not a valid Win32 application") and wrote
+    // nothing, and `nohup ./doc` left no message in its stderr file. Both now ask ProgramFile (program-files.md).
+    private const string BadInterpreter = "printf '#!/nonexistent/interp\\necho hi\\n' > d/bad; chmod +x d/bad; ";
+
+    [SkippableTheory]
+    [InlineData("printf 'a\\nb\\n' | command ./d/hello x 'y z'; echo st=$?")]
+    [InlineData("command ./d/hello q </dev/null 2>&1; echo st=$?")]
+    [InlineData("PATH=\"d:$PATH\"; command hello p </dev/null; echo st=$?")]
+    [InlineData("command ./doc; echo st=$?; command ./doc 2>/dev/null; echo st=$?")]
+    [InlineData(BadInterpreter + "command ./d/bad; echo st=$?; ./d/bad; echo st=$?")]
+    public Task Command_ScriptFile_RunsLikeBash(string command) => Eq(command);
+
+    // `nohup CMD >log 2>&1 &` returns before its child finishes: wait (bounded) for the line the script writes. The
+    // file then holds exactly that output, compared in the tree snapshot. (A foreground `nohup CMD` is a separate,
+    // older difference: GNU waits for CMD and returns its status, ps-bash's nohup always detaches and returns 0.)
+    [SkippableTheory]
+    [InlineData("nohup ./d/hello n >out 2>&1 </dev/null & "
+        + "i=0; until grep -q args out 2>/dev/null || [ $i -ge 400 ]; do sleep 0.1; i=$((i+1)); done; cat out")]
+    [InlineData("nohup ./doc >o 2>e </dev/null; echo st=$?; cat e")]
+    [InlineData(BadInterpreter + "nohup ./d/bad >o 2>e </dev/null; echo st=$?; cat e")]
+    public Task Nohup_ScriptFile_RunsLikeGnuNohup(string command) => EqualAsync(Setup, command, timeout: TimeSpan.FromSeconds(90));
 }

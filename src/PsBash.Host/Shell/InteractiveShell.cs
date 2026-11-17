@@ -527,6 +527,10 @@ public static class InteractiveShell
             var resolvedCmd = ResolveCommand(cmdName, workDir);
             if (resolvedCmd is null)
                 return false;
+            // A file the OS cannot start as it is (a #! script on Windows, no execute bit on Unix) takes the normal path,
+            // where the lookup hook runs ProgramFile's stand-in. A .ps1 is started through pwsh below.
+            if (!resolvedCmd.EndsWith(".ps1", StringComparison.OrdinalIgnoreCase) && ProgramFile.Plan(resolvedCmd) is not null)
+                return false;
 
             var psi = BuildDirectProcessStartInfo(resolvedCmd, args, workDir);
             // The child gets the exported variables only (ShellExports: the one child-environment primitive); the

@@ -242,8 +242,14 @@ public sealed class InvokeBashCommandCommand : PSCmdlet
             return;
         }
 
+        // A program file the OS cannot start as it is (`command ./configure`, a #! script on PATH): Get-Command hands
+        // back the raw ApplicationInfo, so the lookup hook's stand-in never applied; ProgramFile gives the same one.
+        object invokeTarget = target;
+        if (target is ApplicationInfo file && PsBash.Core.ProgramFile.Plan(file.Path) is { } launch)
+            invokeTarget = ScriptBlock.Create(launch.StandInScript(PsBash.Core.ProgramFile.Shown(name, file.Path)));
+
         // `command prog 2>&1`: a program gets ONE pipe for stdout and stderr (docs/specs/stdio-messaging.md §4).
-        if (target is ApplicationInfo app && !InvokeBashNativeCommand.IsBatchFile(app.Path) && StderrMerge.JoinsStdout(this))
+        if (invokeTarget is ApplicationInfo app && !InvokeBashNativeCommand.IsBatchFile(app.Path) && StderrMerge.JoinsStdout(this))
         {
             try
             {
@@ -272,7 +278,7 @@ public sealed class InvokeBashCommandCommand : PSCmdlet
         string call = (name == "[" ? "& '[' @rest" : "& $c @rest") + " 2>&1";
         var invokeBody = _stdin.Count > 0 ? prologue + "$input | " + call : prologue + call;
         var invokeArgs = new object[argv.Length];
-        invokeArgs[0] = target;
+        invokeArgs[0] = invokeTarget;
         for (int k = 1; k < argv.Length; k++) invokeArgs[k] = argv[k];
 
         try

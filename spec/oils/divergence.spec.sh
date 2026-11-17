@@ -91,7 +91,7 @@ hey
 status=0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-path-shebang-script the PATH #! scripts run and print the right output, but each one starts a nested ps-bash process (~3s on a per-invocation host), so six runs exceed the 10s timeout
+## XFAIL ps-bash gap-nested-launcher-cost output and status are right and PATH lookup is not the cost: every #! sh script (like `bash file` and `./script`) runs in a nested ps-bash launcher, a new process plus host start (~3s on a per-invocation host), so six runs exceed the 10s timeout
 ## timeout: 10
 
 #### builtin cat crashes a subshell (#2530)

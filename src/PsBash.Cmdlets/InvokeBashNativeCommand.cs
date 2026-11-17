@@ -49,7 +49,12 @@ public sealed class InvokeBashNativeCommand : PSCmdlet, IDisposable
         catch (Exception ex) when (!FileSystemHelpers.IsPipelineStop(ex)) { info = null; }
 
         var args = FlattenArguments(Arguments);
-        if (info is ApplicationInfo app && !IsBatchFile(app.Path) && StderrMerge.JoinsStdout(this))
+        // A program file the OS cannot start as it is runs as ProgramFile's stand-in (the host's lookup hook already
+        // gave one; a runspace without the hook, Pester's, did not).
+        object? standIn = info is ApplicationInfo file && PsBash.Core.ProgramFile.Plan(file.Path) is { } launch
+            ? ScriptBlock.Create(launch.StandInScript(PsBash.Core.ProgramFile.Shown(Name, file.Path)))
+            : null;
+        if (standIn is null && info is ApplicationInfo app && !IsBatchFile(app.Path) && StderrMerge.JoinsStdout(this))
         {
             StartMerged(app.Path, args);
             return;
@@ -57,7 +62,7 @@ public sealed class InvokeBashNativeCommand : PSCmdlet, IDisposable
 
         // A CommandInfo runs without a second lookup; an unknown name goes through PowerShell's lookup, so the
         // host's command-not-found handling reports it exactly as before.
-        object target = (object?)info ?? Name;
+        object target = standIn ?? (object?)info ?? Name;
         _fallback = ScriptBlock.Create("param($__psbash_cmd, $__psbash_args) & $__psbash_cmd @__psbash_args")
             .GetSteppablePipeline(CommandOrigin.Internal, new object[] { target, args.ToArray<object>() });
         _fallback.Begin(this);
@@ -137,7 +142,8 @@ public sealed class InvokeBashNativeCommand : PSCmdlet, IDisposable
     /// For a cmdlet that runs a command by name (<c>env</c>, <c>xargs</c>, <c>find -exec</c>, <c>command</c>): the program
     /// path to run through <see cref="RunMerged"/> when the cmdlet's stderr goes down the pipeline
     /// (<see cref="StderrMerge.Redirected"/>: merged, or split off to a file or <c>/dev/null</c>) and
-    /// <paramref name="name"/> is a program; null otherwise (run it as before).
+    /// <paramref name="name"/> is a program the OS starts as it is; null otherwise (run it by name as before, where the
+    /// lookup hook gives a <c>#!</c> script or a document <see cref="PsBash.Core.ProgramFile"/>'s stand-in).
     /// </summary>
     internal static string? MergedProgramPath(PSCmdlet cmdlet, string name)
     {
@@ -145,6 +151,7 @@ public sealed class InvokeBashNativeCommand : PSCmdlet, IDisposable
         try
         {
             return cmdlet.InvokeCommand.GetCommand(name, CommandTypes.All) is ApplicationInfo app && !IsBatchFile(app.Path)
+                   && PsBash.Core.ProgramFile.Plan(app.Path) is null
                 ? app.Path
                 : null;
         }
