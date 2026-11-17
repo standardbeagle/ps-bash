@@ -185,8 +185,9 @@ public sealed class InvokeBashPasteCommand : PSCmdlet
         foreach (var raw in plan.Operands)
         {
             if (raw == "-") { sources.Add(("-", null)); continue; }
-            foreach (var filePath in FileSystemHelpers.ResolveOperandPaths(this, raw))
-                sources.Add((filePath, filePath));
+            // Named as typed: from the path alone, `paste ./x x` reported the later spelling for both.
+            foreach (var op in FileSystemHelpers.ResolveOperands(this, raw))
+                sources.Add((op.Display, op.Path));
         }
         if (sources.Count == 0)
         {
@@ -200,7 +201,7 @@ public sealed class InvokeBashPasteCommand : PSCmdlet
             foreach (var (name, path) in sources)
             {
                 string? line = ReadSerialLine(name, path, delimiters);
-                if (line is null) return;
+                if (line is null) continue;   // reported (exit 1); GNU -s goes on with the next file
                 WriteObject(BashRuntime.NewBashObject(line));
             }
             return;
@@ -296,10 +297,10 @@ public sealed class InvokeBashPasteCommand : PSCmdlet
         }
     }
 
-    private void WriteReadError(string path, Exception ex)
+    // name: the operand as typed (OperandPath.Display), or - for the pipeline.
+    private void WriteReadError(string name, Exception ex)
     {
         string msg = FileSystemHelpers.ReadErrorMessage(ex);
-        string normalized = BashPath.ToShell(path);
-        FileSystemHelpers.WriteBashError(this, $"paste: {normalized}: {msg}");
+        FileSystemHelpers.WriteBashError(this, $"paste: {name}: {msg}");
     }
 }

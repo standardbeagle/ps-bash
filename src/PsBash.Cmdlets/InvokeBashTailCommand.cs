@@ -567,7 +567,7 @@ public sealed class InvokeBashTailCommand : PSCmdlet
         }
 
         // File mode
-        var resolvedFiles = ResolveGlob(operands).ToList();
+        var resolvedFiles = FileSystemHelpers.ResolveReaderOperands(this, operands).ToList();
         if (resolvedFiles.Count == 0)
         {
             return;
@@ -575,8 +575,9 @@ public sealed class InvokeBashTailCommand : PSCmdlet
 
         bool headers = FileHeaders.Wanted(plan.Headers, operands.Count);
         var targets = new List<TailFollower.Target>();
-        foreach (var filePath in resolvedFiles)
+        foreach (var operand in resolvedFiles)
         {
+            string filePath = operand.Path;
             if (filePath == "-")
             {
                 if (headers) WriteHeader(FileHeaders.StandardInput);
@@ -584,7 +585,9 @@ public sealed class InvokeBashTailCommand : PSCmdlet
                 continue;
             }
 
-            var target = new TailFollower.Target { Path = filePath, Display = FileHeaders.Display(this, filePath) };
+            // Resolved ahead of use: claim the name, or `tail ./f f` named both `f` (FileSystemHelpers.OperandPath.Claim).
+            operand.Claim(this);
+            var target = new TailFollower.Target { Path = filePath, Display = operand.Display };
             bool exists = File.Exists(filePath);
             long? openedAt = null;
             if (exists)
@@ -882,52 +885,5 @@ public sealed class InvokeBashTailCommand : PSCmdlet
             "BashText", BashRuntime.NormalizeBashText(content)));
         if (unterminated) obj.Properties.Add(new PSNoteProperty("NoTrailingNewline", true));
         return obj;
-    }
-
-    /// <summary>
-    /// Reimplements the psm1 <c>Resolve-BashGlob</c> slice in C# (see
-    /// <see cref="InvokeBashWcCommand"/> for the rationale).
-    /// </summary>
-    private IEnumerable<string> ResolveGlob(IReadOnlyList<string> paths)
-    {
-        foreach (var rawP in paths)
-        {
-            if (rawP == "-") { yield return "-"; continue; }
-            var p = FileSystemHelpers.NormalizeOperandPath(rawP);
-            if (FileSystemHelpers.IsCmdletGlobOperand(this, p))
-            {
-                var matched = new List<string>();
-                try
-                {
-                    foreach (var resolved in SessionState.Path.GetResolvedProviderPathFromPSPath(
-                                 p, out _))
-                    {
-                        matched.Add(resolved);
-                    }
-                }
-                catch
-                {
-                    // No matches — literal passthrough.
-                }
-
-                if (matched.Count == 0)
-                {
-                    yield return p;
-                }
-                else
-                {
-                    foreach (var m in matched)
-                    {
-                        yield return m;
-                    }
-                }
-            }
-            else
-            {
-                var resolvedLiteral = FileSystemHelpers.ProviderPath(this, p);
-                OperandDisplay.Remember(this, resolvedLiteral, rawP);
-                yield return resolvedLiteral;
-            }
-        }
     }
 }

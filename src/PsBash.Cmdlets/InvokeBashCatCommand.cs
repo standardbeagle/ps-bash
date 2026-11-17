@@ -38,9 +38,10 @@ namespace PsBash.Cmdlets;
 /// materialize the whole stream in memory. Flags / operands are parsed lazily on
 /// the first record (or in <see cref="EndProcessing"/> when there is no pipeline
 /// input); the flagged-path numbering counters live on the instance so stdin
-/// lines and any trailing file lines number continuously, exactly as the
-/// buffered oracle did (stdin first, then files). File operands are still read
-/// in <see cref="EndProcessing"/>.
+/// lines and any trailing file lines number continuously. Only a pipeline read FIRST streams (no operand, or
+/// <c>-</c> leads); when a file precedes <c>-</c> the records are kept until <c>-</c>'s turn, since GNU cat
+/// writes its operands in order (<c>cat head.txt - tail.txt</c> printed the pipeline before head.txt). File
+/// operands are read in <see cref="EndProcessing"/>.
 ///
 /// psm1-only dependencies, and why a clean migration is still possible:
 /// <c>Resolve-BashGlob</c> needs the <c>$PWD</c> path provider, reachable from a
@@ -230,8 +231,14 @@ public sealed class InvokeBashCatCommand : PSCmdlet
     private int _lineNum;
     private int _nonBlankNum;
     private bool _lastWasBlank;
+    // The last line written had no newline: the next piece, from whichever input, continues it.
+    private bool _midLine;
 
     private bool _hadError;
+
+    // The pipeline waits for its operand's turn: a file operand comes before the first `-`.
+    private bool _bufferStdin;
+    private readonly List<object> _stdinBuffer = new();
 
     private void ParseOnce()
     {
@@ -261,6 +268,7 @@ public sealed class InvokeBashCatCommand : PSCmdlet
         bool helpOrVersion = Array.IndexOf(args, "--help") >= 0
             || Array.IndexOf(args, "--version") >= 0;
         _suppressStdin = !_readStdin || helpOrVersion || plan.Declined;
+        _bufferStdin = _readStdin && _operands.Count > 0 && !IsStdin(_operands[0]);
     }
 
     /// <summary><c>-</c>, <c>/dev/stdin</c> or <c>/dev/fd/0</c>: this cat's own pipeline input. Not when cat stands in
@@ -275,23 +283,28 @@ public sealed class InvokeBashCatCommand : PSCmdlet
 
         ParseOnce();
         if (_suppressStdin) return;
+        if (_bufferStdin) { _stdinBuffer.Add(InputObject); return; }
+        EmitStdinRecord(InputObject);
+    }
 
+    private void EmitStdinRecord(object input)
+    {
         if (!_hasFlags)
         {
             // Fast path: pass items through, splitting a multi-line item.
-            string text = BashRuntime.GetBashText(InputObject);
+            string text = BashRuntime.GetBashText(input);
             string trimmed = text.TrimEnd('\n');
             if (trimmed.Contains('\n'))
             {
                 // Multi-line record: split into text lines, last keeps the missing newline.
-                bool unterminated = BashRuntime.IsUnterminated(InputObject);
+                bool unterminated = BashRuntime.IsUnterminated(input);
                 var pieces = trimmed.Split('\n');
                 for (int p = 0; p < pieces.Length; p++)
                     WriteObject(BashRuntime.TextRecord(pieces[p], unterminated && p == pieces.Length - 1));
             }
             else
             {
-                WriteObject(InputObject);
+                WriteObject(input);
             }
             return;
         }
@@ -299,18 +312,18 @@ public sealed class InvokeBashCatCommand : PSCmdlet
         // Flagged path (-n/-b/-E/-T/-s) TRANSFORMS the line, so it emits fresh CatLine
         // text records, never the upstream object. A multi-line record (printf 'b\na') is
         // numbered line by line; the last line keeps the source's missing newline.
-        string flagged = BashRuntime.GetBashText(InputObject);
+        string flagged = BashRuntime.GetBashText(input);
         string flaggedTrimmed = flagged.TrimEnd('\n');
         if (flaggedTrimmed.Contains('\n'))
         {
-            bool unterminated = BashRuntime.IsUnterminated(InputObject);
+            bool unterminated = BashRuntime.IsUnterminated(input);
             var pieces = flaggedTrimmed.Split('\n');
             for (int p = 0; p < pieces.Length; p++)
                 EmitLine(pieces[p], string.Empty, unterminated && p == pieces.Length - 1);
         }
         else
         {
-            EmitLine(flaggedTrimmed, string.Empty, BashRuntime.IsUnterminated(InputObject));
+            EmitLine(flaggedTrimmed, string.Empty, BashRuntime.IsUnterminated(input));
         }
     }
 
@@ -337,56 +350,51 @@ public sealed class InvokeBashCatCommand : PSCmdlet
             if (FileSystemHelpers.TryWriteParseError(this, "cat", plan.Parsed)) return;
             if (FileSystemHelpers.TryHandleInfoOptions(this, "cat", plan.Parsed)) return;
         }
-        // Stdin was already streamed from ProcessRecord; only files remain.
-        var fileOperands = _operands.Where(o => !IsStdin(o)).ToList();
-
-        if (!_hasFlags)
+        // Operands in argv order. A streamed pipeline was already written (it led); the first `-` writes a kept
+        // one; a later `-` finds stdin exhausted and adds nothing, as in GNU.
+        bool stdinDone = !_bufferStdin;
+        foreach (var operand in _operands)
         {
-            // Fast path: read each file, one TextOutput object per line.
-            foreach (var filePath in ResolveGlob(fileOperands))
+            if (IsStdin(operand))
             {
-                try
-                {
-                    foreach (var line in BashFileSystem.ReadTextLines(filePath, exact: RawStdinBytes, exactIfBinary: true))
-                    {
-                        WriteObject(BashRuntime.NewBashObject(
-                            line.Text,
-                            noTrailingNewline: !line.HasTrailingNewline));
-                    }
-                }
-                catch (Exception ex)
-                {
-                    if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-                    EmitReadError(filePath, "cat", ex);
-                    _hadError = true;
-                }
+                if (stdinDone) continue;
+                foreach (var rec in _stdinBuffer) EmitStdinRecord(rec);
+                _stdinBuffer.Clear();
+                stdinDone = true;
+                continue;
             }
+            foreach (var filePath in FileSystemHelpers.ClaimedReaderPaths(this, new[] { operand }))
+                EmitFile(filePath);
         }
-        else
-        {
-            // Flagged path: continue numbering from where the stdin stream left off.
-            foreach (var filePath in ResolveGlob(fileOperands))
-            {
-                try
-                {
-                    // -v shows control bytes (a CR before the LF is ^M), so the read must be exact.
-                    foreach (var line in BashFileSystem.ReadTextLines(filePath, exact: _showNonprinting, exactIfBinary: true))
-                    {
-                        EmitLine(line.Text, filePath, !line.HasTrailingNewline);
-                    }
-                }
-                catch (Exception ex)
-                {
-                    if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-                    EmitReadError(filePath, "cat", ex);
-                    _hadError = true;
-                }
-            }
-        }
-
         if (_hadError)
         {
             SessionState.PSVariable.Set("global:LASTEXITCODE", 1);
+        }
+    }
+
+    /// <summary>One file operand: one text record per line (fast path), or numbered / marked lines (flagged path,
+    /// numbering continuing from the stdin lines before it).</summary>
+    private void EmitFile(string filePath)
+    {
+        try
+        {
+            if (!_hasFlags)
+            {
+                foreach (var line in BashFileSystem.ReadTextLines(filePath, exact: RawStdinBytes, exactIfBinary: true))
+                    WriteObject(BashRuntime.NewBashObject(line.Text, noTrailingNewline: !line.HasTrailingNewline));
+            }
+            else
+            {
+                // -v shows control bytes (a CR before the LF is ^M), so the read must be exact.
+                foreach (var line in BashFileSystem.ReadTextLines(filePath, exact: _showNonprinting, exactIfBinary: true))
+                    EmitLine(line.Text, filePath, !line.HasTrailingNewline);
+            }
+        }
+        catch (Exception ex)
+        {
+            if (FileSystemHelpers.IsPipelineStop(ex)) throw;
+            EmitReadError(filePath, "cat", ex);
+            _hadError = true;
         }
     }
 
@@ -400,17 +408,25 @@ public sealed class InvokeBashCatCommand : PSCmdlet
     private void EmitLine(string content, string fileName, bool unterminated = false)
     {
         bool isBlank = content.Length == 0;
+        // A piece that continues an unterminated line (the input before it ended without a newline:
+        // `printf q | cat -n - f`, `cat -n u f`) is the SAME output line. GNU numbers a line where it starts, so
+        // the piece gets no number and counts nothing (it printed `1 q` then `2 a` on one line, where GNU has `1 qa`).
+        bool continues = _midLine;
+        _midLine = unterminated;
 
-        if (_squeezeBlanks && isBlank && _lastWasBlank)
+        if (!continues)
         {
-            return;
-        }
-        _lastWasBlank = isBlank;
+            if (_squeezeBlanks && isBlank && _lastWasBlank)
+            {
+                return;
+            }
+            _lastWasBlank = isBlank;
 
-        _lineNum++;
-        if (!isBlank)
-        {
-            _nonBlankNum++;
+            _lineNum++;
+            if (!isBlank)
+            {
+                _nonBlankNum++;
+            }
         }
 
         string text = content;
@@ -428,7 +444,11 @@ public sealed class InvokeBashCatCommand : PSCmdlet
             text += "$";
         }
 
-        if (_numberNonBlank)
+        if (continues)
+        {
+            // the line's number was printed where it started
+        }
+        else if (_numberNonBlank)
         {
             if (!isBlank)
             {
@@ -455,53 +475,5 @@ public sealed class InvokeBashCatCommand : PSCmdlet
     {
         FileSystemHelpers.WriteBashError(this,
             $"{command}: {BashPath.ToShell(path)}: {FileSystemHelpers.ReadErrorMessage(ex, path)}");
-    }
-
-    /// <summary>
-    /// Reimplements the psm1 <c>Resolve-BashGlob</c> slice in C# (see
-    /// <see cref="InvokeBashWcCommand"/> for the rationale): <c>*</c>/<c>?</c>
-    /// patterns expand against the current location and pass through literally
-    /// when nothing matches; literal paths resolve against the shell's
-    /// <c>$PWD</c> via the path provider.
-    /// </summary>
-    private IEnumerable<string> ResolveGlob(IReadOnlyList<string> paths)
-    {
-        foreach (var rawP in paths)
-        {
-            var p = FileSystemHelpers.NormalizeOperandPath(rawP);
-            if (FileSystemHelpers.IsCmdletGlobOperand(this, p))
-            {
-                var matched = new List<string>();
-                try
-                {
-                    foreach (var resolved in SessionState.Path.GetResolvedProviderPathFromPSPath(
-                                 p, out _))
-                    {
-                        matched.Add(resolved);
-                    }
-                }
-                catch
-                {
-                    // No matches — literal passthrough.
-                }
-
-                if (matched.Count == 0)
-                {
-                    yield return p;
-                }
-                else
-                {
-                    foreach (var m in matched)
-                    {
-                        yield return m;
-                    }
-                }
-            }
-            else
-            {
-                // The operand as typed: ProviderPath normalizes it itself and records the typed text for diagnostics.
-                yield return FileSystemHelpers.ProviderPath(this, rawP);
-            }
-        }
     }
 }

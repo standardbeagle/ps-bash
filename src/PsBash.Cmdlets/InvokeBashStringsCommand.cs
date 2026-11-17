@@ -272,7 +272,7 @@ public sealed class InvokeBashStringsCommand : PSCmdlet
             return;
         }
 
-        foreach (var filePath in ResolveGlob(_operands))
+        foreach (var filePath in FileSystemHelpers.ClaimedReaderPaths(this, _operands))
         {
             try
             {
@@ -304,50 +304,5 @@ public sealed class InvokeBashStringsCommand : PSCmdlet
         string msg = FileSystemHelpers.ReadErrorMessage(ex);
         if (msg == "No such file or directory") msg = "No such file";
         FileSystemHelpers.WriteBashError(this, $"{command}: '{BashPath.ToShell(path)}': {msg}");
-    }
-
-    /// <summary>
-    /// Same glob slice as <see cref="InvokeBashCatCommand"/>: <c>*</c>/<c>?</c>
-    /// expands against the current location; literal paths fall through via
-    /// the unresolved-PS-path provider so the scanner can emit a
-    /// bash-style "no such file" error.
-    /// </summary>
-    private IEnumerable<string> ResolveGlob(IReadOnlyList<string> paths)
-    {
-        foreach (var p in paths)
-        {
-            if (FileSystemHelpers.IsCmdletGlobOperand(this, p))
-            {
-                var matched = new List<string>();
-                try
-                {
-                    foreach (var resolved in SessionState.Path
-                                 .GetResolvedProviderPathFromPSPath(p, out _))
-                    {
-                        matched.Add(resolved);
-                    }
-                }
-                catch
-                {
-                    // No matches — literal passthrough.
-                }
-
-                if (matched.Count == 0)
-                {
-                    yield return p;
-                }
-                else
-                {
-                    foreach (var m in matched)
-                    {
-                        yield return m;
-                    }
-                }
-            }
-            else
-            {
-                yield return FileSystemHelpers.ProviderPath(this, p);
-            }
-        }
     }
 }

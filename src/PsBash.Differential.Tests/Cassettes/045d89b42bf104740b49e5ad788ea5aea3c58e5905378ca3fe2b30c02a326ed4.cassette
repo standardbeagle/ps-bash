@@ -1,0 +1,52 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 447
+stdout-length: 350
+stderr-length: 0
+==== SCRIPT ====
+d=$(mktemp -d); cd "$d" || exit; printf 'a b\n' > f; printf 'c\n' > g; printf q > u; printf '\n\nc\n' > h; echo hi | wc -l - f; echo x | wc - -; echo y | head -n1 f -; echo z | tail -n1 - f; echo z | cat f - g; echo z | cat - f -; echo z | cat f /dev/stdin; printf 'p\nq' | cat -n g - f; cat -n u f; cat -b u h; cat -sn u h h; { printf q; echo a; echo; echo b; } | cat -bE; paste -s nosuch f ./nosuch 2>/dev/null; echo "rc=$?"; cd / && rm -rf "$d"
+==== STDOUT ====
+      1 -
+      1 f
+      2 total
+      1       1       2 -
+      0       0       0 -
+      1       1       2 total
+==> f <==
+a b
+
+==> standard input <==
+y
+==> standard input <==
+z
+
+==> f <==
+a b
+a b
+z
+c
+z
+a b
+a b
+z
+     1	c
+     2	p
+     3	qa b
+     1	qa b
+     1	q
+
+     2	c
+     1	q
+     2
+     3	c
+     4
+     5	c
+     1	qa$
+$
+     2	b$
+a b
+rc=1
+
+==== STDERR ====
+

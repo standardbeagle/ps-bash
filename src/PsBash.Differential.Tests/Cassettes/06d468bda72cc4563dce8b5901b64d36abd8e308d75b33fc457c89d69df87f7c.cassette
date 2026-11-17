@@ -1,0 +1,128 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 322
+stdout-length: 1911
+stderr-length: 0
+==== SCRIPT ====
+d=$(mktemp -d); cd "$d" || exit; printf 'a b\n' > f; printf 'a c\n' > g; for c in cat 'cat -n' head 'head -c1' tail 'tail -c2' wc 'wc -l' 'grep -H a' nl md5sum paste comm strings; do echo "## $c"; $c ./f f 2>&1; echo "rc=$?"; $c ./nosuch nosuch 2>&1; echo "rc=$?"; done; comm ./f g; head -n1 ./f f ./f; cd / && rm -rf "$d"
+==== STDOUT ====
+## cat
+a b
+a b
+rc=0
+cat: ./nosuch: No such file or directory
+cat: nosuch: No such file or directory
+rc=1
+## cat -n
+     1	a b
+     2	a b
+rc=0
+cat: ./nosuch: No such file or directory
+cat: nosuch: No such file or directory
+rc=1
+## head
+==> ./f <==
+a b
+
+==> f <==
+a b
+rc=0
+head: cannot open './nosuch' for reading: No such file or directory
+head: cannot open 'nosuch' for reading: No such file or directory
+rc=1
+## head -c1
+==> ./f <==
+a
+==> f <==
+arc=0
+head: cannot open './nosuch' for reading: No such file or directory
+head: cannot open 'nosuch' for reading: No such file or directory
+rc=1
+## tail
+==> ./f <==
+a b
+
+==> f <==
+a b
+rc=0
+tail: cannot open './nosuch' for reading: No such file or directory
+tail: cannot open 'nosuch' for reading: No such file or directory
+rc=1
+## tail -c2
+==> ./f <==
+b
+
+==> f <==
+b
+rc=0
+tail: cannot open './nosuch' for reading: No such file or directory
+tail: cannot open 'nosuch' for reading: No such file or directory
+rc=1
+## wc
+1 2 4 ./f
+1 2 4 f
+2 4 8 total
+rc=0
+wc: ./nosuch: No such file or directory
+wc: nosuch: No such file or directory
+0 0 0 total
+rc=1
+## wc -l
+1 ./f
+1 f
+2 total
+rc=0
+wc: ./nosuch: No such file or directory
+wc: nosuch: No such file or directory
+0 total
+rc=1
+## grep -H a
+./f:a b
+f:a b
+rc=0
+grep: ./nosuch: No such file or directory
+grep: nosuch: No such file or directory
+rc=2
+## nl
+     1	a b
+     2	a b
+rc=0
+nl: ./nosuch: No such file or directory
+nl: nosuch: No such file or directory
+rc=1
+## md5sum
+7557d2f3a6ad1a3a8ebd23a94ab0c642  ./f
+7557d2f3a6ad1a3a8ebd23a94ab0c642  f
+rc=0
+md5sum: ./nosuch: No such file or directory
+md5sum: nosuch: No such file or directory
+rc=1
+## paste
+a b	a b
+rc=0
+paste: ./nosuch: No such file or directory
+rc=1
+## comm
+		a b
+rc=0
+comm: ./nosuch: No such file or directory
+rc=1
+## strings
+rc=0
+strings: './nosuch': No such file
+strings: 'nosuch': No such file
+rc=1
+a b
+	a c
+==> ./f <==
+a b
+
+==> f <==
+a b
+
+==> ./f <==
+a b
+
+==== STDERR ====
+

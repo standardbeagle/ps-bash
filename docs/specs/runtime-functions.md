@@ -128,6 +128,16 @@ to open`, sed `can't read x`, rev `cannot open x`, strings `'x': No such file`, 
 to "No such file or directory"). Known gap: GNU shell-quotes names with special characters
 (`cat: '*.zz': ...`). Tests: `ReaderOperandDisplayTests` (table over the commands, GNU 9.4 oracle).
 
+**One file, two spellings.** The table maps a resolved path to ONE typed name, the latest remembered, so a name
+recovered from a path is wrong when two operands name one file (`wc ./f f`). A cmdlet therefore names its operands
+from what it resolved them into: `FileSystemHelpers.OperandPath(Path, Display)` from `ResolveOperands` /
+`ResolveReaderOperands` (`-` = the pipeline, for head/tail/wc/cat/strings/comm). Output it builds itself (headers,
+wc's name column, a message it formats) uses `Display`; a cmdlet that resolves all operands BEFORE using them calls
+`operand.Claim(this)` at each one's turn so messages formatted from the path deeper down name it right;
+`ClaimedReaderPaths` is the lazy form for cmdlets that need only paths. No cmdlet keeps a private glob slice
+(guard `OperandDisplayGuardTests.CmdletOperands_ResolveThroughTheSharedResolver_WhichKeepsTheTypedName`; behavior:
+`OperandDisplayDifferentialTests.SameFileNamedTwice_EachOperandKeepsItsSpelling`). Operands are read in argv order:
+`cat f -` writes f before the pipeline (cat streams the pipeline only when it is read first).
 ### Migrated Binary Cmdlets
 
 Leaf `Invoke-Bash*` commands are progressively migrated from psm1 functions to

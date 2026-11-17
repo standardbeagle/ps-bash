@@ -444,15 +444,17 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
 
         // File mode
         bool headers = FileHeaders.Wanted(_headerMode, operands.Count);
-        foreach (var filePath in ResolveGlob(operands))
+        foreach (var operand in FileSystemHelpers.ResolveReaderOperands(this, operands))
         {
+            string filePath = operand.Path;
+            operand.Claim(this);
             if (filePath == "-")
             {
                 if (headers) WriteHeader(FileHeaders.StandardInput);
                 EmitFromRecords(_pipeline, byteCount, count);
                 continue;
             }
-            if (headers && File.Exists(filePath)) WriteHeader(FileHeaders.Display(this, filePath));
+            if (headers && File.Exists(filePath)) WriteHeader(operand.Display);
             if (_zero && byteCount == null)
             {
                 try
@@ -596,7 +598,7 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
                 catch (Exception ex)
                 {
                     if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-                    FileSystemHelpers.WriteBashError(this, $"head: cannot read '{filePath}': {ex.Message}");
+                    WriteOpenError(filePath, ex);
                 }
                 return;
             }
@@ -631,13 +633,16 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
             catch (Exception ex)
             {
                 if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-                // GNU: head: cannot open 'x' for reading: No such file or directory (path shown as
-                // typed by OperandDisplay at the stderr sink).
-                FileSystemHelpers.WriteBashError(this,
-                    $"head: cannot open '{BashPath.ToShell(filePath)}' for reading: {FileSystemHelpers.ReadErrorMessage(ex)}");
+                WriteOpenError(filePath, ex);
             }
         }
     }
+
+    // GNU: head: cannot open 'x' for reading: No such file or directory - for -c and line mode alike (-c said
+    // "cannot read 'x': Could not find file 'x'."). The path is shown as typed by OperandDisplay at the stderr sink.
+    private void WriteOpenError(string filePath, Exception ex) =>
+        FileSystemHelpers.WriteBashError(this,
+            $"head: cannot open '{BashPath.ToShell(filePath)}' for reading: {FileSystemHelpers.ReadErrorMessage(ex, filePath)}");
 
     /// <summary>
     /// Emit one <c>PsBash.CatLine</c> object for a file-mode line (shared by the
@@ -715,52 +720,5 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
         }
 
         return new StreamReader(fs, RawBytes.Encoding, detectEncodingFromByteOrderMarks: false);
-    }
-
-    /// <summary>
-    /// Reimplements the psm1 <c>Resolve-BashGlob</c> slice in C# (see
-    /// <see cref="InvokeBashWcCommand"/> for the rationale).
-    /// </summary>
-    private IEnumerable<string> ResolveGlob(IReadOnlyList<string> paths)
-    {
-        foreach (var rawP in paths)
-        {
-            if (rawP == "-") { yield return "-"; continue; }
-            var p = FileSystemHelpers.NormalizeOperandPath(rawP);
-            if (FileSystemHelpers.IsCmdletGlobOperand(this, p))
-            {
-                var matched = new List<string>();
-                try
-                {
-                    foreach (var resolved in SessionState.Path.GetResolvedProviderPathFromPSPath(
-                                 p, out _))
-                    {
-                        matched.Add(resolved);
-                    }
-                }
-                catch
-                {
-                    // No matches — literal passthrough.
-                }
-
-                if (matched.Count == 0)
-                {
-                    yield return p;
-                }
-                else
-                {
-                    foreach (var m in matched)
-                    {
-                        yield return m;
-                    }
-                }
-            }
-            else
-            {
-                var resolvedLiteral = FileSystemHelpers.ProviderPath(this, p);
-                OperandDisplay.Remember(this, resolvedLiteral, rawP);
-                yield return resolvedLiteral;
-            }
-        }
     }
 }

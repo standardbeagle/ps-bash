@@ -20,9 +20,8 @@ namespace PsBash.Cmdlets;
 /// <item>Pipeline mode: each input item is split on <c>\n</c>; words are
 /// whitespace-delimited (space/tab/CR/LF, empties removed); bytes are the
 /// UTF-8 byte count of each line plus one for the line's <c>\n</c>.</item>
-/// <item>File mode: operands are resolved via the psm1 <c>Resolve-BashGlob</c>
-/// (reachable because a <see cref="PSCmdlet"/> has
-/// <see cref="PSCmdlet.SessionState"/>); a missing file emits a bash-style
+/// <item>File mode: operands are resolved by <see cref="FileSystemHelpers.ResolveReaderOperands"/>
+/// (<c>-</c> is the pipeline; each file is named as typed); a missing file emits a bash-style
 /// error and is skipped; the byte count is the file length minus a UTF-8 BOM
 /// if present; line/word counts come from the CRLF-normalized text.</item>
 /// <item>Multiple files emit a trailing <c>total</c> row.</item>
@@ -32,14 +31,9 @@ namespace PsBash.Cmdlets;
 /// (7-wide single column; 7/8/8 for the three-column form), left-trimmed.</item>
 /// </list>
 ///
-/// psm1-only dependencies, and why a clean migration is still possible:
-/// <c>Resolve-BashGlob</c> needs the <c>$PWD</c> path provider and the
-/// <c>--help</c> path needs the script-scoped help tables — both are reachable
-/// from a <see cref="PSCmdlet"/> via <see cref="PSCmdlet.SessionState"/> /
-/// <c>InvokeCommand.InvokeScript</c> with a string body, so the cmdlet stays
-/// AOT-safe with no ScriptBlock construction on the hot path. The
-/// <c>Resolve-BashGlob</c> glob slice is reimplemented here in C# rather than
-/// calling back into psm1, matching the oracle's logic exactly.
+/// psm1-only dependency: the <c>--help</c> path needs the script-scoped help tables, reachable from a
+/// <see cref="PSCmdlet"/> via <c>InvokeCommand.InvokeScript</c> with a string body, so the cmdlet stays
+/// AOT-safe with no ScriptBlock construction on the hot path.
 ///
 /// Common-parameter collision: the bash flag <c>-w</c> prefix-collides with the
 /// PowerShell common parameters <c>-WarningAction</c> / <c>-WarningVariable</c>
@@ -225,7 +219,7 @@ public sealed class InvokeBashWcCommand : PSCmdlet
         _suppressStdin = _plan.Declined || _operands.Count > 0;
     }
 
-    // --files0-from: the pipeline is the name list (or an entry "-"), so it is kept, not counted.
+    // --files0-from (the name list, or an entry "-") or a `-` operand: the pipeline is kept, not counted.
     private readonly List<object> _stdinRecords = new();
 
     protected override void ProcessRecord()
@@ -233,7 +227,8 @@ public sealed class InvokeBashWcCommand : PSCmdlet
         if (InputObject == null) return;
 
         ParseOnce();
-        if (_plan is { Files0From: not null, Declined: false }) { _stdinRecords.Add(InputObject); return; }
+        // The pipeline is kept, not counted, when it is the --files0-from list or a `-` operand (`wc - f`).
+        if (_plan is { Declined: false } && (_plan.Files0From is not null || _operands.Contains("-"))) { _stdinRecords.Add(InputObject); return; }
         if (_suppressStdin) return;
 
         // Stream the counts instead of buffering the pipe — wc only ever needs
@@ -359,22 +354,28 @@ public sealed class InvokeBashWcCommand : PSCmdlet
             _ => multipleFiles,
         };
 
-        var operandPaths = (files0 ? names.Select(n => n == "-" ? n : ResolveVerbatim(n)) : ResolveGlob(_operands)).ToList();
-        _fileWidth = files0 ? 0 : FileColumnWidth(operandPaths);
-        foreach (var filePath in operandPaths)
+        var operandPaths = (files0
+            ? names.Select(n => n == "-" ? new FileSystemHelpers.OperandPath("-", "-") : ResolveVerbatim(n))
+            : FileSystemHelpers.ResolveReaderOperands(this, _operands)).ToList();
+        _fileWidth = files0 ? 0 : FileColumnWidth(operandPaths.ConvertAll(o => o.Path));
+        foreach (var operand in operandPaths)
         {
-            if (filePath == "-" && files0)
+            // Resolved ahead of use: wc names each operand as typed, `wc ./f f` is `./f` then `f`
+            // (it said `f` twice: the name was recovered from the shared path; FileSystemHelpers.OperandPath.Claim).
+            string filePath = operand.Path, name = operand.Display;
+            operand.Claim(this);
+            if (filePath == "-")
             {
                 var (sl, sw, sc, sm, sx) = CountRecords();
                 grandLines += sl; grandWords += sw; grandBytes += sc; grandChars += sm; if (sx > grandMax) grandMax = sx;
                 if (totalMode != TotalMode.Only)
-                    WriteObject(BuildResult(sl, sw, sc, sm, sx, string.Empty));
+                    WriteObject(BuildResult(sl, sw, sc, sm, sx, files0 ? string.Empty : "-"));
                 continue;
             }
             // The null device (/dev/null, NUL) is an empty file, not a missing one.
             if (!File.Exists(filePath) && !Directory.Exists(filePath) && !FileSystemHelpers.IsNullDevice(filePath))
             {
-                WriteBashError($"wc: {filePath}: No such file or directory");
+                WriteBashError($"wc: {name}: No such file or directory");
                 continue;
             }
 
@@ -404,8 +405,7 @@ public sealed class InvokeBashWcCommand : PSCmdlet
             catch (Exception ex)
             {
                 if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-                string normalized = BashPath.ToShell(filePath);
-                WriteBashError($"wc: {normalized}: {FileSystemHelpers.ReadErrorMessage(ex)}");
+                WriteBashError($"wc: {name}: {FileSystemHelpers.ReadErrorMessage(ex)}");
                 continue;
             }
 
@@ -417,7 +417,7 @@ public sealed class InvokeBashWcCommand : PSCmdlet
 
             if (totalMode != TotalMode.Only)
                 WriteObject(BuildResult(
-                    lineCount, wordCount, (int)fileBytes, charCount, maxLineLen, filePath));
+                    lineCount, wordCount, (int)fileBytes, charCount, maxLineLen, name));
         }
 
         if (printTotal)
@@ -429,12 +429,7 @@ public sealed class InvokeBashWcCommand : PSCmdlet
     }
 
     /// <summary>A --files0-from entry is used verbatim: no globbing, resolved against the PowerShell location.</summary>
-    private string ResolveVerbatim(string name)
-    {
-        var resolved = FileSystemHelpers.ProviderPath(this, name);
-        OperandDisplay.Remember(this, resolved, name);
-        return resolved;
-    }
+    private FileSystemHelpers.OperandPath ResolveVerbatim(string name) => new(FileSystemHelpers.ProviderPath(this, name), name);
 
     /// <summary>The counts of the buffered pipeline (the "-" entry of a --files0-from list).</summary>
     private (int Lines, int Words, int Bytes, int Chars, int Max) CountRecords()
@@ -640,7 +635,6 @@ public sealed class InvokeBashWcCommand : PSCmdlet
     private PSObject BuildResult(
         int lines, int words, int bytes, int chars, int maxLine, string fileName)
     {
-        fileName = fileName.Length > 0 && fileName != "total" ? OperandDisplay.Rewrite(this, fileName) : fileName;
         string bashText = FormatWcText(
             _linesOnly, _wordsOnly, _charsOnly, _bytesOnly, _maxLineOnly,
             lines, words, bytes, chars, maxLine, fileName, _fileWidth);
@@ -655,56 +649,6 @@ public sealed class InvokeBashWcCommand : PSCmdlet
         obj.Properties.Add(new PSNoteProperty("FileName", fileName));
         obj.Properties.Add(new PSNoteProperty("BashText", BashRuntime.NormalizeBashText(bashText)));
         return obj;
-    }
-
-    /// <summary>
-    /// Reimplements the psm1 <c>Resolve-BashGlob</c> slice in C#: a path with
-    /// <c>*</c> or <c>?</c> is expanded against the current location; if it
-    /// matches nothing it passes through literally so the caller emits its own
-    /// error. A literal path is resolved against the shell's <c>$PWD</c> via
-    /// <see cref="PathIntrinsics.GetUnresolvedProviderPathFromPSPath"/> — the
-    /// same provider-aware resolution the psm1 oracle used (not
-    /// <see cref="Directory.GetCurrentDirectory"/>).
-    /// </summary>
-    private IEnumerable<string> ResolveGlob(IReadOnlyList<string> paths)
-    {
-        foreach (var p in paths)
-        {
-            if (FileSystemHelpers.IsCmdletGlobOperand(this, p))
-            {
-                var matched = new List<string>();
-                try
-                {
-                    foreach (var resolved in SessionState.Path.GetResolvedProviderPathFromPSPath(
-                                 p, out _))
-                    {
-                        matched.Add(resolved);
-                    }
-                }
-                catch
-                {
-                    // No matches — fall through to literal passthrough.
-                }
-
-                if (matched.Count == 0)
-                {
-                    yield return p;
-                }
-                else
-                {
-                    foreach (var m in matched)
-                    {
-                        yield return m;
-                    }
-                }
-            }
-            else
-            {
-                var lit = FileSystemHelpers.ProviderPath(this, p);
-                OperandDisplay.Remember(this, lit, p);
-                yield return lit;
-            }
-        }
     }
 
     private void WriteBashError(string message)

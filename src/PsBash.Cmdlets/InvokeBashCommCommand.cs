@@ -159,10 +159,10 @@ public sealed class InvokeBashCommCommand : PSCmdlet
         // `-` is the pipeline. GNU opens stdin once: a second `-` fails ("Bad file descriptor", reads as empty) and
         // the run still goes on, ending with status 1.
         bool stdinTwice = operands[0] == "-" && operands[1] == "-";
-        string? path1 = operands[0] == "-" ? "-" : ResolveSingleOperand(operands[0]);
-        if (path1 == null) return;
-        string? path2 = operands[1] == "-" ? "-" : ResolveSingleOperand(operands[1]);
-        if (path2 == null) return;
+        // Each file keeps the name it was typed as: `comm ./x x` reports `./x` (from the path alone, the name of a
+        // file named twice is the later spelling).
+        var (path1, name1) = ResolveSingleOperand(operands[0]);
+        var (path2, name2) = ResolveSingleOperand(operands[1]);
         if (stdinTwice) FileSystemHelpers.WriteStderr(this, "comm: -: Bad file descriptor");
 
         object Out(string text) => zero ? NulRecords.Record(text) : BashRuntime.NewBashObject(text);
@@ -172,7 +172,7 @@ public sealed class InvokeBashCommCommand : PSCmdlet
 
         IEnumerator<string>? file1 = null;
         IEnumerator<string>? file2 = null;
-        string currentReadPath = path1;
+        string currentReadName = name1;
 
         try
         {
@@ -190,7 +190,7 @@ public sealed class InvokeBashCommCommand : PSCmdlet
             bool Next(int i)
             {
                 var e = i == 0 ? file1! : file2!;
-                currentReadPath = i == 0 ? path1 : path2;
+                currentReadName = i == 0 ? name1 : name2;
                 if (!e.MoveNext()) return false;
                 string cur = e.Current;
                 if (checkMode != OrderCheck.Disabled && (checkMode == OrderCheck.Enabled || seenUnpairable)
@@ -258,7 +258,7 @@ public sealed class InvokeBashCommCommand : PSCmdlet
         catch (Exception ex)
         {
             if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-            WriteReadError(currentReadPath, ex);
+            WriteReadError(currentReadName, ex);
             return;
         }
         finally
@@ -268,22 +268,16 @@ public sealed class InvokeBashCommCommand : PSCmdlet
         }
     }
 
-    private string? ResolveSingleOperand(string raw)
+    /// <summary>The file an operand names (a pattern: its first match) and the name to report it by; <c>-</c> is the pipeline.</summary>
+    private FileSystemHelpers.OperandPath ResolveSingleOperand(string raw)
     {
-        foreach (var p in FileSystemHelpers.ResolveOperandPaths(this, raw))
-        {
-            // Take the first match; the psm1 oracle used unresolved-provider-path
-            // (literal) — glob expansion is a superset that lands on the literal
-            // for non-wildcard inputs.
-            return p;
-        }
-        return raw;
+        foreach (var op in FileSystemHelpers.ResolveReaderOperands(this, new[] { raw })) return op;
+        return new FileSystemHelpers.OperandPath(raw, raw);
     }
 
-    private void WriteReadError(string path, Exception ex)
+    private void WriteReadError(string name, Exception ex)
     {
         string msg = FileSystemHelpers.ReadErrorMessage(ex);
-        string normalized = BashPath.ToShell(path);
-        FileSystemHelpers.WriteBashError(this, $"comm: {normalized}: {msg}");
+        FileSystemHelpers.WriteBashError(this, $"comm: {name}: {msg}");
     }
 }

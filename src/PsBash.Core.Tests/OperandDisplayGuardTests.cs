@@ -50,4 +50,34 @@ public class OperandDisplayGuardTests
             "pass the operand as typed (ProviderPath normalizes it and records the typed text for diagnostics):\n"
             + string.Join("\n", offenders));
     }
+    // A cmdlet that resolves its own patterns returns bare paths, and a name recovered from a path is the LAST
+    // spelling of that file: `wc ./f f` said `f` twice. Operands resolve through FileSystemHelpers
+    // (ResolveOperands / ResolveReaderOperands, which carry the typed name), never a private glob slice.
+    // Allowed: a resolver that already pairs each path with its typed name.
+    private static readonly Dictionary<string, string> OwnResolverAllowed = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["FileSystemHelpers.cs"] = "the shared resolver",
+        ["InvokeBashLsCommand.cs"] = "returns (Target, Display): each literal keeps its typed name; ls names glob matches itself",
+    };
+
+    [Fact]
+    public void CmdletOperands_ResolveThroughTheSharedResolver_WhichKeepsTheTypedName()
+    {
+        var offenders = new List<string>();
+        foreach (var file in Directory.EnumerateFiles(Path.Combine(RepoRoot(), "src", "PsBash.Cmdlets"), "*.cs",
+                     SearchOption.AllDirectories))
+        {
+            if (file.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}")
+                || file.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}")
+                || OwnResolverAllowed.ContainsKey(Path.GetFileName(file)))
+                continue;
+            var lines = File.ReadAllLines(file);
+            for (int i = 0; i < lines.Length; i++)
+                if (lines[i].Contains("GetResolvedProviderPathFromPSPath(") && !lines[i].TrimStart().StartsWith("//"))
+                    offenders.Add($"{Path.GetFileName(file)}:{i + 1}: {lines[i].Trim()}");
+        }
+        Assert.True(offenders.Count == 0,
+            "resolve operands with FileSystemHelpers.ResolveOperands / ResolveReaderOperands (they keep each operand's typed "
+            + "name; claim it at its turn when resolving ahead):\n" + string.Join("\n", offenders));
+    }
 }

@@ -134,7 +134,49 @@ internal static class FileSystemHelpers
     /// <see cref="Display"/> is what a diagnostic must show — the operand AS TYPED, because GNU
     /// quotes the argv element (<c>rm: cannot remove 'nosuch'</c>), never the resolved full path.
     /// </summary>
-    public readonly record struct OperandPath(string Path, string Display);
+    public readonly record struct OperandPath(string Path, string Display)
+    {
+        /// <summary>
+        /// Make this operand the name <see cref="OperandDisplay"/> shows for <see cref="Path"/> in a message
+        /// built from the path. Call it as each operand's turn comes when the operands were resolved AHEAD of
+        /// use: two operands naming one file (<c>wc ./f f</c>) share a Path, and the table holds the latest
+        /// spelling, so without a claim every message about the first said <c>f</c>. Output a cmdlet builds
+        /// itself (a header, wc's name column) uses <see cref="Display"/> directly.
+        /// </summary>
+        public void Claim(PSCmdlet cmdlet)
+        {
+            if (Path != "-") OperandDisplay.Remember(cmdlet, Path, Display);
+        }
+    }
+
+    /// <summary>
+    /// The file operands of a reader that takes <c>-</c> as the pipeline (head, tail, wc), in argv order:
+    /// <c>-</c> stays <c>-</c>, everything else is <see cref="ResolveOperands"/>. The one resolver for them
+    /// (each kept a private copy that answered with bare paths, so a name had to be guessed back from the path).
+    /// </summary>
+    public static IEnumerable<OperandPath> ResolveReaderOperands(PSCmdlet cmdlet, IEnumerable<string> raws)
+    {
+        foreach (var raw in raws)
+        {
+            if (raw == "-") { yield return new OperandPath("-", "-"); continue; }
+            foreach (var op in ResolveOperands(cmdlet, raw)) yield return op;
+        }
+    }
+
+    /// <summary>
+    /// <see cref="ResolveReaderOperands"/> for a cmdlet that needs only the paths: LAZY, each operand
+    /// <see cref="OperandPath.Claim"/>ed as it is yielded, so a diagnostic about it names it as typed.
+    /// Enumerate it once, processing each path before taking the next (never <c>ToList()</c> it - use
+    /// <see cref="ResolveReaderOperands"/> and claim at each turn instead).
+    /// </summary>
+    public static IEnumerable<string> ClaimedReaderPaths(PSCmdlet cmdlet, IEnumerable<string> raws)
+    {
+        foreach (var op in ResolveReaderOperands(cmdlet, raws))
+        {
+            op.Claim(cmdlet);
+            yield return op.Path;
+        }
+    }
 
     /// <summary>
     /// <see cref="ResolveOperandPaths"/> plus the name to print for each result. A literal operand
