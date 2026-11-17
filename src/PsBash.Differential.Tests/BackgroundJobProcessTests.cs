@@ -91,7 +91,7 @@ public class BackgroundJobProcessTests
 
         var psi = new System.Diagnostics.ProcessStartInfo(binary!)
         {
-            RedirectStandardOutput = true,
+            RedirectStandardOutput = true, StandardOutputEncoding = System.Text.Encoding.UTF8,
             RedirectStandardInput = true,
             UseShellExecute = false,
             CreateNoWindow = true,

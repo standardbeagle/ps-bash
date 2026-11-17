@@ -18,8 +18,8 @@ public class CommandNotFoundPerfTests
     {
         var psi = PsBashTestProcess.Create(new[] { "-c", script }, ipcEndpoint: endpoint);
         psi.Environment["PSBASH_HOST_IDLE_SECS"] = "20";
-        psi.RedirectStandardOutput = true;
-        psi.RedirectStandardError = true;
+        psi.RedirectStandardOutput = true; psi.StandardOutputEncoding = System.Text.Encoding.UTF8;
+        psi.RedirectStandardError = true; psi.StandardErrorEncoding = System.Text.Encoding.UTF8;
         psi.UseShellExecute = false;
         var sw = Stopwatch.StartNew();
         using var p = Process.Start(psi)!;

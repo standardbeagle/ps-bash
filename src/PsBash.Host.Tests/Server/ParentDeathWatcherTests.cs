@@ -87,7 +87,7 @@ public sealed class ParentDeathWatcherTests
     {
         // A process that sleeps long enough for us to observe it's alive.
         var si = OperatingSystem.IsWindows()
-            ? new ProcessStartInfo("ping", "-n 60 127.0.0.1") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true }
+            ? new ProcessStartInfo("ping", "-n 60 127.0.0.1") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, StandardOutputEncoding = System.Text.Encoding.UTF8 }
             : new ProcessStartInfo("sleep", "60") { UseShellExecute = false };
         return Process.Start(si)!;
     }

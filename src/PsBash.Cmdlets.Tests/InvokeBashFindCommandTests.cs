@@ -274,8 +274,8 @@ public class InvokeBashFindCommandTests : IDisposable, IClassFixture<SharedPwshF
                     $"/c mklink /J \"{linkPath}\" \"{target}\"")
                 {
                     UseShellExecute = false,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
+                    RedirectStandardOutput = true, StandardOutputEncoding = System.Text.Encoding.UTF8,
+                    RedirectStandardError = true, StandardErrorEncoding = System.Text.Encoding.UTF8,
                     CreateNoWindow = true,
                 };
                 using var p = System.Diagnostics.Process.Start(psi)!;

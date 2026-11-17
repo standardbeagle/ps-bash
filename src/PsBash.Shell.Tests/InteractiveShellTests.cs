@@ -12,8 +12,8 @@ public class InteractiveShellTests
     {
         var psi = PsBashTestProcess.Create(["-i"]);
         psi.RedirectStandardInput = true;
-        psi.RedirectStandardOutput = true;
-        psi.RedirectStandardError = true;
+        psi.RedirectStandardOutput = true; psi.StandardOutputEncoding = System.Text.Encoding.UTF8;
+        psi.RedirectStandardError = true; psi.StandardErrorEncoding = System.Text.Encoding.UTF8;
         psi.UseShellExecute = false;
         psi.CreateNoWindow = true;
         psi.WindowStyle = ProcessWindowStyle.Hidden;
@@ -34,8 +34,8 @@ public class InteractiveShellTests
     {
         var psi = PsBashTestProcess.Create(["-i"]);
         psi.RedirectStandardInput = true;
-        psi.RedirectStandardOutput = true;
-        psi.RedirectStandardError = true;
+        psi.RedirectStandardOutput = true; psi.StandardOutputEncoding = System.Text.Encoding.UTF8;
+        psi.RedirectStandardError = true; psi.StandardErrorEncoding = System.Text.Encoding.UTF8;
         psi.UseShellExecute = false;
         psi.CreateNoWindow = true;
         psi.WindowStyle = ProcessWindowStyle.Hidden;

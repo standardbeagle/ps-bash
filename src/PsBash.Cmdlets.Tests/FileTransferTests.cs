@@ -54,7 +54,7 @@ public class FileTransferTests : IDisposable, IClassFixture<SharedPwshFixture>
         File.Copy(Path.Combine(Environment.SystemDirectory, "PING.EXE"), P(rel));
         _program = Process.Start(new ProcessStartInfo(P(rel), "-n 60 127.0.0.1")
         {
-            UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true,
+            UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, StandardOutputEncoding = System.Text.Encoding.UTF8,
         })!;
         _program.StandardOutput.ReadLine();   // started: the image is mapped
     }

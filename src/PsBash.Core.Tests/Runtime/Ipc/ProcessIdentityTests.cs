@@ -55,7 +55,7 @@ public class ProcessIdentityTests
     {
         // Long-lived, so its start time is readable before it ends; then end it.
         var si = OperatingSystem.IsWindows()
-            ? new ProcessStartInfo("ping", "-n 60 127.0.0.1") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true }
+            ? new ProcessStartInfo("ping", "-n 60 127.0.0.1") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, StandardOutputEncoding = System.Text.Encoding.UTF8 }
             : new ProcessStartInfo("sleep", "60") { UseShellExecute = false };
         using var p = Process.Start(si)!;
         var id = new ProcessIdentity(p.Id, ProcessIdentity.StartTicksOf(p));

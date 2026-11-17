@@ -54,7 +54,7 @@ public class SameFileIdentityTests : IDisposable, IClassFixture<SharedPwshFixtur
         try
         {
             if (OperatingSystem.IsWindows()) return CreateHardLinkW(P(newRel), P(existingRel), IntPtr.Zero);
-            var psi = new ProcessStartInfo("ln") { RedirectStandardError = true, CreateNoWindow = true };
+            var psi = new ProcessStartInfo("ln") { RedirectStandardError = true, StandardErrorEncoding = System.Text.Encoding.UTF8, CreateNoWindow = true };
             psi.ArgumentList.Add(P(existingRel));
             psi.ArgumentList.Add(P(newRel));
             using var p = Process.Start(psi)!;

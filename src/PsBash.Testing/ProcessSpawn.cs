@@ -41,6 +41,8 @@ public static class ProcessSpawn
     /// generous is fine, unbounded is not. Override with
     /// <c>PSBASH_TEST_DRAIN_GRACE_SEC</c>.
     /// </summary>
+    private static readonly System.Text.Encoding Utf8NoBom = new System.Text.UTF8Encoding(false);
+
     internal static TimeSpan DrainGrace =>
         int.TryParse(Environment.GetEnvironmentVariable("PSBASH_TEST_DRAIN_GRACE_SEC"), out var s) && s > 0
             ? TimeSpan.FromSeconds(s)
@@ -61,6 +63,9 @@ public static class ProcessSpawn
             RedirectStandardError = true,
             RedirectStandardInput = true,
             UseShellExecute = false,
+            StandardOutputEncoding = Utf8NoBom,
+            StandardErrorEncoding = Utf8NoBom,
+            StandardInputEncoding = Utf8NoBom,
         };
         foreach (var arg in arguments)
             psi.ArgumentList.Add(arg);
@@ -127,6 +132,12 @@ public static class ProcessSpawn
         psi.RedirectStandardError = true;
         psi.RedirectStandardInput = true;
         psi.UseShellExecute = false;
+        // The child's text is UTF-8 (ps-bash and bash both write it). Unset, .NET on Windows decodes with the test
+        // host's CONSOLE code page: under a 437 console `é` read back as `├⌐` and a correct run failed, so results
+        // depended on the machine (AssociativeArrayTests.Order_NonAsciiKeys failed here, passed on the fleet host).
+        psi.StandardOutputEncoding ??= Utf8NoBom;
+        psi.StandardErrorEncoding ??= Utf8NoBom;
+        psi.StandardInputEncoding ??= Utf8NoBom;
 
         if (canonicalizeEnv)
             psi.Environment.Clear();

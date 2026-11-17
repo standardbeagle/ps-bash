@@ -702,8 +702,8 @@ public sealed class LifecycleScaleAndFaultTests
                 FileName = hostBinary!,
                 UseShellExecute = false,
                 CreateNoWindow = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
+                RedirectStandardOutput = true, StandardOutputEncoding = System.Text.Encoding.UTF8,
+                RedirectStandardError = true, StandardErrorEncoding = System.Text.Encoding.UTF8,
             };
             psi.ArgumentList.Add("--ipc-endpoint");
             psi.ArgumentList.Add(spec);

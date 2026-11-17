@@ -81,7 +81,7 @@ public class FindPredicateTests : IClassFixture<SharedPwshFixture>, IDisposable
         if (OperatingSystem.IsWindows())
         {
             var psi = new ProcessStartInfo("cmd.exe", $"/c mklink /J \"{P(link)}\" \"{P(target)}\"")
-            { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
+            { RedirectStandardOutput = true, StandardOutputEncoding = System.Text.Encoding.UTF8, RedirectStandardError = true, StandardErrorEncoding = System.Text.Encoding.UTF8, UseShellExecute = false, CreateNoWindow = true };
             using var p = Process.Start(psi)!;
             p.WaitForExit();
             Assert.True(p.ExitCode == 0, "mklink /J failed");
@@ -437,7 +437,7 @@ public class FindPredicateTests : IClassFixture<SharedPwshFixture>, IDisposable
 
     private string? RunHost(string exe, params string[] args)
     {
-        var psi = new ProcessStartInfo(exe) { WorkingDirectory = _dir, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
+        var psi = new ProcessStartInfo(exe) { WorkingDirectory = _dir, RedirectStandardOutput = true, StandardOutputEncoding = System.Text.Encoding.UTF8, RedirectStandardError = true, StandardErrorEncoding = System.Text.Encoding.UTF8, UseShellExecute = false };
         foreach (var a in args) psi.ArgumentList.Add(a);
         try
         {

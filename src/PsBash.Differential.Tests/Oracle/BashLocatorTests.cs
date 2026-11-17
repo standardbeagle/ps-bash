@@ -147,8 +147,8 @@ public class BashLocatorTests
         var psi = BashLocator.BuildPsi(host, "echo hello");
         Assert.NotNull(psi);
 
-        psi!.RedirectStandardOutput = true;
-        psi.RedirectStandardError = true;
+        psi!.RedirectStandardOutput = true; psi!.StandardOutputEncoding = System.Text.Encoding.UTF8;
+        psi.RedirectStandardError = true; psi.StandardErrorEncoding = System.Text.Encoding.UTF8;
         psi.RedirectStandardInput = true;
         psi.UseShellExecute = false;
 

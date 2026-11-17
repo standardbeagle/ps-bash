@@ -205,7 +205,7 @@ public class TouchOptionsTests : IDisposable, IClassFixture<SharedPwshFixture>
             if (OperatingSystem.IsWindows())
             {
                 var psi = new ProcessStartInfo("cmd.exe", $"/c mklink /J \"{link}\" \"{target}\"")
-                { RedirectStandardOutput = true, RedirectStandardError = true, CreateNoWindow = true };
+                { RedirectStandardOutput = true, StandardOutputEncoding = System.Text.Encoding.UTF8, RedirectStandardError = true, StandardErrorEncoding = System.Text.Encoding.UTF8, CreateNoWindow = true };
                 using var p = Process.Start(psi)!;
                 p.StandardOutput.ReadToEnd();
                 p.WaitForExit(10000);

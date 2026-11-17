@@ -26,8 +26,8 @@ public class LauncherStdinEndToEndTests
     {
         var psi = PsBashTestProcess.Create(["-c", script], workingDirectory, ipcEndpoint: IpcEndpoint);
         psi.RedirectStandardInput = true;
-        psi.RedirectStandardOutput = true;
-        psi.RedirectStandardError = true;
+        psi.RedirectStandardOutput = true; psi.StandardOutputEncoding = System.Text.Encoding.UTF8;
+        psi.RedirectStandardError = true; psi.StandardErrorEncoding = System.Text.Encoding.UTF8;
         psi.StandardOutputEncoding = Encoding.Latin1;
         psi.StandardErrorEncoding = Encoding.Latin1;
         psi.UseShellExecute = false;

@@ -240,8 +240,8 @@ public class InvokeBashGitCommandTests : IClassFixture<SharedPwshFixture>
         {
             WorkingDirectory = repo,
             UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
+            RedirectStandardOutput = true, StandardOutputEncoding = System.Text.Encoding.UTF8,
+            RedirectStandardError = true, StandardErrorEncoding = System.Text.Encoding.UTF8,
         };
         foreach (var a in args) psi.ArgumentList.Add(a);
         // Fixed identity + no global config influence, so the repo is byte-stable across machines.
@@ -279,8 +279,8 @@ public class InvokeBashGitCommandTests : IClassFixture<SharedPwshFixture>
             var psi = new ProcessStartInfo(GitExe, "--version")
             {
                 UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
+                RedirectStandardOutput = true, StandardOutputEncoding = System.Text.Encoding.UTF8,
+                RedirectStandardError = true, StandardErrorEncoding = System.Text.Encoding.UTF8,
             };
             using var p = Process.Start(psi);
             if (p is null) return false;

@@ -92,9 +92,11 @@ public class HostRobustnessTests
     [SkippableTheory]
     [InlineData("kill-self", "kill -9 $$; echo after", "137", null)]
     //  - `sh -c "kill -USR1 $$"`: the nested shell runs in ANOTHER host, so $$ was not its own pid and
-    //    `kill` hard-killed the enclosing shared host. A ps-bash host is never hard-killed by `kill`.
-    [InlineData("kill-enclosing-usr1", "sh -c \"kill -USR1 $$\"; echo after=$?", "after=0", "not delivered")]
-    [InlineData("kill-enclosing-9", "sh -c \"kill -9 $$\"; echo after=$?", "after=0", "not delivered")]
+    //    `kill` hard-killed the enclosing shared host. A ps-bash host is never hard-killed by `kill`: the
+    //    signal is a message to the command that host runs (background-jobs.md §13), so the enclosing
+    //    script dies of it as in bash (USR1 138, KILL 137) and the host lives on.
+    [InlineData("kill-enclosing-usr1", "sh -c \"kill -USR1 $$\"; echo after=$?", "138", null)]
+    [InlineData("kill-enclosing-9", "sh -c \"kill -9 $$\"; echo after=$?", "137", null)]
     // rc is 1, not bash's 2: every ps-bash `test` syntax error returns 1 today (a separate parity gap).
     [InlineData("test-paren", "@TESTPAREN", "rc=", "too deeply nested")]
     // 50,000 operands: emitted as a PowerShell -or chain, PowerShell's own compiler overflowed its
@@ -128,9 +130,9 @@ public class HostRobustnessTests
 
             var (exit, stdout, stderr) = await RunAsync(endpoint, file);
             Assert.DoesNotContain("Unhandled exception", stderr);
-            if (name == "kill-self")
+            if (name.StartsWith("kill-", StringComparison.Ordinal))
             {
-                Assert.Equal(137, exit);              // bash: killed by SIGKILL
+                Assert.Equal(int.Parse(expectOut!), exit);   // bash: the script dies of the signal, 128+N
                 Assert.DoesNotContain("after", stdout);
             }
             else if (expectOut is not null)
@@ -235,8 +237,8 @@ public class HostRobustnessTests
     {
         var limit = timeout ?? Step;
         var psi = PsBashTestProcess.Create(args, env: env, ipcEndpoint: endpoint);
-        psi.RedirectStandardOutput = true;
-        psi.RedirectStandardError = true;
+        psi.RedirectStandardOutput = true; psi.StandardOutputEncoding = System.Text.Encoding.UTF8;
+        psi.RedirectStandardError = true; psi.StandardErrorEncoding = System.Text.Encoding.UTF8;
         psi.RedirectStandardInput = true;
         psi.UseShellExecute = false;
         using var proc = new Process { StartInfo = psi };

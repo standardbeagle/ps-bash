@@ -19,8 +19,8 @@ public class NestedInvocationTests
     private static async Task<(int Exit, string Out, string Err)> RunAsync(
         ProcessStartInfo psi, TimeSpan timeout)
     {
-        psi.RedirectStandardOutput = true;
-        psi.RedirectStandardError = true;
+        psi.RedirectStandardOutput = true; psi.StandardOutputEncoding = System.Text.Encoding.UTF8;
+        psi.RedirectStandardError = true; psi.StandardErrorEncoding = System.Text.Encoding.UTF8;
         psi.UseShellExecute = false;
         using var p = Process.Start(psi)!;
         var so = p.StandardOutput.ReadToEndAsync();

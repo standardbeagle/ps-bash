@@ -123,8 +123,8 @@ public static class BashLocator
             var psi = new ProcessStartInfo
             {
                 FileName = wslExe,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
+                RedirectStandardOutput = true, StandardOutputEncoding = System.Text.Encoding.UTF8,
+                RedirectStandardError = true, StandardErrorEncoding = System.Text.Encoding.UTF8,
                 UseShellExecute = false,
             };
             psi.ArgumentList.Add("-e");
@@ -162,8 +162,8 @@ public static class BashLocator
             var psi = new ProcessStartInfo
             {
                 FileName = executable,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
+                RedirectStandardOutput = true, StandardOutputEncoding = System.Text.Encoding.UTF8,
+                RedirectStandardError = true, StandardErrorEncoding = System.Text.Encoding.UTF8,
                 UseShellExecute = false,
             };
             // Use a single -c invocation that emits BASH_VERSION on line 1 and
@@ -220,8 +220,8 @@ public static class BashLocator
             var psi = new ProcessStartInfo
             {
                 FileName = wslExe,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
+                RedirectStandardOutput = true, StandardOutputEncoding = System.Text.Encoding.UTF8,
+                RedirectStandardError = true, StandardErrorEncoding = System.Text.Encoding.UTF8,
                 UseShellExecute = false,
             };
             psi.ArgumentList.Add("-e");
@@ -274,8 +274,8 @@ public static class BashLocator
 
         var psi = new ProcessStartInfo
         {
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
+            RedirectStandardOutput = true, StandardOutputEncoding = System.Text.Encoding.UTF8,
+            RedirectStandardError = true, StandardErrorEncoding = System.Text.Encoding.UTF8,
             RedirectStandardInput = true,
             UseShellExecute = false,
         };

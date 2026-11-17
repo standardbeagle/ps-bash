@@ -23,8 +23,8 @@ public sealed class WorktrackLoggingTests
             {
                 FileName = "pwsh",
                 UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
+                RedirectStandardOutput = true, StandardOutputEncoding = System.Text.Encoding.UTF8,
+                RedirectStandardError = true, StandardErrorEncoding = System.Text.Encoding.UTF8,
             };
             foreach (var argument in new[]
             {

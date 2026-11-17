@@ -63,8 +63,8 @@ public sealed class CanaryHostGcTests
             Arguments = OperatingSystem.IsWindows() ? "/c exit 0" : "",
             UseShellExecute = false,
             CreateNoWindow = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
+            RedirectStandardOutput = true, StandardOutputEncoding = System.Text.Encoding.UTF8,
+            RedirectStandardError = true, StandardErrorEncoding = System.Text.Encoding.UTF8,
         })!)
         {
             await dummy.WaitForExitAsync();
@@ -86,8 +86,8 @@ public sealed class CanaryHostGcTests
             FileName = hostBin,
             UseShellExecute = false,
             CreateNoWindow = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
+            RedirectStandardOutput = true, StandardOutputEncoding = System.Text.Encoding.UTF8,
+            RedirectStandardError = true, StandardErrorEncoding = System.Text.Encoding.UTF8,
         };
         hostPsi.ArgumentList.Add(endpointArg);
         hostPsi.ArgumentList.Add($"--launcher-pid={deadPid}");
@@ -131,8 +131,8 @@ public sealed class CanaryHostGcTests
             FileName = PsBashPath!,
             UseShellExecute = false,
             CreateNoWindow = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
+            RedirectStandardOutput = true, StandardOutputEncoding = System.Text.Encoding.UTF8,
+            RedirectStandardError = true, StandardErrorEncoding = System.Text.Encoding.UTF8,
         };
         psi.ArgumentList.Add("host");
         psi.ArgumentList.Add("gc");

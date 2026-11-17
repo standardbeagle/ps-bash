@@ -309,7 +309,7 @@ public class InvokeBashTarCommandTests : IDisposable, IClassFixture<SharedPwshFi
         try
         {
             var psi = new System.Diagnostics.ProcessStartInfo("cmd.exe", $"/c mklink /J \"{link}\" \"{target}\"")
-            { CreateNoWindow = true, UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true };
+            { CreateNoWindow = true, UseShellExecute = false, RedirectStandardOutput = true, StandardOutputEncoding = System.Text.Encoding.UTF8, RedirectStandardError = true, StandardErrorEncoding = System.Text.Encoding.UTF8 };
             using var p = System.Diagnostics.Process.Start(psi)!;
             p.WaitForExit(10000);
             return p.ExitCode == 0 && Directory.Exists(link);

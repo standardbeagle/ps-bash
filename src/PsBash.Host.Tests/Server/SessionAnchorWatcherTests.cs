@@ -131,7 +131,7 @@ public sealed class SessionAnchorWatcherTests
     private static Process StartLongLivedProcess()
     {
         var si = OperatingSystem.IsWindows()
-            ? new ProcessStartInfo("ping", "-n 120 127.0.0.1") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true }
+            ? new ProcessStartInfo("ping", "-n 120 127.0.0.1") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, StandardOutputEncoding = System.Text.Encoding.UTF8 }
             : new ProcessStartInfo("sleep", "120") { UseShellExecute = false };
         return Process.Start(si)!;
     }

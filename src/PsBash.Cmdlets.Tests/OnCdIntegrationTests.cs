@@ -52,8 +52,8 @@ public class OnCdIntegrationTests : IDisposable
             {
                 FileName = tool,
                 Arguments = "--version",
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
+                RedirectStandardOutput = true, StandardOutputEncoding = System.Text.Encoding.UTF8,
+                RedirectStandardError = true, StandardErrorEncoding = System.Text.Encoding.UTF8,
                 UseShellExecute = false,
                 CreateNoWindow = true,
             };
@@ -437,8 +437,8 @@ public class OnCdIntegrationTests : IDisposable
                 FileName = "direnv",
                 Arguments = "allow",
                 WorkingDirectory = dir,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
+                RedirectStandardOutput = true, StandardOutputEncoding = System.Text.Encoding.UTF8,
+                RedirectStandardError = true, StandardErrorEncoding = System.Text.Encoding.UTF8,
                 UseShellExecute = false,
                 CreateNoWindow = true,
             };
@@ -463,8 +463,8 @@ public class OnCdIntegrationTests : IDisposable
                 FileName = "direnv",
                 Arguments = "export pwsh",
                 WorkingDirectory = dir,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
+                RedirectStandardOutput = true, StandardOutputEncoding = System.Text.Encoding.UTF8,
+                RedirectStandardError = true, StandardErrorEncoding = System.Text.Encoding.UTF8,
                 UseShellExecute = false,
                 CreateNoWindow = true,
             };

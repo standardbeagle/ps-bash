@@ -210,8 +210,7 @@ public class PromptRenderingIntegrationTests
     private Task<InteractiveShellHarness> StartAsync()
         => InteractiveShellHarness.StartAsync(
             PsBashPath!,
-            noProfile: true,
-            startTimeout: TimeSpan.FromSeconds(15));
+            noProfile: true);
 
     private static string Normalize(string raw)
         => raw.Replace("\r\n", "\n").Trim();

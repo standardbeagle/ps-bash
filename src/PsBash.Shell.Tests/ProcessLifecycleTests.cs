@@ -31,8 +31,8 @@ public class ProcessLifecycleTests
         {
             FileName = PsBashExe,
             RedirectStandardInput = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
+            RedirectStandardOutput = true, StandardOutputEncoding = System.Text.Encoding.UTF8,
+            RedirectStandardError = true, StandardErrorEncoding = System.Text.Encoding.UTF8,
             UseShellExecute = false,
             CreateNoWindow = true,
         };
@@ -73,8 +73,8 @@ public class ProcessLifecycleTests
         {
             FileName = PsBashExe,
             Arguments = "-c \"sleep 30\"",
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
+            RedirectStandardOutput = true, StandardOutputEncoding = System.Text.Encoding.UTF8,
+            RedirectStandardError = true, StandardErrorEncoding = System.Text.Encoding.UTF8,
             UseShellExecute = false,
             CreateNoWindow = true,
         };
@@ -118,8 +118,8 @@ public class ProcessLifecycleTests
         {
             FileName = PsBashExe,
             Arguments = "-c \"exit 0\"",
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
+            RedirectStandardOutput = true, StandardOutputEncoding = System.Text.Encoding.UTF8,
+            RedirectStandardError = true, StandardErrorEncoding = System.Text.Encoding.UTF8,
             UseShellExecute = false,
             CreateNoWindow = true,
         };
@@ -195,8 +195,8 @@ public class ProcessLifecycleTests
         {
             FileName = "cmd.exe",
             Arguments = $"/c \"\"{PsBashExe}\" -c \"Start-Sleep 30\"\"",
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
+            RedirectStandardOutput = true, StandardOutputEncoding = System.Text.Encoding.UTF8,
+            RedirectStandardError = true, StandardErrorEncoding = System.Text.Encoding.UTF8,
             UseShellExecute = false,
             CreateNoWindow = true,
         };
@@ -301,8 +301,8 @@ public class ProcessLifecycleTests
         var psi = new ProcessStartInfo
         {
             FileName = PsBashExe,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
+            RedirectStandardOutput = true, StandardOutputEncoding = System.Text.Encoding.UTF8,
+            RedirectStandardError = true, StandardErrorEncoding = System.Text.Encoding.UTF8,
             UseShellExecute = false,
             CreateNoWindow = true,
         };
@@ -388,8 +388,8 @@ public class ProcessLifecycleTests
                 {
                     FileName = PsBashExe,
                     Arguments = "-c \"echo ok\"",
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
+                    RedirectStandardOutput = true, StandardOutputEncoding = System.Text.Encoding.UTF8,
+                    RedirectStandardError = true, StandardErrorEncoding = System.Text.Encoding.UTF8,
                     UseShellExecute = false,
                     CreateNoWindow = true,
                 };

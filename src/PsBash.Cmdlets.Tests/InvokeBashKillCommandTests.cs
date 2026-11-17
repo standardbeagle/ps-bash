@@ -220,8 +220,8 @@ public class InvokeBashKillCommandTests : IClassFixture<SharedPwshFixture>
                     FileName = exe,
                     UseShellExecute = false,
                     CreateNoWindow = true,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
+                    RedirectStandardOutput = true, StandardOutputEncoding = System.Text.Encoding.UTF8,
+                    RedirectStandardError = true, StandardErrorEncoding = System.Text.Encoding.UTF8,
                 };
                 psi.ArgumentList.Add("-NoProfile");
                 psi.ArgumentList.Add("-NonInteractive");

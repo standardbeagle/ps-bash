@@ -29,8 +29,8 @@ public class ZJumpEndToEndTests
                 workingDirectory: root,
                 env: new Dictionary<string, string?> { ["PSBASH_HOME"] = home, ["PSBASH_INTERACTIVE_REPL"] = "1" });
             psi.RedirectStandardInput = true;
-            psi.RedirectStandardOutput = true;
-            psi.RedirectStandardError = true;
+            psi.RedirectStandardOutput = true; psi.StandardOutputEncoding = System.Text.Encoding.UTF8;
+            psi.RedirectStandardError = true; psi.StandardErrorEncoding = System.Text.Encoding.UTF8;
             psi.UseShellExecute = false;
 
             var process = Process.Start(psi)

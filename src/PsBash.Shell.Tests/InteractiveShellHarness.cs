@@ -55,6 +55,12 @@ internal sealed class InteractiveShellHarness : IAsyncDisposable
             ? startTimeoutSec
             : 30);
 
+    // A caller may RAISE the cold-start bound, never shorten it: PromptRenderingIntegrationTests passed 15 s, under the
+    // 30 s default and past the PSBASH_TEST_START_TIMEOUT_SEC knob, and a loaded fleet host (s22a) timed out the start
+    // of a correct shell. One bound for the whole suite (memory: flake family = one harness bound).
+    internal static TimeSpan StartBound(TimeSpan? requested)
+        => requested is { } t && t > DefaultStartTimeout ? t : DefaultStartTimeout;
+
     private readonly Process _process;
     private readonly StringBuilder _sinceLastPrompt = new();
     private readonly StringBuilder _stderr = new();
@@ -180,8 +186,8 @@ internal sealed class InteractiveShellHarness : IAsyncDisposable
         {
             FileName = psBashPath,
             RedirectStandardInput = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
+            RedirectStandardOutput = true, StandardOutputEncoding = System.Text.Encoding.UTF8,
+            RedirectStandardError = true, StandardErrorEncoding = System.Text.Encoding.UTF8,
             UseShellExecute = false,
             CreateNoWindow = true,
         };
@@ -252,14 +258,14 @@ internal sealed class InteractiveShellHarness : IAsyncDisposable
         // Wait for the initial prompt so callers know the shell is ready.
         try
         {
-            await harness.WaitForPromptAsync(startTimeout ?? DefaultStartTimeout);
+            await harness.WaitForPromptAsync(StartBound(startTimeout));
 
             // Startup type-ahead: the first prompt now appears BEFORE the runspace is executable
             // (the slow init runs in the background while the prompt accepts type-ahead). Warm it with
             // a no-op `true` and wait within the generous start timeout, so the runspace-init latency
             // is absorbed here — not by the tight per-command WaitForPromptAsync timeouts the tests use.
             await harness.SendLineAsync("true");
-            await harness.WaitForPromptAsync(startTimeout ?? DefaultStartTimeout);
+            await harness.WaitForPromptAsync(StartBound(startTimeout));
         }
         catch
         {
