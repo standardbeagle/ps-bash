@@ -31,7 +31,7 @@ public class ForeignAliasTests
     {
         var aliases = InitialSessionState.CreateDefault2().Commands.OfType<SessionStateAliasEntry>()
             .Select(a => a.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        Assert.Contains("write", aliases);
+        Assert.Contains("gci", aliases);   // on every platform; write, ls, sort are Windows-only aliases
         string root = RepoRoot();
         var scripts = new[] { Path.Combine(root, "src", "PsBash.Module"), Path.Combine(root, "src", "PsBash.Host", "Resources") }
             .SelectMany(d => Directory.EnumerateFiles(d, "*.ps*1", SearchOption.AllDirectories))

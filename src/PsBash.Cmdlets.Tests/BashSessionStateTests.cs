@@ -15,7 +15,8 @@ public class BashSessionStateTests
     public void RemoveForeignAliases_DropsPowerShellsAndKeepsTheRuntimesOwn()
     {
         var iss = InitialSessionState.CreateDefault();
-        Assert.Contains(iss.Commands.OfType<SessionStateAliasEntry>(), a => a.Name == "write");
+        // gci: an alias on every platform (pwsh off Windows has no write, ls, cat, sort, ...).
+        Assert.Contains(iss.Commands.OfType<SessionStateAliasEntry>(), a => a.Name == "gci");
         iss.Commands.Add(new SessionStateAliasEntry("echo", "Invoke-BashEcho"));
         BashSessionState.RemoveForeignAliases(iss);
         var left = iss.Commands.OfType<SessionStateAliasEntry>().Select(a => a.Name).ToList();
