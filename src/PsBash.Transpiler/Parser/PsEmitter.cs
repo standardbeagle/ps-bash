@@ -2544,16 +2544,12 @@ public static partial class PsEmitter
         // One subshell scope (PsBuild.ShellStateScope): a child PS scope plus save/restore of the
         // shell state a scope does not isolate, so nothing the body changes — `set -e`, variables,
         // `shopt`, traps, positionals — leaks into the parent. It is always a script block, which also
-        // gives `exit` / an errexit failure their scoped `return` (ErrexitExitStatement). The `finally`
-        // then restores BOTH halves of the working directory (PowerShell location +
-        // [System.Environment]::CurrentDirectory) — see PsBuild.PopLocationRestoringProcessCwd for why
-        // a bare `Pop-Location` silently made `(cd sub); cat data.txt | …` stream the wrong file. It
-        // runs on the scoped-exit path (`$LASTEXITCODE = N; return`) and on any exception too.
+        // gives `exit` / an errexit failure their scoped `return` (ErrexitExitStatement). The working
+        // directory is part of that state (BashShellState.RestoreWorkingDirectory), as it is for every subshell form.
         // A subshell starts with no EXIT trap (bash resets traps) and fires the one it sets when it ends:
         // `( trap 'echo bye' EXIT; echo body )` prints body, then bye. Only a body that calls `trap` pays for it.
         body = WithSubshellExitTrap(body);
-        var sb = new StringBuilder(PsBuild.ShellStateScope(
-            "Push-Location; " + body, PsBuild.PopLocationRestoringProcessCwd));
+        var sb = new StringBuilder(PsBuild.ShellStateScope(body));
 
         // Partition out the input redirect: `(cmd) < file` feeds the file to the
         // subshell's stdin and wraps the WHOLE result (`Get-Content file | & { … }`),

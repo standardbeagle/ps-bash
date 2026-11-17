@@ -426,32 +426,42 @@ public static class ModuleExtractor
         }
     }
 
+    private static string? _embeddedHash;
+
     /// <summary>
     /// Computes a SHA256 hash over all embedded module resources, including the
     /// TFM-matching Cmdlets DLL. Including the DLL means a rebuilt cmdlets
     /// assembly invalidates the extracted-module cache.
+    /// Once per process: a host calls <see cref="ExtractEmbedded"/> for every runspace it builds (one per command),
+    /// and the resources cannot change while the assembly is loaded. Re-hashing them cost ~16 ms of CPU and a
+    /// multi-megabyte buffer per command.
     /// </summary>
     private static string ComputeEmbeddedHash(System.Reflection.Assembly asm)
+        => asm == typeof(ModuleExtractor).Assembly
+            ? _embeddedHash ??= HashEmbeddedResources(asm)
+            : HashEmbeddedResources(asm);
+
+    private static string HashEmbeddedResources(System.Reflection.Assembly asm)
     {
-        using var sha = SHA256.Create();
-        using var combined = new MemoryStream();
-        foreach (var file in ModuleFiles)
+        // Streamed in order, never copied into one buffer first: the cmdlets DLL and its dependencies are megabytes.
+        using var sha = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        var buffer = new byte[81920];
+        void Append(string resource)
         {
-            using var stream = asm.GetManifestResourceStream($"PsBash.Module/{file}")!;
-            stream.CopyTo(combined);
+            using var stream = asm.GetManifestResourceStream(resource)!;
+            int n;
+            while ((n = stream.Read(buffer, 0, buffer.Length)) > 0) sha.AppendData(buffer, 0, n);
         }
+
+        foreach (var file in ModuleFiles)
+            Append($"PsBash.Module/{file}");
 
         // Hash every embedded cmdlet-folder resource (the DLL + any deps) so a
         // rebuilt cmdlets assembly OR a changed dependency invalidates the cache.
         foreach (var (resName, _) in EnumerateCmdletResources(asm))
-        {
-            using var depStream = asm.GetManifestResourceStream(resName)!;
-            depStream.CopyTo(combined);
-        }
+            Append(resName);
 
-        combined.Position = 0;
-        var bytes = sha.ComputeHash(combined);
-        return Convert.ToHexString(bytes);
+        return Convert.ToHexString(sha.GetHashAndReset());
     }
 
     /// <summary>

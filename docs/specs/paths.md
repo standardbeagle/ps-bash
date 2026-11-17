@@ -44,7 +44,7 @@ names the only exceptions: tar member names, which are archive data, not filesys
 
 | Value | Set at | Notes |
 |---|---|---|
-| `$PWD` | emitter `EmitCd`; `PsBuild.PopLocationRestoringProcessCwd` (subshell restore); `InvokeBashPushdCommand.SyncProcessWorkingDirectory` (pushd/popd, module-mode cd); launcher `Program.BuildInvocationCwdPreamble`; host startup (`Host/Program.cs`, interactive and stateful sessions); `Spec.Tests/InHostExecutor` | bash `$PWD` / `${PWD}` read `$env:PWD` (`PsBuild.TryMapSpecialVar`), not PowerShell's automatic `$PWD` (a native `PathInfo`). Native children inherit the same `PWD`. |
+| `$PWD` | emitter `EmitCd`; `BashShellState.RestoreWorkingDirectory` (every subshell form: `( )`, `$( )`, pipe stages); `InvokeBashPushdCommand.SyncProcessWorkingDirectory` (pushd/popd, module-mode cd); launcher `Program.BuildInvocationCwdPreamble`; host startup (`Host/Program.cs`, interactive and stateful sessions); `Spec.Tests/InHostExecutor` | bash `$PWD` / `${PWD}` read `$env:PWD` (`PsBuild.TryMapSpecialVar`), not PowerShell's automatic `$PWD` (a native `PathInfo`). Native children inherit the same `PWD`. |
 | `$OLDPWD` | `EmitCd`, `SyncProcessWorkingDirectory` | `cd -` reads it back through the inbound mapper. |
 | `$HOME`, `~`, `~/x` | `SdkRunspaceSetup.ps1` (runspace creation), `SdkWorker.SyncHomeToEnvironment` (per request) | The PowerShell `$HOME` variable (ReadOnly, AllScope) holds the shell form; the FileSystem provider's Home stays native. A script's own `HOME=...` is kept as written. |
 | `~+`, `~-` | emitter `TildeSub`, `BashParser.Simple` tilde-in-assignment | read `$env:PWD` / `$env:OLDPWD`. |

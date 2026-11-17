@@ -34,6 +34,23 @@ public class SubshellScopeDifferentialTests
         => Eq("x=outer; ( x=inner; export X2=1 ); echo \"$x [${X2:-unset}]\"; ( cd / ); [ \"$PWD\" != / ] && echo cd-local; "
             + "( shopt -s nullglob ); for f in /nonexist-zz/*; do echo \"glob $f\"; done; ( trap 'echo T' USR1 ); trap -p USR1; echo trap-local");
 
+    // Every subshell form keeps its cd and pushd to itself: `$( )` and pipe stages leaked them while only `( )` wrapped
+    // its body in Push-Location/Pop-Location. The fused lane (`cat data.txt | grep`) reads the PROCESS cwd, so it
+    // shows a half-restored directory; `dirs` shows the pushd stack.
+    [SkippableFact]
+    public Task Subshell_EveryForm_KeepsItsCdAndPushdToItself()
+        => Eq("d=$(mktemp -d); cd \"$d\" || exit; mkdir -p sub/in; echo outer > data.txt; echo inner > sub/data.txt; "
+            + "here() { printf '%s PWD=%s\\n' \"$(pwd)\" \"$PWD\" | sed \"s|$d|D|g\"; }; "
+            + "x=$(cd sub; here); echo \"cmdsub [$x]\"; here; "
+            + "( cd sub; ( cd in; here ); here ); here; "
+            + "f() { cd sub; }; f | cat; here; echo a | { cd sub; cat; }; here; "
+            + "printf '1\\n' | while read -r l; do cd sub; done; here; "
+            + "(cd sub); cat data.txt | grep -c . ; cat data.txt; "
+            + "( cd sub; exit 3 ); echo \"rc=$?\"; here; "
+            + "pushd sub >/dev/null; ( pushd in >/dev/null; dirs -l | sed \"s|$d|D|g\" ); dirs -l | sed \"s|$d|D|g\"; ( popd >/dev/null; here ); here; popd >/dev/null; "
+            + "( cd sub; rmdir in; cd in 2>/dev/null; here ); here; "
+            + "cd / && rm -rf \"$d\"");
+
     [SkippableFact]
     public Task CommandSub_IsASubshell_ForStateAndExit()
         => Eq("w=$(q=zz; echo $q); echo \"[$w] [${q:-unset}]\"; v=$(exit 4); echo \"exit rc=$?\"; v=$( set -e; false; echo after ); echo \"[$v] rc=$?\"");

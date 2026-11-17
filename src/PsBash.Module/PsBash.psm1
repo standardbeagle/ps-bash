@@ -40,7 +40,11 @@
 # Do not use Get-Command as the import guard: it autoloads installed modules from
 # PSModulePath, which lets an older user-installed PsBash.Cmdlets shadow this
 # source tree during local Pester runs.
-$script:__psbashCmdletsDll = @(
+#
+# Module mode only. The host runs this psm1 as a script string, so $PSScriptRoot is empty: each Join-Path
+# below raised "Cannot bind argument to parameter 'Path'" (7 error records per runspace build, ignored). The
+# host pre-registers the cmdlets, and the check after this block still finds them.
+$script:__psbashCmdletsDll = if ($PSScriptRoot) { @(
     # PSModulePath layout: PsBash and PsBash.Cmdlets are sibling modules.
     (Join-Path $PSScriptRoot '..' 'PsBash.Cmdlets' 'PsBash.Cmdlets.Runtime.dll')
     # PSGallery / dev-staged layout: companion DLL bundled inside the PsBash module dir.
@@ -53,7 +57,7 @@ $script:__psbashCmdletsDll = @(
     (Join-Path $PSScriptRoot '..' 'PsBash.Cmdlets' 'bin' 'Release' 'net8.0' 'PsBash.Cmdlets.dll')
     (Join-Path $PSScriptRoot '..' 'PsBash.Cmdlets' 'bin' 'Debug' 'net10.0' 'PsBash.Cmdlets.dll')
     (Join-Path $PSScriptRoot '..' 'PsBash.Cmdlets' 'bin' 'Release' 'net10.0' 'PsBash.Cmdlets.dll')
-) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1 }
 if ($script:__psbashCmdletsDll) {
     # -Global so the binary cmdlets are reachable via Get-Command after
     # Import-Module PsBash from any scope (Pester's psd1-import path is
@@ -73,7 +77,7 @@ if ($script:__psbashCmdletsDll) {
 # but `Invoke-BashLs` was "not recognized"). The host pre-registers the cmdlets via ISS, so
 # this only fires for a genuinely incomplete module-mode install.
 if ((-not $script:__psbashLoadedCmdletsAssembly) -and
-    (-not (Get-Command Invoke-BashBasename -CommandType Cmdlet -ErrorAction SilentlyContinue))) {
+    (-not (Get-Command Invoke-BashBasename -CommandType Cmdlet -ErrorAction Ignore))) {
     Write-Warning ("PsBash: companion binary module PsBash.Cmdlets.dll not found beside the module " +
         "('$PSScriptRoot'). Migrated commands (ls, cat, grep, …) will not work. The PsBash package " +
         "should bundle PsBash.Cmdlets.dll; reinstall, or run: Install-Module PsBash.Cmdlets.")
@@ -82,11 +86,11 @@ if ((-not $script:__psbashLoadedCmdletsAssembly) -and
 # Global state initialized here so bash functions can access these variables
 # before any bash function runs. Positional params are cleared by `set --` and
 # saved/restored by every emitted bash function that references $1..$9 / $@.
-if (-not (Get-Variable -Name BashPositional -Scope global -ErrorAction SilentlyContinue)) {
+if (-not (Test-Path -LiteralPath Variable:global:BashPositional)) {
     $global:BashPositional = $null
 }
 # $0: the `-c` NAME / script path the launcher was given; unset -> the emitted $0 defaults to 'bash'.
-if (-not (Get-Variable -Name BashPositional0 -Scope global -ErrorAction SilentlyContinue)) {
+if (-not (Test-Path -LiteralPath Variable:global:BashPositional0)) {
     $global:BashPositional0 = $null
 }
 # FUNCNAME: the shell functions on the call stack, innermost first (empty at top level). A shell function is a
@@ -424,7 +428,7 @@ else { & $__bc @__bp }
 if ($null -eq $env:OPTIND) { $env:OPTIND = '1' }
 
 # BASH_SOURCE: the script file (and, while `source` runs, the sourced files above it); empty for `-c`.
-if (-not (Get-Variable -Name BASH_SOURCE -Scope global -ErrorAction SilentlyContinue)) {
+if (-not (Test-Path -LiteralPath Variable:global:BASH_SOURCE)) {
     $global:BASH_SOURCE = @()
 }
 
@@ -918,7 +922,8 @@ function Add-BashArray {
         return $Current
     }
     if ($null -eq $Current) { return ,@($Items) }
-    return ,@(@($Current) + @($Items))
+    # Block copy, not PowerShell's per-element array `+` (BashIndexedArray.Concat).
+    return ,[PsBash.Cmdlets.BashIndexedArray]::Concat($Current, $Items)
 }
 
 function Set-BashElement {
@@ -3698,9 +3703,14 @@ $script:conflictingAliases = @('echo','ls','cat','cp','mv','rm','mkdir','pwd','s
 # `a=5; echo $((a))` return 0). Wrapping the loop in `& { … }` scopes the loop
 # variable to the block so it can never escape. The FindabilityGuardTests guard
 # forbids column-0 foreach/for to keep this invariant. Do NOT unwrap.
+# Load-time probes use Test-Path, never a Get-* that fails: even a suppressed failure builds an ErrorRecord on every
+# runspace the host makes and leaves $? false (RunspaceTemplateEquivalenceTests).
+# An alias that already names a bash runtime command is ours, not a conflict: the host's session state carries the
+# Set-Alias lines below as entries (RunspaceTemplate), so they exist before this loop runs.
 & {
     foreach ($alias in $script:conflictingAliases) {
-        if (Test-Path "Alias:\$alias") {
+        $existing = if (Test-Path -LiteralPath "Alias:\$alias") { Get-Item -LiteralPath "Alias:\$alias" }
+        if ($existing -and $existing.Definition -notlike 'Invoke-Bash*') {
             Remove-Item "Alias:\$alias" -Force -ErrorAction SilentlyContinue
         }
     }
@@ -3981,7 +3991,7 @@ function New-BrowseAdapter {
 }
 
 function Initialize-BrowseAdapters {
-    $existing = Get-Variable -Name BrowseAdapters -Scope Script -ErrorAction SilentlyContinue
+    $existing = Get-Variable -Name BrowseAdapters -Scope Script -ErrorAction Ignore
     if ($existing -and $existing.Value) { return }
 
     $inspect = New-BrowseAction -Name 'inspect' -Description 'Show object properties' -Script {
@@ -4460,7 +4470,7 @@ function Enable-BashHookPrompt {
     }
 
     # Capture original prompt function (may be $null if none is defined).
-    $existing = Get-Item -Path Function:\prompt -ErrorAction SilentlyContinue
+    $existing = Get-Item -Path Function:\prompt -ErrorAction Ignore
     $script:__BashOriginalPrompt = if ($null -ne $existing) { $existing.ScriptBlock } else { $null }
 
     # Install the wrapper as the global 'prompt' function.

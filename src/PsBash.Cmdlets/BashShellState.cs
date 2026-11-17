@@ -17,9 +17,15 @@ namespace PsBash.Cmdlets;
 /// <item>the per-runspace <c>shopt</c> table;</item>
 /// <item><c>Set-PSDebug</c> tracing (<c>set -x</c>) — session-wide and not queryable, so it is tracked by
 /// <c>$global:__BashXtrace</c> and <see cref="Restore"/> returns the level the caller must re-apply.</item>
+/// <item>the working directory, both halves (the PowerShell location and the process's
+/// <c>Environment.CurrentDirectory</c>, which raw .NET path APIs and the fused lane read), and the
+/// <c>pushd</c> stack (PowerShell's default location stack).</item>
 /// </list>
-/// NOT restored, on purpose: <c>$?</c>/<c>$LASTEXITCODE</c> (the subshell's status IS the parent's <c>$?</c>)
-/// and the working directory (the emitter's <c>Push-Location</c>/<c>Pop-Location</c> pair owns it).
+/// The working directory lives here, not in the emitter, so that every subshell form gets it:
+/// <c>( … )</c>, <c>$( … )</c>, and each pipeline stage. When only <c>( … )</c> wrapped its body in
+/// <c>Push-Location</c>/<c>Pop-Location</c>, <c>x=$(cd /)</c> and <c>f | cat</c> (with <c>f</c> calling
+/// <c>cd</c>) moved the parent shell.
+/// NOT restored, on purpose: <c>$?</c>/<c>$LASTEXITCODE</c> (the subshell's status IS the parent's <c>$?</c>).
 /// </summary>
 public static class BashShellState
 {
@@ -117,9 +123,10 @@ public static class BashShellState
     {
         internal Snapshot(Dictionary<string, string> env, (bool Exists, object? Value)[] globals,
             Dictionary<string, bool> shopt, bool xtrace, HashSet<string> readonlyNames,
-            Dictionary<string, ScriptBlock?> aliasFunctions, VarFrameStack.Saved varFrames, PsBash.Core.ShellExports.Saved exports)
+            Dictionary<string, ScriptBlock?> aliasFunctions, VarFrameStack.Saved varFrames, PsBash.Core.ShellExports.Saved exports,
+            WorkingDirectory cwd)
         {
-            Exports = exports;
+            Exports = exports; Cwd = cwd;
             Env = env; Globals = globals; Shopt = shopt; Xtrace = xtrace; Readonly = readonlyNames; AliasFunctions = aliasFunctions;
             VarFrames = varFrames;
         }
@@ -140,6 +147,77 @@ public static class BashShellState
         internal (bool Exists, object? Value)[] Globals { get; }
         internal Dictionary<string, bool> Shopt { get; }
         internal bool Xtrace { get; }
+        internal WorkingDirectory Cwd { get; }
+    }
+
+    /// <summary>The working directory a subshell must put back (see <see cref="SaveWorkingDirectory"/>).</summary>
+    internal sealed record WorkingDirectory(string Location, string ProviderPath, string ProcessCwd, string[] Stack);
+
+    /// <summary>
+    /// Reads only: the location, the process cwd, and the <c>pushd</c> stack paths (top first; empty when
+    /// nothing is pushed). PowerShell's location cmdlets are expensive on Linux. Each <c>Set-Location</c> /
+    /// <c>Push-Location</c> / <c>Pop-Location</c> takes time proportional to the entries in the location's
+    /// parent directory: ~47 ms per call under a <c>/tmp</c> with 39k entries. So a subshell must not call
+    /// them unless its body actually moved. The old unconditional pair made every <c>( : )</c> cost 114 ms
+    /// in a <c>mktemp -d</c> directory.
+    /// </summary>
+    private static WorkingDirectory SaveWorkingDirectory(SessionState session)
+    {
+        var here = session.Path.CurrentLocation;
+        var stack = session.Path.LocationStack(null);
+        var paths = stack.Count == 0 ? [] : new string[stack.Count];
+        int i = 0;
+        foreach (var entry in stack) paths[i++] = entry.Path;
+        return new WorkingDirectory(here.Path, here.ProviderPath, Environment.CurrentDirectory, paths);
+    }
+
+    /// <summary>
+    /// Puts back what <see cref="SaveWorkingDirectory"/> read, touching PowerShell's location only for
+    /// what the body changed. It runs in a <c>finally</c>, so it never throws: when a saved directory is
+    /// gone (the body removed it), the restore stops there, and the parent stays where the body left it.
+    /// </summary>
+    private static void RestoreWorkingDirectory(SessionState session, WorkingDirectory saved)
+    {
+        var path = session.Path;
+        bool moved = false;
+        try
+        {
+            var stackNow = path.LocationStack(null);
+            if (!SameStack(stackNow, saved.Stack))
+            {
+                // `( pushd sub )` / `( popd )`: rebuild the stack the parent had. Rare, so the slow cmdlets are fine.
+                for (int n = stackNow.Count; n > 0; n--) path.PopLocation(null);
+                for (int k = saved.Stack.Length - 1; k >= 0; k--)
+                {
+                    path.SetLocation(WildcardPattern.Escape(saved.Stack[k]));
+                    path.PushCurrentLocation(null);
+                }
+                moved = true;
+            }
+            if (moved || !string.Equals(path.CurrentLocation.Path, saved.Location, StringComparison.Ordinal))
+            {
+                path.SetLocation(WildcardPattern.Escape(saved.Location));
+                moved = true;
+            }
+        }
+        catch (Exception) { /* a removed directory: see the summary */ }
+
+        if (!moved && string.Equals(Environment.CurrentDirectory, saved.ProcessCwd, StringComparison.Ordinal)) return;
+        // A non-filesystem location (a registry drive) has no process working directory to give back.
+        if (!Directory.Exists(saved.ProviderPath)) return;
+        try { Environment.CurrentDirectory = saved.ProviderPath; } catch (Exception) { return; }
+        session.PSVariable.Set("global:__PsBashCwd", saved.ProviderPath);
+        // $PWD is the script-visible shell form (C:/x, docs/specs/paths.md), as every cd writes it.
+        BashVariableStore.Set("PWD", BashRuntime.ToShellPath(saved.ProviderPath));
+    }
+
+    private static bool SameStack(PathInfoStack now, string[] saved)
+    {
+        if (now.Count != saved.Length) return false;
+        int i = 0;
+        foreach (var entry in now)
+            if (!string.Equals(entry.Path, saved[i++], StringComparison.Ordinal)) return false;
+        return true;
     }
 
     /// <summary>Capture the state a subshell body may change. Call at the top of the subshell.</summary>
@@ -165,7 +243,7 @@ public static class BashShellState
         lock (ReadonlyNames) readonlyNow = new HashSet<string>(ReadonlyNames, StringComparer.Ordinal);
         return new Snapshot(env, globals, InvokeBashShoptCommand.SnapshotOptions(),
             IsTrue(session.PSVariable.GetValue("global:__BashXtrace")), readonlyNow, SaveAliasFunctions(session),
-            VarFrameStack.Current.Save(), PsBash.Core.ShellExports.Save());
+            VarFrameStack.Current.Save(), PsBash.Core.ShellExports.Save(), SaveWorkingDirectory(session));
     }
 
     /// <summary>
@@ -206,9 +284,11 @@ public static class BashShellState
     /// <summary>Set to <c>$true</c> in a background job's pooled runspace by Invoke-BashBackground.</summary>
     public const string BackgroundRunspaceMark = "__psbashBgRunspace";
 
-    // The $global: shell state lives in the runspace, so it is always the body's own to put back.
+    // The $global: shell state lives in the runspace, so it is always the body's own to put back. So is the
+    // location; the process cwd is put back with it, after the variables (it rewrites $PWD).
     private static object? RestoreRunspaceGlobals(SessionState session, Snapshot saved)
     {
+        RestoreWorkingDirectory(session, saved.Cwd);
         RestoreAliasFunctions(session, saved.AliasFunctions);
         VarFrameStack.Current.Restore(saved.VarFrames);
         bool tracingNow = IsTrue(session.PSVariable.GetValue("global:__BashXtrace"));

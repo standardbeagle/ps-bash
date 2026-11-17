@@ -7,9 +7,8 @@ namespace PsBash.Core.Tests.Parser;
 
 public class PsEmitterTests
 {
-    /// <summary>The emitted `( BODY )`: the subshell scope (state save/restore) around the cwd push/pop.</summary>
-    private static string Sub(string body) =>
-        PsBuild.ShellStateScope("Push-Location; " + body, PsBuild.PopLocationRestoringProcessCwd);
+    /// <summary>The emitted `( BODY )`: the subshell scope (state save/restore, the working directory included).</summary>
+    private static string Sub(string body) => PsBuild.ShellStateScope(body);
 
     [Theory]
     [InlineData("echo foo\\\nbar", "foobar")]
@@ -461,26 +460,22 @@ public class PsEmitterTests
     }
 
     [Fact]
-    public void Transpile_SubshellExit_RestoresProcessWorkingDirectoryNotJustPsLocation()
+    public void Transpile_SubshellCd_RestoresTheDirectoryInTheSharedScopeNotAnEmittedPushPop()
     {
-        // REGRESSION. A bash working directory is BOTH the PowerShell location and
-        // [System.Environment]::CurrentDirectory; `cd` writes both. The subshell wrapper
-        // popped only the PowerShell half, so after `(cd sub)` the PROCESS cwd was still
-        // inside `sub` — and the fused streaming lane, which resolves relative operands
-        // against CurrentDirectory, then read `sub/data.txt` at exit 0 while the unfused
-        // pipeline read the outer one. Runtime proof:
-        // LineStreamCatFileParityTests.Streamed_CatRelative_AfterBashSubshellCd_*.
-        var result = PsEmitter.Transpile("(cd sub)")!;
-
-        Assert.Contains("[System.Environment]::CurrentDirectory = $__psbash_subshell_pop.ProviderPath",
-            result);
-        // The restore must be in the FINALLY, so it also runs when the body throws or
-        // takes the scoped-`exit` return. It is the last statement of that finally.
-        Assert.Contains("} finally { ", result);
-        Assert.EndsWith(PsBuild.PopLocationRestoringProcessCwd + " } }", result);
-        Assert.Contains("$global:LASTEXITCODE = 7; return",
-            PsEmitter.Transpile("(cd sub; exit 7)")!);
-        Assert.EndsWith(PsBuild.PopLocationRestoringProcessCwd + " } }", PsEmitter.Transpile("(cd sub; exit 7)")!);
+        // REGRESSION, twice over. (1) A bash working directory is BOTH the PowerShell location and
+        // [System.Environment]::CurrentDirectory; a wrapper that popped only the PowerShell half left the fused lane
+        // reading `sub/data.txt` after `(cd sub)` (LineStreamCatFileParityTests). (2) The restore lived in an emitted
+        // Push-Location/Pop-Location around `( … )` only, so `x=$(cd /)` and `f | cat` moved the parent, and every
+        // `( : )` paid two location cmdlets (114 ms each under a crowded /tmp on Linux). The working directory is now
+        // part of BashShellState's snapshot, which every subshell form shares; the emitter writes no location cmdlet.
+        foreach (var src in new[] { "(cd sub)", "x=$(cd sub)", "f() { cd sub; }; f | cat", "(cd sub; exit 7)" })
+        {
+            var result = PsEmitter.Transpile(src)!;
+            Assert.Contains("[PsBash.Cmdlets.BashShellState]::Save(", result);
+            Assert.DoesNotContain("Push-Location", result);
+            Assert.DoesNotContain("Pop-Location", result);
+        }
+        Assert.Contains("$global:LASTEXITCODE = 7; return", PsEmitter.Transpile("(cd sub; exit 7)")!);
     }
 
     [Fact]
@@ -1033,11 +1028,6 @@ public class PsEmitterTests
         Assert.Contains("$HOME/src", result);
         Assert.DoesNotContain("\\src", result);
     }
-
-    [Fact]
-    public void Transpile_SubshellCdRestore_WritesTheShellFormPwd()
-        => Assert.Contains("$env:PWD = [PsBash.Cmdlets.BashRuntime]::ToShellPath([string]($__psbash_subshell_pop.ProviderPath))",
-            PsEmitter.Transpile("(cd sub)"));
 
     [Fact]
     public void Transpile_TildeMinus_MapsToOldPwd()
@@ -4087,9 +4077,9 @@ public class PsEmitterTests
         // PowerShell at all ("Unexpected token '&&'"), which this assertion used
         // to pin. Same reason `while` / `case` operands are wrapped.
         Assert.StartsWith("$(& { $__psbash_ss = ", result);
-        Assert.Contains("try { Push-Location; $($__psbash_cd_target = '/tmp'", result);
+        Assert.Contains("try { $($__psbash_cd_target = '/tmp'", result);
         Assert.Contains("&& Invoke-BashPwd } catch [PsBash.Cmdlets.BashParamErrorException] { ", result);
-        Assert.EndsWith(PsBuild.PopLocationRestoringProcessCwd
+        Assert.EndsWith("Set-PSDebug -Off } }"
             + " } }); $(if (-not $? -or $global:LASTEXITCODE -ne 0) { Write-Error '' -ErrorAction SilentlyContinue }) && Invoke-BashPwd", result);
     }
 

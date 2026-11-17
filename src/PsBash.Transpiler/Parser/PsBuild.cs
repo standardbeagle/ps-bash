@@ -161,14 +161,14 @@ public static class PsBuild
     /// A bash SUBSHELL scope: <c>&amp; { save; try { BODY } finally { restore } }</c>. The child scope
     /// isolates PS-scoped state (arrays, functions, <c>set -e</c>'s <c>$ErrorActionPreference</c>,
     /// <c>set -u</c>'s StrictMode); <c>PsBash.Cmdlets.BashShellState</c> saves and restores what a scope
-    /// does not — env-var bash variables, the <c>$global:</c> shell flags/positionals/traps, <c>shopt</c> —
-    /// and reports a <c>set -x</c> to undo. Without it <c>( set -e; true ); false; echo ok</c> stopped the
-    /// PARENT at <c>false</c>, and <c>( x=1 ); echo $x</c> printed 1. <paramref name="finallyTail"/> runs
-    /// after the restore (the working-directory pop). <c>$?</c> is deliberately not restored.
+    /// does not — env-var bash variables, the <c>$global:</c> shell flags/positionals/traps, <c>shopt</c>, the
+    /// working directory and <c>pushd</c> stack — and reports a <c>set -x</c> to undo. Without it
+    /// <c>( set -e; true ); false; echo ok</c> stopped the PARENT at <c>false</c>, and <c>( x=1 ); echo $x</c>
+    /// printed 1. <c>$?</c> is deliberately not restored.
     /// The temp is per child scope, so nested subshells never share it.
     /// </summary>
-    public static string ShellStateScope(string body, string? finallyTail = null) =>
-        "& { " + ShellStateGuard(body, finallyTail) + " }";
+    public static string ShellStateScope(string body) =>
+        "& { " + ShellStateGuard(body) + " }";
 
     /// <summary>
     /// Statements that report a parameter error (<c>x: unbound variable</c>, <c>${x:?msg}</c>) on the
@@ -294,12 +294,10 @@ public static class PsBuild
     /// caller that is already inside a script block of its own and must keep that block's <c>$input</c> (a
     /// compound pipeline stage), which a nested <c>&amp; { }</c> would hide.
     /// </summary>
-    public static string ShellStateGuard(string body, string? finallyTail = null) =>
+    public static string ShellStateGuard(string body) =>
         ShellStateSave + "; try { "
         + body
-        + " }" + ParamErrorCatch + SubshellExitCatch + " finally { " + ShellStateRestore
-        + (finallyTail is null ? "" : "; " + finallyTail)
-        + " }";
+        + " }" + ParamErrorCatch + SubshellExitCatch + " finally { " + ShellStateRestore + " }";
 
     /// <summary>The save half of <see cref="ShellStateGuard"/> (into <c>$__psbash_ss</c>).</summary>
     private const string ShellStateSave = "$__psbash_ss = [PsBash.Cmdlets.BashShellState]::Save($ExecutionContext.SessionState)";
@@ -935,46 +933,6 @@ public static class PsBuild
     public static string ErrexitAndOrList(string chain, string exitStatement) =>
         "$global:__BashErrexitTail = 0; " + ErrexitSuppressed(chain) + "; "
         + ErrexitCheck(exitStatement, "$global:__BashErrexitTail");
-
-    // ────────────────────────── Subshell working-directory restore ─────────────────────
-
-    /// <summary>
-    /// The <c>finally</c> body of a subshell wrapper: pop the PowerShell location AND put
-    /// the process working directory back with it.
-    ///
-    /// <para><b>Why a bare <c>Pop-Location</c> is a correctness bug, not a style nit.</b>
-    /// A bash working directory is BOTH halves — the PowerShell location (what
-    /// <c>SessionState.Path</c>-based cmdlets resolve against) and
-    /// <c>[System.Environment]::CurrentDirectory</c> (what every raw .NET path API
-    /// resolves against, including the fused streaming lane's <c>CatFileStage</c>).
-    /// <c>EmitCd</c> writes both, and so do <c>pushd</c>/<c>popd</c>; a bare
-    /// <c>Pop-Location</c> restored only the first, so after <c>(cd sub)</c> the process
-    /// cwd was still pointing INSIDE <c>sub</c>. <c>(cd sub); cat data.txt | …</c> then
-    /// streamed <c>sub/data.txt</c> at exit 0 while the unfused pipeline read the outer
-    /// one — wrong file, no error anywhere.</para>
-    ///
-    /// <para><b>Nesting.</b> Subshells nest and so does this wrapper, but the temp is
-    /// assigned and consumed within one straight-line statement sequence with no nested
-    /// emission in between: an inner subshell's <c>finally</c> has fully run before an
-    /// outer one starts, so the levels cannot interleave on the name. It is namespaced
-    /// <c>$__psbash*</c> regardless, per the emitter-temp convention.</para>
-    ///
-    /// <para><c>-PassThru</c> output is CAPTURED into the temp rather than left on the
-    /// pipeline — the <c>finally</c> sits inside the subshell's own output scope, so an
-    /// uncaptured <c>PathInfo</c> would be emitted as subshell stdout.
-    /// <c>-ErrorAction SilentlyContinue</c> keeps an empty stack (only reachable if
-    /// <c>Push-Location</c> itself failed) from throwing out of a <c>finally</c> under
-    /// <c>set -e</c>, and <c>Directory.Exists</c> guards a non-filesystem provider whose
-    /// <c>ProviderPath</c> is not a process working directory.</para>
-    /// </summary>
-    public static readonly string PopLocationRestoringProcessCwd =
-        "$__psbash_subshell_pop = Pop-Location -PassThru -ErrorAction SilentlyContinue; "
-        + "if ($__psbash_subshell_pop -and "
-        + "[System.IO.Directory]::Exists($__psbash_subshell_pop.ProviderPath)) { "
-        + "[System.Environment]::CurrentDirectory = $__psbash_subshell_pop.ProviderPath; "
-        + "$global:__PsBashCwd = $__psbash_subshell_pop.ProviderPath; "
-        // $PWD is the script-visible shell form (C:/x, docs/specs/paths.md), like every cd writes it.
-        + "$env:PWD = " + RuntimeToShellPath("$__psbash_subshell_pop.ProviderPath") + " }";
 
     // ─────────────────────────── RC-7 unquoted word-split splat ────────────────────────
 

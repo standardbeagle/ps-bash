@@ -1,0 +1,31 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 685
+stdout-length: 199
+stderr-length: 0
+==== SCRIPT ====
+d=$(mktemp -d); cd "$d" || exit; mkdir -p sub/in; echo outer > data.txt; echo inner > sub/data.txt; here() { printf '%s PWD=%s\n' "$(pwd)" "$PWD" | sed "s|$d|D|g"; }; x=$(cd sub; here); echo "cmdsub [$x]"; here; ( cd sub; ( cd in; here ); here ); here; f() { cd sub; }; f | cat; here; echo a | { cd sub; cat; }; here; printf '1\n' | while read -r l; do cd sub; done; here; (cd sub); cat data.txt | grep -c . ; cat data.txt; ( cd sub; exit 3 ); echo "rc=$?"; here; pushd sub >/dev/null; ( pushd in >/dev/null; dirs -l | sed "s|$d|D|g" ); dirs -l | sed "s|$d|D|g"; ( popd >/dev/null; here ); here; popd >/dev/null; ( cd sub; rmdir in; cd in 2>/dev/null; here ); here; cd / && rm -rf "$d"
+==== STDOUT ====
+cmdsub [D/sub PWD=D/sub]
+D PWD=D
+D/sub/in PWD=D/sub/in
+D/sub PWD=D/sub
+D PWD=D
+D PWD=D
+a
+D PWD=D
+D PWD=D
+1
+outer
+rc=3
+D PWD=D
+D/sub/in D/sub D
+D/sub D
+D PWD=D
+D/sub PWD=D/sub
+D/sub PWD=D/sub
+D PWD=D
+
+==== STDERR ====
+

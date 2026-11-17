@@ -76,58 +76,16 @@ internal sealed class SdkRunspace : IAsyncDisposable
         var modulePath = ModuleExtractor.ExtractEmbedded();
         Trace("module-extracted");
 
-        // Match the pattern used by PwshTestFixture / CanaryPwshFixture:
-        // open with a bare CreateDefault2() (no ImportPSModule on ISS), then
-        // load the psm1 by running its content as a script on the first PowerShell
-        // instance.  Using iss.ImportPSModule causes NestedModules / FormatsToProcess
-        // resolution errors that corrupt the runspace output pipeline even when
-        // ExecutionPolicy is Bypass.
-        var iss = InitialSessionState.CreateDefault2();
-        if (OperatingSystem.IsWindows())
-            iss.ExecutionPolicy = ExecutionPolicy.Bypass;
-
-        // On Windows, CreateDefault2() configures many cmdlets for lazy auto-loading
-        // from module manifests. Auto-loading finds the Windows PowerShell v5 manifests
-        // whose NestedModules reference v5 binary DLLs that use PSSnapIn — a type removed
-        // in SMA 7.x — causing TypeLoadException on first use of Write-Output, Get-Location, etc.
-        // Fix: enumerate cmdlets from the in-process SMA 7.x assemblies and pre-register
-        // them in the ISS so they're immediately available without hitting the module loader.
-        RegisterSdkCmdlets(iss);
-        Trace("iss-cmdlets-registered");
-
-        // Pre-register PsBash.Cmdlets via ISS to skip the Import-Module path
-        // entirely. Import-Module of a binary DLL ran 1.8-5.7 s under parallel
-        // load (host startup #9); ISS pre-registration is essentially free
-        // because the assembly is already in the AppDomain (or LoadFrom is
-        // a single file open). The setup script remains responsible for the
-        // CommandNotFoundAction handler, but no longer does Import-Module.
-        var cmdletsDll = ModuleExtractor.GetCmdletsDllPath();
-        bool issPreRegistered = false;
-        if (File.Exists(cmdletsDll))
-        {
-            try
-            {
-                var asm = System.Reflection.Assembly.LoadFrom(cmdletsDll);
-                // Metadata-first scan: NOT asm.GetTypes(), which loads every type (and so the
-                // Strata assemblies its helper types derive from) into every runspace.
-                int registered = 0;
-                foreach (var (type, attr) in CmdletTypeScanner.FindCmdletTypes(asm))
-                {
-                    iss.Commands.Add(new SessionStateCmdletEntry(
-                        $"{attr.VerbName}-{attr.NounName}", type, null));
-                    registered++;
-                }
-                issPreRegistered = registered > 0;
-            }
-            catch
-            {
-                // Fall back to the script-side Import-Module probe in psm1.
-            }
-        }
-        Trace("iss-psbash-cmdlets-registered");
+        // The session state every runspace starts from is built once per process (RunspaceTemplate): the SDK and
+        // PsBash cmdlets plus the psm1's functions and aliases. Only the psm1's residual statements run per runspace.
+        var psm1Path = Path.Combine(Path.GetDirectoryName(modulePath)!, "PsBash.psm1");
+        var template = RunspaceTemplate.For(
+            File.Exists(psm1Path) ? psm1Path : null, ModuleExtractor.GetCmdletsDllPath(), CreateBaseSessionState);
+        bool issPreRegistered = template.CmdletsPreRegistered;
+        Trace("template-ready");
 
         var host = new ExitTrackingHost();
-        var runspace = RunspaceFactory.CreateRunspace(host, iss);
+        var runspace = RunspaceFactory.CreateRunspace(host, template.NewSessionState());
         runspace.Open();
         Trace("runspace-opened");
         // From here on every step (SetLocation, setup script, psm1 load) can throw.
@@ -191,24 +149,26 @@ internal sealed class SdkRunspace : IAsyncDisposable
         GetVerbFallbackGuard.Install(runspace.SessionStateProxy.InvokeCommand);
         Trace("setup-script-invoked");
 
-        var psm1Path = Path.Combine(Path.GetDirectoryName(modulePath)!, "PsBash.psm1");
         if (File.Exists(psm1Path))
         {
             // The psm1 runs as a script here, so it cannot discover its own path;
             // pooled background runspaces need it to import the module.
             runspace.SessionStateProxy.SetVariable("PsBashModulePsm1Path", psm1Path);
-            var psm1Content = ReadStartupModule(psm1Path);
-            Trace("psm1-read");
-            ps.AddScript(psm1Content).Invoke();
+            // Its definitions are already in the session state (RunspaceTemplate); run the rest.
+            ps.AddScript(template.ResidualScript).Invoke();
             ps.Commands.Clear();
             Trace("psm1-invoked");
+        }
 
+        if (File.Exists(psm1Path) && !(template.IsSplit && issPreRegistered))
+        {
             // The psm1's Invoke-BashGrep / Invoke-BashSed are literal-argument PROXIES for DIRECT
             // PowerShell calls (they keep the binder out of a repeated `-e`). Transpiled bash never needs
             // them: the emitter single-quotes every flag, so the whole argv reaches the cmdlet verbatim.
             // They are also a steppable-pipeline hop, which makes the real cmdlet's early stop
             // (`grep -q`, `grep -m N`, `sed q`) unable to reach the caller's upstream. Drop them here so a
             // transpiled `producer | grep -q x` resolves straight to the cmdlet and stops the producer.
+            // (A split template leaves them out of the session state already: RunspaceTemplate.LiteralArgumentProxies.)
             // Run inside `& { }` so the loop variable is local: a global `$n` would shadow the bash variable `n`
             // (the arithmetic evaluator and `$env`-less lookups read PS variables first).
             ps.AddScript(
@@ -229,7 +189,28 @@ internal sealed class SdkRunspace : IAsyncDisposable
         }
     }
 
-    private static string ReadStartupModule(string path)
+    /// <summary>
+    /// The session state before PsBash's own entries: CreateDefault2 with the SDK cmdlets registered. Match the
+    /// pattern used by PwshTestFixture / CanaryPwshFixture: no ImportPSModule on the ISS (it causes NestedModules /
+    /// FormatsToProcess resolution errors that corrupt the runspace output pipeline even under Bypass).
+    /// </summary>
+    internal static InitialSessionState CreateBaseSessionState()
+    {
+        var iss = InitialSessionState.CreateDefault2();
+        if (OperatingSystem.IsWindows())
+            iss.ExecutionPolicy = ExecutionPolicy.Bypass;
+
+        // On Windows, CreateDefault2() configures many cmdlets for lazy auto-loading
+        // from module manifests. Auto-loading finds the Windows PowerShell v5 manifests
+        // whose NestedModules reference v5 binary DLLs that use PSSnapIn — a type removed
+        // in SMA 7.x — causing TypeLoadException on first use of Write-Output, Get-Location, etc.
+        // Fix: enumerate cmdlets from the in-process SMA 7.x assemblies and pre-register
+        // them in the ISS so they're immediately available without hitting the module loader.
+        RegisterSdkCmdlets(iss);
+        return iss;
+    }
+
+    internal static string ReadStartupModule(string path)
     {
         return BoundedTextFile.Read(
             path,
