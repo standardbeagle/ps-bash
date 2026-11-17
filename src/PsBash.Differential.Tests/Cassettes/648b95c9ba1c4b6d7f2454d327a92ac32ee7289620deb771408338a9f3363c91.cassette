@@ -1,0 +1,23 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 163
+stdout-length: 17
+stderr-length: 0
+==== SCRIPT ====
+sf=$(mktemp)
+cat > "$sf" <<'EOF'
+echo child
+trap 'echo usr1' USR1
+sh -c "kill -9 $$"
+echo notreached
+EOF
+{ bash "$sf"; echo "status=$?"; } 2>/dev/null
+rm -f "$sf"
+
+==== STDOUT ====
+child
+status=137
+
+==== STDERR ====
+

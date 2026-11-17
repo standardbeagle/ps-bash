@@ -4998,7 +4998,7 @@ public class PsEmitterTests
     public void Transpile_SourceWithProcessSub_RoutesToStringCapturePath()
     {
         var result = PsEmitter.Transpile("source <(echo 'PSBASH_T10_VAR=hello')");
-        Assert.Equal("Invoke-ProcessSubSource { Invoke-BashEcho 'PSBASH_T10_VAR=hello' }", result);
+        Assert.Equal(PsBuildTestText.WithSignalPoll("Invoke-ProcessSubSource { Invoke-BashEcho 'PSBASH_T10_VAR=hello' }"), result);
     }
 
     [Fact]
@@ -5006,7 +5006,7 @@ public class PsEmitterTests
     {
         // bash's `.` is a synonym for `source` and must classify identically.
         var result = PsEmitter.Transpile(". <(echo 'A=1')");
-        Assert.Equal("Invoke-ProcessSubSource { Invoke-BashEcho 'A=1' }", result);
+        Assert.Equal(PsBuildTestText.WithSignalPoll("Invoke-ProcessSubSource { Invoke-BashEcho 'A=1' }"), result);
     }
 
     [Fact]
@@ -5016,7 +5016,7 @@ public class PsEmitterTests
         // nested command and wrap the whole thing in Invoke-ProcessSubSource.
         var result = PsEmitter.Transpile("source <(cat config.env | grep -v '^#')");
         Assert.Equal(
-            "Invoke-ProcessSubSource { Invoke-BashCat config.env | Invoke-BashGrep '-v' '^#' }",
+            PsBuildTestText.WithSignalPoll("Invoke-ProcessSubSource { Invoke-BashCat config.env | Invoke-BashGrep '-v' '^#' }"),
             result);
     }
 
@@ -5027,7 +5027,7 @@ public class PsEmitterTests
         // the string-capture path — it goes through Invoke-BashSource as a
         // normal file argument. This guards against the classifier overreaching.
         var result = PsEmitter.Transpile("source script.sh");
-        Assert.Equal(". $($__psbash_lm = 1; Invoke-BashSource -AsScriptBlock script.sh)", result);
+        Assert.Equal(PsBuildTestText.WithSignalPoll(". $($__psbash_lm = 1; Invoke-BashSource -AsScriptBlock script.sh)"), result);
     }
 
     // --- Array and associative array tests ---
@@ -6126,7 +6126,7 @@ public class PsEmitterTests
     [Fact]
     public void Transpile_SourceFileNamedLikeTheCmdlet_KeepsTheSwitchOnTheCmdlet()
     {
-        Assert.Equal(". $($__psbash_lm = 1; Invoke-BashSource -AsScriptBlock Invoke-BashSource.sh)",
+        Assert.Equal(PsBuildTestText.WithSignalPoll(". $($__psbash_lm = 1; Invoke-BashSource -AsScriptBlock Invoke-BashSource.sh)"),
             PsEmitter.Transpile("source Invoke-BashSource.sh"));
         var split = PsEmitter.Transpile("source $f Invoke-BashSource.sh");
         Assert.Contains("Invoke-BashSource -AsScriptBlock @__bashsplat0 Invoke-BashSource.sh", split);
@@ -6137,23 +6137,23 @@ public class PsEmitterTests
     public void Transpile_SourceShFile_EmitsInvokeBashSource()
     {
         var result = PsEmitter.Transpile("source ./lib.sh");
-        Assert.Equal(". $($__psbash_lm = 1; Invoke-BashSource -AsScriptBlock ./lib.sh)", result);
+        Assert.Equal(PsBuildTestText.WithSignalPoll(". $($__psbash_lm = 1; Invoke-BashSource -AsScriptBlock ./lib.sh)"), result);
     }
 
     [Fact]
     public void Transpile_DotSourceShFile_EmitsInvokeBashSource()
     {
         var result = PsEmitter.Transpile(". ./lib.sh");
-        Assert.Equal(". $($__psbash_lm = 1; Invoke-BashSource -AsScriptBlock ./lib.sh)", result);
+        Assert.Equal(PsBuildTestText.WithSignalPoll(". $($__psbash_lm = 1; Invoke-BashSource -AsScriptBlock ./lib.sh)"), result);
     }
 
     [Fact]
     public void Transpile_SourceShFileWithArgs_EmitsInvokeBashSourceWithArgs()
     {
         var result = PsEmitter.Transpile("source ./setup.sh arg1 arg2");
-        Assert.Equal(". $($__psbash_lm = 1; Invoke-BashSource -AsScriptBlock ./setup.sh arg1 arg2)", result);
+        Assert.Equal(PsBuildTestText.WithSignalPoll(". $($__psbash_lm = 1; Invoke-BashSource -AsScriptBlock ./setup.sh arg1 arg2)"), result);
         // A dash argument is $1.. for the file — single-quoted, so it never binds a cmdlet parameter.
-        Assert.Equal(". $($__psbash_lm = 1; Invoke-BashSource -AsScriptBlock ./setup.sh '-x' '-AsScriptBlock')", PsEmitter.Transpile("source ./setup.sh -x -AsScriptBlock"));
+        Assert.Equal(PsBuildTestText.WithSignalPoll(". $($__psbash_lm = 1; Invoke-BashSource -AsScriptBlock ./setup.sh '-x' '-AsScriptBlock')"), PsEmitter.Transpile("source ./setup.sh -x -AsScriptBlock"));
     }
 
     // -e file exists test
@@ -6396,7 +6396,7 @@ public class PsEmitterTests
     public void Transpile_TrapCommandExit_EmitsPassthrough()
     {
         var result = PsEmitter.Transpile("trap 'echo cleanup' EXIT");
-        Assert.Equal("Invoke-BashTrap 'echo cleanup' EXIT", result);
+        Assert.Equal(PsBuildTestText.WithSignalPoll("Invoke-BashTrap 'echo cleanup' EXIT"), result);
     }
 
     [Fact]
@@ -6531,7 +6531,7 @@ public class PsEmitterTests
     public void Transpile_TrapEmptyInt_EmitsPassthrough()
     {
         var result = PsEmitter.Transpile("trap '' INT");
-        Assert.Equal("Invoke-BashTrap '' INT", result);
+        Assert.Equal(PsBuildTestText.WithSignalPoll("Invoke-BashTrap '' INT"), result);
     }
 
     [Fact]
@@ -7045,7 +7045,7 @@ public class PsEmitterTests
         // hash("-") = 336d5ebc
         var result = PsEmitter.Transpile("trap - DEBUG");
 
-        Assert.Equal("Unregister-BashChpwdHook -Name '336d5ebc'", result);
+        Assert.Equal(PsBuildTestText.WithSignalPoll("Unregister-BashChpwdHook -Name '336d5ebc'"), result);
     }
 
     [Fact]

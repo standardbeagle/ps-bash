@@ -163,12 +163,15 @@ public static class BashTranspiler
     /// <summary>
     /// The text of a <c>trap ACTION SIGNAL</c> action (eval context): for ERR and DEBUG it is emitted with the
     /// statement checks and DEBUG leads bash applies inside a trap action (<see cref="PsEmitter.TrapActionSignal"/>).
+    /// A real signal's action (USR1, TERM, ...) gets the same ERR checks and DEBUG leads, but its commands report
+    /// their own <c>$LINENO</c> (line 1 of the action text), as bash's do.
     /// </summary>
     public static string TranspileTrapAction(string action, string signal)
         => Guarded(() =>
         {
             // Set here, inside Guarded: the flag is per-thread and Guarded may move to a large-stack worker.
-            PsEmitter.TrapActionSignal = signal is "ERR" or "DEBUG" ? signal : null;
+            PsEmitter.TrapActionSignal = signal is "ERR" or "DEBUG" ? signal
+                : signal is "" or "EXIT" or "RETURN" ? null : PsEmitter.RealSignalTrapAction;
             try { return TranspileCore(action, TranspileContext.Eval); }
             finally { PsEmitter.TrapActionSignal = null; }
         });

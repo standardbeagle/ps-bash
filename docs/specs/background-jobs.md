@@ -506,3 +506,48 @@ must do no work that the job's path to its first write does not also do.
   It holds the AMSI lock from the moment the job is started (`OutputMux.ProducerStarted`, raised by
   `OutputChannel.MarkStarted`) and requires the foreground's `word_b` to arrive while the lock is held. Before the fix
   the foreground stalled for the whole hold and the job printed first.
+
+## 13. A signal sent to a ps-bash shell
+
+`$$` is the pid of the host process that runs the script. A host runs one command at a time (the executor lease),
+so "the shell whose `$$` is P" means "the command host P is running now". A nested `sh -c "kill -USR1 $$"` runs in
+another host, so its `kill` targets the enclosing script's host.
+
+- **Invariant.** A signal for a ps-bash shell is a message to the command that host runs, never an OS signal or a
+  process kill. A kill ended every script of the session, and the host with them. `kill` reaches another ps-bash shell
+  only through `ShellSignals.SendToShell` (Transpiler, `ShellSignals.cs`). The host registers its route
+  (`ShellSignalSender`, Core). The route finds the target's endpoint from the host sidecars in the owner-only runtime
+  directory. It accepts a sidecar only if it was written after the pid's process started, the same rule
+  `IpcTransportFactory.EnclosingHostOwnEndpoint` uses. It then sends `Mode.Signal(N)` (`MODE:Signal`, `SIGNAL:N`) on
+  that endpoint. The target answers at once, without taking the lease (the lease holder is the target), with
+  `ps-bash-host signal=<Outcome>` and exit 0. A pid that is no reachable host, or a host too old to know the request,
+  is `NotAShell`. The kill cmdlet then refuses to `Process.Kill` it if it is a `ps-bash-host` (`IsShellHost`) and
+  prints `signal not delivered`.
+- **Receiving (`ShellSignals.Deliver`).** `SdkWorker.RunCommand` brackets each command with `BeginCommand` /
+  `EndCommand`. A signal that arrives while no command runs is dropped (`NoCommand`). Before the command sets a trap
+  for any real signal (not EXIT/ERR/DEBUG/RETURN; `trap` calls `NoteTrapSet`), no trap can exist, so the default
+  applies at once. CHLD, CONT, URG, WINCH and the stop family are ignored. Every other signal ends the command with
+  128+N: the worker's `SetShouldExit` plus `PowerShell.BeginStop`, the same channel as `kill $$`. After `NoteTrapSet`,
+  signals are queued, and the trap table is read on the script's own thread. As POSIX keeps pending signals and bash
+  runs their traps, each signal is pending once (a repeat coalesces), and the traps run lowest signal number first.
+  `-9` always ends the command. A queued signal never outlives its command.
+- **Running the trap.** In a script that can set a trap, the emitter appends `PsBuild.SignalTrapPoll` after each
+  top-level statement. "Can set a trap" means the source mentions `trap` (statically inlined `eval` text included),
+  or it sources a file (`source f`, `. f`), whose library may run `trap cleanup INT` (`PsEmitter._canSetTrap`). The
+  poll reads a static property; only when the queue is non-empty does it call `Invoke-BashPendingSignals`. That
+  cmdlet runs the trap, ignores the signal (empty action), or applies the default (`ShellSignalTraps`). `kill $$` uses the same code. As in bash, the trap runs after the current foreground
+  command and leaves `$?` as it found it. A real signal's action counts its own `$LINENO` from 1, and DEBUG and ERR
+  fire inside it.
+- **Unix.** A real SIGUSR1/SIGUSR2 aimed at a host or a launcher is caught (`ShellSignalSender.CatchPosixSignals`) and
+  never takes its default action. The host delivers it to its command, and the launcher forwards it to its host's
+  endpoint. Windows has no POSIX signals, so `kill` is the only sender there, and both platforms behave the same.
+- **Limits.** A trapped signal runs only at a poll. A subshell `( )` or `$( )` body has no poll, so a signal that
+  arrives while one runs waits for the next top-level statement boundary. The same holds for a long-running single
+  command. A trap that only a runtime `eval "$x"` sets, in a script that neither mentions `trap` nor sources a file,
+  gets no polls. A signal queued after it is dropped when the command ends. A host that is
+  wedged, or that takes more than 5 s to answer, is reported unreachable.
+- **Guards.** `ShellSignalRoutingGuardTests` (Cmdlets.Tests) checks the source of the kill cmdlet: every pid it does
+  not own goes through `SendToShell` before any `Process.Kill`, and `Process.Kill` stays behind `IsShellHost`. Unit
+  tests: `ShellSignalsTests` (Core.Tests); where the poll goes: `SignalTrapPollEmitterTests` (Core.Tests). End to end against bash: `ShellSignalDifferentialTests`
+  (Differential.Tests) and the spec cases `builtin-trap` "exit codes for traps are isolated" and `builtin-trap-bash`
+  "Combine DEBUG/ERR trap and USR1 trap".

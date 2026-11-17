@@ -231,6 +231,13 @@ public sealed class InvokeBashKillCommand : PSCmdlet
             // command instead, below, after the other pids are signalled.
             if (procId == Environment.ProcessId && !existenceOnly)
             {
+                // A background job's runspace in this host (in-process job) signalling `$$`: the shell is the command
+                // this host runs, not the job, so the signal goes to it as one another shell sends.
+                if (PsBash.Core.ShellSignals.HasCommand && !PsBash.Core.ShellSignals.IsOwner(ShellSignalTraps.CurrentRunspace))
+                {
+                    PsBash.Core.ShellSignals.Deliver(sigNum);
+                    continue;
+                }
                 signalSelf = true;
                 continue;
             }
@@ -247,6 +254,11 @@ public sealed class InvokeBashKillCommand : PSCmdlet
             // A background job runs in its own host process: stop its whole tree and let `wait` report the signal.
             if (!probeOnly && PsBash.Core.BackgroundJobTable.TrySignal(procId, SignalNumber(signalName ?? "SIGTERM")))
                 continue;
+            // Another ps-bash shell's `$$` (`sh -c "kill -USR1 $$"`: the nested shell runs in another host): the signal
+            // goes to the command that host runs, as a message (its trap runs, or it ends with 128+N). The one route;
+            // a guard test keeps every kill path on it. Ignored-by-default signals too: that shell may trap them.
+            if (!existenceOnly && PsBash.Core.ShellSignals.SendToShell(procId, sigNum, out _))
+                continue;
             try
             {
                 using var proc = Process.GetProcessById(procId);
@@ -256,11 +268,11 @@ public sealed class InvokeBashKillCommand : PSCmdlet
                 if (IsZombie(procId)) throw new ArgumentException("zombie");
                 if (!probeOnly && IsShellHost(proc))
                 {
-                    // Another ps-bash shell's $$ (`sh -c "kill -USR1 $$"` runs in a different host): that process
-                    // serves every script of its session, so Process.Kill ended all of them. There is no channel
-                    // to deliver the signal to the one script yet; say so instead of killing the host.
+                    // A ps-bash host the route above could not reach (no host route in this process, an older host
+                    // that does not know the signal request, no readable sidecar): it serves every script of its
+                    // session, so Process.Kill would end all of them. Say so instead of killing the host.
                     FileSystemHelpers.WriteBashError(this,
-                        $"kill: ({procId}) - signal not delivered: a ps-bash shell host (see intentional-differences.md)");
+                        $"kill: ({procId}) - signal not delivered: a ps-bash shell host that could not be reached");
                     continue;
                 }
                 if (!probeOnly)
@@ -276,44 +288,17 @@ public sealed class InvokeBashKillCommand : PSCmdlet
             }
         }
 
-        if (signalSelf && RunSelfSignalTrap(signalName ?? "SIGTERM"))
-            signalSelf = false;   // a trap handled it: bash runs the handler and the script carries on
-        if (signalSelf && IgnoredByDefault(sigNum))
-            signalSelf = false;   // no trap: SIGCHLD/SIGURG/SIGWINCH are ignored
-
+        // `kill -USR1 $$`: the shell signals itself. A trap runs here and the script carries on (an empty action ignores
+        // the signal); with none, SIGCHLD/SIGURG/SIGWINCH are ignored and anything else ends the script with 128+N
+        // (137 for -9, 143 for TERM). The same rules as a signal another shell sends (ShellSignalTraps).
+        if (signalSelf && sigNum != 9 && ShellSignalTraps.RunTrap(this, sigNum))
+            signalSelf = false;
+        if (signalSelf && ShellSignalTraps.IgnoredByDefault(sigNum))
+            signalSelf = false;
         if (signalSelf)
-        {
-            // The script ends as if killed by the signal: status 128+N (137 for -9, 143 for TERM).
-            // SetShouldExit records it on the host (the same channel bash `exit` uses); the pipeline
-            // stop ends the script, running its finally blocks, and the worker reports that status.
-            int status = 128 + SignalNumber(signalName ?? "SIGTERM");
-            FileSystemHelpers.SetLastExitCode(this, status);
-            Host.SetShouldExit(status);
-            throw new PipelineStoppedException();
-        }
+            throw ShellSignalTraps.Terminate(this, sigNum);
 
         FileSystemHelpers.SetLastExitCode(this, hadError ? 1 : 0);
-    }
-
-    /// <summary>
-    /// `kill -USR1 $$` / `kill -INT $$` with a `trap ... USR1` installed runs the trap in this shell instead of
-    /// ending it. Returns true when a handler ran.
-    /// </summary>
-    private bool RunSelfSignalTrap(string signalName)
-    {
-        string bare = signalName.StartsWith("SIG", StringComparison.Ordinal) ? signalName.Substring(3) : signalName;
-        var dict = (SessionState.PSVariable.Get("global:BashTrapHandlers")
-                    ?? SessionState.PSVariable.Get("BashTrapHandlers"))?.Value as System.Collections.IDictionary;
-        if (dict is null) return false;
-        string? action = null;
-        foreach (var key in new[] { bare, "SIG" + bare, SignalNumber(signalName).ToString(System.Globalization.CultureInfo.InvariantCulture) })
-            if (dict.Contains(key) && dict[key] is string s) { action = s; break; }
-        if (action is null) return false;
-        if (action.Length == 0) return true;   // an empty action IGNORES the signal
-        foreach (var obj in InvokeCommand.InvokeScript(InvokeBashTrapCommand.TranspileAction(action)))
-            WriteObject(obj);
-        FileSystemHelpers.SetLastExitCode(this, 0);
-        return true;
     }
 
     /// <summary>A ps-bash host process (shared by a session's scripts). Background-job hosts are signalled before this.</summary>

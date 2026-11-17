@@ -531,8 +531,7 @@ echo after=$?
 after=0
 ## END
 ## status: 0
-## XFAIL ps-bash intentional-no-signal-to-shell-host kill -USR1 $$ is not delivered to a ps-bash shell host, so the USR1 trap never runs (intentional-differences.md)
-## timeout: 10
+## timeout: 30
 ## real-launcher
 
 #### Combine ERR trap and USR1 trap
@@ -550,8 +549,7 @@ echo after=$?
 after=0
 ## END
 ## status: 0
-## XFAIL ps-bash intentional-no-signal-to-shell-host kill -USR1 $$ is not delivered to a ps-bash shell host, so the USR1 trap never runs (intentional-differences.md)
-## timeout: 10
+## timeout: 30
 ## real-launcher
 
 #### Combine DEBUG trap and ERR trap

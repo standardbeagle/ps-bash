@@ -110,6 +110,10 @@ public static partial class PsEmitter
     /// </summary>
     [ThreadStatic]
     public static string? TrapActionSignal;
+
+    /// <summary><see cref="TrapActionSignal"/> for a real signal's action (USR1, TERM, ...): ERR checks and DEBUG leads as in a
+    /// script, but its commands keep their own line numbers (bash reports line 1 of the action).</summary>
+    public const string RealSignalTrapAction = "SIGNAL";
     [ThreadStatic]
     private static HashSet<string>? _collectScalarLocals;
 
@@ -466,6 +470,10 @@ public static partial class PsEmitter
         if (cmd is Command.Simple && _subshellDepth == 0 && (_functionDepth > 0 || _context == TranspileContext.Eval)
             && text.Contains("Resolve-BashCommand", StringComparison.Ordinal))
             text += "; " + PsBuild.EvalReturnCheck(inFunction: _functionDepth > 0);
+        // A script that can set a trap runs a signal sent to the shell (ShellSignals) between statements, as bash runs a
+        // trap between commands. A subshell is no target: bash's subshell is another process with its traps reset.
+        if (_canSetTrap && _subshellDepth == 0)
+            text += "; " + PsBuild.SignalTrapPoll;
         return text;
     }
 
@@ -1195,6 +1203,7 @@ public static partial class PsEmitter
         _runsDynamicCode = priorDynamicCode || System.Text.RegularExpressions.Regex.IsMatch(bash, @"\b(?:eval|source)\b|(?:^|[\s;&|(])\.\s+\S");
         var priorXtrace = _xtraceMode;
         var priorTrap = _trapMode;
+        var priorCanSetTrap = _canSetTrap;
         var priorDebugTrap = _debugTrapMode;
         _debugTrapMode = System.Text.RegularExpressions.Regex.IsMatch(bash, @"\btrap\s+(?:'[^'\n]*'|\x22[^\x22\n]*\x22)\s+DEBUG\b")
             && bash.Split('\n').Count(l => l.Trim() is { Length: > 0 } t && t[0] != '#') >= 3;
@@ -1205,6 +1214,7 @@ public static partial class PsEmitter
             || System.Text.RegularExpressions.Regex.IsMatch(bash, @"\b(?:declare|typeset)\s+(?:-[a-zA-Z]+\s+)*-[a-zA-Z]*p")
             || System.Text.RegularExpressions.Regex.IsMatch(bash, @"\bexport\s*(?:-p\s*)?(?:[|;&)}]|\r?\n|$)");
         _trapMode = System.Text.RegularExpressions.Regex.IsMatch(bash, @"\btrap\b");
+        _canSetTrap = priorCanSetTrap || _trapMode || CanSetTrapRegex.IsMatch(bash);
         _xtraceMode = System.Text.RegularExpressions.Regex.IsMatch(bash, @"\bset\s+(?:-[a-zA-Z]+\s+)*(?:-[a-zA-Z]*x|-o\s+xtrace)");
         _pipefailMode = priorPipefail || InheritedPipefail || bash.Contains("pipefail", StringComparison.Ordinal) || bash.Contains("PIPESTATUS", StringComparison.Ordinal);
         var priorBashLineno = _bashLinenoMode;
@@ -1212,7 +1222,7 @@ public static partial class PsEmitter
         var trapSignal = TrapActionSignal;
         TrapActionSignal = null;
         var priorInTrapAction = PsBuild.InTrapAction;
-        PsBuild.InTrapAction = trapSignal is not null;
+        PsBuild.InTrapAction = trapSignal is "ERR" or "DEBUG";
         if (trapSignal is not null)
         {
             _errexitMode = true;
@@ -1293,6 +1303,7 @@ public static partial class PsEmitter
             _aliasDefs = priorAliasDefs; _expandAliasesLine = priorAliasLine; _aliasStaticOnly = priorAliasStatic;
             _xtraceMode = priorXtrace;
             _trapMode = priorTrap;
+            _canSetTrap = priorCanSetTrap;
             _debugTrapMode = priorDebugTrap;
             _declarePrintMode = priorDeclarePrint;
             PsBuild.InTrapAction = priorInTrapAction;
@@ -1494,6 +1505,19 @@ public static partial class PsEmitter
     /// <summary>The script runs eval or source text, which can define functions the emitter never sees.</summary>
     [ThreadStatic]
     private static bool _runsDynamicCode;
+
+    /// <summary>
+    /// The script can give a real signal a trap: its source mentions `trap` (statically inlined eval text included), or it
+    /// sources a file that may (a library's `trap cleanup INT`). Each top-level statement then ends with the signal poll
+    /// (<see cref="PsBuild.SignalTrapPoll"/>, background-jobs.md section 13). A trap only a runtime `eval "$x"` sets is not
+    /// seen.
+    /// </summary>
+    [ThreadStatic]
+    private static bool _canSetTrap;
+
+    /// <summary>source, or `.` as a command word (`. lib.sh`; not the operand of `find .`).</summary>
+    private static readonly System.Text.RegularExpressions.Regex CanSetTrapRegex = new(
+        @"\bsource\b|(?:^|[;&|(\n{])[ \t]*\.[ \t]+\S", System.Text.RegularExpressions.RegexOptions.Compiled);
 
     /// <summary>Emit with no lexical loop in scope and <paramref name="kind"/> as the barrier (when <paramref name="apply"/>).</summary>
     private static T WithLoopBarrier<T>(bool apply, LoopBarrierKind kind, Func<T> emit)

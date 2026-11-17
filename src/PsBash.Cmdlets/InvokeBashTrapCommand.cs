@@ -166,6 +166,11 @@ public sealed class InvokeBashTrapCommand : PSCmdlet
         }
 
         var dict = GetTrapDict();
+        // A real signal now has a disposition in this shell: a signal sent to it from now on waits for the statement
+        // boundary, where its trap table is read (PsBash.Core.ShellSignals). A reset counts too (conservative: the
+        // boundary then applies the default).
+        if (signals.Exists(s => !PseudoSignals.Contains(s)))
+            PsBash.Core.ShellSignals.NoteTrapSet(ShellSignalTraps.CurrentRunspace);
         foreach (var signal in signals)
         {
             bool drop = resetMode || action == "";
@@ -217,10 +222,16 @@ public sealed class InvokeBashTrapCommand : PSCmdlet
         return s.Length > 0 && s.All(char.IsAsciiDigit);
     }
 
-    /// <summary>The action is bash text (<c>$?</c>, <c>$((..))</c>, ...), so it runs transpiled; text that does not parse runs as written.</summary>
+    /// <summary>
+    /// The action is bash text (<c>$?</c>, <c>$((..))</c>, ...), so it runs transpiled; text that does not parse runs as
+    /// written. In an ERR / DEBUG / EXIT / RETURN action <c>$LINENO</c> is the line of the command the trap fired for; a real
+    /// signal's action (<paramref name="signal"/> USR1, TERM, ...) counts its own lines, as bash does.
+    /// </summary>
     internal static string TranspileAction(string action, string? signal = null)
     {
-        action = action.Replace("${LINENO}", "$__psbLine").Replace("$LINENO", "$__psbLine");
+        bool realSignal = signal is not null && signal.Length > 0 && !PseudoSignals.Contains(signal);
+        if (!realSignal)
+            action = action.Replace("${LINENO}", "$__psbLine").Replace("$LINENO", "$__psbLine");
         try { return PsBash.Core.Transpiler.BashTranspiler.TranspileTrapAction(action, signal ?? "") ?? action; }
         catch (Exception)
         {

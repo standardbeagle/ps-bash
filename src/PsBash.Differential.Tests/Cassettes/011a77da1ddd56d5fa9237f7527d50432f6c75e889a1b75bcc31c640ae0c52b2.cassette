@@ -1,0 +1,23 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 111
+stdout-length: 39
+stderr-length: 0
+==== SCRIPT ====
+trap 'false; echo $LINENO usr1' USR1
+trap 'false; echo $LINENO dbg' DEBUG
+
+sh -c "kill -USR1 $$"
+echo after=$?
+
+==== STDOUT ====
+4 dbg
+1 dbg
+1 dbg
+1 usr1
+5 dbg
+after=0
+
+==== STDERR ====
+

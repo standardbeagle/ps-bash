@@ -822,6 +822,13 @@ public static class PsBuild
         + (errexitExit is null ? "" : "if (" + ErrexitArmed + " -and $global:LASTEXITCODE -ne 0) { " + errexitExit + " }; ")
         + "$global:LASTEXITCODE = $__psbDbg }; ";
 
+    /// <summary>
+    /// After a statement of a script that can set a trap: run the traps of signals sent to this shell since the last
+    /// statement (<c>PsBash.Core.ShellSignals</c>; bash runs a trap between commands). One static read when none is
+    /// pending; <c>Invoke-BashPendingSignals</c> runs each trap (or the signal's default action) and keeps <c>$?</c>.
+    /// </summary>
+    public const string SignalTrapPoll = "if ([PsBash.Cmdlets.ShellSignalPoll]::Pending) { Invoke-BashPendingSignals }";
+
     /// <summary>The value of <c>$-</c>: the single-letter options currently on, in bash's order.</summary>
     public const string ShellFlagsExpr =
         "$f = ''; if ($global:__BashErrexit) { $f += 'e' }; if ($global:__BashNoglob) { $f += 'f' }; $f += 'h'; "

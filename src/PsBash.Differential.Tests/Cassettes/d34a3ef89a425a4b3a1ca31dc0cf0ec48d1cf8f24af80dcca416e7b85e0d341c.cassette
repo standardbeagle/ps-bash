@@ -1,0 +1,19 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 106
+stdout-length: 14
+stderr-length: 0
+==== SCRIPT ====
+trap 'echo u2' USR2
+trap 'echo u1' USR1
+sh -c "kill -USR2 $$; kill -USR1 $$; kill -USR2 $$"
+echo after=$?
+
+==== STDOUT ====
+u1
+u2
+after=0
+
+==== STDERR ====
+

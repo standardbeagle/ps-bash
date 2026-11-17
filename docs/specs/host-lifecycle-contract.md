@@ -514,7 +514,11 @@ process, and a command that could not be stopped held the lease forever. The rul
 - **A cancelled command that will not stop poisons the host.** `StuckCommandWatchdog` (daemon only):
   20 s after a command's cancellation fired, the host logs the reason and exits; launchers respawn.
 - **`kill $$` ends the command, not the host.** `$$` is the host's pid; the kill cmdlet applies bash's
-  outcome (the script dies of the signal, status 128+N) to the current command.
+  outcome (the script dies of the signal, status 128+N) to the current command. A signal from another shell
+  (`sh -c "kill -USR1 $$"`, or a real SIGUSR1/2 on Unix) arrives as a `Mode.Signal` request, is answered
+  without the lease, and reaches only the running command (`ShellSignals.Deliver`, background-jobs.md §13).
+  Nothing in that path can end the host: a malformed request fails its connection, and a failing stop is
+  swallowed.
 - **Every accepted connection is answered.** A failure escaping `Connection.HandleAsync` is caught
   while the stream is still open (`HostServer.TryAnswerFailureAsync`: stderr frame + EXIT 125, logged
   with type and top frame); a request that never arrives or is malformed gets EXIT 2. Only a client
