@@ -45,7 +45,7 @@ public static class ShellSignalSender
         }
         catch (Exception) { return null; }
         return IpcTransportFactory.EnclosingHostOwnEndpoint(new ProcessIdentity(pid, startTicks),
-            HostMetadata.ReadAll(PsBashRuntimeDirectory.GetPath()));
+            IpcTransportFactory.ReachableHostSidecars());
     }
 
     /// <summary>Send <paramref name="signal"/> to the host serving <paramref name="endpoint"/> (bounded; NotAShell on any failure).</summary>

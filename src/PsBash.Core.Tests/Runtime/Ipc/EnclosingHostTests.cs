@@ -69,6 +69,34 @@ public class EnclosingHostTests
     private static HostMetadata Sidecar(int pid, string endpoint, DateTimeOffset started)
         => new(pid, "ps-bash-host", 1, "b", "unix", endpoint, started, "u");
 
+    // REGRESSION: `sh -c "kill -USR1 $$"` on Linux said "a ps-bash shell host that could not be reached" under a test
+    // harness's PSBASH_IPC_ENDPOINT in /tmp: hosts write their sidecar beside their socket, and only the runtime
+    // directory was searched. The endpoint's own sidecars (base and executor slots) count; a stranger's in that shared
+    // directory does not.
+    [Fact]
+    public void ReachableHostSidecars_IncludesTheExplicitEndpointsChain_NotOtherFilesBesideIt()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "ps-bash", "reach-" + Guid.NewGuid().ToString("N")[..8]);
+        string runtime = Path.Combine(root, "rt"), shared = Path.Combine(root, "shared");
+        Directory.CreateDirectory(runtime);
+        Directory.CreateDirectory(shared);
+        try
+        {
+            string endpoint = Path.Combine(shared, "t1.sock");
+            Assert.True(Sidecar(1, Path.Combine(runtime, "host-u-s.sock"), HostStart).Write("unix", Path.Combine(runtime, "host-u-s.sock")));
+            Assert.True(Sidecar(2, endpoint, HostStart).Write("unix", endpoint));
+            Assert.True(Sidecar(3, endpoint + "-x1", HostStart).Write("unix", endpoint + "-x1"));
+            Assert.True(Sidecar(4, Path.Combine(shared, "other.sock"), HostStart).Write("unix", Path.Combine(shared, "other.sock")));
+
+            var pids = IpcTransportFactory.ReachableHostSidecars(runtime, "unix:" + endpoint).Select(m => m.Pid).Order().ToArray();
+            Assert.Equal([1, 2, 3], pids);
+            Assert.Equal([1], IpcTransportFactory.ReachableHostSidecars(runtime, null).Select(m => m.Pid).ToArray());
+            // An endpoint inside the runtime directory adds nothing twice.
+            Assert.Single(IpcTransportFactory.ReachableHostSidecars(runtime, "unix:" + Path.Combine(runtime, "host-u-s.sock")));
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
     private static readonly DateTimeOffset HostStart = new(2026, 11, 14, 10, 0, 0, TimeSpan.Zero);
     private static readonly ProcessIdentity Host = new(10, HostStart.UtcTicks);
 

@@ -205,11 +205,39 @@ public static class IpcTransportFactory
         hostEndpoint = null;
         var host = EnclosingHostOverride is { } seam ? seam() : ProcessAncestry.FindEnclosingHost();
         if (host is not { } id) return false;
-        if (EnclosingHostOwnEndpoint(id, HostMetadata.ReadAll(SocketDirectory())) is not { } own) return false;
+        if (EnclosingHostOwnEndpoint(id, ReachableHostSidecars()) is not { } own) return false;
         endpoint = ("unix", BaseOfSlotEndpoint(own));
         anchor = id;
         hostEndpoint = own;
         return true;
+    }
+
+    /// <summary>
+    /// The sidecars of every host this user's launchers reach: the runtime directory's, plus, when
+    /// <c>PSBASH_IPC_ENDPOINT</c> names a socket elsewhere (a test harness's private endpoint), the sidecars of that
+    /// endpoint and its executor slots (<c>…-x{k}</c>), which every host writes beside its socket. Only files named after
+    /// the configured endpoint are read there: that directory may be shared (<c>/tmp</c>), the runtime directory is
+    /// owner-only. The one source for "which host is pid N" (a nested launcher's enclosing host, <c>kill</c>'s target).
+    /// </summary>
+    internal static List<HostMetadata> ReachableHostSidecars()
+        => ReachableHostSidecars(SocketDirectory(), Environment.GetEnvironmentVariable(EndpointEnvVar));
+
+    /// <summary><see cref="ReachableHostSidecars()"/> for a given runtime directory and <c>PSBASH_IPC_ENDPOINT</c> value.</summary>
+    internal static List<HostMetadata> ReachableHostSidecars(string dir, string? endpointSpec)
+    {
+        var all = HostMetadata.ReadAll(dir);
+        (string Scheme, string Endpoint) env;
+        try
+        {
+            if (!TryParseEndpointSpec(endpointSpec, EndpointEnvVar, out env)) return all;
+        }
+        catch (ArgumentException) { return all; }
+        if (env.Scheme != "unix" || Path.GetDirectoryName(env.Endpoint) is not { Length: > 0 } envDir
+            || string.Equals(Path.GetFullPath(envDir), Path.GetFullPath(dir), OperatingSystem.IsWindows()
+                ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+            return all;
+        all.AddRange(HostMetadata.ReadAll(envDir, Path.GetFileName(BaseOfSlotEndpoint(env.Endpoint)) + "*"));
+        return all;
     }
 
     /// <summary>

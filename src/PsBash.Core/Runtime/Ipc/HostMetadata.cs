@@ -97,12 +97,15 @@ public sealed record HostMetadata(
     public static HostMetadata? TryRead(string scheme, string endpoint) => TryReadPath(PathFor(scheme, endpoint));
 
     /// <summary>Every readable sidecar in <paramref name="dir"/> (the runtime directory holds the hosts' endpoints).</summary>
-    public static List<HostMetadata> ReadAll(string dir)
+    public static List<HostMetadata> ReadAll(string dir) => ReadAll(dir, "*");
+
+    /// <summary>The readable sidecars in <paramref name="dir"/> of the endpoints whose file name matches <paramref name="endpointPattern"/>.</summary>
+    public static List<HostMetadata> ReadAll(string dir, string endpointPattern)
     {
         var all = new List<HostMetadata>();
         try
         {
-            foreach (var path in Directory.EnumerateFiles(dir, "*.host.json"))
+            foreach (var path in Directory.EnumerateFiles(dir, endpointPattern + ".host.json"))
                 if (TryReadPath(path) is { } meta) all.Add(meta);
         }
         catch (IOException) { }

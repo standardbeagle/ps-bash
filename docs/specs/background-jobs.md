@@ -653,7 +653,9 @@ another host, so its `kill` targets the enclosing script's host.
   process kill. A kill ended every script of the session, and the host with them. `kill` reaches another ps-bash shell
   only through `ShellSignals.SendToShell` (Transpiler, `ShellSignals.cs`). The host registers its route
   (`ShellSignalSender`, Core). The route finds the target's endpoint from the host sidecars in the owner-only runtime
-  directory. It accepts a sidecar only if it was written after the pid's process started, the same rule
+  directory, plus the sidecars of an explicit `PSBASH_IPC_ENDPOINT` chain (its base and executor slots) when that
+  endpoint lives elsewhere (`IpcTransportFactory.ReachableHostSidecars`). A host writes its sidecar beside its socket, so
+  under a test harness's endpoint in `/tmp` the runtime directory alone held none. It accepts a sidecar only if it was written after the pid's process started, the same rule
   `IpcTransportFactory.EnclosingHostOwnEndpoint` uses. It then sends `Mode.Signal(N)` (`MODE:Signal`, `SIGNAL:N`) on
   that endpoint. The target answers at once, without taking the lease (the lease holder is the target), with
   `ps-bash-host signal=<Outcome>` and exit 0. A pid that is no reachable host, or a host too old to know the request,
