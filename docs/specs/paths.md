@@ -51,6 +51,7 @@ names the only exceptions: tar member names, which are archive data, not filesys
 | `$0`, `BASH_SOURCE[0]` (script file) | launcher `Program.BuildPositionalPreamble` | `ps-bash sub\s.sh` → `sub/s.sh`; `-c CMD NAME` keeps NAME as given. |
 | `BASH_SOURCE` (sourced file) | `InvokeBashSourceCommand` | the operand, through `ToShell`. |
 | `$SHELL` default | `BashRuntime.DefaultShell` | |
+| `<(cmd)`, `>(cmd)` (the temp file word) | psm1 `Invoke-ProcessSub`, `New-BashProcessSubPath` | through `BashRuntime.ToShellPath`: `wc -l <(cmd)` printed `C:\…\psub-…` |
 | temp dir in a glob pattern | `PsEmitter.EmitGlobPatternExpr` (`PsBuild.TempDirExpr`) | |
 | `PATH` | not changed | see "PATH" below. |
 

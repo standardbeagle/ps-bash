@@ -46,6 +46,19 @@ public class ProcessSubStreamingTests : IClassFixture<SharedPwshFixture>
         Assert.StartsWith("True True ", got[0]);
     }
 
+    // The word `<(cmd)` / `>(cmd)` expands to is a shell path (paths.md): `wc -l <(seq 3)` printed C:\...\psub-...
+    // Bash's own word, /dev/fd/63, is out of reach (intentional-differences.md), so this asserts the path policy.
+    [Fact]
+    public void ProcessSubWord_IsAShellPath_AndNamesTheFile()
+    {
+        var got = Run(
+            "$p = Invoke-ProcessSub { 'x' }; $q = New-BashProcessSubPath; " +
+            "$r = \"$($p -eq [PsBash.Cmdlets.BashRuntime]::ToShellPath($p))|$([IO.File]::Exists($p))|$($q -eq [PsBash.Cmdlets.BashRuntime]::ToShellPath($q))|$([IO.File]::Exists($q))\"; " +
+            "Remove-Item -LiteralPath $p, $q; $r");
+        Assert.Equal("True|True|True|True", got[0]);
+        if (OperatingSystem.IsWindows())
+            Assert.DoesNotContain('\\', Run("$p = Invoke-ProcessSub { 'x' }; Remove-Item -LiteralPath $p; $p")[0]);
+    }
     [Fact]
     public void FileBytes_AreExact_IncludingAMissingFinalNewlineAndEscapedBytes()
     {

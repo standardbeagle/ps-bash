@@ -572,7 +572,8 @@ function Invoke-ProcessSub {
         & $Command | ForEach-Object { $writer.Add($_) }
         $writer.Dispose()
         $writer = $null
-        return $tmp
+        # The script sees this word (`wc -l <(cmd)` prints it): a shell path, C:/..., never C:\... (paths.md).
+        return [PsBash.Cmdlets.BashRuntime]::ToShellPath($tmp)
     }
     catch {
         if ($null -ne $writer) { $writer.Dispose() }
@@ -596,7 +597,7 @@ function New-BashProcessSubPath {
     [void][System.IO.Directory]::CreateDirectory($subDir)
     $tmp = [System.IO.Path]::Combine($subDir, 'psub-' + [System.IO.Path]::GetRandomFileName())
     [System.IO.File]::WriteAllBytes($tmp, [byte[]]@())
-    return $tmp
+    return [PsBash.Cmdlets.BashRuntime]::ToShellPath($tmp)   # a word the script sees, like Invoke-ProcessSub's
 }
 
 # RC-8a: Invoke-ProcessSubSource was migrated from this psm1 to a binary
