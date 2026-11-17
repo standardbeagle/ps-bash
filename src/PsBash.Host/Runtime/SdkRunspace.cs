@@ -210,6 +210,35 @@ internal sealed class SdkRunspace : IAsyncDisposable
         return iss;
     }
 
+    /// <summary>
+    /// Open the runspaces background jobs will run in (<c>PsBash.Cmdlets.BashJobRunspaces</c>, docs/specs/background-jobs.md
+    /// section 12.5) in the background, called when a command that uses <c>&amp;</c> is about to run: its first jobs then
+    /// find them ready or opening. Not at host start: opening them beside other commands slowed those (a command-not-found
+    /// lookup took 11.7 s instead of 0.45 s), so a host that never runs a job never opens one. Once the spares are open a
+    /// call does nothing. The type lives in the cmdlets assembly, which this project loads at run time, not at build time.
+    /// Best effort: a failure leaves the jobs to open their own.
+    /// </summary>
+    internal static void WarmJobRunspaces()
+    {
+        try { WarmJobRunspacesCall.Value?.Invoke(); }
+        catch (Exception) { /* the first job opens a runspace itself */ }
+    }
+
+    private static readonly Lazy<Action?> WarmJobRunspacesCall = new(static () =>
+    {
+        try
+        {
+            var psm1 = Path.Combine(Path.GetDirectoryName(ModuleExtractor.ExtractEmbedded())!, "PsBash.psm1");
+            var cmdlets = Assembly.LoadFrom(ModuleExtractor.GetCmdletsDllPath());
+            var warm = cmdlets.GetType("PsBash.Cmdlets.BashJobRunspaces")?.GetMethod("WarmAhead");
+            return warm is null ? null : () => warm.Invoke(null, [psm1]);
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    });
+
     internal static string ReadStartupModule(string path)
     {
         return BoundedTextFile.Read(
@@ -220,11 +249,11 @@ internal sealed class SdkRunspace : IAsyncDisposable
 
     public Runspace Runspace => _runspace;
 
-    // Test seam: how many background-job RunspacePools were torn down on release (a runspace that never
+    // Test seam: how many runspaces had background-job state to tear down on release (a runspace that never
     // used `&` has none, so it does not count).
-    internal static int BackgroundPoolsReleased;
+    internal static int BackgroundJobStatesReleased;
 
-    /// <summary>How long releasing a runspace waits for the job-pool teardown (stop + dispose of the jobs).</summary>
+    /// <summary>How long releasing a runspace waits for the job teardown (stop + dispose of the jobs).</summary>
     private static readonly TimeSpan BackgroundTeardownTimeout = TimeSpan.FromSeconds(5);
 
     public ValueTask DisposeAsync()
@@ -238,13 +267,12 @@ internal sealed class SdkRunspace : IAsyncDisposable
     }
 
     /// <summary>
-    /// `cmd &amp;` runs on a private <c>RunspacePool</c> held in the module's script scope. Disposing the
-    /// runspace does NOT dispose an object its variables point at, so every discarded runspace (the daemon
-    /// discards one per <c>-c</c> command) that had used `&amp;` left a whole pool of runspaces, with their
-    /// threads and imported modules, alive for the life of the host. Ask the module to tear its job state
-    /// down first (<c>Remove-BashBgState</c>: stop + dispose the jobs, dispose the pool). Best effort and
-    /// bounded: a runspace that is still busy (an abandoned command) cannot take another pipeline and is
-    /// disposed as before.
+    /// The job table of `cmd &amp;` lives in the module's script scope. Disposing the runspace does NOT stop a job
+    /// its variables point at, so a job of a discarded runspace (the daemon discards one per <c>-c</c> command) ran
+    /// on, holding its job runspace (and, before BashJobRunspaces, a whole private RunspacePool) for the life of the
+    /// host. Ask the module to tear its job state down first (<c>Remove-BashBgState</c>: stop + dispose the jobs; a
+    /// stopped job's runspace is closed). Best effort and bounded: a runspace that is still busy (an abandoned
+    /// command) cannot take another pipeline and is disposed as before.
     /// </summary>
     private void ReleaseBackgroundJobs()
     {
@@ -267,7 +295,7 @@ internal sealed class SdkRunspace : IAsyncDisposable
             }
             var output = ps.EndInvoke(async);
             if (output.Count > 0 && output[0]?.BaseObject is true)
-                Interlocked.Increment(ref BackgroundPoolsReleased);
+                Interlocked.Increment(ref BackgroundJobStatesReleased);
         }
         catch
         {

@@ -12,10 +12,11 @@ namespace PsBash.Cmdlets;
 ///
 /// Behavioral parity oracle: the original psm1 function. Branches preserved:
 /// no operands → "missing operand" error; non-numeric or negative → "invalid
-/// time interval" error; otherwise sleep for the summed duration using
-/// <see cref="Thread.Sleep(int)"/> ms precision (ceiling of seconds × 1000).
+/// time interval" error; otherwise sleep for the summed duration at ms precision
+/// (ceiling of seconds × 1000) through <see cref="PreciseSleep"/>, which wakes on time
+/// rather than on the 15.6 ms Windows tick.
 ///
-/// Termination matches bash: <see cref="Thread.Sleep(int)"/> respects the
+/// Termination matches bash: the sleep respects the
 /// pipeline's stop signal because <see cref="PSCmdlet.Stopping"/> is checked
 /// between operand iterations and around the sleep window itself via a
 /// chunked-sleep loop. A pipeline shutdown (Ctrl-C, downstream
@@ -97,7 +98,7 @@ public sealed class InvokeBashSleepCommand : PSCmdlet
         {
             if (Stopping) return;
             var step = totalMs > ChunkMs ? ChunkMs : (int)totalMs;
-            Thread.Sleep(step);
+            PreciseSleep.For(step);
             totalMs -= step;
         }
     }

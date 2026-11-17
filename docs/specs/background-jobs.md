@@ -341,7 +341,7 @@ which needs the in-process fallback (§10) or a module-mode job-host spawner.
 3. Warm spare + native fast path; perf bar met.
 4. Orphan reaper + lifecycle table tests; interactive-host integration (fg/bg/Ctrl-Z).
 5. Default flips to `process`; `inproc` retained one release behind `PSBASH_BG_MODE=inproc`, then deleted
-   along with the runspace pool and `Remove-BashBgState`.
+   along with the job runspaces (`BashJobRunspaces`) and `Remove-BashBgState`.
 6. **Foreground migration** (§4.2) — DONE as `executor-slots.md` (host lease + BUSY + launcher slot spill
    instead of an `ACQUIRE` broker): `_globalExecGate`, the nested-host endpoints and `PSBASH_INSIDE_HOST`/
    `PSBASH_NEST_DEPTH` are deleted. Done before the §7.3 bars were met, on the owner's explicit approval; the
@@ -411,7 +411,7 @@ Known gaps / not done:
 
 A job's stdout and stderr reach the shell's own streams while it runs. They are interleaved with the foreground
 command's output in production order, memory is bounded, and nothing is printed twice. This works in both job
-modes (runspace pool and job host process) and adds no process.
+modes (job runspace, §12.5, and job host process) and adds no process.
 
 The general layer it is built on (channels, fds, open/close, credit) is described in
 [stdio-messaging.md](stdio-messaging.md). This section covers the job-specific rules.
@@ -492,7 +492,7 @@ must do no work that the job's path to its first write does not also do.
 - **Why.** On Windows, PowerShell reports every script-to-.NET method call to AMSI under one process-wide lock
   (`AmsiUtils.s_amsiLockObject`); cmdlet calls, property reads and sets, and `[pscustomobject]` do not report (measured
   with the lock held 300 ms by another thread: `List.Add` and `[Math]::Abs` waited ~310 ms, the others 1-9 ms).
-  A pool `BeginInvoke` returns only once the job's pipeline has compiled (it waits on the same lock too), so after it
+  A job's `BeginInvoke` returns only once the job's pipeline has compiled (it waits on the same lock too), so after it
   the job's path to `echo` is plain script with no report. The launcher used to build the record (`[pscustomobject]`,
   two `Add-Member`) and call the job table's `.Add` after the start. Under load an AMSI report is slow (Defender is
   busy), so the job printed first. The spec case "a & b" printed `word_a` first in 2 of the 4 spec slices of one
@@ -506,6 +506,92 @@ must do no work that the job's path to its first write does not also do.
   It holds the AMSI lock from the moment the job is started (`OutputMux.ProducerStarted`, raised by
   `OutputChannel.MarkStarted`) and requires the foreground's `word_b` to arrive while the lock is held. Before the fix
   the foreground stalled for the whole hold and the job printed first.
+
+### 12.5 Start latency: jobs run in runspaces that are already open (`BashJobRunspaces`)
+
+`for i in 3 2 1; do { sleep 0.0$i; echo $i; } & done; wait` prints `1 2 3` in bash: jobs start within a
+fraction of a millisecond of their `&`, so the shortest sleep finishes first. The oils cases "wait for N parallel jobs
+and check failure" and "wait -n" (`spec/oils/background.spec.sh`, `arch-bg-job-start-latency`) depend on this.
+
+**Before (measured, Debug, loaded workstation, per-job timestamps; removed afterwards).** Each command opened a
+private `RunspacePool` at its first `&`. The daemon discards the command runspace after each `-c`, so every command
+paid this:
+
+| Job | `&` → first statement | Where the time went |
+|---|---|---|
+| 1st job of a command | 437-687 ms | pool create + open (psm1 import), 415-665 ms |
+| 2nd job launched while the 1st runs | 276-645 ms more | the pool opens another runspace inside `BeginInvoke` |
+| Nth job, past the runspaces already open | 290-650 ms | same |
+| any job, warm pool | 15-55 ms | a new pipeline thread per invocation (below) |
+
+**Causes and fixes.**
+
+1. *Runspace open on the launch path.* `PsBash.Cmdlets.BashJobRunspaces` holds the job runspaces for the whole process,
+   not per command. The daemon host opens `Spares` of them (`PSBASH_JOB_SPARES`, default 4) on one background
+   thread when a command that can start a job in this process is about to run. That is a call of
+   `Invoke-BashBackground` without `-Isolated`, because an `-Isolated` job runs in a host process of its own (§11)
+   (`Connection.UsesInProcessJobs` → `SdkRunspace.WarmJobRunspaces`). Once the spares are open, later calls do nothing. Elsewhere (a module import) the first job
+   starts the warm-up. The host does not open them at start. Opening them beside other commands slows those
+   commands: a fresh host's first command-not-found took 11.7 s while the spares opened at start, and 0.45-0.75 s
+   with them opened lazily. A runspace whose job completed and left it clean
+   goes back to the idle set, up to `MaxIdle` (8; about 4 MB each). `EndJob` removes the globals the job created and
+   restores the ones it changed. A job that changed a function or alias, started jobs of its own, or was stopped
+   leaves a runspace that is closed and replaced. Opens only top up the owned count (idle + running) to `Spares`, never
+   after each take: an open compiles the psm1 under the AMSI lock (§12.4), and an open beside a burst of launches
+   delayed each of their starts by about 100 ms. When no runspace is idle but the warm-up thread is opening one, the
+   launcher waits for it. Two opens at once each took about twice as long: a fresh host's first job took 2.3-3.0 s
+   beside the warm-up's open, against 1.1-1.8 s for one open alone. When nothing is opening, the launcher opens one
+   itself (`ColdOpens`), late but still in launch order. A reused runspace keeps the last job's location, so
+   `BashStateSnapshot.BuildJobOptions` now begins with the parent's `Set-Location`.
+2. *A new thread per invocation.* `RunspaceFactory.CreateRunspace` defaults to `PSThreadOptions.UseNewThread`: on a
+   loaded host `BeginInvoke` took 40-100 ms and the first statement ran 35-150 ms after it. With `ReuseThread` the
+   same steps took 0.3-10 ms and 2-30 ms (a pool's runspaces already work this way).
+3. *AMSI reports on the launch path.* Each script→.NET call on the launch path (about a dozen) waits on the lock
+   that the previous job's start holds. `BashJobRunspaces.NewJob` builds the whole job (text, options, loop
+   variables, arguments, runspace) in one call.
+4. *`sleep` precision.* With starts in order, `sleep 0.03` vs `sleep 0.02` still tied: `Thread.Sleep` wakes on
+   the 15.6 ms Windows tick (10 ms slept 13-35 ms, 20 ms slept 21-38 ms, 30 ms slept 35-49 ms). `sleep` now waits on a
+   high-resolution waitable timer (`PreciseSleep`, Windows 10 1803+), which does not change the system timer
+   resolution: 10.4-12.9, 20.2-21.0 and 30.2-38.0 ms on the same host.
+5. *Launch order.* With ready runspaces, the jobs' pipelines compile at the same time. Each compile waits on the AMSI
+   lock, which is not handed out in arrival order, so `echo word_a & echo word_b &` printed `word_b` first (1 of 3
+   runs of `shell-grammar.spec.sh` "a & b &"). The old pool serialized this by accident: each `BeginInvoke` waited for
+   its runspace to open. Now `NewJob` puts `Enter-BashJobTurn` before the body. It is a cmdlet, so it makes no AMSI
+   report. It waits until every job launched earlier from the same runspace has begun its body or ended
+   (`BashJobRunspaces.JobTurn`). A wait gives up after 2 s, for a job whose start was refused and so never begins.
+   It also stops at once when the job is stopped. Tests: `JobTurnTests` (Cmdlets.Tests).
+
+**After (same host and load, warm daemon, 94 jobs).** Bind 0.7-3.3 ms. `BeginInvoke` 0.4-2 ms, rarely up to 25.
+`&` → first statement: median about 13 ms, 10.6-53 ms in bursts. The tail is the AMSI lock held by the other
+agents' test processes on this machine. A cold open (more concurrent jobs than `Spares`) still costs 700-900 ms.
+Single-digit ms was not reached under that load. The floor is the job pipeline's own compile, which waits on the
+AMSI lock (§12.4) and cannot be moved ahead.
+
+**The two oils cases (measured, same host).** "wait for N parallel jobs and check failure" (10 ms between the sleeps)
+came out `1 2 3` in 10 of 20 and 14 of 20 runs of a loop in one command, so it stays XFAIL. "wait -n" (60 ms between the
+sleeps) passed 20 of 20 and 19 of 20 in one command. As a spec case it passed in only 6 of 11 runs, and in 2 of 6
+under CPU load. It is flaky, so it also stays XFAIL, and its XPASS turns the file red in about half the runs. Opening
+the host's job runspaces before each case did not make it pass every time (tried in the harness, then reverted).
+Both marks carry these numbers. A fresh host opens up to `Spares` runspaces once. The first opens
+took 1.8-3.9 s while several spec hosts started together.
+
+`background.spec.sh` took 44 s, as on main (45 s), with no case timeouts in 6 runs. `shell-grammar.spec.sh` "Invalid
+token" passes, where main failed it in 3 of 3 runs.
+
+Under 4 CPU-bound processes on 8 cores, both files ran clean in 2 of 3 runs, in 1 m 15 s-1 m 22 s. The third run had
+one case timeout: "Async for loop", an `-Isolated` job that runs in a host process. Main, under the same load and
+alternating with these runs, was clean in 0 of 3, in 1 m 39 s-1 m 43 s. Its failures were "Invalid token" 3 times
+and one case timeout ("Start background pipeline").
+
+**Guards.** `BackgroundJobStartLatencyTests` (Host.Tests, runs alone) starts the warm-up and launches a job at once.
+It asserts that the job took the warm-up's runspace. It then launches `Spares` jobs back to back after the spares are
+idle and asserts:
+- no runspace opened on the launch path (`ColdOpens` unchanged);
+- each first statement within 150 ms of its `&` (a runspace open took 300-900 ms);
+- starts in launch order.
+
+`ConnectionJobRunspaceWarmTests` pins which commands warm the runspaces. `BackgroundJobPoolLifetimeTests`
+covers teardown. `BackgroundJobPoolTests` covers the execution policy of a job runspace.
 
 ## 13. A signal sent to a ps-bash shell
 

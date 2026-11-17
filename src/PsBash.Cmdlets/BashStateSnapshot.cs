@@ -93,12 +93,15 @@ public static class BashStateSnapshot
 
     /// <summary>
     /// What an in-process job (pooled runspace, no <see cref="BuildPrelude"/>) runs before its body: the parent's
-    /// <c>set</c> options and, under errtrace, its ERR trap. Without them <c>set -e; { false; echo x; } &amp;</c> printed x
-    /// and the job's status was 0.
+    /// directory, its <c>set</c> options and, under errtrace, its ERR trap. Without the options
+    /// <c>set -e; { false; echo x; } &amp;</c> printed x and the job's status was 0. The job runspace is reused
+    /// (BashJobRunspaces), so its PowerShell location is the last job's, or the host's start directory: without the
+    /// <c>Set-Location</c> a glob or relative path in the job resolved there.
     /// </summary>
     public static string BuildJobOptions(SessionState session)
     {
         var sb = new StringBuilder();
+        sb.Append("Set-Location -LiteralPath ").Append(PsBuild.SingleQuote(session.Path.CurrentFileSystemLocation.ProviderPath)).Append('\n');
         foreach (var name in JobOptionGlobals)
             sb.Append("$global:").Append(name).Append(" = ").Append(Unwrap(session.PSVariable.GetValue("global:" + name)) is true ? "$true" : "$false").Append('\n');
         sb.Append("$global:__BashErrexitSuppress = 0\n");

@@ -3,7 +3,7 @@ using Xunit;
 namespace PsBash.Cmdlets.Tests;
 
 /// <summary>
-/// The in-process background-job runspace pool (<c>Get-BashBgRunspacePool</c>, PsBash.psm1).
+/// The runspaces in-process background jobs run in (<c>PsBash.Cmdlets.BashJobRunspaces</c>).
 /// </summary>
 public class BackgroundJobPoolTests : IClassFixture<SharedPwshFixture>
 {
@@ -22,7 +22,7 @@ public class BackgroundJobPoolTests : IClassFixture<SharedPwshFixture>
     {
         Skip.IfNot(OperatingSystem.IsWindows(), "execution policy is Windows-only");
         var r = CmdResult.Run(_fixture.AcquireFresh(),
-            "[string](Get-BashBgRunspacePool).InitialSessionState.ExecutionPolicy").AssertSuccess();
+            "[string][PsBash.Cmdlets.BashJobRunspaces]::InitialState($null).ExecutionPolicy").AssertSuccess();
         Assert.Equal("Bypass", r.Lines[^1]);
     }
 }

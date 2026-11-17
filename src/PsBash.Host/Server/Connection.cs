@@ -301,8 +301,13 @@ internal sealed class Connection
 
             // A command that backgrounds work will need a private host soon: start one now, while this
             // command runs, instead of when the `&` statement is reached.
+            // In-process jobs: open their runspaces now too (once per host; docs/specs/background-jobs.md section 12.5).
             if (UsesBackgroundJobs(command))
+            {
                 JobHostSpares.Prewarm(CountBackgroundJobs(command));
+                if (UsesInProcessJobs(command, Environment.GetEnvironmentVariable("PSBASH_BG_MODE")))
+                    SdkRunspace.WarmJobRunspaces();
+            }
 
             exitCode = await worker.ExecuteWithOutputAsync(
                 command, outputSink, errorSink, execCts.Token, environment, stdinFeed?.CreateCursor());
@@ -583,6 +588,24 @@ internal sealed class Connection
 
     private static bool UsesBackgroundJobs(string? command)
         => command is not null && command.Contains("Invoke-BashBackground", StringComparison.Ordinal);
+
+    /// <summary>
+    /// Whether the command can start a job in this process, so its job runspaces are worth opening: a call of
+    /// <c>Invoke-BashBackground</c> without <c>-Isolated</c>. An <c>-Isolated</c> job (its body assigns) runs in a host
+    /// process of its own, and opening four runspaces it never uses slowed the commands beside it on a loaded host.
+    /// <paramref name="bgMode"/> is <c>PSBASH_BG_MODE</c>: <c>process</c> runs every job in a host process, <c>inproc</c> none.
+    /// </summary>
+    internal static bool UsesInProcessJobs(string command, string? bgMode)
+    {
+        const string Call = "Invoke-BashBackground", Isolated = " -Isolated";
+        if (bgMode == "process") return false;
+        if (bgMode == "inproc") return command.Contains(Call, StringComparison.Ordinal);
+        for (int i = 0; (i = command.IndexOf(Call, i, StringComparison.Ordinal)) >= 0; i += Call.Length)
+        {
+            if (string.CompareOrdinal(command, i + Call.Length, Isolated, 0, Isolated.Length) != 0) return true;
+        }
+        return false;
+    }
 
     /// <summary>Call sites of <c>Invoke-BashBackground</c> in the command text: how many spares the command can use at once.</summary>
     private static int CountBackgroundJobs(string? command)

@@ -95,7 +95,6 @@ FunctionsToExport = @(
     'Format-BashSize',
     'Format-LsGrid',
     'Format-LsLine',
-    'Get-BashBgRunspacePool',
     'Get-BashFileInfo',
     'Get-BashItem',
     'Get-BashLsProviderEntries',

@@ -73,7 +73,7 @@ status=2
 status=1
 ## END
 ## status: 0
-## XFAIL ps-bash arch-bg-job-start-latency job output is live, so all three lines come before the statuses as in bash, but jobs start tens to hundreds of ms apart (more than the 10 ms between the sleeps), so the first-launched job (sleep 0.03) finishes first and the lines come out 3 2 1
+## XFAIL ps-bash arch-bg-job-start-latency jobs now start in launch order in runspaces that are already open, but 10-50 ms after their & on a loaded host (each job's pipeline compile waits on PowerShell's process-wide AMSI lock), not within the 10 ms between the sleeps, so the lines come out 1 2 3 only some of the time (measured 10/20 and 14/20 runs, docs/specs/background-jobs.md section 12.5)
 ## timeout: 10
 
 #### Builtin in background
@@ -361,7 +361,7 @@ status=3
 status=9
 ## END
 ## status: 0
-## XFAIL ps-bash arch-bg-job-start-latency a runspace-pool job starts 45-370 ms after cmd & (measured: 376 ms for the second job, about 45 ms after that), more than the 60 ms between the two sleeps, so wait -n sees the first-launched job (exit 9) finish first
+## XFAIL ps-bash arch-bg-job-start-latency jobs now start 10-50 ms after their & in runspaces that are already open, inside the 60 ms between the two sleeps, so this passes most runs in one command (measured 20/20 and 19/20) but fewer as a spec case (6 of 11 spec runs, 2 of 6 under CPU load), but a start delayed past 60 ms by PowerShell's process-wide AMSI lock still lets the first-launched job (exit 9) finish first; flaky, so the mark stays (docs/specs/background-jobs.md section 12.5)
 ## timeout: 10
 ## real-launcher
 

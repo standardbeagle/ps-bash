@@ -7010,14 +7010,14 @@ Describe 'Invoke-BashJobs' {
             @(Invoke-BashJobs).Count | Should -Be 0
         }
 
-        It 'Remove-BashBgState stops every job and disposes the job RunspacePool' {
+        It 'Remove-BashBgState stops every job and forgets it' {
             Invoke-BashBackground { Start-Sleep -Seconds 30 }
-            $script:BashBgPool | Should -Not -BeNullOrEmpty
-            $pool = $script:BashBgPool
+            $job = @($script:BashBgJobs)[-1]
+            $job.Done | Should -BeFalse
             (Remove-BashBgState) | Should -BeTrue
-            $script:BashBgPool | Should -BeNullOrEmpty
+            $script:BashBgJobs.Count | Should -Be 0
             $script:BashBgPids.Count | Should -Be 0
-            "$($pool.RunspacePoolStateInfo.State)" | Should -Be 'Closed'
+            $job.Done | Should -BeTrue
             (Remove-BashBgState) | Should -BeFalse
         }
 

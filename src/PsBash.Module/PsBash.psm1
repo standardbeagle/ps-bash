@@ -2858,9 +2858,9 @@ $script:BashTrapHandlers = $global:BashTrapHandlers
 
 # --- Background Process Support ---
 
-# RC-2: background jobs run in-process against a shared RunspacePool of isolated
-# runspaces — no pwsh cold start per `&`. Each entry in $script:BashBgJobs is a
-# job record: @{ Id; PowerShell; AsyncResult; Done }. $! ($global:BashBgLastPid)
+# RC-2: background jobs run in-process, each in a job runspace that is already open
+# (PsBash.Cmdlets.BashJobRunspaces: process-wide, opened ahead, reused) — no pwsh
+# cold start per `&`. Each entry in $script:BashBgJobs is a job record: @{ Id; PowerShell; AsyncResult; Done }. $! ($global:BashBgLastPid)
 # is a synthetic monotonically-increasing id keyed to the [powershell] instance,
 # NOT a real OS pid (documented: bash uses an OS pid; in-process runspaces have
 # no separate pid, so a synthetic id is used and is sufficient for `wait $!`).
@@ -2873,7 +2873,6 @@ $script:BashBgJobs = [System.Collections.Generic.List[object]]::new()
 # either name affects both views — no double-bookkeeping.
 $script:BashBgPids = $script:BashBgJobs
 $script:BashBgNextId = 1000
-$script:BashBgPool = $null
 $global:BashBgLastPid = $null
 # The host loads this psm1 by running its content as a script (SdkRunspace.cs:
 # AddScript(psm1Content)), so $PSCommandPath / $PSScriptRoot are empty there; it
@@ -2882,25 +2881,6 @@ $global:BashBgLastPid = $null
 # left pooled background runspaces without Invoke-Bash* commands.) Import-Module
 # loads set $PSCommandPath.
 $script:BashBgModulePath = $(Get-Variable -Name PsBashModulePsm1Path -ValueOnly -ErrorAction Ignore) ?? $PSCommandPath
-
-function Get-BashBgRunspacePool {
-    if ($null -eq $script:BashBgPool) {
-        $iss = [System.Management.Automation.Runspaces.InitialSessionState]::CreateDefault()
-        # Like the shell's own runspace (SdkRunspace): without it the pool takes the machine policy and, where that
-        # resolves to Restricted, Open() cannot load this psm1 ("running scripts is disabled") and every `cmd &` fails.
-        # Windows only: elsewhere setting it throws PlatformNotSupportedException at Open().
-        if ($IsWindows) { $iss.ExecutionPolicy = [Microsoft.PowerShell.ExecutionPolicy]::Bypass }
-        if ($script:BashBgModulePath -and (Test-Path $script:BashBgModulePath)) {
-            $iss.ImportPSModule(@($script:BashBgModulePath))
-        }
-        # No shared host: a job's `exit N` calls PSHost.SetShouldExit, which on the shell's own host ended the whole script with that status (reported to `wait` instead).
-        $pool = [RunspaceFactory]::CreateRunspacePool($iss)
-        [void]$pool.SetMaxRunspaces(8)
-        $pool.Open()
-        $script:BashBgPool = $pool
-    }
-    return $script:BashBgPool
-}
 
 function Complete-BashBgJob {
     <#
@@ -3060,27 +3040,23 @@ function Complete-BashBgJobsAtExit {
 function Remove-BashBgState {
     <#
     .SYNOPSIS
-        Tear down ALL background-job state of this runspace: stop and dispose every job, dispose the
-        job RunspacePool. The host calls it just before it discards a runspace (a runspace's disposal
-        does not dispose a RunspacePool held in one of its variables, so each command that used `&`
-        used to leave a whole pool of runspaces behind in a long-lived host). Returns $true when a
-        pool existed.
+        Tear down ALL background-job state of this runspace: stop and dispose every job. The host calls it just
+        before it discards a runspace, so a job of a finished command does not run on (a stopped job's runspace is
+        closed; a finished one's went back to the process-wide BashJobRunspaces when it completed). Returns $true
+        when this runspace had started a job.
     #>
+    $had = $script:BashBgJobs.Count -gt 0 -or $null -ne $global:BashBgLastPid
     foreach ($job in @($script:BashBgJobs)) {
         try { if (-not $job.AsyncResult.IsCompleted) { $job.PowerShell.Stop() } } catch { }
         try { $job.PowerShell.Dispose() } catch { }
         $job.Done = $true
     }
     $script:BashBgJobs.Clear()
-    $had = $null -ne $script:BashBgPool
-    if ($had) {
-        try { $script:BashBgPool.Dispose() } catch { }
-        $script:BashBgPool = $null
-    }
+    $global:BashBgLastPid = $null
     return $had
 }
 
-# Import-Module / Remove-Module (a plain pwsh session): leave no job pool behind when the module goes away.
+# Import-Module / Remove-Module (a plain pwsh session): leave no running job behind when the module goes away.
 try {
     if ($null -ne $ExecutionContext.SessionState.Module) {
         $ExecutionContext.SessionState.Module.OnRemove = { Remove-BashBgState | Out-Null }
@@ -3141,17 +3117,16 @@ function Invoke-BashBackground {
 
     $__bgMux = if ($Live) { Get-Variable -Name __BashJobOutput -Scope Global -ValueOnly -ErrorAction Ignore } else { $null }
 
-    if ($Vars -and $Vars.Count) {
-        $__bgPrefix = ($Vars.GetEnumerator() | ForEach-Object { '$' + $_.Key + " = '" + ("$($_.Value)" -replace "'", "''") + "'" }) -join '; '
-        $Command = [scriptblock]::Create($__bgPrefix + "`n" + $Command.ToString())
-    }
-
     # PSBASH_BG_MODE=process: run the job in its own ps-bash-host process (private env/cwd, real pid).
     # -Isolated jobs take it unless PSBASH_BG_MODE=inproc; other jobs stay in-process until it meets the
     # latency bars (docs/specs/background-jobs.md section 11).
     # Only where the host exposes the launcher type; the module (no daemon) and PSBASH_BG_MODE=inproc keep
-    # the runspace-pool path below.
+    # the in-process path below.
     if (($env:PSBASH_BG_MODE -eq 'process' -or ($Isolated -and $env:PSBASH_BG_MODE -ne 'inproc')) -and ('PsBash.Host.Runtime.BashJobProcess' -as [type])) {
+        if ($Vars -and $Vars.Count) {
+            $__bgPrefix = ($Vars.GetEnumerator() | ForEach-Object { '$' + $_.Key + " = '" + ("$($_.Value)" -replace "'", "''") + "'" }) -join '; '
+            $Command = [scriptblock]::Create($__bgPrefix + "`n" + $Command.ToString())
+        }
         if ($script:BashBgJobs.Count -ge $script:BashBgMaxJobs) { Remove-BashBgFinished }
         $prelude = [PsBash.Cmdlets.BashStateSnapshot]::BuildPrelude($ExecutionContext.SessionState)
         $__bgBody = $Command.ToString()
@@ -3171,13 +3146,11 @@ function Invoke-BashBackground {
         Start-BashBgJob -BgJob $job -Process -StartJob { [PsBash.Host.Runtime.BashJobProcess]::Start($prelude, $__bgBody, $__bgEnv, $__bgMux) }
         return
     }
-    # RC-2: run the background command as a PowerShell pipeline against a pooled,
-    # isolated runspace instead of spawning a fresh pwsh process. This eliminates
-    # the ~1-3s pwsh cold start per `&` and the WaitForExit hang in `wait`.
+    # RC-2: run the background command as a PowerShell pipeline in an isolated runspace that is already open
+    # instead of spawning a fresh pwsh process. This eliminates the ~1-3s pwsh cold start per `&` and the
+    # WaitForExit hang in `wait`; a ready runspace (BashJobRunspaces, docs/specs/background-jobs.md section 12.5)
+    # removes the runspace open (hundreds of ms) that made jobs start late and out of launch order.
     if ($script:BashBgJobs.Count -ge $script:BashBgMaxJobs) { Remove-BashBgFinished }
-    $pool = Get-BashBgRunspacePool
-    $ps = [powershell]::Create()
-    $ps.RunspacePool = $pool
     # The job shares this process's environment (bash scalars are env vars), so a plain run would leak
     # the child's assignments into the parent. The wrapper records the environment at job start and, when
     # the body ends, puts back every variable the job changed (unless the parent has since written a
@@ -3185,8 +3158,8 @@ function Invoke-BashBackground {
     # process-wide, so the diff cannot tell the job's writes from the parent's, and applying it to a job that
     # changes nothing undid the parent's assignments. It also reports the body's exit status for `wait`.
     $status = [hashtable]::Synchronized(@{ Code = 0; At = 0L })
-    $wrapped = @'
-param($__bgStatus, $__bgRestore, $__bgStdin, $__bgVars)
+    $__bgHead = @'
+param($__bgStatus, $__bgRestore, $__bgStdin, $__bgVars, $__bgTurn)
 # A subshell body's state restore must not touch the process-wide variables the parent shares (BashShellState.Restore).
 $global:__psbashBgRunspace = $true
 # The job's stdin is the stdin of the compound command that started it, shared with the shell (BackgroundJobStdin).
@@ -3198,7 +3171,8 @@ $global:__BashOperandsExpanded = $true
 $__bgBefore =if ($__bgRestore) { [Environment]::GetEnvironmentVariables() } else { @{} }
 $__bgOk = $false
 try {
-'@ + "`n" + [PsBash.Cmdlets.BashStateSnapshot]::BuildJobOptions($ExecutionContext.SessionState) + $Command.ToString() + "`n" + @'
+'@
+    $__bgTail = @'
     $__bgOk = $true
 } catch {
     # A failure that ends the job (set -u, ${x:?}) was already reported on its error stream, where the job's own
@@ -3225,9 +3199,14 @@ try {
     [PsBash.Cmdlets.BashVariableStore]::LeaveJobSnapshot()
     $__bgStatus.Code = $__bgCode
     $__bgStatus.At = [System.Diagnostics.Stopwatch]::GetTimestamp()
+    # Last: the runspace goes back for the next job without the globals this one created.
+    [PsBash.Cmdlets.BashJobRunspaces]::EndJob($ExecutionContext.SessionState)
 }
 '@
-    [void]$ps.AddScript($wrapped).AddArgument($status).AddArgument([bool]$Isolated).AddArgument([PsBash.Cmdlets.BackgroundJobStdin]::Inherit($ExecutionContext.SessionState)).AddArgument($Vars)
+    # One .NET call builds the job (runspace, options, body, arguments): each script->.NET call is an AMSI report
+    # under the process-wide lock the previous job's start waits on (section 12.4), and a dozen per launch spread
+    # the starts of jobs launched back to back.
+    $ps = [PsBash.Cmdlets.BashJobRunspaces]::NewJob($ExecutionContext.SessionState, $__bgHead, $Command, $__bgTail, $Vars, $status, [bool]$Isolated, $script:BashBgModulePath)
 
     $synthId = $script:BashBgNextId
     $script:BashBgNextId++
