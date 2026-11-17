@@ -239,10 +239,16 @@ internal static class PipedInteractive
 
     /// <summary>The bash script that replays <paramref name="input"/> as an interactive session (see the type).
     /// <paramref name="loadHistory"/>: read <c>$HISTFILE</c> first. <paramref name="noSaveFile"/>: a
-    /// <c>$HISTFILE</c> value the session must not write (the launcher's default).</summary>
-    internal static string BuildScript(string input, bool loadHistory, string? noSaveFile)
+    /// <c>$HISTFILE</c> value the session must not write (the launcher's default). <paramref name="rcFile"/>: the
+    /// <c>--rcfile</c> sourced before the first prompt (<see cref="ShellArgs.RcSourceCommand"/>), so its <c>PS1</c>
+    /// is the one the prompts show.</summary>
+    internal static string BuildScript(string input, bool loadHistory, string? noSaveFile, string? rcFile = null)
     {
         var sb = new StringBuilder();
+        // An interactive shell ($- has i, emacs/monitor/history on), marked before the rc runs so its
+        // `case $- in *i*)` guard sees it, as the REPL and `-i -c` do.
+        sb.Append("shopt -s ").Append(ShellArgs.InteractiveMark).Append('\n');
+        if (rcFile is not null) sb.Append(ShellArgs.RcSourceCommand(rcFile)).Append('\n');
         sb.Append("set -o history\n");
         if (loadHistory) sb.Append("history -r 2>/dev/null\n");
         const string promptCommand =

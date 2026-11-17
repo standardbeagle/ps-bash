@@ -170,6 +170,47 @@ public class ShellArgsTests
     {
         Assert.NotNull(ShellArgs.Parse(["--init-file"]).Error);
     }
+
+    // bash 5.2 oracle: `bash --rcfile rc -i -c 'echo $x'` sources rc first; `-c` alone, or with --norc, never does.
+    [Theory]
+    [InlineData(new[] { "--rcfile", "rc", "-i", "-c", "true" }, "rc")]
+    [InlineData(new[] { "--init-file", "rc", "-i", "-c", "true" }, "rc")]
+    [InlineData(new[] { "--rcfile", "rc", "-c", "true" }, null)]
+    [InlineData(new[] { "--norc", "--rcfile", "rc", "-i", "-c", "true" }, null)]
+    [InlineData(new[] { "--rcfile", "rc", "--norc", "-i" }, null)]
+    [InlineData(new[] { "--rcfile", "rc", "-i" }, "rc")]
+    public void Parse_Rcfile_KeptOnlyForAnInteractiveShellWithoutNorc(string[] argv, string? expected)
+    {
+        var result = ShellArgs.Parse(argv);
+
+        Assert.Null(result.Error);
+        Assert.Equal(expected, result.RcFile);
+    }
+
+    [Fact]
+    public void Parse_RcfileWithInteractiveCommand_SourcesItAfterTheOptionsBeforeTheCommand()
+    {
+        var result = ShellArgs.Parse(["--rcfile", "my rc", "-e", "-i", "-c", "echo hi"]);
+
+        Assert.Equal("shopt -s " + ShellArgs.InteractiveMark + "; set -e; " + ShellArgs.RcSourceCommand("my rc"), result.Prelude);
+        Assert.Equal("echo hi", result.Command);
+    }
+
+    [Theory]
+    [InlineData("rc", "if [ -r 'rc' ]; then . 'rc'; fi")]
+    // Injection probes: the path is one single-quoted word whatever it holds.
+    [InlineData("a'; rm -rf x; '", "if [ -r 'a'\\''; rm -rf x; '\\''' ]; then . 'a'\\''; rm -rf x; '\\'''; fi")]
+    [InlineData("$(id)`x`", "if [ -r '$(id)`x`' ]; then . '$(id)`x`'; fi")]
+    public void RcSourceCommand_SourcesTheFileAsOneQuotedWord_SkippingAnUnreadableOne(string rcFile, string expected)
+        => Assert.Equal(expected, ShellArgs.RcSourceCommand(rcFile));
+
+    [Fact]
+    public void InteractiveHostFlags_PassTheRcfileAbsolute_AndADeviceAsWritten()
+    {
+        Assert.Equal(["--rcfile=" + Path.GetFullPath("rc")], ShellArgs.Parse(["--rcfile", "rc", "-i"]).InteractiveHostFlags());
+        Assert.Equal(["--rcfile=/dev/null"], ShellArgs.Parse(["--rcfile", "/dev/null", "-i"]).InteractiveHostFlags());
+        Assert.Equal(["--no-profile"], ShellArgs.Parse(["--norc", "--rcfile", "rc", "-i"]).InteractiveHostFlags());
+    }
     [Fact]
     public void Parse_OptionFlags_BuildAPreludeForTheCommand()
     {

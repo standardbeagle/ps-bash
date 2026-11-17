@@ -111,7 +111,7 @@ internal sealed class Program
             var interactiveWorkerTask = Task.Run(() => (IWorker)SdkWorker.Create());
             try
             {
-                return await InteractiveShell.RunAsync(interactiveWorkerTask, noProfile);
+                return await InteractiveShell.RunAsync(interactiveWorkerTask, noProfile, GetArg(args, "--rcfile"));
             }
             finally
             {

@@ -17,7 +17,8 @@ public record ShellArgs(
     bool Verbose = false,
     string? Error = null,
     string? Prelude = null,
-    bool NoExec = false)
+    bool NoExec = false,
+    string? RcFile = null)
 {
     // Short flags that may be bundled (`-lc`, `-eu`, `-oo errexit noglob`). A bundle holding any other
     // letter stays one word and is reported as an unsupported option before anything runs.
@@ -97,6 +98,7 @@ public record ShellArgs(
         string[] scriptArgs = [];
         string? timeout = null;
         string? error = null;
+        string? rcFile = null;
         // `-e` / `-u` / `-x` / `-o NAME` / `-O NAME` / `+O NAME`: shell options given on the command line, run as `set`/`shopt` ahead of the -c string.
         var prelude = new List<string>();
         // `-n` (noexec): read and parse the commands, run none of them (`bash -n script.sh` is a syntax check).
@@ -142,11 +144,11 @@ public record ShellArgs(
                 else error ??= "--timeout requires an argument";
                 continue;
             }
-            // --rcfile/--init-file <file>: bash startup-file override. The value is consumed so
-            // it is not mistaken for a script path; ps-bash does not source it.
+            // --rcfile/--init-file <file>: the startup file an INTERACTIVE shell sources in place of its rc
+            // (RcSourceCommand); a non-interactive shell ignores it, and --norc wins.
             if (expanded[i] is "--rcfile" or "--init-file")
             {
-                if (i + 1 < expanded.Count) i++;
+                if (i + 1 < expanded.Count) rcFile = expanded[++i];
                 else error ??= $"{expanded[i]}: option requires an argument";
                 continue;
             }
@@ -313,9 +315,38 @@ public record ShellArgs(
         // option table (never listed by shopt), so a child shell does not inherit it.
         if (interactive && command is not null)
             prelude.Insert(0, "shopt -s " + InteractiveMark);
+        // Only an interactive shell reads a startup file, and --norc suppresses it.
+        if (!interactive || noprofile) rcFile = null;
+        // `bash --rcfile f -i -c cmd` sources f after the command-line options are set, before cmd.
+        if (rcFile is not null && command is not null)
+            prelude.Add(RcSourceCommand(rcFile));
 
         return new ShellArgs(command, interactive, login, stdin, noprofile, unixPaths, scriptPath, scriptArgs, rawPs, showVersion, showHelp, timeout, compactOutput, verbose, error,
-            prelude.Count > 0 ? string.Join("; ", prelude) : null, noExec);
+            prelude.Count > 0 ? string.Join("; ", prelude) : null, noExec, rcFile);
+    }
+
+    /// <summary>
+    /// The startup-file flags for <c>ps-bash-host --interactive</c> (the REPL): <c>--no-profile</c>, or the
+    /// <c>--rcfile</c> to source in place of <c>~/.psbashrc</c>, made absolute here because the path is relative to
+    /// the launcher's working directory. Every site that starts the interactive host uses this.
+    /// </summary>
+    public IEnumerable<string> InteractiveHostFlags()
+    {
+        if (NoProfile) yield return "--no-profile";
+        // A device (`--rcfile /dev/null`) is not a path to resolve: GetFullPath made it C:\dev\null.
+        if (RcFile is not null)
+            yield return "--rcfile=" + (PsBash.Core.DevicePath.IsDevice(RcFile) ? RcFile : System.IO.Path.GetFullPath(RcFile));
+    }
+
+    /// <summary>
+    /// The bash that sources an interactive shell's <c>--rcfile</c>, as bash does: like <c>.</c> (so <c>return</c> ends
+    /// it, <c>exit</c> ends the shell, and <c>BASH_SOURCE</c> is the path as typed), and a file that cannot be read is
+    /// skipped silently with status 0. The one form for every interactive entry (<c>-i -c</c> prelude, piped <c>-i</c>).
+    /// </summary>
+    public static string RcSourceCommand(string rcFile)
+    {
+        string q = "'" + rcFile.Replace("'", "'\\''") + "'";
+        return "if [ -r " + q + " ]; then . " + q + "; fi";
     }
 
     // Expands `-lc` -> `-l`, `-c`. Single-char flags (`-c`, `-l`) and long

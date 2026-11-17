@@ -98,6 +98,20 @@ public class PipedInteractiveTests
         Assert.EndsWith("exit $__psbash_status\n", script);
     }
 
+    // bash 5.2 oracle: `printf 'echo $-\n' | bash --norc -i` prints himBH (interactive, no c), and with --rcfile rc the rc
+    // runs before the first prompt, already interactive (an rc's `case $- in *i*)` guard holds) and its PS1 is the prompt.
+    [Fact]
+    public void BuildScript_MarksTheShellInteractive_ThenSourcesTheRcfile_BeforeTheFirstPrompt()
+    {
+        var script = PipedInteractive.BuildScript("echo hi\n", loadHistory: false, noSaveFile: null, rcFile: "rc");
+        int mark = script.IndexOf("shopt -s " + ShellArgs.InteractiveMark + "\n", StringComparison.Ordinal);
+        int rc = script.IndexOf(ShellArgs.RcSourceCommand("rc"), StringComparison.Ordinal);
+        int prompt = script.IndexOf("${PS1@P}", StringComparison.Ordinal);
+        Assert.True(mark == 0 && rc > mark && prompt > rc, script);
+
+        Assert.DoesNotContain(". '", PipedInteractive.BuildScript("echo hi\n", loadHistory: false, noSaveFile: null));
+    }
+
     // Injection probe: a command's text reaches eval only as a single-quoted literal, never as script text.
     [Theory]
     [InlineData("echo '; touch pwned'")]

@@ -326,6 +326,8 @@ if (shellArgs.ReadFromStdin || (!shellArgs.Interactive && shellArgs.Command is n
 
 // `echo cmds | bash -i`: an interactive shell reading its commands from the pipe (PipedInteractive). The REPL is
 // for a terminal; PSBASH_INTERACTIVE_REPL=1 keeps it for piped input too (test harnesses drive it line by line).
+// The replay runs as a command string, but it is not `bash -c`: $- has no c (pipedInteractive).
+bool pipedInteractive = false;
 if (shellArgs.Interactive && shellArgs.Command is null && shellArgs.ScriptPath is null && Console.IsInputRedirected
     && !EnvFlags.IsTruthy("PSBASH_INTERACTIVE_REPL"))
 {
@@ -347,8 +349,9 @@ if (shellArgs.Interactive && shellArgs.Command is null && shellArgs.ScriptPath i
     shellArgs = shellArgs with
     {
         Command = PipedInteractive.BuildScript(piped, loadHistory: !string.IsNullOrEmpty(inheritedHistFile),
-            noSaveFile: string.IsNullOrEmpty(inheritedHistFile) ? defaultHistFile : null),
+            noSaveFile: string.IsNullOrEmpty(inheritedHistFile) ? defaultHistFile : null, rcFile: shellArgs.RcFile),
     };
+    pipedInteractive = true;
 }
 
 // `bash -i -c 'cmd'` runs cmd and exits; -i alone (no -c string) opens the prompt.
@@ -407,7 +410,7 @@ if (shellArgs.Command is null)
     };
     psi.ArgumentList.Add("--interactive");
     psi.ArgumentList.Add($"--launcher-pid={Environment.ProcessId}");
-    if (shellArgs.NoProfile) psi.ArgumentList.Add("--no-profile");
+    foreach (var flag in shellArgs.InteractiveHostFlags()) psi.ArgumentList.Add(flag);
 
     using var hostProc = System.Diagnostics.Process.Start(psi);
     if (hostProc is null)
@@ -583,7 +586,7 @@ int exitCode = await HostFailureGuard.RunAsync(async () =>
         ipcWorker.LauncherStdin = Console.OpenStandardInput();
     var rc = await worker.ExecuteAsync(
         BuildInvocationCwdPreamble() + pwshCommand,
-        environment: CaptureLauncherEnvironment(dashC: shellArgs.Command is not null));
+        environment: CaptureLauncherEnvironment(dashC: shellArgs.Command is not null && !pipedInteractive));
     Stamp("executed");
     return rc;
 });
@@ -777,7 +780,7 @@ static async Task<int> RunHostUnderPtyAsync(string hostBinary, ShellArgs shellAr
     await using var pty = await PtyAllocator.AllocateAsync(cols, rows);
 
     var hostArgs = new List<string> { "--interactive", $"--launcher-pid={Environment.ProcessId}" };
-    if (shellArgs.NoProfile) hostArgs.Add("--no-profile");
+    hostArgs.AddRange(shellArgs.InteractiveHostFlags());
 
     var env = new Dictionary<string, string>(StringComparer.Ordinal)
     {

@@ -16,13 +16,16 @@ internal sealed class PsBashExecutor : IScriptExecutor
     private static readonly string Endpoint =
         "unix:" + Path.Combine(Path.GetTempPath(), "ps-bash", "spec-" + Guid.NewGuid().ToString("N") + ".sock");
 
+    /// <summary>How long the shared daemon (and its spill slots) stay up with nothing to run.</summary>
+    internal const int HostIdleSecs = 20;
+
     private static readonly Dictionary<string, string> Env = Mode == "perinv"
         ? new() { ["PSBASH_PER_INVOCATION"] = "1" }
         : new()
         {
             ["PSBASH_PER_INVOCATION"] = "0",
             ["PSBASH_IPC_ENDPOINT"] = Endpoint,
-            ["PSBASH_HOST_IDLE_SECS"] = "20",
+            ["PSBASH_HOST_IDLE_SECS"] = HostIdleSecs.ToString(),
             ["PSBASH_HOST_MAX_MB"] = "1536",
             ["PSBASH_EXEC_SPILL_MS"] = Environment.GetEnvironmentVariable("PSBASH_SPEC_SPILL_MS") ?? "250",
         };
@@ -51,9 +54,11 @@ internal sealed class PsBashExecutor : IScriptExecutor
         // Same line as the case's first line, so `$LINENO` in a case counts from 1 like it does in the in-host path.
         // Run as a script FILE, like the oracle (`bash case.sh`) and the in-host path: a `-c` command ends with a
         // different status for some errors (`${x?}` is 127 under -c, 1 in a file), so `-c` judged those cases wrongly.
-        string file = Path.Combine(Path.GetTempPath(), "ps-bash", "spec-launch", Guid.NewGuid().ToString("N") + ".sh");
-        Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+        string file = Path.Combine(LaunchDir, Guid.NewGuid().ToString("N") + ".sh");
+        Directory.CreateDirectory(LaunchDir);
         await File.WriteAllTextAsync(file, shell + script, cancel);
+        await WarmHostsAsync(cancel);
+        Interlocked.Increment(ref _running);
         try
         {
             var r = await ProcessSpawn.RunAsync(StartInfo(caseDir, file), timeout, stdinContent: null, env: Env);
@@ -61,9 +66,51 @@ internal sealed class PsBashExecutor : IScriptExecutor
         }
         finally
         {
+            Volatile.Write(ref _lastEndTicks, DateTime.UtcNow.Ticks);
+            Interlocked.Decrement(ref _running);
             try { File.Delete(file); } catch (IOException) { } catch (UnauthorizedAccessException) { }
         }
     }
+
+    private static readonly string LaunchDir = Path.Combine(Path.GetTempPath(), "ps-bash", "spec-launch");
+    private static readonly SemaphoreSlim WarmGate = new(1, 1);
+    private static int _running;
+    private static long _lastEndTicks; // 0 = no case has run yet: the hosts were never started
+    private static readonly TimeSpan WarmupTimeout = TimeSpan.FromSeconds(120);
+
+    /// <summary>
+    /// A case's time limit ends a hang; it must never include starting the shared hosts. The first launcher case of a run
+    /// cold-starts the daemon, and its first nested <c>$SH</c> cold-starts a spill slot too (slot 0 is busy running the
+    /// parent): on a loaded machine that took 12 s on its own, so sh-usage "sh +c is accepted" (the file's first case
+    /// with a nested shell, limit 14 s) timed out in most full runs. The daemon also idles out after
+    /// <see cref="HostIdleSecs"/>, so a launcher case after a stretch of in-host cases paid it again. Before such a case,
+    /// <c>ps-bash -c 'bash -c :'</c> starts the daemon and its first spill slot, outside any case's clock.
+    /// </summary>
+    private static async Task WarmHostsAsync(CancellationToken cancel)
+    {
+        if (Mode == "perinv") return; // a private host per case is the mode's point: its start is part of every case
+        if (!HostsMayBeCold(Volatile.Read(ref _running), Volatile.Read(ref _lastEndTicks), DateTime.UtcNow.Ticks)) return;
+        await WarmGate.WaitAsync(cancel);
+        try
+        {
+            if (!HostsMayBeCold(Volatile.Read(ref _running), Volatile.Read(ref _lastEndTicks), DateTime.UtcNow.Ticks)) return;
+            var psi = ProcessSpawn.BuildPsi(PsBashLocator.ResolveRequired(BuildConfig.Auto), "-c", "bash -c :");
+            psi.WorkingDirectory = LaunchDir;
+            // A warm-up that fails leaves the case to report what is wrong; it is not itself a result.
+            try { await ProcessSpawn.RunAsync(psi, WarmupTimeout, stdinContent: null, env: Env); }
+            catch (Exception) when (!cancel.IsCancellationRequested) { }
+            Volatile.Write(ref _lastEndTicks, DateTime.UtcNow.Ticks);
+        }
+        finally { WarmGate.Release(); }
+    }
+
+    /// <summary>
+    /// Whether the shared hosts may be down: none started yet, or nothing running and the last case ended more than half
+    /// the idle timeout ago (half, so a host is never caught mid-shutdown).
+    /// </summary>
+    internal static bool HostsMayBeCold(int running, long lastEndTicks, long nowTicks)
+        => lastEndTicks == 0
+           || running == 0 && nowTicks - lastEndTicks > TimeSpan.FromSeconds(HostIdleSecs / 2.0).Ticks;
 }
 
 /// <summary>Picks the executor for the run: <c>inhost</c> (default, shared slots), else a launcher per case.</summary>

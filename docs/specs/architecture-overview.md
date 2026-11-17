@@ -218,7 +218,8 @@ InteractiveShell.RunAsync()
     │     ├── Spawn the host process
     │     └── Establish IPC with the host server
     │
-    ├──► SourceRcFileAsync() → ~/.psbashrc transpiled and executed
+    ├──► SourceRcFileAsync() → ~/.psbashrc (or --rcfile FILE; none under --norc) transpiled and executed
+    │     (piped `-i` and `-i -c` source --rcfile in their script: ShellArgs.RcSourceCommand)
     │
     ├──► PluginLoader.LoadPlugins(config)
     │     ├── Scan ~/.psbash/plugins/*.dll

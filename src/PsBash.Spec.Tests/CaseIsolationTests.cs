@@ -138,6 +138,23 @@ public class CaseIsolationTests
         await Task.CompletedTask;
     }
 
+    /// <summary>
+    /// REGRESSION: a case's limit paid the shared hosts' cold start (daemon + first spill slot, 12 s under load), so
+    /// sh-usage "sh +c is accepted" timed out in most full runs. The hosts are started before a case whenever they may be
+    /// down: never started, or idle for more than half their idle timeout with no case running.
+    /// </summary>
+    [Theory]
+    [InlineData(0, 0L, 1L, true)]                       // nothing has run: the hosts were never started
+    [InlineData(1, 0L, 1L, true)]
+    [InlineData(0, 100L, 100L + 9 * TimeSpan.TicksPerSecond, false)]  // idle 9 s of 20: still up
+    [InlineData(0, 100L, 100L + 11 * TimeSpan.TicksPerSecond, true)]  // idle 11 s: may be shutting down
+    [InlineData(2, 100L, 100L + 60 * TimeSpan.TicksPerSecond, false)] // a case is running: the daemon is busy, not idle
+    public void Launcher_HostsMayBeCold_BeforeTheFirstCaseAndAfterAnIdleStretch(int running, long lastEnd, long now, bool cold)
+    {
+        Assert.Equal(20, PsBashExecutor.HostIdleSecs);
+        Assert.Equal(cold, PsBashExecutor.HostsMayBeCold(running, lastEnd, now));
+    }
+
     private static string[] Entries(string dir)
         => Directory.GetFileSystemEntries(dir).Select(Path.GetFileName).OrderBy(n => n, StringComparer.Ordinal).ToArray()!;
 

@@ -49,7 +49,7 @@ public static class InteractiveShell
     /// this method will not dispose or respawn it. Ctrl+C cancels the in-flight
     /// PS pipeline but keeps the worker alive for the next prompt.
     /// </summary>
-    public static async Task<int> RunAsync(Task<IWorker> workerTask, bool noProfile = false)
+    public static async Task<int> RunAsync(Task<IWorker> workerTask, bool noProfile = false, string? rcFile = null)
     {
         Console.CancelKeyPress += OnCancelKeyPress;
         EnsureVirtualTerminalEnabled();
@@ -163,7 +163,7 @@ public static class InteractiveShell
             catch (OperationCanceledException) { /* Ctrl-C during startup */ }
             if (!noProfile)
             {
-                try { await SourceRcFileAsync(w, readinessCts); }
+                try { await SourceRcFileAsync(w, readinessCts, rcFile); }
                 catch (OperationCanceledException) { /* Ctrl-C during rc load — proceed to the prompt */ }
             }
             readyWorker = w;
@@ -1431,8 +1431,11 @@ public static class InteractiveShell
         }
     }
 
-    private static async Task<bool> SourceRcFileAsync(IWorker worker, CancellationTokenSource cts)
+    private static async Task<bool> SourceRcFileAsync(IWorker worker, CancellationTokenSource cts, string? rcFile = null)
     {
+        // `--rcfile FILE` replaces the default startup file; one that cannot be read is skipped silently (bash).
+        if (rcFile is not null)
+            return !File.Exists(rcFile) || await SourceFileAsync(worker, cts, rcFile);
         // PSBASH_HOME overrides the home directory used to locate .psbashrc.
         // This is used by tests to isolate the rc file without touching the real
         // user profile.  In production this env var is unset and the real home is used.

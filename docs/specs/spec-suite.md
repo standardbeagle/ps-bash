@@ -113,11 +113,17 @@ A case must not write an absolute path outside those (`> /zz` succeeds at the dr
 session: use a path under a directory that does not exist when the point is a failing redirect), and must not
 depend on how long a nested shell takes to start (`timeout 0.5 $SH -c ...`). A case's limit ends a hang; it is
 not a stopwatch: a real-launcher case gets `SpecRunner.NestedShellAllowance` on top of its `## timeout` for every
-`$SH` it starts (seven nested shells ran 8 s against a fixed 10 s, and over it on a loaded host).
+`$SH` it starts (seven nested shells ran 8 s against a fixed 10 s, and over it on a loaded host). Nor does a limit
+ever include starting the shared hosts. Launcher cases share one daemon (`PsBashExecutor`, idle timeout
+`HostIdleSecs`), and a nested `$SH` runs on a spill slot (slot 0 is busy with its parent). Before a launcher case,
+whenever those hosts may be down (none started yet, or idle past half the timeout with no case running:
+`PsBashExecutor.HostsMayBeCold`), the runner starts both with `ps-bash -c 'bash -c :'` outside any case's clock.
+Without that, the first nesting case of a run paid both cold starts: about 12 s under load, so sh-usage "sh +c is
+accepted" (limit 14 s) timed out in most full runs.
 
 Guards: `Spec.Tests/CaseIsolationTests` (a polluting case next to probes on both executors, in sequence and
 concurrently; the probe must print what it printed before; the checkout root and the runner's directory keep
-their entries) and `Spec.Tests/SharedLocationGateTests`.
+their entries), `Spec.Tests/SharedLocationGateTests`, and `CaseIsolationTests.Launcher_HostsMayBeCold_*`.
 
 ## 4. Absorbing the existing tests
 

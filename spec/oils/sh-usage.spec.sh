@@ -68,7 +68,8 @@ foo
 ## real-launcher
 
 #### --rcfile in non-interactive shell prints warnings
-echo 'echo rc' > rc
+# ps-bash: the rc sets PS1, so the prompt line is the same on every host (bash's default prompt holds user, host and cwd).
+echo 'echo rc; PS1="$ "' > rc
 
 $SH --rcfile rc -i </dev/null 2>interactive.txt
 grep -q 'warning' interactive.txt
@@ -82,12 +83,11 @@ head *interactive.txt
 ## STDOUT:
 rc
 ==> interactive.txt <==
-beagle@beagle-ab2:/tmp/tmp.yKLKrlwxiE$ exit
+$ exit
 
 ==> non-interactive.txt <==
 ## END
 ## status: 0
-## XFAIL ps-bash gap-rcfile-not-sourced ps-bash does not source --rcfile, so "rc" is never printed; and the expected prompt line holds the recording host's user, host name and temp dir (beagle@beagle-ab2:/tmp/tmp.yKLKrlwxiE), which no other run reproduces. (-i with </dev/null does read stdin and exit at EOF: it prints its prompt and "exit".)
 ## timeout: 10
 ## real-launcher
 
