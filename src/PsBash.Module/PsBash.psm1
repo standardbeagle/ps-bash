@@ -361,9 +361,9 @@ function Resolve-BashCommand {
         'false' { return { $global:LASTEXITCODE = 1 } }
         # `b=builtin; $b declare f=$x`: Invoke-BashCommand peels the wrapper and runs the rest past functions
         # (a declaration through the run-time eval, its operands already split).
-        'builtin' { return { if ($args.Count -eq 0) { $global:LASTEXITCODE = 0 } else { Invoke-BashCommand 'builtin' @args } } }
+        'builtin' { return { if ($args.Count -eq 0) { $global:LASTEXITCODE = 0 } else { $__psbash_argv = [string[]]$args; Invoke-BashCommand 'builtin' @__psbash_argv } } }
         # `myvar=typeset; $myvar x=$x`: a declaration named at run time; its operands are ordinary (already split) words.
-        { $_ -cin 'declare', 'typeset', 'local', 'export', 'readonly' } { return [scriptblock]::Create("Invoke-BashCommand '$Name' @args") }
+        { $_ -cin 'declare', 'typeset', 'local', 'export', 'readonly' } { return [scriptblock]::Create("`$__psbash_argv = [string[]]`$args; Invoke-BashCommand '$Name' @__psbash_argv") }
         # `b=break; $b`, `c=continue; $c`: a PowerShell break / continue leaves the nearest loop on the CALL stack, so
         # run from this block it leaves the loop the command sits in (bash's loop keywords are dynamic too).
         'break'    { return { break } }

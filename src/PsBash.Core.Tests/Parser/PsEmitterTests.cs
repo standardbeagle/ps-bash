@@ -7167,7 +7167,7 @@ public class PsEmitterTests
     // `builtin() { …; }` / `command() { …; }`: neither is a special builtin, so a function of that name wins (it ran the
     // builtin). Before the definition runs, or after `unset -f`, `builtin` falls back to the run-time wrapper (it has no alias).
     [Theory]
-    [InlineData("builtin() { echo r; }\nbuiltin echo b", "& ((Get-Command -Name 'builtin' -CommandType Function -ErrorAction SilentlyContinue) ?? { Invoke-BashCommand 'builtin' @args })")]
+    [InlineData("builtin() { echo r; }\nbuiltin echo b", "& ((Get-Command -Name 'builtin' -CommandType Function -ErrorAction SilentlyContinue) ?? { $__psbash_argv = [string[]]$args; Invoke-BashCommand 'builtin' @__psbash_argv })")]
     [InlineData("command() { echo r; }\ncommand echo c", "& ((Get-Command -Name 'command' -CommandType Function -ErrorAction SilentlyContinue) ?? 'command')")]
     public void Transpile_FunctionNamedBuiltinOrCommand_CallsTheFunction(string bash, string call)
     {
@@ -7759,11 +7759,11 @@ public class PsEmitterTests
     }
 
     [Fact]
-    public void Transpile_ExternalCommandColonFlag_NotQuoted()
+    public void Transpile_ExternalCommandColonFlag_QuotedSoItArrivesWhole()
     {
-        // Deliberately narrower than the passthrough rule: `-Foo:bar` PARSES, so
-        // quoting it would change named-parameter binding rather than fix a parse.
-        Assert.Equal("cmd -Foo:bar", PsEmitter.Transpile("cmd -Foo:bar"));
+        // A bare `-Foo:bar` reaches a PowerShell callee (a bash function, a program's stand-in) as `-Foo:` and `bar`;
+        // a program gets the same text quoted or not. A Verb-Noun cmdlet keeps it bare (PsEmitterDashOperandTests).
+        Assert.Equal("cmd '-Foo:bar'", PsEmitter.Transpile("cmd -Foo:bar"));
     }
 
     [Fact]

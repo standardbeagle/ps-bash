@@ -6907,7 +6907,7 @@ public static partial class PsEmitter
             var q = PsBuild.SingleQuote(fnName);
             // `builtin` has no alias to fall back to (before the definition runs, or after `unset -f builtin`): the
             // run-time command peels it and runs the rest past functions.
-            var fallback = fnName == "builtin" ? "{ Invoke-BashCommand 'builtin' @args }" : q;
+            var fallback = fnName == "builtin" ? "{ " + PsBuild.ArgvLiterals + "; Invoke-BashCommand 'builtin' " + PsBuild.ArgvSplat + " }" : q;
             leading = "& ((Get-Command -Name " + q + " -CommandType Function -ErrorAction SilentlyContinue) ?? " + fallback + ") ";
             commandWordText = "";
         }
@@ -6926,6 +6926,15 @@ public static partial class PsEmitter
             && NativeMergeRunner(cmd);
         if (mergeRunner) leading = "Invoke-BashNative -- ";
 
+        // An operand PowerShell's binder would rewrite: every dash word for a run-time name or a merged-stderr run, else
+        // the words no PowerShell callee receives intact (QuotedDashOperand). A Verb-Noun command keeps its syntax.
+        // A script file run in place (`./x.sh` -> `bash ./x.sh`) is a call of the bash cmdlet: every dash word is its operand.
+        bool quoteEveryDash = dynamicName || mergeRunner || isScriptCommand;
+        bool powerShellCommand = !quoteEveryDash && cmd.Words.Length > 0 && GetLiteralValue(cmd.Words[0]) is { } headName
+            && IsPowerShellCommandName(headName);
+        string? DashOperand(CompoundWord w) => OrderedArgDashLiteral(w) is { } d
+            && (quoteEveryDash || (splatSafeCommand && !powerShellCommand && BinderRewritesOperand(d))) ? d : null;
+
         if (splatSafeCommand && (HasUnquotedVarSplatArg(commandArgs, loneArraySplats: true) || commandArgs.Any(HasIndirectExpansion)))
         {
             // Hoist each unquoted-variable operand to a temp var and splat it.
@@ -6936,7 +6945,7 @@ public static partial class PsEmitter
             sb.Append(EmitCommandWithSplatArgs(
                 dynamicName ? "& $__bashhead" : leading + commandWordText,
                 commandArgs,
-                argIndex => (dynamicName || mergeRunner) && OrderedArgDashLiteral(commandArgs[argIndex]) is { } dynDash
+                argIndex => DashOperand(commandArgs[argIndex]) is { } dynDash
                     ? PsBuild.SingleQuote(dynDash)
                     : QuoteCommaLiteralWord(commandArgs[argIndex], EmitWord(commandArgs[argIndex])),
                 headPrelude: dynamicName ? "$__bashhead = " + leading[2..] + commandWordText + "; " : ""));
@@ -6950,7 +6959,7 @@ public static partial class PsEmitter
                     sb.Append(' ');
                     // `$GREP -e pat` / `$SH -e -c ...`: the name may resolve to a cmdlet, where a bare `-e` is an ambiguous
                     // PowerShell parameter prefix. A quoted flag is an argument for whatever the name turns out to be.
-                    if ((dynamicName || mergeRunner) && OrderedArgDashLiteral(cmd.Words[i]) is { } dynDashArg)
+                    if (DashOperand(cmd.Words[i]) is { } dynDashArg)
                     {
                         sb.Append(PsBuild.SingleQuote(dynDashArg));
                         continue;
@@ -13629,6 +13638,27 @@ public static partial class PsEmitter
     /// (<c>'-r'</c>) is also returned — re-emitting it single-quoted is equivalent and keeps
     /// one rule for "every dash-leading word".
     /// </summary>
+    /// <summary>
+    /// A static operand (from <see cref="OrderedArgDashLiteral"/>) that a PowerShell callee never receives as written: a
+    /// bare <c>--</c> is consumed as end-of-parameters, <c>--%</c> stops parsing, and <c>-x:y</c> is split into <c>-x:</c>
+    /// and <c>y</c>. A bash function, and a stand-in for a program (a <c>#!</c> file, a background job's program), is
+    /// PowerShell code, so these are single-quoted for every unmapped command; a program gets the same text either way.
+    /// A plain <c>-e</c> stays bare (it reaches <c>$args</c> as <c>-e</c>; stand-ins pass it on through PsBuild.ArgvSplat).
+    /// </summary>
+    internal static bool BinderRewritesOperand(string dashLiteral)
+        => dashLiteral == "--" || dashLiteral.StartsWith("--%", StringComparison.Ordinal) || dashLiteral.IndexOf(':') > 0;
+
+    /// <summary>A PowerShell command name, Verb-Noun (<c>Get-ChildItem</c>): its operands keep PowerShell's parameter syntax.</summary>
+    internal static bool IsPowerShellCommandName(string name)
+    {
+        int dash = name.IndexOf('-');
+        if (dash < 2 || dash != name.LastIndexOf('-') || dash == name.Length - 1) return false;
+        if (!char.IsAsciiLetterUpper(name[0]) || !char.IsAsciiLetterUpper(name[dash + 1])) return false;
+        for (int i = 0; i < name.Length; i++)
+            if (i != dash && !char.IsAsciiLetterOrDigit(name[i])) return false;
+        return true;
+    }
+
     private static string? OrderedArgDashLiteral(CompoundWord word)
     {
         if (word.Parts.IsEmpty || TryGetStaticArgValue(word) is not { Length: > 0 } value || value[0] != '-')

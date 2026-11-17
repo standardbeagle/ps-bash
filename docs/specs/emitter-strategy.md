@@ -245,6 +245,23 @@ the emitter no longer special-cases echo (the old `-e`/`-E`/`--` force-quote set
 
 ---
 
+### 3.1 Operands PowerShell's binder rewrites
+
+A bash function, a `#!` file's stand-in and a background job's program stand-in are PowerShell code, so their
+arguments pass through the binder: a bare `--` is consumed, `--%` stops parsing, `-x:y` arrives as `-x:` plus `y`, and
+a splatted `$args` re-binds `-e` to the callee's `-ErrorAction`. Two rules close the class:
+
+- **Emitter.** For every unmapped command, a dash word that `PsEmitter.BinderRewritesOperand` names (`--`, `--%…`, a
+  dash word containing `:`) is single-quoted. A native program gets the same text either way. A dynamic command name,
+  a merged runner and a script file run in place (`./x.sh` → `bash ./x.sh`) quote every dash word. A Verb-Noun
+  PowerShell command (`PsEmitter.IsPowerShellCommandName`: `Get-Item -Path:x`) keeps its parameter syntax.
+- **Stand-ins.** PowerShell that receives a bash command's `$args` passes them on as literal strings,
+  `PsBuild.ArgvLiterals` then `PsBuild.ArgvSplat` (`$__psbash_argv = [string[]]$args … @__psbash_argv`), never `@args`.
+
+Guards: `Core.Tests/StandInArgvGuardTests` (no `@args` in product code; the autoload wrapper is exempt, because it
+runs a PowerShell cmdlet), `Core.Tests/Parser/PsEmitterDashOperandTests`. Against bash:
+`BashParityGapDifferentialTests.Function_ReceivesDashOperandsAsTyped`, `ScriptFileExecutionDifferentialTests`.
+
 ## 4. `EmitSimple` -- The Main Command Emitter
 
 `EmitSimple` handles `Command.Simple` nodes (single commands that are not

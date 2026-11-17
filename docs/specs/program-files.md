@@ -17,6 +17,10 @@ primitive decides: `PsBash.Core.ProgramFile` (`src/PsBash.Transpiler/ProgramFile
 | Unix | no execute bit | not executable: 126 |
 
 A missing interpreter is 127 (bash: `cannot execute: required file not found`; GNU nohup: `No such file or directory`).
+On Unix the kernel's exec fails with ENOENT, which PowerShell reports only as "Program failed to run" with status 1. So
+`Plan` answers that case itself: `ProgramFile.ShebangInterpreterMissing` reads the first line, and when its first
+word is an absolute path that is not a file, the result is `ProgramLaunch.MissingInterpreter`. Its stand-in prints
+bash's message with 127, and its `CommandLine` has no program, so nohup reports 127.
 
 ## Invariant
 
@@ -26,7 +30,7 @@ A missing interpreter is 127 (bash: `cannot execute: required file not found`; G
 association. That opens a dialog nobody answers and reports 0.
 
 The launch has two renderings:
-- `StandInScript(shown)` is PowerShell that runs in place of the resolved command, taking the arguments as `@args` and
+- `StandInScript(shown)` is PowerShell that runs in place of the resolved command, taking the arguments as ``, passed on as literal strings (`PsBuild.ArgvSplat`, see emitter-strategy §3.1), and
   forwarding pipeline input.
 - `CommandLine(shellExe, dirs)` is the argv for a site that starts a process itself.
 

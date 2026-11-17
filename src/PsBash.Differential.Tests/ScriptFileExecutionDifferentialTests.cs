@@ -25,6 +25,9 @@ public class ScriptFileExecutionDifferentialTests
     [InlineData("PATH=\"d:$PATH\"; echo q | hello; echo st=$?; x=$(hello </dev/null); echo \"cap=$x\"")]
     [InlineData("PATH=d:$PATH; type -P hello; type -a hello | head -1; type -t hello")]
     [InlineData("./doc; echo st=$?")]
+    // The script's argv is the one typed: `-e` was taken by the bash cmdlet's binder (dropped), `-x:y` split, `--`
+    // consumed; in a background job `-e` was "ambiguous" (the job's program stand-in splatted $args).
+    [InlineData("./d/hello -e -x:y </dev/null; ./d/hello -- -e </dev/null; ./d/hello -e x </dev/null & wait; echo st=$?")]
     public Task ScriptFile_RunsLikeBash(string command) => Eq(command);
 
     // `command FILE` and `nohup FILE` resolved the file themselves and handed it straight to the OS (or to PowerShell

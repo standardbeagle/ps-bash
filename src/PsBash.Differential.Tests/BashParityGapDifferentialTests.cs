@@ -14,6 +14,9 @@ public class BashParityGapDifferentialTests
 {
     private static Task Same(string script) => AssertOracle.EqualAsync(script, TimeSpan.FromSeconds(30), liveOnly: true);
 
+    // A deterministic case (no env, timing, PID or filesystem dependence) replays from its cassette, so it runs in every gate.
+    private static Task Recorded(string script) => AssertOracle.EqualAsync(script, TimeSpan.FromSeconds(30));
+
     // --- Variable model: scalars live in $env:, with a static "local" overlay ---------------------
 
     [SkippableFact] public Task Local_IsVisibleToCallee()
@@ -103,10 +106,14 @@ public class BashParityGapDifferentialTests
     [SkippableFact] public Task Pipefail_ReportsFailure()
         => Same("set -o pipefail; false | true; echo $?");
 
+    // REGRESSION: a function is PowerShell code, whose binder consumed a bare `--` and split `-x:y` into `-x:` and `y`.
+    [SkippableFact] public Task Function_ReceivesDashOperandsAsTyped()
+        => Recorded("f() { printf '[%s]' \"$@\"; echo; }; g() { f \"$@\"; }; f -e -x:y --long -- 1 '--' -e; g -e -x:y -- 1 --%");
+
     // REGRESSION: under pipefail a pipeline after `&&` / `||` was a PowerShell parse error for the whole script.
     // Each operand's status, PIPESTATUS and output order must also match bash.
     [SkippableFact] public Task Pipefail_PipelineAsAndOrOperand()
-        => Same("set -o pipefail; true && echo a | cat; false || echo b | cat; echo c | false && echo no; echo st=$?; "
+        => Recorded("set -o pipefail; true && echo a | cat; false || echo b | cat; echo c | false && echo no; echo st=$?; "
                 + "true && false | true; echo st=$? \"${PIPESTATUS[@]}\"; ! echo d | cat && echo no2; echo st=$?; "
                 + "true && echo e | false || echo f | cat; echo st=$?");
 }

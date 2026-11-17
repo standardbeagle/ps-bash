@@ -52,10 +52,12 @@ internal static class JobProgramLookup
     internal static string StandIn(string path)
     {
         var p = PsBash.Core.Parser.PsBuild.SingleQuote(path);
-        return "begin { $__psbjA = $args; if ($MyInvocation.ExpectingInput) { $__psbjS = { Invoke-BashNative -- " + p
-               + " @__psbjA }.GetSteppablePipeline(); $__psbjS.Begin($true) } }\n"
+        const string argv = PsBash.Core.Parser.PsBuild.ArgvSplat;
+        return "begin { " + PsBash.Core.Parser.PsBuild.ArgvLiterals
+               + "; if ($MyInvocation.ExpectingInput) { $__psbjS = { Invoke-BashNative -- " + p
+               + " " + argv + " }.GetSteppablePipeline(); $__psbjS.Begin($true) } }\n"
                + "process { if ($__psbjS) { $__psbjS.Process($_) } }\n"
-               + "end { if ($__psbjS) { $__psbjS.End() } else { Invoke-BashNative -- " + p + " @__psbjA } }";
+               + "end { if ($__psbjS) { $__psbjS.End() } else { Invoke-BashNative -- " + p + " " + argv + " } }";
     }
 
     /// <summary><paramref name="lookup"/> with this hook off (the caller gets the program itself).</summary>

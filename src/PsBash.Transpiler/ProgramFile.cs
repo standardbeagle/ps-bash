@@ -28,7 +28,12 @@ public static class ProgramFile
     public static ProgramLaunch? Plan(string path)
     {
         if (!OperatingSystem.IsWindows())
-            return HasExecuteBit(path) ? null : ProgramLaunch.NotExecutable(path);
+        {
+            if (!HasExecuteBit(path)) return ProgramLaunch.NotExecutable(path);
+            // The kernel runs #! itself, but an exec whose interpreter is missing fails with ENOENT, which PowerShell
+            // reports as "Program failed to run" with status 0 or 1; bash says "required file not found", 127.
+            return ShebangInterpreterMissing(path) ? ProgramLaunch.MissingInterpreter(path) : null;
+        }
         if (HasRunnableExtension(path) || !TryReadShebang(path, out string? shebang)) return null;
         return shebang is null ? ProgramLaunch.NotExecutable(path) : FromShebang(path, shebang);
     }
@@ -65,6 +70,35 @@ public static class ProgramFile
         }
         catch (IOException) { return true; }
         catch (UnauthorizedAccessException) { return true; }
+    }
+
+    /// <summary>
+    /// True when <paramref name="path"/> starts with a <c>#!</c> line whose interpreter is an absolute path that does not
+    /// exist (<c>#!/nonexistent/interp</c>, or <c>#!/bin/sh\r</c> from a CRLF file: the kernel looks for that name too).
+    /// False whenever it cannot tell (unreadable, no newline in the first 256 bytes, a relative or non-ASCII name), so
+    /// the OS decides as before. Runs on every command lookup on Unix: one open and read into a stack buffer.
+    /// </summary>
+    public static bool ShebangInterpreterMissing(string path)
+    {
+        Span<byte> buf = stackalloc byte[256];
+        int n;
+        try
+        {
+            using var handle = File.OpenHandle(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            n = RandomAccess.Read(handle, buf, 0);
+        }
+        catch (IOException) { return false; }
+        catch (UnauthorizedAccessException) { return false; }
+        if (n < 3 || buf[0] != '#' || buf[1] != '!') return false;
+        var line = buf[2..n];
+        int end = line.IndexOf((byte)'\n');
+        if (end < 0) return false;
+        line = line[..end].TrimStart(" \t"u8);
+        int stop = line.IndexOfAny(" \t"u8);
+        var interpreter = stop < 0 ? line : line[..stop];
+        if (interpreter.Length < 2 || interpreter[0] != '/') return false;
+        foreach (var b in interpreter) if (b > 127) return false;
+        return !File.Exists(System.Text.Encoding.ASCII.GetString(interpreter));
     }
 
     /// <summary>The <c>#!</c> line's text (null when the file has none); false when the file cannot be read.</summary>
@@ -112,6 +146,15 @@ public sealed class ProgramLaunch
 
     internal static ProgramLaunch NotExecutable(string path) => new(path, false, null, []);
 
+    /// <summary>A Unix <c>#!</c> file whose interpreter does not exist (<see cref="ProgramFile.ShebangInterpreterMissing"/>).</summary>
+    internal static ProgramLaunch MissingInterpreter(string path) => new(path, false, "", []) { InterpreterMissing = true };
+
+    /// <summary>
+    /// The <c>#!</c> line names an interpreter that does not exist: bash's "cannot execute: required file not found", 127
+    /// (<see cref="Runnable"/> stays true, so a site that starts the process itself reports "No such file", 127).
+    /// </summary>
+    public bool InterpreterMissing { get; private init; }
+
     /// <summary>The program file.</summary>
     public string Path { get; }
 
@@ -129,18 +172,22 @@ public sealed class ProgramLaunch
 
     /// <summary>
     /// The PowerShell that runs the file in place of the resolved command, the command's arguments arriving as
-    /// <c>@args</c>: a shell's through <c>Invoke-BashBash</c>, another interpreter by name, then its options, the file and
-    /// the arguments. Pipeline input is forwarded when there is any. Not runnable: bash's message naming
-    /// <paramref name="shown"/> (<see cref="ProgramFile.Shown"/>) on stderr, never terminating, and status 126.
+    /// <c>$args</c> and passed on as literal strings (<see cref="PsBuild.ArgvSplat"/>): a shell's through
+    /// <c>Invoke-BashBash</c>, another interpreter by name, then its options, the file and the arguments. Pipeline input is
+    /// forwarded when there is any. Not runnable: bash's message naming <paramref name="shown"/>
+    /// (<see cref="ProgramFile.Shown"/>) on stderr, never terminating, and status 126; a missing interpreter: 127.
     /// </summary>
     public string StandInScript(string shown)
     {
         if (!Runnable) return PermissionDeniedScript(shown);
+        if (InterpreterMissing)
+            return "Write-Error -Message 'bash: " + BashPath.ToShell(shown).Replace("'", "''")
+                   + ": cannot execute: required file not found' -Category ObjectNotFound -ErrorAction Continue; $global:LASTEXITCODE = 127";
         var sb = new System.Text.StringBuilder(Shell ? "Invoke-BashBash" : "& " + PsBuild.SingleQuote(Interpreter!));
         foreach (var a in InterpreterArgs) sb.Append(' ').Append(PsBuild.SingleQuote(a));
-        sb.Append(' ').Append(PsBuild.SingleQuote(Path)).Append(" @args");
+        sb.Append(' ').Append(PsBuild.SingleQuote(Path)).Append(' ').Append(PsBuild.ArgvSplat);
         string run = sb.ToString();
-        return PsBuild.ForwardStageInputIfAny(run);
+        return PsBuild.ArgvLiterals + "; " + PsBuild.ForwardStageInputIfAny(run);
     }
 
     /// <summary>
@@ -151,7 +198,7 @@ public sealed class ProgramLaunch
     public (string? Program, List<string> Args) CommandLine(string? shellExe, IEnumerable<string> searchDirectories)
     {
         var args = new List<string>(InterpreterArgs) { Path };
-        if (!Runnable) return (null, args);
+        if (!Runnable || InterpreterMissing) return (null, args);
         return (Shell ? shellExe : ExecutableLookup.Find(Interpreter!, searchDirectories), args);
     }
 

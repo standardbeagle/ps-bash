@@ -1332,6 +1332,23 @@ public static class PsBuild
     /// of a command, ProgramFile.StandInScript): the block's records are piped in when there are any, and otherwise the
     /// command runs with no pipeline input at all, so it keeps the shell's stdin instead of reading an empty pipe.
     /// </summary>
+    /// <summary>
+    /// The statement a stand-in script block runs first so it can pass its arguments on: a copy of <c>$args</c> as plain
+    /// strings in <c>$__psbash_argv</c>, splatted with <see cref="ArgvSplat"/>.
+    /// <para>
+    /// <b>Invariant:</b> a stand-in (a <c>#!</c> file's interpreter, a job's program through Invoke-BashNative) gives its
+    /// command the argv the script wrote. Never splat <c>$args</c> itself: PowerShell re-creates every element that was
+    /// typed as a parameter token, so <c>-e</c> binds to the callee's parameters ("ambiguous: -ErrorAction
+    /// -ErrorVariable", or silently dropped). Any other array splats as literal strings. A bare <c>--</c> or
+    /// <c>-x:y</c> never reaches <c>$args</c> intact, which is why the emitter quotes those (QuotedDashOperand).
+    /// Guard: StandInArgvGuardTests.
+    /// </para>
+    /// </summary>
+    public const string ArgvLiterals = "$__psbash_argv = [string[]]$args";
+
+    /// <summary>The splat of <see cref="ArgvLiterals"/>.</summary>
+    public const string ArgvSplat = "@__psbash_argv";
+
     public static string ForwardStageInputIfAny(string command) =>
         "$__psbash_in = @(" + StageInput + "); if ($__psbash_in.Count -gt 0) { $__psbash_in | " + command + " } else { " + command + " }";
 

@@ -59,20 +59,68 @@ public class ProgramFileTests
             Assert.Null(ProgramFile.Plan(tool));
             Assert.Null(ProgramFile.Plan(group));
             Assert.True(ProgramFile.HasExecuteBit(Path.Combine(dir, "missing")));
+
+            // REGRESSION: `#!/nonexistent/interp` failed in exec with ENOENT, which PowerShell reported as "Program
+            // failed to run" with status 1; bash says "cannot execute: required file not found", 127.
+            string bad = Path.Combine(dir, "bad");
+            File.WriteAllText(bad, "#!/nonexistent/interp -x\necho hi\n");
+            File.SetUnixFileMode(bad, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+            var launch = ProgramFile.Plan(bad)!;
+            Assert.True(launch.InterpreterMissing);
+            Assert.Contains("cannot execute: required file not found", launch.StandInScript("./bad"));
+            Assert.Contains("$global:LASTEXITCODE = 127", launch.StandInScript("./bad"));
+            Assert.Null(launch.CommandLine("LAUNCHER", []).Program);
+        }
+        finally { Directory.Delete(dir, recursive: true); }
+    }
+
+    // The interpreter check reads only the first line's first word: an absolute path that is not a file.
+    [Theory]
+    [InlineData("#!/nonexistent/interp\necho\n", true)]
+    [InlineData("#! /nonexistent/interp -e\n", true)]
+    [InlineData("#!/usr/bin/env-not-here python3\n", true)]
+    [InlineData("#!relative/interp\n", false)]   // not absolute: the kernel's own answer, left to it
+    [InlineData("#!/nonexistent/interp", false)] // no newline in the first 256 bytes: not judged
+    [InlineData("echo no shebang\n", false)]
+    [InlineData("", false)]
+    public void ShebangInterpreterMissing_JudgesTheFirstWordOfTheFirstLine(string content, bool missing)
+    {
+        string dir = TempDir("psbash-interp");
+        try
+        {
+            string file = Path.Combine(dir, "s");
+            File.WriteAllText(file, content);
+            Assert.Equal(missing, ProgramFile.ShebangInterpreterMissing(file));
+            Assert.False(ProgramFile.ShebangInterpreterMissing(Path.Combine(dir, "absent")));
+        }
+        finally { Directory.Delete(dir, recursive: true); }
+    }
+
+    [SkippableFact]
+    [Trait("Platform", "Unix")]
+    public void ShebangInterpreterMissing_AnExistingInterpreter_IsNotMissing()
+    {
+        Skip.If(OperatingSystem.IsWindows(), "a `/…` interpreter path names a Unix file.");
+        string dir = TempDir("psbash-interp-ok");
+        try
+        {
+            string file = Path.Combine(dir, "s");
+            File.WriteAllText(file, "#!/bin/sh -e\necho hi\n");
+            Assert.False(ProgramFile.ShebangInterpreterMissing(file));
         }
         finally { Directory.Delete(dir, recursive: true); }
     }
 
     // The stand-in a resolved #! file runs as, in place of the resolved command.
     [Theory]
-    [InlineData("/bin/sh", "Invoke-BashBash 'C:\\t\\it''s' @args")]
-    [InlineData("/usr/bin/env bash", "Invoke-BashBash 'C:\\t\\it''s' @args")]
-    [InlineData("/bin/bash -e", "Invoke-BashBash '-e' 'C:\\t\\it''s' @args")]
-    [InlineData("/usr/bin/env -S python3 -u", "& 'python3' '-u' 'C:\\t\\it''s' @args")]
-    [InlineData("/usr/local/bin/node", "& 'node' 'C:\\t\\it''s' @args")]
+    [InlineData("/bin/sh", "Invoke-BashBash 'C:\\t\\it''s' @__psbash_argv")]
+    [InlineData("/usr/bin/env bash", "Invoke-BashBash 'C:\\t\\it''s' @__psbash_argv")]
+    [InlineData("/bin/bash -e", "Invoke-BashBash '-e' 'C:\\t\\it''s' @__psbash_argv")]
+    [InlineData("/usr/bin/env -S python3 -u", "& 'python3' '-u' 'C:\\t\\it''s' @__psbash_argv")]
+    [InlineData("/usr/local/bin/node", "& 'node' 'C:\\t\\it''s' @__psbash_argv")]
     public void StandInScript_RunsTheInterpreterWithTheFileThenTheArguments(string shebang, string run)
         => Assert.Equal(
-            "$__psbash_in = @($input); if ($__psbash_in.Count -gt 0) { $__psbash_in | " + run + " } else { " + run + " }",
+            "$__psbash_argv = [string[]]$args; $__psbash_in = @($input); if ($__psbash_in.Count -gt 0) { $__psbash_in | " + run + " } else { " + run + " }",
             ProgramFile.FromShebang(@"C:\t\it's", shebang).StandInScript("ignored"));
 
     [Fact]
