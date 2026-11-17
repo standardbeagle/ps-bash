@@ -26,6 +26,11 @@ internal sealed class Program
         // The shell starts: everything in the environment was inherited, so it is exported (ShellExports). A framed
         // launcher request resets this again with the launcher's own environment (SdkWorker.RunCommand).
         PsBash.Core.ShellExports.Reset();
+        // `kill -SIG P` where P is another ps-bash shell's $$ (a host) reaches the command that host runs as a message,
+        // never as an OS kill of the host (docs/specs/background-jobs.md §13). On Unix a real SIGUSR1/SIGUSR2 sent to
+        // this host (`/bin/kill -USR1 $$`) is the same signal for the shell it runs; by default it ended the host.
+        ShellSignalSender.Register();
+        using var posixSignals = ShellSignalSender.CatchPosixSignals(PsBash.Core.ShellSignals.Deliver);
         var exitCode = await MainCoreAsync(args);
         HostLog.SetExitReason("main returned (server stopped)");
         // End the process explicitly. Returning from Main is not enough: the

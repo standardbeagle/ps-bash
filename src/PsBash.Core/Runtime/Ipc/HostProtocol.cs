@@ -84,6 +84,10 @@ public static class HostProtocol
     public const string ArgvHeaderPrefix = "ARGV:";
     public const string BodyHeaderPrefix = "BODY:";
     public const string DeadlineHeaderPrefix = "DEADLINE:";
+    /// <summary>The signal number of a <see cref="Mode.Signal"/> request (1..64).</summary>
+    public const string SignalHeaderPrefix = "SIGNAL:";
+    /// <summary>The one response line of a <see cref="Mode.Signal"/> request, before the <c>ShellSignals.Outcome</c> name.</summary>
+    public const string SignalOutcomePrefix = "ps-bash-host signal=";
     /// <summary>
     /// R06: request header carrying one launcher environment entry,
     /// <c>ENV:&lt;base64 name&gt;,&lt;base64 value&gt;</c>. Emitted once per entry,
@@ -376,6 +380,10 @@ public static class HostProtocol
                 sb.Append(ModeHeaderPrefix).Append("Shutdown").Append('\n');
                 sb.Append(DeadlineHeaderPrefix).Append(sd.DeadlineMs.ToString(System.Globalization.CultureInfo.InvariantCulture)).Append('\n');
                 break;
+            case Mode.Signal sig:
+                sb.Append(ModeHeaderPrefix).Append("Signal").Append('\n');
+                sb.Append(SignalHeaderPrefix).Append(sig.Number.ToString(System.Globalization.CultureInfo.InvariantCulture)).Append('\n');
+                break;
             default:
                 throw new InvalidOperationException($"Unknown mode: {mode.GetType().Name}");
         }
@@ -434,6 +442,8 @@ public static class HostProtocol
                 }
             case "Shutdown":
                 return await ReadShutdownAsync(reader, ct).ConfigureAwait(false);
+            case "Signal":
+                return await ReadSignalAsync(reader, ct).ConfigureAwait(false);
             default:
                 throw new IOException($"Unknown MODE kind: {kind}");
         }
@@ -615,6 +625,27 @@ public static class HostProtocol
         if (deadlineMs is null)
             throw new IOException("Shutdown frame missing DEADLINE field");
         return new Mode.Shutdown(deadlineMs.Value);
+    }
+
+    private static async Task<Mode.Signal> ReadSignalAsync(StreamLineReader reader, CancellationToken ct)
+    {
+        int? number = null;
+        while (true)
+        {
+            var line = await reader.ReadLineAsync(ct).ConfigureAwait(false)
+                ?? throw new IOException("Request stream closed before END sentinel (Signal)");
+            if (line == EndSentinel) break;
+            if (!line.StartsWith(SignalHeaderPrefix, StringComparison.Ordinal))
+                throw new IOException($"Unexpected line in Signal frame: {line}");
+            var raw = line[SignalHeaderPrefix.Length..];
+            if (!int.TryParse(raw, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var n)
+                || n < 1 || n > 64)
+                throw new IOException($"Invalid {SignalHeaderPrefix} value: {raw}");
+            number = n;
+        }
+        if (number is null)
+            throw new IOException("Signal frame missing SIGNAL field");
+        return new Mode.Signal(number.Value);
     }
 
     private static async Task<Mode.Script> ReadScriptAsync(StreamLineReader reader, CancellationToken ct)

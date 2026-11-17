@@ -129,6 +129,9 @@ public sealed class IpcWorker : IWorker
     /// <summary>OS pid of the private host this worker owns (<see cref="Lifetime.PerInvocation"/>); 0 otherwise.</summary>
     public int OwnedHostPid => _ownedHost?.Id ?? 0;
 
+    /// <summary>The endpoint of the host this worker runs its command on (the executor slot it settled on).</summary>
+    public string Endpoint => _endpoint;
+
     public bool HasExited => _disposed != 0;
 
     private IpcWorker(string scheme, string endpoint, string hostBinaryPath, TimeSpan timeout, TimeSpan poll, Lifetime lifetime)

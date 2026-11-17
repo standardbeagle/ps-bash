@@ -124,6 +124,17 @@ internal sealed class Connection
             return;
         }
 
+        if (mode is Mode.Signal signal)
+        {
+            // A signal for the shell this host runs (`kill -USR1 $$` from a nested shell). Answered at once, never
+            // behind the lease: the command holding the lease is the target (background-jobs.md §13).
+            var outcome = PsBash.Core.ShellSignals.Deliver(signal.Number);
+            HostLog.Write($"signal {signal.Number} delivered: {outcome}");
+            await HostProtocol.WriteResponseLineAsync(_stream, ShellSignalSender.FormatOutcome(outcome), ct);
+            await HostProtocol.WriteExitAsync(_stream, 0, ct);
+            return;
+        }
+
         if (mode is Mode.Health)
         {
             // Health must not consume a pool slot — it only inspects warm state.

@@ -693,6 +693,17 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
             }
         }, eol);
 
+        // This command is the shell a signal sent to this host's pid (`$$`) reaches (ShellSignals, background-jobs.md
+        // §13): a trapped one waits for its next statement boundary, an untrapped one ends it with 128+N, as the same
+        // stop `kill $$` makes (SetShouldExit, then the pipeline stops). Never the host.
+        var signalRunspace = _sdkRunspace.Runspace.InstanceId;
+        PsBash.Core.ShellSignals.BeginCommand(signalRunspace, status =>
+        {
+            _host.SetShouldExit(status);
+            try { _ps.BeginStop(null, null); }
+            catch (Exception) { /* already stopping or finished */ }
+        });
+
         try
         {
             try
@@ -811,6 +822,8 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
         }
         finally
         {
+            PsBash.Core.ShellSignals.EndCommand(signalRunspace);
+
             // Jobs still running queue from here on (bounded per job; see OutputMux): this command's sinks go away.
             JobOutput.Detach();
 

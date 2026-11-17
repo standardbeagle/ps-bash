@@ -154,4 +154,13 @@ public abstract record Mode
     /// </para>
     /// </remarks>
     public sealed record Shutdown(int DeadlineMs) : Mode;
+
+    /// <summary>
+    /// Deliver signal number <paramref name="Number"/> to the shell this host is running (its <c>$$</c> is the host's pid):
+    /// <c>kill -USR1 $$</c> from a nested shell, a real POSIX signal a launcher caught. Answered at once, without the
+    /// execution lease (the command holding it is the target), with one line
+    /// <c>ps-bash-host signal=&lt;ShellSignals.Outcome&gt;</c> and exit 0. The host never ends because of it
+    /// (docs/specs/background-jobs.md §13).
+    /// </summary>
+    public sealed record Signal(int Number) : Mode;
 }

@@ -584,6 +584,12 @@ int exitCode = await HostFailureGuard.RunAsync(async () =>
     Stamp("host connected");
     if (forwardStdin && worker is IpcWorker ipcWorker)
         ipcWorker.LauncherStdin = Console.OpenStandardInput();
+    // Unix: a real SIGUSR1/SIGUSR2 sent to this launcher is a signal for the script it runs: forwarded to its host's
+    // command (trap or 128+N) instead of ending the launcher by default (docs/specs/background-jobs.md §13).
+    using var posixSignals = worker is IpcWorker signalWorker
+        ? PsBash.Core.Runtime.Ipc.ShellSignalSender.CatchPosixSignals(
+            sig => PsBash.Core.Runtime.Ipc.ShellSignalSender.SendToEndpoint(signalWorker.Endpoint, sig))
+        : null;
     var rc = await worker.ExecuteAsync(
         BuildInvocationCwdPreamble() + pwshCommand,
         environment: CaptureLauncherEnvironment(dashC: shellArgs.Command is not null && !pipedInteractive));
