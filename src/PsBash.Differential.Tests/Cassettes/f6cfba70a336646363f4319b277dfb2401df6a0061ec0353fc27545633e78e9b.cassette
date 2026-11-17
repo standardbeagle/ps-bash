@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 73
+stdout-length: 18
+stderr-length: 0
+==== SCRIPT ====
+{ for i in 1 2 3; do { sleep 0.2; echo "job $i"; } & done; wait; } | sort
+==== STDOUT ====
+job 1
+job 2
+job 3
+
+==== STDERR ====
+

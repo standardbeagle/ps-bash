@@ -1,0 +1,16 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 92
+stdout-length: 12
+stderr-length: 0
+==== SCRIPT ====
+{ for i in a b; do for j in 1 2; do { sleep 0.1; echo "$i$j"; } & done; done; wait; } | sort
+==== STDOUT ====
+a1
+a2
+b1
+b2
+
+==== STDERR ====
+

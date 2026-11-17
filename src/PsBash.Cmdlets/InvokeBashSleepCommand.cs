@@ -14,7 +14,8 @@ namespace PsBash.Cmdlets;
 /// no operands → "missing operand" error; non-numeric or negative → "invalid
 /// time interval" error; otherwise sleep for the summed duration at ms precision
 /// (ceiling of seconds × 1000) through <see cref="PreciseSleep"/>, which wakes on time
-/// rather than on the 15.6 ms Windows tick.
+/// rather than on the 15.6 ms Windows tick. In an in-process background job the duration is settled against the
+/// job's start lag first (<see cref="JobClock"/>).
 ///
 /// Termination matches bash: the sleep respects the
 /// pipeline's stop signal because <see cref="PSCmdlet.Stopping"/> is checked
@@ -93,6 +94,9 @@ public sealed class InvokeBashSleepCommand : PSCmdlet
         // downstream Ctrl-C or pipeline-stop interrupts within ~100ms
         // rather than waiting out the full duration.
         var totalMs = (long)Math.Ceiling(totalSeconds * 1000);
+        // In a background job the sleep counts from the `&` that launched it, not from the late start of its body
+        // (JobClock, docs/specs/background-jobs.md section 12.5).
+        if (JobClock.Current(SessionState) is { } clock) totalMs = clock.Settle(totalMs);
         const int ChunkMs = 100;
         while (totalMs > 0)
         {

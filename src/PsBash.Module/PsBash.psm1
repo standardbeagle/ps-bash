@@ -3159,7 +3159,9 @@ function Invoke-BashBackground {
     # changes nothing undid the parent's assignments. It also reports the body's exit status for `wait`.
     $status = [hashtable]::Synchronized(@{ Code = 0; At = 0L })
     $__bgHead = @'
-param($__bgStatus, $__bgRestore, $__bgStdin, $__bgVars, $__bgTurn)
+param($__bgStatus, $__bgRestore, $__bgStdin, $__bgVars, $__bgTurn, $__bgClock)
+# The job's sleeps count from its launch, not from this late start (JobClock, docs/specs/background-jobs.md section 12.5).
+$global:__psbashJobClock = $__bgClock
 # A subshell body's state restore must not touch the process-wide variables the parent shares (BashShellState.Restore).
 $global:__psbashBgRunspace = $true
 # The job's stdin is the stdin of the compound command that started it, shared with the shell (BackgroundJobStdin).

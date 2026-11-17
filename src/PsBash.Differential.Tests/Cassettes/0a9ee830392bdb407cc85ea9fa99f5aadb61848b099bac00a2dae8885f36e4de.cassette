@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 70
+stdout-length: 14
+stderr-length: 0
+==== SCRIPT ====
+x=a; f() { sleep 0.3; echo "x=$x"; }; f & x=b; wait; echo "shell x=$x"
+==== STDOUT ====
+x=a
+shell x=b
+
+==== STDERR ====
+

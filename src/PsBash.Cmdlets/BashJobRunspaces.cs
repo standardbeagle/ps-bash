@@ -51,7 +51,8 @@ public static class BashJobRunspaces
     /// The in-process job of <c>Invoke-BashBackground</c>, built and bound, not started: <paramref name="head"/>, the
     /// parent's options (<see cref="BashStateSnapshot.BuildJobOptions"/>), the launch-time values of the loop variables
     /// the body reads (<paramref name="vars"/>), <c>Enter-BashJobTurn</c> (launch order, <see cref="JobTurn"/>), the body,
-    /// <paramref name="tail"/>; arguments status, restore, stdin, vars (the job's <c>BashVariableStore</c> snapshot), turn.
+    /// <paramref name="tail"/>; arguments status, restore, stdin, vars (the job's <c>BashVariableStore</c> snapshot), turn,
+    /// clock (<see cref="JobClock"/>, launched once the job has its runspace: the head stores it in the job's global <see cref="JobClock.VariableName"/>).
     /// One call, because every script-to-.NET call on the launch path is an AMSI report under PowerShell's process-wide
     /// lock (docs/specs/background-jobs.md section 12.4) that the job launched just before waits on to start.
     /// </summary>
@@ -72,8 +73,9 @@ public static class BashJobRunspaces
             }
             text.Append('\n');
         }
-        // The body begins only after the job launched before it from the same runspace has begun (JobTurn).
-        text.Append("Enter-BashJobTurn $__bgTurn\n");
+        // The body begins only after the job launched before it from the same runspace has begun (JobTurn); its clock
+        // begins there.
+        text.Append("Enter-BashJobTurn $__bgTurn $__bgClock\n");
         text.Append(body.ToString()).Append('\n').Append(tail);
         var turn = JobTurn.Next(Runspace.DefaultRunspace);
         var ps = PowerShell.Create();
@@ -82,6 +84,9 @@ public static class BashJobRunspaces
             ps.AddScript(text.ToString()).AddArgument(status).AddArgument(restore).AddArgument(BackgroundJobStdin.Inherit(session))
                 .AddArgument(vars).AddArgument(turn);
             Bind(ps, modulePath, turn);
+            // The launch: the job's sleeps count from here (JobClock), as a forked job's do in bash. After the bind: time the
+            // launcher spent waiting for a runspace delays the shell as much as the job, so it is not the job's to pay back.
+            ps.AddArgument(JobClock.Launch());
             return ps;
         }
         catch

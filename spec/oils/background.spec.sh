@@ -73,7 +73,7 @@ status=2
 status=1
 ## END
 ## status: 0
-## XFAIL ps-bash arch-bg-job-start-latency jobs now start in launch order in runspaces that are already open, but 10-50 ms after their & on a loaded host (each job's pipeline compile waits on PowerShell's process-wide AMSI lock), not within the 10 ms between the sleeps, so the lines come out 1 2 3 only some of the time (measured 10/20 and 14/20 runs, docs/specs/background-jobs.md section 12.5)
+## XFAIL ps-bash arch-bg-job-start-latency a job's body starts 24-88 ms after its & on a loaded host (its script compile waits on PowerShell's process-wide AMSI lock); the start-lag clock pays that back only out of a sleep, and these sleeps (30/20/10 ms) are shorter, so the jobs end in launch order: 1 2 3 in 5/20 and 1/18 runs (docs/specs/background-jobs.md section 12.5)
 ## timeout: 10
 
 #### Builtin in background
@@ -361,7 +361,7 @@ status=3
 status=9
 ## END
 ## status: 0
-## XFAIL ps-bash arch-bg-job-start-latency jobs now start 10-50 ms after their & in runspaces that are already open, inside the 60 ms between the two sleeps, so this passes most runs in one command (measured 20/20 and 19/20) but fewer as a spec case (6 of 11 spec runs, 2 of 6 under CPU load), but a start delayed past 60 ms by PowerShell's process-wide AMSI lock still lets the first-launched job (exit 9) finish first; flaky, so the mark stays (docs/specs/background-jobs.md section 12.5)
+## XFAIL ps-bash arch-bg-job-start-latency a job's body starts 24-88 ms after its & on a loaded host (AMSI lock); the start-lag clock pays that back out of each sleep, so this fails only when the second job's lag passes its 90 ms window: 18/20 runs under 4 CPU-bound processes, not 20/20, and an XPASS is an error, so the mark stays (docs/specs/background-jobs.md section 12.5)
 ## timeout: 10
 ## real-launcher
 

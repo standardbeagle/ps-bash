@@ -560,6 +560,23 @@ paid this:
    report. It waits until every job launched earlier from the same runspace has begun its body or ended
    (`BashJobRunspaces.JobTurn`). A wait gives up after 2 s, for a job whose start was refused and so never begins.
    It also stops at once when the job is stopped. Tests: `JobTurnTests` (Cmdlets.Tests).
+6. *Start lag added to every sleep.* Even a warm job begins its body 13-27 ms after its `&` (24-88 ms on a loaded
+   host). Bash begins it under a millisecond after. A `sleep D` measured from the body's start therefore ends at
+   `launch + lag + D`, and a lag larger than the gap between two jobs' sleeps reorders them. **Invariant: an in-process
+   job's sleeps count from its launch.** `BashJobRunspaces.NewJob` creates a `JobClock` once the job has its runspace,
+   not on entry. Time the launcher spends waiting for a runspace (seconds on a cold host) delays the shell as much as
+   the job, so it is not the job's to pay back. With the clock at entry, a cold host printed `a1 b1 b2 a2 fg` for
+   `{ echo a1; sleep 3; echo a2; } & { sleep 1; echo b1; sleep 1; echo b2; } & sleep 2.5; echo fg`: the jobs were on
+   time and the foreground was late by both runspace waits. The job's head
+   stores it in the global `$__psbashJobClock`, and `Enter-BashJobTurn` begins it as the body starts, so the start lag
+   becomes the job's debt. `Invoke-BashSleep` settles each duration against the debt: it sleeps `max(0, D - debt)` and
+   carries what is left to the next sleep. Time the body spends after it begins is never debt. A job that has no sleep,
+   or whose start lag is zero, is unaffected. A job ends at `launch + D` exactly when its sleeps can absorb the lag
+   (lag < total sleep). When they cannot, its sleeps return at once and it ends at `launch + lag`. This includes a
+   `sleep` stage of a backgrounded pipeline, which runs in the job's runspace. The foreground shell has no clock, and
+   neither does a job in a host process of its own (§11), so their sleeps are exact. `EndJob` removes the global with
+   the job's other globals. Tests: `JobClockTests` (pure settlement) and `JobClockSleepTests` (wall clock, alone: a job
+   launched 100 ms late sleeping 0.2 s ends 200 ms after its launch).
 
 **After (same host and load, warm daemon, 94 jobs).** Bind 0.7-3.3 ms. `BeginInvoke` 0.4-2 ms, rarely up to 25.
 `&` → first statement: median about 13 ms, 10.6-53 ms in bursts. The tail is the AMSI lock held by the other
@@ -567,12 +584,17 @@ agents' test processes on this machine. A cold open (more concurrent jobs than `
 Single-digit ms was not reached under that load. The floor is the job pipeline's own compile, which waits on the
 AMSI lock (§12.4) and cannot be moved ahead.
 
-**The two oils cases (measured, same host).** "wait for N parallel jobs and check failure" (10 ms between the sleeps)
-came out `1 2 3` in 10 of 20 and 14 of 20 runs of a loop in one command, so it stays XFAIL. "wait -n" (60 ms between the
-sleeps) passed 20 of 20 and 19 of 20 in one command. As a spec case it passed in only 6 of 11 runs, and in 2 of 6
-under CPU load. It is flaky, so it also stays XFAIL, and its XPASS turns the file red in about half the runs. Opening
-the host's job runspaces before each case did not make it pass every time (tried in the harness, then reverted).
-Both marks carry these numbers. A fresh host opens up to `Spares` runspaces once. The first opens
+**The two oils cases (measured, same host, with the start-lag clock of cause 6).** Phases of one job on a loaded
+host with ready runspaces: `NewJob` 0.1-0.3 ms; `BeginInvoke` 2-20 ms after it; the body's first statement 24-88 ms
+after the `&` (13-27 ms with less load), almost all of it the job script's compile under the AMSI lock; the
+`Enter-BashJobTurn` wait about 0; 2.5-15 ms between two launches. The clock pays back that lag, but only out of a
+sleep: a lag longer than the sleep leaves the sleep at 0 and the job ends when its body starts.
+"wait for N parallel jobs and check failure" sleeps 30, 20 and 10 ms, all shorter than the lag, so the jobs end in
+the order their bodies start, which is launch order: `1 2 3` in 5 of 20 and 1 of 18 runs. It stays XFAIL until the
+lag is under 10 ms. "wait -n" (90 and 30 ms) fails only when the second job's lag passes about 90 ms: 18 of 20 runs
+under 4 CPU-bound processes. An XPASS is an error, and it is not 20 of 20, so it stays XFAIL too. Opening the host's
+job runspaces before each case did not make either pass every time (tried in the harness, then reverted). Both marks
+carry these numbers. A fresh host opens up to `Spares` runspaces once. The first opens
 took 1.8-3.9 s while several spec hosts started together.
 
 `background.spec.sh` took 44 s, as on main (45 s), with no case timeouts in 6 runs. `shell-grammar.spec.sh` "Invalid
