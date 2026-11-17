@@ -585,14 +585,20 @@ paid this:
    lock, which is not handed out in arrival order, so `echo word_a & echo word_b &` printed `word_b` first (1 of 3
    runs of `shell-grammar.spec.sh` "a & b &"). The old pool serialized this by accident: each `BeginInvoke` waited for
    its runspace to open. Now `NewJob` puts `Enter-BashJobTurn` before the body. It is a cmdlet, so it makes no AMSI
-   report. It waits until every job launched earlier from the same runspace has passed its turn
-   (`BashJobRunspaces.JobTurn`). **Invariant: a job passes its turn only once its body has begun and it has written
-   its first record to the shell's output, blocked in a `sleep`, or ended**, or 100 ms after its body began (a CPU
-   loop, output sent to a file). The write passes the turn after the record is in the mux (`BashJobOutput.BeginLive`),
-   so the two jobs' first writes cannot swap. Passing at the body's start alone still let `echo word_b` reach the mux
-   first, 1 of 3 runs on a loaded host (Windows fleet s22a). A `sleep` passes it (`JobClock.Blocking`) because in bash
-   the next job would already be running. A wait gives up after 2 s, for a job whose start was refused and so never
-   begins. It also stops at once when the job is stopped. Tests: `JobTurnTests` (Cmdlets.Tests).
+   report. A job holds one ticket in two launch-order lines (`BashJobRunspaces.JobTurn`), per launching runspace.
+   **Invariant 1 (begin): a job's body begins only after every earlier job's body has begun.** **Invariant 2 (first
+   write): a job's first record reaches the shell's output only after every earlier job has written its first record,
+   blocked in a `sleep`, ended, or used up a 100 ms grace counted from its body's start** (a CPU loop, output sent to
+   a file). The write line is passed after the record is in the mux (`BashJobOutput.BeginLive`: `WaitToWrite`, write,
+   `Pass`), so two jobs' first writes cannot swap. A `sleep` passes both lines (`JobClock.Blocking`), because in bash
+   the next job would already be running. Two lines, not one: with a single line passed at the first write, each
+   silent job held the next one's *start* for its whole grace, and the grace cascaded (job 3 of 4 silent jobs began
+   215 ms after its `&`, Windows fleet s22e). Passing the one line at the body's start instead let `echo word_b`
+   reach the mux first, 1 of 3 runs on a loaded host (Windows fleet s22a). Every wait gives up after 2 s, for a job
+   whose start was refused and so never begins, and then skips the tickets before it; it stops at once when the job
+   is stopped or its output abandoned. Tests: `JobTurnTests` (Cmdlets.Tests: silent jobs begin without waiting for
+   each other's writes; a first write waits for the earlier job's; a silent earlier job holds it only for its grace;
+   a `sleep` releases it), `BackgroundJobStartLatencyTests` (Host.Tests).
 6. *Start lag added to every sleep.* Even a warm job begins its body 13-27 ms after its `&` (24-88 ms on a loaded
    host). Bash begins it under a millisecond after. A `sleep D` measured from the body's start therefore ends at
    `launch + lag + D`, and a lag larger than the gap between two jobs' sleeps reorders them. **Invariant: an in-process

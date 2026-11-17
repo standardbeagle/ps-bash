@@ -30,11 +30,12 @@ public static class BashJobOutput
         Func<bool> abandoned = () => ps.InvocationStateInfo.State is not (PSInvocationState.Running or PSInvocationState.NotStarted);
         var output = new PSDataCollection<PSObject>();
         var gate = new object();
-        // The job launched after this one begins once this one's first record is in the mux (launch order,
-        // BashJobRunspaces.JobTurn): passed after the write, so the order of the two jobs' first writes is fixed.
+        // First writes reach the shell in launch order (BashJobRunspaces.JobTurn): this job's first record waits for the
+        // earlier jobs' first writes, and the turn passes after the write, so the order of two jobs' first records is fixed.
         var turn = BashJobRunspaces.JobTurn.Of(ps);
         output.DataAdded += (_, _) =>
         {
+            turn?.WaitToWrite(abandoned);
             lock (gate)
             {
                 foreach (var item in output.ReadAll())
@@ -45,6 +46,7 @@ public static class BashJobOutput
         var errors = ps.Streams.Error;
         errors.DataAdded += (_, _) =>
         {
+            turn?.WaitToWrite(abandoned);
             lock (gate)
             {
                 foreach (var record in errors.ReadAll())

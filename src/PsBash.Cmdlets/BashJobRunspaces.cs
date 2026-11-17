@@ -76,8 +76,8 @@ public static class BashJobRunspaces
             }
             text.Append('\n');
         }
-        // The body begins only after the job launched before it from the same runspace has passed its turn (JobTurn);
-        // its clock begins there.
+        // The body begins only after the job launched before it from the same runspace has begun (JobTurn); its clock
+        // begins there.
         text.Append("Enter-BashJobTurn $__bgTurn $__bgClock\n");
         text.Append(body.ToString()).Append('\n').Append(tail);
         var turn = JobTurn.Next(Runspace.DefaultRunspace);
@@ -326,32 +326,37 @@ public static class BashJobRunspaces
     /// begins first (the parent forks them in order) and, when it writes at once, writes first; here each job's pipeline
     /// compiles on its own thread and waits on PowerShell's process-wide AMSI lock (section 12.4), which is not handed out
     /// in arrival order, so with ready runspaces <c>echo word_a &amp; echo word_b &amp;</c> printed word_b first.
-    /// <c>Enter-BashJobTurn</c>, the statement before the job's body (a cmdlet call: no AMSI report), waits until every job
-    /// launched before it has passed its turn. A job passes it once its body has begun AND it has written its first
-    /// record to the shell's output (<see cref="BashJobOutput"/>, after the write: the order is then fixed), blocked in a
-    /// <c>sleep</c> (<see cref="JobClock.Blocking"/>), ended, or run <see cref="DefaultGrace"/> since its body began.
-    /// Passing at the body's start alone left both jobs' first writes to race (1 of 3 runs, Windows fleet s22a). A wait
-    /// gives up after <see cref="MaxWait"/> (a job whose start was refused never begins).
+    /// <para>Two orders, both in launch order. <b>Begin</b>: <c>Enter-BashJobTurn</c>, the statement before the job's body
+    /// (a cmdlet call: no AMSI report), waits until every earlier job has begun its body or ended. <b>First write</b>: a
+    /// job's first record to the shell's output (<see cref="BashJobOutput"/>) waits until every earlier job has written
+    /// its first record (passed after the write, so the order is fixed), blocked in a <c>sleep</c>
+    /// (<see cref="JobClock.Blocking"/>), ended, or run <see cref="DefaultGrace"/> since its body began. Ordering only the
+    /// begin left the first writes to race (1 of 3 runs, Windows fleet s22a); holding the next body until the first write
+    /// made a run of silent jobs start one grace apart (the 3rd began 215 ms after its <c>&amp;</c>, s22e), so bodies still
+    /// start at once and only a write waits.</para>
+    /// A wait gives up after <see cref="MaxWait"/> (a job whose start was refused never begins); the earlier jobs then no
+    /// longer hold anyone up.
     /// </summary>
     public sealed class JobTurn
     {
         private static readonly TimeSpan MaxWait = TimeSpan.FromSeconds(2);
         private static readonly TimeSpan Slice = TimeSpan.FromMilliseconds(50);
-        /// <summary>How long a job that has begun but neither written, slept nor ended holds up the next one.</summary>
+        /// <summary>How long a job that has begun but neither written, slept nor ended holds up the next one's first write.</summary>
         internal static readonly TimeSpan DefaultGrace = TimeSpan.FromMilliseconds(100);
-        private static readonly ConditionalWeakTable<Runspace, Order> Orders = new();
+        private static readonly ConditionalWeakTable<Runspace, Lines> Orders = new();
         private static readonly ConditionalWeakTable<PowerShell, JobTurn> ByJob = new();
 
-        private readonly Order _order;
-        private readonly long _ticket;
+        private readonly Place _begin;
+        private readonly Place _write;
         private readonly TimeSpan _grace;
-        private int _passed;
+        private readonly object _timerGate = new();
         private Timer? _graceTimer;
+        private int _waitedToWrite;
 
-        private JobTurn(Order order, long ticket, TimeSpan grace)
+        private JobTurn(Lines lines, long ticket, TimeSpan grace)
         {
-            _order = order;
-            _ticket = ticket;
+            _begin = new Place(lines.Begin, ticket);
+            _write = new Place(lines.Write, ticket);
             _grace = grace;
         }
 
@@ -362,8 +367,8 @@ public static class BashJobRunspaces
         internal static JobTurn? Next(Runspace? launcher, TimeSpan grace)
         {
             if (launcher is null) return null;
-            var order = Orders.GetValue(launcher, static _ => new Order());
-            lock (order) return new JobTurn(order, ++order.Issued, grace);
+            var lines = Orders.GetValue(launcher, static _ => new Lines());
+            lock (lines) return new JobTurn(lines, ++lines.Issued, grace);
         }
 
         /// <summary>The turn of the job <paramref name="job"/> runs (<see cref="NewJob"/>), or null.</summary>
@@ -372,64 +377,129 @@ public static class BashJobRunspaces
         internal void AttachTo(PowerShell job) => ByJob.AddOrUpdate(job, this);
 
         /// <summary>
-        /// Wait (bounded, ends early when <paramref name="stopping"/>) for the earlier jobs, then begin: the turn passes on
-        /// this job's first write, sleep or end (<see cref="Pass"/>), or after the grace.
+        /// Wait (bounded, ends early when <paramref name="stopping"/>) until the earlier jobs have begun, then begin. The
+        /// next job's first write may go once this one writes, sleeps or ends (<see cref="Pass"/>), or after the grace.
         /// </summary>
         internal void Enter(Func<bool> stopping)
         {
-            var waited = System.Diagnostics.Stopwatch.StartNew();
-            lock (_order)
+            if (!_begin.Line.WaitFor(_begin.Ticket, stopping))
             {
-                while (_order.Through < _ticket - 1)
-                {
-                    var left = MaxWait - waited.Elapsed;
-                    if (left <= TimeSpan.Zero || stopping()) break;
-                    Monitor.Wait(_order, left < Slice ? left : Slice);
-                }
-                if (_order.Through < _ticket - 1 || _grace <= TimeSpan.Zero)
-                {
-                    PassLocked(force: _order.Through < _ticket - 1);
-                    return;
-                }
-                if (Volatile.Read(ref _passed) == 0)
-                    _graceTimer = new Timer(static s => ((JobTurn)s!).Pass(), this, _grace, Timeout.InfiniteTimeSpan);
+                _begin.Line.SkipBefore(_begin.Ticket);
+                _write.Line.SkipBefore(_write.Ticket);
             }
+            _begin.Pass();
+            if (_grace <= TimeSpan.Zero) { PassWrite(); return; }
+            var timer = new Timer(static s => ((JobTurn)s!).PassWrite(), this, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+            lock (_timerGate)
+            {
+                if (_write.Passed) { timer.Dispose(); return; }
+                _graceTimer = timer;
+            }
+            timer.Change(_grace, Timeout.InfiniteTimeSpan);
         }
 
-        /// <summary>This job has written, blocked or ended: the next one may begin. Cheap once passed (called per record).</summary>
+        /// <summary>
+        /// Before this job's first record reaches the shell's output: wait (bounded, ends early when
+        /// <paramref name="abandoned"/>) until every earlier job has written, slept, ended or used up its grace. Only the
+        /// first call waits.
+        /// </summary>
+        internal void WaitToWrite(Func<bool> abandoned)
+        {
+            if (Interlocked.Exchange(ref _waitedToWrite, 1) != 0) return;
+            if (!_write.Line.WaitFor(_write.Ticket, abandoned)) _write.Line.SkipBefore(_write.Ticket);
+        }
+
+        /// <summary>This job has written, blocked or ended: the next one may begin and write. Cheap once passed (per record).</summary>
         internal void Pass()
         {
-            if (Volatile.Read(ref _passed) != 0) return;
-            lock (_order) PassLocked(force: false);
+            _begin.Pass();
+            PassWrite();
         }
 
-        private void PassLocked(bool force)
+        private void PassWrite()
         {
-            if (Interlocked.Exchange(ref _passed, 1) != 0) return;
-            _graceTimer?.Dispose();
-            _graceTimer = null;
-            if (force)
+            if (_write.Passed) return;
+            Timer? timer;
+            lock (_timerGate)
             {
-                // Gave up on an earlier job: those before this one no longer hold anyone up.
-                if (_order.Through < _ticket) _order.Through = _ticket;
-                _order.Passed.RemoveWhere(t => t <= _order.Through);
+                timer = _graceTimer;
+                _graceTimer = null;
             }
-            else if (_ticket > _order.Through)
-            {
-                _order.Passed.Add(_ticket);
-            }
-            while (_order.Passed.Remove(_order.Through + 1)) _order.Through++;
-            Monitor.PulseAll(_order);
+            timer?.Dispose();
+            _write.Pass();
         }
 
-        private sealed class Order
+        private sealed class Lines
         {
-            public long Issued;   // last ticket handed out
-            public long Through;  // every ticket up to this one has passed
-            public readonly HashSet<long> Passed = [];
+            public long Issued;   // last ticket handed out (the same ticket in both lines)
+            public readonly Line Begin = new();
+            public readonly Line Write = new();
+        }
+
+        /// <summary>One job's ticket in one line.</summary>
+        private sealed class Place(Line line, long ticket)
+        {
+            public readonly Line Line = line;
+            public readonly long Ticket = ticket;
+            private int _passed;
+
+            public bool Passed => Volatile.Read(ref _passed) != 0;
+
+            public void Pass()
+            {
+                if (Interlocked.Exchange(ref _passed, 1) == 0) Line.Pass(Ticket);
+            }
+        }
+
+        /// <summary>Tickets passing in order: <c>_through</c> is the last ticket all of whose predecessors passed.</summary>
+        private sealed class Line
+        {
+            private long _through;
+            private readonly HashSet<long> _passed = [];
+
+            /// <summary>True once every ticket before <paramref name="ticket"/> has passed; false when the wait gave up.</summary>
+            public bool WaitFor(long ticket, Func<bool> stopping)
+            {
+                var waited = System.Diagnostics.Stopwatch.StartNew();
+                lock (this)
+                {
+                    while (_through < ticket - 1)
+                    {
+                        var left = MaxWait - waited.Elapsed;
+                        if (left <= TimeSpan.Zero || stopping()) return false;
+                        Monitor.Wait(this, left < Slice ? left : Slice);
+                    }
+                    return true;
+                }
+            }
+
+            /// <summary>Gave up on the tickets before <paramref name="ticket"/>: they no longer hold anyone up.</summary>
+            public void SkipBefore(long ticket)
+            {
+                lock (this)
+                {
+                    if (_through < ticket - 1) _through = ticket - 1;
+                    _passed.RemoveWhere(t => t <= _through);
+                    AdvanceLocked();
+                }
+            }
+
+            public void Pass(long ticket)
+            {
+                lock (this)
+                {
+                    if (ticket > _through) _passed.Add(ticket);
+                    AdvanceLocked();
+                }
+            }
+
+            private void AdvanceLocked()
+            {
+                while (_passed.Remove(_through + 1)) _through++;
+                Monitor.PulseAll(this);
+            }
         }
     }
-
     private sealed class Baseline
     {
         private readonly Dictionary<string, object?> _variables;
