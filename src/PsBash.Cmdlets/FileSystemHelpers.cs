@@ -46,9 +46,16 @@ internal static class FileSystemHelpers
         // The runtime path policy (RuntimePath.Map: /tmp → $env:TEMP, unix drive paths) — this is
         // the chokepoint most cmdlets resolve operands through, so an expanded `$d/f` (d=/tmp) reaches
         // the same file the emitter's literal /tmp rewrite does. Idempotent on an already-mapped path.
+        string typed = psPath;
         psPath = NormalizeOperandPath(psPath);
-        try { return cmdlet.SessionState.Path.GetUnresolvedProviderPathFromPSPath(psPath); }
+        string resolved;
+        try { resolved = cmdlet.SessionState.Path.GetUnresolvedProviderPathFromPSPath(psPath); }
         catch (System.Management.Automation.DriveNotFoundException) { return psPath; }
+        // A diagnostic names the operand as typed (OperandDisplay). Without this, a message about an operand under the
+        // working directory fell to OperandDisplay's cwd-stripping guess: `cat "$PWD/x"` and `cat ./x` both said
+        // `cat: x: ...` where GNU says `cat: /full/x` and `cat: ./x`.
+        OperandDisplay.Remember(cmdlet, resolved, typed);
+        return resolved;
     }
 
     /// <summary>

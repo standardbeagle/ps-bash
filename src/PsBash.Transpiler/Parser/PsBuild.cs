@@ -1320,6 +1320,14 @@ public static class PsBuild
     public static string ForwardStageInput(string command) => ForwardedStageInput + command;
 
     /// <summary>
+    /// <see cref="ForwardStageInput"/> for a stand-in that may also run outside a pipeline (a <c>#!</c> file run in place
+    /// of a command, ProgramFile.StandInScript): the block's records are piped in when there are any, and otherwise the
+    /// command runs with no pipeline input at all, so it keeps the shell's stdin instead of reading an empty pipe.
+    /// </summary>
+    public static string ForwardStageInputIfAny(string command) =>
+        "$__psbash_in = @(" + StageInput + "); if ($__psbash_in.Count -gt 0) { $__psbash_in | " + command + " } else { " + command + " }";
+
+    /// <summary>
     /// A pipe stage whose stdin is not the pipe (<c>… | cmd &lt; f</c>, <c>… | seq 3</c>): the block drains the upstream
     /// records (so the producer is not refused) and runs <paramref name="body"/> once, as bash does.
     /// </summary>

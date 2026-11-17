@@ -815,7 +815,7 @@ public sealed class InvokeBashRgCommand : PSCmdlet
             return true;
         }
         string path;
-        try { path = FileSystemHelpers.ProviderPath(this, FileSystemHelpers.NormalizeOperandPath(raw)); }
+        try { path = FileSystemHelpers.ProviderPath(this, raw); }
         catch { path = raw; }
         try
         {

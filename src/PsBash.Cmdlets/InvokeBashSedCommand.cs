@@ -128,7 +128,7 @@ public sealed class InvokeBashSedCommand : PSCmdlet
         {
             try
             {
-                string path = FileSystemHelpers.ProviderPath(this, FileSystemHelpers.NormalizeOperandPath(name));
+                string path = FileSystemHelpers.ProviderPath(this, name);
                 if (!File.Exists(path)) return null;
                 return BashFileSystem.ReadAllText(path);
             }
@@ -140,7 +140,7 @@ public sealed class InvokeBashSedCommand : PSCmdlet
             {
                 try
                 {
-                    string path = FileSystemHelpers.ProviderPath(this, FileSystemHelpers.NormalizeOperandPath(name));
+                    string path = FileSystemHelpers.ProviderPath(this, name);
                     en = File.Exists(path) ? ReadRawLines(path).GetEnumerator() : null;
                 }
                 catch (Exception ex) when (!FileSystemHelpers.IsPipelineStop(ex)) { en = null; }
@@ -166,7 +166,7 @@ public sealed class InvokeBashSedCommand : PSCmdlet
         if (DevicePath.Classify(name) is DeviceKind.Stdout or DeviceKind.Stderr or DeviceKind.Null || _outFiles.ContainsKey(name)) return;
         try
         {
-            string path = FileSystemHelpers.ProviderPath(this, FileSystemHelpers.NormalizeOperandPath(name));
+            string path = FileSystemHelpers.ProviderPath(this, name);
             _outFiles[name] = RedirectFileWriter.OpenText(path, append: false, this);
         }
         catch (Exception ex) when (!FileSystemHelpers.IsPipelineStop(ex))

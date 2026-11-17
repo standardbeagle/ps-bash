@@ -1,0 +1,42 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 235
+stdout-length: 1552
+stderr-length: 0
+==== SCRIPT ====
+d=$(mktemp -d); cd "$d" || exit; mkdir sub; for op in "$d/nope" ./nope nope sub/../nope "$d/sub/nope"; do cat "$op"; head -n1 "$op"; wc -l "$op"; grep x "$op"; sort "$op"; tail -n1 "$op"; done 2>&1 | sed "s|$d|D|g"; cd / && rm -rf "$d"
+==== STDOUT ====
+cat: D/nope: No such file or directory
+head: cannot open 'D/nope' for reading: No such file or directory
+wc: D/nope: No such file or directory
+grep: D/nope: No such file or directory
+sort: cannot read: D/nope: No such file or directory
+tail: cannot open 'D/nope' for reading: No such file or directory
+cat: ./nope: No such file or directory
+head: cannot open './nope' for reading: No such file or directory
+wc: ./nope: No such file or directory
+grep: ./nope: No such file or directory
+sort: cannot read: ./nope: No such file or directory
+tail: cannot open './nope' for reading: No such file or directory
+cat: nope: No such file or directory
+head: cannot open 'nope' for reading: No such file or directory
+wc: nope: No such file or directory
+grep: nope: No such file or directory
+sort: cannot read: nope: No such file or directory
+tail: cannot open 'nope' for reading: No such file or directory
+cat: sub/../nope: No such file or directory
+head: cannot open 'sub/../nope' for reading: No such file or directory
+wc: sub/../nope: No such file or directory
+grep: sub/../nope: No such file or directory
+sort: cannot read: sub/../nope: No such file or directory
+tail: cannot open 'sub/../nope' for reading: No such file or directory
+cat: D/sub/nope: No such file or directory
+head: cannot open 'D/sub/nope' for reading: No such file or directory
+wc: D/sub/nope: No such file or directory
+grep: D/sub/nope: No such file or directory
+sort: cannot read: D/sub/nope: No such file or directory
+tail: cannot open 'D/sub/nope' for reading: No such file or directory
+
+==== STDERR ====
+

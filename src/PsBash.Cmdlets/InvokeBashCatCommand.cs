@@ -499,7 +499,8 @@ public sealed class InvokeBashCatCommand : PSCmdlet
             }
             else
             {
-                yield return FileSystemHelpers.ProviderPath(this, p);
+                // The operand as typed: ProviderPath normalizes it itself and records the typed text for diagnostics.
+                yield return FileSystemHelpers.ProviderPath(this, rawP);
             }
         }
     }

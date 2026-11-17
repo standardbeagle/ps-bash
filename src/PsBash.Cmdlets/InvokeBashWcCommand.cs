@@ -431,7 +431,7 @@ public sealed class InvokeBashWcCommand : PSCmdlet
     /// <summary>A --files0-from entry is used verbatim: no globbing, resolved against the PowerShell location.</summary>
     private string ResolveVerbatim(string name)
     {
-        var resolved = FileSystemHelpers.ProviderPath(this, FileSystemHelpers.NormalizeOperandPath(name));
+        var resolved = FileSystemHelpers.ProviderPath(this, name);
         OperandDisplay.Remember(this, resolved, name);
         return resolved;
     }

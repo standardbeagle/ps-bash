@@ -140,7 +140,7 @@ public sealed class ProgramLaunch
         foreach (var a in InterpreterArgs) sb.Append(' ').Append(PsBuild.SingleQuote(a));
         sb.Append(' ').Append(PsBuild.SingleQuote(Path)).Append(" @args");
         string run = sb.ToString();
-        return "$__psbash_in = @($input); if ($__psbash_in.Count -gt 0) { $__psbash_in | " + run + " } else { " + run + " }";
+        return PsBuild.ForwardStageInputIfAny(run);
     }
 
     /// <summary>

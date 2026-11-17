@@ -181,7 +181,7 @@ public sealed class InvokeBashFindCommand : PSCmdlet
             {
                 try
                 {
-                    var full = FileSystemHelpers.ProviderPath(this, FileSystemHelpers.NormalizeOperandPath(path));
+                    var full = FileSystemHelpers.ProviderPath(this, path);
                     sink = new FileSink(RedirectFileWriter.OpenText(full, append: false, this));
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
@@ -523,7 +523,7 @@ public sealed class InvokeBashFindCommand : PSCmdlet
                     string refPath;
                     try
                     {
-                        refPath = FileSystemHelpers.ProviderPath(this, FileSystemHelpers.NormalizeOperandPath(f));
+                        refPath = FileSystemHelpers.ProviderPath(this, f);
                         if (!File.Exists(refPath) && !Directory.Exists(refPath) && !FindStat.IsLinkEntry(new FileInfo(refPath))) throw new FileNotFoundException();
                     }
                     catch { EmitError($"find: ‘{f}’: No such file or directory"); return; }
@@ -593,7 +593,7 @@ public sealed class InvokeBashFindCommand : PSCmdlet
                         {
                             try
                             {
-                                var full = FileSystemHelpers.ProviderPath(this, FileSystemHelpers.NormalizeOperandPath(refArg));
+                                var full = FileSystemHelpers.ProviderPath(this, refArg);
                                 FileSystemInfo info = Directory.Exists(full) ? new DirectoryInfo(full) : new FileInfo(full);
                                 if (!info.Exists && !FindStat.IsLinkEntry(info)) throw new FileNotFoundException();
                                 refTime = y switch { 'a' => info.LastAccessTime, 'B' => info.CreationTime, 'c' => FindStat.ChangeTimeOf(info), _ => info.LastWriteTime };
