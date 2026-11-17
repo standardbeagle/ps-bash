@@ -76,8 +76,8 @@ public static class BashJobRunspaces
             }
             text.Append('\n');
         }
-        // The body begins only after the job launched before it from the same runspace has begun (JobTurn); its clock
-        // begins there.
+        // The body begins only after the job launched before it from the same runspace has passed its turn (JobTurn);
+        // its clock begins there.
         text.Append("Enter-BashJobTurn $__bgTurn $__bgClock\n");
         text.Append(body.ToString()).Append('\n').Append(tail);
         var turn = JobTurn.Next(Runspace.DefaultRunspace);
@@ -92,7 +92,10 @@ public static class BashJobRunspaces
             scalars.Attach(ps.Runspace);
             // The launch: the job's sleeps count from here (JobClock), as a forked job's do in bash. After the bind: time the
             // launcher spent waiting for a runspace delays the shell as much as the job, so it is not the job's to pay back.
-            ps.AddArgument(JobClock.Launch());
+            turn?.AttachTo(ps);
+            var clock = JobClock.Launch();
+            clock.Turn = turn;
+            ps.AddArgument(clock);
             return ps;
         }
         catch
@@ -320,37 +323,58 @@ public static class BashJobRunspaces
 
     /// <summary>
     /// The place of an in-process job among the jobs launched from the same runspace. In bash a job launched first
-    /// begins first (the parent forks them in order); here each job's pipeline compiles on its own thread and waits on
-    /// PowerShell's process-wide AMSI lock (section 12.4), which is not handed out in arrival order, so with ready
-    /// runspaces <c>echo word_a &amp; echo word_b &amp;</c> printed word_b first. <c>Enter-BashJobTurn</c>, the statement
-    /// before the job's body (a cmdlet call: no AMSI report), waits until every job launched before it has begun its
-    /// body or ended. A wait gives up after <see cref="MaxWait"/> (a job whose start was refused never begins).
+    /// begins first (the parent forks them in order) and, when it writes at once, writes first; here each job's pipeline
+    /// compiles on its own thread and waits on PowerShell's process-wide AMSI lock (section 12.4), which is not handed out
+    /// in arrival order, so with ready runspaces <c>echo word_a &amp; echo word_b &amp;</c> printed word_b first.
+    /// <c>Enter-BashJobTurn</c>, the statement before the job's body (a cmdlet call: no AMSI report), waits until every job
+    /// launched before it has passed its turn. A job passes it once its body has begun AND it has written its first
+    /// record to the shell's output (<see cref="BashJobOutput"/>, after the write: the order is then fixed), blocked in a
+    /// <c>sleep</c> (<see cref="JobClock.Blocking"/>), ended, or run <see cref="DefaultGrace"/> since its body began.
+    /// Passing at the body's start alone left both jobs' first writes to race (1 of 3 runs, Windows fleet s22a). A wait
+    /// gives up after <see cref="MaxWait"/> (a job whose start was refused never begins).
     /// </summary>
     public sealed class JobTurn
     {
         private static readonly TimeSpan MaxWait = TimeSpan.FromSeconds(2);
         private static readonly TimeSpan Slice = TimeSpan.FromMilliseconds(50);
+        /// <summary>How long a job that has begun but neither written, slept nor ended holds up the next one.</summary>
+        internal static readonly TimeSpan DefaultGrace = TimeSpan.FromMilliseconds(100);
         private static readonly ConditionalWeakTable<Runspace, Order> Orders = new();
+        private static readonly ConditionalWeakTable<PowerShell, JobTurn> ByJob = new();
 
         private readonly Order _order;
         private readonly long _ticket;
+        private readonly TimeSpan _grace;
         private int _passed;
+        private Timer? _graceTimer;
 
-        private JobTurn(Order order, long ticket)
+        private JobTurn(Order order, long ticket, TimeSpan grace)
         {
             _order = order;
             _ticket = ticket;
+            _grace = grace;
         }
 
         /// <summary>The next turn of jobs launched from <paramref name="launcher"/>; none without a runspace.</summary>
-        internal static JobTurn? Next(Runspace? launcher)
+        internal static JobTurn? Next(Runspace? launcher) => Next(launcher, DefaultGrace);
+
+        /// <summary>Test seam: <see cref="Next(Runspace?)"/> with its own grace.</summary>
+        internal static JobTurn? Next(Runspace? launcher, TimeSpan grace)
         {
             if (launcher is null) return null;
             var order = Orders.GetValue(launcher, static _ => new Order());
-            lock (order) return new JobTurn(order, ++order.Issued);
+            lock (order) return new JobTurn(order, ++order.Issued, grace);
         }
 
-        /// <summary>Wait (bounded, ends early when <paramref name="stopping"/>) for the earlier jobs, then begin.</summary>
+        /// <summary>The turn of the job <paramref name="job"/> runs (<see cref="NewJob"/>), or null.</summary>
+        internal static JobTurn? Of(PowerShell job) => ByJob.TryGetValue(job, out var turn) ? turn : null;
+
+        internal void AttachTo(PowerShell job) => ByJob.AddOrUpdate(job, this);
+
+        /// <summary>
+        /// Wait (bounded, ends early when <paramref name="stopping"/>) for the earlier jobs, then begin: the turn passes on
+        /// this job's first write, sleep or end (<see cref="Pass"/>), or after the grace.
+        /// </summary>
         internal void Enter(Func<bool> stopping)
         {
             var waited = System.Diagnostics.Stopwatch.StartNew();
@@ -362,19 +386,28 @@ public static class BashJobRunspaces
                     if (left <= TimeSpan.Zero || stopping()) break;
                     Monitor.Wait(_order, left < Slice ? left : Slice);
                 }
-                PassLocked(force: _order.Through < _ticket - 1);
+                if (_order.Through < _ticket - 1 || _grace <= TimeSpan.Zero)
+                {
+                    PassLocked(force: _order.Through < _ticket - 1);
+                    return;
+                }
+                if (Volatile.Read(ref _passed) == 0)
+                    _graceTimer = new Timer(static s => ((JobTurn)s!).Pass(), this, _grace, Timeout.InfiniteTimeSpan);
             }
         }
 
-        /// <summary>This job has begun or ended: the next one may begin.</summary>
+        /// <summary>This job has written, blocked or ended: the next one may begin. Cheap once passed (called per record).</summary>
         internal void Pass()
         {
+            if (Volatile.Read(ref _passed) != 0) return;
             lock (_order) PassLocked(force: false);
         }
 
         private void PassLocked(bool force)
         {
             if (Interlocked.Exchange(ref _passed, 1) != 0) return;
+            _graceTimer?.Dispose();
+            _graceTimer = null;
             if (force)
             {
                 // Gave up on an earlier job: those before this one no longer hold anyone up.

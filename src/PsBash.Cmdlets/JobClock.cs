@@ -30,6 +30,15 @@ public sealed class JobClock
 
     internal JobClock(long launchedTimestamp) => _launched = launchedTimestamp;
 
+    /// <summary>The job's launch-order turn (<see cref="BashJobRunspaces.JobTurn"/>), or null.</summary>
+    internal BashJobRunspaces.JobTurn? Turn { get; set; }
+
+    /// <summary>
+    /// The job is about to block (a <c>sleep</c>): the job launched after it may begin. In bash it would be running by
+    /// now; holding it for the grace would only add start lag.
+    /// </summary>
+    public void Blocking() => Turn?.Pass();
+
     /// <summary>A clock for a job launched now.</summary>
     public static JobClock Launch() => new(Stopwatch.GetTimestamp());
 

@@ -585,9 +585,14 @@ paid this:
    lock, which is not handed out in arrival order, so `echo word_a & echo word_b &` printed `word_b` first (1 of 3
    runs of `shell-grammar.spec.sh` "a & b &"). The old pool serialized this by accident: each `BeginInvoke` waited for
    its runspace to open. Now `NewJob` puts `Enter-BashJobTurn` before the body. It is a cmdlet, so it makes no AMSI
-   report. It waits until every job launched earlier from the same runspace has begun its body or ended
-   (`BashJobRunspaces.JobTurn`). A wait gives up after 2 s, for a job whose start was refused and so never begins.
-   It also stops at once when the job is stopped. Tests: `JobTurnTests` (Cmdlets.Tests).
+   report. It waits until every job launched earlier from the same runspace has passed its turn
+   (`BashJobRunspaces.JobTurn`). **Invariant: a job passes its turn only once its body has begun and it has written
+   its first record to the shell's output, blocked in a `sleep`, or ended**, or 100 ms after its body began (a CPU
+   loop, output sent to a file). The write passes the turn after the record is in the mux (`BashJobOutput.BeginLive`),
+   so the two jobs' first writes cannot swap. Passing at the body's start alone still let `echo word_b` reach the mux
+   first, 1 of 3 runs on a loaded host (Windows fleet s22a). A `sleep` passes it (`JobClock.Blocking`) because in bash
+   the next job would already be running. A wait gives up after 2 s, for a job whose start was refused and so never
+   begins. It also stops at once when the job is stopped. Tests: `JobTurnTests` (Cmdlets.Tests).
 6. *Start lag added to every sleep.* Even a warm job begins its body 13-27 ms after its `&` (24-88 ms on a loaded
    host). Bash begins it under a millisecond after. A `sleep D` measured from the body's start therefore ends at
    `launch + lag + D`, and a lag larger than the gap between two jobs' sleeps reorders them. **Invariant: an in-process

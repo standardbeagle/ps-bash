@@ -96,7 +96,11 @@ public sealed class InvokeBashSleepCommand : PSCmdlet
         var totalMs = (long)Math.Ceiling(totalSeconds * 1000);
         // In a background job the sleep counts from the `&` that launched it, not from the late start of its body
         // (JobClock, docs/specs/background-jobs.md section 12.5).
-        if (JobClock.Current(SessionState) is { } clock) totalMs = clock.Settle(totalMs);
+        if (JobClock.Current(SessionState) is { } clock)
+        {
+            clock.Blocking();
+            totalMs = clock.Settle(totalMs);
+        }
         const int ChunkMs = 100;
         while (totalMs > 0)
         {

@@ -14,19 +14,57 @@ public class JobTurnTests
 {
     private static readonly Func<bool> NotStopping = static () => false;
 
+    private static readonly TimeSpan NoGrace = TimeSpan.FromMinutes(5);
+
+    // REGRESSION (Windows fleet s22a, `echo word_a & echo word_b &` printed word_b first 1 of 3 runs): the turn passed as
+    // the first job's body began, leaving both jobs' first writes to race. It now passes once the first job has written
+    // (or slept, or ended: Pass), not on entry.
     [Fact]
-    public void LaterJob_WaitsForTheEarlierOneToBegin()
+    public void LaterJob_WaitsUntilTheEarlierOneHasBegunAndPassed()
     {
         using var launcher = RunspaceFactory.CreateRunspace();
-        var first = JobTurn.Next(launcher)!;
-        var second = JobTurn.Next(launcher)!;
+        var first = JobTurn.Next(launcher, NoGrace)!;
+        var second = JobTurn.Next(launcher, NoGrace)!;
         using var entered = new ManualResetEventSlim();
         var t = new Thread(() => { second.Enter(NotStopping); entered.Set(); }) { IsBackground = true };
         t.Start();
 
         Assert.False(entered.Wait(150), "the second job began before the first");
         first.Enter(NotStopping);
-        Assert.True(entered.Wait(1000), "the second job did not begin once the first had");
+        Assert.False(entered.Wait(150), "the second job began as soon as the first had begun, before its first write");
+        first.Pass();
+        Assert.True(entered.Wait(1000), "the second job did not begin once the first had written");
+    }
+
+    // A first job that begins but neither writes, sleeps nor ends (a CPU loop, output to a file) holds the next one only
+    // for its grace.
+    [Fact]
+    public void AnEarlierJobThatBeganButIsSilent_HoldsTheNextOnlyForItsGrace()
+    {
+        using var launcher = RunspaceFactory.CreateRunspace();
+        var first = JobTurn.Next(launcher, TimeSpan.FromMilliseconds(50))!;
+        var second = JobTurn.Next(launcher, NoGrace)!;
+        first.Enter(NotStopping);
+        using var entered = new ManualResetEventSlim();
+        var t = new Thread(() => { second.Enter(NotStopping); entered.Set(); }) { IsBackground = true };
+        t.Start();
+        Assert.True(entered.Wait(1500), "the second job waited past the first job's grace");
+    }
+
+    // A job's sleep passes its turn: in bash the next job would already be running.
+    [Fact]
+    public void AnEarlierJobThatSleeps_LetsTheNextBegin()
+    {
+        using var launcher = RunspaceFactory.CreateRunspace();
+        var first = JobTurn.Next(launcher, NoGrace)!;
+        var second = JobTurn.Next(launcher, NoGrace)!;
+        var clock = JobClock.Launch();
+        clock.Turn = first;
+        first.Enter(NotStopping);
+        clock.Blocking();
+        var sw = Stopwatch.StartNew();
+        second.Enter(NotStopping);
+        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(1), $"waited {sw.ElapsedMilliseconds} ms");
     }
 
     [Fact]
