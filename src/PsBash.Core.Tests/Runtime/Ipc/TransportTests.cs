@@ -74,6 +74,54 @@ public class TransportTests : IDisposable
         await serverTask;
     }
 
+    /// <summary>
+    /// REGRESSION: a second host on a live endpoint deleted the live host's socket file before binding. On POSIX the
+    /// delete succeeds and the first host kept running unreachable; on Windows the bind died with an unhandled
+    /// "address already in use" (a FATAL host-log entry). The loser now gets EndpointInUseException, and the first
+    /// host still answers.
+    /// </summary>
+    [SkippableFact]
+    public async Task UnixSocket_SecondListenerOnALiveEndpoint_IsRefused_AndTheFirstStillAnswers()
+    {
+        Skip.If(RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && Environment.OSVersion.Version.Build < 17063,
+            "AF_UNIX requires Windows 10 1803+");
+        Directory.CreateDirectory(_dir);
+        var sockPath = Path.Combine(_dir, "live.sock");
+        await using var first = new UnixSocketTransport(sockPath);
+        await first.ListenAsync();
+
+        await using var second = new UnixSocketTransport(sockPath);
+        var ex = await Assert.ThrowsAsync<EndpointInUseException>(() => second.ListenAsync());
+        Assert.Equal(sockPath, ex.Endpoint);
+        Assert.True(File.Exists(sockPath), "the live host's socket file was removed");
+
+        var accept = first.AcceptAsync();
+        using var client = await first.ConnectAsync();
+        using var served = await accept.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.NotNull(served);
+    }
+
+    /// <summary>A socket file nobody listens on (its host crashed) is still taken over.</summary>
+    [SkippableFact]
+    public async Task UnixSocket_StaleSocketFile_IsReplaced()
+    {
+        Skip.If(RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && Environment.OSVersion.Version.Build < 17063,
+            "AF_UNIX requires Windows 10 1803+");
+        Directory.CreateDirectory(_dir);
+        var sockPath = Path.Combine(_dir, "stale.sock");
+        // A killed host's leftover file. A bound socket closed normally cannot stand in: .NET on Windows deletes the file
+        // at close. A plain file at the path refuses a connect on Windows and Linux alike (10061 / ECONNREFUSED).
+        File.WriteAllText(sockPath, "");
+        Assert.True(UnixSocketProbe.NothingListens(sockPath));
+
+        await using var transport = new UnixSocketTransport(sockPath);
+        await transport.ListenAsync();
+        var accept = transport.AcceptAsync();
+        using var client = await transport.ConnectAsync();
+        using var served = await accept.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.NotNull(served);
+    }
+
     [SkippableFact]
     [Trait("Platform", "Posix")]
     public async Task UnixSocket_FileMode_Is_0600()

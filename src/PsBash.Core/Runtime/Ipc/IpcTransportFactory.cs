@@ -382,6 +382,8 @@ public static class IpcTransportFactory
     public static void RetireEndpoint(string scheme, string endpoint)
     {
         if (scheme != "unix") return;
+        // The one deliberate removal of a possibly live socket (UnixSocketGuardTests allow-list): the caller replaces
+        // that host on purpose.
         try { if (File.Exists(endpoint)) File.Delete(endpoint); }
         catch { /* best effort: bind will surface any remaining problem */ }
     }

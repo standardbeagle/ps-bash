@@ -85,36 +85,13 @@ public static class StaleArtifactReaper
                 // A pending-spawn record (PendingHostSpawn) whose launcher died: long past any startup window.
                 if (path.EndsWith(PendingHostSpawn.Suffix, StringComparison.Ordinal)) { TryDelete(path); removed++; continue; }
                 if (File.Exists(path + ".host.json")) continue; // ReapDeadSidecars decides these
-                if (!NothingListens(path)) continue;
+                if (!UnixSocketProbe.NothingListens(path)) continue;
                 TryDelete(path);
                 if (!File.Exists(path)) removed++;
             }
             catch { /* best effort per file */ }
         }
         return removed;
-    }
-
-    // True only when a connect is refused: the file is a socket nobody listens on, or not a socket.
-    // A timeout or any other error leaves the file alone.
-    private static bool NothingListens(string path)
-    {
-        using var sock = new System.Net.Sockets.Socket(
-            System.Net.Sockets.AddressFamily.Unix, System.Net.Sockets.SocketType.Stream, System.Net.Sockets.ProtocolType.Unspecified);
-        try
-        {
-            var connect = sock.ConnectAsync(new System.Net.Sockets.UnixDomainSocketEndPoint(path));
-            if (!connect.Wait(TimeSpan.FromMilliseconds(500))) return false;
-            return false; // connected: a host is listening
-        }
-        catch (AggregateException ae) when (ae.InnerException is System.Net.Sockets.SocketException se)
-        {
-            return se.SocketErrorCode == System.Net.Sockets.SocketError.ConnectionRefused;
-        }
-        catch (System.Net.Sockets.SocketException se)
-        {
-            return se.SocketErrorCode == System.Net.Sockets.SocketError.ConnectionRefused;
-        }
-        catch { return false; }
     }
 
     private static int ReapDeadSidecars(string dir)
@@ -151,7 +128,8 @@ public static class StaleArtifactReaper
                 if (sidecar.EndsWith(".host.json", StringComparison.Ordinal))
                 {
                     var socket = sidecar[..^".host.json".Length];
-                    if (File.Exists(socket)) { TryDelete(socket); removed++; }
+                    // A replacement binds before it writes its sidecar: its socket is live although the old owner is dead.
+                    if (File.Exists(socket) && UnixSocketProbe.NothingListens(socket)) { TryDelete(socket); removed++; }
                 }
             }
             catch { /* best effort per file */ }

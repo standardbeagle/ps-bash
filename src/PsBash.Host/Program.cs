@@ -210,7 +210,16 @@ internal sealed class Program
         // stale-socket bind TOCTOU or endpoint-replace race), _ready is never
         // completed and a bare `await WhenListening` would hang forever as a
         // zombie. WaitUntilListeningAsync rethrows the bind fault instead.
-        if (!await server.WaitUntilListeningAsync(serverTask))
+        bool listening;
+        try { listening = await server.WaitUntilListeningAsync(serverTask); }
+        catch (EndpointInUseException)
+        {
+            // Lost a start race: another live host serves this endpoint, and the launcher reaches that one. Exiting
+            // is the outcome, not a crash (an unhandled bind fault was a FATAL host-log entry and a .NET crash event).
+            HostLog.Write("exit: endpoint already served by another host");
+            return 0;
+        }
+        if (!listening)
         {
             // Defensive: RunAsync returned before binding without faulting —
             // nothing was served, so exit cleanly. A real bind fault or a

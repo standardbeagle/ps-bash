@@ -238,6 +238,17 @@ leaves the sidecar and its companion socket untouched. Without this
 compare-then-delete step a rebinding host's freshly bound socket could be unlinked
 under it.
 
+### A socket file is removed only when nothing listens on it
+
+A replacement binds before it writes its sidecar, so a dead sidecar owner does not make the socket stale. Every
+removal of a socket file first checks `UnixSocketProbe.NothingListens` (a refused connect). That covers the reaper,
+a host's bind (`UnixSocketTransport.ListenAsync`, which removes a crashed host's leftover file), and a host's own
+dispose, since after `RetireEndpoint` the path may belong to a replacement. On POSIX, deleting a live socket's file
+succeeds silently and leaves that host running unreachable. A host whose endpoint is already served gets
+`EndpointInUseException` and exits 0 with a host-log line. That includes losing a bind race; on Windows this used
+to be an unhandled "address already in use", a FATAL crash. `RetireEndpoint` is the one deliberate removal of a
+possibly live socket. Guard: `Core.Tests/Runtime/Ipc/UnixSocketGuardTests`; behavior: `TransportTests`.
+
 ## Endpoint Cleanup vs Process Cleanup
 
 Endpoint cleanup means removing bind artifacts so a replacement can claim the

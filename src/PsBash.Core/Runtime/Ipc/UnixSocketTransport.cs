@@ -29,9 +29,11 @@ public sealed class UnixSocketTransport : IIpcTransport
         if (_listening) throw new InvalidOperationException("Already listening");
         ThrowIfDisposed();
 
-        // Stale socket file from a crashed previous host: remove before bind.
+        // A socket file left by a crashed host is removed before bind, but only when nothing listens on it
+        // (UnixSocketProbe): a live host's file deleted on POSIX left that host running unreachable.
         if (File.Exists(_socketPath))
         {
+            if (!UnixSocketProbe.NothingListens(_socketPath)) throw new EndpointInUseException(_socketPath);
             try { File.Delete(_socketPath); } catch (IOException) { /* let bind surface the real error */ }
         }
 
@@ -51,7 +53,13 @@ public sealed class UnixSocketTransport : IIpcTransport
 
         var sock = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
         var ep = new UnixDomainSocketEndPoint(_socketPath);
-        sock.Bind(ep);
+        try { sock.Bind(ep); }
+        catch (SocketException se) when (se.SocketErrorCode == SocketError.AddressAlreadyInUse)
+        {
+            // Another host bound between the probe and here: it serves the endpoint.
+            sock.Dispose();
+            throw new EndpointInUseException(_socketPath, se);
+        }
         sock.Listen(backlog: 16);
         _listener = sock;
         _listening = true;
@@ -88,9 +96,11 @@ public sealed class UnixSocketTransport : IIpcTransport
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return ValueTask.CompletedTask;
         try { _listener?.Dispose(); } catch { /* idempotent */ }
         _listener = null;
+        // Our listener is closed, so a host still answering on the path is a replacement that re-bound it (after
+        // RetireEndpoint): its socket file is not ours to remove.
         if (_listening)
         {
-            try { if (File.Exists(_socketPath)) File.Delete(_socketPath); }
+            try { if (File.Exists(_socketPath) && UnixSocketProbe.NothingListens(_socketPath)) File.Delete(_socketPath); }
             catch (IOException) { /* best effort */ }
         }
         return ValueTask.CompletedTask;
