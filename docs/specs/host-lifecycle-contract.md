@@ -249,6 +249,17 @@ succeeds silently and leaves that host running unreachable. A host whose endpoin
 to be an unhandled "address already in use", a FATAL crash. `RetireEndpoint` is the one deliberate removal of a
 possibly live socket. Guard: `Core.Tests/Runtime/Ipc/UnixSocketGuardTests`; behavior: `TransportTests`.
 
+### A daemon host closes only the fds it inherited
+
+A host spawned as a daemon (`PSBASH_HOST_DETACH=1`, POSIX) points fd 0-2 at `/dev/null`. It also closes the
+launcher's pipes that leaked into fds 3 and up, since otherwise a caller reading the launcher's output never sees
+EOF. It closes a pipe only if it came through the exec, meaning it has no `FD_CLOEXEC` (`InheritedFdDetach.IsInherited`).
+The .NET runtime opens all of its own descriptors with `O_CLOEXEC`, its signal pipe included. Closing that pipe
+aborts the host on the next signal: the first child that exits sends SIGCHLD, the runtime's write gets EBADF, and
+it calls abort. The old rule, "every pipe at 3+", held only while the detach ran before any runtime pipe existed.
+It broke once POSIX signal handlers were registered earlier in `Main`, and every native program run on a Linux daemon
+host killed it. The rule does not depend on startup order. Test: `Host.Tests/Server/InheritedFdDetachTests`.
+
 ## Endpoint Cleanup vs Process Cleanup
 
 Endpoint cleanup means removing bind artifacts so a replacement can claim the

@@ -65,6 +65,39 @@ public sealed class InheritedFdDetachTests
             "fstat on an unopened fd should return false, not throw");
     }
 
+    /// <summary>
+    /// REGRESSION (g30, every Linux Differential test that started a program): the detach closed EVERY pipe at fd 3+,
+    /// and once the host registered POSIX signal handlers before it (ShellSignalSender.CatchPosixSignals) that
+    /// included the runtime's signal pipe. The first child exit (SIGCHLD) then aborted the host with EBADF. A pipe
+    /// opened in this process (FD_CLOEXEC, as the runtime opens all of its own) is never selected; a pipe that
+    /// survived an exec (no FD_CLOEXEC) is. The runtime's signal pipe is open here because of the registration.
+    /// </summary>
+    [SkippableFact]
+    public void InheritedPipeFds_SelectsOnlyPipesThatCameThroughExec_NeverTheRuntimesOwn()
+    {
+        Skip.If(OperatingSystem.IsWindows(), "POSIX fd inheritance; Windows hosts never run the detach");
+        using var signals = OperatingSystem.IsWindows() ? null : PosixSignalRegistration.Create(PosixSignal.SIGCHLD, _ => { });
+        using var own = new AnonymousPipeServerStream(PipeDirection.Out, HandleInheritability.None);
+        using var inheritable = new AnonymousPipeServerStream(PipeDirection.Out, HandleInheritability.Inheritable);
+        int ownFd = (int)own.SafePipeHandle.DangerousGetHandle();
+        int inheritableFd = (int)inheritable.SafePipeHandle.DangerousGetHandle();
+        Assert.False(InheritedFdDetach.IsInherited(ownFd));
+        Assert.True(InheritedFdDetach.IsInherited(inheritableFd));
+
+        var selected = InheritedFdDetach.InheritedPipeFds();
+
+        Assert.DoesNotContain(ownFd, selected);
+        Assert.Contains(inheritableFd, selected);
+        Assert.All(selected, fd => Assert.True(InheritedFdDetach.IsInherited(fd), $"fd {fd} has FD_CLOEXEC: opened here, not inherited"));
+    }
+
+    [SkippableFact]
+    public void IsInherited_IsFalse_ForAnUnopenedFd()
+    {
+        Skip.If(OperatingSystem.IsWindows(), "POSIX fd inheritance");
+        Assert.False(InheritedFdDetach.IsInherited(9999));
+    }
+
     [Fact]
     public void IsFdPipe_AgreesWithFstat_OnLinuxForPipe()
     {

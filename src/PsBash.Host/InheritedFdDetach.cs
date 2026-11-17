@@ -9,9 +9,9 @@ namespace PsBash.Host;
 /// daemon keeps the inherited write ends open, so any caller of the launcher
 /// that read its output via a pipe never sees EOF — the read hangs forever.
 ///
-/// fd 0/1/2 are replaced with /dev/null. fds 3+ that resolve to pipes are
-/// closed; .NET runtime fds (EventPipe, debugger, diagnostic port, GC sockets)
-/// must NOT be touched.
+/// fd 0/1/2 are replaced with /dev/null. fds 3+ that are pipes AND were inherited
+/// (no FD_CLOEXEC, <see cref="IsInherited"/>) are closed; .NET runtime fds (its
+/// signal pipe, EventPipe, debugger, diagnostic port) must NOT be touched.
 ///
 /// Pipe detection (RC-5):
 /// - Linux: readlink /proc/self/fd/{fd}, match the "pipe:[N]" target form.
@@ -181,6 +181,52 @@ internal static class InheritedFdDetach
         return IsFdPipeViaFstat(fd);
     }
 
+    [DllImport("libc", SetLastError = true, EntryPoint = "fcntl")]
+    private static extern int fcntl_getfd(int fd, int cmd);
+
+    private const int F_GETFD = 1;   // same value on Linux and Darwin
+    private const int FD_CLOEXEC = 1;
+
+    /// <summary>
+    /// Whether <paramref name="fd"/> came through this process's exec: open and without FD_CLOEXEC. exec closes
+    /// every FD_CLOEXEC fd, so one that has it was opened here, after exec. The .NET runtime opens all of its own
+    /// that way (its signal pipe is <c>pipe2(…, O_CLOEXEC)</c>). An fd we cannot query counts as not inherited.
+    /// </summary>
+    internal static bool IsInherited(int fd)
+    {
+        try
+        {
+            var flags = fcntl_getfd(fd, F_GETFD);
+            return flags >= 0 && (flags & FD_CLOEXEC) == 0;
+        }
+        catch { return false; }
+    }
+
+    /// <summary>
+    /// The fds the detach closes: pipes at 3+ that this process inherited (<see cref="IsInherited"/>).
+    /// REGRESSION: the rule was "every pipe at 3+", which held only while the detach ran before the runtime opened
+    /// any pipe of its own. Once the host registered POSIX signal handlers first (ShellSignalSender), it closed the
+    /// runtime's signal pipe. The first child that exited (SIGCHLD) then made the runtime's signal thread write to
+    /// the closed fd, get EBADF, and abort the host: every native program run on a Linux daemon host killed it.
+    /// </summary>
+    internal static List<int> InheritedPipeFds()
+    {
+        var fds = new List<int>();
+        if (System.IO.Directory.Exists("/proc/self/fd"))
+        {
+            foreach (var entry in System.IO.Directory.EnumerateFileSystemEntries("/proc/self/fd"))
+                if (int.TryParse(System.IO.Path.GetFileName(entry), out var fd) && fd >= 3 && IsFdPipe(fd) && IsInherited(fd))
+                    fds.Add(fd);
+        }
+        else
+        {
+            // macOS / FreeBSD have no /proc: walk [3,256), fstat-confirmed pipes only.
+            for (int fd = 3; fd < 256; fd++)
+                if (IsFdPipeViaFstat(fd) && IsInherited(fd)) fds.Add(fd);
+        }
+        return fds;
+    }
+
     /// <summary>
     /// Replaces fd 0/1/2 with /dev/null and closes any inherited pipe fds at
     /// 3+. Best-effort: every failure path is swallowed because a daemon that
@@ -206,34 +252,11 @@ internal static class InheritedFdDetach
             // the daemon keeps the test runner's pipe write ends open after
             // the launcher exits and the test's ReadToEndAsync never sees EOF.
             //
-            // Only close fds that IsFdPipe confirms are pipes so we never
-            // touch .NET runtime fds (EventPipe, debugger, diagnostic port,
-            // GC sockets) — on macOS those may lack FD_CLOEXEC and closing
-            // them crashes the runtime with SIGABRT (RC-5).
+            // Only inherited pipes (InheritedPipeFds): the runtime's own fds, pipes included, are never touched
+            // whenever this runs, since closing one aborts the host (RC-5 on macOS, the signal pipe on Linux).
             try
             {
-                if (System.IO.Directory.Exists("/proc/self/fd"))
-                {
-                    foreach (var entry in System.IO.Directory.EnumerateFileSystemEntries("/proc/self/fd"))
-                    {
-                        var name = System.IO.Path.GetFileName(entry);
-                        if (!int.TryParse(name, out var fd)) continue;
-                        if (fd < 3) continue;
-                        if (IsFdPipe(fd))
-                            close(fd);
-                    }
-                }
-                else
-                {
-                    // macOS / FreeBSD have no /proc. Walk the [3,256) fd range
-                    // but gate every close on fstat-confirmed S_ISFIFO so .NET
-                    // runtime fds in that range are left untouched.
-                    for (int fd = 3; fd < 256; fd++)
-                    {
-                        if (IsFdPipeViaFstat(fd))
-                            close(fd);
-                    }
-                }
+                foreach (var fd in InheritedPipeFds()) close(fd);
             }
             catch { /* best effort */ }
         }
