@@ -3139,10 +3139,11 @@ function Invoke-BashBackground {
     if (($env:PSBASH_BG_MODE -eq 'process' -or ($Isolated -and $env:PSBASH_BG_MODE -ne 'inproc')) -and ('PsBash.Host.Runtime.BashJobProcess' -as [type])) {
         if ($script:BashBgJobs.Count -ge $script:BashBgMaxJobs) { Remove-BashBgFinished }
         $prelude = [PsBash.Cmdlets.BashStateSnapshot]::BuildPrelude($ExecutionContext.SessionState)
-        $bjp = [PsBash.Host.Runtime.BashJobProcess]::Start($prelude, $Command.ToString(), [PsBash.Cmdlets.BashStateSnapshot]::EnvironmentBlock(), $__bgMux)
+        $__bgBody = $Command.ToString()
+        $__bgEnv = [PsBash.Cmdlets.BashStateSnapshot]::EnvironmentBlock()
         $job = [pscustomobject]@{
-            Id = $bjp.Pid; PowerShell = $bjp; AsyncResult = $bjp.AsyncResult; Done = $false
-            Status = $bjp; ExitCode = $null; Raw = $true; Live = $null -ne $__bgMux
+            Id = $null; PowerShell = $null; AsyncResult = $null; Done = $false
+            Status = $null; ExitCode = $null; Raw = $true; Live = $null -ne $__bgMux
         }
         $job | Add-Member -MemberType ScriptProperty -Name 'HasExited' -Value {
             if ($this.Done) { return $true }
@@ -3152,8 +3153,7 @@ function Invoke-BashBackground {
             try { $this.PowerShell.Stop() } catch { }
             $this.Done = $true
         } -Force
-        $script:BashBgJobs.Add($job)
-        $global:BashBgLastPid = $bjp.Pid
+        Start-BashBgJob -BgJob $job -Process -StartJob { [PsBash.Host.Runtime.BashJobProcess]::Start($prelude, $__bgBody, $__bgEnv, $__bgMux) }
         return
     }
     # RC-2: run the background command as a PowerShell pipeline against a pooled,
@@ -3214,13 +3214,10 @@ try {
     $synthId = $script:BashBgNextId
     $script:BashBgNextId++
 
-    # Live: the job's records go to the session's output mux as they are produced (nothing is kept for `wait`).
-    $async = if ($null -ne $__bgMux) { [PsBash.Cmdlets.BashJobOutput]::BeginLive($ps, $__bgMux, "job $synthId") } else { $ps.BeginInvoke() }
-
     $job = [pscustomobject]@{
         Id          = $synthId
         PowerShell  = $ps
-        AsyncResult = $async
+        AsyncResult = $null
         Done        = $false
         Status      = $status
         ExitCode    = $null
@@ -3239,8 +3236,46 @@ try {
         try { $this.PowerShell.Stop() } catch { }
         $this.Done = $true
     } -Force
-    $script:BashBgJobs.Add($job)
-    $global:BashBgLastPid = $synthId
+    # Live: the job's records go to the session's output mux as they are produced (nothing is kept for `wait`).
+    if ($null -ne $__bgMux) {
+        Start-BashBgJob -BgJob $job -StartJob { [PsBash.Cmdlets.BashJobOutput]::BeginLive($ps, $__bgMux, "job $synthId") }
+    } else {
+        Start-BashBgJob -BgJob $job -StartJob { $ps.BeginInvoke() }
+    }
+}
+
+function Start-BashBgJob {
+    <#
+    .SYNOPSIS
+        The one place a background job (`cmd &`) is started. Registers the record ($BgJob) in the job table, then runs
+        $StartJob (BeginInvoke / BeginLive / BashJobProcess::Start) as the LAST act, keeping its result with property
+        sets only. Once the job runs, the launcher's way back to the next command must be work-free
+        (docs/specs/background-jobs.md section 12.4): on Windows every script->.NET method call (the table's .Add) is
+        reported to AMSI under PowerShell's process-wide lock, slow when Defender is loaded, while the job's way to its
+        first write has no such call; under load the job then printed before the foreground's next command
+        (`echo a & echo b` gave a first).
+        Guard: BackgroundJobLaunchGuardTests (nothing but property and variable sets after the start).
+    #>
+    param([Parameter(Mandatory)]$BgJob, [Parameter(Mandatory)][scriptblock]$StartJob, [switch]$Process)
+    $script:BashBgJobs.Add($BgJob)
+    try { $__bgStarted = & $StartJob }
+    catch {
+        # A refused start (PSBASH_JOBS_MAX) is reported and the script goes on, as when the start was a plain
+        # statement; `throw` here would end the whole script.
+        [void]$script:BashBgJobs.Remove($BgJob)
+        Write-Error -ErrorRecord $_
+        return
+    }
+    # Property and variable sets only from here (no method call: see above).
+    if ($Process) {
+        $BgJob.Id = $__bgStarted.Pid
+        $BgJob.PowerShell = $__bgStarted
+        $BgJob.Status = $__bgStarted
+        $BgJob.AsyncResult = $__bgStarted.AsyncResult
+    } else {
+        $BgJob.AsyncResult = $__bgStarted
+    }
+    $global:BashBgLastPid = $BgJob.Id
 }
 
 function Invoke-BashWait {

@@ -479,3 +479,30 @@ The general layer it is built on (channels, fds, open/close, credit) is describe
   - `BackgroundJobLiveOutputTests` (Host.Tests): ordering through the batcher, stderr routing, record integrity,
     no replay at `wait`, queue between commands, flood bound and teardown.
   - `BackgroundJobDifferentialTests` `*_LiveOutput_*`: against the bash oracle.
+
+### 12.4 Launch: the job's start is the launcher's last act
+
+In bash, `echo a & echo b` prints `b` first: after `fork` the parent runs on at once, and the child has more to do
+before it writes. ps-bash keeps that order by the same margin. Once a job is started, the launcher's path back to the next command
+must do no work that the job's path to its first write does not also do.
+
+- **Invariant.** `Start-BashBgJob` (PsBash.psm1) is the only place a job starts (`BeginInvoke`, `BashJobOutput.BeginLive`,
+  `BashJobProcess.Start`). It records the job in the table and sets `$!` first, then starts the job, then does only
+  property and variable sets. Nothing follows a `Start-BashBgJob` call except `return`.
+- **Why.** On Windows, PowerShell reports every script-to-.NET method call to AMSI under one process-wide lock
+  (`AmsiUtils.s_amsiLockObject`); cmdlet calls, property reads and sets, and `[pscustomobject]` do not report (measured
+  with the lock held 300 ms by another thread: `List.Add` and `[Math]::Abs` waited ~310 ms, the others 1-9 ms).
+  A pool `BeginInvoke` returns only once the job's pipeline has compiled (it waits on the same lock too), so after it
+  the job's path to `echo` is plain script with no report. The launcher used to build the record (`[pscustomobject]`,
+  two `Add-Member`) and call the job table's `.Add` after the start. Under load an AMSI report is slow (Defender is
+  busy), so the job printed first. The spec case "a & b" printed `word_a` first in 2 of the 4 spec slices of one
+  loaded full gate (beagle-ab, g45, load average about 50 on 12 cores). On the same host under the same load, the
+  case repeated 288 times per run failed 3 and 7 times in two runs before the fix (10 of 576) and 0 of 576 after it.
+- **What it does not cover.** If the foreground's next command itself calls a .NET method, it pays an AMSI report that
+  the job may not. Compiling the job ahead does not move its own lock wait: every new `PowerShell` invocation takes
+  the lock (a precompiled function, the same script text and a cached script block each waited the full hold).
+- **Guards.** `BackgroundJobLaunchGuardTests` (Host.Tests, an AST check of the psm1). The regression test is
+  `BackgroundJobLiveOutputTests.LiveJobStart_ForegroundReachesItsNextCommand_WhileTheAmsiLockIsHeldFromTheJobsStart`.
+  It holds the AMSI lock from the moment the job is started (`OutputMux.ProducerStarted`, raised by
+  `OutputChannel.MarkStarted`) and requires the foreground's `word_b` to arrive while the lock is held. Before the fix
+  the foreground stalled for the whole hold and the job printed first.

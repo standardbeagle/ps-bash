@@ -154,4 +154,73 @@ public class BackgroundJobLiveOutputTests : IAsyncLifetime
         await worker.DisposeAsync();
         Assert.True(sw.Elapsed < TimeSpan.FromSeconds(20), $"teardown of a blocked job took {sw.Elapsed}");
     }
+
+    /// <summary>
+    /// <c>echo word_a &amp; echo word_b</c> prints word_b first, as bash does (spec/oils/shell-grammar.spec.sh "a &amp; b"):
+    /// once the job is started, the launcher's path to its next command must not include a script-to-.NET method call
+    /// (background-jobs.md section 12.4). On Windows each such call is reported to AMSI under PowerShell's process-wide
+    /// lock, slow when Defender is loaded; the launcher's job-table <c>.Add</c> came after the start, the job's path to
+    /// its write has no such call, and under load the job printed first. Induced here: the AMSI lock is held from the
+    /// moment the job is started (<c>OutputMux.ProducerStarted</c>) until the foreground's word_b arrives, or 10 s.
+    /// Before the fix the foreground stalled the whole 10 s and the job printed word_a first.
+    /// </summary>
+    [SkippableFact]
+    public async Task LiveJobStart_ForegroundReachesItsNextCommand_WhileTheAmsiLockIsHeldFromTheJobsStart()
+    {
+        var amsiLock = typeof(System.Management.Automation.PSObject).Assembly
+            .GetType("System.Management.Automation.AmsiUtils")
+            ?.GetField("s_amsiLockObject", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)
+            ?.GetValue(null);
+        Skip.If(!OperatingSystem.IsWindows() || amsiLock is null, "AMSI and its process-wide lock exist on Windows only");
+
+        var worker = _fixture.CreateWorker();
+        var foregroundArrived = new ManualResetEventSlim();
+        var arrivedWhileHeld = false;
+        Thread? holder = null;
+        void HoldAcrossJobStart(PsBash.Core.Stdio.OutputChannel _)
+        {
+            var acquired = new ManualResetEventSlim();
+            holder = new Thread(() =>
+            {
+                lock (amsiLock!)
+                {
+                    acquired.Set();
+                    arrivedWhileHeld = foregroundArrived.Wait(TimeSpan.FromSeconds(10));
+                }
+            }) { IsBackground = true };
+            holder.Start();
+            acquired.Wait();
+        }
+
+        var stdout = new StringBuilder();
+        var gate = new object();
+        worker.JobOutput.ProducerStarted += HoldAcrossJobStart;
+        int exit;
+        try
+        {
+            exit = await worker.ExecuteWithOutputAsync(
+                BashTranspiler.Transpile("echo word_a & echo word_b; wait")!,
+                s =>
+                {
+                    lock (gate) stdout.Append(s);
+                    if (s.Contains("word_b", StringComparison.Ordinal)) foregroundArrived.Set();
+                },
+                _ => { });
+        }
+        finally
+        {
+            worker.JobOutput.ProducerStarted -= HoldAcrossJobStart;
+            foregroundArrived.Set();
+            holder?.Join();
+        }
+
+        Assert.True(arrivedWhileHeld,
+            "the foreground's next command did not run while the AMSI lock was held from the job's start: the launcher "
+            + "made a script->.NET call after starting the job (Start-BashBgJob must start the job as its last act)");
+        Assert.Equal(0, exit);
+        // Both lines, once each. Their order is the natural race here (the lock stalls neither side now), so the order
+        // bash shows is the spec case's to check, not this test's.
+        lock (gate)
+            Assert.Equal(["word_a", "word_b"], stdout.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries).Order());
+    }
 }

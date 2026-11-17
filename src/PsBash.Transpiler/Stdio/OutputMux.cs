@@ -51,6 +51,15 @@ public sealed class OutputMux
 
     public bool IsAttached { get { lock (_gate) return _sink is not null; } }
 
+    /// <summary>
+    /// Raised on the launcher's thread the moment a producer has been started (<see cref="OutputChannel.MarkStarted"/>:
+    /// a background job's <c>BeginInvoke</c> or its job host's request returned), before the launcher resumes.
+    /// Diagnostic: tests use it to stall the launcher's remaining path (background-jobs.md section 12.4).
+    /// </summary>
+    public event Action<OutputChannel>? ProducerStarted;
+
+    internal void OnStarted(OutputChannel channel) => ProducerStarted?.Invoke(channel);
+
     /// <summary>Open a producer channel. <paramref name="name"/> is diagnostic only.</summary>
     public OutputChannel Open(string name)
     {
@@ -195,6 +204,9 @@ public sealed class OutputChannel : IDisposable
     /// stopped while it waited.
     /// </summary>
     public bool Write(int fd, string text, Func<bool>? abandoned = null) => _mux.Write(this, fd, text, abandoned);
+
+    /// <summary>The producer now runs (called by its launcher right after starting it): raises <see cref="OutputMux.ProducerStarted"/>.</summary>
+    public void MarkStarted() => _mux.OnStarted(this);
 
     /// <summary>The producer is done; text it queued is still delivered.</summary>
     public void Close()

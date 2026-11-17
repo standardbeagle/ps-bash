@@ -55,12 +55,15 @@ public static class BashJobOutput
         };
         var input = new PSDataCollection<PSObject>();
         input.Complete();
-        try { return ps.BeginInvoke(input, output); }
+        IAsyncResult started;
+        try { started = ps.BeginInvoke(input, output); }
         catch
         {
             channel.Close();
             throw;
         }
+        channel.MarkStarted();
+        return started;
     }
 
     /// <summary>The exact text of one output record, as the host renders a foreground record (SdkWorker.GetOutputText).</summary>

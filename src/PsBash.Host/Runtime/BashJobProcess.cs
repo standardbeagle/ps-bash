@@ -76,6 +76,7 @@ public sealed class BashJobProcess : IDisposable
         }
         BackgroundJobTable.Register(job.Pid, job.Stop);
         _ = job.RunAsync(prelude + "\n" + body, environment);
+        job._channel?.MarkStarted();
         return job;
     }
 
