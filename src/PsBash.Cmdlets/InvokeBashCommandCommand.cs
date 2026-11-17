@@ -205,6 +205,18 @@ public sealed class InvokeBashCommandCommand : PSCmdlet
     /// </summary>
     private static readonly HashSet<string> DeclarationBuiltins = new(StringComparer.Ordinal) { "export", "readonly", "local", "declare", "typeset" };
 
+    /// <summary>The records as the bytes a program reads (<see cref="NativeStdinBridge.RecordBytes"/>), one byte[] each.</summary>
+    private static List<object> NativeStdinBytes(List<object> records)
+    {
+        var bytes = new List<object>(records.Count);
+        foreach (var r in records)
+        {
+            var b = r is PSObject { BaseObject: byte[] raw } ? raw : r as byte[] ?? NativeStdinBridge.RecordBytes(r);
+            if (b.Length > 0) bytes.Add(b);
+        }
+        return bytes;
+    }
+
     private void RunInner(string[] argv)
     {
         // command command x, command builtin x: the wrappers only bypass functions, so peel them.
@@ -283,10 +295,14 @@ public sealed class InvokeBashCommandCommand : PSCmdlet
         invokeArgs[0] = invokeTarget;
         for (int k = 1; k < argv.Length; k++) invokeArgs[k] = argv[k];
 
+        // A program is fed the records' BYTES, as a pipe into it is (ConvertTo-BashNativeStdin): PowerShell's native
+        // pipe formats any other object, so `printf 'a\n' | command cat` gave cat a BashText table.
+        var stdin = invokeTarget is ApplicationInfo ? NativeStdinBytes(_stdin) : _stdin;
+
         try
         {
             var output = _stdin.Count > 0
-                ? InvokeCommand.InvokeScript(invokeBody, false, PipelineResultTypes.None, _stdin, invokeArgs)
+                ? InvokeCommand.InvokeScript(invokeBody, false, PipelineResultTypes.None, stdin, invokeArgs)
                 : InvokeCommand.InvokeScript(invokeBody, invokeArgs);
             foreach (var item in output)
             {
