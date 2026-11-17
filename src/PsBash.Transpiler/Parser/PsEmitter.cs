@@ -464,8 +464,10 @@ public static partial class PsEmitter
 
     /// <summary>
     /// The <c>+ cmd args</c> line <c>set -x</c> prints before a command, as a call that checks the flag at run time.
-    /// Only words whose value can be rendered without running anything (literals, quoted text, variables) are traced:
-    /// a command substitution or glob would run twice, so such a command is left untraced.
+    /// bash traces the words AFTER expansion -- the words the command runs with -- so each word is passed as its fields
+    /// (<see cref="XtraceFields"/>): <c>$unset -c x</c> traces <c>+ -c x</c>, a split <c>$x</c> each field, an empty
+    /// <c>"$@"</c> nothing. Only words that expand without running anything are traced (<see cref="XtracePure"/>): a
+    /// command substitution, an assigning or failing expansion or a glob would run twice, so such a command is untraced.
     /// </summary>
     private static string? TryEmitXtrace(Command cmd)
     {
@@ -474,15 +476,16 @@ public static partial class PsEmitter
         {
             case Command.Simple { Words.Length: > 0, EnvPairs.IsEmpty: true } simple:
                 foreach (var w in simple.Words)
-                    if (XtraceWord(w) is { } e) parts.Add(e); else return null;
+                    if (XtraceFields(w) is { } e) parts.Add(e); else return null;
                 break;
             case Command.ShAssignment { IsLocal: false, IsExport: false } assign:
                 foreach (var pair in assign.Pairs)
                 {
                     if (pair.Op != AssignOp.Equal || pair.ArrayValue is not null) return null;
-                    if (pair.Value is null) { parts.Add(PsBuild.SingleQuote(pair.Name + "=")); continue; }
-                    if (XtraceWord(pair.Value) is not { } v) return null;
-                    parts.Add("(\"" + pair.Name + "=\" + " + v + ")");
+                    if (pair.Value is null) { parts.Add(PsBuild.XtraceAssignment(pair.Name, "''")); continue; }
+                    // An assignment's value is never split: one field.
+                    if (!XtracePure(pair.Value.Parts) || XtraceValue(pair.Value) is not { } v) return null;
+                    parts.Add(PsBuild.XtraceAssignment(pair.Name, v));
                 }
                 break;
             default:
@@ -491,17 +494,53 @@ public static partial class PsEmitter
         return "Write-BashXtrace " + string.Join(" ", parts);
     }
 
-    private static string? XtraceWord(CompoundWord word)
+    /// <summary>
+    /// A word's FIELDS for the trace, from the same expansion the command runs with: a word the command splits
+    /// (<see cref="IsUnquotedSplitWord"/>) is the array <see cref="EmitUnquotedSplitWordArray"/> builds -- the one
+    /// <see cref="EmitCommandWithSplatArgs"/> splats -- so a word that expands to nothing traces as nothing; any other
+    /// word is one field. Null when the word cannot be expanded twice safely.
+    /// </summary>
+    private static string? XtraceFields(CompoundWord word)
+    {
+        if (!XtracePure(word.Parts)) return null;
+        if (TryGetStaticArgValue(word) is { } literal) return PsBuild.SingleQuote(literal);
+        return IsUnquotedSplitWord(word) ? "(" + EmitUnquotedSplitWordArray(word) + ")" : XtraceValue(word);
+    }
+
+    /// <summary>A word as ONE field (its emitted string value), or null when it has no plain value expression.</summary>
+    private static string? XtraceValue(CompoundWord word)
     {
         if (TryGetStaticArgValue(word) is { } literal) return PsBuild.SingleQuote(literal);
-        foreach (var part in word.Parts)
-        {
-            var p = part is WordPart.DoubleQuoted dq ? dq.Parts : System.Collections.Immutable.ImmutableArray.Create(part);
-            foreach (var q in p)
-                if (q is not (WordPart.Literal or WordPart.SimpleVarSub or WordPart.SingleQuoted or WordPart.EscapedLiteral)) return null;
-        }
         var emitted = EmitWord(word);
         return emitted.Length > 0 && (emitted[0] == (char)34 || emitted[0] == (char)36) ? "([string](" + emitted + "))" : null;
+    }
+
+    /// <summary>
+    /// Word parts that expand the same every time and run nothing: text, quotes, tilde, brace expansion, plain variables
+    /// (not <c>$RANDOM</c>, which changes per read) and <c>${name}</c> / <c>${name[@]}</c> / <c>${name[N]}</c>. Not a
+    /// command or arithmetic substitution, an operator expansion (<c>${x:=v}</c> assigns, <c>${x:?}</c> fails) or a glob.
+    /// </summary>
+    private static bool XtracePure(System.Collections.Immutable.ImmutableArray<WordPart> parts)
+    {
+        foreach (var part in parts)
+        {
+            switch (part)
+            {
+                case WordPart.Literal or WordPart.EscapedLiteral or WordPart.SingleQuoted or WordPart.AnsiCQuoted
+                    or WordPart.TildeSub or WordPart.BracedTuple or WordPart.BracedRange:
+                    break;
+                case WordPart.SimpleVarSub { Name: not ("RANDOM" or "SRANDOM") }:
+                    break;
+                case WordPart.DoubleQuoted dq when XtracePure(dq.Parts):
+                    break;
+                case WordPart.BracedVarSub { Name: not ("RANDOM" or "SRANDOM"), Suffix: var s, ArgWord: null }
+                    when s is null or "[@]" or "[*]" || s.Length > 2 && s[0] == '[' && s[^1] == ']' && s[1..^1].All(char.IsAsciiDigit):
+                    break;
+                default:
+                    return false;
+            }
+        }
+        return true;
     }
 
     /// <summary>The ERR trap line of the statement before the one being emitted (the last command it ran).</summary>
@@ -509,12 +548,118 @@ public static partial class PsEmitter
     private static int _priorTrapLine;
 
     private static string EmitStatementCore(Command cmd)
+        => RecordLineFor(cmd, statement: true) + EmitStatementCoreBody(cmd);
+
+    /// <summary>
+    /// The <see cref="PsBuild.SetCallLine"/> that goes before <paramref name="cmd"/> at statement position -- a statement,
+    /// or a hoisted <c>if</c>/<c>elif</c>/<c>while</c>/<c>until</c> condition (<see cref="EmitHoistedCondition"/>) -- or "".
+    /// A script that reads BASH_LINENO records each statement's line: a function it calls reports it. A command that may
+    /// name a missing command records it too: bash's <c>script.sh: line N: x: command not found</c> shows it
+    /// (<see cref="PsBuild.DiagnosticPrefix"/>). A trap action keeps the line of the command the trap fired for. Sets
+    /// <see cref="_statementLine"/> (a static <c>eval</c>'s text counts its lines from it).
+    /// </summary>
+    private static string RecordLineFor(Command cmd, bool statement)
     {
-        // A script that reads BASH_LINENO records each statement's line: a function it calls reports it.
-        if (_bashLinenoMode && (cmd is Command.Simple { Line: > 0 } ls ? ls.Line : FirstSimpleLine(cmd)) is > 0 and var callLine)
-            return PsBuild.SetCallLine(_lineBase + callLine) + EmitStatementCoreBody(cmd);
-        return EmitStatementCoreBody(cmd);
+        _statementLine = (cmd is Command.Simple { Line: > 0 } ls ? SimpleCommandLine(ls) : FirstSimpleLine(cmd)) is > 0 and var line
+            ? _lineBase + line : 0;
+        // A loop that reaches past line 1 runs its line-1 statements again after later lines recorded theirs.
+        if (statement && _functionDepth == 0 && _loopDepth == 0) _loopReachesPastLine1 = RunsPastLine1(cmd);
+        bool lineAlreadyRecorded = _statementLine == 1 && _scriptRoot && _functionDepth == 0 && (_loopDepth == 0 || !_loopReachesPastLine1);
+        return (_bashLinenoMode || (!PsBuild.InTrapAction && !lineAlreadyRecorded && MayReportCommandNotFound(cmd))) && _statementLine > 0
+            ? PsBuild.SetCallLine(_statementLine) : "";
     }
+
+    /// <summary>
+    /// A builtin that looks a name up and runs it: <c>command x</c> / <c>builtin x</c> (not <c>command -v x</c>, a query),
+    /// <c>exec x</c> (not <c>exec &gt;f</c>), and an <c>eval</c> of text known only at run time (a static eval's text is
+    /// emitted in place, its statements record their own lines).
+    /// </summary>
+    private static bool LooksUpACommand(Command.Simple s, string name) => name switch
+    {
+        "command" => s.Words.Length > 1 && !s.Words.Skip(1).TakeWhile(w => GetLiteralValue(w) is ['-', _, ..]).Any(w => GetLiteralValue(w)!.AsSpan().IndexOfAny('v', 'V') >= 0)
+                     && s.Words.Skip(1).Any(w => GetLiteralValue(w) is not ['-', ..]),
+        "builtin" or "exec" => s.Words.Length > 1,
+        "eval" => s.Words.Skip(1).Any(w => TryReconstructBashSource(w) is null),
+        _ => false,
+    };
+
+    /// <summary>Depth of nested <see cref="Transpile(string, TranspileContext)"/> calls (an inline eval's text is one).</summary>
+    [ThreadStatic] private static int _transpileNesting;
+
+    /// <summary>
+    /// The outermost text being emitted is a script (`-c` text or a script file), not text transpiled at run time
+    /// (a sourced file, a run-time eval): its first statements run when nothing has recorded a line yet, and the host
+    /// starts every command on line 1 (VarFrameStack.ResetFor), so a statement on line 1 outside a function or loop
+    /// need not record it.
+    /// </summary>
+    [ThreadStatic] private static bool _scriptRoot;
+
+    /// <summary>
+    /// <paramref name="cmd"/> runs a command on a line past 1, so a loop around it runs its line-1 commands again after
+    /// a later line was recorded (they must record line 1 again). A function definition runs nothing; an unknown
+    /// node is assumed to.
+    /// </summary>
+    private static bool RunsPastLine1(Command? cmd)
+    {
+        switch (cmd)
+        {
+            case null: return false;
+            case Command.Simple s: return SimpleCommandLine(s) > 1;
+            case Command.ShAssignment a: return a.Line > 1;
+            case Command.BoolExpr b: return b.Line > 1;
+            case Command.ArithCommand a: return a.Line > 1;
+            case Command.ShFunction: return false;
+            case Command.Pipeline p: foreach (var c in p.Commands) if (RunsPastLine1(c)) return true; return false;
+            case Command.AndOrList l: foreach (var c in l.Commands) if (RunsPastLine1(c)) return true; return false;
+            case Command.CommandList l: foreach (var c in l.Commands) if (RunsPastLine1(c)) return true; return false;
+            case Command.If i:
+                foreach (var arm in i.Arms) if (RunsPastLine1(arm.Cond) || RunsPastLine1(arm.Body)) return true;
+                return RunsPastLine1(i.ElseBody);
+            case Command.While w: return RunsPastLine1(w.Cond) || RunsPastLine1(w.Body);
+            case Command.ForIn f: return f.Line > 1 || RunsPastLine1(f.Body);
+            case Command.ForArith f: return f.Line > 1 || RunsPastLine1(f.Body);
+            case Command.Select s: return RunsPastLine1(s.Body);
+            case Command.Case c:
+                if (c.Line > 1) return true;
+                foreach (var arm in c.Arms) if (RunsPastLine1(arm.Body)) return true;
+                return false;
+            case Command.Subshell s: return RunsPastLine1(s.Body);
+            case Command.BraceGroup g: return RunsPastLine1(g.Body);
+            case Command.Background b: return RunsPastLine1(b.Inner);
+            default: return true;
+        }
+    }
+    /// <summary>The top-level statement being emitted has a simple command past line 1 (see <see cref="_scriptRoot"/>).</summary>
+    [ThreadStatic] private static bool _loopReachesPastLine1;
+
+    /// <summary>The script line of the statement being emitted (bash's, <see cref="SimpleCommandLine"/>); 0 when unknown.</summary>
+    [ThreadStatic] private static int _statementLine;
+
+    /// <summary>
+    /// The line bash gives a simple command (<see cref="Command.Simple.ReportLine"/>: where the token after its first word
+    /// ends; `x \&lt;newline&gt; arg` on 2 is line 3, `eval 'a&lt;newline&gt;b'` on 5 is 6), else the line it starts on.
+    /// </summary>
+    private static int SimpleCommandLine(Command.Simple s) => s.ReportLine > 0 ? s.ReportLine : s.Line;
+
+    /// <summary>
+    /// The statement can run a command that is not found (its diagnostic carries the statement's line): a simple command
+    /// (alone, in a pipeline or an and-or list) whose name is not a literal, or a literal that is no builtin, ps-bash
+    /// command or script function -- or <c>command</c> / <c>exec</c> / <c>builtin</c>, which look a name up themselves.
+    /// Compound commands are not: their bodies' statements record their own lines.
+    /// </summary>
+    private static bool MayReportCommandNotFound(Command cmd) => cmd switch
+    {
+        Command.Simple { Words.IsDefaultOrEmpty: false } s => GetLiteralValue(s.Words[0]) is not { Length: > 0 } name
+            || LooksUpACommand(s, name)
+            || s.Words.Any(w => ContainsCommandSub(w.Parts))
+            || !(s_posixSpecialBuiltins.Contains(name) || s_specialBuiltins.Contains(name)
+                 || _definedFunctions is { } fns && fns.Contains(name) || IsMappedCommandName(name)),
+        // `x=$(missing)`: the substitution's command reports the assignment's line.
+        Command.ShAssignment assign => ContainsCommandSub(assign),
+        Command.Pipeline p => p.Commands.Any(MayReportCommandNotFound),
+        Command.AndOrList a => a.Commands.Any(MayReportCommandNotFound),
+        _ => false,
+    };
 
     /// <summary>The script reads BASH_LINENO: statements record their line for the functions they call.</summary>
     [ThreadStatic]
@@ -1050,6 +1195,8 @@ public static partial class PsEmitter
             _errexitMode = true;
             if (trapSignal != "DEBUG") _debugTrapMode = true;
         }
+        var priorScriptRoot = _scriptRoot;
+        if (_transpileNesting++ == 0) _scriptRoot = context == TranspileContext.Default;
         try
         {
             Command? cmd;
@@ -1094,6 +1241,7 @@ public static partial class PsEmitter
         }
         finally
         {
+            _transpileNesting--; _scriptRoot = priorScriptRoot;
             _context = prior;
             _intVars = priorIntVars;
             _assocVars = priorAssocVars;
@@ -1281,11 +1429,14 @@ public static partial class PsEmitter
     /// errexit) like <see cref="EmitGuardedCondition"/>, followed by "; ".</summary>
     private static string EmitHoistedCondition(Command cond)
     {
+        // A condition names its command like a statement does: `if nosuch; then` on line 3 reports line 3, and a loop's
+        // condition is tested again after its body recorded later lines. Recorded first: a static eval in it counts from it.
+        string record = RecordLineFor(cond, statement: false);
         // While DEBUG is on every condition is hoisted, so the action can run before it (each time it is tested).
         var text = WithErrexitExempt(() => !DebugActive ? Emit(cond)
             : cond is Command.AndOrList andOr ? EmitDebugAndOr(andOr) : WithDebugLead(cond, () => Emit(cond)));
         if (_errexitMode) text = PsBuild.ErrexitSuppressed(text);
-        return PsBuild.HoistedCondition(text);
+        return record + PsBuild.HoistedCondition(text);
     }
 
     // ── Loop control: labels for break N / continue N ─────────────────────────────────────
@@ -6714,7 +6865,7 @@ public static partial class PsEmitter
         var sb = new StringBuilder();
         // An empty command word ('' , "" ) names no command: bash reports ": command not found" (127).
         if (cmd.EnvPairs.IsEmpty && cmd.Words.Length > 0 && IsEmptyQuotedWord(cmd.Words[0]))
-            return PsBuild.StderrLine("ps-bash: : command not found") + "; $global:LASTEXITCODE = 127";
+            return PsBuild.ShellDiagnosticLine("': command not found'") + "; $global:LASTEXITCODE = 127";
         // A command word that is only a command substitution: the substitution runs, and when it expands to
         // nothing no command runs and the status is the substitution's (+""+"true"+""+, $(false), $(exit 42)).
         if (cmd.EnvPairs.IsEmpty && cmd.Words.Length == 1 && cmd.Words[0].Parts.Length == 1
@@ -13428,9 +13579,13 @@ public static partial class PsEmitter
                 var priorBarrier = _loopBarrier; bool priorTop = _evalAtScriptTop;
                 if (scriptTop && _loopLabels is not { Count: > 0 } && _loopBarrier == LoopBarrierKind.None) _loopBarrier = LoopBarrierKind.Warn;
                 _evalAtScriptTop = priorTop || scriptTop;
+                // The text's lines are the script's from the eval's own line on (bash: `eval $'true\nx'` on line 7
+                // reports x on line 8), so its statements record those lines (BASH_LINENO, diagnostics).
+                int priorLineBase = _lineBase;
+                if (_statementLine > 0) _lineBase = _statementLine - 1;
                 string? inner;
                 try { inner = Transpile(joined, TranspileContext.Eval); }
-                finally { _envPrefixShadow = shadow; _loopBarrier = priorBarrier; _evalAtScriptTop = priorTop; }
+                finally { _envPrefixShadow = shadow; _loopBarrier = priorBarrier; _evalAtScriptTop = priorTop; _lineBase = priorLineBase; }
                 if (inner is not null)
                     return inner;
             }
@@ -13473,7 +13628,7 @@ public static partial class PsEmitter
             + ", ($null -ne (Get-Variable -Name __BashStdIn -Scope Global -ValueOnly -ErrorAction SilentlyContinue))) } " +
             // A syntax error in the eval text is eval's own failure (status 2), not an exception out of the surrounding script.
             "catch { Write-Error ('ps-bash: eval: ' + $(if ($_.Exception.InnerException) { $_.Exception.InnerException.Message } else { $_.Exception.Message })) -ErrorAction Continue; $global:LASTEXITCODE = 2 }; " +
-            "if ($null -ne $__psbash_eval_pwsh) { " + PsBuild.EvalReturnVar + " = $false; Invoke-Expression $__psbash_eval_pwsh } " +
+            "if ($null -ne $__psbash_eval_pwsh) { " + PsBuild.EvalReturnVar + " = $false; " + PsBuild.EvalLinesScope("Invoke-Expression $__psbash_eval_pwsh") + " } " +
             "} finally { $global:__BashEvalDepth = $__psbash_eval_depth } " +
             // A `return` in the text left only the Invoke-Expression: in a function (or in eval text, passing it on)
             // it leaves here too. At the top of a script there is nothing to return from.

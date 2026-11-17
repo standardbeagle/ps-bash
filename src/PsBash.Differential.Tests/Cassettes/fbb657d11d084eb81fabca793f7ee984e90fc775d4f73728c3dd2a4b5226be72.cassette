@@ -1,0 +1,19 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 151
+stdout-length: 90
+stderr-length: 0
+==== SCRIPT ====
+W="$(mktemp -d)"; cd "$W"
+printf '%s\n' 'true' 'nosuch_t' > t.sh
+printf '%s\n' 'echo top' '. ./t.sh' 'nosuch_s' > s.sh
+bash s.sh 2>&1
+cd /; rm -rf "$W"
+==== STDOUT ====
+top
+./t.sh: line 2: nosuch_t: command not found
+s.sh: line 3: nosuch_s: command not found
+
+==== STDERR ====
+

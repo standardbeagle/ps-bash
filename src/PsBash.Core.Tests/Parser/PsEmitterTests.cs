@@ -263,7 +263,8 @@ public class PsEmitterTests
     public void Transpile_EmptyQuotedCommand_ReportsOnTheErrorStream()
     {
         var ps = PsEmitter.Transpile("{ ''; } 2>/dev/null")!;
-        Assert.Contains("Write-Error -Message 'ps-bash: : command not found' -ErrorAction Continue; $global:LASTEXITCODE = 127", ps);
+        // With bash's source prefix (`script.sh: line 1: : command not found`), built at run time.
+        Assert.Contains("Write-Error -Message (" + PsBuild.DiagnosticPrefix + " + ': command not found') -ErrorAction Continue; $global:LASTEXITCODE = 127", ps);
         Assert.DoesNotContain("[Console]::Error", ps);
     }
 

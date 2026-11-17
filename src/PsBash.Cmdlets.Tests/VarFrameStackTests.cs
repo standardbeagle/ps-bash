@@ -288,4 +288,48 @@ public class VarFrameStackTests
         Assert.Equal(9, s.Line);
         Assert.Empty(s.CallLines(inScriptFile: false));
     }
+
+    /// <summary>
+    /// The line a shell diagnostic shows (ShellDiagnostic). bash 5.2 (WSL): a run-time <c>eval</c> on line 7 whose text
+    /// fails on its own line 2 reports line 8; a function called from inside it reports the function's own script lines;
+    /// a nested eval counts from the inner eval's line; a file sourced inside an eval has its own lines; after an eval or
+    /// a sourced file the caller is back on its own line (`eval "$three_lines"; x` on line 1 reports line 1).
+    /// </summary>
+    [Fact]
+    public void RecordLine_InsideARunTimeEval_CountsFromTheEvalsLine()
+    {
+        var s = new VarFrameStack();
+        s.RecordLine(7);
+        Assert.Equal(7, s.Line);
+        s.EnterLines(s.Line - 1);            // eval on line 7 (BeginEvalLines): its text's line 1 is line 7
+        s.RecordLine(2);
+        Assert.Equal(8, s.Line);
+        s.Enter();                           // a function called from the eval's text: its body has script lines
+        s.RecordLine(3);
+        Assert.Equal(3, s.Line);
+        s.Exit();
+        Assert.Equal(8, s.Line);
+        s.EnterLines(s.Line - 1);            // a nested eval on line 8
+        s.RecordLine(1);
+        Assert.Equal(8, s.Line);
+        s.RecordLine(3);
+        Assert.Equal(10, s.Line);
+        s.ExitLines();
+        Assert.Equal(8, s.Line);             // back on the inner eval's line
+        s.EnterLines(0);                     // a file sourced from the eval (BeginSourceLines): its own lines
+        s.RecordLine(2);
+        Assert.Equal(2, s.Line);
+        s.ExitLines();
+        Assert.Equal(8, s.Line);
+        s.RecordLine(2);
+        Assert.Equal(8, s.Line);
+        s.ExitLines();
+        Assert.Equal(7, s.Line);             // back on the eval's line
+        s.RecordLine(9);
+        Assert.Equal(9, s.Line);
+        s.ExitLines();                       // unbalanced end: a no-op
+        Assert.Equal(9, s.Line);
+        s.RecordLine(4);
+        Assert.Equal(4, s.Line);
+    }
 }

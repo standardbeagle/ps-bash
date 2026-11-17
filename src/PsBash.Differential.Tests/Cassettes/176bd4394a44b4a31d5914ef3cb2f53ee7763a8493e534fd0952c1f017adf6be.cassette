@@ -1,0 +1,18 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 95
+stdout-length: 53
+stderr-length: 0
+==== SCRIPT ====
+W="$(mktemp -d)"; cd "$W"
+bash -c 'echo a
+nosuch_m' myname 2>&1; echo "rc=$?"
+cd /; rm -rf "$W"
+==== STDOUT ====
+a
+myname: line 2: nosuch_m: command not found
+rc=127
+
+==== STDERR ====
+

@@ -12,13 +12,19 @@ public abstract record Command : BashNode
     /// <summary>
     /// A simple command: words with optional environment pairs and redirects.
     /// Modeled after oils command.Simple.
+    /// <see cref="Line"/> is the line the command starts on (<c>$LINENO</c>, the DEBUG trap). <see cref="ReportLine"/> is
+    /// the line bash gives the command once parsed -- its diagnostics (<c>s.sh: line N: x: command not found</c>) and
+    /// the <c>BASH_LINENO</c> of a function it calls: the line where the token after its first word ENDS, because bash
+    /// numbers the command when it reads that token (<c>x \&lt;nl&gt; arg</c> on 2 is line 3, <c>x 'a&lt;nl&gt;b'</c> on 9
+    /// is 10, <c>x a \&lt;nl&gt; b</c> on 4 stays 4). 0 when not computed: use <see cref="Line"/>.
     /// </summary>
     public sealed record Simple(
         ImmutableArray<CompoundWord> Words,
         ImmutableArray<EnvPair> EnvPairs,
         ImmutableArray<Redirect> Redirects,
         ImmutableArray<HereDoc> HereDocs = default,
-        int Line = 0) : Command;
+        int Line = 0,
+        int ReportLine = 0) : Command;
 
     /// <summary>
     /// A pipeline of commands connected by <c>|</c> or <c>|&amp;</c>.

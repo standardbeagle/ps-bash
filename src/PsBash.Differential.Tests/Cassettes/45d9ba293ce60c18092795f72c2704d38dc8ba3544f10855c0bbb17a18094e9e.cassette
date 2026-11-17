@@ -1,0 +1,21 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 197
+stdout-length: 260
+stderr-length: 0
+==== SCRIPT ====
+W="$(mktemp -d)"; cd "$W"
+printf '%s\n' 'true' 'true' 'nosuch_t3' > t3.sh
+{ c=$'true\ntrue\nnosuch_e'; eval "$c"; nosuch_1; . ./t3.sh; nosuch_2; eval '. ./t3.sh'; nosuch_3; } 2>&1
+cd /; rm -rf "$W"
+==== STDOUT ====
+bash: line 5: nosuch_e: command not found
+bash: line 3: nosuch_1: command not found
+./t3.sh: line 3: nosuch_t3: command not found
+bash: line 3: nosuch_2: command not found
+./t3.sh: line 3: nosuch_t3: command not found
+bash: line 3: nosuch_3: command not found
+
+==== STDERR ====
+

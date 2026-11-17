@@ -1,0 +1,30 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 175
+stdout-length: 273
+stderr-length: 0
+==== SCRIPT ====
+W="$(mktemp -d)"; cd "$W"
+{
+echo start
+command nosuch_cmd
+n=nosuch_var; $n
+true && nosuch_and
+echo p | nosuch_pipe
+for i in 1 2; do
+  nosuch_loop
+done
+} 2>&1
+cd /; rm -rf "$W"
+==== STDOUT ====
+start
+bash: line 4: nosuch_cmd: command not found
+bash: line 5: nosuch_var: command not found
+bash: line 6: nosuch_and: command not found
+bash: line 7: nosuch_pipe: command not found
+bash: line 9: nosuch_loop: command not found
+bash: line 9: nosuch_loop: command not found
+
+==== STDERR ====
+

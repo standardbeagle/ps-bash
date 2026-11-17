@@ -122,6 +122,7 @@ public sealed partial class BashParser
         // Collect leading assignment words (VAR=val ...).
         // Array assignments like arr=(a b c) are detected and consumed here.
         int simpleLine = BashLexer.LineAt(_input, Peek().Position);
+        int reportLine = ReportLineOfCommandAt(_pos, simpleLine);
         var assignmentPairs = ImmutableArray.CreateBuilder<Assignment>();
         var envPairs = ImmutableArray.CreateBuilder<EnvPair>();
         bool hasArrayAssignment = false;
@@ -322,7 +323,33 @@ public sealed partial class BashParser
             envPairs.ToImmutable(),
             redirects.ToImmutable(),
             hereDocs.ToImmutable(),
-            simpleLine);
+            simpleLine,
+            reportLine);
+    }
+
+    /// <summary>
+    /// <see cref="Command.Simple.ReportLine"/> of the command whose first token is <c>_tokens[first]</c>: bash numbers a
+    /// simple command when its parser reads the token after the first word (it needs that token to tell <c>x</c> from
+    /// <c>x ()</c>), so the line is where that token ends -- a word's last line, a newline's own line. bash 5.2 (WSL):
+    /// <c>x \&lt;nl&gt; arg</c> on 2 is 3, <c>x 'a&lt;nl&gt;b'</c> on 9 is 10, <c>x 'a&lt;nl&gt;b' 'c&lt;nl&gt;d'</c> on
+    /// 11 is 12, <c>x \&lt;nl&gt;&lt;nl&gt;</c> on 16 is 17, <c>'n&lt;nl&gt;F' x</c> on 14 is 15. A command that starts
+    /// with a redirect or an array assignment keeps <paramref name="startLine"/>.
+    /// </summary>
+    private int ReportLineOfCommandAt(int first, int startLine)
+    {
+        if (first + 1 >= _tokens.Count) return startLine;
+        var head = _tokens[first];
+        if (head.Kind is not (BashTokenKind.Word or BashTokenKind.AssignmentWord) || head.Value.EndsWith('(')) return startLine;
+        var next = _tokens[first + 1];
+        int end = next.Kind == BashTokenKind.Eof || next.Value.Length == 0 ? head.Position + Math.Max(0, head.Value.Length - 1)
+            : next.Kind == BashTokenKind.Newline ? next.Position
+            : next.Position + next.Value.Length - 1;
+        // startLine is head's line: count only the newlines from head on (LineAt rescans the whole input).
+        end = Math.Min(end, _input.Length);
+        int line = startLine;
+        for (int i = Math.Max(0, head.Position); i < end; i++)
+            if (_input[i] == '\n') line++;
+        return line;
     }
 
     private static void StripControlBuiltinWrappers(ImmutableArray<CompoundWord>.Builder words)

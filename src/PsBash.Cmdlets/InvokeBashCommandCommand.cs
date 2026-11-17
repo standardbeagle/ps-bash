@@ -237,7 +237,7 @@ public sealed class InvokeBashCommandCommand : PSCmdlet
 
         if (target == null)
         {
-            FileSystemHelpers.WriteBashError(this, $"bash: {name}: command not found");
+            FileSystemHelpers.WriteBashError(this, ShellDiagnostic.Prefix(SessionState) + $"{name}: command not found");
             FileSystemHelpers.SetLastExitCode(this, 127);
             return;
         }

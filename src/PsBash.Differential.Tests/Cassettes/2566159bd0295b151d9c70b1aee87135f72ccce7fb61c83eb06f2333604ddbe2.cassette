@@ -1,0 +1,54 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 296
+stdout-length: 217
+stderr-length: 0
+==== SCRIPT ====
+W="$(mktemp -d)"; cd "$W"
+{
+arr=(); ar2=(1 "2 3"); sp="p q"
+f() { $unset echo infn "$@"; }
+set -x
+$unset -c 'echo 2'
+echo a $unset b
+echo "" x "$unset"
+echo "$@" y
+echo "${arr[@]}" z
+echo $sp
+echo "${ar2[@]}" ${ar2[@]}
+f
+v=$unset
+w="$sp"
+: ${unset}
+echo $unset"" q
+set +x
+} 2>&1
+cd /; rm -rf "$W"
+==== STDOUT ====
++ -c 'echo 2'
+bash: line 6: -c: command not found
++ echo a b
+a b
++ echo '' x ''
+ x
++ echo y
+y
++ echo z
+z
++ echo p q
+p q
++ echo 1 '2 3' 1 2 3
+1 2 3 1 2 3
++ f
++ echo infn
+infn
++ v=
++ w='p q'
++ :
++ echo '' q
+ q
++ set +x
+
+==== STDERR ====
+

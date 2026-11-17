@@ -1,0 +1,37 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 265
+stdout-length: 315
+stderr-length: 0
+==== SCRIPT ====
+W="$(mktemp -d)"; cd "$W"
+{
+echo a
+eval 'true
+nosuch_x'
+if nosuch_if; then :; fi
+i=0
+while [ $i -lt 2 ] && nosuch_wh; do :; done
+until nosuch_un || [ $i -ge 2 ]; do
+  i=$((i+1))
+  echo body
+done
+if false; then :
+elif nosuch_elif; then :; fi
+} 2>&1
+cd /; rm -rf "$W"
+==== STDOUT ====
+a
+bash: line 6: nosuch_x: command not found
+bash: line 6: nosuch_if: command not found
+bash: line 8: nosuch_wh: command not found
+bash: line 9: nosuch_un: command not found
+body
+bash: line 9: nosuch_un: command not found
+body
+bash: line 9: nosuch_un: command not found
+bash: line 14: nosuch_elif: command not found
+
+==== STDERR ====
+

@@ -629,7 +629,18 @@ records become stdout TEXT, so an enclosing stage no longer reads them as stderr
 
 - `set -e` / `set -o errexit` -> `$ErrorActionPreference = 'Stop'; $global:__BashErrexit = $true` (+ create `$global:__BashErrexitSuppress` if absent)
 - `set +e` / `set +o errexit` -> `$ErrorActionPreference = 'Continue'; $global:__BashErrexit = $false`
-- `set -x` / `set -o xtrace` -> `Set-PSDebug -Trace 1`
+- `set -x` / `set -o xtrace` -> `Set-PSDebug -Trace 1`. In a script that mentions xtrace, each statement is preceded by
+  `Write-BashXtrace <fields>` (`PsEmitter.TryEmitXtrace`). The trace line shows the command's FIELDS after
+  expansion.
+  - A word the command splits (`IsUnquotedSplitWord`) is passed as the same `EmitUnquotedSplitWordArray` the command
+    splats (`XtraceFields`). So `$unset -c 'echo 2'` traces `+ -c 'echo 2'`, an empty `"$@"` traces nothing, and
+    `""` traces `''`.
+  - An assignment is passed as `PsBuild.XtraceAssignment` and traces `+ v='p q'`.
+  - Only words that expand without side effects are traced (`XtracePure`). Words with a command or arithmetic
+    substitution, an assigning or failing `${…}` operator, `$RANDOM` or a glob would run twice, so their command
+    goes untraced.
+  - Also untraced: pipelines, array assignments, and the commands inside an eval.
+  - Differential: `XtraceFieldsDifferentialTests`.
 - `set -u` / `set -o nounset` (any bundling) -> `$global:__BashNounset = $true`. A script that mentions nounset emits plain `$x` / `${x}` reads as a runtime check that throws `BashParamErrorException` ("x: unbound variable") when the flag is on and the variable is unset; `${x:-d}`-style forms and positional parameters are not checked. The check is per command string: a later `-c` does not inherit it.
 - `set -C` / `set -o noclobber` -> `$global:__BashNoclobber`; `Invoke-BashRedirect` refuses a truncating `>` onto an existing file unless `-Force` (`>|`).
 - Combined flags (e.g., `set -euo pipefail`) are decomposed.

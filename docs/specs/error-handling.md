@@ -212,6 +212,73 @@ interactive under nounset), every top-level command runs in `PsBuild.DiscardLine
 (`$global:__BashFailGlob`) drops the commands after it on its line. Outside any scope (a function defined by text
 that had none) the runtime keeps the older per-command abandon mark.
 
+### 2.6 Diagnostic prefix
+
+A diagnostic from the shell itself carries bash's source prefix (error.c `error_prolog`). A non-interactive shell writes
+`NAME: line N: `. NAME is `${BASH_SOURCE[0]}` if it is set (the script or sourced file), else `$0` (`bash` under
+`bash -c`, `me` under `bash -c '…' me`). An interactive shell writes `bash: `. ps-bash builds the prefix in ONE place:
+`PsBash.Cmdlets.ShellDiagnostic.Prefix`. Its callers are:
+
+- emitted text: `PsBuild.DiagnosticPrefix`, `PsBuild.ShellDiagnosticLine`
+- the host's CommandNotFoundAction handler (`SdkRunspaceSetup.ps1`)
+- `Resolve-BashCommand` (psm1)
+- `Invoke-BashCommand`
+
+`CommandNotFoundReport.Describe` builds only the reason after the prefix. Guard: Core.Tests
+`ShellDiagnosticPrefixGuardTests` fails on a line that spells "command not found" without the primitive.
+
+**The line N** is `VarFrameStack.Line`.
+
+- *Recording the line.* The emitted code records the line before each statement and each hoisted
+  `if`/`elif`/`while`/`until` condition that may raise the diagnostic (`PsEmitter.RecordLineFor`,
+  `PsBuild.SetCallLine`).
+  - A statement "may raise it" when it names a non-builtin, non-mapped, non-function command or a run-time name.
+    `command x`, `builtin x`, `exec x` and a run-time `eval` count too.
+  - A script that reads `BASH_LINENO` records the line before every statement.
+  - Every host command starts on line 1 (`VarFrameStack.ResetFor`). So a top-level line-1 statement of the script
+    records nothing. The exception is a loop that reaches past line 1 (`RunsPastLine1`): its line-1 statements run
+    again after later lines were recorded.
+- *Which line a command gets.* bash numbers a simple command when it reads the token AFTER its first word, so the line
+  is where that token ends (`Command.Simple.ReportLine`, computed by the parser).
+  - `x \<nl> arg` on line 2 is line 3.
+  - `x 'a<nl>b'` on line 9 is line 10.
+  - `x a \<nl> b` on line 4 stays line 4.
+  - `$LINENO` and the DEBUG trap keep the start line (`Command.Simple.Line`).
+  - The same line is the call line a function reports in `BASH_LINENO`.
+- *Function bodies* record absolute script lines. `VarFrameStack.Enter` zeroes `LineBase`, and `Exit` puts the
+  caller's line back.
+- *A static `eval`* emits its text with the eval's line as base (`PsEmitter._lineBase`). Its line k is the eval's line
+  + k − 1.
+- *A run-time `eval`* runs in `PsBuild.EvalLinesScope` (`VarFrameStack.BeginEvalLines`: base = current line − 1).
+- *A sourced file* runs in `PsBuild.SourceLinesScope` (base 0: its own lines, also inside an eval).
+- *After an eval or a sourced file*, both scopes restore the base and the caller's line. bash's
+  `eval "$three_lines"; x` on line 1 reports line 1.
+- *A cmdlet called directly* has recorded nothing (line 0). Its prefix leaves the line out (`NAME: `).
+
+Covered: command not found, from any site (all four). Differential `ShellDiagnosticLineDifferentialTests` tests the
+script file, `-c`, `$0`, sourced files, conditions, evals and continuations.
+
+Not yet through the primitive: the other shell diagnostics still hard-code `bash: ` or `ps-bash: ` (no NAME, no line).
+
+- builtin errors, e.g. `cd: …`, `declare: …`, `type: …`, `alias: …`, `wait: …`, `local: …`, `builtin: …`
+- the `${x:?}`, unbound-variable and bad-substitution messages (`Write-BashExpansionError`, `PsBuild` param errors)
+- bad array subscript
+- readonly variable
+- not a valid identifier
+- ambiguous redirect
+- eval and source parse errors
+- `[: missing ]`
+
+Routing each one through `ShellDiagnostic.Prefix` is mechanical. It changes expectations across Cmdlets.Tests, Pester
+and the spec corpus, so that work is tracked separately.
+
+Known differences from bash:
+
+- A function defined under `bash -c` reports `environment:` in bash, because that is its `${BASH_SOURCE[0]}`. A
+  function defined in a sourced file names that file. ps-bash's `BASH_SOURCE` has no per-function frames, so both
+  print the caller's name.
+- A function defined inside a run-time eval numbers its body from 1.
+
 ---
 
 ## 3. File I/O Error Helpers

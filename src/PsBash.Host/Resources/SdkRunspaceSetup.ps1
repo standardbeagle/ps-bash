@@ -236,11 +236,15 @@ $ExecutionContext.InvokeCommand.CommandNotFoundAction = {
     $wslHint = Get-BashWslPathHint
     # A word with a slash names a file: bash reports the exec error (No such file or directory 127, Is a directory
     # 126, File name too long 126), not "command not found".
-    $msg = "bash: ${name}: command not found"; $notFoundStatus = 127
+    # The source prefix (`script.sh: line 5: `, `bash: line 1: ` under -c, `bash: ` interactive) is bash's, from the
+    # one builder (ShellDiagnostic); the line is the one the emitted code recorded for the running statement.
+    $prefix = 'bash: '
+    try { $prefix = [PsBash.Cmdlets.ShellDiagnostic]::Prefix($global:BASH_SOURCE, $global:BashPositional0) } catch { }
+    $msg = "${prefix}${name}: command not found"; $notFoundStatus = 127
     if ($name.IndexOfAny([char[]]'/\') -ge 0) {
         try {
             $report = [PsBash.Cmdlets.CommandNotFoundReport]::DescribeIn($name, $ExecutionContext.SessionState.Path.CurrentFileSystemLocation.ProviderPath)
-            $msg = [string]$report[0]; $notFoundStatus = [int]$report[1]
+            $msg = $prefix + [string]$report[0]; $notFoundStatus = [int]$report[1]
         } catch { }   # the cmdlets assembly not loaded yet: keep "command not found"
     }
     $EventArgs.CommandScriptBlock = {

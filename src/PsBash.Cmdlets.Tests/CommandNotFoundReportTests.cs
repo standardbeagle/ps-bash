@@ -15,20 +15,20 @@ public class CommandNotFoundReportTests
     private static bool OnlyDot(string p) => p is "." or "..";
 
     [Theory]
-    [InlineData("nosuch", "bash: nosuch: command not found", 127)]
-    [InlineData("./nosuch", "bash: ./nosuch: No such file or directory", 127)]
-    [InlineData("/nosuch/x", "bash: /nosuch/x: No such file or directory", 127)]
-    [InlineData("a\\b", "bash: a\\b: No such file or directory", 127)]
+    [InlineData("nosuch", "nosuch: command not found", 127)]
+    [InlineData("./nosuch", "./nosuch: No such file or directory", 127)]
+    [InlineData("/nosuch/x", "/nosuch/x: No such file or directory", 127)]
+    [InlineData("a\\b", "a\\b: No such file or directory", 127)]
     public void Describe_MissingFile_ReportsLikeBash(string name, string message, int status)
         => Assert.Equal((message, status), CommandNotFoundReport.Describe(name, OnlyDot));
 
     [Fact]
     public void Describe_OverlongComponentInAnExistingDirectory_IsFileNameTooLong()
-        => Assert.Equal(($"bash: ./{Long}: File name too long", 126), CommandNotFoundReport.Describe("./" + Long, OnlyDot));
+        => Assert.Equal(($"./{Long}: File name too long", 126), CommandNotFoundReport.Describe("./" + Long, OnlyDot));
 
     [Fact]
     public void Describe_OverlongComponentPastAMissingDirectory_IsNoSuchFile()
-        => Assert.Equal(($"bash: ./x/{Long}/y: No such file or directory", 127),
+        => Assert.Equal(($"./x/{Long}/y: No such file or directory", 127),
             CommandNotFoundReport.Describe("./x/" + Long + "/y", OnlyDot));
 
     [Fact]
@@ -49,7 +49,7 @@ public class CommandNotFoundReportTests
 
     [Fact]
     public void Describe_Directory_IsADirectory()
-        => Assert.Equal(("bash: ./d: Is a directory", 126), CommandNotFoundReport.Describe("./d", p => p is "." or "./d"));
+        => Assert.Equal(("./d: Is a directory", 126), CommandNotFoundReport.Describe("./d", p => p is "." or "./d"));
 
     [Fact]
     public void Describe_ExistsProbeThatThrows_IsTreatedAsMissing()
@@ -63,7 +63,7 @@ public class CommandNotFoundReportTests
         try
         {
             var r = CommandNotFoundReport.DescribeIn("./sub", dir);
-            Assert.Equal(new object[] { "bash: ./sub: Is a directory", 126 }, r);
+            Assert.Equal(new object[] { "./sub: Is a directory", 126 }, r);
             Assert.Equal(127, CommandNotFoundReport.DescribeIn("./missing", dir)[1]);
         }
         finally { Directory.Delete(dir, recursive: true); }

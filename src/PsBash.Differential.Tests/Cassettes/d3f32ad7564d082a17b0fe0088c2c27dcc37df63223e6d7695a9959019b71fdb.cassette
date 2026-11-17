@@ -1,0 +1,18 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 161
+stdout-length: 42
+stderr-length: 0
+==== SCRIPT ====
+W="$(mktemp -d)"; cd "$W"
+printf '%s\n' 'f() { echo "called from ${BASH_LINENO[0]}"; }' 'f a \' 'b' 'f \' 'b' "f 'x" "y'" > s.sh
+bash s.sh 2>&1
+cd /; rm -rf "$W"
+==== STDOUT ====
+called from 2
+called from 5
+called from 7
+
+==== STDERR ====
+

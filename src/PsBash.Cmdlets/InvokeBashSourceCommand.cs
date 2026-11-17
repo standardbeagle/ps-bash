@@ -125,6 +125,8 @@ public sealed class InvokeBashSourceCommand : PSCmdlet
         // A `return` in the file ends the source, not the function that sourced it: the eval-return flag its text
         // set (the file is transpiled as eval text) is spent here.
         string quotedPath = "'" + PsBash.Core.BashPath.ToShell(Path).Replace("'", "''") + "'";
+        // Its diagnostics show its own lines (`./lib.sh: line 2:`), and the caller's line is put back when it ends.
+        result = PsBash.Core.Parser.PsBuild.SourceLinesScope(result);
         result = "$global:BASH_SOURCE = @(" + quotedPath + ") + @($global:BASH_SOURCE); try {\n" + result
             + "\n} finally { $global:BASH_SOURCE = @($global:BASH_SOURCE | Select-Object -Skip 1); " + PsBash.Core.Parser.PsBuild.EvalReturnVar + " = $false }";
         return ScriptBlock.Create(result);

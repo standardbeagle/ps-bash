@@ -38,15 +38,33 @@ public sealed class VarFrameStack
     /// <summary>The shell-function call depth (0 at top level).</summary>
     public int Depth { get; private set; }
 
-    /// <summary>The source line of the statement running now (set by the emitted code of a script that reads BASH_LINENO).</summary>
+    /// <summary>
+    /// The source line of the statement running now (set by the emitted code before a statement that calls a function
+    /// or may raise a shell diagnostic, and before every statement of a script that reads BASH_LINENO).
+    /// </summary>
     public int Line { get; set; }
+
+    /// <summary>
+    /// Added to every recorded line: the text a run-time <c>eval</c> runs was transpiled alone, so its lines count from 1,
+    /// and bash numbers them from the eval's own line (<see cref="BeginEvalLines"/>). 0 in a function body, whose lines are
+    /// already the script's.
+    /// </summary>
+    public int LineBase { get; private set; }
 
     /// <summary>The line each active function was called from, outermost first (BASH_LINENO, reversed).</summary>
     private readonly List<int> _callLines = new();
 
+    /// <summary>The caller's <see cref="LineBase"/> for each active function.</summary>
+    private readonly List<int> _callLineBases = new();
+
+    /// <summary>The <see cref="LineBase"/> and <see cref="Line"/> outside each running <c>eval</c> or sourced file (<see cref="EnterLines"/>).</summary>
+    private readonly List<(int Base, int Line)> _lineScopes = new();
+
     public void Enter()
     {
         _callLines.Add(Line);
+        _callLineBases.Add(LineBase);
+        LineBase = 0;
         Depth++;
     }
 
@@ -58,6 +76,7 @@ public sealed class VarFrameStack
         Depth--;
         // The caller goes on at its call: a call inside the same statement (`f $(g)`) is still made from that line.
         if (_callLines.Count > 0) { Line = _callLines[^1]; _callLines.RemoveAt(_callLines.Count - 1); }
+        if (_callLineBases.Count > 0) { LineBase = _callLineBases[^1]; _callLineBases.RemoveAt(_callLineBases.Count - 1); }
     }
 
     /// <summary>
@@ -210,7 +229,7 @@ public sealed class VarFrameStack
         }
     }
 
-    public void Clear() { _frames.Clear(); _bindings.Clear(); _tempExports.Clear(); _unsetTemps.Clear(); _callLines.Clear(); Line = 0; Depth = 0; }
+    public void Clear() { _frames.Clear(); _bindings.Clear(); _tempExports.Clear(); _unsetTemps.Clear(); _callLines.Clear(); _callLineBases.Clear(); _lineScopes.Clear(); Line = 0; LineBase = 0; Depth = 0; }
 
     /// <summary>A copy of the frames, for a subshell to put back when it ends (BashShellState.Save/Restore).</summary>
     public sealed class Saved
@@ -255,6 +274,9 @@ public sealed class VarFrameStack
         to._unsetTemps.UnionWith(from._unsetTemps);
         to._callLines.Clear();
         to._callLines.AddRange(from._callLines);
+        to._callLineBases.Clear();
+        to._callLineBases.AddRange(from._callLineBases);
+        to.LineBase = from.LineBase;
         // Ids stay unique across the restore: a frame pushed after it never reuses one a saved frame holds.
         to._nextId = Math.Max(to._nextId, from._nextId);
     }
@@ -272,18 +294,61 @@ public sealed class VarFrameStack
     public static VarFrameStack Current
         => Runspace.DefaultRunspace is { } rs ? PerRunspace.GetValue(rs, _ => new VarFrameStack()) : NoRunspace;
 
-    /// <summary>A new top-level command on <paramref name="runspace"/> starts with no frames (the host calls this per invocation).</summary>
+    /// <summary>
+    /// A new top-level command on <paramref name="runspace"/> starts with no frames (the host calls this per invocation),
+    /// on line 1: the emitted script records a statement's line only once it is past line 1 (PsEmitter.EmitStatementCore),
+    /// so a diagnostic from its first line still reads <c>bash: line 1:</c>.
+    /// </summary>
     public static void ResetFor(Runspace runspace)
     {
-        if (PerRunspace.TryGetValue(runspace, out var stack)) stack.Clear();
+        var stack = PerRunspace.GetValue(runspace, _ => new VarFrameStack());
+        stack.Clear();
+        stack.Line = 1;
     }
 
     // The emitted code's entry points (static, so the PowerShell text stays short). Values come in as object: PowerShell
     // turns a $null passed to a string parameter into "", and an unset name must stay null.
     public static void EnterFunction() => Current.Enter();
     public static void ExitFunction() => Current.Exit();
-    /// <summary>The statement on <paramref name="line"/> starts (only a script that reads BASH_LINENO records it).</summary>
-    public static void SetLine(int line) => Current.Line = line;
+    /// <summary>The statement on <paramref name="line"/> starts (BASH_LINENO and the shell-diagnostic prefix, ShellDiagnostic, read it).</summary>
+    public static void SetLine(int line) => Current.RecordLine(line);
+
+    /// <summary>
+    /// A run-time <c>eval</c> starts on the current line: the lines of its text (from 1) are the script's from that line
+    /// on (bash: <c>eval $'true\nx'</c> on line 7 reports x on line 8). <see cref="EndEvalLines"/> ends it.
+    /// </summary>
+    public static void BeginEvalLines() { var s = Current; s.EnterLines(Math.Max(0, s.Line - 1)); }
+
+    /// <summary>The run-time <c>eval</c> that <see cref="BeginEvalLines"/> started has ended.</summary>
+    public static void EndEvalLines() => Current.ExitLines();
+
+    /// <summary>A sourced file starts: its lines are its own (<c>./lib.sh: line 2:</c>), also when sourced inside an eval.</summary>
+    public static void BeginSourceLines() => Current.EnterLines(0);
+
+    /// <summary>The sourced file that <see cref="BeginSourceLines"/> started has ended.</summary>
+    public static void EndSourceLines() => Current.ExitLines();
+
+    /// <summary>The statement on <paramref name="line"/> of the running text starts: <see cref="Line"/> is it plus <see cref="LineBase"/>.</summary>
+    public void RecordLine(int line) => Line = LineBase + line;
+
+    /// <summary>
+    /// Text transpiled on its own (an eval's, a sourced file's) starts running: its line 1 is line
+    /// <paramref name="lineBase"/> + 1. <see cref="ExitLines"/> puts back the base AND the line: bash's line after
+    /// <c>eval "$three_lines"; x</c> or <c>. ./f; x</c> on line 1 is 1 again.
+    /// </summary>
+    public void EnterLines(int lineBase)
+    {
+        _lineScopes.Add((LineBase, Line));
+        LineBase = lineBase;
+    }
+
+    /// <summary>The text <see cref="EnterLines"/> started has ended (an unbalanced end is a no-op).</summary>
+    public void ExitLines()
+    {
+        if (_lineScopes.Count == 0) return;
+        (LineBase, Line) = _lineScopes[^1];
+        _lineScopes.RemoveAt(_lineScopes.Count - 1);
+    }
     /// <summary>The value of <c>${BASH_LINENO[@]}</c>; <paramref name="bashSource"/> is <c>$global:BASH_SOURCE</c> (non-empty in a script file).</summary>
     public static string[] BashLineNo(object? bashSource) => Current.CallLines(InScriptFile(bashSource));
 

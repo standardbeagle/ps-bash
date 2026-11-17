@@ -19,24 +19,24 @@ public static class CommandNotFoundReport
     public const int PathMax = 4096;
 
     /// <summary>
-    /// The message (<c>bash: NAME: REASON</c>) and status for <paramref name="name"/>. <paramref name="directoryExists"/> answers for a prefix of the word as typed
+    /// The message without its source prefix (<c>NAME: REASON</c>; the caller adds <see cref="ShellDiagnostic"/>'s) and status for <paramref name="name"/>. <paramref name="directoryExists"/> answers for a prefix of the word as typed
     /// (relative to the shell's current directory).
     /// </summary>
     public static (string Message, int Status) Describe(string name, Func<string, bool> directoryExists)
     {
-        if (name.IndexOfAny(['/', '\\']) < 0) return ($"bash: {name}: command not found", 127);
-        if (RawBytes.GetByteCount(name) >= PathMax) return ($"bash: {name}: File name too long", 126);
+        if (name.IndexOfAny(['/', '\\']) < 0) return ($"{name}: command not found", 127);
+        if (RawBytes.GetByteCount(name) >= PathMax) return ($"{name}: File name too long", 126);
         var parts = name.Split('/', '\\');
         string prefix = "";
         for (int i = 0; i < parts.Length; i++)
         {
-            if (RawBytes.GetByteCount(parts[i]) > NameMax) return ($"bash: {name}: File name too long", 126);
+            if (RawBytes.GetByteCount(parts[i]) > NameMax) return ($"{name}: File name too long", 126);
             prefix = i == 0 ? parts[0] : prefix + "/" + parts[i];
             // Resolution stops at the first missing directory: `./nodir/LONG/x` is ENOENT, not ENAMETOOLONG.
             if (i < parts.Length - 1 && prefix.Length > 0 && !SafeExists(directoryExists, prefix)) break;
         }
-        if (parts[^1].Length > 0 && SafeExists(directoryExists, name)) return ($"bash: {name}: Is a directory", 126);
-        return ($"bash: {name}: No such file or directory", 127);
+        if (parts[^1].Length > 0 && SafeExists(directoryExists, name)) return ($"{name}: Is a directory", 126);
+        return ($"{name}: No such file or directory", 127);
     }
 
     /// <summary>

@@ -645,8 +645,9 @@ public static class PsBuild
         + "if ($null -ne $__psbash_tr) { Write-BashHostStderr -Message $__psbash_tr } }";
 
     /// <summary>
-    /// A shell-reported error line (<c>ps-bash: : command not found</c>) on the PowerShell error stream, so
-    /// <c>2&gt;$null</c> / <c>2&gt;&amp;1</c> / <c>2&gt; f</c> see it. <c>[Console]::Error</c> bypassed every redirect.
+    /// A fixed error line on the PowerShell error stream, so <c>2&gt;$null</c> / <c>2&gt;&amp;1</c> / <c>2&gt; f</c> see
+    /// it (<c>[Console]::Error</c> bypassed every redirect). A shell diagnostic that needs bash's
+    /// <c>NAME: line N: </c> prefix uses <see cref="ShellDiagnosticLine"/>.
     /// </summary>
     public static string StderrLine(string message) =>
         "Write-Error -Message " + SingleQuote(message) + " -ErrorAction Continue";
@@ -852,8 +853,45 @@ public static class PsBuild
     /// <summary><c>${BASH_LINENO[@]}</c>: the line each active function was called from, innermost first (then 0 in a script file).</summary>
     public const string BashLineNoArray = "[PsBash.Cmdlets.VarFrameStack]::BashLineNo($global:BASH_SOURCE)";
 
-    /// <summary>A statement on <paramref name="line"/> starts: a function it calls reports that line in BASH_LINENO.</summary>
+    /// <summary>
+    /// A statement on <paramref name="line"/> starts: a function it calls reports that line in BASH_LINENO, and a
+    /// shell diagnostic it raises (<c>NAME: line N: x: command not found</c>) shows it (<see cref="DiagnosticPrefix"/>).
+    /// </summary>
     public static string SetCallLine(int line) => "[PsBash.Cmdlets.VarFrameStack]::SetLine(" + line + "); ";
+
+    /// <summary>
+    /// bash's source prefix for a diagnostic from the shell itself, evaluated at run time: <c>script.sh: line 5: </c>,
+    /// <c>bash: line 1: </c> under <c>-c</c>, <c>bash: </c> interactive (PsBash.Cmdlets.ShellDiagnostic, the one builder;
+    /// docs/specs/error-handling.md "Diagnostic prefix").
+    /// </summary>
+    public const string DiagnosticPrefix = "[PsBash.Cmdlets.ShellDiagnostic]::Prefix($global:BASH_SOURCE, $global:BashPositional0)";
+
+    /// <summary>
+    /// Run <paramref name="statement"/> (the text of a run-time <c>eval</c>, transpiled alone so its lines count from 1)
+    /// with its recorded lines counted from the eval's own line, as bash numbers them (VarFrameStack.BeginEvalLines).
+    /// </summary>
+    public static string EvalLinesScope(string statement) =>
+        "[PsBash.Cmdlets.VarFrameStack]::BeginEvalLines(); try { " + statement
+        + " } finally { [PsBash.Cmdlets.VarFrameStack]::EndEvalLines() }";
+
+    /// <summary>
+    /// Run <paramref name="statement"/> (a sourced file's text) on the file's own lines, also when sourced inside an eval,
+    /// and put the caller back on its line afterwards (VarFrameStack.BeginSourceLines).
+    /// </summary>
+    public static string SourceLinesScope(string statement) =>
+        "[PsBash.Cmdlets.VarFrameStack]::BeginSourceLines(); try {\n" + statement
+        + "\n} finally { [PsBash.Cmdlets.VarFrameStack]::EndSourceLines() }";
+
+    /// <summary>
+    /// One <c>NAME=VALUE</c> of a traced assignment, for Write-BashXtrace: it prints the name bare and quotes only the
+    /// value (<c>+ sp='p q'</c>; an empty value bare, <c>+ v=</c>). <paramref name="valueExpr"/> is a PowerShell expression.
+    /// </summary>
+    public static string XtraceAssignment(string name, string valueExpr) =>
+        "@{ n = " + SingleQuote(name) + "; v = " + valueExpr + " }";
+
+    /// <summary>A shell diagnostic <paramref name="message"/> (a PowerShell string expression) with bash's source prefix, on stderr.</summary>
+    public static string ShellDiagnosticLine(string message) =>
+        "Write-Error -Message (" + DiagnosticPrefix + " + " + message + ") -ErrorAction Continue";
 
     /// <summary>Source line of the statement being emitted; the ERR trap reads it as <c>$LINENO</c>.</summary>
     [ThreadStatic] public static int TrapLine;

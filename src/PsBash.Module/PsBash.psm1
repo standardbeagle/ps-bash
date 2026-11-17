@@ -296,16 +296,30 @@ function ConvertTo-BashAnsiCQuoted([string]$s) {
     $sb.ToString()
 }
 
-# set -x: the "+ cmd args" line bash prints on stderr before a command. Words print as bash does: bare when made of
-# safe characters, otherwise single-quoted. The emitter calls this only in scripts that mention set -x.
+# One traced word as bash's xtrace shows it: bare when made of safe characters, otherwise single-quoted.
+function ConvertTo-BashXtraceWord([string]$s) {
+    if ($s -match '^[A-Za-z0-9_./:+@%=,^~-]+$') { $s }
+    elseif ($s -match '[\x01-\x1f\x7f]') { ConvertTo-BashAnsiCQuoted $s }
+    else { "'" + $s.Replace("'", "'\''") + "'" }
+}
+
+# set -x: the "+ cmd args" line bash prints on stderr before a command. Each argument is one source word's FIELDS, the
+# words the command runs with (PsEmitter.XtraceFields): a scalar is one field, an array its elements, so a word that
+# expanded to nothing (`$unset`, an empty "$@") shows nothing and a split `$x` shows each field. An assignment comes as
+# @{ n = NAME; v = VALUE } and shows as NAME=VALUE (an empty value bare: `v=`). A command left with no word at all
+# prints no line, as in bash. The emitter calls this only in scripts that mention set -x.
 function Write-BashXtrace {
     if (-not $global:__BashXtrace) { return }
-    $words = foreach ($w in $args) {
-        $s = [string]$w
-        if ($s -match '^[A-Za-z0-9_./:+@%=,^~-]+$') { $s }
-        elseif ($s -match '[\x01-\x1f\x7f]') { ConvertTo-BashAnsiCQuoted $s }
-        else { "'" + $s.Replace("'", "'\''") + "'" }
+    $words = foreach ($a in $args) {
+        if ($a -is [System.Collections.IDictionary]) {
+            $v = [string]$a['v']
+            $a['n'] + '=' + $(if ($v.Length -eq 0) { '' } else { ConvertTo-BashXtraceWord $v })
+            continue
+        }
+        foreach ($w in @($a)) { if ($null -ne $w) { ConvertTo-BashXtraceWord ([string]$w) } }
     }
+    $words = @($words)
+    if ($words.Count -eq 0) { return }
     Write-BashHostStderr ('+ ' + ($words -join ' '))
 }
 
@@ -333,7 +347,7 @@ function Resolve-BashCommand {
     if ($Name -eq '') {
         # `"$empty"` / `''` as a command: bash looks up the empty name and does not find it.
         return {
-            Write-Error -Message 'bash: : command not found' -Category ObjectNotFound -ErrorAction Continue
+            Write-Error -Message ([PsBash.Cmdlets.ShellDiagnostic]::Prefix($global:BASH_SOURCE, $global:BashPositional0) + ': command not found') -Category ObjectNotFound -ErrorAction Continue
             $global:LASTEXITCODE = 127
         }
     }
@@ -395,7 +409,7 @@ function Resolve-BashCommand {
         $app = Get-Command -Name ([WildcardPattern]::Escape($Name)) -CommandType Application -ErrorAction Ignore | Select-Object -First 1
         if ($app) { return $app.Source }
         return {
-            Write-Error -Message "bash: ${Name}: command not found" -Category ObjectNotFound -TargetObject $Name -ErrorAction Continue
+            Write-Error -Message ([PsBash.Cmdlets.ShellDiagnostic]::Prefix($global:BASH_SOURCE, $global:BashPositional0) + "${Name}: command not found") -Category ObjectNotFound -TargetObject $Name -ErrorAction Continue
             $global:LASTEXITCODE = 127
         }.GetNewClosure()
     }

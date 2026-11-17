@@ -1,0 +1,43 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 234
+stdout-length: 348
+stderr-length: 0
+==== SCRIPT ====
+W="$(mktemp -d)"; cd "$W"
+{
+echo one
+nosuch_a
+echo 'x
+y'
+nosuch_c
+eval $'true\nnosuch_d'
+c=$'true\ntrue\nnosuch_e'; eval "$c"
+nosuch_f \
+  arg
+nosuch_g a \
+  b
+nosuch_h 'p
+q' 'r
+s'
+"" quoted-empty
+echo "rc=$?"
+} 2>&1
+cd /; rm -rf "$W"
+==== STDOUT ====
+one
+bash: line 4: nosuch_a: command not found
+x
+y
+bash: line 7: nosuch_c: command not found
+bash: line 9: nosuch_d: command not found
+bash: line 11: nosuch_e: command not found
+bash: line 11: nosuch_f: command not found
+bash: line 12: nosuch_g: command not found
+bash: line 15: nosuch_h: command not found
+bash: line 17: : command not found
+rc=127
+
+==== STDERR ====
+
