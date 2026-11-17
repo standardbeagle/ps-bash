@@ -175,86 +175,40 @@ public sealed class InvokeBashArithmeticCommand : PSCmdlet
         return false;
     }
 
-    // An associative array's key: the subscript text with `$k` / `${k}` replaced by the variable's value.
-    // A quoted key drops its quotes (`(( x = A['spam'] ))` reads key spam); a single-quoted one is not expanded.
-    private string ExpandKey(string subscript)
-    {
-        string key = subscript.Trim();
-        if (key.Length >= 2 && key[0] == '\'' && key[^1] == '\'' && key.IndexOf('\'', 1) == key.Length - 1) return key[1..^1];
-        if (key.Length >= 2 && key[0] == '"' && key[^1] == '"' && key.IndexOf('"', 1) == key.Length - 1) key = key[1..^1];
-        return System.Text.RegularExpressions.Regex.Replace(key, @"\$\{?(\w+)\}?", m => ReadRawVar(m.Groups[1].Value) ?? "");
-    }
-
-    // An indexed array's subscript is itself an arithmetic expression; negative counts from the end.
-    private long ElementIndex(string subscript, int count)
-    {
-        long index = BashArith.Evaluate(subscript, n => ReadVar(n), WriteVar, ReadRawVar);
-        return index < 0 ? index + count : index;
-    }
+    private BashArrayElement.Vars ElementVars => new(ReadVar, WriteVar, ReadRawVar);
 
     /// <summary>
     /// A subscript read from a VALUE (<c>x='a[$(cmd)]'; $(( x ))</c>) with a command substitution in it: bash expands it
     /// as a word first, so the command runs (<see cref="BashSubscriptExpansion"/>). A literal <c>$(( a[$(cmd)] ))</c> in
     /// the script never gets here with one; the emitter substitutes it before the expression reaches this cmdlet.
     /// </summary>
-    private bool TryExpandSubscript(ref string subscript)
-    {
-        if (!BashSubscriptExpansion.NeedsWordExpansion(subscript)) return false;
-        subscript = BashSubscriptExpansion.Expand(InvokeCommand, subscript)
-            ?? throw new BashArith.BashArithException($"{subscript}: bad substitution");
-        return true;
-    }
+    private string ExpandSubscript(string subscript, out bool expanded)
+        => BashArrayElement.ExpandSubscript(InvokeCommand, subscript, out expanded)
+           ?? throw new BashArith.BashArithException($"{subscript}: bad substitution");
 
     private string? ReadElement(string baseName, string subscript)
     {
-        bool expanded = TryExpandSubscript(ref subscript);
+        subscript = ExpandSubscript(subscript, out bool expanded);
         object? holder = BashVariableLookup.ArrayHolder(SessionState, baseName);
         if (holder is System.Collections.IDictionary dict)
         {
-            string key = expanded ? subscript : ExpandKey(subscript);
+            string key = BashArrayElement.AssocKey(subscript, expanded, ReadRawVar);
             return dict.Contains(key) ? dict[key]?.ToString() ?? "" : null;
         }
         if (holder is System.Collections.IList list)
         {
-            long index = ElementIndex(subscript, list.Count);
+            long index = BashArrayElement.Index(subscript, list.Count, ElementVars);
             return index >= 0 && index < list.Count ? list[(int)index]?.ToString() ?? "" : null;
         }
         // A scalar behaves as a one-element array.
         string? scalar = BashVariableStore.Get(baseName);
-        return scalar is not null && ElementIndex(subscript, 1) == 0 ? scalar : null;
+        return scalar is not null && BashArrayElement.Index(subscript, 1, ElementVars) == 0 ? scalar : null;
     }
 
     private void WriteElement(string baseName, string subscript, string value)
     {
-        bool expanded = TryExpandSubscript(ref subscript);
-        object? holder = BashVariableLookup.ArrayHolder(SessionState, baseName);
-        if (holder is BashSparseArray sparse)
-        {
-            long at = ElementIndex(subscript, sparse.Count == 0 ? 0 : (int)sparse.NextIndex);
-            if (at >= 0) sparse[at] = value;
-            return;
-        }
-        if (holder is System.Collections.IDictionary dict)
-        {
-            dict[expanded ? subscript : ExpandKey(subscript)] = value;
-            return;
-        }
-        var items = new List<object?>();
-        if (holder is System.Collections.IEnumerable seq && holder is not string)
-            foreach (var item in seq) items.Add(item);
-        long index = ElementIndex(subscript, items.Count);
-        if (index < 0) return;
-        if (index > items.Count)
-        {
-            // A gap: a dense array can't hold it (bash keeps the holes unset), so it becomes a sparse one.
-            var sp = BashSparseArray.FromList(items);
-            sp[index] = value;
-            BashVariableLookup.ReplaceArray(SessionState, baseName, sp);
-            return;
-        }
-        while (items.Count <= index) items.Add("");
-        items[(int)index] = value;
-        BashVariableLookup.ReplaceArray(SessionState, baseName, items.ToArray());
+        subscript = ExpandSubscript(subscript, out bool expanded);
+        BashArrayElement.Write(SessionState, baseName, subscript, expanded, value, ElementVars);
     }
 
     private string? ReadRawVar(string name)

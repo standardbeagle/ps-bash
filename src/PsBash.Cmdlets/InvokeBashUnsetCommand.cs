@@ -54,7 +54,7 @@ public sealed class InvokeBashUnsetCommand : PSCmdlet
         int open = name.IndexOf('[');
         if (open <= 0 || !name.EndsWith(']')) return false;
         string baseName = name[..open];
-        string key = name[(open + 1)..^1];
+        string key = name[(open + 1)..^1], written = key;
         if (key is "@" or "*") return false;
         // `unset -v 'assoc["K"]'` / `unset 'assoc[K]'`: the quotes delimit the key, they are not part of it.
         if (key.Length >= 2 && key[0] is '"' or '\'' && key[^1] == key[0]) key = key[1..^1];
@@ -93,9 +93,8 @@ public sealed class InvokeBashUnsetCommand : PSCmdlet
         }
         if (value is System.Collections.IDictionary dict)
         {
-            // `unset "m[$k]"` arrives already expanded; a quoted `$k` is expanded here.
-            dict.Remove(expanded ? key : System.Text.RegularExpressions.Regex.Replace(key, @"\$\{?(\w+)\}?",
-                m => BashVariableLookup.Scalar(SessionState, m.Groups[1].Value) ?? ""));
+            // `unset "m[$k]"` arrives already expanded; a quoted `$k` is expanded here, by the one key rule.
+            dict.Remove(expanded ? key : BashArrayElement.AssocKey(written, false, BashArrayElement.ReadOnly(SessionState).ReadRaw));
             return true;
         }
         // An indexed array's subscript is an arithmetic expression (`unset 'stack[n-1]'`).

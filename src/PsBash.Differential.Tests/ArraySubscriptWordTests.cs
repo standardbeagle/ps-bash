@@ -41,6 +41,22 @@ public class ArraySubscriptWordTests
         + "for i in 1 2; do (( i += 10 )); echo $i; done\n"
         + "s=3; (( s++ )); echo $s; e[2]=9; (( e = 1 )); declare -p e");
 
+    // REGRESSION: a builtin's `NAME[subscript]` operand is resolved at run time as bash does (BashArrayElement):
+    // `printf -v 'm[$k]'` added a key named `$k`, `printf -v 'a[$i]'` replaced the array with a scalar, and an
+    // arithmetic write to a scalar's element dropped the scalar's value.
+    [SkippableFact]
+    public Task RunTimeElementOperand_ResolvesLikeBash() => AssertOracle.EqualAsync(
+        "declare -A m; k=K\n"
+        + "printf -v \"m['q']\" x1; printf -v 'm[\"$k\"]' x2; printf -v 'm[${k}2]' x3; printf -v 'm[a b]' x4; printf -v 'm[$(echo c)]' x5\n"
+        + "for e in \"${!m[@]}\"; do echo \"$e=${m[$e]}\"; done | sort\n"
+        + "a=(0 1 2); i=1\n"
+        + "printf -v 'a[$i]' y1; printf -v 'a[i+1]' y2; printf -v 'a[-1]' y3; printf -v 'a[5]' y4; printf -v 'a[$(echo 0)]' y5\n"
+        + "declare -p a\n"
+        + "printf -v 'm[$u]' z 2>/dev/null; echo st=$?; printf -v 'a[-9]' z 2>/dev/null; echo st=$?\n"
+        + "x=5; printf -v 'x[2]' z; declare -p x; s=3; (( s[2] = 7 )); declare -p s\n"
+        + "f() { printf -v 'nw[1]' q; (( na[1] = 4 )); }; f; declare -p nw na\n"
+        + "unset 'm[$k]' \"m['q']\"; for e in \"${!m[@]}\"; do echo \"$e\"; done | sort");
+
     // `ref='A[$key]'; ${!ref}`: the variables in an indirect subscript expand (single quotes keep them literal).
     [SkippableFact]
     public Task IndirectSubscript_ExpandsVariables() => AssertOracle.EqualAsync(

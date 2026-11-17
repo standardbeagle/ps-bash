@@ -528,7 +528,8 @@ public sealed class InvokeBashPrintfCommand : PSCmdlet
 
     /// <summary>
     /// <c>printf -v NAME</c>: set the shell variable (or element 0 of the array the name holds), exactly as
-    /// <c>read</c> does. <c>NAME[i]</c> sets one element of the array variable (created/extended as needed).
+    /// <c>read</c> does. <c>NAME[subscript]</c> sets one element, the subscript resolved as bash does at run time
+    /// (<see cref="BashArrayElement"/>: <c>m[$k]</c> is key K, <c>a[i+1]</c> a position).
     /// </summary>
     private void AssignVariable(string target, string value)
     {
@@ -540,25 +541,15 @@ public sealed class InvokeBashPrintfCommand : PSCmdlet
         }
 
         string name = target.Substring(0, br);
-        string sub = target.Substring(br + 1, target.Length - br - 2).Trim();
-        if (!int.TryParse(sub, out int idx) || idx < 0)
+        string? sub = BashArrayElement.ExpandSubscript(InvokeCommand, target.Substring(br + 1, target.Length - br - 2), out bool expanded);
+        bool written;
+        try { written = sub is not null && BashArrayElement.Write(SessionState, name, sub, expanded, value, BashArrayElement.ReadOnly(SessionState)); }
+        catch (BashArith.BashArithException) { written = false; }
+        if (!written)
         {
-            // An associative array's key is set; any other computed subscript is not modelled: keep the value
-            // reachable as the name's value.
-            if (BashVariableLookup.ArrayHolder(SessionState, name) is System.Collections.IDictionary assoc)
-                assoc[sub.Length >= 2 && sub[0] == '"' && sub[^1] == '"' ? sub[1..^1] : sub] = value;
-            else
-                try { BashVariableLookup.SetScalar(SessionState, name, value); } catch { }
-            return;
+            FileSystemHelpers.WriteStderr(this, $"{target}: bad array subscript");
+            FileSystemHelpers.SetLastExitCode(this, 1);
         }
-        var existing = BashVariableLookup.ArrayHolder(SessionState, name);
-        var items = new List<object?>();
-        if (existing is System.Collections.IEnumerable en)
-            foreach (var o in en) items.Add(o);
-        else if (BashVariableLookup.Scalar(SessionState, name) is { } one) items.Add(one);
-        while (items.Count <= idx) items.Add("");
-        items[idx] = value;
-        BashVariableLookup.SetArray(SessionState, name, items.ToArray());
     }
 
     /// <summary>

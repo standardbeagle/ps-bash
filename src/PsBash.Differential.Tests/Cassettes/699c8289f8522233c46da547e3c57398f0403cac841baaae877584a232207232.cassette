@@ -1,0 +1,36 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 640
+stdout-length: 208
+stderr-length: 0
+==== SCRIPT ====
+declare -A m; k=K
+printf -v "m['q']" x1; printf -v 'm["$k"]' x2; printf -v 'm[${k}2]' x3; printf -v 'm[a b]' x4; printf -v 'm[$(echo c)]' x5
+for e in "${!m[@]}"; do echo "$e=${m[$e]}"; done | sort
+a=(0 1 2); i=1
+printf -v 'a[$i]' y1; printf -v 'a[i+1]' y2; printf -v 'a[-1]' y3; printf -v 'a[5]' y4; printf -v 'a[$(echo 0)]' y5
+declare -p a
+printf -v 'm[$u]' z 2>/dev/null; echo st=$?; printf -v 'a[-9]' z 2>/dev/null; echo st=$?
+x=5; printf -v 'x[2]' z; declare -p x; s=3; (( s[2] = 7 )); declare -p s
+f() { printf -v 'nw[1]' q; (( na[1] = 4 )); }; f; declare -p nw na
+unset 'm[$k]' "m['q']"; for e in "${!m[@]}"; do echo "$e"; done | sort
+==== STDOUT ====
+K2=x3
+K=x2
+a b=x4
+c=x5
+q=x1
+declare -a a=([0]="y5" [1]="y1" [2]="y3" [5]="y4")
+st=1
+st=1
+declare -a x=([0]="5" [2]="z")
+declare -a s=([0]="3" [2]="7")
+declare -a nw=([1]="q")
+declare -a na=([1]="4")
+K2
+a b
+c
+
+==== STDERR ====
+

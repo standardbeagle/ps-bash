@@ -128,6 +128,15 @@ Rules:
   (a PowerShell variable answers only when it holds an array); `SetScalar` assigns (element 0 of an array the name
   holds, else the store); `SetArray` / `ReplaceArray` / `RemoveArray` write an array in the scope that owns it.
   Arithmetic, `read`, `printf -v`, `getopts`, `mapfile`, `[[ -v ]]`, `declare -p`, `unset`, `${!ref}` (psm1) use it.
+- **An element named at run time: `PsBash.Cmdlets.BashArrayElement`.** A cmdlet that gets `NAME[subscript]` from an
+  operand or a value (`printf -v 'm[$k]'`, `unset 'm[$k]'`, `x='a[i+1]'; $(( x = 1 ))`) resolves and writes it there,
+  on top of `BashVariableLookup`. A `$(...)` in the subscript runs. An associative key keeps a single-quoted key
+  literal, drops outer double quotes and expands `$k` / `${k}`; an empty key is a bad subscript. An indexed subscript
+  is arithmetic, a negative one counts from the end, and a write past the end makes the array sparse. A scalar becomes
+  element 0, and a new array is global. The bug class: three cmdlets each had a copy of these rules, and `printf -v`'s
+  never expanded `$k`, so `printf -v 'm[$k]'` added a key named `$k` (oils `array-assoc`). Guard:
+  `Core.Tests/ArrayElementGuardTests` (no other cmdlet holds the key-expansion regex). Behavior:
+  `Differential.Tests/ArraySubscriptWordTests.RunTimeElementOperand_ResolvesLikeBash`.
 - **PowerShell-owned names** (`PsBash.Core.PowerShellOwnedVariables`: `$input`, `$Host`, `$PID`, `$args`, …) are
   never a bash value and the emitter never names a PowerShell variable after one.
 - **Emitter: a loop binds the shell variable.** `for` iterates a private `$__psbash_lvN` and sets the shell variable
