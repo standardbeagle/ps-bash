@@ -67,7 +67,7 @@ public class ShellSemanticsRegressionTests
     {
         var ps = BashTranspiler.Transpile("pfx=AB; export Q${pfx}=v");
         Assert.Contains("$__psbash_eval_src = @('export', ", ps);
-        Assert.Contains("Invoke-BashPrintf '%s ' \"$(if ($null -eq $__psbash_declw) { '' } else { [PsBash.Cmdlets.BashQuoteText]::ForReuse($__psbash_declw) })\"", ps);
+        Assert.Contains("Invoke-BashPrintf '%s ' \"$(if ($null -eq $env:__psbash_declw) { '' } else { [PsBash.Cmdlets.BashQuoteText]::ForReuse($env:__psbash_declw) })\"", ps);
         Assert.DoesNotContain("Invoke-BashExport", ps);
     }
 

@@ -193,12 +193,12 @@ public class BashTranspilerReviewRegressionTests
     public void Transpile_TestOfAnEmptyCommandSub_ComparesAsAString(string bash)
         => Assert.Contains("(@($(", BashTranspiler.Transpile(bash));
 
-    // Oracle: `for i in 1 2; do worker $i & done` runs worker with 1 and 2 - the loop variable is a PowerShell variable the job cannot see, so its value is handed over at launch.
+    // Oracle: `for i in 1 2; do worker $i & done` runs worker with 1 and 2 - the loop moves on before the job reads the variable, so its value is handed over at launch.
     [Fact]
     public void Transpile_BackgroundJobInALoop_HandsOverTheLoopVariable()
     {
         var ps = BashTranspiler.Transpile("f() { return $1; }; for i in 1 2; do f $i & done");
-        Assert.Contains("-Vars @{ 'i' = $i } {", ps);
+        Assert.Contains("-Vars @{ 'i' = $env:i } {", ps);
     }
 
     [Fact]
@@ -650,13 +650,17 @@ public class BashTranspilerReviewRegressionTests
     public void Transpile_ComparisonInArithmetic_IsNotTreatedAsAssignment()
         => Assert.DoesNotContain("$__bashsplat1 =", BashTranspiler.Transpile("echo $((n==2)) $n"));
 
-    // Oracle: `for i in 1 2 3; do :; done; i=0; until [ $i -ge 3 ]; do i=$((i+1)); done; echo $i` prints 3. The
-    // PowerShell loop variable lingered with its last value and arithmetic reads it before the shell variable (it
-    // counted from 3 and printed 4), so the loop drops it.
+    // Oracle: `for i in 1 2 3; do :; done; i=0; until [ $i -ge 3 ]; do i=$((i+1)); done; echo $i` prints 3. A
+    // PowerShell loop variable lingered with its last value and arithmetic read it before the shell variable (it
+    // counted from 3 and printed 4). The loop binds only the shell variable now (environment-model.md section 8).
 
     [Fact]
-    public void Transpile_ForInLoop_DropsItsLexicalLoopVariableAfterwards()
-        => Assert.Contains("Remove-Variable -Name i", BashTranspiler.Transpile("for i in 1 2 3; do :; done"));
+    public void Transpile_ForInLoop_BindsOnlyTheShellVariable()
+    {
+        var ps = BashTranspiler.Transpile("for i in 1 2 3; do :; done");
+        Assert.Contains("[System.Environment]::SetEnvironmentVariable('i', [string]($__psbash_lv0))", ps);
+        Assert.DoesNotContain("foreach ($i ", ps);
+    }
 
     // Oracle: `declare -i n=5; n+=2; echo $n` prints 7 - an integer variable adds on `+=` (it appended: 52).
     // A plain variable still appends.
@@ -1165,8 +1169,8 @@ public class BashTranspilerReviewRegressionTests
     public void Transpile_ForLoopOverPowerShellAutomaticName_IteratesAPrivateVariable(string name)
     {
         var ps = BashTranspiler.Transpile($"for {name} in 1 2; do echo ${name}; done");
-        Assert.Contains($"foreach ($__psbash_lv_{name} in", ps);
-        Assert.Contains($"$env:{name} = [string]$__psbash_lv_{name}", ps);
+        Assert.Contains("foreach ($__psbash_lv0 in", ps);
+        Assert.Contains($"[System.Environment]::SetEnvironmentVariable('{name}', [string]($__psbash_lv0))", ps);
         Assert.DoesNotContain($"foreach (${name} ", ps);
     }
 
@@ -1215,7 +1219,7 @@ public class BashTranspilerReviewRegressionTests
         var ps = BashTranspiler.Transpile("for k in \"${(@k)a}\"; do echo in; done");
         Assert.Contains("$global:__BashExpansionFailed = $false; $__psbash_fl = ", ps);
         Assert.Contains("if ($global:__BashExpansionFailed) { $global:__BashExpansionFailed = $false } else { ", ps);
-        Assert.Contains("foreach ($k in $__psbash_fl)", ps);
+        Assert.Contains("foreach ($__psbash_lv0 in $__psbash_fl)", ps);
         // A list that cannot fail keeps the plain loop.
         Assert.DoesNotContain("__psbash_fl", BashTranspiler.Transpile("for k in a b; do echo in; done"));
     }

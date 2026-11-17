@@ -1,0 +1,31 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 476
+stdout-length: 82
+stderr-length: 0
+==== SCRIPT ====
+rl() { local rq; read rq <<< 9; }; rl; echo "rl [${rq-unset}] $((rq + 0))"
+down() { local rq=$1; if (( rq > 0 )); then down $((rq - 1)); fi; echo "down $rq"; }; down 2
+read rr <<< 5; rr=7; echo "rr $((rr)) $rr"
+printf -v pp 5; pp=7; echo "pp $((pp)) $pp"
+set -- -a; getopts a opt; opt=3; echo "opt $((opt + 1))"
+input=4; echo "input $((input + 1))"
+host=3; echo "host $((host * 2))"
+Error=2; echo "Error $((Error + 1))"
+f() { args=6; input=1; echo "fn $((args + input))"; }; f
+==== STDOUT ====
+rl [unset] 0
+down 0
+down 1
+down 2
+rr 7 7
+pp 7 7
+opt 4
+input 5
+host 6
+Error 3
+fn 7
+
+==== STDERR ====
+

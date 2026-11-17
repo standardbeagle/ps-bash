@@ -15,11 +15,34 @@ public static partial class PsEmitter
     /// Emit PowerShell for the given command AST node.
     /// </summary>
     /// <summary>
-    /// Set of loop variable names currently in scope.
-    /// Variables declared by for-in or for-arith loops emit as <c>$var</c> rather than <c>$env:var</c>.
+    /// A function's LEXICAL locals in scope: its local arrays (an array lives only as a PowerShell variable) and the
+    /// scalar names a dynamic local cannot hold (<see cref="IsDynamicLocalName"/>). They emit as <c>$var</c>. Every
+    /// other shell variable, a loop variable included, is read from and written to the shell variable store
+    /// (<c>$env:var</c>): one storage per variable (environment-model.md section 8).
     /// </summary>
     [ThreadStatic]
-    private static HashSet<string>? _loopVars;
+    private static HashSet<string>? _lexicalLocals;
+
+    /// <summary>
+    /// Names an enclosing <c>for</c> / <c>for ((;;))</c> / <c>while read</c> binds. Their storage is the shell variable
+    /// store like any other variable's (a function called from the body reads its own <c>local</c> or the loop's value
+    /// there, never a PowerShell variable of the loop's). The set only keeps two emission choices: an unquoted
+    /// <c>$v</c> is not word-split unless the list may hold IFS characters (<see cref="_splitLoopVars"/>), and a
+    /// background job started in the body gets the value the loop had at launch (<see cref="_jobCapture"/>).
+    /// </summary>
+    [ThreadStatic]
+    private static HashSet<string>? _storeLoopVars;
+
+    /// <summary>
+    /// While a background job's body is emitted: the loop variables and lexical locals it may read, each with the
+    /// PowerShell expression of its value at launch. The job (another runspace, or another process) reads its own
+    /// copy, <c>$name</c>, which <c>Invoke-BashBackground -Vars</c> sets; <see cref="_jobCaptureUsed"/> collects the
+    /// names the body read.
+    /// </summary>
+    [ThreadStatic]
+    private static Dictionary<string, string>? _jobCapture;
+    [ThreadStatic]
+    private static HashSet<string>? _jobCaptureUsed;
 
     // Names of a `VAR=val cmd` prefix being emitted: the command's own words expand BEFORE the prefix
     // takes effect (`x=old; x=new echo "$x"` prints old), so a reference to such a name reads the
@@ -91,8 +114,8 @@ public static partial class PsEmitter
     private static HashSet<string>? _collectScalarLocals;
 
     private static bool IsDynamicLocalName(string name)
-        => name != "IFS" && !_psBuiltins.Contains(name) && PsBuild.TryMapSpecialVar(name, braced: false, inDoubleQuote: false) is null
-           && !(_loopVars?.Contains(name) ?? false);
+        => name != "IFS" && PsBuild.TryMapSpecialVar(name, braced: false, inDoubleQuote: false) is null
+           && !(_lexicalLocals?.Contains(name) ?? false);
     private const string EnvShadowPrefix = "__psbash_ea_";
 
     private static string? EnvShadowName(string name)
@@ -1589,20 +1612,39 @@ public static partial class PsEmitter
     }
 
     /// <summary>
-    /// PowerShell automatic variables a <c>foreach</c> cannot use as its iteration variable: a read-only or constant
-    /// one throws on assignment (<c>for pid in ...</c> ran no iteration: "Cannot overwrite variable PID"), and the
-    /// others are rebound by PowerShell itself. A bash loop over such a name iterates a private PowerShell variable;
-    /// the body reads the shell variable (<c>$env:</c>), which each iteration sets.
+    /// One pass of a loop binds its variable: the shell variable, or for a name the enclosing function holds as a
+    /// lexical local, that PowerShell variable. Never a second, PowerShell copy beside the shell variable.
     /// </summary>
-    private static readonly HashSet<string> _psReservedLoopNames = new(StringComparer.OrdinalIgnoreCase)
+    private static string BindLoopVariable(string name, string valueExpr)
+        => _lexicalLocals is not null && _lexicalLocals.Contains(name)
+            ? $"${{{name}}} = [string]({valueExpr}); "
+            : PsBuild.SetShellScalar(name, valueExpr) + "; ";
+
+    /// <summary>Notes <paramref name="name"/> as bound by the loop being emitted; <see cref="LeaveLoopVariable"/> undoes it.</summary>
+    private static (bool Added, string? Captured) EnterLoopVariable(string name)
     {
-        "PID", "HOME", "Host", "true", "false", "null", "ShellId", "PSHOME", "ExecutionContext", "PSCulture",
-        "PSUICulture", "PSVersionTable", "PSEdition", "IsWindows", "IsLinux", "IsMacOS", "IsCoreCLR", "Error",
-        "input", "args", "this", "Matches", "foreach", "switch", "PSItem", "LASTEXITCODE", "MyInvocation",
-        "PSScriptRoot", "PSCommandPath", "PSBoundParameters", "PSCmdlet", "StackTrace", "NestedPromptLevel",
-        "ConsoleFileName", "PSDebugContext", "EnabledExperimentalFeatures", "Event", "EventArgs", "EventSubscriber",
-        "Sender",
-    };
+        bool added = (_storeLoopVars ??= new HashSet<string>(StringComparer.Ordinal)).Add(name);
+        // In a background job's body, a loop that binds a captured name binds the job's own variable from then on.
+        string? captured = _jobCapture is not null && _jobCapture.Remove(name, out var expr) ? expr : null;
+        return (added, captured);
+    }
+
+    private static void LeaveLoopVariable(string name, (bool Added, string? Captured) entered)
+    {
+        if (entered.Added) _storeLoopVars!.Remove(name);
+        if (entered.Captured is not null && _jobCapture is not null) _jobCapture[name] = entered.Captured;
+    }
+
+    /// <summary>
+    /// In a background job's body: true when <paramref name="name"/> is read from the job's own copy (<c>$name</c>),
+    /// noting that the job must be handed it.
+    /// </summary>
+    private static bool IsJobCaptured(string name)
+    {
+        if (_jobCapture is null || !_jobCapture.ContainsKey(name)) return false;
+        _jobCaptureUsed!.Add(name);
+        return true;
+    }
 
     private static string EmitForIn(Command.ForIn forIn)
     {
@@ -1614,8 +1656,10 @@ public static partial class PsEmitter
             sb.Append(IterGuardPrefix(depth));
             sb.Append(label);
 
-            bool reservedName = _psReservedLoopNames.Contains(forIn.Var);
-            string psVar = reservedName ? "__psbash_lv_" + forIn.Var : forIn.Var;
+            // The iteration variable is private to the loop. The loop variable's one storage is the shell variable,
+            // which each pass sets (BindLoopVariable): a PowerShell variable of the same name was a second storage that
+            // a function called from the body read in place of its own `local` (environment-model.md section 8).
+            string psVar = "__psbash_lv" + depth;
             string listPrelude = "";
 
             // `for i; do` (no `in`) iterates $@; `for i in ; do` has an explicit, empty list and runs zero times.
@@ -1648,12 +1692,11 @@ public static partial class PsEmitter
             sb.Append(IterGuardCheck(depth));
             sb.Append(DebugAt(forIn.Line)); // trap DEBUG: before each iteration, with the `for` line
             // The loop variable is an ordinary shell variable: the body's functions see it and it keeps its last value after the loop.
-            sb.Append($"$env:{forIn.Var} = [string]${psVar}; ");
+            sb.Append(BindLoopVariable(forIn.Var, "$" + psVar));
 
-            var vars = _loopVars ??= new HashSet<string>();
-            bool added = !reservedName && vars.Add(forIn.Var);
+            var entered = EnterLoopVariable(forIn.Var);
             // `for i; do` (no list) iterates "$@": arbitrary strings.
-            bool addedSplit = !reservedName && (forIn.List.IsEmpty || ForListMaySplit(forIn.List)) && (_splitLoopVars ??= new HashSet<string>()).Add(forIn.Var);
+            bool addedSplit = (forIn.List.IsEmpty || ForListMaySplit(forIn.List)) && (_splitLoopVars ??= new HashSet<string>()).Add(forIn.Var);
             try
             {
                 sb.Append(EmitBody(forIn.Body));
@@ -1661,7 +1704,7 @@ public static partial class PsEmitter
             finally
             {
                 if (addedSplit) _splitLoopVars!.Remove(forIn.Var);
-                if (added) vars.Remove(forIn.Var);
+                LeaveLoopVariable(forIn.Var, entered);
             }
 
             sb.Append(" }");
@@ -1671,13 +1714,7 @@ public static partial class PsEmitter
             body = body + "; " + (globs ? PsBuild.ZeroIterationStatusAfterGlob(IterVar(depth)) : PsBuild.ZeroIterationStatus(IterVar(depth)));
             // A list expanded ahead of the loop (it can fail) runs the loop only when it did not.
             if (listPrelude.Length > 0) body = listPrelude + PsBuild.UnlessExpansionFailed(body);
-            string loop = ApplyCompoundRedirects((globs ? PsBuild.FailGlobReset : "") + body, forIn.Redirects);
-            // The PowerShell loop variable outlives the loop with its last value, and arithmetic reads a PowerShell
-            // variable before the shell variable: `for i in 1 2 3; do :; done; i=0; ...$((i+1))` then counted from 3.
-            // The shell variable (`$env:`) already holds the last value, so drop the lexical one. A name the
-            // enclosing function declared `local` (already a lexical variable) is left alone.
-            if (reservedName) return loop + "; Remove-Variable -Name " + psVar + " -ErrorAction SilentlyContinue";
-            return added ? loop + "; Remove-Variable -Name " + forIn.Var + " -ErrorAction SilentlyContinue" : loop;
+            return ApplyCompoundRedirects((globs ? PsBuild.FailGlobReset : "") + body, forIn.Redirects);
         }
         finally
         {
@@ -1934,22 +1971,22 @@ public static partial class PsEmitter
         string label = PushLoopLabel(depth);
         try
         {
-            // Register loop var before emitting header so init/cond/step all use $var
+            // The loop variable lives in the shell variable store, which Invoke-BashArith reads and writes in the init,
+            // the condition and the step alike; the name is only noted as a loop variable (_storeLoopVars).
             string? loopVar = ExtractArithVar(forArith.Init);
-            var vars = _loopVars ??= new HashSet<string>();
-            bool added = loopVar is not null && vars.Add(loopVar);
+            var entered = loopVar is null ? default : EnterLoopVariable(loopVar);
             try
             {
                 if (forArith.Line > 0 && DebugActive)
-                    return ApplyCompoundRedirects(EmitDebugForArith(forArith, depth, label, loopVar), forArith.Redirects);
+                    return ApplyCompoundRedirects(EmitDebugForArith(forArith, depth, label), forArith.Redirects);
                 var sb = new StringBuilder();
                 sb.Append(IterGuardPrefix(depth));
                 sb.Append(label).Append("for (");
-                sb.Append(EmitForArithClause(forArith.Init, initializeLoopVar: loopVar));
+                sb.Append(EmitForArithClause(forArith.Init));
                 sb.Append("; ");
                 sb.Append(EmitForArithCondition(forArith.Cond));
                 sb.Append("; ");
-                sb.Append(EmitForArithClause(forArith.Step, initializeLoopVar: null));
+                sb.Append(EmitForArithClause(forArith.Step));
                 sb.Append(") { ");
                 sb.Append(IterGuardCheck(depth));
                 sb.Append(EmitBody(forArith.Body));
@@ -1958,7 +1995,7 @@ public static partial class PsEmitter
         }
         finally
         {
-            if (added) vars.Remove(loopVar!);
+            if (loopVar is not null) LeaveLoopVariable(loopVar, entered);
         }
         }
         finally
@@ -1973,12 +2010,12 @@ public static partial class PsEmitter
     /// once; cond before every pass, the failing one included; step after every pass), and a PowerShell <c>for</c>
     /// header cannot hold it. A <c>while</c> whose first pass skips the step; <c>continue</c> still reaches the step.
     /// </summary>
-    private static string EmitDebugForArith(Command.ForArith forArith, int depth, string label, string? loopVar)
+    private static string EmitDebugForArith(Command.ForArith forArith, int depth, string label)
     {
         int line = forArith.Line;
         string first = "$__psbash_af" + depth;
         var sb = new StringBuilder();
-        string init = EmitForArithClause(forArith.Init, initializeLoopVar: loopVar);
+        string init = EmitForArithClause(forArith.Init);
         if (forArith.Init is not null) sb.Append(DebugAt(line));
         if (init.Length > 0) sb.Append(init).Append("; ");
         sb.Append(first).Append(" = $true; ");
@@ -1986,7 +2023,7 @@ public static partial class PsEmitter
         sb.Append(IterGuardCheck(depth));
         sb.Append("if (-not ").Append(first).Append(") { ");
         if (forArith.Step is not null)
-            sb.Append(DebugAt(line)).Append(EmitForArithClause(forArith.Step, initializeLoopVar: null)).Append("; ");
+            sb.Append(DebugAt(line)).Append(EmitForArithClause(forArith.Step)).Append("; ");
         sb.Append("}; ").Append(first).Append(" = $false; ");
         if (forArith.Cond is not null) sb.Append(DebugAt(line));
         sb.Append("if (-not (").Append(EmitForArithCondition(forArith.Cond)).Append(")) { break }; ");
@@ -2481,7 +2518,7 @@ public static partial class PsEmitter
         var priorFunctionLocals = _functionLocalNames;
         var priorFunctionReadonly = _readonlyVars is null ? null : new HashSet<string>(_readonlyVars, StringComparer.Ordinal);
         _functionLocalNames = new HashSet<string>(localVars.Concat(dynLocals), StringComparer.Ordinal);
-        var vars = _loopVars ??= new HashSet<string>();
+        var vars = _lexicalLocals ??= new HashSet<string>();
         var added = new List<string>();
         foreach (var v in localVars)
             if (vars.Add(v)) added.Add(v);
@@ -2867,26 +2904,53 @@ public static partial class PsEmitter
         var outerLabels = _loopLabels; var outerBarrier = _loopBarrier;
         _loopLabels = null; _loopBarrier = LoopBarrierKind.Warn;
         bool savedErrTrap = PsBuild.ErrTrapNeedsErrtrace; PsBuild.ErrTrapNeedsErrtrace = true;
+        // A loop variable (or a function's lexical local) the body reads is handed over at launch: the loop moves on
+        // before the job reads it, and an in-process job shares the process environment with the shell.
+        var outerCapture = _jobCapture; var outerCaptureUsed = _jobCaptureUsed;
+        var capture = JobCaptureCandidates(outerCapture);
+        _jobCapture = capture is null ? null : new Dictionary<string, string>(capture, StringComparer.Ordinal);
+        _jobCaptureUsed = new HashSet<string>(StringComparer.Ordinal);
         string inner;
-        try { inner = Emit(bg.Inner); }
-        finally { _subshellDepth--; PsBuild.ErrTrapNeedsErrtrace = savedErrTrap; _loopLabels = outerLabels; _loopBarrier = outerBarrier; }
+        HashSet<string> captured;
+        try { inner = Emit(bg.Inner); captured = _jobCaptureUsed; }
+        finally { _subshellDepth--; PsBuild.ErrTrapNeedsErrtrace = savedErrTrap; _loopLabels = outerLabels; _loopBarrier = outerBarrier; _jobCapture = outerCapture; _jobCaptureUsed = outerCaptureUsed; }
+        // A job inside a job passes on the copy the outer job holds, which the outer job must then be handed too.
+        if (outerCapture is not null)
+            foreach (var v in captured)
+                if (outerCapture.ContainsKey(v)) outerCaptureUsed!.Add(v);
         // A job that can change shell state (variables, cwd, options, functions) must not share this
         // process's environment and cwd: it runs in a host of its own (-Isolated). A job that only runs
         // programs keeps the cheap in-process path, whose text is unchanged.
-        // A for-loop variable is a PowerShell variable the job (another runspace or process) cannot see, and the
-        // loop moves on before the job reads it: hand over its value at launch.
-        string vars = "";
-        if (_loopVars is { Count: > 0 })
-        {
-            var used = _loopVars.Where(v => inner.Contains("$" + v, StringComparison.Ordinal)).OrderBy(v => v, StringComparer.Ordinal).ToList();
-            if (used.Count > 0)
-                vars = " -Vars @{ " + string.Join("; ", used.Select(v => $"{PsBuild.SingleQuote(v)} = ${v}")) + " }";
-        }
+        string vars = captured.Count == 0 || capture is null
+            ? ""
+            : " -Vars @{ " + string.Join("; ", captured.Order(StringComparer.Ordinal).Select(v => $"{PsBuild.SingleQuote(v)} = {capture[v]}")) + " }";
         // A job whose stdout/stderr are the shell's own writes them live (CollectLiveJobs).
         string live = _liveJobs is not null && _liveJobs.Contains(bg) ? " -Live" : "";
         return MayMutateShellState(bg.Inner)
             ? $"Invoke-BashBackground -Isolated{live}{vars} {{ {inner} }}"
             : $"Invoke-BashBackground{live}{vars} {{ {inner} }}";
+    }
+
+    /// <summary>
+    /// The names a background job started here may read from a copy of its own, each with the PowerShell expression
+    /// of its value now: a loop variable (the shell variable, or the enclosing job's copy) and a lexical local. A
+    /// PowerShell-owned name (<c>$input</c>, <c>$args</c>) cannot be a copy; the job reads the shell variable.
+    /// </summary>
+    private static Dictionary<string, string>? JobCaptureCandidates(Dictionary<string, string>? outer)
+    {
+        Dictionary<string, string>? map = null;
+        if (_storeLoopVars is not null)
+            foreach (var v in _storeLoopVars)
+                if (!PowerShellOwnedVariables.Contains(v))
+                    (map ??= new(StringComparer.Ordinal))[v] = outer is not null && outer.ContainsKey(v) ? "$" + v : "$env:" + v;
+        if (_lexicalLocals is not null)
+            foreach (var v in _lexicalLocals)
+                if (!PowerShellOwnedVariables.Contains(v))
+                    (map ??= new(StringComparer.Ordinal))[v] = "$" + v;
+        if (outer is not null)
+            foreach (var kv in outer)
+                (map ??= new(StringComparer.Ordinal)).TryAdd(kv.Key, "$" + kv.Key);
+        return map;
     }
 
     private static readonly HashSet<string> _stateBuiltins = new(StringComparer.Ordinal)
@@ -2943,98 +3007,6 @@ public static partial class PsEmitter
     /// </summary>
     private static string EmitArithConditionExpr(ArithmeticSyntax syntax)
         => $"(@({EmitArithmeticInvocation(syntax)}) -ne 0)"; // a failed evaluation yields no value: false, status 1
-
-    private static string EmitArithCommandLegacy(string expr)
-    {
-        // Increment/decrement: env vars need assignment with [int] cast;
-        // loop/PS vars can use native ++ / -- operators.
-        if (expr.EndsWith("++") || expr.EndsWith("--"))
-        {
-            string varName = expr[..^2].Trim();
-            string varRef = varName.StartsWith('$') ? varName : ArithVarRef(varName);
-            if (IsEnvVar(varRef))
-            {
-                string delta = expr.EndsWith("++") ? "1" : "-1";
-                return $"{varRef} = [int]{varRef} + {delta}";
-            }
-            return varRef + expr[^2..];
-        }
-        if (expr.StartsWith("++") || expr.StartsWith("--"))
-        {
-            string varName = expr[2..].Trim();
-            string varRef = varName.StartsWith('$') ? varName : ArithVarRef(varName);
-            if (IsEnvVar(varRef))
-            {
-                string delta = expr.StartsWith("++") ? "1" : "-1";
-                return $"{varRef} = [int]{varRef} + {delta}";
-            }
-            return expr[..2] + varRef;
-        }
-
-        // Ternary: x > 0 ? 1 : 0 -> if ($x -gt 0) { 1 } else { 0 }
-        int qIdx = FindTernaryQuestion(expr);
-        if (qIdx >= 0)
-        {
-            int cIdx = expr.IndexOf(':', qIdx + 1);
-            if (cIdx >= 0)
-            {
-                string cond = expr[..qIdx].Trim();
-                string trueVal = expr[(qIdx + 1)..cIdx].Trim();
-                string falseVal = expr[(cIdx + 1)..].Trim();
-                string psCond = TranslateArithCondition(cond);
-                trueVal = PrefixBareVar(trueVal);
-                falseVal = PrefixBareVar(falseVal);
-                return $"if ({psCond}) {{ {trueVal} }} else {{ {falseVal} }}";
-            }
-        }
-
-        // Comparison: x > 5 -> $x -gt 5 (contains comparison operator)
-        if (HasComparisonOp(expr))
-            return TranslateArithCondition(expr);
-
-        // Assignment: x = 5 -> $x = 5
-        if (expr.Contains('=') && !expr.Contains("==") && !expr.Contains("!=")
-            && !expr.Contains("<=") && !expr.Contains(">="))
-        {
-            return TranslateArithClause(expr, isInit: true);
-        }
-
-        // General arithmetic: x + 1 -> $x + 1
-        return PrefixBareVar(expr);
-    }
-
-    private static int FindTernaryQuestion(string expr)
-    {
-        for (int i = 0; i < expr.Length; i++)
-        {
-            if (expr[i] == '?' && i > 0 && (i + 1 >= expr.Length || expr[i + 1] != '?'))
-                return i;
-        }
-        return -1;
-    }
-
-    private static bool HasComparisonOp(string expr) =>
-        expr.Contains("==") || expr.Contains("!=")
-        || expr.Contains("<=") || expr.Contains(">=")
-        || ContainsBareComparison(expr);
-
-    private static bool ContainsBareComparison(string expr)
-    {
-        for (int i = 0; i < expr.Length; i++)
-        {
-            char c = expr[i];
-            if (c == '<' || c == '>')
-            {
-                // Skip <= >= (already checked) and << >> (shift operators)
-                if (i + 1 < expr.Length && expr[i + 1] is '=' or '<' or '>')
-                    continue;
-                if (i > 0 && expr[i - 1] is '<' or '>')
-                    continue;
-                return true;
-            }
-        }
-        return false;
-    }
 
     private static string EmitWhileCondition(Command cond)
     {
@@ -3152,16 +3124,12 @@ public static partial class PsEmitter
     /// <param name="feedFor">The loop's input, decided once the body has been emitted.</param>
     private static string EmitWhileRead(List<string> varNames, string? ifs, Func<string> emitBody, Func<ReadLoopFeed> feedFor)
     {
-        // The `read` variables are the loop bindings for this construct: register
-        // them as loop vars so the body emits them bare ($line, not $env:line) and
-        // RC-7 word-splitting does not splat them (a `read` var holds a single
-        // bound field, exactly like a for-loop variable).
-        var vars = _loopVars ??= new HashSet<string>();
-        var added = new List<string>(varNames.Count);
+        // The `read` variables are this loop's bindings. Like every shell variable they live in the store, where the
+        // body and the functions it calls read them; noted as loop variables, RC-7 word-splitting does not splat them
+        // (a `read` var holds a single bound field, exactly like a for-loop variable).
+        var entered = new List<(string Name, (bool Added, string? Captured) Entered)>(varNames.Count);
         foreach (var name in varNames)
-        {
-            if (vars.Add(name)) added.Add(name);
-        }
+            entered.Add((name, EnterLoopVariable(name)));
 
         // A real (labelled) loop, not a `ForEach-Object` pipeline: inside a ForEach-Object script
         // block `break` does not stop the pipeline — it unwinds to the nearest ENCLOSING loop, and
@@ -3181,13 +3149,12 @@ public static partial class PsEmitter
         {
             PopLoopLabel();
             _loopDepth--;
-            foreach (var name in added)
-                vars.Remove(name);
+            for (int i = entered.Count - 1; i >= 0; i--)
+                LeaveLoopVariable(entered[i].Name, entered[i].Entered);
         }
 
-        // Bind the read variable to the current line with a REAL PowerShell
-        // assignment at the top of the loop body — `${VAR} = $_`. The body already
-        // emits the read var bare (loop-var scope), so it resolves naturally. The
+        // Bind the read variable to the current line at the top of the loop body: the shell variable
+        // (BindLoopVariable), which the body reads like any other. The
         // old approach text-rewrote every `$VAR` in the emitted body to `$_`, which
         // clobbered occurrences of the name inside single-quoted PS literals (e.g. a
         // bash `'has $line literal'` that must stay literal), corrupting output.
@@ -3197,8 +3164,8 @@ public static partial class PsEmitter
         if (ifs is null || ifs.Contains('\t')) trimChars.Add("9");
         string bind = varNames.Count == 1
             ? trimChars.Count == 0
-                ? $"${{{varNames[0]}}} = $_; "
-                : $"${{{varNames[0]}}} = $_.Trim([char[]]@({string.Join(",", trimChars)})); "
+                ? BindLoopVariable(varNames[0], "$_")
+                : BindLoopVariable(varNames[0], $"$_.Trim([char[]]@({string.Join(",", trimChars)}))")
             : BuildReadFieldBindings(varNames, ifs);
 
         // The lines of one record: its BashText (null-safe), the trailing newline dropped, split.
@@ -3213,11 +3180,17 @@ public static partial class PsEmitter
         // line through the cursor every reader in the body advances too, so `read a` in the condition and `read b` in the
         // body pair the lines as in bash. A pass that took a whole record (one can carry several lines) left a body
         // reader only the records after it. The cursor is pulled per line: nothing is drained up front.
+        // The `read` that finds no more input assigns "" to its variables (`while read q; do :; done <<< x; echo "[$q]"`
+        // prints []), and a `break` leaves them as they were: the clearing ends a one-pass block that `break` leaves.
+        string atEof = string.Concat(varNames.Select(v => BindLoopVariable(v, "''")));
+        string loop;
         if (feed.Kind == ReadLoopFeedKind.Shared)
-            return $":{recLabel} while ($null -ne ({rec} = {PsBuild.SharedStdinNextLine})) {{ :{lineLabel} foreach ($_ in @({rec})) {{ {PsBuild.SetStatus(0)}; {bind}{bodyText} }} }}";
-        return feed.RecordTail is null
-            ? $":{recLabel} foreach ({rec} in {feed.Records}) {{ {inner} }}"
-            : $":{recLabel} foreach ({rec} in {feed.Records}) {{ {inner}; {feed.RecordTail} }}";
+            loop = $":{recLabel}r while ($null -ne ({rec} = {PsBuild.SharedStdinNextLine})) {{ :{lineLabel} foreach ($_ in @({rec})) {{ {PsBuild.SetStatus(0)}; {bind}{bodyText} }} }}";
+        else
+            loop = feed.RecordTail is null
+                ? $":{recLabel}r foreach ({rec} in {feed.Records}) {{ {inner} }}"
+                : $":{recLabel}r foreach ({rec} in {feed.Records}) {{ {inner}; {feed.RecordTail} }}";
+        return $":{recLabel} do {{ {loop}; {atEof}}} while ($false)";
     }
 
     /// <summary>
@@ -3262,8 +3235,7 @@ public static partial class PsEmitter
         }
         for (int i = 0; i < varNames.Count; i++)
         {
-            sb.Append($"${{{varNames[i]}}} = $(if ($__psbash_readf.Count -gt {i}) ");
-            sb.Append($"{{ $__psbash_readf[{i}] }} else {{ '' }}); ");
+            sb.Append(BindLoopVariable(varNames[i], $"$(if ($__psbash_readf.Count -gt {i}) {{ $__psbash_readf[{i}] }} else {{ '' }})"));
         }
         return sb.ToString();
     }
@@ -3304,49 +3276,8 @@ public static partial class PsEmitter
     private static string? ExtractArithVar(ArithmeticSyntax? init) =>
         init?.Root is ArithmeticExpr.Assignment assignment ? assignment.Name : null;
 
-    private static string EmitForArithClause(ArithmeticSyntax? syntax, string? initializeLoopVar)
-    {
-        if (syntax is null) return "";
-        string invocation = EmitArithmeticInvocation(syntax);
-        return initializeLoopVar is null
-            ? $"$null = {invocation}"
-            : $"${{{initializeLoopVar}}} = $({invocation})";
-    }
-
-    private static string TranslateArithClause(string clause, bool isInit)
-    {
-        clause = clause.Trim();
-        if (clause.Length == 0) return "";
-
-        // Check for increment/decrement BEFORE PrefixBareVar to get clean var name
-        if (clause.EndsWith("++") || clause.EndsWith("--"))
-        {
-            string varName = clause[..^2].Trim();
-            string varRef = varName.StartsWith('$') ? varName : ArithVarRef(varName);
-            if (IsEnvVar(varRef))
-            {
-                string delta = clause.EndsWith("++") ? "1" : "-1";
-                return $"{varRef} = [int]{varRef} + {delta}";
-            }
-            return varRef + clause[^2..];
-        }
-
-        // Convert assignment before PrefixBareVar to separate LHS from RHS
-        if (isInit && clause.Contains('=') && !clause.Contains("=="))
-        {
-            int eq = clause.IndexOf('=');
-            string varName = clause[..eq].Trim();
-            string valExpr = clause[(eq + 1)..].Trim();
-            string varRef = varName.StartsWith('$') ? varName : ArithVarRef(varName);
-            string valPart = PrefixBareVar(valExpr);
-            return $"{varRef} = {valPart}";
-        }
-
-        // Prefix bare variables with $
-        clause = PrefixBareVar(clause);
-
-        return clause;
-    }
+    private static string EmitForArithClause(ArithmeticSyntax? syntax)
+        => syntax is null ? "" : $"$null = {EmitArithmeticInvocation(syntax)}";
 
     /// <summary>
     /// Condition clause of a C-style <c>for ((init; cond; step))</c> header.
@@ -3362,73 +3293,6 @@ public static partial class PsEmitter
     /// </summary>
     private static string EmitForArithCondition(ArithmeticSyntax? syntax) =>
         syntax is null ? "" : EmitArithConditionExpr(syntax);
-
-    private static string TranslateArithCondition(string cond)
-    {
-        cond = cond.Trim();
-        if (cond.Length == 0) return "";
-
-        // Replace multi-char operators before single-char to avoid partial matches
-        cond = cond.Replace("<=", " -le ")
-                   .Replace(">=", " -ge ")
-                   .Replace("!=", " -ne ")
-                   .Replace("==", " -eq ");
-
-        // Handle bare < and > (not already part of -le/-ge/-ne/-eq)
-        cond = cond.Replace("<", " -lt ").Replace(">", " -gt ");
-
-        cond = PrefixBareVar(cond);
-
-        // Clean up multiple spaces
-        cond = System.Text.RegularExpressions.Regex.Replace(cond, @"\s+", " ").Trim();
-
-        return cond;
-    }
-
-    private static readonly HashSet<string> _psBuiltins = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "true", "false", "null", "HOME", "LASTEXITCODE", "PID", "args",
-    };
-
-    /// <summary>
-    /// Return the PowerShell variable reference for a bare name:
-    /// loop vars and PS builtins get <c>$name</c>, others get <c>$env:name</c>.
-    /// </summary>
-    private static string ArithVarRef(string name)
-    {
-        if (_psBuiltins.Contains(name))
-            return "$" + name;
-        if (_loopVars is not null && _loopVars.Contains(name))
-            return "$" + name;
-        return "$env:" + (EnvShadowName(name) ?? name);
-    }
-
-    private static bool IsEnvVar(string varRef) => varRef.StartsWith("$env:");
-
-    /// <summary>
-    /// Prefix bare variable names in arithmetic expressions with the correct
-    /// PowerShell variable form. Loop variables (tracked in <c>_loopVars</c>)
-    /// become <c>$var</c>; PS builtins keep <c>$var</c>; all other user
-    /// variables become <c>$env:var</c>.
-    /// Skips identifiers preceded by <c>$</c> or <c>-</c> (PowerShell operators).
-    /// </summary>
-    private static string PrefixBareVar(string expr)
-    {
-        return System.Text.RegularExpressions.Regex.Replace(
-            expr,
-            @"\b([a-zA-Z_]\w*)\b(?!\s*\()",
-            m =>
-            {
-                if (m.Index > 0 && expr[m.Index - 1] is '$' or '-')
-                    return m.Value;
-                string name = m.Value;
-                if (_psBuiltins.Contains(name))
-                    return "$" + name;
-                if (_loopVars is not null && _loopVars.Contains(name))
-                    return "$" + name;
-                return "[int]$env:" + name;
-            });
-    }
 
     /// <summary>
     /// Emit a condition expression for use inside <c>if</c>/<c>elif</c>.
@@ -4543,7 +4407,9 @@ public static partial class PsEmitter
                 continue;
             }
 
-            string varPrefix = cmd.IsLocal ? "$" : "$env:";
+            // A scalar is the shell variable unless the function holds the name as a lexical local (IFS, a local array):
+            // a top-level `local` (no function to scope it) is not a PowerShell variable either.
+            string varPrefix = cmd.IsLocal && (_lexicalLocals?.Contains(pair.Name) ?? false) ? "$" : "$env:";
 
             // Array assignment: arr=(a b c) -> $arr = @('a','b','c')
             // Array append:     arr+=('x')  -> $arr += @('x')
@@ -9161,8 +9027,9 @@ public static partial class PsEmitter
             // Glued to a literal (`ref=$ref`) a bare `$a['2']` would expand only `$a`.
             return !inDoubleQuote && elem.StartsWith('$') && !elem.StartsWith("$(") ? "$(" + elem + ")" : elem;
         }
-        // Loop variables emit as $var, not $env:var
-        if (_loopVars is not null && _loopVars.Contains(name))
+        // A function's lexical local (a local array, IFS) is its PowerShell variable; in a background job's body a loop
+        // variable is the job's copy. Any other variable, a loop variable included, is the shell variable.
+        if (IsJobCaptured(name) || (_lexicalLocals is not null && _lexicalLocals.Contains(name)))
             return $"${name}";
 
         if (arrayElem0 && _arrayVars is not null && _arrayVars.Contains(name))
@@ -9257,6 +9124,9 @@ public static partial class PsEmitter
         // (EmitSimpleVar renders it bare, `$cfg`, which the split array takes just as well as `$env:cfg`).
         if (_splitLoopVars is not null && _splitLoopVars.Contains(name))
             return true;
+        // Any other loop variable holds one already-split word (a list item, a number, a `read` field).
+        if (_storeLoopVars is not null && _storeLoopVars.Contains(name))
+            return false;
 
         // The single source of truth: a name is RC-7-splat-eligible iff
         // EmitSimpleVar would render it as `$env:NAME`. Loop vars, special
@@ -11276,7 +11146,7 @@ public static partial class PsEmitter
     {
         // Emit ${name} or ${env:name} with braces to prevent PS drive-reference misparse.
         name = ResolveNameref(name);
-        if (_loopVars is not null && _loopVars.Contains(name))
+        if (IsJobCaptured(name) || (_lexicalLocals is not null && _lexicalLocals.Contains(name)))
             return $"${{{name}}}";
 
         var special = PsBuild.TryMapSpecialVar(name, braced: true, inDoubleQuote: true);

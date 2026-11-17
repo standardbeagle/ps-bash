@@ -99,10 +99,10 @@ public class InvokeBashLetCommandTests : IClassFixture<SharedPwshFixture>
     }
 
     [Fact]
-    public void Let_VariableLookup_ReadsCallerScope()
+    public void Let_VariableLookup_ReadsTheShellVariables()
     {
         var v = RunAndReadIntVar(
-            "$a = 10; $b = 3; Invoke-BashLet 'c=a*b+1'",
+            "$env:a = '10'; $env:b = '3'; try { Invoke-BashLet 'c=a*b+1' } finally { $env:a = $null; $env:b = $null }",
             "c");
         Assert.Equal(31L, v);
     }

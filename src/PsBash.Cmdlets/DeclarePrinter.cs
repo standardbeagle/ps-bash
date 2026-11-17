@@ -26,18 +26,9 @@ internal static class DeclarePrinter
             return true;
         }
 
-        object? val = null;
-        try
-        {
-            // The caller's own scope first: inside a subshell / function block the array is a local, not a global.
-            val = cmdlet.GetVariableValue(name) ?? cmdlet.SessionState.PSVariable.GetValue($"global:{name}");
-        }
-        catch
-        {
-            // Not a variable name PowerShell accepts; fall through to the environment.
-        }
-
-        val ??= BashVariableStore.Get(name);
+        // An array as the caller's scope sees it (inside a subshell / function block it is a local), else the shell
+        // variable.
+        object? val = BashVariableLookup.ArrayHolder(cmdlet.SessionState, name) ?? BashVariableStore.Get(name);
         if (val is null)
         {
             // `readonly nv` / `declare -i nv` with no value: the name exists, unset, with its attributes (bash: `declare -r nv`).

@@ -1,0 +1,27 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 298
+stdout-length: 76
+stderr-length: 0
+==== SCRIPT ====
+gs() { q=5; }
+ga() { (( q = 6 )); }
+gr() { read q <<< 7; }
+gp() { printf -v q '%s' 8; }
+gl() { let q=9; }
+gx() { q+=x; }
+gu() { unset q; }
+show() { echo "$1 [$q] $((q+0)) ${q:-empty}"; }
+for ((q = 0; q < 1; q++)); do for w in gs ga gr gp gl gx; do q=0; $w; show $w; done; q=0; done; echo "end [$q]"
+==== STDOUT ====
+gs [5] 5 5
+ga [6] 6 6
+gr [7] 7 7
+gp [8] 8 8
+gl [9] 9 9
+gx [0x] 0 0x
+end [1]
+
+==== STDERR ====
+

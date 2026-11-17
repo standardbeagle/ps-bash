@@ -228,8 +228,7 @@ public sealed class InvokeBashMapfileCommand : PSCmdlet
         if (originGiven)
         {
             var entries = new List<object?>();
-            object? existing = SessionState.PSVariable.GetValue(varName);
-            if (existing is PSObject pso) existing = pso.BaseObject;
+            object? existing = BashVariableLookup.ArrayHolder(SessionState, varName) ?? BashVariableLookup.Scalar(SessionState, varName);
             if (existing is BashSparseArray sparse)
                 foreach (System.Collections.DictionaryEntry kv in sparse) { entries.Add(kv.Key); entries.Add(kv.Value); }
             else if (existing is System.Collections.IList list)
@@ -244,12 +243,7 @@ public sealed class InvokeBashMapfileCommand : PSCmdlet
             result = lines.ToArray();
         }
 
-        // Set the variable in the caller's scope. The psm1 oracle used
-        // `Set-Variable -Name $varName -Value $result` with no -Scope flag,
-        // which in a function body defaults to the caller's scope. For a
-        // binary cmdlet, SessionState.PSVariable.Set has the same effect
-        // (sets the variable in the runspace's current scope, which is the
-        // caller's scope when called from a script / interactive session).
-        FileSystemHelpers.SetShellVariable(SessionState, varName, result);
+        // The array variable in the scope that owns it, else a global (BashVariableLookup.SetArray).
+        BashVariableLookup.SetArray(SessionState, varName, result);
     }
 }

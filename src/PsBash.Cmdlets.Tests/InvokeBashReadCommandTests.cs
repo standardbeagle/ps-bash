@@ -27,7 +27,7 @@ public class InvokeBashReadCommandTests : IClassFixture<SharedPwshFixture>
         pwsh.AddScript(script).Invoke();
         pwsh.Commands.Clear();
         var result = pwsh.AddScript(
-            $"$v = Get-Variable -Name '{varName}' -ValueOnly -ErrorAction SilentlyContinue; " +
+            $"$v = [PsBash.Cmdlets.BashVariableLookup]::Scalar($ExecutionContext.SessionState, '{varName}'); " +
             "if ($null -eq $v) { return } " +
             "Write-Output ($v -as [string])").Invoke();
         pwsh.Commands.Clear();
@@ -75,7 +75,7 @@ public class InvokeBashReadCommandTests : IClassFixture<SharedPwshFixture>
             "$global:__BashStdIn = [System.Collections.Generic.Queue[object]]::new(); " +
             "$global:__BashStdIn.Enqueue(\"a`nb`nc\"); $global:__BashStdIn.Enqueue('d'); " +
             "Invoke-BashRead x; Invoke-BashRead y; " +
-            "\"x=$x y=$y\"; " +
+            "\"x=$env:x y=$env:y\"; $env:x = $null; $env:y = $null; " +
             "& { while ($global:__BashStdIn -and $global:__BashStdIn.Count -gt 0) { $global:__BashStdIn.Dequeue() } }");
 
         Assert.Equal(new[] { "x=a y=b", "c", "d" }, lines);
@@ -91,7 +91,7 @@ public class InvokeBashReadCommandTests : IClassFixture<SharedPwshFixture>
         var lines = RunLines(
             "$global:__BashStdIn = [System.Collections.Generic.Queue[object]]::new(); " +
             "$global:__BashStdIn.Enqueue(\"1`n2`n3`n4`n\"); " +
-            "while ($null -ne ($a = [PsBash.Cmdlets.SharedStdinLine]::Next($global:__BashStdIn))) { Invoke-BashRead b; \"$a-$b\" }");
+            "while ($null -ne ($a = [PsBash.Cmdlets.SharedStdinLine]::Next($global:__BashStdIn))) { Invoke-BashRead b; \"$a-$env:b\" }; $env:b = $null");
 
         Assert.Equal(new[] { "1-2", "3-4" }, lines);
     }
@@ -120,8 +120,8 @@ public class InvokeBashReadCommandTests : IClassFixture<SharedPwshFixture>
         var lines = RunLines(
             "$global:__BashStdIn = [System.Collections.Generic.Queue[object]]::new(); " +
             "$global:__BashStdIn.Enqueue(\"1`n\"); " +
-            "Invoke-BashRead b; Invoke-BashRead b; \"[$b] $global:LASTEXITCODE\"; " +
-            "$y = 'old'; $z = 'old'; Invoke-BashRead y z; \"[$y][$z]\"");
+            "Invoke-BashRead b; Invoke-BashRead b; \"[$env:b] $global:LASTEXITCODE\"; " +
+            "$env:y = 'old'; $env:z = 'old'; Invoke-BashRead y z; \"[$env:y][$env:z]\"; $env:b = $null; $env:y = $null; $env:z = $null");
 
         Assert.Equal(new[] { "[] 1", "[][]" }, lines);
     }
@@ -134,7 +134,7 @@ public class InvokeBashReadCommandTests : IClassFixture<SharedPwshFixture>
         var lines = RunLines(
             "$global:__BashStdIn = [System.Collections.Generic.Queue[object]]::new(); " +
             "$global:__BashStdIn.Enqueue([PsBash.Cmdlets.BashRuntime]::TextRecord('abc', $true)); " +
-            "Invoke-BashRead -n 2 x; \"x=$x\"; " +
+            "Invoke-BashRead -n 2 x; \"x=$env:x\"; $env:x = $null; " +
             "$rest = $global:__BashStdIn.Dequeue(); " +
             "\"rest=$([PsBash.Cmdlets.BashRuntime]::GetBashText($rest)) unterminated=$([PsBash.Cmdlets.BashRuntime]::IsUnterminated($rest))\"");
 
@@ -148,7 +148,7 @@ public class InvokeBashReadCommandTests : IClassFixture<SharedPwshFixture>
         var lines = RunLines(
             "$global:__BashStdIn = [System.Collections.Generic.Queue[object]]::new(); " +
             "$global:__BashStdIn.Enqueue(\"abc`n\"); $global:__BashStdIn.Enqueue(\"def`n\"); " +
-            "Invoke-BashRead -n 2 x; Invoke-BashRead y; Invoke-BashRead z; \"x=$x y=$y z=$z\"");
+            "Invoke-BashRead -n 2 x; Invoke-BashRead y; Invoke-BashRead z; \"x=$env:x y=$env:y z=$env:z\"; $env:x = $null; $env:y = $null; $env:z = $null");
 
         Assert.Equal(new[] { "x=ab y=c z=def" }, lines);
     }
@@ -164,7 +164,7 @@ public class InvokeBashReadCommandTests : IClassFixture<SharedPwshFixture>
             "$global:__BashStdIn.Enqueue('a'); $global:__BashStdIn.Enqueue('b'); " +
             "$job = [PsBash.Cmdlets.BackgroundJobStdin]::Inherit($ExecutionContext.SessionState); " +
             "\"same=$([object]::ReferenceEquals($job, $global:__BashStdIn)) type=$($job.GetType().Name)\"; " +
-            "\"job=$($job.Dequeue())\"; Invoke-BashRead x; \"shell=$x left=$($job.Count)\"; " +
+            "\"job=$($job.Dequeue())\"; Invoke-BashRead x; \"shell=$env:x left=$($job.Count)\"; $env:x = $null; " +
             "$global:__BashStdIn = [PsBash.Core.StdinCursor]::new([object[]]@('s')); " +
             "\"cursor-shared=$([object]::ReferenceEquals([PsBash.Cmdlets.BackgroundJobStdin]::Inherit($ExecutionContext.SessionState), $global:__BashStdIn))\"; " +
             "$global:__BashStdIn = [PsBash.Core.StdinCursor]@{ IsShellStdin = $true }; $global:__BashStdIn.Enqueue('own'); " +
@@ -246,11 +246,8 @@ public class InvokeBashReadCommandTests : IClassFixture<SharedPwshFixture>
         var pwsh = _fixture.AcquireFresh();
         pwsh.AddScript("'a b c d' | Invoke-BashRead v1 v2").Invoke();
         pwsh.Commands.Clear();
-        var v1 = pwsh.AddScript("$v1").Invoke();
-        pwsh.Commands.Clear();
-        var v2 = pwsh.AddScript("$v2").Invoke();
-        Assert.Equal("a", v1[0]?.ToString());
-        Assert.Equal("b c d", v2[0]?.ToString());
+        var vs = pwsh.AddScript("$env:v1; $env:v2; $env:v1 = $null; $env:v2 = $null").Invoke();
+        Assert.Equal(new[] { "a", "b c d" }, vs.Select(o => o?.ToString()));
     }
 
     [Fact]
@@ -310,14 +307,8 @@ public class InvokeBashReadCommandTests : IClassFixture<SharedPwshFixture>
             "$env:IFS = ','; try { '1,2,3' | Invoke-BashRead v1 v2 v3 } finally { Remove-Item Env:\\IFS }")
             .Invoke();
         pwsh.Commands.Clear();
-        var v1 = pwsh.AddScript("$v1").Invoke();
-        pwsh.Commands.Clear();
-        var v2 = pwsh.AddScript("$v2").Invoke();
-        pwsh.Commands.Clear();
-        var v3 = pwsh.AddScript("$v3").Invoke();
-        Assert.Equal("1", v1[0]?.ToString());
-        Assert.Equal("2", v2[0]?.ToString());
-        Assert.Equal("3", v3[0]?.ToString());
+        var vs = pwsh.AddScript("$env:v1; $env:v2; $env:v3; $env:v1 = $null; $env:v2 = $null; $env:v3 = $null").Invoke();
+        Assert.Equal(new[] { "1", "2", "3" }, vs.Select(o => o?.ToString()));
     }
 
     [Fact]
@@ -329,11 +320,8 @@ public class InvokeBashReadCommandTests : IClassFixture<SharedPwshFixture>
             "$env:IFS = ','; try { '1,2,3' | Invoke-BashRead a b } finally { Remove-Item Env:\\IFS }")
             .Invoke();
         pwsh.Commands.Clear();
-        var a = pwsh.AddScript("$a").Invoke();
-        pwsh.Commands.Clear();
-        var b = pwsh.AddScript("$b").Invoke();
-        Assert.Equal("1", a[0]?.ToString());
-        Assert.Equal("2,3", b[0]?.ToString());
+        var ab = pwsh.AddScript("$env:a; $env:b; $env:a = $null; $env:b = $null").Invoke();
+        Assert.Equal(new[] { "1", "2,3" }, ab.Select(o => o?.ToString()));
     }
 
     // ---- oils builtin-read gaps (oracle: bash 5.2) ----
@@ -348,7 +336,7 @@ public class InvokeBashReadCommandTests : IClassFixture<SharedPwshFixture>
     [Fact]
     public void Read_NoNames_KeepsLeadingAndTrailingWhitespaceInReply()
     {
-        Assert.Equal("  a b  ", ReadVariable("Remove-Variable REPLY -Scope Global -ErrorAction SilentlyContinue; '  a b  ' | Invoke-BashRead", "REPLY"));
+        Assert.Equal("  a b  ", ReadVariable("$env:REPLY = $null; '  a b  ' | Invoke-BashRead", "REPLY"));
         Assert.Equal("a b", ReadVariable("'  a b  ' | Invoke-BashRead myvar", "myvar"));
     }
 
@@ -377,14 +365,14 @@ public class InvokeBashReadCommandTests : IClassFixture<SharedPwshFixture>
     [Fact]
     public void Read_ExactCount_IgnoresTheDelimiterButMaxCountStopsAtIt()
     {
-        Assert.Equal("fooba", ReadVariable("'foobar' | Invoke-BashRead -N 5 -d b; $r=$REPLY; Remove-Variable REPLY -Scope Global; Set-Variable out $r -Scope Global", "out"));
-        Assert.Equal("foo", ReadVariable("'foobar' | Invoke-BashRead -n 5 -d b; $r=$REPLY; Remove-Variable REPLY -Scope Global; Set-Variable out $r -Scope Global", "out"));
+        Assert.Equal("fooba", ReadVariable("'foobar' | Invoke-BashRead -N 5 -d b; $env:out = $env:REPLY; $env:REPLY = $null", "out"));
+        Assert.Equal("foo", ReadVariable("'foobar' | Invoke-BashRead -n 5 -d b; $env:out = $env:REPLY; $env:REPLY = $null", "out"));
     }
 
     [Fact]
     public void Read_TimeoutZero_OnlyTestsForInputAndConsumesNothing()
     {
-        Assert.Equal("", ReadVariable("Remove-Variable REPLY -Scope Global -ErrorAction SilentlyContinue; 'foo' | Invoke-BashRead -t 0", "REPLY"));
+        Assert.Equal("", ReadVariable("$env:REPLY = $null; 'foo' | Invoke-BashRead -t 0", "REPLY"));
     }
 
     [Fact]
@@ -413,7 +401,7 @@ public class InvokeBashReadCommandTests : IClassFixture<SharedPwshFixture>
         // value because the explicit name argument was rejected before
         // even being treated as a name fallback".
         var v = ReadVariable(
-            "Remove-Variable REPLY -Scope Global -ErrorAction SilentlyContinue; 'value' | Invoke-BashRead \"`$(throw 'pwn')\"",
+            "$env:REPLY = $null; 'value' | Invoke-BashRead \"`$(throw 'pwn')\"",
             "REPLY");
         Assert.True(string.IsNullOrEmpty(v),
             "REPLY should not be assigned when the name argument is rejected");

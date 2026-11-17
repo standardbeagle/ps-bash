@@ -124,8 +124,7 @@ function Expand-BashSubscriptWord([string]$Text) {
         if ($c -eq [char]'$' -and $Text.Substring($i) -match '^\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))') {
             $vn = if ($Matches[1]) { $Matches[1] } else { $Matches[2] }
             $i += $Matches[0].Length - 1
-            $ev = [System.Environment]::GetEnvironmentVariable($vn)
-            if ($null -eq $ev) { $pv = Get-Variable -Name $vn -ValueOnly -Scope Global -ErrorAction Ignore; $ev = if ($pv -is [array]) { $pv[0] } elseif ($pv -is [System.Collections.IDictionary]) { $pv['0'] } else { $pv } }
+            $ev = [PsBash.Cmdlets.BashVariableLookup]::Scalar($ExecutionContext.SessionState, $vn)
             [void]$sb.Append([string]$ev)
             continue
         }
@@ -140,11 +139,11 @@ function Get-BashIndirectValue {
     if ($null -eq $Ref -and $RefName -match '^([A-Za-z_][A-Za-z0-9_]*)\[') {
         # `${!a[1]}` / `${!a[@]-d}`: a missing element (or no elements) is an unset name, quietly; only an unset ARRAY
         # is "a[1]: invalid indirect expansion".
-        $refSet = $null -ne (Get-Variable -Name $Matches[1] -ErrorAction Ignore) -or $null -ne [System.Environment]::GetEnvironmentVariable($Matches[1])
+        $refSet = [PsBash.Cmdlets.BashVariableLookup]::IsSet($ExecutionContext.SessionState, $Matches[1])
         if ($refSet) { return $null }
     }
     elseif ($null -eq $Ref -and $RefName) {
-        $rv = Get-Variable -Name $RefName -ValueOnly -ErrorAction Ignore
+        $rv = [PsBash.Cmdlets.BashVariableLookup]::ArrayHolder($ExecutionContext.SessionState, $RefName)
         if ($null -ne $rv) { $refSet = $true; $Ref = if ($rv -is [System.Collections.IDictionary]) { $rv['0'] } elseif ($rv -is [array]) { $rv[0] } else { $rv } }
     }
     if ($null -eq $Ref -and $RefName -eq 'OPTIND') { $Ref = '1' }
@@ -182,7 +181,7 @@ function Get-BashIndirectValue {
     if ($n -eq 'OPTIND' -and $null -eq [System.Environment]::GetEnvironmentVariable('OPTIND') -and $null -eq (Get-Variable -Name OPTIND -ValueOnly -ErrorAction Ignore)) { return '1' }
     # A subscript that leaves a quote open (`a[1"]`) is no array reference: "invalid variable name" below.
     if ($n -match '^([A-Za-z_][A-Za-z0-9_]*)\[(.*)\]$' -and [PsBash.Cmdlets.BashSubscriptExpansion]::QuotesBalanced($Matches[2])) {
-        $v = Get-Variable -Name $Matches[1] -ValueOnly -ErrorAction Ignore
+        $v = [PsBash.Cmdlets.BashVariableLookup]::ArrayHolder($ExecutionContext.SessionState, $Matches[1])
         $rawSub = $Matches[2]
         $sub = $rawSub.Trim('"', "'")
         if ($null -eq $v) { return $null }
@@ -243,12 +242,8 @@ function Get-BashIndirectValue {
         'PPID' { return [string](Get-Process -Id $PID -ErrorAction SilentlyContinue).Parent.Id }
         { $_ -eq 'UID' -or $_ -eq 'EUID' } { return [string]$(if ($IsWindows) { [long][System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value.Split('-')[-1] } else { [long](id -u) }) }
     }
-    $e = [System.Environment]::GetEnvironmentVariable($n)
-    if ($null -ne $e) { return $e }
-    $pv = Get-Variable -Name $n -ValueOnly -ErrorAction Ignore
-    if ($pv -is [System.Collections.IDictionary]) { return $pv['0'] }
-    if ($pv -is [array]) { return $pv[0] }
-    $pv
+    # One chain: the shell variable, or element 0 of the array the name holds (environment-model.md section 8).
+    [PsBash.Cmdlets.BashVariableLookup]::Scalar($ExecutionContext.SessionState, $n)
 }
 
 # A failed word expansion that does not end a script (a bad substitution): report it, status 1, and mark the command
@@ -3135,7 +3130,8 @@ function Invoke-BashBackground {
         # The emitter found the job able to change shell state (assignments, cd, options, functions): it
         # must not share this process's environment and cwd, so it gets a host of its own.
         [switch]$Isolated,
-        # For-loop variables the body reads, as of the launch (the loop moves on before the job runs).
+        # Loop variables the body reads, as of the launch (the loop moves on before the job runs): the body reads
+        # them as $name, and an in-process job's cmdlets (arithmetic) through BashVariableStore's job snapshot.
         [hashtable]$Vars,
         # The emitter found the job's stdout/stderr to be the shell's own (no enclosing redirect, pipe, command
         # substitution or function): where the host provides the session's output mux, the job writes there live
@@ -3190,13 +3186,15 @@ function Invoke-BashBackground {
     # changes nothing undid the parent's assignments. It also reports the body's exit status for `wait`.
     $status = [hashtable]::Synchronized(@{ Code = 0; At = 0L })
     $wrapped = @'
-param($__bgStatus, $__bgRestore, $__bgStdin)
+param($__bgStatus, $__bgRestore, $__bgStdin, $__bgVars)
 # A subshell body's state restore must not touch the process-wide variables the parent shares (BashShellState.Restore).
 $global:__psbashBgRunspace = $true
 # The job's stdin is the stdin of the compound command that started it, shared with the shell (BackgroundJobStdin).
 $global:__BashStdIn = $__bgStdin
 # The job body is transpiled bash, whose operands the shell already globbed (FileSystemHelpers.OperandsShellExpanded).
 $global:__BashOperandsExpanded = $true
+# The loop variables the body reads, as of the launch: the loop goes on writing the environment this job shares.
+[PsBash.Cmdlets.BashVariableStore]::EnterJobSnapshot($__bgVars)
 $__bgBefore =if ($__bgRestore) { [Environment]::GetEnvironmentVariables() } else { @{} }
 $__bgOk = $false
 try {
@@ -3222,13 +3220,14 @@ try {
             [Environment]::SetEnvironmentVariable($__bgKey, $__bgOld)
         }
     }
-    # A pooled runspace must not keep the cursor for the next job.
+    # A pooled runspace must not keep the cursor (or the launch-time variables) for the next job.
     $global:__BashStdIn = $null
+    [PsBash.Cmdlets.BashVariableStore]::LeaveJobSnapshot()
     $__bgStatus.Code = $__bgCode
     $__bgStatus.At = [System.Diagnostics.Stopwatch]::GetTimestamp()
 }
 '@
-    [void]$ps.AddScript($wrapped).AddArgument($status).AddArgument([bool]$Isolated).AddArgument([PsBash.Cmdlets.BackgroundJobStdin]::Inherit($ExecutionContext.SessionState))
+    [void]$ps.AddScript($wrapped).AddArgument($status).AddArgument([bool]$Isolated).AddArgument([PsBash.Cmdlets.BackgroundJobStdin]::Inherit($ExecutionContext.SessionState)).AddArgument($Vars)
 
     $synthId = $script:BashBgNextId
     $script:BashBgNextId++

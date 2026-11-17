@@ -35,14 +35,41 @@ public static class BashVariableStore
 {
     /// <summary>Read a bash variable. Null when unset (bash's "unset" — distinct
     /// from set-to-empty, which the <c>${VAR-word}</c> operators rely on).</summary>
-    public static string? Get(string name) => Environment.GetEnvironmentVariable(name);
+    public static string? Get(string name)
+        => t_jobSnapshot is { } snapshot && snapshot.TryGetValue(name, out var held)
+            ? held
+            : Environment.GetEnvironmentVariable(name);
 
     /// <summary>
     /// Write a bash variable. A null <paramref name="value"/> UNSETS it (the
     /// .NET convention, and what <c>unset</c> / an env-prefix restore needs).
     /// </summary>
     public static void Set(string name, string? value)
-        => Environment.SetEnvironmentVariable(name, value);
+    {
+        if (t_jobSnapshot is { } snapshot && snapshot.ContainsKey(name)) { snapshot[name] = value; return; }
+        Environment.SetEnvironmentVariable(name, value);
+    }
+
+    // The variables an in-process background job was handed at launch (`for j in 1 2; do echo $((j * 10)) & done`):
+    // the job runs on a pool thread while the loop goes on writing the process environment both share, so the job
+    // reads and writes its own copy of these names (environment-model.md section 8).
+    [ThreadStatic] private static Dictionary<string, string?>? t_jobSnapshot;
+
+    /// <summary>
+    /// On the thread running an in-process background job: <paramref name="vars"/> (name to value at launch, from
+    /// <c>Invoke-BashBackground -Vars</c>) answer for those names until <see cref="LeaveJobSnapshot"/>.
+    /// </summary>
+    public static void EnterJobSnapshot(IDictionary? vars)
+    {
+        if (vars is null || vars.Count == 0) { t_jobSnapshot = null; return; }
+        var snapshot = new Dictionary<string, string?>(StringComparer.Ordinal);
+        foreach (DictionaryEntry e in vars)
+            if (e.Key is string key) snapshot[key] = e.Value?.ToString();
+        t_jobSnapshot = snapshot;
+    }
+
+    /// <summary>Ends <see cref="EnterJobSnapshot"/> (a pooled thread runs the next job without it).</summary>
+    public static void LeaveJobSnapshot() => t_jobSnapshot = null;
 
     /// <summary>Every bash variable currently set, for <c>env</c> / <c>printenv</c>.</summary>
     public static IEnumerable<KeyValuePair<string, string>> Enumerate()

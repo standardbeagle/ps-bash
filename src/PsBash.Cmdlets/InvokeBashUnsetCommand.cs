@@ -74,10 +74,10 @@ public sealed class InvokeBashUnsetCommand : PSCmdlet
             expanded = true;
         }
 
-        var value = SessionState.PSVariable.GetValue(baseName);
+        var value = BashVariableLookup.ArrayHolder(SessionState, baseName);
         long ReadNumber(string n)
         {
-            var raw = SessionState.PSVariable.GetValue(n)?.ToString() ?? BashVariableStore.Get(n);
+            var raw = BashVariableLookup.Scalar(SessionState, n);
             return long.TryParse(raw?.Trim(), out var v) ? v : 0;
         }
         if (value is BashSparseArray sparse && (long.TryParse(key, out var sparseIdx) || TryEvaluate(key, ReadNumber, out sparseIdx)))
@@ -95,7 +95,7 @@ public sealed class InvokeBashUnsetCommand : PSCmdlet
         {
             // `unset "m[$k]"` arrives already expanded; a quoted `$k` is expanded here.
             dict.Remove(expanded ? key : System.Text.RegularExpressions.Regex.Replace(key, @"\$\{?(\w+)\}?",
-                m => SessionState.PSVariable.GetValue(m.Groups[1].Value)?.ToString() ?? BashVariableStore.Get(m.Groups[1].Value) ?? ""));
+                m => BashVariableLookup.Scalar(SessionState, m.Groups[1].Value) ?? ""));
             return true;
         }
         // An indexed array's subscript is an arithmetic expression (`unset 'stack[n-1]'`).
@@ -130,8 +130,7 @@ public sealed class InvokeBashUnsetCommand : PSCmdlet
                     replacement = sp;
                 }
                 // Through the owning scope's variable, so a function unsetting a global array's element reaches the caller.
-                if (SessionState.PSVariable.Get(baseName) is { } owner) owner.Value = replacement;
-                else SessionState.PSVariable.Set(baseName, replacement);
+                BashVariableLookup.ReplaceArray(SessionState, baseName, replacement);
             }
             return true;
         }

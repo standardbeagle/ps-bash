@@ -16,7 +16,7 @@ Nav starts at /CODE_MAP.md. Keep this index complete — a guard test fails on a
 - [cwd-awareness.md](cwd-awareness.md) — CWD-Aware History Design
 - [design-decisions.md](design-decisions.md) — Design Decisions and Rationale
 - [emitter-strategy.md](emitter-strategy.md) — Emitter Strategy Specification
-- [environment-model.md](environment-model.md) — shell variables, the export attribute (`ShellExports`), and how a child's environment is built
+- [environment-model.md](environment-model.md) — shell variables, the export attribute (`ShellExports`), how a child's environment is built, and one storage per variable (`BashVariableLookup`, §8)
 - [error-handling.md](error-handling.md) — Error Handling Specification
 - [flagspec-extraction.md](flagspec-extraction.md) — FlagSpecs Extraction Plan
 - [frecency-jump.md](frecency-jump.md) — Frecency Directory Jump (zoxide-style `z` / `zi`)

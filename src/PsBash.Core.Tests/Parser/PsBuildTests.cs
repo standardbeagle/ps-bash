@@ -458,6 +458,12 @@ public class PsBuildTests
     public void SetCallLine_RecordsTheStatementLineForBashLineno()
         => Assert.Equal("[PsBash.Cmdlets.VarFrameStack]::SetLine(7); ", PsBuild.SetCallLine(7));
 
+    // A loop's binding writes the shell variable only, quoting the name and stringifying the value.
+    [Fact]
+    public void SetShellScalar_WritesTheShellVariableAsAString()
+        => Assert.Equal("[System.Environment]::SetEnvironmentVariable('it''s', [string]($__psbash_lv0))",
+            PsBuild.SetShellScalar("it's", "$__psbash_lv0"));
+
     [Fact]
     public void ErrTrapCheck_DoesNotRunTheActionInsideItself()
     {

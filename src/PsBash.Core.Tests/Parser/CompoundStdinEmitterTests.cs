@@ -124,7 +124,7 @@ public class CompoundStdinEmitterTests
         // runs in a process block, behind the gate that stops the producer once the loop is done.
         Assert.Contains("| " + PsBuild.PipeGate + " | & { begin { $__psbash_wg0 = [PsBash.Cmdlets.BashPipeGate]::Claim()", ps);
         Assert.Contains("process { if ($__psbash_wg0.Done) { return }", ps);
-        Assert.Contains(":__psbash_l0 foreach ($__psbash_rec0 in @($_))", ps);
+        Assert.Contains(":__psbash_l0r foreach ($__psbash_rec0 in @($_))", ps);
         Assert.DoesNotContain("in $input", ps);
         Assert.DoesNotContain("__BashStdIn", ps);
     }

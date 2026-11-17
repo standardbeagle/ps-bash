@@ -504,14 +504,19 @@ public sealed class InvokeBashReadCommand : PSCmdlet
     }
 
     /// <summary>
-    /// Assign value to a variable in the caller's scope plus the process
-    /// environment block (oracle parity — the psm1 oracle set both
-    /// <c>Set-Variable</c> and <c>Set-Item Env:NAME</c>, so subsequent
-    /// <c>$env:NAME</c> expansions in transpiled bash see the value).
+    /// Assign the read value: a scalar to the shell variable (or element 0 of the array the name holds), an array
+    /// (<c>-a</c>) to the array variable. Never a scalar PowerShell copy: one storage per variable
+    /// (environment-model.md section 8); a function-scope copy outlived the function's <c>local</c>.
     /// </summary>
     private void AssignVariable(string name, object value)
     {
-        FileSystemHelpers.SetShellVariable(SessionState, name, value);
+        if (value is string scalarValue)
+        {
+            try { BashVariableLookup.SetScalar(SessionState, name, scalarValue); }
+            catch { /* env-set may fail for restricted names; non-fatal */ }
+            return;
+        }
+        BashVariableLookup.SetArray(SessionState, name, value);
         // Mirror the oracle's Set-Item Env:$name slice. For array values,
         // join with spaces — bash exports arrays as scalars too.
         string envVal = value switch

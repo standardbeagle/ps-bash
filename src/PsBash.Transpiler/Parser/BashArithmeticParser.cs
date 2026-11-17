@@ -413,6 +413,8 @@ public sealed class BashArithmeticParser
                 throw new BashArithmeticParseException($"invalid arithmetic base in '{token}'");
             return ParseDigits(token[(hash + 1)..], radix, token, true);
         }
+        // A bare `0x` (no hex digits) is 0 in bash, not an error: `q=0x; echo $((q+0))` prints 0.
+        if (token.Length == 2 && token.StartsWith("0x", StringComparison.OrdinalIgnoreCase)) return 0;
         if (token.StartsWith("0x", StringComparison.OrdinalIgnoreCase)) return ParseDigits(token[2..], 16, token, false);
         if (token.Length > 1 && token[0] == '0') return ParseDigits(token, 8, token, false);
         if (!long.TryParse(token, NumberStyles.None, CultureInfo.InvariantCulture, out long value))

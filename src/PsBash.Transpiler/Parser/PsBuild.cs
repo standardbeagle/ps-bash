@@ -1200,6 +1200,14 @@ public static class PsBuild
     public static string RestoreLocal(string name)
         => "$env:" + name + " = [PsBash.Cmdlets.VarFrameStack]::LeaveLocal(" + SingleQuote(name) + ", $__lsd_" + name + ".v, $env:" + name + ")";
 
+    /// <summary>
+    /// A loop binds its variable for one pass: the shell variable (its one storage, environment-model.md section 8),
+    /// set to <paramref name="valueExpr"/> as a string. Through .NET directly: a fifth of the cost of a
+    /// <c>$env:name =</c> provider write, which a loop pays on every pass.
+    /// </summary>
+    public static string SetShellScalar(string name, string valueExpr)
+        => "[System.Environment]::SetEnvironmentVariable(" + SingleQuote(name) + ", [string](" + valueExpr + "))";
+
     /// <summary><c>typeset +n name</c>: no longer a nameref; the variable takes the reference's target name as its value.</summary>
     public static string ClearNameref(string name)
         => "$env:" + name + " = [PsBash.Cmdlets.BashShellState]::ClearNameref(" + SingleQuote(name) + ", $env:" + name + ")";

@@ -111,12 +111,15 @@ public class InvokeBashDeclareCommandTests : IClassFixture<SharedPwshFixture>
         Assert.DoesNotContain(Texts(r), l => l.Contains("Show-BashHelp", StringComparison.Ordinal));
     }
 
+    // A scalar is the shell variable (environment-model.md section 8). In a plain PowerShell (no shell start) every
+    // variable set in the environment counts as exported (ShellExports), hence -x; the unexported `declare --` form
+    // runs through the host in Differential VariableScopeChainTests and the spec suite.
     [Fact]
     public void DeclareP_Variable_PrintsADeclareLine()
     {
-        var r = Run("$global:psbvar_x = '1'; Invoke-BashDeclare '-p' psbvar_x").AssertSuccess();
+        var r = Run("& { $env:psbvar_x = '1'; try { Invoke-BashDeclare '-p' psbvar_x } finally { $env:psbvar_x = $null } }").AssertSuccess();
 
-        Assert.Equal(new[] { "declare -- psbvar_x=\"1\"" }, Texts(r));
+        Assert.Equal(new[] { "declare -x psbvar_x=\"1\"" }, Texts(r));
     }
 
     // Oracle: bash prints arrays as `declare -a a=([0]="1" [1]="2 3")` and escapes `"` `\` `$` in values.
@@ -139,18 +142,18 @@ public class InvokeBashDeclareCommandTests : IClassFixture<SharedPwshFixture>
     [Fact]
     public void DeclareP_ValueWithQuoteAndDollar_IsEscaped()
     {
-        var r = Run("$global:psbq = 'a\"b$c'; Invoke-BashDeclare '-p' psbq").AssertSuccess();
+        var r = Run("& { $env:psbq = 'a\"b$c'; try { Invoke-BashDeclare '-p' psbq } finally { $env:psbq = $null } }").AssertSuccess();
 
-        Assert.Equal(new[] { "declare -- psbq=\"a\\\"b\\$c\"" }, Texts(r));
+        Assert.Equal(new[] { "declare -x psbq=\"a\\\"b\\$c\"" }, Texts(r));
     }
 
     [Fact]
     public void DeclareP_DirectCall_DecoySwitchStillWorks()
     {
         // Pester / interactive PowerShell bind a bare -p to the P decoy (-p prefix-matches -PipelineVariable).
-        var r = Run("$global:psbvar_y = 'v'; Invoke-BashDeclare -p psbvar_y").AssertSuccess();
+        var r = Run("& { $env:psbvar_y = 'v'; try { Invoke-BashDeclare -p psbvar_y } finally { $env:psbvar_y = $null } }").AssertSuccess();
 
-        Assert.Equal(new[] { "declare -- psbvar_y=\"v\"" }, Texts(r));
+        Assert.Equal(new[] { "declare -x psbvar_y=\"v\"" }, Texts(r));
     }
 
     [Fact]
@@ -169,7 +172,7 @@ public class InvokeBashDeclareCommandTests : IClassFixture<SharedPwshFixture>
     [Fact]
     public void DeclareF_Output_IsNewlineTerminated()
     {
-        var output = _fixture.AcquireFresh().AddScript("$global:psbvar_z = '1'; Invoke-BashDeclare '-p' psbvar_z").Invoke();
+        var output = _fixture.AcquireFresh().AddScript("$env:psbvar_z = '1'; try { Invoke-BashDeclare '-p' psbvar_z } finally { $env:psbvar_z = $null }").Invoke();
 
         Assert.Single(output);
         Assert.NotEqual(true, output[0].Properties["NoTrailingNewline"]?.Value);

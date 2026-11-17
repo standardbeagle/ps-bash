@@ -62,6 +62,8 @@ public class BashArithTests
     [InlineData("0?1:2", 2)]
     // number bases
     [InlineData("0xFF", 255)]
+    [InlineData("0x", 0)]                // oracle: `echo $((0x))` and `q=0x; echo $((q+0))` print 0 (no digits = 0)
+    [InlineData("0X+1", 1)]
     [InlineData("0xABCDEF", 11259375)]   // uppercase hex A-F = 10-15 (not bash base 36-41)
     [InlineData("0xabcdef", 11259375)]   // lowercase hex, same value
     [InlineData("010", 8)]
@@ -350,14 +352,16 @@ public class InvokeBashArithmeticRawReaderTests : IClassFixture<SharedPwshFixtur
 
     public InvokeBashArithmeticRawReaderTests(SharedPwshFixture fixture) => _fixture = fixture;
 
+    // A scalar has one storage, the shell variable (environment-model.md section 8): a PowerShell scalar of the same
+    // name is not a bash variable and must not shadow it (a caller's `$q` hid a callee's `local q`).
     [Fact]
-    public void InvokeBashArith_ExistingEmptyPowerShellVariable_WinsOverEnvironment()
+    public void InvokeBashArith_APowerShellScalarOfTheSameName_NeverShadowsTheShellVariable()
     {
         var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(
-            "$env:x = '9'; $x = ''; Invoke-BashArith '$x'").Invoke();
+            "$env:x = '9'; $x = ''; $y = '5'; try { Invoke-BashArith '$x'; Invoke-BashArith 'x + y' } finally { $env:x = $null }").Invoke();
 
-        Assert.Equal("0", Assert.Single(result).ToString());
+        Assert.Equal(new[] { "9", "9" }, result.Select(o => o.ToString()));
     }
 
     // Oracle: `x='1 + 2'; echo $(( $x * 3 ))` is 7 -- $x is substituted as TEXT before the expression is parsed.

@@ -132,16 +132,14 @@ public sealed class InvokeBashGetoptsCommand : PSCmdlet
         return list.ToArray();
     }
 
-    /// <summary>Visible to both <c>$name</c> and <c>$env:name</c> reads, like <c>read</c>.</summary>
+    /// <summary>The shell variable, like <c>read</c> (one storage per variable, environment-model.md section 8).</summary>
     private void Assign(string name, string value)
     {
-        SessionState.PSVariable.Set(name, value);
-        try { BashVariableStore.Set(name, value); } catch { /* restricted name: non-fatal */ }
+        try { BashVariableLookup.SetScalar(SessionState, name, value); } catch { /* restricted name: non-fatal */ }
     }
 
     private void Unassign(string name)
     {
-        SessionState.PSVariable.Remove(name);
         try { BashVariableStore.Set(name, null); } catch { /* restricted name: non-fatal */ }
     }
 }

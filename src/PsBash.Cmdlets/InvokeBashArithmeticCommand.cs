@@ -208,8 +208,7 @@ public sealed class InvokeBashArithmeticCommand : PSCmdlet
     private string? ReadElement(string baseName, string subscript)
     {
         bool expanded = TryExpandSubscript(ref subscript);
-        object? holder = SessionState.PSVariable.GetValue(baseName);
-        if (holder is PSObject wrapped) holder = wrapped.BaseObject;
+        object? holder = BashVariableLookup.ArrayHolder(SessionState, baseName);
         if (holder is System.Collections.IDictionary dict)
         {
             string key = expanded ? subscript : ExpandKey(subscript);
@@ -228,8 +227,7 @@ public sealed class InvokeBashArithmeticCommand : PSCmdlet
     private void WriteElement(string baseName, string subscript, string value)
     {
         bool expanded = TryExpandSubscript(ref subscript);
-        object? holder = SessionState.PSVariable.GetValue(baseName);
-        if (holder is PSObject wrapped) holder = wrapped.BaseObject;
+        object? holder = BashVariableLookup.ArrayHolder(SessionState, baseName);
         if (holder is BashSparseArray sparse)
         {
             long at = ElementIndex(subscript, sparse.Count == 0 ? 0 : (int)sparse.NextIndex);
@@ -251,13 +249,12 @@ public sealed class InvokeBashArithmeticCommand : PSCmdlet
             // A gap: a dense array can't hold it (bash keeps the holes unset), so it becomes a sparse one.
             var sp = BashSparseArray.FromList(items);
             sp[index] = value;
-            if (SessionState.PSVariable.Get(baseName) is { } o) o.Value = sp; else SessionState.PSVariable.Set(baseName, sp);
+            BashVariableLookup.ReplaceArray(SessionState, baseName, sp);
             return;
         }
         while (items.Count <= index) items.Add("");
         items[(int)index] = value;
-        if (SessionState.PSVariable.Get(baseName) is { } owner) owner.Value = items.ToArray();
-        else SessionState.PSVariable.Set(baseName, items.ToArray());
+        BashVariableLookup.ReplaceArray(SessionState, baseName, items.ToArray());
     }
 
     private string? ReadRawVar(string name)
@@ -269,55 +266,21 @@ public sealed class InvokeBashArithmeticCommand : PSCmdlet
             return lines.Length > 0 ? lines[0] : null;
         }
         if (TrySplitElement(name, out var elemBase, out var elemSub)) return ReadElement(elemBase, elemSub);
-        // PowerShell variable first (loop variables are emitted as $name).
-        try
-        {
-            var variable = SessionState.PSVariable.Get(name);
-            if (variable is not null)
-            {
-                // An array / associative array used as a plain name reads element 0 (`a=(1 2 3); $((a + 5))` is 6).
-                object? held = variable.Value is PSObject w ? w.BaseObject : variable.Value;
-                if (held is System.Collections.IDictionary dict)
-                    return dict.Contains("0") ? dict["0"]?.ToString() ?? "" : "";
-                if (held is System.Collections.IList list && held is not string)
-                    return list.Count > 0 ? list[0]?.ToString() ?? "" : "";
-                return held?.ToString() ?? string.Empty;
-            }
-        }
-        catch { /* not a readable PS variable in scope */ }
-
-        // Ordinary bash variable (ps-bash stores them as $env:NAME).
-        return BashVariableStore.Get(name);
+        // The shell variable, or element 0 of the array the name holds (`a=(1 2 3); $((a + 5))` is 6). Never a scalar
+        // PowerShell variable: that was a caller's loop variable seen through PowerShell's scope chain, a stale `read`
+        // copy, or PowerShell's own `$input` (environment-model.md section 8).
+        return BashVariableLookup.Scalar(SessionState, name);
     }
 
     /// <summary>
-    /// Persist an assignment. Writes to the bash-variable store and, when a
-    /// PowerShell variable of that name already exists in scope, updates it too
-    /// so a loop variable stays consistent.
+    /// Persist an assignment: the shell variable, or element 0 of the array the name holds (`a=(1 10); (( a++ ))` /
+    /// `let m=7` on an array writes element 0 and leaves the others).
     /// </summary>
     private void WriteVar(string name, long value)
     {
         var s = value.ToString(CultureInfo.InvariantCulture);
         if (TrySplitElement(name, out var elemBase, out var elemSub)) { WriteElement(elemBase, elemSub, s); return; }
-        try
-        {
-            // `a=(1 10); (( a++ ))` / `let m=7` on an array or associative array writes element 0 (key "0"), leaving
-            // the other elements; it replaced the whole array with the number.
-            object? held = GetVariableValue(name);
-            if (held is PSObject w) held = w.BaseObject;
-            if (held is System.Collections.IDictionary || (held is System.Collections.IList && held is not string))
-            {
-                WriteElement(name, "0", s);
-                return;
-            }
-        }
-        catch { /* not a readable PS variable in scope */ }
+        if (BashVariableLookup.ArrayHolder(SessionState, name) is not null) { WriteElement(name, "0", s); return; }
         BashVariableStore.Set(name, s);
-        try
-        {
-            if (GetVariableValue(name) is not null)
-                SessionState.PSVariable.Set(name, value);
-        }
-        catch { /* best effort — env write above is the canonical store */ }
     }
 }

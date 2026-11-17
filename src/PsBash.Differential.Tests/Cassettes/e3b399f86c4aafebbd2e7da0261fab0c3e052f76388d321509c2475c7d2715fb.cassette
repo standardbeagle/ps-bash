@@ -1,0 +1,62 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 1018
+stdout-length: 372
+stderr-length: 0
+==== SCRIPT ====
+q=glob
+ar() { local q; q=$(echo 9); echo "ar $((q + 1))"; }
+cm() { local q=9; (( q > 5 )) && echo "cm yes" || echo "cm no"; (( q++ )); echo "cm $q"; }
+lt() { local q=9; let 'r = q + 1'; echo "lt $r"; }
+br() { local q=9; echo "br ${q} $q"; }
+tt() { local q=9; [[ $q == 9 ]] && echo "tt yes" || echo "tt no"; [[ q -eq 9 ]] && echo "tt eq"; }
+ap() { local q=9; q+=x; echo "ap $q"; }
+pv() { local q; printf -v q '%s' 9; echo "pv $((q+1)) $q"; }
+rd() { local q; read q <<< 9; echo "rd $((q+1)) $q"; }
+dc() { declare q=9; echo "dc $((q+1)) $q"; }
+vv() { local q=9; [[ -v q ]] && echo "vv set"; local n=q; echo "ind ${!n}"; }
+dp() { local q=9; declare -p q; }
+un() { local q; echo "un [${q-unset}] $((q+1))"; }
+nest() { local q=9; inner; }
+inner() { echo "inner $((q+1)) $q"; }
+rec() { local q=$1; if (( q > 0 )); then rec $((q - 1)); fi; echo "rec $q $((q*2))"; }
+all() { for fn in ar cm lt br tt ap pv rd dc vv dp un nest; do $fn; echo "  after $fn q=$q"; done; rec 2; }
+while read q; do all; done <<< rv; echo "end q=[$q]"
+==== STDOUT ====
+ar 10
+  after ar q=rv
+cm yes
+cm 10
+  after cm q=rv
+lt 10
+  after lt q=rv
+br 9 9
+  after br q=rv
+tt yes
+tt eq
+  after tt q=rv
+ap 9x
+  after ap q=rv
+pv 10 9
+  after pv q=rv
+rd 10 9
+  after rd q=rv
+dc 10 9
+  after dc q=rv
+vv set
+ind 9
+  after vv q=rv
+declare -- q="9"
+  after dp q=rv
+un [unset] 1
+  after un q=rv
+inner 10 9
+  after nest q=rv
+rec 0 0
+rec 1 2
+rec 2 4
+end q=[]
+
+==== STDERR ====
+

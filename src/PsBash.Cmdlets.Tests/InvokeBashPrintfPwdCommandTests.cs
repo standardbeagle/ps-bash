@@ -334,7 +334,7 @@ public class InvokeBashPrintfPwdCommandTests : IClassFixture<SharedPwshFixture>
     public void Printf_DashV_AssignsVariableAndPrintsNothing()
     {
         var pwsh = _fixture.AcquireFresh();
-        var r = CmdResult.Run(pwsh, "Invoke-BashPrintf '-v' myvar '%s-%d' a 5; $myvar").AssertSuccess();
+        var r = CmdResult.Run(pwsh, "Invoke-BashPrintf '-v' myvar '%s-%d' a 5; $env:myvar").AssertSuccess();
         Assert.Equal("a-5", r.Stdout.Trim());
         Assert.Equal("a-5", Environment.GetEnvironmentVariable("myvar"));
     }
@@ -342,14 +342,14 @@ public class InvokeBashPrintfPwdCommandTests : IClassFixture<SharedPwshFixture>
     [Fact]
     public void Printf_DashVJoined_AndLastWins()
     {
-        var r = CmdResult.Run(_fixture.AcquireFresh(), "Invoke-BashPrintf '-vpa' '-vpb' '%s' z; $pa + '|' + $pb").AssertSuccess();
+        var r = CmdResult.Run(_fixture.AcquireFresh(), "Invoke-BashPrintf '-vpa' '-vpb' '%s' z; $env:pa + '|' + $env:pb").AssertSuccess();
         Assert.Equal("|", r.Stdout.Trim().Replace("z", ""));
     }
 
     [Fact]
     public void Printf_DashV_Direct_BareDecoyBinds()
         // A bare -v typed at PowerShell prefix-matches -Verbose; the V decoy rescues it (Pester path).
-        => Assert.Equal("hi", CmdResult.Run(_fixture.AcquireFresh(), "Invoke-BashPrintf -v pv2 '%s' hi; $pv2").AssertSuccess().Stdout.Trim());
+        => Assert.Equal("hi", CmdResult.Run(_fixture.AcquireFresh(), "Invoke-BashPrintf -v pv2 '%s' hi; $env:pv2").AssertSuccess().Stdout.Trim());
 
     [Fact]
     public void Printf_DashV_ArrayElement_SetsThatElement()

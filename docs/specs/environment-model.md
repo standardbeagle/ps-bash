@@ -79,6 +79,8 @@ They read `BashVariableStore.GetExported` / `EnumerateExported`. Shell builtins 
 `Differential.Tests/ExportedEnvironmentDifferentialTests`: 25 ways to set a variable × every way a child observes it,
 against bash.
 
+`Core.Tests/ShellVariableStorageGuardTests`: one storage per variable (§8).
+
 ## 7. Remaining gap
 
 **A program PowerShell itself starts inherits the whole process environment, unexported variables included.** That
@@ -98,3 +100,45 @@ Smaller differences:
 - Under `set -a`, re-assigning a previously unexported variable the value it already has does not export it.
 - `declare -x NAME=v` inside a function sets a global (declare with flags is not function-local yet).
 - `export -f`: functions are not passed to a nested shell.
+
+## 8. One storage per variable
+
+**A bash scalar lives only in the shell variable store; an array lives only as a PowerShell variable. A name
+resolves through ONE chain.**
+
+| Kind | Storage | Scoping |
+|---|---|---|
+| scalar (`x=1`, `read x`, `for x`, `printf -v x`, `getopts`, `(( x = 1 ))`, `let`, `declare x`) | `BashVariableStore` (`$env:x`) | `local x`: the caller's value parked in `$__lsd_x` / `VarFrameStack`, restored on return (dynamic, as bash) |
+| indexed / sparse / associative array | a PowerShell variable (`$a`: `object[]`, `BashSparseArray`, `BashAssoc`) | PowerShell scopes; `local -a` is the function's lexical variable |
+
+The class this closes: a scalar held in BOTH (a PowerShell variable beside `$env:x`). PowerShell resolves a variable
+through its own dynamic scope chain, which is not bash's, and readers disagreed on the order. The bug that found it:
+`for q in one; do f; done` with `f() { local q; q=$(echo 9); echo $((q + 1)); }` printed 1. The loop bound `$q` as a
+PowerShell variable too, and the arithmetic cmdlet read a PowerShell variable first, so the callee saw the caller's
+loop variable instead of its own local. The same shape: `read q` in a function left a global `$q` that every later
+`(( q > 0 ))` read (a recursion on `local q=$1` never ended), `read x; x=7; $((x))` read the stale copy, a callee's
+`q=5` never reached a loop body that read `$q`, and `input=4; $((input + 1))` read PowerShell's `$input`.
+
+Rules:
+
+- **Run time: `PsBash.Cmdlets.BashVariableLookup`** is the one access by name. `Scalar` / `ArrayHolder` / `IsSet` read
+  (a PowerShell variable answers only when it holds an array); `SetScalar` assigns (element 0 of an array the name
+  holds, else the store); `SetArray` / `ReplaceArray` / `RemoveArray` write an array in the scope that owns it.
+  Arithmetic, `read`, `printf -v`, `getopts`, `mapfile`, `[[ -v ]]`, `declare -p`, `unset`, `${!ref}` (psm1) use it.
+- **PowerShell-owned names** (`PsBash.Core.PowerShellOwnedVariables`: `$input`, `$Host`, `$PID`, `$args`, …) are
+  never a bash value and the emitter never names a PowerShell variable after one.
+- **Emitter: a loop binds the shell variable.** `for` iterates a private `$__psbash_lvN` and sets the shell variable
+  each pass (`PsBuild.SetShellScalar`: `[Environment]::SetEnvironmentVariable`, a fifth of a `$env:x =` write);
+  `for ((;;))` runs every clause through `Invoke-BashArith` against the store; `while read` sets the store per line
+  and, at end of input, to "" as bash's failing `read` does (a `break` leaves the values). `_storeLoopVars` only keeps
+  the no-word-split choice and the job capture. Only a function's lexical locals (`_lexicalLocals`: local arrays,
+  `IFS`) emit as `$name`.
+- **Background job in a loop**: the body reads a launch-time copy, `$name`, handed over by
+  `Invoke-BashBackground -Vars`; an in-process job also gets it as a per-thread snapshot in `BashVariableStore`
+  (`EnterJobSnapshot`), so `$((j * 2)) &` in the job sees the value at launch while the loop moves on.
+
+Guards (`Core.Tests/ShellVariableStorageGuardTests`): no cmdlet reaches a PowerShell variable by a computed name
+outside `BashVariableLookup` (internal `__Bash*` variables named through a constant are listed with a reason); no
+psm1 function does (`Get-Variable -Name $n`); every binding construct, at top level and in a function, emits no
+PowerShell variable for the bash scalar. Behavior: `Differential.Tests/VariableScopeChainTests` (loop kind × callee
+access × shadowing × the loop variable after the call, against bash).

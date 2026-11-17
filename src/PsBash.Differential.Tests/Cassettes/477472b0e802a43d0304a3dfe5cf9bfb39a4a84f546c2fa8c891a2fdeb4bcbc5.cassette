@@ -1,0 +1,29 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 214
+stdout-length: 97
+stderr-length: 0
+==== SCRIPT ====
+see() { echo "see $q $((q*2)) ${#q}"; [[ $q -gt 1 ]] && echo big; }
+for q in 1 2; do see; done
+for ((q = 3; q < 5; q++)); do see; done
+printf '%s\n' 5 6 | while read q; do see; done
+while read q; do see; done <<< 7
+==== STDOUT ====
+see 1 2 1
+see 2 4 1
+big
+see 3 6 1
+big
+see 4 8 1
+big
+see 5 10 1
+big
+see 6 12 1
+big
+see 7 14 1
+big
+
+==== STDERR ====
+

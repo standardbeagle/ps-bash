@@ -194,8 +194,7 @@ public sealed class InvokeBashTestCommand : PSCmdlet
         if (open > 0 && operand.EndsWith(']'))
         {
             string name = operand[..open], sub = operand[(open + 1)..^1];
-            object? holder = SessionState.PSVariable.GetValue(name);
-            if (holder is PSObject wrapped) holder = wrapped.BaseObject;
+            object? holder = BashVariableLookup.ArrayHolder(SessionState, name);
             if (holder is System.Collections.IDictionary dict)
             {
                 if (sub is "@" or "*") return dict.Count > 0;
@@ -234,8 +233,7 @@ public sealed class InvokeBashTestCommand : PSCmdlet
         // Shell variables computed on read (PsBuild.TryMapSpecialVar), never stored: always set in bash.
         if (operand is "SHELLOPTS" or "BASHOPTS") return true;
         // An array or associative array is set when it has elements (`a=(x); [[ -v a ]]`).
-        object? whole = SessionState.PSVariable.GetValue(operand);
-        if (whole is PSObject w2) whole = w2.BaseObject;
+        object? whole = BashVariableLookup.ArrayHolder(SessionState, operand);
         return whole is System.Collections.IDictionary d2 ? d2.Count > 0 : whole is System.Collections.IList l2 && l2.Count > 0;
     }
 

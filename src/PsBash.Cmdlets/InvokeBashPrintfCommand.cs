@@ -527,17 +527,15 @@ public sealed class InvokeBashPrintfCommand : PSCmdlet
     internal static bool IsAssignableName(string s) => AssignableName.IsMatch(s);
 
     /// <summary>
-    /// <c>printf -v NAME</c>: set the shell variable in the caller scope AND the variable store
-    /// (<c>$env:NAME</c> expansions in transpiled bash read it), exactly as <c>read</c> does.
-    /// <c>NAME[i]</c> sets one element of the PowerShell array variable (created/extended as needed).
+    /// <c>printf -v NAME</c>: set the shell variable (or element 0 of the array the name holds), exactly as
+    /// <c>read</c> does. <c>NAME[i]</c> sets one element of the array variable (created/extended as needed).
     /// </summary>
     private void AssignVariable(string target, string value)
     {
         int br = target.IndexOf('[');
         if (br < 0)
         {
-            SessionState.PSVariable.Set(target, value);
-            try { BashVariableStore.Set(target, value); } catch { }
+            try { BashVariableLookup.SetScalar(SessionState, target, value); } catch { }
             return;
         }
 
@@ -545,18 +543,22 @@ public sealed class InvokeBashPrintfCommand : PSCmdlet
         string sub = target.Substring(br + 1, target.Length - br - 2).Trim();
         if (!int.TryParse(sub, out int idx) || idx < 0)
         {
-            // Associative / computed subscripts are not modelled; keep the value reachable.
-            SessionState.PSVariable.Set(name, value);
+            // An associative array's key is set; any other computed subscript is not modelled: keep the value
+            // reachable as the name's value.
+            if (BashVariableLookup.ArrayHolder(SessionState, name) is System.Collections.IDictionary assoc)
+                assoc[sub.Length >= 2 && sub[0] == '"' && sub[^1] == '"' ? sub[1..^1] : sub] = value;
+            else
+                try { BashVariableLookup.SetScalar(SessionState, name, value); } catch { }
             return;
         }
-        var existing = SessionState.PSVariable.GetValue(name);
+        var existing = BashVariableLookup.ArrayHolder(SessionState, name);
         var items = new List<object?>();
-        if (existing is System.Collections.IEnumerable en && existing is not string)
+        if (existing is System.Collections.IEnumerable en)
             foreach (var o in en) items.Add(o);
-        else if (existing is string one) items.Add(one);
+        else if (BashVariableLookup.Scalar(SessionState, name) is { } one) items.Add(one);
         while (items.Count <= idx) items.Add("");
         items[idx] = value;
-        FileSystemHelpers.SetShellVariable(SessionState, name, items.ToArray());
+        BashVariableLookup.SetArray(SessionState, name, items.ToArray());
     }
 
     /// <summary>
