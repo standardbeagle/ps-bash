@@ -277,16 +277,19 @@ public class BackgroundJobDifferentialTests
     // -----------------------------------------------------------------------
 
     /// <summary>
-    /// kill -l lists signal names; output must be non-empty in both bash and ps-bash.
-    /// Because bash and ps-bash may list different signal sets, use golden.
-    /// Failure-surface axis 8: kill -l exit code must be 0.
+    /// <c>kill -l</c> prints bash's Linux signal table (<c>%2d) SIGNAME</c>, tab-separated, five per row, real-time
+    /// signals 34-64 as <c>SIGRTMIN+n</c>/<c>SIGRTMAX-n</c>), and every <c>-l</c> form reads the same table: 32 and 33 print
+    /// nothing, 128+N is N, past 64 is invalid. REGRESSION: ps-bash printed 13 names one per line (a golden froze its
+    /// <c>SIGHUP</c>), and <c>kill -34</c> resolved to no number and sent TERM. One table:
+    /// <c>InvokeBashKillCommand.LinuxSignalNames</c>.
     /// </summary>
     [SkippableFact]
-    public async Task Differential_Kill_ListSignals_Golden()
+    public async Task Differential_Kill_ListSignals()
     {
-        await AssertOracle.GoldenAsync(
-            "kill -l | head -1",
-            "Differential_Kill_ListSignals",
+        await AssertOracle.EqualAsync(
+            "kill -l | cat -A; echo \"rc=${PIPESTATUS[0]}\"\n"
+            + "kill -l 34 64 RTMIN+1 SIGRTMAX-1 162 32 33 0 SIGHUP; echo rc=$?\n"
+            + "kill -l 65 2>/dev/null; echo rc=$?",
             timeout: TimeSpan.FromSeconds(15));
     }
 

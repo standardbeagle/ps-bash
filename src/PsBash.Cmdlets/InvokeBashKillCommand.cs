@@ -50,12 +50,46 @@ public sealed class InvokeBashKillCommand : PSCmdlet
         ["28"] = "SIGWINCH", ["WINCH"] = "SIGWINCH",
     };
 
-    private static readonly string?[] LinuxSignalNames =
+    /// <summary>
+    /// Bash's signal names by number on Linux, the one table every <c>kill</c> form reads (list, <c>-l N</c>, <c>-s NAME</c>,
+    /// <c>-N</c>): 1-31, then the real-time signals 34-64 as bash names them (<c>RTMIN</c>, <c>RTMIN+1</c> ... <c>RTMIN+15</c>,
+    /// <c>RTMAX-14</c> ... <c>RTMAX</c>); 32 and 33 belong to the C library and have none.
+    /// </summary>
+    private static readonly string?[] LinuxSignalNames = BuildSignalNames();
+
+    private static string?[] BuildSignalNames()
     {
-        null, "HUP", "INT", "QUIT", "ILL", "TRAP", "ABRT", "BUS", "FPE", "KILL", "USR1", "SEGV", "USR2", "PIPE",
-        "ALRM", "TERM", "STKFLT", "CHLD", "CONT", "STOP", "TSTP", "TTIN", "TTOU", "URG", "XCPU", "XFSZ",
-        "VTALRM", "PROF", "WINCH", "IO", "PWR", "SYS",
-    };
+        string?[] names = new string?[65];
+        string[] standard =
+        [
+            "HUP", "INT", "QUIT", "ILL", "TRAP", "ABRT", "BUS", "FPE", "KILL", "USR1", "SEGV", "USR2", "PIPE",
+            "ALRM", "TERM", "STKFLT", "CHLD", "CONT", "STOP", "TSTP", "TTIN", "TTOU", "URG", "XCPU", "XFSZ",
+            "VTALRM", "PROF", "WINCH", "IO", "PWR", "SYS",
+        ];
+        standard.CopyTo(names, 1);
+        for (int n = 34; n <= 64; n++)
+            names[n] = n == 34 ? "RTMIN" : n <= 49 ? $"RTMIN+{n - 34}" : n < 64 ? $"RTMAX-{64 - n}" : "RTMAX";
+        return names;
+    }
+
+    /// <summary>
+    /// <c>kill -l</c> with no operand: bash's table, <c>%2d) SIGNAME</c> entries, a tab after each and a newline after every
+    /// fifth (bash's display_signal_list), so a row ends <c>5) SIGTRAP</c> and a short last row ends with a tab.
+    /// </summary>
+    internal static string SignalList()
+    {
+        var sb = new System.Text.StringBuilder();
+        int column = 0;
+        for (int n = 1; n < LinuxSignalNames.Length; n++)
+        {
+            if (LinuxSignalNames[n] is not { } name) continue;
+            sb.Append(n.ToString(System.Globalization.CultureInfo.InvariantCulture).PadLeft(2)).Append(") SIG").Append(name);
+            if (++column < 5) sb.Append('\t');
+            else { sb.Append('\n'); column = 0; }
+        }
+        if (column != 0) sb.Append('\n');
+        return sb.ToString();
+    }
 
     private static readonly Regex NumSignal = new(@"^-(\d+)$", RegexOptions.Compiled);
     private static readonly Regex NamedSignal = new(@"^-(SIG)?([A-Za-z][A-Za-z0-9]*)$", RegexOptions.Compiled);
@@ -100,7 +134,7 @@ public sealed class InvokeBashKillCommand : PSCmdlet
                     {
                         if (n > 128) n -= 128;
                         if (n == 0 && t == "0") shown = "EXIT";
-                        else if (n >= 1 && n < LinuxSignalNames.Length) shown = LinuxSignalNames[n];
+                        else if (n >= 1 && n < LinuxSignalNames.Length) shown = LinuxSignalNames[n] ?? "";   // 32, 33: valid, no name, prints nothing
                     }
                     else
                     {
@@ -117,19 +151,14 @@ public sealed class InvokeBashKillCommand : PSCmdlet
                         FileSystemHelpers.WriteBashError(this, $"kill: {t}: invalid signal specification");
                         bad = 1;
                     }
-                    else WriteObject(BashRuntime.NewBashObject(shown));
+                    else if (shown.Length > 0) WriteObject(BashRuntime.NewBashObject(shown));
                 }
                 FileSystemHelpers.SetLastExitCode(this, bad);
                 return;
             }
             if (a == "-l" || a == "-L" || a == "--list")
             {
-                // Signal names ordered by signal number (psm1 parity).
-                var names = Signals
-                    .Where(kv => int.TryParse(kv.Key, out _))
-                    .OrderBy(kv => int.Parse(kv.Key))
-                    .Select(kv => kv.Value);
-                foreach (var obj in BashRuntime.EmitBashLines(string.Join("\n", names) + "\n", "kill"))
+                foreach (var obj in BashRuntime.EmitBashLines(SignalList(), "kill"))
                     WriteObject(obj);
                 return;
             }

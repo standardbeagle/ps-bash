@@ -982,7 +982,7 @@ QA audit sections per qa-rubric Directive 10 template.
 - `src/PsBash.Differential.Tests/BackgroundJobDifferentialTests.cs:Differential_Wait_NoJobs_ExitsZero`
 - `src/PsBash.Differential.Tests/BackgroundJobDifferentialTests.cs:Differential_Background_WaitLastPid_Continues`
 - `src/PsBash.Differential.Tests/BackgroundJobDifferentialTests.cs:Differential_Jobs_NoProcesses_EmitsNothing`
-- `src/PsBash.Differential.Tests/BackgroundJobDifferentialTests.cs:Differential_Kill_ListSignals_Golden` (golden)
+- `src/PsBash.Differential.Tests/BackgroundJobDifferentialTests.cs:Differential_Kill_ListSignals` (oracle)
 - `src/PsBash.Differential.Tests/BackgroundJobDifferentialTests.cs:Differential_Background_QuotedArg_Golden` (golden)
 
 **FAILURE-SURFACE COVERAGE** (per Directive 3 axes):
@@ -1019,7 +1019,7 @@ QA audit sections per qa-rubric Directive 10 template.
 - 8 differential tests added in `BackgroundJobDifferentialTests.cs`
 - 6 use EqualAsync (skip on Windows without WSL bash oracle; live bash diff on Linux/macOS CI)
 - 2 use GoldenAsync (frozen output for platform-independent validation):
-  - `Differential_Kill_ListSignals_Golden`: kill -l signal list differs between bash and ps-bash; golden freezes ps-bash output
+  - `Differential_Kill_ListSignals`: kill -l prints bash's Linux signal table (closed: it printed 13 names one per line)
   - `Differential_Background_QuotedArg_Golden`: background job stdout is not forwarded to parent by Invoke-BashBackground architecture; golden freezes foreground-only output
 
 **KNOWN BUGS / RISKS**:
