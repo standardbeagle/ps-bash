@@ -28,8 +28,8 @@ public class ScriptTmpVariableTests
                 ipcEndpoint: PsBashTestProcess.CreateEndpoint());
             psi.Environment["PSBASH_HOST_IDLE_SECS"] = "3";
             psi.WorkingDirectory = dir;
-            psi.RedirectStandardOutput = true; psi.StandardOutputEncoding = System.Text.Encoding.UTF8;
-            psi.RedirectStandardError = true; psi.StandardErrorEncoding = System.Text.Encoding.UTF8;
+            psi.RedirectStandardOutput = true; psi.StandardOutputEncoding ??= System.Text.Encoding.UTF8;
+            psi.RedirectStandardError = true; psi.StandardErrorEncoding ??= System.Text.Encoding.UTF8;
             psi.UseShellExecute = false;
             using var p = Process.Start(psi)!;
             var so = p.StandardOutput.ReadToEndAsync();

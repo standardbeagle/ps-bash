@@ -32,8 +32,8 @@ internal static class ProcessRunHelper
         Action<Process>? onStarted = null,
         bool strictTimeout = false)
     {
-        psi.RedirectStandardOutput = true; psi.StandardOutputEncoding = System.Text.Encoding.UTF8;
-        psi.RedirectStandardError = true; psi.StandardErrorEncoding = System.Text.Encoding.UTF8;
+        psi.RedirectStandardOutput = true; psi.StandardOutputEncoding ??= System.Text.Encoding.UTF8;
+        psi.RedirectStandardError = true; psi.StandardErrorEncoding ??= System.Text.Encoding.UTF8;
         psi.RedirectStandardInput = true;
         psi.UseShellExecute = false;
         psi.CreateNoWindow = true;

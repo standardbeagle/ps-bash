@@ -11,7 +11,8 @@ namespace PsBash.Core.Tests;
 /// with (UTF-8: ps-bash and bash write it). Left unset, .NET on Windows decodes with the test host's CONSOLE code page,
 /// so the same correct run passed on a 65001 fleet host and failed under a 437 console (<c>é</c> read back as
 /// <c>├⌐</c>: <c>AssociativeArrayTests.Order_NonAsciiKeys</c>). <c>PsBash.Testing.ProcessSpawn</c> sets it for every
-/// run it starts; a hand-built <c>ProcessStartInfo</c> sets it beside its redirect.
+/// run it starts; a hand-built <c>ProcessStartInfo</c> sets it beside its redirect. A helper that is handed a start
+/// info defaults it with <c>??=</c>, never <c>=</c>: the caller may have chosen another (Latin-1 for byte-exact tests).
 /// <para>Oracle note (qa-rubric Directive 1): a repo-structure invariant with no bash equivalent, so a source check.</para>
 /// </summary>
 public class TestStdioEncodingGuardTests
@@ -49,6 +50,11 @@ public class TestStdioEncodingGuardTests
                     if (redirects > encodings)
                         offenders.Add($"{name}/{rel}: {redirects} RedirectStandard{stream}, {encodings} Standard{stream}Encoding");
                 }
+                // A start info that already exists (a helper's parameter) may carry the caller's choice: the byte-exact
+                // tests decode as Latin-1. Defaulting it to UTF-8 with `=` overwrote that (RawBytesEndToEndTests: 0xE9
+                // came back as `?`, Windows fleet s22e); the default goes in with `??=`.
+                foreach (Match m in Regex.Matches(text, @"\.\s*Standard(Output|Error|Input)Encoding\s*=\s*[^;=]*(UTF8|Utf8)[^;]*;"))
+                    offenders.Add($"{name}/{rel}: `{m.Value.Trim()}` overwrites the caller's encoding; default it with ??=");
             }
         }
         Assert.True(offenders.Count == 0,

@@ -237,8 +237,8 @@ public class HostRobustnessTests
     {
         var limit = timeout ?? Step;
         var psi = PsBashTestProcess.Create(args, env: env, ipcEndpoint: endpoint);
-        psi.RedirectStandardOutput = true; psi.StandardOutputEncoding = System.Text.Encoding.UTF8;
-        psi.RedirectStandardError = true; psi.StandardErrorEncoding = System.Text.Encoding.UTF8;
+        psi.RedirectStandardOutput = true; psi.StandardOutputEncoding ??= System.Text.Encoding.UTF8;
+        psi.RedirectStandardError = true; psi.StandardErrorEncoding ??= System.Text.Encoding.UTF8;
         psi.RedirectStandardInput = true;
         psi.UseShellExecute = false;
         using var proc = new Process { StartInfo = psi };
