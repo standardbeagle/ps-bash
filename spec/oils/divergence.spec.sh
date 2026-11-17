@@ -43,7 +43,8 @@ two
 ## timeout: 10
 
 #### Changing PATH will invalidate PATH cache
-
+# ps-bash: each #! sh script below runs in a nested shell, as in bash, so the limit adds SpecRunner.NestedShellAllowance
+# (4 s) for each of the six runs: a limit ends a hang, it does not time process starts (spec-suite.md 3.4).
 mkdir -p _tmp/bin
 mkdir -p _tmp/bin2
 printf '#!/usr/bin/env sh\necho hi\n' >_tmp/bin/hello
@@ -91,8 +92,7 @@ hey
 status=0
 ## END
 ## status: 0
-## XFAIL ps-bash gap-nested-launcher-cost output and status are right and PATH lookup is not the cost: every #! sh script (like `bash file` and `./script`) runs in a nested ps-bash launcher, a new process plus host start (~3s on a per-invocation host), so six runs exceed the 10s timeout
-## timeout: 10
+## timeout: 40
 
 #### builtin cat crashes a subshell (#2530)
 

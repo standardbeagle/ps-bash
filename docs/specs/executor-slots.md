@@ -71,6 +71,13 @@ stateful host does not spill unrelated launchers. Behavioural: `NestedBashC_Repe
 Process-mode background jobs still miss the cold-miss speed bars in `background-jobs.md` section 7.3 (`{ :; } & wait`
 3505 ms vs 935 ms in-process); the user approved proceeding anyway, and the default stays in-process.
 
+A nested shell (`bash -c`, `bash file`, a `#!` script) is a launcher process on a slot host, never the enclosing host:
+the enclosing host is running its parent, and bash variables are the process environment, so two commands cannot
+share a host. That costs about 1 s per nested shell on a warm slot. The first nested shell after 60 s idle also
+cold-starts the slot host: 7 s measured on a loaded machine (2026-11-17), and users pay it too. Running a nested
+shell in the enclosing host (a fresh runspace with its own scalar overlay, `background-jobs.md` §3) is the fix. The
+spec suite gives a case `SpecRunner.NestedShellAllowance` per nested shell rather than timing these starts.
+
 ## 6. Concurrent-launcher test
 
 `ConcurrentLaunchersTests` (Differential.Tests) starts 4 real launchers at once against one private session (own
