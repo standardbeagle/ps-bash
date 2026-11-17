@@ -8168,6 +8168,32 @@ public static partial class PsEmitter
             ? BashParser.DecomposeWord(item)
             : ImmutableArray.Create<WordPart>(new WordPart.Literal(item));
 
+    // One brace's alternatives as part lists. A quoted empty item (`{"",a}`) becomes an empty single-quoted part, so the
+    // word it makes counts as quoted and stays (DropsEmptyBraceWord).
+    private static List<ImmutableArray<WordPart>> BraceAlternatives(WordPart part, bool leading)
+    {
+        var items = ExpandBrace(part);
+        var alts = new List<ImmutableArray<WordPart>>(items.Count);
+        for (int i = 0; i < items.Count; i++)
+            alts.Add(part is WordPart.BracedTuple tuple && tuple.IsQuotedEmpty(i)
+                ? ImmutableArray.Create<WordPart>(new WordPart.SingleQuoted(""))
+                : BraceItemParts(items[i], leading));
+        return alts;
+    }
+
+    /// <summary>
+    /// True when a word brace expansion produced is dropped if it comes out empty: bash removes an unquoted word that
+    /// expands to nothing (<c>{a,}</c> is one word, <c>{,}</c> none, <c>$e{a,}</c> none with <c>e</c> unset), and keeps
+    /// one with any quoted part (<c>{"",a}</c>, <c>''{a,}</c>, <c>{"$e",b}</c>). A tilde or glob part is never empty.
+    /// </summary>
+    internal static bool DropsEmptyBraceWord(ImmutableArray<WordPart> word)
+    {
+        foreach (var p in word)
+            if (p is WordPart.SingleQuoted or WordPart.AnsiCQuoted or WordPart.DoubleQuoted or WordPart.EscapedLiteral
+                or WordPart.TildeSub or WordPart.GlobPart)
+                return false;
+        return true;
+    }
     // Joining text after an item that ends in a variable name continues that NAME, as in bash's textual
     // expansion (`{$a,b}_c` reads `$a_c`).
     private static ImmutableArray<WordPart> AppendBraceParts(ImmutableArray<WordPart> head, ImmutableArray<WordPart> tail)
@@ -8193,7 +8219,6 @@ public static partial class PsEmitter
         // (each brace contributes its item list; every other part is one literal segment).
         int braceCount = 0;
         bool dynamicPart = false;
-        bool dynamicItems = false;
         foreach (var p in parts)
         {
             if (p is WordPart.BracedTuple or WordPart.BracedRange)
@@ -8201,7 +8226,7 @@ public static partial class PsEmitter
                 braceCount++;
                 // `{$a,b}`: an item with an expansion is text that must be expanded, not printed.
                 if (p is WordPart.BracedTuple t && t.Items.Any(i => i.Contains('$') || i.Contains('`')))
-                    dynamicPart = dynamicItems = true;
+                    dynamicPart = true;
                 else if (braceCount == 1 && ReferenceEquals(p, parts[0]) && p is WordPart.BracedTuple lead && lead.Items.Any(i => i.StartsWith('~')))
                     dynamicPart = true;
             }
@@ -8220,7 +8245,7 @@ public static partial class PsEmitter
             foreach (var part in parts)
             {
                 var alts = part is WordPart.BracedTuple or WordPart.BracedRange
-                    ? ExpandBrace(part).ConvertAll(it => BraceItemParts(it, leading: combos.Count == 1 && combos[0].IsEmpty))
+                    ? BraceAlternatives(part, leading: combos.Count == 1 && combos[0].IsEmpty)
                     : new List<ImmutableArray<WordPart>> { ImmutableArray.Create(part) };
                 CheckBraceWords((long)combos.Count * alts.Count);
                 var next = new List<ImmutableArray<WordPart>>(combos.Count * alts.Count);
@@ -8230,28 +8255,45 @@ public static partial class PsEmitter
                 combos = next;
             }
             if (leadingTilde) combos = combos.ConvertAll(RetildeBraceWord);
-            var combined = $"@({string.Join(',', combos.ConvertAll(FlattenPartsToDoubleQuotedString))})";
-            // An unquoted expansion that comes out empty is dropped from the word list (`{$a,b}_c` with `$a_c` unset).
-            return dynamicItems ? $"@({combined} | Where-Object {{ $_ -ne '' }})" : combined;
+            // A word with no quoted part that comes out empty is dropped (DropsEmptyBraceWord): known now when its text
+            // is literal (`{a,}`), at run time when it holds an expansion (`{$a,b}_c` with `$a_c` unset). A quoted one
+            // stays (`{"$a",b}`). A run-time drop needs the `;` form: in a comma list an empty pipeline is a $null item.
+            var elements = new List<string>(combos.Count);
+            bool runtimeDrop = false;
+            foreach (var combo in combos)
+            {
+                string word = FlattenPartsToDoubleQuotedString(combo);
+                if (!DropsEmptyBraceWord(combo)) elements.Add(word);
+                else if (TryGetPureLiteralText(combo, out var text)) { if (text.Length > 0) elements.Add(word); }
+                else { elements.Add($"({word} | Where-Object {{ $_ -ne '' }})"); runtimeDrop = true; }
+            }
+            return $"@({string.Join(runtimeDrop ? "; " : ",", elements)})";
         }
         if (braceCount >= 2)
         {
-            var combos = new List<string> { "" };
+            // Each word carries whether any of its text was quoted: an empty one that was not is dropped (`{,a}{,b}`).
+            var combos = new List<(string Text, bool Quoted)> { ("", false) };
             foreach (var part in parts)
             {
-                List<string> segment = part is WordPart.BracedTuple or WordPart.BracedRange
-                    ? ExpandBrace(part)
-                    : new List<string> { BraceAffixText(part) };
+                var segment = new List<(string Text, bool Quoted)>();
+                if (part is WordPart.BracedTuple or WordPart.BracedRange)
+                {
+                    var braceItems = ExpandBrace(part);
+                    for (int i = 0; i < braceItems.Count; i++)
+                        segment.Add((braceItems[i], part is WordPart.BracedTuple tuple && tuple.IsQuotedEmpty(i)));
+                }
+                else segment.Add((BraceAffixText(part), part is not WordPart.Literal));
                 CheckBraceWords((long)combos.Count * segment.Count); // bound the product before building it
-                var next = new List<string>(combos.Count * segment.Count);
-                foreach (string head in combos)
-                    foreach (string s in segment)
-                        next.Add(head + s);
+                var next = new List<(string Text, bool Quoted)>(combos.Count * segment.Count);
+                foreach (var head in combos)
+                    foreach (var s in segment)
+                        next.Add((head.Text + s.Text, head.Quoted || s.Quoted));
                 combos = next;
             }
             var crossItems = new List<string>(combos.Count);
-            foreach (string c in combos)
-                crossItems.Add(PsBuild.SingleQuote(c));
+            foreach (var c in combos)
+                if (c.Text.Length > 0 || c.Quoted)
+                    crossItems.Add(PsBuild.SingleQuote(c.Text));
             return $"@({string.Join(',', crossItems)})";
         }
 
@@ -8260,6 +8302,7 @@ public static partial class PsEmitter
         var suffix = new StringBuilder();
         WordPart? bracePart = null;
         bool foundBrace = false;
+        bool affixQuoted = false;   // `''{a,}`: a quoted affix keeps the empty word
 
         for (int i = 0; i < parts.Length; i++)
         {
@@ -8268,20 +8311,21 @@ public static partial class PsEmitter
             {
                 bracePart = part;
                 foundBrace = true;
+                continue;
             }
-            else if (!foundBrace)
-            {
-                prefix.Append(BraceAffixText(part));
-            }
-            else
-            {
-                suffix.Append(BraceAffixText(part));
-            }
+            affixQuoted |= part is not WordPart.Literal;
+            (foundBrace ? suffix : prefix).Append(BraceAffixText(part));
         }
 
         string pre = prefix.ToString();
         string suf = suffix.ToString();
-        var expanded = ExpandBrace(bracePart!);
+        var all = ExpandBrace(bracePart!);
+        // `{a,}`, `{,}`: a bare empty item makes an empty unquoted word, which bash drops; `{"",a}` keeps its "".
+        var expanded = new List<string>(all.Count);
+        for (int i = 0; i < all.Count; i++)
+            if (all[i].Length > 0 || pre.Length > 0 || suf.Length > 0 || affixQuoted
+                || (bracePart is WordPart.BracedTuple tuple && tuple.IsQuotedEmpty(i)))
+                expanded.Add(all[i]);
 
         // If no prefix/suffix, emit the bare expansion.
         if (pre.Length == 0 && suf.Length == 0)

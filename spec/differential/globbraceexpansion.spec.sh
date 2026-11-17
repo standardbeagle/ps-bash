@@ -34,7 +34,6 @@ echo "{a,b}"
 echo {a,}
 ## stdout: a
 ## status: 0
-## XFAIL ps-bash gap-differential-globbraceexpansion globbraceexpansion (differential): differs from bash 5.2; see docs/specs/spec-gaps.md
 
 #### Differential_BraceRange_LetterRange_KnownGap
 echo {a..e}

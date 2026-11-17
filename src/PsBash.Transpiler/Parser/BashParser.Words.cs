@@ -1406,7 +1406,16 @@ public sealed partial class BashParser
         var expandedItems = new List<string>();
         foreach (var item in rawItems)
             expandedItems.AddRange(ExpandNestedBraces(item));
-        parts.Add(new WordPart.BracedTuple(ImmutableArray.CreateRange(expandedItems.ConvertAll(RestoreKeptBraces))));
+        var finished = expandedItems.ConvertAll(RestoreKeptBraces);
+        // `{"",a}`: quote removal leaves "" as it leaves a bare `{,a}` slot, but bash keeps only the quoted one.
+        ImmutableArray<int>.Builder? quotedEmpty = null;
+        for (int i = 0; i < finished.Count; i++)
+            if (finished[i].Length == 0 && expandedItems[i].Length > 0)
+                (quotedEmpty ??= ImmutableArray.CreateBuilder<int>()).Add(i);
+        parts.Add(new WordPart.BracedTuple(ImmutableArray.CreateRange(finished))
+        {
+            QuotedEmpty = quotedEmpty?.ToImmutable() ?? default,
+        });
         return closePos;
     }
 

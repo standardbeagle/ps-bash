@@ -4599,6 +4599,26 @@ public class PsEmitterTests
         Assert.Equal("Invoke-BashEcho @('a','b','c')", result);
     }
 
+    /// <summary>An empty unquoted brace word is dropped at transpile time; one with a quoted part stays; one holding an
+    /// expansion is filtered when it runs (PsEmitter.DropsEmptyBraceWord). Bash-visible: GlobBraceExpansionDifferentialTests.</summary>
+    [Theory]
+    [InlineData("echo {a,}", "Invoke-BashEcho @('a')")]
+    [InlineData("echo {,}", "Invoke-BashEcho @()")]
+    [InlineData("echo {\"\",a}", "Invoke-BashEcho @('','a')")]
+    [InlineData("echo ''{a,}", "Invoke-BashEcho @('a','')")]
+    [InlineData("echo {,a}{,b}", "Invoke-BashEcho @('b','a','ab')")]
+    public void Transpile_EmptyBraceWord_DroppedUnlessQuoted(string bash, string expected)
+        => Assert.Equal(expected, PsEmitter.Transpile(bash));
+
+    [Fact]
+    public void Parse_QuotedEmptyBraceItem_IsRecorded()
+    {
+        var quoted = Assert.IsType<WordPart.BracedTuple>(Assert.Single(BashParser.DecomposeWord("{\"\",a,''}"), p => p is WordPart.BracedTuple));
+        Assert.Equal(new[] { 0, 2 }, quoted.QuotedEmpty.ToArray());
+        var bare = Assert.IsType<WordPart.BracedTuple>(Assert.Single(BashParser.DecomposeWord("{,a}"), p => p is WordPart.BracedTuple));
+        Assert.False(bare.IsQuotedEmpty(0));
+    }
+
     /// <summary>A `{` whose closing brace belongs to a nested pair is literal, and a comma inside the nested pair
     /// does not make the outer one a list (bash 5.2: `{{a,b}` -> `{a {b`, `{{a,b}}` -> `{a} {b}`, `{a,{b}` stays).</summary>
     [Theory]

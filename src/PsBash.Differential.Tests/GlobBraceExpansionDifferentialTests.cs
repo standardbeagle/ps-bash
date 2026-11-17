@@ -157,15 +157,21 @@ public class GlobBraceExpansionDifferentialTests
     // -----------------------------------------------------------------------
 
     /// <summary>
-    /// Verifies that a trailing comma produces an empty string as the second item.
-    /// bash output: "a " (two arguments: "a" and ""). IsBraceExpansion must
-    /// detect the comma even when one item is empty.
+    /// A bare empty item makes an empty unquoted word, which bash removes: <c>{a,}</c> is ONE word, <c>{,}</c> none,
+    /// <c>$e{a,}</c> none with <c>e</c> unset. A word with a quoted part stays (<c>{"",a}</c>, <c>''{a,}</c>,
+    /// <c>{"$e",b}</c>). REGRESSION: ps-bash passed the empty words on (<c>printf '[%s]' {a,}</c> printed <c>[a][]</c>);
+    /// <c>echo {a,}</c> hid it behind a trailing space. Rule: <c>PsEmitter.DropsEmptyBraceWord</c>; the parser records
+    /// quoted empty items (<c>BracedTuple.QuotedEmpty</c>).
     /// </summary>
     [SkippableFact]
     public async Task Differential_BraceTuple_TrailingComma_EmptyItem()
     {
         await AssertOracle.EqualAsync(
-            "echo {a,}",
+            "p() { printf '[%s]' \"$@\"; echo \" n=$#\"; }\n"
+            + "p {a,}; p {,}; p x{a,}; p ''{a,}; p \"{a,}\"; p {a,,b}; p {,a}{,b}; p {a,}\"\"; p $e{a,}; p {\"\",a}; p {a,$e}\n"
+            + "p {\"$e\",b}; p {$e,b}; x=1; p {$x,}; p {a,}{1..2}; p {,}{,}z\n"
+            + "for w in {a,} {,} x{,}; do printf '<%s>' \"$w\"; done; echo\n"
+            + "arr=({a,} {,b} {,}); echo \"${#arr[@]} [${arr[*]}]\"",
             timeout: TimeSpan.FromSeconds(15));
     }
 

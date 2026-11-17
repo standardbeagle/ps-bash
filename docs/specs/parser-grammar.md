@@ -421,6 +421,13 @@ echo {1..5}    # Word("{1..5}")   -- range expansion
 echo '{a,b}'   # Word("'{a,b}'") -- single-quoted, braces are literal
 ```
 
+**Empty words.** An item's quotes are removed at parse time, so `{"",a}` and `{,a}` both hold an empty item;
+`BracedTuple.QuotedEmpty` records which empty items were quoted. **Invariant: a word brace expansion produces is
+dropped when it has no quoted part and expands to nothing**, as bash removes an empty unquoted word: `{a,}` is one
+word, `{,}` none, `$e{a,}` none with `e` unset, while `{"",a}`, `''{a,}` and `{"$e",b}` keep their empty word. One
+rule, `PsEmitter.DropsEmptyBraceWord`, for every path of `EmitBraceExpandedWord`: a literal word is dropped at transpile
+time, a word holding an expansion when it runs. Tests: `PsEmitterTests.Transpile_EmptyBraceWord_DroppedUnlessQuoted`,
+`GlobBraceExpansionDifferentialTests.Differential_BraceTuple_TrailingComma_EmptyItem`.
 ### 6.4 Process Substitution vs Redirect
 
 `<(` and `>(` are detected **before** the single-character `<`/`>` operator check. The entire `<(...)` or `>(...)` is consumed as a single `Word` token, then decomposed into `WordPart.ProcessSub` during word parsing.

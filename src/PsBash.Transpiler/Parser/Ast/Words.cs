@@ -69,7 +69,18 @@ public abstract record WordPart : BashNode
     /// A brace expansion with comma-separated items, e.g. <c>{a,b,c}</c>.
     /// Each item is a string literal.
     /// </summary>
-    public sealed record BracedTuple(ImmutableArray<string> Items) : WordPart;
+    public sealed record BracedTuple(ImmutableArray<string> Items) : WordPart
+    {
+        /// <summary>
+        /// Indexes of items that are empty only because quotes held nothing (<c>{"",a}</c>, <c>{a,''}</c>). Bash keeps a
+        /// word made from such an item and drops one made from a bare empty item (<c>{a,}</c>, <c>{,}</c>): an unquoted
+        /// word that expands to nothing is removed (<c>PsEmitter.DropsEmptyBraceWord</c>). Default: none.
+        /// </summary>
+        public ImmutableArray<int> QuotedEmpty { get; init; }
+
+        /// <summary>True when item <paramref name="index"/> is a quoted empty string, not a bare empty slot.</summary>
+        public bool IsQuotedEmpty(int index) => !QuotedEmpty.IsDefault && QuotedEmpty.Contains(index);
+    }
 
     /// <summary>
     /// A brace expansion with a numeric range, e.g. <c>{1..10}</c>, <c>{01..05}</c>, or <c>{1..10..2}</c>.
