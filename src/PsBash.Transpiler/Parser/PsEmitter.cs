@@ -11500,7 +11500,7 @@ public static partial class PsEmitter
                 // chain operators observe the correct success/failure state.
                 var unnegated = negPipelineInChain with { Negated = false };
                 // The command's own output must still reach stdout (`! echo hi || .` prints hi): run it as a statement, then invert its status.
-                sb.Append(EmitPipeline(unnegated) + "; " + PsBuild.SetExitFromBool("$global:LASTEXITCODE -ne 0"));
+                sb.Append(ChainPipelineOperand(EmitPipeline(unnegated)) + "; " + PsBuild.SetExitFromBool("$global:LASTEXITCODE -ne 0"));
             }
             else if (cmd is Command.Pipeline pipeline)
             {
@@ -11512,8 +11512,7 @@ public static partial class PsEmitter
                 // as the actual chain-operator LHS. PowerShell's $(if ...) correctly
                 // propagates $?=false to the && / || operator when the else-branch
                 // calls Write-Error. A $(& { ... }) wrapper does NOT propagate $?.
-                var pipelineText = EmitPipeline(pipeline);
-                sb.Append(pipelineText);
+                sb.Append(ChainPipelineOperand(EmitPipeline(pipeline)));
                 sb.Append("; " + PsBuild.SignalFailIfNonZero());
             }
             else if (cmd is Command.Simple simple)
@@ -11587,6 +11586,17 @@ public static partial class PsEmitter
         return emitted.Contains(';') || emitted.StartsWith("if ", StringComparison.Ordinal)
             || ChainOperandAssignment.IsMatch(emitted);
     }
+
+    /// <summary>
+    /// A pipeline as an <c>&amp;&amp;</c> / <c>||</c> operand. A pipeline usually emits ONE PowerShell pipeline, which
+    /// stays bare so it keeps streaming. Under pipefail it emits a statement LIST (<c>$__pf = ...; stages; ...</c>), and
+    /// bare, only its first statement, an assignment, was the chain's operand: <c>set -o pipefail; a &amp;&amp; b | c</c>
+    /// was the parse error "Unexpected token '='" for the whole script (the Bash tool sets pipefail). A statement list
+    /// is wrapped in <c>$( ... )</c> like a compound operand (current scope, so PIPESTATUS still lands). Test:
+    /// <see cref="PsBuild.IsStatementList"/> (quote/nesting aware), not a raw <c>;</c>, which every script block has.
+    /// </summary>
+    private static string ChainPipelineOperand(string pipelineText)
+        => PsBuild.IsStatementList(pipelineText) ? PsBuild.Subexpr(pipelineText) : pipelineText;
 
     private static readonly System.Text.RegularExpressions.Regex ChainOperandAssignment = new(@"^\$[A-Za-z_][\w:]*\s*=(?!=)", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
 

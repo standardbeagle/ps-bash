@@ -102,4 +102,11 @@ public class BashParityGapDifferentialTests
 
     [SkippableFact] public Task Pipefail_ReportsFailure()
         => Same("set -o pipefail; false | true; echo $?");
+
+    // REGRESSION: under pipefail a pipeline after `&&` / `||` was a PowerShell parse error for the whole script.
+    // Each operand's status, PIPESTATUS and output order must also match bash.
+    [SkippableFact] public Task Pipefail_PipelineAsAndOrOperand()
+        => Same("set -o pipefail; true && echo a | cat; false || echo b | cat; echo c | false && echo no; echo st=$?; "
+                + "true && false | true; echo st=$? \"${PIPESTATUS[@]}\"; ! echo d | cat && echo no2; echo st=$?; "
+                + "true && echo e | false || echo f | cat; echo st=$?");
 }
