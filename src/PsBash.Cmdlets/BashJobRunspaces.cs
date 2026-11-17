@@ -25,6 +25,9 @@ namespace PsBash.Cmdlets;
 public static class BashJobRunspaces
 {
     private static readonly object Gate = new();
+    // A job's scalar store is keyed by its runspace: the one PowerShell runs the calling thread's pipeline in.
+    static BashJobRunspaces() => PsBash.Core.ScalarOverlay.CurrentOwner = static () => Runspace.DefaultRunspace;
+
     private static readonly List<Runspace> Idle = [];
     private static readonly ConditionalWeakTable<Runspace, Baseline> Baselines = new();
     private static string? _modulePath;
@@ -78,12 +81,15 @@ public static class BashJobRunspaces
         text.Append("Enter-BashJobTurn $__bgTurn $__bgClock\n");
         text.Append(body.ToString()).Append('\n').Append(tail);
         var turn = JobTurn.Next(Runspace.DefaultRunspace);
+        // The job's scalars as of the `&` (section 3): copied here, on the launching thread, before the shell goes on.
+        var scalars = PsBash.Core.ScalarOverlay.Capture();
         var ps = PowerShell.Create();
         try
         {
             ps.AddScript(text.ToString()).AddArgument(status).AddArgument(restore).AddArgument(BackgroundJobStdin.Inherit(session))
                 .AddArgument(vars).AddArgument(turn);
             Bind(ps, modulePath, turn);
+            scalars.Attach(ps.Runspace);
             // The launch: the job's sleeps count from here (JobClock), as a forked job's do in bash. After the bind: time the
             // launcher spent waiting for a runspace delays the shell as much as the job, so it is not the job's to pay back.
             ps.AddArgument(JobClock.Launch());
@@ -91,6 +97,7 @@ public static class BashJobRunspaces
         }
         catch
         {
+            if (ps.Runspace is { } bound) PsBash.Core.ScalarOverlay.Detach(bound);
             ps.Dispose();
             throw;
         }
@@ -236,6 +243,7 @@ public static class BashJobRunspaces
 
     private static void Release(Runspace rs, bool reusable)
     {
+        PsBash.Core.ScalarOverlay.Detach(rs);
         reusable = reusable && rs.RunspaceStateInfo.State == RunspaceState.Opened
             && Baselines.TryGetValue(rs, out var baseline) && baseline.Clean;
         if (reusable)
@@ -264,6 +272,12 @@ public static class BashJobRunspaces
         // resolves to Restricted, Open() cannot load the psm1 ("running scripts is disabled") and every `cmd &` fails.
         // Windows only: elsewhere setting it throws PlatformNotSupportedException at Open().
         if (OperatingSystem.IsWindows()) iss.ExecutionPolicy = Microsoft.PowerShell.ExecutionPolicy.Bypass;
+        // `$env:NAME` is the job's own scalar store, not the process environment the foreground shares (section 3).
+        // By index: CreateDefault's entries come from the core snap-in, and Remove(name, type) leaves them in place (the
+        // Env drive then stays PowerShell's, measured).
+        for (int i = iss.Providers.Count - 1; i >= 0; i--)
+            if (iss.Providers[i].Name == "Environment") iss.Providers.RemoveItem(i);
+        iss.Providers.Add(new SessionStateProviderEntry(JobEnvironmentProvider.ProviderName, typeof(JobEnvironmentProvider), null));
         if (!string.IsNullOrEmpty(modulePath) && File.Exists(modulePath)) iss.ImportPSModule([modulePath]);
         return iss;
     }
@@ -278,6 +292,7 @@ public static class BashJobRunspaces
         try
         {
             rs.Open();
+            JobProgramLookup.Install(rs.SessionStateProxy.InvokeCommand);
             Baselines.AddOrUpdate(rs, Baseline.Capture(rs.SessionStateProxy.InvokeProvider));
             lock (Gate) _owned++;
             return rs;

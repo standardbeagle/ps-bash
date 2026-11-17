@@ -87,7 +87,10 @@ against bash.
 is a plain `prog args` with no stderr merge, in any position (statement, `$( )`, pipeline stage, `&`, `exec prog`,
 `env prog`, `command prog`, `xargs prog`, `find -exec prog`, `time prog`), and `.cmd` / `.bat`. PowerShell's
 native-command processor copies the process environment and has no hook. Programs started with `2>&1` / `&>` / `|&`,
-and every nested shell, are not affected.
+and every nested shell, are not affected. In an in-process background job none of this applies except `.cmd` /
+`.bat`: the job runspace's lookup hook starts every other program through `Invoke-BashNative` and `ChildStdio`, from
+the job's own store (`background-jobs.md` §3). A `.cmd` / `.bat` there gets the process environment, which is the
+shell's current values, not the job's launch-time ones.
 
 Removing the unexported variables from the process environment around the launch is not a fix: a thread-mode
 background job reads `$env:NAME` from the same process while the program starts, and would see the variable
@@ -128,14 +131,17 @@ Rules:
 - **PowerShell-owned names** (`PsBash.Core.PowerShellOwnedVariables`: `$input`, `$Host`, `$PID`, `$args`, …) are
   never a bash value and the emitter never names a PowerShell variable after one.
 - **Emitter: a loop binds the shell variable.** `for` iterates a private `$__psbash_lvN` and sets the shell variable
-  each pass (`PsBuild.SetShellScalar`: `[Environment]::SetEnvironmentVariable`, a fifth of a `$env:x =` write);
+  each pass (`PsBuild.SetShellScalar`: `[PsBash.Cmdlets.BashVariableStore]::Set`, a direct .NET call like the
+  `[Environment]::SetEnvironmentVariable` it replaced, which a background job would have bypassed);
   `for ((;;))` runs every clause through `Invoke-BashArith` against the store; `while read` sets the store per line
   and, at end of input, to "" as bash's failing `read` does (a `break` leaves the values). `_storeLoopVars` only keeps
   the no-word-split choice and the job capture. Only a function's lexical locals (`_lexicalLocals`: local arrays,
   `IFS`) emit as `$name`.
-- **Background job in a loop**: the body reads a launch-time copy, `$name`, handed over by
-  `Invoke-BashBackground -Vars`; an in-process job also gets it as a per-thread snapshot in `BashVariableStore`
-  (`EnterJobSnapshot`), so `$((j * 2)) &` in the job sees the value at launch while the loop moves on.
+- **Background job**: an in-process job's scalar storage is its own store, `ScalarOverlay`, copied at the `&` and
+  keyed by the job's runspace (`background-jobs.md` §3). `BashVariableStore` resolves it first, and the job
+  runspace's `$env:` drive is served from it, so a job never reads a value the shell wrote after its launch
+  (`x=a; { sleep 1; echo $x; } & x=b` prints a) and nothing it writes reaches the shell. A loop variable is also
+  handed over as `$name` by `Invoke-BashBackground -Vars`, for the body's PowerShell-variable reads.
 
 Guards (`Core.Tests/ShellVariableStorageGuardTests`): no cmdlet reaches a PowerShell variable by a computed name
 outside `BashVariableLookup` (internal `__Bash*` variables named through a constant are listed with a reason); no

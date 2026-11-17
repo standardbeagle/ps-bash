@@ -144,7 +144,7 @@ public sealed class InvokeBashSourceCommand : PSCmdlet
     private string? FindOnPath(string name)
     {
         if (name.IndexOfAny(['/', '\\']) >= 0 || !InvokeBashShoptCommand.IsEnabled("sourcepath")) return null;
-        string pathValue = Environment.GetEnvironmentVariable("PATH") ?? "";
+        string pathValue = BashVariableStore.Get("PATH") ?? "";
         // A prefix binding (`PATH=dir:$PATH . f`) may still hold bash's ':' separators.
         if (OperatingSystem.IsWindows()) pathValue = PsBash.Core.ExecutableLookup.ToWindowsPathList(pathValue);
         foreach (var dir in pathValue.Split(System.IO.Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))

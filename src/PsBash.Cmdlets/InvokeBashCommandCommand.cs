@@ -248,8 +248,10 @@ public sealed class InvokeBashCommandCommand : PSCmdlet
         if (target is ApplicationInfo file && PsBash.Core.ProgramFile.Plan(file.Path) is { } launch)
             invokeTarget = ScriptBlock.Create(launch.StandInScript(PsBash.Core.ProgramFile.Shown(name, file.Path)));
 
-        // `command prog 2>&1`: a program gets ONE pipe for stdout and stderr (docs/specs/stdio-messaging.md §4).
-        if (invokeTarget is ApplicationInfo app && !InvokeBashNativeCommand.IsBatchFile(app.Path) && StderrMerge.JoinsStdout(this))
+        // `command prog 2>&1`: a program gets ONE pipe for stdout and stderr (docs/specs/stdio-messaging.md §4). In a
+        // background job always through RunMerged: `& $c` would give it the process environment, not the job's scalars.
+        if (invokeTarget is ApplicationInfo app && !InvokeBashNativeCommand.IsBatchFile(app.Path)
+            && (StderrMerge.JoinsStdout(this) || PsBash.Core.ScalarOverlay.Current is not null))
         {
             try
             {

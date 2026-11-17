@@ -2603,8 +2603,8 @@ public static partial class PsEmitter
                 body = "try { " + body + " } finally { foreach ($__psbLsdV in @(Get-Variable -Name '__lsd_*' -Scope 0 -ErrorAction SilentlyContinue)) "
                      // An unset caller value is removed (a $null handed to SetEnvironmentVariable arrived as "": set, empty).
                      + "{ if ($null -ne $__psbLsdV.Value) { $__psbLsdN = $__psbLsdV.Name.Substring(6); "
-                     + "$__psbLsdR = [PsBash.Cmdlets.VarFrameStack]::LeaveLocal($__psbLsdN, $__psbLsdV.Value.v, [System.Environment]::GetEnvironmentVariable($__psbLsdN)); "
-                     + "if ($null -eq $__psbLsdR) { Remove-Item -LiteralPath ('Env:' + $__psbLsdN) -ErrorAction SilentlyContinue } else { [System.Environment]::SetEnvironmentVariable($__psbLsdN, $__psbLsdR) } } } }";
+                     + "$__psbLsdR = [PsBash.Cmdlets.VarFrameStack]::LeaveLocal($__psbLsdN, $__psbLsdV.Value.v, [PsBash.Cmdlets.BashVariableStore]::Get($__psbLsdN)); "
+                     + "if ($null -eq $__psbLsdR) { Remove-Item -LiteralPath ('Env:' + $__psbLsdN) -ErrorAction SilentlyContinue } else { [PsBash.Cmdlets.BashVariableStore]::Set($__psbLsdN, $__psbLsdR) } } } }";
             var sb = new StringBuilder();
             // A PowerShell alias outranks a function of the same name (`r`, `h`, `diff`), so a bash function
             // that shares its name would never run; drop the alias first.
@@ -4906,7 +4906,7 @@ public static partial class PsEmitter
             // `export 'NAME+=VALUE'` (the run-time eval of `export NAME${x}+=v` quotes each field) appends.
             sbOut.Append($"$__psbD = {expr}; $__psbI = $__psbD.IndexOf('='); ")
                  .Append("if ($__psbI -gt 0) { $__psbN = $__psbD.Substring(0, $__psbI); $__psbV = $__psbD.Substring($__psbI + 1); ")
-                 .Append("if ($__psbN.EndsWith('+')) { $__psbN = $__psbN.Substring(0, $__psbN.Length - 1); $__psbV = [string][Environment]::GetEnvironmentVariable($__psbN) + $__psbV }; ")
+                 .Append("if ($__psbN.EndsWith('+')) { $__psbN = $__psbN.Substring(0, $__psbN.Length - 1); $__psbV = [string][PsBash.Cmdlets.BashVariableStore]::Get($__psbN) + $__psbV }; ")
                  .Append("Set-Item -LiteralPath ('Env:' + $__psbN) -Value $__psbV" + markReadonly)
                  // `export "$k=$v"`: `declare -p` shows the x attribute, as for a literal `export X=1`.
                  .Append(name == "export" ? "; " + PsBuild.MarkExportedAtRunTime("$__psbN") : "")
@@ -10468,7 +10468,7 @@ public static partial class PsEmitter
             // `${!ref@a}`: the attribute letters of the variable NAMED by $ref.
             if (op == "@a")
                 return "$(& { $__in = [string]$(" + IndLookup(true) + "); if ($__in) { $__iv = Get-Variable -Name $__in -ValueOnly -ErrorAction Ignore; "
-                    + "if ($null -eq $__iv) { $__iv = [System.Environment]::GetEnvironmentVariable($__in) }; "
+                    + "if ($null -eq $__iv) { $__iv = [PsBash.Cmdlets.BashVariableStore]::Get($__in) }; "
                     + "[PsBash.Cmdlets.BashQuoteText]::Attributes($__in, $__iv) } })";
             if (op.StartsWith(":=", StringComparison.Ordinal) || op.StartsWith('='))
             {
@@ -10476,7 +10476,7 @@ public static partial class PsEmitter
                 // The name first: an unset or empty ref reports its error once and assigns nothing.
                 return "$(& { $__ivn = [string]$(" + IndLookup(true) + "); if ($__ivn -eq '') { return }; "
                     + "$__iv0 = $(" + IndLookup(false) + "); $__iv = $__iv0; $__ir = " + assigned + "; "
-                    + "if ($__iv -cne $__iv0) { [System.Environment]::SetEnvironmentVariable($__ivn, [string]$__iv) }; $__ir })";
+                    + "if ($__iv -cne $__iv0) { [PsBash.Cmdlets.BashVariableStore]::Set($__ivn, [string]$__iv) }; $__ir })";
             }
             string indRef = "$(" + IndLookup(false) + ")";
             // Always the `$( … )` subexpression form: it stays one word beside a literal prefix (`x=${!ref-d}`).

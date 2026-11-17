@@ -63,6 +63,7 @@ public class ShellVariableStorageGuardTests
         ["InvokeBashRedirectCommand.cs|RedirectFailedVariable"] = "the redirect-failure mark's own constant",
         ["BashShellState.cs|BashRuntime.SubshellPidVariable"] = "the subshell pid mark's own constant",
         ["BashRuntime.cs|SubshellPidVariable"] = "the subshell pid mark's own constant",
+        ["JobClock.cs|VariableName"] = "a background job's launch clock's own constant (__psbashJobClock)",
     };
 
     private const string Primitive = "BashVariableLookup.cs";
@@ -170,7 +171,7 @@ public class ShellVariableStorageGuardTests
     {
         string ps = BashTranspiler.Transpile($"for {name} in 1; do echo ${name}; done");
         Assert.DoesNotMatch(new Regex(@"\$(?:\{" + name + @"\}|" + name + @"\b)(?!:)", RegexOptions.IgnoreCase), ps);
-        Assert.Contains("SetEnvironmentVariable('" + name + "'", ps);
+        Assert.Contains("BashVariableStore]::Set('" + name + "'", ps);
     }
 
     // The job (another runspace, or another process) is handed the value the loop has at launch; the loop moves on.

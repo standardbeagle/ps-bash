@@ -253,10 +253,11 @@ public static class BashShellState
     /// </summary>
     public static object? Restore(SessionState session, Snapshot saved)
     {
-        // In a background job's pooled runspace the variables, readonly set and shopt table are the PARENT's
-        // (process-wide, shared): putting the snapshot back would undo what the parent wrote while the job ran
-        // (`(sleep 1) & x=1; wait` lost x). Such a job's own writes are handled by Invoke-BashBackground (-Isolated).
-        if (IsTrue(session.PSVariable.GetValue("global:" + BackgroundRunspaceMark)))
+        // In a background job's pooled runspace the readonly set and shopt table are the PARENT's (process-wide,
+        // shared): putting the snapshot back would undo what the parent wrote while the job ran. The job's scalars
+        // and their export attribute are its own (ScalarOverlay, taken at the `&`), so those are put back.
+        bool inJob = IsTrue(session.PSVariable.GetValue("global:" + BackgroundRunspaceMark));
+        if (inJob && PsBash.Core.ScalarOverlay.Current is null)
             return RestoreRunspaceGlobals(session, saved);
 
         // Variables: drop what the body added, reset what it changed. Only differences are written.
@@ -275,6 +276,7 @@ public static class BashShellState
         }
 
         PsBash.Core.ShellExports.Restore(saved.Exports);
+        if (inJob) return RestoreRunspaceGlobals(session, saved);
         InvokeBashShoptCommand.RestoreOptions(saved.Shopt);
         // `readonly` made inside the body ends with it, like the variable it protects.
         lock (ReadonlyNames) { ReadonlyNames.Clear(); ReadonlyNames.UnionWith(saved.Readonly); }

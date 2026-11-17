@@ -70,7 +70,7 @@ public sealed class InvokeBashHashCommand : PSCmdlet
             }
         }
         var names = args[i..];
-        string? pathValue = Environment.GetEnvironmentVariable("PATH");
+        string? pathValue = BashVariableStore.Get("PATH");
         var table = CommandHashTable.For(Runspace.DefaultRunspace ?? (object)SessionState);
 
         if (names.Length == 0 && targets) { Fail(1, "hash: -t: option requires an argument"); return; }

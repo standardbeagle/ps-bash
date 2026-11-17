@@ -17,9 +17,10 @@ namespace PsBash.Core;
 /// emitted code keeps there), is NOT exported: there is no "mark as unexported" step an assignment site could forget.
 /// </para>
 /// <para>
-/// The table is process-wide, like the environment it describes. It lives in this assembly because both the host
-/// (per-invocation reset, the interactive shell's direct spawn) and the cmdlets use it. See
-/// <c>docs/specs/environment-model.md</c>.
+/// The foreground's table is process-wide, like the environment it describes. An in-process background job has its
+/// own copy, with its own variables (<see cref="ScalarOverlay"/>): every member here works on the store of the code
+/// running on the calling thread. It lives in this assembly because both the host (per-invocation reset, the
+/// interactive shell's direct spawn) and the cmdlets use it. See <c>docs/specs/environment-model.md</c>.
 /// </para>
 /// </summary>
 public static class ShellExports
@@ -41,7 +42,17 @@ public static class ShellExports
     private static readonly string[] ShellOwned = ["OPTIND"];
 
     private static readonly object Gate = new();
-    private static HashSet<string> s_exported = new(NameComparer);
+
+    /// <summary>One store's export attribute: the foreground's (<see cref="s_process"/>) or a job's.</summary>
+    internal sealed class Table
+    {
+        public HashSet<string> Exported = new(NameComparer);
+
+        /// <summary>While <c>set -a</c> is on: the unexported variables and their values when it was turned on.</summary>
+        public Dictionary<string, string>? Baseline;
+    }
+
+    private static readonly Table s_process = new();
     private static bool s_seeded;
 
     /// <summary>
@@ -51,8 +62,30 @@ public static class ShellExports
     /// </summary>
     private static bool s_tracking;
 
-    /// <summary>While <c>set -a</c> is on: the unexported variables and their values when it was turned on.</summary>
-    private static Dictionary<string, string>? s_allExportBaseline;
+    /// <summary>
+    /// The store of the calling code, its gate held by the caller: the job's (<see cref="ScalarOverlay.Current"/>), or
+    /// the foreground's, synced.
+    /// </summary>
+    private readonly struct Scope
+    {
+        public readonly ScalarOverlay? Overlay;
+        public readonly Table Table;
+        public Scope(ScalarOverlay? overlay) { Overlay = overlay; Table = overlay?.Exports ?? s_process; }
+        public object Gate => (object?)Overlay?.Gate ?? ShellExports.Gate;
+
+        public string? Value(string name) => Overlay is null ? Environment.GetEnvironmentVariable(name) : Overlay.Get(name);
+
+        public IEnumerable<KeyValuePair<string, string>> Values()
+        {
+            if (Overlay is not null)
+            {
+                foreach (var kv in Overlay.Entries()) yield return kv;
+                yield break;
+            }
+            foreach (DictionaryEntry e in Environment.GetEnvironmentVariables())
+                if (e.Key is string name) yield return new KeyValuePair<string, string>(name, e.Value as string ?? "");
+        }
+    }
 
     /// <summary>
     /// A shell starts: every variable in the process environment now was inherited, so it is exported. Called by the
@@ -74,59 +107,77 @@ public static class ShellExports
             if (e.Key is string name) set.Add(name);
         foreach (var name in ShellExported) set.Add(name);
         foreach (var name in ShellOwned) set.Remove(name);
-        s_exported = set;
-        s_allExportBaseline = null;
+        s_process.Exported = set;
+        s_process.Baseline = null;
         s_seeded = true;
     }
 
-    /// <summary>Under the gate: seeded, and the assignments made under <c>set -a</c> so far are exported.</summary>
-    private static void SyncLocked()
+    /// <summary>Under the scope's gate: seeded, and the assignments made under <c>set -a</c> so far are exported.</summary>
+    private static void SyncLocked(Scope scope)
     {
-        if (!s_seeded || !s_tracking) SeedLocked();
-        if (s_allExportBaseline is null) return;
-        foreach (DictionaryEntry e in Environment.GetEnvironmentVariables())
+        if (scope.Overlay is null && (!s_seeded || !s_tracking)) SeedLocked();
+        var t = scope.Table;
+        if (t.Baseline is null) return;
+        foreach (var (name, value) in scope.Values())
         {
-            if (e.Key is not string name || s_exported.Contains(name)) continue;
-            var value = e.Value as string ?? "";
+            if (t.Exported.Contains(name)) continue;
             // Assigned since `set -a`: new, or its value changed. (An assignment of the SAME value is not seen.)
-            if (!s_allExportBaseline.TryGetValue(name, out var before) || !string.Equals(before, value, StringComparison.Ordinal))
-                s_exported.Add(name);
+            if (!t.Baseline.TryGetValue(name, out var before) || !string.Equals(before, value, StringComparison.Ordinal))
+                t.Exported.Add(name);
+        }
+    }
+
+    /// <summary>A copy of the export attribute of <paramref name="from"/>'s store (the foreground's when null), for a new job.</summary>
+    internal static Table CopyTable(ScalarOverlay? from)
+    {
+        var scope = new Scope(from);
+        lock (scope.Gate)
+        {
+            SyncLocked(scope);
+            return new Table
+            {
+                Exported = new HashSet<string>(scope.Table.Exported, NameComparer),
+                Baseline = scope.Table.Baseline is null ? null : new Dictionary<string, string>(scope.Table.Baseline, NameComparer),
+            };
         }
     }
 
     /// <summary>Whether <paramref name="name"/> has the export attribute (set or not).</summary>
     public static bool IsExported(string name)
     {
-        lock (Gate)
+        var scope = new Scope(ScalarOverlay.Current);
+        lock (scope.Gate)
         {
-            SyncLocked();
-            return s_exported.Contains(name);
+            SyncLocked(scope);
+            return scope.Table.Exported.Contains(name);
         }
     }
 
     /// <summary><c>export NAME</c> / <c>declare -x NAME</c>. An unset name keeps the attribute for a later assignment.</summary>
     public static void Export(params string[] names)
     {
-        lock (Gate)
+        var scope = new Scope(ScalarOverlay.Current);
+        lock (scope.Gate)
         {
-            SyncLocked();
+            SyncLocked(scope);
             foreach (var name in names)
-                if (!string.IsNullOrEmpty(name)) s_exported.Add(name);
+                if (!string.IsNullOrEmpty(name)) scope.Table.Exported.Add(name);
         }
     }
 
     /// <summary><c>export -n NAME</c> / <c>declare +x NAME</c>: the variable stays, children stop seeing it.</summary>
     public static void Unexport(params string[] names)
     {
-        lock (Gate)
+        var scope = new Scope(ScalarOverlay.Current);
+        lock (scope.Gate)
         {
-            SyncLocked();
+            SyncLocked(scope);
             foreach (var name in names)
             {
-                s_exported.Remove(name);
+                scope.Table.Exported.Remove(name);
                 // Under `set -a` the name is unexported as of now; only a later assignment exports it again.
-                if (s_allExportBaseline is not null && Environment.GetEnvironmentVariable(name) is { } value)
-                    s_allExportBaseline[name] = value;
+                if (scope.Table.Baseline is not null && scope.Value(name) is { } value)
+                    scope.Table.Baseline[name] = value;
             }
         }
     }
@@ -134,47 +185,61 @@ public static class ShellExports
     /// <summary><c>unset NAME</c>: the variable and its attributes are gone; a later <c>NAME=v</c> is a new, unexported one.</summary>
     public static void Forget(string name)
     {
-        lock (Gate)
+        var scope = new Scope(ScalarOverlay.Current);
+        lock (scope.Gate)
         {
-            SyncLocked();
-            s_exported.Remove(name);
-            s_allExportBaseline?.Remove(name);
+            SyncLocked(scope);
+            scope.Table.Exported.Remove(name);
+            scope.Table.Baseline?.Remove(name);
         }
     }
 
     /// <summary><c>set -a</c> / <c>set -o allexport</c>: every variable assigned while it is on is exported.</summary>
     public static bool AllExport
     {
-        get { lock (Gate) return s_allExportBaseline is not null; }
+        get
+        {
+            var scope = new Scope(ScalarOverlay.Current);
+            lock (scope.Gate) return scope.Table.Baseline is not null;
+        }
         set
         {
-            lock (Gate)
+            var scope = new Scope(ScalarOverlay.Current);
+            lock (scope.Gate)
             {
-                SyncLocked(); // turning it off: what was assigned under it stays exported
-                if (!value) { s_allExportBaseline = null; return; }
-                if (s_allExportBaseline is not null) return;
+                SyncLocked(scope); // turning it off: what was assigned under it stays exported
+                var t = scope.Table;
+                if (!value) { t.Baseline = null; return; }
+                if (t.Baseline is not null) return;
                 var baseline = new Dictionary<string, string>(NameComparer);
-                foreach (DictionaryEntry e in Environment.GetEnvironmentVariables())
-                    if (e.Key is string name && !s_exported.Contains(name)) baseline[name] = e.Value as string ?? "";
-                s_allExportBaseline = baseline;
+                foreach (var (name, v) in scope.Values())
+                    if (!t.Exported.Contains(name)) baseline[name] = v;
+                t.Baseline = baseline;
             }
         }
     }
 
     /// <summary>The value a child process would see for <paramref name="name"/>: null when unset or not exported.</summary>
     public static string? Get(string name)
-        => IsExported(name) ? Environment.GetEnvironmentVariable(name) : null;
+    {
+        var scope = new Scope(ScalarOverlay.Current);
+        lock (scope.Gate)
+        {
+            SyncLocked(scope);
+            return scope.Table.Exported.Contains(name) ? scope.Value(name) : null;
+        }
+    }
 
     /// <summary>The environment a child process gets: every exported variable that is set.</summary>
     public static List<KeyValuePair<string, string>> Enumerate()
     {
         var result = new List<KeyValuePair<string, string>>();
-        lock (Gate)
+        var scope = new Scope(ScalarOverlay.Current);
+        lock (scope.Gate)
         {
-            SyncLocked();
-            foreach (DictionaryEntry e in Environment.GetEnvironmentVariables())
-                if (e.Key is string name && s_exported.Contains(name))
-                    result.Add(new KeyValuePair<string, string>(name, e.Value as string ?? ""));
+            SyncLocked(scope);
+            foreach (var kv in scope.Values())
+                if (scope.Table.Exported.Contains(kv.Key)) result.Add(kv);
         }
         return result;
     }
@@ -183,11 +248,12 @@ public static class ShellExports
     public static List<string> UnexportedNames()
     {
         var result = new List<string>();
-        lock (Gate)
+        var scope = new Scope(ScalarOverlay.Current);
+        lock (scope.Gate)
         {
-            SyncLocked();
-            foreach (DictionaryEntry e in Environment.GetEnvironmentVariables())
-                if (e.Key is string name && !s_exported.Contains(name)) result.Add(name);
+            SyncLocked(scope);
+            foreach (var kv in scope.Values())
+                if (!scope.Table.Exported.Contains(kv.Key)) result.Add(kv.Key);
         }
         return result;
     }
@@ -196,17 +262,25 @@ public static class ShellExports
     /// THE child-environment primitive. <paramref name="childEnvironment"/> starts as a copy of the process environment
     /// (plus whatever the caller set for the child); every shell variable that is not exported is removed from it. An
     /// entry the caller set itself - a name the process environment lacks, or a different value - is kept.
+    /// <para>In a job (<see cref="ScalarOverlay"/>) the process environment is the foreground's, not the job's: every
+    /// entry copied from it is replaced by the job's exported variables, and the caller's own entries are kept.</para>
     /// </summary>
     public static void RemoveUnexported(IDictionary<string, string?> childEnvironment)
     {
         ArgumentNullException.ThrowIfNull(childEnvironment);
-        List<string>? drop = null;
-        lock (Gate)
+        var scope = new Scope(ScalarOverlay.Current);
+        if (scope.Overlay is not null)
         {
-            SyncLocked();
+            ReplaceWithJobExports(childEnvironment, scope);
+            return;
+        }
+        List<string>? drop = null;
+        lock (scope.Gate)
+        {
+            SyncLocked(scope);
             foreach (var kv in childEnvironment)
             {
-                if (s_exported.Contains(kv.Key)) continue;
+                if (scope.Table.Exported.Contains(kv.Key)) continue;
                 var ours = Environment.GetEnvironmentVariable(kv.Key);
                 if (ours is null || !string.Equals(ours, kv.Value, StringComparison.Ordinal)) continue;
                 (drop ??= new List<string>()).Add(kv.Key);
@@ -214,6 +288,33 @@ public static class ShellExports
         }
         if (drop is null) return;
         foreach (var name in drop) childEnvironment.Remove(name);
+    }
+
+    private static void ReplaceWithJobExports(IDictionary<string, string?> childEnvironment, Scope scope)
+    {
+        // The caller's own entries: a name the process environment lacks, or a different value.
+        List<KeyValuePair<string, string?>>? callers = null;
+        var given = new HashSet<string>(childEnvironment.Keys, NameComparer);
+        foreach (var kv in childEnvironment)
+        {
+            var process = Environment.GetEnvironmentVariable(kv.Key);
+            if (process is null || !string.Equals(process, kv.Value, StringComparison.Ordinal))
+                (callers ??= new List<KeyValuePair<string, string?>>()).Add(kv);
+        }
+        childEnvironment.Clear();
+        lock (scope.Gate)
+        {
+            SyncLocked(scope);
+            foreach (var kv in scope.Values())
+            {
+                if (!scope.Table.Exported.Contains(kv.Key)) continue;
+                // One the caller removed (the nested shell drops PSBASH_TIMEOUT) stays removed.
+                if (!given.Contains(kv.Key) && Environment.GetEnvironmentVariable(kv.Key) is not null) continue;
+                childEnvironment[kv.Key] = kv.Value;
+            }
+        }
+        if (callers is null) return;
+        foreach (var kv in callers) childEnvironment[kv.Key] = kv.Value;
     }
 
     /// <summary>
@@ -248,11 +349,12 @@ public static class ShellExports
     /// <summary>A copy of the table: a subshell's <c>export</c> ends with it.</summary>
     public static Saved Save()
     {
-        lock (Gate)
+        var scope = new Scope(ScalarOverlay.Current);
+        lock (scope.Gate)
         {
-            SyncLocked();
-            return new Saved(new HashSet<string>(s_exported, NameComparer),
-                s_allExportBaseline is null ? null : new Dictionary<string, string>(s_allExportBaseline, NameComparer));
+            SyncLocked(scope);
+            return new Saved(new HashSet<string>(scope.Table.Exported, NameComparer),
+                scope.Table.Baseline is null ? null : new Dictionary<string, string>(scope.Table.Baseline, NameComparer));
         }
     }
 
@@ -260,11 +362,12 @@ public static class ShellExports
     public static void Restore(Saved saved)
     {
         ArgumentNullException.ThrowIfNull(saved);
-        lock (Gate)
+        var scope = new Scope(ScalarOverlay.Current);
+        lock (scope.Gate)
         {
-            s_exported = new HashSet<string>(saved.Exported, NameComparer);
-            s_allExportBaseline = saved.Baseline is null ? null : new Dictionary<string, string>(saved.Baseline, NameComparer);
-            s_seeded = true;
+            scope.Table.Exported = new HashSet<string>(saved.Exported, NameComparer);
+            scope.Table.Baseline = saved.Baseline is null ? null : new Dictionary<string, string>(saved.Baseline, NameComparer);
+            if (scope.Overlay is null) s_seeded = true;
         }
     }
 
@@ -276,13 +379,14 @@ public static class ShellExports
     {
         ArgumentNullException.ThrowIfNull(names);
         var was = new bool[names.Count];
-        lock (Gate)
+        var scope = new Scope(ScalarOverlay.Current);
+        lock (scope.Gate)
         {
-            SyncLocked();
+            SyncLocked(scope);
             for (int i = 0; i < names.Count; i++)
             {
-                was[i] = s_exported.Contains(names[i]);
-                s_exported.Add(names[i]);
+                was[i] = scope.Table.Exported.Contains(names[i]);
+                scope.Table.Exported.Add(names[i]);
             }
         }
         return was;
@@ -293,12 +397,13 @@ public static class ShellExports
     {
         ArgumentNullException.ThrowIfNull(names);
         ArgumentNullException.ThrowIfNull(was);
-        lock (Gate)
+        var scope = new Scope(ScalarOverlay.Current);
+        lock (scope.Gate)
         {
             for (int i = 0; i < names.Count && i < was.Length; i++)
             {
-                if (was[i]) s_exported.Add(names[i]);
-                else s_exported.Remove(names[i]);
+                if (was[i]) scope.Table.Exported.Add(names[i]);
+                else scope.Table.Exported.Remove(names[i]);
             }
         }
     }
@@ -306,11 +411,12 @@ public static class ShellExports
     /// <summary>Set one name's attribute (a function's local ends: the caller's variable has its own attribute back).</summary>
     public static void SetExported(string name, bool exported)
     {
-        lock (Gate)
+        var scope = new Scope(ScalarOverlay.Current);
+        lock (scope.Gate)
         {
-            SyncLocked();
-            if (exported) s_exported.Add(name);
-            else s_exported.Remove(name);
+            SyncLocked(scope);
+            if (exported) scope.Table.Exported.Add(name);
+            else scope.Table.Exported.Remove(name);
         }
     }
 }

@@ -1210,10 +1210,11 @@ public static class PsBuild
     /// <summary>
     /// A loop binds its variable for one pass: the shell variable (its one storage, environment-model.md section 8),
     /// set to <paramref name="valueExpr"/> as a string. Through .NET directly: a fifth of the cost of a
-    /// <c>$env:name =</c> provider write, which a loop pays on every pass.
+    /// <c>$env:name =</c> provider write, which a loop pays on every pass. Through the store, never
+    /// <c>System.Environment</c>: in a background job the store is the job's own (background-jobs.md section 3).
     /// </summary>
     public static string SetShellScalar(string name, string valueExpr)
-        => "[System.Environment]::SetEnvironmentVariable(" + SingleQuote(name) + ", [string](" + valueExpr + "))";
+        => "[PsBash.Cmdlets.BashVariableStore]::Set(" + SingleQuote(name) + ", [string](" + valueExpr + "))";
 
     /// <summary><c>typeset +n name</c>: no longer a nameref; the variable takes the reference's target name as its value.</summary>
     public static string ClearNameref(string name)

@@ -3379,8 +3379,8 @@ public class PsEmitterTests
         // b="beta gamma".
         var result = PsEmitter.Transpile("while read -r a b; do echo \"$a\"; done < f");
 
-        Assert.Contains("SetEnvironmentVariable('a', [string]($(if ($__psbash_readf.Count -gt 0) { $__psbash_readf[0] } else { '' })))", result);
-        Assert.Contains("SetEnvironmentVariable('b', [string]($(if ($__psbash_readf.Count -gt 1) { $__psbash_readf[1] } else { '' })))", result);
+        Assert.Contains("BashVariableStore]::Set('a', [string]($(if ($__psbash_readf.Count -gt 0) { $__psbash_readf[0] } else { '' })))", result);
+        Assert.Contains("BashVariableStore]::Set('b', [string]($(if ($__psbash_readf.Count -gt 1) { $__psbash_readf[1] } else { '' })))", result);
         // The limit argument is what gives the LAST variable the remainder.
         Assert.Contains("-split '\\s+', 2", result);
     }
@@ -3403,7 +3403,7 @@ public class PsEmitterTests
         // Guard the narrow claim: the one-variable form is unchanged (no split).
         var result = PsEmitter.Transpile("while read -r l; do echo \"$l\"; done < f");
 
-        Assert.Contains("SetEnvironmentVariable('l', [string]($_.Trim([char[]]@(32,9))))", result);
+        Assert.Contains("BashVariableStore]::Set('l', [string]($_.Trim([char[]]@(32,9))))", result);
         Assert.DoesNotContain("__psbash_readf", result);
     }
 
@@ -3525,7 +3525,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("for x in a b c; do echo $x; done");
 
-        Assert.Equal("$__psbash_iter = 0; :__psbash_l0 foreach ($__psbash_lv0 in 'a','b','c') { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; [System.Environment]::SetEnvironmentVariable('x', [string]($__psbash_lv0)); Invoke-BashEcho $env:x }; if ($__psbash_iter -eq 0) { $global:LASTEXITCODE = 0 }", result);
+        Assert.Equal("$__psbash_iter = 0; :__psbash_l0 foreach ($__psbash_lv0 in 'a','b','c') { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; [PsBash.Cmdlets.BashVariableStore]::Set('x', [string]($__psbash_lv0)); Invoke-BashEcho $env:x }; if ($__psbash_iter -eq 0) { $global:LASTEXITCODE = 0 }", result);
     }
 
     [Fact]
@@ -3533,7 +3533,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("for i in 1 2 3; do echo $i; done");
 
-        Assert.Equal("$__psbash_iter = 0; :__psbash_l0 foreach ($__psbash_lv0 in 1,2,3) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; [System.Environment]::SetEnvironmentVariable('i', [string]($__psbash_lv0)); Invoke-BashEcho $env:i }; if ($__psbash_iter -eq 0) { $global:LASTEXITCODE = 0 }", result);
+        Assert.Equal("$__psbash_iter = 0; :__psbash_l0 foreach ($__psbash_lv0 in 1,2,3) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; [PsBash.Cmdlets.BashVariableStore]::Set('i', [string]($__psbash_lv0)); Invoke-BashEcho $env:i }; if ($__psbash_iter -eq 0) { $global:LASTEXITCODE = 0 }", result);
     }
 
     [Fact]
@@ -3544,7 +3544,7 @@ public class PsEmitterTests
         // ConvertTo-BashGlob: the shell's pathname expansion (relative names, no hidden files,
         // sorted); an unmatched glob falls back to the literal word so the loop still runs
         // once — bash nullglob is OFF by default.
-        Assert.Equal("$global:__BashFailGlob = $false; $__psbash_iter = 0; :__psbash_l0 foreach ($__psbash_lv0 in @(ConvertTo-BashGlob '*.txt')) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; [System.Environment]::SetEnvironmentVariable('f', [string]($__psbash_lv0)); Invoke-BashCat $env:f }; if (-not $global:__BashFailGlob) { if ($__psbash_iter -eq 0) { $global:LASTEXITCODE = 0 } }", result);
+        Assert.Equal("$global:__BashFailGlob = $false; $__psbash_iter = 0; :__psbash_l0 foreach ($__psbash_lv0 in @(ConvertTo-BashGlob '*.txt')) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; [PsBash.Cmdlets.BashVariableStore]::Set('f', [string]($__psbash_lv0)); Invoke-BashCat $env:f }; if (-not $global:__BashFailGlob) { if ($__psbash_iter -eq 0) { $global:LASTEXITCODE = 0 } }", result);
     }
 
     [Fact]
@@ -3579,7 +3579,7 @@ public class PsEmitterTests
         // $(if ...) subexpression — a bare (if ...) is parsed by PowerShell as an
         // invocation of a command named "if" and fails at runtime; the subexpression
         // operator is required for the implicit-$@ iteration to actually run.
-        Assert.Equal("$__psbash_iter = 0; :__psbash_l0 foreach ($__psbash_lv0 in $(if ($global:BashPositional) { $global:BashPositional } else { $args })) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; [System.Environment]::SetEnvironmentVariable('x', [string]($__psbash_lv0)); Invoke-BashEcho \"$env:x\" }; if ($__psbash_iter -eq 0) { $global:LASTEXITCODE = 0 }", result);
+        Assert.Equal("$__psbash_iter = 0; :__psbash_l0 foreach ($__psbash_lv0 in $(if ($global:BashPositional) { $global:BashPositional } else { $args })) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; [PsBash.Cmdlets.BashVariableStore]::Set('x', [string]($__psbash_lv0)); Invoke-BashEcho \"$env:x\" }; if ($__psbash_iter -eq 0) { $global:LASTEXITCODE = 0 }", result);
     }
 
     [Fact]
@@ -3616,7 +3616,7 @@ public class PsEmitterTests
         // the functions it calls read (environment-model.md section 8). A PowerShell `$i` beside it was a second
         // storage a callee read in place of its own `local i`.
         Assert.Contains("foreach ($__psbash_lv0 in", result);
-        Assert.Contains("[System.Environment]::SetEnvironmentVariable('i', [string]($__psbash_lv0)); Invoke-BashEcho $env:i", result);
+        Assert.Contains("[PsBash.Cmdlets.BashVariableStore]::Set('i', [string]($__psbash_lv0)); Invoke-BashEcho $env:i", result);
         Assert.DoesNotContain("foreach ($i ", result);
     }
 
@@ -3705,7 +3705,7 @@ public class PsEmitterTests
         // literals); at end of input it is set to "" as bash's failing `read` does, which a `break` (to the outer
         // label) skips.
         Assert.Equal(
-            ":__psbash_l0 do { :__psbash_l0r while ($null -ne ($__psbash_rec0 = [PsBash.Cmdlets.SharedStdinLine]::Next($global:__BashStdIn))) { :__psbash_lc0 foreach ($_ in @($__psbash_rec0)) { $global:LASTEXITCODE = 0; [System.Environment]::SetEnvironmentVariable('line', [string]($_.Trim([char[]]@(32,9)))); Invoke-BashEcho $env:line } }; [System.Environment]::SetEnvironmentVariable('line', [string]('')); } while ($false)",
+            ":__psbash_l0 do { :__psbash_l0r while ($null -ne ($__psbash_rec0 = [PsBash.Cmdlets.SharedStdinLine]::Next($global:__BashStdIn))) { :__psbash_lc0 foreach ($_ in @($__psbash_rec0)) { $global:LASTEXITCODE = 0; [PsBash.Cmdlets.BashVariableStore]::Set('line', [string]($_.Trim([char[]]@(32,9)))); Invoke-BashEcho $env:line } }; [PsBash.Cmdlets.BashVariableStore]::Set('line', [string]('')); } while ($false)",
             result);
     }
 
@@ -3713,7 +3713,7 @@ public class PsEmitterTests
     [Fact]
     public void Transpile_WhileReadLine_IfsEmptyKeepsTheLineAndDelimiterReadsRecords()
     {
-        Assert.Contains("SetEnvironmentVariable('line', [string]($_));", PsEmitter.Transpile("while IFS= read -r line; do echo $line; done")!);
+        Assert.Contains("BashVariableStore]::Set('line', [string]($_));", PsEmitter.Transpile("while IFS= read -r line; do echo $line; done")!);
         Assert.DoesNotContain("foreach ($_ in @((", PsEmitter.Transpile("while read -r -d '' line; do echo $line; done")!);
     }
 
@@ -3725,7 +3725,7 @@ public class PsEmitterTests
         // prints it verbatim), so the emitted single-quoted string must be untouched.
         var result = PsEmitter.Transpile("while read line; do echo 'lit=$line'; done");
 
-        Assert.Contains("SetEnvironmentVariable('line', [string]($_.Trim([char[]]@(32,9))));", result);
+        Assert.Contains("BashVariableStore]::Set('line', [string]($_.Trim([char[]]@(32,9))));", result);
         Assert.Contains("'lit=$line'", result);   // literal preserved, NOT rewritten to $_
         Assert.DoesNotContain("'lit=$_'", result);
     }
@@ -4589,7 +4589,7 @@ public class PsEmitterTests
     public void Transpile_ForInGlobCharClass_EmitsConvertToBashGlob()
     {
         var result = PsEmitter.Transpile("for f in [abc]*.txt; do cat $f; done");
-        Assert.Equal("$global:__BashFailGlob = $false; $__psbash_iter = 0; :__psbash_l0 foreach ($__psbash_lv0 in @(ConvertTo-BashGlob '[abc]*.txt')) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; [System.Environment]::SetEnvironmentVariable('f', [string]($__psbash_lv0)); Invoke-BashCat $env:f }; if (-not $global:__BashFailGlob) { if ($__psbash_iter -eq 0) { $global:LASTEXITCODE = 0 } }", result);
+        Assert.Equal("$global:__BashFailGlob = $false; $__psbash_iter = 0; :__psbash_l0 foreach ($__psbash_lv0 in @(ConvertTo-BashGlob '[abc]*.txt')) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; [PsBash.Cmdlets.BashVariableStore]::Set('f', [string]($__psbash_lv0)); Invoke-BashCat $env:f }; if (-not $global:__BashFailGlob) { if ($__psbash_iter -eq 0) { $global:LASTEXITCODE = 0 } }", result);
     }
 
     [Fact]
@@ -5067,7 +5067,7 @@ public class PsEmitterTests
     public void Transpile_ArrayIteration_EmitsForEachOverArray()
     {
         var result = PsEmitter.Transpile("for item in ${arr[@]}; do echo $item; done");
-        Assert.Equal("$__psbash_iter = 0; :__psbash_l0 foreach ($__psbash_lv0 in $(if ($arr -is [System.Collections.IDictionary]) { $arr.Values } else { $arr })) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; [System.Environment]::SetEnvironmentVariable('item', [string]($__psbash_lv0)); Invoke-BashEcho $env:item }; if ($__psbash_iter -eq 0) { $global:LASTEXITCODE = 0 }", result);
+        Assert.Equal("$__psbash_iter = 0; :__psbash_l0 foreach ($__psbash_lv0 in $(if ($arr -is [System.Collections.IDictionary]) { $arr.Values } else { $arr })) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; [PsBash.Cmdlets.BashVariableStore]::Set('item', [string]($__psbash_lv0)); Invoke-BashEcho $env:item }; if ($__psbash_iter -eq 0) { $global:LASTEXITCODE = 0 }", result);
     }
 
     [Fact]
@@ -5711,7 +5711,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("while read -r line; do echo $line; done");
         Assert.Contains(":__psbash_l0r while ($null -ne ($__psbash_rec0 = " + PsBuild.SharedStdinNextLine + "))", result);
-        Assert.Contains("SetEnvironmentVariable('line', [string]($_", result);
+        Assert.Contains("BashVariableStore]::Set('line', [string]($_", result);
     }
 
     // read -p "prompt" VAR -> Invoke-BashRead -p "prompt" VAR
@@ -6469,7 +6469,7 @@ public class PsEmitterTests
     [InlineData("alias LEFT='('\nLEFT echo one; echo two )", "Invoke-BashEcho two")]
     [InlineData("alias a=\na (( v = 0 ))\necho done", "Invoke-BashEcho done")]
     [InlineData("alias e_='for i in 1 2 3; do echo $i;'\ne_ done", "foreach")]
-    [InlineData("alias FOR1='for '\nalias FOR2='FOR1 '\nalias eye1='i '\nalias eye2='eye1 '\nalias IN='in '\nFOR2 eye2 IN 1 2; do echo $i; done", "SetEnvironmentVariable('i'")]
+    [InlineData("alias FOR1='for '\nalias FOR2='FOR1 '\nalias eye1='i '\nalias eye2='eye1 '\nalias IN='in '\nFOR2 eye2 IN 1 2; do echo $i; done", "BashVariableStore]::Set('i'")]
     public void Transpile_AliasHoldingPartOfACompoundCommand_IsReadAsItsText(string script, string expected)
         => Assert.Contains(expected, PsEmitter.Transpile("shopt -s expand_aliases\n" + script));
 

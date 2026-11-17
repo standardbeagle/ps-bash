@@ -178,7 +178,7 @@ function Get-BashIndirectValue {
     if ($n -eq '#') { return [string]$Pos.Count }
     if ($n -eq '?') { return [string]$global:LASTEXITCODE }
     if ($n -eq 'FUNCNAME') { return ([string]@(Get-BashFuncNames | Where-Object { $_ -ne 'Get-BashIndirectValue' })[0]) }
-    if ($n -eq 'OPTIND' -and $null -eq [System.Environment]::GetEnvironmentVariable('OPTIND') -and $null -eq (Get-Variable -Name OPTIND -ValueOnly -ErrorAction Ignore)) { return '1' }
+    if ($n -eq 'OPTIND' -and $null -eq $env:OPTIND -and $null -eq (Get-Variable -Name OPTIND -ValueOnly -ErrorAction Ignore)) { return '1' }
     # A subscript that leaves a quote open (`a[1"]`) is no array reference: "invalid variable name" below.
     if ($n -match '^([A-Za-z_][A-Za-z0-9_]*)\[(.*)\]$' -and [PsBash.Cmdlets.BashSubscriptExpansion]::QuotesBalanced($Matches[2])) {
         $v = [PsBash.Cmdlets.BashVariableLookup]::ArrayHolder($ExecutionContext.SessionState, $Matches[1])
@@ -3151,12 +3151,8 @@ function Invoke-BashBackground {
     # WaitForExit hang in `wait`; a ready runspace (BashJobRunspaces, docs/specs/background-jobs.md section 12.5)
     # removes the runspace open (hundreds of ms) that made jobs start late and out of launch order.
     if ($script:BashBgJobs.Count -ge $script:BashBgMaxJobs) { Remove-BashBgFinished }
-    # The job shares this process's environment (bash scalars are env vars), so a plain run would leak
-    # the child's assignments into the parent. The wrapper records the environment at job start and, when
-    # the body ends, puts back every variable the job changed (unless the parent has since written a
-    # different value) — only for an -Isolated job that found no host of its own to run in: the environment is
-    # process-wide, so the diff cannot tell the job's writes from the parent's, and applying it to a job that
-    # changes nothing undid the parent's assignments. It also reports the body's exit status for `wait`.
+    # The job's scalars are its own copy, taken at the & (BashJobRunspaces.NewJob, ScalarOverlay): it never writes the
+    # process environment the shell keeps them in (section 3). The wrapper reports the body's exit status for `wait`.
     $status = [hashtable]::Synchronized(@{ Code = 0; At = 0L })
     $__bgHead = @'
 param($__bgStatus, $__bgRestore, $__bgStdin, $__bgVars, $__bgTurn, $__bgClock)
@@ -3168,9 +3164,7 @@ $global:__psbashBgRunspace = $true
 $global:__BashStdIn = $__bgStdin
 # The job body is transpiled bash, whose operands the shell already globbed (FileSystemHelpers.OperandsShellExpanded).
 $global:__BashOperandsExpanded = $true
-# The loop variables the body reads, as of the launch: the loop goes on writing the environment this job shares.
-[PsBash.Cmdlets.BashVariableStore]::EnterJobSnapshot($__bgVars)
-$__bgBefore =if ($__bgRestore) { [Environment]::GetEnvironmentVariables() } else { @{} }
+# The job's scalars ($env:NAME) are its own copy, taken at the & (ScalarOverlay, docs/specs/background-jobs.md section 3).
 $__bgOk = $false
 try {
 '@
@@ -3187,18 +3181,8 @@ try {
     # A body that ended early (`exit N` stops the pipeline) leaves its status in LASTEXITCODE; an error with none is 1.
     $x = $global:LASTEXITCODE
     $__bgCode = if ($__bgOk) { if ($null -eq $x) { 0 } else { [int]$x } } elseif ($x) { [int]$x } else { 1 }
-    $__bgAfter = if ($__bgRestore) { [Environment]::GetEnvironmentVariables() } else { @{} }
-    foreach ($__bgKey in @($__bgAfter.Keys) + @($__bgBefore.Keys)) {
-        $__bgNew = $__bgAfter[$__bgKey]
-        $__bgOld = $__bgBefore[$__bgKey]
-        if ($__bgNew -ceq $__bgOld) { continue }
-        if ([Environment]::GetEnvironmentVariable($__bgKey) -ceq $__bgNew) {
-            [Environment]::SetEnvironmentVariable($__bgKey, $__bgOld)
-        }
-    }
-    # A pooled runspace must not keep the cursor (or the launch-time variables) for the next job.
+    # A pooled runspace must not keep the cursor for the next job.
     $global:__BashStdIn = $null
-    [PsBash.Cmdlets.BashVariableStore]::LeaveJobSnapshot()
     $__bgStatus.Code = $__bgCode
     $__bgStatus.At = [System.Diagnostics.Stopwatch]::GetTimestamp()
     # Last: the runspace goes back for the next job without the globals this one created.

@@ -461,7 +461,7 @@ public class PsBuildTests
     // A loop's binding writes the shell variable only, quoting the name and stringifying the value.
     [Fact]
     public void SetShellScalar_WritesTheShellVariableAsAString()
-        => Assert.Equal("[System.Environment]::SetEnvironmentVariable('it''s', [string]($__psbash_lv0))",
+        => Assert.Equal("[PsBash.Cmdlets.BashVariableStore]::Set('it''s', [string]($__psbash_lv0))",
             PsBuild.SetShellScalar("it's", "$__psbash_lv0"));
 
     [Fact]

@@ -45,16 +45,20 @@ public class BashVariableStoreGuardTests
             Path.Combine(RepoRoot(), "src", "PsBash.Cmdlets"), "*.cs", SearchOption.AllDirectories);
 
     /// <summary>
-    /// Names that are ps-bash HOST configuration, not bash script variables.
-    /// Reading these from the real process environment is correct and required:
-    /// scoping them per invocation would break the launcher's ability to
-    /// configure the host at all.
+    /// Names that are ps-bash HOST configuration or process identity, not bash script variables, each with the reason
+    /// it reads the real process environment. Scoping them to a job or an invocation would break the launcher's
+    /// ability to configure the host at all. <c>PATH</c> is NOT here: <c>PATH=dir:$PATH</c> is the script's own
+    /// variable (a background job has its own copy, background-jobs.md section 3), read through the store.
     /// </summary>
+    private static readonly (string Literal, string Reason)[] HostConfigNames =
+    [
+        ("\"PSBASH_", "the launcher's knobs for the host (timeouts, caps, modes, spares)"),
+        ("\"NO_COLOR\"", "the terminal's color preference for the host's own rendering"),
+        ("\"USERNAME\"", "the OS account a file owner falls back to, not a shell variable"),
+    ];
+
     private static bool IsHostConfigName(string line) =>
-        line.Contains("\"PSBASH_", StringComparison.Ordinal)
-        || line.Contains("\"NO_COLOR\"", StringComparison.Ordinal)
-        || line.Contains("\"USERNAME\"", StringComparison.Ordinal)
-        || line.Contains("\"PATH\"", StringComparison.Ordinal);
+        HostConfigNames.Any(n => line.Contains(n.Literal, StringComparison.Ordinal));
 
     /// <summary>
     /// A helper whose name declares it reads HOST CONFIG (e.g.
@@ -91,7 +95,7 @@ public class BashVariableStoreGuardTests
             for (int i = 0; i < lines.Length; i++)
             {
                 var line = lines[i];
-                if (!Regex.IsMatch(line, @"Environment\.(Get|Set)EnvironmentVariable\b")) continue;
+                if (!Regex.IsMatch(line, @"Environment\.(Get|Set)EnvironmentVariables?\b")) continue;
                 if (line.TrimStart().StartsWith("//", StringComparison.Ordinal)) continue;
                 if (line.Contains("///", StringComparison.Ordinal)) continue;
                 if (IsHostConfigName(line)) continue;
@@ -103,8 +107,62 @@ public class BashVariableStoreGuardTests
 
         Assert.True(offenders.Count == 0,
             "A bash VARIABLE must go through BashVariableStore, not Environment directly "
-            + "(host config knobs like PSBASH_*/NO_COLOR/USERNAME/PATH are exempt). Offenders:\n  "
+            + "(in a background job the store is the job's own, ScalarOverlay; only the host config names in "
+            + "HostConfigNames are exempt, each with its reason). Offenders:\n  "
             + string.Join("\n  ", offenders));
+    }
+
+    private static string Src(params string[] parts) => File.ReadAllText(Path.Combine([RepoRoot(), "src", .. parts]));
+
+    /// <summary>
+    /// Emitted PowerShell and the module read and write a scalar as <c>$env:NAME</c> (a job runspace's Env: drive is
+    /// the job's store) or through <c>BashVariableStore</c>, never <c>System.Environment</c>, which is the process
+    /// environment the foreground and every other job share (background-jobs.md section 3).
+    /// </summary>
+    [Fact]
+    public void EmittedCodeAndModule_NeverReachAScalarThroughSystemEnvironment()
+    {
+        var direct = new Regex(@"\[(System\.)?Environment\]::(Get|Set)EnvironmentVariables?\b");
+        var offenders = new List<string>();
+        foreach (var (name, text) in new[]
+                 {
+                     ("PsEmitter.cs", Src("PsBash.Transpiler", "Parser", "PsEmitter.cs")),
+                     ("PsBuild.cs", Src("PsBash.Transpiler", "Parser", "PsBuild.cs")),
+                     ("PsBash.psm1", Src("PsBash.Module", "PsBash.psm1")),
+                 })
+        {
+            var lines = text.Split('\n');
+            for (int i = 0; i < lines.Length; i++)
+            {
+                var line = lines[i].TrimStart();
+                if (line.StartsWith("//", StringComparison.Ordinal) || line.StartsWith('#')) continue;
+                if (direct.IsMatch(lines[i])) offenders.Add($"{name}:{i + 1}: {line}");
+            }
+        }
+        Assert.True(offenders.Count == 0,
+            "Emitted code and the module must reach a bash scalar through $env:NAME or "
+            + "[PsBash.Cmdlets.BashVariableStore]: System.Environment bypasses a background job's own store. Offenders:\n  "
+            + string.Join("\n  ", offenders));
+    }
+
+    /// <summary>
+    /// A job runspace replaces PowerShell's Environment provider, and resolves a program a command word names through
+    /// <c>Invoke-BashNative</c> (PowerShell's own launcher would hand it the process environment).
+    /// </summary>
+    [Fact]
+    public void AJobRunspace_ServesEnvFromTheJobStore_AndStartsProgramsThroughTheStore()
+    {
+        var runspaces = Src("PsBash.Cmdlets", "BashJobRunspaces.cs");
+        Assert.Contains("typeof(JobEnvironmentProvider)", runspaces, StringComparison.Ordinal);
+        Assert.Contains("JobProgramLookup.Install(", runspaces, StringComparison.Ordinal);
+        Assert.Contains("ScalarOverlay.Capture()", runspaces, StringComparison.Ordinal);
+        // Only there: the shell's own runspace keeps PowerShell's launcher and its own lookup hook.
+        var installers = Directory.EnumerateFiles(Path.Combine(RepoRoot(), "src"), "*.cs", SearchOption.AllDirectories)
+            .Where(f => !f.Contains(".Tests", StringComparison.Ordinal) && !f.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+            .Where(f => File.ReadAllText(f).Contains("JobProgramLookup.Install(", StringComparison.Ordinal))
+            .Select(Path.GetFileName)
+            .ToList();
+        Assert.Equal(["BashJobRunspaces.cs"], installers);
     }
 
     [Fact]

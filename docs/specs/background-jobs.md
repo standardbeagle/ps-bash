@@ -64,6 +64,34 @@ Non-goals
 
 1. **Snapshot at `&`.** State is captured on the thread that executes the `&` statement, before it
    returns. Later parent writes are invisible to the job and vice versa.
+
+   **An in-process job's scalars are its own store** (`PsBash.Core.ScalarOverlay`, Transpiler assembly). The job
+   shares the shell's process, so the process environment cannot be its storage: `BashJobRunspaces.NewJob` copies
+   the scalars and the export attribute (`ShellExports`' table) on the launching thread and attaches the copy to the
+   job's runspace (`ConditionalWeakTable` keyed by the runspace, never by variable name; detached in `Release`). Every
+   access goes through it:
+
+   - `$env:NAME` in the job: the runspace's `Env:` drive is `JobEnvironmentProvider` (PowerShell's Environment
+     provider is removed from `BashJobRunspaces.InitialState`), which reads and writes `BashVariableStore`;
+   - C# and emitted code: `BashVariableStore.Get/Set/Enumerate` and `ShellExports` resolve `ScalarOverlay.Current`
+     (the calling thread's `Runspace.DefaultRunspace`; one `Interlocked` read when no job is attached), else the
+     process environment. Emitted code and the psm1 never call `System.Environment` for a scalar;
+   - a child process: `BashVariableStore.ApplyTo` → `ShellExports.RemoveUnexported` fills the child's block from the
+     job's exported values (the caller's own entries, such as `PSBASH_*` knobs it set, stay);
+   - a program a command word names: PowerShell's native-command processor would copy the process environment, so
+     the job runspace's `PostCommandLookupAction` (`JobProgramLookup`, installed only there) replaces it with a
+     stand-in that runs `Invoke-BashNative` (input streamed record by record through a steppable pipeline), which
+     starts it through `ChildStdio`. `command prog` and `Invoke-BashNative` itself start it the same way in a job.
+   - a job launched in a job copies the outer job's store.
+
+   Not covered: **a `.cmd` / `.bat`** keeps PowerShell's launcher (its argument quoting is the one cmd.exe parses
+   right), so it gets the process environment: the shell's current values, not the job's. **Command lookup** uses the
+   process `PATH`: a job's `PATH=dir:$PATH` reaches its children's environment but does not change which program a
+   name resolves to. Shell options (`shopt`, `set -o`) and `readonly` stay process-wide (`BashShellState.Restore`).
+   Guards: `Core.Tests/BashVariableStoreGuardTests` (no direct `Environment` access for a bash variable in Cmdlets,
+   none in emitted code or the psm1, the provider and hook installed only in job runspaces),
+   `Cmdlets.Tests/BackgroundJobRunspaceTests`, `Core.Tests/ScalarOverlayTests`; behavior against bash:
+   `Differential.Tests/BackgroundJobLaunchValuesDifferentialTests`.
 2. **Identity.** `$$` stays the *parent shell's* id in the job; `$BASHPID` is the job's own. `$!` in the
    parent is the job's OS pid.
 3. **stdin.** A non-interactive job's stdin is `/dev/null` (NUL) unless redirected; an interactive one

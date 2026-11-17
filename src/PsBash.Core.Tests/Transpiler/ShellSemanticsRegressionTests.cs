@@ -83,7 +83,7 @@ public class ShellSemanticsRegressionTests
         var append = BashTranspiler.Transpile("export 'QQ+= -L'", TranspileContext.Eval);
         // After quote removal it is the assignment NAME+=VALUE (BashParser.QuotedDeclarationAssignment).
         Assert.Contains("$env:QQ += ' -L'", append);
-        Assert.Contains("if ($__psbN.EndsWith('+')) { $__psbN = $__psbN.Substring(0, $__psbN.Length - 1); $__psbV = [string][Environment]::GetEnvironmentVariable($__psbN) + $__psbV }",
+        Assert.Contains("if ($__psbN.EndsWith('+')) { $__psbN = $__psbN.Substring(0, $__psbN.Length - 1); $__psbV = [string][PsBash.Cmdlets.BashVariableStore]::Get($__psbN) + $__psbV }",
             BashTranspiler.Transpile("export \"$n+= -L\"", TranspileContext.Eval));
         // Oracle: `two='b c'; readonly $two; b=new` is status 1; the eval text `readonly 'b' 'c'` marked nothing.
         Assert.Contains("[PsBash.Cmdlets.BashShellState]::MarkReadonly('c')", BashTranspiler.Transpile("readonly 'b' 'c'", TranspileContext.Eval));

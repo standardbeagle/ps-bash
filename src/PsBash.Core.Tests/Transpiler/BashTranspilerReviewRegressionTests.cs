@@ -658,7 +658,7 @@ public class BashTranspilerReviewRegressionTests
     public void Transpile_ForInLoop_BindsOnlyTheShellVariable()
     {
         var ps = BashTranspiler.Transpile("for i in 1 2 3; do :; done");
-        Assert.Contains("[System.Environment]::SetEnvironmentVariable('i', [string]($__psbash_lv0))", ps);
+        Assert.Contains("[PsBash.Cmdlets.BashVariableStore]::Set('i', [string]($__psbash_lv0))", ps);
         Assert.DoesNotContain("foreach ($i ", ps);
     }
 
@@ -1170,7 +1170,7 @@ public class BashTranspilerReviewRegressionTests
     {
         var ps = BashTranspiler.Transpile($"for {name} in 1 2; do echo ${name}; done");
         Assert.Contains("foreach ($__psbash_lv0 in", ps);
-        Assert.Contains($"[System.Environment]::SetEnvironmentVariable('{name}', [string]($__psbash_lv0))", ps);
+        Assert.Contains($"[PsBash.Cmdlets.BashVariableStore]::Set('{name}', [string]($__psbash_lv0))", ps);
         Assert.DoesNotContain($"foreach (${name} ", ps);
     }
 

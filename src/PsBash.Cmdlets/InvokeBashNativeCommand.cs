@@ -45,7 +45,8 @@ public sealed class InvokeBashNativeCommand : PSCmdlet, IDisposable
     {
         // The one lookup of NAME (the host's command-lookup hook counts it as a use, as running it would).
         CommandInfo? info;
-        try { info = InvokeCommand.GetCommand(Name, CommandTypes.All); }
+        // A job runspace's hook would hand back the stand-in that calls this cmdlet (JobProgramLookup): look past it.
+        try { info = JobProgramLookup.Raw(() => InvokeCommand.GetCommand(Name, CommandTypes.All)); }
         catch (Exception ex) when (!FileSystemHelpers.IsPipelineStop(ex)) { info = null; }
 
         var args = FlattenArguments(Arguments);
@@ -54,9 +55,13 @@ public sealed class InvokeBashNativeCommand : PSCmdlet, IDisposable
         object? standIn = info is ApplicationInfo file && PsBash.Core.ProgramFile.Plan(file.Path) is { } launch
             ? ScriptBlock.Create(launch.StandInScript(PsBash.Core.ProgramFile.Shown(Name, file.Path)))
             : null;
-        if (standIn is null && info is ApplicationInfo app && !IsBatchFile(app.Path) && StderrMerge.JoinsStdout(this))
+        // In a background job a program is always started here: PowerShell would give it the process environment,
+        // the foreground's scalars, not the job's (ScalarOverlay, background-jobs.md section 3).
+        bool merge = StderrMerge.JoinsStdout(this);
+        if (standIn is null && info is ApplicationInfo app && !IsBatchFile(app.Path)
+            && (merge || PsBash.Core.ScalarOverlay.Current is not null))
         {
-            StartMerged(app.Path, args);
+            StartProgram(app.Path, args, merge);
             return;
         }
 
@@ -111,15 +116,16 @@ public sealed class InvokeBashNativeCommand : PSCmdlet, IDisposable
         _fallback?.Dispose();
     }
 
-    private void StartMerged(string path, List<string> args)
+    private void StartProgram(string path, List<string> args, bool merge)
     {
         var psi = ProgramStartInfo(this, path, args);
         try
         {
             // Piped input is fed to it; otherwise it reads the process stdin, as a program PowerShell starts does.
+            // Not merged, its stderr goes through this cmdlet's error stream (StreamingChildProcess).
             bool piped = MyInvocation.ExpectingInput;
             _child = BashRuntime.StartChildProcessStreaming(psi, keepStdinOpen: piped,
-                new ChildStdioMode(MergeStderr: true, InheritStdin: !piped));
+                new ChildStdioMode(MergeStderr: merge, InheritStdin: !piped));
         }
         catch (Exception ex) when (!FileSystemHelpers.IsPipelineStop(ex))
         {
@@ -141,16 +147,18 @@ public sealed class InvokeBashNativeCommand : PSCmdlet, IDisposable
     /// <summary>
     /// For a cmdlet that runs a command by name (<c>env</c>, <c>xargs</c>, <c>find -exec</c>, <c>command</c>): the program
     /// path to run through <see cref="RunMerged"/> when the cmdlet's stderr goes down the pipeline
-    /// (<see cref="StderrMerge.Redirected"/>: merged, or split off to a file or <c>/dev/null</c>) and
+    /// (<see cref="StderrMerge.Redirected"/>: merged, or split off to a file or <c>/dev/null</c>) or the cmdlet runs in a
+    /// background job (its environment is the job's scalars, <see cref="JobProgramLookup"/>), and
     /// <paramref name="name"/> is a program the OS starts as it is; null otherwise (run it by name as before, where the
     /// lookup hook gives a <c>#!</c> script or a document <see cref="PsBash.Core.ProgramFile"/>'s stand-in).
     /// </summary>
     internal static string? MergedProgramPath(PSCmdlet cmdlet, string name)
     {
-        if (string.IsNullOrEmpty(name) || !StderrMerge.Redirected(cmdlet)) return null;
+        // In a background job always: PowerShell would start it with the process environment, not the job's scalars.
+        if (string.IsNullOrEmpty(name) || (!StderrMerge.Redirected(cmdlet) && PsBash.Core.ScalarOverlay.Current is null)) return null;
         try
         {
-            return cmdlet.InvokeCommand.GetCommand(name, CommandTypes.All) is ApplicationInfo app && !IsBatchFile(app.Path)
+            return JobProgramLookup.Raw(() => cmdlet.InvokeCommand.GetCommand(name, CommandTypes.All)) is ApplicationInfo app && !IsBatchFile(app.Path)
                    && PsBash.Core.ProgramFile.Plan(app.Path) is null
                 ? app.Path
                 : null;

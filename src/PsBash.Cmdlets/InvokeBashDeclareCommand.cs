@@ -103,15 +103,15 @@ public sealed class InvokeBashDeclareCommand : PSCmdlet
 
     private void PrintBareVariables()
     {
-        var env = Environment.GetEnvironmentVariables();
-        var keys = new List<string>();
-        foreach (System.Collections.DictionaryEntry e in env) keys.Add((string)e.Key);
+        var env = new Dictionary<string, string>(PsBash.Core.ShellExports.NameComparer);
+        foreach (var (name, value) in BashVariableStore.Enumerate()) env[name] = value;
+        var keys = new List<string>(env.Keys);
         foreach (var nr in BashShellState.NamerefNames())
             if (!keys.Contains(nr)) keys.Add(nr);
         var arrays = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var (an, av) in AllVariables())
         {
-            if (env.Contains(an)) continue;
+            if (env.ContainsKey(an)) continue;
             string? text = av switch
             {
                 BashSparseArray sp => DeclarePrinter.FormatSparse(sp),
@@ -125,7 +125,7 @@ public sealed class InvokeBashDeclareCommand : PSCmdlet
         foreach (var key in keys)
         {
             if (arrays.TryGetValue(key, out var arrText)) { WriteLine(key + "=" + arrText); continue; }
-            string v = (string?)env[key] ?? BashShellState.NamerefTarget(key) ?? string.Empty;
+            string v = (env.TryGetValue(key, out var held) ? held : null) ?? BashShellState.NamerefTarget(key) ?? string.Empty;
             bool plain = true;
             foreach (char c in v)
                 if (!(char.IsAsciiLetterOrDigit(c) || "_-./:+=@%,".IndexOf(c) >= 0)) { plain = false; break; }
@@ -161,9 +161,8 @@ public sealed class InvokeBashDeclareCommand : PSCmdlet
     {
         var result = new List<(string, object?)>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
-        var env = Environment.GetEnvironmentVariables();
-        foreach (System.Collections.DictionaryEntry e in env)
-            if (e.Key is string k && !k.StartsWith("__", StringComparison.Ordinal) && seen.Add(k)) result.Add((k, e.Value));
+        foreach (var (k, value) in BashVariableStore.Enumerate())
+            if (!k.StartsWith("__", StringComparison.Ordinal) && seen.Add(k)) result.Add((k, value));
         try
         {
             foreach (var v in SessionState.InvokeProvider.Item.Get(new[] { @"variable:\*" }, force: false, literalPath: false))
