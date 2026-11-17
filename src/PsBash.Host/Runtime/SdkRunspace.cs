@@ -207,7 +207,20 @@ internal sealed class SdkRunspace : IAsyncDisposable
         // Fix: enumerate cmdlets from the in-process SMA 7.x assemblies and pre-register
         // them in the ISS so they're immediately available without hitting the module loader.
         RegisterSdkCmdlets(iss);
+        RemoveForeignAliases(iss);
         return iss;
+    }
+
+    /// <summary>
+    /// Drop every alias that is not the bash runtime's own (<see cref="PsBash.Core.PowerShellAliases"/>): PowerShell resolves an alias
+    /// before a function or a program, so a built-in one turned a bash command word into a cmdlet (<c>write</c>,
+    /// <c>r</c>, <c>start</c>). By index: entries that come from the core snap-in ignore Remove(name, type).
+    /// </summary>
+    internal static void RemoveForeignAliases(InitialSessionState iss)
+    {
+        for (int i = iss.Commands.Count - 1; i >= 0; i--)
+            if (iss.Commands[i] is SessionStateAliasEntry alias && !PsBash.Core.PowerShellAliases.IsBashRuntimeAlias(alias.Definition))
+                iss.Commands.RemoveItem(i);
     }
 
     /// <summary>

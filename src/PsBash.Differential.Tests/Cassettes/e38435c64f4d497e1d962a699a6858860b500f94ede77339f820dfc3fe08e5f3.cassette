@@ -1,0 +1,33 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 229
+stdout-length: 341
+stderr-length: 0
+==== SCRIPT ====
+for c in gci sls iex icm r h ni ri del erase ren select measure group foreach gcm saps; do
+  type -t "$c" >/dev/null 2>&1; t=$?; "$c" x >/dev/null 2>&1; echo "$c type=$t run=$?"
+done
+iex 'echo injected' 2>/dev/null; echo "iex=$?"
+==== STDOUT ====
+gci type=1 run=127
+sls type=1 run=127
+iex type=1 run=127
+icm type=1 run=127
+r type=1 run=127
+h type=1 run=127
+ni type=1 run=127
+ri type=1 run=127
+del type=1 run=127
+erase type=1 run=127
+ren type=1 run=127
+select type=0 run=127
+measure type=1 run=127
+group type=1 run=127
+foreach type=1 run=127
+gcm type=1 run=127
+saps type=1 run=127
+iex=127
+
+==== STDERR ====
+

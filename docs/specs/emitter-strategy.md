@@ -159,12 +159,31 @@ When a mapped command appears as a standalone statement (not a pipe target),
 name is in the `PsBuiltinAliases` set. PowerShell has built-in aliases for
 common commands (`echo`, `cat`, `ls`, `cd`, `pwd`, `mkdir`, `cp`, `mv`, `rm`,
 `sort`, `diff`, `sleep`) that resolve correctly without rewriting. These are
-excluded from standalone mapping to avoid unnecessary `Invoke-Bash*` calls when
-the native alias already does the right thing.
+excluded from standalone mapping: the module defines each as an alias of its `Invoke-Bash*`
+command, so the word already reaches the runtime. PowerShell's own aliases of those names are gone (2.3).
 
 For all other mapped commands used standalone (e.g., `grep file.txt`, `awk '{print}'
 data.csv`), the emitter rewrites them to `Invoke-Bash*` calls so the runtime
 function handles flag parsing.
+
+### 2.3 PowerShell's own aliases are not bash commands
+
+A bash runspace holds no PowerShell alias except the runtime's own (definition `Invoke-Bash*`, such as the
+`PsBuiltinAliases` above, which the module redefines). PowerShell resolves an alias before a function or a program,
+so with `CreateDefault`'s ~135 aliases every unmapped word that named one ran a cmdlet: `write -- $x` ran
+`Write-Output` and printed `--` (oils `hay.spec.sh`, Windows fleet s22e), `r` re-ran the previous command,
+`iex 'cmd'` evaluated PowerShell, `where` hid `where.exe`. In bash such a word is a function, a program on PATH, or
+"command not found" (127).
+
+**Invariant: every `InitialSessionState` a runspace runs bash code in drops the aliases that are not the runtime's
+own before the module's go in.** Rule: `PsBash.Core.PowerShellAliases.IsBashRuntimeAlias`. Builders:
+`SdkRunspace.CreateBaseSessionState` (the shell), `BashJobRunspaces.InitialState` (in-process jobs),
+`New-BashLazyStdin` (an unbounded pipe producer), the last two via `PsBash.Cmdlets.BashSessionState.RemoveForeignAliases`.
+Entries are removed by index: the core snap-in's ignore `Remove(name, type)`. The module (`PsBash.psm1`) removes only
+the aliases it replaces, because imported into a user's own pwsh it must leave `gci` and `%` alone. ps-bash's own
+PowerShell therefore names every command in full. Guards: `Core.Tests/PowerShellAliasGuardTests` (every builder
+strips), `Host.Tests/ForeignAliasTests` (the base state holds none; no psm1/ps1 command uses an alias),
+`Cmdlets.Tests/BashSessionStateTests`; behavior `Differential.Tests/PowerShellAliasWordTests`.
 
 ---
 

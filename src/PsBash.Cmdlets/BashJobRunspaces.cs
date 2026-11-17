@@ -281,6 +281,8 @@ public static class BashJobRunspaces
         for (int i = iss.Providers.Count - 1; i >= 0; i--)
             if (iss.Providers[i].Name == "Environment") iss.Providers.RemoveItem(i);
         iss.Providers.Add(new SessionStateProviderEntry(JobEnvironmentProvider.ProviderName, typeof(JobEnvironmentProvider), null));
+        // A job runs bash too: only the runtime's own aliases, as the shell's runspace (PsBash.Core.PowerShellAliases).
+        BashSessionState.RemoveForeignAliases(iss);
         if (!string.IsNullOrEmpty(modulePath) && File.Exists(modulePath)) iss.ImportPSModule([modulePath]);
         return iss;
     }

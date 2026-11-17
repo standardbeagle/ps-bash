@@ -27,6 +27,8 @@ public sealed class NewBashLazyStdinCommand : PSCmdlet
     protected override void EndProcessing()
     {
         var iss = InitialSessionState.CreateDefault();
+        // The producer is bash: a command word must not resolve to a PowerShell alias (PsBash.Core.PowerShellAliases).
+        BashSessionState.RemoveForeignAliases(iss);
 #pragma warning disable IL3000 // runs only in the (non-single-file) host runspace, where the cmdlet assembly has a real path
         iss.ImportPSModule(new[] { typeof(NewBashLazyStdinCommand).Assembly.Location });
 #pragma warning restore IL3000
