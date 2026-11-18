@@ -227,13 +227,13 @@ internal sealed partial class SignalForwarder : IDisposable, IAsyncDisposable
         var pty = s_pty;
         if (pty is null) return;
 
-        if (!PosixNative.TryGetWinsize(0, out short cols, out short rows))
+        if (!PsBash.Core.Platform.TerminalIoctl.TryGetWindowSize(0, out ushort cols, out ushort rows, out _))
             return;
-        if (cols <= 0 || rows <= 0) return;
+        if (cols is 0 or > (ushort)short.MaxValue || rows is 0 or > (ushort)short.MaxValue) return;
 
         try
         {
-            pty.Resize(cols, rows);
+            pty.Resize((short)cols, (short)rows);
             var s = s_self;
             if (s is not null) Interlocked.Increment(ref s._winchCount);
         }
@@ -439,43 +439,8 @@ internal sealed partial class SignalForwarder : IDisposable, IAsyncDisposable
             }
         }
 
-        /// <summary>
-        /// <c>ioctl(fd, TIOCGWINSZ)</c> — read a tty's window size. Returns
-        /// <c>false</c> (and zeroed out-params) if the fd is not a tty.
-        /// </summary>
-        public static bool TryGetWinsize(int fd, out short cols, out short rows)
-        {
-            var ws = default(Winsize);
-            if (ioctl(fd, TIOCGWINSZ, ref ws) != 0)
-            {
-                cols = 0; rows = 0;
-                return false;
-            }
-            cols = (short)ws.ws_col;
-            rows = (short)ws.ws_row;
-            return true;
-        }
-
-        // TIOCGWINSZ: Linux 0x5413; macOS/FreeBSD 0x40087468 (_IOR('t',104,winsize)).
-        public static ulong TIOCGWINSZ =>
-            RuntimeInformation.IsOSPlatform(OSPlatform.Linux)
-                ? 0x5413UL
-                : 0x40087468UL;
-
-        [StructLayout(LayoutKind.Sequential)]
-        public struct Winsize
-        {
-            public ushort ws_row;
-            public ushort ws_col;
-            public ushort ws_xpixel;
-            public ushort ws_ypixel;
-        }
-
         [LibraryImport(LibC, SetLastError = true)]
         public static partial int killpg(int pgrp, int sig);
-
-        [LibraryImport(LibC, SetLastError = true)]
-        public static partial int ioctl(int fd, ulong request, ref Winsize ws);
 
         [LibraryImport(LibC, SetLastError = true)]
         public static partial IntPtr signal(int signum, IntPtr handler);

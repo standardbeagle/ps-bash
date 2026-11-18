@@ -20,18 +20,8 @@ public sealed class InvokeBashKillCommand : PSCmdlet
     public string[]? Arguments { get; set; }
 
     // Number/name -> canonical SIGxxx, mirroring the psm1 table.
-    /// <summary>Linux: a terminated-but-unreaped child (state Z in /proc) is already gone for <c>kill -0</c>, as in bash.</summary>
-    private static bool IsZombie(int pid)
-    {
-        if (!OperatingSystem.IsLinux()) return false;
-        try
-        {
-            var stat = System.IO.File.ReadAllBytes("/proc/" + pid.ToString(System.Globalization.CultureInfo.InvariantCulture) + "/stat");
-            int close = Array.LastIndexOf(stat, (byte)')');
-            return close >= 0 && close + 2 < stat.Length && stat[close + 2] == (byte)'Z';
-        }
-        catch (Exception) { return false; }
-    }
+    /// <summary>A terminated-but-unreaped child (Linux state Z, macOS SZOMB) is already gone for <c>kill -0</c>, as in bash.</summary>
+    private static bool IsZombie(int pid) => PsBash.Core.Platform.ProcessInfo.IsZombie(pid);
 
     private static readonly Dictionary<string, string> Signals = new(StringComparer.Ordinal)
     {

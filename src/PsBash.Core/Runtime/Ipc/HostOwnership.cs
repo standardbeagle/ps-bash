@@ -70,7 +70,7 @@ public static class HostOwnership
 
     /// <summary>
     /// Injection seam for <see cref="ProcessOwnerIsCurrentUser"/>: the process
-    /// uid probe is Linux-only (/proc), so tests pass a synthetic probe to
+    /// uid probe answers only for a live process, so tests pass a synthetic probe to
     /// exercise the foreign-owner branch without a second local user.
     /// </summary>
     internal static CleanupDecision Classify(

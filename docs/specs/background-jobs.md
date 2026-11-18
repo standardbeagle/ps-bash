@@ -243,6 +243,29 @@ never throws: the OS refuses the start time of a child that runs as another user
 reaped and reports its exit. REGRESSION: the POSIX spawn caught only "gone", so on macOS every setuid program failed
 to start and stayed unreaped (`ps` listed no process). Guard: `ProcessIdentityTests.EverySpawn_TakesItsChildsIdentityFromOf`.
 
+### 6.1a Process information (one primitive)
+
+Questions about another process go through `PsBash.Core.Platform.ProcessInfo` (`src/PsBash.Transpiler/Platform/`),
+never a private `/proc` parser: `ParentPid` (nested-launcher detection `ProcessAncestry`, `ps-bash host gc`),
+`IsZombie` (`kill -0`), `GroupMembers` (`JobProcess.TreePids` on POSIX), `TryGetRealUid` (host ownership),
+`ProcessUmask` (the `umask` builtin's starting value).
+
+| Question | Windows | Linux | macOS |
+|---|---|---|---|
+| parent pid | `NtQueryInformationProcess` | `/proc/<pid>/stat` field 4 (after the last `)`) | libproc `proc_pidinfo(PROC_PIDTBSDINFO)` `pbi_ppid` |
+| zombie | never | stat state `Z` | `pbi_status == SZOMB` (5) |
+| group members | none (Job Object instead) | walk `/proc`, stat field 5 | `proc_listpids(PROC_ALL_PIDS)` + `pbi_pgid`, zombies excluded |
+| real uid | no opinion | `/proc/<pid>/status` `Uid:` | `pbi_ruid` |
+| umask | 022 | `/proc/self/status` `Umask:` | mkdir a 0777 probe dir and read back (no `getumask`; `umask(0)`/`umask(old)` races other threads) |
+
+`struct proc_bsdinfo` (XNU `bsd/sys/proc_info.h`, 136 bytes): `pbi_status`@4, `pbi_pid`@12, `pbi_ppid`@16,
+`pbi_ruid`@28, `pbi_pgid`@100. The decoders are public and unit-tested from hand-built buffers on every OS
+(`Core.Tests/Platform/ProcessInfoTests`); the live tests there check them against a child the test started.
+The umask is read once: ps-bash never calls `umask(2)` (one host serves many sessions); the builtin keeps the
+session's mask and `FileModeSpec.CurrentUmask` (chmod/mkdir symbolic modes, cp, tar) reads it.
+Guard: `PlatformProbeGuardTests` (no `/proc` path outside `Platform/` except inventoried Linux branches that have
+their own macOS branch: `ps`, `InheritedFdDetach`).
+
 ### 6.2 Lifecycle table — every way a job can end, and what happens
 
 | Event | Outcome |

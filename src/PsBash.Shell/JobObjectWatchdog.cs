@@ -15,8 +15,6 @@ namespace PsBash.Shell;
 /// </summary>
 internal static class JobObjectWatchdog
 {
-    private const int ProcStatMaxBytes = 4096;
-
     // Must live for the process lifetime so the kernel handle is not GC'd and
     // the Job Object is not closed prematurely. Closing the handle triggers the
     // KILL_ON_JOB_CLOSE semantics immediately.
@@ -130,77 +128,19 @@ internal static class JobObjectWatchdog
 
     /// <summary>
     /// Returns the parent process id of the process owning <paramref name="processHandle"/>,
-    /// or 0 if unavailable. Windows-only.
+    /// or 0 if unavailable. Windows-only (<see cref="PsBash.Core.Platform.ProcessInfo.ParentPidOfHandle"/>).
     /// </summary>
     public static int GetParentProcessId(IntPtr processHandle)
-    {
-        if (!OperatingSystem.IsWindows()) return 0;
-        try
-        {
-            var pbi = new PROCESS_BASIC_INFORMATION();
-            int status = NtQueryInformationProcess(
-                processHandle,
-                0, // ProcessBasicInformation
-                ref pbi,
-                Marshal.SizeOf(pbi),
-                out _);
-            if (status != 0) return 0;
-            return (int)pbi.InheritedFromUniqueProcessId.ToInt64();
-        }
-        catch { return 0; }
-    }
+        => PsBash.Core.Platform.ProcessInfo.ParentPidOfHandle(processHandle) ?? 0;
 
     /// <summary>
     /// Cross-platform parent-PID lookup by PID. Returns 0 if unavailable.
     /// Used by <c>ps-bash host gc</c> to identify orphaned ps-bash-host
-    /// processes whose launcher is dead.
+    /// processes whose launcher is dead. Windows, Linux and macOS all answer
+    /// through the one platform primitive <see cref="PsBash.Core.Platform.ProcessInfo.ParentPid"/>.
     /// </summary>
-    /// <remarks>
-    /// Windows: <see cref="NtQueryInformationProcess"/> on the process handle.
-    /// Linux: parse field 4 of <c>/proc/{pid}/stat</c>. The exe name (field 2)
-    ///   is wrapped in parentheses and may itself contain spaces and parens,
-    ///   so we locate the LAST closing paren and split after that.
-    /// macOS: not implemented (returns 0). The macOS gc path falls back to a
-    ///   conservative "no orphans found" answer; users can <c>kill</c> manually.
-    /// </remarks>
     public static int GetParentProcessIdByPid(int pid)
-    {
-        if (pid <= 0) return 0;
-        if (OperatingSystem.IsWindows())
-        {
-            try
-            {
-                using var p = Process.GetProcessById(pid);
-                return GetParentProcessId(p.Handle);
-            }
-            catch { return 0; }
-        }
-        if (OperatingSystem.IsLinux())
-        {
-            try
-            {
-                var statText = ReadProcStat(pid);
-                int lastParen = statText.LastIndexOf(')');
-                if (lastParen < 0 || lastParen + 2 >= statText.Length) return 0;
-                // After ")" comes: " S ppid ..." (state then ppid)
-                var rest = statText[(lastParen + 2)..];
-                var fields = rest.Split(' ');
-                if (fields.Length < 2) return 0;
-                return int.TryParse(fields[1], out var ppid) ? ppid : 0;
-            }
-            catch { return 0; }
-        }
-        return 0;
-    }
-
-    private static string ReadProcStat(int pid)
-    {
-        var path = $"/proc/{pid}/stat";
-        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-        Span<byte> buffer = stackalloc byte[ProcStatMaxBytes];
-        int read = stream.Read(buffer);
-        return System.Text.Encoding.UTF8.GetString(buffer[..read]);
-    }
+        => PsBash.Core.Platform.ProcessInfo.ParentPid(pid) ?? 0;
 
     // ------------------------- P/Invoke -------------------------
 
@@ -245,17 +185,6 @@ internal static class JobObjectWatchdog
         public UIntPtr PeakJobMemoryUsed;
     }
 
-    [StructLayout(LayoutKind.Sequential)]
-    private struct PROCESS_BASIC_INFORMATION
-    {
-        public IntPtr Reserved1;
-        public IntPtr PebBaseAddress;
-        public IntPtr Reserved2_0;
-        public IntPtr Reserved2_1;
-        public IntPtr UniqueProcessId;
-        public IntPtr InheritedFromUniqueProcessId;
-    }
-
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern IntPtr CreateJobObject(IntPtr lpJobAttributes, string? lpName);
 
@@ -271,12 +200,4 @@ internal static class JobObjectWatchdog
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool CloseHandle(IntPtr hObject);
-
-    [DllImport("ntdll.dll")]
-    private static extern int NtQueryInformationProcess(
-        IntPtr processHandle,
-        int processInformationClass,
-        ref PROCESS_BASIC_INFORMATION processInformation,
-        int processInformationLength,
-        out int returnLength);
 }

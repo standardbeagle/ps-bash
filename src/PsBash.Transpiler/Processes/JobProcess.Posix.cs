@@ -205,32 +205,17 @@ public sealed partial class JobProcess
         return Posix.kill(-Pid, sig) == 0;
     }
 
-    /// <summary>Live members of the process group, from /proc (Linux). Caller holds <c>_gate</c>.</summary>
+    /// <summary>Live members of the process group (<see cref="PsBash.Core.Platform.ProcessInfo.GroupMembers"/>: Linux /proc,
+    /// macOS libproc; zombies excluded). Caller holds <c>_gate</c>.</summary>
     private IReadOnlyList<int> TreePidsPosix()
     {
-        var pids = new List<int>();
         if (!_ownGroup)
         {
+            var pids = new List<int>();
             if (!_reaped) pids.Add(Pid);
             return pids;
         }
-        if (!Directory.Exists("/proc")) return pids;
-        foreach (var dir in Directory.EnumerateDirectories("/proc"))
-        {
-            if (!int.TryParse(Path.GetFileName(dir), out int pid)) continue;
-            try
-            {
-                // "pid (comm) state ppid pgrp ..." - comm may hold spaces and parentheses, so cut after the LAST ')'.
-                var stat = File.ReadAllText(Path.Combine(dir, "stat"));
-                int close = stat.LastIndexOf(')');
-                if (close < 0) continue;
-                var fields = stat[(close + 1)..].Split(' ', StringSplitOptions.RemoveEmptyEntries);
-                if (fields.Length < 3 || fields[0] == "Z") continue; // a zombie is not running
-                if (int.TryParse(fields[2], out int pgrp) && pgrp == Pid) pids.Add(pid);
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* exited while we looked */ }
-        }
-        return pids;
+        return PsBash.Core.Platform.ProcessInfo.GroupMembers(Pid);
     }
 
     private static IntPtr Utf8(string s)

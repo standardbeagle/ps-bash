@@ -246,9 +246,12 @@ internal static partial class TerminalMode
    `Restore()` calls `tcsetattr(fd, TCSANOW, &saved)`.
 
 The opaque `struct termios` is treated as a fixed-size byte buffer
-(256 bytes — comfortably larger than glibc's 60, musl's 60, macOS's
-44). The libc functions only ever read/write the prefix they
-understand.
+(`TermiosLayout.BufferSize` = 256 bytes — comfortably larger than
+glibc's/musl's 60 and macOS's 72). The libc functions only ever
+read/write the prefix they understand. Code that must read a field
+(tests checking ICANON/ECHO) uses `PsBash.Core.Platform.TermiosLayout`:
+`tcflag_t` is 4 bytes on Linux (`c_lflag`@12) but an 8-byte
+`unsigned long` on macOS (`c_lflag`@24); ICANON is 0x2 vs 0x100.
 
 ### 7.3 Windows console-mode path
 
@@ -357,6 +360,17 @@ raw-mode host child:
 | `SIGINT` | `PosixSignalRegistration` (covers `SIGINT`); `ctx.Cancel = true` | `killpg(hostPgid, SIGINT)` — re-deliver to the host's foreground process group. Launcher is *not* terminated. |
 | `SIGTSTP` | raw `signal()` P/Invoke (`PosixSignal` does not enumerate `SIGTSTP`) | `killpg(hostPgid, SIGTSTP)`. Launcher is *not* stopped — a stopped launcher freezes byte pumping forever. |
 | `SIGWINCH` | raw `signal()` P/Invoke | `ioctl(TIOCGWINSZ)` on the launcher tty → `IPty.Resize` (`ioctl(TIOCSWINSZ)`) on the PTY master. The kernel then sends `SIGWINCH` to the host through the slave. |
+
+**`ioctl` lives in one helper.** `TIOCGWINSZ`/`TIOCSWINSZ` go through
+`PsBash.Core.Platform.TerminalIoctl` — the only `ioctl` declaration
+(guard `PlatformProbeGuardTests`). `ioctl` is variadic; Apple arm64
+passes variadic arguments on the stack while a fixed-argument P/Invoke
+puts the pointer in `x2`, so on osx-arm64 the helper declares six dummy
+`nint`s after `fd` and `request` (filling `x0`–`x7`) and the winsize
+pointer, the ninth argument, lands at `[sp]` — the callee's first
+`va_arg`. Linux (x86-64, AAPCS64) and macOS x86-64 pass variadic
+integers in the same registers, so they use the plain three-argument
+form. Live check: `PtyAllocationTests.Posix_WindowSize_SetOnMaster_ReadsBackOnSlave`.
 
 `hostPgid` = the host pid. PTY-2 spawns the host with
 `POSIX_SPAWN_SETSID`, so it is a session/process-group leader and its

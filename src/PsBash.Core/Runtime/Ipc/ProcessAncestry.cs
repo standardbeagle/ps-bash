@@ -1,5 +1,3 @@
-using System.Runtime.InteropServices;
-
 namespace PsBash.Core.Runtime.Ipc;
 
 /// <summary>
@@ -14,13 +12,13 @@ namespace PsBash.Core.Runtime.Ipc;
 /// key so a recycled PID cannot attach an unrelated invocation to a stale daemon.
 /// </summary>
 /// <remarks>
-/// <para>All platform paths use <c>[LibraryImport]</c> (source-generated,
-/// trim/AOT-safe — the same pattern as <c>Pty/UnixPtyAdapter</c> and
-/// <c>Pty/TerminalMode</c>). On failure a lookup returns <c>null</c> and the
+/// <para>Parent pids come from the one platform primitive
+/// <see cref="PsBash.Core.Platform.ProcessInfo"/> (Windows, Linux and macOS;
+/// trim/AOT-safe). On failure a lookup returns <c>null</c> and the
 /// caller falls back to the per-user canonical endpoint, so a stat/syscall
 /// failure degrades to the old shared daemon rather than breaking resolution.</para>
 /// </remarks>
-internal static partial class ProcessAncestry
+internal static class ProcessAncestry
 {
     /// <summary>How far up the ancestry chain the anchor walk may climb.</summary>
     private const int MaxAncestorDepth = 10;
@@ -179,27 +177,10 @@ internal static partial class ProcessAncestry
     }
 
     /// <summary>
-    /// Real ancestry lookup: Windows via <c>NtQueryInformationProcess</c> on the
-    /// target's handle; Linux via <c>/proc/{pid}/stat</c>. Returns <c>null</c> when
-    /// unavailable (macOS without /proc, no permission, process gone).
+    /// Real ancestry lookup through the one platform primitive (<see cref="PsBash.Core.Platform.ProcessInfo.ParentPid"/>:
+    /// Windows <c>NtQueryInformationProcess</c>, Linux <c>/proc</c>, macOS libproc). <c>null</c> when unavailable.
     /// </summary>
-    private static int? GetParentProcessIdByPid(int pid)
-    {
-        if (pid <= 0) return null;
-        try
-        {
-            if (OperatingSystem.IsWindows())
-            {
-                using var p = System.Diagnostics.Process.GetProcessById(pid);
-                var parent = GetParentViaNt(p.Handle);
-                return parent is > 0 ? parent : null;
-            }
-            if (OperatingSystem.IsLinux())
-                return ParseProcStatPpid(ReadProcStat(pid));
-            return null;
-        }
-        catch { return null; }
-    }
+    private static int? GetParentProcessIdByPid(int pid) => PsBash.Core.Platform.ProcessInfo.ParentPid(pid);
 
     /// <summary>
     /// Real process info lookup: name (without extension) and start time in UTC
@@ -215,55 +196,4 @@ internal static partial class ProcessAncestry
         }
         catch { return null; }
     }
-
-    private static int? ParseProcStatPpid(string statText)
-    {
-        // Field 2 (comm) is parenthesized and may itself contain spaces/parens;
-        // locate the LAST ')' then read state and ppid after it.
-        int lastParen = statText.LastIndexOf(')');
-        if (lastParen < 0 || lastParen + 2 >= statText.Length) return null;
-        var fields = statText[(lastParen + 2)..].Split(' ');
-        return fields.Length >= 2 && int.TryParse(fields[1], out var ppid) && ppid > 0 ? ppid : null;
-    }
-
-    private static string ReadProcStat(int pid)
-    {
-        using var stream = new FileStream(
-            $"/proc/{pid}/stat", FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-        Span<byte> buffer = stackalloc byte[4096];
-        int read = stream.Read(buffer);
-        return System.Text.Encoding.UTF8.GetString(buffer[..read]);
-    }
-
-    private static int? GetParentViaNt(IntPtr handle)
-    {
-        var pbi = default(ProcessBasicInformation);
-        int status = NtQueryInformationProcess(
-            handle, ProcessBasicInformationClass, ref pbi,
-            Marshal.SizeOf<ProcessBasicInformation>(), out _);
-        if (status != 0) return null;
-        long parent = (long)pbi.InheritedFromUniqueProcessId;
-        return parent > 0 && parent <= int.MaxValue ? (int)parent : null;
-    }
-
-    private const int ProcessBasicInformationClass = 0;
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct ProcessBasicInformation
-    {
-        public IntPtr ExitStatus;
-        public IntPtr PebBaseAddress;
-        public IntPtr AffinityMask;
-        public IntPtr BasePriority;
-        public UIntPtr UniqueProcessId;
-        public UIntPtr InheritedFromUniqueProcessId;
-    }
-
-    [LibraryImport("ntdll.dll")]
-    private static partial int NtQueryInformationProcess(
-        IntPtr processHandle,
-        int processInformationClass,
-        ref ProcessBasicInformation processInformation,
-        int processInformationLength,
-        out int returnLength);
 }

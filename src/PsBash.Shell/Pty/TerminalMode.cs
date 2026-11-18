@@ -444,9 +444,10 @@ internal static partial class TerminalMode
 
     private static partial class PosixNative
     {
-        // termios is opaque to us; the 256-byte buffer is comfortably larger
-        // than glibc's 60 bytes, musl's 60 bytes, and macOS's 44 bytes.
-        public const int TermiosBufSize = 256;
+        // termios is opaque to us (saved and restored as bytes); the buffer is
+        // comfortably larger than glibc's/musl's 60 bytes and macOS's 72 (its
+        // tcflag_t and speed_t are 8-byte unsigned longs). Layout: TermiosLayout.
+        public const int TermiosBufSize = PsBash.Core.Platform.TermiosLayout.BufferSize;
 
         // tcsetattr "when" arg: apply changes immediately.
         public const int TCSANOW = 0;

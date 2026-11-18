@@ -89,6 +89,29 @@ public class PtyAllocationTests
         pty.Resize(cols: 120, rows: 40);
     }
 
+    /// <summary>
+    /// REGRESSION (osx-arm64): <c>ioctl</c> is variadic and Apple arm64 passes variadic arguments on the stack, so the
+    /// old fixed three-argument P/Invoke handed the kernel a garbage winsize pointer there. The size set on the master
+    /// (<c>TIOCSWINSZ</c>, at allocation and on resize) must read back from the slave (<c>TIOCGWINSZ</c>), both through
+    /// the one helper <see cref="PsBash.Core.Platform.TerminalIoctl"/>.
+    /// </summary>
+    [SkippableFact]
+    [Trait("Platform", "Posix")]
+    public async Task Posix_WindowSize_SetOnMaster_ReadsBackOnSlave()
+    {
+        Skip.If(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "POSIX-only: Windows has no ioctl");
+
+        await using var pty = await PtyAllocator.AllocateAsync(cols: 80, rows: 24);
+        Assert.True(PsBash.Core.Platform.TerminalIoctl.TryGetWindowSize(pty.SlaveFileDescriptor, out var cols, out var rows, out int errno),
+            $"TIOCGWINSZ failed, errno={errno}");
+        Assert.Equal((80, 24), ((int)cols, (int)rows));
+
+        pty.Resize(cols: 132, rows: 43);
+        Assert.True(PsBash.Core.Platform.TerminalIoctl.TryGetWindowSize(pty.SlaveFileDescriptor, out cols, out rows, out errno),
+            $"TIOCGWINSZ failed, errno={errno}");
+        Assert.Equal((132, 43), ((int)cols, (int)rows));
+    }
+
     [SkippableFact]
     [Trait("Platform", "Posix")]
     public async Task Posix_Resize_After_Dispose_Is_Noop()

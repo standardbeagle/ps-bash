@@ -3,8 +3,11 @@ using System.Management.Automation;
 namespace PsBash.Cmdlets;
 
 /// <summary>
-/// The <c>umask</c> builtin. Windows has no file-creation mask, so the value is only remembered for the
-/// shell's lifetime and reported back (<c>umask</c>, <c>umask -S</c>); it does not change file modes.
+/// The <c>umask</c> builtin. The shell's mask is remembered per session and reported back (<c>umask</c>,
+/// <c>umask -S</c>); it starts as the mask the process inherited (<see cref="PsBash.Core.Platform.ProcessInfo.ProcessUmask"/>,
+/// 022 on Windows) and is what ps-bash's own mode arithmetic reads (<see cref="FileModeSpec.CurrentUmask"/>: chmod/mkdir
+/// symbolic modes, cp, tar). It never calls <c>umask(2)</c>: one host process serves many sessions, so files the kernel
+/// creates keep the inherited process mask.
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashUmask")]
 public sealed class InvokeBashUmaskCommand : PSCmdlet
@@ -13,11 +16,11 @@ public sealed class InvokeBashUmaskCommand : PSCmdlet
     // commands, and `umask 077` in one must not change what the next one reports.
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<
         System.Management.Automation.Runspaces.Runspace, System.Runtime.CompilerServices.StrongBox<int>> PerRunspace = new();
-    private static readonly System.Runtime.CompilerServices.StrongBox<int> Fallback = new(0x12);
+    private static readonly System.Runtime.CompilerServices.StrongBox<int> Fallback = new(PsBash.Core.Platform.ProcessInfo.ProcessUmask());
 
     private static System.Runtime.CompilerServices.StrongBox<int> Box =>
         System.Management.Automation.Runspaces.Runspace.DefaultRunspace is { } rs
-            ? PerRunspace.GetValue(rs, _ => new System.Runtime.CompilerServices.StrongBox<int>(0x12)) // 0022
+            ? PerRunspace.GetValue(rs, _ => new System.Runtime.CompilerServices.StrongBox<int>(PsBash.Core.Platform.ProcessInfo.ProcessUmask()))
             : Fallback;
 
     private static int Mask
@@ -25,6 +28,9 @@ public sealed class InvokeBashUmaskCommand : PSCmdlet
         get => Box.Value;
         set => Box.Value = value;
     }
+
+    /// <summary>The current session's mask (as <c>umask</c> would print it).</summary>
+    internal static int ShellMask => Mask;
 
     // Decoy for a direct `Invoke-BashUmask -p` (an ambiguous common-parameter prefix otherwise). The emitter
     // single-quotes umask's dash words, so transpiled calls always reach Arguments.

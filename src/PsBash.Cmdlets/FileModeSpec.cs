@@ -124,25 +124,11 @@ internal static class FileModeSpec
     public static bool OwnerCanWrite(int mode) => (mode & 0x080) != 0; // 0200
 
     /// <summary>
-    /// The current process umask. Linux exposes it in <c>/proc/self/status</c>; elsewhere (and on
-    /// Windows, which has none) the near-universal 022 is used.
+    /// The shell's umask: what the <c>umask</c> builtin holds for this session, which starts as the mask the process
+    /// inherited (<see cref="PsBash.Core.Platform.ProcessInfo.ProcessUmask"/>; 022 on Windows, which has none). So
+    /// <c>umask 077; mkdir -m +w d</c> masks with 077, as bash does.
     /// </summary>
-    public static int CurrentUmask()
-    {
-        try
-        {
-            if (OperatingSystem.IsLinux())
-            {
-                foreach (var line in File.ReadLines("/proc/self/status"))
-                {
-                    if (!line.StartsWith("Umask:", StringComparison.Ordinal)) continue;
-                    return Convert.ToInt32(line.Substring(6).Trim(), 8);
-                }
-            }
-        }
-        catch { /* fall through to the default */ }
-        return 0x12; // 0022
-    }
+    public static int CurrentUmask() => InvokeBashUmaskCommand.ShellMask;
 
     private static bool TryParseOctal(string spec, out int mode)
     {

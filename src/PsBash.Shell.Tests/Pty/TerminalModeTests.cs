@@ -393,33 +393,10 @@ public class TerminalModeTests
 /// </summary>
 internal static partial class TerminalModeProbe
 {
-    // termios buffer must be large enough for any glibc/musl/BSD layout.
-    // Linux glibc: 60 bytes. macOS: 44 bytes. 256 is comfortably bounded.
-    private const int TermiosBufSize = 256;
-
-    // Index offsets into the termios struct. These match the layout used
-    // by both glibc and musl on Linux — the only platforms where this
-    // probe is exercised (POSIX-only test path).
-    //
-    //   struct termios {
-    //     tcflag_t c_iflag;
-    //     tcflag_t c_oflag;
-    //     tcflag_t c_cflag;
-    //     tcflag_t c_lflag;   // <-- ICANON / ECHO live here
-    //     ...
-    //   };
-    //
-    // tcflag_t = unsigned int (4 bytes). c_iflag, c_oflag, c_cflag, c_lflag
-    // are first four fields on both Linux and macOS, so c_lflag is at
-    // offset 12 (3 * 4) on both platforms. NCCS / c_ispeed / c_ospeed
-    // differ but live after c_lflag and don't affect this offset.
-    private const int CLflagOffset = 12;
-    // ICANON and ECHO bit values differ across platforms:
-    //   Linux glibc: ICANON=0x02, ECHO=0x08
-    //   macOS:       ICANON=0x100, ECHO=0x08
-    private static readonly uint ICANON =
-        RuntimeInformation.IsOSPlatform(OSPlatform.OSX) ? 0x00000100u : 0x00000002u;
-    private static readonly uint ECHO = 0x00000008;
+    // Layout knowledge (buffer size, c_lflag offset and width, ICANON/ECHO bits) is the platform
+    // primitive's: tcflag_t is 4 bytes on Linux (c_lflag @12) but 8 on macOS (c_lflag @24).
+    private const int TermiosBufSize = PsBash.Core.Platform.TermiosLayout.BufferSize;
+    private static readonly bool MacLayout = PsBash.Core.Platform.TermiosLayout.CurrentIsMacOS;
 
     private static bool IsPosix =>
         RuntimeInformation.IsOSPlatform(OSPlatform.Linux)
@@ -434,8 +411,8 @@ internal static partial class TerminalModeProbe
             fixed (byte* p = buf)
             {
                 if (NativeMethods.tcgetattr(fd, (IntPtr)p) != 0) return true;
-                uint lflag = ReadUInt32(buf, CLflagOffset);
-                return (lflag & ICANON) != 0;
+                ulong lflag = PsBash.Core.Platform.TermiosLayout.ReadLflag(buf, MacLayout);
+                return (lflag & PsBash.Core.Platform.TermiosLayout.Icanon(MacLayout)) != 0;
             }
         }
     }
@@ -449,15 +426,10 @@ internal static partial class TerminalModeProbe
             fixed (byte* p = buf)
             {
                 if (NativeMethods.tcgetattr(fd, (IntPtr)p) != 0) return true;
-                uint lflag = ReadUInt32(buf, CLflagOffset);
-                return (lflag & ECHO) != 0;
+                ulong lflag = PsBash.Core.Platform.TermiosLayout.ReadLflag(buf, MacLayout);
+                return (lflag & PsBash.Core.Platform.TermiosLayout.Echo) != 0;
             }
         }
-    }
-
-    private static uint ReadUInt32(Span<byte> buf, int offset)
-    {
-        return (uint)(buf[offset] | (buf[offset + 1] << 8) | (buf[offset + 2] << 16) | (buf[offset + 3] << 24));
     }
 
     private static partial class NativeMethods

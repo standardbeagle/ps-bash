@@ -129,10 +129,8 @@ internal sealed partial class UnixPtyAdapter : IPty
 
     private static void SetWinsize(int masterFd, short cols, short rows)
     {
-        var ws = new NativeMethods.Winsize { ws_row = (ushort)rows, ws_col = (ushort)cols };
-        if (NativeMethods.ioctl(masterFd, NativeMethods.TIOCSWINSZ, ref ws) != 0)
+        if (!PsBash.Core.Platform.TerminalIoctl.TrySetWindowSize(masterFd, (ushort)cols, (ushort)rows, out int err))
         {
-            int err = Marshal.GetLastPInvokeError();
             throw new InvalidOperationException(
                 $"ioctl(TIOCSWINSZ) failed (errno={err}): {Marshal.GetPInvokeErrorMessage(err)}");
         }
@@ -184,23 +182,6 @@ internal sealed partial class UnixPtyAdapter : IPty
 
         public static int PosixOpenSlaveFlags => PosixOpenPtFlags;
 
-        // TIOCSWINSZ differs by OS:
-        //   Linux:   0x5414
-        //   macOS:   0x80087467 (_IOW('t', 103, struct winsize))
-        public static ulong TIOCSWINSZ =>
-            RuntimeInformation.IsOSPlatform(OSPlatform.Linux)
-                ? 0x5414UL
-                : 0x80087467UL;
-
-        [StructLayout(LayoutKind.Sequential)]
-        public struct Winsize
-        {
-            public ushort ws_row;
-            public ushort ws_col;
-            public ushort ws_xpixel;
-            public ushort ws_ypixel;
-        }
-
         [LibraryImport(LibC, SetLastError = true)]
         public static partial int posix_openpt(int flags);
 
@@ -218,8 +199,5 @@ internal sealed partial class UnixPtyAdapter : IPty
 
         [LibraryImport(LibC, SetLastError = true)]
         public static partial int close(int fd);
-
-        [LibraryImport(LibC, SetLastError = true)]
-        public static partial int ioctl(int fd, ulong request, ref Winsize ws);
     }
 }

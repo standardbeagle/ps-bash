@@ -18,35 +18,14 @@ internal static class PosixIdentity
     public static uint CurrentUid() => getuid();
 
     /// <summary>
-    /// Owner uid of a live process. Linux reads the authoritative
-    /// <c>/proc/{pid}/status</c> <c>Uid:</c> line (the real uid) — readable for
-    /// any process, so a foreign-owned PID is detectable even when its sidecar
-    /// falsely claims our username. Returns false (no opinion) on platforms
-    /// without <c>/proc</c>.
+    /// Real uid of a live process, from the one platform primitive
+    /// (<see cref="PsBash.Core.Platform.ProcessInfo.TryGetRealUid"/>: Linux
+    /// <c>/proc/{pid}/status</c> <c>Uid:</c>, macOS libproc <c>pbi_ruid</c>) — the
+    /// kernel's answer, so a foreign-owned PID is detectable even when its sidecar
+    /// falsely claims our username. Returns false (no opinion) when unknown.
     /// </summary>
     public static bool TryGetProcessUid(int pid, out uint uid)
-    {
-        uid = 0;
-        if (!OperatingSystem.IsLinux() || pid <= 0) return false;
-        try
-        {
-            var status = BoundedTextFile.Read(
-                $"/proc/{pid}/status",
-                64 * 1024,
-                "Process status exceeds the maximum supported size.");
-            foreach (var line in status.Split('\n'))
-            {
-                if (!line.StartsWith("Uid:", StringComparison.Ordinal)) continue;
-                var fields = line[4..].Split(
-                    (char[]?)null, StringSplitOptions.RemoveEmptyEntries);
-                return fields.Length > 0 &&
-                       uint.TryParse(fields[0], out uid);
-            }
-        }
-        catch (IOException) { }
-        catch (UnauthorizedAccessException) { }
-        return false;
-    }
+        => PsBash.Core.Platform.ProcessInfo.TryGetRealUid(pid, out uid);
 
     /// <summary>
     /// lstat a path, returning the owning uid, its low 9 permission bits as a
