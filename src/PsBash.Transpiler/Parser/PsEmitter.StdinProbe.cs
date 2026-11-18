@@ -111,12 +111,25 @@ public static partial class PsEmitter
     {
         if (_stdinOpaque || simple.Words.IsDefaultOrEmpty) return;
         if (!simple.HereDocs.IsDefaultOrEmpty || HasInputRedirect(simple.Redirects)) return;
-        if (GetLiteralValue(simple.Words[0]) is not { } name) { _stdinOpaque = true; return; }
+        if (StdinOperands(simple) is not ({ } name, var args)) { _stdinOpaque = true; return; }
         if (StdinReaders.Classify(name) == StdinReaders.Kind.Native && IsStdinFreeFunction(name)) return;
+        if (StdinReaders.MayReadStdin(name, args)) _stdinOpaque = true;
+    }
+
+    /// <summary>
+    /// The command name and operands as <see cref="StdinReaders"/> must see them: each word's value after quote
+    /// removal when it is static (<c>-d' '</c> is <c>-d </c>, <c>'-d:'</c> is <c>-d:</c>, <c>'cat'</c> is <c>cat</c>),
+    /// null for a word with an expansion. The ONE way both stdin decisions (feed this command? may it read the
+    /// scope's stdin?) read words. REGRESSION: they took only an unquoted literal, so a quoted flag counted as a file
+    /// operand and <c>x | { cut -d' ' -f1; }</c> / <c>x | eval "cut '-d:' -f1"</c> printed nothing (guard
+    /// StdinOperandsGuardTests). Name null = not a static name.
+    /// </summary>
+    private static (string? Name, List<string?> Args) StdinOperands(Command.Simple simple)
+    {
         var args = new List<string?>(simple.Words.Length - 1);
         for (int i = 1; i < simple.Words.Length; i++)
-            args.Add(GetLiteralValue(simple.Words[i]));
-        if (StdinReaders.MayReadStdin(name, args)) _stdinOpaque = true;
+            args.Add(TryGetStaticArgValue(simple.Words[i]));
+        return (TryGetStaticArgValue(simple.Words[0]), args);
     }
 
     /// <summary>What one unit knows about its functions and stdin; keyed by the unit's <see cref="_unitFunctions"/> set.</summary>

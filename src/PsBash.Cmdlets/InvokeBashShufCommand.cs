@@ -78,7 +78,15 @@ public sealed class InvokeBashShufCommand : PSCmdlet
 
     private readonly List<PSObject> _pipeline = new();
 
+    // Records become LINES first: a piece without its newline (`printf a`) waits for the rest (LineAssembler).
+    private readonly LineAssembler _lines = new();
+
     protected override void ProcessRecord()
+    {
+        if (_lines.Feed(InputObject) is { } record) { InputObject = record; ProcessInputRecord(); }
+    }
+
+    private void ProcessInputRecord()
     {
         if (InputObject != null)
         {
@@ -88,6 +96,7 @@ public sealed class InvokeBashShufCommand : PSCmdlet
 
     protected override void EndProcessing()
     {
+        if (_lines.Flush() is { } last) { InputObject = last; ProcessInputRecord(); }
         var rawArgs = Arguments ?? Array.Empty<string>();
 
         FileSystemHelpers.SetLastExitCode(this, 0);

@@ -1,0 +1,52 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 739
+stdout-length: 167
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit
+for c in 'sed s/,$//' 'awk {print\ NR\ \$0}' 'cut -d, -f2' 'rev' 'nl' 'grep -c ,'; do
+  for i in 1 2 3; do printf '%s,' $i; done | eval "$c"; echo "|$c"
+done
+printf 'b\0a\0' | sort -z | tr '\0' @; echo '|'
+{ printf 'b'; printf 'x\0a\0'; } | sort -z | tr '\0' @; echo '|'
+printf 'a\0b\0' | head -zn1 | tr '\0' @; echo '|'
+{ printf 'a\0a'; printf '\0b\0'; } | uniq -z | tr '\0' @; echo '|'
+yes | tr '\n' x | head -c 5; echo '|'
+printf 'f\0g' | tr '\0' @ | sed 's/@/+/'; echo '|'
+echo 'a b:c' | { cut -d' ' -f1; }
+echo 'a b:c' | { cut '-d:' -f2; }
+echo 'a b:c' | { cut -d":" -f2; }
+echo 'a b:c' | eval "cut '-d:' -f1"
+echo 'a b:c' | eval "'cat'"
+echo 'a b:c' | { 'sort' -t':' -k2; }
+echo 'piped' | { cat '-'; }
+cd / 
+==== STDOUT ====
+1,2,3|sed s/,$//
+11,2,3,
+|awk {print\ NR\ \$0}
+2
+|cut -d, -f2
+,3,2,1|rev
+     1	1,2,3,
+|nl
+1
+|grep -c ,
+a@b@|
+a@bx@|
+a@|
+a@b@|
+yxyxy|
+f+g|
+a
+c
+c
+a b
+a b:c
+a b:c
+piped
+
+==== STDERR ====
+

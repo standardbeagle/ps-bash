@@ -401,6 +401,7 @@ public sealed class InvokeBashTailCommand : PSCmdlet
         _pipeMode = plan.Operands.Count == 0;
         bool dashOperand = plan.Operands.Contains("-");
         _bufferPipe = (plan.Zero && !plan.BytesMode) || dashOperand;
+        _lines.PassThrough = plan.BytesMode;
         if (!_pipeMode)
         {
             return;
@@ -429,7 +430,15 @@ public sealed class InvokeBashTailCommand : PSCmdlet
         _lastHeaderName = name;
     }
 
+    // Records become LINES first: a piece without its newline (`printf a`) waits for the rest (LineAssembler).
+    private readonly LineAssembler _lines = new();
+
     protected override void ProcessRecord()
+    {
+        if (_lines.Feed(InputObject) is { } record) { InputObject = record; ProcessInputRecord(); }
+    }
+
+    private void ProcessInputRecord()
     {
         if (_halt || _plan is null || InputObject is null) return;
         var item = InputObject;
@@ -528,6 +537,7 @@ public sealed class InvokeBashTailCommand : PSCmdlet
 
     protected override void EndProcessing()
     {
+        if (_lines.Flush() is { } last) { InputObject = last; ProcessInputRecord(); }
         if (_halt || _plan is null) return;
         var plan = _plan;
         var operands = plan.Operands;

@@ -103,7 +103,15 @@ public sealed class InvokeBashXargsCommand : PSCmdlet
     /// <summary>The command name as the user typed it, for messages and -t.</summary>
     private string _displayCmd = "";
 
+    // Records become LINES first: a piece without its newline (`printf a`) waits for the rest (LineAssembler).
+    private readonly LineAssembler _lines = new();
+
     protected override void ProcessRecord()
+    {
+        if (_lines.Feed(InputObject) is { } record) { InputObject = record; ProcessInputRecord(); }
+    }
+
+    private void ProcessInputRecord()
     {
         _pipelineItems.Add(InputObject);
     }
@@ -134,6 +142,7 @@ public sealed class InvokeBashXargsCommand : PSCmdlet
 
     protected override void EndProcessing()
     {
+        if (_lines.Flush() is { } last) { InputObject = last; ProcessInputRecord(); }
         var args = Arguments ?? Array.Empty<string>();
 
         FileSystemHelpers.SetLastExitCode(this, 0);

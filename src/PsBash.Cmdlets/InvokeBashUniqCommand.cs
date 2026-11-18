@@ -417,6 +417,7 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
         _allRepeated = plan.AllRepeated;
         _allRepeatedMethod = plan.AllRepeatedMethod;
         _zero = plan.Zero;
+        _lines.Terminator = _zero ? '\0' : '\n';
         _groupMethod = plan.GroupMethod;
         _skipFields = plan.SkipFields;
         _skipChars = plan.SkipChars;
@@ -524,7 +525,16 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
 
     private bool KeepMembers => _allRepeated || _groupMethod is not null;
 
+    // Records become LINES first: a piece without its newline (`printf a`) waits for the rest (LineAssembler).
+    private readonly LineAssembler _lines = new();
+
     protected override void ProcessRecord()
+    {
+        if (InputObject is not null) ParseOnce();   // the mode (-z, -c) decides what ends a record: known before the first Feed
+        if (_lines.Feed(InputObject) is { } record) { InputObject = record; ProcessInputRecord(); }
+    }
+
+    private void ProcessInputRecord()
     {
         if (InputObject == null) return;
 
@@ -551,6 +561,7 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
 
     protected override void EndProcessing()
     {
+        if (_lines.Flush() is { } last) { InputObject = last; ProcessInputRecord(); }
         ParseOnce();
 
         var rawArgs = ArgsWithDecoys();

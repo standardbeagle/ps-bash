@@ -524,12 +524,21 @@ public sealed class InvokeBashSedCommand : PSCmdlet
     {
         _pipelineMode = true;
         _term = plan.NullData ? '\0' : '\n';
+        _lines.Terminator = _term;
         _sink = new RecordSink(WriteStdoutRecord);
         _debugSink = _sink;
         _engine = new SedEngine(commands, suppressDefault, _sink.Add, _rt);
     }
 
+    // Records become LINES first: a piece without its newline (`printf a`) waits for the rest (LineAssembler).
+    private readonly LineAssembler _lines = new();
+
     protected override void ProcessRecord()
+    {
+        if (_lines.Feed(InputObject) is { } record) { InputObject = record; ProcessInputRecord(); }
+    }
+
+    private void ProcessInputRecord()
     {
         if (InputObject == null) return;
         if (_bufferStdin)
@@ -602,6 +611,7 @@ public sealed class InvokeBashSedCommand : PSCmdlet
 
     protected override void EndProcessing()
     {
+        if (_lines.Flush() is { } last) { InputObject = last; ProcessInputRecord(); }
         if (_pipelineMode) FinishPipeline();
         else _fileRun?.Invoke();
         CloseFiles();
@@ -723,6 +733,7 @@ public sealed class InvokeBashSedCommand : PSCmdlet
     private void RunFiles(SedArgs plan, List<string> operands, List<SedCommand> commands, bool suppressDefault)
     {
         _term = plan.NullData ? '\0' : '\n';
+        _lines.Terminator = _term;
         char term = _term;
         bool separate = plan.Separate || plan.InPlace;
         bool readError = false;

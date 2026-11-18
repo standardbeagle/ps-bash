@@ -29,7 +29,8 @@ Tests: `*.Tests`, `Differential.Tests` (bash oracle), `Canary.Tests`, `Escalatio
 - **Command flags**: `Cmdlets/*Command.cs`; shared argv parser `Cmdlets/Args/{ArgParser,OptSpec,ParsedArgs}.cs` + emitter opt-in `PsEmitter.OrderedArgCommands`.
 - **Destructive FS / spawn**: `FileSystemHelpers.Delete*Force`/`ClearReadOnly`; `BashRuntime.RunChildProcess`.
 - **Glob**: `PsEmitter.IsGlobWord` → `ConvertToBashGlobCommand.cs` → `BashGlob.cs`; shopt in `InvokeBashShoptCommand`.
-- **Compound-command stdin**: `PsEmitter._inStdinScope`, `PsBuild.StdinScope`, `Parser/StdinReaders.cs`, "does it read stdin?" probe `Parser/PsEmitter.StdinProbe.cs`, `Cmdlets/SharedStdin.cs`; natives get it as process stdin via `Cmdlets/NativeStdinBridge.cs`.
+- **Pipeline records → lines** (`printf a` is a piece, not a line): `Cmdlets/LineAssembler.cs` in every line consumer. Spec `runtime-functions.md` §Partial lines.
+- **Compound-command stdin**: `PsEmitter._inStdinScope`, `PsBuild.StdinScope`, `Parser/StdinReaders.cs` (words via `PsEmitter.StdinOperands`, quote-removed), "does it read stdin?" probe `Parser/PsEmitter.StdinProbe.cs`, `Cmdlets/SharedStdin.cs`; natives get it as process stdin via `Cmdlets/NativeStdinBridge.cs`.
 - **Launcher stdin into `-c`**: `Shell/Program.cs`, `HostProtocol` STDIN frames, `Server/LauncherStdinFeed.cs`, `Transpiler/StdinCursor.cs`.
 - **Fused pipeline**: `FusedLane.cs` → `InvokeBashFusedPipelineCommand.cs` → `LineStreamStages.cs` + `LineStream/*`.
 - **External-tool wrapper** (psav/ffmpeg ref): `InvokeBash{Tool}Command.cs` + `Media/*` (plan first, run second).

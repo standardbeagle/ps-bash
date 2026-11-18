@@ -1,0 +1,256 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 618
+stdout-length: 1501
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit
+printf 'q' > u; printf 'a b\nc d\n' > f
+for c in 'sed s/x/y/' 'awk 1' 'awk {print\ NF}' 'grep -c .' 'grep a' 'cut -c1-3' 'rev' 'paste -sd+' 'nl' 'sort' 'uniq' 'uniq -c' 'wc -l' 'head -n1' 'tail -n1' 'tac' 'tr a-z A-Z' 'cat -n' 'fold -w2' 'expand' 'column -t' 'xargs echo' 'strings' 'grep -n .' 'rg -N .' 'mapfile -t a; echo ${#a[@]}:${a[0]}' 'while IFS= read -r l; do echo "<$l>"; done'; do
+  echo "## $c"
+  { printf q; printf 'a b\n'; printf 'c'; printf ' d\n'; } | eval "$c"; echo "|rc=$?"
+  cat u f | eval "$c"; echo "|rc=$?"
+  { printf 'x\ny'; } | eval "$c"; echo "|rc=$?"
+done 2>&1
+cd / 
+==== STDOUT ====
+## sed s/x/y/
+qa b
+c d
+|rc=0
+qa b
+c d
+|rc=0
+y
+y|rc=0
+## awk 1
+qa b
+c d
+|rc=0
+qa b
+c d
+|rc=0
+x
+y
+|rc=0
+## awk {print\ NF}
+2
+2
+|rc=0
+2
+2
+|rc=0
+1
+1
+|rc=0
+## grep -c .
+2
+|rc=0
+2
+|rc=0
+2
+|rc=0
+## grep a
+qa b
+|rc=0
+qa b
+|rc=0
+|rc=1
+## cut -c1-3
+qa
+c d
+|rc=0
+qa
+c d
+|rc=0
+x
+y
+|rc=0
+## rev
+b aq
+d c
+|rc=0
+b aq
+d c
+|rc=0
+x
+y|rc=0
+## paste -sd+
+qa b+c d
+|rc=0
+qa b+c d
+|rc=0
+x+y
+|rc=0
+## nl
+     1	qa b
+     2	c d
+|rc=0
+     1	qa b
+     2	c d
+|rc=0
+     1	x
+     2	y
+|rc=0
+## sort
+c d
+qa b
+|rc=0
+c d
+qa b
+|rc=0
+x
+y
+|rc=0
+## uniq
+qa b
+c d
+|rc=0
+qa b
+c d
+|rc=0
+x
+y
+|rc=0
+## uniq -c
+      1 qa b
+      1 c d
+|rc=0
+      1 qa b
+      1 c d
+|rc=0
+      1 x
+      1 y
+|rc=0
+## wc -l
+2
+|rc=0
+2
+|rc=0
+1
+|rc=0
+## head -n1
+qa b
+|rc=0
+qa b
+|rc=0
+x
+|rc=0
+## tail -n1
+c d
+|rc=0
+c d
+|rc=0
+y|rc=0
+## tac
+c d
+qa b
+|rc=0
+c d
+qa b
+|rc=0
+yx
+|rc=0
+## tr a-z A-Z
+QA B
+C D
+|rc=0
+QA B
+C D
+|rc=0
+X
+Y|rc=0
+## cat -n
+     1	qa b
+     2	c d
+|rc=0
+     1	qa b
+     2	c d
+|rc=0
+     1	x
+     2	y|rc=0
+## fold -w2
+qa
+ b
+c
+d
+|rc=0
+qa
+ b
+c
+d
+|rc=0
+x
+y|rc=0
+## expand
+qa b
+c d
+|rc=0
+qa b
+c d
+|rc=0
+x
+y|rc=0
+## column -t
+qa  b
+c   d
+|rc=0
+qa  b
+c   d
+|rc=0
+x
+y
+|rc=0
+## xargs echo
+qa b c d
+|rc=0
+qa b c d
+|rc=0
+x y
+|rc=0
+## strings
+qa b
+|rc=0
+qa b
+|rc=0
+|rc=0
+## grep -n .
+1:qa b
+2:c d
+|rc=0
+1:qa b
+2:c d
+|rc=0
+1:x
+2:y
+|rc=0
+## rg -N .
+qa b
+c d
+|rc=0
+qa b
+c d
+|rc=0
+x
+y
+|rc=0
+## mapfile -t a; echo ${#a[@]}:${a[0]}
+2:qa b
+|rc=0
+2:qa b
+|rc=0
+2:x
+|rc=0
+## while IFS= read -r l; do echo "<$l>"; done
+<qa b>
+<c d>
+|rc=0
+<qa b>
+<c d>
+|rc=0
+<x>
+|rc=0
+
+==== STDERR ====
+

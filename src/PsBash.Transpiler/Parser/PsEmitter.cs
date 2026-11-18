@@ -2856,15 +2856,12 @@ public static partial class PsEmitter
             || !simple.HereDocs.IsDefaultOrEmpty
             || HasInputRedirect(simple.Redirects)
             || simple.Words.IsDefaultOrEmpty
-            || GetLiteralValue(simple.Words[0]) is not { } name
+            || StdinOperands(simple) is not ({ } name, var args)
             || PsBuild.IsStatementList(text)
             || text.StartsWith("$(", StringComparison.Ordinal)
             || text.StartsWith("& {", StringComparison.Ordinal))
             return text;
 
-        var args = new List<string?>(simple.Words.Length - 1);
-        for (int i = 1; i < simple.Words.Length; i++)
-            args.Add(GetLiteralValue(simple.Words[i]));
         // `command cat` / `command -p sort`: the command it runs is the reader, and Invoke-BashCommand hands it the pipeline.
         if (name == "command")
             return StdinReaders.CommandTarget(args) is { } target && StdinReaders.ShouldFeed(target.Name, target.Args)

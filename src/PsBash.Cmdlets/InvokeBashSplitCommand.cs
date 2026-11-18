@@ -297,7 +297,15 @@ public sealed class InvokeBashSplitCommand : PSCmdlet
     private readonly List<PSObject> _pipeline = new();
     private SplitSuffixSequence _suffixes = null!;
 
+    // Records become LINES first: a piece without its newline (`printf a`) waits for the rest (LineAssembler).
+    private readonly LineAssembler _lines = new();
+
     protected override void ProcessRecord()
+    {
+        if (_lines.Feed(InputObject) is { } record) { InputObject = record; ProcessInputRecord(); }
+    }
+
+    private void ProcessInputRecord()
     {
         if (InputObject != null)
         {
@@ -307,6 +315,7 @@ public sealed class InvokeBashSplitCommand : PSCmdlet
 
     protected override void EndProcessing()
     {
+        if (_lines.Flush() is { } last) { InputObject = last; ProcessInputRecord(); }
         // Re-inject the decoy-bound flags (bare -d/-a/-e/-C never reach Arguments: the binder
         // eats or crashes them) so the shared parser sees the whole argv.
         var raw = Arguments ?? Array.Empty<string>();

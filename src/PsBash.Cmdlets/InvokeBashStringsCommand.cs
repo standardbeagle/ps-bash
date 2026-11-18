@@ -221,7 +221,15 @@ public sealed class InvokeBashStringsCommand : PSCmdlet
         }
     }
 
+    // Records become LINES first: a piece without its newline (`printf a`) waits for the rest (LineAssembler).
+    private readonly LineAssembler _lines = new();
+
     protected override void ProcessRecord()
+    {
+        if (_lines.Feed(InputObject) is { } record) { InputObject = record; ProcessInputRecord(); }
+    }
+
+    private void ProcessInputRecord()
     {
         if (InputObject == null) return;
 
@@ -238,6 +246,7 @@ public sealed class InvokeBashStringsCommand : PSCmdlet
 
     protected override void EndProcessing()
     {
+        if (_lines.Flush() is { } last) { InputObject = last; ProcessInputRecord(); }
         ParseOnce();
 
         var args = ArgsWithDecoys();

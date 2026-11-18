@@ -93,7 +93,15 @@ public sealed class InvokeBashMapfileCommand : PSCmdlet
         return nul < 0 ? line : line[..nul];
     }
 
+    // Records become LINES first: a piece without its newline (`printf a`) waits for the rest (LineAssembler).
+    private readonly LineAssembler _lines = new();
+
     protected override void ProcessRecord()
+    {
+        if (_lines.Feed(InputObject) is { } record) { InputObject = record; ProcessInputRecord(); }
+    }
+
+    private void ProcessInputRecord()
     {
         if (InputObject == null) return;
         // A record is a line: the PREVIOUS record gets its newline now (it was not the last), unless its text already ended with one.
@@ -105,6 +113,7 @@ public sealed class InvokeBashMapfileCommand : PSCmdlet
 
     protected override void EndProcessing()
     {
+        if (_lines.Flush() is { } last) { InputObject = last; ProcessInputRecord(); }
         var args = Arguments ?? Array.Empty<string>();
 
         FileSystemHelpers.SetLastExitCode(this, 0);

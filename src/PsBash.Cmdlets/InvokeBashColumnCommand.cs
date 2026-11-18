@@ -200,7 +200,15 @@ public sealed class InvokeBashColumnCommand : PSCmdlet
 
     private readonly List<PSObject> _pipeline = new();
 
+    // Records become LINES first: a piece without its newline (`printf a`) waits for the rest (LineAssembler).
+    private readonly LineAssembler _lines = new();
+
     protected override void ProcessRecord()
+    {
+        if (_lines.Feed(InputObject) is { } record) { InputObject = record; ProcessInputRecord(); }
+    }
+
+    private void ProcessInputRecord()
     {
         if (InputObject != null)
         {
@@ -210,6 +218,7 @@ public sealed class InvokeBashColumnCommand : PSCmdlet
 
     protected override void EndProcessing()
     {
+        if (_lines.Flush() is { } last) { InputObject = last; ProcessInputRecord(); }
         var raw = Arguments ?? Array.Empty<string>();
         var pre = new List<string>();
         if (C is not null) { pre.Add("-c"); pre.Add(C); }

@@ -462,7 +462,15 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
     /// finishes and an early-satisfied grep (<c>-q</c>, <c>-m N</c>) stops the upstream. Retained state is
     /// bounded by the context window (-B ring + -A countdown), never the stream length.
     /// </summary>
+    // Records become LINES first: a piece without its newline (`printf a`) waits for the rest (LineAssembler).
+    private readonly LineAssembler _lines = new();
+
     protected override void ProcessRecord()
+    {
+        if (_lines.Feed(InputObject) is { } record) { InputObject = record; ProcessInputRecord(); }
+    }
+
+    private void ProcessInputRecord()
     {
         if (_collectStdin)
         {
@@ -491,6 +499,7 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
 
     protected override void EndProcessing()
     {
+        if (_lines.Flush() is { } last) { InputObject = last; ProcessInputRecord(); }
         if (_pipelineMode) FinishPipeline();
         else _fileModeRun?.Invoke();
     }
@@ -616,6 +625,7 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
             _pipelineMode = true;
             _scanner.Begin(plan.Label ?? StdinLabel, plan.ForceFileName, startBinary: false, sizeHint: -1);
             _feeder = new GrepStdinFeeder(_scanner, plan.NullData);
+            _lines.Terminator = plan.NullData ? '\0' : '\n';
             _pDone = _scanner.SourceDone;
             return;
         }

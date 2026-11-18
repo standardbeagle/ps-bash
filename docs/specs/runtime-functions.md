@@ -188,6 +188,23 @@ multi-line object. A consumer that receives a multi-line BashText item splits **
 text lines and passes single-line items through unchanged (never flatten the whole input: that
 destroys the typed objects of a filter).
 
+### Partial lines: records are not lines
+
+A record that ends mid-line (`IsUnterminated`: `printf a`, `echo -n`, a file without a final newline)
+is NOT a line to a command that reads lines: bash's reader sees bytes, so `{ printf a; printf 'b\n'; }
+| sed s/x/y/` reads one line `ab`, and `for i in 1 2 3; do printf '%s,' $i; done | wc -l` style loops
+build ONE line. Every line consumer feeds each `InputObject` through ONE primitive,
+`Cmdlets/LineAssembler.cs`: `Feed` returns the record to process now (the same object when it completes
+nothing pending, so a filter still passes the upstream object; a fresh `TextRecord` when it joins
+pieces; nothing while the line is open), and `EndProcessing` first processes `Flush()`, the stream's
+unterminated last line. Its `Terminator` is `\0` under `-z` (a record ends at NUL; `echo b` is the bytes
+`b\n`, part of the next NUL record), and `PassThrough` is set in a byte mode (`head -c`, `tail -c`:
+holding a piece would never end on `yes | tr '\n' x | head -c 5`). A mode must be known before the
+first `Feed` (`head`/`uniq` parse in `ProcessRecord` before feeding). Byte consumers (`cat`, `tr`, `od`,
+`wc`, `base64`, `tee`, checksums) and whole-stream readers (`diff`, `jq`, `file`) do not use it.
+Guard: `LineAssemblerGuardTests` (every pipeline cmdlet assembles or is listed with its reason);
+oracle: `LineAssemblyDifferentialTests`. REGRESSION: 25 commands took each record as its own line(s).
+
 ### Line terminators must survive the object choice
 
 A record renders as `BashText` + `\n` unless it carries `NoTrailingNewline` (`printf`,

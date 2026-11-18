@@ -256,7 +256,15 @@ public sealed class InvokeBashAwkCommand : PSCmdlet
         });
     }
 
+    // Records become LINES first: a piece without its newline (`printf a`) waits for the rest (LineAssembler).
+    private readonly LineAssembler _lines = new();
+
     protected override void ProcessRecord()
+    {
+        if (_lines.Feed(InputObject) is { } record) { InputObject = record; ProcessInputRecord(); }
+    }
+
+    private void ProcessInputRecord()
     {
         if (_halt || _machine is null || InputObject is null) return;
         var machine = _machine;
@@ -281,6 +289,7 @@ public sealed class InvokeBashAwkCommand : PSCmdlet
 
     protected override void EndProcessing()
     {
+        if (_lines.Flush() is { } last) { InputObject = last; ProcessInputRecord(); }
         if (_machine is null || _program is null) return;
         var machine = _machine;
         var program = _program;

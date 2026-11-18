@@ -253,7 +253,9 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
         _lineCount = h.Count;
         _headerMode = h.Headers;
         _zero = h.Zero;
+        _lines.Terminator = _zero ? '\0' : '\n';
         _byteCount = h.BytesMode ? h.ByteCount : null;
+        _lines.PassThrough = h.BytesMode;
         // We stream the pipeline only when:
         //   - the argv is clean (a scan/NUM error or --help/--version goes through EndProcessing)
         //   - no file operands (file mode runs in EndProcessing)
@@ -275,7 +277,16 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
         _anyHeader = true;
     }
 
+    // Records become LINES first: a piece without its newline (`printf a`) waits for the rest (LineAssembler).
+    private readonly LineAssembler _lines = new();
+
     protected override void ProcessRecord()
+    {
+        if (InputObject is not null) ParseFlagsOnce();   // the mode (-z, -c) decides what ends a record: known before the first Feed
+        if (_lines.Feed(InputObject) is { } record) { InputObject = record; ProcessInputRecord(); }
+    }
+
+    private void ProcessInputRecord()
     {
         if (InputObject == null) return;
 
@@ -389,6 +400,7 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
 
     protected override void EndProcessing()
     {
+        if (_lines.Flush() is { } last) { InputObject = last; ProcessInputRecord(); }
         // If ProcessRecord streamed the line-mode pipeline already, we're done.
         if (_flagsParsed && (_streamingLineMode || _streamingByteMode))
         {
@@ -428,6 +440,8 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
         var operands = plan.Operands;
         _headerMode = plan.Headers;
         _zero = plan.Zero;
+        _lines.Terminator = _zero ? '\0' : '\n';
+        _lines.PassThrough = plan.BytesMode;
 
         // Pipeline mode
         if (operands.Count == 0)

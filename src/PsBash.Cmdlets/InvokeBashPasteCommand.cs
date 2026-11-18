@@ -132,7 +132,15 @@ public sealed class InvokeBashPasteCommand : PSCmdlet
     // operand), which is exactly the shape of the common `... | paste -sd,` idiom.
     private readonly List<string> _stdin = new();
 
+    // Records become LINES first: a piece without its newline (`printf a`) waits for the rest (LineAssembler).
+    private readonly LineAssembler _lines = new();
+
     protected override void ProcessRecord()
+    {
+        if (_lines.Feed(InputObject) is { } record) { InputObject = record; ProcessInputRecord(); }
+    }
+
+    private void ProcessInputRecord()
     {
         if (InputObject == null) return;
         // A record may carry its trailing newline (printf/cat) or not (seq);
@@ -153,6 +161,7 @@ public sealed class InvokeBashPasteCommand : PSCmdlet
 
     protected override void EndProcessing()
     {
+        if (_lines.Flush() is { } last) { InputObject = last; ProcessInputRecord(); }
         var args = ArgsWithDecoys();
 
         FileSystemHelpers.SetLastExitCode(this, 0);
