@@ -137,7 +137,7 @@ find . -name '*.ps1' -type f
 ### 4. Top CPU processes
 
 ```powershell
-ps aux | sort -k3 -rn | head 5
+ps aux | sort -k3 -rn | head -5
 ```
 
 ```text
@@ -205,13 +205,13 @@ done | sort -t: -k2 -rn | head -5
 ps-bash count-errors.sh
 ```
 
-Behaviour is checked against bash 5.2. Where ps-bash differs on purpose, the difference
+Behavior is checked against bash 5.2. Where ps-bash differs on purpose, the difference
 is listed in
 [intentional-differences.md](https://github.com/standardbeagle/ps-bash/blob/main/docs/specs/intentional-differences.md).
 
 ## Breaking changes in v0.15.0
 
-v0.15.0 moves three behaviours to what bash does. Each can change an existing script.
+v0.15.0 moves three behaviors to what bash does. Each can change an existing script.
 
 ### PowerShell aliases no longer run in bash code
 
@@ -244,8 +244,9 @@ This holds for nested shells (`sh -c`, `bash script.sh`), programs started with 
 **What to change:** `export NAME`, or pass it for one command with `NAME=v cmd`.
 
 <Aside type="note">
-Not covered yet: a program started plainly (`prog args`, with no stderr merge) still
-inherits unexported variables.
+Not covered yet: a program started without a stderr merge (`prog args`, also inside
+`$( )`, `xargs` or `find -exec`) and any `.cmd` or `.bat` file still inherit unexported
+variables.
 </Aside>
 
 ### Paths use forward slashes on Windows

@@ -4,7 +4,10 @@
 
 PsBash transpiles bash to PowerShell — `rm -rf`, `ls -la`, `grep -r`, `sort -k3` all work natively. It runs whole scripts: functions, arrays, traps, `set -e`, `pipefail`, here-docs, process substitution and background jobs. Every command returns **typed .NET objects** while producing bash-identical text output. Includes a standalone shell binary that AI coding agents (Claude Code, OpenCode, GitHub Copilot) can use as a drop-in bash replacement.
 
-**v0.15.0** is a bash-compatibility release with three breaking changes. See [What's new](#whats-new-in-v0150) and [Breaking changes](#breaking-changes-in-v0150).
+**v0.15.0:** the bash spec suite (4,826 cases, expected output recorded from bash 5.2)
+had 140 cases marked as expected failures in v0.14.5. It has 79 now, and each mark names
+its reason. Three changes can break existing scripts. See [What's new](#whats-new-in-v0150)
+and [Breaking changes](#breaking-changes-in-v0150).
 
 [![CI](https://github.com/standardbeagle/ps-bash/actions/workflows/ci.yml/badge.svg)](https://github.com/standardbeagle/ps-bash/actions/workflows/ci.yml)
 [![PSGallery](https://img.shields.io/powershellgallery/v/PsBash.svg?label=PSGallery)](https://www.powershellgallery.com/packages/PsBash)
@@ -43,10 +46,7 @@ package in a unique `.previous-*` directory; existing backups are preserved.
 
 ## What's new in v0.15.0
 
-This release is about bash compatibility. Where ps-bash still differs from bash, the
-difference is documented.
-
-**Scripts that went wrong in v0.14.5 now match bash:**
+**Each line below behaved differently from bash in v0.14.5. In v0.15.0 it does what bash does:**
 
 ```bash
 x=1; sh -c 'echo "[$x]"'                 # printed [1]. Now [], x is not exported
@@ -54,35 +54,42 @@ f() { echo x; exit 3; }
 f | cat; echo "after ${PIPESTATUS[*]}"   # exit ended the whole script. Now: x, after 3 0
 { printf a; printf 'b\n'; } | sed s/x/y/ # printed a and b on two lines. Now ab
 set -o pipefail
-make build && make test | tee log        # was a PowerShell parse error
+make build && make test | tee log        # under pipefail this was a parse error
 echo it’s                                # a pasted ’ was a parse error
 yes | while read l; do break; done       # never ended. Now stops at the break
 { echo a; cat out.txt >&2; } > out.txt   # printed nothing. Now a
 echo "${PWD##*/}"                        # Windows: printed the whole C:\... path. Now the last component
 ```
 
-**Checked against real bash.** The differential tests run a snippet through bash 5.2
-and through ps-bash, then compare output and exit status
-(`src/PsBash.Differential.Tests`).
-The spec corpus in `spec/oils` holds 2,538 cases in 143 files, imported from the Oils
-spec tests with expectations recorded from bash. On Windows, 78 of them are marked as
-expected differences, down from 736 in v0.14.1 and 127 in v0.14.5. Each of the 78 names
-its reason: 57 are Windows itself (drive-letter paths, no `/bin`, case-insensitive
-names), 12 are interactive features ps-bash does not have (readline `bind`, job
-control), and 9 are other documented choices. The list of differences is
-[docs/specs/intentional-differences.md](docs/specs/intentional-differences.md).
+**Checked against bash.** The spec suite under `spec/` holds 4,826 cases in 221 files;
+2,538 of them come from the Oils spec tests. Expected output and exit status are
+recorded from bash 5.2, and each case runs through ps-bash. 79 cases carry an XFAIL
+(expected failure) mark, down from 140 in v0.14.5. A marked case that starts passing
+fails the suite, so a fix has to remove its mark. Each mark names its reason:
+
+- 58 are Windows facts: drive-letter paths, no `/bin`, a case-insensitive environment.
+- 12 are interactive features ps-bash does not have: readline `bind`, prompt counters,
+  job control.
+- 9 are other known differences: a ps-bash command runs ahead of a `PATH` file of the
+  same name (4), there is no SIGPIPE (2), a background job starts late on a loaded
+  host (2), and `help` prints its own text (1).
+
+The differential tests (`src/PsBash.Differential.Tests`) compare ps-bash's output and
+exit status with bash's, which is recorded in checked-in cassettes. The list of
+differences is [docs/specs/intentional-differences.md](docs/specs/intentional-differences.md).
 
 **Background jobs.** A job that writes to the shell's own output prints as it runs, in
 launch order, instead of at `wait`. A job gets its own copy of the shell's variables at the `&`.
 `kill -USR1 $$` from a nested shell runs the script's trap.
 
 **Processes.** Stopping a command (Ctrl+C, `timeout`) ends its whole process tree,
-including grandchildren whose parent already exited. `bash -c` and `sh -c` stream
-their output and are never timed out. A program started with `2>&1` keeps its write order.
+including grandchildren whose parent already exited. A nested `bash -c` or `sh -c`
+streams its output as it is written, and ps-bash puts no time limit on it. A program
+started with `2>&1` keeps its write order.
 
 **macOS.** Scripts no longer die with status 138 and no output. Signal numbers, wait
-statuses, `stat` data and terminal size come from one per-platform layer, so `kill`,
-`trap`, `ls -l`, `stat`, `find` and `umask` answer correctly on macOS and on Linux arm64.
+statuses, `stat` data and terminal size come from one per-platform layer, which fixes
+`kill`, `trap`, `ls -l`, `stat`, `find` and `umask` on macOS.
 One limit: a SIGUSR1 sent from outside ps-bash does not reach a `trap … USR1` on macOS,
 because the .NET runtime uses that signal itself.
 
@@ -121,10 +128,11 @@ sh -c 'echo "[$x]"'    # [1]
 
 This holds for nested shells (`sh -c`, `bash script.sh`), programs started with `2>&1`,
 `&>` or `|&`, and for `env`, `printenv` and `compgen -e`. Fix a script that relied on
-the old behaviour with `export NAME` or a prefix assignment (`NAME=v cmd`).
+the old behavior with `export NAME` or a prefix assignment (`NAME=v cmd`).
 
-Not covered yet: a program started plainly (`prog args`, no stderr merge) still inherits
-unexported variables.
+Not covered yet: a program started without a stderr merge (`prog args`, also inside
+`$( )`, `xargs` or `find -exec`) and any `.cmd` or `.bat` file still inherit unexported
+variables.
 
 ### Paths use forward slashes on Windows
 
@@ -156,7 +164,7 @@ PS> Get-Process | Format-Table -Auto | Out-String | ForEach-Object { $_ -split "
 # Good luck extracting CPU from that
 
 # After: typed objects through the entire pipeline
-PS> $top = ps aux | sort -k3 -rn | head 5
+PS> $top = ps aux | sort -k3 -rn | head -5
 PS> $top[0].ProcessName   # pwsh
 PS> $top[0].CPU           # 12.4     (decimal, not a string)
 PS> $top[0].PID           # 1847     (integer, not a substring)
@@ -186,7 +194,7 @@ PS> $files.SizeBytes | Measure-Object -Sum | Select -Expand Sum
 PS> echo '{"db":"postgres","port":5432}' | jq '.db'
 "postgres"
 
-PS> cat app.log | grep ERROR | awk '{print $1, $3}' | sort | uniq -c | sort -rn | head 5
+PS> cat app.log | grep ERROR | awk '{print $1, $3}' | sort | uniq -c | sort -rn | head -5
       47 2024-01-15 DatabaseError
       23 2024-01-15 TimeoutError
       12 2024-01-15 AuthError
@@ -203,7 +211,7 @@ PsBash can be used as a **PowerShell module** or a **standalone shell**. They sh
 ```powershell
 Install-Module PsBash
 ls -la | grep '.cs' | sort -k5 -h        # typed objects through the pipeline
-$procs = ps aux | sort -k3 -rn | head 5  # .PID, .CPU are real .NET types
+$procs = ps aux | sort -k3 -rn | head -5  # .PID, .CPU are real .NET types
 ```
 
 Best for: scripts, VS Code terminal, CI/CD, mixing bash with PowerShell cmdlets.
@@ -355,16 +363,17 @@ See [docs/agent-setup.md](docs/agent-setup.md) for detailed per-agent configurat
 | Object pipeline | Types survive `grep \| sort \| head` | Strings only | Strings only | Strings only | Varies |
 | PowerShell integration | Native — objects flow into cmdlets | Separate shell | Separate shell | Separate shell | Native |
 | Cross-platform | Win/Lin/Mac | Windows only | Windows only | Windows only | Win/Lin/Mac |
-| Commands | 120+ built-in | ~80 (GNU coreutils) | ~200+ (full GNU) | All of Linux | Define your own |
+| Commands | 118 built-in | ~80 (GNU coreutils) | ~200+ (full GNU) | All of Linux | Define your own |
 | jq/awk/sed | Built-in, zero binaries | awk/sed yes, jq no | Yes (install pkg) | Yes (apt install) | Not included |
 | PATH conflicts | None (AllScope aliases) | Shadows PowerShell | Shadows PowerShell | Filesystem boundary | None |
-| Startup overhead | ~100 ms (module load) | New process per call | New process per call | ~1s (cold), ~200ms (warm) | ~100 ms |
 | AI agent shell | Yes (`ps-bash -c`) | No | No | No | No |
 | Interactive mode | Yes (aliases, prompt, external tools) | Yes (full bash) | Yes (full bash) | Yes (full Linux) | No |
 
 ## Commands
 
-More than 120 commands are built in.
+The module registers 118 bash and Unix command names as cmdlets, listed below. The
+`ps-bash` shell adds bash's builtins on top: `read`, `declare`, `local`, `export`,
+`eval`, `set` and the others.
 
 | Category | Commands |
 |----------|----------|
@@ -384,8 +393,9 @@ More than 120 commands are built in.
 | **Math** | `seq` `expr` |
 
 A real option that ps-bash does not implement is refused with exit 2 and a message.
-The refused options are listed per command in
-[intentional-differences.md](docs/specs/intentional-differences.md).
+The refused options are listed in
+[intentional-differences.md](docs/specs/intentional-differences.md#not-implemented-refused-exit-2),
+with per-command detail in [runtime-command-reference.md](docs/specs/runtime-command-reference.md).
 
 ## PsBash vs Native PowerShell
 
@@ -393,9 +403,9 @@ The refused options are listed per command in
 |------|--------|-------------------|
 | List files | `ls -la` | `Get-ChildItem -Force \| Format-List` |
 | Find by name | `find . -name '*.ps1'` | `Get-ChildItem -Recurse -Filter *.ps1` |
-| Top 5 CPU | `ps aux \| sort -k3 -rn \| head 5` | `Get-Process \| Sort-Object CPU -Desc \| Select -First 5` |
+| Top 5 CPU | `ps aux \| sort -k3 -rn \| head -5` | `Get-Process \| Sort-Object CPU -Desc \| Select -First 5` |
 | Count lines | `wc -l file.txt` | `(Get-Content file.txt).Count` |
-| Search files | `grep -r 'TODO' src/` | `Select-String -Path src/* -Pattern TODO -Recurse` |
+| Search files | `grep -r 'TODO' src/` | `Get-ChildItem src -Recurse -File \| Select-String TODO` |
 | JSON field | `cat f.json \| jq '.name'` | `(Get-Content f.json \| ConvertFrom-Json).name` |
 | Delete tree | `rm -rf dist/` | `Remove-Item dist/ -Recurse -Force` |
 | Disk usage | `du -sh * \| sort -rh` | `Get-ChildItem \| Sort Length -Desc \| Select Name,Length` |
@@ -432,12 +442,14 @@ The parser tokenizes and parses bash into an AST modeled on Oils syntax.asdl. Th
 
 ## Testing
 
-Three layers check behaviour against real bash:
+The first two layers check behavior against bash; the third tests ps-bash's own parts:
 
-- **Spec corpus** (`spec/oils`): 2,538 cases in 143 files, imported from the Oils spec
-  tests. Expected output and status are recorded from bash 5.2.
-- **Differential tests** (`src/PsBash.Differential.Tests`): a snippet runs through bash
-  and through ps-bash, and the results must match.
+- **Spec suite** (`spec/`): 4,826 cases in 221 files, 2,538 of them imported from the
+  Oils spec tests (`spec/oils`). Expected output and status are recorded from bash 5.2.
+  79 cases carry an XFAIL mark with a reason id.
+- **Differential tests** (`src/PsBash.Differential.Tests`): ps-bash's output and exit
+  status must match bash's, recorded in checked-in cassettes (`PSBASH_ORACLE_LIVE=1`
+  runs bash live instead).
 - **Unit and guard tests** per project, plus the Pester suite in `tests/`.
 
 Build and test through `tman` (see [CLAUDE.md](CLAUDE.md)), which serializes builds and
@@ -455,14 +467,15 @@ CI runs on Windows, Linux, and macOS via GitHub Actions.
 
 | Feature | Linux/macOS | Windows |
 |---------|-------------|---------|
-| File permissions | Real POSIX (`rwxr-xr-x`) | Synthesised: `0644` files, `0755` directories and executables |
+| File permissions | Real POSIX (`rwxr-xr-x`) | Synthesized: `0644` files, `0755` directories and executables |
 | `ln -s` | Works normally | Needs the symlink privilege (Developer Mode) |
 | Paths a script sees | `/home/you/x` | `C:/Users/you/x` |
 | `x=1; X=2` | Two variables | One variable (the environment is case-insensitive) |
 | `PATH` separator | `:` | `;` |
 
-Signal numbers are bash's (Linux numbering) on every OS: `kill -l`, `trap … USR1` and a
-`128+N` exit status read the same on macOS.
+Signal numbers use bash's Linux numbering on every OS, so `kill -l`, `trap … USR1` and a
+`128+N` exit status read the same on macOS as on Linux. bash on macOS uses macOS's
+numbers (USR1 is 30 there).
 
 ## Documentation
 

@@ -22,7 +22,6 @@ This page compares it honestly against every alternative so you can decide what 
 | **Disk footprint** | One module, or one self-contained package | ~300 MB (MSYS2 runtime) | 1-4 GB (base + packages) | 1-15 GB (full distro) | Module + your wrappers |
 | **Install** | `Install-Module PsBash` | Git for Windows installer | Setup wizard, select packages | Windows feature + distro | Per-command XML authoring |
 | **Runtime** | PowerShell process | Separate mintty/bash process | Separate bash process | Linux VM (Hyper-V) | PowerShell process |
-| **Startup cost** | ~100 ms (module import) | ~200 ms (new process) | ~200 ms (new process) | 1-3 s (cold) / 200 ms (warm) | ~100 ms |
 | **Typed objects** | Yes, always | No (strings) | No (strings) | No (strings) | Yes, if configured |
 | **PowerShell integration** | Native -- objects flow into cmdlets | None -- separate shell | None -- separate shell | None -- separate OS | Native |
 | **Cross-platform** | Windows, Linux, macOS | Windows only | Windows only | Windows only | Windows, Linux, macOS |
@@ -34,16 +33,16 @@ This page compares it honestly against every alternative so you can decide what 
 
 ## PsBash vs Bash
 
-The commands are identical, and so is the script around them: functions, arrays, `trap`,
-`set -e`, `pipefail`, here-docs, process substitution and background jobs run in the
-`ps-bash` shell. Behaviour is checked against bash 5.2. The difference is what comes out
-of the pipeline.
+You type the same command lines, and the `ps-bash` shell runs the script around them:
+functions, arrays, `trap`, `set -e`, `pipefail`, here-docs, process substitution and
+background jobs. Behavior is checked against bash 5.2; what still differs is listed
+under "When Bash Wins". The main difference is what comes out of the pipeline.
 
 | Task | Bash | PsBash | The PsBash Advantage |
 |------|------|--------|---------------------|
 | List files | `ls -la` | `ls -la` | Returns `LsEntry` objects with `.Name`, `.SizeBytes`, `.Modified` |
 | Find text | `grep -r 'TODO' src/` | `grep -r 'TODO' src/` | Returns `GrepMatch` objects with `.LineNumber`, `.FileName`, `.MatchText` |
-| Top CPU processes | `ps aux \| sort -k3 -rn \| head 5` | `ps aux \| sort -k3 -rn \| head 5` | `PsEntry` objects with `.CPU` as a decimal, not a string to parse |
+| Top CPU processes | `ps aux \| sort -k3 -rn \| head -5` | `ps aux \| sort -k3 -rn \| head -5` | `PsEntry` objects with `.CPU` as a decimal, not a string to parse |
 | File sizes | `ls -la \| awk '{print $5}'` | `(ls -la).SizeBytes` | Direct property access replaces awk field extraction |
 | JSON queries | `cat f.json \| jq '.name'` | `cat f.json \| jq '.name'` | Works on Windows without installing jq separately |
 | Count lines | `wc -l file.txt` | `wc -l file.txt` | `WcResult` with `.Lines`, `.Words`, `.Bytes` as integers |
@@ -66,7 +65,7 @@ ps-bash aims to match bash 5.2 and GNU coreutils. These differences remain:
   the line editor is not readline.
 - **Refused options** -- a real GNU option that ps-bash does not implement fails with
   exit 2 and a message.
-- **Windows itself** -- no `/bin`, synthesised permission bits, case-insensitive file and
+- **Windows itself** -- no `/bin`, synthesized permission bits, case-insensitive file and
   variable names, `C:/x` paths.
 - **System administration on Linux** -- bash is the native shell. PsBash adds a layer.
 
@@ -76,9 +75,9 @@ status. The full list of differences is
 
 ### What changed in v0.15.0
 
-Three behaviours moved to what bash does. Each can change an existing script:
+Three behaviors moved to what bash does. Each can change an existing script:
 
-| Behaviour | Before | v0.15.0 (as bash) |
+| Behavior | Before | v0.15.0 (as bash) |
 |-----------|--------|-------------------|
 | `gci`, `iex`, `r`, `write` in bash code | Ran the PowerShell alias | A function or `PATH` program, else exit 127 |
 | `x=1; sh -c 'echo "[$x]"'` | `[1]` | `[]`: a child sees exported variables only |
@@ -100,18 +99,17 @@ Details and what to change:
 
 ## PsBash vs Native PowerShell
 
-Same results, fewer characters. PsBash commands average 50-70% shorter than their native PowerShell equivalents.
+In the table below the PsBash form is 34-73% shorter than the native PowerShell form.
 
 | Task | PsBash | Chars | PowerShell | Chars | Saved |
 |------|--------|-------|------------|-------|-------|
-| List files | `ls -la` | 5 | `Get-ChildItem -Force` | 21 | 76% |
-| Find text | `grep -r 'TODO' src/` | 19 | `Select-String -Pattern TODO -Path src/* -Recurse` | 50 | 62% |
-| Top CPU | `ps aux \| sort -k3 -rn \| head 5` | 32 | `Get-Process \| Sort-Object CPU -Desc \| Select-Object -First 5` | 55 | 42% |
-| JSON query | `cat f.json \| jq '.name'` | 22 | `(Get-Content f.json \| ConvertFrom-Json).name` | 46 | 52% |
-| First 10 lines | `head -n 10 file.txt` | 18 | `Get-Content file.txt -Head 10` | 30 | 40% |
-| Count lines | `wc -l file.txt` | 13 | `(Get-Content file.txt \| Measure-Object -Line).Lines` | 52 | 75% |
-| Find files | `find . -name '*.ps1'` | 19 | `Get-ChildItem -Recurse -Filter *.ps1` | 38 | 50% |
-| Sort by column | `sort -k5 -h` | 10 | `Sort-Object { $_.Length }` | 26 | 62% |
+| List files | `ls -la` | 6 | `Get-ChildItem -Force` | 20 | 70% |
+| Find text | `grep -r 'TODO' src/` | 19 | `Get-ChildItem src -Recurse -File \| Select-String TODO` | 53 | 64% |
+| Top CPU | `ps aux \| sort -k3 -rn \| head -5` | 31 | `Get-Process \| Sort-Object CPU -Desc \| Select-Object -First 5` | 60 | 48% |
+| JSON query | `cat f.json \| jq '.name'` | 23 | `(Get-Content f.json \| ConvertFrom-Json).name` | 44 | 48% |
+| First 10 lines | `head -n 10 file.txt` | 19 | `Get-Content file.txt -Head 10` | 29 | 34% |
+| Count lines | `wc -l file.txt` | 14 | `(Get-Content file.txt \| Measure-Object -Line).Lines` | 51 | 73% |
+| Find files | `find . -name '*.ps1'` | 20 | `Get-ChildItem -Recurse -Filter *.ps1` | 36 | 44% |
 
 ### When Native PowerShell Wins
 
@@ -124,7 +122,7 @@ Same results, fewer characters. PsBash commands average 50-70% shorter than thei
 
 ### When PsBash Wins
 
-- **Brevity** -- 50-70% fewer characters for everyday tasks.
+- **Brevity** -- 34-73% fewer characters for the everyday tasks in the table above.
 - **Muscle memory** -- if you know bash, you know PsBash. No learning curve.
 - **Text pipeline compatibility** -- output looks like bash, so existing scripts and colleagues can read it.
 - **Familiar to bash users** -- onboard Linux-native developers to PowerShell without retraining.
@@ -151,7 +149,7 @@ WSL gives you a real Linux kernel. PsBash gives you bash-style commands inside t
 | Network stack | Host network | Bridged or NAT |
 | Docker | Docker Desktop | Native Linux Docker |
 | Installation | `Install-Module PsBash` | Windows feature + distro download |
-| Startup time | Instant (module load) | Seconds (VM boot) |
+| Startup time | A module import, no VM | Seconds (VM boot) |
 
 ### When You Need WSL Instead
 
@@ -185,7 +183,7 @@ Git Bash ships with Git for Windows and gives you a real bash shell with GNU cor
 | File paths | `C:/Users/...` (drive kept, forward slashes) | `/c/Users/...` POSIX translation |
 | Scripting | Bash scripts and PowerShell cmdlets in one process | Real bash scripts, but can't call cmdlets |
 | jq built-in | Yes | No (separate install) |
-| Commands | 120+ | ~80 (GNU coreutils subset) |
+| Commands | 118 | ~80 (GNU coreutils subset) |
 
 ### The Fundamental Difference
 
@@ -233,7 +231,7 @@ Cygwin is the heavyweight option: a full POSIX compatibility layer for Windows w
 | File paths | `C:/Users/...` (drive kept, forward slashes) | `/cygdrive/c/Users/...` |
 | Fork support | N/A (no process forking) | Emulated via `cygwin1.dll` (slow) |
 | Package manager | PowerShell Gallery | Cygwin setup.exe (no CLI package manager) |
-| Commands | 120+ (focused on scripting) | 200+ (full GNU userland) |
+| Commands | 118 (focused on scripting) | 200+ (full GNU userland) |
 | Symlinks | PowerShell API | Cygwin-internal (often broken outside Cygwin) |
 | Pipeline to .NET | Native | Not possible |
 | Update process | `Update-Module PsBash` | Rerun setup.exe |

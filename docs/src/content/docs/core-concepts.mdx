@@ -78,7 +78,7 @@ $result = ls -la | grep '.ps1'
 $result[0].PSObject.TypeNames[0]   # PsBash.LsEntry -- NOT a string
 $result[0].SizeBytes                # 141234 -- real integer
 
-$top = ps aux | sort -k5 -rn | head 5
+$top = ps aux | sort -k5 -rn | head -5
 $top[0].PSObject.TypeNames[0]      # PsBash.PsEntry
 $top[0].CPU                         # 12.3 -- real double
 $top[0].Memory                      # 2.1 -- real double
@@ -159,17 +159,18 @@ PowerShell. See
 
 Two more rules hold everywhere in the shell. Both match bash.
 
-**A child process sees exported variables only.** Every shell variable lives in the
-host's process environment, so ps-bash keeps the export attribute in a separate table
-and builds a child's environment from it.
+**A child process sees exported variables only.** Every scalar shell variable is a
+process environment variable of the host, so ps-bash keeps the export attribute in a
+separate table and builds a child's environment from it.
 
 ```bash
 x=1; sh -c 'echo "[$x]"'           # []
 export x; sh -c 'echo "[$x]"'      # [1]
 ```
 
-One gap remains: a program started plainly (`prog args`, with no stderr merge) still
-inherits unexported variables.
+One gap remains: a program started without a stderr merge (`prog args`, also inside
+`$( )`, `xargs` or `find -exec`) and any `.cmd` or `.bat` file still inherit unexported
+variables.
 
 **A path is `C:/Users/x` on Windows.** One helper converts every path on its way to the
 script, so `$PWD`, `~`, `mktemp`, `realpath` and glob results agree, and idioms that

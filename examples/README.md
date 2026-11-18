@@ -24,7 +24,7 @@ PsBash ships **two** surfaces, and the examples use both:
 
 ## Notes for v0.15.0
 
-The `.sh` examples run in the `ps-bash` shell, where three behaviours changed in v0.15.0
+The `.sh` examples run in the `ps-bash` shell, where three behaviors changed in v0.15.0
 to match bash. If you adapt an example into your own script:
 
 - **PowerShell aliases are not commands.** `gci`, `iex`, `r` and `write` are no longer

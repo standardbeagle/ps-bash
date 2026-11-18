@@ -1,6 +1,6 @@
 ---
 title: PsBash
-description: Real bash commands, real PowerShell objects. More than 120 bash commands as native PowerShell cmdlets with typed pipeline output, and a shell that runs bash scripts. Windows, macOS, Linux.
+description: Real bash commands, real PowerShell objects. 118 bash and Unix commands as native PowerShell cmdlets with typed pipeline output, and a shell that runs bash scripts. Windows, macOS, Linux.
 template: splash
 head:
   - tag: meta
@@ -30,23 +30,9 @@ hero:
 
 import { Card, CardGrid } from '@astrojs/starlight/components';
 
-## Why PsBash?
-
-<CardGrid>
-  <Card title="Muscle Memory" icon="terminal">
-    Same `ls -la`, `grep -r`, `ps aux` commands you already know. Same flags, same output format. No new syntax to learn.
-  </Card>
-  <Card title="Typed Pipeline" icon="rocket">
-    Objects survive through `grep`, `sort`, `head`, `tail`. Pipe `ls -la | grep '.ps1'` and get `LsEntry` objects back, not strings to parse.
-  </Card>
-  <Card title="Cross-Platform" icon="laptop">
-    Windows, Linux, macOS. No WSL overhead, no VM, no filesystem boundary. Runs everywhere PowerShell runs.
-  </Card>
-</CardGrid>
-
 ## New in v0.15.0: closer to bash
 
-Scripts that went wrong in v0.14.5 now do what bash does:
+Each line below behaved differently from bash in v0.14.5. In v0.15.0 it does what bash does:
 
 ```bash
 x=1; sh -c 'echo "[$x]"'                 # printed [1]. Now [], x is not exported
@@ -58,9 +44,9 @@ echo "${PWD##*/}"                        # Windows: printed the whole C:\... pat
 ```
 
 <CardGrid>
-  <Card title="Checked against real bash" icon="approve-check-circle">
-    The spec corpus holds 2,538 cases with output recorded from bash 5.2. On Windows 78
-    are marked as expected differences, down from 736 in v0.14.1. Each one names its reason.
+  <Card title="Checked against bash" icon="approve-check-circle">
+    The spec suite holds 4,826 cases with expected output recorded from bash 5.2. 79 carry
+    an XFAIL (expected failure) mark, down from 140 in v0.14.5, and each mark names its reason.
   </Card>
   <Card title="Three breaking changes" icon="warning">
     PowerShell aliases no longer run in bash code, a child process sees exported
@@ -70,6 +56,20 @@ echo "${PWD##*/}"                        # Windows: printed the whole C:\... pat
   <Card title="macOS and background jobs" icon="laptop">
     Scripts no longer die with status 138 on macOS. Job output prints as the job runs,
     in launch order. Stopping a command ends its whole process tree.
+  </Card>
+</CardGrid>
+
+## Why PsBash?
+
+<CardGrid>
+  <Card title="Muscle Memory" icon="terminal">
+    Same `ls -la`, `grep -r`, `ps aux` commands you already know. Same flags, same output format. No new syntax to learn.
+  </Card>
+  <Card title="Typed Pipeline" icon="rocket">
+    Objects survive through `grep`, `sort`, `head`, `tail`. Pipe `ls -la | grep '.ps1'` and get `LsEntry` objects back, not strings to parse.
+  </Card>
+  <Card title="Cross-Platform" icon="laptop">
+    Windows, Linux, macOS. No WSL overhead, no VM, no filesystem boundary. Runs everywhere PowerShell runs.
   </Card>
 </CardGrid>
 
@@ -97,12 +97,11 @@ The output looks like bash. The pipeline carries typed objects. You get both.
 | Task | Bash | PsBash | Native PowerShell |
 |------|------|--------|-------------------|
 | List files with details | `ls -la` | `ls -la` | `Get-ChildItem \| Format-List` |
-| Find text in files | `grep -r 'TODO' .` | `grep -r 'TODO' .` | `Select-String -Pattern 'TODO' -Path . -Recurse` |
-| Sort by column | `sort -k5 -h` | `sort -k5 -h` | `Sort-Object { $_.Length }` |
+| Find text in files | `grep -r 'TODO' .` | `grep -r 'TODO' .` | `Get-ChildItem -Recurse -File \| Select-String 'TODO'` |
 | First 10 lines | `head -n 10 file.txt` | `head -n 10 file.txt` | `Get-Content file.txt -Head 10` |
 | Count lines | `wc -l *.ps1` | `wc -l *.ps1` | `(Get-Content *.ps1 \| Measure-Object -Line).Lines` |
 
-Same command. Typed objects. No string parsing.
+The command is the one you would type in bash, and the result is typed objects.
 
 ## More than commands — a whole shell
 
@@ -154,16 +153,16 @@ ls -la | browse                         # arrow-key file workbench, with actions
 ## By the Numbers
 
 <CardGrid>
-  <Card title="120+ Commands" icon="setting">
+  <Card title="118 Commands" icon="setting">
     `ls`, `grep`, `awk`, `jq`, `sed`, `find`, `tar` and the rest of the everyday set, as native PowerShell cmdlets.
   </Card>
-  <Card title="2,538 Spec Cases" icon="approve-check-circle">
-    Bash behaviour cases in 143 files, imported from the Oils spec tests, with expected output recorded from bash 5.2.
+  <Card title="4,826 Spec Cases" icon="approve-check-circle">
+    Bash behavior cases in 221 files, 2,538 of them imported from the Oils spec tests. Expected output is recorded from bash 5.2.
   </Card>
   <Card title="3 Platforms" icon="laptop">
-    Windows x64, Linux x64, macOS arm64. CI runs on all three.
+    Release archives for Windows x64, Linux x64 and macOS arm64. CI runs on all three systems.
   </Card>
-  <Card title="20 Typed Objects" icon="document">
-    `LsEntry`, `GrepMatch`, `PsEntry`, `WcResult` and more. Real properties, not text.
+  <Card title="24 Typed Objects" icon="document">
+    `LsEntry`, `GrepMatch`, `PsEntry`, `WcResult` and 20 more, each with its own format view and named, typed properties.
   </Card>
 </CardGrid>
