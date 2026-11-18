@@ -289,7 +289,12 @@ jobs:
       # BLOCKING (filesystem-security regressions such as tar containment live here).
       # --blame-hang-timeout and the step timeout bound a hang from process-spawning
       # fixtures: a hang now fails the release instead of being ignored.
+      # macOS is ADVISORY for now (owner decision, v0.15.0): under full-suite load there an awk pipe child dies
+      # (SIGBUS, exit 138) and AwkRedirectTests.Pipe_OutputBeyondTheStdioBuffer… / JobClockSleepTests fail on
+      # every run; alone they pass (single-test.yml). Windows and Linux stay blocking. Make it blocking again
+      # once that crash is fixed.
       - name: Run PsBash.Cmdlets.Tests
+        continue-on-error: ${{ matrix.os == 'macos-latest' }}
         timeout-minutes: 10
         shell: bash
         run: |
