@@ -35,7 +35,7 @@ PSBASH_SESSION=build ps-bash -c 'x=5; cd /src'
 PSBASH_SESSION=build ps-bash -c 'echo $x; pwd'     # 5, then /src (C:/src on Windows)
 ```
 
-Only exported variables reach a program the session starts (v0.15.0): after `x=5`,
+Only exported variables reach a nested shell the session starts (v0.15.0): after `x=5`,
 `sh -c 'echo $x'` prints an empty line until you `export x`.
 
 - The launcher does not re-impose its own cwd or environment on a stateful session (it would
@@ -54,8 +54,9 @@ Since v0.15.0 a signal aimed at that pid from a ps-bash shell (`sh -c "kill -USR
 signal is sent:
 
 - a `trap` for the signal runs at the script's next top-level statement;
-- with no trap, the script ends with 128+N, and the host stays up;
-- STOP, TSTP, TTIN, TTOU and CONT are ignored: a host command cannot be suspended.
+- with no trap, the script ends with 128+N and the host stays up, except for the signals below;
+- with no trap, STOP, TSTP, TTIN, TTOU and CONT are ignored, as are CHLD, URG and WINCH: a host
+  command cannot be suspended.
 
 A signal that arrives during one long command or a `( )` / `$( )` body waits for it to finish.
 On Linux and macOS a real SIGUSR1 or SIGUSR2 sent to the host or the launcher by another

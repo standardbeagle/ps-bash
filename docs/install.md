@@ -23,21 +23,25 @@ curl -fsSL https://raw.githubusercontent.com/standardbeagle/ps-bash/main/install
 Both install the whole package into a versioned directory, run a real command
 before switching to it, and keep the previous version. To install a release
 other than the latest, pipe into `VERSION=0.15.0 bash`, or save `install.ps1`
-and run it with `-Version 0.15.0`.
+and run it with `-Version 0.15.0`. The installer ends by printing the installed
+version; once its directory is on `PATH`, `ps-bash --version` in a new terminal
+prints the same.
 
 ## Upgrading to v0.15.0
 
-Three changes can break a script that ran on v0.14.x. Each matches bash.
+These three changes are the most likely to break a script that ran on v0.14.x.
+Each one makes ps-bash do what bash does.
 
 | Change | Before | Now | What to do |
 |---|---|---|---|
 | Paths a script sees (Windows) | `$PWD` = `C:\Users\x` | `C:/Users/x` | Split and match on `/`. `C:\x`, `C:/x`, `/c/x` and `/mnt/c/x` are all still accepted as input. `PATH` is unchanged. |
-| PowerShell aliases in bash code | `gci`, `%`, `iex`, `r`, `write` ran cmdlets | "command not found" (127), or the function or PATH program of that name | Use the full cmdlet name (`Get-ChildItem`). |
-| A child's environment | `x=1; sh -c 'echo $x'` printed `1` | prints an empty line | `export x`. |
+| PowerShell aliases in bash code | `gci`, `iex`, `r`, `write` ran cmdlets | "command not found" (127), or the function or PATH program of that name | Use the full cmdlet name (`Get-ChildItem`). |
+| A nested shell's environment | `x=1; sh -c 'echo $x'` printed `1` | prints an empty line | `export x`. A plain `prog args` still sees every variable. |
 
-Background job output also changed: a `cmd &` whose output goes to the terminal
-prints as it runs (it used to appear at `wait`). The full list is in the
-[changelog](../CHANGELOG.md#v0150); open items are in [Known Issues](known-issues.md).
+Other behavior changes are in the [changelog](../CHANGELOG.md#v0150): background
+job output prints as the job runs instead of at `wait`, `set -e` ends a failing
+pipe stage, a stop ends the command's whole process tree, and `readlink` on a
+file that is not a link prints nothing. Open items are in [Known Issues](known-issues.md).
 
 ## Standalone package contents
 

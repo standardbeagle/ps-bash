@@ -2,8 +2,8 @@
 
 Open bugs and gaps in ps-bash v0.15.0, each checked against the code, the specs or bash 5.2.
 Deliberate differences from bash (platform limits, refused options) are listed separately in
-[Intentional Differences](specs/intentional-differences.md). Check both pages before you report
-a bug.
+[Intentional Differences](specs/intentional-differences.md); the ones scripts hit most often are
+repeated here, under their area. Check both pages before you report a bug.
 
 ## Pipelines
 
@@ -54,10 +54,12 @@ a bug.
 ## Processes and environment
 
 - **A program started as a plain `prog args` inherits unexported variables.** Nested shells,
-  programs under `2>&1` / `|&` / `&>`, `env`, `printenv`, `timeout`, `find -exec`, `nohup` and
-  awk `system()` get exported variables only. A plain `x=1; prog` with no stderr merge is
-  started by PowerShell, which hands it every shell variable. The same program is the one
-  process killed on a stop; its children are not. Spec: `environment-model.md` §7.
+  programs under `2>&1` / `|&` / `&>`, and the programs `timeout`, `nohup` and awk `system()`
+  start get exported variables only; `env`, `printenv` and `compgen -e` list only exported
+  names. A plain `x=1; prog` with no stderr merge, in any position (also `env prog`,
+  `command prog`, `xargs prog`, `time prog`), is started by PowerShell, which hands it every
+  shell variable. The same program is the one process killed on a stop; its children are not.
+  Spec: `environment-model.md` §7.
 - **`.cmd` and `.bat` in a background job** get the host process environment in place of the
   job's copy.
 - **Foreground `nohup CMD` returns 0 at once.** GNU nohup waits and returns CMD's status.
@@ -69,12 +71,12 @@ a bug.
 ## Signals and background jobs
 
 - **A trapped signal runs at the next top-level statement.** A signal that arrives during one
-  long command, or inside a `( )` or `$( )` body, waits for it to finish. STOP, TSTP, TTIN,
-  TTOU and CONT are ignored.
-- **A job starts about 13 ms after its `&`** (10-53 ms under load); bash forks at once. A
-  `sleep` in the job is shortened by that lag, so longer sleeps keep bash's order. Jobs that
-  differ by less than the lag can finish in another order than in bash. Two spec cases stay
-  XFAIL for this (`arch-bg-job-start-latency`), one of them `wait -n`.
+  long command, or inside a `( )` or `$( )` body, waits for it to finish. With no trap, STOP,
+  TSTP, TTIN, TTOU and CONT are ignored: a host command cannot be suspended.
+- **A job starts about 13 ms after its `&`** (median on Windows; 10-53 ms under load); bash
+  forks at once. A `sleep` in the job is shortened by that lag, so longer sleeps keep bash's
+  order. Jobs that differ by less than the lag can finish in another order than in bash. Two
+  spec cases stay XFAIL for this (`arch-bg-job-start-latency`), one of them `wait -n`.
 - **Some job output is still printed at `wait`.** A job streams its output as it runs when
   its stdout is the shell's own. A job started inside a function, a redirected group, a
   pipeline, `$( )`, `<( )`, `eval`, `source`, a trap, or after `exec > file` is collected and
@@ -83,7 +85,8 @@ a bug.
   are stopped and output they had not delivered is dropped. Use `wait`, or `nohup cmd &` for a
   process that must outlive the shell.
 - **Ctrl+C ends a program's whole process tree,** including a child its script started with
-  `&`. Bash leaves that child running. A `setsid` child survives in both.
+  `&`. Bash leaves that child running. A `setsid` child survives in both. A plain `prog args`
+  is the exception: only that process is stopped (see above).
 
 ## macOS
 
@@ -119,7 +122,7 @@ Entries this page or earlier releases listed as open:
 - `set -e` ends a failing pipe stage; it used to run to its end.
 - `exit` in a function called from a pipe stage, `( )` or `$( )` ended the whole script.
 - `kill -USR1 $$` from a nested shell was refused; it now runs the trap.
-- A child process saw every shell variable.
+- A nested shell, or a program started with `2>&1`, saw every shell variable.
 - `--rcfile` was parsed and dropped.
 - Background job output was held until `wait`.
 

@@ -290,7 +290,7 @@ unalias -a                  # remove all
 
 Aliases expand the first word of each command in a line before the transpiler sees it. So `ll` becomes `ls -al`, then `ls` is mapped to `Invoke-BashLs`.
 
-These are bash aliases. PowerShell's own aliases (`gci`, `%`, `iex`, `r`, `write`) are not commands in the shell since v0.15.0: such a word runs a function or PATH program of that name, or fails with "command not found" (127), as in bash. Full cmdlet names (`Get-ChildItem`) still work.
+These are bash aliases. PowerShell's own aliases (`gci`, `iex`, `r`, `write`) are not commands in the shell since v0.15.0: such a word runs a function or PATH program of that name, or fails with "command not found" (127), as in bash. Full cmdlet names (`Get-ChildItem`) still work.
 
 ### Autosuggestions
 
@@ -339,7 +339,7 @@ export EDITOR="code"        # set in the worker
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-A program you start sees exported variables only, as in bash (v0.15.0). After `x=1`, `sh -c 'echo $x'` prints an empty line; after `export x`, it prints `1`. `NAME=value cmd` exports for that one command.
+A nested shell, or a program started with `2>&1`, `&>` or `|&`, sees exported variables only, as in bash (v0.15.0). After `x=1`, `sh -c 'echo $x'` prints an empty line; after `export x`, it prints `1`. `NAME=value cmd` exports for that one command. A program started plainly (`prog args`) still inherits every shell variable ([Known Issues](known-issues.md#processes-and-environment)).
 
 Paths the shell hands to a script use forward slashes on Windows: `$PWD`, `~` and `$HOME` are `C:/Users/you`, so `${PWD##*/}` and `for f in $dir/*` work. `PATH` keeps the Windows `;` form: a `:` you write between entries becomes `;` after the assignment.
 
@@ -477,7 +477,7 @@ find . -name '*.ps1' -type f
 
 ### PowerShell commands
 
-Anything the bash parser doesn't recognize passes through to PowerShell. Use full cmdlet names: PowerShell's aliases (`gci`, `%`, `?`) are not resolved (v0.15.0).
+Anything the bash parser doesn't recognize passes through to PowerShell. Use full cmdlet names: PowerShell's aliases (`gci`, `iex`) are not resolved (v0.15.0).
 
 ```
 Get-Process | Where-Object { $_.CPU -gt 5 }
@@ -535,4 +535,4 @@ specific to the interactive shell:
 - **Prompt escapes `\j`, `\!`, `\#`.** `\j` is always `0`; `\!` and `\#` are always `1`.
 - **`set -v`.** The option is tracked (`$-`, `$SHELLOPTS`), but input lines are not echoed.
 - **PowerShell aliases.** Since v0.15.0 a line the shell runs as bash does not resolve
-  PowerShell's built-in aliases (`gci`, `%`, `iex`). Type the full cmdlet name.
+  PowerShell's built-in aliases (`gci`, `iex`). Type the full cmdlet name.

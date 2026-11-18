@@ -170,16 +170,17 @@ RUN ps-bash -c "echo ready"
   `scp a b && ssh h cmd | grep x` failed the whole script with a PowerShell parse error. It runs now.
 - **Typographic quotes.** A pasted `’`, `“”` or `–` in a command (`echo it’s`) failed the whole
   script. These are ordinary characters now, as in bash.
-- **PowerShell aliases.** `gci`, `%`, `iex`, `r` and `write` are no longer commands in bash code:
+- **PowerShell aliases.** `gci`, `iex`, `r` and `write` are no longer commands in bash code:
   exit 127 unless a function or PATH program has that name. Full cmdlet names still work.
 - **Exported variables only.** `x=1; bash -c 'echo $x'` prints an empty line. Use `export x=1`,
-  or `x=1 bash -c '...'`.
+  or `x=1 bash -c '...'`. A program started plainly (`prog args`) still inherits every variable.
 - **Nested shells.** `bash -c '...'`, `sh -c` and `bash script.sh` stream their output as it is
   written and are no longer killed after `PSBASH_TIMEOUT`.
 - **Background jobs.** `cmd &` output appears as the job runs. It used to appear at `wait`.
 - **Busy hosts.** When every executor slot of the session has been busy for 2 s (several long
-  builds), the next command runs on a private host that exits with it, instead of waiting. At most
-  2 such hosts per session; `PSBASH_EXEC_OVERFLOW_MS` and `PSBASH_EXEC_OVERFLOW_MAX` change both.
+  builds), the next command runs on a private host that exits with it, instead of waiting. A
+  session runs at most 2 such hosts at once; past that, a command waits for a slot.
+  `PSBASH_EXEC_OVERFLOW_MS` sets the 2 s wait and `PSBASH_EXEC_OVERFLOW_MAX` the host limit.
 
 Open items an agent can hit are in [Known Issues](known-issues.md).
 
