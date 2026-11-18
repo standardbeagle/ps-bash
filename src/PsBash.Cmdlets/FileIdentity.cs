@@ -108,9 +108,18 @@ internal static class FileIdentity
                 return true;
             }
 
-            var linux = BashRuntime.RunChildProcess("stat", new[] { "-c", "%i", "--", path }, TimeSpan.FromSeconds(10));
+            // lstat in-process (the stat CLI does not follow a link either); a spawned stat only where no
+            // struct stat layout is known.
+            if (PsBash.Core.Platform.PosixStat.Current != PsBash.Core.Platform.StatLayout.Unsupported)
+            {
+                if (!PsBash.Core.Platform.PosixStat.TryLStat(path, out var st)) return false;
+                inode = st.Inode;
+                return true;
+            }
+            var stat = PsBash.Core.Platform.SystemTools.Resolve("stat");
+            var linux = BashRuntime.RunChildProcess(stat, new[] { "-c", "%i", "--", path }, TimeSpan.FromSeconds(10));
             if (linux.ExitCode == 0 && !linux.TimedOut && ulong.TryParse(linux.Stdout.Trim(), out inode)) return true;
-            var bsd = BashRuntime.RunChildProcess("stat", new[] { "-f", "%i", path }, TimeSpan.FromSeconds(10));
+            var bsd = BashRuntime.RunChildProcess(stat, new[] { "-f", "%i", path }, TimeSpan.FromSeconds(10));
             return bsd.ExitCode == 0 && !bsd.TimedOut && ulong.TryParse(bsd.Stdout.Trim(), out inode);
         }
         catch
@@ -132,9 +141,15 @@ internal static class FileIdentity
             if (OperatingSystem.IsWindows())
                 return TryGetWindowsId(path, out var id) ? id.Volume.ToString("x8") : null;
 
-            var linux = BashRuntime.RunChildProcess("stat", new[] { "-c", "%d", "--", path }, TimeSpan.FromSeconds(10));
+            // st_dev in decimal, as `stat %d` prints it.
+            if (PsBash.Core.Platform.PosixStat.Current != PsBash.Core.Platform.StatLayout.Unsupported)
+                return PsBash.Core.Platform.PosixStat.TryLStat(path, out var st)
+                    ? st.Device.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                    : null;
+            var stat = PsBash.Core.Platform.SystemTools.Resolve("stat");
+            var linux = BashRuntime.RunChildProcess(stat, new[] { "-c", "%d", "--", path }, TimeSpan.FromSeconds(10));
             if (linux.ExitCode == 0 && !linux.TimedOut && linux.Stdout.Trim() is { Length: > 0 } li) return li;
-            var bsd = BashRuntime.RunChildProcess("stat", new[] { "-f", "%d", path }, TimeSpan.FromSeconds(10));
+            var bsd = BashRuntime.RunChildProcess(stat, new[] { "-f", "%d", path }, TimeSpan.FromSeconds(10));
             return bsd.ExitCode == 0 && !bsd.TimedOut && bsd.Stdout.Trim() is { Length: > 0 } bi ? bi : null;
         }
         catch

@@ -71,6 +71,7 @@ public class ProgramFileGuardTests
         ["NativeStdinBridge.cs"] = "classifies a name as a program to pick a stdin mode; the run goes through Invoke-BashNative",
         ["TabCompleter.cs"] = "lists command names to complete; it runs nothing",
         ["InvokeBashTracerouteCommand.cs"] = "starts the system's own traceroute/tracert program, never a user file",
+        ["SystemTools.cs"] = "finds the OS's own stat/id/ps in /usr/bin, /bin (native binaries), never a user file",
     };
 
     [Fact]

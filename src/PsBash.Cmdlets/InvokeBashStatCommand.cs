@@ -433,7 +433,7 @@ public sealed class InvokeBashStatCommand : PSCmdlet
                 var statArgs = isMac
                     ? new[] { "-f", "%i %b %d", item.FullName }
                     : new[] { "-c", "%i %b %d", item.FullName };
-                var psi = new System.Diagnostics.ProcessStartInfo("/usr/bin/stat")
+                var psi = new System.Diagnostics.ProcessStartInfo(PsBash.Core.Platform.SystemTools.Resolve("stat"))
                 {
                     RedirectStandardOutput = true,
                     RedirectStandardError = true,
@@ -559,7 +559,7 @@ public sealed class InvokeBashStatCommand : PSCmdlet
                 var statArgs = isMac
                     ? new[] { "-f", "%Su %Sg", item.FullName }
                     : new[] { "-c", "%U %G", item.FullName };
-                var psi = new System.Diagnostics.ProcessStartInfo("/usr/bin/stat")
+                var psi = new System.Diagnostics.ProcessStartInfo(PsBash.Core.Platform.SystemTools.Resolve("stat"))
                 {
                     RedirectStandardOutput = true,
                     RedirectStandardError = true,

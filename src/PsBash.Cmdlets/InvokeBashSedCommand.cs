@@ -219,7 +219,7 @@ public sealed class InvokeBashSedCommand : PSCmdlet
         }
         else
         {
-            psi.FileName = "/bin/sh";
+            psi.FileName = PsBash.Core.Platform.SystemTools.PosixShell;
             psi.ArgumentList.Add("-c");
             psi.ArgumentList.Add(command);
         }

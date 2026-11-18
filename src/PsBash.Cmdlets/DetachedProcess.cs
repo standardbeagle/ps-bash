@@ -33,7 +33,7 @@ public static class DetachedProcess
 
     private static int StartUnix(string exe, IReadOnlyList<string> args, string cwd, string outPath, bool append, string? errPath)
     {
-        var psi = new ProcessStartInfo("/bin/sh") { WorkingDirectory = cwd, UseShellExecute = false };
+        var psi = new ProcessStartInfo(PsBash.Core.Platform.SystemTools.PosixShell) { WorkingDirectory = cwd, UseShellExecute = false };
         var op = append ? ">>" : ">";
         psi.ArgumentList.Add("-c");
         psi.ArgumentList.Add(string.IsNullOrEmpty(errPath)

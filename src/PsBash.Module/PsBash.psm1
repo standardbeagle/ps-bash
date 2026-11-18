@@ -1283,7 +1283,7 @@ function Get-LsEntryFromFsi {
         $perm = "$typeChar$(ConvertTo-PermissionString -Mode $mode)"
         $owner = ''; $group = ''
         $statArgs = if ($IsMacOS) { @('-f','%Su %Sg',$Item.FullName) } else { @('-c','%U %G',$Item.FullName) }
-        $statOut = & /usr/bin/stat @statArgs 2>$null
+        $statOut = & ([PsBash.Cmdlets.BashRuntime]::SystemToolPath('stat')) @statArgs 2>$null
         if ($statOut) { $parts = $statOut -split ' ',2; $owner = $parts[0]; $group = $parts[1] }
     }
 

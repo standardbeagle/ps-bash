@@ -52,6 +52,7 @@ Tests: `*.Tests`, `Differential.Tests` (bash oracle), `Canary.Tests`, `Escalatio
 - **Device names** (`/dev/stdout`, `/dev/null`, `/dev/fd/N`, …): `Transpiler/DevicePath.cs` `Classify` is the only list; choke points `RedirectFileWriter.OpenFile` / `BashFileSystem.OpenRead` → `Cmdlets/DeviceStreams.cs`, never a file (guards `DevicePathGuardTests`, `DeviceChokePointTests`). Spec `paths.md` §Device names.
 - **Canonical name** (`readlink`, `realpath`; links followed per component): `Cmdlets/CanonicalPath.cs`; name quoting in messages `Cmdlets/GnuQuote.cs`. Spec `paths.md` §Canonical names.
 - **Bytes vs text**: `Transpiler/RawBytes.cs` at every text↔bytes boundary — never `Encoding.UTF8` on data; streams `Cmdlets/ByteRecordStreams.cs`.
+- **OS/arch-dependent facts** (`struct stat` layout + stat P/Invoke, system tool paths, `/bin/sh`): `Transpiler/Platform/` (`PosixStat`, `SystemTools`) only (guard `PlatformDependencyGuardTests`). Spec `docs/specs/README.md` §Platform dependencies.
 - **Embedded DLL extraction**: `ModuleExtractor.cs` (list = `EmbedCmdletsDll` in `PsBash.Core.csproj`).
 - **Strata**: `src/Strata.props`.
 

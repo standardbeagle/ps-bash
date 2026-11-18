@@ -31,6 +31,10 @@ public static class BashRuntime
     /// </summary>
     public static string DefaultShell() => _defaultShell ??= PsBash.Core.BashPath.ToShell(ComputeDefaultShell());
 
+    /// <summary>The OS's own <paramref name="name"/> tool (<c>stat</c>, <c>id</c>) for the psm1, which spawns it by
+    /// this path: <see cref="PsBash.Core.Platform.SystemTools.Resolve"/>.</summary>
+    public static string SystemToolPath(string name) => PsBash.Core.Platform.SystemTools.Resolve(name);
+
     private static string ComputeDefaultShell()
     {
         if (!OperatingSystem.IsWindows())
@@ -46,7 +50,7 @@ public static class BashRuntime
             }
             catch (System.IO.IOException) { }
             catch (UnauthorizedAccessException) { }
-            return "/bin/sh";
+            return PsBash.Core.Platform.SystemTools.PosixShell;
         }
         string? self = Environment.ProcessPath;
         if (string.IsNullOrEmpty(self)) return "ps-bash";

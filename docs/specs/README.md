@@ -47,3 +47,22 @@ Nav starts at /CODE_MAP.md. Keep this index complete — a guard test fails on a
 - [sqlite-history-schema.md](sqlite-history-schema.md) — SQLite History Store Schema
 - [styled-output.md](styled-output.md) — Styled Output (interactive Format-Styled, buttons + detail expansion, opt-in default)
 - [transpile-fuzz-grammar.md](transpile-fuzz-grammar.md) — Transpile Fuzz Grammar & Parseability Contract (never emit broken PowerShell)
+
+## Platform dependencies
+
+ps-bash ships win-x64, linux-x64/arm64 (glibc + musl) and osx-arm64. Every OS/arch-dependent constant, struct
+layout and system tool path lives in ONE place: `src/PsBash.Transpiler/Platform/` (namespace `PsBash.Core.Platform`;
+the Transpiler assembly is referenced by Cmdlets, Core, Host and Shell).
+
+- `PosixStat` — libc `stat`/`lstat`/`fstat` and the `struct stat` layout per target (Linux x86_64, Linux arm64 =
+  `asm-generic`, Darwin 64-bit-inode incl. `$INODE64` symbols on x86_64; glibc < 2.33 via `__xstat`). The kernel
+  fills a byte buffer that the pure `TryDecode(span, layout)` reads, so each layout is unit-tested on any OS.
+- `SystemTools` — the OS's own `stat`/`id`/`ps`/`sysctl` (`Resolve(name)`: `/usr/bin`, `/bin` (Alpine/busybox),
+  `/usr/sbin`, `/sbin`; never PATH-first, since callers pick GNU vs BSD flags by OS), `PosixShell` (`/bin/sh`), the
+  host-bash candidates. psm1: `[PsBash.Cmdlets.BashRuntime]::SystemToolPath('stat')`.
+- Runtime facts come from .NET, never a literal: page size = `Environment.SystemPageSize` (16K/64K arm64 kernels).
+
+Rule: a new platform fact goes into `Platform/`; a call site asks it. Guards (`Core.Tests/PlatformDependencyGuardTests`):
+no `struct stat` field / stat-family P/Invoke outside `Platform/`; no `"/usr/bin/…"`, `"/bin/…"`, `"/usr/sbin/…"`,
+`"/usr/local/bin/…"` literal in product C# or psm1 outside `Platform/` (allowlist, each entry with its reason).
+Layouts: `Core.Tests/PosixStatTests` (hand-built buffers per layout).

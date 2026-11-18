@@ -407,7 +407,7 @@ internal sealed class AwkShell
         }
         else
         {
-            psi.FileName = "/bin/sh";
+            psi.FileName = PsBash.Core.Platform.SystemTools.PosixShell;
             psi.ArgumentList.Add("-c");
             psi.ArgumentList.Add(inputPath is null ? command : WithInput(command, inputPath));
         }

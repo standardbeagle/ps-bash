@@ -1079,7 +1079,7 @@ public sealed class InvokeBashLsCommand : PSCmdlet
                 var statArgs = isMac
                     ? new[] { "-f", "%l %u %g %p %Su %Sg", item.FullName }
                     : new[] { "-c", "%h %u %g %f %U %G", item.FullName };
-                var psi = new System.Diagnostics.ProcessStartInfo("/usr/bin/stat")
+                var psi = new System.Diagnostics.ProcessStartInfo(PsBash.Core.Platform.SystemTools.Resolve("stat"))
                 {
                     RedirectStandardOutput = true,
                     RedirectStandardError = true,

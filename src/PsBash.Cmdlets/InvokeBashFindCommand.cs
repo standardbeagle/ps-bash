@@ -1248,7 +1248,7 @@ public sealed class InvokeBashFindCommand : PSCmdlet
             var statArgs = OperatingSystem.IsMacOS()
                 ? new[] { "-f", "%Su %Sg", item.FullName }
                 : new[] { "-c", "%U %G", item.FullName };
-            var psi = new System.Diagnostics.ProcessStartInfo("/usr/bin/stat")
+            var psi = new System.Diagnostics.ProcessStartInfo(PsBash.Core.Platform.SystemTools.Resolve("stat"))
             {
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,

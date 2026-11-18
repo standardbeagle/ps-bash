@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using PsBash.Core.Platform;
 
 namespace PsBash.Core.Runtime;
 
@@ -56,92 +57,10 @@ internal static class PosixIdentity
     /// </summary>
     public static (uint Uid, UnixFileMode Mode, bool IsDir) StatPath(string path)
     {
-        if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
-        {
-            // macOS x86_64 exports the 64-bit-ino struct under $INODE64; arm64
-            // exposes the same layout as plain lstat.
-            var rc = RuntimeInformation.ProcessArchitecture == Architecture.Arm64
-                ? lstat_darwin_arm64(path, out var darwin)
-                : lstat_darwin_x64(path, out darwin);
-            if (rc != 0) throw CannotStat(path);
-            return (darwin.st_uid, FromRaw(darwin.st_mode), IsDirMode(darwin.st_mode));
-        }
-
-        if (lstat_linux(path, out var linux) != 0) throw CannotStat(path);
-        return (linux.st_uid, FromRaw(linux.st_mode), IsDirMode(linux.st_mode));
+        // PosixStat owns the per-OS/per-arch struct stat layout (Platform/).
+        if (!PosixStat.TryLStat(path, out var st))
+            throw new InsecureRuntimeDirectoryException(
+                $"Cannot inspect ps-bash runtime path '{path}': {Marshal.GetLastPInvokeErrorMessage()}.");
+        return (st.Uid, st.Permissions & (UnixFileMode)0x1FF, st.IsDirectory);
     }
-
-    private static InsecureRuntimeDirectoryException CannotStat(string path)
-        => new($"Cannot inspect ps-bash runtime path '{path}': {Marshal.GetLastPInvokeErrorMessage()}.");
-
-    private static bool IsDirMode(uint rawStMode) => (rawStMode & S_IFMT) == S_IFDIR;
-
-    private static UnixFileMode FromRaw(uint rawStMode) => (UnixFileMode)(rawStMode & 0x1FF);
-
-    private const uint S_IFMT = 0xF000;
-    private const uint S_IFDIR = 0x4000;
-
-    // glibc x86_64 / arm64 struct stat; only st_mode / st_uid are consumed.
-    [StructLayout(LayoutKind.Sequential)]
-    private struct LinuxStat
-    {
-        public ulong st_dev;
-        public ulong st_ino;
-        public ulong st_nlink;
-        public uint st_mode;
-        public uint st_uid;
-        public uint st_gid;
-        public int __pad0;
-        public ulong st_rdev;
-        public long st_size;
-        public long st_blksize;
-        public long st_blocks;
-        public long st_atime_sec;
-        public long st_atime_nsec;
-        public long st_mtime_sec;
-        public long st_mtime_nsec;
-        public long st_ctime_sec;
-        public long st_ctime_nsec;
-        public long __unused0;
-        public long __unused1;
-        public long __unused2;
-    }
-
-    // 64-bit Darwin (arm64 + x86_64) stat64 ABI.
-    [StructLayout(LayoutKind.Sequential)]
-    private struct DarwinStat
-    {
-        public int st_dev;
-        public ushort st_mode;
-        public ushort st_nlink;
-        public ulong st_ino;
-        public uint st_uid;
-        public uint st_gid;
-        public int st_rdev;
-        public long st_atime_sec;
-        public long st_atime_nsec;
-        public long st_mtime_sec;
-        public long st_mtime_nsec;
-        public long st_ctime_sec;
-        public long st_ctime_nsec;
-        public long st_birthtime_sec;
-        public long st_birthtime_nsec;
-        public long st_size;
-        public long st_blocks;
-        public int st_blksize;
-        public uint st_flags;
-        public uint st_gen;
-        public int st_lspare;
-        public long st_qspare0;
-        public long st_qspare1;
-    }
-
-    [DllImport("libc", SetLastError = true, EntryPoint = "lstat")]
-    private static extern int lstat_linux(string path, out LinuxStat buf);
-
-    [DllImport("libc", SetLastError = true, EntryPoint = "lstat$INODE64")]
-    private static extern int lstat_darwin_x64(string path, out DarwinStat buf);
-
-    [DllImport("libc", SetLastError = true, EntryPoint = "lstat")]
-    private static extern int lstat_darwin_arm64(string path, out DarwinStat buf);
 }

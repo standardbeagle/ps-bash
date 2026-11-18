@@ -224,7 +224,7 @@ public sealed class InvokeBashIdCommand : PSCmdlet
     {
         try
         {
-            var psi = new ProcessStartInfo("/usr/bin/id")
+            var psi = new ProcessStartInfo(PsBash.Core.Platform.SystemTools.Resolve("id"))
             {
                 UseShellExecute = false,
                 RedirectStandardOutput = true,

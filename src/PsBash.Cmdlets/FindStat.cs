@@ -197,7 +197,9 @@ internal sealed class FindStat
     {
         try
         {
-            var psi = new System.Diagnostics.ProcessStartInfo("stat")
+            // The OS's own stat (BSD on macOS even when Homebrew's GNU stat is first on PATH): the format flags
+            // below are chosen by OS.
+            var psi = new System.Diagnostics.ProcessStartInfo(PsBash.Core.Platform.SystemTools.Resolve("stat"))
             { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
             // GNU: -c FORMAT (%f = raw mode in hex). BSD/macOS stat has no -c: -f FORMAT with %p = st_mode in
             // octal, %l links, %Su/%Sg names, %c ctime epoch, %b in fixed 512-byte blocks (so %B becomes 512).
@@ -268,7 +270,7 @@ internal sealed class FindStat
     {
         try
         {
-            var psi = new System.Diagnostics.ProcessStartInfo("stat") { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
+            var psi = new System.Diagnostics.ProcessStartInfo(PsBash.Core.Platform.SystemTools.Resolve("stat")) { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
             psi.ArgumentList.Add(OperatingSystem.IsMacOS() ? "-f" : "-c"); // BSD stat: -f FORMAT, %c = ctime epoch
             psi.ArgumentList.Add(OperatingSystem.IsMacOS() ? "%c" : "%Z"); psi.ArgumentList.Add("--"); psi.ArgumentList.Add(info.FullName);
             var o = BashRuntime.RunChildProcess(psi).Stdout.Trim();

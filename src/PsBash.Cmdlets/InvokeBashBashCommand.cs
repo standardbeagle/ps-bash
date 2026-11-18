@@ -394,9 +394,8 @@ public sealed class InvokeBashBashCommand : PSCmdlet, IDisposable
 
     /// <summary>Absolute paths only: a PATH search could find a ps-bash installed AS <c>bash</c>,
     /// which is the launcher the tiers above already looked for. <c>/bin/sh</c> last, for a host
-    /// with no bash at all (Alpine).</summary>
-    internal static readonly string[] HostShellCandidates =
-        ["/bin/bash", "/usr/bin/bash", "/usr/local/bin/bash", "/bin/sh"];
+    /// with no bash at all (Alpine). The list lives in <see cref="PsBash.Core.Platform.SystemTools"/>.</summary>
+    internal static IReadOnlyList<string> HostShellCandidates => PsBash.Core.Platform.SystemTools.HostShellCandidates;
 
     internal static string? ResolvePsBashExecutable(PSCmdlet cmdlet)
     {

@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using System.Management.Automation;
 using System.Runtime.InteropServices;
+using PsBash.Core.Platform;
 
 namespace PsBash.Cmdlets;
 
@@ -319,7 +320,7 @@ public sealed class InvokeBashPsCommand : PSCmdlet
 
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
         {
-            string? currentUser = TryRun("/usr/bin/id", "-un");
+            string? currentUser = TryRun(SystemTools.Resolve("id"), "-un");
             string[] procDirs;
             try { procDirs = Directory.GetDirectories("/proc"); }
             catch { procDirs = Array.Empty<string>(); }
@@ -433,7 +434,7 @@ public sealed class InvokeBashPsCommand : PSCmdlet
                             }
                             else
                             {
-                                currentUser = TryRun("/usr/bin/id", "-un");
+                                currentUser = TryRun(SystemTools.Resolve("id"), "-un");
                             }
                         }
                         if (!string.IsNullOrEmpty(currentUser) && entry.User != currentUser) continue;
@@ -668,7 +669,7 @@ public sealed class InvokeBashPsCommand : PSCmdlet
         catch { }
 
         string userName = uid.ToString(CultureInfo.InvariantCulture);
-        var getent = TryRun("/usr/bin/getent", "passwd", uid.ToString(CultureInfo.InvariantCulture));
+        var getent = TryRun(SystemTools.Resolve("getent"),"passwd", uid.ToString(CultureInfo.InvariantCulture));
         if (!string.IsNullOrEmpty(getent))
         {
             var first = getent.Split(':')[0];
@@ -718,7 +719,9 @@ public sealed class InvokeBashPsCommand : PSCmdlet
         catch { }
         DateTime startDate = bootTime.AddSeconds(starttime / (double)clkTck).LocalDateTime;
 
-        const int pageSize = 4096;
+        // /proc/<pid>/stat rss is in pages of the kernel's page size: 4K on x86_64, but 16K or 64K on some arm64
+        // kernels (Apple silicon Linux, RHEL arm64).
+        long pageSize = Environment.SystemPageSize;
         long rssKB = rssPages * pageSize / 1024;
         long vszKB = vsize / 1024;
 
@@ -781,7 +784,7 @@ public sealed class InvokeBashPsCommand : PSCmdlet
             }
             else if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
             {
-                var sysctl = TryRun("/usr/sbin/sysctl", "-n", "hw.memsize");
+                var sysctl = TryRun(SystemTools.Resolve("sysctl"),"-n", "hw.memsize");
                 if (!string.IsNullOrEmpty(sysctl) &&
                     long.TryParse(sysctl, NumberStyles.Integer,
                         CultureInfo.InvariantCulture, out var tb))
@@ -858,7 +861,7 @@ public sealed class InvokeBashPsCommand : PSCmdlet
         var dict = new Dictionary<int, (string, int, string)>();
         try
         {
-            var output = TryRun("/bin/ps", "-axo", "pid=,user=,ppid=,tty=");
+            var output = TryRun(SystemTools.Resolve("ps"),"-axo", "pid=,user=,ppid=,tty=");
             if (string.IsNullOrEmpty(output)) return dict;
             foreach (var line in output.Split('\n'))
             {
