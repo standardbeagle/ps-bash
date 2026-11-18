@@ -43,9 +43,14 @@ S "gate: $(@($gate | Select-String 'xpass=[1-9]').Count) spec files with cases t
 $tsv = Join-Path $Out "spec-results$Tag.tsv"
 if (Test-Path $tsv) { S ('spec files: ' + ((Get-Content $tsv | ForEach-Object { ($_ -split "`t")[0] } | Group-Object | ForEach-Object { "$($_.Name)=$($_.Count)" }) -join ' ')) }
 
+# A whole suite outlasts tman's default 45m backstop on this box (Differential 27-40 min; cut off in g45, s22f).
+$env:PSBASH_TMAN_MAX_TIME = '100m'
 foreach ($p in 'Differential', 'Cmdlets') {
     $r = tman test-proj "src/PsBash.$p.Tests" 2>&1 | ForEach-Object { "$_" }
     $r | Set-Content (Join-Path $Out "$p.log")
-    S "${p}: $(Totals $r)"; Fails $r
+    # No totals line = the run never finished: say so (and why, from tman), never a blank.
+    $t = Totals $r
+    if (-not $t) { $t = 'DID NOT FINISH: ' + ((($r | Select-String '^tman: ' | ForEach-Object { $_.Line.Trim() }) -join ' / ') ?? '') }
+    S "${p}: $t"; Fails $r
 }
 S 'FINISHED'

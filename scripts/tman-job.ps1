@@ -94,7 +94,11 @@ try {
         Write-Host "tman-job: taking a machine-wide build/test slot ($slots total; queue: tman ls --all)"
         Push-Location $gateDir
         try {
-            & tman run --max-parallel $slots --queue-timeout 60m --stall 5m --max-time 45m -- `
+            # --stall is the hang detector; --max-time only a backstop. A whole-suite run on a loaded box can outlast
+            # 45m (Windows fleet: full Differential 27-40 min, cut off at 45:00 in g45 and s22f), so a caller that runs
+            # one sets PSBASH_TMAN_MAX_TIME (tman duration, e.g. 100m).
+            $maxTime = if ($env:PSBASH_TMAN_MAX_TIME) { $env:PSBASH_TMAN_MAX_TIME } else { '45m' }
+            & tman run --max-parallel $slots --queue-timeout 60m --stall 5m --max-time $maxTime -- `
                 pwsh -NoProfile -File $PSCommandPath $Verb @Rest
             $code = $LASTEXITCODE
         }

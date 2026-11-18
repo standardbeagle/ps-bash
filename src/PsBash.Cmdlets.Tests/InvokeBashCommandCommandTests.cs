@@ -20,16 +20,36 @@ namespace PsBash.Cmdlets.Tests;
 public class InvokeBashCommandCommandTests : IClassFixture<SharedPwshFixture>
 {
     private readonly SharedPwshFixture _fixture;
+    private readonly Xunit.Abstractions.ITestOutputHelper _output;
 
-    public InvokeBashCommandCommandTests(SharedPwshFixture fixture)
+    public InvokeBashCommandCommandTests(SharedPwshFixture fixture, Xunit.Abstractions.ITestOutputHelper output)
     {
         _fixture = fixture;
+        _output = output;
     }
 
     private System.Collections.ObjectModel.Collection<System.Management.Automation.PSObject> RunRaw(string script)
     {
         var pwsh = _fixture.AcquireFresh();
-        return pwsh.AddScript(script).Invoke();
+        return Invoke(pwsh, script);
+    }
+
+    /// <summary>
+    /// Runs <paramref name="script"/> and records how the call ended (state, elapsed, record count, error records) in the
+    /// test output, which xunit prints for a failing test. Windows fleet s22f: five tests here got NO output (even
+    /// <c>--help</c>) beside the parallel suite and passed alone; an empty result said nothing about why.
+    /// </summary>
+    private System.Collections.ObjectModel.Collection<System.Management.Automation.PSObject> Invoke(
+        System.Management.Automation.PowerShell pwsh, string script)
+    {
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        var results = pwsh.AddScript(script).Invoke();
+        _output.WriteLine($"[{script}] state={pwsh.InvocationStateInfo.State} {clock.ElapsedMilliseconds} ms " +
+                          $"records={results.Count} hadErrors={pwsh.HadErrors}" +
+                          (pwsh.InvocationStateInfo.Reason is { } why ? $" reason={why.GetType().Name}: {why.Message}" : ""));
+        foreach (var e in pwsh.Streams.Error)
+            _output.WriteLine($"  error: {e.Exception?.GetType().Name}: {e} @ {e.InvocationInfo?.MyCommand?.Name}");
+        return results;
     }
 
     private string[] RunLines(string script)
@@ -48,7 +68,7 @@ public class InvokeBashCommandCommandTests : IClassFixture<SharedPwshFixture>
     {
         var pwsh = _fixture.AcquireFresh();
 
-        var results = pwsh.AddScript(script).Invoke();
+        var results = Invoke(pwsh, script);
         pwsh.Commands.Clear();
 
         var lines = results
