@@ -241,7 +241,7 @@ public sealed class InvokeBashTrapCommand : PSCmdlet
             System.Management.Automation.Language.Parser.ParseInput(action, out _, out var errors);
             if (errors.Length == 0) return action;
             var msg = "trap: syntax error in trap action: `" + action.Replace("\r", "").Replace("\n", " ") + "'";
-            return "Write-Error '" + msg.Replace("'", "''") + "' -ErrorAction Continue; $global:LASTEXITCODE = 2";
+            return "Write-Error " + PsBash.Core.Parser.PsBuild.SingleQuote(msg) + " -ErrorAction Continue; $global:LASTEXITCODE = 2";
         }
     }
 

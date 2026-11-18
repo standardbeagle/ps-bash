@@ -25,7 +25,7 @@ Tests: `*.Tests`, `Differential.Tests` (bash oracle), `Canary.Tests`, `Escalatio
 ## Where to find X
 
 - **bash cmd → cmdlet**: `PsEmitter.TryEmitMappedCommand` (passthrough only).
-- **Emitted PS text** (quoting, exit-code, `[void]`, splat): `Parser/PsBuild.cs` — never hand-concat in PsEmitter.
+- **Emitted PS text** (quoting incl. Unicode quote/dash marks, exit-code, `[void]`, splat): `Parser/PsBuild.cs` — never hand-concat in PsEmitter (guard `PsQuoteMarkGuardTests`). Bash quote removal on raw text: `Transpiler/BashQuoting.cs`.
 - **Command flags**: `Cmdlets/*Command.cs`; shared argv parser `Cmdlets/Args/{ArgParser,OptSpec,ParsedArgs}.cs` + emitter opt-in `PsEmitter.OrderedArgCommands`.
 - **Destructive FS / spawn**: `FileSystemHelpers.Delete*Force`/`ClearReadOnly`; `BashRuntime.RunChildProcess`.
 - **Glob**: `PsEmitter.IsGlobWord` → `ConvertToBashGlobCommand.cs` → `BashGlob.cs`; shopt in `InvokeBashShoptCommand`.

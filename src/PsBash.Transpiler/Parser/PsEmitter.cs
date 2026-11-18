@@ -1945,6 +1945,11 @@ public static partial class PsEmitter
     /// </summary>
     private static string ForListItem(CompoundWord word, string emitted)
     {
+        // A static word (literals, `\x` escapes, '.', "." without expansions) is its VALUE, single-quoted. Never
+        // re-quote EmitWord's command-mode text: `a\ b` renders as the bareword a` b, and '.' around it kept the
+        // backtick (`for c in grep\ x` ran `grep` x`; `e\"f` became e`"f). Oracle: PsQuotingDifferentialTests.
+        if (TryGetStaticArgValue(word) is { } value)
+            return PsBuild.SingleQuote(value);
         if (word.Parts.Length > 1 && word.Parts.All(p => p is WordPart.Literal or WordPart.EscapedLiteral or WordPart.SingleQuoted
                 or WordPart.AnsiCQuoted or WordPart.DoubleQuoted or WordPart.SimpleVarSub or WordPart.BracedVarSub or WordPart.CommandSub)
             && word.Parts.Any(p => p is not (WordPart.Literal or WordPart.EscapedLiteral or WordPart.SingleQuoted or WordPart.AnsiCQuoted)))
@@ -1964,11 +1969,11 @@ public static partial class PsEmitter
         // list element (`$HOME/src,$HOME/git` parses as a division): make it a string concatenation.
         var tildeWord = TildeBarewordItem.Match(item);
         if (tildeWord.Success)
-            return "(" + tildeWord.Groups[1].Value + " + '" + tildeWord.Groups[2].Value.Replace("'", "''") + "')";
+            return "(" + tildeWord.Groups[1].Value + " + " + PsBuild.SingleQuote(tildeWord.Groups[2].Value) + ")";
         // A bare prefix glued to a double-quoted part (`y="$x"`, `--opt="a b"`) is command-mode text: the quoted tail must still expand.
         var gluedQuote = BarePrefixDoubleQuotedItem.Match(item);
         if (gluedQuote.Success)
-            return "('" + gluedQuote.Groups[1].Value.Replace("'", "''") + "' + " + gluedQuote.Groups[2].Value + ")";
+            return "(" + PsBuild.SingleQuote(gluedQuote.Groups[1].Value) + " + " + gluedQuote.Groups[2].Value + ")";
         if (c is '$' or '"' or '\'' or '(' or '@') return item;
         // Bare command-mode text with an expansion (`a$(...)`, `x$env:y`): single-quoted, the code was the value.
         if (item.IndexOf('$') >= 0 && item.IndexOfAny(['\'', '"']) < 0)
@@ -1976,7 +1981,7 @@ public static partial class PsEmitter
         if (double.TryParse(item, System.Globalization.NumberStyles.Any,
             System.Globalization.CultureInfo.InvariantCulture, out _))
             return item;
-        return "'" + item.Replace("'", "''") + "'";
+        return PsBuild.SingleQuote(item);
     }
 
     /// <summary>
@@ -4018,7 +4023,7 @@ public static partial class PsEmitter
         if (long.TryParse(emitted, System.Globalization.NumberStyles.AllowLeadingSign,
                 System.Globalization.CultureInfo.InvariantCulture, out _))
             return emitted;
-        return "'" + emitted.Replace("'", "''") + "'";
+        return PsBuild.SingleQuote(emitted);
     }
 
     /// <summary>
@@ -4055,7 +4060,7 @@ public static partial class PsEmitter
             var sb = new StringBuilder();
             foreach (var part in dq.Parts)
                 sb.Append(EmitWordPart(part));
-            return "'" + sb.ToString().Replace("'", "''") + "'";
+            return PsBuild.SingleQuote(sb.ToString());
         }
         return EmitWord(word);
     }
@@ -4331,7 +4336,7 @@ public static partial class PsEmitter
                 if (rawCmd is not null)
                 {
                     var transpiledCmd = Transpile(rawCmd) ?? rawCmd;
-                    var scriptBody = transpiledCmd.Replace("'", "''");
+                    var scriptBody = PsBuild.EscapeForSingleQuote(transpiledCmd);
                     // The variable too: $PROMPT_COMMAND reads it, and ps-bash's own prompt loops (REPL, piped -i) run it.
                     sb.Append("$env:PROMPT_COMMAND = ").Append(PsBuild.SingleQuote(rawCmd)).Append("; ");
                     sb.Append($"Register-BashPromptHook -Name 'prompt-command' -ScriptBlock {{ Invoke-Expression '{scriptBody}' }}");
@@ -7229,7 +7234,7 @@ public static partial class PsEmitter
     /// bodies that hit this path do not.)
     /// </summary>
     private static string EscapeForDoubleQuotedHereDocBody(string body) =>
-        body.IndexOf('"') < 0 ? body : body.Replace("\"", "`\"");
+        PsBuild.EscapeDoubleQuoteMarks(body);
 
     private static string TranslateHereDocVars(string body)
     {
@@ -7567,9 +7572,11 @@ public static partial class PsEmitter
                 head = first[(close + 2)..];
                 parts = elem.Parts.RemoveRange(0, used);
             }
-            // `['a+1']=c` / `["q r"]=2`: the quotes delimit the key, they are not part of it.
+            // `['a+1']=c` / `["q r"]=2` / `["k\"j"]=v`: the subscript is raw text, so it gets bash's quote removal
+            // (BashQuoting); stripping only the outer quotes kept `k\"j` as the key.
             if (key.Length == 0 || (!numericKeysAllowed && key.All(char.IsDigit))) return false;
-            if (key.Length >= 2 && key[0] is '\'' or '"' && key[^1] == key[0]) key = key[1..^1];
+            key = PsBash.Core.BashQuoting.RemoveQuotes(key);
+            if (key.Length == 0) return false;
             if (head.Length > 0) parts = parts.Insert(0, new WordPart.Literal(head));
             // bash 5.2 leaves a tilde on the right of an associative `[key]=value` literal (an indexed one expands it).
             if (parts.Any(p => p is WordPart.TildeSub))
@@ -7783,7 +7790,7 @@ public static partial class PsEmitter
         for (int i = 0; i < word.Parts.Length; i++)
         {
             var part = word.Parts[i];
-            string bare = EmitBarewordPart(part);
+            string bare = EmitBarewordPart(part, first: i == 0);
             // `p${a[1]}` / `last=${a[-1]}`: glued to a literal, a bare `$a['1']` would expand only `$a` and keep `['1']` as text.
             if (word.Parts.Length > 1 && part is WordPart.BracedVarSub && System.Text.RegularExpressions.Regex.IsMatch(bare, @"^\$\w+\[.*\]$"))
                 bare = "$(" + bare + ")";
@@ -7937,7 +7944,7 @@ public static partial class PsEmitter
     private static bool TryEmitJoinedValue(ImmutableArray<WordPart> parts, out string expr)
     {
         expr = "";
-        return ContainsCommandSub(parts) && TryJoin(parts, inDq: true, out expr);
+        return (ContainsCommandSub(parts) || HasStringHostileVar(parts)) && TryJoin(parts, inDq: true, out expr);
     }
 
     private static bool TryJoin(ImmutableArray<WordPart> parts, bool inDq, out string expr)
@@ -7971,9 +7978,37 @@ public static partial class PsEmitter
                 // argument-mode bareword, whose $( ) end is found by the same naive paren count.
                 case WordPart.CommandSub when parts.Length > 1: return true;
                 case WordPart.DoubleQuoted dq when EmbedsCommandSubInString(dq.Parts, inDq: true): return true;
-                case WordPart.BracedVarSub { ArgWord: { } arg } when inDq && ContainsCommandSub(arg): return true;
+                case WordPart.BracedVarSub bv when inDq && BracedVarLeavesString(bv): return true;
             }
         }
+        return false;
+    }
+
+    /// <summary>
+    /// A <c>${.}</c> that must not be emitted inside a PS string's <c>$( )</c>: its argument word holds a command
+    /// substitution, or its operator argument or subscript holds a double-quote mark (<c>"</c>, U+201C-U+201E).
+    /// PowerShell rewrites those marks even inside a literal nested in the <c>$( )</c> of an expandable string:
+    /// <c>"$('a""b')"</c> is <c>a"b</c> (a pair becomes one, a backtick before one is consumed), so
+    /// <c>echo "${u:-a\"\"b}"</c> printed <c>a"b</c> and <c>"${m[kU+201C U+201D]}"</c> read another key. Such a word is a join.
+    /// </summary>
+    private static bool BracedVarLeavesString(WordPart.BracedVarSub b)
+        => (b.ArgWord is { } arg && ContainsCommandSub(arg)) || HasDoubleQuoteMark(b.Suffix) || HasDoubleQuoteMark(b.Name);
+
+    // A ${...} anywhere in the word (also inside "...") that BracedVarLeavesString.
+    private static bool HasStringHostileVar(ImmutableArray<WordPart> parts)
+    {
+        foreach (var p in parts)
+        {
+            if (p is WordPart.BracedVarSub b && BracedVarLeavesString(b)) return true;
+            if (p is WordPart.DoubleQuoted dq && HasStringHostileVar(dq.Parts)) return true;
+        }
+        return false;
+    }
+    private static bool HasDoubleQuoteMark(string? text)
+    {
+        if (text is null) return false;
+        foreach (char c in text)
+            if (PsBuild.IsDoubleQuoteMark(c)) return true;
         return false;
     }
 
@@ -8023,7 +8058,7 @@ public static partial class PsEmitter
                     // word-splitting is not modelled here).
                     segs.Add(inDq ? EmitCommandSubString(cs, nested: false) : $"(@{EmitCommandSub(cs)[1..]} -join ' ')");
                     break;
-                case WordPart.BracedVarSub { ArgWord: { } arg } bvs when inDq && ContainsCommandSub(arg):
+                case WordPart.BracedVarSub bvs when inDq && BracedVarLeavesString(bvs):
                     FlushRun();
                     segs.Add(EmitBracedVar(bvs, inDoubleQuote: false));
                     break;
@@ -8137,7 +8172,7 @@ public static partial class PsEmitter
             sb.Append(lit);
         }
         // Pure literal (possibly empty): single-quote it, doubling embedded single quotes.
-        return $"'{sb.Replace("'", "''")}'";
+        return PsBuild.SingleQuote(sb.ToString());
     }
 
     private static bool HasBraceExpansion(ImmutableArray<WordPart> parts)
@@ -8465,11 +8500,14 @@ public static partial class PsEmitter
         return value;
     }
 
-    /// <summary>A part spliced into an unquoted PowerShell word: a literal `{` / `}` would start a scriptblock
-    /// (`echo a{b}c` split into `a`, a block and `c`), so it is backtick-escaped.</summary>
-    private static string EmitBarewordPart(WordPart part, bool wholeWord = false)
-        => part is WordPart.Literal { Value: var v } && (v.Contains('{') || v.Contains('}'))
-            ? wholeWord ? PsBuild.DoubleQuote(v) : v.Replace("{", "`{").Replace("}", "`}")
+    /// <summary>A part spliced into an unquoted PowerShell word. Literal text PowerShell would read as syntax
+    /// (<see cref="PsBuild.BarewordNeedsEscape"/>: `{`/`}` start a scriptblock, `echo a{b}c` split into three; a quote
+    /// mark such as U+2019 opens a string, `echo it's` was a parse error; a leading en dash made `echo -n` a
+    /// parameter) is one quoted string as a whole word, else backtick-escaped. <paramref name="first"/>: the part
+    /// starts the word. Guard PsQuoteMarkGuardTests.</summary>
+    private static string EmitBarewordPart(WordPart part, bool wholeWord = false, bool first = false)
+        => part is WordPart.Literal { Value: var v } && PsBuild.BarewordNeedsEscape(v, wholeWord || first)
+            ? wholeWord ? PsBuild.DoubleQuote(v) : PsBuild.EscapeBareword(v, first)
             : EmitWordPart(part);
 
     private static string EmitWordPart(WordPart part) => part switch
@@ -8477,7 +8515,7 @@ public static partial class PsEmitter
         WordPart.Literal lit => lit.Value,
         // `\b`, `\e`, `\n`... are plain letters in bash; a backtick before one would be a PowerShell escape (bell, ESC, LF).
         WordPart.EscapedLiteral el => el.Value.Length == 1 && char.IsAsciiLetterOrDigit(el.Value[0]) ? el.Value : $"`{el.Value}",
-        WordPart.SingleQuoted sq => $"'{sq.Value}'",
+        WordPart.SingleQuoted sq => PsBuild.SingleQuote(sq.Value),
         WordPart.AnsiCQuoted aq => EmitAnsiCQuoted(aq),
         WordPart.DoubleQuoted dq => EmitDoubleQuoted(dq),
         WordPart.SimpleVarSub vs => EmitSimpleVar(vs.Name, strict: true),
@@ -13351,7 +13389,7 @@ public static partial class PsEmitter
             "if (-not $global:__BashHookDebugTrapWarned) { " +
             "$global:__BashHookDebugTrapWarned = $true; " +
             "Write-Warning 'ps-bash: trap DEBUG mapped to Register-BashChpwdHook (fires on directory change, not every command)' }";
-        var scriptBody = transpiledCmd.Replace("'", "''");
+        var scriptBody = PsBuild.EscapeForSingleQuote(transpiledCmd);
         return
             $"{warnLine}; " +
             $"Register-BashChpwdHook -Name '{hookName}' -ScriptBlock {{ Invoke-Expression '{scriptBody}' }}";
@@ -13972,7 +14010,7 @@ public static partial class PsEmitter
     }
 
     // Double ' for safe embedding inside a PowerShell single-quoted string literal.
-    private static string SqEsc(string s) => s.Replace("'", "''");
+    private static string SqEsc(string s) => PsBuild.EscapeForSingleQuote(s);
 
     /// <summary>
     /// Translates a bash glob pattern to a .NET regex pattern suitable for use in

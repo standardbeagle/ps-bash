@@ -181,7 +181,7 @@ public sealed class ProgramLaunch
     {
         if (!Runnable) return PermissionDeniedScript(shown);
         if (InterpreterMissing)
-            return "Write-Error -Message 'bash: " + BashPath.ToShell(shown).Replace("'", "''")
+            return "Write-Error -Message 'bash: " + PsBuild.EscapeForSingleQuote(BashPath.ToShell(shown))
                    + ": cannot execute: required file not found' -Category ObjectNotFound -ErrorAction Continue; $global:LASTEXITCODE = 127";
         var sb = new System.Text.StringBuilder(Shell ? "Invoke-BashBash" : "& " + PsBuild.SingleQuote(Interpreter!));
         foreach (var a in InterpreterArgs) sb.Append(' ').Append(PsBuild.SingleQuote(a));
@@ -204,6 +204,6 @@ public sealed class ProgramLaunch
 
     /// <summary>The stand-in for a file that cannot run: bash's message on stderr and status 126.</summary>
     public static string PermissionDeniedScript(string shown)
-        => "Write-Error -Message 'bash: " + BashPath.ToShell(shown).Replace("'", "''")
+        => "Write-Error -Message 'bash: " + PsBuild.EscapeForSingleQuote(BashPath.ToShell(shown))
            + ": Permission denied' -Category PermissionDenied -ErrorAction Continue; $global:LASTEXITCODE = 126";
 }

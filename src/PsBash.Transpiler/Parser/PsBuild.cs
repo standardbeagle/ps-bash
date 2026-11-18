@@ -82,8 +82,59 @@ public static class PsBuild
     // ─────────────────────────────── Quoting / escaping ───────────────────────────────
 
     /// <summary>The chars that must be escaped inside a PowerShell double-quoted string.</summary>
+    // PowerShell's tokenizer ends a string at the Unicode quote marks too, not only at ' and ": U+2018-U+201B are
+    // single quotes and U+201C-U+201E double quotes (CharExtensions.IsSingleQuote / IsDoubleQuote). Every escape below
+    // covers the whole set; escaping only the ASCII mark let `echo 'it’s'` close the literal mid-word and run the rest
+    // as code (spec emitter-strategy.md §Quote marks; guard PsQuoteMarkGuardTests).
+    private const string SingleQuoteMarks = "'\u2018\u2019\u201A\u201B";
+    private const string DoubleQuoteMarks = "\"\u201C\u201D\u201E";
+
     private static readonly System.Buffers.SearchValues<char> s_doubleQuoteSpecials =
-        System.Buffers.SearchValues.Create("`$\"");
+        System.Buffers.SearchValues.Create("`$" + DoubleQuoteMarks);
+
+    private static readonly System.Buffers.SearchValues<char> s_singleQuoteMarks =
+        System.Buffers.SearchValues.Create(SingleQuoteMarks);
+
+    // A token PowerShell starts with one of these is a -parameter, exactly like ASCII '-' (CharExtensions.IsDash):
+    // bash `echo –n x` must print "–n x", not run `echo -n`. ASCII '-' itself stays bare: flags pass through as text.
+    private const string DashMarks = "\u2013\u2014\u2015";
+
+    /// <summary>
+    /// True when bash LITERAL text spliced into an unquoted PowerShell word holds a character PowerShell reads as
+    /// syntax there although bash does not: <c>{</c>/<c>}</c> (a scriptblock), a quote mark (<c>'</c>, <c>"</c>,
+    /// U+2018-U+201E open a string), or, at the start of the word, a dash mark (U+2013-U+2015 make a parameter).
+    /// </summary>
+    public static bool BarewordNeedsEscape(string text, bool atWordStart)
+    {
+        if (text.Length == 0) return false;
+        if (atWordStart && DashMarks.Contains(text[0])) return true;
+        foreach (char c in text)
+            if (c is '{' or '}' || IsSingleQuoteMark(c) || IsDoubleQuoteMark(c)) return true;
+        return false;
+    }
+
+    /// <summary>
+    /// <paramref name="text"/> (bash literal text) with a backtick before each character
+    /// <see cref="BarewordNeedsEscape"/> names, for splicing into an unquoted PowerShell word.
+    /// </summary>
+    public static string EscapeBareword(string text, bool atWordStart)
+    {
+        if (!BarewordNeedsEscape(text, atWordStart)) return text;
+        var sb = new System.Text.StringBuilder(text.Length + 4);
+        for (int i = 0; i < text.Length; i++)
+        {
+            char c = text[i];
+            if (c is '{' or '}' || IsSingleQuoteMark(c) || IsDoubleQuoteMark(c) || (i == 0 && atWordStart && DashMarks.Contains(c)))
+                sb.Append('`');
+            sb.Append(c);
+        }
+        return sb.ToString();
+    }
+    /// <summary>True for a character that opens or closes a PowerShell single-quoted string.</summary>
+    public static bool IsSingleQuoteMark(char c) => SingleQuoteMarks.Contains(c);
+
+    /// <summary>True for a character that opens or closes a PowerShell double-quoted string.</summary>
+    public static bool IsDoubleQuoteMark(char c) => DoubleQuoteMarks.Contains(c);
 
     /// <summary>
     /// Wrap <paramref name="value"/> in a PowerShell single-quoted literal, escaping
@@ -91,9 +142,27 @@ public static class PsBuild
     /// PS single-quoted string honors. Use for literal paths, positional args, and any
     /// value that must reach PowerShell verbatim with no expansion.
     /// </summary>
-    public static string SingleQuote(string value)
-        // Fast path (the common case — no embedded quote): one Concat, skip the Replace scan+alloc.
-        => value.IndexOf('\'') < 0 ? "'" + value + "'" : "'" + value.Replace("'", "''") + "'";
+    public static string SingleQuote(string value) => "'" + EscapeForSingleQuote(value) + "'";
+
+    /// <summary>
+    /// Escape <paramref name="value"/> for placement INSIDE a PowerShell single-quoted string (no surrounding quotes):
+    /// every single-quote mark (<c>'</c> and U+2018-U+201B) is doubled, the one escape such a string honors. The
+    /// common case (no mark) returns <paramref name="value"/> itself.
+    /// </summary>
+    public static string EscapeForSingleQuote(string value)
+    {
+        int at = value.AsSpan().IndexOfAny(s_singleQuoteMarks);
+        if (at < 0) return value;
+        var sb = new System.Text.StringBuilder(value.Length + 4);
+        sb.Append(value, 0, at);
+        for (int i = at; i < value.Length; i++)
+        {
+            char c = value[i];
+            if (IsSingleQuoteMark(c)) sb.Append(c);
+            sb.Append(c);
+        }
+        return sb.ToString();
+    }
 
     /// <summary>
     /// The .NET regex of <c>[[ s =~ re ]]</c> from <paramref name="patExpr"/> (a PowerShell expression for the ERE text).
@@ -116,31 +185,40 @@ public static class PsBuild
         text = "";
         if (expr.Length < 2 || expr[0] != '\'' || expr[^1] != '\'') return false;
         string inner = expr[1..^1];
+        var sb = new System.Text.StringBuilder(inner.Length);
         for (int i = 0; i < inner.Length; i++)
         {
-            if (inner[i] != '\'') continue;
-            if (i + 1 < inner.Length && inner[i + 1] == '\'') { i++; continue; }
+            if (!IsSingleQuoteMark(inner[i])) { sb.Append(inner[i]); continue; }
+            if (i + 1 < inner.Length && IsSingleQuoteMark(inner[i + 1])) { sb.Append(inner[i + 1]); i++; continue; }
             return false;
         }
-        text = inner.Replace("''", "'");
+        text = sb.ToString();
         return true;
     }
 
     /// <summary>
     /// Escape <paramref name="value"/> for placement INSIDE a PowerShell double-quoted
-    /// string (returns the inner text, no surrounding quotes). Order is load-bearing:
-    /// backtick first (it is PowerShell's escape char, introduced by the next two
-    /// replacements), then <c>$</c> (starts variable expansion), then <c>"</c> (ends
-    /// the string). Called once per literal string part during emission — the hottest
+    /// string (returns the inner text, no surrounding quotes): a backtick goes before every
+    /// backtick (PowerShell's escape char), <c>$</c> (starts variable expansion) and
+    /// double-quote mark (<c>"</c> and U+201C-U+201E end the string). Called once per literal string part during emission — the hottest
     /// builder — so the clean case is allocation-free: a single <see cref="System.Buffers.SearchValues{T}"/>
     /// scan returns the original string with no rebuild when nothing needs escaping
     /// (vs. three full Replace passes).
     /// </summary>
     public static string EscapeForDoubleQuote(string value)
     {
-        if (value.AsSpan().IndexOfAny(s_doubleQuoteSpecials) < 0)
+        int at = value.AsSpan().IndexOfAny(s_doubleQuoteSpecials);
+        if (at < 0)
             return value;
-        return value.Replace("`", "``").Replace("$", "`$").Replace("\"", "`\"");
+        var sb = new System.Text.StringBuilder(value.Length + 4);
+        sb.Append(value, 0, at);
+        for (int i = at; i < value.Length; i++)
+        {
+            char c = value[i];
+            if (c is '`' or '$' || IsDoubleQuoteMark(c)) sb.Append('`');
+            sb.Append(c);
+        }
+        return sb.ToString();
     }
 
     /// <summary>
@@ -148,6 +226,23 @@ public static class PsBuild
     /// inner text escaped via <see cref="EscapeForDoubleQuote"/>.
     /// </summary>
     public static string DoubleQuote(string value) => "\"" + EscapeForDoubleQuote(value) + "\"";
+
+    /// <summary>
+    /// Backtick-escape only the double-quote marks (<c>"</c>, U+201C-U+201E) of text that is already PowerShell
+    /// double-quoted-string content whose <c>$</c> expansions must stay live (a heredoc body rendered as an ordinary
+    /// string). Returns <paramref name="value"/> itself when it has none.
+    /// </summary>
+    public static string EscapeDoubleQuoteMarks(string value)
+    {
+        if (value.AsSpan().IndexOfAny(DoubleQuoteMarks) < 0) return value;
+        var sb = new System.Text.StringBuilder(value.Length + 4);
+        foreach (char c in value)
+        {
+            if (IsDoubleQuoteMark(c)) sb.Append('`');
+            sb.Append(c);
+        }
+        return sb.ToString();
+    }
 
     // ─────────────────────────── Output suppression / wrapping ────────────────────────
 

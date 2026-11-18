@@ -3533,7 +3533,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("for i in 1 2 3; do echo $i; done");
 
-        Assert.Equal("$__psbash_iter = 0; :__psbash_l0 foreach ($__psbash_lv0 in 1,2,3) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; [PsBash.Cmdlets.BashVariableStore]::Set('i', [string]($__psbash_lv0)); Invoke-BashEcho $env:i }; if ($__psbash_iter -eq 0) { $global:LASTEXITCODE = 0 }", result);
+        Assert.Equal("$__psbash_iter = 0; :__psbash_l0 foreach ($__psbash_lv0 in '1','2','3') { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; [PsBash.Cmdlets.BashVariableStore]::Set('i', [string]($__psbash_lv0)); Invoke-BashEcho $env:i }; if ($__psbash_iter -eq 0) { $global:LASTEXITCODE = 0 }", result);
     }
 
     [Fact]

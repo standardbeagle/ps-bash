@@ -73,7 +73,7 @@ public sealed class InvokeBashSourceCommand : PSCmdlet
         }
 
         if (System.IO.Path.GetExtension(resolvedPath).Equals(".ps1", StringComparison.OrdinalIgnoreCase))
-            return ScriptBlock.Create($". '{resolvedPath.Replace("'", "''")}'");
+            return ScriptBlock.Create(". " + PsBash.Core.Parser.PsBuild.SingleQuote(resolvedPath));
 
         string content;
         try
@@ -124,7 +124,7 @@ public sealed class InvokeBashSourceCommand : PSCmdlet
         // as it runs; the caller's file is BASH_SOURCE[1]. Scripts find their own directory from it.
         // A `return` in the file ends the source, not the function that sourced it: the eval-return flag its text
         // set (the file is transpiled as eval text) is spent here.
-        string quotedPath = "'" + PsBash.Core.BashPath.ToShell(Path).Replace("'", "''") + "'";
+        string quotedPath = PsBash.Core.Parser.PsBuild.SingleQuote(PsBash.Core.BashPath.ToShell(Path));
         // Its diagnostics show its own lines (`./lib.sh: line 2:`), and the caller's line is put back when it ends.
         result = PsBash.Core.Parser.PsBuild.SourceLinesScope(result);
         result = "$global:BASH_SOURCE = @(" + quotedPath + ") + @($global:BASH_SOURCE); try {\n" + result

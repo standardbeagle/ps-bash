@@ -1,0 +1,41 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 576
+stdout-length: 125
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit
+echo –n x; echo —e; echo –; printf '%s\n' –e; x=–n; echo "$x"
+for w in –n x’; do echo "<$w>"; done; a=(–n); echo "${a[0]}"
+echo "${u:-a\"\"b}"; y="${u:-a\"\"b}"; echo "$y"; echo "${u:-x'""'y}"; echo "pre${u:-a\"\"b}post"
+declare -A m=(["k\"\"j"]=v); echo "${m["k\"\"j"]}"; declare -A n=(["a\"b"]=1 ['c d']=2); echo "${!n[@]}" | tr ' ' '\n' | sort | tr '\n' ' '; echo
+for c in a\ b e\"f 'x y' "p q" grep\ x; do echo "[$c]"; done
+for c in grep\ -c; do printf 'a\nb\n' | $c a; done
+for i in 007 1.0 1e3 0x10 -5 +3; do printf '%s,' "$i"; done; echo
+cd / 
+==== STDOUT ====
+–n x
+—e
+–
+–e
+–n
+<–n>
+<x’>
+–n
+a""b
+a""b
+x''y
+prea""bpost
+v
+a"b c d
+[a b]
+[e"f]
+[x y]
+[p q]
+[grep x]
+1
+007,1.0,1e3,0x10,-5,+3,
+
+==== STDERR ====
+

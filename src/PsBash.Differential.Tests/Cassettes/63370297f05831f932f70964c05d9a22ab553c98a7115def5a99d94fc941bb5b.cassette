@@ -1,0 +1,72 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 1263
+stdout-length: 457
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit
+q='‘’‚‛“”„'
+echo a‘’‚‛“”„b; echo 'a‘’‚‛“”„b'; echo "a‘’‚‛“”„b"; echo "a‘’‚‛“”„b$q"; echo a\a‘’‚‛“”„b
+x=a‘’‚‛“”„b; echo "$x"; x='a‘’‚‛“”„b'; echo "$x"; x="a‘’‚‛“”„b$q"; echo "$x"
+for c in a‘’‚‛“”„b "a‘’‚‛“”„b" 'a‘’‚‛“”„b' a\ a‘’‚‛“”„b; do echo "[$c]"; done
+echo "$(echo a‘’‚‛“”„b)" `echo a‘’‚‛“”„b`; a=(a‘’‚‛“”„b "a‘’‚‛“”„b" 'a‘’‚‛“”„b'); echo "${a[@]}" ${#a[@]}
+case a‘’‚‛“”„b in a‘’‚‛“”„b) echo hit;; esac; [[ "a‘’‚‛“”„b" == a‘’‚‛“”„b ]] && echo eq
+printf '%s|' a‘’‚‛“”„b 'a‘’‚‛“”„b' "a‘’‚‛“”„b"; echo
+echo ${q:-a‘’‚‛“”„b} "${u:-a‘’‚‛“”„b}" ${u:-'a‘’‚‛“”„b'}; y=${u:-a‘’‚‛“”„b}; echo "$y"
+f() { echo "a‘’‚‛“”„b$1"; }; f a‘’‚‛“”„b; eval "echo a‘’‚‛“”„b"; eval 'echo a‘’‚‛“”„b'
+echo a‘’‚‛“”„b > o; cat o; echo a‘’‚‛“”„b | sed s/a‘’‚‛“”„b/Y/; echo a‘’‚‛“”„b | awk '{print "a‘’‚‛“”„b" $0}'; echo a‘’‚‛“”„b | grep -c a‘’‚‛“”„b
+test "a‘’‚‛“”„b" = a‘’‚‛“”„b && echo t; declare -A m=([a‘’‚‛“”„b]=a‘’‚‛“”„b); echo "${m[a‘’‚‛“”„b]}" ${m[a‘’‚‛“”„b]}
+read -r v <<< "a‘’‚‛“”„b"; echo "$v"; export EV='a‘’‚‛“”„b'; printenv EV; bash -c "echo a‘’‚‛“”„b"; bash -c 'echo a‘’‚‛“”„b'
+[[ "aa‘’‚‛“”„bb" == a*a‘’‚‛“”„b* ]] && echo m1; case "aa‘’‚‛“”„bb" in *a‘’‚‛“”„b*) echo m2;; esac
+cat <<EOF
+ha‘’‚‛“”„bd$q
+a‘’‚‛“”„b@
+EOF
+cat <<'EOF'
+a‘’‚‛“”„b@
+'@
+EOF
+cd / 
+==== STDOUT ====
+a‘’‚‛“”„b
+a‘’‚‛“”„b
+a‘’‚‛“”„b
+a‘’‚‛“”„b‘’‚‛“”„
+aa‘’‚‛“”„b
+a‘’‚‛“”„b
+a‘’‚‛“”„b
+a‘’‚‛“”„b‘’‚‛“”„
+[a‘’‚‛“”„b]
+[a‘’‚‛“”„b]
+[a‘’‚‛“”„b]
+[a a‘’‚‛“”„b]
+a‘’‚‛“”„b a‘’‚‛“”„b
+a‘’‚‛“”„b a‘’‚‛“”„b a‘’‚‛“”„b 3
+hit
+eq
+a‘’‚‛“”„b|a‘’‚‛“”„b|a‘’‚‛“”„b|
+‘’‚‛“”„ a‘’‚‛“”„b a‘’‚‛“”„b
+a‘’‚‛“”„b
+a‘’‚‛“”„ba‘’‚‛“”„b
+a‘’‚‛“”„b
+a‘’‚‛“”„b
+a‘’‚‛“”„b
+Y
+a‘’‚‛“”„ba‘’‚‛“”„b
+1
+t
+a‘’‚‛“”„b a‘’‚‛“”„b
+a‘’‚‛“”„b
+a‘’‚‛“”„b
+a‘’‚‛“”„b
+a‘’‚‛“”„b
+m1
+m2
+ha‘’‚‛“”„bd‘’‚‛“”„
+a‘’‚‛“”„b@
+a‘’‚‛“”„b@
+'@
+
+==== STDERR ====
+

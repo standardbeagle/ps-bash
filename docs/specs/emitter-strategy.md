@@ -344,11 +344,14 @@ const-ness is lost where the value was previously lost entirely.
 
 ### `for x in LIST`
 
-Every bare literal in the list is quoted through `FormatForItem`, including the
-**single-item** case (`for x in one` -> `foreach ($x in 'one')`). Emitting the bare
-word made PowerShell invoke it as a command ("one: command not found"); only the
-multi-item path used to quote, which is what hid the bug. Words `EmitWord` already
-rendered as PowerShell values (`$x`, `"a"`, `(…)`, `@(…)`, numbers) pass through.
+Every bare literal in the list is quoted, including the **single-item** case (`for x in one` ->
+`foreach ($x in 'one')`). Emitting the bare word made PowerShell invoke it as a command ("one: command not
+found"); only the multi-item path used to quote, which is what hid the bug. A STATIC word (literals, `\x`
+escapes, `'…'`, `"…"` without expansions) is emitted as its VALUE through `PsBuild.SingleQuote`
+(`ForListItem` → `TryGetStaticArgValue`), never by re-quoting `EmitWord`'s command-mode text: `a\ b`
+renders as the bareword ``a` b``, and wrapping that in `'…'` kept the backtick (`for c in grep\ x` ran
+``grep` x``), and a word PowerShell reads as a number lost its spelling (`for i in 007` gave `7`). Other
+words (`$x`, `"a$y"`, `(…)`, `@(…)`) keep their emitted PowerShell value.
 
 An UNQUOTED `$(cmd)` / `` `cmd` `` word is word-split like an unquoted `$x`: bash expands it to TEXT,
 splits that text on `$IFS`, then glob-expands each word. The capture array only splits on LINES, so
@@ -983,6 +986,35 @@ Calls `TransformWordPath` on the final result. A word with an unquoted glob part
 operand: the callers test `IsGlobWord` / `IsBraceGlobWord` first and emit the pattern through
 `EmitGlobPatternExpr` instead (§4 "Pathname expansion"); `EmitWord` still renders such a word bare for the
 positions that do not expand (assignment values, `case`, `[[ ]]`, redirect targets).
+
+### Quote marks (bash text PowerShell reads as syntax)
+
+PowerShell's tokenizer ends a string at the Unicode quote marks as well as at the ASCII ones: U+2018-U+201B
+close a single-quoted string, U+201C-U+201E a double-quoted one, and a token that starts with U+2013-U+2015
+(en dash, em dash, horizontal bar) is a `-parameter`. To bash they are ordinary characters. Every emitted
+PowerShell literal therefore goes through ONE `PsBuild` primitive that knows the whole set:
+
+| Context | Primitive | Escape |
+|---|---|---|
+| `'…'` | `SingleQuote` / `EscapeForSingleQuote` | every single-quote mark doubled |
+| `"…"` (no live `$`) | `DoubleQuote` / `EscapeForDoubleQuote` | backtick before `` ` ``, `$`, every double-quote mark |
+| `"…"` with live `$` (a heredoc body) | `EscapeDoubleQuoteMarks` | backtick before every double-quote mark |
+| unquoted argument text | `BarewordNeedsEscape` / `EscapeBareword` | `{` `}`, quote marks, a leading dash mark; a whole word becomes one `"…"` |
+
+A pasted apostrophe (`echo it’s`) was a parse error that failed the whole script, `echo 'a‘’b'` silently
+printed `a’b`, and `echo –n x` ran `echo -n`. An ad-hoc `.Replace("'", "''")` is forbidden outside `PsBuild`
+(guard `PsQuoteMarkGuardTests`, which also round-trips every primitive through PowerShell's parser and
+parses a corpus of every word context × every mark; oracle `PsQuotingDifferentialTests`).
+
+Inside the `$( )` of a PowerShell expandable string, double-quote marks are rewritten even within a nested
+literal (`"$('a""b')"` is `a"b`: a pair becomes one, a backtick before one is consumed). Code holding such a
+mark never sits inside a string: a `${…}` whose argument or subscript holds one (`"${u:-a\"\"b}"`,
+`"${m[k""]}"`) is emitted as a join (`BracedVarLeavesString`, the same `TryEmitJoinedWord` /
+`TryEmitJoinedValue` path a command substitution takes).
+
+Raw subscript text (an assoc compound key `["k\"j"]=v`) gets bash's quote removal through
+`PsBash.Core.BashQuoting.RemoveQuotes`, shared with the cmdlets' run-time `BashGlob.RemoveQuotes`; stripping
+only the outer quotes kept `k\"j`.
 
 ### `EmitDoubleQuoted`
 

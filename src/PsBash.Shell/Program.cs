@@ -213,7 +213,7 @@ if (shellArgs.ScriptPath is not null)
         if (compactOutput)
             Environment.SetEnvironmentVariable("PSBASH_COMPACT_COMMAND", $"{shellArgs.ScriptPath} {string.Join(' ', shellArgs.ScriptArgs)}");
         var ps1Preamble = BuildPositionalPreamble(shellArgs.ScriptPath, shellArgs.ScriptArgs);
-        var escapedPath = shellArgs.ScriptPath.Replace("'", "''");
+        var escapedPath = PsBash.Core.Parser.PsBuild.EscapeForSingleQuote(shellArgs.ScriptPath);
         return await HostFailureGuard.RunAsync(async () =>
         {
             await using IWorker ps1Worker = await workerFactory();
@@ -610,7 +610,7 @@ return exitCode;
 static string BuildPositionalPreamble(string script0, string[] scriptArgs, bool isFile = true)
 {
     static string QuotePs(string s) =>
-        "'" + s.Replace("'", "''") + "'";
+        PsBash.Core.Parser.PsBuild.SingleQuote(s);
 
     // $0 is the script path / `-c` NAME as given (bash: `bash sub/s.sh` -> $0 = sub/s.sh); a script path in the
     // shell spelling (`sub\s.sh` -> sub/s.sh, docs/specs/paths.md), a `-c` NAME untouched.
@@ -714,9 +714,9 @@ static string BuildInvocationCwdPreamble()
     // A stateful named session keeps its own cwd between calls; resetting it to the launcher's
     // would undo every `cd` the session made.
     if (SessionCommands.IsStatefulSessionActive()) return string.Empty;
-    var cwd = Environment.CurrentDirectory.Replace("'", "''");
+    var cwd = PsBash.Core.Parser.PsBuild.EscapeForSingleQuote(Environment.CurrentDirectory);
     // $PWD is the script-visible shell form (C:/x, docs/specs/paths.md); the process cwd stays native.
-    var shellCwd = PsBash.Core.BashPath.ToShell(Environment.CurrentDirectory).Replace("'", "''");
+    var shellCwd = PsBash.Core.Parser.PsBuild.EscapeForSingleQuote(PsBash.Core.BashPath.ToShell(Environment.CurrentDirectory));
     return
         "$__psbash_invocation_cwd = '" + cwd + "'; " +
         "[System.Environment]::CurrentDirectory = $__psbash_invocation_cwd; " +
