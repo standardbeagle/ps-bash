@@ -1,45 +1,63 @@
 ---
 title: "Encoding & Hashing"
-description: "base64, md5sum, sha1sum, sha256sum, and file commands for encoding, integrity checking, and file type detection in PowerShell."
+description: "base64, od, md5sum, sha1sum, sha256sum, and file commands for encoding, byte dumps, integrity checking, and file type detection in PowerShell."
 head:
   - tag: meta
     attrs:
       name: keywords
-      content: powershell base64, base64 encode powershell, md5sum powershell, sha256sum powershell, file type detection powershell, bash checksum powershell, sha1sum powershell
+      content: powershell base64, base64 encode powershell, od powershell, hex dump powershell, md5sum powershell, sha256sum powershell, file type detection powershell, bash checksum powershell, sha1sum powershell
 ---
 
 import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
 
 # Encoding & Hashing
 
-`base64`, `md5sum`, `sha1sum`, `sha256sum`, and `file` for encoding, integrity checking, and file type detection.
+`base64`, `od`, `md5sum`, `sha1sum`, `sha256sum`, and `file` for encoding, byte dumps, integrity checking, and file type detection.
+
+All of them read the exact bytes of their input. Pipeline input is the byte stream bash would see: each record plus its newline, and no newline after a record that has none (`printf x`, `echo -n`). `printf x | md5sum` hashes the single byte `x`.
 
 ---
 
 ## base64
 
-Encode or decode data in Base64 format.
+Encode or decode data in Base64 (GNU coreutils 9.4 behaviour).
 
 ```
-base64 [OPTIONS] [FILE]
+base64 [OPTION]... [FILE]
 ```
+
+With no FILE, or with `-`, reads the pipeline.
 
 ### Flags
 
 | Flag | Description |
 |------|-------------|
-| `-d`, `--decode` | Decode Base64 input back to original data |
-| `-w NUM`, `--wrap=NUM` | Wrap encoded output at NUM columns (default: 76, 0 = no wrap) |
+| `-d`, `--decode` | Decode Base64 input back to the original bytes |
+| `-i`, `--ignore-garbage` | When decoding, skip characters outside the Base64 alphabet |
+| `-w COLS`, `--wrap=COLS` | Wrap encoded lines at COLS characters (default 76, `0` = no wrapping) |
 
-### Return Type
+Bundles (`-dw0`) and unique long-option prefixes (`--dec`, `--wr 20`) work as in GNU.
 
-Returns a `PsBash.TextOutput` object with the encoded or decoded string as `BashText`.
+### Behaviour
+
+- Encoding and decoding stream: pipeline input is processed record by record, files in chunks, so large inputs are not held in memory, and a downstream `head` ends the read.
+- `-d` writes the decoded bytes exactly. A trailing newline in the decoded data is kept, and bytes that are not valid UTF-8 pass through unchanged.
+- Wrapped lines end in `\n`, never `\r\n`.
+
+### Exit status and errors
+
+| Condition | Result |
+|-----------|--------|
+| Invalid Base64 while decoding | `base64: invalid input` error on stderr, exit 1; from the pipeline, bytes decoded before the bad character are still written |
+| `-w` value that is not a decimal (`-w x`, `-w -1`, `-w 1K`) | Usage error, exit 1 |
+| A second FILE operand | `extra operand`, exit 1 |
+| Missing file | `base64: NAME: No such file or directory`, exit 1 |
 
 ### Examples
 
 **Encode a string from the pipeline:**
 
-```powershell
+```bash
 echo 'hello' | base64
 ```
 
@@ -49,7 +67,7 @@ aGVsbG8K
 
 **Decode a Base64 string:**
 
-```powershell
+```bash
 echo 'aGVsbG8K' | base64 -d
 ```
 
@@ -57,90 +75,190 @@ echo 'aGVsbG8K' | base64 -d
 hello
 ```
 
-**Encode a file:**
+**Encode a file without line wrapping:**
 
-```powershell
-base64 image.png
+```bash
+base64 -w 0 image.png > image.b64
 ```
 
-**Encode without line wrapping:**
+**Round trip keeps every byte:**
 
-```powershell
-echo 'a longer string that would normally wrap' | base64 -w 0
+```bash
+printf 'a\n' | base64 | base64 -d | wc -c
 ```
 
-**Decode a Base64 file:**
+```text
+2
+```
 
-```powershell
-base64 -d encoded.txt
+---
+
+## od
+
+Dump bytes as octal, hexadecimal, decimal, or characters (GNU coreutils 9.4 layout).
+
+```
+od [OPTION]... [FILE]...
+```
+
+Files are read in order and dumped as one stream. With no FILE, or for `-`, reads the pipeline. Output is written as the bytes arrive, so `od -An -tx1 /dev/urandom | head -n 2` ends when `head` has its lines; `-N` is not required for an endless device. A run of identical lines prints once, followed by a `*` line, as in GNU.
+
+### Flags
+
+| Flag | Description |
+|------|-------------|
+| `-A RADIX`, `--address-radix=RADIX` | Offset column radix: `o` (octal, default), `d`, `x`, or `n` (no offsets) |
+| `-t TYPE`, `--format=TYPE` | Output type; repeatable. `a` (named characters), `c` (characters/escapes), `d`, `o`, `u`, `x` with an optional size `1 2 4 8` or `C S I L` (default size 4). A trailing `z` is accepted |
+| `-a` | Same as `-t a` |
+| `-b` | Same as `-t o1` |
+| `-c` | Same as `-t c` |
+| `-d` | Same as `-t u2` |
+| `-o` | Same as `-t o2` (the default when no type is given) |
+| `-s` | Same as `-t d2` |
+| `-x` | Same as `-t x2` |
+| `-i` | Same as `-t d4` |
+| `-l` | Same as `-t d8` |
+| `-j BYTES`, `--skip-bytes=BYTES` | Skip BYTES of input first |
+| `-N BYTES`, `--read-bytes=BYTES` | Dump at most BYTES |
+| `-w[BYTES]`, `--width[=BYTES]` | Bytes per output line (default 16; `-w` alone = 32) |
+| `-v`, `--output-duplicates` | Do not collapse repeated lines into `*` |
+
+`-j` and `-N` take decimal, `0x` hex, or leading-`0` octal, with an optional `b` (512), `k`, or `m` multiplier. When several `-t` types are given, their columns are aligned.
+
+### Differences from GNU
+
+- Not supported: floating-point types (`-t f`, `-f`, `-F`, `-e`), `-S`/`--strings`, `--endian`, `--traditional`. They are rejected with a usage error (exit 1).
+- The `z` suffix (GNU's `>printable<` column) is accepted but prints no extra column.
+
+### Exit status
+
+0 on success. 1 for a usage error, a missing or unreadable file (the other files are still dumped), or `-j` past the end of the input (`cannot skip past end of combined input`).
+
+### Examples
+
+**Show characters and escapes:**
+
+```bash
+printf 'hi\n' | od -c
+```
+
+```text
+0000000   h   i  \n
+0000003
+```
+
+**Hex bytes without an offset column:**
+
+```bash
+printf 'hi\n' | od -An -tx1
+```
+
+```text
+ 68 69 0a
+```
+
+**First 16 bytes of a file, hex offsets:**
+
+```bash
+od -A x -t x1 -N 16 image.png
 ```
 
 ---
 
 ## md5sum
 
-Compute MD5 message digest for files or pipeline input.
+Compute or check MD5 digests (GNU coreutils 9.4 behaviour).
 
 ```
-md5sum [OPTIONS] [FILE...]
+md5sum [OPTION]... [FILE]...
+md5sum -c [OPTION]... [FILE]...
 ```
+
+With no FILE, or with `-`, reads the pipeline. A bare `md5sum` with nothing piped prints nothing.
 
 ### Flags
 
 | Flag | Description |
 |------|-------------|
-| `-c`, `--check` | Read checksums from file and verify them |
-| `-b`, `--binary` | Read files in binary mode |
+| `-b`, `--binary` | Mark entries as binary: `HASH *NAME` |
+| `-t`, `--text` | Mark entries as text: `HASH  NAME` (default). The last of `-b`/`-t` wins |
+| `--tag` | BSD-style output: `MD5 (NAME) = HASH` |
+| `-z`, `--zero` | End each output line with NUL instead of a newline; names are never escaped |
+| `-c`, `--check` | Read checksum lists from the FILEs (or the pipeline) and verify them |
+| `--quiet` | Check mode: do not print `OK` lines |
+| `--status` | Check mode: print nothing; the exit status reports the result |
+| `-w`, `--warn` | Check mode: warn about improperly formatted lines |
+| `--strict` | Check mode: an improperly formatted line is a failure |
+| `--ignore-missing` | Check mode: skip files that do not exist |
 
-### TextOutput Properties
+Option combinations GNU rejects are rejected with the same message and exit 1, for example `--quiet` without `-c` (`the --quiet option is meaningful only when verifying checksums`) or `--tag` with `-c`.
 
-Each result is a `PsBash.TextOutput` object:
+### Output
+
+Names are printed as typed, with `/` as the separator on Windows. A name containing a backslash or newline is escaped and the line starts with `\`, as in GNU.
+
+Check mode accepts text, binary, and `--tag` lists, skips blank and `#` lines, and prints `NAME: OK`, `NAME: FAILED`, or `NAME: FAILED open or read`. Summary warnings (`WARNING: 1 computed checksum did NOT match`) go to stderr.
+
+### Exit status
+
+| Mode | Status |
+|------|--------|
+| Hash | 0, or 1 if any FILE is missing, a directory, or unreadable |
+| Check | 0 when every listed file verified; 1 on any mismatch, unreadable file, list with no properly formatted line, or (`--strict`) improper line |
+| Usage error | 1 |
+
+### Properties
+
+Each hash-mode result is a `PsBash.TextOutput` object:
 
 | Property | Type | Description |
 |----------|------|-------------|
-| `Hash` | string | Hex-encoded MD5 digest |
-| `FileName` | string | Path to the hashed file, or `-` for pipeline input |
+| `Hash` | string | Lower-case hex digest |
+| `FileName` | string | Name as printed, or `-` for pipeline input |
 | `Algorithm` | string | `MD5` |
-| `BashText` | string | Formatted `hash  filename` output |
+| `BashText` | string | The output line |
+
+Check-mode lines are plain text records.
 
 ### Examples
 
-**Hash a file:**
-
-```powershell
-md5sum README.md
-```
-
-```text
-d41d8cd98f00b204e9800998ecf8427e  README.md
-```
-
-**Hash multiple files:**
-
-```powershell
-md5sum file1.txt file2.txt
-```
-
-```text
-098f6bcd4621d373cade4e832627b4f6  file1.txt
-ad0234829205b9033196ba818f7a872b  file2.txt
-```
-
 **Hash pipeline input:**
 
-```powershell
+```bash
 echo 'data' | md5sum
 ```
 
 ```text
-8d777f385d3dfec8815d20f7496026dc  -
+6137cde4893c59f76f005a8123d8e8e6  -
 ```
 
-**Access the hash property directly:**
+**Write a checksum list and verify it later:**
+
+```bash
+md5sum *.txt > sums.md5
+md5sum -c sums.md5
+```
+
+```text
+a.txt: OK
+b.txt: OK
+```
+
+**BSD tag format:**
+
+```bash
+md5sum --tag a.txt
+```
+
+```text
+MD5 (a.txt) = 764efa883dda1e11db47671c4a3bbd9e
+```
+
+**Use the typed properties:**
 
 ```powershell
 $result = md5sum README.md
-$result.Hash        # "d41d8cd98f00b204e9800998ecf8427e"
+$result.Hash        # hex digest
 $result.Algorithm   # "MD5"
 ```
 
@@ -148,224 +266,146 @@ $result.Algorithm   # "MD5"
 
 ## sha1sum
 
-Compute SHA-1 message digest for files or pipeline input. Same interface as `md5sum`.
+Compute or check SHA-1 digests. Same flags, output formats, and exit status as [`md5sum`](#md5sum); the tag label is `SHA1` and the digest is 40 hex digits.
 
 ```
-sha1sum [OPTIONS] [FILE...]
+sha1sum [OPTION]... [FILE]...
 ```
 
-### Flags
+### Example
 
-| Flag | Description |
-|------|-------------|
-| `-c`, `--check` | Read checksums from file and verify them |
-| `-b`, `--binary` | Read files in binary mode |
-
-### TextOutput Properties
-
-Each result is a `PsBash.TextOutput` object:
-
-| Property | Type | Description |
-|----------|------|-------------|
-| `Hash` | string | Hex-encoded SHA-1 digest |
-| `FileName` | string | Path to the hashed file, or `-` for pipeline input |
-| `Algorithm` | string | `SHA1` |
-| `BashText` | string | Formatted `hash  filename` output |
-
-### Examples
-
-**Hash a file:**
-
-```powershell
-sha1sum README.md
-```
-
-```text
-da39a3ee5e6b4b0d3255bfef95601890afd80709  README.md
-```
-
-**Hash from pipeline:**
-
-```powershell
+```bash
 echo 'data' | sha1sum
 ```
 
 ```text
-a17c9aaa61e80a1bf71d0d850af4e5baa9800bbd  -
-```
-
-**Use the typed properties:**
-
-```powershell
-$result = sha1sum config.yml
-$result.Hash       # hex digest string
-$result.FileName   # "config.yml"
+c5d84736ba451747dd5f0eb9d17e104f3697ef47  -
 ```
 
 ---
 
 ## sha256sum
 
-Compute SHA-256 message digest for files or pipeline input. Same interface as `md5sum`.
+Compute or check SHA-256 digests. Same flags, output formats, and exit status as [`md5sum`](#md5sum); the tag label is `SHA256` and the digest is 64 hex digits.
 
 ```
-sha256sum [OPTIONS] [FILE...]
+sha256sum [OPTION]... [FILE]...
 ```
-
-### Flags
-
-| Flag | Description |
-|------|-------------|
-| `-c`, `--check` | Read checksums from file and verify them |
-| `-b`, `--binary` | Read files in binary mode |
-
-### TextOutput Properties
-
-Each result is a `PsBash.TextOutput` object:
-
-| Property | Type | Description |
-|----------|------|-------------|
-| `Hash` | string | Hex-encoded SHA-256 digest |
-| `FileName` | string | Path to the hashed file, or `-` for pipeline input |
-| `Algorithm` | string | `SHA256` |
-| `BashText` | string | Formatted `hash  filename` output |
 
 ### Examples
 
-**Hash a file:**
-
-```powershell
-sha256sum README.md
-```
-
-```text
-e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  README.md
-```
-
-**Hash pipeline input:**
-
-```powershell
+```bash
 echo 'data' | sha256sum
 ```
 
 ```text
-b8e2f6eb2098b6d0fcbabf2db0b3b5e24bfe7b6eab9a573ae322e4f0a7c17e3c  -
+6667b2d1aab6a00caa5aee5af8ad9f1465e567abf1c209d15727d57b3e8f6e5f  -
 ```
 
 **Compare checksums programmatically:**
 
 ```powershell
 $expected = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
-$actual = (sha256sum README.md).Hash
-$expected -eq $actual   # True
+$actual = (sha256sum empty.txt).Hash
+$expected -eq $actual   # True for an empty file
 ```
 
 <Aside type="tip">
-All three checksum commands -- `md5sum`, `sha1sum`, and `sha256sum` -- share the same interface and return the same `TextOutput` structure. The only differences are the `Algorithm` property and the hash length.
+`md5sum`, `sha1sum`, and `sha256sum` share one engine, so flags, check-mode behaviour, and the `TextOutput` properties are identical. `sha224sum`, `sha384sum`, `sha512sum`, and `b2sum` are not built in.
 </Aside>
 
 ---
 
 ## file
 
-Determine the type of a file by inspecting its contents (magic bytes).
+Determine a file's type from its contents (file 5.45 output).
 
 ```
-file [OPTIONS] FILE...
+file [OPTION]... FILE...
+file [OPTION]... -f NAMEFILE
 ```
 
 ### Flags
 
 | Flag | Description |
 |------|-------------|
-| `-b`, `--brief` | Omit the filename prefix from output |
-| `-i`, `--mime` | Output MIME type instead of human-readable description |
-| `-L`, `--dereference` | Follow symbolic links (accepted for compatibility) |
+| `-b`, `--brief` | Omit the `NAME:` prefix |
+| `-i`, `--mime` | Print `type; charset=ENCODING` instead of a description |
+| `--mime-type` | Print only the MIME type |
+| `--mime-encoding` | Print only the charset |
+| `-L`, `--dereference` | Follow symbolic links (default: report `symbolic link to X`) |
+| `-h`, `--no-dereference` | Do not follow symbolic links (the default) |
+| `-F STR`, `--separator=STR` | Use STR instead of `:` after the name |
+| `-0`, `--print0` | Print a NUL after the name |
+| `-N`, `--no-pad` | Do not pad names to a common width |
+| `-f FILE`, `--files-from=FILE` | Read names, one per line, from FILE (`-` = the pipeline) |
+| `-n`, `-p`, `-S` | Accepted, no effect |
 
-### Detected File Types
+`-` as an operand classifies the pipeline input and is listed as `/dev/stdin`.
 
-| Type | Magic Bytes | Description | MIME Type |
-|------|-------------|-------------|-----------|
-| PNG | `89 50 4E 47` | PNG image data | `image/png` |
-| JPEG | `FF D8` | JPEG image data | `image/jpeg` |
-| PDF | `25 50 44 46` | PDF document | `application/pdf` |
-| ZIP | `50 4B 03 04` | Zip archive data | `application/zip` |
-| ELF | `7F 45 4C 46` | ELF executable | `application/x-executable` |
-| GIF | `47 49 46 38` | GIF image data | `image/gif` |
-| RIFF | `52 49 46 46` | RIFF data | `application/octet-stream` |
-| Text | (no binary bytes) | ASCII text | `text/plain` |
+### What it recognizes
 
-Files that match no magic signature and contain binary bytes are reported as `data` with MIME type `application/octet-stream`.
+- Empty files, directories, symbolic links.
+- Text: ASCII, UTF-8 (with or without BOM), ISO-8859, non-ISO extended ASCII, with the `with CRLF line terminators`, `with very long lines (N)`, `with no line terminators`, and `with escape sequences` qualifiers.
+- `#!` scripts by interpreter (`Bourne-Again shell script`, `POSIX shell script`, `Python script`, `Node.js script`, ...), followed by `, ASCII text executable`.
+- ELF (class, endianness, machine, PIE, interpreter, BuildID, stripped), PE32/PE32+ and MS-DOS executables, including .NET assemblies.
+- gzip, zip, PNG (dimensions, bit depth, color type), JPEG (JFIF, frame size), PDF (version, page count).
+- Anything else with binary bytes is `data`.
 
-### TextOutput Properties
+### Differences from file 5.45
+
+- No Exif detail for JPEG; zip-based formats (EPUB, OOXML, JAR, APK) are reported as plain `Zip archive data`.
+- No source-language detection (`C source`, `JSON`, `HTML`, `XML` are reported as text).
+- At most the first 1 MiB of a file is examined.
+
+### Exit status
+
+0, also for a missing operand: as in file 5.45, `` NAME: cannot open `NAME' (No such file or directory) `` is printed on stdout. Usage errors (including no operand) exit 1; options file 5.45 has but ps-bash does not implement (`-z`, `-s`, `-k`, `-m`, ...) exit 2. An unreadable `-f` list is an error on stderr, exit 1.
+
+### Properties
 
 Each result is a `PsBash.TextOutput` object:
 
 | Property | Type | Description |
 |----------|------|-------------|
-| `FileName` | string | Path to the inspected file |
-| `FileType` | string | Human-readable type description |
-| `MimeType` | string | MIME type string |
-| `BashText` | string | Formatted output string |
+| `FileName` | string | Path of the inspected file (`/dev/stdin` for `-`) |
+| `FileType` | string | Human-readable description |
+| `MimeType` | string | MIME type |
+| `MimeEncoding` | string | Charset |
+| `BashText` | string | The output line |
 
 ### Examples
 
-**Detect file type:**
+**Several files; the type column is aligned:**
 
-```powershell
-file image.png
+```bash
+file notes.txt run.sh empty win.txt nosuch
 ```
 
 ```text
-image.png: PNG image data
+notes.txt: ASCII text
+run.sh:    Bourne-Again shell script, ASCII text executable
+empty:     empty
+win.txt:   ASCII text, with CRLF line terminators
+nosuch:    cannot open `nosuch' (No such file or directory)
 ```
 
-**Brief output (no filename):**
+**MIME output:**
 
-```powershell
-file -b image.png
-```
-
-```text
-PNG image data
-```
-
-**MIME type output:**
-
-```powershell
-file -i document.pdf
+```bash
+file -i notes.txt
+file -b --mime-type run.sh
 ```
 
 ```text
-document.pdf: application/pdf
-```
-
-**Combine brief and MIME:**
-
-```powershell
-file -bi archive.zip
-```
-
-```text
-application/zip
-```
-
-**Check multiple files:**
-
-```powershell
-file script.ps1 photo.jpg data.bin
-```
-
-```text
-script.ps1: ASCII text
-photo.jpg: JPEG image data
-data.bin: data
+notes.txt: text/plain; charset=us-ascii
+text/x-shellscript
 ```
 
 **Access typed properties:**
 
 ```powershell
 $info = file image.png
-$info.FileType   # "PNG image data"
+$info.FileType   # "PNG image data, 800 x 600, 8-bit/color RGBA, non-interlaced"
 $info.MimeType   # "image/png"
 ```

@@ -5,173 +5,176 @@ description: sed, awk, cut, tr, uniq, sort, column, join, paste, comm, and diff 
 
 import { Aside } from '@astrojs/starlight/components';
 
-Commands for transforming, filtering, sorting, and comparing text. Most text processing commands produce `TextOutput` objects. The notable exception is `sort`, which is a **pipeline bridge** that preserves the original typed objects passing through it.
+Commands for transforming, filtering, sorting, and comparing text. Each one follows the GNU tool's option table, messages, and exit codes (GNU coreutils 9.4, sed 4.9, gawk 5.2, diffutils 3.10, util-linux 2.39 `column`), checked against a real bash as the test oracle.
+
+Output falls into two kinds:
+
+- **Filters** (`sort`, plain `uniq`, `uniq -d/-u/-D`) emit every output line as the original upstream object, so typed properties survive: `ls -la | sort -k5 -n` still yields `LsEntry` objects.
+- **Transformers** (`sed`, `awk`, `cut`, `tr`, `paste`, `join`, `comm`, `uniq -c`, `column`, `diff`) change the text and emit fresh text records.
+
+All of them read lines the way bash does: a trailing empty line is kept, a last line without a newline is still a line, and a piece written without a newline (`printf a`) joins the next piece into one line. Options may follow operands, short options bundle (`-rk2`), and long options accept any unique prefix (`--rev` for `--reverse`).
 
 ## sed
 
-Stream editor for filtering and transforming text line by line.
+Stream editor: applies a script to each input line.
 
 ```
-sed [OPTIONS] EXPRESSION [FILE...]
+sed [OPTION]... SCRIPT [FILE...]
+sed [OPTION]... -e SCRIPT... [-f FILE]... [FILE...]
 ```
 
 ### Flags
 
 | Flag | Description |
 |------|-------------|
-| `-n` | Suppress default output; only print when explicitly requested with `p` |
-| `-i` | Edit files in place |
-| `-E` | Use extended regular expressions (unescaped `+`, `?`, `\|`, `()`, `{}`) |
-| `-e EXPR` | Add a sed expression (use multiple `-e` for chained edits) |
+| `-n`, `--quiet`, `--silent` | Suppress automatic printing of the pattern space |
+| `-e SCRIPT`, `--expression=SCRIPT` | Add a script chunk (repeatable; chunks are joined with newlines) |
+| `-f FILE`, `--file=FILE` | Read script from FILE (repeatable; mixed with `-e` in command-line order) |
+| `-E`, `-r`, `--regexp-extended` | Extended regular expressions |
+| `-i[SUFFIX]`, `--in-place[=SUFFIX]` | Edit files in place; with SUFFIX, keep a backup (`-i.bak`, or `-ibak/*` where `*` is the file name) |
+| `-s`, `--separate` | Treat files as separate streams (`$` and line numbers restart per file) |
+| `-z`, `--null-data` | NUL-separated records |
+| `-l N`, `--line-length=N` | Wrap width for the `l` command (default 70) |
+| `--follow-symlinks` | With `-i`, edit the link target instead of replacing the link |
+| `--debug` | Print GNU's annotated program and per-cycle trace |
+| `-u`, `-b`, `--posix`, `--sandbox` | Accepted, no effect |
 
-### Supported commands
+The first operand is the script only when no `-e`/`-f` was given. A `#n` first line acts as `-n`.
 
-| Command | Syntax | Description |
-|---------|--------|-------------|
-| Substitute | `s/pattern/replacement/` | Replace first match on each line |
-| Substitute global | `s/pattern/replacement/g` | Replace all matches on each line |
-| Delete | `d` | Delete the line |
-| Print | `p` | Print the line (useful with `-n`) |
-| Transliterate | `y/src/dst/` | Replace each character in *src* with the corresponding character in *dst* |
+### Commands
 
-### Address ranges
+Every GNU sed 4.9 command is implemented.
 
-Addresses restrict which lines a command applies to.
+| Command | Description |
+|---------|-------------|
+| `s/RE/REPL/FLAGS` | Substitute. Flags: `g`, `N` (Nth match), `p`, `i`/`I`, `m`/`M`, `e`, `w FILE` |
+| `y/SRC/DST/` | Transliterate characters |
+| `p` `P` `d` `D` `n` `N` `=` `l [N]` `z` `F` | Print, delete, next line, line number, unambiguous print, zap, file name |
+| `a TEXT` `i TEXT` `c TEXT` | Append, insert, change (also the `a\` multi-line form) |
+| `h` `H` `g` `G` `x` | Hold-space operations |
+| `{ ... }`, `: LABEL`, `b` `t` `T` | Blocks, labels, branches |
+| `q [N]`, `Q [N]` | Quit (with or without printing) and set the exit status |
+| `r FILE` `R FILE` `w FILE` `W FILE` | Read and write files (`/dev/stdout`, `/dev/stderr` accepted) |
+| `e [COMMAND]` | Run a command through ps-bash |
+| `v [VERSION]`, `#` | Version check, comment |
+
+### Addresses
 
 | Address | Example | Description |
 |---------|---------|-------------|
-| Line number | `3d` | Apply to line 3 only |
-| Range | `2,5d` | Apply to lines 2 through 5 |
-| Range to end | `3,$d` | Apply from line 3 to end of input |
-| Regex | `/error/d` | Apply to lines matching the pattern |
-| Regex range | `/start/,/end/d` | Apply from first match of *start* through first match of *end* |
+| Line number | `3d` | Line 3 only |
+| `$` | `$p` | Last line of input |
+| Range | `2,5d` | Lines 2 through 5 |
+| Regex | `/error/d` | Lines matching the pattern |
+| Regex range | `/start/,/end/d` | From a match of *start* through the next match of *end* |
+| `N,/re/`, `0,/re/` | `0,/x/s//y/` | From line N to the next match (`0,` can end on line 1) |
+| Step | `0~3p` | Every 3rd line |
+| Negation | `1!G` | Every line except the address |
 
-### Return type
+### Behavior notes
 
-`TextOutput` objects (one per output line).
+- Files form one stream like GNU: `sed -n '$p' a b` prints the last line of `b` only. Use `-s` or `-i` to treat them separately.
+- POSIX bracket classes (`[[:space:]]`, `[[:alpha:]]`) work in BRE and ERE.
+- Exit codes: 1 for usage and script errors, 2 when an input file cannot be read (the other files still run), 4 for a missing `-f` file, a missing branch label, or `-i` without files.
+- `-i` replaces a symlink with a regular file unless `--follow-symlinks` is given (as GNU).
 
 ### Examples
 
-```powershell
-# Replace first occurrence of 'foo' with 'bar' on each line
-echo "foo foo foo" | sed 's/foo/bar/'
+```bash
+echo "foo foo foo" | sed 's/foo/bar/2'
 ```
 
 ```text
-bar foo foo
+foo bar foo
 ```
 
-```powershell
-# Global replacement
-echo "foo foo foo" | sed 's/foo/bar/g'
+```bash
+# Delete lines containing 'debug', print only ERROR lines
+sed '/debug/d' log.txt
+sed -n '/ERROR/p' log.txt
 ```
 
-```text
-bar bar bar
+```bash
+# Edit in place, keeping config.txt.bak
+sed -i.bak 's/oldname/newname/g' config.txt
 ```
 
-```powershell
-# Delete lines containing 'debug'
-cat log.txt | sed '/debug/d'
-```
-
-```powershell
-# Print only lines matching a pattern (suppress default output)
-cat data.txt | sed -n '/ERROR/p'
-```
-
-```powershell
-# Edit a file in place
-sed -i 's/oldname/newname/g' config.txt
-```
-
-```powershell
-# Multiple expressions with -e
-cat input.txt | sed -e 's/alpha/ALPHA/g' -e '/^$/d'
-```
-
-```powershell
-# Transliterate characters (rot13-style swap)
-echo "hello" | sed 'y/helo/HELO/'
+```bash
+# Reverse a file with the hold space
+printf 'a\nb\nc\n' | sed -n '1!G;h;$p'
 ```
 
 ```text
-HELLO
+c
+b
+a
 ```
 
 ---
 
 ## awk
 
-Pattern-scanning and processing language. Each input line is split into fields that you can reference by position.
+A full AWK interpreter (lexer, parser, and evaluator), compared output for output against gawk 5.2.1.
 
 ```
-awk [OPTIONS] 'PROGRAM' [FILE...]
+awk [-F FS] [-v VAR=VAL]... 'PROGRAM' [FILE...]
+awk [-F FS] [-v VAR=VAL]... -f PROGFILE... [FILE...]
 ```
 
 ### Flags
 
 | Flag | Description |
 |------|-------------|
-| `-F SEP` | Set field separator (default: whitespace) |
-| `-v VAR=VAL` | Set a variable before execution begins |
+| `-F FS` | Field separator (joined form `-F:` also works; last `-F` wins; `\t` escapes expanded) |
+| `-v VAR=VAL` | Assign a variable before `BEGIN` (repeatable) |
+| `-f FILE`, `--file=FILE` | Read the program from FILE (repeatable; files are concatenated) |
+| `--` | End of options |
 
-### Field access
+Option parsing stops at the first operand (the program text), as POSIX requires.
 
-| Reference | Description |
-|-----------|-------------|
-| `$0` | The entire line |
-| `$1`, `$2`, ... | Individual fields (1-indexed) |
-| `$NF` | The last field |
+### Language
 
-### Built-in variables
+- Patterns: `BEGIN`, `END`, `/regex/`, expressions, and ranges `pat1, pat2`.
+- Control flow: `if`/`else`, `while`, `do`/`while`, `for`, `for (k in arr)`, `break`, `continue`, `next`, `nextfile`, `exit [N]`.
+- Arrays: associative, `delete arr[k]`, `delete arr`, `(k in arr)`, multi-subscript `arr[i,j]` with `SUBSEP`.
+- User functions: `function name(params, locals) { ... return x }`, with recursion. Scalars are passed by value, arrays by reference. Indirect calls `@var(args)` work for user functions.
+- Variables: `NR`, `NF`, `FNR`, `FS`, `OFS`, `ORS`, `FILENAME`, `RSTART`, `RLENGTH`, `SUBSEP`, `CONVFMT`, `OFMT`.
 
-| Variable | Description |
-|----------|-------------|
-| `NR` | Current line number (1-based) |
-| `NF` | Number of fields on the current line |
-| `FS` | Input field separator |
-| `OFS` | Output field separator (default: space) |
+### Built-in functions
 
-### Program structure
+| Category | Functions |
+|----------|-----------|
+| String | `length`, `substr`, `index`, `split`, `sub`, `gsub`, `match`, `sprintf`, `tolower`, `toupper` |
+| Math | `sin`, `cos`, `atan2`, `exp`, `log`, `sqrt`, `int`, `rand`, `srand` |
+| Time | `systime`, `strftime` |
+| I/O | `system`, `close`, `fflush` |
 
-An awk program consists of pattern/action pairs. The action runs for each line where the pattern matches.
+### I/O
 
-| Pattern | Example | Description |
-|---------|---------|-------------|
-| (none) | `{ print $1 }` | Runs on every line |
-| `BEGIN` | `BEGIN { OFS="," }` | Runs once before input |
-| `END` | `END { print NR }` | Runs once after all input |
-| `/regex/` | `/error/ { print }` | Lines matching the regex |
-| Expression | `$3 > 100 { print $1 }` | Lines where the expression is true |
+| Form | Description |
+|------|-------------|
+| `getline`, `getline var` | Next record of the main input (also crosses file operands; works in `BEGIN`) |
+| `getline < file`, `getline var < file` | Read a file line by line (`-` and `/dev/stdin` read stdin) |
+| `cmd \| getline [var]` | Read a command's output line by line |
+| `print > file`, `print >> file` | Write or append; the file stays open until `close(file)` or program end |
+| `print \| "cmd"` | Pipe records into a command's stdin |
+| `close(name)` | Close a file or command; returns 0, the command's exit status, or -1 |
 
-### String functions
+Commands in `system()`, `cmd | getline`, and `print | "cmd"` run through ps-bash itself, so they are bash command lines on every platform. Output redirection accepts `/dev/stdout`, `/dev/stderr`, `-`, and `/dev/null`.
 
-| Function | Description |
-|----------|-------------|
-| `length(s)` | Length of string *s* (or `$0` if omitted) |
-| `substr(s, start)` | Substring from position *start* (1-based) |
-| `substr(s, start, len)` | Substring of length *len* from *start* |
-| `tolower(s)` | Convert to lowercase |
-| `toupper(s)` | Convert to uppercase |
-| `gsub(/re/, repl)` | Replace all matches in `$0` |
-| `sub(/re/, repl)` | Replace first match in `$0` |
+### Differences from gawk
 
-### Output functions
+- Recursion is capped near depth 1000 (`awk: fatal: function call nesting too deep`, exit 2) to protect the host's stack.
+- `close()` of a `cmd | getline` command that still has unread output gives it up to 3 s to exit, then ends it and returns 141. gawk's SIGPIPE gives 141 at once.
+- `close()` of a `print | "cmd"` pipe, explicit or at program end, waits as long as the command runs, as gawk does. Ctrl-C or a downstream stop ends the command and its process tree.
+- Indirect calls (`@name()`) reach user functions only, not built-ins.
+- Warnings omit gawk's `cmd. line:N:` prefix.
 
-| Function | Description |
-|----------|-------------|
-| `print expr, ...` | Print values separated by OFS |
-| `printf "fmt", ...` | Formatted output (C-style `%s`, `%d`, `%f`) |
-
-### Return type
-
-`TextOutput` objects (one per output line).
+Exit codes follow gawk: 1 for syntax errors, 2 for fatal runtime errors.
 
 ### Examples
 
-```powershell
-# Print the second field of each line
+```bash
 echo "alice 90" | awk '{ print $2 }'
 ```
 
@@ -179,69 +182,67 @@ echo "alice 90" | awk '{ print $2 }'
 90
 ```
 
-```powershell
-# Set field separator to colon
-cat /etc/passwd | awk -F: '{ print $1 }'
+```bash
+# Sum a column with a custom separator
+awk -F, '{ sum += $2 } END { print "Total:", sum }' data.csv
 ```
 
-```powershell
-# Filter lines where column 3 exceeds a threshold
-ps aux | awk '$3 > 5.0 { print $1, $11, $3 }'
-```
-
-```powershell
-# Use BEGIN/END blocks
-cat data.csv | awk -F, 'BEGIN { sum=0 } { sum+=$2 } END { print "Total:", sum }'
-```
-
-```powershell
-# Printf for formatted output
-echo "hello world" | awk '{ printf "%s has %d chars\n", $1, length($1) }'
+```bash
+# User-defined function
+awk 'function fact(n) { return n <= 1 ? 1 : n * fact(n - 1) } BEGIN { print fact(10) }'
 ```
 
 ```text
-hello has 5 chars
+3628800
 ```
 
-```powershell
-# Pattern matching with regex
-cat log.txt | awk '/ERROR/ { print NR, $0 }'
+```bash
+# Pipe records through a command, then continue
+printf '3\n1\n2\n' | awk '{ print | "sort -n" } END { close("sort -n"); print "done" }'
+```
+
+```text
+1
+2
+3
+done
 ```
 
 ---
 
 ## cut
 
-Extract selected fields or character positions from each line.
+Select fields, characters, or bytes from each line.
 
 ```
-cut [OPTIONS] [FILE...]
+cut OPTION... [FILE...]
 ```
 
 ### Flags
 
 | Flag | Description |
 |------|-------------|
-| `-d DELIM` | Set field delimiter (default: tab) |
-| `-f FIELDS` | Select fields by number (e.g. `1`, `1,3`, `1-3`) |
-| `-c CHARS` | Select characters by position (e.g. `1-5`, `2,4`) |
+| `-f LIST`, `--fields=LIST` | Select fields |
+| `-d DELIM`, `--delimiter=DELIM` | Field delimiter, one character (default: tab) |
+| `-c LIST`, `--characters=LIST` | Select characters (counted as bytes, as GNU 9.4 does) |
+| `-b LIST`, `--bytes=LIST` | Select bytes |
+| `-s`, `--only-delimited` | Skip lines that contain no delimiter |
+| `--complement` | Invert the selection |
+| `--output-delimiter=STR` | Join selected fields with STR |
+| `-n` | Accepted, no effect |
 
-### Field/character specifications
+LIST is a comma-separated set of `N`, `N-M`, `N-` and `-M`. Positions are sorted and merged, and each prints once, as in GNU. A line without the delimiter prints whole in field mode unless `-s` is given.
 
-| Spec | Description |
-|------|-------------|
-| `N` | Single field or character position |
-| `N,M` | Multiple specific positions |
-| `N-M` | Range from N to M (inclusive) |
+### Differences from GNU
 
-### Return type
+- `-z` is refused (exit 2).
+- A multi-byte character split by `-c`/`-b` leaves raw-byte markers, matching GNU's byte counting.
 
-`TextOutput` objects (one per output line).
+List errors (`fields are numbered from 1`, `invalid decreasing range`) exit 1.
 
 ### Examples
 
-```powershell
-# Extract second field from colon-delimited input
+```bash
 echo "alice:90:A" | cut -d: -f2
 ```
 
@@ -249,26 +250,19 @@ echo "alice:90:A" | cut -d: -f2
 90
 ```
 
-```powershell
-# Extract multiple fields
-echo "one:two:three:four" | cut -d: -f1,3
+```bash
+echo "a:b:c:d" | cut -d: -f3-
+echo "a:b:c:d" | cut -d: -f2 --complement
+echo "a:b:c:d" | cut -d: -f1,3 --output-delimiter=' '
 ```
 
 ```text
-one:three
+c:d
+a:c:d
+a c
 ```
 
-```powershell
-# Extract a range of fields
-echo "a:b:c:d:e" | cut -d: -f2-4
-```
-
-```text
-b:c:d
-```
-
-```powershell
-# Extract characters by position
+```bash
 echo "abcdefgh" | cut -c1-4
 ```
 
@@ -280,73 +274,64 @@ abcd
 
 ## tr
 
-Translate, squeeze, or delete characters.
+Translate, squeeze, or delete characters from standard input.
 
 ```
-pipeline | tr [OPTIONS] SET1 [SET2]
+tr [OPTION]... SET1 [SET2]
 ```
 
 <Aside type="note">
-`tr` reads from the pipeline only; it does not accept file arguments.
+Like GNU `tr`, it takes no file operands. Use `tr ... < file` or a pipe.
 </Aside>
 
 ### Flags
 
 | Flag | Description |
 |------|-------------|
-| `-d` | Delete characters in SET1 |
-| `-s` | Squeeze repeated characters in SET1 (or SET2 when translating) |
+| `-d`, `--delete` | Delete characters in SET1 |
+| `-s`, `--squeeze-repeats` | Squeeze runs of repeated characters (SET1, or SET2 when translating) |
+| `-c`, `-C`, `--complement` | Use the complement of SET1 |
 
-### Character sets
+### Sets
 
-Character ranges are supported as `a-z`, `A-Z`, `0-9`, etc.
+| Form | Meaning |
+|------|---------|
+| `a-z` | Range (a reversed range such as `z-a` is an error, exit 1) |
+| `[:alnum:]` `[:alpha:]` `[:digit:]` `[:upper:]` `[:lower:]` `[:space:]` `[:punct:]` | Character classes |
+| `\n` `\t` `\r` `\a` `\b` `\f` `\v` `\\` `\NNN` | Escapes; any other backslash escape is the literal character |
 
-| Set | Expands to |
-|-----|------------|
-| `a-z` | All lowercase letters |
-| `A-Z` | All uppercase letters |
-| `0-9` | All digits |
-
-### Return type
-
-`TextOutput` objects (one per output line).
+A shorter SET2 is padded with its last character. The newline is an ordinary character, so `tr '\n' ,` and `tr -d '\n'` work. Output streams record by record, so `tail -f log | tr '\n' ' '` prints as input arrives.
 
 ### Examples
 
-```powershell
-# Convert lowercase to uppercase
+```bash
 echo "hello world" | tr 'a-z' 'A-Z'
-```
-
-```text
-HELLO WORLD
-```
-
-```powershell
-# Delete digits
 echo "abc123def" | tr -d '0-9'
-```
-
-```text
-abcdef
-```
-
-```powershell
-# Squeeze repeated spaces
 echo "hello    world" | tr -s ' '
 ```
 
 ```text
+HELLO WORLD
+abcdef
 hello world
 ```
 
-```powershell
-# Translate and squeeze
-echo "aabbcc" | tr -s 'abc' 'xyz'
+```bash
+# Keep only letters and newlines
+echo "hello, world!" | tr -cd '[:alpha:]\n'
 ```
 
 ```text
-xyz
+helloworld
+```
+
+```bash
+# Join lines (the last newline becomes a comma too)
+x=$(printf 'a\nb\nc\n' | tr '\n' ,); echo "$x"
+```
+
+```text
+a,b,c,
 ```
 
 ---
@@ -356,29 +341,34 @@ xyz
 Filter adjacent duplicate lines.
 
 ```
-uniq [OPTIONS] [FILE...]
+uniq [OPTION]... [INPUT [OUTPUT]]
 ```
 
 <Aside type="note">
-`uniq` only removes *consecutive* duplicates. Pipe through `sort` first if the duplicates are not adjacent.
+`uniq` only compares *adjacent* lines. Sort first if duplicates are scattered. The second operand is an output file, not a second input.
 </Aside>
 
 ### Flags
 
 | Flag | Description |
 |------|-------------|
-| `-c` | Prefix each line with its count of consecutive occurrences |
-| `-d` | Only print lines that are repeated |
+| `-c`, `--count` | Prefix each line with its run length |
+| `-d`, `--repeated` | Print one line per repeated run |
+| `-D`, `--all-repeated[=none\|prepend\|separate]` | Print every line of each repeated run |
+| `-u`, `--unique` | Print only lines that are not repeated |
+| `--group[=separate\|prepend\|append\|both]` | Print all lines, groups divided by an empty line |
+| `-i`, `--ignore-case` | Compare case-insensitively |
+| `-f N`, `--skip-fields=N` | Skip the first N fields |
+| `-s N`, `--skip-chars=N` | Skip the first N characters |
+| `-w N`, `--check-chars=N` | Compare at most N characters |
+| `-z`, `--zero-terminated` | NUL-separated records |
 
-### Return type
-
-`TextOutput` objects (one per output line).
+Obsolete `-N` and `+N` forms are accepted. Invalid counts, conflicting modes (`-cD`, `--group` with `-c/-d/-D/-u`), and a third operand exit 1. Under `-z`, stdin is buffered rather than streamed.
 
 ### Examples
 
-```powershell
-# Remove consecutive duplicates
-echo "apple" "apple" "banana" "banana" "apple" | uniq
+```bash
+printf 'apple\napple\nbanana\nbanana\napple\n' | uniq
 ```
 
 ```text
@@ -387,75 +377,80 @@ banana
 apple
 ```
 
-```powershell
-# Count occurrences
-echo "a" "a" "b" "a" "a" "a" | uniq -c
+```bash
+printf 'a\nA\nb\nb\nc\n' | uniq -i -c
 ```
 
 ```text
       2 a
-      1 b
-      3 a
+      2 b
+      1 c
 ```
 
-```powershell
-# Show only repeated lines
-echo "x" "y" "y" "z" | uniq -d
+```bash
+printf 'a\na\nb\nc\nc\n' | uniq -u
 ```
 
 ```text
-y
+b
 ```
 
 ---
 
 ## sort
 
-Sort lines of text. This is a **pipeline bridge** command: it sorts by the `BashText` representation but preserves the original typed objects.
+Sort lines. A **filter**: it compares the text of each record but emits the original objects.
 
 ```
-sort [OPTIONS] [FILE...]
+sort [OPTION]... [FILE...]
 ```
 
 <Aside type="tip">
-Because `sort` is a pipeline bridge, typed properties survive sorting. After `ls -la | sort -k5 -n`, each result is still an `LsEntry` with `.SizeBytes`, `.Permissions`, etc.
+Typed properties survive sorting. After `ls -la | sort -k5 -n`, each result is still an `LsEntry` with `.SizeBytes`, `.Permissions`, etc.
 </Aside>
 
 ### Flags
 
 | Flag | Description |
 |------|-------------|
-| `-r` | Reverse the sort order |
-| `-n` | Numeric sort |
-| `-u` | Remove duplicates (unique output) |
-| `-f` | Case-insensitive sort |
-| `-k N` | Sort by field N (1-based) |
-| `-t SEP` | Use SEP as the field delimiter |
-| `-h` | Human-numeric sort (e.g. `2K`, `1G`) |
-| `-V` | Version-number sort (e.g. `1.2`, `1.10`) |
-| `-M` | Month sort (e.g. `Jan`, `Feb`) |
-| `-c` | Check whether input is already sorted (sets exit code) |
+| `-n`, `--numeric-sort` | Numeric prefix |
+| `-g`, `--general-numeric-sort` | Floating-point prefix |
+| `-h`, `--human-numeric-sort` | Number with unit suffix (`2K`, `1G`) |
+| `-V`, `--version-sort` | Version order (dpkg rules) |
+| `-M`, `--month-sort` | Month names |
+| `-R`, `--random-sort` | Random order (equal keys stay together); `--random-source=FILE` makes it repeatable |
+| `--sort=WORD` | `numeric`, `general-numeric`, `human-numeric`, `month`, `version`, `random` |
+| `-r`, `--reverse` | Reverse the result |
+| `-f`, `--ignore-case` | Fold lowercase to uppercase |
+| `-b`, `--ignore-leading-blanks` | Ignore leading blanks |
+| `-d`, `--dictionary-order` | Consider only blanks and alphanumerics |
+| `-i`, `--ignore-nonprinting` | Consider only printable characters |
+| `-k POS1[,POS2]`, `--key=` | Sort key `F[.C][OPTS]`; repeatable; per-key modifiers `b d f g h i M n R r V` |
+| `-t SEP`, `--field-separator=SEP` | Field separator, one character (`\0` for NUL) |
+| `-u`, `--unique` | Keep the first line of each run of equal keys |
+| `-s`, `--stable` | Disable the last-resort whole-line comparison |
+| `-m`, `--merge` | Merge already-sorted files |
+| `-c`, `--check[=diagnose-first]` | Report the first disorder (exit 1) |
+| `-C`, `--check=quiet\|silent` | Check silently (exit 1 on disorder) |
+| `-o FILE`, `--output=FILE` | Write to FILE (may be one of the inputs) |
+| `-z`, `--zero-terminated` | NUL-separated records |
+| `--files0-from=FILE` | Read input names from FILE |
+| `-S`, `-T`, `--parallel`, `--batch-size`, `--compress-program` | Validated, no effect (nothing spills to disk) |
 
-### Return type
+A key with its own ordering modifier does not inherit the global options, as in GNU (`sort -r -k2n` sorts field 2 ascending).
 
-Original pipeline objects are passed through unchanged. When reading from files, `TextOutput` objects are produced.
+### Differences from GNU
+
+- `--debug` is refused (exit 2).
+- Comparison is ordinal (the C locale's order); there is no locale collation.
+- Under `-z`, stdin is buffered rather than streamed.
+
+Exit codes: 0 sorted, 1 disorder under `-c`/`-C`, 2 usage errors or an unreadable input (fatal, no output).
 
 ### Examples
 
-```powershell
-# Basic alphabetical sort
-echo "banana" "apple" "cherry" | sort
-```
-
-```text
-apple
-banana
-cherry
-```
-
-```powershell
-# Numeric sort in reverse
-echo "10" "2" "30" "1" | sort -rn
+```bash
+printf '10\n2\n30\n1\n' | sort -rn
 ```
 
 ```text
@@ -465,66 +460,79 @@ echo "10" "2" "30" "1" | sort -rn
 1
 ```
 
-```powershell
-# Sort by a specific field
-echo "alice 90" "bob 75" "carol 88" | sort -k2 -n
+```bash
+# Field 2 numerically; then multi-key: field 1, then field 3 numeric descending
+printf 'b 2\na 10\nc 1\n' | sort -k2,2n
+printf 'eng bob 50\neng amy 70\nops cat 60\n' | sort -k1,1 -k3,3nr
 ```
 
 ```text
-bob 75
-carol 88
-alice 90
+c 1
+b 2
+a 10
+eng amy 70
+eng bob 50
+ops cat 60
+```
+
+```bash
+printf '1.10\n1.2\n1.9\n' | sort -V
+printf '2K\n1G\n512\n' | sort -h
+```
+
+```text
+1.2
+1.9
+1.10
+512
+2K
+1G
 ```
 
 ```powershell
-# Pipeline bridge: typed objects survive sorting
+# PowerShell: typed objects survive sorting
 $procs = ps aux | sort -k3 -rn | head 5
 $procs[0].CPU      # Real decimal value
 $procs[0].Command  # Process name
-```
-
-```powershell
-# Sort file sizes (human-numeric)
-ls -lh | sort -k5 -h
-```
-
-```powershell
-# Unique lines only
-echo "a" "b" "a" "c" "b" | sort -u
-```
-
-```text
-a
-b
-c
 ```
 
 ---
 
 ## column
 
-Format input into aligned columns.
+Format input into columns (util-linux `column`).
 
 ```
-column [OPTIONS] [FILE...]
+column [OPTION]... [FILE...]
 ```
 
 ### Flags
 
 | Flag | Description |
 |------|-------------|
-| `-t` | Table mode: detect columns and align them |
-| `-s SEP` | Use SEP as the input column separator (used with `-t`) |
+| `-t`, `--table` | Table mode: split each line into cells and align them |
+| `-s CHARS`, `--separator=CHARS` | Input delimiter set for `-t` (default: whitespace); empty fields are kept |
+| `-o STR`, `--output-separator=STR` | Cell separator for `-t` (default: two spaces) |
+| `-l N`, `--table-columns-limit=N` | At most N columns; the last holds the rest of the line |
+| `-L`, `--keep-empty-lines` | Keep blank lines |
+| `-c N`, `--output-width=N` | Width for fill mode |
+| `-x`, `--fillrows` | Fill mode: fill rows before columns |
+| `-e`, `-d` | Accepted, no effect |
 
-### Return type
+Without `-t`, entries are filled down the columns of a grid sized to the width (`-c`, else `COLUMNS`, else 80), separated by tabs.
 
-`TextOutput` objects (one per output line).
+### Differences from util-linux
+
+- No terminal size query: width comes from `-c`, `COLUMNS`, or 80.
+- `-` is not a stdin operand.
+- Refused (exit 2): `-n -N -O -C -E -m -H -R -T -W -J -r -i -p`.
+
+Usage errors exit 1.
 
 ### Examples
 
-```powershell
-# Align whitespace-delimited data into columns
-echo "name age city" "alice 30 portland" "bob 25 seattle" | column -t
+```bash
+printf 'name age city\nalice 30 portland\nbob 25 seattle\n' | column -t
 ```
 
 ```text
@@ -533,110 +541,102 @@ alice  30   portland
 bob    25   seattle
 ```
 
-```powershell
-# Use a custom separator
-echo "alice:30:portland" "bob:25:seattle" | column -t -s:
+```bash
+printf 'alice:30:portland\nbob:25:seattle\n' | column -t -s: -o ' | '
 ```
 
 ```text
-alice  30  portland
-bob    25  seattle
-```
-
-```powershell
-# Format command output into a table
-mount | column -t
+alice | 30 | portland
+bob   | 25 | seattle
 ```
 
 ---
 
 ## join
 
-Join two sorted files on a common field (like a relational join).
+Join lines of two sorted files on a common field (GNU merge join).
 
 ```
-join [OPTIONS] FILE1 FILE2
+join [OPTION]... FILE1 FILE2
 ```
 
 <Aside type="note">
-Both files must be sorted on the join field. Use `sort` first if needed.
+Both files must be sorted on the join field. `-` reads standard input for one of them.
 </Aside>
 
 ### Flags
 
 | Flag | Description |
 |------|-------------|
-| `-t SEP` | Use SEP as the field delimiter (default: space) |
-| `-1 N` | Join on field N of the first file (default: 1) |
-| `-2 N` | Join on field N of the second file (default: 1) |
+| `-t CHAR` | Field separator (default: runs of blanks, leading blanks ignored; output joined by one space) |
+| `-1 N`, `-2 N`, `-j N` | Join field of file 1, file 2, or both (default: 1) |
+| `-a N` | Also print unpairable lines from file N (1 or 2; repeatable) |
+| `-v N` | Print only unpairable lines from file N |
+| `-o FORMAT` | Output fields: `0` (join field) and `F.N`, comma or blank separated; `-o auto` uses the first line's field count |
+| `-e STR` | Fill missing fields with STR |
+| `-i`, `--ignore-case` | Compare keys case-insensitively |
+| `--header` | Join the first lines as headers |
+| `--check-order`, `--nocheck-order` | Always, or never, check input order |
+| `-z`, `--zero-terminated` | NUL-separated records |
 
-### Return type
-
-`TextOutput` objects (one per matched pair).
+By default, an unsorted input after an unpairable line prints `join: FILE:LINE: is not sorted: ...` and ends with exit 1. Usage errors exit 1. Under `-z`, stdin is buffered rather than streamed.
 
 ### Examples
 
-```powershell
-# Join two files on the first field
-# names.txt: "1 alice\n2 bob\n3 carol"
-# scores.txt: "1 90\n2 75\n3 88"
+```bash
+# names.txt: 1 alice / 2 bob / 3 carol      scores.txt: 1 90 / 3 88 / 4 70
 join names.txt scores.txt
 ```
 
 ```text
 1 alice 90
-2 bob 75
 3 carol 88
 ```
 
-```powershell
-# Join on different fields with a custom delimiter
-join -t, -1 2 -2 1 data.csv lookup.csv
+```bash
+join -a1 -e NA -o auto names.txt scores.txt
 ```
 
-```powershell
-# Join employee and department data
-join employees.txt departments.txt
+```text
+1 alice 90
+2 bob NA
+3 carol 88
+```
+
+```bash
+join -o 1.2,2.2 names.txt scores.txt
+join -v2 names.txt scores.txt
+```
+
+```text
+alice 90
+carol 88
+4 70
 ```
 
 ---
 
 ## paste
 
-Merge lines from multiple files side by side.
+Merge corresponding lines of files.
 
 ```
-paste [OPTIONS] FILE1 [FILE2...]
+paste [OPTION]... [FILE...]
 ```
 
 ### Flags
 
 | Flag | Description |
 |------|-------------|
-| `-d DELIM` | Use DELIM as the output delimiter (default: tab) |
-| `-s` | Serial mode: paste each file as a single line |
+| `-d LIST`, `--delimiters=LIST` | Delimiters used in turn (escapes `\n \t \\ \0`; default: tab) |
+| `-s`, `--serial` | Paste each file's lines into one line |
 
-### Return type
-
-`TextOutput` objects (one per output line).
+`-` reads standard input; several `-` operands share one cursor, so `paste - - -` groups lines in threes. With no operands, `paste` reads standard input. `-z` is refused (exit 2).
 
 ### Examples
 
-```powershell
-# Merge two files side by side (tab-separated)
-# names.txt: "alice\nbob\ncarol"
-# ages.txt: "30\n25\n28"
-paste names.txt ages.txt
-```
-
-```text
-alice	30
-bob	25
-carol	28
-```
-
-```powershell
-# Use comma as delimiter
+```bash
+# names.txt: alice / bob / carol      ages.txt: 30 / 25 / 28
 paste -d, names.txt ages.txt
 ```
 
@@ -646,47 +646,49 @@ bob,25
 carol,28
 ```
 
-```powershell
-# Serial mode: each file becomes one line
-paste -s names.txt
+```bash
+paste -sd, names.txt
 ```
 
 ```text
-alice	bob	carol
+alice,bob,carol
+```
+
+```bash
+seq 6 | paste -d ':,' - - -
+```
+
+```text
+1:2,3
+4:5,6
 ```
 
 ---
 
 ## comm
 
-Compare two sorted files line by line. Output is displayed in three columns: lines only in file 1, lines only in file 2, and lines common to both.
+Compare two sorted files line by line. Column 1: lines only in FILE1; column 2: only in FILE2; column 3: in both. Columns are tab-indented.
 
 ```
-comm [OPTIONS] FILE1 FILE2
+comm [OPTION]... FILE1 FILE2
 ```
-
-<Aside type="note">
-Both files must be sorted. Use `sort` first if needed.
-</Aside>
 
 ### Flags
 
 | Flag | Description |
 |------|-------------|
-| `-1` | Suppress column 1 (lines only in file 1) |
-| `-2` | Suppress column 2 (lines only in file 2) |
-| `-3` | Suppress column 3 (lines common to both) |
+| `-1`, `-2`, `-3` | Suppress the column (bundle as `-12`, `-23`) |
+| `--total` | Append a summary line with the three counts |
+| `--output-delimiter=STR` | Column separator instead of tab |
+| `--check-order`, `--nocheck-order` | Always, or never, check input order |
+| `-z`, `--zero-terminated` | NUL-separated records |
 
-### Return type
-
-`TextOutput` objects (one per output line). Columns are tab-indented.
+By default an unsorted input prints `comm: file N is not in sorted order` and the run ends with exit 1. Usage errors exit 1.
 
 ### Examples
 
-```powershell
-# Show all three columns
-# file1.txt (sorted): "apple\nbanana\ncherry"
-# file2.txt (sorted): "banana\ncherry\ndate"
+```bash
+# file1.txt: apple / banana / cherry      file2.txt: banana / cherry / date
 comm file1.txt file2.txt
 ```
 
@@ -697,8 +699,7 @@ apple
 	date
 ```
 
-```powershell
-# Show only lines common to both files
+```bash
 comm -12 file1.txt file2.txt
 ```
 
@@ -707,41 +708,59 @@ banana
 cherry
 ```
 
-```powershell
-# Show lines unique to the first file
-comm -23 file1.txt file2.txt
+```bash
+comm --total -3 file1.txt file2.txt
 ```
 
 ```text
 apple
+	date
+1	1	2	total
 ```
 
 ---
 
 ## diff
 
-Compare two files and show the differences.
+Compare files or directories. The engine is a port of GNU diffutils 3.10's algorithm, so hunks match GNU's output exactly.
 
 ```
-diff [OPTIONS] FILE1 FILE2
+diff [OPTION]... FILE1 FILE2
 ```
 
 ### Flags
 
 | Flag | Description |
 |------|-------------|
-| `-u` | Unified diff format (shows context lines with `+`/`-` markers) |
+| `-u`, `-U N`, `--unified[=N]` | Unified format (default 3 context lines) |
+| `-c`, `-C N`, `--context[=N]` | Context format |
+| `-q`, `--brief` | Report only whether files differ |
+| `-s`, `--report-identical-files` | Report identical files |
+| `-r`, `--recursive` | Recurse into subdirectories |
+| `-N`, `--new-file` | Treat a missing file as empty |
+| `-i`, `--ignore-case` | Ignore case |
+| `-w`, `--ignore-all-space` | Ignore all white space |
+| `-b`, `--ignore-space-change` | Ignore changes in the amount of white space |
+| `-B`, `--ignore-blank-lines` | Ignore changes whose lines are all blank |
+| `--strip-trailing-cr` | Drop `\r` before each newline |
+| `-a`, `--text` | Treat binary files as text |
+| `-L LABEL`, `--label=LABEL` | Header label instead of name and timestamp (once per side) |
 
-### Return type
+Unified and context headers carry the file's modification time (`--- old.txt<TAB>2026-11-18 10:15:02.123456700 +0000`); use `--label` for stable output. A NUL in the first 4096 characters marks a file as binary (`Binary files a and b differ`). `-` reads standard input.
 
-`TextOutput` objects (one per output line). Produces no output if the files are identical.
+Directories: `Only in DIR: NAME` for one-sided entries, `Common subdirectories: ...` without `-r`, and a `diff OPTIONS A B` header line before each differing file.
+
+### Differences from GNU
+
+- Refused (exit 2): `-y`, `-e`, `-n`, `-p`, `-F`, `-x`, `-X`, `-S`, `-I`, `-t`, `-T`, `--color`, `--line-format` and the other formatting options.
+- Ambiguous long-option candidates are listed alphabetically.
+
+Exit codes: 0 same, 1 different, 2 trouble.
 
 ### Examples
 
-```powershell
-# Normal diff format
-# old.txt: "alpha\nbeta\ngamma"
-# new.txt: "alpha\nBETA\ngamma\ndelta"
+```bash
+# old.txt: alpha / beta / gamma      new.txt: alpha / BETA / gamma / delta
 diff old.txt new.txt
 ```
 
@@ -754,9 +773,8 @@ diff old.txt new.txt
 > delta
 ```
 
-```powershell
-# Unified diff format
-diff -u old.txt new.txt
+```bash
+diff -u --label old.txt --label new.txt old.txt new.txt
 ```
 
 ```text
@@ -770,7 +788,7 @@ diff -u old.txt new.txt
 +delta
 ```
 
-```powershell
-# Check if two files are identical (no output means identical)
-diff config.txt config.bak
+```bash
+# Exit status only
+diff -q config.txt config.bak && echo same
 ```

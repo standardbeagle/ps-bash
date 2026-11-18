@@ -1,129 +1,80 @@
 ---
 title: Pipeline Tools
-description: "tee and xargs commands for pipeline manipulation. tee splits output to files while preserving typed objects; xargs builds and executes commands from stdin."
+description: "tee, xargs, and the less/more pagers. tee splits output to files while preserving typed objects; xargs builds and executes commands from stdin."
 head:
   - tag: meta
     attrs:
       name: keywords
-      content: powershell tee, powershell xargs, bash tee powershell, bash xargs powershell, pipeline split file, build commands stdin, powershell pipeline tools
+      content: powershell tee, powershell xargs, bash tee powershell, bash xargs powershell, pipeline split file, build commands stdin, powershell pipeline tools, less, more, pager
 ---
 
 import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
 
 # Pipeline Tools
 
-`tee` and `xargs` for pipeline manipulation.
+`tee` and `xargs` for pipeline manipulation, plus the `less` and `more` pagers.
 
 ---
 
 ## tee
 
-Write pipeline input to one or more files while passing the original typed objects through to the next command.
+Copy pipeline input to one or more files while passing the original typed objects through to the next command.
 
 ### Syntax
 
 ```text
-tee [OPTIONS] [FILE...]
+tee [-a] [FILE]...
 ```
 
 ### Flags
 
-| Flag | Description | Example |
-|------|-------------|---------|
-| `-a` | Append to files instead of overwriting | `ls \| tee -a log.txt` |
+| Flag | Description |
+|------|-------------|
+| `-a`, `--append` | Append to the files instead of overwriting them |
+
+`-i`/`--ignore-interrupts` and `-p`/`--output-error` are refused (exit 2). Operands after `--` are always file names, so `tee -- -x` creates a file named `-x`.
+
+### Behavior
+
+- **Files open before any input arrives**, so `true | tee out.txt` still truncates `out.txt`.
+- **Streaming**: each record is written and flushed as it arrives, then passed on.
+- **Exact bytes**: a record without a trailing newline (`printf x`, `echo -n`) is written without one, so `printf x | tee f` produces a 1-byte file.
+- **Device names**: `/dev/null` discards, `/dev/stdout` and `/dev/stderr` write tee's own streams, `/dev/fd/N` writes descriptor N. No file is created for any of them.
+- **Errors**: a file that cannot be opened is reported (`tee: nodir/x: No such file or directory`) and the other files are still written. The exit status stays 0; GNU exits 1.
 
 ### Object behavior
 
-**tee** is a pipeline bridge command. It converts each input object to its `BashText` representation for file output, but passes the **original typed objects** through the pipeline unchanged.
-
-This means downstream commands receive the same rich objects they would without `tee` in the pipeline. The file gets plain text; the pipeline gets types.
-
-```powershell
-ls -la | tee listing.txt | grep '.ps1'
-```
-
-In this pipeline:
-- `listing.txt` receives the text rendering of every `LsEntry`
-- `grep` receives `LsEntry[]` objects and matches against their `BashText`
-- The final output is still typed `LsEntry` objects, not strings
+`tee` writes each object's `BashText` to the files but passes the **original typed objects** downstream. The file gets text; the pipeline keeps the types.
 
 ```powershell
 $results = ls -la | tee listing.txt | grep '.ps1'
-$results[0].GetType().Name   # PSCustomObject (LsEntry type)
-$results[0].Name             # "PsBash.psm1"
+$results[0].Name             # PsBash.psm1
 $results[0].SizeBytes        # 141234
 ```
 
-### Multiple files
-
-Pass multiple file paths to write the same content to several files at once:
-
-```powershell
-echo 'build started' | tee build.log /tmp/build-backup.log
-```
-
-Both `build.log` and `/tmp/build-backup.log` receive the text. The `TextOutput` object passes through.
+`listing.txt` holds the full `ls -la` text; `grep` receives `LsEntry` objects and matches against their `BashText`.
 
 ### Examples
 
-**Save directory listing while continuing the pipeline:**
-
-```powershell
-ls -la | tee listing.txt | grep '.ps1'
-```
-
-```text
--rw-r--r-- 1 you you 141234 Apr  2 10:30 PsBash.psm1
--rw-r--r-- 1 you you  28400 Apr  2 10:28 PsBash.Tests.ps1
-```
-
-The file `listing.txt` contains the full `ls -la` output. The grep results are still `LsEntry` objects.
-
-**Append to a log file:**
-
-```powershell
-echo 'deploy started' | tee -a deploy.log
-echo 'step 1 complete' | tee -a deploy.log
+```bash
+echo one | tee -a deploy.log > /dev/null
+echo two | tee -a deploy.log > /dev/null
 cat deploy.log
 ```
 
 ```text
-deploy started
-step 1 complete
+one
+two
 ```
 
-Each `echo` appends a line rather than overwriting.
-
-**Capture intermediate pipeline state for debugging:**
-
-```powershell
+```bash
+# Save an intermediate stage while the pipeline continues
 cat data.csv | grep -v '^#' | tee filtered.csv | wc -l
 ```
 
-```text
-42
+```bash
+echo 'build started' | tee build.log backup/build.log
 ```
-
-The file `filtered.csv` captures what the pipeline looked like after `grep -v` removed comments. `wc` still counts the original objects.
-
-**Write to file and inspect object properties:**
-
-```powershell
-$entries = ls -la /tmp | tee /tmp/snapshot.txt
-$entries[0].Permissions   # "-rw-r--r--"
-$entries[0].SizeBytes     # 4096
-```
-
-### Error handling
-
-If a target directory does not exist, `tee` reports an error for that file and continues writing to the remaining files:
-
-```powershell
-echo 'hello' | tee /nonexistent/dir/file.txt output.txt
-# tee: /nonexistent/dir/file.txt: No such file or directory
-```
-
-`output.txt` is still written. The object still passes through.
 
 ### Comparison
 
@@ -134,7 +85,7 @@ echo 'hello' | tee /nonexistent/dir/file.txt output.txt
 ls -la | tee listing.txt | grep '.ps1'
 ```
 
-Bash `tee` writes raw text to files and passes the same text through stdout. Everything is unstructured text throughout.
+Bash `tee` copies text to the files and to stdout.
 
 </TabItem>
 <TabItem label="PsBash">
@@ -143,7 +94,7 @@ Bash `tee` writes raw text to files and passes the same text through stdout. Eve
 ls -la | tee listing.txt | grep '.ps1'
 ```
 
-PsBash `tee` writes `BashText` to files but passes the original **typed objects** through. `grep` receives `LsEntry[]`, not strings. Types survive the entire pipeline.
+The file receives the same text; `grep` receives `LsEntry` objects.
 
 </TabItem>
 <TabItem label="PowerShell">
@@ -152,7 +103,7 @@ PsBash `tee` writes `BashText` to files but passes the original **typed objects*
 Get-ChildItem | Tee-Object -FilePath listing.txt | Where-Object { $_.Name -match '\.ps1$' }
 ```
 
-PowerShell's `Tee-Object` passes objects through and writes their `ToString()` rendering to a file. Similar concept, different syntax.
+`Tee-Object` passes objects through and writes their formatted rendering to the file.
 
 </TabItem>
 </Tabs>
@@ -161,63 +112,67 @@ PowerShell's `Tee-Object` passes objects through and writes their `ToString()` r
 
 ## xargs
 
-Build and execute commands from standard input. Input is split into arguments on blanks and newlines (quotes and backslashes protect blanks), and the arguments are appended to the specified command.
+Build and run commands from pipeline input. Input is split into arguments, and the arguments are appended to the command.
 
 ### Syntax
 
 ```text
-xargs [OPTIONS] COMMAND [INITIAL-ARGS...]
+xargs [OPTION]... [COMMAND [INITIAL-ARGS]...]
 ```
+
+Options end at the first operand: everything after the command name belongs to the command, so `xargs grep -il foo` passes `-il` to grep.
 
 ### Flags
 
-| Flag | Description | Example |
-|------|-------------|---------|
-| `-I REPLACE` | Replace occurrences of REPLACE in the command with each input line. Runs the command once per line. | `xargs -I {} echo 'Processing {}'` |
-| `-n NUM` | Pass at most NUM arguments per command invocation | `xargs -n 2 echo` |
+| Flag | Description |
+|------|-------------|
+| `-0`, `--null` | Items are separated by NUL |
+| `-d DELIM`, `--delimiter=DELIM` | Items are separated by DELIM (`\n`, `\t`, `\r`, `\0`, `\\` escapes allowed) |
+| `-I REPLACE` | Run once per input line, replacing REPLACE in the arguments with the line |
+| `-i[REPLACE]` | Obsolete form of `-I`; `REPLACE` defaults to `{}` |
+| `-n N` | At most N arguments per command |
+| `-L N` | Treated as `-n N` (see differences) |
+| `-r`, `--no-run-if-empty` | Do not run the command when there is no input |
+| `-t`, `--verbose` | Print each command line to stderr before running it |
+| `-p`, `--interactive` | There is no terminal to confirm on, so nothing runs: `xargs: failed to open /dev/tty for reading`, exit 1 |
+| `-P N`, `--max-procs=N` | Accepted; commands run one at a time |
 
-### Three modes
+### Input handling
 
-**xargs** operates in one of three modes depending on the flags:
+By default the input is split on blanks and newlines, as in GNU xargs; single quotes, double quotes, and backslashes keep blanks inside one argument. With `-I`/`-i`, each input line is one argument: leading blanks are stripped and quotes and backslashes are still applied. With `-0` or `-d`, items are split only on the delimiter.
 
-<Tabs>
-<TabItem label="Default mode">
+Typed pipeline objects contribute their `BashText`.
 
-All input items are collected and passed as arguments to a single invocation of the command.
+With no command, xargs runs `echo`. A bash command name that ps-bash implements (`rm`, `grep`, `basename`, ...) runs the ps-bash version; other names resolve to PowerShell commands or programs on `PATH`. Shell builtins such as `true` and `false` are not commands xargs can run. On Windows, where no `false` program is on `PATH`, `xargs false` prints `xargs: false: No such file or directory` and exits 127.
 
-```powershell
-echo -e 'one\ntwo\nthree' | xargs echo 'items:'
+### Exit status
+
+| Status | Meaning |
+|--------|---------|
+| `0` | Every command succeeded |
+| `123` | A command exited 1-125 |
+| `124` | A command exited 255 (xargs stops) |
+| `126` | The command could not be run (xargs stops) |
+| `127` | The command was not found (xargs stops) |
+
+### Differences from GNU
+
+- `-L N` counts input items, not input lines.
+- Input comes from the pipeline only; there is no `-a FILE`.
+- `-s`, `-x`, `-E`, and `--process-slot-var` are not implemented. An unrecognised option is taken as the command name.
+
+### Examples
+
+```bash
+printf 'a b\nc\n"d e" f\n' | xargs echo
 ```
 
 ```text
-items: one two three
+a b c d e f
 ```
 
-One command runs: `echo 'items:' one two three`.
-
-</TabItem>
-<TabItem label="-I replacement">
-
-The command runs once per input line. Each occurrence of the replacement string in the arguments is replaced with the current line.
-
-```powershell
-echo -e 'alice\nbob' | xargs -I {} echo 'Hello, {}!'
-```
-
-```text
-Hello, alice!
-Hello, bob!
-```
-
-Two commands run: `echo 'Hello, alice!'` and `echo 'Hello, bob!'`.
-
-</TabItem>
-<TabItem label="-n batch">
-
-Input items are split into batches of N, and the command runs once per batch.
-
-```powershell
-echo -e 'a\nb\nc\nd' | xargs -n 2 echo 'pair:'
+```bash
+printf 'a\nb\nc\nd\n' | xargs -n 2 echo pair:
 ```
 
 ```text
@@ -225,110 +180,59 @@ pair: a b
 pair: c d
 ```
 
-Two commands run: `echo 'pair:' a b` and `echo 'pair:' c d`.
-
-</TabItem>
-</Tabs>
-
-### Input handling
-
-**xargs** converts each piped object to its `BashText` representation and splits it on blanks and newlines, as GNU xargs does; single quotes, double quotes, and backslashes keep blanks inside one argument. With `-I`/`-i`, each input line is one argument instead (leading blanks are stripped, quotes and backslashes are still applied).
-
-```powershell
-ls | xargs echo 'files:'
+```bash
+printf 'a\nb x\n' | xargs -I {} echo 'Hello {}!'
 ```
 
-Each filename from `ls` becomes an argument to `echo`.
+```text
+Hello a!
+Hello b x!
+```
+
+```bash
+find . -name '*.tmp' -print0 | xargs -0 rm -f
+```
+
+---
+
+## less and more
+
+Pagers. When the output is not an interactive terminal (a pipe, a redirect, a script, the Bash tool), both pass their input through unchanged, so `cmd | less` in a script behaves like `cmd`.
+
+### Syntax
+
+```text
+less [OPTION]... [FILE]...
+more [OPTION]... [FILE]...
+```
+
+### less
+
+- **Non-interactive**: pipeline objects pass through as they are; file operands are emitted line by line. A missing file prints `less: FILE: No such file or directory` and exits 1.
+- **Interactive** (interactive shell, terminal on stdin and stdout): runs the native `less` found on `PATH` with your arguments (`-N`, `-i`, `-S`, and any other flag). Pipeline input is written to a temporary file first. With no native `less` installed, the input is printed instead.
+
+### more
+
+- Pipeline objects and file lines are emitted without paging. Dash and `+NUM` arguments are accepted and ignored.
+- There is no interactive paging loop; `more` prints everything in both modes.
+
+### Differences from GNU
+
+- GNU `more` writing to a non-terminal prints a `::::::::::::::` header with the file name before each file; ps-bash prints only the content.
+- `less nofile` exits 1; GNU `less` exits 0.
 
 ### Examples
 
-**Delete matching files:**
-
-```powershell
-find . -name '*.tmp' | xargs rm -f
+```bash
+printf 'a\nb\n' | less | wc -l     # 2: nothing is paged in a pipe
 ```
-
-All `.tmp` files found by `find` are passed as arguments to a single `rm -f` invocation.
-
-**Process each line individually with a placeholder:**
-
-```powershell
-cat urls.txt | xargs -I {} echo 'Downloading {}'
-```
-
-```text
-Downloading https://example.com/file1.tar.gz
-Downloading https://example.com/file2.tar.gz
-```
-
-Each URL is substituted into the `echo` command one at a time.
-
-**Batch arguments in groups:**
-
-```powershell
-echo -e 'a\nb\nc\nd\ne\nf' | xargs -n 3 echo 'batch:'
-```
-
-```text
-batch: a b c
-batch: d e f
-```
-
-**Chain with find to process discovered files:**
-
-```powershell
-find src -name '*.ps1' | xargs grep 'function'
-```
-
-Searches all `.ps1` files under `src/` for lines containing `function`.
-
-**Build commands from a file list:**
-
-```powershell
-cat manifest.txt | xargs -I {} cp {} /backup/
-```
-
-Copies each file listed in `manifest.txt` to the backup directory, one at a time.
-
-### Error handling
-
-Calling `xargs` with no command runs `echo`, as GNU xargs does:
-
-```powershell
-echo 'hello' | xargs
-# hello
-```
-
-Exit status follows GNU: `123` if any invocation exited 1-125, `124` if the command exited 255 (xargs stops), `127` if the command was not found and `126` if it could not be run (both stop xargs at once).
-
-### Comparison
-
-<Tabs>
-<TabItem label="Bash">
 
 ```bash
-find . -name '*.tmp' | xargs rm -f
+git log | less -S                  # in an interactive shell: native less
 ```
 
-Bash `xargs` supports many additional flags (`-0` for null-delimited input, `-P` for parallel execution, `-t` for tracing). It reads raw text from stdin.
+---
 
-</TabItem>
-<TabItem label="PsBash">
+## browse
 
-```powershell
-find . -name '*.tmp' | xargs rm -f
-```
-
-PsBash `xargs` supports `-I`/`-i`, `-n`, `-L`, `-0`, `-d`, `-r`, and `-t` (`-p` and `-P` are accepted but ignored). It extracts `BashText` from typed pipeline objects and splits on blanks and newlines. Commands are invoked via PowerShell's `&` operator.
-
-</TabItem>
-<TabItem label="PowerShell">
-
-```powershell
-Get-ChildItem -Filter '*.tmp' -Recurse | ForEach-Object { Remove-Item $_.FullName -Force }
-```
-
-PowerShell uses `ForEach-Object` for per-item processing. There is no built-in `xargs` equivalent; the pipeline itself serves a similar role with cmdlet-native syntax.
-
-</TabItem>
-</Tabs>
+`browse` is an interactive, object-aware table for pipeline output (`ls -la | browse`, `ps aux | browse`), with a scriptable `--list` mode. Without a terminal it prints a line-mode list instead of blocking. See [Interactive TUIs from a .psm1](/ps-bash/guides/interactive-tui/) for keys, flags, adapters, and the safety model.

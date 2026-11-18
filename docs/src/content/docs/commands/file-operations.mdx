@@ -1,11 +1,18 @@
 ---
 title: File Operations
-description: "cp, mv, rm, mkdir, rmdir, touch, and ln — copy, move, delete, create directories, update timestamps, and create links."
+description: "cp, mv, rm, mkdir, rmdir, touch, ln, chmod, install, and mktemp: copy, move, delete, create, timestamp, link, change modes, install files, and make temporary files."
 ---
 
 import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
 
-Commands for copying, moving, removing, and linking files and directories. All return `PsBash.TextOutput` objects when producing verbose output.
+Commands that change the filesystem. They print nothing unless asked to (`-v`, prompts, errors). Verbose lines are `PsBash.TextOutput` objects whose `BashText` is GNU's exact wording.
+
+Shared conventions (coreutils 9.4):
+
+- Options parse like GNU getopt: bundles (`-rfv`), options after operands, unique long-option abbreviations (`--rec`), and `--` to end options.
+- Unknown options and usage errors use GNU's wording and exit 1. A GNU option that ps-bash does not implement exits 2 with `recognized but not supported`.
+- Diagnostics name an operand as you typed it (`cp: cannot stat 'nosuch': No such file or directory`). Paths in `-v` output use forward slashes.
+- `-i` prompts go to stderr, and the answer is read from the command's stdin. No answer counts as "no". An answer starting with `y` or `Y` is yes.
 
 ---
 
@@ -14,63 +21,66 @@ Commands for copying, moving, removing, and linking files and directories. All r
 Copy files and directories.
 
 ```
-cp [OPTION]... SOURCE... DEST
+cp [OPTION]... SOURCE DEST
+cp [OPTION]... SOURCE... DIRECTORY
+cp [OPTION]... -t DIRECTORY SOURCE...
 ```
 
 ### Flags
 
 | Flag | Description |
 |------|-------------|
-| `-r`, `-R` | Copy directories recursively |
-| `-v` | Explain what is being done |
-| `-n` | Do not overwrite an existing file |
-| `-f` | Force: remove existing destination directory before copying |
+| `-r`, `-R`, `--recursive` | Copy directories recursively |
+| `-a`, `--archive` | `-dR --preserve=all` |
+| `-p` | `--preserve=mode,ownership,timestamps` |
+| `--preserve[=LIST]`, `--no-preserve=LIST` | Attributes to keep: `mode`, `timestamps`, `ownership`, `links`, `context`, `xattr`, `all` |
+| `-f`, `--force` | Overwrite a read-only destination; with `-l`/`-s`, replace an existing destination |
+| `-n`, `--no-clobber` | Do not overwrite an existing file |
+| `-i`, `--interactive` | Ask before overwriting |
+| `-u`, `--update[=WHEN]` | `older` (default): copy only when the source is newer; `all`; `none` |
+| `-v`, `--verbose` | Name each file copied |
+| `-l`, `--link` / `-s`, `--symbolic-link` | Make hard links / symbolic links instead of copying |
+| `-b`, `--backup[=CONTROL]`, `-S SUFFIX` | Back up an existing destination (`none`, `simple`, `existing`, `numbered`) |
+| `-t DIR`, `--target-directory=DIR` | Copy all sources into DIR |
+| `-T`, `--no-target-directory` | Treat DEST as a file, never as a directory to copy into |
+| `--parents` | Recreate each source's path under the destination directory |
+| `-L` / `-H` / `-P` / `-d` | Follow links always / on the command line only / never / never and keep links |
+| `-x`, `--one-file-system` | Do not descend into another device |
+| `--remove-destination` | Remove the destination before copying |
+| `--attributes-only` | Copy attributes, not data |
+| `--reflink[=WHEN]`, `--sparse=WHEN` | Accepted. `--reflink=always` fails: no supported filesystem clones |
+| `--strip-trailing-slashes`, `--debug` | As GNU |
 
-### Return type
+Refused (exit 2): `-Z`/`--context`, `--copy-contents`.
 
-No output by default. With `-v`, returns `PsBash.TextOutput` showing each copy operation.
+### Behaviour
+
+- The last of `-i`, `-n` and `--update=none|all` decides the overwrite policy. `-f` does not cancel `-i`.
+- `-n` prints GNU 9.4's warning `cp: warning: behavior of -n is non-portable and may change in future; use --update=none instead` and skips existing files with status 0.
+- `cp a b` where `b` is the same file (a hard link, or a symlink to it) fails with `'a' and 'b' are the same file`, status 1.
+- A missing destination parent is an error (`cp: cannot create regular file 'nodir/x': No such file or directory`). Parent directories are not created for you.
+- A copy that does not preserve timestamps gets the current time, as in GNU.
+- On Windows, `mode` preservation copies the read-only, hidden and archive attributes. `ownership`, `links` and `xattr` are accepted and do nothing. `--preserve=context` fails, as on a kernel without SELinux.
 
 ### Examples
 
-Copy a single file:
-
-```powershell
-cp config.json config.backup.json
-```
-
-Copy a directory recursively with verbose output:
-
-```powershell
-cp -rv src/ src-backup/
+```bash
+cp -rv src dst
 ```
 
 ```text
-'src/main.ps1' -> 'src-backup/main.ps1'
-'src/util.ps1' -> 'src-backup/util.ps1'
+'src' -> 'dst'
+'src/a' -> 'dst/a'
+'src/b' -> 'dst/b'
 ```
 
-Copy without overwriting existing files:
-
-```powershell
-cp -n defaults.json settings.json
+```bash
+cp -bv x src/a                       # 'x' -> 'src/a' (backup: 'src/a~')
+cp --update=none defaults.json settings.json
+cp -t dest/ file1.txt file2.txt
+cp --parents src/lib/util.sh out/    # creates out/src/lib/util.sh
+cp -a project project.bak
 ```
-
-Copy multiple files into a directory:
-
-```powershell
-cp file1.txt file2.txt dest/
-```
-
-### Behavior notes
-
-- When `DEST` is an existing directory, sources are copied into it.
-- `-n` silently skips files that already exist at the destination.
-- `-f` removes an existing destination directory before copying (useful for replacing a directory tree).
-- `-r` is required for directories; without it, `cp` emits an error and skips.
-
-### Comparison with bash
-
-Identical syntax. The difference is that verbose output returns a `PsBash.TextOutput` object with a `.BashText` property instead of plain text.
 
 ---
 
@@ -79,55 +89,40 @@ Identical syntax. The difference is that verbose output returns a `PsBash.TextOu
 Move or rename files and directories.
 
 ```
-mv [OPTION]... SOURCE... DEST
+mv [OPTION]... SOURCE DEST
+mv [OPTION]... SOURCE... DIRECTORY
+mv [OPTION]... -t DIRECTORY SOURCE...
 ```
 
 ### Flags
 
 | Flag | Description |
 |------|-------------|
-| `-v` | Explain what is being done |
-| `-n` | Do not overwrite an existing file |
-| `-f` | Force (do not prompt before overwriting) |
+| `-f`, `--force` | Do not prompt before overwriting |
+| `-n`, `--no-clobber` | Do not overwrite; say so (`mv: not replacing 'b'`) and exit 1 |
+| `-i`, `--interactive` | Ask before overwriting (`mv: overwrite 'b'? `) |
+| `-u`, `--update[=WHEN]` | Move only when the source is newer (`older`), or `all` / `none` |
+| `-v`, `--verbose` | Print `renamed 'a' -> 'b'` |
+| `-b`, `--backup[=CONTROL]`, `-S SUFFIX` | Back up an existing destination |
+| `-t DIR`, `--target-directory=DIR` | Move all sources into DIR |
+| `-T`, `--no-target-directory` | Treat DEST as a file |
 
-### Return type
+The last of `-f`, `-n`, `-i` and `--update=none|all` decides. Refused (exit 2): `-Z`/`--context`, `--strip-trailing-slashes`, `--no-copy`, `--debug`.
 
-No output by default. With `-v`, returns `PsBash.TextOutput` showing each move operation.
+### Behaviour
+
+- Hard links to the same file are `'a' and 'b' are the same file` (status 1). Moving a file onto a symlink that points at it replaces the symlink, as in GNU.
+- A declined `-i` prompt exits 1.
+- A missing destination parent: `mv: cannot move 's' to 'nodir/x': No such file or directory`.
 
 ### Examples
 
-Rename a file:
-
-```powershell
-mv old-name.txt new-name.txt
+```bash
+mv -v a c                  # renamed 'a' -> 'c'
+mv -n draft.md final.md    # mv: not replacing 'final.md'   (status 1)
+mv -t archive/ *.log
+mv --backup=numbered new.conf app.conf
 ```
-
-Move files into a directory with verbose output:
-
-```powershell
-mv -v *.log archive/
-```
-
-```text
-'error.log' -> 'archive/error.log'
-'access.log' -> 'archive/access.log'
-```
-
-Move without overwriting:
-
-```powershell
-mv -n draft.md final.md
-```
-
-### Behavior notes
-
-- When `DEST` is an existing directory, sources are moved into it.
-- `-n` silently skips when the destination already exists.
-- Works on both files and directories without needing a recursive flag.
-
-### Comparison with bash
-
-Identical syntax and semantics.
 
 ---
 
@@ -143,53 +138,46 @@ rm [OPTION]... FILE...
 
 | Flag | Description |
 |------|-------------|
-| `-r`, `-R` | Remove directories and their contents recursively |
-| `-f` | Ignore nonexistent files, never prompt |
-| `-v` | Explain what is being done |
+| `-r`, `-R`, `--recursive` | Remove directories and their contents |
+| `-d`, `--dir` | Remove empty directories |
+| `-f`, `--force` | Ignore missing files, never prompt |
+| `-i` | Prompt before every removal |
+| `-I` | Prompt once before removing more than three files, or when recursive |
+| `--interactive[=WHEN]` | `never`, `once` (`-I`), `always` (`-i`) |
+| `-v`, `--verbose` | Name each file removed |
+| `--preserve-root[=all]` | Refuse to remove `/` recursively (default). `=all` also skips operands on another device |
+| `--no-preserve-root` | Turn the GNU failsafe off (the protected-path guard below still applies) |
+| `--one-file-system` | Skip directories on another device than the operand |
 
-### Return type
+The last of `-f`, `-i`, `-I` and `--interactive` wins.
 
-No output by default. With `-v`, returns `PsBash.TextOutput` listing each removed path.
+### Behaviour
+
+- Prompts use GNU's text: `rm: remove regular file 'x'? `, `rm: remove regular empty file 'x'? `, `rm: descend into directory 'd'? `, `rm: remove 4 arguments? `.
+- `.` and `..` operands are refused: `rm: refusing to remove '.' or '..' directory: skipping '.'`.
+- `rm -r /` (also `C:/`, `//`) prints GNU's `rm: it is dangerous to operate recursively on '/'` and `rm: use --no-preserve-root to override this failsafe`.
+
+<Aside type="caution" title="Protected paths">
+On top of GNU's checks, `rm` never removes a filesystem root (`/`, `C:\`) or your home directory, even with `--no-preserve-root`: `rm: refusing to remove 'C:/Users/you': protected path`. Windows reserved device names (`NUL`, `CON`, ...) are not deleted either.
+</Aside>
 
 ### Examples
 
-Remove a single file:
-
-```powershell
-rm temp.txt
-```
-
-Remove a directory tree with verbose output:
-
-```powershell
-rm -rv build/
+```bash
+rm -rv b
 ```
 
 ```text
-removed 'build/output.js'
-removed 'build/output.css'
-removed 'build/'
+removed 'b/c/f'
+removed directory 'b/c'
+removed directory 'b'
 ```
 
-Silently remove files that may not exist:
-
-```powershell
+```bash
 rm -f maybe-missing.txt
+rm -d empty-dir
+rm -I *.log
 ```
-
-<Aside type="caution" title="Safety guards">
-`rm` refuses to delete the filesystem root (`/` or drive root) and the user home directory (`~`). Attempting to do so produces an error: `rm: refusing to remove '...': protected path`.
-</Aside>
-
-### Behavior notes
-
-- Without `-r`, attempting to remove a directory produces an error.
-- `-f` suppresses errors for missing files and suppresses the "missing operand" error when called with no arguments.
-- With `-v`, child items are listed before the parent directory.
-
-### Comparison with bash
-
-Identical flags. The safety guards against `rm /` and `rm ~` match common GNU coreutils `--preserve-root` behavior, enabled by default.
 
 ---
 
@@ -205,46 +193,32 @@ mkdir [OPTION]... DIRECTORY...
 
 | Flag | Description |
 |------|-------------|
-| `-p` | Create parent directories as needed, no error if existing |
-| `-v` | Print a message for each created directory |
+| `-p`, `--parents` | Create missing parents; no error if the directory exists |
+| `-v`, `--verbose` | Print `mkdir: created directory 'd'` for each directory created |
+| `-m MODE`, `--mode=MODE` | Mode of the new directory: octal or symbolic (`u=rwx,go=rx`, `a+x`, `+t`) |
 
-### Return type
+`-m` is checked before anything is created. A bad mode is `mkdir: invalid mode 'X'` (exit 1). With `-p`, only the last directory gets the mode. Refused (exit 2): `-Z`/`--context`.
 
-No output by default. With `-v`, returns `PsBash.TextOutput` for each directory created.
+### Differences from GNU
+
+On Windows only the owner-write bit maps to anything: a mode without it sets the read-only attribute. Other bits are accepted and have no effect.
+
+`mkdir -pv` reports only the last directory of each operand. GNU reports every parent it creates.
 
 ### Examples
 
-Create a single directory:
-
-```powershell
-mkdir output
-```
-
-Create nested directories:
-
-```powershell
+```bash
 mkdir -p src/components/ui
-```
-
-Create with verbose output:
-
-```powershell
-mkdir -v logs
+mkdir -pv p/q
 ```
 
 ```text
-mkdir: created directory 'logs'
+mkdir: created directory 'p/q'
 ```
 
-### Behavior notes
-
-- Without `-p`, creating a directory that already exists produces an error.
-- Without `-p`, creating a directory whose parent does not exist produces an error.
-- `-p` silently succeeds when the directory already exists.
-
-### Comparison with bash
-
-Identical syntax and semantics.
+```bash
+mkdir -m 700 secrets
+```
 
 ---
 
@@ -260,55 +234,34 @@ rmdir [OPTION]... DIRECTORY...
 
 | Flag | Description |
 |------|-------------|
-| `-p` | Remove directory and its empty ancestors |
-| `-v` | Print a message for each removed directory |
+| `-p`, `--parents` | Also remove each empty ancestor named in the operand |
+| `-v`, `--verbose` | Print `rmdir: removing directory, 'd'` |
 
-### Return type
+Refused (exit 2): `--ignore-fail-on-non-empty`.
 
-No output by default. With `-v`, returns `PsBash.TextOutput` for each directory removed.
+With `-pv`, the operand is reported as typed and each removed parent by its full path. GNU prints every name as typed.
 
 ### Examples
 
-Remove an empty directory:
-
-```powershell
-rmdir old-output
-```
-
-Remove a chain of empty parent directories:
-
-```powershell
-rmdir -pv a/b/c
+```bash
+rmdir -pv a/b/c        # run in C:/work
 ```
 
 ```text
 rmdir: removing directory, 'a/b/c'
-rmdir: removing directory, 'a/b'
-rmdir: removing directory, 'a'
+rmdir: removing directory, 'C:/work/a/b'
+rmdir: removing directory, 'C:/work/a'
 ```
 
-Attempt to remove a non-empty directory (produces an error):
-
-```powershell
-rmdir src
-# rmdir: failed to remove 'src': Directory not empty
+```bash
+rmdir src       # rmdir: failed to remove 'src': Directory not empty   (status 1)
 ```
-
-### Behavior notes
-
-- Only removes empty directories. Use `rm -r` for directories with contents.
-- `-p` walks up the path removing each ancestor only while it is empty.
-- Errors on non-directory targets and missing paths.
-
-### Comparison with bash
-
-Identical syntax and semantics.
 
 ---
 
 ## touch
 
-Create files or update timestamps.
+Create files or change their timestamps.
 
 ```
 touch [OPTION]... FILE...
@@ -316,120 +269,212 @@ touch [OPTION]... FILE...
 
 ### Flags
 
-| Flag | Description |
-|------|-------------|
-| `-d` | Use the specified date string instead of the current time |
+| Flag | Argument | Description |
+|------|----------|-------------|
+| `-a` | -- | Change only the access time |
+| `-m` | -- | Change only the modification time |
+| `--time` | WORD | `atime`/`access`/`use` = `-a`, `mtime`/`modify` = `-m` |
+| `-c`, `--no-create` | -- | Do not create missing files |
+| `-d`, `--date` | STRING | Use a GNU date string instead of now |
+| `-t` | STAMP | `[[CC]YY]MMDDhhmm[.ss]`, local time |
+| `-r`, `--reference` | FILE | Use FILE's times |
+| `-h`, `--no-dereference` | -- | Change a symlink itself, not its target |
+| `-f` | -- | Ignored, as in GNU |
 
-### Return type
+### Behaviour
 
-No output. Creates missing files as empty files and updates `LastWriteTime` and `LastAccessTime` on existing files.
+- `-d` takes the same strings as `date -d`: `3 hours ago`, `yesterday`, `next friday`, `2024-01-02 10:00`, `@1700000000`, zone suffixes. An impossible date or trailing junk is `touch: invalid date format 'X'` (exit 1).
+- `-t` with `-d` or `-r` is `touch: cannot specify times from more than one source` (exit 1).
+- Without `-h`, a symlink is resolved first, so a dangling link creates its target.
+- Missing parent directories are not created.
 
 ### Examples
 
-Create a new empty file:
-
-```powershell
+```bash
 touch notes.txt
+touch -d '2024-01-02 10:00' report.txt
+touch -t 202401021030.00 report.txt
+touch -r reference.txt copy.txt
+touch -c maybe-missing.txt     # no file is created
 ```
-
-Update the timestamp of an existing file to now:
-
-```powershell
-touch README.md
-```
-
-Set a specific timestamp:
-
-```powershell
-touch -d '2025-01-15 09:30:00' report.txt
-```
-
-Create multiple files at once:
-
-```powershell
-touch file1.txt file2.txt file3.txt
-```
-
-### Behavior notes
-
-- If the file does not exist and its parent directory exists, an empty file is created.
-- If the parent directory does not exist, `touch` emits an error instead of creating intermediate directories.
-- `-d` accepts any date string parseable by `[System.DateTime]::Parse()`.
-
-### Comparison with bash
-
-Supports `-d` for setting timestamps. Bash `touch` also supports `-t`, `-a`, `-m`, and `-c`; those are not implemented.
 
 ---
 
 ## ln
 
-Create hard or symbolic links between files.
+Create hard or symbolic links.
 
 ```
 ln [OPTION]... TARGET LINK_NAME
+ln [OPTION]... TARGET
+ln [OPTION]... TARGET... DIRECTORY
+ln [OPTION]... -t DIRECTORY TARGET...
 ```
 
 ### Flags
 
 | Flag | Description |
 |------|-------------|
-| `-s` | Create a symbolic link instead of a hard link |
-| `-f` | Remove existing destination file before creating the link |
-| `-v` | Explain what is being done |
+| `-s`, `--symbolic` | Make a symbolic link instead of a hard link |
+| `-f`, `--force` | Replace an existing LINK_NAME |
+| `-i`, `--interactive` | Ask before replacing (`ln: replace 'b'? `) |
+| `-r`, `--relative` | Store the target relative to the link's directory (needs `-s`) |
+| `-v`, `--verbose` | Print each link made |
+| `-n`, `--no-dereference` | Accepted (a symlink-to-directory LINK_NAME is never descended into) |
+| `-b`, `--backup[=CONTROL]`, `-S SUFFIX` | Back up an existing LINK_NAME |
+| `-t DIR`, `--target-directory=DIR` | Make the links in DIR |
+| `-T`, `--no-target-directory` | Treat LINK_NAME as a file |
 
-### Return type
+Refused (exit 2): `-d`/`-F`/`--directory`, `-L`/`--logical`, `-P`/`--physical`.
 
-No output by default. With `-v`, returns `PsBash.TextOutput` showing the created link.
+### Differences from GNU
+
+- GNU follows a LINK_NAME that is a symlink to a directory unless `-n` is given. ps-bash always treats it as a plain name.
+- GNU refuses with "same file" when LINK_NAME already links to TARGET. ps-bash does not make this check.
+- With `-r` on Windows, targets on two different drives have no relative path, so the absolute target is stored.
 
 ### Examples
 
-Create a symbolic link:
-
-```powershell
-ln -s /path/to/target shortcut
-```
-
-Create a hard link with verbose output:
-
-```powershell
-ln -v original.txt hardlink.txt
-```
-
-```text
-'hardlink.txt' => 'original.txt'
-```
-
-Force-replace an existing link:
-
-```powershell
-ln -sf /new/target existing-link
-```
-
-Create a symbolic link with verbose output:
-
-```powershell
-ln -sv config.json config-link.json
-```
-
-```text
-'config-link.json' -> 'config.json'
+```bash
+ln -v original.txt hardlink.txt     # 'hardlink.txt' => 'original.txt'
+ln -sv config.json config-link.json # 'config-link.json' -> 'config.json'
+ln -sfv /new/target existing-link
+ln -srv f d2/                       # 'd2/f' -> '../f'
 ```
 
 <Aside type="caution" title="Windows symlinks">
-Creating symbolic links on Windows requires **Developer Mode** enabled or running PowerShell as **Administrator**. Hard links work without elevation but only within the same volume.
+Creating symbolic links on Windows needs Developer Mode or an elevated session. A failure is reported (`ln: failed to create symbolic link ...`), never ignored. Hard links need no privilege but must stay on one NTFS volume.
 </Aside>
 
-### Behavior notes
+---
 
-- Without `-s`, creates a hard link (target must be a file on the same filesystem).
-- With `-s`, creates a symbolic link (can target files or directories, and can cross filesystems).
-- `-f` removes the existing destination before creating the link.
-- Verbose output uses `->` for symbolic links and `=>` for hard links.
+## chmod
 
-### Comparison with bash
+Change file mode bits.
 
-Identical flags. The Windows symlink restriction is a platform limitation, not a PsBash difference.
+```
+chmod [OPTION]... MODE FILE...
+```
+
+### Flags
+
+| Flag | Description |
+|------|-------------|
+| `-R`, `--recursive` | Change directories and their contents (symlinks met in the walk are skipped) |
+| `-v`, `--verbose` | Report every file |
+| `-c`, `--changes` | Report only files whose mode changed |
+| `-f`, `--silent`, `--quiet` | Suppress most error messages |
+| `--preserve-root`, `--no-preserve-root` | Accepted |
+
+MODE is octal (`644`) or symbolic (`u+x`, `go-w`, `a=r`, `+x`, `g=u`, and comma lists). A dash-leading symbolic mode such as `-w` or `-x` is taken as the MODE, not as an option. An invalid mode is `chmod: invalid mode: 'X'` (exit 1) and no file is touched. A missing file is `chmod: cannot access 'x': No such file or directory`. The other files are still changed and the status is 1.
+
+Not supported: `--reference=FILE` (an error, exit 1).
+
+### Differences from GNU
+
+Windows has no mode bits. Only the owner-write bit maps, to the read-only attribute: `chmod -w f` and `chmod 444 f` set it, `chmod +w f` and `chmod 644 f` clear it. Every other bit is accepted and changes nothing, so `chmod +x script.sh` succeeds, as it does in Git Bash. `-v`/`-c` report the stand-in modes `0644`/`0755` (`0444`/`0555` when read-only). On Linux and macOS the bits are set exactly.
+
+### Examples
+
+```bash
+chmod +x build.sh
+chmod -v 444 f
+```
+
+```text
+mode of 'f' changed from 0644 (rw-r--r--) to 0444 (r--r--r--)
+```
+
+```bash
+chmod -R go-w public/
+```
+
+---
+
+## install
+
+Copy files into place, or create directories.
+
+```
+install [OPTION]... SOURCE DEST
+install [OPTION]... SOURCE... DIRECTORY
+install [OPTION]... -t DIRECTORY SOURCE...
+install -d [OPTION]... DIRECTORY...
+```
+
+### Flags
+
+| Flag | Argument | Description |
+|------|----------|-------------|
+| `-d` | -- | Create each operand as a directory, with parents |
+| `-D` | -- | Create the destination's leading directories, then copy |
+| `-t` | DIR | Copy all sources into DIR (created if missing) |
+| `-m` | MODE | Accepted; the mode is not applied |
+| `-s` | -- | Accepted; binaries are not stripped |
+| `-S` | SUFFIX | Suffix for the swapped-aside old file (default `.old`) |
+| `-v` | -- | Report each copy and directory |
+
+### Behaviour
+
+- When the destination exists, it is renamed to `DEST.old` (the `-S` suffix), the new file is copied in, and the old file is deleted. If the old file is still locked, as a running `.exe` is on Windows, its deletion is scheduled for the next reboot. This lets `install` replace a binary that is in use.
+- A copy creates the destination's parent directory if it is missing.
+- Options are matched case-sensitively and cannot be bundled: write `-d -v`, not `-dv`.
+
+### Differences from GNU
+
+- `-m` and `-s` have no effect, and `-o`/`-g` are not supported. Install the file, then run `chmod` if the mode matters.
+- `-S` names the swap suffix. In GNU it is the backup suffix.
+- `-d` and `-D` are told apart by the operands, not by case. With no `-t` and no operand that is an existing file, the flag creates directories. Otherwise it creates leading directories for the copy.
+- `--` ends options. Long options (`--mode=...`, `--target-directory=...`) are not recognised.
+- `-v` prints full paths (`'C:/work/a' -> 'C:/work/b'`), reports a replaced destination as `install: swapped 'C:/work/b' -> 'C:/work/b.old'` instead of `removed 'b'`, and with `-d` reports only the last directory created.
+- With no operands, the message is `install: missing file operand` without the `Try 'install --help'` hint. The exit status is 1, as in GNU.
+
+### Examples
+
+```bash
+install -v a b             # 'C:/work/a' -> 'C:/work/b'  (run in C:/work)
+install -d -v x/y          # install: creating directory 'x/y'
+install -t ~/.local/bin ps-bash.exe
+install -D build/app.exe dist/bin/app.exe
+```
+
+---
+
+## mktemp
+
+Create a uniquely named temporary file or directory and print its name.
+
+```
+mktemp [-d] [-p DIR] [TEMPLATE]
+```
+
+### Flags
+
+| Flag | Argument | Description |
+|------|----------|-------------|
+| `-d` | -- | Create a directory instead of a file |
+| `-p` | DIR | Create the entry in DIR |
+
+### Behaviour
+
+- Without `-p`, the entry is created in the `ps-bash/proc-sub/` folder of the system temp directory. `$TMPDIR` is not consulted.
+- A TEMPLATE's trailing `X` run is dropped, the rest of its base name becomes a prefix, and a random 8.3 name is appended (`app.XXXXXX` gives something like `app.k3xq0v1z.ab4`). A directory part in the template is ignored.
+- Files are created exclusively (never adopting an existing path), and with owner-only permissions on Linux and macOS (0600 file, 0700 directory).
+- The printed name is in shell form (`C:/Users/you/AppData/Local/Temp/ps-bash/proc-sub/...`). The output object also has a `Path` property with the native path.
+
+### Differences from GNU
+
+- The X count does not set the length of the random part.
+- `-t`, `-u`/`--dry-run`, `-q`, `--suffix` and `--tmpdir` are not options: any other word is taken as the TEMPLATE, and the last one wins.
+
+### Examples
+
+```bash
+tmp=$(mktemp)
+dir=$(mktemp -d)
+work=$(mktemp -d build.XXXXXX)
+trap 'rm -rf "$dir"' EXIT
+```
 
 ---
 
@@ -438,24 +483,18 @@ Identical flags. The Windows symlink restriction is a platform limitation, not a
 <Tabs>
 <TabItem label="Path separators">
 
-All commands accept both `/` and `\` as path separators on all platforms. Verbose output always uses forward slashes (`/`) for consistency with bash conventions.
+All commands accept `/` and `\` (and `/c/x`, `/mnt/c/x`) as input. Their own output, including `-v` lines and error messages, uses forward slashes.
 
 </TabItem>
 <TabItem label="Symlinks on Windows">
 
-Symbolic links (`ln -s`) on Windows require one of:
-- **Developer Mode** enabled in Settings > Update & Security > For developers
-- Running PowerShell as **Administrator**
-
-Hard links (`ln` without `-s`) work without elevation but the target must be a file on the same NTFS volume.
+`ln -s` and `cp -s` need **Developer Mode** (Settings > System > For developers) or an elevated session. Hard links (`ln`, `cp -l`) need no elevation but must stay on one NTFS volume. Tests and scripts that only need a directory link can use a junction instead.
 
 </TabItem>
 <TabItem label="Permissions">
 
-File permission behavior differs by platform:
-
-- **Linux/macOS**: File permissions are preserved during `cp` and `mv` operations via the underlying .NET APIs.
-- **Windows**: NTFS ACLs apply. Unix-style permission strings shown by `ls -l` are approximated from file attributes.
+- **Linux/macOS**: `chmod`, `mkdir -m` and `cp -p` set real permission bits.
+- **Windows**: NTFS has ACLs, not mode bits. Only the owner-write bit maps, to the read-only attribute. `ls -l` and `stat` show synthesised modes (0644 files, 0755 directories and executables).
 
 </TabItem>
 </Tabs>

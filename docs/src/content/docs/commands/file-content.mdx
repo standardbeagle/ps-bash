@@ -7,616 +7,634 @@ import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
 
 Commands for reading file content, counting statistics, transforming text, and splitting files into pieces.
 
+All of them follow the GNU coreutils option grammar: bundled short flags (`-qn2`), long options and unambiguous abbreviations (`--lines=5`, `--li=5`), options after operands, `--` to end options, and `-` for standard input. An unknown option or a bad number prints GNU's message and exits 1; a valid GNU option that ps-bash does not implement is refused with exit 2 instead of being ignored.
+
+<Aside type="note">
+**Records are not lines.** A pipeline record that ends mid-line (`printf a`, `echo -n`, a file with no final newline) is joined with the next record before a line-reading command sees it, so `{ printf a; printf 'b\n'; } | rev` reads one line, `ab`. Empty lines, including trailing ones, are kept: `printf 'a\n\n\n' | head` writes the same four bytes back. A missing final newline is copied through.
+</Aside>
+
 ## cat
 
-Concatenate files and print on the standard output. Returns `CatLine` objects with `LineNumber`, `Content`, and `FileName` properties.
+Concatenate files and pipeline input. Without flags, `cat` passes pipeline objects through unchanged and emits file lines as `PsBash.TextOutput`. With a formatting flag, every line becomes a `PsBash.CatLine`.
 
 ### Syntax
 
 ```text
-cat [OPTIONS] [FILE...]
+cat [OPTION]... [FILE]...
 ```
 
 ### Flags
 
 | Flag | Description |
 |------|-------------|
-| `-n` | Number all output lines |
-| `-b` | Number non-blank output lines (overrides `-n`) |
-| `-s` | Squeeze consecutive blank lines into one |
-| `-E` | Display `$` at the end of each line |
-| `-T` | Display `^I` for tab characters |
+| `-n`, `--number` | Number all output lines |
+| `-b`, `--number-nonblank` | Number non-blank lines (overrides `-n`) |
+| `-s`, `--squeeze-blank` | Squeeze runs of blank lines into one |
+| `-E`, `--show-ends` | Show `$` at the end of each line |
+| `-T`, `--show-tabs` | Show tabs as `^I` |
+| `-v`, `--show-nonprinting` | Show control bytes as `^X` (DEL as `^?`) and bytes 128 and above as `M-X` |
+| `-A`, `--show-all` | Same as `-vET` |
+| `-e` | Same as `-vE` |
+| `-t` | Same as `-vT` |
+| `-u` | Ignored, as in GNU |
+
+Operands are written in argument order, so `cat head.txt - tail.txt` puts the pipeline between the two files.
+
+### Byte handling
+
+- A text file operand is read CRLF- and BOM-transparently: `cat crlf.txt | wc -c` is one byte short per CR. A `< file` redirect is read exactly. The same policy applies to every line tool on this page.
+- A file with a NUL byte in its first 8 KB is treated as binary and copied byte for byte, so `cat image.png > copy.png` produces an identical file.
+- With `-v`, `-A`, `-e`, or `-t` the file is read byte-exactly, so a carriage return shows as `^M`.
 
 ### Return type
 
-`PsBash.CatLine` with properties:
+- **No flags**: pipeline objects pass through; file lines are `PsBash.TextOutput`.
+- **Any formatting flag**: `PsBash.CatLine` with these properties:
 
 | Property | Type | Description |
 |----------|------|-------------|
-| `LineNumber` | int | Line number in the file |
+| `LineNumber` | int | Line number in the output |
 | `Content` | string | Raw line content |
 | `FileName` | string | Source file path (empty for pipeline input) |
-| `BashText` | string | Formatted output including line numbers and transformations |
+| `BashText` | string | Formatted line, including the number and markers |
 
 ### Examples
 
-```powershell
-# Display file contents
-cat README.md
-```
-
-```powershell
-# Number all lines
-cat -n script.ps1
+```bash
+printf 'alpha\n\tbeta\n\n\ngamma\n' > notes.txt
+cat -n notes.txt
 ```
 
 ```text
-     1	#!/usr/bin/env pwsh
-     2	Import-Module PsBash
-     3	
-     4	ls -la | grep '.log'
+     1	alpha
+     2		beta
+     3
+     4
+     5	gamma
+```
+
+```bash
+cat -sb notes.txt      # squeeze blanks, number non-blank lines
+```
+
+```text
+     1	alpha
+     2		beta
+
+     3	gamma
+```
+
+```bash
+printf 'a\tb\r\n' | cat -A
+```
+
+```text
+a^Ib^M$
 ```
 
 ```powershell
-# Number only non-blank lines and show line endings
-cat -b -E notes.txt
-```
-
-```powershell
-# Squeeze blank lines and show tabs
-cat -s -T Makefile
-```
-
-```powershell
-# Access typed properties
-$lines = cat src/PsBash.psm1
-$lines[0].Content       # raw text of line 1
-$lines.Count             # total line count
-$lines | Where-Object { $_.Content -match 'function' }
-```
-
-```powershell
-# Concatenate multiple files
-cat header.txt body.txt footer.txt
+# CatLine properties (any formatting flag)
+$lines = cat -n notes.txt
+$lines[0].Content      # alpha
+$lines[0].LineNumber   # 1
 ```
 
 ---
 
 ## head
 
-Output the first part of files. In pipeline mode, `head` is a **pipeline bridge**: it passes through the original typed objects unchanged.
+Output the first part of files. On pipeline input `head` is a **pipeline bridge**: it passes the original typed objects through unchanged.
 
 ### Syntax
 
 ```text
-head [-n COUNT] [FILE...]
+head [OPTION]... [FILE]...
+head -NUM [FILE]...
 ```
 
 ### Flags
 
 | Flag | Description |
 |------|-------------|
-| `-n` | Number of lines to output (default: 10) |
+| `-n N`, `--lines=N` | First N lines (default 10). `-n -K` prints all but the last K lines |
+| `-c N`, `--bytes=N` | First N bytes. `-c -K` prints all but the last K bytes |
+| `-q`, `--quiet`, `--silent` | Never print `==> FILE <==` headers |
+| `-v`, `--verbose` | Always print headers |
+| `-z`, `--zero-terminated` | Records end in NUL instead of newline |
+| `-NUM` | Obsolete form of `-n NUM` (first argument only; `-5q` and `-2k` are accepted) |
+
+N accepts GNU size suffixes (`1K`, `1MB`, `2KiB`). The last of `-c`/`-n` wins. With two or more files, headers are printed by default and a blank line separates the files.
+
+On a pipe, `head -c N` stops the upstream command after the Nth byte, so `yes | head -c 5` ends.
 
 ### Return type
 
 - **File mode**: `PsBash.CatLine` objects
-- **Pipeline mode**: passes through whatever type it receives
+- **Pipeline mode**: whatever type it receives
 
 <Aside type="tip">
-`head` preserves the type of its input. `cat file.txt | head -5` returns `CatLine` objects. `ls -la | head -5` returns `LsEntry` objects. `ps aux | head -5` returns `PsEntry` objects.
+`head` preserves the type of its input. `ls -la | head -5` returns `LsEntry` objects and `ps aux | head -5` returns `PsEntry` objects.
 </Aside>
+
+### Differences from GNU
+
+- A bare number as the first argument is taken as the count (`head 5`). GNU would read a file named `5`.
 
 ### Examples
 
-```powershell
-# First 10 lines of a file (default)
-head README.md
+```bash
+printf '1\n2\n3\n4\n5\n' | head -n -2
+```
+
+```text
+1
+2
+3
+```
+
+```bash
+printf 'a\nb\n' > a.txt; printf 'c\nd\n' > b.txt
+head -n 1 a.txt b.txt
+```
+
+```text
+==> a.txt <==
+a
+
+==> b.txt <==
+c
 ```
 
 ```powershell
-# First 3 lines
-head -n 3 README.md
-```
-
-```powershell
-# Pipeline bridge -- returns LsEntry objects, not strings
+# Pipeline bridge: LsEntry objects, not strings
 $top5 = ls -la | sort -k5 -rn | head -n 5
-$top5[0].SizeBytes    # real integer
-$top5[0].Name          # real string
-```
-
-```powershell
-# Pipeline bridge -- returns PsEntry objects
-$procs = ps aux | sort -k3 -rn | head 5
-$procs[0].CPU          # real double
-$procs[0].Command      # real string
+$top5[0].SizeBytes    # integer
+$top5[0].Name         # string
 ```
 
 ---
 
 ## tail
 
-Output the last part of files. Like `head`, `tail` is a **pipeline bridge** that preserves original object types.
+Output the last part of files. Like `head`, `tail` is a **pipeline bridge** that preserves the original object types.
 
 ### Syntax
 
 ```text
-tail [-n COUNT] [FILE...]
+tail [OPTION]... [FILE]...
+tail -NUM | +NUM [FILE]
 ```
 
 ### Flags
 
 | Flag | Description |
 |------|-------------|
-| `-n` | Number of lines to output (default: 10). Prefix with `+` to start from line N. |
+| `-n N`, `--lines=N` | Last N lines (default 10). `+N` starts at line N |
+| `-c N`, `--bytes=N` | Last N bytes. `+N` starts at byte N |
+| `-f`, `--follow[=name\|descriptor]` | Keep reading as the file grows |
+| `-F` | Same as `--follow=name --retry` |
+| `--retry` | Keep trying to open a file that is missing or inaccessible |
+| `--pid=PID` | With `-f`, stop when process PID exits |
+| `-s N`, `--sleep-interval=N` | Seconds between polls with `-f` |
+| `--max-unchanged-stats=N` | Validated only; the replacement check runs on every poll |
+| `-q`, `--quiet`, `--silent` | Never print headers |
+| `-v`, `--verbose` | Always print headers |
+| `-z`, `--zero-terminated` | Records end in NUL instead of newline |
+
+Numbers use the same rules as `head`. The obsolete `-NUM` / `+NUM` forms (with optional `b`, `c`, `l`, `f` letters) are honoured only when the rest of the command line leaves no ambiguity (at most one file); otherwise tail reports `option used in invalid context`, as GNU does.
+
+When following, tail prints GNU's notices: `has become inaccessible`, `has appeared;  following new file`, `has been replaced`, `file truncated`. Descriptor mode follows by path.
 
 ### Return type
 
 - **File mode**: `PsBash.CatLine` objects
-- **Pipeline mode**: passes through whatever type it receives
+- **Pipeline mode**: whatever type it receives
 
 ### Examples
 
-```powershell
-# Last 10 lines of a file (default)
-tail server.log
+```bash
+printf '1\n2\n3\n4\n5\n' | tail -n +3
 ```
 
-```powershell
-# Last 5 lines
-tail -n 5 server.log
+```text
+3
+4
+5
 ```
 
-```powershell
-# From line 3 onward (skip first 2 lines)
-tail -n +3 data.csv
+```bash
+printf 'abcdefgh\n' | tail -c 4     # the last 4 bytes include the newline
 ```
 
-```powershell
-# Pipeline bridge -- returns LsEntry objects
-$smallest = ls -la | sort -k5 -n | tail -n 3
-$smallest[0].SizeBytes   # real integer
+```text
+fgh
+```
+
+```bash
+tail -F app.log      # follow by name, survives log rotation
 ```
 
 ---
 
 ## tac
 
-Concatenate and print files in reverse line order. Returns `TextOutput` objects.
+Print lines in reverse order.
 
 ### Syntax
 
 ```text
-tac [-s SEPARATOR] [FILE...]
+tac [-s SEP] [FILE]...
 ```
 
 ### Flags
 
 | Flag | Description |
 |------|-------------|
-| `-s` | Use SEPARATOR instead of newline as the record separator |
+| `-s SEP`, `--separator=SEP` | Split records on SEP instead of newline |
+
+`-b`/`--before` and `-r`/`--regex` are refused (exit 2).
 
 ### Return type
 
-`PsBash.TextOutput` with a `BashText` property.
+Pipeline input: the original records, in reverse order. File input: `PsBash.TextOutput`.
+
+### Differences from GNU
+
+- With `-s SEP`, each reversed record is emitted as its own line without the separator, and the empty piece after a trailing separator comes first. `printf 'a,b,c,' | tac -s ,` prints an empty line, then `c`, `b`, `a` on separate lines. GNU keeps the separator attached and prints `c,b,a,`.
 
 ### Examples
 
-```powershell
-# Reverse lines of a file
-tac changelog.txt
+```bash
+printf '1\n2\n3\n' | tac
 ```
 
-```powershell
-# Reverse pipeline input
-cat data.txt | tac
-```
-
-```powershell
-# Custom separator
-tac -s '---' sections.txt
+```text
+3
+2
+1
 ```
 
 ---
 
 ## wc
 
-Print newline, word, and byte counts. Returns `WcResult` objects with typed integer properties.
+Count lines, words, characters, and bytes. Returns `PsBash.WcResult` objects with integer properties.
 
 ### Syntax
 
 ```text
-wc [OPTIONS] [FILE...]
+wc [OPTION]... [FILE]...
+wc [OPTION]... --files0-from=F
 ```
 
 ### Flags
 
 | Flag | Description |
 |------|-------------|
-| `-l` | Print only the line count |
-| `-w` | Print only the word count |
-| `-c` | Print only the byte count |
+| `-l`, `--lines` | Newline count |
+| `-w`, `--words` | Word count |
+| `-c`, `--bytes` | Byte count |
+| `-m`, `--chars` | Character count |
+| `-L`, `--max-line-length` | Width of the longest line |
+| `--total=WHEN` | Total line: `auto` (default), `always`, `only`, `never` |
+| `--files0-from=F` | Read NUL-separated file names from F (`-` for stdin) |
 
-When no flags are given, all three counts are printed.
+With no flags, wc prints lines, words, and bytes.
+
+`wc` counts the byte stream, not records: `printf abc | wc -c` is `3` and `printf abc | wc -l` is `0`. The byte count of a file is its exact size, BOM included. Invalid UTF-8 bytes count in `-c` only, following GNU's UTF-8 locale rules.
+
+File output pads every column to the digit width of the files' total size, as GNU does. Standard input uses a fixed layout with the first column unpadded: `echo hi | wc` prints `1       1       3`, where GNU prints `      1       1       3`.
+
+A `-` operand (`wc - f.txt`) counts standard input as it streams, so endless input is not held in memory. A second `-` counts zeros, as in GNU.
 
 ### Return type
 
-`PsBash.WcResult` with properties:
+`PsBash.WcResult` with these properties:
 
 | Property | Type | Description |
 |----------|------|-------------|
-| `Lines` | int | Number of newlines |
-| `Words` | int | Number of whitespace-delimited words |
-| `Bytes` | int | Number of bytes |
+| `Lines` | int | Newline count |
+| `Words` | int | Word count |
+| `Bytes` | int | Byte count |
+| `Chars` | int | Character count |
+| `MaxLineLength` | int | Longest line width |
 | `FileName` | string | Source file path |
-| `BashText` | string | Formatted count output |
+| `BashText` | string | Formatted count line |
 
 ### Examples
 
-```powershell
-# Full counts for a file
-wc README.md
+```bash
+printf 'one two\nthree\n' > f.txt
+wc f.txt
 ```
 
 ```text
-  42     187    1084 README.md
+ 2  3 14 f.txt
+```
+
+```bash
+wc -l a.txt f.txt
+```
+
+```text
+ 2 a.txt
+ 2 f.txt
+ 4 total
 ```
 
 ```powershell
-# Line count only
-wc -l src/PsBash.psm1
-```
-
-```powershell
-# Count lines from pipeline
-cat README.md | grep 'bash' | wc -l
-```
-
-```powershell
-# Multiple files produce a total row
-wc -l src/*.ps1
-```
-
-```powershell
-# Access typed properties
-$stats = wc README.md
-$stats.Lines    # 42
-$stats.Words    # 187
-$stats.Bytes    # 1084
+# Typed properties
+$stats = wc f.txt
+$stats.Lines    # 2
+$stats.Words    # 3
+$stats.Bytes    # 14
 ```
 
 ---
 
 ## nl
 
-Number lines of files. By default, blank lines are not numbered.
+Number lines. By default only non-empty lines get a number.
 
 ### Syntax
 
 ```text
-nl [-ba] [FILE...]
+nl [OPTION]... [FILE]...
 ```
 
 ### Flags
 
 | Flag | Description |
 |------|-------------|
-| `-ba` | Number all lines, including blank lines |
+| `-b STYLE`, `--body-numbering=STYLE` | `a` all lines, `t` non-empty lines (default), `n` none |
+| `-n FORMAT`, `--number-format=FORMAT` | `ln` left-aligned, `rn` right-aligned (default), `rz` right-aligned with zeros |
+| `-s SEP`, `--number-separator=SEP` | Text after the number (default tab) |
+| `-w N`, `--number-width=N` | Number width (default 6) |
+| `-v N`, `--starting-line-number=N` | First number (default 1) |
+| `-i N`, `--line-increment=N` | Step between numbers (default 1) |
 
-Without `-ba`, blank lines are passed through without a number.
+A bad style, format, or number exits 1. Not implemented, refused with exit 2: `-b pREGEX`, and the logical-page options `-d`, `-f`, `-h`, `-l`, `-p`.
+
+With the default `-b t`, an unnumbered empty line is printed empty. GNU pads it with spaces to the number width plus the separator.
 
 ### Return type
 
-`PsBash.TextOutput` with a `BashText` property.
+`PsBash.TextOutput`
 
 ### Examples
 
-```powershell
-# Number non-blank lines
-nl script.ps1
+```bash
+printf 'one\n\ntwo\n' | nl -b a -n rz -w 3 -s ': '
 ```
 
 ```text
-     1	Import-Module PsBash
-     2	$files = ls -la
-
-     3	echo "Found $($files.Count) files"
-```
-
-```powershell
-# Number all lines including blanks
-nl -ba script.ps1
-```
-
-```text
-     1	Import-Module PsBash
-     2	$files = ls -la
-     3	
-     4	echo "Found $($files.Count) files"
-```
-
-```powershell
-# Number pipeline input
-cat README.md | nl
+001: one
+002:
+003: two
 ```
 
 ---
 
 ## rev
 
-Reverse characters of each line. Returns `TextOutput` objects.
+Reverse the characters of each line.
 
 ### Syntax
 
 ```text
-rev [FILE...]
+rev [FILE]...
 ```
 
 ### Return type
 
-`PsBash.TextOutput` with a `BashText` property.
+`PsBash.TextOutput`
 
 ### Examples
 
-```powershell
-# Reverse characters in a file
-rev names.txt
-```
-
-```powershell
-# Reverse pipeline input
-echo "hello world" | rev
+```bash
+echo 'hello world' | rev
 ```
 
 ```text
 dlrow olleh
 ```
 
-```powershell
-# Reverse multiple files
-rev file1.txt file2.txt
-```
-
 ---
 
 ## strings
 
-Print sequences of printable characters (ASCII 0x20-0x7E) found in files. Useful for extracting readable text from binary data.
+Print runs of printable characters found in files or pipeline input.
 
 ### Syntax
 
 ```text
-strings [-n LENGTH] [FILE...]
+strings [-n N] [FILE]...
 ```
 
 ### Flags
 
 | Flag | Description |
 |------|-------------|
-| `-n` | Minimum string length (default: 4) |
+| `-n N`, `--bytes=N`, `-N` | Minimum run length (default 4) |
+| `-a`, `--all` | Accepted; the whole input is always scanned |
+
+`-n 0` or a non-number exits 1. Not implemented, refused with exit 2: `-d`, `-f`, `-t`, `-o`, `-w`, `-e`, `-T`, `-s`, `-U` and their long forms.
+
+### Differences from GNU
+
+- Printable means ASCII space through `~`. Tab is not printable, and a non-ASCII character ends a run.
 
 ### Return type
 
-`PsBash.TextOutput` with a `BashText` property.
+`PsBash.TextOutput`
 
 ### Examples
 
-```powershell
-# Extract printable strings from a binary
-strings program.exe
+```bash
+printf 'ab\001\002hello\000world!!\n' | strings
 ```
 
-```powershell
-# Only strings of 8+ characters
-strings -n 8 program.exe
-```
-
-```powershell
-# Extract from pipeline input
-cat binary.dat | strings -n 6
+```text
+hello
+world!!
 ```
 
 ---
 
 ## fold
 
-Wrap each input line to fit in a specified width.
+Wrap input lines to a fixed width.
 
 ### Syntax
 
 ```text
-fold [-w WIDTH] [-s] [-b] [FILE...]
+fold [-bs] [-w WIDTH] [FILE]...
 ```
 
 ### Flags
 
 | Flag | Description |
 |------|-------------|
-| `-w` | Maximum line width (default: 80) |
-| `-s` | Break at spaces instead of mid-word |
-| `-b` | Count bytes rather than columns (default for ASCII) |
+| `-w N`, `--width=N`, `-N` | Maximum line width (default 80) |
+| `-s`, `--spaces` | Break after the last space in the window instead of mid-word |
+| `-b`, `--bytes` | Accepted; ps-bash counts characters, the same as bytes for ASCII |
+
+The width must be a positive decimal number; `-w 0` and `-w x` exit 1.
 
 ### Return type
 
-`PsBash.TextOutput` with a `BashText` property.
+`PsBash.TextOutput`
 
 ### Examples
 
-```powershell
-# Wrap at 40 columns
-fold -w 40 essay.txt
+```bash
+echo 'the quick brown fox jumps' | fold -w 10
 ```
 
-```powershell
-# Wrap at spaces to avoid breaking words
-fold -w 60 -s paragraph.txt
-```
-
-```powershell
-# Wrap pipeline input
-cat README.md | fold -w 72 -s
+```text
+the quick
+brown fox
+jumps
 ```
 
 ---
 
 ## expand
 
-Convert tab characters to spaces.
+Convert tabs to spaces.
 
 ### Syntax
 
 ```text
-expand [-t TABWIDTH] [FILE...]
+expand [-i] [-t LIST] [FILE]...
 ```
 
 ### Flags
 
 | Flag | Description |
 |------|-------------|
-| `-t` | Tab stop width (default: 8) |
+| `-t N`, `--tabs=N` | Tab stops every N columns (default 8) |
+| `-t LIST` | Explicit ascending stops, separated by commas or blanks. The last element may be `/N` (then a stop at every multiple of N) or `+N` (then a stop every N columns after the last explicit stop) |
+| `-i`, `--initial` | Convert only leading tabs |
+| `-N` | Obsolete form of `-t N` |
+
+Several `-t` options are concatenated. Past the last plain stop, a tab becomes one space. A bad list exits 1.
 
 ### Return type
 
-`PsBash.TextOutput` with a `BashText` property.
+`PsBash.TextOutput`
 
 ### Examples
 
-```powershell
-# Convert tabs to 8 spaces (default)
-expand Makefile
+```bash
+printf 'a\tb\tc\n' | expand -t 2,6
 ```
 
-```powershell
-# Convert tabs to 4 spaces
-expand -t 4 src/main.go
-```
-
-```powershell
-# Expand pipeline input
-cat config.yaml | expand -t 2
+```text
+a b   c
 ```
 
 ---
 
 ## unexpand
 
-Convert spaces to tabs.
+Convert runs of spaces to tabs.
 
 ### Syntax
 
 ```text
-unexpand [-t TABWIDTH] [-a] [FILE...]
+unexpand [-a] [--first-only] [-t LIST] [FILE]...
 ```
 
 ### Flags
 
 | Flag | Description |
 |------|-------------|
-| `-t` | Tab stop width (default: 8) |
-| `-a` | Convert all sequences of spaces, not just leading spaces |
-
-Without `-a`, only leading spaces are converted.
+| `-a`, `--all` | Convert every run of spaces, not only leading ones |
+| `--first-only` | Convert only leading spaces (overrides `-a` and `-t` in any order) |
+| `-t N`, `-t LIST`, `--tabs=` | Tab stops, as for `expand`. Implies `-a` |
+| `-N` | Obsolete tab width; does not imply `-a` |
 
 ### Return type
 
-`PsBash.TextOutput` with a `BashText` property.
+`PsBash.TextOutput`
 
 ### Examples
 
-```powershell
-# Convert leading spaces to tabs (default: 8-wide)
-unexpand source.py
+```bash
+printf '    x   y\n' | unexpand -t 4 | cat -A
 ```
 
-```powershell
-# Convert leading spaces to 4-wide tabs
-unexpand -t 4 source.py
-```
-
-```powershell
-# Convert all space runs, not just leading
-unexpand -a -t 4 data.txt
+```text
+^Ix^Iy$
 ```
 
 ---
 
 ## split
 
-Split a file into pieces. Output files are written to the current directory.
+Split a file (or the pipeline) into pieces. Output files are written to the current directory; output names follow GNU coreutils 9.4.
 
 ### Syntax
 
 ```text
-split [-l LINES] [-d] [-a LENGTH] [FILE [PREFIX]]
+split [OPTION]... [FILE [PREFIX]]
 ```
 
 ### Flags
 
 | Flag | Description |
 |------|-------------|
-| `-l` | Number of lines per output file (default: 1000) |
-| `-d` | Use numeric suffixes (`00`, `01`, ...) instead of alphabetic (`aa`, `ab`, ...) |
-| `-a` | Suffix length (default: 2) |
+| `-l N`, `--lines=N` | N lines per file (default 1000) |
+| `-b SIZE`, `--bytes=SIZE` | SIZE bytes per file (`K`, `M`, `G`, `KB`, `KiB`, ...) |
+| `-n CHUNKS`, `--number=CHUNKS` | `N` equal byte chunks, `K/N` chunk K to stdout, `l/N` and `l/K/N` without splitting lines, `r/N` and `r/K/N` round-robin by line |
+| `-a N`, `--suffix-length=N` | Fixed suffix length |
+| `-d` | Decimal suffixes |
+| `--numeric-suffixes[=FROM]` | Decimal suffixes, starting at FROM |
+| `-x`, `--hex-suffixes[=FROM]` | Lowercase hex suffixes |
+| `--additional-suffix=S` | Append S to every name |
+| `-NUM` | Obsolete form of `-l NUM` |
 
-The default output prefix is `x`, producing files `xaa`, `xab`, `xac`, ... (or `x00`, `x01`, `x02`, ... with `-d`).
+Without `-a`, the suffix grows as needed: `xaa` ... `xyz`, then `xzaaa` ...; numerically `x00` ... `x89`, then `x9000` .... A fixed `-a N` that runs out stops with `split: output file suffixes exhausted` (exit 1). Combining `-l`, `-b`, and `-n` is an error. Not implemented, refused with exit 2: `-C`, `-t`, `-e`, `-u`, `--filter`, `--verbose`.
+
+### Differences from GNU
+
+- The whole input is buffered in memory.
+- A very large chunk count is an error instead of an attempt to create that many files.
 
 ### Return type
 
-No output objects. Files are written to disk.
+No output objects (except `-n K/N`, which writes the chunk to stdout).
 
 ### Examples
 
-```powershell
-# Split into 1000-line chunks (default)
-split largefile.csv
-# produces: xaa, xab, xac, ...
+```bash
+seq 10 > s.txt
+split -l 4 s.txt          # xaa xab xac
+split -n 3 -d s.txt part_ # part_00 part_01 part_02, 7 bytes each
 ```
 
-```powershell
-# Split into 100-line chunks with numeric suffixes
-split -l 100 -d data.csv
-# produces: x00, x01, x02, ...
-```
-
-```powershell
-# Custom prefix
-split -l 50 data.csv chunk_
-# produces: chunk_aa, chunk_ab, chunk_ac, ...
-```
-
-```powershell
-# Longer suffixes for large files
-split -l 10 -d -a 4 huge.log part_
-# produces: part_0000, part_0001, part_0002, ...
-```
-
-```powershell
-# Split from pipeline
-cat data.csv | split -l 500 - output_
+```bash
+split -l 10 -d -a 4 huge.log part_   # part_0000, part_0001, ...
+cat data.csv | split -l 500 - out_   # read the pipeline
 ```
 
 ---
 
 ## Pipeline bridge pattern
 
-`head` and `tail` are pipeline bridges. They do not create new objects. They pass through the exact objects they receive, preserving type information across the entire pipeline.
+`head` and `tail` are pipeline bridges. They do not create new objects; they pass through the objects they receive, so type information survives the pipeline.
 
 ```powershell
-# CatLine objects survive through head
-$lines = cat file.txt | head -5
-$lines[0].PSObject.TypeNames[0]   # PsBash.CatLine
-$lines[0].Content                  # raw text
-
 # LsEntry objects survive through tail
 $files = ls -la | tail -3
 $files[0].PSObject.TypeNames[0]   # PsBash.LsEntry
-$files[0].SizeBytes                # real integer
+$files[0].SizeBytes                # integer
 
 # PsEntry objects survive through head
-$procs = ps aux | sort -k3 -rn | head 5
+$procs = ps aux | sort -k3 -rn | head -5
 $procs[0].PSObject.TypeNames[0]   # PsBash.PsEntry
-$procs[0].CPU                      # real double
+$procs[0].CPU                      # double
 ```
 
-This means you can chain bridge commands freely and still access typed properties at the end of the pipeline.
+Bridge commands can be chained, and the typed properties are still available at the end of the pipeline.

@@ -5,66 +5,49 @@ description: echo and printf commands for formatted text output.
 
 import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
 
+`echo` and `printf` follow the bash **builtins**, not the GNU coreutils programs: the option rules, escape dialects, and error messages are bash 5.2's.
+
 ## echo
 
-Print text to the pipeline with optional escape sequence expansion.
+Print the arguments, separated by single spaces, followed by a newline.
 
 ### Syntax
 
 ```text
-echo [OPTIONS] [STRING...]
+echo [-neE] [STRING]...
 ```
 
 ### Flags
 
-| Flag | Description | Example |
-|------|-------------|---------|
-| `-n` | Suppress trailing newline | `echo -n 'no newline'` |
-| `-e` | Enable interpretation of escape sequences | `echo -e 'line1\nline2'` |
-| `-E` | Disable interpretation of escape sequences (default) | `echo -E 'literal \n'` |
+| Flag | Description |
+|------|-------------|
+| `-n` | Do not print the trailing newline |
+| `-e` | Interpret backslash escapes |
+| `-E` | Do not interpret escapes (default) |
+
+As in bash, only a leading run of words made of `n`, `e`, `E` after a dash are options (`-ne`, `-en`). The first other word ends option parsing and is printed literally, including `--`, `--help`, `-x`, and `-`. When both `-e` and `-E` are given, the last one wins.
 
 ### Escape sequences (`-e`)
 
-When `-e` is active, the following sequences are expanded:
-
 | Sequence | Meaning |
 |----------|---------|
-| `\n` | Newline |
-| `\t` | Horizontal tab |
-| `\r` | Carriage return |
-| `\a` | Alert (bell) |
-| `\b` | Backspace |
-| `\f` | Form feed |
-| `\v` | Vertical tab |
-| `\\` | Literal backslash |
+| `\a` `\b` `\f` `\n` `\r` `\t` `\v` | Alert, backspace, form feed, newline, carriage return, tab, vertical tab |
+| `\\` | Backslash |
+| `\e`, `\E` | Escape (0x1B) |
+| `\0NNN` | Byte with octal value NNN (up to three digits) |
+| `\xHH` | Byte with hex value HH (one or two digits) |
+| `\uHHHH`, `\UHHHHHHHH` | Unicode character |
+| `\c` | Stop: nothing more is printed, not even the newline |
 
-<Aside type="note">
-The current implementation does not support octal (`\0NNN`) or hex (`\xHH`) escape sequences. If you need those, use `printf` with format specifiers or PowerShell string literals.
-</Aside>
+A bare `\NNN` without the leading `0` is not an escape in `echo`; it is printed as is. An unrecognised escape keeps its backslash.
 
 ### Return type
 
-`PsBash.TextOutput` with a single property:
-
-| Property | Type | Description |
-|----------|------|-------------|
-| `BashText` | `string` | The formatted output text (includes trailing newline unless `-n` is used) |
+One `PsBash.TextOutput` per output line. `BashText` holds the line without its newline; with `-n` the last object is marked as having no trailing newline.
 
 ### Examples
 
-**Basic output:**
-
-```powershell
-echo 'Hello, world!'
-```
-
-```text
-Hello, world!
-```
-
-**Multiple arguments are joined with spaces:**
-
-```powershell
+```bash
 echo one two three
 ```
 
@@ -72,21 +55,7 @@ echo one two three
 one two three
 ```
 
-**Suppress trailing newline with `-n`:**
-
-```powershell
-echo -n 'prompt> '
-```
-
-```text
-prompt>
-```
-
-The output has no trailing newline, so subsequent output appears on the same line.
-
-**Escape sequences with `-e`:**
-
-```powershell
+```bash
 echo -e 'column1\tcolumn2\nrow1\trow2'
 ```
 
@@ -95,12 +64,25 @@ column1	column2
 row1	row2
 ```
 
-**Access the object programmatically:**
+```bash
+echo -e '\x41\0102\cignored'; echo '|'
+```
+
+```text
+AB|
+```
+
+```bash
+echo -- -n     # `--` is not an option to echo
+```
+
+```text
+-- -n
+```
 
 ```powershell
 $out = echo -n 'hello'
-$out.BashText        # "hello"
-$out.BashText.Length  # 5
+$out.BashText         # hello
 ```
 
 ### Comparison
@@ -113,8 +95,6 @@ echo -e 'hello\tworld'
 # hello	world
 ```
 
-Bash `echo` behavior varies across implementations (GNU coreutils vs built-in). The `-e` flag is not POSIX-standard; some shells enable escapes by default.
-
 </TabItem>
 <TabItem label="PsBash">
 
@@ -123,7 +103,7 @@ echo -e 'hello\tworld'
 # hello	world
 ```
 
-PsBash `echo` defaults to `-E` (no escape expansion), matching GNU coreutils behavior. The `-e` flag must be explicit.
+Escapes are off by default (`xpg_echo` is off), as in bash.
 
 </TabItem>
 <TabItem label="PowerShell">
@@ -133,7 +113,7 @@ Write-Output "hello`tworld"
 # hello	world
 ```
 
-Native PowerShell uses backtick escapes (`` `t ``, `` `n ``) inside double-quoted strings. `Write-Output` has no flag-based escape control.
+Native PowerShell uses backtick escapes (`` `t ``, `` `n ``) inside double-quoted strings.
 
 </TabItem>
 </Tabs>
@@ -142,120 +122,101 @@ Native PowerShell uses backtick escapes (`` `t ``, `` `n ``) inside double-quote
 
 ## printf
 
-Format and print text using C-style format specifiers.
+Format and print arguments under control of a format string.
 
 ### Syntax
 
 ```text
-printf FORMAT [ARGUMENTS...]
+printf [-v VAR] FORMAT [ARGUMENT]...
 ```
 
-The FORMAT string is required. If no ARGUMENTS are provided, format specifiers consume nothing and produce empty output for that position.
+### Options
 
-### Format specifiers
+| Option | Description |
+|--------|-------------|
+| `-v VAR` | Assign the output to shell variable VAR instead of printing it. `VAR` may be an array element, `name[subscript]` |
+| `--` | End of options |
 
-| Specifier | Description | Example |
-|-----------|-------------|---------|
-| `%s` | String | `printf '%s' 'hello'` produces `hello` |
-| `%d` | Decimal integer | `printf '%d' 42` produces `42` |
-| `%f` | Floating-point (6 decimal places) | `printf '%f' 3.14` produces `3.140000` |
-| `%%` | Literal percent sign | `printf '100%%'` produces `100%` |
+Any other dash-led first word is an error: `printf: -x: invalid option` and the usage line, exit 2. With no format, printf prints the usage line and exits 2.
 
-<Aside type="note">
-The current implementation supports `%s`, `%d`, `%f`, and `%%`. Hex (`%x`), octal (`%o`), and width/precision modifiers (`%-10s`, `%05d`, `%.2f`) are not yet implemented. For those, use PowerShell's `-f` operator or `[string]::Format()`.
-</Aside>
+### Conversions
+
+| Conversion | Description |
+|------------|-------------|
+| `%s` | String |
+| `%b` | String with backslash escapes expanded (echo-style, plus `\NNN` octal) |
+| `%q` | String quoted so the shell reads it back as the same word |
+| `%c` | First character of the argument |
+| `%d`, `%i` | Signed decimal |
+| `%u` | Unsigned decimal |
+| `%o`, `%x`, `%X` | Octal, hex, upper-case hex |
+| `%f`, `%e`, `%E`, `%g`, `%G` | Floating point |
+| `%(FMT)T` | `strftime` format of an epoch-seconds argument (`-1` or no argument means now) |
+| `%%` | Literal `%` |
+
+Flags `-`, `+`, space, `0`, `#`, a field width, and a precision are supported, and both width and precision may be `*` (taken from the next argument). Length modifiers (`h`, `l`, `L`, `j`, `z`, `t`) are accepted and ignored.
+
+### Arguments
+
+- The format is reused until every argument is consumed: `printf '%s\n' a b c` prints three lines.
+- Numeric arguments are read like C `strtoimax`: `0x` hex, leading `0` octal, an optional sign. A leading quote gives the character code: `printf '%d' "'A"` prints `65`.
+- A non-numeric argument to a numeric conversion prints `printf: X: invalid number` on stderr; printf continues and exits 1.
+- An invalid conversion character prints what came before it, reports `` printf: `y': invalid format character ``, and exits 1.
+- A conversion with no argument left prints nothing, and its width is not applied: `printf '[%s][%d][%5s]\n' a` prints `[a][][]`. bash prints `[a][0][     ]`.
 
 ### Escape sequences in FORMAT
 
-The format string automatically expands the same escape sequences as `echo -e`:
-
-| Sequence | Meaning |
-|----------|---------|
-| `\n` | Newline |
-| `\t` | Horizontal tab |
-| `\r` | Carriage return |
-| `\a` | Alert (bell) |
-| `\b` | Backspace |
-| `\f` | Form feed |
-| `\v` | Vertical tab |
-| `\\` | Literal backslash |
-
-### Argument type conversion
-
-`printf` automatically converts string arguments to the type required by the format specifier:
-
-- Arguments that parse as integers are passed as `[int]` to `%d`
-- Arguments that parse as decimals are passed as `[double]` to `%f`
-- All other arguments remain as `[string]`
+The format string expands `\a \b \e \f \n \r \t \v \\`, `\"`, `\'`, `\?`, `\NNN` (one to three octal digits), `\xHH`, `\uHHHH`, and `\UHHHHHHHH`. Unlike `echo` and `%b`, `\c` is not special in the format.
 
 ### Return type
 
-`PsBash.TextOutput` with a single property:
-
-| Property | Type | Description |
-|----------|------|-------------|
-| `BashText` | `string` | The formatted output text (no automatic trailing newline) |
+One `PsBash.TextOutput` whose `BashText` is the exact formatted output. printf adds no newline of its own.
 
 ### Examples
 
-**Simple string formatting:**
-
-```powershell
-printf 'Hello, %s!\n' 'world'
+```bash
+printf '[%-6s][%5.2f][%03d][%x][%o]\n' ab 3.14159 7 255 8
 ```
 
 ```text
-Hello, world!
+[ab    ][ 3.14][007][ff][10]
 ```
 
-**Multiple arguments with mixed types:**
-
-```powershell
-printf 'Name: %s, Age: %d, Score: %f\n' 'Alice' 30 95.5
-```
-
-```text
-Name: Alice, Age: 30, Score: 95.500000
-```
-
-**Tab-separated table:**
-
-```powershell
-printf '%s\t%s\t%s\n' 'Name' 'Role' 'Team'
-printf '%s\t%s\t%s\n' 'Alice' 'Dev' 'Platform'
-printf '%s\t%s\t%s\n' 'Bob' 'QA' 'Platform'
+```bash
+printf '%s=%d\n' a 1 b 2     # the format is reused
 ```
 
 ```text
-Name	Role	Team
-Alice	Dev	Platform
-Bob	QA	Platform
+a=1
+b=2
 ```
 
-**Literal percent sign:**
-
-```powershell
-printf 'Disk usage: %d%%\n' 73
+```bash
+printf '%q\n' "it's a test"
 ```
 
 ```text
-Disk usage: 73%
+it\'s\ a\ test
 ```
 
-**Access the object programmatically:**
-
-```powershell
-$out = printf '%s-%d' 'build' 42
-$out.BashText  # "build-42"
+```bash
+TZ=UTC printf '%(%Y-%m-%d)T\n' 0
+printf -v out '%05.1f' 3.14159; echo "$out"
 ```
 
-### Error handling
+```text
+1970-01-01
+003.1
+```
 
-Calling `printf` with no arguments throws an error:
+```bash
+printf '%d\n' abc; echo "status=$?"
+```
 
-```powershell
-printf
-# printf: usage: printf format [arguments]
+```text
+printf: abc: invalid number
+0
+status=1
 ```
 
 ### Comparison
@@ -268,8 +229,6 @@ printf 'Name: %s, Count: %d\n' 'items' 5
 # Name: items, Count: 5
 ```
 
-Bash `printf` supports the full POSIX set of specifiers including `%x`, `%o`, `%e`, `%g`, width modifiers, and precision. It also reuses the format string if there are more arguments than specifiers.
-
 </TabItem>
 <TabItem label="PsBash">
 
@@ -278,7 +237,7 @@ printf 'Name: %s, Count: %d\n' 'items' 5
 # Name: items, Count: 5
 ```
 
-PsBash `printf` supports `%s`, `%d`, `%f`, and `%%`. Unlike bash, it does not cycle the format string over excess arguments.
+Same conversions, flags, and format reuse as the bash builtin.
 
 </TabItem>
 <TabItem label="PowerShell">
@@ -288,7 +247,7 @@ PsBash `printf` supports `%s`, `%d`, `%f`, and `%%`. Unlike bash, it does not cy
 # Name: items, Count: 5
 ```
 
-PowerShell uses .NET composite format strings with `{0}`, `{1}` placeholders and the `-f` operator. This supports full .NET format specifiers like `{0:N2}`, `{1:X}`, and padding via `{0,-10}`.
+PowerShell uses .NET composite format strings with `{0}`, `{1}` placeholders and the `-f` operator.
 
 </TabItem>
 </Tabs>

@@ -1,20 +1,30 @@
 ---
 title: File Listing
-description: ls, find, stat, tree, du, pwd, basename, and dirname commands for listing files, navigating directories, and inspecting metadata.
+description: ls, find, stat, tree, du, pwd, basename, dirname, readlink, and realpath for listing files, walking directories, inspecting metadata, and resolving names.
 head:
   - tag: meta
     attrs:
       name: keywords
-      content: powershell ls, powershell find files, powershell stat, powershell tree, powershell du disk usage, powershell pwd, powershell basename dirname, bash file listing powershell
+      content: powershell ls, powershell find files, powershell stat, powershell tree, powershell du disk usage, powershell pwd, powershell basename dirname, powershell readlink realpath, bash file listing powershell
 ---
 
 import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
 
-Every command on this page returns typed PowerShell objects. Terminal output looks like bash, but you can access properties like `.SizeBytes`, `.Permissions`, and `.IsDirectory` directly.
+`ls`, `find`, `stat`, `tree` and `du` return typed PowerShell objects. The terminal output follows GNU coreutils 9.4 (findutils 4.9 for `find`, tree 2.1 for `tree`), with the differences listed per command, and properties such as `.SizeBytes`, `.Permissions` and `.IsDirectory` stay available to PowerShell.
 
 <Aside type="tip">
-Objects survive the entire pipeline. `ls -la | grep '.ps1' | sort -k5 -h` returns `LsEntry` objects -- not strings.
+Objects survive the pipeline. `ls -l | grep '.ps1' | sort -k5 -n` returns `LsEntry` objects, not strings.
 </Aside>
+
+<Aside type="note" title="Paths in output">
+On Windows every path these commands print uses forward slashes with the drive letter kept: `C:/Users/you/project`, never `C:\Users\you\project` or `/c/Users/you/project`. Operands may use any of `C:/x`, `C:\x`, `/c/x`, `/mnt/c/x` or a relative path. A name you typed is printed as you typed it (`find src` prints `src/a.txt`). The `FullPath` properties keep the native form for PowerShell callers.
+</Aside>
+
+Shared conventions:
+
+- Options parse like GNU getopt: bundles (`-la`), options after operands, unique long-option abbreviations (`--almost` for `--almost-all`), and `--` to end options. (`tree` is the exception: like tree(1), its long options do not abbreviate.)
+- A GNU option that ps-bash does not implement exits 2 with `recognized but not supported`. It is never silently ignored.
+- Usage errors use GNU's wording and the `Try 'ls --help' for more information.` hint.
 
 ---
 
@@ -25,132 +35,179 @@ List directory contents.
 ### Synopsis
 
 ```
-ls [flags] [path...]
+ls [OPTION]... [FILE]...
 ```
 
 ### Flags
 
 | Flag | Description |
 |------|-------------|
-| `-l` | Long listing with permissions, owner, size, and date |
-| `-a` | Show hidden files (names starting with `.`) |
-| `-h` | Human-readable sizes (`4.0K`, `1.2M`) in long listing |
-| `-R` | Recurse into subdirectories |
-| `-S` | Sort by file size (largest first) |
-| `-t` | Sort by modification time (newest first) |
-| `-r` | Reverse the sort order |
-| `-1` | One entry per line |
+| `-l` | Long listing: mode, link count, owner, group, size, date, name |
+| `-a`, `--all` | Include names starting with `.`, plus `.` and `..` |
+| `-A`, `--almost-all` | Like `-a` without `.` and `..` |
+| `-h`, `--human-readable` | Sizes as `4.0K`, `1.2M` (with `-l` or `-s`) |
+| `-R`, `--recursive` | List subdirectories recursively, with `dir:` headers |
+| `-d`, `--directory` | List directories themselves, not their contents |
+| `-1` | One entry per line (the default when output is not a terminal) |
+| `-C` / `-x` / `-m` | Columns filled down / across / comma-separated |
+| `--format=WORD` | `long`, `verbose`, `commas`, `horizontal`, `across`, `vertical`, `single-column` |
+| `-w COLS`, `--width=COLS` | Line length for column formats (else `$COLUMNS`, else 80; `0` = unlimited) |
+| `-T COLS`, `--tabsize=COLS` | Tab stops for column alignment (else `$TABSIZE`, default 8) |
+| `-S` / `-t` / `-X` / `-U` | Sort by size / time / extension / not at all |
+| `--sort=WORD` | `size`, `time`, `extension`, `none` |
+| `-r`, `--reverse` | Reverse the sort order |
+| `--group-directories-first` | Directories before files |
+| `-u` / `-c` / `--time=WORD` | Show and sort by access / change time (`atime`, `ctime`, `birth`, ...) |
+| `--full-time` | `-l` with `--time-style=full-iso` |
+| `--time-style=STYLE` | `full-iso`, `long-iso`, `iso`, `locale` (default from `$TIME_STYLE`) |
+| `-p` / `-F`, `--classify[=WHEN]` | Append `/` to directories / append a type indicator (`/`, `*`, `@`, ...) |
+| `-i`, `--inode` | Prefix the inode number (NTFS file index on Windows) |
+| `-s`, `--size` | Prefix allocated size in 1 KiB blocks |
+| `-n`, `--numeric-uid-gid` | Numeric owner and group (implies `-l`) |
+| `-g` / `-o` / `-G`, `--no-group` | Omit owner / omit group / omit group (`-g` and `-o` imply `-l`) |
+| `-I PAT`, `--ignore=PAT` | Skip names matching the glob (repeatable) |
+| `--hide=PAT` | Like `-I`, but overridden by `-a`/`-A` |
+| `-B`, `--ignore-backups` | Skip names ending in `~` |
+| `--color[=WHEN]` | `always`, `auto`, `never` |
+
+Refused (exit 2): the quoting options (`-b -q -Q -N --quoting-style --literal ...`), `-f -k -v -D -H -L -Z`, `--block-size`, `--si`, `--dereference*`, `--indicator-style`, `--file-type`, `--hyperlink`, `--dired`, `--zero`, `--context`, `--author`, and `--time-style=+FORMAT`.
 
 ### Return Type: `PsBash.LsEntry`
+
+One-per-line and `-l` output emit one `LsEntry` per file. Column formats (`-C`, `-x`, `-m`) emit plain text rows, because one row holds several entries.
 
 | Property | Type | Description |
 |----------|------|-------------|
 | `Name` | string | File or directory name |
-| `FullPath` | string | Absolute path on disk |
+| `FullPath` | string | Absolute path (native form) |
 | `IsDirectory` | bool | `$true` for directories |
+| `IsSymlink` | bool | `$true` for symbolic links and junctions |
 | `SizeBytes` | long | Size in bytes (4096 for directories) |
-| `Permissions` | string | Unix-style permission string (e.g., `-rw-r--r--`) |
-| `LinkCount` | int | Number of hard links |
-| `Owner` | string | File owner name |
-| `Group` | string | File group name |
-| `LastModified` | DateTime | Last modification time |
-| `BashText` | string | Formatted terminal output |
+| `Permissions` | string | Mode string, e.g. `-rw-r--r--` |
+| `LinkCount` | int | Hard link count |
+| `Owner` | string | Owner name |
+| `Group` | string | Group name |
+| `LastModified` | DateTime | Modification time |
+| `AccessTime` | DateTime | Last access time |
+| `BirthTime` | DateTime | Creation time |
+| `BashText` | string | The formatted line |
+
+### Differences from GNU
+
+- On Windows the mode string is synthesised: 0644 for files, 0755 for directories and executable extensions, write bits cleared for read-only files, 0777 for links. Owner and group come from the file's owner SID and primary-group SID. `-n` prints the last sub-authority of each SID.
+- `--full-time` prints .NET's 100 ns timestamp resolution followed by a trailing `0`.
+- `-s` counts whole 4 KiB allocation units.
 
 ### Examples
 
-**List files with details:**
+**Long listing:**
 
-```powershell
+```bash
 ls -la
 ```
 
-```text
-drwxr-xr-x  5 beagle beagle 4096 Apr  2 10:30 .
-drwxr-xr-x  3 beagle beagle 4096 Apr  1 09:15 ..
--rw-r--r--  1 beagle beagle 1084 Apr  2 10:30 README.md
-drwxr-xr-x  2 beagle beagle 4096 Apr  2 10:28 src
-```
+The listing starts with `total N`, then `.` and `..`. Link-count and size columns are right-aligned to the widest entry in the listing, as in GNU. Files changed in the last six months show `Mon dd HH:MM`; older files show `Mon dd  YYYY`.
 
-**Sort by size, human-readable:**
+**Largest first, human-readable:**
 
-```powershell
+```bash
 ls -lSh
 ```
 
-```text
--rw-r--r--  1 beagle beagle 141K Apr  2 10:30 PsBash.psm1
--rw-r--r--  1 beagle beagle 1.1K Apr  2 10:28 PsBash.psd1
--rw-r--r--  1 beagle beagle  512 Apr  1 09:15 README.md
-```
-
-**Access typed properties:**
+**Typed properties:**
 
 ```powershell
-$files = ls -la
+$files = ls -l
 $files[0].Name          # "README.md"
 $files[0].SizeBytes     # 1084
 $files[0].Permissions   # "-rw-r--r--"
-$files[0].LastModified  # 04/02/2026 10:30:00
 ```
 
-**Pipeline: filter and sort while preserving objects:**
+**Filter and sort without losing objects:**
 
 ```powershell
-$scripts = ls -la | grep '.ps1' | sort -k5 -h
-$scripts[0].Name       # "PsBash.psm1"
-$scripts[0].SizeBytes  # 141234
-```
-
-**Recursive listing with reverse time sort:**
-
-```powershell
-ls -laRtr src/
+$scripts = ls -l | grep '.ps1' | sort -k5 -n
+$scripts[-1].SizeBytes
 ```
 
 ---
 
 ## find
 
-Search for files in a directory hierarchy.
+Walk directory trees and evaluate an expression for each entry.
 
 ### Synopsis
 
 ```
-find [path] [predicates...]
+find [-H|-L|-P] [-D OPTS] [-Olevel] [PATH...] [EXPRESSION]
 ```
 
-### Flags
+Words up to the first one that starts with `-`, `(`, `)`, `!` or `,` are start paths (default `.`). The rest is the expression, combined with GNU precedence: `!`/`-not`, then `-a`/`-and` (implicit between terms), then `-o`/`-or`, then `,`. Group terms with `\( ... \)`.
 
-| Flag | Argument | Description |
-|------|----------|-------------|
-| `-name` | pattern | Glob pattern to match file names (e.g., `'*.ps1'`) |
-| `-type` | `f` or `d` | Filter by type: `f` for files, `d` for directories |
-| `-size` | expr | Size filter: `+1M` (larger than 1 MB), `-500c` (smaller than 500 bytes). Suffixes: `c` bytes, `k` KiB, `M` MiB, `G` GiB. No suffix = 512-byte blocks |
-| `-maxdepth` | N | Descend at most N levels below the start path |
-| `-mtime` | expr | Modification time in days: `-7` (within last 7 days), `+30` (more than 30 days ago) |
-| `-empty` | -- | Match empty files (0 bytes) and empty directories |
+### Tests
+
+| Test | Description |
+|------|-------------|
+| `-name` / `-iname PAT` | Base name matches the glob (case-insensitive with `-i`) |
+| `-path` / `-ipath` / `-wholename` / `-iwholename PAT` | Whole path matches the glob |
+| `-regex` / `-iregex RE` | Whole path matches the regex; dialect via `-regextype` (default `emacs`) |
+| `-lname` / `-ilname PAT` | Symlink target matches the glob |
+| `-type C` | `f`, `d`, `l` (and `b c p s` on Unix), or a list such as `f,d` |
+| `-size [+-]N[bcwkMG]` | Size, rounded up to the unit (no suffix = 512-byte blocks) |
+| `-empty` | Empty file or directory |
+| `-maxdepth N` / `-mindepth N` | Depth limits |
+| `-mtime` / `-atime` / `-ctime [+-]N` | Age in days (floor) |
+| `-mmin` / `-amin` / `-cmin [+-]N` | Age in minutes |
+| `-daystart` | Measure ages from the start of today |
+| `-newer F`, `-anewer`, `-cnewer`, `-newerXY REF` | Compare times with a file, or with a date string when Y is `t` |
+| `-perm MODE`, `-perm -MODE`, `-perm /MODE` | Mode exactly / all bits / any bit (octal or symbolic) |
+| `-user` / `-group` / `-uid` / `-gid`, `-nouser`, `-nogroup` | Ownership |
+| `-links N`, `-inum N`, `-samefile F` | Link count, inode, same file |
+| `-executable`, `-readable`, `-writable` | Access checks |
+| `-true`, `-false` | Constants |
+
+### Actions
+
+| Action | Description |
+|--------|-------------|
+| `-print` / `-print0` | Print the path with a newline / NUL (the implicit action when none is given) |
+| `-printf FMT` | Formatted output: `%p %f %h %P %H %s %m %M %u %g %U %G %y %Y %l %d %n %i %k %b %t %a %c %T* %A* %C* %B*`, with width, precision and `\` escapes |
+| `-fprint F`, `-fprint0 F`, `-fprintf F FMT`, `-ls`, `-fls F` | Print to a file / `ls -dils` format |
+| `-exec CMD {} ;` / `-exec CMD {} +` | Run a command per match / in batches |
+| `-execdir ...`, `-ok ...`, `-okdir ...` | Run from the match's directory / ask first (answer read from stdin) |
+| `-delete` | Remove the match (implies `-depth`) |
+| `-prune` | Do not descend into a matched directory |
+| `-quit` | Stop at the first match |
+
+Options: `-depth`, `-follow`, `-xdev`/`-mount`, `-noleaf`, `-ignore_readdir_race`, `-warn`/`-nowarn` are accepted. `-L`/`-H` follow symbolic links, with GNU's loop detection.
 
 ### Return Type: `PsBash.FindEntry`
 
+Emitted by the implicit `-print` and by an explicit `-print`. `-print0` and `-printf` emit exact text records instead.
+
 | Property | Type | Description |
 |----------|------|-------------|
-| `Path` | string | Display path relative to search root (e.g., `./src/main.ps1`) |
-| `Name` | string | File or directory name |
-| `FullPath` | string | Absolute path on disk |
+| `Path` | string | Path as printed (start path as typed, then the path below it) |
+| `Name` | string | Base name |
+| `FullPath` | string | Absolute path (native form) |
 | `IsDirectory` | bool | `$true` for directories |
 | `SizeBytes` | long | Size in bytes |
-| `Permissions` | string | Unix-style permission string |
-| `LinkCount` | int | Number of hard links |
-| `Owner` | string | File owner name |
-| `Group` | string | File group name |
-| `LastModified` | DateTime | Last modification time |
-| `BashText` | string | Display path (same as `Path`) |
+| `Permissions` | string | Mode string |
+| `LinkCount` | int | Hard link count |
+| `Owner` / `Group` | string | Owner and group names |
+| `LastModified` | DateTime | Modification time |
+| `BashText` | string | Same as `Path` |
+
+### Behaviour
+
+- The walk is lazy and depth-first: each match is printed, run through `-exec` or deleted as it is found, so `find / -name x | head -1` stops early. `-depth` and `-delete` give true post-order.
+- Errors match GNU and exit 1: `paths must precede expression`, `missing argument to '-name'`, `unknown predicate '-bogus'`, `Unknown argument to -type`. A missing start path prints `No such file or directory`, sets status 1, and the remaining paths are still walked.
+- Not implemented: `-used`, `-context` (exit 1, `unsupported predicate`).
+- On Windows, modes and owners are synthesised as for `ls`, `%D` is the drive letter, ctime is the NTFS change time, and `-newerBt` (birth time) works.
 
 ### Examples
 
-**Find all PowerShell files:**
-
-```powershell
+```bash
 find . -name '*.ps1'
 ```
 
@@ -159,68 +216,65 @@ find . -name '*.ps1'
 ./tests/PsBash.Tests.ps1
 ```
 
-**Find large files:**
-
-```powershell
-find . -type f -size +1M
+```bash
+find . -type f -size +1M                         # larger than 1 MiB
+find . -type d -mtime -7                         # directories changed this week
+find . \( -name node_modules -o -name .git \) -prune -o -type f -print
+find . -name '*.tmp' -delete
+find src -name '*.cs' -exec grep -l TODO {} +
+find . -type f -printf '%s\t%p\n' | sort -n | tail -n 3
 ```
 
-**Find recently modified directories:**
-
 ```powershell
-find . -type d -mtime -7
-```
-
-**Combine with pipeline for typed access:**
-
-```powershell
-$bigFiles = find . -type f -size +100k
-$bigFiles | ForEach-Object { "$($_.Name): $($_.SizeBytes) bytes" }
-```
-
-**Limit search depth and find empty files:**
-
-```powershell
-find . -maxdepth 2 -empty
+$big = find . -type f -size +100k
+$big | ForEach-Object { "$($_.Name): $($_.SizeBytes) bytes" }
 ```
 
 ---
 
 ## stat
 
-Display file or file system status.
+Display file status.
 
 ### Synopsis
 
 ```
-stat [flags] file...
+stat [OPTION]... FILE...
 ```
 
 ### Flags
 
 | Flag | Argument | Description |
 |------|----------|-------------|
-| `-c` | format | Format string using `%` specifiers (see table below) |
-| `-t` | -- | Terse output: single line of space-separated values |
-| `--printf` | format | Like `-c` but interprets escape sequences (`\n`, `\t`) and does not append a trailing newline |
+| `-c`, `--format` | FORMAT | Print FORMAT with `%` directives, then a newline |
+| `--printf` | FORMAT | Like `-c`, but expands `\n`, `\t`, `\\` and adds no newline |
+| `-t`, `--terse` | -- | One line of space-separated fields |
+| `--cached` | MODE | Accepted and validated; no effect |
 
-### Format Specifiers (for `-c` and `--printf`)
+Refused (exit 2): `-L`/`--dereference`, `-f`/`--file-system`.
 
-| Specifier | Value |
+### Format directives
+
+| Directive | Value |
 |-----------|-------|
+| `%n` | File name as typed |
+| `%N` | Quoted file name (`'f'`) |
 | `%s` | Size in bytes |
-| `%a` | Octal permissions (e.g., `0644`) |
-| `%A` | Human-readable permissions (e.g., `-rw-r--r--`) |
-| `%n` | File name |
-| `%N` | Full path |
-| `%U` | Owner name |
-| `%G` | Group name |
+| `%a` | Octal mode, e.g. `644` |
+| `%A` | Mode string, e.g. `-rw-r--r--` |
+| `%F` | File type: `regular file`, `regular empty file`, `directory` |
+| `%U` / `%G` | Owner / group name |
+| `%u` / `%g` | Always `0` |
 | `%i` | Inode number |
 | `%b` | Number of 512-byte blocks |
 | `%d` | Device number |
-| `%Y` | Modification time as Unix epoch |
-| `%h` | Number of hard links |
+| `%h` | Hard link count |
+| `%X` | Access time, epoch seconds |
+| `%Y` | Modification time, epoch seconds |
+| `%Z` | Modification time, epoch seconds (GNU: change time) |
 | `%%` | Literal `%` |
+
+Any other directive is printed literally.
 
 ### Return Type: `PsBash.StatEntry`
 
@@ -230,107 +284,88 @@ stat [flags] file...
 | `FullPath` | string | Absolute path |
 | `IsDirectory` | bool | `$true` for directories |
 | `SizeBytes` | long | Size in bytes (4096 for directories) |
-| `Permissions` | string | Unix-style permission string |
-| `OctalPerms` | string | Octal permission string (e.g., `0644`) |
+| `Permissions` | string | Mode string |
+| `OctalPerms` | string | Octal mode, e.g. `0644` |
 | `LinkCount` | int | Hard link count |
-| `Owner` | string | Owner name |
-| `Group` | string | Group name |
-| `Inode` | long | Inode number (0 on Windows) |
-| `Blocks` | long | Number of 512-byte blocks |
+| `Owner` / `Group` | string | Owner and group names |
+| `Inode` | long | Inode number |
+| `Blocks` | long | 512-byte blocks |
 | `Device` | long | Device number |
-| `LastModified` | DateTime | Last modification time |
-| `MtimeEpoch` | long | Modification time as Unix epoch seconds |
-| `AccessTime` | DateTime | Last access time |
-| `AtimeEpoch` | long | Access time as Unix epoch seconds |
+| `LastModified` | DateTime | Modification time |
+| `MtimeEpoch` | long | Modification time, epoch seconds |
+| `AccessTime` | DateTime | Access time |
+| `AtimeEpoch` | long | Access time, epoch seconds |
 | `BashText` | string | Formatted output |
+
+### Differences from GNU
+
+- The default block has `File`, `Size`, `Device`, `Access` and `Modify` lines only. `Uid`/`Gid` show names without numbers, and the time is printed with 7 fractional digits and a `+hh:mm` offset.
+- `%u` and `%g` print `0`, and `%Z` reports the modification time.
+- `-t` prints the octal mode and owner/group names where GNU prints the raw mode in hex and numeric ids. Its device-type and change-time fields are `0`.
 
 ### Examples
 
-**Default output:**
-
-```powershell
-stat README.md
+```bash
+stat -c '%s %a %A %F %n' README.md
 ```
 
 ```text
-  File: README.md
-  Size: 1084	Blocks: 8	IO Block: 4096	regular file
-Device: 0	Inode: 12345	Links: 1
-Access: (0644/-rw-r--r--)	Uid: (beagle)	Gid: (beagle)
-Modify: 2026-04-02 10:30:00.0000000 -07:00
+1084 644 -rw-r--r-- regular file README.md
 ```
 
-**Custom format -- size and name:**
-
-```powershell
-stat -c '%s %n' README.md
-```
-
-```text
-1084 README.md
-```
-
-**Terse mode:**
-
-```powershell
+```bash
+stat --printf='%n\t%s\n' README.md src
 stat -t README.md
 ```
 
-**Access typed properties:**
-
 ```powershell
 $info = stat README.md
-$info.SizeBytes     # 1084
 $info.OctalPerms    # "0644"
 $info.MtimeEpoch    # 1743530400
-$info.Owner         # "beagle"
-```
-
-**Printf with escape sequences:**
-
-```powershell
-stat --printf='%n\t%s\n' README.md src/
 ```
 
 ---
 
 ## tree
 
-List contents of directories in a tree-like format with box-drawing characters.
+List a directory as an indented tree. Follows tree(1) 2.1, which is not part of coreutils.
 
 ### Synopsis
 
 ```
-tree [flags] [path]
+tree [OPTION]... [DIRECTORY]...
 ```
 
 ### Flags
 
 | Flag | Argument | Description |
 |------|----------|-------------|
-| `-a` | -- | Show hidden files (names starting with `.`) |
-| `-d` | -- | List directories only |
-| `-L` | N | Descend at most N levels deep |
-| `-I` | pattern | Exclude files matching glob pattern |
-| `--dirsfirst` | -- | Sort directories before files at each level |
+| `-a` | -- | Include hidden names |
+| `-d` | -- | Directories only |
+| `-f` | -- | Print the full path of each entry |
+| `-L` | N | Descend at most N levels (N must be 1 or more) |
+| `-I` | PATTERN | Exclude names matching the glob; repeatable, `\|` separates alternatives |
+| `-n` | -- | No colour (accepted; output is never coloured) |
+| `--dirsfirst` | -- | Directories before files |
+| `--noreport` | -- | Omit the `N directories, M files` line |
+
+Every directory operand is walked. Long options do not abbreviate. Other tree options (`-C -p -s -h -P -R -l -J -X -H --gitignore --prune --filesfirst ...`) exit 2. An unknown option is a usage error (exit 1). `-L 0` prints `Invalid level, must be greater than 0.` (exit 1).
 
 ### Return Type: `PsBash.TreeEntry`
 
 | Property | Type | Description |
 |----------|------|-------------|
-| `Name` | string | File or directory name (empty for summary line) |
-| `Path` | string | Path relative to tree root |
-| `Depth` | int | Nesting depth (0 for root and summary) |
+| `Name` | string | Entry name (empty for the summary line) |
+| `Path` | string | Path relative to the tree root |
+| `Depth` | int | Nesting depth (0 for the root and summary) |
 | `IsDirectory` | bool | `$true` for directories |
-| `TreePrefix` | string | Box-drawing prefix characters |
-| `BashText` | string | Full formatted line with prefix and name |
+| `TreePrefix` | string | Box-drawing prefix |
+| `BashText` | string | Prefix plus name |
 
 ### Examples
 
-**Show directory tree:**
-
-```powershell
-tree src/
+```bash
+tree src
 ```
 
 ```text
@@ -338,325 +373,280 @@ src
 ├── PsBash.Format.ps1xml
 ├── PsBash.psd1
 └── PsBash.psm1
-
 0 directories, 3 files
 ```
 
-**Limit depth:**
+The summary line follows the last entry with no blank line, and its directory count leaves out the root. tree 2.1 prints a blank line first and counts the root (`1 directory, 3 files` here).
 
-```powershell
-tree -L 2 .
+```bash
+tree -L 2 -I 'node_modules|bin|obj' .
+tree -d --dirsfirst --noreport .
 ```
 
-**Directories only, directories first:**
-
 ```powershell
-tree -d --dirsfirst .
-```
-
-**Filter typed entries from the pipeline:**
-
-```powershell
-$entries = tree src/
-$dirs = $entries | Where-Object { $_.IsDirectory -and $_.Name -ne '' }
-$dirs.Name   # list of directory names
-```
-
-**Exclude patterns:**
-
-```powershell
-tree -I 'node_modules' -L 3 .
+(tree src | Where-Object { $_.IsDirectory -and $_.Name }).Name
 ```
 
 ---
 
 ## du
 
-Estimate file space usage.
+Report space used by files and directories.
 
 ### Synopsis
 
 ```
-du [flags] [path...]
+du [OPTION]... [FILE]...
 ```
 
 ### Flags
 
 | Flag | Argument | Description |
 |------|----------|-------------|
-| `-h` | -- | Human-readable sizes (`4.0K`, `1.2M`) |
-| `-s` | -- | Summarize: show only the total for each argument |
-| `-a` | -- | Show sizes for individual files, not just directories |
-| `-c` | -- | Produce a grand total line at the end |
-| `-d` | N | Max depth of directory reporting |
+| `-s`, `--summarize` | -- | One total per operand |
+| `-a`, `--all` | -- | Report files too, not only directories |
+| `-c`, `--total` | -- | Add a grand `total` line |
+| `-d`, `--max-depth` | N | Report only N levels deep (`-1` = unlimited) |
+| `-h`, `--human-readable` | -- | `4.0K`, `1.2M` |
+| `-k` / `-m` / `-b`, `--bytes` | -- | Units: KiB (default) / MiB / bytes; the last of `-h -k -m -b` wins |
+| `--exclude` | GLOB | Skip matching files and directories |
+| `--apparent-size`, `-l`, `-x` | -- | Accepted; no effect |
+
+`-a` with `-s`, and `-s` with a non-zero `-d`, are GNU usage errors. Refused (exit 2): `-B`/`--block-size`, `-D -H -L -P -S -t -X -0`, `--threshold`, `--exclude-from`, `--files0-from`, `--inodes`, `--si`, `--time`, `--time-style`.
 
 ### Return Type: `PsBash.DuEntry`
 
 | Property | Type | Description |
 |----------|------|-------------|
-| `Size` | long | Size in KiB (ceiling) |
-| `SizeBytes` | long | Exact size in bytes |
-| `SizeHuman` | string | Human-readable size string |
-| `Path` | string | Display path |
-| `Depth` | int | Directory depth relative to target |
-| `IsTotal` | bool | `$true` for the grand total line (`-c`) |
-| `BashText` | string | Formatted `size\tpath` output |
+| `Size` | long | Size in the selected unit |
+| `SizeBytes` | long | Size in bytes |
+| `SizeHuman` | string | Human-readable size |
+| `Path` | string | Path as printed |
+| `Depth` | int | Depth below the operand |
+| `IsTotal` | bool | `$true` for the `-c` total line |
+| `BashText` | string | `size<TAB>path` |
+
+### Differences from GNU
+
+Sizes are apparent sizes (the byte length of each file), not allocated blocks, so `du` and `du --apparent-size` print the same figures.
 
 ### Examples
 
-**Summarize current directory:**
-
-```powershell
+```bash
 du -sh .
+du -h -c -d 1 .
+du -d 1 . | sort -rn | head -n 5
 ```
-
-```text
-1.2M	.
-```
-
-**Show all files with human-readable sizes:**
 
 ```powershell
-du -ah src/
-```
-
-**Limit depth and show grand total:**
-
-```powershell
-du -hc -d 1 .
-```
-
-```text
-140K	./src
-32K	./tests
-8.0K	./docs
-180K	.
-180K	total
-```
-
-**Access typed sizes for computation:**
-
-```powershell
-$usage = du -a src/
-$totalBytes = ($usage | Measure-Object -Property SizeBytes -Sum).Sum
-"Total: $totalBytes bytes"
-```
-
-**Find largest subdirectories:**
-
-```powershell
-du -d 1 . | sort -k1 -rn | head 5
+$usage = du -a src
+($usage | Measure-Object -Property SizeBytes -Sum).Sum
 ```
 
 ---
 
 ## pwd
 
-Print name of current/working directory.
+Print the current working directory.
 
 ### Synopsis
 
 ```
-pwd [flags]
+pwd [-P]
 ```
 
 ### Flags
 
 | Flag | Description |
 |------|-------------|
-| `-P` | Print the physical directory path (resolve symlinks via the OS) |
+| `-P` | Print the physical name: every symbolic link in the path is resolved |
 
-Without `-P`, `pwd` returns the PowerShell logical path from `Get-Location`. With `-P`, it calls `[System.IO.Directory]::GetCurrentDirectory()` to resolve symlinks.
-
-### Return Type: `PsBash.TextOutput`
-
-| Property | Type | Description |
-|----------|------|-------------|
-| `BashText` | string | Working directory path with forward slashes |
+Without `-P`, pwd prints the logical path: the location as `cd` reached it, links not resolved. The output is the shell form of the path (`C:/Users/you/project` on Windows) and matches `$PWD`. `pwd -P` gives the same name as `realpath .` and `readlink -f .`. The output object is a `PsBash.PwdLine` with a `BashText` property.
 
 ### Examples
 
-**Print working directory:**
-
-```powershell
+```bash
 pwd
 ```
 
 ```text
-/home/beagle/work/project
+C:/Users/you/work/project
 ```
 
-**Physical path (resolve symlinks):**
-
-```powershell
-pwd -P
+```bash
+cd link-to-project && pwd && pwd -P
 ```
 
-**Store and use in pipeline:**
-
-```powershell
-$cwd = pwd
-"Working in: $cwd"
+```text
+C:/Users/you/work/link-to-project
+C:/Users/you/work/project
 ```
 
 ---
 
 ## basename
 
-Strip directory and suffix from filenames.
+Strip the directory and an optional suffix from names.
 
 ### Synopsis
 
 ```
-basename [-s suffix] path...
+basename NAME [SUFFIX]
+basename OPTION... NAME...
 ```
 
 ### Flags
 
 | Flag | Argument | Description |
 |------|----------|-------------|
-| `-s` | suffix | Remove trailing suffix from the result |
+| `-a`, `--multiple` | -- | Every operand is a NAME |
+| `-s`, `--suffix` | SUFFIX | Remove a trailing SUFFIX; implies `-a` |
 
-Also supports `--suffix=EXT` long form.
-
-### Return Type: `PsBash.TextOutput`
-
-| Property | Type | Description |
-|----------|------|-------------|
-| `BashText` | string | Filename with directory components stripped |
+Without `-a`, a second operand is the SUFFIX and a third is an `extra operand` error. A suffix is removed only when the name is longer than the suffix. Output is one plain string per name. `-z` is not supported.
 
 ### Examples
 
-**Extract filename from path:**
-
-```powershell
-basename /home/beagle/work/script.ps1
-```
-
-```text
-script.ps1
-```
-
-**Strip extension:**
-
-```powershell
-basename -s .ps1 /home/beagle/work/script.ps1
-```
-
-```text
-script
-```
-
-**Process multiple paths:**
-
-```powershell
-basename /usr/bin/ls /usr/bin/cat
-```
-
-```text
-ls
-cat
-```
-
-**Combine with find:**
-
-```powershell
-find . -name '*.ps1' | ForEach-Object { basename $_.Path }
+```bash
+basename /home/you/work/script.sh          # script.sh
+basename /x/y.tar.gz .gz                   # y.tar
+basename -s .sh /x/a.sh /x/b.sh            # a, b (one per line)
+basename -a a/b c/d                        # b, d
 ```
 
 ---
 
 ## dirname
 
-Strip last component from file name, returning the directory portion.
+Strip the last component from each name.
 
 ### Synopsis
 
 ```
-dirname path...
+dirname NAME...
 ```
 
-### Return Type: `PsBash.TextOutput`
+Every argument is a NAME: there are no options. A name with no `/` gives `.`; `/usr` gives `/`. Trailing slashes are ignored. Output is one plain string per name. Backslashes in a Windows path are printed as `/`.
 
-| Property | Type | Description |
-|----------|------|-------------|
-| `BashText` | string | Directory portion of the path |
+### Differences from GNU
+
+- No `-z`/`--zero`.
+- With no operand, `dirname` prints nothing and exits 0. GNU prints `dirname: missing operand` and exits 1.
 
 ### Examples
 
-**Extract directory from path:**
-
-```powershell
-dirname /home/beagle/work/script.ps1
+```bash
+dirname /home/you/work/script.sh   # /home/you/work
+dirname script.sh                  # .
+dirname /usr                       # /
+cd "$(dirname "$0")"
 ```
 
-```text
-/home/beagle/work
+---
+
+## readlink
+
+Print a symbolic link's target, or a canonical file name.
+
+### Synopsis
+
+```
+readlink [OPTION]... FILE...
 ```
 
-**Bare filename returns current directory marker:**
+### Flags
 
-```powershell
-dirname script.ps1
+| Flag | Description |
+|------|-------------|
+| `-f`, `--canonicalize` | Canonical name with every link followed; all but the last component must exist |
+| `-e`, `--canonicalize-existing` | Like `-f`, but every component must exist |
+| `-m`, `--canonicalize-missing` | Like `-f`, but no component needs to exist |
+| `-n`, `--no-newline` | No newline after the name (ignored, with a warning, for several FILEs) |
+| `-q`, `--quiet` / `-s`, `--silent` | Suppress error messages (the default) |
+| `-v`, `--verbose` | Report errors |
+| `-z`, `--zero` | End each name with NUL |
+
+The last of `-f`/`-e`/`-m` wins, and the last of `-q`/`-s`/`-v` wins.
+
+### Behaviour
+
+- Without `-f`/`-e`/`-m`, FILE must be a symbolic link, and its target is printed exactly as stored. Anything else fails silently with status 1. With `-v`, the error is printed: `readlink: d: Invalid argument` for a non-link, `No such file or directory`, or `Not a directory`.
+- Canonicalization ports gnulib's `canonicalize_filename_mode`. It walks one component at a time from the root and follows each link where it is met, so `link/..` is the parent of the link's target, not the directory that holds the link. A loop is `Too many levels of symbolic links`.
+- The result is printed in shell form (`C:/x/y` on Windows).
+
+### Examples
+
+```bash
+ln -s d/f l
+readlink l            # d/f
+readlink -f l         # C:/Users/you/tmp/d/f
+readlink -m new/x     # canonical even though new/ does not exist
+readlink -v d         # readlink: d: Invalid argument   (status 1)
 ```
 
-```text
-.
+---
+
+## realpath
+
+Print the canonical (physical) name of each file.
+
+### Synopsis
+
+```
+realpath [OPTION]... FILE...
 ```
 
-**Root path:**
+### Flags
 
-```powershell
-dirname /usr
-```
+| Flag | Description |
+|------|-------------|
+| `-e`, `--canonicalize-existing` | Every component must exist |
+| `-m`, `--canonicalize-missing` | No component needs to exist |
+| `-P`, `--physical` | Follow each link where it is met (default) |
+| `-L`, `--logical` | Fold `..` first, then follow links |
+| `-s`, `--strip`, `--no-symlinks` | Do not follow links |
+| `-q`, `--quiet` | Suppress error messages |
+| `-z`, `--zero` | End each name with NUL |
 
-```text
-/
-```
+The default requires all but the last component to exist. The last of `-e`/`-m` wins, and the last of `-L`/`-P`/`-s` wins. `--relative-to` and `--relative-base` exit 2 (not supported).
 
-**Combine with other commands:**
+### Behaviour
 
-```powershell
-$dir = dirname /home/beagle/work/script.ps1
-ls -la $dir.BashText
+Uses the same canonicalization as `readlink -f`. With `-s`, a relative operand is made absolute against the physical current directory (the `pwd -P` name). A failure prints `realpath: NAME: reason` (the name GNU-quoted when needed, e.g. `'a b'`) unless `-q` is given, and the exit status is 1. The other operands are still processed.
+
+### Examples
+
+```bash
+realpath .                  # C:/Users/you/work/project
+realpath -m nosuch/x        # C:/Users/you/work/project/nosuch/x
+realpath nosuch/x           # realpath: nosuch/x: No such file or directory  (status 1)
+realpath -s link            # the link's own name, not its target
 ```
 
 ---
 
 ## Pipeline Bridge Patterns
 
-The real power of these commands comes from combining them through the pipeline while keeping typed objects intact.
+Typed objects pass through the pipeline unchanged, so these commands combine with PowerShell.
 
-**Filter ls output and access properties:**
+**Filter `ls` output and read properties:**
 
 ```powershell
-$large = ls -la | grep '.psm1' | sort -k5 -rn
-$large[0].Name       # "PsBash.psm1"
-$large[0].SizeBytes  # 141234
-$large[0].Permissions # "-rw-r--r--"
+$large = ls -l | grep '.psm1' | sort -k5 -rn
+$large[0].Name
+$large[0].SizeBytes
 ```
 
-**Combine find with stat for detailed metadata:**
+**`find` plus `stat`:**
 
 ```powershell
 find . -name '*.ps1' | ForEach-Object {
     $s = stat $_.FullPath
-    [PSCustomObject]@{
-        Name  = $_.Name
-        Size  = $s.SizeBytes
-        Owner = $s.Owner
-    }
+    [PSCustomObject]@{ Name = $_.Name; Size = $s.SizeBytes; Owner = $s.Owner }
 }
 ```
 
-**Disk usage analysis:**
+**Largest entries:**
 
-```powershell
-du -ah . | sort -k1 -rn | head 10
-```
-
-**Directory tree filtered to directories:**
-
-```powershell
-tree -d -L 2 . | Where-Object { $_.IsDirectory }
+```bash
+du -a . | sort -rn | head -n 10
 ```

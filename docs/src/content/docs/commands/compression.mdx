@@ -5,61 +5,92 @@ description: gzip, gunzip, zcat, and tar commands for compressing, decompressing
 
 import { Aside } from '@astrojs/starlight/components';
 
-Commands for compressing and decompressing files with gzip, and creating or extracting archives with tar.
+`gzip` and `tar` are binary cmdlets built on .NET's `GZipStream` and `System.Formats.Tar`. They need no external `gzip.exe` or `tar.exe`, and the archives they write are standard gzip and POSIX tar files that GNU tools read. Compressed data travels through pipelines and redirections as exact bytes, so `gzip -c f > f.gz` and `tar cf - d | tar tf -` work as in bash.
 
 ---
 
 ## gzip
 
-Compress files using the gzip format. By default, replaces each file with a compressed `.gz` version.
+Compress files in the gzip format. By default each `FILE` is replaced by `FILE.gz`.
 
 ### Syntax
 
 ```text
-gzip [OPTIONS] FILE...
+gzip [OPTION]... [FILE]...
 ```
+
+With no `FILE`, gzip compresses (or with `-d`, decompresses) its pipeline input to stdout. Options and file names can be mixed, bundled (`-dk`, `-9v`), and abbreviated (`--dec`, `--std`). `--` ends options.
 
 ### Flags
 
 | Flag | Description |
 |------|-------------|
-| `-d` | Decompress (same as `gunzip`) |
-| `-c` | Write output to stdout instead of replacing the file |
-| `-k` | Keep the original file (do not delete after compress/decompress) |
-| `-f` | Force overwrite of output files |
-| `-v` | Verbose -- show compression ratio for each file |
-| `-l` | List compression statistics instead of compressing |
-| `-1` .. `-9` | Compression level (`-1` fastest, `-9` smallest, default `-6`) |
+| `-c`, `--stdout`, `--to-stdout` | Write to stdout and keep the input files |
+| `-d`, `--decompress`, `--uncompress` | Decompress |
+| `-f`, `--force` | Overwrite an existing output file |
+| `-k`, `--keep` | Keep the input file |
+| `-l`, `--list` | List compressed size, uncompressed size, and ratio for each `.gz` file |
+| `-q`, `--quiet`, `--silent` | Suppress warnings (directory ignored, unknown suffix, already has suffix) |
+| `-r`, `--recursive` | Descend into directory operands and process each file in them |
+| `-S SUF`, `--suffix=SUF` | Use `SUF` instead of `.gz` when compressing and decompressing |
+| `-t`, `--test` | Check that each file decompresses. Prints nothing on success; with `-v`, prints `FILE: OK` |
+| `-v`, `--verbose` | Print `FILE: RATIO` for each file processed |
+| `-1` .. `-9`, `--fast`, `--best` | Compression level. `-1`/`--fast` maps to .NET `Fastest`, `-9`/`--best` to `SmallestSize`, anything else to `Optimal`. The last level given wins |
+| `-h`, `--help`, `-V`, `--version`, `-L`, `--license` | Print help or version information |
+
+Accepted and ignored, because the .NET gzip writer has no matching control: `-a`/`--ascii`, `-m`, `-M`, `-n`/`--no-name`, `-N`/`--name`, `--rsyncable`, `--synchronous`.
+
+Refused with exit 2: `-Z`/`--lzw` and `-b`/`--bits`, because no LZW codec is available.
+
+### Exit status
+
+| Code | Meaning |
+|------|---------|
+| 0 | Success |
+| 1 | Usage error, missing file, or corrupt input |
+| 2 | Output file already exists and `-f` was not given, or a refused option |
 
 ### Return type
 
-With `-l`, each result is a `PsBash.GzipListOutput` object:
+Without `-c`, gzip writes files and returns nothing unless `-v` is given. With `-c`, or with pipeline input, it returns the output bytes as pipeline records.
+
+With `-l`, each file produces one `PsBash.GzipListOutput` object:
 
 | Property | Type | Description |
 |----------|------|-------------|
-| `CompressedSize` | int | Size of the compressed file in bytes |
-| `UncompressedSize` | int | Original uncompressed size in bytes |
-| `Ratio` | string | Compression ratio as a percentage (e.g. `"72.5%"`) |
-| `FileName` | string | Path to the compressed file |
-| `BashText` | string | Formatted text output |
+| `CompressedSize` | long | Size of the `.gz` file in bytes |
+| `UncompressedSize` | long | Decompressed size in bytes |
+| `Ratio` | string | Space saved, formatted as `"53.0%"` |
+| `FileName` | string | Path of the `.gz` file |
+| `BashText` | string | The formatted listing line |
 
-With `-v`, returns `BashObject` lines showing the compression ratio per file.
+### Differences from GNU gzip
+
+- `-l` prints one line per file with no column header, and the last column is the full Windows path of the `.gz` file (`C:\work\a.txt.gz`). GNU prints a header and the uncompressed name as typed.
+- `-v` prints `FILE: RATIO` to stdout, with FILE as a full Windows path. GNU prints `FILE: RATIO -- replaced with FILE.gz` to stderr.
+- Running `gzip` with no `FILE` and no pipeline input reports `gzip: missing file operand`. It does not wait on the terminal.
+- An existing output file is never overwritten interactively. Without `-f`, gzip reports `already exists; not overwritten` and exits 2.
 
 ### Examples
 
-```powershell
+```bash
 # Compress a file, keeping the original
 gzip -k data.csv
 ```
 
-```powershell
-# Compress with maximum compression
-gzip -9 largefile.bin
+```bash
+# Round-trip through a pipe; the bytes are exact
+gzip -c data.csv | gzip -dc | wc -l
 ```
 
-```powershell
-# List compression statistics for a .gz file
-gzip -l archive.gz
+```bash
+# Compress every file under logs/ with maximum compression
+gzip -r9 logs/
+```
+
+```bash
+# Check an archive before relying on it
+gzip -t backup.gz && echo ok
 ```
 
 ```powershell
@@ -74,40 +105,29 @@ $info.Ratio              # "72.7%"
 
 ## gunzip
 
-Decompress gzip-compressed files. This is an alias for `gzip -d` -- it automatically sets the decompress flag.
+Decompress gzip files. `gunzip` is `gzip -d` under another name: it takes every gzip flag, and `-d` is implied.
 
 ### Syntax
 
 ```text
-gunzip [OPTIONS] FILE...
+gunzip [OPTION]... [FILE]...
 ```
 
-### Flags
-
-| Flag | Description |
-|------|-------------|
-| `-c` | Write decompressed output to stdout |
-| `-k` | Keep the `.gz` file after decompression |
-| `-f` | Force overwrite of output files |
-| `-v` | Verbose -- show compression ratio |
-
-<Aside type="note">
-`gunzip` shares the same flags as `gzip`. The `-d` flag is implicit -- you do not need to pass it.
-</Aside>
+`gunzip FILE.gz` writes `FILE` and removes `FILE.gz` unless you pass `-k` or `-c`. If the name lacks the suffix (`.gz`, or the one set with `-S`), gunzip warns `unknown suffix -- ignored` and skips the file. If `FILE` does not exist, gunzip also tries `FILE.gz`, and the error names the last name it tried.
 
 ### Examples
 
-```powershell
+```bash
 # Decompress a file, removing the .gz
 gunzip data.csv.gz
 ```
 
-```powershell
+```bash
 # Decompress but keep the original .gz file
 gunzip -k archive.gz
 ```
 
-```powershell
+```bash
 # Decompress to stdout for piping
 gunzip -c logs.gz | grep 'ERROR'
 ```
@@ -116,102 +136,157 @@ gunzip -c logs.gz | grep 'ERROR'
 
 ## zcat
 
-Decompress gzip files and write the content to stdout. This is equivalent to `gzip -dc` -- both decompress and stdout flags are set automatically.
+Decompress gzip files to stdout. `zcat` is `gzip -dc`. It never modifies or removes the input file.
 
 ### Syntax
 
 ```text
-zcat FILE...
+zcat [OPTION]... [FILE]...
 ```
+
+With no `FILE`, zcat decompresses its pipeline input.
 
 ### Examples
 
-```powershell
+```bash
 # View compressed file contents
 zcat readme.txt.gz
 ```
 
-```powershell
+```bash
 # Pipe decompressed content into other commands
 zcat access.log.gz | grep '404' | wc -l
 ```
 
-```powershell
-# Preview the first few lines of a compressed file
-zcat data.csv.gz | head 5
+```bash
+# Decompress a stream
+cat data.csv.gz | zcat | head -n 5
 ```
-
-<Aside type="tip">
-`zcat` always writes to stdout and never modifies the original file, so there is no need for the `-k` flag.
-</Aside>
 
 ---
 
 ## tar
 
-Create, extract, and list archive files. Uses `System.IO.Compression.ZipArchive` internally, with optional gzip wrapping via the `-z` flag.
+Create, extract, and list POSIX tar archives, with optional gzip compression. The option parser follows GNU tar 1.35, including abbreviations and the old-style first word (`tar czf a.tgz dir`, `tar xvf a.tar`).
 
 ### Syntax
 
 ```text
-tar [OPTIONS] [FILE...]
+tar -c [OPTION]... [-f ARCHIVE] [-C DIR] FILE...
+tar -x [OPTION]... [-f ARCHIVE] [-C DIR] [MEMBER]...
+tar -t [OPTION]... [-f ARCHIVE] [MEMBER]...
 ```
+
+Exactly one of `-c`, `-x`, `-t` is required. Without `-f`, the archive is `$TAPE` when that variable is set and exported. Otherwise it is stdin or stdout, as with `-f -`.
 
 ### Flags
 
 | Flag | Description |
 |------|-------------|
-| `-c` | Create a new archive |
-| `-x` | Extract files from an archive |
-| `-t` | List the contents of an archive |
-| `-f FILE` | Specify the archive filename (required) |
-| `-z` | Filter the archive through gzip (compress on create, decompress on extract/list) |
-| `-v` | Verbose -- print filenames as they are processed |
-| `-C DIR` | Change to DIR before extracting |
-| `--exclude=PATTERN` | Exclude files matching the glob pattern |
+| `-c`, `--create` | Create an archive |
+| `-x`, `--extract`, `--get` | Extract members |
+| `-t`, `--list` | List member names |
+| `-f FILE`, `--file=FILE` | Archive file. `-` means stdin or stdout |
+| `-C DIR`, `--directory=DIR` | On create, take the following operands relative to `DIR`. The flag is positional and can repeat. On extract, write into `DIR` |
+| `-z`, `--gzip`, `--gunzip`, `--ungzip` | Compress on create. On extract or list, a gzip archive file is detected by its magic bytes and needs no `-z` |
+| `-a`, `--auto-compress` | On create, choose gzip from a `.gz` or `.tgz` archive name |
+| `-v`, `--verbose` | On create and extract, print each member name. Directories end in `/` |
+| `-k`, `--keep-old-files` | Extract without replacing existing files. Each one is reported as `Cannot open: File exists` (exit 2) |
+| `-O`, `--to-stdout` | Extract file contents to stdout instead of to disk |
+| `--strip-components=N` | On extract, drop the first `N` path components of each member name |
+| `--exclude=PATTERN` | Skip members matching `PATTERN` (create, list, and extract) |
+| `-X FILE`, `--exclude-from=FILE` | Read exclude patterns from `FILE`, one per line |
+| `-T FILE`, `--files-from=FILE` | Read member names (or, on create, source paths) from `FILE`, one per line. `-` reads the pipeline |
+| `--wildcards`, `--no-wildcards` | Treat the member names that follow as glob patterns, or as literal names |
+| `-m`, `--touch` | On extract, do not restore archived modification times |
+| `-p`, `--preserve-permissions`, `--same-permissions` | On extract outside Windows, apply the archived mode bits without masking them by the umask |
+
+Accepted and ignored: `--overwrite`, `--same-owner`, `--no-same-owner`, `--no-same-permissions`.
+
+### Matching rules
+
+- **Member names** (list and extract): a plain name selects that member and everything below it, so `d` selects `d/` and `d/a`. A name that selects nothing is reported as `tar: NAME: Not found in archive`. The remaining members are still processed, and the run exits 2.
+- **Patterns**: `--exclude` patterns, and names after `--wildcards`, use fnmatch rules. `*` and `?` match across `/`, and `[a-z]`, `[!x]`, and `\` escapes work. An exclude pattern matches any run of whole path components, so `--exclude=sub` skips `d/sub` and everything below it.
+- A name containing `*`, `?`, or `[` without `--wildcards` or `--no-wildcards` is matched literally. tar then prints GNU's `Pattern matching characters used in file names` warning to stderr.
+
+### Exit status
+
+| Code | Meaning |
+|------|---------|
+| 0 | Success |
+| 1 | I/O failure during the operation, or a member skipped for safety |
+| 2 | No mode or two modes, empty create, missing archive or source, member not found, not a tar archive, refused option |
+| 64 | Option parse error (unknown option, missing argument) |
 
 ### Return type
 
-With `-t`, each entry is a `PsBash.TarListOutput` object:
+With `-t`, each member produces one `PsBash.TarListOutput` object:
 
 | Property | Type | Description |
 |----------|------|-------------|
-| `Name` | string | Filename within the archive |
-| `Size` | long | Uncompressed size in bytes |
-| `ModifiedDate` | DateTime | Last modification timestamp |
-| `BashText` | string | Entry path as displayed in the listing |
+| `BashText` | string | Member path as stored in the archive. Directories end in `/` |
+| `Name` | string | Last path component of the member |
+
+With `-v` on create or extract, tar returns one text line per member. When the archive is written to stdout, those names go to stderr.
+
+### Safety on extract
+
+tar refuses any member that would write outside the destination: absolute names, drive or UNC paths, and names that climb out with `..`. Each refused member is reported as `Skipping to next header: NAME: path escapes archive destination` (exit 1). It also refuses links whose target escapes the destination, and writes through an existing symlink or junction under the destination.
+
+### Not supported
+
+These options are refused with exit 2. None of them is ever silently ignored.
+
+- Compression formats with no managed .NET codec: `-j`/`--bzip2`, `-J`/`--xz`, `--lzma`, `--lzip`, `--lzop`, `--zstd`, `-Z`/`--compress`, `-I`. A bundle such as `-cjf` is refused too, and with `-a` a `.bz2`, `.xz`, `.zst`, or `.Z` archive name is refused.
+- Other modes: `-A`, `-d`/`--diff`, `-r`, `-u`, `--delete`, `--test-label`.
+- `-h`/`--dereference`, `--transform`, incremental and multi-volume archives, xattrs, ownership and mtime overrides, `--null`.
+- Option lines (such as `-C dir`) inside a `-T` file.
+
+### Differences from GNU tar
+
+- `tar -tv` lists names only. GNU prints `ls -l`-style lines.
+- An absolute source operand is stored under its basename. GNU stores the full path minus the leading `/`.
+- Archives are not padded to GNU's 10240-byte record size. GNU tar reads them without complaint.
+- A gzip archive read from stdin needs `-z`. Without it, tar reports `tar: Archive is compressed. Use -z option`.
 
 ### Examples
 
-```powershell
+```bash
 # Create a gzip-compressed archive from a directory
 tar -czf project.tar.gz src/
 ```
 
-```powershell
-# Extract a gzip-compressed archive to a specific directory
-tar -xzf project.tar.gz -C /tmp/output
+```bash
+# Old-style first word, extract into another directory
+tar xzf project.tar.gz -C out
 ```
 
-```powershell
-# List contents of an archive
-tar -tzf backup.tar.gz
+```bash
+# Stream an archive through a pipe
+tar -cf - src | tar -tf -
 ```
 
-```powershell
-# Access typed properties from the listing
-$entries = tar -tzf project.tar.gz
-$entries[0].Name          # "app.js"
-$entries[0].Size          # 2048
-$entries[0].ModifiedDate  # 4/1/2026 3:22:00 PM
+```bash
+# Extract one subtree, dropping its top directory
+tar -xf release.tar --strip-components=1 release/bin
 ```
 
-```powershell
+```bash
 # Create an archive excluding test files
-tar -czf release.tar.gz src/ --exclude=*.test.ps1
+tar -czf release.tar.gz --exclude='*.test.ps1' src/
+```
+
+```bash
+# Print one member's content without extracting
+tar -xOf project.tar.gz src/README.md
 ```
 
 ```powershell
-# Verbose extract to see each file as it is written
-tar -xzvf archive.tar.gz
+# Typed list output
+$entries = tar -tzf project.tar.gz
+$entries | Where-Object { $_.BashText -like 'src/*.js' } | ForEach-Object Name
 ```
+
+<Aside type="note">
+In a direct PowerShell call (`Invoke-BashTar` or the `tar` alias typed at a `PS>` prompt), the case-insensitive binder cannot tell `-c` from `-C`. `-C DIR` is recognized once a mode flag is already on the line. Scripts run through ps-bash are not affected, because every flag reaches tar as typed.
+</Aside>

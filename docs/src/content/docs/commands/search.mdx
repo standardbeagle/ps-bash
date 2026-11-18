@@ -1,6 +1,6 @@
 ---
 title: "Search: grep & rg"
-description: "grep and rg commands for pattern matching and recursive search in PowerShell. The grep command bridges bash-style text matching with PowerShell's typed object pipeline."
+description: "grep (GNU grep 3.11) and rg (ripgrep 14.1) for pattern matching and recursive search in PowerShell. Both filter typed pipeline objects as well as files."
 head:
   - tag: meta
     attrs:
@@ -12,86 +12,78 @@ import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
 
 # Search Commands
 
-`grep` and `rg` for pattern matching and recursive search.
+`grep` follows GNU grep 3.11 and `rg` follows ripgrep 14.1, including options, output format, colours and exit status. Both run in-process and need no installed binary.
 
 ---
 
 ## grep
 
-Search for patterns in files or filter pipeline objects by matching against their text representation.
+Print lines that match patterns, from files or from the pipeline.
 
 ```
-grep [OPTIONS] PATTERN [FILE...]
+grep [OPTION]... PATTERNS [FILE]...
+grep [OPTION]... -e PATTERNS ... [FILE]...
+grep [OPTION]... -f PATTERN_FILE ... [FILE]...
 ```
+
+`egrep` is `grep -E` and `fgrep` is `grep -F`.
 
 ### Two Modes
-
-**grep** operates in two distinct modes depending on how you call it:
 
 <Tabs>
 <TabItem label="Pipeline mode">
 
-When objects are piped in and no file arguments are given, grep matches against each object's `BashText` representation and emits the **original typed object** on match.
+When objects are piped in and no file is named, grep matches each object's `BashText` and emits the **original object** on a match.
 
 ```powershell
-ls -la | grep '.ps1'
+ls -l | grep '.ps1'
 ```
 
-```text
--rw-r--r-- 1 you you 141234 Apr  2 10:30 PsBash.psm1
--rw-r--r-- 1 you you  28400 Apr  2 10:28 PsBash.Tests.ps1
-```
-
-The output looks like text, but each result is still an `LsEntry` object:
+The output looks like text, but each result is still an `LsEntry`:
 
 ```powershell
-$result = ls -la | grep '.ps1'
-$result[0].GetType().Name   # PSCustomObject (LsEntry type)
+$result = ls -l | grep '.ps1'
 $result[0].Name             # "PsBash.psm1"
 $result[0].SizeBytes        # 141234
-$result[0].Permissions      # "-rw-r--r--"
 ```
 
-This is the **pipeline bridge pattern**: grep reads `.BashText` for matching but passes through the original object unchanged. Types survive the entire pipeline:
+Types survive later stages too:
 
 ```powershell
-$big = ls -la | grep '.ps1' | sort -k5 -rn | head 1
-$big[0].SizeBytes   # 141234 -- still a real integer
+$big = ls -l | grep '.ps1' | sort -k5 -rn | head -n 1
+$big.SizeBytes   # still a number
 ```
 
 </TabItem>
 <TabItem label="File mode">
 
-When file paths are given as arguments, grep reads the files and returns `GrepMatch` objects.
+When files are named, or with `-r`, grep reads them and emits one `PsBash.GrepMatch` per output line.
 
-```powershell
-grep 'function' src/PsBash.psm1
+```bash
+grep -n 'function' src/PsBash.psm1
 ```
 
 ```text
-function Get-BashPlatform {
-function New-BashObject {
-function ConvertFrom-BashArgs {
+7:function Get-BashPlatform {
+20:function New-BashObject {
 ```
 
-Each result is a `GrepMatch` with typed properties:
-
 ```powershell
-$matches = grep -n 'function' src/PsBash.psm1
-$matches[0].FileName    # "/home/you/src/PsBash.psm1"
-$matches[0].LineNumber   # 7
-$matches[0].Line         # "function Get-BashPlatform {"
+$m = grep -n 'function' src/PsBash.psm1
+$m[0].FileName     # "src/PsBash.psm1"
+$m[0].LineNumber   # 7
+$m[0].Line         # "function Get-BashPlatform {"
 ```
 
-With multiple files, output includes the filename prefix:
+With several files, or `-r`, each line is prefixed with the file name as you typed it:
 
-```powershell
-grep 'Import-Module' *.ps1
+```bash
+grep -r hi s
 ```
 
 ```text
-profile.ps1:Import-Module PsBash
-setup.ps1:Import-Module Pester
+s/a/x.txt:hi
+s/y.txt:hi
 ```
 
 </TabItem>
@@ -99,222 +91,190 @@ setup.ps1:Import-Module Pester
 
 ### Flags
 
+Every GNU grep 3.11 option is implemented.
+
 | Flag | Description |
 |------|-------------|
-| `-i` | Case-insensitive matching |
-| `-v` | Invert match (select non-matching lines) |
-| `-n` | Prefix each line with its line number |
-| `-c` | Print count of matching lines only |
-| `-r` | Recursive search through directories |
-| `-l` | Print only names of files with matches |
-| `-E` | Extended regular expressions (ERE syntax) |
-| `-A NUM` | Show NUM lines after each match |
-| `-B NUM` | Show NUM lines before each match |
-| `-C NUM` | Show NUM lines before and after each match |
+| `-E` / `-F` / `-G` / `-P` | Extended regex / fixed strings / basic regex (default) / Perl-compatible regex |
+| `-e PAT`, `--regexp=PAT` | Pattern (repeatable) |
+| `-f FILE`, `--file=FILE` | Read patterns from FILE (repeatable) |
+| `-i`, `-y`, `--ignore-case` / `--no-ignore-case` | Case-insensitive matching / turn it off again |
+| `-v`, `--invert-match` | Select non-matching lines |
+| `-w` / `-x` | Match whole words / whole lines |
+| `-c`, `--count` | Print a count of selected lines per file |
+| `-l` / `-L` | List files with / without a match |
+| `-o`, `--only-matching` | Print only the matched parts |
+| `-q`, `--quiet` | No output; exit 0 on the first match |
+| `-s`, `--no-messages` | Suppress messages about missing or unreadable files |
+| `-m N`, `--max-count=N` | Stop after N selected lines per file |
+| `-n` / `-b` | Prefix line numbers / byte offsets |
+| `-H` / `-h` | Always / never prefix file names |
+| `-T`, `--initial-tab` | Align output with a tab after the prefix |
+| `-Z`, `--null` | NUL after file names |
+| `-z`, `--null-data` | Input and output records end in NUL |
+| `-A N` / `-B N` / `-C N`, `-NUM` | Context lines after / before / around each match |
+| `--group-separator=SEP`, `--no-group-separator` | Separator between context groups (default `--`) |
+| `-r` / `-R` | Search directories recursively |
+| `--include=GLOB`, `--exclude=GLOB`, `--exclude-dir=GLOB`, `--exclude-from=FILE` | Filter the files searched |
+| `-a`, `--text` / `-I` / `--binary-files=TYPE` | Treat binary files as text / as non-matching / `binary`, `text`, `without-match` |
+| `-d ACTION` / `-D ACTION` | Directories: `read`, `skip`, `recurse` / devices: `read`, `skip` |
+| `--label=LABEL` | Name to show for stdin |
+| `--color[=WHEN]` | `always`, `auto`, `never`; colours from `GREP_COLORS` (GNU defaults) |
+| `-u` | Accepted, with GNU's obsolescence warning |
+| `--line-buffered`, `-U` | Accepted; no effect |
+
+### Behaviour
+
+- **Exit status**: 0 when a line is selected, 1 when none is, 2 on an error. An unreadable or missing file makes the status 2 even if another file matched, unless `-q` found a match.
+- **Usage errors** exit 2: an unknown or ambiguous option, a bad context length, `grep: conflicting matchers specified` for two of `-E -F -G -P`.
+- **Binary files**: a file with a NUL byte in its first 96 KiB is binary. A match prints `grep: NAME: binary file matches` on stderr instead of the line.
+- **`-P`**: the pattern is translated to .NET regex, including `\K` at top level, `\Q..\E`, possessive quantifiers, `(?P<n>)`, `\h`, `\R`. Constructs it cannot express (recursion, `(?|`, backtracking verbs, `\K` inside a group) exit 2 with `grep: unsupported PCRE construct`.
+
+<Aside type="note" title="Differences from GNU">
+- `grep -r` skips `.git`, `.hg`, `.svn`, `.vs`, `node_modules`, `bin` and `obj` before descending, and skips binary files it meets during the walk without a message. Set `PSBASH_SEARCH_NO_IGNORE=1` (or pass `-a`) to search everything.
+- An invalid UTF-8 byte is text, not a binary marker. Only a NUL makes input binary.
+- `--color=auto` colours only when ps-bash runs on a terminal (`PSBASH_GREP_TTY=1`/`0` overrides the check).
+</Aside>
 
 ### GrepMatch Properties
 
-In file mode, each result is a `PsBash.GrepMatch` object:
-
 | Property | Type | Description |
 |----------|------|-------------|
-| `FileName` | string | Absolute path to the matched file |
-| `LineNumber` | int | 1-based line number of the match |
-| `Line` | string | Full text of the matched line |
-| `BashText` | string | Formatted output string (includes filename/line number prefixes) |
+| `FileName` | string | File name as typed (or the path below a `-r` root) |
+| `LineNumber` | int | 1-based line number |
+| `Line` | string | The line's text |
+| `BashText` | string | The printed line, prefixes included |
 
-<Aside type="tip">
-In pipeline mode, grep does **not** return `GrepMatch` objects. It returns whatever objects were piped in. This is what makes pipeline composition work -- types survive through `grep`, `sort`, `head`, and `tail` without losing structure.
-</Aside>
+`-c`, `-l` and `-L` print plain text records. In pipeline mode the piped objects themselves come out.
 
 ### Examples
 
-**Case-insensitive search:**
-
-```powershell
-grep -i 'error' /var/log/app.log
-```
-
-**Regex with extended syntax:**
-
-```powershell
+```bash
+grep -i 'error' app.log
 grep -E 'warn|error|fatal' server.log
-```
-
-**Inverted match (exclude lines):**
-
-```powershell
-cat config.yml | grep -v '^#'
-```
-
-**Count matches per file:**
-
-```powershell
-grep -rc 'import' src/
-```
-
-```text
-src/main.ps1:3
-src/utils.ps1:1
-```
-
-**Context lines around matches:**
-
-```powershell
-grep -B2 -A2 'throw' src/PsBash.psm1
-```
-
-**List files containing a pattern:**
-
-```powershell
+grep -v '^#' config.yml
+grep -rn --include='*.sh' 'set -e' .
 grep -rl 'Invoke-BashGrep' src/
+grep -c TODO *.md
+grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+' package.json
+grep -B2 -A2 'throw' src/PsBash.psm1
+grep -q needle file && echo found
+grep -P '(?<=v)\d+' versions.txt
 ```
 
-**Recursive search from a directory:**
-
 ```powershell
-grep -r 'function' src/
-```
-
-**Pipeline bridge with further processing:**
-
-```powershell
-# Find large .log files -- types preserved through grep
-$logs = ls -la | grep '\.log'
-$logs | ForEach-Object { $_.SizeBytes } | Measure-Object -Sum
+# Filter typed objects, then use their properties
+$logs = ls -l | grep '\.log'
+($logs | Measure-Object -Property SizeBytes -Sum).Sum
 ```
 
 ---
 
 ## rg
 
-Recursive search across files, modeled after [ripgrep](https://github.com/BurntSushi/ripgrep). Searches recursively by default, skips `.git` directories, and excludes dotfiles unless `--hidden` is specified.
+Recursive search modelled on [ripgrep](https://github.com/BurntSushi/ripgrep) 14.1. With no path, it searches the current directory, or stdin when input is piped in.
 
 ```
 rg [OPTIONS] PATTERN [PATH...]
+rg [OPTIONS] -e PATTERN ... [PATH...]
+rg [OPTIONS] --files [PATH...]
 ```
 
 ### Flags
 
 | Flag | Description |
 |------|-------------|
-| `-i` | Case-insensitive matching |
-| `-w` | Match whole words only (wraps pattern in `\b...\b`) |
-| `-c` | Print count of matching lines only |
-| `-l` | Print only names of files with matches |
-| `-n` | Show line numbers (default) |
-| `-N` | Suppress line numbers |
-| `-o` | Print only the matched portion of each line |
-| `-v` | Invert match (select non-matching lines) |
-| `-F` | Treat pattern as a fixed string, not a regex |
-| `-g GLOB` | Filter files by glob pattern (e.g., `-g '*.ps1'`) |
-| `-A NUM` | Show NUM lines after each match |
-| `-B NUM` | Show NUM lines before each match |
-| `-C NUM` | Show NUM lines before and after each match |
-| `--hidden` | Include dotfiles and hidden directories |
+| `-i` / `-s` / `-S` | Ignore case / case-sensitive / smart case (the last one wins) |
+| `-F`, `--fixed-strings` | Literal pattern |
+| `-w` / `-x` | Whole words / whole lines |
+| `-v`, `--invert-match` | Non-matching lines |
+| `-e PAT` / `-f FILE` | Pattern / patterns from a file (repeatable; makes every operand a path) |
+| `-P` | PCRE syntax, translated to .NET regex |
+| `-U`, `--multiline`, `--multiline-dotall` | Let matches span lines |
+| `-c` / `--count-matches` | Count lines / matches per file |
+| `-l` / `--files-without-match` | List files with / without a match |
+| `-o`, `--only-matching` | Only the matched parts |
+| `-r REPL`, `--replace=REPL` | Replace matches in output (`$1`, `$name`, `${name}`, `$$`) |
+| `-q`, `--quiet` | No output; exit 0 on the first match |
+| `-m N`, `--max-count=N` | At most N matching lines per file |
+| `-n` / `-N` | Show / hide line numbers |
+| `--column`, `--vimgrep`, `-b` | Column numbers / `path:line:col:text` / byte offsets |
+| `-H` / `-I` | Show / hide file names |
+| `--heading` | Group matches under a file-name heading |
+| `-A N` / `-B N` / `-C N` | Context lines |
+| `--passthru` | Print every line, matches highlighted |
+| `--trim` | Strip leading whitespace |
+| `-0`, `--null` | NUL after file names |
+| `-g GLOB`, `--iglob GLOB` | Include (or `!GLOB` exclude) files by glob |
+| `-t TYPE` / `-T TYPE` | Search / skip a file type (ripgrep's 203 built-in types) |
+| `--type-list`, `--type-add SPEC`, `--type-clear TYPE` | Inspect or change the type table |
+| `--hidden` | Include hidden files and directories |
+| `--no-ignore`, `-u`, `-uu` | Turn off the default pruning (`-uu` also searches hidden files) |
+| `-L`, `--follow` | Follow symbolic links and junctions |
+| `-d N`, `--max-depth N` | Limit recursion depth |
+| `--files` | List the files that would be searched |
+| `--sort KEY`, `--sortr KEY` | `path`, `modified`, `accessed`, `created`, `none` |
+| `-a`, `--text` | Search binary files |
+| `-z`, `--search-zip` | Search inside `.gz` files |
+| `-E ENC`, `--encoding ENC` | `utf-8`, `latin1`, `utf-16le`, `utf-16be`, ... |
+| `--json`, `--stats` | ripgrep's JSON Lines output / summary statistics |
+| `--color WHEN`, `--colors SPEC`, `-p` | Colour control; `-p` = colour + heading + line numbers |
+
+Refused (exit 2, `recognized but not supported`): `--pre`, `--pre-glob`, `--ignore-file`, the `--no-ignore-*` variants, `--null-data`, `--crlf`, `--engine`, `--max-filesize`, `--max-columns`, `--context-separator`, `--path-separator`, `--one-file-system`, `--debug`, `--trace`. Accepted with no effect: `-j`, `--mmap`, `--no-mmap`, `--line-buffered`, `--block-buffered`, `--no-messages`, `--no-config`.
+
+### Behaviour
+
+- **Output layout** follows ripgrep's terminal rules. In a script, or when piped, lines are `path:text` with no line numbers unless `-n`. In an interactive ps-bash terminal, matches are grouped under file headings with line numbers, as ripgrep does on a TTY.
+- **Pruning**: hidden entries and the default set (`.git`, `.hg`, `.svn`, `.vs`, `node_modules`, `bin`, `obj`) are skipped before descending. `--hidden`, `--no-ignore`/`-u` or `PSBASH_SEARCH_NO_IGNORE=1` change this. `.gitignore` files are **not** read.
+- **Exit status**: 0 on a match, 1 on none, 2 on an error (an unreadable path makes it 2 even when another file matched).
+- **Path separators**: on Windows, a file found below a directory prints with a backslash (`src\a.txt`), unlike grep and the rest of ps-bash, which print `src/a.txt`.
+- **Argument rules** are ripgrep's: options may follow operands, long options do not abbreviate, and `--color` requires a value.
+- **Native ripgrep**: set `PSBASH_RG_NATIVE=1` to hand the command line to a real `rg` on `PATH` (no piped input). Use this when you need `.gitignore` handling, preprocessors or the PCRE2 engine.
 
 ### RgMatch Properties
 
-Each result is a `PsBash.RgMatch` object:
-
 | Property | Type | Description |
 |----------|------|-------------|
-| `FileName` | string | Absolute path to the matched file |
-| `LineNumber` | int | 1-based line number of the match |
-| `Line` | string | Full text of the matched line |
-| `BashText` | string | Formatted output string (includes filename/line number prefixes) |
+| `FileName` | string | Path as printed |
+| `LineNumber` | int | 1-based line number |
+| `Line` | string | The line's text |
+| `BashText` | string | The printed line |
 
-<Aside type="note">
-Like grep, rg also supports pipeline mode. When objects are piped in with no file arguments, rg matches against `BashText` and passes through the original objects.
-</Aside>
+Like grep, rg run on piped objects emits the original objects.
 
 ### Examples
 
-**Search the current directory recursively:**
-
-```powershell
-rg 'function'
+```bash
+rg -n 'function' src
 ```
 
 ```text
-src/PsBash.psm1:7:function Get-BashPlatform {
-src/PsBash.psm1:20:function New-BashObject {
-src/PsBash.psm1:43:function ConvertFrom-BashArgs {
+src\PsBash.psm1:7:function Get-BashPlatform {
+src\PsBash.psm1:20:function New-BashObject {
 ```
 
-**Filter by file type with glob:**
-
-```powershell
-rg -g '*.ps1' 'Import-Module'
-```
-
-**Case-insensitive whole-word search:**
-
-```powershell
+```bash
+rg -t sh 'set -e'                     # only shell scripts
+rg -g '*.ps1' -g '!*.Tests.ps1' 'Import-Module'
 rg -iw 'error'
-```
-
-**Fixed string search (no regex interpretation):**
-
-```powershell
 rg -F '$_.Name'
-```
-
-**Only show matched text:**
-
-```powershell
 rg -o '\d+\.\d+\.\d+' package.json
-```
-
-```text
-package.json:3:0.1.0
-```
-
-**Context lines around matches:**
-
-```powershell
 rg -C3 'throw' src/
-```
-
-**Count matches per file:**
-
-```powershell
 rg -c 'function' src/
-```
-
-```text
-src/PsBash.psm1:69
-src/Help.psm1:2
-```
-
-**List files containing a pattern:**
-
-```powershell
 rg -l 'Invoke-Bash'
-```
-
-**Include hidden files:**
-
-```powershell
+rg --files -t cs | wc -l
+rg 'v(\d+)' -r 'version $1' CHANGELOG.md
 rg --hidden 'alias' .
-```
-
-**Suppress line numbers for clean output:**
-
-```powershell
-rg -N 'version' package.json
 ```
 
 ### grep vs rg
 
 | | `grep` | `rg` |
 |---|--------|------|
-| Recursive | Requires `-r` flag | Recursive by default |
-| Dotfiles | Includes everything with `-r` | Excludes by default, `--hidden` to include |
-| `.git` directory | Included with `-r` | Always skipped |
-| Glob filtering | Not supported | `-g '*.ext'` |
-| Only-matching | Not supported | `-o` flag |
-| Fixed strings | Not supported | `-F` flag |
-| Word boundaries | Not supported | `-w` flag |
-| Line numbers | Off by default, `-n` to enable | On by default, `-N` to disable |
+| Recursive | With `-r` | By default |
+| Hidden files | Searched with `-r` | Skipped unless `--hidden` |
+| Pruned directories | `.git`, `node_modules`, `bin`, `obj`, ... | Same set, plus hidden ones |
+| File selection | `--include`, `--exclude`, `--exclude-dir` | `-g`, `-t`/`-T` |
+| Line numbers in scripts | Off; `-n` turns them on | Off; `-n` turns them on (on in an interactive terminal) |
+| Replacement | No | `-r REPL` |
 | Pipeline bridge | Passes original objects | Passes original objects |

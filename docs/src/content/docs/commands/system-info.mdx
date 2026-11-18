@@ -1,19 +1,26 @@
 ---
 title: System Info
-description: ps, env, date, hostname, whoami, which, alias, time, and sleep commands.
+description: ps, env, date, hostname, whoami, id, uname, which, alias, time, sleep, timeout, nohup, flock, kill, tput, ping, and traceroute commands.
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 
 # System Info
 
-`ps`, `env`, `date`, `hostname`, `whoami`, `which`, `balias`, `time`, and `sleep` commands for process listing, environment inspection, and shell utilities.
+Process listing, environment and identity queries, timing, process control, and network probes.
+
+| Group | Commands |
+|-------|----------|
+| Processes | [`ps`](#ps), [`kill`](#kill), [`nohup`](#nohup), [`timeout`](#timeout), [`flock`](#flock) |
+| Environment and identity | [`env` / `printenv`](#env--printenv), [`hostname`](#hostname), [`whoami`](#whoami), [`id`](#id), [`uname`](#uname), [`which`](#which), [`alias` / `unalias`](#alias--unalias) |
+| Time | [`date`](#date), [`time`](#time), [`sleep`](#sleep) |
+| Terminal and network | [`tput`](#tput), [`ping`](#ping), [`traceroute` / `tracert`](#traceroute--tracert) |
 
 ---
 
 ## ps
 
-Report a snapshot of the current processes. Returns structured `PsEntry` objects with typed properties for process ID, CPU, memory, and more.
+List processes as `PsEntry` objects.
 
 ### Syntax
 
@@ -21,194 +28,321 @@ Report a snapshot of the current processes. Returns structured `PsEntry` objects
 ps [OPTIONS]
 ```
 
+With no options, lists the current user's processes that have a terminal.
+
 ### Flags
 
 | Flag | Description |
 |------|-------------|
-| `aux` | BSD-style: show all processes with full columns |
-| `-e` / `-A` | Show all processes |
-| `-f` | Full-format listing (current user's processes, no TTY restriction) |
-| `-u USER` | Filter by username |
-| `-p PID` | Filter by process ID |
-| `--sort=KEY` | Sort by key (prefix with `-` for descending) |
-| `-o COLS` | Custom column output (comma-separated) |
+| `aux`, `-aux` | All processes, BSD-style columns |
+| `-e`, `-A` | All processes |
+| `-f` | Same columns as `aux`; without `-e` lists every process of the current user |
+| `-ef` | All processes, `aux` columns (bundles of `e`, `A`, `f` are accepted) |
+| `-u USER` | Processes owned by USER |
+| `-p PIDLIST` | Processes with these PIDs (comma- or space-separated) |
+| `--sort=KEY`, `--sort KEY` | Sort by KEY; a leading `-` sorts descending |
+| `-o COLS` | Custom columns, comma-separated |
 
 **Sort keys:** `pid`, `ppid`, `cpu`, `%cpu`, `mem`, `%mem`, `rss`, `vsz`, `user`, `comm`, `time`
 
-**Custom columns (`-o`):** `pid`, `ppid`, `user`, `%cpu`, `cpu`, `%mem`, `mem`, `vsz`, `rss`, `tty`, `stat`, `start`, `time`, `command`, `cmd`, `comm`, `args`
+**Columns for `-o`:** `pid`, `ppid`, `user`, `%cpu`, `cpu`, `%mem`, `mem`, `vsz`, `rss`, `tty`, `stat`, `start`, `time`, `command`, `cmd`, `comm`, `args`
+
+Other options are ignored.
+
+### Differences from procps
+
+- No header line is printed.
+- `%CPU` is always `0.0`; sorting by `cpu` does not reorder anything.
+- `-f` prints the `aux` columns, not procps' `UID PID PPID C STIME TTY TIME CMD`.
+- `STAT` is the kernel state letter on Linux. On Windows and macOS it is approximate: `S`, `Sl` for a multi-threaded process, and on macOS `D` for one that is not responding.
+
+### Exit status
+
+0. A malformed `-p` list prints `ps: error: process ID list syntax error` and an unknown `--sort` key prints `ps: error: unknown sort specifier`; both exit 1.
 
 ### PsEntry Properties
-
-Each result is a `PsBash.PsEntry` object:
 
 | Property | Type | Description |
 |----------|------|-------------|
 | `PID` | `int` | Process ID |
 | `PPID` | `int` | Parent process ID |
-| `User` | `string` | Username of the process owner |
-| `CPU` | `double` | CPU usage percentage |
-| `Memory` | `double` | Memory usage percentage |
-| `MemoryMB` | `double` | Resident memory in megabytes |
+| `User` | `string` | Owner (`?` when unknown) |
+| `CPU` | `double` | Always `0.0` |
+| `Memory` | `double` | Resident memory as a percentage of total memory |
+| `MemoryMB` | `double` | Resident memory in MB |
 | `VSZ` | `long` | Virtual memory size in KB |
 | `RSS` | `long` | Resident set size in KB |
 | `TTY` | `string` | Controlling terminal |
 | `Stat` | `string` | Process state code |
-| `Start` | `DateTime` | Process start time |
-| `Time` | `string` | Cumulative CPU time (`M:SS` format) |
-| `Command` | `string` | Command line |
-| `CommandLine` | `string` | Full command line |
+| `Start` | `DateTime` | Start time |
+| `Time` | `string` | Cumulative CPU time |
+| `Command` | `string` | Command line (newlines collapsed to spaces) |
+| `CommandLine` | `string` | Command line |
 | `ProcessName` | `string` | Short process name |
 | `WorkingSet` | `long` | Working set in bytes |
-| `BashText` | `string` | Formatted text output line |
+| `BashText` | `string` | The printed line |
 
 <Aside type="note">
-Cross-platform: on Linux, `ps` reads `/proc` directly for accurate data. On Windows and macOS, it uses .NET `System.Diagnostics.Process` with platform-specific enrichment (CIM on Windows, `/bin/ps` on macOS).
+On Linux, `ps` reads `/proc`. On Windows and macOS it uses `System.Diagnostics.Process`, with CIM (`Win32_Process`) on Windows and `/bin/ps` on macOS for owner, parent, and terminal.
 </Aside>
 
 ### Examples
 
-**List all processes (BSD-style):**
+**All processes, largest resident memory first:**
+
+```bash
+ps aux --sort=-rss | head -n 5
+```
+
+The rows are still `PsEntry` objects after `sort` and `head`:
 
 ```powershell
-ps aux
+$top = ps aux --sort=-rss | head -n 1
+$top.PID
+$top.MemoryMB
 ```
+
+**Selected processes and columns:**
+
+```bash
+ps -p 1,$$ -o pid,user,rss,comm
+```
+
+---
+
+## kill
+
+Send a signal to processes or jobs.
+
+### Syntax
 
 ```text
-root         1  0.0  0.1   2456  1024 ?       S     09:15     0:01 /sbin/init
-you       1234  2.5  1.3  45600 13312 pts/0   Sl    10:30     1:42 pwsh
+kill [-s SIGNAL | -n SIGNUM | -SIGNAL] PID|JOBSPEC...
+kill -l [SIGNAL...]
 ```
 
-**Top 5 processes by CPU usage:**
+### Flags
 
-```powershell
-ps aux | sort -k3 -rn | head 5
+| Flag | Description |
+|------|-------------|
+| `-s SIG`, `-n NUM`, `--signal SIG` | Signal by name (`TERM`, `SIGTERM`) or number |
+| `-SIG`, `-NUM` | Short forms: `-9`, `-KILL`, `-SIGINT` |
+| `-l`, `-L`, `--list` | List signals; with arguments, translate numbers to names and names to numbers (`128+N` is accepted) |
+
+Signal names and numbers follow bash on Linux (1-31, then `RTMIN` ... `RTMAX` for 34-64) on every platform.
+
+### Behaviour
+
+- `%N`, `%%`, `%+` and the `$!` of a background job address ps-bash's job table.
+- A signal sent to another ps-bash shell (its `$$`) or to the current script (`kill -USR1 $$`) is delivered as a message: a `trap` for it runs; without one, `SIGCHLD`, `SIGURG`, and `SIGWINCH` are ignored and any other signal ends that script with status 128+N.
+- Any other process cannot receive POSIX signals on Windows. Every signal except 0, `CHLD`, `URG`, and `WINCH` terminates it. `kill -0 PID` and those three only check that the process exists.
+- A ps-bash host process is never killed directly, because it runs every script in its session.
+
+### Exit status
+
+| Status | Meaning |
+|--------|---------|
+| 0 | Every target was signalled |
+| 1 | A target did not exist (`kill: (PID) - No such process`), an argument was not a PID or jobspec, or a signal was invalid |
+| 2 | No PID or jobspec given (usage message) |
+
+### Examples
+
+```bash
+sleep 60 &
+kill $!
+kill -l 15        # TERM
+kill -l TERM      # 15
+kill -0 1234 2>/dev/null && echo running
 ```
 
-The output looks like text, but each result is still a `PsEntry` object. Properties survive the pipeline:
+---
 
-```powershell
-$top = ps aux | sort -k3 -rn | head 1
-$top[0].PID         # 1234
-$top[0].MemoryMB    # 13.0
-```
+## nohup
 
-**Filter by user:**
+Start a command that outlives the shell.
 
-```powershell
-ps -u root
-```
-
-**Filter by PID:**
-
-```powershell
-ps -p 1
-```
-
-**Sort by memory descending:**
-
-```powershell
-ps aux --sort=-%mem
-```
-
-**Custom column output:**
-
-```powershell
-ps -e -o pid,user,%cpu,%mem,command
-```
+### Syntax
 
 ```text
-    1 root      0.0  0.1 /sbin/init
- 1234 you       2.5  1.3 pwsh
+nohup COMMAND [ARG]...
 ```
 
-**Access properties programmatically:**
+The command starts as a detached process and `nohup` returns at once; `$!` is the new process's OS PID. Output goes to the redirect targets on the `nohup` command line (`nohup cmd > log 2>&1 &`), or, without a stdout redirect, is appended to `nohup.out` in the current directory with the message `nohup: ignoring input and appending output to 'nohup.out'`. The child inherits none of the shell's pipes, so a caller waiting for the shell's output to end does not hang on it.
 
-```powershell
-$procs = ps aux
-$procs | Where-Object { $_.Memory -gt 1.0 } | ForEach-Object {
-    '{0}: {1} MB' -f $_.ProcessName, $_.MemoryMB
-}
+A ps-bash builtin or mapped command (`sleep`, `seq`, ...) runs in a new `ps-bash -c`. A `#!` script on Windows runs through its interpreter.
+
+### Differences from GNU
+
+- `nohup` does not wait for the command, even without `&`.
+
+### Exit status
+
+| Status | Meaning |
+|--------|---------|
+| 0 | Command started |
+| 125 | Missing operand |
+| 126 | Command found but could not be started |
+| 127 | Command not found |
+
+### Example
+
+```bash
+nohup ./server.sh > server.log 2>&1 &
+echo "started $!"
+```
+
+---
+
+## timeout
+
+Run a command with a time limit.
+
+### Syntax
+
+```text
+timeout [OPTION] DURATION COMMAND [ARG]...
+```
+
+DURATION is a number (fractions allowed) with an optional `s`, `m`, `h`, or `d` suffix. `0` disables the limit.
+
+### Flags
+
+| Flag | Description |
+|------|-------------|
+| `--preserve-status` | On timeout, exit 143 instead of 124 |
+| `-s SIG`, `--signal=SIG` | Accepted, ignored |
+| `-k DUR`, `--kill-after=DUR` | Accepted (DUR is validated), ignored |
+| `--foreground` | Accepted, ignored |
+| `-v`, `--verbose` | Accepted, ignored |
+
+### Behaviour
+
+COMMAND runs as bash text in a nested pipeline of the current shell, so builtins, functions, mapped commands, and programs all work. When the time is up, the pipeline is stopped and any programs it started are killed. Piped input becomes COMMAND's stdin. The name never falls through to Windows' `timeout.exe`.
+
+### Exit status
+
+| Status | Meaning |
+|--------|---------|
+| 124 | Timed out (143 with `--preserve-status`) |
+| 125 | Usage error or invalid duration |
+| 127 | Command not found |
+| other | COMMAND's own status |
+
+### Examples
+
+```bash
+timeout 5 curl -s https://example.com/health
+timeout 0.5 sleep 2; echo $?    # 124
+```
+
+---
+
+## flock
+
+Run a command while holding a file lock.
+
+### Syntax
+
+```text
+flock [OPTION]... FILE COMMAND [ARG]...
+flock [OPTION]... FILE -c STRING
+```
+
+### Flags
+
+| Flag | Description |
+|------|-------------|
+| `-x`, `-e`, `--exclusive` | Exclusive lock (default) |
+| `-s`, `--shared` | Shared lock |
+| `-n`, `--nb`, `--nonblock` | Fail at once if the lock is held |
+| `-w SECS`, `--timeout SECS` | Give up after SECS (fractions allowed) |
+| `-E CODE`, `--conflict-exit-code CODE` | Exit status when the lock is not obtained (default 1) |
+| `-c STRING`, `--command STRING` | Run STRING as bash |
+| `-o`, `--close`, `-F`, `--no-fork` | Accepted, no effect |
+
+FILE is created if it does not exist. The lock is taken by opening FILE with a share mode that denies other writers (readers too, for an exclusive lock), and released when the command ends.
+
+### Differences from util-linux
+
+- The `flock FD` form (lock an open descriptor) and `-u`/`--unlock` are not supported.
+- Because the lock is a share mode, any process that opens FILE for writing is blocked, not only other `flock` callers.
+- COMMAND runs as a program or ps-bash command; a shell builtin is not found. `flock FILE true` exits 127 on Windows (use `-c true`).
+
+### Exit status
+
+The command's status; the `-E` code (default 1) when `-n`/`-w` could not get the lock; 1 when FILE cannot be opened; 64 for a usage error; 127 when the command is not found.
+
+### Example
+
+```bash
+flock -n /tmp/deploy.lock ./deploy.sh || echo "deploy already running"
 ```
 
 ---
 
 ## env / printenv
 
-Print environment variables as structured objects. Both `env` and `printenv` call the same function.
+Print the environment, or run a command with a modified environment.
 
 ### Syntax
 
 ```text
-env [VARNAME]
-printenv [VARNAME]
+env [-i] [-u NAME]... [NAME=VALUE]... [COMMAND [ARG]...]
+env [NAME]
+printenv [NAME]...
 ```
 
-When called with no arguments, lists all environment variables sorted by name. When called with a variable name, returns that single variable.
+### Flags
+
+| Flag | Description |
+|------|-------------|
+| `-i`, `--ignore-environment` | Start from an empty environment |
+| `-u NAME`, `--unset=NAME` | Remove NAME |
+| `--` | End of options |
+
+### Behaviour
+
+- With no arguments, `env` and `printenv` print every exported variable as `NAME=VALUE`, sorted by name.
+- `env NAME=VALUE... COMMAND` runs COMMAND with the changed environment and restores it afterwards. Without a COMMAND, it prints the resulting environment.
+- `printenv NAME...` prints only the values. A name that is not exported prints nothing and sets status 1.
+- `env NAME` for an exported NAME prints `NAME=VALUE` (a ps-bash extension). Otherwise the word is a command to run.
+
+### Differences from GNU
+
+- Output is sorted by name.
+- `-0`, `-C`/`--chdir`, `-S`/`--split-string`, `-v`, and the signal options are not supported.
+- Known gaps in this release: `env NAME=VALUE printenv NAME` prints `NAME=VALUE` instead of the value, and `env -u NAME printenv NAME` fails with `NAME: command not found` (exit 127).
+
+### Exit status
+
+0, or COMMAND's status. 127 with `env: 'NAME': No such file or directory` when COMMAND is not found.
 
 ### EnvEntry Properties
 
-Each result is a `PsBash.EnvEntry` object:
-
 | Property | Type | Description |
 |----------|------|-------------|
-| `Name` | `string` | Environment variable name |
-| `Value` | `string` | Environment variable value |
-| `BashText` | `string` | Formatted as `NAME=VALUE` |
+| `Name` | `string` | Variable name |
+| `Value` | `string` | Variable value |
+| `BashText` | `string` | `NAME=VALUE` (`printenv NAME`: the value) |
 
 ### Examples
 
-**List all environment variables:**
+```bash
+printenv HOME
+env LANG=C sort names.txt
+env | grep -c '^PS'
+```
 
 ```powershell
-env
-```
-
-```text
-HOME=/home/you
-PATH=/usr/bin:/bin
-SHELL=/bin/bash
-```
-
-**Get a specific variable:**
-
-```powershell
-env HOME
-```
-
-```text
-HOME=/home/you
-```
-
-**Access the value programmatically:**
-
-```powershell
-$home = env HOME
-$home.Value    # "/home/you"
-$home.Name     # "HOME"
-```
-
-**Filter environment variables with grep:**
-
-```powershell
-env | grep PATH
-```
-
-```text
-PATH=/usr/bin:/bin
-MANPATH=/usr/share/man
-```
-
-**Count environment variables:**
-
-```powershell
-env | wc -l
+(env HOME).Value
 ```
 
 ---
 
 ## date
 
-Print the current date and time, or format a specific date. Returns a `DateOutput` object with typed date components.
+Print or format a date.
 
 ### Syntax
 
@@ -220,124 +354,78 @@ date [OPTIONS] [+FORMAT]
 
 | Flag | Description |
 |------|-------------|
-| `-d STRING` / `--date=STRING` | Display time described by STRING instead of now |
-| `-u` / `--utc` / `--universal` | Print in UTC |
-| `-r FILE` / `--reference=FILE` | Display the last modification time of FILE |
-| `+FORMAT` | Output format using `%` specifiers |
+| `-d STRING`, `--date=STRING` | Use the time described by STRING instead of now |
+| `-u`, `--utc`, `--universal` | Print in UTC |
+| `-r FILE`, `--reference=FILE` | Use FILE's modification time |
+| `+FORMAT` | Output format |
+
+`-d` accepts the GNU date grammar: absolute dates and times, `@EPOCH`, relative items (`yesterday`, `2 days ago`, `next friday`, `+3 hours`), weekdays, and time zones. The result is shown in the local zone unless `-u` is given.
 
 ### Format Specifiers
 
-| Specifier | Description | Example |
-|-----------|-------------|---------|
-| `%Y` | Four-digit year | `2026` |
-| `%m` | Month (01-12) | `04` |
-| `%d` | Day of month (01-31) | `02` |
-| `%H` | Hour, 24-hour (00-23) | `14` |
-| `%M` | Minute (00-59) | `30` |
-| `%S` | Second (00-59) | `45` |
-| `%s` | Seconds since Unix epoch | `1775340645` |
-| `%A` | Full weekday name | `Thursday` |
-| `%B` | Full month name | `April` |
-| `%Z` | Timezone | `UTC` |
-| `%a` | Abbreviated weekday | `Thu` |
-| `%b` | Abbreviated month | `Apr` |
-| `%e` | Day of month, space-padded | ` 2` |
-| `%j` | Day of year (001-366) | `092` |
-| `%p` | AM/PM | `PM` |
-| `%n` | Newline | |
-| `%t` | Tab | |
-| `%%` | Literal `%` | `%` |
+| Specifier | Output | | Specifier | Output |
+|-----------|--------|-|-----------|--------|
+| `%Y` / `%y` | Year, 4 / 2 digits | | `%H` / `%k` | Hour 00-23 / space-padded |
+| `%m` | Month 01-12 | | `%I` / `%l` | Hour 01-12 / space-padded |
+| `%d` / `%e` | Day 01-31 / space-padded | | `%M` | Minute |
+| `%j` | Day of year 001-366 | | `%S` | Second |
+| `%A` / `%a` | Weekday name / abbreviated | | `%N`, `%1N`...`%9N` | Nanoseconds (100 ns resolution) |
+| `%B` / `%b` / `%h` | Month name / abbreviated | | `%p` / `%P` | `AM`/`PM` / `am`/`pm` |
+| `%u` / `%w` | Weekday 1-7 (Mon=1) / 0-6 (Sun=0) | | `%s` | Seconds since the epoch |
+| `%F` | `%Y-%m-%d` | | `%z` | UTC offset, `+hhmm` |
+| `%T` / `%R` | `%H:%M:%S` / `%H:%M` | | `%Z` | Time zone (see below) |
+| `%D` | `%m/%d/%y` | | `%r` | 12-hour time with AM/PM |
+| `%n` / `%t` / `%%` | Newline / tab / `%` | | | |
+
+### Differences from GNU
+
+- `%Z` and the zone in the default output are `UTC` for UTC and otherwise the system time-zone ID (`America/Chicago` on Linux and macOS, `Central Standard Time` on Windows), not an abbreviation such as `CST`.
+- Not supported: `%c`, `%x`, `%X`, `%C`, `%g`, `%G`, `%U`, `%V`, `%W`, `%:z`, and padding modifiers (`%-d`, `%_H`, `%^a`). An unsupported specifier is printed as is.
+- `-I`/`--iso-8601`, `-R`/`--rfc-email`, `--rfc-3339`, `-f`/`--file`, and `-s`/`--set` are not supported. A date operand (`date 010112002025`) prints `date: cannot set date: Operation not permitted` and the current time.
+
+### Exit status
+
+0. 1 for an invalid `-d` string (`date: invalid date 'X'`), a missing `-r` file, an operand without `+`, or an extra operand.
 
 ### DateOutput Properties
 
-Each result is a `PsBash.DateOutput` object:
-
 | Property | Type | Description |
 |----------|------|-------------|
-| `Year` | `int` | Four-digit year |
-| `Month` | `int` | Month number (1-12) |
-| `Day` | `int` | Day of month (1-31) |
-| `Hour` | `int` | Hour (0-23) |
-| `Minute` | `int` | Minute (0-59) |
-| `Second` | `int` | Second (0-59) |
-| `Epoch` | `long` | Unix timestamp (seconds since 1970-01-01) |
+| `Year`, `Month`, `Day` | `int` | Date parts |
+| `Hour`, `Minute`, `Second` | `int` | Time parts |
+| `Epoch` | `long` | Seconds since 1970-01-01 UTC |
 | `DayOfWeek` | `string` | Full weekday name |
-| `TimeZone` | `string` | Timezone identifier |
-| `DateTime` | `DateTimeOffset` | The underlying .NET DateTimeOffset |
-| `BashText` | `string` | Formatted date string |
+| `TimeZone` | `string` | `UTC` or the time-zone ID |
+| `DateTime` | `DateTimeOffset` | The underlying value |
+| `BashText` | `string` | The printed text |
 
 ### Examples
 
-**Current date and time (default format):**
-
-```powershell
-date
+```bash
+date -u -d @0
+date -u -d @0 '+%F %T'
+date -d '2025-12-25' +%A
+date -d 'yesterday' +%F
+date -r package.json +%s
 ```
 
 ```text
-Thu Apr  2 14:30:45 America/Chicago 2026
+Thu Jan  1 00:00:00 UTC 1970
+1970-01-01 00:00:00
+Thursday
 ```
-
-**Custom format:**
-
-```powershell
-date '+%Y-%m-%d %H:%M:%S'
-```
-
-```text
-2026-04-02 14:30:45
-```
-
-**Unix epoch timestamp:**
-
-```powershell
-date '+%s'
-```
-
-```text
-1775340645
-```
-
-**Display a specific date:**
-
-```powershell
-date -d '2025-12-25'
-```
-
-```text
-Thu Dec 25 00:00:00 America/Chicago 2025
-```
-
-**UTC output:**
-
-```powershell
-date -u
-```
-
-```text
-Thu Apr  2 19:30:45 UTC 2026
-```
-
-**Last modification time of a file:**
-
-```powershell
-date -r package.json
-```
-
-**Access properties programmatically:**
 
 ```powershell
 $d = date
-$d.Year       # 2026
-$d.Epoch      # 1775340645
-$d.DayOfWeek  # "Thursday"
+$d.Epoch
+$d.DateTime.AddDays(7)
 ```
 
 ---
 
 ## hostname
 
-Print the system hostname.
+Print the host name.
 
 ### Syntax
 
@@ -345,52 +433,19 @@ Print the system hostname.
 hostname
 ```
 
-### Return Type
+Prints `System.Net.Dns.GetHostName()`. Arguments are ignored; `hostname` cannot set the name.
 
-`PsBash.TextOutput` with a single property:
+### Example
 
-| Property | Type | Description |
-|----------|------|-------------|
-| `BashText` | `string` | The system hostname |
-
-Uses `[System.Net.Dns]::GetHostName()` for cross-platform compatibility.
-
-### Examples
-
-**Print the hostname:**
-
-```powershell
-hostname
-```
-
-```text
-my-workstation
-```
-
-**Access the value programmatically:**
-
-```powershell
-$h = hostname
-$h.BashText    # "my-workstation"
-```
-
-**Use in a formatted string:**
-
-```powershell
-$user = whoami
-$host = hostname
-printf '%s@%s\n' $user.BashText $host.BashText
-```
-
-```text
-you@my-workstation
+```bash
+echo "$(whoami)@$(hostname)"
 ```
 
 ---
 
 ## whoami
 
-Print the current username.
+Print the current user name (`System.Environment.UserName`, without a domain).
 
 ### Syntax
 
@@ -398,21 +453,9 @@ Print the current username.
 whoami
 ```
 
-### Return Type
+### Example
 
-`PsBash.TextOutput` with a single property:
-
-| Property | Type | Description |
-|----------|------|-------------|
-| `BashText` | `string` | The current username |
-
-Uses `[System.Environment]::UserName` for cross-platform compatibility.
-
-### Examples
-
-**Print the current user:**
-
-```powershell
+```bash
 whoami
 ```
 
@@ -420,236 +463,240 @@ whoami
 you
 ```
 
-**Access the value programmatically:**
+---
 
-```powershell
-$me = whoami
-$me.BashText    # "you"
+## id
+
+Print user and group identity.
+
+### Syntax
+
+```text
+id [-u | -g | -G] [-n] [-r] [USER]
 ```
 
-**Combine with other commands:**
+### Flags
 
-```powershell
-ps -u (whoami).BashText
+| Flag | Description |
+|------|-------------|
+| `-u` | User ID only |
+| `-g` | Primary group ID only |
+| `-G` | All group IDs |
+| `-n` | Names instead of IDs (with `-u`, `-g`, `-G`) |
+| `-r` | Accepted, no effect |
+
+On Linux and macOS, `id` runs `/usr/bin/id` with the same arguments, so output matches the system's.
+
+On Windows, IDs are security identifiers (SIDs):
+
+```text
+uid=S-1-5-21-...-1001(MACHINE\you) gid=S-1-1-0 groups=Everyone,Users,...
 ```
+
+### Differences on Windows
+
+- Flags must be separate words: `id -u -n`, not `id -un`.
+- `id -u` prints a SID, not a number, so tests such as `[ "$(id -u)" -eq 0 ]` do not detect an administrator.
+- An unknown USER silently reports the current user.
+
+### Example
+
+```bash
+id -u -n
+```
+
+---
+
+## uname
+
+Print system information.
+
+### Syntax
+
+```text
+uname [-asnrm]
+```
+
+| Flag | Output |
+|------|--------|
+| `-s` | Kernel name (default when no flag is given) |
+| `-n` | Host name, lower-case |
+| `-r` | OS version, `Major.Minor.Build` |
+| `-m` | `x86_64` for a 64-bit process, else `i686` |
+| `-a` | `-s -n -r -m` followed by `MINGW64` |
+
+Flags can be bundled (`-sr`). Unknown arguments are ignored.
+
+The values follow Git for Windows (MSYS2) on every platform, so scripts that test `uname -s` take their Windows branch:
+
+```bash
+uname -s
+```
+
+```text
+MINGW64_NT-10.0.26100
+```
+
+<Aside type="caution">
+`uname` reports `MINGW64_NT-...` and `x86_64` on Linux, macOS, and ARM64 too. Scripts that use `uname` to choose a platform will choose Windows.
+</Aside>
 
 ---
 
 ## which
 
-Locate a command by name. Returns the path to the executable or function definition.
+Locate a command.
 
 ### Syntax
 
 ```text
-which [OPTIONS] NAME...
+which [-a] NAME...
 ```
-
-### Flags
 
 | Flag | Description |
 |------|-------------|
-| `-a` | Show all matches, not just the first |
+| `-a` | Print every match, not only the first |
+
+A program prints its path with forward slashes (`C:/Program Files/Git/cmd/git.exe`). A ps-bash command (`ls`, `grep`) prints its own name, which runs it. Functions and aliases print their definition.
+
+### Exit status
+
+0 when every NAME was found. 1 when any NAME was not (`which: no NAME in PATH` on stderr). `which` with no NAME prints `which: missing operand`.
 
 ### WhichOutput Properties
 
-Each result is a `PsBash.WhichOutput` object:
-
 | Property | Type | Description |
 |----------|------|-------------|
-| `Command` | `string` | The command name that was looked up |
-| `Path` | `string` | Resolved path or definition |
-| `Type` | `string` | Command type (e.g., `application`, `function`, `alias`) |
-| `BashText` | `string` | The resolved path |
+| `Command` | `string` | The NAME looked up |
+| `Path` | `string` | Path, name, or definition |
+| `Type` | `string` | `application`, `alias`, `function`, `cmdlet`, ... |
+| `BashText` | `string` | Same as `Path` |
 
 ### Examples
 
-**Locate a command:**
-
-```powershell
-which pwsh
+```bash
+which git
+which ls grep
 ```
 
 ```text
-/usr/bin/pwsh
-```
-
-**Show all matches:**
-
-```powershell
-which -a python
-```
-
-```text
-/usr/bin/python
-/usr/local/bin/python
-```
-
-**Check the command type:**
-
-```powershell
-$w = which grep
-$w.Type       # "alias"
-$w.Path       # "Invoke-BashGrep"
-$w.Command    # "grep"
-```
-
-**Locate multiple commands:**
-
-```powershell
-which ls cat grep
-```
-
-```text
-Invoke-BashLs
-Invoke-BashCat
-Invoke-BashGrep
+C:/Program Files/Git/cmd/git.exe
+ls
+grep
 ```
 
 ---
 
-## balias / unalias
+## alias / unalias
 
-Define, display, or remove shell aliases. The command is named `balias` to avoid conflicting with PowerShell's built-in `alias` command. The `unalias` command is also available.
+Define, list, and remove aliases.
 
 ### Syntax
 
 ```text
-balias [OPTIONS] [NAME[=VALUE]...]
+alias [NAME[=VALUE]...]
 unalias NAME...
 unalias -a
 ```
 
-### Flags
+In scripts, `alias` and `unalias` behave as the bash builtins. The value is bash text: `alias ll='ls -la'` then `ll src` runs `ls -la src`. From a PowerShell session the same command is also available as `balias`.
 
-| Flag | Description |
-|------|-------------|
-| `-p` | List all aliases (same as calling `balias` with no arguments) |
-| `-u` | Unalias mode (remove aliases) |
-| `-a` | Remove all aliases (used with `-u`) |
+| Form | Effect |
+|------|--------|
+| `alias` | List all aliases as `alias NAME='VALUE'` |
+| `alias NAME` | Show one alias; ps-bash's own command aliases (`grep`, `ls`, ...) are found too |
+| `alias NAME=VALUE` | Define an alias |
+| `unalias NAME` | Remove an alias (`unalias: NAME: not found` if there is none) |
+| `unalias -a` | Remove all aliases |
 
-<Aside type="note">
-The `unalias` command calls the same function as `balias` but you must use `-u` to trigger removal mode. Use `balias -u NAME` to remove a single alias, or `balias -u -a` to remove all aliases.
-</Aside>
+`unalias` with no NAME prints its usage and exits 2. `alias NAME` for an unknown NAME prints `bash: alias: NAME: not found` and exits 1.
 
 ### AliasOutput Properties
-
-Each result is a `PsBash.AliasOutput` object:
 
 | Property | Type | Description |
 |----------|------|-------------|
 | `Name` | `string` | Alias name |
-| `Value` | `string` | Alias value (the command it expands to) |
-| `BashText` | `string` | Formatted as `alias name='value'` |
+| `Value` | `string` | Alias text |
+| `BashText` | `string` | `alias name='value'` |
 
-### Examples
+### Example
 
-**Define an alias:**
-
-```powershell
-balias ll='ls -la'
-```
-
-**List all aliases:**
-
-```powershell
-balias
+```bash
+alias ll='ls -la'
+alias ll
+unalias ll
 ```
 
 ```text
 alias ll='ls -la'
-```
-
-**Look up a specific alias:**
-
-```powershell
-balias ll
-```
-
-```text
-alias ll='ls -la'
-```
-
-**Access properties programmatically:**
-
-```powershell
-balias mygrep='grep -rn'
-$a = balias mygrep
-$a.Name     # "mygrep"
-$a.Value    # "grep -rn"
-```
-
-**Remove an alias:**
-
-```powershell
-balias -u ll
-```
-
-**Remove all aliases:**
-
-```powershell
-balias -u -a
 ```
 
 ---
 
 ## time
 
-Run a command and measure its execution time. Returns the command's output along with timing information.
+Time a pipeline or a command.
 
-### Syntax
+### The `time` keyword
+
+In a bash script, `time` in front of a pipeline is the bash keyword. It times the whole pipeline (`time a | b`, `time { ...; }`) and writes the report to stderr after it finishes, so `2>` on an enclosing group redirects it.
 
 ```text
-time COMMAND [ARGS...]
+time [-p] PIPELINE
 ```
 
-### TimeOutput Properties
+The default report is bash's:
 
-Each result is a `PsBash.TimeOutput` object:
+```text
+
+real	0m0.012s
+user	0m0.000s
+sys	0m0.000s
+```
+
+`time -p` prints the POSIX form (`real 0.01`, `user 0.00`, `sys 0.00`). `TIMEFORMAT` is honoured (`%[p][l]R`, `%U`, `%S`, `%P`, `%%`); an empty `TIMEFORMAT` prints nothing.
+
+User and system times are the CPU time of the ps-bash host process, which includes in-process commands but not separate programs.
+
+### The `time` command
+
+`command time ...`, `env time ...`, and a direct PowerShell call run the time command instead. It accepts GNU time's options:
+
+| Flag | Description |
+|------|-------------|
+| `-p`, `--portability` | POSIX report (`real`, `user`, `sys`) |
+| `-f FORMAT`, `--format=FORMAT` | GNU time format: `%e %E %U %S %P %M %x %C %Z %%`; other GNU directives print `0` |
+| `-q`, `--quiet` | Omit `Command exited with non-zero status N` |
+
+`-o`, `-a`, and `-v` are rejected (`recognized but not supported`, exit 2). Without `-p` or `-f`, the report is one line, `real    0.045s`. The status is the command's.
+
+From PowerShell, the command returns a `PsBash.TimeOutput` object:
 
 | Property | Type | Description |
 |----------|------|-------------|
-| `RealTime` | `TimeSpan` | Wall-clock elapsed time |
-| `Command` | `string` | The command that was timed |
-| `ExitCode` | `int` | Exit code of the command (0 = success) |
-| `BashText` | `string` | The command's text output |
-
-The real time is also printed to stderr in the format `real    0.123s`.
+| `RealTime` | `TimeSpan` | Wall-clock time |
+| `Command` | `string` | The command name |
+| `ExitCode` | `int` | The command's status |
+| `BashText` | `string` | The command's output |
 
 ### Examples
 
-**Time a command:**
-
-```powershell
-time ls -la
+```bash
+time sort -u big.txt > /dev/null
+TIMEFORMAT='%R s'; time make
+command time -f '%e s, %M KB' ./build.sh
 ```
-
-```text
--rw-r--r-- 1 you you 141234 Apr  2 10:30 PsBash.psm1
-real    0.045s
-```
-
-**Access timing properties:**
 
 ```powershell
 $t = time sleep 2
-$t.RealTime.TotalSeconds    # ~2.0
-$t.ExitCode                 # 0
-$t.Command                  # "sleep"
-```
-
-**Time a pipeline-producing command:**
-
-```powershell
-$t = time grep -r 'function' src/
-$t.RealTime.TotalMilliseconds    # elapsed ms
+$t.RealTime.TotalSeconds    # about 2
 ```
 
 ---
 
 ## sleep
 
-Delay execution for a specified amount of time. Produces no output.
+Pause for a time.
 
 ### Syntax
 
@@ -657,41 +704,112 @@ Delay execution for a specified amount of time. Produces no output.
 sleep NUMBER[SUFFIX]...
 ```
 
-### Duration Suffixes
+| Suffix | Meaning |
+|--------|---------|
+| `s` | Seconds (default) |
+| `m` | Minutes |
+| `h` | Hours |
+| `d` | Days |
 
-| Suffix | Meaning | Example |
-|--------|---------|---------|
-| `s` | Seconds (default) | `sleep 5s` |
-| `m` | Minutes | `sleep 2m` |
-| `h` | Hours | `sleep 1h` |
-| `d` | Days | `sleep 1d` |
+NUMBER may be fractional. Several arguments are added together. `sleep` can be interrupted (Ctrl-C, a pipeline stop, `timeout`) within about 100 ms. In a background job, the time counts from the `&` that started the job.
 
-When no suffix is given, the number is treated as seconds. Multiple arguments are summed together.
+### Exit status
+
+0. 1 for a missing operand (`sleep: missing operand`) or an invalid interval (`sleep: invalid time interval 'X'`).
 
 ### Examples
 
-**Sleep for 3 seconds:**
-
-```powershell
-sleep 3
-```
-
-**Sleep for 500 milliseconds:**
-
-```powershell
+```bash
 sleep 0.5
+sleep 1m 30s     # 90 seconds
 ```
 
-**Sleep with a suffix:**
+---
 
-```powershell
-sleep 2m
+## tput
+
+Query terminal capabilities.
+
+### Syntax
+
+```text
+tput CAPNAME [ARG]
 ```
 
-**Combine multiple durations:**
+On Linux and macOS, `tput` runs the system `tput` when there is one (falling back to the built-in values for `cols`/`lines` when it reports `0`). On Windows, and when no system `tput` exists, these capabilities are built in:
 
-```powershell
-sleep 1m 30s
+| Capability | Output |
+|------------|--------|
+| `cols` | Terminal width (80 when unknown) |
+| `lines` | Terminal height (24 when unknown) |
+| `bold` | `ESC[1m` |
+| `sgr0` | `ESC[0m` |
+| `setaf N` | `ESC[38;5;Nm` (256-color form) |
+| `clear` | Nothing |
+
+Any other capability prints nothing and exits 0 (ncurses `tput` exits 4).
+
+### Example
+
+```bash
+bold=$(tput bold); reset=$(tput sgr0)
+echo "${bold}done${reset}"
 ```
 
-This sleeps for 90 seconds total (1 minute + 30 seconds).
+---
+
+## ping
+
+Send ICMP echo requests and return one object per probe.
+
+### Syntax
+
+```text
+ping [-c COUNT | -n COUNT] [-W SECONDS] [-t] HOST
+```
+
+| Flag | Description |
+|------|-------------|
+| `-c N`, `-n N` | Number of probes (default 4) |
+| `-W SECS` | Per-probe timeout (default 4) |
+| `-t` | Continuous mode, capped at 100 probes |
+
+Uses .NET's `Ping` class, not the system `ping`. Each line is `reply from ADDR: icmp_seq=N ttl=T time=MS ms` or `request timeout for icmp_seq N (STATUS)`. No summary is printed and the exit status is 0 even when every probe times out. A missing HOST prints `ping: usage error: Destination address required` and exits 1.
+
+### PingReply Properties
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `Seq` | `int` | Probe number |
+| `Target` | `string` | HOST as given |
+| `Address` | `string` | Replying address |
+| `Time` | `long` | Round trip in ms (-1 on timeout) |
+| `Ttl` | `int` | TTL of the reply |
+| `Status` | `string` | `ok`, or the failure status |
+| `class` | `string` | `ok` (under 80 ms), `slow` (under 200 ms), `high`, `timeout` |
+| `BashText` | `string` | The printed line |
+
+The `class` property drives the `net` stylesheet: `ping example.com | Show-Styled` colours each reply by latency. See [Styled output](/ps-bash/guides/styled-output/).
+
+---
+
+## traceroute / tracert
+
+Trace the route to a host, one object per hop.
+
+### Syntax
+
+```text
+traceroute [-m MAXHOPS | -h MAXHOPS] [-w SECS | -W SECS] HOST
+```
+
+| Flag | Description |
+|------|-------------|
+| `-m N`, `-h N` | Maximum hops (1-64, default 30) |
+| `-w`, `-W` | Accepted; the timeout is fixed |
+
+Runs the system `tracert` (Windows) or `traceroute`, and turns each numbered hop line into a `PsBash.TraceHop` object (`Hop`, `Target`, `Time`, `Status`, `class`, `BashText`). Without a system tool, it falls back to TTL-limited pings, which also set `Address` (on Linux this needs raw-socket permission). `tracert` is the same command.
+
+```bash
+traceroute -m 15 example.com | Show-Styled
+```

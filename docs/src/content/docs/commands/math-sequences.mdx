@@ -1,57 +1,71 @@
 ---
 title: "Math & Sequences"
-description: "seq and expr commands for numeric sequences and arithmetic expression evaluation in PowerShell."
+description: "seq, expr, shuf, and yes commands for numeric sequences, expression evaluation, shuffling, and repeated output in PowerShell."
 head:
   - tag: meta
     attrs:
       name: keywords
-      content: powershell seq, powershell expr, powershell number sequence, bash seq powershell, bash expr powershell, powershell arithmetic, powershell math
+      content: powershell seq, powershell expr, powershell shuf, powershell yes, powershell number sequence, bash seq powershell, bash expr powershell, powershell arithmetic, powershell random lines
 ---
 
 import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
 
 # Math & Sequences
 
-`seq` for generating numeric sequences and `expr` for arithmetic and string expression evaluation.
+`seq` generates numeric sequences, `expr` evaluates an arithmetic or string expression, `shuf` shuffles lines, and `yes` repeats a line until its reader stops.
 
 ---
 
 ## seq
 
-Generate a sequence of numbers, one per line or joined with a separator.
+Print a sequence of numbers, one per line or joined with a separator.
 
 ```
-seq [OPTIONS] LAST
-seq [OPTIONS] FIRST LAST
-seq [OPTIONS] FIRST INCREMENT LAST
+seq [OPTION]... LAST
+seq [OPTION]... FIRST LAST
+seq [OPTION]... FIRST INCREMENT LAST
 ```
 
 ### Flags
 
 | Flag | Description |
 |------|-------------|
-| `-s SEP`, `--separator=SEP` | Use SEP as the separator between numbers (outputs a single `BashText` string instead of individual objects) |
-| `-w`, `--equal-width` | Pad numbers with leading zeros so all have equal width |
+| `-s SEP`, `--separator=SEP` | Join the numbers with SEP (one output record instead of one per number). `-sSEP` attached also works |
+| `-w`, `--equal-width` | Pad with leading zeros to a common width |
+| `-f FORMAT`, `--format=FORMAT` | printf-style floating format for each number: one `%e`, `%f`, or `%g` conversion with flags `-+ 0#`, width, and precision; `%%` is a literal `%` |
 
-### SeqOutput Properties
+### Behaviour
 
-Without `-s`, each result is a `PsBash.SeqOutput` object:
+- Integer operands give integer output. If any operand has a decimal point, every value is printed with the largest number of decimal places among the operands (`seq 0 0.25 1` prints `0.00 ... 1.00`).
+- Values are generated lazily: `seq 1 100000000 | head -1` computes one value.
+- `FIRST > LAST` with a positive increment prints nothing.
+
+### Differences from GNU
+
+- `-w` pads integer sequences only; GNU also pads decimal sequences (`00.5`).
+- A non-numeric operand is not reported with GNU's `invalid floating point argument` message.
+
+### Exit status
+
+0 on success. An explicit zero increment prints `seq: invalid Zero increment value: '0'` and exits 1.
+
+### Properties
+
+Without `-s`, each value is a `PsBash.SeqOutput` object:
 
 | Property | Type | Description |
 |----------|------|-------------|
-| `Value` | long or double | The numeric value of the sequence element |
+| `Value` | long or double | The number (the text itself when `-f` makes it non-numeric) |
 | `Index` | int | Zero-based position in the sequence |
-| `BashText` | string | Formatted string representation (includes padding when `-w` is used) |
+| `BashText` | string | The printed text (with `-w` padding or `-f` formatting) |
 
-<Aside type="note">
-When `-s` is used, seq returns a single `BashText` object with all values joined by the separator instead of individual `SeqOutput` objects.
-</Aside>
+With `-s`, seq writes one text record holding the joined values.
 
 ### Examples
 
 **Count from 1 to 5:**
 
-```powershell
+```bash
 seq 5
 ```
 
@@ -63,7 +77,7 @@ seq 5
 5
 ```
 
-Each line is a typed `SeqOutput` object:
+Each line is a typed object:
 
 ```powershell
 $nums = seq 5
@@ -71,24 +85,11 @@ $nums[2].Value   # 3
 $nums[2].Index   # 2
 ```
 
-**Specify a start and end:**
+**Start, increment, end; count down:**
 
-```powershell
-seq 3 7
-```
-
-```text
-3
-4
-5
-6
-7
-```
-
-**Custom increment:**
-
-```powershell
+```bash
 seq 0 2 10
+seq 5 -1 1
 ```
 
 ```text
@@ -98,15 +99,6 @@ seq 0 2 10
 6
 8
 10
-```
-
-**Countdown with negative increment:**
-
-```powershell
-seq 5 -1 1
-```
-
-```text
 5
 4
 3
@@ -114,9 +106,9 @@ seq 5 -1 1
 1
 ```
 
-**Comma-separated output:**
+**Join with a separator:**
 
-```powershell
+```bash
 seq -s ', ' 1 5
 ```
 
@@ -124,24 +116,25 @@ seq -s ', ' 1 5
 1, 2, 3, 4, 5
 ```
 
-**Equal-width zero padding:**
+**Equal width and printf formats:**
 
-```powershell
-seq -w 1 100
+```bash
+seq -w 8 10
+seq -f '%03g' 3
 ```
 
 ```text
+08
+09
+10
 001
 002
 003
-...
-099
-100
 ```
 
-**Decimal sequences:**
+**Decimal steps:**
 
-```powershell
+```bash
 seq 0.0 0.5 2.0
 ```
 
@@ -153,117 +146,80 @@ seq 0.0 0.5 2.0
 2.0
 ```
 
-**Pipeline composition -- types survive through the pipeline:**
-
-```powershell
-seq 1 10 | grep '[13579]$'
-```
-
-```text
-1
-3
-5
-7
-9
-```
-
 ---
 
 ## expr
 
-Evaluate arithmetic, comparison, or string expressions and return the result.
+Evaluate one expression, print the result, and set the exit status from it.
 
 ```
 expr EXPRESSION
 ```
 
-Expressions use infix notation for arithmetic and comparisons, and keyword-prefix notation for string operations.
+Each operand and operator is a separate argument: `expr 2 + 3`, not `expr 2+3`.
 
-### Arithmetic Operators
+### Operators
 
-| Operator | Description |
-|----------|-------------|
-| `+` | Addition |
-| `-` | Subtraction |
-| `*` | Multiplication |
-| `/` | Integer division (truncates toward zero) |
-| `%` | Modulus (remainder) |
+| Form | Result |
+|------|--------|
+| `A + B`, `A - B`, `A * B`, `A / B`, `A % B` | Integer arithmetic with arbitrary precision; `/` truncates toward zero |
+| `A < B`, `A <= B`, `A = B`, `A != B`, `A >= B`, `A > B` | `1` or `0`. Numeric comparison when both sides are integers, string comparison otherwise |
+| `STRING : REGEX`, `match STRING REGEX` | REGEX is a POSIX basic regular expression anchored at the start. With `\(...\)` the result is the first group (empty on no match), otherwise the length of the match (`0` on no match) |
+| `length STRING` | Length of STRING |
+| `substr STRING POS LEN` | Substring from 1-based POS, at most LEN characters; empty when POS is out of range or LEN is below 1 |
+| `index STRING CHARS` | 1-based position of the first character of STRING found in CHARS, or `0` |
+| `STRING` | STRING itself |
 
-### Comparison Operators
+Quote `*`, `<`, `>`, `|`, and `&` so the shell does not treat them as operators: `expr 3 '*' 4`.
 
-| Operator | Description |
-|----------|-------------|
-| `=` | Equal (case-sensitive for strings) |
-| `!=` | Not equal |
-| `<` | Less than |
-| `<=` | Less than or equal |
-| `>` | Greater than |
-| `>=` | Greater than or equal |
+### Differences from GNU
 
-Comparisons return `1` for true and `0` for false. When both operands are integers, numeric comparison is used; otherwise string comparison applies.
+- One operation per call. `expr` reads only the first three arguments of an infix expression, so `expr 1 + 2 + 3` prints `3` (GNU: `6`). Parentheses and the `|` and `&` operators are not supported. Chain the calls or use `$(( ))`.
+- `<`, `<=`, `>=`, `>` compare strings case-insensitively; `=` and `!=` are case-sensitive.
 
-### String Operations
+### Exit status
 
-| Syntax | Description |
-|--------|-------------|
-| `expr length STRING` | Length of the string |
-| `expr substr STRING POS LEN` | Substring starting at 1-based POS for LEN characters |
-| `expr index STRING CHARS` | 1-based position of the first character in CHARS found in STRING, or 0 if none |
-| `expr match STRING REGEX` | Match STRING against a POSIX BRE anchored at start; returns the captured group if `\(...\)` is present, otherwise the match length |
+| Status | Meaning |
+|--------|---------|
+| 0 | Result is neither empty nor `0` |
+| 1 | Result is empty or `0` |
+| 2 | Error: missing operand, `division by zero`, `non-integer argument`, `invalid regular expression`, unknown operator |
 
-### ExprOutput Properties
+The 0/1 rule is what makes `if expr "$name" : 'tmp_' >/dev/null; then ...` work.
+
+### Properties
 
 Each result is a `PsBash.ExprOutput` object:
 
 | Property | Type | Description |
 |----------|------|-------------|
-| `Value` | long or string | The result as a number (when the result is numeric) or string |
-| `BashText` | string | String representation of the result |
+| `Value` | long, BigInteger, or string | The result as a number when it is an integer, otherwise the text |
+| `BashText` | string | The printed result |
 
 ### Examples
 
-**Basic arithmetic:**
+**Arithmetic:**
 
-```powershell
+```bash
 expr 2 + 3
+expr 17 / 5
+expr 17 % 5
 ```
 
 ```text
 5
+3
+2
 ```
-
-The result is a typed object:
 
 ```powershell
 $r = expr 10 '*' 5
 $r.Value   # 50
 ```
 
-<Aside type="tip">
-Wrap `*` in quotes to prevent PowerShell from expanding it as a glob. The same applies to `<` and `>` which PowerShell interprets as redirection operators.
-</Aside>
-
-**Integer division and modulus:**
-
-```powershell
-expr 17 / 5
-```
-
-```text
-3
-```
-
-```powershell
-expr 17 '%' 5
-```
-
-```text
-2
-```
-
 **Comparison:**
 
-```powershell
+```bash
 expr 10 '>' 5
 ```
 
@@ -271,76 +227,95 @@ expr 10 '>' 5
 1
 ```
 
-```powershell
-expr 3 '=' 3
-```
+**String functions:**
 
-```text
-1
-```
-
-**String length:**
-
-```powershell
+```bash
 expr length 'hello world'
-```
-
-```text
-11
-```
-
-**Substring extraction:**
-
-```powershell
 expr substr 'hello world' 7 5
-```
-
-```text
-world
-```
-
-**Character index:**
-
-```powershell
 expr index 'hello' 'lo'
 ```
 
 ```text
+11
+world
 3
 ```
 
-Returns the 1-based position of the first occurrence of any character from the search string. Here `l` appears at position 3.
+**Regex match with a capture group:**
 
-**Regex match with capture group:**
-
-```powershell
-expr match 'archive-2024.tar.gz' '.*-\([0-9]*\)'
+```bash
+expr 'archive-2024.tar.gz' : '.*-\([0-9]*\)'
 ```
 
 ```text
 2024
 ```
 
-The `\(...\)` capture group extracts the year. Without a capture group, match returns the length of the matched portion.
+---
 
-**Single operand passthrough:**
+## shuf
 
-```powershell
-expr 'hello'
+Print input lines in random order.
+
+```
+shuf [OPTION]... [FILE]
+shuf -e [OPTION]... [ARG]...
+shuf -i LO-HI [OPTION]...
+```
+
+### Flags
+
+| Flag | Description |
+|------|-------------|
+| `-e` | Treat the arguments as the input lines |
+| `-i LO-HI` | Input is the integers LO through HI |
+| `-n N`, `--head-count=N` | Print at most N lines |
+
+Without `-e` or `-i`, shuf reads FILE, or the pipeline when there is no FILE. A record without a trailing newline is joined to the next one first, as in every line consumer.
+
+### Differences from GNU
+
+- Not supported: `-r`/`--repeat`, `-o`/`--output`, `-z`/`--zero-terminated`, `--random-source`, `--input-range`/`--echo` long forms, and attached values (`-n3`). An unrecognised option prints `shuf: invalid option` and exits 1.
+- A missing FILE produces no output and no error.
+- The shuffle is unseeded; there is no way to reproduce an order.
+
+### Return type
+
+Pipeline input objects pass through unchanged (shuf only reorders them). Lines from `-e`, `-i`, or a file are text records.
+
+### Examples
+
+```bash
+shuf -i 1-10 -n 3
+shuf -e red green blue
+ls *.jpg | shuf -n 1
+```
+
+---
+
+## yes
+
+Print a line repeatedly until the reading side stops.
+
+```
+yes [STRING]...
+```
+
+With no STRING, prints `y`. Several STRINGs are joined with a single space. There are no options other than `--help` and `--version`.
+
+The loop stops when the downstream command stops reading, so `yes | head -n 3` terminates.
+
+### Examples
+
+```bash
+yes | head -n 3
+yes 'n o' | head -n 2
 ```
 
 ```text
-hello
+y
+y
+y
+n o
+n o
 ```
-
-When given a single operand, expr echoes it as the result.
-
-### seq vs expr
-
-| | `seq` | `expr` |
-|---|-------|--------|
-| Purpose | Generate number sequences | Evaluate expressions |
-| Output type | `SeqOutput` per number | Single `ExprOutput` |
-| Decimal support | Yes | Integer arithmetic only |
-| String operations | No | `length`, `substr`, `index`, `match` |
-| Pipeline use | Generates multiple objects for piping | Returns a single result |

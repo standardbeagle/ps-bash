@@ -51,17 +51,19 @@ intact. ffmpeg's own single-dash flags are reachable only after the `--` in `psa
 
 ## Subcommands
 
-| Subcommand | Produces | Typical use |
-|------------|----------|-------------|
-| `probe FILE...` | `PsBash.MediaInfo` | What is this file? How long, how big, what codec? |
-| `shot FILE` | PNG still(s) | A screenshot for docs, a thumbnail, N stills across a clip |
-| `frames FILE` | numbered PNGs | Every Nth second, for frame-by-frame inspection |
-| `sheet FILE` | one tiled PNG | A contact sheet: the whole video at a glance |
-| `gif FILE` | animated GIF | A demo GIF for a PR, an issue, a README |
-| `clip FILE` | H.264 MP4 | A trimmed, browser-safe demo video |
-| `record` | H.264 MP4 | Record your screen while you demo something |
-| `to FILE --out X` | anything | Convert / rescale by output extension |
-| `raw -- ARGS` | whatever ffmpeg does | Passthrough |
+| Subcommand | Aliases | Produces | Typical use |
+|------------|---------|----------|-------------|
+| `probe FILE...` | `info` | `PsBash.MediaInfo` | What is this file? How long, how big, what codec? |
+| `shot FILE` | `screenshot`, `still` | PNG still(s) | A screenshot for docs, a thumbnail, N stills across a clip |
+| `frames FILE` | | numbered PNGs | Every Nth second, for frame-by-frame inspection |
+| `sheet FILE` | `contact` | one tiled PNG | A contact sheet: the whole video at a glance |
+| `gif FILE` | | animated GIF | A demo GIF for a PR, an issue, a README |
+| `clip FILE` | `demo`, `trim` | H.264 MP4 | A trimmed, browser-safe demo video |
+| `record` | `capture` | H.264 MP4 | Record your screen while you demo something |
+| `to FILE --out X` | `convert` | anything | Convert / rescale by output extension |
+| `raw -- ARGS` | `ffmpeg` | whatever ffmpeg does | Passthrough |
+
+`psav`, `psav help`, or `psav --help` prints the usage summary. Options take `--name value` or `--name=value`.
 
 ### Common options
 
@@ -72,7 +74,7 @@ intact. ffmpeg's own single-dash flags are reachable only after the `--` in `psa
 | `--at TIME` | shot | Grab exactly here |
 | `--from TIME` | frames, gif, clip | Start of the window |
 | `--to TIME` | frames, gif, clip | End of the window |
-| `--dur SECONDS` | frames, gif, clip | Length of the window (wins over `--to`) |
+| `--dur SECONDS`, `--duration` | frames, gif, clip | Length of the window (wins over `--to`) |
 | `--count N` | shot | N stills, evenly spread across the clip |
 | `--fps N` | frames, gif, record | Frames per second (gif default 12, record 30) |
 | `--tiles CxR` | sheet | Grid shape, default `4x3` |
@@ -82,6 +84,7 @@ intact. ffmpeg's own single-dash flags are reachable only after the `--` in `psa
 | `--window TITLE` | record | Record one window instead of the whole desktop (Windows) |
 | `--display SPEC` | record | X11 display (`:0.0`) or avfoundation device index |
 | `--no-loop` | gif | Play once instead of looping forever |
+| `--quiet` | record | Skip the "Recording the screen..." warning |
 | `--dry-run` | all | Print the ffmpeg command; run nothing |
 
 ### TIME accepts what you would actually type
@@ -151,8 +154,10 @@ Two details that matter:
 - **`--count` needs the duration**, which `psav` gets from ffprobe. If the file cannot be probed it
   says so and points you at `--at`, rather than quietly grabbing frame 0 six times.
 
-Default names are derived from the source, so a run never overwrites its input:
-`demo.mp4` → `demo-shot-01-00-00-12.500.png`.
+Default names are derived from the source and written next to it, so a run never overwrites its
+input: `psav shot demo.mp4 --at 12.5` writes `demo-shot-00-00-12.500.png`. With `--count`, each name
+also carries its position (`demo-shot-01-HH-MM-SS.mmm.png`, `demo-shot-02-…`), and `--out` names a
+directory, not a file.
 
 ---
 
@@ -217,9 +222,11 @@ psav record --seconds 15 --window "ps-bash"           # one window (Windows)
 psav record --seconds 15 --display :0.0               # a specific X display (Linux)
 ```
 
-The grabber is chosen per-OS — `gdigrab` on Windows, `x11grab` on Linux, `avfoundation` on macOS —
-and the spawn budget is the recording length plus real headroom, so the bounded-wait watchdog can
-never truncate your recording.
+The grabber is chosen per OS: `gdigrab` on Windows, `x11grab` on Linux, `avfoundation` on macOS.
+Without `--out`, the file is `screen-recording-YYYYMMDD-HHMMSS.mp4` in the current directory.
+Recording is the only subcommand with a time limit: the length plus 60 seconds. Past that the
+ffmpeg process tree is killed and `psav` exits 124. Every other encode runs until it finishes or
+you press Ctrl+C.
 
 <Aside type="caution">
 Recording is the one subcommand that blocks for its full duration by design. `psav` warns you
@@ -269,10 +276,12 @@ psav gif demo.mp4 --from 2 --dur 5 --fps 20 --dry-run |
 ```
 
 ```text
-ffmpeg -hide_banner -loglevel error -y -nostdin -ss 00:00:02.000 -t 00:00:05.000 -i demo.mp4
+ffmpeg -hide_banner -loglevel error -y -nostdin -ss 00:00:02.000 -t 00:00:05.000 -i C:\clips\demo.mp4
   -filter_complex "fps=20,scale=800:-1:flags=lanczos,split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=5"
-  -loop 0 demo-demo.gif
+  -loop 0 C:\clips\demo-demo.gif
 ```
+
+(One line in the real output, wrapped here. Input and output are absolute paths.)
 
 Copy it, tweak it, run it by hand. That is also how the wrapper is tested — see
 [Build a structured CLI wrapper](/ps-bash/guides/build-a-cli-wrapper/).
@@ -393,15 +402,17 @@ ls *.mp4 | ForEach-Object { psav sheet $_.FullName --tiles 5x4 --out "./index/$(
 | Code | Meaning |
 |------|---------|
 | `0` | Success |
-| `1` | Input missing / unreadable, or ffmpeg failed |
-| `2` | Usage error (unknown subcommand, option without a value, missing `--out`) |
-| `124` | The encode exceeded its wait budget and was killed (whole process tree) |
+| `1` | Input missing or unreadable, ffprobe could not read a file, or ffmpeg wrote no output |
+| `2` | Usage error (unknown subcommand, option without a value, missing input or `--out`) |
+| other | A failed encode exits with ffmpeg's own status; the artifact row carries `Status = failed` and the reason |
+| `124` | `record` ran past its length plus 60 seconds and was killed (whole process tree) |
 | `127` | ffmpeg / ffprobe not on `PATH` |
 
 ## Building your own
 
-`psav` is ~600 lines and nothing in it is special-cased. The two how-to articles walk through
-building the same thing from scratch for any CLI tool you use:
+`psav` is one cmdlet plus pure plan builders (`Media/FfmpegPlan.cs`, `AvOptions.cs`, `AvTime.cs`),
+and nothing in it is special-cased. The two how-to articles walk through building the same thing
+from scratch for any CLI tool you use:
 
 <CardGrid>
   <Card title="Part 1 — the wrapper" icon="seti:powershell">
