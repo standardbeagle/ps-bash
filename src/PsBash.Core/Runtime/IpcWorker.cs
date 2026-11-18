@@ -219,10 +219,15 @@ public sealed class IpcWorker : IWorker
     internal static int FirstSlotPastEnclosingHost(string enclosingHostEndpoint)
         => IpcTransportFactory.SlotIndexOf(enclosingHostEndpoint) + 1;
 
-    /// <summary>Every slot is held by our own ancestor chain: run on a private per-invocation host instead.</summary>
+    /// <summary>Every slot is busy (or held by our own ancestor chain): run on a private per-invocation host instead.</summary>
     private async Task MoveToPrivateHostAsync(CancellationToken ct)
     {
         _lifetime = Lifetime.PerInvocation;
+        if (PrivateHostEndpointForTest is { } scripted)
+        {
+            (_scheme, _endpoint) = ("unix", scripted);
+            return;
+        }
         (_scheme, _endpoint) = IpcTransportFactory.ResolvePerInvocationEndpoint();
         await SpawnPrivateHostAsync(ct).ConfigureAwait(false);
     }
@@ -842,8 +847,17 @@ public sealed class IpcWorker : IWorker
 
     private int _busyBackoffMs = 5;
 
+    // Pause between rounds over a session's busy slots (a launcher waiting for one: no overflow ticket, or inside the grace).
+    private int _roundBackoffMs = 10;
+
+    // Held while this launcher's command runs on an overflow host (the per-session bound on extra hosts).
+    private ExecOverflowTicket? _overflowTicket;
+
     /// <summary>Test seam: slot endpoints are served by scripted hosts already listening, so skip discovery/spawn.</summary>
     internal bool AssumeSlotHostsReachableForTest { get; set; }
+
+    /// <summary>Test seam: a scripted host already listening stands in for the private host, so nothing is spawned.</summary>
+    internal string? PrivateHostEndpointForTest { get; set; }
 
     // Set when the endpoint came from the enclosing host (IpcTransportFactory.ResolveEndpoint): this launcher runs inside
     // a command of that host's session, so a BUSY slot is (or may be) one of its ancestors and must never be waited on.
@@ -879,14 +893,26 @@ public sealed class IpcWorker : IWorker
         int next = _slot + 1;
         if (next > IpcTransportFactory.MaxExecSlots)
         {
+            // Every slot is busy. Nested: they are our ancestor chain, so a private host is the only safe place left.
             if (nested)
             {
-                // Every slot is occupied by an ancestor chain: a private host is the only safe place left.
                 await MoveToPrivateHostAsync(ct).ConfigureAwait(false);
                 return;
             }
-            next = 0; // contended, not nested: go round again; the other launchers will finish
-            busyFor.Restart();
+            // Contended: overflow to a private host once the slots stayed busy for the grace (short commands free one
+            // well inside it, so a burst starts no host) and a ticket is free (at most ExecOverflowTicket.Max() extra
+            // hosts per session: each is ~70-150 MB). Otherwise go round again. REGRESSION: going round was the only
+            // option, so with six long builds in flight every further `bash -c` from an agent waited minutes.
+            if (busyFor.ElapsedMilliseconds >= SpillDelayMs() + ExecOverflowTicket.GraceMs()
+                && ExecOverflowTicket.TryAcquire(_scheme, _baseEndpoint, ExecOverflowTicket.Max()) is { } ticket)
+            {
+                _overflowTicket = ticket;
+                await MoveToPrivateHostAsync(ct).ConfigureAwait(false);
+                return;
+            }
+            await Task.Delay(_roundBackoffMs, ct).ConfigureAwait(false);
+            _roundBackoffMs = Math.Min(_roundBackoffMs * 2, 250);
+            next = 0;
         }
 
         _slot = next;
@@ -1771,6 +1797,7 @@ public sealed class IpcWorker : IWorker
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return ValueTask.CompletedTask;
         Interlocked.Exchange(ref _lastHostObservation, null)?.Dispose();
+        using var overflowTicket = Interlocked.Exchange(ref _overflowTicket, null); // released after the host below is gone
 
         // REFACTOR-7: PerInvocation owns its private host — kill the tree so the
         // host never outlives this launcher, then unlink the process-local

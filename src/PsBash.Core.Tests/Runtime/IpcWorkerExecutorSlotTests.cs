@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using PsBash.Core.Runtime;
@@ -163,8 +164,118 @@ public sealed class IpcWorkerExecutorSlotTests
         Assert.Equal(1, worker.SlotForTest);
     }
 
+    private static async Task<T> WithEnv<T>((string Name, string Value)[] vars, Func<Task<T>> body)
+    {
+        var prior = vars.Select(v => (v.Name, Environment.GetEnvironmentVariable(v.Name))).ToArray();
+        foreach (var (name, value) in vars) Environment.SetEnvironmentVariable(name, value);
+        try { return await body(); }
+        finally { foreach (var (name, value) in prior) Environment.SetEnvironmentVariable(name, value); }
+    }
+
+    /// <summary>Every slot of a fresh session busy, plus a free scripted host standing in for the overflow host.</summary>
+    private sealed class AllBusySession : IAsyncDisposable
+    {
+        public readonly string Base = NewBase();
+        public readonly SlotHost[] Slots = new SlotHost[IpcTransportFactory.MaxExecSlots + 1];
+        public SlotHost Private = null!;
+
+        public static async Task<AllBusySession> StartAsync()
+        {
+            var s = new AllBusySession();
+            for (int k = 0; k < s.Slots.Length; k++)
+            {
+                s.Slots[k] = new SlotHost(IpcTransportFactory.ResolveSlotEndpoint("unix", s.Base, k).Endpoint, busy: true);
+                await s.Slots[k].StartAsync();
+            }
+            s.Private = new SlotHost(Path.Combine(Path.GetDirectoryName(s.Base)!, $"priv-{Guid.NewGuid():N}"[..13] + ".sock"), busy: false);
+            await s.Private.StartAsync();
+            return s;
+        }
+
+        public IpcWorker Worker()
+        {
+            var worker = IpcWorker.ConnectForTest("unix", Base, Path.Combine(Path.GetTempPath(), "ps-bash-host-fake"));
+            worker.AssumeSlotHostsReachableForTest = true;
+            worker.PrivateHostEndpointForTest = Private.Endpoint;
+            return worker;
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            foreach (var host in Slots) await host.DisposeAsync();
+            await Private.DisposeAsync();
+        }
+    }
+
+    // REGRESSION: an unrelated launcher that found every slot busy went round them again until one freed — with six
+    // long builds in flight, every further `bash -c` from an agent waited minutes. Before the fix this test spun until
+    // its safety net cancelled it.
+    [Fact]
+    public async Task EverySlotBusy_PastTheGrace_UnrelatedLauncher_RunsOnAnOverflowHost()
+    {
+        await using var session = await AllBusySession.StartAsync();
+        await using var worker = session.Worker();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+
+        var output = await WithEnv([("PSBASH_EXEC_SPILL_MS", "0"), ("PSBASH_EXEC_OVERFLOW_MS", "0"), ("PSBASH_EXEC_OVERFLOW_MAX", "2")],
+            () => worker.QueryAsync("echo x", cts.Token));
+
+        Assert.Contains("ran-on-" + Path.GetFileName(session.Private.Endpoint), output);
+        Assert.Equal(1, session.Private.Commands);
+        foreach (var host in session.Slots) Assert.Equal(1, host.Commands);  // one refusal each, no second round
+    }
+
+    // Memory: a burst of short commands frees a slot inside the grace, so it must start no host.
+    [Fact]
+    public async Task EverySlotBusy_InsideTheGrace_GoesRoundAgain_StartsNoHost()
+        => await AssertWaitsForASlot([("PSBASH_EXEC_OVERFLOW_MS", "600000"), ("PSBASH_EXEC_OVERFLOW_MAX", "2")], holdTickets: 0);
+
+    // Memory: overflow hosts are capped per session; with every ticket held the launcher waits for a slot instead.
+    [Fact]
+    public async Task EverySlotBusy_EveryOverflowTicketHeld_GoesRoundAgain_StartsNoHost()
+        => await AssertWaitsForASlot([("PSBASH_EXEC_OVERFLOW_MS", "0"), ("PSBASH_EXEC_OVERFLOW_MAX", "1")], holdTickets: 1);
+
+    private static async Task AssertWaitsForASlot((string, string)[] env, int holdTickets)
+    {
+        await using var session = await AllBusySession.StartAsync();
+        var held = Enumerable.Range(0, holdTickets).Select(_ => ExecOverflowTicket.TryAcquire("unix", session.Base, holdTickets)).ToList();
+        try
+        {
+            Assert.All(held, Assert.NotNull);
+            await using var worker = session.Worker();
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));  // safety net only
+
+            await WithEnv([("PSBASH_EXEC_SPILL_MS", "0"), .. env], async () =>
+            {
+                var query = worker.QueryAsync("echo x", cts.Token);
+                await session.Slots[0].SecondCommand.Task.WaitAsync(TimeSpan.FromSeconds(30));  // went round: no clock race
+                cts.Cancel();
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => query);
+                return 0;
+            });
+
+            Assert.Equal(0, session.Private.Commands);
+        }
+        finally { foreach (var t in held) t?.Dispose(); }
+    }
+
+    [Fact]
+    public void OverflowTicket_AtMostMaxPerSession_FreedOnDispose()
+    {
+        string session = NewBase();
+        using var first = ExecOverflowTicket.TryAcquire("unix", session, 2);
+        var second = ExecOverflowTicket.TryAcquire("unix", session, 2);
+        Assert.NotNull(first);
+        Assert.NotNull(second);
+        Assert.Null(ExecOverflowTicket.TryAcquire("unix", session, 2));
+        using (var other = ExecOverflowTicket.TryAcquire("unix", NewBase(), 2)) Assert.NotNull(other);  // per session
+        second!.Dispose();
+        using var again = ExecOverflowTicket.TryAcquire("unix", session, 2);
+        Assert.NotNull(again);
+        Assert.Null(ExecOverflowTicket.TryAcquire("unix", session, 0));  // 0 = never overflow
+    }
     [Theory]
-    [InlineData("/r/host.sock", 1)]                                  // inside the base host: slot 1 first
+    [InlineData("/r/host.sock", 1)]                                // inside the base host: slot 1 first
     [InlineData("/r/host.sock-x1", 2)]
     [InlineData("/r/host.sock-x5", 6)]
     [InlineData("/r/host.sock-x6", 7)]                               // past MaxExecSlots: a private host

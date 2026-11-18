@@ -27,7 +27,12 @@ path would overflow). Slots are separate daemons started on demand and kept warm
   waiting on us, so spill immediately to the next slot; if every slot (`MaxExecSlots` = 6) is busy, run on a private
   per-invocation host.
 - **Contended** (an unrelated launcher): back off briefly and retry slot 0; after the spill delay (default 250 ms,
-  `PSBASH_EXEC_SPILL_MS`) move to a healthy slot, or start one.
+  `PSBASH_EXEC_SPILL_MS`) move to a healthy slot, or start one. **Overflow:** if every slot stays busy past the grace
+  (`PSBASH_EXEC_OVERFLOW_MS`, default 2000) and one of the session's overflow tickets is free (`ExecOverflowTicket`,
+  `PSBASH_EXEC_OVERFLOW_MAX`, default 2; an OS file lock held for the command, dropped on exit or death), run on a
+  private per-invocation host that ends with the command. Otherwise go round again. Memory bound per session: 7 slot
+  hosts + the ticket cap (each host ~70-150 MB private). REGRESSION: going round was the only option, so six long
+  builds made every further `bash -c` wait minutes.
 - **Stateful** hosts (named sessions with one pinned runspace) never receive spill from unrelated launchers; a nested
   launcher still spills, because it cannot wait on its own parent.
 - The slot choice is sticky for the life of the launcher process.
