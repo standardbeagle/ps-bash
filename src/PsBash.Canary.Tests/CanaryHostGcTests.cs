@@ -38,18 +38,12 @@ public sealed class CanaryHostGcTests
     /// window before the watcher's first poll — overwhelmingly likely on any
     /// modern OS with 32-bit PIDs). Assert the host self-terminates within
     /// 10 seconds via its ParentDeathWatcher.
-    ///
-    /// macOS skip: <see cref="JobObjectWatchdog.GetParentProcessIdByPid"/> is
-    /// not implemented on macOS, so the gc-side assertion would be unreliable.
-    /// The host-side ParentDeathWatcher itself uses portable
-    /// <c>Process.GetProcessById</c> and is exercised on macOS via other tests
-    /// (the cross-platform PerInvocation IpcWorker DisposeAsync path).
+    /// Runs on macOS too: parent pids come from Platform/ProcessInfo (libproc there).
     /// </summary>
     [SkippableFact]
     public async Task OrphanHost_ParentDeathWatcher_SelfTerminatesWithin10s()
     {
         Skip.If(PsBashPath is null, "ps-bash launcher not built");
-        Skip.If(OperatingSystem.IsMacOS(), "macOS: GetParentProcessIdByPid is not implemented (use PerInvocation IpcWorker test instead)");
 
         // Find the host binary that sits alongside ps-bash.
         var hostBin = ResolveHostBinary(PsBashPath!);
