@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Management.Automation;
 using System.Text;
@@ -26,15 +25,38 @@ namespace PsBash.Cmdlets;
 /// whole output (CRLF→LF, one record per <c>\n</c>, an unterminated last line flagged); stderr is emitted as it
 /// arrives (a prompt without a newline shows at once), CRLF→LF.
 /// </para>
+/// <para>
+/// <b>Back-pressure.</b> At most <see cref="BufferChars"/> of output wait between the reader threads and the pipeline
+/// thread, about one pipe buffer. A reader that would go past it waits until the pipeline thread drains, so the child
+/// blocks on its own write, as it would on a full pipe: a fast child under a slow (or busy) pipeline holds bounded
+/// memory, not all of its output.
+/// </para>
+/// <para>
+/// <b>Exit.</b> Pipe EOF ends the reading, not the wait: a child that closed its stdout and stderr and keeps running
+/// (<c>exec &gt;&amp;- 2&gt;&amp;-; sleep 1; exit 3</c>) is waited for, and its own status is returned, as bash does.
+/// The wait ends at the child's exit or at a stop (<see cref="Kill"/>).
+/// </para>
 /// </summary>
 public sealed class StreamingChildProcess : IDisposable
 {
     /// <summary>After the child exits, how long its pipes may stay open (a backgrounded grandchild holding them).</summary>
     private static readonly TimeSpan ExitDrainGrace = TimeSpan.FromSeconds(5);
 
+    /// <summary>The most output text (chars) held for the pipeline thread before the readers wait: about a pipe buffer.</summary>
+    internal const int BufferChars = 64 * 1024;
+
+    /// <summary>The most one read hands over (chars); the buffer can exceed <see cref="BufferChars"/> by less than this.</summary>
+    internal const int ReadChars = 4096;
+
     private readonly SpawnedChild _child;
     private readonly Thread _exitWatcher;
-    private readonly ConcurrentQueue<(bool IsStderr, string Text)> _chunks = new();
+    // Guarded by its own lock: the readers wait on it for room, the pipeline thread pulses it when it drains.
+    private readonly Queue<(bool IsStderr, string Text)> _chunks = new();
+    private readonly List<(bool IsStderr, string Text)> _taken = new();
+    private int _bufferedChars;
+    private bool _released;
+    // Cancelled by Kill: ends Complete's wait for the child's exit.
+    private readonly CancellationTokenSource _stop = new();
     private readonly AutoResetEvent _signal = new(false);
     private readonly ChildOutputAssembler _assembler = new();
     private readonly List<string> _lines = new();
@@ -70,7 +92,9 @@ public sealed class StreamingChildProcess : IDisposable
     /// full pipe (the child may print before it reads). False — and stdin is closed — when the child no longer
     /// reads it (exited, or closed fd 0): bash's broken pipe. Pipeline thread only.
     /// </summary>
-    public bool WriteStdin(Cmdlet cmdlet, byte[] bytes)
+    public bool WriteStdin(Cmdlet cmdlet, byte[] bytes) => WriteStdin(SinkFor(cmdlet), bytes);
+
+    internal bool WriteStdin(IChildOutputSink sink, byte[] bytes)
     {
         var stdin = _stdin;
         if (stdin is null) return false;
@@ -80,7 +104,7 @@ public sealed class StreamingChildProcess : IDisposable
         var handles = new WaitHandle[] { _signal, ((IAsyncResult)write).AsyncWaitHandle };
         while (!write.IsCompleted)
         {
-            Drain(cmdlet, final: false);
+            Drain(sink, final: false);
             WaitHandle.WaitAny(handles, 200);
         }
         if (write.IsCompletedSuccessfully) return true;
@@ -98,13 +122,15 @@ public sealed class StreamingChildProcess : IDisposable
     }
 
     /// <summary>Emit whatever output has arrived, without waiting. Pipeline thread only.</summary>
-    public void PumpAvailable(Cmdlet cmdlet) => Drain(cmdlet, final: false);
+    public void PumpAvailable(Cmdlet cmdlet) => Drain(SinkFor(cmdlet), final: false);
 
     /// <summary>
-    /// Close stdin, emit the child's output until it exits and its pipes close, and return its exit code. When the
-    /// cmdlet is stopping the child is killed and nothing more is emitted. Pipeline thread only; once.
+    /// Close stdin, emit the child's output until its pipes close, wait for it to exit, and return its exit code. When
+    /// the cmdlet is stopping the child is killed and nothing more is emitted. Pipeline thread only; once.
     /// </summary>
-    public int Complete(Cmdlet cmdlet)
+    public int Complete(Cmdlet cmdlet) => Complete(SinkFor(cmdlet));
+
+    internal int Complete(IChildOutputSink sink)
     {
         if (_completed) return SafeExitCode();
         _completed = true;
@@ -112,9 +138,9 @@ public sealed class StreamingChildProcess : IDisposable
         var exitedAt = (DateTime?)null;
         while (true)
         {
-            if (cmdlet.Stopping) { Kill(); return SafeExitCode(); }
+            if (sink.Stopping) { Kill(); return SafeExitCode(); }
             bool streamsDone = Volatile.Read(ref _openStreams) == 0;
-            Drain(cmdlet, final: false);
+            Drain(sink, final: false);
             if (streamsDone) break;
             if (HasExited())
             {
@@ -123,7 +149,13 @@ public sealed class StreamingChildProcess : IDisposable
             }
             _signal.WaitOne(200);
         }
-        Drain(cmdlet, final: true);
+        Drain(sink, final: true);
+        // EOF on the pipes ends the reading, not the wait: the child may have closed them and still be running. No time
+        // limit (bash waits as long as it runs); a stop ends the wait (Kill cancels the token; Stopping is polled too).
+        while (!_child.WaitForExit(200, _stop.Token))
+        {
+            if (sink.Stopping || Volatile.Read(ref _killed) != 0) { Kill(); break; }
+        }
         return SafeExitCode();
     }
 
@@ -136,18 +168,41 @@ public sealed class StreamingChildProcess : IDisposable
         if (Interlocked.Exchange(ref _killed, 1) != 0) return;
         try { _child.KillTree(); }
         catch { /* already gone / race */ }
+        Release();
+        try { _stop.Cancel(); } catch (ObjectDisposedException) { }
         Signal();
     }
 
     /// <summary>Pids of the child's tree alive now. Diagnostics and tests.</summary>
     internal IReadOnlyList<int> TreePids() => _child.TreePids();
 
+    /// <summary>Output chars waiting for the pipeline thread now. Tests.</summary>
+    internal int BufferedChars { get { lock (_chunks) return _bufferedChars; } }
+
+    /// <summary>The child has exited (what it started may still run). Tests.</summary>
+    internal bool ChildHasExited => HasExited();
+
+    /// <summary>Every output pipe reached EOF. Tests.</summary>
+    internal bool OutputClosed => Volatile.Read(ref _openStreams) == 0;
+
     public void Dispose()
     {
         if (!HasExited()) Kill();
+        Release();
         CloseStdin();
         try { _child.Dispose(); } catch { }
         _signal.Dispose();
+        _stop.Dispose();
+    }
+
+    /// <summary>Nobody will drain any more (kill / dispose): a reader waiting for room drops its chunk and ends.</summary>
+    private void Release()
+    {
+        lock (_chunks)
+        {
+            _released = true;
+            Monitor.PulseAll(_chunks);
+        }
     }
 
     private bool HasExited()
@@ -159,7 +214,7 @@ public sealed class StreamingChildProcess : IDisposable
     {
         try
         {
-            // Bounded: only reached after the pipes closed or a kill, when the exit is at most a moment away.
+            // Bounded: only reached after the child exited or was killed, when the exit is at most a moment away.
             if (!_child.WaitForExit(2_000)) return 124;
             return _child.ExitCode;
         }
@@ -175,13 +230,13 @@ public sealed class StreamingChildProcess : IDisposable
     {
         var thread = new Thread(() =>
         {
-            var buffer = new char[4096];
+            var buffer = new char[ReadChars];
             try
             {
                 int read;
                 while ((read = reader.Read(buffer, 0, buffer.Length)) > 0)
                 {
-                    _chunks.Enqueue((isStderr, new string(buffer, 0, read)));
+                    if (!Put(isStderr, new string(buffer, 0, read))) break;
                     Signal();
                 }
             }
@@ -202,11 +257,42 @@ public sealed class StreamingChildProcess : IDisposable
         thread.Start();
     }
 
+    /// <summary>
+    /// Queue one chunk for the pipeline thread, first waiting while the buffer is full (an empty buffer always takes a
+    /// chunk). False when nobody will drain any more (<see cref="Release"/>): the reader stops. Reader threads only.
+    /// </summary>
+    private bool Put(bool isStderr, string text)
+    {
+        lock (_chunks)
+        {
+            while (!_released && _bufferedChars > 0 && _bufferedChars + text.Length > BufferChars)
+                Monitor.Wait(_chunks);
+            if (_released) return false;
+            _chunks.Enqueue((isStderr, text));
+            _bufferedChars += text.Length;
+            return true;
+        }
+    }
+
+    /// <summary>Move every queued chunk to <see cref="_taken"/> and give the readers their room back.</summary>
+    private void TakeChunks()
+    {
+        _taken.Clear();
+        lock (_chunks)
+        {
+            if (_chunks.Count == 0) return;
+            while (_chunks.TryDequeue(out var chunk)) _taken.Add(chunk);
+            _bufferedChars = 0;
+            Monitor.PulseAll(_chunks);
+        }
+    }
+
     /// <summary>Emit queued chunks in arrival order; <paramref name="final"/> also flushes the held tails.</summary>
-    private void Drain(Cmdlet cmdlet, bool final)
+    private void Drain(IChildOutputSink sink, bool final)
     {
         StringBuilder? stderr = null;
-        while (_chunks.TryDequeue(out var chunk))
+        TakeChunks();
+        foreach (var chunk in _taken)
         {
             if (chunk.IsStderr)
             {
@@ -215,28 +301,54 @@ public sealed class StreamingChildProcess : IDisposable
             }
             if (stderr is { Length: > 0 })
             {
-                WriteStderr(cmdlet, _assembler.Stderr(stderr.ToString()));
+                sink.Stderr(_assembler.Stderr(stderr.ToString()));
                 stderr.Clear();
             }
             _lines.Clear();
             _assembler.Stdout(chunk.Text, _lines);
             foreach (var line in _lines)
-                cmdlet.WriteObject(BashRuntime.NewBashObject(line));
+                sink.Stdout(BashRuntime.NewBashObject(line));
         }
         if (stderr is { Length: > 0 })
-            WriteStderr(cmdlet, _assembler.Stderr(stderr.ToString()));
+            sink.Stderr(_assembler.Stderr(stderr.ToString()));
         if (!final) return;
-        WriteStderr(cmdlet, _assembler.StderrEnd());
+        sink.Stderr(_assembler.StderrEnd());
         if (_assembler.StdoutEnd() is { } partial)
-            cmdlet.WriteObject(BashRuntime.NewBashObject(partial, "PsBash.TextOutput", noTrailingNewline: true));
+            sink.Stdout(BashRuntime.NewBashObject(partial, "PsBash.TextOutput", noTrailingNewline: true));
     }
 
-    private static void WriteStderr(Cmdlet cmdlet, string text)
+    private CmdletSink? _cmdletSink;
+
+    // One cmdlet drives an instance for its whole life; the wrapper is made once, not per record.
+    private IChildOutputSink SinkFor(Cmdlet cmdlet) =>
+        _cmdletSink is { } s && ReferenceEquals(s.Cmdlet, cmdlet) ? s : _cmdletSink = new CmdletSink(cmdlet);
+
+    private sealed class CmdletSink(Cmdlet cmdlet) : IChildOutputSink
     {
-        if (text.Length == 0) return;
-        if (cmdlet is PSCmdlet ps) FileSystemHelpers.WriteStderrBytes(ps, text);
-        else cmdlet.WriteError(new ErrorRecord(new IOException(text), "BashError", ErrorCategory.NotSpecified, null));
+        public Cmdlet Cmdlet { get; } = cmdlet;
+        public bool Stopping => Cmdlet.Stopping;
+        public void Stdout(object record) => Cmdlet.WriteObject(record);
+
+        public void Stderr(string text)
+        {
+            if (text.Length == 0) return;
+            if (Cmdlet is PSCmdlet ps) FileSystemHelpers.WriteStderrBytes(ps, text);
+            else Cmdlet.WriteError(new ErrorRecord(new IOException(text), "BashError", ErrorCategory.NotSpecified, null));
+        }
     }
+}
+
+/// <summary>Where <see cref="StreamingChildProcess"/> emits, on the pipeline thread: the cmdlet, or a test's collector.</summary>
+internal interface IChildOutputSink
+{
+    /// <summary>The pipeline is stopping: kill the child, emit nothing more.</summary>
+    bool Stopping { get; }
+
+    /// <summary>One stdout record.</summary>
+    void Stdout(object record);
+
+    /// <summary>stderr text as it arrived (may be empty, may lack a newline).</summary>
+    void Stderr(string text);
 }
 
 /// <summary>

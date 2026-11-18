@@ -89,6 +89,18 @@ public class NestedShellStreamingDifferentialTests
             timeout: TimeSpan.FromSeconds(30));
     }
 
+    /// <summary>
+    /// A child that closes its stdout and stderr and keeps running: bash waits for the process, not its pipes, and
+    /// reports the child's own status. ps-bash ended the wait at pipe EOF and reported 124 (killing the child).
+    /// </summary>
+    [SkippableFact]
+    public async Task Differential_NestedShell_ClosedOutput_StatusIsTheChildsOwnExit()
+    {
+        await AssertOracle.EqualAsync(
+            "bash -c 'exec >&- 2>&-; sleep 3; exit 3'; echo rc=$?",
+            timeout: TimeSpan.FromSeconds(60));
+    }
+
     /// <summary>With no -c and no script operand the pipe is still the PROGRAM (collected, then run).</summary>
     [SkippableFact]
     public async Task Differential_NestedShell_ProgramOnStdin_StillRuns()

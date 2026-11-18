@@ -201,6 +201,24 @@ exit status, a 2 s bound shared by both drains (every writer is dead, so EOF is 
 abandoned. **After a normal exit**: the drains get one 5 s grace in total (something the child left running may still
 hold the pipes), then the capture is returned without them. `SpawnedChild.Dispose` never joins a reader.
 
+**A wait with no time limit still has a stop.** Where bash waits as long as the child runs (awk `close()` of an output
+pipe, the exit of a streaming child), the wait is `SpawnedChild.WaitForExit(Timeout.Infinite, stopToken)`: it ends at
+the exit or at the stop, never only at the exit. awk: `AwkShell` tracks every child it starts (getline commands AND
+output pipes, also one whose `close()` is already waiting) and `KillAll` (StopProcessing) cancels `AwkShell.StopToken`
+and ends each tree; a stopped `close()` throws `PipelineStoppedException` so the program does not go on.
+Guard: `ProcessTreeKillGuardTests.Cmdlets_EveryUnboundedWaitForExit_HasAStopPath`.
+
+**Streaming child: pipe EOF ends the reading, not the wait** (`StreamingChildProcess.Complete`). A child that closed its
+stdout and stderr and keeps running is waited for and its own status is returned (bash 5.2:
+`bash -c 'exec >&- 2>&-; sleep 1; exit 3'` → 3 after 1 s); it was reported 124 and killed. Its output waits for the
+pipeline thread in a buffer of at most `StreamingChildProcess.BufferChars` (64 Ki chars, about a pipe buffer); a full
+buffer blocks the reader thread and so the child's write, as a full pipe does, so a fast child holds bounded memory.
+
+**Known gap (streaming output latency).** A cmdlet can emit only while the pipeline thread runs it: its own
+Begin/Process/End, i.e. when an input record arrives or at the end. While the upstream stage is busy without producing
+(`sleep 5 | bash -c 'echo hi'`), the child's output waits (bounded) and appears when the upstream yields; bash shows
+`hi` at once. Closing it needs output that bypasses the pipeline thread (a foreground output channel, §3).
+
 **What survives, as in bash** (oracle: bash 5.2 + coreutils `timeout` on Ubuntu 24.04):
 
 | Case | bash | ps-bash |
@@ -223,7 +241,7 @@ a programmatic stop there ends the leader and what is still linked to it by pare
 |---|---|
 | `RunChildProcess` (probes, `git`, `rg`, sed `e`, awk `system()`, psav) | `WaitBuffered` → `SpawnedChild.KillTree` |
 | `StartChildProcessStreaming` (nested `bash`/`sh`, `Invoke-BashNative`, `env`/`command`/`xargs`/`find -exec`/`time`/`flock` under a redirected stderr) | `StopProcessing` → `StreamingChildProcess.Kill` → `KillTree` |
-| awk `cmd \| getline`, `print \| "cmd"` | `AwkCommandStream.Kill` / `AwkPipeSink.Abort` → `KillTree` |
+| awk `cmd \| getline`, `print \| "cmd"` (open, or in `close()`) | `AwkShell.KillAll` → `AwkCommandStream.Kill` / each pipe child's `KillTree`; `StopToken` ends `close()`'s wait |
 | `traceroute` | `KillTree` on `Stopping` |
 | `timeout` | stops its nested pipeline; a program under it is one of the rows above |
 | background job host (`PSBASH_BG_MODE=process`) | `JobProcess` directly (`background-jobs.md` §6) |
