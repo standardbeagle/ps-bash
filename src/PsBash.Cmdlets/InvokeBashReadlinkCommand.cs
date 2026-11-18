@@ -1,174 +1,123 @@
 using System.Management.Automation;
+using PsBash.Cmdlets.Args;
 
 namespace PsBash.Cmdlets;
 
 /// <summary>
-/// Binary cmdlet replacement for the psm1 <c>Invoke-BashReadlink</c> function
-/// (REFACTOR-2). Prints the resolved symbolic-link target or canonical file
-/// name for each operand, matching GNU coreutils <c>readlink</c>'s default
-/// behavior as implemented by the psm1 oracle.
-///
-/// Behavioral parity oracle: the original psm1 function.
+/// GNU coreutils <c>readlink [-f|-e|-m] [-n] [-q|-s|-v] [-z] FILE...</c>.
 /// <list type="bullet">
-/// <item>Default (no <c>-f</c>): for each operand, call <c>Get-Item</c>; if the
-/// item is missing, emit a bash-style error and continue. Otherwise emit
-/// <c>FileSystemInfo.LinkTarget</c> (the symlink target) when present, or the
-/// item's <c>FullName</c> for a non-symlink — mirroring the psm1 oracle's
-/// <c>if ($item.Target) { $item.Target } else { $item.FullName }</c> branch.</item>
-/// <item><c>-f</c> (canonicalize): call <c>Resolve-Path</c>; if it fails, emit
-/// the same bash-style error. Otherwise emit the canonical path string.</item>
+/// <item>Default: FILE must be a symbolic link; its target is printed as stored. Anything else fails (status 1)
+/// SILENTLY: "Invalid argument" (not a link) or "No such file or directory" print only under <c>-v</c>.</item>
+/// <item><c>-f</c> / <c>-e</c> / <c>-m</c>: the canonical name, every link followed (<see cref="CanonicalPath"/>):
+/// all but the last component must exist / every one / none. The last of the three given wins. Failures are silent
+/// unless <c>-v</c>; the last of <c>-q</c>/<c>-s</c>/<c>-v</c> wins.</item>
+/// <item><c>-n</c>: no newline after the name (ignored with a warning for more than one FILE); <c>-z</c>: NUL after
+/// each name.</item>
 /// </list>
-/// Output is a typed <c>PsBash.ReadlinkOutput</c> PSObject with <c>Path</c> and
-/// <c>BashText</c> note properties, matching the psm1 oracle's PSCustomObject.
+/// Flags arrive in <see cref="Arguments"/> in order (<c>PsEmitter.OrderedArgCommands</c>); the
+/// <see cref="f"/>/<see cref="E"/>/<see cref="V"/> switches exist only for a DIRECT call (<c>-e</c> collides with
+/// <c>-ErrorAction</c>, <c>-v</c> with <c>-Verbose</c>) and are re-injected first.
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashReadlink")]
 [OutputType(typeof(PSObject))]
 public sealed class InvokeBashReadlinkCommand : PSCmdlet
 {
-    /// <summary>
-    /// GNU readlink's <c>-f</c> (canonicalize). The bare flag <c>-f</c> has no
-    /// PowerShell common-parameter prefix collision, but we declare it as an
-    /// explicit <see cref="SwitchParameter"/> so the binder treats it as a
-    /// known parameter instead of routing it through
-    /// <see cref="Arguments"/>. The psm1 oracle distinguishes <c>-f</c> with
-    /// <c>-ceq</c> (case-sensitive equals), so we honor only the lowercase
-    /// short form here too.
-    /// </summary>
-    [Parameter]
-    public SwitchParameter f { get; set; }
+    /// <summary>Decoy for a direct call's <c>-f</c>.</summary>
+    [Parameter] public SwitchParameter f { get; set; }
 
-    /// <summary>
-    /// GNU readlink's <c>-e</c> (canonicalize; every component must exist). Declared
-    /// as a decoy <see cref="SwitchParameter"/> because the bare <c>-e</c> prefix-
-    /// collides with <c>-ErrorAction</c>/<c>-ErrorVariable</c> and the binder crashes
-    /// ("ambiguous") before <see cref="Arguments"/> ever sees it. realpath guarded this
-    /// surface; readlink was missed. Treated like <c>-f</c> (canonicalize).
-    /// </summary>
-    [Parameter]
-    public SwitchParameter E { get; set; }
+    /// <summary>Decoy: a direct call's bare <c>-e</c> is ambiguous between <c>-ErrorAction</c>/<c>-ErrorVariable</c>.</summary>
+    [Parameter] public SwitchParameter E { get; set; }
 
-    /// <summary>
-    /// GNU readlink's <c>-v</c> (verbose). Decoy for the <c>-Verbose</c> prefix
-    /// collision (a bare <c>-v</c> silently bound <c>-Verbose</c>). Accepted and
-    /// ignored — readlink's diagnostics are already emitted.
-    /// </summary>
-    [Parameter]
-    public SwitchParameter V { get; set; }
+    /// <summary>Decoy: a direct call's bare <c>-v</c> would bind <c>-Verbose</c>.</summary>
+    [Parameter] public SwitchParameter V { get; set; }
 
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
+    private const string OptF = "canonicalize", OptE = "canonicalize-existing", OptM = "canonicalize-missing",
+        OptN = "no-newline", OptQ = "quiet", OptS = "silent", OptV = "verbose", OptZ = "zero";
+
+    private static readonly OptSpecSet ReadlinkSpec = new(
+        new[]
+        {
+            new OptSpec(OptF, 'f', OptF),
+            new OptSpec(OptE, 'e', OptE),
+            new OptSpec(OptM, 'm', OptM),
+            new OptSpec(OptN, 'n', OptN),
+            new OptSpec(OptQ, 'q', OptQ),
+            new OptSpec(OptS, 's', OptS),
+            new OptSpec(OptV, 'v', OptV),
+            new OptSpec(OptZ, 'z', OptZ),
+        },
+        allowAbbrev: true,
+        gnuInfoOptions: true);
+
+    internal static ParsedArgs ScanArgs(string[] args) => ArgParser.Parse(args, ReadlinkSpec);
+
     protected override void ProcessRecord()
     {
-        var args = Arguments ?? Array.Empty<string>();
-
+        var args = BashRuntime.PrependDecoys(Arguments, (f.IsPresent, "-f"), (E.IsPresent, "-e"), (V.IsPresent, "-v"));
         FileSystemHelpers.SetLastExitCode(this, 0);
         if (FileSystemHelpers.TryHandleVersion(this, "readlink", args)) return;
         if (Array.IndexOf(args, "--help") >= 0)
         {
-            foreach (var line in InvokeCommand.InvokeScript(
-                         "param($n) Show-BashHelp $n", "readlink"))
-            {
+            foreach (var line in InvokeCommand.InvokeScript("param($n) Show-BashHelp $n", "readlink"))
                 WriteObject(line);
-            }
             return;
         }
 
-        // -f/-e/-m are canonicalize variants; -v is verbose (accepted, ignored).
-        // -e and -v are bound to the E/V decoys (never in Arguments); -f/-m arrive
-        // here and must not be treated as path operands. Every other -prefixed token
-        // stays an operand (psm1 oracle: it fails Get-Item, matching GNU).
-        var operands = new List<string>();
-        foreach (var a in args)
+        var parsed = ScanArgs(args);
+        if (FileSystemHelpers.TryWriteParseError(this, "readlink", parsed)) return;
+        if (FileSystemHelpers.TryHandleInfoOptions(this, "readlink", parsed)) return;
+
+        // The last of -f/-e/-m picks the mode; the last of -q/-s/-v picks verbosity (GNU: each option overwrites).
+        CanonicalPath.Mode? mode = null;
+        bool verbose = false, noNewline = false, zero = false;
+        foreach (var t in parsed.Tokens)
         {
-            if (a is "-f" or "-e" or "-m" or "-v") continue;
-            operands.Add(a);
+            if (t.Kind != ArgTokKind.Option) continue;
+            switch (t.OptId)
+            {
+                case OptF: mode = CanonicalPath.Mode.AllButLast; break;
+                case OptE: mode = CanonicalPath.Mode.Existing; break;
+                case OptM: mode = CanonicalPath.Mode.Missing; break;
+                case OptN: noNewline = true; break;
+                case OptQ or OptS: verbose = false; break;
+                case OptV: verbose = true; break;
+                case OptZ: zero = true; break;
+            }
         }
 
-        // Canonicalize for -f (bound), -e (E decoy), or -m (canonicalize-missing,
-        // reaches Arguments since 'm' has no common-parameter collision). ps-bash's
-        // oracle only resolves existing paths, so -m behaves like -e/-f here.
-        bool canonicalize = f.IsPresent || E.IsPresent || Array.IndexOf(args, "-m") >= 0;
-
+        var operands = parsed.Operands();
         if (operands.Count == 0)
         {
-            FileSystemHelpers.WriteBashError(this, "readlink: missing operand");
+            FileSystemHelpers.WriteBashError(this, "readlink: missing operand\nTry 'readlink --help' for more information.");
+            FileSystemHelpers.SetLastExitCode(this, 1);
             return;
         }
-
-        foreach (var path in operands)
+        if (noNewline && operands.Count > 1)
         {
-            string text;
-            if (canonicalize)
-            {
-                try
-                {
-                    var resolved = SessionState.Path.GetResolvedPSPathFromPSPath(path);
-                    if (resolved.Count == 0)
-                    {
-                        FileSystemHelpers.WriteBashError(this,
-                            $"readlink: {path}: No such file or directory");
-                        continue;
-                    }
-                    text = resolved[0].ProviderPath;
-                }
-                catch
-                {
-                    FileSystemHelpers.WriteBashError(this,
-                        $"readlink: {path}: No such file or directory");
-                    continue;
-                }
-            }
-            else
-            {
-                string fullPath;
-                try
-                {
-                    fullPath = FileSystemHelpers.ProviderPath(this, path);
-                }
-                catch
-                {
-                    FileSystemHelpers.WriteBashError(this,
-                        $"readlink: {path}: No such file or directory");
-                    continue;
-                }
-
-                FileSystemInfo? info = null;
-                try
-                {
-                    if (Directory.Exists(fullPath))
-                    {
-                        info = new DirectoryInfo(fullPath);
-                    }
-                    else if (File.Exists(fullPath))
-                    {
-                        info = new FileInfo(fullPath);
-                    }
-                }
-                catch
-                {
-                    info = null;
-                }
-
-                if (info == null)
-                {
-                    FileSystemHelpers.WriteBashError(this,
-                        $"readlink: {path}: No such file or directory");
-                    continue;
-                }
-
-                // psm1 oracle: `if ($item.Target) { $item.Target } else { $item.FullName }`.
-                // FileSystemInfo.LinkTarget is the .NET API for reading a
-                // symlink's target string (null for non-links).
-                var target = info.LinkTarget;
-                text = !string.IsNullOrEmpty(target) ? target! : info.FullName;
-            }
-
-            var output = new PSObject();
-            output.TypeNames.Insert(0, "PsBash.ReadlinkOutput");
-            output.Properties.Add(new PSNoteProperty("Path", text));
-            output.Properties.Add(new PSNoteProperty("BashText", PsBash.Core.BashPath.ToShell(text)));
-            WriteObject(output);
+            FileSystemHelpers.WriteBashError(this, "readlink: ignoring --no-newline with multiple arguments");
+            noNewline = false;
         }
+
+        bool failed = false;
+        foreach (var operand in operands)
+        {
+            // The message names the operand as typed (an absolute one inside the working directory too).
+            OperandDisplay.Remember(this, operand, operand);
+            var r = mode is { } m ? CanonicalPath.Canonicalize(this, operand, m) : CanonicalPath.ReadLink(this, operand);
+            if (!r.Ok)
+            {
+                failed = true;
+                if (verbose) FileSystemHelpers.WriteBashError(this, $"readlink: {GnuQuote.IfNeeded(operand)}: {r.Error}");
+                continue;
+            }
+            string text = PsBash.Core.BashPath.ToShell(r.Path!);
+            WriteObject(zero ? NulRecords.Record(text)
+                : noNewline ? BashRuntime.NewBashObject(text, noTrailingNewline: true)
+                : BashRuntime.NewBashObject(text));
+        }
+        if (failed) FileSystemHelpers.SetLastExitCode(this, 1);
     }
 }

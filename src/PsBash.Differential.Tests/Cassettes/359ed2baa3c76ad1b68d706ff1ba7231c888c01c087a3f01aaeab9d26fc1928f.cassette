@@ -1,0 +1,259 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 286
+stdout-length: 5779
+stderr-length: 0
+==== SCRIPT ====
+for c in base64 cat column comm cp cut diff du expand fold grep gzip head join ln ls mkdir mv nl paste readlink realpath rm rmdir sort split stat tac tail tar tee touch unexpand uniq wc; do echo "## $c"; $c -@ </dev/null 2>&1; echo "rc=$?"; $c --zzqq </dev/null 2>&1; echo "rc=$?"; done
+==== STDOUT ====
+## base64
+base64: invalid option -- '@'
+Try 'base64 --help' for more information.
+rc=1
+base64: unrecognized option '--zzqq'
+Try 'base64 --help' for more information.
+rc=1
+## cat
+cat: invalid option -- '@'
+Try 'cat --help' for more information.
+rc=1
+cat: unrecognized option '--zzqq'
+Try 'cat --help' for more information.
+rc=1
+## column
+column: invalid option -- '@'
+Try 'column --help' for more information.
+rc=1
+column: unrecognized option '--zzqq'
+Try 'column --help' for more information.
+rc=1
+## comm
+comm: invalid option -- '@'
+Try 'comm --help' for more information.
+rc=1
+comm: unrecognized option '--zzqq'
+Try 'comm --help' for more information.
+rc=1
+## cp
+cp: invalid option -- '@'
+Try 'cp --help' for more information.
+rc=1
+cp: unrecognized option '--zzqq'
+Try 'cp --help' for more information.
+rc=1
+## cut
+cut: invalid option -- '@'
+Try 'cut --help' for more information.
+rc=1
+cut: unrecognized option '--zzqq'
+Try 'cut --help' for more information.
+rc=1
+## diff
+diff: invalid option -- '@'
+diff: Try 'diff --help' for more information.
+rc=2
+diff: unrecognized option '--zzqq'
+diff: Try 'diff --help' for more information.
+rc=2
+## du
+du: invalid option -- '@'
+Try 'du --help' for more information.
+rc=1
+du: unrecognized option '--zzqq'
+Try 'du --help' for more information.
+rc=1
+## expand
+expand: invalid option -- '@'
+Try 'expand --help' for more information.
+rc=1
+expand: unrecognized option '--zzqq'
+Try 'expand --help' for more information.
+rc=1
+## fold
+fold: invalid option -- '@'
+Try 'fold --help' for more information.
+rc=1
+fold: unrecognized option '--zzqq'
+Try 'fold --help' for more information.
+rc=1
+## grep
+grep: invalid option -- '@'
+Usage: grep [OPTION]... PATTERNS [FILE]...
+Try 'grep --help' for more information.
+rc=2
+grep: unrecognized option '--zzqq'
+Usage: grep [OPTION]... PATTERNS [FILE]...
+Try 'grep --help' for more information.
+rc=2
+## gzip
+gzip: invalid option -- '@'
+Try `gzip --help' for more information.
+rc=1
+gzip: unrecognized option '--zzqq'
+Try `gzip --help' for more information.
+rc=1
+## head
+head: invalid option -- '@'
+Try 'head --help' for more information.
+rc=1
+head: unrecognized option '--zzqq'
+Try 'head --help' for more information.
+rc=1
+## join
+join: invalid option -- '@'
+Try 'join --help' for more information.
+rc=1
+join: unrecognized option '--zzqq'
+Try 'join --help' for more information.
+rc=1
+## ln
+ln: invalid option -- '@'
+Try 'ln --help' for more information.
+rc=1
+ln: unrecognized option '--zzqq'
+Try 'ln --help' for more information.
+rc=1
+## ls
+ls: invalid option -- '@'
+Try 'ls --help' for more information.
+rc=2
+ls: unrecognized option '--zzqq'
+Try 'ls --help' for more information.
+rc=2
+## mkdir
+mkdir: invalid option -- '@'
+Try 'mkdir --help' for more information.
+rc=1
+mkdir: unrecognized option '--zzqq'
+Try 'mkdir --help' for more information.
+rc=1
+## mv
+mv: invalid option -- '@'
+Try 'mv --help' for more information.
+rc=1
+mv: unrecognized option '--zzqq'
+Try 'mv --help' for more information.
+rc=1
+## nl
+nl: invalid option -- '@'
+Try 'nl --help' for more information.
+rc=1
+nl: unrecognized option '--zzqq'
+Try 'nl --help' for more information.
+rc=1
+## paste
+paste: invalid option -- '@'
+Try 'paste --help' for more information.
+rc=1
+paste: unrecognized option '--zzqq'
+Try 'paste --help' for more information.
+rc=1
+## readlink
+readlink: invalid option -- '@'
+Try 'readlink --help' for more information.
+rc=1
+readlink: unrecognized option '--zzqq'
+Try 'readlink --help' for more information.
+rc=1
+## realpath
+realpath: invalid option -- '@'
+Try 'realpath --help' for more information.
+rc=1
+realpath: unrecognized option '--zzqq'
+Try 'realpath --help' for more information.
+rc=1
+## rm
+rm: invalid option -- '@'
+Try 'rm --help' for more information.
+rc=1
+rm: unrecognized option '--zzqq'
+Try 'rm --help' for more information.
+rc=1
+## rmdir
+rmdir: invalid option -- '@'
+Try 'rmdir --help' for more information.
+rc=1
+rmdir: unrecognized option '--zzqq'
+Try 'rmdir --help' for more information.
+rc=1
+## sort
+sort: invalid option -- '@'
+Try 'sort --help' for more information.
+rc=2
+sort: unrecognized option '--zzqq'
+Try 'sort --help' for more information.
+rc=2
+## split
+split: invalid option -- '@'
+Try 'split --help' for more information.
+rc=1
+split: unrecognized option '--zzqq'
+Try 'split --help' for more information.
+rc=1
+## stat
+stat: invalid option -- '@'
+Try 'stat --help' for more information.
+rc=1
+stat: unrecognized option '--zzqq'
+Try 'stat --help' for more information.
+rc=1
+## tac
+tac: invalid option -- '@'
+Try 'tac --help' for more information.
+rc=1
+tac: unrecognized option '--zzqq'
+Try 'tac --help' for more information.
+rc=1
+## tail
+tail: invalid option -- '@'
+Try 'tail --help' for more information.
+rc=1
+tail: unrecognized option '--zzqq'
+Try 'tail --help' for more information.
+rc=1
+## tar
+tar: invalid option -- '@'
+Try 'tar --help' or 'tar --usage' for more information.
+rc=64
+tar: unrecognized option '--zzqq'
+Try 'tar --help' or 'tar --usage' for more information.
+rc=64
+## tee
+tee: invalid option -- '@'
+Try 'tee --help' for more information.
+rc=1
+tee: unrecognized option '--zzqq'
+Try 'tee --help' for more information.
+rc=1
+## touch
+touch: invalid option -- '@'
+Try 'touch --help' for more information.
+rc=1
+touch: unrecognized option '--zzqq'
+Try 'touch --help' for more information.
+rc=1
+## unexpand
+unexpand: invalid option -- '@'
+Try 'unexpand --help' for more information.
+rc=1
+unexpand: unrecognized option '--zzqq'
+Try 'unexpand --help' for more information.
+rc=1
+## uniq
+uniq: invalid option -- '@'
+Try 'uniq --help' for more information.
+rc=1
+uniq: unrecognized option '--zzqq'
+Try 'uniq --help' for more information.
+rc=1
+## wc
+wc: invalid option -- '@'
+Try 'wc --help' for more information.
+rc=1
+wc: unrecognized option '--zzqq'
+Try 'wc --help' for more information.
+rc=1
+
+==== STDERR ====
+

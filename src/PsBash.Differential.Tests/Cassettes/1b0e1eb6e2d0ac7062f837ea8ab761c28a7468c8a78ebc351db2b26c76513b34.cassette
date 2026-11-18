@@ -1,0 +1,49 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 701
+stdout-length: 585
+stderr-length: 0
+==== SCRIPT ====
+d=$(mktemp -d); cd "$d" || exit; d=$(pwd); mkdir sub; touch f
+readlink -n f sub 2>&1; echo "rc=$?"
+readlink -fn f | sed "s|$d|D|g"; echo "|rc=$?"
+readlink -fz f sub | tr '\0' '\n' | sed "s|$d|D|g"; echo "|"
+realpath -z f nosuch/x 2>/dev/null | tr '\0' '\n' | sed "s|$d|D|g"; echo "|"
+readlink -fq nosuch/x; echo "rc=$?"; readlink -fvq nosuch/x; echo "rc=$?"; readlink -fqv nosuch/x 2>&1; echo "rc=$?"
+readlink -mfe sub/nosuch 2>&1; echo "rc=$?"; readlink -efm nosuch/x | sed "s|$d|D|g"; echo "rc=$?"
+readlink 2>&1; echo "rc=$?"; realpath 2>&1; echo "rc=$?"; readlink -x f 2>&1; echo "rc=$?"
+readlink --canon f 2>&1; echo "rc=$?"; realpath --canonicalize-m nosuch/x | sed "s|$d|D|g"
+cd / && rm -rf "$d"
+==== STDOUT ====
+readlink: ignoring --no-newline with multiple arguments
+rc=1
+D/f|rc=0
+D/f
+D/sub
+|
+D/f
+|
+rc=1
+rc=1
+readlink: nosuch/x: No such file or directory
+rc=1
+rc=1
+D/nosuch/x
+rc=0
+readlink: missing operand
+Try 'readlink --help' for more information.
+rc=1
+realpath: missing operand
+Try 'realpath --help' for more information.
+rc=1
+readlink: invalid option -- 'x'
+Try 'readlink --help' for more information.
+rc=1
+readlink: option '--canon' is ambiguous; possibilities: '--canonicalize' '--canonicalize-existing' '--canonicalize-missing'
+Try 'readlink --help' for more information.
+rc=1
+D/nosuch/x
+
+==== STDERR ====
+

@@ -13668,7 +13668,7 @@ public static partial class PsEmitter
     /// cmdlet must be prepared to receive every flag as a plain string.
     /// </summary>
     internal static readonly IReadOnlySet<string> OrderedArgCommands =
-        new HashSet<string>(StringComparer.Ordinal) { "source", "getopts", "flock", "timeout", "times", "history", "hash", "umask", "ulimit", "compgen", "shopt", "complete", "compopt", "tee", "cp", "mv", "rm", "mkdir", "chmod", "rmdir", "ln", "touch", "xargs", "time", "env", "command", "declare", "type", "bash", "sh", "awk", "head", "tail", "wc", "cat", "tac", "nl", "uniq", "fold", "expand", "unexpand", "paste", "join", "comm", "split", "strings", "base64", "stat", "file", "cut", "sort", "grep", "sed", "rg", "find", "echo", "printf", "test", "ls", "du", "tree", "column", "gzip", "tar", "md5sum", "sha1sum", "sha256sum", "diff", "jq", "od" };
+        new HashSet<string>(StringComparer.Ordinal) { "source", "getopts", "flock", "timeout", "times", "history", "hash", "umask", "ulimit", "compgen", "shopt", "complete", "compopt", "tee", "cp", "mv", "rm", "mkdir", "chmod", "rmdir", "ln", "touch", "xargs", "time", "env", "command", "declare", "type", "bash", "sh", "awk", "head", "tail", "wc", "cat", "tac", "nl", "uniq", "fold", "expand", "unexpand", "paste", "join", "comm", "split", "strings", "base64", "stat", "file", "cut", "sort", "grep", "sed", "rg", "find", "echo", "printf", "test", "ls", "du", "tree", "column", "gzip", "tar", "md5sum", "sha1sum", "sha256sum", "diff", "jq", "od", "readlink", "realpath" };
 
     /// <summary><c>Invoke-BashTee</c> -&gt; is <c>tee</c> in <see cref="OrderedArgCommands"/>?</summary>
     private static bool IsOrderedArgCmdlet(string cmdlet) =>

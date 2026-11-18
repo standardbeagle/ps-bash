@@ -3,20 +3,10 @@ using Xunit;
 namespace PsBash.Cmdlets.Tests;
 
 /// <summary>
-/// Behavioral-parity tests for the REFACTOR-2 migration of Invoke-BashReadlink
-/// from PsBash.psm1 to a binary cmdlet (PsBash.Cmdlets.dll).
-///
-/// Oracle: the psm1 function emitted a typed PsBash.ReadlinkOutput object whose
-/// BashText / Path is either FileSystemInfo.LinkTarget (when the operand is a
-/// symlink) or item.FullName (regular file/dir). On a missing operand or a
-/// missing path, it called Write-Error -ErrorAction Continue with a
-/// bash-style "readlink: PATH: No such file or directory" message. The -f
-/// flag switched to a Resolve-Path branch.
-///
-/// Failure-surface axes that apply: empty input (missing operand), unicode
-/// path, missing target (Directive 3 #14), alias resolution, --help dispatch,
-/// injection probe (Directive 12). Pipeline / large-input / signal axes do
-/// not apply: readlink has no streaming surface.
+/// Invoke-BashReadlink against GNU coreutils readlink (oracle: coreutils 9.4). The default form prints a symbolic
+/// link's target and fails SILENTLY (status 1) for anything else; <c>-v</c> names the reason. <c>-f/-e/-m</c>
+/// canonicalize through <see cref="CanonicalPath"/> (its walk is unit-tested in CanonicalPathTests). The symlink
+/// cases skip where the host may not create links (Windows without Developer Mode).
 /// </summary>
 public class InvokeBashReadlinkCommandTests : IDisposable, IClassFixture<SharedPwshFixture>
 {
@@ -38,141 +28,135 @@ public class InvokeBashReadlinkCommandTests : IDisposable, IClassFixture<SharedP
         try { Directory.Delete(_tmpDir, recursive: true); } catch { /* best-effort */ }
     }
 
-    private string[] RunBashText(string script)
+    private CmdResult Invoke(string script)
     {
         var pwsh = _fixture.AcquireFresh();
-        var result = pwsh.AddScript(script).Invoke();
-        pwsh.Commands.Clear();
-
-        return result.Select(o =>
-        {
-            if (o == null) return "";
-            var bt = o.Properties["BashText"]?.Value as string;
-            return bt ?? o.ToString();
-        }).ToArray();
+        pwsh.AddScript("$ErrorActionPreference='Continue'; Set-Location -LiteralPath '" + _tmpDir.Replace("'", "''") + "'").Invoke();
+        return CmdResult.Run(pwsh, script);
     }
 
-    /// <summary>
-    /// Attempt to create a symlink. Requires Developer Mode / admin on Windows.
-    /// Returns null if symlink creation is not permitted on this host.
-    /// </summary>
-    private static string? TryCreateSymlink(string linkPath, string targetPath)
+    private static string[] StderrLines(CmdResult r) => r.Stderr.Length == 0 ? [] : r.Stderr.Split('\n');
+
+    private static string Q(string s) => "'" + s.Replace("'", "''") + "'";
+
+    private static bool TryCreateSymlink(string linkPath, string target, bool directory = false)
     {
         try
         {
-            File.CreateSymbolicLink(linkPath, targetPath);
-            return linkPath;
+            if (directory) Directory.CreateSymbolicLink(linkPath, target);
+            else File.CreateSymbolicLink(linkPath, target);
+            return true;
         }
-        catch (UnauthorizedAccessException) { return null; }
-        catch (IOException) { return null; }
-        catch (PlatformNotSupportedException) { return null; }
+        catch (UnauthorizedAccessException) { return false; }
+        catch (IOException) { return false; }
+        catch (PlatformNotSupportedException) { return false; }
+    }
+
+    private static void SamePath(string expected, string actual)
+        => Assert.Equal(new FileInfo(expected).FullName, new FileInfo(actual).FullName, ignoreCase: OperatingSystem.IsWindows());
+
+    [Fact]
+    public void Readlink_RegularFile_FailsSilently()
+    {
+        // GNU: readlink(2) says EINVAL for a non-link; without -v nothing is printed, status 1.
+        var r = Invoke($"Invoke-BashReadlink {Q(_regularFile)}");
+        Assert.Empty(r.Lines);
+        Assert.Empty(StderrLines(r));
+        Assert.Equal(1, r.ExitCode);
     }
 
     [Fact]
-    public void Readlink_RegularFile_ReturnsFullName()
+    public void Readlink_DashV_RegularFile_SaysInvalidArgument()
     {
-        // psm1 oracle: when item.Target is empty, emit item.FullName.
-        var lines = RunBashText($"Invoke-BashReadlink '{_regularFile.Replace("'", "''")}'");
-        Assert.Single(lines);
-        Assert.Equal(
-            new FileInfo(_regularFile).FullName,
-            new FileInfo(lines[0]).FullName,
-            ignoreCase: true);
+        // Bare -v must not bind -Verbose (V decoy); it makes the failure speak.
+        var r = Invoke("Invoke-BashReadlink -v regular.txt");
+        Assert.Empty(r.Lines);
+        Assert.Contains(StderrLines(r), m => m == "readlink: regular.txt: Invalid argument");
+        Assert.Equal(1, r.ExitCode);
+    }
+
+    [Theory]
+    [InlineData("nosuch", "readlink: nosuch: No such file or directory")]
+    [InlineData("regular.txt/", "readlink: regular.txt/: Not a directory")]
+    [InlineData("regular.txt/x", "readlink: regular.txt/x: Not a directory")]
+    [InlineData("regular.txt/..", "readlink: regular.txt/..: Not a directory")]
+    [InlineData("a b", "readlink: 'a b': No such file or directory")]
+    [InlineData("", "readlink: '': No such file or directory")]
+    public void Readlink_DashV_NamesTheReasonAsGnuQuotesIt(string operand, string message)
+    {
+        var r = Invoke($"Invoke-BashReadlink -v {Q(operand)}");
+        Assert.Empty(r.Lines);
+        Assert.Contains(StderrLines(r), m => m == message);
+        Assert.Equal(1, r.ExitCode);
+    }
+
+    [Fact]
+    public void Readlink_DashV_AbsoluteOperandInsideCwd_KeptAsTyped()
+    {
+        var typed = PsBash.Core.BashPath.ToShell(Path.Combine(_tmpDir, "regular.txt"));
+        var r = Invoke($"Invoke-BashReadlink -v {Q(typed)}");
+        Assert.Contains(StderrLines(r), m => m == $"readlink: {typed}: Invalid argument");
     }
 
     [Fact]
     public void Readlink_DashE_CanonicalizesWithoutBinderCrash()
     {
-        // Regression: bare -e prefix-collides with -ErrorAction/-ErrorVariable and the
-        // binder crashed ("ambiguous") before the cmdlet ran. It must bind (E decoy)
-        // and canonicalize like -f. A passing invocation proves no binder crash.
-        var lines = RunBashText($"Invoke-BashReadlink -e '{_regularFile.Replace("'", "''")}'");
-        Assert.Single(lines);
-        Assert.Equal(
-            new FileInfo(_regularFile).FullName,
-            new FileInfo(lines[0]).FullName,
-            ignoreCase: true);
+        // Bare -e prefix-collides with -ErrorAction/-ErrorVariable; the E decoy binds it.
+        var r = Invoke($"Invoke-BashReadlink -e {Q(_regularFile)}");
+        Assert.Single(r.Lines);
+        SamePath(_regularFile, r.Lines[0]);
+        Assert.Equal(0, r.ExitCode);
     }
 
     [Fact]
-    public void Readlink_DashV_AcceptedWithoutBinderCrash()
+    public void Readlink_DashF_LastComponentMayBeMissing_IntermediateMayNot()
     {
-        // Regression: bare -v silently bound -Verbose. It must be accepted (V decoy)
-        // and produce the normal output for the operand.
-        var lines = RunBashText($"Invoke-BashReadlink -v '{_regularFile.Replace("'", "''")}'");
-        Assert.Single(lines);
-    }
-
-    [SkippableFact]
-    public void Readlink_Symlink_ReturnsLinkTarget()
-    {
-        var linkPath = Path.Combine(_tmpDir, "link-to-regular");
-        var created = TryCreateSymlink(linkPath, _regularFile);
-        Skip.If(created == null, "Symlink creation not permitted on this host");
-
-        var lines = RunBashText($"Invoke-BashReadlink '{linkPath.Replace("'", "''")}'");
-        Assert.Single(lines);
-        // .NET's FileSystemInfo.LinkTarget returns whatever was passed at
-        // creation. We compare canonicalized FullNames so case/separator
-        // differences don't break the assertion on Windows.
-        Assert.True(new FileInfo(lines[0]).FullName.Equals(
-            new FileInfo(_regularFile).FullName,
-            StringComparison.OrdinalIgnoreCase),
-            $"Expected link target to match {_regularFile}, got {lines[0]}");
+        var r = Invoke("Invoke-BashReadlink -f ghost.txt nosuch/x");
+        Assert.Single(r.Lines);
+        SamePath(Path.Combine(_tmpDir, "ghost.txt"), r.Lines[0]);
+        Assert.Empty(StderrLines(r));     // silent without -v
+        Assert.Equal(1, r.ExitCode);
     }
 
     [Fact]
-    public void Readlink_MissingPath_EmitsNoOutput()
+    public void Readlink_DashM_NothingNeedExist()
     {
-        // psm1 oracle: Get-Item fails, Write-Error -ErrorAction Continue is
-        // raised, foreach continues. No BashText is emitted for the missing
-        // operand.
-        var ghost = Path.Combine(_tmpDir, "ghost.txt");
-        var lines = RunBashText($"Invoke-BashReadlink '{ghost.Replace("'", "''")}'");
-        Assert.Empty(lines);
+        var r = Invoke("Invoke-BashReadlink -m nosuch/x/../y");
+        Assert.Single(r.Lines);
+        SamePath(Path.Combine(_tmpDir, "nosuch", "y"), r.Lines[0]);
     }
 
     [Fact]
-    public void Readlink_MissingOperand_EmitsNoOutput()
+    public void Readlink_LastModeFlagWins()
     {
-        // psm1 oracle: zero operands -> "readlink: missing operand" error +
-        // return. No output objects.
-        var lines = RunBashText("Invoke-BashReadlink");
-        Assert.Empty(lines);
+        // As the emitter passes them (OrderedArgCommands quotes every dash word): order kept. A direct call's decoy
+        // switches are re-injected first, so only the quoted form can show which came last.
+        Assert.Single(Invoke("Invoke-BashReadlink '-e' '-m' nosuch/x").Lines);
+        Invoke("Invoke-BashReadlink '-m' '-e' nosuch/x").AssertFailed(1);
     }
 
     [Fact]
-    public void Readlink_DashFCanonicalize_ResolvesPath()
+    public void Readlink_DashZ_EndsEachNameWithNul()
     {
-        // -f branch: Resolve-Path on an existing file. Should emit the
-        // canonical path.
-        var lines = RunBashText($"Invoke-BashReadlink -f '{_regularFile.Replace("'", "''")}'");
-        Assert.Single(lines);
-        Assert.Equal(
-            new FileInfo(_regularFile).FullName,
-            new FileInfo(lines[0]).FullName,
-            ignoreCase: true);
+        var r = Invoke("(Invoke-BashReadlink -fz regular.txt | ForEach-Object { $_.BashText }) -join ''");
+        Assert.EndsWith("regular.txt\0", r.Lines[0]);
     }
 
     [Fact]
-    public void Readlink_DashFMissing_EmitsNoOutput()
+    public void Readlink_NoNewlineWithManyOperands_Warns()
     {
-        var ghost = Path.Combine(_tmpDir, "ghost-f.txt");
-        var lines = RunBashText($"Invoke-BashReadlink -f '{ghost.Replace("'", "''")}'");
-        Assert.Empty(lines);
+        var r = Invoke("Invoke-BashReadlink -fn regular.txt regular.txt");
+        Assert.Equal(2, r.Lines.Count);
+        Assert.Contains(StderrLines(r), m => m == "readlink: ignoring --no-newline with multiple arguments");
     }
 
     [Fact]
-    public void Readlink_MultipleOperands_OneOutputPerExisting()
+    public void Readlink_MissingOperand_Errors()
     {
-        var ghost = Path.Combine(_tmpDir, "ghost-multi.txt");
-        var lines = RunBashText(
-            $"Invoke-BashReadlink '{_regularFile.Replace("'", "''")}' '{ghost.Replace("'", "''")}'");
-        Assert.Single(lines); // only the existing one emits
-        Assert.Equal(
-            new FileInfo(_regularFile).FullName,
-            new FileInfo(lines[0]).FullName,
-            ignoreCase: true);
+        var r = Invoke("Invoke-BashReadlink");
+        Assert.Empty(r.Lines);
+        Assert.Contains(StderrLines(r), m => m.StartsWith("readlink: missing operand"));
+        Assert.Equal(1, r.ExitCode);
     }
 
     [Fact]
@@ -180,46 +164,78 @@ public class InvokeBashReadlinkCommandTests : IDisposable, IClassFixture<SharedP
     {
         var unicodeFile = Path.Combine(_tmpDir, "файл-📄.txt");
         File.WriteAllText(unicodeFile, "hi\n");
-        var lines = RunBashText($"Invoke-BashReadlink '{unicodeFile.Replace("'", "''")}'");
-        Assert.Single(lines);
-        Assert.Equal(
-            new FileInfo(unicodeFile).FullName,
-            new FileInfo(lines[0]).FullName,
-            ignoreCase: true);
+        var r = Invoke($"Invoke-BashReadlink -f {Q(unicodeFile)}");
+        Assert.Single(r.Lines);
+        SamePath(unicodeFile, r.Lines[0]);
     }
 
     [Fact]
     public void Readlink_ViaAlias_Works()
     {
-        var lines = RunBashText($"readlink '{_regularFile.Replace("'", "''")}'");
-        Assert.Single(lines);
-        Assert.Equal(
-            new FileInfo(_regularFile).FullName,
-            new FileInfo(lines[0]).FullName,
-            ignoreCase: true);
+        var r = Invoke("readlink -f regular.txt");
+        Assert.Single(r.Lines);
+        SamePath(_regularFile, r.Lines[0]);
     }
 
     [Fact]
     public void Readlink_HelpFlag_EmitsUsage()
     {
-        var pwsh = _fixture.AcquireFresh();
-        var result = pwsh.AddScript("Invoke-BashReadlink --help").Invoke();
-        var lines = result.Select(o => o?.ToString() ?? "").ToArray();
-        Assert.NotEmpty(lines);
-        Assert.Contains(lines, l => l.Contains("readlink", StringComparison.OrdinalIgnoreCase));
+        var r = Invoke("Invoke-BashReadlink --help");
+        Assert.Contains(r.Lines, l => l.Contains("readlink", StringComparison.OrdinalIgnoreCase));
     }
-
-    // ---- injection probe (Directive 12) ----
 
     [Fact]
     public void Readlink_PathWithScriptblockChars_TreatedAsLiteralPath()
     {
-        // A literal path string containing $() must never be evaluated as
-        // PowerShell code. The path doesn't exist so we expect zero output
-        // and zero side-effects (no "pwn" anywhere).
-        var weirdPath = Path.Combine(_tmpDir, "$(throw'pwn').txt");
-        var lines = RunBashText($"Invoke-BashReadlink '{weirdPath.Replace("'", "''")}'");
-        Assert.Empty(lines);
-        Assert.DoesNotContain(lines, l => l.Contains("pwn"));
+        // A literal path containing $() is never evaluated, and no file-name glob runs on [ or *.
+        var r = Invoke("Invoke-BashReadlink -f '$(throw''pwn'').txt' 'a[1]*'");
+        Assert.Equal(2, r.Lines.Count);
+        Assert.EndsWith("$(throw'pwn').txt", r.Lines[0]);
+        Assert.EndsWith("a[1]*", r.Lines[1]);
+    }
+
+    // ---- symbolic links (skipped where the host may not create them) ----
+
+    [SkippableFact]
+    public void Readlink_Symlink_PrintsTargetAsStored()
+    {
+        Skip.IfNot(TryCreateSymlink(Path.Combine(_tmpDir, "l"), "regular.txt"), "Symlink creation not permitted on this host");
+        var r = Invoke("Invoke-BashReadlink l");
+        Assert.Equal(new[] { "regular.txt" }, r.Lines);
+        Assert.Equal(0, r.ExitCode);
+    }
+
+    [SkippableFact]
+    public void Readlink_DashF_FollowsLinkThenDotDot()
+    {
+        // dl -> sub/deep: dl/.. is sub (the TARGET's parent), not the directory holding dl.
+        Directory.CreateDirectory(Path.Combine(_tmpDir, "sub", "deep"));
+        Skip.IfNot(TryCreateSymlink(Path.Combine(_tmpDir, "dl"), Path.Combine("sub", "deep"), directory: true),
+            "Symlink creation not permitted on this host");
+        var r = Invoke("Invoke-BashReadlink -f dl/..");
+        Assert.Single(r.Lines);
+        SamePath(Path.Combine(_tmpDir, "sub"), r.Lines[0]);
+    }
+
+    [SkippableFact]
+    public void Readlink_DashF_DanglingLink_ResolvesToMissingTarget()
+    {
+        Skip.IfNot(TryCreateSymlink(Path.Combine(_tmpDir, "dang"), "nowhere"), "Symlink creation not permitted on this host");
+        var f = Invoke("Invoke-BashReadlink -f dang");
+        Assert.Single(f.Lines);
+        SamePath(Path.Combine(_tmpDir, "nowhere"), f.Lines[0]);
+        Assert.Empty(Invoke("Invoke-BashReadlink -e dang").Lines);
+    }
+
+    [SkippableFact]
+    public void Readlink_Loop_TooManyLevels_UnderDashMKeptAsName()
+    {
+        Skip.IfNot(TryCreateSymlink(Path.Combine(_tmpDir, "l1"), "l2") && TryCreateSymlink(Path.Combine(_tmpDir, "l2"), "l1"),
+            "Symlink creation not permitted on this host");
+        var f = Invoke("Invoke-BashReadlink -fv l1");
+        Assert.Empty(f.Lines);
+        Assert.Contains(StderrLines(f), m => m == "readlink: l1: Too many levels of symbolic links");
+        var m = Invoke("Invoke-BashReadlink -m l1");
+        Assert.Single(m.Lines);
     }
 }

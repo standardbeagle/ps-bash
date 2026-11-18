@@ -1,0 +1,500 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 524
+stdout-length: 7989
+stderr-length: 0
+==== SCRIPT ====
+d=$(mktemp -d); cd "$d" || exit; d=$(pwd); mkdir sub; touch f
+for c in 'readlink' 'readlink -f' 'readlink -e' 'readlink -m' 'readlink -fv' 'readlink -ev' 'readlink -mv' 'readlink -v' 'realpath' 'realpath -e' 'realpath -m' 'realpath -q' 'realpath -s' 'realpath -L' 'realpath -sm'; do
+  echo "## $c"
+  for op in f sub sub/ f/ nosuch sub/nosuch sub/nosuch/ nosuch/x sub/../f ./sub/./f sub/nosuch/../f f/x f/.. "$d/sub/../f" '' 'a b' "it's"; do $c "$op"; echo "  rc=$? [$op]"; done
+done 2>&1 | sed "s|$d|D|g"
+cd / && rm -rf "$d"
+==== STDOUT ====
+## readlink
+  rc=1 [f]
+  rc=1 [sub]
+  rc=1 [sub/]
+  rc=1 [f/]
+  rc=1 [nosuch]
+  rc=1 [sub/nosuch]
+  rc=1 [sub/nosuch/]
+  rc=1 [nosuch/x]
+  rc=1 [sub/../f]
+  rc=1 [./sub/./f]
+  rc=1 [sub/nosuch/../f]
+  rc=1 [f/x]
+  rc=1 [f/..]
+  rc=1 [D/sub/../f]
+  rc=1 []
+  rc=1 [a b]
+  rc=1 [it's]
+## readlink -f
+D/f
+  rc=0 [f]
+D/sub
+  rc=0 [sub]
+D/sub
+  rc=0 [sub/]
+  rc=1 [f/]
+D/nosuch
+  rc=0 [nosuch]
+D/sub/nosuch
+  rc=0 [sub/nosuch]
+D/sub/nosuch
+  rc=0 [sub/nosuch/]
+  rc=1 [nosuch/x]
+D/f
+  rc=0 [sub/../f]
+D/sub/f
+  rc=0 [./sub/./f]
+  rc=1 [sub/nosuch/../f]
+  rc=1 [f/x]
+  rc=1 [f/..]
+D/f
+  rc=0 [D/sub/../f]
+  rc=1 []
+D/a b
+  rc=0 [a b]
+D/it's
+  rc=0 [it's]
+## readlink -e
+D/f
+  rc=0 [f]
+D/sub
+  rc=0 [sub]
+D/sub
+  rc=0 [sub/]
+  rc=1 [f/]
+  rc=1 [nosuch]
+  rc=1 [sub/nosuch]
+  rc=1 [sub/nosuch/]
+  rc=1 [nosuch/x]
+D/f
+  rc=0 [sub/../f]
+  rc=1 [./sub/./f]
+  rc=1 [sub/nosuch/../f]
+  rc=1 [f/x]
+  rc=1 [f/..]
+D/f
+  rc=0 [D/sub/../f]
+  rc=1 []
+  rc=1 [a b]
+  rc=1 [it's]
+## readlink -m
+D/f
+  rc=0 [f]
+D/sub
+  rc=0 [sub]
+D/sub
+  rc=0 [sub/]
+D/f
+  rc=0 [f/]
+D/nosuch
+  rc=0 [nosuch]
+D/sub/nosuch
+  rc=0 [sub/nosuch]
+D/sub/nosuch
+  rc=0 [sub/nosuch/]
+D/nosuch/x
+  rc=0 [nosuch/x]
+D/f
+  rc=0 [sub/../f]
+D/sub/f
+  rc=0 [./sub/./f]
+D/sub/f
+  rc=0 [sub/nosuch/../f]
+D/f/x
+  rc=0 [f/x]
+D
+  rc=0 [f/..]
+D/f
+  rc=0 [D/sub/../f]
+  rc=1 []
+D/a b
+  rc=0 [a b]
+D/it's
+  rc=0 [it's]
+## readlink -fv
+D/f
+  rc=0 [f]
+D/sub
+  rc=0 [sub]
+D/sub
+  rc=0 [sub/]
+readlink: f/: Not a directory
+  rc=1 [f/]
+D/nosuch
+  rc=0 [nosuch]
+D/sub/nosuch
+  rc=0 [sub/nosuch]
+D/sub/nosuch
+  rc=0 [sub/nosuch/]
+readlink: nosuch/x: No such file or directory
+  rc=1 [nosuch/x]
+D/f
+  rc=0 [sub/../f]
+D/sub/f
+  rc=0 [./sub/./f]
+readlink: sub/nosuch/../f: No such file or directory
+  rc=1 [sub/nosuch/../f]
+readlink: f/x: Not a directory
+  rc=1 [f/x]
+readlink: f/..: Not a directory
+  rc=1 [f/..]
+D/f
+  rc=0 [D/sub/../f]
+readlink: '': No such file or directory
+  rc=1 []
+D/a b
+  rc=0 [a b]
+D/it's
+  rc=0 [it's]
+## readlink -ev
+D/f
+  rc=0 [f]
+D/sub
+  rc=0 [sub]
+D/sub
+  rc=0 [sub/]
+readlink: f/: Not a directory
+  rc=1 [f/]
+readlink: nosuch: No such file or directory
+  rc=1 [nosuch]
+readlink: sub/nosuch: No such file or directory
+  rc=1 [sub/nosuch]
+readlink: sub/nosuch/: No such file or directory
+  rc=1 [sub/nosuch/]
+readlink: nosuch/x: No such file or directory
+  rc=1 [nosuch/x]
+D/f
+  rc=0 [sub/../f]
+readlink: ./sub/./f: No such file or directory
+  rc=1 [./sub/./f]
+readlink: sub/nosuch/../f: No such file or directory
+  rc=1 [sub/nosuch/../f]
+readlink: f/x: Not a directory
+  rc=1 [f/x]
+readlink: f/..: Not a directory
+  rc=1 [f/..]
+D/f
+  rc=0 [D/sub/../f]
+readlink: '': No such file or directory
+  rc=1 []
+readlink: 'a b': No such file or directory
+  rc=1 [a b]
+readlink: "it's": No such file or directory
+  rc=1 [it's]
+## readlink -mv
+D/f
+  rc=0 [f]
+D/sub
+  rc=0 [sub]
+D/sub
+  rc=0 [sub/]
+D/f
+  rc=0 [f/]
+D/nosuch
+  rc=0 [nosuch]
+D/sub/nosuch
+  rc=0 [sub/nosuch]
+D/sub/nosuch
+  rc=0 [sub/nosuch/]
+D/nosuch/x
+  rc=0 [nosuch/x]
+D/f
+  rc=0 [sub/../f]
+D/sub/f
+  rc=0 [./sub/./f]
+D/sub/f
+  rc=0 [sub/nosuch/../f]
+D/f/x
+  rc=0 [f/x]
+D
+  rc=0 [f/..]
+D/f
+  rc=0 [D/sub/../f]
+readlink: '': No such file or directory
+  rc=1 []
+D/a b
+  rc=0 [a b]
+D/it's
+  rc=0 [it's]
+## readlink -v
+readlink: f: Invalid argument
+  rc=1 [f]
+readlink: sub: Invalid argument
+  rc=1 [sub]
+readlink: sub/: Invalid argument
+  rc=1 [sub/]
+readlink: f/: Not a directory
+  rc=1 [f/]
+readlink: nosuch: No such file or directory
+  rc=1 [nosuch]
+readlink: sub/nosuch: No such file or directory
+  rc=1 [sub/nosuch]
+readlink: sub/nosuch/: No such file or directory
+  rc=1 [sub/nosuch/]
+readlink: nosuch/x: No such file or directory
+  rc=1 [nosuch/x]
+readlink: sub/../f: Invalid argument
+  rc=1 [sub/../f]
+readlink: ./sub/./f: No such file or directory
+  rc=1 [./sub/./f]
+readlink: sub/nosuch/../f: No such file or directory
+  rc=1 [sub/nosuch/../f]
+readlink: f/x: Not a directory
+  rc=1 [f/x]
+readlink: f/..: Not a directory
+  rc=1 [f/..]
+readlink: D/sub/../f: Invalid argument
+  rc=1 [D/sub/../f]
+readlink: '': No such file or directory
+  rc=1 []
+readlink: 'a b': No such file or directory
+  rc=1 [a b]
+readlink: "it's": No such file or directory
+  rc=1 [it's]
+## realpath
+D/f
+  rc=0 [f]
+D/sub
+  rc=0 [sub]
+D/sub
+  rc=0 [sub/]
+realpath: f/: Not a directory
+  rc=1 [f/]
+D/nosuch
+  rc=0 [nosuch]
+D/sub/nosuch
+  rc=0 [sub/nosuch]
+D/sub/nosuch
+  rc=0 [sub/nosuch/]
+realpath: nosuch/x: No such file or directory
+  rc=1 [nosuch/x]
+D/f
+  rc=0 [sub/../f]
+D/sub/f
+  rc=0 [./sub/./f]
+realpath: sub/nosuch/../f: No such file or directory
+  rc=1 [sub/nosuch/../f]
+realpath: f/x: Not a directory
+  rc=1 [f/x]
+realpath: f/..: Not a directory
+  rc=1 [f/..]
+D/f
+  rc=0 [D/sub/../f]
+realpath: '': No such file or directory
+  rc=1 []
+D/a b
+  rc=0 [a b]
+D/it's
+  rc=0 [it's]
+## realpath -e
+D/f
+  rc=0 [f]
+D/sub
+  rc=0 [sub]
+D/sub
+  rc=0 [sub/]
+realpath: f/: Not a directory
+  rc=1 [f/]
+realpath: nosuch: No such file or directory
+  rc=1 [nosuch]
+realpath: sub/nosuch: No such file or directory
+  rc=1 [sub/nosuch]
+realpath: sub/nosuch/: No such file or directory
+  rc=1 [sub/nosuch/]
+realpath: nosuch/x: No such file or directory
+  rc=1 [nosuch/x]
+D/f
+  rc=0 [sub/../f]
+realpath: ./sub/./f: No such file or directory
+  rc=1 [./sub/./f]
+realpath: sub/nosuch/../f: No such file or directory
+  rc=1 [sub/nosuch/../f]
+realpath: f/x: Not a directory
+  rc=1 [f/x]
+realpath: f/..: Not a directory
+  rc=1 [f/..]
+D/f
+  rc=0 [D/sub/../f]
+realpath: '': No such file or directory
+  rc=1 []
+realpath: 'a b': No such file or directory
+  rc=1 [a b]
+realpath: "it's": No such file or directory
+  rc=1 [it's]
+## realpath -m
+D/f
+  rc=0 [f]
+D/sub
+  rc=0 [sub]
+D/sub
+  rc=0 [sub/]
+D/f
+  rc=0 [f/]
+D/nosuch
+  rc=0 [nosuch]
+D/sub/nosuch
+  rc=0 [sub/nosuch]
+D/sub/nosuch
+  rc=0 [sub/nosuch/]
+D/nosuch/x
+  rc=0 [nosuch/x]
+D/f
+  rc=0 [sub/../f]
+D/sub/f
+  rc=0 [./sub/./f]
+D/sub/f
+  rc=0 [sub/nosuch/../f]
+D/f/x
+  rc=0 [f/x]
+D
+  rc=0 [f/..]
+D/f
+  rc=0 [D/sub/../f]
+realpath: '': No such file or directory
+  rc=1 []
+D/a b
+  rc=0 [a b]
+D/it's
+  rc=0 [it's]
+## realpath -q
+D/f
+  rc=0 [f]
+D/sub
+  rc=0 [sub]
+D/sub
+  rc=0 [sub/]
+  rc=1 [f/]
+D/nosuch
+  rc=0 [nosuch]
+D/sub/nosuch
+  rc=0 [sub/nosuch]
+D/sub/nosuch
+  rc=0 [sub/nosuch/]
+  rc=1 [nosuch/x]
+D/f
+  rc=0 [sub/../f]
+D/sub/f
+  rc=0 [./sub/./f]
+  rc=1 [sub/nosuch/../f]
+  rc=1 [f/x]
+  rc=1 [f/..]
+D/f
+  rc=0 [D/sub/../f]
+  rc=1 []
+D/a b
+  rc=0 [a b]
+D/it's
+  rc=0 [it's]
+## realpath -s
+D/f
+  rc=0 [f]
+D/sub
+  rc=0 [sub]
+D/sub
+  rc=0 [sub/]
+realpath: f/: Not a directory
+  rc=1 [f/]
+D/nosuch
+  rc=0 [nosuch]
+D/sub/nosuch
+  rc=0 [sub/nosuch]
+D/sub/nosuch
+  rc=0 [sub/nosuch/]
+D/nosuch/x
+  rc=0 [nosuch/x]
+D/f
+  rc=0 [sub/../f]
+D/sub/f
+  rc=0 [./sub/./f]
+realpath: sub/nosuch/../f: No such file or directory
+  rc=1 [sub/nosuch/../f]
+realpath: f/x: Not a directory
+  rc=1 [f/x]
+realpath: f/..: Not a directory
+  rc=1 [f/..]
+D/f
+  rc=0 [D/sub/../f]
+realpath: '': No such file or directory
+  rc=1 []
+D/a b
+  rc=0 [a b]
+D/it's
+  rc=0 [it's]
+## realpath -L
+D/f
+  rc=0 [f]
+D/sub
+  rc=0 [sub]
+D/sub
+  rc=0 [sub/]
+realpath: f/: Not a directory
+  rc=1 [f/]
+D/nosuch
+  rc=0 [nosuch]
+D/sub/nosuch
+  rc=0 [sub/nosuch]
+D/sub/nosuch
+  rc=0 [sub/nosuch/]
+realpath: nosuch/x: No such file or directory
+  rc=1 [nosuch/x]
+D/f
+  rc=0 [sub/../f]
+D/sub/f
+  rc=0 [./sub/./f]
+realpath: sub/nosuch/../f: No such file or directory
+  rc=1 [sub/nosuch/../f]
+realpath: f/x: Not a directory
+  rc=1 [f/x]
+realpath: f/..: Not a directory
+  rc=1 [f/..]
+D/f
+  rc=0 [D/sub/../f]
+realpath: '': No such file or directory
+  rc=1 []
+D/a b
+  rc=0 [a b]
+D/it's
+  rc=0 [it's]
+## realpath -sm
+D/f
+  rc=0 [f]
+D/sub
+  rc=0 [sub]
+D/sub
+  rc=0 [sub/]
+D/f
+  rc=0 [f/]
+D/nosuch
+  rc=0 [nosuch]
+D/sub/nosuch
+  rc=0 [sub/nosuch]
+D/sub/nosuch
+  rc=0 [sub/nosuch/]
+D/nosuch/x
+  rc=0 [nosuch/x]
+D/f
+  rc=0 [sub/../f]
+D/sub/f
+  rc=0 [./sub/./f]
+D/sub/f
+  rc=0 [sub/nosuch/../f]
+D/f/x
+  rc=0 [f/x]
+D
+  rc=0 [f/..]
+D/f
+  rc=0 [D/sub/../f]
+realpath: '': No such file or directory
+  rc=1 []
+D/a b
+  rc=0 [a b]
+D/it's
+  rc=0 [it's]
+
+==== STDERR ====
+

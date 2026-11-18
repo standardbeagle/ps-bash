@@ -79,6 +79,17 @@ interactive shell's cwd sync.
 One comparison-only inverse exists: `RuntimePath.TryUnmapTmp` lets `[[ $PWD == /tmp* ]]` and `case` match a
 temp-directory value against the `/tmp` spelling (`BashPatternMatch`). It never produces output.
 
+### Canonical names (one walk)
+
+`readlink -f/-e/-m`, plain `readlink` and `realpath` resolve names through `Cmdlets/CanonicalPath.cs`, a port of
+gnulib `canonicalize_filename_mode`: one component at a time from the root, each symbolic link followed where it is
+met (so `dl/..` is the parent of the link's target), the existence rule per mode (Existing / AllButLast / Missing),
+gnulib's `/`, `/.`, `/..` directory checks, ENOTDIR for a name under a file, and its loop rule (after 20 links, the
+first repeated link). The walk is pure over a probe, so it is unit-tested on a fake tree (`CanonicalPathTests`).
+Never canonicalize with `Resolve-Path` / `GetUnresolvedProviderPathFromPSPath`: they fold `..` by text, follow no
+link and glob `[`/`*`. A diagnostic names the operand as typed, GNU-quoted (`Cmdlets/GnuQuote.cs`: `''`, `'a b'`,
+`"it's"`; a Windows drive colon does not force quoting).
+
 ## Device names
 
 **A `/dev/*` device name is not a path and never reaches the filesystem.** Windows has no `/dev`: a name

@@ -130,6 +130,8 @@ public class CommonParameterCollisionGuardTests
             ["chmod"] = new(CollidingLetters),
             ["sha1sum"] = new(CollidingLetters),
             ["sha256sum"] = new(CollidingLetters),
+            ["readlink"] = new(CollidingLetters),
+            ["realpath"] = new(CollidingLetters),
         };
 
     [Fact]

@@ -1737,7 +1737,70 @@
       "desc": "start assigning at index N"
     }
   ],
-  "realpath": [],
+  "readlink": [
+    {
+      "flag": "-f",
+      "desc": "canonicalize: every component but the last must exist"
+    },
+    {
+      "flag": "-e",
+      "desc": "canonicalize: every component must exist"
+    },
+    {
+      "flag": "-m",
+      "desc": "canonicalize: no component need exist"
+    },
+    {
+      "flag": "-n",
+      "desc": "no newline after the name"
+    },
+    {
+      "flag": "-q",
+      "desc": "quiet (default)"
+    },
+    {
+      "flag": "-s",
+      "desc": "silent (default)"
+    },
+    {
+      "flag": "-v",
+      "desc": "report errors"
+    },
+    {
+      "flag": "-z",
+      "desc": "end each name with NUL"
+    }
+  ],
+  "realpath": [
+    {
+      "flag": "-e",
+      "desc": "every component must exist"
+    },
+    {
+      "flag": "-m",
+      "desc": "no component need exist"
+    },
+    {
+      "flag": "-L",
+      "desc": "resolve '..' before symlinks"
+    },
+    {
+      "flag": "-P",
+      "desc": "resolve symlinks first (default)"
+    },
+    {
+      "flag": "-q",
+      "desc": "no error messages"
+    },
+    {
+      "flag": "-s",
+      "desc": "do not follow symlinks"
+    },
+    {
+      "flag": "-z",
+      "desc": "end each name with NUL"
+    }
+  ],
   "rg": [
     {
       "flag": "-i",

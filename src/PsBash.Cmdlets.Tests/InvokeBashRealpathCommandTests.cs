@@ -6,13 +6,10 @@ namespace PsBash.Cmdlets.Tests;
 /// Behavioral-parity tests for the REFACTOR-2 migration of Invoke-BashRealpath
 /// from PsBash.psm1 to a binary cmdlet (PsBash.Cmdlets.dll).
 ///
-/// Oracle: the psm1 function used Resolve-Path with a
-/// GetUnresolvedProviderPathFromPSPath fallback for paths that do not exist.
-/// The cmdlet preserves the exact contract — successful resolution emits the
-/// PSPath form, failed resolution emits the canonical path string.
+/// Oracle: GNU coreutils 9.4 realpath. Canonicalization is <see cref="CanonicalPath"/> (unit-tested in
+/// CanonicalPathTests); these cover the command surface: modes, -s/-L, -q, messages, exit status.
 ///
-/// Failure-surface axes that apply: existing/missing paths, multiple operands,
-/// flag-suppression (any -prefixed token is silently skipped), --help dispatch,
+/// Failure-surface axes that apply: existing/missing paths, multiple operands, --help dispatch,
 /// quoting/injection (Directive 12). Pipeline / file-content / signal axes do
 /// not apply: realpath has no streaming or file-read surface.
 /// </summary>
@@ -110,13 +107,57 @@ public class InvokeBashRealpathCommandTests : IDisposable, IClassFixture<SharedP
     }
 
     [Fact]
-    public void Realpath_FlagsAreSkipped()
+    public void Realpath_FlagWithoutOperand_IsMissingOperand()
     {
-        // psm1 oracle silently skips any -prefixed token (it never implemented
-        // -e / -m / --relative-to). A bare flag with no operand produces zero
-        // output.
-        var lines = RunLines("Invoke-BashRealpath -e");
-        Assert.Empty(lines);
+        // GNU: options are parsed (in order, abbreviations allowed); with no FILE it is "missing operand", status 1.
+        var pwsh = _fixture.AcquireFresh();
+        CmdResult.Run(pwsh, "Invoke-BashRealpath -e")
+            .AssertFailed(1, "realpath: missing operand", "Try 'realpath --help' for more information.");
+    }
+
+    [Fact]
+    public void Realpath_MissingIntermediate_FailsAndSaysWhy()
+    {
+        // Default mode: all but the last component must exist; -q silences the message, not the status.
+        var pwsh = _fixture.AcquireFresh();
+        var dir = _tmpDir.Replace("'", "''");
+        CmdResult.Run(pwsh, $"Set-Location -LiteralPath '{dir}'; Invoke-BashRealpath nosuch/x exists.txt/x")
+            .AssertFailed(1, "realpath: nosuch/x: No such file or directory", "realpath: exists.txt/x: Not a directory");
+        var quiet = CmdResult.Run(pwsh, $"Set-Location -LiteralPath '{dir}'; Invoke-BashRealpath -q nosuch/x").AssertFailed(1);
+        Assert.Equal("", quiet.Stderr);
+    }
+
+    [Fact]
+    public void Realpath_DashS_ChecksOnlyTheLastComponent()
+    {
+        // GNU -s reads no link: nosuch/x is printed, exists.txt/x is "Not a directory".
+        var pwsh = _fixture.AcquireFresh();
+        var dir = _tmpDir.Replace("'", "''");
+        var ok = CmdResult.Run(pwsh, $"Set-Location -LiteralPath '{dir}'; Invoke-BashRealpath -s nosuch/x").AssertSuccess();
+        Assert.EndsWith("nosuch/x", ok.Lines[0]);
+        CmdResult.Run(pwsh, $"Set-Location -LiteralPath '{dir}'; Invoke-BashRealpath -s exists.txt/x")
+            .AssertFailed(1, "realpath: exists.txt/x: Not a directory");
+    }
+
+    [Fact]
+    public void Realpath_DirectDashP_BindsWithoutBinderCrash()
+    {
+        // Bare -P is ambiguous between -PipelineVariable/-ProgressAction; the P decoy binds it (Pester calls directly).
+        var pwsh = _fixture.AcquireFresh();
+        var r = CmdResult.Run(pwsh, $"Invoke-BashRealpath -P '{_existingFile.Replace("'", "''")}'").AssertSuccess();
+        Assert.EndsWith("exists.txt", r.Lines[0], StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Realpath_DashL_ChecksTheUnfoldedName()
+    {
+        // GNU -L: nosuch/../exists.txt still needs nosuch to be a directory (ENOENT), as the walk meets it.
+        var pwsh = _fixture.AcquireFresh();
+        var dir = _tmpDir.Replace("'", "''");
+        CmdResult.Run(pwsh, $"Set-Location -LiteralPath '{dir}'; Invoke-BashRealpath -L nosuch/../exists.txt")
+            .AssertFailed(1, "realpath: nosuch/../exists.txt: No such file or directory");
+        var m = CmdResult.Run(pwsh, $"Set-Location -LiteralPath '{dir}'; Invoke-BashRealpath -Lm nosuch/../exists.txt").AssertSuccess();
+        Assert.EndsWith("exists.txt", m.Lines[0]);
     }
 
     [Fact]
