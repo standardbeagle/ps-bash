@@ -22,7 +22,7 @@ ps-bash session stop build
   host is still serialized (cwd and `$env:` are process-global), but two sessions never wait
   on each other. Use one session per independent workload or agent.
 - **Name safety.** Names are 1-32 characters of `A-Z a-z 0-9 _ -`; the name becomes part of a
-  socket/pipe path, so anything else is refused.
+  socket path, so anything else is refused.
 - **Per-user.** Sessions are scoped to the OS user and live under the 0700 runtime directory.
 
 ## Stateful by default
@@ -32,8 +32,11 @@ aliases, `export`s and the working directory carry from one `-c` call to the nex
 
 ```bash
 PSBASH_SESSION=build ps-bash -c 'x=5; cd /src'
-PSBASH_SESSION=build ps-bash -c 'echo $x; pwd'     # 5, /src
+PSBASH_SESSION=build ps-bash -c 'echo $x; pwd'     # 5, then /src (C:/src on Windows)
 ```
+
+Only exported variables reach a program the session starts (v0.15.0): after `x=5`,
+`sh -c 'echo $x'` prints an empty line until you `export x`.
 
 - The launcher does not re-impose its own cwd or environment on a stateful session (it would
   undo the session's `cd`/`export`); only `PSBASH_*` control variables are forwarded.
@@ -42,6 +45,22 @@ PSBASH_SESSION=build ps-bash -c 'echo $x; pwd'     # 5, /src
 - `session start NAME --stateless` gives the older model: a fresh pooled runspace per command.
   `start` refuses to switch a running session between modes; `session stop` it first.
   `session list` shows each session's mode.
+
+## Signals
+
+`$$` in a session is the pid of its host process, which serves every command of the session.
+Since v0.15.0 a signal aimed at that pid from a ps-bash shell (`sh -c "kill -USR1 $$"`,
+`kill -TERM $$`) is delivered to the script the host is running. It travels as a message to the host; no OS
+signal is sent:
+
+- a `trap` for the signal runs at the script's next top-level statement;
+- with no trap, the script ends with 128+N, and the host stays up;
+- STOP, TSTP, TTIN, TTOU and CONT are ignored: a host command cannot be suspended.
+
+A signal that arrives during one long command or a `( )` / `$( )` body waits for it to finish.
+On Linux and macOS a real SIGUSR1 or SIGUSR2 sent to the host or the launcher by another
+program is routed the same way, with one exception: on macOS an outside SIGUSR1 does not reach
+a `trap … USR1` (the .NET runtime owns that signal there); SIGUSR2 does.
 
 ## Reattachable terminal
 

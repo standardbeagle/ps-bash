@@ -4,8 +4,40 @@ Choose between the **PowerShell module** (`Install-Module PsBash`) and the
 **standalone shell**. They have different installation layouts. The current
 GitHub release workflow builds self-contained shell archives named
 `ps-bash-v<VERSION>-<RID>.zip` for `win-x64`, `linux-x64`, and `osx-arm64`.
-Check the selected release's actual assets before downloading; architecture
-detection in an installer does not establish that an asset exists.
+There is no `linux-arm64`, `osx-x64` or `win-arm64` archive: the installers stop
+with a named error on those platforms, and the only route there is a build from
+source. Check the selected release's assets before downloading.
+
+## Quick install
+
+```powershell
+# Windows (PowerShell 7+)
+iwr https://raw.githubusercontent.com/standardbeagle/ps-bash/main/install.ps1 | iex
+```
+
+```bash
+# Linux x64, macOS arm64
+curl -fsSL https://raw.githubusercontent.com/standardbeagle/ps-bash/main/install.sh | bash
+```
+
+Both install the whole package into a versioned directory, run a real command
+before switching to it, and keep the previous version. To install a release
+other than the latest, pipe into `VERSION=0.15.0 bash`, or save `install.ps1`
+and run it with `-Version 0.15.0`.
+
+## Upgrading to v0.15.0
+
+Three changes can break a script that ran on v0.14.x. Each matches bash.
+
+| Change | Before | Now | What to do |
+|---|---|---|---|
+| Paths a script sees (Windows) | `$PWD` = `C:\Users\x` | `C:/Users/x` | Split and match on `/`. `C:\x`, `C:/x`, `/c/x` and `/mnt/c/x` are all still accepted as input. `PATH` is unchanged. |
+| PowerShell aliases in bash code | `gci`, `%`, `iex`, `r`, `write` ran cmdlets | "command not found" (127), or the function or PATH program of that name | Use the full cmdlet name (`Get-ChildItem`). |
+| A child's environment | `x=1; sh -c 'echo $x'` printed `1` | prints an empty line | `export x`. |
+
+Background job output also changed: a `cmd &` whose output goes to the terminal
+prints as it runs (it used to appear at `wait`). The full list is in the
+[changelog](../CHANGELOG.md#v0150); open items are in [Known Issues](known-issues.md).
 
 ## Standalone package contents
 
@@ -91,8 +123,12 @@ fi
 These Unix examples set PATH for the current shell. After verification, add the
 chosen directory to your actual shell's startup configuration; fish uses its
 own PATH syntax (`fish_add_path`). Do not source a Bash example as fish code.
-macOS startup was not exercised in the production review; validate the actual
-release on the target machine before replacing a working installation.
+
+On macOS, use v0.15.0 or later. Earlier releases could end a script with exit
+138 and no output, because the host caught the SIGUSR1 that the .NET runtime
+sends itself there. The release gate runs the test suites on `osx-arm64`;
+`PsBash.Cmdlets.Tests` is advisory on macOS for now
+(see [Known Issues](known-issues.md#macos)).
 
 ## Package Manager Installation (Planned)
 

@@ -1,6 +1,6 @@
 # Using ps-bash
 
-Ps-bash has two modes: the **PsBash module** and the **ps-bash shell**. They share the same 77 bash commands and typed object pipeline, but serve different use cases.
+Ps-bash has two modes: the **PsBash module** and the **ps-bash shell**. They share the same bash commands and typed object pipeline, but serve different use cases.
 
 For complete workflows, failure/recovery paths, and acceptance criteria, see
 [Production User Journeys](planning/production-user-journeys.md). Proposed remote
@@ -9,10 +9,12 @@ workspace behavior is labeled separately from the current shell.
 ## Session lifetime
 
 An interactive shell keeps its state while its launcher and host are alive.
-Closing the launcher is not a supported detach-and-resume operation. The warm
+Closing its terminal ends it; to detach and come back, start it with
+`ps-bash session attach NAME` ([Named sessions](sessions.md)). The warm
 host reused by `ps-bash -c` gives each invocation a fresh runspace; variables,
-functions, and cwd from one invocation do not become a persistent workspace for
-the next. See the [host lifecycle contract](specs/host-lifecycle-contract.md) for
+functions, and cwd from one invocation do not carry to the next unless the
+commands run in a named session (`PSBASH_SESSION=NAME`), which is stateful by
+default. See the [host lifecycle contract](specs/host-lifecycle-contract.md) for
 ownership, cancellation, and idle shutdown.
 
 ## PsBash Module
@@ -286,7 +288,9 @@ unalias ll                  # remove
 unalias -a                  # remove all
 ```
 
-Aliases expand the first word of input before the transpiler sees it. So `ll` becomes `ls -al`, then `ls` is mapped to `Invoke-BashLs`.
+Aliases expand the first word of each command in a line before the transpiler sees it. So `ll` becomes `ls -al`, then `ls` is mapped to `Invoke-BashLs`.
+
+These are bash aliases. PowerShell's own aliases (`gci`, `%`, `iex`, `r`, `write`) are not commands in the shell since v0.15.0: such a word runs a function or PATH program of that name, or fails with "command not found" (127), as in bash. Full cmdlet names (`Get-ChildItem`) still work.
 
 ### Autosuggestions
 
@@ -335,6 +339,20 @@ export EDITOR="code"        # set in the worker
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
+A program you start sees exported variables only, as in bash (v0.15.0). After `x=1`, `sh -c 'echo $x'` prints an empty line; after `export x`, it prints `1`. `NAME=value cmd` exports for that one command.
+
+Paths the shell hands to a script use forward slashes on Windows: `$PWD`, `~` and `$HOME` are `C:/Users/you`, so `${PWD##*/}` and `for f in $dir/*` work. `PATH` keeps the Windows `;` form: a `:` you write between entries becomes `;` after the assignment.
+
+### Background jobs
+
+`cmd &` starts a job; `wait`, `wait -n`, `$!` and `kill %1` work. Since v0.15.0 a job's output prints as the job runs, above the prompt, and the line you are editing is redrawn. Jobs print in the order they were started. A job reads its own copy of the shell's variables, taken at the `&`:
+
+```bash
+x=a; { sleep .3; echo $x; } & x=b; wait     # prints a
+```
+
+Output of a job started inside a function, a pipeline, `$( )`, a redirected group or `eval` is still collected and printed at `wait`.
+
 ### Ctrl+C handling
 
 - **Transpiled commands**: Cancels execution, prints `^C`, restarts the worker
@@ -363,6 +381,8 @@ ps-bash --norc
 ```
 
 This is useful for CI/CD or when you want a clean environment, matching the behavior of `bash --noprofile`.
+
+`--rcfile FILE` (or `--init-file FILE`) sources FILE in place of `~/.psbashrc` before the first prompt (v0.15.0). `--norc` wins over it, and a missing file is skipped silently.
 
 ### `install` command
 
@@ -457,7 +477,7 @@ find . -name '*.ps1' -type f
 
 ### PowerShell commands
 
-Anything the bash parser doesn't recognize passes through to PowerShell:
+Anything the bash parser doesn't recognize passes through to PowerShell. Use full cmdlet names: PowerShell's aliases (`gci`, `%`, `?`) are not resolved (v0.15.0).
 
 ```
 Get-Process | Where-Object { $_.CPU -gt 5 }
@@ -504,81 +524,15 @@ Variables persist across commands because the worker session is long-lived.
 
 ## Limitations
 
-These are the known gaps in priority order. Each includes an estimated effort and what would be involved in fixing it.
+Open bugs and gaps are tracked in [Known Issues](known-issues.md); every deliberate difference
+from bash is listed in [Intentional Differences](specs/intentional-differences.md). The ones
+specific to the interactive shell:
 
-### 1. No command history — **Small effort**
-
-The shell uses .NET's `Console.ReadLine()` which has no history buffer. Pressing Up does nothing.
-
-**Fix:** Replace `Console.ReadLine()` with a readline library that supports history, reverse-search (`Ctrl+R`), and line editing. Options:
-- Use `System.ReadLine` NuGet package
-- Port a minimal GNU readline wrapper
-- Use PowerShell's PSReadLine via the worker
-
-**Impact:** This is the single biggest UX gap. Every shell needs Up-arrow history.
-
-### 2. No tab completion — **Medium effort**
-
-The module has full tab completion for flags (`ls -[Tab]`), but the shell has none. No command completion, no file completion, no flag completion.
-
-**Fix:** The worker already has the PsBash module loaded with `TabExpansion` definitions. Wire `Console.TreatControlCAsInput` + `Tab` key detection to request completions from the worker via a protocol message, then render inline.
-
-### 3. Glob expansion inconsistent across commands — **Small effort**
-
-`ls *.txt` works because `Invoke-BashLs` uses `-Filter`. `cat *.txt` works because PowerShell resolves it. But `rm *.bak` or `mv *.tmp /tmp/` may not expand as expected because glob resolution depends on the individual command implementation.
-
-**Fix:** Add a shell-level glob expansion step before sending to the worker — expand `*.txt` to the matching files using `Directory.GetFiles()`, then pass the expanded list to the command.
-
-### 4. First-word-only alias expansion — **Small effort**
-
-Only the first word of input is checked for alias expansion. `sudo ll` won't expand `ll`. `git commit -m "fix" && ll` won't expand `ll` after `&&`.
-
-**Fix:** After splitting on `&&`, `||`, `;`, and `|`, expand aliases on the first word of each segment.
-
-### 5. `FOO=bar command` falls back to worker — **Small effort**
-
-`EDITOR=nano crontab -e` has env pairs, so `TryRunDirect` rejects it and sends it through the worker. The worker handles env vars then runs the command — but it runs inside the pipe protocol, not on the console. Interactive tools launched this way won't get a terminal.
-
-**Fix:** In `TryRunDirect`, extract env pairs, set them as environment variables on the `ProcessStartInfo`, and still run directly.
-
-### 6. Variable/glob arguments fall back to worker — **Small effort**
-
-`git log $BRANCH` or `rm *.bak` contain non-literal word parts, so `TryRunDirect` rejects them. The worker handles them fine, but the command loses direct console access.
-
-**Fix:** For globs, expand before checking. For variables, resolve them by sending a quick `$var` query to the worker first. Or accept the fallback for variable cases (the worker handles them correctly).
-
-### 7. No customizable prompt — **Small effort**
-
-The prompt format is hardcoded in C#. Users can't configure colors, layout, or add custom segments.
-
-**Fix:** Support `PROMPT_COMMAND` or a `.psbashrc` prompt function. The shell evaluates the function each cycle and uses the result instead of the built-in prompt.
-
-### 8. No `PROMPT_COMMAND` / preexec hook — **Small effort**
-
-No mechanism to run code before each prompt display (for custom window titles, tmux integration, etc.).
-
-**Fix:** After each command completes and before displaying the prompt, evaluate a `PROMPT_COMMAND` variable from the worker.
-
-### 9. Worker state not synced to shell — **Medium effort**
-
-The PowerShell worker has its own `$PWD`, `$LASTEXITCODE`, variables. The shell tracks `_lastDir` separately by parsing `cd` commands. If the worker's CWD drifts (e.g., a PowerShell function changes it), the prompt shows the wrong directory.
-
-**Fix:** After each command, query the worker's `$PWD` and sync `_lastDir`. This also fixes `pushd`/`popd` prompt tracking.
-
----
-
-## Priority Summary
-
-| # | Limitation | Effort | Impact |
-|---|-----------|--------|--------|
-| 1 | No command history | Small | Critical UX — every shell needs this |
-| 2 | No tab completion | Medium | Major UX — expected in any modern shell |
-| 3 | Glob expansion inconsistent | Small | High — `rm *.bak` should just work |
-| 4 | First-word-only alias expansion | Small | Medium — `sudo ll` is common |
-| 5 | `FOO=bar cmd` falls back to pipe | Small | Medium — needed for env-prefixed tools |
-| 6 | Variable/glob args fall back | Small | Low — worker handles it correctly |
-| 7 | No customizable prompt | Small | Medium — personalization matters |
-| 8 | No preexec hook | Small | Low — niche feature |
-| 9 | Worker state not synced | Medium | Medium — causes subtle prompt bugs |
-
-Items 1, 3, 4 are the highest-impact, smallest-effort wins. They would make the shell feel substantially more complete.
+- **No `bind`.** The line editor is ps-bash's own, not GNU readline, so there are no readline
+  functions, keymaps or variables to list or rebind.
+- **No job control.** There is no `set -m`. `cmd &`, `wait` and `kill %1` work; a running
+  command cannot be suspended with Ctrl+Z and resumed.
+- **Prompt escapes `\j`, `\!`, `\#`.** `\j` is always `0`; `\!` and `\#` are always `1`.
+- **`set -v`.** The option is tracked (`$-`, `$SHELLOPTS`), but input lines are not echoed.
+- **PowerShell aliases.** Since v0.15.0 a line the shell runs as bash does not resolve
+  PowerShell's built-in aliases (`gci`, `%`, `iex`). Type the full cmdlet name.

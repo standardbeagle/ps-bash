@@ -1,135 +1,153 @@
 # Known Issues
 
-## Local production review 2026-10-20
+Open bugs and gaps in ps-bash v0.15.0, each checked against the code, the specs or bash 5.2.
+Deliberate differences from bash (platform limits, refused options) are listed separately in
+[Intentional Differences](specs/intentional-differences.md). Check both pages before you report
+a bug.
 
-The [current review](production-readiness-review-2026-10-20.md) records reproduced
-local failures and working-tree corrections. Gzip now preserves existing output unless
-forced and stages writes before replacement; locked-file replacement no longer sweeps
-unrelated sibling names. Windows installation rejects unowned directories, preserves
-upgrade backups and works without HOME. Unavailable history storage permits a working
-prompt. Terminal brokers hold one endpoint lease and bound client replay writes.
+## Pipelines
 
-`set -u`/`nounset` is supported for `$x`, `${x}` and `$1`..`$N` reads and for names read inside `$(( ))` / `(( ))`;
-`set -C`/`set -o noclobber` is supported for `>` onto an existing file (`>|` and `>>` still write); the check runs when the redirect stage opens the file, so the command itself has already run.
-Unsupported launcher flags also exit 2; use `set -e` inside the script for errexit.
+- **Output of a streaming child waits for an idle upstream stage.**
+  `sleep 5 | bash -c 'echo hi'` prints `hi` after 5 s; bash prints it at once. A nested shell's
+  output is emitted when the pipeline thread runs its stage, which happens when an input record
+  arrives or the upstream ends. The output is complete and in order, only late.
+  Spec: `stdio-messaging.md` §4.6.
+- **No SIGPIPE.** A producer whose reader exits early is stopped, but it is not killed by a
+  signal and its status is not 141: `yes | head -n 1; echo ${PIPESTATUS[*]}` prints `141 0` in
+  bash. `PIPESTATUS` and `pipefail` are otherwise implemented. Two spec cases stay XFAIL for
+  this (`wontfix-sigpipe`).
+- **A bare `exit` in a pipe stage exits 0.** `false; { exit; } | cat; echo ${PIPESTATUS[*]}`
+  prints `0 0`; bash prints `1 0` (the status before the pipeline). `exit N` is correct.
+- **`f 2>&1` where the function `f` runs a program.** The program keeps separate stdout and
+  stderr pipes, so lines it writes to both can change order. A program run directly under
+  `2>&1`, `|&` or `&>` keeps its order.
+- **`NAME=value cmd` as a pipe stage collects its input first.** The stage starts after its
+  upstream completes, so an unbounded producer (`yes | FOO=1 head -n1`) does not stream into it.
 
-Still open: Windows environment-backed variables are case-insensitive (see
-`docs/specs/intentional-differences.md`); broad interactive/PTY suite flakes and clean release
-artifacts need platform validation. `session list`/`status` now report terminal-only brokers.
-Gzip/tar decoding rejects a stream with a missing footer in every mode: the standalone host
-enables strict validation at startup, and imported module mode checks the trailer itself
-(a multi-member archive is rejected there rather than risk accepting a truncated one).
-Process-substitution temp permissions are conditional hardening on
-shared-user Unix machines. Proposed remote-product stories are outside this local product.
+## Redirection
 
-## Production blockers reviewed 2026-10-18
+- **`exec` on stdin, stdout or stderr is partly supported.** `exec > log; rest` redirects the
+  statements that follow it in the same list. At the top level of a script that is the rest
+  of the script, as in bash. Inside a compound command or a function it differs:
+  - As the last statement of a compound command or function body, it is refused. The shell
+    prints `exec: N: redirecting the shell's own stdin/stdout/stderr with exec is not supported`,
+    applies no redirection and goes on. Example: `if $quiet; then exec 2>/dev/null; fi`.
+    Put the commands to redirect in a group instead: `{ cmds; } 2>/dev/null`.
+  - Followed by other statements in a compound command or function body, it covers only
+    those statements. Bash keeps the redirection after the block or function ends.
+  - An interactive line that holds only the `exec`, and `exec 1>&-`, are refused the same way.
+  - `exec N<>file` is not supported.
 
-The [production readiness review](production-readiness-review-2026-10-18.md)
-records evidence, affected journeys, and closure criteria. Status:
+  `exec` on descriptors 3 and up (`exec 3>f`, `exec {fd}>f`, `exec 3>&1`, `exec 3>&-`) works.
+- **`/dev/stdin` as a file operand.** Only `cat` and awk's `getline < "/dev/stdin"` read it.
+  `head`, `tail`, `sort`, `grep`, `sed`, `cut`, `wc` and the other line tools report that it
+  cannot be opened; use `-` or a pipe. `cp`, `touch`, `stat` and `source` do not accept a
+  device operand (`cp f /dev/null`).
+- **A native program can miss the tail of a `> file` burst.** Output written faster than one
+  record per millisecond is buffered for up to 50 ms. A ps-bash command that reads the file
+  sees all of it; a native program or a size check (`test -s`, `stat`, `ls -l`) run right
+  after the burst, inside the same redirected group, may not.
+- **A native program's stdout is line-decoded.** PowerShell drops a CR before an LF and adds
+  a missing final newline, so `ssh host cat f > f` is not byte-exact for such a file. Its
+  stdin is exact.
 
-- **Fixed — archive extraction (B01):** `tar -x` now refuses to write through an
-  existing symlink/junction ancestor or final component (nonzero exit, outside
-  content untouched). Residual: a link swapped in between the check and the open
-  by a concurrent attacker is narrowed, not eliminated; still extract untrusted
-  archives into a fresh directory with trusted ancestors.
-- **Fixed — installers (B02):** `install.sh` / `install.ps1` install the complete
-  package into a versioned directory, run a real command before switching, verify
-  the published digest, and keep the previous version. Unsupported platforms fail
-  with a named error.
-- **Fixed — release integrity (B03–B05):** binaries are staged as workflow
-  artifacts and only promoted after every gate passes; every job builds the tag's
-  single resolved SHA; Core, Cmdlets and Host tests block. Differential cassette
-  replay and a short shell safety/recovery subset now also block. The broad shell
-  suite remains advisory: on 2-core Linux runners some interactive/PTY tests stall (the
-  prompt prints one character then nothing; a 50,000-term `[ a -o ... ]`
-  hostile-input test exits 125). Harness waits now extend only while the machine
-  is measurably starved, so these are open product-or-environment questions, not
-  timeouts.
-- **Partly fixed — history privacy (B08):** a line starting with a space, or any
-  line while `PSBASH_HISTORY_PRIVATE=1`, is never recorded; an unopenable history
-  DB degrades to in-memory with a warning. `history`, `history -d ID` and
-  `history -c` list and delete (`-c` runs `secure_delete` + WAL truncate + VACUUM).
-  Still open: retention policy; bash-compatible `history` flags beyond these.
+## Processes and environment
 
-- **Partly fixed — durable sessions and per-session concurrency (B06, B07):** `ps-bash session start/list/status/stop NAME` + `PSBASH_SESSION=NAME` give a host that outlives its launchers and runs concurrently with other sessions ([sessions](sessions.md)). Reattachable broker-owned PTY/screen is implemented. List/status still inspect only the command host. Original note:
-  product-scope decisions, not shell bugs. The warm host is not a durable session
-  manager, and commands sharing one daemon run serially. The
-  [journey contract](planning/production-user-journeys.md) labels proposed remote
-  behavior separately from current capabilities.
-## Architecture differences (not bugs — won't fix)
+- **A program started as a plain `prog args` inherits unexported variables.** Nested shells,
+  programs under `2>&1` / `|&` / `&>`, `env`, `printenv`, `timeout`, `find -exec`, `nohup` and
+  awk `system()` get exported variables only. A plain `x=1; prog` with no stderr merge is
+  started by PowerShell, which hands it every shell variable. The same program is the one
+  process killed on a stop; its children are not. Spec: `environment-model.md` §7.
+- **`.cmd` and `.bat` in a background job** get the host process environment in place of the
+  job's copy.
+- **Foreground `nohup CMD` returns 0 at once.** GNU nohup waits and returns CMD's status.
+  `nohup CMD &` is unaffected.
+- **A nested shell is slow to start.** Each `bash -c`, `sh -c` and `#!` shell script runs in a
+  ps-bash of its own: about 1 s on a warm host, more for the first one on a cold host. A loop
+  that starts hundreds takes minutes. Spec: `executor-slots.md` §5.
 
-These diverge from bash because of the PowerShell pipeline model, not missing
-effort. A bash pipe is N OS processes, each with an exit status the shell
-`waitpid`s into `PIPESTATUS`. A PowerShell pipeline is one cooperative object
-stream with a single `$LASTEXITCODE` and record-interleaved stages — there is no
-per-stage process status to collect, and "stage N's exit code" is not
-well-defined mid-stream. The following three are one knot:
+## Signals and background jobs
 
-- **`PIPESTATUS`** — populated (${PIPESTATUS[@]}) when the script mentions it or `pipefail`: each stage runs through `Invoke-BashPipeStage`.
-  It is set only by multi-stage pipelines (a later simple command does not reset it to one element). `source`d and `eval`ed text inherits the caller's live `pipefail` and `set -u`.
-- **Broken pipe / SIGPIPE** — `cmd | head -1` does not deliver SIGPIPE to the
-  producer; exit-141 semantics do not exist. Mapped cmdlets get partial
-  early-stop via `StopUpstreamCommandsException` (from `-First N`), but that is
-  not SIGPIPE.
-- **The trade-off** — the only route to true `PIPESTATUS` is to stop emitting
-  bash pipes as PowerShell pipelines (run each stage as a separately-captured
-  invocation), which kills streaming and breaks broken-pipe behavior. PsBash
-  keeps streaming; these stay won't-fix.
+- **A trapped signal runs at the next top-level statement.** A signal that arrives during one
+  long command, or inside a `( )` or `$( )` body, waits for it to finish. STOP, TSTP, TTIN,
+  TTOU and CONT are ignored.
+- **A job starts about 13 ms after its `&`** (10-53 ms under load); bash forks at once. A
+  `sleep` in the job is shortened by that lag, so longer sleeps keep bash's order. Jobs that
+  differ by less than the lag can finish in another order than in bash. Two spec cases stay
+  XFAIL for this (`arch-bg-job-start-latency`), one of them `wait -n`.
+- **Some job output is still printed at `wait`.** A job streams its output as it runs when
+  its stdout is the shell's own. A job started inside a function, a redirected group, a
+  pipeline, `$( )`, `<( )`, `eval`, `source`, a trap, or after `exec > file` is collected and
+  printed in one piece at `wait` or at exit.
+- **`-c` and jobs still running at the end.** After the script ends, jobs get 1 s; then they
+  are stopped and output they had not delivered is dropped. Use `wait`, or `nohup cmd &` for a
+  process that must outlive the shell.
+- **Ctrl+C ends a program's whole process tree,** including a child its script started with
+  `&`. Bash leaves that child running. A `setsid` child survives in both.
 
-Public-facing summary: `docs/src/content/docs/comparison.mdx` ("When Bash Wins").
-Current behavior is frozen by skipped goldens in
-`src/PsBash.Differential.Tests/PipeDifferentialTests.cs`.
+## macOS
 
-## `eval "$(cmd)"` — runtime eval (resolved)
+- **An outside SIGUSR1 does not reach `trap … USR1`.** The .NET runtime uses SIGUSR1 to
+  suspend its own threads on macOS, so ps-bash does not catch it. `kill -USR1` sent from a
+  ps-bash shell is delivered, and SIGUSR2 works from anywhere.
+- **`PsBash.Cmdlets.Tests` is advisory in the macOS release gate.** Under the full suite's
+  load, an awk output pipe (`print | "wc -l"`) lost its child twice (broken pipe, once exit
+  138) and a job-clock sleep bound failed. Each test passes when run alone on macOS. Windows
+  and Linux runs of the suite, and every other macOS suite, block a release.
+- **A raw byte in a variable** (`x=$(printf '\xe9')`) becomes U+FFFD on Linux and macOS;
+  Windows keeps it.
 
-**Status:** supported as of REFACTOR-5a-2. Supersedes the v0.8.14
-parse-time-rejection design.
+## Windows
 
-**History:** v0.8.14 resolved `eval` entirely at parse time in
-`PsEmitter.EmitEval` and *rejected* dynamic eval bodies — `eval "$(cmd)"`,
-`eval \`cmd\``, `eval $((expr))`, `eval <(cmd)` — with a `ParseException`,
-because the transpiler could not reach a body computed at runtime. The
-rationale was avoiding a nested-ps-bash-subprocess hang.
+- **Variable names are case-insensitive.** `x=1; X=2` is one variable.
+- **`/` is `C:/` and `/tmp` is `%TEMP%`.** An absolute path a script prints starts with a
+  drive letter. `PATH` is `;`-separated: a `:` written between entries becomes `;`.
+- **No mode bits.** `chmod +x` succeeds and changes nothing; `ls -l` shows synthesized modes.
+- **`<(cmd)` is a temp file** (`C:/…/psub-…`) where bash gives `/dev/fd/63`, and it holds the whole
+  output of cmd before the reader starts.
 
-**Current behavior:** `EmitEval` still folds **static** eval bodies (literals,
-quoted literals) inline at parse time via `TryReconstructBashSource` — lossless
-and zero-runtime-cost. But when any arg requires runtime expansion (command
-sub, arithmetic, process sub, variable, glob, brace expansion) the emitter now
-emits an **in-process runtime eval block** instead of rejecting:
+## Interactive shell
 
-```powershell
-$__psbash_eval_src = @(<args>) -join ' '
-# depth-guarded (limit 5), then:
-$__psbash_eval_pwsh = [PsBash.Core.Transpiler.BashTranspiler, PsBash.Transpiler]::Transpile(
-    $__psbash_eval_src, [PsBash.Core.Transpiler.TranspileContext, PsBash.Transpiler]::Eval)
-Invoke-Expression $__psbash_eval_pwsh
-```
+No `bind`, no `set -m` job control, and the prompt escapes `\j`, `\!` and `\#` are constants.
+See [Using ps-bash](shell-guide.md#limitations).
 
-The eval body is re-transpiled **in-process** by `BashTranspiler` inside the
-ps-bash-host SDK runspace and run via `Invoke-Expression`. No nested ps-bash
-subprocess is spawned, so the v0.8.14 hang risk does not return. A depth probe
-(`$global:__BashEvalDepth`, limit 5) guards against runaway `eval`-of-`eval`
-recursion.
+## Fixed in v0.15.0
 
-`fnm env --shell bash`, `direnv hook bash`, `ssh-agent -s`, and `dircolors`
-shell-init idioms work directly — no manual inlining required.
+Entries this page or earlier releases listed as open:
 
-**Perf:** the fnm-shaped payload (`eval $(printf 'export ...\n...')`) runs well
-under the 15 s hang-detection budget — sub-second in local runs. The 15 s
-budget on the eval differential tests is a *hang* oracle, not a perf target:
-REFACTOR-7 made non-interactive modes spawn a private host per invocation, so
-each `-c` pays a single-digit-second host cold-start cost that a 2 s budget
-would conflate with a genuine eval hang.
+- `PIPESTATUS` is set after every pipeline and reset by a simple command or an assignment.
+- `set -e` ends a failing pipe stage; it used to run to its end.
+- `exit` in a function called from a pipe stage, `( )` or `$( )` ended the whole script.
+- `kill -USR1 $$` from a nested shell was refused; it now runs the trap.
+- A child process saw every shell variable.
+- `--rcfile` was parsed and dropped.
+- Background job output was held until `wait`.
 
-**Regression guards** (in `BashTranspilerTests`):
-- `Transpile_EvalWithCommandSubstitution_EmitsRuntimeSubexpression`
-- `Transpile_EvalWithMappedCommandSubstitution_TranspilesInner`
-- `Transpile_EvalWithBackquoteCommandSub_EmitsRuntimeSubexpression`
-- `Transpile_EvalWithArithmeticExpansion_EmitsRuntimeSubexpression`
-- `Transpile_EvalWithVariableReference_ForwardsToRuntimeEval`
+## Production review status
 
-Differential (bash-oracle) guards in `EvalDifferentialTests`:
-- `Differential_Eval_CmdSubMultilineExports_DoesNotHang`
-- `Differential_Eval_QuotedCmdSubMultiline_DoesNotHang`
-- `Differential_Eval_FnmShapedPayload_DoesNotHang`
-- `PsBash_Eval_CmdSubMultiline_WallTimeUnder15000ms`
+The [2026-10-18](production-readiness-review-2026-10-18.md) and
+[2026-10-20](production-readiness-review-2026-10-20.md) reviews record evidence and closure
+criteria. Status of their findings:
+
+- **Fixed: archive extraction (B01).** `tar -x` refuses to write through an existing symlink
+  or junction ancestor or final component (nonzero exit, outside content untouched).
+  Residual: a link swapped in between the check and the open by a concurrent attacker is
+  narrowed, not eliminated. Extract untrusted archives into a fresh directory with trusted
+  ancestors.
+- **Fixed: installers (B02).** `install.sh` and `install.ps1` install the complete package
+  into a versioned directory, run a real command before switching, verify the published
+  digest, and keep the previous version. Unsupported platforms fail with a named error.
+- **Fixed: release integrity (B03-B05).** Binaries are staged as workflow artifacts and
+  promoted only after every gate passes; every job builds the tag's single resolved SHA.
+- **Partly fixed: history privacy (B08).** A line starting with a space, or any line while
+  `PSBASH_HISTORY_PRIVATE=1`, is never recorded; an unopenable history DB degrades to
+  in-memory with a warning. `history -d ID` and `history -c` delete (`-c` runs
+  `secure_delete`, a WAL truncate and VACUUM). Still open: a retention policy.
+- **Partly fixed: durable sessions (B06, B07).** `ps-bash session start|list|status|stop NAME`,
+  `PSBASH_SESSION=NAME` and `session attach` give a host and a terminal that outlive their
+  launchers ([Named sessions](sessions.md)). Commands inside one host still run one at a time.
+- **Gzip and tar** reject a stream with a missing footer in every mode. Gzip keeps an existing
+  output file unless forced.
+- **`set -u`** covers `$x`, `${x}`, `$1`..`$N` and names read inside `$(( ))`. **`set -C`**
+  covers `>` onto an existing file; the check runs when the redirect opens the file, so the
+  command itself has already run.
