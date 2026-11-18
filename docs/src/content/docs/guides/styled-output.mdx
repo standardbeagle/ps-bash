@@ -45,7 +45,7 @@ Get-Process |
 ```
 
 The `-Css` argument (alias `-Style` / `-Stylesheet`) accepts **a built-in sheet name**, an
-**inline CSS string** (anything containing `{` or a newline), or a **path to a `.css` file**.
+**inline CSS string** (anything containing `{` or a newline), or a **path to a `.pcss` or `.css` file**.
 Omit it and you get the built-in `default` sheet.
 
 ## Layout: list vs table, chosen for you
@@ -60,13 +60,13 @@ Omit it and you get the built-in `default` sheet.
 </CardGrid>
 
 Pick the columns and their order with `-Property Name,Id,CPU`; omit it and each row uses its
-own `ToString()`. The structural sheet (`table.css` / `list.css`) handles header weight,
+own `ToString()`. The structural sheet (`table.pcss` / `list.pcss`) handles header weight,
 primary-column bold, and right-aligning numeric cells — **without** coloring data cells, so
 your semantic colors always win the cascade.
 
 ## Built-in stylesheets
 
-Eleven sheets ship embedded in the cmdlet. Name them with `-Style <name>`:
+Twelve sheets ship embedded in the cmdlet. Name them with `-Style <name>`:
 
 | Sheet | For | What it does |
 |-------|-----|--------------|
@@ -76,6 +76,7 @@ Eleven sheets ship embedded in the cmdlet. Name them with `-Style <name>`:
 | `table` | grid structure | header bold+underline, `.primary` bold, `.num` right-aligned |
 | `list` | property lists | `.property-name` cyan+bold |
 | `net` | `ping` / `traceroute` | `.ok` under 80ms green, `.slow` under 200ms yellow, `.high` red+bold, `.timeout` strikethrough |
+| `git` | `psgit` status, log, branch, diff | `.staged` green, `.modified` yellow, `.untracked` gray, `.conflict` red+bold, `.current` branch green+bold |
 | `av` | `psav` media + artifacts | `.video` cyan, `.audio` magenta, `.image` green; `.ok` green, `.failed` red+bold, `.planned` gray italic |
 | `fs` | files (interactive) | adds `open`/`cd` buttons + size/dates/attrs/acl expansion |
 | `procsvc` | processes (interactive) | adds `stop`/`restart` buttons + path/memory/threads expansion |
@@ -88,7 +89,7 @@ Strata implements a focused, terminal-meaningful subset of CSS:
 
 ```css
 /* text (inherited) */
-color: red | bright-cyan | #88ccff | transparent;   /* 16 ANSI names + hex */
+color: red | brightcyan | gray | #88ccff | transparent;   /* 16 ANSI names (brightred, not bright-red) + hex */
 font-weight: bold;
 font-style: italic;
 text-decoration: underline | strikethrough | none;
@@ -146,7 +147,7 @@ data is never lost to a styling error.
 
 ## Bring your own theme
 
-Drop a `.css` file with a built-in's name to extend it (cascade — your rules win), searched
+Drop a `.pcss` file (`.css` also works) with a built-in's name to extend it (cascade — your rules win), searched
 in order:
 
 <Steps>
@@ -156,10 +157,10 @@ in order:
 </Steps>
 
 ```css
-/* ~/.config/ps-bash/styles/ps.css — extend the built-in ps sheet */
-.busy   { color: bright-red; font-weight: bold; }
+/* ~/.config/ps-bash/styles/ps.pcss — extend the built-in ps sheet */
+.busy   { color: brightred; font-weight: bold; }
 .idle   { color: #555555; }
-Process { color: bright-white; }
+Process { color: brightwhite; }
 ```
 
 You don't recopy the whole sheet — your file appends after the built-in, so you only write

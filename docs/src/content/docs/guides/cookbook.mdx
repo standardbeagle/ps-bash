@@ -1,6 +1,6 @@
 ---
 title: Pipeline Cookbook
-description: "15 real-world pipeline recipes for DevOps, data processing, file management, and text analysis using ps-bash typed objects."
+description: "14 real-world pipeline recipes for DevOps, data processing, file management, and text analysis using ps-bash typed objects."
 head:
   - tag: meta
     attrs:
@@ -16,20 +16,25 @@ Real-world pipeline recipes organized by use case. Every recipe shows the one-li
 Every pipeline preserves typed objects. Assign the result to a variable and access properties directly -- no string parsing required.
 </Aside>
 
+These recipes run in PowerShell with the module imported (`Import-Module PsBash`), so the
+variable assignments and the `Sort-Object`, `Where-Object` and `Measure-Object` steps are
+PowerShell. The one-liners that use only bash commands also run in the `ps-bash` shell. `Path` is the display path (`./src/a.ps1`);
+`FullPath` is the native absolute path.
+
 ## DevOps Recipes
 
 ### Find Large Files
 
 ```powershell
-find . -size +10M -type f | sort -k5 -rn
+find . -size +10M -type f | Sort-Object SizeBytes -Descending
 ```
 
-Recursively finds files larger than 10 MB and sorts them by size (column 5) in descending numeric order. Useful for identifying bloat in a repository or deployment directory.
+Recursively finds files larger than 10 MB and sorts them by size, largest first. `find` prints only the path, so the sort uses the `SizeBytes` property instead of a text column. Useful for identifying bloat in a repository or deployment directory.
 
 ```text
-./logs/app-2026-03.log          52428800    2026-03-30 14:22
-./dist/bundle.js                15728640    2026-03-28 09:15
-./data/export.csv               11534336    2026-03-25 16:45
+./logs/app-2026-03.log
+./dist/bundle.js
+./data/export.csv
 ```
 
 **Object properties available:**
@@ -37,13 +42,13 @@ Recursively finds files larger than 10 MB and sorts them by size (column 5) in d
 | Property | Type | Example |
 |----------|------|---------|
 | `Name` | string | `app-2026-03.log` |
-| `FullPath` | string | `./logs/app-2026-03.log` |
+| `Path` | string | `./logs/app-2026-03.log` |
 | `SizeBytes` | long | `52428800` |
 | `IsDirectory` | bool | `False` |
 
 ```powershell
 # Programmatic access after pipeline
-$big = find . -size +10M -type f | sort -k5 -rn
+$big = find . -size +10M -type f | Sort-Object SizeBytes -Descending
 $big.SizeBytes | Measure-Object -Sum    # total bytes in large files
 $big | Where-Object { $_.Name -like '*.log' }  # filter to logs only
 ```
@@ -53,7 +58,7 @@ $big | Where-Object { $_.Name -like '*.log' }  # filter to logs only
 ### Disk Usage Hogs
 
 ```powershell
-du -sh * | sort -rh | head 10
+du -sh * | sort -rh | head -n 10
 ```
 
 Shows disk usage of each item in the current directory with human-readable sizes, sorted largest first, limited to the top 10 entries.
@@ -75,7 +80,7 @@ Shows disk usage of each item in the current directory with human-readable sizes
 | `BashText` | string | `1.2G    node_modules` |
 
 ```powershell
-$usage = du -sh * | sort -rh | head 10
+$usage = du -sh * | sort -rh | head -n 10
 $usage.SizeBytes | Measure-Object -Sum   # total disk usage
 ```
 
@@ -111,7 +116,7 @@ The `cut`, `uniq -c`, and final `sort` stages produce `TextOutput` objects. For 
 ### Top CPU Processes
 
 ```powershell
-ps aux | sort -k3 -rn | head 10
+ps aux | sort -k3 -rn | head -n 10
 ```
 
 Lists all processes, sorts by CPU percentage (column 3) in descending order, and shows the top 10 consumers.
@@ -134,7 +139,7 @@ you       5678  0.1  0.5  12300  5100 pts/1    S    10:15   0:00 node server.js
 | `User` | string | `you` |
 
 ```powershell
-$procs = ps aux | sort -k3 -rn | head 10
+$procs = ps aux | sort -k3 -rn | head -n 10
 $procs.CPU | Measure-Object -Sum -Average   # CPU stats for top consumers
 $procs | Where-Object { $_.CPU -gt 1.0 }    # only high-CPU processes
 ```
@@ -160,7 +165,7 @@ Finds all files modified in the last 7 days and sorts them alphabetically. Usefu
 | Property | Type | Example |
 |----------|------|---------|
 | `Name` | string | `Commands.ps1` |
-| `FullPath` | string | `./src/Commands.ps1` |
+| `Path` | string | `./src/Commands.ps1` |
 | `SizeBytes` | long | `14200` |
 | `IsDirectory` | bool | `False` |
 
@@ -243,9 +248,9 @@ db.example.com
 
 ```powershell
 # Chain multiple lookups
-$host = cat config.yml | yq '.database.host'
+$dbHost = cat config.yml | yq '.database.host'
 $port = cat config.yml | yq '.database.port'
-echo "$host`:$port"   # db.example.com:5432
+"${dbHost}:$port"   # db.example.com:5432
 ```
 
 ---
@@ -269,7 +274,7 @@ Finds `.tmp` files older than 7 days and passes them to `rm -f` for removal. The
 | Property | Type | Example |
 |----------|------|---------|
 | `Name` | string | `build-cache.tmp` |
-| `FullPath` | string | `./tmp/build-cache.tmp` |
+| `Path` | string | `./tmp/build-cache.tmp` |
 | `SizeBytes` | long | `8192` |
 
 ```powershell
@@ -298,7 +303,7 @@ Finds all PowerShell scripts under `src/` and pipes the file list into `tar` to 
 | Property | Type | Example |
 |----------|------|---------|
 | `Name` | string | `PsBash.psm1` |
-| `FullPath` | string | `src/PsBash.psm1` |
+| `Path` | string | `src/PsBash.psm1` |
 | `SizeBytes` | long | `245760` |
 
 ```powershell
@@ -341,7 +346,7 @@ For a richer alternative, capture the `find` output first: `$files = find . -typ
 ### Word Frequency Analysis
 
 ```powershell
-cat text.txt | tr ' ' '\n' | sort | uniq -c | sort -rn | head 20
+cat text.txt | tr ' ' '\n' | sort | uniq -c | sort -rn | head -n 20
 ```
 
 Splits text into one word per line, sorts alphabetically (so identical words are adjacent), counts consecutive duplicates, and ranks by frequency. The top 20 most common words appear first.
@@ -359,12 +364,6 @@ Splits text into one word per line, sorts alphabetically (so identical words are
 | Property | Type | Example |
 |----------|------|---------|
 | `BashText` | string | `      87 the` |
-
-```powershell
-# Alternative: capture and use PowerShell grouping
-$words = cat text.txt | tr ' ' '\n'
-$words | Group-Object { $_.BashText.Trim() } | Sort-Object Count -Descending | Select-Object -First 20
-```
 
 ---
 
@@ -502,7 +501,7 @@ Count Name     Group
 | Pipeline Source | Type | Key Properties |
 |----------------|------|----------------|
 | `ls -la` | `LsEntry` | `Name`, `SizeBytes`, `Permissions`, `Owner`, `LastModified` |
-| `find` | `FindEntry` | `Name`, `FullPath`, `SizeBytes`, `IsDirectory` |
+| `find` | `FindEntry` | `Name`, `Path`, `FullPath`, `SizeBytes`, `IsDirectory` |
 | `ps aux` | `PsEntry` | `PID`, `CPU`, `Memory`, `Command`, `User` |
 | `grep` | `GrepMatch` | `FileName`, `LineNumber`, `Line` |
 | `du` | `DuEntry` | `SizeBytes`, `Path` |

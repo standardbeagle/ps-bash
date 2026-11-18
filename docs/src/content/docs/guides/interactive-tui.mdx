@@ -158,11 +158,11 @@ expanded — you don't need an adapter at all. Write a **stylesheet** and let
 [`Show-Styled`](/ps-bash/guides/styled-output/) drive the cascade:
 
 ```css
-/* ~/.config/ps-bash/styles/pr.css */
+/* ~/.config/ps-bash/styles/pr.pcss */
 PullRequest            { display: block; color: white; }
 PullRequest.draft      { color: gray; }
 PullRequest.approved   { color: green; font-weight: bold; }
-PullRequest:focused    { background: blue; color: bright-white; }
+PullRequest:focused    { background: blue; color: brightwhite; }
 
 /* detail rows hidden until the row is expanded with Enter */
 PullRequest > DetailLine            { display: none; }

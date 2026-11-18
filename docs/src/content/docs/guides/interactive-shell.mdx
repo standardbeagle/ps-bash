@@ -134,9 +134,17 @@ complete -r svc         # remove
 ```
 
 <Aside type="caution">
-Function-based completion (`complete -F func` with `COMP_WORDS`/`COMPREPLY`) and standalone
-`compgen` are **not** implemented. A `-F` spec registers but contributes no candidates.
+In the line editor only `-W` word lists produce candidates. A `complete -F func` spec registers
+but contributes nothing at Tab.
 </Aside>
+
+`compgen` works as a command in scripts and at the prompt: `-W WORDLIST`, `-f`, `-d`, `-v`, `-e`,
+`-c`, `-A KIND`, `-F`, `-C`, `-P`, `-S` and `-X`, with a trailing `[--] PREFIX` filter. It exits 1
+when nothing matches.
+
+```bash
+compgen -W 'start stop restart status' -- st    # start, stop, status
+```
 
 ## Aliases
 
@@ -203,8 +211,13 @@ designed but not yet implemented.
 
 ## Directory navigation: `cd` and `$OLDPWD`
 
-`cd` updates `$env:PWD`, `[System.Environment]::CurrentDirectory`, and PowerShell's location
-together, and records the directory you're leaving into `$env:OLDPWD` on **every** successful `cd`.
+`cd` updates `$PWD`, the process working directory and PowerShell's location together, and records
+the directory you're leaving in `$OLDPWD` on **every** successful `cd`. On Windows both print as
+forward-slash paths (`C:/Users/me/src`).
+
+Like bash, `cd` resolves a relative path, `CDPATH` and `cd -` against the logical `$PWD`, the path
+you used to get there, not the physical directory behind a symlink. `pwd -P` prints the physical
+path with every link resolved.
 
 | Command | Behavior |
 |---------|----------|
@@ -269,21 +282,28 @@ equivalent for; the prompt still renders, but duration is unavailable.
 
 ## Shell options and traps
 
-| Construct | Maps to |
-|-----------|---------|
-| `set -e` / `set -o errexit` | `$ErrorActionPreference = 'Stop'` (+ an errexit guard) |
-| `set -x` / `set -o xtrace` | `Set-PSDebug -Trace 1` |
-| `set -u` / `set -o nounset` | `Set-StrictMode -Version Latest` |
-| `set -- a b c` | Reset positional parameters |
-| `trap '…' ERR` | Fires the handler when a command returns non-zero |
+Shell options and traps follow bash.
 
-Combined flags like `set -euo pipefail` are decomposed (`pipefail` has no PowerShell equivalent and
-is ignored — see the [pipeline exit-code note](/ps-bash/comparison/)). `trap '…' DEBUG` has no faithful
-mapping (no pre-command event in PowerShell) and is a documented gap.
+| Construct | Behavior |
+|-----------|----------|
+| `set -e` / `set -o errexit` | Exit on the first failing command, with bash's exemptions (`if`, `&&`, `||`, `!`) |
+| `set -u` / `set -o nounset` | Expanding an unset variable is an error |
+| `set -x` / `set -o xtrace` | Print each command to stderr after expansion, prefixed with `+ ` |
+| `set -o pipefail` | A pipeline's status is the last non-zero stage status; `$PIPESTATUS` holds every stage |
+| `set -- a b c` | Reset positional parameters |
+| `trap '…' ERR` | Run when a command returns non-zero |
+| `trap '…' DEBUG` | Run before each simple command |
+| `trap '…' EXIT` / `RETURN` | Run when the shell exits / a function or sourced file returns |
+| `trap '…' INT TERM USR1 …` | Run when the signal arrives |
+
+Combined flags such as `set -euo pipefail` work as in bash.
 
 ## AI command assist (Ctrl-^) <Badge text="opt-in" variant="tip" />
 
-Press `Ctrl-^` (also bindable as Ctrl-backtick or `Ctrl-6`) to send your current buffer to an external AI CLI and
+AI assist is off until you set `PSBASH_AI_ENABLE=1`. `PSBASH_AI_DISABLE=1` turns it off even when
+`PSBASH_AI_ENABLE` is set.
+
+With it on, press `Ctrl-^` (also bindable as Ctrl-backtick or `Ctrl-6`) to send your current buffer to an external AI CLI and
 get back a bash command. The shell shows the suggestion, **flags risky patterns** (`rm`, `git push
 --force`, `sudo`, `curl … | sh`, package installs, `Invoke-Expression`), and asks what to do:
 execute (a flagged command requires typing `EXECUTE` to confirm), insert into the buffer for
@@ -293,11 +313,12 @@ editing, retry, switch providers, or cancel. Your original line is restored on c
   `~/.psbash/ai-providers.json` (or `$PSBASH_AI_CONFIG`).
 - Prompts are **redacted** for obvious secrets (`API_KEY=…` → `<redacted>`) and the buffer/cwd are
   truncated before sending.
-- Disable the feature entirely with `PSBASH_AI_DISABLE=1`.
 
 ## Startup file
 
-On launch the shell sources `~/.psbashrc` (override with `PSBASH_HOME`; skip with `--no-profile`).
+On launch the interactive shell sources `~/.psbashrc` (`PSBASH_HOME` changes the directory it is
+read from). `--rcfile FILE` or `--init-file FILE` sources FILE instead; `--norc` or `--noprofile`
+skips the startup file. A non-interactive `ps-bash -c` or `ps-bash script.sh` reads no startup file.
 `alias`/`unalias`/`complete` lines are applied to the interactive tables; the rest is transpiled
 and run. This is the same path used by interactive `source FILE`, so sourced aliases and completions
 are immediately live.

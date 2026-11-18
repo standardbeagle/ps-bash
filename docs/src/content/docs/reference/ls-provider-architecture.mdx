@@ -1,62 +1,88 @@
 ---
 title: ls Provider Architecture
-description: How ps-bash implements bash-compatible directory listing with streaming System.IO enumeration, custom provider registration, and a PowerShell provider fallback.
+description: How ps-bash implements bash-compatible directory listing with direct System.IO enumeration, custom provider registration, and a PowerShell provider fallback.
 head:
   - tag: meta
     attrs:
       name: keywords
-      content: ps-bash ls, directory listing, System.IO streaming, Register-BashLsProvider, bash compatible ls, Windows reserved names
+      content: ps-bash ls, directory listing, System.IO enumeration, Register-BashLsProvider, bash compatible ls, Windows reserved names
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 
-`ls` is deceptively complex to emulate correctly on Windows. This page explains the problems with the naive `Get-ChildItem` approach, how ps-bash solves them with a three-tier architecture, and how to register custom providers for non-filesystem paths.
+`ls` is a binary cmdlet, `Invoke-BashLs` (`src/PsBash.Cmdlets/InvokeBashLsCommand.cs`). This page explains why it does not use `Get-ChildItem` for files, the order in which it resolves a target, and how to register a custom provider for paths that are not on disk.
 
-## Why Get-ChildItem Falls Short
+## Why not Get-ChildItem
 
-The natural PowerShell way to list a directory is `Get-ChildItem`. It works for simple cases, but has several problems that affect bash compatibility:
+The first `ls` was a psm1 function built on `Get-ChildItem` and `Get-Acl`. It had three problems with bash compatibility:
 
-**1. ACL calls on every entry**
+- **ACL calls on every entry.** `Get-Acl` per file was slow on large directories, and it failed on files with Windows reserved device names (`nul`, `con`, `prn`, `aux`, `com1`–`com9`, `lpt1`–`lpt9`), which Win32 resolves as devices.
+- **Directories first.** The listing grouped directories before files. Bash `ls` sorts all entries together.
+- **Provider overhead.** Each item went through the PowerShell provider layer and its extra properties.
 
-`Get-ChildItem` automatically calls `Get-Acl` to populate the `UnixStat` and `Mode` properties for each file system item. On directories with hundreds of files this is measurably slow. More critically, it *fails* on directories that contain files with Windows reserved device names (`nul`, `con`, `prn`, `aux`, `com1`-`com9`, `lpt1`-`lpt9`). These names are legal on most filesystems via Win32 extended paths, but `Get-Acl` resolves them as device names and throws an error.
+The cmdlet reads the filesystem directly through `System.IO` and calls PowerShell only for paths that are not on disk.
 
-**2. Full load before first result**
+## Resolution order
 
-`Get-ChildItem` loads all entries into memory before streaming any to the pipeline. In a directory with 100k files (e.g., `node_modules`), this causes significant memory pressure and delay before the first line appears.
-
-**3. Dirs-first sort order**
-
-`Get-ChildItem` returns directories before files within each sort group. Bash `ls` sorts all entries together alphabetically, case-insensitively (`a.txt` before `B.txt` before `c/`).
-
-**4. Automatic trailing slash on directories**
-
-`Get-ChildItem` always adds `/` to directory names in list output. Bash only adds it with `ls -p`.
-
-## Three-Tier Architecture
-
-ps-bash's `Invoke-BashLs` tries three strategies in order:
+For each operand, `Invoke-BashLs` tries:
 
 ```
-1. Custom providers (Register-BashLsProvider)
-   └─ Any registered provider whose Detect block returns $true
-2. System.IO fast path
-   └─ [System.IO.Directory]::Exists($path) → DirectoryInfo.EnumerateFileSystemInfos
-3. Get-ChildItem fallback
-   └─ Registry:, Cert:, custom PSDrives, and any other PS provider
+1. Null device (Windows)
+   └─ /dev/null lists as a character device, never as C:\dev\null
+2. Real filesystem
+   └─ Directory.Exists / File.Exists → DirectoryInfo.EnumerateFileSystemInfos
+3. Custom providers (Register-BashLsProvider)
+   └─ the first provider whose Detect block returns $true
+4. PowerShell provider fallback
+   └─ Get-Item / Get-ChildItem for Registry:, Cert:, custom PSDrives
 ```
 
-### Tier 1: Custom Providers
+Steps 3 and 4 run in the psm1 function `Get-BashLsProviderEntries`, because they need module-scoped state the binary cmdlet cannot reach. It returns raw `PsBash.LsEntry` objects. The cmdlet then sorts and formats entries from every step the same way.
 
-Any code can register a provider for paths that it owns:
+<Aside type="note">
+A custom provider is only asked about a target that is not a real file or directory. It cannot override a path that exists on disk.
+</Aside>
+
+### Real filesystem
+
+- **No ACL calls.** File attributes come from `FileSystemInfo.Attributes`, which the directory enumeration already returned.
+- **Reserved names work.** The enumeration lists `nul`, `con` and the rest as ordinary files.
+- **Hidden files.** Without `-a`/`-A`, names starting with `.` are skipped, and on Windows so are files with the `Hidden` attribute.
+- **Permissions on Windows** come from `FileAttributes.ReadOnly` and the file extension (`.exe`, `.bat`, `.cmd`, `.ps1`, `.sh`, `.com`). See [Cross-Platform Guide](/ps-bash/reference/cross-platform/#file-permissions).
+- **Names are shell paths.** An operand is displayed as you typed it. Paths ps-bash builds use forward slashes on Windows.
+
+### Sorting
+
+Every step sorts the same way: all entries together, compared with `StringComparer.OrdinalIgnoreCase` (`a.txt`, `B.txt`, `c/`). `-t`, `-S`, `-X`, `-U` and `-r` change the key or order as in GNU `ls`. GNU `ls` in a UTF-8 locale uses locale collation, so names that start with punctuation can sort differently there.
+
+### PowerShell provider fallback
+
+When the target is neither on disk nor claimed by a custom provider, `Get-BashLsProviderEntries` calls `Get-Item` and, for a container, `Get-ChildItem`. Each item becomes a `PsBash.LsEntry` through `Get-LsEntryFromPsItem`. These entries have read-only permissions (`dr-xr-xr-x` or `-r--r--r--`), no owner or group, and a size only when the item has a `Length`.
+
+A target that resolves nowhere prints `ls: cannot access 'NAME': No such file or directory` and sets exit status 2.
+
+## Bash compatibility
+
+| Behavior | bash | ps-bash |
+|----------|------|---------|
+| Sort order | all entries together | all entries together, case-insensitive ordinal |
+| Trailing `/` on dirs | only with `-p` / `-F` | only with `-p` / `-F` |
+| `nul` in a directory | listed | listed |
+| `-a` (show hidden) | `.`-prefixed files | `.`-prefixed files, plus `Hidden` files on Windows |
+| `-R` (recursive) | all depths | all depths, symlinks not followed |
+| `-l` (long format) | permissions, owner, size | permissions, owner, size |
+
+## Registering a custom provider
+
+`Register-BashLsProvider` is exported by the `PsBash` module. Call it from PowerShell after `Import-Module PsBash`.
 
 ```powershell
 Register-BashLsProvider -Name 'MyProvider' -Detect {
     param($path)
     $path -like 'MyScheme:*'
 } -List {
-    param($path, $options)
-    # $options.ShowHidden, $options.LongFormat, $options.Recursive
-    # Return PSCustomObjects with PSTypeName = 'PsBash.LsEntry'
+    param($path, $flags)
+    # $flags.Hidden, $flags.Recursive, $flags.Long
     [PSCustomObject]@{
         PSTypeName   = 'PsBash.LsEntry'
         Name         = 'example'
@@ -69,68 +95,26 @@ Register-BashLsProvider -Name 'MyProvider' -Detect {
         Owner        = 'user'
         Group        = 'group'
         LastModified = [DateTime]::Now
-        BashText     = ''  # filled in by ls before output
+        BashText     = ''  # ls formats the line
     }
 }
 ```
 
-<Aside type="tip">
-Custom providers run before the System.IO and Get-ChildItem tiers. They are the right place to add support for database-backed paths, remote filesystems, or any virtual namespace that behaves like a directory.
-</Aside>
-
-### Tier 2: System.IO Fast Path
-
-For real filesystem paths, ps-bash uses `System.IO.DirectoryInfo.EnumerateFileSystemInfos`:
-
-- **Streaming**: entries are yielded to the pipeline as they are enumerated — no memory accumulation
-- **No ACL calls**: file attributes come from `FileSystemInfo.Attributes` (a single Win32 `FindFirstFile` call, already cached)
-- **Reserved names handled**: the underlying Win32 enumeration handles `nul`, `con`, etc. correctly — it never calls `GetFileSecurity` on them
-- **Bash-compatible permissions on Windows**: read/write/execute bits are derived from `FileAttributes.ReadOnly` and the file extension (`.exe`, `.bat`, `.cmd`, `.ps1`, `.sh`, `.com`)
-
-Sorting is done with `System.Linq.Enumerable.OrderBy` using `StringComparer.OrdinalIgnoreCase`, which matches bash's default sort order: all entries together, case-insensitive alphabetical.
-
-### Tier 3: Get-ChildItem Fallback
-
-When the path is not a real filesystem directory (e.g., `Registry:`, `Cert:`, custom PSDrives), the System.IO tier is skipped and ps-bash falls back to `Get-ChildItem`. Each item is wrapped into a `PsBash.LsEntry` via `Get-LsEntryFromPsItem`, which reads properties from the PS provider item rather than `FileSystemInfo`.
-
-This tier preserves the ability to use `ls` naturally on any PowerShell path:
-
-```bash
-ls Registry:/HKLM/SOFTWARE
-ls Cert:/CurrentUser/My
-```
-
-## Bash Compatibility Details
-
-| Behavior | bash | ps-bash (old) | ps-bash (new) |
-|----------|------|---------------|---------------|
-| Sort order | alpha mixed, case-insensitive | dirs-first | alpha mixed, case-insensitive |
-| Trailing `/` on dirs | only with `-p` | always | only with `-p` |
-| `nul` in directory | works | Get-Acl error | works |
-| Memory for 100k files | streaming | full load | streaming |
-| `-a` (show hidden) | `.`-prefixed files | works | works |
-| `-R` (recursive) | all depths | works | works |
-| `-l` (long format) | permissions, owner, size | works | works |
-
-## `Get-LsEntryFromFsi` vs `Get-BashFileInfo`
-
-`Get-LsEntryFromFsi` is the new function that creates `PsBash.LsEntry` from a `System.IO.FileSystemInfo`. It is the canonical source of truth for file metadata in the System.IO tier.
-
-`Get-BashFileInfo` still exists as a thin wrapper for backward compatibility — `Invoke-BashFind` and `Invoke-BashStat` call it internally. It now delegates to `Get-LsEntryFromFsi`.
-
-## Extending with `Register-BashLsProvider`
-
-The provider API is designed for ps-bash integrations that need to expose non-standard paths as first-class directories. The `List` scriptblock receives:
+The `List` block receives:
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `$path` | `string` | The path passed to `ls` |
-| `$options` | `hashtable` | Parsed flags: `ShowHidden`, `LongFormat`, `Recursive`, `SortByTime`, `SortBySize`, `ReverseSort`, `ClassifyDirs` |
+| `$path` | `string` | The target passed to `ls` |
+| `$flags` | `hashtable` | `Hidden` (`-a`/`-A`), `Recursive` (`-R`), `Long` (always `$false`) |
 
-The `List` block should return `PsBash.LsEntry` objects. The `BashText` property is filled in by `Invoke-BashLs` after the provider returns, so the provider can leave it empty.
+Return `PsBash.LsEntry` objects. `ls` fills in `BashText` and applies its own sort and long format, so the provider does not need to read `-l`, `-t` or `-S`.
 
-To remove a provider:
+Providers are kept in the module-scoped list `$script:BashLsProviders`. To remove one, run the removal inside the module's scope:
 
 ```powershell
-$script:BashLsProviders = $script:BashLsProviders | Where-Object { $_.Name -ne 'MyProvider' }
+& (Get-Module PsBash) { [void]$script:BashLsProviders.RemoveAll({ param($p) $p.Name -eq 'MyProvider' }) }
 ```
+
+## `Get-LsEntryFromFsi` and `Get-BashFileInfo`
+
+The psm1 still defines `Get-LsEntryFromFsi`, which builds a `PsBash.LsEntry` from a `System.IO.FileSystemInfo`, and `Get-BashFileInfo`, a wrapper that calls it. `ls`, `find` and `stat` are binary cmdlets and no longer call either; each has its own C# copy of the logic.

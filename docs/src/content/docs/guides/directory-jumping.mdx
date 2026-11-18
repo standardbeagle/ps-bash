@@ -72,17 +72,20 @@ so `z` is always a safe superset of `cd`.
 
 ## `zi` — interactive pick
 
-When several directories match and you want to choose, `zi` lists them numbered by score
-and reads your selection — no `fzf` dependency:
+When several directories match and you want to choose, `zi` lists up to 20 of them, best
+match first, and reads your selection. It needs no `fzf`:
 
 ```text
 ps-bash$ zi core
-  1  ~/work/core/ps-bash      (rank 42.0)
-  2  ~/work/core/strata       (rank 18.5)
-  3  ~/personal/core-utils    (rank  3.2)
-Select: 2
-ps-bash$ cd ~/work/core/strata
+  1  /home/me/work/core/ps-bash
+  2  /home/me/work/core/strata
+  3  /home/me/personal/core-utils
+select> 2
 ```
+
+Entering a number runs `cd` to that directory. An empty line cancels. Anything else prints
+`ps-bash: zi: invalid selection`. With no match, `zi` prints `ps-bash: zi: no match for 'core'`;
+with no keyword and nothing tracked yet, `ps-bash: zi: no directories tracked yet`.
 
 ## Tab completion and ghost text, from the same data
 

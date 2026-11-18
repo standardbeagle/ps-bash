@@ -16,6 +16,10 @@ Every ps-bash command returns a typed `PSCustomObject`. Each object carries a `.
 All types include a `ToString()` method that returns `BashText`, so string interpolation and pipeline formatting work automatically.
 </Aside>
 
+<Aside type="note" title="Two kinds of path property">
+Display paths are shell paths: forward slashes on Windows (`C:/src/app.ps1`, `./src/main.ps1`). That covers `find`, `du` and `tree` `Path`, `which` `Path`, and every `BashText`. `FullPath` is the native absolute path (`C:\src\app.ps1` on Windows); pass it to .NET or PowerShell APIs.
+</Aside>
+
 ## Quick Reference
 
 | Command(s) | Type | Key Properties |
@@ -638,6 +642,8 @@ Survives `grep`, `sort`, `head`, `tail`, and `tee`.
 ## PsBash.EnvEntry
 
 Represents a single environment variable from `env` or `printenv`.
+
+In a ps-bash shell, `env` and `printenv` list only exported variables, the same set a child process receives: `x=1; env` does not show `x`, `export x=1; env` does. With the module imported into your own PowerShell session, every environment variable counts as exported.
 
 ### Produced by
 
