@@ -5,7 +5,8 @@ namespace PsBash.Testing;
 /// such output builds the expectation from this, never from <c>Path.GetTempPath()</c> as typed: on macOS the temp
 /// dir is <c>/var/folders/…</c> and <c>/var</c> is a link to <c>/private/var</c>, so the canonical answer starts
 /// <c>/private/var</c>. REGRESSION (publish v0.15.0, macOS): eight readlink/realpath tests expected the typed
-/// spelling while the commands answered correctly. Guard: <c>Core.Tests/PhysicalPathGuardTests</c>.
+/// spelling while the commands answered correctly. Guard: <c>Core.Tests/PhysicalPathGuardTests</c>. The product copy is
+/// <c>PsBash.Core.PhysicalPath</c> (this assembly takes no repo references by design); keep the two in step.
 /// </summary>
 public static class PhysicalPath
 {

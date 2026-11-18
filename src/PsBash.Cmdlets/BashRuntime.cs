@@ -456,6 +456,29 @@ public static class BashRuntime
     }
 
     /// <summary>
+    /// The directory a relative <c>cd</c> target resolves against, and the <c>$OLDPWD</c> it leaves: bash's logical
+    /// <c>$PWD</c> — the path <c>cd</c> went by, links kept (<c>$global:__PsBashCwd</c>) — while it still names the
+    /// process cwd, else the process cwd. REGRESSION (macOS): the process cwd is getcwd(3), physical, so after
+    /// <c>cd /var/folders/x</c> a <c>cd sub</c> landed in <c>/private/var/folders/x/sub</c> and <c>pwd</c> printed that.
+    /// </summary>
+    public static string CdBase(SessionState? state)
+        => CdBase(state?.PSVariable.GetValue("global:__PsBashCwd") as string, Environment.CurrentDirectory);
+
+    /// <summary>The decision of <see cref="CdBase(SessionState?)"/> on given logical and physical directories.</summary>
+    public static string CdBase(string? logical, string physical)
+    {
+        if (string.IsNullOrEmpty(logical) || !Path.IsPathRooted(logical)) return physical;
+        var cmp = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        if (string.Equals(logical.TrimEnd('/', '\\'), physical.TrimEnd('/', '\\'), cmp)) return logical;
+        try
+        {
+            return Directory.Exists(logical)
+                   && string.Equals(PsBash.Core.PhysicalPath.Of(logical), PsBash.Core.PhysicalPath.Of(physical), cmp) ? logical : physical;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException) { return physical; }
+    }
+
+    /// <summary>
     /// bash's logical <c>cd</c> checks each directory it walks through before applying a <c>..</c>:
     /// <c>cd nonexistent/..</c> fails, whereas <c>GetFullPath</c> collapses it to the current directory. True when the
     /// path has no <c>..</c> segment or every directory component before a <c>..</c> exists.

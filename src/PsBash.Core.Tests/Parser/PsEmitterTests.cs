@@ -2649,7 +2649,7 @@ public class PsEmitterTests
         // Every successful cd must stash the dir it leaves into $OLDPWD so `cd -` can return.
         var result = PsEmitter.Transpile("cd /tmp");
 
-        Assert.Contains("$env:OLDPWD = [PsBash.Cmdlets.BashRuntime]::ToShellPath([string]([System.Environment]::CurrentDirectory))", result);
+        Assert.Contains("$env:OLDPWD = [PsBash.Cmdlets.BashRuntime]::ToShellPath([string]($__psbash_cd_base))", result);
     }
 
     [Fact]

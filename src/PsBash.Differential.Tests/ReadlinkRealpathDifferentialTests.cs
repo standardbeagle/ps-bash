@@ -11,14 +11,16 @@ namespace PsBash.Differential.Tests;
 /// nothing, status 1), <c>readlink -m</c> was <c>-f</c>, <c>realpath nosuch/x</c> printed a path, and options other
 /// than <c>-e</c> were skipped. Fixed at the class: one gnulib-ported walk (<c>CanonicalPath</c>) behind both, GNU name
 /// quoting in messages (<c>GnuQuote</c>), and the shared argv parser. Links are covered by the cmdlet and unit tests:
-/// Windows hosts may not create them.
+/// Windows hosts may not create them. The canonical answers are physical, so <c>D</c> is <c>pwd -P</c>: on macOS the
+/// temp dir is reached as <c>/var/…</c> but is <c>/private/var/…</c> (REGRESSION: a cassette recorded where /tmp is no link
+/// failed there while the commands were right).
 /// </summary>
 public class ReadlinkRealpathDifferentialTests
 {
     [SkippableFact]
     public Task EveryMode_EveryOperandShape()
         => AssertOracle.EqualAsync(
-            "d=$(mktemp -d); cd \"$d\" || exit; d=$(pwd); mkdir sub; touch f\n"
+            "d=$(mktemp -d); cd \"$d\" || exit; d=$(pwd -P); mkdir sub; touch f\n"
             + "for c in 'readlink' 'readlink -f' 'readlink -e' 'readlink -m' 'readlink -fv' 'readlink -ev' 'readlink -mv' "
             + "'readlink -v' 'realpath' 'realpath -e' 'realpath -m' 'realpath -q' 'realpath -s' 'realpath -L' 'realpath -sm'; do\n"
             + "  echo \"## $c\"\n"
@@ -31,7 +33,7 @@ public class ReadlinkRealpathDifferentialTests
     [SkippableFact]
     public Task Options_OrderOutputFormsAndUsageErrors()
         => AssertOracle.EqualAsync(
-            "d=$(mktemp -d); cd \"$d\" || exit; d=$(pwd); mkdir sub; touch f\n"
+            "d=$(mktemp -d); cd \"$d\" || exit; d=$(pwd -P); mkdir sub; touch f\n"
             + "readlink -n f sub 2>&1; echo \"rc=$?\"\n"
             + "readlink -fn f | sed \"s|$d|D|g\"; echo \"|rc=$?\"\n"
             + "readlink -fz f sub | tr '\\0' '\\n' | sed \"s|$d|D|g\"; echo \"|\"\n"

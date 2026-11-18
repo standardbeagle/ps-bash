@@ -12652,11 +12652,11 @@ public static partial class PsEmitter
         // unix drive paths) — an expanded `cd $d` (d=/tmp) must reach the directory `cd /tmp` and
         // every cmdlet resolve, not GetFullPath's `C:\tmp`.
         var resolveAndAct =
-            "$__psbash_cd_resolved = [System.IO.Path]::GetFullPath(" + PsBuild.RuntimeMapPath("[string]$__psbash_cd_target") + ", [System.Environment]::CurrentDirectory); " +
-            "if ([System.IO.Directory]::Exists($__psbash_cd_resolved) -and [PsBash.Cmdlets.BashRuntime]::CdPathWalkExists(" + PsBuild.RuntimeMapPath("[string]$__psbash_cd_target") + ", [System.Environment]::CurrentDirectory)) { " +
+            "$__psbash_cd_resolved = [System.IO.Path]::GetFullPath(" + PsBuild.RuntimeMapPath("[string]$__psbash_cd_target") + ", $__psbash_cd_base); " +
+            "if ([System.IO.Directory]::Exists($__psbash_cd_resolved) -and [PsBash.Cmdlets.BashRuntime]::CdPathWalkExists(" + PsBuild.RuntimeMapPath("[string]$__psbash_cd_target") + ", $__psbash_cd_base)) { " +
             // $PWD / $OLDPWD and the echoed directory are the script-visible shell form (C:/x, docs/specs/paths.md);
             // the process cwd and the PowerShell location stay native.
-            "$env:OLDPWD = " + PsBuild.RuntimeToShellPath("[System.Environment]::CurrentDirectory") + "; " +
+            "$env:OLDPWD = " + PsBuild.RuntimeToShellPath("$__psbash_cd_base") + "; " +
             "$global:__PsBashCwd = $__psbash_cd_resolved; " +
             "[System.Environment]::CurrentDirectory = $__psbash_cd_resolved; " +
             "$env:PWD = " + PsBuild.RuntimeToShellPath("$__psbash_cd_resolved") + "; " +
@@ -12665,8 +12665,9 @@ public static partial class PsEmitter
             "$global:LASTEXITCODE = 0 " +
             "} else { Write-Error -Message (\"cd: \" + $__psbash_cd_target + \": No such file or directory\") -ErrorAction Continue; $global:LASTEXITCODE = 1 }";
 
-        var prefix = "$__psbash_cd_target = " + targetExpr + "; " + (useCdPath
-            ? "$__psbash_cd_via = [PsBash.Cmdlets.BashRuntime]::CdPathLookup([string]$__psbash_cd_target, [System.Environment]::CurrentDirectory); "
+        // Relative targets resolve against bash's logical $PWD (BashRuntime.CdBase), not getcwd: on macOS that is physical.
+        var prefix = "$__psbash_cd_target = " + targetExpr + "; $__psbash_cd_base = [PsBash.Cmdlets.BashRuntime]::CdBase($ExecutionContext.SessionState); " + (useCdPath
+            ? "$__psbash_cd_via = [PsBash.Cmdlets.BashRuntime]::CdPathLookup([string]$__psbash_cd_target, $__psbash_cd_base); "
               + "if ($__psbash_cd_via) { $__psbash_cd_target = $__psbash_cd_via }; "
             : "");
         if (isDash)
