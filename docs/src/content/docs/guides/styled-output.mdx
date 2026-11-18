@@ -71,12 +71,12 @@ Twelve sheets ship embedded in the cmdlet. Name them with `-Style <name>`:
 | Sheet | For | What it does |
 |-------|-----|--------------|
 | `default` | anything | Generic semantic palette: `.error .warn .ok .info .muted .busy …` |
-| `ls` | `ls` output | `DirectoryInfo` bright-blue+bold, `.dir .exe .symlink .hidden .archive` |
+| `ls` | `ls` output | `DirectoryInfo` blue+bold, `.dir .exe .symlink .hidden .archive` |
 | `ps` | `ps` output | `.busy` red+bold, `.stuck` yellow+strikethrough, `.idle` gray |
 | `table` | grid structure | header bold+underline, `.primary` bold, `.num` right-aligned |
 | `list` | property lists | `.property-name` cyan+bold |
 | `net` | `ping` / `traceroute` | `.ok` under 80ms green, `.slow` under 200ms yellow, `.high` red+bold, `.timeout` strikethrough |
-| `git` | `psgit` status, log, branch, diff | `.staged` green, `.modified` yellow, `.untracked` gray, `.conflict` red+bold, `.current` branch green+bold |
+| `git` | `psgit` status, log, branch, diff | `.staged` bright green, `.modified` bright yellow, `.untracked` gray, `.conflict` bright red+bold, `.current` branch bright green+bold |
 | `av` | `psav` media + artifacts | `.video` cyan, `.audio` magenta, `.image` green; `.ok` green, `.failed` red+bold, `.planned` gray italic |
 | `fs` | files (interactive) | adds `open`/`cd` buttons + size/dates/attrs/acl expansion |
 | `procsvc` | processes (interactive) | adds `stop`/`restart` buttons + path/memory/threads expansion |
@@ -89,7 +89,7 @@ Strata implements a focused, terminal-meaningful subset of CSS:
 
 ```css
 /* text (inherited) */
-color: red | brightcyan | gray | #88ccff | transparent;   /* 16 ANSI names (brightred, not bright-red) + hex */
+color: red | brightcyan | gray | #88ccff | transparent;   /* 16 ANSI names, no hyphen (brightred) + hex */
 font-weight: bold;
 font-style: italic;
 text-decoration: underline | strikethrough | none;

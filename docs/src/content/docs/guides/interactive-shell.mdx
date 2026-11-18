@@ -215,9 +215,9 @@ designed but not yet implemented.
 the directory you're leaving in `$OLDPWD` on **every** successful `cd`. On Windows both print as
 forward-slash paths (`C:/Users/me/src`).
 
-Like bash, `cd` resolves a relative path, `CDPATH` and `cd -` against the logical `$PWD`, the path
-you used to get there, not the physical directory behind a symlink. `pwd -P` prints the physical
-path with every link resolved.
+Like bash, `cd` resolves a relative path, `CDPATH` and `cd -` against the logical `$PWD`, which is
+the path you used to get there with its symlinks left in place. `pwd -P` prints the physical path
+with every link resolved.
 
 | Command | Behavior |
 |---------|----------|

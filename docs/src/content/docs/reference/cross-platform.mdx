@@ -1,6 +1,6 @@
 ---
 title: Cross-Platform Guide
-description: "How ps-bash behaves on Linux, macOS, and Windows — supported targets, paths, file permissions, process listing, signals, symlinks, and CI testing."
+description: "How ps-bash behaves on Linux, macOS, and Windows: supported targets, paths, file permissions, process listing, signals, symlinks, and CI testing."
 ---
 
 import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
@@ -20,8 +20,8 @@ but no release archive is built for them.
 
 ### Where OS facts live
 
-Every OS- or architecture-dependent fact lives in one place, `src/PsBash.Transpiler/Platform/`.
-A command asks that code instead of writing the fact itself:
+OS- and architecture-dependent facts are defined in one place, `src/PsBash.Transpiler/Platform/`.
+Commands call these primitives instead of hard-coding a value:
 
 | Primitive | Owns |
 |-----------|------|
@@ -67,7 +67,7 @@ every platform and are never opened as files.
 ### Logical and physical directory
 
 `cd` follows bash: it resolves a relative target, `CDPATH` and `cd -` against the logical `$PWD`,
-the path you typed, not the physical directory. On macOS, `/var` and `/tmp` are links into
+which is the path you typed with its symlinks left in place. On macOS, `/var` and `/tmp` are links into
 `/private`. After `cd "$(mktemp -d)"; cd sub`, `pwd` prints the `/var/...` path, as bash does.
 
 `pwd -P` resolves every link and prints the physical path. `readlink -f` and `realpath` follow
@@ -179,8 +179,9 @@ SIGUSR2 is caught on every platform.
 ## System tools
 
 On Linux and macOS, ps-bash calls the OS's own `stat`, `id`, `ps`, `sysctl` and `getent` when .NET
-cannot answer. `SystemTools` finds them in `/usr/bin`, `/bin`, `/usr/sbin` and `/sbin`, never
-through `$PATH` first, so a script's `stat` function or a `stat` alias cannot be called by mistake.
+cannot answer. `SystemTools` looks in `/usr/bin`, `/bin`, `/usr/sbin` and `/sbin` before `$PATH`,
+so a different `stat` earlier on `$PATH` (Homebrew's GNU coreutils on macOS, for example) is not
+picked up with the wrong flag dialect.
 
 Windows has none of these tools. The data comes from .NET and CIM.
 
@@ -215,7 +216,8 @@ A hard link needs no elevation, but the target must be a file on the same NTFS v
 ## CI matrix
 
 `.github/workflows/ci.yml` runs the Pester suite on `windows-latest`, `ubuntu-latest` and
-`macos-latest` for every push and pull request to `main`. The release workflow runs Pester and the
-Core, Cmdlets and Host xUnit suites on all three OSes, and publishes nothing unless they pass. The
-macOS Cmdlets suite is advisory for now. Tests that depend on the OS use Pester's `-Skip:` with
+`macos-latest` on pushes and pull requests to `main` (Markdown-only changes are skipped). The
+release workflow, `publish.yml`, runs Pester and the Core, Cmdlets, Host and Differential xUnit
+suites on all three OSes, and publishes nothing unless they pass. The macOS Cmdlets suite is
+advisory for now. Tests that depend on the OS use Pester's `-Skip:` with
 `$IsWindows`, `$IsMacOS` and `$IsLinux`.

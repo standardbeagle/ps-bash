@@ -19,11 +19,12 @@ around ps-bash, at the OS level.
 
 ## What ps-bash does
 
-### A child sees exported variables only
+### Nested shells and merged-stderr programs see exported variables only
 
-As in bash, a program started from a script gets only the variables that were inherited or
-exported (`export`, `declare -x`, `set -a`, `NAME=v cmd`). A plain `TOKEN=x` assignment stays in
-the shell:
+A nested shell (`sh -c`, `bash script.sh`) and a program started with `2>&1`, `&>` or `|&` get
+only the variables that were inherited or exported (`export`, `declare -x`, `set -a`,
+`NAME=v cmd`). `env`, `printenv` and `compgen -e` list the same set. A plain `TOKEN=x`
+assignment is not passed to them:
 
 ```bash
 TOKEN=secret
@@ -31,18 +32,21 @@ sh -c 'echo "[$TOKEN]"'     # []
 env | grep -c '^TOKEN='     # 0
 ```
 
-One gap remains: a native program that PowerShell starts directly (a plain `prog args` without
-`2>&1`, and any `.cmd` or `.bat`) inherits the whole process environment, unexported variables
-included. Programs started with a stderr merge, and every nested shell, are not affected.
+<Aside type="caution" title="A plain prog args still inherits every variable">
+A program started without a stderr merge (`prog args`, also through `env`, `command`, `xargs`,
+`time`, `$( )` or `find -exec`) and any `.cmd` or `.bat` file inherit every shell variable,
+unexported ones included. Do not rely on a missing `export` to keep a secret from a program.
+</Aside>
+
 Variables the shell inherited at startup are exported, so a secret in the agent's own
 environment reaches every child, as it would in bash.
 
-### PowerShell aliases do nothing
+### PowerShell aliases are not resolved
 
-A ps-bash runspace keeps only its own `Invoke-Bash*` aliases. Words such as `iex`, `r`, `write`,
-`start`, `del` or `%` are not PowerShell aliases there: each resolves to a shell function, a
-program on `PATH`, or "command not found" (exit 127), as in bash. So `iex '…'` does not evaluate
-PowerShell.
+A ps-bash runspace keeps only its own aliases, the ones that name an `Invoke-Bash*` command.
+`gci`, `iex`, `r`, `write`, `start` and `del` are ordinary command words there: each runs a shell
+function or a program on `PATH` with that name, or fails with "command not found" (exit 127), as
+in bash. `iex '…'` does not evaluate PowerShell. Full cmdlet names still run (see below).
 
 ### rm refuses the root and your home directory
 
@@ -59,8 +63,9 @@ protected. `rm -rf ~/*` deletes everything in your home directory.
 | `PSBASH_HOST_MAX_MB` | Stop a command whose host passes the memory limit (exit 137) |
 | `PSBASH_PER_INVOCATION=1` | Give each command its own host that exits with it, so nothing stays running |
 
-The host also survives hostile input: deep nesting and huge brace expansions are parse errors, and
-a command that ignores Ctrl+C is ended with its host. See
+Script text cannot crash the shared host either: nesting deeper than 1000 levels and a brace
+expansion of more than 1,000,000 words are parse errors, and a command that ignores Ctrl+C is
+ended together with its host. See
 [The Host Daemon](/ps-bash/reference/host-daemon/#a-command-cannot-take-the-host-down).
 
 ### AI assist is off by default
@@ -77,7 +82,7 @@ you set `PSBASH_AI_ENABLE=1`, and `PSBASH_AI_DISABLE=1` overrides that. See
   names a PowerShell cmdlet, such as `Remove-Item` or `Invoke-Expression`, runs that cmdlet.
 - **No network control.** `curl`, `wget` and any native program reach the network as the user can.
 - **No filtering of inherited secrets.** Variables in the environment ps-bash started with are
-  exported to every child.
+  exported to every child, and a plain `prog args` also receives unexported shell variables.
 - **No isolation of in-process PowerShell.** A `.ps1` file, or a cmdlet called by name, runs with
   the host's full rights and is outside the host's crash guards.
 
@@ -98,6 +103,6 @@ you set `PSBASH_AI_ENABLE=1`, and `PSBASH_AI_DISABLE=1` overrides that. See
 
 ## See also
 
-- [The Host Daemon](/ps-bash/reference/host-daemon/) — host lifecycle, timeouts and memory limits.
-- [Cross-Platform Guide](/ps-bash/reference/cross-platform/) — paths, permissions and processes per OS.
-- [Cookbook](/ps-bash/guides/cookbook/) — common pipeline recipes.
+- [The Host Daemon](/ps-bash/reference/host-daemon/): host lifecycle, timeouts and memory limits.
+- [Cross-Platform Guide](/ps-bash/reference/cross-platform/): paths, permissions and processes per OS.
+- [Cookbook](/ps-bash/guides/cookbook/): common pipeline recipes.

@@ -32,7 +32,7 @@ Bash variables are the host's process environment and the working directory is i
 
 **Overflow hosts.** If every slot stays busy for `PSBASH_EXEC_OVERFLOW_MS` (2000 ms), the command runs on a private host that exits when the command ends. A session may have `PSBASH_EXEC_OVERFLOW_MAX` (2) overflow hosts at once; a launcher that finds none free keeps trying the slots. A nested launcher that finds every slot busy always gets a private host.
 
-At most, a session runs 7 hosts (the main host plus 6 slots) and up to `PSBASH_EXEC_OVERFLOW_MAX` overflow hosts. Each host uses about 70–150 MB. A nested shell on a warm slot costs about a second.
+At most, a session runs 7 hosts (the main host plus 6 slots) and up to `PSBASH_EXEC_OVERFLOW_MAX` overflow hosts. `ps-bash host list` shows the memory each one uses. A nested shell on a warm slot costs about a second.
 
 ## When the host exits
 
@@ -48,18 +48,18 @@ At most, a session runs 7 hosts (the main host plus 6 slots) and up to `PSBASH_E
 The anchor rule means a host never outlives its session by more than a few seconds. Closing the terminal or ending the agent cleans up its host. A host named by `PSBASH_SESSION` or `PSBASH_IPC_ENDPOINT` has no anchor and exits only on idle.
 
 <Aside type="note" title="Seeing several ps-bash-host processes?">
-One host per open terminal or agent is expected, plus executor slots while commands run in parallel or nest. `ps-bash host list` shows each host's role (`main`, `slot`, `session`). Up to v0.11.5, an agent whose own process name wasn't on the anchor list could leave **one host per command**, each idling for 10 minutes ([#7](https://github.com/standardbeagle/ps-bash/issues/7)). From v0.11.6 each of those hosts exits a few seconds after its command. To get a single warm host for the whole agent session, set `PSBASH_SESSION` (below).
+One host per open terminal or agent is expected, plus executor slots while commands run in parallel or nest. `ps-bash host list` shows each host's role (`main`, `slot`, `session`, or `unregistered` for a host no session file names). Up to v0.11.5, an agent whose own process name wasn't on the anchor list could leave **one host per command**, each idling for 10 minutes ([#7](https://github.com/standardbeagle/ps-bash/issues/7)). From v0.11.6 each of those hosts exits a few seconds after its command. To get a single warm host for the whole agent session, set `PSBASH_SESSION` (below).
 </Aside>
 
 ## A command cannot take the host down
 
-A host is shared by every command in its session, so no script text may crash it or wedge it.
+A host is shared by every command in its session, so script text must not be able to crash it or hang it.
 
 - **Deep nesting is a parse error.** Recursion in the parser is capped at 1000 levels. Brace expansion that would produce more than 1,000,000 words is a parse error. Either is reported as `ps-bash: parse error:` with exit 2.
-- **Regex matches time out** after 15 s.
-- **A command that ignores Ctrl+C poisons the host.** If a cancelled command has not stopped `PSBASH_STUCK_GRACE_SECS` (20 s) later, the shared host logs the reason and exits with code 70. The next command starts a fresh host.
+- **Regex matches time out** after 15 s (`PSBASH_REGEX_TIMEOUT_SECS`).
+- **A command that ignores Ctrl+C ends its host.** If a cancelled command has not stopped `PSBASH_STUCK_GRACE_SECS` (20 s) later, the shared host logs the reason and exits with code 70. The next command starts a fresh host.
 - **Memory is bounded.** When a host's memory passes `PSBASH_HOST_MAX_MB`, the running command is stopped with exit 137 and `ps-bash: command stopped: the host exceeded its memory limit`.
-- **`kill $$` ends the command, not the host.**
+- **`kill $$` ends only the command.** The host keeps running.
 - **The launcher never prints a stack trace.** A timeout exits 124. A host failure prints one `ps-bash:` line and exits 125.
 - **Every host failure is logged** to `~/.psbash/host.log` (`PSBASH_HOST_LOG` overrides; rotated at 4 MB). Each host writes a `start` line and an `exit code=N reason=…` line.
 
@@ -69,7 +69,7 @@ PowerShell code run in-process, such as `Invoke-Expression` in a `.ps1`, is outs
 
 `cmd &` runs in-process by default: the job gets a pre-opened runspace in the same host and its own copy of the shell's variables, taken at the `&`. Its output appears live, in order. In `-c` mode, jobs still running when the command ends are killed with it.
 
-`PSBASH_BG_MODE=process` runs each job in its own host process instead. It is slower to start (about 3.5 s for `{ :; } & wait` cold, against under 1 s in-process) and is opt-in.
+`PSBASH_BG_MODE=process` runs each job in its own host process instead. A job is slower to start in this mode, and it is opt-in.
 
 ## Environment variables
 
@@ -88,6 +88,7 @@ Set these in the environment of the shell or agent that runs `ps-bash`. For an a
 | `PSBASH_EXEC_OVERFLOW_MS` | `2000` | How long every slot must stay busy before a command gets an overflow host. |
 | `PSBASH_EXEC_OVERFLOW_MAX` | `2` | Overflow hosts a session may run at once. `0` turns overflow off: a launcher waits for a slot. |
 | `PSBASH_STUCK_GRACE_SECS` | `20` | Seconds a cancelled command may take to stop before the shared host exits. |
+| `PSBASH_REGEX_TIMEOUT_SECS` | `15` | Time limit for one regex match. `0` disables it. |
 | `PSBASH_HOST_MAX_MB` | a quarter of available memory, at most 2048 | Memory limit per host. `0` disables it. |
 | `PSBASH_HOST_LOG` | `~/.psbash/host.log` | Host log file. |
 | `PSBASH_BG_MODE` | *(in-process)* | `process` runs each background job in its own host process. |
