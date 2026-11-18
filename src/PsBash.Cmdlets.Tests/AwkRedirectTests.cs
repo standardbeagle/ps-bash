@@ -346,7 +346,7 @@ public class AwkRedirectTests : IClassFixture<SharedPwshFixture>, IDisposable
     {
         // 200k lines (> the 64K pipe buffer): the command has consumed data before awk finishes, and every
         // record arrives in order exactly once.
-        var r = AwkR("BEGIN{ for (i = 1; i <= 200000; i++) print i | \"wc -l\" }");
+        var r = AwkR("BEGIN{ for (i = 1; i <= 200000; i++) print i | \"wc -l\" }").AssertSuccess();
         Assert.Equal(new[] { "200000" }, r.Lines.Select(l => l.Trim()).ToArray());
     }
 

@@ -24,6 +24,7 @@ public class InvokeBashRealpathCommandTests : IDisposable, IClassFixture<SharedP
         _fixture = fixture;
         _tmpDir = Path.Combine(Path.GetTempPath(), $"psb-realpath-{Guid.NewGuid():N}".Substring(0, 25));
         Directory.CreateDirectory(_tmpDir);
+        _tmpDir = PsBash.Testing.PhysicalPath.Of(_tmpDir); // the answer is canonical (macOS: /var -> /private/var)
         _existingFile = Path.Combine(_tmpDir, "exists.txt");
         File.WriteAllText(_existingFile, "hi\n");
     }

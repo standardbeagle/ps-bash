@@ -128,21 +128,5 @@ public class InvokeBashCdCommandTests : IClassFixture<SharedPwshFixture>, IDispo
         Assert.Equal(Physical(expected), Physical(actual.ProcessCwd), ignoreCase: true);
     }
 
-    /// <summary>realpath: resolve every symlinked path component (not just the leaf).</summary>
-    private static string Physical(string path)
-    {
-        var root = Path.GetPathRoot(path) ?? "";
-        var current = root;
-        foreach (var segment in path[root.Length..].Split(new[] { '/', '\\' }, StringSplitOptions.RemoveEmptyEntries))
-        {
-            current = Path.Combine(current, segment);
-            try
-            {
-                if (new DirectoryInfo(current).ResolveLinkTarget(returnFinalTarget: true) is { } target)
-                    current = target.FullName;
-            }
-            catch (IOException) { /* not a link / unreadable: keep the component */ }
-        }
-        return current.TrimEnd(Path.DirectorySeparatorChar);
-    }
+    private static string Physical(string path) => PsBash.Testing.PhysicalPath.Of(path);
 }

@@ -19,6 +19,7 @@ public class InvokeBashReadlinkCommandTests : IDisposable, IClassFixture<SharedP
         _fixture = fixture;
         _tmpDir = Path.Combine(Path.GetTempPath(), $"psb-readlink-{Guid.NewGuid():N}".Substring(0, 25));
         Directory.CreateDirectory(_tmpDir);
+        _tmpDir = PsBash.Testing.PhysicalPath.Of(_tmpDir); // the answer is canonical (macOS: /var -> /private/var)
         _regularFile = Path.Combine(_tmpDir, "regular.txt");
         File.WriteAllText(_regularFile, "hi\n");
     }
