@@ -201,7 +201,7 @@ jobs:
       matrix:
         os: [windows-latest, ubuntu-latest, macos-latest]
       # Don't let one OS cancel the others — the publish gate needs every leg's
-      # blocking steps (Pester + Core.Tests + Cmdlets.Tests) to report.
+      # blocking steps (Pester, Core/Cmdlets/Host/Differential, Shell safety) to report.
       fail-fast: false
     runs-on: ${{ matrix.os }}
     # Backstop only. Each non-blocking suite carries its own step-level
@@ -294,6 +294,7 @@ jobs:
       # every run; alone they pass (single-test.yml). Windows and Linux stay blocking. Make it blocking again
       # once that crash is fixed.
       - name: Run PsBash.Cmdlets.Tests
+        id: cmdlets-tests
         continue-on-error: ${{ matrix.os == 'macos-latest' }}
         timeout-minutes: 10
         shell: bash
@@ -410,7 +411,8 @@ jobs:
           fi
 
       - name: Upload test artifacts
-        if: failure()
+        # failure() misses the advisory macOS Cmdlets step (continue-on-error keeps the job green).
+        if: failure() || steps.cmdlets-tests.outcome == 'failure'
         uses: actions/upload-artifact@v4
         with:
           name: test-results-${{ matrix.os }}

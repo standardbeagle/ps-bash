@@ -93,7 +93,9 @@ for trx in "${TRX_FILES[@]}"; do
     # Extract NotExecuted results with their messages using python (available everywhere)
     # Falls back to grep-based extraction if python3 not available
     if command -v python3 >/dev/null 2>&1; then
-        mapfile -t SKIP_REASONS < <(python3 - "$trx" <<'PYEOF'
+        SKIP_REASONS=()
+        # A read loop, not mapfile: macOS ships bash 3.2, which has no mapfile (exit 127).
+        while IFS= read -r line; do SKIP_REASONS+=("$line"); done < <(python3 - "$trx" <<'PYEOF'
 import sys, xml.etree.ElementTree as ET
 
 trx_path = sys.argv[1]
@@ -120,11 +122,13 @@ PYEOF
         )
     else
         # Fallback: grep for NotExecuted blocks (POSIX grep, no -P)
-        mapfile -t SKIP_REASONS < <(grep 'outcome="NotExecuted"' "$trx" | \
+        SKIP_REASONS=()
+        while IFS= read -r line; do SKIP_REASONS+=("$line"); done < <(grep 'outcome="NotExecuted"' "$trx" | \
             sed 's/.*testName="\([^"]*\)".*/\1|||unknown reason/' 2>/dev/null || true)
     fi
 
-    for entry in "${SKIP_REASONS[@]}"; do
+    # ${a[@]+...}: bash 3.2 under set -u calls an empty array unbound.
+    for entry in ${SKIP_REASONS[@]+"${SKIP_REASONS[@]}"}; do
         [[ -z "$entry" ]] && continue
         test_name="${entry%%|||*}"
         reason="${entry##*|||}"
