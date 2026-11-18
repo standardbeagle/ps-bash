@@ -22,6 +22,7 @@ Nav starts at /CODE_MAP.md. Keep this index complete — a guard test fails on a
 - [frecency-jump.md](frecency-jump.md) — Frecency Directory Jump (zoxide-style `z` / `zi`)
 - [history-store-interface.md](history-store-interface.md) — IHistoryStore Interface Specification
 - [host-lifecycle-contract.md](host-lifecycle-contract.md) — Host Lifecycle Metadata and Ownership Contract
+- [platform-dependencies.md](platform-dependencies.md) — Platform Dependencies (signals, struct stat, system tools, process info, ioctl: one home)
 - [spec-suite.md](spec-suite.md) — fast bash-conformance corpus + runner (DESIGN; in-host execution, executor-slot parallelism, absorbs overlapping tests)
 - [spec-gaps.md](spec-gaps.md) — known bash divergences (XFAIL cases) in the spec corpus, grouped by area
 - [xfail-triage.md](xfail-triage.md) — XFAIL backlog by agent-relevance tier (agent-facing scripting first, interactive-only last)
@@ -50,19 +51,4 @@ Nav starts at /CODE_MAP.md. Keep this index complete — a guard test fails on a
 
 ## Platform dependencies
 
-ps-bash ships win-x64, linux-x64/arm64 (glibc + musl) and osx-arm64. Every OS/arch-dependent constant, struct
-layout and system tool path lives in ONE place: `src/PsBash.Transpiler/Platform/` (namespace `PsBash.Core.Platform`;
-the Transpiler assembly is referenced by Cmdlets, Core, Host and Shell).
-
-- `PosixStat` — libc `stat`/`lstat`/`fstat` and the `struct stat` layout per target (Linux x86_64, Linux arm64 =
-  `asm-generic`, Darwin 64-bit-inode incl. `$INODE64` symbols on x86_64; glibc < 2.33 via `__xstat`). The kernel
-  fills a byte buffer that the pure `TryDecode(span, layout)` reads, so each layout is unit-tested on any OS.
-- `SystemTools` — the OS's own `stat`/`id`/`ps`/`sysctl` (`Resolve(name)`: `/usr/bin`, `/bin` (Alpine/busybox),
-  `/usr/sbin`, `/sbin`; never PATH-first, since callers pick GNU vs BSD flags by OS), `PosixShell` (`/bin/sh`), the
-  host-bash candidates. psm1: `[PsBash.Cmdlets.BashRuntime]::SystemToolPath('stat')`.
-- Runtime facts come from .NET, never a literal: page size = `Environment.SystemPageSize` (16K/64K arm64 kernels).
-
-Rule: a new platform fact goes into `Platform/`; a call site asks it. Guards (`Core.Tests/PlatformDependencyGuardTests`):
-no `struct stat` field / stat-family P/Invoke outside `Platform/`; no `"/usr/bin/…"`, `"/bin/…"`, `"/usr/sbin/…"`,
-`"/usr/local/bin/…"` literal in product C# or psm1 outside `Platform/` (allowlist, each entry with its reason).
-Layouts: `Core.Tests/PosixStatTests` (hand-built buffers per layout).
+Every OS/arch-dependent fact lives in `src/PsBash.Transpiler/Platform/`: see [platform-dependencies.md](platform-dependencies.md).

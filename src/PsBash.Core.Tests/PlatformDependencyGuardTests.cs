@@ -129,9 +129,6 @@ public class PlatformDependencyGuardTests
     {
         ["PsBash.Cmdlets/FileMagic.cs"] = (null,
             "`file` names the interpreter of a #! line by matching its path as TEXT; it never starts it"),
-        ["PsBash.Transpiler/Processes/JobProcess.Posix.cs"] = (["\"/bin/sh\""],
-            "the POSIX shell for the chdir trampoline; owned by the process-spawn work, which moves it to "
-            + "SystemTools.PosixShell when it next touches the file"),
     };
 
     internal static List<string> ToolPathOffenders(IEnumerable<(string Rel, string Text)> cs, IEnumerable<(string Rel, string Text)> ps)
@@ -184,9 +181,9 @@ public class PlatformDependencyGuardTests
             ("PsBash.Module/PsBash.psm1", "        $statOut = & /usr/bin/stat @statArgs 2>$null\n# & /usr/bin/stat in a comment\n$p = './bin/x'"),
         };
         var offenders = ToolPathOffenders(cs, ps);
-        Assert.Equal(5, offenders.Count);
+        Assert.Equal(6, offenders.Count);
         Assert.DoesNotContain(offenders, o => o.Contains("FileMagic", StringComparison.Ordinal));
-        Assert.DoesNotContain(offenders, o => o.Contains("chdirBySh", StringComparison.Ordinal));
+        Assert.Contains(offenders, o => o.Contains("chdirBySh", StringComparison.Ordinal));  // no allowance: SystemTools.PosixShell
     }
 
     // ---- SystemTools itself ----

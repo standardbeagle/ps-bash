@@ -57,7 +57,7 @@ public sealed partial class JobProcess
     {
         bool chdir = !string.IsNullOrEmpty(spec.WorkingDirectory);
         bool chdirBySh = chdir && !HasAddChdir;
-        string program = chdirBySh ? "/bin/sh" : spec.FileName;
+        string program = chdirBySh ? SystemTools.PosixShell : spec.FileName;
         var argv = new List<IntPtr> { Utf8(program) };
         if (chdirBySh)
         {

@@ -41,7 +41,6 @@ Tests: `*.Tests`, `Differential.Tests` (bash oracle), `Canary.Tests`, `Escalatio
 - **Host startup / autoload**: `SdkRunspace.cs` + `SdkRunspaceSetup.ps1`.
 - **Host must survive input** (recursion bound, host log, stuck-command poison): `Parser/NestingGuard.cs` (every recursive descent enters it), `Host/Server/HostLog.cs`, `Host/Runtime/StuckCommandWatchdog.cs`. Spec: `host-lifecycle-contract.md` §No input may take the host down.
 - **Child process + tree (spawn/kill/suspend/identity, Job Object / pgroup)**: `Transpiler/Processes/JobProcess*.cs`; cmdlet children reach it via `Cmdlets/ChildStdio.cs` (`SpawnedChild.KillTree`). Spec: `background-jobs.md` §6, `stdio-messaging.md` §4.6.
-- **Process info / terminal ioctl** (parent pid, zombie, pgroup members, uid, umask; winsize; termios offsets): `Transpiler/Platform/{ProcessInfo,TerminalIoctl,TermiosLayout}.cs` — Linux /proc, macOS libproc, Windows NtQuery; only `ioctl` decl (guard `PlatformProbeGuardTests`). Spec `background-jobs.md` §6.1a, `pty.md` §8.2.
 - **Background job (`cmd &`) in its own host process** (opt-in `PSBASH_BG_MODE=process`): `Host/Runtime/BashJobProcess.cs` + `JobHostSpares.cs`, state copy `Cmdlets/BashStateSnapshot.cs`, `kill` routing `Transpiler/BackgroundJobTable.cs`. Spec: `background-jobs.md` §11.
 - **Live job output / output channels + credit**: `Transpiler/Stdio/OutputMux.cs` (attached in `SdkWorker.RunCommand`), live-job marking `Parser/PsEmitter.LiveJobs.cs`, `Cmdlets/BashJobOutput.cs`. Spec: `stdio-messaging.md`, `background-jobs.md` §12.
 - **Daemon / IPC / pool / nesting / spawn lock**: `IpcWorker.cs`, `Ipc/*` (`WindowsHostSpawn.cs` = no handle inheritance, `HostSpawnLock.cs`), `WorkerPool.cs`; daemon ends with its session = `Host/Server/SessionAnchorWatcher.cs`. Spec: `host-lifecycle-contract.md`.
@@ -53,7 +52,7 @@ Tests: `*.Tests`, `Differential.Tests` (bash oracle), `Canary.Tests`, `Escalatio
 - **Device names** (`/dev/stdout`, `/dev/null`, `/dev/fd/N`, …): `Transpiler/DevicePath.cs` `Classify` is the only list; choke points `RedirectFileWriter.OpenFile` / `BashFileSystem.OpenRead` → `Cmdlets/DeviceStreams.cs`, never a file (guards `DevicePathGuardTests`, `DeviceChokePointTests`). Spec `paths.md` §Device names.
 - **Canonical name** (`readlink`, `realpath`; links followed per component): `Cmdlets/CanonicalPath.cs`; name quoting in messages `Cmdlets/GnuQuote.cs`. Spec `paths.md` §Canonical names.
 - **Bytes vs text**: `Transpiler/RawBytes.cs` at every text↔bytes boundary — never `Encoding.UTF8` on data; streams `Cmdlets/ByteRecordStreams.cs`.
-- **OS/arch-dependent facts** (`struct stat` layout + stat P/Invoke, system tool paths, `/bin/sh`): `Transpiler/Platform/` (`PosixStat`, `SystemTools`) only (guard `PlatformDependencyGuardTests`). Spec `docs/specs/README.md` §Platform dependencies.
+- **OS/arch-dependent facts** (signal numbers + wait status, `struct stat`, system tool paths/`/bin/sh`, parent pid/zombie/pgroup/uid/umask, winsize `ioctl`, termios): `Transpiler/Platform/` only (`OsSignals`, `PosixStat`, `SystemTools`, `ProcessInfo`, `TerminalIoctl`, `TermiosLayout`); guards `OsSignalsGuardTests`, `PlatformDependencyGuardTests`, `PlatformProbeGuardTests`. Spec `platform-dependencies.md`.
 - **Embedded DLL extraction**: `ModuleExtractor.cs` (list = `EmbedCmdletsDll` in `PsBash.Core.csproj`).
 - **Strata**: `src/Strata.props`.
 

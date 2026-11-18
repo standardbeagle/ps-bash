@@ -40,6 +40,7 @@ model in [runtime-functions.md](runtime-functions.md) "Raw bytes".
 | Unexported variable and a program started without a stderr merge (`x=1; prog`) | The program's environment has `x`. Nested shells (`sh -c`, `bash`), programs started with `2>&1` / `&>` / `\|&`, `env`, `printenv`, `compgen -e`, `declare -p` and every other child see exported variables only, as in bash | PowerShell's native-command processor hands a program the whole process environment, where every shell variable lives. See `environment-model.md` §7 |
 | `PATHEXT` and other Windows variables | Present in the environment, so a prefix listing (`compgen -v P`, `compgen -e P`) includes them | Windows defines them |
 | Raw byte in a variable on **Linux/macOS** | `x=$(printf '\xe9')` loses the byte (becomes U+FFFD) | Variables live in the process environment, and .NET re-encodes it on Unix; Windows keeps it |
+| `trap … USR1` and a SIGUSR1 from outside ps-bash on **macOS** | Not delivered to the trap (`kill -USR1` from a ps-bash shell is); SIGUSR2 is | The .NET runtime uses SIGUSR1 to suspend its own threads for every GC on macOS (no real-time signals there); catching it turned each GC into a trap delivery (exit 138). `docs/specs/platform-dependencies.md` §Signals |
 
 ## Architecture
 
