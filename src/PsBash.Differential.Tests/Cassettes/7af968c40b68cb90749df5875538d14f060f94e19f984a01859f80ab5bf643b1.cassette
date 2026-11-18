@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 52
+stdout-length: 5
+stderr-length: 0
+==== SCRIPT ====
+bash -c 'exec >&- 2>&-; sleep 3; exit 3'; echo rc=$?
+==== STDOUT ====
+rc=3
+
+==== STDERR ====
+
