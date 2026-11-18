@@ -19,7 +19,7 @@ This page compares it honestly against every alternative so you can decide what 
 
 | | **PsBash** | **Git Bash** | **Cygwin** | **WSL** | **Crescendo** |
 |---|---|---|---|---|---|
-| **Disk footprint** | **340 KB** (3 files) | ~300 MB (MSYS2 runtime) | 1-4 GB (base + packages) | 1-15 GB (full distro) | Module + your wrappers |
+| **Disk footprint** | One module, or one self-contained package | ~300 MB (MSYS2 runtime) | 1-4 GB (base + packages) | 1-15 GB (full distro) | Module + your wrappers |
 | **Install** | `Install-Module PsBash` | Git for Windows installer | Setup wizard, select packages | Windows feature + distro | Per-command XML authoring |
 | **Runtime** | PowerShell process | Separate mintty/bash process | Separate bash process | Linux VM (Hyper-V) | PowerShell process |
 | **Startup cost** | ~100 ms (module import) | ~200 ms (new process) | ~200 ms (new process) | 1-3 s (cold) / 200 ms (warm) | ~100 ms |
@@ -27,14 +27,17 @@ This page compares it honestly against every alternative so you can decide what 
 | **PowerShell integration** | Native -- objects flow into cmdlets | None -- separate shell | None -- separate shell | None -- separate OS | Native |
 | **Cross-platform** | Windows, Linux, macOS | Windows only | Windows only | Windows only | Windows, Linux, macOS |
 | **PATH conflicts** | None (AllScope aliases) | Shadows system PATH | Shadows system PATH | Filesystem boundary | None |
-| **Dependencies** | PowerShell 7+ | MSYS2, MinGW runtime | POSIX emulation DLLs | Hyper-V, Linux kernel | PowerShell 7+ |
+| **Dependencies** | PowerShell 7.4+ (module); none (standalone shell) | MSYS2, MinGW runtime | POSIX emulation DLLs | Hyper-V, Linux kernel | PowerShell 7+ |
 
 <Tabs>
 <TabItem label="vs Bash">
 
 ## PsBash vs Bash
 
-The commands are identical. The difference is what comes out of the pipeline.
+The commands are identical, and so is the script around them: functions, arrays, `trap`,
+`set -e`, `pipefail`, here-docs, process substitution and background jobs run in the
+`ps-bash` shell. Behaviour is checked against bash 5.2. The difference is what comes out
+of the pipeline.
 
 | Task | Bash | PsBash | The PsBash Advantage |
 |------|------|--------|---------------------|
@@ -53,12 +56,36 @@ The commands are identical. The difference is what comes out of the pipeline.
 
 ### When Bash Wins
 
-- **Shell scripting** -- bash scripts, conditionals, loops, and functions are a complete programming language. PsBash provides commands, not a shell.
-- **Process substitution** -- `diff <(cmd1) <(cmd2)` has no PsBash equivalent.
-- **Heredocs** -- `cat <<EOF` style multi-line strings are a bash feature, not a command.
-- **Per-stage pipeline exit codes** -- `set -o pipefail`, `$PIPESTATUS`, and `SIGPIPE`/exit-141 on early reader close are bash-shell semantics that do not map to a PowerShell pipeline. This is an **architecture difference, not a bug**: a bash pipe is N OS processes whose individual exit statuses the shell collects, while a PowerShell pipeline is a single cooperative object stream with one `$LASTEXITCODE` and record-interleaved stages. Recovering `$PIPESTATUS` would require running each stage as a separately-captured invocation, which sacrifices streaming. PsBash keeps streaming; pipeline exit status is last-command-wins.
-- **Full POSIX compliance** -- PsBash reimplements common commands, not the full POSIX specification.
+ps-bash aims to match bash 5.2 and GNU coreutils. These differences remain:
+
+- **Broken pipes** -- `cmd | head -1` does not send SIGPIPE to the producer. There is
+  no exit status 141.
+- **Subshells are not processes** -- `( )` and `$( )` run inside the host. `$BASHPID` is
+  a synthetic id there, and `ps` knows no such pid.
+- **Job control** -- there is no `set -m` job control. `bind` is not a command, because
+  the line editor is not readline.
+- **Refused options** -- a real GNU option that ps-bash does not implement fails with
+  exit 2 and a message.
+- **Windows itself** -- no `/bin`, synthesised permission bits, case-insensitive file and
+  variable names, `C:/x` paths.
 - **System administration on Linux** -- bash is the native shell. PsBash adds a layer.
+
+`set -o pipefail` and `$PIPESTATUS` work: a multi-stage pipeline records each stage's
+status. The full list of differences is
+[intentional-differences.md](https://github.com/standardbeagle/ps-bash/blob/main/docs/specs/intentional-differences.md).
+
+### What changed in v0.15.0
+
+Three behaviours moved to what bash does. Each can change an existing script:
+
+| Behaviour | Before | v0.15.0 (as bash) |
+|-----------|--------|-------------------|
+| `gci`, `iex`, `r`, `write` in bash code | Ran the PowerShell alias | A function or `PATH` program, else exit 127 |
+| `x=1; sh -c 'echo "[$x]"'` | `[1]` | `[]`: a child sees exported variables only |
+| `echo "$PWD"` on Windows | `C:\Users\x` | `C:/Users/x` |
+
+Details and what to change:
+[Breaking changes in v0.15.0](/ps-bash/getting-started/#breaking-changes-in-v0150).
 
 ### When PsBash Wins
 
@@ -117,7 +144,7 @@ WSL gives you a real Linux kernel. PsBash gives you bash-style commands inside t
 | Object pipeline | Typed objects (`LsEntry`, `GrepMatch`) | Text strings |
 | .NET integration | Full -- pipe into any cmdlet or API | None -- separate OS boundary |
 | Real Linux kernel | No | Yes |
-| Shell scripting | PowerShell scripting | Full bash/zsh scripting |
+| Shell scripting | Bash scripts in the `ps-bash` shell, plus PowerShell | Full bash/zsh scripting |
 | File system | Native (no boundary crossing) | `/mnt/c` translation layer |
 | Package managers | PowerShell Gallery | apt, yum, pacman |
 | System services | PowerShell/Windows services | systemd, cron |
@@ -128,7 +155,7 @@ WSL gives you a real Linux kernel. PsBash gives you bash-style commands inside t
 
 ### When You Need WSL Instead
 
-- **Running existing bash scripts** that use shell features (job control, process substitution, signals).
+- **Scripts that need Linux itself**: `/proc`, programs under `/bin`, real permission bits, interactive job control.
 - **Docker with Linux containers** or software requiring a Linux kernel.
 
 ### Why PsBash Over WSL
@@ -148,17 +175,17 @@ Git Bash ships with Git for Windows and gives you a real bash shell with GNU cor
 
 | Feature | PsBash | Git Bash |
 |---------|--------|----------|
-| Disk size | **340 KB** | ~300 MB (MSYS2 runtime + coreutils) |
+| Disk size | One module, or one self-contained package | ~300 MB (MSYS2 runtime + coreutils) |
 | Output | Typed PowerShell objects | Text strings |
 | Shell | Runs inside PowerShell | Separate mintty terminal |
 | Pipeline to .NET | `ls -la \| Where-Object { $_.SizeBytes -gt 1MB }` | Not possible -- different process |
 | PATH handling | AllScope aliases, no PATH conflicts | Prepends to PATH, can shadow Windows tools |
 | Line endings | PowerShell handles natively | MSYS2 translates `\r\n` ↔ `\n` (sometimes wrong) |
 | Symlinks | PowerShell API (Developer Mode on Windows) | MSYS2 emulation (sometimes broken) |
-| File paths | Native Windows paths | `/c/Users/...` POSIX translation |
-| Scripting | PowerShell scripts + bash-style commands | Real bash scripts, but can't call cmdlets |
+| File paths | `C:/Users/...` (drive kept, forward slashes) | `/c/Users/...` POSIX translation |
+| Scripting | Bash scripts and PowerShell cmdlets in one process | Real bash scripts, but can't call cmdlets |
 | jq built-in | Yes | No (separate install) |
-| Commands | 68 | ~80 (GNU coreutils subset) |
+| Commands | 120+ | ~80 (GNU coreutils subset) |
 
 ### The Fundamental Difference
 
@@ -178,12 +205,11 @@ PS> grep -r 'TODO' src/ | ForEach-Object { $_.FileName } | Sort-Object -Unique
 
 ### When You Need Git Bash Instead
 
-- **Running existing bash scripts** or Makefiles that need a real shell.
+- **Scripts that depend on GNU options ps-bash refuses**, or on MSYS path forms (`/c/Users/...`) in output.
 - **You already have it** and just need quick Unix commands outside PowerShell.
 
 ### Why PsBash Over Git Bash
 
-- **340 KB vs 300 MB** -- 1000x smaller. No MSYS2 runtime.
 - **Objects, not strings** -- `(ls -la | grep '.log').SizeBytes` vs parsing awk output.
 - **Stays in PowerShell** -- no context switching, no separate process, objects flow into cmdlets.
 - **No PATH conflicts** -- Git Bash prepends MSYS2 to system PATH, shadowing Windows tools. PsBash uses PowerShell-scoped aliases.
@@ -199,15 +225,15 @@ Cygwin is the heavyweight option: a full POSIX compatibility layer for Windows w
 
 | Feature | PsBash | Cygwin |
 |---------|--------|--------|
-| Disk size | **340 KB** | 1-4 GB (base + packages) |
+| Disk size | One module, or one self-contained package | 1-4 GB (base + packages) |
 | Install process | `Install-Module PsBash` | GUI wizard, select from 2000+ packages |
 | Output | Typed PowerShell objects | Text strings |
 | Shell | Runs inside PowerShell | Separate bash/zsh in mintty |
 | Runtime | Native .NET | `cygwin1.dll` POSIX emulation |
-| File paths | Native Windows paths | `/cygdrive/c/Users/...` |
+| File paths | `C:/Users/...` (drive kept, forward slashes) | `/cygdrive/c/Users/...` |
 | Fork support | N/A (no process forking) | Emulated via `cygwin1.dll` (slow) |
 | Package manager | PowerShell Gallery | Cygwin setup.exe (no CLI package manager) |
-| Commands | 68 (focused on scripting) | 200+ (full GNU userland) |
+| Commands | 120+ (focused on scripting) | 200+ (full GNU userland) |
 | Symlinks | PowerShell API | Cygwin-internal (often broken outside Cygwin) |
 | Pipeline to .NET | Native | Not possible |
 | Update process | `Update-Module PsBash` | Rerun setup.exe |
@@ -219,11 +245,11 @@ Cygwin is the heavyweight option: a full POSIX compatibility layer for Windows w
 
 ### Why PsBash Over Cygwin
 
-- **340 KB vs 1-4 GB** -- ~10,000x smaller. No POSIX emulation layer.
+- **No POSIX emulation layer** -- commands are .NET code calling the OS directly.
 - **`Install-Module` vs GUI wizard** -- Cygwin's installer has 2000 package checkboxes. PsBash is one command.
-- **Native paths** -- no `/cygdrive/c/` translation. Files are where Windows expects them.
+- **Drive-letter paths** -- `C:/project/src`, with no `/cygdrive/c/` translation.
 - **Objects flow into PowerShell** -- Cygwin is a walled garden. Nothing crosses back.
-- **No DLL conflicts** -- `cygwin1.dll` can break other software. PsBash is pure PowerShell.
+- **No DLL conflicts** -- `cygwin1.dll` can break other software. PsBash is managed .NET code.
 - **No fork penalty** -- Cygwin's fork emulation on Windows is notoriously slow. PsBash runs natively.
 - **Updates** -- `Update-Module PsBash` vs re-downloading a 400 MB setup.exe.
 - **Cross-platform** -- Cygwin is Windows-only.
@@ -235,7 +261,7 @@ $ find /cygdrive/c/project -name '*.cs' -exec grep -l 'TODO' {} \;
 
 # PsBash: native paths, typed objects
 PS> find . -name '*.cs' | grep 'TODO' -r
-# objects with .FileName = "C:\project\src\Foo.cs"
+# objects with .FileName and .LineNumber
 ```
 
 </TabItem>
@@ -330,10 +356,10 @@ objects in the pipeline.
 
 ## The Bottom Line
 
-PsBash is not a replacement for bash, PowerShell, or WSL. It is a bridge.
+PsBash runs bash commands and bash scripts on PowerShell. It does not provide a Linux kernel or Linux programs.
 
 If you need a full Linux environment, use WSL.
 If you need deep PowerShell parameter control, use native cmdlets.
-If you need POSIX shell scripting, use bash.
+If you need byte-exact GNU output for every option, use the GNU tools.
 
-If you need **bash syntax with typed PowerShell objects** that work across Windows, macOS, and Linux -- that is what PsBash does.
+If you need **bash scripts and bash syntax with typed PowerShell objects** on Windows, macOS, and Linux, that is what PsBash does.

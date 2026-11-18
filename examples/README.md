@@ -22,5 +22,21 @@ PsBash ships **two** surfaces, and the examples use both:
   examples run with `ps-bash <file>` or `ps-bash -c '<command>'`. The line editor, Ctrl-R,
   `z`/`zi`, `!!`, and tab completion live here (see `02-interactive-shell/`).
 
+## Notes for v0.15.0
+
+The `.sh` examples run in the `ps-bash` shell, where three behaviours changed in v0.15.0
+to match bash. If you adapt an example into your own script:
+
+- **PowerShell aliases are not commands.** `gci`, `iex`, `r` and `write` are no longer
+  resolved as aliases; without a function or `PATH` program of that name they exit 127.
+  Use the bash command (`ls`) or the full cmdlet name (`Get-ChildItem`). The `.ps1` and
+  `.psm1` examples run in your own PowerShell session, where aliases are untouched.
+- **Export what a child needs.** `x=1; sh -c 'echo $x'` prints an empty line. Write
+  `export x`, or `x=1 sh -c 'echo $x'`.
+- **Paths print with forward slashes on Windows.** `$PWD`, `~`, `mktemp` and `realpath`
+  give `C:/Users/you/x`. Input still accepts `C:\x`, `/c/x` and `/mnt/c/x`.
+
+Details: [Breaking changes in v0.15.0](../README.md#breaking-changes-in-v0150).
+
 > Scripts that need a real terminal (the `Show-Styled` / `browse` viewers, Ctrl-R, `z`) say
 > so at the top. The rest run non-interactively and are safe in CI.

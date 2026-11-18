@@ -7,7 +7,7 @@ import { Tabs, TabItem, Aside, Steps } from '@astrojs/starlight/components';
 
 ## Prerequisites
 
-ps-bash requires **PowerShell 7.0 or later**. Check your version:
+The ps-bash module requires **PowerShell 7.4 or later**. Check your version:
 
 ```powershell
 $PSVersionTable.PSVersion
@@ -16,40 +16,49 @@ $PSVersionTable.PSVersion
 If you need to install or update PowerShell, see the
 [official installation guide](https://learn.microsoft.com/en-us/powershell/scripting/install/installing-powershell).
 
+The standalone `ps-bash` shell is self-contained and needs no .NET runtime.
+
+<Aside type="caution" title="Upgrading to v0.15.0?">
+Three changes can alter what an existing script does. Read
+[Breaking changes in v0.15.0](#breaking-changes-in-v0150) first.
+</Aside>
+
 ## Installation
 
 <Tabs>
-  <TabItem label="Quick try">
-    Clone the repository and import the module directly:
+  <TabItem label="PowerShell module">
+    Install from the PowerShell Gallery and import it:
 
     ```powershell
-    git clone https://github.com/standardbeagle/ps-bash.git
-    Import-Module ./ps-bash/src/PsBash.psd1 -DisableNameChecking
+    Install-Module PsBash
+    Import-Module PsBash -DisableNameChecking
     ```
 
-    This loads ps-bash for the current session only.
+    This adds `ls`, `grep`, `awk` and the other commands to your PowerShell session.
   </TabItem>
-  <TabItem label="Permanent install">
-    Copy the module into a directory on your `PSModulePath` so PowerShell finds it automatically.
+  <TabItem label="Standalone shell">
+    The `ps-bash` binary runs bash scripts and an interactive bash shell.
 
     <Tabs>
       <TabItem label="Linux / macOS">
-        ```powershell
-        $dest = "$HOME/.local/share/powershell/Modules/PsBash"
-        New-Item -ItemType Directory -Path $dest -Force
-        Copy-Item -Path ./ps-bash/src/* -Destination $dest -Recurse
-        Import-Module PsBash -DisableNameChecking
+        ```bash
+        curl -fsSL https://raw.githubusercontent.com/standardbeagle/ps-bash/main/install.sh | bash
         ```
       </TabItem>
       <TabItem label="Windows">
         ```powershell
-        $dest = "$HOME\Documents\PowerShell\Modules\PsBash"
-        New-Item -ItemType Directory -Path $dest -Force
-        Copy-Item -Path .\ps-bash\src\* -Destination $dest -Recurse
-        Import-Module PsBash -DisableNameChecking
+        iwr https://raw.githubusercontent.com/standardbeagle/ps-bash/main/install.ps1 | iex
         ```
       </TabItem>
     </Tabs>
+
+    Release archives are built for Windows x64, Linux x64 and macOS arm64. Then:
+
+    ```bash
+    ps-bash -c 'ls -la | grep .md'   # one command
+    ps-bash script.sh                # a script file
+    ps-bash                          # an interactive shell
+    ```
   </TabItem>
   <TabItem label="Profile auto-load">
     Add the import to your PowerShell profile so ps-bash loads every time you open a terminal:
@@ -173,7 +182,86 @@ $sizes.SizeBytes | Measure-Object -Sum -Average
 # Average: 2897.6
 ```
 
-Standard PowerShell cmdlets like `Measure-Object`, `Where-Object`, and `Group-Object` work seamlessly because the pipeline carries typed data.
+Standard PowerShell cmdlets like `Measure-Object`, `Where-Object`, and `Group-Object` work on the result because the pipeline carries typed data.
+
+## Running bash scripts
+
+The module gives you commands. The `ps-bash` shell runs whole scripts: functions, arrays,
+`trap`, `set -e`, `pipefail`, here-docs, process substitution and background jobs.
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+for f in *.log; do
+  count=$(grep -c ERROR "$f" || true)
+  if [ "$count" -gt 0 ]; then
+    echo "${f}: ${count} errors"
+  fi
+done | sort -t: -k2 -rn | head -5
+```
+
+```bash
+ps-bash count-errors.sh
+```
+
+Behaviour is checked against bash 5.2. Where ps-bash differs on purpose, the difference
+is listed in
+[intentional-differences.md](https://github.com/standardbeagle/ps-bash/blob/main/docs/specs/intentional-differences.md).
+
+## Breaking changes in v0.15.0
+
+v0.15.0 moves three behaviours to what bash does. Each can change an existing script.
+
+### PowerShell aliases no longer run in bash code
+
+Bash code used to resolve PowerShell's built-in aliases (about 135) before functions and
+programs. Now `gci`, `iex`, `r` and `write` behave as in bash: a function or a program on
+`PATH` with that name runs, otherwise the command is not found (exit 127). `where` runs
+`where.exe`.
+
+```bash
+gci            # before: ran Get-ChildItem. Now: gci: command not found (127)
+iex 'echo x'   # before: evaluated its argument as PowerShell. Now: not found (127)
+```
+
+**What to change:** use the bash command (`ls`) or the full cmdlet name
+(`Get-ChildItem`). This applies to the `ps-bash` shell only. Importing the module into
+your own PowerShell session leaves that session's aliases alone.
+
+### A child process sees exported variables only
+
+```bash
+x=1
+sh -c 'echo "[$x]"'    # before: [1]   now: []
+export x
+sh -c 'echo "[$x]"'    # [1]
+```
+
+This holds for nested shells (`sh -c`, `bash script.sh`), programs started with `2>&1`,
+`&>` or `|&`, and for `env`, `printenv` and `compgen -e`.
+
+**What to change:** `export NAME`, or pass it for one command with `NAME=v cmd`.
+
+<Aside type="note">
+Not covered yet: a program started plainly (`prog args`, with no stderr merge) still
+inherits unexported variables.
+</Aside>
+
+### Paths use forward slashes on Windows
+
+Every path ps-bash hands a script is `C:/Users/x` instead of `C:\Users\x`. That covers `$PWD`,
+`$OLDPWD`, `~`, `$HOME`, `mktemp`, `realpath`, `readlink`, `type`, `which`, `$0` and glob
+results. The drive letter stays; ps-bash never prints `/c/Users/x`.
+
+```bash
+echo "$PWD"          # before: C:\Users\x\proj   now: C:/Users/x/proj
+echo "${PWD##*/}"    # before: the whole path    now: proj
+```
+
+**What to change:** a script that matched on `\` in one of these values needs `/`.
+Input is unchanged: `C:/x`, `C:\x`, `/c/x` and `/mnt/c/x` name the same file. `PATH`
+keeps its Windows form, with `;` between entries.
 
 ## Tab completion
 
@@ -211,6 +299,11 @@ Flags:
 ```
 
 ## Troubleshooting
+
+**"gci: command not found" after upgrading to v0.15.0**
+
+Bash code no longer resolves PowerShell aliases. See
+[Breaking changes in v0.15.0](#breaking-changes-in-v0150).
 
 **"ls still shows native output"**
 

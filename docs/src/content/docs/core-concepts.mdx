@@ -31,7 +31,7 @@ Terminal renders BashText via Format.ps1xml
 Code accesses typed properties
 ```
 
-Three pieces work together to make this seamless:
+Three pieces work together:
 
 **`New-BashObject`** creates a `PSCustomObject` with a `PSTypeName`, a `BashText` property, and a `ToString()` override that returns `BashText`. Every command calls this factory (or sets the same structure inline for richer types like `LsEntry`).
 
@@ -103,7 +103,7 @@ Because bridge commands preserve types, you can chain them freely and still acce
 
 ## AllScope Aliases
 
-Ps-bash registers 69 aliases using `-Option AllScope`, which makes them visible in every scope (modules, scripts, nested functions):
+Ps-bash registers 126 aliases using `-Option AllScope`, which makes them visible in every scope (modules, scripts, nested functions):
 
 ```powershell
 Set-Alias -Name 'ls' -Value 'Invoke-BashLs' -Force -Scope Global -Option AllScope
@@ -116,7 +116,7 @@ PowerShell resolves commands in this order:
 3. **Cmdlet**
 4. **Application** (external executables)
 
-Because aliases win, `ls` resolves to `Invoke-BashLs` instead of the built-in `Get-ChildItem` alias on Windows or `/usr/bin/ls` on Linux. The same applies to all 69 commands: `cat`, `grep`, `sort`, `ps`, `rm`, and so on.
+Because aliases win, `ls` resolves to `Invoke-BashLs` instead of the built-in `Get-ChildItem` alias on Windows or `/usr/bin/ls` on Linux. The same applies to every ps-bash command: `cat`, `grep`, `sort`, `ps`, `rm`, and so on.
 
 To temporarily use a native command, call the full cmdlet name or remove the alias:
 
@@ -131,6 +131,56 @@ Remove-Alias ls -Force
 <Aside type="note">
 Aliases are restored when you re-import the module. Running `Import-Module PsBash -Force` brings them all back.
 </Aside>
+
+### In the `ps-bash` shell: bash name lookup
+
+The module adds aliases to your PowerShell session and leaves PowerShell's own aliases
+(`gci`, `%`, `iex`) alone. The standalone `ps-bash` shell does the opposite. Its runspaces
+keep only the aliases that point at an `Invoke-Bash*` command and drop the rest (about
+135). A command word then resolves as it does in bash:
+
+1. A function you defined
+2. A ps-bash command
+3. A program on `PATH`
+4. Otherwise `command not found`, exit 127
+
+```bash
+gci                       # gci: command not found (127)
+gci() { echo "my gci"; }  # a function of that name runs
+gci                       # my gci
+Get-ChildItem             # a full cmdlet name still works
+```
+
+Before v0.15.0, `gci` ran `Get-ChildItem` and `iex 'text'` evaluated its argument as
+PowerShell. See
+[Breaking changes in v0.15.0](/ps-bash/getting-started/#breaking-changes-in-v0150).
+
+## What a script sees in the `ps-bash` shell
+
+Two more rules hold everywhere in the shell. Both match bash.
+
+**A child process sees exported variables only.** Every shell variable lives in the
+host's process environment, so ps-bash keeps the export attribute in a separate table
+and builds a child's environment from it.
+
+```bash
+x=1; sh -c 'echo "[$x]"'           # []
+export x; sh -c 'echo "[$x]"'      # [1]
+```
+
+One gap remains: a program started plainly (`prog args`, with no stderr merge) still
+inherits unexported variables.
+
+**A path is `C:/Users/x` on Windows.** One helper converts every path on its way to the
+script, so `$PWD`, `~`, `mktemp`, `realpath` and glob results agree, and idioms that
+split on `/` work:
+
+```bash
+echo "${PWD##*/}"                  # the last component
+for f in "$dir"/*; do echo "$f"; done
+```
+
+Input accepts `C:/x`, `C:\x`, `/c/x` and `/mnt/c/x`. `PATH` keeps the Windows `;` form.
 
 ## Case-Sensitive Flag Parsing
 
@@ -164,6 +214,8 @@ $defs = New-FlagDefs -Entries @(
 $parsed = ConvertFrom-BashArgs -Arguments $Arguments -FlagDefs $defs
 # $parsed.Flags['-e'] and $parsed.Flags['-E'] are independent booleans
 ```
+
+Commands implemented as binary cmdlets follow the same rule: their shared argument parser keys options with `StringComparer.Ordinal`.
 
 Ps-bash commands also use `$args` and `$input` instead of `[CmdletBinding()]` param blocks. This avoids conflicts with PowerShell common parameters like `-ErrorAction` and `-ErrorVariable`, which would collide with bash flags like `-E` (extended regex in `grep`, disabled escapes in `echo`).
 

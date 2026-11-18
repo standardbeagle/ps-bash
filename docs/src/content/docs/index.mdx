@@ -1,6 +1,6 @@
 ---
 title: PsBash
-description: Real bash commands, real PowerShell objects. 68 Unix commands reimplemented as native PowerShell cmdlets with typed pipeline output. Windows, macOS, Linux.
+description: Real bash commands, real PowerShell objects. More than 120 bash commands as native PowerShell cmdlets with typed pipeline output, and a shell that runs bash scripts. Windows, macOS, Linux.
 template: splash
 head:
   - tag: meta
@@ -41,6 +41,35 @@ import { Card, CardGrid } from '@astrojs/starlight/components';
   </Card>
   <Card title="Cross-Platform" icon="laptop">
     Windows, Linux, macOS. No WSL overhead, no VM, no filesystem boundary. Runs everywhere PowerShell runs.
+  </Card>
+</CardGrid>
+
+## New in v0.15.0: closer to bash
+
+Scripts that went wrong in v0.14.5 now do what bash does:
+
+```bash
+x=1; sh -c 'echo "[$x]"'                 # printed [1]. Now [], x is not exported
+f() { echo x; exit 3; }
+f | cat; echo "after ${PIPESTATUS[*]}"   # exit ended the whole script. Now: x, after 3 0
+{ printf a; printf 'b\n'; } | sed s/x/y/ # printed a and b on two lines. Now ab
+yes | while read l; do break; done       # never ended. Now stops at the break
+echo "${PWD##*/}"                        # Windows: printed the whole C:\... path. Now the last component
+```
+
+<CardGrid>
+  <Card title="Checked against real bash" icon="approve-check-circle">
+    The spec corpus holds 2,538 cases with output recorded from bash 5.2. On Windows 78
+    are marked as expected differences, down from 736 in v0.14.1. Each one names its reason.
+  </Card>
+  <Card title="Three breaking changes" icon="warning">
+    PowerShell aliases no longer run in bash code, a child process sees exported
+    variables only, and Windows paths print as `C:/x`.
+    [What to change →](/ps-bash/getting-started/#breaking-changes-in-v0150)
+  </Card>
+  <Card title="macOS and background jobs" icon="laptop">
+    Scripts no longer die with status 138 on macOS. Job output prints as the job runs,
+    in launch order. Stopping a command ends its whole process tree.
   </Card>
 </CardGrid>
 
@@ -125,14 +154,14 @@ ls -la | browse                         # arrow-key file workbench, with actions
 ## By the Numbers
 
 <CardGrid>
-  <Card title="68 Commands" icon="setting">
-    `ls`, `grep`, `awk`, `jq`, `sed`, `find`, `tar`, and 61 more Unix commands reimplemented as native PowerShell cmdlets.
+  <Card title="120+ Commands" icon="setting">
+    `ls`, `grep`, `awk`, `jq`, `sed`, `find`, `tar` and the rest of the everyday set, as native PowerShell cmdlets.
   </Card>
-  <Card title="775 Tests" icon="approve-check-circle">
-    Every command tested across flag combinations, edge cases, and pipeline scenarios.
+  <Card title="2,538 Spec Cases" icon="approve-check-circle">
+    Bash behaviour cases in 143 files, imported from the Oils spec tests, with expected output recorded from bash 5.2.
   </Card>
   <Card title="3 Platforms" icon="laptop">
-    Windows, Linux, macOS. CI-verified on all three.
+    Windows x64, Linux x64, macOS arm64. CI runs on all three.
   </Card>
   <Card title="20 Typed Objects" icon="document">
     `LsEntry`, `GrepMatch`, `PsEntry`, `WcResult` and more. Real properties, not text.

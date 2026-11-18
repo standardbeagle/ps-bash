@@ -2,11 +2,12 @@
 
 **Real bash commands on Windows. No WSL, Git Bash, or Cygwin required.**
 
-PsBash transpiles bash to PowerShell — `rm -rf`, `ls -la`, `grep -r`, `sort -k3` all work natively. Every command returns **typed .NET objects** while producing bash-identical text output. Includes a standalone shell binary that AI coding agents (Claude Code, OpenCode, GitHub Copilot) can use as a drop-in bash replacement.
+PsBash transpiles bash to PowerShell — `rm -rf`, `ls -la`, `grep -r`, `sort -k3` all work natively. It runs whole scripts: functions, arrays, traps, `set -e`, `pipefail`, here-docs, process substitution and background jobs. Every command returns **typed .NET objects** while producing bash-identical text output. Includes a standalone shell binary that AI coding agents (Claude Code, OpenCode, GitHub Copilot) can use as a drop-in bash replacement.
+
+**v0.15.0** is a bash-compatibility release with three breaking changes. See [What's new](#whats-new-in-v0150) and [Breaking changes](#breaking-changes-in-v0150).
 
 [![CI](https://github.com/standardbeagle/ps-bash/actions/workflows/ci.yml/badge.svg)](https://github.com/standardbeagle/ps-bash/actions/workflows/ci.yml)
 [![PSGallery](https://img.shields.io/powershellgallery/v/PsBash.svg?label=PSGallery)](https://www.powershellgallery.com/packages/PsBash)
-[![Tests](https://img.shields.io/badge/tests-857%20passing-brightgreen.svg)](#testing)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)](#cross-platform)
 
@@ -28,6 +29,9 @@ iwr https://raw.githubusercontent.com/standardbeagle/ps-bash/main/install.ps1 | 
 curl -fsSL https://raw.githubusercontent.com/standardbeagle/ps-bash/main/install.sh | bash
 ```
 
+Release archives are built for Windows x64, Linux x64 and macOS arm64. The installers
+stop with an error on any other platform.
+
 On Windows, `-InstallDir` must be empty or marked as a PsBash package by this installer.
 Move an older unmarked installation aside before upgrading. Upgrades retain the old
 package in a unique `.previous-*` directory; existing backups are preserved.
@@ -36,6 +40,106 @@ package in a unique `.previous-*` directory; existing backups are preserved.
   <source srcset="docs/assets/demo.webp" type="image/webp">
   <img src="docs/assets/demo.gif" alt="ps-bash demo showing typed pipeline objects" width="800">
 </picture>
+
+## What's new in v0.15.0
+
+This release is about bash compatibility. Where ps-bash still differs from bash, the
+difference is documented.
+
+**Scripts that went wrong in v0.14.5 now match bash:**
+
+```bash
+x=1; sh -c 'echo "[$x]"'                 # printed [1]. Now [], x is not exported
+f() { echo x; exit 3; }
+f | cat; echo "after ${PIPESTATUS[*]}"   # exit ended the whole script. Now: x, after 3 0
+{ printf a; printf 'b\n'; } | sed s/x/y/ # printed a and b on two lines. Now ab
+set -o pipefail
+make build && make test | tee log        # was a PowerShell parse error
+echo it’s                                # a pasted ’ was a parse error
+yes | while read l; do break; done       # never ended. Now stops at the break
+{ echo a; cat out.txt >&2; } > out.txt   # printed nothing. Now a
+echo "${PWD##*/}"                        # Windows: printed the whole C:\... path. Now the last component
+```
+
+**Checked against real bash.** The differential tests run a snippet through bash 5.2
+and through ps-bash, then compare output and exit status
+(`src/PsBash.Differential.Tests`).
+The spec corpus in `spec/oils` holds 2,538 cases in 143 files, imported from the Oils
+spec tests with expectations recorded from bash. On Windows, 78 of them are marked as
+expected differences, down from 736 in v0.14.1 and 127 in v0.14.5. Each of the 78 names
+its reason: 57 are Windows itself (drive-letter paths, no `/bin`, case-insensitive
+names), 12 are interactive features ps-bash does not have (readline `bind`, job
+control), and 9 are other documented choices. The list of differences is
+[docs/specs/intentional-differences.md](docs/specs/intentional-differences.md).
+
+**Background jobs.** A job that writes to the shell's own output prints as it runs, in
+launch order, instead of at `wait`. A job gets its own copy of the shell's variables at the `&`.
+`kill -USR1 $$` from a nested shell runs the script's trap.
+
+**Processes.** Stopping a command (Ctrl+C, `timeout`) ends its whole process tree,
+including grandchildren whose parent already exited. `bash -c` and `sh -c` stream
+their output and are never timed out. A program started with `2>&1` keeps its write order.
+
+**macOS.** Scripts no longer die with status 138 and no output. Signal numbers, wait
+statuses, `stat` data and terminal size come from one per-platform layer, so `kill`,
+`trap`, `ls -l`, `stat`, `find` and `umask` answer correctly on macOS and on Linux arm64.
+One limit: a SIGUSR1 sent from outside ps-bash does not reach a `trap … USR1` on macOS,
+because the .NET runtime uses that signal itself.
+
+**Busy machines.** A command that finds every host of its session busy for 2 seconds
+runs on a private host that ends with it, instead of waiting for one to free. At most 2
+such overflow hosts run per session (`PSBASH_EXEC_OVERFLOW_MAX`), so memory stays bounded.
+
+## Breaking changes in v0.15.0
+
+Three changes move ps-bash toward bash and can change what an existing script does.
+
+### PowerShell aliases no longer run in bash code
+
+A bash script used to resolve PowerShell's built-in aliases (about 135 of them) before
+functions and programs. It no longer does. `gci`, `iex`, `r` and `write` now behave as
+in bash: a function or a program on `PATH` with that name runs, otherwise the command
+is not found (exit 127). `where` runs `where.exe`.
+
+```bash
+gci            # before: ran Get-ChildItem. Now: gci: command not found (127)
+iex 'echo x'   # before: evaluated its argument as PowerShell. Now: not found (127)
+write -- x     # before: ran Write-Output. Now: an ordinary command word, as in bash
+```
+
+Full cmdlet names still work (`Get-ChildItem`). Importing the module into your own
+PowerShell session leaves that session's aliases alone.
+
+### A child process sees exported variables only
+
+```bash
+x=1
+sh -c 'echo "[$x]"'    # before: [1]   now: []
+export x
+sh -c 'echo "[$x]"'    # [1]
+```
+
+This holds for nested shells (`sh -c`, `bash script.sh`), programs started with `2>&1`,
+`&>` or `|&`, and for `env`, `printenv` and `compgen -e`. Fix a script that relied on
+the old behaviour with `export NAME` or a prefix assignment (`NAME=v cmd`).
+
+Not covered yet: a program started plainly (`prog args`, no stderr merge) still inherits
+unexported variables.
+
+### Paths use forward slashes on Windows
+
+Every path ps-bash hands a script is `C:/Users/x` instead of `C:\Users\x`: `$PWD`, `$OLDPWD`,
+`~`, `$HOME`, `mktemp`, `realpath`, `readlink`, `type`, `which`, `$0` and glob results.
+The drive letter stays; ps-bash never prints `/c/Users/x`.
+
+```bash
+echo "$PWD"          # before: C:\Users\x\proj   now: C:/Users/x/proj
+echo "${PWD##*/}"    # before: the whole path    now: proj
+```
+
+Input is unchanged: `C:/x`, `C:\x`, `/c/x` and `/mnt/c/x` all name the same file. `PATH`
+keeps its Windows form (`;` between entries). A script that matched on `\` in one of
+these values needs `/` instead.
 
 ## Why PsBash?
 
@@ -92,7 +196,7 @@ PS> find . -name '*.log' -mtime +7 | xargs rm -f    # actually works on Windows
 
 ## Two Modes: Module and Shell
 
-PsBash can be used as a **PowerShell module** or a **standalone shell**. They share the same 78 bash commands and typed object pipeline.
+PsBash can be used as a **PowerShell module** or a **standalone shell**. They share the same commands and typed object pipeline.
 
 ### Module — bash commands inside PowerShell
 
@@ -148,11 +252,10 @@ Test-BashSyntax 'echo hello | wc -l'
 `Show-Styled` require an optional Strata build dependency and are absent from builds
 without it. The shell, source and syntax commands above do not require those features.
 
-The shell currently refuses `set -u`/`set -o nounset` and `set -C`/`set -o noclobber`
-because their protections are not implemented. Unsupported launcher flags also exit 2;
-use `ps-bash -c 'set -e; ...'` for errexit rather than a launcher `-e` flag.
-Other unsupported `set` options and mixed option forms also fail explicitly. Use
-separate `set` commands for supported options and `set -- ...` for positional parameters.
+`set -e`, `set -u`, `set -o pipefail` and `set -C` are supported; their limits are listed
+in [docs/known-issues.md](docs/known-issues.md). The launcher takes `-e`, `-u`, `-x`, `-v`,
+`-o` and `-O` with `-c`, a script file or `-s`, as bash does. An unsupported launcher
+flag exits 2.
 
 ## AI Coding Agent Setup
 
@@ -246,38 +349,43 @@ See [docs/agent-setup.md](docs/agent-setup.md) for detailed per-agent configurat
 | | **PsBash** | **Git Bash** | **Cygwin** | **WSL** | **Crescendo** |
 |---|---|---|---|---|---|
 | Install | `Install-Module` | Git for Windows | 50+ packages | Hyper-V/WSL2 | Per-command XML |
-| Footprint | **340 KB**, 3 files | ~300 MB (MSYS2 runtime) | ~1-4 GB | ~1-15 GB (full distro) | Module + your wrappers |
+| Footprint | One module, or one self-contained package | ~300 MB (MSYS2 runtime) | ~1-4 GB | ~1-15 GB (full distro) | Module + your wrappers |
 | `rm -rf` works | Yes | Yes | Yes | Yes | If you configure it |
 | Typed objects | Always | Never (strings) | Never (strings) | Never (strings) | If configured |
 | Object pipeline | Types survive `grep \| sort \| head` | Strings only | Strings only | Strings only | Varies |
 | PowerShell integration | Native — objects flow into cmdlets | Separate shell | Separate shell | Separate shell | Native |
 | Cross-platform | Win/Lin/Mac | Windows only | Windows only | Windows only | Win/Lin/Mac |
-| Commands | 78 built-in | ~80 (GNU coreutils) | ~200+ (full GNU) | All of Linux | Define your own |
+| Commands | 120+ built-in | ~80 (GNU coreutils) | ~200+ (full GNU) | All of Linux | Define your own |
 | jq/awk/sed | Built-in, zero binaries | awk/sed yes, jq no | Yes (install pkg) | Yes (apt install) | Not included |
 | PATH conflicts | None (AllScope aliases) | Shadows PowerShell | Shadows PowerShell | Filesystem boundary | None |
 | Startup overhead | ~100 ms (module load) | New process per call | New process per call | ~1s (cold), ~200ms (warm) | ~100 ms |
 | AI agent shell | Yes (`ps-bash -c`) | No | No | No | No |
 | Interactive mode | Yes (aliases, prompt, external tools) | Yes (full bash) | Yes (full bash) | Yes (full Linux) | No |
 
-## 78 Commands
+## Commands
+
+More than 120 commands are built in.
 
 | Category | Commands |
 |----------|----------|
-| **Listing** | `ls` `find` `stat` `tree` `du` `pwd` `basename` `dirname` `realpath` `dirs` |
-| **Files** | `cp` `mv` `rm` `mkdir` `rmdir` `touch` `ln` |
-| **Content** | `cat` `head` `tail` `less` `tac` `wc` `nl` `rev` `strings` `fold` `expand` `unexpand` `split` |
+| **Listing** | `ls` `find` `stat` `tree` `du` `pwd` `basename` `dirname` `realpath` `readlink` `dirs` |
+| **Files** | `cp` `mv` `rm` `mkdir` `rmdir` `touch` `ln` `chmod` `install` `mktemp` |
+| **Content** | `cat` `head` `tail` `less` `more` `tac` `wc` `nl` `rev` `strings` `fold` `expand` `unexpand` `split` `od` |
 | **Search** | `grep` `rg` |
-| **Text** | `sed` `awk` `cut` `tr` `uniq` `sort` `column` `join` `paste` `comm` `diff` |
+| **Text** | `sed` `awk` `cut` `tr` `uniq` `sort` `shuf` `column` `join` `paste` `comm` `diff` |
 | **Pipeline** | `tee` `xargs` `yes` |
 | **Data** | `jq` `yq` `xan` |
-| **System** | `ps` `env` `date` `hostname` `nohup` `whoami` `which` `alias` `time` `sleep` `tput` `pushd` `popd` |
-| **Shell** | `shopt` `type` `source` `command` `unset` `shift` |
+| **System** | `ps` `kill` `env` `printenv` `date` `hostname` `uname` `id` `whoami` `which` `nohup` `timeout` `flock` `time` `times` `sleep` `tput` `umask` `ulimit` `ping` `traceroute` |
+| **Shell** | `cd` `pushd` `popd` `source` `command` `type` `hash` `alias` `unalias` `unset` `shift` `getopts` `let` `test` `[` `trap` `shopt` `mapfile` `readarray` `compgen` `history` `fc` `bash` `sh` |
+| **Jobs** | `jobs` `fg` `bg` `wait` |
 | **Output** | `echo` `printf` |
 | **Encoding** | `base64` `md5sum` `sha1sum` `sha256sum` `file` |
 | **Archive** | `gzip` `gunzip` `zcat` `tar` |
 | **Math** | `seq` `expr` |
 
-Every command supports `--help` and tab completion for all flags.
+A real option that ps-bash does not implement is refused with exit 2 and a message.
+The refused options are listed per command in
+[intentional-differences.md](docs/specs/intentional-differences.md).
 
 ## PsBash vs Native PowerShell
 
@@ -320,13 +428,25 @@ The standalone `ps-bash` binary adds a transpiler layer:
 bash input → BashLexer → BashParser → PsEmitter → IpcWorker → ps-bash-host/SdkWorker → PowerShell SDK
 ```
 
-The parser tokenizes and parses bash into an AST modeled on Oils syntax.asdl. The emitter maps bash commands to `Invoke-Bash*` functions, forwarding all arguments unchanged. The runtime PowerShell module handles all flag parsing with full bash-compatible behavior.
+The parser tokenizes and parses bash into an AST modeled on Oils syntax.asdl. The emitter maps bash commands to `Invoke-Bash*` cmdlets, forwarding all arguments unchanged. The cmdlets parse the flags themselves.
 
 ## Testing
 
-```powershell
-Invoke-Pester ./tests/PsBash.Tests.ps1
-# 857 tests: 561 Core (parser/emitter), 96 Shell (e2e), 200 Module (runtime)
+Three layers check behaviour against real bash:
+
+- **Spec corpus** (`spec/oils`): 2,538 cases in 143 files, imported from the Oils spec
+  tests. Expected output and status are recorded from bash 5.2.
+- **Differential tests** (`src/PsBash.Differential.Tests`): a snippet runs through bash
+  and through ps-bash, and the results must match.
+- **Unit and guard tests** per project, plus the Pester suite in `tests/`.
+
+Build and test through `tman` (see [CLAUDE.md](CLAUDE.md)), which serializes builds and
+test runs:
+
+```bash
+tman test                                   # every suite
+tman test-proj src/PsBash.Differential.Tests --filter "FullyQualifiedName~Pipefail"
+tman pester                                 # the Pester gate
 ```
 
 CI runs on Windows, Linux, and macOS via GitHub Actions.
@@ -335,10 +455,14 @@ CI runs on Windows, Linux, and macOS via GitHub Actions.
 
 | Feature | Linux/macOS | Windows |
 |---------|-------------|---------|
-| File permissions | Real POSIX (`rwxr-xr-x`) | Approximated from ACLs |
-| `ps` backend | `/proc` filesystem | .NET `System.Diagnostics.Process` |
-| `ln -s` | Works normally | Requires Developer Mode |
-| `stat` | `/usr/bin/stat` | Pure .NET implementation |
+| File permissions | Real POSIX (`rwxr-xr-x`) | Synthesised: `0644` files, `0755` directories and executables |
+| `ln -s` | Works normally | Needs the symlink privilege (Developer Mode) |
+| Paths a script sees | `/home/you/x` | `C:/Users/you/x` |
+| `x=1; X=2` | Two variables | One variable (the environment is case-insensitive) |
+| `PATH` separator | `:` | `;` |
+
+Signal numbers are bash's (Linux numbering) on every OS: `kill -l`, `trap … USR1` and a
+`128+N` exit status read the same on macOS.
 
 ## Documentation
 
