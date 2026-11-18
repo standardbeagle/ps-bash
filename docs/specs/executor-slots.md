@@ -31,7 +31,8 @@ path would overflow). Slots are separate daemons started on demand and kept warm
   (`PSBASH_EXEC_OVERFLOW_MS`, default 2000) and one of the session's overflow tickets is free (`ExecOverflowTicket`,
   `PSBASH_EXEC_OVERFLOW_MAX`, default 2; an OS file lock held for the command, dropped on exit or death), run on a
   private per-invocation host that ends with the command. Otherwise go round again. Memory bound per session: 7 slot
-  hosts + the ticket cap (each host ~70-150 MB private). REGRESSION: going round was the only option, so six long
+  hosts + the ticket cap. A fresh host (an overflow host never outlives its command) is ~70-150 MB private; a
+  long-lived slot host can grow toward ~840 MB warm, capped by `HostMemoryGuard`. REGRESSION: going round was the only option, so six long
   builds made every further `bash -c` wait minutes.
 - **Stateful** hosts (named sessions with one pinned runspace) never receive spill from unrelated launchers; a nested
   launcher still spills, because it cannot wait on its own parent.
