@@ -10,7 +10,11 @@ namespace PsBash.Testing;
 public static class PhysicalPath
 {
     /// <summary>Resolves each existing component in turn (a missing tail is kept as typed).</summary>
-    public static string Of(string path)
+    public static string Of(string path) => Of(path, depth: 0);
+
+    // A link's target is a path as written: it can run through further links (a link made to /var/folders/x on
+    // macOS), so it is resolved again. 40 = Linux's MAXSYMLINKS; a loop stops there unresolved.
+    private static string Of(string path, int depth)
     {
         var full = Path.GetFullPath(path);
         var root = Path.GetPathRoot(full) ?? "";
@@ -21,7 +25,7 @@ public static class PhysicalPath
             try
             {
                 if (new FileInfo(current).ResolveLinkTarget(returnFinalTarget: true) is { } target)
-                    current = target.FullName;
+                    current = depth < 40 ? Of(target.FullName, depth + 1) : target.FullName;
             }
             catch (IOException) { /* not a link / unreadable: keep the component */ }
             catch (UnauthorizedAccessException) { }

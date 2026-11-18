@@ -63,14 +63,24 @@ public class PhysicalPathGuardTests
         var real = Directory.CreateDirectory(Path.Combine(root, "real")).FullName;
         try
         {
+            Directory.CreateDirectory(Path.Combine(real, "sub"));
+            // outer -> link/sub, link -> real: the first target runs through another link (macOS: any path made
+            // under /var/folders, since /var -> /private/var). REGRESSION: it was taken as written.
             var link = Path.Combine(root, "link");
+            var outer = Path.Combine(root, "outer");
             var linked = true;
-            try { Directory.CreateSymbolicLink(link, real); }
+            try
+            {
+                Directory.CreateSymbolicLink(link, real);
+                Directory.CreateSymbolicLink(outer, Path.Combine(link, "sub"));
+            }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException) { linked = false; }
             Skip.IfNot(linked, "symlink creation not permitted on this host");
 
             Assert.Equal(Path.Combine(PhysicalPath.Of(real), "missing", "x"),
                 PhysicalPath.Of(Path.Combine(link, "missing", "x")));
+            Assert.Equal(Path.Combine(PhysicalPath.Of(real), "sub", "x"),
+                PhysicalPath.Of(Path.Combine(outer, "x")));
         }
         finally { try { Directory.Delete(root, recursive: true); } catch { } }
     }
