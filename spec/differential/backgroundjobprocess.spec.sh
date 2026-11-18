@@ -2,22 +2,15 @@
 
 #### RunAsync
 export PSBASH_BG_MODE=process
-for i in 1 2 3 4 5 6 7 8 9 10; do true & echo $!; done; wait; echo "rc=$?"
+for i in 1 2 3 4 5 6 7 8 9 10; do true & echo $! >> pids; done; wait; echo "rc=$?"
+grep -cE '^[0-9]+$' pids; sort -u pids | wc -l
 ## STDOUT:
-2567075
-2567076
-2567077
-2567079
-2567080
-2567081
-2567082
-2567083
-2567084
-2567085
 rc=0
+10
+10
 ## END
 ## status: 0
-## XFAIL ps-bash gap-differential-backgroundjobprocess backgroundjobprocess (differential): differs from bash 5.2; see docs/specs/spec-gaps.md
+## timeout: 120
 
 #### RunAsync row 2
 export PSBASH_BG_MODE=process
@@ -27,17 +20,19 @@ job:before
 parent:after
 ## END
 ## status: 0
+## timeout: 120
 
 #### RunAsync row 3
 export PSBASH_BG_MODE=process
-sleep 120 & echo $!; sleep 120 & echo $!; sleep 120 & echo $!
+for i in 1 2 3; do sleep 120 >/dev/null 2>&1 & echo $! >> pids; done
+grep -cE '^[0-9]+$' pids; sort -u pids | wc -l; kill $(cat pids); wait; echo done
 ## STDOUT:
-2567088
-2567089
-2567090
+3
+3
+done
 ## END
 ## status: 0
-## XFAIL ps-bash gap-differential-backgroundjobprocess backgroundjobprocess (differential): differs from bash 5.2; see docs/specs/spec-gaps.md
+## timeout: 120
 
 #### RunAsync row 4
 export PSBASH_BG_MODE=process
@@ -48,6 +43,7 @@ out2
 next
 ## END
 ## status: 0
+## timeout: 120
 
 #### RunAsync row 5
 export PSBASH_BG_MODE=process
@@ -57,6 +53,7 @@ rc=1
 rc=3
 ## END
 ## status: 0
+## timeout: 120
 
 #### RunAsync row 6
 export PSBASH_BG_MODE=process
@@ -67,17 +64,7 @@ rc=143
 gone
 ## END
 ## status: 0
-
-#### RunAsync row 7
-export PSBASH_BG_MODE=process
-export PSBASH_JOBS_MAX=1; { sleep 2; echo first; } & { echo second; } & wait; echo done
-## STDOUT:
-second
-first
-done
-## END
-## status: 0
-## XFAIL ps-bash gap-differential-backgroundjobprocess backgroundjobprocess (differential): differs from bash 5.2; see docs/specs/spec-gaps.md
+## timeout: 120
 
 #### RunAsync row 8
 export PSBASH_BG_MODE=process
@@ -87,6 +74,7 @@ f:hi
 arr=b n=3
 ## END
 ## status: 0
+## timeout: 120
 
 #### RunAsync row 9
 export PSBASH_BG_MODE=process
@@ -96,3 +84,4 @@ in-job
 x=parent
 ## END
 ## status: 0
+## timeout: 120

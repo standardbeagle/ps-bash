@@ -24,7 +24,7 @@ readonly r=1; r=2; echo "r=$r"
 x=1; X=2; echo "$x $X"
 ## stdout: 1 2
 ## status: 0
-## XFAIL ps-bash gap-differential-bashparitygap bashparitygap (differential): differs from bash 5.2; see docs/specs/spec-gaps.md
+## XFAIL ps-bash platform-windows-env-case Windows environment is case-insensitive: $x reads X (intentional-differences.md, Platform: variable names differing only in case)
 
 #### LargeValue_SurvivesAssignment
 big=$(head -c 40000 /dev/zero | tr '\0' a); echo ${#big}

@@ -145,6 +145,16 @@ guard tests, cmdlet unit tests of internals.
 Mechanics: `spec absorb <test-class>` extracts the script literals (and `Theory` rows) from a test class, runs them in the
 oracle, writes the cases (with the old test name in a `## from:` line), and prints the cases whose recorded value differs
 from the old assertion. A class is deleted only when every extracted case passes or is explicitly XFAIL'd.
+A recorded expectation must be reproducible by ANY run, bash's included: a pid (`$!`), a temp path (`${BASH_SOURCE[0]}` of
+the recorder's script file, `mktemp`), `$USER`, `/dev/fd/63` is rewritten to the invariant the old test asserted (count and
+compare the pids, `[ "$a" = "$b" ]`, assign the variable in the case). A case for a ps-bash-only knob (`PSBASH_JOBS_MAX`)
+has no bash expectation and stays a C# test. `PSBASH_SPEC_TRIAGE` marks a failing case `triage` "differs from bash 5.2
+(auto-marked; investigate)": a note to act on, never committed. Every XFAIL id is `platform-windows-*`, `wontfix-*`,
+`intentional-*`, `arch-*` or `gap-*` with its cause in the reason (guard `SpecCorpusHygieneTests`). Eight absorbed cases
+broke this; their XFAILs hid an in-host timeout (ten process-mode jobs need about 20 s) behind a fidelity check that
+saw both paths fail and called it agreement. A case that sets `PSBASH_BG_MODE=process` pays a host spawn per `&` (10-15 s
+on a loaded machine) and declares `## timeout: 120` (same guard): two sequential jobs outran the 30 s default 4 times in 18
+loaded runs.
 Order: one class at a time, suite green after each, so a regression is attributable.
 
 ## 5. Reporting

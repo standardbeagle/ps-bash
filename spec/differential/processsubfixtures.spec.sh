@@ -40,10 +40,9 @@ paste <(seq 1 5) <(seq 6 10)
 ## status: 0
 
 #### ProcessSub_TempFile_WcSingleLargeInput
-wc -l <(seq 1 100)
-## stdout: 100 /dev/fd/63
+wc -l <(seq 1 100) | cut -d' ' -f1
+## stdout: 100
 ## status: 0
-## XFAIL ps-bash gap-differential-processsubfixtures processsubfixtures (differential): differs from bash 5.2; see docs/specs/spec-gaps.md
 
 #### ProcessSub_Source_FunctionDefinition
 source <(echo 'greet() { echo "hi $1"; }'); greet world

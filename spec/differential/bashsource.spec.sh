@@ -28,7 +28,6 @@ same
 ## status: 0
 
 #### RunAsync row 4
-echo "n=${#BASH_SOURCE[@]} [${BASH_SOURCE[0]}] fb=[${BASH_SOURCE[0]:-$0}]"
-## stdout: n=1 [/mnt/c/Users/andyb/AppData/Local/Temp/ps-bash/spec-record/b7241c02a14c450da8b4915670592465.sh] fb=[/mnt/c/Users/andyb/AppData/Local/Temp/ps-bash/spec-record/b7241c02a14c450da8b4915670592465.sh]
+bash -c 'echo "n=${#BASH_SOURCE[@]} [${BASH_SOURCE[0]}] fb=[${BASH_SOURCE[0]:-$0}]"'
+## stdout: n=0 [] fb=[bash]
 ## status: 0
-## XFAIL ps-bash gap-differential-bashsource bashsource (differential): differs from bash 5.2; see docs/specs/spec-gaps.md
