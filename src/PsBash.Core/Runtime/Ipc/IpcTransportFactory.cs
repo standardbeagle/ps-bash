@@ -364,18 +364,13 @@ public static class IpcTransportFactory
         return ("unix", prefix + unique + ext);
     }
 
-    /// <summary>
-    /// Longest AF_UNIX path .NET accepts. <c>sun_path</c> is a 108-byte buffer
-    /// including the terminating NUL on Linux/Windows, so the path itself is
-    /// capped at 107 chars; macOS uses a 104-byte buffer (103 chars).
-    /// </summary>
-    internal const int UnixSocketPathMaxChars = 107;
+
 
     /// <summary>Minimum random hex chars kept for per-invocation uniqueness.</summary>
     internal const int MinInvocationSuffixHexChars = 12;
 
-    internal static int UnixSocketPathBudget()
-        => OperatingSystem.IsMacOS() ? 103 : UnixSocketPathMaxChars;
+    /// <summary>Longest AF_UNIX path on this OS (<see cref="PsBash.Core.Platform.UnixSocketPath"/>).</summary>
+    internal static int UnixSocketPathBudget() => PsBash.Core.Platform.UnixSocketPath.MaxChars;
 
     private static string SocketDirectory() => PsBashRuntimeDirectory.GetPath();
 

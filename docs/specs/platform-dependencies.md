@@ -16,6 +16,7 @@ branch, a variadic `ioctl` whose third argument Apple arm64 reads from the stack
 | `SystemTools` | the OS's own `stat`/`id`/`ps`/`sysctl`, `/bin/sh`, host-bash candidates | `PlatformDependencyGuardTests` |
 | `ProcessInfo` | parent pid, zombie, process-group members, real uid, umask | `Core.Tests/PlatformProbeGuardTests` |
 | `TerminalIoctl`, `TermiosLayout` | the one `ioctl` declaration (winsize), termios offsets | `PlatformProbeGuardTests` |
+| `UnixSocketPath` | the AF_UNIX `sun_path` budget (103 macOS/FreeBSD, 107 Linux/Windows) | `UnixSocketPathTests` |
 
 Runtime facts .NET already knows come from .NET, never a literal: page size = `Environment.SystemPageSize`
 (16K/64K arm64 kernels).
@@ -99,5 +100,4 @@ it. The guards fail on, outside `Platform/`:
   `"/usr/local/bin/…"` literal in product C# or psm1 (`PlatformDependencyGuardTests`; allowlist entries carry a reason);
 - a `/proc` path or an `ioctl` declaration (`PlatformProbeGuardTests`).
 
-Not yet in `Platform/`: the AF_UNIX `sun_path` budget (`IpcTransportFactory.UnixSocketPathBudget`, 104 on macOS /
-108 on Linux) and `ps`'s `clkTck = 100`.
+Not yet in `Platform/`: `ps`'s `clkTck = 100`.

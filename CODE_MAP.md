@@ -52,7 +52,7 @@ Tests: `*.Tests`, `Differential.Tests` (bash oracle), `Canary.Tests`, `Escalatio
 - **Device names** (`/dev/stdout`, `/dev/null`, `/dev/fd/N`, …): `Transpiler/DevicePath.cs` `Classify` is the only list; choke points `RedirectFileWriter.OpenFile` / `BashFileSystem.OpenRead` → `Cmdlets/DeviceStreams.cs`, never a file (guards `DevicePathGuardTests`, `DeviceChokePointTests`). Spec `paths.md` §Device names.
 - **Canonical name** (`readlink`, `realpath`; links followed per component): `Cmdlets/CanonicalPath.cs`; name quoting in messages `Cmdlets/GnuQuote.cs`. Spec `paths.md` §Canonical names.
 - **Bytes vs text**: `Transpiler/RawBytes.cs` at every text↔bytes boundary — never `Encoding.UTF8` on data; streams `Cmdlets/ByteRecordStreams.cs`.
-- **OS/arch-dependent facts** (signal numbers + wait status, `struct stat`, system tool paths/`/bin/sh`, parent pid/zombie/pgroup/uid/umask, winsize `ioctl`, termios): `Transpiler/Platform/` only (`OsSignals`, `PosixStat`, `SystemTools`, `ProcessInfo`, `TerminalIoctl`, `TermiosLayout`); guards `OsSignalsGuardTests`, `PlatformDependencyGuardTests`, `PlatformProbeGuardTests`. Spec `platform-dependencies.md`.
+- **OS/arch-dependent facts** (signal numbers + wait status, `struct stat`, system tool paths/`/bin/sh`, parent pid/zombie/pgroup/uid/umask, winsize `ioctl`, termios, AF_UNIX path budget): `Transpiler/Platform/` only (`OsSignals`, `PosixStat`, `SystemTools`, `ProcessInfo`, `TerminalIoctl`, `TermiosLayout`, `UnixSocketPath`); guards `OsSignalsGuardTests`, `PlatformDependencyGuardTests`, `PlatformProbeGuardTests`. Spec `platform-dependencies.md`.
 - **Embedded DLL extraction**: `ModuleExtractor.cs` (list = `EmbedCmdletsDll` in `PsBash.Core.csproj`).
 - **Strata**: `src/Strata.props`.
 
