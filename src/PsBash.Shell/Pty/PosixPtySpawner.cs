@@ -250,11 +250,8 @@ internal sealed partial class PosixPtySpawner : PtySpawner
 
     private static int DecodeStatus(int status)
     {
-        // WIFEXITED(status): (status & 0x7f) == 0; WEXITSTATUS = (status >> 8) & 0xff
-        if ((status & 0x7f) == 0)
-            return (status >> 8) & 0xff;
-        // WIFSIGNALED: bash convention 128 + signum
-        return 128 + (status & 0x7f);
+        // WEXITSTATUS, or 128 + the signal's bash number (macOS numbers signals differently).
+        return PsBash.Core.Platform.OsSignals.ExitStatusOf(status);
     }
 
     public override async ValueTask DisposeAsync()

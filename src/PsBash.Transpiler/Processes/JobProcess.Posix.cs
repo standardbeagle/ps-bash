@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
+using PsBash.Core.Platform;
 using PsBash.Core.Runtime.Ipc;
 
 namespace PsBash.Core.Runtime.Processes;
@@ -161,8 +162,8 @@ public sealed partial class JobProcess
             _reaped = true;
             _reapedAtTicks = Stopwatch.GetTimestamp();
         }
-        // WIFEXITED -> WEXITSTATUS; WIFSIGNALED -> 128 + signal (the shell convention).
-        int code = (status & 0x7f) == 0 ? (status >> 8) & 0xff : 128 + (status & 0x7f);
+        // WIFEXITED -> WEXITSTATUS; WIFSIGNALED -> 128 + the signal's bash number (the shell convention).
+        int code = OsSignals.ExitStatusOf(status);
         PublishExit(code);
     }
 
@@ -259,9 +260,10 @@ public sealed partial class JobProcess
         public const int SpawnStructSize = 1024;
         // Values identical on Linux (glibc, musl) and macOS.
         public const int SetPGroup = 0x02, SetSigDef = 0x04, SetSigMask = 0x08;
-        public const int SIGTERM = 15, SIGKILL = 9;
-        public static readonly int SIGSTOP = OperatingSystem.IsMacOS() ? 17 : 19;
-        public static readonly int SIGCONT = OperatingSystem.IsMacOS() ? 19 : 18;
+        // OS numbers for kill(): the one signal table (Platform/OsSignals) knows where macOS differs.
+        public static readonly int SIGTERM = OsSignals.ToNative(OsSignals.SIGTERM), SIGKILL = OsSignals.ToNative(OsSignals.SIGKILL);
+        public static readonly int SIGSTOP = OsSignals.ToNative(OsSignals.SIGSTOP);
+        public static readonly int SIGCONT = OsSignals.ToNative(OsSignals.SIGCONT);
         public const int EINTR = 4;
 
         [DllImport("libc", SetLastError = true)] public static extern int kill(int pid, int sig);

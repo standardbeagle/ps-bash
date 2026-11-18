@@ -97,6 +97,39 @@ public class EnclosingHostTests
         finally { Directory.Delete(root, recursive: true); }
     }
 
+    // REGRESSION (macOS CI, $TMPDIR = /var/folders/../T/): a slot name that would not fit a socket path is hashed
+    // (psbash-slot-{hash}-x{k}) and never matched `basename*`, so every NestedKill test whose script ran on a slot
+    // host said "a ps-bash shell host that could not be reached".
+    [Fact]
+    public void ReachableHostSidecars_FindsTheExplicitEndpointsHashedSlots()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "ps-bash", "reach-" + Guid.NewGuid().ToString("N")[..8]);
+        string runtime = Path.Combine(root, "rt"), shared = Path.Combine(root, "shared");
+        Directory.CreateDirectory(runtime);
+        Directory.CreateDirectory(shared);
+        try
+        {
+            // A base that fits exactly, so its "-x1" slot does not and is hashed.
+            int budget = IpcTransportFactory.UnixSocketPathBudget();
+            string stem = Path.Combine(shared, "o");
+            string endpoint = stem + new string('e', budget - stem.Length - ".sock".Length) + ".sock";
+            Assert.Equal(budget, endpoint.Length);
+            string slot = IpcTransportFactory.ResolveSlotEndpoint("unix", endpoint, 1).Endpoint;
+            Assert.StartsWith("psbash-slot-", Path.GetFileName(slot));
+            Assert.Equal(IpcTransportFactory.MaxExecSlots, IpcTransportFactory.HashedSlotNames(endpoint).Count);
+
+            Assert.True(Sidecar(2, endpoint, HostStart).Write("unix", endpoint));
+            Assert.True(Sidecar(3, slot, HostStart).Write("unix", slot));
+            // Another endpoint's hashed slot in the same shared directory is not this endpoint's.
+            string stranger = IpcTransportFactory.ResolveSlotEndpoint("unix", endpoint[..^6] + "z.sock", 1).Endpoint;
+            Assert.True(Sidecar(4, stranger, HostStart).Write("unix", stranger));
+
+            var pids = IpcTransportFactory.ReachableHostSidecars(runtime, "unix:" + endpoint).Select(m => m.Pid).Order().ToArray();
+            Assert.Equal([2, 3], pids);
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
     private static readonly DateTimeOffset HostStart = new(2026, 11, 14, 10, 0, 0, TimeSpan.Zero);
     private static readonly ProcessIdentity Host = new(10, HostStart.UtcTicks);
 

@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
+using PsBash.Core.Platform;
 
 namespace PsBash.Shell.Pty;
 
@@ -388,13 +389,11 @@ internal sealed partial class SignalForwarder : IDisposable, IAsyncDisposable
     {
         private const string LibC = "libc";
 
-        // Signal numbers. SIGINT/SIGWINCH are stable across Linux/macOS/BSD.
-        // SIGTSTP differs: 20 on Linux and on the BSD family (macOS/FreeBSD)
-        // alike — it is one of the historically-aligned numbers. SIGWINCH is
-        // 28 on Linux and on macOS/FreeBSD.
-        public const int SIGINT = 2;
-        public const int SIGTSTP = 20;
-        public const int SIGWINCH = 28;
+        // OS signal numbers from the one table (Platform/OsSignals). SIGTSTP is 18 on macOS, where 20 is SIGCHLD:
+        // the old hardcoded 20 replaced the runtime's SIGCHLD handler and never saw Ctrl-Z.
+        public static readonly int SIGINT = OsSignals.ToNative(OsSignals.SIGINT);
+        public static readonly int SIGTSTP = OsSignals.ToNative(OsSignals.SIGTSTP);
+        public static readonly int SIGWINCH = OsSignals.ToNative(OsSignals.SIGWINCH);
 
         // Raw POSIX handler trampoline. The C signature is void(*)(int) with
         // the platform default (Cdecl) calling convention. [UnmanagedFunctionPointer]

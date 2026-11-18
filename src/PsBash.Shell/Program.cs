@@ -284,6 +284,12 @@ if (shellArgs.ScriptPath is not null)
         await using IWorker scriptWorker = await scriptWorkerTask;
         if (scriptForwardsStdin && scriptWorker is IpcWorker scriptIpc)
             scriptIpc.LauncherStdin = Console.OpenStandardInput();
+        // As for -c below: a real SIGUSR1/SIGUSR2 to `ps-bash script.sh` is the script's (trap or 128+N), not the end of
+        // the launcher by default action while its script runs on in the host.
+        using var scriptSignals = scriptWorker is IpcWorker scriptSignalWorker
+            ? PsBash.Core.Runtime.Ipc.ShellSignalSender.CatchPosixSignals(
+                sig => PsBash.Core.Runtime.Ipc.ShellSignalSender.SendToEndpoint(scriptSignalWorker.Endpoint, sig))
+            : null;
         return await scriptWorker.ExecuteAsync(
             BuildInvocationCwdPreamble() + preamble + pwshScriptCommand,
             environment: CaptureLauncherEnvironment());

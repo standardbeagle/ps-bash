@@ -56,24 +56,24 @@ public static class ShellSignalSender
     }
 
     /// <summary>
-    /// Unix: catch a REAL SIGUSR1 / SIGUSR2 aimed at this process and hand it to <paramref name="deliver"/> as signal 10 /
-    /// 12 (bash's Linux numbering, which the trap table uses on every platform). Their default action ends the process: a
-    /// host ended every script of its session, a launcher its own script without running the trap. The host delivers to
-    /// the command it runs (<see cref="ShellSignals.Deliver"/>), the launcher forwards to its host. Null on Windows, which
-    /// has no POSIX signals (there, <c>kill</c> reaches a shell only through <see cref="ShellSignals.SendToShell"/>).
+    /// Unix: catch a REAL SIGUSR1 / SIGUSR2 aimed at this process and hand it to <paramref name="deliver"/> by its bash
+    /// number (10 / 12, the Linux numbering the trap table uses on every platform). Their default action ends the
+    /// process: a host ended every script of its session, a launcher its own script without running the trap. The host
+    /// delivers to the command it runs (<see cref="ShellSignals.Deliver"/>), the launcher forwards to its host. On macOS
+    /// SIGUSR1 is the .NET runtime's own (<see cref="PsBash.Core.Platform.OsSignals.RuntimeOwned(int)"/>) and is not
+    /// caught: there only <c>kill</c> from a ps-bash shell (a message) reaches a USR1 trap. Null on Windows, which has no
+    /// POSIX signals (there, <c>kill</c> reaches a shell only through <see cref="ShellSignals.SendToShell"/>).
     /// </summary>
     public static IDisposable? CatchPosixSignals(Func<int, ShellSignals.Outcome> deliver)
     {
         if (OperatingSystem.IsWindows()) return null;
-        // Raw numbers (PosixSignal names only the signals .NET itself handles): Linux 10/12, the BSDs and macOS 30/31.
-        bool linux = OperatingSystem.IsLinux();
         var registrations = new List<System.Runtime.InteropServices.PosixSignalRegistration>(2);
-        foreach (var (raw, bashNumber) in new[] { (linux ? 10 : 30, 10), (linux ? 12 : 31, 12) })
+        foreach (var bashNumber in PsBash.Core.Platform.OsSignals.ScriptSignals())
         {
             try
             {
                 registrations.Add(System.Runtime.InteropServices.PosixSignalRegistration.Create(
-                    (System.Runtime.InteropServices.PosixSignal)raw,
+                    PsBash.Core.Platform.OsSignals.AsPosixSignal(bashNumber),
                     ctx =>
                     {
                         ctx.Cancel = true;   // never the default action (terminate)

@@ -237,7 +237,28 @@ public static class IpcTransportFactory
                 ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
             return all;
         all.AddRange(HostMetadata.ReadAll(envDir, Path.GetFileName(BaseOfSlotEndpoint(env.Endpoint)) + "*"));
+        // A slot whose name would not fit a socket path is hashed (psbash-slot-{hash}-x{k}, ResolveSlotEndpoint), so the
+        // pattern above misses it. REGRESSION (macOS, long $TMPDIR): every slot host there was hashed, and `kill` of a
+        // script on a slot said "a ps-bash shell host that could not be reached".
+        foreach (var name in HashedSlotNames(env.Endpoint))
+            all.AddRange(HostMetadata.ReadAll(envDir, name + "*"));
         return all;
+    }
+
+    /// <summary>The file names of <paramref name="endpoint"/>'s executor slots that <see cref="ResolveSlotEndpoint"/> hashes.</summary>
+    internal static List<string> HashedSlotNames(string endpoint)
+    {
+        var names = new List<string>();
+        var baseEndpoint = BaseOfSlotEndpoint(endpoint);
+        for (int slot = 1; slot <= MaxExecSlots; slot++)
+        {
+            string resolved;
+            try { resolved = ResolveSlotEndpoint("unix", baseEndpoint, slot).Endpoint; }
+            catch (IOException) { continue; }   // does not fit even hashed (RequireFits): no host can serve it
+            var name = Path.GetFileName(resolved);
+            if (name.StartsWith("psbash-slot-", StringComparison.Ordinal)) names.Add(name);
+        }
+        return names;
     }
 
     /// <summary>

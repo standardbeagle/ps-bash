@@ -57,7 +57,7 @@ public static class PsBashRuntimeDirectory
         // The test seam also suppresses $XDG_RUNTIME_DIR: otherwise a Linux box with XDG set
         // ignores the synthetic root, and tests that chmod "their" directory hit the REAL one.
         return ResolvePath(
-            TempPathOverride is null ? Environment.GetEnvironmentVariable("XDG_RUNTIME_DIR") : null,
+            TempPathOverride is null ? HostTempPath.XdgRuntimeDir() : null,
             TempPath(),
             PosixIdentity.CurrentUid(),
             isPosix: true);
@@ -116,7 +116,8 @@ public static class PsBashRuntimeDirectory
                 "world-writable; refusing to use it.");
     }
 
-    private static string TempPath() => TempPathOverride?.Invoke() ?? Path.GetTempPath();
+    // The host captures both at start (HostTempPath): a script that exports TMPDIR does not move the hosts it signals.
+    private static string TempPath() => TempPathOverride?.Invoke() ?? HostTempPath.Get();
 }
 
 /// <summary>

@@ -352,9 +352,10 @@ public partial class SignalForwarderTests
     // Helpers
     // ------------------------------------------------------------------
 
-    private const int SIGINT = 2;
-    private const int SIGTSTP = 20;
-    private const int SIGWINCH = 28;
+    // OS numbers from the one signal table (macOS SIGTSTP is 18; 20 is SIGCHLD there).
+    private static readonly int SIGINT = PsBash.Core.Platform.OsSignals.ToNative(PsBash.Core.Platform.OsSignals.SIGINT);
+    private static readonly int SIGTSTP = PsBash.Core.Platform.OsSignals.ToNative(PsBash.Core.Platform.OsSignals.SIGTSTP);
+    private static readonly int SIGWINCH = PsBash.Core.Platform.OsSignals.ToNative(PsBash.Core.Platform.OsSignals.SIGWINCH);
 
     /// <summary>
     /// A signal-forwarding test target: a child that is its own session /
