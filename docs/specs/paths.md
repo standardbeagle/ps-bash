@@ -133,6 +133,11 @@ Rules:
 - **Stream names are dups.** `exec 3>/dev/stdout`, `{v}>/dev/stderr`, `exec 3>/dev/fd/7` are
   `exec 3>&1`, `{v}>&2`, `exec 3>&7` (`BashFdTable.Open`): a later `>&3` writes the stdout of the command
   that writes, so an enclosing pipe or redirect applies.
+- **A descriptor's writes are in the file when the command ends.** Every writer to a table descriptor
+  (`>&N` = `Write-BashFd`, `/dev/fd/N`) calls `BashFdTable.Flush(N)` at its end, as bash's write(2)s are
+  there at once: a burst (`exec 3>f; seq 1 1000 >&3`) used to sit in the writer's buffer until the idle
+  timer, and a program run next (`stat -c %s f`) saw a short file. Guards:
+  `DeviceChokePointTests.FdTable_ABurstOfWrites_*`, `ByteFilterStreamingDifferentialTests.ExecFd_*`.
 - **stdin is the cmdlet's pipeline input**, read by the cmdlet, not opened: a cmdlet treats the operand
   through `FileSystemHelpers.IsStdinOperand` (`-`, `/dev/stdin`, `/dev/fd/0`); the parser drops a literal
   `cmd < /dev/stdin` (`BashParser.AddRedirect`: the command keeps its pipe) and the emitter feeds a command
@@ -155,8 +160,9 @@ oracle: `DeviceNameDifferentialTests`):
   false; `test -e "$d"` and the literal `[ -e /dev/null ]` are answered from the device.
 - A descriptor duplicated from stderr (`exec 3>/dev/stderr`, as `exec 3>&2`) writes the shell's stderr
   directly: an enclosing `2>&1 |` or `2> f` on a compound command does not capture `>&3`.
-- An endless device read by a whole-input command (`sort /dev/zero`) never ends, as in bash; `od` asks
-  for `-N`.
+- An endless device read by a whole-input command (`sort /dev/zero`) never ends, as in bash. The byte
+  filters `base64` and `od` stream (runtime-functions.md "Byte filters stream"): `od -v /dev/zero | head -1`
+  and `od -N 4 /dev/zero` end, as GNU's do.
 - `ls -l /dev/null` shows fixed mode bits; `/dev/tcp`, `/dev/udp` and `/dev/pts/*` are not devices here.
 
 ## PATH

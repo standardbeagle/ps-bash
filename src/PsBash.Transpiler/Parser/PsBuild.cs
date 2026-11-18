@@ -1459,9 +1459,12 @@ public static class PsBuild
     /// time. Prepended (<c>feed | cmd</c>) to a stdin-reading command inside a stdin scope. Lazy:
     /// a consumer that stops the pipeline early (<c>head</c>) leaves the rest queued, and
     /// <c>read</c> / a later command advance the same cursor. Empty queue = empty input (EOF).
+    /// Each record is taken with ONE atomic <c>TryDequeue</c> (<c>StdinCursor.TryDequeue</c> / <c>Queue.TryDequeue</c>): a
+    /// background job reads the same cursor, and <c>Count -gt 0</c> then <c>Dequeue()</c> let it take the record in
+    /// between, so <c>Dequeue</c> threw at end of input (guard: SharedStdinTakeGuardTests).
     /// </summary>
     public const string StdinFeed =
-        "& { while ($global:__BashStdIn -and $global:__BashStdIn.Count -gt 0) { $global:__BashStdIn.Dequeue() } }";
+        "& { $__psbash_q = $global:__BashStdIn; $__psbash_r = $null; while ($__psbash_q -and $__psbash_q.TryDequeue([ref]$__psbash_r)) { $__psbash_r } }";
 
     /// <summary>
     /// Wrap <paramref name="body"/> so it runs with the incoming pipeline (<c>$input</c>) as ITS stdin:

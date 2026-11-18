@@ -18,10 +18,11 @@ namespace PsBash.Cmdlets;
 /// <list type="bullet">
 /// <item><b>File mode</b> — only the first operand is consumed (the psm1
 /// oracle indexes <c>$operands[0]</c> directly; later operands are ignored).
-/// For encoding, the file stream is encoded in chunks so raw bytes are never
-/// materialized as one array. For decoding, base64 characters are consumed
-/// incrementally while whitespace is ignored, matching
-/// <see cref="Convert.FromBase64String(string)"/>.</item>
+/// Both directions STREAM (<see cref="ByteFilterStreaming"/>): encoding feeds
+/// <see cref="Base64LineEncoder"/> chunk by chunk, decoding feeds a
+/// <see cref="ByteRecordEmitter"/> one quartet at a time, and output is written while
+/// the file is read - so a downstream <c>head</c> ends the read, and
+/// <c>base64 /dev/urandom | head -c 32</c> ends as GNU's does.</item>
 /// <item><b>Pipeline mode</b> — the record byte stream (each item's <c>BashText</c>
 /// plus a boundary <c>\n</c> unless unterminated) is consumed RECORD BY RECORD in
 /// <c>ProcessRecord</c>: encoding feeds <see cref="Base64LineEncoder"/> (wrapped lines
@@ -29,15 +30,10 @@ namespace PsBash.Cmdlets;
 /// bytes become records as they arrive). Nothing but a carry and one line is retained.</item>
 /// </list>
 ///
-/// Encoded output is wrapped at <c>-w N</c> columns by joining wrap-sized
-/// substrings with <c>\n</c> (the record boundary; <see cref="Environment.NewLine"/> would put CRs into
-/// the bytes on Windows) and stripping trailing
-/// <c>\r</c> / <c>\n</c>. The wrapped string is emitted as a single
-/// <c>PsBash.TextOutput</c> object (BashText preserves the embedded line
-/// endings). <c>-w 0</c> emits the unwrapped string in one piece.
-///
-/// Decoded output is interpreted as UTF-8 text with a single trailing <c>\n</c>
-/// stripped (the oracle's <c>$output -replace "`n$", ''</c>).
+/// Encoded output is one record per wrapped line (<c>-w N</c>); <c>-w 0</c> is one
+/// line written in unterminated pieces (<see cref="Base64LineEncoder.UnwrappedPiece"/>).
+/// Decoded output is the exact bytes (escaped-byte markers for non-UTF-8), one record
+/// per line, an unterminated tail kept unterminated.
 ///
 /// Flag binding: <c>-d</c> prefix-collides with the <c>-Debug</c> common
 /// parameter and <c>-w</c> prefix-collides with <c>-WarningAction</c> /
@@ -226,10 +222,10 @@ public sealed class InvokeBashBase64Command : PSCmdlet
                 _recordBytes!.Encode(InputObject, _encoder!.Append);
             }
         }
-        catch (FormatException ex)
+        catch (FormatException)
         {
             _failed = true;
-            FileSystemHelpers.WriteBashError(this, $"base64: invalid input: {ex.Message}");
+            FileSystemHelpers.WriteBashError(this, "base64: invalid input");
         }
     }
 
@@ -261,9 +257,9 @@ public sealed class InvokeBashBase64Command : PSCmdlet
                 _encoder.Finish();
             }
         }
-        catch (FormatException ex)
+        catch (FormatException)
         {
-            FileSystemHelpers.WriteBashError(this, $"base64: invalid input: {ex.Message}");
+            FileSystemHelpers.WriteBashError(this, "base64: invalid input");
         }
         return true;
     }
@@ -302,43 +298,43 @@ public sealed class InvokeBashBase64Command : PSCmdlet
         {
             // Oracle uses operands[0] directly — later operands are ignored.
             string filePath = FileSystemHelpers.ProviderPath(this, operands[0]);
+            // STREAMED both ways (ByteFilterStreaming): output goes out while the file is read, so a downstream
+            // `head` stops the read through WriteObject, as SIGPIPE stops GNU's. Buffering to EOF first never
+            // ended on an endless device (`base64 /dev/urandom | head -c 32`).
             if (decode)
             {
-                string output;
+                var decoded = new ByteRecordEmitter(WriteObject);
                 try
                 {
-                    output = DecodeBase64FileToOutput(filePath, ignoreGarbage);
+                    DecodeFile(filePath, ignoreGarbage, decoded.Append);
+                    decoded.Finish();
                 }
-                catch (FormatException ex)
+                catch (FormatException)
                 {
-                    FileSystemHelpers.WriteBashError(this, $"base64: invalid input: {ex.Message}");
-                    return;
+                    // Like GNU (and the stdin path), what decoded before the bad character is still written.
+                    decoded.Finish();
+                    FileSystemHelpers.WriteBashError(this, "base64: invalid input");
                 }
                 catch (Exception ex)
                 {
                     if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-                    WriteReadError(filePath, ex, normalizeNotFound: true);
-                    return;
+                    WriteReadError(filePath, ex);
                 }
-                WriteDecoded(output);
                 return;
             }
-            else
+            try
             {
-                string output;
-                try
-                {
-                    output = EncodeFileToBase64String(filePath, wrapCol);
-                }
-                catch (Exception ex)
-                {
-                    if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-                    WriteReadError(filePath, ex, normalizeNotFound: false);
-                    return;
-                }
-                WriteEncoded(output, wrapCol);
-                return;
+                var encoder = new Base64LineEncoder(wrapCol, WriteObject);
+                using var stream = BashFileSystem.OpenRead(filePath);
+                ByteFilterStreaming.Pump(stream, this, encoder.Append);
+                encoder.Finish();
             }
+            catch (Exception ex)
+            {
+                if (FileSystemHelpers.IsPipelineStop(ex)) throw;
+                WriteReadError(filePath, ex);
+            }
+            return;
         }
 
         // The pipeline was consumed record by record in ProcessRecord (the exact byte stream the
@@ -347,85 +343,15 @@ public sealed class InvokeBashBase64Command : PSCmdlet
         FinishStdinStream();
     }
 
-    // base64 is a TRANSFORMER: one fresh text record carrying exactly GNU's bytes.
-    // Decoded bytes are written as-is (no newline added); encoded text gets GNU's final
-    // newline only when wrapping (`-w 0` writes none).
-    private void WriteDecoded(string output)
-    {
-        // EmitBashLines splits the exact byte stream into records and marks an unterminated tail.
-        foreach (var rec in BashRuntime.EmitBashLines(output)) WriteObject(rec);
-    }
-
-    private void WriteEncoded(string output, int wrapCol)
-    {
-        if (output.Length == 0) return;
-        WriteObject(BashRuntime.TextRecord(output, unterminated: wrapCol <= 0));
-    }
-
-    private static string EncodeFileToBase64String(string path, int wrapCol)
-    {
-        using var stream = BashFileSystem.OpenRead(path);
-        return EncodeByteStream(stream, wrapCol);
-    }
-
-    private static string EncodeByteStream(Stream stream, int wrapCol)
-    {
-        var output = new Base64OutputBuilder(wrapCol);
-        var buffer = new byte[49152]; // Multiple of 3, so most chunks encode independently.
-        var carry = new byte[2];
-        int carryLen = 0;
-
-        int read;
-        while ((read = stream.Read(buffer, 0, buffer.Length)) > 0)
-        {
-            int offset = 0;
-            if (carryLen > 0)
-            {
-                int needed = 3 - carryLen;
-                if (read < needed)
-                {
-                    Array.Copy(buffer, 0, carry, carryLen, read);
-                    carryLen += read;
-                    continue;
-                }
-
-                var triple = new byte[3];
-                Array.Copy(carry, 0, triple, 0, carryLen);
-                Array.Copy(buffer, 0, triple, carryLen, needed);
-                output.Append(Convert.ToBase64String(triple));
-                offset = needed;
-                carryLen = 0;
-            }
-
-            int fullLen = ((read - offset) / 3) * 3;
-            if (fullLen > 0)
-            {
-                output.Append(Convert.ToBase64String(buffer, offset, fullLen));
-                offset += fullLen;
-            }
-
-            carryLen = read - offset;
-            if (carryLen > 0)
-            {
-                Array.Copy(buffer, offset, carry, 0, carryLen);
-            }
-        }
-
-        if (carryLen > 0)
-        {
-            var final = new byte[carryLen];
-            Array.Copy(carry, final, carryLen);
-            output.Append(Convert.ToBase64String(final));
-        }
-
-        return output.ToString();
-    }
-
-    private static string DecodeBase64FileToOutput(string path, bool ignoreGarbage)
+    /// <summary>
+    /// Decode the base64 text of <paramref name="path"/> into <paramref name="sink"/> one quartet at a time, as it is
+    /// read (whitespace anywhere is skipped; <paramref name="ignoreGarbage"/> also skips any non-alphabet char). Throws
+    /// <see cref="FormatException"/> at the first bad quartet, after the bytes before it reached the sink.
+    /// </summary>
+    private void DecodeFile(string path, bool ignoreGarbage, ByteSink sink)
     {
         using var stream = BashFileSystem.OpenRead(path);
         using var reader = BashFileSystem.OpenRawReader(stream, leaveOpen: true);
-        using var decoded = new MemoryStream();
         var chars = new char[16384];
         var quartet = new char[4];
         int quartetLen = 0;
@@ -433,6 +359,7 @@ public sealed class InvokeBashBase64Command : PSCmdlet
         int read;
         while ((read = reader.Read(chars, 0, chars.Length)) > 0)
         {
+            if (Stopping) throw new PipelineStoppedException();
             for (int i = 0; i < read; i++)
             {
                 char ch = chars[i];
@@ -441,20 +368,12 @@ public sealed class InvokeBashBase64Command : PSCmdlet
                 if (ignoreGarbage && !IsBase64Char(ch)) continue;
                 quartet[quartetLen++] = ch;
                 if (quartetLen != 4) continue;
-
-                byte[] bytes = Convert.FromBase64CharArray(quartet, 0, quartetLen);
-                decoded.Write(bytes, 0, bytes.Length);
+                sink(Convert.FromBase64CharArray(quartet, 0, quartetLen));
                 quartetLen = 0;
             }
         }
 
-        if (quartetLen > 0)
-        {
-            byte[] bytes = Convert.FromBase64CharArray(quartet, 0, quartetLen);
-            decoded.Write(bytes, 0, bytes.Length);
-        }
-
-        return DecodeBytesToOutput(decoded.GetBuffer(), (int)decoded.Length);
+        if (quartetLen > 0) sink(Convert.FromBase64CharArray(quartet, 0, quartetLen));
     }
 
     /// <summary>True for a standard base64 alphabet char (incl. <c>=</c> padding).</summary>
@@ -462,57 +381,9 @@ public sealed class InvokeBashBase64Command : PSCmdlet
         => (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z')
            || (ch >= '0' && ch <= '9') || ch == '+' || ch == '/' || ch == '=';
 
-    private static string DecodeBytesToOutput(byte[] decoded, int count)
+    private void WriteReadError(string path, Exception ex)
     {
-        // The decoded bytes EXACTLY (escaped-byte markers for non-UTF-8 bytes): a final newline is data, not
-        // something to strip (`printf 'a\n' | base64 | base64 -d | wc -c` is 2).
-        return RawBytes.GetString(decoded, 0, count);
-    }
-
-    private void WriteReadError(string path, Exception ex, bool normalizeNotFound)
-    {
-        // normalizeNotFound is kept for the two call sites; both now map a missing file to GNU's text
-        // (the encode path used to leak the .NET "Could not find file 'C:\...'" message).
-        _ = normalizeNotFound;
         FileSystemHelpers.WriteBashError(this,
             $"base64: {BashPath.ToShell(path)}: {FileSystemHelpers.ReadErrorMessage(ex)}");
-    }
-
-    private sealed class Base64OutputBuilder
-    {
-        private readonly int _wrapCol;
-        private readonly StringBuilder _builder = new();
-        private int _lineLen;
-
-        public Base64OutputBuilder(int wrapCol)
-        {
-            _wrapCol = wrapCol;
-        }
-
-        public void Append(string encoded)
-        {
-            if (_wrapCol <= 0)
-            {
-                _builder.Append(encoded);
-                return;
-            }
-
-            int offset = 0;
-            while (offset < encoded.Length)
-            {
-                if (_lineLen == _wrapCol)
-                {
-                    _builder.Append('\n'); // a record boundary is always LF (Environment.NewLine put CRs into the bytes on Windows)
-                    _lineLen = 0;
-                }
-
-                int take = Math.Min(_wrapCol - _lineLen, encoded.Length - offset);
-                _builder.Append(encoded, offset, take);
-                _lineLen += take;
-                offset += take;
-            }
-        }
-
-        public override string ToString() => _builder.ToString();
     }
 }

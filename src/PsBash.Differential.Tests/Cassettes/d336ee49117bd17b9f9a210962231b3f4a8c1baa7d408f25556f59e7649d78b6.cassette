@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 66
+stdout-length: 69
+stderr-length: 0
+==== SCRIPT ====
+timeout 20 bash -c 'cat /dev/zero | od -v | head -1'; echo "st=$?"
+==== STDOUT ====
+0000000 000000 000000 000000 000000 000000 000000 000000 000000
+st=0
+
+==== STDERR ====
+

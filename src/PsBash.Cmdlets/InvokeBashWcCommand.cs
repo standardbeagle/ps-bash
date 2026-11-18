@@ -219,17 +219,22 @@ public sealed class InvokeBashWcCommand : PSCmdlet
         _suppressStdin = _plan.Declined || _operands.Count > 0;
     }
 
-    // --files0-from (the name list, or an entry "-") or a `-` operand: the pipeline is kept, not counted.
+    // --files0-from=- : the pipeline is the NAME LIST, kept (it is names, not data) until EndProcessing reads it.
     private readonly List<object> _stdinRecords = new();
+
+    // A `-` operand (`wc - f`) or a "-" entry of a --files0-from FILE: the pipeline is the stdin those count. It is
+    // COUNTED as it streams, into the running totals, and EndProcessing hands them to the first "-" (TakeStdinCounts);
+    // keeping every record until then held the whole input in memory.
+    private bool StdinIsNameList => _plan is { Declined: false, Files0From: "-" };
+    private bool StdinIsDashOperand => _plan is { Declined: false } && (_plan.Files0From is not null || _operands.Contains("-"));
 
     protected override void ProcessRecord()
     {
         if (InputObject == null) return;
 
         ParseOnce();
-        // The pipeline is kept, not counted, when it is the --files0-from list or a `-` operand (`wc - f`).
-        if (_plan is { Declined: false } && (_plan.Files0From is not null || _operands.Contains("-"))) { _stdinRecords.Add(InputObject); return; }
-        if (_suppressStdin) return;
+        if (StdinIsNameList) { _stdinRecords.Add(InputObject); return; }
+        if (_suppressStdin && !StdinIsDashOperand) return;
 
         // Stream the counts instead of buffering the pipe — wc only ever needs
         // running totals. Per-record accumulation is exactly the buffered
@@ -366,7 +371,7 @@ public sealed class InvokeBashWcCommand : PSCmdlet
             operand.Claim(this);
             if (filePath == "-")
             {
-                var (sl, sw, sc, sm, sx) = CountRecords();
+                var (sl, sw, sc, sm, sx) = TakeStdinCounts();
                 grandLines += sl; grandWords += sw; grandBytes += sc; grandChars += sm; if (sx > grandMax) grandMax = sx;
                 if (totalMode != TotalMode.Only)
                     WriteObject(BuildResult(sl, sw, sc, sm, sx, files0 ? string.Empty : "-"));
@@ -431,19 +436,16 @@ public sealed class InvokeBashWcCommand : PSCmdlet
     /// <summary>A --files0-from entry is used verbatim: no globbing, resolved against the PowerShell location.</summary>
     private FileSystemHelpers.OperandPath ResolveVerbatim(string name) => new(FileSystemHelpers.ProviderPath(this, name), name);
 
-    /// <summary>The counts of the buffered pipeline (the "-" entry of a --files0-from list).</summary>
-    private (int Lines, int Words, int Bytes, int Chars, int Max) CountRecords()
+    /// <summary>
+    /// The counts of stdin (a `-` operand, or the "-" entry of a --files0-from list), streamed in ProcessRecord. Taken
+    /// once: stdin is then at end of input, so a second "-" counts zeros, as GNU's does (`wc - -`).
+    /// </summary>
+    private (int Lines, int Words, int Bytes, int Chars, int Max) TakeStdinCounts()
     {
+        var counts = (_totalLines, _totalWords, _totalBytes, _totalChars, _maxLine);
         _totalLines = _totalWords = _totalBytes = _totalChars = _maxLine = 0;
         _inWord = false; _curLine = 0;
-        foreach (var rec in _stdinRecords)
-        {
-            string text = BashRuntime.GetBashText(rec);
-            if (!text.EndsWith('\n') && !BashRuntime.IsUnterminated(rec)) text += "\n";
-            AccumulateStream(text);
-        }
-        _stdinRecords.Clear();
-        return (_totalLines, _totalWords, _totalBytes, _totalChars, _maxLine);
+        return counts;
     }
 
     /// <summary>

@@ -7,6 +7,37 @@ namespace PsBash.Cmdlets;
 internal delegate void ByteSink(ReadOnlySpan<byte> bytes);
 
 /// <summary>
+/// THE read loop of a byte filter's file operand (<c>base64 FILE</c>, <c>od FILE</c>): chunk in, sink out, output
+/// written while the input is read. A filter that buffers its whole input before writing never ends on an endless
+/// device (<c>base64 /dev/urandom | head -c 32</c>: GNU encodes as it reads and the closed pipe stops it); here the
+/// downstream stop unwinds through the sink's <c>WriteObject</c>, and a Ctrl-C (<see cref="Cmdlet.Stopping"/>) ends a
+/// loop that writes nothing (<c>od /dev/zero</c> folds every line into <c>*</c>, and runs until interrupted, as GNU's
+/// does). Guard: <c>ByteFilterStreamingGuardTests</c>; spec runtime-functions.md "Byte filters stream".
+/// </summary>
+internal static class ByteFilterStreaming
+{
+    /// <summary>Read size: a multiple of 3 (base64 triples) and of every od block size.</summary>
+    internal const int ChunkSize = 48 * 1024;
+
+    /// <summary>
+    /// Feed <paramref name="input"/> to <paramref name="sink"/> chunk by chunk until end of input, or until
+    /// <paramref name="done"/> says the consumer wants no more (<c>od -N</c>). Throws
+    /// <see cref="System.Management.Automation.PipelineStoppedException"/> when <paramref name="cmdlet"/> is stopping.
+    /// </summary>
+    internal static void Pump(Stream input, System.Management.Automation.Cmdlet cmdlet, ByteSink sink, Func<bool>? done = null)
+    {
+        var buffer = new byte[ChunkSize];
+        while (done?.Invoke() != true)
+        {
+            if (cmdlet.Stopping) throw new System.Management.Automation.PipelineStoppedException();
+            int read = input.Read(buffer, 0, buffer.Length);
+            if (read <= 0) return;
+            sink(buffer.AsSpan(0, read));
+        }
+    }
+}
+
+/// <summary>
 /// Pipeline records -> the byte stream they stand for, ONE RECORD AT A TIME. The incremental
 /// counterpart of <c>RawBytes.GetBytes(BashRuntime.RecordStreamText(items))</c>: each record
 /// contributes its BashText plus a boundary <c>\n</c> unless it is unterminated or already ends
@@ -123,10 +154,12 @@ internal sealed class ByteRecordStream : Stream
 /// <summary>
 /// Incremental base64 encoder: bytes in, wrapped lines out. A 0-2 byte carry joins a triple split
 /// across chunks, so the output equals encoding the concatenated bytes. With a wrap column each
-/// full line is emitted as it completes (a terminated record); with <c>-w 0</c> the single
-/// unwrapped line is emitted at <see cref="Finish"/> as one <c>NoTrailingNewline</c> record (it is
-/// one line to every downstream consumer, so it cannot be split). Retained: the carry plus the
-/// current line (plus the whole output only for <c>-w 0</c>).
+/// full line is emitted as it completes (a terminated record); with <c>-w 0</c> the one unwrapped
+/// line goes out in <c>NoTrailingNewline</c> PIECES of <see cref="UnwrappedPiece"/> chars (a piece is
+/// not a line: every line consumer joins pieces through <c>LineAssembler</c>, spec runtime-functions.md
+/// "Partial lines"), the rest at <see cref="Finish"/>. Retained: the carry plus at most one line or
+/// piece - never the whole output, so <c>base64 -w0 /dev/zero | head -c 10</c> ends, as GNU's does
+/// (it writes as it encodes; holding the line until end of input never ended on an endless device).
 /// </summary>
 internal sealed class Base64LineEncoder
 {
@@ -136,6 +169,9 @@ internal sealed class Base64LineEncoder
     private int _carryLen;
     private readonly StringBuilder _line = new();
     private readonly char[] _chars = new char[4 * 3072];
+
+    /// <summary>Chars of an unwrapped (<c>-w 0</c>) line held before they go out as one unterminated piece.</summary>
+    internal const int UnwrappedPiece = 64 * 1024;
 
     public Base64LineEncoder(int wrapColumn, Action<object> emit)
     {
@@ -186,7 +222,16 @@ internal sealed class Base64LineEncoder
 
     private void Push(ReadOnlySpan<char> chars)
     {
-        if (_wrap <= 0) { _line.Append(chars); return; }
+        if (_wrap <= 0)
+        {
+            _line.Append(chars);
+            if (_line.Length >= UnwrappedPiece)
+            {
+                _emit(BashRuntime.TextRecord(_line.ToString(), unterminated: true));
+                _line.Clear();
+            }
+            return;
+        }
         while (chars.Length > 0)
         {
             int take = Math.Min(_wrap - _line.Length, chars.Length);

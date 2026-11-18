@@ -427,7 +427,7 @@ if ($__bfed -and $__bc -is [string] -and $__bc -ceq $__bn -and $__bn -ne '' -and
 } elseif ($__bfed) {
     $__bread = $(if ($__bsr = 'PsBash.Core.Parser.StdinReaders' -as [type]) { $__bsr::ShouldFeed($__bn, [string[]]$__bp) } else { $true })
     if ($__bread) {
-        & { while ($global:__BashStdIn -and $global:__BashStdIn.Count -gt 0) { $global:__BashStdIn.Dequeue() } } | & $__bc @__bp
+        & { $__psbash_q = $global:__BashStdIn; $__psbash_r = $null; while ($__psbash_q -and $__psbash_q.TryDequeue([ref]$__psbash_r)) { $__psbash_r } } | & $__bc @__bp
     } else { & $__bc @__bp }
 } elseif ($MyInvocation.ExpectingInput) { $input | & $__bc @__bp }
 else { & $__bc @__bp }

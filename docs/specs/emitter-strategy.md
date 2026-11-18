@@ -478,8 +478,11 @@ passes its pipeline to `$input` only, so the emitter builds the sharing itself
   `StdinCursor` over forwarded frames (runtime-functions.md "Deliberately left"). Arbitrary producers
   (`cmd | { head -n1; }`) stay eager.
 - **Readers.** Inside a scope `EmitSimpleFed` prefixes a stdin-reading simple command with the lazy
-  feed `& { while (queue.Count) { queue.Dequeue() } } | cmd`; `read` and the feed advance the same
-  cursor, so `{ read x; sort; }` sorts the REST. Which commands read stdin is a syntactic estimate
+  feed `& { while ($q.TryDequeue([ref]$r)) { $r } } | cmd`; `read` and the feed advance the same
+  cursor, so `{ read x; sort; }` sorts the REST. **Every take from a shared stdin is ONE atomic
+  `TryDequeue`** (`StdinCursor.TryDequeue`, `SharedStdin.TryTake`): a background job reads the same cursor
+  (`BackgroundJobStdin`), and `Count` then `Dequeue` let it take the record in between, so `Dequeue` threw
+  at end of input (guards `SharedStdinTakeGuardTests`, `SharedStdinTakeTests`). Which commands read stdin is a syntactic estimate
   (`StdinReaders.ShouldFeed`, the emitter never parses flags): `tr xargs tee mapfile` always;
   `cat head tail wc sort uniq cut nl rev tac fold paste join comm base64 md5sum … less more` when
   there is no file operand (value-taking flags like `head -n 2`, `sort -k 2` are skipped, a lone

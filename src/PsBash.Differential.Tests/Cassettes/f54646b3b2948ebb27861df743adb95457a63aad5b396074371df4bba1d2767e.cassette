@@ -1,0 +1,19 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 112
+stdout-length: 278
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit; printf 'abcdefghijklmnopqrstuvwxyz0123456789' > g; od -tx1 g - g <<< hi; echo "st=$?"
+==== STDOUT ====
+0000000 61 62 63 64 65 66 67 68 69 6a 6b 6c 6d 6e 6f 70
+0000020 71 72 73 74 75 76 77 78 79 7a 30 31 32 33 34 35
+0000040 36 37 38 39 68 69 0a 61 62 63 64 65 66 67 68 69
+0000060 6a 6b 6c 6d 6e 6f 70 71 72 73 74 75 76 77 78 79
+0000100 7a 30 31 32 33 34 35 36 37 38 39
+0000113
+st=0
+
+==== STDERR ====
+

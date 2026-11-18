@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 101
+stdout-length: 15
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit; exec 3>>f; for i in 1 2 3; do seq 1 300 >&3; stat -c %s f; done; exec 3>&-
+==== STDOUT ====
+1092
+2184
+3276
+
+==== STDERR ====
+

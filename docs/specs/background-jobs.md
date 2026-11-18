@@ -598,7 +598,11 @@ paid this:
    with them opened lazily. A runspace whose job completed and left it clean
    goes back to the idle set, up to `MaxIdle` (8; about 4 MB each). `EndJob` removes the globals the job created and
    restores the ones it changed. A job that changed a function or alias, started jobs of its own, or was stopped
-   leaves a runspace that is closed and replaced. Opens only top up the owned count (idle + running) to `Spares`, never
+   leaves a runspace that is closed and replaced. So does a job that changed shell state IN PLACE: the baseline
+   compares the shell-state globals (`BashShellState.AllGlobalNames`: the trap table, the alias table, ...) and the
+   location stack by content through `StateStamp`, not by reference only, so `trap`, `alias` or `pushd` in a job
+   cannot reach the next job given that runspace (guards `BackgroundJobRunspaceTests.Baseline_*`,
+   `ByteFilterStreamingDifferentialTests.JobState_*`). Opens only top up the owned count (idle + running) to `Spares`, never
    after each take: an open compiles the psm1 under the AMSI lock (§12.4), and an open beside a burst of launches
    delayed each of their starts by about 100 ms. When no runspace is idle but the warm-up thread is opening one, the
    launcher waits for it. Two opens at once each took about twice as long: a fresh host's first job took 2.3-3.0 s

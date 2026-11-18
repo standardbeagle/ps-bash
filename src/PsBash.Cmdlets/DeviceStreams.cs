@@ -194,7 +194,8 @@ internal static class DeviceStreams
 
         protected override void Dispose(bool disposing)
         {
-            if (disposing) { _out?.Dispose(); _err?.Dispose(); }
+            // The command's writes are in the file once it closes the device (BashFdTable.Flush).
+            if (disposing) { BashFdTable.Flush(fd); _out?.Dispose(); _err?.Dispose(); }
             base.Dispose(disposing);
         }
     }

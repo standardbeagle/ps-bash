@@ -7,8 +7,10 @@ namespace PsBash.Cmdlets;
 /// <para>Supported: <c>-A RADIX</c> (o d x n), <c>-t TYPE</c> (a c d o u x with sizes 1 2 4 8, repeatable), the
 /// traditional <c>-a -b -c -d -o -s -x -i -l</c>, <c>-j SKIP</c>, <c>-N COUNT</c>, <c>-w[BYTES]</c>, <c>-v</c>, and
 /// their long forms. Input is the file operands in order, or stdin when there are none (or for <c>-</c>).</para>
-/// <para>The work is in <see cref="OdFormat"/> (pure). Stdin records are turned back into their exact bytes by
-/// <see cref="RecordByteEncoder"/>, the same stream <c>md5sum</c> hashes. The single-letter flags that collide with
+/// <para>The formatting is <see cref="OdLineWriter"/>, fed AS THE BYTES ARRIVE (a byte filter streams:
+/// <see cref="ByteFilterStreaming"/>): stdin records through <see cref="RecordByteEncoder"/> (the same stream
+/// <c>md5sum</c> hashes) inside <c>ProcessRecord</c> when stdin is the first input, a file chunk by chunk. Only stdin
+/// that follows a file operand (<c>od f -</c>) is held until its turn. The single-letter flags that collide with
 /// PowerShell common parameters (<c>-a -c -d -o -v -w</c>) reach the cmdlet quoted from the transpiler.</para>
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashOd")]
@@ -21,22 +23,45 @@ public sealed class InvokeBashOdCommand : PSCmdlet
     [Parameter(ValueFromPipeline = true)]
     public PSObject? InputObject { get; set; }
 
-    private readonly MemoryStream _stdin = new();
+    private OdPlan? _plan;
+    private OdLineWriter? _writer;
+    // Stdin is the first input (no operand, or `-` first): fed to the writer as it arrives.
+    private bool _stdinFirst;
+    // Stdin that comes after a file operand: held until its turn.
+    private MemoryStream? _heldStdin;
     private RecordByteEncoder? _encoder;
 
-    private void AppendStdin(ReadOnlySpan<byte> bytes) => _stdin.Write(bytes);
+    private OdPlan Planned()
+    {
+        if (_plan is not null) return _plan;
+        _plan = OdFormat.Plan(Arguments ?? Array.Empty<string>());
+        if (_plan.Error is null && !_plan.Help && !_plan.Version)
+        {
+            _writer = new OdLineWriter(_plan, line => WriteObject(BashRuntime.NewBashObject(line)));
+            _stdinFirst = _plan.Operands.Count == 0 || _plan.Operands[0] == "-";
+        }
+        return _plan;
+    }
+
+    private void FeedStdin(ReadOnlySpan<byte> bytes)
+    {
+        if (_stdinFirst) _writer!.Append(bytes);
+        else (_heldStdin ??= new MemoryStream()).Write(bytes);
+    }
 
     protected override void ProcessRecord()
     {
         if (InputObject is null) return;
-        (_encoder ??= new RecordByteEncoder()).Encode(InputObject, AppendStdin);
+        Planned();
+        if (_writer is null || (_stdinFirst && _writer.Done)) return;
+        (_encoder ??= new RecordByteEncoder()).Encode(InputObject, FeedStdin);
     }
 
     protected override void EndProcessing()
     {
         var args = Arguments ?? Array.Empty<string>();
         FileSystemHelpers.SetLastExitCode(this, 0);
-        var plan = OdFormat.Plan(args);
+        var plan = Planned();
         if (plan.Error is { } error)
         {
             FileSystemHelpers.WriteBashError(this, error);
@@ -50,37 +75,33 @@ public sealed class InvokeBashOdCommand : PSCmdlet
             return;
         }
 
-        _encoder?.Finish(AppendStdin);
+        var writer = _writer!;
+        _encoder?.Finish(FeedStdin);
         bool hadError = false;
-        using var all = new MemoryStream();
-        if (plan.Operands.Count == 0) _stdin.WriteTo(all);
-        foreach (var raw in plan.Operands)
+        // Stdin is read once: a second `-` finds it at end of input, as GNU's does.
+        bool stdinUsed = _stdinFirst;
+        for (int oi = _stdinFirst ? 1 : 0; oi < plan.Operands.Count; oi++)
         {
-            if (raw == "-") { _stdin.WriteTo(all); continue; }
+            string raw = plan.Operands[oi];
+            if (writer.Done) break;
+            if (raw == "-")
+            {
+                if (!stdinUsed && _heldStdin is not null) writer.Append(_heldStdin.GetBuffer().AsSpan(0, (int)_heldStdin.Length));
+                stdinUsed = true;
+                _heldStdin = null;
+                continue;
+            }
             foreach (var op in FileSystemHelpers.ResolveOperands(this, raw))
             {
+                if (writer.Done) break;
                 if (Directory.Exists(op.Path))
                 {
                     FileSystemHelpers.WriteBashError(this, $"od: {op.Display}: read error: Is a directory");
                     hadError = true;
                     continue;
                 }
-                // An endless device (/dev/zero, /dev/urandom, /dev/full: DevicePath) is read only as far as -N asks.
-                if (PsBash.Core.DevicePath.Classify(op.Path) is PsBash.Core.DeviceKind.Zero or PsBash.Core.DeviceKind.Random or PsBash.Core.DeviceKind.Full)
-                {
-                    if (plan.Limit < 0)
-                    {
-                        FileSystemHelpers.WriteBashError(this, $"od: {op.Display}: endless device: give -N BYTES");
-                        hadError = true;
-                        continue;
-                    }
-                    var want = new byte[checked((int)Math.Min(plan.Skip + plan.Limit - Math.Min(all.Length, plan.Skip + plan.Limit), 64L * 1024 * 1024))];
-                    using var device = BashFileSystem.OpenRead(op.Path);
-                    device.ReadExactly(want);
-                    all.Write(want);
-                    continue;
-                }
-                if (!File.Exists(op.Path) && !PsBash.Core.DevicePath.IsNull(op.Path))
+                if (!File.Exists(op.Path) && !PsBash.Core.DevicePath.IsNull(op.Path)
+                    && PsBash.Core.DevicePath.Classify(op.Path) is not (PsBash.Core.DeviceKind.Zero or PsBash.Core.DeviceKind.Random or PsBash.Core.DeviceKind.Full))
                 {
                     FileSystemHelpers.WriteBashError(this, $"od: {op.Display}: No such file or directory");
                     hadError = true;
@@ -88,8 +109,9 @@ public sealed class InvokeBashOdCommand : PSCmdlet
                 }
                 try
                 {
+                    // An endless device (/dev/zero, /dev/urandom) is read as far as -N or a downstream stop asks.
                     using var s = BashFileSystem.OpenRead(op.Path);
-                    s.CopyTo(all);
+                    ByteFilterStreaming.Pump(s, this, writer.Append, () => writer.Done);
                 }
                 catch (Exception ex)
                 {
@@ -100,26 +122,19 @@ public sealed class InvokeBashOdCommand : PSCmdlet
             }
         }
 
-        byte[] data = all.ToArray();
         // Nothing could be read at all: GNU prints only the errors, not an address line.
-        if (hadError && data.Length == 0)
+        if (hadError && writer.InputBytes == 0)
         {
             FileSystemHelpers.SetLastExitCode(this, 1);
             return;
         }
-        if (plan.Skip > data.Length)
+        if (writer.SkipPastEnd)
         {
             FileSystemHelpers.WriteBashError(this, "od: cannot skip past end of combined input");
             FileSystemHelpers.SetLastExitCode(this, 1);
             return;
         }
-        long start = plan.Skip;
-        long count = data.Length - start;
-        if (plan.Limit >= 0 && plan.Limit < count) count = plan.Limit;
-        byte[] window = start == 0 && count == data.Length ? data : data.AsSpan((int)start, (int)count).ToArray();
-
-        foreach (var line in OdFormat.Lines(plan, window, start))
-            WriteObject(BashRuntime.NewBashObject(line));
+        writer.Finish();
         if (hadError) FileSystemHelpers.SetLastExitCode(this, 1);
     }
 }

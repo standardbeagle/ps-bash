@@ -6,8 +6,10 @@ namespace PsBash.Core;
 /// the same cursor, which is what makes <c>{ read x; sort; }</c> sort the REST.
 /// <para>
 /// The surface is deliberately a <see cref="Queue{T}"/> look-alike (<see cref="Count"/>,
-/// <see cref="Dequeue"/>, <see cref="Enqueue"/>) because the emitted PowerShell
-/// (<c>PsBuild.StdinFeed</c>: <c>while ($q.Count -gt 0) { $q.Dequeue() }</c>) was written against a queue.
+/// <see cref="Dequeue"/>, <see cref="Enqueue"/>, <see cref="TryDequeue(out object?)"/>) because the emitted PowerShell
+/// (<c>PsBuild.StdinFeed</c>: <c>while ($q.TryDequeue([ref]$r)) { $r }</c>) also runs against a plain queue. A reader
+/// takes with <see cref="TryDequeue(out object?)"/> only: the cursor can be shared with a background job, and
+/// <see cref="Count"/> then <see cref="Dequeue"/> is a check-then-act race.
 /// <see cref="Count"/> is the one non-queue member: it PULLS one record from the source when nothing is
 /// buffered (blocking until one arrives or the source ends) and reports 0 only at end of input, so
 /// <c>Count -gt 0</c> means "another record exists" without ever draining the source ahead of its consumer.
@@ -55,7 +57,7 @@ public sealed class StdinCursor
     }
 
     /// <summary>
-    /// A cursor over a source whose wait for the next record can be CANCELLED (<see cref="TryDequeue"/>), so a
+    /// A cursor over a source whose wait for the next record can be CANCELLED (<see cref="TryDequeue(CancellationToken, out object?)"/>), so a
     /// background reader — the pump feeding a native program's stdin — can be stopped while the source is
     /// silent without losing or half-taking a record.
     /// </summary>
@@ -65,7 +67,7 @@ public sealed class StdinCursor
     }
 
     /// <summary>
-    /// True when a wait for the next record can be cancelled (<see cref="TryDequeue"/> honours its token
+    /// True when a wait for the next record can be cancelled (<see cref="TryDequeue(CancellationToken, out object?)"/> honours its token
     /// while blocked) — a cancellable source, or none left to wait on. An enumerator-backed cursor blocks in
     /// <c>MoveNext</c> regardless of the token.
     /// </summary>
@@ -77,20 +79,36 @@ public sealed class StdinCursor
     /// </summary>
     public bool TryDequeue(CancellationToken ct, out object? record)
     {
-        record = null;
-        if (IsBufferEmpty())
+        // Check-and-take is ONE step under the lock, and an empty buffer means end of input only once the source is
+        // done: another reader (a background job shares the cursor) can take the record this thread just pulled, and
+        // then this one pulls the next instead of reporting a false end of input. `Count` then `Dequeue` raced exactly
+        // there (Dequeue threw "empty" at end of input). Guard: SharedStdinTakeGuardTests.
+        while (true)
         {
+            lock (_gate)
+            {
+                if (_buffer.First is { } first)
+                {
+                    record = first.Value;
+                    _buffer.RemoveFirst();
+                    return true;
+                }
+                if (_sourceDone)
+                {
+                    record = null;
+                    return false;
+                }
+            }
             ct.ThrowIfCancellationRequested();
             FillOne(ct);
         }
-        lock (_gate)
-        {
-            if (_buffer.First is null) return false;
-            record = _buffer.First.Value;
-            _buffer.RemoveFirst();
-            return true;
-        }
     }
+
+    /// <summary>
+    /// Take the next record atomically (waiting for one to arrive), or false at end of input. THE take for a reader that
+    /// may share the cursor with another thread: never <see cref="Count"/> then <see cref="Dequeue"/>.
+    /// </summary>
+    public bool TryDequeue(out object? record) => TryDequeue(CancellationToken.None, out record);
 
     /// <summary>Number of records that can be read right now: 0 only at end of input, else the buffered count (at least 1).</summary>
     public int Count

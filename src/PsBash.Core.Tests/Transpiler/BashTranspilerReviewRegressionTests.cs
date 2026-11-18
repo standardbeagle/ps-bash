@@ -1288,7 +1288,7 @@ public class BashTranspilerReviewRegressionTests
     public void Transpile_SubstitutionInStdinIgnoringPipeStage_ReadsThePipe(string bash)
     {
         var ps = BashTranspiler.Transpile(bash);
-        Assert.Contains("$global:__BashStdIn.Dequeue()", ps);
+        Assert.Contains(PsBash.Core.Parser.PsBuild.StdinFeed, ps);
         Assert.DoesNotContain("$null = @($input)", ps);
     }
 

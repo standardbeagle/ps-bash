@@ -28,6 +28,31 @@ internal static class SharedStdin
     }
 
     /// <summary>
+    /// THE take from a shared stdin: the next record, atomically, or false at end of input. A background job reads the
+    /// same cursor as the shell (<see cref="BackgroundJobStdin"/>), so checking <c>Count</c> and then calling
+    /// <c>Dequeue</c> raced: the other reader could take the record in between, and <c>Dequeue</c> then threw at end of
+    /// input. Every reader here takes through this (guard: SharedStdinTakeGuardTests). A plain <c>Queue[object]</c> is
+    /// single-threaded by construction (a job promotes it to a cursor first).
+    /// </summary>
+    internal static bool TryTake(object? stdin, out object? record)
+    {
+        switch (stdin)
+        {
+            case StdinCursor cursor: return cursor.TryDequeue(out record);
+            case Queue<object> queue: return queue.TryDequeue(out record);
+            default: record = null; return false;
+        }
+    }
+
+    /// <summary>Every record left on <paramref name="stdin"/>, taken one at a time through <see cref="TryTake"/>.</summary>
+    private static List<object> TakeAll(object? stdin)
+    {
+        var items = new List<object>();
+        while (TryTake(stdin, out var item)) items.Add(item!);
+        return items;
+    }
+
+    /// <summary>
     /// Take ONE line (without its terminator) from the shared stdin. A record that carries several
     /// lines (<c>printf 'a\nb\n'</c> is one record) yields its first line and keeps the remainder at
     /// the FRONT of the stream. False when the stdin is absent or at end of input.
@@ -50,22 +75,13 @@ internal static class SharedStdin
         line = null;
         terminated = true;
         if (stdin is not null && PSObject.AsPSObject(stdin).BaseObject is var b && b is StdinCursor or Queue<object>) stdin = b;
-        Func<int> count;
-        Func<object> take;
-        switch (stdin)
-        {
-            case StdinCursor cursor: count = () => cursor.Count; take = cursor.Dequeue; break;
-            case Queue<object> queue: count = () => queue.Count; take = queue.Dequeue; break;
-            default: return false;
-        }
-        if (count() == 0) return false;
-        var item = take();
+        if (stdin is not (StdinCursor or Queue<object>)) return false;
+        if (!TryTake(stdin, out var item)) return false;
         var text = BashRuntime.GetBashText(item).Replace("\r\n", "\n");
         bool unterminated = BashRuntime.IsUnterminated(item);
         // Join the records that continue an unterminated one until a newline arrives (or the input ends).
-        while (unterminated && text.IndexOf('\n') < 0 && count() > 0)
+        while (unterminated && text.IndexOf('\n') < 0 && TryTake(stdin, out var next))
         {
-            var next = take();
             text += BashRuntime.GetBashText(next).Replace("\r\n", "\n");
             unterminated = BashRuntime.IsUnterminated(next);
         }
@@ -100,18 +116,9 @@ internal static class SharedStdin
     {
         record = null;
         terminated = false;
-        var items = new List<object>();
-        switch (Get(state))
-        {
-            case StdinCursor cursor:
-                while (cursor.Count > 0) items.Add(cursor.Dequeue());
-                break;
-            case Queue<object> queue:
-                while (queue.Count > 0) items.Add(queue.Dequeue());
-                break;
-            default:
-                return false;
-        }
+        var stdin = Get(state);
+        if (stdin is null) return false;
+        var items = TakeAll(stdin);
         if (items.Count == 0) return false;
         // Each record ends in a newline unless it is the unterminated tail (printf abc): the stream's exact bytes.
         var text = BashRuntime.RecordStreamText(items).Replace("\r\n", "\n");
@@ -138,18 +145,9 @@ internal static class SharedStdin
     {
         chars = null;
         complete = false;
-        var items = new List<object>();
-        switch (Get(state))
-        {
-            case StdinCursor cursor:
-                while (cursor.Count > 0) items.Add(cursor.Dequeue());
-                break;
-            case Queue<object> queue:
-                while (queue.Count > 0) items.Add(queue.Dequeue());
-                break;
-            default:
-                return false;
-        }
+        var stdin = Get(state);
+        if (stdin is null) return false;
+        var items = TakeAll(stdin);
         if (items.Count == 0) return false;
         var text = BashRuntime.RecordStreamText(items).Replace("\r\n", "\n");
         if (text.Length <= count) { chars = text; complete = text.Length == count; return true; }

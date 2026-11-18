@@ -183,6 +183,27 @@ public class DeviceChokePointTests : IClassFixture<SharedPwshFixture>, IDisposab
         Assert.NotNull(BashFdTable.Open(15, "/dev/fd/9", ">"));    // not open: Bad file descriptor
     }
 
+    /// <summary>
+    /// REGRESSION: <c>exec 3&gt;f; seq 1 1000 &gt;&amp;3; stat -c %s f</c> printed a short size (bash: 3893). A burst of writes
+    /// to a table descriptor sat in the writer's buffer until the idle timer, and a reader that is not ps-bash's own (a
+    /// program, <c>stat</c>, the file's length) saw part of it. The writes are in the file once the command ends
+    /// (<see cref="BashFdTable.Flush"/>). The size is read straight from the file system, past every ps-bash read hook.
+    /// Oracle note (qa-rubric Directive 1): bash-visible half pinned by ByteFilterStreamingDifferentialTests.ExecFd_*.
+    /// </summary>
+    [Fact]
+    public void FdTable_ABurstOfWrites_IsInTheFileWhenTheCommandEnds()
+    {
+        string file = Path.Combine(_root, "burst");
+        Assert.Null(BashFdTable.Open(41, file, ">"));
+        try
+        {
+            var r = CmdResult.Run(_fixture.AcquireFresh(),
+                $"1..1000 | ForEach-Object {{ \"$_\" }} | Write-BashFd 41; [System.IO.FileInfo]::new('{Q(file)}').Length").AssertSuccess();
+            Assert.Equal("3893", r.Lines[^1]);
+        }
+        finally { BashFdTable.Close(41); }
+    }
+
     private static string Q(string s) => s.Replace("'", "''");
 
     /// <summary>Run <paramref name="script"/> with the current location at the root of a PSDrive over <see cref="_root"/>.</summary>

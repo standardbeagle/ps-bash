@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 21
+stdout-length: 82
+stderr-length: 0
+==== SCRIPT ====
+printf 'a\n' | wc - -
+==== STDOUT ====
+      1       1       2 -
+      0       0       0 -
+      1       1       2 total
+
+==== STDERR ====
+

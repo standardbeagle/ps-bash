@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 75
+stdout-length: 8
+stderr-length: 0
+==== SCRIPT ====
+timeout 20 bash -c 'base64 /dev/urandom | head -c 32 | wc -c'; echo "st=$?"
+==== STDOUT ====
+32
+st=0
+
+==== STDERR ====
+

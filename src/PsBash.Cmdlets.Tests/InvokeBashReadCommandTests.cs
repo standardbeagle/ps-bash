@@ -76,7 +76,7 @@ public class InvokeBashReadCommandTests : IClassFixture<SharedPwshFixture>
             "$global:__BashStdIn.Enqueue(\"a`nb`nc\"); $global:__BashStdIn.Enqueue('d'); " +
             "Invoke-BashRead x; Invoke-BashRead y; " +
             "\"x=$env:x y=$env:y\"; $env:x = $null; $env:y = $null; " +
-            "& { while ($global:__BashStdIn -and $global:__BashStdIn.Count -gt 0) { $global:__BashStdIn.Dequeue() } }");
+            PsBash.Core.Parser.PsBuild.StdinFeed);
 
         Assert.Equal(new[] { "x=a y=b", "c", "d" }, lines);
     }

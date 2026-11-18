@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 76
+stdout-length: 5
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit; exec 3>f; seq 1 1000 >&3; stat -c %s f; exec 3>&-
+==== STDOUT ====
+3893
+
+==== STDERR ====
+

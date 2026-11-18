@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 108
+stdout-length: 48
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit; printf 'abcdefghijklmnopqrstuvwxyz0123456789' > g; od -j 100 g 2>&1; echo "st=$?"
+==== STDOUT ====
+od: cannot skip past end of combined input
+st=1
+
+==== STDERR ====
+

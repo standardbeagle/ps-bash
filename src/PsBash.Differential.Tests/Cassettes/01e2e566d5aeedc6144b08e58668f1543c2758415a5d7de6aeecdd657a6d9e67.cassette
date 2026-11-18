@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 1
+script-length: 123
+stdout-length: 31
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit; printf 'YWJj!!!!' > bad; base64 -d bad 2>/dev/null; echo " st=$?"; base64 -d bad 2>&1 >/dev/null
+==== STDOUT ====
+abc st=1
+base64: invalid input
+
+==== STDERR ====
+

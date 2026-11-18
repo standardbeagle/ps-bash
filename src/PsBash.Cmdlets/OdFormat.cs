@@ -33,6 +33,99 @@ internal sealed class OdPlan
 }
 
 /// <summary>
+/// <c>od</c>'s output as the bytes ARRIVE (a byte filter streams: <see cref="ByteFilterStreaming"/>): <c>-j</c> bytes are
+/// dropped, at most <c>-N</c> are taken, every full input line is formatted the moment it fills, and a run of lines equal
+/// to the last one printed becomes one <c>*</c> (unless <c>-v</c>). <see cref="Finish"/> prints the short last line and
+/// the final address. Retained: one input line and the last one printed, never the input - so
+/// <c>od -v /dev/zero | head -1</c> and <c>cat /dev/urandom | od | head</c> end, as GNU's do.
+/// </summary>
+internal sealed class OdLineWriter
+{
+    private readonly OdPlan _plan;
+    private readonly Action<string> _emit;
+    private readonly int _block, _blockWidth, _width;
+    private readonly byte[] _line, _prev;
+    private readonly StringBuilder _sb = new();
+    private readonly long _startOffset;
+    private long _skipLeft, _limitLeft, _pos;
+    private int _lineLen;
+    private bool _hasPrev, _starred;
+
+    public OdLineWriter(OdPlan plan, Action<string> emit) : this(plan, emit, plan.Skip, plan.Limit, plan.Skip) { }
+
+    internal OdLineWriter(OdPlan plan, Action<string> emit, long skip, long limit, long startOffset)
+    {
+        _plan = plan;
+        _emit = emit;
+        _skipLeft = skip;
+        _limitLeft = limit;
+        _startOffset = startOffset;
+        // Columns of every type line up: a block of `block` bytes (the largest unit) is as wide as the widest
+        // type needs for it, and each type spreads that width over its own units.
+        _block = 1;
+        foreach (var t in plan.Types) _block = Math.Max(_block, t.Size);
+        foreach (var t in plan.Types) _blockWidth = Math.Max(_blockWidth, t.FieldWidth * (_block / t.Size));
+        _width = Math.Max(_block, plan.Width - plan.Width % _block);
+        _line = new byte[_width];
+        _prev = new byte[_width];
+    }
+
+    /// <summary>Input bytes seen so far, skipped ones included.</summary>
+    public long InputBytes { get; private set; }
+
+    /// <summary>True once <c>-N</c> bytes were taken: the rest of the input is not needed.</summary>
+    public bool Done => _limitLeft == 0;
+
+    /// <summary>True when the input ended before <c>-j</c> was skipped (GNU: "cannot skip past end of combined input").</summary>
+    public bool SkipPastEnd => _skipLeft > 0;
+
+    public void Append(ReadOnlySpan<byte> data)
+    {
+        InputBytes += data.Length;
+        if (_skipLeft > 0)
+        {
+            int drop = (int)Math.Min(_skipLeft, data.Length);
+            _skipLeft -= drop;
+            data = data[drop..];
+        }
+        if (_limitLeft >= 0 && data.Length > _limitLeft) data = data[..(int)_limitLeft];
+        if (_limitLeft > 0) _limitLeft -= data.Length;
+        while (data.Length > 0)
+        {
+            int take = Math.Min(_width - _lineLen, data.Length);
+            data[..take].CopyTo(_line.AsSpan(_lineLen));
+            _lineLen += take;
+            data = data[take..];
+            if (_lineLen == _width) EmitLine();
+        }
+    }
+
+    /// <summary>The short last line and the final address.</summary>
+    public void Finish()
+    {
+        if (_lineLen > 0) EmitLine();
+        if (_plan.AddressRadix != 'n') _emit(OdFormat.Address(_plan.AddressRadix, _startOffset + _pos));
+    }
+
+    private void EmitLine()
+    {
+        int len = _lineLen;
+        long at = _startOffset + _pos;
+        _pos += len;
+        _lineLen = 0;
+        if (!_plan.ShowDuplicates && len == _width && _hasPrev && _line.AsSpan(0, len).SequenceEqual(_prev))
+        {
+            if (!_starred) { _starred = true; _emit("*"); }
+            return;
+        }
+        _starred = false;
+        _hasPrev = true;
+        _line.AsSpan(0, len).CopyTo(_prev);
+        OdFormat.FormatLine(_plan, _line, len, at, _block, _blockWidth, _sb, _emit);
+    }
+}
+
+/// <summary>
 /// The pure half of <c>od</c> (GNU coreutils 9.4 behaviour): argv to <see cref="OdPlan"/>, bytes to lines. No I/O.
 /// </summary>
 internal static class OdFormat
@@ -201,41 +294,31 @@ internal static class OdFormat
     /// <summary>Every output line for <paramref name="data"/> (already skipped / limited by the caller).</summary>
     public static IEnumerable<string> Lines(OdPlan plan, byte[] data, long startOffset)
     {
-        // Columns of every type line up: a block of `block` bytes (the largest unit) is as wide as the widest
-        // type needs for it, and each type spreads that width over its own units.
-        int block = 1;
-        foreach (var t in plan.Types) block = Math.Max(block, t.Size);
-        int blockWidth = 0;
-        foreach (var t in plan.Types) blockWidth = Math.Max(blockWidth, t.FieldWidth * (block / t.Size));
-        int width = Math.Max(block, plan.Width - plan.Width % block);
-        var sb = new StringBuilder();
-        int prevStart = -1;
-        bool starred = false;
-        for (int pos = 0; pos < data.Length; pos += width)
-        {
-            int len = Math.Min(width, data.Length - pos);
-            if (!plan.ShowDuplicates && len == width && prevStart >= 0
-                && data.AsSpan(pos, len).SequenceEqual(data.AsSpan(prevStart, len)))
-            {
-                if (!starred) { starred = true; yield return "*"; }
-                continue;
-            }
-            starred = false;
-            prevStart = pos;
-            for (int ti = 0; ti < plan.Types.Count; ti++)
-            {
-                var t = plan.Types[ti];
-                sb.Clear();
-                sb.Append(ti == 0 ? Address(plan.AddressRadix, startOffset + pos) : AddressPad(plan.AddressRadix));
-                for (int k = 0; k < len; k += t.Size)
-                    sb.Append(Unit(t, data, pos + k, Math.Min(t.Size, len - k)).PadLeft(blockWidth / (block / t.Size)));
-                yield return sb.ToString();
-            }
-        }
-        if (plan.AddressRadix != 'n') yield return Address(plan.AddressRadix, startOffset + data.Length);
+        var lines = new List<string>();
+        var writer = new OdLineWriter(plan, lines.Add, skip: 0, limit: -1, startOffset);
+        writer.Append(data);
+        writer.Finish();
+        return lines;
     }
 
-    private static string Address(char radix, long offset) => radix switch
+    /// <summary>
+    /// The lines of one input line of <paramref name="len"/> bytes at <paramref name="offset"/> (<paramref name="line"/>
+    /// holds them), one per <c>-t</c> type.
+    /// </summary>
+    internal static void FormatLine(OdPlan plan, byte[] line, int len, long offset, int block, int blockWidth, StringBuilder sb, Action<string> emit)
+    {
+        for (int ti = 0; ti < plan.Types.Count; ti++)
+        {
+            var t = plan.Types[ti];
+            sb.Clear();
+            sb.Append(ti == 0 ? Address(plan.AddressRadix, offset) : AddressPad(plan.AddressRadix));
+            for (int k = 0; k < len; k += t.Size)
+                sb.Append(Unit(t, line, k, Math.Min(t.Size, len - k)).PadLeft(blockWidth / (block / t.Size)));
+            emit(sb.ToString());
+        }
+    }
+
+    internal static string Address(char radix, long offset) => radix switch
     {
         'o' => Convert.ToString(offset, 8).PadLeft(7, '0'),
         'd' => offset.ToString("D7", CultureInfo.InvariantCulture),

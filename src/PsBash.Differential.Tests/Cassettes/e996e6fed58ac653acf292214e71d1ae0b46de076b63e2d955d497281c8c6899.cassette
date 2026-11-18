@@ -1,0 +1,16 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 173
+stdout-length: 84
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit; { seq 1 20000; head -c 3001 /dev/zero; printf '\377\001x'; } > z;base64 z | wc -l; base64 -w0 z | wc -c; base64 z | base64 -d | md5sum; md5sum < z
+==== STDOUT ====
+1964
+149200
+d7a1118527cd3f60aee968b9e8cf6e71  -
+d7a1118527cd3f60aee968b9e8cf6e71  -
+
+==== STDERR ====
+

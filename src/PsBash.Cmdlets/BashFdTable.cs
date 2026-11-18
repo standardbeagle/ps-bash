@@ -215,6 +215,28 @@ internal static class BashFdTable
         return 0;
     }
 
+    /// <summary>
+    /// The end of ONE command's writes to <paramref name="fd"/>: what it wrote reaches the file now. Every writer to a
+    /// table descriptor (<c>&gt;&amp;N</c>, <c>/dev/fd/N</c>) calls this when its command ends. In bash each write is a
+    /// write(2), so the file is whole once the command is done; here a burst (<c>seq 1 1000 &gt;&amp;3</c>) sat in the
+    /// writer's buffer until the idle timer, and a program run next (<c>stat -c %s f</c>, <c>wc -c &lt; f</c> through a
+    /// native) saw a short file. Nothing for a descriptor that is not open or duplicates stdout/stderr.
+    /// Spec: paths.md section Device names (fd flush per command).
+    /// </summary>
+    public static void Flush(int fd)
+    {
+        StreamWriter? writer;
+        lock (Gate)
+        {
+            if (!Fds.TryGetValue(fd, out var h) || h.Std != 0) return;
+            writer = h.Writer;
+        }
+        if (writer is null) return;
+        try { RedirectFileWriter.FlushText(writer); }
+        catch (IOException) { }
+        catch (ObjectDisposedException) { }
+    }
+
     private static bool CloseLocked(int fd)
     {
         if (!Fds.Remove(fd, out var h)) return false;

@@ -298,7 +298,7 @@ public static class BashJobRunspaces
         {
             rs.Open();
             JobProgramLookup.Install(rs.SessionStateProxy.InvokeCommand);
-            Baselines.AddOrUpdate(rs, Baseline.Capture(rs.SessionStateProxy.InvokeProvider));
+            Baselines.AddOrUpdate(rs, Baseline.Capture(rs.SessionStateProxy.InvokeProvider, rs.SessionStateProxy.Path));
             lock (Gate) _owned++;
             return rs;
         }
@@ -535,31 +535,56 @@ public static class BashJobRunspaces
             }
         }
     }
+    /// <summary>Test seam: the baseline of <paramref name="session"/> as a job runspace would capture it at open.</summary>
+    internal static object CaptureBaseline(SessionState session) => Baseline.Capture(session);
+
+    /// <summary>Test seam: <see cref="EndJob"/>'s verdict on a runspace captured by <see cref="CaptureBaseline"/>: true = reusable.</summary>
+    internal static bool RestoreBaseline(object baseline, SessionState session) => ((Baseline)baseline).Restore(session);
+
+    /// <summary>
+    /// What a job runspace held when it opened, and THE test of whether a finished job left it as it was
+    /// (<see cref="Restore"/>). State is compared through <see cref="StateStamp"/>: by identity, and for the shell-state
+    /// globals (<see cref="BashShellState.AllGlobalNames"/>) and the location stack also by content. Identity alone
+    /// (<c>ReferenceEquals</c>) missed a job that changed an object IN PLACE - <c>trap</c> adds to the
+    /// <c>$global:BashTrapHandlers</c> dictionary, <c>alias</c> to <c>$global:BashUserAliases</c>, <c>pushd</c> pushes on
+    /// the runspace's location stack - so the runspace went back to the idle set and the next job given it would run with
+    /// the last job's traps, aliases and directory stack (a job is a fresh subshell in bash). Content is checked only
+    /// there: PowerShell's own collections (<c>$Error</c>) change in every job and are invisible to bash.
+    /// Guard: BackgroundJobRunspaceTests (Baseline_*); spec background-jobs.md section 12.5.
+    /// </summary>
     private sealed class Baseline
     {
-        private readonly Dictionary<string, object?> _variables;
+        private static readonly HashSet<string> ContentChecked = new(BashShellState.AllGlobalNames, StringComparer.OrdinalIgnoreCase);
+
+        private readonly Dictionary<string, StateStamp> _variables;
         private readonly Dictionary<string, object> _commands;
+        private readonly StateStamp _locationStack;
 
         /// <summary>False once a job left state that cannot be undone; the runspace is then closed, not reused.</summary>
         public bool Clean = true;
 
-        private Baseline(Dictionary<string, object?> variables, Dictionary<string, object> commands)
+        private Baseline(Dictionary<string, StateStamp> variables, Dictionary<string, object> commands, StateStamp locationStack)
         {
             _variables = variables;
             _commands = commands;
+            _locationStack = locationStack;
         }
 
-        public static Baseline Capture(ProviderIntrinsics provider)
+        public static Baseline Capture(ProviderIntrinsics provider, PathIntrinsics? path)
         {
-            var variables = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
-            foreach (var v in Variables(provider)) variables[v.Name] = v.Value;
+            var variables = new Dictionary<string, StateStamp>(StringComparer.OrdinalIgnoreCase);
+            foreach (var v in Variables(provider)) variables[v.Name] = StateStamp.Of(v.Value, byContent: ContentChecked.Contains(v.Name));
             var commands = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
             foreach (var (key, info) in Commands(provider)) commands[key] = info;
-            return new Baseline(variables, commands);
+            return new Baseline(variables, commands, StateStamp.Of(LocationStack(path), byContent: true));
         }
+
+        public static Baseline Capture(SessionState session) => Capture(session.InvokeProvider, session.Path);
 
         public bool Restore(SessionState session)
         {
+            // pushd/popd in the job: the runspace's location stack is not put back (the next job's `dirs` showed it).
+            if (!_locationStack.Matches(LocationStack(session.Path))) return false;
             var provider = session.InvokeProvider;
             foreach (var v in Variables(provider))
             {
@@ -568,11 +593,16 @@ public static class BashJobRunspaces
                     if (v.Name == "BashBgLastPid") return false;
                     try { session.PSVariable.Remove("global:" + v.Name); } catch (Exception) { }
                 }
-                else if (!ReferenceEquals(was, v.Value) && (v.Options & (ScopedItemOptions.ReadOnly | ScopedItemOptions.Constant)) == 0)
+                else if (!ReferenceEquals(was.Value, v.Value) && (v.Options & (ScopedItemOptions.ReadOnly | ScopedItemOptions.Constant)) == 0)
                 {
                     // The job started jobs of its own: their records are in this runspace's job table.
                     if (v.Name == "BashBgLastPid") return false;
-                    try { v.Value = was; } catch (Exception) { }
+                    try { v.Value = was.Value; } catch (Exception) { }
+                }
+                else if (was.ByContent && !was.Matches(v.Value))
+                {
+                    // The same object, changed in place (a trap, an alias, an array element): its old content is gone.
+                    return false;
                 }
             }
             int seen = 0;
@@ -582,6 +612,19 @@ public static class BashJobRunspaces
                 seen++;
             }
             return seen == _commands.Count;
+        }
+
+        /// <summary>The runspace's default location stack (what <c>pushd</c> pushes on), as paths; none without a session.</summary>
+        private static string[]? LocationStack(PathIntrinsics? path)
+        {
+            if (path is null) return null;
+            try
+            {
+                var paths = new List<string>();
+                foreach (var p in path.LocationStack(null)) paths.Add(p.Path);
+                return paths.ToArray();
+            }
+            catch (Exception) { return null; }
         }
 
         private static IEnumerable<PSVariable> Variables(ProviderIntrinsics provider)
@@ -598,4 +641,71 @@ public static class BashJobRunspaces
                 if (item.BaseObject is CommandInfo c) yield return ("a:" + c.Name, c);
         }
     }
+}
+
+/// <summary>
+/// One piece of job-runspace state as it was at a moment: the value itself and, when asked for, a shallow copy of its
+/// content (a dictionary's keys and values, a list's elements). <see cref="Matches"/> then tells whether a value that is
+/// the SAME object still holds the same content - what <c>ReferenceEquals</c> alone could not see once a job changed a
+/// table in place (<c>BashJobRunspaces.Baseline</c>).
+/// </summary>
+internal sealed class StateStamp
+{
+    private readonly object?[]? _content;
+
+    private StateStamp(object? value, object?[]? content)
+    {
+        Value = value;
+        _content = content;
+    }
+
+    /// <summary>True when the content was copied: <see cref="Matches"/> then compares it element by element.</summary>
+    public bool ByContent => _content is not null;
+
+    /// <summary>The value as it was (the object itself, not a copy).</summary>
+    public object? Value { get; }
+
+    /// <summary>The stamp of <paramref name="value"/>; with <paramref name="byContent"/> its content is copied too.</summary>
+    public static StateStamp Of(object? value, bool byContent) => new(value, byContent ? Content(value) : null);
+
+    /// <summary>
+    /// True when <paramref name="current"/> holds what the stamped value held: element by element (<see cref="object.Equals(object?, object?)"/>)
+    /// for a stamp taken by content, else the value itself.
+    /// </summary>
+    public bool Matches(object? current)
+    {
+        if (_content is null) return Equals(Unwrap(Value), Unwrap(current));
+        var now = Content(current);
+        if (now is null || now.Length != _content.Length) return false;
+        for (int i = 0; i < now.Length; i++)
+            if (!Equals(Unwrap(_content[i]), Unwrap(now[i]))) return false;
+        return true;
+    }
+
+    /// <summary>A shallow copy of a collection's content (a dictionary as key, value, key, value), or null for anything else.</summary>
+    private static object?[]? Content(object? value)
+    {
+        switch (Unwrap(value))
+        {
+            case null:
+            case string:
+                return null;
+            case System.Collections.IDictionary d:
+            {
+                var items = new List<object?>(d.Count * 2);
+                foreach (System.Collections.DictionaryEntry e in d) { items.Add(e.Key); items.Add(e.Value); }
+                return items.ToArray();
+            }
+            case System.Collections.IEnumerable list:
+            {
+                var items = new List<object?>();
+                foreach (var item in list) items.Add(item);
+                return items.ToArray();
+            }
+            default:
+                return null;
+        }
+    }
+
+    private static object? Unwrap(object? value) => value is PSObject p ? p.BaseObject : value;
 }

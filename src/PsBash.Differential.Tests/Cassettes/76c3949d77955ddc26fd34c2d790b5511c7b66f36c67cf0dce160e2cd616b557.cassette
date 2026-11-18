@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 69
+stdout-length: 16
+stderr-length: 0
+==== SCRIPT ====
+timeout 20 bash -c 'base64 -w0 /dev/zero | head -c 10'; echo " st=$?"
+==== STDOUT ====
+AAAAAAAAAA st=0
+
+==== STDERR ====
+

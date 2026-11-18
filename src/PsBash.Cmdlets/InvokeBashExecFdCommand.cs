@@ -130,6 +130,8 @@ public sealed class WriteBashFdCommand : PSCmdlet
     protected override void EndProcessing()
     {
         if (_bad) FileSystemHelpers.SetLastExitCode(this, 1);
+        // The command's writes are in the file once it ends, as bash's write(2)s are (BashFdTable.Flush).
+        else if (_std == 0) BashFdTable.Flush(Descriptor);
     }
 }
 

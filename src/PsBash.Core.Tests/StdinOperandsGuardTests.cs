@@ -13,7 +13,7 @@ namespace PsBash.Core.Tests;
 /// </summary>
 public class StdinOperandsGuardTests
 {
-    private const string Feed = "$global:__BashStdIn.Dequeue()";
+    private const string Feed = PsBuild.StdinFeed;
 
     [Theory]
     [InlineData("cut -d: -f1", "cut -d':' -f1", true)]
