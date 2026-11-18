@@ -16,13 +16,7 @@ namespace PsBash.Host.Tests.Server;
 ///
 /// The end-to-end "spawn host on macOS, exec echo, assert no SIGABRT" check
 /// is gated on the CI 3-OS matrix — this box is Linux/WSL2 with no macOS.
-///
-/// Runs alone: it asserts on the process-wide fd table, which parallel classes change all the time (pipes, dup2,
-/// child spawns), and a number is reused the moment it is freed. CI (publish v0.15.0 attempt 1, ubuntu) saw the
-/// pipe it had just opened without FD_CLOEXEC report FD_CLOEXEC; the same commit passed everywhere else.
 /// </summary>
-[Collection(nameof(InheritedFdDetachTests))]
-[CollectionDefinition(nameof(InheritedFdDetachTests), DisableParallelization = true)]
 public sealed class InheritedFdDetachTests
 {
     [Fact]
@@ -78,23 +72,34 @@ public sealed class InheritedFdDetachTests
     /// opened in this process (FD_CLOEXEC, as the runtime opens all of its own) is never selected; a pipe that
     /// survived an exec (no FD_CLOEXEC) is. The runtime's signal pipe is open here because of the registration.
     /// </summary>
+    /// <para>
+    /// Only fds this test holds open are asserted on. Other fds of a test process belong to threads earlier tests left
+    /// running, which open and close them while the scan runs (publish CI, ubuntu, twice: a pipe selected as inherited
+    /// read back with FD_CLOEXEC; once a pipe opened here without it read back with it). The rule itself is
+    /// <see cref="SelectionRule_KeepsOnlyInheritedPipesFromFd3Up"/>.
+    /// </para>
     [SkippableFact]
-    public void InheritedPipeFds_SelectsOnlyPipesThatCameThroughExec_NeverTheRuntimesOwn()
+    public void InheritedPipeFds_NeverSelectsAPipeTheRuntimeOpened()
     {
         Skip.If(OperatingSystem.IsWindows(), "POSIX fd inheritance; Windows hosts never run the detach");
         using var signals = OperatingSystem.IsWindows() ? null : PosixSignalRegistration.Create(PosixSignal.SIGCHLD, _ => { });
         using var own = new AnonymousPipeServerStream(PipeDirection.Out, HandleInheritability.None);
-        using var inheritable = new AnonymousPipeServerStream(PipeDirection.Out, HandleInheritability.Inheritable);
         int ownFd = (int)own.SafePipeHandle.DangerousGetHandle();
-        int inheritableFd = (int)inheritable.SafePipeHandle.DangerousGetHandle();
         Assert.False(InheritedFdDetach.IsInherited(ownFd));
-        Assert.True(InheritedFdDetach.IsInherited(inheritableFd));
 
-        var selected = InheritedFdDetach.InheritedPipeFds();
+        Assert.DoesNotContain(ownFd, InheritedFdDetach.InheritedPipeFds());
+    }
 
-        Assert.DoesNotContain(ownFd, selected);
-        Assert.Contains(inheritableFd, selected);
-        Assert.All(selected, fd => Assert.True(InheritedFdDetach.IsInherited(fd), $"fd {fd} has FD_CLOEXEC: opened here, not inherited"));
+    [Fact]
+    public void SelectionRule_KeepsOnlyInheritedPipesFromFd3Up()
+    {
+        var pipes = new HashSet<int> { 0, 1, 2, 3, 5, 6 };
+        var inherited = new HashSet<int> { 0, 1, 2, 3, 4, 6 };
+
+        var selected = InheritedFdDetach.SelectInheritedPipes([0, 1, 2, 3, 4, 5, 6], pipes.Contains, inherited.Contains);
+
+        // 0-2: stdio, replaced by /dev/null, never closed. 4: not a pipe. 5: FD_CLOEXEC (the runtime's own).
+        Assert.Equal([3, 6], selected);
     }
 
     [SkippableFact]

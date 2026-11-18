@@ -211,20 +211,26 @@ internal static class InheritedFdDetach
     /// </summary>
     internal static List<int> InheritedPipeFds()
     {
-        var fds = new List<int>();
         if (System.IO.Directory.Exists("/proc/self/fd"))
         {
+            var open = new List<int>();
             foreach (var entry in System.IO.Directory.EnumerateFileSystemEntries("/proc/self/fd"))
-                if (int.TryParse(System.IO.Path.GetFileName(entry), out var fd) && fd >= 3 && IsFdPipe(fd) && IsInherited(fd))
-                    fds.Add(fd);
+                if (int.TryParse(System.IO.Path.GetFileName(entry), out var fd)) open.Add(fd);
+            return SelectInheritedPipes(open, IsFdPipe, IsInherited);
         }
-        else
-        {
-            // macOS / FreeBSD have no /proc: walk [3,256), fstat-confirmed pipes only.
-            for (int fd = 3; fd < 256; fd++)
-                if (IsFdPipeViaFstat(fd) && IsInherited(fd)) fds.Add(fd);
-        }
-        return fds;
+        // macOS / FreeBSD have no /proc: walk [3,256), fstat-confirmed pipes only.
+        var candidates = new List<int>(253);
+        for (int fd = 3; fd < 256; fd++) candidates.Add(fd);
+        return SelectInheritedPipes(candidates, IsFdPipeViaFstat, IsInherited);
+    }
+
+    /// <summary>The selection rule alone: fd 3 and up, a pipe, and inherited (no FD_CLOEXEC).</summary>
+    internal static List<int> SelectInheritedPipes(IEnumerable<int> fds, Func<int, bool> isPipe, Func<int, bool> isInherited)
+    {
+        var selected = new List<int>();
+        foreach (var fd in fds)
+            if (fd >= 3 && isPipe(fd) && isInherited(fd)) selected.Add(fd);
+        return selected;
     }
 
     /// <summary>

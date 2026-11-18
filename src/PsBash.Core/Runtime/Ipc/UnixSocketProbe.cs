@@ -24,14 +24,23 @@ public static class UnixSocketProbe
         }
         catch (AggregateException ae) when (ae.InnerException is System.Net.Sockets.SocketException se)
         {
-            return se.SocketErrorCode == System.Net.Sockets.SocketError.ConnectionRefused;
+            return IsRefused(se.SocketErrorCode);
         }
         catch (System.Net.Sockets.SocketException se)
         {
-            return se.SocketErrorCode == System.Net.Sockets.SocketError.ConnectionRefused;
+            return IsRefused(se.SocketErrorCode);
         }
         catch { return false; }
     }
+
+    /// <summary>
+    /// The errors that prove nobody listens at the path. A path that is not a socket is refused as ECONNREFUSED on
+    /// Linux and Windows, but as ENOTSOCK on macOS (XNU unp_connect: the vnode is not a socket); the socket we connect
+    /// with always is one, so ENOTSOCK can only describe the target. REGRESSION: only ConnectionRefused counted, so on
+    /// macOS such a file was never reaped or taken over.
+    /// </summary>
+    internal static bool IsRefused(System.Net.Sockets.SocketError error)
+        => error is System.Net.Sockets.SocketError.ConnectionRefused or System.Net.Sockets.SocketError.NotSocket;
 }
 
 /// <summary>Another live host already serves this endpoint: the host that hit it lost a start race and exits cleanly.</summary>

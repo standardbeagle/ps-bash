@@ -101,6 +101,17 @@ public class TransportTests : IDisposable
         Assert.NotNull(served);
     }
 
+    // REGRESSION (macOS, publish v0.15.0 dry run): a connect to a path that is not a socket is ENOTSOCK there, not
+    // ECONNREFUSED, and only the latter counted as "nobody listens". Errors that leave a host possibly alive do not count.
+    [Theory]
+    [InlineData(SocketError.ConnectionRefused, true)]
+    [InlineData(SocketError.NotSocket, true)]
+    [InlineData(SocketError.TimedOut, false)]
+    [InlineData(SocketError.AccessDenied, false)]
+    [InlineData(SocketError.AddressNotAvailable, false)]
+    public void Probe_CountsOnlyTheErrorsThatProveNobodyListens(SocketError error, bool stale)
+        => Assert.Equal(stale, UnixSocketProbe.IsRefused(error));
+
     /// <summary>A socket file nobody listens on (its host crashed) is still taken over.</summary>
     [SkippableFact]
     public async Task UnixSocket_StaleSocketFile_IsReplaced()
