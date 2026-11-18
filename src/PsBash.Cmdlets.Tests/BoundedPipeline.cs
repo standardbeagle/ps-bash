@@ -30,4 +30,35 @@ internal static class BoundedPipeline
         pwsh.Commands.Clear();
         return task.GetAwaiter().GetResult();
     }
+
+    /// <summary>
+    /// Start <paramref name="script"/>, block in <paramref name="waitUntilReady"/> until it reached the state under
+    /// test (a child is running, a wait has begun), then STOP it (what Ctrl+C does) and require the pipeline to end
+    /// within <paramref name="bound"/> of the stop. Returns how long the stop took. A pipeline that never ends is
+    /// abandoned (its runspace stays busy), so give each such test a fresh <c>AcquireFresh</c> runspace.
+    /// </summary>
+    public static TimeSpan StopWhenReady(PowerShell pwsh, string script, Action waitUntilReady, TimeSpan bound, string what)
+    {
+        var task = Task.Run(() =>
+        {
+            try { pwsh.AddScript(script).Invoke(); }
+            catch (PipelineStoppedException) { /* the expected end */ }
+        });
+        try { waitUntilReady(); }
+        catch
+        {
+            pwsh.Stop();
+            task.Wait(TimeSpan.FromSeconds(10));
+            pwsh.Commands.Clear();
+            throw;
+        }
+        Assert.False(task.IsCompleted, $"{what}: the pipeline ended before the stop; nothing was tested: {script}");
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var stop = Task.Run(pwsh.Stop);
+        bool ended = task.Wait(bound) && stop.Wait(bound);
+        sw.Stop();
+        Assert.True(ended, $"{what}: the pipeline did not end within {bound.TotalSeconds:0} s of the stop: {script}");
+        pwsh.Commands.Clear();
+        return sw.Elapsed;
+    }
 }

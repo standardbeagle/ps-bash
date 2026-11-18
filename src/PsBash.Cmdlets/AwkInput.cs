@@ -289,8 +289,19 @@ internal sealed class AwkShell
 {
     private readonly PSCmdlet _cmdlet;
     private readonly ConcurrentBag<AwkCommandStream> _streams = new();
+    // Every live `print | "cmd"` child until its sink disposes it: a close() waiting for one is no longer in the
+    // machine's open outputs, so the stop must reach it from here. A disposed child is forgotten (its process group id
+    // may belong to someone else by then).
+    private readonly ConcurrentDictionary<SpawnedChild, byte> _pipes = new();
     // Cancelled by KillAll (the cmdlet's StopProcessing): ends a system() / piped command, which has no time limit.
     private readonly CancellationTokenSource _stop = new();
+
+    /// <summary>
+    /// Cancelled when the cmdlet stops. Every wait on a command awk started (<c>close()</c> of an output pipe,
+    /// <c>system()</c>) waits on its exit OR this token: bash's awk waits for the command as long as it runs, so there is
+    /// no time limit, and the stop is what ends the wait.
+    /// </summary>
+    public CancellationToken StopToken => _stop.Token;
     private string? _exe;
     private bool _exeResolved;
 
@@ -332,16 +343,36 @@ internal sealed class AwkShell
     /// </summary>
     public SpawnedChild? StartPipe(string command)
     {
+        if (_stop.IsCancellationRequested) throw new PipelineStoppedException();
         var psi = BuildStartInfo(command);
         psi.CreateNoWindow = true;
-        try { return ChildStdio.Start(psi, OutputMode()); }
+        SpawnedChild child;
+        try { child = ChildStdio.Start(psi, OutputMode()); }
         catch (Exception ex) when (!FileSystemHelpers.IsPipelineStop(ex)) { return null; }
+        _pipes.TryAdd(child, 0);
+        // A stop that raced the start: KillAll walked the set before this child was in it.
+        if (_stop.IsCancellationRequested) KillTree(child);
+        return child;
     }
 
+    /// <summary>The sink disposed <paramref name="child"/>: a later stop must not signal its (reusable) process group.</summary>
+    public void ForgetPipe(SpawnedChild child) => _pipes.TryRemove(child, out _);
+
+    /// <summary>
+    /// The cmdlet stops (another thread): cancel every wait and end the whole tree of every command awk started —
+    /// getline commands, output pipes (also one whose <c>close()</c> is waiting for it) and, through the token,
+    /// <c>system()</c>.
+    /// </summary>
     public void KillAll()
     {
         _stop.Cancel();
         foreach (var s in _streams) s.Kill();
+        foreach (var p in _pipes.Keys) KillTree(p);
+    }
+
+    private static void KillTree(SpawnedChild child)
+    {
+        try { child.KillTree(); } catch { /* exited / disposed */ }
     }
 
     /// <summary>

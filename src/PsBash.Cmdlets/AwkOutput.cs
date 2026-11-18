@@ -168,8 +168,8 @@ internal sealed class AwkFileSink : AwkOutSink
 /// gawk's stdio pipe: published on <c>fflush</c>, <c>close()</c>, a full buffer or the end of the program)
 /// and its stdout/stderr are pumped by background threads into a queue that is drained on the cmdlet
 /// thread (output objects may only be written there) — straight into awk's output, never held, because it
-/// IS the real stdout. <c>close()</c> closes the command's stdin, waits for it to finish and returns its
-/// exit status. The child's launcher forwards the redirected stdin to the first stdin reader, so
+/// IS the real stdout. <c>close()</c> closes the command's stdin, waits for it to finish (no time limit; a stop
+/// ends the wait and the command's tree, see <see cref="AwkShell.KillAll"/>) and returns its exit status. The child's launcher forwards the redirected stdin to the first stdin reader, so
 /// compound commands (<c>a; b</c>) get stdin too. A command that exits while awk is still printing is
 /// gawk's <c>fatal: print to "cmd" failed: Broken pipe</c> (exit 2).
 /// </summary>
@@ -183,9 +183,10 @@ internal sealed class AwkPipeSink : AwkOutSink
     private readonly System.Collections.Concurrent.ConcurrentQueue<(bool Err, string Text)> _queue = new();
     private readonly Thread _outPump;
     private readonly Thread? _errPump; // none when the command's stderr shares its stdout pipe (awk ... 2>&1)
+    // The cmdlet's stop (AwkShell.StopToken): ends close()'s wait; AwkShell.KillAll ends the command's tree.
+    private readonly CancellationToken _stop;
+    private readonly AwkShell _shell;
     private bool _closed;
-    // close() is waiting for the command: Abort (StopProcessing, another thread) must still kill it.
-    private volatile bool _waiting;
 
     public AwkPipeSink(string command, AwkShell? shell, AwkStdout stdout, Action<string> stderr)
     {
@@ -194,6 +195,8 @@ internal sealed class AwkPipeSink : AwkOutSink
         _stderr = stderr;
         if (shell is null)
             throw new AwkInterpreter.AwkRuntimeException($"fatal: cannot open pipe `{command}' (no shell available)");
+        _shell = shell;
+        _stop = shell.StopToken;
         _child = shell.StartPipe(command)
             ?? throw new AwkInterpreter.AwkRuntimeException($"fatal: cannot open pipe `{command}' (cannot start the command)");
         _w = new StreamWriter(_child.StandardInput!.BaseStream, RawBytes.Encoding, 1 << 16);
@@ -268,29 +271,35 @@ internal sealed class AwkPipeSink : AwkOutSink
             if (flushStdoutFirst) _stdout.FlushHeld();
             _stdout.Holders--;
 
-            // No time limit (gawk waits as long as the command runs); Ctrl+C reaches it through Abort.
-            _waiting = true;
-            _child.WaitForExit();
-            _waiting = false;
+            // No time limit (gawk waits as long as the command runs): the wait ends at the command's exit or at the
+            // cmdlet's stop, which also ends the command's whole tree (AwkShell.KillAll). After a stop nothing waits
+            // for a pipe (stdio-messaging.md §4.6), and the program does not go on.
+            if (!_child.WaitForExit(Timeout.Infinite, _stop))
+            {
+                try { _child.KillTree(); } catch { /* gone */ }
+                throw new System.Management.Automation.PipelineStoppedException();
+            }
             _outPump.Join(TimeSpan.FromSeconds(5));
             _errPump?.Join(TimeSpan.FromSeconds(5));
             Drain();
-            return _child.HasExited ? _child.ExitCode : 130; // not exited: Abort disposed it under the wait
+            return _child.ExitCode;
         }
-        finally { try { _child.Dispose(); } catch { /* ignore */ } }
+        finally { DisposeChild(); }
     }
 
     public override void Abort()
     {
-        if (_closed)
-        {
-            if (_waiting) try { _child.KillTree(); } catch { /* gone */ }
-            return;
-        }
+        if (_closed) return; // a close() in progress is ended by the stop token + AwkShell.KillAll
         _closed = true;
         _stdout.Holders--;
         try { _child.KillTree(); } catch { /* gone */ }
         try { _w.Dispose(); } catch { /* best effort */ }
+        DisposeChild();
+    }
+
+    private void DisposeChild()
+    {
         try { _child.Dispose(); } catch { /* ignore */ }
+        _shell.ForgetPipe(_child);
     }
 }

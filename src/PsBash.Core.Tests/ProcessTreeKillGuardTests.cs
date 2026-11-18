@@ -131,6 +131,51 @@ public class ProcessTreeKillGuardTests
             + string.Join("\n  ", offenders));
     }
 
+    /// <summary>
+    /// Every parameterless <c>WaitForExit()</c> in the cmdlet assembly, with why a stop still ends it. A wait for a child
+    /// on the pipeline thread waits on its exit OR a stop - <c>SpawnedChild.WaitForExit(ms, stopToken)</c> - because the
+    /// stop arrives from another thread (<c>StopProcessing</c>) and must be able to end it: awk's <c>close()</c> of an
+    /// output pipe waited with a bare <c>WaitForExit()</c> that no Ctrl+C could reach.
+    /// </summary>
+    private static readonly Dictionary<string, (int Count, string Reason)> UnboundedWaitSites = new(StringComparer.Ordinal)
+    {
+        ["PsBash.Cmdlets/StreamingChildProcess.cs"] = (1, "exit-watcher background thread (not the pipeline thread); Kill -> KillTree ends the child and so the wait"),
+        ["PsBash.Cmdlets/InvokeBashLessCommand.cs"] = (1, "interactive pager owns the console; the user quits it"),
+    };
+
+    private static readonly Regex UnboundedWait = new(@"\.WaitForExit\s*\(\s*\)", RegexOptions.Compiled);
+
+    [Fact]
+    public void Cmdlets_EveryUnboundedWaitForExit_HasAStopPath()
+    {
+        var root = Path.Combine(RepoRoot(), "src");
+        var problems = new List<string>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var file in Directory.EnumerateFiles(Path.Combine(root, "PsBash.Cmdlets"), "*.cs", SearchOption.AllDirectories))
+        {
+            var rel = Path.GetRelativePath(root, file).Replace(Path.DirectorySeparatorChar, '/');
+            if (rel.Contains("/bin/", StringComparison.Ordinal) || rel.Contains("/obj/", StringComparison.Ordinal)) continue;
+            var calls = File.ReadAllLines(file)
+                .Select((l, i) => (Line: l.TrimStart(), No: i + 1))
+                .Where(x => !x.Line.StartsWith("//", StringComparison.Ordinal) && UnboundedWait.IsMatch(x.Line))
+                .Select(x => $"{rel}:{x.No}: {x.Line}")
+                .ToList();
+            if (calls.Count == 0) continue;
+            seen.Add(rel);
+            if (!UnboundedWaitSites.TryGetValue(rel, out var allowed))
+                problems.AddRange(calls.Select(c => "NEW  " + c));
+            else if (calls.Count != allowed.Count)
+                problems.Add($"COUNT {rel}: {calls.Count}, inventory says {allowed.Count} ({allowed.Reason})\n      " + string.Join("\n      ", calls));
+        }
+        foreach (var file in UnboundedWaitSites.Keys.Where(f => !seen.Contains(f)))
+            problems.Add($"STALE {file}: inventoried but has no WaitForExit() any more - remove the entry");
+
+        Assert.True(problems.Count == 0,
+            "Wait for a child on its exit OR the stop: SpawnedChild.WaitForExit(Timeout.Infinite, stopToken) (bash puts no "
+            + "time limit on it; Ctrl+C must still end it, stdio-messaging.md §4.6), or inventory the call in "
+            + "ProcessTreeKillGuardTests.UnboundedWaitSites with why a stop ends it:\n  " + string.Join("\n  ", problems));
+    }
+
     /// <summary>The wait after a stop must not hang on a pipe: the buffered helper waits on the process and bounds its drains.</summary>
     [Fact]
     public void BufferedWait_KillsThroughThePrimitive_AndNeverJoinsADrainUnbounded()

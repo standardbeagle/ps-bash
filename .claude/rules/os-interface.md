@@ -29,7 +29,8 @@ Raw `Process.Start` is allowed ONLY for the interactive pager (less). Never raw-
 STOP = WHOLE TREE: every child starts via `ChildStdio.Start` inside a Job Object / process group (`JobProcess`,
 spec `stdio-messaging.md` §4.6); stop it with `SpawnedChild.KillTree()` / `StreamingChildProcess.Kill()`. NEVER
 `Process.Kill` / `Kill(entireProcessTree:true)` (misses orphans, which then hold the pipes) and never wait for
-pipe EOF after a stop (guard `ProcessTreeKillGuardTests`).
+pipe EOF after a stop (guard `ProcessTreeKillGuardTests`). A wait with no time limit (awk `close()`, a streaming
+child's exit) is `SpawnedChild.WaitForExit(Timeout.Infinite, stopToken)` — never a bare `WaitForExit()` (inventoried).
 
 ## PATHS / IDENTITY (already centralized — reuse, don't re-add)
 - operand path normalization → `FileSystemHelpers.NormalizeOperandPath` → `WindowsPath` (unix→drive).
