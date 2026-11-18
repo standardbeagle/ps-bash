@@ -53,7 +53,7 @@ public sealed class CanaryHostGcTests
         int deadPid;
         using (var dummy = Process.Start(new ProcessStartInfo
         {
-            FileName = OperatingSystem.IsWindows() ? "cmd.exe" : "/bin/true",
+            FileName = OperatingSystem.IsWindows() ? "cmd.exe" : "true",  // by PATH: macOS has no /bin/true
             Arguments = OperatingSystem.IsWindows() ? "/c exit 0" : "",
             UseShellExecute = false,
             CreateNoWindow = true,

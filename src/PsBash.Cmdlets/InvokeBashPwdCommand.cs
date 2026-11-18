@@ -97,7 +97,9 @@ public sealed class InvokeBashPwdCommand : PSCmdlet
                 // PathInfo.ProviderPath is the resolved physical path of the
                 // current location — the same value, without a Resolve-Path
                 // round trip.
-                location = SessionState.Path.CurrentLocation.ProviderPath;
+                // ProviderPath is the location as cd typed it; -P resolves every link (bash: physical). REGRESSION
+                // (macOS): `pwd -P` under /var/folders printed /var/… where getcwd and readlink -f say /private/var/….
+                location = PhysicalPath.Of(SessionState.Path.CurrentLocation.ProviderPath);
             }
             catch (Exception ex)
             {

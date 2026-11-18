@@ -385,11 +385,10 @@ public partial class SignalForwarderTests
     /// <summary>
     /// Start <paramref name="program"/> as a session/process-group leader.
     ///
-    /// <para>Shape: <c>setsid sh -c 'echo $$; exec PROGRAM ARGS'</c>. <c>setsid</c>
-    /// makes the <c>sh</c> a brand-new session leader (so its
-    /// pid == pgid == sid); <c>sh</c> echoes <c>$$</c> — its own pid — as the
-    /// first stdout line; <c>exec</c> then replaces <c>sh</c> with the workload
-    /// <i>keeping the same pid</i>. The first captured stdout line is therefore
+    /// <para>Shape: <c>perl -MPOSIX -e 'setsid; print $$; exec @ARGV' sh -c 'exec PROGRAM ARGS'</c>. perl's
+    /// <c>setsid()</c> makes it a brand-new session leader (so its pid == pgid == sid) and prints its own pid as
+    /// the first stdout line; each <c>exec</c> then replaces the process <i>keeping the same pid</i>. perl, not
+    /// the <c>setsid</c> command: macOS has no <c>setsid</c> binary. The first captured stdout line is therefore
     /// the leader pid, and it is deterministic — no <c>setpgid</c>-after-exec
     /// race.</para>
     /// </summary>
@@ -399,16 +398,19 @@ public partial class SignalForwarderTests
         // argv element with no host-side quote-parsing ambiguity.
         var psi = new ProcessStartInfo
         {
-            FileName = "setsid",
+            FileName = "perl",
             RedirectStandardOutput = true, StandardOutputEncoding = System.Text.Encoding.UTF8,
             RedirectStandardError = true, StandardErrorEncoding = System.Text.Encoding.UTF8,
             UseShellExecute = false,
         };
+        psi.ArgumentList.Add("-MPOSIX");
+        psi.ArgumentList.Add("-e");
+        psi.ArgumentList.Add("setsid() or die \"setsid: $!\\n\"; $| = 1; print \"$$\\n\"; exec { $ARGV[0] } @ARGV or die \"exec: $!\\n\";");
         psi.ArgumentList.Add("sh");
         psi.ArgumentList.Add("-c");
-        psi.ArgumentList.Add($"echo $$; exec {program} {args}");
+        psi.ArgumentList.Add($"exec {program} {args}");
         var wrapper = Process.Start(psi)
-            ?? throw new InvalidOperationException("failed to start setsid wrapper");
+            ?? throw new InvalidOperationException("failed to start the perl setsid wrapper");
 
         // The leader prints its own pid as the first stdout line before exec.
         string? firstLine = wrapper.StandardOutput.ReadLine();

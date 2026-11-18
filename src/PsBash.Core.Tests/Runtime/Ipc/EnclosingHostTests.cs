@@ -103,7 +103,9 @@ public class EnclosingHostTests
     [Fact]
     public void ReachableHostSidecars_FindsTheExplicitEndpointsHashedSlots()
     {
-        string root = Path.Combine(Path.GetTempPath(), "ps-bash", "reach-" + Guid.NewGuid().ToString("N")[..8]);
+        // A short root: the hashed slot name must itself fit (macOS $TMPDIR alone is ~50 chars of the 103).
+        string tmp = OperatingSystem.IsWindows() ? Path.GetTempPath() : "/tmp";
+        string root = Path.Combine(tmp, "ps-bash", "r-" + Guid.NewGuid().ToString("N")[..8]);
         string runtime = Path.Combine(root, "rt"), shared = Path.Combine(root, "shared");
         Directory.CreateDirectory(runtime);
         Directory.CreateDirectory(shared);

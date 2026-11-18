@@ -430,6 +430,26 @@ public class InvokeBashPrintfPwdCommandTests : IClassFixture<SharedPwshFixture>
         Assert.NotEqual("", lines[0]);
     }
 
+    // REGRESSION (macOS: $TMPDIR is /var/folders/…, /var -> /private/var): `pwd -P` printed the location as cd typed
+    // it, so `d=$(pwd -P)` held /var/… while readlink -f answered /private/var/…. bash: every link resolved.
+    [SkippableFact]
+    public void Pwd_PhysicalFlag_ResolvesALinkedDirectory()
+    {
+        var root = Directory.CreateTempSubdirectory("psbash-pwdP-").FullName;
+        try
+        {
+            var target = Directory.CreateDirectory(Path.Combine(root, "target")).FullName;
+            var link = Path.Combine(root, "link");
+            try { Directory.CreateSymbolicLink(link, target); }
+            catch (Exception ex) { Skip.If(true, $"cannot create directory symlink (needs privilege): {ex.Message}"); }
+
+            var lines = RunBashText($"Set-Location -LiteralPath '{link.Replace("'", "''")}'; Invoke-BashPwd -P");
+            var expected = PsBash.Testing.PhysicalPath.Of(target);
+            Assert.Equal(new[] { OperatingSystem.IsWindows() ? expected.Replace('\\', '/') : expected }, lines);
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
     [Fact]
     public void Pwd_EmitsTypedPwdLineObject()
     {
