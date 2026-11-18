@@ -77,7 +77,9 @@ public static class CanonicalPath
     private static string AbsoluteOperand(PSCmdlet cmdlet, string operand)
     {
         string cwd;
-        try { cwd = cmdlet.SessionState.Path.CurrentFileSystemLocation.ProviderPath; }
+        // gnulib makes a relative operand absolute with getcwd(3): the PHYSICAL directory. It matters only without link
+        // following: REGRESSION (macOS, cwd reached as /var/…): `realpath -s f` printed /var/…/f, GNU /private/var/…/f.
+        try { cwd = PsBash.Core.PhysicalPath.Of(cmdlet.SessionState.Path.CurrentFileSystemLocation.ProviderPath); }
         catch (InvalidOperationException) { cwd = Environment.CurrentDirectory; }
         return Absolute(FileSystemHelpers.NormalizeOperandPath(operand), cwd, OperatingSystem.IsWindows());
     }

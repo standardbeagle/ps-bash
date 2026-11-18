@@ -390,6 +390,8 @@ public class PtyTuiParityTests
         var probePath = Path.Combine(harness.TempHome, "readkey-probe.ps1");
         await File.WriteAllTextAsync(probePath,
             "for ($i = 0; $i -lt 3; $i++) {\n" +
+            "    [Console]::Out.WriteLine(\"PROBE:wait$i\")\n" +
+            "    [Console]::Out.Flush()\n" +
             "    $k = [Console]::ReadKey($true)\n" +
             "    $kc = [int]$k.KeyChar\n" +
             "    [Console]::Out.WriteLine(\"PROBE:i=$i Key=$($k.Key) KeyChar=$kc Mods=$($k.Modifiers)\")\n" +
@@ -406,14 +408,19 @@ public class PtyTuiParityTests
         // (raw byte 0x01). ReadKey on POSIX uses VT-sequence parsing for the
         // arrow keys — the ESC-prefixed CSI sequence resolves to
         // ConsoleKey.UpArrow / ConsoleKey.DownArrow.
+        // Each key goes only after the probe says it is about to read it. REGRESSION (macOS CI): a key typed while
+        // `source` was still starting went to the line editor, and the probe waited for it forever.
+        await harness.WaitForRegexAsync(@"PROBE:wait0", TuiTimeout);
         await harness.WriteKeysAsync("\x1b[A");
         await harness.WaitForRegexAsync(@"PROBE:i=0 Key=UpArrow ", TuiTimeout);
 
+        await harness.WaitForRegexAsync(@"PROBE:wait1", TuiTimeout);
         await harness.WriteKeysAsync("\x1b[B");
         await harness.WaitForRegexAsync(@"PROBE:i=1 Key=DownArrow ", TuiTimeout);
 
         // Ctrl-A: KeyChar=1, Modifiers=Control. The probe stringifies the
         // Modifiers enum, so "Control" must appear.
+        await harness.WaitForRegexAsync(@"PROBE:wait2", TuiTimeout);
         await harness.WriteKeysAsync("\x01");
         await harness.WaitForRegexAsync(@"PROBE:i=2 .* KeyChar=1 Mods=Control", TuiTimeout);
 

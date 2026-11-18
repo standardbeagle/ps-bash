@@ -383,19 +383,29 @@ public partial class SignalForwarderTests
     }
 
     /// <summary>
-    /// Start <paramref name="program"/> as a session/process-group leader.
-    ///
-    /// <para>Shape: <c>perl -MPOSIX -e 'setsid; print $$; exec @ARGV' sh -c 'exec PROGRAM ARGS'</c>. perl's
-    /// <c>setsid()</c> makes it a brand-new session leader (so its pid == pgid == sid) and prints its own pid as
-    /// the first stdout line; each <c>exec</c> then replaces the process <i>keeping the same pid</i>. perl, not
-    /// the <c>setsid</c> command: macOS has no <c>setsid</c> binary. The first captured stdout line is therefore
-    /// the leader pid, and it is deterministic — no <c>setpgid</c>-after-exec
-    /// race.</para>
+    /// Start <paramref name="program"/> as a session/process-group leader (<c>exec</c>ed, same pid).
     /// </summary>
     private static SessionLeaderChild StartSessionLeaderChild(string program, string args)
+        => StartSessionLeader($"exec {program} {args}");
+
+    /// <summary>
+    /// Start a session-leader child running <paramref name="prelude"/> followed by a bounded wait loop. It stays in
+    /// <c>sh</c> so a <c>trap</c> installed by <paramref name="prelude"/> remains in effect — used by the SIGTSTP
+    /// test, which needs the child to have a non-default signal disposition.
+    /// </summary>
+    private static SessionLeaderChild StartSessionLeaderShellLoop(string prelude)
+        => StartSessionLeader($"{prelude}; i=0; while [ $i -lt 600 ]; do sleep 0.1; i=$((i+1)); done");
+
+    /// <summary>
+    /// The one way these tests make a session leader: <c>perl -MPOSIX -e 'setsid; print $$; exec @ARGV' sh -c
+    /// SCRIPT</c>. perl's <c>setsid()</c> makes it a brand-new session leader (pid == pgid == sid) and prints its own
+    /// pid as the first stdout line; <c>exec</c> keeps that pid for <c>sh</c> (and for whatever <c>sh</c> execs), so
+    /// the first line is the leader pid with no <c>setpgid</c>-after-exec race. perl, not the <c>setsid</c> command:
+    /// macOS has no <c>setsid</c> binary (REGRESSION: every POSIX forwarder test failed to start there).
+    /// </summary>
+    private static SessionLeaderChild StartSessionLeader(string shScript)
     {
-        // ArgumentList (not Arguments) so the `sh -c` script survives as one
-        // argv element with no host-side quote-parsing ambiguity.
+        // ArgumentList (not Arguments): each element reaches argv verbatim.
         var psi = new ProcessStartInfo
         {
             FileName = "perl",
@@ -408,56 +418,19 @@ public partial class SignalForwarderTests
         psi.ArgumentList.Add("setsid() or die \"setsid: $!\\n\"; $| = 1; print \"$$\\n\"; exec { $ARGV[0] } @ARGV or die \"exec: $!\\n\";");
         psi.ArgumentList.Add("sh");
         psi.ArgumentList.Add("-c");
-        psi.ArgumentList.Add($"exec {program} {args}");
+        psi.ArgumentList.Add(shScript);
         var wrapper = Process.Start(psi)
             ?? throw new InvalidOperationException("failed to start the perl setsid wrapper");
 
-        // The leader prints its own pid as the first stdout line before exec.
         string? firstLine = wrapper.StandardOutput.ReadLine();
         if (!int.TryParse(firstLine?.Trim(), out int leaderPid) || leaderPid <= 0)
         {
             try { wrapper.Kill(entireProcessTree: true); } catch { }
+            string stderr = "";
+            try { stderr = wrapper.StandardError.ReadToEnd(); } catch (InvalidOperationException) { }
             wrapper.Dispose();
             throw new InvalidOperationException(
-                $"setsid wrapper did not report a leader pid (got '{firstLine}')");
-        }
-
-        return new SessionLeaderChild { Wrapper = wrapper, LeaderPid = leaderPid };
-    }
-
-    /// <summary>
-    /// Start a session-leader child running <paramref name="prelude"/> followed
-    /// by a busy-wait loop. Same <c>setsid sh -c 'echo $$; ...'</c> shape as
-    /// <see cref="StartSessionLeaderChild"/>, but instead of <c>exec</c>ing a
-    /// workload it stays in <c>sh</c> so a <c>trap</c> installed by
-    /// <paramref name="prelude"/> remains in effect — used by the SIGTSTP test,
-    /// which needs the child to have a non-default signal disposition.
-    /// </summary>
-    private static SessionLeaderChild StartSessionLeaderShellLoop(string prelude)
-    {
-        var psi = new ProcessStartInfo
-        {
-            FileName = "setsid",
-            RedirectStandardOutput = true, StandardOutputEncoding = System.Text.Encoding.UTF8,
-            RedirectStandardError = true, StandardErrorEncoding = System.Text.Encoding.UTF8,
-            UseShellExecute = false,
-        };
-        psi.ArgumentList.Add("sh");
-        psi.ArgumentList.Add("-c");
-        // echo $$ first (leader pid), install the prelude (e.g. a trap), then
-        // a bounded busy-wait so the child cannot outlive a wedged test.
-        psi.ArgumentList.Add($"echo $$; {prelude}; i=0; while [ $i -lt 600 ]; do sleep 0.1; i=$((i+1)); done");
-
-        var wrapper = Process.Start(psi)
-            ?? throw new InvalidOperationException("failed to start setsid shell-loop wrapper");
-
-        string? firstLine = wrapper.StandardOutput.ReadLine();
-        if (!int.TryParse(firstLine?.Trim(), out int leaderPid) || leaderPid <= 0)
-        {
-            try { wrapper.Kill(entireProcessTree: true); } catch { }
-            wrapper.Dispose();
-            throw new InvalidOperationException(
-                $"setsid shell-loop wrapper did not report a leader pid (got '{firstLine}')");
+                $"setsid wrapper did not report a leader pid (got '{firstLine}'; stderr '{stderr}')");
         }
 
         return new SessionLeaderChild { Wrapper = wrapper, LeaderPid = leaderPid };
