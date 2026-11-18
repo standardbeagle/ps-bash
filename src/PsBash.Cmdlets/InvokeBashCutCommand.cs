@@ -297,19 +297,8 @@ public sealed class InvokeBashCutCommand : PSCmdlet
         if (_suppressStdin) return;
 
         // Pipeline mode: cut each stdin sub-line as it arrives instead of buffering the whole pipe.
-        string text = BashRuntime.GetBashText(InputObject);
-        string trimmed = text.TrimEnd('\n');
-        if (trimmed.Contains('\n'))
-        {
-            foreach (var sub in trimmed.Split('\n'))
-            {
-                EmitCutLine(sub);
-            }
-        }
-        else
-        {
-            EmitCutLine(trimmed);
-        }
+        foreach (var sub in BashRuntime.SplitRecord(InputObject, out _))
+            EmitCutLine(sub);
     }
 
     protected override void EndProcessing()

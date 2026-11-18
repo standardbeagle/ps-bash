@@ -49,15 +49,15 @@ internal sealed class SortStage : ILineStreamStage
         var texts = new List<string>();
         foreach (var item in input)
         {
-            string trimmed = item.TrimEnd('\n');
-            if (trimmed.Contains('\n'))
+            var pieces = LineStreamRecord.SubLines(item);
+            if (pieces.Length == 1)
             {
-                foreach (var sub in trimmed.Split('\n')) { emit.Add(sub); texts.Add(sub); }
+                emit.Add(item);
+                texts.Add(pieces[0]);
             }
             else
             {
-                emit.Add(item);
-                texts.Add(trimmed);
+                foreach (var sub in pieces) { emit.Add(sub); texts.Add(sub); }
             }
         }
 

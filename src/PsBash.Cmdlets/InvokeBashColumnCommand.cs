@@ -248,21 +248,7 @@ public sealed class InvokeBashColumnCommand : PSCmdlet
         if (operands.Count == 0 && _pipeline.Count > 0)
         {
             foreach (var item in _pipeline)
-            {
-                string text = BashRuntime.GetBashText(item);
-                string trimmed = text.TrimEnd('\n');
-                if (trimmed.Contains('\n'))
-                {
-                    foreach (var subLine in trimmed.Split('\n'))
-                    {
-                        lines.Add(subLine);
-                    }
-                }
-                else
-                {
-                    lines.Add(trimmed);
-                }
-            }
+                lines.AddRange(BashRuntime.SplitRecord(item, out _));
         }
         else
         {

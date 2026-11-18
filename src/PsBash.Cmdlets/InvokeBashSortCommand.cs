@@ -487,18 +487,15 @@ public sealed class InvokeBashSortCommand : PSCmdlet
             }
             foreach (var item in _pipeline)
             {
-                string text = BashRuntime.GetBashText(item);
-                string trimmed = text.TrimEnd('\n');
-                if (trimmed.Contains('\n'))
+                var pieces = BashRuntime.SplitRecord(item, out _);
+                if (pieces.Length == 1)
                 {
-                    foreach (var sub in trimmed.Split('\n'))
-                    {
-                        items.Add(sub); texts.Add(sub); labels.Add("-"); lineNos.Add(++line);
-                    }
+                    items.Add(item); texts.Add(pieces[0]); labels.Add("-"); lineNos.Add(++line);
+                    continue;
                 }
-                else
+                foreach (var sub in pieces)
                 {
-                    items.Add(item); texts.Add(trimmed); labels.Add("-"); lineNos.Add(++line);
+                    items.Add(sub); texts.Add(sub); labels.Add("-"); lineNos.Add(++line);
                 }
             }
         }

@@ -65,11 +65,8 @@ public sealed class InvokeBashRevCommand : PSCmdlet
         // of buffering keeps a huge pipe from materializing in memory.
         if ((Arguments?.Length ?? 0) != 0) return;
 
-        string text = BashRuntime.GetBashText(InputObject);
-        string trimmed = text.TrimEnd('\n');
         // rev is a TRANSFORMER: fresh text, and (GNU) it copies a missing final newline.
-        bool unterminated = BashRuntime.IsUnterminated(InputObject);
-        var pieces = trimmed.Split('\n');
+        var pieces = BashRuntime.SplitRecord(InputObject, out bool unterminated);
         for (int p = 0; p < pieces.Length; p++)
         {
             WriteObject(BashRuntime.TextRecord(

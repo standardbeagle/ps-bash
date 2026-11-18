@@ -292,21 +292,20 @@ public sealed class InvokeBashShufCommand : PSCmdlet
         {
             foreach (var obj in _pipeline)
             {
-                string text = BashRuntime.GetBashText(obj);
-                string trimmed = text.TrimEnd('\n');
-                if (trimmed.Contains('\n'))
+                var pieces = BashRuntime.SplitRecord(obj, out _);
+                if (pieces.Length == 1)
+                {
+                    items.Add(BashRuntime.GetBashText(obj));
+                    origins.Add(obj);
+                }
+                else
                 {
                     // A multi-line record (printf 'a\nb') is several lines to shuffle.
-                    foreach (var piece in trimmed.Split('\n'))
+                    foreach (var piece in pieces)
                     {
                         items.Add(piece);
                         origins.Add(null);
                     }
-                }
-                else
-                {
-                    items.Add(text);
-                    origins.Add(obj);
                 }
             }
         }

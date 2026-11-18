@@ -544,19 +544,14 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
 
         // Stream the adjacent dedup instead of buffering the pipe — uniq only
         // needs the current run (prev line/key + count), never the whole input.
-        string text = BashRuntime.GetBashText(InputObject);
-        string trimmed = text.TrimEnd('\n');
-        if (trimmed.Contains('\n'))
+        var pieces = BashRuntime.SplitRecord(InputObject, out _);
+        if (pieces.Length == 1)
         {
-            foreach (var subLine in trimmed.Split('\n'))
-            {
-                ProcessLine(subLine);
-            }
+            ProcessLine(pieces[0], InputObject);
+            return;
         }
-        else
-        {
-            ProcessLine(trimmed, InputObject);
-        }
+        foreach (var subLine in pieces)
+            ProcessLine(subLine);
     }
 
     protected override void EndProcessing()

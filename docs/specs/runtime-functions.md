@@ -205,6 +205,22 @@ first `Feed` (`head`/`uniq` parse in `ProcessRecord` before feeding). Byte consu
 Guard: `LineAssemblerGuardTests` (every pipeline cmdlet assembles or is listed with its reason);
 oracle: `LineAssemblyDifferentialTests`. REGRESSION: 25 commands took each record as its own line(s).
 
+**A record → its lines: ONE splitter.** A record's text carries at most ONE terminator of its own (a
+terminated record whose text lacks it gets the boundary newline when rendered). So the split is: drop
+exactly one trailing `\n`, then split on `\n` — every earlier `\n` ends a line, and `printf 'a\n\n'` (one
+record) is the two lines `a` and `""`. An empty terminated record is one empty line; an empty unterminated
+record (`printf ''`) is no line. Only the last line of an `IsUnterminated` record lacks its newline. The
+primitive is `BashRuntime.SplitRecord(text, unterminated)` / `SplitRecord(item, out unterminated)`
+(`RecordLines` and the fused lane's `LineStreamRecord.SubLines` are built on it); a site that strips `\r`
+does so on the lines it returns. Never `TrimEnd('\n')` record text: it eats the trailing empty lines.
+The producer side: a plain record whose text ends in `\n` is ambiguous (`NewBashObject` strips one `\n`,
+readers take a remaining one as the own terminator), so a producer holding a byte slice emits it with
+`BashRuntime.BytesRecord(bytes)` — a plain line for `x\n`, exact bytes for `x\n\n` or `x` (`tr`, the
+`LineAssembler` join). Guard: `RecordSplitGuardTests` (no `TrimEnd(…'\n'…)` in PsBash.Cmdlets outside an
+allow-list naming why each is not a record split); unit `RecordSplitTests`; oracle
+`RecordTrailingEmptyLinesDifferentialTests`. REGRESSION: `printf 'a\n\n' | grep -c ''` was 1 (bash 2) in
+grep, sed, cat, nl, cut, rev, tac, sort, uniq, head, tail, shuf, column, rg, fold, expand, comm, paste, tr.
+
 ### Line terminators must survive the object choice
 
 A record renders as `BashText` + `\n` unless it carries `NoTrailingNewline` (`printf`,

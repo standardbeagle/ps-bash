@@ -292,19 +292,16 @@ public sealed class InvokeBashCatCommand : PSCmdlet
         if (!_hasFlags)
         {
             // Fast path: pass items through, splitting a multi-line item.
-            string text = BashRuntime.GetBashText(input);
-            string trimmed = text.TrimEnd('\n');
-            if (trimmed.Contains('\n'))
+            var pieces = BashRuntime.SplitRecord(input, out bool unterminated);
+            if (pieces.Length == 1)
             {
-                // Multi-line record: split into text lines, last keeps the missing newline.
-                bool unterminated = BashRuntime.IsUnterminated(input);
-                var pieces = trimmed.Split('\n');
-                for (int p = 0; p < pieces.Length; p++)
-                    WriteObject(BashRuntime.TextRecord(pieces[p], unterminated && p == pieces.Length - 1));
+                WriteObject(input);
             }
             else
             {
-                WriteObject(input);
+                // Multi-line record: split into text lines, last keeps the missing newline.
+                for (int p = 0; p < pieces.Length; p++)
+                    WriteObject(BashRuntime.TextRecord(pieces[p], unterminated && p == pieces.Length - 1));
             }
             return;
         }
@@ -312,19 +309,9 @@ public sealed class InvokeBashCatCommand : PSCmdlet
         // Flagged path (-n/-b/-E/-T/-s) TRANSFORMS the line, so it emits fresh CatLine
         // text records, never the upstream object. A multi-line record (printf 'b\na') is
         // numbered line by line; the last line keeps the source's missing newline.
-        string flagged = BashRuntime.GetBashText(input);
-        string flaggedTrimmed = flagged.TrimEnd('\n');
-        if (flaggedTrimmed.Contains('\n'))
-        {
-            bool unterminated = BashRuntime.IsUnterminated(input);
-            var pieces = flaggedTrimmed.Split('\n');
-            for (int p = 0; p < pieces.Length; p++)
-                EmitLine(pieces[p], string.Empty, unterminated && p == pieces.Length - 1);
-        }
-        else
-        {
-            EmitLine(flaggedTrimmed, string.Empty, BashRuntime.IsUnterminated(input));
-        }
+        var lines = BashRuntime.SplitRecord(input, out bool lastOpen);
+        for (int p = 0; p < lines.Length; p++)
+            EmitLine(lines[p], string.Empty, lastOpen && p == lines.Length - 1);
     }
 
     protected override void EndProcessing()

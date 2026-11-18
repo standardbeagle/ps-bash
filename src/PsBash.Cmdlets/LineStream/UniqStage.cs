@@ -69,13 +69,12 @@ internal sealed class UniqStage : ILineStreamStage
 
         foreach (var item in input)
         {
-            // Same record expansion as the cmdlet's ProcessRecord: trailing newline
-            // trimmed, an embedded-newline record split into lines. Fused producers
-            // yield one bare line, so this is a no-op in the normal case.
-            string trimmed = item.TrimEnd('\n');
-            if (trimmed.Contains('\n'))
+            // Same record expansion as the cmdlet's ProcessRecord (BashRuntime.SplitRecord).
+            // Fused producers yield one bare line, so this is a no-op in the normal case.
+            var pieces = LineStreamRecord.SubLines(item);
+            if (pieces.Length != 1)
             {
-                foreach (var subLine in trimmed.Split('\n'))
+                foreach (var subLine in pieces)
                 {
                     string key = GetUniqKey(subLine, _skipFields, _skipChars, _checkChars);
                     if (prevKey != null && SameKey(key, prevKey)) { runCount++; continue; }
@@ -85,10 +84,10 @@ internal sealed class UniqStage : ILineStreamStage
                 continue;
             }
 
-            string k = GetUniqKey(trimmed, _skipFields, _skipChars, _checkChars);
+            string k = GetUniqKey(pieces[0], _skipFields, _skipChars, _checkChars);
             if (prevKey != null && SameKey(k, prevKey)) { runCount++; continue; }
             if (TryFlush(prevLine, runCount, out var f)) yield return f!;
-            prevLine = trimmed; prevKey = k; runCount = 1;
+            prevLine = pieces[0]; prevKey = k; runCount = 1;
         }
 
         if (TryFlush(prevLine, runCount, out var last)) yield return last!;

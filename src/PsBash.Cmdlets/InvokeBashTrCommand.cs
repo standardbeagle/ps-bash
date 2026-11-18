@@ -290,9 +290,10 @@ public sealed class InvokeBashTrCommand : PSCmdlet
         // bytes, embedded newlines included. So this record's byte-stream contribution is
         // BashText + "\n" for a normal record and BashText verbatim for a marked one — which is what
         // makes `seq 1 3 | tr -d '\n'` (seq emits bare lines) "123" exactly like `printf '1\n2\n3\n'`.
+        // A plain record whose text already ends in its own "\n" (a bare "a\n" string) gets no second one:
+        // the same record → bytes rule as every reader (BashRuntime.RecordStreamText / SplitRecord).
         string text = BashRuntime.GetBashText(InputObject);
-        bool exact = InputObject.Properties["NoTrailingNewline"]?.Value is true;
-        string chunk = exact ? text : text + "\n";
+        string chunk = text.EndsWith('\n') || BashRuntime.IsUnterminated(InputObject) ? text : text + "\n";
 
         // STREAMING, whatever the table: each record is transformed and written as it arrives
         // (`tail -f log | tr '\n' ' '` emits per line; `yes | tr '\n' x | head -c 5` terminates).
@@ -302,18 +303,15 @@ public sealed class InvokeBashTrCommand : PSCmdlet
     }
 
     /// <summary>
-    /// Writes transformed stream bytes. Bytes ending in a terminator go out as an ordinary record
-    /// (the serializer re-adds that <c>\n</c>; embedded newlines stay inside the record, as before);
-    /// bytes without one (terminator deleted or translated, or input that never had one) go out as
-    /// exact bytes.
+    /// Writes transformed stream bytes via <see cref="BashRuntime.BytesRecord"/>: bytes ending in one
+    /// terminator go out as an ordinary record (the serializer re-adds that <c>\n</c>; embedded newlines
+    /// stay inside the record); bytes without one (terminator deleted or translated, or input that never
+    /// had one) or ending in an empty line (<c>printf 'a\n\n' | tr a b</c>) go out as exact bytes.
     /// </summary>
     private void EmitStream(string bytes)
     {
         if (bytes.Length == 0) return;
-        if (bytes[^1] == '\n')
-            WriteObject(BashRuntime.NewBashObject(bytes.Substring(0, bytes.Length - 1)));
-        else
-            WriteObject(BashRuntime.NewBashObject(bytes, noTrailingNewline: true));
+        WriteObject(BashRuntime.BytesRecord(bytes));
     }
 
     protected override void EndProcessing()

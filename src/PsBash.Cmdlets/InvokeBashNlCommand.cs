@@ -296,19 +296,8 @@ public sealed class InvokeBashNlCommand : PSCmdlet
 
         // Pipeline mode: number each stdin sub-line as it arrives instead of
         // buffering the whole pipe.
-        string text = BashRuntime.GetBashText(InputObject);
-        string trimmed = text.TrimEnd('\n');
-        if (trimmed.Contains('\n'))
-        {
-            foreach (var subLine in trimmed.Split('\n'))
-            {
-                EmitNumbered(subLine);
-            }
-        }
-        else
-        {
-            EmitNumbered(trimmed);
-        }
+        foreach (var subLine in BashRuntime.SplitRecord(InputObject, out _))
+            EmitNumbered(subLine);
     }
 
     protected override void EndProcessing()

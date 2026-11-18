@@ -1,0 +1,45 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 682
+stdout-length: 196
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit
+printf 'b\n\n' | sort > o; od -An -c o
+printf 'a\n\n\n' | uniq > o; od -An -c o
+printf 'a\n\n' | tail -n 2 > o; od -An -c o
+printf 'a\n\n' | tac > o; od -An -c o
+printf 'a\n\n' | cut -c1 > o; od -An -c o
+printf 'a\n\n' | nl -ba > o; od -An -c o
+printf 'a\n\n' | grep -c ''
+printf 'a\n\n' | sed -n '$='
+printf 'a\n\n' | tr a b | grep -c ''
+printf 'a\n\n' | head -n -1 > o; od -An -c o
+printf 'a\nb\n\n\n' | head -n -2 > o; od -An -c o
+printf 'x\ny\n' > t; printf 'a\n\n' | rg -f - t | wc -l
+printf 'a\n\n' | while IFS= read -r l; do echo "[$l]"; done
+printf '' | sed p > o; od -An -c o; echo "|$?"
+{ printf 'a\n'; printf ''; } | sed p > o; od -An -c o
+cd / 
+==== STDOUT ====
+  \n   b  \n
+   a  \n  \n
+   a  \n  \n
+  \n   a  \n
+   a  \n  \n
+                       1  \t   a  \n                       2  \t
+  \n
+2
+2
+2
+   a  \n
+   a  \n   b  \n
+2
+[a]
+[]
+|0
+   a  \n   a  \n
+
+==== STDERR ====
+

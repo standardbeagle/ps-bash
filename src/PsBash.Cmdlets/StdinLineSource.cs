@@ -27,8 +27,7 @@ internal sealed class StdinLineSource
         {
             var text = (BashRuntime.GetBashText(item) ?? "").Replace("\r\n", "\n");
             // A record is one line; text that already carries newlines contributes one line each.
-            if (text.EndsWith('\n')) text = text.Substring(0, text.Length - 1);
-            foreach (var line in text.Split('\n')) _piped.Enqueue(line);
+            foreach (var line in BashRuntime.SplitRecord(text, BashRuntime.IsUnterminated(item))) _piped.Enqueue(line);
         }
     }
 

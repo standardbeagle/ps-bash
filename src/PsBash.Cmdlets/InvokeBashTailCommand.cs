@@ -491,12 +491,9 @@ public sealed class InvokeBashTailCommand : PSCmdlet
         if (_plan.FromLine)
         {
             long skip = (long)_plan.Count - 1;
-            string text = BashRuntime.GetBashText(item);
-            string trimmed = text.TrimEnd('\n');
-            if (trimmed.Contains('\n'))
+            var pieces = BashRuntime.SplitRecord(item, out bool unterminated);
+            if (pieces.Length != 1)
             {
-                bool unterminated = BashRuntime.IsUnterminated(item);
-                var pieces = trimmed.Split('\n');
                 for (int p = 0; p < pieces.Length; p++)
                 {
                     if (_lineIdx >= skip)
@@ -515,12 +512,9 @@ public sealed class InvokeBashTailCommand : PSCmdlet
         if (_lineRing is null) return; // -n 0: GNU prints nothing
         {
             int cap = _plan.Count;
-            string text = BashRuntime.GetBashText(item);
-            string trimmed = text.TrimEnd('\n');
-            if (trimmed.Contains('\n'))
+            var pieces = BashRuntime.SplitRecord(item, out bool unterminated);
+            if (pieces.Length != 1)
             {
-                bool unterminated = BashRuntime.IsUnterminated(item);
-                var pieces = trimmed.Split('\n');
                 for (int p = 0; p < pieces.Length; p++)
                 {
                     _lineRing.Enqueue(BashRuntime.TextRecord(pieces[p], unterminated && p == pieces.Length - 1));
@@ -718,12 +712,9 @@ public sealed class InvokeBashTailCommand : PSCmdlet
         var all = new List<object>();
         foreach (var item in records)
         {
-            string text = BashRuntime.GetBashText(item);
-            string trimmed = text.TrimEnd('\n');
-            if (trimmed.Contains('\n'))
+            var pieces = BashRuntime.SplitRecord(item, out bool unterminated);
+            if (pieces.Length != 1)
             {
-                bool unterminated = BashRuntime.IsUnterminated(item);
-                var pieces = trimmed.Split('\n');
                 for (int p = 0; p < pieces.Length; p++)
                     all.Add(BashRuntime.TextRecord(pieces[p], unterminated && p == pieces.Length - 1));
             }

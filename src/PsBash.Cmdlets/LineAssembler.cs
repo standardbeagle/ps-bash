@@ -72,7 +72,7 @@ public sealed class LineAssembler
         _pending.Clear();
         _hasPending = false;
         if (Terminator == '\n')
-            return AsPso(BashRuntime.TextRecord(joined[..^1], unterminated: false));
+            return AsPso(BashRuntime.BytesRecord(joined)); // `printf x; printf 'a\n\n'` = lines "xa", ""
         return AsPso(BashRuntime.TextRecord(joined, unterminated: true));
     }
 

@@ -159,24 +159,19 @@ public sealed class InvokeBashTacCommand : PSCmdlet
             // Pipeline mode — trim trailing newlines, split on \n, accumulate.
             foreach (var item in _pipeline)
             {
-                string text = BashRuntime.GetBashText(item);
-                string trimmed = text.TrimEnd('\n');
-                if (trimmed.Contains('\n'))
+                var pieces = BashRuntime.SplitRecord(item, out bool unterminated);
+                if (pieces.Length == 1)
                 {
-                    bool unterminated = BashRuntime.IsUnterminated(item);
-                    var pieces = trimmed.Split('\n');
-                    for (int p = 0; p < pieces.Length; p++)
-                    {
-                        lines.Add(pieces[p]);
-                        pipelineRecords.Add(BashRuntime.TextRecord(
-                            pieces[p], unterminated && p == pieces.Length - 1));
-                    }
-                }
-                else
-                {
-                    lines.Add(trimmed);
+                    lines.Add(pieces[0]);
                     // tac is a FILTER: a single-line record is emitted as itself.
                     pipelineRecords.Add(item);
+                    continue;
+                }
+                for (int p = 0; p < pieces.Length; p++)
+                {
+                    lines.Add(pieces[p]);
+                    pipelineRecords.Add(BashRuntime.TextRecord(
+                        pieces[p], unterminated && p == pieces.Length - 1));
                 }
             }
         }

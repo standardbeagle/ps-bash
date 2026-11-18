@@ -715,6 +715,18 @@ public static class BashRuntime
             : NewBashObject(text);
 
     /// <summary>
+    /// A record standing for exactly <paramref name="bytes"/> (a stream slice that may end in a newline, in
+    /// several, or in none). Bytes ending in ONE newline become a plain line record without it (the serializer
+    /// appends it); anything else — no final newline, or a final EMPTY line (<c>"x\n\n"</c>) — is kept as exact
+    /// bytes. Never a plain record whose text ends in <c>\n</c>: readers take that <c>\n</c> as the record's own
+    /// terminator (<see cref="SplitRecord(string, bool)"/>), so the empty line it stood for would vanish.
+    /// </summary>
+    public static object BytesRecord(string bytes)
+        => bytes.Length > 0 && bytes[^1] == '\n' && (bytes.Length == 1 || bytes[^2] != '\n')
+            ? NewBashObject(bytes[..^1])
+            : NewBashObject(bytes, "PsBash.TextOutput", noTrailingNewline: true);
+
+    /// <summary>
     /// The lines of a (possibly multi-line) record, each with whether it is unterminated: only
     /// the LAST line of an <see cref="IsUnterminated"/> record is. The one splitter every
     /// transformer uses so a stdin record (<c>printf 'b\na'</c>) and a file line
@@ -722,10 +734,37 @@ public static class BashRuntime
     /// </summary>
     public static IEnumerable<(string Text, bool Unterminated)> RecordLines(object? item)
     {
-        bool unterminated = IsUnterminated(item);
-        var pieces = GetBashText(item).TrimEnd('\n').Split('\n');
+        var pieces = SplitRecord(item, out bool unterminated);
         for (int p = 0; p < pieces.Length; p++)
             yield return (pieces[p], unterminated && p == pieces.Length - 1);
+    }
+
+    /// <summary>
+    /// THE record → lines splitter (spec <c>runtime-functions.md</c> §Partial lines). A record's text carries at
+    /// most ONE terminator of its own, so: drop exactly one trailing <c>\n</c>, then split on <c>\n</c> — every
+    /// earlier <c>\n</c> ends a line, so <c>"a\n\n"</c> is the two lines <c>a</c> and <c>""</c>. An empty
+    /// terminated record is one empty line (a native program's blank line arrives as <c>""</c>); an empty
+    /// <paramref name="unterminated"/> record (<c>printf ''</c>) is no line at all. When
+    /// <paramref name="unterminated"/> (pass <see cref="IsUnterminated"/>) only the LAST line lacks its newline.
+    /// Never <c>TrimEnd('\n')</c> record text: that eats the trailing empty lines (<c>printf 'a\n\n' | grep -c ''</c>
+    /// counted 1, bash 2). Guard: <c>RecordSplitGuardTests</c>. A <c>'\r'</c> stays in the line; a site that
+    /// strips it does so on the lines this returns.
+    /// </summary>
+    public static string[] SplitRecord(string text, bool unterminated)
+    {
+        if (text.Length == 0) return unterminated ? Array.Empty<string>() : new[] { string.Empty };
+        if (text[^1] == '\n') text = text[..^1];
+        return text.Split('\n');
+    }
+
+    /// <summary>
+    /// <see cref="SplitRecord(string, bool)"/> for a pipeline record: its BashText split into lines, with
+    /// <paramref name="unterminated"/> = <see cref="IsUnterminated"/> (true = the last line has no newline).
+    /// </summary>
+    public static string[] SplitRecord(object? item, out bool unterminated)
+    {
+        unterminated = IsUnterminated(item);
+        return SplitRecord(GetBashText(item), unterminated);
     }
 
     /// <summary>

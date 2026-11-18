@@ -1,0 +1,214 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 604
+stdout-length: 9079
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit
+for c in "grep -c ''" "grep -n ''" 'sed =' 'cat -n' 'cat -A' 'cat' 'nl -ba' 'cut -c1' 'tr a b' 'tr a b | wc -l' 'rev' 'tac' 'sort' 'uniq -c' 'head -n 9' 'tail -n 9' 'tail -n +1' 'shuf | sort' 'column -t' "rg -c ''" "rg -n ''" 'fold' 'expand' 'unexpand' 'paste -' 'comm - /dev/null' 'awk {print\ NR\ \$0}' 'wc -l'; do
+  for src in "printf 'a\n\n'" "printf 'a\n\n\n'" "printf '\n\n'" "printf 'a\n\nb\n\n'" "printf 'a\nb'" "printf ''" "{ printf x; printf 'a\n\n'; }"; do
+    eval "$src | $c" > o 2>&1; echo "## $c <- $src: $(od -An -c o | tr -s ' ' | tr -d '\n')"
+  done
+done
+cd / 
+==== STDOUT ====
+## grep -c '' <- printf 'a\n\n':  2 \n
+## grep -c '' <- printf 'a\n\n\n':  3 \n
+## grep -c '' <- printf '\n\n':  2 \n
+## grep -c '' <- printf 'a\n\nb\n\n':  4 \n
+## grep -c '' <- printf 'a\nb':  2 \n
+## grep -c '' <- printf '':  0 \n
+## grep -c '' <- { printf x; printf 'a\n\n'; }:  2 \n
+## grep -n '' <- printf 'a\n\n':  1 : a \n 2 : \n
+## grep -n '' <- printf 'a\n\n\n':  1 : a \n 2 : \n 3 : \n
+## grep -n '' <- printf '\n\n':  1 : \n 2 : \n
+## grep -n '' <- printf 'a\n\nb\n\n':  1 : a \n 2 : \n 3 : b \n 4 : \n
+## grep -n '' <- printf 'a\nb':  1 : a \n 2 : b \n
+## grep -n '' <- printf '':
+## grep -n '' <- { printf x; printf 'a\n\n'; }:  1 : x a \n 2 : \n
+## sed = <- printf 'a\n\n':  1 \n a \n 2 \n \n
+## sed = <- printf 'a\n\n\n':  1 \n a \n 2 \n \n 3 \n \n
+## sed = <- printf '\n\n':  1 \n \n 2 \n \n
+## sed = <- printf 'a\n\nb\n\n':  1 \n a \n 2 \n \n 3 \n b \n 4 \n \n
+## sed = <- printf 'a\nb':  1 \n a \n 2 \n b
+## sed = <- printf '':
+## sed = <- { printf x; printf 'a\n\n'; }:  1 \n x a \n 2 \n \n
+## cat -n <- printf 'a\n\n':  1 \t a \n 2 \t \n
+## cat -n <- printf 'a\n\n\n':  1 \t a \n 2 \t \n 3 \t \n
+## cat -n <- printf '\n\n':  1 \t \n 2 \t \n
+## cat -n <- printf 'a\n\nb\n\n':  1 \t a \n 2 \t \n 3 \t b \n 4 \t \n
+## cat -n <- printf 'a\nb':  1 \t a \n 2 \t b
+## cat -n <- printf '':
+## cat -n <- { printf x; printf 'a\n\n'; }:  1 \t x a \n 2 \t \n
+## cat -A <- printf 'a\n\n':  a $ \n $ \n
+## cat -A <- printf 'a\n\n\n':  a $ \n $ \n $ \n
+## cat -A <- printf '\n\n':  $ \n $ \n
+## cat -A <- printf 'a\n\nb\n\n':  a $ \n $ \n b $ \n $ \n
+## cat -A <- printf 'a\nb':  a $ \n b
+## cat -A <- printf '':
+## cat -A <- { printf x; printf 'a\n\n'; }:  x a $ \n $ \n
+## cat <- printf 'a\n\n':  a \n \n
+## cat <- printf 'a\n\n\n':  a \n \n \n
+## cat <- printf '\n\n':  \n \n
+## cat <- printf 'a\n\nb\n\n':  a \n \n b \n \n
+## cat <- printf 'a\nb':  a \n b
+## cat <- printf '':
+## cat <- { printf x; printf 'a\n\n'; }:  x a \n \n
+## nl -ba <- printf 'a\n\n':  1 \t a \n 2 \t \n
+## nl -ba <- printf 'a\n\n\n':  1 \t a \n 2 \t \n 3 \t \n
+## nl -ba <- printf '\n\n':  1 \t \n 2 \t \n
+## nl -ba <- printf 'a\n\nb\n\n':  1 \t a \n 2 \t \n 3 \t b \n 4 \t \n
+## nl -ba <- printf 'a\nb':  1 \t a \n 2 \t b \n
+## nl -ba <- printf '':
+## nl -ba <- { printf x; printf 'a\n\n'; }:  1 \t x a \n 2 \t \n
+## cut -c1 <- printf 'a\n\n':  a \n \n
+## cut -c1 <- printf 'a\n\n\n':  a \n \n \n
+## cut -c1 <- printf '\n\n':  \n \n
+## cut -c1 <- printf 'a\n\nb\n\n':  a \n \n b \n \n
+## cut -c1 <- printf 'a\nb':  a \n b \n
+## cut -c1 <- printf '':
+## cut -c1 <- { printf x; printf 'a\n\n'; }:  x \n \n
+## tr a b <- printf 'a\n\n':  b \n \n
+## tr a b <- printf 'a\n\n\n':  b \n \n \n
+## tr a b <- printf '\n\n':  \n \n
+## tr a b <- printf 'a\n\nb\n\n':  b \n \n b \n \n
+## tr a b <- printf 'a\nb':  b \n b
+## tr a b <- printf '':
+## tr a b <- { printf x; printf 'a\n\n'; }:  x b \n \n
+## tr a b | wc -l <- printf 'a\n\n':  2 \n
+## tr a b | wc -l <- printf 'a\n\n\n':  3 \n
+## tr a b | wc -l <- printf '\n\n':  2 \n
+## tr a b | wc -l <- printf 'a\n\nb\n\n':  4 \n
+## tr a b | wc -l <- printf 'a\nb':  1 \n
+## tr a b | wc -l <- printf '':  0 \n
+## tr a b | wc -l <- { printf x; printf 'a\n\n'; }:  2 \n
+## rev <- printf 'a\n\n':  a \n \n
+## rev <- printf 'a\n\n\n':  a \n \n \n
+## rev <- printf '\n\n':  \n \n
+## rev <- printf 'a\n\nb\n\n':  a \n \n b \n \n
+## rev <- printf 'a\nb':  a \n b
+## rev <- printf '':
+## rev <- { printf x; printf 'a\n\n'; }:  a x \n \n
+## tac <- printf 'a\n\n':  \n a \n
+## tac <- printf 'a\n\n\n':  \n \n a \n
+## tac <- printf '\n\n':  \n \n
+## tac <- printf 'a\n\nb\n\n':  \n b \n \n a \n
+## tac <- printf 'a\nb':  b a \n
+## tac <- printf '':
+## tac <- { printf x; printf 'a\n\n'; }:  \n x a \n
+## sort <- printf 'a\n\n':  \n a \n
+## sort <- printf 'a\n\n\n':  \n \n a \n
+## sort <- printf '\n\n':  \n \n
+## sort <- printf 'a\n\nb\n\n':  \n \n a \n b \n
+## sort <- printf 'a\nb':  a \n b \n
+## sort <- printf '':
+## sort <- { printf x; printf 'a\n\n'; }:  \n x a \n
+## uniq -c <- printf 'a\n\n':  1 a \n  1 \n
+## uniq -c <- printf 'a\n\n\n':  1 a \n  2 \n
+## uniq -c <- printf '\n\n':  2 \n
+## uniq -c <- printf 'a\n\nb\n\n':  1 a \n  1 \n 1 b \n  1 \n
+## uniq -c <- printf 'a\nb':  1 a \n  1 b \n
+## uniq -c <- printf '':
+## uniq -c <- { printf x; printf 'a\n\n'; }:  1 x a \n  1 \n
+## head -n 9 <- printf 'a\n\n':  a \n \n
+## head -n 9 <- printf 'a\n\n\n':  a \n \n \n
+## head -n 9 <- printf '\n\n':  \n \n
+## head -n 9 <- printf 'a\n\nb\n\n':  a \n \n b \n \n
+## head -n 9 <- printf 'a\nb':  a \n b
+## head -n 9 <- printf '':
+## head -n 9 <- { printf x; printf 'a\n\n'; }:  x a \n \n
+## tail -n 9 <- printf 'a\n\n':  a \n \n
+## tail -n 9 <- printf 'a\n\n\n':  a \n \n \n
+## tail -n 9 <- printf '\n\n':  \n \n
+## tail -n 9 <- printf 'a\n\nb\n\n':  a \n \n b \n \n
+## tail -n 9 <- printf 'a\nb':  a \n b
+## tail -n 9 <- printf '':
+## tail -n 9 <- { printf x; printf 'a\n\n'; }:  x a \n \n
+## tail -n +1 <- printf 'a\n\n':  a \n \n
+## tail -n +1 <- printf 'a\n\n\n':  a \n \n \n
+## tail -n +1 <- printf '\n\n':  \n \n
+## tail -n +1 <- printf 'a\n\nb\n\n':  a \n \n b \n \n
+## tail -n +1 <- printf 'a\nb':  a \n b
+## tail -n +1 <- printf '':
+## tail -n +1 <- { printf x; printf 'a\n\n'; }:  x a \n \n
+## shuf | sort <- printf 'a\n\n':  \n a \n
+## shuf | sort <- printf 'a\n\n\n':  \n \n a \n
+## shuf | sort <- printf '\n\n':  \n \n
+## shuf | sort <- printf 'a\n\nb\n\n':  \n \n a \n b \n
+## shuf | sort <- printf 'a\nb':  a \n b \n
+## shuf | sort <- printf '':
+## shuf | sort <- { printf x; printf 'a\n\n'; }:  \n x a \n
+## column -t <- printf 'a\n\n':  a \n
+## column -t <- printf 'a\n\n\n':  a \n
+## column -t <- printf '\n\n':
+## column -t <- printf 'a\n\nb\n\n':  a \n b \n
+## column -t <- printf 'a\nb':  a \n b \n
+## column -t <- printf '':
+## column -t <- { printf x; printf 'a\n\n'; }:  x a \n
+## rg -c '' <- printf 'a\n\n':  2 \n
+## rg -c '' <- printf 'a\n\n\n':  3 \n
+## rg -c '' <- printf '\n\n':  2 \n
+## rg -c '' <- printf 'a\n\nb\n\n':  4 \n
+## rg -c '' <- printf 'a\nb':  2 \n
+## rg -c '' <- printf '':
+## rg -c '' <- { printf x; printf 'a\n\n'; }:  2 \n
+## rg -n '' <- printf 'a\n\n':  1 : a \n 2 : \n
+## rg -n '' <- printf 'a\n\n\n':  1 : a \n 2 : \n 3 : \n
+## rg -n '' <- printf '\n\n':  1 : \n 2 : \n
+## rg -n '' <- printf 'a\n\nb\n\n':  1 : a \n 2 : \n 3 : b \n 4 : \n
+## rg -n '' <- printf 'a\nb':  1 : a \n 2 : b \n
+## rg -n '' <- printf '':
+## rg -n '' <- { printf x; printf 'a\n\n'; }:  1 : x a \n 2 : \n
+## fold <- printf 'a\n\n':  a \n \n
+## fold <- printf 'a\n\n\n':  a \n \n \n
+## fold <- printf '\n\n':  \n \n
+## fold <- printf 'a\n\nb\n\n':  a \n \n b \n \n
+## fold <- printf 'a\nb':  a \n b
+## fold <- printf '':
+## fold <- { printf x; printf 'a\n\n'; }:  x a \n \n
+## expand <- printf 'a\n\n':  a \n \n
+## expand <- printf 'a\n\n\n':  a \n \n \n
+## expand <- printf '\n\n':  \n \n
+## expand <- printf 'a\n\nb\n\n':  a \n \n b \n \n
+## expand <- printf 'a\nb':  a \n b
+## expand <- printf '':
+## expand <- { printf x; printf 'a\n\n'; }:  x a \n \n
+## unexpand <- printf 'a\n\n':  a \n \n
+## unexpand <- printf 'a\n\n\n':  a \n \n \n
+## unexpand <- printf '\n\n':  \n \n
+## unexpand <- printf 'a\n\nb\n\n':  a \n \n b \n \n
+## unexpand <- printf 'a\nb':  a \n b
+## unexpand <- printf '':
+## unexpand <- { printf x; printf 'a\n\n'; }:  x a \n \n
+## paste - <- printf 'a\n\n':  a \n \n
+## paste - <- printf 'a\n\n\n':  a \n \n \n
+## paste - <- printf '\n\n':  \n \n
+## paste - <- printf 'a\n\nb\n\n':  a \n \n b \n \n
+## paste - <- printf 'a\nb':  a \n b \n
+## paste - <- printf '':
+## paste - <- { printf x; printf 'a\n\n'; }:  x a \n \n
+## comm - /dev/null <- printf 'a\n\n':  a \n c o m m : f i l e 1 i s n o t i n s o r t e d  o r d e r \n \n c o m m : i n p u t i s n o t i n s o r t e d o r d e r \n
+## comm - /dev/null <- printf 'a\n\n\n':  a \n c o m m : f i l e 1 i s n o t i n s o r t e d  o r d e r \n \n \n c o m m : i n p u t i s n o t i n s o r t e d o r d e r \n
+## comm - /dev/null <- printf '\n\n':  \n \n
+## comm - /dev/null <- printf 'a\n\nb\n\n':  a \n c o m m : f i l e 1 i s n o t i n s o r t e d  o r d e r \n \n b \n \n c o m m :  i n p u t i s n o t i n  s o r t e d o r d e r \n
+## comm - /dev/null <- printf 'a\nb':  a \n b \n
+## comm - /dev/null <- printf '':
+## comm - /dev/null <- { printf x; printf 'a\n\n'; }:  x a \n c o m m : f i l e 1  i s n o t i n s o r t e d o r d e r \n \n c o m m : i n p u t i s n o t i n s o r t e d o r d e r \n
+## awk {print\ NR\ \$0} <- printf 'a\n\n':  1 a \n 2 \n
+## awk {print\ NR\ \$0} <- printf 'a\n\n\n':  1 a \n 2 \n 3 \n
+## awk {print\ NR\ \$0} <- printf '\n\n':  1 \n 2 \n
+## awk {print\ NR\ \$0} <- printf 'a\n\nb\n\n':  1 a \n 2 \n 3 b \n 4 \n
+## awk {print\ NR\ \$0} <- printf 'a\nb':  1 a \n 2 b \n
+## awk {print\ NR\ \$0} <- printf '':
+## awk {print\ NR\ \$0} <- { printf x; printf 'a\n\n'; }:  1 x a \n 2 \n
+## wc -l <- printf 'a\n\n':  2 \n
+## wc -l <- printf 'a\n\n\n':  3 \n
+## wc -l <- printf '\n\n':  2 \n
+## wc -l <- printf 'a\n\nb\n\n':  4 \n
+## wc -l <- printf 'a\nb':  1 \n
+## wc -l <- printf '':  0 \n
+## wc -l <- { printf x; printf 'a\n\n'; }:  2 \n
+
+==== STDERR ====
+

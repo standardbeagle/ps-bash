@@ -555,30 +555,23 @@ public sealed class InvokeBashSedCommand : PSCmdlet
             return;
         }
 
-        _sawRecord = true;
-        _lastUnterminated = InputObject.Properties["NoTrailingNewline"]?.Value is true
-            && !BashRuntime.GetBashText(InputObject).EndsWith("\n");
-
         bool quitMidRecord = false;
         if (_term == '\n')
         {
-            string trimmed = BashRuntime.GetBashText(InputObject).TrimEnd('\n');
-            if (trimmed.Contains('\n'))
+            var parts = BashRuntime.SplitRecord(InputObject, out bool unterminated);
+            if (parts.Length == 0) return; // `printf ''`: no bytes, so no line and no last-line state
+            _sawRecord = true;
+            _lastUnterminated = unterminated;
+            for (int i = 0; i < parts.Length; i++)
             {
-                var parts = trimmed.Split('\n');
-                for (int i = 0; i < parts.Length; i++)
-                {
-                    _engine!.Feed(parts[i]);
-                    if (_engine.Done) { quitMidRecord = i < parts.Length - 1; break; }
-                }
-            }
-            else
-            {
-                _engine!.Feed(trimmed);
+                _engine!.Feed(parts[i]);
+                if (_engine.Done) { quitMidRecord = i < parts.Length - 1; break; }
             }
         }
         else
         {
+            _sawRecord = true;
+            _lastUnterminated = BashRuntime.IsUnterminated(InputObject);
             FeedNulText(BashRuntime.RecordStreamText(new object[] { InputObject }));
         }
 

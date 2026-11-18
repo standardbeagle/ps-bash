@@ -305,14 +305,11 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
                 StopUpstream();
                 return;
             }
-            string text = BashRuntime.GetBashText(InputObject);
-            string trimmed = text.TrimEnd('\n');
-            if (trimmed.Contains('\n'))
+            var pieces = BashRuntime.SplitRecord(InputObject, out bool unterminated);
+            if (pieces.Length != 1)
             {
                 // A multi-line record (printf 'b\na') is split into text lines; the last
                 // piece keeps the source's missing newline (head copies bytes).
-                bool unterminated = BashRuntime.IsUnterminated(InputObject);
-                var pieces = trimmed.Split('\n');
                 for (int p = 0; p < pieces.Length; p++)
                 {
                     if (_emitted >= _lineCount) break;
@@ -542,7 +539,7 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
             {
                 int total = 0;
                 foreach (var item in pipeline)
-                    total += ItemLines(BashRuntime.GetBashText(item)).Length;
+                    total += BashRuntime.SplitRecord(item, out _).Length;
                 limit = Math.Max(0, total + count);
             }
 
@@ -550,8 +547,8 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
             foreach (var item in pipeline)
             {
                 if (emitted >= limit) break;
-                var lines = ItemLines(BashRuntime.GetBashText(item));
-                if (lines.Length <= 1)
+                var lines = BashRuntime.SplitRecord(item, out bool unterminated);
+                if (lines.Length == 1)
                 {
                     // head is a FILTER: a single-line item is one of its own output lines,
                     // so pass the ORIGINAL object through (LsEntry, CatLine, …).
@@ -560,7 +557,6 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
                 }
                 else
                 {
-                    bool unterminated = BashRuntime.IsUnterminated(item);
                     for (int p = 0; p < lines.Length; p++)
                     {
                         if (emitted >= limit) break;
@@ -673,23 +669,6 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
             "BashText", BashRuntime.NormalizeBashText(line)));
         if (unterminated) obj.Properties.Add(new PSNoteProperty("NoTrailingNewline", true));
         WriteObject(obj);
-    }
-
-    /// <summary>
-    /// Split a pipeline item's BashText into its constituent lines. A trailing <c>'\n'</c>
-    /// TERMINATES the last line, so the split's spurious trailing empty element is dropped
-    /// — but genuine interior/trailing BLANK lines are KEPT. Used by the <c>head -n -K</c>
-    /// line count + emit so both agree with GNU. (The old <c>TrimEnd('\n')</c> stripped ALL
-    /// trailing newlines, undercounting <c>"a\nb\n\n\n"</c> as 2 lines instead of 4.)
-    /// </summary>
-    internal static string[] ItemLines(string text)
-    {
-        if (text.EndsWith('\n'))
-        {
-            var parts = text.Split('\n');
-            return parts[..^1]; // drop the terminator's trailing empty element
-        }
-        return text.Split('\n');
     }
 
     private static bool IsAllDigits(string s)

@@ -796,17 +796,12 @@ public sealed class InvokeBashRgCommand : PSCmdlet
         var src = new RgSource { Display = "<stdin>", IsStdin = true, Items = new List<object?>() };
         foreach (var item in _pipeline)
         {
-            string text = BashRuntime.GetBashText(item);
-            string trimmed = text.TrimEnd('\n');
-            if (trimmed.Contains('\n'))
+            var pieces = BashRuntime.SplitRecord(item, out _);
+            foreach (var sub in pieces)
             {
-                foreach (var sub in trimmed.Split('\n')) { src.Lines.Add(sub); src.Items.Add(null); src.ByteSize += RawBytes_Count(sub) + 1; }
-            }
-            else
-            {
-                src.Lines.Add(trimmed);
-                src.Items.Add(item);
-                src.ByteSize += RawBytes_Count(trimmed) + 1;
+                src.Lines.Add(sub);
+                src.Items.Add(pieces.Length == 1 ? item : null);
+                src.ByteSize += RawBytes_Count(sub) + 1;
             }
         }
         return src;
@@ -820,7 +815,7 @@ public sealed class InvokeBashRgCommand : PSCmdlet
         if (raw == "-")
         {
             foreach (var item in _pipeline)
-                foreach (var l in BashRuntime.GetBashText(item).TrimEnd('\n').Split('\n')) dest.Add(l.TrimEnd('\r'));
+                foreach (var l in BashRuntime.SplitRecord(item, out _)) dest.Add(l.TrimEnd('\r'));
             return true;
         }
         string path;

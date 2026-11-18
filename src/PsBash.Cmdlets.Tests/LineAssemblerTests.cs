@@ -47,6 +47,19 @@ public class LineAssemblerTests
     }
 
     [Fact]
+    public void PieceThenRecordEndingInAnEmptyLine_KeepsTheEmptyLine()
+    {
+        // printf 'x'; printf 'a\n\n' : lines "xa", "" (bash: grep -c '' = 2). The join used to be the plain
+        // record "xa\n", which every reader took as ONE line.
+        var a = new LineAssembler();
+        a.Feed(Piece("x"));
+        var r = a.Feed(Piece("a\n\n"));
+        Assert.Equal(new[] { "xa", "" }, BashRuntime.SplitRecord(r, out bool open));
+        Assert.False(open);
+        Assert.Equal("xa\n\n", BashRuntime.RecordStreamText(new object[] { r! }));
+    }
+
+    [Fact]
     public void Flush_ReturnsTheUnterminatedLastLine()
     {
         var a = new LineAssembler();

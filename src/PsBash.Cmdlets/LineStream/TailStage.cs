@@ -96,8 +96,8 @@ internal sealed class TailStage : ILineStreamStage
     /// <summary>
     /// Port of the cmdlet's pipeline branch. Note it emits the ORIGINAL record for a
     /// single-line item and the SUB-LINE for a multi-line one — which is why this stage does
-    /// its own expansion instead of using <see cref="LineStreamRecord.SubLines"/> (that helper
-    /// returns the TRIMMED text, and trimming here would drop a byte the cmdlet keeps).
+    /// its own single-line check around <see cref="LineStreamRecord.SubLines"/> (the split
+    /// lines lose the record's own terminator, which the cmdlet keeps by emitting the original).
     /// </summary>
     public IEnumerable<string> Run(IEnumerable<string> input)
     {
@@ -107,10 +107,10 @@ internal sealed class TailStage : ILineStreamStage
             int idx = 0;
             foreach (var item in input)
             {
-                string trimmed = item.TrimEnd('\n');
-                if (trimmed.Contains('\n'))
+                var pieces = LineStreamRecord.SubLines(item);
+                if (pieces.Length != 1)
                 {
-                    foreach (var subLine in trimmed.Split('\n'))
+                    foreach (var subLine in pieces)
                     {
                         if (idx >= skip) yield return subLine;
                         idx++;
@@ -132,10 +132,10 @@ internal sealed class TailStage : ILineStreamStage
         int bufLen = 0, pos = 0;
         foreach (var item in input)
         {
-            string trimmed = item.TrimEnd('\n');
-            if (trimmed.Contains('\n'))
+            var pieces = LineStreamRecord.SubLines(item);
+            if (pieces.Length != 1)
             {
-                foreach (var subLine in trimmed.Split('\n'))
+                foreach (var subLine in pieces)
                 {
                     buf[pos] = subLine;
                     pos = (pos + 1) % cap;

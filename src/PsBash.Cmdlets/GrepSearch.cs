@@ -509,15 +509,11 @@ internal sealed class GrepStdinFeeder
     {
         if (!_nullData)
         {
-            string trimmed = recordText.TrimEnd('\n');
-            if (trimmed.Contains('\n'))
-            {
-                var pieces = trimmed.Split('\n');
-                for (int i = 0; i < pieces.Length; i++)
-                    if (!_scanner.Feed(pieces[i], unterminated && i == pieces.Length - 1 ? 0 : 1, null)) return false;
-                return true;
-            }
-            return _scanner.Feed(trimmed, unterminated ? 0 : 1, original);
+            var pieces = BashRuntime.SplitRecord(recordText, unterminated);
+            if (pieces.Length == 1) return _scanner.Feed(pieces[0], unterminated ? 0 : 1, original);
+            for (int i = 0; i < pieces.Length; i++)
+                if (!_scanner.Feed(pieces[i], unterminated && i == pieces.Length - 1 ? 0 : 1, null)) return false;
+            return true;
         }
 
         // -z: the byte stream is the records' text, each terminated by \n unless unterminated.

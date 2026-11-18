@@ -145,10 +145,7 @@ public sealed class InvokeBashPasteCommand : PSCmdlet
         if (InputObject == null) return;
         // A record may carry its trailing newline (printf/cat) or not (seq);
         // split so each line is one field either way.
-        string text = BashRuntime.GetBashText(InputObject);
-        if (text.EndsWith('\n')) text = text[..^1];
-        foreach (var line in text.Split('\n'))
-            _stdin.Add(line);
+        _stdin.AddRange(BashRuntime.SplitRecord(InputObject, out _));
     }
 
     /// <summary>Arguments with the decoy-bound <c>-d VALUE</c> re-injected.</summary>
