@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 105
+stdout-length: 9
+stderr-length: 0
+==== SCRIPT ====
+h() { local -n z=$1; echo "c[$z]"; }; g() { h "${99999999999999999999}"; }; g a 2>/dev/null; echo "rc=$?"
+==== STDOUT ====
+c[]
+rc=0
+
+==== STDERR ====
+

@@ -155,3 +155,66 @@ public class OsSignalsGuardTests
         finally { dir.Delete(recursive: true); }
     }
 }
+
+/// <summary>
+/// The outcome of a blocking <c>waitpid</c> (<see cref="OsSignals.WaitOutcome(int, int, int, int)"/>). A child whose
+/// status another waiter took (ECHILD: the .NET runtime reaps every child of a process that inherited SIGCHLD ignored)
+/// is bash's 0: jobs.c <c>wait_for</c> sets <c>WSTATUS (child->status) = 0; /* XXX -- can't find true status */</c>.
+/// ps-bash's job reaper reported 255 there. Oracle note: bash's source is the reference; ECHILD cannot be provoked in a
+/// bash differential (bash installs its own SIGCHLD handler).
+/// </summary>
+public class WaitOutcomeTests
+{
+    [Theory]
+    [InlineData(0x0000, false, 0)]   // exited 0
+    [InlineData(0x0300, false, 3)]   // exited 3
+    [InlineData(0x000F, false, 143)] // SIGTERM
+    [InlineData(0x001E, true, 138)]  // macOS SIGUSR1 (30) is bash's 10
+    public void WaitOutcome_ReapedChild_IsItsExitStatus(int waitStatus, bool bsd, int expected)
+        => Assert.Equal(expected, OsSignals.WaitOutcome(4242, 4242, waitStatus, 0, bsd));
+
+    [Fact]
+    public void WaitOutcome_StatusTakenByAnotherWaiter_IsBashsZero()
+        => Assert.Equal(OsSignals.LostChildStatus, OsSignals.WaitOutcome(-1, 4242, 0xFF00, OsSignals.ECHILD, false));
+
+    [Fact]
+    public void WaitOutcome_LostChildStatus_IsZeroAsInBash() => Assert.Equal(0, OsSignals.LostChildStatus);
+
+    [Fact]
+    public void WaitOutcome_Interrupted_IsRetried()
+        => Assert.Null(OsSignals.WaitOutcome(-1, 4242, 0, OsSignals.EINTR, false));
+
+    [Fact]
+    public void WaitOutcome_OtherPidOrFailure_IsNeverAnInventedStatus()
+    {
+        Assert.Equal(OsSignals.LostChildStatus, OsSignals.WaitOutcome(-1, 4242, 0, 22 /* EINVAL */, false));
+        Assert.Equal(OsSignals.LostChildStatus, OsSignals.WaitOutcome(0, 0, 0x0300, 0, false));
+    }
+
+    /// <summary>
+    /// Guard: every <c>waitpid</c> caller decodes through OsSignals (<c>WaitOutcome</c> / <c>ExitStatusOf</c> /
+    /// <c>LostChildStatus</c>) and invents no status of its own (the reaper's <c>0xFF00</c> fallback, a private ECHILD).
+    /// Oracle note: a source invariant, no bash equivalent.
+    /// </summary>
+    [Fact]
+    public void WaitpidCallers_DecodeOnlyThroughOsSignals()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "CLAUDE.md"))) dir = dir.Parent;
+        Assert.NotNull(dir);
+        var sep = Path.DirectorySeparatorChar;
+        var offenders = new List<string>();
+        foreach (var file in Directory.EnumerateFiles(Path.Combine(dir.FullName, "src"), "*.cs", SearchOption.AllDirectories))
+        {
+            if (file.Contains($"{sep}obj{sep}") || file.Contains($"{sep}bin{sep}") || file.Contains($".Tests{sep}")) continue;
+            if (file.EndsWith($"Platform{sep}OsSignals.cs", StringComparison.Ordinal)) continue;
+            var text = File.ReadAllText(file);
+            if (!Regex.IsMatch(text, @"\bwaitpid\s*\(")) continue;
+            if (!Regex.IsMatch(text, @"OsSignals\.(WaitOutcome|ExitStatusOf|LostChildStatus)\b"))
+                offenders.Add($"{Path.GetFileName(file)}: calls waitpid but does not decode through OsSignals");
+            if (Regex.IsMatch(text, @"0x[Ff][Ff]00\b|\bECHILD\s*=\s*\d"))
+                offenders.Add($"{Path.GetFileName(file)}: invents a wait status / errno of its own");
+        }
+        Assert.True(offenders.Count == 0, string.Join("\n", offenders));
+    }
+}

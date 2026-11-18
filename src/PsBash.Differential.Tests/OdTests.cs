@@ -29,4 +29,9 @@ public class OdTests
     [SkippableFact]
     public Task Od_BadRadix_Fails() => AssertOracle.EqualAsync(
         "{ printf x | od -A q; } 2>/dev/null; echo st=$?");
+
+    // A size past int range threw OverflowException from the planner (stderr is GNU's locale-quoted message).
+    [SkippableFact]
+    public Task Od_TypeSizePastIntRange_FailsLikeAnyInvalidType() => AssertOracle.EqualAsync(
+        "{ printf x | od -t d99999999999; } 2>/dev/null; echo st=$?; { printf x | od -t d99999999999 2>&1 >/dev/null; } | wc -l");
 }

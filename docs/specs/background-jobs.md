@@ -84,6 +84,11 @@ Non-goals
      starts it through `ChildStdio`. `command prog` and `Invoke-BashNative` itself start it the same way in a job.
    - a job launched in a job copies the outer job's store.
 
+   **A shell scalar has one storage in the job: that store.** The emitter hands a job a PowerShell copy
+   (`-Vars`) only of a function's lexical locals (`${name}` variables); a loop variable, which lives in the store
+   (`PsBuild.SetShellScalar`), is never copied too. A copy shadowed the job's own assignment: in
+   `for i in 1; do { i=7; echo $i; } & wait; done` the job printed `1`. Guard: `Core.Tests/JobScalarCaptureTests`.
+
    Not covered: **a `.cmd` / `.bat`** keeps PowerShell's launcher (its argument quoting is the one cmd.exe parses
    right), so it gets the process environment: the shell's current values, not the job's. **Command lookup** uses the
    process `PATH`: a job's `PATH=dir:$PATH` reaches its children's environment but does not change which program a
@@ -712,8 +717,12 @@ another host, so its `kill` targets the enclosing script's host.
   runs their traps, each signal is pending once (a repeat coalesces), and the traps run lowest signal number first.
   `-9` always ends the command. A queued signal never outlives its command.
 - **Running the trap.** In a script that can set a trap, the emitter appends `PsBuild.SignalTrapPoll` after each
-  top-level statement. "Can set a trap" means the source mentions `trap` (statically inlined `eval` text included),
-  or it sources a file (`source f`, `. f`), whose library may run `trap cleanup INT` (`PsEmitter._canSetTrap`). The
+  top-level statement. "Can set a trap" is decided on the parsed commands, never by scanning the source text, by one
+  predicate (`PsEmitter.CanSetTrap`, `PsEmitter.TrapPoll.cs`): a `trap` command (also via `command`/`builtin`, in a
+  function body, or in static `eval` text), `source`/`.` (a library may run `trap cleanup INT`), `alias`, or a command
+  whose name or eval text is only known at run time (`eval "$x"`, `$cmd …`; not a path such as `$dir/go`). A subshell's trap does not count; the
+  word `trap` as an argument (`echo trap`) does not either. A text scan missed `t=tr; eval "${t}ap …"`, whose trap
+  then never ran. Guard: `SignalTrapPollEmitterTests.Guard_TheTrapPollGateIsTheAstPredicate`. The
   poll reads a static property; only when the queue is non-empty does it call `Invoke-BashPendingSignals`. That
   cmdlet runs the trap, ignores the signal (empty action), or applies the default (`ShellSignalTraps`). `kill $$` uses the same code. As in bash, the trap runs after the current foreground
   command and leaves `$?` as it found it. A real signal's action counts its own `$LINENO` from 1, and DEBUG and ERR
@@ -723,8 +732,7 @@ another host, so its `kill` targets the enclosing script's host.
   endpoint. Windows has no POSIX signals, so `kill` is the only sender there, and both platforms behave the same.
 - **Limits.** A trapped signal runs only at a poll. A subshell `( )` or `$( )` body has no poll, so a signal that
   arrives while one runs waits for the next top-level statement boundary. The same holds for a long-running single
-  command. A trap that only a runtime `eval "$x"` sets, in a script that neither mentions `trap` nor sources a file,
-  gets no polls. A signal queued after it is dropped when the command ends. A host that is
+  command. A signal queued after it is dropped when the command ends. A host that is
   wedged, or that takes more than 5 s to answer, is reported unreachable.
 - **Guards.** `ShellSignalRoutingGuardTests` (Cmdlets.Tests) checks the source of the kill cmdlet: every pid it does
   not own goes through `SendToShell` before any `Process.Kill`, and `Process.Kill` stays behind `IsShellHost`. Unit

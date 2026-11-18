@@ -531,6 +531,11 @@ process, and a command that could not be stopped held the lease forever. The rul
   large-stack worker (`NestingGuard.WithStackFallback`) — inline, because a thread hop costs
   milliseconds on an STA caller. A new recursive descent MUST enter the guard.
 - **Transpile-time expansion is bounded.** Brace expansion beyond 1,000,000 words is a parse error.
+- **Script digits never overflow.** A number the script wrote is parsed with a non-throwing parse: a positional
+  index through `PositionalIndex.TryParse` (saturates at `int.MaxValue`, an unset parameter, as bash), a cmdlet
+  count through `BashRuntime.ParseCountClamped`. `${99999999999999999999}` forwarded to a nameref threw
+  `OverflowException` out of the transpile. Guard: `Core.Tests/ScriptDigitParseGuardTests` (no throwing integer parse
+  in `Transpiler/Parser`).
 - **Regex matches time out.** `HostRegexTimeout` sets the process default (15 s) before any `Regex`
   exists; a managed match cannot be stopped any other way.
 - **A cancelled command that will not stop poisons the host.** `StuckCommandWatchdog` (daemon only):

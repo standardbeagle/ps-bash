@@ -1,0 +1,17 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 71
+stdout-length: 11
+stderr-length: 0
+==== SCRIPT ====
+x="trap 'echo T3' USR2"; eval "$x"
+sh -c "kill -USR2 $$"
+echo after=$?
+
+==== STDOUT ====
+T3
+after=0
+
+==== STDERR ====
+

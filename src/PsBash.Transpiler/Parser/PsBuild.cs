@@ -1659,7 +1659,7 @@ public static class PsBuild
         {
             "@" or "*" => "$(if ($global:BashPositional) { $global:BashPositional } else { $args })",
             "#" => "$(if ($global:BashPositional) { $global:BashPositional.Count } else { $args.Count })",
-            _ when int.TryParse(sigil, out int oneBased) =>
+            _ when PositionalIndex.TryParse(sigil, out int oneBased) =>
                 "$(if ($global:BashPositional) { $global:BashPositional[" + (oneBased - 1) + "] } "
                 + "else { $args[" + (oneBased - 1) + "] })",
             _ => throw new System.ArgumentException($"Not a positional sigil: '{sigil}'", nameof(sigil)),
@@ -1806,10 +1806,10 @@ public static class PsBuild
                 // — a bare $10 lexes as $1 followed by literal "0" (see BashParser.ParseSimpleVar)
                 // — and the plain-form call site is the only one that ever handles it. A bash
                 // variable name can never be all-digits, so an all-digit name here is
-                // unambiguously a positional index. An index beyond int range (e.g. a
-                // 10-billion-digit index) is an unset parameter -> empty string in bash.
+                // unambiguously a positional index. An index beyond int range is an unset
+                // parameter -> empty string in bash (PositionalIndex saturates it).
                 if (!braced && name.Length >= 2 && IsAllDigits(name))
-                    return int.TryParse(name, out _) ? BuildPositionalExpansion(name) : "''";
+                    return BuildPositionalExpansion(name);
 
                 return null;
         }

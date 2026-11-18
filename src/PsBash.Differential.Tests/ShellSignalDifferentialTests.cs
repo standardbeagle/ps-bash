@@ -53,6 +53,14 @@ public class ShellSignalDifferentialTests
     public Task NestedKill_SeveralSignals_EachTrapRunsOnceInSignalOrder() =>
         AssertOracle.EqualAsync("trap 'echo u2' USR2\ntrap 'echo u1' USR1\nsh -c \"kill -USR2 $$; kill -USR1 $$; kill -USR2 $$\"\necho after=$?\n");
 
+    // A trap that only run-time eval text installs: the source never says `trap`, so the script got no signal polls and
+    // the trap never ran (`after=0` alone).
+    [SkippableTheory]
+    [InlineData("t=tr; eval \"${t}ap 'echo T2' USR1\"\nsh -c \"kill -USR1 $$\"\necho after=$?\n")]
+    [InlineData("x=\"trap 'echo T3' USR2\"; eval \"$x\"\nsh -c \"kill -USR2 $$\"\necho after=$?\n")]
+    [InlineData("set -- trap 'echo T4' USR1; \"$@\"\nsh -c \"kill -USR1 $$\"\necho after=$?\n")]
+    public Task NestedKill_TrapSetByRunTimeCode_RunsTheTrap(string script) => AssertOracle.EqualAsync(script);
+
     [SkippableFact]
     public Task NestedKill_TrapWithDebugTrap_LinenoCountsInsideTheAction() =>
         AssertOracle.EqualAsync("trap 'false; echo $LINENO usr1' USR1\ntrap 'false; echo $LINENO dbg' DEBUG\n\nsh -c \"kill -USR1 $$\"\necho after=$?\n");

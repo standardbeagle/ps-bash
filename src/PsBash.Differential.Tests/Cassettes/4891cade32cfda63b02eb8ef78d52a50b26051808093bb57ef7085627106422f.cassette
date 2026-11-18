@@ -1,0 +1,17 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 69
+stdout-length: 11
+stderr-length: 0
+==== SCRIPT ====
+set -- trap 'echo T4' USR1; "$@"
+sh -c "kill -USR1 $$"
+echo after=$?
+
+==== STDOUT ====
+T4
+after=0
+
+==== STDERR ====
+

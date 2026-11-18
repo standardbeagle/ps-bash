@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 56
+stdout-length: 2
+stderr-length: 0
+==== SCRIPT ====
+for i in 1; do { (( i += 5 )); echo "$i"; } & wait; done
+==== STDOUT ====
+6
+
+==== STDERR ====
+

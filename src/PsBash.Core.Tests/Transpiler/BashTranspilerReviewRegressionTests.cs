@@ -193,12 +193,13 @@ public class BashTranspilerReviewRegressionTests
     public void Transpile_TestOfAnEmptyCommandSub_ComparesAsAString(string bash)
         => Assert.Contains("(@($(", BashTranspiler.Transpile(bash));
 
-    // Oracle: `for i in 1 2; do worker $i & done` runs worker with 1 and 2 - the loop moves on before the job reads the variable, so its value is handed over at launch.
+    // Oracle: `for i in 1 2; do worker $i & done` runs worker with 1 and 2 - the loop moves on before the job reads the
+    // variable; the job's own scalar store, copied at the `&`, holds the value at launch (no PowerShell copy).
     [Fact]
-    public void Transpile_BackgroundJobInALoop_HandsOverTheLoopVariable()
+    public void Transpile_BackgroundJobInALoop_ReadsTheLoopVariableFromItsOwnStore()
     {
         var ps = BashTranspiler.Transpile("f() { return $1; }; for i in 1 2; do f $i & done");
-        Assert.Contains("-Vars @{ 'i' = $env:i } {", ps);
+        Assert.DoesNotContain("-Vars", ps);
     }
 
     [Fact]

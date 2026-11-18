@@ -232,13 +232,13 @@ internal sealed partial class PosixPtySpawner : PtySpawner
             if (rc < 0)
             {
                 int err = Marshal.GetLastPInvokeError();
-                if (err == NativeMethods.ECHILD)
+                if (err == PsBash.Core.Platform.OsSignals.ECHILD)
                 {
-                    // No such child / already reaped (e.g. SIGCHLD inherited).
+                    // The status is gone (another waiter reaped it, or SIGCHLD was inherited ignored): bash's 0.
                     Volatile.Write(ref _exited, 1);
-                    return 0;
+                    return PsBash.Core.Platform.OsSignals.LostChildStatus;
                 }
-                if (err == NativeMethods.EINTR) continue;
+                if (err == PsBash.Core.Platform.OsSignals.EINTR) continue;
                 throw new InvalidOperationException(
                     $"waitpid failed (errno={err}): {Marshal.GetPInvokeErrorMessage(err)}");
             }
@@ -292,8 +292,6 @@ internal sealed partial class PosixPtySpawner : PtySpawner
     {
         private const string LibC = "libc";
 
-        public const int ECHILD = 10;
-        public const int EINTR = 4;
         public const int WNOHANG = 1;
 
         // POSIX_SPAWN_SETSID:

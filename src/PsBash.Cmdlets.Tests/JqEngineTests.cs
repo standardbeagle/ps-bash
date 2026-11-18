@@ -70,6 +70,16 @@ public class JqEngineTests
         Assert.Equal(expected, JqValue.CanonicalLiteral(literal));
     }
 
+    // An exponent past int range is input text: int.Parse threw OverflowException out of the engine. jq 1.7 prints
+    // decNumber's clamped form (`1e-99999999999` is `0E-1147483646`), which ps-bash does not reproduce; the
+    // assertion is only that the literal is printed in the same scientific shape instead of throwing.
+    [Theory]
+    [InlineData("1e99999999999", "1E+")]
+    [InlineData("1e-99999999999", "1E-")]
+    [InlineData("-2.5E+99999999999999999999", "-2.5E+")]
+    public void CanonicalLiteral_ExponentPastIntRange_DoesNotThrow(string literal, string prefix)
+        => Assert.StartsWith(prefix, JqValue.CanonicalLiteral(literal));
+
     [Theory]
     [InlineData(1.0, "1")]
     [InlineData(1.5, "1.5")]

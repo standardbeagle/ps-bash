@@ -144,26 +144,24 @@ public sealed partial class JobProcess
         }
     }
 
-    /// <summary>Blocks in waitpid so the child is always reaped (no zombies), then publishes the status.</summary>
+    /// <summary>
+    /// Blocks in waitpid so the child is always reaped (no zombies), then publishes the status. A status another waiter
+    /// took (ECHILD) is bash's 0, decided by <see cref="OsSignals.WaitOutcome(int, int, int, int)"/>.
+    /// </summary>
     private void ReapLoop()
     {
-        int status = 0;
+        int code;
         while (true)
         {
-            int rc = Posix.waitpid(Pid, out status, 0);
-            if (rc == Pid) break;
-            int err = Marshal.GetLastPInvokeError();
-            if (rc < 0 && err == Posix.EINTR) continue;
-            status = unchecked((int)0xFF00); // ECHILD: someone else reaped it; report 255 rather than a false success
-            break;
+            int rc = Posix.waitpid(Pid, out int status, 0);
+            int err = rc < 0 ? Marshal.GetLastPInvokeError() : 0;
+            if (OsSignals.WaitOutcome(rc, Pid, status, err) is { } outcome) { code = outcome; break; }
         }
         lock (_gate)
         {
             _reaped = true;
             _reapedAtTicks = Stopwatch.GetTimestamp();
         }
-        // WIFEXITED -> WEXITSTATUS; WIFSIGNALED -> 128 + the signal's bash number (the shell convention).
-        int code = OsSignals.ExitStatusOf(status);
         PublishExit(code);
     }
 
@@ -249,7 +247,6 @@ public sealed partial class JobProcess
         public static readonly int SIGTERM = OsSignals.ToNative(OsSignals.SIGTERM), SIGKILL = OsSignals.ToNative(OsSignals.SIGKILL);
         public static readonly int SIGSTOP = OsSignals.ToNative(OsSignals.SIGSTOP);
         public static readonly int SIGCONT = OsSignals.ToNative(OsSignals.SIGCONT);
-        public const int EINTR = 4;
 
         [DllImport("libc", SetLastError = true)] public static extern int kill(int pid, int sig);
         [DllImport("libc", SetLastError = true)] public static extern int waitpid(int pid, out int status, int options);

@@ -281,7 +281,9 @@ internal static class JqValue
         int e = s.IndexOfAny(new[] { 'e', 'E' });
         if (e >= 0)
         {
-            exp = int.Parse(s.Substring(e + 1), NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture);
+            // The literal is script/input text: an exponent past int range must not throw. Bounded well inside int so the
+            // digit-count arithmetic below cannot wrap.
+            exp = Math.Clamp(BashRuntime.ParseCountClamped(s.AsSpan(e + 1)), -1_000_000_000, 1_000_000_000);
             s = s.Substring(0, e);
         }
         int dot = s.IndexOf('.');

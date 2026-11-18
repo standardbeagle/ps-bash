@@ -31,6 +31,10 @@ Every number a script sees is **bash's number = Linux numbering**, on every OS: 
 - `OsSignals.ToNative(bash)` — the number to pass the OS; 0 when the signal does not exist there.
 - `OsSignals.FromNative(native)` — back to bash's number (kept as-is when bash has none, e.g. macOS SIGINFO 29).
 - `OsSignals.ExitStatusOf(waitStatus)` — `exit code` or `128 + bash number`.
+- `OsSignals.WaitOutcome(rc, pid, status, errno)` — the one decoder of a `waitpid`: the status, null on EINTR (wait
+  again), else `LostChildStatus` = 0. ECHILD means another waiter took the status (.NET reaps every child of a process
+  that inherited SIGCHLD ignored); bash then records 0 (jobs.c `wait_for`: "can't find true status"). The job reaper
+  reported 255. Guard: `Core.Tests/WaitOutcomeTests.WaitpidCallers_DecodeOnlyThroughOsSignals`.
 - `OsSignals.AsPosixSignal(bash)` — for `PosixSignalRegistration`; refuses a runtime-owned signal.
 
 The numbers differ on macOS/FreeBSD (BSD numbering):

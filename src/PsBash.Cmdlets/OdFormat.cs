@@ -182,7 +182,10 @@ internal static class OdFormat
                 {
                     int start = i;
                     while (i < spec.Length && char.IsAsciiDigit(spec[i])) i++;
-                    size = int.Parse(spec.AsSpan(start, i - start), CultureInfo.InvariantCulture);
+                    // GNU: a size no integer holds is not a type string at all (no "N-byte type" line). The digits are
+                    // script text, so they are never int.Parse'd (OverflowException).
+                    if (!int.TryParse(spec.AsSpan(start, i - start), NumberStyles.None, CultureInfo.InvariantCulture, out size))
+                    { plan.Error = $"od: invalid type string '{spec}'"; return false; }
                 }
                 else if (i < spec.Length && spec[i] is 'C' or 'S' or 'I' or 'L')
                     size = spec[i++] switch { 'C' => 1, 'S' => 2, 'I' => 4, _ => 8 };

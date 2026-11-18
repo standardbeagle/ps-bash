@@ -56,6 +56,32 @@ public static class OsSignals
     internal static int ExitStatusOf(int waitStatus, bool bsd)
         => (waitStatus & 0x7f) == 0 ? (waitStatus >> 8) & 0xff : 128 + FromNative(waitStatus & 0x7f, bsd);
 
+    /// <summary>errno values of <c>waitpid</c>, the same on Linux and macOS.</summary>
+    public const int EINTR = 4, ECHILD = 10;
+
+    /// <summary>
+    /// The status bash reports for a child whose wait status is gone: <c>waitpid</c> failed with ECHILD because another
+    /// waiter reaped it first (the .NET runtime reaps every child of a process that inherited SIGCHLD ignored) or the
+    /// kernel discarded it. bash records 0 then (jobs.c <c>wait_for</c>: "can't find true status").
+    /// </summary>
+    public const int LostChildStatus = 0;
+
+    /// <summary>
+    /// What a blocking <c>waitpid(pid, &amp;status, 0)</c> that returned <paramref name="rc"/> (errno
+    /// <paramref name="errno"/>) says about child <paramref name="pid"/>: its status (<see cref="ExitStatusOf(int)"/>),
+    /// <see cref="LostChildStatus"/> when the status is gone (ECHILD, or any other failure: nothing is left to wait for),
+    /// or null when the wait must be repeated (EINTR). The one decoder of a wait's outcome; never a status invented at
+    /// the call site (it was 255, which no bash reports for such a child).
+    /// </summary>
+    public static int? WaitOutcome(int rc, int pid, int waitStatus, int errno) => WaitOutcome(rc, pid, waitStatus, errno, BsdNumbering);
+
+    internal static int? WaitOutcome(int rc, int pid, int waitStatus, int errno, bool bsd)
+    {
+        if (rc == pid && pid > 0) return ExitStatusOf(waitStatus, bsd);
+        if (rc < 0 && errno == EINTR) return null;
+        return LostChildStatus;
+    }
+
     /// <summary>
     /// True when the .NET runtime itself uses <paramref name="bashSignal"/> here, so ps-bash must never register it. The
     /// BSDs have no SIGRTMIN, so CoreCLR (pal signal.cpp) and NativeAOT (UnixSignals.h) use SIGUSR1 as

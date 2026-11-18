@@ -27,14 +27,14 @@ public static partial class PsEmitter
     /// Names an enclosing <c>for</c> / <c>for ((;;))</c> / <c>while read</c> binds. Their storage is the shell variable
     /// store like any other variable's (a function called from the body reads its own <c>local</c> or the loop's value
     /// there, never a PowerShell variable of the loop's). The set only keeps two emission choices: an unquoted
-    /// <c>$v</c> is not word-split unless the list may hold IFS characters (<see cref="_splitLoopVars"/>), and a
-    /// background job started in the body gets the value the loop had at launch (<see cref="_jobCapture"/>).
+    /// <c>$v</c> is not word-split unless the list may hold IFS characters (<see cref="_splitLoopVars"/>). A background
+    /// job started in the body gets the value the loop had at launch from its own scalar store, copied at the <c>&amp;</c>.
     /// </summary>
     [ThreadStatic]
     private static HashSet<string>? _storeLoopVars;
 
     /// <summary>
-    /// While a background job's body is emitted: the loop variables and lexical locals it may read, each with the
+    /// While a background job's body is emitted: the function's lexical locals it may read, each with the
     /// PowerShell expression of its value at launch. The job (another runspace, or another process) reads its own
     /// copy, <c>$name</c>, which <c>Invoke-BashBackground -Vars</c> sets; <see cref="_jobCaptureUsed"/> collects the
     /// names the body read.
@@ -1214,7 +1214,6 @@ public static partial class PsEmitter
             || System.Text.RegularExpressions.Regex.IsMatch(bash, @"\b(?:declare|typeset)\s+(?:-[a-zA-Z]+\s+)*-[a-zA-Z]*p")
             || System.Text.RegularExpressions.Regex.IsMatch(bash, @"\bexport\s*(?:-p\s*)?(?:[|;&)}]|\r?\n|$)");
         _trapMode = System.Text.RegularExpressions.Regex.IsMatch(bash, @"\btrap\b");
-        _canSetTrap = priorCanSetTrap || _trapMode || CanSetTrapRegex.IsMatch(bash);
         _xtraceMode = System.Text.RegularExpressions.Regex.IsMatch(bash, @"\bset\s+(?:-[a-zA-Z]+\s+)*(?:-[a-zA-Z]*x|-o\s+xtrace)");
         _pipefailMode = priorPipefail || InheritedPipefail || bash.Contains("pipefail", StringComparison.Ordinal) || bash.Contains("PIPESTATUS", StringComparison.Ordinal);
         var priorBashLineno = _bashLinenoMode;
@@ -1262,6 +1261,7 @@ public static partial class PsEmitter
             if (aliasesSpliced) { _aliasDefs = null; _aliasStaticOnly = false; } // already expanded in the text
             if (BashParser.SawBadSubstitution) _lineAbandonMode = true;
             _rootCommand = cmd;
+            _canSetTrap = priorCanSetTrap || CanSetTrap(cmd);
             _liveJobs = _context == TranspileContext.Eval ? null : CollectLiveJobs(cmd);
             _discardInteractive = _nounsetMode && bash.Contains("shopt -s psbash_interactive", StringComparison.Ordinal);
             string body = EmitBody(cmd);
@@ -1507,17 +1507,11 @@ public static partial class PsEmitter
     private static bool _runsDynamicCode;
 
     /// <summary>
-    /// The script can give a real signal a trap: its source mentions `trap` (statically inlined eval text included), or it
-    /// sources a file that may (a library's `trap cleanup INT`). Each top-level statement then ends with the signal poll
-    /// (<see cref="PsBuild.SignalTrapPoll"/>, background-jobs.md section 13). A trap only a runtime `eval "$x"` sets is not
-    /// seen.
+    /// The unit can give a real signal a trap (<see cref="CanSetTrap"/>, decided on the parsed commands): each top-level
+    /// statement then ends with the signal poll (<see cref="PsBuild.SignalTrapPoll"/>, background-jobs.md section 13).
     /// </summary>
     [ThreadStatic]
     private static bool _canSetTrap;
-
-    /// <summary>source, or `.` as a command word (`. lib.sh`; not the operand of `find .`).</summary>
-    private static readonly System.Text.RegularExpressions.Regex CanSetTrapRegex = new(
-        @"\bsource\b|(?:^|[;&|(\n{])[ \t]*\.[ \t]+\S", System.Text.RegularExpressions.RegexOptions.Compiled);
 
     /// <summary>Emit with no lexical loop in scope and <paramref name="kind"/> as the barrier (when <paramref name="apply"/>).</summary>
     private static T WithLoopBarrier<T>(bool apply, LoopBarrierKind kind, Func<T> emit)
@@ -2930,8 +2924,8 @@ public static partial class PsEmitter
         var outerLabels = _loopLabels; var outerBarrier = _loopBarrier;
         _loopLabels = null; _loopBarrier = LoopBarrierKind.Warn;
         bool savedErrTrap = PsBuild.ErrTrapNeedsErrtrace; PsBuild.ErrTrapNeedsErrtrace = true;
-        // A loop variable (or a function's lexical local) the body reads is handed over at launch: the loop moves on
-        // before the job reads it, and an in-process job shares the process environment with the shell.
+        // A function's lexical local the body reads is handed over at launch (the job's runspace has no such PowerShell
+        // variable). A shell scalar, a loop variable included, is in the job's own store copied at the `&`.
         var outerCapture = _jobCapture; var outerCaptureUsed = _jobCaptureUsed;
         var capture = JobCaptureCandidates(outerCapture);
         _jobCapture = capture is null ? null : new Dictionary<string, string>(capture, StringComparer.Ordinal);
@@ -2958,17 +2952,19 @@ public static partial class PsEmitter
     }
 
     /// <summary>
-    /// The names a background job started here may read from a copy of its own, each with the PowerShell expression
-    /// of its value now: a loop variable (the shell variable, or the enclosing job's copy) and a lexical local. A
-    /// PowerShell-owned name (<c>$input</c>, <c>$args</c>) cannot be a copy; the job reads the shell variable.
+    /// The names a background job started here reads from a PowerShell copy of its own, each with the PowerShell
+    /// expression of its value now: a function's lexical local (a PowerShell variable the job's runspace does not have).
+    /// A PowerShell-owned name (<c>$input</c>, <c>$args</c>) cannot be a copy; the job reads the shell variable.
+    /// <para>
+    /// <b>Invariant</b>: a shell scalar (a loop variable included) is never captured here. The job's own scalar store,
+    /// copied at the <c>&amp;</c> (ScalarOverlay in-process, the environment block of a job host), already holds the
+    /// loop's value at launch, and it is the one storage the job's assignments write: a second, PowerShell copy was read
+    /// in place of the job's own <c>i=9</c> (docs/specs/background-jobs.md section 3). Guard: <c>JobScalarCaptureTests</c>.
+    /// </para>
     /// </summary>
     private static Dictionary<string, string>? JobCaptureCandidates(Dictionary<string, string>? outer)
     {
         Dictionary<string, string>? map = null;
-        if (_storeLoopVars is not null)
-            foreach (var v in _storeLoopVars)
-                if (!PowerShellOwnedVariables.Contains(v))
-                    (map ??= new(StringComparer.Ordinal))[v] = outer is not null && outer.ContainsKey(v) ? "$" + v : "$env:" + v;
         if (_lexicalLocals is not null)
             foreach (var v in _lexicalLocals)
                 if (!PowerShellOwnedVariables.Contains(v))
@@ -9074,7 +9070,7 @@ public static partial class PsEmitter
     private static string PositionalRefExpr(string sigil)
     {
         string inner;
-        if (int.TryParse(sigil, out int position))
+        if (PositionalIndex.TryParse(sigil, out int position))
         {
             if (position == 0)
                 inner = "$global:BashPositional0";

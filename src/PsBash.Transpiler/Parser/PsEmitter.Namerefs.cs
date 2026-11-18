@@ -92,9 +92,9 @@ public static partial class PsEmitter
                 foreach (var pair in a.Pairs)
                     if (pair.Value is { Parts.Length: 1 } v
                         && (v.Parts[0] is WordPart.SimpleVarSub { Name: var n } || v.Parts[0] is WordPart.DoubleQuoted { Parts: [WordPart.SimpleVarSub { Name: var n2 }] } && (n = n2) is not null)
-                        && n.Length > 0 && n.All(char.IsAsciiDigit) && n != "0")
+                        && PositionalIndex.TryParse(n, out int index) && index > 0)
                     {
-                        found = (pair.Name, int.Parse(n));
+                        found = (pair.Name, index);
                         return;
                     }
         });
@@ -146,7 +146,7 @@ public static partial class PsEmitter
             _ => null,
         };
         if (name == "@") return 0;
-        return name is { Length: > 0 } && name.All(char.IsAsciiDigit) && name != "0" ? int.Parse(name) : null;
+        return PositionalIndex.TryParse(name, out int index) && index > 0 ? index : null;
     }
 
     /// <summary>The function body once per candidate target, selected by the run-time value of the positional.</summary>

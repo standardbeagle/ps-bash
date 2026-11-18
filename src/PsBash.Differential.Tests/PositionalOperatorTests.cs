@@ -45,4 +45,12 @@ public class PositionalOperatorTests
     [InlineData("set -e + -- p q; case $- in *e*) echo e-on;; esac; echo \"[$*]\"")]
     [InlineData("{ set -x + q r; f=$-; set +x; } 2>/dev/null; case $f in *x*) echo x-on;; esac; echo \"[$*]\"")]
     public Task SetLoneDashOrPlus_AmongOptions(string script) => AssertOracle.EqualAsync(script);
+
+    // A positional number past int range is an unset parameter. The nameref forwarding read it with int.Parse, so the
+    // transpile threw (OverflowException) instead of running the script.
+    [SkippableTheory]
+    [InlineData("h() { local -n z=$1; echo \"c[$z]\"; }; g() { h \"${99999999999999999999}\"; }; g a 2>/dev/null; echo \"rc=$?\"")]
+    [InlineData("set -- a b; echo \"[${99999999999999999999}] [${2147483648}] [${2}] [${#99999999999999999999}]\"")]
+    [InlineData("f() { local -n r=${99999999999999999999}; echo \"r=[$r]\"; }; f x 2>/dev/null; echo \"rc=$?\"")]
+    public Task HugePositionalNumber_IsUnset(string script) => AssertOracle.EqualAsync(script);
 }

@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 72
+stdout-length: 6
+stderr-length: 0
+==== SCRIPT ====
+printf '1\n2\n' | while read -r v; do { v=x$v; echo "$v"; } & wait; done
+==== STDOUT ====
+x1
+x2
+
+==== STDERR ====
+

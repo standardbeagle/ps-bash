@@ -57,4 +57,15 @@ public class BackgroundJobLaunchValuesDifferentialTests
     [SkippableFact]
     public Task AJobInAJob_SeesTheOuterJobsValueAtItsLaunch() =>
         Eq("n=1; { { sleep 0.2; echo \"inner n=$n\"; } & n=2; wait; echo \"outer n=$n\"; } & wait");
+
+    // The job's own assignment to a variable it was launched with (a loop variable) is what its later reads see: the
+    // job's store is the one storage. A PowerShell copy handed to the job used to shadow it (`L 1` instead of `L 9`).
+    [SkippableTheory]
+    [InlineData("for i in 1 2; do { i=9; echo \"L $i\"; } & wait; done; echo \"shell i=$i\"")]
+    [InlineData("for i in 1; do { echo \"a $i\"; i=7; echo \"b $i\"; } & wait; done")]
+    [InlineData("for i in 1; do { (( i += 5 )); echo \"$i\"; } & wait; done")]
+    [InlineData("for ((i = 0; i < 2; i++)); do { i=$((i + 10)); echo \"$i\"; } & wait; done")]
+    [InlineData("printf '1\\n2\\n' | while read -r v; do { v=x$v; echo \"$v\"; } & wait; done")]
+    [InlineData("for i in 1; do { unset i; echo \"[${i-unset}]\"; } & wait; done")]
+    public Task AJobsOwnAssignment_ReachesItsLaterReads(string script) => Eq(script);
 }

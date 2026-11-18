@@ -1,0 +1,17 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 71
+stdout-length: 11
+stderr-length: 0
+==== SCRIPT ====
+t=tr; eval "${t}ap 'echo T2' USR1"
+sh -c "kill -USR1 $$"
+echo after=$?
+
+==== STDOUT ====
+T2
+after=0
+
+==== STDERR ====
+

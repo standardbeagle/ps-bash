@@ -174,11 +174,13 @@ public class ShellVariableStorageGuardTests
         Assert.Contains("BashVariableStore]::Set('" + name + "'", ps);
     }
 
-    // The job (another runspace, or another process) is handed the value the loop has at launch; the loop moves on.
+    // The job reads the loop's value at launch from its own scalar store, copied at the `&` (ScalarOverlay / the job
+    // host's environment block): no second, PowerShell copy beside it, which hid the job's own `q=x` from its reads.
     [Fact]
-    public void ABackgroundJobInALoop_IsHandedTheValueAtLaunch()
+    public void ABackgroundJobInALoop_ReadsTheLoopVariableFromItsOwnStore()
     {
         string ps = BashTranspiler.Transpile("for q in a b; do echo $q & done");
-        Assert.Contains("-Vars @{ 'q' = $env:q }", ps);
+        Assert.DoesNotContain("-Vars", ps);
+        Assert.Contains("$env:q", ps);
     }
 }

@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 118
+stdout-length: 7
+stderr-length: 0
+==== SCRIPT ====
+{ printf x | od -t d99999999999; } 2>/dev/null; echo st=$?; { printf x | od -t d99999999999 2>&1 >/dev/null; } | wc -l
+==== STDOUT ====
+st=1
+1
+
+==== STDERR ====
+

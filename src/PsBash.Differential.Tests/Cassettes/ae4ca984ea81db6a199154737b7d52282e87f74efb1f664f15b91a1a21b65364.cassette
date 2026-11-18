@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 94
+stdout-length: 14
+stderr-length: 0
+==== SCRIPT ====
+set -- a b; echo "[${99999999999999999999}] [${2147483648}] [${2}] [${#99999999999999999999}]"
+==== STDOUT ====
+[] [] [b] [0]
+
+==== STDERR ====
+
