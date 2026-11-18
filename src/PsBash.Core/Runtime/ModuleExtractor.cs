@@ -170,6 +170,16 @@ public static class ModuleExtractor
         // Before the marker is read: a pruner that already holds the directory makes this wait, and the
         // extraction below then lays it down again.
         HoldInUse(dir);
+        return ExtractTo(dir, asm);
+    }
+
+    /// <summary>
+    /// Lay the module embedded in <paramref name="asm"/> down in <paramref name="dir"/> unless its marker says it is
+    /// already there, and return the psd1 path. Every file is written through <see cref="PublishFile"/>: another host
+    /// process may be running from this directory right now. Test seam for <see cref="ExtractEmbedded"/>.
+    /// </summary>
+    internal static string ExtractTo(string dir, System.Reflection.Assembly asm)
+    {
         var marker = Path.Combine(dir, ".extracted");
         var psd1Path = Path.Combine(dir, "PsBash.psd1");
 
@@ -233,11 +243,8 @@ public static class ModuleExtractor
 
             foreach (var file in ModuleFiles)
             {
-                var destPath = Path.Combine(dir, file);
                 using var stream = asm.GetManifestResourceStream($"PsBash.Module/{file}")!;
-                using var dest = new FileStream(
-                    destPath, FileMode.Create, FileAccess.Write, FileShare.Read);
-                stream.CopyTo(dest);
+                PublishFile(Path.Combine(dir, file), stream);
             }
 
             // Extract the TFM-matching PsBash.Cmdlets.dll AND any embedded
@@ -249,16 +256,15 @@ public static class ModuleExtractor
             // it. Non-Strata builds embed only PsBash.Cmdlets.dll.
             foreach (var (resName, fileName) in EnumerateCmdletResources(asm))
             {
-                var destPath = Path.Combine(dir, fileName);
                 using var depStream = asm.GetManifestResourceStream(resName)!;
-                using var depDest = new FileStream(
-                    destPath, FileMode.Create, FileAccess.Write, FileShare.Read);
-                depStream.CopyTo(depDest);
+                PublishFile(Path.Combine(dir, fileName), depStream);
             }
 
-            // Write content hash as marker after all files extracted successfully
+            // Write content hash as marker after all files extracted successfully. Published like the rest, so a
+            // concurrent reader sees the old marker or the new one, never an empty or half-written one.
             var hash = ComputeEmbeddedHash(asm);
-            File.WriteAllText(marker, hash);
+            using (var markerContent = new MemoryStream(System.Text.Encoding.ASCII.GetBytes(hash)))
+                PublishFile(marker, markerContent);
         }
         finally
         {
@@ -266,6 +272,74 @@ public static class ModuleExtractor
         }
 
         return psd1Path;
+    }
+
+    /// <summary>
+    /// Publish <paramref name="content"/> as <paramref name="destPath"/> WITHOUT ever changing the bytes of a file
+    /// that is already there. Another host process may have that file memory-mapped (the cmdlets DLL is loaded from
+    /// this directory): a file truncated under a mapping is a SIGBUS on macOS / Linux, and a sharing violation on
+    /// Windows. So the bytes go to a temp file in the SAME directory (same volume, so the rename is atomic), which is
+    /// then renamed over the destination; whoever has the old file open or mapped keeps the old file. A destination
+    /// that already holds exactly these bytes is left alone. The one way an extracted module file is written (guard:
+    /// <c>ModuleExtractorPublishTests.Extractor_WritesOnlyThroughPublishFile</c>; spec <c>docs/specs/runtime-functions.md</c> Temp File Strategy).
+    /// </summary>
+    internal static void PublishFile(string destPath, Stream content)
+    {
+        var dir = Path.GetDirectoryName(destPath)!;
+        var tmp = Path.Combine(dir, "." + Path.GetFileName(destPath) + "." + Guid.NewGuid().ToString("N") + ".tmp");
+        try
+        {
+            using (var staged = new FileStream(tmp, FileMode.CreateNew, FileAccess.Write, FileShare.ReadWrite))
+                content.CopyTo(staged);
+            if (SameBytes(tmp, destPath)) return;
+            RenameOver(tmp, destPath);
+        }
+        finally
+        {
+            try { File.Delete(tmp); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+        }
+    }
+
+    private static void RenameOver(string source, string destPath)
+    {
+        try
+        {
+            File.Move(source, destPath, overwrite: true);
+        }
+        catch (Exception e) when (OperatingSystem.IsWindows() && (e is IOException or UnauthorizedAccessException) && File.Exists(destPath))
+        {
+            // Windows refuses to replace a file that is open or loaded as an image, but it does rename that file
+            // (its users share delete): move it aside - they keep it - and put the new one in its place. The aside
+            // copy goes when nothing holds it any more (or with the whole directory, when the pruner removes it).
+            var aside = Path.Combine(Path.GetDirectoryName(destPath)!,
+                "." + Path.GetFileName(destPath) + "." + Guid.NewGuid().ToString("N") + ".old");
+            File.Move(destPath, aside);
+            File.Move(source, destPath);
+            try { File.Delete(aside); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+        }
+    }
+
+    private static bool SameBytes(string a, string b)
+    {
+        try
+        {
+            using var fa = new FileStream(a, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var fb = new FileStream(b, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            if (fa.Length != fb.Length) return false;
+            var ba = new byte[81920];
+            var bb = new byte[81920];
+            int n;
+            while ((n = fa.ReadAtLeast(ba, ba.Length, throwOnEndOfStream: false)) > 0)
+            {
+                if (fb.ReadAtLeast(bb, n, throwOnEndOfStream: false) != n) return false;
+                if (!ba.AsSpan(0, n).SequenceEqual(bb.AsSpan(0, n))) return false;
+            }
+            return true;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return false; // missing, or unreadable: publish
+        }
     }
 
     // ---- Old extraction directories ------------------------------------------------------------------

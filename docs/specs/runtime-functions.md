@@ -598,6 +598,12 @@ content-stamped directory. A `.extracted` marker file (holding the hash) signals
 extraction completed successfully; a marker with a different hash is deleted and the files
 are re-extracted.
 
+**Invariant: a published file is never rewritten in place.** Another host process may have the cmdlets DLL
+memory-mapped from this directory; truncating it is a SIGBUS on macOS/Linux and a sharing violation on Windows.
+Every file (the marker too) goes through `ModuleExtractor.PublishFile`: staged as `.{name}.{guid}.tmp` in the same
+directory, then renamed over the destination (Windows, destination in use: the old file is renamed aside first). A
+destination already holding the same bytes is left alone. Guard: `Core.Tests/ModuleExtractorPublishTests`.
+
 Old directories: every process holds `{dir}/.inuse` open shared for its life. Once per process,
 `PruneStaleExtractions` removes each other extraction whose `.inuse` it can open exclusively
 (flock on Unix); a directory without `.inuse` (an older release) only after 7 days and, on
