@@ -16,7 +16,13 @@ namespace PsBash.Host.Tests.Server;
 ///
 /// The end-to-end "spawn host on macOS, exec echo, assert no SIGABRT" check
 /// is gated on the CI 3-OS matrix — this box is Linux/WSL2 with no macOS.
+///
+/// Runs alone: it asserts on the process-wide fd table, which parallel classes change all the time (pipes, dup2,
+/// child spawns), and a number is reused the moment it is freed. CI (publish v0.15.0 attempt 1, ubuntu) saw the
+/// pipe it had just opened without FD_CLOEXEC report FD_CLOEXEC; the same commit passed everywhere else.
 /// </summary>
+[Collection(nameof(InheritedFdDetachTests))]
+[CollectionDefinition(nameof(InheritedFdDetachTests), DisableParallelization = true)]
 public sealed class InheritedFdDetachTests
 {
     [Fact]

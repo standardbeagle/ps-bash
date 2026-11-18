@@ -64,4 +64,36 @@ public class ProcessIdentityTests
         p.WaitForExit();
         Assert.False(id.IsRunning());
     }
+
+    // Another user's process: Windows System (4), init/launchd (1). Its start time can be refused (macOS always,
+    // Windows unelevated); the identity of a started child must still come back.
+    [Fact]
+    public void Of_AnotherUsersProcess_NeverThrows()
+    {
+        int pid = OperatingSystem.IsWindows() ? 4 : 1;
+        Assert.Equal(pid, ProcessIdentity.Of(pid).Pid);
+    }
+
+    [Fact]
+    public void Of_APidThatDoesNotExist_HasZeroStartTicks()
+        => Assert.Equal(new ProcessIdentity(int.MaxValue, 0), ProcessIdentity.Of(int.MaxValue));
+
+    /// <summary>
+    /// Every spawn takes its child's identity from <see cref="ProcessIdentity.Of"/>. The spawns read the start time
+    /// themselves once, in two copies; the POSIX copy did not catch EPERM, so on macOS every setuid program
+    /// (<c>/bin/ps</c>, <c>sudo</c>) failed to start and stayed unreaped. Oracle note (Directive 1): a source invariant.
+    /// </summary>
+    [Fact]
+    public void EverySpawn_TakesItsChildsIdentityFromOf()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "CLAUDE.md"))) dir = dir.Parent;
+        Assert.NotNull(dir);
+        var processes = Path.Combine(dir!.FullName, "src", "PsBash.Transpiler", "Processes");
+        var offenders = Directory.EnumerateFiles(processes, "JobProcess*.cs")
+            .Where(f => File.ReadAllText(f).Contains("StartTicksOf(", StringComparison.Ordinal))
+            .Select(Path.GetFileName)
+            .ToList();
+        Assert.True(offenders.Count == 0, "read a child's start time through ProcessIdentity.Of: " + string.Join(", ", offenders));
+    }
 }

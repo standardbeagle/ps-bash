@@ -82,6 +82,13 @@ public static class StderrMerge
         FieldInfo Downstream,
         PropertyInfo Command);
 
+    [System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage(
+        "Trimming", "IL2026",
+        Justification = "The SMA internals are looked up by name in the PowerShell host runspace (the non-AOT " +
+            "ps-bash-host), where System.Management.Automation is never trimmed. Not found = null = two pipes.")]
+    [System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage(
+        "Trimming", "IL2075",
+        Justification = "Reflecting over members of the untrimmed SMA types above; a missing member returns null.")]
     private static Accessors? Resolve()
     {
         try

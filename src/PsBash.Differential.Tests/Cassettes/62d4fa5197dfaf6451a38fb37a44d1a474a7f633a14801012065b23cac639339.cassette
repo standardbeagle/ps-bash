@@ -1,10 +1,11 @@
 PSBASH-ORACLE-CASSETTE v1
 bash-version: 5.2.21(1)-release
 exit-code: 0
-script-length: 229
+script-length: 266
 stdout-length: 341
 stderr-length: 0
 ==== SCRIPT ====
+PATH=/nonexistent-psbash-no-programs
 for c in gci sls iex icm r h ni ri del erase ren select measure group foreach gcm saps; do
   type -t "$c" >/dev/null 2>&1; t=$?; "$c" x >/dev/null 2>&1; echo "$c type=$t run=$?"
 done

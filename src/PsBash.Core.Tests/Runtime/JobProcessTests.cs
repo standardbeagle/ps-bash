@@ -63,6 +63,17 @@ public class JobProcessTests
         Assert.True(job.HasExited);
     }
 
+    // REGRESSION (macOS CI since d4ad485f: `ps` listed no process, its /bin/ps lookup never started): a setuid child
+    // runs as root, so reading its start time right after the spawn is refused (EPERM), and the spawn threw it,
+    // leaving the child unreaped. The identity comes from ProcessIdentity.Of, which never throws.
+    [SkippableFact]
+    public async Task Start_ASetuidProgram_RunsAndReportsItsExit()
+    {
+        Skip.IfNot(OperatingSystem.IsMacOS(), "macOS /bin/ps is setuid root; Linux and Windows let the parent read its child's start time");
+        using var job = JobProcess.Start(new("/bin/ps", ["-p", Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture)]));
+        Assert.Equal(0, await job.Exited.WaitAsync(Wait));
+    }
+
     [Fact]
     public void Start_UnknownProgram_ThrowsHostUnavailable()
         => Assert.Throws<PsBash.Core.Runtime.HostUnavailableException>(

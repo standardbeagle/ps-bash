@@ -237,7 +237,13 @@ internal sealed class SdkRunspace : IAsyncDisposable
         catch (Exception) { /* the first job opens a runspace itself */ }
     }
 
-    private static readonly Lazy<Action?> WarmJobRunspacesCall = new(static () =>
+    private static readonly Lazy<Action?> WarmJobRunspacesCall = new(ResolveWarmJobRunspaces);
+
+    [System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage(
+        "Trimming", "IL2075",
+        Justification = "PsBash.Cmdlets is loaded from disk at run time (Assembly.LoadFrom), never trimmed; a " +
+            "missing WarmAhead returns null and the first job opens its own runspace.")]
+    private static Action? ResolveWarmJobRunspaces()
     {
         try
         {
@@ -250,7 +256,7 @@ internal sealed class SdkRunspace : IAsyncDisposable
         {
             return null;
         }
-    });
+    }
 
     internal static string ReadStartupModule(string path)
     {

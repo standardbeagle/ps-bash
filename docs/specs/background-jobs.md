@@ -237,6 +237,12 @@ behind a shared contract test-suite. It is THE process-tree primitive: every chi
 pipes as its stdio, `BREAKAWAY` allowed and no new console process group. The foreground-child invariant - a stop
 ends the whole tree and no wait depends on a pipe - is `stdio-messaging.md` §4.6.
 
+A spawn that succeeded never fails on bookkeeping. The child's identity comes from `ProcessIdentity.Of(pid)`, which
+never throws: the OS refuses the start time of a child that runs as another user (a setuid program such as macOS
+`/bin/ps` or `sudo`: EPERM) or that already exited, and the identity then carries start ticks 0. The child is still
+reaped and reports its exit. REGRESSION: the POSIX spawn caught only "gone", so on macOS every setuid program failed
+to start and stayed unreaped (`ps` listed no process). Guard: `ProcessIdentityTests.EverySpawn_TakesItsChildsIdentityFromOf`.
+
 ### 6.2 Lifecycle table — every way a job can end, and what happens
 
 | Event | Outcome |

@@ -121,16 +121,8 @@ public sealed partial class JobProcess
             int rc = Posix.posix_spawnp(out int pid, path, actions, attr, argvBlock, envpBlock);
             if (rc != 0) throw Failure($"posix_spawnp('{spec.FileName}')", rc);
 
-            ProcessIdentity identity;
-            try
-            {
-                using var probe = Process.GetProcessById(pid);
-                identity = new ProcessIdentity(pid, ProcessIdentity.StartTicksOf(probe));
-            }
-            catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
-            {
-                identity = new ProcessIdentity(pid, 0); // exited before we could look; the waiter still reaps it
-            }
+            // Never throws (a setuid child such as macOS /bin/ps refuses the read): the waiter below still reaps it.
+            var identity = ProcessIdentity.Of(pid);
 
             var job = new JobProcess(pid, identity) { _ownGroup = spec.OwnProcessGroup };
             var waiter = new Thread(() => job.ReapLoop()) { IsBackground = true, Name = $"job-wait-{pid}" };

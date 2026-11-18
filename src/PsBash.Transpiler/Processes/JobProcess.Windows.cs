@@ -119,16 +119,7 @@ public sealed unsafe partial class JobProcess
             }
 
             // Identity from the pinned handle: pi.hProcess keeps the pid from being recycled.
-            ProcessIdentity identity;
-            try
-            {
-                using var probe = Process.GetProcessById(pi.dwProcessId);
-                identity = new ProcessIdentity(pi.dwProcessId, ProcessIdentity.StartTicksOf(probe));
-            }
-            catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception)
-            {
-                identity = new ProcessIdentity(pi.dwProcessId, 0); // already gone, or not readable: the handle still reports its status
-            }
+            var identity = ProcessIdentity.Of(pi.dwProcessId); // unreadable: the handle still reports its status
 
             var result = new JobProcess(pi.dwProcessId, identity) { _hProcess = pi.hProcess, _hJob = job };
             result._exitEvent = new ManualResetEvent(false) { SafeWaitHandle = new SafeWaitHandle(pi.hProcess, ownsHandle: false) };

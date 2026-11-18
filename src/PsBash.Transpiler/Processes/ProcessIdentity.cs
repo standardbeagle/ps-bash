@@ -19,6 +19,26 @@ public readonly record struct ProcessIdentity(int Pid, long StartTimeUtcTicks)
     /// <summary>Start time of <paramref name="process"/> in UTC ticks — the one formula every identity uses.</summary>
     public static long StartTicksOf(Process process) => process.StartTime.ToUniversalTime().Ticks;
 
+    /// <summary>
+    /// The identity of <paramref name="pid"/>, a child this process just started. Never throws: an unreadable start
+    /// time gives ticks 0. The child already runs, so this is bookkeeping, and the OS refuses it for a child that runs
+    /// as another user (a setuid program such as macOS <c>/bin/ps</c> or <c>sudo</c>: EPERM) or that already exited.
+    /// Every spawn takes its identity here, so a refused read can never turn a started child into a failed spawn
+    /// (and leave it unreaped).
+    /// </summary>
+    public static ProcessIdentity Of(int pid)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(pid);
+            return new ProcessIdentity(pid, StartTicksOf(process));
+        }
+        catch (Exception)
+        {
+            return new ProcessIdentity(pid, 0);
+        }
+    }
+
     /// <summary><c>&lt;pid&gt;:&lt;startTicks&gt;</c>, the <see cref="SessionAnchorArg"/> value.</summary>
     public string ToArgumentValue()
         => Pid.ToString(CultureInfo.InvariantCulture) + ":" + StartTimeUtcTicks.ToString(CultureInfo.InvariantCulture);
