@@ -7,7 +7,7 @@ import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
 
 Commands for reading file content, counting statistics, transforming text, and splitting files into pieces.
 
-All of them follow the GNU coreutils option grammar: bundled short flags (`-qn2`), long options and unambiguous abbreviations (`--lines=5`, `--li=5`), options after operands, `--` to end options, and `-` for standard input. An unknown option or a bad number prints GNU's message and exits 1; a valid GNU option that ps-bash does not implement is refused with exit 2 instead of being ignored.
+Except for `rev`, which takes only file names, they follow the GNU coreutils option grammar: bundled short flags (`-qn2`), long options and unambiguous abbreviations (`--lines=5`, `--li=5`), options after operands, and `--` to end options. `cat`, `head`, `tail`, `wc`, and `split` read standard input for a `-` operand. An unknown option or a bad number prints GNU's message and exits 1; a valid GNU option that ps-bash does not implement is refused with exit 2 instead of being ignored.
 
 <Aside type="note">
 **Records are not lines.** A pipeline record that ends mid-line (`printf a`, `echo -n`, a file with no final newline) is joined with the next record before a line-reading command sees it, so `{ printf a; printf 'b\n'; } | rev` reads one line, `ab`. Empty lines, including trailing ones, are kept: `printf 'a\n\n\n' | head` writes the same four bytes back. A missing final newline is copied through.
@@ -201,7 +201,7 @@ tail -NUM | +NUM [FILE]
 | `-v`, `--verbose` | Always print headers |
 | `-z`, `--zero-terminated` | Records end in NUL instead of newline |
 
-Numbers use the same rules as `head`. The obsolete `-NUM` / `+NUM` forms (with optional `b`, `c`, `l`, `f` letters) are honoured only when the rest of the command line leaves no ambiguity (at most one file); otherwise tail reports `option used in invalid context`, as GNU does.
+Numbers use the same rules as `head`. The obsolete `-NUM` / `+NUM` forms (with optional `b`, `c`, `l`, `f` letters) are honored only when the rest of the command line leaves no ambiguity (at most one file); otherwise tail reports `option used in invalid context`, as GNU does.
 
 When following, tail prints GNU's notices: `has become inaccessible`, `has appeared;  following new file`, `has been replaced`, `file truncated`. Descriptor mode follows by path.
 
@@ -632,9 +632,9 @@ $files[0].PSObject.TypeNames[0]   # PsBash.LsEntry
 $files[0].SizeBytes                # integer
 
 # PsEntry objects survive through head
-$procs = ps aux | sort -k3 -rn | head -5
+$procs = ps aux | sort -k4 -rn | head -5
 $procs[0].PSObject.TypeNames[0]   # PsBash.PsEntry
-$procs[0].CPU                      # double
+$procs[0].Memory                   # double
 ```
 
 Bridge commands can be chained, and the typed properties are still available at the end of the pipeline.

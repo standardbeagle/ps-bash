@@ -10,8 +10,6 @@ head:
 
 import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
 
-# Encoding & Hashing
-
 `base64`, `od`, `md5sum`, `sha1sum`, `sha256sum`, and `file` for encoding, byte dumps, integrity checking, and file type detection.
 
 All of them read the exact bytes of their input. Pipeline input is the byte stream bash would see: each record plus its newline, and no newline after a record that has none (`printf x`, `echo -n`). `printf x | md5sum` hashes the single byte `x`.
@@ -20,7 +18,7 @@ All of them read the exact bytes of their input. Pipeline input is the byte stre
 
 ## base64
 
-Encode or decode data in Base64 (GNU coreutils 9.4 behaviour).
+Encode or decode data in Base64 (GNU coreutils 9.4 behavior).
 
 ```
 base64 [OPTION]... [FILE]
@@ -38,7 +36,7 @@ With no FILE, or with `-`, reads the pipeline.
 
 Bundles (`-dw0`) and unique long-option prefixes (`--dec`, `--wr 20`) work as in GNU.
 
-### Behaviour
+### Behavior
 
 - Encoding and decoding stream: pipeline input is processed record by record, files in chunks, so large inputs are not held in memory, and a downstream `head` ends the read.
 - `-d` writes the decoded bytes exactly. A trailing newline in the decoded data is kept, and bytes that are not valid UTF-8 pass through unchanged.
@@ -167,7 +165,7 @@ od -A x -t x1 -N 16 image.png
 
 ## md5sum
 
-Compute or check MD5 digests (GNU coreutils 9.4 behaviour).
+Compute or check MD5 digests (GNU coreutils 9.4 behavior).
 
 ```
 md5sum [OPTION]... [FILE]...
@@ -311,7 +309,7 @@ $expected -eq $actual   # True for an empty file
 ```
 
 <Aside type="tip">
-`md5sum`, `sha1sum`, and `sha256sum` share one engine, so flags, check-mode behaviour, and the `TextOutput` properties are identical. `sha224sum`, `sha384sum`, `sha512sum`, and `b2sum` are not built in.
+`md5sum`, `sha1sum`, and `sha256sum` share one engine, so flags, check-mode behavior, and the `TextOutput` properties are identical. `sha224sum`, `sha384sum`, `sha512sum`, and `b2sum` are not built in.
 </Aside>
 
 ---
@@ -347,7 +345,7 @@ file [OPTION]... -f NAMEFILE
 
 - Empty files, directories, symbolic links.
 - Text: ASCII, UTF-8 (with or without BOM), ISO-8859, non-ISO extended ASCII, with the `with CRLF line terminators`, `with very long lines (N)`, `with no line terminators`, and `with escape sequences` qualifiers.
-- `#!` scripts by interpreter (`Bourne-Again shell script`, `POSIX shell script`, `Python script`, `Node.js script`, ...), followed by `, ASCII text executable`.
+- `#!` scripts by interpreter, in file 5.45's wording: `Bourne-Again shell script, ASCII text executable`, `POSIX shell script, ASCII text executable`, `Python script, ASCII text executable`, `Node.js script executable, ASCII text`, `Perl script text executable`, and others.
 - ELF (class, endianness, machine, PIE, interpreter, BuildID, stripped), PE32/PE32+ and MS-DOS executables, including .NET assemblies.
 - gzip, zip, PNG (dimensions, bit depth, color type), JPEG (JFIF, frame size), PDF (version, page count).
 - Anything else with binary bytes is `data`.

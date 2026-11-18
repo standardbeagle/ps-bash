@@ -10,8 +10,6 @@ head:
 
 import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
 
-# Math & Sequences
-
 `seq` generates numeric sequences, `expr` evaluates an arithmetic or string expression, `shuf` shuffles lines, and `yes` repeats a line until its reader stops.
 
 ---
@@ -34,7 +32,7 @@ seq [OPTION]... FIRST INCREMENT LAST
 | `-w`, `--equal-width` | Pad with leading zeros to a common width |
 | `-f FORMAT`, `--format=FORMAT` | printf-style floating format for each number: one `%e`, `%f`, or `%g` conversion with flags `-+ 0#`, width, and precision; `%%` is a literal `%` |
 
-### Behaviour
+### Behavior
 
 - Integer operands give integer output. If any operand has a decimal point, every value is printed with the largest number of decimal places among the operands (`seq 0 0.25 1` prints `0.00 ... 1.00`).
 - Values are generated lazily: `seq 1 100000000 | head -1` computes one value.
@@ -275,7 +273,7 @@ Without `-e` or `-i`, shuf reads FILE, or the pipeline when there is no FILE. A 
 
 ### Differences from GNU
 
-- Not supported: `-r`/`--repeat`, `-o`/`--output`, `-z`/`--zero-terminated`, `--random-source`, `--input-range`/`--echo` long forms, and attached values (`-n3`). An unrecognised option prints `shuf: invalid option` and exits 1.
+- Not supported: `-r`/`--repeat`, `-o`/`--output`, `-z`/`--zero-terminated`, `--random-source`, `--input-range`/`--echo` long forms, and attached values (`-n3`). An unrecognized option prints `shuf: invalid option '-r'` (naming the option) and exits 1.
 - A missing FILE produces no output and no error.
 - The shuffle is unseeded; there is no way to reproduce an order.
 

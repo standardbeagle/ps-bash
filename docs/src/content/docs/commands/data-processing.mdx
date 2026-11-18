@@ -10,15 +10,13 @@ head:
 
 import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
 
-# Data Processing
-
 `jq` for JSON, `yq` for simple YAML, and `xan` for simple CSV. None of them needs an external binary.
 
 ---
 
 ## jq
 
-JSON processor. `jq` is a .NET implementation of jq 1.7, not a subset. It has jq's grammar, generator semantics, path expressions, user-defined functions, regular expressions, and `@format` strings. It is checked against the jq 1.7 binary in more than 300 differential tests.
+JSON processor. `jq` is a .NET implementation of the jq 1.7 language: jq's grammar, generator semantics, path expressions, user-defined functions, regular expressions, and `@format` strings. The gaps are listed under [Not supported](#not-supported). It is checked against the jq 1.7 binary in more than 300 differential tests.
 
 ```text
 jq [OPTIONS] FILTER [FILE...]
@@ -70,7 +68,7 @@ Options can appear anywhere and short options can be bundled (`-nr`). The first 
 
 ### Language
 
-The whole jq 1.7 language is supported:
+Supported syntax:
 
 - Paths and iteration: `.a.b`, `.[0]`, `.[-1]`, `.[2:4]`, `.[]`, `.[]?`, `..`, `."key"`, `.["key"]`
 - Operators: `|`, `,`, `//`, `and`/`or`/`not`, arithmetic, comparison, and the assignments `=`, `|=`, `+=`, `-=`, `*=`, `/=`, `%=`, `//=`

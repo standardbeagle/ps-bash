@@ -113,7 +113,7 @@ Decompress gzip files. `gunzip` is `gzip -d` under another name: it takes every 
 gunzip [OPTION]... [FILE]...
 ```
 
-`gunzip FILE.gz` writes `FILE` and removes `FILE.gz` unless you pass `-k` or `-c`. If the name lacks the suffix (`.gz`, or the one set with `-S`), gunzip warns `unknown suffix -- ignored` and skips the file. If `FILE` does not exist, gunzip also tries `FILE.gz`, and the error names the last name it tried.
+`gunzip FILE.gz` writes `FILE` and removes `FILE.gz` unless you pass `-k` or `-c`. If the name lacks the suffix (`.gz`, or the one set with `-S`), gunzip warns `unknown suffix -- ignored` and skips the file. If `FILE` does not exist, the error names `FILE.gz`, but gunzip does not go on to decompress `FILE.gz` as GNU does. Pass the `.gz` name.
 
 ### Examples
 
@@ -214,8 +214,8 @@ Accepted and ignored: `--overwrite`, `--same-owner`, `--no-same-owner`, `--no-sa
 | Code | Meaning |
 |------|---------|
 | 0 | Success |
-| 1 | I/O failure during the operation, or a member skipped for safety |
-| 2 | No mode or two modes, empty create, missing archive or source, member not found, not a tar archive, refused option |
+| 1 | I/O failure during the operation, or a member refused because its name or link target escapes the destination |
+| 2 | No mode or two modes, empty create, missing archive or source, member not found, not a tar archive, extraction through an existing symlink or junction, refused option |
 | 64 | Option parse error (unknown option, missing argument) |
 
 ### Return type
@@ -231,11 +231,11 @@ With `-v` on create or extract, tar returns one text line per member. When the a
 
 ### Safety on extract
 
-tar refuses any member that would write outside the destination: absolute names, drive or UNC paths, and names that climb out with `..`. Each refused member is reported as `Skipping to next header: NAME: path escapes archive destination` (exit 1). It also refuses links whose target escapes the destination, and writes through an existing symlink or junction under the destination.
+tar refuses any member that would write outside the destination: absolute names, drive or UNC paths, and names that climb out with `..`. Each refused member is reported as `Skipping to next header: NAME: path escapes archive destination` (exit 1). A link whose target escapes the destination is refused the same way. A write through an existing symlink or junction under the destination is refused with `Cannot open: path traverses a symbolic link or junction` (exit 2).
 
 ### Not supported
 
-These options are refused with exit 2. None of them is ever silently ignored.
+These options are refused with exit 2. None of them is silently ignored.
 
 - Compression formats with no managed .NET codec: `-j`/`--bzip2`, `-J`/`--xz`, `--lzma`, `--lzip`, `--lzop`, `--zstd`, `-Z`/`--compress`, `-I`. A bundle such as `-cjf` is refused too, and with `-a` a `.bz2`, `.xz`, `.zst`, or `.Z` archive name is refused.
 - Other modes: `-A`, `-d`/`--diff`, `-r`, `-u`, `--delete`, `--test-label`.
@@ -246,7 +246,7 @@ These options are refused with exit 2. None of them is ever silently ignored.
 
 - `tar -tv` lists names only. GNU prints `ls -l`-style lines.
 - An absolute source operand is stored under its basename. GNU stores the full path minus the leading `/`.
-- Archives are not padded to GNU's 10240-byte record size. GNU tar reads them without complaint.
+- Archives are not padded to GNU's 10240-byte record size. GNU tar still reads them.
 - A gzip archive read from stdin needs `-z`. Without it, tar reports `tar: Archive is compressed. Use -z option`.
 
 ### Examples

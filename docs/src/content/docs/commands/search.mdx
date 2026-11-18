@@ -10,9 +10,7 @@ head:
 
 import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
 
-# Search Commands
-
-`grep` follows GNU grep 3.11 and `rg` follows ripgrep 14.1, including options, output format, colours and exit status. Both run in-process and need no installed binary.
+`grep` follows GNU grep 3.11 and `rg` follows ripgrep 14.1, including options, output format, colors and exit status. Both run in-process and need no installed binary.
 
 ---
 
@@ -28,7 +26,7 @@ grep [OPTION]... -f PATTERN_FILE ... [FILE]...
 
 `egrep` is `grep -E` and `fgrep` is `grep -F`.
 
-### Two Modes
+### Two modes
 
 <Tabs>
 <TabItem label="Pipeline mode">
@@ -119,21 +117,21 @@ Every GNU grep 3.11 option is implemented.
 | `-a`, `--text` / `-I` / `--binary-files=TYPE` | Treat binary files as text / as non-matching / `binary`, `text`, `without-match` |
 | `-d ACTION` / `-D ACTION` | Directories: `read`, `skip`, `recurse` / devices: `read`, `skip` |
 | `--label=LABEL` | Name to show for stdin |
-| `--color[=WHEN]` | `always`, `auto`, `never`; colours from `GREP_COLORS` (GNU defaults) |
+| `--color[=WHEN]` | `always`, `auto`, `never`; colors from `GREP_COLORS` (GNU defaults) |
 | `-u` | Accepted, with GNU's obsolescence warning |
 | `--line-buffered`, `-U` | Accepted; no effect |
 
-### Behaviour
+### Behavior
 
 - **Exit status**: 0 when a line is selected, 1 when none is, 2 on an error. An unreadable or missing file makes the status 2 even if another file matched, unless `-q` found a match.
 - **Usage errors** exit 2: an unknown or ambiguous option, a bad context length, `grep: conflicting matchers specified` for two of `-E -F -G -P`.
-- **Binary files**: a file with a NUL byte in its first 96 KiB is binary. A match prints `grep: NAME: binary file matches` on stderr instead of the line.
+- **Binary files**: a named file with a NUL byte in its first 96 KiB is binary (a file met during a `-r` walk is checked over its first 8 KB). A match prints `grep: NAME: binary file matches` on stderr instead of the line.
 - **`-P`**: the pattern is translated to .NET regex, including `\K` at top level, `\Q..\E`, possessive quantifiers, `(?P<n>)`, `\h`, `\R`. Constructs it cannot express (recursion, `(?|`, backtracking verbs, `\K` inside a group) exit 2 with `grep: unsupported PCRE construct`.
 
 <Aside type="note" title="Differences from GNU">
-- `grep -r` skips `.git`, `.hg`, `.svn`, `.vs`, `node_modules`, `bin` and `obj` before descending, and skips binary files it meets during the walk without a message. Set `PSBASH_SEARCH_NO_IGNORE=1` (or pass `-a`) to search everything.
+- `grep -r` skips `.git`, `.hg`, `.svn`, `.vs`, `node_modules`, `bin` and `obj` before descending, and skips binary files it meets during the walk without a message. `PSBASH_SEARCH_NO_IGNORE=1` turns the directory pruning off. `-a` searches binary files as text.
 - An invalid UTF-8 byte is text, not a binary marker. Only a NUL makes input binary.
-- `--color=auto` colours only when ps-bash runs on a terminal (`PSBASH_GREP_TTY=1`/`0` overrides the check).
+- `--color=auto` colors only when ps-bash runs on a terminal (`PSBASH_GREP_TTY=1`/`0` overrides the check).
 </Aside>
 
 ### GrepMatch Properties
@@ -172,7 +170,7 @@ $logs = ls -l | grep '\.log'
 
 ## rg
 
-Recursive search modelled on [ripgrep](https://github.com/BurntSushi/ripgrep) 14.1. With no path, it searches the current directory, or stdin when input is piped in.
+Recursive search modeled on [ripgrep](https://github.com/BurntSushi/ripgrep) 14.1. With no path, it searches the current directory, or stdin when input is piped in.
 
 ```
 rg [OPTIONS] PATTERN [PATH...]
@@ -209,7 +207,7 @@ rg [OPTIONS] --files [PATH...]
 | `-t TYPE` / `-T TYPE` | Search / skip a file type (ripgrep's 203 built-in types) |
 | `--type-list`, `--type-add SPEC`, `--type-clear TYPE` | Inspect or change the type table |
 | `--hidden` | Include hidden files and directories |
-| `--no-ignore`, `-u`, `-uu` | Turn off the default pruning (`-uu` also searches hidden files) |
+| `--no-ignore`, `--no-ignore-vcs`, `-u`, `-uu` | Turn off the default pruning (`-uu` also searches hidden files) |
 | `-L`, `--follow` | Follow symbolic links and junctions |
 | `-d N`, `--max-depth N` | Limit recursion depth |
 | `--files` | List the files that would be searched |
@@ -218,11 +216,11 @@ rg [OPTIONS] --files [PATH...]
 | `-z`, `--search-zip` | Search inside `.gz` files |
 | `-E ENC`, `--encoding ENC` | `utf-8`, `latin1`, `utf-16le`, `utf-16be`, ... |
 | `--json`, `--stats` | ripgrep's JSON Lines output / summary statistics |
-| `--color WHEN`, `--colors SPEC`, `-p` | Colour control; `-p` = colour + heading + line numbers |
+| `--color WHEN`, `--colors SPEC`, `-p` | Color control; `-p` = color + heading + line numbers |
 
-Refused (exit 2, `recognized but not supported`): `--pre`, `--pre-glob`, `--ignore-file`, the `--no-ignore-*` variants, `--null-data`, `--crlf`, `--engine`, `--max-filesize`, `--max-columns`, `--context-separator`, `--path-separator`, `--one-file-system`, `--debug`, `--trace`. Accepted with no effect: `-j`, `--mmap`, `--no-mmap`, `--line-buffered`, `--block-buffered`, `--no-messages`, `--no-config`.
+Refused (exit 2, `recognized but not supported`): `--pre`, `--pre-glob`, `--ignore-file`, `--no-ignore-dot`, `--no-ignore-global`, `--no-ignore-parent`, `--no-ignore-files`, `--no-ignore-exclude`, `--no-ignore-messages`, `--null-data`, `--crlf`, `--engine`, `--max-filesize`, `--max-columns`, `--context-separator`, `--path-separator`, `--one-file-system`, `--debug`, `--trace`. Accepted with no effect: `-j`, `--mmap`, `--no-mmap`, `--line-buffered`, `--block-buffered`, `--no-messages`, `--no-config`.
 
-### Behaviour
+### Behavior
 
 - **Output layout** follows ripgrep's terminal rules. In a script, or when piped, lines are `path:text` with no line numbers unless `-n`. In an interactive ps-bash terminal, matches are grouped under file headings with line numbers, as ripgrep does on a TTY.
 - **Pruning**: hidden entries and the default set (`.git`, `.hg`, `.svn`, `.vs`, `node_modules`, `bin`, `obj`) are skipped before descending. `--hidden`, `--no-ignore`/`-u` or `PSBASH_SEARCH_NO_IGNORE=1` change this. `.gitignore` files are **not** read.

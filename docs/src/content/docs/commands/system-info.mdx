@@ -5,8 +5,6 @@ description: ps, env, date, hostname, whoami, id, uname, which, alias, time, sle
 
 import { Aside } from '@astrojs/starlight/components';
 
-# System Info
-
 Process listing, environment and identity queries, timing, process control, and network probes.
 
 | Group | Commands |
@@ -28,7 +26,7 @@ List processes as `PsEntry` objects.
 ps [OPTIONS]
 ```
 
-With no options, lists the current user's processes that have a terminal.
+With no options, lists the current user's processes. On Linux, only those with a terminal are listed.
 
 ### Flags
 
@@ -131,19 +129,20 @@ kill -l [SIGNAL...]
 
 Signal names and numbers follow bash on Linux (1-31, then `RTMIN` ... `RTMAX` for 34-64) on every platform.
 
-### Behaviour
+### Behavior
 
 - `%N`, `%%`, `%+` and the `$!` of a background job address ps-bash's job table.
 - A signal sent to another ps-bash shell (its `$$`) or to the current script (`kill -USR1 $$`) is delivered as a message: a `trap` for it runs; without one, `SIGCHLD`, `SIGURG`, and `SIGWINCH` are ignored and any other signal ends that script with status 128+N.
 - Any other process cannot receive POSIX signals on Windows. Every signal except 0, `CHLD`, `URG`, and `WINCH` terminates it. `kill -0 PID` and those three only check that the process exists.
 - A ps-bash host process is never killed directly, because it runs every script in its session.
+- An unknown signal name in the short form (`kill -FOO PID`) or in `--signal=FOO` is not rejected: `TERM` is sent. bash prints `kill: FOO: invalid signal specification` and exits 1.
 
 ### Exit status
 
 | Status | Meaning |
 |--------|---------|
 | 0 | Every target was signalled |
-| 1 | A target did not exist (`kill: (PID) - No such process`), an argument was not a PID or jobspec, or a signal was invalid |
+| 1 | A target did not exist (`kill: (PID) - No such process`), an argument was not a PID or jobspec, or the signal given to `-s`, `-n`, or `--signal SIG` was invalid (`kill: FOO: invalid signal specification`) |
 | 2 | No PID or jobspec given (usage message) |
 
 ### Examples
@@ -212,11 +211,11 @@ DURATION is a number (fractions allowed) with an optional `s`, `m`, `h`, or `d` 
 |------|-------------|
 | `--preserve-status` | On timeout, exit 143 instead of 124 |
 | `-s SIG`, `--signal=SIG` | Accepted, ignored |
-| `-k DUR`, `--kill-after=DUR` | Accepted (DUR is validated), ignored |
+| `-k DUR`, `--kill-after=DUR` | Accepted, ignored. DUR is validated in the `-k DUR` and `--kill-after DUR` forms only |
 | `--foreground` | Accepted, ignored |
 | `-v`, `--verbose` | Accepted, ignored |
 
-### Behaviour
+### Behavior
 
 COMMAND runs as bash text in a nested pipeline of the current shell, so builtins, functions, mapped commands, and programs all work. When the time is up, the pipeline is stopped and any programs it started are killed. Piped input becomes COMMAND's stdin. The name never falls through to Windows' `timeout.exe`.
 
@@ -301,18 +300,20 @@ printenv [NAME]...
 | `-u NAME`, `--unset=NAME` | Remove NAME |
 | `--` | End of options |
 
-### Behaviour
+### Behavior
 
 - With no arguments, `env` and `printenv` print every exported variable as `NAME=VALUE`, sorted by name.
 - `env NAME=VALUE... COMMAND` runs COMMAND with the changed environment and restores it afterwards. Without a COMMAND, it prints the resulting environment.
 - `printenv NAME...` prints only the values. A name that is not exported prints nothing and sets status 1.
 - `env NAME` for an exported NAME prints `NAME=VALUE` (a ps-bash extension). Otherwise the word is a command to run.
+- Unexported variables: `env`, `printenv`, and `compgen -e` list exported variables only. A nested shell (`sh -c`, `bash script.sh`) and a program started with `2>&1`, `&>`, or `|&` receive exported variables only. A program started as a plain `prog args` inherits every shell variable, exported or not.
 
 ### Differences from GNU
 
 - Output is sorted by name.
 - `-0`, `-C`/`--chdir`, `-S`/`--split-string`, `-v`, and the signal options are not supported.
-- Known gaps in this release: `env NAME=VALUE printenv NAME` prints `NAME=VALUE` instead of the value, and `env -u NAME printenv NAME` fails with `NAME: command not found` (exit 127).
+- `env NAME=VALUE printenv NAME` prints `NAME=VALUE`. GNU prints the value.
+- `env -u NAME printenv NAME` fails with `NAME: command not found` (exit 127). GNU runs `printenv`, which exits 1.
 
 ### Exit status
 
@@ -361,7 +362,7 @@ date [OPTIONS] [+FORMAT]
 
 `-d` accepts the GNU date grammar: absolute dates and times, `@EPOCH`, relative items (`yesterday`, `2 days ago`, `next friday`, `+3 hours`), weekdays, and time zones. The result is shown in the local zone unless `-u` is given.
 
-### Format Specifiers
+### Format specifiers
 
 | Specifier | Output | | Specifier | Output |
 |-----------|--------|-|-----------|--------|
@@ -381,7 +382,7 @@ date [OPTIONS] [+FORMAT]
 
 - `%Z` and the zone in the default output are `UTC` for UTC and otherwise the system time-zone ID (`America/Chicago` on Linux and macOS, `Central Standard Time` on Windows), not an abbreviation such as `CST`.
 - Not supported: `%c`, `%x`, `%X`, `%C`, `%g`, `%G`, `%U`, `%V`, `%W`, `%:z`, and padding modifiers (`%-d`, `%_H`, `%^a`). An unsupported specifier is printed as is.
-- `-I`/`--iso-8601`, `-R`/`--rfc-email`, `--rfc-3339`, `-f`/`--file`, and `-s`/`--set` are not supported. A date operand (`date 010112002025`) prints `date: cannot set date: Operation not permitted` and the current time.
+- `-I`/`--iso-8601`, `-R`/`--rfc-email`, `--rfc-3339`, `-f`/`--file`, and `-s`/`--set` are not implemented. `-I`, `-R`, and `--rfc-3339` are ignored without an error, and the default format is printed. A date operand (`date 010112002025`) prints `date: cannot set date: Operation not permitted` and the current time.
 
 ### Exit status
 
@@ -654,7 +655,7 @@ user	0m0.000s
 sys	0m0.000s
 ```
 
-`time -p` prints the POSIX form (`real 0.01`, `user 0.00`, `sys 0.00`). `TIMEFORMAT` is honoured (`%[p][l]R`, `%U`, `%S`, `%P`, `%%`); an empty `TIMEFORMAT` prints nothing.
+`time -p` prints the POSIX form (`real 0.01`, `user 0.00`, `sys 0.00`). `TIMEFORMAT` is honored (`%[p][l]R`, `%U`, `%S`, `%P`, `%%`); an empty `TIMEFORMAT` prints nothing.
 
 User and system times are the CPU time of the ps-bash host process, which includes in-process commands but not separate programs.
 
@@ -789,7 +790,7 @@ Uses .NET's `Ping` class, not the system `ping`. Each line is `reply from ADDR: 
 | `class` | `string` | `ok` (under 80 ms), `slow` (under 200 ms), `high`, `timeout` |
 | `BashText` | `string` | The printed line |
 
-The `class` property drives the `net` stylesheet: `ping example.com | Show-Styled` colours each reply by latency. See [Styled output](/ps-bash/guides/styled-output/).
+The `class` property drives the `net` stylesheet: `ping example.com | Show-Styled` colors each reply by latency. See [Styled output](/ps-bash/guides/styled-output/).
 
 ---
 

@@ -10,8 +10,6 @@ head:
 
 import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
 
-# Pipeline Tools
-
 `tee` and `xargs` for pipeline manipulation, plus the `less` and `more` pagers.
 
 ---
@@ -37,14 +35,14 @@ tee [-a] [FILE]...
 ### Behavior
 
 - **Files open before any input arrives**, so `true | tee out.txt` still truncates `out.txt`.
-- **Streaming**: each record is written and flushed as it arrives, then passed on.
+- **Streaming**: each record is written as it arrives and then passed on. A fast burst of records is buffered for up to 50 ms before it reaches the file.
 - **Exact bytes**: a record without a trailing newline (`printf x`, `echo -n`) is written without one, so `printf x | tee f` produces a 1-byte file.
 - **Device names**: `/dev/null` discards, `/dev/stdout` and `/dev/stderr` write tee's own streams, `/dev/fd/N` writes descriptor N. No file is created for any of them.
 - **Errors**: a file that cannot be opened is reported (`tee: nodir/x: No such file or directory`) and the other files are still written. The exit status stays 0; GNU exits 1.
 
 ### Object behavior
 
-`tee` writes each object's `BashText` to the files but passes the **original typed objects** downstream. The file gets text; the pipeline keeps the types.
+`tee` writes each object's `BashText` to the files and passes the **original typed objects** downstream.
 
 ```powershell
 $results = ls -la | tee listing.txt | grep '.ps1'
@@ -135,7 +133,7 @@ Options end at the first operand: everything after the command name belongs to t
 | `-r`, `--no-run-if-empty` | Do not run the command when there is no input |
 | `-t`, `--verbose` | Print each command line to stderr before running it |
 | `-p`, `--interactive` | There is no terminal to confirm on, so nothing runs: `xargs: failed to open /dev/tty for reading`, exit 1 |
-| `-P N`, `--max-procs=N` | Accepted; commands run one at a time |
+| `-P N`, `--max-procs N` | Accepted; commands run one at a time. The `--max-procs=N` form is not recognized |
 
 ### Input handling
 
@@ -158,8 +156,8 @@ With no command, xargs runs `echo`. A bash command name that ps-bash implements 
 ### Differences from GNU
 
 - `-L N` counts input items, not input lines.
-- Input comes from the pipeline only; there is no `-a FILE`.
-- `-s`, `-x`, `-E`, and `--process-slot-var` are not implemented. An unrecognised option is taken as the command name.
+- Input comes from the pipeline only.
+- `-s`, `-x`, `-E`, `-a`, and `--process-slot-var` are not implemented. An unrecognized option is taken as the command name.
 
 ### Examples
 

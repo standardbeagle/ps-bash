@@ -12,7 +12,7 @@ Output falls into two kinds:
 - **Filters** (`sort`, plain `uniq`, `uniq -d/-u/-D`) emit every output line as the original upstream object, so typed properties survive: `ls -la | sort -k5 -n` still yields `LsEntry` objects.
 - **Transformers** (`sed`, `awk`, `cut`, `tr`, `paste`, `join`, `comm`, `uniq -c`, `column`, `diff`) change the text and emit fresh text records.
 
-All of them read lines the way bash does: a trailing empty line is kept, a last line without a newline is still a line, and a piece written without a newline (`printf a`) joins the next piece into one line. Options may follow operands, short options bundle (`-rk2`), and long options accept any unique prefix (`--rev` for `--reverse`).
+All of them read lines the way bash does: a trailing empty line is kept, a last line without a newline is still a line, and a piece written without a newline (`printf a`) joins the next piece into one line. In every command except `awk` and `tr`, options may follow operands, short options bundle (`-rk2`), and long options accept any unique prefix (`--rev` for `--reverse`).
 
 ## sed
 
@@ -71,7 +71,7 @@ Every GNU sed 4.9 command is implemented.
 | Step | `0~3p` | Every 3rd line |
 | Negation | `1!G` | Every line except the address |
 
-### Behavior notes
+### Behavior
 
 - Files form one stream like GNU: `sed -n '$p' a b` prints the last line of `b` only. Use `-s` or `-i` to treat them separately.
 - POSIX bracket classes (`[[:space:]]`, `[[:alpha:]]`) work in BRE and ERE.
@@ -127,7 +127,7 @@ awk [-F FS] [-v VAR=VAL]... -f PROGFILE... [FILE...]
 |------|-------------|
 | `-F FS` | Field separator (joined form `-F:` also works; last `-F` wins; `\t` escapes expanded) |
 | `-v VAR=VAL` | Assign a variable before `BEGIN` (repeatable) |
-| `-f FILE`, `--file=FILE` | Read the program from FILE (repeatable; files are concatenated) |
+| `-f FILE`, `--file FILE` | Read the program from FILE (repeatable; files are concatenated). The `--file=FILE` form is not recognized |
 | `--` | End of options |
 
 Option parsing stops at the first operand (the program text), as POSIX requires.
@@ -164,7 +164,7 @@ Commands in `system()`, `cmd | getline`, and `print | "cmd"` run through ps-bash
 
 ### Differences from gawk
 
-- Recursion is capped near depth 1000 (`awk: fatal: function call nesting too deep`, exit 2) to protect the host's stack.
+- Deep recursion ends with `awk: fatal: function call nesting too deep` (exit 2) when the host's stack runs low. The limit depends on stack use, not on a fixed depth.
 - `close()` of a `cmd | getline` command that still has unread output gives it up to 3 s to exit, then ends it and returns 141. gawk's SIGPIPE gives 141 at once.
 - `close()` of a `print | "cmd"` pipe, explicit or at program end, waits as long as the command runs, as gawk does. Ctrl-C or a downstream stop ends the command and its process tree.
 - Indirect calls (`@name()`) reach user functions only, not built-ins.
@@ -291,6 +291,7 @@ Like GNU `tr`, it takes no file operands. Use `tr ... < file` or a pipe.
 | `-d`, `--delete` | Delete characters in SET1 |
 | `-s`, `--squeeze-repeats` | Squeeze runs of repeated characters (SET1, or SET2 when translating) |
 | `-c`, `-C`, `--complement` | Use the complement of SET1 |
+| `-t`, `--truncate-set1` | Accepted; see the difference below |
 
 ### Sets
 
@@ -300,7 +301,11 @@ Like GNU `tr`, it takes no file operands. Use `tr ... < file` or a pipe.
 | `[:alnum:]` `[:alpha:]` `[:digit:]` `[:upper:]` `[:lower:]` `[:space:]` `[:punct:]` | Character classes |
 | `\n` `\t` `\r` `\a` `\b` `\f` `\v` `\\` `\NNN` | Escapes; any other backslash escape is the literal character |
 
-A shorter SET2 is padded with its last character. The newline is an ordinary character, so `tr '\n' ,` and `tr -d '\n'` work. Output streams record by record, so `tail -f log | tr '\n' ' '` prints as input arrives.
+A shorter SET2 is padded with its last character. The newline is an ordinary character, so `tr '\n' ,` and `tr -d '\n'` work. Output streams record by record, so `tail -f log | tr '\n' ' '` prints as input arrives. Long options must be spelled in full.
+
+### Differences from GNU
+
+- `-t` does not shorten SET1 to the length of SET2; SET2 is still padded with its last character. `echo abcdef | tr -t abc xy` prints `xyydef`. GNU prints `xycdef`.
 
 ### Examples
 
@@ -445,7 +450,7 @@ A key with its own ordering modifier does not inherit the global options, as in 
 - Comparison is ordinal (the C locale's order); there is no locale collation.
 - Under `-z`, stdin is buffered rather than streamed.
 
-Exit codes: 0 sorted, 1 disorder under `-c`/`-C`, 2 usage errors or an unreadable input (fatal, no output).
+Exit codes: 0 sorted; 1 disorder under `-c`/`-C`, or an invalid `--check=`/`--sort=` word; 2 other usage errors or an unreadable input (fatal, no output).
 
 ### Examples
 
@@ -491,9 +496,9 @@ printf '2K\n1G\n512\n' | sort -h
 
 ```powershell
 # PowerShell: typed objects survive sorting
-$procs = ps aux | sort -k3 -rn | head 5
-$procs[0].CPU      # Real decimal value
-$procs[0].Command  # Process name
+$procs = ps aux | sort -k4 -rn | head -n 5
+$procs[0].Memory   # double: resident memory, % of total
+$procs[0].Command  # command line
 ```
 
 ---
@@ -519,12 +524,11 @@ column [OPTION]... [FILE...]
 | `-x`, `--fillrows` | Fill mode: fill rows before columns |
 | `-e`, `-d` | Accepted, no effect |
 
-Without `-t`, entries are filled down the columns of a grid sized to the width (`-c`, else `COLUMNS`, else 80), separated by tabs.
+Without `-t`, entries are filled down the columns of a grid sized to the width (`-c`, else `COLUMNS`, else 80), separated by tabs. As in util-linux, `-` is not a stdin operand.
 
 ### Differences from util-linux
 
 - No terminal size query: width comes from `-c`, `COLUMNS`, or 80.
-- `-` is not a stdin operand.
 - Refused (exit 2): `-n -N -O -C -E -m -H -R -T -W -J -r -i -p`.
 
 Usage errors exit 1.

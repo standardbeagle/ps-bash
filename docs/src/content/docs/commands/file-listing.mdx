@@ -22,8 +22,8 @@ On Windows every path these commands print uses forward slashes with the drive l
 
 Shared conventions:
 
-- Options parse like GNU getopt: bundles (`-la`), options after operands, unique long-option abbreviations (`--almost` for `--almost-all`), and `--` to end options. (`tree` is the exception: like tree(1), its long options do not abbreviate.)
-- A GNU option that ps-bash does not implement exits 2 with `recognized but not supported`. It is never silently ignored.
+- Options parse like GNU getopt: bundles (`-la`), options after operands, unique long-option abbreviations (`--almost` for `--almost-all`), and `--` to end options. Two exceptions: `tree`, like tree(1), does not abbreviate long options, and `basename` matches each option exactly, with no bundles or abbreviations.
+- In `ls`, `stat`, `tree`, `du`, and `realpath`, a GNU option that ps-bash does not implement exits 2 with `recognized but not supported`.
 - Usage errors use GNU's wording and the `Try 'ls --help' for more information.` hint.
 
 ---
@@ -32,7 +32,7 @@ Shared conventions:
 
 List directory contents.
 
-### Synopsis
+### Syntax
 
 ```
 ls [OPTION]... [FILE]...
@@ -72,7 +72,7 @@ ls [OPTION]... [FILE]...
 
 Refused (exit 2): the quoting options (`-b -q -Q -N --quoting-style --literal ...`), `-f -k -v -D -H -L -Z`, `--block-size`, `--si`, `--dereference*`, `--indicator-style`, `--file-type`, `--hyperlink`, `--dired`, `--zero`, `--context`, `--author`, and `--time-style=+FORMAT`.
 
-### Return Type: `PsBash.LsEntry`
+### Return type: `PsBash.LsEntry`
 
 One-per-line and `-l` output emit one `LsEntry` per file. Column formats (`-C`, `-x`, `-m`) emit plain text rows, because one row holds several entries.
 
@@ -94,8 +94,8 @@ One-per-line and `-l` output emit one `LsEntry` per file. Column formats (`-C`, 
 
 ### Differences from GNU
 
-- On Windows the mode string is synthesised: 0644 for files, 0755 for directories and executable extensions, write bits cleared for read-only files, 0777 for links. Owner and group come from the file's owner SID and primary-group SID. `-n` prints the last sub-authority of each SID.
-- `--full-time` prints .NET's 100 ns timestamp resolution followed by a trailing `0`.
+- On Windows the mode string is synthesized: 0644 for files, 0755 for directories and executable extensions, write bits cleared for read-only files. A link shows the type letter `l` with the same bits. Owner and group are both the current user name. `-n` prints the last sub-authority of the file's owner SID and primary-group SID.
+- `--full-time` prints .NET's 100 ns timestamp resolution (seven digits) followed by `00`.
 - `-s` counts whole 4 KiB allocation units.
 
 ### Examples
@@ -136,7 +136,7 @@ $scripts[-1].SizeBytes
 
 Walk directory trees and evaluate an expression for each entry.
 
-### Synopsis
+### Syntax
 
 ```
 find [-H|-L|-P] [-D OPTS] [-Olevel] [PATH...] [EXPRESSION]
@@ -181,7 +181,7 @@ Words up to the first one that starts with `-`, `(`, `)`, `!` or `,` are start p
 
 Options: `-depth`, `-follow`, `-xdev`/`-mount`, `-noleaf`, `-ignore_readdir_race`, `-warn`/`-nowarn` are accepted. `-L`/`-H` follow symbolic links, with GNU's loop detection.
 
-### Return Type: `PsBash.FindEntry`
+### Return type: `PsBash.FindEntry`
 
 Emitted by the implicit `-print` and by an explicit `-print`. `-print0` and `-printf` emit exact text records instead.
 
@@ -198,12 +198,12 @@ Emitted by the implicit `-print` and by an explicit `-print`. `-print0` and `-pr
 | `LastModified` | DateTime | Modification time |
 | `BashText` | string | Same as `Path` |
 
-### Behaviour
+### Behavior
 
 - The walk is lazy and depth-first: each match is printed, run through `-exec` or deleted as it is found, so `find / -name x | head -1` stops early. `-depth` and `-delete` give true post-order.
-- Errors match GNU and exit 1: `paths must precede expression`, `missing argument to '-name'`, `unknown predicate '-bogus'`, `Unknown argument to -type`. A missing start path prints `No such file or directory`, sets status 1, and the remaining paths are still walked.
+- Errors match GNU and exit 1: `paths must precede expression`, `` missing argument to `-name' ``, `` unknown predicate `-bogus' ``, `Unknown argument to -type`. A missing start path prints `No such file or directory`, sets status 1, and the remaining paths are still walked.
 - Not implemented: `-used`, `-context` (exit 1, `unsupported predicate`).
-- On Windows, modes and owners are synthesised as for `ls`, `%D` is the drive letter, ctime is the NTFS change time, and `-newerBt` (birth time) works.
+- On Windows, modes are synthesized as for `ls`, except that links are 0777. Owner and group come from the file's owner SID and primary-group SID. `%D` is the drive letter's character code (`67` for `C:`), ctime is the NTFS change time, and `-newerBt` (birth time) works.
 
 ### Examples
 
@@ -236,7 +236,7 @@ $big | ForEach-Object { "$($_.Name): $($_.SizeBytes) bytes" }
 
 Display file status.
 
-### Synopsis
+### Syntax
 
 ```
 stat [OPTION]... FILE...
@@ -268,7 +268,7 @@ Refused (exit 2): `-L`/`--dereference`, `-f`/`--file-system`.
 | `%i` | Inode number |
 | `%b` | Number of 512-byte blocks |
 | `%d` | Device number |
-| `%h` | Hard link count |
+| `%h` | Hard link count (always `1` on Windows) |
 | `%X` | Access time, epoch seconds |
 | `%Y` | Modification time, epoch seconds |
 | `%Z` | Modification time, epoch seconds (GNU: change time) |
@@ -276,7 +276,7 @@ Refused (exit 2): `-L`/`--dereference`, `-f`/`--file-system`.
 
 Any other directive is printed literally.
 
-### Return Type: `PsBash.StatEntry`
+### Return type: `PsBash.StatEntry`
 
 | Property | Type | Description |
 |----------|------|-------------|
@@ -330,7 +330,7 @@ $info.MtimeEpoch    # 1743530400
 
 List a directory as an indented tree. Follows tree(1) 2.1, which is not part of coreutils.
 
-### Synopsis
+### Syntax
 
 ```
 tree [OPTION]... [DIRECTORY]...
@@ -345,13 +345,13 @@ tree [OPTION]... [DIRECTORY]...
 | `-f` | -- | Print the full path of each entry |
 | `-L` | N | Descend at most N levels (N must be 1 or more) |
 | `-I` | PATTERN | Exclude names matching the glob; repeatable, `\|` separates alternatives |
-| `-n` | -- | No colour (accepted; output is never coloured) |
+| `-n` | -- | No color (accepted; output is never colored) |
 | `--dirsfirst` | -- | Directories before files |
 | `--noreport` | -- | Omit the `N directories, M files` line |
 
 Every directory operand is walked. Long options do not abbreviate. Other tree options (`-C -p -s -h -P -R -l -J -X -H --gitignore --prune --filesfirst ...`) exit 2. An unknown option is a usage error (exit 1). `-L 0` prints `Invalid level, must be greater than 0.` (exit 1).
 
-### Return Type: `PsBash.TreeEntry`
+### Return type: `PsBash.TreeEntry`
 
 | Property | Type | Description |
 |----------|------|-------------|
@@ -393,7 +393,7 @@ tree -d --dirsfirst --noreport .
 
 Report space used by files and directories.
 
-### Synopsis
+### Syntax
 
 ```
 du [OPTION]... [FILE]...
@@ -414,7 +414,7 @@ du [OPTION]... [FILE]...
 
 `-a` with `-s`, and `-s` with a non-zero `-d`, are GNU usage errors. Refused (exit 2): `-B`/`--block-size`, `-D -H -L -P -S -t -X -0`, `--threshold`, `--exclude-from`, `--files0-from`, `--inodes`, `--si`, `--time`, `--time-style`.
 
-### Return Type: `PsBash.DuEntry`
+### Return type: `PsBash.DuEntry`
 
 | Property | Type | Description |
 |----------|------|-------------|
@@ -449,7 +449,7 @@ $usage = du -a src
 
 Print the current working directory.
 
-### Synopsis
+### Syntax
 
 ```
 pwd [-P]
@@ -488,7 +488,7 @@ C:/Users/you/work/project
 
 Strip the directory and an optional suffix from names.
 
-### Synopsis
+### Syntax
 
 ```
 basename NAME [SUFFIX]
@@ -502,7 +502,7 @@ basename OPTION... NAME...
 | `-a`, `--multiple` | -- | Every operand is a NAME |
 | `-s`, `--suffix` | SUFFIX | Remove a trailing SUFFIX; implies `-a` |
 
-Without `-a`, a second operand is the SUFFIX and a third is an `extra operand` error. A suffix is removed only when the name is longer than the suffix. Output is one plain string per name. `-z` is not supported.
+Without `-a`, a second operand is the SUFFIX and a third is an `extra operand` error. A suffix is removed only when the name is longer than the suffix. Output is one plain string per name. `-z` is not an option: it is taken as a NAME.
 
 ### Examples
 
@@ -519,7 +519,7 @@ basename -a a/b c/d                        # b, d
 
 Strip the last component from each name.
 
-### Synopsis
+### Syntax
 
 ```
 dirname NAME...
@@ -547,7 +547,7 @@ cd "$(dirname "$0")"
 
 Print a symbolic link's target, or a canonical file name.
 
-### Synopsis
+### Syntax
 
 ```
 readlink [OPTION]... FILE...
@@ -567,7 +567,7 @@ readlink [OPTION]... FILE...
 
 The last of `-f`/`-e`/`-m` wins, and the last of `-q`/`-s`/`-v` wins.
 
-### Behaviour
+### Behavior
 
 - Without `-f`/`-e`/`-m`, FILE must be a symbolic link, and its target is printed exactly as stored. Anything else fails silently with status 1. With `-v`, the error is printed: `readlink: d: Invalid argument` for a non-link, `No such file or directory`, or `Not a directory`.
 - Canonicalization ports gnulib's `canonicalize_filename_mode`. It walks one component at a time from the root and follows each link where it is met, so `link/..` is the parent of the link's target, not the directory that holds the link. A loop is `Too many levels of symbolic links`.
@@ -589,7 +589,7 @@ readlink -v d         # readlink: d: Invalid argument   (status 1)
 
 Print the canonical (physical) name of each file.
 
-### Synopsis
+### Syntax
 
 ```
 realpath [OPTION]... FILE...
@@ -609,7 +609,7 @@ realpath [OPTION]... FILE...
 
 The default requires all but the last component to exist. The last of `-e`/`-m` wins, and the last of `-L`/`-P`/`-s` wins. `--relative-to` and `--relative-base` exit 2 (not supported).
 
-### Behaviour
+### Behavior
 
 Uses the same canonicalization as `readlink -f`. With `-s`, a relative operand is made absolute against the physical current directory (the `pwd -P` name). A failure prints `realpath: NAME: reason` (the name GNU-quoted when needed, e.g. `'a b'`) unless `-q` is given, and the exit status is 1. The other operands are still processed.
 
