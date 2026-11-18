@@ -40,7 +40,7 @@ public class FindPredicateTests : IClassFixture<SharedPwshFixture>, IDisposable
 
     public void Dispose()
     {
-        try { Directory.SetCurrentDirectory(Path.GetTempPath()); Directory.Delete(_dir, recursive: true); } catch { /* best-effort */ }
+        try { Directory.Delete(_dir, recursive: true); } catch { /* best-effort */ }
     }
 
 #pragma warning disable CA1416

@@ -351,8 +351,6 @@ public static class BashJobRunspaces
         private readonly Place _begin;
         private readonly Place _write;
         private readonly TimeSpan _grace;
-        private readonly object _timerGate = new();
-        private Timer? _graceTimer;
         private int _waitedToWrite;
 
         private JobTurn(Lines lines, long ticket, TimeSpan grace)
@@ -390,14 +388,11 @@ public static class BashJobRunspaces
                 _write.Line.SkipBefore(_write.Ticket);
             }
             _begin.Pass();
-            if (_grace <= TimeSpan.Zero) { PassWrite(); return; }
-            var timer = new Timer(static s => ((JobTurn)s!).PassWrite(), this, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
-            lock (_timerGate)
-            {
-                if (_write.Passed) { timer.Dispose(); return; }
-                _graceTimer = timer;
-            }
-            timer.Change(_grace, Timeout.InfiniteTimeSpan);
+            if (_grace <= TimeSpan.Zero) { _write.Pass(); return; }
+            // The grace is a deadline the waiters check, not a timer: a timer callback runs on the thread pool, and a
+            // starved pool (a loaded host, many jobs) held the next job's first write for the whole MaxWait, not the
+            // grace (2014 ms for a 50 ms grace, Windows fleet s22k).
+            _write.PassBy(System.Diagnostics.Stopwatch.GetTimestamp() + (long)(_grace.TotalSeconds * System.Diagnostics.Stopwatch.Frequency));
         }
 
         /// <summary>
@@ -415,19 +410,6 @@ public static class BashJobRunspaces
         internal void Pass()
         {
             _begin.Pass();
-            PassWrite();
-        }
-
-        private void PassWrite()
-        {
-            if (_write.Passed) return;
-            Timer? timer;
-            lock (_timerGate)
-            {
-                timer = _graceTimer;
-                _graceTimer = null;
-            }
-            timer?.Dispose();
             _write.Pass();
         }
 
@@ -451,6 +433,12 @@ public static class BashJobRunspaces
             {
                 if (Interlocked.Exchange(ref _passed, 1) == 0) Line.Pass(Ticket);
             }
+
+            /// <summary>Passes on its own at <paramref name="timestamp"/> (<see cref="System.Diagnostics.Stopwatch"/> ticks) unless passed sooner.</summary>
+            public void PassBy(long timestamp)
+            {
+                if (!Passed) Line.PassBy(Ticket, timestamp);
+            }
         }
 
         /// <summary>Tickets passing in order: <c>_through</c> is the last ticket all of whose predecessors passed.</summary>
@@ -458,6 +446,7 @@ public static class BashJobRunspaces
         {
             private long _through;
             private readonly HashSet<long> _passed = [];
+            private readonly Dictionary<long, long> _passAt = [];   // ticket -> Stopwatch timestamp it passes by itself
 
             /// <summary>True once every ticket before <paramref name="ticket"/> has passed; false when the wait gave up.</summary>
             public bool WaitFor(long ticket, Func<bool> stopping)
@@ -465,14 +454,51 @@ public static class BashJobRunspaces
                 var waited = System.Diagnostics.Stopwatch.StartNew();
                 lock (this)
                 {
-                    while (_through < ticket - 1)
+                    while (true)
                     {
+                        long nextDue = PassDueLocked();
+                        if (_through >= ticket - 1) return true;
                         var left = MaxWait - waited.Elapsed;
                         if (left <= TimeSpan.Zero || stopping()) return false;
-                        Monitor.Wait(this, left < Slice ? left : Slice);
+                        var wait = left < Slice ? left : Slice;
+                        if (nextDue != long.MaxValue)
+                        {
+                            var due = TimeSpan.FromSeconds((double)(nextDue - System.Diagnostics.Stopwatch.GetTimestamp()) / System.Diagnostics.Stopwatch.Frequency);
+                            if (due < wait) wait = due < TimeSpan.Zero ? TimeSpan.Zero : due;
+                        }
+                        Monitor.Wait(this, wait);
                     }
-                    return true;
                 }
+            }
+
+            /// <summary><paramref name="ticket"/> passes by itself at <paramref name="timestamp"/>; the waiters enforce it.</summary>
+            public void PassBy(long ticket, long timestamp)
+            {
+                lock (this)
+                {
+                    if (ticket <= _through || _passed.Contains(ticket)) return;
+                    _passAt[ticket] = timestamp;
+                    Monitor.PulseAll(this);
+                }
+            }
+
+            /// <summary>Passes every ticket whose time has come; returns the earliest timestamp still pending.</summary>
+            private long PassDueLocked()
+            {
+                if (_passAt.Count == 0) return long.MaxValue;
+                long now = System.Diagnostics.Stopwatch.GetTimestamp(), next = long.MaxValue;
+                List<long>? due = null;
+                foreach (var (t, at) in _passAt)
+                {
+                    if (at <= now) (due ??= []).Add(t);
+                    else if (at < next) next = at;
+                }
+                if (due is not null)
+                {
+                    foreach (var t in due) { _passAt.Remove(t); if (t > _through) _passed.Add(t); }
+                    AdvanceLocked();
+                }
+                return next;
             }
 
             /// <summary>Gave up on the tickets before <paramref name="ticket"/>: they no longer hold anyone up.</summary>
@@ -490,6 +516,7 @@ public static class BashJobRunspaces
             {
                 lock (this)
                 {
+                    _passAt.Remove(ticket);
                     if (ticket > _through) _passed.Add(ticket);
                     AdvanceLocked();
                 }
@@ -497,7 +524,13 @@ public static class BashJobRunspaces
 
             private void AdvanceLocked()
             {
-                while (_passed.Remove(_through + 1)) _through++;
+                while (_passed.Remove(_through + 1)) _passAt.Remove(++_through);
+                if (_passAt.Count > 0)
+                {
+                    List<long>? stale = null;
+                    foreach (var t in _passAt.Keys) if (t <= _through) (stale ??= []).Add(t);
+                    if (stale is not null) foreach (var t in stale) _passAt.Remove(t);
+                }
                 Monitor.PulseAll(this);
             }
         }

@@ -18,6 +18,7 @@ namespace PsBash.Cmdlets.Tests;
 /// Oracle (qa-rubric Directive 1): expected outputs were taken from GNU xargs via
 /// <c>wsl.exe -d Ubuntu-24.04 -- bash -c '…'</c>.
 /// </summary>
+[Collection(ProcessWorkingDirectoryCollection.Name)]
 public class XargsInnerCommandFlagTests : IClassFixture<SharedPwshFixture>
 {
     private readonly SharedPwshFixture _fixture;

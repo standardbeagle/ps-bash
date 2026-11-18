@@ -9,7 +9,9 @@ namespace PsBash.Cmdlets.Tests;
 /// Jobs launched from one runspace begin their bodies, and make their first writes, in launch order (<see cref="JobTurn"/>,
 /// docs/specs/background-jobs.md section 12.5). Oracle note (qa-rubric Directive 1): the ordering primitive is
 /// ps-bash plumbing; the bash-visible order is pinned by the oils case "a &amp; b &amp;" (shell-grammar.spec.sh).
+/// Wall-clock bounds, and one test occupies the whole thread pool, so the class runs alone (<see cref="WallClockBoundCollection"/>).
 /// </summary>
+[Collection(WallClockBoundCollection.Name)]
 public class JobTurnTests
 {
     private static readonly Func<bool> NotStopping = static () => false;
@@ -79,6 +81,39 @@ public class JobTurnTests
         var sw = Stopwatch.StartNew();
         second.WaitToWrite(NotStopping);
         Assert.True(sw.Elapsed < TimeSpan.FromSeconds(1.5), $"the second job's write waited {sw.ElapsedMilliseconds} ms");
+    }
+
+    // REGRESSION (Windows fleet s22k, "the second job's write waited 2014 ms"): the grace was a Timer, whose callback runs
+    // on the thread pool. With every pool thread busy (a loaded host, many jobs, parallel test classes) it did not run,
+    // and a 50 ms grace held the next write for the whole 2 s bounded wait. The waiter now enforces the deadline itself.
+    [Fact]
+    public void SilentEarlierJobsGrace_HoldsWithEveryPoolThreadBusy()
+    {
+        ThreadPool.GetMaxThreads(out int maxWorkers, out int maxIo);
+        ThreadPool.GetMinThreads(out int minWorkers, out _);
+        var release = new ManualResetEventSlim();   // not disposed: queued items may still be waking on it
+        Assert.True(ThreadPool.SetMaxThreads(minWorkers, maxIo), "could not cap the thread pool");
+        try
+        {
+            for (int i = 0; i < minWorkers * 2; i++) ThreadPool.UnsafeQueueUserWorkItem(static e => ((ManualResetEventSlim)e!).Wait(), release);
+            var saturating = Stopwatch.StartNew();
+            while (ThreadPool.PendingWorkItemCount == 0 && saturating.Elapsed < TimeSpan.FromSeconds(10)) Thread.Yield();
+            Assert.True(ThreadPool.PendingWorkItemCount > 0, "the pool never filled up, so this test proves nothing");
+
+            using var launcher = RunspaceFactory.CreateRunspace();
+            var first = JobTurn.Next(launcher, TimeSpan.FromMilliseconds(50))!;
+            var second = JobTurn.Next(launcher, NoGrace)!;
+            first.Enter(NotStopping);
+            second.Enter(NotStopping);
+            var sw = Stopwatch.StartNew();
+            second.WaitToWrite(NotStopping);
+            Assert.True(sw.Elapsed < TimeSpan.FromSeconds(1), $"with the pool busy the second job's write waited {sw.ElapsedMilliseconds} ms");
+        }
+        finally
+        {
+            release.Set();
+            ThreadPool.SetMaxThreads(maxWorkers, maxIo);
+        }
     }
 
     // A job's sleep passes its turn: in bash the next job would already be writing.

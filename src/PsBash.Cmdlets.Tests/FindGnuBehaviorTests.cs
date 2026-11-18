@@ -27,7 +27,7 @@ public class FindGnuBehaviorTests : IClassFixture<SharedPwshFixture>, IDisposabl
 
     public void Dispose()
     {
-        try { Directory.SetCurrentDirectory(Path.GetTempPath()); Directory.Delete(_dir, recursive: true); } catch { /* best-effort */ }
+        try { Directory.Delete(_dir, recursive: true); } catch { /* best-effort */ }
     }
 
     /// <summary>Runs one find invocation from inside the fixture tree; Lines = the printed paths.</summary>

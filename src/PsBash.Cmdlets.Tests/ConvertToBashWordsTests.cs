@@ -9,6 +9,7 @@ namespace PsBash.Cmdlets.Tests;
 /// Expected values are bash 5.2 (oracle-checked; end to end in
 /// <c>ExpansionRedirectEnvDifferentialTests</c>).
 /// </summary>
+[Collection(ProcessWorkingDirectoryCollection.Name)]
 public class ConvertToBashWordsTests : IClassFixture<SharedPwshFixture>
 {
     private readonly SharedPwshFixture _fixture;

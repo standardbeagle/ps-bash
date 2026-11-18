@@ -596,9 +596,11 @@ paid this:
    215 ms after its `&`, Windows fleet s22e). Passing the one line at the body's start instead let `echo word_b`
    reach the mux first, 1 of 3 runs on a loaded host (Windows fleet s22a). Every wait gives up after 2 s, for a job
    whose start was refused and so never begins, and then skips the tickets before it; it stops at once when the job
-   is stopped or its output abandoned. Tests: `JobTurnTests` (Cmdlets.Tests: silent jobs begin without waiting for
-   each other's writes; a first write waits for the earlier job's; a silent earlier job holds it only for its grace;
-   a `sleep` releases it), `BackgroundJobStartLatencyTests` (Host.Tests).
+   is stopped or its output abandoned. The grace is a deadline stored in the line and enforced by the waiter on
+   each wake-up, never a timer callback: on a starved thread pool the callback did not run, and a 50 ms grace held the
+   next write for the whole 2 s (Windows fleet s22k). Tests: `JobTurnTests` (Cmdlets.Tests: silent jobs begin without
+   waiting for each other's writes; a first write waits for the earlier job's; a silent earlier job holds it only for
+   its grace, also with every pool thread busy; a `sleep` releases it), `BackgroundJobStartLatencyTests` (Host.Tests).
 6. *Start lag added to every sleep.* Even a warm job begins its body 13-27 ms after its `&` (24-88 ms on a loaded
    host). Bash begins it under a millisecond after. A `sleep D` measured from the body's start therefore ends at
    `launch + lag + D`, and a lag larger than the gap between two jobs' sleeps reorders them. **Invariant: an in-process

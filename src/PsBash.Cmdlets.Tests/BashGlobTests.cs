@@ -7,6 +7,7 @@ namespace PsBash.Cmdlets.Tests;
 /// <c>ConvertTo-BashGlob</c> cmdlet the transpiler emits for every unquoted glob word. Expected values are
 /// bash 5.2 in a C.UTF-8 locale (oracle-checked; end to end in <c>PathnameExpansionDifferentialTests</c>).
 /// </summary>
+[Collection(ProcessWorkingDirectoryCollection.Name)]
 public class BashGlobTests : IClassFixture<SharedPwshFixture>, IDisposable
 {
     private readonly SharedPwshFixture _fixture;
