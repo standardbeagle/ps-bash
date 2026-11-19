@@ -53,8 +53,6 @@ $repo = 'standardbeagle/ps-bash'
 # Update this list when new bugs land in ~/.claude/memory/deferred_hard_bugs.md.
 # ============================================================================
 $DeferredHardBugs = @(
-    # Pipefail / PIPESTATUS
-    'Differential_Pipe_ExitCode_PipefailOn_FirstFailurePropagates',
     # eval caller scope
     'Differential_Eval_VarAssignment_VisibleAfterEval',
     'Differential_Eval_ExitCodeFromFalse_PropagatedToShell',

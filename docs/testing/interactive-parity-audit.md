@@ -824,7 +824,7 @@ QA audit sections per qa-rubric Directive 10 template.
 | Broken pipe | YES (skip) | `Differential_Pipe_BrokenPipe_HeadClosesEarly` — test present but permanently skipped on Windows (known SIGPIPE hang); see MEMORY.md |
 | Slow reader | NO | gap — no test with a blocking consumer; unbounded buffering risk untested |
 | Signal during execute | NO | gap — no Ctrl-C test mid-pipeline |
-| Exit code propagation | YES | `Differential_Pipe_ExitCode_LastCmdWins_PipefailOff`, `Differential_Pipe_ExitCode_PipefailOn_FirstFailurePropagates` (golden documenting known gap) |
+| Exit code propagation | YES | `Differential_Pipe_ExitCode_LastCmdWins_PipefailOff`, `Differential_Pipe_ExitCode_PipefailOn_FirstFailurePropagates` (oracle) |
 | Stderr interleave | YES (golden) | `Differential_PipeAmp_StderrMergedToStdout` — golden captures |& behavior; wording differs between bash and ps-bash |
 | Working dir state | NO | gap — no test verifying cd inside a pipeline stage persists |
 | Environment leak | NO | gap — no test for `VAR=x cmd | next` env isolation |
@@ -851,7 +851,7 @@ QA audit sections per qa-rubric Directive 10 template.
 - `grep -q` exit code not propagated through PowerShell pipeline chain: `cmd | grep -q pat && arm` fires the wrong arm because `$LASTEXITCODE` is not reliably set after a pipeline segment ends — `PipeDifferentialTests.cs:Differential_Pipe_InCondition_GrepQNoMatch` (golden)
 - `grep -q` still emits pipeline objects even in quiet mode: BashObjects from the upstream `echo` pass through `Invoke-BashGrep -q` and appear on stdout, leaking to the terminal — `PipeDifferentialTests.cs:Differential_Pipe_InCondition_GrepQMatches` (golden)
 - Broken pipe hangs forever on Windows: `yes | head -n 3` never terminates because Windows has no SIGPIPE. The `yes` producer is not killed when `head` closes stdin. See MEMORY.md "Windows process death" — `PipeDifferentialTests.cs:Differential_Pipe_BrokenPipe_HeadClosesEarly` (skipped)
-- `set -o pipefail` standalone does not implement PIPESTATUS tracking: `false | true; echo $?` with pipefail on still prints 0 instead of 1 because ps-bash maps pipefail only as part of `set -euo pipefail` and does not track per-stage exit codes — `PipeDifferentialTests.cs:Differential_Pipe_ExitCode_PipefailOn_FirstFailurePropagates` (golden)
+- (fixed) `set -o pipefail` standalone reads the per-stage statuses Invoke-BashPipeStage records: `false | true; echo $?` prints 1 — `PipeDifferentialTests.cs:Differential_Pipe_ExitCode_PipefailOn_FirstFailurePropagates` (oracle)
 - `|&` wording differs: stderr from `ls /nonexistent` on ps-bash uses PowerShell error message format rather than the Unix `ls: cannot access` format; bytes differ even though the merge path works — `PipeDifferentialTests.cs:Differential_PipeAmp_StderrMergedToStdout` (golden)
 
 **PRIORITY GAPS** (top 3 max):

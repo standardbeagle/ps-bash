@@ -1,0 +1,22 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 289
+stdout-length: 31
+stderr-length: 0
+==== SCRIPT ====
+nosuchcmd 2>&1 | head -1 >/dev/null; echo ${PIPESTATUS[0]}
+nosuchcmd 2>/dev/null | cat; echo "${PIPESTATUS[@]}"
+f() { return 3; }; f | cat; echo "${PIPESTATUS[@]}"
+echo x | (exit 4); echo "${PIPESTATUS[@]}"
+set -o pipefail; nosuchcmd 2>/dev/null | cat; echo "pf=$?"; f | cat; echo "pf2=$?"
+==== STDOUT ====
+127
+127 0
+3 0
+0 4
+pf=127
+pf2=3
+
+==== STDERR ====
+

@@ -94,4 +94,14 @@ public class ShellLanguageGapDifferentialTests
         + "u() { trap - ERR; }; trap 'echo E3' ERR; u; false; trap - ERR\n"
         + "x=$(trap 'echo E5' ERR; false); echo \"[$x]\"\n"
         + "trap 'echo E6' ERR; y=$(false); echo \"[$y]\"; trap - ERR");
+
+    // --- Pipe-stage status when a downstream stage stops it (InvokeBashPipeStageCommand.RecordStopped) ---
+
+    [SkippableFact]
+    public Task PipeStatus_StageStoppedByHead_KeepsItsStatus() => Same(
+        "nosuchcmd 2>&1 | head -1 >/dev/null; echo ${PIPESTATUS[0]}\n"
+        + "nosuchcmd 2>/dev/null | cat; echo \"${PIPESTATUS[@]}\"\n"
+        + "f() { return 3; }; f | cat; echo \"${PIPESTATUS[@]}\"\n"
+        + "echo x | (exit 4); echo \"${PIPESTATUS[@]}\"\n"
+        + "set -o pipefail; nosuchcmd 2>/dev/null | cat; echo \"pf=$?\"; f | cat; echo \"pf2=$?\"");
 }

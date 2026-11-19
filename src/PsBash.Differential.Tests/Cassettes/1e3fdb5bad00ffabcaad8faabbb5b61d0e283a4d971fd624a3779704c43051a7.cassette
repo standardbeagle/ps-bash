@@ -1,0 +1,16 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 27
+stdout-length: 11
+stderr-length: 0
+==== SCRIPT ====
+yes | head -n 3; echo rc=$?
+==== STDOUT ====
+y
+y
+y
+rc=0
+
+==== STDERR ====
+

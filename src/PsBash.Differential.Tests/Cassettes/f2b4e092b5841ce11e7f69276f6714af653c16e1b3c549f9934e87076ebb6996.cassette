@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 132
+stdout-length: 12
+stderr-length: 0
+==== SCRIPT ====
+set -o pipefail; false | true; echo $?; (exit 3) | (exit 5) | true; echo $? ${PIPESTATUS[*]}; set +o pipefail; false | true; echo $?
+==== STDOUT ====
+1
+5 3 5 0
+0
+
+==== STDERR ====
+

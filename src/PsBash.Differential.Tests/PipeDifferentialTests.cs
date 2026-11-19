@@ -151,22 +151,15 @@ public class PipeDifferentialTests
 
     /// <summary>
     /// With pipefail on: `set -o pipefail; false | true; echo $?` → `1`.
-    /// set -o pipefail causes the pipeline to exit with the first non-zero code.
-    ///
-    /// KNOWN GAP: ps-bash translates `set -o pipefail` only as part of `set -euo pipefail`.
-    /// Standalone `set -o pipefail` maps to $ErrorActionPreference='Stop' but does NOT
-    /// implement cross-stage PIPESTATUS tracking. This test documents the current behavior
-    /// with GoldenAsync so regressions are detected.
+    /// set -o pipefail causes the pipeline to exit with the last non-zero stage status. The stages' statuses are
+    /// recorded by Invoke-BashPipeStage (PIPESTATUS), and pipefail reads them; the skip that called this a deferred gap
+    /// was stale. The stage that fails first and the stage that fails last differ in the second case.
     /// </summary>
     [SkippableFact]
     public async Task Differential_Pipe_ExitCode_PipefailOn_FirstFailurePropagates()
     {
-        Skip.If(true, "deferred-hard-bug: pipefail / PIPESTATUS. PowerShell pipelines " +
-                      "do not propagate component exit codes; needs runtime helper. " +
-                      "See ~/.claude/memory/deferred_hard_bugs.md.");
-        await AssertOracle.GoldenAsync(
-            "set -o pipefail; false | true; echo $?",
-            "Pipe_ExitCode_PipefailOn",
+        await AssertOracle.EqualAsync(
+            "set -o pipefail; false | true; echo $?; (exit 3) | (exit 5) | true; echo $? ${PIPESTATUS[*]}; set +o pipefail; false | true; echo $?",
             timeout: TimeSpan.FromSeconds(15));
     }
 
@@ -179,25 +172,14 @@ public class PipeDifferentialTests
     /// closes its stdin after 3 lines. bash sends SIGPIPE to `yes`; ps-bash must
     /// not hang waiting for `yes` to finish.
     /// Failure-surface axis 5: reader closes early; producer must terminate.
-    ///
-    /// KNOWN BUG: ps-bash hangs on `yes | head -n 3` because Windows has no SIGPIPE.
-    /// The `yes` producer process is not terminated when `head` closes its stdin,
-    /// so the pipeline never completes. This is documented in MEMORY.md under
-    /// "Windows process death". Test uses GoldenAsync with extended timeout as a
-    /// sentinel — currently it times out. When the bug is fixed, the golden should
-    /// record "y\ny\ny\n" and the timeout should be reduced.
-    ///
-    /// To verify: `yes | head -n 3` via ps-bash -c hangs indefinitely on Windows.
+    /// `yes` is the in-process cmdlet: head's stop ends it (UpstreamStop), there is no SIGPIPE to wait for. The skip
+    /// ("hangs on Windows") predates that and was stale. The status after it is head's (0).
     /// </summary>
     [SkippableFact]
-    [Trait("KnownBug", "BrokenPipe-Windows")]
     public async Task Differential_Pipe_BrokenPipe_HeadClosesEarly()
     {
-        // Skip this test — it hangs indefinitely on Windows due to missing SIGPIPE.
-        // Documented as known bug; re-enable when process-death fix lands.
-        Skip.If(true, "known hang: yes | head -n 3 never terminates on Windows (no SIGPIPE). See MEMORY.md 'Windows process death'.");
         await AssertOracle.EqualAsync(
-            "yes | head -n 3",
+            "yes | head -n 3; echo rc=$?",
             timeout: TimeSpan.FromSeconds(15));
     }
 

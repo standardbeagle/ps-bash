@@ -68,6 +68,9 @@ public sealed class InvokeBashNativeCommand : PSCmdlet, IDisposable
         // A CommandInfo runs without a second lookup; an unknown name goes through PowerShell's lookup, so the
         // host's command-not-found handling reports it exactly as before.
         object target = standIn ?? (object?)info ?? Name;
+        // Not found: the status is 127 from here on, before the message is written (`nosuchcmd 2>&1 | head -1` stops
+        // this stage once head has the message, and PIPESTATUS reads the status it had: InvokeBashPipeStageCommand).
+        if (info is null && standIn is null) FileSystemHelpers.SetLastExitCode(this, 127);
         _fallback = ScriptBlock.Create("param($__psbash_cmd, $__psbash_args) & $__psbash_cmd @__psbash_args")
             .GetSteppablePipeline(CommandOrigin.Internal, new object[] { target, args.ToArray<object>() });
         _fallback.Begin(this);

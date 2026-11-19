@@ -407,6 +407,7 @@ internal static class FileSystemHelpers
     public static void SetLastExitCode(PSCmdlet cmdlet, int code)
     {
         cmdlet.SessionState.PSVariable.Set(new PSVariable("global:LASTEXITCODE", code));
+        InvokeBashPipeStageCommand.NoteStatus(code); // the stage's own status (PIPESTATUS when a later stage stops it)
     }
 
     /// <summary>

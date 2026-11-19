@@ -200,7 +200,9 @@ The emitter translates `set` flags to PowerShell equivalents:
 Combined flags are decomposed: `set -euo pipefail` extracts `-e`, `-u` and
 `pipefail`. A script that mentions `pipefail` or `PIPESTATUS` is emitted in pipefail mode
 (`PsEmitter._pipefailMode`): every stage's status is recorded (`Invoke-BashPipeStage`) and
-`$global:PIPESTATUS` is set after the pipeline.
+`$global:PIPESTATUS` is set after the pipeline. A stage a later stage stops (`nosuchcmd 2>&1 | head -1`) records the
+status its OWN commands set (`FileSystemHelpers.SetLastExitCode` -> `InvokeBashPipeStageCommand.NoteStatus`), not
+`$LASTEXITCODE`, which the stopping stage has already overwritten: 127 there, as in bash.
 
 ### 2.5 Errors that discard the input line
 
