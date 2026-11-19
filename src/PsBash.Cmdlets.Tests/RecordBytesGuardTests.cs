@@ -50,8 +50,6 @@ public class RecordBytesGuardTests
             = "the host has no cmdlets reference; it routes through StdoutRecord.Bytes on the next line",
         ["InvokeBashWcCommand.cs: if (!text.EndsWith('\\n') && !BashRuntime.IsUnterminated(InputObject)) text += \"\\n\";"]
             = "PENDING: wc is being edited concurrently by another owner; route through BashRuntime.RecordBytes",
-        ["InvokeBashWcCommand.cs: if (!text.EndsWith('\\n') && !BashRuntime.IsUnterminated(rec)) text += \"\\n\";"]
-            = "PENDING: wc is being edited concurrently by another owner; route through BashRuntime.RecordBytes",
     };
 
     internal static List<string> Scan(string name, string text)
