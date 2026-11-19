@@ -703,7 +703,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("cmd |& other");
 
-        Assert.Equal("Invoke-BashNative -- cmd 2>&1 | ConvertTo-BashNativeStdin 'other' | other", result);
+        Assert.Equal("Invoke-BashNative -- cmd 2>&1 | Invoke-BashRedirect -MergeErrors | ConvertTo-BashNativeStdin 'other' | other", result);
     }
 
     [Fact]

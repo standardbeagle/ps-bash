@@ -11937,8 +11937,10 @@ public static partial class PsEmitter
             if (i > 0)
             {
                 var op = pipeline.Ops[i - 1];
+                // `a |& b`: a's stderr records reach b as STDOUT records (PsBuild.MergeStderrIntoStdout), never as ErrorRecords,
+                // whose message already holds its line's `\n` and so read as one more empty line under the record -> bytes rule.
                 if (op == "|&")
-                    sb.Append(" 2>&1 | ");
+                    sb.Append(PsBuild.MergeStderrIntoStdout).Append(" | ");
                 else
                     sb.Append(" | ");
             }

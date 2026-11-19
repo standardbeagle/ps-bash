@@ -927,7 +927,10 @@ general fallback path (`EmitSimple`) and the mapped passthrough path
    A simple pipe-target stage is emitted by `EmitSimplePipeStage`; with an env prefix it is wrapped in
    a save/set/restore script block that forwards `$input` (see "Env pairs"), and a stage that needs the
    RC-7 splat hoist forwards `$input` inside its block.
-3. Pipe operators: `|` emits as ` | `, `|&` emits as ` 2>&1 | `.
+3. Pipe operators: `|` emits as ` | `, `|&` emits as `PsBuild.MergeStderrIntoStdout` + ` | `
+   (` 2>&1 | Invoke-BashRedirect -MergeErrors | `): the next stage reads each stderr write as a STDOUT record with the
+   write's own bytes (`printf x >&2` stays unterminated), never a raw ErrorRecord, whose text already holds its `\n`
+   and so read as one more empty line under the record -> bytes rule. Guard `Core.Tests/StderrMergeGuardTests`.
    Under per-stage status (pipefail / `PIPESTATUS`) the pipeline is `PsBuild.PipefailPipeline` around
    `PsBuild.PipefailStage` stages. **Invariant: it is ONE pipeline element** (a dot-sourced block: the caller's scope,
    streaming output), so it is valid PowerShell in every position a pipeline stands in: after `&&`/`||`, in `$( )`, as a

@@ -95,6 +95,18 @@ public class PipeDifferentialTests
             timeout: TimeSpan.FromSeconds(15));
     }
 
+    /// <summary>
+    /// <c>|&amp;</c> hands the next stage each stderr write as the bytes bash writes: <c>echo STDERR &gt;&amp;2 |&amp; cat</c>
+    /// is one line (the merged record was an ErrorRecord whose text held its own <c>\n</c>, so the record -> bytes rule
+    /// read an extra empty line), <c>printf x &gt;&amp;2</c> stays unterminated, and an embedded newline is kept.
+    /// </summary>
+    [SkippableTheory]
+    [InlineData("f() { echo STDOUT; echo STDERR >&2; }\nf |& cat\nf |& wc -l")]
+    [InlineData("{ echo a; printf 'b' >&2; echo c; } |& od -c")]
+    [InlineData("{ echo $'two\\nlines' >&2; echo $'end\\n' >&2; } |& cat -A")]
+    [InlineData("f() { echo e >&2; }\nf |& f |& tr e E")]
+    public Task Differential_PipeAmp_StderrWritesKeepTheirBytes(string script) => AssertOracle.EqualAsync(script);
+
     // -----------------------------------------------------------------------
     // Pipeline in if condition
     // -----------------------------------------------------------------------
