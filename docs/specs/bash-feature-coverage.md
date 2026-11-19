@@ -65,7 +65,7 @@ ended the driver loop (`help` reached PowerShell's own `help`; fixed, see below)
 
 ### Open (re-measured 2026-11-18)
 
-Missing builtins (command not found): `bind caller disown enable logout suspend`. Not supported by design (a
+`bind caller disown enable logout suspend` are present and refuse or report as bash does in a non-interactive shell (`caller` at top level returns 1, bash 0). Not supported by design (a
 message and status 2): `coproc`, the `select` menu loop. `help NAME` prints the synopsis and short description only
 (bash goes on with the long text). Now present: `getopts ulimit complete compgen
 history fc builtin`, history expansion (`!!` stays literal in a script, as in bash).
