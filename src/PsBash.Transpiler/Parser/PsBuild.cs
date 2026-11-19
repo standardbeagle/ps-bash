@@ -1382,11 +1382,12 @@ public static class PsBuild
     /// A call <c>f -i x</c> is emitted bare, so PowerShell marks the <c>-i</c> in <c>$args</c> as a parameter name, and
     /// a later splat (<c>grep "$@"</c>) bound it as one ("-i" is ambiguous / a prefix of InputObject). Each string is
     /// re-read as a plain <c>[string]</c>, which drops that mark; other values (a FileInfo, an int) are kept as they are.
+    /// The body starts without the caller's ERR trap unless errtrace is on (<c>ErrTrapInheritance</c>; <c>$__bet</c>).
     /// </summary>
-    public const string FunctionPrologue = " $__bp = $global:BashPositional; $global:BashPositional = @(foreach ($__psba in $args) { if ($__psba -is [string]) { [string]$__psba } else { $__psba } }); [PsBash.Cmdlets.VarFrameStack]::EnterFunction(); try { ";
+    public const string FunctionPrologue = " $__bp = $global:BashPositional; $global:BashPositional = @(foreach ($__psba in $args) { if ($__psba -is [string]) { [string]$__psba } else { $__psba } }); $__bet = [PsBash.Cmdlets.VarFrameStack]::EnterFunction($ExecutionContext.SessionState); try { ";
 
     /// <summary>The text every bash function body ends with (see <see cref="FunctionPrologue"/>).</summary>
-    public const string FunctionEpilogue = " } finally { [PsBash.Cmdlets.VarFrameStack]::ExitFunction(); $global:BashPositional = $__bp } ";
+    public const string FunctionEpilogue = " } finally { [PsBash.Cmdlets.VarFrameStack]::ExitFunction($ExecutionContext.SessionState, $__bet); $global:BashPositional = $__bp } ";
 
     // ─────────────────── bash variable contexts (PsBash.Cmdlets.VarFrameStack) ───────────────────
 

@@ -6070,9 +6070,11 @@ public class PsEmitterTests
     }
 
     // Inside a function/subshell/command-sub the ERR-trap half of the check is gated on errtrace (set -E).
-    private static string ErrexitCheckInsideScope(string exit)
+    // A subshell, function or `$( )` body: the runtime puts the ERR trap aside on entry (ErrTrapInheritance), so its
+    // check is not gated on errtrace; a compound pipeline stage still is (errtraceGated).
+    private static string ErrexitCheckInsideScope(string exit, bool errtraceGated = false)
     {
-        bool saved = PsBuild.ErrTrapNeedsErrtrace; PsBuild.ErrTrapNeedsErrtrace = true;
+        bool saved = PsBuild.ErrTrapNeedsErrtrace; PsBuild.ErrTrapNeedsErrtrace = errtraceGated;
         try { return PsBuild.ErrexitCheck(exit); } finally { PsBuild.ErrTrapNeedsErrtrace = saved; }
     }
 
@@ -6094,7 +6096,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile(bash)!;
         Assert.Contains(PsBuild.ErrexitLifted("\u0001", "$__psbash_eb0").Split('\u0001')[0], result);
-        Assert.Contains(ErrexitCheckInsideScope("return"), result);
+        Assert.Contains(ErrexitCheckInsideScope("return", errtraceGated: true), result);
     }
 
     // bash ignores -e in a stage of a pipeline that is a condition, a non-final && / || operand or negated,
@@ -6108,7 +6110,7 @@ public class PsEmitterTests
     [InlineData("{ echo one; false; echo two; } | cat")]
     [InlineData("trap 'echo x' ERR\n{ echo one; false; echo two; } | cat")]
     public void Transpile_CompoundPipeStageWhereErrexitIsIgnored_HasNoStageChecks(string bash)
-        => Assert.DoesNotContain(ErrexitCheckInsideScope("return"), PsEmitter.Transpile(bash)!);
+        => Assert.DoesNotContain(ErrexitCheckInsideScope("return", errtraceGated: true), PsEmitter.Transpile(bash)!);
 
     // Oracle: `set -e; g() { false; echo in-g; }; g | cat; echo end` prints only `end`: a function stage inherits -e too,
     // so g ends at false. The stage lifts the pipeline's suppression around the call, and the body's errexit check

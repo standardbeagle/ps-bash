@@ -310,6 +310,23 @@ public sealed class VarFrameStack
     // turns a $null passed to a string parameter into "", and an unset name must stay null.
     public static void EnterFunction() => Current.Enter();
     public static void ExitFunction() => Current.Exit();
+
+    /// <summary>
+    /// A bash function body starts (<c>PsBuild.FunctionPrologue</c>): a new frame, and the ERR trap put aside unless
+    /// errtrace is on (<see cref="ErrTrapInheritance"/>). Returns what was put aside, for <see cref="ExitFunction(SessionState, object)"/>.
+    /// </summary>
+    public static object? EnterFunction(SessionState session)
+    {
+        Current.Enter();
+        return ErrTrapInheritance.Hide(session);
+    }
+
+    /// <summary>The function body that <see cref="EnterFunction(SessionState)"/> started ends (<c>PsBuild.FunctionEpilogue</c>).</summary>
+    public static void ExitFunction(SessionState session, object? hiddenErrTrap)
+    {
+        Current.Exit();
+        ErrTrapInheritance.RestoreAfterFunction(session, hiddenErrTrap);
+    }
     /// <summary>The statement on <paramref name="line"/> starts (BASH_LINENO and the shell-diagnostic prefix, ShellDiagnostic, read it).</summary>
     public static void SetLine(int line) => Current.RecordLine(line);
 

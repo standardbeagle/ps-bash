@@ -240,6 +240,9 @@ public static class BashShellState
             var v = session.PSVariable.Get("global:" + GlobalNames[i]);
             globals[i] = v is null ? (false, null) : (true, CloneMutable(v.Value));
         }
+        // The body starts without the ERR trap unless errtrace is on (bash does not hand it to a subshell); Restore puts
+        // it back with the rest of the globals.
+        ErrTrapInheritance.Hide(session);
 
         HashSet<string> readonlyNow;
         lock (ReadonlyNames) readonlyNow = new HashSet<string>(ReadonlyNames, StringComparer.Ordinal);

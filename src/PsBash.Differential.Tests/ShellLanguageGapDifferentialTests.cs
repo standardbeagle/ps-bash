@@ -67,4 +67,31 @@ public class ShellLanguageGapDifferentialTests
     [SkippableFact]
     public Task ShellVariables_ExportAttribute() => Same(
         "env | grep -c '^SHLVL='; env | grep -c '^PPID='; env | grep -c '^OPTIND='");
+
+    // --- ERR trap inheritance (ErrTrapInheritance) ---------------------------------------------------
+
+    /// <summary>
+    /// A trap set inside a subshell or function fires there; <c>false || true</c> and an <c>if</c> condition never fire
+    /// it; without <c>set -E</c> a function called from a subshell does not see the subshell's trap, with it, it does.
+    /// </summary>
+    [SkippableFact]
+    public Task ErrTrap_SetInSubshellOrFunction_Fires() => Same(
+        "( trap 'echo err' ERR; false )\n"
+        + "g() { trap 'echo errg' ERR; false; echo after; }; g\ntrap - ERR\n"
+        + "( trap 'echo errx' ERR; false || true; echo nofire )\n"
+        + "( set -E; trap 'echo errE' ERR; h() { false; }; h )\n"
+        + "( trap 'echo errN' ERR; h() { false; }; h )\n"
+        + "( trap 'echo errI' ERR; if false; then :; fi; ! true; echo ok )\n"
+        + "trap 'echo top' ERR; false; trap - ERR");
+
+    /// <summary>
+    /// A function's own trap replaces the caller's after it returns (bash maybe_set_error_trap); <c>trap - ERR</c> in a
+    /// function leaves the caller's in force; a substitution sets its own.
+    /// </summary>
+    [SkippableFact]
+    public Task ErrTrap_FunctionAndSubstitutionScope() => Same(
+        "g() { trap 'echo E2' ERR; }; trap 'echo E1' ERR; g; false\n"
+        + "u() { trap - ERR; }; trap 'echo E3' ERR; u; false; trap - ERR\n"
+        + "x=$(trap 'echo E5' ERR; false); echo \"[$x]\"\n"
+        + "trap 'echo E6' ERR; y=$(false); echo \"[$y]\"; trap - ERR");
 }

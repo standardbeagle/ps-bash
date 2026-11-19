@@ -1024,7 +1024,8 @@ public static partial class PsEmitter
         int savedExempt = _errexitExemptDepth;
         // Otherwise set -e is not inherited, but under errtrace the ERR trap runs inside (`x=$( false; echo y )` traps):
         // a scoped body turns errexit off and keeps its statements' checks, so only the trap half can fire.
-        bool trapInside = !ownErrexit && _errtraceMode && scoped;
+        // So does a body that sets its own ERR trap (`x=$(trap 'echo E' ERR; false)` captures E): BodySetsErrTrap.
+        bool trapInside = !ownErrexit && scoped && (_errtraceMode || BodySetsErrTrap(body));
         // `shopt -s inherit_errexit`: the substitution keeps -e. The body gets its checks; at run time they may fire only
         // while the option is on (PsBuild.InheritErrexitCapture). A scoped body returns from its own scope when one does.
         bool inheritErrexit = !ownErrexit && !trapInside && scoped && _errexitMode && _inheritErrexitMode;
@@ -1036,7 +1037,11 @@ public static partial class PsEmitter
         // (`v=$(exit 3); echo $?` prints 3). Raise the depth so `exit` emits the scoped `return`;
         // PipelineHead / Invoke-ProcessSub supply the script block it returns from.
         _subshellDepth++;
-        bool savedErrTrapSub = PsBuild.ErrTrapNeedsErrtrace; PsBuild.ErrTrapNeedsErrtrace = true;
+        // A body that is sure to get the subshell scope (PipelineHead) has the ERR trap put aside at run time
+        // (ErrTrapInheritance), so `x=$(trap 'echo E' ERR; false)` fires its own trap; one that may run unscoped keeps
+        // the static errtrace test.
+        bool savedErrTrapSub = PsBuild.ErrTrapNeedsErrtrace;
+        PsBuild.ErrTrapNeedsErrtrace = !(scoped && !CannotChangeShellState(body));
         // No lexical loop reaches into the substitution: with one around it a `break` ends the substitution, without one
         // it warns as it would here (LoopBarrierKind).
         var capOuterLabels = _loopLabels; var capOuterBarrier = _loopBarrier;
@@ -2569,7 +2574,9 @@ public static partial class PsEmitter
             // A function is typically a FILTER (`echo x | f`): its stdin is whatever it is called with, not the
             // launcher's. Under the launcher-stdin scope its body therefore reads `$input`/the pipe as before.
             _functionDepth++;
-            bool savedErrTrap = PsBuild.ErrTrapNeedsErrtrace; PsBuild.ErrTrapNeedsErrtrace = true;
+            // The body starts without the caller's ERR trap unless errtrace is on: the runtime puts it aside on entry
+            // (PsBuild.FunctionPrologue -> ErrTrapInheritance), so a trap the body sets itself fires there.
+            bool savedErrTrap = PsBuild.ErrTrapNeedsErrtrace; PsBuild.ErrTrapNeedsErrtrace = false;
             string body;
             // The body is emitted as inside a stdin scope; one PROVEN to read no stdin (ProbeStdinScope) comes out
             // unchanged. Any other (`indent() { sed 's/^/  /'; }`, `f() { read -r x; }`, but also `f() { g; }` or
@@ -2762,7 +2769,9 @@ public static partial class PsEmitter
         _subshellDepth++;
         var outerLabels = _loopLabels; var outerBarrier = _loopBarrier;
         _loopLabels = null; _loopBarrier = LoopBarrierKind.Warn;
-        string body; bool savedErrTrapSh = PsBuild.ErrTrapNeedsErrtrace; PsBuild.ErrTrapNeedsErrtrace = true;
+        // The ERR trap is put aside at run time (BashShellState.Save -> ErrTrapInheritance): `( trap 'echo err' ERR; false )`
+        // fires the subshell's own trap, which a static errtrace test here kept from running.
+        string body; bool savedErrTrapSh = PsBuild.ErrTrapNeedsErrtrace; PsBuild.ErrTrapNeedsErrtrace = false;
         // `( … ) < file` gives the body its own stdin (a scope); otherwise it inherits the enclosing one.
         try { body = EmitCompoundBody(subshell.Redirects, () => EmitBody(subshell.Body)); }
         finally { _subshellDepth--; PsBuild.ErrTrapNeedsErrtrace = savedErrTrapSh; _loopLabels = outerLabels; _loopBarrier = outerBarrier; }

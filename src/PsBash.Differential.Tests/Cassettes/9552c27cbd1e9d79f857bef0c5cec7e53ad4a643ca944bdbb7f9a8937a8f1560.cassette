@@ -1,0 +1,20 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 219
+stdout-length: 17
+stderr-length: 0
+==== SCRIPT ====
+g() { trap 'echo E2' ERR; }; trap 'echo E1' ERR; g; false
+u() { trap - ERR; }; trap 'echo E3' ERR; u; false; trap - ERR
+x=$(trap 'echo E5' ERR; false); echo "[$x]"
+trap 'echo E6' ERR; y=$(false); echo "[$y]"; trap - ERR
+==== STDOUT ====
+E2
+E3
+[E5]
+E6
+[]
+
+==== STDERR ====
+

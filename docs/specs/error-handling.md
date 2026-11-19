@@ -388,7 +388,11 @@ state saved before and restored after (`BashShellState.Save` / `Restore`).
 `QUIT`, `PIPE`, and others.
 
 **ps-bash**: `trap` handles `EXIT`, `ERR`, `RETURN`, `DEBUG` (before each simple
-command; `DebugTrapDifferentialTests`) and signal names. A signal
+command, from the command after the `trap`, on the same line too; a script that is nothing but the `trap` is a prompt
+hook, `PsEmitter.SetsDebugTrapForOtherCommands`; `DebugTrapDifferentialTests`) and signal names. The ERR trap is not
+inherited by a function, a subshell or a `$( )` unless `set -E`: each starts with none, a trap it sets fires there,
+and a function that set one leaves it in force for its caller (bash `maybe_set_error_trap`; `Cmdlets/ErrTrapInheritance.cs`,
+entered from `VarFrameStack.EnterFunction` and `BashShellState.Save`). A signal
 trap runs when the shell is signalled (`trap 'echo got' USR1; kill -USR1
 $BASHPID` prints `got`); a signal to a ps-bash shell is delivered as a message
 to the script its host runs, not as an OS signal (`background-jobs.md`,

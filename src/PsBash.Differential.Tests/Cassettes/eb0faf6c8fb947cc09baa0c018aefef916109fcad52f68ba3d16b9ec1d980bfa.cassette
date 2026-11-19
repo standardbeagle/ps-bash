@@ -1,0 +1,28 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 345
+stdout-length: 44
+stderr-length: 0
+==== SCRIPT ====
+( trap 'echo err' ERR; false )
+g() { trap 'echo errg' ERR; false; echo after; }; g
+trap - ERR
+( trap 'echo errx' ERR; false || true; echo nofire )
+( set -E; trap 'echo errE' ERR; h() { false; }; h )
+( trap 'echo errN' ERR; h() { false; }; h )
+( trap 'echo errI' ERR; if false; then :; fi; ! true; echo ok )
+trap 'echo top' ERR; false; trap - ERR
+==== STDOUT ====
+err
+errg
+after
+nofire
+errE
+errE
+errN
+ok
+top
+
+==== STDERR ====
+
