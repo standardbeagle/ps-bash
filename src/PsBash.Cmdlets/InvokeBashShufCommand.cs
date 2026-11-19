@@ -1,49 +1,31 @@
 using System.Management.Automation;
+using PsBash.Cmdlets.Args;
+using PsBash.Core;
 
 namespace PsBash.Cmdlets;
 
 /// <summary>
-/// Binary cmdlet replacement for the psm1 <c>Invoke-BashShuf</c> function
-/// (REFACTOR-2 follow-on). Random shuffle of input lines, matching GNU
-/// coreutils <c>shuf</c>.
+/// GNU coreutils <c>shuf</c>: a random permutation of its input lines.
 ///
-/// Three input modes, matching the psm1 oracle byte-for-byte:
+/// Input is one of:
 /// <list type="bullet">
-/// <item><b>Echo mode</b> (<c>-e</c>): treat the args after <c>-e</c> as
-/// input items, not file paths. A subsequent <c>-</c>-prefixed token ends
-/// the item run; the run resumes when another <c>-e</c> is seen.</item>
-/// <item><b>Range mode</b> (<c>-i LO-HI</c>): items are the integers
-/// <c>LO..HI</c> rendered as strings.</item>
-/// <item><b>File / pipeline mode</b> (default): the first positional
-/// operand is read as a file path; if there are no operands and the
-/// pipeline has data, items come from pipeline <c>BashText</c>.</item>
+/// <item><b>Echo mode</b> (<c>-e</c>): every operand is an input line.</item>
+/// <item><b>Range mode</b> (<c>-i LO-HI</c>): the integers <c>LO..HI</c> (<c>HI = LO-1</c> is empty).</item>
+/// <item><b>File / pipeline</b> (default): the one FILE operand, or stdin when there is none or it is <c>-</c>.</item>
 /// </list>
+/// <c>-n COUNT</c> caps the output (the smallest of several wins, as in GNU); <c>-r</c> picks with replacement
+/// (<c>COUNT</c> lines, or until the reader stops); <c>-o FILE</c> writes the output there after all input is read
+/// (<c>shuf -o f f</c> works).
 ///
-/// <c>-n N</c> caps the output to the first N items after shuffle.
+/// ARGV: the shared ordered parser (<see cref="ShufSpec"/>), so options after <c>-e</c> are options
+/// (<c>shuf -r -n 2 -e a</c> prints two lines). REGRESSION: a hand scan took everything after <c>-e</c> up to the
+/// next dash as a line and ignored <c>-r</c> / <c>-o</c>; <c>-o</c> failed in the binder as ambiguous
+/// (<c>-OutVariable</c> / <c>-OutBuffer</c>). The transpiler passes every word quoted
+/// (<c>PsEmitter.OrderedArgCommands</c>); the decoys below exist for DIRECT calls only and are put back in front
+/// of the arguments. They are single letters so no other bash flag prefix-matches them (<c>-r</c> once bound a
+/// parameter named <c>Range</c>).
 ///
-/// Output: each item is emitted via <see cref="BashRuntime.NewBashObject(string)"/>
-/// as a default <c>PsBash.TextOutput</c> bare string — exact match for the
-/// oracle's <c>Emit-BashLine -Text $item</c> output shape (since each item
-/// is a single line, <c>Emit-BashLine</c> and <c>NewBashObject</c> produce
-/// the same observable result).
-///
-/// Flag binding:
-/// <list type="bullet">
-/// <item><c>-e</c> (echo) is declared as an explicit <see cref="SwitchParameter"/>
-/// — bare <c>-e</c> prefix-collides with PowerShell's
-/// <c>-ErrorAction</c> / <c>-ErrorVariable</c> common parameters under
-/// <see cref="PSCmdlet"/> binding. An exact param-name match beats the
-/// common-parameter prefix match, so the declaration is salvageable here
-/// (unlike <c>echo</c>, which has two colliding flags).</item>
-/// <item><c>-i</c>, <c>-n</c>, and <c>--head-count=N</c> are value flags
-/// with no PowerShell common-parameter prefix collision and stay in
-/// <see cref="Arguments"/>; they are parsed by a manual scan.</item>
-/// </list>
-///
-/// Shuffle determinism: like the psm1 oracle, the cmdlet uses
-/// <see cref="Random"/> with no fixed seed, so the per-run permutation is
-/// non-deterministic. Tests assert that the output is a permutation of the
-/// input (multiset equality), never an exact ordering.
+/// Shuffle determinism: <see cref="Random"/> with no fixed seed; tests assert permutations, never an order.
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashShuf")]
 [OutputType(typeof(string))]
@@ -52,29 +34,43 @@ public sealed class InvokeBashShufCommand : PSCmdlet
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
-    /// <summary>
-    /// Echo mode: treat args as input items, not file paths. Declared as a
-    /// switch because bare <c>-e</c> prefix-collides with
-    /// <c>-ErrorAction</c> / <c>-ErrorVariable</c> under
-    /// <see cref="PSCmdlet"/> parameter binding.
-    /// </summary>
+    /// <summary>Decoy for a direct <c>-e</c> (bare <c>-e</c> prefix-collides with <c>-ErrorAction</c>).</summary>
     [Parameter]
-    [Alias("e")]
-    public SwitchParameter EchoMode { get; set; }
+    public SwitchParameter e { get; set; }
 
-    /// <summary>
-    /// Range mode: input is the integers LO..HI rendered as strings.
-    /// Declared as an explicit string parameter because bare <c>-i</c>
-    /// prefix-collides with PowerShell common parameters
-    /// <c>-InformationAction</c> / <c>-InformationVariable</c> /
-    /// <c>-InputObject</c> under <see cref="PSCmdlet"/> binding.
-    /// </summary>
+    /// <summary>Decoy for a direct <c>-i LO-HI</c> (bare <c>-i</c> prefix-collides with <c>-InformationAction</c>).</summary>
     [Parameter]
-    [Alias("i")]
-    public string? Range { get; set; }
+    public string? i { get; set; }
+
+    /// <summary>Decoy for a direct <c>-o FILE</c> (bare <c>-o</c> prefix-collides with <c>-OutVariable</c>).</summary>
+    [Parameter]
+    public string? o { get; set; }
 
     [Parameter(ValueFromPipeline = true)]
     public PSObject? InputObject { get; set; }
+
+    private const string OptEcho = "echo", OptRange = "input-range", OptCount = "head-count",
+        OptOutput = "output", OptRepeat = "repeat";
+
+    // (A string[] field on purpose: CommonParameterCollisionGuardTests enumerates cmdlets' static string sets.)
+    private static readonly string[] ShufValidButUnsupported =
+    {
+        "-z", "--zero-terminated", "--random-source",
+    };
+
+    /// <summary>shuf's whole option surface, built once for the shared ordered parser.</summary>
+    internal static readonly OptSpecSet ShufSpec = new(
+        new[]
+        {
+            new OptSpec(OptEcho, 'e', "echo"),
+            new OptSpec(OptRange, 'i', "input-range", OptKind.Value),
+            new OptSpec(OptCount, 'n', "head-count", OptKind.Value),
+            new OptSpec(OptOutput, 'o', "output", OptKind.Value),
+            new OptSpec(OptRepeat, 'r', "repeat"),
+        },
+        validButUnsupported: ShufValidButUnsupported,
+        allowAbbrev: true,
+        gnuInfoOptions: true);
 
     private readonly List<PSObject> _pipeline = new();
 
@@ -83,214 +79,86 @@ public sealed class InvokeBashShufCommand : PSCmdlet
 
     protected override void ProcessRecord()
     {
-        if (_lines.Feed(InputObject) is { } record) { InputObject = record; ProcessInputRecord(); }
-    }
-
-    private void ProcessInputRecord()
-    {
-        if (InputObject != null)
-        {
-            _pipeline.Add(InputObject);
-        }
+        if (_lines.Feed(InputObject) is { } record) _pipeline.Add(record);
     }
 
     protected override void EndProcessing()
     {
-        if (_lines.Flush() is { } last) { InputObject = last; ProcessInputRecord(); }
-        var rawArgs = Arguments ?? Array.Empty<string>();
+        if (_lines.Flush() is { } last) _pipeline.Add(last);
+
+        var args = BashRuntime.PrependDecoys(Arguments, (e.IsPresent, "-e"));
+        if (i is not null) args = Prepend(args, "-i", i);
+        if (o is not null) args = Prepend(args, "-o", o);
 
         FileSystemHelpers.SetLastExitCode(this, 0);
-        if (FileSystemHelpers.TryHandleVersion(this, "shuf", rawArgs)) return;
-        if (Array.IndexOf(rawArgs, "--help") >= 0)
+        var parsed = ArgParser.Parse(args, ShufSpec);
+        if (FileSystemHelpers.TryWriteParseError(this, "shuf", parsed)) return;
+        if (FileSystemHelpers.TryHandleInfoOptions(this, "shuf", parsed)) return;
+
+        bool echo = parsed.Has(OptEcho);
+        bool repeat = parsed.Has(OptRepeat);
+        string? output = parsed.Last(OptOutput)?.Value;
+        int ranges = 0;
+        foreach (var _ in parsed.All(OptRange)) ranges++;
+        if (ranges > 1) { Fail("shuf: multiple -i options specified", hint: true); return; }
+        if (echo && ranges == 1) { Fail("shuf: cannot combine -e and -i options", hint: true); return; }
+
+        long? count = null;
+        foreach (var t in parsed.All(OptCount))
         {
-            foreach (var line in InvokeCommand.InvokeScript(
-                         "param($n) Show-BashHelp $n", "shuf"))
+            if (!long.TryParse(t.Value, System.Globalization.NumberStyles.None,
+                    System.Globalization.CultureInfo.InvariantCulture, out var n))
             {
-                WriteObject(line);
+                Fail($"shuf: invalid line count: {GnuQuote.Locale(t.Value ?? "")}", hint: false);
+                return;
             }
-            return;
+            count = count is { } prev ? Math.Min(prev, n) : n;
         }
 
-        // First pass — same shape as the psm1 oracle's switch loop. Parses
-        // -n N (and --head-count=N), -i LO-HI, picks up the first non-flag
-        // operand as inputFile. Also flips echoMode on if -e is seen here
-        // (covers callers that pass `-e` literally instead of binding the
-        // SwitchParameter).
-        int? count = null;
-        string? inputFile = null;
-        bool echoMode = EchoMode.IsPresent;
-        int? rangeStart = null;
-        int? rangeEnd = null;
-
-        // If the binder consumed `-i LO-HI` into `Range`, parse it now.
-        if (!string.IsNullOrEmpty(Range))
-        {
-            int dash = Range.IndexOf('-');
-            if (dash > 0
-                && int.TryParse(Range.Substring(0, dash), out var lo0)
-                && int.TryParse(Range.Substring(dash + 1), out var hi0))
-            {
-                rangeStart = lo0;
-                rangeEnd = hi0;
-            }
-        }
-
-        int i = 0;
-        while (i < rawArgs.Length)
-        {
-            var a = rawArgs[i];
-            if (a == "-n")
-            {
-                i++;
-                if (i < rawArgs.Length && int.TryParse(rawArgs[i], out var n))
-                {
-                    count = n;
-                }
-            }
-            else if (a == "-e")
-            {
-                echoMode = true;
-            }
-            else if (a == "-i")
-            {
-                i++;
-                if (i < rawArgs.Length)
-                {
-                    var rangePart = rawArgs[i];
-                    int dashIdx = rangePart.IndexOf('-');
-                    if (dashIdx > 0
-                        && int.TryParse(rangePart.Substring(0, dashIdx), out var lo)
-                        && int.TryParse(rangePart.Substring(dashIdx + 1), out var hi))
-                    {
-                        rangeStart = lo;
-                        rangeEnd = hi;
-                    }
-                }
-            }
-            else if (a.StartsWith("--head-count="))
-            {
-                if (int.TryParse(a.Substring("--head-count=".Length), out var n))
-                {
-                    count = n;
-                }
-            }
-            else
-            {
-                if (a.StartsWith("-") && a != "-")
-                {
-                    // Unknown flag — oracle silently ignores via switch
-                    // default fall-through (it does fail the StartsWith('-')
-                    // path but then writes an error & returns). To match the
-                    // oracle byte-for-byte we emit a bash-style error and
-                    // exit early.
-                    FileSystemHelpers.WriteBashError(this, $"shuf: invalid option '{a}'");
-                    FileSystemHelpers.SetLastExitCode(this, 1);
-                    return;
-                }
-                if (inputFile == null && a != "-")
-                {
-                    inputFile = a;
-                }
-            }
-            i++;
-        }
-
+        var operands = parsed.Operands();
         var items = new List<string>();
         // Pipeline mode only: the upstream record behind each item (null = split piece or
         // non-pipeline source). shuf is a FILTER — each output line is one of its input lines.
         var origins = new List<object?>();
 
-        if (echoMode)
+        if (echo)
         {
-            // Echo-mode item collection.
-            //
-            // Two binding cases to cover:
-            //   (a) PowerShell parameter binding consumed `-e` into the
-            //       `EchoMode` switch — `rawArgs` contains only the item
-            //       tokens (plus any `-n N` / `-i ...` / `--head-count=` that
-            //       was already handled in the first pass).
-            //   (b) The caller passed `-e` literally inside `Arguments`
-            //       (e.g. through `ValueFromRemainingArguments` collection
-            //       — happens when the transpiler emits a string that
-            //       contains a `-e` after a positional that already bound).
-            //
-            // The unified scan handles both: walk `rawArgs`; when we hit
-            // `-e` advance past it and start collecting; when we hit
-            // any other `-`-prefixed token, skip it AND its value (for
-            // value-bearing flags we know about); otherwise the token is
-            // an item iff EchoMode is bound — case (a).
-            int j = 0;
-            bool seenLiteralE = Array.IndexOf(rawArgs, "-e") >= 0;
-            while (j < rawArgs.Length)
-            {
-                var t = rawArgs[j];
-                if (t == "-e")
-                {
-                    j++;
-                    while (j < rawArgs.Length && !rawArgs[j].StartsWith("-"))
-                    {
-                        items.Add(rawArgs[j]);
-                        j++;
-                    }
-                    continue;
-                }
-                if (t == "-n" || t == "-i")
-                {
-                    // Skip the value-flag and its argument; the first pass
-                    // already extracted them.
-                    j += 2;
-                    continue;
-                }
-                if (t.StartsWith("--head-count="))
-                {
-                    j++;
-                    continue;
-                }
-                if (t.StartsWith("-"))
-                {
-                    // Other `-`-prefixed token — skip.
-                    j++;
-                    continue;
-                }
-                // Positional token. In case (a) — EchoMode bound by
-                // PowerShell, no literal `-e` in args — every positional is
-                // an item. In case (b), positionals outside a `-e ... -`
-                // run are NOT items (oracle parity).
-                if (!seenLiteralE)
-                {
-                    items.Add(t);
-                }
-                j++;
-            }
+            items.AddRange(operands);
         }
-        else if (rangeStart.HasValue && rangeEnd.HasValue)
+        else if (parsed.Last(OptRange)?.Value is { } range)
         {
-            for (int n = rangeStart.Value; n <= rangeEnd.Value; n++)
+            if (operands.Count > 0) { FileSystemHelpers.WriteExtraOperand(this, "shuf", operands[0]); return; }
+            if (!TryParseRange(range, out long lo, out long hi))
             {
-                items.Add(n.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                Fail($"shuf: invalid input range: {GnuQuote.Locale(range)}", hint: false);
+                return;
             }
+            for (long n = lo; n <= hi; n++) items.Add(n.ToString(System.Globalization.CultureInfo.InvariantCulture));
         }
-        else if (inputFile != null)
+        else if (operands.Count > 1)
         {
+            FileSystemHelpers.WriteExtraOperand(this, "shuf", operands[1]);
+            return;
+        }
+        else if (operands.Count == 1 && operands[0] != "-")
+        {
+            string inputFile = operands[0];
             foreach (var filePath in FileSystemHelpers.ResolveOperandPaths(this, inputFile))
             {
                 try
                 {
-                    foreach (var line in BashFileSystem.ReadLines(filePath))
-                    {
-                        items.Add(line);
-                    }
+                    foreach (var line in BashFileSystem.ReadLines(filePath)) items.Add(line);
                 }
                 catch (Exception ex) when (!FileSystemHelpers.IsPipelineStop(ex))
                 {
-                    // GNU: `shuf: NAME: No such file or directory`, status 1, nothing shuffled (was silent, 0).
+                    // GNU: `shuf: NAME: No such file or directory`, status 1, nothing shuffled.
                     FileSystemHelpers.WriteBashError(this,
                         $"shuf: {GnuQuote.IfNeeded(inputFile)}: {FileSystemHelpers.ReadErrorMessage(ex, filePath)}");
                     return;
                 }
             }
         }
-        else if (_pipeline.Count > 0)
+        else
         {
             foreach (var obj in _pipeline)
             {
@@ -313,26 +181,88 @@ public sealed class InvokeBashShufCommand : PSCmdlet
         }
         while (origins.Count < items.Count) origins.Add(null);
 
-        // Shuffle: Fisher-Yates with System.Random (no seed, matching the
-        // oracle's `[System.Random]::new()`).
-        var rng = new Random();
-        for (int k = items.Count - 1; k > 0; k--)
+        if (repeat && items.Count == 0 && count != 0)
         {
-            int swap = rng.Next(k + 1);
-            (items[k], items[swap]) = (items[swap], items[k]);
-            (origins[k], origins[swap]) = (origins[swap], origins[k]);
+            Fail("shuf: no lines to repeat", hint: false);
+            return;
         }
 
-        int emitCount = count.HasValue && count.Value < items.Count
-            ? Math.Max(0, count.Value)
-            : items.Count;
-
-        for (int k = 0; k < emitCount; k++)
+        RedirectFileWriter? sink = null;
+        if (output is not null)
         {
-            // shuf terminates every output line, so a stale missing-newline flag is stripped.
-            WriteObject(origins[k] is { } origin
-                ? BashRuntime.PassTerminated(origin)
-                : BashRuntime.NewBashObject(items[k]));
+            try { sink = RedirectFileWriter.OpenFile(FileSystemHelpers.ProviderPath(this, output), append: false, this); }
+            catch (Exception ex) when (!FileSystemHelpers.IsPipelineStop(ex))
+            {
+                Fail($"shuf: {GnuQuote.IfNeeded(output)}: {FileSystemHelpers.ReadErrorMessage(ex)}", hint: false);
+                return;
+            }
         }
+
+        try
+        {
+            var rng = new Random();
+            if (repeat)
+            {
+                // With replacement: COUNT picks, or until the reader stops (`shuf -r -e a | head -3`).
+                for (long k = 0; (count is null || k < count) && !Stopping; k++)
+                {
+                    int pick = rng.Next(items.Count);
+                    Emit(sink, items[pick], origins[pick]);
+                }
+                return;
+            }
+
+            // Fisher-Yates.
+            for (int k = items.Count - 1; k > 0; k--)
+            {
+                int swap = rng.Next(k + 1);
+                (items[k], items[swap]) = (items[swap], items[k]);
+                (origins[k], origins[swap]) = (origins[swap], origins[k]);
+            }
+            long emitCount = count is { } c && c < items.Count ? c : items.Count;
+            for (int k = 0; k < emitCount; k++) Emit(sink, items[k], origins[k]);
+        }
+        finally
+        {
+            sink?.Dispose();
+        }
+    }
+
+    private void Emit(RedirectFileWriter? sink, string item, object? origin)
+    {
+        if (sink is not null)
+        {
+            sink.Write(RawBytes.GetBytes(item + "\n"));
+            return;
+        }
+        // shuf terminates every output line, so a stale missing-newline flag is stripped.
+        WriteObject(origin is not null ? BashRuntime.PassTerminated(origin) : BashRuntime.NewBashObject(item));
+    }
+
+    private void Fail(string message, bool hint)
+    {
+        if (hint && FileSystemHelpers.UsageHint("shuf") is { } h) message += "\n" + h;
+        FileSystemHelpers.WriteBashError(this, message);
+        FileSystemHelpers.SetLastExitCode(this, 1);
+    }
+
+    private static string[] Prepend(string[] args, string flag, string value)
+    {
+        var list = new List<string>(args.Length + 2) { flag, value };
+        list.AddRange(args);
+        return list.ToArray();
+    }
+
+    /// <summary>GNU's <c>-i LO-HI</c>: two unsigned numbers, <c>HI</c> at least <c>LO-1</c>. Pure.</summary>
+    internal static bool TryParseRange(string range, out long lo, out long hi)
+    {
+        lo = hi = 0;
+        int dash = range.IndexOf('-');
+        if (dash <= 0) return false;
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        const System.Globalization.NumberStyles digits = System.Globalization.NumberStyles.None;
+        return long.TryParse(range.AsSpan(0, dash), digits, inv, out lo)
+            && long.TryParse(range.AsSpan(dash + 1), digits, inv, out hi)
+            && hi >= lo - 1;
     }
 }

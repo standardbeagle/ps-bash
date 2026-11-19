@@ -110,4 +110,36 @@ public class DirectCallBinderTests : IDisposable, IClassFixture<SharedPwshFixtur
         var r = InTmp("Invoke-BashMv -v s d").AssertSuccess();
         Assert.Equal("renamed 's' -> 'd'", r.Stdout.Trim());
     }
+
+    // shuf -o / -e / -i, ping -W, traceroute -w, id -a: decoys put the colliding letters back. REGRESSION: "parameter
+    // name 'o' is ambiguous" (shuf -o, ping -W, traceroute -w) and id -a bound -Arguments.
+    [Fact]
+    public void Shuf_DashO_DashE_Direct_WritesTheFile()
+    {
+        InTmp("Invoke-BashShuf -o out -e a").AssertSuccess();
+        Assert.Equal("a\n", File.ReadAllText(P("out")));
+    }
+
+    [Fact]
+    public void Shuf_DashI_DashN_DashR_Direct()
+    {
+        var r = InTmp("Invoke-BashShuf -r -n 3 -i 7-7").AssertSuccess();
+        Assert.Equal(new[] { "7", "7", "7" }, r.Stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(l => l.Trim()).ToArray());
+    }
+
+    [Fact]
+    public void Ping_DashW_Direct_ReachesTheParser()
+        => InTmp("Invoke-BashPing -W 1").AssertFailed(1, "ping: usage error: Destination address required");
+
+    [Fact]
+    public void Traceroute_DashW_Direct_ReachesTheParser()
+        => InTmp("Invoke-BashTraceroute -w 1").AssertFailed(1, "traceroute: usage error: Destination address required");
+
+    [SkippableFact]
+    public void Id_DashA_Direct_IsAccepted()
+    {
+        Skip.IfNot(OperatingSystem.IsWindows(), "the Unix path hands argv to the system id");
+        var r = InTmp("Invoke-BashId -a").AssertSuccess();
+        Assert.StartsWith("uid=", r.Stdout.Trim());
+    }
 }

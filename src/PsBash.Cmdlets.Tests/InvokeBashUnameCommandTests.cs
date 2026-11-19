@@ -139,44 +139,52 @@ public class InvokeBashUnameCommandTests : IClassFixture<SharedPwshFixture>
         Assert.Contains(lines, l => l.Contains("uname", System.StringComparison.OrdinalIgnoreCase));
     }
 
-    [SkippableFact]
-    public void Uname_UnknownFlag_IsIgnoredAndDefaultsToKernelName()
+    // GNU: an unknown option or an operand is a usage error (status 1, hint line), never silently dropped.
+    // REGRESSION: `uname -x` printed the kernel name with status 0.
+    [Theory]
+    [InlineData("Invoke-BashUname -x", "uname: invalid option -- 'x'")]
+    [InlineData("Invoke-BashUname foo", "uname: extra operand")]
+    [InlineData("Invoke-BashUname '-s;rm'", "uname: invalid option -- ';'")]
+    public void Uname_UsageError_IsReportedWithStatus1(string script, string error)
     {
-        // Oracle silently drops unknown flags and falls through to default -s.
-        var lines = RunLines("Invoke-BashUname -x");
-        Assert.Equal(new[] { ExpectedSysName() }, lines);
+        var r = CmdResult.Run(_fixture.AcquireFresh(), script).AssertFailed(1, error, "Try 'uname --help'");
+        Assert.Equal("", r.Stdout.Trim());
     }
 
     // ---- injection probe (Directive 12) ----
 
-    [SkippableFact]
-    public void Uname_ExtraArgWithScriptblockChars_IsIgnoredNotExecuted()
+    [Fact]
+    public void Uname_ArgWithScriptblockChars_IsAnOperandNotExecuted()
     {
-        // Adversarial positional arg containing PS scriptblock + $() chars.
-        // The cmdlet must not evaluate it as code — token is not a recognized
-        // flag bundle, so the loop drops it and the default -s output is emitted.
-        var lines = RunLines("Invoke-BashUname '$(throw \"pwn\")'");
-        Assert.Equal(new[] { ExpectedSysName() }, lines);
-        Assert.DoesNotContain(lines, l => l.Contains("pwn"));
+        var r = CmdResult.Run(_fixture.AcquireFresh(), "Invoke-BashUname '$(throw \"pwn\")'").AssertFailed(1, "uname: extra operand");
+        Assert.DoesNotContain("pwn\"", r.Stdout);
     }
 
-    [SkippableFact]
-    public void Uname_InjectionInBundledLookalike_IsIgnored()
+    // DIRECT calls (Pester / module users): -o -p -i collide ambiguously with common parameters and -v is -Verbose;
+    // the decoys put them back. REGRESSION: "Parameter cannot be processed because the parameter name 'o' is
+    // ambiguous", and -v was ignored.
+    [Theory]
+    [InlineData("-o", "Msys", "GNU/Linux")]
+    [InlineData("-p", "unknown", null)]
+    [InlineData("-i", "unknown", null)]
+    [InlineData("-s -o", null, null)]
+    [InlineData("-v", null, null)]
+    public void Uname_CollidingFlag_DirectInvocation_Works(string flags, string? windows, string? linux)
     {
-        // A dash-prefixed token that contains forbidden chars must not be
-        // treated as a flag bundle (the IsShortFlagBundle predicate rejects it)
-        // and must not be evaluated. Output stays at the -s default.
-        var lines = RunLines("Invoke-BashUname '-s;rm'");
-        Assert.Equal(new[] { ExpectedSysName() }, lines);
+        var r = CmdResult.Run(_fixture.AcquireFresh(), $"Invoke-BashUname {flags}").AssertSuccess();
+        var line = r.Stdout.Trim();
+        Assert.NotEqual("", line);
+        if (OperatingSystem.IsWindows() && windows is not null) Assert.Equal(windows, line);
+        if (OperatingSystem.IsLinux() && linux is not null) Assert.Equal(linux, line);
+        if (flags == "-s -o") Assert.True(line.Split(' ').Length >= 2, line); // both fields, -s first
     }
-
     // ---- host kernel (Linux / macOS) ----
 
     private static readonly PsBash.Core.Platform.KernelIdentity.Uts Box =
         new("Linux", "box", "6.8.0-45-generic", "#45-Ubuntu SMP", "x86_64");
 
     // coreutils order s n r v m p i o; -a = all on Linux (p / i = machine: Debian/Ubuntu/Fedora builds), BSD's five
-    // on macOS; no field = -s; an unknown option prints nothing.
+    // on macOS; no field = -s; a usage error is null (the cmdlet reports it).
     [Theory]
     [InlineData(false, "", "Linux")]
     [InlineData(false, "-s", "Linux")]
@@ -187,6 +195,9 @@ public class InvokeBashUnameCommandTests : IClassFixture<SharedPwshFixture>
     [InlineData(false, "--kernel-release --machine", "6.8.0-45-generic x86_64")]
     [InlineData(true, "-a", "Linux box 6.8.0-45-generic #45-Ubuntu SMP x86_64")]
     [InlineData(false, "-x", null)]
+    [InlineData(false, "extra", null)]
+    [InlineData(false, "-v -s", "Linux #45-Ubuntu SMP")]
+    [InlineData(false, "--operating", "GNU/Linux")]
     public void FormatHost_IsCoreutilsUname(bool darwin, string args, string? expected)
         => Assert.Equal(expected, InvokeBashUnameCommand.FormatHost(Box, darwin,
             args.Split(' ', StringSplitOptions.RemoveEmptyEntries)));

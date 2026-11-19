@@ -147,6 +147,21 @@ public class RuntimeCommandParityDifferentialTests
         => Eq("tr; echo rc=$?; echo ab | tr a; echo rc=$?; echo ab | tr -ds a; echo rc=$?; echo ab | tr -d a b; echo rc=$?; "
             + "echo ab | tr a b c; echo rc=$?; echo ab | tr -s a b c; echo rc=$?; echo aab | tr -s a; echo ab | tr -d a; echo ab | tr -s a b");
 
+    // shuf / uname / id / ping — class: a hand argv scan (options after -e were lines, -un a user name, unknown
+    // options ignored, -o / -W / -p / -i crashing the binder). Primitive: ArgParser + PsEmitter.OrderedArgCommands.
+    [SkippableFact]
+    public Task Shuf_OptionsAnywhere_RepeatOutputAndErrors()
+        => Eq("cd \"$(mktemp -d)\"; shuf -r -n 2 -e a; shuf -n 2 -o out -e x y; sort out; shuf -e a -i 1-2; echo rc=$?; "
+            + "shuf a b; echo rc=$?; shuf -i 5-1; echo rc=$?; shuf -i 3-3; shuf -i 2-1; echo rc=$?; shuf -n x -e a; echo rc=$?; "
+            + "shuf -r -e a | head -3; shuf -n 1 -n 3 -e a b c d | wc -l; shuf -r -n 2 < /dev/null; echo rc=$?; shuf -i 1-3 extra; echo rc=$?");
+
+    [SkippableFact]
+    public Task Uname_Id_Ping_ParseLikeGnu()
+        => Eq("uname -x; echo rc=$?; uname foo; echo rc=$?; for o in -o -p -i -v '-s -o' --operating-system; do uname $o > /dev/null; echo \"$o rc=$?\"; done; "
+            + "[ \"$(id -un)\" = \"$(id -u -n)\" ] && echo same; [ \"$(id -gn)\" = \"$(id --group --name)\" ] && echo same; "
+            + "id -n; echo rc=$?; id -ug; echo rc=$?; id -x; echo rc=$?; "
+            + "ping -W 1 -c x 127.0.0.1; echo rc=$?; ping; echo rc=$?; ping -z > /dev/null 2>&1; echo rc=$?");
+
     // tee -i / -p — class: GNU options refused as unsupported. Now accepted (FsState: the file is written).
     [SkippableFact]
     public Task Tee_IgnoreInterruptsAndOutputError_AreAccepted()

@@ -26,6 +26,13 @@ public sealed class InvokeBashTracerouteCommand : PSCmdlet
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
+    /// <summary>
+    /// Decoy for a DIRECT <c>-w SECS</c> / <c>-W SECS</c>: bare, both are ambiguous (<c>-WarningAction</c> /
+    /// <c>-WarningVariable</c>) and failed in the binder. The transpiler passes every word quoted
+    /// (<c>PsEmitter.OrderedArgCommands</c>); this exists for direct calls and is put back in front of the arguments.
+    /// </summary>
+    [Parameter] public string? W { get; set; }
+
     // First "<n> ms" / "<n.n> ms" round-trip time on a hop line.
     private static readonly Regex s_latency = new(@"([0-9]+(?:\.[0-9]+)?)\s*ms", RegexOptions.Compiled);
     private static readonly Regex s_hopNum = new(@"^\s*(\d+)", RegexOptions.Compiled);
@@ -33,6 +40,12 @@ public sealed class InvokeBashTracerouteCommand : PSCmdlet
     protected override void ProcessRecord()
     {
         var args = Arguments ?? Array.Empty<string>();
+        if (W is not null)
+        {
+            var list = new List<string>(args.Length + 2) { "-w", W };
+            list.AddRange(args);
+            args = list.ToArray();
+        }
         FileSystemHelpers.SetLastExitCode(this, 0);
         if (FileSystemHelpers.TryHandleVersion(this, "traceroute", args)) return;
         if (Array.IndexOf(args, "--help") >= 0)

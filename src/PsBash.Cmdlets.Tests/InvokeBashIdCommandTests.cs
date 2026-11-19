@@ -76,16 +76,20 @@ public class InvokeBashIdCommandTests : IClassFixture<SharedPwshFixture>
         Assert.NotEmpty(line);
     }
 
+    // -n / -r alone (no -u/-g/-G) is GNU's usage error on every platform (oracle: `id -n` → rc 1). REGRESSION: the
+    // Windows path printed the default form.
+    [Theory]
+    [InlineData("-n")]
+    [InlineData("-r")]
+    [InlineData("-nr")]
+    public void Id_NameOrRealAlone_IsAUsageError(string flag)
+        => CmdResult.Run(_fixture.AcquireFresh(), $"Invoke-BashId '{flag}'")
+            .AssertFailed(1, "id: cannot print only names or real IDs in default format");
+
     [Fact]
-    public void Id_FlagN_DefaultFormStillHasUidGid()
-    {
-        // -n alone (no -u/-g/-G) still yields the default form per the oracle
-        // on Windows. On Linux /usr/bin/id -n alone is an error; gate Windows.
-        if (!IsWindows()) return;
-        var lines = RunLines("Invoke-BashId -n");
-        Assert.Single(lines);
-        Assert.Contains("uid=", lines[0]);
-    }
+    public void Id_TwoChoices_IsAUsageError()
+        => CmdResult.Run(_fixture.AcquireFresh(), "Invoke-BashId '-ug'")
+            .AssertFailed(1, "id: cannot print \"only\" of more than one choice");
 
     [Fact]
     public void Id_FlagUN_ReturnsUsernameOnWindows()
@@ -128,15 +132,10 @@ public class InvokeBashIdCommandTests : IClassFixture<SharedPwshFixture>
     }
 
     [Fact]
-    public void Id_FlagR_AcceptedAndDoesNotChangeOutput()
+    public void Id_FlagUR_IsTheUid()
     {
-        // -r is accepted by the oracle without altering output on Windows.
-        // On Linux /usr/bin/id -r alone is an error and emits empty stdout —
-        // gate Windows-only.
-        if (!IsWindows()) return;
-        var lines = RunLines("Invoke-BashId -r");
-        Assert.Single(lines);
-        Assert.Contains("uid=", lines[0]);
+        var r = CmdResult.Run(_fixture.AcquireFresh(), "Invoke-BashId '-ur'").AssertSuccess();
+        Assert.Equal(CmdResult.Run(_fixture.AcquireFresh(), "Invoke-BashId '-u'").AssertSuccess().Stdout.Trim(), r.Stdout.Trim());
     }
 
     // ---- injection probe (Directive 12) ----

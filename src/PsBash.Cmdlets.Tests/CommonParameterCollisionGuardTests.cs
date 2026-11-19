@@ -136,6 +136,13 @@ public class CommonParameterCollisionGuardTests
             ["sha256sum"] = new(CollidingLetters),
             ["readlink"] = new(CollidingLetters),
             ["realpath"] = new(CollidingLetters),
+            // ping -W / uname -o -p -i -v / shuf -o / traceroute -w / id: ambiguous binder prefixes before they joined the
+            // ordered set (REGRESSION: "parameter name 'W' is ambiguous"); decoys W / o p i v a / e i o / W / a for direct calls.
+            ["ping"] = new(CollidingLetters),
+            ["uname"] = new(CollidingLetters),
+            ["shuf"] = new(CollidingLetters),
+            ["traceroute"] = new(CollidingLetters),
+            ["id"] = new(CollidingLetters),
         };
 
     [Fact]
@@ -155,10 +162,10 @@ public class CommonParameterCollisionGuardTests
             }
 
             var command = cmdletAttr.NounName.Substring(4).ToLowerInvariant();
-            if (!specs.TryGetValue(command, out var flags))
-            {
-                continue; // command has no documented flag spec — nothing to check
-            }
+            // The documented flags (BashFlagSpecs.json) and, below, the flags the cmdlet's own parser declares. A command
+            // with no spec entry is still checked through its OptSpecSet. REGRESSION: ping -W, uname -o/-p/-i and shuf -o
+            // were not in the spec file, so this guard never saw them while each crashed the binder.
+            specs.TryGetValue(command, out var flags);
 
             var guarded = DeclaredSingleLetterNames(type);
             EmitterForceQuoted.TryGetValue(command, out var forceQuoted);
@@ -169,8 +176,12 @@ public class CommonParameterCollisionGuardTests
             // to survive binding to reach the classifier and emit its exit-2 message.
             // Fold every single-letter -x found in a static flag-set field into the
             // checked set so the guard covers the whole binder-collision class.
-            var allFlags = new List<string>(flags);
-            allFlags.AddRange(ClassifierShortFlags(type));
+            var allFlags = new List<string>(flags ?? new List<string>());
+            // Classifier sets (unsupported / passthrough flag lists) only for documented commands. Known leftover: git
+            // (no spec entry) passes `log -p` through; scripts reach it quoted, a direct `Invoke-BashGit log -p` does not.
+            if (flags is not null) allFlags.AddRange(ClassifierShortFlags(type));
+            allFlags.AddRange(OptSpecShortFlags(type));
+            if (allFlags.Count == 0) continue; // nothing documented or declared to check
 
             foreach (var flag in allFlags)
             {
@@ -226,6 +237,22 @@ public class CommonParameterCollisionGuardTests
                 {
                     yield return entry;
                 }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Every short option (<c>-x</c>) of a cmdlet's static <see cref="PsBash.Cmdlets.Args.OptSpecSet"/> fields: the
+    /// options its shared ordered parser accepts, whether or not BashFlagSpecs.json lists them.
+    /// </summary>
+    private static IEnumerable<string> OptSpecShortFlags(Type type)
+    {
+        foreach (var field in type.GetFields(BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public))
+        {
+            if (field.GetValue(null) is not PsBash.Cmdlets.Args.OptSpecSet set) continue;
+            foreach (var spec in set.Specs)
+            {
+                if (spec.Short != '\0') yield return "-" + spec.Short;
             }
         }
     }

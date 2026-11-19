@@ -1,5 +1,6 @@
 using System.Management.Automation;
 using System.Net.NetworkInformation;
+using PsBash.Cmdlets.Args;
 
 namespace PsBash.Cmdlets;
 
@@ -19,47 +20,93 @@ public sealed class InvokeBashPingCommand : PSCmdlet
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
+    /// <summary>
+    /// Decoy for a DIRECT <c>-W SECS</c>: a bare <c>-W</c> is ambiguous (<c>-WarningAction</c> /
+    /// <c>-WarningVariable</c>). PowerShell names are case-insensitive, so a direct <c>-w</c> lands here too and is
+    /// read as <c>-W</c>; the transpiler passes every word quoted (<c>PsEmitter.OrderedArgCommands</c>) and keeps them
+    /// apart.
+    /// </summary>
+    [Parameter] public string? W { get; set; }
+
+    private const string OptCount = "count", OptTimeout = "timeout", OptContinuous = "continuous";
+
+    // iputils options ps-bash refuses (a string[] on purpose: CommonParameterCollisionGuardTests reads it).
+    private static readonly string[] PingValidButUnsupported =
+    {
+        "-w", "-i", "-s", "-q", "-4", "-6", "-I", "-l", "-p", "-D", "-O", "-a", "-f",
+    };
+
+    /// <summary>ping's option surface for the shared ordered parser: <c>-c N</c> / <c>-n N</c> (count, iputils /
+    /// Windows), <c>-W SECS</c> (reply timeout), <c>-t</c> (continuous, capped at 100 probes).</summary>
+    internal static readonly OptSpecSet PingSpec = new(
+        new[]
+        {
+            new OptSpec(OptCount, 'c', null, OptKind.Value),
+            new OptSpec(OptCount, 'n', null, OptKind.Value),
+            new OptSpec(OptTimeout, 'W', null, OptKind.Value),
+            new OptSpec(OptContinuous, 't', null),
+        },
+        validButUnsupported: PingValidButUnsupported,
+        gnuInfoOptions: true,
+        usageExitCode: 2);
+
     protected override void ProcessRecord()
     {
         var args = Arguments ?? Array.Empty<string>();
-        FileSystemHelpers.SetLastExitCode(this, 0);
-        if (FileSystemHelpers.TryHandleVersion(this, "ping", args)) return;
-        if (Array.IndexOf(args, "--help") >= 0)
+        if (W is not null)
         {
-            WriteObject(BashRuntime.NewBashObject("usage: ping [-c count] [-W timeout] HOST"));
+            var list = new List<string>(args.Length + 2) { "-W", W };
+            list.AddRange(args);
+            args = list.ToArray();
+        }
+        FileSystemHelpers.SetLastExitCode(this, 0);
+        var parsed = ArgParser.Parse(args, PingSpec);
+        if (FileSystemHelpers.TryWriteParseError(this, "ping", parsed)) return;
+        if (parsed.Has(OptSpecSet.VersionId))
+        {
+            FileSystemHelpers.TryHandleVersion(this, "ping", new[] { "--version" });
+            return;
+        }
+        if (parsed.Has(OptSpecSet.HelpId))
+        {
+            WriteObject(BashRuntime.NewBashObject("usage: ping [-c count] [-W timeout] [-t] HOST"));
             return;
         }
 
-        string? host = null;
         int count = 4;
         double timeoutSec = 4;
-
-        for (var i = 0; i < args.Length; i++)
+        // ArgParser yields options in argv order, so the last -c / -W wins as in iputils.
+        foreach (var t in parsed.Tokens)
         {
-            var a = args[i];
-            // `-c N` / `-n N` (count, GNU / Windows), `-W secs` (timeout). `-t` (continuous) caps at
-            // 100 so a non-interactive snapshot can never run unbounded.
-            if ((a == "-c" || a == "-n") && i + 1 < args.Length && int.TryParse(args[++i], out var c))
+            if (t.Kind != ArgTokKind.Option) continue;
+            switch (t.OptId)
             {
-                count = Math.Max(1, c);
-            }
-            else if (a == "-W" && i + 1 < args.Length && double.TryParse(args[++i], System.Globalization.CultureInfo.InvariantCulture, out var w))
-            {
-                timeoutSec = w;
-            }
-            else if (a == "-t")
-            {
-                count = 100;
-            }
-            else if (!a.StartsWith('-'))
-            {
-                host ??= a;
+                case OptCount:
+                    if (!int.TryParse(t.Value, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var c) || c < 1)
+                    {
+                        Fail($"ping: invalid argument: {GnuQuote.Always(t.Value ?? "")}");
+                        return;
+                    }
+                    count = c;
+                    break;
+                case OptTimeout:
+                    // iputils: a garbage -W is warned about and ignored (the default timeout stays).
+                    if (double.TryParse(t.Value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var w) && w >= 0)
+                        timeoutSec = w;
+                    else
+                        FileSystemHelpers.WriteStderr(this, $"ping: option argument contains garbage: {t.Value}\nping: this will become fatal error in the future");
+                    break;
+                case OptContinuous:
+                    count = 100;
+                    break;
             }
         }
 
+        var operands = parsed.Operands();
+        string? host = operands.Count > 0 ? operands[0] : null;
         if (string.IsNullOrEmpty(host))
         {
-            FileSystemHelpers.WriteBashError(this, "ping: usage error: Destination address required");
+            Fail("ping: usage error: Destination address required");
             return;
         }
 
@@ -109,6 +156,15 @@ public sealed class InvokeBashPingCommand : PSCmdlet
     /// Pure (unit-test seam).
     /// </summary>
     internal static int ExitStatus(int replies, bool unresolved) => unresolved ? 2 : replies > 0 ? 0 : 1;
+
+    /// <summary>iputils' argument errors (bad count, no destination): the message, status 1. An unknown option is
+    /// the parser's usage error, status 2.</summary>
+    private void Fail(string message)
+    {
+        FileSystemHelpers.WriteBashError(this, message);
+        FileSystemHelpers.SetLastExitCode(this, 1);
+    }
+
 
     private static PSObject BuildReply(string host, int seq, PingReply? reply, string? error)
     {

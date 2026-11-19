@@ -1,0 +1,38 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 393
+stdout-length: 117
+stderr-length: 384
+==== SCRIPT ====
+uname -x; echo rc=$?; uname foo; echo rc=$?; for o in -o -p -i -v '-s -o' --operating-system; do uname $o > /dev/null; echo "$o rc=$?"; done; [ "$(id -un)" = "$(id -u -n)" ] && echo same; [ "$(id -gn)" = "$(id --group --name)" ] && echo same; id -n; echo rc=$?; id -ug; echo rc=$?; id -x; echo rc=$?; ping -W 1 -c x 127.0.0.1; echo rc=$?; ping; echo rc=$?; ping -z > /dev/null 2>&1; echo rc=$?
+==== STDOUT ====
+rc=1
+rc=1
+-o rc=0
+-p rc=0
+-i rc=0
+-v rc=0
+-s -o rc=0
+--operating-system rc=0
+same
+same
+rc=1
+rc=1
+rc=1
+rc=1
+rc=1
+rc=2
+
+==== STDERR ====
+uname: invalid option -- 'x'
+Try 'uname --help' for more information.
+uname: extra operand ‘foo’
+Try 'uname --help' for more information.
+id: cannot print only names or real IDs in default format
+id: cannot print "only" of more than one choice
+id: invalid option -- 'x'
+Try 'id --help' for more information.
+ping: invalid argument: 'x'
+ping: usage error: Destination address required
+

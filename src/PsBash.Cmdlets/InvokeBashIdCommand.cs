@@ -5,6 +5,7 @@ using System.Management.Automation;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Security.Principal;
+using PsBash.Cmdlets.Args;
 
 namespace PsBash.Cmdlets;
 
@@ -25,13 +26,10 @@ namespace PsBash.Cmdlets;
 /// <c>WindowsIdentity(string)</c>. Default emits the bash-shaped
 /// <c>"uid=SID(NAME) gid=SID groups=NAME,NAME,..."</c> line.
 ///
-/// All flags (<c>-u</c>, <c>-g</c>, <c>-G</c>, <c>-n</c>, <c>-r</c>) have
-/// **no** PowerShell common-parameter prefix collision under the cmdlet
-/// binder. <c>-g</c> and <c>-G</c> are the same name to the case-insensitive
-/// binder, so neither is declared — the manual scan distinguishes them
-/// case-sensitively (preserving the oracle's <c>switch</c> case-sensitive
-/// match between <c>'-g'</c> and <c>'-G'</c>). All flags stay in
-/// <c>Arguments</c>.
+/// ARGV (Windows): the shared ordered parser (<see cref="IdSpec"/>), so bundles (<c>-un</c>) and long forms work
+/// and <c>-g</c> / <c>-G</c> stay distinct. The transpiler passes every word quoted
+/// (<c>PsEmitter.OrderedArgCommands</c>); the <c>a</c> decoy is for a DIRECT <c>-a</c>, which would otherwise
+/// prefix-match <c>-Arguments</c>.
 ///
 /// The <c>--help</c> path delegates to the psm1 <c>Show-BashHelp</c> function
 /// via parameter-bound <c>InvokeCommand.InvokeScript</c> (AOT-safe: fixed
@@ -44,9 +42,29 @@ public sealed class InvokeBashIdCommand : PSCmdlet
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
+    /// <summary>Decoy: a bare <c>-a</c> prefix-matches <c>-Arguments</c>. Put back in front of the arguments.</summary>
+    [Parameter] public SwitchParameter a { get; set; }
+
+    private const string OptUser = "user", OptGroup = "group", OptGroups = "groups", OptName = "name", OptReal = "real";
+
+    /// <summary>id's option surface on Windows (the Unix path hands argv to the system id).</summary>
+    internal static readonly OptSpecSet IdSpec = new(
+        new[]
+        {
+            new OptSpec(OptUser, 'u', "user"),
+            new OptSpec(OptGroup, 'g', "group"),
+            new OptSpec(OptGroups, 'G', "groups"),
+            new OptSpec(OptName, 'n', "name"),
+            new OptSpec(OptReal, 'r', "real"),
+            new OptSpec("ignored", 'a', null), // GNU: accepted and ignored, for compatibility
+        },
+        validButUnsupported: new[] { "-z", "--zero", "-Z", "--context" },
+        allowAbbrev: true,
+        gnuInfoOptions: true);
+
     protected override void ProcessRecord()
     {
-        var args = Arguments ?? Array.Empty<string>();
+        var args = BashRuntime.PrependDecoys(Arguments, (a.IsPresent, "-a"));
 
         FileSystemHelpers.SetLastExitCode(this, 0);
         if (FileSystemHelpers.TryHandleVersion(this, "id", args)) return;
@@ -74,24 +92,25 @@ public sealed class InvokeBashIdCommand : PSCmdlet
     [SupportedOSPlatform("windows")]
     private void RunWindowsId(string[] args)
     {
-        bool showUid = false, showGid = false, showGroups = false, showName = false;
-        string? userName = null;
-
-        // Case-sensitive walk — preserves the oracle's switch on '-g' vs '-G'.
-        foreach (var a in args)
+        // The shared ordered parser: bundles (`-un`), long forms, case-sensitive `-g` / `-G`. REGRESSION: an exact-word
+        // switch took `-un` for a user name ("id: '-un': no such user").
+        var parsed = ArgParser.Parse(args, IdSpec);
+        if (FileSystemHelpers.TryWriteParseError(this, "id", parsed)) return;
+        bool showUid = parsed.Has(OptUser), showGid = parsed.Has(OptGroup), showGroups = parsed.Has(OptGroups);
+        bool showName = parsed.Has(OptName);
+        int only = (showUid ? 1 : 0) + (showGid ? 1 : 0) + (showGroups ? 1 : 0);
+        if (only > 1)
         {
-            switch (a)
-            {
-                case "-u": showUid = true; break;
-                case "-g": showGid = true; break;
-                case "-G": showGroups = true; break;
-                case "-n": showName = true; break;
-                case "-r": /* accepted, no behavior change (oracle parity) */ break;
-                default:
-                    if (a != "--help") userName = a;
-                    break;
-            }
+            FileSystemHelpers.WriteBashError(this, "id: cannot print \"only\" of more than one choice");
+            return;
         }
+        if (only == 0 && (showName || parsed.Has(OptReal)))
+        {
+            FileSystemHelpers.WriteBashError(this, "id: cannot print only names or real IDs in default format");
+            return;
+        }
+        var operands = parsed.Operands();
+        string? userName = operands.Count > 0 ? operands[0] : null;
 
         // GNU: a NAME no account answers to is `id: ‘NAME’: no such user`, status 1. REGRESSION: it silently printed
         // the CURRENT user's identity. (An existing account WindowsIdentity cannot open — a local user without S4U
