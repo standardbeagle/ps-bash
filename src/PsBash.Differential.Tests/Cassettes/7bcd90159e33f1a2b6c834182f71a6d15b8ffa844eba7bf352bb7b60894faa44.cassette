@@ -1,0 +1,17 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 91
+stdout-length: 153
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit; seq 1 5 > g; printf 'xy' | od -c g - g - nope 2>&1; echo "st=$?"
+==== STDOUT ====
+0000000   1  \n   2  \n   3  \n   4  \n   5  \n   x   y   1  \n   2  \n
+od: nope: No such file or directory
+0000020   3  \n   4  \n   5  \n
+0000026
+st=1
+
+==== STDERR ====
+

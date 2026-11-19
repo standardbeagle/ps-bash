@@ -26,7 +26,15 @@ public class ByteFilterStreamingDifferentialTests
     [InlineData("timeout 20 bash -c 'od -v /dev/zero | head -1'; echo \"st=$?\"")]
     [InlineData("timeout 20 bash -c 'cat /dev/zero | od -v | head -1'; echo \"st=$?\"")]
     [InlineData("timeout 20 bash -c 'od -An -tx1 -N 4 /dev/zero'; echo \"st=$?\"")]
+    // A file operand before `-`: the file is dumped first, then stdin streams. REGRESSION: stdin after a file was
+    // held in memory until its turn, so an endless stdin never reached od's output.
+    [InlineData("cd \"$(mktemp -d)\" || exit; printf 'abc' > g; timeout 20 bash -c 'cat /dev/zero | od -c -v g - | head -2'; echo \"st=$?\"")]
     public Task ByteFilter_OfAnEndlessInput_EndsWhenDownstreamStops(string script) => AssertOracle.EqualAsync(script);
+
+    [SkippableTheory]
+    [InlineData("cd \"$(mktemp -d)\" || exit; seq 1 1000 > f; seq 1 5 > g; od -c f - < g | tail -3; echo x | od -c g | tail -2; od -c - g < f | head -2")]
+    [InlineData("cd \"$(mktemp -d)\" || exit; seq 1 5 > g; printf 'xy' | od -c g - g - nope 2>&1; echo \"st=$?\"")]
+    public Task Od_StdinAfterAFileOperand_KeepsOperandOrder(string script) => AssertOracle.EqualAsync(script);
 
     [SkippableTheory]
     [InlineData("cd \"$(mktemp -d)\" || exit; printf 'abcdefghijklmnopqrstuvwxyz0123456789' > g; od -c -j 3 -N 20 g; echo \"st=$?\"")]

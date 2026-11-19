@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 118
+stdout-length: 149
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit; printf 'abc' > g; timeout 20 bash -c 'cat /dev/zero | od -c -v g - | head -2'; echo "st=$?"
+==== STDOUT ====
+0000000   a   b   c  \0  \0  \0  \0  \0  \0  \0  \0  \0  \0  \0  \0  \0
+0000020  \0  \0  \0  \0  \0  \0  \0  \0  \0  \0  \0  \0  \0  \0  \0  \0
+st=0
+
+==== STDERR ====
+
