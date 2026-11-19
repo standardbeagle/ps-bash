@@ -9306,7 +9306,16 @@ public static partial class PsEmitter
     private static bool IsUnquotedSplitWord(CompoundWord word)
         => IsPureUnquotedVarWord(word) || IsUnquotedPositionalListWord(word) || IsPureUnquotedCommandSubWord(word) || IsGlobWord(word)
            || IsBraceGlobWord(word) || IsArrayValuedWord(word) || IsUnquotedDefaultAltWord(word) || IsUnquotedElementWord(word) || IsUnquotedPositionalOpWord(word)
-           || IsUnquotedPositionalAffixWord(word) || IsUnquotedVarAffixWord(word) || IsQuotedArrayAffixWord(word) || IsUnquotedQuotedAltWord(word);
+           || IsUnquotedPositionalAffixWord(word) || IsUnquotedVarAffixWord(word) || IsQuotedArrayAffixWord(word) || IsUnquotedQuotedAltWord(word)
+           || IsUnquotedPositionalSliceWord(word);
+
+    /// <summary>
+    /// Bare <c>${@:2:2}</c> / <c>${*: -1}</c>: the slice is a list of parameters, each split again like bare <c>$@</c>.
+    /// Emitted as one argument it was an array beside the other words (<c>echo ${@:2:2} ${*: -1}</c>: "Cannot convert
+    /// System.Object[] to System.String").
+    /// </summary>
+    private static bool IsUnquotedPositionalSliceWord(CompoundWord word)
+        => word.Parts is [WordPart.BracedVarSub { Name: "@" or "*", Suffix: { } s }] && IsPositionalSliceSuffix(s);
 
     /// <summary>
     /// Bare <c>${x+"$x"}</c> / <c>${x:+"--opt=$x"}</c> / <c>${a[@]+"${a[@]}"}</c>: the quoted alternative is its words when it is
@@ -9727,6 +9736,8 @@ public static partial class PsEmitter
             : IsUnquotedArrayAllWord(word)
             // ConvertTo-BashWords takes ONE string: the elements joined by a space split back apart on IFS.
             ? PsBuild.WordSplitArray("(@(" + EmitBracedVar((WordPart.BracedVarSub)word.Parts[0]) + ") -join ' ')")
+            : IsUnquotedPositionalSliceWord(word)
+            ? "@(ConvertTo-BashWords -Prefix '' -Suffix '' -Fields @(" + EmitBracedVar((WordPart.BracedVarSub)word.Parts[0]) + "))"
             : IsUnquotedPositionalListWord(word)
             // Joined with IFS[0] and split again (IFS=x, `"" ""` is one empty field); IFS='' keeps each parameter whole.
             ? "@(ConvertTo-BashWords -Prefix '' -Suffix '' -Fields @(" + PsBuild.BuildPositionalExpansion("@") + "))"

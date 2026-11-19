@@ -12,6 +12,14 @@ public class ShellLanguageGapParserTests
 {
     private static string Emit(string bash) => PsEmitter.Transpile(bash) ?? "";
 
+    // --- positional slices as unquoted words ------------------------------------------------------
+
+    [Theory]
+    [InlineData("echo ${@:2:2}")]
+    [InlineData("echo ${*: -1}")]
+    public void Transpile_UnquotedPositionalSlice_IsSplitIntoWords(string bash)
+        => Assert.Contains("ConvertTo-BashWords", Emit(bash));
+
     // --- ERR trap scope ---------------------------------------------------------------------------
 
     /// <summary>A function body hides the caller's ERR trap on entry (ErrTrapInheritance via VarFrameStack).</summary>

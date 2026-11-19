@@ -104,4 +104,14 @@ public class ShellLanguageGapDifferentialTests
         + "f() { return 3; }; f | cat; echo \"${PIPESTATUS[@]}\"\n"
         + "echo x | (exit 4); echo \"${PIPESTATUS[@]}\"\n"
         + "set -o pipefail; nosuchcmd 2>/dev/null | cat; echo \"pf=$?\"; f | cat; echo \"pf2=$?\"");
+
+    // --- Positional slices as unquoted words (PsEmitter.IsUnquotedPositionalSliceWord) ----------------
+
+    [SkippableFact]
+    public Task PositionalSlice_AllForms() => Same(
+        "set -- a b c d e\necho ${@:2:2} ${*: -1}\necho ${@:1}\necho ${@: -2}\n"
+        + "for x in \"${@:2}\"; do echo \"[$x]\"; done\n"
+        + "set -- \"a b\" c \"d e\"\nfor x in \"${@:2}\"; do echo \"<$x>\"; done\nfor x in \"${*:2}\"; do echo \"{$x}\"; done\n"
+        + "printf '(%s)' ${@:1:2}; echo\n"
+        + "f() { echo \"${@:2:1}\" \"${#@}\"; for y in \"${@: -2}\"; do echo \"f[$y]\"; done; }; f p \"q r\" s");
 }

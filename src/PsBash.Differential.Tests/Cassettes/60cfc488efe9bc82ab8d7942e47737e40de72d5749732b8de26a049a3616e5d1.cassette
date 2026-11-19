@@ -1,0 +1,35 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 325
+stdout-length: 82
+stderr-length: 0
+==== SCRIPT ====
+set -- a b c d e
+echo ${@:2:2} ${*: -1}
+echo ${@:1}
+echo ${@: -2}
+for x in "${@:2}"; do echo "[$x]"; done
+set -- "a b" c "d e"
+for x in "${@:2}"; do echo "<$x>"; done
+for x in "${*:2}"; do echo "{$x}"; done
+printf '(%s)' ${@:1:2}; echo
+f() { echo "${@:2:1}" "${#@}"; for y in "${@: -2}"; do echo "f[$y]"; done; }; f p "q r" s
+==== STDOUT ====
+b c e
+a b c d e
+d e
+[b]
+[c]
+[d]
+[e]
+<c>
+<d e>
+{c d e}
+(a)(b)(c)
+q r 3
+f[q r]
+f[s]
+
+==== STDERR ====
+
