@@ -223,7 +223,7 @@ public sealed class InvokeBashLnCommand : PSCmdlet
         }
         if (operands.Count == 0)
         {
-            FileSystemHelpers.WriteBashError(this, "ln: missing file operand" + TryHelp);
+            FileSystemHelpers.WriteMissingFileOperand(this, "ln");
             return;
         }
 
@@ -240,8 +240,7 @@ public sealed class InvokeBashLnCommand : PSCmdlet
             // ln -T TARGET LINK_NAME — LINK_NAME is never a directory to descend into.
             if (operands.Count == 1)
             {
-                FileSystemHelpers.WriteBashError(this,
-                    $"ln: missing destination file operand after '{operands[0]}'" + TryHelp);
+                FileSystemHelpers.WriteMissingFileOperand(this, "ln", operands[0]);
                 return;
             }
             if (operands.Count > 2)

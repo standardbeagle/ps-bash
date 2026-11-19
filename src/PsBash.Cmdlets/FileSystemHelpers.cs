@@ -571,9 +571,9 @@ internal static class FileSystemHelpers
     /// <c>missing operand after 'LAST'</c>), then the tool's <see cref="UsageHint"/>, status <paramref name="exitCode"/>
     /// (1 for coreutils; <c>expr</c> 2, <c>nohup</c>/<c>env</c> 125). Guard: <c>MissingOperandGuardTests</c>.
     /// </summary>
-    public static void WriteMissingOperand(PSCmdlet cmdlet, string cmd, string? after = null, int exitCode = 1)
+    public static void WriteMissingOperand(PSCmdlet cmdlet, string cmd, string? after = null, int exitCode = 1, string? why = null)
     {
-        WriteBashError(cmdlet, MissingOperandMessage(cmd, after));
+        WriteBashError(cmdlet, MissingOperandMessage(cmd, after, why));
         SetLastExitCode(cmdlet, exitCode);
     }
 
@@ -595,13 +595,41 @@ internal static class FileSystemHelpers
     }
 
     /// <summary>
+    /// The file tools' spelling of <see cref="WriteMissingOperand"/> (cp, mv, ln, install, touch): <c>CMD: missing file
+    /// operand</c>, or <c>CMD: missing destination file operand after 'SRC'</c> (the source quoted as <c>quoteaf</c>),
+    /// then the usage hint, status 1. REGRESSION: touch and install left out the hint.
+    /// </summary>
+    public static void WriteMissingFileOperand(PSCmdlet cmdlet, string cmd, string? destinationAfter = null)
+    {
+        string message = destinationAfter is null
+            ? $"{cmd}: missing file operand"
+            : $"{cmd}: missing destination file operand after {GnuQuote.Always(destinationAfter)}";
+        WriteBashError(cmdlet, UsageHint(cmd) is { } hint ? message + "\n" + hint : message);
+        SetLastExitCode(cmdlet, 1);
+    }
+
+    /// <summary>
+    /// GNU's "extra operand" usage error as the tools that call <c>quote()</c> word it: <c>CMD: extra operand ‘X’</c>,
+    /// an optional explanation line (<paramref name="why"/>: tr's "Only one string may be given ..."), the usage hint,
+    /// status 1.
+    /// </summary>
+    public static void WriteExtraOperand(PSCmdlet cmdlet, string cmd, string operand, string? why = null)
+    {
+        string message = $"{cmd}: extra operand {GnuQuote.Locale(operand)}";
+        if (why is not null) message += "\n" + why;
+        WriteBashError(cmdlet, UsageHint(cmd) is { } hint ? message + "\n" + hint : message);
+        SetLastExitCode(cmdlet, 1);
+    }
+
+    /// <summary>
     /// The text of <see cref="WriteMissingOperand"/> for a pure plan that carries its error as a string: the
     /// first line (the operand after which one is missing quoted as gnulib <c>quote()</c>,
     /// <c>chmod: missing operand after ‘755’</c>), then the usage hint.
     /// </summary>
-    public static string MissingOperandMessage(string cmd, string? after = null)
+    public static string MissingOperandMessage(string cmd, string? after = null, string? why = null)
     {
         string message = after is null ? $"{cmd}: missing operand" : $"{cmd}: missing operand after {GnuQuote.Locale(after)}";
+        if (why is not null) message += "\n" + why; // tr: "Two strings must be given when translating."
         return UsageHint(cmd) is { } hint ? message + "\n" + hint : message;
     }
 

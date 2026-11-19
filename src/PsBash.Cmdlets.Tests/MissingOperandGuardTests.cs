@@ -25,11 +25,14 @@ public class MissingOperandGuardTests
         throw new InvalidOperationException("Repo root (the dir with CLAUDE.md) not found.");
     }
 
-    // A string literal that carries the message (not a comment mentioning it).
-    private static readonly Regex Literal = new("\"[^\"]*missing operand", RegexOptions.Compiled);
+    // A string literal that carries the message (not a comment mentioning it), in either spelling: "missing operand"
+    // and the file tools' "missing file operand" / "missing destination file operand" (WriteMissingFileOperand).
+    // REGRESSION: touch and install spelled the file form themselves and left out the usage hint.
+    private static readonly Regex Literal = new("\"[^\"]*missing [a-z ]*operand", RegexOptions.Compiled);
 
     // diff is GNU diffutils: its hint is `diff: Try ...` and it names the program, not an operand, after `after`.
-    private static readonly HashSet<string> Allowed = new(StringComparer.Ordinal) { "FileSystemHelpers.cs", "DiffPlan.cs" };
+    // gzip: its "missing file operand" is not a GNU message at all (GNU gzip reads stdin); a known leftover.
+    private static readonly HashSet<string> Allowed = new(StringComparer.Ordinal) { "FileSystemHelpers.cs", "DiffPlan.cs", "InvokeBashGzipCommand.cs" };
 
     [Fact]
     public void Cmdlets_WriteMissingOperandOnlyThroughThePrimitive()

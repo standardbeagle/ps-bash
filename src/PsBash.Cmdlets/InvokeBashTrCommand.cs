@@ -89,6 +89,7 @@ public sealed class InvokeBashTrCommand : PSCmdlet
     private List<string> _operands = new();
     private bool _suppress;
     private string? _rangeErrorMsg;
+    private Action<PSCmdlet>? _operandError; // a SET count GNU rejects (missing / extra operand), reported at End
     // Deferred parse failure: an unrecognized flag found in ParseOnce.
     // Emitted in EndProcessing so ProcessRecord's early-return path stays clean.
     private string? _optionErrorToken;
@@ -104,6 +105,13 @@ public sealed class InvokeBashTrCommand : PSCmdlet
     private bool _squeezeComplement;         // -cs with one SET: squeeze what is NOT in SET1
     private HashSet<char>? _complementOriginal; // -c translate: the SET1 a wide character is tested against
     private char _complementLast;            // -c translate: SET2's last character
+
+    /// <summary>
+    /// How many SETs GNU tr takes (validate()): translating two, <c>-d</c> or <c>-s</c> alone one, <c>-ds</c> two,
+    /// <c>-s</c> one or two. The fused lane (TrStage) declines outside these so the cmdlet reports the usage error.
+    /// </summary>
+    internal static (int Min, int Max) OperandBounds(bool delete, bool squeeze)
+        => (delete == squeeze ? 2 : 1, delete && !squeeze ? 1 : 2);
 
     private void ParseOnce()
     {
@@ -167,6 +175,29 @@ public sealed class InvokeBashTrCommand : PSCmdlet
             }
 
             _operands.Add(arg);
+        }
+
+        // GNU tr's operand count (validate()): translating needs two SETs, -d or -s alone one, -ds two; anything else
+        // is a usage error before any input is read. REGRESSION: `tr`, `tr a` and `tr -d a b` copied the input, rc 0.
+        int n = _operands.Count;
+        var (min, max) = OperandBounds(_deleteMode, _squeezeMode);
+        if (n < min)
+        {
+            string? after = n == 0 ? null : _operands[n - 1];
+            string? why = n == 0 ? null : _squeezeMode
+                ? "Two strings must be given when both deleting and squeezing repeats."
+                : "Two strings must be given when translating.";
+            _operandError = c => FileSystemHelpers.WriteMissingOperand(c, "tr", after, why: why);
+            _suppress = true;
+            return;
+        }
+        if (n > max)
+        {
+            string extra = _operands[max];
+            string? why = n == 2 ? "Only one string may be given when deleting without squeezing repeats." : null;
+            _operandError = c => FileSystemHelpers.WriteExtraOperand(c, "tr", extra, why);
+            _suppress = true;
+            return;
         }
 
         // GNU warns (stderr, exit unchanged) once per SET ending in a lone backslash. Expanding each
@@ -339,6 +370,12 @@ public sealed class InvokeBashTrCommand : PSCmdlet
         if (_optionErrorToken != null)
         {
             FileSystemHelpers.WriteOptionError(this, "tr", _optionErrorToken, TrValidButUnsupported);
+            return;
+        }
+
+        if (_operandError != null)
+        {
+            _operandError(this);
             return;
         }
 

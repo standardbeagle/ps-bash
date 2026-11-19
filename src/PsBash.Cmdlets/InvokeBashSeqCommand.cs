@@ -77,6 +77,16 @@ public sealed class InvokeBashSeqCommand : PSCmdlet
         var status = SeqCore.Generate(args, w.IsPresent,
             out var values, out string? separator, out bool isInteger, out string? badIncrement);
 
+        if (status == SeqCore.Status.MissingOperand)
+        {
+            FileSystemHelpers.WriteMissingOperand(this, "seq");
+            return;
+        }
+        if (status == SeqCore.Status.ExtraOperand)
+        {
+            FileSystemHelpers.WriteExtraOperand(this, "seq", badIncrement!);
+            return;
+        }
         if (status == SeqCore.Status.ZeroIncrement)
         {
             FileSystemHelpers.WriteBashError(this, $"seq: invalid Zero increment value: '{badIncrement}'");
@@ -118,7 +128,7 @@ public sealed class InvokeBashSeqCommand : PSCmdlet
 /// </summary>
 internal static class SeqCore
 {
-    internal enum Status { Ok, ZeroIncrement }
+    internal enum Status { Ok, ZeroIncrement, MissingOperand, ExtraOperand }
 
     /// <summary>
     /// Produce the formatted value strings (the exact <c>BashText</c> the cmdlet
@@ -200,6 +210,14 @@ internal static class SeqCore
 
             operands.Add(arg);
             i++;
+        }
+
+        // GNU: one to three operands. REGRESSION: a bare `seq` printed 1 with status 0.
+        if (operands.Count == 0) return Status.MissingOperand;
+        if (operands.Count > 3)
+        {
+            badIncrement = operands[3];
+            return Status.ExtraOperand;
         }
 
         // Determine first, increment, last (psm1 oracle semantics).

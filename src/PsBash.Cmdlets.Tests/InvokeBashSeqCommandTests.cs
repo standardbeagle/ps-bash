@@ -111,13 +111,16 @@ public class InvokeBashSeqCommandTests : IClassFixture<SharedPwshFixture>
         Assert.Equal(new[] { "1.0", "1.5", "2.0" }, lines);
     }
 
+    // GNU seq needs LAST (oracle: `seq` → "seq: missing operand" + Try line, rc 1). REGRESSION: it printed 1, status 0.
     [Fact]
-    public void Seq_Empty_NoArgs_EmitsSingleOne()
-    {
-        // Oracle defaults: first=1, increment=1, last=1 → emit "1".
-        var lines = RunLines("Invoke-BashSeq | ForEach-Object { $_.BashText }");
-        Assert.Equal(new[] { "1" }, lines);
-    }
+    public void Seq_NoArgs_IsMissingOperand()
+        => CmdResult.Run(_fixture.AcquireFresh(), "Invoke-BashSeq")
+            .AssertFailed(1, "seq: missing operand");
+
+    [Fact]
+    public void Seq_FourOperands_IsExtraOperand()
+        => CmdResult.Run(_fixture.AcquireFresh(), "Invoke-BashSeq 1 2 3 4")
+            .AssertFailed(1, "seq: extra operand");
 
     [Fact]
     public void Seq_TypedOutputCarriesPsBashSeqOutput()

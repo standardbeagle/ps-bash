@@ -272,7 +272,7 @@ public sealed class InvokeBashCpCommand : PSCmdlet
         {
             if (operands.Count == 0)
             {
-                FileSystemHelpers.WriteBashError(this, "cp: missing file operand" + TryHelp);
+                FileSystemHelpers.WriteMissingFileOperand(this, "cp");
                 return null;
             }
             var abs = FileSystemHelpers.ProviderPath(this, tdir);
@@ -288,12 +288,12 @@ public sealed class InvokeBashCpCommand : PSCmdlet
 
         if (operands.Count == 0)
         {
-            FileSystemHelpers.WriteBashError(this, "cp: missing file operand" + TryHelp);
+            FileSystemHelpers.WriteMissingFileOperand(this, "cp");
             return null;
         }
         if (operands.Count == 1)
         {
-            FileSystemHelpers.WriteBashError(this, $"cp: missing destination file operand after '{operands[0]}'" + TryHelp);
+            FileSystemHelpers.WriteMissingFileOperand(this, "cp", operands[0]);
             return null;
         }
 

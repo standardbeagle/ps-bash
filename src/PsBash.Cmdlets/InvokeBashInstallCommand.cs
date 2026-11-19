@@ -235,7 +235,7 @@ public sealed class InvokeBashInstallCommand : PSCmdlet
         // --------------------------------------------------------------
         if (operands.Count < 2 && targetDir == null)
         {
-            FileSystemHelpers.WriteBashError(this, "install: missing file operand");
+            FileSystemHelpers.WriteMissingFileOperand(this, "install", operands.Count == 1 ? operands[0] : null);
             return;
         }
 

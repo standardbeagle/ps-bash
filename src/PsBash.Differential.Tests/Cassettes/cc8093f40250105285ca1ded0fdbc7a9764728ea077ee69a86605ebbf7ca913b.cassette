@@ -1,0 +1,36 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 234
+stdout-length: 37
+stderr-length: 556
+==== SCRIPT ====
+tr; echo rc=$?; echo ab | tr a; echo rc=$?; echo ab | tr -ds a; echo rc=$?; echo ab | tr -d a b; echo rc=$?; echo ab | tr a b c; echo rc=$?; echo ab | tr -s a b c; echo rc=$?; echo aab | tr -s a; echo ab | tr -d a; echo ab | tr -s a b
+==== STDOUT ====
+rc=1
+rc=1
+rc=1
+rc=1
+rc=1
+rc=1
+ab
+b
+b
+
+==== STDERR ====
+tr: missing operand
+Try 'tr --help' for more information.
+tr: missing operand after ‘a’
+Two strings must be given when translating.
+Try 'tr --help' for more information.
+tr: missing operand after ‘a’
+Two strings must be given when both deleting and squeezing repeats.
+Try 'tr --help' for more information.
+tr: extra operand ‘b’
+Only one string may be given when deleting without squeezing repeats.
+Try 'tr --help' for more information.
+tr: extra operand ‘c’
+Try 'tr --help' for more information.
+tr: extra operand ‘c’
+Try 'tr --help' for more information.
+

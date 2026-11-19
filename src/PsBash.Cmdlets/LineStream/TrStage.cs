@@ -103,6 +103,10 @@ internal sealed class TrStage : ILineStreamStage
             operands.Add(arg);
         }
 
+        // A SET count GNU rejects is a usage error the cmdlet reports.
+        var (minSets, maxSets) = InvokeBashTrCommand.OperandBounds(deleteMode, squeezeMode);
+        if (operands.Count < minSets || operands.Count > maxSets) return null;
+
         // ---- table construction (port of BuildTablesCore) ----
         HashSet<char>? membership = null;
         Dictionary<char, char>? translateMap = null;

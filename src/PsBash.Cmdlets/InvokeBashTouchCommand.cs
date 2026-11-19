@@ -168,7 +168,7 @@ public sealed class InvokeBashTouchCommand : PSCmdlet
 
         if (operands.Count == 0)
         {
-            FileSystemHelpers.WriteBashError(this, "touch: missing file operand");
+            FileSystemHelpers.WriteMissingFileOperand(this, "touch");
             return;
         }
 

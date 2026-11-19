@@ -131,6 +131,22 @@ public class RuntimeCommandParityDifferentialTests
         => FsStateOracle.EqualAsync("echo s > s; mkdir -p ip",
             "install -v s s2; install -v -d id1/id2 id3; install -v -D s dd/ee/ff; install -v s id3; install -v -t ip s");
 
+    // ---- usage-error batch (each a REGRESSION: the wrong case printed output, or nothing, at status 0) ----
+
+    // seq / touch / install — class: a usage error (missing / extra operand) without GNU's wording or hint line.
+    // Primitive: FileSystemHelpers.WriteMissingOperand / WriteMissingFileOperand / WriteExtraOperand.
+    [SkippableFact]
+    public Task Seq_Touch_Install_OperandCountErrors()
+        => Eq("seq; echo rc=$?; seq 1 2 3 4; echo rc=$?; touch; echo rc=$?; install; echo rc=$?; install a; echo rc=$?");
+
+    // tr — class: the SET count was never checked, so `tr a` copied its input. Primitive: OperandBounds (GNU
+    // validate()), shared by the cmdlet and the fused TrStage, reported via WriteMissingOperand(why:) /
+    // WriteExtraOperand.
+    [SkippableFact]
+    public Task Tr_SetCount_IsValidated()
+        => Eq("tr; echo rc=$?; echo ab | tr a; echo rc=$?; echo ab | tr -ds a; echo rc=$?; echo ab | tr -d a b; echo rc=$?; "
+            + "echo ab | tr a b c; echo rc=$?; echo ab | tr -s a b c; echo rc=$?; echo aab | tr -s a; echo ab | tr -d a; echo ab | tr -s a b");
+
     // mkdir — class: the parent of a trailing-slash operand was the operand itself. Primitive:
     // FileSystemHelpers.ParentDirectory.
     [SkippableFact]

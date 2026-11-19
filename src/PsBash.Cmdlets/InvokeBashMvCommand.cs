@@ -211,7 +211,7 @@ public sealed class InvokeBashMvCommand : PSCmdlet
         {
             if (operands.Count == 0)
             {
-                FileSystemHelpers.WriteBashError(this, "mv: missing file operand" + TryHelp);
+                FileSystemHelpers.WriteMissingFileOperand(this, "mv");
                 return;
             }
             var tabs = FileSystemHelpers.ProviderPath(this, tdir);
@@ -230,12 +230,12 @@ public sealed class InvokeBashMvCommand : PSCmdlet
         {
             if (operands.Count == 0)
             {
-                FileSystemHelpers.WriteBashError(this, "mv: missing file operand" + TryHelp);
+                FileSystemHelpers.WriteMissingFileOperand(this, "mv");
                 return;
             }
             if (operands.Count == 1)
             {
-                FileSystemHelpers.WriteBashError(this, $"mv: missing destination file operand after '{operands[0]}'" + TryHelp);
+                FileSystemHelpers.WriteMissingFileOperand(this, "mv", operands[0]);
                 return;
             }
             if (plan.NoTargetDirectory && operands.Count > 2)
