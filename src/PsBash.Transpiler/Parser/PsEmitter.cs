@@ -1232,6 +1232,9 @@ public static partial class PsEmitter
         }
         var priorScriptRoot = _scriptRoot;
         if (_transpileNesting++ == 0) _scriptRoot = context == TranspileContext.Default;
+        // Only the root script's input lines are read by the shell's reader; eval, sourced and inline text are not.
+        var priorReaderMode = _readerMode;
+        _readerMode = _transpileNesting == 1 && context == TranspileContext.Default ? ReaderModeFor(bash) : ReaderMode.Off;
         try
         {
             Command? cmd;
@@ -1277,6 +1280,8 @@ public static partial class PsEmitter
             _liveJobs = _context == TranspileContext.Eval ? null : CollectLiveJobs(cmd);
             _discardInteractive = _nounsetMode && bash.Contains("shopt -s psbash_interactive", StringComparison.Ordinal);
             string body = EmitBody(cmd);
+            // A lone top-level command is the reader's one input line (a list reports each line in EmitCommandList).
+            if (cmd is not Command.CommandList) body = ReaderCommandFor(cmd, 0) + body;
             // A lone top-level command is its own input line (a list gets the scope per command in EmitCommandList).
             if (cmd is not Command.CommandList && (_discardInteractive || PsBuild.CanDiscardLine(body)))
                 body = PsBuild.DiscardLineScope(body);
@@ -1286,7 +1291,7 @@ public static partial class PsEmitter
         }
         finally
         {
-            _transpileNesting--; _scriptRoot = priorScriptRoot;
+            _transpileNesting--; _scriptRoot = priorScriptRoot; _readerMode = priorReaderMode;
             _context = prior;
             _intVars = priorIntVars;
             _assocVars = priorAssocVars;
@@ -11526,17 +11531,21 @@ public static partial class PsEmitter
         // known only once they are emitted (a function defined on one line and called on another), so they are kept.
         var rootPieces = ReferenceEquals(list, _rootCommand) ? new List<(string Text, bool SameLine, bool LineStarts)>() : null;
         bool[]? parsedLineStarts = rootPieces is not null ? BashParser.LineStartsOf(list) : null;
+        // The root script reports each input line to the shell's reader as it starts (ReaderCommandFor; "" for most scripts).
+        var root = list;
+        int inputLine = -1;
         list = list with { Commands = ResolveLastArgRefs(list.Commands) };
         var sb = new StringBuilder();
         for (int i = 0; i < list.Commands.Length; i++)
         {
+            string readerCommand = parsedLineStarts is not null && (i == 0 || parsedLineStarts[i]) ? ReaderCommandFor(root, ++inputLine) : "";
             if (i > 0)
                 sb.Append("; ");
             _readonlyViolation = false;
             // `exec >&2; rest`: the rest of the list runs under the shell-wide redirection.
             if (i + 1 < list.Commands.Length && StdExecRedirects(list.Commands[i]) is { } execRedirects)
             {
-                string underExec = EmitStatement(RestUnderExecRedirects(list.Commands.RemoveRange(0, i + 1), execRedirects));
+                string underExec = readerCommand + EmitStatement(RestUnderExecRedirects(list.Commands.RemoveRange(0, i + 1), execRedirects));
                 sb.Append(underExec);
                 rootPieces?.Add((underExec, false, false));
                 break;
@@ -11569,7 +11578,7 @@ public static partial class PsEmitter
             bool lineStarts = _lineAbandonMode && !sameLine && i + 1 < list.Commands.Length
                 && lineOfThis > 0 && FirstSimpleLine(list.Commands[i + 1]) == LastSimpleLine(list.Commands[i]);
             if (lineStarts) sb.Append(PsBuild.FailGlobReset);
-            string statement = EmitStatement(list.Commands[i]);
+            string statement = readerCommand + EmitStatement(list.Commands[i]);
             sb.Append(sameLine ? PsBuild.UnlessGlobFailed(statement) : statement);
             if (rootPieces is not null) rootPieces[^1] = rootPieces[^1] with { Text = statement };
             if (_readonlyViolation)

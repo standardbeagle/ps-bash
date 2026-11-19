@@ -20,8 +20,8 @@ public static class BashPromptText
     /// <summary>
     /// <see cref="Expand(string?)"/> with the shell's counters from <paramref name="session"/> (the emitted
     /// <c>${v@P}</c> passes <c>$ExecutionContext.SessionState</c>): <c>\j</c> the jobs in the job table
-    /// (<c>Get-BashJobCount</c>, the table <c>jobs</c> lists); <c>\!</c> and <c>\#</c> are 1. Each is read only when
-    /// the prompt uses it.
+    /// (<c>Get-BashJobCount</c>, the table <c>jobs</c> lists), <c>\!</c> the history number and <c>\#</c> the command
+    /// number (<see cref="ShellReader"/>). Each is read only when the prompt uses it.
     /// </summary>
     public static string Expand(string? prompt, SessionState? session)
         => ExpandParametersAndRemoveQuoting(Decode(prompt, c => Counter(c, session)), BashVariableStore.Get);
@@ -30,7 +30,8 @@ public static class BashPromptText
     private static int Counter(char escape, SessionState? session) => escape switch
     {
         'j' => JobCount(session),
-        _ => 1,
+        '!' => ShellReader.HistoryNumber(session),
+        _ => ShellReader.CommandNumber,
     };
 
     /// <summary>The job table's size through the module's one accessor; 0 without a session or the module (no job table).</summary>

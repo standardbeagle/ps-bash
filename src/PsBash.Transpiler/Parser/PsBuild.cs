@@ -1462,10 +1462,21 @@ public static class PsBuild
 
     /// <summary>
     /// <c>${v@P}</c> of the PowerShell expression <paramref name="value"/>: the prompt escapes, with the shell's session
-    /// for the counters <c>\j</c> (job table), <c>\!</c> and <c>\#</c> (PsBash.Cmdlets.BashPromptText).
+    /// for the counters <c>\j</c> (job table), <c>\!</c> and <c>\#</c> (PsBash.Cmdlets.BashPromptText, ShellReader).
     /// </summary>
     public static string PromptExpand(string value) =>
         "[PsBash.Cmdlets.BashPromptText]::Expand(" + value + ", $ExecutionContext.SessionState)";
+
+    /// <summary>
+    /// Run before each top-level command the shell's reader takes in (an input line; a multi-line compound command is
+    /// one): bash's <c>current_command_number</c> (prompt <c>\#</c>) counts it, and under <c>set -o history</c> its text
+    /// <paramref name="line"/> becomes a history entry (prompt <c>\!</c>, <c>history</c>). <paramref name="line"/> is
+    /// null for a script that never turns history on (no text to carry). PsBash.Cmdlets.ShellReader.
+    /// </summary>
+    public static string ReaderCommand(string? line) =>
+        line is null
+            ? "[PsBash.Cmdlets.ShellReader]::Next(); "
+            : "[PsBash.Cmdlets.ShellReader]::Next($ExecutionContext.SessionState, " + SingleQuote(line) + "); ";
 
     /// <summary>
     /// The trailing <c>-Text '…'</c> of an <c>Invoke-BashBackground</c> call: the job's command as written, which

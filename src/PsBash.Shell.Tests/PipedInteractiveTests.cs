@@ -55,7 +55,7 @@ public class PipedInteractiveTests
     [InlineData(new[] { "echo \"a", "b\"" }, "echo \"a\nb\"")]
     [InlineData(new[] { "cat <<EOF", "x", "EOF" }, "cat <<EOF\nx\nEOF")]
     public void HistoryEntry_JoinsLinesLikeCmdhist(string[] lines, string expected) =>
-        Assert.Equal(expected, PipedInteractive.HistoryEntry(lines));
+        Assert.Equal(expected, PsBash.Core.Parser.CmdHist.Entry(lines));
 
     [Theory]
     [InlineData("echo !!", "echo echo two")]

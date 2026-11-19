@@ -77,4 +77,29 @@ public class BashPromptTextTests
     [Fact]
     public void Decode_PromptWithoutCounters_AsksForNone() =>
         Assert.Equal("a b", BashPromptText.Decode("a \\[b\\]", _ => throw new InvalidOperationException("asked for a counter")));
+
+    // bash 5.2 (oracle, a script file): \# is the number of the top-level command running (bash -c: 0); \! for
+    // ${v@P} is 1 with history off, else the entry count, 1 once `history -c` emptied the list.
+    [Theory]
+    [InlineData(0, false, 1)]
+    [InlineData(5, false, 5)]
+    [InlineData(5, true, 0)]
+    public void CommandNumberFor_CountsLinesRead_ZeroUnderDashC(int read, bool dashC, int expected) =>
+        Assert.Equal(expected, ShellReader.CommandNumberFor(read, dashC));
+
+    [Theory]
+    [InlineData(false, 9, 1)]
+    [InlineData(true, 0, 1)]
+    [InlineData(true, 1, 1)]
+    [InlineData(true, 3, 3)]
+    public void HistoryNumberFor_FollowsBashPromptHistoryNumber(bool historyOn, int entries, int expected) =>
+        Assert.Equal(expected, ShellReader.HistoryNumberFor(historyOn, entries));
+
+    // bash 5.2 (oracle, `printf 'echo a\necho b\n' | PS1='[\!] ' bash --norc -i`): [1], [2], [3]: the prompt names the
+    // command about to be read, not yet in the list.
+    [Theory]
+    [InlineData(0, 1)]
+    [InlineData(2, 3)]
+    public void HistoryNumberFor_InteractivePrompt_IsOnePastTheCount(int entries, int expected) =>
+        Assert.Equal(expected, ShellReader.HistoryNumberFor(true, entries, interactive: true));
 }

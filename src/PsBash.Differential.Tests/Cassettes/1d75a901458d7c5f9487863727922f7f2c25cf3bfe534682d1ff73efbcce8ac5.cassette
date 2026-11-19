@@ -1,0 +1,61 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 622
+stdout-length: 646
+stderr-length: 0
+==== SCRIPT ====
+__fs_snap() { find . | LC_ALL=C sort | while IFS= read -r p; do if [ -d "$p" ]; then echo "D $p"; else echo "F $p $(base64 -w0 "$p")"; fi; done; }
+d=$(mktemp -d) && cd "$d" && { :
+cat > s.sh <<'EOF'
+PS1='n=\# h=\!'
+echo "${PS1@P}"
+echo a; echo "${PS1@P}"
+if true; then
+  echo "if ${PS1@P}"
+fi
+x=$(echo "${PS1@P}"); echo "sub $x"
+eval 'echo "ev ${PS1@P}"'; echo "after ${PS1@P}"
+set -o history
+history -c
+echo "${PS1@P}"
+for i in 1 2
+do echo "$i ${PS1@P}"
+done
+echo "_${PS1@P}"
+history
+EOF
+} >/dev/null 2>&1
+echo '== stdout'
+{ :
+bash s.sh; echo st=$?
+} 2>/dev/null
+echo "== exit $?"
+echo '== fs'
+__fs_snap
+cd /; rm -rf "$d"
+==== STDOUT ====
+== stdout
+n=2 h=1
+a
+n=3 h=1
+if n=4 h=1
+sub n=5 h=1
+ev n=6 h=1
+after n=6 h=1
+n=9 h=1
+1 n=10 h=2
+2 n=10 h=2
+_n=11 h=3
+    1  echo "${PS1@P}"
+    2  for i in 1 2; do echo "$i ${PS1@P}"; done
+    3  echo "_${PS1@P}"
+    4  history
+st=0
+== exit 0
+== fs
+D .
+F ./s.sh UFMxPSduPVwjIGg9XCEnCmVjaG8gIiR7UFMxQFB9IgplY2hvIGE7IGVjaG8gIiR7UFMxQFB9IgppZiB0cnVlOyB0aGVuCiAgZWNobyAiaWYgJHtQUzFAUH0iCmZpCng9JChlY2hvICIke1BTMUBQfSIpOyBlY2hvICJzdWIgJHgiCmV2YWwgJ2VjaG8gImV2ICR7UFMxQFB9Iic7IGVjaG8gImFmdGVyICR7UFMxQFB9IgpzZXQgLW8gaGlzdG9yeQpoaXN0b3J5IC1jCmVjaG8gIiR7UFMxQFB9Igpmb3IgaSBpbiAxIDIKZG8gZWNobyAiJGkgJHtQUzFAUH0iCmRvbmUKZWNobyAiXyR7UFMxQFB9IgpoaXN0b3J5Cg==
+
+==== STDERR ====
+

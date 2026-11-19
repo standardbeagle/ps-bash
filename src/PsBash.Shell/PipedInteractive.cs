@@ -34,7 +34,7 @@ internal static class PipedInteractive
 
         var acc = new List<string>();
         var heredocs = new Queue<(string Delim, bool StripTabs)>();
-        var quote = new QuoteState();
+        var quote = new CmdHist.LineQuotes();
         foreach (var line in lines)
         {
             acc.Add(line);
@@ -47,22 +47,15 @@ internal static class PipedInteractive
             else
             {
                 quote.Scan(line, heredocs);
-                if (heredocs.Count > 0 || quote.Open || EndsWithContinuation(line)) continue;
+                if (heredocs.Count > 0 || quote.Open || CmdHist.EndsWithContinuation(line)) continue;
             }
             if (!IsComplete(string.Join('\n', acc))) continue;
             result.Add(acc);
             acc = new List<string>();
-            quote = new QuoteState();
+            quote = new CmdHist.LineQuotes();
         }
         if (acc.Count > 0) result.Add(acc);
         return result;
-    }
-
-    private static bool EndsWithContinuation(string line)
-    {
-        int n = 0;
-        for (int i = line.Length - 1; i >= 0 && line[i] == '\\'; i--) n++;
-        return n % 2 == 1;
     }
 
     /// <summary>True when the text parses, or fails with an error that more input cannot fix.</summary>
@@ -87,94 +80,6 @@ internal static class PipedInteractive
             return true;
         }
     }
-
-    /// <summary>Quote state carried across the lines of one command; also queues each here-document delimiter.</summary>
-    private sealed class QuoteState
-    {
-        private bool _single, _double;
-        public bool Open => _single || _double;
-
-        public void Scan(string line, Queue<(string, bool)> heredocs)
-        {
-            for (int i = 0; i < line.Length; i++)
-            {
-                char c = line[i];
-                if (_single) { if (c == '\'') _single = false; continue; }
-                if (c == '\\') { i++; continue; }
-                if (_double) { if (c == '"') _double = false; continue; }
-                switch (c)
-                {
-                    case '\'': _single = true; break;
-                    case '"': _double = true; break;
-                    case '#' when i == 0 || char.IsWhiteSpace(line[i - 1]) || line[i - 1] is ';' or '&' or '|' or '(':
-                        return;
-                    case '<' when i + 1 < line.Length && line[i + 1] == '<' && (i + 2 >= line.Length || line[i + 2] != '<'):
-                        i = ReadHeredocWord(line, i + 2, heredocs);
-                        break;
-                }
-            }
-        }
-
-        /// <summary>Reads the delimiter after <c>&lt;&lt;</c> / <c>&lt;&lt;-</c>; returns the index of its last char.</summary>
-        private static int ReadHeredocWord(string line, int i, Queue<(string, bool)> heredocs)
-        {
-            bool strip = i < line.Length && line[i] == '-';
-            if (strip) i++;
-            while (i < line.Length && line[i] is ' ' or '\t') i++;
-            var word = new StringBuilder();
-            int start = i;
-            while (i < line.Length && !char.IsWhiteSpace(line[i]) && line[i] is not (';' or '&' or '|' or '<' or '>' or '(' or ')'))
-            {
-                char c = line[i];
-                if (c is '\'' or '"')
-                {
-                    int close = line.IndexOf(c, i + 1);
-                    if (close < 0) close = line.Length;
-                    word.Append(line, i + 1, Math.Max(0, close - i - 1));
-                    i = close + 1;
-                    continue;
-                }
-                if (c == '\\' && i + 1 < line.Length) { word.Append(line[i + 1]); i += 2; continue; }
-                word.Append(c);
-                i++;
-            }
-            // `$((1 << 2))` is a shift, not a here-document: a delimiter never starts with a digit here.
-            if (word.Length > 0 && !char.IsAsciiDigit(line[start])) heredocs.Enqueue((word.ToString(), strip));
-            return i - 1;
-        }
-    }
-
-    /// <summary>The history entry bash stores for a multi-line command (<c>cmdhist</c>): the lines joined with
-    /// <c>; </c>, or a space after a line that opens a compound command or ends in an operator. A command holding a
-    /// here-document or a quoted newline keeps its newlines.</summary>
-    internal static string HistoryEntry(IReadOnlyList<string> lines)
-    {
-        if (lines.Count == 1) return lines[0];
-        var q = new QuoteState();
-        var heredocs = new Queue<(string, bool)>();
-        foreach (var l in lines.Take(lines.Count - 1))
-        {
-            q.Scan(l, heredocs);
-            if (q.Open || heredocs.Count > 0) return string.Join('\n', lines);
-        }
-        var sb = new StringBuilder(lines[0]);
-        for (int i = 1; i < lines.Count; i++)
-        {
-            var prev = lines[i - 1].TrimEnd();
-            var cur = lines[i].Trim();
-            if (cur.Length == 0) continue;
-            bool opens = prev.Length == 0 || prev.EndsWith(';') || prev.EndsWith('{') || prev.EndsWith('(') || prev.EndsWith('|')
-                || prev.EndsWith("&&", StringComparison.Ordinal)
-                || EndsWithWord(prev, "do") || EndsWithWord(prev, "then") || EndsWithWord(prev, "else")
-                // `case x in` / `for x in`: `in` as a keyword, not `echo in`.
-                || (EndsWithWord(prev, "in") && (prev.TrimStart().StartsWith("case ", StringComparison.Ordinal) || prev.TrimStart().StartsWith("for ", StringComparison.Ordinal)));
-            sb.Append(opens ? " " : "; ").Append(cur);
-        }
-        return sb.ToString();
-    }
-
-    private static bool EndsWithWord(string s, string word) =>
-        s.EndsWith(word, StringComparison.Ordinal) && (s.Length == word.Length || char.IsWhiteSpace(s[^(word.Length + 1)]) || s[^(word.Length + 1)] == ';');
 
     /// <summary>History expansion of one command against the session's earlier entries (most recent last):
     /// <c>!!</c>, <c>!-n</c>, <c>!$</c>, <c>!prefix</c>. Not inside single quotes, after a backslash, or for a
@@ -275,7 +180,7 @@ internal static class PipedInteractive
                 lines = expanded.Split('\n').ToList();
                 command = expanded;
             }
-            var entry = HistoryEntry(lines);
+            var entry = CmdHist.Entry(lines);
             session.Add(entry);
             sb.Append("history -s -- ").Append(Sq(entry)).Append('\n');
             sb.Append("__psbash_line=").Append(Sq(command)).Append('\n');

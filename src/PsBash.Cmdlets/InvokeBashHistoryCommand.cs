@@ -156,6 +156,10 @@ public sealed class InvokeBashHistoryCommand : PSCmdlet
         return list;
     }
 
+    /// <summary>The number of entries in the session's history list, without creating it (prompt <c>\!</c>).</summary>
+    internal static int EntryCount(SessionState state)
+        => state.PSVariable.GetValue("global:" + StateVariable) is List<string> list ? list.Count : 0;
+
     protected override void EndProcessing()
     {
         var args = new List<string>();

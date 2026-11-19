@@ -182,3 +182,25 @@ Not provided, with reasons: `ShellVariablesGuardTests.NotProvided` (`BASH_ARGC B
 BASH_COMMAND BASH_EXECUTION_STRING BASH_LOADABLES_PATH HISTCMD _`). Guard: `Core.Tests/ShellVariablesGuardTests`
 (every bash name in exactly one place; every computed name mapped). Behavior, one name at a time:
 `Differential.Tests/ShellLanguageGapDifferentialTests`.
+
+## 10. Prompt counters (`\j`, `\#`, `\!`)
+
+**Invariant: a prompt counter is the shell's count, read from the one place that keeps it.** `BashPromptText.Decode`
+asks for `\j`, `\!`, `\#` by letter and never makes one up (they were fixed at 0, 1, 1).
+
+- `\j`: the job table's size, psm1 `Get-BashJobCount` (`$script:BashBgJobs`). A job leaves the table when a builtin
+  reports it (`jobs`, `wait`, `fg`); jobspecs resolve in one place (background-jobs.md §8).
+- `\#`: bash's `current_command_number`, the top-level input lines read so far: `Cmdlets/ShellReader.cs`, per runspace.
+  The root script reports each input line before it runs (`PsBuild.ReaderCommand`, placed by
+  `PsEmitter.ReaderCommandFor` from the parser's line spans `BashParser.InputLinesOf`): `a; b` is one line, a multi-line
+  `if` is one, an `eval`'s or sourced file's text is none. Under `bash -c` (`PSBASH_DASH_C`) it is 0, as in bash.
+- `\!`: the history number. Under `set -o history` each reported line is also a history entry, joined as bash's
+  `cmdhist` stores it (`Parser/CmdHist.cs`, also used by the piped `bash -i` replay); `\!` is the entry count (1 when
+  history is off or empty), one past it at an interactive prompt (the next command is not in the list yet).
+- An interactive shell (`InvokeBashShoptCommand.InteractiveShell`: the REPL, piped `bash -i`, `-i -c`) reports
+  nothing: its front end reads the lines and records history (`history -s`), and the text it runs is not the input.
+- Cost: the report is one script-to-.NET call per input line, so only a script that can observe it gets one
+  (`PsEmitter.ReaderModeFor`: the text has `@P` or turns history on). Every other script's emission is unchanged.
+
+Guards: `Core.Tests/Parser/PromptCounterEmitterTests` (one report per input line; none for other scripts),
+`Cmdlets.Tests/BashPromptTextTests` (counters come from the shell). Behaviour: oils `prompt.spec.sh`.

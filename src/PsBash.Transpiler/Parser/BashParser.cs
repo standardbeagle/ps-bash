@@ -215,29 +215,50 @@ public sealed partial class BashParser
         // `)`/`}`) throws inside ParseAndOrProgress rather than yielding an empty
         // command.
         var commands = ImmutableArray.CreateBuilder<Command>();
+        int lineFirstToken = _pos;
         commands.Add(ParseListStatement(AtEndOfInputOnly, "ParseList"));
         var startsLine = new List<bool> { true };
+        var lineSpans = new List<(int Start, int End)>();
 
         while (true)
         {
             int before = _pos;
             SkipTopLevelTerminators();
-            if (Peek().Kind == BashTokenKind.Eof)
-                break;
-
             bool newline = false;
             for (int t = before; t < _pos; t++)
                 newline |= _tokens[t].Kind == BashTokenKind.Newline;
+            if (newline || Peek().Kind == BashTokenKind.Eof)
+            {
+                lineSpans.Add(InputLineSpan(lineFirstToken, before));
+                lineFirstToken = _pos;
+            }
+            if (Peek().Kind == BashTokenKind.Eof)
+                break;
+
             startsLine.Add(newline);
             commands.Add(ParseListStatement(AtEndOfInputOnly, "ParseList"));
         }
 
-        if (commands.Count == 1)
-            return commands[0];
+        var root = commands.Count == 1 ? commands[0] : new Command.CommandList(commands.ToImmutable());
+        s_inputLines.AddOrUpdate(root, new InputLines(_input, lineSpans.ToArray()));
+        if (root is Command.CommandList list)
+            s_lineStarts.AddOrUpdate(list, startsLine.ToArray());
+        return root;
+    }
 
-        var list = new Command.CommandList(commands.ToImmutable());
-        s_lineStarts.AddOrUpdate(list, startsLine.ToArray());
-        return list;
+    /// <summary>
+    /// The source span of the input line whose commands are the tokens <c>[firstToken, end)</c>: up to the newline that
+    /// ends it (a comment on it included), or past the body of a here-document it opens.
+    /// </summary>
+    private (int Start, int End) InputLineSpan(int firstToken, int end)
+    {
+        int start = _tokens[Math.Min(firstToken, _tokens.Count - 1)].Position;
+        int stop = _input.Length;
+        for (int t = end; t < _tokens.Count; t++)
+            if (_tokens[t].Kind is BashTokenKind.Newline or BashTokenKind.Eof) { stop = Math.Min(_tokens[t].Position, _input.Length); break; }
+        for (int t = firstToken; t < end && t < _tokens.Count; t++)
+            if (_tokens[t].HasHereDocBodySpan && _tokens[t].BodyEnd > stop) stop = Math.Min(_tokens[t].BodyEnd, _input.Length);
+        return (Math.Min(start, stop), stop);
     }
 
     // For each top-level command of a parsed text: whether it begins an input line (a newline, not `;` or `&`, comes
@@ -248,6 +269,23 @@ public sealed partial class BashParser
     /// was not made by the parser's top level.</summary>
     internal static bool[]? LineStartsOf(Command.CommandList list)
         => s_lineStarts.TryGetValue(list, out var starts) && starts.Length == list.Commands.Length ? starts : null;
+
+    /// <summary>The input lines of a parsed text, as written: the source and each line's span (sliced only when asked).</summary>
+    internal sealed class InputLines(string source, (int Start, int End)[] spans)
+    {
+        /// <summary>How many input lines the reader takes in (a multi-line compound command is one).</summary>
+        public int Count => spans.Length;
+
+        /// <summary>The text of input line <paramref name="i"/> (0-based), trailing blanks removed.</summary>
+        public string Text(int i) => source[spans[i].Start..spans[i].End].TrimEnd(' ', '\t', '\r', '\n');
+    }
+
+    // The input lines of each text the parser's top level made, keyed by its root command (a list, or a lone command).
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Command, InputLines> s_inputLines = new();
+
+    /// <summary>The input lines of the text whose root command is <paramref name="root"/>; null when the parser's top level
+    /// did not make it.</summary>
+    internal static InputLines? InputLinesOf(Command root) => s_inputLines.TryGetValue(root, out var lines) ? lines : null;
 
     // Parse a unit that MUST consume at least one token, else the operand is missing
     // (a dangling `&&`/`||`/`|`, a leading binary operator, or EOF) — reject cleanly

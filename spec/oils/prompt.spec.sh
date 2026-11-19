@@ -167,7 +167,6 @@ matched=0
 matched=0
 ## END
 ## status: 0
-## XFAIL ps-bash wontfix-interactive-prompt \j needs job control, \! and \# a count of every executed command (intentional-differences.md, Interactive shell)
 ## timeout: 10
 
 #### \# for command number
@@ -177,7 +176,6 @@ echo "${PS1@P}" | egrep -q "foo $((prev_cmd_num + 1)) bar"
 echo matched=$?
 ## stdout: matched=0
 ## status: 0
-## XFAIL ps-bash wontfix-interactive-prompt \j needs job control, \! and \# a count of every executed command (intentional-differences.md, Interactive shell)
 ## timeout: 10
 
 #### sh -i
