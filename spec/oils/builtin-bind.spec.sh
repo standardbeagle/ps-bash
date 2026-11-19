@@ -25,7 +25,6 @@ bind -s
 bind -S
 ## stdout:
 ## status: 0
-## XFAIL ps-bash wontfix-interactive-bind bind lists and edits GNU readline's keymaps; ps-bash's line editor is not readline (intentional-differences.md, Interactive shell)
 ## timeout: 10
 
 #### bind -v -V accepted
