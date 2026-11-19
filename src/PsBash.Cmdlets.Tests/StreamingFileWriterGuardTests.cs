@@ -51,6 +51,7 @@ public class StreamingFileWriterGuardTests
         ["InvokeBashSedCommand.cs"] = "sed -i: a temp file renamed over the input once complete (`w` files use OpenText)",
         ["InvokeBashGzipCommand.cs"] = "a staging file renamed into place once complete",
         ["InvokeBashTarCommand.cs"] = "the archive and extracted members: final products, each written in one pass",
+        ["BashFdTable.cs"] = "`exec N<>file`: reader and writer share ONE FileStream position, as one descriptor does, flushed per write; `>`/`>>` descriptors use OpenText",
     };
 
     [Fact]
