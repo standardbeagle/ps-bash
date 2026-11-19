@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 95
+stdout-length: 14
+stderr-length: 0
+==== SCRIPT ====
+trap 'echo "err [${PIPESTATUS[@]}]"' ERR; echo B | grep zzz; true | (exit 3) | cat; echo "s=$?"
+==== STDOUT ====
+err [0 1]
+s=0
+
+==== STDERR ====
+

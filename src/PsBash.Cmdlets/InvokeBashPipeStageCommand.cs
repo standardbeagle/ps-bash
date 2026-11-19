@@ -129,9 +129,15 @@ public sealed class InvokeBashPipeStageCommand : BashCmdlet
         Record(_ownStatus is int own && own != 0 ? own : now != 0 ? now : _beginStatus);
     }
 
+    /// <summary>
+    /// The stage's status, in its slot and as this wrapper's own (<see cref="BashCmdlet.OwnStatus"/>): the wrapper's
+    /// Dispose re-asserts it after the stages ahead have finished. Without it, the wrapper re-asserted the 0 it set in
+    /// BeginProcessing: `echo B | grep zzz` under an ERR trap that reads PIPESTATUS came out 0.
+    /// </summary>
     private void Record(int code)
     {
         if (Index >= 0 && Index < Slot.Length) Slot[Index] = code;
+        OwnStatus = code;
     }
 
     private int CurrentStatus()

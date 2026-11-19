@@ -1,0 +1,16 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 245
+stdout-length: 43
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)"; : > e; echo x | command grep -q zzz e; echo "command s=$?"; printf x | grep zzz | command grep -q zzz e; echo "command3 s=$?"; echo x | eval 'grep -q zzz e'; echo "eval s=$?"; echo x | grep zzz | command true; echo "true s=$?"
+==== STDOUT ====
+command s=1
+command3 s=1
+eval s=1
+true s=0
+
+==== STDERR ====
+

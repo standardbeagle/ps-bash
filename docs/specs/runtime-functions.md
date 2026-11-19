@@ -120,6 +120,12 @@ through `FileSystemHelpers.SetLastExitCode` (which records it on the instance), 
 that status in `Dispose`, which the engine calls after every EndProcessing in ascending pipeline position, so the last
 stage that set a status wins. A stage that set none (a redirection, a capture) leaves it. Guard
 `BashCmdletBaseGuardTests`; behavior `PipelineLastStageStatusTests.Status_OfALaterStage_SurvivesTheStagesAheadOfIt`.
+The re-assert undoes only an overwrite by a stage AHEAD: the last stage always re-asserts; a stage before it only
+when the last cmdlet that set a status is a stage ahead of it in the same pipeline and the status is still that
+cmdlet's. A status set later by a program, the command-not-found handler or a cmdlet nested in a later stage stands
+(`echo x | grep zzz | nosuchcmd` is 127). So a cmdlet's own status is its final one: a cmdlet that runs another
+command (`command`, `env`, `flock`) takes its status with `FileSystemHelpers.AdoptLastExitCode`, and pipefail's stage
+wrapper records the stage's status as its own. Behavior `PipelineLastStageStatusTests.Status_OfALaterStage_IsNotUndone`.
 
 **Diagnostics name operands as typed.** GNU quotes the argv element, never the resolved full path
 (`cat: nosuchfile: No such file or directory`). Every diagnostic goes through

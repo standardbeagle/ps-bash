@@ -237,6 +237,7 @@ public sealed class InvokeBashEnvCommand : BashCmdlet
                 {
                     WriteObject(r);
                 }
+                FileSystemHelpers.AdoptLastExitCode(this);
             }
             catch (CommandNotFoundException)
             {

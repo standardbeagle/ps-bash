@@ -236,6 +236,7 @@ public sealed class InvokeBashCommandCommand : BashCmdlet
                 if (o?.BaseObject is ErrorRecord er) FileSystemHelpers.WriteErrorRecord(this, er);
                 else WriteObject(o);
             }
+            FileSystemHelpers.AdoptLastExitCode(this);
             return;
         }
         var name = argv[0];
@@ -325,6 +326,7 @@ public sealed class InvokeBashCommandCommand : BashCmdlet
                 if (item?.BaseObject is ErrorRecord er) FileSystemHelpers.WriteErrorRecord(this, er);
                 else WriteObject(item);
             }
+            FileSystemHelpers.AdoptLastExitCode(this);
         }
         catch (Exception ex)
         {

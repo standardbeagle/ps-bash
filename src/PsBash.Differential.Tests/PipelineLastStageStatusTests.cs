@@ -41,6 +41,25 @@ public class PipelineLastStageStatusTests
         + "echo \"s=$?\"; seq 3 | grep 5; echo \"s=$?\"; seq 3 | grep 2 | grep 7; echo \"s=$?\"")]
     public Task Status_OfALaterStage_SurvivesTheStagesAheadOfIt(string script) => AssertOracle.EqualAsync(script);
 
+    /// <summary>
+    /// The re-assert above must only undo a stage AHEAD. It undid two later statuses: a wrapper's (<c>command</c>,
+    /// <c>env</c>, <c>flock</c> set 0, then ran a command that set its own status as itself, and re-asserted the 0:
+    /// <c>echo x | command ls /nosuch</c> gave 0, GNU 2; <c>command ./prog</c> lost the program's status; pipefail's
+    /// stage wrapper re-asserted its 0 under an ERR trap) and one set by something that is not a cmdlet (a program, the
+    /// command-not-found handler: <c>echo x | grep zzz | nosuchcmd</c> gave grep's 1, not 127).
+    /// Primitives: <c>FileSystemHelpers.AdoptLastExitCode</c>; <c>BashCmdlet</c> re-asserts only a cmdlet's overwrite.
+    /// </summary>
+    [SkippableTheory]
+    [InlineData("cd \"$(mktemp -d)\"; : > e; echo x | command grep -q zzz e; echo \"command s=$?\"; "
+        + "printf x | grep zzz | command grep -q zzz e; echo \"command3 s=$?\"; "
+        + "echo x | eval 'grep -q zzz e'; echo \"eval s=$?\"; echo x | grep zzz | command true; echo \"true s=$?\"")]
+    [InlineData("cd \"$(mktemp -d)\"; printf '#!/bin/sh\\ncat >/dev/null\\nexit 7\\n' > seven; printf '#!/bin/sh\\necho x\\nexit 5\\n' > five; "
+        + "chmod +x seven five; echo x | grep zzz | nosuchcmd 2>/dev/null; echo \"notfound s=$?\"; echo x | grep zzz | ./seven; "
+        + "echo \"native s=$?\"; echo x | command ./seven; echo \"command-native s=$?\"; ./five | grep zzz; echo \"five s=$?\"; "
+        + "./five | grep --bogus 2>/dev/null; echo \"five-bogus s=$?\"")]
+    [InlineData("trap 'echo \"err [${PIPESTATUS[@]}]\"' ERR; echo B | grep zzz; true | (exit 3) | cat; echo \"s=$?\"")]
+    public Task Status_OfALaterStage_IsNotUndone(string script) => AssertOracle.EqualAsync(script);
+
     /// <summary>The usage error itself: grep's usage line and hint, tr's hint at status 1 (it was 2 with no hint).</summary>
     [SkippableTheory]
     [InlineData("echo x | grep --bogus 2>&1; echo \"s=$?\"; echo x | tr --bogus 2>&1; echo \"s=$?\"")]

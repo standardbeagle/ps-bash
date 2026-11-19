@@ -414,6 +414,20 @@ internal static class FileSystemHelpers
     }
 
     /// <summary>
+    /// <paramref name="cmdlet"/> ran another command (<c>command ls</c>, <c>env prog</c>, <c>flock f cmd</c>) and that
+    /// command's status is now the cmdlet's own. A wrapper sets 0 as it starts and the command it runs sets
+    /// <c>$LASTEXITCODE</c> as ITSELF (a native, a script, another cmdlet's instance), so the wrapper's recorded status
+    /// stayed that 0, and <see cref="BashCmdlet"/> re-asserted it over the command's (<c>echo x | command ls /nosuch</c>
+    /// gave 0, GNU 2). Call this right after the nested command returns.
+    /// </summary>
+    public static void AdoptLastExitCode(PSCmdlet cmdlet)
+    {
+        if (cmdlet.SessionState.PSVariable.GetValue("global:LASTEXITCODE") is { } v
+            && LanguagePrimitives.TryConvertTo<int>(v, out int code))
+            SetLastExitCode(cmdlet, code);
+    }
+
+    /// <summary>
     /// A WORD failed to expand (<c>$((1/0))</c>): status 1, and <c>$global:__BashExpansionFailed</c> is set to the
     /// word's source position (<c>line:column</c>) so the command it belongs to can abandon itself -- echo through
     /// <see cref="TakeExpansionFailed"/>, a hoisted word through the emitter's <c>PsBuild.AbandonIfExpansionFailed</c>.

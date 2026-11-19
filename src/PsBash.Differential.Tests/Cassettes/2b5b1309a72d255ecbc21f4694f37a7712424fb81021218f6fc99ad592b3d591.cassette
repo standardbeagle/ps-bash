@@ -1,0 +1,17 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 401
+stdout-length: 69
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)"; printf '#!/bin/sh\ncat >/dev/null\nexit 7\n' > seven; printf '#!/bin/sh\necho x\nexit 5\n' > five; chmod +x seven five; echo x | grep zzz | nosuchcmd 2>/dev/null; echo "notfound s=$?"; echo x | grep zzz | ./seven; echo "native s=$?"; echo x | command ./seven; echo "command-native s=$?"; ./five | grep zzz; echo "five s=$?"; ./five | grep --bogus 2>/dev/null; echo "five-bogus s=$?"
+==== STDOUT ====
+notfound s=127
+native s=7
+command-native s=7
+five s=1
+five-bogus s=2
+
+==== STDERR ====
+

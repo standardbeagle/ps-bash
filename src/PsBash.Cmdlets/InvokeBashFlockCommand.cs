@@ -87,6 +87,7 @@ public sealed class InvokeBashFlockCommand : BashCmdlet
         try
         {
             foreach (var r in InvokeCommand.InvokeScript(script, args)) WriteObject(r);
+            FileSystemHelpers.AdoptLastExitCode(this);
         }
         catch (CommandNotFoundException ex)
         {

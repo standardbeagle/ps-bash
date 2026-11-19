@@ -101,6 +101,8 @@ public sealed class InvokeBashNativeCommand : BashCmdlet
     {
         if (_fallback is not null)
         {
+            // No AdoptLastExitCode: PowerShell publishes the program's status after this returns, and it stands as a
+            // status set by no cmdlet (BashCmdlet); reading it here took the stage ahead's.
             _fallback.End();
             return;
         }

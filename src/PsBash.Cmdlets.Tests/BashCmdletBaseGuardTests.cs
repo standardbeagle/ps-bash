@@ -72,6 +72,53 @@ public class BashCmdletBaseGuardTests : IClassFixture<SharedPwshFixture>
     public void LaterStageStatus_WinsOverAFailedStageAheadOfIt()
         => Assert.Equal(0, CmdResult.Run(_fixture.AcquireFresh(), "Invoke-BashCat /no/such/psbash-file | Invoke-BashTail -1").ExitCode);
 
+    // The re-assert undoes only a stage AHEAD. A status set later by something that is not a cmdlet (a program, the
+    // command-not-found handler; here a script block) stands, and a wrapper's status is the command it ran
+    // (FileSystemHelpers.AdoptLastExitCode): both were re-asserted over (echo x | grep zzz | nosuchcmd gave 1, not 127;
+    // echo x | command ls /nosuch gave 0).
+    [Fact]
+    public void LaterStatus_SetByNoCmdlet_IsNotUndone()
+        => Assert.Equal(9, CmdResult.Run(_fixture.AcquireFresh(),
+            "Invoke-BashEcho x | Invoke-BashTail --bogus 2>$null | & { end { $global:LASTEXITCODE = 9 } }").ExitCode);
+
+    [Fact]
+    public void Wrapper_InAPipeline_HasTheStatusOfTheCommandItRan()
+        => CmdResult.Run(_fixture.AcquireFresh(), "Invoke-BashEcho x | Invoke-BashCommand ls /no/such/psbash-file")
+            .AssertFailed(2, "No such file or directory");
+
+    // A cmdlet that runs another command by name (`& $c @args`): its own recorded status must end as that command's.
+    private static readonly Regex RunsACommand = new(@"""[^""]*[&.] ?\$[A-Za-z_]+ @", RegexOptions.Compiled);
+
+    // Takes the nested command's status: adopts it, or reads it back and sets it.
+    private static readonly Regex TakesItsStatus = new(@"AdoptLastExitCode\(|\$global:LASTEXITCODE", RegexOptions.Compiled);
+
+    private static readonly Dictionary<string, string> RunsWithoutAdopting = new()
+    {
+        ["InvokeBashNativeCommand.cs"] = "PowerShell publishes the program's status after the stage ends; it is set by no cmdlet and stands (BashCmdlet)",
+    };
+
+    [Fact]
+    public void Wrappers_TakeTheStatusOfTheCommandTheyRun()
+    {
+        var dir = Path.Combine(RepoRoot(), "src", "PsBash.Cmdlets");
+        var offenders = new List<string>();
+        var seen = new HashSet<string>();
+        foreach (var file in Directory.EnumerateFiles(dir, "*.cs", SearchOption.AllDirectories))
+        {
+            if (file.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}")) continue;
+            var name = Path.GetFileName(file);
+            var text = File.ReadAllText(file);
+            if (!RunsACommand.IsMatch(text)) continue;
+            seen.Add(name);
+            if (!RunsWithoutAdopting.ContainsKey(name) && !TakesItsStatus.IsMatch(text)) offenders.Add(name);
+        }
+        Assert.True(offenders.Count == 0,
+            "Call FileSystemHelpers.AdoptLastExitCode(this) after the command this cmdlet runs (BashCmdlet re-asserts a stale own status):\n"
+            + string.Join("\n", offenders));
+        var stale = RunsWithoutAdopting.Keys.Where(k => !seen.Contains(k)).ToList();
+        Assert.True(stale.Count == 0, "Stale allowlist entries: " + string.Join(", ", stale));
+    }
+
     private static string RepoRoot()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
