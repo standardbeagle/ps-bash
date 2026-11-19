@@ -82,8 +82,8 @@ public static partial class PsEmitter
     /// <summary>The script mentions <c>trap</c>: a subshell or <c>$( )</c> may run a function that sets an EXIT trap.</summary>
     [ThreadStatic]
     private static bool _trapMode;
-    // A multi-statement script that sets a DEBUG trap: every top-level simple command first runs it (bash semantics).
-    // A lone `trap 'cmd' DEBUG` line (an interactive prompt hook) keeps its directory-change mapping.
+    // Text that sets a DEBUG trap and runs other commands: every top-level simple command first runs it (bash semantics).
+    // A lone `trap 'cmd' DEBUG` (an interactive prompt hook) keeps its directory-change mapping (SetsDebugTrapForOtherCommands).
     [ThreadStatic]
     private static bool _debugTrapMode;
     /// <summary>The script prints variables with <c>declare -p</c>: <c>export</c> and <c>declare -i</c> record their attribute for it.</summary>
@@ -1209,8 +1209,7 @@ public static partial class PsEmitter
         var priorTrap = _trapMode;
         var priorCanSetTrap = _canSetTrap;
         var priorDebugTrap = _debugTrapMode;
-        _debugTrapMode = System.Text.RegularExpressions.Regex.IsMatch(bash, @"\btrap\s+(?:'[^'\n]*'|\x22[^\x22\n]*\x22)\s+DEBUG\b")
-            && bash.Split('\n').Count(l => l.Trim() is { Length: > 0 } t && t[0] != '#') >= 3;
+        _debugTrapMode = SetsDebugTrapForOtherCommands(bash);
         var priorDeclarePrint = _declarePrintMode;
         // Eval and sourced text cannot see the `declare -p` that will print what they declare (it is in the caller), so
         // they always record the attributes.

@@ -24,6 +24,16 @@ public class DebugTrapDifferentialTests
     [InlineData("x='a; echo pwned'\necho \"$x\" && echo \"$(echo 'q\"')\"")]
     public Task DebugTrap_RunsBeforeEachSimpleCommand(string script) => AssertOracle.EqualAsync(Log + script);
 
+    /// <summary>
+    /// The trap set and used on ONE line, or in a two-line script, runs before the commands after it. ps-bash turned the
+    /// action on only for scripts of three or more lines, so these printed no D (PsEmitter.SetsDebugTrapForOtherCommands).
+    /// </summary>
+    [SkippableTheory]
+    [InlineData("trap 'echo D' DEBUG; echo a")]
+    [InlineData("trap 'echo D' DEBUG\necho a; echo b")]
+    [InlineData("echo x; trap \"echo D\" DEBUG && echo a")]
+    public Task DebugTrap_SetOnTheSameLine_RunsForTheRestOfIt(string script) => AssertOracle.EqualAsync(script);
+
     /// <summary>Under <c>set -e</c> a DEBUG action that fails ends the script with its status (bash: 42 after one run).</summary>
     [SkippableFact]
     public Task DebugTrap_FailingActionUnderErrexit_EndsTheScript() => AssertOracle.EqualAsync(

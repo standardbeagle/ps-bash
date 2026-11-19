@@ -134,6 +134,17 @@ public class ShellLanguageGapParserTests
     public void Transpile_PlainOperatorOnBang_TestsSetNess()
         => Assert.DoesNotContain("[string]$global:BashBgLastPid", Emit("echo ${!-dash}"));
 
+    // --- trap DEBUG on one line -------------------------------------------------------------------
+
+    [Theory]
+    [InlineData("trap 'echo D' DEBUG; echo a", true)]
+    [InlineData("trap 'echo D' DEBUG\necho a", true)]
+    [InlineData("trap 'echo D' DEBUG", false)]           // a lone prompt hook keeps the chpwd mapping
+    [InlineData("# c\ntrap \"x\" DEBUG ;\n\n", false)]
+    [InlineData("echo trap DEBUG", false)]
+    public void SetsDebugTrapForOtherCommands_CountsCommandsNotLines(string bash, bool expected)
+        => Assert.Equal(expected, PsEmitter.SetsDebugTrapForOtherCommands(bash));
+
     // --- ERR trap scope ---------------------------------------------------------------------------
 
     /// <summary>A function body hides the caller's ERR trap on entry (ErrTrapInheritance via VarFrameStack).</summary>

@@ -1415,9 +1415,10 @@ and fires only ERR.
 
 ### 9.4 trap DEBUG
 
-`trap '...' DEBUG` has no emitter translation. The emitter emits a comment noting the
-gap and does not register a ps-bash hook. See `on-cd-hooks.md` Section 15.1 for the
-rationale.
+In a script that runs other commands, `trap '...' DEBUG` runs the action before each simple command
+after it (`PsEmitter.DebugLead`, gated on `PsEmitter.SetsDebugTrapForOtherCommands`: any command besides the trap,
+on any line). A lone `trap '...' DEBUG` (an interactive prompt hook) is mapped to `Register-BashChpwdHook`; see
+`on-cd-hooks.md` Section 15.1.
 
 For full hook semantics, firing model, coexistence with PSReadLine/oh-my-posh/Starship,
 and known gaps, see [`on-cd-hooks.md`](./on-cd-hooks.md).
