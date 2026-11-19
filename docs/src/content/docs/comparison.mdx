@@ -61,8 +61,8 @@ ps-bash aims to match bash 5.2 and GNU coreutils. These differences remain:
   no exit status 141.
 - **Subshells are not processes** -- `( )` and `$( )` run inside the host. `$BASHPID` is
   a synthetic id there, and `ps` knows no such pid.
-- **Job control** -- there is no `set -m` job control. `bind` is not a command, because
-  the line editor is not readline.
+- **Job control** -- there is no `set -m` job control. `bind` changes nothing, because
+  the line editor is not readline. `select` and `coproc` are refused with status 2.
 - **Refused options** -- a real GNU option that ps-bash does not implement fails with
   exit 2 and a message.
 - **Windows itself** -- no `/bin`, synthesized permission bits, case-insensitive file and

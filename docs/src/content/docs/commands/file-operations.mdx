@@ -203,8 +203,6 @@ mkdir [OPTION]... DIRECTORY...
 
 On Windows only the owner-write bit maps to anything: a mode without it sets the read-only attribute. Other bits are accepted and have no effect.
 
-`mkdir -pv` reports only the last directory of each operand. GNU reports every parent it creates.
-
 ### Examples
 
 ```bash
@@ -212,7 +210,10 @@ mkdir -p src/components/ui
 mkdir -pv p/q
 ```
 
+`-pv` reports every directory it creates, named as typed:
+
 ```text
+mkdir: created directory 'p'
 mkdir: created directory 'p/q'
 ```
 
@@ -234,26 +235,23 @@ rmdir [OPTION]... DIRECTORY...
 
 | Flag | Description |
 |------|-------------|
-| `-p`, `--parents` | Also remove each empty ancestor |
-| `-v`, `--verbose` | Print `rmdir: removing directory, 'd'` |
+| `-p`, `--parents` | Also remove each parent directory named in the operand: `rmdir -p a/b/c` removes `a/b/c`, `a/b`, then `a` |
+| `-v`, `--verbose` | Print `rmdir: removing directory, 'd'`, with the name as typed |
 
 Refused (exit 2): `--ignore-fail-on-non-empty`.
 
-### Differences from GNU
-
-- `-p` does not stop at the operand's first component. It keeps removing parent directories above it while they are empty. GNU removes only the components named in the operand.
-- With `-pv`, the operand is reported as typed and each removed parent by its full path. GNU prints every name as typed.
+`-p` stops at the operand's first component. It never removes a directory above the one you named, even an empty one. If a parent is not empty, `rmdir` reports it (`rmdir: failed to remove directory 'a': Directory not empty`) and exits 1.
 
 ### Examples
 
 ```bash
-rmdir -pv a/b/c        # run in C:/work, which holds other entries
+rmdir -pv a/b/c
 ```
 
 ```text
 rmdir: removing directory, 'a/b/c'
-rmdir: removing directory, 'C:/work/a/b'
-rmdir: removing directory, 'C:/work/a'
+rmdir: removing directory, 'a/b'
+rmdir: removing directory, 'a'
 ```
 
 ```bash
@@ -428,14 +426,14 @@ install -d [OPTION]... DIRECTORY...
 - `-S` names the swap suffix. In GNU it is the backup suffix.
 - `-d` and `-D` are told apart by the operands, not by case. With no `-t` and no operand that is an existing file, the flag creates directories. Otherwise it creates leading directories for the copy.
 - `--` ends options. Long options (`--mode=...`, `--target-directory=...`) are not recognized.
-- `-v` prints full paths (`'C:/work/a' -> 'C:/work/b'`), reports a replaced destination as `install: swapped 'C:/work/b' -> 'C:/work/b.old'` instead of `removed 'b'`, and with `-d` reports only the last directory created.
+- `-v` names files and directories as typed (`'a' -> 'b'`, `install: creating directory 'x/y'`), as GNU does. One line differs: a replaced destination is reported as `install: swapped 'C:/work/b' -> 'C:/work/b.old'`, with full paths, where GNU prints `removed 'b'`.
 - With no operands, the message is `install: missing file operand` without the `Try 'install --help'` hint. The exit status is 1, as in GNU.
 
 ### Examples
 
 ```bash
-install -v a b             # 'C:/work/a' -> 'C:/work/b'  (run in C:/work)
-install -d -v x/y          # install: creating directory 'x/y'
+install -v a b             # 'a' -> 'b'
+install -d -v x/y          # install: creating directory 'x', then 'x/y'
 install -t ~/.local/bin ps-bash.exe
 install -D build/app.exe dist/bin/app.exe
 ```
@@ -447,34 +445,43 @@ install -D build/app.exe dist/bin/app.exe
 Create a uniquely named temporary file or directory and print its name.
 
 ```
-mktemp [-d] [-p DIR] [TEMPLATE]
+mktemp [OPTION]... [TEMPLATE]
 ```
 
 ### Flags
 
-| Flag | Argument | Description |
-|------|----------|-------------|
-| `-d` | -- | Create a directory instead of a file |
-| `-p` | DIR | Create the entry in DIR |
+| Flag | Description |
+|------|-------------|
+| `-d`, `--directory` | Create a directory instead of a file |
+| `-p DIR`, `--tmpdir[=DIR]` | Create the entry in DIR. Without DIR, use `$TMPDIR`, or the default directory when it is unset |
+| `-t` | Create the entry in `$TMPDIR`, else the `-p` DIR, else the default directory |
+| `--suffix=SUFFIX` | Append SUFFIX to the name. The TEMPLATE must then end in `X` |
+| `-u`, `--dry-run` | Print a free name without creating anything |
+| `-q`, `--quiet` | Print no message when creation fails |
 
 ### Behavior
 
-- Without `-p`, the entry is created in the `ps-bash/proc-sub/` folder of the system temp directory. That directory is fixed when the ps-bash host starts: a `TMPDIR` assigned in the script is not consulted.
-- A TEMPLATE's trailing `X` run is dropped, the rest of its base name becomes a prefix, and a random 8.3 name is appended (`app.XXXXXX` gives something like `app.k3xq0v1z.ab4`). A directory part in the template is ignored.
+- A TEMPLATE needs a run of at least three `X`. The last run is replaced with random letters and digits, one for each `X`: `mktemp app.XXXXXX` gives a name such as `app.lEqs45`. The default TEMPLATE is `tmp.XXXXXXXXXX`.
+- A TEMPLATE on its own is a path relative to the current directory, and may name a directory that exists: `mktemp build/app.XXXXXX`.
+- With no TEMPLATE, or with `-p`, `--tmpdir`, or `-t`, the entry goes into a directory: the DIR you gave, else `$TMPDIR`, else the default directory. `TMPDIR` must be exported.
+- The default directory is the `ps-bash/proc-sub/` folder of the system temp directory.
 - Files are created exclusively (never adopting an existing path), and with owner-only permissions on Linux and macOS (0600 file, 0700 directory).
-- The printed name is in shell form (`C:/Users/you/AppData/Local/Temp/ps-bash/proc-sub/...`). The output object also has a `Path` property with the native path.
+- The printed name keeps the directory as typed (`sub/in.WihIn2`, or `C:/Users/you/AppData/Local/Temp/ps-bash/proc-sub/tmp.EjPBGsc3qo` for the default directory). The output object also has a `Path` property with the native path.
+
+Errors exit 1 with GNU's messages: `mktemp: too few X's in template ‘app.XX’`, `mktemp: too many templates`, and `mktemp: failed to create file via template ‘sub/app.XXXXXX’: No such file or directory` when the directory is missing.
 
 ### Differences from GNU
 
-- The X count does not set the length of the random part.
-- `-t`, `-u`/`--dry-run`, `-q`, `--suffix` and `--tmpdir` are not options: any other word is taken as the TEMPLATE, and the last one wins.
+- The default directory is ps-bash's temp folder, not `/tmp`. Set and export `TMPDIR` to choose another.
 
 ### Examples
 
 ```bash
 tmp=$(mktemp)
 dir=$(mktemp -d)
-work=$(mktemp -d build.XXXXXX)
+work=$(mktemp -d build.XXXXXX)        # in the current directory
+log=$(mktemp --suffix=.log run.XXXXXX)
+export TMPDIR=$PWD/scratch            # later mktemp calls create their files in scratch/
 trap 'rm -rf "$dir"' EXIT
 ```
 

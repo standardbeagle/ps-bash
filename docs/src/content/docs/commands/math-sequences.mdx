@@ -148,7 +148,7 @@ seq 0.0 0.5 2.0
 
 ## expr
 
-Evaluate one expression, print the result, and set the exit status from it.
+Evaluate an expression, print the result, and set the exit status from it.
 
 ```
 expr EXPRESSION
@@ -166,14 +166,19 @@ Each operand and operator is a separate argument: `expr 2 + 3`, not `expr 2+3`.
 | `length STRING` | Length of STRING |
 | `substr STRING POS LEN` | Substring from 1-based POS, at most LEN characters; empty when POS is out of range or LEN is below 1 |
 | `index STRING CHARS` | 1-based position of the first character of STRING found in CHARS, or `0` |
+| `A \| B` | A when it is neither empty nor `0`, otherwise B |
+| `A & B` | A when neither side is empty or `0`, otherwise `0` |
+| `( EXPRESSION )` | Grouping |
+| `+ TOKEN` | TOKEN as a string, even when it is a keyword such as `length` |
 | `STRING` | STRING itself |
 
-Quote `*`, `<`, `>`, `|`, and `&` so the shell does not treat them as operators: `expr 3 '*' 4`.
+Operators chain and follow GNU's precedence, lowest first: `|`, `&`, comparisons, `+ -`, `* / %`, `:`. Operators on one level group from the left, so `expr 1 + 2 + 3` prints `6` and `expr 2 + 3 '*' 4` prints `14`.
+
+Quote `*`, `<`, `>`, `|`, `&`, `(`, and `)` so the shell does not treat them as operators: `expr '(' 1 + 2 ')' '*' 3`.
 
 ### Differences from GNU
 
-- One operation per call. `expr` reads only the first three arguments of an infix expression, so `expr 1 + 2 + 3` prints `3` (GNU: `6`). Parentheses and the `|` and `&` operators are not supported. Chain the calls or use `$(( ))`.
-- `<`, `<=`, `>=`, `>` compare strings case-insensitively; `=` and `!=` are case-sensitive.
+- Strings compare by code point, which is GNU's order in the C locale. In another locale GNU uses that locale's collation order.
 
 ### Exit status
 
@@ -181,7 +186,7 @@ Quote `*`, `<`, `>`, `|`, and `&` so the shell does not treat them as operators:
 |--------|---------|
 | 0 | Result is neither empty nor `0` |
 | 1 | Result is empty or `0` |
-| 2 | Error: missing operand, `division by zero`, `non-integer argument`, `invalid regular expression`, unknown operator |
+| 2 | Error: `missing operand`, `syntax error: ...`, `division by zero`, `non-integer argument`, `invalid regular expression` |
 
 The 0/1 rule is what makes `if expr "$name" : 'tmp_' >/dev/null; then ...` work.
 
@@ -202,12 +207,14 @@ Each result is a `PsBash.ExprOutput` object:
 expr 2 + 3
 expr 17 / 5
 expr 17 % 5
+expr '(' 1 + 2 ')' '*' 3
 ```
 
 ```text
 5
 3
 2
+9
 ```
 
 ```powershell
@@ -269,12 +276,11 @@ shuf -i LO-HI [OPTION]...
 | `-i LO-HI` | Input is the integers LO through HI |
 | `-n N`, `--head-count=N` | Print at most N lines |
 
-Without `-e` or `-i`, shuf reads FILE, or the pipeline when there is no FILE. A record without a trailing newline is joined to the next one first, as in every line consumer.
+Without `-e` or `-i`, shuf reads FILE, or the pipeline when there is no FILE. A record without a trailing newline is joined to the next one first, as in every line consumer. A FILE that cannot be read prints `shuf: FILE: No such file or directory` and exits 1.
 
 ### Differences from GNU
 
 - Not supported: `-r`/`--repeat`, `-o`/`--output`, `-z`/`--zero-terminated`, `--random-source`, `--input-range`/`--echo` long forms, and attached values (`-n3`). An unrecognized option prints `shuf: invalid option '-r'` (naming the option) and exits 1.
-- A missing FILE produces no output and no error.
 - The shuffle is unseeded; there is no way to reproduce an order.
 
 ### Return type

@@ -29,12 +29,12 @@ With no `FILE`, gzip compresses (or with `-d`, decompresses) its pipeline input 
 | `-d`, `--decompress`, `--uncompress` | Decompress |
 | `-f`, `--force` | Overwrite an existing output file |
 | `-k`, `--keep` | Keep the input file |
-| `-l`, `--list` | List compressed size, uncompressed size, and ratio for each `.gz` file |
+| `-l`, `--list` | List compressed size, uncompressed size, ratio, and uncompressed name for each `.gz` file, under a header line |
 | `-q`, `--quiet`, `--silent` | Suppress warnings (directory ignored, unknown suffix, already has suffix) |
 | `-r`, `--recursive` | Descend into directory operands and process each file in them |
 | `-S SUF`, `--suffix=SUF` | Use `SUF` instead of `.gz` when compressing and decompressing |
 | `-t`, `--test` | Check that each file decompresses. Prints nothing on success; with `-v`, prints `FILE: OK` |
-| `-v`, `--verbose` | Print `FILE: RATIO` for each file processed |
+| `-v`, `--verbose` | Print `FILE: RATIO -- replaced with FILE.gz` on stderr for each file processed |
 | `-1` .. `-9`, `--fast`, `--best` | Compression level. `-1`/`--fast` maps to .NET `Fastest`, `-9`/`--best` to `SmallestSize`, anything else to `Optimal`. The last level given wins |
 | `-h`, `--help`, `-V`, `--version`, `-L`, `--license` | Print help or version information |
 
@@ -47,27 +47,36 @@ Refused with exit 2: `-Z`/`--lzw` and `-b`/`--bits`, because no LZW codec is ava
 | Code | Meaning |
 |------|---------|
 | 0 | Success |
-| 1 | Usage error, missing file, or corrupt input |
-| 2 | Output file already exists and `-f` was not given, or a refused option |
+| 1 | An error: usage error, missing file, or corrupt input |
+| 2 | A warning and no error: a directory operand without `-r`, an unknown suffix under `-d`, or an output file that already exists without `-f`. Also a refused option |
+
+These are GNU's statuses. Messages name each file as typed.
 
 ### Return type
 
-Without `-c`, gzip writes files and returns nothing unless `-v` is given. With `-c`, or with pipeline input, it returns the output bytes as pipeline records.
+Without `-c`, gzip writes files and returns nothing. With `-c`, or with pipeline input, it returns the output bytes as pipeline records.
 
-With `-l`, each file produces one `PsBash.GzipListOutput` object:
+`-l` prints GNU's table:
+
+```text
+         compressed        uncompressed  ratio uncompressed_name
+                 30                  30  60.0% g.txt
+```
+
+Each file's row is one `PsBash.GzipListOutput` object:
 
 | Property | Type | Description |
 |----------|------|-------------|
 | `CompressedSize` | long | Size of the `.gz` file in bytes |
 | `UncompressedSize` | long | Decompressed size in bytes |
 | `Ratio` | string | Space saved, formatted as `"53.0%"` |
-| `FileName` | string | Path of the `.gz` file |
+| `FileName` | string | The uncompressed name: the operand as typed, without `.gz` |
 | `BashText` | string | The formatted listing line |
 
 ### Differences from GNU gzip
 
-- `-l` prints one line per file with no column header, and the last column is the full Windows path of the `.gz` file (`C:\work\a.txt.gz`). GNU prints a header and the uncompressed name as typed.
-- `-v` prints `FILE: RATIO` to stdout, with FILE as a full Windows path. GNU prints `FILE: RATIO -- replaced with FILE.gz` to stderr.
+- `-l` lists files only. With piped input and no `FILE`, `-l` is ignored and the input is compressed. GNU lists the stream under the name `stdout`.
+- The gzip header does not store the file name, so the compressed size is a few bytes smaller than GNU's.
 - Running `gzip` with no `FILE` and no pipeline input reports `gzip: missing file operand`. It does not wait on the terminal.
 - An existing output file is never overwritten interactively. Without `-f`, gzip reports `already exists; not overwritten` and exits 2.
 
@@ -95,7 +104,7 @@ gzip -t backup.gz && echo ok
 
 ```powershell
 # Access typed properties from the list output
-$info = gzip -l backup.gz
+$info = gzip -l backup.gz | Where-Object CompressedSize   # skip the header line
 $info.CompressedSize     # 14320
 $info.UncompressedSize   # 52480
 $info.Ratio              # "72.7%"
@@ -105,7 +114,7 @@ $info.Ratio              # "72.7%"
 
 ## gunzip
 
-Decompress gzip files. `gunzip` is `gzip -d` under another name: it takes every gzip flag, and `-d` is implied.
+Decompress gzip files. `gunzip` behaves as `gzip -d`: it takes every gzip flag, and `-d` is implied. It is a command of its own, so it also works when another command runs it (`xargs gunzip`, `env gunzip f.gz`).
 
 ### Syntax
 
@@ -113,7 +122,7 @@ Decompress gzip files. `gunzip` is `gzip -d` under another name: it takes every 
 gunzip [OPTION]... [FILE]...
 ```
 
-`gunzip FILE.gz` writes `FILE` and removes `FILE.gz` unless you pass `-k` or `-c`. If the name lacks the suffix (`.gz`, or the one set with `-S`), gunzip warns `unknown suffix -- ignored` and skips the file. If `FILE` does not exist, the error names `FILE.gz`, but gunzip does not go on to decompress `FILE.gz` as GNU does. Pass the `.gz` name.
+`gunzip FILE.gz` writes `FILE` and removes `FILE.gz` unless you pass `-k` or `-c`. If the name lacks the suffix (`.gz`, or the one set with `-S`), gunzip warns `unknown suffix -- ignored`, skips the file, and exits 2. If `FILE` does not exist, gunzip decompresses `FILE.gz`, as GNU does: `gunzip data.csv` is the same as `gunzip data.csv.gz`.
 
 ### Examples
 

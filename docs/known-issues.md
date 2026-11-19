@@ -36,9 +36,9 @@ repeated here, under their area. Check both pages before you report a bug.
   - Followed by other statements in a compound command or function body, it covers only
     those statements. Bash keeps the redirection after the block or function ends.
   - An interactive line that holds only the `exec`, and `exec 1>&-`, are refused the same way.
-  - `exec N<>file` is not supported.
 
-  `exec` on descriptors 3 and up (`exec 3>f`, `exec {fd}>f`, `exec 3>&1`, `exec 3>&-`) works.
+  `exec` on descriptors 3 and up (`exec 3>f`, `exec {fd}>f`, `exec 3>&1`, `exec 3>&-`, and
+  the read-write `exec 5<>f`) works.
 - **`/dev/stdin` as a file operand.** Only `cat` and awk's `getline < "/dev/stdin"` read it.
   `head`, `tail`, `sort`, `grep`, `sed`, `cut`, `wc` and the other line tools report that it
   cannot be opened; use `-` or a pipe. `cp`, `touch`, `stat` and `source` do not accept a
@@ -88,6 +88,41 @@ repeated here, under their area. Check both pages before you report a bug.
   `&`. Bash leaves that child running. A `setsid` child survives in both. A plain `prog args`
   is the exception: only that process is stopped (see above).
 
+## Shell language
+
+- **`select` and `coproc` are not supported.** Each prints `bash: select: not supported by
+  ps-bash` (or `coproc`) with status 2, and the rest of the script runs. This is by design.
+- **`BASH_ARGV`, `BASH_ARGC`, `BASH_COMMAND` and `HISTCMD` are unset.**
+- **`declare -A m=([a]b]=3)` takes `a]b` as the key.** Bash rejects the element.
+- **`caller` at the top level returns 1.** Bash prints `0 NULL` and returns 0.
+- **A sourced file that turns on `pipefail` does not turn it on for the caller,** unless the
+  calling script also names `pipefail` itself.
+- **`help NAME` prints the synopsis and the one-line description only,** for 61 builtins. Bash
+  goes on with the long text.
+- **The report for a killed job is shorter.** After `sleep 30 & kill -9 $!; wait $!`, ps-bash
+  prints `bash: 1000 Killed`. Bash prints `bash: line 1: <pid> Killed  sleep 30`. The
+  status, 137, is the same.
+- **`< empty-file wc` pads its counts as for a pipe** (`      0       0       0`). Bash's wc
+  sees a regular file and prints `0 0 0`.
+- **`nice` does not exist.** `nice cmd` is "command not found" (127).
+
+## Commands
+
+- **`date` ignores `$TZ`.** `TZ=UTC date` prints local time. Use `date -u`.
+- **`gzip -l` does not list piped input.** `gzip -l < f.gz` compresses the stream. GNU lists
+  it under the name `stdout`. Name the file: `gzip -l f.gz`.
+- **`mktemp` without `-p` or an exported `TMPDIR` creates its file in ps-bash's temp folder**
+  (`…/Temp/ps-bash/proc-sub` on Windows), not in `/tmp`.
+- **`install -v` reports a replaced destination as `install: swapped 'DEST' -> 'DEST.old'`**
+  with full paths. GNU prints `removed 'DEST'`. The other `-v` lines match GNU.
+- **`tput setaf N` on Windows prints the 256-color form (`ESC[38;5;Nm`) for colors 0-15.**
+  ncurses prints `ESC[3Nm` and `ESC[9Nm` there. Both select the same color.
+- **`timeout -s SIG` and `-k DUR` are checked but have no effect.** The command is stopped the
+  same way for every signal, and the status is 124 where GNU's `timeout -s KILL` gives 137.
+- **Some single-letter flags are taken by PowerShell.** `ping -W SECS`, `uname -o`, `uname -p`,
+  `uname -i` and `shuf -o FILE` fail with `Parameter cannot be processed because the parameter
+  name 'W' is ambiguous`, and `uname -v` is ignored.
+
 ## macOS
 
 - **An outside SIGUSR1 does not reach `trap … USR1`.** The .NET runtime uses SIGUSR1 to
@@ -111,7 +146,7 @@ repeated here, under their area. Check both pages before you report a bug.
 
 ## Interactive shell
 
-No `bind`, no `set -m` job control, and the prompt escapes `\j`, `\!` and `\#` are constants.
+`bind` only warns `line editing not enabled`, there is no `set -m` job control, and the prompt escapes `\j`, `\!` and `\#` are constants.
 See [Using ps-bash](shell-guide.md#limitations).
 
 ## Fixed in v0.15.0
@@ -125,6 +160,22 @@ Entries this page or earlier releases listed as open:
 - A nested shell, or a program started with `2>&1`, saw every shell variable.
 - `--rcfile` was parsed and dropped.
 - Background job output was held until `wait`.
+- `kill -FOO PID` sent TERM; an unknown signal is now an error.
+- `expr 1 + 2 + 3` printed `3`; `expr` now chains and follows GNU's precedence.
+- `date -I`, `-R` and `--rfc-3339` were ignored and the default format was printed.
+- `tee`, `ping`, `tput`, `shuf` and `id` exited 0 after a failure.
+- `uname` printed `MINGW64_NT-…` on Linux and macOS.
+- `mktemp` ignored `$TMPDIR` and a template's directory.
+- `rmdir -p a/b` went on to remove empty directories above `a`.
+- `rg` printed `\` in the paths it found on Windows.
+- `c=eval; $c 'echo x'`, `"$@"` and `command NAME` could not run a builtin (127).
+- The quoted word `pipefail` in a script (`grep -c pipefail f && echo y`) broke the parse.
+- `PPID`, `SHLVL`, `GROUPS`, `DIRSTACK`, `BASH_ALIASES`, `SRANDOM` and `BASH_SUBSHELL` were
+  unset, and `$IFS` read empty before it was assigned.
+- `exec 5<>file` was a parse error.
+- `( trap 'echo err' ERR; false )` did not run the trap, and neither did
+  `trap 'echo D' DEBUG; echo a` on one line.
+- `nosuchcmd 2>&1 | head -1` left 0 in `PIPESTATUS[0]`; it is 127.
 
 ## Production review status
 

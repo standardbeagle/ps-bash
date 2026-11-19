@@ -254,13 +254,11 @@ tac [-s SEP] [FILE]...
 
 `-b`/`--before` and `-r`/`--regex` are refused (exit 2).
 
+With `-s SEP`, each record keeps the separator that ends it, as in GNU: `printf 'a,b,c,' | tac -s ,` prints `c,b,a,`. No newline is added.
+
 ### Return type
 
 Pipeline input: the original records, in reverse order. File input: `PsBash.TextOutput`.
-
-### Differences from GNU
-
-- With `-s SEP`, each reversed record is emitted as its own line without the separator, and the empty piece after a trailing separator comes first. `printf 'a,b,c,' | tac -s ,` prints an empty line, then `c`, `b`, `a` on separate lines. GNU keeps the separator attached and prints `c,b,a,`.
 
 ### Examples
 
@@ -303,7 +301,7 @@ With no flags, wc prints lines, words, and bytes.
 
 `wc` counts the byte stream, not records: `printf abc | wc -c` is `3` and `printf abc | wc -l` is `0`. The byte count of a file is its exact size, BOM included. Invalid UTF-8 bytes count in `-c` only, following GNU's UTF-8 locale rules.
 
-File output pads every column to the digit width of the files' total size, as GNU does. Standard input uses a fixed layout with the first column unpadded: `echo hi | wc` prints `1       1       3`, where GNU prints `      1       1       3`.
+Columns are laid out as in GNU. One input with one count prints the bare number (`wc -l f.txt`, `seq 3 | wc -l`). Otherwise every column is padded to the digit width of the files' total size, and to at least 7 when an input is not a regular file, such as a pipe: `echo hi | wc` prints `      1       1       3`.
 
 A `-` operand (`wc - f.txt`) counts standard input as it streams, so endless input is not held in memory. A second `-` counts zeros, as in GNU.
 
@@ -375,7 +373,7 @@ nl [OPTION]... [FILE]...
 
 A bad style, format, or number exits 1. Not implemented, refused with exit 2: `-b pREGEX`, and the logical-page options `-d`, `-f`, `-h`, `-l`, `-p`.
 
-With the default `-b t`, an unnumbered empty line is printed empty. GNU pads it with spaces to the number width plus the separator.
+A line that gets no number (an empty line under the default `-b t`) starts with blanks as wide as the number and the separator, as in GNU.
 
 ### Return type
 

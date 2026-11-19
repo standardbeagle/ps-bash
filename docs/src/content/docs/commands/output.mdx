@@ -162,7 +162,7 @@ Flags `-`, `+`, space, `0`, `#`, a field width, and a precision are supported, a
 - Numeric arguments are read like C `strtoimax`: `0x` hex, leading `0` octal, an optional sign. A leading quote gives the character code: `printf '%d' "'A"` prints `65`.
 - A non-numeric argument to a numeric conversion prints `printf: X: invalid number` on stderr; printf continues and exits 1.
 - An invalid conversion character prints what came before it, reports `` printf: `y': invalid format character ``, and exits 1.
-- A conversion with no argument left prints nothing, and its width is not applied: `printf '[%s][%d][%5s]\n' a` prints `[a][][]`. bash prints `[a][0][     ]`.
+- A conversion with no argument left gets an empty argument, as in bash: `%s` prints nothing, a numeric conversion prints `0`, and the width still applies. `printf '[%s][%d][%5s]\n' a` prints `[a][0][     ]`.
 
 ### Escape sequences in FORMAT
 

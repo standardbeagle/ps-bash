@@ -135,14 +135,14 @@ Signal names and numbers follow bash on Linux (1-31, then `RTMIN` ... `RTMAX` fo
 - A signal sent to another ps-bash shell (its `$$`) or to the current script (`kill -USR1 $$`) is delivered as a message: a `trap` for it runs; without one, `SIGCHLD`, `SIGURG`, and `SIGWINCH` are ignored and any other signal ends that script with status 128+N.
 - Any other process cannot receive POSIX signals on Windows. Every signal except 0, `CHLD`, `URG`, and `WINCH` terminates it. `kill -0 PID` and those three only check that the process exists.
 - A ps-bash host process is never killed directly, because it runs every script in its session.
-- An unknown signal name in the short form (`kill -FOO PID`) or in `--signal=FOO` is not rejected: `TERM` is sent. bash prints `kill: FOO: invalid signal specification` and exits 1.
+- A signal that does not exist is rejected in every form (`-FOO`, `-99`, `-s FOO`, `-n 99`, `--signal=FOO`): `kill` prints `kill: FOO: invalid signal specification`, exits 1 and signals nothing, as bash does.
 
 ### Exit status
 
 | Status | Meaning |
 |--------|---------|
 | 0 | Every target was signalled |
-| 1 | A target did not exist (`kill: (PID) - No such process`), an argument was not a PID or jobspec, or the signal given to `-s`, `-n`, or `--signal SIG` was invalid (`kill: FOO: invalid signal specification`) |
+| 1 | A target did not exist (`kill: (PID) - No such process`), an argument was not a PID or jobspec, or the signal was invalid (`kill: FOO: invalid signal specification`) |
 | 2 | No PID or jobspec given (usage message) |
 
 ### Examples
@@ -210,10 +210,12 @@ DURATION is a number (fractions allowed) with an optional `s`, `m`, `h`, or `d` 
 | Flag | Description |
 |------|-------------|
 | `--preserve-status` | On timeout, exit 143 instead of 124 |
-| `-s SIG`, `--signal=SIG` | Accepted, ignored |
-| `-k DUR`, `--kill-after=DUR` | Accepted, ignored. DUR is validated in the `-k DUR` and `--kill-after DUR` forms only |
+| `-s SIG`, `--signal=SIG` | SIG is checked, then ignored: the command is stopped the same way for every signal |
+| `-k DUR`, `--kill-after=DUR` | DUR is checked, then ignored |
 | `--foreground` | Accepted, ignored |
 | `-v`, `--verbose` | Accepted, ignored |
+
+`-s` and `-k` take their value attached or separate (`-sKILL`, `-s KILL`, `--signal=KILL`, `--signal KILL`). An unknown signal prints `timeout: ‘FOO’: invalid signal`, and a bad DUR prints `timeout: invalid time interval ‘x’`. Both exit 125.
 
 ### Behavior
 
@@ -224,9 +226,11 @@ COMMAND runs as bash text in a nested pipeline of the current shell, so builtins
 | Status | Meaning |
 |--------|---------|
 | 124 | Timed out (143 with `--preserve-status`) |
-| 125 | Usage error or invalid duration |
+| 125 | Usage error: an invalid duration, signal, or option |
 | 127 | Command not found |
 | other | COMMAND's own status |
+
+Because `-s` does not change how the command is stopped, `timeout -s KILL 1 sleep 5` exits 124. GNU exits 137.
 
 ### Examples
 
@@ -287,17 +291,18 @@ Print the environment, or run a command with a modified environment.
 ### Syntax
 
 ```text
-env [-i] [-u NAME]... [NAME=VALUE]... [COMMAND [ARG]...]
-env [NAME]
-printenv [NAME]...
+env [-i] [-0] [-u NAME]... [-C DIR] [NAME=VALUE]... [COMMAND [ARG]...]
+printenv [-0] [NAME]...
 ```
 
 ### Flags
 
 | Flag | Description |
 |------|-------------|
-| `-i`, `--ignore-environment` | Start from an empty environment |
+| `-i`, `--ignore-environment`, `-` | Start from an empty environment |
 | `-u NAME`, `--unset=NAME` | Remove NAME |
+| `-0`, `--null` | End each printed entry with NUL, not a newline (`env` without a COMMAND, and `printenv`) |
+| `-C DIR`, `--chdir=DIR` | Run COMMAND in DIR (`env` only) |
 | `--` | End of options |
 
 ### Behavior
@@ -305,19 +310,25 @@ printenv [NAME]...
 - With no arguments, `env` and `printenv` print every exported variable as `NAME=VALUE`, sorted by name.
 - `env NAME=VALUE... COMMAND` runs COMMAND with the changed environment and restores it afterwards. Without a COMMAND, it prints the resulting environment.
 - `printenv NAME...` prints only the values. A name that is not exported prints nothing and sets status 1.
-- `env NAME` for an exported NAME prints `NAME=VALUE` (a ps-bash extension). Otherwise the word is a command to run.
+- `env NAME` runs NAME as a command, as GNU does. To print one variable, use `printenv NAME`.
 - Unexported variables: `env`, `printenv`, and `compgen -e` list exported variables only. A nested shell (`sh -c`, `bash script.sh`) and a program started with `2>&1`, `&>`, or `|&` receive exported variables only. A program started as a plain `prog args` inherits every shell variable, exported or not.
 
 ### Differences from GNU
 
 - Output is sorted by name.
-- `-0`, `-C`/`--chdir`, `-S`/`--split-string`, `-v`, and the signal options are not supported.
-- `env NAME=VALUE printenv NAME` prints `NAME=VALUE`. GNU prints the value.
-- `env -u NAME printenv NAME` fails with `NAME: command not found` (exit 127). GNU runs `printenv`, which exits 1.
+- `-S`/`--split-string`, `-v`/`--debug`, and the signal options are refused with exit 125.
 
 ### Exit status
 
-0, or COMMAND's status. 127 with `env: 'NAME': No such file or directory` when COMMAND is not found.
+| Status | Meaning |
+|--------|---------|
+| 0 | `env` printed the environment, or `printenv` found every NAME |
+| 1 | `printenv`: a NAME is not exported |
+| 2 | `printenv`: usage error |
+| 125 | `env`: usage error, such as an unknown option or `-u` without a NAME |
+| 126 | `env`: COMMAND was found but cannot be run (`env: ‘./dir’: Permission denied`) |
+| 127 | `env`: COMMAND was not found (`env: ‘NAME’: No such file or directory`) |
+| other | COMMAND's own status |
 
 ### EnvEntry Properties
 
@@ -336,7 +347,7 @@ env | grep -c '^PS'
 ```
 
 ```powershell
-(env HOME).Value
+(printenv HOME).Value
 ```
 
 ---
@@ -358,7 +369,12 @@ date [OPTIONS] [+FORMAT]
 | `-d STRING`, `--date=STRING` | Use the time described by STRING instead of now |
 | `-u`, `--utc`, `--universal` | Print in UTC |
 | `-r FILE`, `--reference=FILE` | Use FILE's modification time |
+| `-I[FMT]`, `--iso-8601[=FMT]` | ISO 8601 output. FMT is `date` (the default), `hours`, `minutes`, `seconds`, or `ns` |
+| `-R`, `--rfc-email` | RFC 5322 output: `Thu, 01 Jan 1970 00:00:00 +0000` |
+| `--rfc-3339=FMT` | RFC 3339 output. FMT is `date`, `seconds`, or `ns` |
 | `+FORMAT` | Output format |
+
+Long options can be shortened to a unique prefix (`--iso=seconds`), and so can FMT (`-Is`). Only one output format may be given: `date -I -R` prints `date: multiple output formats specified` and exits 1.
 
 `-d` accepts the GNU date grammar: absolute dates and times, `@EPOCH`, relative items (`yesterday`, `2 days ago`, `next friday`, `+3 hours`), weekdays, and time zones. The result is shown in the local zone unless `-u` is given.
 
@@ -373,7 +389,7 @@ date [OPTIONS] [+FORMAT]
 | `%A` / `%a` | Weekday name / abbreviated | | `%N`, `%1N`...`%9N` | Nanoseconds (100 ns resolution) |
 | `%B` / `%b` / `%h` | Month name / abbreviated | | `%p` / `%P` | `AM`/`PM` / `am`/`pm` |
 | `%u` / `%w` | Weekday 1-7 (Mon=1) / 0-6 (Sun=0) | | `%s` | Seconds since the epoch |
-| `%F` | `%Y-%m-%d` | | `%z` | UTC offset, `+hhmm` |
+| `%F` | `%Y-%m-%d` | | `%z` / `%:z` | UTC offset, `+hhmm` / `+hh:mm` |
 | `%T` / `%R` | `%H:%M:%S` / `%H:%M` | | `%Z` | Time zone (see below) |
 | `%D` | `%m/%d/%y` | | `%r` | 12-hour time with AM/PM |
 | `%n` / `%t` / `%%` | Newline / tab / `%` | | | |
@@ -381,8 +397,10 @@ date [OPTIONS] [+FORMAT]
 ### Differences from GNU
 
 - `%Z` and the zone in the default output are `UTC` for UTC and otherwise the system time-zone ID (`America/Chicago` on Linux and macOS, `Central Standard Time` on Windows), not an abbreviation such as `CST`.
-- Not supported: `%c`, `%x`, `%X`, `%C`, `%g`, `%G`, `%U`, `%V`, `%W`, `%:z`, and padding modifiers (`%-d`, `%_H`, `%^a`). An unsupported specifier is printed as is.
-- `-I`/`--iso-8601`, `-R`/`--rfc-email`, `--rfc-3339`, `-f`/`--file`, and `-s`/`--set` are not implemented. `-I`, `-R`, and `--rfc-3339` are ignored without an error, and the default format is printed. A date operand (`date 010112002025`) prints `date: cannot set date: Operation not permitted` and the current time.
+- Not supported: `%c`, `%x`, `%X`, `%C`, `%g`, `%G`, `%U`, `%V`, `%W`, and padding modifiers (`%-d`, `%_H`, `%^a`). An unsupported specifier is printed as is.
+- `$TZ` is ignored. `TZ=UTC date` prints local time; use `-u` for UTC.
+- `-f`/`--file` and `--debug` are refused with exit 2.
+- `date` never sets the clock. `-s STRING` prints `date: cannot set date: Operation not permitted`, then the time STRING describes, and exits 1, which is what GNU does without root. A date operand (`date 010112002025`) prints the same message and exits 1, but prints the current time where GNU prints the time the operand names.
 
 ### Exit status
 
@@ -486,7 +504,9 @@ id [-u | -g | -G] [-n] [-r] [USER]
 | `-n` | Names instead of IDs (with `-u`, `-g`, `-G`) |
 | `-r` | Accepted, no effect |
 
-On Linux and macOS, `id` runs `/usr/bin/id` with the same arguments, so output matches the system's.
+On Linux and macOS, `id` runs `/usr/bin/id` with the same arguments, so its output, error messages, and exit status are the system's.
+
+A USER that does not exist prints `id: ‘USER’: no such user` and exits 1 on every platform.
 
 On Windows, IDs are security identifiers (SIDs):
 
@@ -496,9 +516,8 @@ uid=S-1-5-21-...-1001(MACHINE\you) gid=S-1-1-0 groups=Everyone,Users,...
 
 ### Differences on Windows
 
-- Flags must be separate words: `id -u -n`, not `id -un`.
+- Flags must be separate words: `id -u -n`. A bundle such as `id -un` is read as a user name and fails with `id: ‘-un’: no such user`.
 - `id -u` prints a SID, not a number, so tests such as `[ "$(id -u)" -eq 0 ]` do not detect an administrator.
-- An unknown USER silently reports the current user.
 
 ### Example
 
@@ -518,17 +537,24 @@ Print system information.
 uname [-asnrm]
 ```
 
-| Flag | Output |
-|------|--------|
-| `-s` | Kernel name (default when no flag is given) |
-| `-n` | Host name, lower-case |
-| `-r` | OS version, `Major.Minor.Build` |
-| `-m` | `x86_64` for a 64-bit process, else `i686` |
-| `-a` | `-s -n -r -m` followed by `MINGW64` |
+On Linux and macOS, `uname` reports the host kernel, read with the `uname` system call, so `case $(uname -s) in Linux) ...` takes the Linux branch. On Windows it reports what Git for Windows (MSYS2) reports.
 
-Flags can be bundled (`-sr`). Unknown arguments are ignored.
+| Flag | Linux and macOS | Windows |
+|------|-----------------|---------|
+| `-s` (default) | Kernel name: `Linux`, `Darwin` | `MINGW64_NT-10.0.26100` |
+| `-n` | Host name | Host name, lower-case |
+| `-r` | Kernel release | OS version, `Major.Minor.Build` |
+| `--kernel-version` | Kernel version | Ignored |
+| `-m` | Machine: `x86_64`, `aarch64`, `arm64` | `x86_64` for a 64-bit process, else `i686` |
+| `-a` | Linux: kernel name, host name, release, version, the machine three times, then `GNU/Linux`, as coreutils prints it. macOS: the first five of those | `-s -n -r -m` followed by `MINGW64` |
 
-The values follow Git for Windows (MSYS2) on every platform, so scripts that test `uname -s` take their Windows branch:
+Flags can be bundled (`-sr`). On Linux and macOS the long forms (`--kernel-name`, `--nodename`, `--kernel-release`, `--machine`, `--operating-system`, `--all`) work too.
+
+### Differences from GNU
+
+- On Windows, the kernel name is `MINGW64_NT-...`, as in Git Bash. A script that tests `uname -s` takes its MINGW branch there.
+- `-v`, `-o`, `-p`, and `-i` written alone do not reach `uname`, because PowerShell reads them as its own parameters. `-v` is ignored, and the other three fail with a parameter error. This is listed in [Known issues](https://github.com/standardbeagle/ps-bash/blob/main/docs/known-issues.md).
+- An unknown option is not an error. On Windows it is ignored. On Linux and macOS `uname` prints nothing. GNU prints a usage error and exits 1.
 
 ```bash
 uname -s
@@ -537,10 +563,6 @@ uname -s
 ```text
 MINGW64_NT-10.0.26100
 ```
-
-<Aside type="caution">
-`uname` reports `MINGW64_NT-...` and `x86_64` on Linux, macOS, and ARM64 too. Scripts that use `uname` to choose a platform will choose Windows.
-</Aside>
 
 ---
 
@@ -562,7 +584,7 @@ A program prints its path with forward slashes (`C:/Program Files/Git/cmd/git.ex
 
 ### Exit status
 
-0 when every NAME was found. 1 when any NAME was not (`which: no NAME in PATH` on stderr). `which` with no NAME prints `which: missing operand`.
+0 when every NAME was found. 1 when any NAME was not (`which: no NAME in PATH` on stderr). `which` with no NAME prints nothing and exits 1, as Debian's `which` does.
 
 ### WhichOutput Properties
 
@@ -743,12 +765,30 @@ On Linux and macOS, `tput` runs the system `tput` when there is one (falling bac
 |------------|--------|
 | `cols` | Terminal width (80 when unknown) |
 | `lines` | Terminal height (24 when unknown) |
-| `bold` | `ESC[1m` |
+| `colors` | `256` |
+| `bold`, `dim`, `blink`, `rev` | `ESC[1m`, `ESC[2m`, `ESC[5m`, `ESC[7m` |
+| `smul` / `rmul`, `smso` / `rmso`, `sitm` / `ritm` | Underline, standout, and italic on / off |
 | `sgr0` | `ESC[0m` |
-| `setaf N` | `ESC[38;5;Nm` (256-color form) |
+| `setaf N` | `ESC[38;5;Nm` |
+| `setab N` | `ESC[4Nm` for N below 8, `ESC[48;5;Nm` from 16; for 8-15, `ESC[100m` to `ESC[107m` |
+| `cup ROW COL`, `home`, `el`, `ed` | Cursor position, home, clear to end of line, clear to end of screen |
+| `civis` / `cnorm` | Hide / show the cursor |
+| `longname` | `xterm with 256 colors` |
 | `clear` | Nothing |
 
-Any other capability prints nothing and exits 0 (ncurses `tput` exits 4).
+The strings are those of an `xterm-256color` terminal.
+
+### Exit status
+
+0. An unknown capability prints `tput: unknown terminfo capability 'NAME'` and exits 4, as ncurses `tput` does. The system `tput`'s statuses 1 (a boolean capability that is absent) and 4 are passed on.
+
+### Differences from ncurses (built-in table)
+
+- `setaf N` prints the 256-color form for every N. For colors 0-15 ncurses prints the short form, `ESC[31m` for `setaf 1` and `ESC[91m` for `setaf 9`. Both select the same color.
+- `sgr0` prints `ESC[0m`. ncurses prints `ESC(B ESC[m`.
+- `clear` prints nothing.
+- `tput` with no capability prints nothing and exits 0. ncurses prints its usage and exits 2.
+- `-T TERM` and `-S` are not options.
 
 ### Example
 
@@ -775,7 +815,21 @@ ping [-c COUNT | -n COUNT] [-W SECONDS] [-t] HOST
 | `-W SECS` | Per-probe timeout (default 4) |
 | `-t` | Continuous mode, capped at 100 probes |
 
-Uses .NET's `Ping` class, not the system `ping`. Each line is `reply from ADDR: icmp_seq=N ttl=T time=MS ms` or `request timeout for icmp_seq N (STATUS)`. No summary is printed and the exit status is 0 even when every probe times out. A missing HOST prints `ping: usage error: Destination address required` and exits 1.
+Uses .NET's `Ping` class, not the system `ping`. Each line is `reply from ADDR: icmp_seq=N ttl=T time=MS ms` or `request timeout for icmp_seq N (STATUS)`. No summary is printed.
+
+### Exit status
+
+| Status | Meaning |
+|--------|---------|
+| 0 | At least one probe was answered |
+| 1 | No probe was answered, or HOST is missing (`ping: usage error: Destination address required`) |
+| 2 | HOST does not resolve (`ping: HOST: Name or service not known`) |
+
+These are the statuses of Linux `ping`.
+
+### Differences from Linux ping
+
+- `-W SECS` fails in a script with a PowerShell parameter error, because PowerShell reads `-W` as its own parameter. Without it the timeout is 4 seconds. This is listed in [Known issues](https://github.com/standardbeagle/ps-bash/blob/main/docs/known-issues.md).
 
 ### PingReply Properties
 

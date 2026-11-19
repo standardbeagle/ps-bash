@@ -38,7 +38,7 @@ tee [-a] [FILE]...
 - **Streaming**: each record is written as it arrives and then passed on. A fast burst of records is buffered for up to 50 ms before it reaches the file.
 - **Exact bytes**: a record without a trailing newline (`printf x`, `echo -n`) is written without one, so `printf x | tee f` produces a 1-byte file.
 - **Device names**: `/dev/null` discards, `/dev/stdout` and `/dev/stderr` write tee's own streams, `/dev/fd/N` writes descriptor N. No file is created for any of them.
-- **Errors**: a file that cannot be opened is reported (`tee: nodir/x: No such file or directory`) and the other files are still written. The exit status stays 0; GNU exits 1.
+- **Errors**: a file that cannot be opened is reported (`tee: nodir/x: No such file or directory`) and the other files are still written. The message names the file as typed, and `tee` exits 1, as GNU does.
 
 ### Object behavior
 
@@ -133,7 +133,9 @@ Options end at the first operand: everything after the command name belongs to t
 | `-r`, `--no-run-if-empty` | Do not run the command when there is no input |
 | `-t`, `--verbose` | Print each command line to stderr before running it |
 | `-p`, `--interactive` | There is no terminal to confirm on, so nothing runs: `xargs: failed to open /dev/tty for reading`, exit 1 |
-| `-P N`, `--max-procs N` | Accepted; commands run one at a time. The `--max-procs=N` form is not recognized |
+| `-P N`, `--max-procs=N` | Accepted; commands run one at a time. N must be a number that is not negative (`xargs: invalid number "x" for -P option`, exit 1) |
+
+The long forms `--max-args` (`-n`), `--max-lines` (`-L`), `--replace` (`-I`), `--delimiter`, and `--max-procs` take their value after `=` or as the next word.
 
 ### Input handling
 
@@ -141,7 +143,7 @@ By default the input is split on blanks and newlines, as in GNU xargs; single qu
 
 Typed pipeline objects contribute their `BashText`.
 
-With no command, xargs runs `echo`. A bash command name that ps-bash implements (`rm`, `grep`, `basename`, ...) runs the ps-bash version; other names resolve to PowerShell commands or programs on `PATH`. Shell builtins such as `true` and `false` are not commands xargs can run. On Windows, where no `false` program is on `PATH`, `xargs false` prints `xargs: false: No such file or directory` and exits 127.
+With no command, xargs runs `echo`. A bash command name that ps-bash implements (`rm`, `grep`, `basename`, ...) runs the ps-bash version; other names resolve to PowerShell commands or programs on `PATH`. `true` and `false` are among the commands xargs can run on every platform: `echo a | xargs false` exits 123.
 
 ### Exit status
 

@@ -655,7 +655,7 @@ In a ps-bash shell, `env` and `printenv` list only exported variables, the same 
 |----------|------|-------------|
 | `Name` | `string` | Variable name |
 | `Value` | `string` | Variable value |
-| `BashText` | `string` | Formatted as `NAME=value` |
+| `BashText` | `string` | Formatted as `NAME=value`; for `printenv NAME`, the value alone |
 
 ### BashText format
 
@@ -667,7 +667,7 @@ PATH=/usr/local/bin:/usr/bin:/bin
 
 ```powershell
 $vars = env
-$path = env PATH
+$path = printenv PATH
 $path.Name    # "PATH"
 $path.Value   # "/usr/local/bin:/usr/bin:/bin"
 ```
@@ -731,23 +731,25 @@ Represents compression metadata from `gzip -l`.
 | `CompressedSize` | `long` | Compressed file size in bytes |
 | `UncompressedSize` | `long` | Original file size in bytes |
 | `Ratio` | `string` | Compression ratio (e.g. `72.5%`) |
-| `FileName` | `string` | Path to the compressed file |
+| `FileName` | `string` | The uncompressed name: the operand as typed, without `.gz` |
 | `BashText` | `string` | Formatted listing line |
+
+`gzip -l` first emits GNU's header line as plain text, then one object per file.
 
 ### BashText format
 
 ```text
-      1024       4096  75.0% data.gz
+               1024                4096  75.0% data
 ```
 
 ### Example
 
 ```powershell
-$info = gzip -l archive.gz
+$info = gzip -l archive.gz | Where-Object CompressedSize
 $info.CompressedSize     # 1024
 $info.UncompressedSize   # 4096
 $info.Ratio              # "75.0%"
-$info.FileName           # "archive.gz"
+$info.FileName           # "archive"
 ```
 
 ### Pipeline bridge

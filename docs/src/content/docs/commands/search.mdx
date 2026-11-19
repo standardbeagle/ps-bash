@@ -225,7 +225,7 @@ Refused (exit 2, `recognized but not supported`): `--pre`, `--pre-glob`, `--igno
 - **Output layout** follows ripgrep's terminal rules. In a script, or when piped, lines are `path:text` with no line numbers unless `-n`. In an interactive ps-bash terminal, matches are grouped under file headings with line numbers, as ripgrep does on a TTY.
 - **Pruning**: hidden entries and the default set (`.git`, `.hg`, `.svn`, `.vs`, `node_modules`, `bin`, `obj`) are skipped before descending. `--hidden`, `--no-ignore`/`-u` or `PSBASH_SEARCH_NO_IGNORE=1` change this. `.gitignore` files are **not** read.
 - **Exit status**: 0 on a match, 1 on none, 2 on an error (an unreadable path makes it 2 even when another file matched).
-- **Path separators**: on Windows, a file found below a directory prints with a backslash (`src\a.txt`), unlike grep and the rest of ps-bash, which print `src/a.txt`.
+- **Path separators**: a file found below a directory prints with `/` on every platform (`src/a.txt`), as in grep.
 - **Argument rules** are ripgrep's: options may follow operands, long options do not abbreviate, and `--color` requires a value.
 - **Native ripgrep**: set `PSBASH_RG_NATIVE=1` to hand the command line to a real `rg` on `PATH` (no piped input). Use this when you need `.gitignore` handling, preprocessors or the PCRE2 engine.
 

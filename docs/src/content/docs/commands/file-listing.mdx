@@ -525,12 +525,13 @@ Strip the last component from each name.
 dirname NAME...
 ```
 
-Every argument is a NAME: there are no options. A name with no `/` gives `.`; `/usr` gives `/`. Trailing slashes are ignored. Output is one plain string per name. Backslashes in a Windows path are printed as `/`.
+Every argument is a NAME: there are no options. A name with no `/` gives `.`; `/usr` gives `/`; an empty name gives `.`. Trailing slashes are ignored, and so are repeated ones (`a//b` gives `a`). Output is one plain string per name. Backslashes in a Windows path are printed as `/`.
+
+With no operand, `dirname` prints `dirname: missing operand` and exits 1, as GNU does.
 
 ### Differences from GNU
 
-- No `-z`/`--zero`.
-- With no operand, `dirname` prints nothing and exits 0. GNU prints `dirname: missing operand` and exits 1.
+- No `-z`/`--zero`: the word is taken as a NAME.
 
 ### Examples
 
