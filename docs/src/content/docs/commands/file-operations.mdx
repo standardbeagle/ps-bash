@@ -427,7 +427,7 @@ install -d [OPTION]... DIRECTORY...
 - `-d` and `-D` are told apart by the operands, not by case. With no `-t` and no operand that is an existing file, the flag creates directories. Otherwise it creates leading directories for the copy.
 - `--` ends options. Long options (`--mode=...`, `--target-directory=...`) are not recognized.
 - `-v` names files and directories as typed (`'a' -> 'b'`, `install: creating directory 'x/y'`), as GNU does. One line differs: a replaced destination is reported as `install: swapped 'C:/work/b' -> 'C:/work/b.old'`, with full paths, where GNU prints `removed 'b'`.
-- With no operands, the message is `install: missing file operand` without the `Try 'install --help'` hint. The exit status is 1, as in GNU.
+- With no operands, the message is `install: missing file operand`, and with one, `install: missing destination file operand after 'a'`, each followed by `Try 'install --help' for more information.`. The exit status is 1, as in GNU.
 
 ### Examples
 

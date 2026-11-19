@@ -45,7 +45,7 @@ seq [OPTION]... FIRST INCREMENT LAST
 
 ### Exit status
 
-0 on success. An explicit zero increment prints `seq: invalid Zero increment value: '0'` and exits 1.
+0 on success. An explicit zero increment prints `seq: invalid Zero increment value: '0'` and exits 1. No operand (`seq: missing operand`) or a fourth one (`seq: extra operand ‘4’`) also prints `Try 'seq --help' for more information.` and exits 1.
 
 ### Properties
 
@@ -274,13 +274,15 @@ shuf -i LO-HI [OPTION]...
 |------|-------------|
 | `-e` | Treat the arguments as the input lines |
 | `-i LO-HI` | Input is the integers LO through HI |
-| `-n N`, `--head-count=N` | Print at most N lines |
+| `-n N`, `--head-count=N` | Print at most N lines; of several `-n`, the smallest wins |
+| `-r`, `--repeat` | Pick with replacement: N lines with `-n`, otherwise until the reader stops (`shuf -r -e a \| head -3`) |
+| `-o FILE`, `--output=FILE` | Write to FILE after all input is read |
 
 Without `-e` or `-i`, shuf reads FILE, or the pipeline when there is no FILE. A record without a trailing newline is joined to the next one first, as in every line consumer. A FILE that cannot be read prints `shuf: FILE: No such file or directory` and exits 1.
 
 ### Differences from GNU
 
-- Not supported: `-r`/`--repeat`, `-o`/`--output`, `-z`/`--zero-terminated`, `--random-source`, `--input-range`/`--echo` long forms, and attached values (`-n3`). An unrecognized option prints `shuf: invalid option '-r'` (naming the option) and exits 1.
+- Not supported (exit 2): `-z`/`--zero-terminated`, `--random-source`. Options may come anywhere, also after `-e` (`shuf -e a b -n 1`), and take attached values (`-n3`), as in GNU. An unrecognized option prints `shuf: invalid option -- 'x'` and exits 1, and so do GNU's other usage errors (`cannot combine -e and -i options`, `invalid input range`, `invalid line count`, `extra operand`, `no lines to repeat`).
 - The shuffle is unseeded; there is no way to reproduce an order.
 
 ### Return type

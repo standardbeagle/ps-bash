@@ -29,8 +29,10 @@ tee [-a] [FILE]...
 | Flag | Description |
 |------|-------------|
 | `-a`, `--append` | Append to the files instead of overwriting them |
+| `-i`, `--ignore-interrupts` | Accepted; tee is never stopped by an interrupt it does not own |
+| `-p`, `--output-error[=MODE]` | Accepted for every MODE (`warn`, `warn-nopipe`, `exit`, `exit-nopipe`): a reader that closes early stops tee without an error. Another MODE is GNU's `invalid argument` error, exit 1 |
 
-`-i`/`--ignore-interrupts` and `-p`/`--output-error` are refused (exit 2). Operands after `--` are always file names, so `tee -- -x` creates a file named `-x`.
+Operands after `--` are always file names, so `tee -- -x` creates a file named `-x`.
 
 ### Behavior
 

@@ -303,9 +303,7 @@ Like GNU `tr`, it takes no file operands. Use `tr ... < file` or a pipe.
 
 Without `-t`, a shorter SET2 is padded with its last character. With `-d` and `-s` together, SET1 is deleted first and then repeats of SET2 are squeezed. The newline is an ordinary character, so `tr '\n' ,` and `tr -d '\n'` work. Output streams record by record, so `tail -f log | tr '\n' ' '` prints as input arrives. Long options must be spelled in full.
 
-### Differences from GNU
-
-- A missing SET is not an error. `tr` with no SET, and `tr a` without `-d` or `-s`, copy the input unchanged and exit 0. GNU prints `tr: missing operand` and exits 1.
+The number of SETs is checked as GNU does: translating needs two, `-d` one, `-s` one or two, `-d -s` two. Too few is `tr: missing operand`, too many `tr: extra operand`, each with GNU's explanation and usage line, exit 1, and the input is not read.
 
 ### Examples
 

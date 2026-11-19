@@ -16,9 +16,6 @@ repeated here, under their area. Check both pages before you report a bug.
   signal and its status is not 141: `yes | head -n 1; echo ${PIPESTATUS[*]}` prints `141 0` in
   bash. `PIPESTATUS` and `pipefail` are otherwise implemented. Two spec cases stay XFAIL for
   this (`wontfix-sigpipe`).
-- **A stage stopped by `head` reports 0 when `head` writes to the script's stdout.**
-  `nosuchcmd 2>&1 | head -1; echo ${PIPESTATUS[0]}` prints `0`; bash prints `127`. With
-  `head`'s output redirected (`| head -1 >/dev/null`), the status is 127.
 - **A bare `exit` in a pipe stage exits 0.** `false; { exit; } | cat; echo ${PIPESTATUS[*]}`
   prints `0 0`; bash prints `1 0` (the status before the pipeline). `exit N` is correct.
 - **`f 2>&1` where the function `f` runs a program.** The program keeps separate stdout and
@@ -125,12 +122,6 @@ repeated here, under their area. Check both pages before you report a bug.
   ncurses prints `ESC[3Nm` and `ESC[9Nm` there. Both select the same color.
 - **`timeout -s SIG` and `-k DUR` are checked but have no effect.** The command is stopped the
   same way for every signal, and the status is 124 where GNU's `timeout -s KILL` gives 137.
-- **Some single-letter flags are taken by PowerShell.** `ping -W SECS`, `uname -o`, `uname -p`,
-  `uname -i` and `shuf -o FILE` print `Parameter cannot be processed because the parameter
-  name 'W' is ambiguous` (naming the letter), do nothing, and leave status 0. `uname -v` is
-  ignored.
-- **`env -C DIR pwd` prints the shell's directory, not DIR.** Programs and `ls` run in DIR
-  (`env -C DIR sh -c pwd` prints DIR).
 
 ## macOS
 
@@ -185,8 +176,17 @@ Entries this page or earlier releases listed as open:
 - `exec 5<>file` was a parse error.
 - `( trap 'echo err' ERR; false )` did not run the trap, and neither did
   `trap 'echo D' DEBUG; echo a` on one line.
-- `nosuchcmd 2>&1 | head -1 >/dev/null` left 0 in `PIPESTATUS[0]`; it is 127. One case is
-  still open (see Pipelines).
+- `nosuchcmd 2>&1 | head -1` left 0 in `PIPESTATUS[0]`; it is 127.
+- In a script that reads `PIPESTATUS` or sets `pipefail`, a stage after `head` did not end:
+  `printf 'ab\0' | head -c 3 | od -c` printed nothing.
+- `ping -W`, `uname -o`, `-p`, `-i` and `shuf -o` printed a PowerShell parameter error, and
+  `uname -v` was ignored. `id -un` was read as a user name; `shuf -r -n 2 -e a` printed one line.
+- `env -C DIR pwd` printed the shell's directory, and `mkdir dir/` failed.
+- `seq` with no operand printed `1`, `tr a` copied its input, and `touch` and `install` with
+  no operand left out the `Try` line.
+- `tee -i` and `tee -p` were refused (exit 2).
+- `kill -RTMIN+1 PID` was refused, and so was `trap ... RTMIN+1`.
+- `date 010112002025` printed the current time instead of the time it names.
 
 ## Production review status
 

@@ -457,7 +457,8 @@ the set only AFTER its cmdlet is migrated, and add it to
 (`Invoke-BashTee -a f`, `Invoke-BashCp -v a b` — Pester and interactive PowerShell bind them, the
 transpiler never does). Re-inject them with `BashRuntime.PrependDecoys(Arguments, ...)` BEFORE
 `Parse`; prepending is safe because a decoy can only bind ahead of any `--`. A direct call with a
-colliding bare letter that has NO decoy (`Invoke-BashTee -i`) still fails in the binder — quote it.
+colliding bare letter that has NO decoy still fails in the binder — quote it. A command whose letters
+are not in BashFlagSpecs.json is still checked through its `OptSpecSet` (`CommonParameterCollisionGuardTests`).
 
 **Also in `Args/`:** `GnuNumber.TryParse` (head/tail `NUM`: sign, digits, multiplier suffix `b k K m M G T ... kB MB KiB`; lowercase only b/k/m; saturates at int.MaxValue).
 

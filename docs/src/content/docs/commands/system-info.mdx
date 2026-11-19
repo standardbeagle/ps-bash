@@ -317,7 +317,6 @@ printenv [-0] [NAME]...
 
 - Output is sorted by name.
 - `-S`/`--split-string`, `-v`/`--debug`, and the signal options are refused with exit 125.
-- `env -C DIR pwd` prints the shell's directory. Programs and `ls` do run in DIR.
 
 ### Exit status
 
@@ -401,7 +400,7 @@ Long options can be shortened to a unique prefix (`--iso=seconds`), and so can F
 - Not supported: `%c`, `%x`, `%X`, `%C`, `%g`, `%G`, `%U`, `%V`, `%W`, and padding modifiers (`%-d`, `%_H`, `%^a`). An unsupported specifier is printed as is.
 - `$TZ` is ignored. `TZ=UTC date` prints local time; use `-u` for UTC.
 - `-f`/`--file` and `--debug` are refused with exit 2.
-- `date` never sets the clock. `-s STRING` prints `date: cannot set date: Operation not permitted`, then the time STRING describes, and exits 1, which is what GNU does without root. A date operand (`date 010112002025`) prints the same message and exits 1, but prints the current time where GNU prints the time the operand names.
+- `date` never sets the clock. `-s STRING` prints `date: cannot set date: Operation not permitted`, then the time STRING describes, and exits 1, which is what GNU does without root. A date operand (`date 010112002025`, `MMDDhhmm[[CC]YY][.ss]`) does the same: the message, then the time the operand names, exit 1.
 
 ### Exit status
 
@@ -503,7 +502,9 @@ id [-u | -g | -G] [-n] [-r] [USER]
 | `-g` | Primary group ID only |
 | `-G` | All group IDs |
 | `-n` | Names instead of IDs (with `-u`, `-g`, `-G`) |
-| `-r` | Accepted, no effect |
+| `-r` | Real IDs instead of effective IDs (with `-u`, `-g`, `-G`); on Windows they are the same |
+
+Flags can be bundled (`id -un`). `-n` or `-r` without `-u`, `-g` or `-G` is a usage error (`id: cannot print only names or real IDs in default format`, exit 1), and so are two of `-u`, `-g`, `-G` together, as in GNU.
 
 On Linux and macOS, `id` runs `/usr/bin/id` with the same arguments, so its output, error messages, and exit status are the system's.
 
@@ -517,7 +518,6 @@ uid=S-1-5-21-...-1001(MACHINE\you) gid=S-1-1-0 groups=Everyone,Users,...
 
 ### Differences on Windows
 
-- Flags must be separate words: `id -u -n`. A bundle such as `id -un` is read as a user name and fails with `id: ‘-un’: no such user`.
 - `id -u` prints a SID, not a number, so tests such as `[ "$(id -u)" -eq 0 ]` do not detect an administrator.
 
 ### Example
@@ -545,17 +545,17 @@ On Linux and macOS, `uname` reports the host kernel, read with the `uname` syste
 | `-s` (default) | Kernel name: `Linux`, `Darwin` | `MINGW64_NT-10.0.26100` |
 | `-n` | Host name | Host name, lower-case |
 | `-r` | Kernel release | OS version, `Major.Minor.Build` |
-| `--kernel-version` | Kernel version | Ignored |
+| `-v` | Kernel version | OS description |
 | `-m` | Machine: `x86_64`, `aarch64`, `arm64` | `x86_64` for a 64-bit process, else `i686` |
+| `-p`, `-i` | Processor, hardware platform (the machine, as coreutils prints them) | `unknown` |
+| `-o` | `GNU/Linux`; macOS: `Darwin` | `Msys` |
 | `-a` | Linux: kernel name, host name, release, version, the machine three times, then `GNU/Linux`, as coreutils prints it. macOS: the first five of those | `-s -n -r -m` followed by `MINGW64` |
 
-Flags can be bundled (`-sr`). On Linux and macOS the long forms (`--kernel-name`, `--nodename`, `--kernel-release`, `--machine`, `--operating-system`, `--all`) work too.
+Flags can be bundled (`-sr`), and the long forms (`--kernel-name`, `--nodename`, `--kernel-release`, `--kernel-version`, `--machine`, `--processor`, `--hardware-platform`, `--operating-system`, `--all`) work too. Fields print in GNU's order whatever order they are asked in. An unknown option (`uname: invalid option -- 'x'`) or an operand (`uname: extra operand ‘x’`) is a usage error, exit 1.
 
 ### Differences from GNU
 
 - On Windows, the kernel name is `MINGW64_NT-...`, as in Git Bash. A script that tests `uname -s` takes its MINGW branch there.
-- `-v`, `-o`, `-p`, and `-i` written alone do not reach `uname`, because PowerShell reads them as its own parameters. `-v` is ignored, and the other three print a PowerShell parameter error instead of the field. This is listed in [Known issues](https://github.com/standardbeagle/ps-bash/blob/main/docs/known-issues.md).
-- An unknown option is not an error, and the status is 0. On Windows it is ignored. On Linux and macOS an unknown long option is ignored, and an unknown letter (`uname -x`) makes `uname` print nothing. GNU prints a usage error and exits 1.
 
 ```bash
 uname -s
@@ -813,7 +813,7 @@ ping [-c COUNT | -n COUNT] [-W SECONDS] [-t] HOST
 | Flag | Description |
 |------|-------------|
 | `-c N`, `-n N` | Number of probes (default 4) |
-| `-W SECS` | Per-probe timeout (default 4). Does not work in a script; see the difference below |
+| `-W SECS` | Per-probe timeout (default 4). A value that is not a number is warned about and ignored, as in iputils |
 | `-t` | Continuous mode, capped at 100 probes |
 
 Uses .NET's `Ping` class, not the system `ping`. Each line is `reply from ADDR: icmp_seq=N ttl=T time=MS ms` or `request timeout for icmp_seq N (STATUS)`. No summary is printed.
@@ -830,7 +830,7 @@ These are the statuses of Linux `ping`.
 
 ### Differences from Linux ping
 
-- `-W SECS` in a script prints a PowerShell parameter error and sends no probe, because PowerShell reads `-W` as its own parameter. The status is 0. Leave `-W` out; the timeout is then 4 seconds. This is listed in [Known issues](https://github.com/standardbeagle/ps-bash/blob/main/docs/known-issues.md).
+- The other iputils options (`-w`, `-i`, `-s`, `-q`, `-4`, `-6`, ...) are refused with exit 2. A bad count is `ping: invalid argument: 'x'`, exit 1.
 
 ### PingReply Properties
 
