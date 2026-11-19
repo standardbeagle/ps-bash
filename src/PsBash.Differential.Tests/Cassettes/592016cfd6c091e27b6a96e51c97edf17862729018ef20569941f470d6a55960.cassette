@@ -1,0 +1,19 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 127
+stdout-length: 23
+stderr-length: 0
+==== SCRIPT ====
+expr + length; expr length + 3; expr index abcb cb; expr substr hello 2 100; echo "[$(expr substr abc 0 1)]"; expr -- 5; expr -
+==== STDOUT ====
+length
+1
+2
+ello
+[]
+5
+-
+
+==== STDERR ====
+

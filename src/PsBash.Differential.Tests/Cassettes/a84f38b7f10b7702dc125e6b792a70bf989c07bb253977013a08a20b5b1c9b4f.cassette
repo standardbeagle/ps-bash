@@ -1,0 +1,35 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 270
+stdout-length: 55
+stderr-length: 437
+==== SCRIPT ====
+expr 1 +; echo rc=$?; expr \( 1; echo rc=$?; expr \( 1 2; echo rc=$?; expr 1 2; echo rc=$?; expr \); echo rc=$?; expr 1 + a; echo rc=$?; expr abcdef : 'a\(..\)' + 0; echo rc=$?; expr length; echo rc=$?; expr 1 / 0; echo rc=$?; expr; echo rc=$?; expr ' 1' + 1; echo rc=$?
+==== STDOUT ====
+rc=2
+rc=2
+rc=2
+rc=2
+rc=2
+rc=2
+rc=2
+rc=2
+rc=2
+rc=2
+rc=2
+
+==== STDERR ====
+expr: syntax error: missing argument after ‘+’
+expr: syntax error: expecting ')' after ‘1’
+expr: syntax error: expecting ')' instead of ‘2’
+expr: syntax error: unexpected argument ‘2’
+expr: syntax error: unexpected ')'
+expr: non-integer argument
+expr: non-integer argument
+expr: syntax error: missing argument after ‘length’
+expr: division by zero
+expr: missing operand
+Try 'expr --help' for more information.
+expr: non-integer argument
+

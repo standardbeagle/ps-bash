@@ -42,4 +42,32 @@ public class ExprDifferentialTests
     [SkippableFact]
     public Task Expr_Colon_PunctClass()
         => Eq("expr 'x!' : 'x[[:punct:]]'");
+
+    // Class: expr was a flat one-operator dispatch, so chains, precedence, | and & were wrong or
+    // errors. Fix = the ExprEvaluator grammar (one level per precedence, left-associative).
+    [SkippableFact]
+    public Task Expr_Chains_PrecedenceAndAssociativity()
+        => Eq("expr 1 + 2 + 3; expr 20 / 2 / 5; expr 10 - 3 - 2; expr 1 + 2 \\* 3 - 4 / 2 % 3; "
+            + "expr \\( 2 + 3 \\) \\* \\( 4 - 1 \\); expr 2 \\> 1 \\> 0; expr abc : 'a\\(.\\)' = b; "
+            + "expr -7 / 2; expr -5 % 3; expr 5 % -3; expr 99999999999999999999 + 1; expr 007; expr 007 + 0");
+
+    [SkippableFact]
+    public Task Expr_OrAnd_ShortCircuitAndNullness()
+        => Eq("expr 2 \\| 1 / 0; echo rc=$?; expr 0 \\& 1 / 0; echo rc=$?; expr '' \\| ''; echo rc=$?; "
+            + "expr 00 \\| 7; expr -0 \\& 1; echo rc=$?; expr x \\| y; expr 1 \\& 2");
+
+    [SkippableFact]
+    public Task Expr_Comparisons_NumericElseBytewise()
+        => Eq("expr 3 \\< 10; expr a10 \\< a9; expr a \\< B; expr 010 = 10; expr abc != abd; expr 10 \\>= 9");
+
+    [SkippableFact]
+    public Task Expr_KeywordsAndQuote()
+        => Eq("expr + length; expr length + 3; expr index abcb cb; expr substr hello 2 100; "
+            + "echo \"[$(expr substr abc 0 1)]\"; expr -- 5; expr -");
+
+    [SkippableFact]
+    public Task Expr_Errors_GnuSyntaxMessages()
+        => Eq("expr 1 +; echo rc=$?; expr \\( 1; echo rc=$?; expr \\( 1 2; echo rc=$?; expr 1 2; echo rc=$?; "
+            + "expr \\); echo rc=$?; expr 1 + a; echo rc=$?; expr abcdef : 'a\\(..\\)' + 0; echo rc=$?; "
+            + "expr length; echo rc=$?; expr 1 / 0; echo rc=$?; expr; echo rc=$?; expr ' 1' + 1; echo rc=$?");
 }

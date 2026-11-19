@@ -171,12 +171,17 @@ public sealed class InvokeBashPrintfCommand : PSCmdlet
         // leading blank and a sign are fine, trailing text is "invalid number" (the numeric prefix still prints and the
         // status becomes 1). Out of range clamps with a WARNING and status 0: %d to the int64 bounds, %u to 2^64-1.
         // strtoumax negates in 64 bits, so `%u -18446744073709551615` is 1.
+        // A missing argument is the EMPTY argument (POSIX printf): every conversion still runs, so widths and
+        // precision apply (`%5s` is five blanks, `%d` 0, `%f` 0.000000, `%q` ''). The ONE accessor pair;
+        // guard PrintfMissingArgumentTests runs every conversion with no argument.
+        string Arg(int idx) => idx < argList.Length ? argList[idx] : "";
+        object Conv(int idx) => idx < converted.Count ? converted[idx] : "";
         long IntArg(int idx) => unchecked((long)ParseIntArg(idx, unsigned: false));
         ulong UIntArg(int idx) => ParseIntArg(idx, unsigned: true);
         ulong ParseIntArg(int idx, bool unsigned)
         {
-            string a = argList[idx];
-            if (a.Length >= 2 && (a[0] == '\'' || a[0] == '"')) return unchecked((ulong)ToLong(converted[idx]));
+            string a = Arg(idx);
+            if (a.Length >= 2 && (a[0] == '\'' || a[0] == '"')) return unchecked((ulong)ToLong(Conv(idx)));
             if (a is "'" or "\"") return 0; // no character after the quote: code point 0, no complaint
             int p = 0;
             while (p < a.Length && char.IsWhiteSpace(a[p])) p++;
@@ -296,9 +301,9 @@ public sealed class InvokeBashPrintfCommand : PSCmdlet
                 switch (spec)
                 {
                     case 'q':
-                        if (argIdx < converted.Count)
+
                         {
-                            string q = ShellQuote(argList[argIdx]);
+                            string q = ShellQuote(Arg(argIdx));
                             if (widthStr.Length > 0) q = flagStr.Contains('-') ? q.PadRight(ParseFieldWidth(widthStr)) : q.PadLeft(ParseFieldWidth(widthStr));
                             sb.Append(q);
                         }
@@ -306,10 +311,10 @@ public sealed class InvokeBashPrintfCommand : PSCmdlet
                         i = j + 1;
                         break;
                     case 's':
-                        if (argIdx < converted.Count)
+
                         {
                             // Raw text: %s must not reformat numerics (`007`, `1.50`, `1e3` print as typed).
-                            string val = argList[argIdx];
+                            string val = Arg(argIdx);
                             if (hasPrecision)
                                 val = val.Substring(0, Math.Min(precStr.Length > 0 ? ParseFieldWidth(precStr) : 0, val.Length));
                             if (widthStr.Length > 0)
@@ -325,7 +330,7 @@ public sealed class InvokeBashPrintfCommand : PSCmdlet
                         break;
                     case 'd':
                     case 'i': // %i is an alias of %d
-                        if (argIdx < converted.Count)
+
                         {
                             long val = IntArg(argIdx);
                             if (widthStr.Length > 0 || hasPrecision || flagStr.IndexOfAny(['+', ' ']) >= 0)
@@ -356,7 +361,7 @@ public sealed class InvokeBashPrintfCommand : PSCmdlet
                         i = j + 1;
                         break;
                     case 'u': // unsigned decimal
-                        if (argIdx < converted.Count)
+
                         {
                             ulong uval = UIntArg(argIdx);
                             string str = uval.ToString(CultureInfo.InvariantCulture);
@@ -375,10 +380,10 @@ public sealed class InvokeBashPrintfCommand : PSCmdlet
                     case 'E':
                     case 'g':
                     case 'G':
-                        if (argIdx < converted.Count)
+
                         {
                             int prec = precStr.Length > 0 ? ParseFieldWidth(precStr) : 6;
-                            double d = ToDouble(converted[argIdx]);
+                            double d = ToDouble(Conv(argIdx));
                             string formatted = (spec == 'e' || spec == 'E')
                                 // 2-digit exponent like C printf (not .NET's 3-digit "E+00n").
                                 ? d.ToString("0." + new string('0', prec) + (spec == 'e' ? "e+00" : "E+00"), CultureInfo.InvariantCulture)
@@ -404,10 +409,10 @@ public sealed class InvokeBashPrintfCommand : PSCmdlet
                         i = j + 1;
                         break;
                     case 'f':
-                        if (argIdx < converted.Count)
+
                         {
                             int prec = precStr.Length > 0 ? ParseFieldWidth(precStr) : 6;
-                            double d = ToDouble(converted[argIdx]);
+                            double d = ToDouble(Conv(argIdx));
                             string formatted = d.ToString(
                                 "F" + prec, CultureInfo.InvariantCulture);
                             if (prec == 0 && flagStr.Contains('#')) formatted += "."; // `#` always shows the point
@@ -427,7 +432,7 @@ public sealed class InvokeBashPrintfCommand : PSCmdlet
                         i = j + 1;
                         break;
                     case 'x':
-                        if (argIdx < converted.Count)
+
                         {
                             long val = unchecked((long)UIntArg(argIdx));
                             string str = FormatRadix(val.ToString("x", CultureInfo.InvariantCulture), val != 0 && flagStr.Contains('#') ? "0x" : "", widthStr, precStr, hasPrecision, flagStr);
@@ -437,7 +442,7 @@ public sealed class InvokeBashPrintfCommand : PSCmdlet
                         i = j + 1;
                         break;
                     case 'X':
-                        if (argIdx < converted.Count)
+
                         {
                             long val = unchecked((long)UIntArg(argIdx));
                             string str = FormatRadix(val.ToString("X", CultureInfo.InvariantCulture), val != 0 && flagStr.Contains('#') ? "0X" : "", widthStr, precStr, hasPrecision, flagStr);
@@ -447,7 +452,7 @@ public sealed class InvokeBashPrintfCommand : PSCmdlet
                         i = j + 1;
                         break;
                     case 'o':
-                        if (argIdx < converted.Count)
+
                         {
                             long val = unchecked((long)UIntArg(argIdx));
                             string str = FormatRadix(Convert.ToString(val, 8), "", widthStr, precStr, hasPrecision, flagStr, octalAlt: flagStr.Contains('#'));
@@ -461,7 +466,7 @@ public sealed class InvokeBashPrintfCommand : PSCmdlet
                             // bash %c writes the FIRST BYTE of the argument's text: `printf '%c' 65` is '6' (not the
                             // code 'A'), `%c` of "μ" is the lone byte CE. An empty or missing argument is a NUL byte,
                             // and a width pads that one byte.
-                            char first = FirstByteChar(argIdx < converted.Count ? argList[argIdx] : "");
+                            char first = FirstByteChar(argIdx < converted.Count ? Arg(argIdx) : "");
                             int pad = widthStr.Length > 0 ? ParseFieldWidth(widthStr) - 1 : 0;
                             bool left = flagStr.Contains('-');
                             if (pad > 0 && !left) sb.Append(' ', pad);
@@ -472,11 +477,11 @@ public sealed class InvokeBashPrintfCommand : PSCmdlet
                         i = j + 1;
                         break;
                     case 'b':
-                        if (argIdx < converted.Count)
+
                         {
                             // Raw text, not the numeric coercion: `%b` of `0101` keeps its zero.
                             string expanded = BashEscapes.Expand(
-                                argList[argIdx], EscapeDialect.PrintfB, out bool bStop);
+                                Arg(argIdx), EscapeDialect.PrintfB, out bool bStop);
                             sb.Append(expanded);
                             if (bStop) stoppedByC = true;
                         }

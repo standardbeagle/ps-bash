@@ -1,0 +1,18 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 88
+stdout-length: 12
+stderr-length: 0
+==== SCRIPT ====
+expr 3 \< 10; expr a10 \< a9; expr a \< B; expr 010 = 10; expr abc != abd; expr 10 \>= 9
+==== STDOUT ====
+1
+1
+0
+1
+1
+1
+
+==== STDERR ====
+

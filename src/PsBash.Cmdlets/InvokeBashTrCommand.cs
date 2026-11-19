@@ -100,7 +100,10 @@ public sealed class InvokeBashTrCommand : PSCmdlet
     private HashSet<char>? _membershipSet;   // delete / squeeze-only: chars in SET1
     private Dictionary<char, char>? _translateMap; // translate: SET1 char -> SET2 char
     private HashSet<char>? _translateDrop;   // translate: SET1 chars dropped (SET2 empty)
-    private HashSet<char>? _squeezeSet2;     // squeeze-after-translate: chars in SET2
+    private HashSet<char>? _squeezeSet;      // stage 2: squeeze runs of these (SET1 alone, else SET2)
+    private bool _squeezeComplement;         // -cs with one SET: squeeze what is NOT in SET1
+    private HashSet<char>? _complementOriginal; // -c translate: the SET1 a wide character is tested against
+    private char _complementLast;            // -c translate: SET2's last character
 
     private void ParseOnce()
     {
@@ -213,17 +216,20 @@ public sealed class InvokeBashTrCommand : PSCmdlet
 
     private void BuildTablesCore()
     {
-        // Delete mode and squeeze-only mode test membership against SET1 (the
-        // complement flag flips the test at use-site, not the set contents).
+        // GNU tr is two stages over one byte stream: DELETE-or-TRANSLATE, then SQUEEZE. Each stage's set is
+        // fixed here. Squeeze set: SET1 (complemented by -c) when -s is the only action, else SET2 — the
+        // set the characters are in AFTER the first stage (`tr -ds a b`, `tr -s ab xy`).
         if (_deleteMode)
         {
             if (_operands.Count == 0) return;
             _membershipSet = new HashSet<char>(ExpandClass(_operands[0]));
+            if (_squeezeMode && _operands.Count >= 2) _squeezeSet = new HashSet<char>(ExpandClass(_operands[1]));
             return;
         }
         if (_squeezeMode && _operands.Count == 1)
         {
-            _membershipSet = new HashSet<char>(ExpandClass(_operands[0]));
+            _squeezeSet = new HashSet<char>(ExpandClass(_operands[0]));
+            _squeezeComplement = _complementMode;
             return;
         }
 
@@ -232,14 +238,14 @@ public sealed class InvokeBashTrCommand : PSCmdlet
             string set1 = ExpandClass(_operands[0]);
             string set2 = ExpandClass(_operands[1]);
 
-            if (_truncateMode && set2.Length > set1.Length)
-            {
-                set2 = set2.Substring(0, set1.Length);
-            }
+            // -t: SET1 is cut to SET2's length (GNU `tr -t abc xy` maps only a->x, b->y).
+            if (_truncateMode && !_complementMode && set1.Length > set2.Length)
+                set1 = set1.Substring(0, set2.Length);
 
             if (_complementMode)
             {
-                // SET1 becomes all 256 chars MINUS the original SET1.
+                // SET1 becomes every byte MINUS the original SET1. A character past one byte (a UTF-8
+                // sequence) is in the complement too; TransformLine maps each of its bytes to SET2's last.
                 var compSb = new StringBuilder();
                 var set1Hash = new HashSet<char>(set1);
                 for (int c = 0; c <= 255; c++)
@@ -248,12 +254,12 @@ public sealed class InvokeBashTrCommand : PSCmdlet
                     if (!set1Hash.Contains(ch)) compSb.Append(ch);
                 }
                 set1 = compSb.ToString();
-                // Extend SET2 by repeating last char to match new SET1 length.
                 if (set2.Length > 0)
                 {
+                    _complementOriginal = set1Hash;
+                    _complementLast = set2[set2.Length - 1];
                     var ext = new StringBuilder(set2);
-                    char last = set2[set2.Length - 1];
-                    while (ext.Length < set1.Length) ext.Append(last);
+                    while (ext.Length < set1.Length) ext.Append(_complementLast);
                     set2 = ext.ToString();
                 }
             }
@@ -272,10 +278,9 @@ public sealed class InvokeBashTrCommand : PSCmdlet
                 else _translateDrop.Add(from); // set2 empty: drop (oracle parity)
             }
 
-            if (_squeezeMode) _squeezeSet2 = new HashSet<char>(set2);
+            if (_squeezeMode) _squeezeSet = new HashSet<char>(set2);
         }
     }
-
     protected override void ProcessRecord()
     {
         if (InputObject == null) return;
@@ -348,73 +353,47 @@ public sealed class InvokeBashTrCommand : PSCmdlet
     }
 
     /// <summary>
-    /// Transforms one line using the tables built by <see cref="BuildTables"/>.
-    /// All per-char tests are O(1) hash lookups; the SETs were expanded once.
+    /// Transforms one chunk of the byte stream with the tables built by <see cref="BuildTables"/>: stage 1
+    /// deletes or translates, stage 2 squeezes runs of a <see cref="_squeezeSet"/> character. All per-char tests
+    /// are O(1) hash lookups; the SETs were expanded once.
     /// </summary>
     private string TransformLine(string text)
     {
-        // Delete mode — uses SET1 only.
-        if (_deleteMode)
+        var sb = new StringBuilder(text.Length);
+        foreach (char ch in text)
         {
-            if (_membershipSet == null) return text;
-            var sb = new StringBuilder(text.Length);
-            foreach (char ch in text)
+            if (_deleteMode)
             {
-                bool inSet = _membershipSet.Contains(ch);
-                // Complement + delete keeps chars that ARE in set (oracle
-                // behavior — preserved); plain delete drops them.
-                if (_complementMode ? inSet : !inSet) sb.Append(ch);
+                // Complement + delete keeps the SET1 characters; plain delete drops them.
+                if (_membershipSet != null && (_membershipSet.Contains(ch) != _complementMode)) continue;
+                Squeeze(sb, ch);
             }
-            return sb.ToString();
-        }
-
-        // Squeeze-only mode — single SET, no translation.
-        if (_squeezeMode && _operands.Count == 1)
-        {
-            if (_membershipSet == null) return text;
-            var sb = new StringBuilder(text.Length);
-            foreach (char ch in text)
+            else if (_translateMap != null)
             {
-                bool inSet = _membershipSet.Contains(ch);
-                if (_complementMode) inSet = !inSet;
-                if (inSet && _sqPrevInSet && ch == _sqPrevChar) continue;
-                sb.Append(ch);
-                _sqPrevChar = ch;
-                _sqPrevInSet = inSet;
-            }
-            return sb.ToString();
-        }
-
-        // Translation mode — SET1 -> SET2.
-        if (_translateMap != null)
-        {
-            var sb = new StringBuilder(text.Length);
-            foreach (char ch in text)
-            {
-                if (_translateMap.TryGetValue(ch, out char mapped)) sb.Append(mapped);
+                if (_translateMap.TryGetValue(ch, out char mapped)) Squeeze(sb, mapped);
                 else if (_translateDrop != null && _translateDrop.Contains(ch)) { /* drop */ }
-                else sb.Append(ch);
-            }
-            string result = sb.ToString();
-
-            if (_squeezeMode && _squeezeSet2 != null)
-            {
-                var sb2 = new StringBuilder(result.Length);
-                foreach (char ch in result)
+                else if (ch > 0xFF && _complementOriginal != null && !_complementOriginal.Contains(ch))
                 {
-                    bool inSet2 = _squeezeSet2.Contains(ch);
-                    if (inSet2 && _sqPrevInSet && ch == _sqPrevChar) continue;
-                    sb2.Append(ch);
-                    _sqPrevChar = ch;
-                    _sqPrevInSet = inSet2;
+                    // In the complement: each UTF-8 byte of it becomes SET2's last character.
+                    int bytes = char.IsSurrogate(ch) ? 2 : ch < 0x800 ? 2 : 3;
+                    for (int k = 0; k < bytes; k++) Squeeze(sb, _complementLast);
                 }
-                return sb2.ToString();
+                else Squeeze(sb, ch);
             }
-
-            return result;
+            else Squeeze(sb, ch);
         }
+        return sb.ToString();
+    }
 
-        return text;
+    /// <summary>Stage 2: append <paramref name="ch"/> unless it repeats the previous squeezed character.</summary>
+    private void Squeeze(StringBuilder sb, char ch)
+    {
+        if (_squeezeSet == null) { sb.Append(ch); return; }
+        bool inSet = _squeezeSet.Contains(ch) != _squeezeComplement;
+        if (inSet && _sqPrevInSet && ch == _sqPrevChar) return;
+        sb.Append(ch);
+        _sqPrevChar = ch;
+        _sqPrevInSet = inSet;
     }
 
 }

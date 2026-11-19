@@ -1,0 +1,23 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 149
+stdout-length: 34
+stderr-length: 0
+==== SCRIPT ====
+expr 2 \| 1 / 0; echo rc=$?; expr 0 \& 1 / 0; echo rc=$?; expr '' \| ''; echo rc=$?; expr 00 \| 7; expr -0 \& 1; echo rc=$?; expr x \| y; expr 1 \& 2
+==== STDOUT ====
+2
+rc=0
+0
+rc=1
+0
+rc=1
+7
+0
+rc=1
+x
+1
+
+==== STDERR ====
+
