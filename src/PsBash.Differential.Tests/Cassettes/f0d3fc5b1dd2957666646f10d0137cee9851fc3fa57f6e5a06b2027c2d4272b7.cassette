@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 54
+stdout-length: 8
+stderr-length: 0
+==== SCRIPT ====
+[[ $UID =~ ^[0-9]+$ ]] && echo UID-num || echo UID-bad
+==== STDOUT ====
+UID-num
+
+==== STDERR ====
+

@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 66
+stdout-length: 12
+stderr-length: 0
+==== SCRIPT ====
+[[ $SRANDOM =~ ^[0-9]+$ ]] && echo SRANDOM-num || echo SRANDOM-bad
+==== STDOUT ====
+SRANDOM-num
+
+==== STDERR ====
+

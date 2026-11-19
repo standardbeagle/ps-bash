@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 81
+stdout-length: 17
+stderr-length: 0
+==== SCRIPT ====
+[[ $EPOCHSECONDS =~ ^[0-9]+$ ]] && echo EPOCHSECONDS-num || echo EPOCHSECONDS-bad
+==== STDOUT ====
+EPOCHSECONDS-num
+
+==== STDERR ====
+

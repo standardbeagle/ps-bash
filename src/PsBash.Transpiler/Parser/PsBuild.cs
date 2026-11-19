@@ -1355,6 +1355,24 @@ public static class PsBuild
     public const string NullSafeBashText =
         "if ($null -ne $_ -and $_.PSObject.Properties['BashText']) { $_.BashText } else { \"$_\" }";
 
+    /// <summary>
+    /// The PowerShell value of an array bash computes (<see cref="PsBash.Core.ShellVariables.Computed"/>): the call
+    /// stack, the version parts, the groups, the directory stack, the alias table. Null for any other name, whose
+    /// elements are its own PowerShell variable. The one table for these: every array read the emitter writes asks it,
+    /// and so does <c>Get-BashIndirectValue</c> for <c>${!ref}</c>.
+    /// </summary>
+    public static string? ShellArrayExpr(string name) => name switch
+    {
+        "BASH_VERSINFO" => "$global:BashVersionInfo",
+        "BASH_SOURCE" => "$global:BASH_SOURCE",
+        "FUNCNAME" => "@(Get-BashFuncNames)",
+        "BASH_LINENO" => "@(" + BashLineNoArray + ")",
+        "GROUPS" => "@([PsBash.Cmdlets.ShellArrays]::Groups())",
+        "DIRSTACK" => "@([PsBash.Cmdlets.ShellArrays]::DirStack($ExecutionContext.SessionState))",
+        "BASH_ALIASES" => "$([PsBash.Cmdlets.ShellArrays]::Aliases($ExecutionContext.SessionState))",
+        _ => null,
+    };
+
     // ───────────────────────────── Bash function definitions ─────────────────────────────
 
     /// <summary>
@@ -1809,6 +1827,10 @@ public static class PsBuild
     /// <summary><c>$BASHPID</c>. A <c>$( )</c> whose text reads it must take the subshell scope that sets it.</summary>
     public const string BashPidRead = "$([PsBash.Cmdlets.BashRuntime]::BashPid($ExecutionContext.SessionState))";
 
+    /// <summary>The read of <c>$BASH_SUBSHELL</c>: the depth <c>BashShellState.Save</c> counts. A substitution that reads it
+    /// gets the subshell scope (PsEmitter.PipelineHead), as one that reads <see cref="BashPidRead"/> does.</summary>
+    public const string SubshellDepthRead = "[PsBash.Cmdlets.BashRuntime]::SubshellDepth($ExecutionContext.SessionState)";
+
     /// <summary>
     /// The single source of truth for how a bash special variable (<c>$?</c>, <c>$$</c>,
     /// <c>$RANDOM</c>, positional params, …) maps to PowerShell. Returns <c>null</c> when
@@ -1819,12 +1841,11 @@ public static class PsBuild
     /// <paramref name="braced"/> selects between the plain-<c>$name</c> emission (used for
     /// a bare <c>$name</c> word) and the brace-quoted <c>${name}</c> emission (used inside
     /// double quotes when the following character would otherwise be misparsed, e.g.
-    /// <c>"$x:suffix"</c>). The two forms are NOT symmetric today — several special names
-    /// (<c>RANDOM</c>, <c>SECONDS</c>, <c>PPID</c>, <c>BASH_VERSION</c>,
-    /// <c>BASH_VERSINFO</c>, and multi-digit positionals) only have a plain mapping; a
-    /// braced reference to one of them falls through to <c>${env:name}</c>. This mirrors
-    /// the pre-existing (and pre-existing-buggy) behavior of the two call sites this
-    /// method replaces byte-for-byte — it is not a design choice made here.
+    /// <c>"$x:suffix"</c>). A computed variable reads the same in both forms (<c>${RANDOM}</c> once fell through to
+    /// <c>${env:RANDOM}</c>, empty). Only <c>BASH_VERSINFO</c> (an array, whose element reads go through
+    /// <c>PsEmitter.ShellArrayExpr</c>) and multi-digit positionals have a plain mapping alone.
+    /// The variables bash binds at shell start are ordinary variables (<see cref="PsBash.Core.ShellVariables"/>); the
+    /// ones mapped here read the variable first and fall back to the start value outside a shell host.
     /// </para>
     /// <para>
     /// <paramref name="inDoubleQuote"/> only affects <c>$0</c>: inside double quotes (or
@@ -1852,7 +1873,16 @@ public static class PsBuild
             case "?":
                 return braced ? "${global:LASTEXITCODE}" : "$global:LASTEXITCODE";
             case "RANDOM":
-                return braced ? null : "$(Get-Random -Maximum 32768)";
+                return "$(Get-Random -Maximum 32768)";
+            case "SRANDOM":
+                // 32 random bits from the system generator (bash: getrandom(2)), never repeating a seed.
+                return "$([System.BitConverter]::ToUInt32([System.Security.Cryptography.RandomNumberGenerator]::GetBytes(4), 0))";
+            case "BASH_SUBSHELL":
+                return "$(" + SubshellDepthRead + ")";
+            case "LINENO" when TrapLine > 0:
+                // The line of the statement being emitted. The lexer writes it in for `$LINENO` / `${LINENO}`; an
+                // operator form (`${LINENO+set}`, `${LINENO:-x}`, `${#LINENO}`) reaches here.
+                return SingleQuote(TrapLine.ToString(System.Globalization.CultureInfo.InvariantCulture));
             case "*" when inDoubleQuote:
                 // "$*" joins the positionals with the first character of IFS (a space by default).
                 return "$(@(if ($global:BashPositional) { $global:BashPositional } else { $args }) -join " + IfsJoinSeparator + ")";
@@ -1887,9 +1917,10 @@ public static class PsBuild
             case "_":
                 return braced ? "${global:BashLastArg}" : "$global:BashLastArg";
             case "SECONDS":
-                return braced ? null : "$([math]::Floor(([DateTime]::UtcNow - $global:BashStartTime).TotalSeconds))";
+                return "$([math]::Floor(([DateTime]::UtcNow - $global:BashStartTime).TotalSeconds))";
             case "PPID":
-                return braced ? null : "(Get-Process -Id $PID -ErrorAction SilentlyContinue).Parent.Id";
+                // Bound at shell start (ShellVariables.SeedShellStart); the parent of this process outside a shell host.
+                return "$(if ($null -ne $env:PPID) { $env:PPID } else { (Get-Process -Id $PID -ErrorAction SilentlyContinue).Parent.Id })";
             // Variables bash defines about the machine and the shell. Computed on read; an env variable of the
             // same name wins for HOSTNAME and OSTYPE (bash only sets those when the environment lacks them).
             case "UID":
@@ -1898,9 +1929,9 @@ public static class PsBuild
             case "OSTYPE":
                 return "$(if ($null -ne $env:OSTYPE) { $env:OSTYPE } elseif ($IsWindows) { 'msys' } elseif ($IsMacOS) { 'darwin' } else { 'linux-gnu' })";
             case "HOSTTYPE":
-                return "$(if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq 'Arm64') { 'aarch64' } else { 'x86_64' })";
+                return "$(if ($null -ne $env:HOSTTYPE) { $env:HOSTTYPE } else { [PsBash.Core.ShellVariables]::HostType() })";
             case "MACHTYPE":
-                return "$(($(if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq 'Arm64') { 'aarch64' } else { 'x86_64' })) + $(if ($IsWindows) { '-pc-msys' } elseif ($IsMacOS) { '-apple-darwin' } else { '-pc-linux-gnu' }))";
+                return "$(if ($null -ne $env:MACHTYPE) { $env:MACHTYPE } else { [PsBash.Core.ShellVariables]::MachType() })";
             case "HOSTNAME":
                 return "$(if ($null -ne $env:HOSTNAME) { $env:HOSTNAME } else { [System.Environment]::MachineName.ToLowerInvariant() })";
             case "SHELL":
@@ -1921,7 +1952,7 @@ public static class PsBuild
             case "EPOCHREALTIME":
                 return "$(([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() * 1000).ToString().Insert(([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() * 1000).ToString().Length - 6, '.'))";
             case "BASH_VERSION":
-                return braced ? null : "$global:BashVersion";
+                return "$(if ($null -ne $env:BASH_VERSION) { $env:BASH_VERSION } else { $global:BashVersion })";
             case "BASH_VERSINFO":
                 return braced ? null : "$global:BashVersionInfo";
             default:

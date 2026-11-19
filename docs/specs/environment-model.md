@@ -161,3 +161,24 @@ outside `BashVariableLookup` (internal `__Bash*` variables named through a const
 psm1 function does (`Get-Variable -Name $n`); every binding construct, at top level and in a function, emits no
 PowerShell variable for the bash scalar. Behavior: `Differential.Tests/VariableScopeChainTests` (loop kind × callee
 access × shadowing × the loop variable after the call, against bash).
+
+## 9. Shell-owned variables
+
+**Every variable bash defines is in ONE table: `PsBash.Core.ShellVariables` (Transpiler assembly).** Two kinds:
+
+- **Seeded** (`ShellVariables.Seeded`): bound when a shell starts, then an ordinary variable. `IFS` (`$' \t\n'`),
+  `OPTIND`, `OPTERR`, `PS4`, `SHLVL` (inherited + 1, exported), `PPID` (the launcher's parent, handed over as
+  `PSBASH_PPID` and removed), `BASH`, `BASH_VERSION`, `SHELL`, `HOSTNAME`, `HOSTTYPE`, `MACHTYPE`, `OSTYPE`,
+  `COMP_WORDBREAKS`. `SdkWorker` calls `SeedShellStart()` after `ShellExports.Reset()` on every invocation (a stateful
+  session: once), with bash's export attribute (`AlwaysUnexported` feeds `ShellExports.ShellOwned`).
+- **Computed** (`ShellVariables.Computed`): worked out on each read. Scalars map in `PsBuild.TryMapSpecialVar`
+  (`RANDOM SRANDOM SECONDS BASHPID BASH_SUBSHELL EPOCHREALTIME ...`), arrays in `PsBuild.ShellArrayExpr`
+  (`GROUPS DIRSTACK BASH_ALIASES FUNCNAME BASH_LINENO BASH_SOURCE BASH_VERSINFO`; runtime `Cmdlets/ShellArrays.cs`);
+  `${!ref}` reads both through the same two (psm1 `Get-BashIndirectValue`). `BASH_SUBSHELL` is the depth
+  `BashShellState.Save` counts. A computed scalar can be a number, and 0 is false in PowerShell: a colon
+  operator (`${SECONDS:+y}`) tests its text (`PsEmitter.IsNumericShellValue`, also `$? $# $$ $!`).
+
+Not provided, with reasons: `ShellVariablesGuardTests.NotProvided` (`BASH_ARGC BASH_ARGV BASH_ARGV0 BASH_CMDS
+BASH_COMMAND BASH_EXECUTION_STRING BASH_LOADABLES_PATH HISTCMD _`). Guard: `Core.Tests/ShellVariablesGuardTests`
+(every bash name in exactly one place; every computed name mapped). Behavior, one name at a time:
+`Differential.Tests/ShellLanguageGapDifferentialTests`.

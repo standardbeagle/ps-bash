@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 67
+stdout-length: 28
+stderr-length: 0
+==== SCRIPT ====
+echo "BASH_VERSION=${BASH_VERSION+set} nonempty=${BASH_VERSION:+y}"
+==== STDOUT ====
+BASH_VERSION=set nonempty=y
+
+==== STDERR ====
+

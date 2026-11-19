@@ -77,6 +77,55 @@ public static partial class ProcessInfo
         return null;
     }
 
+    /// <summary>
+    /// Parent pid of THIS process, or null when unknown. On Windows it reads its own handle (no process lookup by id,
+    /// which enumerates every process): the launcher asks once per command for <c>$PPID</c>.
+    /// </summary>
+    public static int? OwnParentPid()
+    {
+        if (!OperatingSystem.IsWindows()) return ParentPid(Environment.ProcessId);
+        using var self = Process.GetCurrentProcess();
+        return ParentPidOfHandle(self.Handle);
+    }
+
+    /// <summary>
+    /// This process's groups, bash's <c>GROUPS</c> array: the primary group first, then each group <c>getgroups(2)</c>
+    /// returns (bash keeps a repeat of the primary). Windows has no numeric gids: each group SID of the process token,
+    /// as its last sub-authority (the numeric id ps-bash gives a SID, as for <c>$UID</c> and <c>id</c>). Empty when unknown.
+    /// </summary>
+    public static List<long> GroupIds()
+    {
+        var ids = new List<long>();
+        try
+        {
+            if (OperatingSystem.IsWindows())
+            {
+                using var identity = System.Security.Principal.WindowsIdentity.GetCurrent();
+                if (identity.Groups is { } groups)
+                    foreach (var g in groups)
+                        if (g is System.Security.Principal.SecurityIdentifier sid
+                            && long.TryParse(sid.Value.AsSpan(sid.Value.LastIndexOf('-') + 1), out long rid))
+                            ids.Add(rid);
+                return ids;
+            }
+            ids.Add(getgid());
+            int n = getgroups(0, null);
+            if (n <= 0) return ids;
+            var list = new uint[n];
+            n = getgroups(n, list);
+            for (int i = 0; i < n; i++) ids.Add(list[i]);
+        }
+        catch (Exception ex) when (ex is EntryPointNotFoundException or DllNotFoundException
+                                       or System.Security.SecurityException or UnauthorizedAccessException) { }
+        return ids;
+    }
+
+    [LibraryImport("libc")]
+    private static partial uint getgid();
+
+    [LibraryImport("libc", SetLastError = true)]
+    private static partial int getgroups(int size, [Out] uint[]? list);
+
     /// <summary>Windows: parent pid of the process behind <paramref name="processHandle"/>; null when unavailable.</summary>
     public static int? ParentPidOfHandle(IntPtr processHandle)
     {

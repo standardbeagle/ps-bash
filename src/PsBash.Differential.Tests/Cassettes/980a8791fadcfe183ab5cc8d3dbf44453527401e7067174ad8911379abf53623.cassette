@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 57
+stdout-length: 9
+stderr-length: 0
+==== SCRIPT ====
+[[ $PPID =~ ^[0-9]+$ ]] && echo PPID-num || echo PPID-bad
+==== STDOUT ====
+PPID-num
+
+==== STDERR ====
+

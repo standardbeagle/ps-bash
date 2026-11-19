@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 1
+script-length: 73
+stdout-length: 6
+stderr-length: 0
+==== SCRIPT ====
+env | grep -c '^SHLVL='; env | grep -c '^PPID='; env | grep -c '^OPTIND='
+==== STDOUT ====
+1
+0
+0
+
+==== STDERR ====
+

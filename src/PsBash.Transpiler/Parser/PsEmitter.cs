@@ -8789,6 +8789,8 @@ public static partial class PsEmitter
             && !PsBuild.CanDiscardLine(inner)
             // `$(echo $BASHPID)` reads the id the subshell scope sets (PsBuild.BashPidRead), so it needs that scope.
             && !inner.Contains(PsBuild.BashPidRead, StringComparison.Ordinal)
+            // ... and so does `$(echo $BASH_SUBSHELL)`, whose depth the scope raises.
+            && !inner.Contains(PsBuild.SubshellDepthRead, StringComparison.Ordinal)
             ? inner : PsBuild.ShellStateScope(WithSubshellExitTrap(inner));
     }
 
@@ -8985,7 +8987,7 @@ public static partial class PsEmitter
         int end = start;
         while (end < expr.Length && (char.IsAsciiLetterOrDigit(expr[end]) || expr[end] == '_')) end++;
         string name = expr[start..end];
-        if (name is not ("RANDOM" or "SECONDS" or "EPOCHSECONDS" or "BASHPID" or "PPID" or "UID" or "EUID")) return false;
+        if (name is not ("RANDOM" or "SRANDOM" or "SECONDS" or "EPOCHSECONDS" or "BASHPID" or "BASH_SUBSHELL" or "PPID" or "UID" or "EUID")) return false;
         int k = end;
         while (k < expr.Length && expr[k] == ' ') k++;
         if (k < expr.Length && expr[k] == '=' && !(k + 1 < expr.Length && expr[k + 1] == '=')) return false; // assignment
@@ -10393,14 +10395,7 @@ public static partial class PsEmitter
                 string subscript = bvs.Suffix[1..close];
                 string subOp = bvs.Suffix[(close + 1)..]; // trailing operator, "" if none
                 // Special bash array vars use their mapped name, not $Name
-                string arrayVar = bvs.Name switch
-                {
-                    "BASH_VERSINFO" => "$global:BashVersionInfo",
-                    "BASH_SOURCE" => "$global:BASH_SOURCE",
-                    "FUNCNAME" => "@(Get-BashFuncNames)",
-                    "BASH_LINENO" => "@(" + PsBuild.BashLineNoArray + ")",
-                    var n => $"${n}"
-                };
+                string arrayVar = PsBuild.ShellArrayExpr(bvs.Name) ?? $"${bvs.Name}";
 
                 if (subOp.Length == 0)
                 {
@@ -10409,7 +10404,7 @@ public static partial class PsEmitter
                     // A SCALAR (`s=abc`) lives in the environment, not in a PowerShell variable: `${s[@]}` / `${s[0]}` are
                     // the scalar itself (bash treats it as a one-element array).
                     string whole = bvs.Name.All(c => char.IsAsciiLetterOrDigit(c) || c == '_') && !char.IsAsciiDigit(bvs.Name[0])
-                        && bvs.Name is not ("BASH_VERSINFO" or "BASH_SOURCE" or "FUNCNAME" or "BASH_LINENO")
+                        && PsBuild.ShellArrayExpr(bvs.Name) is null
                         ? $"$(if ($null -ne {arrayVar}) {{ {arrayVar} }} else {{ {EmitSimpleVar(bvs.Name)} }})"
                         : arrayVar;
                     if (subscript == "0" && !ReferenceEquals(whole, arrayVar))
@@ -10522,7 +10517,7 @@ public static partial class PsEmitter
             string subscript = bvs.Suffix[3..^1]; // strip #L[ and ]
             if (subscript is "@" or "*")
             {
-                string lenArr = bvs.Name switch { "FUNCNAME" => "@(Get-BashFuncNames)", "BASH_LINENO" => "@(" + PsBuild.BashLineNoArray + ")", "BASH_VERSINFO" => "$global:BashVersionInfo", _ => $"${bvs.Name}" };
+                string lenArr = PsBuild.ShellArrayExpr(bvs.Name) ?? $"${bvs.Name}";
                 // Always a subexpression: bare `$a.Count` glued to a literal (`len=${#a[@]}`) expands only `$a`.
                 // A scalar (`s=abc`, an env var) is a one-element array: `${#s[@]}` is 1.
                 if (lenArr.AsSpan(1).IndexOfAnyExcept(VarNameChars) < 0 && bvs.Name.Length > 0)

@@ -1,0 +1,16 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 102
+stdout-length: 10
+stderr-length: 0
+==== SCRIPT ====
+echo $BASH_SUBSHELL; ( echo $BASH_SUBSHELL; ( echo $BASH_SUBSHELL ) ); echo "c=$(echo $BASH_SUBSHELL)"
+==== STDOUT ====
+0
+1
+2
+c=1
+
+==== STDERR ====
+

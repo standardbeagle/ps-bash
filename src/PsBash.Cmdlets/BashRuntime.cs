@@ -22,47 +22,24 @@ namespace PsBash.Cmdlets;
 /// </summary>
 public static class BashRuntime
 {
-    private static string? _defaultShell;
-
-    /// <summary>
-    /// <c>$SHELL</c> when the environment has none: bash sets it at startup (not exported) to the login shell of the
-    /// user's passwd entry. On Unix that entry's shell (<c>/bin/sh</c> when it cannot be read); on Windows, which has no
-    /// passwd, this shell itself: the <c>ps-bash</c> launcher beside the running process.
-    /// </summary>
-    public static string DefaultShell() => _defaultShell ??= PsBash.Core.BashPath.ToShell(ComputeDefaultShell());
+    /// <summary><c>$SHELL</c> when the environment has none (<see cref="PsBash.Core.ShellVariables.DefaultShell"/>).</summary>
+    public static string DefaultShell() => PsBash.Core.ShellVariables.DefaultShell();
 
     /// <summary>The OS's own <paramref name="name"/> tool (<c>stat</c>, <c>id</c>) for the psm1, which spawns it by
     /// this path: <see cref="PsBash.Core.Platform.SystemTools.Resolve"/>.</summary>
     public static string SystemToolPath(string name) => PsBash.Core.Platform.SystemTools.Resolve(name);
 
-    private static string ComputeDefaultShell()
-    {
-        if (!OperatingSystem.IsWindows())
-        {
-            try
-            {
-                string user = Environment.UserName;
-                foreach (var line in System.IO.File.ReadLines("/etc/passwd"))
-                {
-                    var fields = line.Split(':');
-                    if (fields.Length >= 7 && fields[0] == user && fields[6].Length > 0) return fields[6];
-                }
-            }
-            catch (System.IO.IOException) { }
-            catch (UnauthorizedAccessException) { }
-            return PsBash.Core.Platform.SystemTools.PosixShell;
-        }
-        string? self = Environment.ProcessPath;
-        if (string.IsNullOrEmpty(self)) return "ps-bash";
-        string? dir = System.IO.Path.GetDirectoryName(self);
-        if (dir is not null)
-        {
-            string launcher = System.IO.Path.Combine(dir, "ps-bash.exe");
-            if (System.IO.File.Exists(launcher)) return launcher;
-        }
-        return self;
-    }
+    /// <summary>The scope variable holding a subshell's nesting depth, <c>$BASH_SUBSHELL</c> (set beside
+    /// <see cref="SubshellPidVariable"/> by <see cref="BashShellState.Save"/>).</summary>
+    public const string SubshellDepthVariable = "__psbash_subshell";
 
+    /// <summary><c>$BASH_SUBSHELL</c>: how many subshells deep the running code is (0 in the shell itself).</summary>
+    public static int SubshellDepth(SessionState session)
+    {
+        object? v = null;
+        try { v = session.PSVariable.GetValue(SubshellDepthVariable); } catch (InvalidOperationException) { }
+        return (v is PSObject pso ? pso.BaseObject : v) is int depth ? depth : 0;
+    }
     /// <summary>
     /// The scope variable holding a subshell's <c>$BASHPID</c>. bash forks for <c>( )</c>, <c>$( )</c> and a compound
     /// pipe stage, so each has its own BASHPID while <c>$$</c> stays the shell's; ps-bash runs them in the same

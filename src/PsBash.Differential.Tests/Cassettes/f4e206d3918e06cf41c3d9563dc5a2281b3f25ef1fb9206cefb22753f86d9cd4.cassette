@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 69
+stdout-length: 36
+stderr-length: 0
+==== SCRIPT ====
+printf '%q\n' "$IFS"; echo "PS4=[$PS4] OPTIND=$OPTIND OPTERR=$OPTERR"
+==== STDOUT ====
+$' \t\n'
+PS4=[+ ] OPTIND=1 OPTERR=1
+
+==== STDERR ====
+

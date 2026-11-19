@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 43
+stdout-length: 20
+stderr-length: 0
+==== SCRIPT ====
+echo "BASH=${BASH+set} nonempty=${BASH:+y}"
+==== STDOUT ====
+BASH=set nonempty=y
+
+==== STDERR ====
+

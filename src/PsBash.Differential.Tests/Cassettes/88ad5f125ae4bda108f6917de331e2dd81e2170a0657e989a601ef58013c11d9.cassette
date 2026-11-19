@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 58
+stdout-length: 25
+stderr-length: 0
+==== SCRIPT ====
+echo "SHELLOPTS=${SHELLOPTS+set} nonempty=${SHELLOPTS:+y}"
+==== STDOUT ====
+SHELLOPTS=set nonempty=y
+
+==== STDERR ====
+

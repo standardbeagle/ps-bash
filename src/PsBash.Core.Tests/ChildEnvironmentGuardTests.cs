@@ -120,6 +120,8 @@ public class ChildEnvironmentGuardTests
         // declare lists every variable; hash and source search the shell's PATH, exported or not, as bash's builtins do;
         // JobEnvironmentProvider is a background job's $env: drive, the store itself (background-jobs.md section 3).
         "InvokeBashDeclareCommand.cs", "InvokeBashHashCommand.cs", "InvokeBashSourceCommand.cs", "JobEnvironmentProvider.cs",
+        // ShellArrays computes $DIRSTACK, whose first element is the shell's $PWD (environment-model.md section 9).
+        "ShellArrays.cs",
     };
 
     [Fact]

@@ -177,7 +177,20 @@ function Get-BashIndirectValue {
     if ($n -eq '@' -or $n -eq '*') { return ($Pos -join ' ') }
     if ($n -eq '#') { return [string]$Pos.Count }
     if ($n -eq '?') { return [string]$global:LASTEXITCODE }
-    if ($n -eq 'FUNCNAME') { return ([string]@(Get-BashFuncNames | Where-Object { $_ -ne 'Get-BashIndirectValue' })[0]) }
+    # An array bash computes (FUNCNAME, GROUPS, DIRSTACK, BASH_LINENO, ...: the one table, PsBuild.ShellArrayExpr):
+    # element 0, unset when there is none (`${!v+set}` for FUNCNAME at top level is empty).
+    $arrExpr = [PsBash.Core.Parser.PsBuild]::ShellArrayExpr($n)
+    if ($arrExpr) {
+        $av = & ([scriptblock]::Create($arrExpr))
+        if ($av -is [System.Collections.IDictionary]) { return $av['0'] }
+        # This function is a frame of the call stack too: without it, a stack that holds only the script's `main` is
+        # the top level, where FUNCNAME is unset.
+        $rest = @($av | Where-Object { $_ -ne 'Get-BashIndirectValue' })
+        if ($n -eq 'FUNCNAME' -and $rest.Count -eq 1 -and $rest[0] -eq 'main') { return $null }
+        $first = $rest[0]
+        if ($null -eq $first) { return $null }
+        return [string]$first
+    }
     if ($n -eq 'OPTIND' -and $null -eq $env:OPTIND -and $null -eq (Get-Variable -Name OPTIND -ValueOnly -ErrorAction Ignore)) { return '1' }
     # A subscript that leaves a quote open (`a[1"]`) is no array reference: "invalid variable name" below.
     if ($n -match '^([A-Za-z_][A-Za-z0-9_]*)\[(.*)\]$' -and [PsBash.Cmdlets.BashSubscriptExpansion]::QuotesBalanced($Matches[2])) {
@@ -238,8 +251,11 @@ function Get-BashIndirectValue {
         'SECONDS' { return [string][math]::Floor(([DateTime]::UtcNow - $global:BashStartTime).TotalSeconds) }
         'EPOCHSECONDS' { return [string][DateTimeOffset]::UtcNow.ToUnixTimeSeconds() }
         'EPOCHREALTIME' { $us = [long](([DateTimeOffset]::UtcNow - [DateTimeOffset]::UnixEpoch).Ticks / 10); return ('{0}.{1:D6}' -f [long][math]::Floor($us / 1000000), ($us % 1000000)) }
-        'BASHPID' { return [string]$PID }
-        'PPID' { return [string](Get-Process -Id $PID -ErrorAction SilentlyContinue).Parent.Id }
+        'SRANDOM' { return [string][System.BitConverter]::ToUInt32([System.Security.Cryptography.RandomNumberGenerator]::GetBytes(4), 0) }
+        'BASHPID' { return [string][PsBash.Cmdlets.BashRuntime]::BashPid($ExecutionContext.SessionState) }
+        'BASH_SUBSHELL' { return [string][PsBash.Cmdlets.BashRuntime]::SubshellDepth($ExecutionContext.SessionState) }
+        'BASHOPTS' { return [PsBash.Cmdlets.InvokeBashShoptCommand]::BashOpts() }
+        'SHELLOPTS' { return & ([scriptblock]::Create([PsBash.Core.Parser.PsBuild]::ShellOptsExpr)) }
         { $_ -eq 'UID' -or $_ -eq 'EUID' } { return [string]$(if ($IsWindows) { [long][System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value.Split('-')[-1] } else { [long](id -u) }) }
     }
     # One chain: the shell variable, or element 0 of the array the name holds (environment-model.md section 8).

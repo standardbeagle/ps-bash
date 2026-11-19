@@ -36,10 +36,10 @@ public static class ShellExports
     private static readonly string[] ShellExported = ["PWD", "OLDPWD", "HOME"];
 
     /// <summary>
-    /// Shell variables the host puts in the environment before a command runs that bash keeps unexported
-    /// (<c>OPTIND</c> is seeded to 1 by <c>SdkWorker.ResetEnvironment</c>).
+    /// Shell variables bash binds at every shell start and keeps unexported (<c>IFS</c>, <c>OPTIND</c>, <c>PPID</c>,
+    /// ...: <see cref="ShellVariables.AlwaysUnexported"/>; the host binds them, <see cref="ShellVariables.SeedShellStart"/>).
     /// </summary>
-    private static readonly string[] ShellOwned = ["OPTIND"];
+    private static readonly string[] ShellOwned = [.. ShellVariables.AlwaysUnexported];
 
     private static readonly object Gate = new();
 

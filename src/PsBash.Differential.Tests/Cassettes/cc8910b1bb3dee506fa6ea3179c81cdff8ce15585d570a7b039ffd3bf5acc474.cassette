@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 66
+stdout-length: 12
+stderr-length: 0
+==== SCRIPT ====
+[[ $BASHPID =~ ^[0-9]+$ ]] && echo BASHPID-num || echo BASHPID-bad
+==== STDOUT ====
+BASHPID-num
+
+==== STDERR ====
+

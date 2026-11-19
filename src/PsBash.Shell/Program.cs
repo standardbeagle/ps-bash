@@ -708,10 +708,14 @@ static IReadOnlyList<KeyValuePair<string, string>> CaptureLauncherEnvironment(bo
     var entries = new List<KeyValuePair<string, string>>();
     foreach (System.Collections.DictionaryEntry e in Environment.GetEnvironmentVariables())
     {
-        if (e.Key is string name && name != "PSBASH_DASH_C")
+        if (e.Key is string name && name != "PSBASH_DASH_C" && name != PsBash.Core.ShellVariables.LauncherParentPidVariable)
             entries.Add(new KeyValuePair<string, string>(name, e.Value as string ?? string.Empty));
     }
     if (dashC) entries.Add(new KeyValuePair<string, string>("PSBASH_DASH_C", "1"));
+    // $PPID is the process that started this shell, which only the launcher knows (ShellVariables.SeedShellStart).
+    if (PsBash.Core.Platform.ProcessInfo.OwnParentPid() is int parent)
+        entries.Add(new KeyValuePair<string, string>(PsBash.Core.ShellVariables.LauncherParentPidVariable,
+            parent.ToString(System.Globalization.CultureInfo.InvariantCulture)));
     return entries;
 }
 

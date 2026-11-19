@@ -1,0 +1,22 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 306
+stdout-length: 76
+stderr-length: 0
+==== SCRIPT ====
+[[ ${GROUPS[0]} =~ ^[0-9]+$ ]] && echo groups-num
+[[ ${DIRSTACK[0]} == "$PWD" ]] && echo dirstack-cwd n=${#DIRSTACK[@]}
+alias ll='ls -l'; echo "alias=${BASH_ALIASES[ll]}"
+echo "vi=${BASH_VERSINFO[0]} fn=${FUNCNAME-unset}"
+v=FUNCNAME; echo "ind=[${!v+set}][${!v}]"; f() { echo "inf=[${!v+set}][${!v}]"; }; f
+==== STDOUT ====
+groups-num
+dirstack-cwd n=1
+alias=ls -l
+vi=5 fn=unset
+ind=[][]
+inf=[set][f]
+
+==== STDERR ====
+

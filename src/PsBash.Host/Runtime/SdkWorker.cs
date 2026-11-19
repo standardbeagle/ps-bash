@@ -281,6 +281,10 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
         // host's execution lease taken, is told "busy" and runs on another executor slot; nothing in
         // the environment marks the nesting (docs/specs/executor-slots.md).
         bool framedLauncherRequest = environment is not null;
+        // A shell whose environment is not reset per command (a stateful session, the in-process interactive shell)
+        // starts once: bash's own variables are bound before its first command.
+        if ((environment is null || StatefulSession) && Interlocked.Exchange(ref s_shellVariablesSeeded, 1) == 0)
+            PsBash.Core.ShellVariables.SeedShellStart();
         if (environment is not null)
         {
             // A stateful session owns its environment: the launcher's block only carries PSBASH_*
@@ -293,6 +297,8 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
                 ClearReadonlyNames();
                 // A new shell: what the launcher handed over is what it inherited, so all of it is exported.
                 PsBash.Core.ShellExports.Reset();
+                // ... and bash binds its own variables (IFS, PPID, SHLVL, OPTIND, ...: one table, ShellVariables).
+                PsBash.Core.ShellVariables.SeedShellStart();
             }
             SyncHomeToEnvironment();
         }
@@ -907,6 +913,8 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
     /// </summary>
     internal static bool StatefulSession { get; set; }
 
+    private static int s_shellVariablesSeeded;
+
     /// <summary>
     /// Stateful hosts take only the launcher's <c>PSBASH_*</c> control variables (set, never removed),
     /// minus the host-nesting markers, which the host owns.
@@ -942,8 +950,6 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
             Environment.SetEnvironmentVariable(entry.Key, entry.Value);
         }
 
-        // bash starts every shell with OPTIND=1; seed it when the launcher did not supply one.
-        if (keep.Add("OPTIND")) Environment.SetEnvironmentVariable("OPTIND", "1");
 
         // Remove anything not in the launcher block (vars written by an earlier
         // invocation such as `export Y=leak`, and host-only vars the launcher

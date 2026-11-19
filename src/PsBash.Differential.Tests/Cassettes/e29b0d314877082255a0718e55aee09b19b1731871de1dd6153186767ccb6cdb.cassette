@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 76
+stdout-length: 31
+stderr-length: 0
+==== SCRIPT ====
+echo "COMP_WORDBREAKS=${COMP_WORDBREAKS+set} nonempty=${COMP_WORDBREAKS:+y}"
+==== STDOUT ====
+COMP_WORDBREAKS=set nonempty=y
+
+==== STDERR ====
+

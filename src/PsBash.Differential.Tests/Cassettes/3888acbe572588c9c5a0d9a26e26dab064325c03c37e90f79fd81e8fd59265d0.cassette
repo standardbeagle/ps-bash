@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 55
+stdout-length: 24
+stderr-length: 0
+==== SCRIPT ====
+echo "HOSTNAME=${HOSTNAME+set} nonempty=${HOSTNAME:+y}"
+==== STDOUT ====
+HOSTNAME=set nonempty=y
+
+==== STDERR ====
+

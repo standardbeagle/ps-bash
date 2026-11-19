@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 52
+stdout-length: 23
+stderr-length: 0
+==== SCRIPT ====
+echo "SECONDS=${SECONDS+set} nonempty=${SECONDS:+y}"
+==== STDOUT ====
+SECONDS=set nonempty=y
+
+==== STDERR ====
+

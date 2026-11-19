@@ -65,6 +65,10 @@ public class ShellVariableStorageGuardTests
         ["BashShellState.cs|BashRuntime.SubshellPidVariable"] = "the subshell pid mark's own constant",
         ["BashRuntime.cs|SubshellPidVariable"] = "the subshell pid mark's own constant",
         ["JobClock.cs|VariableName"] = "a background job's launch clock's own constant (__psbashJobClock)",
+        ["BashRuntime.cs|SubshellDepthVariable"] = "the subshell depth ($BASH_SUBSHELL) mark's own constant",
+        ["BashShellState.cs|BashRuntime.SubshellDepthVariable"] = "the subshell depth ($BASH_SUBSHELL) mark's own constant",
+        ["ErrTrapInheritance.cs|TrapVariable"] = "the ERR trap's own constant (__BashTrapERR), put aside on scope entry",
+        ["ErrTrapInheritance.cs|ErrtraceVariable"] = "the set -E flag's own constant (__BashErrtrace)",
     };
 
     private const string Primitive = "BashVariableLookup.cs";
