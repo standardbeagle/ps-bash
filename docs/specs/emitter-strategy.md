@@ -309,7 +309,11 @@ If the command has a heredoc attached:
 - **Literal** (`<<'EOF'`): emits `@'\n{body}\n'@ | cmd` with no variable
   translation.
 
-The heredoc body is piped into the command.
+The heredoc body is piped into the command. The command is that pipe's stage (as is a `< file` command, after
+`Invoke-BashCat f`), so it is emitted under `WithPipeStageFeed`: any script block its emission wraps it in (the run-time
+`exec` branch of `$SH >out <<EOF`, a splat hoist) forwards `$input` to the command inside, or the command reads nothing
+(`g=-; cat $g <<EOF` or `< in`, the oils xtrace spec `$SH >stdout 2>stderr <<'EOF'`; Differential
+`RunTimeCommandNameTests.HereDocument_ReachesACommandInsideAWrapper`; guard `Core.Tests/Parser/StdinFeedWrapperGuardTests`).
 
 ### Here-string (`<<<`)
 

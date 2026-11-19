@@ -5273,7 +5273,10 @@ public static partial class PsEmitter
             result = $"{EmitHereDocLiteral(cmd.HereDocs[^1])} | Emit-BashLine | {EmitEvalWithStdin(() => EmitSimple(innerCmd), dotSource: true)}";
             return true;
         }
-        string cmdText = EmitSimple(innerCmd);
+        // The command is the pipe stage after the body (`body | Emit-BashLine | cmd`): any script block its emission wraps it in
+        // (a splat hoist, an env prefix, the run-time exec branch of `$SH >out <<EOF`) must hand the block's input on, or the
+        // command reads nothing (`f=-; cat $f <<EOF`, `$SH >stdout <<EOF` printed nothing).
+        string cmdText = WithPipeStageFeed(true, () => EmitSimple(innerCmd));
         // A real program must read the heredoc's bytes, not PowerShell's per-record `\r\n` rendering of them;
         // every other consumer keeps receiving the records as before.
         result = $"{EmitHereDocLiteral(cmd.HereDocs[^1])} | Emit-BashLine | {NativeStdinFeedOrNull(innerCmd)}{cmdText}";
@@ -5396,7 +5399,9 @@ public static partial class PsEmitter
         // an empty <cmd> produced a dangling `|` ("An empty pipe element is not
         // allowed"), which failed the parse of the whole file. With no command the
         // redirect IS the command.
-        var inner = EmitSimple(innerCmd);
+        // The command is the pipe stage after the file (`Invoke-BashCat f | cmd`): fed like a here-document's command, so a
+        // wrapper its emission needs (a splat hoist: `g=-; cat $g < f` read nothing) hands the file on.
+        var inner = WithPipeStageFeed(true, () => EmitSimple(innerCmd));
         if (inner.Length == 0)
         {
             // Only a lone `$(< file)` reads the file out; any other bare redirect just opens it.

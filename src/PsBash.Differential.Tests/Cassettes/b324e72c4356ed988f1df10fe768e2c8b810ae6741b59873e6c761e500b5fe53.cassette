@@ -1,0 +1,18 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 82
+stdout-length: 8
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)"
+echo hi > in
+g=-; cat $g < in
+FOO=1 cat $g < in; cat $g <<< "$g"
+==== STDOUT ====
+hi
+hi
+-
+
+==== STDERR ====
+

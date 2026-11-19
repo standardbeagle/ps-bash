@@ -31,4 +31,18 @@ public class RunTimeCommandNameTests
     [InlineData("f() { while read -r l; do echo \"f:$l\"; done; }; echo u | { h=f; $h; }")]
     [InlineData("r=read; echo w | { $r v; echo \"v=$v\"; }")]
     public Task NameInAStdinScope_GetsTheStdinOnlyIfItReadsIt(string script) => AssertOracle.EqualAsync(script);
+
+    /// <summary>
+    /// A here-document / here-string is the stdin of a command whose emission wraps it in a script block: the run-time
+    /// <c>exec</c> branch of <c>$c &gt;f</c> (it may be <c>exec</c>'s permanent redirect), a splat hoist, an env prefix.
+    /// The block got the body and the command inside read nothing: <c>$SH &gt;stdout 2&gt;stderr &lt;&lt;'EOF'</c> ran an
+    /// empty script (oils xtrace spec "xtrace with unprintable chars"), <c>f=-; cat $f &lt;&lt;EOF</c> printed nothing.
+    /// </summary>
+    [SkippableTheory]
+    [InlineData("cd \"$(mktemp -d)\"\nc=cat\n$c >o 2>e <<'EOF'\nbody $x\nEOF\necho \"st=$?\"; cat o e")]
+    [InlineData("cd \"$(mktemp -d)\"\nc=cat\n$c >o <<< 'here string'; cat o\nFOO=1 $c >o2 <<EOF\nenv $((1+1))\nEOF\ncat o2")]
+    [InlineData("cd \"$(mktemp -d)\"\nf=-; cat $f <<EOF\nsplat\nEOF\nc='cat -n'; $c >o <<EOF\nsplit\nEOF\ncat o")]
+    [InlineData("cd \"$(mktemp -d)\"\necho hi > in\ng=-; cat $g < in\nFOO=1 cat $g < in; cat $g <<< \"$g\"")]
+    [InlineData("cd \"$(mktemp -d)\"\nc=bash\n$c >o 2>e <<'EOF'\ns=$'a\\x03b'\nset -o xtrace\necho \"$s\"\nEOF\nod -c o; cat e")]
+    public Task HereDocument_ReachesACommandInsideAWrapper(string script) => AssertOracle.EqualAsync(script);
 }
