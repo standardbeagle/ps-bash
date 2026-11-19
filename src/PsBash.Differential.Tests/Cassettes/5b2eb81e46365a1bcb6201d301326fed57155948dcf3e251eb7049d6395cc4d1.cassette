@@ -1,0 +1,16 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 272
+stdout-length: 47
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit; { kill -USR1 $BASHPID; echo after; } & wait $! 2>err; echo "USR1 $?"; grep -o -e 'User defined signal [12]' -e Hangup -e Killed -e Terminated -e Interrupt -e Quit -e 'Broken pipe' err; grep -c -i -e exception -e EndInvoke err; echo still-running
+==== STDOUT ====
+USR1 138
+User defined signal 1
+0
+still-running
+
+==== STDERR ====
+

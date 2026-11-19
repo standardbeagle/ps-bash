@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 109
+stdout-length: 12
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit; { echo c; kill -TERM $BASHPID; echo d; } > out & wait $!; echo "redir $?"; cat out
+==== STDOUT ====
+redir 143
+c
+
+==== STDERR ====
+

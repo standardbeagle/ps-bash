@@ -98,7 +98,18 @@ Non-goals
    `Cmdlets.Tests/BackgroundJobRunspaceTests`, `Core.Tests/ScalarOverlayTests`; behavior against bash:
    `Differential.Tests/BackgroundJobLaunchValuesDifferentialTests`.
 2. **Identity.** `$$` stays the *parent shell's* id in the job; `$BASHPID` is the job's own. `$!` in the
-   parent is the job's OS pid.
+   parent is the job's OS pid. An in-process job's `$BASHPID` is a synthetic subshell id that `BashJobRunspaces.NewJob`
+   assigns (`BashRuntime.SubshellPidVariable`); it is not `$!` (the synthetic job id), a known gap. It used to be the
+   shell's pid, so `kill -USR1 $BASHPID` in the job killed the shell.
+   **Invariant: a signal a job sends itself ends only the job, through ONE path.** `ShellSignalTraps.Terminate` in a
+   job runspace records the signal (`ShellSignalTraps.JobSignalVariable`) and ends the job as its `exit` does, so the
+   output made so far is kept; the wrapper hands the signal to `wait` (`$__bgStatus.Signal`), which returns 128+N
+   (numbers from `OsSignals`) and prints bash's report (silent for TERM and PIPE) and never .NET exception text. A job
+   ignores INT and QUIT it sends itself (`ShellSignalTraps.IgnoredHere`: bash's asynchronous commands ignore them).
+   The same rule holds for a subshell (foreground, in a job, in `$( )`): `kill` that names the running subshell's own
+   `$BASHPID` makes `Terminate` throw `BashSubshellExitException` (128+N) to that subshell's scope, as its `exit` does
+   (`PsBuild.DynamicExit`); `kill $$` still ends the shell. bash's "Terminated" report for a foreground child is not
+   made (known gap). Guard `Cmdlets.Tests/JobSelfSignalGuardTests`; oracle `BackgroundJobSelfSignalDifferentialTests`.
 3. **stdin.** A non-interactive job's stdin is `/dev/null` (NUL) unless redirected; an interactive one
    inherits the terminal (and gets SIGTTIN semantics only where the OS has them).
 4. **Status.** `wait N` returns the job's exit status (128+signal on kill); unknown pid → 127;

@@ -10,14 +10,20 @@ namespace PsBash.Cmdlets;
 /// treats signal 0 as an existence probe only, and <c>-l</c> lists the known
 /// signal names. Windows has no real POSIX signals, so every terminating signal
 /// maps to <see cref="Process.Kill()"/> — matching the psm1 oracle, whose
-/// Stop-Process calls also force-terminate. No flag collides with a PowerShell
-/// common parameter, so all tokens arrive via <see cref="Arguments"/>.
+/// Stop-Process calls also force-terminate. A signal word can collide with a PowerShell common
+/// parameter: <c>-PIPE</c> prefix-matches <c>-PipelineVariable</c>, which took the next token (the pid) as
+/// a variable name and left kill with no operands ("kill: usage"). The transpiler puts kill on
+/// <c>PsEmitter.OrderedArgCommands</c>, so every dash word arrives single-quoted in <see cref="Arguments"/>;
+/// the <see cref="PIPE"/> decoy is for DIRECT calls (<c>Invoke-BashKill -PIPE $pid</c>) and is re-injected first.
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashKill")]
 public sealed class InvokeBashKillCommand : PSCmdlet
 {
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
+
+    // Declared because the bare token -PIPE prefix-matches -PipelineVariable (exact name wins). Direct calls only.
+    [Parameter] public SwitchParameter PIPE { get; set; }
 
     // Number/name -> canonical SIGxxx, mirroring the psm1 table.
     /// <summary>A terminated-but-unreaped child (Linux state Z, macOS SZOMB) is already gone for <c>kill -0</c>, as in bash.</summary>
@@ -94,7 +100,7 @@ public sealed class InvokeBashKillCommand : PSCmdlet
 
     protected override void EndProcessing()
     {
-        var args = Arguments ?? Array.Empty<string>();
+        var args = BashRuntime.PrependDecoys(Arguments, (PIPE.IsPresent, "-PIPE"));
         if (Array.IndexOf(args, "--help") >= 0)
         {
             foreach (var line in InvokeCommand.InvokeScript("param($n) Show-BashHelp $n", "kill"))
@@ -222,6 +228,8 @@ public sealed class InvokeBashKillCommand : PSCmdlet
         bool existenceOnly = signalName == "SIG0";
         bool hadError = badArg;
         bool signalSelf = false;
+        // The self named was the running subshell's own $BASHPID (not `$$`): only that subshell ends.
+        bool selfIsSubshell = false;
         int sigNum = SignalNumber(signalName ?? "SIGTERM");
         if (existenceOnly) sigNum = 0;
         // A job, another process or the shell without a trap for it ignores the signal: only check the target exists.
@@ -264,7 +272,7 @@ public sealed class InvokeBashKillCommand : PSCmdlet
             // own id is the shell signalling itself, any other one (a subshell that has ended) names nothing.
             if (BashRuntime.IsSubshellPid(procId))
             {
-                if (procId == BashRuntime.BashPid(SessionState)) { if (!existenceOnly) signalSelf = true; continue; }
+                if (procId == BashRuntime.BashPid(SessionState)) { if (!existenceOnly) signalSelf = selfIsSubshell = true; continue; }
                 FileSystemHelpers.WriteBashError(this, $"kill: ({procId}) - No such process");
                 hadError = true;
                 continue;
@@ -312,10 +320,10 @@ public sealed class InvokeBashKillCommand : PSCmdlet
         // (137 for -9, 143 for TERM). The same rules as a signal another shell sends (ShellSignalTraps).
         if (signalSelf && sigNum != 9 && ShellSignalTraps.RunTrap(this, sigNum))
             signalSelf = false;
-        if (signalSelf && ShellSignalTraps.IgnoredByDefault(sigNum))
+        if (signalSelf && ShellSignalTraps.IgnoredHere(this, sigNum))
             signalSelf = false;
         if (signalSelf)
-            throw ShellSignalTraps.Terminate(this, sigNum);
+            throw ShellSignalTraps.Terminate(this, sigNum, innermostSubshell: selfIsSubshell);
 
         FileSystemHelpers.SetLastExitCode(this, hadError ? 1 : 0);
     }

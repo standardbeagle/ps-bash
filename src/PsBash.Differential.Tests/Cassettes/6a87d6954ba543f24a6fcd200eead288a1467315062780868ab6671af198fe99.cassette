@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 74
+stdout-length: 8
+stderr-length: 0
+==== SCRIPT ====
+{ echo a; kill -USR1 $BASHPID; echo b; } & wait 2>/dev/null; echo "all $?"
+==== STDOUT ====
+a
+all 0
+
+==== STDERR ====
+

@@ -191,6 +191,38 @@ public class InvokeBashKillCommandTests : IClassFixture<SharedPwshFixture>
         Assert.Contains(errs, m => m.Contains("No such process", StringComparison.OrdinalIgnoreCase));
     }
 
+    // REGRESSION: `kill -PIPE PID` printed "kill: usage": -PIPE prefix-matched the -PipelineVariable common parameter,
+    // which took the pid as a variable name. Direct call shape (Pester); the transpiled shape is single-quoted
+    // (PsEmitter.OrderedArgCommands) and covered by BackgroundJobSelfSignalDifferentialTests (PIPE).
+    [Fact]
+    public void Kill_PipeSignalWord_DirectCall_ReachesTheSignalNotPipelineVariable()
+    {
+        var errs = RunErrors("Invoke-BashKill -PIPE 2147483646");
+        Assert.Contains(errs, m => m.Contains("No such process", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(errs, m => m.Contains("usage", StringComparison.OrdinalIgnoreCase));
+    }
+
+    // Guard for the class: every signal word kill accepts as `-NAME` that a common parameter's name starts with
+    // (the binder's prefix match) has an exact-name decoy parameter, so a direct call cannot lose it to the binder.
+    [Fact]
+    public void Kill_EverySignalWordThatPrefixesACommonParameter_HasADecoy()
+    {
+        var names = (string?[])typeof(InvokeBashKillCommand)
+            .GetField("LinuxSignalNames", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!
+            .GetValue(null)!;
+        var common = typeof(System.Management.Automation.Internal.CommonParameters).GetProperties().Select(p => p.Name).ToArray();
+        Assert.Contains("PipelineVariable", common);
+        var missing = new List<string>();
+        foreach (string? word in names)
+        {
+            if (word is null) continue;
+            if (!common.Any(c => c.StartsWith(word, StringComparison.OrdinalIgnoreCase))) continue;
+            var prop = typeof(InvokeBashKillCommand).GetProperty(word);
+            if (prop is null || !prop.IsDefined(typeof(System.Management.Automation.ParameterAttribute), false)) missing.Add(word);
+        }
+        Assert.True(missing.Count == 0, "signal words the binder would take as a common parameter, without a decoy: " + string.Join(", ", missing));
+    }
+
     [Fact]
     public void Kill_NoArguments_EmitsUsageError()
     {

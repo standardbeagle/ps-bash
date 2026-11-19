@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 92
+stdout-length: 10
+stderr-length: 0
+==== SCRIPT ====
+fn() { { echo f1; kill -USR1 $BASHPID; echo f2; } & wait $! 2>/dev/null; echo "fn $?"; }; fn
+==== STDOUT ====
+f1
+fn 138
+
+==== STDERR ====
+

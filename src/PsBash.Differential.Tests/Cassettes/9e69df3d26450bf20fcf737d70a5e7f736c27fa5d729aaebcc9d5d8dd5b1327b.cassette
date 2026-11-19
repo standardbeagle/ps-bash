@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 124
+stdout-length: 19
+stderr-length: 0
+==== SCRIPT ====
+exec 2>/dev/null; { kill -HUP $BASHPID; } & sleep 1; wait $!; echo "late $?"; { echo e1; exit 3; } & wait $!; echo "exit $?"
+==== STDOUT ====
+late 129
+e1
+exit 3
+
+==== STDERR ====
+

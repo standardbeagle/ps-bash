@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 96
+stdout-length: 24
+stderr-length: 0
+==== SCRIPT ====
+exec 2>/dev/null; { ( kill -USR1 $BASHPID ); echo "jobsub $?"; } & wait $!; echo "jobsubwait $?"
+==== STDOUT ====
+jobsub 138
+jobsubwait 0
+
+==== STDERR ====
+

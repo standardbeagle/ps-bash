@@ -1337,7 +1337,7 @@ public class PsEmitterTests
         // Batch 1 of the shared ordered parser. Adding a command here also means adding it to
         // CommonParameterCollisionGuardTests.EmitterForceQuoted (Cmdlets.Tests) — that map is
         // how the guard knows the emitter, not a decoy, protects the colliding letters.
-        Assert.Equal(new[] { "awk", "base64", "bash", "cat", "chmod", "column", "comm", "command", "compgen", "complete", "compopt", "cp", "cut", "declare", "diff", "du", "echo", "env", "expand", "file", "find", "flock", "fold", "getopts", "grep", "gzip", "hash", "head", "history", "join", "jq", "ln", "ls", "md5sum", "mkdir", "mv", "nl", "od", "paste", "printf", "readlink", "realpath", "rg", "rm", "rmdir", "sed", "sh", "sha1sum", "sha256sum", "shopt", "sort", "source", "split", "stat", "strings", "tac", "tail", "tar", "tee", "test", "time", "timeout", "times", "touch", "tree", "type", "ulimit", "umask", "unexpand", "uniq", "wc", "xargs" }, PsEmitter.OrderedArgCommands.OrderBy(x => x).ToArray());
+        Assert.Equal(new[] { "awk", "base64", "bash", "cat", "chmod", "column", "comm", "command", "compgen", "complete", "compopt", "cp", "cut", "declare", "diff", "du", "echo", "env", "expand", "file", "find", "flock", "fold", "getopts", "grep", "gzip", "hash", "head", "history", "join", "jq", "kill", "ln", "ls", "md5sum", "mkdir", "mv", "nl", "od", "paste", "printf", "readlink", "realpath", "rg", "rm", "rmdir", "sed", "sh", "sha1sum", "sha256sum", "shopt", "sort", "source", "split", "stat", "strings", "tac", "tail", "tar", "tee", "test", "time", "timeout", "times", "touch", "tree", "type", "ulimit", "umask", "unexpand", "uniq", "wc", "xargs" }, PsEmitter.OrderedArgCommands.OrderBy(x => x).ToArray());
     }
 
     // `bash` is on OrderedArgCommands: the script's own args (`bash s.sh -v -e -c x`) and the
@@ -4114,6 +4114,11 @@ public class PsEmitterTests
 
         Assert.Equal("$global:BashPositional = @()", result);
     }
+
+    // kill is on OrderedArgCommands: `-PIPE` bare prefix-matched the -PipelineVariable common parameter ("kill: usage").
+    [Fact]
+    public void Transpile_KillSignalWord_IsSingleQuoted()
+        => Assert.Equal("Invoke-BashKill '-PIPE' 123", PsEmitter.Transpile("kill -PIPE 123"));
 
     [Fact]
     public void Transpile_Background_EmitsInvokeBashBackground()

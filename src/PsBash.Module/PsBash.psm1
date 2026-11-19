@@ -2892,6 +2892,9 @@ function Complete-BashBgJob {
     param([Parameter(Mandatory)]$Job)
     if ($Job.Done) { return }
     $ps = $Job.PowerShell
+    # The signal the job sent itself, recorded by its wrapper: status 128+N, and `wait` reports it (Write-BashBgSignalReport).
+    $selfSignal = if ($Job.Status -is [System.Collections.IDictionary]) { $Job.Status.Signal } else { $null }
+    if ($selfSignal) { $Job | Add-Member -NotePropertyName Signal -NotePropertyValue ([int]$selfSignal) -Force }
     try {
         $out = $ps.EndInvoke($Job.AsyncResult)
         $Job.ExitCode = [int]$Job.Status.Code
@@ -2912,8 +2915,12 @@ function Complete-BashBgJob {
             Write-BashHostStderr $errText
         }
     } catch {
-        Write-BashHostStderr ("$_")
-        if ($null -eq $Job.ExitCode) { $Job.ExitCode = 1 }
+        # A job a signal ended reports the signal, never the .NET text of the stop that ended it.
+        if ($selfSignal) { $Job.ExitCode = [int]$Job.Status.Code }
+        else {
+            Write-BashHostStderr ("$_")
+            if ($null -eq $Job.ExitCode) { $Job.ExitCode = 1 }
+        }
     } finally {
         $ps.Dispose()
         $Job.Done = $true
@@ -3185,6 +3192,8 @@ try {
     # A pooled runspace must not keep the cursor for the next job.
     $global:__BashStdIn = $null
     $__bgStatus.Code = $__bgCode
+    # A signal the job sent itself (`kill -USR1 $BASHPID`; ShellSignalTraps.Terminate) ended it: `wait` reports it.
+    $__bgStatus.Signal = $global:__psbashJobSignal
     $__bgStatus.At = [System.Diagnostics.Stopwatch]::GetTimestamp()
     # Last: the runspace goes back for the next job without the globals this one created.
     [PsBash.Cmdlets.BashJobRunspaces]::EndJob($ExecutionContext.SessionState)

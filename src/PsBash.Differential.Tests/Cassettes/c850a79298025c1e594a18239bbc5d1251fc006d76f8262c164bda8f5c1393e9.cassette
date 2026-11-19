@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 77
+stdout-length: 14
+stderr-length: 0
+==== SCRIPT ====
+exec 2>/dev/null; ( kill -TERM $BASHPID; echo no ); echo "sub $?"; echo after
+==== STDOUT ====
+sub 143
+after
+
+==== STDERR ====
+

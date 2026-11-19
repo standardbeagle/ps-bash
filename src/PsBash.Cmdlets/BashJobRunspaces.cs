@@ -65,6 +65,11 @@ public static class BashJobRunspaces
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(body);
         var text = new System.Text.StringBuilder(head).Append('\n').Append(BashStateSnapshot.BuildJobOptions(session));
+        // A job is a child process in bash, with a $BASHPID of its own: here a synthetic subshell id
+        // (BashRuntime.SubshellPidVariable). Without one it read the shell's pid, and `kill -USR1 $BASHPID` in the job
+        // signalled the SHELL, which died of it. A literal, so the job's way to its body makes no .NET call (section 12.4).
+        text.Append("$global:").Append(BashRuntime.SubshellPidVariable).Append(" = ")
+            .Append(BashRuntime.NextSubshellPid().ToString(System.Globalization.CultureInfo.InvariantCulture)).Append('\n');
         if (vars is { Count: > 0 })
         {
             bool first = true;

@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 78
+stdout-length: 18
+stderr-length: 0
+==== SCRIPT ====
+exec 2>/dev/null; ( ( kill -HUP $BASHPID ); echo "inner $?" ); echo "outer $?"
+==== STDOUT ====
+inner 129
+outer 0
+
+==== STDERR ====
+

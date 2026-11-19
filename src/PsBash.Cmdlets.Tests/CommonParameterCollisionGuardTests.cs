@@ -69,6 +69,8 @@ public class CommonParameterCollisionGuardTests
             // command: emitter single-quotes every dash literal (its own -v/-V/-p AND the inner
             // command's flags); the cmdlet scans options only up to the first operand.
             ["command"] = new(CollidingLetters),
+            // kill: every dash literal single-quoted (`-PIPE` prefix-matched -PipelineVariable); PIPE decoy for direct calls.
+            ["kill"] = new(CollidingLetters),
             // declare (print forms): every dash literal single-quoted; P stays declared for direct calls.
             ["declare"] = new(CollidingLetters),
             // type: -p vs -P differ only in case, which the binder folds; quoted they keep it. A/P decoys for direct calls.
