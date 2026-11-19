@@ -28,4 +28,10 @@ public class DateFormatDifferentialTests
     [SkippableFact]
     public Task Date_EpochNanos_HasNineteenDigits()
         => Eq("date +%s%N | wc -c");
+
+    // `date MMDDhhmm[[CC]YY][.ss]` as a non-root user: "cannot set date", status 1, then the time the operand names
+    // (-u: read and printed in UTC; a two-digit year 69-99 is 19xx). REGRESSION: ps-bash printed the current time.
+    [SkippableFact]
+    public Task Date_SetOperand_PrintsTheNamedTime()
+        => Eq("date -u 010112002025; echo \"rc=$?\"; date -u 0704093099.45; echo \"rc=$?\"");
 }

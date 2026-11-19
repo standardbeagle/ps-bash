@@ -23,7 +23,16 @@ internal enum TouchTimeWord
 /// </summary>
 internal static class TouchStamp
 {
-    public static bool TryParse(string stamp, DateTime now, out DateTime result)
+    public static bool TryParse(string stamp, DateTime now, out DateTime result) => TryParse(stamp, now, yearLast: false, out result);
+
+    /// <summary>
+    /// The operand of <c>date MMDDhhmm[[CC]YY][.ss]</c> (the time an unprivileged <c>date</c> reports it cannot set):
+    /// the same fields and calendar rules as <c>touch -t</c>, the year LAST instead of first (POSIX date).
+    /// </summary>
+    public static bool TryParseDateOperand(string operand, DateTime now, out DateTime result) =>
+        TryParse(operand, now, yearLast: true, out result);
+
+    private static bool TryParse(string stamp, DateTime now, bool yearLast, out DateTime result)
     {
         result = default;
 
@@ -48,17 +57,19 @@ internal static class TouchStamp
 
         int year;
         int pos = 0;
+        // The year field: in front of MMDDhhmm (touch -t) or behind it (date).
+        int yearAt = yearLast ? 8 : 0;
         switch (main.Length)
         {
             case 12:
-                year = Two(main, 0) * 100 + Two(main, 2);
-                pos = 4;
+                year = Two(main, yearAt) * 100 + Two(main, yearAt + 2);
+                pos = yearLast ? 0 : 4;
                 break;
             case 10:
             {
-                int yy = Two(main, 0);
+                int yy = Two(main, yearAt);
                 year = yy >= 69 ? 1900 + yy : 2000 + yy;
-                pos = 2;
+                pos = yearLast ? 0 : 2;
                 break;
             }
             default:

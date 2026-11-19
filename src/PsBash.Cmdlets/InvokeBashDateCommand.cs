@@ -168,6 +168,7 @@ public sealed class InvokeBashDateCommand : PSCmdlet
         bool utc = false;
         string? refFile = null;
         string? setOperand = null;
+        DateTime? setInstant = null;
         string? setString = null;
         bool sawFormatOperand = false;
 
@@ -221,12 +222,15 @@ public sealed class InvokeBashDateCommand : PSCmdlet
                 FileSystemHelpers.WriteStderr(this, "Try 'date --help' for more information.");
                 return;
             }
-            if (!SetDateOperand.IsMatch(arg))
+            // The date it names is what an unprivileged GNU date prints after "cannot set date". REGRESSION: it
+            // printed the current time.
+            if (!TouchStamp.TryParseDateOperand(arg, DateTime.Now, out var named))
             {
                 WriteBashError($"date: invalid date '{arg}'");
                 return;
             }
             setOperand = arg;
+            setInstant = named;
         }
         if (setString != null)
         {
@@ -236,7 +240,7 @@ public sealed class InvokeBashDateCommand : PSCmdlet
         }
         if (setOperand != null)
         {
-            // Never sets the clock: report as an unprivileged GNU date does, then print the current time.
+            // Never sets the clock: report as an unprivileged GNU date does, then print the time it names.
             WriteBashError("date: cannot set date: Operation not permitted");
         }
 
@@ -262,6 +266,13 @@ public sealed class InvokeBashDateCommand : PSCmdlet
                 mtime = System.IO.Directory.GetLastWriteTime(resolved);
             }
             dto = new DateTimeOffset(mtime);
+        }
+        else if (setInstant is { } instant)
+        {
+            // Under -u the operand names a UTC time (GNU reads it in the TZ it prints in).
+            dto = utc
+                ? new DateTimeOffset(DateTime.SpecifyKind(instant, DateTimeKind.Unspecified), TimeSpan.Zero)
+                : new DateTimeOffset(instant);
         }
         else if (dateString != null)
         {
@@ -422,10 +433,6 @@ public sealed class InvokeBashDateCommand : PSCmdlet
         }
         return sb.ToString();
     }
-
-    /// <summary>GNU date's set-the-clock operand: MMDDhhmm[[CC]YY][.ss].</summary>
-    private static readonly System.Text.RegularExpressions.Regex SetDateOperand =
-        new(@"^\d{8}(\d{2}){0,2}(\.\d{2})?$", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
 
     private void WriteBashError(string message)
     {
