@@ -583,7 +583,11 @@ public sealed class InvokeBashSortCommand : BashCmdlet
                     using var device = RedirectFileWriter.OpenFile(outPath, append: false, this);
                     device.Write(RawBytes.GetBytes(sb.ToString()));
                 }
-                else File.WriteAllBytes(outPath, RawBytes.GetBytes(sb.ToString()));
+                else
+                {
+                    FileSystemHelpers.ThrowIfNotWritableName(outPath);   // `-o eleven/`: "Is a directory"
+                    File.WriteAllBytes(outPath, RawBytes.GetBytes(sb.ToString()));
+                }
             }
             catch (Exception ex)
             {

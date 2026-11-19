@@ -190,6 +190,7 @@ public sealed class InvokeBashRedirectCommand : BashCmdlet
             if (!append && !force && File.Exists(target)
                 && SessionState.PSVariable.GetValue("__BashNoclobber") is true)
                 throw new IOException("cannot overwrite existing file");
+            FileSystemHelpers.ThrowIfNotWritableName(target);   // `> twenty/`: "Is a directory"
             stream = new RedirectFileWriter(new FileStream(target, append ? FileMode.Append : FileMode.Create,
                 FileAccess.Write, FileShare.ReadWrite, bufferSize: 64 * 1024));
             return true;

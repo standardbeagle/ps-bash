@@ -37,11 +37,18 @@ public sealed class InvokeBashFlockCommand : BashCmdlet
 
         string path = FileSystemHelpers.NormalizeOperandPath(o.File);
         FileStream? lockFile;
-        try { lockFile = Acquire(path, o.Shared, o.Wait); }
+        try
+        {
+            // util-linux opens with O_CREAT, and on EISDIR again read-only: `lk/` is what stat says (SlashedNameErrno).
+            if (FileSystemHelpers.SlashedNameErrno(path, FileSystemHelpers.NameUse.Stat) is { } slashed)
+                throw new IOException(slashed);
+            lockFile = Acquire(path, o.Shared, o.Wait);
+        }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            FileSystemHelpers.WriteStderr(this, $"flock: cannot open lock file {o.File}: {ex.Message}");
-            FileSystemHelpers.SetLastExitCode(this, 1);
+            // util-linux: a lock file that cannot be opened is EX_NOINPUT (66), with the errno text.
+            FileSystemHelpers.WriteStderr(this, $"flock: cannot open lock file {o.File}: {FileSystemHelpers.ReadErrorMessage(ex)}");
+            FileSystemHelpers.SetLastExitCode(this, 66);
             return;
         }
         if (lockFile is null)

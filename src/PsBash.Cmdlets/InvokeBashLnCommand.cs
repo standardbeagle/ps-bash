@@ -348,6 +348,21 @@ public sealed class InvokeBashLnCommand : BashCmdlet
             return false;
         }
 
+        // A link name ending in '/' names a directory, so link(2)/symlink(2) fail: ENOENT for a missing name (Windows
+        // dropped the slash and `ln a eight/` made `eight`), EEXIST for an existing one - which -f/a backup first looks
+        // up and reports as GNU's "failed to access" (FileSystemHelpers.SlashedNameErrno).
+        if (FileSystemHelpers.SlashedNameErrno(linkAbsolute, FileSystemHelpers.NameUse.Link) is { } slashed)
+        {
+            bool named = slashed != FileSystemHelpers.NoSuchFileOrDirectory;
+            FileSystemHelpers.WriteBashError(this,
+                named && (plan.BackupEnabled || plan.Existing != LnExisting.Fail)
+                    ? $"ln: failed to access '{linkName}': Not a directory"
+                    : symbolic || named
+                        ? $"ln: failed to create {(symbolic ? "symbolic" : "hard")} link '{linkName}': {slashed}"
+                        : $"ln: failed to create hard link '{linkName}' => '{target}': {slashed}");
+            return false;
+        }
+
         // -r: the stored text is the path from the link's directory, with both ends canonicalized.
         var linkText = target;
         if (plan.Relative)

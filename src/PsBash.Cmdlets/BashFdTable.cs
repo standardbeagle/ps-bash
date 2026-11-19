@@ -59,6 +59,7 @@ internal static class BashFdTable
             if (access == FileAccess.ReadWrite)
             {
                 if (kind != PsBash.Core.DeviceKind.None) return $"{PsBash.Core.BashPath.ToShell(path)}: cannot open a device for reading and writing";
+                FileSystemHelpers.ThrowIfNotWritableName(path);   // `exec 3<> fx/`: "Is a directory"
                 fs = new FileStream(path, mode, access, FileShare.ReadWrite | FileShare.Delete);
                 // One file position, as one descriptor has: the writer writes where the stream is, flushed per write.
                 writer = new StreamWriter(fs, PsBash.Core.RawBytes.Encoding, 4096, leaveOpen: true) { AutoFlush = true };

@@ -190,6 +190,7 @@ public sealed class InvokeBashHistoryCommand : BashCmdlet
             (f, lines, append) =>
             {
                 var path = Resolve(f);
+                FileSystemHelpers.ThrowIfNotWritableName(path);   // `history -w hx/` creates no file `hx`
                 using var sw = new StreamWriter(path, append, PsBash.Core.RawBytes.Encoding);
                 foreach (var l in lines) sw.Write(l + "\n");
             }, mark, defaultFile);

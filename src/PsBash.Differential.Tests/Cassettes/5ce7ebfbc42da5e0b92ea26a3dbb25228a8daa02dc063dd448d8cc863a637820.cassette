@@ -1,0 +1,54 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 620
+stdout-length: 117
+stderr-length: 459
+==== SCRIPT ====
+__fs_snap() { find . | LC_ALL=C sort | while IFS= read -r p; do if [ -d "$p" ]; then echo "D $p"; else echo "F $p $(base64 -w0 "$p")"; fi; done; }
+d=$(mktemp -d) && cd "$d" && { :
+echo a > a; echo b > b
+} >/dev/null 2>&1
+echo '== stdout'
+{ :
+touch b/; echo rc=$?; cp a a/; echo rc=$?; cp a b/; echo rc=$?; mv a b/; echo rc=$?; install a b/; echo rc=$?; ln a b/; echo rc=$?; ln -s a b/; echo rc=$?; ln -sf a b/; echo rc=$?; echo t | tee b/; echo rc=$?; echo s | sort -o b/; echo rc=$?; { echo r > b/; } 2>/dev/null; echo rc=$?; flock b/ true; echo rc=$?; cat b
+}
+echo "== exit $?"
+echo '== fs'
+__fs_snap
+cd /; rm -rf "$d"
+==== STDOUT ====
+== stdout
+rc=1
+rc=1
+rc=1
+rc=1
+rc=1
+rc=1
+rc=1
+rc=1
+t
+rc=1
+rc=2
+rc=1
+rc=66
+b
+== exit 0
+== fs
+D .
+F ./a YQo=
+F ./b Ygo=
+
+==== STDERR ====
+touch: setting times of 'b/': Not a directory
+cp: cannot stat 'a/': Not a directory
+cp: cannot stat 'b/': Not a directory
+mv: cannot stat 'b/': Not a directory
+install: cannot stat 'b/': Not a directory
+ln: failed to create hard link 'b/': File exists
+ln: failed to create symbolic link 'b/': File exists
+ln: failed to access 'b/': Not a directory
+tee: b/: Is a directory
+sort: open failed: b/: Is a directory
+flock: cannot open lock file b/: Not a directory
+

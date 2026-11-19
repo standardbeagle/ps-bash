@@ -608,7 +608,19 @@ public sealed class InvokeBashTarCommand : BashCmdlet
             else
             {
                 archiveFull = Path.GetFullPath(archiveFile!);
-                outStream = File.Open(archiveFile!, FileMode.Create, FileAccess.Write, FileShare.None);
+                try
+                {
+                    FileSystemHelpers.ThrowIfNotWritableName(archiveFull);   // `tar cf out/ d`: "Is a directory"
+                    outStream = File.Open(archiveFile!, FileMode.Create, FileAccess.Write, FileShare.None);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    // GNU: the archive that cannot be opened is fatal, status 2.
+                    FileSystemHelpers.WriteBashError(this, $"tar: {archiveFile}: Cannot open: {FileSystemHelpers.ReadErrorMessage(ex)}");
+                    FileSystemHelpers.WriteStderr(this, NotRecoverableLine);
+                    FileSystemHelpers.SetLastExitCode(this, 2);
+                    return;
+                }
             }
             tarStream = gzipFilter
                 ? (Stream)new GZipStream(outStream, CompressionMode.Compress)

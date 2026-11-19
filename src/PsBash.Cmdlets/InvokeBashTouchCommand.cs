@@ -212,6 +212,14 @@ public sealed class InvokeBashTouchCommand : BashCmdlet
         foreach (var file in operands)
         {
             var absolute = FileSystemHelpers.ProviderPath(this, file);
+            // `touch five/` names a directory: GNU's create fails (EISDIR) and the stamping reports what stat says -
+            // ENOENT (silent under -c) or ENOTDIR for a file `a/`. It made a file `five`.
+            if (FileSystemHelpers.SlashedNameErrno(absolute, FileSystemHelpers.NameUse.Stat) is { } slashed)
+            {
+                if (!(noCreate && slashed == FileSystemHelpers.NoSuchFileOrDirectory))
+                    FileSystemHelpers.WriteBashError(this, $"touch: setting times of '{file}': {slashed}");
+                continue;
+            }
             bool isLink = FileTimes.IsLink(absolute);
             // A dangling link is a real entry for -h (it stamps the link), but not otherwise.
             bool exists = File.Exists(absolute) || Directory.Exists(absolute) || (noDereference && isLink);

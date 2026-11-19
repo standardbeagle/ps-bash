@@ -94,6 +94,18 @@ Never canonicalize with `Resolve-Path` / `GetUnresolvedProviderPathFromPSPath`: 
 link and glob `[`/`*`. A diagnostic names the operand as typed, GNU-quoted (`Cmdlets/GnuQuote.cs`: `''`, `'a b'`,
 `"it's"`; a Windows drive colon does not force quoting).
 
+### A trailing slash names a directory (one answer)
+
+A name ending in `/` resolves only to a directory (POSIX); Windows and .NET drop the slash, so `ln a eight/` made a
+file `eight` and `install a thirteen/` a directory. Its parent is `FileSystemHelpers.ParentDirectory` (`two/` is in
+`.`), and before an entry is created from it, `FileSystemHelpers.SlashedNameErrno(path, NameUse)` gives the failing
+system call's errno: open-for-write (redirect, tee, `sort -o`, uniq OUTPUT, `exec N<>`, `tar cf`) is always
+"Is a directory" (`ThrowIfNotWritableName`, called by `RedirectFileWriter.OpenFile`); stat (cp, mv, install,
+touch, flock) "Not a directory" for an existing file, else ENOENT (a directory source may still become `n/`:
+`cp -r d n/`, `mv d n/`); link/symlink "File exists" for an existing name, else ENOENT. Guard
+`TrailingSlashOperandGuardTests` (every source that creates by name consults it or says why its names cannot end in
+`/`); oracle `RuntimeCommandParityDifferentialTests.TrailingSlashOperand_*`.
+
 ## Device names
 
 **A `/dev/*` device name is not a path and never reaches the filesystem.** Windows has no `/dev`: a name

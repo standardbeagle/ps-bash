@@ -322,9 +322,20 @@ public sealed class InvokeBashInstallCommand : BashCmdlet
                 targetName = destRaw.TrimEnd('/', '\\') + "/" + basename;
             }
 
+            // A destination ending in '/' names a directory (FileSystemHelpers.SlashedNameErrno): an existing file is
+            // "cannot stat", a missing name cannot become a regular file. `install a thirteen/` made a directory.
+            if (FileSystemHelpers.SlashedNameErrno(targetPath, FileSystemHelpers.NameUse.Stat) is { } slashed)
+            {
+                FileSystemHelpers.WriteBashError(this, slashed != FileSystemHelpers.NoSuchFileOrDirectory
+                    ? $"install: cannot stat '{targetName}': {slashed}"
+                    : $"install: cannot create regular file '{targetName}': Not a directory");
+                hadError = true;
+                continue;
+            }
+
             // Ensure the immediate parent dir exists. The oracle did this
             // unconditionally inside the copy loop too.
-            var targetParent = Path.GetDirectoryName(targetPath);
+            var targetParent = FileSystemHelpers.ParentDirectory(targetPath);
             if (!string.IsNullOrEmpty(targetParent) && !Directory.Exists(targetParent))
             {
                 try { Directory.CreateDirectory(targetParent); } catch { /* swallow — handled by copy error path */ }

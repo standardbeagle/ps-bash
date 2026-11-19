@@ -492,7 +492,7 @@ public sealed class InvokeBashSplitCommand : BashCmdlet
             catch (Exception ex)
             {
                 if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-                FileSystemHelpers.WriteBashError(this, $"split: {BashPath.ToShell(outPath)}: {ex.Message}");
+                FileSystemHelpers.WriteBashError(this, $"split: {BashPath.ToShell(outPath)}: {FileSystemHelpers.ReadErrorMessage(ex)}");
                 return;
             }
         }
@@ -532,7 +532,7 @@ public sealed class InvokeBashSplitCommand : BashCmdlet
             catch (Exception ex)
             {
                 if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-                FileSystemHelpers.WriteBashError(this, $"split: {BashPath.ToShell(outPath)}: {ex.Message}");
+                FileSystemHelpers.WriteBashError(this, $"split: {BashPath.ToShell(outPath)}: {FileSystemHelpers.ReadErrorMessage(ex)}");
                 return;
             }
             chunkIndex++;
@@ -610,7 +610,7 @@ public sealed class InvokeBashSplitCommand : BashCmdlet
             if (FileSystemHelpers.IsPipelineStop(ex)) throw;
             string normalized = BashPath.ToShell(outPath);
             FileSystemHelpers.WriteBashError(
-                this, $"split: {normalized}: {ex.Message}");
+                this, $"split: {normalized}: {FileSystemHelpers.ReadErrorMessage(ex)}");
             return false;
         }
     }

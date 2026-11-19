@@ -584,7 +584,10 @@ internal static class FileSystemHelpers
     /// <see cref="Path.GetDirectoryName(string)"/> of <c>C:\x\two\</c> is <c>C:\x\two</c> itself. REGRESSION:
     /// <c>mkdir two/</c> failed "No such file or directory" because that "parent" did not exist yet.
     /// </summary>
-    public static string? ParentDirectory(string path)
+    public static string? ParentDirectory(string path) => Path.GetDirectoryName(WithoutTrailingSeparators(path));
+
+    /// <summary><paramref name="path"/> without its trailing separators (a root is kept as it is).</summary>
+    private static string WithoutTrailingSeparators(string path)
     {
         string trimmed = Path.TrimEndingDirectorySeparator(path);
         while (trimmed.Length < path.Length && trimmed.Length > 0)
@@ -592,7 +595,51 @@ internal static class FileSystemHelpers
             path = trimmed;
             trimmed = Path.TrimEndingDirectorySeparator(path);
         }
-        return Path.GetDirectoryName(path);
+        return path;
+    }
+
+    /// <summary>How a command is about to use a name, for <see cref="SlashedNameErrno"/>: the system call decides the errno.</summary>
+    public enum NameUse
+    {
+        /// <summary>stat(2): cp, mv and install look the destination up first; touch stamps it.</summary>
+        Stat,
+        /// <summary>open(2) with O_CREAT for writing: a redirect, tee, <c>sort -o</c>, uniq's OUTPUT.</summary>
+        OpenForWrite,
+        /// <summary>link(2) / symlink(2): ln.</summary>
+        Link,
+    }
+
+    /// <summary>ENOENT's text, as <see cref="SlashedNameErrno"/> returns it.</summary>
+    public const string NoSuchFileOrDirectory = "No such file or directory";
+
+    /// <summary>
+    /// POSIX path resolution: a name that ends in <c>/</c> must resolve to a DIRECTORY. The errno text the system call of
+    /// <paramref name="use"/> fails with when <paramref name="path"/> ends in a separator and is not an existing directory
+    /// (a link to one is), else null - the caller then goes on as usual. open(O_CREAT) is always "Is a directory"; stat is
+    /// "Not a directory" for an existing non-directory, else ENOENT; link/symlink are "File exists" for any existing
+    /// entry, else ENOENT. Windows and .NET drop the slash, so without this <c>ln a eight/</c> made a file <c>eight</c>
+    /// and <c>install a thirteen/</c> a directory. Guard: <c>TrailingSlashOperandGuardTests</c>.
+    /// </summary>
+    public static string? SlashedNameErrno(string path, NameUse use)
+    {
+        if (!Path.EndsInDirectorySeparator(path) || Directory.Exists(path)) return null;
+        var name = WithoutTrailingSeparators(path);
+        if (name.Length == path.Length) return null;   // a root
+        if (use == NameUse.OpenForWrite) return "Is a directory";
+        bool exists = File.Exists(name) || IsReparsePoint(name);
+        return use == NameUse.Link
+            ? exists ? "File exists" : NoSuchFileOrDirectory
+            : exists ? "Not a directory" : NoSuchFileOrDirectory;
+    }
+
+    /// <summary>
+    /// The one check before a file is opened for writing by name (<see cref="RedirectFileWriter.OpenFile"/>, a redirect,
+    /// <c>sort -o</c>): throws an <see cref="IOException"/> whose message is the errno text (<see cref="SlashedNameErrno"/>,
+    /// <see cref="NameUse.OpenForWrite"/>), which <see cref="ReadErrorMessage(Exception)"/> passes through.
+    /// </summary>
+    public static void ThrowIfNotWritableName(string path)
+    {
+        if (SlashedNameErrno(path, NameUse.OpenForWrite) is { } why) throw new IOException(why);
     }
 
     /// <summary>

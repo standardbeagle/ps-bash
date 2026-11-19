@@ -76,6 +76,8 @@ internal sealed class RedirectFileWriter : IDisposable
     {
         var kind = PsBash.Core.DevicePath.Classify(path, out int fd);
         if (kind != PsBash.Core.DeviceKind.None) return new(DeviceStreams.OpenWrite(kind, fd, path, owner));
+        // `tee ten/`: "Is a directory", never a file `ten` (FileSystemHelpers.SlashedNameErrno).
+        FileSystemHelpers.ThrowIfNotWritableName(path);
         return new(new FileStream(path, append ? FileMode.Append : FileMode.Create, FileAccess.Write,
             FileShare.ReadWrite | FileShare.Delete, 64 * 1024));
     }

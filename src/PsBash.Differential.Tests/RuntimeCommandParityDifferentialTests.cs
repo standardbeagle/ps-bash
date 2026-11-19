@@ -206,4 +206,27 @@ public class RuntimeCommandParityDifferentialTests
         => FsStateOracle.EqualAsync("true",
             "mkdir two/; echo rc=$?; mkdir -v three//; mkdir -pv four/five/; mkdir two/; echo rc=$?; mkdir no/such/; echo rc=$?",
             compareStderr: true);
+
+    // touch/cp/mv/ln/install/tee/sort -o/uniq/redirect — class: a name ending in '/' that is not a directory was
+    // created as a plain file or failed with the wrong errno (Windows drops the slash: `ln a eight/` made `eight`,
+    // `install a thirteen/` a directory, `cp -r d nineteen/` failed). Primitive: FileSystemHelpers.SlashedNameErrno.
+    [SkippableFact]
+    public Task TrailingSlashOperand_NamesADirectory_Missing()
+        => FsStateOracle.EqualAsync("echo a > a; mkdir dir; echo k > dir/k",
+            "touch five/; echo rc=$?; touch -c ghost/; echo rc=$?; touch dir/; echo rc=$?; cp a six/; echo rc=$?; "
+            + "cp -r dir nineteen/; echo rc=$?; cp a dir/; echo rc=$?; echo b > b; mv b seven/; echo rc=$?; "
+            + "ln a eight/; echo rc=$?; ln -s a nine/; echo rc=$?; echo t | tee ten/; echo rc=$?; "
+            + "echo s | sort -o eleven/; echo rc=$?; echo u | uniq - twelve/; echo rc=$?; install a thirteen/; echo rc=$?; "
+            + "{ echo r > twenty/; } 2>/dev/null; echo rc=$?; { echo r >> twentyone/; } 2>/dev/null; echo rc=$?; "
+            + "echo p | split - fourteen/; echo rc=$?; mkdir d2; mv d2 d3/; echo rc=$?; tar cf out/ dir; echo rc=$?; "
+            + "flock lk/ true; echo rc=$?; flock nodir/x true; echo rc=$?",
+            compareStderr: true);
+
+    [SkippableFact]
+    public Task TrailingSlashOperand_NamesADirectory_ExistingFile()
+        => FsStateOracle.EqualAsync("echo a > a; echo b > b",
+            "touch b/; echo rc=$?; cp a a/; echo rc=$?; cp a b/; echo rc=$?; mv a b/; echo rc=$?; install a b/; echo rc=$?; "
+            + "ln a b/; echo rc=$?; ln -s a b/; echo rc=$?; ln -sf a b/; echo rc=$?; echo t | tee b/; echo rc=$?; "
+            + "echo s | sort -o b/; echo rc=$?; { echo r > b/; } 2>/dev/null; echo rc=$?; flock b/ true; echo rc=$?; cat b",
+            compareStderr: true);
 }

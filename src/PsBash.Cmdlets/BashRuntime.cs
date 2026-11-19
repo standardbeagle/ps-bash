@@ -649,6 +649,7 @@ public static class BashRuntime
     /// <summary>Write (or append) <paramref name="text"/> as its exact bytes: markers back to single bytes.</summary>
     public static void WriteRawText(string path, string text, bool append = false)
     {
+        FileSystemHelpers.ThrowIfNotWritableName(path);
         var bytes = PsBash.Core.RawBytes.GetBytes(text);
         if (append)
         {

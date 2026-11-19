@@ -174,7 +174,8 @@ public sealed class InvokeBashTeeCommand : BashCmdlet
                 // GNU names the operand as typed (quotef), never the resolved Windows path.
                 string shown = GnuQuote.IfNeeded(rawPath);
                 string? parentDir;
-                try { parentDir = Path.GetDirectoryName(filePath); }
+                // The parent of `ten/` is `.` (ParentDirectory); the open then says "Is a directory".
+                try { parentDir = FileSystemHelpers.ParentDirectory(filePath); }
                 catch { parentDir = null; }
 
                 if (!string.IsNullOrEmpty(parentDir) && !Directory.Exists(parentDir))

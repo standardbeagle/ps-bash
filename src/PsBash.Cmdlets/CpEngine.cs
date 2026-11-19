@@ -63,6 +63,22 @@ internal sealed class CpEngine
             return false;
         }
 
+        // A destination ending in '/' names a directory: GNU stats it first (`cp a b/` with a file b: "cannot stat 'b/':
+        // Not a directory", before the same-file check), and a missing one can only become a directory (`cp -r d n/`).
+        if (FileSystemHelpers.SlashedNameErrno(dest, FileSystemHelpers.NameUse.Stat) is { } slashed)
+        {
+            if (slashed != FileSystemHelpers.NoSuchFileOrDirectory)
+            {
+                _error($"cp: cannot stat '{destDisplay}': {slashed}");
+                return false;
+            }
+            if (!srcIsDir)
+            {
+                _error($"cp: cannot create regular file '{destDisplay}': Not a directory");
+                return false;
+            }
+        }
+
         bool destExisted = File.Exists(dest) || Directory.Exists(dest) || FileSystemHelpers.IsReparsePoint(dest);
 
         // -n / --update=none skip an existing destination FILE before anything else is asked — even when it
@@ -87,7 +103,7 @@ internal sealed class CpEngine
         if (occupancyError != null) { _error(occupancyError); return false; }
 
         // GNU never creates missing parent directories for the destination.
-        var parent = Path.GetDirectoryName(dest);
+        var parent = FileSystemHelpers.ParentDirectory(dest);   // the parent of `n/` is `.`, not `n`
         if (!string.IsNullOrEmpty(parent) && !Directory.Exists(parent))
         {
             _error($"cp: cannot create {(srcIsDir ? "directory" : "regular file")} '{destDisplay}': No such file or directory");

@@ -293,6 +293,18 @@ public sealed class InvokeBashMvCommand : BashCmdlet
             var targetDisplay = destIsExistingDir ? FileSystemHelpers.JoinDisplay(destRaw, srcDisplay) : destRaw;
             bool targetExists = File.Exists(targetPath) || Directory.Exists(targetPath) || FileSystemHelpers.IsReparsePoint(targetPath);
 
+            // A destination ending in '/' names a directory (FileSystemHelpers.SlashedNameErrno): GNU stats it first
+            // (`mv a b/` with a file b: "cannot stat"), and only a directory may be renamed to a missing `n/`.
+            if (FileSystemHelpers.SlashedNameErrno(targetPath, FileSystemHelpers.NameUse.Stat) is { } slashed
+                && (slashed != FileSystemHelpers.NoSuchFileOrDirectory || !srcIsDir))
+            {
+                FileSystemHelpers.WriteBashError(this, slashed != FileSystemHelpers.NoSuchFileOrDirectory
+                    ? $"mv: cannot stat '{targetDisplay}': {slashed}"
+                    : $"mv: cannot move '{srcDisplay}' to '{targetDisplay}': Not a directory");
+                hadError = true;
+                continue;
+            }
+
             // -n: an existing destination is NOT replaced, and GNU 9.4 says so and exits 1
             // (`mv: not replacing 'b'`) — before the same-file check (`mv -n a a` also says this).
             if (plan.Existing == MvExisting.NoClobber && targetExists)
@@ -326,7 +338,7 @@ public sealed class InvokeBashMvCommand : BashCmdlet
                 continue;
             }
 
-            var targetParent = Path.GetDirectoryName(targetPath);
+            var targetParent = FileSystemHelpers.ParentDirectory(targetPath);   // `mv d n/`: the parent is `.`
             if (!string.IsNullOrEmpty(targetParent) && !Directory.Exists(targetParent))
             {
                 FileSystemHelpers.WriteBashError(this,

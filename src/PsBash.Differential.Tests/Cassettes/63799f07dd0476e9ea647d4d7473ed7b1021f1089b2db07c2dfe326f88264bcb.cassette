@@ -1,0 +1,70 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 961
+stdout-length: 234
+stderr-length: 723
+==== SCRIPT ====
+__fs_snap() { find . | LC_ALL=C sort | while IFS= read -r p; do if [ -d "$p" ]; then echo "D $p"; else echo "F $p $(base64 -w0 "$p")"; fi; done; }
+d=$(mktemp -d) && cd "$d" && { :
+echo a > a; mkdir dir; echo k > dir/k
+} >/dev/null 2>&1
+echo '== stdout'
+{ :
+touch five/; echo rc=$?; touch -c ghost/; echo rc=$?; touch dir/; echo rc=$?; cp a six/; echo rc=$?; cp -r dir nineteen/; echo rc=$?; cp a dir/; echo rc=$?; echo b > b; mv b seven/; echo rc=$?; ln a eight/; echo rc=$?; ln -s a nine/; echo rc=$?; echo t | tee ten/; echo rc=$?; echo s | sort -o eleven/; echo rc=$?; echo u | uniq - twelve/; echo rc=$?; install a thirteen/; echo rc=$?; { echo r > twenty/; } 2>/dev/null; echo rc=$?; { echo r >> twentyone/; } 2>/dev/null; echo rc=$?; echo p | split - fourteen/; echo rc=$?; mkdir d2; mv d2 d3/; echo rc=$?; tar cf out/ dir; echo rc=$?; flock lk/ true; echo rc=$?; flock nodir/x true; echo rc=$?
+}
+echo "== exit $?"
+echo '== fs'
+__fs_snap
+cd /; rm -rf "$d"
+==== STDOUT ====
+== stdout
+rc=1
+rc=0
+rc=0
+rc=1
+rc=0
+rc=0
+rc=1
+rc=1
+rc=1
+t
+rc=1
+rc=2
+rc=1
+rc=1
+rc=1
+rc=1
+rc=1
+rc=0
+rc=2
+rc=66
+rc=66
+== exit 0
+== fs
+D .
+F ./a YQo=
+F ./b Ygo=
+D ./d3
+D ./dir
+F ./dir/a YQo=
+F ./dir/k awo=
+D ./nineteen
+F ./nineteen/k awo=
+
+==== STDERR ====
+touch: setting times of 'five/': No such file or directory
+cp: cannot create regular file 'six/': Not a directory
+mv: cannot move 'b' to 'seven/': Not a directory
+ln: failed to create hard link 'eight/' => 'a': No such file or directory
+ln: failed to create symbolic link 'nine/': No such file or directory
+tee: ten/: Is a directory
+sort: open failed: eleven/: Is a directory
+uniq: twelve/: Is a directory
+install: cannot create regular file 'thirteen/': Not a directory
+split: fourteen/aa: No such file or directory
+tar: out/: Cannot open: Is a directory
+tar: Error is not recoverable: exiting now
+flock: cannot open lock file lk/: No such file or directory
+flock: cannot open lock file nodir/x: No such file or directory
+
