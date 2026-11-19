@@ -1,0 +1,22 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 154
+stdout-length: 111
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit
+echo 'help cd | head -1; echo still' > s3
+for f in s3 s3; do ( . "./$f" ) 2>&1 </dev/null; echo "after $f rc=$?"; done
+echo done
+==== STDOUT ====
+cd: cd [-L|[-P [-e]] [-@]] [dir]
+still
+after s3 rc=0
+cd: cd [-L|[-P [-e]] [-@]] [dir]
+still
+after s3 rc=0
+done
+
+==== STDERR ====
+

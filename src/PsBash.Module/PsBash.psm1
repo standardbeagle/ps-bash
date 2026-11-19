@@ -459,15 +459,6 @@ function Invoke-BashSuspend {
     Write-BashBuiltinError 'suspend: cannot suspend: no job control' 1
 }
 function Invoke-BashLogout { Write-BashBuiltinError "logout: not login shell: use ``exit'" 1 }
-function Invoke-BashHelp {
-    $names = [PsBash.Core.Parser.BashBuiltins, PsBash.Transpiler]::Names
-    $topics = @($args | Where-Object { -not "$_".StartsWith('-') })
-    $global:LASTEXITCODE = 0
-    foreach ($t in $topics) {
-        if ($names.Contains("$t")) { "${t}: bash builtin (ps-bash has no help text; see the bash manual)" }
-        else { Write-BashBuiltinError "help: no help topics match ``${t}'.  Try ``help help' or ``man -k ${t}' or ``info ${t}'." 1 }
-    }
-}
 # The rest of Resolve-BashCommand's -Words / -Fed block, given $__bw (every word: the command, then its operands) and
 # $__bfed, $__blm (the -LoopMode). Its operands are $__bargs, never $__bp: that name marks a bash function's scope
 # (PsBuild.FunctionPrologue, found by PsBuild.PublishParkedLocals). A user function reads stdin like a program; a ps-bash command reads it per StdinReaders, the rule the

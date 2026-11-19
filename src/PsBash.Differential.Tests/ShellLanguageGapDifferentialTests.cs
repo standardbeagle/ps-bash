@@ -146,4 +146,18 @@ public class ShellLanguageGapDifferentialTests
         "cd \"$(mktemp -d)\" || exit\necho hello > f\nexec 5<> f\nread -u 5 line; echo \"got=$line\"\nexec 5>&-\n"
         + "exec 6<> new; echo made >&6; exec 6>&-; cat new\n"
         + "printf 'abc\\n' > g; exec 7<>g; echo XY >&7; exec 7>&-; cat g");
+
+    // --- help builtin (InvokeBashHelpCommand) ----------------------------------------------------------
+
+    /// <summary><c>help NAME</c>'s first two lines, <c>-s</c>, <c>-d</c> (bare, it bound <c>-Debug</c>), a pattern with bash's
+    /// header, a prefix (<c>help -s e</c>), an unknown topic; and a pipe that closes early ends neither the sourced script
+    /// nor its caller.</summary>
+    [SkippableFact]
+    public Task Help_Builtin_FirstLinesAndForms() => Same(
+        "help cd | head -2\nhelp -s pwd cd\nhelp -d umask cd\nhelp 'ec*' | head -3\nhelp -d 'ec*'\nhelp -s e\nhelp nosuch 2>/dev/null; echo rc=$?");
+
+    [SkippableFact]
+    public Task Help_PipeClosedEarly_InSourcedScript_DoesNotEndTheCaller() => Same(
+        "cd \"$(mktemp -d)\" || exit\necho 'help cd | head -1; echo still' > s3\n"
+        + "for f in s3 s3; do ( . \"./$f\" ) 2>&1 </dev/null; echo \"after $f rc=$?\"; done\necho done");
 }

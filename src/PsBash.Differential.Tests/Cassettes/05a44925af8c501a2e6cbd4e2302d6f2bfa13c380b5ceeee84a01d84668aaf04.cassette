@@ -1,0 +1,37 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 130
+stdout-length: 599
+stderr-length: 0
+==== SCRIPT ====
+help cd | head -2
+help -s pwd cd
+help -d umask cd
+help 'ec*' | head -3
+help -d 'ec*'
+help -s e
+help nosuch 2>/dev/null; echo rc=$?
+==== STDOUT ====
+cd: cd [-L|[-P [-e]] [-@]] [dir]
+    Change the shell working directory.
+pwd: pwd [-LP]
+cd: cd [-L|[-P [-e]] [-@]] [dir]
+umask - Display or set file mode mask.
+cd - Change the shell working directory.
+Shell commands matching keyword `ec*'
+
+echo: echo [-neE] [arg ...]
+Shell commands matching keyword `ec*'
+
+echo - Write arguments to the standard output.
+echo: echo [-neE] [arg ...]
+enable: enable [-a] [-dnps] [-f filename] [name ...]
+eval: eval [arg ...]
+exec: exec [-cl] [-a name] [command [argument ...]] [redirection ...]
+exit: exit [n]
+export: export [-fn] [name[=value] ...] or export -p
+rc=1
+
+==== STDERR ====
+

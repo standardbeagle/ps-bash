@@ -61,6 +61,8 @@ public class CommonParameterCollisionGuardTests
             // history: -c/-d/-p/-w are its own; every dash word is single-quoted. c/d/p/w decoys for direct calls.
             ["history"] = new(CollidingLetters),
             ["hash"] = new(CollidingLetters),
+            // help: -d is its own flag (bare, it bound -Debug: help -d umask printed the long form); every dash word is single-quoted.
+            ["help"] = new(CollidingLetters),
             ["umask"] = new(CollidingLetters),
             ["ulimit"] = new(CollidingLetters),
             ["compgen"] = new(CollidingLetters),

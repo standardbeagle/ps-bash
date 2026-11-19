@@ -126,7 +126,6 @@ FunctionsToExport = @(
     'Invoke-BashCaller',
     'Invoke-BashDisown',
     'Invoke-BashEnable',
-    'Invoke-BashHelp',
     'Invoke-BashLogout',
     'Invoke-BashSuspend',
     'Invoke-BrowseAction',
