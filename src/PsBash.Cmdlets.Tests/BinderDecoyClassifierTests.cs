@@ -37,8 +37,7 @@ public class BinderDecoyClassifierTests : IClassFixture<SharedPwshFixture>
     }
 
     [Theory]
-    // tee diagnose-write-errors
-    [InlineData("'x' | Invoke-BashTee -p out.txt")]
+    // (tee -p / -i are implemented now: InvokeBashTeeCommandTests covers the direct calls)
     // column output width (-o is implemented now: a value-bearing decoy)
     // split elide-empty / line-bytes
     [InlineData("'x' | Invoke-BashSplit -e")]

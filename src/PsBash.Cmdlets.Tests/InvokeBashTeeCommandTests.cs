@@ -78,6 +78,29 @@ public class InvokeBashTeeCommandTests : IClassFixture<SharedPwshFixture>, IDisp
         Assert.Equal("PREEXISTING\none\ntwo\n", File.ReadAllText(target));
     }
 
+    // DIRECT calls: bare -p / -i collide with common parameters (-ProgressAction / -InformationAction); the P / I decoys
+    // put them back. GNU tee accepts both. REGRESSION: refused "recognized but not supported", status 2.
+    [Theory]
+    [InlineData("-p")]
+    [InlineData("-i")]
+    [InlineData("-i -p")]
+    public void Tee_IgnoreInterruptsAndOutputError_DirectInvocation_WriteTheFile(string flags)
+    {
+        string target = Path.Combine(_tmpDir, "out.txt");
+        var r = CmdResult.Run(_fixture.AcquireFresh(), $"'one' | Invoke-BashTee {flags} '{Q(target)}'").AssertSuccess();
+        Assert.Equal("one", r.Stdout.Trim());
+        Assert.Equal("one\n", File.ReadAllText(target));
+    }
+
+    [Fact]
+    public void Tee_OutputErrorBadMode_IsAUsageError()
+    {
+        string target = Path.Combine(_tmpDir, "out.txt");
+        CmdResult.Run(_fixture.AcquireFresh(), $"'one' | Invoke-BashTee '--output-error=bogus' '{Q(target)}'")
+            .AssertFailed(1, "tee: invalid argument ‘bogus’ for ‘--output-error’", "  - ‘warn-nopipe’");
+        Assert.False(File.Exists(target));
+    }
+
     [Fact]
     public void Tee_AppendFlag_LongForm_AppendsRatherThanOverwrites()
     {
@@ -328,18 +351,13 @@ $global:teeSeen = $null
     }
 
     [Fact]
-    public void Tee_ValidButUnsupportedOption_WritesError()
+    public void Tee_IgnoreInterruptsLongForm_IsAccepted()
     {
-        // Catalog flag (valid GNU, not implemented): classified as "recognized but not supported", exit 2.
-        // --ignore-interrupts is listed as the long form (bare -i collides with PS binder).
-        var pwsh = _fixture.AcquireFresh();
-        pwsh.AddScript("$ErrorActionPreference='Continue'").Invoke();
-        pwsh.Commands.Clear();
-        var result = pwsh.AddScript(
-            "'x' | Invoke-BashTee --ignore-interrupts 2>$null; $LASTEXITCODE").Invoke();
-        pwsh.Commands.Clear();
-        Assert.Single(result);
-        Assert.Equal(2, (int)result[0].BaseObject);
+        // GNU --ignore-interrupts (oracle: rc 0, copies). REGRESSION: refused as valid-but-unsupported, exit 2.
+        string target = Path.Combine(_tmpDir, "ii.txt");
+        var lines = RunLines($"'x' | Invoke-BashTee --ignore-interrupts '{Q(target)}'");
+        Assert.Equal(new[] { "x" }, lines);
+        Assert.Equal("x\n", File.ReadAllText(target));
     }
 
     // ── shared ordered parser: what the emitter's every-dash-literal quoting delivers ──
@@ -368,19 +386,17 @@ $global:teeSeen = $null
     }
 
     [Fact]
-    public void Tee_QuotedBareI_IsClassifiedNotSwallowedByTheBinder()
+    public void Tee_QuotedBareI_IsIgnoreInterrupts()
     {
-        // Bare `-i` prefix-collides with -InformationAction; quoted it reaches Arguments and is
-        // refused as valid-but-unsupported (GNU: --ignore-interrupts), exit 2, nothing written.
+        // Quoted `-i` (what the emitter delivers) reaches the ordered parser: --ignore-interrupts, status 0, the file
+        // is written. REGRESSION: refused as valid-but-unsupported, exit 2, nothing written.
         string target = Path.Combine(_tmpDir, "i.txt");
         var pwsh = _fixture.AcquireFresh();
-        pwsh.AddScript("$ErrorActionPreference='Continue'").Invoke();
-        pwsh.Commands.Clear();
         var result = pwsh.AddScript(
-            $"'x' | Invoke-BashTee '-i' '{Q(target)}' 2>$null; $LASTEXITCODE").Invoke();
+            $"'x' | Invoke-BashTee '-i' '{Q(target)}'; $LASTEXITCODE").Invoke();
         pwsh.Commands.Clear();
-        Assert.Equal(2, (int)result[^1].BaseObject);
-        Assert.False(File.Exists(target));
+        Assert.Equal(0, (int)result[^1].BaseObject);
+        Assert.Equal("x\n", File.ReadAllText(target));
     }
 
     [Fact]
@@ -428,10 +444,13 @@ public class TeeArgScanTests
     [InlineData("append=1 ops=[f]", "--append", "f")]
     [InlineData("append=1 ops=[f]", "f", "-a")]
     [InlineData("append=1 ops=[f]", "-a", "-a", "f")]
-    [InlineData("ERR tee: option '-p' is recognized but not supported by ps-bash", "-p", "f")]
-    [InlineData("ERR tee: option '-p' is recognized but not supported by ps-bash", "-ap", "f")]
-    [InlineData("ERR tee: option '--ignore-interrupts' is recognized but not supported by ps-bash", "--ignore-interrupts", "f")]
-    [InlineData("ERR tee: option '--output-error' is recognized but not supported by ps-bash", "--output-error=warn", "f")]
+    // -i / -p / --output-error are accepted (GNU tee). REGRESSION: refused as "recognized but not supported", status 2.
+    [InlineData("append=0 ops=[f]", "-p", "f")]
+    [InlineData("append=1 ops=[f]", "-ap", "f")]
+    [InlineData("append=1 ops=[f]", "-aip", "f")]
+    [InlineData("append=0 ops=[f]", "--ignore-interrupts", "f")]
+    [InlineData("append=0 ops=[f]", "--output-error=warn", "f")]
+    [InlineData("append=0 ops=[f]", "--output-error", "f")]
     [InlineData("ERR tee: unrecognized option '--bogus'", "--bogus", "f")]
     [InlineData("ERR tee: invalid option -- 'z'", "-z", "f")]
     [InlineData("append=0 ops=[-,f]", "-", "f")]
@@ -454,9 +473,9 @@ public class TeeArgScanTests
     [InlineData("append=1 ops=[f]", "--a", "f")]                                   // was unrecognized option '--a'
     [InlineData("ERR tee: option '--append' doesn't allow an argument", "--append=x", "f")]
     [InlineData("ERR tee: option '--append' doesn't allow an argument", "--ap=", "f")]
-    [InlineData("ERR tee: option '-i' is recognized but not supported by ps-bash", "-i", "f")]           // was invalid option -- 'i'
-    [InlineData("ERR tee: option '--output-error' is recognized but not supported by ps-bash", "--out", "f")]
-    [InlineData("ERR tee: option '--ignore-interrupts' is recognized but not supported by ps-bash", "--ignore", "f")]
+    [InlineData("append=0 ops=[f]", "-i", "f")]
+    [InlineData("append=0 ops=[f]", "--out", "f")]
+    [InlineData("append=0 ops=[f]", "--ignore", "f")]
     [InlineData("ERR tee: invalid option -- 'z'", "-az", "f")]                     // was invalid option -- 'a'
     [InlineData("ERR tee: invalid option -- '-'", "-a-", "f")]                     // was invalid option -- 'a'
     [InlineData("append=0 ops=[f]", "--vers", "f")]                                // --version by prefix (cmdlet prints it)

@@ -34,9 +34,9 @@ namespace PsBash.Cmdlets;
 ///
 /// Common-parameter collision: the transpiler single-quotes every dash-leading word for tee
 /// (<c>PsEmitter.OrderedArgCommands</c>), so flags arrive in <see cref="Arguments"/> in order.
-/// <see cref="A"/>/<see cref="P"/> stay as decoy switches ONLY for DIRECT calls
+/// <see cref="A"/>/<see cref="P"/>/<see cref="I"/> stay as decoy switches ONLY for DIRECT calls
 /// (<c>Invoke-BashTee -a f</c>, Pester), where the binder would otherwise eat a bare
-/// <c>-a</c> (prefix of <c>-Arguments</c>) / <c>-p</c>; they are re-injected before parsing.
+/// <c>-a</c> (prefix of <c>-Arguments</c>) / <c>-p</c> / <c>-i</c>; they are re-injected before parsing.
 ///
 /// Glob expansion routes through
 /// <see cref="FileSystemHelpers.ResolveOperandPaths"/>.
@@ -57,12 +57,16 @@ public sealed class InvokeBashTeeCommand : PSCmdlet
     public SwitchParameter A { get; set; }
 
     /// <summary>
-    /// Decoy for the valid-but-unsupported <c>-p</c> (diagnose write errors). Bare
-    /// <c>-p</c> prefix-collides with <c>-ProgressAction</c> and crashed the binder
-    /// before the classifier. Re-injected below so it fires exit 2.
+    /// Decoy for a DIRECT <c>-p</c> (bare, it prefix-collides with <c>-ProgressAction</c> / <c>-PipelineVariable</c>
+    /// and crashed the binder). Re-injected below.
     /// </summary>
     [Parameter]
     public SwitchParameter P { get; set; }
+
+    /// <summary>Decoy for a DIRECT <c>-i</c> (bare, it is ambiguous: <c>-InformationAction</c> /
+    /// <c>-InformationVariable</c>). Re-injected below.</summary>
+    [Parameter]
+    public SwitchParameter I { get; set; }
 
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
@@ -70,21 +74,26 @@ public sealed class InvokeBashTeeCommand : PSCmdlet
     [Parameter(ValueFromPipeline = true)]
     public PSObject? InputObject { get; set; }
 
-    private const string OptAppend = "append";
+    private const string OptAppend = "append", OptIgnoreInterrupts = "ignore-interrupts", OptOutputError = "output-error";
 
-    // Valid GNU tee flags not implemented by ps-bash. -a / --append IS implemented.
-    // (A string[] field on purpose: CommonParameterCollisionGuardTests enumerates the
-    // static string sets of every cmdlet to find short flags the binder could eat.)
-    private static readonly string[] TeeValidButUnsupported =
-    {
-        "-i", "--ignore-interrupts",
-        "-p", "--output-error",
-    };
+    // GNU --output-error MODEs, in GNU's order (the invalid-argument message lists them).
+    private static readonly string[] OutputErrorModes = { "warn", "warn-nopipe", "exit", "exit-nopipe" };
 
-    /// <summary>tee's whole option surface, built once for the shared ordered parser.</summary>
+    /// <summary>
+    /// tee's whole option surface, built once for the shared ordered parser. <c>-i</c> (ignore SIGINT) and
+    /// <c>-p</c> / <c>--output-error[=MODE]</c> (how write errors are treated) are accepted: ps-bash's tee is not
+    /// killed by an interrupt it does not own, and a closed reader stops it without an error under every MODE.
+    /// REGRESSION: both were refused as unsupported (status 2), so GNU scripts using <c>tee -i</c> / <c>tee -p</c>
+    /// failed.
+    /// </summary>
     private static readonly OptSpecSet TeeSpec = new(
-        new[] { new OptSpec(OptAppend, 'a', "append") },
-        validButUnsupported: TeeValidButUnsupported,
+        new[]
+        {
+            new OptSpec(OptAppend, 'a', "append"),
+            new OptSpec(OptIgnoreInterrupts, 'i', "ignore-interrupts"),
+            new OptSpec(OptOutputError, 'p', null),
+            new OptSpec(OptOutputError, '\0', "output-error", OptKind.OptionalValue),
+        },
         allowAbbrev: true,
         gnuInfoOptions: true);
 
@@ -109,7 +118,7 @@ public sealed class InvokeBashTeeCommand : PSCmdlet
         // instead of reaching Arguments; the transpiler force-quotes them so they arrive in
         // Arguments in order). The decoys are prepended, which is fine: tee's options are
         // order-insensitive and a decoy can only be bound BEFORE any `--`.
-        var args = BashRuntime.PrependDecoys(Arguments, (A.IsPresent, "-a"), (P.IsPresent, "-p"));
+        var args = BashRuntime.PrependDecoys(Arguments, (A.IsPresent, "-a"), (P.IsPresent, "-p"), (I.IsPresent, "-i"));
 
         FileSystemHelpers.SetLastExitCode(this, 0);
         if (FileSystemHelpers.TryHandleVersion(this, "tee", args)) { _done = true; return; }
@@ -127,6 +136,19 @@ public sealed class InvokeBashTeeCommand : PSCmdlet
         var parsed = ScanArgs(args);
         if (FileSystemHelpers.TryWriteParseError(this, "tee", parsed)) { _done = true; return; }
         if (FileSystemHelpers.TryHandleInfoOptions(this, "tee", parsed)) { _done = true; return; }
+
+        foreach (var t in parsed.All(OptOutputError))
+        {
+            if (t.Value is { } mode && Array.IndexOf(OutputErrorModes, mode) < 0)
+            {
+                var msg = new System.Text.StringBuilder($"tee: invalid argument {GnuQuote.Locale(mode)} for {GnuQuote.Locale("--output-error")}\nValid arguments are:");
+                foreach (var m in OutputErrorModes) msg.Append("\n  - ").Append(GnuQuote.Locale(m));
+                if (FileSystemHelpers.UsageHint("tee") is { } hint) msg.Append('\n').Append(hint);
+                Fail(msg.ToString()); // status 1 at the end (an upstream stage resets it before then)
+                _done = true;
+                return;
+            }
+        }
 
         bool append = parsed.Has(OptAppend);
         var operands = parsed.Operands();

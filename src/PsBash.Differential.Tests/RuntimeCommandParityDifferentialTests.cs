@@ -147,6 +147,13 @@ public class RuntimeCommandParityDifferentialTests
         => Eq("tr; echo rc=$?; echo ab | tr a; echo rc=$?; echo ab | tr -ds a; echo rc=$?; echo ab | tr -d a b; echo rc=$?; "
             + "echo ab | tr a b c; echo rc=$?; echo ab | tr -s a b c; echo rc=$?; echo aab | tr -s a; echo ab | tr -d a; echo ab | tr -s a b");
 
+    // tee -i / -p — class: GNU options refused as unsupported. Now accepted (FsState: the file is written).
+    [SkippableFact]
+    public Task Tee_IgnoreInterruptsAndOutputError_AreAccepted()
+        => FsStateOracle.EqualAsync("true",
+            "echo x | tee -i -p f; echo rc=$?; echo y | tee --output-error=warn g; echo rc=$?; echo z | tee --output-error=bogus h; echo rc=$?",
+            compareStderr: true);
+
     // mkdir — class: the parent of a trailing-slash operand was the operand itself. Primitive:
     // FileSystemHelpers.ParentDirectory.
     [SkippableFact]

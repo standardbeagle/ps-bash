@@ -1,0 +1,41 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 414
+stdout-length: 71
+stderr-length: 169
+==== SCRIPT ====
+__fs_snap() { find . | LC_ALL=C sort | while IFS= read -r p; do if [ -d "$p" ]; then echo "D $p"; else echo "F $p $(base64 -w0 "$p")"; fi; done; }
+d=$(mktemp -d) && cd "$d" && { :
+true
+} >/dev/null 2>&1
+echo '== stdout'
+{ :
+echo x | tee -i -p f; echo rc=$?; echo y | tee --output-error=warn g; echo rc=$?; echo z | tee --output-error=bogus h; echo rc=$?
+}
+echo "== exit $?"
+echo '== fs'
+__fs_snap
+cd /; rm -rf "$d"
+==== STDOUT ====
+== stdout
+x
+rc=0
+y
+rc=0
+rc=1
+== exit 0
+== fs
+D .
+F ./f eAo=
+F ./g eQo=
+
+==== STDERR ====
+tee: invalid argument ‘bogus’ for ‘--output-error’
+Valid arguments are:
+  - ‘warn’
+  - ‘warn-nopipe’
+  - ‘exit’
+  - ‘exit-nopipe’
+Try 'tee --help' for more information.
+
