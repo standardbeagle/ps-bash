@@ -115,9 +115,10 @@ public class InteractiveShellHarnessTests
         // path the shell never produced. NOT via `$HOME` either: that is the
         // PowerShell automatic variable, which reflects the Windows user profile
         // regardless of the HOME env var we inject.
-        // `Invoke-BashEnv` by its cmdlet name is unambiguous: no PATH lookup, so no
-        // MSYS binary can intercept it.
-        await harness.SendLineAsync("Invoke-BashEnv HOME");
+        // `Invoke-BashPrintenv` by its cmdlet name is unambiguous: no PATH lookup, so no
+        // MSYS binary can intercept it. Not `env HOME`: GNU env runs HOME as a program
+        // (c80b40ef split env from printenv), so it prints only an error.
+        await harness.SendLineAsync("Invoke-BashPrintenv HOME");
         await harness.WaitForPromptAsync();
 
         var output = harness.ReadSinceLastPrompt()
