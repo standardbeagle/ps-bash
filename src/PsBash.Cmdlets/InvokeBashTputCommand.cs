@@ -22,7 +22,7 @@ namespace PsBash.Cmdlets;
 /// (<c>cols</c>, <c>lines</c>, <c>clear</c>, <c>bold</c>, <c>sgr0</c>,
 /// <c>setaf N</c>) the cmdlet emulates the psm1 oracle byte-for-byte:
 /// terminal dimensions via <see cref="System.Console"/>, ANSI SGR
-/// strings hard-coded. Unknown capabilities silently emit nothing.</item>
+/// strings hard-coded (<see cref="Emulated"/> for the rest). An unknown capability is ncurses' status 4.</item>
 /// </list>
 ///
 /// Directive 12 safety: operand strings bind to the spawn via
@@ -122,6 +122,15 @@ public sealed class InvokeBashTputCommand : PSCmdlet
                 // stderr only AFTER the stdout loop — a mid-stream stderr burst could
                 // deadlock; concurrent drain removes that.)
                 var spawn = BashRuntime.RunChildProcess(psi);
+                // tput's status IS its answer (1 = boolean capability absent, 4 = unknown capability): reported, never
+                // swallowed into the emulator's output. No terminal ($TERM unset = 2, unknown terminal = 3) falls
+                // through to the emulator, which answers for an xterm-256color terminal.
+                if (!spawn.TimedOut && spawn.ExitCode is 1 or 4)
+                {
+                    if (spawn.Stderr.Length > 0) FileSystemHelpers.WriteStderr(this, spawn.Stderr.TrimEnd('\n', '\r'));
+                    FileSystemHelpers.SetLastExitCode(this, spawn.ExitCode);
+                    return;
+                }
                 if (!spawn.TimedOut && spawn.ExitCode == 0)
                 {
                     var nativeOut = spawn.Stdout.Replace("\r\n", "\n");
@@ -190,8 +199,15 @@ public sealed class InvokeBashTputCommand : PSCmdlet
                 }
                 break;
             default:
-                result = string.Empty;
-                break;
+                if (Emulated(cap, operands) is { } known)
+                {
+                    result = known;
+                    break;
+                }
+                // ncurses: an unknown capability name is status 4 (not silently empty).
+                FileSystemHelpers.WriteStderr(this, $"tput: unknown terminfo capability '{cap}'");
+                FileSystemHelpers.SetLastExitCode(this, 4);
+                return;
         }
 
         if (result.Length > 0)
@@ -201,6 +217,44 @@ public sealed class InvokeBashTputCommand : PSCmdlet
                 WriteObject(emitted);
             }
         }
+    }
+
+    /// <summary>
+    /// xterm-256color strings (ncurses 6.4 terminfo) for the capabilities beyond the oracle's original set, or null
+    /// for a name the emulator does not know. Pure (unit-test seam).
+    /// </summary>
+    internal static string? Emulated(string cap, IReadOnlyList<string> operands)
+    {
+        const string Esc = "\u001b";
+        int Arg(int k) => operands.Count > k && int.TryParse(operands[k], System.Globalization.NumberStyles.Integer,
+            System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : 0;
+        return cap switch
+        {
+            "colors" => "256",
+            "setab" => Arg(1) switch
+            {
+                < 8 and var n => $"{Esc}[4{n}m",
+                < 16 and var n => $"{Esc}[10{n - 8}m",
+                var n => $"{Esc}[48;5;{n}m",
+            },
+            "smul" => $"{Esc}[4m",
+            "rmul" => $"{Esc}[24m",
+            "rev" => $"{Esc}[7m",
+            "smso" => $"{Esc}[7m",
+            "rmso" => $"{Esc}[27m",
+            "dim" => $"{Esc}[2m",
+            "blink" => $"{Esc}[5m",
+            "sitm" => $"{Esc}[3m",
+            "ritm" => $"{Esc}[23m",
+            "el" => $"{Esc}[K",
+            "ed" => $"{Esc}[J",
+            "home" => $"{Esc}[H",
+            "civis" => $"{Esc}[?25l",
+            "cnorm" => $"{Esc}[?12l{Esc}[?25h",
+            "cup" => $"{Esc}[{Arg(1) + 1};{Arg(2) + 1}H",
+            "longname" => "xterm with 256 colors",
+            _ => null,
+        };
     }
 
     private int GetWindowWidth()

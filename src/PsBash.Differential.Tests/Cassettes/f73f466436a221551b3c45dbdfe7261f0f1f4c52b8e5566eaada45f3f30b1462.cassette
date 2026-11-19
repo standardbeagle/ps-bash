@@ -1,0 +1,18 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 58
+stdout-length: 15
+stderr-length: 0
+==== SCRIPT ====
+dirname a//b ''; dirname // /usr/bin/ sort; dirname -- a/b
+==== STDOUT ====
+a
+.
+/
+/usr
+.
+a
+
+==== STDERR ====
+

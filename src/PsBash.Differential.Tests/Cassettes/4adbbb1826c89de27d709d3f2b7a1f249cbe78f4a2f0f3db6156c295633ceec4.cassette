@@ -1,0 +1,17 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 172
+stdout-length: 31
+stderr-length: 0
+==== SCRIPT ====
+echo abcdef | tr -t abc xy; echo aabbbcc | tr -ds a b; echo 'aa  bb' | tr -cs a x; echo hello123 | tr -c '[:alpha:]\n' _; echo aabbcc | tr -s ab xy; echo abc | tr -d -s b c
+==== STDOUT ====
+xycdef
+bcc
+aaxhello___
+xycc
+ac
+
+==== STDERR ====
+

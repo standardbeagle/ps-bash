@@ -3185,7 +3185,8 @@ Describe 'Invoke-BashNl — Basic' {
         $results = @(Invoke-BashEcho -e 'a\n\nb' | Invoke-BashNl)
         $results.Count | Should -Be 3
         $results[0].BashText | Should -Match '^\s+1\ta$'
-        $results[1].BashText | Should -Be ''
+        # GNU: an unnumbered line is prefixed by width + separator spaces (6 + 1).
+        $results[1].BashText | Should -Be (' ' * 7)
         $results[2].BashText | Should -Match '^\s+2\tb$'
     }
 }
@@ -4793,10 +4794,11 @@ Describe 'Invoke-BashEnv — List All' {
 }
 
 Describe 'Invoke-BashEnv — Filter by Name' {
-    It 'returns just the value for a specific variable' {
-        $result = Invoke-BashEnv 'PATH'
+    # GNU: `env NAME` RUNS NAME (`env PATH` is 127); printing one variable is printenv's job.
+    It 'printenv returns just the value for a specific variable' {
+        $result = Invoke-BashPrintenv 'PATH'
         $result.Value | Should -Be $env:PATH
-        $result.BashText | Should -Be "PATH=$($env:PATH)"
+        $result.BashText | Should -Be $env:PATH
     }
 
     It 'returns error for nonexistent variable' {
@@ -4811,9 +4813,9 @@ Describe 'Invoke-BashEnv — Alias' {
         $alias.Definition | Should -Be 'Invoke-BashEnv'
     }
 
-    It 'printenv alias resolves to Invoke-BashEnv' {
+    It 'printenv alias resolves to Invoke-BashPrintenv' {
         $alias = Get-Alias -Name printenv -Scope Global
-        $alias.Definition | Should -Be 'Invoke-BashEnv'
+        $alias.Definition | Should -Be 'Invoke-BashPrintenv'
     }
 }
 
@@ -6077,17 +6079,20 @@ Describe 'Invoke-BashGzip — compress files' {
         $f = Join-Path $TestDrive 'list.txt'
         Set-Content -Path $f -Value 'list info' -NoNewline
         gzip -k $f
-        $result = gzip -l "$f.gz"
-        $result.CompressedSize | Should -BeGreaterThan 0
-        $result.UncompressedSize | Should -Be 9
-        $result.FileName | Should -Match 'list\.txt\.gz'
+        # GNU's table: a header line, then a row naming the uncompressed file (the .gz stripped).
+        $result = @(gzip -l "$f.gz" | Where-Object { $_.PSObject.Properties['CompressedSize'] })
+        $result.Count | Should -Be 1
+        $result[0].CompressedSize | Should -BeGreaterThan 0
+        $result[0].UncompressedSize | Should -Be 9
+        $result[0].FileName | Should -Match 'list\.txt$'
     }
 
     It 'gzip -v file.txt shows verbose output' {
         $f = Join-Path $TestDrive 'verbose.txt'
         Set-Content -Path $f -Value 'verbose test' -NoNewline
-        $result = gzip -v $f
-        $result.BashText | Should -Match '\d+(\.\d+)?%'
+        # GNU writes the verbose line to stderr: `NAME:	-33.3% -- replaced with NAME.gz`.
+        $result = @(gzip -v $f 2>&1)
+        "$($result | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })" | Should -Match '\d+(\.\d+)?% -- replaced with .*verbose\.txt\.gz'
     }
 
     It 'gzip errors on missing file' {

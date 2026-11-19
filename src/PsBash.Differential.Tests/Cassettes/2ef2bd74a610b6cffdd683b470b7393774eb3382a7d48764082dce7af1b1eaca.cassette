@@ -1,0 +1,38 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 346
+stdout-length: 253
+stderr-length: 0
+==== SCRIPT ====
+__fs_snap() { find . | LC_ALL=C sort | while IFS= read -r p; do if [ -d "$p" ]; then echo "D $p"; else echo "F $p $(base64 -w0 "$p")"; fi; done; }
+d=$(mktemp -d) && cd "$d" && { :
+mkdir -p a
+} >/dev/null 2>&1
+echo '== stdout'
+{ :
+mkdir -pv a/b/c; mkdir -pv ./a/x//y/; mkdir -pv a/b/c/d
+}
+echo "== exit $?"
+echo '== fs'
+__fs_snap
+cd /; rm -rf "$d"
+==== STDOUT ====
+== stdout
+mkdir: created directory 'a/b'
+mkdir: created directory 'a/b/c'
+mkdir: created directory './a/x'
+mkdir: created directory './a/x//y/'
+mkdir: created directory 'a/b/c/d'
+== exit 0
+== fs
+D .
+D ./a
+D ./a/b
+D ./a/b/c
+D ./a/b/c/d
+D ./a/x
+D ./a/x/y
+
+==== STDERR ====
+

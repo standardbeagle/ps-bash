@@ -39,6 +39,27 @@ public class InvokeBashPingCommandTests : IClassFixture<SharedPwshFixture>
         }
     }
 
+    // iputils statuses (oracle: `ping -c1 127.0.0.1` 0, `ping -c1 -W1 192.0.2.1` 1, `ping -c1 nosuch.invalid` 2).
+    [Theory]
+    [InlineData(2, false, 0)]
+    [InlineData(0, false, 1)]
+    [InlineData(0, true, 2)]
+    public void ExitStatus_IsIputils(int replies, bool unresolved, int expected)
+        => Assert.Equal(expected, InvokeBashPingCommand.ExitStatus(replies, unresolved));
+
+    [Fact]
+    public void Ping_Loopback_Exit0()
+        => CmdResult.Run(_fixture.AcquireFresh(), "Invoke-BashPing -c 1 127.0.0.1").AssertSuccess();
+
+    // REGRESSION: a name that does not resolve printed a timeout line per probe at status 0.
+    [Fact]
+    public void Ping_UnresolvableName_Exit2NoProbes()
+    {
+        var r = CmdResult.Run(_fixture.AcquireFresh(), "Invoke-BashPing -c 2 nosuch.invalid");
+        r.AssertFailed(2, "ping: nosuch.invalid: Name or service not known");
+        Assert.Empty(r.Lines);
+    }
+
     [Fact]
     public void Ping_NoHost_WritesUsageError()
     {

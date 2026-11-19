@@ -1,0 +1,20 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 232
+stdout-length: 43
+stderr-length: 0
+==== SCRIPT ====
+printf 'a,b,c' | tac -s ,; echo; printf 'a,b,c,' | tac -s ,; echo; printf '1xy2xy3' | tac -s xy; echo; printf 'a,b' > f1; printf 'c,d,' > f2; tac -s , f1 f2; echo; printf 'a\nb\n' | tac -s ''; printf 'a,b\n' | tac -s ,; echo '[end]'
+==== STDOUT ====
+cb,a,
+c,b,a,
+32xy1xy
+ba,d,c,
+a
+b
+b
+a,[end]
+
+==== STDERR ====
+

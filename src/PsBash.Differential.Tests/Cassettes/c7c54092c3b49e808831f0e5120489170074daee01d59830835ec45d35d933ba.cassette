@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 27
+stdout-length: 5
+stderr-length: 44
+==== SCRIPT ====
+shuf nosuchfile; echo rc=$?
+==== STDOUT ====
+rc=1
+
+==== STDERR ====
+shuf: nosuchfile: No such file or directory
+

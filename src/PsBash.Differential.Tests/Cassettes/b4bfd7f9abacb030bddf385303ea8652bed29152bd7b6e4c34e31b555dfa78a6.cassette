@@ -1,0 +1,60 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 195
+stdout-length: 159
+stderr-length: 1052
+==== SCRIPT ====
+for c in dirname basename mkdir rmdir rm readlink realpath sleep stat chmod comm join; do $c; echo "$c rc=$?"; done; chmod 755; echo rc=$?; comm a; echo rc=$?; nohup; echo rc=$?; expr; echo rc=$?
+==== STDOUT ====
+dirname rc=1
+basename rc=1
+mkdir rc=1
+rmdir rc=1
+rm rc=1
+readlink rc=1
+realpath rc=1
+sleep rc=1
+stat rc=1
+chmod rc=1
+comm rc=1
+join rc=1
+rc=1
+rc=1
+rc=125
+rc=2
+
+==== STDERR ====
+dirname: missing operand
+Try 'dirname --help' for more information.
+basename: missing operand
+Try 'basename --help' for more information.
+mkdir: missing operand
+Try 'mkdir --help' for more information.
+rmdir: missing operand
+Try 'rmdir --help' for more information.
+rm: missing operand
+Try 'rm --help' for more information.
+readlink: missing operand
+Try 'readlink --help' for more information.
+realpath: missing operand
+Try 'realpath --help' for more information.
+sleep: missing operand
+Try 'sleep --help' for more information.
+stat: missing operand
+Try 'stat --help' for more information.
+chmod: missing operand
+Try 'chmod --help' for more information.
+comm: missing operand
+Try 'comm --help' for more information.
+join: missing operand
+Try 'join --help' for more information.
+chmod: missing operand after ‘755’
+Try 'chmod --help' for more information.
+comm: missing operand after ‘a’
+Try 'comm --help' for more information.
+nohup: missing operand
+Try 'nohup --help' for more information.
+expr: missing operand
+Try 'expr --help' for more information.
+

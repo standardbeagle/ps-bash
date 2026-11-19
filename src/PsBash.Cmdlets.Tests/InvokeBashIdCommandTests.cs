@@ -145,21 +145,38 @@ public class InvokeBashIdCommandTests : IClassFixture<SharedPwshFixture>
     public void Id_PositionalArgWithScriptblockChars_IsLiteralNotExecuted()
     {
         // Adversarial positional username containing PS scriptblock + $() chars.
-        // Oracle on Windows would try WindowsIdentity(name) which throws on a
-        // bad name; we catch and fall through to current. Either way no PS
-        // evaluation of the payload may occur — "pwn" must never appear.
-        var lines = RunLines("Invoke-BashId '$(throw \"pwn\")'");
-        Assert.NotEmpty(lines);
-        Assert.DoesNotContain(lines, l => l.Contains("pwn"));
+        // No account has that name: GNU's "no such user" (status 1), and the payload is never evaluated.
+        var r = CmdResult.Run(_fixture.AcquireFresh(), "Invoke-BashId '$(throw \"pwn\")'");
+        r.AssertFailed(1, "no such user");
+        Assert.Empty(r.Lines);
+        Assert.DoesNotContain("pwn", r.Stderr.Replace("$(throw \"pwn\")", ""));
+    }
+
+    // REGRESSION: an unknown NAME printed the CURRENT user's identity at status 0 on Windows; on Unix the system id's
+    // diagnostic and status were dropped. Oracle: `id nosuchuser` / `id -u nosuchuser` → "id: ‘nosuchuser’: no such
+    // user", status 1.
+    [Theory]
+    [InlineData("")]
+    [InlineData("-u ")]
+    public void Id_UnknownUser_NoSuchUserExit1(string flags)
+    {
+        var r = CmdResult.Run(_fixture.AcquireFresh(), $"Invoke-BashId {flags}psb-nosuchuser-7q");
+        r.AssertFailed(1, "id: ‘psb-nosuchuser-7q’: no such user");
+        Assert.Empty(r.Lines);
+    }
+
+    [Fact]
+    public void Id_KnownUser_Succeeds()
+    {
+        var name = System.Environment.UserName;
+        CmdResult.Run(_fixture.AcquireFresh(), $"Invoke-BashId -u '{name.Replace("'", "''")}'").AssertSuccess();
     }
 
     [Fact]
     public void Id_PositionalArgWithSemicolonInjection_IsLiteralNotExecuted()
     {
         // Same shape — adversarial token with ';' and 'rm' must not split or run.
-        // Windows: WindowsIdentity ctor throws, fall through to current → uid= line.
-        // Linux: /usr/bin/id treats it as a literal user name lookup, fails with
-        // empty stdout. Either way, no PowerShell evaluation of the payload.
+        // A literal user name lookup that fails ("no such user"); no PowerShell evaluation of the payload.
         var lines = RunLines("Invoke-BashId 'foo;rm -rf /'");
         // Output must NEVER contain "pwn" / executed payload signs — single
         // observable check applicable to both platforms.

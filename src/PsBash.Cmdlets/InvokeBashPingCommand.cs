@@ -63,7 +63,20 @@ public sealed class InvokeBashPingCommand : PSCmdlet
             return;
         }
 
+        // iputils: a name that does not resolve is reported once, before any probe, at status 2.
+        if (!System.Net.IPAddress.TryParse(host, out _))
+        {
+            try { _ = System.Net.Dns.GetHostAddresses(host!); }
+            catch (Exception ex) when (ex is System.Net.Sockets.SocketException or ArgumentException)
+            {
+                FileSystemHelpers.WriteStderr(this, $"ping: {host}: Name or service not known");
+                FileSystemHelpers.SetLastExitCode(this, ExitStatus(replies: 0, unresolved: true));
+                return;
+            }
+        }
+
         var timeoutMs = (int)Math.Max(1, timeoutSec * 1000);
+        int replies = 0;
         using var ping = new Ping();
         for (var seq = 1; seq <= count; seq++)
         {
@@ -84,9 +97,18 @@ public sealed class InvokeBashPingCommand : PSCmdlet
                 error = (ex.InnerException ?? ex).Message;
             }
 
+            if (reply is { Status: IPStatus.Success }) replies++;
             WriteObject(BuildReply(host!, seq, reply, error));
         }
+        FileSystemHelpers.SetLastExitCode(this, ExitStatus(replies, unresolved: false));
     }
+
+    /// <summary>
+    /// iputils ping's status: 0 when any probe was answered, 1 when none was (every probe timed out), 2 when the
+    /// name did not resolve. REGRESSION: it was 0 whatever happened, so <c>ping -c1 host || alert</c> never fired.
+    /// Pure (unit-test seam).
+    /// </summary>
+    internal static int ExitStatus(int replies, bool unresolved) => unresolved ? 2 : replies > 0 ? 0 : 1;
 
     private static PSObject BuildReply(string host, int seq, PingReply? reply, string? error)
     {

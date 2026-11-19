@@ -19,6 +19,7 @@ branch, a variadic `ioctl` whose third argument Apple arm64 reads from the stack
 | `ProcessInfo` | parent pid, zombie, process-group members, real uid, umask | `Core.Tests/PlatformProbeGuardTests` |
 | `TerminalIoctl`, `TermiosLayout` | the one `ioctl` declaration (winsize), termios offsets | `PlatformProbeGuardTests` |
 | `UnixSocketPath` | the AF_UNIX `sun_path` budget (103 macOS/FreeBSD, 107 Linux/Windows) | `UnixSocketPathTests` |
+| `KernelIdentity` | `uname(2)` and the `struct utsname` layout (65-byte fields Linux, 256 Darwin) — what `uname` prints off Windows; Windows keeps the MSYS identity | `KernelIdentityTests`, `PlatformDependencyGuardTests.UnameCall_LivesOnlyInPlatform` |
 
 Runtime facts .NET already knows come from .NET, never a literal: page size = `Environment.SystemPageSize`
 (16K/64K arm64 kernels).

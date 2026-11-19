@@ -1,0 +1,16 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 117
+stdout-length: 22
+stderr-length: 0
+==== SCRIPT ====
+echo a | xargs false; echo rc=$?; echo a | xargs true; echo rc=$?; timeout 5 false; echo rc=$?; nice true; echo rc=$?
+==== STDOUT ====
+rc=123
+rc=0
+rc=1
+rc=0
+
+==== STDERR ====
+

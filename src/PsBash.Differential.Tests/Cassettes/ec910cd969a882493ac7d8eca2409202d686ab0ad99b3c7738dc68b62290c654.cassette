@@ -1,0 +1,26 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 511
+stdout-length: 88
+stderr-length: 192
+==== SCRIPT ====
+mkdir -p mk/t mk/p && cd mk; s() { f=$1; echo "${f%%.*}.${#f} $(test -f "$f" && echo f)$(test -d "$f" && echo d)"; }; s "$(TMPDIR=t mktemp)"; s "$(TMPDIR=t mktemp -d)"; s "$(TMPDIR=t mktemp ab.XXXX)"; s "$(TMPDIR=t mktemp -t ab.XXXX)"; s "$(TMPDIR=t mktemp -p p ab.XXXX)"; s "$(TMPDIR=t mktemp -t -p p ab.XXXX)"; s "$(mktemp p/q.XXX.txt)"; f=$(mktemp --suffix=.s p/zXXX); echo "${f:0:3}.${#f}.${f##*.}"; mktemp abc; echo rc=$?; mktemp -t a/bXXX; echo rc=$?; mktemp -d nosuch/aXXX; echo rc=$?; cd .. && rm -rf mk
+==== STDOUT ====
+t/tmp.16 f
+t/tmp.16 d
+ab.7 f
+t/ab.9 f
+p/ab.9 f
+t/ab.9 f
+p/q.11 f
+p/z.8.s
+rc=1
+rc=1
+rc=1
+
+==== STDERR ====
+mktemp: too few X's in template ‘abc’
+mktemp: invalid template, ‘a/bXXX’, contains directory separator
+mktemp: failed to create directory via template ‘nosuch/aXXX’: No such file or directory
+

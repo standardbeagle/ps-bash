@@ -1,0 +1,39 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 371
+stdout-length: 254
+stderr-length: 115
+==== SCRIPT ====
+__fs_snap() { find . | LC_ALL=C sort | while IFS= read -r p; do if [ -d "$p" ]; then echo "D $p"; else echo "F $p $(base64 -w0 "$p")"; fi; done; }
+d=$(mktemp -d) && cd "$d" && { :
+mkdir -p a/x/y a/b; mkdir -p z/w
+} >/dev/null 2>&1
+echo '== stdout'
+{ :
+rmdir -pv a/x//y/; echo rc=$?; rmdir -pv ./z/w; echo rc=$?
+}
+echo "== exit $?"
+echo '== fs'
+__fs_snap
+cd /; rm -rf "$d"
+==== STDOUT ====
+== stdout
+rmdir: removing directory, 'a/x//y/'
+rmdir: removing directory, 'a/x'
+rmdir: removing directory, 'a'
+rc=1
+rmdir: removing directory, './z/w'
+rmdir: removing directory, './z'
+rmdir: removing directory, '.'
+rc=1
+== exit 0
+== fs
+D .
+D ./a
+D ./a/b
+
+==== STDERR ====
+rmdir: failed to remove directory 'a': Directory not empty
+rmdir: failed to remove directory '.': Invalid argument
+

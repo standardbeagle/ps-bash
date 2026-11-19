@@ -1,0 +1,16 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 101
+stdout-length: 69
+stderr-length: 0
+==== SCRIPT ====
+printf '[%5s][%3d][%.2f][%e][%g][%x][%-4s|][%q][%b]\n'; printf '[%s][%s]\n' a b c; printf '%s=%d\n' x
+==== STDOUT ====
+[     ][  0][0.00][0.000000e+00][0][0][    |][''][]
+[a][b]
+[c][]
+x=0
+
+==== STDERR ====
+

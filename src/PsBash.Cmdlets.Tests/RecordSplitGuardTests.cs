@@ -39,8 +39,10 @@ public class RecordSplitGuardTests
             = "styled table text this command just rendered, emitted as one record",
         ["StyledInteractiveSession.cs: return writer.ToString().TrimEnd('\\r', '\\n');"]
             = "styled text this command just rendered for the interactive screen",
-        ["InvokeBashIdCommand.cs: var trimmed = stdout.TrimEnd('\\r', '\\n');"]
+        ["InvokeBashIdCommand.cs: var trimmed = run.Stdout.TrimEnd('\\r', '\\n');"]
             = "a child process's one-line answer (id lookup), not pipeline input",
+        ["InvokeBashIdCommand.cs: if (run.Stderr.Length > 0) FileSystemHelpers.WriteStderr(this, run.Stderr.TrimEnd('\\r', '\\n'));"]
+            = "the system id's diagnostic forwarded to stderr (the writer adds the newline)",
         ["InvokeBashPsCommand.cs: return result.TimedOut ? null : result.Stdout.TrimEnd('\\r', '\\n');"]
             = "a child process's one-line answer, not pipeline input",
         ["InvokeBashJqCommand.cs: if (halt.Text != null) FileSystemHelpers.WriteStderr(this, halt.Text.TrimEnd('\\n'));"]
@@ -49,6 +51,8 @@ public class RecordSplitGuardTests
             = "a child's stderr text forwarded to stderr",
         ["InvokeBashSedCommand.cs: raw = raw.TrimEnd('\\n');"]
             = "sed -f SCRIPT file text; trailing blank script lines are no-op commands",
+        ["InvokeBashTputCommand.cs: if (spawn.Stderr.Length > 0) FileSystemHelpers.WriteStderr(this, spawn.Stderr.TrimEnd('\\n', '\\r'));"]
+            = "the system tput's diagnostic forwarded to stderr (the writer adds the newline)",
         ["InvokeBashXanCommand.cs: string body = sb.ToString().TrimEnd('\\r', '\\n');"]
             = "a table this command just rendered, emitted as one record",
     };

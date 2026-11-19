@@ -1,0 +1,18 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 83
+stdout-length: 14
+stderr-length: 74
+==== SCRIPT ====
+echo x | tee /nonexistent-dir/f; echo rc=$?; mkdir -p d; echo y | tee d; echo rc=$?
+==== STDOUT ====
+x
+rc=1
+y
+rc=1
+
+==== STDERR ====
+tee: /nonexistent-dir/f: No such file or directory
+tee: d: Is a directory
+

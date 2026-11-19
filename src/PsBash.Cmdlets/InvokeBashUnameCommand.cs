@@ -6,7 +6,9 @@ namespace PsBash.Cmdlets;
 /// <summary>
 /// Binary cmdlet replacement for the psm1 <c>Invoke-BashUname</c> function
 /// (REFACTOR-2). Prints system information, matching the GNU coreutils
-/// <c>uname</c> surface as the psm1 oracle implemented it.
+/// <c>uname</c> surface. On Linux and macOS it reports the HOST kernel
+/// (<see cref="PsBash.Core.Platform.KernelIdentity"/>, <see cref="FormatHost"/>);
+/// the MINGW identity below is the Windows answer only.
 ///
 /// Behavioral parity oracle: the original psm1 function. Flags supported are
 /// <c>-s</c> (kernel name, default), <c>-n</c> (network/host name), <c>-r</c>
@@ -69,6 +71,14 @@ public sealed class InvokeBashUnameCommand : PSCmdlet
         bool flagS = false, flagN = false, flagR = false, flagM = false;
         bool flagA = a.IsPresent;
 
+        // Linux / macOS: the host kernel (uname(2) via KernelIdentity), as coreutils prints it.
+        if (PsBash.Core.Platform.KernelIdentity.Host() is { } uts)
+        {
+            if (FormatHost(uts, OperatingSystem.IsMacOS(), args, flagA) is { } line)
+                WriteObject(BashRuntime.NewBashObject(line));
+            return;
+        }
+
         foreach (var arg in args)
         {
             if (arg.Length >= 2 && arg[0] == '-' && IsShortFlagBundle(arg))
@@ -113,6 +123,55 @@ public sealed class InvokeBashUnameCommand : PSCmdlet
         }
 
         WriteObject(BashRuntime.NewBashObject(text));
+    }
+
+    /// <summary>
+    /// coreutils <c>uname</c> over a host kernel identity: fields in GNU's order <c>-s -n -r -v -m -p -i -o</c>
+    /// (long forms too), <c>-s</c> when none is asked for. <c>-a</c> is all of them on Linux (<c>-p</c> / <c>-i</c> =
+    /// the machine, as Debian, Ubuntu and Fedora build it); on macOS <c>-s -n -r -v -m</c> (BSD uname). An unknown
+    /// option yields null (the cmdlet prints nothing, as before). Pure (unit-test seam).
+    /// </summary>
+    internal static string? FormatHost(PsBash.Core.Platform.KernelIdentity.Uts uts, bool darwin, IReadOnlyList<string> args, bool all = false)
+    {
+        // s n r v m p i o
+        var want = new bool[8];
+        foreach (var arg in args)
+        {
+            switch (arg)
+            {
+                case "--all": all = true; continue;
+                case "--kernel-name": want[0] = true; continue;
+                case "--nodename": want[1] = true; continue;
+                case "--kernel-release": want[2] = true; continue;
+                case "--kernel-version": want[3] = true; continue;
+                case "--machine": want[4] = true; continue;
+                case "--processor": want[5] = true; continue;
+                case "--hardware-platform": want[6] = true; continue;
+                case "--operating-system": want[7] = true; continue;
+            }
+            if (arg.Length < 2 || arg[0] != '-' || arg[1] == '-') continue;
+            foreach (char ch in arg.AsSpan(1))
+            {
+                int k = "snrvmpio".IndexOf(ch);
+                if (ch == 'a') all = true;
+                else if (k >= 0) want[k] = true;
+                else return null;
+            }
+        }
+        if (all)
+        {
+            for (int k = 0; k < (darwin ? 5 : 8); k++) want[k] = true;
+        }
+        else if (Array.IndexOf(want, true) < 0)
+        {
+            want[0] = true;
+        }
+        string[] values = [uts.SysName, uts.NodeName, uts.Release, uts.Version, uts.Machine, uts.Machine, uts.Machine,
+            darwin ? uts.SysName : "GNU/Linux"];
+        var parts = new List<string>(8);
+        for (int k = 0; k < 8; k++)
+            if (want[k]) parts.Add(values[k]);
+        return string.Join(' ', parts);
     }
 
     /// <summary>

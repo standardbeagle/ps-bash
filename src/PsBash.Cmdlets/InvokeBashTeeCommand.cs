@@ -149,18 +149,20 @@ public sealed class InvokeBashTeeCommand : PSCmdlet
             {
                 if (FileSystemHelpers.IsNullDevice(filePath)) continue;
                 string normalized = BashPath.ToShell(filePath);
+                // GNU names the operand as typed (quotef), never the resolved Windows path.
+                string shown = GnuQuote.IfNeeded(rawPath);
                 string? parentDir;
                 try { parentDir = Path.GetDirectoryName(filePath); }
                 catch { parentDir = null; }
 
                 if (!string.IsNullOrEmpty(parentDir) && !Directory.Exists(parentDir))
                 {
-                    Fail($"tee: {normalized}: No such file or directory");
+                    Fail($"tee: {shown}: No such file or directory");
                     continue;
                 }
                 if (Directory.Exists(filePath))
                 {
-                    Fail($"tee: {normalized}: Is a directory");
+                    Fail($"tee: {shown}: Is a directory");
                     continue;
                 }
 
@@ -172,7 +174,7 @@ public sealed class InvokeBashTeeCommand : PSCmdlet
                 catch (Exception ex)
                 {
                     if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-                    Fail($"tee: {normalized}: {ex.Message}");
+                    Fail($"tee: {shown}: {FileSystemHelpers.ReadErrorMessage(ex)}");
                 }
             }
         }

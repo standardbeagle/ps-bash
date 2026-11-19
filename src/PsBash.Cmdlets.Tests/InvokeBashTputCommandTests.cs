@@ -122,19 +122,35 @@ public class InvokeBashTputCommandTests : IClassFixture<SharedPwshFixture>
         Assert.Empty(lines);
     }
 
+    // REGRESSION: an unknown capability printed nothing at status 0. ncurses: the message and status 4 (also from a
+    // native tput, whose 1 / 4 statuses are now reported instead of falling through to the emulator).
     [Fact]
-    public void Tput_UnknownCapability_EmitsNothing()
+    public void Tput_UnknownCapability_Exit4()
     {
-        // Failure axis: missing target / unknown capability. Oracle's default
-        // arm produces '' which is filtered out before Emit-BashLine.
-        var lines = RunLines("Invoke-BashTput nonexistent-cap-xyz");
-        // On a host with native `tput` on PATH, the binary itself may emit
-        // something on stderr but stdout will be empty and exit non-zero, so
-        // the cmdlet falls through to the in-process fallback which also
-        // emits nothing. Either way, stdout must have no records.
-        Assert.Empty(lines);
+        var r = CmdResult.Run(_fixture.AcquireFresh(), "Invoke-BashTput nonexistent-cap-xyz");
+        r.AssertFailed(4, "tput: unknown terminfo capability 'nonexistent-cap-xyz'");
+        Assert.Empty(r.Lines);
     }
 
+    // ncurses 6.4 xterm-256color strings (oracle: `TERM=xterm-256color tput CAP | od -c`).
+    [Theory]
+    [InlineData("colors", "", "256")]
+    [InlineData("setab", "1", "\u001b[41m")]
+    [InlineData("smul", "", "\u001b[4m")]
+    [InlineData("rmul", "", "\u001b[24m")]
+    [InlineData("rev", "", "\u001b[7m")]
+    [InlineData("el", "", "\u001b[K")]
+    [InlineData("civis", "", "\u001b[?25l")]
+    [InlineData("cnorm", "", "\u001b[?12l\u001b[?25h")]
+    [InlineData("cup", "1 2", "\u001b[2;3H")]
+    [InlineData("dim", "", "\u001b[2m")]
+    [InlineData("longname", "", "xterm with 256 colors")]
+    public void Emulated_MatchesXterm256Color(string cap, string args, string expected)
+    {
+        var operands = new List<string> { cap };
+        operands.AddRange(args.Split(' ', StringSplitOptions.RemoveEmptyEntries));
+        Assert.Equal(expected, InvokeBashTputCommand.Emulated(cap, operands));
+    }
     [Fact]
     public void Tput_HelpFlag_EmitsUsage()
     {

@@ -139,6 +139,20 @@ public class InvokeBashEnvCommandTests : IClassFixture<SharedPwshFixture>
             .AssertFailed(127, $"env: ‘{name}’: No such file or directory");
     }
 
+    // The host installs a CommandNotFoundAction that answers every unknown name with a "command not found" stub;
+    // a lookup that fires it (InvokeCommand.GetCommand) took the stub for the command, so `env nosuch` printed
+    // "bash: …: command not found" (oracle: RuntimeCommandParityDifferentialTests.Env_FailureStatuses_125_126_127).
+    [Fact]
+    public void Env_CommandNotFound_UnderTheHostsNotFoundHandler_IsEnvsMessage()
+    {
+        var name = "psb-nosuch-" + Guid.NewGuid().ToString("N");
+        CmdResult.Run(_fixture.AcquireFresh(),
+                "$ExecutionContext.InvokeCommand.CommandNotFoundAction = { param($n, $e) " +
+                "$e.CommandScriptBlock = { Write-Error 'bash: stub: command not found' }; $e.StopSearch = $true }; " +
+                $"try {{ Invoke-BashEnv {name} }} finally {{ $ExecutionContext.InvokeCommand.CommandNotFoundAction = $null }}")
+            .AssertFailed(127, $"env: ‘{name}’: No such file or directory");
+    }
+
     [Fact]
     public void Env_Directory_Exit126()
     {

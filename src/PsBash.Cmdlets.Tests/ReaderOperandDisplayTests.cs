@@ -96,6 +96,16 @@ public class ReaderOperandDisplayTests : IDisposable, IClassFixture<SharedPwshFi
     }
 
     [Fact]
+    public void Tee_AbsoluteOrSpacedOperand_IsShownAsTyped()
+    {
+        // GNU quotef: the operand as typed, shell-quoted when needed — `/psb-nodir/f` was shown as `C:/psb-nodir/f`
+        // (oracle: RuntimeCommandParityDifferentialTests.Tee_UnopenableFile_Exits1).
+        var r = Run("echo hi | tee /psb-nodir-7q/f 'no dir/f'");
+        Assert.Contains("tee: /psb-nodir-7q/f: No such file or directory", r.Stderr, StringComparison.Ordinal);
+        Assert.Contains("tee: 'no dir/f': No such file or directory", r.Stderr, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Tee_UnwritablePath_QuotesOperandAsTyped()
     {
         var r = Run("echo hi | tee nodir/x");

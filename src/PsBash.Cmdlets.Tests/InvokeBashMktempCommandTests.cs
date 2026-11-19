@@ -7,12 +7,9 @@ namespace PsBash.Cmdlets.Tests;
 /// <c>Invoke-BashMktemp</c> from PsBash.psm1 to a binary cmdlet
 /// (<see cref="PsBash.Cmdlets.InvokeBashMktempCommand"/>).
 ///
-/// Oracle: the psm1 function. The cmdlet preserves the exact oracle
-/// branches — default file creation, <c>-d</c> directory creation, the
-/// trailing-<c>X</c> template prefix, and the
-/// <c>{TempPath}/ps-bash/proc-sub/</c> destination (the oracle always
-/// plants the result there regardless of the template's directory
-/// portion).
+/// Oracle: GNU coreutils 9.4 mktemp (WSL Ubuntu-24.04): the X run, the template's directory, <c>$TMPDIR</c>, and
+/// the GNU diagnostics. With no template and <c>$TMPDIR</c> unset the file goes to ps-bash's <c>/tmp</c> stand-in,
+/// <c>{TempPath}/ps-bash/proc-sub/</c> (ps-bash-specific: asserted by hand).
 ///
 /// Failure-surface axes covered (per Directive 3):
 /// empty input (no args), unicode/template, alias resolution, <c>--help</c>,
@@ -63,7 +60,7 @@ public class InvokeBashMktempCommandTests : IDisposable, IClassFixture<SharedPws
     private static readonly string ExpectedRoot =
         Path.Combine(Path.GetTempPath(), "ps-bash", "proc-sub");
 
-    [Fact]
+    [SkippableFact]
     public void Mktemp_DashP_HonorsDirectory_NoBinderCrash()
     {
         // Regression: bare -p prefix-collides with -ProgressAction (PS 7.4) and the
@@ -83,7 +80,7 @@ public class InvokeBashMktempCommandTests : IDisposable, IClassFixture<SharedPws
             StringComparison.OrdinalIgnoreCase);
     }
 
-    [Fact]
+    [SkippableFact]
     public void Mktemp_NoArgs_CreatesEmptyFileInProcSubDir()
     {
         var lines = RunLines("(Invoke-BashMktemp).Path");
@@ -99,7 +96,7 @@ public class InvokeBashMktempCommandTests : IDisposable, IClassFixture<SharedPws
                 : StringComparison.Ordinal);
     }
 
-    [Fact]
+    [SkippableFact]
     public void Mktemp_DashD_CreatesDirectory()
     {
         var lines = RunLines("(Invoke-BashMktemp -d).Path");
@@ -109,52 +106,131 @@ public class InvokeBashMktempCommandTests : IDisposable, IClassFixture<SharedPws
         Assert.False(File.Exists(path));
     }
 
-    [Fact]
-    public void Mktemp_Template_PrefixesNameWithBasename()
+    // ---- GNU template / directory rules (oracle: coreutils 9.4 mktemp, WSL Ubuntu-24.04) ----
+
+    /// <summary>A fresh scratch directory that the script runs in.</summary>
+    private string Scratch()
     {
-        // Oracle: 'myapp.XXXXXX' -> prefix 'myapp.' + random.
-        var lines = RunLines("(Invoke-BashMktemp 'myapp.XXXXXX').Path");
-        Assert.Single(lines);
-        var path = lines[0];
-        Assert.True(File.Exists(path));
-        var name = Path.GetFileName(path);
-        Assert.StartsWith("myapp.", name, StringComparison.Ordinal);
-        // The random suffix from Path.GetRandomFileName is non-empty.
-        Assert.True(name.Length > "myapp.".Length);
+        var dir = Path.Combine(Path.GetTempPath(), "psb-mkt-" + Guid.NewGuid().ToString("N")[..10]);
+        Directory.CreateDirectory(dir);
+        _createdPaths.Add(dir);
+        return dir;
     }
 
-    [Fact]
-    public void Mktemp_TemplateWithDirPath_StillPlantsInProcSubDir()
+    private CmdResult RunIn(string dir, string script)
+        => CmdResult.Run(_fixture.AcquireFresh(), $"Set-Location -LiteralPath '{dir.Replace("'", "''")}'; {script}");
+
+    // REGRESSION: the X run was kept and a random name appended ('myapp.XXXXXX' -> 'myapp.ab3cd.efg'); GNU replaces
+    // the last run of X's (same length, [A-Za-z0-9]) and keeps what follows it.
+    [Theory]
+    [InlineData("myapp.XXXXXX", "myapp.", 6, "")]
+    [InlineData("q.XXX.txt", "q.", 3, ".txt")]
+    [InlineData("$(throw).XXX", "$(throw).", 3, "")]   // injection probe: a literal name, never evaluated
+    public void Mktemp_Template_ReplacesTheXRunInTheCurrentDirectory(string template, string prefix, int xs, string suffix)
     {
-        // Oracle: prefix = [Path]::GetFileName($trimmed) — the directory
-        // portion of a template like 'sub/x.XXXX' is discarded and the
-        // result still lives under ps-bash/proc-sub/.
-        var lines = RunLines("(Invoke-BashMktemp 'whatever/leaf.XXX').Path");
-        Assert.Single(lines);
-        var path = lines[0];
-        var parent = Path.GetDirectoryName(path);
-        Assert.NotNull(parent);
-        Assert.Equal(ExpectedRoot.TrimEnd(Path.DirectorySeparatorChar),
-            parent!.TrimEnd(Path.DirectorySeparatorChar),
-            ignoreCase: OperatingSystem.IsWindows());
-        Assert.StartsWith("leaf.", Path.GetFileName(path), StringComparison.Ordinal);
+        var dir = Scratch();
+        var r = RunIn(dir, $"Invoke-BashMktemp '{template}'");
+        r.AssertSuccess();
+        var name = Assert.Single(r.Lines);
+        Assert.Matches("^" + System.Text.RegularExpressions.Regex.Escape(prefix) + "[A-Za-z0-9]{" + xs + "}"
+            + System.Text.RegularExpressions.Regex.Escape(suffix) + "$", name);
+        Assert.True(File.Exists(Path.Combine(dir, name)), name);
     }
 
-    [Fact]
-    public void Mktemp_DashU_TreatedAsTemplate_PerOracle()
+    // REGRESSION: a template's directory was dropped and the file planted in ps-bash/proc-sub.
+    [SkippableFact]
+    public void Mktemp_TemplateWithDirectory_IsRelativeToTheCurrentDirectory()
     {
-        // The psm1 oracle has no -u flag; any non '-d' token becomes the
-        // template (last wins). We assert oracle parity here: '-u' becomes
-        // a literal prefix on the generated filename.
-        var lines = RunLines("(Invoke-BashMktemp -u).Path");
-        Assert.Single(lines);
-        var name = Path.GetFileName(lines[0]);
-        // The trailing-X regex strips nothing (no X+ run at end); basename
-        // of '-u' is '-u'. The resulting prefix is '-u'.
-        Assert.StartsWith("-u", name, StringComparison.Ordinal);
+        var dir = Scratch();
+        Directory.CreateDirectory(Path.Combine(dir, "p"));
+        var r = RunIn(dir, "Invoke-BashMktemp p/leaf.XXX");
+        r.AssertSuccess();
+        var name = Assert.Single(r.Lines);
+        Assert.Matches("^p/leaf\\.[A-Za-z0-9]{3}$", name);
+        Assert.True(File.Exists(Path.Combine(dir, name)));
+
+        RunIn(dir, "Invoke-BashMktemp -d nosuch/aXXX")
+            .AssertFailed(1, "mktemp: failed to create directory via template ‘nosuch/aXXX’: No such file or directory");
     }
 
-    [Fact]
+    // REGRESSION: $TMPDIR was ignored. No template / -t / --tmpdir use it; -p DIR wins over it except under -t.
+    [SkippableFact]
+    [Trait("Platform", "Windows")]
+    public void Mktemp_HonorsTmpdir()
+    {
+        // The store is the process environment; off Windows .NET's own temp path reads TMPDIR, so a relative value
+        // would leak into parallel classes. Unix coverage: Plan_IsGnuMktemp + the differential case.
+        Skip.IfNot(OperatingSystem.IsWindows(), "TMPDIR is the .NET temp path off Windows");
+        var dir = Scratch();
+        Directory.CreateDirectory(Path.Combine(dir, "t"));
+        Directory.CreateDirectory(Path.Combine(dir, "p"));
+        string Run(string args)
+        {
+            var r = RunIn(dir, "$env:TMPDIR = $null; [PsBash.Cmdlets.BashVariableStore]::Set('TMPDIR', 't'); "
+                + "[PsBash.Cmdlets.BashVariableStore]::Export('TMPDIR'); try { Invoke-BashMktemp " + args
+                + " } finally { [PsBash.Cmdlets.BashVariableStore]::Unexport('TMPDIR'); [PsBash.Cmdlets.BashVariableStore]::Set('TMPDIR', $null) }");
+            r.AssertSuccess();
+            return Assert.Single(r.Lines);
+        }
+        Assert.Matches("^t/tmp\\.[A-Za-z0-9]{10}$", Run(""));
+        Assert.Matches("^t/abc\\.[A-Za-z0-9]{4}$", Run("-t abc.XXXX"));
+        Assert.Matches("^t/abc\\.[A-Za-z0-9]{4}$", Run("--tmpdir abc.XXXX"));
+        Assert.Matches("^p/abc\\.[A-Za-z0-9]{4}$", Run("-p p abc.XXXX"));
+        Assert.Matches("^t/abc\\.[A-Za-z0-9]{4}$", Run("-t -p p abc.XXXX"));
+        Assert.Matches("^abc\\.[A-Za-z0-9]{4}$", Run("abc.XXXX"));
+        Assert.True(Directory.Exists(Path.Combine(dir, Run("-d").Replace('/', Path.DirectorySeparatorChar))));
+    }
+
+    [Theory]
+    [InlineData("abc", "mktemp: too few X's in template ‘abc’")]
+    [InlineData("-t a/bXXX", "mktemp: invalid template, ‘a/bXXX’, contains directory separator")]
+    [InlineData("--suffix=.x aXXXb", "mktemp: with --suffix, template ‘aXXXb’ must end in X")]
+    [InlineData("aXXX bXXX", "mktemp: too many templates")]
+    [InlineData("-Z", "mktemp: invalid option -- 'Z'")]
+    public void Mktemp_BadTemplateOrOption_Exit1(string args, string message)
+        => RunIn(Scratch(), "Invoke-BashMktemp " + args).AssertFailed(1, message);
+
+    // -u: a name that does not exist, nothing created (it was a literal '-u' template).
+    [SkippableFact]
+    public void Mktemp_DryRun_CreatesNothing()
+    {
+        var dir = Scratch();
+        var r = RunIn(dir, "Invoke-BashMktemp -u aXXXX");
+        r.AssertSuccess();
+        Assert.False(File.Exists(Path.Combine(dir, Assert.Single(r.Lines))));
+        Assert.Empty(Directory.GetFileSystemEntries(dir));
+    }
+
+    // Direct invocation of the colliding short flags (-d: -Debug, -p: -ProgressAction).
+    [SkippableFact]
+    public void Mktemp_DirectInvocation_DashDAndDashP()
+    {
+        var dir = Scratch();
+        Directory.CreateDirectory(Path.Combine(dir, "p"));
+        var r = RunIn(dir, "Invoke-BashMktemp -d -p p aXXX");
+        r.AssertSuccess();
+        var name = Assert.Single(r.Lines);
+        Assert.Matches("^p/a[A-Za-z0-9]{3}$", name);
+        Assert.True(Directory.Exists(Path.Combine(dir, name)));
+    }
+
+    [Theory]
+    [InlineData(null, false, null, null, null, "D", "tmp.", 10)]
+    [InlineData("a.XXX", false, null, null, "T", null, "a.", 3)]
+    [InlineData("a.XXX", true, null, null, "T", "T", "a.", 3)]
+    [InlineData("a.XXX", true, "P", null, "", "P", "a.", 3)]
+    [InlineData("a.XXX", false, "", null, "", "D", "a.", 3)]
+    [InlineData("aXXX", false, null, ".s", null, null, "a", 3)]
+    public void Plan_IsGnuMktemp(string? template, bool t, string? dirArg, string? suffix, string? tmpdir, string? dir, string prefix, int xs)
+    {
+        var plan = InvokeBashMktempCommand.Plan(template, t, dirArg, suffix, tmpdir, "D");
+        Assert.Null(plan.Error);
+        Assert.Equal(dir, plan.Dir);
+        Assert.Equal(prefix, plan.Template[..plan.XStart]);
+        Assert.Equal(xs, plan.XCount);
+        Assert.Equal(suffix ?? "", plan.Template[(plan.XStart + plan.XCount)..]);
+    }
+    [SkippableFact]
     public void Mktemp_HelpFlag_EmitsUsage()
     {
         var lines = RunLines("Invoke-BashMktemp --help");
@@ -162,7 +238,7 @@ public class InvokeBashMktempCommandTests : IDisposable, IClassFixture<SharedPws
         Assert.Contains(lines, l => l.Contains("mktemp", StringComparison.OrdinalIgnoreCase));
     }
 
-    [Fact]
+    [SkippableFact]
     public void Mktemp_ViaAlias_Works()
     {
         var lines = RunLines("(mktemp).Path");
@@ -170,7 +246,7 @@ public class InvokeBashMktempCommandTests : IDisposable, IClassFixture<SharedPws
         Assert.True(File.Exists(lines[0]));
     }
 
-    [Fact]
+    [SkippableFact]
     public void Mktemp_EmitsTypedMktempOutput()
     {
         // The PSObject's typename must be 'PsBash.MktempOutput' so any
@@ -191,20 +267,5 @@ public class InvokeBashMktempCommandTests : IDisposable, IClassFixture<SharedPws
             var p = r?.ToString();
             if (p != null && File.Exists(p)) _createdPaths.Add(p);
         }
-    }
-
-    // ---- injection probe (Directive 12) ----
-
-    [Fact]
-    public void Mktemp_TemplateWithScriptblockChars_TreatedAsLiteralPrefix()
-    {
-        // A template containing $(throw 'pwn') chars must not be evaluated
-        // as PowerShell — the prefix is taken as a literal basename string.
-        var lines = RunLines("(Invoke-BashMktemp '$(throw).XXX').Path");
-        Assert.Single(lines);
-        var name = Path.GetFileName(lines[0]);
-        Assert.StartsWith("$(throw).", name, StringComparison.Ordinal);
-        // No "pwn" execution and no error: the path exists.
-        Assert.True(File.Exists(lines[0]));
     }
 }

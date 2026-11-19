@@ -1,0 +1,47 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 422
+stdout-length: 386
+stderr-length: 0
+==== SCRIPT ====
+__fs_snap() { find . | LC_ALL=C sort | while IFS= read -r p; do if [ -d "$p" ]; then echo "D $p"; else echo "F $p $(base64 -w0 "$p")"; fi; done; }
+d=$(mktemp -d) && cd "$d" && { :
+echo s > s; mkdir -p ip
+} >/dev/null 2>&1
+echo '== stdout'
+{ :
+install -v s s2; install -v -d id1/id2 id3; install -v -D s dd/ee/ff; install -v s id3; install -v -t ip s
+} 2>/dev/null
+echo "== exit $?"
+echo '== fs'
+__fs_snap
+cd /; rm -rf "$d"
+==== STDOUT ====
+== stdout
+'s' -> 's2'
+install: creating directory 'id1'
+install: creating directory 'id1/id2'
+install: creating directory 'id3'
+install: creating directory 'dd'
+install: creating directory 'dd/ee'
+'s' -> 'dd/ee/ff'
+'s' -> 'id3/s'
+'s' -> 'ip/s'
+== exit 0
+== fs
+D .
+D ./dd
+D ./dd/ee
+F ./dd/ee/ff cwo=
+D ./id1
+D ./id1/id2
+D ./id3
+F ./id3/s cwo=
+D ./ip
+F ./ip/s cwo=
+F ./s cwo=
+F ./s2 cwo=
+
+==== STDERR ====
+

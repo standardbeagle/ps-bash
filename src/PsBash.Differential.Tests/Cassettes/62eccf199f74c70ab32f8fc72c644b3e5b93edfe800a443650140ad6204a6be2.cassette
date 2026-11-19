@@ -1,0 +1,20 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 102
+stdout-length: 228
+stderr-length: 0
+==== SCRIPT ====
+printf 'a\n\nb\n' | nl | od -c; printf 'a\nb\n' | nl -b n -s: | od -c; printf 'x\n\n' | nl -w3 | od -c
+==== STDOUT ====
+0000000                       1  \t   a  \n
+0000020  \n                       2  \t   b  \n
+0000032
+0000000                               a  \n
+0000020   b  \n
+0000022
+0000000           1  \t   x  \n                  \n
+0000013
+
+==== STDERR ====
+

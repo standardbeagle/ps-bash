@@ -1,0 +1,58 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 1194
+stdout-length: 144
+stderr-length: 427
+==== SCRIPT ====
+__fs_snap() { find . | LC_ALL=C sort | while IFS= read -r p; do if [ -d "$p" ]; then echo "D $p"; else echo "F $p $(base64 -w0 "$p")"; fi; done; }
+d=$(mktemp -d) && cd "$d" && { :
+mkdir d; echo x > b.txt; echo y > c; echo z > e
+} >/dev/null 2>&1
+echo '== stdout'
+{ :
+gzip d; echo rc=$?; gzip -q d; echo rc=$?; gzip -d b.txt; echo rc=$?; gzip -dq b.txt; echo rc=$?; printf '\x1f\x8b\x08\x08\x00\x00\x00\x00\x00\x03\x61\x00\xcb\x48\xcd\xc9\xc9\xe7\x02\x00\x20\x30\x3a\x36\x06\x00\x00\x00' > a.gz; gzip a.gz; echo rc=$?; printf '\x1f\x8b\x08\x08\x00\x00\x00\x00\x00\x03\x61\x00\xcb\x48\xcd\xc9\xc9\xe7\x02\x00\x20\x30\x3a\x36\x06\x00\x00\x00' > c.gz; gzip -d c.gz; echo rc=$?; gzip -dq c.gz; echo rc=$?; : > z.gz; gzip -d z.gz; echo rc=$?; gzip -t z.gz; echo rc=$?; gzip -d nosuch; echo rc=$?; gzip -d d nosuch; echo rc=$?; printf '\x1f\x8b\x08\x08\x00\x00\x00\x00\x00\x03\x61\x00\xcb\x48\xcd\xc9\xc9\xe7\x02\x00\x20\x30\x3a\x36\x06\x00\x00\x00' > e.gz; gunzip e; echo rc=$?; printf '\x1f\x8b\x08\x08\x00\x00\x00\x00\x00\x03\x61\x00\xcb\x48\xcd\xc9\xc9\xe7\x02\x00\x20\x30\x3a\x36\x06\x00\x00\x00' > f.gz; zcat f; echo rc=$?; rm -f *.gz
+}
+echo "== exit $?"
+echo '== fs'
+__fs_snap
+cd /; rm -rf "$d"
+==== STDOUT ====
+== stdout
+rc=2
+rc=2
+rc=2
+rc=0
+rc=0
+rc=2
+rc=2
+rc=1
+rc=1
+rc=1
+rc=1
+rc=2
+hello
+rc=0
+== exit 0
+== fs
+D .
+F ./b.txt eAo=
+F ./c eQo=
+D ./d
+F ./e ego=
+
+==== STDERR ====
+gzip: d is a directory -- ignored
+gzip: b.txt: unknown suffix -- ignored
+gzip: a.gz already has .gz suffix -- unchanged
+gzip: c already exists;	not overwritten
+gzip: c already exists;	not overwritten
+
+gzip: z.gz: unexpected end of file
+
+gzip: z.gz: unexpected end of file
+gzip: nosuch.gz: No such file or directory
+gzip: d is a directory -- ignored
+gzip: nosuch.gz: No such file or directory
+gzip: e: unknown suffix -- ignored
+

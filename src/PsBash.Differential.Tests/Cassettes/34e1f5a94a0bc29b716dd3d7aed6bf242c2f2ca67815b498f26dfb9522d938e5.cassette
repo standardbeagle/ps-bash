@@ -1,0 +1,47 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 685
+stdout-length: 596
+stderr-length: 121
+==== SCRIPT ====
+__fs_snap() { find . | LC_ALL=C sort | while IFS= read -r p; do if [ -d "$p" ]; then echo "D $p"; else echo "F $p $(base64 -w0 "$p")"; fi; done; }
+d=$(mktemp -d) && cd "$d" && { :
+mkdir -p r
+} >/dev/null 2>&1
+echo '== stdout'
+{ :
+printf '\x1f\x8b\x08\x08\x00\x00\x00\x00\x00\x03\x61\x00\xcb\x48\xcd\xc9\xc9\xe7\x02\x00\x20\x30\x3a\x36\x06\x00\x00\x00' > n.gz; printf '\x1f\x8b\x08\x08\x00\x00\x00\x00\x00\x03\x61\x00\xcb\x48\xcd\xc9\xc9\xe7\x02\x00\x20\x30\x3a\x36\x06\x00\x00\x00' > r/m.gz; gzip -l n.gz; gzip -l n.gz r/m.gz; gzip -l n.gz nosuch; echo rc=$?; gzip -tv n.gz; gzip -dv n.gz; gzip -drv r; echo rc=$?; cat n r/m
+}
+echo "== exit $?"
+echo '== fs'
+__fs_snap
+cd /; rm -rf "$d"
+==== STDOUT ====
+== stdout
+         compressed        uncompressed  ratio uncompressed_name
+                 28                   6 -33.3% n
+         compressed        uncompressed  ratio uncompressed_name
+                 28                   6 -33.3% n
+                 28                   6 -33.3% r/m
+                 56                  12 -200.0% (totals)
+         compressed        uncompressed  ratio uncompressed_name
+                 28                   6 -33.3% n
+                 28                   6 -33.3% (totals)
+rc=1
+rc=0
+hello
+hello
+== exit 0
+== fs
+D .
+F ./n aGVsbG8K
+D ./r
+F ./r/m aGVsbG8K
+
+==== STDERR ====
+gzip: nosuch.gz: No such file or directory
+n.gz:	 OK
+n.gz:	-33.3% -- replaced with n
+r/m.gz:	-33.3% -- replaced with r/m
+

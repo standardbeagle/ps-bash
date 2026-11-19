@@ -1,0 +1,36 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 278
+stdout-length: 67
+stderr-length: 497
+==== SCRIPT ====
+env nosuchcmd; echo rc=$?; mkdir dd; env ./dd; echo rc=$?; env ./nosuch; echo rc=$?; env -Q; echo rc=$?; env -u; echo rc=$?; env --bogus; echo rc=$?; printenv -Q; echo rc=$?; printenv --bogus; echo rc=$?; printenv PE_NOPE; echo rc=$?; env false; echo rc=$?; env true; echo rc=$?
+==== STDOUT ====
+rc=127
+rc=126
+rc=127
+rc=125
+rc=125
+rc=125
+rc=2
+rc=2
+rc=1
+rc=1
+rc=0
+
+==== STDERR ====
+env: ‘nosuchcmd’: No such file or directory
+env: ‘./dd’: Permission denied
+env: ‘./nosuch’: No such file or directory
+env: invalid option -- 'Q'
+Try 'env --help' for more information.
+env: option requires an argument -- 'u'
+Try 'env --help' for more information.
+env: unrecognized option '--bogus'
+Try 'env --help' for more information.
+printenv: invalid option -- 'Q'
+Try 'printenv --help' for more information.
+printenv: unrecognized option '--bogus'
+Try 'printenv --help' for more information.
+

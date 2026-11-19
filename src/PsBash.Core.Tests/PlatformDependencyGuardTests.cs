@@ -115,6 +115,33 @@ public class PlatformDependencyGuardTests
         Assert.Empty(StatOffenders([("Y.cs", "if (PosixStat.TryFStat(fd, out var st) && st.IsFifo) Close(fd);")]));
     }
 
+    // ---- (c) the kernel identity (uname) ----
+
+    /// <summary>A <c>uname(2)</c> P/Invoke or a <c>struct utsname</c> copy.</summary>
+    private static readonly Regex UnameDependency = new(
+        @"EntryPoint\s*=\s*""uname""|\bextern\b[^;(]*\buname\s*\(|\butsname\b", RegexOptions.Compiled);
+
+    internal static List<string> UnameOffenders(IEnumerable<(string Rel, string Text)> sources)
+    {
+        var offenders = new List<string>();
+        foreach (var (rel, text) in sources)
+            foreach (var (line, code) in CodeLines(text, "//"))
+                if (UnameDependency.IsMatch(code)) offenders.Add($"{rel}:{line}: {code.Trim()}");
+        return offenders;
+    }
+
+    /// <summary>REGRESSION: <c>uname</c> printed the MINGW identity on Linux and macOS. The host kernel comes from
+    /// <see cref="KernelIdentity"/> (Linux 65-byte and Darwin 256-byte <c>struct utsname</c>) and nowhere else.</summary>
+    [Fact]
+    public void UnameCall_LivesOnlyInPlatform()
+    {
+        var offenders = UnameOffenders(Sources(ProductProjects, "*.cs"));
+        Assert.True(offenders.Count == 0,
+            "a uname(2) P/Invoke or struct utsname outside src/PsBash.Transpiler/Platform/ — use "
+            + "PsBash.Core.Platform.KernelIdentity.Host():\n  " + string.Join("\n  ", offenders));
+        Assert.Equal(2, UnameOffenders([("X.cs", "[DllImport(\"libc\", EntryPoint = \"uname\")]\nprivate static extern int uname(byte* b);\n// uname( in prose")]).Count);
+    }
+
     // ---- (b) system tool paths ----
 
     /// <summary>A C# string literal that starts with a system tool directory.</summary>

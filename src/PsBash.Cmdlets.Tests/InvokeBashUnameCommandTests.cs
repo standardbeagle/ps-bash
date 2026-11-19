@@ -31,8 +31,10 @@ public class InvokeBashUnameCommandTests : IClassFixture<SharedPwshFixture>
         _fixture = fixture;
     }
 
+    // The MINGW identity is the Windows answer; Linux / macOS report the host kernel (FormatHost tests below).
     private string[] RunLines(string script)
     {
+        Skip.IfNot(OperatingSystem.IsWindows(), "MINGW identity is the Windows answer; Unix reports the host kernel");
         var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(script).Invoke();
         pwsh.Commands.Clear();
@@ -60,7 +62,7 @@ public class InvokeBashUnameCommandTests : IClassFixture<SharedPwshFixture>
     private static string ExpectedArch() =>
         System.Environment.Is64BitProcess ? "x86_64" : "i686";
 
-    [Fact]
+    [SkippableFact]
     public void Uname_NoFlags_ReturnsKernelName()
     {
         // Default == -s.
@@ -68,35 +70,35 @@ public class InvokeBashUnameCommandTests : IClassFixture<SharedPwshFixture>
         Assert.Equal(new[] { ExpectedSysName() }, lines);
     }
 
-    [Fact]
+    [SkippableFact]
     public void Uname_FlagS_ReturnsKernelName()
     {
         var lines = RunLines("Invoke-BashUname -s");
         Assert.Equal(new[] { ExpectedSysName() }, lines);
     }
 
-    [Fact]
+    [SkippableFact]
     public void Uname_FlagN_ReturnsLowerHostName()
     {
         var lines = RunLines("Invoke-BashUname -n");
         Assert.Equal(new[] { ExpectedHostName() }, lines);
     }
 
-    [Fact]
+    [SkippableFact]
     public void Uname_FlagR_ReturnsRelease()
     {
         var lines = RunLines("Invoke-BashUname -r");
         Assert.Equal(new[] { ExpectedRelease() }, lines);
     }
 
-    [Fact]
+    [SkippableFact]
     public void Uname_FlagM_ReturnsMachineArch()
     {
         var lines = RunLines("Invoke-BashUname -m");
         Assert.Equal(new[] { ExpectedArch() }, lines);
     }
 
-    [Fact]
+    [SkippableFact]
     public void Uname_FlagA_ReturnsAllJoined()
     {
         var expected = $"{ExpectedSysName()} {ExpectedHostName()} {ExpectedRelease()} {ExpectedArch()} MINGW64";
@@ -104,7 +106,7 @@ public class InvokeBashUnameCommandTests : IClassFixture<SharedPwshFixture>
         Assert.Equal(new[] { expected }, lines);
     }
 
-    [Fact]
+    [SkippableFact]
     public void Uname_BundledFlags_SnrEmitsThreeFieldsInOrder()
     {
         // Oracle order is s, n, r, m regardless of bundle order.
@@ -113,7 +115,7 @@ public class InvokeBashUnameCommandTests : IClassFixture<SharedPwshFixture>
         Assert.Equal(new[] { expected }, lines);
     }
 
-    [Fact]
+    [SkippableFact]
     public void Uname_BundledFlags_AllShort_SameAsFlagA_ButWithoutMingw64Suffix()
     {
         // -snrm = s + n + r + m (no trailing "MINGW64" — that's -a only).
@@ -122,14 +124,14 @@ public class InvokeBashUnameCommandTests : IClassFixture<SharedPwshFixture>
         Assert.Equal(new[] { expected }, lines);
     }
 
-    [Fact]
+    [SkippableFact]
     public void Uname_ViaAlias_ReturnsKernelName()
     {
         var lines = RunLines("uname");
         Assert.Equal(new[] { ExpectedSysName() }, lines);
     }
 
-    [Fact]
+    [SkippableFact]
     public void Uname_HelpFlag_EmitsUsage()
     {
         var lines = RunLines("Invoke-BashUname --help");
@@ -137,7 +139,7 @@ public class InvokeBashUnameCommandTests : IClassFixture<SharedPwshFixture>
         Assert.Contains(lines, l => l.Contains("uname", System.StringComparison.OrdinalIgnoreCase));
     }
 
-    [Fact]
+    [SkippableFact]
     public void Uname_UnknownFlag_IsIgnoredAndDefaultsToKernelName()
     {
         // Oracle silently drops unknown flags and falls through to default -s.
@@ -147,7 +149,7 @@ public class InvokeBashUnameCommandTests : IClassFixture<SharedPwshFixture>
 
     // ---- injection probe (Directive 12) ----
 
-    [Fact]
+    [SkippableFact]
     public void Uname_ExtraArgWithScriptblockChars_IsIgnoredNotExecuted()
     {
         // Adversarial positional arg containing PS scriptblock + $() chars.
@@ -158,7 +160,7 @@ public class InvokeBashUnameCommandTests : IClassFixture<SharedPwshFixture>
         Assert.DoesNotContain(lines, l => l.Contains("pwn"));
     }
 
-    [Fact]
+    [SkippableFact]
     public void Uname_InjectionInBundledLookalike_IsIgnored()
     {
         // A dash-prefixed token that contains forbidden chars must not be
@@ -166,5 +168,37 @@ public class InvokeBashUnameCommandTests : IClassFixture<SharedPwshFixture>
         // and must not be evaluated. Output stays at the -s default.
         var lines = RunLines("Invoke-BashUname '-s;rm'");
         Assert.Equal(new[] { ExpectedSysName() }, lines);
+    }
+
+    // ---- host kernel (Linux / macOS) ----
+
+    private static readonly PsBash.Core.Platform.KernelIdentity.Uts Box =
+        new("Linux", "box", "6.8.0-45-generic", "#45-Ubuntu SMP", "x86_64");
+
+    // coreutils order s n r v m p i o; -a = all on Linux (p / i = machine: Debian/Ubuntu/Fedora builds), BSD's five
+    // on macOS; no field = -s; an unknown option prints nothing.
+    [Theory]
+    [InlineData(false, "", "Linux")]
+    [InlineData(false, "-s", "Linux")]
+    [InlineData(false, "-rn", "box 6.8.0-45-generic")]
+    [InlineData(false, "-m -v", "#45-Ubuntu SMP x86_64")]
+    [InlineData(false, "-o", "GNU/Linux")]
+    [InlineData(false, "-a", "Linux box 6.8.0-45-generic #45-Ubuntu SMP x86_64 x86_64 x86_64 GNU/Linux")]
+    [InlineData(false, "--kernel-release --machine", "6.8.0-45-generic x86_64")]
+    [InlineData(true, "-a", "Linux box 6.8.0-45-generic #45-Ubuntu SMP x86_64")]
+    [InlineData(false, "-x", null)]
+    public void FormatHost_IsCoreutilsUname(bool darwin, string args, string? expected)
+        => Assert.Equal(expected, InvokeBashUnameCommand.FormatHost(Box, darwin,
+            args.Split(' ', StringSplitOptions.RemoveEmptyEntries)));
+
+    // REGRESSION: on Linux/macOS uname printed MINGW64_NT-<.NET version>.
+    [SkippableFact]
+    [Trait("Platform", "Unix")]
+    public void Uname_OnUnix_IsTheHostKernel()
+    {
+        Skip.If(OperatingSystem.IsWindows(), "Windows keeps the MINGW identity");
+        var pwsh = _fixture.AcquireFresh();
+        var result = pwsh.AddScript("Invoke-BashUname").Invoke();
+        Assert.Equal(new[] { OperatingSystem.IsMacOS() ? "Darwin" : "Linux" }, result.Select(o => o?.ToString()).ToArray());
     }
 }

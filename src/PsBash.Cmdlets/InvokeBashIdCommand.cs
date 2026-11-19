@@ -93,6 +93,15 @@ public sealed class InvokeBashIdCommand : PSCmdlet
             }
         }
 
+        // GNU: a NAME no account answers to is `id: ‘NAME’: no such user`, status 1. REGRESSION: it silently printed
+        // the CURRENT user's identity. (An existing account WindowsIdentity cannot open — a local user without S4U
+        // logon rights — still falls back to the current identity; see runtime-command-reference.md.)
+        if (!string.IsNullOrEmpty(userName) && !AccountExists(userName))
+        {
+            FileSystemHelpers.WriteBashError(this, $"id: {GnuQuote.Locale(userName)}: no such user");
+            return;
+        }
+
         WindowsIdentity identity;
         try
         {
@@ -209,6 +218,21 @@ public sealed class InvokeBashIdCommand : PSCmdlet
             $"uid={uid}({uname}) gid={gid} groups={groupsJoined}"));
     }
 
+    /// <summary>True when the account database resolves <paramref name="name"/> (a user name, DOMAIN\user or SID).</summary>
+    [SupportedOSPlatform("windows")]
+    private static bool AccountExists(string name)
+    {
+        try
+        {
+            _ = new NTAccount(name).Translate(typeof(SecurityIdentifier));
+            return true;
+        }
+        catch (Exception ex) when (ex is IdentityNotMappedException or ArgumentException or SystemException)
+        {
+            return false;
+        }
+    }
+
     [SupportedOSPlatform("windows")]
     private static IdentityReference? FirstGroup(WindowsIdentity identity)
     {
@@ -238,13 +262,12 @@ public sealed class InvokeBashIdCommand : PSCmdlet
             // Bounded spawn with concurrent stream drain + kill-tree on timeout
             // (BashRuntime.RunChildProcess) so a hung /usr/bin/id can never wedge
             // the single-threaded host runspace.
-            var stdout = BashRuntime.RunChildProcess(psi).Stdout;
-            var trimmed = stdout.TrimEnd('\r', '\n');
-            if (trimmed.Length == 0 && !string.IsNullOrEmpty(stdout))
-            {
-                // a lone trailing newline still means "one empty line" — suppress to match common id behavior
-            }
-            WriteObject(BashRuntime.NewBashObject(trimmed));
+            var run = BashRuntime.RunChildProcess(psi);
+            // The system id's own diagnostics and status (`id nosuchuser`: "no such user", 1) reach the script.
+            if (run.Stderr.Length > 0) FileSystemHelpers.WriteStderr(this, run.Stderr.TrimEnd('\r', '\n'));
+            var trimmed = run.Stdout.TrimEnd('\r', '\n');
+            if (run.Stdout.Length > 0) WriteObject(BashRuntime.NewBashObject(trimmed));
+            if (run.TimedOut || run.ExitCode != 0) FileSystemHelpers.SetLastExitCode(this, run.TimedOut ? 1 : run.ExitCode);
         }
         catch (Exception)
         {

@@ -273,9 +273,15 @@ public sealed class InvokeBashEnvCommand : PSCmdlet
             return File.Exists(abs) ? null : ("No such file or directory", 127);
         }
         if (name.Length == 0) return ("No such file or directory", 127);
-        var found = InvokeCommand.GetCommand(WildcardPattern.Escape(name),
-            CommandTypes.Alias | CommandTypes.Cmdlet | CommandTypes.Function | CommandTypes.Application | CommandTypes.ExternalScript);
-        return found is null ? ("No such file or directory", 127) : null;
+        // Get-Command searches; InvokeCommand.GetCommand also fires the host's CommandNotFoundAction, which answers
+        // EVERY name with a "command not found" stub — so `env nosuch` printed bash's message, not env's.
+        foreach (var r in InvokeCommand.InvokeScript(
+            "param($n) Get-Command ([WildcardPattern]::Escape($n)) -CommandType Alias,Cmdlet,Function,Application,ExternalScript " +
+            "-ErrorAction SilentlyContinue | Select-Object -First 1", name))
+        {
+            if (r?.BaseObject is CommandInfo) return null;
+        }
+        return ("No such file or directory", 127);
     }
     private void PrintEffectiveEnv(
         bool ignoreEnv, List<string> unset, List<(string Name, string Value)> assignments, bool nul)
