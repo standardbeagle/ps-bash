@@ -2589,7 +2589,9 @@ Describe 'Invoke-BashSed — Pipeline Bridge' {
     It 'pipeline sed rewrites BashText of an object input as plain text' {
         $obj = [PSCustomObject]@{
             PSTypeName = 'PsBash.TestObj'
-            BashText   = "hello world`n"
+            # A plain record's line has no `n of its own: its bytes are BashText + `n (StdoutRecord.Bytes,
+            # runtime-functions.md section Partial lines); "hello world`n" would be two lines.
+            BashText   = "hello world"
             Name       = 'original'
         }
         $obj | Add-Member -MemberType ScriptMethod -Name 'ToString' -Value { $this.BashText } -Force

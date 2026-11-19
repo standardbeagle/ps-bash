@@ -61,6 +61,7 @@ public class ShellVariableStorageGuardTests
         ["SharedStdin.cs|VariableName"] = "the shared stdin cursor's own constant",
         ["SharedStdin.cs|SharedStdin.VariableName"] = "the shared stdin cursor's own constant",
         ["InvokeBashRedirectCommand.cs|RedirectFailedVariable"] = "the redirect-failure mark's own constant",
+        ["ShellSignalTraps.cs|SubshellScopeVariable"] = "the open subshell scope's own constant ($__psbash_ss, PsBuild.ShellStateGuard): is a subshell open here",
         ["BashShellState.cs|BashRuntime.SubshellPidVariable"] = "the subshell pid mark's own constant",
         ["BashRuntime.cs|SubshellPidVariable"] = "the subshell pid mark's own constant",
         ["JobClock.cs|VariableName"] = "a background job's launch clock's own constant (__psbashJobClock)",

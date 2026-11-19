@@ -20,6 +20,7 @@ public class ShellStateInventoryGuardTests
         ["__BashExpansionFailed"] = "one-command hand-off: set by a failed expansion (bad ${!ref}, arithmetic error), read and cleared before the command runs",
         ["__BashFailGlob"] = "one-loop hand-off: cleared before a for list that globs, set by a failglob error in it, read after the loop",
         ["LASTEXITCODE"] ="PowerShell's own; the status is carried by the command result, not copied",
+        ["__psbashJobSignal"] = "one-job hand-off: set by ShellSignalTraps.Terminate in a job runspace, read once by the job wrapper's finally; EndJob drops it before the runspace is reused",
         ["PsBashVersion"] = "constant, set at module load",
         ["BashVersionInfo"] = "constant, set at module load",
         ["BASH_VERSINFO"] = "constant alias of BashVersionInfo, set at module load (so declare -p sees it)",
