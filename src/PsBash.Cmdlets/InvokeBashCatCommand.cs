@@ -367,8 +367,18 @@ public sealed class InvokeBashCatCommand : PSCmdlet
         {
             if (!_hasFlags)
             {
+                // `cmd < f`: the reader may ask whether its stdin is a regular file (wc's column width, RegularStdin).
+                bool offer = RawStdinBytes && File.Exists(filePath) && !FileSystemHelpers.IsNullDevice(filePath);
                 foreach (var line in BashFileSystem.ReadTextLines(filePath, exact: RawStdinBytes, exactIfBinary: true))
-                    WriteObject(BashRuntime.NewBashObject(line.Text, noTrailingNewline: !line.HasTrailingNewline));
+                {
+                    var record = BashRuntime.NewBashObject(line.Text, noTrailingNewline: !line.HasTrailingNewline);
+                    if (offer)
+                    {
+                        offer = false;
+                        RegularStdin.Offer(record, new FileInfo(filePath).Length);
+                    }
+                    WriteObject(record);
+                }
             }
             else
             {

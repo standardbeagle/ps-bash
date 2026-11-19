@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 70
+stdout-length: 65
+stderr-length: 0
+==== SCRIPT ====
+seq 1 100000 | wc -lc; seq 1 3000000 | wc -c; printf 'a\n' | wc -lwcmL
+==== STDOUT ====
+ 100000  588895
+22888896
+      1       1       2       2       1
+
+==== STDERR ====
+

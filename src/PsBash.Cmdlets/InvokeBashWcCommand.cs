@@ -233,6 +233,7 @@ public sealed class InvokeBashWcCommand : PSCmdlet
         if (InputObject == null) return;
 
         ParseOnce();
+        NoteFirstRecord(InputObject);
         if (StdinIsNameList) { _stdinRecords.Add(InputObject); return; }
         if (_suppressStdin && !StdinIsDashOperand) return;
 
@@ -330,6 +331,7 @@ public sealed class InvokeBashWcCommand : PSCmdlet
         // empty stdin (`echo -n '' | wc -c` prints 0; `printf '' | wc` prints 0 0 0).
         if (_operands.Count == 0 && _plan?.Files0From is null)
         {
+            _fileWidth = StdinCountWidth(Columns, _regularStdinBytes);
             // --total=only prints the single count line without a name; always adds a total line too.
             if (totalMode != TotalMode.Only)
                 WriteObject(BuildResult(_totalLines, _totalWords, _totalBytes, _totalChars, _maxLine, string.Empty));
@@ -362,7 +364,10 @@ public sealed class InvokeBashWcCommand : PSCmdlet
         var operandPaths = (files0
             ? names.Select(n => n == "-" ? new FileSystemHelpers.OperandPath("-", "-") : ResolveVerbatim(n))
             : FileSystemHelpers.ResolveReaderOperands(this, _operands)).ToList();
-        _fileWidth = files0 ? 0 : FileColumnWidth(operandPaths.ConvertAll(o => o.Path));
+        // A --files0-from list read from a pipe is not stat'ed up front (GNU: width 1); a list file's names are.
+        _fileWidth = files0 && _plan!.Files0From == "-" && _regularStdinBytes is null
+            ? 1
+            : FileColumnWidth(operandPaths.ConvertAll(o => o.Path));
         foreach (var operand in operandPaths)
         {
             // Resolved ahead of use: wc names each operand as typed, `wc ./f f` is `./f` then `f`
@@ -381,6 +386,13 @@ public sealed class InvokeBashWcCommand : PSCmdlet
             if (!File.Exists(filePath) && !Directory.Exists(filePath) && !FileSystemHelpers.IsNullDevice(filePath))
             {
                 WriteBashError($"wc: {name}: No such file or directory");
+                continue;
+            }
+            // A directory is read as an empty input that fails: GNU reports it and still prints its zero counts.
+            if (Directory.Exists(filePath))
+            {
+                WriteBashError($"wc: {name}: Is a directory");
+                if (totalMode != TotalMode.Only) WriteObject(BuildResult(0, 0, 0, 0, 0, name));
                 continue;
             }
 
@@ -564,34 +576,79 @@ public sealed class InvokeBashWcCommand : PSCmdlet
         return (lines, words, chars, maxLine);
     }
 
-    private int _fileWidth;   // 0 = stdin layout (legacy 7/8-wide, first column trimmed)
+    private int _fileWidth = 1;
 
-    /// <summary>GNU wc pads every count to the digit width of the files' TOTAL size (1 for one file with one column;
-    /// 7 when an operand is not a regular file, e.g. a directory or the null device).</summary>
+    /// <summary>The number of count columns printed: the selected ones, or the default three (lines, words, bytes).</summary>
+    private static int ColumnCount(bool l, bool w, bool m, bool c, bool maxLine)
+    {
+        int n = (l ? 1 : 0) + (w ? 1 : 0) + (m ? 1 : 0) + (c ? 1 : 0) + (maxLine ? 1 : 0);
+        return n == 0 ? 3 : n;
+    }
+
+    /// <summary>
+    /// GNU wc's count width (coreutils wc.c compute_number_width), the ONE rule for every layout: one input with one
+    /// column is 1 wide (<c>printf 'a\n' | wc -l</c> = <c>1</c>); otherwise every count is right-aligned to the digit
+    /// width of the regular inputs' total size, at least 7 when an input is not a regular file (a pipe, a directory,
+    /// the null device): <c>printf 'a\n' | wc -lc</c> = <c>      1       2</c>, <c>wc -lc &lt; f</c> = <c>1000 3893</c>.
+    /// </summary>
+    internal static int CountWidth(int columns, int inputs, bool anyNotRegular, long regularBytes)
+    {
+        if (inputs == 1 && columns == 1) return 1;
+        int width = 1;
+        for (long t = regularBytes; t >= 10; t /= 10) width++;
+        return anyNotRegular && width < 7 ? 7 : width;
+    }
+
+    /// <summary>The width when the pipeline is wc's only input: a regular file (<c>wc &lt; f</c>, recognised by
+    /// <see cref="RegularStdin"/>) counts its size, anything else (a pipe) is not regular.</summary>
+    internal static int StdinCountWidth(int columns, long? regularStdinBytes)
+        => CountWidth(columns, 1, regularStdinBytes is null, regularStdinBytes ?? 0);
+
+    private int Columns => ColumnCount(_linesOnly, _wordsOnly, _charsOnly, _bytesOnly, _maxLineOnly);
+
+    /// <summary>The width for file operands (<see cref="CountWidth"/>): a missing file is skipped; <c>-</c> is the
+    /// pipeline, regular only when it is a redirected file.</summary>
     private int FileColumnWidth(List<string> paths)
     {
-        int selected = (_linesOnly ? 1 : 0) + (_wordsOnly ? 1 : 0) + (_charsOnly ? 1 : 0) + (_bytesOnly ? 1 : 0) + (_maxLineOnly ? 1 : 0);
-        if (paths.Count == 1 && selected == 1) return 1;
         long total = 0;
+        bool notRegular = false;
         foreach (var path in paths)
         {
-            if (path == "-" || FileSystemHelpers.IsNullDevice(path) || Directory.Exists(path)) return 7;
+            if (path == "-")
+            {
+                if (_regularStdinBytes is { } stdinBytes) total += stdinBytes;
+                else notRegular = true;
+                continue;
+            }
+            if (FileSystemHelpers.IsNullDevice(path) || Directory.Exists(path)) { notRegular = true; continue; }
             if (!File.Exists(path)) continue;
-            try { total += new FileInfo(path).Length; } catch { return 7; }
+            try { total += new FileInfo(path).Length; } catch { notRegular = true; }
         }
-        return Math.Max(1, total.ToString(System.Globalization.CultureInfo.InvariantCulture).Length);
+        return CountWidth(Columns, paths.Count, notRegular, total);
+    }
+
+    // The size of the redirected regular file the pipeline is (`wc < f`); null for a pipe.
+    private long? _regularStdinBytes;
+    private bool _firstRecordSeen;
+
+    private void NoteFirstRecord(object record)
+    {
+        if (_firstRecordSeen) return;
+        _firstRecordSeen = true;
+        if (RegularStdin.TryClaim(record, out long size))
+            _regularStdinBytes = size;
     }
 
     /// <summary>
     /// Format the wc output line (the exact <c>BashText</c> the cmdlet emits),
     /// shared with the fused-pipeline streaming stage so the fused lane's bytes
-    /// are identical to the unfused path by construction. Column selection +
-    /// 7/8-wide padding + leading-whitespace trim, then
-    /// <see cref="BashRuntime.NormalizeBashText"/>.
+    /// are identical to the unfused path by construction. Column selection, every
+    /// count right-aligned to <paramref name="width"/> (<see cref="CountWidth"/>) and
+    /// joined by single spaces, then <see cref="BashRuntime.NormalizeBashText"/>.
     /// </summary>
     internal static string FormatWcText(
         bool linesOnly, bool wordsOnly, bool charsOnly, bool bytesOnly, bool maxLineOnly,
-        int lines, int words, int bytes, int chars, int maxLine, string fileName, int width = 0)
+        int lines, int words, int bytes, int chars, int maxLine, string fileName, int width)
     {
         // GNU prints the SELECTED columns in a fixed order: lines, words, chars,
         // bytes, max-line-length. With no selector, the default is lines/words/bytes.
@@ -604,29 +661,19 @@ public sealed class InvokeBashWcCommand : PSCmdlet
         if (cols.Count == 0) { cols.Add(lines); cols.Add(words); cols.Add(bytes); }
 
         var sb = new StringBuilder();
-        if (width > 0)
-        {
-            // File operands: every count right-aligned to one common width, joined by single spaces, nothing trimmed.
-            for (int k = 0; k < cols.Count; k++)
-                sb.Append(k == 0 ? "" : " ").Append(cols[k].ToString().PadLeft(width));
-            if (fileName.Length > 0) sb.Append(' ').Append(fileName);
-            return BashRuntime.NormalizeBashText(sb.ToString());
-        }
+        // Every count right-aligned to one common width, joined by single spaces, nothing trimmed.
         for (int k = 0; k < cols.Count; k++)
-        {
-            // Width parity with the oracle: first column 7-wide, the rest 8-wide
-            // (so a single column is 7 and the default triple is 7/8/8).
-            sb.Append(cols[k].ToString().PadLeft(k == 0 ? 7 : 8));
-        }
-        if (fileName.Length > 0)
-        {
-            sb.Append(' ').Append(fileName);
-        }
-
-        // psm1 oracle: ($parts -join '') -replace '^\s+', ' ' then TrimStart().
-        // Net effect is a plain TrimStart of leading whitespace.
-        return BashRuntime.NormalizeBashText(sb.ToString().TrimStart());
+            sb.Append(k == 0 ? "" : " ").Append(cols[k].ToString(System.Globalization.CultureInfo.InvariantCulture).PadLeft(width));
+        if (fileName.Length > 0) sb.Append(' ').Append(fileName);
+        return BashRuntime.NormalizeBashText(sb.ToString());
     }
+
+    /// <summary>The fused stage's line: its input is a pipe (<see cref="StdinCountWidth"/>).</summary>
+    internal static string FormatPipeWcText(
+        bool linesOnly, bool wordsOnly, bool charsOnly, bool bytesOnly, bool maxLineOnly,
+        int lines, int words, int bytes, int chars, int maxLine)
+        => FormatWcText(linesOnly, wordsOnly, charsOnly, bytesOnly, maxLineOnly, lines, words, bytes, chars, maxLine,
+            string.Empty, StdinCountWidth(ColumnCount(linesOnly, wordsOnly, charsOnly, bytesOnly, maxLineOnly), null));
 
     /// <summary>Count words (maximal non-whitespace runs) — shared with the fused stage.</summary>
     internal static int CountWordsInLine(string text) => CountWords(text);

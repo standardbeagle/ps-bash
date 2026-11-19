@@ -165,7 +165,8 @@ public class InvokeBashCatHeadTailWcCommandTests : IClassFixture<SharedPwshFixtu
         // "a b\nc\n" -> 2 lines, 3 words, bytes = len("a b")+1 + len("c")+1 = 6.
         var lines = RunBashText("\"a b`nc\" | Invoke-BashWc");
         Assert.Single(lines);
-        Assert.Equal("2       3       6", lines[0]);
+        // GNU pads a pipe to width 7 (compute_number_width): "      2       3       6".
+        Assert.Equal("      2       3       6", lines[0]);
     }
 
     [Fact]

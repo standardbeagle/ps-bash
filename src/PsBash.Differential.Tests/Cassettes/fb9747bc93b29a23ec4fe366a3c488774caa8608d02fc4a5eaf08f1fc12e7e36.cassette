@@ -1,0 +1,17 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 115
+stdout-length: 85
+stderr-length: 0
+==== SCRIPT ====
+cd "$(mktemp -d)" || exit; seq 1 1000 > f; seq 1 5 > g; printf 'f\0g\0' > L; mkdir d; wc -lc g d 2>&1; echo "st=$?"
+==== STDOUT ====
+      5      10 g
+wc: d: Is a directory
+      0       0 d
+      5      10 total
+st=1
+
+==== STDERR ====
+

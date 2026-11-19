@@ -253,8 +253,8 @@ internal sealed class WcStage : ILineStreamStage
         // FormatWcText's parameter order is (lines, words, CHARS, BYTES, maxLine): -m before -c.
         // (This call used to pass _c/_m swapped, so a fused `wc -c` printed the CHAR count — equal
         // to the byte count for ASCII, which is why the ASCII parity corpus never noticed.)
-        yield return InvokeBashWcCommand.FormatWcText(
-            _l, _w, _m, _c, _L, lines, words, bytes, chars, maxLine, string.Empty);
+        yield return InvokeBashWcCommand.FormatPipeWcText(
+            _l, _w, _m, _c, _L, lines, words, bytes, chars, maxLine);
     }
 }
 
