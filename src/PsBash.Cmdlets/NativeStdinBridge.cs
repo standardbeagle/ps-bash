@@ -26,7 +26,7 @@ namespace PsBash.Cmdlets;
 /// next command sees exactly what bash would: the stream minus what the program consumed.
 /// </para>
 /// <para>
-/// The process stdin is process-global; the host runs one command at a time (its exec gate), and nesting is
+/// The process stdin is process-global; the host runs one command at a time (its execution lease), and nesting is
 /// refused (<see cref="Enter"/> returns null while a bridge is active), so only one program owns it. The write
 /// end is never inheritable, or the program would never see EOF.
 /// </para>

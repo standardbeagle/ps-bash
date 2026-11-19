@@ -20,7 +20,7 @@ namespace PsBash.Host.Runtime;
 ///
 /// <para><b>Isolation is not parallel execution.</b> Runspaces are isolated per
 /// connection, but command <i>execution</i> is serialized process-wide by
-/// <see cref="SdkWorker"/>'s static exec gate, because bash variables
+/// the host's one execution lease (HostServer._execLease), because bash variables
 /// (<c>$env:NAME</c>) and the cwd are process-global. Concurrent launchers queue on
 /// that gate. Real concurrency would need invocation-scoped env/cwd or separate
 /// processes (<c>PSBASH_PER_INVOCATION=1</c>).</para>

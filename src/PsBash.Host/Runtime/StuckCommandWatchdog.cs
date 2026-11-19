@@ -41,7 +41,7 @@ internal static class StuckCommandWatchdog
             var first = await Task.WhenAny(run, Task.Delay(grace)).ConfigureAwait(false);
             if (first != run)
                 Terminate($"a cancelled command did not stop within {grace.TotalSeconds:0}s ({label}); " +
-                          "it would hold the exec gate and hang every later command on this host");
+                          "it would hold the execution lease and hang every later command on this host");
         });
     }
 }

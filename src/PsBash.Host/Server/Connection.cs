@@ -274,7 +274,7 @@ internal sealed class Connection
         // Check out an isolated worker for this one command; discard it on the way
         // out so the next -c never sees this command's session state. Distinct
         // connections get distinct (isolated) workers; execution itself is still
-        // serialized process-wide by SdkWorker's exec gate.
+        // serialized by the host's execution lease (HostServer._execLease).
         WorkerPool<SdkWorker>.DiagLog("Connection: acquiring worker");
         SdkWorker? worker = null;
         bool workerFaulted = false;
@@ -317,7 +317,7 @@ internal sealed class Connection
         {
             // The launcher is gone: there is no one to receive a response, and the
             // command has been stopped. Abandon quietly — the point of the cancel is
-            // to release the exec gate promptly for everyone else.
+            // to release the execution lease promptly for everyone else.
             // The finally below cancels the watchdog and releases the worker.
             WorkerPool<SdkWorker>.DiagLog("Connection: client disconnected; command abandoned");
             return;

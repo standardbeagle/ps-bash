@@ -406,7 +406,7 @@ public sealed class HostServerTests : IAsyncLifetime
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
         // 60 s was thin, not generous. Each connection gets an ISOLATED pooled worker that
         // is DISCARDED on release, so this is 16 psm1 imports with in-use concurrency capped
-        // at (CPU count clamped to [2,8]) and execution serialized by SdkWorker's exec gate.
+        // at (CPU count clamped to [2,8]) and execution serialized by the host's execution lease.
         //
         // Measured: 9-11 s standalone, and still only 12 s under six CPU hogs — so raw CPU
         // load is NOT the cause. What is: `dotnet test` on the solution dispatches one vstest

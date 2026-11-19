@@ -24,7 +24,7 @@ internal sealed class LauncherStdinFeed : IDisposable
     /// <summary>
     /// Unread bytes held in memory; the rest of a backlog spills to a temp file (<see cref="ChunkQueue"/>),
     /// so the pump keeps draining the socket and always sees the peer's EOF. A pump parked on a full
-    /// queue could not, and a disconnected launcher then kept the shared execution gate.
+    /// queue could not, and a disconnected launcher then kept the host's execution lease.
     /// </summary>
     internal const long MaxMemoryBytes = 4L * 1024 * 1024;
 

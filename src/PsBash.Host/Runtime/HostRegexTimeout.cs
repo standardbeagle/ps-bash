@@ -6,7 +6,7 @@ namespace PsBash.Host.Runtime;
 /// GNU grep/sed/awk use automata that cannot blow up; .NET's engine backtracks, so a pattern such as
 /// <c>(a+)+$</c> against a long run of <c>a</c> ending in a non-match takes exponential time. In the
 /// host that was worse than slow: a cmdlet stuck inside <c>Regex.Match</c> ignores PowerShell's Stop,
-/// so the command held the process-wide exec gate forever (even after its launcher was killed) and
+/// so the command held the host's execution lease (HostServer._execLease) forever (even after its launcher was killed) and
 /// every other command on the host queued behind it. The runtime reads <c>REGEX_DEFAULT_MATCH_TIMEOUT</c>
 /// once, when the first Regex is constructed, so <see cref="Install"/> must run first thing in Main.
 /// The timeout is per match call — generous enough for a linear match over a very large line.

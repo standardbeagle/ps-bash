@@ -5,7 +5,7 @@ using Xunit;
 namespace PsBash.Host.Tests.Runtime;
 
 /// <summary>
-/// A command that cannot be stopped used to wedge the shared host: it held the process-wide exec gate
+/// A command that cannot be stopped used to wedge the shared host: it held the host's execution lease
 /// after its launcher left, so every later command hung (`grep -E '(a+)+$'` pegged a host for 26 min
 /// while `echo alive` waited behind it). Two layers: a default regex match timeout prevents the common
 /// cause; the stuck-command backstop poisons (exits) a host whose cancelled command never returns.
@@ -39,7 +39,7 @@ public class StuckCommandTests : IDisposable
 
         var reason = await poisoned.Task.WaitAsync(TimeSpan.FromSeconds(10));
         Assert.Contains("did not stop within", reason);
-        Assert.Contains("exec gate", reason);
+        Assert.Contains("execution lease", reason);
     }
 
     [Fact]

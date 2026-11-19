@@ -139,9 +139,10 @@ public sealed class InvokeBashTarCommand : PSCmdlet
 
     /// <summary>
     /// tar's option surface. Implemented: modes <c>-c -x -t</c>; <c>-f FILE</c>, <c>-C DIR</c> (position
-    /// matters on create), <c>-v -z -k -a -O</c>, <c>--exclude=PAT</c>, <c>--strip-components=N</c>; accepted
-    /// no-ops that match the existing behaviour: <c>-m/--touch -p/--preserve-permissions --same-permissions
-    /// --overwrite --wildcards --no-wildcards --no-same-owner --same-owner --no-same-permissions</c>.
+    /// matters on create), <c>-v -z -k -a -O</c>, <c>--exclude=PAT</c>, <c>--strip-components=N</c>, and on extract
+    /// <c>-m/--touch</c> (do not restore the member's modification time) and <c>-p/--preserve-permissions
+    /// --same-permissions</c> (off Windows, its mode bits not masked by the umask; <see cref="RestoreMetadata"/>). Accepted no-ops that match the
+    /// existing behaviour: <c>--overwrite --wildcards --no-wildcards --no-same-owner --same-owner --no-same-permissions</c>.
     /// Usage errors exit 64 (EX_USAGE, GNU tar); semantic errors (no/two modes, empty archive) exit 2.
     /// </summary>
     private static readonly OptSpecSet TarSpec = new(

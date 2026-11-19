@@ -162,7 +162,7 @@ internal sealed class Program
         // command, concurrent across launchers). Sized from the environment
         // (PSBASH_POOL_WARM / PSBASH_POOL_MAX).
         // The shared daemon: a cancelled command that cannot be stopped poisons the host (it would
-        // hold the exec gate forever) — exit so launchers respawn, instead of hanging every session.
+        // hold the execution lease forever) — exit so launchers respawn, instead of hanging every session.
         StuckCommandWatchdog.Enabled = true;
 
         // A durable named session (`ps-bash session start`) is stateful: one pinned runspace for the

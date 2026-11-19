@@ -12,7 +12,7 @@ namespace PsBash.Shell;
 ///   <item>outlives every launcher that attaches to it (no anchor watcher ends it),</item>
 ///   <item>keeps its shell state (cwd, variables) between attachments, and</item>
 ///   <item>runs concurrently with every other session — each is its own host process, so the
-///   per-process exec gate never serializes two sessions against each other.</item>
+///   per-host execution lease never serializes two sessions against each other.</item>
 /// </list>
 /// Attach with <c>PSBASH_SESSION=NAME ps-bash -c '…'</c>. This command only manages lifetime;
 /// it never changes how commands run.
