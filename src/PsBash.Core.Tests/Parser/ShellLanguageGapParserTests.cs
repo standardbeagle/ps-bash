@@ -12,6 +12,49 @@ public class ShellLanguageGapParserTests
 {
     private static string Emit(string bash) => PsEmitter.Transpile(bash) ?? "";
 
+    // --- operators on special parameters ----------------------------------------------------------
+
+    /// <summary>`${!:+pid}` was read as an indirect reference (`${!name}`) and emitted a broken command.</summary>
+    [Theory]
+    [InlineData("${!:+pid}", "!", ":+pid")]
+    [InlineData("${$:-x}", "$", ":-x")]
+    [InlineData("${?:+r}", "?", ":+r")]
+    [InlineData("${-:+dash}", "-", ":+dash")]
+    [InlineData("${#:-z}", "#", ":-z")]
+    [InlineData("${#!}", "!", "#L")]
+    public void Parse_OperatorOnSpecialParameter_IsThatParameter(string word, string name, string suffix)
+    {
+        var cmd = Assert.IsType<Command.Simple>(BashParser.Parse("echo " + word));
+        var sub = Assert.IsType<WordPart.BracedVarSub>(Assert.Single(cmd.Words[1].Parts));
+        Assert.Equal(name, sub.Name);
+        Assert.Equal(suffix, sub.Suffix);
+    }
+
+    /// <summary>`$?` and `$#` are ints in PowerShell; 0 is falsy there, so `${?:-q}` gave q after a success.</summary>
+    [Theory]
+    [InlineData("echo ${?:-q}", "([string]$global:LASTEXITCODE)")]
+    [InlineData("echo ${#:+n}", "([string]")]
+    public void Transpile_ColonOperatorOnNumericSpecial_TestsItAsText(string bash, string fragment)
+        => Assert.Contains(fragment, Emit(bash));
+
+    public static TheoryData<string> ComputedScalars()
+    {
+        var data = new TheoryData<string>();
+        foreach (string name in PsBash.Core.ShellVariables.Computed)
+            if (PsBuild.ShellArrayExpr(name) is null)
+                data.Add(name);
+        return data;
+    }
+
+    /// <summary>
+    /// Guard over the whole computed-scalar table: `${SECONDS:+y}` gave "" in the first second (0 is falsy in
+    /// PowerShell), and `$RANDOM` can be 0. A name added to ShellVariables.Computed is covered without a new case.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(ComputedScalars))]
+    public void Transpile_ColonOperatorOnComputedScalar_TestsItAsText(string name)
+        => Assert.Contains("([string]", Emit($"echo ${{{name}:+y}}"));
+
     // --- positional slices as unquoted words ------------------------------------------------------
 
     [Theory]

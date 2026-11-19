@@ -114,4 +114,16 @@ public class ShellLanguageGapDifferentialTests
         + "set -- \"a b\" c \"d e\"\nfor x in \"${@:2}\"; do echo \"<$x>\"; done\nfor x in \"${*:2}\"; do echo \"{$x}\"; done\n"
         + "printf '(%s)' ${@:1:2}; echo\n"
         + "f() { echo \"${@:2:1}\" \"${#@}\"; for y in \"${@: -2}\"; do echo \"f[$y]\"; done; }; f p \"q r\" s");
+
+    // --- Operators on special parameters (BashParser.IsSpecialParameterWithOperator) -------------------
+
+    [SkippableFact]
+    public Task SpecialParameter_Operators() => Same(
+        "sleep 0 & wait\necho ${!:+pid}\necho ${!:-x} | tr -d 0-9\nn=${#!}; [ \"$n\" -gt 0 ] && echo lenok\n"
+        + "echo ${$:+pp} ${#$} | tr -d 0-9\nfalse; echo ${?:-q} ${?:+r}\ntrue; echo ${?:-q} ${?+s} ${#?}\n"
+        + "echo ${-:+dash}\nset -- 1 2 3; echo ${#:+cnt} ${#:-z}\nset --; echo ${#:-z} ${#:+n}\necho ${0:+zero}");
+
+    [SkippableFact]
+    public Task SpecialParameter_UnsetBangBeforeAnyJob() => Same(
+        "echo \"[${!:-none}] [${!:+x}] [${!-dash}]\"");
 }

@@ -94,7 +94,7 @@ Reserved words are recognized contextually by the parser, not as distinct token 
 | `WordPart.AnsiCQuoted` | `Value: string` | `$'...'` ANSI-C quoting; raw inner text, C-escapes (`\n`, `\t`, `\xHH`, `\nnn`, `\uHHHH`, `\cX`) expanded by the emitter |
 | `WordPart.DoubleQuoted` | `Parts: WordPart[]` | Content inside double quotes (with expansion) |
 | `WordPart.SimpleVarSub` | `Name: string` | `$foo`, `$?`, `$!`, `$#`, `$$`, `$@`, `$*`, `$-`, `$0`-`$9`, `$SECONDS`, `$PPID`, `$BASH_VERSION` |
-| `WordPart.BracedVarSub` | `Name: string`, `Suffix: string?` | `${foo}`, `${foo:-default}`, `${#arr[@]}`, `${!arr[@]}` |
+| `WordPart.BracedVarSub` | `Name: string`, `Suffix: string?` | `${foo}`, `${foo:-default}`, `${#arr[@]}`, `${!arr[@]}`; a special parameter followed by an operator is that parameter (`${!:+pid}`, `${?:-q}`, `${#:-z}`, `${$%1}`: `BashParser.IsSpecialParameterWithOperator`), `${#!}` `${#$}` `${#?}` `${#-}` are its length (`#L`) |
 | `WordPart.CommandSub` | `Body: BashNode` | `$(cmd)` or `` `cmd` `` -- body is recursively parsed |
 | `WordPart.ArithSub` | `Expr: ArithmeticSyntax` | `$(( x + 1 ))` |
 | `WordPart.TildeSub` | `User: string?` | `~` (null user = current) or `~user` |

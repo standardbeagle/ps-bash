@@ -511,8 +511,9 @@ public sealed partial class BashParser
             return pos;
         }
 
-        // ${!arr[@]} or ${!arr[*]} -> array keys operator
-        if (pos < len && raw[pos] == '!')
+        // ${!arr[@]} or ${!arr[*]} -> array keys operator. `${!:+pid}` / `${!-none}` are the `!` PARAMETER (the last job's
+        // pid) with an operator: no name can start with an operator character (IsSpecialParameterWithOperator).
+        if (pos < len && raw[pos] == '!' && !IsSpecialParameterWithOperator(raw, pos))
         {
             pos++; // skip !
             if (pos + 1 < len && raw[pos] == '#' && raw[pos + 1] == '}')
@@ -620,8 +621,15 @@ public sealed partial class BashParser
                 return hashClose + 1;
             }
         }
-        // ${#VAR} or ${#arr[@]} -> length operator
-        if (pos < len && raw[pos] == '#')
+        // ${#!} ${#$} ${#?} ${#-}: the length of a special parameter's value (bash: ${#-} is the length of $-, while
+        // ${#-y} is $# with a default).
+        if (pos + 2 < len && raw[pos] == '#' && raw[pos + 1] is '!' or '$' or '?' or '-' && raw[pos + 2] == '}')
+        {
+            parts.Add(new WordPart.BracedVarSub(raw[pos + 1].ToString(), "#L"));
+            return pos + 3;
+        }
+        // ${#VAR} or ${#arr[@]} -> length operator; ${#:+n} / ${#-y} / ${#%1} are the `#` PARAMETER with an operator.
+        if (pos < len && raw[pos] == '#' && !IsSpecialParameterWithOperator(raw, pos))
         {
             pos++; // skip #
             int nameStart = pos;
@@ -671,8 +679,9 @@ public sealed partial class BashParser
         // (The bare `${@}` / `${*}` forms are handled by the special-parameter branch
         // above; only the with-operator forms reach this point.) Take the sigil as the
         // name so the emitter's positional-slice path can see it.
+        // The other special parameters take operators the same way: ${?:-q} ${$:+pp} ${-:+i} ${!-none} ${#:-0}.
         int varStart = pos;
-        if (pos < len && raw[pos] is '@' or '*')
+        if (pos < len && raw[pos] is '@' or '*' || IsSpecialParameterWithOperator(raw, pos))
             pos++;
         else
             while (pos < len && IsVarChar(raw[pos]))
@@ -878,6 +887,22 @@ public sealed partial class BashParser
 
         parts.Add(new WordPart.BracedVarSub(varName, suffix, argWord));
         return pos;
+    }
+
+    /// <summary>
+    /// <c>raw[pos]</c> is a one-character special parameter (<c>! $ ? - #</c>) followed by an operator, so it is the
+    /// parameter's NAME: <c>${!:+pid}</c>, <c>${?:-q}</c>, <c>${#:+n}</c>, <c>${$%1}</c>. The forms that mean something
+    /// else keep their branches: <c>${!name}</c> / <c>${!#}</c> (indirection), <c>${#name}</c> / <c>${##}</c> (length).
+    /// </summary>
+    private static bool IsSpecialParameterWithOperator(string raw, int pos)
+    {
+        if (pos + 1 >= raw.Length || raw[pos] is not ('!' or '$' or '?' or '-' or '#')) return false;
+        char next = raw[pos + 1];
+        if (next is ':' or '=' or '+' or '%' or '/' or '^' or ',') return true;
+        // `-`/`?` after `!` or `#` is an operator unless it is the whole body (`${#-}` / `${#?}` = a length, above).
+        if (next is '-' or '?') return pos + 2 < raw.Length && raw[pos + 2] != '}' || raw[pos] is not ('#' or '!');
+        // `${$#x}` / `${?#1}` / `${-#h}`: prefix removal on the parameter (`${!#}` and `${##}` are other forms).
+        return next == '#' && raw[pos] is '$' or '?' or '-';
     }
 
     /// <summary>

@@ -1,0 +1,32 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 282
+stdout-length: 44
+stderr-length: 0
+==== SCRIPT ====
+sleep 0 & wait
+echo ${!:+pid}
+echo ${!:-x} | tr -d 0-9
+n=${#!}; [ "$n" -gt 0 ] && echo lenok
+echo ${$:+pp} ${#$} | tr -d 0-9
+false; echo ${?:-q} ${?:+r}
+true; echo ${?:-q} ${?+s} ${#?}
+echo ${-:+dash}
+set -- 1 2 3; echo ${#:+cnt} ${#:-z}
+set --; echo ${#:-z} ${#:+n}
+echo ${0:+zero}
+==== STDOUT ====
+pid
+
+lenok
+pp
+1 r
+0 s 1
+dash
+cnt 3
+0 n
+zero
+
+==== STDERR ====
+

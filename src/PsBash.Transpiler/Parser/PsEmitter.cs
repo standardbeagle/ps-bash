@@ -10565,6 +10565,12 @@ public static partial class PsEmitter
         }
         string varRef = EmitSimpleVar(bvs.Name, strict: bvs.Suffix.StartsWith("/", StringComparison.Ordinal) || bvs.Suffix == "#L" || IsSliceSuffix(bvs.Suffix)
             || bvs.Suffix is ['@', _]); // `${undef@Q}` / `${undef@P}` under set -u are unbound
+        // `$?` `$#` `$$` `$!` and the computed scalars ($SECONDS, $RANDOM, ...) are numbers in PowerShell, and 0 is falsy
+        // there: `${?:-q}` after a success gave q (bash: 0), `${SECONDS:+y}` in the first second gave "". A colon operator
+        // tests the TEXT, as bash does ("0" is non-empty); the plain `-` `+` `=` `?` test set-ness, which the cast would
+        // lose (an unset `$!` is null, `[string]` makes it "": `${!-dash}` printed nothing).
+        if (IsNumericShellValue(bvs.Name) && bvs.Suffix is { } colonSfx && colonSfx.StartsWith(":", StringComparison.Ordinal))
+            varRef = $"([string]{varRef})";
 
         // Name-prefix expansion: ${!prefix*} / ${!prefix@} -> the NAMES of
         // variables starting with `prefix`. ps-bash models bash variables as
