@@ -1,0 +1,39 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 399
+stdout-length: 191
+stderr-length: 120
+==== SCRIPT ====
+__fs_snap() { find . | LC_ALL=C sort | while IFS= read -r p; do if [ -d "$p" ]; then echo "D $p"; else echo "F $p $(base64 -w0 "$p")"; fi; done; }
+d=$(mktemp -d) && cd "$d" && { :
+true
+} >/dev/null 2>&1
+echo '== stdout'
+{ :
+mkdir two/; echo rc=$?; mkdir -v three//; mkdir -pv four/five/; mkdir two/; echo rc=$?; mkdir no/such/; echo rc=$?
+}
+echo "== exit $?"
+echo '== fs'
+__fs_snap
+cd /; rm -rf "$d"
+==== STDOUT ====
+== stdout
+rc=0
+mkdir: created directory 'three//'
+mkdir: created directory 'four'
+mkdir: created directory 'four/five/'
+rc=1
+rc=1
+== exit 0
+== fs
+D .
+D ./four
+D ./four/five
+D ./three
+D ./two
+
+==== STDERR ====
+mkdir: cannot create directory ‘two/’: File exists
+mkdir: cannot create directory ‘no/such/’: No such file or directory
+

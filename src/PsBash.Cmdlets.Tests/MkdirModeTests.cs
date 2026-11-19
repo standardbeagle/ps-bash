@@ -108,7 +108,7 @@ public class MkdirModeTests : IDisposable, IClassFixture<SharedPwshFixture>
     public void Mode_OnAnExistingDirectory_StillReportsFileExists_AndLeavesItAlone()
     {
         Directory.CreateDirectory(P("a"));
-        InTmp("Invoke-BashMkdir -m 700 a").AssertFailed(1, "mkdir: cannot create directory 'a': File exists");
+        InTmp("Invoke-BashMkdir -m 700 a").AssertFailed(1, "mkdir: cannot create directory ‘a’: File exists");
     }
 
     [Fact]

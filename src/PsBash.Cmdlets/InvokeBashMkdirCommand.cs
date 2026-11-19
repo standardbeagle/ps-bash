@@ -139,17 +139,19 @@ public sealed class InvokeBashMkdirCommand : PSCmdlet
                 if (!parents)
                 {
                     FileSystemHelpers.WriteBashError(this,
-                        $"mkdir: cannot create directory '{dir}': File exists");
+                        $"mkdir: cannot create directory {GnuQuote.Locale(dir)}: File exists");
                     hadError = true;
                 }
                 continue;
             }
 
-            var parent = Path.GetDirectoryName(absolute);
+            // The parent of `two/` is `.`, not `two` (FileSystemHelpers.ParentDirectory). REGRESSION: GetDirectoryName of
+            // a trailing-separator path is the path itself, so `mkdir two/` failed "No such file or directory".
+            var parent = FileSystemHelpers.ParentDirectory(absolute);
             if (!string.IsNullOrEmpty(parent) && !Directory.Exists(parent) && !parents)
             {
                 FileSystemHelpers.WriteBashError(this,
-                    $"mkdir: cannot create directory '{dir}': No such file or directory");
+                    $"mkdir: cannot create directory {GnuQuote.Locale(dir)}: No such file or directory");
                 hadError = true;
                 continue;
             }
@@ -179,7 +181,7 @@ public sealed class InvokeBashMkdirCommand : PSCmdlet
             {
                 if (FileSystemHelpers.IsPipelineStop(ex)) throw;
                 FileSystemHelpers.WriteBashError(this,
-                    $"mkdir: cannot create directory '{dir}': {ex.Message}");
+                    $"mkdir: cannot create directory {GnuQuote.Locale(dir)}: {ex.Message}");
                 hadError = true;
                 continue;
             }

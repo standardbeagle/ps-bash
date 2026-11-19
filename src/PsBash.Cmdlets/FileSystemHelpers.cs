@@ -578,6 +578,23 @@ internal static class FileSystemHelpers
     }
 
     /// <summary>
+    /// The directory that holds the entry <paramref name="path"/> names: trailing separators are not a path component
+    /// (<c>two/</c> names <c>two</c>, whose parent is <c>.</c>), so they are dropped first, a root kept as it is.
+    /// <see cref="Path.GetDirectoryName(string)"/> of <c>C:\x\two\</c> is <c>C:\x\two</c> itself. REGRESSION:
+    /// <c>mkdir two/</c> failed "No such file or directory" because that "parent" did not exist yet.
+    /// </summary>
+    public static string? ParentDirectory(string path)
+    {
+        string trimmed = Path.TrimEndingDirectorySeparator(path);
+        while (trimmed.Length < path.Length && trimmed.Length > 0)
+        {
+            path = trimmed;
+            trimmed = Path.TrimEndingDirectorySeparator(path);
+        }
+        return Path.GetDirectoryName(path);
+    }
+
+    /// <summary>
     /// The text of <see cref="WriteMissingOperand"/> for a pure plan that carries its error as a string: the
     /// first line (the operand after which one is missing quoted as gnulib <c>quote()</c>,
     /// <c>chmod: missing operand after ‘755’</c>), then the usage hint.

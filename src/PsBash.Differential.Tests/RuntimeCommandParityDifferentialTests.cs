@@ -130,4 +130,12 @@ public class RuntimeCommandParityDifferentialTests
     public Task Install_Verbose_NamesOperandsAsTyped()
         => FsStateOracle.EqualAsync("echo s > s; mkdir -p ip",
             "install -v s s2; install -v -d id1/id2 id3; install -v -D s dd/ee/ff; install -v s id3; install -v -t ip s");
+
+    // mkdir — class: the parent of a trailing-slash operand was the operand itself. Primitive:
+    // FileSystemHelpers.ParentDirectory.
+    [SkippableFact]
+    public Task Mkdir_TrailingSlash_CreatesTheDirectory()
+        => FsStateOracle.EqualAsync("true",
+            "mkdir two/; echo rc=$?; mkdir -v three//; mkdir -pv four/five/; mkdir two/; echo rc=$?; mkdir no/such/; echo rc=$?",
+            compareStderr: true);
 }
