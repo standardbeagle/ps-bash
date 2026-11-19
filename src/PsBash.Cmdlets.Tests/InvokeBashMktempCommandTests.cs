@@ -88,8 +88,10 @@ public class InvokeBashMktempCommandTests : IDisposable, IClassFixture<SharedPws
         var path = lines[0];
         Assert.True(File.Exists(path), $"expected file to exist: {path}");
         Assert.Equal(0, new FileInfo(path).Length);
-        // Path lives under {Temp}/ps-bash/proc-sub/...
-        Assert.StartsWith(ExpectedRoot, path,
+        // Path lives under an exported $TMPDIR (GNU; macOS always sets it), else {Temp}/ps-bash/proc-sub/...
+        string? tmpdir = Environment.GetEnvironmentVariable("TMPDIR");
+        string root = string.IsNullOrEmpty(tmpdir) ? ExpectedRoot : Path.TrimEndingDirectorySeparator(tmpdir);
+        Assert.StartsWith(root, path,
             // case-insensitive on Windows
             OperatingSystem.IsWindows()
                 ? StringComparison.OrdinalIgnoreCase

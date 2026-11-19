@@ -38,6 +38,25 @@ public class InvokeBashIdCommandTests : IClassFixture<SharedPwshFixture>
 
     private static bool IsWindows() => RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
 
+    /// <summary>
+    /// A usage or lookup failure is what the HOST's id says off Windows: there the cmdlet runs the system id, as bash
+    /// on that host would, and the wording is the implementation's (GNU `‘x’: no such user`, uutils `'x'`, BSD
+    /// `x: no such user`). On Windows the cmdlet is the implementation and GNU's text is the oracle.
+    /// </summary>
+    private void AssertFailsLikeId(string psArgs, string[] hostArgs, string gnuStderr)
+    {
+        var r = CmdResult.Run(_fixture.AcquireFresh(), "Invoke-BashId " + psArgs);
+        if (IsWindows())
+        {
+            r.AssertFailed(1, gnuStderr);
+            return;
+        }
+        var host = PsBash.Testing.ProcessSpawn.RunAsync("id", hostArgs, TimeSpan.FromSeconds(30)).GetAwaiter().GetResult();
+        Assert.NotEqual(0, host.ExitCode);
+        string firstLine = host.Stderr.Split('\n')[0].TrimEnd('\r');
+        r.AssertFailed(host.ExitCode, firstLine);
+    }
+
     [Fact]
     public void Id_NoFlags_EmitsUidGidGroupsLine()
     {
@@ -83,13 +102,11 @@ public class InvokeBashIdCommandTests : IClassFixture<SharedPwshFixture>
     [InlineData("-r")]
     [InlineData("-nr")]
     public void Id_NameOrRealAlone_IsAUsageError(string flag)
-        => CmdResult.Run(_fixture.AcquireFresh(), $"Invoke-BashId '{flag}'")
-            .AssertFailed(1, "id: cannot print only names or real IDs in default format");
+        => AssertFailsLikeId($"'{flag}'", [flag], "id: cannot print only names or real IDs in default format");
 
     [Fact]
     public void Id_TwoChoices_IsAUsageError()
-        => CmdResult.Run(_fixture.AcquireFresh(), "Invoke-BashId '-ug'")
-            .AssertFailed(1, "id: cannot print \"only\" of more than one choice");
+        => AssertFailsLikeId("'-ug'", ["-ug"], "id: cannot print \"only\" of more than one choice");
 
     [Fact]
     public void Id_FlagUN_ReturnsUsernameOnWindows()
@@ -159,9 +176,10 @@ public class InvokeBashIdCommandTests : IClassFixture<SharedPwshFixture>
     [InlineData("-u ")]
     public void Id_UnknownUser_NoSuchUserExit1(string flags)
     {
-        var r = CmdResult.Run(_fixture.AcquireFresh(), $"Invoke-BashId {flags}psb-nosuchuser-7q");
-        r.AssertFailed(1, "id: ‘psb-nosuchuser-7q’: no such user");
-        Assert.Empty(r.Lines);
+        AssertFailsLikeId(flags + "psb-nosuchuser-7q",
+            [.. flags.Split(' ', StringSplitOptions.RemoveEmptyEntries), "psb-nosuchuser-7q"],
+            "id: ‘psb-nosuchuser-7q’: no such user");
+        Assert.Empty(CmdResult.Run(_fixture.AcquireFresh(), $"Invoke-BashId {flags}psb-nosuchuser-7q").Lines);
     }
 
     [Fact]

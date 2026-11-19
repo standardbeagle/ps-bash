@@ -114,20 +114,20 @@ public class JobClockSleepTests : IClassFixture<SharedPwshFixture>
         var pwsh = _fixture.AcquireFresh();
         // The command compiled once, so the measured run is the sleep and an invocation of a few ms.
         CmdResult.Run(pwsh, "Invoke-BashSleep 0").AssertSuccess();
-        // Launched 1 s ago, body beginning now: `sleep 2` sleeps 1 s and ends 2 s after the launch, not 3.
-        // Seconds, not 100 ms: a loaded macOS runner overslept 100 ms by 131, too close to the 200 a bug would take.
-        var launched = Stopwatch.GetTimestamp() - 1000 * Stopwatch.Frequency / 1000;
+        // Launched 3 s ago, body beginning now: `sleep 4` sleeps 1 s and ends 4 s after the launch, not 7.
+        // A wide gap between right (1 s) and the bug (4 s): loaded macOS runners overslept 100 ms by 131 and 1 s by 822.
+        var launched = Stopwatch.GetTimestamp() - 3000 * Stopwatch.Frequency / 1000;
         var clock = new JobClock(launched);
         clock.Begin();
         pwsh.Runspace.SessionStateProxy.SetVariable(JobClock.VariableName, clock);
         try
         {
             var run = Stopwatch.StartNew();
-            CmdResult.Run(pwsh, "Invoke-BashSleep 2").AssertSuccess();
+            CmdResult.Run(pwsh, "Invoke-BashSleep 4").AssertSuccess();
             var sinceLaunchMs = (Stopwatch.GetTimestamp() - launched) * 1000 / Stopwatch.Frequency;
             Assert.Equal(0, clock.DebtMs);
-            Assert.True(run.ElapsedMilliseconds is >= 1000 and < 1700, $"the sleep took {run.ElapsedMilliseconds} ms; owed 1000 of 2000");
-            Assert.InRange(sinceLaunchMs, 2000, 2700);
+            Assert.True(run.ElapsedMilliseconds is >= 1000 and < 3000, $"the sleep took {run.ElapsedMilliseconds} ms; owed 1000 of 4000");
+            Assert.InRange(sinceLaunchMs, 4000, 6000);
         }
         finally
         {
