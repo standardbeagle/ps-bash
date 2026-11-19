@@ -22,15 +22,13 @@ public class BuiltinNamesNeverReachPowerShellTests
     };
 
     /// <summary>
-    /// Builtins that are emitted as their bare name today, and why that is safe: the runtime's own alias, or a builtin
-    /// ps-bash does not have (bash-feature-coverage.md "Missing builtins": it is "command not found", 127).
-    /// Implementing one of the missing builtins removes it from here.
+    /// Builtins that are emitted as their bare name today, and why that is safe: the runtime's own alias. A builtin
+    /// ps-bash does not have would be listed here as "command not found", 127 (bind, caller, disown, enable, logout and
+    /// suspend were, until they became Invoke-Bash* commands).
     /// </summary>
     private static readonly Dictionary<string, string> BareByDesign = new(StringComparer.Ordinal)
     {
         ["alias"] = "the runtime's alias for Invoke-BashAlias (kept by PowerShellAliases.IsBashRuntimeAlias)",
-        ["bind"] = "missing builtin", ["caller"] = "missing builtin", ["disown"] = "missing builtin",
-        ["enable"] = "missing builtin", ["logout"] = "missing builtin", ["suspend"] = "missing builtin",
     };
 
     private static bool EmittedBare(string name)
