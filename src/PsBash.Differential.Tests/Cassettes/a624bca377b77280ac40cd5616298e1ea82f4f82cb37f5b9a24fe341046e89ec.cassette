@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 104
+stdout-length: 15
+stderr-length: 0
+==== SCRIPT ====
+case 08 in 8) echo bad;; 08) echo good08;; esac; case 1e5 in 100000) echo bad;; 1e5) echo good1e5;; esac
+==== STDOUT ====
+good08
+good1e5
+
+==== STDERR ====
+

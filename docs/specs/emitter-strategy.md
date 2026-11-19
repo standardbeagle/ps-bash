@@ -990,6 +990,20 @@ operand: the callers test `IsGlobWord` / `IsBraceGlobWord` first and emit the pa
 `EmitGlobPatternExpr` instead (§4 "Pathname expansion"); `EmitWord` still renders such a word bare for the
 positions that do not expand (assignment values, `case`, `[[ ]]`, redirect targets).
 
+### Number-shaped words
+
+A bash word is text. PowerShell's tokenizer reads a whole unquoted `1e5`, `33441e77`, `0x10`, `0b101`, `1kb`,
+`10d`, `7u`, `08`, `.5`, `1.` as a NUMBER: a function's `$args`, an `[object]` parameter, an `@(…)` item or a
+`foreach` item gets the converted value (`for f in 33441e77` printed `3.3441E+81`, `f 1e5` gave the function
+100000, `{-0,1}` became the range `@(0..1)`). **Invariant: whether emitted text may stay bare is decided ONLY by
+`PsNumberLiteral` (`Parser/PsNumberLiteral.cs`), through `PsBuild.QuoteArgumentNumber` (an argument: a word
+PowerShell would read as a number is single-quoted, except a canonical integer) and `PsBuild.IsBareIntegerValue`
+(a list item: only a canonical integer, `0` or `-?[1-9][0-9]{0,17}`, which keeps its text in argument AND
+expression mode; `08`, `-0`, `+5` are quoted).** `EmitWord` applies the first to every word. Never a
+`double.TryParse` / `long.TryParse` on emitted text. Guard `PsNumberLiteralGuardTests` (the predicate against
+PowerShell's own tokenizer over a fuzzed corpus, and a source scan of `PsEmitter.cs`); emitter tests
+`NumberShapedWordEmitterTests`; oracle `NumberShapedWordDifferentialTests` (every word-emitting construct).
+
 ### Quote marks (bash text PowerShell reads as syntax)
 
 PowerShell's tokenizer ends a string at the Unicode quote marks as well as at the ASCII ones: U+2018-U+201B

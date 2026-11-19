@@ -1972,8 +1972,8 @@ public static partial class PsEmitter
         // Bare command-mode text with an expansion (`a$(...)`, `x$env:y`): single-quoted, the code was the value.
         if (item.IndexOf('$') >= 0 && item.IndexOfAny(['\'', '"']) < 0)
             return "\"" + item + "\"";
-        if (double.TryParse(item, System.Globalization.NumberStyles.Any,
-            System.Globalization.CultureInfo.InvariantCulture, out _))
+        // Only a canonical integer keeps its text bare in expression mode (`08`, `+5`, `1e5` are other numbers).
+        if (PsBuild.IsBareIntegerValue(item))
             return item;
         return PsBuild.SingleQuote(item);
     }
@@ -4015,9 +4015,8 @@ public static partial class PsEmitter
         char c = emitted[0];
         // $var / "already" / 'already' / (subexpr) / @(array) are valid PS values.
         if (c is '$' or '"' or '\'' or '(' or '@') return emitted;
-        // A pure integer stays bare so numeric -eq/-ne/-lt/-gt compare as numbers.
-        if (long.TryParse(emitted, System.Globalization.NumberStyles.AllowLeadingSign,
-                System.Globalization.CultureInfo.InvariantCulture, out _))
+        // A canonical integer stays bare so numeric -eq/-ne/-lt/-gt compare as numbers; `08`/`+5` bare would be 8/5.
+        if (PsBuild.IsBareIntegerValue(emitted))
             return emitted;
         return PsBuild.SingleQuote(emitted);
     }
@@ -7732,7 +7731,12 @@ public static partial class PsEmitter
         return true;
     }
 
+    /// <summary>A word as a command argument. Number-shaped literal text (`1e5`, `0x10`, `08`) is single-quoted:
+    /// bare, PowerShell reads it as a number (PsBuild.QuoteArgumentNumber).</summary>
     private static string EmitWord(CompoundWord word)
+        => PsBuild.QuoteArgumentNumber(EmitWordText(word));
+
+    private static string EmitWordText(CompoundWord word)
     {
         // `/tmp/…` words are rewritten from their PARTS (see TryEmitTmpRootedWord), before any
         // emitted text exists to splice into.
@@ -8429,11 +8433,9 @@ public static partial class PsEmitter
     private static string FormatBraceArray(List<string> items)
     {
         // Check if all items are integers — use PS range operator if sequential.
-        // IsPlainInteger accepts arbitrary-length digit runs (`{10000000000,2}`),
-        // so parse with long/TryParse: an out-of-range item just disables the
-        // range optimization (falls through to the literal array) instead of
-        // throwing OverflowException.
-        if (items.Count >= 2 && items.All(IsPlainInteger)
+        // Only a canonical integer (PsBuild.IsBareIntegerValue: no leading zero, no sign but `-`, at most 18
+        // digits) may stay bare; `08`, `-0`, `1e5` are quoted items. long.TryParse cannot fail on one.
+        if (items.Count >= 2 && items.All(PsBuild.IsBareIntegerValue)
             && long.TryParse(items[0], out long first)
             && long.TryParse(items[^1], out long last))
         {
@@ -8455,28 +8457,12 @@ public static partial class PsEmitter
         var formatted = new List<string>();
         foreach (string item in items)
         {
-            if (IsPlainInteger(item))
+            if (PsBuild.IsBareIntegerValue(item))
                 formatted.Add(item);
             else
                 formatted.Add(PsBuild.SingleQuote(item));
         }
         return $"@({string.Join(',', formatted)})";
-    }
-
-    private static bool IsPlainInteger(string s)
-    {
-        if (s.Length == 0) return false;
-        int start = s[0] == '-' ? 1 : 0;
-        if (start >= s.Length) return false;
-        // Leading zeros mean it's a zero-padded string, not a plain integer.
-        if (s.Length - start > 1 && s[start] == '0')
-            return false;
-        for (int i = start; i < s.Length; i++)
-        {
-            if (s[i] is not (>= '0' and <= '9'))
-                return false;
-        }
-        return true;
     }
 
     // internal, not private: FusedLane's stage-list builder must apply the SAME

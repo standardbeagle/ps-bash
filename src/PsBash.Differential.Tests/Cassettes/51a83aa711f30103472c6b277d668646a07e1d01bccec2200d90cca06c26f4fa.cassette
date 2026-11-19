@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 161
+stdout-length: 177
+stderr-length: 0
+==== SCRIPT ====
+printf '[%s]' 33441e77 1e5 0x10 1kb 10d 5l 7u 3ul 2y 1s 1n +5 -5 1. .5 1_000 0b101 1e5x 0x 1.2.3 08 1kbx 1mb 1gb 1pb 1E5 0X1F 1.5e3 -0 00 0b 1e+5 1.5n 0x1d; echo
+==== STDOUT ====
+[33441e77][1e5][0x10][1kb][10d][5l][7u][3ul][2y][1s][1n][+5][-5][1.][.5][1_000][0b101][1e5x][0x][1.2.3][08][1kbx][1mb][1gb][1pb][1E5][0X1F][1.5e3][-0][00][0b][1e+5][1.5n][0x1d]
+
+==== STDERR ====
+

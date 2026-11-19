@@ -130,6 +130,25 @@ public static class PsBuild
         }
         return sb.ToString();
     }
+    /// <summary>
+    /// <paramref name="emitted"/> (a whole unquoted PowerShell COMMAND ARGUMENT) single-quoted when PowerShell would read
+    /// it as a numeric literal that prints differently (<c>1e5</c> → 100000, <c>0x10</c> → 16, <c>08</c> → 8,
+    /// <c>1kb</c> → 1024); otherwise unchanged. A canonical integer (<c>5</c>, <c>-3</c>) stays bare. The rule is
+    /// <see cref="PsNumberLiteral"/>; spec emitter-strategy.md §Number-shaped words.
+    /// </summary>
+    public static string QuoteArgumentNumber(string emitted)
+        => PsNumberLiteral.IsArgumentNumber(emitted) && !PsNumberLiteral.IsCanonicalInteger(emitted)
+            ? SingleQuote(emitted)
+            : emitted;
+
+    /// <summary>
+    /// True when bash literal <paramref name="text"/> may stand BARE as a PowerShell EXPRESSION value (an array element,
+    /// a for-list item, a test operand) and still mean the same text: only a canonical integer
+    /// (<see cref="PsNumberLiteral.IsCanonicalInteger"/>). Every other literal there is single-quoted: <c>+5</c>,
+    /// <c>08</c>, <c>1.</c>, <c>1e5</c> are numbers in expression mode and <c>1.2.3</c> is a number and a member access.
+    /// </summary>
+    public static bool IsBareIntegerValue(string text) => PsNumberLiteral.IsCanonicalInteger(text);
+
     /// <summary>True for a character that opens or closes a PowerShell single-quoted string.</summary>
     public static bool IsSingleQuoteMark(char c) => SingleQuoteMarks.Contains(c);
 

@@ -1,0 +1,16 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 102
+stdout-length: 20
+stderr-length: 0
+==== SCRIPT ====
+[ 08 -eq 8 ] && echo eq08; test 010 -eq 10 && echo eq010; seq 1e1 | tail -1; seq 3 | tr '\n' ' '; echo
+==== STDOUT ====
+eq08
+eq010
+10
+1 2 3
+
+==== STDERR ====
+

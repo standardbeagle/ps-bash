@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 94
+stdout-length: 41
+stderr-length: 0
+==== SCRIPT ====
+echo {1e5,08,-0,+5} {-0,1} x{1e5,2} {1,2,3}; for i in {08..10}; do printf '%s ' $i; done; echo
+==== STDOUT ====
+1e5 08 -0 +5 -0 1 x1e5 x2 1 2 3
+08 09 10
+
+==== STDERR ====
+

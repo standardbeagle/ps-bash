@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 56
+stdout-length: 37
+stderr-length: 0
+==== SCRIPT ====
+echo 1e5 0x10 08 -1e5 -08 -.5 -0; printf '%s\n' 0x10 1e5
+==== STDOUT ====
+1e5 0x10 08 -1e5 -08 -.5 -0
+0x10
+1e5
+
+==== STDERR ====
+

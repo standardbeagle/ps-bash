@@ -1,0 +1,19 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 106
+stdout-length: 28
+stderr-length: 0
+==== SCRIPT ====
+cat <<E
+1e5 0x10 08
+E
+cat <<< 1e5; r=$(echo 0x10); echo "$r"; IFS=, read -r p q <<< "1e5,08"; echo "$p $q"
+==== STDOUT ====
+1e5 0x10 08
+1e5
+0x10
+1e5 08
+
+==== STDERR ====
+

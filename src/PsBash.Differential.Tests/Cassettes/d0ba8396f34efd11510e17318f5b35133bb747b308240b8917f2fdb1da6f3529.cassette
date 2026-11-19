@@ -1,0 +1,15 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 122
+stdout-length: 21
+stderr-length: 0
+==== SCRIPT ====
+[ 08 = 8 ] && echo bad || echo good08; [ 1e5 = 100000 ] && echo bad || echo good1e5; test -0 = 0 && echo bad || echo good0
+==== STDOUT ====
+good08
+good1e5
+good0
+
+==== STDERR ====
+

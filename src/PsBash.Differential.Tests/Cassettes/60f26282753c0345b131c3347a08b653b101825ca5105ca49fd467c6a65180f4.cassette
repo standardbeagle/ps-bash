@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 98
+stdout-length: 27
+stderr-length: 0
+==== SCRIPT ====
+f() { printf '[%s]' "$@"; echo; }; f 1\e5 1"e5" 1'e5' 0\x10; g() { return 0; }; g 1e5 && echo ok-g
+==== STDOUT ====
+[1e5][1e5][1e5][0x10]
+ok-g
+
+==== STDERR ====
+

@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: wsl
+exit-code: 0
+script-length: 84
+stdout-length: 14
+stderr-length: 0
+==== SCRIPT ====
+declare -a d=(1e5 08); printf '[%s]' "${d[@]}"; echo; k=(); k[0]=1e5; echo "${k[0]}"
+==== STDOUT ====
+[1e5][08]
+1e5
+
+==== STDERR ====
+
