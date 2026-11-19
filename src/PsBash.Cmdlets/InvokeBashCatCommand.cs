@@ -210,10 +210,9 @@ public sealed class InvokeBashCatCommand : BashCmdlet
         };
     }
 
-    /// <summary>Arguments with the decoy-bound flags re-injected (bare -A binds -Arguments, -v binds
-    /// -Verbose, -E binds the E switch): a bound decoy would otherwise never reach the parser.</summary>
-    private string[] ArgsWithDecoys()
-        => BashRuntime.PrependDecoys(Arguments, (A.IsPresent, "-A"), (V.IsPresent, "-v"), (E.IsPresent, "-E"));
+    /// <summary>Arguments with the decoy-bound flags put back as typed (bare -A binds -Arguments, -v binds -Verbose, -E
+    /// binds the E switch, and each decoy takes both cases: -e is not -E): <see cref="BashRuntime.TypedArguments"/>.</summary>
+    private string[] ArgsWithDecoys() => BashRuntime.TypedArguments(this, Arguments);
 
     private CatArgs? _plan;
     // Parsed-once flag / operand state.

@@ -171,7 +171,9 @@ public sealed class InvokeBashXargsCommand : BashCmdlet
     protected override void EndProcessing()
     {
         if (_lines.Flush() is { } last) { InputObject = last; ProcessInputRecord(); }
-        var args = Arguments ?? Array.Empty<string>();
+        // Direct-call decoys go back where and as they were typed (BashRuntime.TypedArguments): the string decoy I took
+        // a direct `-i echo` as `-I echo` (bare -i never takes a separate argument).
+        var args = BashRuntime.TypedArguments(this, Arguments);
 
         FileSystemHelpers.SetLastExitCode(this, 0);
         if (FileSystemHelpers.TryHandleVersion(this, "xargs", args)) return;
@@ -185,14 +187,14 @@ public sealed class InvokeBashXargsCommand : BashCmdlet
             return;
         }
 
-        string? replaceStr = I;  // -I VALUE (declared param) or -IREPLACE joined
+        string? replaceStr = null;  // -I VALUE / -IREPLACE / -i[REPLACE] (a direct call's decoy is back in args)
         int maxArgs = 0;
         int maxLines = 0;
         bool nullDelim = false;
         bool noRunIfEmpty = false;
         bool traceCmd = false;
         bool interactive = false;
-        string? customDelim = D;  // -d DELIM (also set by -dDELIM / --delimiter=)
+        string? customDelim = null;  // -d DELIM (also set by -dDELIM / --delimiter=)
         // P is accepted via parameter binding but otherwise unused.
         _ = P;
 

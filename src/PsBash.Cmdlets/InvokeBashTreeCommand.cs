@@ -174,14 +174,8 @@ public sealed class InvokeBashTreeCommand : BashCmdlet
     {
         // Decoy-bound flags (bare -d/-a/-C/-p/-I never reach Arguments) are re-injected; the
         // transpiler single-quotes every flag so only DIRECT calls bind them.
-        var raw = Arguments ?? Array.Empty<string>();
-        var pre = new List<string>();
-        if (D.IsPresent) pre.Add("-d");
-        if (A.IsPresent) pre.Add("-a");
-        if (C.IsPresent) pre.Add("-C");
-        if (P.IsPresent) pre.Add("-p");
-        if (I is not null) { pre.Add("-I"); pre.Add(I); }
-        var args = pre.Count == 0 ? raw : pre.Concat(raw).ToArray();
+        // As typed: -D is not -d, -A not -a, -c not -C (BashRuntime.TypedArguments).
+        var args = BashRuntime.TypedArguments(this, Arguments);
 
         FileSystemHelpers.SetLastExitCode(this, 0);
         var plan = Plan(args);

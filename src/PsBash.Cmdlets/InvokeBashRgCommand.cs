@@ -451,17 +451,8 @@ public sealed class InvokeBashRgCommand : BashCmdlet
         // common parameter) instead of reaching Arguments; re-inject them as the ordinary tokens they
         // stand for. Transpiled bash never gets here: the emitter single-quotes every flag
         // (OrderedArgCommands), so the whole argv arrives verbatim and in order.
-        var args = BashRuntime.PrependDecoys(Arguments,
-            (I.IsPresent, "-i"), (V.IsPresent, "-v"), (C.IsPresent, "-c"), (W.IsPresent, "-w"), (O.IsPresent, "-o"));
-        if (A is not null || B is not null || E is { Length: > 0 })
-        {
-            var extra = new List<string>();
-            if (A is { } av) { extra.Add("-A"); extra.Add(av.ToString()); }
-            if (B is { } bv) { extra.Add("-B"); extra.Add(bv.ToString()); }
-            if (E != null) foreach (var pat in E) { extra.Add("-e"); extra.Add(pat); }
-            extra.AddRange(args);
-            args = extra.ToArray();
-        }
+        // Each decoy takes both cases (-C N is not -c, -E ENC not -e): BashRuntime.TypedArguments.
+        var args = BashRuntime.TypedArguments(this, Arguments);
 
         // Native passthrough is opt-in (PSBASH_RG_NATIVE) and only applies with no pipeline input. The
         // binary gets the argv VERBATIM, before any validation here: it understands every ripgrep flag.

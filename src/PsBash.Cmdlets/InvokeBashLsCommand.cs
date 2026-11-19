@@ -318,9 +318,8 @@ public sealed class InvokeBashLsCommand : BashCmdlet
         // A decoy-bound flag (direct PowerShell call: `Invoke-BashLs -a`, `-d`, `-p`, `-i`) is
         // re-injected ahead of everything; the transpiler single-quotes every dash word for ls
         // (PsEmitter.OrderedArgCommands) so they arrive in Arguments, in order.
-        var args = BashRuntime.PrependDecoys(Arguments, (A.IsPresent, "-a"), (D.IsPresent, "-d"),
-            (P.IsPresent, "-p"), (I.IsPresent, "-i"), (O.IsPresent, "-o"));
-        if (W is not null) args = new[] { "-w", W }.Concat(args).ToArray();
+        // Each decoy takes both cases (-A is not -a, -I PATTERN not -i): BashRuntime.TypedArguments.
+        var args = BashRuntime.TypedArguments(this, Arguments);
 
         FileSystemHelpers.SetLastExitCode(this, 0);
         if (FileSystemHelpers.TryHandleVersion(this, "ls", args)) return;

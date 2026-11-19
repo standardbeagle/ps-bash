@@ -319,42 +319,16 @@ public sealed class InvokeBashTarCommand : BashCmdlet
     public string? F { get; set; }
 
     /// <summary>
-    /// Re-injects decoy-bound flags before the scan. <c>-v</c> and <c>-f FILE</c> are position-free. The
-    /// <c>C</c> switch is either <c>-c</c> or <c>-C DIR</c> (the binder cannot tell): with no mode on the line
-    /// it is <c>-c</c>; with a mode already given it is <c>-C</c> and its DIR is the first operand
-    /// (`Invoke-BashTar -xf a.tar -C out` leaves <c>out</c> as the first operand).
+    /// Re-injects decoy-bound flags before the scan, where and as they were typed (<see cref="BashRuntime.TypedArguments"/>):
+    /// the <c>C</c> switch is <c>-c</c> or <c>-C</c> (then its DIR is the next word, `Invoke-BashTar -xf a.tar -C out`),
+    /// <c>V</c> is <c>-v</c> or <c>-V</c>, <c>F</c> is <c>-f FILE</c> or <c>-F</c>.
     /// </summary>
     private string[] ArgsWithDecoys()
     {
         // A bound decoy means the original first argument was a dashed option the binder consumed, so what is
         // left in Arguments is NOT an old-style word (`Invoke-BashTar -c -f a.tar src` leaves `src` first).
-        var raw = Arguments ?? Array.Empty<string>();
-        if (!V.IsPresent && F is null && !C.IsPresent) raw = NormalizeOldStyle(raw);
-        var pre = new List<string>();
-        if (V.IsPresent) pre.Add("-v");
-        if (F is not null) { pre.Add("-f"); pre.Add(F); }
-        var rest = raw;
-        if (C.IsPresent)
-        {
-            var probe = ArgParser.Parse(raw, TarSpec);
-            bool hasMode = probe.Has(OptCreate) || probe.Has(OptExtract) || probe.Has(OptList);
-            int operandIndex = -1;
-            foreach (var t in probe.Tokens)
-            {
-                if (t.Kind == ArgTokKind.Operand) { operandIndex = t.ArgIndex; break; }
-            }
-            if (hasMode && operandIndex >= 0)
-            {
-                pre.Add("-C");
-                pre.Add(raw[operandIndex]);
-                rest = raw.Where((_, i) => i != operandIndex).ToArray();
-            }
-            else
-            {
-                pre.Add("-c");
-            }
-        }
-        return pre.Count == 0 ? rest : pre.Concat(rest).ToArray();
+        if (!V.IsPresent && F is null && !C.IsPresent) return NormalizeOldStyle(Arguments ?? Array.Empty<string>());
+        return BashRuntime.TypedArguments(this, Arguments);
     }
 
     /// <summary>The archive's bytes when it is stdin (<c>-f -</c>, or no <c>-f</c> at all): the pipeline records, read in <see cref="EndProcessing"/>.</summary>

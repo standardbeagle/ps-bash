@@ -115,8 +115,9 @@ public sealed class InvokeBashDiffCommand : BashCmdlet
 
     protected override void EndProcessing()
     {
-        // Re-inject decoy-bound flags (the transpiler single-quotes every dash word, so they only bind on a direct call).
-        var args = BashRuntime.PrependDecoys(Arguments, (I.IsPresent, "-i"), (W.IsPresent, "-w"), (C.IsPresent, "-c"));
+        // Re-inject decoy-bound flags as typed (the transpiler single-quotes every dash word, so they only bind on a
+        // direct call; -I is not -i, -C N not -c).
+        var args = BashRuntime.TypedArguments(this, Arguments);
 
         FileSystemHelpers.SetLastExitCode(this, 0);
         if (FileSystemHelpers.TryHandleVersion(this, "diff", args)) return;

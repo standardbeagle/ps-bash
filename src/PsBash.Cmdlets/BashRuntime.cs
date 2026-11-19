@@ -362,6 +362,117 @@ public static class BashRuntime
     }
 
     /// <summary>
+    /// The bash argv a DIRECT call typed (<c>Invoke-BashPing -w 3 host</c>, <c>Invoke-BashGit log -p</c>), with every
+    /// single-letter decoy parameter put back as the flag it was typed as, where it was typed.
+    /// <para>
+    /// A bare <c>-w</c> / <c>-p</c> / <c>-c</c> collides with a PowerShell common parameter, so a cmdlet declares a
+    /// one-letter decoy that the binder fills instead. The binder is case-insensitive (one decoy takes <c>-w</c> and
+    /// <c>-W</c>) and keeps no position (<c>git -C dir log</c>: <c>-C</c> belongs before <c>dir</c>). Both are read back
+    /// from the command's own syntax tree: <see cref="InvocationInfo.Line"/> parsed, the command at
+    /// <see cref="InvocationInfo.OffsetInLine"/>, its elements in order. A decoy element becomes <c>-</c> + its name as
+    /// typed (and the value a string decoy took); any other element takes the next of <paramref name="arguments"/>.
+    /// When the tree cannot be matched to the bound arguments (a call split over lines, a splatted array) the decoys
+    /// lead, as typed, in their declared order (<see cref="PrependDecoys"/>'s rule).
+    /// </para>
+    /// The transpiler never reaches a decoy: it quotes every dash word of these commands
+    /// (<c>PsEmitter.OrderedArgCommands</c>), so this is the direct-call path (Pester, an interactive PowerShell user).
+    /// Guard <c>CommonParameterCollisionGuardTests.CaseCollidingDecoy_RecoversTheTypedFlag</c>.
+    /// </summary>
+    public static string[] TypedArguments(PSCmdlet cmdlet, string[]? arguments)
+    {
+        var args = arguments ?? Array.Empty<string>();
+        var decoys = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+        foreach (var kv in cmdlet.MyInvocation.BoundParameters)
+            if (kv.Key.Length == 1) decoys[kv.Key] = kv.Value;
+        if (decoys.Count == 0) return args;
+
+        var elements = CommandElements(cmdlet.MyInvocation);
+        if (elements is not null && Rebuild(elements, args, decoys) is { } typed) return typed;
+
+        var lead = new List<string>(args.Length + decoys.Count * 2);
+        foreach (var (name, value) in decoys)
+        {
+            lead.Add("-" + (TypedCase(cmdlet.MyInvocation, name) ?? name));
+            if (DecoyValue(value) is { } v) lead.Add(v);
+        }
+        lead.AddRange(args);
+        return lead.ToArray();
+    }
+
+    /// <summary>
+    /// The case a one-letter decoy <paramref name="name"/> was typed in (<c>w</c> or <c>W</c>), from the command's syntax
+    /// tree; null when it cannot be read (then the caller's default stands).
+    /// </summary>
+    public static string? TypedCase(InvocationInfo? invocation, string name)
+    {
+        if (CommandElements(invocation) is { } elements)
+        {
+            foreach (var e in elements)
+                if (e is System.Management.Automation.Language.CommandParameterAst p
+                    && string.Equals(p.ParameterName, name, StringComparison.OrdinalIgnoreCase))
+                    return p.ParameterName;
+        }
+        // No tree for this command: the first `-x` / `-X` word of its own pipeline segment.
+        foreach (var word in CurrentPipelineSegment(invocation).Split(' ', '\t'))
+            if (word.Length == name.Length + 1 && word[0] == '-'
+                && string.Equals(word.Substring(1), name, StringComparison.OrdinalIgnoreCase))
+                return word.Substring(1);
+        return null;
+    }
+
+    private static string? DecoyValue(object? bound) => bound switch
+    {
+        null or SwitchParameter or bool => null,
+        // A string[] decoy (rg's E) bound from one word: that word. A PowerShell list (`-e a,b`) is one bash word `a,b`.
+        string[] words => string.Join(",", words),
+        _ => (string)LanguagePrimitives.ConvertTo(bound, typeof(string), System.Globalization.CultureInfo.InvariantCulture),
+    };
+
+    private static string[]? Rebuild(IReadOnlyList<System.Management.Automation.Language.CommandElementAst> elements,
+        string[] args, Dictionary<string, object?> decoys)
+    {
+        var typed = new List<string>(args.Length + decoys.Count * 2);
+        int next = 0;
+        for (int i = 1; i < elements.Count; i++)
+        {
+            if (elements[i] is System.Management.Automation.Language.CommandParameterAst p)
+            {
+                if (!decoys.TryGetValue(p.ParameterName, out var bound))
+                {
+                    // No parameter of that name: the binder handed the word to the remaining arguments (`-n`).
+                    if (next >= args.Length || args[next] != p.Extent.Text) return null;
+                    typed.Add(args[next++]);
+                    continue;
+                }
+                typed.Add("-" + p.ParameterName);
+                if (DecoyValue(bound) is { } v)
+                {
+                    typed.Add(v);
+                    if (p.Argument is null) i++; // `-w 3`: the next element was its value
+                }
+                continue;
+            }
+            if (next >= args.Length) return null;
+            typed.Add(args[next++]);
+        }
+        return next == args.Length ? typed.ToArray() : null;
+    }
+
+    /// <summary>The elements of the command <paramref name="invocation"/> ran (name first), from its parsed line.</summary>
+    private static IReadOnlyList<System.Management.Automation.Language.CommandElementAst>? CommandElements(InvocationInfo? invocation)
+    {
+        string line = invocation?.Line ?? "";
+        if (line.Length == 0 || invocation!.OffsetInLine < 1) return null;
+        // A line of a longer block (`{` opened above, `}` below) has parse errors, but the command on it still parses;
+        // Rebuild checks every element against the bound arguments, so a wrong tree is refused there.
+        var ast = System.Management.Automation.Language.Parser.ParseInput(line, out _, out _);
+        int start = invocation.OffsetInLine - 1;
+        var command = ast.Find(a => a is System.Management.Automation.Language.CommandAst c
+            && c.Extent.StartOffset == start, searchNestedScriptBlocks: true) as System.Management.Automation.Language.CommandAst;
+        return command?.CommandElements;
+    }
+
+    /// <summary>
     /// Strips a single trailing <c>\n</c> from BashText, matching the psm1
     /// <c>New-BashObject</c> / <c>Set-BashDisplayProperty</c> normalization
     /// (the worker serializer owns line endings).

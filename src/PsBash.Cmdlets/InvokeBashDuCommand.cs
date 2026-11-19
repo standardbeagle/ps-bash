@@ -185,16 +185,8 @@ public sealed class InvokeBashDuCommand : BashCmdlet
         return true;
     }
 
-    private string[] ArgsWithDecoys()
-    {
-        var raw = Arguments ?? Array.Empty<string>();
-        var pre = new List<string>();
-        if (A.IsPresent) pre.Add("-a");
-        if (C.IsPresent) pre.Add("-c");
-        if (P.IsPresent) pre.Add("-P");
-        if (D is int d) { pre.Add("-d"); pre.Add(d.ToString(System.Globalization.CultureInfo.InvariantCulture)); }
-        return pre.Count == 0 ? raw : pre.Concat(raw).ToArray();
-    }
+    /// <summary>Direct-call decoys, as typed (-D is not -d N): <see cref="BashRuntime.TypedArguments"/>.</summary>
+    private string[] ArgsWithDecoys() => BashRuntime.TypedArguments(this, Arguments);
 
     /// <summary>Size number for the mode: KiB (default), MiB, or bytes; all round up like GNU.</summary>
     private static long SizeUnits(long bytes, DuSizeMode mode) => mode switch

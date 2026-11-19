@@ -21,12 +21,21 @@ public sealed class InvokeBashPingCommand : BashCmdlet
     public string[]? Arguments { get; set; }
 
     /// <summary>
-    /// Decoy for a DIRECT <c>-W SECS</c>: a bare <c>-W</c> is ambiguous (<c>-WarningAction</c> /
-    /// <c>-WarningVariable</c>). PowerShell names are case-insensitive, so a direct <c>-w</c> lands here too and is
-    /// read as <c>-W</c>; the transpiler passes every word quoted (<c>PsEmitter.OrderedArgCommands</c>) and keeps them
-    /// apart.
+    /// Decoys for a DIRECT call: a bare <c>-W</c>/<c>-w</c>, <c>-I</c>/<c>-i</c>, <c>-p</c> or <c>-O</c> is ambiguous
+    /// between two common parameters, and <c>-D</c> is <c>-Debug</c>. PowerShell names are case-insensitive, so one
+    /// decoy takes both cases; <see cref="BashRuntime.TypedArguments"/> puts back the one typed, where it was typed
+    /// (REGRESSION: a direct <c>-w 3</c> ran as <c>-W 3</c>). The transpiler passes every word quoted
+    /// (<c>PsEmitter.OrderedArgCommands</c>), so none of these binds from a script.
     /// </summary>
     [Parameter] public string? W { get; set; }
+    /// <inheritdoc cref="W"/>
+    [Parameter] public string? I { get; set; }
+    /// <inheritdoc cref="W"/>
+    [Parameter] public string? P { get; set; }
+    /// <inheritdoc cref="W"/>
+    [Parameter] public SwitchParameter O { get; set; }
+    /// <inheritdoc cref="W"/>
+    [Parameter] public SwitchParameter D { get; set; }
 
     private const string OptCount = "count", OptTimeout = "timeout", OptContinuous = "continuous";
 
@@ -52,13 +61,7 @@ public sealed class InvokeBashPingCommand : BashCmdlet
 
     protected override void ProcessRecord()
     {
-        var args = Arguments ?? Array.Empty<string>();
-        if (W is not null)
-        {
-            var list = new List<string>(args.Length + 2) { "-W", W };
-            list.AddRange(args);
-            args = list.ToArray();
-        }
+        var args = BashRuntime.TypedArguments(this, Arguments);
         FileSystemHelpers.SetLastExitCode(this, 0);
         var parsed = ArgParser.Parse(args, PingSpec);
         if (FileSystemHelpers.TryWriteParseError(this, "ping", parsed)) return;

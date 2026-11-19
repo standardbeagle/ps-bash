@@ -135,10 +135,8 @@ public sealed class InvokeBashCpCommand : BashCmdlet
     {
         // Re-inject every decoy-bound flag. The transpiler single-quotes each dash-leading word for cp
         // (PsEmitter.OrderedArgCommands) so they arrive in Arguments in order; a DIRECT call
-        // (`Invoke-BashCp -v a b`, Pester) binds the decoys instead. Prepending is safe: a decoy can only
-        // have been bound before any `--`.
-        var args = BashRuntime.PrependDecoys(Arguments,
-            (v.IsPresent, "-v"), (p.IsPresent, "-p"), (I.IsPresent, "-i"), (D.IsPresent, "-d"), (A.IsPresent, "-a"));
+        // (`Invoke-BashCp -v a b`, Pester) binds the decoys instead, each in both cases (-p is not -P).
+        var args = BashRuntime.TypedArguments(this, Arguments);
 
         FileSystemHelpers.SetLastExitCode(this, 0);
         if (FileSystemHelpers.TryHandleVersion(this, "cp", args)) return;

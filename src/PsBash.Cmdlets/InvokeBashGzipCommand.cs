@@ -223,8 +223,7 @@ public class InvokeBashGzipCommand : BashCmdlet
     /// <summary>Bytes of compressed input retained for inflating (0 when compressing; test seam).</summary>
     internal long RetainedInputBytes => _compressedInput?.Length ?? 0;
 
-    private string[] EffectiveArgs()
-        => BashRuntime.PrependDecoys(Arguments ?? Array.Empty<string>(), (D.IsPresent, "-d"), (C.IsPresent, "-c"), (V.IsPresent, "-v"), (F.IsPresent, "-f"));
+    private string[] EffectiveArgs() => BashRuntime.TypedArguments(this, Arguments);
 
     private bool IsDecompress(GzipArgs plan) => plan.Decompress || ImpliedDecompress;
 
@@ -298,9 +297,9 @@ public class InvokeBashGzipCommand : BashCmdlet
 
     private void Run()
     {
-        // Decoy-bound switches (bare -d/-c/-v/-f never reach Arguments) are re-injected before the scan.
-        var raw = Arguments ?? Array.Empty<string>();
-        var args = BashRuntime.PrependDecoys(raw, (D.IsPresent, "-d"), (C.IsPresent, "-c"), (V.IsPresent, "-v"), (F.IsPresent, "-f"));
+        // Decoy-bound switches (bare -d/-c/-v/-f never reach Arguments) are re-injected as typed before the scan
+        // (-V is not -v).
+        var args = EffectiveArgs();
 
         FileSystemHelpers.SetLastExitCode(this, 0);
         var plan = Plan(args);

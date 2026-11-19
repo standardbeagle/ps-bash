@@ -177,8 +177,9 @@ public class CommonParameterCollisionGuardTests
             // Fold every single-letter -x found in a static flag-set field into the
             // checked set so the guard covers the whole binder-collision class.
             var allFlags = new List<string>(flags ?? new List<string>());
-            // Classifier sets (unsupported / passthrough flag lists) only for documented commands. Known leftover: git
-            // (no spec entry) passes `log -p` through; scripts reach it quoted, a direct `Invoke-BashGit log -p` does not.
+            // Classifier sets (unsupported / passthrough flag lists) only for documented commands. git has no flag universe
+            // (its argv is git's): it declares a switch decoy for every colliding letter and rebuilds the argv in order
+            // (BashRuntime.TypedArguments; InvokeBashGitCommandTests.Direct_*).
             if (flags is not null) allFlags.AddRange(ClassifierShortFlags(type));
             allFlags.AddRange(OptSpecShortFlags(type));
             if (allFlags.Count == 0) continue; // nothing documented or declared to check
@@ -217,6 +218,54 @@ public class CommonParameterCollisionGuardTests
             + "like the existing I/V/C/W/O switches), or — for a position-critical infix operator — by "
             + "putting the command on PsEmitter.OrderedArgCommands and this test's EmitterForceQuoted map. "
             + "See docs/solutions/common-parameter-flag-collisions.md.");
+    }
+
+    /// <summary>
+    /// A one-letter decoy is case-insensitive: <c>W</c> takes a direct <c>-w</c> and <c>-W</c> alike. When the command
+    /// has BOTH flags (ping <c>-w</c> deadline / <c>-W</c> timeout), the cmdlet must read back which one was typed —
+    /// <c>BashRuntime.TypedArguments</c> / <c>TypedCase</c> (the command's syntax tree), or the older raw-line recovery
+    /// on <c>BashRuntime.CurrentPipelineSegment</c>. REGRESSION: a direct <c>Invoke-BashPing -w 3 host</c> ran as
+    /// <c>-W 3</c>. Oracle note (qa-rubric Directive 1): a ps-bash-specific structural invariant, no bash oracle.
+    /// </summary>
+    /// <summary>Commands whose decoys may stay case-blind, with the reason.</summary>
+    private static readonly Dictionary<string, string> CaseBlindDecoyAllowed = new(StringComparer.Ordinal)
+    {
+        // GNU tr: `-c, -C, --complement` — one option, two spellings.
+        ["tr"] = "-c and -C are the same option",
+        // Direct calls reach the psm1 literal-args proxy (Invoke-BashSed), which never binds a decoy.
+        ["sed"] = "direct calls go through the literal-args proxy",
+    };
+
+    [Fact]
+    public void CaseCollidingDecoy_RecoversTheTypedFlag()
+    {
+        var specs = LoadFlagSpecs();
+        var sources = Directory.EnumerateFiles(Path.GetDirectoryName(FindRepoFile(Path.Combine("src", "PsBash.Cmdlets", "BashRuntime.cs")))!, "*.cs")
+            .Select(File.ReadAllText).ToList();
+        var violations = new List<string>();
+        foreach (var type in typeof(InvokeBashFindCommand).Assembly.GetTypes())
+        {
+            var cmdletAttr = type.GetCustomAttribute<CmdletAttribute>();
+            if (cmdletAttr is null || !cmdletAttr.NounName.StartsWith("Bash", StringComparison.Ordinal)) continue;
+            var command = cmdletAttr.NounName.Substring(4).ToLowerInvariant();
+            if (CaseBlindDecoyAllowed.ContainsKey(command)) continue;
+            var flags = new HashSet<string>(StringComparer.Ordinal);
+            if (specs.TryGetValue(command, out var documented)) flags.UnionWith(documented);
+            flags.UnionWith(ClassifierShortFlags(type));
+            flags.UnionWith(OptSpecShortFlags(type));
+            foreach (var letter in DeclaredSingleLetterNames(type))
+            {
+                if (!flags.Contains("-" + letter) || !flags.Contains("-" + char.ToUpperInvariant(letter))) continue;
+                var source = sources.FirstOrDefault(s => s.Contains("class " + type.Name + " ", StringComparison.Ordinal)) ?? "";
+                if (source.Contains("TypedArguments(", StringComparison.Ordinal) || source.Contains("TypedCase(", StringComparison.Ordinal)
+                    || source.Contains("CurrentPipelineSegment(", StringComparison.Ordinal))
+                    continue;
+                violations.Add($"{command} ({type.Name}): decoy '{letter}' takes both -{letter} and -{char.ToUpperInvariant(letter)}");
+            }
+        }
+        Assert.True(violations.Count == 0,
+            "A case-insensitive decoy hides which flag a direct call typed; rebuild the argv with BashRuntime.TypedArguments:\n  "
+            + string.Join("\n  ", violations.OrderBy(v => v, StringComparer.Ordinal)));
     }
 
     /// <summary>

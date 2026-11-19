@@ -219,14 +219,8 @@ public sealed class InvokeBashColumnCommand : BashCmdlet
     protected override void EndProcessing()
     {
         if (_lines.Flush() is { } last) { InputObject = last; ProcessInputRecord(); }
-        var raw = Arguments ?? Array.Empty<string>();
-        var pre = new List<string>();
-        if (C is not null) { pre.Add("-c"); pre.Add(C); }
-        if (E.IsPresent) pre.Add("-e");
-        if (D.IsPresent) pre.Add("-d");
-        if (V.IsPresent) pre.Add("-V");
-        if (O is not null) { pre.Add("-o"); pre.Add(O); }
-        var args = pre.Count == 0 ? raw : pre.Concat(raw).ToArray();
+        // Direct-call decoys, as typed (-C NAME is not -c N, -O not -o): BashRuntime.TypedArguments.
+        var args = BashRuntime.TypedArguments(this, Arguments);
 
         FileSystemHelpers.SetLastExitCode(this, 0);
         var plan = Plan(args);

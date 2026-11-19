@@ -440,9 +440,8 @@ public sealed class InvokeBashSortCommand : BashCmdlet
     protected override void EndProcessing()
     {
         if (_lines.Flush() is { } last) { InputObject = last; ProcessInputRecord(); }
-        var rawArgs = BashRuntime.PrependDecoys(Arguments,
-            (C.IsPresent, "-c"), (D.IsPresent, "-d"), (V.IsPresent, "-V"), (I.IsPresent, "-i"));
-        if (O is not null) rawArgs = new[] { "-o", O }.Concat(rawArgs).ToArray();
+        // Direct-call decoys, as typed (-C is not -c): BashRuntime.TypedArguments.
+        var rawArgs = BashRuntime.TypedArguments(this, Arguments);
 
         FileSystemHelpers.SetLastExitCode(this, 0);
         if (FileSystemHelpers.TryHandleVersion(this, "sort", rawArgs)) return;

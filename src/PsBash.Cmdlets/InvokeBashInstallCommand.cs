@@ -84,7 +84,8 @@ public sealed class InvokeBashInstallCommand : BashCmdlet
 
     protected override void ProcessRecord()
     {
-        var args = Arguments ?? Array.Empty<string>();
+        // Direct-call decoys, as typed (-d is not -D): BashRuntime.TypedArguments.
+        var args = BashRuntime.TypedArguments(this, Arguments);
 
         FileSystemHelpers.SetLastExitCode(this, 0);
         if (FileSystemHelpers.TryHandleVersion(this, "install", args)) return;

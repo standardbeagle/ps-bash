@@ -47,6 +47,25 @@ public class InvokeBashPingCommandTests : IClassFixture<SharedPwshFixture>
     public void ExitStatus_IsIputils(int replies, bool unresolved, int expected)
         => Assert.Equal(expected, InvokeBashPingCommand.ExitStatus(replies, unresolved));
 
+    // DIRECT calls (Pester, an interactive PowerShell user): the transpiler quotes every flag, a direct call does not.
+    // REGRESSION: the case-insensitive decoy W took a direct `-w 3` (deadline, unsupported) and ran it as `-W 3`
+    // (reply timeout); `-i 1` / `-p ff` / `-O` were "parameter name is ambiguous" binder errors. The typed flag is read
+    // back from the command's syntax tree (BashRuntime.TypedArguments).
+    [Theory]
+    [InlineData("Invoke-BashPing -w 3 127.0.0.1", "-w")]
+    [InlineData("Invoke-BashPing -c 1 -i 1 127.0.0.1", "-i")]
+    [InlineData("Invoke-BashPing -c 1 -I lo 127.0.0.1", "-I")]
+    [InlineData("Invoke-BashPing -p ff -c 1 127.0.0.1", "-p")]
+    [InlineData("Invoke-BashPing -c 1 -O 127.0.0.1", "-O")]
+    [InlineData("Invoke-BashPing -c 1 -D 127.0.0.1", "-D")]
+    public void Direct_CaseCollidingFlag_IsTheFlagTyped(string script, string flag)
+        => CmdResult.Run(_fixture.AcquireFresh(), script)
+            .AssertFailed(2, $"ping: option '{flag}' is recognized but not supported by ps-bash");
+
+    [Fact]
+    public void Direct_CapitalW_IsTheReplyTimeout()
+        => CmdResult.Run(_fixture.AcquireFresh(), "Invoke-BashPing -W 1 -c 1 127.0.0.1").AssertSuccess();
+
     [Fact]
     public void Ping_Loopback_Exit0()
         => CmdResult.Run(_fixture.AcquireFresh(), "Invoke-BashPing -c 1 127.0.0.1").AssertSuccess();
