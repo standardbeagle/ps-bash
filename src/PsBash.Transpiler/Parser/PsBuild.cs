@@ -1561,8 +1561,15 @@ public static class PsBuild
     /// <summary>The splat of <see cref="ArgvLiterals"/>.</summary>
     public const string ArgvSplat = "@__psbash_argv";
 
-    public static string ForwardStageInputIfAny(string command) =>
-        "$__psbash_in = @(" + StageInput + "); if ($__psbash_in.Count -gt 0) { $__psbash_in | " + command + " } else { " + command + " }";
+    public static string ForwardStageInputIfAny(string command) => ForwardStageInputIfAny(command, "");
+
+    /// <summary>
+    /// <see cref="ForwardStageInputIfAny(string)"/> with <paramref name="feed"/> (<c>"stage | "</c>) between the input
+    /// and the command when there is input: a native program's records become its exact stdin bytes
+    /// (<see cref="NativeStdinFeed"/>).
+    /// </summary>
+    public static string ForwardStageInputIfAny(string command, string feed) =>
+        "$__psbash_in = @(" + StageInput + "); if ($__psbash_in.Count -gt 0) { $__psbash_in | " + feed + command + " } else { " + command + " }";
 
     /// <summary>
     /// A pipe stage whose stdin is not the pipe (<c>… | cmd &lt; f</c>, <c>… | seq 3</c>): the block drains the upstream

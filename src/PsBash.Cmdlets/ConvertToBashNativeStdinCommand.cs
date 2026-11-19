@@ -35,20 +35,37 @@ public sealed class ConvertToBashNativeStdinCommand : PSCmdlet
 
     private bool _native;
     private bool _bashFunction;
+    private bool _standIn;
 
     protected override void BeginProcessing()
     {
         _native = EnterBashNativeStdinCommand.ResolvesToApplication(this, Name);
+        if (_native) return;
         using var probe = PsBash.Core.CommandHashTable.Probe();
+        // A program file the OS cannot start (`./script` with a #! line on Windows) resolves to its stand-in
+        // (PsBash.Core.ProgramLaunch.StandInScript), which feeds the records to ps-bash's bash or turns them into the
+        // interpreter's bytes itself: it gets them unchanged.
+        try
+        {
+            // The lookup hook's replacement script block comes back as a FunctionInfo (a ScriptInfo elsewhere).
+            _standIn = InvokeCommand.GetCommand(Name, CommandTypes.All) is CommandInfo ci and (FunctionInfo or ScriptInfo)
+                       && PsBash.Core.ProgramLaunch.IsRunnableStandIn(ci.Definition);
+        }
+        catch { _standIn = false; }
+        if (_standIn) return;
         // A function the transpiler emitted (it saves $global:BashPositional first) reads its input with bash
         // commands, which understand an unterminated record; a hand-written PowerShell function gets plain strings.
-        _bashFunction = !_native
-            && InvokeCommand.GetCommand(Name, CommandTypes.Function) is FunctionInfo fn
+        _bashFunction = InvokeCommand.GetCommand(Name, CommandTypes.Function) is FunctionInfo fn
             && fn.Definition.Contains("$global:BashPositional", StringComparison.Ordinal);
     }
 
     protected override void ProcessRecord()
     {
+        if (_standIn)
+        {
+            WriteObject(InputObject);
+            return;
+        }
         if (!_native)
         {
             // A bash function keeps the "no final newline" mark: `printf ab | f` must not hand f's commands "ab\n".

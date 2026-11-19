@@ -113,15 +113,30 @@ public class ProgramFileTests
 
     // The stand-in a resolved #! file runs as, in place of the resolved command.
     [Theory]
-    [InlineData("/bin/sh", "Invoke-BashBash 'C:\\t\\it''s' @__psbash_argv")]
-    [InlineData("/usr/bin/env bash", "Invoke-BashBash 'C:\\t\\it''s' @__psbash_argv")]
-    [InlineData("/bin/bash -e", "Invoke-BashBash '-e' 'C:\\t\\it''s' @__psbash_argv")]
-    [InlineData("/usr/bin/env -S python3 -u", "& 'python3' '-u' 'C:\\t\\it''s' @__psbash_argv")]
-    [InlineData("/usr/local/bin/node", "& 'node' 'C:\\t\\it''s' @__psbash_argv")]
-    public void StandInScript_RunsTheInterpreterWithTheFileThenTheArguments(string shebang, string run)
-        => Assert.Equal(
-            "$__psbash_argv = [string[]]$args; $__psbash_in = @($input); if ($__psbash_in.Count -gt 0) { $__psbash_in | " + run + " } else { " + run + " }",
-            ProgramFile.FromShebang(@"C:\t\it's", shebang).StandInScript("ignored"));
+    // A shell reads the records' bytes itself; another interpreter is a native program, so its input goes through
+    // ConvertTo-BashNativeStdin (exact bytes, no added line end) on the way in.
+    [InlineData("/bin/sh", "", "Invoke-BashBash 'C:\\t\\it''s' @__psbash_argv")]
+    [InlineData("/usr/bin/env bash", "", "Invoke-BashBash 'C:\\t\\it''s' @__psbash_argv")]
+    [InlineData("/bin/bash -e", "", "Invoke-BashBash '-e' 'C:\\t\\it''s' @__psbash_argv")]
+    [InlineData("/usr/bin/env -S python3 -u", "ConvertTo-BashNativeStdin 'python3' | ", "& 'python3' '-u' 'C:\\t\\it''s' @__psbash_argv")]
+    [InlineData("/usr/local/bin/node", "ConvertTo-BashNativeStdin 'node' | ", "& 'node' 'C:\\t\\it''s' @__psbash_argv")]
+    public void StandInScript_RunsTheInterpreterWithTheFileThenTheArguments(string shebang, string feed, string run)
+    {
+        string script = ProgramFile.FromShebang(@"C:\t\it's", shebang).StandInScript("ignored");
+        Assert.Equal(
+            "$__psbash_argv = [string[]]$args; $__psbash_in = @($input); if ($__psbash_in.Count -gt 0) { $__psbash_in | " + feed + run + " } else { " + run + " }",
+            script);
+        // ConvertTo-BashNativeStdin recognises it and hands it the records unchanged.
+        Assert.True(ProgramLaunch.IsRunnableStandIn(script));
+    }
+
+    [Fact]
+    public void IsRunnableStandIn_IsFalseForAnythingElse()
+    {
+        Assert.False(ProgramLaunch.IsRunnableStandIn(ProgramLaunch.PermissionDeniedScript("./x")));
+        Assert.False(ProgramLaunch.IsRunnableStandIn("param($a) $input | Out-String"));
+        Assert.False(ProgramLaunch.IsRunnableStandIn(null));
+    }
 
     [Fact]
     public void FromShebang_EnvWithNoProgram_IsPermissionDenied()

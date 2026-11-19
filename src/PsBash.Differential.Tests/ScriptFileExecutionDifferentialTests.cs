@@ -22,6 +22,9 @@ public class ScriptFileExecutionDifferentialTests
     [SkippableTheory]
     [InlineData("echo piped | bash r.sh; bash r.sh < doc; echo st=$?")]
     [InlineData("printf 'a\\nb\\n' | ./d/hello x 'y z'; echo st=$?")]
+    // A #! script's stdin is the producer's exact bytes: an unterminated last line stays unterminated (read fails on
+    // it), and a record already ending in a newline gains no second one (the stand-in was handed text strings).
+    [InlineData("echo -n x | ./d/hello; printf 'p\\nq' | ./d/hello; PATH=\"d:$PATH\"; printf 'r\\n' | hello; echo st=$?")]
     [InlineData("PATH=\"d:$PATH\"; echo q | hello; echo st=$?; x=$(hello </dev/null); echo \"cap=$x\"")]
     [InlineData("PATH=d:$PATH; type -P hello; type -a hello | head -1; type -t hello")]
     [InlineData("./doc; echo st=$?")]

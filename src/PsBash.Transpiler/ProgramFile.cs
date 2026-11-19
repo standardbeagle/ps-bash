@@ -187,8 +187,20 @@ public sealed class ProgramLaunch
         foreach (var a in InterpreterArgs) sb.Append(' ').Append(PsBuild.SingleQuote(a));
         sb.Append(' ').Append(PsBuild.SingleQuote(Path)).Append(' ').Append(PsBuild.ArgvSplat);
         string run = sb.ToString();
-        return PsBuild.ArgvLiterals + "; " + PsBuild.ForwardStageInputIfAny(run);
+        // The stand-in is handed the records unchanged (IsRunnableStandIn): ps-bash's bash reads their bytes itself; an
+        // interpreter is a native program, so its records become exact stdin bytes on the way in.
+        string feed = Shell ? "" : PsBuild.NativeStdinFeed(Interpreter!) + " | ";
+        return PsBuild.ArgvLiterals + "; " + PsBuild.ForwardStageInputIfAny(run, feed);
     }
+
+    /// <summary>
+    /// True when <paramref name="scriptText"/> is a runnable stand-in (<see cref="StandInScript"/>) that a command
+    /// lookup put in place of a program file. Its stdin is ps-bash's records, passed through unchanged, so an
+    /// unterminated last line stays unterminated (<c>echo -n x | ./script</c>): handed text strings it lost the mark,
+    /// and a record already ending in a newline gained a second one.
+    /// </summary>
+    public static bool IsRunnableStandIn(string? scriptText)
+        => scriptText is not null && scriptText.TrimStart().StartsWith(PsBuild.ArgvLiterals + "; ", StringComparison.Ordinal);
 
     /// <summary>
     /// The argv that starts the file as a process, before the command's own arguments: the program
