@@ -231,8 +231,12 @@ public class InvokeBashGzipCommandTests : IDisposable, IClassFixture<SharedPwshF
         }
 
         var objs = RunObjects($"Invoke-BashGzip -l '{PsQuote(file)}'");
-        Assert.Single(objs);
-        var o = objs[0];
+        // GNU's header line, then one row (no totals row for a single name).
+        Assert.Equal(2, objs.Count);
+        Assert.Equal("         compressed        uncompressed  ratio uncompressed_name", objs[0].BaseObject as string);   // a text record
+        var o = objs[1];
+        // GNU names the operand as typed, minus the suffix.
+        Assert.Equal(file[..^3], o.Properties["FileName"].Value);
         Assert.Contains("PsBash.GzipListOutput", o.TypeNames);
         // Sizes are 64-bit so a >2 GB member can't overflow the listing.
         Assert.Equal((long)payload.Length, (long)o.Properties["UncompressedSize"].Value);
@@ -278,8 +282,7 @@ public class InvokeBashGzipCommandTests : IDisposable, IClassFixture<SharedPwshF
     [Fact]
     public void Gzip_GunzipAlias_DefaultsToDecompress()
     {
-        // The `gunzip FILE.gz` alias resolves to the cmdlet with
-        // $MyInvocation.InvocationName = 'gunzip', which boosts -d.
+        // The `gunzip` alias names Invoke-BashGunzip (gzip -d).
         string file = Path.Combine(_tmpDir, "ga.txt");
         byte[] original = Encoding.UTF8.GetBytes("via gunzip\n");
         File.WriteAllBytes(file, original);
@@ -311,6 +314,76 @@ public class InvokeBashGzipCommandTests : IDisposable, IClassFixture<SharedPwshF
         // Trailing '\n' stripped by BashRuntime.NewBashObject.
         Assert.Equal("zcat works", lines[0]);
         Assert.True(File.Exists(file), "zcat must not remove the source");
+    }
+
+    // REGRESSION: gunzip / zcat were told apart by InvocationName, which is `&` under an indirect call
+    // (`xargs gunzip`, `env zcat f`): gunzip then COMPRESSED (here: refused "already has .gz suffix").
+    [Fact]
+    public void Gunzip_IndirectCall_StillDecompresses()
+    {
+        string file = Path.Combine(_tmpDir, "ind.txt");
+        File.WriteAllText(file, "indirect\n");
+        RunLines($"Invoke-BashGzip '{PsQuote(file)}'");
+        var r = CmdResult.Run(_fixture.AcquireFresh(), $"$c = 'gunzip'; & $c '{PsQuote(file + ".gz")}'");
+        r.AssertSuccess();
+        Assert.Equal("indirect\n", File.ReadAllText(file));
+        Assert.False(File.Exists(file + ".gz"));
+    }
+
+    // Direct calls (Pester): -c / -d / -v bind the decoys, which the gunzip / zcat cmdlets inherit.
+    [Fact]
+    public void Zcat_DirectInvocation_WritesStdoutAndKeepsSource()
+    {
+        string file = Path.Combine(_tmpDir, "dz.txt");
+        File.WriteAllText(file, "direct zcat\n");
+        RunLines($"Invoke-BashGzip '{PsQuote(file)}'");
+        Assert.Equal(new[] { "direct zcat" }, RunLines($"Invoke-BashZcat '{PsQuote(file + ".gz")}'"));
+        Assert.Equal(new[] { "direct zcat" }, RunLines($"Invoke-BashGunzip -c '{PsQuote(file + ".gz")}'"));
+        Assert.True(File.Exists(file + ".gz"));
+    }
+
+    // `gunzip NAME` with only NAME.gz on disk decompresses NAME.gz (GNU tries the suffix).
+    [Fact]
+    public void Gunzip_NameWithoutSuffix_TriesNameDotGz()
+    {
+        string file = Path.Combine(_tmpDir, "bare.txt");
+        File.WriteAllText(file, "bare\n");
+        RunLines($"Invoke-BashGzip '{PsQuote(file)}'");
+        CmdResult.Run(_fixture.AcquireFresh(), $"Invoke-BashGunzip '{PsQuote(file)}'").AssertSuccess();
+        Assert.Equal("bare\n", File.ReadAllText(file));
+    }
+
+    // GNU status: a warning is 2 (even under -q), an error 1 and wins over a warning.
+    [Fact]
+    public void Gzip_DirectoryOperand_WarnsWithStatus2_ErrorWins()
+    {
+        string dir = Path.Combine(_tmpDir, "wd");
+        Directory.CreateDirectory(dir);
+        CmdResult.Run(_fixture.AcquireFresh(), $"Invoke-BashGzip -q '{PsQuote(dir)}'").AssertFailed(2);
+        CmdResult.Run(_fixture.AcquireFresh(), $"Invoke-BashGzip '{PsQuote(dir)}' '{PsQuote(Path.Combine(_tmpDir, "nosuch"))}'")
+            .AssertFailed(1, "is a directory -- ignored", "No such file or directory");
+    }
+
+    [Theory]
+    [InlineData(-2, 6, "-33.3%")]
+    [InlineData(1, 2, " 50.0%")]
+    [InlineData(-2, 2, "-100.0%")]
+    [InlineData(0, 0, "  0.0%")]
+    [InlineData(-5, 3000, " -0.2%")]    // gzip -v of 3000 random bytes: rounded, sign beside the digits
+    [InlineData(73, 81, " 90.1%")]
+    [InlineData(-24, 12, "-200.0%")]
+    public void Ratio_IsGnuDisplayRatio(long num, long den, string expected)
+        => Assert.Equal(expected, InvokeBashGzipCommand.Ratio(num, den));
+
+    // GNU's header_bytes: 10-byte header (+ stored name "a\0") + 8-byte trailer. Bytes from `gzip -k a` / `gzip -n`.
+    [Theory]
+    [InlineData("1f8b08080000000000036100cb48cdc9c9e702002030 3a3606000000", 20)]
+    [InlineData("1f8b08000000000000 03cb48cdc9c95728cf2fca4951c840b0b900790d36831800 0000", 18)]
+    [InlineData("1f8b", 18)]
+    public void MemberOverhead_CountsHeaderFieldsAndTrailer(string hex, long expected)
+    {
+        using var s = new MemoryStream(Convert.FromHexString(hex.Replace(" ", "")));
+        Assert.Equal(expected, InvokeBashGzipCommand.MemberOverhead(s));
     }
 
     [Fact]

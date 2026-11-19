@@ -35,11 +35,13 @@ namespace PsBash.Cmdlets;
 /// carries raw bytes through the string pipeline). Under verbose mode, the cmdlet emits
 /// one extra <c>PsBash.TextOutput</c> line per file with the ratio.
 ///
-/// Alias detection: the bash <c>gunzip</c> alias means "<c>gzip -d</c>" and
-/// <c>zcat</c> means "<c>gzip -dc</c>". The psm1 oracle reads
-/// <c>$MyInvocation.InvocationName</c>; the cmdlet reads
-/// <see cref="System.Management.Automation.PSCmdlet.MyInvocation"/>.<c>InvocationName</c>
-/// and applies the same default-flag boost.
+/// Identity: <c>gunzip</c> means "<c>gzip -d</c>" and <c>zcat</c> "<c>gzip -dc</c>". They are their own cmdlets
+/// (<see cref="InvokeBashGunzipCommand"/>, <see cref="InvokeBashZcatCommand"/>): the alias name used to be read from
+/// InvocationName, which is <c>&amp;</c> under an indirect call (<c>xargs gunzip</c>, <c>env zcat f</c>), and gunzip
+/// then COMPRESSED its operand (guard <c>InvocationIdentityGuardTests</c>).
+///
+/// Status (GNU): an error is 1, a warning 2 unless an error happened (<see cref="Warn"/>); a name in a message or a
+/// verbose / list line is the operand as typed (<c>r/f.gz</c>), never the resolved Windows path.
 ///
 /// Flag binding: <c>-d</c> / <c>-c</c> / <c>-v</c> prefix-collide with
 /// <c>-Debug</c> / <c>-Confirm</c> / <c>-Verbose</c> common parameters
@@ -64,8 +66,30 @@ namespace PsBash.Cmdlets;
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashGzip")]
 [OutputType(typeof(string))]
-public sealed class InvokeBashGzipCommand : PSCmdlet
+public class InvokeBashGzipCommand : PSCmdlet
 {
+    /// <summary><c>gunzip</c> / <c>zcat</c>: decompress whatever the options say.</summary>
+    private protected virtual bool ImpliedDecompress => false;
+
+    /// <summary><c>zcat</c>: write to stdout.</summary>
+    private protected virtual bool ImpliedStdout => false;
+
+    // GNU exit status: 0, 1 = error, 2 = warning (only while no error happened).
+    private int _status;
+
+    private void Error(string message)
+    {
+        FileSystemHelpers.WriteStderr(this, message);
+        _status = 1;
+    }
+
+    /// <summary>GNU's WARN: the message unless suppressed (<c>-q</c>), and status 2 unless an error already made it 1.</summary>
+    private void Warn(string message, bool print = true)
+    {
+        if (print) FileSystemHelpers.WriteStderr(this, message);
+        if (_status == 0) _status = 2;
+    }
+
     private const string OptDecompress = "decompress", OptStdout = "stdout", OptKeep = "keep", OptForce = "force",
         OptVerbose = "verbose", OptList = "list", OptTest = "test", OptRecursive = "recursive", OptQuiet = "quiet",
         OptSuffix = "suffix", OptNoOp = "noop", OptLevelPrefix = "level";
@@ -202,13 +226,7 @@ public sealed class InvokeBashGzipCommand : PSCmdlet
     private string[] EffectiveArgs()
         => BashRuntime.PrependDecoys(Arguments ?? Array.Empty<string>(), (D.IsPresent, "-d"), (C.IsPresent, "-c"), (V.IsPresent, "-v"), (F.IsPresent, "-f"));
 
-    private bool IsDecompress(GzipArgs plan)
-    {
-        string invokedAs = MyInvocation?.InvocationName ?? string.Empty;
-        return plan.Decompress
-               || string.Equals(invokedAs, "gunzip", StringComparison.OrdinalIgnoreCase)
-               || string.Equals(invokedAs, "zcat", StringComparison.OrdinalIgnoreCase);
-    }
+    private bool IsDecompress(GzipArgs plan) => plan.Decompress || ImpliedDecompress;
 
     private static CompressionLevel LevelFor(int level) => level switch
     {
@@ -274,6 +292,12 @@ public sealed class InvokeBashGzipCommand : PSCmdlet
 
     protected override void EndProcessing()
     {
+        try { Run(); }
+        finally { if (_status != 0) FileSystemHelpers.SetLastExitCode(this, _status); }
+    }
+
+    private void Run()
+    {
         // Decoy-bound switches (bare -d/-c/-v/-f never reach Arguments) are re-injected before the scan.
         var raw = Arguments ?? Array.Empty<string>();
         var args = BashRuntime.PrependDecoys(raw, (D.IsPresent, "-d"), (C.IsPresent, "-c"), (V.IsPresent, "-v"), (F.IsPresent, "-f"));
@@ -283,8 +307,8 @@ public sealed class InvokeBashGzipCommand : PSCmdlet
         if (FileSystemHelpers.TryWriteParseError(this, "gzip", plan.Parsed)) return;
         if (FileSystemHelpers.TryHandleInfoOptions(this, "gzip", plan.Parsed)) return;
 
-        bool decompress = plan.Decompress;
-        bool toStdout = plan.ToStdout;
+        bool decompress = plan.Decompress || ImpliedDecompress;
+        bool toStdout = plan.ToStdout || ImpliedStdout;
         bool keep = plan.Keep;
         bool force = plan.Force;
         bool verbose = plan.Verbose;
@@ -295,19 +319,6 @@ public sealed class InvokeBashGzipCommand : PSCmdlet
         string suffix = plan.Suffix;
         int level = plan.Level;
 
-        // Detect gunzip / zcat invocation via alias name. Matches the psm1
-        // oracle's `$MyInvocation.InvocationName -eq 'gunzip'` branch.
-        string invokedAs = MyInvocation?.InvocationName ?? string.Empty;
-        if (string.Equals(invokedAs, "gunzip", StringComparison.OrdinalIgnoreCase))
-        {
-            decompress = true;
-        }
-        if (string.Equals(invokedAs, "zcat", StringComparison.OrdinalIgnoreCase))
-        {
-            decompress = true;
-            toStdout = true;
-        }
-
         var operands = plan.Operands;
         if (operands.Count == 0 && StdinRecords > 0)
         {
@@ -316,22 +327,26 @@ public sealed class InvokeBashGzipCommand : PSCmdlet
         }
         if (operands.Count == 0)
         {
-            FileSystemHelpers.WriteBashError(this, "gzip: missing file operand");
+            Error("gzip: missing file operand");
             return;
         }
 
-        // Flatten operands into the concrete file list. A directory operand is
-        // expanded into its contained files under -r/--recursive; without -r it
-        // is skipped with the GNU "is a directory -- ignored" warning (suppressed
-        // by -q). A missing path errors and is skipped.
-        var files = new List<string>();
+        // Flatten operands into the concrete file list, each with the NAME GNU shows for it: the operand as typed,
+        // a recursive member as OPERAND/rel. A directory operand is expanded under -r; without -r it is skipped with
+        // the "is a directory -- ignored" warning (status 2, message suppressed by -q). A missing NAME under -d is
+        // (and -l / -t, which read members) retried as NAME<suffix> (`gunzip f` decompresses f.gz), reported under the name tried last.
+        var files = new List<(string Path, string Name)>();
+        int named = 0;
         foreach (string operand in operands)
         {
-            foreach (string resolved in FileSystemHelpers.ResolveOperandPaths(this, operand))
+            var resolvedAll = FileSystemHelpers.ResolveOperandPaths(this, operand).ToList();
+            foreach (string resolved in resolvedAll)
             {
+                named++;
+                string name = resolvedAll.Count == 1 ? operand : ShellRelative(resolved);
                 if (File.Exists(resolved))
                 {
-                    files.Add(resolved);
+                    files.Add((resolved, name));
                 }
                 else if (Directory.Exists(resolved))
                 {
@@ -342,279 +357,302 @@ public sealed class InvokeBashGzipCommand : PSCmdlet
                             foreach (var child in Directory.EnumerateFiles(
                                          resolved, "*", SearchOption.AllDirectories))
                             {
-                                files.Add(child);
+                                files.Add((child, name.TrimEnd('/') + "/" + BashPath.ToShell(Path.GetRelativePath(resolved, child))));
                             }
                         }
                         catch (Exception ex)
                         {
                             if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-                            FileSystemHelpers.WriteBashError(this, $"gzip: {BashPath.ToShell(resolved)}: {ex.Message}");
+                            Error($"gzip: {name}: {Failure(ex, resolved)}");
                         }
                     }
-                    else if (!quiet)
+                    else
                     {
-                        FileSystemHelpers.WriteBashError(this, $"gzip: {BashPath.ToShell(resolved)} is a directory -- ignored");
+                        Warn($"gzip: {name} is a directory -- ignored", print: !quiet);
                     }
+                }
+                else if ((decompress || list || test) && !resolved.EndsWith(suffix, StringComparison.Ordinal))
+                {
+                    if (File.Exists(resolved + suffix)) files.Add((resolved + suffix, name + suffix));
+                    else Error($"gzip: {name}{suffix}: No such file or directory");
                 }
                 else
                 {
-                    // GNU gzip -d retries NAME as NAME<suffix> and reports the name it tried last.
-                    string tried = decompress && !resolved.EndsWith(suffix, StringComparison.Ordinal)
-                        ? resolved + suffix : resolved;
-                    FileSystemHelpers.WriteBashError(this, $"gzip: {BashPath.ToShell(tried)}: No such file or directory");
+                    Error($"gzip: {name}: No such file or directory");
                 }
             }
         }
 
+        // -l: GNU's header once, a row per member, and a totals row when more than one name was given. GNU's totals
+        // ratio subtracts only the LAST member's header_bytes (0 after a member that was not gzip): kept as is.
+        long totalC = 0, totalU = 0, lastHdr = 0;
+        bool listed = false;
+        void ListRow(long c, long u, long hdr, string label)
         {
-            foreach (string filePath in files)
+            if (!listed)
             {
-                if (!File.Exists(filePath) && !Directory.Exists(filePath))
-                {
-                    string normalized = BashPath.ToShell(filePath);
-                    FileSystemHelpers.WriteBashError(this, $"gzip: {normalized}: No such file or directory");
-                    continue;
-                }
+                WriteObject(BashRuntime.NewBashObject(string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                    "{0,19} {1,19}  ratio uncompressed_name", "compressed", "uncompressed")));
+                listed = true;
+            }
+            string ratio = Ratio(u - (c - hdr), u);
+            string line = string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                "{0,19} {1,19} {2} {3}", c, u, ratio, label);
+            var obj = new PSObject();
+            obj.TypeNames.Insert(0, "PsBash.GzipListOutput");
+            obj.Properties.Add(new PSNoteProperty("BashText", line));
+            obj.Properties.Add(new PSNoteProperty("CompressedSize", c));
+            obj.Properties.Add(new PSNoteProperty("UncompressedSize", u));
+            obj.Properties.Add(new PSNoteProperty("Ratio", ratio.Trim()));
+            obj.Properties.Add(new PSNoteProperty("FileName", label));
+            WriteObject(obj);
+        }
 
-                long inputSize;
+        foreach (var (filePath, name) in files)
+        {
+            long inputSize;
+            try
+            {
+                inputSize = new FileInfo(filePath).Length;
+            }
+            catch (Exception ex)
+            {
+                if (FileSystemHelpers.IsPipelineStop(ex)) throw;
+                Error($"gzip: {name}: {Failure(ex, filePath)}");
+                continue;
+            }
+
+            // An empty member: GNU writes a blank line, then the error.
+            if (inputSize == 0 && (decompress || test || list))
+            {
+                Error($"\ngzip: {name}: unexpected end of file");
+                continue;
+            }
+            // -t / --test: decompress and discard to verify integrity. Silent on success.
+            if (test)
+            {
                 try
                 {
-                    inputSize = new FileInfo(filePath).Length;
+                    using var input = BashFileSystem.OpenRead(filePath);
+                    using var gs = GzipIntegrity.OpenDecoder(input);
+                    var tbuf = new byte[81920];
+                    while (gs.Read(tbuf, 0, tbuf.Length) > 0) { }
+                    if (verbose) FileSystemHelpers.WriteStderr(this, $"{name}:\t OK");   // GNU: verbose lines are stderr
                 }
                 catch (Exception ex)
                 {
                     if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-                    string normalized = BashPath.ToShell(filePath);
-                    FileSystemHelpers.WriteBashError(this, $"gzip: {normalized}: {ex.Message}");
-                    continue;
+                    Error($"gzip: {name}: not in gzip format");
                 }
+                continue;
+            }
 
-                // -t / --test: decompress and discard to verify integrity. Silent
-                // on success (exit 0); a corrupt stream errors and sets exit 1.
-                if (inputSize == 0 && (decompress || test || list))
+            if (list)
+            {
+                long uncompressedSize, hdr;
+                try
                 {
-                    FileSystemHelpers.WriteBashError(this, $"gzip: {BashPath.ToShell(filePath)}: unexpected end of file");
+                    // Stream-count the decompressed size — never materialize it. 64-bit: a >2 GB member.
+                    using var input = BashFileSystem.OpenRead(filePath);
+                    hdr = MemberOverhead(input);
+                    input.Position = 0;
+                    using var gs = GzipIntegrity.OpenDecoder(input);
+                    var cbuf = new byte[81920];
+                    long total = 0; int cn;
+                    while ((cn = gs.Read(cbuf, 0, cbuf.Length)) > 0) total += cn;
+                    uncompressedSize = total;
+                }
+                catch (Exception ex)
+                {
+                    if (FileSystemHelpers.IsPipelineStop(ex)) throw;
+                    if (ex is InvalidDataException) lastHdr = 0;
+                    Error($"gzip: {name}: {Failure(ex, filePath)}");
                     continue;
                 }
-                if (test)
+                ListRow(inputSize, uncompressedSize, hdr, StripSuffix(name, suffix));
+                totalC += inputSize; totalU += uncompressedSize; lastHdr = hdr;
+                continue;
+            }
+
+            if (decompress)
+            {
+                if (toStdout)
                 {
+                    // Inflate in chunks straight into records: the decompressed bytes are never
+                    // materialised (a bomb used to fill a MemoryStream, then a string, then a split).
                     try
                     {
                         using var input = BashFileSystem.OpenRead(filePath);
                         using var gs = GzipIntegrity.OpenDecoder(input);
-                        var tbuf = new byte[81920];
-                        while (gs.Read(tbuf, 0, tbuf.Length) > 0) { }
-                        if (verbose) WriteObject(BashRuntime.NewBashObject($"{filePath}: OK"));
+                        var records = new ByteRecordEmitter(WriteObject);
+                        var chunk = new byte[81920];
+                        int got;
+                        try
+                        {
+                            while ((got = gs.Read(chunk, 0, chunk.Length)) > 0) records.Append(chunk.AsSpan(0, got));
+                        }
+                        finally { records.Finish(); }
                     }
                     catch (Exception ex)
                     {
                         if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-                        FileSystemHelpers.WriteBashError(this, $"gzip: {BashPath.ToShell(filePath)}: not in gzip format");
-                        FileSystemHelpers.SetLastExitCode(this, 1);
+                        Error($"gzip: {name}: {Failure(ex, filePath)}");
                     }
                     continue;
                 }
 
-                if (list)
+                // GNU refuses a name without the suffix (it cannot derive the output name): a warning, which -q
+                // (and -r without -v) suppresses together with its status.
+                if (!filePath.EndsWith(suffix, StringComparison.Ordinal))
                 {
-                    long compressedSize = inputSize;
-                    long uncompressedSize;
-                    try
+                    if (verbose || (!recursive && !quiet)) Warn($"gzip: {name}: unknown suffix -- ignored");
+                    continue;
+                }
+                string outPath = filePath.Substring(0, filePath.Length - suffix.Length);
+                string outName = StripSuffix(name, suffix);
+                if (RefuseExistingOutput(outPath, outName, force)) continue;
+                long outSize, overhead;
+                try
+                {
+                    using (var probe = BashFileSystem.OpenRead(filePath)) overhead = MemberOverhead(probe);
+                    outSize = WriteFileOutput(outPath, force, outFs =>
                     {
-                        // Stream-count the decompressed size — never materialize it.
-                        // Keep it 64-bit: a >2 GB member overflows an int cast and
-                        // prints a negative/wrapped size and bogus ratio.
                         using var input = BashFileSystem.OpenRead(filePath);
                         using var gs = GzipIntegrity.OpenDecoder(input);
-                        var cbuf = new byte[81920];
-                        long total = 0; int cn;
-                        while ((cn = gs.Read(cbuf, 0, cbuf.Length)) > 0) total += cn;
-                        uncompressedSize = total;
-                    }
-                    catch (Exception ex)
-                    {
-                        if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-                        string normalized = BashPath.ToShell(filePath);
-                        FileSystemHelpers.WriteBashError(this, $"gzip: {normalized}: {ex.Message}");
-                        continue;
-                    }
-                    string ratio = uncompressedSize > 0
-                        ? string.Format(System.Globalization.CultureInfo.InvariantCulture,
-                            "{0:F1}%", (1.0 - ((double)compressedSize / uncompressedSize)) * 100)
-                        : "0.0%";
-                    string line = string.Format(System.Globalization.CultureInfo.InvariantCulture,
-                        "{0,10} {1,10} {2,6} {3}", compressedSize, uncompressedSize, ratio, filePath);
-                    var obj = new PSObject();
-                    obj.TypeNames.Insert(0, "PsBash.GzipListOutput");
-                    obj.Properties.Add(new PSNoteProperty("BashText", line));
-                    obj.Properties.Add(new PSNoteProperty("CompressedSize", compressedSize));
-                    obj.Properties.Add(new PSNoteProperty("UncompressedSize", uncompressedSize));
-                    obj.Properties.Add(new PSNoteProperty("Ratio", ratio));
-                    obj.Properties.Add(new PSNoteProperty("FileName", filePath));
-                    WriteObject(obj);
+                        gs.CopyTo(outFs);
+                    });
+                }
+                catch (Exception ex)
+                {
+                    if (FileSystemHelpers.IsPipelineStop(ex)) throw;
+                    Error($"gzip: {name}: {Failure(ex, filePath)}");
                     continue;
                 }
-
-                if (decompress)
+                if (!keep)
                 {
-                    if (toStdout)
-                    {
-                        // Inflate in chunks straight into records: the decompressed bytes are never
-                        // materialised (a bomb used to fill a MemoryStream, then a string, then a split).
-                        try
-                        {
-                            using var input = BashFileSystem.OpenRead(filePath);
-                            using var gs = GzipIntegrity.OpenDecoder(input);
-                            var records = new ByteRecordEmitter(WriteObject);
-                            var chunk = new byte[81920];
-                            int got;
-                            try
-                            {
-                                while ((got = gs.Read(chunk, 0, chunk.Length)) > 0) records.Append(chunk.AsSpan(0, got));
-                            }
-                            finally { records.Finish(); }
-                        }
-                        catch (Exception ex)
-                        {
-                            if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-                            string normalized = BashPath.ToShell(filePath);
-                            FileSystemHelpers.WriteBashError(this, $"gzip: {normalized}: {ex.Message}");
-                            continue;
-                        }
-                    }
-                    else
-                    {
-                        // GNU gzip refuses to decompress a file whose name lacks the
-                        // expected suffix (it cannot derive the output name) — warn
-                        // and skip rather than overwrite the input in place.
-                        if (!filePath.EndsWith(suffix, StringComparison.Ordinal))
-                        {
-                            if (!quiet)
-                            {
-                                FileSystemHelpers.WriteBashError(this,
-                                    $"gzip: {BashPath.ToShell(filePath)}: unknown suffix -- ignored");
-                            }
-                            continue;
-                        }
-                        string outPath = filePath.Substring(0, filePath.Length - suffix.Length);
-                        if (RefuseExistingOutput(outPath, force)) continue;
-                        long outSize;
-                        try
-                        {
-                            outSize = WriteFileOutput(outPath, force, outFs =>
-                            {
-                                using var input = BashFileSystem.OpenRead(filePath);
-                                using var gs = GzipIntegrity.OpenDecoder(input);
-                                gs.CopyTo(outFs);
-                            });
-                        }
-                        catch (Exception ex)
-                        {
-                            if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-                            string normalized = BashPath.ToShell(filePath);
-                            FileSystemHelpers.WriteBashError(this, $"gzip: {normalized}: {ex.Message}");
-                            continue;
-                        }
-                        if (!keep)
-                        {
-                            // Force-delete: the source may be read-only (e.g. a
-                            // file inside a .git pack dir); bare File.Delete throws
-                            // UnauthorizedAccess on Windows and the original lingers.
-                            try { FileSystemHelpers.DeleteFileForce(filePath); } catch { /* best effort, oracle parity */ }
-                        }
-                        if (verbose)
-                        {
-                            string ratio = outSize > 0
-                                ? string.Format(System.Globalization.CultureInfo.InvariantCulture,
-                                    "{0:F1}%", (1.0 - ((double)inputSize / outSize)) * 100)
-                                : "0.0%";
-                            WriteObject(BashRuntime.NewBashObject($"{filePath}: {ratio}"));
-                        }
-                    }
+                    // Force-delete: the source may be read-only (e.g. a file inside a .git pack dir).
+                    try { FileSystemHelpers.DeleteFileForce(filePath); } catch { /* best effort, oracle parity */ }
                 }
-                else
+                if (verbose)
+                    FileSystemHelpers.WriteStderr(this, $"{name}:\t{Ratio(outSize - (inputSize - overhead), outSize)} -- replaced with {outName}");
+                continue;
+            }
+
+            // GNU refuses to compress a file that already ends in the active suffix: a notice, no status. Without
+            // this guard `gzip -r` over a tree with *.gz members re-compressed each into *.gz.gz. -c is exempt.
+            if (!toStdout && filePath.EndsWith(suffix, StringComparison.Ordinal))
+            {
+                if (verbose || (!recursive && !quiet))
+                    FileSystemHelpers.WriteStderr(this, $"gzip: {name} already has {suffix} suffix -- unchanged");
+                continue;
+            }
+
+            CompressionLevel compLevel = LevelFor(level);
+
+            if (toStdout)
+            {
+                // The compressed stream is binary: it travels the string pipeline as escaped-byte markers
+                // (RawBytes), so `gzip -c FILE | gzip -dc` and `gzip -c FILE > f.gz` carry exactly GNU's bytes.
+                try
                 {
-                    // GNU gzip refuses to compress a file that already ends in the
-                    // active suffix ("already has .gz suffix -- unchanged"). Without
-                    // this guard `gzip -r` over a tree containing *.gz members would
-                    // re-compress each into *.gz.gz and delete the original. The
-                    // -c/stdout path is exempt (it never renames/deletes, matching GNU).
-                    if (!toStdout && filePath.EndsWith(suffix, StringComparison.Ordinal))
+                    var records = new ByteRecordEmitter(WriteObject);
+                    try
                     {
-                        if (!quiet)
-                        {
-                            FileSystemHelpers.WriteBashError(this,
-                                $"gzip: {BashPath.ToShell(filePath)} already has {suffix} suffix -- unchanged");
-                        }
-                        continue;
+                        using var sink = new ByteRecordStream(records);
+                        CompressFile(filePath, sink, compLevel);
                     }
-
-                    CompressionLevel compLevel = level switch
-                    {
-                        <= 1 => CompressionLevel.Fastest,
-                        >= 9 => CompressionLevel.SmallestSize,
-                        _ => CompressionLevel.Optimal,
-                    };
-
-                    if (toStdout)
-                    {
-                        // The compressed stream is binary: it travels the string pipeline as
-                        // escaped-byte markers (RawBytes), so `gzip -c FILE | gzip -dc` and
-                        // `gzip -c FILE > f.gz` carry exactly GNU's bytes. Input AND output stream:
-                        // the compressor writes straight into records as it produces them.
-                        try
-                        {
-                            var records = new ByteRecordEmitter(WriteObject);
-                            try
-                            {
-                                using var sink = new ByteRecordStream(records);
-                                CompressFile(filePath, sink, compLevel);
-                            }
-                            finally { records.Finish(); }
-                        }
-                        catch (Exception ex)
-                        {
-                            if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-                            string normalized = BashPath.ToShell(filePath);
-                            FileSystemHelpers.WriteBashError(this, $"gzip: {normalized}: {ex.Message}");
-                            continue;
-                        }
-                    }
-                    else
-                    {
-                        string outPath = filePath + suffix;
-                        if (RefuseExistingOutput(outPath, force)) continue;
-                        long compSize;
-                        try
-                        {
-                            compSize = WriteFileOutput(outPath, force,
-                                outFs => CompressFile(filePath, outFs, compLevel));
-                        }
-                        catch (Exception ex)
-                        {
-                            if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-                            string normalized = BashPath.ToShell(filePath);
-                            FileSystemHelpers.WriteBashError(this, $"gzip: {normalized}: {ex.Message}");
-                            continue;
-                        }
-                        if (!keep)
-                        {
-                            try { FileSystemHelpers.DeleteFileForce(filePath); } catch { /* best effort, oracle parity */ }
-                        }
-                        if (verbose)
-                        {
-                            string ratio = inputSize > 0
-                                ? string.Format(System.Globalization.CultureInfo.InvariantCulture,
-                                    "{0:F1}%", (1.0 - ((double)compSize / inputSize)) * 100)
-                                : "0.0%";
-                            WriteObject(BashRuntime.NewBashObject($"{filePath}: {ratio}"));
-                        }
-                    }
+                    finally { records.Finish(); }
                 }
+                catch (Exception ex)
+                {
+                    if (FileSystemHelpers.IsPipelineStop(ex)) throw;
+                    Error($"gzip: {name}: {Failure(ex, filePath)}");
+                }
+                continue;
+            }
+
+            string gzPath = filePath + suffix;
+            if (RefuseExistingOutput(gzPath, name + suffix, force)) continue;
+            long compSize;
+            try
+            {
+                compSize = WriteFileOutput(gzPath, force, outFs => CompressFile(filePath, outFs, compLevel));
+            }
+            catch (Exception ex)
+            {
+                if (FileSystemHelpers.IsPipelineStop(ex)) throw;
+                Error($"gzip: {name}: {Failure(ex, filePath)}");
+                continue;
+            }
+            if (!keep)
+            {
+                try { FileSystemHelpers.DeleteFileForce(filePath); } catch { /* best effort, oracle parity */ }
+            }
+            if (verbose)
+            {
+                // Our member has a bare 10-byte header (no stored name) and the 8-byte trailer.
+                FileSystemHelpers.WriteStderr(this,
+                    $"{name}:\t{Ratio(inputSize - (compSize - 18), inputSize)} -- replaced with {name}{suffix}");
             }
         }
+
+        if (listed && named > 1) ListRow(totalC, totalU, lastHdr, "(totals)");
     }
 
+    private string ShellRelative(string resolved)
+    {
+        string cwd = SessionState.Path.CurrentFileSystemLocation.ProviderPath;
+        string rel = Path.GetRelativePath(cwd, resolved);
+        return BashPath.ToShell(rel.StartsWith("..", StringComparison.Ordinal) || Path.IsPathRooted(rel) ? resolved : rel);
+    }
+
+    /// <summary>GNU's words for a failed member: a bad stream is "not in gzip format", an I/O error strerror.</summary>
+    private static string Failure(Exception ex, string path)
+        => ex is InvalidDataException ? "not in gzip format" : FileSystemHelpers.ReadErrorMessage(ex, path);
+
+    private static string StripSuffix(string name, string suffix)
+        => name.EndsWith(suffix, StringComparison.Ordinal) && name.Length > suffix.Length ? name[..^suffix.Length] : name;
+
+    /// <summary>
+    /// GNU's <c>display_ratio</c>: per-mille, truncated, a sign column (<c>-33.3%</c>, <c> 50.0%</c>,
+    /// <c>-100.0%</c>). Pure (unit-test seam).
+    /// </summary>
+    internal static string Ratio(long num, long den)
+    {
+        // gzip 1.12: fprintf("%5.1f%%", den == 0 ? 0 : 100.0 * num / den) — rounded, the sign beside the digits
+        // (" -0.2%", "  0.0%", "-100.0%"). The pre-1.10 integer form truncated and put the sign in column 1.
+        double r = den == 0 ? 0 : 100.0 * num / den;
+        return r.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture).PadLeft(5) + "%";
+    }
+
+    /// <summary>
+    /// A gzip member's bytes that are not deflate data: the header (10 bytes, plus FEXTRA / FNAME / FCOMMENT /
+    /// FHCRC when flagged) and the 8-byte trailer — GNU's <c>header_bytes</c>, which its ratios leave out. Reads from
+    /// the stream's start; a stream too short for a header counts the fixed 18. Pure (unit-test seam).
+    /// </summary>
+    internal static long MemberOverhead(Stream s)
+    {
+        Span<byte> head = stackalloc byte[10];
+        if (s.ReadAtLeast(head, 10, throwOnEndOfStream: false) < 10) return 18;
+        long len = 10;
+        byte flags = head[3];
+        if ((flags & 4) != 0)
+        {
+            int lo = s.ReadByte(), hi = s.ReadByte();
+            if (lo < 0 || hi < 0) return len + 8;
+            int xlen = lo | (hi << 8);
+            len += 2 + xlen;
+            s.Seek(xlen, SeekOrigin.Current);
+        }
+        foreach (int bit in new[] { 8, 16 })
+        {
+            if ((flags & bit) == 0) continue;
+            int b;
+            do { b = s.ReadByte(); len++; } while (b > 0);
+        }
+        if ((flags & 2) != 0) len += 2;
+        return len + 8;
+    }
     /// <summary>
     /// gzip with no file operand: the pipeline (the exact byte stream, consumed in
     /// <see cref="ProcessRecord"/>) is compressed — or, under <c>-d</c> / <c>zcat</c>, decompressed —
@@ -651,7 +689,7 @@ public sealed class InvokeBashGzipCommand : PSCmdlet
         }
         catch (Exception ex) when (ex is InvalidDataException or IOException)
         {
-            FileSystemHelpers.WriteBashError(this, "gzip: stdin: not in gzip format");
+            Error("gzip: stdin: not in gzip format");
         }
     }
     // RFC 1952 member: header, an empty final deflate block, CRC32=0, ISIZE=0.
@@ -673,11 +711,11 @@ public sealed class InvokeBashGzipCommand : PSCmdlet
         input.CopyTo(gzip);
     }
 
-    private bool RefuseExistingOutput(string path, bool force)
+    /// <summary>GNU (stdin not a terminal): <c>NAME already exists;\tnot overwritten</c>, a warning even under -q.</summary>
+    private bool RefuseExistingOutput(string path, string name, bool force)
     {
         if (force || !File.Exists(path)) return false;
-        FileSystemHelpers.WriteBashError(this, $"gzip: {BashPath.ToShell(path)} already exists; not overwritten");
-        FileSystemHelpers.SetLastExitCode(this, 2);
+        Warn($"gzip: {name} already exists;\tnot overwritten");
         return true;
     }
 
@@ -705,4 +743,21 @@ public sealed class InvokeBashGzipCommand : PSCmdlet
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
         }
     }
+}
+
+/// <summary><c>gunzip</c> = <c>gzip -d</c>, its own cmdlet so the identity survives an indirect call.</summary>
+[Cmdlet(VerbsLifecycle.Invoke, "BashGunzip")]
+[OutputType(typeof(string))]
+public sealed class InvokeBashGunzipCommand : InvokeBashGzipCommand
+{
+    private protected override bool ImpliedDecompress => true;
+}
+
+/// <summary><c>zcat</c> = <c>gzip -dc</c>, its own cmdlet so the identity survives an indirect call.</summary>
+[Cmdlet(VerbsLifecycle.Invoke, "BashZcat")]
+[OutputType(typeof(string))]
+public sealed class InvokeBashZcatCommand : InvokeBashGzipCommand
+{
+    private protected override bool ImpliedDecompress => true;
+    private protected override bool ImpliedStdout => true;
 }

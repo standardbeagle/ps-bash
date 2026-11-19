@@ -5,23 +5,16 @@ using System.Management.Automation;
 namespace PsBash.Cmdlets;
 
 /// <summary>
-/// Binary cmdlet replacement for the psm1 <c>Invoke-BashEnv</c>
-/// (REFACTOR-2 follow-on). Prints environment variables — with no args,
-/// emits all variables sorted by name; with one operand, emits just that
-/// variable (or a bash-style error if unset).
+/// Coreutils <c>env</c>: with no COMMAND, print the (modified) environment as <c>NAME=VALUE</c> lines, sorted by name;
+/// with one, run it with the modified environment: <c>env [-i] [-0] [-u NAME] [-C DIR] [-] [NAME=VALUE]... [COMMAND
+/// [ARG]...]</c>. Usage errors are status 125, a COMMAND that is not found 127, one that cannot run 126 (GNU).
+/// <c>printenv</c> is its own cmdlet (<see cref="InvokeBashPrintenvCommand"/>): an alias name does not survive an
+/// indirect call (<c>env X=1 printenv X</c> runs <c>&amp; $c</c>, where InvocationName is <c>&amp;</c>), so a command's
+/// identity is never read from InvocationName (guard <c>InvocationIdentityGuardTests</c>).
 ///
-/// Behavioral parity oracle: the original psm1 function. Output is a
-/// typed <c>PsBash.EnvEntry</c> PSObject per variable with <c>Name</c>,
-/// <c>Value</c>, <c>BashText = "NAME=VALUE"</c>. Missing-variable error
-/// message matches the oracle byte-for-byte: <c>env: 'NAME': not set</c>.
-///
-/// No colliding flags. The only flag the psm1 oracle accepts is
-/// <c>--help</c>, which delegates to psm1 <c>Show-BashHelp</c> via
-/// parameter-bound <c>InvokeCommand.InvokeScript</c> (AOT-safe — no
-/// concatenation of user-controlled tokens into the script body).
-///
-/// Aliases <c>env</c> and <c>printenv</c> stay in psm1 and resolve to
-/// this cmdlet automatically once <c>PsBash.Cmdlets.dll</c> is loaded.
+/// Output is a typed <c>PsBash.EnvEntry</c> PSObject per variable with <c>Name</c>, <c>Value</c>,
+/// <c>BashText = "NAME=VALUE"</c>. <c>-i</c> collides with <c>-InformationAction</c>, hence the decoy (a direct
+/// call binds it; the transpiler's words arrive in <see cref="Arguments"/>).
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashEnv")]
 [OutputType(typeof(PSObject))]
@@ -55,114 +48,24 @@ public sealed class InvokeBashEnvCommand : PSCmdlet
 
     protected override void EndProcessing()
     {
-        var args = Arguments ?? Array.Empty<string>();
+        // A DIRECT call (`Invoke-BashEnv -i ...`) binds the decoy; the transpiler's words arrive in Arguments.
+        var args = BashRuntime.PrependDecoys(Arguments, (i.IsPresent, "-i"));
 
         FileSystemHelpers.SetLastExitCode(this, 0);
-        if (FileSystemHelpers.TryHandleVersion(this, "env", args)) return;
-        if (Array.IndexOf(args, "--help") >= 0)
+        if (args.Length > 0 && args[0] == "--help")
         {
-            foreach (var line in InvokeCommand.InvokeScript(
-                         "param($n) Show-BashHelp $n", "env"))
-            {
+            foreach (var line in InvokeCommand.InvokeScript("param($n) Show-BashHelp $n", "env"))
                 WriteObject(line);
-            }
             return;
         }
+        if (args.Length > 0 && args[0] == "--version" && FileSystemHelpers.TryHandleVersion(this, "env", args)) return;
 
-        // env's core form: `env [-i] [-u NAME] [NAME=VALUE]... [COMMAND [ARG]...]`
-        // — run a command with a modified environment. Activated only when an
-        // assignment or an -i/-u/-- flag is present, so the legacy print paths
-        // (bare `env`, the `env NAME` print-var-ism, `printenv`) are untouched.
-        if (i.IsPresent || HasEnvModForm(args))
-        {
-            HandleEnvModForm(args, i.IsPresent);
-            return;
-        }
+        // GNU `env [OPTION]... [-] [NAME=VALUE]... [COMMAND [ARG]...]`. Options end at the first operand, `--`
+        // or `-`; usage errors are status 125 (env's own failure, distinct from the command's status).
+        if (ParseOptions(args) is not { } opts) return;
+        int idx = opts.Next;
 
-        // `printenv NAME...` prints the VALUE only (one per line), matching bash;
-        // `env NAME` is a ps-bash-ism that keeps the NAME=VALUE shape. The two
-        // resolve to this same cmdlet via aliases, so distinguish them by the
-        // invocation name (Dart wpCPSd25qMuI). `printenv` is never emitter-mapped,
-        // so the alias name survives into InvocationName (like gunzip/zcat).
-        bool asPrintenv = string.Equals(
-            MyInvocation?.InvocationName, "printenv", StringComparison.OrdinalIgnoreCase);
-
-        if (args.Length > 0)
-        {
-            if (asPrintenv)
-            {
-                // bash printenv prints each named var's value; a missing var
-                // contributes no line (bash exits 1 silently, no "env:" error).
-                foreach (var name in args)
-                {
-                    // printenv is a child of the shell: it sees the exported variables only.
-                    var v = BashVariableStore.GetExported(name);
-                    if (v != null) WriteObject(BuildEntry(name, v, valueOnly: true));
-                    else FileSystemHelpers.SetLastExitCode(this, 1); // not in the environment: status 1, no message
-                }
-                return;
-            }
-
-            // `env NAME` for a set variable keeps the legacy NAME=VALUE print; anything else is
-            // `env COMMAND [ARG]...` and runs the command (GNU).
-            var varName = args[0];
-            var val = args.Length == 1 ? BashVariableStore.GetExported(varName) : null;
-            if (val == null)
-            {
-                HandleEnvModForm(args, false);
-                return;
-            }
-            WriteObject(BuildEntry(varName, val));
-            return;
-        }
-
-        // No args: enumerate all bash variables, sorted by name
-        // (the psm1 oracle's `Sort-Object` step).
-        var all = new List<KeyValuePair<string, string>>(BashVariableStore.EnumerateExported());
-        all.Sort(static (a, b) => StringComparer.Ordinal.Compare(a.Key, b.Key));
-
-        foreach (var (key, v) in all)
-        {
-            WriteObject(BuildEntry(key, v));
-        }
-    }
-
-    /// <summary>
-    /// True when the args use env's run-a-command / modify-environment form:
-    /// any <c>NAME=VALUE</c> assignment, or an <c>-i</c> / <c>--ignore-environment</c>
-    /// / <c>-u</c> / <c>--unset</c> / <c>--</c> flag. Bare <c>env</c> and the
-    /// single-name print forms return false and keep their legacy behavior.
-    /// </summary>
-    private static bool HasEnvModForm(string[] args)
-    {
-        foreach (var a in args)
-        {
-            if (a is "-i" or "--ignore-environment" or "-u" or "--unset" or "--") return true;
-            if (a.StartsWith("--unset=", StringComparison.Ordinal)) return true;
-            if (IsAssignment(a)) return true;
-        }
-        return false;
-    }
-
-    private void HandleEnvModForm(string[] args, bool ignoreEnvFromFlag)
-    {
-        bool ignoreEnv = ignoreEnvFromFlag;
-        var unset = new List<string>();
         var assignments = new List<(string Name, string Value)>();
-        int idx = 0;
-
-        // Leading options.
-        while (idx < args.Length)
-        {
-            var a = args[idx];
-            if (a is "-i" or "--ignore-environment") { ignoreEnv = true; idx++; continue; }
-            if (a is "-u" or "--unset") { idx++; if (idx < args.Length) unset.Add(args[idx]); idx++; continue; }
-            if (a.StartsWith("--unset=", StringComparison.Ordinal)) { unset.Add(a.Substring("--unset=".Length)); idx++; continue; }
-            if (a == "--") { idx++; break; }
-            break;
-        }
-
-        // NAME=VALUE assignments (stop at the first non-assignment — the command).
         while (idx < args.Length && IsAssignment(args[idx]))
         {
             var a = args[idx];
@@ -171,39 +74,134 @@ public sealed class InvokeBashEnvCommand : PSCmdlet
             idx++;
         }
 
-        // A command follows → run it with the modified environment; otherwise
-        // print the effective environment.
         if (idx < args.Length)
         {
-            var cmdName = args[idx];
-            var cmdArgs = args.Skip(idx + 1).ToArray();
-            RunWithModifiedEnv(ignoreEnv, unset, assignments, cmdName, cmdArgs);
+            if (opts.Null)
+            {
+                UsageError("cannot specify --null (-0) with command");
+                return;
+            }
+            RunWithModifiedEnv(opts.IgnoreEnv, opts.Unset, assignments, opts.ChDir, args[idx], args.Skip(idx + 1).ToArray());
+            return;
         }
-        else
+        if (opts.ChDir is not null)
         {
-            PrintEffectiveEnv(ignoreEnv, unset, assignments);
+            UsageError("must specify command with --chdir (-C)");
+            return;
         }
+        PrintEffectiveEnv(opts.IgnoreEnv, opts.Unset, assignments, opts.Null);
+    }
+
+    private sealed record EnvOptions(bool IgnoreEnv, List<string> Unset, bool Null, string? ChDir, int Next);
+
+    /// <summary>GNU env's option scan; null after writing the usage error (status 125).</summary>
+    private EnvOptions? ParseOptions(string[] args)
+    {
+        bool ignoreEnv = false, nul = false;
+        string? chdir = null;
+        var unset = new List<string>();
+        int idx = 0;
+        while (idx < args.Length)
+        {
+            var a = args[idx];
+            if (a == "--") { idx++; break; }
+            if (a == "-") { ignoreEnv = true; idx++; break; }
+            if (a.StartsWith("--", StringComparison.Ordinal))
+            {
+                int eq = a.IndexOf('=');
+                string name = eq < 0 ? a[2..] : a[2..eq];
+                string? inline = eq < 0 ? null : a[(eq + 1)..];
+                string? Value()
+                {
+                    if (inline is not null) return inline;
+                    if (idx + 1 < args.Length) return args[++idx];
+                    UsageError($"option '--{name}' requires an argument");
+                    return null;
+                }
+                switch (name)
+                {
+                    case "ignore-environment": ignoreEnv = true; break;
+                    case "null": nul = true; break;
+                    case "unset": { if (Value() is not { } v) return null; unset.Add(v); break; }
+                    case "chdir": { if (Value() is not { } v) return null; chdir = v; break; }
+                    case "split-string" or "debug" or "default-signal" or "ignore-signal" or "block-signal" or "list-signal-handling":
+                        UsageError($"option '{a}' is recognized but not supported by ps-bash", hint: false);
+                        return null;
+                    default:
+                        UsageError($"unrecognized option '{a}'");
+                        return null;
+                }
+                idx++;
+                continue;
+            }
+            if (a.Length < 2 || a[0] != '-') break;
+
+            for (int k = 1; k < a.Length; k++)
+            {
+                char ch = a[k];
+                if (ch is 'u' or 'C')
+                {
+                    string? v = k + 1 < a.Length ? a[(k + 1)..] : idx + 1 < args.Length ? args[++idx] : null;
+                    if (v is null) { UsageError($"option requires an argument -- '{ch}'"); return null; }
+                    if (ch == 'u') unset.Add(v); else chdir = v;
+                    break;
+                }
+                if (ch == 'i') ignoreEnv = true;
+                else if (ch == '0') nul = true;
+                else if (ch is 'S' or 'v')
+                {
+                    UsageError($"option '-{ch}' is recognized but not supported by ps-bash", hint: false);
+                    return null;
+                }
+                else { UsageError($"invalid option -- '{ch}'"); return null; }
+            }
+            idx++;
+        }
+        return new EnvOptions(ignoreEnv, unset, nul, chdir, idx);
+    }
+
+    /// <summary><c>env: WHAT</c> (+ the usage hint), status 125 — env's own failure.</summary>
+    private void UsageError(string what, bool hint = true)
+    {
+        string message = "env: " + what;
+        if (hint && FileSystemHelpers.UsageHint("env") is { } h) message += "\n" + h;
+        FileSystemHelpers.WriteBashError(this, message);
+        FileSystemHelpers.SetLastExitCode(this, 125);
     }
 
     /// <summary>
-    /// Apply <c>-i</c> / <c>-u</c> / <c>NAME=VALUE</c> to the process environment,
-    /// run <paramref name="cmdName"/> in-process (so ps-bash aliases/cmdlets
-    /// resolve), then restore the environment. Restoration runs in a finally so a
-    /// throwing command cannot leak the temporary environment.
+    /// Apply <c>-i</c> / <c>-u</c> / <c>NAME=VALUE</c> (and <c>-C DIR</c>) to the shell environment, run
+    /// <paramref name="cmdName"/> in-process (so ps-bash aliases/cmdlets resolve), then restore it. Restoration runs
+    /// in a finally so a throwing command cannot leak the temporary environment. A COMMAND that is not a program
+    /// is GNU's <c>env: ‘X’: No such file or directory</c> 127; a directory <c>Permission denied</c> 126.
     /// </summary>
     private void RunWithModifiedEnv(
         bool ignoreEnv, List<string> unset, List<(string Name, string Value)> assignments,
-        string cmdName, string[] cmdArgs)
+        string? chdir, string cmdName, string[] cmdArgs)
     {
         var saved = new List<(string Name, string? Old)>();
         // The assignments are the command's environment: exported for it, whatever the names' attributes are.
         var assigned = assignments.Select(a => a.Name).ToArray();
         var wasExported = PsBash.Core.ShellExports.BeginTemp(assigned);
+        bool pushed = false;
         try
         {
+            if (chdir is not null)
+            {
+                var target = FileSystemHelpers.ProviderPath(this, chdir);
+                if (!Directory.Exists(target))
+                {
+                    FileSystemHelpers.WriteBashError(this, $"env: cannot change directory to {GnuQuote.Locale(chdir)}: No such file or directory");
+                    FileSystemHelpers.SetLastExitCode(this, 125);
+                    return;
+                }
+                SessionState.Path.PushCurrentLocation("psbash-env");
+                SessionState.Path.SetLocation(WildcardPattern.Escape(target));
+                pushed = true;
+            }
             if (ignoreEnv)
             {
-                foreach (var (k, v) in BashVariableStore.Enumerate())
+                foreach (var (k, v) in BashVariableStore.Enumerate().ToList())
                 {
                     saved.Add((k, v));
                     BashVariableStore.Set(k, null);
@@ -218,6 +216,13 @@ public sealed class InvokeBashEnvCommand : PSCmdlet
             {
                 saved.Add((n, BashVariableStore.Get(n)));
                 BashVariableStore.Set(n, v);
+            }
+
+            if (Unrunnable(cmdName) is { } failure)
+            {
+                FileSystemHelpers.WriteBashError(this, $"env: {GnuQuote.Locale(cmdName)}: {failure.Why}");
+                FileSystemHelpers.SetLastExitCode(this, failure.Status);
+                return;
             }
 
             // `env X=1 prog 2>&1`: a program gets ONE pipe for stdout and stderr (docs/specs/stdio-messaging.md §4).
@@ -237,7 +242,7 @@ public sealed class InvokeBashEnvCommand : PSCmdlet
             }
             catch (CommandNotFoundException)
             {
-                FileSystemHelpers.WriteBashError(this, $"env: '{cmdName}': No such file or directory");
+                FileSystemHelpers.WriteBashError(this, $"env: {GnuQuote.Locale(cmdName)}: No such file or directory");
                 FileSystemHelpers.SetLastExitCode(this, 127);
             }
         }
@@ -250,11 +255,30 @@ public sealed class InvokeBashEnvCommand : PSCmdlet
                 BashVariableStore.Set(saved[k].Name, saved[k].Old);
             }
             PsBash.Core.ShellExports.EndTemp(assigned, wasExported);
+            if (pushed) SessionState.Path.PopLocation("psbash-env");
         }
     }
 
+    /// <summary>
+    /// Why <paramref name="name"/> cannot run as a program (execvp's answer), or null: a path naming a directory
+    /// is 126 "Permission denied", a missing path or a name no command answers to is 127.
+    /// </summary>
+    private (string Why, int Status)? Unrunnable(string name)
+    {
+        bool isPath = name.Contains('/') || (OperatingSystem.IsWindows() && name.Contains('\\'));
+        if (isPath)
+        {
+            var abs = FileSystemHelpers.ProviderPath(this, name);
+            if (Directory.Exists(abs)) return ("Permission denied", 126);
+            return File.Exists(abs) ? null : ("No such file or directory", 127);
+        }
+        if (name.Length == 0) return ("No such file or directory", 127);
+        var found = InvokeCommand.GetCommand(WildcardPattern.Escape(name),
+            CommandTypes.Alias | CommandTypes.Cmdlet | CommandTypes.Function | CommandTypes.Application | CommandTypes.ExternalScript);
+        return found is null ? ("No such file or directory", 127) : null;
+    }
     private void PrintEffectiveEnv(
-        bool ignoreEnv, List<string> unset, List<(string Name, string Value)> assignments)
+        bool ignoreEnv, List<string> unset, List<(string Name, string Value)> assignments, bool nul)
     {
         var dict = new Dictionary<string, string>(StringComparer.Ordinal);
         if (!ignoreEnv)
@@ -267,28 +291,21 @@ public sealed class InvokeBashEnvCommand : PSCmdlet
 
         var names = new List<string>(dict.Keys);
         names.Sort(StringComparer.Ordinal);
+        if (nul)
+        {
+            // -0: each entry ends with NUL, not newline — one exact-bytes record.
+            var sb = new System.Text.StringBuilder();
+            foreach (var key in names) sb.Append(key).Append('=').Append(dict[key]).Append('\0');
+            if (sb.Length > 0) WriteObject(BashRuntime.BytesRecord(sb.ToString()));
+            return;
+        }
         foreach (var key in names) WriteObject(BuildEntry(key, dict[key]));
     }
 
-    /// <summary>A <c>NAME=VALUE</c> token: a valid env-var name, then <c>=</c>, then anything.</summary>
-    private static bool IsAssignment(string a)
-    {
-        int eq = a.IndexOf('=');
-        return eq > 0 && IsValidName(a.Substring(0, eq));
-    }
+    /// <summary>GNU: any operand with <c>=</c> after its first character is an assignment (<c>env 1=x printenv 1</c>).</summary>
+    private static bool IsAssignment(string a) => a.IndexOf('=') > 0;
 
-    private static bool IsValidName(string name)
-    {
-        if (name.Length == 0) return false;
-        if (name[0] != '_' && !char.IsLetter(name[0])) return false;
-        for (int i = 1; i < name.Length; i++)
-        {
-            if (name[i] != '_' && !char.IsLetterOrDigit(name[i])) return false;
-        }
-        return true;
-    }
-
-    private static PSObject BuildEntry(string name, string value, bool valueOnly = false)
+    internal static PSObject BuildEntry(string name, string value, bool valueOnly = false)
     {
         var pso = new PSObject();
         pso.TypeNames.Insert(0, "PsBash.EnvEntry");

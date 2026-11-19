@@ -2660,10 +2660,9 @@ function Resolve-JqStringInterpolation {
 
 # Invoke-BashGzip migrated to binary cmdlet PsBash.Cmdlets.InvokeBashGzipCommand
 # (REFACTOR-2 follow-on). See src/PsBash.Cmdlets/InvokeBashGzipCommand.cs.
-# The aliases below (gzip / gunzip / zcat) resolve to the cmdlet because the
-# binary module is imported before this psm1 runs as a script. The cmdlet
-# reads $MyInvocation.InvocationName to map gunzip -> '-d' and zcat -> '-dc'
-# exactly like the psm1 oracle did.
+# The aliases gzip / gunzip / zcat name Invoke-BashGzip / Invoke-BashGunzip /
+# Invoke-BashZcat: each identity is its own cmdlet, because an alias name read
+# from InvocationName is lost under an indirect call (xargs gunzip, env zcat f).
 
 # --- tar ---
 
@@ -3854,7 +3853,10 @@ Set-Alias -Name 'du'      -Value 'Invoke-BashDu'      -Force -Scope Global -Opti
 Set-Alias -Name 'tree'    -Value 'Invoke-BashTree'    -Force -Scope Global -Option AllScope
 Set-Alias -Name 'env'      -Value 'Invoke-BashEnv'      -Force -Scope Global -Option AllScope
 Set-Alias -Name 'nohup'    -Value 'Invoke-BashNohup'    -Force -Scope Global -Option AllScope
-Set-Alias -Name 'printenv' -Value 'Invoke-BashEnv'      -Force -Scope Global -Option AllScope
+Set-Alias -Name 'printenv' -Value 'Invoke-BashPrintenv' -Force -Scope Global -Option AllScope
+# true / false as PROGRAMS (env true, xargs false, timeout 1 false): the script builtins never reach these.
+Set-Alias -Name 'true'     -Value 'Invoke-BashTrue'     -Force -Scope Global -Option AllScope
+Set-Alias -Name 'false'    -Value 'Invoke-BashFalse'    -Force -Scope Global -Option AllScope
 Set-Alias -Name 'basename' -Value 'Invoke-BashBasename' -Force -Scope Global -Option AllScope
 Set-Alias -Name 'dirname'  -Value 'Invoke-BashDirname'  -Force -Scope Global -Option AllScope
 # cd: module-mode only (the transpiler emits its own cd via EmitCd). Routed through
@@ -3880,8 +3882,8 @@ Set-Alias -Name 'sha256sum' -Value 'Invoke-BashSha256sum' -Force -Scope Global -
 Set-Alias -Name 'file'     -Value 'Invoke-BashFile'     -Force -Scope Global -Option AllScope
 Set-Alias -Name 'rg'       -Value 'Invoke-BashRg'       -Force -Scope Global -Option AllScope
 Set-Alias -Name 'gzip'     -Value 'Invoke-BashGzip'     -Force -Scope Global -Option AllScope
-Set-Alias -Name 'gunzip'   -Value 'Invoke-BashGzip'     -Force -Scope Global -Option AllScope
-Set-Alias -Name 'zcat'     -Value 'Invoke-BashGzip'     -Force -Scope Global -Option AllScope
+Set-Alias -Name 'gunzip'   -Value 'Invoke-BashGunzip'   -Force -Scope Global -Option AllScope
+Set-Alias -Name 'zcat'     -Value 'Invoke-BashZcat'     -Force -Scope Global -Option AllScope
 Set-Alias -Name 'tar'      -Value 'Invoke-BashTar'      -Force -Scope Global -Option AllScope
 Set-Alias -Name 'yq'       -Value 'Invoke-BashYq'       -Force -Scope Global -Option AllScope
 Set-Alias -Name 'xan'      -Value 'Invoke-BashXan'      -Force -Scope Global -Option AllScope
